@@ -26,6 +26,7 @@ The one publishable package (working name `engine`, private for now). Layout and
 - Add an `exports` subpath only together with the file that backs it. The final map is 0017 §2; M35 audits it.
 - `tsconfig.json` type-checks everything in `src/`; `tsconfig.build.json` extends it and excludes `*.test.ts` from `dist/`. Base options are in the root `tsconfig.base.json` (`types: []`: a tsconfig that needs Node types opts in).
 - TypeScript must be erasable (`erasableSyntaxOnly`): no enums, namespaces or parameter properties. Relative imports carry the `.js` extension (`nodenext`).
+- No ambient time or randomness in `src/` outside `src/test/`: `src/clock.ts` is the only file allowed to name `Date`, `performance`, `setTimeout`/`setInterval`, `requestAnimationFrame` (Biome `noRestrictedGlobals`, `biome.json`), and `Math.random`/`getRandomValues`/`randomUUID` fail `pnpm test unit -t no_ambient_random`; take a `Clock`/`Scheduler` by injection instead (docs/decisions/0020 §8).
 
 ## Where tests live
 
@@ -45,3 +46,15 @@ page for any fixture other than `hash` loads it through `fixtureWasm(name)` (`fi
 shaped exactly like `virtual:engine/wasm`'s `EngineWasm`; `wiring.html` is the only page importing
 the real virtual module, so the public path stays tested. Port: `ENGINE_TEST_PORT` (default 4517,
 `strictPort`), so two worktrees can run the browser suite at once.
+
+## Adding a browser spec
+
+A `*.spec.ts` under `tests/browser/` (one level up from `tests/browser/pages/`), importing `test`
+and `expect` from `@playwright/test` and `openPage` from `./support/page.js` (navigates, asserts
+`crossOriginIsolated`, fails the test on any page error or console error). Put `@engines` in a
+test's title to also run it in WebKit and Firefox (`playwright.config.ts`'s `webkit`/`firefox`
+projects grep for it; chromium runs everything); put `@slow` in the title to move it to
+`pnpm test:slow` (0020 §4). `engine/test` (`createHarness`, `createManualClock`) is what a spec
+drives through `page.evaluate` against a page's `window.__harness`; `src/test/harness.ts`'s own
+doc comment has the exact contract (`resume`/`park`/`untilQuiescent`/`stepTick`/`stepFrame`/`hash`/
+`admit`/`memoryBytes`/`memGrows`/`errors`).
