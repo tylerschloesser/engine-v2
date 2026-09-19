@@ -4,7 +4,8 @@
     "noEmit": true,
     "lib": ["es2023", "dom"],
     "types": ["node", "vite/client"],
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true
   },
   "include": [".", "../../../src/virtual.d.ts"]
 }

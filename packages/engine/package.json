@@ -23,6 +23,10 @@
     "./virtual": {
       "types": "./dist/virtual.d.ts"
     },
+    "./test": {
+      "types": "./dist/test.d.ts",
+      "default": "./dist/test.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {
