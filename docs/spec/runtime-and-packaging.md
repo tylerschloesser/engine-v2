@@ -37,11 +37,11 @@ Because the game crate and engine crate link into one WASM module, the engine **
 - **Cross-thread communication.** Decided in [0015](../decisions/0015-threads-memory-and-topology.md).
 - **Worker topology.** Decided in [0015](../decisions/0015-threads-memory-and-topology.md) and [0018](../decisions/0018-renderer.md).
 - **What "zero GC" means, measurably.** Decided in [0016](../decisions/0016-zero-gc-definition.md).
-- **Exports map.** Entry points (e.g. `engine`, `engine/worker`, `engine/server`), how `new Worker(new URL(...))` and `.wasm` assets resolve under Vite when they originate in a library, and exactly what a game must configure. Verify against the current Vite version with a spike.
-- **Rust build pipeline.** cargo + wasm-bindgen-cli, wasm-pack, or a Vite plugin; how the engine crate reaches the game (in-repo path, crates.io, bundled in the npm package); rebuild speed and what the dev loop (edit Rust → see change) feels like.
-- **Rust dependency policy.** "Zero dependencies" is stated for npm. What's the bar for crates (e.g. serialization, noise is the game's problem, wgpu if the renderer is Rust)?
+- **Exports map.** Decided in [0017](../decisions/0017-packaging-and-build.md).
+- **Rust build pipeline.** Decided in [0017](../decisions/0017-packaging-and-build.md).
+- **Rust dependency policy.** Decided in [0017](../decisions/0017-packaging-and-build.md); the `serde_json` exception is argued in [0003](../decisions/0003-game-facing-api.md).
 - **Zero npm dependencies vs. a WebSocket server.** Decided in [0009](../decisions/0009-transport-and-hosting.md).
 - **WASM memory behavior.** Decided in [0015](../decisions/0015-threads-memory-and-topology.md) and [0014](../decisions/0014-js-wasm-boundary.md).
 - **One module, several roles.** Decided in [0015](../decisions/0015-threads-memory-and-topology.md).
-- **Publishing.** Is the package actually published publicly (name/scope, license, crates.io for the Rust side), or is "published" a packaging discipline for a private repo? A Tyler question; it affects how the engine crate reaches a game.
+- **Publishing.** Decided in [0017](../decisions/0017-packaging-and-build.md).
 - **Server runtime.** Decided in [0009](../decisions/0009-transport-and-hosting.md) and [0002](../decisions/0002-determinism-same-wasm-everywhere.md).
