@@ -71,7 +71,7 @@ export function createWorldServer(cfg: WorldConfig, host: HostServices): { accep
 
 - The WebSocket API allocates one `ArrayBuffer` and `MessageEvent` per message; that garbage is confined to the net worker and exempted in [0016](0016-zero-gc-definition.md).
 - Head-of-line blocking stays: at ~1% loss expect a 1–2 RTT stall every few seconds, absorbed by the interpolation delay in [0010](0010-rates-and-subscriptions.md).
-- Tests use a scripted fake `Connection` (latency, jitter, stall, disconnect) with no sockets ([0020](0020-testing-strategy.md)).
+- Tests use the real in-memory adapter pair, or real loopback WebSockets, wrapped in a deterministic network conditioner (latency, jitter, stall, disconnect); nothing is mocked ([0020](0020-testing-strategy.md)).
 - URL-to-world routing, TLS, and process supervision are the deployer's; the repo documents two recipes (one Fly machine per world; one Durable Object per world id) without engine code for either.
 - Deferred to Phase 2: the Durable Object adapter and its feasibility check (CPU accounting for timer-driven ticks, timer accuracy, headroom under 128 MB, restart frequency), because it gates only whether DO is a supported host, not the design.
 - Deferred to Phase 2: a WebTransport adapter, because no target server runtime ships a stable implementation; revisit when Node or workerd does.

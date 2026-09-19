@@ -23,12 +23,12 @@ Testability is a design constraint, not an afterthought:
 
 ## Open questions
 
-- **Tooling.** Current best options for LLM-driven and scripted browser testing (Playwright and its CLI/MCP tooling, raw CDP, Vitest browser mode), plus Rust-side runners (`cargo test`, wasm-bindgen-test or equivalent). What gives Claude the tightest edit→verify loop?
-- **Headless WebGPU.** Getting a real WebGPU device in automated Chrome locally on macOS and in CI (flags, software adapters); whether other browsers are tested at all.
-- **Detecting GC.** Candidate mechanisms: CDP tracing of V8 GC events, `--trace-gc` via JS flags, heap-size sampling. Which is reliable enough to assert "zero GCs during these N frames" without flaking? Prove it with a spike.
-- **Verifying rendering.** GPU readback + hashing vs. screenshot comparison; tolerance across GPUs and software adapters.
-- **Netcode tests without mocks.** Multiple real clients against a real server in one test process over the real transport, with a deterministic network conditioner (latency, jitter, loss) rather than a mocked socket.
-- **The budget.** Does the 1 minute include the Rust/WASM build, or assume warm caches? How the suites are parallelized, and the rule for when a test moves to the slow suite.
-- **Which isolates "no GC" covers.** Each worker has its own V8 isolate and heap. A GC in the sim worker doesn't drop a frame the way one on the rendering thread does. Define which threads the assertion covers, and whether minor (scavenge) GCs count.
-- **Cross-browser determinism.** The implications above promise a state-hash comparison in "each browser", while the tooling question asks whether other browsers are tested at all. Safari/WebKit is the engine most likely to differ and the hardest to automate (does Playwright's WebKit build expose WebGPU, or run WASM like iOS Safari does?). Decide what is asserted where: the sim hash needs no GPU, so it can run in more engines than the renderer tests.
-- Performance regression checks (frame time, tick time, bandwidth per client) and whether they belong in the fast suite.
+- **Tooling.** Decided in [0020](../decisions/0020-testing-strategy.md).
+- **Headless WebGPU.** Decided in [0020](../decisions/0020-testing-strategy.md). Deferred to Phase 3: verifying the SwiftShader flag set on a GitHub runner (spike B), because the local loop is proven and the fallback is known. See [0020](../decisions/0020-testing-strategy.md).
+- **Detecting GC.** Decided in [0016](../decisions/0016-zero-gc-definition.md).
+- **Verifying rendering.** Decided in [0020](../decisions/0020-testing-strategy.md).
+- **Netcode tests without mocks.** Decided in [0020](../decisions/0020-testing-strategy.md).
+- **The budget.** Suites, parallelization and the demotion rule decided in [0020](../decisions/0020-testing-strategy.md).
+- **Which isolates "no GC" covers.** Decided in [0016](../decisions/0016-zero-gc-definition.md).
+- **Cross-browser determinism.** Decided in [0020](../decisions/0020-testing-strategy.md) and [0002](../decisions/0002-determinism-same-wasm-everywhere.md).
+- **Performance regression checks.** Decided in [0020](../decisions/0020-testing-strategy.md).
