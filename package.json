@@ -1,0 +1,23 @@
+{
+  "name": "engine-v2",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node scripts/test.mjs",
+    "test:slow": "node scripts/test.mjs --tier slow",
+    "lint": "node scripts/lint.mjs",
+    "setup:tools": "node scripts/setup-tools.mjs",
+    "format": "pnpm exec biome check --write . && cargo fmt"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.14",
+    "@types/node": "22.20.3",
+    "typescript": "7.0.2",
+    "vite": "8.3.0",
+    "vitest": "5.0.1"
+  }
+}

@@ -1,0 +1,5 @@
+# rust-toolchain.toml (repo root; an external game ships the same file)
+[toolchain]
+channel = "1.93.0"                     # the release the Rust-building spikes ran on
+targets = ["wasm32-unknown-unknown"]
+components = ["rustfmt", "clippy"]

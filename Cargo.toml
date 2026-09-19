@@ -1,0 +1,29 @@
+[workspace]
+resolver = "3"
+members = ["packages/engine/crates/*"]
+exclude = ["spikes"]
+
+[workspace.package]
+edition = "2024"
+version = "0.0.0"
+publish = false
+
+# The ban lists live in clippy.toml (owner: docs/decisions/0002 §3).
+[workspace.lints.clippy]
+disallowed_methods = "deny"
+disallowed_types = "deny"
+
+# Profiles: docs/decisions/0017 §6, verbatim. `"*"` covers only non-member
+# dependencies, so the `engine` crate builds at the dev opt-level (0024 §13).
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
