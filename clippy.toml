@@ -1,0 +1,5 @@
+# Ban lists for the determinism lints turned on in the root Cargo.toml
+# ([workspace.lints.clippy]). Owner of the lists: docs/decisions/0002 §3.
+# M02 fills them with the first sim code; do not add entries without that ADR.
+disallowed-methods = []
+disallowed-types = []
