@@ -19,7 +19,7 @@ You are the **orchestrator**; run this session on Fable or Opus. Land as many mi
 Once per session:
 
 1. **Read** `docs/process.md` ("Rules for every session"), `PLAN.md` ("How milestones work" and the table) and `.claude/agents/milestone-implementer.md` (what your implementer already knows, so your prompts can stay short). Nothing else up front.
-2. **Check the ground.** You are on `main`, and `pnpm test && pnpm lint` is green. If Status says a milestone is *in flight*: `git log <base>..HEAD` step subjects plus the brief's Deviations say how far it got. A dirty tree is handed to a fresh implementer as it is (never stash or reset); continue at step 4 with "continue from step k".
+2. **Check the ground.** You are on `main`, and `pnpm test && pnpm lint` is green. If Status says a milestone is *in flight*: `git log <base>..HEAD` step subjects plus the brief's Deviations say how far it got. A dirty tree is handed to a fresh implementer as it is (never stash or reset); continue at step 4 with "continue from step k". A dirty tree with nothing in flight is not yours to clean up: ask Tyler.
 
 Per milestone:
 
@@ -29,7 +29,8 @@ Per milestone:
    - `pnpm gate <base>`: tree clean, files changed, existing goldens modified or deleted, skip/ignore/only/todo markers added, diff size.
    - `pnpm test && pnpm lint`, run by you. For slow-tier commands accept the implementer's pasted result line; re-run them yourself only at a tag milestone.
    - The changed files sit inside the brief's "Files touched"; every name under "Tests added" exists (`grep`); every **Provides** name exists (`grep -n`; do not read the files). A diff over roughly 3,000 lines gets a Sonnet review agent, not your read.
-   - A criterion that says "by hand" or "in this session" needs automated evidence (`playwright-cli`, a Node `fetch`, a pasted command line with its output) or it stays unticked and goes on Tyler's list. Never tick on a claim.
+   - A criterion that says "by hand" or "in this session" needs automated evidence (`playwright-cli`, a Node `fetch`, a pasted command line with its output) or it stays unticked and goes under "Criteria awaiting Tyler" in `docs/plan/questions-for-tyler.md`. Never tick on a claim. Like a device check, a criterion that only Tyler can verify does not block: when it is the only kind left unticked, the milestone is still recorded as done.
+   - **Decisions needed** in the report: a technical one is yours (decide, record it per the Deviations rule below, send the implementer back with the answer); one that is Tyler's goes into `questions-for-tyler.md` with a recommended default, and the implementer continues on the default.
 
    Failures go back to the same implementer (its context is intact) or, if it is unavailable or near its limit, to a fresh one after you write the failures under "Open gate failures" in the brief's Deviations. Two rounds at most; then one implementer with `model: opus`; then split the milestone or record a blocker. Your own fixes: under about 20 lines, in one file.
 6. **Record.** Tick the brief's exit-criteria boxes and set its `Status:` to done; tick `PLAN.md`. A changed decision gets an ADR drafted by a Sonnet agent with the `write-adr` skill and reviewed by you. Deviations that touch later briefs: a Sonnet agent fixes those briefs from the Deviations text and you review `git diff --stat`. `questions-for-tyler.md`, coverage rows and `deferred-ledger.md` are yours (or a Sonnet doc agent's). Overwrite Status; commit `M<NN> done: …`. On a marker row (`PLAN.md` names the tag): `git tag -a <tag> -m "<what is true now>"`.

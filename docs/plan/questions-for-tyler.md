@@ -30,6 +30,12 @@ Detail for Q1–Q6 is in `PRE-PLAN.md` §11 (item numbers in brackets). Detail f
 | Q10 | Own-timer progress bars under latency: stretch the bar over `duration + lead` so it ends when the result arrives, or fill on time and wait? | Stretch; M26 measures the gap and M34's device check is the feel test | M26 | **Stretch** (2026-09-19) |
 | Q11 | Code style: 2-space indent, single quotes, semicolons as needed, line width 100 (Biome); rustfmt defaults? | Yes | M01 | **Yes** (2026-09-19) |
 
+## Criteria awaiting Tyler
+
+Exit criteria that only Tyler can verify and that no command could stand in for (`PROMPT.md` loop step 5). They do not block the next milestone; the box in the brief stays unticked until Tyler confirms. One line each: milestone, the criterion, how to check it.
+
+(none)
+
 ## Resolved without asking
 
 - [3] The Xcode license: native linking works on this machine without `DEVELOPER_DIR` (checked 2026-09-19 with `cc`), so native `cargo test` and the `ts-rs` step will link.
