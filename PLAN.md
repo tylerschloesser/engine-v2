@@ -1,14 +1,14 @@
 # PLAN
 
-Phase 2 output. The index of Phase 3: milestone order, dependencies and progress. One brief per milestone lives in `docs/plan/<NN>-<slug>.md` (format: `docs/plan/README.md`); a Phase 3 session reads `PROMPT.md`, then its one brief, then the brief's reading list. Architecture, budgets and the ADR index stay in `PRE-PLAN.md`; decisions stay in `docs/decisions/`.
+Phase 2 output. The index of Phase 3: milestone order, dependencies and progress. One brief per milestone lives in `docs/plan/<NN>-<slug>.md` (format: `docs/plan/README.md`); the orchestrating session of `PROMPT.md` reads the brief; the implementer sub-agent it delegates to reads the brief and the brief's reading list (`docs/decisions/0025-phase-3-orchestration.md`). Architecture, budgets and the ADR index stay in `PRE-PLAN.md`; decisions stay in `docs/decisions/`.
 
 ## How milestones work
 
-- One milestone = one session. Tick the box here when every exit criterion in the brief is met and verified; record deviations in the brief's **Deviations** section (or a new ADR if a decision changes).
-- **The table is in execution order.** Take the first unticked row whose **After** milestones are all ticked. A `b`/`c` suffix is a split made to meet the sizing rule, not a lesser milestone; `10` runs before `09b`, `35b` before `35`, `37b` before `37`.
-- Sizing rule every brief meets: one new subsystem or one vertical cut; at most three packages or crates touched; reading list of `docs/spec/overview.md` plus at most three files; roughly 1,500 lines of new code and tests or fewer; verification that runs in minutes. A session that finds its milestone too big splits it (new brief, new row here) rather than overrunning.
+- One milestone = one implementer delegation (`.claude/agents/milestone-implementer.md`), accepted by the orchestrator. The orchestrator ticks the box here when every exit criterion in the brief is met and verified by its gate; the implementer records deviations in the brief's **Deviations** section (or a new ADR if a decision changes).
+- **The table is in execution order.** Take the first unticked row whose **After** milestones are all ticked. A `b`/`c` suffix is a split made to meet the sizing rule, not a lesser milestone; `10` runs before `09b`, `35b` before `35`, `37b` before `37`. A row that needs Tyler first (a push, a deploy, a login, an answer) is skipped while another row is ready.
+- Sizing rule every brief meets: one new subsystem or one vertical cut; at most three packages or crates touched; reading list of `docs/spec/overview.md` plus at most three files; roughly 1,500 lines of new code and tests or fewer; verification that runs in minutes. The rule sizes one implementer's context. An implementer that finds its milestone too big stops at a step boundary (or at the brief's cut line) and reports; the orchestrator splits it (new brief, new row here) rather than letting it overrun.
 - **T** = planned on the recommended default of an unanswered question in `docs/plan/questions-for-tyler.md`. **D** = a Tyler-run manual device checklist is attached in `docs/plan/device-checks.md`; device checks never block the next milestone, and a failed check opens a plan edit.
-- Three markers: **harness complete** after M04 (zero-allocation and cross-runtime determinism assertions running), **vertical slice complete** after M16, **first playable** after M20b.
+- Markers, each an annotated tag made at the row's `done` commit: `harness-complete` after M04 (zero-allocation and cross-runtime determinism assertions running), `vertical-slice-complete` after M16, `first-playable` after M20b, `multiplayer-in-browser` after M29, `reference-game-complete` after M34c, `phase-3-complete` after M39b. No other tags; everything is on `main`.
 
 ## Milestones
 
@@ -55,7 +55,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [ ] | 27 | `27-server-entrypoint-and-netcode-harness.md` | `createWorldServer`, Node adapter, in-memory pairs, virtual-clock netcode suite | 22b, 24, 16b | |
 | [ ] | 28 | `28-sessions-and-reconnect.md` | handshake, identity, heartbeat, link policy | 27 | |
 | [ ] | 28b | `28b-reconnect-and-lifecycle.md` | resume hint, epochs, grace, idle, resend | 28, 19, 24 | |
-| [ ] | 29 | `29-net-worker-and-reference-server.md` | net worker, loopback `ws`, `games/reference-server`, multiplayer in a browser | 28b | D |
+| [ ] | 29 | `29-net-worker-and-reference-server.md` | net worker, loopback `ws`, `games/reference-server`, multiplayer in a browser. **Multiplayer in browser.** | 28b | D |
 | [ ] | 30 | `30-interpolation.md` | remote presence interpolation, adaptive delay | 29, 19, 26 | |
 | [ ] | 31 | `31-rates-and-integrity.md` | chunk token bucket, soft cap, rate limits, byte budgets, zoom-out churn measurement | 29 | |
 | [ ] | 31b | `31b-desync-hashes.md` | per-chunk desync hashes, `ResyncChunk` | 31 | |
@@ -64,7 +64,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [ ] | 33b | `33b-reference-furnace-operation.md` | deposit/take, smelting, panel | 33 | T |
 | [ ] | 34 | `34-reference-multiplayer.md` | roster, remote players, play through the reference server | 33b, 30, 31b | D |
 | [ ] | 34b | `34b-reference-scripted-single-player.md` | scripted full game, golden log, persistence extras | 34, 23, 24b | T |
-| [ ] | 34c | `34c-reference-scripted-multiplayer.md` | scripted multiplayer races + reconnect in the netcode suite | 34b | |
+| [ ] | 34c | `34c-reference-scripted-multiplayer.md` | scripted multiplayer races + reconnect in the netcode suite. **Reference game complete.** | 34b | |
 | [ ] | 35b | `35b-bun-and-deno-adapters.md` | Bun and Deno server adapters | 29 | |
 | [ ] | 35 | `35-packaging-and-adapters.md` | final exports map, tarball + size tests, pattern B, `checkSupport`, release profile | 29, 35b | D |
 | [ ] | 36 | `36-slow-tier-and-benchmarks.md` | `pnpm test:slow`, standard large save, benchmarks | 34c, 35 | |
@@ -73,7 +73,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [ ] | 37 | `37-robustness-events.md` | trap reactions, `onFatal`, engine-event surface audit | 34c, 37b | |
 | [ ] | 38 | `38-hosting-checks.md` | Durable Objects go/no-go, COOP/COEP on a real host, Fly deploy | 35, 31 | D |
 | [ ] | 39 | `39-acceptance.md` | coverage + budget audit, full device checklist, Phase 3 exit | all above | D |
-| [ ] | 39b | `39b-phase-4-handoff.md` | capture what code cannot say in ADRs, `PROMPT.md` for Phase 4 | 39 | |
+| [ ] | 39b | `39b-phase-4-handoff.md` | capture what code cannot say in ADRs, `PROMPT.md` for Phase 4. **Phase 3 complete.** | 39 | |
 
 ## Companion files
 
@@ -85,8 +85,9 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 
 ## Plan-level decisions
 
-ADRs written during Phase 2:
+ADRs written during Phase 2 and Phase 3:
 
 - `docs/decisions/0022-entity-ids-and-provisional-ids.md`: `EntityId` is host-allocated, monotonic, never reused; predicted entities get client-local provisional ids and are addressed by tile. Supersedes the "type-segregated stores" wording of 0007 §5 and makes the interim rule of 0012 permanent.
 - `docs/decisions/0023-action-growth-declaration.md`: `Game::growth(&Action)` so shrinking actions pass the state-budget check. Amends 0004, 0003, 0007 §8.
 - `docs/decisions/0024-planning-amendments.md`: the ADR gaps and contradictions found while cutting milestones, each with the amendment and the milestone that implements it.
+- `docs/decisions/0025-phase-3-orchestration.md`: Phase 3 is one orchestrating session that lands milestones in serial on `main`; a Sonnet `milestone-implementer` sub-agent builds each; the orchestrator gates with `pnpm gate` and is the only writer of checkboxes, this file and `PROMPT.md`; tags at the markers above. Amends 0021 (Context, §3, §5, §7).

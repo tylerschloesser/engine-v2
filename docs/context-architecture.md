@@ -27,7 +27,7 @@ How this repo's documentation is split so that Claude sessions and sub-agents lo
 CLAUDE.md                     map + rules (always loaded)
 PROMPT.md                     current phase entrypoint + status block
 PRE-PLAN.md                   Phase 1 output: architecture + index of decisions
-PLAN.md                       Phase 2 output: milestones, each sized to one session
+PLAN.md                       Phase 2 output: milestones, each sized to one implementer sub-agent
 docs/
   process.md                  phases, shared session rules
   context-architecture.md     this file
@@ -49,12 +49,13 @@ spikes/<name>/                throwaway feasibility code + RESULT.md (Phase 1 on
   hooks/pre-commit-check.sh   the hook's script
   rules/<invariant>.md        path-scoped invariants, each added with the first code it governs
   skills/<procedure>/SKILL.md procedures, each added when it becomes real
+  agents/milestone-implementer.md  the Phase 3 implementer sub-agent (Sonnet); the only custom agent
 packages/engine/CLAUDE.md, packages/engine/crates/*/CLAUDE.md, games/*/CLAUDE.md
                               per-package conventions, each added in the milestone that
                               creates the package (layout: decisions/0017-packaging-and-build.md)
 ```
 
-If `PLAN.md` outgrows one comfortable read, Phase 2 splits it into `PLAN.md` (index + ordering + progress) and `docs/plan/<milestone>.md` (one brief per session, carrying that milestone's exit-criteria checkboxes and deviations). The `PROMPT.md` status block holds only the current milestone, state, exact next step, and blockers, and is overwritten rather than appended to.
+If `PLAN.md` outgrows one comfortable read, Phase 2 splits it into `PLAN.md` (index + ordering + progress) and `docs/plan/<milestone>.md` (one brief per milestone, the instruction set of the sub-agent that builds it, carrying that milestone's exit-criteria checkboxes and deviations). The `PROMPT.md` status block holds only the current milestone, state, exact next step, and blockers, and is overwritten rather than appended to.
 
 ## Target layout after bootstrap (Phase 4)
 
@@ -74,8 +75,8 @@ docs/
   skills/<procedure>/SKILL.md      repeatable procedures
 ```
 
-Deleted in Phase 4: `PROMPT.md`, `PRE-PLAN.md`, `PLAN.md` (and `docs/plan/`), `docs/process.md`, `docs/research/`, `docs/archive/`, `spikes/`. `docs/spec/` is folded into `docs/architecture/` (requirements that became behavior) and the reference game's own docs. Anything in the deleted files that can't be inferred from code must first be captured in an ADR.
+Deleted in Phase 4 (`.claude/agents/` and `scripts/gate.mjs` are Phase 3 scaffolding too; Phase 4 decides whether they stay): `PROMPT.md`, `PRE-PLAN.md`, `PLAN.md` (and `docs/plan/`), `docs/process.md`, `docs/research/`, `docs/archive/`, `spikes/`. `docs/spec/` is folded into `docs/architecture/` (requirements that became behavior) and the reference game's own docs. Anything in the deleted files that can't be inferred from code must first be captured in an ADR.
 
 ## Decisions
 
-[`decisions/0021-context-architecture.md`](decisions/0021-context-architecture.md) holds the specifics and the reasoning: which rule files and skills are expected and the milestone that creates each, the sub-agent briefing format, why there are no custom sub-agent definitions and what would justify one, the single commit-time hook and the triggers for extending or removing it, the permission allowlist, and Phase 3 progress tracking.
+[`decisions/0021-context-architecture.md`](decisions/0021-context-architecture.md) holds the specifics and the reasoning: which rule files and skills are expected and the milestone that creates each, the sub-agent briefing format, why there are no custom sub-agent definitions and what would justify one, the single commit-time hook and the triggers for extending or removing it, the permission allowlist, and Phase 3 progress tracking. [`decisions/0025-phase-3-orchestration.md`](decisions/0025-phase-3-orchestration.md) amends it for Phase 3: one orchestrating session, the `milestone-implementer` sub-agent that builds each milestone, who may write checkboxes and goldens, the acceptance gate, and trunk-only git with tags at markers.
