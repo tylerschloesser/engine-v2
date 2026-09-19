@@ -5,7 +5,9 @@ import {
   findSeed,
   formatFailure,
   formatSuiteLine,
+  formatWarning,
   parseJunit,
+  parsePlaywrightJson,
   parseVitestJson,
 } from './report.mjs'
 
@@ -127,6 +129,38 @@ describe('parseVitestJson', () => {
     expect(parseVitestJson(JSON.stringify(report)).failures).toEqual([
       { name: '/repo/x.test.mjs', message: 'SyntaxError', artefacts: [] },
     ])
+  })
+})
+
+describe('parsePlaywrightJson', () => {
+  test('passing report: one test per spec x project', () => {
+    expect(parsePlaywrightJson(fixture('playwright-pass.json'))).toEqual({
+      tests: 1,
+      failures: [],
+      warnings: [],
+    })
+  })
+
+  test('failing report: name carries the project, message from results.errors, trace as an artefact', () => {
+    const { tests, failures, warnings } = parsePlaywrightJson(fixture('playwright-fail.json'))
+    expect(tests).toBe(2)
+    expect(failures).toEqual([
+      {
+        name: '[webkit] determinism: golden reproduced @engines',
+        message: 'checkpoint 0: got aaa, golden has bbb',
+        seed: undefined,
+        artefacts: ['test-results/webkit/trace.zip'],
+      },
+    ])
+    expect(warnings).toEqual([
+      '[chromium] determinism: golden reproduced @engines: Tracing.start took 1.2s',
+    ])
+  })
+})
+
+describe('formatWarning', () => {
+  test('indented warn line', () => {
+    expect(formatWarning('slow: Tracing.start')).toBe('  warn slow: Tracing.start')
   })
 })
 

@@ -3,7 +3,7 @@
 // failures. The runner (scripts/test.mjs) deletes `reportPath` before spawning and hands the same
 // path back to `parse`, so a stale report is never read. M03 adds `playwright`.
 import { existsSync, readFileSync } from 'node:fs'
-import { parseJunit, parseVitestJson } from './report.mjs'
+import { parseJunit, parsePlaywrightJson, parseVitestJson } from './report.mjs'
 import { lastLines, readLog } from './run.mjs'
 
 /**
@@ -78,6 +78,31 @@ export const adapters = {
       }
     },
     parse: fromReport(parseVitestJson),
+  },
+
+  // `browser` (docs/decisions/0020 §1, §3): Playwright Test against `packages/engine/playwright.config.ts`.
+  // `--grep` composes the `@slow` tag with `pattern` the same way the `vitest` adapter's `-t` does.
+  playwright: {
+    command({ suite, pattern, tier }) {
+      const reportPath = `${suite.name}/report.json`
+      const tag = tier === 'slow' ? '(?=.*@slow)' : '(?!.*@slow)'
+      return {
+        cmd: 'pnpm',
+        args: [
+          'exec',
+          'playwright',
+          'test',
+          '--config',
+          'packages/engine/playwright.config.ts',
+          '--grep',
+          `${tag}.*${pattern ?? ''}`,
+          ...(suite.args ?? []),
+        ],
+        env: { PLAYWRIGHT_JSON_OUTPUT_FILE: `test-results/${reportPath}` },
+        reportPath: `test-results/${reportPath}`,
+      }
+    },
+    parse: fromReport(parsePlaywrightJson),
   },
 
   // A plain script in any runtime (the Bun leg of `wasm`). `suite` is `{ cmd, args, tests }`:

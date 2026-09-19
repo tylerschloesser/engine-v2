@@ -12,14 +12,27 @@ export const buildSteps = [
   // `buildGame()` (from dist/, hence after tsc) on the dev profile for every fixture crate.
   { name: 'fixtures', cmd: 'node', args: ['packages/engine/scripts/build-fixtures.mjs'] },
   { name: 'cargo-tests', cmd: 'cargo', args: ['nextest', 'run', '--workspace', '--no-run'] },
+  // `vite build` of the fixture app on the dev profile (docs/plan/03-browser-harness.md, Planning
+  // decisions "Served build, not dev server"); `browser`'s `webServer` only runs `vite preview`.
+  {
+    name: 'pages',
+    cmd: 'pnpm',
+    args: [
+      'exec',
+      'vite',
+      'build',
+      '--config',
+      'packages/engine/tests/browser/pages/vite.config.ts',
+    ],
+  },
 ]
 
 /**
  * A suite is `{ name, kind, tiers, budgetMs, args?, cwd?, env?, legs? }`; `kind` names an adapter in
  * scripts/lib/adapters.mjs. `legs` are extra runs reported on the suite's line, each
  * `{ name, kind, ... }` with what its adapter needs. Ids follow the rows of the 0020 §3 table:
- * `rust`, `unit`, `wasm`, and reserved for later milestones `netcode`, `browser`. `budgetMs` is the fast-tier budget; owner of
- * the numbers: docs/decisions/0020 §3. Slow-tier lines carry no budget.
+ * `rust`, `unit`, `wasm`, `browser`, and reserved for a later milestone `netcode`. `budgetMs` is the
+ * fast-tier budget; owner of the numbers: docs/decisions/0020 §3. Slow-tier lines carry no budget.
  */
 export const suites = [
   { name: 'rust', kind: 'nextest', tiers: ['fast', 'slow'], budgetMs: 10_000 },
@@ -39,4 +52,5 @@ export const suites = [
       },
     ],
   },
+  { name: 'browser', kind: 'playwright', tiers: ['fast', 'slow'], budgetMs: 25_000 },
 ]

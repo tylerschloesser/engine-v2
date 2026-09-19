@@ -8,7 +8,13 @@ import { fileURLToPath } from 'node:url'
 import { adapters } from './lib/adapters.mjs'
 import { parseArgs, usage } from './lib/args.mjs'
 import { toolEnv } from './lib/env.mjs'
-import { classifyBudget, formatDuration, formatFailure, formatSuiteLine } from './lib/report.mjs'
+import {
+  classifyBudget,
+  formatDuration,
+  formatFailure,
+  formatSuiteLine,
+  formatWarning,
+} from './lib/report.mjs'
 import { lastLines, readLog, run } from './lib/run.mjs'
 import { probeTool, TOOLS } from './setup-tools.mjs'
 import { buildBudgetMs, buildSteps, suites } from './suites.mjs'
@@ -72,7 +78,7 @@ async function main() {
   // Phase 3: one line per suite in registration order, then one block per failure.
   const nameWidth = Math.max(...selected.map((s) => s.name.length))
   let failed = false
-  for (const { suite, tests, failures, ms } of outcomes) {
+  for (const { suite, tests, failures, warnings, ms } of outcomes) {
     const budgetMs = opts.tier === 'fast' ? suite.budgetMs : undefined
     const overBudget = budgetMs !== undefined && classifyBudget(ms, budgetMs, opts.scale) === 'fail'
     failed ||= failures.length > 0 || overBudget
@@ -87,6 +93,7 @@ async function main() {
         nameWidth,
       }),
     )
+    for (const warning of warnings) console.log(formatWarning(warning))
   }
   for (const { suite, failures } of outcomes) {
     for (const failure of failures) console.log(formatFailure({ suite: suite.name, ...failure }))
@@ -107,6 +114,7 @@ async function runSuite(suite, opts) {
     ms: performance.now() - start,
     tests: parts.reduce((n, part) => n + part.tests, 0),
     failures: parts.flatMap((part) => part.failures),
+    warnings: parts.flatMap((part) => part.warnings ?? []),
   }
 }
 

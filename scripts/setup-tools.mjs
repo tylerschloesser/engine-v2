@@ -41,6 +41,17 @@ export const TOOLS = [
       args: ['-c', 'curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.8"'],
     },
   },
+  {
+    // `@playwright/test`'s own version is a devDependency pin (docs/decisions/0017 §10), checked by
+    // the lockfile like any other; this row is the browser binaries the `browser` suite launches.
+    name: 'playwright-browsers',
+    pin: '1.63.0',
+    probe: { cmd: 'node', args: ['scripts/lib/playwright-browsers-probe.mjs'], match: /^(\S+)/m },
+    install: {
+      cmd: 'pnpm',
+      args: ['exec', 'playwright', 'install', 'chromium', 'webkit', 'firefox'],
+    },
+  },
 ]
 
 /** Installed version of `tool`, or null when it is missing. */

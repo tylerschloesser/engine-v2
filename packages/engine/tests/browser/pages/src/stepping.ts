@@ -10,6 +10,9 @@ declare global {
   interface Window {
     __harness?: Harness
     __stepping?: { ready: boolean }
+    /** `tests/browser/support/page.ts`'s `openPage` waits for this (`page.goto`'s `load` event does
+     * not reliably wait out a module's top-level `await` chain: measured). */
+    __pageReady?: true
   }
 }
 
@@ -19,3 +22,4 @@ const harness = await createHarness({
 })
 window.__harness = harness
 window.__stepping = { ready: true }
+window.__pageReady = true

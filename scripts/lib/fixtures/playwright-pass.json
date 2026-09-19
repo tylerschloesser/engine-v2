@@ -1,0 +1,26 @@
+{
+  "config": {},
+  "suites": [
+    {
+      "title": "wiring.spec.ts",
+      "file": "wiring.spec.ts",
+      "specs": [
+        {
+          "title": "wiring: crossOriginIsolated and SharedArrayBuffer on main",
+          "ok": true,
+          "tests": [
+            {
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "annotations": [],
+              "results": [{ "status": "passed", "duration": 293, "errors": [], "attachments": [] }],
+              "status": "expected"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": { "expected": 1, "skipped": 0, "unexpected": 0, "flaky": 0 }
+}

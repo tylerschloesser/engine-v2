@@ -36,6 +36,12 @@ export function formatSuiteLine({ name, failed, tests, ms, budgetMs, scale = 1, 
   return `${name.padEnd(nameWidth)} ${status} ${count} ${time}${note}`
 }
 
+/** One warning line under a suite's line (an adapter's `warnings`, docs/decisions/0020 §3 extension:
+ * M04 uses this for the `Tracing.start` stall). */
+export function formatWarning(text) {
+  return `  warn ${text}`
+}
+
 /** One failure block: name, message capped at `maxLines`, seed, artefact paths. */
 export function formatFailure(
   { suite, name, message, seed, artefacts = [] },
@@ -96,6 +102,46 @@ export function parseVitestJson(json) {
     }
   }
   return { tests: (report.numPassedTests ?? 0) + (report.numFailedTests ?? 0), failures }
+}
+
+const FAILED_STATUSES = new Set(['failed', 'timedOut', 'interrupted'])
+
+/**
+ * Playwright's `--reporter=json` report (docs/decisions/0020 §1, §3, §5, §6; a `playwright`
+ * adapter entry of `scripts/lib/adapters.mjs`). `tests` counts one entry per spec x project (a
+ * `@engines` spec run in three browsers is three tests); `warnings` comes from annotations of type
+ * `warning` (M04's `Tracing.start` stall).
+ */
+export function parsePlaywrightJson(json) {
+  const report = JSON.parse(json)
+  let tests = 0
+  const failures = []
+  const warnings = []
+
+  const walkSpec = (spec) => {
+    for (const t of spec.tests ?? []) {
+      tests++
+      const project = t.projectName ? `[${t.projectName}] ` : ''
+      const name = `${project}${spec.title}`
+      const last = t.results?.at(-1)
+      if (last && FAILED_STATUSES.has(last.status)) {
+        const message =
+          (last.errors ?? []).map((e) => e.message ?? String(e)).join('\n') || last.status
+        const artefacts = (last.attachments ?? []).map((a) => a.path).filter(Boolean)
+        failures.push({ name, message, seed: findSeed(message), artefacts })
+      }
+      for (const a of t.annotations ?? []) {
+        if (a.type === 'warning') warnings.push(`${name}: ${a.description ?? ''}`)
+      }
+    }
+  }
+  const walkSuite = (suite) => {
+    for (const spec of suite.specs ?? []) walkSpec(spec)
+    for (const child of suite.suites ?? []) walkSuite(child)
+  }
+  for (const suite of report.suites ?? []) walkSuite(suite)
+
+  return { tests, failures, warnings }
 }
 
 /** The message lines, then the first stack frame outside node_modules (where the test failed). */

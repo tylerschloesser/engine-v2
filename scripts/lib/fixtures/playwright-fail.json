@@ -1,0 +1,55 @@
+{
+  "config": {},
+  "suites": [
+    {
+      "title": "determinism.spec.ts",
+      "file": "determinism.spec.ts",
+      "specs": [
+        {
+          "title": "determinism: golden reproduced @engines",
+          "ok": false,
+          "tests": [
+            {
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "annotations": [{ "type": "warning", "description": "Tracing.start took 1.2s" }],
+              "results": [
+                {
+                  "status": "passed",
+                  "duration": 120,
+                  "errors": [],
+                  "attachments": [],
+                  "retry": 0
+                }
+              ],
+              "status": "expected"
+            },
+            {
+              "projectId": "webkit",
+              "projectName": "webkit",
+              "annotations": [],
+              "results": [
+                {
+                  "status": "failed",
+                  "duration": 88,
+                  "errors": [{ "message": "checkpoint 0: got aaa, golden has bbb" }],
+                  "attachments": [
+                    {
+                      "name": "trace",
+                      "path": "test-results/webkit/trace.zip",
+                      "contentType": "application/zip"
+                    }
+                  ],
+                  "retry": 0
+                }
+              ],
+              "status": "unexpected"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": { "expected": 1, "skipped": 0, "unexpected": 1, "flaky": 0 }
+}

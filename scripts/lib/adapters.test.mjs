@@ -12,6 +12,29 @@ function logWith(text) {
   return logPath
 }
 
+describe('playwright adapter', () => {
+  test('command: fast tier excludes @slow, slow tier requires it, pattern composes', () => {
+    const { command } = adapters.playwright
+    expect(command({ suite: { name: 'browser' }, tier: 'fast' })).toEqual({
+      cmd: 'pnpm',
+      args: [
+        'exec',
+        'playwright',
+        'test',
+        '--config',
+        'packages/engine/playwright.config.ts',
+        '--grep',
+        '(?!.*@slow).*',
+      ],
+      env: { PLAYWRIGHT_JSON_OUTPUT_FILE: 'test-results/browser/report.json' },
+      reportPath: 'test-results/browser/report.json',
+    })
+    expect(
+      command({ suite: { name: 'browser' }, tier: 'slow', pattern: 'determinism' }).args,
+    ).toContain('(?=.*@slow).*determinism')
+  })
+})
+
 describe('script adapter', () => {
   test('script adapter: -t skips a script none of whose tests match', () => {
     const { command } = adapters.script
