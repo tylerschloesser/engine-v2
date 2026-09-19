@@ -1,6 +1,6 @@
 # M02b: Vite plugin, `virtual:engine/wasm`, fixture app
 
-Status: not started · After: 02 · Tyler-dependent: no
+Status: done · After: 02 · Tyler-dependent: no
 
 Split out of M02 (see the split note there). Nothing is scheduled between 02, 02b, 03 and 04.
 
@@ -66,11 +66,11 @@ Note from M02: `packages/engine/tests/tsconfig.json` already type-checks everyth
 `wasm` suite: `plugin-dev: headers on every response`, `plugin-dev: wasm served as application/wasm`, `plugin-dev: virtual module carries url and buildHash`, `plugin-dev: fs.allow contains engine dir`, `plugin-dev: touch triggers rebuild and full-reload`, `plugin-build: hashed non-inlined wasm asset`, `plugin-build: preview sends COOP/COEP`, `plugin: default profile follows the Vite command` (0017 §4; no `profile` option: Vite's `resolveConfig` with command `serve` then `build`, reading the chosen profile from the plugin's `api.profile`, gives `dev` then `release`; no cargo call, so the fast tier pays no release build). Slow tier (same suite, `@slow` title): `plugin: rustc error reaches overlay and recovers @slow`, `plugin-build: default profile writes a release game.json @slow` (a real `vite build` with no `profile` option; `game.json.profile === 'release'`).
 
 ## Exit criteria
-- [ ] All tests above pass by name (`pnpm test wasm -t plugin`, `pnpm test:slow wasm -t "rustc error"`, `pnpm test:slow wasm -t "default profile"`).
-- [ ] `pnpm --filter engine exec vite build -c tests/browser/pages/vite.config.ts` succeeds and `vite preview` serves `wiring.html` with `crossOriginIsolated === true` (checked by hand in one browser; automated in M03).
-- [ ] `packages/engine/src/vite.ts` imports Node built-ins and types only (`vite` stays a types-only optional peer, 0017 §2).
-- [ ] `wasm` suite still inside its budget with the plugin tests added; number recorded under Deviations.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name (`pnpm test wasm -t plugin`, `pnpm test:slow wasm -t "rustc error"`, `pnpm test:slow wasm -t "default profile"`).
+- [x] `pnpm --filter engine exec vite build -c tests/browser/pages/vite.config.ts` succeeds and `vite preview` serves `wiring.html` with `crossOriginIsolated === true` (checked by hand in one browser; automated in M03).
+- [x] `packages/engine/src/vite.ts` imports Node built-ins and types only (`vite` stays a types-only optional peer, 0017 §2).
+- [x] `wasm` suite still inside its budget with the plugin tests added; number recorded under Deviations.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test wasm -t plugin` · `pnpm test:slow wasm -t "rustc error"` · `pnpm test` · `pnpm lint`
@@ -102,3 +102,4 @@ No split: steps 1–5 fitted one session. No decision changed, so no ADR. Exact 
   - `plugin: rustc error reaches overlay and recovers @slow`: ~4.8–5.1 s (a real cold build: fresh `[workspace]`, its own `target/`, no shared incremental state).
   - `plugin-build: default profile writes a release game.json @slow`: ~4.6 s cold (first run, release profile never built for `fx-hash` before), ~1 s once its `target/engine/release` incremental state is warm.
 - **Exit criterion 2, done by hand (this session):** `pnpm --filter engine exec vite build -c tests/browser/pages/vite.config.ts` (and separately `vite dev`) then `vite preview`, opened in Chromium via the `playwright-cli` skill: `window.__wiring.crossOriginIsolated` read `true` in both the build+preview and the dev-server case; a `utimes` touch to `fixtures/hash/src/lib.rs` under `vite dev` bumped the dev route's `?v=` from 1 to 2 on reload.
+- **Orchestrator gate (2026-09-19):** `pnpm gate 2debfab` clean (18 files, +756/−7, no goldens or markers changed); `pnpm test` (rust 16, unit 44, wasm 23 in 1 s/7 s) and `pnpm lint` green. Exit criterion 2 re-run by the orchestrator: `vite build` then `vite preview` on port 4519, `playwright-cli --raw eval` of `window.__wiring` in Chromium gave `{"url":"/assets/game-D8nkzLPz.wasm",…,"contentType":"application/wasm","crossOriginIsolated":true}`, and `curl -I /wiring.html` showed both COOP/COEP headers. Files outside the brief list, accepted: `packages/engine/scripts/copy-virtual-dts.mjs` (10 lines) and the `exclude` in `tests/tsconfig.json`. The symlinked-crate-path fix for `buildGame` is assigned to M35 (its brief, Planning decisions).

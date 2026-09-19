@@ -16,7 +16,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 |---|---|---|---|---|---|
 | [x] | 01 | `01-scaffolding.md` | pnpm + cargo workspaces, toolchain pins, format/lint, `.claude/settings.json` + commit hook, `write-adr` skill, skeleton `pnpm test` / `pnpm lint` | — | |
 | [x] | 02 | `02-build-and-determinism.md` | engine crate ABI + `export_game!` + loader, `buildGame`, first fixture, import allowlist, state hash equal natively / Node / Bun | 01 | |
-| [ ] | 02b | `02b-vite-plugin.md` | Vite plugin, `virtual:engine/wasm`, COOP/COEP fixture app | 02 | |
+| [x] | 02b | `02b-vite-plugin.md` | Vite plugin, `virtual:engine/wasm`, COOP/COEP fixture app | 02 | |
 | [ ] | 03 | `03-browser-harness.md` | Playwright in `pnpm test`, `engine/test` skeleton (clock, stepping, quiescence), determinism hash in three browsers, `run-tests` skill | 02b | D |
 | [ ] | 04 | `04-zero-gc-harness.md` | zero-allocation assertion with permanent negative controls, `budgets.json`, `gc-test` skill. **Harness complete.** | 03 | |
 | [ ] | 05 | `05-codec-and-state-hash.md` | `Codec`, NaN canonicalisation, `StateHash`, golden-bytes pattern | 04 | |
