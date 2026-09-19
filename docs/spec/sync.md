@@ -4,7 +4,7 @@
 
 - The sim sends deltas to each client/renderer, scoped to that client's viewport.
 - A client-side layer manages the currently displayed state and the latest received state, and interpolates and predicts so lag isn't noticeable.
-- The engine abstracts this: the game defines the data model, the deltas, and the interpolation and prediction logic; the engine pieces everything together.
+- The engine abstracts this: the game defines the data model (actions, entities, per-player and global state, presence) and the rules (`apply` and tick rules). The engine derives deltas from the rules' writes, predicts by re-running the same `apply` on the client, and interpolates remote motion. The game writes no delta types and no separate prediction or interpolation logic; it may opt individual actions out of prediction. (Amended by Tyler, 2026-09-19.)
 - Tick rate is TBD. It must accommodate mobile network patterns: assume reasonably decent, modern speeds and bandwidth, but not great 5G.
 - Transport: likely WebSockets, unless there's a better option.
 - **Hosting.** The server entrypoint is host-agnostic in this sense: it is a library that needs one long-lived context, a timer, injected connections, and injected storage. Target a Node/Bun process (VM, container, Fly) first and Cloudflare Durable Objects second. Vercel is not a target for the sim (it can serve the static client). Cost target: about $5/month per always-available world, about $0 while idle.

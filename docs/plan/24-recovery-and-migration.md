@@ -34,7 +34,7 @@ Mine from spikes: none. Rules that apply: `.claude/rules/determinism.md`, `.clau
 **Provides**
 - ABI/region: `RegionId` 9 `Progress` (12 B, sim role; read from a *dead* instance through `inst.region(9).u8` / `inst.mem.u32`, which call no export): `ProgressCursor { phase: u32, tick: u32, record: u32 }`, `phase ∈ { Idle, Admit, ApplyRecord, OnPlayer, Tick, BuildFrame, Snapshot, Replay }`, written by Rust before each step; during replay `record` is the byte offset of the record in its segment (the `offset` of 0005's `Skip { segment, offset }`).
 - ABI: `sim_log_skip(segment: u32, offset: u32) -> len` (a frame holding one `Skip` record, `tick_delta = 0`, in the `Persist` region); `sim_test_trap()` (panics in phase `Idle`; test-only by convention, reached only through `engine/test`).
-- TS host: `SimHost.onRecovered: ((r: { reason: 'panic' | 'upgrade'; tick: number; skipped: number }) => void) | null` (M28b points it at `bumpEpoch()` + `resyncAll()`; M24b fires it with `'upgrade'`), `SimHost.onFatal: ((f: { tick: number; message: string }) => void) | null` (M27 maps it for servers, see ADR note below; the sim worker maps it to `shell.fatal`), `SimHost.recover(): Promise<'resumed' | 'skipped' | 'fatal'>`.
+- TS host: `SimHost.onRecovered: ((r: { reason: 'panic' | 'upgrade'; tick: number; skipped: number }) => void) | null` (M28b points it at `bumpEpoch()` + `resyncAll()`; M24b fires it with `'upgrade'`), `SimHost.onFatal: ((f: { tick: number; message: string }) => void) | null` (M27 maps it to `HostServices.onFatal?` for servers, 0024 §5; the sim worker maps it to `shell.fatal`), `SimHost.recover(): Promise<'resumed' | 'skipped' | 'fatal'>`.
 - `engine/test`: `trapSim(host): void` (calls `sim_test_trap`; this is the "M24 test trap hook" M28b's `harness.panicServer()` uses).
 - Fixture `panicky`: actions `PanicInAdmit`, `PanicInApply`, `ArmTickPanic { at: Tick }`, `OverflowStackInAdmit` (deterministic panics in each phase; `sim_test_trap` exists for harnesses running other fixtures).
 
@@ -83,4 +83,4 @@ none
 ## Deviations
 (filled in during Phase 3)
 
-ADR note for the planner (not an edit): 0009 `HostServices` has no member through which a *server* host learns of `onFatal` (0005 Panic recovery 4). This brief exposes `SimHost.onFatal`; M27 should add an optional `onFatal` to `HostServices` by ADR amendment.
+ADR note: 0009 `HostServices` had no member through which a *server* host learns of `onFatal` (0005 Panic recovery 4). 0024 §5 adds `HostServices.onFatal?`; this brief exposes `SimHost.onFatal` and M27 maps it.

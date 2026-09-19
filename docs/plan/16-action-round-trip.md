@@ -1,6 +1,6 @@
 # M16: Action round trip (vertical slice complete)
 
-Status: not started · After: 15b · Tyler-dependent: PRE-PLAN §11 item 1 (`serde_json` sign-off; assumed approved) and the `dispatch`-before-ready behaviour below (assumed: throws) · Device checklist attached (**D**)
+Status: not started · After: 15b · Tyler-dependent: PRE-PLAN §11 item 1 (`serde_json` sign-off; assumed approved) · Device checklist attached (**D**)
 
 Split: `G::Ui` → UI ring → `onUi`, `client.clock()` and the minimal `FrameView` moved to `16b-ui-observation-and-clock.md` (size). M17 depends on 16b; M21 depends on this milestone only.
 
@@ -25,7 +25,7 @@ Also `crates/engine/src/wire/CLAUDE.md`. Mine from spikes: `spikes/prediction-ap
 - **Skill** `.claude/skills/add-action-type/SKILL.md`, written last from what was actually done.
 
 ## Non-scope
-Prediction, `NotPredictable`, pending replay (M25). Persistence (M22). Action rate limit and `RateLimited` (M31). Presence table content and witness checks (M19). State-budget check (M21). `Hello`/`Welcome`, resend after reconnect (M28). `onUi`, `clock()` (M16b).
+Prediction, `NotPredictable`, pending replay (M25). Persistence (M22). Action rate limit and `RateLimited` (M31). Presence table content and witness checks (M19). State-budget check (M21). `Hello`/`Welcome` (M28), resend after reconnect (M28b). `onUi`, `clock()` (M16b).
 
 ## Files, packages and crates touched
 `packages/engine/src` (`client.ts`, `worker.ts`, `vite.ts`, `test.ts`), `packages/engine/crates/engine` (`abi/client.rs`, `client/`, `host/`), `packages/engine/fixtures/puts`. Plus `.claude/skills/`.
@@ -64,7 +64,8 @@ Latency row: `action_lands_on_next_tick` (≤ 1 tick to authority). Allocation r
 Skill `add-action-type` (0021 §4). `packages/engine/src/CLAUDE.md`: ring record formats table.
 
 ## Manual device checks
-`docs/plan/device-checks.md`, section for M16: first on-device run of the slice (isolation, adapter, determinism hash, pan/pinch, one action), per PRE-PLAN §8 item 9.
+[device-checks.md, M16: Vertical slice on the phone](device-checks.md#m16-vertical-slice-on-the-phone) (`PRE-PLAN.md` §8 item 9: first on-device run of the slice).
+The slice page must be listed by `pnpm device:serve --tunnel` and show the counters the items read: `Confirmed` / rejected results, ring drops, `engine_mem_grows` per instance, the tick counter.
 
 ## Deviations
 (filled in during Phase 3)

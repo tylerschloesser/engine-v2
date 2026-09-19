@@ -30,12 +30,12 @@ Mine from spikes: `spikes/prediction-api/game/tests/prediction.rs` (`timed_colle
 **Provides:**
 - `OverlayDiff` (engine-internal): `tiles() -> &[TilePos]` whose effective value changed since the previous replay; `ClientCore::mark_dirty(ChunkCoord)` so the diff and replica deltas share one dirty set.
 - `FrameView::entities()` (M17's iterator and order) now yields replica plus overlay: overlay values override by id, tombstones are skipped, provisional ids come last. `FrameView::is_predicted(EntityId) -> bool`, `tile_is_predicted(TilePos) -> bool`, `predicted_tiles(&mut dyn FnMut(TilePos, Tile))`, `pending(&mut dyn FnMut(u32, &Prediction<G::Reject>))`.
-- `Clocks` (M17's struct: `authoritative`, `predicted`, `tick_fraction`, `ticks_per_second`) gains `lead: Ticks`, `progress(started_at, done_at) -> f32` and `own_progress(started_at, done_at) -> f32`.
+- `Clocks` (M16b's struct as grown by M17: `authoritative`, `predicted`, `tick_fraction`, `ticks_per_second`) gains `lead: Ticks`, `progress(started_at, done_at) -> f32` and `own_progress(started_at, done_at) -> f32`.
 - `HostClock`: `on_frame(tick, arrived_ms)`, `now(local_ms) -> (Tick, f32)` (tick and fraction, monotone), `now_f64(local_ms)`, `rebase()`. M30 builds on it.
 - `LeadEstimator`: `on_ack_sample(auth_tick_at_dispatch, ack_tick)`, `seed_rtt_ms(f64)` (M28/M29 call it), `lead() -> Ticks`. It drives M25's `ClientCore::set_lead`.
 - `client.clock().predicted` differs from `.authoritative` from this milestone on; a `tickFraction` field if M16b's object lacks one.
 
-**Consumes:** `Overlay` iterators, `View` layering, `PendingQueue`, `Prediction`, `ClientCore::set_lead`, the per-ack sample hook, `Loopback` helpers, fixture `predict` (M25). `FrameView`, `EntityIter`, `Clocks`, `DrawList`, `Draw`, `PREDICTED`, `drawListHash`/`drawListRecords`, `renderTo`/`expectPixel` (M17, M09). `ClientCore::drain_dirty` and the slab rebuild "pristine + replica overlay through `tile_visual`" with its chunk-upload ring record (M15, M15b). Clock block layout (M16); `client.clock` reused object (M16b). `stepFrame`, injectable clock (M03, M06b).
+**Consumes:** `Overlay` iterators, `View` layering, `PendingQueue`, `Prediction`, `ClientCore::set_lead`, the per-ack sample hook, `Loopback` helpers, fixture `predict` (M25). `FrameView`, `EntityIter`, `DrawList`, `Draw`, `PREDICTED`, `drawListHash`/`drawListRecords` (M17); `Clocks` (M16b, M17); `renderTo`/`expectPixel` (M09). `ClientCore::drain_dirty` and the slab rebuild "pristine + replica overlay through `tile_visual`" with its chunk-upload ring record (M15, M15b). Clock block layout (M16); `client.clock` reused object (M16b). `stepFrame`, injectable clock (M03, M06b).
 
 ## Planning decisions
 - **Change list = tiles only.** The DrawList is rebuilt from `View` every frame, so entities, players and globals need no diff; `ui` already re-runs per frame and dispatch (M25). Terrain texels are the only retained renderer state. `OverlayDiff` keeps the previous deduplicated overlay tile list (single digits) and compares after each replay.
@@ -70,7 +70,7 @@ Browser suite: `prediction-no-flicker`: stepped frames, semantic pixel probe at 
 ## Exit criteria
 - [ ] Every test above passes; the measured gaps are recorded under Deviations.
 - [ ] The browser zero-GC test passes with predicted actions in its script.
-- [ ] `docs/plan/device-checks.md` has the own-timer question under M34 (add it if Phase 2 did not).
+- [ ] Item M34-own-timer-bar in `docs/plan/device-checks.md` matches what was built.
 - [ ] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
@@ -86,7 +86,7 @@ Browser suite: `prediction-no-flicker`: stepped frames, semantic pixel probe at 
 Extend `.claude/rules/prediction.md`: texel conversion always reads overlay-then-replica and is triggered only through the dirty set; key cross-ack client state by tile. Add the own-timer rule and the two `Clocks` helpers to the `add-action-type` skill's timer section.
 
 ## Manual device checks
-`docs/plan/device-checks.md`, M34 entry "own-timer bar on a real network" (added by this milestone).
+Owns item M34-own-timer-bar (own-timer bar on a real network), run in [M34's section of device-checks.md](device-checks.md#m34-reference-multiplayer-on-real-devices); nothing to run before M34.
 
 ## Deviations
 (filled in during Phase 3)

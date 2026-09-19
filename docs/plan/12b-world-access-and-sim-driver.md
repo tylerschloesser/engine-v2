@@ -36,7 +36,7 @@ Mine from spikes: `spikes/prediction-api/engine/src/lib.rs` (`Authority::write`,
 
 ## Planning decisions
 - **Exact `TickCx` shape (PRE-PLAN §10).** `TickCx<'a, G>` is a struct, not a trait, implementing `WorldRead + WorldWrite` (`rng()` is `Ok`). Inherent methods, index-based so rules can write while iterating: M12b `as_write()`, `player_count()`, `player_id_at(i)` (ascending `PlayerId`); M21b `next_woken()`, `next_due()`, `wake(id)`, `wake_at(id, Tick)`, `cancel_wake(id)`, `activate(sys, id)`, `deactivate(sys, id)`, `active_len(sys)`, `active_at(sys, i)`. No entity-wide iteration exists: that is what keeps tick cost O(active) (0007 §7). Player timers have no wheel: `tick` scans the player table, which holds tens of rows.
-- **Puts made through `TickCx` do not auto-wake; puts made by `apply`/`on_player`/`genesis` do** (mechanism in M21b). Stated here because it is why `TickCx` and `Authority` are distinct types.
+- **Puts made through `TickCx` do not auto-wake; puts made by `apply`/`on_player`/`genesis` do** (0024 §7; mechanism in M21b). Stated here because it is why `TickCx` and `Authority` are distinct types.
 - **`Applied` carries nothing**, per `0022-entity-ids-and-provisional-ids.md` §6 (tile addressing; no id map).
 
 ## Order of work

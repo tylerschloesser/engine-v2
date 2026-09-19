@@ -1,6 +1,6 @@
 # 0009: Transport and hosting
 
-Status: Accepted (2026-09-19)
+Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §5.
 
 ## Context
 

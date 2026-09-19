@@ -70,7 +70,8 @@ PRE-PLAN §7 "Download": the `size` test (both `.wasm` thresholds, engine JS). "
 `packages/engine/CLAUDE.md`: the packaging tests and how to run them, the no-workspace-inheritance rule, scratch-app location, pattern B recipe. `run-tests` skill: reading `size.json`. `games/reference` README: pattern B and `checkSupport` usage in five lines. No new rule file.
 
 ## Manual device checks
-Proposed entries for `docs/plan/device-checks.md` (this row should carry **D**): **M35-safari-build**: real Safari on macOS and on the iPhone loads the `vite build` + `preview` reference game and its debug line reports wasm delivery `module` (or `url` if item (c) was needed); **M35-capability**: a browser without WebGPU shows the capability screen with `no-webgpu`.
+[device-checks.md, M35: Built reference game in real Safari](device-checks.md#m35-built-reference-game-in-real-safari) (this row carries **D**).
+Items M35-safari-build-mac and M35-safari-build-iphone decide item (c) of Planning decisions; M35-capability needs the capability screen.
 
 ## Deviations
 (filled in during Phase 3)

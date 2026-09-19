@@ -1,6 +1,6 @@
 # 0005: Persistence, upgrades and crash recovery
 
-Status: Accepted (2026-09-19)
+Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §2, §3, §4, §8.
 
 ## Context
 

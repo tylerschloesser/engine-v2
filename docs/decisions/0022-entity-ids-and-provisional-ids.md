@@ -1,6 +1,6 @@
 # 0022: Entity ids: monotonic, never reused, layout-free; predicted entities are addressed by tile
 
-Status: Accepted (2026-09-19)
+Status: Accepted (2026-09-19). Settles the entity-store and id-reuse item deferred in [0007](0007-world-model.md) and the provisional-id item deferred in [0012](0012-prediction-and-reconciliation.md), whose interim addressing rule it replaces (§6). Implemented in milestones M12, M21 and M25.
 
 ## Context
 

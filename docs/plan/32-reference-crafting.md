@@ -1,6 +1,6 @@
 # M32: Reference game: inventory, unlock and crafting
 
-Status: not started · After: 20b, 21 · Tyler-dependent: no
+Status: not started · After: 20b, 21b · Tyler-dependent: no
 
 ## Goal
 A player who has mined the required stone sees a crafting menu appear, crafts a furnace with a timed progress bar while still able to collect, and ends with a furnace item in a six-item inventory. A logged `Disconnected` cancels that player's collect and leaves the craft running.

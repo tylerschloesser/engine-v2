@@ -1,6 +1,6 @@
 # 0018: Renderer: TypeScript WebGPU ferry on the main thread, Rust produces every byte
 
-Status: Accepted (2026-09-19)
+Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §9, §11.
 
 ## Context
 

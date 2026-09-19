@@ -1,6 +1,6 @@
 # 0003: The game-facing API
 
-Status: Accepted (2026-09-19)
+Status: Accepted (2026-09-19). Amended by [0023](0023-action-growth-declaration.md). Amended by [0024](0024-planning-amendments.md) §7, §9.
 
 ## Context
 

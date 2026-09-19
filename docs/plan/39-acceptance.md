@@ -71,7 +71,7 @@ All rows of PRE-PLAN §7. This milestone measures nothing new except by re-runni
 None created. The `run-tests` skill gains one line for `pnpm acceptance:check` only if Phase 4 will keep the script; otherwise nothing (M39b decides).
 
 ## Manual device checks
-The whole of `docs/plan/device-checks.md`, re-run on the final build, plus the play-test sign-off entry (proposed as that file's last entry, owned by this milestone).
+The whole of `docs/plan/device-checks.md`, re-run on the final build. [device-checks.md, M39: Acceptance](device-checks.md#m39-acceptance) holds the re-run item, M39-large-save, and the play-test sign-off (its last item, owned by this milestone).
 
 ## Deviations
 (filled in during Phase 3)

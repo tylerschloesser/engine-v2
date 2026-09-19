@@ -33,6 +33,9 @@ Phase 1 output (2026-09-19). Input to Phase 2, which turns it into `PLAN.md` (se
 | [0019] | Camera, input, overlay | Camera is main-thread state written to a seqlock block; semantic input events; CPU picking from the DrawList; custom-property DOM anchoring |
 | [0020] | Testing strategy | nextest + Vitest (Node) + Playwright/CDP; five fast suites in 55 s; virtual-clock netcode harness; test entrypoint; CI on SwiftShader |
 | [0021] | Context architecture | Nested `CLAUDE.md` + path-scoped rules; skills written when real; one commit hook; progress lives in `PROMPT.md`/`PLAN.md` |
+| [0022] | Entity ids and provisional ids | Real ids are monotonic, never reused and layout-free; provisional ids are client-local (bit 31); actions address anything predictable by tile, so `Applied` carries nothing |
+| [0023] | Action growth declaration | Provided `Game::growth(&Action) -> Option<Growth>` bounds what `apply` may add, so a world at its state budget still accepts actions that free state; audited, not trusted |
+| [0024] | Planning amendments | Fifteen numbered fixes to gaps and contradictions in 0001–0020 found while writing the milestone briefs; cited as "0024 §n" |
 
 ## 2. Architecture overview
 
@@ -398,3 +401,6 @@ Every item an ADR or spec file marks "Deferred". "2" = Phase 2 decides it in `PL
 [0019]: docs/decisions/0019-camera-input-and-overlay.md
 [0020]: docs/decisions/0020-testing-strategy.md
 [0021]: docs/decisions/0021-context-architecture.md
+[0022]: docs/decisions/0022-entity-ids-and-provisional-ids.md
+[0023]: docs/decisions/0023-action-growth-declaration.md
+[0024]: docs/decisions/0024-planning-amendments.md

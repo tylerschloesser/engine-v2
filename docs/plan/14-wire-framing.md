@@ -20,7 +20,7 @@ Module `wire` in the engine crate. Writers are generic over M05's `ByteSink` (a 
 - Game-typed values go through M05 `codec::encode_to` / `codec::decode` (which already returns the rest of the slice). Writers are generic over `ByteSink`; the usual sink is `SliceSink` over the `Tx` region.
 
 ## Non-scope
-`Hello`/`Welcome`/`Reject`/`Bye`/`ResyncChunk` bodies (M28, M31): ids reserved only. Presence and Hashes section **bodies** (M19, M31): written and read as opaque bytes here. Building frames from a `ChangeLog` (M15). Any TypeScript: no TS code parses frames, ever (0015 net worker row, 0011 Decode path). The log frame format (M22).
+`Hello`/`Welcome`/`Reject`/`Bye`/`ResyncChunk` bodies (M28, M31b): ids reserved only. Presence and Hashes section **bodies** (M19, M31b), and the `ChunkKeeps` body (M28b): written and read as opaque bytes here. Building frames from a `ChangeLog` (M15). Any TypeScript: no TS code parses frames, ever (0015 net worker row, 0011 Decode path). The log frame format (M22).
 
 ## Files, packages and crates touched
 `packages/engine/crates/engine` (`wire/`), golden files, `packages/engine/fixtures/puts` (values for goldens).
@@ -31,7 +31,7 @@ Module `wire` in the engine crate. Writers are generic over M05's `ByteSink` (a 
 
 ## Planning decisions
 Closes PRE-PLAN §10 "Exact section ids, varint coordinate coding, overlay run format".
-- **Message type byte** (first byte of every post-handshake message, both directions): `0x01 Frame`, `0x02 UplinkBatch`, `0x03 Welcome`, `0x04 ResyncChunk`, `0x05 Bye`; `0x06..=0x7F` free. Constraint handed to M28: `Hello`/`Reject` start with the frozen `magic u32` (0013), so the magic's first byte on the wire must be ≥ `0x80`.
+- **Message type byte** (first byte of every post-handshake message, both directions): `0x01 Frame`, `0x02 UplinkBatch`, `0x03 Welcome`, `0x04 ResyncChunk`, `0x05 Bye`; `0x06..=0x7F` free. Constraint handed to M28: `Hello`/`Reject` start with the frozen `magic u32` (0013), so the magic's first byte on the wire must be ≥ `0x80` (0024 §8).
 - **Frame header** as 0011. `flags`: all bits reserved, written 0; a non-zero flag is `WireError::Malformed` (strict build equality makes forward compatibility pointless). A frame with no sections is the heartbeat.
 - **Section ids** = order of appearance; ids strictly ascending, each at most once, empty sections omitted, unknown id malformed: `1 ActionResults · 2 Global · 3 OwnPlayer · 4 ChunkEnterPristine · 5 ChunkSnapshots · 6 ChunkLeaves · 7 ChunkDeltas · 8 Presence · 9 Hashes · 10 ChunkTiles` (reserved by 0008 §3, unbuilt) `· 11 ChunkKeeps` (resume "keep" entries, M28).
 - **Chunk-coordinate list** (sections 4, 6, 11 and the chunk keys inside 5 and 7): entries sorted by `(cy, cx)`; first entry absolute as two zigzag varints, each later entry as zigzag deltas from the previous one. Sorting makes bytes canonical and deltas small (the ~3 B of 0011 for a first entry near the origin, ~2 B after). Priority decides *which* chunks a frame holds (M31), never their order inside a section.

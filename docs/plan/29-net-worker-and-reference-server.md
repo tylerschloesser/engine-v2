@@ -17,8 +17,8 @@ Also cited, open only if needed: 0009 (Node: structural `ws` typing), 0020 §7 (
 - **Net worker kind** in `engine/worker` `run()`: `createBytePump` (M27) + `createLink` (M28) + `wsConnection(url)`; event-driven, uplink drained on a `setInterval` (0015 §2). It never parses a message: reconnect policy comes from `CloseEvent.code` (`CloseCode`, M28), liveness from "any message on the current socket". A full downlink ring queues in the worker's own heap (0015 §2); `drops` stays 0.
 - **`wsConnection(url): Connection`**: the browser `WebSocket` as a client-side `Connection` (0009 settings: binary, `arraybuffer`). The same function runs under Node 22's global `WebSocket` for the loopback tests, so the tests cover the shipped wrapper.
 - **Lifecycle messages only** (0015 §2), added to M06b's setup-message family: net → main `{ type: 'link', state, code? }` on transitions; main → net `{ type: 'probe' }` on `visibilitychange → visible` and `online`, and `{ type: 'retry' }`; M06b's `stop` sends `Bye{Leave}` first. Nothing per frame. The uplink drain uses M06's poll period.
-- **Remote host option:** M06b's `host: { kind: 'remote'; url }` gains `joinKey?` and becomes real: multiplayer topology of 0015 §1 (no sim worker). (M13's brief calls the same option `server: { url, joinKey? }`; M06b's shape is first in the code and wins.) `readInvite(location): { joinKey }` parses `#k=`.
-- **Link events** on M23's `EngineEvent` carrier: `{ type: 'Link'; state: 'connecting' | 'online' | 'reconnecting' | 'updating' | 'superseded' | 'rejected'; reason?: 'BadKey' | 'Full' }` (`Resyncing` is M24's event). `reconnecting` is emitted only after the indicator delay of 0013; the game stays interactive.
+- **Remote host option:** M06b's `host: { kind: 'remote'; url }` gains `joinKey?` and becomes real: multiplayer topology of 0015 §1 (no sim worker). `readInvite(location): { joinKey }` parses `#k=`.
+- **Link events:** `client.onLink(cb: (e: { state: 'connecting' | 'online' | 'reconnecting' | 'updating' | 'superseded' | 'rejected'; reason?: 'BadKey' | 'Full' }) => void)`, a per-event subscription in the style of `client.onUi` and M23's `client.onStorage` (there is no `EngineEvent` union; one reused event object). `Resyncing` is M28b's `client.onResyncing`. `reconnecting` is emitted only after the indicator delay of 0013; the game stays interactive.
 - **Version mismatch:** default handler reloads once, guarded by `sessionStorage['engine.reloadedFrom'] = <own build hash>`; if the reloaded bundle has the same hash, state `updating` and `link.retry()` on the backoff schedule. `client.onVersionMismatch(cb)` replaces the default.
 - **`attachWebSocketServer(wss, server)`** in `engine/server/node`, structurally typed (0009 Node); maps each socket to a `Connection`, close codes passed through; `perMessageDeflate` must be off (checked, readable error).
 - **`games/reference-server`**: `ws` + Node adapter, about 60 lines. `--game <dir>` (default: the reference game's `buildGame` output), `--data <dir>`, `--import <archive>` (M23's `importWorld(storage, bytes)` before start: the single-player-to-hosted path of 0005), `PORT`, `JOIN_KEY`; exits 0 on `onIdle` when `--exit-on-idle`; exits 1 on `ready` rejection or `onFatal`. Game-agnostic so it is testable with a fixture before the reference game is multiplayer (M34).
@@ -26,7 +26,7 @@ Also cited, open only if needed: 0009 (Node: structural `ws` typing), 0020 §7 (
 - **Browser tests** against a Node-side server on the manual timer of `engine/test`, stepped in lockstep with the pages.
 
 ## Non-scope
-Interpolation (M30). Rates, hashes (M31, M31b). Bun/Deno adapters, pattern B for the net kind, size test (M35). Fly/Pages deploys (M38). Remaining engine events (M37).
+Interpolation (M30). Rates, hashes (M31, M31b). Bun/Deno adapters (M35b); pattern B for the net kind, size test (M35). Fly/Pages deploys (M38). Remaining engine events (M37).
 
 ## Files, packages and crates touched
 - `packages/engine`: `src/worker/net.ts`, `src/net/ws-connection.ts`, `src/client.ts` (remote host, `Link` events, mismatch flow), `src/server-node.ts`, `src/test/net-harness.ts`, `tests/{netcode,browser}/`, `budgets.json` (`gc.pages` entry); `ws` as a devDependency for tests only
@@ -34,8 +34,8 @@ Interpolation (M30). Rates, hashes (M31, M31b). Bun/Deno adapters, pattern B for
 - `packages/engine/fixtures/`: a multiplayer page for M16's action fixture
 
 ## Seams
-**Provides:** `host.kind: 'remote'` with `joinKey?`; `EngineEvent` `Link`; `client.onVersionMismatch`, `client.leave()`; `readInvite`; `wsConnection`; `attachWebSocketServer`; control-block words `CB_LINK_STATE` and `CB_LINK_GEN` (written by net; global words 4–5, reserved in M06's layout), which tell the client worker when to emit `client_hello`; harness `transport: 'ws'`; test helper `startTestServer({ fixture, manualTimer }): { url, stepTick(), stop() }` for Playwright; `client.debug.linkLog()` (test entrypoint only).
-**Consumes:** byte pump, harness, `conditionLink`, `WorldServer.ready` (M27); `createLink`, `CloseCode`, `loadOrMintSecret`, `session_state` (M28); resume, `Resyncing` (M28b); `ClientOptions.host`, net worker idle shell, setup and lifecycle messages (M06b); rings, control block, uplink poll period (M06); `zeroGcSuite`, `gc.pages` with the `budgeted` class and `bytesPerMessage`, negative-control hook (M04); client worker shell (M15b); `EngineEvent` carrier, `importWorld` (M23); `pnpm device:serve --tunnel` (M03).
+**Provides:** `host: { kind: 'remote', url, joinKey? }` made real; `client.onLink`; the version-mismatch reload / `updating` flow and `client.onVersionMismatch`, `client.leave()`; `readInvite`; `wsConnection`; `attachWebSocketServer`; control-block words `CB_LINK_STATE` and `CB_LINK_GEN` (written by net; global words 4–5, reserved in M06's layout), which tell the client worker when to emit `client_hello`; harness `transport: 'ws'`; test helper `startTestServer({ fixture, manualTimer }): { url, stepTick(), stop() }` for Playwright; `client.debug.linkLog()` (test entrypoint only).
+**Consumes:** byte pump, harness, `conditionLink`, `WorldServer.ready` (M27); `createLink`, `CloseCode`, `loadOrMintSecret`, `session_state` (M28); resume, `Resyncing`, `client.onResyncing` (M28b); `ClientOptions.host`, net worker idle shell, setup and lifecycle messages (M06b); rings, control block, uplink poll period (M06); `zeroGcSuite`, `gc.pages` with the `budgeted` class and `bytesPerMessage`, negative-control hook (M04); client worker shell (M15b); the lifecycle-message carrier and `client.onStorage` naming, server `importWorld` (M23); `pnpm device:serve --tunnel` (M03).
 
 ## Planning decisions
 - **Spike C (PRE-PLAN §10) runs here.** Fast tier: one seed, 3 runs of a 10 s 4-client session over loopback `ws`, identical `trace()`. Slow tier: the full spike (0020 Consequences: run count and time target). If traces differ after a day's effort, the `ws` subset becomes a smoke test (join, action, reconnect) and the brief records it in Deviations; the design does not change.
@@ -70,9 +70,7 @@ PRE-PLAN §7 "Allocation per isolate" (net worker row and the unchanged main/cli
 `games/reference-server/CLAUDE.md`; `gc-test` skill: the multiplayer topology and lockstep pacing; `.claude/rules/hot-paths.md` globs extended to `src/worker/net.ts`.
 
 ## Manual device checks
-`docs/plan/device-checks.md`, section M29 (iPhone; Android only if Q5 is answered yes). `pnpm device:serve --tunnel` (M03) with the test server's `/ws` proxied on the same HTTPS origin, since an `https` page cannot open `ws://`; open the fixture multiplayer page with `?linklog=1`.
-1. Three runs each: other app 5 s; 30 s; 5 min; screen lock 60 s; Wi-Fi → cellular in the foreground; airplane mode 15 s.
-2. Per run, copy from the on-page link log: was `close` delivered (ms after `visible`) or silence; ms from `visible` to `Welcome`; was the page discarded.
-3. Rule: `visible → Welcome` median ≤ 1.5 s and max ≤ 4 s → keep the 0013 numbers. Silence with median > 2 s → lower the probe deadline toward one heartbeat interval plus margin; prompt `close` everywhere → numbers stay, note it. Any change is a new ADR amending 0013's Client policy.
+[device-checks.md, M29: Net worker and reconnect](device-checks.md#m29-net-worker-and-reconnect).
+This milestone builds the fixture multiplayer page with `?linklog=1` (an on-page view of `client.debug.linkLog()`), and the server's `/ws` proxied on the HTTPS origin of `pnpm device:serve --tunnel` (M03), since an `https` page cannot open `ws://`.
 
 ## Deviations

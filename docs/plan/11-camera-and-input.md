@@ -16,7 +16,7 @@ The engine-owned camera runs on the main thread at display rate: f64 centre, pan
 Mine from spikes: none with camera code; `spikes/zero-gc-webgpu/public/main.js` for the reused-object style. Rules that apply: `.claude/rules/hot-paths.md`.
 
 ## Scope
-- `camera/camera.ts`: integration (`camera` phase of the frame loop), constraints, view clamp, `moveTo`, follow-target hook (no-op until M18 supplies a target), snap to device pixels at rest, `localStorage` save/restore.
+- `camera/camera.ts`: integration (`camera` phase of the frame loop), constraints, view clamp, `moveTo`, follow-target hook (no-op until M18 supplies a target), snap to device pixels at rest, `localStorage` save/restore under `engine.camera.<ClientOptions.cameraKey ?? 'default'>` (a game passes its world id, so each world keeps its own camera), and `client.camera.restored: boolean` (false when nothing was restored, so a game knows to `moveTo` its spawn; M20b consumes both).
 - `camera/transform.ts`: `worldToScreen`, `screenToWorld`, tile under a point; pure functions shared with M18 picking.
 - `input/pointers.ts`, `input/keys.ts`, `input/wheel.ts`: listeners per 0019 §3–§4 that write into two fixed pointer slots, a key bitmask and a wheel accumulator; nothing else happens in a listener.
 - `input/semantic.ts`: tap, hover, longpress, drag* recognition in rAF; cursor tile; `client.input.{on, setMode, suspend, resume}`; `inputRing` producer.
@@ -33,7 +33,7 @@ Mine from spikes: none with camera code; `spikes/zero-gc-webgpu/public/main.js` 
 
 ## Seams
 **Provides**
-- TS, on `Client`: `camera.{setConstraints, moveTo, read, worldToScreen, screenToWorld}` and `input.{on, setMode, suspend, resume}` with 0019's signatures. Types: `CameraState` (M06, now `read`'s out-parameter), `InputEventTs { type, worldX, worldY, tileX, tileY, pickId, button, shift, ctrl, alt, meta, pointerType }` (one reused instance per event type; listeners must copy what they keep).
+- TS, on `Client`: `camera.{setConstraints, moveTo, read, worldToScreen, screenToWorld}`, `camera.restored: boolean`, `ClientOptions.cameraKey?: string`, and `input.{on, setMode, suspend, resume}` with 0019's signatures. Types: `CameraState` (M06, now `read`'s out-parameter), `InputEventTs { type, worldX, worldY, tileX, tileY, pickId, button, shift, ctrl, alt, meta, pointerType }` (one reused instance per event type; listeners must copy what they keep).
 - Internal: `camera.setViewClamp(maxTilesPerAxis)`, `camera.setFollow(x, y, valid)` (M18), `camera.cursorTile` (M17 uniform, M18 picking), `transform.ts` functions.
 - `inputRing` record (32 bytes, little-endian): `0 kind u8` (1 tap, 2 hover, 3 longpress, 4 dragstart, 5 drag, 6 dragend), `1 button u8`, `2 modifiers u8` (bit 0 shift, 1 ctrl, 2 alt, 3 meta), `3 pointer u8` (0 mouse, 1 touch, 2 pen), `4 seq u32`, `8 tile i32×2`, `16 frac f32×2` (position inside the tile, so world position is exact over ±2^23), `24 pick_id u32`, `28 time_ms u32` (wrapping).
 - Rust: `#[repr(C)] InputEvent` mirroring the record with `world_pos()`; `InputQueue` (fixed 64; on overflow the oldest `hover` or `drag` is dropped before any other kind; cleared at the end of each `frame`); ABI `on_input(len: u32) -> status` (added by M02's rule) decodes whole records from `RegionId::Rx`.
@@ -56,13 +56,13 @@ Mine from spikes: none with camera code; `spikes/zero-gc-webgpu/public/main.js` 
 ## Tests added
 - `unit` suite: `camera.pan_keeps_world_point`, `camera.pinch_about_midpoint`, `camera.wheel_about_cursor`, `camera.zoom_clamps_and_constraints`, `camera.inertia_decay_time_based` (same end state at 30, 60 and 120 Hz steps within 1e-6), `camera.moveto_cancelled_by_input`, `camera.precision_at_2pow23`, `transform.roundtrip`, `semantic.tap_vs_drag_thresholds`, `semantic.longpress`, `semantic.hover_only_on_change`, `input.record_layout_golden`.
 - Rust native: `input.decode_record_golden`, `input.queue_overflow_drops_hover_first`.
-- Browser (Chromium): `input.dom_path_pan_and_tap` (real `PointerEvent`s via Playwright mouse: the one DOM-path test), `input.keyboard_focus_rules` (typing in an `<input>` does not move the camera; `blur` clears keys), `input.widget_blocks_canvas` (`pointer-events: auto` element above the canvas), `input.suspend_resume`, `camera.block_reaches_worker_each_frame`, `camera.persisted_and_restored`, `input.events_reach_wasm` (test export returns `InputQueue` length and last tile).
+- Browser (Chromium): `input.dom_path_pan_and_tap` (real `PointerEvent`s via Playwright mouse: the one DOM-path test), `input.keyboard_focus_rules` (typing in an `<input>` does not move the camera; `blur` clears keys), `input.widget_blocks_canvas` (`pointer-events: auto` element above the canvas), `input.suspend_resume`, `camera.block_reaches_worker_each_frame`, `camera.persisted_and_restored` (also: `restored` is false on a fresh key and two `cameraKey`s do not share a camera), `input.events_reach_wasm` (test export returns `InputQueue` length and last tile).
 - Zero-GC: page id `input` through `zeroGcSuite` (600 frames of injected drag, pinch, wheel and WASD with a `tap` every 30 frames; chunk streaming and the renderer active; isolates `main`, `client`, `gen0`).
 
 ## Exit criteria
 - [ ] All tests above pass by name; page `input` within its `gc.pages.input` budgets on every isolate, `inputRing` `drops == 0`.
 - [ ] Source scan: no `getCoalescedEvents`, no listener outside the canvas except the `window` key, `blur` and `visibilitychange` listeners of 0019 §4.
-- [ ] Device-check items below are written into `docs/plan/device-checks.md`.
+- [ ] The `docs/plan/device-checks.md` section for this milestone matches what was built.
 - [ ] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
@@ -77,10 +77,8 @@ Mine from spikes: none with camera code; `spikes/zero-gc-webgpu/public/main.js` 
 `packages/engine/CLAUDE.md`: "listeners record, rAF integrates"; how to inject input in tests. `hot-paths.md` globs already cover `src/input/**` and `src/camera/**`.
 
 ## Manual device checks
-`docs/plan/device-checks.md`, on the iPhone (and the Android phone if Q5 says one exists), `device.html` from `pnpm device:serve --tunnel`:
-- **M11-boot.** Open the URL. Pass: HUD shows isolated, adapter and "workers ready (posted Module)". Fail with a worker error → reopen with `?module=url`; if that passes, plan edit: default to the URL path on Safari (0017 §4 fallback).
-- **M11-gestures.** One-finger pan for 10 s, flick, pinch to both zoom limits, tap a tile, pull down from the top edge, double-tap, rotate the phone. Pass: the world point stays under the finger; flick glides and stops; HUD shows the tapped tile; the page never scrolls, zooms or refreshes; after rotation the view keeps its centre. Fail → the named knob (inertia constant, thresholds, page CSS helper) and a plan edit.
-- **M11-memory** (`?probe=memory`; closes 0015's on-device ceilings). The page (1) grows a scratch `WebAssembly.Memory` in 64 MiB steps to 1 GiB and reports the largest success; (2) runs the default topology (sim + client + gen arenas of 0015 §5) beside the WebGPU context with `autopan` for 2 min; (3) repeats (2) with `&touch=1`, which writes every arena page. Record all three results. Pass: (2) and (3) survive without a reload. Fail → re-run with `&sim=64&client=32` (MiB); if that survives, plan edit lowering the mobile defaults through a superseding ADR for 0015 §5; if (1) < 256 MiB, record the ceiling there too.
+[device-checks.md, M11: Boot, gestures and memory](device-checks.md#m11-boot-gestures-and-memory). The M03, M08 and M09b sections are run in the same sitting.
+This milestone adds to `device.html`: gestures, `?module=url`, and `?probe=memory` with its `touch`, `sim` and `client` parameters.
 
 ## Deviations
 (filled in during Phase 3)

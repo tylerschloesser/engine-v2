@@ -1,6 +1,6 @@
 # M34: Reference game: roster, remote players, play through the reference server
 
-Status: not started · After: 33b, 30, 31 · Tyler-dependent: no
+Status: not started · After: 33b, 30, 31b · Tyler-dependent: no
 
 Split during planning: the PLAN.md row for M34 also held the scripted full-game tests, which alone exceed one session. They are `34b-reference-scripted-single-player.md` and `34c-reference-scripted-multiplayer.md`. This brief makes the game multiplayer; those two prove the whole game.
 
@@ -29,13 +29,13 @@ Rules that apply: `.claude/rules/determinism.md`, `.claude/rules/hot-paths.md`, 
 Scripted full-game and race tests (M34b, M34c). Player names, chat, cursors. Any per-player colour choice UI. Status UI for storage and fatal events (M37 owns the remaining engine events).
 
 ## Files, packages and crates touched
-`games/reference/` (`sim/src/{types,lib,client}.rs`, `src/main.ts`, `src/ui/{roster,status}.ts`, tests), `games/reference-server/` (scripts, README). Engine: only the accessor below if it is missing.
+`games/reference/` (`sim/src/{types,lib,client}.rs`, `src/main.ts`, `src/ui/{roster,status}.ts`, tests), `games/reference-server/` (scripts, README). Engine crate: only the `FrameView::roster` accessor below.
 
 ## Seams
-**Provides:** `GlobalState`, `content::PALETTE`, `Ui.roster`; Playwright helper `tests/helpers/server.ts::startReferenceServer({ seed, joinKey?, maxPlayers?, manualTimer: true })` wrapping M29's `startTestServer` with the reference game's `buildGame` output; `openGame(page, { invite })`.
-**Consumes:** `put_global`, `Delta::Roster` in the `Store` (M12), Global section with the roster (M14); `FrameView::presences` with `alpha` (M19, M30); `seed_presence` from `Welcome` (M19/M28); `cx.follow` (M18); `createClient` `host` option (M06b), `readInvite`, `client.onLink`, `startTestServer`, `games/reference-server` (M29); rates and hashes on by default (M31, M31b); `SimRng` through `WorldWrite::rng` (M12b).
-**Required of M27's harness (check before starting; add here if missing, in `engine/test` only):** `createNetHarness({ fixture })` must accept the reference game's `buildGame` output directory; `HeadlessClient` needs `setCamera({ x, y, tilesAcross })` writing its camera block (so the game's spring produces presence) and `ui(): unknown` returning the last `Ui` JSON. M27 lists `setView`, `dispatch`, `replicaHash` only.
-**Required, add here if missing:** a read accessor for the engine roster from client code. M17's `FrameView` lists none. Proposed: `FrameView::roster(&self, f: &mut dyn FnMut(PlayerId, bool))` in ascending `PlayerId`, reading the replica's `Store`. About 40 lines in the engine crate plus one fixture test; record it under Deviations.
+**Provides:** `FrameView::roster` (engine crate); `GlobalState`, `content::PALETTE`, `Ui.roster`; Playwright helper `tests/helpers/server.ts::startReferenceServer({ seed, joinKey?, maxPlayers?, manualTimer: true })` wrapping M29's `startTestServer` with the reference game's `buildGame` output; `openGame(page, { invite })`.
+**Consumes:** `put_global` (M12b), `Delta::Roster` in the `Store` (M12; 0024 §8), Global section with the roster (M14); `FrameView::presences` with `alpha` (M19, M30); `seed_presence` from `Welcome` (M19/M28); `cx.follow` (M18); `createClient` `host` option (M06b), `readInvite`, `client.onLink`, `startTestServer`, `games/reference-server` (M29); rates and hashes on by default (M31, M31b); `SimRng` through `WorldWrite::rng` (M12b).
+**From M27's harness (in its brief; if missing in code, stop and fix the plan):** `createNetHarness({ fixture })` accepting the reference game's `buildGame` output directory; `HeadlessClient.setCamera({ x, y, tilesAcross })` (so the game's spring produces presence) and `HeadlessClient.ui()` returning the last `Ui` JSON.
+**Engine addition owned by this milestone** (no earlier brief provides a read accessor for the engine roster from client code): `FrameView::roster(&self, f: &mut dyn FnMut(PlayerId, bool))` in ascending `PlayerId`, reading the replica's `Store` (M12's `Delta::Roster`, 0024 §8). About 40 lines in the engine crate plus one fixture test (`frameview_roster_follows_delta`).
 
 ## Planning decisions
 - **Colour assignment uses `SimRng`.** Which colour a player gets is unspecified, `on_player` is host-only and logged, and no other reference feature draws from the sim RNG. This puts `rng()`, the RNG's place in the snapshot, and its replay determinism under the reference game's golden log at no cost in scope.
@@ -46,7 +46,7 @@ Scripted full-game and race tests (M34b, M34c). Player names, chat, cursors. Any
 
 ## Order of work
 1. `GlobalState`, colour assignment, native tests; `SCHEMA_VERSION` bump; bindings.
-2. Roster accessor (if missing), `Ui.roster`, `roster.ts`.
+2. `FrameView::roster`, `Ui.roster`, `roster.ts`.
 3. Remote circles in `extract`.
 4. Mode selection, `status.ts`, `startReferenceServer`, two-page test.
 5. Returning-player rule. 6. README, `CLAUDE.md` updates.
@@ -72,7 +72,8 @@ Bandwidth per client, steady (`PRE-PLAN.md` §7): in `reference_presence_only_to
 `games/reference/CLAUDE.md`: single-player vs invite mode, how to run two players locally. `games/reference-server/CLAUDE.md`: the start script.
 
 ## Manual device checks
-`docs/plan/device-checks.md`, section M34: "own-timer bar on a real network" (entry owned by M26) and "two devices, one world".
+[device-checks.md, M34: Reference multiplayer on real devices](device-checks.md#m34-reference-multiplayer-on-real-devices): two devices in one world, the own-timer bar (owner M26), remote motion (owner M30).
+The phone must reach the reference game over HTTPS with `/ws` to `games/reference-server` on the same origin.
 
 ## Deviations
 (filled in during Phase 3)

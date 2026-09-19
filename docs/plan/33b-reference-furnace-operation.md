@@ -11,7 +11,7 @@ Clicking a furnace opens a panel; any player can deposit iron and fuel and take 
 1. `docs/spec/overview.md`
 2. `docs/spec/reference-game.md` (Furnace)
 3. `docs/decisions/0007-world-model.md` (§7 what ticks: active lists, sleep/wake, timer wheel)
-4. `docs/decisions/0022-entity-ids-and-provisional-ids.md` (§6 addressing rule, §7 `entity(id)` on a client; numbered on acceptance)
+4. `docs/decisions/0022-entity-ids-and-provisional-ids.md` (§6 addressing rule, §7 `entity(id)` on a client)
 
 Look up at the step: `TickCx` methods: the "Exact `TickCx` shape" decision in `docs/plan/12b-world-access-and-sim-driver.md` and the M21b brief; ratios stay counts `0006` "Rates and continuous quantities"; picking `0019` §4; prediction opt-out and the authoritative clock for remote machines `0012` ("What is predicted", "Two clocks").
 Rules that apply: `.claude/rules/determinism.md`, `.claude/rules/hot-paths.md`, `games/reference/CLAUDE.md`. Skill: `add-action-type`.

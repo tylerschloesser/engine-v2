@@ -18,7 +18,7 @@ A deliberately small game that exercises every engine feature, in single-player 
 - Players are drawn as circles.
 - A player follows their camera with a springy effect based on the camera's acceleration and velocity.
 - **Player position is presence, not world state.** The spring runs on each client from its own camera. Positions are relayed to other clients as ephemeral, unlogged presence. A position-dependent action (collect) carries the player's claimed position, and the sim range-checks that.
-- When a player is within a certain distance of a resource, a collect button appears (several can show at once, one per resource in range). Collecting takes 2 seconds; the button fills to show progress.
+- When a player is within 3 tiles of a resource (centre of the player circle to centre of the resource tile), a collect button appears (several can show at once, one per resource in range). Collecting takes 2 seconds; the button fills to show progress.
 - One collect and one craft at a time; no queue. Panning out of range cancels a collect.
 - Inventory and unlocks are per player.
 - A new player spawns at the land tile nearest the origin; a returning player resumes where they were. Players may float over water.
@@ -36,6 +36,7 @@ A deliberately small game that exercises every engine feature, in single-player 
 - A furnace smelts one ingot in 5 seconds.
 - One coal fuels 10 ingots. One wood fuels 2.
 - Any player can use any furnace. Output ingots can be taken back out (take-all); ore and fuel stay in.
+- An empty furnace (no ore, fuel or ingots inside) can be picked up by any player: it disappears from the world and returns to that player's inventory. (Added by Tyler, 2026-09-19, so the game exercises entity removal.)
 
 ### UI
 

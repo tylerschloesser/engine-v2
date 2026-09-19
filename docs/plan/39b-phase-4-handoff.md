@@ -35,7 +35,7 @@ Any Phase 4 work: writing `docs/architecture/`, deleting files, folding the spec
 
 ## Seams
 **Provides:** `docs/decisions/README.md` (ADR index); the capture ADRs; ADR "Budgets as measured at Phase 3 exit"; `device-check` skill; the Phase 4 `PROMPT.md`.
-**Consumes:** M39's `docs/plan/acceptance/*` and open-items list; every brief's Planning decisions and Deviations; ADRs written during Phases 2–3 (among them M35 "Build profiles, measured", M36b "Fast-tier budgets, dev loop and wire measurements", M37 "Engine failure surface", M27's 0009 amendment, and the rest listed under `PLAN.md` "Plan-level decisions").
+**Consumes:** M39's `docs/plan/acceptance/*` and open-items list; every brief's Planning decisions and Deviations; ADRs written during Phases 2–3 (among them M35 "Build profiles, measured", M36b "Fast-tier budgets, dev loop and wire measurements", M37 "Engine failure surface", 0024 "Planning amendments", and the rest listed under `PLAN.md` "Plan-level decisions").
 
 ## Planning decisions
 - **Grouped capture ADRs, not fifty small ones.** A Planning-decisions paragraph is already a decision with a rationale; most are implementation-level and become visible in code (names, layouts, record formats), so they fail test (2) and are dropped. What remains (rules chosen over alternatives, thresholds, "we measured and did not build X") is cheaper to find later in a handful of subsystem ADRs than in one file each. Anything that *reverses* an accepted ADR still gets its own superseding ADR.

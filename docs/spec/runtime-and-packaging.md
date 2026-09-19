@@ -17,7 +17,7 @@
 
 - "Zero dependencies" means zero *runtime* npm dependencies in the engine package. devDependencies are fine. An `engine/vite` plugin entrypoint is compatible (Node built-ins only; Vite is a types-only optional peer).
 - The engine takes an injected transport adapter. On Node, which has no built-in WebSocket server, the *game's* server package installs `ws` and passes it in; the engine does not hand-roll the protocol.
-- Rust crate policy: `serde` and `postcard` are allowed in the engine crate, `ts-rs` at build time; anything else needs an ADR. Stable Rust only (so no WASM threads).
+- Rust crate policy: `serde`, `postcard` and `serde_json` are allowed in the engine crate, plus `ts-rs` (declared as a normal dependency whose code LTO removes; the size test checks that) and `libm`, pinned, only if the engine ever needs a transcendental; anything else needs an ADR. (`serde_json`, the `ts-rs` form and `libm` approved by Tyler, 2026-09-19.) Stable Rust only (so no WASM threads).
 - Publishing: packaging discipline in a private repo for now (the Rust crate is bundled inside the npm package; a tarball-install test keeps it honest). Not published publicly yet.
 - Server runtimes: Node ≥ 22 and Bun are tested; Deno is best-effort.
 

@@ -21,7 +21,7 @@ Mine from spikes: none. Rules that apply: `.claude/rules/hot-paths.md`, `.claude
 
 ## Non-scope
 - Interpolation, adaptive delay, fade after silence (M30). Until M30, remote avatars snap to the newest sample.
-- `FrameCx` beyond M12's shell: input events in it and `cx.follow` (M18). Persisting the last sample in the session table and sending it in `Welcome` (M28; seam below). Roster and online flag (Global scope, M34). The reference game's spring (M20).
+- `FrameCx` beyond M12's shell: input events in it and `cx.follow` (M18). Persisting the last sample in the session table and sending it in `Welcome` (M28; seam below). Roster and online flag (Global scope, M34). The reference game's spring (M20b).
 
 ## Files, packages and crates touched
 - `packages/engine/crates/engine/`: new modules `presence` (trait, `PresenceTable`, sampler, `RemotePresences`) and edits to the uplink assembler, frame builder, `on_frame` decoder and the `admit` call site.
@@ -41,8 +41,8 @@ Mine from spikes: none. Rules that apply: `.claude/rules/hot-paths.md`, `.claude
 
 ## Planning decisions
 - **Presence as an optional replay track: not built.** Replays show the world without avatars (0001 Consequences). A track would be a separate storage key fed from `PresenceTable::on_sample`, so nothing needs reserving in the log or snapshot formats now. Closes the 0001 deferred item.
-- **`Presence` gains a `Default` bound.** The engine must construct the value it passes to `frame` before the game has written one; 0001 gives no constructor. `()` already has it. Reported as an ADR gap, not edited.
-- **The 32-byte limit is enforced per encoded sample**, not at init: postcard varints make the size value-dependent. An oversize sample is dropped and counted (`presence_oversize`, must read 0 in tests).
+- **`Presence` gains a `Default` bound.** The engine must construct the value it passes to `frame` before the game has written one; 0001 gives no constructor. `()` already has it. 0024 §6 adds the bound.
+- **The 32-byte limit is enforced per encoded sample** (0024 §6), not at init: postcard varints make the size value-dependent. An oversize sample is dropped and counted (`presence_oversize`, must read 0 in tests).
 - **"On change" means the encoded bytes differ from the last sent sample.** The final at-rest sample of 0001 then needs no special case: when motion stops, the resting value differs from the last sent one and goes out in the next slot. A test pins this.
 - **`age_ticks` on every relayed sample.** The 1 Hz re-relay of a held sample would otherwise look like a fresh sample at a new time to M30's buffer. One byte.
 - **`Gone` entries** implement "tells clients at once" on connection loss; the roster's online flag follows the logged event after the grace (0013) and is too late. On a lossy adapter a lost `Gone` degrades to M30's fade.

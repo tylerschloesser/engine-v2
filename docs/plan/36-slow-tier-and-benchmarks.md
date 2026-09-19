@@ -1,6 +1,6 @@
 # M36: Slow tier and wall-clock benchmarks
 
-Status: not started · After: 34 (and 34b for its golden log), 35 · Tyler-dependent: no
+Status: not started · After: 34c, 35 · Tyler-dependent: no
 
 Split: the suite audit and the deferred measurements (demotion audit, 30 s rebuild, build-cache decision, `wasm-opt`/`+simd128`, byte diffing) are `36b-suite-audit-and-measurements.md`; together they were well past the line rule. `After` gains 35 (PLAN.md lists only 34) because the slow tier this milestone completes includes M35's packaging tests; M35 needs only M29, so no ordering is lost.
 
@@ -16,7 +16,7 @@ Split: the suite audit and the deferred measurements (demotion audit, 30 s rebui
 Mine from spikes: none new (M17b's `scripts/profile-frame.mjs` already carries the trace reader). Rules that apply: `.claude/rules/determinism.md` (the bench `genesis` is sim code), `.claude/rules/hot-paths.md` (no bench hook on a tick or frame path may allocate).
 
 ## Scope
-- **Slow-tier completeness.** Every `@slow` / `slow_*` test of every suite runs under `pnpm test:slow` with the 0020 §2 contract, including the stray bench commands earlier milestones created (`pnpm bench:worldgen` of M08, the reference worldgen bench of M20, `pnpm bench:frame` of M17b): each becomes a slow-tier member reporting through the runner, keeping its `pnpm bench:*` alias.
+- **Slow-tier completeness.** Every `@slow` / `slow_*` test of every suite runs under `pnpm test:slow` with the 0020 §2 contract, including the stray bench commands earlier milestones created (the `worldgen-bench` slow test of M08, already a tier member; the reference worldgen bench of M20; `pnpm bench:frame` of M17b): each is a slow-tier member reporting through the runner, and `pnpm bench:frame` keeps its alias.
 - **Heavy mode at N = 1** (0002 §3, 0020 §5): M22b's `heavy_wasm_n1 @slow` covers the `persist` fixture; extend the same `runHeavy` call to every recorded fixture log and to M34b's `tests/golden/full-game.log`, under Node. Native twin through `engine::testing::heavy`.
 - **Release-profile golden replay** (0017 §9): every golden log against `buildGame({ profile: 'release' })` under Node and Bun, same checked-in hashes (`release-golden @slow`). Plain release only; the `wasm-opt` and `+simd128` variants are M36b's.
 - **The standard large save** (0020 §9): a seeded builder in the reference `sim` crate behind cargo feature `bench`, reached through `Game::genesis` when the worldgen params carry the bench marker. It fills both state budgets exactly as §9 specifies with uniformly staggered furnace timers. A native test asserts entity, modified-tile and entity-chunk counts equal the §9 figures *computed* from `WorldConfig` defaults, and that two builds from one seed hash equal. The reference page accepts `?bench=large-save` on bench builds only (M39's device check loads it on the iPhone, per M07's hand-over).
@@ -31,14 +31,14 @@ Mine from spikes: none new (M17b's `scripts/profile-frame.mjs` already carries t
 Everything in M36b. Phone frame times (manual, 0018 Consequences). Optimisation beyond what a gate needs: a missed gate is reported with a profile and handled as a plan edit. Packaging tests (M35; this milestone only confirms they run in the tier).
 
 ## Files, packages and crates touched
-`games/reference` (`sim/src/bench.rs`, feature `bench`, `sim/tests/` or `benches/` for the tick bench, page param), `packages/engine` (`src/vite.ts` for `buildGame({ features })`, `tests/**` slow tests, `baselines/*.json`, `budgets.json`), repo `scripts/` (`lib/bench-gate.mjs`, `suites.mjs` entries). The engine crate only if `engine::testing` lacks a constructor that runs `genesis` with custom params.
+`games/reference` (`sim/src/bench.rs`, feature `bench`, `sim/tests/` or `benches/` for the tick bench, page param), `packages/engine` (`tests/**` slow tests, `baselines/*.json`, `budgets.json`), repo `scripts/` (`lib/bench-gate.mjs`, `suites.mjs` entries). The engine crate only if `engine::testing` lacks a constructor that runs `genesis` with custom params.
 
 ## Seams
-**Provides:** cargo feature `bench` on the reference `sim` crate, `bench::standard_large_save(w: &mut dyn WorldWrite, seed)`; `buildGame({ features?: string[] })` (output directory and build hash differ per feature set); `?bench=large-save`; `baselines/{tick,frame-reference,worldgen}.json`; `scripts/lib/bench-gate.mjs` `gate(name, sample)`; `pnpm bench:baseline`; tests `slow_tick_large_save`, `tick-large-save node @slow`, `slow_snapshot_large_save`, `bench.frame_reference @slow`, `release-golden @slow`, `heavy-n1 all logs @slow`, `soak-netcode @slow`, `soak-browser @slow`, `slow_heavy_large_save`, `webkit-readback @slow`; `budgets.json` key `mem.simHighWaterLargeSave`.
-**Consumes:** `runHeavy`, `replayWorld`, `heavy_wasm_n1` (M22b); `engine::testing::{replay, heavy}`, `lastSnapshotBytes` (M22); golden logs and regeneration commands (M05, M34b `golden:record`); `Sim<G>` driver and the host API behind the 0014 sim exports (M12b, M13, M15); `createWorldServer`, `HeadlessClient`, conditioner, `VirtualClock` (M27); `net.*` counters (M15, M31); `memory_bytes()` and the init-time sum (M07, M21); zero-GC `measure` (M04); readback scenes and probes (M09); `bench.frame_worstcase`, `baselines/frame.json`, `scripts/profile-frame.mjs`, `profile-frame` skill (M17b); `pnpm bench:worldgen` (M08) and the reference worldgen bench (M20); `buildGame({ profile, env })` (M02); runner, tiers, `scripts/suites.mjs` (M01); M35's slow tests.
+**Provides:** cargo feature `bench` on the reference `sim` crate, `bench::standard_large_save(w: &mut dyn WorldWrite, seed)`; `?bench=large-save`; `baselines/{tick,frame-reference,worldgen}.json`; `scripts/lib/bench-gate.mjs` `gate(name, sample)`; `pnpm bench:baseline`; tests `slow_tick_large_save`, `tick-large-save node @slow`, `slow_snapshot_large_save`, `bench.frame_reference @slow`, `release-golden @slow`, `heavy-n1 all logs @slow`, `soak-netcode @slow`, `soak-browser @slow`, `slow_heavy_large_save`, `webkit-readback @slow`; `budgets.json` key `mem.simHighWaterLargeSave`.
+**Consumes:** `runHeavy`, `replayWorld`, `heavy_wasm_n1` (M22b); `engine::testing::{replay, heavy}`, `lastSnapshotBytes` (M22); golden logs and regeneration commands (M05, M34b `golden:record`); `Sim<G>` driver and the host API behind the 0014 sim exports (M12b, M13, M15); `createWorldServer`, `HeadlessClient`, conditioner, `VirtualClock` (M27); `net.*` counters (M15, M31); `memory_bytes()` and the init-time sum (M07, M21); zero-GC `measure` (M04); readback scenes and probes (M09); `bench.frame_worstcase`, `baselines/frame.json`, `scripts/profile-frame.mjs`, `profile-frame` skill (M17b); the `worldgen-bench` slow test (M08) and the reference worldgen bench (M20); `buildGame({ profile, env })` (M02) and `buildGame({ features })` (M34b); runner, tiers, `scripts/suites.mjs` (M01); M35's slow tests.
 
 ## Planning decisions
-- **Native gate, WASM record.** 0020 §9 and 0010 define the proxy as a *native* benchmark, while subscriptions and fan-out live in the TS sim host (0015 §1 "Server"). The native bench therefore fixes each player's subscription set directly and measures the Rust side; the Node twin makes a host-side or codegen regression visible. It gets a baseline entry and the 25 % rule but no absolute budget.
+- **Native gate, WASM record (0024 §14).** 0020 §9 and 0010 define the proxy as a *native* benchmark, while subscriptions and fan-out live in the TS sim host (0015 §1 "Server"). The native bench therefore fixes each player's subscription set directly and measures the Rust side; the Node twin makes a host-side or codegen regression visible. It gets a baseline entry and the 25 % rule but no absolute budget.
 - **Machine fingerprint** = `os.cpus()[0].model` + `os.arch()`, stored in each baseline. No environment variable to forget; CI never matches, which is 0020 §10's "recorded, never gating". If M17b chose another mechanism for `frame.json`, keep one: migrate to this helper.
 - **Bench marker through a cargo feature, not a second `Game`.** Tick rules, entity type and encoders are exactly the shipped ones. The feature is never enabled by `vite build` or the fast tier; `buildGame({ features })` is the only way in, and the different build hash keeps a bench client from joining a normal server.
 - **`slow_heavy_large_save` uses N = 100.** A full-budget snapshot per tick takes minutes and adds nothing over N = 1 on the scripted logs, where hidden state actually shows.
@@ -46,13 +46,13 @@ Everything in M36b. Phone frame times (manual, 0018 Consequences). Optimisation 
 - **If this does not fit one session,** cut `soak-browser` and `slow_heavy_large_save` into `36c` first; never the two gated benchmarks or the handed-over questions.
 
 ## Order of work
-1. Tier completeness (bench commands under the runner). 2. `heavy-n1 all logs`, `release-golden`. 3. `buildGame({ features })`, the builder and its native assertions, a 1/64-scale fast test. 4. `slow_tick_large_save`, Node twin, snapshot stall, high-water mark. 5. `bench-gate.mjs`, baselines. 6. `bench.frame_reference`, `?bench=large-save`. 7. Soak variants. 8. `webkit-readback`. 9. Skills and nested `CLAUDE.md`.
+1. Tier completeness (bench commands under the runner). 2. `heavy-n1 all logs`, `release-golden`. 3. The `bench` feature built through M34b's `buildGame({ features })`, the builder and its native assertions, a 1/64-scale fast test. 4. `slow_tick_large_save`, Node twin, snapshot stall, high-water mark. 5. `bench-gate.mjs`, baselines. 6. `bench.frame_reference`, `?bench=large-save`. 7. Soak variants. 8. `webkit-readback`. 9. Skills and nested `CLAUDE.md`.
 
 ## Tests added
 By name under Provides; all slow. One fast `rust` test: `large_save_builder_is_deterministic` on a 1/64-scale config (inside the 0020 §4 p95 limit), so the builder cannot rot between slow runs. `unit`: `bench-gate: threshold and fingerprint`.
 
 ## Exit criteria
-- [ ] `pnpm test:slow` runs every slow test of every suite, one line per suite, exit 0 on Tyler's Mac; `pnpm bench:frame` and `pnpm bench:worldgen` still work as aliases.
+- [ ] `pnpm test:slow` runs every slow test of every suite, one line per suite, exit 0 on Tyler's Mac; `pnpm bench:frame` still works as an alias.
 - [ ] `heavy-n1 all logs` and `release-golden` pass under Node (and Bun for the replay).
 - [ ] The builder's native test proves the §9 counts and determinism.
 - [ ] `slow_tick_large_save` meets the 0010 desktop proxy and `bench.frame_reference` both 0018 §9 proxies, each with a baseline. A miss is not hidden: Deviations gets the profile and a plan edit is raised.
@@ -71,7 +71,7 @@ PRE-PLAN §7 "Tick time": `slow_tick_large_save`. "Frame time": `bench.frame_ref
 `run-tests` skill: slow tier layout, baseline regeneration rule, where bench JSON lands. `profile-frame` skill: `bench.frame_reference` as the capture for reference-game regressions. `games/reference/CLAUDE.md`: the `bench` feature, and that it must never ship.
 
 ## Manual device checks
-none of its own. It supplies `?bench=large-save` for the M39 entry M07 defined (full default state budget on the iPhone for ten minutes, zero grows, no reload).
+None of its own. It supplies `?bench=large-save` for item M39-large-save: [device-checks.md, M39](device-checks.md#m39-acceptance).
 
 ## Deviations
 (filled in during Phase 3)

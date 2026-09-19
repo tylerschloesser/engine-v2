@@ -1,6 +1,6 @@
 # M20: Reference game v0: world and collect rules
 
-Status: not started · After: 16 (PLAN.md lists 18, 19; only M20b needs them) · Tyler-dependent: Q4 (collect range; default 3 tiles assumed)
+Status: not started · After: 16b · Tyler-dependent: Q4 (collect range; default 3 tiles assumed)
 
 Split during planning: the PLAN.md row for M20 did not fit the sizing rule (about 2,100 lines, six files to read). This brief is the world and the headless rules; `20b-reference-player-and-collect-ui.md` is the player, presence and DOM, and is where the game becomes playable.
 
@@ -33,7 +33,7 @@ Player circle, spring, `Presence`, `admit`, spawn, any DOM UI (M20b). Inventory 
 
 ## Seams
 **Provides:** `RefGame`, `RefWorldgen`, `RefParams`; `content::{RANGE_Q8, COLLECT, UNITS_PER_TILE, NOT_BUILDABLE, COLLECTABLE}`; `rules::collect::in_range(from, tile) -> bool` (shared with M20b's button logic); native test helper `sim/tests/common/mod.rs::RefScenario` (new world with `TEST_SEED`, join a player, dispatch, step ticks, read player and tile, state hash); `tests/fixtures/landmarks.json` (nearest tile of each resource and nearest land tile to the origin for `TEST_SEED`, guarded by a Rust test); browser helper `tests/helpers/game.ts::openGame(page, opts)`.
-**Consumes:** `export_game!`, `buildGame`, `engine()` plugin (M02); `Worldgen`, `hash2`, gen worker path (M08); terrain renderer, art loading, `tile_visual`, `TileTexel` (M09); camera and input (M11); `Game` (incl. the `anchor` hook M12 adds), `Registry`, `Ticks`, `SimRng` (M12); `WorldRead`/`WorldWrite`, `TickCx::{player_count, player_id_at}`, `TickRate::secs`, `testkit::run_script` (M12b); sim worker (M13); `createClient` with `host: { kind: 'local' }` (M06b); `dispatch`, ts-rs bindings step, `add-action-type` skill (M16); `engine/test` stepping (M03). Collect and craft timers belong to players, and the timer wheel of `0007` §7 is keyed by `EntityId`, so this game depends on M12b's player scan; if that seam changed, stop and fix the plan first.
+**Consumes:** `export_game!`, `buildGame` (M02); `engine()` plugin (M02b); `Worldgen`, `hash2`, `engine::noise`, `assert_worldgen_contract` (M08); gen worker path (M08b); terrain renderer, `tiles.json`, `tile_visual`, `TileTexel` (M09); art sampling (M09b, if ticked); camera and input (M11); `Game` (incl. the `anchor` hook of 0024 §7), `Registry`, `Ticks`, `SimRng` (M12); `WorldRead`/`WorldWrite`, `TickCx::{player_count, player_id_at}`, `TickRate::secs`, `testkit::run_script` (M12b); sim worker (M13); `createClient` with `host: { kind: 'local' }` (M06b); `dispatch`, ts-rs bindings step, `add-action-type` skill (M16); `engine/test` stepping (M03, M06b, M13). Collect and craft timers belong to players, and the timer wheel of `0007` §7 is keyed by `EntityId`, so this game depends on M12b's player scan; if that seam changed, stop and fix the plan first.
 
 ## Planning decisions
 - **Collects are not reservations.** Two players may collect one tile at once; at completion a collect whose resource is gone ends with no item. This keeps `apply` free of cross-player reads and produces the "last unit" rejection race that `0003` Consequences wants scripted (M34c).

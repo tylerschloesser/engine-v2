@@ -1,6 +1,6 @@
 # M37b: WebGPU device loss, `rendererLost`, the test device-loss flag
 
-Status: not started · After: 34 (runs **before** M37) · Tyler-dependent: no
+Status: not started · After: 34c (runs **before** M37) · Tyler-dependent: no
 
 Split out of M37 (sizing rule: reading list). It runs first so M37's event audit includes `rendererLost`.
 
@@ -19,7 +19,7 @@ Mine from spikes: `spikes/zero-gc-webgpu/` (device, pipeline and pool creation i
 - **Re-runnable GPU setup.** `render/device.ts` (M09) and everything created from the device (terrain pipeline and textures M09/M09b, art array and mips M09b, sprite atlas and uber-quad pipeline M17/M17b, instance buffer, reused descriptors and bind groups) hang off one `GpuResources` object built by one function, so loss handling is "drop it, build another". No behaviour change while healthy.
 - **Loss sequence** (0018 §8): `device.lost` → request adapter → device → reconfigure the same canvas → `GpuResources` again → re-fetch art (HTTP cache) → rewrite the visual-table uniform from `tiles.json` (it lives on main, M09) → set `CB_FLAGS` bit `RENDERER_RESET` (reserved by M06) and wake the client worker. The client worker, seeing the bit at its next wake, clears it and calls the client export that marks every resident chunk and the indirection window for re-upload (`Uploader::requeue_all`, visible first by the existing priority); the chunk-upload ring's byte budget paces the refill as on a join.
 - **While no device exists** the rAF callback still integrates the camera, writes the camera block and the overlay properties, takes DrawList slots (and drops them), and does not drain the upload ring; it skips encode and submit. The canvas keeps its last presented frame.
-- **`rendererLost`:** `client.onRendererLost(cb: (e: { reason: 'no-adapter' | 'repeated-loss' }) => void)`, raised per the 0018 §8 rule, timed by the injected `Clock` (M03). After it, the renderer makes no further attempt; sim, storage and link continue, so a reload loses nothing. (If an `EngineEvent` union carrier landed, this is a filter over it; M37 owns that rule.)
+- **`rendererLost`:** `client.onRendererLost(cb: (e: { reason: 'no-adapter' | 'repeated-loss' }) => void)`, raised per the 0018 §8 rule, timed by the injected `Clock` (M03). After it, the renderer makes no further attempt; sim, storage and link continue, so a reload loses nothing. (A per-event subscription like `client.onUi`; there is no `EngineEvent` union. M37 audits the full set.)
 - **Test flag** (0018 §8; PRE-PLAN §6 list): `engine/test` `loseDevice(client)` (calls `device.destroy()`), `failNextAdapter(client)` (the next `requestAdapter` resolves `null`). Playwright helper `allowDeviceLoss(page)` opts one test out of the global failure rule of 0020 §6.
 - **Reference game:** nothing beyond registering the callback; the prompt UI is M37's `status.ts` work.
 
@@ -63,7 +63,8 @@ PRE-PLAN §7 "Allocation per isolate": unchanged main and client-worker numbers 
 `packages/engine/CLAUDE.md`: "every GPU object is created in `GpuResources`; nothing else may hold a GPU handle", and how to write a test that expects a loss. `hot-paths.md` unchanged. No new skill.
 
 ## Manual device checks
-Proposed entry for `docs/plan/device-checks.md` (this row should carry **D**): **M37b-ios-background**: on the iPhone, play, background the tab for several minutes under memory pressure (camera app, a few heavy pages), return: the world is drawn again without a reload, or the `rendererLost` prompt appears; never a frozen or black canvas.
+[device-checks.md, M37b: Renderer recovery after backgrounding](device-checks.md#m37b-renderer-recovery-after-backgrounding) (this row carries **D**).
+Run once M37 has landed the `rendererLost` prompt.
 
 ## Deviations
 (filled in during Phase 3)

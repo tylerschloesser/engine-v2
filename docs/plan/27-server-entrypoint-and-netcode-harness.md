@@ -11,13 +11,13 @@ Status: not started · After: 22b · Tyler-dependent: no
 3. `docs/decisions/0020-testing-strategy.md` (§3 suites and budgets, §7 netcode harness, §8 what the engine exposes)
 4. `docs/decisions/0017-packaging-and-build.md` (§2 exports map, §5 server half: `loadGame`)
 
-Mine from spikes: `spikes/determinism-hash/` (Node and Bun loader shape). Rules that apply: `.claude/rules/determinism.md`, `.claude/rules/hot-paths.md` (the client shell reused headless). Skill: `write-adr`.
+Mine from spikes: `spikes/determinism-hash/` (Node and Bun loader shape). Rules that apply: `.claude/rules/determinism.md`, `.claude/rules/hot-paths.md` (the client shell reused headless).
 
 ## Scope
 - `createWorldServer(cfg: WorldConfig, host: HostServices)` as typed in 0009: `createSimHost` + `Persistence.open` (load, recover or create), `host.timer` started when loaded, `accept(c)` (connections arriving before `ready` wait), `stop()` = `SimHost.stop()` then close connections.
-- **ADR amending 0009** (next free number, short): the returned object gains `ready: Promise<void>`, rejecting with M22b/M24b's `WorldLoadError`, because loading is asynchronous and 0009's synchronous signature has nowhere to report it; `HostServices` gains `onFatal?`, mapped from M24's `SimHostOptions.onFatal` (M24's ADR note). M37's brief plans the same `onFatal?` amendment: whichever session runs second links to the first ADR instead of writing another.
+- **0024 §5 (amends 0009), implemented here, not re-decided:** `createWorldServer` returns `{ ready, accept, stop }`; `ready: Promise<void>` rejects with M22b/M24b's `WorldLoadError`, because loading is asynchronous and 0009's synchronous signature has nowhere to report it; `HostServices` gains `onFatal?`, mapped from M24's `SimHost.onFatal`; the seed is accepted as text or hex as §5 states.
 - Until M28 there is no handshake: `accept` uses M15's implicit accept (`PlayerId = conn`). Scenarios here are join-only.
-- `engine/server/node`: M02's `loadGame` and M22b's `createFsStorage` stay; add `nodeHostServices({ wasm, storage, onIdle?, onFatal? })` supplying `clock` and `timer` from `systemClock`/`systemScheduler` (M03). The `ws` attachment is M29.
+- `engine/server/node`: M02's `loadGame` and M22b's `fsStorage` stay; add `nodeHostServices({ wasm, storage, onIdle?, onFatal? })` supplying `clock` and `timer` from `systemClock`/`systemScheduler` (M03). The `ws` attachment is M29.
 - In-memory `Connection` pair, conditioner, virtual clock, byte pump, headless client, harness (names under Seams), exported from `engine/test`.
 - `netcode` suite registered in `scripts/suites.mjs` under the contract and budget of 0020 §2–3; the `wasm` suite's scenarios switched to run their logs through `createWorldServer` with `memoryStorage()` (Bun: M02's plain script, extended).
 
@@ -27,7 +27,7 @@ Handshake, identity, reconnect (M28, M28b). Net worker, `ws`, loopback subset (M
 ## Files, packages and crates touched
 - `packages/engine/src/server.ts`, `src/server-node.ts`, `src/net/{memory-connection,conditioner,pump}.ts`, `src/test/{virtual-clock,headless-client,net-harness}.ts`
 - `packages/engine/tests/netcode/` (new suite, nested `CLAUDE.md`), `tests/wasm/`; fixtures: M16's action fixture and M15's `puts` fixture, unchanged
-- `docs/decisions/<next>-server-ready-and-fatal.md`. No crate.
+- No crate. No ADR: the 0009 amendment is 0024 §5.
 
 ## Seams
 **Provides:**
@@ -36,10 +36,10 @@ Handshake, identity, reconnect (M28, M28b). Net worker, `ws`, loopback subset (M
 - `conditionLink(a, b, { seed, latencyMs, jitterMs, stall?: { p, rtoMs } }, clock): ConditionedLink` with `ends: [Connection, Connection]`, `set(conditions)`, `stall(ms)`, `disconnect(code?)`. Wraps any `Connection` pair (memory now, `ws` in M29); semantics of 0020 §7.
 - `createVirtualClock(): VirtualClock`, M03's `ManualClock` plus `advanceTo(t): Promise<void>` (awaits physical arrival, then releases in `(deliverAt, link, seq)` order) and `advanceBy(ms)`.
 - `createBytePump({ uplink, downlink })` with `attach(conn)`, `detach()`, `drain()`: the net worker's pump core (0015 §1) between M06 rings (`SabSet.uplink`/`downlink`) and a `Connection`. M29 wraps it in the worker.
-- `HeadlessClient`: M15b's client-worker shell made callable without `Atomics.wait` (`pump()`, `stepFrame(dt)`), terrain generated synchronously on miss (M08b's headless rule), a byte pump to its `Connection`; methods `dispatch(action): number`, `setView(report)`, `replicaHash()`, `onActionResult(cb)`, `status()`.
-- `createNetHarness({ fixture, seed, clients, world?, transport?: 'memory', conditions? }): Promise<NetHarness>` with `clock`, `server`, `storage`, `clients[]`, `link(i)`, `addClient()`, `advanceTo(t)`, `advanceTicks(n)`, `settle()` (all links empty, pumps drained, every client has applied the host's latest tick), `assertConverged()` (`replicaHash()` equals `hostRegionHash(conn)` per client), `counters(i): NetCounters` (M15b's `netCounters` per client, per tick and totals, plus `messagesDown/Up`), `trace(): Uint8Array` (every released message as `(t, link, dir, bytes)`), `dispose()`. A failure prints seed and scenario and dumps the action log (0020 §2).
+- `HeadlessClient`: M15b's client-worker shell made callable without `Atomics.wait` (`pump()`, `stepFrame(dt)`), terrain generated synchronously on miss (M08b's headless rule), a byte pump to its `Connection`; methods `dispatch(action): number`, `setView(report)`, `setCamera({ x, y, tilesAcross })` (writes its camera block, so a game's `ClientSide::frame` produces presence once M18/M19 land), `ui(): unknown` (the last `Ui` JSON, `null` before the first), `replicaHash()`, `onActionResult(cb)`, `status()`.
+- `createNetHarness({ fixture, seed, clients, world?, transport?: 'memory', conditions? }): Promise<NetHarness>` (`fixture` is a fixture name or any `buildGame` output directory, so the reference game runs in it from M34) with `clock`, `server`, `storage`, `clients[]`, `link(i)`, `addClient()`, `advanceTo(t)`, `advanceTicks(n)`, `settle()` (all links empty, pumps drained, every client has applied the host's latest tick), `assertConverged()` (`replicaHash()` equals `hostRegionHash(conn)` per client), `counters(i): NetCounters` (M15b's `netCounters` per client, per tick and totals, plus `messagesDown/Up`), `trace(): Uint8Array` (every released message as `(t, link, dir, bytes)`), `dispose()`. A failure prints seed and scenario and dumps the action log (0020 §2).
 
-**Consumes:** `createSimHost`, `SimHost`, `stepTick`, types `Connection`/`MsgClass`/`HostServices`/`WorldConfig` (M13); `SimHost.accept`, `RingConnection` as the model adapter, `replicaHash`/`hostRegionHash`/`netCounters` (M15b); `Host`, `ClientCore`, `region_hash` (M15); `dispatch` path (M16); `memoryStorage` (M22); `Persistence.open`, `createFsStorage`, `SimHost.stop` (M22b); `SimHostOptions.onFatal` (M24, if ticked); `Clock`/`Scheduler`, `ManualClock`, `systemClock` (M03); rings (M06); `loadGame`, loader (M02).
+**Consumes:** `createSimHost`, `SimHost`, `stepTick`, types `Connection`/`MsgClass`/`HostServices`/`WorldConfig` (M13); `SimHost.accept`, `RingConnection` as the model adapter, `replicaHash`/`hostRegionHash`/`netCounters` (M15b); `Host`, `ClientCore`, `region_hash` (M15); `dispatch` path (M16); UI-ring kind-1 record behind `ui()` (M16b); `setCamera`'s camera block (M06b); `memoryStorage` (M22); `Persistence.open`, `fsStorage`, `SimHost.stop` (M22b); `SimHost.onFatal` (M24); `Clock`/`Scheduler`, `ManualClock`, `systemClock` (M03); rings (M06); `loadGame`, loader (M02).
 
 ## Planning decisions
 - **WebTransport adapter (PRE-PLAN §10): not built in Phase 3, no milestone.** Revisit when both hold: Node LTS or workerd ships a non-experimental WebTransport server, and the Tier-1 iOS floor includes it (0009, Alternatives rejected); or when field play shows head-of-line stalls beyond the interpolation cap of 0010. The option is kept alive here: every `send` carries its `MsgClass`, and one scenario runs a `datagrams: true` memory pair with latest-wins drops.
@@ -48,19 +48,19 @@ Handshake, identity, reconnect (M28, M28b). Net worker, `ws`, loopback subset (M
 - **Test placement** follows M01: `packages/engine/tests/netcode/`.
 
 ## Order of work
-1. ADR; `createWorldServer` over `createSimHost` + `Persistence.open`; move the `wasm` suite onto it.
+1. `createWorldServer` (0024 §5 shape) over `createSimHost` + `Persistence.open`; move the `wasm` suite onto it.
 2. Memory pair, `VirtualClock`, conditioner, with TS unit tests (ordering, seeded reproducibility).
 3. Byte pump, `HeadlessClient`, harness; first scenario green.
 4. Remaining scenarios, suite registration, `nodeHostServices` + fs round trip.
 
 ## Tests added
-Netcode: `join-converges` (K=4, action mix, `assertConverged`), `late-join`, `conditioned-link` (latency, jitter, stall; the same seed gives an identical `trace()` twice), `latest-wins-datagrams`, `counters-exact` (bytes per client per tick exact for a fixed seed). `wasm`: `server/load-or-create` (stop, reopen on fs storage, same hash), `server/ready-rejects-on-corrupt-world`, `server/accept-before-ready-waits`. TS unit: `virtual-clock`, `conditioner`, `memory-connection`, `byte-pump-backpressure` (full ring retries, `drops` stays 0).
+Netcode: `join-converges` (K=4, action mix, `assertConverged`), `late-join`, `conditioned-link` (latency, jitter, stall; the same seed gives an identical `trace()` twice), `latest-wins-datagrams`, `counters-exact` (bytes per client per tick exact for a fixed seed), `headless-ui-and-camera` (`ui()` returns the fixture's last `Ui` JSON, M16b's kind-1 record; `setCamera` moves the subscription), `harness-accepts-build-dir` (`fixture` given as a `buildGame` output directory). `wasm`: `server/load-or-create` (stop, reopen on fs storage, same hash), `server/ready-rejects-on-corrupt-world`, `server/accept-before-ready-waits`. TS unit: `virtual-clock`, `conditioner`, `memory-connection`, `byte-pump-backpressure` (full ring retries, `drops` stays 0).
 
 ## Exit criteria
 - [ ] `pnpm test netcode` passes within the 0020 §3 budget; two runs of one seed produce identical traces.
 - [ ] `pnpm test wasm` runs its logs through `createWorldServer` under Node and Bun with the existing golden hashes.
 - [ ] No `node:` import outside `src/server-node.ts` and M22b's fs storage (grep test); Biome's restricted-globals rule (M03) passes with no new override.
-- [ ] The ADR exists and `PLAN.md` "Plan-level decisions" lists it.
+- [ ] `createWorldServer`'s return type and `HostServices.onFatal?` match 0024 §5 (type-asserted in a `unit` test).
 - [ ] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands

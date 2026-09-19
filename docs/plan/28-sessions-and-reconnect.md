@@ -16,7 +16,7 @@ Every connection, in-browser and in the harness, starts with `Hello` and is answ
 Rules that apply: `.claude/rules/determinism.md`.
 
 ## Scope
-- Codecs with golden bytes: `Hello`, `Welcome`, `Reject`, `Bye { reason: Leave | Superseded }` (layouts: 0013 Handshake; `MsgType` ids for `Welcome` and `Bye` are already reserved by M14). `PROTOCOL_VERSION = 1`; the magic's first wire byte is ≥ `0x80` (M14's constraint), so `Hello`/`Reject` never collide with a `MsgType`.
+- Codecs with golden bytes: `Hello`, `Welcome`, `Reject`, `Bye { reason: Leave | Superseded }` (layouts: 0013 Handshake; `MsgType` ids for `Welcome` and `Bye` are already reserved by M14). `PROTOCOL_VERSION = 1`; the magic's first wire byte is ≥ `0x80` (M14's constraint, 0024 §8), so `Hello`/`Reject` never collide with a `MsgType`.
 - Host handshake per connection: TS parses the frozen prefix, join key and secret (DataView; the server is outside 0016); magic or version wrong, or no `Hello` within 5 s, closes with `ProtocolError`. Non-`Hello` messages before `Hello` are dropped silently (at most 8, then close): this lets the net worker stay a pure byte pump across reconnects (M29).
 - Session table `SHA-256(secret) → { playerId, lastPresence }` (WebCrypto), persisted with `Storage.write` at key `sessions` (0005 key list).
 - `Welcome` built in Rust by `sim_attach`; then the logged `Joined`/`Connected` event (0013, Join is late join) and the first frames as M15 already sends them. M15's implicit accept (`PlayerId = conn`) is deleted.

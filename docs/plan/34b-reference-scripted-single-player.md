@@ -23,17 +23,17 @@ Rules that apply: `games/reference/CLAUDE.md`; `.claude/rules/determinism.md` fo
 - **State budget full:** a `WorldConfig` whose `max_entities` leaves less headroom than `max_action_growth`; `PlaceFurnace` returns `Rejected(Engine(StateBudgetFull))`, the item stays in the inventory, and the build control shows the reason.
 - **`test-hooks` cargo feature** on `reference-sim`, never enabled by `vite build`: `SCHEMA_VERSION + 1`, and `StartCraft` with recipe id 255 panics in `apply`. Two `slow`-tagged tests use that build: the poison action is skipped and acked `EngineFault` while play continues (`0005` Panic recovery step 3); a world saved by the normal build reports `SaveIncompatible` under the hooks build with every stored byte unchanged and `exportWorld` still working.
 - **Zero GC through the game:** the M04 assertion, single-player topology, over a window of the script that pans, collects and deposits.
-- Minimal status UI needed by these tests only: `status.ts` shows `WorldBusy` and `SaveIncompatible` (with Export and Delete, per M23's default) from `client.onEngineEvent`.
+- Minimal status UI needed by these tests only: `status.ts` shows `WorldBusy` and `SaveIncompatible` (with Export and Delete, per M23's default) from the rejection of `client.ready` (`EngineStartError` codes `'world-busy'`, M23, and `'save-incompatible'`, M24b; there is no `EngineEvent` union).
 
 ## Non-scope
-Multiplayer scripts and races (M34c). Heavy mode, soak, benchmarks, the standard large save (M36 consumes this milestone's script and log). Device loss (M37). `migrate` with a real second schema: the reference game has none (fixtures `migrate-v*` of M24b cover it; see the coverage file).
+Multiplayer scripts and races (M34c). Heavy mode, soak, benchmarks, the standard large save (M36 consumes this milestone's script and log). Device loss (M37b). `migrate` with a real second schema: the reference game has none (fixtures `migrate-v*` of M24b cover it; see the coverage file).
 
 ## Files, packages and crates touched
-`games/reference/` (tests, helpers, `sim/Cargo.toml` feature, `sim/src/rules/craft.rs` hook, `src/ui/status.ts`, `package.json` script). `packages/engine/src/vite.ts` only if `buildGame({ features })` does not exist yet (M36 specifies it: output directory and build hash differ per feature set; add it exactly so and tell M36's brief).
+`games/reference/` (tests, helpers, `sim/Cargo.toml` feature, `sim/src/rules/craft.rs` hook, `src/ui/status.ts`, `package.json` script). `packages/engine/src/vite.ts` for `buildGame({ features?: string[] })`: this milestone needs it first (the `test-hooks` build), so it is built here: the features are passed to cargo, and the output directory and build hash differ per feature set, so a feature build never joins a normal server. M36 and M36b consume it.
 
 ## Seams
-**Provides:** `script.ts` with both drivers; `tests/golden/full-game.log` and its hashes (M36 heavy mode and M36b measurements consume them); cargo feature `test-hooks`; `golden:record` command.
-**Consumes:** everything M20–M34 provide; `HeadlessClient`, `createNetHarness`/memory storage, `VirtualClock` (M27); determinism page and golden regeneration pattern (M03, M05); `forceSnapshot`, `client.exportWorld`/`importWorld`, server `exportWorld`/`importWorld`, `EngineEvent` `WorldBusy` (M23); recovery, `Skip`, `EngineFault`, `Resyncing` (M24); `SaveIncompatible` (M24b); state-budget check (M21); zero-GC harness (M04); `engine/test` input injection (M11), `drawListRecords` (M17), `untilQuiescent` (M06b).
+**Provides:** `buildGame({ features?: string[] })` (engine, `engine/vite`); `script.ts` with both drivers; `tests/golden/full-game.log` and its hashes (M36 heavy mode and M36b measurements consume them); cargo feature `test-hooks`; `golden:record` command.
+**Consumes:** everything M20–M34 provide; `HeadlessClient`, `createNetHarness`/memory storage, `VirtualClock` (M27); determinism page and golden regeneration pattern (M03, M05); `forceSnapshot`, `client.exportWorld`/`importWorld`, server `exportWorld`/`importWorld`, `EngineStartError` code `'world-busy'`, `client.onStorage` (M23); recovery, `Skip`, `EngineFault` (M24); `client.onResyncing` (M28b); `EngineStartError` code `'save-incompatible'` (M24b); state-budget check (M21); zero-GC harness (M04); `engine/test` input injection (M11), `drawListRecords` (M17), `untilQuiescent` (M06b).
 
 ## Planning decisions
 - **One script, two drivers.** The DOM run proves the UI path; the headless run is fast, feeds the golden log, and is what M34c reuses. Their final hashes must match, which pins "the UI adds nothing the actions do not say".
@@ -48,6 +48,7 @@ Multiplayer scripts and races (M34c). Heavy mode, soak, benchmarks, the standard
 
 ## Tests added
 - Browser: `reference_full_game_single`, `reference_reload_resumes`, `reference_offscreen_furnace_keeps_smelting`, `reference_world_busy_second_tab`, `reference_export_import_roundtrip`, `reference_state_budget_full_shows_reason`, `gc.reference_single_player`.
+- WASM under Node (engine `wasm` suite): `build-game-features` (a fixture built with and without a feature lands in two directories with two build hashes).
 - WASM under Node and Bun: `reference_golden_replay` (checkpoint hashes; first divergent tick reported), `reference_single_player_save_to_server`, `reference_state_budget_full`.
 - Rust native: `golden_replay` (same log, same hashes).
 - Browser determinism page: the reference log added to the Chromium, WebKit and Firefox runs.

@@ -1,6 +1,6 @@
 # 0016: What "zero GC" means, and how it is asserted
 
-Status: Accepted (2026-09-19)
+Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §12.
 
 ## Context
 

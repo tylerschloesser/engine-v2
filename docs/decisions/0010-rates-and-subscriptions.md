@@ -1,6 +1,6 @@
 # 0010: Rates, subscriptions, and the bandwidth budget
 
-Status: Accepted (2026-09-19)
+Status: Accepted (2026-09-19). Conditional amendment recorded in [0024](0024-planning-amendments.md) §15.
 
 ## Context
 

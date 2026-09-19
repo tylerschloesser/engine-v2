@@ -44,7 +44,7 @@ Mine from spikes: none (the prediction spike built no interpolation). Rules that
 - **Buffer depth 8 samples per key** (0.8 s at the presence rate; the delay cap of 0010 needs 4). Out-of-order or duplicate times are dropped. A re-relayed held sample (same `sample_tick`) refreshes the silence timer without adding a sample: that is what keeps a resting player solid (0001).
 - **`alpha`** is 1 while samples are fresh, ramps to 0 across the silence limit of 0012, and is 0 at once on `Gone`. The game multiplies it into its colour; the engine draws nothing itself.
 - **Floats are fine here** (client side, never hashed; 0003). Reproducibility is asserted within one runtime only.
-- **Measured, may become an ADR change.** Presence arrives at the sample rate of 0010, which is half the frame rate that 0010's delay formula is written in. With the floor delay the newest bracketing sample is often missing and the buffer extrapolates. The scenario `extrapolation_ratio` measures `interpExtrapolatedFrames / interpRenderedFrames` at the median network profile. If it exceeds 0.2, record a Deviation proposing that the formula's interval term be the presence sample interval, and supersede the 0010 row by ADR; do not tune silently.
+- **Delay formula interval (0024 §15).** Presence arrives at the sample rate of 0010, which is half the frame rate that 0010's delay formula is written in; with the floor delay the newest bracketing sample is often missing and the buffer extrapolates. 0024 §15 states which cadence the formula's interval term uses; implement it as written there. The scenario `extrapolation_ratio` still measures `interpExtrapolatedFrames / interpRenderedFrames` at the median network profile; if it exceeds 0.2 under §15's rule, record a Deviation with the numbers; do not tune silently.
 
 ## Order of work
 1. `InterpBuffer` with Hermite, extrapolation cap, hold, fade; native unit tests on synthetic samples.
@@ -87,7 +87,7 @@ Browser suite: `rebase-on-visible`: hide, advance the injected clock 5 s, show; 
 Engine crate `CLAUDE.md`: one line that `interp` and `clock` are float, client-only and must never be reachable from `apply`/`tick`. No new skill.
 
 ## Manual device checks
-`docs/plan/device-checks.md`, M34 entry (two phones on a mobile network: a remote dot moves without snapping and fades on airplane mode); nothing to check before M34 draws remote players.
+Owns item M34-remote-motion, run in [M34's section of device-checks.md](device-checks.md#m34-reference-multiplayer-on-real-devices) and again on cellular in M38's; nothing to check before M34 draws remote players.
 
 ## Deviations
 (filled in during Phase 3)

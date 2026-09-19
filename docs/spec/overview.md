@@ -14,9 +14,9 @@ A multiplayer web game engine for one genre Tyler likes to prototype: top-down, 
 | Knowing which chunks are visible/subscribed; requesting async chunk generation; chunk lifecycle | Tile art and assets |
 | WebGPU rendering | Data model (tiles, entities, player state) |
 | Tick loop and scheduling; running the sim in a worker or on a server | Simulation rules and game-defined actions |
-| Engine-defined actions (connect/disconnect). Camera + viewport are *not* actions: see below | Delta definitions, interpolation and prediction logic |
+| Engine-defined actions (connect/disconnect). Camera + viewport are *not* actions: see below | Replicated data types, the presence type, per-action prediction opt-outs |
 | Connected players and their chunk subscriptions | Game UI (DOM overlay) |
-| Transport, delta delivery, the interpolation/prediction machinery | Per-game config (chunk size, world cap, etc.) |
+| Transport, delta derivation and delivery, the interpolation/prediction machinery | Per-game config (chunk size, world cap, etc.) |
 | Persistence (snapshots + action log) and replay | |
 
 Guiding idea: the game defines *what* (data and rules); the engine pieces everything together and handles *when and where* it runs.
@@ -24,7 +24,7 @@ Guiding idea: the game defines *what* (data and rules); the engine pieces everyt
 ## Fixed decisions (Tyler's)
 
 - pnpm monorepo. TypeScript on the JS side. Rust→WASM for everything that reasonably can be. Accepted exception: the renderer's WebGPU calls, the camera, and input handling are TypeScript on the main thread (see `client.md`).
-- **Game authors write simulation logic in Rust** (worldgen, actions, tick rules, deltas, prediction). The game crate and engine crate compile into one WASM module. TypeScript is for bootstrapping and UI.
+- **Game authors write simulation logic in Rust** (worldgen, data types, actions, tick rules, presence, client-side view code). The game crate and engine crate compile into one WASM module. TypeScript is for bootstrapping and UI.
 - The engine is the single published npm package, with **zero runtime npm dependencies** and multiple entrypoints (main thread, worker, server). See `runtime-and-packaging.md`.
 - The reference game is a separate, private package: Vite plus a simple game.
 - Custom WebGPU renderer; no rendering library.

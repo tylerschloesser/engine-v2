@@ -24,7 +24,7 @@ Mine from spikes: `spikes/cross-origin-sab` (ring drain into a non-shared memory
 - **`engine/test`:** `netCounters(client)` (M15 counters + `downlinkRetries`), `replicaHash(client)`, `hostRegionHash(client, conn)`; M06b's `untilQuiescent` already covers both rings, extend it with "the client has applied the host's latest tick".
 
 ## Non-scope
-Net worker and sockets (M29). `createWorldServer` (M27). Handshake (M28). Pacing, heartbeat, hashes (M31). Actions (M16). DrawList, entities on screen (M17): only tiles are visible here. "Reveal when visible chunks are received and generated" (M28/M20).
+Net worker and sockets (M29). `createWorldServer` (M27). Handshake (M28). Pacing (M31), heartbeat (M28), hashes (M31b). Actions (M16). DrawList, entities on screen (M17): only tiles are visible here. "Reveal when visible chunks are received and generated" (M28/M20).
 
 ## Files, packages and crates touched
 `packages/engine/src` (`server.ts`, `worker.ts`, `ring-connection.ts`, `abi.ts`, `test.ts`), `packages/engine/crates/engine` (`abi/registry.rs`, `host/`, `client/`), `packages/engine/fixtures/puts` (test page).

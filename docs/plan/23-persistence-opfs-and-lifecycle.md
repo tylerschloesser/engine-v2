@@ -26,7 +26,7 @@ Panic recovery and worker respawn (M24, M37). `SaveIncompatible` (M24b; this mil
 
 ## Files, packages and crates touched
 - `packages/engine/src/storage/{opfs,archive}.ts`, `packages/engine/src/worker/sim.ts`, `packages/engine/src/client.ts` (events + three methods), `packages/engine/src/server.ts` (re-export archive functions)
-- `packages/engine/fixtures/pages/opfs-latency.html` + its worker script; browser tests beside M03's.
+- `packages/engine/tests/browser/pages/opfs-latency.html` + its worker script (M02b's fixture app); browser tests beside M03's.
 - No Rust changes expected.
 
 ## Seams
@@ -40,17 +40,17 @@ Panic recovery and worker respawn (M24, M37). `SaveIncompatible` (M24b; this mil
 
 **Consumes**
 - M22 `Storage`, `runStorageConformance`, `Persistence`; M22b `Persistence.open`, `SimHost.pause/resume/stop`, `WorldLoadError`.
-- M06b `W_YIELD` / park / resume protocol and `shell.runAsync(fn)` (leave the loop, await, re-enter); `EngineStartError`; `createClient({ host: 'local', world })` (M06b/M13); M13 sim worker body and `SimHost.pause/resume`.
+- M06b `W_YIELD` / park / resume protocol and `shell.runAsync(fn)` (leave the loop, await, re-enter); `EngineStartError`; `createClient({ host: { kind: 'local', world } })` (M06b/M13); M13 sim worker body and `SimHost.pause/resume`.
 - M04 zero-GC harness and negative controls; M03 COOP/COEP fixture page and stepping API.
 
 ## Planning decisions
 1. **Is the periodic snapshot `write` inside the strict zero-GC window? (PRE-PLAN §10, 0016.) Measured here, with the rule fixed now.** The test `zero_gc_singleplayer_with_snapshot` calls `forceSnapshot()` once inside the 600-frame window. If the sim worker still meets its 0016 §1 budget with zero GC events: **inside**, the default stands, and this test replaces the snapshot-free one. If not: the strict test runs without a snapshot, a second test asserts the snapshot as a *budgeted event* (`simWorker.snapshotEventBytes` = measured bytes + 25 %, hard cap 4 KB per snapshot, zero `MajorGC`), and the session writes a new ADR superseding the deferred sentence in 0016 (use the `write-adr` skill). Either way the log `append` and `sync` stay in the strict window and the failure output names the allocating call frames. Rationale: the only allocating part is the promise-only rename/reopen (a few promises per 60 s); a number decides, not an argument.
 2. **Promise-only OPFS calls run behind `shell.runAsync`, never awaited by the tick path.** After the synchronous scratch write + `flush()`, the adapter queues the rename and the next scratch open; the sim worker body runs them through M06b's `shell.runAsync` in the gap after the current tick pass (the loop is left and re-entered once per snapshot); their failure reaches `Storage.onError`. If the next scratch handle is not open when the following snapshot is due, that snapshot is skipped and retried a tick later (counter `snapshotDeferred`, expected 0).
-3. **Rename availability is checked first.** Step 1 of the work probes `FileSystemFileHandle.move()` in Playwright WebKit, Firefox and Chromium, and the device page probes it on iOS. If it is missing anywhere we support, the adapter uses *slot files* instead and no rename at all: snapshots go to pre-opened `snap.slot<k>` files whose first bytes are an adapter header `key_len u16 | key`; `list`/`read` resolve keys from slot headers; `delete` frees a slot. This is safe for the reason 0005 already gives (recovery trusts only the CRC). Record the outcome under Deviations; if slots are used, report it as an amendment to the 0005 OPFS row.
+3. **Rename availability is checked first (the fallback is 0024 §4).** Step 1 of the work probes `FileSystemFileHandle.move()` in Playwright WebKit, Firefox and Chromium, and the device page probes it on iOS. If it is missing anywhere we support, the adapter uses *slot files* instead and no rename at all: snapshots go to pre-opened `snap.slot<k>` files whose first bytes are an adapter header `key_len u16 | key`; `list`/`read` resolve keys from slot headers; `delete` frees a slot. This is safe for the reason 0005 already gives (recovery trusts only the CRC). Record the outcome under Deviations; if slots are used, report it as an amendment to the 0005 OPFS row.
 4. **`append` passes no options object.** Sync access handles keep a file position cursor; the adapter seeks once at open (`{ at }` on a reused options object) and then calls `write(view)` only. The zero-GC test is the proof.
 5. **`persist()` trigger.** Called once from the first engine-observed `pointerdown`/`keydown` or the first `client.dispatch`, whichever comes first, and only when `Persistence.open` reported `created`. `client.onStorage` fires at load, after the `persist()` answer, and after each hidden-boundary snapshot; `estimate()` is never called on the tick path.
 6. **Export/import run where the handles are.** Main parks the sim worker (`W_YIELD` + wake), posts the request; the worker pauses, takes a snapshot if dirty, awaits `flush()`, packs, and transfers the buffer back. Import writes under the archive's world id (or `opts.worldId`), takes lock `world:<id>` for the duration, refuses the running world's id and refuses an existing id without `overwrite`. The game then starts that world with a new `createClient`. Import never loads the world itself; the normal load path (and later the upgrade path, M24b) runs at that next start, as 0005 says.
-7. **OPFS latency on iOS Safari (PRE-PLAN §10, 0005): scheduled here as a device check with the retune rule fixed now.** Tyler opens `fixtures/pages/opfs-latency.html` on the iPhone, served by M03's fixture page server over the same HTTPS route M11's device check established (OPFS and cross-origin isolation need a secure context). The page's worker does 1,200 appends of 64 B with a `flush()` after every 20, then scratch writes of 1 MiB and 8 MiB with `flush()`, and prints p50 / p95 / max for `append`, `flush`, and both snapshot writes, plus `move()` and `navigator.locks` availability. **The retune number is `flush` p95.** ≤ 10 ms: keep the 1 s interval. 10–40 ms: raise the interval to 2 s (one hitch half as often; the power-loss window then equals the object-store row of 0005). > 40 ms (longer than the gap between ticks): `sync` only at snapshots and clean boundaries. Any change is a new ADR superseding that number in 0005. `append` p95 > 2 ms is reported but changes nothing (one append per tick).
+7. **OPFS latency on iOS Safari (PRE-PLAN §10, 0005): scheduled here as a device check with the retune rule fixed now.** Tyler opens `opfs-latency.html` on the iPhone, served by M03's `pnpm device:serve --tunnel` (OPFS and cross-origin isolation need a secure context). The page's worker does 1,200 appends of 64 B with a `flush()` after every 20, then scratch writes of 1 MiB and 8 MiB with `flush()`, and prints p50 / p95 / max for `append`, `flush`, and both snapshot writes, plus `move()` and `navigator.locks` availability. **The retune number is `flush` p95.** ≤ 10 ms: keep the 1 s interval. 10–40 ms: raise the interval to 2 s (one hitch half as often; the power-loss window then equals the object-store row of 0005). > 40 ms (longer than the gap between ticks): `sync` only at snapshots and clean boundaries. Any change is a new ADR superseding that number in 0005. `append` p95 > 2 ms is reported but changes nothing (one append per tick).
 
 ## Order of work
 1. Probe `move()`, `createSyncAccessHandle`, `navigator.locks` in the three Playwright browsers; settle decision 3.
@@ -69,7 +69,7 @@ Panic recovery and worker respawn (M24, M37). `SaveIncompatible` (M24b; this mil
 - [ ] All tests above pass by name.
 - [ ] Decision 1 is resolved in writing: either the default is confirmed (measured bytes recorded under Deviations and in `budgets.json`), or the superseding ADR exists and `budgets.json` carries `simWorker.snapshotEventBytes`.
 - [ ] Decision 3 outcome recorded.
-- [ ] `docs/plan/device-checks.md` has the M23 entries.
+- [ ] The `docs/plan/device-checks.md` section for this milestone matches what was built.
 - [ ] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
@@ -85,13 +85,8 @@ Panic recovery and worker respawn (M24, M37). `SaveIncompatible` (M24b; this mil
 Extend `packages/engine/src/storage/CLAUDE.md`: OPFS adapter rules (no options objects, no promises on the tick path, self-yield). Extend the `gc-test` skill with "forcing a snapshot inside the window".
 
 ## Manual device checks
-Entries for `docs/plan/device-checks.md` (iPhone Safari; Android Chrome if Tyler has the device, PRE-PLAN §11.6):
-1. Latency page: record the table; apply decision 7 to `flush` p95; note `move()` availability.
-2. Play the fixture world 2 minutes, swipe-kill Safari, reopen: world resumes, no admitted action lost.
-3. Same world in a second tab: `WorldBusy` shown by the fixture page.
-4. Private Browsing: page reports `durable: false` and still plays.
-5. Background 30 s, foreground: tick did not advance while hidden; no reload.
-6. Export: file arrives in Files; import it under a new id; both worlds show the same hash.
+[device-checks.md, M23: OPFS and world lifecycle](device-checks.md#m23-opfs-and-world-lifecycle).
+This milestone builds `opfs-latency.html` (Planning decision 7) and a fixture world page showing hash, tick, `durable`, `WorldBusy`, and export / import controls; both must be listed by `pnpm device:serve --tunnel`.
 
 ## Deviations
 (filled in during Phase 3)

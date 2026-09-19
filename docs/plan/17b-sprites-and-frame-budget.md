@@ -1,6 +1,6 @@
 # M17b: Sprite atlas, frame-time budget, `profile-frame`
 
-Status: not started · After: 17 (09b for `mips.ts`) · Tyler-dependent: no
+Status: not started · After: 17, 09b · Tyler-dependent: no
 
 Split out of M17 during planning. M20 (reference game v0) needs it; M18 and M19 do not. Carries one manual desktop check (Safari and Firefox).
 
@@ -41,7 +41,7 @@ Sprite animation clocks (a game passes the frame in `param`). Text. A second atl
 ## Planning decisions
 - **Frame-time criterion lands here, not in M09.** Terrain alone puts almost nothing on the CPU; the shares of 0018 §9 (main rAF callback, client-worker `frame`) are dominated by the 2 MiB `writeBuffer`, `extract` and the sort, which first exist at full size in M17. `bench.frame_worstcase` renders the `drawables` fixture with 65,536 records at maximum zoom-out under real rAF (`--disable-frame-rate-limit --disable-gpu-vsync`, as the spike did), 300 frames after 120 warm-up, and takes medians from trace events between marks: the rAF callback task on `CrRendererMain`, and a `performance.measure` around `frame` on the client worker. It must meet 0018 §9's desktop proxy numbers and stay within 25 % of the checked-in baseline (0020 §9); it gates on Tyler's Mac only and records elsewhere.
 - **`profile-frame` skill contents.** When to use it (a frame-time benchmark fails or a renderer/extract change is suspected); the one command (`node scripts/profile-frame.mjs [--fixture drawables] [--frames 300]`), which writes a trace JSON and prints one table: main callback p50/p95, worker `frame` p50/p95, top five self-time functions per thread, against the budget rows; how to read it; when to update the baseline. Written by the session after it has run the procedure once (0021 §4).
-- **Sprite table in data textures, not uniforms.** 4,096 sprites × 32 bytes is 128 KiB, over the 16 KiB compatibility-mode binding limit (0018 §7). Decision: a 64 × 64 `rgba32float` data texture pair read with `textureLoad` instead of a uniform array (one texture for rect, one for pivot + size). It keeps one bind group, needs no storage buffers, and `rgba32float` is loadable (not filterable) in compatibility mode.
+- **Sprite table in data textures, not uniforms (0024 §11).** 4,096 sprites × 32 bytes is 128 KiB, over the 16 KiB compatibility-mode binding limit (0018 §7). Decision: a 64 × 64 `rgba32float` data texture pair read with `textureLoad` instead of a uniform array (one texture for rect, one for pivot + size). It keeps one bind group, needs no storage buffers, and `rgba32float` is loadable (not filterable) in compatibility mode.
 - **Manual harness shape for Safari and Firefox** (0018 deferral; the CDP instrument is Chromium-only). `?harness=1` on `device.html` steps 120 + 600 frames of the `drawables` page's script with the real renderer, then prints: any `uncapturederror`, the result of the `GPUTexture`-as-view probe, whether `writeBuffer` and `writeTexture` accepted SAB-backed views (or the staged-copy path engaged), and `memory.buffer.byteLength` per instance. Tyler records allocations with the browser's own tool around the 600-frame run.
 
 ## Order of work
@@ -58,7 +58,7 @@ Sprite animation clocks (a game passes the frame in `param`). Text. A second atl
 - [ ] All fast tests above pass by name.
 - [ ] `pnpm bench:frame` meets the desktop proxy of 0018 §9 on Tyler's Mac and `baselines/frame.json` is checked in.
 - [ ] `.claude/skills/profile-frame/SKILL.md` exists and its command was run in this session.
-- [ ] The manual item below is written into `docs/plan/device-checks.md`.
+- [ ] The `docs/plan/device-checks.md` section for this milestone matches what was built.
 - [ ] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
@@ -73,10 +73,8 @@ Sprite animation clocks (a game passes the frame in `param`). Text. A second atl
 Creates the `profile-frame` skill (0021 §4; PLAN.md listed it under M17 before the split). `packages/engine/CLAUDE.md`: `pnpm bench:frame`, baseline update rule.
 
 ## Manual device checks
-`docs/plan/device-checks.md`, item **M17b-harness-desktop** (Tyler's Mac, Safari current and Firefox current):
-1. `pnpm device:serve`, open `http://127.0.0.1:4173/device.html?harness=1` (loopback is a secure context; no tunnel needed). In Safari: Web Inspector → Timelines → JavaScript Allocations, record, press "run" on the page, stop after it prints. In Firefox: Profiler with "JS Allocations" enabled, same steps.
-2. **Pass:** the page prints no GPU errors and unchanged memory sizes; the allocation timeline over the 600 frames shows no growth beyond roughly the main-thread budget × 600 (≈ 70 KB) and no GC pause markers.
-3. **Fail →** validation error on a SAB-backed upload: make the staged-copy path (M09) the default for that browser. Visible periodic GC: capture the allocation call tree, open a plan edit naming the site. Probe differences are recorded only (0016's budget is by formula).
+[device-checks.md, M17b: Desktop Safari and Firefox harness run](device-checks.md#m17b-desktop-safari-and-firefox-harness-run). Run on the Mac with plain `pnpm device:serve` (loopback is a secure context; no tunnel).
+This milestone builds `device.html?harness=1` for it (Planning decisions, "Manual harness shape").
 
 ## Deviations
 (filled in during Phase 3)

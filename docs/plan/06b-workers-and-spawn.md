@@ -34,7 +34,7 @@ Any ring traffic with meaning (M08b, M09, M13, M15b, M16). The rAF frame loop (M
   interface ClientOptions {
     canvas: HTMLCanvasElement
     wasm: { url: string; buildHash: string }                       // virtual:engine/wasm, 0017 §4
-    host: { kind: 'local'; world: WorldConfig } | { kind: 'remote'; url: string }
+    host: { kind: 'local'; world: WorldConfig } | { kind: 'remote'; url: string; joinKey?: string }
     createWorker?: () => Worker                                    // pattern B
     arenas?: { sim?: number; client?: number; gen?: number }       // bytes; defaults 0015 §5
     genWorkers?: number                                            // default per 0008
@@ -43,7 +43,7 @@ Any ring traffic with meaning (M08b, M09, M13, M15b, M16). The rAF frame loop (M
   class EngineStartError extends Error { code: 'not-isolated' | 'worker-blocked' | 'compile-failed' | 'abi-mismatch' | 'arena-config' | 'worker-fatal' }
   checkSupport(): Promise<{ ok: boolean; failures: { code: 'not-isolated' | 'no-sab' | 'no-wasm' | 'no-module-worker' | 'no-webgpu' | 'no-adapter'; message: string }[] }>
   ```
-  `host` closes the PRE-PLAN §10 gap "which option selects single-player": `local` spawns the sim worker and forwards `world` (0009), `remote` spawns the net worker. M15 and M29 consume it unchanged.
+  `host` closes the PRE-PLAN §10 gap "which option selects single-player": `local` spawns the sim worker and forwards `world` (0009), `remote` spawns the net worker. M13 consumes `local`; M29 makes `remote` (and its `joinKey`) real.
 - Setup message (the only steady use of `postMessage` besides fatal and resume): `{ type: 'setup', kind: 'client' | 'sim' | 'gen' | 'net', index, module?: WebAssembly.Module, wasmUrl?: string, sabs: SabSet, config, test?: TestFlags }`. Replies: `{ type: 'ready' }`, `{ type: 'fatal', message }`. Main → worker afterwards: `{ type: 'resume' }`, `{ type: 'stop' }`.
 - Worker shell API for later kinds: `runBlockingLoop(shell, body: (wokenBy: number) => void, timeoutMs: () => number)`, `shell.runAsync(fn: () => Promise<void>)` (leave the loop, await, re-enter: for Promise-only APIs such as opening an OPFS file, M23), `shell.fatal(message)`.
 - Rust `engine::client::CameraBlock`; `RegionId::Camera` (80 bytes); ABI export `frame`.

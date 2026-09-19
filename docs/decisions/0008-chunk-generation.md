@@ -1,6 +1,6 @@
 # 0008: Chunk generation: one pure function, run wherever it is needed
 
-Status: Accepted (2026-09-19)
+Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §9.
 
 ## Context
 

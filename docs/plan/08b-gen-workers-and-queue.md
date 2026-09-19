@@ -25,13 +25,13 @@ Mine from spikes: `spikes/cross-origin-sab/src/bench-worker.ts` (`wasmU8.set(slo
 
 ## Non-scope
 - Camera integration and input: M11 (tests drive the block with M06b's `setCamera`). Texel conversion and the upload ring: M09 (it consumes `CacheEvent`s, `slot_of`, `copy_chunk`). Subscriptions, chunk enter/leave, overlays arriving before generation: M15. The host warmer: M13.
-- Gen-instance re-instantiation after a trap (0014 §6): M24; this brief supplies `GenQueue::requeue_in_flight(worker)` and nothing else.
+- Gen-instance re-instantiation after a trap (0014 §6): M37; this brief supplies `GenQueue::requeue_in_flight(worker)` and nothing else.
 - Headless clients under Node (M27) have no gen workers; their client instance generates synchronously on miss (0008 §2 second row) through M07.
 - Chunk sizes other than the default in the browser topology (Planning decisions 6).
 
 ## Files, packages and crates touched
 - `packages/engine/crates/engine/`: `src/gen_queue.rs`, `src/view.rs`, `src/client/terrain_feed.rs`, `src/abi/registry.rs` (four exports, `RegionId::GenIn`), `tests/gen_queue.rs`.
-- `packages/engine/` TS: `src/worker/gen.ts` (fills M06b's stub), `src/worker/client-gen.ts` (called from `worker/client.ts`), `src/abi.ts`, `src/test.ts`, `tests/unit/gen-record.test.ts`, `tests/browser/gen.spec.ts`, `tests/app/{gen.html, src/gen.ts}`, `budgets.json` keys.
+- `packages/engine/` TS: `src/worker/gen.ts` (fills M06b's stub), `src/worker/client-gen.ts` (called from `worker/client.ts`), `src/abi.ts`, `src/test.ts`, `tests/unit/gen-record.test.ts`, `tests/browser/gen.spec.ts`, `tests/browser/pages/{gen.html, src/gen.ts}`, `budgets.json` keys.
 - `packages/engine/fixtures/worldgen/`: client-role arm of its `Instance` (a `TerrainStore` over `Pristine<FixtureGen>` + `TerrainFeed`).
 
 ## Seams

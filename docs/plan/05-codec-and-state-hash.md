@@ -22,7 +22,7 @@ Mine from spikes: `spikes/determinism-hash/src/lib.rs` lines 11–61 (`mix64`), 
 - `determinism.md` gains the `Codec`/hash rules.
 
 ## Non-scope
-- Frame header, sections, section ids, overlay run format: M14. Snapshot and log containers, crc32: M22. Per-chunk desync hashes: M31. `SimRng`: M12. Heavy mode and replay equality: M22/M36.
+- Frame header, sections, section ids, overlay run format: M14. Snapshot and log containers, crc32: M22. Per-chunk desync hashes: M31b. `SimRng`: M12. Heavy mode and replay equality: M22/M22b/M36.
 - `sim_hash`, `runHashScenario`, `golden.json` and `pnpm golden`: M02/M03 own them; this milestone only changes what the `hash` fixture feeds its hasher.
 - A canonicalising *deserializer* (Planning decisions 2).
 

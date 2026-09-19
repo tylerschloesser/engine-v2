@@ -1,6 +1,6 @@
 # M13: TS sim host, sim worker and the tick loop
 
-Status: not started · After: 06b, 12b (08b for `view::nearest_first`) · Tyler-dependent: no
+Status: not started · After: 06b, 08b, 12b · Tyler-dependent: no
 
 ## Goal
 One TypeScript `SimHost` drives a `role=sim` instance identically in the sim worker and under Node: injected clock and timer, 20 Hz pacing, the catch-up cap, seal → log sink → tick ordering, and the 2 ms chunk warmer. `createClient({ host: { kind: 'local', world } })` (M06b's option) spawns a real sim worker; `stepTick()` from `engine/test` steps it deterministically; the fixture's hash after 100 ticks equals the native golden in Node and in the browser.

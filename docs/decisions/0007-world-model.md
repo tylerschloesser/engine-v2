@@ -1,6 +1,6 @@
 # 0007: World model: pristine function, sparse overlays, global entities
 
-Status: Accepted (2026-09-19)
+Status: Accepted (2026-09-19). Amended by [0022](0022-entity-ids-and-provisional-ids.md). Amended by [0023](0023-action-growth-declaration.md). Amended by [0024](0024-planning-amendments.md) §9.
 
 ## Context
 

@@ -25,7 +25,7 @@ Mine from spikes: `spikes/zero-gc-webgpu/public/main.js` (canvas + rAF variant, 
 - Canvas-presentation smoke test (0020 §6 layer c).
 
 ## Non-scope
-Device loss (M37). Sprites and their atlas mips (M17b). Camera gestures and the snap-to-device-pixels-at-rest rule (M11; the device page uses scripted motion until then). The third fill-rate fallback, per-chunk quads: built only if the device check fails the first two (it would be a plan edit and a new brief).
+Device loss (M37b). Sprites and their atlas mips (M17b). Camera gestures and the snap-to-device-pixels-at-rest rule (M11; the device page uses scripted motion until then). The third fill-rate fallback, per-chunk quads: built only if the device check fails the first two (it would be a plan edit and a new brief).
 
 ## Files, packages and crates touched
 `packages/engine` (`src/render/{terrain,mips,viewport}.ts`, `src/render/wgsl/*.wgsl`, `src/frame-loop.ts`, `tests/browser/pages/device.html`, `tests/browser/`), `packages/engine/fixtures/terrain/` (art with variants, two priorities and a band). No Rust.
@@ -58,7 +58,7 @@ Device loss (M37). Sprites and their atlas mips (M17b). Camera gestures and the 
 ## Exit criteria
 - [ ] All tests above pass by name.
 - [ ] `pnpm device:serve` serves `device.html` and the HUD shows non-zero frame statistics in desktop Chrome with `?autopan=1&tiles=256`.
-- [ ] The fill-rate item below is written into `docs/plan/device-checks.md` exactly as stated.
+- [ ] The `docs/plan/device-checks.md` section for this milestone matches what was built.
 - [ ] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
@@ -73,10 +73,8 @@ Device loss (M37). Sprites and their atlas mips (M17b). Camera gestures and the 
 `packages/engine/CLAUDE.md`: how to open the device page and its URL parameters. No new skill: `profile-frame` waits for M17b.
 
 ## Manual device checks
-`docs/plan/device-checks.md`, item **M09b-fill-rate** (run on the iPhone; on the Android phone too if Q5 says one exists; may be run as soon as this milestone is ticked):
-1. `pnpm device:serve --tunnel`, open the printed `https://…/device.html?autopan=1&tiles=256&scale=2` in Safari, portrait then landscape, Low Power Mode off, for 60 s each.
-2. **Pass:** `isolated` and adapter lines green; rAF p95 ≤ 17.5 ms; intervals > 20 ms ≤ 5 per 10 s; GPU latency p95 ≤ 6 ms; no visible hitch while chunks stream in. Record the HUD numbers in the checklist.
-3. **Fail →** re-open with `&scaleCap=1.5`; still failing, `&scaleCap=1`; still failing, add `&cutoff=4`. The first configuration that passes becomes the mobile default (plan edit: change the defaults in `ClientOptions.render` and note it in 0018 by a superseding ADR). If none passes, open a plan edit for the per-chunk-quad fallback of 0018.
+[device-checks.md, M09b: Terrain fill rate](device-checks.md#m09b-terrain-fill-rate). May be run as soon as this milestone is ticked.
+This milestone builds `device.html` with the HUD fields and the `autopan`, `tiles`, `scale`, `scaleCap` and `cutoff` parameters the item uses.
 
 ## Deviations
 (filled in during Phase 3)

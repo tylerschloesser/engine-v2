@@ -13,7 +13,7 @@ With a furnace in the inventory the player opens a construction mode, sees a 2x2
 3. `docs/decisions/0007-world-model.md` (§5 multi-tile entities, §6 traits)
 4. `docs/decisions/0019-camera-input-and-overlay.md` (§4: events, cursor tile and ghost, touch flow, input over DOM)
 
-Look up at the step: addressing rule and provisional ids `docs/decisions/0022-entity-ids-and-provisional-ids.md` §5–§6 (numbered on acceptance); `Unknown` reads and correction without snapping `0012`; `Draw.flags` and `ghost` `0018` §2; sprite manifest `0018` §4.
+Look up at the step: addressing rule and provisional ids `docs/decisions/0022-entity-ids-and-provisional-ids.md` §5–§6; `Unknown` reads and correction without snapping `0012`; `Draw.flags` and `ghost` `0018` §2; sprite manifest `0018` §4.
 Rules that apply: `.claude/rules/determinism.md`, `.claude/rules/hot-paths.md`, `games/reference/CLAUDE.md`. Skill: `add-action-type`.
 
 ## Scope

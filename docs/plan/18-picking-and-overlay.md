@@ -22,15 +22,16 @@ Main-thread side
 - `input/pick.ts`: scan per 0019 §4 over long-lived typed views of each triple-buffer slot; shape containment per `kind`; `pick_id` written into `tap`, `longpress`, `hover` and `drag*` events and ring records; hover pick at most once per rAF and only when the pointer or the slot changed.
 - `overlay/anchors.ts`: the anchor layer, the injected static rule, `client.overlay.anchor` and `anchorSlot`, floating origin and re-base, visibility toggling on transitions, the at-most-two-writes rule, slot anchors from the header's anchor table; the per-anchor `translate()` fallback mode behind an option.
 - Frame loop: a new first phase `acquire` (take the newest DrawList slot once), so camera follow, picking, overlay and render all use the same slot.
+- `client.input.emit(code: number, a?: number, b?: number)` (0024 §7): the TypeScript-to-`ClientSide` channel for client-local UI intent. It writes one record of a new kind 7 ("game": `code` in the `pick_id` field, `a`/`b` in the tile fields) into M11's 32-byte `inputRing` layout; the record surfaces in `FrameCx::input()` like any other `InputEvent`. M33 is the first consumer (construction mode).
 - Device page: `?anchors=50`.
 
 Rust side
-- `client/frame_cx.rs`: fills M12's `FrameCx` shell; `frame(t_ms)` order becomes build `FrameView` → `ClientSide::frame` → `extract` → header (`follow`, anchors) → sort → publish → clear `InputQueue`.
+- `client/frame_cx.rs`: fills M12's `FrameCx` shell; `frame(t_ms)` order becomes build `FrameView` → `ClientSide::frame` → `extract` → header (`follow`, anchors) → sort → publish → clear `InputQueue`. Because `frame` may change client-side state, M16b's `ui` call now runs after every `ClientSide::frame` (its re-run rule, 0024 §7; the `PartialEq` gate is unchanged).
 - `DrawList::anchor(slot, pos)`.
 - Main: `camera.setFollow` from the slot header in the frame that draws that slot.
 
 ## Non-scope
-Presence sampling and uplink (M19: it gives meaning to `frame`'s `presence` argument). Interpolated positions behind `cx.view()` (M30). Reference-game button and progress bar (M20). GPU picking (rejected, 0019).
+Presence sampling and uplink (M19: it gives meaning to `frame`'s `presence` argument). Interpolated positions behind `cx.view()` (M30). Reference-game button and progress bar (M20b). GPU picking (rejected, 0019).
 
 ## Files, packages and crates touched
 `packages/engine` (`src/input/pick.ts`, `src/overlay/anchors.ts`, `src/frame-loop.ts`, `src/camera/camera.ts`, `src/client.ts`, `src/test/*`, `tests/browser/`, `tests/browser/pages/device.html`), `packages/engine/crates/engine` (`client/frame_cx.rs`, `client/drawlist.rs`), `packages/engine/fixtures/overlay/` (`fx-overlay`: pickable circles, slot anchors, a ghost and a follow toggle).
@@ -38,6 +39,7 @@ Presence sampling and uplink (M19: it gives meaning to `frame`'s `presence` argu
 ## Seams
 **Provides**
 - TS on `Client`: `overlay.anchor(el, worldX, worldY, opts?)` → `{ set(x, y), remove() }`, `overlay.anchorSlot(el, slot)` → `{ remove() }` (0019 §5 signatures). `ClientOptions.overlay?: { root?: HTMLElement; mode?: 'properties' | 'translate' }` (default root: the canvas's parent; the engine appends one anchor-layer element there and **re-parents each anchored `el` into it**).
+- `client.input.emit(code, a?, b?)` (0024 §7) and `InputEvent` kind 7 "game" (`code()`, `a()`, `b()` accessors), consumed by M33.
 - `pickAt(cssX, cssY): number` internal, used by the semantic layer; `engine/test`: `pickAt(client, cssX, cssY)`, counters `styleWrites`, `pickScanned`.
 - **`FrameCx<'a, G>`** (this brief owns the shape; it fills M12's shell, and M19 adds nothing to it beyond using `frame`'s `presence` argument):
   - `view() -> &FrameView<G>`: the same value `extract` receives (M17: `WorldRead`, ticks, `visible`, `zoom`, `cursor_tile`, `me`), built before `frame` runs
@@ -50,7 +52,7 @@ Presence sampling and uplink (M19: it gives meaning to `frame`'s `presence` argu
 - `DrawList::anchor(&mut self, slot: u8, pos: WorldPos)` (64 slots); header fields `follow_valid`, `follow`, `anchor_mask`, `anchors` (offsets in M17).
 - `budgets.json`: `gc.pages.anchors` (its `main` = the strict number + the overlay string constant, spelled out in `formula`).
 
-**Consumes** M12: `FrameCx` shell, `ClientSide`. M17: slot header layout, `Draw` layout and kind constants, `FrameView`, triple-buffer reader, GC page `drawables`. M11: semantic events, `inputRing`, `InputQueue`, `camera.setFollow`, `camera.cursorTile`, `transform.ts`, injection helpers. M09b: `renderer.onViewportChange`, `device.html`. M03: `pnpm device:serve --tunnel`. M17b (optional): sprite pivots from `sprites.json` for sprite picking; without it a sprite picks by its `pos`/`size` rectangle. M04: `installGcPage`, `zeroGcSuite`, `budgets.json`, `pnpm gc reliability`.
+**Consumes** M12: `FrameCx` shell, `ClientSide`. M16b: the `ui` call policy and its re-run rule. M17: slot header layout, `Draw` layout and kind constants, `FrameView`, triple-buffer reader, GC page `drawables`. M11: semantic events, `inputRing`, `InputQueue`, `camera.setFollow`, `camera.cursorTile`, `transform.ts`, injection helpers. M09b: `renderer.onViewportChange`, `device.html`. M03: `pnpm device:serve --tunnel`. M17b (optional): sprite pivots from `sprites.json` for sprite picking; without it a sprite picks by its `pos`/`size` rectangle. M04: `installGcPage`, `zeroGcSuite`, `budgets.json`, `pnpm gc reliability`.
 
 ## Planning decisions
 - **How input reaches the game's Rust (PRE-PLAN §10 gap).** As a borrowed slice, `cx.input()`, of the same 32-byte records main wrote (M11 layout), including `pick_id`. `frame` has `&mut self`, so the game copies what it needs (selection, tool state, ghost rotation) into its `Client` value and `extract` reads it from `&self`. A slice costs nothing, keeps ordering, and needs no callback registration inside WASM.
@@ -66,15 +68,15 @@ Presence sampling and uplink (M19: it gives meaning to `frame`'s `presence` argu
 
 ## Tests added
 - `unit` suite: `pick.contains_per_kind`, `pick.front_to_back_order`, `pick.skips_zero_id_and_cursor_anchored`, `overlay.rebase_math`, `overlay.align_offsets`.
-- Rust native: `framecx.input_slice_order_and_clear`, `drawlist.anchor_table_and_mask`, `framecx.follow_written_to_header`.
-- Browser (Chromium): `pick.tap_reports_entity_pick_id`, `pick.hover_once_per_raf_on_change`, `pick.matches_interpolated_frame_on_screen` (pick uses the slot being drawn, not a newer one), `overlay.anchor_tracks_world_point` (element rect vs `worldToScreen` within 0.5 px through pan and zoom; reading layout is allowed in tests only), `overlay.idle_writes_nothing`, `overlay.pan_one_write_zoom_two` (`styleWrites` counter), `overlay.slot_anchor_follows_rust`, `overlay.rebase_beyond_50000px`, `overlay.offscreen_hidden_on_transition_only`, `overlay.widget_click_not_a_tap`, `overlay.translate_mode_equivalent`, `framecx.tap_visible_in_frame`, `follow.centres_in_same_frame_pan_ignored_zoom_works`, `ghost.mouse_tracks_cursor_tile`, `ghost.touch_tap_then_confirm`.
+- Rust native: `framecx.input_slice_order_and_clear`, `input.game_record_round_trip`, `drawlist.anchor_table_and_mask`, `framecx.follow_written_to_header`.
+- Browser (Chromium): `pick.tap_reports_entity_pick_id`, `pick.hover_once_per_raf_on_change`, `pick.matches_interpolated_frame_on_screen` (pick uses the slot being drawn, not a newer one), `overlay.anchor_tracks_world_point` (element rect vs `worldToScreen` within 0.5 px through pan and zoom; reading layout is allowed in tests only), `overlay.idle_writes_nothing`, `overlay.pan_one_write_zoom_two` (`styleWrites` counter), `overlay.slot_anchor_follows_rust`, `overlay.rebase_beyond_50000px`, `overlay.offscreen_hidden_on_transition_only`, `overlay.widget_click_not_a_tap`, `overlay.translate_mode_equivalent`, `framecx.tap_visible_in_frame`, `framecx.emit_visible_in_frame` (`client.input.emit(3, 1, 2)` arrives as one kind-7 event with the same three values; allocates nothing), `follow.centres_in_same_frame_pan_ignored_zoom_works`, `ghost.mouse_tracks_cursor_tile`, `ghost.touch_tap_then_confirm`.
 - Zero-GC: page id `anchors` through `zeroGcSuite`; strict pages unchanged.
 
 ## Exit criteria
 - [ ] All tests above pass by name.
 - [ ] `budgets.json` has `gc.pages.anchors` with the constant in its `formula`; pages `anchors`, `input` and `drawables` pass.
 - [ ] Source scan: no `getBoundingClientRect`, `offsetWidth` or other layout read under `src/overlay/` or `src/input/`.
-- [ ] The device item below is written into `docs/plan/device-checks.md`.
+- [ ] The `docs/plan/device-checks.md` section for this milestone matches what was built.
 - [ ] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
@@ -88,10 +90,8 @@ Presence sampling and uplink (M19: it gives meaning to `frame`'s `presence` argu
 `packages/engine/CLAUDE.md`: "overlay code never reads layout; at most two style writes per frame". `packages/engine/crates/engine/CLAUDE.md`: `frame` mutates, `extract` reads; input arrives as `cx.input()`.
 
 ## Manual device checks
-`docs/plan/device-checks.md`, item **M18-anchoring** (iPhone, Safari; `device.html?anchors=50` from `pnpm device:serve --tunnel`: 50 text buttons anchored to tiles, each drawn over an in-canvas ring, plus 4 slot anchors on moving circles):
-1. Pan slowly, flick, then pinch in and out continuously for 30 s; repeat in landscape.
-2. **Pass:** every label stays centred on its ring with no visible lag or jitter (zero swim), text stays crisp at every zoom, buttons respond to taps without moving the camera, HUD rAF p95 ≤ 17.5 ms during the pinch.
-3. **Fail →** reopen with `&anchorMode=translate`. If that passes, plan edit: make `translate` the default on iOS (or everywhere if desktop cost is equal) and record it against 0019 with a superseding ADR. If both fail, record a screen capture and open a plan edit; the remaining option is in-canvas drawables for anything that must not swim.
+[device-checks.md, M18: Picking and overlay anchoring](device-checks.md#m18-picking-and-overlay-anchoring).
+This milestone builds `device.html?anchors=50` for it (50 text buttons anchored to tiles, each over an in-canvas ring, plus 4 slot anchors on moving circles), the `&anchorMode=translate` switch, and the last tap's `pick_id` on the HUD.
 
 ## Deviations
 (filled in during Phase 3)

@@ -27,7 +27,7 @@ Also open `crates/engine/src/wire/CLAUDE.md` (M14's id tables). Mine from spikes
 - `testkit::Loopback<G>`: one `Host`, K `ClientCore`s, byte buffers, per-client delay in ticks, scripted camera paths.
 
 ## Non-scope
-Token bucket, visible-first pacing, soft cap, degrade, heartbeat, action rate limit, desync `Hashes`, `ResyncChunk`: **M31**. Stated because the task brief asked: none is trivial enough to take here. Every enter is sent in the tick it happens, unpaced; the counters below show what M31 has to pace. Actions and acks (M16; `ack_seq` is carried but always the stored `last_seq`). Presence relay (M19). `Hello`/`Welcome`, resume hints, epochs, disconnect grace (M28). ABI exports, rings, TS (15b). Prediction overlay (M25).
+Token bucket, visible-first pacing, soft cap, degrade, action rate limit: **M31**; heartbeat: **M28**; desync `Hashes`, `ResyncChunk`: **M31b**. Stated because the task brief asked: none is trivial enough to take here. Every enter is sent in the tick it happens, unpaced; the counters below show what M31 has to pace. Actions and acks (M16; `ack_seq` is carried but always the stored `last_seq`). Presence relay (M19). `Hello`/`Welcome` (M28); resume hints, epochs, disconnect grace (M28b). ABI exports, rings, TS (15b). Prediction overlay (M25).
 
 ## Files, packages and crates touched
 `packages/engine/crates/engine` (`host/`, `client/`, `testkit/`), `packages/engine/fixtures/puts`, `packages/engine/budgets.json`.

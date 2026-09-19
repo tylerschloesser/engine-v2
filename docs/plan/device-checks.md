@@ -1,139 +1,247 @@
 # Manual device checks
 
-Tyler-run checks on real hardware: the things Phase 3 cannot automate (`0020` §10, `PRE-PLAN.md` §9 risk 1). One section per milestone marked **D** in `PLAN.md`. A check never blocks the next milestone; a failed check opens a plan edit (`PLAN.md`, "How milestones work"), and where an ADR number changes, a superseding ADR.
+Tyler-run checks on real hardware: what Phase 3 cannot automate (`0020` §10, `PRE-PLAN.md` §9 risk 1). This file owns every manual check; briefs only link to their section here. One section per milestone marked **D** in `PLAN.md`, in `PLAN.md` order.
 
-This file is a skeleton written in Phase 2. The session that lands a **D** milestone replaces the skeleton steps of its section with the exact page, URL parameters and thresholds it built, keeping the item ids. Other briefs append items under **More items**; keep ids unique (`M<NN>-<slug>`).
+- A check never blocks the next milestone. A failed check opens a plan edit (`PLAN.md`, "How milestones work"); where an ADR's number changes, a superseding ADR.
+- The session that lands a **D** milestone makes its section match what it built (exact page, URL parameters, HUD field names). Headings and item ids are stable: briefs link to the headings, and M39's `acceptance-check.mjs` looks up ticked ids. Add an item as `- [ ] **M<NN>-<slug>**`; never rename one.
+- Tick an item when it passes. On FAIL leave it unticked, follow *If it fails*, re-run, and record both runs on the section's **Run on** line.
 
 ## Devices
 
-- **iPhone**, 12-class or newer, iOS 26+, Safari. Assumed available. Low Power Mode off unless an item says otherwise.
-- **Android**, mid-range 4 GB, Chrome: open question Q5 (`docs/plan/questions-for-tyler.md`). Default: no device, so Android items are marked *(Android, if Q5)* and skipped; desktop Chrome is covered by the automated suites, not by this file.
-- **Mac** (Tyler's): desktop Safari and Firefox for the few items that name them.
+- **iPhone:** 12-class or newer, iOS 26+, Safari. Low Power Mode off unless an item says otherwise.
+- **Android** (mid-range 4 GB, Chrome): *only if Q5 is answered yes* (`questions-for-tyler.md`). Default is no device: those rows are skipped and recorded "not run: no device", never ticked. Desktop Chrome is covered by the automated suites, not here.
+- **Mac** (Tyler's): desktop Safari and Firefox, for the items that name them.
 
-## Serving a page to a phone
+## How to serve a page to the phone
 
-`crossOriginIsolated`, WebGPU and OPFS need a **secure context**. `http://<LAN IP>:port` is not one, so it will not work, and the page will report "not isolated". Every response must also carry the COOP/COEP pair of `0015` §3, including the worker script.
+Mechanism, rationale and the `mkcert` alternative: [M03's brief](03-browser-harness.md), Planning decisions, "Determinism on a physical iPhone and Android phone". WebGPU, OPFS and `crossOriginIsolated` need a secure context, so `http://<LAN IP>` never works.
 
-Serve per M03. `<<serve>>` TODO: replace this marker with the one command and URL form once M03 lands. M03's brief proposes `pnpm device:serve --tunnel` (a Cloudflare quick tunnel printing an `https://` URL; fallback `mkcert` + `preview.https`); M09b's brief names `pnpm device` for the device page. One of the two names must win before M11's section is run.
-
-Multiplayer items (M29 onward) also need `wss://`: an HTTPS page cannot open `ws://` to a LAN address. M29's brief proxies `/ws` on the page's own HTTPS origin; use that.
-
-## Recording a run
-
-Under each section, add a row per run: `date · device + OS version · build hash shown by the page · item id · PASS / FAIL · numbers or notes`. On FAIL, follow the item's fallback, re-run, and record both rows.
+- **iPhone:** on the Mac run `pnpm device:serve --tunnel`; open the printed `https://` URL in Safari. Its `index.html` lists every fixture-app page; items below name the page and its parameters.
+- **Android** *(only if Q5 is answered yes)*: `pnpm device:serve`, then the `adb reverse` step of M03's brief, then the `localhost` URL in Chrome.
+- **Mac browsers:** `pnpm device:serve` and the loopback URL it prints (loopback is a secure context; no tunnel).
+- **Multiplayer items (M29 onward):** an `https` page cannot open `ws://`, so the server's `/ws` must be reachable on the page's own HTTPS origin (M29's section).
+- Every item starts with "served as above". If the HUD says "not isolated", the serving is wrong, not the engine: fix that first.
 
 ---
 
-## M11: first on-device run (camera and input)
+## M03: Determinism page
 
-First time engine code runs on the phone. Also the first scheduled run of the items owned by M03, M08 and M09b, which exist by now.
+When: the page exists from M03; first scheduled run is in the M11 sitting. Closes the deferred phone run of `0002`.
 
-**Open:** `<<serve>>`, then the device page in Safari; the determinism page for `M03-determinism`.
+**Open** (served as above): `determinism.html`.
 
-- [ ] **M11-boot.** Page loads. *Pass:* HUD shows cross-origin isolated, a WebGPU adapter, and workers ready from a posted `Module`. *If it fails:* reopen with the `module=url` parameter; if that passes, plan edit making the URL path Safari's default (`0017` §4; `PRE-PLAN.md` risk 1: `instantiateStreaming` in the worker).
-- [ ] **M03-determinism** (`0002`). Open the determinism page. *Pass:* every checkpoint hash equals its golden; one PASS banner. *If it fails:* there is no fallback by design: record the first divergent checkpoint and the user agent, open a plan edit; suspects in order are an observable NaN (`0002` §2) and a toolchain difference.
-- [ ] **M11-memory** (`0015` §5 arena sizes and the whole-tab target). Run the memory probe: largest reservable memory; default topology beside a WebGPU context for two minutes; the same with every arena page touched. *Pass:* no reload in either two-minute run. *If it fails:* re-run with the smaller arenas the probe offers; if that survives, plan edit lowering the mobile defaults by a superseding ADR for `0015` §5. Record the largest reservation either way.
-- [ ] **M09b-fill-rate** (`0018` Consequences). Maximum zoom-out, render scale 2, auto-pan, portrait then landscape, 60 s each. *Pass:* steady 60 fps and GPU time inside the share of `0018` §9; no hitch while chunks stream in. *If it fails,* in the order `0018` states: lower the render-scale cap (two steps), then drop neighbour reads below the pixel cutoff, then the per-chunk-quad fallback (a new brief). The first passing configuration becomes the mobile default.
-- [ ] **M08-worldgen-ms-per-chunk** (`0008` §6). Run the worldgen bench page. *Pass:* at or under the per-chunk phone budget of `0008` §6. *If it fails:* revisit the budget and the gen-worker count (`0008` Consequences); plan edit.
-- [ ] **M11-gestures** (`0019` §3). One-finger pan, flick, pinch to both zoom limits, tap a tile, pull down from the top edge, double-tap, rotate the phone. *Pass:* the world point stays under the finger; inertia glides and stops; the HUD shows the tapped tile; the page never scrolls, zooms or refreshes; rotation keeps the centre. *If it fails:* the named knob (inertia constant, tap thresholds, page CSS helper of `0019` §3) and a plan edit.
-- [ ] *(Android, if Q5)* repeat every item above in Chrome.
+- [ ] **M03-determinism** (`0002`). *Steps:* load the page, wait for the banner. *Pass:* one PASS banner; every checkpoint hash equals its golden (0 mismatches); the page shows `crossOriginIsolated: true`. *If it fails:* no fallback by design. Record the first divergent checkpoint and the user agent; open a plan edit. Suspects in order: an observable NaN (`0002` §2), a toolchain difference.
+- [ ] **M03-determinism-android** *(Android: only if Q5 is answered yes)*. Same page, Chrome. *Pass / If it fails:* as above.
 
-**More items** (append below; keep the checkbox + Pass + If-it-fails shape):
-
-**Runs:**
+**Run on:** <device, OS, date>; **result:** <PASS / FAIL, notes, plan edit link>
 
 ---
 
-## M16: vertical slice on the phone
+## M08: Worldgen ms per chunk
 
-**Open:** `<<serve>>`, the M16 fixture page (single-player: main + client + sim + gen).
+When: the page exists from M08; first scheduled run is in the M11 sitting. Closes the deferred item of `0008` Consequences.
 
-- [ ] **M16-round-trip.** Tap the fixture's action control ten times. *Pass:* each tap's result shows within a perceptible instant; the page's counters show ten `Confirmed`, zero ring drops.
-- [ ] **M16-coexist** (`0015` §5 whole-tab target). Play and pan for ten minutes (`0020` §10). *Pass:* no reload, no visible hitch, `engine_mem_grows` stays 0 on every instance. *If it fails:* the smaller-arena configuration from M11-memory, then a plan edit for `0015` §5.
-- [ ] **M16-background.** Switch to another app for 30 s and return; lock the screen for 60 s and return. *Pass:* the frame loop and the tick loop resume without a reload; the tick counter did not advance while hidden (`simulation.md`, idle worlds).
-- [ ] **M16-low-power.** Turn Low Power Mode on. *Pass:* motion speed is unchanged at the halved frame rate (`0019` Context: time-based motion).
+**Open** (served as above): `worldgen-bench.html`.
 
-**More items:**
+- [ ] **M08-worldgen-ms-per-chunk** (`0008` §6). *Steps:* let the bench finish; record median ms/chunk, the golden result, the user agent and `hardwareConcurrency`. *Pass:* golden match, and median at or under the per-chunk budget of `0008` §6 (1 ms). *If it fails:* golden mismatch is a determinism bug: stop and treat as M03-determinism. Over budget: plan edit revisiting the default gen-worker count on phones (M08b) and M13's warmer yield per gap (`0008` Consequences).
+- [ ] **M08-warn-threshold**. *Steps:* compute F = phone median / desktop median from the same page. *Pass:* phone median ≤ 0.5 ms (the estimate in `0008` holds) or F ≤ 5. *If it fails:* set `worldgenMsPerChunkWarn` in `budgets.json` to 1 ms / F and record F.
+- [ ] **M08-android** *(Android: only if Q5 is answered yes)*. Both items in Chrome.
 
-**Runs:**
+**Run on:** <device, OS, date>; **result:** <median ms/chunk, F, PASS / FAIL>
 
 ---
 
-## M18: picking and overlay anchoring
+## M09b: Terrain fill rate
 
-**Open:** `<<serve>>`, the device page with the anchors parameter (50 anchors).
+When: as soon as M09b is ticked; repeated by M18-fill-rate-with-anchors and M39-rerun. Closes the deferred item of `0018` Consequences.
 
-- [ ] **M18-anchors** (`0019` Consequences). Pan, flick and pinch for 30 s with 50 DOM anchors mounted. *Pass:* zero swim between anchors and canvas, crisp text at every zoom, no visible style-recalc hitch while pinching. *If it fails:* the fallback `0019` states (per-anchor `translate()` writes from the same rAF callback); re-run; plan edit and a note against the overlay line of `0016`.
-- [ ] **M18-fill-rate-with-anchors.** Repeat M09b-fill-rate with the anchors mounted (`0019` combines the two checks). *Pass / fallback:* as M09b-fill-rate.
-- [ ] **M18-pick.** Tap small and overlapping drawables at three zoom levels. *Pass:* the HUD reports the topmost drawable's `pick_id` every time; a tap on a DOM widget reports nothing to the canvas.
-- [ ] **M18-touch-ghost.** Tap to move the cursor tile, then drag. *Pass:* the ghost sits on the tapped tile; the drag pans.
+**Open** (served as above): `device.html?autopan=1&tiles=256&scale=2`.
 
-**More items:**
+- [ ] **M09b-fill-rate** (`0018` §9 GPU share; `0018` Consequences). *Steps:* portrait 60 s, then landscape 60 s; copy the HUD numbers. *Pass:* `isolated` and adapter lines green; rAF interval p95 ≤ 17.5 ms; intervals > 20 ms ≤ 5 per 10 s; GPU latency p95 ≤ 6 ms; no visible hitch while chunks stream in. *If it fails,* in the order `0018` Consequences states: reopen with `&scaleCap=1.5`; then `&scaleCap=1`; then add `&cutoff=4`. The first passing configuration becomes the mobile default: plan edit changing the `ClientOptions.render` defaults, plus a superseding ADR note for `0018`. None passes: plan edit for the per-chunk-quad fallback of `0018` (a new brief).
+- [ ] **M09b-fill-rate-android** *(Android: only if Q5 is answered yes)*. Same, Chrome.
 
-**Runs:**
+**Run on:** <device, OS, date>; **result:** <HUD numbers per orientation, configuration that passed>
+
+---
+
+## M11: Boot, gestures and memory
+
+When: M11 ticked. First time engine code runs on the phone: run the M03, M08 and M09b sections in the same sitting.
+
+**Open** (served as above): `device.html`.
+
+- [ ] **M11-boot** (`0017` §4; `PRE-PLAN.md` §9 risk 1). *Steps:* open the URL. *Pass:* HUD shows `isolated`, an adapter, and "workers ready (posted Module)". *If it fails* with a worker error: reopen with `?module=url`; if that passes, plan edit making the URL path Safari's default (`0017` §4 fallback). M35 item (c) reads this result.
+- [ ] **M11-gestures** (`0019` §3). *Steps:* one-finger pan 10 s, flick, pinch to both zoom limits, tap a tile, pull down from the top edge, double-tap, rotate the phone. *Pass:* the world point stays under the finger; the flick glides and stops; the HUD shows the tapped tile; the page never scrolls, zooms or refreshes; rotation keeps the centre. *If it fails:* name the knob (inertia constant, tap thresholds, page CSS helper of `0019` §3) in a plan edit.
+- [ ] **M11-memory** (`0015` §5 arena sizes and whole-tab target). *Steps:* `device.html?probe=memory`. The probe (1) grows a scratch memory in 64 MiB steps to 1 GiB, (2) runs the default topology beside the WebGPU context with `autopan` for 2 min, (3) repeats (2) with `&touch=1` (every arena page written). Record all three. *Pass:* (2) and (3) finish without a reload. *If it fails:* re-run with `&sim=64&client=32` (MiB); if that survives, plan edit lowering the mobile defaults by a superseding ADR for `0015` §5. If (1) < 256 MiB, record the ceiling in the same ADR.
+- [ ] **M11-android** *(Android: only if Q5 is answered yes)*. All three in Chrome.
+
+**Run on:** <device, OS, date>; **result:** <per item; largest reservation in MiB>
+
+---
+
+## M16: Vertical slice on the phone
+
+When: M16 ticked (`PRE-PLAN.md` §8 item 9: first on-device run of the slice).
+
+**Open** (served as above): the M16 slice page (single-player: main + client + sim + gen, fixture `puts`); `determinism.html` for the first item.
+
+- [ ] **M16-slice-boot**. *Steps:* re-run M03-determinism on this build, then open the slice page. *Pass:* M03's criterion; the slice page shows `isolated`, an adapter, workers ready, terrain drawn; pan and pinch behave as M11-gestures.
+- [ ] **M16-round-trip** (`0004`). *Steps:* tap the page's action control 10 times. *Pass:* 10 `Confirmed`, 0 rejected, 0 ring drops on the page's counters; each result appears with no perceptible delay.
+- [ ] **M16-coexist** (`0015` §5 whole-tab target; `0020` §10). *Steps:* play and pan for 10 min. *Pass:* no reload, no visible hitch, `engine_mem_grows` = 0 on every instance. *If it fails:* the smaller-arena parameters of M11-memory, then the plan edit of M11-memory.
+- [ ] **M16-background** (`simulation.md`, idle worlds). *Steps:* another app for 30 s and return; lock the screen for 60 s and return. *Pass:* frame loop and tick loop resume without a reload; the tick counter did not advance while hidden.
+- [ ] **M16-low-power** (`0019` Context, time-based motion). *Steps:* turn Low Power Mode on, pan and flick. *Pass:* motion speed unchanged at the halved frame rate.
+- [ ] **M16-android** *(Android: only if Q5 is answered yes)*. All items in Chrome.
+
+**Run on:** <device, OS, date>; **result:** <per item>
+
+---
+
+## M17b: Desktop Safari and Firefox harness run
+
+When: M17b ticked. On the Mac, not the phone. Closes the deferral of `0018` Consequences (the CDP instrument of `0016` is Chromium-only).
+
+**Open:** `pnpm device:serve` (no tunnel), then the loopback URL + `device.html?harness=1`, in Safari current and in Firefox current.
+
+- [ ] **M17b-harness-desktop-safari**. *Steps:* Web Inspector → Timelines → JavaScript Allocations, record, press "run" on the page, stop after it prints. *Pass:* the page prints no GPU error and unchanged memory sizes; over the 600 frames the allocation timeline grows by no more than the main-thread budget of `0016` × 600 (about 70 KB) and shows 0 GC pause markers. *If it fails:* validation error on a SAB-backed upload → make M09's staged-copy path the default for that browser. Visible periodic GC → capture the allocation call tree; plan edit naming the site. Probe differences are recorded only.
+- [ ] **M17b-harness-desktop-firefox**. *Steps:* Profiler with "JS Allocations" enabled, same sequence. *Pass / If it fails:* as above.
+
+**Run on:** <browser versions, macOS, date>; **result:** <printed probe lines, allocation growth, PASS / FAIL>
+
+---
+
+## M18: Picking and overlay anchoring
+
+When: M18 ticked. Closes the deferred item of `0019` Consequences, which combines it with the fill-rate check of `0018`.
+
+**Open** (served as above): `device.html?anchors=50` (50 text buttons anchored to tiles, each over an in-canvas ring; 4 slot anchors on moving circles).
+
+- [ ] **M18-anchors** (`0019` Consequences). *Steps:* pan slowly, flick, then pinch in and out continuously for 30 s; repeat in landscape. *Pass:* every label stays centred on its ring (zero swim, no lag or jitter); text crisp at every zoom; buttons respond to taps without moving the camera; HUD rAF p95 ≤ 17.5 ms during the pinch. *If it fails:* reopen with `&anchorMode=translate` (the fallback `0019` Consequences states). If that passes: plan edit making `translate` the default on iOS (everywhere if desktop cost is equal), a superseding ADR for `0019`, and a note against the overlay line of `0016`. If both fail: screen capture and a plan edit; what remains is in-canvas drawables for anything that must not swim.
+- [ ] **M18-fill-rate-with-anchors**. *Steps:* M09b-fill-rate with `&anchors=50` added. *Pass / If it fails:* as M09b-fill-rate.
+- [ ] **M18-pick** (`0019` §4). *Steps:* tap small and overlapping drawables at three zoom levels; tap a DOM button. *Pass:* the HUD reports the topmost drawable's `pick_id` every time (0 misses); a tap on a DOM widget reports nothing to the canvas.
+- [ ] **M18-touch-ghost** (`0019` §4, cursor tile and ghost). *Steps:* tap to move the cursor tile, then drag. *Pass:* the ghost sits on the tapped tile; the drag pans.
+- [ ] **M18-android** *(Android: only if Q5 is answered yes)*. All items in Chrome.
+
+**Run on:** <device, OS, date>; **result:** <per item; anchor mode that passed>
 
 ---
 
 ## M23: OPFS and world lifecycle
 
-**Open:** `<<serve>>`, the OPFS latency page, then the M23 fixture world. OPFS also needs the secure context.
+When: M23 ticked. Closes the deferred OPFS latency item of `0005` Consequences; it tunes only the log `sync` interval.
 
-- [ ] **M23-opfs-latency** (`0005` Consequences; tunes only the log `sync` interval). Run the latency page; record the table. *Pass:* `flush` p95 inside the "keep" band of M23's brief (Planning decision 7). *If it fails:* apply that decision's retune rule; any change is a superseding ADR for the number in `0005`. Note whether the OPFS rename call exists (M23 decision 3).
-- [ ] **M23-kill-resume.** Play two minutes, swipe-kill Safari, reopen. *Pass:* the world resumes; no admitted action is lost (`0005` loss windows).
-- [ ] **M23-world-busy.** Open the same world in a second tab. *Pass:* the second tab shows `WorldBusy`; the first keeps playing.
-- [ ] **M23-private.** Private Browsing. *Pass:* the page reports `durable: false` and still plays.
-- [ ] **M23-hidden-pause.** Background 30 s, foreground. *Pass:* no ticks ran while hidden; no reload.
-- [ ] **M23-export-import.** Export; the file arrives in Files; import under a new id. *Pass:* both worlds show the same hash.
+**Open** (served as above): `opfs-latency.html`, then the M23 fixture world page.
 
-**More items:**
+- [ ] **M23-opfs-latency** (`0005` Consequences). *Steps:* run the latency page; copy the whole table (p50 / p95 / max for `append`, `flush`, both snapshot writes; `move()` and `navigator.locks` availability). *Pass:* `flush` p95 ≤ 10 ms, the keep band of [M23's brief](23-persistence-opfs-and-lifecycle.md), Planning decision 7, which owns the bands. *If it fails:* apply that decision's retune rule; any change is a new ADR superseding the number in `0005`. `move()` missing → slot files, M23 Planning decision 3.
+- [ ] **M23-kill-resume** (`0005` loss windows). *Steps:* play 2 min, swipe-kill Safari, reopen. *Pass:* the world resumes; 0 admitted actions lost.
+- [ ] **M23-world-busy**. *Steps:* open the same world in a second tab. *Pass:* the second tab shows `WorldBusy`; the first keeps playing.
+- [ ] **M23-private**. *Steps:* open the page in Private Browsing. *Pass:* the page reports `durable: false` and still plays.
+- [ ] **M23-hidden-pause**. *Steps:* background 30 s, foreground. *Pass:* the tick counter did not advance while hidden; no reload.
+- [ ] **M23-export-import**. *Steps:* export; confirm the file arrives in Files; import it under a new id. *Pass:* both worlds show the same hash.
+- [ ] **M23-android** *(Android: only if Q5 is answered yes)*. All items in Chrome.
 
-**Runs:**
-
----
-
-## M29: net worker and reconnect on a real network
-
-**Open:** `<<serve>>` with `/ws` proxied on the same HTTPS origin; `games/reference-server` (or the M29 fixture server) on the Mac; the page with its link-log parameter.
-
-- [ ] **M29-socket-resume** (`0013` Consequences; tunes only the dead timeout and the probe deadline). Three runs each: another app for 5 s, 30 s, 5 min; screen lock 60 s; Wi-Fi to cellular in the foreground; airplane mode 15 s. Copy from the link log: whether `close` was delivered or the socket went silent, the time from `visible` to `Welcome`, whether the page was discarded. *Pass:* the keep rule in M29's brief (Manual device checks, step 3). *If it fails:* that brief's tuning rule; any change is a new ADR amending `0013` Client policy.
-- [ ] **M29-play-through-drop.** Keep panning during each drop. *Pass:* the game stays interactive on last known state; the indicator appears only after the delay of `0013`; no modal for short outages.
-- [ ] **M29-net-heap.** Ten minutes connected with steady traffic. *Pass:* no visible periodic hitch (the net worker's garbage is quarantined, `0015`, `0016`).
-
-**More items:**
-
-**Runs:**
+**Run on:** <device, OS, date>; **result:** <latency table; per item>
 
 ---
 
-## M39: acceptance
+## M29: Net worker and reconnect
 
-Run on the final build, after every other section has a PASS row or a recorded plan edit.
+When: M29 ticked. Closes the iOS worker-socket resume item (`PRE-PLAN.md` §10; `0013` Consequences); it tunes only the dead timeout and the probe deadline of `0013`.
 
-**Open:** `<<serve>>`; the reference game, single-player, then through `games/reference-server`, then the hosted deployment of M38.
+**Open** (served as above, with `/ws` proxied on the same HTTPS origin): on the Mac `node games/reference-server --game <fixture dir>`; on the phone the fixture multiplayer page with `?linklog=1`.
 
-- [ ] **M39-rerun.** Re-run M11-boot, M03-determinism, M09b-fill-rate, M18-anchors, M23-kill-resume, M29-socket-resume on this build. *Pass:* each item's own criterion.
-- [ ] **M39-full-game-touch.** Play the script of `34b-reference-scripted-single-player.md` by hand: spawn, mine to the unlock, craft, place with tap-then-confirm, fuel, smelt, take. *Pass:* every step works by touch; buttons and the furnace panel stay glued to their tiles; ten minutes without a reload or a visible hitch.
-- [ ] **M39-two-devices.** Phone and Mac in one hosted world. *Pass:* each sees the other's circle move smoothly; roster dots follow a disconnect after the grace and the return; a furnace placed on one appears on the other.
-- [ ] **M39-desktop-browsers** (`0018` Consequences: the zero-GC harness shape by hand). Desktop Safari and Firefox on the Mac: play five minutes. *Pass:* no validation error in the console, no periodic hitch.
-- [ ] *(Android, if Q5)* M39-full-game-touch and M39-two-devices in Chrome.
+- [ ] **M29-socket-resume** (`0013` Client policy). *Steps:* three runs each of: another app 5 s; 30 s; 5 min; screen lock 60 s; Wi-Fi → cellular in the foreground; airplane mode 15 s. Per run copy from the on-page link log: `close` delivered (ms after `visible`) or silence; ms from `visible` to `Welcome`; page discarded or not. *Pass:* `visible → Welcome` median ≤ 1.5 s and max ≤ 4 s: keep the `0013` numbers. *If it fails:* silence with median > 2 s → lower the probe deadline toward one heartbeat interval plus margin; prompt `close` everywhere → numbers stay, note it. Any change is a new ADR amending `0013` Client policy.
+- [ ] **M29-play-through-drop** (`0013` Client policy). *Steps:* keep panning during each drop above. *Pass:* the game stays interactive on last known state; the indicator appears only after the delay `0013` states; no modal for short outages.
+- [ ] **M29-net-heap** (`0015` §2, `0016`). *Steps:* 10 min connected with steady traffic. *Pass:* no visible periodic hitch (the net worker's garbage stays off the main thread).
+- [ ] **M29-android** *(Android: only if Q5 is answered yes)*. All items in Chrome.
 
-**More items:**
-
-**Runs:**
+**Run on:** <device, OS, network, date>; **result:** <table of runs: close/silence, ms to Welcome, discarded>
 
 ---
 
-## Items owned by milestones without a **D** in `PLAN.md`
+## M34: Reference multiplayer on real devices
 
-Sibling briefs link here; each should either get a **D** in `PLAN.md` or have its item run with the section named.
+When: M34 ticked. Holds the item M26 owns (own-timer feel) and the item M30 owns (remote motion).
 
-| Item | Owner brief | Run with |
+**Open:** `games/reference-server` on the Mac; the reference game on the phone over HTTPS with `/ws` on the same origin, joined through the invite link; the same world in desktop Chrome on the Mac.
+
+- [ ] **M34-two-devices**. *Steps:* phone and Mac join one LAN world; collect on one, place on the other. *Pass:* each sees the other's circle and changes; roster dots go hollow after a disconnect plus the grace of `0013` and fill on return.
+- [ ] **M34-own-timer-bar** (`0012` completion gap; owner [M26's brief](26-prediction-rendering-and-clocks.md), Planning decisions). *Steps:* start own timers on Wi-Fi, then on a throttled or cellular link. Answer: does a bar stretched by one RTT read as correct, or is a full bar that waits better? *Pass:* Tyler accepts the "stretch" default. *If it fails:* switch own bars to the plain rule (a full bar that waits), per M26's decision; record the choice in M34's Deviations, by ADR if `0012` changes.
+- [ ] **M34-remote-motion** (`0012` "Remote motion"; owner M30). *Steps:* move on the Mac and watch the phone; then turn the Mac's Wi-Fi off. *Pass:* the remote circle moves without snapping; it fades per `0012` when its player drops. *If it fails:* plan edit against M30's adaptive delay.
+- [ ] **M34-android** *(Android: only if Q5 is answered yes)*. All items in Chrome.
+
+**Run on:** <devices, OS, network, date>; **result:** <per item; own-timer decision>
+
+---
+
+## M35: Built reference game in real Safari
+
+When: M35 ticked.
+
+**Open:** the `vite build` + `vite preview` output of `games/reference`: on the Mac over loopback; on the iPhone over HTTPS.
+
+- [ ] **M35-safari-build-mac** (`0017` §4). *Steps:* load in desktop Safari. *Pass:* the game plays; the debug line reports wasm delivery `module` (`url` only if M35 item (c) built the automatic fallback). *If it fails:* M35 item (c): the automatic `wasmUrl` fallback becomes required; plan edit.
+- [ ] **M35-safari-build-iphone**. Same on the iPhone. *Pass / If it fails:* as above.
+- [ ] **M35-capability** (`0018` §7). *Steps:* open the game in a browser with no `navigator.gpu` (for example Safari with the WebGPU feature flag off). *Pass:* the capability screen appears with `no-webgpu`; no blank page.
+
+**Run on:** <device / browser, OS, date>; **result:** <delivery mode per browser>
+
+---
+
+## M37b: Renderer recovery after backgrounding
+
+When: M37 ticked (the `rendererLost` prompt is M37's `status.ts`; M37b builds the recovery).
+
+**Open:** the reference game on the iPhone over HTTPS.
+
+- [ ] **M37b-ios-background** (`0018` §8). *Steps:* play; background the tab for several minutes under memory pressure (camera app, a few heavy pages); return. Three runs. *Pass:* every run ends with the world drawn again without a reload, or with the `rendererLost` prompt; 0 frozen or black canvases. *If it fails:* record which; plan edit against the device-loss sequence of `0018` §8.
+
+**Run on:** <device, OS, date>; **result:** <per run: redrawn / prompt / reload / black>
+
+---
+
+## M38: Hosted deployment
+
+When: M38 ticked and Q6 answered yes. If Q6 is declined this section is "not run" and M39 lists it open (M38's brief, Planning decisions).
+
+**Open:** the Cloudflare Pages URL on the iPhone, **on cellular** (Wi-Fi off). No local serving.
+
+- [ ] **M38-hosted-boot** (`0015` §3, COOP/COEP on a real host and cross-origin `wss`). *Steps:* open the URL. *Pass:* the page is cross-origin isolated, gets an adapter, and reaches `online` against the Fly origin. *If it fails:* compare with `scripts/check-coi.mjs <url>`; plan edit against `0015` §3 or the hosting recipe.
+- [ ] **M38-socket-resume**. *Steps:* each step of M29-socket-resume once over the real network; record `visible → Welcome`. *Pass / If it fails:* as M29-socket-resume.
+- [ ] **M38-remote-motion**. *Steps:* M34-remote-motion with the phone on cellular and the Mac on Wi-Fi. *Pass / If it fails:* as M34-remote-motion.
+
+**Run on:** <device, OS, carrier, date>; **result:** <per item; ms to Welcome>
+
+---
+
+## M39: Acceptance
+
+When: last. On the final build, after every other section has a result line. M39 re-runs rather than trusting old ticks (M39's brief, Planning decisions).
+
+**Open:** the reference game: single-player, then through `games/reference-server`, then the hosted deployment of M38; the fixture pages served as above for the re-run.
+
+- [ ] **M39-rerun**. *Steps:* untick and re-run every item of every section above on the final build. *Pass:* each item's own criterion; every section gets a new **Run on** line.
+- [ ] **M39-large-save** (`0007` §8; handed over by M07, Planning decision 11; `?bench=large-save` from M36). *Steps:* load the standard large save on the iPhone in single-player; play 10 min. *Pass:* `engine_mem_grows` = 0 and no tab reload. *If it fails:* decide which default drops first (`0007` §8: entities are the memory problem), by ADR.
+- [ ] **M39-full-game-touch**. *Steps:* play the script of `34b-reference-scripted-single-player.md` by hand: spawn, mine to the unlock, craft, place with tap-then-confirm, fuel, smelt, take. *Pass:* every step works by touch; buttons and the furnace panel stay glued to their tiles; 10 min with no reload and no visible hitch.
+- [ ] **M39-two-devices**. *Steps:* phone and Mac in one hosted world (LAN world if M38 was not run). *Pass:* each sees the other's circle move smoothly; roster dots follow a disconnect after the grace and the return; a furnace placed on one appears on the other.
+- [ ] **M39-desktop-browsers**. *Steps:* desktop Safari and Firefox on the Mac, 5 min of play each. *Pass:* 0 validation errors in the console; no periodic hitch.
+- [ ] **M39-android** *(Android: only if Q5 is answered yes)*. M39-full-game-touch and M39-two-devices in Chrome.
+- [ ] **M39-sign-off**. *Steps:* Tyler plays the reference game from start to furnace output, single-player and with a second player. *Pass:* Tyler signs off. *If it fails:* each objection becomes a plan edit.
+
+**Run on:** <device model, OS version, date>; **result:** <per item>; **sign-off:** <Tyler, date>
+
+---
+
+## Needed by a check, built by no milestone yet
+
+Found while consolidating. Each is named at most in a brief's Manual device checks section, never in a Scope or an exit criterion. Delete a row when a brief's Scope takes it on.
+
+| Need | Used by | Note |
 |---|---|---|
-| M03-determinism | `03-browser-harness.md` | M11 |
-| M08-worldgen-ms-per-chunk | `08-worldgen-and-gen-worker.md` | M11 |
-| M09b-fill-rate | `09b-terrain-art-and-lifecycle.md` | as soon as M09b is ticked; again in M11, M18, M39 |
-| M34-own-timer-bar: own progress bars on a real network (`0012` completion gap; decision recorded in M34's Deviations) | `26-prediction-rendering-and-clocks.md`, `34-reference-multiplayer.md` | after M34 |
-| M34-two-devices-lan: two devices, one LAN world through `games/reference-server` | `34-reference-multiplayer.md` | after M34 |
-| M35 entries (real Safari loads the built reference game) | `35-packaging-and-adapters.md` | after M35 |
-| M37 entry (background under memory pressure, renderer recovery) | `37-robustness-events.md` | after M37 |
-| M38 section (hosted page on cellular; M29's steps over the real network) | `38-hosting-checks.md` | after M38 |
+| The reference game served to the phone over HTTPS, with `/ws` to `games/reference-server` on the same origin | M34, M35, M37b, M39 (before M38's hosted URL exists) | `pnpm device:serve` (M03) serves only the fixture app |
+| `/ws` proxy in `pnpm device:serve`, and a real-time (not manual-timer) server for the fixture multiplayer page | M29 | `startTestServer` is manual-timer; `games/reference-server --game <fixture dir>` is the real-time candidate |
+| Name of the fixture multiplayer page and its `?linklog=1` parameter | M29 | M29 provides `client.debug.linkLog()` on the test entrypoint only |
+| A link log on the hosted reference game | M38-socket-resume | the production build has no `?linklog=1` |
+| Name of the M16 slice page; HUD counters: `Confirmed` / rejected counts, ring drops, `engine_mem_grows` per instance, tick counter | M16, M23-hidden-pause, M39-large-save | M09b's HUD list has none of them |
+| Name of the M23 fixture world page, showing hash, tick, `durable`, `WorldBusy`, export and import controls | M23 | the brief says "the fixture page" |
+| `pick_id` of the last tap on the `device.html` HUD | M18-pick | not in M18's Scope |
+| One fixture-app root | M08, M23 | M02b: `tests/browser/pages/`; M08: `tests/app/`; M23: `fixtures/pages/`. `device:serve` lists only the fixture app's pages |

@@ -1,6 +1,6 @@
 # 0004: Action timing, ordering, validation and rejection
 
-Status: Accepted (2026-09-19)
+Status: Accepted (2026-09-19). Amended by [0023](0023-action-growth-declaration.md). Amended by [0024](0024-planning-amendments.md) §8.
 
 ## Context
 

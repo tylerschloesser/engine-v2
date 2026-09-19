@@ -68,6 +68,6 @@ PRE-PLAN §7 "Hosting cost": Fly and Cloudflare billing pages after the runs. "T
 `games/reference-server/README.md` recipes; `games/reference-server-do/CLAUDE.md` if the package stays. No skill: deploys are rare and the README is the procedure.
 
 ## Manual device checks
-`docs/plan/device-checks.md`, section M38 (iPhone): open the Pages URL on cellular; the page is cross-origin isolated and gets an adapter; it reaches `online` against Fly; then repeat M29's checklist steps once each over the real network and record `visible → Welcome`.
+[device-checks.md, M38: Hosted deployment](device-checks.md#m38-hosted-deployment). Run on the iPhone on cellular against the Pages URL; not run if Q6 is declined.
 
 ## Deviations

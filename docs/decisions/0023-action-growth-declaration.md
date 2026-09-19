@@ -34,7 +34,7 @@ pub trait Game {
 - Let `free_entities = max_entities.saturating_sub(entity_count)` and `free_tiles = max_modified_tiles.saturating_sub(modified_tile_count)`.
 - `growth(a) == Some(g)`: reject with `StateBudgetFull` iff `g.entities > free_entities` or `g.modified_tiles > free_tiles`. `Growth::NONE` therefore always passes, even when tick rules have pushed a count past its limit.
 - `growth(a) == None`: the 0004 rule unchanged (either nominal headroom below `max_action_growth` rejects).
-- Id exhaustion (`0022-entity-ids-and-provisional-ids.md` §2) uses the same number: a declared action needs `g.entities` ids left, an undeclared one the entity count of `max_action_growth`.
+- Id exhaustion ([0022](0022-entity-ids-and-provisional-ids.md) §2) uses the same number: a declared action needs `g.entities` ids left, an undeclared one the entity count of `max_action_growth`.
 
 `max_action_growth` keeps its role as the slack figure of the 0007 memory split and as the bound for undeclared actions. A declaration whose nominal cost (0007 §8 figures) exceeds `max_action_growth` is a game bug: `debug_assert!`.
 

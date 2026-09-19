@@ -1,6 +1,6 @@
 # M25: Prediction core
 
-Status: not started · After: 21 · Tyler-dependent: no
+Status: not started · After: 21b · Tyler-dependent: no
 
 ## Goal
 The client role predicts the local player's own actions by running the game's `apply` on a `Predicting` overlay over the replica, keeps a pending queue, and resets and replays on every received frame. `Unknown` reads, RNG use and `predict() == false` decline to predict and still send. The taint rule is chosen by the tests written here. Verified natively with a fixture game, including a zero-allocation replay test.
@@ -9,7 +9,7 @@ The client role predicts the local player's own actions by running the game's `a
 1. `docs/spec/overview.md`
 2. `docs/decisions/0012-prediction-and-reconciliation.md` (Decision through "Frozen predicted tick"; Consequences)
 3. `docs/decisions/0003-game-facing-api.md` (the trait block; "Contexts"; the last Consequences bullet, items 1, 2, 6, 8)
-4. `docs/decisions/0022-entity-ids-and-provisional-ids.md` (decisions 5–7; it has a number by Phase 3, see `PLAN.md`)
+4. `docs/decisions/0022-entity-ids-and-provisional-ids.md` (decisions 5–7)
 Mine from spikes: `spikes/prediction-api/engine/src/lib.rs` (`Overlay`, `read_*` helpers, `Predicting`, `Pending`, `Client::predict/submit/on_frame`), `engine/src/harness.rs`, `game/src/lib.rs`, `game/tests/prediction.rs`, `game/tests/alloc.rs`. Rules that apply: `.claude/rules/hot-paths.md`, `.claude/rules/determinism.md`.
 
 ## Scope
@@ -18,7 +18,7 @@ Mine from spikes: `spikes/prediction-api/engine/src/lib.rs` (`Overlay`, `read_*`
 - `View<'_, G>` reads overlay-then-replica (it read the replica only until now).
 - `PendingQueue<G>`: M16's fixed outbox turned into the pending queue (same capacity, same "queue full" behaviour), frozen `predicted_tick` per entry, prediction inside `on_action`, the four reconcile steps inside `ClientCore::on_frame`.
 - Provisional ids and the `EntityId` `Deserialize` guard (0022 5).
-- The taint rule, `WorldRead::entities_in`, and `entity(id)` semantics (0022 7).
+- The taint rule, the overlay merge of `WorldRead::entities_in` (M21 built the `Authority`/`Store` side), and `entity(id)` semantics (0022 7).
 - Fixture game `predict`.
 
 ## Non-scope
@@ -34,12 +34,12 @@ Mine from spikes: `spikes/prediction-api/engine/src/lib.rs` (`Overlay`, `read_*`
 **Provides:**
 - `Predicting<'_, G>`, `Overlay<G>` (`mark`, `rollback`, `clear`, `is_empty`, read-only iterators `tiles()`, `entities()`, `players()` for M26), `PendingQueue<G>`, `Pending { seq, action, predicted_tick, status }`, `Prediction::{Applied, NotPredictable, Rejected(G::Reject)}`.
 - `EntityId::provisional(seq, index) -> Option<EntityId>`, `EntityId::is_provisional()`.
-- `WorldRead::entities_in(&self, rect: TileRect, f: &mut dyn FnMut(EntityId, &G::Entity)) -> Result<(), Unknown>`.
+- The overlay merge of `WorldRead::entities_in` on `Predicting` and `View` (signature and `Authority` side: M21).
 - `ClientCore::set_lead(Ticks)`, `ClientCore::predicted_tick()`; `PendingQueue::unacked_after(seq)` iterator of `(seq, &G::Action)`, which M28b's resend uses once this milestone is ticked.
 - Per-ack sample hook for M26: `on_ack_sample(auth_tick_at_dispatch, ack_tick)`; each `Pending` records `auth_tick_at_dispatch`.
 - `testkit::Loopback` (M15) gains `dispatch(client, action) -> (seq, Prediction)`, `pending(client)`, `overlay_len(client)` and a `visible(client, rect)` equality helper (the spike's `visible()`).
 
-**Consumes:** `Store::apply`, `Delta`, ids (M12); `WorldRead`/`WorldWrite`, `Authority`, `View`, `Outcome` (M12b). `ClientCore`, `Replica` with its held-chunk set, atomic `on_frame`, `FrameSummary.ack_seq`, `testkit::Loopback` with per-client delay (M15). `on_action` with its outbox, the result record and `onActionResult` (M16); the `ui` re-run and `FrameView` minimal (M16b). `Registry` footprints via `G::prototype`, `ChunkIndex` occupancy in `Store`, `TileRect` and `Authority`/`Store` range iteration if M21 built them (M21). `Codec` (M05).
+**Consumes:** `Store::apply`, `Delta`, ids (M12); `WorldRead`/`WorldWrite`, `Authority`, `View`, `Outcome` (M12b). `ClientCore`, `Replica` with its held-chunk set, atomic `on_frame`, `FrameSummary.ack_seq`, `testkit::Loopback` with per-client delay (M15). `on_action` with its outbox, the result record and `onActionResult` (M16); the `ui` re-run and `FrameView` minimal (M16b). `Registry` footprints via `G::prototype`, `ChunkIndex` occupancy in `Store`, `WorldRead::entities_in` on `Authority`/`Store` (M21); `TileRect` (M07). `Codec` (M05).
 
 ## Planning decisions
 - **Provisional ids** follow 0022 5. Private layout: bit 31, then the low 22 bits of `seq`, then a 9-bit spawn index. Unique among 32 pending entries because `seq` is monotonic. A 513th spawn in one action makes `provisional` return `None`, which sets `saw_unknown` (the action is `NotPredictable`).
@@ -50,7 +50,7 @@ Mine from spikes: `spikes/prediction-api/engine/src/lib.rs` (`Overlay`, `read_*`
   Implement the rule as a small strategy so all three run against the same scenarios. `taint_dependency` (A is placed across the subscription edge and declines; B deposits into A's furnace by tile; the host accepts both) counts *contradicted verdicts*: a local `Rejected` or `Applied` whose host verdict differs. `taint_rollback_visibility` repeats it with A failing through `rng()` after a read. `taint_independence` (A declines; C is unrelated) counts *lost predictions*. Selection, fixed in advance: a rule is admissible only with zero contradicted verdicts in both dependency scenarios; among admissible rules take the fewest lost predictions; on a tie take the simpler. Expected: R0 fails; R2 is unsound, since a declined action's write set is unknowable once it stops at the first `Unknown`; R1 ships. Record the counts in Deviations, delete the losing strategies, keep the scenarios.
 - **Statuses are re-evaluated on every replay** (a declined action becomes predictable once its chunk arrives). TypeScript is told once: `NotPredictable` at dispatch (0003). A local `Rejected` is not surfaced at all, because it is a hint (0012); the UI simply sees no ghost until the host's verdict. `predict() == false` is `NotPredictable` without running `apply`, and taints like any other.
 - **Queue full** stays M16's behaviour (the outbox already fails dispatch locally); prediction adds no second limit.
-- **Iterating reads.** `entities_in` visits each entity whose footprint intersects `rect` once, in ascending `EntityId` (ids are layout-free and monotonic, so the order is identical on host, replay and client; provisional ids sort last, in spawn order). It returns `Err(Unknown)` before any callback if `rect` touches an unsubscribed chunk. `Predicting` and `View` merge: overlay entries override by id, tombstones are skipped. Ids are collected into a reused scratch vector and sorted; no allocation after warm-up. If M21 did not build the `Authority`/`Store` side, build it here first and note it in Deviations.
+- **Iterating reads.** `entities_in` visits each entity whose footprint intersects `rect` once, in ascending `EntityId` (ids are layout-free and monotonic, so the order is identical on host, replay and client; provisional ids sort last, in spawn order). It returns `Err(Unknown)` before any callback if `rect` touches an unsubscribed chunk. `Predicting` and `View` merge: overlay entries override by id, tombstones are skipped. Ids are collected into a reused scratch vector and sorted; no allocation after warm-up. The `Authority`/`Store`/replica side, the order and the `Unknown` rule are M21's; this milestone adds only the merge.
 - **`entity(id)` gone vs unsubscribed:** 0022 7; no signature change. The fixture UI holds a tile and asks `entity_at`.
 - **`ui` trigger:** `ui` re-runs after every dispatch and every `on_frame`; the `PartialEq` filter of 0003 already suppresses unchanged JSON, so no overlay diff is needed for it.
 - **Cut line.** This milestone sits at the sizing limit. If it overruns, `entities_in` moves to `25b-prediction-range-reads.md` (new `PLAN.md` row, after 25; nothing else waits on it, since M26 merges the overlay into `FrameView::entities()` itself).

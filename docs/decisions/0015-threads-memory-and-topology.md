@@ -1,6 +1,6 @@
 # 0015: Threads, memory, and topology
 
-Status: Accepted (2026-09-19)
+Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §9, §10.
 
 ## Context
 

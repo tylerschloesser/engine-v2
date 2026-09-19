@@ -26,12 +26,12 @@ Mine from spikes: `spikes/determinism-hash/src/lib.rs` (`coord_hash` → `hash2`
 ## Non-scope
 - Gen workers, `genRequest`/`genResult` records, `GenQueue`, client pristine-cache feed, worker count, zero-GC of the gen isolate: **M08b**.
 - **Host-side generate-on-miss** is not new code: it is `TerrainStore`'s miss path (M07) and becomes real worldgen here through `Pristine<W>`; this brief only tests it (`cache_invisible_real_worldgen`). **The 2 ms between-tick warmer belongs to M13** (`sim_warm_one`, `host::warm`, `WARM_BUDGET_MS`): WASM has no clock (0014 §3), so the budget can only be enforced by the TS sim host against the injected clock, and its rectangles arrive with M15. M13 consumes `TerrainStore::{is_cached, materialize}` from M07.
-- The `Game` trait and `type Worldgen` on it: M12. Stamping `WorldgenStamp` into world params, snapshots and log headers, and `SaveIncompatible`: M22/M24. `Welcome` carrying seed + params: M28. Texel conversion: M09. The reference game's worldgen: M20 (reuses `engine::noise`, `hash2`, `assert_worldgen_contract`).
+- The `Game` trait and `type Worldgen` on it: M12. Stamping `WorldgenStamp` into world params, snapshots and log headers, and `SaveIncompatible`: M22/M24b. `Welcome` carrying seed + params: M28. Texel conversion: M09. The reference game's worldgen: M20 (reuses `engine::noise`, `hash2`, `assert_worldgen_contract`).
 
 ## Files, packages and crates touched
 - `packages/engine/crates/engine/`: `src/worldgen.rs`, `src/noise.rs`, `src/testing/worldgen_contract.rs`, `src/abi/registry.rs` (one export, one `Instance` method), `tests/worldgen_*.rs`, `tests/golden/`.
 - `packages/engine/fixtures/worldgen/`: `Cargo.toml`, `src/lib.rs`, `scenario.json`, `golden.json`, `CLAUDE.md`.
-- `packages/engine/` TS: `src/abi.ts` row, `tests/support/scenario.ts` (`kind` dispatch), `scripts/golden.mjs`, `tests/wasm/worldgen*.test.ts`, the Bun leg, `tests/app/{determinism (list), worldgen-bench.html, src/worldgen-bench.ts}`, `budgets.json` key.
+- `packages/engine/` TS: `src/abi.ts` row, `tests/support/scenario.ts` (`kind` dispatch), `scripts/golden.mjs`, `tests/wasm/worldgen*.test.ts`, the Bun leg, `tests/browser/pages/{determinism (list), worldgen-bench.html, src/worldgen-bench.ts}`, `budgets.json` key.
 
 ## Seams
 **Provides:**
@@ -80,7 +80,8 @@ Chunk generation row of `PRE-PLAN.md` §7 (owner 0008 §6): `worldgen-bench` aga
 Updates `packages/engine/CLAUDE.md`; adds `packages/engine/fixtures/worldgen/CLAUDE.md` (what the fixture is for, scenario kind, bless command). `determinism.md` globs already cover both.
 
 ## Manual device checks
-`docs/plan/device-checks.md#m08-worldgen-ms-per-chunk` (PLAN should mark M08 **D**; never blocking). Tyler runs `pnpm device:serve --tunnel`, opens `worldgen-bench.html` on the iPhone (Android over `adb reverse` if Q5 is answered yes) and records median ms/chunk and the golden result. Reading it: golden mismatch → stop, determinism bug (0002's deferred device run). At or below 0.5 ms → 0008's estimate holds. Above 0.5 ms → record the phone/desktop factor F; if F > 5, set `worldgenMsPerChunkWarn` to 1 ms / F. Above 1 ms with this fixture → the budget of 0008 §6 is broken: open a plan edit revisiting the default gen worker count on phones (M08b) and M13's warmer yield per gap.
+[device-checks.md, M08: Worldgen ms per chunk](device-checks.md#m08-worldgen-ms-per-chunk). Never blocking.
+This milestone builds `worldgen-bench.html` for it (median ms/chunk, golden match, user agent, `hardwareConcurrency`); what each number changes is stated there.
 
 ## Deviations
 (filled in during Phase 3)

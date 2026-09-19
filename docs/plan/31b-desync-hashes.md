@@ -38,7 +38,7 @@ Pacing (M31). Pristine-terrain hash sampling between client and server (0008 def
 
 ## Planning decisions
 - **Hash-all is a runtime flag, not `cfg(debug_assertions)`.** The fast tier builds on the dev profile (0020 §3), so a compile-time switch would put hash traffic into every byte-counter assertion of M31. The harness turns it on everywhere except `rates/*`, `zoomout/*`, `reconnect/cost`; the Vite plugin's dev server turns it on; release builds and `games/reference-server` leave it off.
-- **Global/OwnPlayer resync reuses `ResyncChunk`** with a reserved coordinate; 0013 names the hashes but no recovery message for them, and a new message type for a should-never-happen path is not worth a type id.
+- **Global/OwnPlayer resync reuses `ResyncChunk`** with a reserved coordinate (0024 §8); 0013 names the hashes but no recovery message for them, and a new message type for a should-never-happen path is not worth a type id.
 - **The host's resync snapshot is the host-side dump.** The client already holds its own encoding, so no debug-only upload path exists.
 - **A desync never closes the connection and never pauses the world;** a second mismatch on the same chunk within the sweep period is reported again, with no escalation in v1.
 

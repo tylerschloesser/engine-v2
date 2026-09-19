@@ -1,6 +1,6 @@
 # M20b: Reference game v0: player, presence and collect UI (first playable)
 
-Status: not started · After: 20, 18, 19 · Tyler-dependent: Q4 (collect range; default 3 tiles assumed)
+Status: not started · After: 20, 17b, 18, 19 · Tyler-dependent: Q4 (collect range; default 3 tiles assumed)
 
 Split from M20 during planning (see that brief). Needs a new PLAN.md row.
 
@@ -34,10 +34,10 @@ Remote players and roster (M34). Crafting menu and unlock (M32). Styling beyond 
 
 ## Seams
 **Provides:** `RefClient` (spring state, `pos()`), `PlayerPresence`, the `Ui` type and its binding, `src/ui/dom.ts` (`el()`, keyed-list diff helper reused by M32–M34), browser helpers `panTo(page, tile)`, `uiState(page)`, `clickCollect(page, tile)` in `tests/helpers/game.ts`.
-**Consumes:** `RefGame`, `in_range`, `RefScenario`, `landmarks.json`, `openGame` (M20); `ClientSide::extract`, `DrawList`, `FrameView` (M17); `client.overlay.anchor`, picking-free taps on DOM (M18); `ClientSide::frame`, `FrameCx` camera block read, `Presence` uplink, `PresenceTable`, `admit` call site (M19); `onUi`, `onActionResult`, `clock()` (M16); `client.camera.moveTo`/`read` (M11).
-**Required of other milestones (check their briefs before starting):**
-- M16/M17: the engine must re-run `ClientSide::ui` when client-side state changed, not only when the replica changed (`in_range` depends on the spring). Either every produced frame with the `PartialEq` gate of `0003`, or a `cx.ui_dirty()` call from `frame`.
-- M11: a way for `main.ts` to learn that no saved camera was restored (a boolean on `client.camera` or on `CameraState`), and the saved camera keyed per world id.
+**Consumes:** `RefGame`, `in_range`, `RefScenario`, `landmarks.json`, `openGame` (M20); `ClientSide::extract`, `DrawList`, `FrameView` (M17); `client.overlay.anchor`, picking-free taps on DOM, `ClientSide::frame`, `FrameCx::camera()` (M18); `Presence` uplink, `PresenceTable`, `admit` call site (M19); `onActionResult` (M16); `onUi` with the `ui` re-run rule, `clock()` (M16b); `client.camera.moveTo`/`read`/`restored`, `ClientOptions.cameraKey` (M11).
+**Relied on from other milestones (in their briefs; if one is missing in code, stop and fix the plan):**
+- M16b/M18: the engine re-runs `ClientSide::ui` when client-side state changed, not only when the replica changed (0024 §7; `in_range` depends on the spring).
+- M11: `client.camera.restored` and `ClientOptions.cameraKey` (pass the world id).
 
 ## Planning decisions
 - **Where `from` comes from.** The ADRs put the spring in Rust and `dispatch` in TypeScript, and say per-frame values must not travel through `Ui` (`0003`). Decision: each `in_range` entry carries `from` = the player's position when that tile entered range (refreshed whenever the set changes). It is a real position of this player, inside `RANGE` of the tile by construction, and at most `2 × RANGE` from the live presence sample, far inside the `admit` tolerance. `Ui` therefore changes at tile-crossing rate, never per frame. Rejected: a `ClientSide` hook that stamps actions (new `Game` API, needs an ADR); reading an anchor slot from TypeScript (f32 precision far from the origin).

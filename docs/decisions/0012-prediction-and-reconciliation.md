@@ -1,6 +1,6 @@
 # 0012: Prediction and reconciliation
 
-Status: Accepted (2026-09-19)
+Status: Accepted (2026-09-19). Amended by [0022](0022-entity-ids-and-provisional-ids.md). Amended by [0024](0024-planning-amendments.md) §8.
 
 ## Context
 

@@ -1,6 +1,6 @@
 # 0001: The camera is not an action; presence and witness-carrying actions
 
-Status: Accepted (2026-09-19)
+Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §6.
 
 ## Context
 

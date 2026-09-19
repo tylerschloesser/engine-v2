@@ -22,7 +22,7 @@ Rules that apply: `.claude/rules/hot-paths.md` (the step path is measured in M04
 - `pnpm device:serve` (serves the built fixture app for phones) and the `run-tests` skill.
 
 ## Non-scope
-The zero-GC instrument, negative controls, `budgets.json` (M04). The production worker entry `worker.ts` / `run()`, `createClient`, rings, the production control block and `yield` flag (M06). Render targets, input injection, counters, device-loss flag from 0020 §8 (M09, M11, M14/M31, M37: each adds its piece to `engine/test`). WebGPU. CI (M10). Packaging smoke of the reference game (M20/M35).
+The zero-GC instrument, negative controls, `budgets.json` (M04). The production worker entry `worker.ts` / `run()`, `createClient`, rings, the production control block and `yield` flag (M06, M06b). Render targets, input injection, counters, device-loss flag from 0020 §8 (M09, M11, M15b/M31, M37b: each adds its piece to `engine/test`). WebGPU. CI (M10). Packaging smoke of the reference game (M20/M35).
 
 ## Files, packages and crates touched
 `packages/engine` only (plus root `package.json` scripts and `biome.json`).
@@ -50,7 +50,7 @@ packages/engine/package.json (exports: add `./test`)
 **Provides (`engine/test`):**
 - `createManualClock(startMs = 0): ManualClock` where `ManualClock extends Clock, Scheduler` plus `advance(ms)` (fires due timers in `(deadline, id)` order) and `frame(dtMs)` (advances, then runs the frame callbacks registered so far exactly once).
 - `createHarness(opts: { wasm: EngineWasm | WebAssembly.Module, workers: HarnessWorkerSpec[], clock?: ManualClock }): Promise<Harness>`; `HarnessWorkerSpec = { name: string, role: Role, config: InstanceConfig }`. The `name` is the **isolate name** used by M04's budgets and controls; `'main'` is reserved.
-- `Harness`: `clock`; `stepTick(): void` (every sim-role worker runs one `sim_tick`; returns when all have acknowledged); `stepFrame(dtMs: number): void` (`clock.frame(dtMs)` on main, then one step of every client-role worker: none exist before M06, so it is main-only for now); both are synchronous and allocation-free once resumed. `resume(): Promise<void>` (workers enter their blocking wait loop; resolves when all report blocked-and-ready), `park(): Promise<void>` (workers return to their event loops so messages and CDP reach them), `untilQuiescent(): Promise<void>` (**the awaitable cross-thread quiescence point of 0020 §8**: resolves when every worker has acknowledged every request and is parked).; `hash(worker: string): Promise<string>`, `admit(worker, bytes: Uint8Array): Promise<Status>` (setup-rate, not for the measured window), `memoryBytes(): Promise<Record<string, number>>`, `memGrows(): Promise<Record<string, number>>`, `errors(): string[]`, `dispose()`. `park` / `resume` / `untilQuiescent` match the names M06b adds for the production topology (`parkWorkers`, `resumeWorkers`, `untilQuiescent`).
+- `Harness`: `clock`; `stepTick(): void` (every sim-role worker runs one `sim_tick`; returns when all have acknowledged); `stepFrame(dtMs: number): void` (`clock.frame(dtMs)` on main, then one step of every client-role worker: none exist before M06b, so it is main-only for now); both are synchronous and allocation-free once resumed. `resume(): Promise<void>` (workers enter their blocking wait loop; resolves when all report blocked-and-ready), `park(): Promise<void>` (workers return to their event loops so messages and CDP reach them), `untilQuiescent(): Promise<void>` (**the awaitable cross-thread quiescence point of 0020 §8**: resolves when every worker has acknowledged every request and is parked).; `hash(worker: string): Promise<string>`, `admit(worker, bytes: Uint8Array): Promise<Status>` (setup-rate, not for the measured window), `memoryBytes(): Promise<Record<string, number>>`, `memGrows(): Promise<Record<string, number>>`, `errors(): string[]`, `dispose()`. `park` / `resume` / `untilQuiescent` match the names M06b adds for the production topology (`parkWorkers`, `resumeWorkers`, `untilQuiescent`).
 - Page contract used by every spec: a test page builds a harness and assigns `window.__harness` plus a page-specific result object; Node-side `tests/browser/support/page.ts` gives `openPage(page, path)` which navigates, asserts `crossOriginIsolated`, and fails the test on any `pageerror`, console `error`, or worker `error` event.
 - Registering a browser test: a `*.spec.ts` under `tests/browser/`; tag `@engines` in the title to run it in WebKit and Firefox as well as Chromium; tag `@slow` to demote (0020 §4). Chromium launch args already include `--enable-unsafe-webgpu` (0020 §6) so M09 changes no config.
 - `pnpm device:serve [--tunnel]`: builds the fixture app (dev profile) and runs `vite preview` on `127.0.0.1:4173`; `index.html` lists every page.
@@ -114,7 +114,8 @@ This is Tyler's call (it installs `cloudflared` and exposes the fixture page on 
 - `packages/engine/CLAUDE.md`: the ambient-time rule in one line; how to add a browser spec and tag it.
 
 ## Manual device checks
-`docs/plan/device-checks.md`, item "determinism page" (iPhone and Android; procedure above). The page and command exist from this milestone; the first scheduled run is with M11's checklist. Not gating.
+[device-checks.md, M03: Determinism page](device-checks.md#m03-determinism-page). Not gating.
+This milestone builds `determinism.html` and `pnpm device:serve [--tunnel]` (procedure: Planning decisions above); the first scheduled run is in M11's sitting.
 
 ## Deviations
 (filled in during Phase 3)
