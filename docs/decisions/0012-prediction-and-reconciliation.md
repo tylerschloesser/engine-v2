@@ -13,7 +13,7 @@ Status: Accepted (2026-09-19)
 **Mechanism: reset-and-replay overlay.** The game's single `apply(world, who, action) -> Result<(), Reject>` runs on the client against `Predicting` (reads overlay-then-replica; writes are puts pushed onto the overlay). The overlay is three preallocated vectors (tiles, entities with tombstones, players) that keep capacity across `clear()`; a failed action rolls back by truncating to a mark. At dispatch the action is applied once, queued as pending with its `seq`, and sent. Then, once per received frame ([0011](0011-wire-format-and-deltas.md)):
 
 1. apply the frame's deltas to the authoritative replica;
-2. pop pending actions with `seq <= ack_seq`, raising `Confirmed` (with the provisional→real entity id map, in spawn order) or `Rejected(reason)` to the game UI;
+2. pop pending actions with `seq <= ack_seq`, raising `Confirmed` or `Rejected(reason)` to the game UI (`Confirmed` carries a provisional→real entity id map, in spawn order, only if the provisional-id item deferred under Consequences picks id rewriting; [0004](0004-action-timing-and-rejection.md) `Applied`);
 3. `overlay.clear()`;
 4. re-run `G::apply` for each still-pending action.
 
@@ -26,7 +26,7 @@ Measured: 0 allocations over 190 frames × 4 pending actions. The pending queue 
 **Two clocks.** Authoritative = tick of the latest frame. Predicted = authoritative + lead, where lead is the estimated round trip in ticks. A player's own timers are written and rendered in the predicted clock, before and after the ack, so the bar advances one step per tick with no jump at confirmation. Everything not predicted renders against the authoritative clock.
 
 **Correction without snapping.**
-- An action's ack and the deltas it caused arrive in one atomically applied frame, so the ghost leaves the overlay in the same render in which the real result appears; the id map lets the renderer carry animation state across.
+- An action's ack and the deltas it caused arrive in one atomically applied frame, so the ghost leaves the overlay in the same render in which the real result appears; the id map, if the deferred provisional-id item under Consequences keeps it, lets the renderer carry animation state across (otherwise the stable key does).
 - A conflicting delta can arrive before the reject ack; re-prediction then fails and the ghost goes early. The spike showed no torn state (ghost XOR refunded item) on any frame.
 - `extract` marks overlay-sourced tiles and entities as `predicted`, so the game can style pending things and animate a rejection using its reason code instead of popping.
 - If the lead estimate was off by k ticks, the ack causes exactly one k-tick correction of an own timer; the displayed offset eases to zero over ~200 ms.
@@ -51,7 +51,7 @@ Measured: 0 allocations over 190 frames × 4 pending actions. The pending queue 
 - A panic in `apply` under prediction traps only the client instance; the host is always a different instance.
 - Interim rule until item 1 below is settled: actions address things that may be predicted by a stable key (tile), not by `EntityId`.
 - Deferred to Phase 2: provisional ids for predicted entities (stable-key addressing vs. engine rewriting of ids inside pending actions), because the choice depends on the reference game's final action shapes and on whether the engine may see inside `G::Action`.
-- Deferred to Phase 2: the taint rule after a `NotPredictable` action (likely: mark every later pending action `NotPredictable`), because a later action predicted without its effects can be rejected locally while the host accepts, and the rule needs tests against the real pending queue.
+- Deferred to Phase 3 (the prediction milestone): the taint rule after a `NotPredictable` action (likely: mark every later pending action `NotPredictable`), because a later action predicted without its effects can be rejected locally while the host accepts, and the rule needs tests against the real pending queue.
 - Deferred to Phase 2: the per-frame overlay change list for the renderer (diff the overlay before and after each replay; emit dirty tiles/entities plus the `predicted` flag), because it depends on the DrawList design in [0018](0018-renderer.md).
 - Deferred to Phase 2: enforcing host-side atomicity of `apply` with an undo journal, because its cost is unmeasured; until then the host asserts that a rejecting handler recorded no write.
 - Deferred to Phase 2: the own-timer completion gap (the bar is full one RTT before the host's tick rule delivers the result; options: accept it, render over `duration + lead`, or an opt-in predicted expiry), because it is a UX call that needs the running game.

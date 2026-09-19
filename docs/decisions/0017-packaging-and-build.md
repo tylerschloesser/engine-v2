@@ -68,7 +68,7 @@ export default defineConfig({ plugins: [engine({ crate: './sim' })] })
 ```
 
 ```toml
-# sim/Cargo.toml  (plus rust-toolchain.toml: channel = "stable", targets = ["wasm32-unknown-unknown"])
+# sim/Cargo.toml  (plus rust-toolchain.toml: the exact stable pin of section 10)
 [package]
 name = "sim"
 edition = "2024"
@@ -97,6 +97,44 @@ and `engine::export_game!(MyGame);` in `lib.rs`. An external game crate must not
 **9. Size budgets and profiles.** Budgets are owned by Requirements and [0015](0015-threads-memory-and-topology.md) (`.wasm` ≤ 1 MB brotli warn, 2 MB fail; engine JS ≤ 50 KB brotli), measured on the release `game.wasm` at brotli 11. Baseline, stub engine + trivial game with std, `Vec` and a formatting panic hook: **19,836 B raw / 7,263 B brotli** (`opt-level = 3`); 16,680 / 6,434 after `wasm-opt -O3`. That is the fixed floor of allocator plus panic/fmt. The dev-profile module is 1.5 MB raw (8 MB for the synthetic crate) because of DWARF and is never measured against the budget.
 **Fast tier = dev profile.** `pnpm test` builds native test binaries and the `.wasm` on the dev profile (incremental, no LTO), including the `vite build` of the packaging smoke (`profile: 'dev'`); that is how the ≤ 30 s target of [0020](0020-testing-strategy.md) is met. The release profile is built by `vite build`, and in the slow tier by the size test, the tarball test, and a replay of the golden hashes on the release module (hashes were identical across `opt-level` 3 and `"s"` in [0002](0002-determinism-same-wasm-everywhere.md)).
 
+**10. Toolchain.** Exact pins, so every session, worktree and CI run uses the same tools. Requirements say stable Rust; an exact stable release satisfies that, and a floating `channel = "stable"` would let a toolchain update change codegen, and with it the build hash ([0005](0005-persistence-and-recovery.md)), between two machines.
+
+```toml
+# rust-toolchain.toml (repo root; an external game ships the same file)
+[toolchain]
+channel = "1.93.0"                     # the release the Rust-building spikes ran on
+targets = ["wasm32-unknown-unknown"]
+components = ["rustfmt", "clippy"]
+```
+
+| Tool | Pin | Where | Evidence |
+|---|---|---|---|
+| Rust | 1.93.0 | `rust-toolchain.toml` | spikes `vite-lib-worker-wasm`, `determinism-hash` |
+| Node | ≥ 22.18 (`engines`; `.node-version` = 22.18.0) | root `package.json` | both spikes ran on 22.18.0; Vite 8.3.0 needs `^20.19.0 \|\| >=22.12.0`, Vitest 5.0.1 `^22.12.0 \|\| ^24.0.0 \|\| >=26.0.0` |
+| pnpm | 11.x (`packageManager: "pnpm@11.25.0"`) | root `package.json` | spike: 11.25.0 |
+| Bun | 1.3.8 | Bun leg of the WASM suite ([0020](0020-testing-strategy.md)) only | spike: same state hash as Node |
+| Vite | 8.3.0 | devDependency (peer range stays `^8.0.0`) | spike matrix |
+| TypeScript | 7.0.2 | devDependency | spike |
+| `@playwright/test` | 1.63.0 (bundled Chromium 153) | devDependency | spikes `vite-lib-worker-wasm`, `zero-gc-webgpu` |
+| Vitest | 5.0.1 | devDependency | `npm view vitest version`, 2026-09-19; its `vite` peer range includes `^8.0.0` |
+| cargo-nextest | 0.9.145 | `cargo install cargo-nextest --locked --version 0.9.145` | `cargo search cargo-nextest`, 2026-09-19 |
+| Biome | 2.5.14 | devDependency `@biomejs/biome`, installed with `-E` | `npm view @biomejs/biome version`, 2026-09-19 |
+
+npm devDependencies are exact versions (no `^`), and `pnpm-lock.yaml` and `Cargo.lock` are committed. Bumping a pin is an ordinary commit that re-runs both tiers; a Rust or Playwright bump also re-checks the golden hashes ([0002](0002-determinism-same-wasm-everywhere.md)) and the zero-GC negative controls ([0016](0016-zero-gc-definition.md)).
+
+**Formatting and linting.** TypeScript, JavaScript and JSON: **Biome**, one devDependency and one native binary that formats, lints and sorts imports, configured by one root `biome.json`. Rust: `rustfmt` and `clippy` from the pinned toolchain, with the workspace lints of [0002](0002-determinism-same-wasm-everywhere.md). The commands:
+
+| Purpose | Command |
+|---|---|
+| Check TS/JS/JSON (format + lint, writes nothing) | `pnpm exec biome check .` |
+| Fix TS/JS/JSON | `pnpm exec biome check --write .` |
+| Check Rust formatting | `cargo fmt --check` |
+| Fix Rust formatting | `cargo fmt` |
+| Lint Rust (compiles, so not in the hook) | `cargo clippy --workspace --all-targets -- -D warnings` |
+| Type-check TypeScript (Biome does not) | `pnpm exec tsc --noEmit` per package |
+
+The two check rows that need no compile (Biome, `cargo fmt`) are the commit hook of [0021](0021-context-architecture.md). `pnpm lint` runs all four checks; its place next to `pnpm test` is in [0020](0020-testing-strategy.md) section 2.
+
 ## Alternatives rejected
 
 - **wasm-pack, wasm-bindgen:** generated per-build glue cannot be imported by a prebuilt loader, and an exact CLI/crate version lock enters every game's build ([0014](0014-js-wasm-boundary.md)). `@wasm-tool/rollup-plugin-rust` and `vite-plugin-wasm` assume wasm-bindgen; the first has 7 runtime dependencies.
@@ -106,10 +144,12 @@ and `engine::export_game!(MyGame);` in `lib.rs`. An external game crate must not
 - **Requiring `optimizeDeps.exclude` or `worker.format` from the game:** measured unnecessary on Vite 8.3 (fixed by Vite PR #21434).
 - **Pattern B only:** never failed, but costs every game a file and an option for a failure this repo and tarball installs cannot hit. **`?url` as the API:** above. **A bundled engine `dist`:** `tsc` output passed everything; a bundler adds a build step and nothing else.
 - **Release profile in the fast tier:** fat LTO disables incremental compilation; 10x slower on the synthetic crate.
+- **ESLint + Prettier:** two tools, two configs and a plugin chain (`typescript-eslint`, the Prettier-conflict config) where Biome is one pinned binary with one file; both start a Node process and ESLint's typed rules start the TypeScript program, which does not fit a commit gate that must stay under 3 s ([0021](0021-context-architecture.md)). Type-aware lint rules are given up; `tsc` and the tests cover what they would catch.
+- **`channel = "stable"`:** floats with every Rust release, so two machines can build different `.wasm` bytes from one commit.
 
 ## Consequences
 
-- Every game needs rustup with the `wasm32-unknown-unknown` target; `rust-toolchain.toml` installs it on first build. A native linker is needed for bindings and native tests.
+- Every game needs rustup; `rust-toolchain.toml` installs the pinned release, the `wasm32-unknown-unknown` target and the components on first build. A native linker is needed for bindings and native tests.
 - Dev and release modules differ (overflow checks, debug assertions, `log` levels); only the slow tier proves the release module against golden hashes.
 - A deploy must ship client and server from one `buildGame` output: a machine with `wasm-opt` and one without produce different hashes.
 - Untested by the spike, first exercised in Phase 3: the plugin's `fs.allow` entry; real Safari with a posted `Module`; `fs.watch` recursive on Linux/Windows; a `.wasm` under Vite's 4 KB inline limit (moot: the floor is ~17 KB); `ts-rs` adding zero bytes.
@@ -123,4 +163,5 @@ and `engine::export_game!(MyGame);` in `lib.rs`. An external game crate must not
 - Vite 8.3: https://vite.dev/guide/features.html#web-workers · https://vite.dev/config/worker-options.html · https://vite.dev/guide/dep-pre-bundling.html · https://vite.dev/config/server-options.html#server-fs-allow · https://github.com/vitejs/vite/pull/21434
 - Node exports and WASM loading: https://nodejs.org/api/packages.html#conditional-exports · https://runtime-keys.proposal.wintertc.org/ · https://nodejs.org/api/esm.html#wasm-modules · https://developers.cloudflare.com/workers/runtime-apis/webassembly/javascript/
 - Crates (registry, 2026-09-19): postcard 1.1.3 features https://crates.io/crates/postcard · ts-rs 12.0.1 export via `cargo test export_bindings` and `TS_RS_EXPORT_DIR` https://docs.rs/ts-rs/12.0.1/ts_rs/ · serde 1.0.229 https://crates.io/crates/serde
+- Toolchain (checked 2026-09-19): Biome 2.5.14 https://biomejs.dev/guides/getting-started/ (`biome check`, `-E` pinning) · https://biomejs.dev/reference/cli/ · Vitest 5.0.1 https://www.npmjs.com/package/vitest · cargo-nextest 0.9.145 https://crates.io/crates/cargo-nextest · toolchain file https://rust-lang.github.io/rustup/overrides.html#the-toolchain-file · versions of Rust, Node, pnpm, Bun, Vite, TypeScript and Playwright: the "Versions" line of the `vite-lib-worker-wasm` spike and the header of [`../../spikes/zero-gc-webgpu/RESULT.md`](../../spikes/zero-gc-webgpu/RESULT.md)
 - wasm-pack status and the cargo-only view: https://github.com/wasm-bindgen/wasm-pack/releases · https://nickb.dev/blog/life-after-wasm-pack-an-opinionated-deconstruction/ · https://github.com/wasm-tool/rollup-plugin-rust

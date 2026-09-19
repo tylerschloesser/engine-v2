@@ -41,6 +41,34 @@ export interface HostServices {      // everything the library needs from its ho
 export function createWorldServer(cfg: WorldConfig, host: HostServices): { accept(c: Connection): void; stop(): Promise<void> };
 ```
 
+**`WorldConfig`** is the one host-side configuration value, used unchanged by a server and by the single-player sim worker (`createClient` forwards it there). This is the consolidated field list; the meaning and default of each field are owned by the ADR named in its comment, and a field is added here when an ADR adds a knob (the disconnect grace, idle timeout and snapshot cadence are fixed numbers in [0013](0013-sessions-and-integrity.md) and [0005](0005-persistence-and-recovery.md), not knobs). Tick rate and chunk size are compile-time constants of the game crate ([0003](0003-game-facing-api.md)), not config.
+
+```ts
+export interface WorldConfig<Params = unknown> {
+  worldId: string;                    // storage key prefix `worlds/<id>` (0005)
+  buildHash: string;                  // hex SHA-256 from loadGame() / virtual:engine/wasm (0017); handshake token (0013), log stamp (0005)
+  params: {                           // WORLD PARAMS: read only when storage holds no world, then stored with genesis and
+                                      // fixed for the world's life; a stored world ignores this block (0005, 0013)
+    seed: string;                     // u64 as decimal text, since TS-facing values avoid u64 (0003); worldgen input (0008)
+    worldgen: Params;                 // the game's `Worldgen::Params`, typed by ts-rs (0008)
+    maxEntities?: number;             // state budget, default 262,144 (0007)
+    maxModifiedTiles?: number;        // state budget, default 1,048,576 (0007)
+    maxActionGrowth?: number;         // bytes of nominal headroom one action may need, default 4,096 (0007; check in 0004)
+  };
+  joinKey?: string;                   // default "": single-player and open servers (0013)
+  maxPlayers?: number;                // default 8 (0013)
+  keepTickingWhenEmpty?: boolean;     // default false: ticking stops with the last Disconnected (0013)
+  view?: { maxTilesPerAxis?: number; maxChunks?: number };   // untrusted-view clamp 256 and subscription cap 128, sent in Welcome (0010);
+                                      // the client-side zoom range is camera.setConstraints (0019)
+  cacheChunks?: number;               // host dense-chunk cache, default 1,024 = 4 MiB; invisible to the sim (0007)
+  arenaBytes?: number;                // sim-role arena, default 96 MiB (0015)
+  actionRate?: { perSecond?: number; burst?: number };       // default 20 / 40 per connection (0004)
+  bandwidth?: { softCapBytesPerS?: number; chunkRefillBytesPerS?: number; chunkBurstBytes?: number; hardCapBytesPerS?: number };  // 0010
+}
+```
+
+The host passes `params`, the budgets and `arenaBytes` to the instance as the one-time JSON config of [0014](0014-js-wasm-boundary.md). Client-only settings (client and gen arenas, worldgen worker count, camera constraints) are `createClient` options, not part of this type ([0015](0015-threads-memory-and-topology.md), [0008](0008-chunk-generation.md), [0019](0019-camera-input-and-overlay.md)).
+
 **Node.** The game's server package installs `ws`, constructs the `WebSocketServer`, and passes it to the engine's Node adapter, which is typed structurally (`{ on('connection', cb) }`, socket `{ send, close, on, bufferedAmount }`) so the engine imports nothing. The engine contains no RFC 6455 code. Bun and Deno adapters wrap their built-in servers.
 
 **Host-agnostic, honestly.** As defined under Hosting in `docs/spec/sync.md`: one long-lived single-threaded JS context with `WebAssembly`, a timer and monotonic clock, connections that all arrive in that same context, injected storage. A host that cannot pin all of a world's connections to one long-lived instance is out of scope by construction.

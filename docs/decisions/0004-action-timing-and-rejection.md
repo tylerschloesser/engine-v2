@@ -22,17 +22,21 @@ Actions are the only way to change the sim from outside, and "all actions with t
 | 1. Decode postcard into `G::Action` | host | Malformed: protocol error, connection closed ([0013](0013-sessions-and-integrity.md)). Not a rejection |
 | 2. Admit: rate limit (20 actions/s sustained, burst 40, per connection), then `G::admit` ([0001](0001-camera-and-presence.md)) | host only, never replayed | `Rejected`; **not logged** |
 | 3. Append to the frame for *T+1*; the frame is written to the log before it is applied ([0005](0005-persistence-and-recovery.md)) | host | storage failure is fatal to the world |
-| 4. `G::apply` at the start of *T+1*: deterministic validation against sim state, then writes. A rejecting `apply` must have written nothing. The engine first checks the state budget ([0007](0007-world-model.md)) | host live, host replay; clients run the same code for prediction | `Rejected`; **the action stays in the log** and replay rejects it again, identically |
+| 4. `G::apply` at the start of *T+1*: deterministic validation against sim state, then writes. A rejecting `apply` must have written nothing. The host runs the state-budget check (below) first | host live, host replay; clients run the same code for prediction | `Rejected`; **the action stays in the log** and replay rejects it again, identically |
 | 5. Ack | host | |
+
+**State-budget check.** `WorldWrite` puts are infallible ([0003](0003-game-facing-api.md)), so the state budget of [0007](0007-world-model.md) is enforced per action, before `apply` is called: if the headroom of either count (defined there) is below the world's `max_action_growth`, the host does not call `apply` and the result is `Rejected(Engine(StateBudgetFull))`. The check reads only sim state and world params, so the live host, replay and recovery decide identically, and the action stays in the log like any other step-4 rejection. It covers every game action, because the host cannot know what `apply` will write. It never covers `on_player`, `genesis` or tick-rule writes: for those the budget is soft and the headroom margin absorbs them. A predicting client does not run it (a replica cannot count the world); the ack decides.
 
 **Acks ride on deltas.** The results for every action a client sent during tick *T* are delivered in that client's network frame for tick *T+1*, in `seq` order, together with the deltas those actions caused, and the frame is applied atomically on the client. A frame is sent for a tick whenever there is an ack to carry, even with no deltas.
 
 ```rust
 pub struct Ack<G: Game> { pub seq: u32, pub tick: Tick, pub result: Result<Applied, Rejected<G>> }
-pub struct Applied { pub spawned: /* real EntityIds in spawn order */ .. }     // maps provisional ids (0012)
+pub struct Applied { pub spawned: /* real EntityIds in spawn order */ .. }     // provisional, see below
 pub enum Rejected<G: Game> { Game(G::Reject), Engine(EngineReject) }
 pub enum EngineReject { RateLimited, StateBudgetFull, EngineFault /* skip record, 0005 */ }
 ```
+
+`Applied.spawned` is provisional: it assumes engine-side rewriting of provisional entity ids, which is one of two options still open in the provisional-id item deferred to Phase 2 in [0012](0012-prediction-and-reconciliation.md) (Consequences); with stable-key addressing `Applied` carries nothing.
 
 **Flow to the prediction layer.** The client keeps a queue of unacked actions. On each frame it applies the deltas to its replica, pops every pending action with `seq <= ack_seq`, clears the overlay, and re-runs `apply` for what is still pending ([0012](0012-prediction-and-reconciliation.md)). Because the ack and its deltas share a frame, a confirmed ghost is replaced by the real thing in one render, and a rejected one disappears with no intermediate state. For each popped action the game's TypeScript gets `onActionResult(seq, Confirmed | Rejected(reason))` so it can show feedback. A local prediction failure is a hint, never a verdict: the client always sends the action. After a reconnect the client resends pending actions with `seq` above the host's last processed value, so nothing applies twice ([0013](0013-sessions-and-integrity.md)).
 
@@ -62,6 +66,7 @@ pub enum EngineReject { RateLimited, StateBudgetFull, EngineFault /* skip record
 - `apply` runs in three places from one source, so its validation must be complete: the UI preventing an invalid action is a convenience, never the rule.
 - The host asserts that a rejecting `apply` recorded no writes; enforcement by undo journal is deferred ([0003](0003-game-facing-api.md)).
 - The rate limit is an engine default, overridable per game.
+- A world at its state budget rejects every game action, including one that would only remove state, and the budget is fixed per world ([0007](0007-world-model.md)). Deferred to Phase 2: a per-action growth declaration (so that shrinking actions pass the check), because it adds a `Game` hook whose shape belongs with the other `apply` items deferred in [0003](0003-game-facing-api.md).
 - Deferred to Phase 2: a typed fast path for continuous action streams, because no planned game has one ([0001](0001-camera-and-presence.md)); the log estimate above would then be dominated by that stream (288-576 KB per player-hour at 10-20 Hz, quantized).
 
 ## Sources

@@ -15,14 +15,14 @@ Requirements in [`../spec/simulation.md`](../spec/simulation.md): the engine man
 - *Log* = a sequence of **segments**. A segment header carries the identity and names its base snapshot (segment 0's base is genesis: seed + world params). A segment holds one **frame** per tick that had actions: `len varint | tick_delta varint | count varint | records | crc32`; a record is `kind u8 | player_slot u8 | payload`. Kinds: game action (payload = `seq varint | G::Action`; the `seq` is what lets replay rebuild each player's last processed `seq`, [0004](0004-action-timing-and-rejection.md)), connection event, `Skip`. Ticks without actions are not logged; they are implied by `tick_delta`.
 - No compaction: the full log from tick 0 is kept (sizes: [0004](0004-action-timing-and-rejection.md)). Snapshots are pruned to the base snapshot of every segment plus the latest two. Sealed segments may be gzip-compressed with `CompressionStream`.
 
-**Cadence.** A snapshot every **60 s of sim time (1,200 ticks at 20 Hz)** if anything changed, plus at every clean boundary the host can detect: zero-player pause, server shutdown signal, browser `visibilitychange -> hidden` and `pagehide` (best effort, never relied on). Log frames are appended **before** they are applied (write-ahead); the storage `sync` barrier runs at most once per second when dirty.
+**Cadence.** A snapshot every **60 s of sim time (1,200 ticks at 20 Hz)** if anything changed, plus at every clean boundary the host can detect: zero-player pause, server shutdown signal, browser `visibilitychange -> hidden` and `pagehide` (best effort, never relied on). Log frames are handed to `append` **before** they are applied (write-ahead); the storage `sync` barrier runs at most once per second when dirty. When an appended frame counts as durable depends on the adapter (table under Storage).
 
 **Loss windows.**
 
 | Event | Admitted actions lost | Action-free sim progress lost |
 |---|---|---|
 | Tab close, worker or renderer crash, WASM panic | 0 (at most the one in-flight frame) | up to 60 s (1,200 ticks) |
-| OS crash or power loss, local disk | up to 1 s | up to 60 s |
+| OS crash or power loss on any local-disk adapter; server process killed (`fs` adapter) | up to 1 s | up to 60 s |
 | Server on an object-store adapter (batched appends) | up to 2 s | up to 60 s |
 
 After a crash the world resumes at max(latest snapshot tick, last logged frame tick). Lost idle progress (a furnace re-smelts a few ingots) is indistinguishable from the tab having been paused.
@@ -35,16 +35,31 @@ After a crash the world resumes at max(latest snapshot tick, last logged frame t
 
 ```ts
 interface Storage {
+  // write side: called from the tick path, return value never awaited there
+  append(key: string, bytes: Uint8Array): void | Promise<void>;
+  sync(key: string): void | Promise<void>;                  // durability barrier; may be a no-op
+  write(key: string, bytes: Uint8Array): void | Promise<void>;   // atomic replace (snapshots, manifest, sessions)
+  delete(key: string): void | Promise<void>;
+  onError: ((err: unknown) => void) | null;                 // set by the host; a failed or lost write is fatal to the world (0004)
+  // off the tick path only: load, recovery, pause, shutdown, export
+  flush(): Promise<void>;                                   // resolves when everything handed over so far is durable
   read(key: string): Promise<Uint8Array | null>;
-  write(key: string, bytes: Uint8Array): Promise<void>;    // atomic replace
-  append(key: string, bytes: Uint8Array): Promise<void>;
-  sync(key: string): Promise<void>;                         // durability barrier; may be a no-op
   list(prefix: string): Promise<string[]>;
-  delete(key: string): Promise<void>;
 }   // keys: worlds/<id>/manifest, log/<segment>, snap/<tick>, sessions
 ```
 
-- *Browser*: OPFS with sync access handles, owned by the sim worker (a dedicated worker; its tick path calls the synchronous handle directly, producing no Promise garbage). The worker holds `navigator.locks.request("world:<id>", { ifAvailable: true })` for its lifetime; if unavailable the engine reports `WorldBusy` ("open in another tab"). The exclusive OPFS handle is the backstop. The main-thread entrypoint calls `navigator.storage.persist()` once after a user gesture at world creation (the method is not exposed in workers) and exposes `{ persisted, usage, quota }`; the answer is never relied on. No OPFS (Safari private mode): an in-memory adapter and `durable: false`.
+**The tick path never awaits storage and, in steady state, no shipped adapter allocates a promise on it.** The sim host is one code base for the sim worker and the server ([0015](0015-threads-memory-and-topology.md)): it calls `append`/`sync`/`write`/`delete`, ignores the return value, and learns of failure only through `onError`. `bytes` is an engine-owned view valid only during the call, so an adapter either consumes it synchronously or copies it. Calls on one key take effect in call order. The host awaits `flush()` at the clean boundaries of Cadence (pause, `stop()`, before export) and nowhere else. `void | Promise<void>` exists for deployer-written adapters whose backend is promise-only; their allocation is their own, and only the browser is held to [0016](0016-zero-gc-definition.md).
+
+| Adapter | `append` does | A frame is durable | `write` (snapshot) |
+|---|---|---|---|
+| Browser OPFS | synchronous `write` at the end offset of a sync access handle opened at load; returns `void` | against tab close, worker crash and WASM panic: when `append` returns. Against OS crash or power loss: at the next `sync` (synchronous `flush()`, ≤ 1 s) | synchronous write + `flush()` into a scratch file whose handle was opened in advance; the rename to `snap/<tick>` and the opening of the next scratch handle are promise-only OPFS calls, started and not awaited (a few promises per 60 s; the worker reaches its event loop through the `yield` flag of [0015](0015-threads-memory-and-topology.md)) |
+| Node / Bun / Deno `fs` | copies into a preallocated in-memory buffer; returns `void` | when the asynchronous `write` + `datasync` started by `sync` (≤ 1 s) or by a full buffer completes, off the tick path. Against a WASM panic: when `append` returns (the JS host and its buffer survive) | temp file, `datasync`, `rename`, all asynchronous after one copy |
+| Object store, Durable Object (deployer-written) | copies into a buffer | when the numbered part object is stored; parts are cut at most every 2 s | one object put |
+| Memory | copies | never (`durable: false`) | replaces the value |
+
+These are the durability points behind the loss windows above. Recovery needs no atomic rename to be safe: it takes the newest snapshot whose CRC verifies, so a torn or unrenamed snapshot only means the previous one is used.
+
+- *Browser*: OPFS with sync access handles, owned by the sim worker (a dedicated worker). The worker holds `navigator.locks.request("world:<id>", { ifAvailable: true })` for its lifetime; if unavailable the engine reports `WorldBusy` ("open in another tab"). The exclusive OPFS handle is the backstop. The main-thread entrypoint calls `navigator.storage.persist()` once after a user gesture at world creation (the method is not exposed in workers) and exposes `{ persisted, usage, quota }`; the answer is never relied on. No OPFS (Safari private mode): an in-memory adapter and `durable: false`.
 - *Server*: the engine ships a Node `fs` adapter (built-in module, zero npm dependencies) and the memory adapter. Hosts without files (Durable Objects, object stores) get a deployer-written adapter that emulates `append` with numbered part objects; per-frame CRCs tolerate a partial last part.
 - *Export/import*: `exportWorld(id)` streams one gzip file holding the manifest, all segments, the pruned snapshot set and the session table; `importWorld(bytes)` writes them through `Storage` and then takes the normal load path, including the upgrade path. This is the only real protection against Safari's 7-day eviction, and the move from single-player to hosted.
 

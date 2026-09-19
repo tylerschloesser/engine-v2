@@ -28,7 +28,7 @@ Phase 1 output (2026-09-19). Input to Phase 2, which turns it into `PLAN.md` (se
 | [0014] | JS↔WASM boundary | Hand-rolled numbers-only `extern "C"` ABI, two output-only imports, fixed regions, one loader; no wasm-bindgen |
 | [0015] | Threads, memory, topology | Main (TS) + client worker + net or sim worker + gen workers; SAB rings/seqlock/triple buffer only; mandatory COOP/COEP; fixed arena per instance |
 | [0016] | Zero-GC definition | Per-isolate byte budgets (main 110, workers 8 B/frame, net ≤ 1 KB/message) asserted with CDP sampling + trace, permanent negative controls |
-| [0017] | Packaging and build | One npm package with subpath exports + bundled crate; plain `cargo` driven by the engine's Vite plugin; `.wasm` as data with a build hash; tarball test |
+| [0017] | Packaging and build | One npm package with subpath exports + bundled crate; plain `cargo` driven by the engine's Vite plugin; `.wasm` as data with a build hash; tarball test; exact toolchain pins, Biome + rustfmt + clippy |
 | [0018] | Renderer | TS WebGPU "ferry" on main; Rust produces DrawList + texels; one full-viewport terrain shader over page/indirection textures; art contract; frame budget |
 | [0019] | Camera, input, overlay | Camera is main-thread state written to a seqlock block; semantic input events; CPU picking from the DrawList; custom-property DOM anchoring |
 | [0020] | Testing strategy | nextest + Vitest (Node) + Playwright/CDP; five fast suites in 55 s; virtual-clock netcode harness; test entrypoint; CI on SwiftShader |
@@ -118,7 +118,7 @@ MULTIPLAYER: the sim worker is replaced by a net worker plus a server process
 Layout after Phase 3 (owner: [0017]; `.claude/` and nested `CLAUDE.md` files: [0021], `docs/context-architecture.md`):
 
 ```
-pnpm-workspace.yaml  package.json  Cargo.toml (workspace, profiles, lints)  Cargo.lock  rust-toolchain.toml
+pnpm-workspace.yaml  package.json  Cargo.toml (workspace, profiles, lints)  Cargo.lock  rust-toolchain.toml  biome.json   (pins: [0017] §10)
 packages/engine/                  the one publishable package ("private": true for now), zero runtime deps
   package.json                    exports map below; "files": ["dist", "crates"]
   src/ -> dist/                   TypeScript compiled by tsc (no bundler)
@@ -135,7 +135,7 @@ games/reference/                  private Vite app
   sim/                            the game crate (cdylib + rlib): impl Game, Worldgen, ClientSide; export_game!
   assets/ + scripts/              asset script -> tiles.png/json, sprites.png/json ([0018] art contract)
 games/reference-server/           private; depends on `engine` + `ws`; builds the WebSocketServer and injects it
-tests/ or per-package test dirs   suites of [0020]; budgets file; golden hashes; manual iOS checklist
+tests/ or per-package test dirs   suites of [0020]; golden hashes; manual iOS checklist (the budgets file is `packages/engine/budgets.json`, [0020] §9)
 .claude/ (settings.json, hooks/, rules/, skills/)   created in Phase 3's first milestone ([0021])
 ```
 
@@ -165,9 +165,10 @@ trait Game {                                   // 0003
     type Action; type Reject: From<Unknown>;   // Codec + TS: plain data, postcard on the wire, JSON from the UI
     type Entity; type Player; type Global;     // replicated whole values: chunk scope / private / everyone (0011)
     type Presence;                             // <= 32 B, unlogged, client-produced (0001)
-    type Ui;                                   // Serialize + TS + PartialEq: what the DOM observes
+    type Ui: Default;                          // Serialize + TS + PartialEq + Default: what the DOM observes
     type Client: ClientSide<Self>;             // never replicated or hashed; floats allowed
     fn register(&mut Registry);                // trait tables + entity prototypes (TraitSet, footprint) (0007)
+    fn prototype(&Entity) -> PrototypeId;      // engine derives occupancy and delta scope from it
     fn genesis(w); fn on_player(w, who, Joined|Connected|Disconnected);
     fn apply(w: &mut dyn WorldWrite, who, &Action) -> Result<(), Reject>;   // host live, replay, client prediction
     fn predict(&Action) -> bool;               // opt-out flag only (0012)
@@ -190,7 +191,7 @@ client.input.{on('tap'|'hover'|'longpress'|'drag*', cb), setMode, suspend, resum
 client.overlay.{anchor(el, x, y), anchorSlot(el, slot)}                                     // 0019
 // engine events the surface must carry: SaveIncompatible, WorldBusy, durable:false, storage estimate, Resyncing,
 // onFatal (0005); rendererLost (0018); version mismatch / updating (0013); exportWorld / importWorld (0005)
-// server: createWorldServer(cfg, { wasm, storage, clock, timer, onIdle }).accept(connection)   (0009)
+// server: createWorldServer(cfg: WorldConfig, { wasm, storage, clock, timer, onIdle }).accept(connection)   (0009: field list)
 ```
 
 **The reference game on this API** (scope: `docs/spec/reference-game.md`; coverage list and scripted-test extras: [0003] Consequences):
@@ -237,7 +238,7 @@ Drop: client dead after 3 s without a frame → backoff 0, 0.5, 1, 2, 5 s; prese
 
 ## 6. Testing strategy
 
-Owner: [0020]; what is asserted: [0002] (determinism), [0016] (zero GC). One command, `pnpm test [suite] [-t pattern]`, builds incrementally then runs the fast suites in parallel with a one-line-per-suite output contract; `pnpm test:slow` runs the rest.
+Owner: [0020]; what is asserted: [0002] (determinism), [0016] (zero GC). One command, `pnpm test [suite] [-t pattern]`, builds incrementally then runs the fast suites in parallel with a one-line-per-suite output contract; `pnpm test:slow` runs the rest; `pnpm lint` runs the format, lint and type checks of [0017] §10, whose no-compile subset is the commit hook ([0021]).
 
 | Suite | Runner | Budget | Holds |
 |---|---|---|---|
@@ -258,7 +259,7 @@ Owner: [0020]; what is asserted: [0002] (determinism), [0016] (zero GC). One com
 | Budget | Number | Owner |
 |---|---|---|
 | Frame time | 60 fps = 16.6 ms on the baseline phone: main rAF callback ≤ 4 ms, GPU ≤ 6 ms, client-worker `frame` ≤ 8 ms (parallel). Desktop proxy: main ≤ 1.3 ms, worker ≤ 2.7 ms. *Derived in this phase.* | [0018] §9 |
-| Tick time | ≤ 10 ms per 50 ms tick on the slowest host (phone sim worker, Fly shared-cpu-1x); desktop proxy ≤ 3 ms on the standard large save. *Derived in this phase.* | [0010] |
+| Tick time | ≤ 10 ms per 50 ms tick on the slowest host (phone sim worker, Fly shared-cpu-1x); desktop proxy ≤ 3 ms on the standard large save (state budget full, 8 players; defined in [0020] §9). *Derived in this phase.* | [0010] |
 | Chunk generation | ≤ 1 ms per chunk on the baseline phone; desktop benchmark warns above 0.25 ms (measured 0.09–0.11 ms). Host warmer 2 ms per tick gap. Join at full zoom-out: 81 visible chunks ≈ 8 ms desktop, 25–40 ms phone (est.) | [0008] |
 | GPU upload | ≤ 64 KiB of chunk texels per frame; constant 2–10 draws | [0018] |
 | Bandwidth per client, steady | down 1–5 KB/s typical; up ~0.4 KB/s while panning, ~0 at rest; soft cap 16 KB/s for tick frames | [0010] |
@@ -277,15 +278,15 @@ Owner: [0020]; what is asserted: [0002] (determinism), [0016] (zero GC). One com
 
 Not the plan; the dependencies the plan must respect. `docs/process.md` requires a thin vertical slice (chunked world on screen, camera input, sim in a worker, one action round trip, tests green) as early as possible, and the test harness (with GC and determinism checks) early.
 
-1. **Scaffold first:** workspaces, `packages/engine` exports map, the crate with `export_game!` + loader + `engine_init` ([0014]), the Vite plugin/`buildGame` ([0017]), a fixture game, COOP/COEP, and `.claude/settings.json` + commit hook + `write-adr` skill ([0021]). The `vite-lib-worker-wasm` spike is the template.
-2. **Test harness is milestone 2, not later:** `pnpm test` with the output contract, nextest + Vitest + Playwright wired, the injectable clock/stepping API, the import-allowlist test, the first golden hash running natively + Node + three browsers, and the zero-GC harness with negative controls (ported from `spikes/zero-gc-webgpu`) running against whatever page exists. Every later milestone adds tests to it. The `run-tests` and `gc-test` skills land here ([0021]).
+1. **Milestone 1 is repo scaffolding only, sized for one session:** pnpm + cargo workspaces with empty `packages/engine` and crate, the toolchain pins and `biome.json` / rustfmt / clippy setup with their exact commands ([0017] §10), `.claude/settings.json` (allowlist + the commit hook) and the `write-adr` skill ([0021]), and a **skeleton `pnpm test`** entrypoint that runs an empty Rust suite (nextest) and an empty TS suite (Vitest) under the quiet-on-success output contract of [0020] §2, plus `pnpm lint`. No engine code, no browser suite, no CI.
+2. **The real test harness is milestone 2, not later.** It brings the minimum it needs to have something to test (the crate with `export_game!` + loader + `engine_init` ([0014]), `buildGame` and the Vite plugin ([0017]), one fixture game, a COOP/COEP page; the `vite-lib-worker-wasm` spike is the template) and then: Playwright wired into `pnpm test`, the injectable clock/stepping API, the import-allowlist test, the first **determinism hash across runtimes** (native + Node + Bun + three browsers), and the **zero-allocation assertion** with negative controls (ported from `spikes/zero-gc-webgpu`) running against whatever page exists. If that is more than one session, Phase 2 splits it (build + determinism hash, then the zero-GC harness) but schedules nothing else between. Every later milestone adds tests to it. The `run-tests` and `gc-test` skills land here ([0021]).
 3. **The slice needs, in dependency order:** SAB ring/seqlock/triple-buffer primitives ([0015]) → world model core + `Worldgen` + gen worker ([0007], [0008]) → renderer terrain path + camera/input on main ([0018], [0019]) → `Store`/`Delta`/`WorldWrite` + tick loop in the sim worker ([0003], [0007]) → wire framing + in-browser `Connection` + subscriptions ([0011], [0009], [0010]) → `dispatch` → `apply` → ack without prediction ([0004]). Single-player first: it needs no socket and exercises the whole protocol.
 4. **Codec before anything persistent or networked:** `Codec` with NaN canonicalisation and the state hash ([0002]) underlie the wire, the log, snapshots and desync hashes; golden-bytes tests fix section ids ([0011]).
-5. **Prediction after the unpredicted round trip works**, and only after deciding the provisional-id and taint questions (section 10); its renderer hand-off (overlay change list, `predicted` flag) depends on the DrawList ([0012], [0018]).
+5. **Prediction after the unpredicted round trip works**, and only after Phase 2 has decided the provisional-id question (section 10); the taint rule is settled inside the prediction milestone, with tests; its renderer hand-off (overlay change list, `predicted` flag) depends on the DrawList ([0012], [0018]).
 6. **Persistence after the tick loop and codec; recovery and upgrade paths after persistence** ([0005]). Heavy mode arrives with the first snapshot. Panic recovery needs the loader's trap handling ([0014]).
 7. **Multiplayer after single-player:** server entrypoint + Node adapter + `games/reference-server`, net worker, handshake/reconnect/epochs, desync hashes ([0009], [0013]); the netcode harness (in-memory pairs first) lands with the server entrypoint ([0020]). Presence and interpolation can land with it or just before ([0001], [0012]).
 8. **Reference-game features ride the engine milestones** that enable them (collect = first action; furnace = multi-tile entity + timer wheel; roster = Global scope; overlay anchoring with the first button); engine tests use fixture games so they never wait for the reference game ([0020]).
-9. **Early measurements that can change numbers:** CI workflow with SwiftShader (spike B) as soon as a GPU test exists; first on-device run (iPhone: determinism page, arena reservation, fill-rate, anchoring) as soon as the slice renders; Durable Objects feasibility any time after the server entrypoint. Schedule each explicitly; none blocks the slice.
+9. **Early measurements that can change numbers:** the CI workflow with SwiftShader (spike B) is added in the milestone that lands the first GPU test, never in milestone 1 (if that is the zero-GC harness, Phase 2 may give the workflow its own session directly after it); first on-device run (iPhone: determinism page, arena reservation, fill-rate, anchoring) as soon as the slice renders; Durable Objects feasibility any time after the server entrypoint. Schedule each explicitly; none blocks the slice.
 10. **Each milestone fits one session** and names its spec/ADR reading list, exit criteria and verifying commands (`docs/process.md`); skills and rule files attach to the milestone that makes them real ([0021]).
 
 ## 9. Risks (ranked)
@@ -293,7 +294,7 @@ Not the plan; the dependencies the plan must respect. `docs/process.md` requires
 | # | Risk | L / I | Mitigation | Trigger: it has happened when |
 |---|---|---|---|---|
 | 1 | **Real-iPhone behaviour is untested**: WASM determinism on device, terrain fill-rate, memory ceiling (148 MiB of arenas + GPU under WebKit's ~300 MB kill line), DOM anchoring, posted `Module`, OPFS latency, worker-socket resume | M / H | Manual checklist from the first rendering milestone ([0020] §10); stated fallbacks: render-scale cap 1.5 → 1, drop neighbour reads, per-chunk quads ([0018]); smaller arenas by config ([0015]); per-anchor `translate()` ([0019]); `instantiateStreaming` in the worker ([0017]) | golden hash differs on the phone; < 60 fps or GPU > 6 ms at max zoom-out; tab reloads under play; anchors swim |
-| 2 | **Prediction open problems** (provisional ids, `NotPredictable` taint, overlay → renderer change list, host atomicity, timer completion gap, iterating reads) | H / M | Interim rule: address by tile; decide the first two in Phase 2; ship the unpredicted round trip first so prediction is additive ([0012], [0003]) | an action needs an `EntityId` of a predicted entity; local reject while host accepts in tests; ghost flicker on ack |
+| 2 | **Prediction open problems** (provisional ids, `NotPredictable` taint, overlay → renderer change list, host atomicity, timer completion gap, iterating reads) | H / M | Interim rule: address by tile; decide provisional ids in Phase 2 and the taint rule in the prediction milestone; ship the unpredicted round trip first so prediction is additive ([0012], [0003]) | an action needs an `EntityId` of a predicted entity; local reject while host accepts in tests; ghost flicker on ack |
 | 3 | **128-chunk cap is tight at maximum zoom-out**: a square 256-tile view needs 121 chunks for ring 1 alone, leaving 7 for look-ahead and hysteresis | H / L–M | Known Phase 3 tuning item: eviction already degrades to farthest-first ([0010]); options are a lower default max zoom, a larger cap, or look-ahead only below a zoom threshold. Cap and zoom range both come from a Requirement, so changing either default goes to Tyler | chunk enter/leave churn or late chunks while panning at full zoom-out in the netcode byte counters |
 | 4 | **WebGPU wrapper-object floor and Safari/Firefox differences**: the floor (≈ 104–118 B/frame) is browser-owned and measured in desktop Chromium only; `writeBuffer` from a SAB view and texture-as-view are unverified elsewhere; no GC instrument outside Chromium | M / M | Budget by formula in one budgets file ([0016]); constant wrapper count per frame ([0018]); manual Safari/Firefox run of the harness shape; iOS "by feel" checklist | Chrome update moves the clean number past 110; validation error on Safari; visible periodic hitch on iOS |
 | 5 | **Durable Objects feasibility unverified** (CPU accounting for timer ticks, timer accuracy, 128 MB headroom, restart frequency) | M / L | DO is the second target; design assumes nothing DO-specific; Node/Bun on Fly meets the cost target alone ([0009]) | feasibility check shows ticks billed or throttled beyond the $5 target, or < 96 MiB usable |
@@ -301,7 +302,7 @@ Not the plan; the dependencies the plan must respect. `docs/process.md` requires
 | 7 | **Dev-loop and suite budgets are floors from trivial crates**; real sim + serde + fat LTO may exceed 30 s / 60 s | M / M | Dev profile in the fast tier, crate split as first lever, intermediate profile, demotion rule ([0017], [0020]) | suite warning (> budget) or failure (> 1.5x) in `pnpm test`; rebuild > 30 s |
 | 8 | **`Tracing.start` stall** (~10 s in 4/570 spike runs; 0/400 with `--disable-features=SpareRendererForSitePerProcess`, suggestive not proven) | L / L | Flag is in the config; harness times the call and reports a named warning, not a failure ([0016]) | browser suite sporadically ≈ 10 s over budget with that warning |
 | 9 | **Vite pattern-A symlink caveat**: `vite dev` + engine reached through a symlink with no workspace-root marker puts the worker URL outside `server.fs.allow` | L / L | Root `pnpm-workspace.yaml` avoids it here; plugin appends the engine dir to `fs.allow` (untested); pattern B is the documented escape ([0017]) | "outside of Vite serving allow list" in the Vite log; worker `error` before ready |
-| 10 | **Whole-value puts or frame sizes exceed the bandwidth budget** on a busy base; network figures are assumptions | L–M / M | Byte counters in the netcode suite from the first encoder; engine-side byte diffing is ready as a non-API change ([0011], [0010]) | bytes per client per tick above the numbers file; soft cap degrade engaged in the reference game |
+| 10 | **Whole-value puts or frame sizes exceed the bandwidth budget** on a busy base; network figures are assumptions | L–M / M | Byte counters in the netcode suite from the first encoder; engine-side byte diffing is ready as a non-API change ([0011], [0010]) | bytes per client per tick above the budgets file ([0020] §9); soft cap degrade engaged in the reference game |
 | 11 | **Deprecated CDP call** (`Target.sendMessageToTarget`) removed by a Chrome update | L / M | Own CDP WebSocket with flattened sessions ([0016]); negative controls turn the suite red rather than silently blind | worker sessions fail to attach after a Playwright/Chromium bump |
 | 12 | **Game-author determinism slips** (HashMap, std transcendentals, NaN) | M / L | Lints, allowlist, heavy mode, cross-engine goldens ([0002]) | heavy-mode or golden mismatch naming the first divergent tick |
 
@@ -316,7 +317,8 @@ Every item an ADR or spec file marks "Deferred". "2" = Phase 2 decides it in `PL
 | Determinism run on real x86-64, physical iPhone and Android | spike had emulation and desktop builds only; first CI milestone closes x86 | [0002] | 2→3 |
 | Whether `+simd128` and `wasm-opt` may be enabled for the sim module | unmeasured; both stay off | [0002] | 2→3 |
 | Provisional ids for predicted entities (stable key vs id rewriting) | depends on final action shapes and whether the engine may see inside `G::Action` | [0012], [0003] | 2 |
-| Taint rule after a `NotPredictable` pending action | needs tests against the real pending queue | [0012], [0003] | 2 |
+| Taint rule after a `NotPredictable` pending action | needs tests against the real pending queue, i.e. code | [0012], [0003] | 3 |
+| Per-action growth declaration, so shrinking actions pass the state-budget check in a full world | adds a `Game` hook; belongs with the other `apply` items | [0004], [0007] | 2 |
 | Per-frame overlay change list + `predicted` flag for the renderer | depends on the DrawList design | [0012], [0003] | 2 |
 | Host-side atomicity of `apply` via an undo journal (asserted until then) | cost unmeasured | [0012], [0003], [0004] | 2→3 |
 | Own-timer completion gap of one RTT | UX call that needs the running game | [0012], [0003] | 2→3 |
@@ -343,30 +345,37 @@ Every item an ADR or spec file marks "Deferred". "2" = Phase 2 decides it in `PL
 | On-device memory ceilings (largest reservation, sim + client + WebGPU coexisting, untouched pages) | needs Tyler's devices | [0015] | 2→3 |
 | Ring capacities, uplink poll period, control-block layout, `yield` protocol | implementation numbers behind a fixed mechanism | [0015] | 2 |
 | Verifying COOP/COEP listings on one real static host | the spike could not deploy | [0015] | 2→3 |
-| Whether the periodic snapshot write is inside the strict zero-GC window (default: inside) | no persistence code or measurement | [0016] | 2→3 |
+| Whether the periodic snapshot `write` is inside the strict zero-GC window (default: inside; log `append`/`sync` are inside by construction, [0005]) | its rename uses promise-only OPFS calls; no persistence code or measurement | [0016] | 2→3 |
 | Final main-thread B/frame number and overlay-anchoring string constant | depend on the real renderer's wrapper count | [0016] | 3 |
 | Software-adapter form of assertion B (scene, N, per-function numbers) | SwiftShader on a runner unmeasured | [0016] | 3 |
+| Untested by the packaging spike, first exercised in Phase 3: the plugin's `server.fs.allow` entry; recursive `fs.watch` on Linux/Windows; real Safari with a posted `Module`; `ts-rs` adding zero bytes | the spike ran on macOS with a tarball install and Playwright WebKit only | [0017] | 3 |
 | Whether `crates/` holds one crate or several | follows the module breakdown; first lever if the dev loop slows | [0017] | 2 |
 | Real release build time and size; intermediate profile; `debug = "line-tables-only"`; snapshot → reload → restore on Rust edit | need a real sim | [0017] | 3 |
 | Zero-GC harness shape run by hand in Safari and Firefox | CDP instrument is Chromium-only | [0018] | 2→3 |
 | Terrain shader fill-rate on real phones (manual check, fallbacks stated) | phones cannot be automated; no shader yet | [0018], `docs/spec/client.md` | 2→3 |
 | Exact WGSL, manifest JSON schema, upload-ring record layout, worker frame clock | implementation details, no cross-domain effect | [0018] | 2 |
 | Overlay anchoring on iOS Safari (manual check, fallback stated) | phones cannot be automated | [0019], `docs/spec/client.md` | 2→3 |
+| "Follow with user offset" (a follow target currently disables panning entirely) | needs a later decision; no v1 game feature asks for it | [0019] | 2 |
 | Input-ring record layout, easing curves, wheel constants, `FrameCx` shape | tuning or implementation details | [0019] | 2 |
 | Spike B: SwiftShader WebGPU on a stock `ubuntu-latest` runner | local loop proven, fallback known; runs with the first CI workflow | [0020], `docs/spec/testing.md` | 3 |
 | Spike C: byte-identical traces over loopback `ws` | in-memory path is deterministic by construction | [0020] | 3 |
 | Measuring the 30 s rebuild and per-suite numbers; sccache vs shared `CARGO_TARGET_DIR` | no code to measure | [0020] | 3 |
 
-**Gaps found while writing this file** (no ADR states them; small, Phase 2 decides inside the relevant milestone): the `createClient` option that selects single-player vs a server URL, and the world id / seed / params it passes; how `client.input` events and the input ring surface inside `FrameCx`; how the main thread learns `Welcome.last_processed_action_seq` to seed `seq` (a field of the clock seqlock block is the obvious carrier); whether `dispatch` before `Welcome` queues or fails; the `TileTexel::from_tables` registration call; where test files live (one `tests/` tree vs per package).
+**Gaps found while writing this file** (no ADR states them; small, Phase 2 decides inside the relevant milestone): the `createClient` option that selects single-player (it forwards a `WorldConfig`, [0009]) vs a server URL; how `client.input` events and the input ring surface inside `FrameCx`; how the main thread learns `Welcome.last_processed_action_seq` to seed `seq` (a field of the clock seqlock block is the obvious carrier); whether `dispatch` before `Welcome` queues or fails; the `TileTexel::from_tables` registration call; where test files live (one `tests/` tree vs per package).
 
 ## 11. Items awaiting Tyler
 
 1. **Sign-off on `serde_json`** in the engine crate, which goes beyond the approved `serde` + `postcard` (+ `ts-rs` at build time) list. It parses UI-dispatched action JSON and one-time config inside the client/sim WASM; alternatives and why they lose are in [0003]. Related, for the same sign-off: `ts-rs` is declared as a normal dependency whose code LTO removes (the size test watches it), and `libm` would be added pinned only if the engine ever needs a transcendental ([0017] §7).
 2. **Proposed amendment to the zero-GC Requirement wording** in `docs/spec/testing.md`: the net worker cannot be "approximately zero allocation" because the WebSocket API allocates a `MessageEvent` + `ArrayBuffer` per message; [0016] budgets it at ≤ 1 KB per message with zero major GCs and confines it to its own heap. The same edit could replace "about 100 B/frame" with the measured main-thread floor (≈ 104–118 B/frame in production shape; test budget 110). Until Tyler edits the Requirement, [0016] is the operative reading.
 3. **Environment:** accept the Xcode license (`sudo xcodebuild -license accept`) so native `cargo test` and the `ts-rs` bindings step link, or confirm the runner keeps exporting `DEVELOPER_DIR=/Library/Developer/CommandLineTools` ([0020] §10).
-4. **Devices for the manual checklist:** [0018], [0008] and [0015] assume one iPhone (12-class or newer, iOS 26+) and one mid-range 4 GB Android phone. Does Tyler have the Android device, or is Android checked on desktop Chrome only?
-5. **Accounts and spend for two deferred checks:** a Cloudflare Workers paid plan ($5/month) for the Durable Objects feasibility check ([0009]) and one real static host deploy to verify the COOP/COEP listings ([0015]); plus a Fly machine if the cost target is to be verified rather than computed.
-6. **Heads-up, no action yet:** if Phase 3 tuning of risk 3 needs a different default maximum zoom or subscription cap, that changes numbers stated in the Requirements of `docs/spec/client.md` and will come back as a question.
+4. **Proposed amendment to the Requirement wording on deltas and prediction.** `docs/spec/sync.md` (Requirements, "The engine abstracts this: the game defines the data model, the deltas, and the interpolation and prediction logic") and `docs/spec/overview.md` (engine/game table, game column: "Delta definitions, interpolation and prediction logic"; Fixed decisions: "worldgen, actions, tick rules, deltas, prediction") give the game more than [0003], [0011] and [0012] do. Backed by `spikes/prediction-api`, the engine derives deltas from `WorldWrite` puts and prediction from the shared `apply`, and owns interpolation; the game defines only data, rules, presence, and optional `predict()` opt-outs. Until Tyler edits the Requirements, the ADRs are the operative reading. Proposed text:
+   - `sync.md`: "The engine abstracts this: the game defines the data model (actions, entities, per-player and global state, presence) and the rules (`apply` and tick rules). The engine derives deltas from the rules' writes, predicts by re-running the same `apply` on the client, and interpolates remote motion. The game writes no delta types and no separate prediction or interpolation logic; it may opt individual actions out of prediction."
+   - `overview.md` table, game column: "Replicated data types, the presence type, per-action prediction opt-outs"; engine column: "Transport, delta derivation and delivery, the interpolation/prediction machinery".
+   - `overview.md` Fixed decisions: "(worldgen, data types, actions, tick rules, presence, client-side view code)".
+5. **Collect range has no number.** `docs/spec/reference-game.md` says "within a certain distance"; [0001] checks `dist(from, tile) <= RANGE`. Proposed default: **3 tiles** (centre of the player circle to the centre of the resource tile), to be recorded in the Requirement.
+6. **Devices for the manual checklist:** [0018], [0008] and [0015] assume one iPhone (12-class or newer, iOS 26+) and one mid-range 4 GB Android phone. Does Tyler have the Android device, or is Android checked on desktop Chrome only?
+7. **Accounts and spend for two deferred checks:** a Cloudflare Workers paid plan ($5/month) for the Durable Objects feasibility check ([0009]) and one real static host deploy to verify the COOP/COEP listings ([0015]); plus a Fly machine if the cost target is to be verified rather than computed.
+8. **Heads-up, no action yet:** if Phase 3 tuning of risk 3 needs a different default maximum zoom or subscription cap, that changes numbers stated in the Requirements of `docs/spec/client.md` and will come back as a question.
 
 [0001]: docs/decisions/0001-camera-and-presence.md
 [0002]: docs/decisions/0002-determinism-same-wasm-everywhere.md
