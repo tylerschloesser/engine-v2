@@ -4,5 +4,6 @@
     "rootDir": "..",
     "allowImportingTsExtensions": true
   },
-  "include": [".", "../src"]
+  "include": [".", "../src"],
+  "exclude": ["browser/pages"]
 }
