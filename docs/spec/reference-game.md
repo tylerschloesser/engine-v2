@@ -42,4 +42,6 @@ Small gaps. Phase 1 should propose defaults and confirm them with Tyler in its b
 - Do resource tiles deplete, or are they infinite?
 - Is inventory per player (assumed yes), and is the furnace unlock per player (assumed yes)?
 - Can any player use any furnace (assumed yes)?
+- **Feature coverage.** The game must exercise every engine feature. If resources are infinite, no tile layer is ever modified and the only world mutation is building placement; depletion would exercise tile-layer deltas and modified-chunk persistence. Nothing moves except players, which does cover interpolation of remote entities. Furnaces smelting while nobody watches exercises off-screen simulation. Check the final feature list against the engine's and close any gap with the smallest possible addition.
+- Where does a new player spawn, and can a spawn land in water?
 - What UI approach does the game use for its DOM overlay: framework-free, or a small framework? The engine must not care either way.
