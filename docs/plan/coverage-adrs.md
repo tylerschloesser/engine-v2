@@ -1,6 +1,6 @@
 # Coverage: ADR decisions, budgets, engine events and context artifacts
 
-Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023 and 0024), every budget row of `PRE-PLAN.md` §7, every engine event of the `PRE-PLAN.md` §4 TS sketch and every ADR 0021 context artifact, mapped to the milestone exit criterion or named test that verifies it. Status: **covered** (an exit criterion, or a named test that an exit criterion requires to pass), **unverified** (in a brief's Scope, Seams, Budgets or Context artifacts only), **uncovered** (in no brief), **n/a** (a constraint with nothing to build or test), and one row ruled **unverified by decision (Q6), carried to 39b**; the open rows are collected under Gaps at the end with an owner and a proposed criterion.
+Every decision of ADRs 0001 to 0025 (judged against the amendments of 0022, 0023, 0024 and 0025), every budget row of `PRE-PLAN.md` §7, every engine event of the `PRE-PLAN.md` §4 TS sketch and every ADR 0021 context artifact, mapped to the milestone exit criterion or named test that verifies it. Status: **covered** (an exit criterion, or a named test that an exit criterion requires to pass), **unverified** (in a brief's Scope, Seams, Budgets or Context artifacts only), **uncovered** (in no brief), **n/a** (a constraint with nothing to build or test), and one row ruled **unverified by decision (Q6), carried to 39b**; the open rows are collected under Gaps at the end with an owner and a proposed criterion.
 
 ## ADR 0001: Camera and presence
 
@@ -830,15 +830,15 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §1 no rule file without `paths:` | M01 (test), M02, M25 | `context-artifacts` | covered |
 | §2 no `@path` import in root `CLAUDE.md` | M01, M39b | M01 exit "root `CLAUDE.md` is within its line cap and has no `@` import" | covered |
 | §2 nested `CLAUDE.md` imports only a short file of its own package | none | constraint, nothing to build | n/a |
-| §3 sub-agents briefed with files | M39, M39b (Scope: "briefed per 0021 §3") | constraint on how sessions delegate | n/a |
+| §3 sub-agents briefed with files (in Phase 3 the brief is the milestone brief: 0025 §1–§2) | every milestone; M39, M39b (Scope: "briefed per 0021 §3") | constraint on how sessions delegate | n/a |
 | §4 skills written when the procedure is real, by the session that ran it, wrapping a command | M03, M04, M16, M17b | exit criteria "commands were each run once in this session" (M03, M04), "was followed once" (M16), "its command was run" (M17b) | covered |
 | §4 table: five expected skills, each an exit criterion of its milestone | M01, M03, M04, M16, M17b | see artifacts table | covered |
-| §5 no custom sub-agent definitions | M34c (note only) | constraint | n/a |
+| §5 no custom sub-agent definitions (amended: one exists, 0025 §2; a second needs a new ADR) | M34c (note only) | constraint; see the 0025 rows | n/a |
 | §6 one `PreToolUse` hook on `git commit`: script re-checks the command, format and lint only, exit 2 with the fix command | M01 | exit "Hook, by pipe ..."; `scripts/lib/pre-commit-check.test.mjs` | covered |
 | §6 hook cost target (under 3 s), `timeout: 30` | M01 | exit "wall time under the 0021 §6 target"; "`.claude/settings.json` parses, matches 0021 §6–7" | covered |
 | §6 tests, `tsc`, clippy and builds stay out of the hook, enforced by `pnpm test` / `pnpm lint` exit criteria | every milestone | last exit criterion of every brief; M01 `pre-commit-check.test.mjs` ("without running any tool") | covered |
 | §6 triggers to extend or remove the gate | none | future trigger, nothing to build | n/a |
-| §7 permission allowlist and deny list in checked-in `.claude/settings.json` | M01 | exit "`.claude/settings.json` parses, matches 0021 §6–7, and `claude` starts ... without a settings warning" | covered |
+| §7 permission allowlist and deny list in checked-in `.claude/settings.json` (amended: 0025 §5 adds `Bash(git tag -a *)`; M01's pinned check predates it, see M01 Deviations) | M01 | exit "`.claude/settings.json` parses, matches 0021 §6–7, and `claude` starts ... without a settings warning" | covered |
 | §7 machine-specific entries in `settings.local.json` | none | constraint | n/a |
 | §8 `PROMPT.md` status block overwritten, never appended; nothing in auto memory | process (`docs/process.md`), M39b | M39b exit "`PROMPT.md` is the Phase 4 prompt"; the per-session status block is a process rule | n/a |
 | §8 per-milestone state in `PLAN.md` and the brief's Deviations | M16, M39, M39b | M16 exit "PLAN.md marks the vertical slice complete"; M39 exit "every `PLAN.md` row is ticked or has a recorded deviation"; M39b exit "`PLAN.md` is fully ticked" | covered |
@@ -923,11 +923,24 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §15 measure `extrapolation_ratio`; above 0.2 a new ADR supersedes the 0010 row | M30 | criterion "`extrapolation_ratio` and its verdict are written under Deviations" | covered |
 
 
+## ADR 0025: Phase 3 orchestration
+
+Process decisions, implemented outside the milestone table (before M02b).
+
+| Decision (ADR §, few identifying words) | Milestone(s) | Exit criterion or test | Status |
+|---|---|---|---|
+| §1 one orchestrator, one Sonnet implementer per milestone, serial, foreground | every milestone | constraint on how sessions work; owned by `PROMPT.md` | n/a |
+| §2 custom agent `.claude/agents/milestone-implementer.md` with `model: sonnet` | none (landed with the ADR) | `context-artifacts` (`unit`): every agent file has `name`, `description`, `model`, and `name` matches the file | covered |
+| §3 single writers (goldens, checkboxes, `PLAN.md`, `PROMPT.md`); gate `pnpm gate <base>` then `pnpm test && pnpm lint` | none (landed with the ADR) | `gate` tests in `scripts/lib/gate.test.mjs` (`unit`) cover the script; the single-writer rule is a constraint | covered (script); n/a (rule) |
+| §4 trunk only; `done` commits green; tags at `PLAN.md` markers; push only `done` commits | every milestone; M10 (trigger on `main`), M39 (CI on `main`), M39b (`phase-3-complete` tag) | M39b exit "the tag `phase-3-complete` exists on the final commit"; M39 exit "the latest CI run on `main` is green" | covered |
+| §5 allowlist gains `Bash(git tag -a *)` | none (landed with the ADR) | constraint; `.claude/settings.json` | n/a |
+
 ## Context artifacts (ADR 0021)
 
 | Artifact | Created by | Exit criterion or test | Status |
 |---|---|---|---|
 | `.claude/settings.json` | M01 | exit "`.claude/settings.json` parses, matches 0021 §6–7" | covered |
+| `.claude/agents/milestone-implementer.md` (0025 §2) | none (landed with ADR 0025) | `context-artifacts` agent-frontmatter test | covered |
 | `.claude/hooks/pre-commit-check.sh` | M01 | exit "Hook, by pipe ..."; `pre-commit-check.test.mjs` | covered |
 | skill `write-adr` | M01 | exit "`write-adr` skill ... exist"; used by M21b exit (journal ADR "numbered by the `write-adr` skill") | covered |
 | skill `run-tests` | M03 (extended M09, M10, M27, M31b, M34b, M35, M36, M36b) | M03 exit "`.claude/skills/run-tests/SKILL.md` exists and its commands were each run once" | covered |

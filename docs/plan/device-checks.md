@@ -3,7 +3,7 @@
 Tyler-run checks on real hardware: what Phase 3 cannot automate (`0020` §10, `PRE-PLAN.md` §9 risk 1). This file owns every manual check; briefs only link to their section here. One section per milestone marked **D** in `PLAN.md`, in `PLAN.md` order.
 
 - A check never blocks the next milestone. A failed check opens a plan edit (`PLAN.md`, "How milestones work"); where an ADR's number changes, a superseding ADR.
-- The session that lands a **D** milestone makes its section match what it built (exact page, URL parameters, HUD field names). Headings and item ids are stable: briefs link to the headings, and M39's `acceptance-check.mjs` looks up ticked ids. Add an item as `- [ ] **M<NN>-<slug>**`; never rename one.
+- The implementer that lands a **D** milestone makes its section match what it built (exact page, URL parameters, HUD field names). Headings and item ids are stable: briefs link to the headings, and M39's `acceptance-check.mjs` looks up ticked ids. Add an item as `- [ ] **M<NN>-<slug>**`; never rename one.
 - Tick an item when it passes. On FAIL leave it unticked, follow *If it fails*, re-run, and record both runs on the section's **Run on** line.
 
 ## Devices

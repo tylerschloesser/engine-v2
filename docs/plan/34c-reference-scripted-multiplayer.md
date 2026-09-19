@@ -72,7 +72,7 @@ Netcode: `reference_full_game_two_players`, `reference_race_last_unit`, `referen
 Bandwidth per client, steady and burst, including megabytes per hour of play as a projection (`PRE-PLAN.md` §7), measured by `reference_bytes_and_mispredictions_in_budget` from `counters(i)`; netcode suite time from the `pnpm test` summary line.
 
 ## Context artifacts
-`games/reference/CLAUDE.md`: how to write a netcode scenario with `refHarness`. If this is the third milestone to hand-write the same scenario boilerplate, note it for `0021` §5; do not add an agent.
+`games/reference/CLAUDE.md`: how to write a netcode scenario with `refHarness`. If this is the third milestone to hand-write the same scenario boilerplate, note it for `0021` §5 in your report; do not add an agent (the only custom agent is the one of `0025` §2, and another needs a new ADR).
 
 ## Manual device checks
 None.

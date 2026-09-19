@@ -5,6 +5,8 @@ Status: not started · After: all other milestones, including any `NNb`/`NNc` ro
 Split note: the hand-off to Phase 4 (capturing non-inferable facts in ADRs, rewriting `PROMPT.md`) is `39b-phase-4-handoff.md`. The audit below fills a session by itself and can block on Tyler; the hand-off cannot start until it is green.
 
 ## Goal
+Run by the orchestrating session itself, not by a `milestone-implementer` (0025 §1): the work is delegation and judgement, and a sub-agent cannot launch sub-agents. Its sub-agents are `general-purpose` with `model: sonnet`.
+
 Phase 3's "done when" (`docs/process.md`) is demonstrated, not asserted: every spec Requirement, every ADR decision and every reference-game feature points at a passing named test or a ticked device check; every PRE-PLAN §7 budget has a measured value; `PLAN.md` is fully ticked or its deviations are recorded; Tyler has run the whole device checklist and signed off. This milestone writes audit tables and small gap-closing tests only. No features.
 
 ## Read first
@@ -16,7 +18,7 @@ Phase 3's "done when" (`docs/process.md`) is demonstrated, not asserted: every s
 Plan files (do not count): `PLAN.md`, `docs/plan/device-checks.md`, `docs/plan/deferred-ledger.md`, `docs/plan/questions-for-tyler.md`, and the Phase 2 coverage map if one exists under `docs/plan/`. Sub-agents get their own reading lists (below). Rules that apply: none. Skills: `run-tests`.
 
 ## Scope
-- **Green baseline first.** `pnpm test`, `pnpm lint`, `pnpm test:slow` on Tyler's Mac, and the latest CI run on the branch. Nothing else starts until these pass; a failure is fixed if it is a small regression, otherwise it is a plan edit and this milestone stops.
+- **Green baseline first.** `pnpm test`, `pnpm lint`, `pnpm test:slow` on Tyler's Mac, and the latest CI run on `main`. Nothing else starts until these pass; a failure is fixed if it is a small regression, otherwise it is a plan edit and this milestone stops.
 - **Coverage audit, delegated.** One sub-agent per unit, each briefed per 0021 §3 with `docs/spec/overview.md`, its one source file, and the instruction to write one table and return a ten-line summary:
   - per spec domain file (`world`, `simulation`, `sync`, `runtime-and-packaging`, `client`, `testing`, `reference-game`) and `overview.md`'s "Fixed decisions" and "Non-goals": one row per Requirement bullet;
   - ADRs in groups of about five (0001–0021 plus every ADR written in Phases 2–3): one row per numbered or bold-headed decision;
@@ -45,7 +47,7 @@ New features, refactors, performance work beyond a one-line fix. Writing archite
 - **The audit's unit of evidence is a test name, not a file or a milestone.** Phase 2's coverage check mapped Requirements to milestones; that proves intent. Here each row must cite something a command can find and run, so the tables stay useful to Phase 4 when it folds the spec into `docs/architecture/`.
 - **Re-run, don't trust ticks.** Device entries ticked months earlier against an older build are re-run once on the final build, because risk 1 of PRE-PLAN §9 (real-iPhone behaviour) is the top-ranked risk and the final build is the only one that matters.
 - **Where the results live.** Under `docs/plan/acceptance/`, which Phase 4 deletes with the rest of `docs/plan/`. That is deliberate: the coverage tables are evidence for a gate, not living documentation. The one part with lasting value, the measured budgets, is moved into an ADR by M39b.
-- **Blocking on Tyler is expected.** If the automated parts are green and only the device run or sign-off is outstanding, write exactly that into the `PROMPT.md` status block, commit, and end the session (process.md). The next session resumes at "Device checklist".
+- **Blocking on Tyler is expected.** If the automated parts are green and only the device run or sign-off is outstanding, write exactly that into the `PROMPT.md` status block and commit (process.md). The orchestrator resumes at "Device checklist" when Tyler is back.
 
 ## Order of work
 1. Green baseline. 2. Launch the coverage sub-agents in parallel; meanwhile build `acceptance-check.mjs`. 3. Budget ledger. 4. Deferred ledger and `PLAN.md` audit. 5. Close small gaps; open briefs for large ones. 6. Hand Tyler the device checklist and the final question batch; stop if waiting. 7. On Tyler's results: tick or open plan edits; re-run `pnpm acceptance:check`; tick this milestone.
@@ -54,7 +56,7 @@ New features, refactors, performance work beyond a one-line fix. Writing archite
 Only gap-closing tests, each named in the coverage table row it closes. `acceptance-check.mjs` has one unit test (a fixture table with a missing test name fails).
 
 ## Exit criteria
-- [ ] `pnpm test`, `pnpm lint` and `pnpm test:slow` pass on Tyler's Mac; the fast tier is inside the Requirement's one minute (number recorded in the ledger); the branch's latest CI run is green.
+- [ ] `pnpm test`, `pnpm lint` and `pnpm test:slow` pass on Tyler's Mac; the fast tier is inside the Requirement's one minute (number recorded in the ledger); the latest CI run on `main` is green.
 - [ ] `pnpm acceptance:check` passes: no `gap` rows, every cited test found, every cited device check ticked.
 - [ ] `docs/plan/acceptance/budgets.md` has a verdict for every PRE-PLAN §7 row; no `missed` row lacks a decision.
 - [ ] Every row of `docs/plan/deferred-ledger.md` is closed; every `PLAN.md` row is ticked or has a recorded deviation with an ADR where a decision changed.
@@ -63,7 +65,7 @@ Only gap-closing tests, each named in the coverage table row it closes. `accepta
 - [ ] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
-`pnpm test` · `pnpm lint` · `pnpm test:slow` · `pnpm acceptance:check` · `pnpm test:timings` (M36b) · `gh run list --branch <phase-3 branch> --limit 1`
+`pnpm test` · `pnpm lint` · `pnpm test:slow` · `pnpm acceptance:check` · `pnpm test:timings` (M36b) · `gh run list --branch main --limit 1`
 
 ## Budgets
 All rows of PRE-PLAN §7. This milestone measures nothing new except by re-running existing commands; it records where each number came from in the budget ledger.
