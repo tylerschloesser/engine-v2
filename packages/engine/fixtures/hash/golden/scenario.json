@@ -1,0 +1,14 @@
+{
+  "role": "sim",
+  "config": {
+    "arenaBytes": 1048576,
+    "game": { "seed": "0x00c0ffee5eed1234", "entities": 256 }
+  },
+  "ticks": 10000,
+  "checkpointEvery": 1000,
+  "input": {
+    "everyTicks": 7,
+    "bytes": 16,
+    "rule": "before tick t (1-based) when t % everyTicks == 0: byte[i] = (t * 31 + i * 17 + (t >> 3)) & 0xff"
+  }
+}

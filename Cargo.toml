@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["packages/engine/crates/*"]
+# Every directory under fixtures/ is a crate (non-crate test assets live under packages/engine/tests/).
+members = ["packages/engine/crates/*", "packages/engine/fixtures/*"]
 exclude = ["spikes"]
 
 [workspace.package]

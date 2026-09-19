@@ -7,4 +7,11 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Native test helpers (`engine::testing`). Dev-dependency use only; never on in a `.wasm` build.
+testing = []
+
+# Policy and the exact allowed list: docs/decisions/0017 §7 (checked by scripts/lib/crate-policy.test.mjs).
 [dependencies]
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
