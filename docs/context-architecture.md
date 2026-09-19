@@ -41,6 +41,7 @@ docs/
     testing.md                │
     reference-game.md         ┘
   research/<topic>.md         Phase 1 sub-agent output
+  archive/                    Tyler's original brain dump; superseded by spec/, not a source
   decisions/NNNN-<slug>.md    ADRs
 spikes/<name>/                throwaway feasibility code + RESULT.md (Phase 1 only)
 .claude/                      created in Phase 3's first milestone, grows by milestone
