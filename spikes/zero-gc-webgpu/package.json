@@ -1,0 +1,12 @@
+{
+  "name": "spike-zero-gc-webgpu",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "reliability": "playwright test tests/zero-gc.spec.mjs -g clean --repeat-each=60 --workers=8 && playwright test tests/zero-gc.spec.mjs -g neg- --repeat-each=15 --workers=8"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
+}
