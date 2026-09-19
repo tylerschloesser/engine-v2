@@ -33,15 +33,15 @@ Because the game crate and engine crate link into one WASM module, the engine **
 
 ## Open questions
 
-- **JS↔WASM boundary.** wasm-bindgen (generated glue tends to allocate) vs. a hand-rolled ABI over linear memory; how much glue the zero-GC goal tolerates.
-- **Cross-thread communication.** SharedArrayBuffer + Atomics (ring buffers, shared state) vs. `postMessage` with transferables (structured clone creates garbage). SAB requires cross-origin isolation (COOP/COEP headers): what does that demand of the game's dev server and production hosting, and does it break anything the game might embed?
-- **Worker topology.** Which workers exist (sim, render via OffscreenCanvas, chunk generation pool, network decode), who owns which memory, and whether WASM threads (shared memory across workers) are worth their constraints.
-- **What "zero GC" means, measurably.** Proposed: after load, the steady-state hot paths (frame loop, tick, message handling) allocate nothing on the JS heap. DOM UI and one-time setup are exempt. Define how it's measured (see `testing.md`).
+- **JS↔WASM boundary.** Decided in [0014](../decisions/0014-js-wasm-boundary.md).
+- **Cross-thread communication.** Decided in [0015](../decisions/0015-threads-memory-and-topology.md).
+- **Worker topology.** Decided in [0015](../decisions/0015-threads-memory-and-topology.md) and [0018](../decisions/0018-renderer.md).
+- **What "zero GC" means, measurably.** Decided in [0016](../decisions/0016-zero-gc-definition.md).
 - **Exports map.** Entry points (e.g. `engine`, `engine/worker`, `engine/server`), how `new Worker(new URL(...))` and `.wasm` assets resolve under Vite when they originate in a library, and exactly what a game must configure. Verify against the current Vite version with a spike.
 - **Rust build pipeline.** cargo + wasm-bindgen-cli, wasm-pack, or a Vite plugin; how the engine crate reaches the game (in-repo path, crates.io, bundled in the npm package); rebuild speed and what the dev loop (edit Rust → see change) feels like.
 - **Rust dependency policy.** "Zero dependencies" is stated for npm. What's the bar for crates (e.g. serialization, noise is the game's problem, wgpu if the renderer is Rust)?
-- **Zero npm dependencies vs. a WebSocket server.** Node ships a WebSocket *client* but (verify) no server; `ws` would be a runtime dependency. Bun, Deno, and workerd have built-in servers. Options: the engine's server entrypoint takes a transport adapter injected by the host (which also serves host-agnosticism), hand-rolls the upgrade over `node:http`, or targets only runtimes with a built-in server.
-- **WASM memory behavior.** Linear memory never shrinks, `memory.grow` detaches every JS `ArrayBuffer` view (a zero-GC and correctness hazard for cached views; shared memory behaves differently), and mobile Safari's practical ceiling is well under 4 GB. Decide between preallocating a fixed arena sized from the game's world cap and growing on demand.
-- **One module, several roles.** A multiplayer client still loads the game's WASM (prediction, decode, possibly worldgen and rendering), and single-player loads it as the sim too. One module instantiated in several places, or separate client/sim builds for size? What is the download-size budget on mobile?
+- **Zero npm dependencies vs. a WebSocket server.** Decided in [0009](../decisions/0009-transport-and-hosting.md).
+- **WASM memory behavior.** Decided in [0015](../decisions/0015-threads-memory-and-topology.md) and [0014](../decisions/0014-js-wasm-boundary.md).
+- **One module, several roles.** Decided in [0015](../decisions/0015-threads-memory-and-topology.md).
 - **Publishing.** Is the package actually published publicly (name/scope, license, crates.io for the Rust side), or is "published" a packaging discipline for a private repo? A Tyler question; it affects how the engine crate reaches a game.
-- **Server runtime.** Which JS runtimes the server entrypoint supports (Node, Bun, Deno, workerd) and how each loads the WASM module; or whether the server is a native Rust binary instead (ties to determinism in `simulation.md` and hosting in `sync.md`).
+- **Server runtime.** Decided in [0009](../decisions/0009-transport-and-hosting.md) and [0002](../decisions/0002-determinism-same-wasm-everywhere.md).
