@@ -81,7 +81,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 - `docs/plan/questions-for-tyler.md`: the batched questions, defaults, and what depends on each.
 - `docs/plan/device-checks.md`: the Tyler-run manual device checklist, one section per **D** milestone.
 - `docs/plan/reference-coverage.md`: engine feature → reference-game feature → milestone.
-- `docs/plan/coverage.md`: spec Requirement / ADR decision → milestone exit criterion.
+- `docs/plan/coverage.md`: spec Requirement → milestone exit criterion. `docs/plan/coverage-adrs.md`: ADR decision, budget, engine event and context artifact → milestone exit criterion. A milestone that changes an exit criterion updates its rows; M39 re-audits both.
 
 ## Plan-level decisions
 

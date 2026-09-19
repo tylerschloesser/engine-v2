@@ -1,6 +1,6 @@
 # M02: Engine ABI, loader, `buildGame`, first fixture, determinism hash (native / Node / Bun)
 
-Status: not started · After: 01 · Tyler-dependent: `PRE-PLAN.md` §11 item 1 (`serde_json` sign-off; default assumed: approved, as 0014 §4 and 0017 §7 already state)
+Status: not started · After: 01 · Tyler-dependent: no (Q1 answered: `serde_json`, `ts-rs` and `libm` approved, as 0014 §4 and 0017 §7 state)
 
 **Split note.** The PLAN row for 02 did not fit the sizing rule (about 2,100 lines with the Vite plugin). It is split: this brief (crate ABI, loader, `buildGame()`, fixture, allowlist, hash golden in three non-browser runtimes) and `02b-vite-plugin.md` (the `engine()` plugin, `virtual:engine/wasm`, the fixture Vite app). Order is 01 → 02 → 02b → 03 → 04 with nothing between.
 

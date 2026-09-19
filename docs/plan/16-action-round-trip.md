@@ -1,6 +1,6 @@
 # M16: Action round trip (vertical slice complete)
 
-Status: not started · After: 15b · Tyler-dependent: PRE-PLAN §11 item 1 (`serde_json` sign-off; assumed approved) · Device checklist attached (**D**)
+Status: not started · After: 15b · Tyler-dependent: no (Q1 answered: `serde_json` approved) · Device checklist attached (**D**)
 
 Split: `G::Ui` → UI ring → `onUi`, `client.clock()` and the minimal `FrameView` moved to `16b-ui-observation-and-clock.md` (size). M17 depends on 16b; M21 depends on this milestone only.
 

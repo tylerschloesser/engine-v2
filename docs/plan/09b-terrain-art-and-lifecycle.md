@@ -1,6 +1,6 @@
 # M09b: Terrain art sampling, canvas lifecycle, device page
 
-Status: not started · After: 09 · Tyler-dependent: no (phone serving reuses M03's `pnpm device:serve --tunnel` and its stated default)
+Status: not started · After: 09 · Tyler-dependent: no (phone serving reuses M03's `pnpm device:serve --tunnel`; tunnel approved, Q7)
 
 Split out of M09 during planning. Carries a **D** (device checklist): terrain fill-rate. Does not block M10 or M11.
 

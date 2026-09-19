@@ -1,6 +1,6 @@
 # M04: Zero-allocation assertion with permanent negative controls
 
-Status: not started · After: 03 · Tyler-dependent: no (`PRE-PLAN.md` §11 item 2, the wording of the zero-GC Requirement, does not change what is built; 0016 is the operative reading)
+Status: not started · After: 03 · Tyler-dependent: no (Q2 answered: the zero-GC Requirement in `docs/spec/testing.md` is amended to 0016's reading; what is built does not change)
 
 ## Goal
 The assertion of 0016 §3 runs in the `browser` suite against the page that exists today: a main-thread frame loop plus one worker ticking the fixture `.wasm` in lockstep, with bytes crossing SAB ↔ WASM memory in both directions. Per isolate it asserts A (no GC trace events in the window) and B (exact sampled bytes per frame within budget), plus unchanged WASM memory size. Five permanent negative controls each fail on the named isolate and nowhere else. Budgets live in `packages/engine/budgets.json`. Later milestones add a zero-GC test for a new page with a budgets entry and a five-line spec.

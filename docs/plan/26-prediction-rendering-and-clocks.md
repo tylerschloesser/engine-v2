@@ -1,6 +1,6 @@
 # M26: Prediction rendering and clocks
 
-Status: not started · After: 25, 17 · Tyler-dependent: Q "own-timer rule" (default assumed: stretch over `duration + lead`)
+Status: not started · After: 25, 17 · Tyler-dependent: no (Q10 answered: stretch over `duration + lead`)
 
 ## Goal
 Predicted state reaches the screen correctly: `extract` sees replica plus overlay with a `predicted` query, predicted tiles reach terrain texels without a per-frame re-upload, and a ghost and its real result swap inside one DrawList (tested: never zero, never two). The client has a free-running authoritative clock, a predicted clock with an estimated lead, and a default rule for own-timer bars whose completion gap is measured.

@@ -1,6 +1,6 @@
 # M20b: Reference game v0: player, presence and collect UI (first playable)
 
-Status: not started · After: 20, 17b, 18, 19 · Tyler-dependent: Q4 (collect range; default 3 tiles assumed)
+Status: not started · After: 20, 17b, 18, 19 · Tyler-dependent: no (Q4 answered: collect range is 3 tiles)
 
 Split from M20 during planning (see that brief).
 

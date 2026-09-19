@@ -1,6 +1,6 @@
 # M20: Reference game v0: world and collect rules
 
-Status: not started · After: 16b · Tyler-dependent: Q4 (collect range; default 3 tiles assumed)
+Status: not started · After: 16b · Tyler-dependent: no (Q4 answered: collect range is 3 tiles)
 
 Split during planning: the PLAN.md row for M20 did not fit the sizing rule (about 2,100 lines, six files to read). This brief is the world and the headless rules; `20b-reference-player-and-collect-ui.md` is the player, presence and DOM, and is where the game becomes playable.
 

@@ -1,6 +1,6 @@
 # M35: Packaging: final exports map, tarball and size tests, pattern B proven, `checkSupport` final, release profile
 
-Status: not started · After: 29, 35b · Tyler-dependent: no (Q1's default, `ts-rs` as a normal dependency, is what the size test watches)
+Status: not started · After: 29, 35b · Tyler-dependent: no (Q1 answered: `ts-rs` is a normal dependency; the size test watches that LTO removes it)
 
 Split: the Bun and Deno server adapters are `35b-bun-and-deno-adapters.md`; with them the reading list was 0017 + 0020 + 0018 + 0009 + 0005. 35b runs **first**, so the exports map frozen here has a real file behind every subpath and the tarball test can start a Bun server.
 

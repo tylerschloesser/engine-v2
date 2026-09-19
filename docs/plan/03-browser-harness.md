@@ -1,6 +1,6 @@
 # M03: Browser harness: Playwright, fixture pages, `engine/test` skeleton, determinism in three browsers
 
-Status: not started · After: 02b · Tyler-dependent: how the determinism page reaches a phone (default assumed: Cloudflare quick tunnel for iPhone, `adb reverse` for Android; see Planning decisions)
+Status: not started · After: 02b · Tyler-dependent: no (Q7 answered: a Cloudflare quick tunnel is OK; Q5 answered: iPhone only, so the `adb reverse` path is documented but unused; see Planning decisions)
 
 ## Goal
 `pnpm test` runs a fifth suite, `browser`, under the same output contract: Playwright Test against the built fixture app, cross-origin isolated. A test-only worker runs the fixture `.wasm` through the M02 loader, stepped from the main thread through the first version of `engine/test` (injectable `Clock`/`Scheduler`, `stepTick`, `stepFrame`, an awaitable quiescence point). The M02 golden hashes are reproduced in Chromium, WebKit and Firefox. The `run-tests` skill exists.
@@ -68,11 +68,11 @@ packages/engine/package.json (exports: add `./test`)
 
 **Output contract.** Playwright runs with `--reporter=json` into `test-results/browser/report.json`; the new `playwright` adapter parses it into M01's `{ tests, failures }` shape (failure artefacts: trace, attachments). One extension to M01's contract: adapters may return `warnings: string[]`, and `report.mjs` prints each as a `warn` line under the suite line; the adapter fills it from test annotations of type `warning`. M04 uses this for the `Tracing.start` stall. Fast tier greps out `@slow`, slow tier greps for it (M01's tag).
 
-**Determinism on a physical iPhone and Android phone (0002 deferred, 2→3).** Closed by hand from the device checklist using `determinism.html`, which shows each checkpoint hash next to the golden with a single PASS/FAIL banner, the user agent, and `crossOriginIsolated`. `crossOriginIsolated` needs a secure context, so `http://<LAN IP>` cannot work. Mechanism: `pnpm device:serve` (static preview, plugin headers on every response, no HMR socket), then
+**Determinism on a physical phone (0002 deferred, 2→3).** Tyler's device is an iPhone only (Q5), so the Android row of the checklist is "not run: no device". Closed by hand from the device checklist using `determinism.html`, which shows each checkpoint hash next to the golden with a single PASS/FAIL banner, the user agent, and `crossOriginIsolated`. `crossOriginIsolated` needs a secure context, so `http://<LAN IP>` cannot work. Mechanism: `pnpm device:serve` (static preview, plugin headers on every response, no HMR socket), then
 - **iPhone:** `pnpm device:serve --tunnel`, which also runs `cloudflared tunnel --url http://127.0.0.1:4173` (quick tunnel: HTTPS, no account) and prints the `https://….trycloudflare.com/determinism.html` URL; the app config adds `.trycloudflare.com` to `preview.allowedHosts` only when `ENGINE_DEVICE=1`.
-- **Android:** `adb reverse tcp:4173 tcp:4173`, then open `http://localhost:4173/determinism.html` (`localhost` is a secure context).
-- Fallback if Tyler prefers no third-party tunnel: an `mkcert` certificate given to `preview.https` with `--host`, which costs installing and trusting a root certificate on the phone.
-This is Tyler's call (it installs `cloudflared` and exposes the fixture page on a random public URL while running); the default above is assumed. Real x86-64 is closed by M10.
+- **Android (unused option; no device, Q5):** `adb reverse tcp:4173 tcp:4173`, then open `http://localhost:4173/determinism.html` (`localhost` is a secure context). It needs nothing from the script and is not tried.
+- Fallback if the tunnel ever stops working: an `mkcert` certificate given to `preview.https` with `--host`, which costs installing and trusting a root certificate on the phone.
+Tyler approved the tunnel (Q7: it installs `cloudflared` and exposes the fixture page on a random public URL while running). Real x86-64 is closed by M10.
 
 **What `stepFrame` means before a client worker exists.** It advances the manual clock and runs main-thread frame callbacks. That is enough for M04's main-thread loop and fixes the signature M06, M09 and M17 build on.
 
@@ -82,7 +82,7 @@ This is Tyler's call (it installs `cloudflared` and exposes the fixture page on 
 3. Playwright config, `webServer`, `support/page.ts`, the adapter and `warnings`; register `pages` and `browser`; `TOOLS` row (`pnpm exec playwright install chromium webkit firefox`).
 4. `wiring.spec.ts`, `stepping.spec.ts`.
 5. `determinism.html` + spec in three engines.
-6. `device-serve.mjs`; try the Android or tunnel path once if a phone is at hand (not an exit criterion).
+6. `device-serve.mjs`; try the tunnel path once if the iPhone is at hand (not an exit criterion).
 7. Write `run-tests` from what was actually run.
 
 ## Tests added

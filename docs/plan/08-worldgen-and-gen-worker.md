@@ -1,6 +1,6 @@
 # M08: Worldgen and the gen role
 
-Status: not started · After: 05, 07 · Tyler-dependent: no (device page assumes Q5 default: iPhone + desktop Chrome)
+Status: not started · After: 05, 07 · Tyler-dependent: no (Q5 answered: the device page is checked on the iPhone only)
 
 **Split.** The PLAN row for M08 broke the sizing rule (about 1,900 lines across Rust, worker TypeScript and browser tests). This brief keeps everything that needs no SharedArrayBuffer: the `Worldgen` trait, the `gen` role, the fixture worldgen, the cross-runtime golden and the benchmark. Gen workers over `genRequest`/`genResult`, the client generation queue and the client pristine-cache feed are `docs/plan/08b-gen-workers-and-queue.md` (After: 06b, 08). M06 is therefore not a prerequisite here (M12 needs only this brief); M09 waits on 08b.
 
