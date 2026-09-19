@@ -35,5 +35,11 @@ test('lint.no_ambient_random', () => {
       }
     }
   }
+  // A plain throw, not `expect(offenders).toEqual([])`: the runner's JSON reporter carries only
+  // `error.message` (docs/decisions/0020 §2), not Vitest's separately rendered diff, so the file
+  // name must be in the message itself for `pnpm test` to name it on failure.
+  if (offenders.length > 0) {
+    throw new Error(`ambient randomness outside src/test/:\n${offenders.join('\n')}`)
+  }
   expect(offenders).toEqual([])
 })
