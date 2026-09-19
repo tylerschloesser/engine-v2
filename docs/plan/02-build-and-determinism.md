@@ -1,6 +1,6 @@
 # M02: Engine ABI, loader, `buildGame`, first fixture, determinism hash (native / Node / Bun)
 
-Status: not started · After: 01 · Tyler-dependent: no (Q1 answered: `serde_json`, `ts-rs` and `libm` approved, as 0014 §4 and 0017 §7 state)
+Status: done (2026-09-19) · After: 01 · Tyler-dependent: no (Q1 answered: `serde_json`, `ts-rs` and `libm` approved, as 0014 §4 and 0017 §7 state)
 
 **Split note.** The PLAN row for 02 did not fit the sizing rule (about 2,100 lines with the Vite plugin). It is split: this brief (crate ABI, loader, `buildGame()`, fixture, allowlist, hash golden in three non-browser runtimes) and `02b-vite-plugin.md` (the `engine()` plugin, `virtual:engine/wasm`, the fixture Vite app). Order is 01 → 02 → 02b → 03 → 04 with nothing between.
 
@@ -114,17 +114,17 @@ Exports that return `len` return `i32`; a negative value is `-(status)`. `Region
 - Scenario (in `golden/scenario.json`): fixed seed, 256 entities, 10,000 ticks, checkpoint every 1,000, 16 input bytes admitted every 7th tick derived from the tick number with integer ops only. Shrink the tick count if any runtime exceeds 0.2 s; never drop a runtime.
 
 ## Exit criteria
-- [ ] `pnpm test wasm` passes; the golden has ≥ 10 checkpoints and is identical natively, under Node and under Bun.
-- [ ] `pnpm test rust -t scenario_matches_golden` passes.
-- [ ] Temporarily adding `getrandom` with its JS backend to `fx-hash` makes `import allowlist` fail naming the module (done by hand once, result noted under Deviations, not committed).
-- [ ] Temporarily adding an `f32::sin` call, a `HashMap` field and a `std::time::Instant` to `fx-hash` makes `pnpm lint` fail naming `clippy::disallowed_methods` and `clippy::disallowed_types` (check, then revert); the `clippy.toml` lists match 0002 §3.
-- [ ] `pnpm test unit -t crate-policy` passes; temporarily adding `rand` to the engine crate's `[dependencies]` makes it fail naming `rand` (check, then revert).
-- [ ] Root `CLAUDE.md` has one line each for determinism and hot paths naming its rule file, and `pnpm test unit -t context-artifacts` (M01) passes with both rule files present.
-- [ ] `pnpm golden hash` rewrites an identical `golden.json` (no diff).
-- [ ] `WebAssembly.Module.imports` of `fx-hash` is exactly `engine.panic`, `engine.log`.
-- [ ] Rebuild time and `wasm` suite time recorded under Deviations.
-- [ ] `run-tests`-relevant commands work by name: `pnpm test wasm -t "import allowlist"` runs one test.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `pnpm test wasm` passes; the golden has ≥ 10 checkpoints and is identical natively, under Node and under Bun.
+- [x] `pnpm test rust -t scenario_matches_golden` passes.
+- [x] Temporarily adding `getrandom` with its JS backend to `fx-hash` makes `import allowlist` fail naming the module (done by hand once, result noted under Deviations, not committed).
+- [x] Temporarily adding an `f32::sin` call, a `HashMap` field and a `std::time::Instant` to `fx-hash` makes `pnpm lint` fail naming `clippy::disallowed_methods` and `clippy::disallowed_types` (check, then revert); the `clippy.toml` lists match 0002 §3.
+- [x] `pnpm test unit -t crate-policy` passes; temporarily adding `rand` to the engine crate's `[dependencies]` makes it fail naming `rand` (check, then revert).
+- [x] Root `CLAUDE.md` has one line each for determinism and hot paths naming its rule file, and `pnpm test unit -t context-artifacts` (M01) passes with both rule files present.
+- [x] `pnpm golden hash` rewrites an identical `golden.json` (no diff).
+- [x] `WebAssembly.Module.imports` of `fx-hash` is exactly `engine.panic`, `engine.log`.
+- [x] Rebuild time and `wasm` suite time recorded under Deviations.
+- [x] `run-tests`-relevant commands work by name: `pnpm test wasm -t "import allowlist"` runs one test.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test` · `pnpm test wasm` · `pnpm test rust` · `pnpm golden hash && git diff --exit-code packages/engine/fixtures/hash/golden/` · `pnpm lint`
@@ -144,4 +144,27 @@ Exports that return `len` return `i32`; a negative value is `-(status)`. `Region
 None.
 
 ## Deviations
-(filled in during Phase 3)
+No split: steps 1–7 fitted one session. No decision changed, so no ADR. Small corrections and exact shapes:
+
+- **Additions to the registry** (both sides, covered by `abi registry`): `enum LogLevel { Error = 0, Warn = 1, Info = 2, Debug = 3 }` (the `level` of `engine.log`; release builds drop everything below `Warn`, 0014 §3), and the constants `BOOT_BYTES = 65536`, `BOOT_TEXT_BYTES = 4096` (the boot-region tail the panic hook formats into; config may use the rest) and `RESULT_BYTES = 64`. `engine::log(level: LogLevel, &str)`. `ABI_VERSION` is 1.
+- **Who declares which region.** `engine_init` declares `Result` for every role before `Instance::init`; the implementor declares the rest through `RegionLayout::region` (fx-hash: `Rx` 64 B, `Tx` 64 B). Regions are 8-aligned and zero-filled; declaring one twice or with 0 bytes panics. `RegionLayout` also has `ptr`, `len`, `bytes`, `bytes_mut`, and is what a native test passes to `Instance::init`. An unknown role number is `BadConfig`; a `cfg_len` past the config part of the boot region is `BadLength`.
+- **`Instance::sim_hash` defaults to `0`,** not `Unsupported`: its seam signature returns `u64`, and the role check has already run.
+- **Arena exhaustion does not use `panic!`.** std formats a panic message into a `String` before the hook runs (`FormatStringPayload`), so a formatted `panic!` inside the allocator would re-enter it. `abi::panic::fatal(fmt::Arguments)` formats into the boot tail, calls `engine.panic` and executes `unreachable`; the arena uses it. The ordinary hook is allocation-free itself, as 0014 §6 asks. Message: `arena exhausted: requested N bytes with L live, reserved R bytes (arenaBytes)`.
+- **For M07 (the hand-over question).** Probe, not a test: with `arenaBytes` 1 MiB, a 900 KiB allocation after init reused the freed reservation (`memGrows() === 0`, memory stayed 2,359,296 B). So reserve-and-free does give std's allocator the block back for large requests; fragmentation under cache churn is still M07's to measure.
+- **`tsconfig.json` needs `lib: ["es2023", "dom"]`,** not only `types: ["node"]`: `@types/node` 22.20.3 does not declare `WebAssembly`; only `lib.dom` and `lib.webworker` do. `loader.ts` and `abi.ts` still use no DOM-only global. New `packages/engine/tests/tsconfig.json` (`allowImportingTsExtensions`) type-checks `tests/`; the package's `typecheck` script runs both.
+- **Tests run against `src/`, plain scripts against `dist/`.** Vitest imports `../../src/*.js`. `bun-leg.mjs` and `scripts/golden.mjs` import `dist/` (Node's type stripping does not map `.js` to `.ts`), plus `tests/support/scenario.ts` directly, whose only runtime import is `src/abi.ts` (no imports of its own). `pnpm golden` runs `tsc` first and passes `--disable-warning=ExperimentalWarning`.
+- **`buildGame` stubs every function import** when it reads `abiVersion`, whatever the import's name. With stubs for `engine.*` only, the `getrandom` module failed in the `fixtures` build step with a bare `LinkError` and the allowlist test never ran to say why.
+- **Runner: `legs`.** A suite may carry `legs: [{ name, kind, ... }]`, extra runs reported on the suite's line (log: `test-results/<suite>/<leg>.log`). An adapter's `command` may return `null` (nothing to run). The `script` adapter takes `{ cmd, args, tests }`: `tests` names what the script reports so `-t` can skip it; the script prints one JSON line last, `{ tests: [{ name, ok, message? }] }`, and exits non-zero on failure; it has no slow tier. **The Bun leg compares with the golden itself** (`diffCheckpoints` in `scenario.ts`) and reports the verdict, rather than the runner comparing; the line also carries `checkpoints` and `runtime` for the log. It refuses to pass when not run under Bun, and carries the `script` adapter's permanent negative control (`--self-check-fail`). `scripts/lib/adapters.test.mjs` covers the adapter.
+- **Test-support additions:** `fixtureNames()`, `fixtureBuildDir(name)`, `fixtureBytes(name)`, `readGolden(name, file)`; `scenario.ts` exports `HashScenario`, `Golden` (`{ checkpoints: string[] }`) and `diffCheckpoints`; `wasm-sections.ts` exports `funcType(sections, index)`. `scenario.json` is `{ role, config: InstanceConfig, ticks, checkpointEvery, input: { everyTicks, bytes, rule } }`; input byte `i` before tick `t` is `(t*31 + i*17 + (t>>3)) & 0xff`.
+- **`clippy.toml` also bans `powi`** with the transcendentals (Rust documents its precision as unspecified too); every entry carries a `reason` citing 0002 §2.
+- **Target-feature allowlist** captured from Rust 1.93.0: `bulk-memory`, `bulk-memory-opt`, `call-indirect-overlong`, `multivalue`, `mutable-globals`, `nontrapping-fptoint`, `reference-types`, `sign-ext`.
+- **Hand checks (done once, reverted, nothing committed):**
+  - `getrandom = { version = "0.2", features = ["js"] }` called from `sim_tick`: `import allowlist` failed with `fx-hash imports outside the allowlist: __wbindgen_placeholder__ (27: __wbg_crypto_…, …): a crate pulled in wasm-bindgen (getrandom's JS backend, …)` and `__wbindgen_externref_xform__ (2: …)`. The list is in the assertion message because Vitest elides a long array.
+  - `f32::sin`, a `HashMap` field and `std::time::Instant::now()` in `fx-hash`: `pnpm lint` failed on clippy with "use of a disallowed method" for `f32::sin` and "use of a disallowed type" for `std::collections::HashMap` and `std::time::Instant`, each with its reason (lints `clippy::disallowed_methods`, `clippy::disallowed_types`).
+  - `rand = { version = "0.9", default-features = false }` in the engine crate: `crate-policy` failed with `engine crate dependencies outside docs/decisions/0017 §7: expected [ 'rand' ]`. With default features `rand` fails earlier and as loudly: `getrandom` 0.3 does not compile for `wasm32-unknown-unknown`, so the `fixtures` build step fails.
+- **Measurements** (Tyler's Mac, warm; one fixture):
+  - `wasm` suite: 0.5–0.6 s of its 7 s (14 Vitest tests + the Bun leg). The scenario itself (10,000 ticks, 256 entities, dev profile) takes 11 ms under Node; nothing needed shrinking.
+  - No-op build: `tsc` 0.34 s, `fixtures` 0.13 s (one fixture; far below the 2 s trigger for a single cargo invocation), `cargo-tests` 0.16 s.
+  - One-line edit in `crates/engine/src/hash.rs` → tests starting: `tsc` 0.33 s + `fixtures` 0.27 s + `cargo-tests` 1.26 s ≈ 1.9 s of the 30 s Dev loop row.
+  - Cold wasm build of `fx-hash` with `serde`, `serde_json`, `serde_derive`: 7.4 s. The sccache trigger is not near.
+  - Dev-profile `game.wasm`: 3.7 MB (DWARF; never measured against the size budget).

@@ -34,6 +34,7 @@ packages/engine/tests/browser/pages/src/{wiring.ts, fixture-wasm.ts}
 packages/engine/tests/wasm/{plugin-dev,plugin-build,plugin-rebuild-error}.test.ts
 packages/engine/package.json   (exports: add `./virtual`)
 ```
+Note from M02: `packages/engine/tests/tsconfig.json` already type-checks everything under `tests/` (extends the package tsconfig, which has `lib: dom` and `types: node`; `allowImportingTsExtensions`). Either let it cover the pages or add `exclude: ["browser/pages"]` there when the pages get their own `tsconfig.json`; the package's `typecheck` script must end up covering both.
 
 ## Seams
 **Provides:**

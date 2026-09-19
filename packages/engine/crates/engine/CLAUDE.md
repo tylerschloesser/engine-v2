@@ -14,6 +14,12 @@ A member of the root cargo workspace. These live at the repo root, not here: pro
 - `pnpm lint` runs `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings`. `pnpm format` fixes formatting.
 - On macOS, native linking needs `DEVELOPER_DIR` when the Xcode licence is not accepted; the scripts set it (`scripts/lib/env.mjs`). For a bare `cargo` call that links: `DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo …`.
 
+## Layout
+
+- `src/abi/`: the JS↔WASM boundary (0014). `registry.rs` is the single owner of the ABI and states the rule for adding to it; `mod.rs` holds what the exports do; `boot.rs`, `regions.rs`, `arena.rs`, `panic.rs`, `config.rs` are the pieces. `panic::fatal` exists because std formats a panic message into a `String` before the hook runs: use it, not `panic!`, anywhere the allocator may be the failure.
+- `src/hash.rs`: `Fnv64`. `src/testing.rs` (feature `testing`, dev-dependencies only): `assert_golden`.
+- Determinism rules for everything here: `.claude/rules/determinism.md`.
+
 ## Tests
 
 - Unit tests inline (`#[cfg(test)] mod tests`); scenario and replay tests in `tests/*.rs`.

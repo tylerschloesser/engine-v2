@@ -4,7 +4,7 @@ Multiplayer web game engine (Rust→WASM + TypeScript, custom WebGPU renderer) f
 
 **Start every session at `PROMPT.md`.** It names the current milestone, the loop to follow, and when you're done.
 
-**Commands:** `pnpm setup:tools` (once per machine) · `pnpm test [suite] [-t pattern]` · `pnpm test:slow` · `pnpm lint` · `pnpm format`. Both checks are quiet: one line per suite or check, details only on failure, logs under `test-results/`.
+**Commands:** `pnpm setup:tools` (once per machine) · `pnpm test [suite] [-t pattern]` · `pnpm test:slow` · `pnpm lint` · `pnpm format` · `pnpm golden [fixture]` (the only writer of golden hashes). Both checks are quiet: one line per suite or check, details only on failure, logs under `test-results/`.
 
 ## Context map
 
@@ -15,7 +15,7 @@ Read only what the task needs. A sub-agent should be briefable with `docs/spec/o
 | `PROMPT.md` | Current phase and milestone: status block, the session loop, rules | Rewritten each phase; deleted in Phase 4 |
 | `packages/engine/` | The engine package (TypeScript in `src/`) and, in `crates/engine/`, the Rust crate; each has a nested `CLAUDE.md` with its commands and test placement | Permanent |
 | `scripts/` | `pnpm test` / `lint` / `setup:tools` runners (plain Node `.mjs`); `scripts/suites.mjs` is where suites and build steps are registered | Permanent |
-| `.claude/` | `settings.json` (allowlist, commit gate running `hooks/pre-commit-check.sh`: Biome + rustfmt), `skills/` (`write-adr`) | Permanent |
+| `.claude/` | `settings.json` (allowlist, commit gate running `hooks/pre-commit-check.sh`: Biome + rustfmt), `skills/` (`write-adr`), `rules/` (the invariants below) | Permanent |
 | `docs/process.md` | The four phases; rules common to every session | Until Phase 4 |
 | `docs/context-architecture.md` | How context is split and why (nested `CLAUDE.md`, `.claude/rules/`, skills, sub-agent briefs); target layout after bootstrap | Permanent |
 | `docs/spec/overview.md` | Goal, engine/game split, fixed decisions, scale, non-goals, glossary | Folded into architecture docs in Phase 4 |
@@ -28,6 +28,13 @@ Read only what the task needs. A sub-agent should be briefable with `docs/spec/o
 | `PLAN.md` | Phase 2 output: milestone index in execution order, dependencies, progress checkboxes | Deleted in Phase 4 |
 | `docs/plan/<NN>-<slug>.md` | One brief per milestone: the whole instruction set for one session (format: `docs/plan/README.md`) | Deleted in Phase 4 |
 | `docs/plan/*.md` (unnumbered) | `questions-for-tyler`, `device-checks` (Tyler-run), `deferred-ledger`, `coverage`, `coverage-adrs`, `reference-coverage` | Deleted in Phase 4 |
+
+## Invariants
+
+Each has a path-scoped rule file that loads when you read a matching file; read it yourself before creating a new file in its area.
+
+- **Determinism:** sim, worldgen and `apply` code must produce the same bits natively and as `.wasm` in every runtime: `.claude/rules/determinism.md`.
+- **Hot paths:** no allocation per frame or per tick in the JS around a WASM instance: `.claude/rules/hot-paths.md`.
 
 ## Rules
 

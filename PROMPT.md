@@ -3,9 +3,9 @@
 ## Status
 
 - **Phase:** 3 of 4. (Updated 2026-09-19.)
-- **Current milestone:** M02, `docs/plan/02-build-and-determinism.md`. Not started.
-- **State:** M01 is done on branch `m01-scaffolding` (not yet merged to `main`): workspaces, toolchain pins, empty `engine` package and crate, `pnpm test` / `pnpm test:slow` / `pnpm lint` / `pnpm setup:tools`, `.claude/settings.json` with the commit gate, the `write-adr` skill, nested `CLAUDE.md` files. `pnpm test && pnpm lint` is green. No engine code yet. Open questions for Tyler (none blocking; defaults stand): `docs/plan/questions-for-tyler.md`.
-- **Exact next step:** On a new machine run `pnpm install && pnpm setup:tools` first. At session start, check that Claude Code shows no warning about `.claude/settings.json` (M01 could not verify this by command; note the result in M01's Deviations). Branch `m02-build-and-determinism` from whichever of `main` and `m01-scaffolding` contains the other, then follow "The loop" below.
+- **Current milestone:** M02b, `docs/plan/02b-vite-plugin.md`. Not started.
+- **State:** M01 and M02 are done; neither is merged to `main` yet (`m02-build-and-determinism` contains `m01-scaffolding`, which contains `main`). M02 landed the engine crate ABI (`abi/registry.rs` owns it; `export_instance!` / `export_game!`), `src/abi.ts`, the loader (`instantiate`), `buildGame()` (`engine/vite`), `loadGame()` (`engine/server/node`), fixture `fx-hash` with a golden that is equal natively, under Node and under Bun, the `wasm` suite (import allowlist, target features, ABI registry, loader, determinism, Bun leg), `crate-policy`, the clippy ban lists, `pnpm golden`, and the rule files `.claude/rules/{determinism,hot-paths}.md`. `pnpm test && pnpm lint` is green. Read M02's Deviations before relying on a seam: exact shapes are there. Open questions for Tyler (none blocking; defaults stand): `docs/plan/questions-for-tyler.md`.
+- **Exact next step:** On a new machine run `pnpm install && pnpm setup:tools` first (it now installs Bun 1.3.8 too). Branch `m02b-vite-plugin` from whichever of `main` and `m02-build-and-determinism` contains the other, then follow "The loop" below.
 - **Blockers:** none.
 
 Overwrite this block (never append to it) whenever you stop: current milestone, state, exact next step, blockers. Leave the rest of this file intact.

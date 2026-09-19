@@ -212,3 +212,4 @@ No split: steps 1–7 fitted one session, so there is no `01b`. Small correction
 - **`context-artifacts` failures name the file** through the assertion message (`<path>: 61 lines, cap 60`); the bare `toEqual([])` printed only `[ Array(1) ]`.
 - **pnpm's `[ELIFECYCLE]` stdout line** also follows the usage output on exit 2 (`pnpm test nosuch`), as "any non-zero exit" implies.
 - **Not checkable by command (for M02's session):** eyeball the session start for a `.claude/settings.json` warning. The `hooks` block was added mid-session; the commits made after it went through, but whether the live hook fired was not observed, so the pipe tests above are the evidence.
+- **Checked by M02's session (2026-09-19):** no warning about `.claude/settings.json` appeared at session start, and the live commit gate fired: it blocked two commits on an unformatted tree (rustfmt, then Biome) with its `fix:` line, and let them through after `pnpm format`.
