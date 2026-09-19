@@ -43,7 +43,7 @@ packages/engine/scripts/{build-fixtures.mjs, golden.mjs}
 packages/engine/tests/wasm/{allowlist,abi-registry,loader,determinism}.test.ts, bun-leg.mjs
 packages/engine/tests/support/{fixtures.ts, scenario.ts, wasm-sections.ts}
 scripts/lib/crate-policy.test.mjs
-scripts/suites.mjs, scripts/lib/adapters.mjs, scripts/setup-tools.mjs, vitest.config.ts (project `wasm`), clippy.toml
+scripts/suites.mjs, scripts/lib/adapters.mjs, scripts/setup-tools.mjs, vitest.config.ts (project `wasm`), clippy.toml, packages/engine/tsconfig.json (`types: ["node"]`: the first Node-API code lands here; `@types/node` is already pinned by M01)
 packages/engine/CLAUDE.md (M01 created it; extend), .claude/rules/{determinism.md, hot-paths.md}, CLAUDE.md (root: two invariant lines)
 ```
 Root `Cargo.toml`: add workspace member glob `packages/engine/fixtures/*` (every directory there is a crate; non-crate test assets live under `packages/engine/tests/`).
