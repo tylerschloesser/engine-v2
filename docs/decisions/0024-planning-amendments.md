@@ -102,7 +102,7 @@ Phase 2 wrote one brief per milestone (`docs/plan/`). Turning each ADR into sign
 **16. 0014 wrong-role calls do not trap in debug.**
 - Says: 0014 §5, an export called on an instance of the wrong role returns a status "(traps in debug)".
 - Why it cannot stand: the fast tier builds every fixture on the dev profile only ([0020](0020-testing-strategy.md)), a trap marks the instance dead, and the loader test for this path must run there and go on using the instance.
-- Amendment: a wrong-role call returns `Status::WrongRole` on every profile; there is no debug trap. The loader turns the status into a thrown error on the TS side, so the mistake is still loud.
+- Amendment: a wrong-role call returns `Status::WrongRole` on every profile; there is no debug trap. Callers see it like any other non-zero status from `call0/1/2`; the engine's own hosts never call across roles, which the ABI registry's per-export `role` field lets a test check.
 - Implemented in: M02 (`loader: wrong-role export returns WrongRole`).
 
 ## Alternatives rejected
