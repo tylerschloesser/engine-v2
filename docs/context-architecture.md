@@ -74,7 +74,7 @@ docs/
   skills/<procedure>/SKILL.md      repeatable procedures
 ```
 
-Deleted in Phase 4: `PROMPT.md`, `PRE-PLAN.md`, `PLAN.md` (and `docs/plan/`), `docs/process.md`, `docs/research/`, `spikes/`. `docs/spec/` is folded into `docs/architecture/` (requirements that became behavior) and the reference game's own docs. Anything in the deleted files that can't be inferred from code must first be captured in an ADR.
+Deleted in Phase 4: `PROMPT.md`, `PRE-PLAN.md`, `PLAN.md` (and `docs/plan/`), `docs/process.md`, `docs/research/`, `docs/archive/`, `spikes/`. `docs/spec/` is folded into `docs/architecture/` (requirements that became behavior) and the reference game's own docs. Anything in the deleted files that can't be inferred from code must first be captured in an ADR.
 
 ## Decisions
 
