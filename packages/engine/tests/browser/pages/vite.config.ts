@@ -27,5 +27,12 @@ export default defineConfig({
     rollupOptions: { input },
   },
   server: { port, strictPort: true },
-  preview: { port, strictPort: true },
+  preview: {
+    port,
+    strictPort: true,
+    // `pnpm device:serve --tunnel` (docs/plan/03-browser-harness.md, Planning decisions
+    // "Determinism on a physical phone"): the Cloudflare quick tunnel's `Host` header is a random
+    // `*.trycloudflare.com` subdomain, which Vite's own host check would otherwise refuse.
+    ...(process.env.ENGINE_DEVICE === '1' ? { allowedHosts: ['.trycloudflare.com'] } : {}),
+  },
 })
