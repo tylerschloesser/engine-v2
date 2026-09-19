@@ -48,4 +48,4 @@ A deliberately small game that exercises every engine feature, in single-player 
 
 ## Open questions
 
-- **Feature coverage.** The game must exercise every engine feature. Check the final feature list against the engine's and close any gap with the smallest possible addition or a scripted test (known candidates: a furnace spanning a chunk border, rejected actions, eviction at the cap, keyboard focus).
+- **Feature coverage.** Decided in [0003](../decisions/0003-game-facing-api.md) (Consequences): gameplay covers the listed features; the rest are pinned by scripted tests ([0020](../decisions/0020-testing-strategy.md)). Deferred to Phase 2: the final check of this list against the engine's feature list, because that list is fixed only when `PLAN.md` defines the milestones. See [0003](../decisions/0003-game-facing-api.md).
