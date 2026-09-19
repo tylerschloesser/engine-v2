@@ -1,6 +1,6 @@
 # M10: CI workflow on `ubuntu-latest` with SwiftShader (spike B)
 
-Status: not started · After: 09 · Tyler-dependent: CI trigger policy and Actions minutes (default assumed: every push and pull request, superseded runs cancelled, both tiers)
+Status: not started · After: 09 · Tyler-dependent: Q8, CI trigger policy and Actions minutes (unanswered; default assumed: every push and pull request, superseded runs cancelled, both tiers)
 
 ## Goal
 One GitHub Actions workflow runs `pnpm lint`, `pnpm test` and `pnpm test:slow` on a stock `ubuntu-latest` runner with Chromium's WebGPU on SwiftShader. It closes three deferred measurements: spike B (does the flag set of 0020 §6 give an adapter on a runner, and does it agree with Metal within tolerance), determinism on real x86-64 hardware (0002), and the software-adapter numbers of GC assertion B (0016). Timings are recorded on every run and never gate.

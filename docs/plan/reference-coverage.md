@@ -15,7 +15,7 @@ M34b and M34c keep the test columns true: a row is done when the named test exis
 | Two tile layers + `aux`; `tile_visual`; art contract; dithering, variants (0007, 0018) | base + resource layer, depletion stages, script-made art | play | 20 |
 | Tile overlays, canonical overlay (0007) | depletion; last unit clears the resource | play | 20 |
 | Trait tables, `traits_at`, shared rule helper (0007, 0003) | `NOT_BUILDABLE` on water, resources, furnace; `can_place` for host, prediction and ghost | play | 33 |
-| Game actions, `dispatch` → ack → `onActionResult`, reject reasons (0004) | collect, craft, place, deposit, take | play | 20b–33b |
+| Game actions, `dispatch` → ack → `onActionResult`, reject reasons (0004) | collect, craft, place, deposit, take, pick up | play | 20b–33b |
 | `admit` + presence witness (0001) | `StartCollect { tile, from }` | play | 20b |
 | Engine actions `Joined` / `Connected` / `Disconnected` via `on_player` (`simulation.md`) | default player state; colour on join; collect cancelled after the grace | play + scripted | 20, 32, 34, 34c |
 | Presence uplink and relay; interpolation of remote motion (0001, 0012) | own spring writes presence; remote circles | play | 20b, 34 |
@@ -23,6 +23,7 @@ M34b and M34c keep the test columns true: a row is done when the named test exis
 | Global scope: engine roster + `put_global` (0011) | coloured roster dots | play | 34 |
 | `SimRng` and its snapshot (0002, 0003) | colour picked with `w.rng()` on join | play | 34 |
 | Multi-tile entity, prototypes, occupancy, `entity_at` (0007) | 2x2 furnace | play | 33 |
+| `WorldWrite::despawn`, `EntityGone`, prediction tombstones, occupancy release (0007, 0012, ADR 0022 §7) | pick up an empty furnace (Requirement added 2026-09-19, R3): predicted despawn, tiles buildable again, a second player's open panel closes on `EntityGone` | play + scripted | 33b, 34b, 34c |
 | Furnace across a chunk border, partial subscription (0003 list) | scripted placement at a chunk corner | scripted | 33, 34c |
 | Timer wheel, sleep/wake, O(active) tick (0007) | smelting; idle furnaces cost nothing | play | 33b |
 | Off-screen state keeps simulating (0003 list) | furnace smelts while unsubscribed | scripted | 34b |
@@ -60,7 +61,6 @@ M34b and M34c keep the test columns true: a row is done when the named test exis
 
 | Feature | Recommendation |
 |---|---|
-| `WorldWrite::despawn`, `EntityGone`, prediction tombstones, occupancy release | **Gap worth closing.** Nothing in the spec removes a furnace, yet removal touches occupancy, chunk index, delta scope, per-chunk hashes and the overlay. Recommended: a small addition, "pick up an empty furnace" (one action, one button in the panel): question R3. Until answered: fixture-only (M21, M25) |
 | `Game::migrate` with a real second schema; tick-rate rescale (0005, 0006) | fixture-only (M24b `migrate-v*`). A fake old schema in the reference game would be test scaffolding dressed as content |
 | Non-default `CHUNK_BITS`, `TICK_RATE`, arena sizes, `keepTickingWhenEmpty` | fixture-only (M07, M12b, M06b, M28b). `durations_at_20_and_30_hz` checks the conversion against the reference durations |
 | World edge: `Tile::VOID`, clamp at ±2^23 | fixture-only (M07, M11); the worldgen golden reaches ±2^18 |
@@ -97,17 +97,18 @@ M34b and M34c keep the test columns true: a row is done when the named test exis
 | Furnace UI: deposit iron, coal or wood | `deposit_validates_item_count_and_cap`, `reference_furnace_flow` | 33b |
 | One ingot per 5 s; coal 10, wood 2 | `smelt_takes_five_seconds_at_20_and_30_hz`, `one_coal_smelts_exactly_ten`, `one_wood_smelts_exactly_two` | 33b |
 | Any player, any furnace; take-all; ore and fuel stay | `any_player_can_use_any_furnace`, `take_all_moves_ingots`, `reference_full_game_two_players` (no action removes ore or fuel) | 33b, 34c |
+| An empty furnace can be picked up by any player; it leaves the world and returns to the inventory | `pickup_empty_despawns_and_returns_item`, `pickup_rejected_unless_empty`, `pickup_by_any_footprint_tile_and_any_player`, `predicted_pickup_tombstone_then_ack`, `pickup_sends_entity_gone_and_closes_other_panel`, `reference_furnace_pick_up`, `reference_full_game_single`, `reference_full_game_two_players` | 33b, 34b, 34c |
 | Framework-free TypeScript | `reference_package_depends_only_on_engine` | 20 |
 | Whole game, single-player and multiplayer | `reference_full_game_single`, `reference_golden_replay`, `reference_full_game_two_players` | 34b, 34c |
 
 ## 4. Questions (for `docs/plan/questions-for-tyler.md`; briefs assume the default)
 
+Answered and removed from this table: Q4 (collect range: 3 tiles, centre to centre; M20, M20b) and R3 ("pick up an empty furnace": added to the Requirements, built in M33b, scripted in M34b and M34c).
+
 | # | Question | Default assumed | Affects |
 |---|---|---|---|
-| Q4 | (existing) Collect range | 3 tiles, centre to centre | 20, 20b |
 | R1 | May a furnace be placed over a resource tile (burying it)? | No: resource ids carry `NOT_BUILDABLE`; a depleted tile becomes buildable | 33 |
 | R2 | `FurnaceTake` is the one unpredicted action (result shows one round trip later) so that the `predict` opt-out has a user. Acceptable feel? | Yes | 33b |
-| R3 | Add "pick up an empty furnace" so that `despawn` has a reference user? It extends the spec's stated full scope. | No (fixture-only); **recommended: yes** | 33b, 34b, 34c |
 | R4 | Should the game always offer Export (protection against Safari's 7-day eviction), or only on the `SaveIncompatible` / status screen? | Only on the status screen | 34b, 37 |
 
 ## 5. Gaps found in the ADRs while planning (none blocks a Requirement)

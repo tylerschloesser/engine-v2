@@ -1,6 +1,6 @@
 # M23: Persistence in the browser: OPFS, Web Lock, lifecycle, export/import
 
-Status: not started · After: 22b · Tyler-dependent: Q "what should a game do with a save it cannot load?" (default assumed: engine offers `exportWorld` and `deleteWorld` on an unloaded world; the reference game shows both). Device check attached (**D**).
+Status: not started · After: 22b · Tyler-dependent: Q9, "what should a game do with a save it cannot load?" (unanswered; default assumed: engine offers `exportWorld` and `deleteWorld` on an unloaded world; the reference game shows both). Device check attached (**D**).
 
 ## Goal
 A single-player world survives tab close and reload: the sim worker owns OPFS sync access handles and a Web Lock, a second tab gets `WorldBusy`, a browser without OPFS runs on memory storage and reports `durable: false`, and `exportWorld` / `importWorld` round-trip a world between browser and Node. The zero-GC test runs with persistence on and decides, by measurement, whether the periodic snapshot write stays inside the strict window.
@@ -20,13 +20,14 @@ Mine from spikes: `spikes/zero-gc-webgpu` (worker CDP attach, sampling calls), `
 - World archive format, `exportWorld` / `importWorld` / `deleteWorld`, in the sim worker and as plain functions over any `Storage` for servers.
 - Zero-GC: persistence enabled in the single-player window of M04's test, plus the forced-snapshot measurement.
 - A checked-in OPFS latency page for the device check.
+- **World page `world.html`** (+ `src/world.ts`, fixture app, fixture `puts`, single-player with persistence on; `?world=<id>`, default `device`): M16's `slice.html` HUD and Paint control plus `hash` (`worldHash`, refreshed once a second), `durable` and `persisted` (from `client.onStorage`), a `WorldBusy` banner when `client.ready` rejects with `'world-busy'`, and Export, Import (file input plus a new-id field) and Delete buttons over `exportWorld` / `importWorld` / `deleteWorld`. The browser tests of this milestone that need a page use it, and the device items name it.
 
 ## Non-scope
 Panic recovery and worker respawn (M24, M37). `SaveIncompatible` (M24b; this milestone only guarantees export/delete work on a world that failed to load). Game UI for any of it (reference game, M32+). The remaining engine events and `onFatal` (M37). Server-side import wiring in `games/reference-server` (M29).
 
 ## Files, packages and crates touched
 - `packages/engine/src/storage/{opfs,archive}.ts`, `packages/engine/src/worker/sim.ts`, `packages/engine/src/client.ts` (events + three methods), `packages/engine/src/server.ts` (re-export archive functions)
-- `packages/engine/tests/browser/pages/opfs-latency.html` + its worker script (M02b's fixture app); browser tests beside M03's.
+- `packages/engine/tests/browser/pages/{opfs-latency.html, world.html, src/opfs-latency.ts, src/world.ts}` + the latency page's worker script (M02b's fixture app); browser tests beside M03's.
 - No Rust changes expected.
 
 ## Seams
@@ -35,12 +36,14 @@ Panic recovery and worker respawn (M24, M37). `SaveIncompatible` (M24b; this mil
 - TS on the client (main thread), following the `client.onLink` naming of M29: `WorldBusy` is a start failure, so `client.ready` rejects with `EngineStartError { code: 'world-busy' }` (M06b's union gains the code); `client.onStorage(cb: (s: StorageStatus) => void)` with `StorageStatus = { durable: boolean; persisted: boolean; usage: number; quota: number }`. M24b adds code `'save-incompatible'`; M37 adds `onFatal` and audits the set against 0005 Consequences. Carrier: `SimLifecycleMessage = { type: 'storage', ... } | { type: 'start-failed', code, detail }` over `postMessage` from the sim worker (lifecycle only, 0015; M06b's `postMessage` grep criterion gains these two types).
 - TS methods: `client.exportWorld(): Promise<Blob>`, `client.importWorld(bytes: Blob | Uint8Array, opts?: { worldId?: string; overwrite?: boolean }): Promise<{ worldId: string }>`, `client.deleteWorld(worldId: string): Promise<void>`; all reject with `NotSinglePlayer` when there is no sim worker.
 - TS functions from `engine/server`: `exportWorld(storage: Storage, worldId: string): Promise<Uint8Array>`, `importWorld(storage: Storage, bytes: Uint8Array, opts?): Promise<{ worldId: string }>`; archive = gzip (`CompressionStream`) of `magic | version u16 | count | (key, bytes)*` holding exactly the key set 0005 lists.
+- Pages `opfs-latency.html` and `world.html` (`?world=<id>`; HUD adds `hash`, `durable`, `persisted` to M16's fields), the latter reused by M24's and M24b's browser tests if they need a persisted world page.
 - `engine/test`: `forceSnapshot()` (advances the injected clock past the cadence so one snapshot lands in a measured window), `persistenceCounters()`.
 - `budgets.json` lines: `simWorker.bytesPerFrame` now measured with persistence on; possibly `simWorker.snapshotEventBytes` (Planning decision 1).
 
 **Consumes**
 - M22 `Storage`, `runStorageConformance`, `Persistence`; M22b `Persistence.open`, `SimHost.pause/resume/stop`, `WorldLoadError`.
 - M06b `W_YIELD` / park / resume protocol and `shell.runAsync(fn)` (leave the loop, await, re-enter); `EngineStartError`; `createClient({ host: { kind: 'local', world } })` (M06b/M13); M13 sim worker body and `SimHost.pause/resume`.
+- M16 `slice.html` HUD fields and Paint control; M13 `worldHash`.
 - M04 zero-GC harness and negative controls; M03 COOP/COEP fixture page and stepping API.
 
 ## Planning decisions
@@ -59,7 +62,7 @@ Panic recovery and worker respawn (M24, M37). `SaveIncompatible` (M24b; this mil
 4. Hidden/visible boundaries; reload test.
 5. Archive + export/import/delete, Node round trip first, then browser ↔ Node.
 6. Zero-GC with persistence; forced-snapshot measurement; budgets file; ADR if needed.
-7. Latency page; add the checklist entries below to `docs/plan/device-checks.md`.
+7. Latency page; confirm the `docs/plan/device-checks.md` section for this milestone matches what was built.
 
 ## Tests added
 - Browser (Chromium unless noted): `storage_conformance_opfs` (also WebKit, Firefox), `world_survives_reload` (play, reload page, hash at resumed tick equals `replayWorld` of the exported log), `second_tab_gets_world_busy`, `no_opfs_falls_back_durable_false` (OPFS stubbed out by an init script), `hidden_pauses_and_snapshots`, `export_import_roundtrip_browser`, `delete_world_removes_all_keys`, `export_works_after_load_failure` (corrupt manifest), `zero_gc_singleplayer_with_snapshot`, negative control `neg_control_snapshot_allocates` (a test-hook adapter that allocates per `append` must fail on the sim worker only).
@@ -69,6 +72,7 @@ Panic recovery and worker respawn (M24, M37). `SaveIncompatible` (M24b; this mil
 - [ ] All tests above pass by name.
 - [ ] Decision 1 is resolved in writing: either the default is confirmed (measured bytes recorded under Deviations and in `budgets.json`), or the superseding ADR exists and `budgets.json` carries `simWorker.snapshotEventBytes`.
 - [ ] Decision 3 outcome recorded.
+- [ ] `pnpm device:serve` lists `opfs-latency.html` and `world.html`; in desktop Chrome `world.html` shows `hash`, `tick`, `durable: true`, and a second tab on the same `?world=` shows the `WorldBusy` banner (`second_tab_gets_world_busy` runs on this page).
 - [ ] The `docs/plan/device-checks.md` section for this milestone matches what was built.
 - [ ] `pnpm test` and `pnpm lint` are green.
 
@@ -86,7 +90,7 @@ Extend `packages/engine/src/storage/CLAUDE.md`: OPFS adapter rules (no options o
 
 ## Manual device checks
 [device-checks.md, M23: OPFS and world lifecycle](device-checks.md#m23-opfs-and-world-lifecycle).
-This milestone builds `opfs-latency.html` (Planning decision 7) and a fixture world page showing hash, tick, `durable`, `WorldBusy`, and export / import controls; both must be listed by `pnpm device:serve --tunnel`.
+This milestone builds `opfs-latency.html` (Planning decision 7) and `world.html` (Scope: hash, tick, `durable`, `WorldBusy`, export / import / delete controls); both are listed by `pnpm device:serve --tunnel`.
 
 ## Deviations
 (filled in during Phase 3)

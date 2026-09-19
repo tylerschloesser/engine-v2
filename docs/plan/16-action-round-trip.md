@@ -22,16 +22,17 @@ Also `crates/engine/src/wire/CLAUDE.md`. Mine from spikes: `spikes/prediction-ap
 - **Main rAF:** drain the UI ring once; call `onActionResult` per kind-2 record in ring order (kind 1, `Ui`, is M16b: when both are present `onUi` fires first so a result handler sees current state).
 - **Host:** `Host::on_uplink` decodes each action (`WireError` → `status` that makes `SimHost` close the connection, 0004 step 1), drops `seq <= last_seq` (resend dedup), calls `G::admit(&View, &PresenceTable::empty(), who, &a)`; failure → an `Outcome::Rejected` queued for that connection, **not** recorded; success → `Record::Action` appended to the frame being collected. `seal()` fixes that frame for T+1; `Sim::step` applies it; outcomes go to the sender's next `build_frame` as `ActionResults` in `seq` order with `ack_seq` in the header; a frame is built whenever there is an outcome (0004 "Acks ride on deltas").
 - **Bindings step:** `buildGame()`/the Vite plugin run the native `export_bindings` test of 0017 §5 without gating reload; fixture `puts` derives `TS` on `Action`, `Reject`; output committed under the fixture's `bindings/`; `pnpm lint` type-checks a fixture page that calls `dispatch` with the generated type.
+- **Slice page `slice.html`** (+ `src/slice.ts`, fixture app `tests/browser/pages/`, fixture `puts`, single-player topology): the page `vertical_slice` drives and the page Tyler opens on the phone, so it is listed by `pnpm device:serve`. It has a Paint control (a button that dispatches `Paint` at the tile under the screen centre) and an on-page HUD, diagnostic only and outside the zero-GC rule (as M09b's HUD): `isolated`, adapter, workers ready, `confirmed` and `rejected` (counts from `onActionResult`), `ring drops` (sum of `stats().drops` over the `SabSet` rings, M06), `engine_mem_grows` per instance (`asHarness(client).memGrows()`, M06b), and `tick` (`authoritative_tick` from the clock block). `?hud=0` hides it for the zero-GC window.
 - **Skill** `.claude/skills/add-action-type/SKILL.md`, written last from what was actually done.
 
 ## Non-scope
 Prediction, `NotPredictable`, pending replay (M25). Persistence (M22). Action rate limit and `RateLimited` (M31). Presence table content and witness checks (M19). State-budget check (M21). `Hello`/`Welcome` (M28), resend after reconnect (M28b). `onUi`, `clock()` (M16b).
 
 ## Files, packages and crates touched
-`packages/engine/src` (`client.ts`, `worker.ts`, `vite.ts`, `test.ts`), `packages/engine/crates/engine` (`abi/client.rs`, `client/`, `host/`), `packages/engine/fixtures/puts`. Plus `.claude/skills/`.
+`packages/engine/src` (`client.ts`, `worker.ts`, `vite.ts`, `test.ts`), `packages/engine/tests/browser/pages/{slice.html, src/slice.ts}`, `packages/engine/crates/engine` (`abi/client.rs`, `client/`, `host/`), `packages/engine/fixtures/puts`. Plus `.claude/skills/`.
 
 ## Seams
-**Provides:** `client.dispatch`, `client.onActionResult`, the extended meaning of `client.ready`; clock block layout; action-ring and UI-ring record formats (kind 2); exports `on_action`, `client_poll_ui`; `Host` admit pipeline; `engine/test` `dispatchRaw(seq, jsonBytes)` (pre-encoded, for the zero-GC window per 0016 §2) and `actionResults()`; golden `wasm_script_a_matches_native`; skill `add-action-type`.
+**Provides:** `client.dispatch`, `client.onActionResult`, the extended meaning of `client.ready`; clock block layout; action-ring and UI-ring record formats (kind 2); exports `on_action`, `client_poll_ui`; `Host` admit pipeline; `engine/test` `dispatchRaw(seq, jsonBytes)` (pre-encoded, for the zero-GC window per 0016 §2) and `actionResults()`; golden `wasm_script_a_matches_native`; page `slice.html` with its HUD field names (`confirmed`, `rejected`, `ring drops`, `engine_mem_grows`, `tick`; M23's world page and M39-large-save read the same names); skill `add-action-type`.
 **Consumes:** M15b `SimHost.accept`, `sim_admit`, `sim_build_frame`, `on_frame`, `client_poll_uplink`; M15 `Host`, `ClientCore`; M14 `ActionResultsWriter/Reader`, uplink actions; M13 `sim_seal_frame`, `logSink`; M12b `Record`, `Outcome`; M06 `SabSet.{actionRing, uiRing, clockBlock}`, `SeqlockWriter`/`SeqlockReader`; M06b `Client`, `untilQuiescent`; M11 `injectPointer`; M09 `renderTo`/`readPixels`/`expectPixel`; M02 `buildGame`, `abi::registry`, `pnpm golden`; M02b the Vite plugin.
 
 ## Planning decisions
@@ -49,6 +50,7 @@ Rust: `action_lands_on_next_tick`, `arrival_order_within_tick`, `ack_and_deltas_
 
 ## Exit criteria
 - [ ] `vertical_slice` passes in Chromium; all other tests above pass.
+- [ ] `pnpm device:serve` lists `slice.html`; in desktop Chrome ten presses of its Paint control show `confirmed 10`, `rejected 0`, `ring drops 0`, `engine_mem_grows 0` on every instance and an advancing `tick` on the HUD (`vertical_slice` asserts the same HUD text after its own dispatches).
 - [ ] `bindings/*.ts` for `puts` are committed and regenerate byte-identically.
 - [ ] `.claude/skills/add-action-type/SKILL.md` exists and was followed once to add `Action::SetMotd` handling to the test page (or another variant) without reading this brief.
 - [ ] PLAN.md marks the vertical slice complete.
@@ -65,7 +67,7 @@ Skill `add-action-type` (0021 §4). `packages/engine/src/CLAUDE.md`: ring record
 
 ## Manual device checks
 [device-checks.md, M16: Vertical slice on the phone](device-checks.md#m16-vertical-slice-on-the-phone) (`PRE-PLAN.md` §8 item 9: first on-device run of the slice).
-The slice page must be listed by `pnpm device:serve --tunnel` and show the counters the items read: `Confirmed` / rejected results, ring drops, `engine_mem_grows` per instance, the tick counter.
+The page is `slice.html` (Scope), listed by `pnpm device:serve --tunnel`; its HUD shows the counters the items read: `confirmed` / `rejected`, `ring drops`, `engine_mem_grows` per instance, `tick`.
 
 ## Deviations
 (filled in during Phase 3)

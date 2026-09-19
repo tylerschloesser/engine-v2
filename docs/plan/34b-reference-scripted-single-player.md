@@ -1,6 +1,6 @@
 # M34b: Reference game: scripted full game, single-player, with persistence extras
 
-Status: not started · After: 34, 23, 24b · Tyler-dependent: no
+Status: not started · After: 34, 23, 24b · Tyler-dependent: R4 (offer "Export world" always, or only on the status screen? unanswered; default assumed: status screen only) and Q9 through M23 / M24b, see `docs/plan/questions-for-tyler.md`
 
 Split from M34 during planning (see that brief). M23 and M24b are not upstream of M34 in PLAN.md, so they are listed under After explicitly.
 
@@ -16,14 +16,14 @@ Also: `docs/plan/reference-coverage.md` (both tables). Skills: `run-tests`, `gc-
 Rules that apply: `games/reference/CLAUDE.md`; `.claude/rules/determinism.md` for the hook code.
 
 ## Scope
-- **Script helper** `games/reference/tests/helpers/script.ts`: one fluent description of a play (`panTo`, `collect(resource, n)`, `craft`, `place(origin)`, `deposit`, `waitTicks`, `takeAll`, `expectUi(partial)`), with two drivers: `domDriver(page)` (injected pointer input and real button clicks through `engine/test`) and `headlessDriver(client)` (M27 `HeadlessClient`: `setCamera`, `dispatch`, `ui`). Coordinates come from `landmarks.json`.
-- **Full game, browser:** spawn on land, mine to the unlock, craft, place, fetch iron and coal, deposit, smelt, take. Asserts `Ui` after every step and the final state hash against the headless run of the same script.
+- **Script helper** `games/reference/tests/helpers/script.ts`: one fluent description of a play (`panTo`, `collect(resource, n)`, `craft`, `place(origin)`, `pickUp`, `deposit`, `waitTicks`, `takeAll`, `expectUi(partial)`), with two drivers: `domDriver(page)` (injected pointer input and real button clicks through `engine/test`) and `headlessDriver(client)` (M27 `HeadlessClient`: `setCamera`, `dispatch`, `ui`). Coordinates come from `landmarks.json`.
+- **Full game, browser:** spawn on land, mine to the unlock, craft, place, pick the still-empty furnace up again (M33b's `FurnacePickUp`: it leaves the DrawList, the item is back) and place it two tiles over, fetch iron and coal, deposit, smelt, take; a final pick-up attempt is refused because fuel is left. Asserts `Ui` after every step and the final state hash against the headless run of the same script.
 - **Golden log:** `pnpm --filter reference golden:record` runs the script on the headless driver against `createWorldServer` with memory storage and a virtual clock, and writes `tests/golden/full-game.log` plus checkpoint hashes (from the `.wasm` run, `0002` §1). Replayed natively, under Node and Bun, and on M03's determinism page in three browsers.
 - **Persistence through the game:** reload resumes (inventory, furnace contents, depleted tiles, camera); a furnace keeps smelting while its chunk is unsubscribed; a second tab on the same world gets `WorldBusy`; export then import under a new world id gives an equal hash; an exported single-player world imported into a server storage is reclaimed by the same secret with its inventory (`0005` "Single-player to hosted").
 - **State budget full:** a `WorldConfig` whose `max_entities` leaves less headroom than `max_action_growth`; `PlaceFurnace` returns `Rejected(Engine(StateBudgetFull))`, the item stays in the inventory, and the build control shows the reason.
 - **`test-hooks` cargo feature** on `reference-sim`, never enabled by `vite build`: `SCHEMA_VERSION + 1`, and `StartCraft` with recipe id 255 panics in `apply`. Two `slow`-tagged tests use that build: the poison action is skipped and acked `EngineFault` while play continues (`0005` Panic recovery step 3); a world saved by the normal build reports `SaveIncompatible` under the hooks build with every stored byte unchanged and `exportWorld` still working.
 - **Zero GC through the game:** the M04 assertion, single-player topology, over a window of the script that pans, collects and deposits.
-- Minimal status UI needed by these tests only: `status.ts` shows `WorldBusy` and `SaveIncompatible` (with Export and Delete, per M23's default) from the rejection of `client.ready` (`EngineStartError` codes `'world-busy'`, M23, and `'save-incompatible'`, M24b; there is no `EngineEvent` union).
+- Minimal status UI needed by these tests only: `status.ts` shows `WorldBusy` and `SaveIncompatible` (with Export and Delete, per M23's default, Q9; on this screen only, R4's default) from the rejection of `client.ready` (`EngineStartError` codes `'world-busy'`, M23, and `'save-incompatible'`, M24b; there is no `EngineEvent` union).
 
 ## Non-scope
 Multiplayer scripts and races (M34c). Heavy mode, soak, benchmarks, the standard large save (M36 consumes this milestone's script and log). Device loss (M37b). `migrate` with a real second schema: the reference game has none (fixtures `migrate-v*` of M24b cover it; see the coverage file).

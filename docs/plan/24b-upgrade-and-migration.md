@@ -1,6 +1,6 @@
 # M24b: Upgrade path: `SCHEMA_VERSION`, `migrate`, `OldStore`, `SaveIncompatible`, Tick rescale
 
-Status: not started · After: 24 (needs 22b, 23's `start-failed` carrier and 24's `onRecovered`) · Tyler-dependent: Q "what should a game do with a save it cannot load?" (same question as M23; default: `client.ready` rejects with `'save-incompatible'`, files untouched, `exportWorld` / `deleteWorld` still work)
+Status: not started · After: 24 (needs 22b, 23's `start-failed` carrier and 24's `onRecovered`) · Tyler-dependent: Q9, "what should a game do with a save it cannot load?" (unanswered; same question as M23; default assumed: `client.ready` rejects with `'save-incompatible'`, files untouched, `exportWorld` / `deleteWorld` still work)
 
 Split from PLAN row 24 (see M24).
 

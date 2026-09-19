@@ -1,6 +1,6 @@
 # M33: Reference game: furnace entity and predicted placement
 
-Status: not started · After: 32, 26 · Tyler-dependent: R1 (may a furnace cover a resource tile? default: no), see `docs/plan/reference-coverage.md` "Questions"
+Status: not started · After: 32, 26 · Tyler-dependent: R1 (may a furnace cover a resource tile? unanswered; default assumed: no), see `docs/plan/questions-for-tyler.md`
 
 Split during planning: the PLAN.md row for M33 (entity, ghost, three actions, smelting, two UIs) was about 2,000 lines with five files to read. This brief is the entity and its placement; `33b-reference-furnace-operation.md` is deposit, take, smelting and the furnace panel.
 
@@ -25,7 +25,7 @@ Rules that apply: `.claude/rules/determinism.md`, `.claude/rules/hot-paths.md`, 
 - DOM `src/ui/build.ts`: a Build button shown when `can_build`; toggles construction mode; Escape and a second press leave it. Mouse: a `tap` while placing dispatches `PlaceFurnace { origin: tap.tile }`. Touch: a `tap` moves the cursor tile (engine) and shows a Confirm button anchored to the ghost with `client.overlay.anchor`; Confirm dispatches. Mouse or touch is read from `pointerType` on the tap event (M11's `InputEventTs`). Rejections flash the ghost's Confirm/Build control with the reason.
 
 ## Non-scope
-Deposit, take, smelting, the furnace panel, picking a furnace (M33b). Removing a furnace (no Requirement). Rotation.
+Deposit, take, smelting, the furnace panel, picking a furnace (M33b). Removing a furnace (M33b: pick up an empty furnace). Rotation.
 
 ## Files, packages and crates touched
 `games/reference/` only (`sim/src/{types,content,client}.rs`, `sim/src/rules/place.rs`, `scripts/gen-assets.mjs`, `assets/`, `src/ui/build.ts`, tests).

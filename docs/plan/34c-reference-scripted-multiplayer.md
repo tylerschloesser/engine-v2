@@ -18,7 +18,7 @@ Rules that apply: `games/reference/CLAUDE.md`. Skill: `run-tests`.
 
 ## Scope
 All tests live in `games/reference/tests/netcode/`, run by the netcode suite, use `createNetHarness` with the reference game's `buildGame` output, a fixed seed, the virtual clock, and M34b's `script.ts` headless driver. Default conditions: 60 ms latency, 20 ms jitter; each race also runs at 0 ms and at 250 ms.
-- **Full game, two players:** A mines, crafts and places; B deposits into and takes from A's furnace; after `settle()` `assertConverged()` holds and both `Ui`s agree with the host.
+- **Full game, two players:** A mines, crafts and places, and opens the furnace panel; B picks A's still-empty furnace up (any player may: A's frame carries `EntityGone`, A's panel closes, the furnace item is B's) and places it again; A deposits into and takes from the furnace B placed; after `settle()` `assertConverged()` holds and both `Ui`s agree with the host.
 - **Races** (each asserts the loser's `onActionResult`, the final host state, and "never a torn state": on every client frame the loser holds the item or the ghost, never both or neither):
   - last unit: B's `StartCollect` on a tile A's completion just emptied is predicted locally and rejected by the host;
   - same spot: two `PlaceFurnace` with overlapping footprints in one tick; arrival order wins; the loser's furnace item is back after the ack;

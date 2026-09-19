@@ -6,23 +6,23 @@ Every row of `PRE-PLAN.md` §10 (same order), with where Phase 2 settled it. **D
 |---|---|---|
 | Typed fast path + quantized deltas for continuous action streams | Decided: not built, not scheduled; uplink flag bits kept free | M14 |
 | Presence as an optional replay track | Decided: not built | M19 |
-| Determinism on real x86-64, physical iPhone, Android | Owned: x86-64 in CI; phones via the determinism page | M10; M03 device check |
+| Determinism on real x86-64, physical iPhone, Android | Owned: x86-64 in CI; the iPhone via the determinism page; Android not run: no device (Q5) | M10; M03 device check |
 | `+simd128` and `wasm-opt` for the sim module | Owned: both stay off until measured against the goldens | M36b |
 | Provisional ids for predicted entities | Decided | ADR 0022 (implemented in M25) |
 | Taint rule after a `NotPredictable` pending action | Owned: three candidate rules run against fixed scenarios; the selection rule is fixed in the brief | M25 |
 | Per-action growth declaration | Decided | ADR 0023 (implemented in M21) |
 | Per-frame overlay change list + `predicted` flag | Decided: tile-only `OverlayDiff` into the dirty-chunk set; `FrameView::is_predicted` / `predicted_tiles` | M26 |
 | Host-side atomicity of `apply` via an undo journal | Owned: built and benchmarked; adopt at ≤ 10 % `apply` overhead and zero steady-state allocation; ADR either way | M21b |
-| Own-timer completion gap of one RTT | Owned: measured; default UX rule is to stretch the bar over `duration + lead` (question Q10) | M26; feel check at M34 |
+| Own-timer completion gap of one RTT | Decided: stretch the bar over `duration + lead` (Tyler, Q10); the remaining gap is measured | M26; feel check at M34 |
 | Lead estimation; iterating reads; `entity(id)` gone vs unsubscribed | Decided: median of the last 8 per-ack samples; `WorldRead::entities_in` in ascending id order; ADR 0022 §7 | M26; M21 + M25; ADR 0022 |
 | Exact `TickCx`, `FrameCx`, `FrameView`, `OldStore` shapes | Decided | `TickCx`: M12b (completed in M21b); `FrameView`: M17; `FrameCx`: M18; `OldStore`: M24b |
-| Final check of reference-game coverage against the engine feature list | Decided: table written; uncovered features get fixture tests; one addition proposed (R3) | `docs/plan/reference-coverage.md` |
+| Final check of reference-game coverage against the engine feature list | Decided: table written; uncovered features get fixture tests; one addition made, "pick up an empty furnace" (R3, added to the Requirements by Tyler; M33b) | `docs/plan/reference-coverage.md` |
 | OPFS append/flush latency on iOS Safari | Owned: thresholds that retune the sync interval are fixed in the brief | M23 device check |
 | Helper that rescales `Tick`/`Ticks` fields during `migrate` | Decided: `Rescale` + hand-implemented `RescaleTicks`; engine timers rescale automatically | M24b |
 | Entity store layout and `EntityId` reuse policy | Decided | ADR 0022 (implemented in M12) |
 | Overlay promotion to dense at 512 entries; bucketed per-chunk area effects | Decided: neither is built in Phase 3; promotion is a representation-only change with M36's memory high-water mark as its trigger; area effects need an ADR from the game that wants them | M07 |
 | On-device validation of the 64 MiB world-budget split | Owned: `memory_bytes()` in M07, init-time sum in M21, high-water assertion in M36, device run in M39 | M07 → M39 |
-| ms per chunk on a real iPhone and mid-range Android | Owned: `worldgen-bench.html`; thresholds that rescale the warn level or reopen the gen-worker count are in the brief | M08 device check |
+| ms per chunk on a real iPhone and mid-range Android | Owned: `worldgen-bench.html` on the iPhone (Android not run: no device, Q5); thresholds that rescale the warn level or reopen the gen-worker count are in the brief | M08 device check |
 | Sampled pristine-hash check between client and server | Decided: none; a dev-build assertion compares gen-worker output with local generation; the `Hashes` section stays extensible | M08, M31b |
 | Whether noise helpers move into the engine crate | Decided: yes, `engine::noise`, f64 only | M08 |
 | Durable Object adapter and feasibility check | Owned: recipe package + go/no-go rule fixed in advance; ADR from the result | M38 |
@@ -36,7 +36,7 @@ Every row of `PRE-PLAN.md` §10 (same order), with where Phase 2 settled it. **D
 | Where `engine.log` text is decoded | Decided: in the instance's own isolate, by the loader (`LoaderHooks.onLog`) | M02 |
 | On-device memory ceilings | Owned: memory page with arena-size URL parameters as the fallback | M11 device check |
 | Ring capacities, uplink poll period, control-block layout, `yield` protocol | Decided | M06 (capacities, control block), M06b (`yield`), M29 implements the 10 ms uplink poll |
-| Verifying COOP/COEP listings on one real static host | Owned: Cloudflare Pages | M38 |
+| Verifying COOP/COEP listings on one real static host | **Unverified, carried forward.** The Cloudflare Pages deploy was not approved (Q6); M38 serves the client from the Fly machine (`games/reference-server --static` sets the headers), which does not verify a static host's listing or the cross-origin `wss` sentence of 0015 §3 | M38 (states it); M39b (open item into Phase 4) |
 | Whether the periodic snapshot `write` is inside the strict zero-GC window | Owned: inside if the sim worker meets its 0016 §1 budget with one forced snapshot in the window; otherwise a budgeted event with a superseding ADR | M23 |
 | Final main-thread B/frame number and overlay-anchoring string constant | Owned | M17 (`gc.pages.drawables`), M18 (`gc.pages.anchors`) |
 | Software-adapter form of assertion B | Owned: mechanism (`GC_MODE=software`) in M04, numbers in M10 | M04, M10 |

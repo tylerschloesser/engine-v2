@@ -20,10 +20,10 @@ Rules that apply: `.claude/rules/determinism.md`, `.claude/rules/hot-paths.md`, 
 - `GlobalState { colours: [u8; MAX_PLAYERS] }` (palette index per `PlayerId`, 0 = unassigned). `genesis` puts the empty value. `on_player(Joined)` picks a free palette index with `w.rng()` and does one `put_global`. Nothing else writes `Global`.
 - `Ui.roster: Vec<{ id, online, colour, me }>` built in `ui()` from the engine roster and `global().colours`. DOM `src/ui/roster.ts`: one dot per entry, hollow when offline.
 - Remote players in `extract`: for each `FrameView::presences` entry draw a `circle` in that player's colour with the entry's `alpha`; own circle takes the own colour. No range ring for remotes.
-- Mode selection in `main.ts`: `readInvite()` (M29) present → `host: { kind: 'remote', url }` with the join key from the fragment; absent → `host: { kind: 'local' }`.
+- Mode selection in `main.ts`: `readInvite()` (M29) present → `host: { kind: 'remote', url }` (`url` = `wsUrl(location)`, M29: the server's `/ws` on the page's own origin) with the join key from the fragment; absent → `host: { kind: 'local' }`.
 - Link status: `src/ui/status.ts` shows a small indicator from `client.onLink` (states per M29) after the delay of `0013` Client policy; `rejected` with `BadKey` or `Full` shows a one-line message. No modal.
 - Returning player: on its first `frame`, if the presence passed in was seeded (M19 `seed_presence`, from `Welcome`) `RefClient` starts the spring there and calls `cx.follow(Some(pos))` for that one frame, then `None`. Otherwise M20b's spawn rule applies.
-- `games/reference-server`: confirm its defaults serve the reference game (`--game` default, `JOIN_KEY`, `--data`); add `pnpm --filter reference-server start` and a README section "play with a friend on the LAN" that points at `<<serve>>` in `docs/plan/device-checks.md`.
+- `games/reference-server`: confirm its defaults serve the reference game (`--game` default, `JOIN_KEY`, `--data`); add `pnpm --filter reference-server start` and a README section "play with a friend on the LAN" that points at [How to serve a page to the phone](device-checks.md#how-to-serve-a-page-to-the-phone) in `docs/plan/device-checks.md`.
 
 ## Non-scope
 Scripted full-game and race tests (M34b, M34c). Player names, chat, cursors. Any per-player colour choice UI. Status UI for storage and fatal events (M37 owns the remaining engine events).
@@ -33,7 +33,7 @@ Scripted full-game and race tests (M34b, M34c). Player names, chat, cursors. Any
 
 ## Seams
 **Provides:** `FrameView::roster` (engine crate); `GlobalState`, `content::PALETTE`, `Ui.roster`; Playwright helper `tests/helpers/server.ts::startReferenceServer({ seed, joinKey?, maxPlayers?, manualTimer: true })` wrapping M29's `startTestServer` with the reference game's `buildGame` output; `openGame(page, { invite })`.
-**Consumes:** `put_global` (M12b), `Delta::Roster` in the `Store` (M12; 0024 §8), Global section with the roster (M14); `FrameView::presences` with `alpha` (M19, M30); `seed_presence` from `Welcome` (M19/M28); `cx.follow` (M18); `createClient` `host` option (M06b), `readInvite`, `client.onLink`, `startTestServer`, `games/reference-server` (M29); rates and hashes on by default (M31, M31b); `SimRng` through `WorldWrite::rng` (M12b).
+**Consumes:** `put_global` (M12b), `Delta::Roster` in the `Store` (M12; 0024 §8), Global section with the roster (M14); `FrameView::presences` with `alpha` (M19, M30); `seed_presence` from `Welcome` (M19/M28); `cx.follow` (M18); `createClient` `host` option (M06b), `readInvite`, `wsUrl`, `client.onLink`, `startTestServer`, `games/reference-server`, `pnpm device:serve --app reference --ws` (M29); rates and hashes on by default (M31, M31b); `SimRng` through `WorldWrite::rng` (M12b).
 **From M27's harness (in its brief; if missing in code, stop and fix the plan):** `createNetHarness({ fixture })` accepting the reference game's `buildGame` output directory; `HeadlessClient.setCamera({ x, y, tilesAcross })` (so the game's spring produces presence) and `HeadlessClient.ui()` returning the last `Ui` JSON.
 **Engine addition owned by this milestone** (no earlier brief provides a read accessor for the engine roster from client code): `FrameView::roster(&self, f: &mut dyn FnMut(PlayerId, bool))` in ascending `PlayerId`, reading the replica's `Store` (M12's `Delta::Roster`, 0024 §8). About 40 lines in the engine crate plus one fixture test (`frameview_roster_follows_delta`).
 
@@ -42,7 +42,7 @@ Scripted full-game and race tests (M34b, M34c). Player names, chat, cursors. Any
 - **Colours are `Global`, not `Player`.** Every client must read every player's colour, including offline ones; that is the definition of the Global scope (`0011`).
 - **The one-frame follow is how the host's memory of a position reaches the camera.** It also gives the follow target its only reference-game user. If a locally saved camera exists it is within a few tiles of the same place, so the jump is invisible.
 - **Offline players stay in the roster** as hollow dots: player state persists indefinitely (`0013`), and the dot is the visible proof that the online flag follows the logged event after the grace.
-- **Own-timer completion gap** (`0012`, deferred 2→3; carried from M20b): judge it here by hand against the reference server through a throttled connection and record the decision in Deviations: accept, or render own bars over `duration + lead`. The device entry below repeats it on a real network.
+- **Own-timer completion gap** (`0012`, deferred 2→3; carried from M20b): decided, not judged here. Own bars stretch over `duration + lead` (Q10; M26's `own_progress`). Check by hand against the reference server through a throttled connection that every own bar (collect, craft) uses it and ends when the result arrives; the device entry below repeats that on a real network.
 
 ## Order of work
 1. `GlobalState`, colour assignment, native tests; `SCHEMA_VERSION` bump; bindings.
@@ -73,7 +73,7 @@ Bandwidth per client, steady (`PRE-PLAN.md` §7): in `reference_presence_only_to
 
 ## Manual device checks
 [device-checks.md, M34: Reference multiplayer on real devices](device-checks.md#m34-reference-multiplayer-on-real-devices): two devices in one world, the own-timer bar (owner M26), remote motion (owner M30).
-The phone must reach the reference game over HTTPS with `/ws` to `games/reference-server` on the same origin.
+The phone reaches the reference game over HTTPS with `/ws` to `games/reference-server` on the same origin through M29's `pnpm device:serve --tunnel --app reference --ws`; the game's remote `url` defaults to `wsUrl(location)` (M29).
 
 ## Deviations
 (filled in during Phase 3)
