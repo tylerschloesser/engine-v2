@@ -120,4 +120,163 @@ Tyler approved the tunnel (Q7: it installs `cloudflared` and exposes the fixture
 This milestone builds `determinism.html` and `pnpm device:serve [--tunnel]` (procedure: Planning decisions above); the first scheduled run is in M11's sitting.
 
 ## Deviations
-(filled in during Phase 3)
+
+No split: steps 1–7 fitted one session. No decision changed and no seam under **Provides** was
+renamed, so no ADR. Exact shapes, findings and small corrections:
+
+- **`biome.json`'s `noRestrictedGlobals` override excludes `src/vite.ts` and `src/build-game.ts`**,
+  not only `src/clock.ts` and `src/test/**` as the Seams text says ("the only file in
+  `packages/engine/src/` outside `src/test/`"). Both are build-time Vite/cargo tooling (0017 §5),
+  outside what 0020 §8 means by "main thread, workers and server"; `vite.ts` already used
+  `setTimeout` for its rebuild debounce and `build-game.ts` already used `performance.now()` for
+  `cargoMs` before this milestone. Denied globals: `Date`, `performance`, `setTimeout`,
+  `setInterval`, `requestAnimationFrame`, each with a reason citing 0020 §8.
+- **`step-block.ts` field layout** (5 `Int32Array` slots, not the six named in Seams —
+  `CONTROL`/`ERR` collapsed into one `Op` field and a `Status`/message never needed a slot of its
+  own): `Req`, `Ack`, `State` (`WorkerState`: `Idle 0`, `Armed 1`, `Busy 2`), `Yield`, `Op`
+  (`StepOp`: `Tick 1`, `Frame 2`). `park()` wakes the worker by `Atomics.notify`-ing `Req` **without
+  changing its value**: `Atomics.wait` returns `"ok"` on any `notify` regardless of whether the
+  waited word changed, so this keeps `Req === Ack` true across a park (verified: this is exactly
+  what `stepping.spec.ts`'s `untilQuiescent` test relies on). `resume()`/`park()` are `postMessage`
+  round trips (`'resume'` → `'armed'`, then a `Yield`-flag wake → `'parked'`); `stepTick`/`stepFrame`
+  are the SAB path (`wake` + a busy-spin `awaitAck`, capped at the spike's `2e9`-iteration guard
+  before throwing "did not ack a step (resume() first?)").
+- **`hash`/`admit`/`memoryBytes`/`memGrows` require the worker parked**, checked with a clear throw
+  (`harness: worker '<name>' is armed; call park() first (<what>)`) rather than silently queueing a
+  `postMessage` a blocked worker cannot receive (would hang forever). This is why the seam text pairs
+  `park()`/`hash()`/`resume()` as an explicit round trip rather than having `hash()` park
+  automatically: automatic parking would silently change every other armed worker's state too on a
+  multi-worker harness.
+- **`untilQuiescent()` is implemented as parking every worker** (same code path as `park()`). "Every
+  worker has acknowledged every request and is parked" (Seams) reduces to this once `stepTick`/
+  `stepFrame` are synchronous and already ack before returning: nothing but the park itself is ever
+  outstanding when it is called. `stepping.spec.ts`'s quiescence test therefore proves `Req === Ack`
+  and `STATE === idle` indirectly, through the public API: `hash()` only succeeds once truly parked
+  (a worker blocked in `Atomics.wait` cannot receive the `postMessage`), so a following `hash()` call
+  succeeding is the proof, rather than reading the internal `Int32Array` from the test (not exposed
+  outside `src/test/`, and Seams marks the whole step block "Internal, replaced later").
+- **`determinism.spec.ts` does not go through `createHarness`.** Reproducing the golden needs
+  `sim_admit` on every 7th tick across all 10,000 ticks; the harness's `admit` is explicitly
+  setup-rate/park-required (Seams), so driving it per-admit would mean ~1,400 park/resume round
+  trips per engine. Instead `tests/browser/pages/src/determinism-worker.ts` is a bare module worker
+  (0020 §5's own phrase, "a bare page with the .wasm in a worker") that runs
+  `tests/support/scenario.ts`'s `runHashScenario` — the same driver the native, Node and Bun legs use
+  — in one `postMessage` round trip. `harness.ts`/`harness-worker.ts` stay generic; this fixture-
+  specific driving logic has no reason to live under `src/test/`.
+- **`page.goto`'s `load` event does not reliably wait out a page's top-level `await` chain** (fetch +
+  `compileStreaming` + `instantiate`), measured under three parallel Playwright workers: the first
+  tests to start sometimes read `window.__wiring`/`window.__harness` before the module script's last
+  line ran (`window.__createHarness` was still `undefined`, so `?.()` silently no-op'd and a
+  `page.waitForEvent('worker')` then timed out at 30 s; a fetched header read `undefined`). Fix, not
+  in the brief's Files list: every page ends with `window.__pageReady = true`, and
+  `tests/browser/support/page.ts`'s `openPage` waits for it before returning. Confirmed by three
+  consecutive full three-engine runs with zero flakes after the fix (zero before, on the same
+  machine, under load).
+- **`wiring.ts` fetches the wasm bytes once, not twice.** `res.headers` does not consume the
+  `Response` body, so the same `res` feeds `WebAssembly.compileStreaming`; the original draft (one
+  fetch for headers, a second for `compileStreaming`) roughly doubled network load under three
+  parallel browsers and was a contributing factor to the flake above.
+- **Every page has `<link rel="icon" href="data:,">`.** Without it, Chromium's automatic
+  `/favicon.ico` request 404s, which `openPage`'s console-error guard (correctly) fails the test on;
+  not in the brief's Files list, but needed for `support/page.ts`'s console-error contract to be
+  usable at all.
+- **`wiring.ts` gets its `onLog` line for free.** `crates/engine/src/abi/mod.rs`'s `try_init` already
+  calls `panic::log(LogLevel::Debug, "engine_init ok")` on every successful `engine_init` (added in
+  M02, not seen as a `Tests added` item there); dev-profile builds keep `Debug` (release drops below
+  `Warn`, 0014 §3). No fixture change was needed for "an engine.log line arrives through `onLog`":
+  `wiring.ts` instantiates the fixture directly on the main thread (no worker, no isolation needed
+  for this one check) purely to observe it.
+- **`playwright` adapter**: `PLAYWRIGHT_JSON_OUTPUT_FILE` (not `_NAME`; found by reading
+  `playwright`'s own `resolveOutputFile`, since 1.63.0's docs describe the config option, not the
+  env var name) resolves relative to `cwd`, matching the vitest adapter's `outputFile` path
+  convention (`test-results/browser/report.json`). Running the raw `playwright test` CLI without
+  this env var instead writes to `packages/engine/test-results/browser/report.json` (the config's
+  own `outputFile`, resolved relative to the config file's directory) — a different path, noted in
+  the `run-tests` skill so it isn't confused with the runner's own report.
+- **`scripts/test.mjs`, not just `scripts/suites.mjs`/`scripts/lib/{adapters,report}.mjs`, changed**
+  (outside the brief's Files list): the `warnings` extension to the output contract (Planning
+  decisions "Output contract") needed `runSuite`/`main` to aggregate and print a line per warning
+  (`formatWarning`, new in `report.mjs`) under each suite's line; nothing else there changed.
+- **`playwright-browsers` TOOLS row probes via `scripts/lib/playwright-browsers-probe.mjs`**, not a
+  single regex against `playwright install --version`: `playwright install --dry-run` always
+  describes the full install plan whether or not the browsers are already present (measured — ran it
+  against an already-populated cache and got the same four-browser listing as a first run), so it
+  cannot say what is missing. `playwright install --list` prints one block per Playwright version
+  found in the shared `~/Library/Caches/ms-playwright` (or platform equivalent) cache; the probe
+  finds the block for the pinned version and checks it names all three engines, printing the pin
+  string on success (so it composes with `setup-tools.mjs`'s existing `match`-a-version mechanism)
+  and nothing otherwise.
+- **`pnpm device:serve`'s port is 4173, fixed**, distinct from `ENGINE_TEST_PORT` (4517 default): it
+  sets `ENGINE_TEST_PORT=4173` for the `vite preview` child so the existing app config's `port`/
+  `strictPort` (0017/M02b) serves it without a second config. `--host 127.0.0.1` is passed explicitly
+  to both this script's `vite preview` and `playwright.config.ts`'s `webServer` command: Vite's
+  default preview host resolves to `localhost`, which on this machine binds `::1` only and refuses a
+  `127.0.0.1` connection (measured; `baseURL`/the device URL are both literal `127.0.0.1`).
+- **Measurements** (Tyler's Mac, warm caches unless noted):
+  - `browser` suite: **13 tests, ~4.2–4.4 s of its 25 s budget (~17 %)** — well under a third of the
+    row, so M04 has the headroom 0020 §3's demotion rule assumes. 13 = chromium's 11 (6 `wiring` + 4
+    `stepping` + 1 `determinism`, all untagged or not, chromium runs everything) plus the
+    `@engines`-tagged `determinism` test again in `webkit` and `firefox`. Three consecutive full
+    `pnpm test browser` runs showed no flakiness after the `__pageReady` fix.
+  - `pages` build step in isolation (`vite exec vite build --config .../vite.config.ts`, the same
+    command `scripts/suites.mjs` runs): **~150–180 ms internal Vite time, ~470–490 ms wall** (`pnpm
+    exec` + Node startup accounts for most of the gap), cold (no `dist/`) and warm alike — added to
+    every `pnpm test` build phase, so about 1.6 % of the 30 s Dev-loop budget (0020 §3).
+  - `pnpm test browser` end to end (`rm -rf test-results packages/engine/tests/browser/pages/dist`,
+    then two consecutive runs): cold **6.7 s wall**, warm **5.9 s wall** (both include the `tsc`,
+    `fixtures`, `cargo-tests --no-run` and `pages` build steps, not `pages` in isolation, plus the
+    `browser` suite's own ~4.2 s); the runner's own `browser pass 13 tests` line was identical
+    (4.2 s) in both.
+  - Dev-profile `game.wasm` served to the pages app: unchanged from M02b (3.7 MB, DWARF; never
+    measured against the release-only size budget, 0015 §6). One consequence, not a regression: two
+    fetches of it (the pre-fix `wiring.ts`) under three parallel Playwright workers was itself a
+    contributing factor to the `__pageReady` flake above, at this size; noted for M04, which will
+    also fetch it.
+- **Exit criterion wording vs. what exists: "`pnpm test` runs five suites in parallel."** After this
+  milestone `pnpm test` runs **four**: `rust`, `unit`, `wasm`, `browser` (`browser pass 13 tests
+  4.2s/25s`, alongside the other three). The 0020 §3 table names five rows (`rust`, `unit`, `wasm`,
+  `netcode`, `browser`), and `browser` is the fifth *named* suite in that table, but `netcode` is not
+  registered until its own milestone — nothing in this brief's Scope builds it. Read literally
+  against the actual suite count, this criterion is **not met**; read as "the fifth row of 0020 §3's
+  table now runs," it is. Flagged rather than silently reworded (the checkbox itself is not mine to
+  touch); no code changed to chase the literal count.
+- **Exit criterion 5 (`grep -r "test/" packages/engine/dist/{loader,clock,vite,server-node}.js`
+  finds no import of test code) by hand:** the grep is not empty — `dist/clock.js`'s own doc comment
+  names `src/test/manual-clock.ts` and `src/test/` descriptively (carried over from the `.ts` source
+  comment). Confirmed by hand that neither match is an `import`/`require` line
+  (`grep -n "^import\|require(" ... | grep -i test` on the same four files: no output). The claim the
+  criterion is checking — no import of test code from these four production entrypoints — holds;
+  the literal command's output is not empty.
+- **Exit criteria 3 and 4, done by hand, reverted, nothing committed except the fix each surfaced:**
+  - Checkpoint 0 of `fixtures/hash/golden/golden.json` set to `"0000000000000000"`: `pnpm test rust
+    -t scenario_matches_golden` failed with `assertion `left == right` failed: checkpoint 0 differs
+    from .../golden.json` (`left: "29e92bc3f1e72c2c"`, `right: "0000000000000000"`); `pnpm test wasm
+    -t determinism` failed both `determinism: node matches golden` and the Bun leg, the latter
+    printing `checkpoint 0: got 29e92bc3f1e72c2c, golden has 0000000000000000`; `pnpm test browser -t
+    determinism` failed in `[chromium]`, `[webkit]` and `[firefox]`, each with `checkpoint 0: got
+    29e92bc3f1e72c2c, golden has 0000000000000000`. Reverted; `git diff --exit-code` on the file
+    confirmed clean.
+  - `Date.now()` added to `loader.ts`: `pnpm lint` failed on `biome`, `lint/style/noRestrictedGlobals`,
+    "Do not use the global variable Date" at the new line, with the reason string from `biome.json`.
+    `Math.random()` added instead: `pnpm test unit -t no_ambient_random` failed — but only after a
+    real fix (see the standalone commit above this Deviations entry): the test originally used
+    `expect(offenders).toEqual([])`, whose file list lives only in Vitest's separately-rendered diff,
+    which the JSON-reporter-based runner (0020 §2) never captures. Changed to a plain `throw` when
+    `offenders` is non-empty, kept (not part of the revert): `pnpm test unit -t no_ambient_random`
+    now fails with `Error: ambient randomness outside src/test/:\nloader.ts: matches
+    /\bMath\.random\b/`. `loader.ts` reverted; `git diff --exit-code` confirmed clean.
+- **Context artifacts written:** `.claude/skills/run-tests/SKILL.md`; `packages/engine/CLAUDE.md`
+  (ambient-time/randomness one-liner, "Adding a browser spec" section). Every command in the skill
+  was run at least once in this session, **except `pnpm golden`**: the delegation prompt explicitly
+  forbade running it against the existing `hash` fixture this milestone, so its section documents
+  the command without executing it.
+- **`pnpm setup:tools`** installed nothing new for Bun/nextest (already pinned from M01/M02); the
+  Playwright browsers (chromium 153, webkit 26.6, firefox 155, matching the pin's bundled versions)
+  were already present in the shared cache from other projects on this machine at the exact pin
+  version, so `pnpm exec playwright install chromium webkit firefox` completed with no download —
+  untested here: a genuinely cold install's download time.
+- **Tunnel path: implemented, not run.** `cloudflared` is not on `PATH` on this machine;
+  `pnpm device:serve --tunnel` printed the one-line install hint and exited 1, which is the whole of
+  what was verified for that branch. `pnpm device:serve` (no `--tunnel`) was verified for real:
+  built the fixture app, served `determinism.html` on `127.0.0.1:4173`, and a `playwright-cli` read
+  of `#result` showed `PASS | crossOriginIsolated: true | userAgent: ...HeadlessChrome/153...`.
