@@ -31,13 +31,14 @@ A deliberately small game that exercises every engine feature, in single-player 
 
 ## Notes
 
-- The player's position is sim state (collection range depends on it), so the spring must run in the sim, driven by the engine-defined camera action, with the local player predicted on the client. This makes the game a good test of prediction.
+- The camera is not an action and never mutates the world (see `overview.md`), yet the player follows the camera and collection range depends on the player's position. How those fit together is the first open question below.
 - Durations above are in seconds; see the time-units question in `simulation.md`.
 
 ## Open questions
 
 Small gaps. Phase 1 should propose defaults and confirm them with Tyler in its batch of questions:
 
+- **Where does the player's position live?** Candidates: (a) *presence*, not world state: the spring runs on each client from its own camera, positions are relayed to other clients as ephemeral, unlogged presence (like cursors), and range is checked when a collect action is admitted, so the log holds only admitted actions and replay never needs positions; (b) world state driven by a game-defined movement action that the game samples from the camera, which is logged, replayable, and predicted, at the cost of a continuous action stream. (a) matches "the camera lives independently"; confirm with Tyler.
 - Can ingots be taken back out of a furnace? (Presumably yes.)
 - Do resource tiles deplete, or are they infinite?
 - Is inventory per player (assumed yes), and is the furnace unlock per player (assumed yes)?

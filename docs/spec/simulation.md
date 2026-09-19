@@ -7,7 +7,8 @@
 - All actions are serialized and sent as messages.
 - The world is deterministic: given the original simulation code, the original seeds and parameters, and all actions with their timings, the world can be reconstructed exactly.
 - The sim tracks which players are connected and what each is seeing (camera position + viewport), so it knows which chunks each player is subscribed to.
-- Some actions are engine-defined and engine-managed (connection, camera/viewport); others are game-defined (see `reference-game.md`).
+- Some actions are engine-defined and engine-managed (connection); others are game-defined (see `reference-game.md`).
+- Camera + viewport updates are not actions and never mutate the world (see Fixed decisions in `overview.md`). They feed subscriptions only, so they are neither logged nor needed for replay.
 - The engine manages data storage: something appropriate in the browser ("localStorage or whatever"), something appropriate on the server.
 - The world only needs to be persisted occasionally, for crash recovery.
 - Actions are stored indefinitely so the world can be replayed.
@@ -24,7 +25,7 @@ Tick rate lives in `sync.md`.
 - **Storage.** Browser: OPFS (sync access handles work in workers) vs. IndexedDB; quotas and eviction; localStorage is almost certainly too small and blocks the main thread. Server: a minimal storage interface that stays host-agnostic.
 - **Time units.** Game durations are authored in seconds but the sim counts ticks; define the conversion so changing the tick rate doesn't change game feel.
 - Can a single-player world later be hosted as multiplayer (same snapshot + log format)? Nice to have.
-- **Camera actions dominate the log.** Camera/viewport updates are actions, the reference game makes them gameplay input (so they can't be dropped from the log), and the log is kept indefinitely. Estimate log growth per player-hour at the chosen camera send rate, and decide on quantization, coalescing, and encoding so "indefinitely" stays affordable in OPFS and on a server.
+- **Log growth.** The camera is not logged, so the log holds only connection and game actions. Still estimate growth per player-hour for a plausible action rate, so "indefinitely" has a number in OPFS and on a server. If a game wants continuous input in the sim (see the player-position question in `reference-game.md`), that stream is what would dominate.
 - **Browser durability.** In a browser, closing the tab is the normal exit and there is no reliable shutdown hook, so "persist occasionally" can't rely on a final save: the continuously appended action log is the durability mechanism, and the acceptable loss window (last N ticks) needs a number. Also: browser eviction of site storage (Safari's 7-day rule, `navigator.storage.persist()`), two tabs opening the same save (OPFS sync handles are exclusive; Web Locks), and whether save export/import is in scope (a Tyler question).
 - **Sim crash recovery.** A Rust panic traps and poisons the WASM instance. Define recovery (new instance, load snapshot, replay log tail) for both worker and server, and what clients see meanwhile.
 - **Snapshot schema evolution.** Snapshotting at an upgrade boundary only helps if the new sim version can read the old snapshot. Decide whether the snapshot format is schema-evolvable, whether games write migration hooks, or whether upgrades may simply invalidate saves during prototyping (a Tyler question).

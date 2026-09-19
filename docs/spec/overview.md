@@ -14,7 +14,7 @@ A multiplayer web game engine for one genre Tyler likes to prototype: top-down, 
 | Knowing which chunks are visible/subscribed; requesting async chunk generation; chunk lifecycle | Tile art and assets |
 | WebGPU rendering | Data model (tiles, entities, player state) |
 | Tick loop and scheduling; running the sim in a worker or on a server | Simulation rules and game-defined actions |
-| Engine-defined actions (connect/disconnect, camera + viewport) | Delta definitions, interpolation and prediction logic |
+| Engine-defined actions (connect/disconnect). Camera + viewport are *not* actions: see below | Delta definitions, interpolation and prediction logic |
 | Connected players and their chunk subscriptions | Game UI (DOM overlay) |
 | Transport, delta delivery, the interpolation/prediction machinery | Per-game config (chunk size, world cap, etc.) |
 | Persistence (snapshots + action log) and replay | |
@@ -30,6 +30,7 @@ Guiding idea: the game defines *what* (data and rules); the engine pieces everyt
 - Custom WebGPU renderer; no rendering library.
 - WebSockets for multiplayer unless research finds something clearly better.
 - Game UI is a game-owned DOM overlay; the engine renders no UI widgets.
+- **The camera never mutates the world, and is not an action.** It is deliberately non-mutating so that it can live independently of the sim: the sim's host uses each client's camera + viewport only to decide chunk subscriptions. Only actions change the world.
 - The server entrypoint should be agnostic to where it's hosted (e.g. AWS vs. Vercel), within what `sync.md` finds feasible.
 
 ## Scale and trust
