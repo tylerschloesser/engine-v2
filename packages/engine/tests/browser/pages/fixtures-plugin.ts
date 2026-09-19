@@ -10,6 +10,14 @@ import type { Connect, Plugin } from 'vite'
 const FIXTURES_DIR = fileURLToPath(new URL('../../../fixtures/', import.meta.url))
 const PREFIX = '/fixtures/'
 
+// Terminating a request here skips Vite's own header middleware, so this route sets the pair
+// itself (0015 §3: every response of the game's origin needs both, the engine plugin's own wasm
+// route included).
+const COI_HEADERS = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+}
+
 type FixtureFile = 'game.wasm' | 'game.json'
 
 function fixtureOutputPath(name: string, file: FixtureFile): string {
@@ -34,6 +42,7 @@ const serve: Connect.NextHandleFunction = (req, res, next) => {
   const path = fixtureOutputPath(name, file)
   if (!existsSync(path)) return next()
   res.setHeader('Content-Type', file === 'game.wasm' ? 'application/wasm' : 'application/json')
+  for (const [key, value] of Object.entries(COI_HEADERS)) res.setHeader(key, value)
   res.end(readFileSync(path))
 }
 

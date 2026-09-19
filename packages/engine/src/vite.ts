@@ -136,6 +136,9 @@ export function engine(opts: EngineOptions): Plugin {
         if (!wasmBytes) return next()
         res.setHeader('Content-Type', 'application/wasm')
         res.setHeader('Cache-Control', 'no-store')
+        // Terminating the response here skips Vite's own header middleware (0015 §3: every
+        // response needs these, the wasm route's own response included).
+        for (const [key, value] of Object.entries(COI_HEADERS)) res.setHeader(key, value)
         res.end(wasmBytes)
         return undefined
       })
