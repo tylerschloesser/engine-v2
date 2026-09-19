@@ -1,0 +1,37 @@
+{
+  "numTotalTestSuites": 1,
+  "numPassedTestSuites": 0,
+  "numFailedTestSuites": 1,
+  "numPendingTestSuites": 0,
+  "numTotalTests": 1,
+  "numPassedTests": 0,
+  "numFailedTests": 1,
+  "numPendingTests": 0,
+  "numTodoTests": 0,
+  "startTime": 1789843464910,
+  "success": false,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [],
+          "fullName": "runner_negative_control",
+          "status": "failed",
+          "title": "runner_negative_control",
+          "duration": 2.3060000000000045,
+          "failureMessages": [
+            "AssertionError: runner self-check: deliberate failure: expected 'fail' not to be 'fail' // Object.is equality\n    at /repo/scripts/lib/runner-control.test.mjs:6:86\n    at file:///repo/node_modules/vitest/dist/run.js:1:1"
+          ],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        }
+      ],
+      "startTime": 1789843464978,
+      "endTime": 1789843464980.306,
+      "status": "failed",
+      "message": "",
+      "name": "/repo/scripts/lib/runner-control.test.mjs"
+    }
+  ]
+}

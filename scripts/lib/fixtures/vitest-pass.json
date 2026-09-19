@@ -1,0 +1,35 @@
+{
+  "numTotalTestSuites": 1,
+  "numPassedTestSuites": 1,
+  "numFailedTestSuites": 0,
+  "numPendingTestSuites": 0,
+  "numTotalTests": 1,
+  "numPassedTests": 1,
+  "numFailedTests": 0,
+  "numPendingTests": 0,
+  "numTodoTests": 0,
+  "startTime": 1789843464432,
+  "success": true,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [],
+          "fullName": "runner_negative_control",
+          "status": "passed",
+          "title": "runner_negative_control",
+          "duration": 0.8470420000000018,
+          "failureMessages": [],
+          "meta": {},
+          "tags": [],
+          "benchmarks": []
+        }
+      ],
+      "startTime": 1789843464507,
+      "endTime": 1789843464507.847,
+      "status": "passed",
+      "message": "",
+      "name": "/repo/scripts/lib/runner-control.test.mjs"
+    }
+  ]
+}

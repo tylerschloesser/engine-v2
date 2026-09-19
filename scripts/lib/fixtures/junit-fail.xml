@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="1" errors="0" uuid="c2bad511-b26f-4c0d-a015-b5dde421d047" timestamp="2026-09-19T11:44:43.740-07:00" time="0.006">
+    <testsuite name="engine::runner_control" tests="1" skipped="0" errors="0" failures="1">
+        <testcase name="runner_negative_control" classname="engine::runner_control" timestamp="2026-09-19T11:44:43.740-07:00" time="0.006">
+            <failure message="thread &apos;runner_negative_control&apos; (2373930) panicked at packages/engine/crates/engine/tests/runner_control.rs:7:5" type="test failure with exit code 101">thread &apos;runner_negative_control&apos; (2373930) panicked at packages/engine/crates/engine/tests/runner_control.rs:7:5:
+runner self-check: deliberate failure
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</failure>
+            <system-out>
+running 1 test
+test runner_negative_control ... FAILED
+
+failures:
+
+failures:
+    runner_negative_control
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err>
+thread &apos;runner_negative_control&apos; (2373930) panicked at packages/engine/crates/engine/tests/runner_control.rs:7:5:
+runner self-check: deliberate failure
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+</system-err>
+        </testcase>
+    </testsuite>
+</testsuites>

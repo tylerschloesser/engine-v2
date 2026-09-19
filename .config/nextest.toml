@@ -1,0 +1,15 @@
+# Fast tier: everything except tests whose function name starts with `slow_`
+# (the slow tag of docs/decisions/0020 §4). `pnpm test` reads the junit report.
+[profile.default]
+fail-fast = false
+default-filter = "not test(/(^|::)slow_/)"
+
+[profile.default.junit]
+path = "junit.xml"
+
+# Slow tier: `pnpm test:slow` runs with `-P slow`.
+[profile.slow]
+default-filter = "test(/(^|::)slow_/)"
+
+[profile.slow.junit]
+path = "junit.xml"

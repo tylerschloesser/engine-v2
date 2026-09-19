@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="db73c2d0-ebf2-41bf-85c9-21c697f40e3d" timestamp="2026-09-19T11:44:43.872-07:00" time="0.006">
+    <testsuite name="engine::runner_control" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="runner_negative_control" classname="engine::runner_control" timestamp="2026-09-19T11:44:43.872-07:00" time="0.006"/>
+    </testsuite>
+</testsuites>
