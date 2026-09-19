@@ -1,6 +1,6 @@
 # M38: Hosting checks
 
-Status: not started · After: 35 (run after 34 when possible, so the reference game is the payload; otherwise the `busy-field` fixture) · Tyler-dependent: Q6 (`docs/plan/questions-for-tyler.md`); default assumed: all three approved, i.e. the $5 Cloudflare Workers plan, a free Pages deploy, a Fly machine with a 1 GB volume, and Tyler logs the CLIs in
+Status: not started · After: 35, 31 (run after 34 when possible, so the reference game is the payload; otherwise the `busy-field` fixture) · Tyler-dependent: Q6 (`docs/plan/questions-for-tyler.md`); default assumed: all three approved, i.e. the $5 Cloudflare Workers plan, a free Pages deploy, a Fly machine with a 1 GB volume, and Tyler logs the CLIs in
 
 ## Goal
 Three claims that Phase 1 could only compute are measured on real hosts: a Durable Object can (or cannot) host a world within 0009's constraints and cost target, the COOP/COEP listing works on one real static host including a cross-origin `wss`, and the reference server on Fly meets the cost target with idle stop and wake. The Durable Objects outcome is recorded as a new ADR.

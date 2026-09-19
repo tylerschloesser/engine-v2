@@ -2,7 +2,7 @@
 
 Status: not started · After: 23 · Tyler-dependent: no
 
-Split: PLAN row 24 held two subsystems with a reading list over the limit. This brief is panic recovery. `24b-upgrade-and-migration.md` is `SCHEMA_VERSION`, `migrate`, `OldStore`, `SaveIncompatible`, the Tick rescale helper and the upgrade path. The file keeps its PLAN.md name; the row title should become "panic recovery by re-instantiation, `Skip` records, epoch seam".
+Split: PLAN row 24 held two subsystems with a reading list over the limit. This brief is panic recovery. `24b-upgrade-and-migration.md` is `SCHEMA_VERSION`, `migrate`, `OldStore`, `SaveIncompatible`, the Tick rescale helper and the upgrade path. The file keeps its original name.
 
 ## Goal
 A Rust panic or any other trap in the sim instance no longer ends the world: the host catches it, builds a fresh instance from the kept `Module`, reloads snapshot + log tail, signals the epoch seam and resumes with connections open. A panic that recurs in one record's `apply` is fenced off by a logged `Skip` record and acked `EngineFault`; one that recurs in `tick` stops the world with every file intact and a fatal report.

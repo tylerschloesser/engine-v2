@@ -2,7 +2,7 @@
 
 Status: not started · After: 28, 19, 24 · Tyler-dependent: no
 
-Second half of the PLAN.md row "sessions and reconnect" (split explained in M28). PLAN.md needs this row, with `After` as above; M29 then follows 28b.
+Second half of the PLAN.md row "sessions and reconnect" (split explained in M28). M29 follows 28b.
 
 ## Goal
 A dropped client comes back for one round trip and about a kilobyte: the resume hint turns unchanged chunks into "keep" entries, pending actions are resent exactly once, and a host restart or panic recovery bumps the epoch and forces a full resync. A disconnect is logged only after the grace; a world with no players stops ticking, snapshots, and calls `onIdle`; the next connection resumes it.

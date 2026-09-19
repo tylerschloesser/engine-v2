@@ -1,6 +1,6 @@
 # M01: Scaffolding
 
-Status: not started · After: none · Tyler-dependent: Q-format (formatting style; default assumed: 2-space indent, single quotes, semicolons as needed, line width 100, rustfmt defaults)
+Status: not started · After: none · Tyler-dependent: no (code style answered, Q11 in `docs/plan/questions-for-tyler.md`: 2-space indent, single quotes, semicolons as needed, line width 100, rustfmt defaults)
 
 ## Goal
 A fresh clone can run `pnpm install && pnpm setup:tools && pnpm test && pnpm lint` and see one quiet `pass` line per suite and per lint check. The repo has its pnpm and cargo workspaces, exact toolchain pins, an empty `engine` package and `engine` crate, a test runner that later milestones only add rows to, the Claude Code allowlist and commit gate, the `write-adr` skill, and the first nested `CLAUDE.md` files. No engine code exists yet.
@@ -42,7 +42,7 @@ One package, one crate, plus repo-root tooling.
 | `Cargo.lock` | generated, committed |
 | `clippy.toml` | header comment naming 0002 §3 as the owner of the lists; `disallowed-methods = []`, `disallowed-types = []` |
 | `.config/nextest.toml` | `[profile.default]`: `fail-fast = false`, `default-filter = "not test(/(^\|::)slow_/)"`, `[profile.default.junit] path = "junit.xml"`. `[profile.slow]`: `default-filter = "test(/(^\|::)slow_/)"`, same junit path. (Checked on the pinned nextest: the report lands at `target/nextest/<profile>/junit.xml`.) |
-| `biome.json` | from `biome init`, then: `vcs.enabled` + `useIgnoreFile` true; files exclude `spikes`, `docs`, and `**/src/bindings` (generated, M16); formatter per the Tyler-dependent default above; recommended lint preset; import sorting on. |
+| `biome.json` | from `biome init`, then: `vcs.enabled` + `useIgnoreFile` true; files exclude `spikes`, `docs`, and `**/src/bindings` (generated, M16); formatter per Q11 in the header line; recommended lint preset; import sorting on. |
 | `tsconfig.base.json` | `target`/`lib` es2023, `module` + `moduleResolution` nodenext, `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `verbatimModuleSyntax`, `isolatedModules`, `erasableSyntaxOnly`, `declaration`, `sourceMap`, `skipLibCheck`, `types: []`. (Checked: TypeScript at the pin accepts all of these.) |
 | `vitest.config.ts` | `test.projects` with one project: `name: 'unit'`, `environment: 'node'`, `include: ['packages/*/src/**/*.test.ts', 'scripts/**/*.test.mjs']`. No globals; tests import from `vitest`. |
 | `.gitignore` | already covers `node_modules`, `target`, `dist`, `test-results`; add nothing unless a tool writes elsewhere |

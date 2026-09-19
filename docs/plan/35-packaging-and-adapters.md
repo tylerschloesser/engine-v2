@@ -28,7 +28,7 @@ Mine from spikes: `spikes/vite-lib-worker-wasm/game/test/run.mjs` (install + dev
 - Fast tier: confirm the packaging smoke of 0020 §3 (Vite-built reference game, `profile: 'dev'`) is in the `browser` suite; add it if no earlier milestone did.
 
 ## Non-scope
-Bun/Deno adapters (35b). Durable Object subpath (M38 adds it and updates `exports-map`). Publishing, name, license (0017 §8). Release golden replay (M36); `wasm-opt`/`+simd128` safety for the sim (M36b, handed over by M02). Windows. ABI or worker-kind changes.
+Bun/Deno adapters (35b). Durable Object adapter (M38: a recipe package outside the engine, `games/reference-server-do/`; no exports-map entry, 0009 Consequences). Publishing, name, license (0017 §8). Release golden replay (M36); `wasm-opt`/`+simd128` safety for the sim (M36b, handed over by M02). Windows. ABI or worker-kind changes.
 
 ## Files, packages and crates touched
 `packages/engine` (`package.json`, `src/client.ts` / support module, `src/vite.ts`, `budgets.json`, `tests/browser/packaging/*` incl. `scratch-app/` template, `tests/wasm/size.test.ts`, `src/exports-map.test.ts`); root `Cargo.toml` (`[profile.release-names]` and what the ADR decides); `games/reference` (capability screen).

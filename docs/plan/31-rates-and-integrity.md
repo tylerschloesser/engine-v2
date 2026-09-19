@@ -40,7 +40,7 @@ Also cited: 0004 (admit step 2: `RateLimited`), `PRE-PLAN.md` §9 risks 3 and 10
 - Chunk-bucket entry point `enqueueChunkSnapshot(conn, coord, priority)` for M31b's resync answer.
 - Multi-frame messages: `on_frame` accepts several whole frames per message.
 
-**Consumes:** `Host<G>`, `SubscriptionSet`, counters, fixture ceilings, `testkit::Loopback` (M15); `FrameWriter`, `UplinkBatch.last_received_tick`, `encode_chunk_snapshot` (M14); admit pipeline and `EngineReject::RateLimited` (M16); heartbeat (M28); harness, `NetCounters`, `conditionLink.stall` (M27); timers and entities for the fixture (M21); `budgets.json` + its loader (M04); `WorldConfig.bandwidth`/`actionRate` plumbing (M13).
+**Consumes:** `Host<G>`, `SubscriptionSet`, counters, fixture ceilings, `testkit::Loopback` (M15); `FrameWriter`, `UplinkBatch.last_received_tick`, `encode_chunk_snapshot` (M14); admit pipeline and `EngineReject::RateLimited` (M16); heartbeat (M28); harness, `NetCounters`, `conditionLink.stall` (M27); entities and timers for the fixture (M21, M21b); `budgets.json` + its loader (M04); `WorldConfig.bandwidth`/`actionRate` plumbing (M13).
 
 ## Planning decisions
 - **Real frame sizes against the bandwidth budget (PRE-PLAN §10).** Three owners, as M15's brief already states: M15 landed counters and fixture ceilings; this brief asserts the 0010 rows under pacing with `busy-field`; **M36b** measures the reference game's busy furnace field and takes the byte-diffing decision of 0011. What M36b needs from here: `assertBudget`, per-section bytes, and `degradeLevel`, so its question ("above the typical row, or degrade engaged?") is one counter read. A miss is answered by byte diffing, never by raising a budget row.

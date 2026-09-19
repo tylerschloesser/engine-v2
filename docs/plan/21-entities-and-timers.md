@@ -2,7 +2,7 @@
 
 Status: not started · After: 16 · Tyler-dependent: no
 
-Split: the PLAN.md row for M21 is two subsystems. This brief lands the spatial half and the state-budget check. `21b-timers-wakeups-and-tickcx.md` lands the timer wheel, wake-ups, active lists, the completed `TickCx` and the undo-journal measurement. M22, M25 and M32 depend on 21b.
+Split: the PLAN.md row for M21 is two subsystems. This brief lands the spatial half and the state-budget check. `21b-timers-wakeups-and-tickcx.md` lands the timer wheel, wake-ups, active lists, the completed `TickCx` and the undo-journal measurement. M22, M25 and M32 list 21b under After.
 
 ## Goal
 A game registers entity prototypes (trait set + footprint). Spawning, moving and despawning a multi-tile entity updates occupancy in every overlapped chunk within the tick; `entity_at` and `traits_at` answer from it on the host and on a replica; delta scope and chunk snapshots follow the footprint. Before every `apply` the host runs the state-budget check with the per-action growth declaration.

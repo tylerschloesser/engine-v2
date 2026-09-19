@@ -2,7 +2,7 @@
 
 Status: not started · After: 34c, 35 · Tyler-dependent: no
 
-Split: the suite audit and the deferred measurements (demotion audit, 30 s rebuild, build-cache decision, `wasm-opt`/`+simd128`, byte diffing) are `36b-suite-audit-and-measurements.md`; together they were well past the line rule. `After` gains 35 (PLAN.md lists only 34) because the slow tier this milestone completes includes M35's packaging tests; M35 needs only M29, so no ordering is lost.
+Split: the suite audit and the deferred measurements (demotion audit, 30 s rebuild, build-cache decision, `wasm-opt`/`+simd128`, byte diffing) are `36b-suite-audit-and-measurements.md`; together they were well past the line rule. `After` includes 35 because the slow tier this milestone completes includes M35's packaging tests; M35 needs only M29, so no ordering is lost.
 
 ## Goal
 `pnpm test:slow` is complete per 0020: heavy mode at N = 1 on every recorded log, golden replay on the release module, the standard large save with the tick and frame wall-clock benchmarks gated at the 25 % threshold on the baseline machine, soak and large-world variants, the WebKit readback scene. The two derived budgets of PRE-PLAN §7 (tick time, frame time) have measured desktop-proxy numbers in checked-in baselines, and three questions other briefs handed here are answered.

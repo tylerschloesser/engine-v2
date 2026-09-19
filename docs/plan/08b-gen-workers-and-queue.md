@@ -2,7 +2,7 @@
 
 Status: not started · After: 06b, 08 · Tyler-dependent: no
 
-Split out of M08 (see its header). Needs a new `PLAN.md` row; M09 waits on this brief.
+Split out of M08 (see its header). M09 waits on this brief.
 
 ## Goal
 In a cross-origin-isolated page, the client worker owns a prioritised generation queue feeding its pristine cache (M07's `TerrainStore`), and one or two `gen`-role workers serve it over `genRequest`/`genResult` with no `postMessage` and no allocation in steady state. Driven by the camera block, generation fills visible chunks first, then ring 1, then ring 2; results are identical with one or two workers; the gen and client isolates pass the zero-GC assertion.
@@ -51,7 +51,7 @@ Mine from spikes: `spikes/cross-origin-sab/src/bench-worker.ts` (`wasmU8.set(slo
 3. **The view comes from the camera block inside `frame`,** which M06b already delivers to the client instance: `visible_rect(centre, half_extent_tiles)`, velocity converted once to Q24.8. No extra export is needed and M11 changes nothing here. Float use is confined to `view::visible_rect`; the queue itself is integer-only.
 4. **Retention is LRU plus `touch`.** On every re-sort the queue touches each cached chunk inside ring 3, so LRU order evicts only beyond the retention bound of 0008 §5 without a second mechanism, and a visible chunk's GPU page slot (0018: slot = slab index) is never evicted under it.
 5. **A full `genRequest` is backpressure** (0015 §2): the pump asks `gen_take` for a job only once it holds a free slot (claim first, take second; an uncommitted claim reserves nothing in M06's ring, and if that turns out false use its `pushed − popped` counters instead), so a job is never popped without a slot; `drops` stays 0 and the test asserts it. A gen worker that finds `genResult` full retries on its next wake and does not start another job.
-6. **Default chunk size only, in the browser topology.** `SabSet` is created on main before any instance exists, with M06's fixed `genResult` slot of 16 + 4,096 bytes. The gen worker checks `region(GenOut).len + 16 <= slotBytes` at setup and calls `shell.fatal` with a readable message otherwise. Carrying `chunkBits` in `game.json` so main can size the ring is left to the first game that changes `CHUNK_BITS`; the Rust side is already size-agnostic.
+6. **Default chunk size only, in the browser topology (0024 §9).** `SabSet` is created on main before any instance exists, with M06's fixed `genResult` slot of 16 + 4,096 bytes. The gen worker checks `region(GenOut).len + 16 <= slotBytes` at setup and calls `shell.fatal` with a readable message otherwise. Carrying `chunkBits` in `game.json` so main can size the ring is left to the first game that changes `CHUNK_BITS`; the Rust side is already size-agnostic.
 7. **Worker count cannot change results** (0008 §2): asserted by comparing `client_chunk_hash` over the whole generated set with 1 and 2 workers.
 8. **`stats` exact values are budgets.** For the scripted join at the view clamp and a scripted pan, `GenStats.requested`/`delivered`/`cancelled` are asserted exactly against `budgets.json` (`genJoinChunks`, `genPanChunks`): deterministic counters in the fast tier, per 0020 §9.
 

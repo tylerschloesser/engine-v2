@@ -1,6 +1,6 @@
 # M18: Picking, overlay anchoring, `FrameCx`
 
-Status: not started · After: 17 · Tyler-dependent: no
+Status: not started · After: 17, 09b · Tyler-dependent: no
 
 Carries a **D**: overlay anchoring on iOS Safari. Order against M19 does not matter: both start from M12's `FrameCx` shell, and whichever lands first adds the `ClientSide::frame` call (M19's brief says the same).
 
@@ -22,11 +22,11 @@ Main-thread side
 - `input/pick.ts`: scan per 0019 §4 over long-lived typed views of each triple-buffer slot; shape containment per `kind`; `pick_id` written into `tap`, `longpress`, `hover` and `drag*` events and ring records; hover pick at most once per rAF and only when the pointer or the slot changed.
 - `overlay/anchors.ts`: the anchor layer, the injected static rule, `client.overlay.anchor` and `anchorSlot`, floating origin and re-base, visibility toggling on transitions, the at-most-two-writes rule, slot anchors from the header's anchor table; the per-anchor `translate()` fallback mode behind an option.
 - Frame loop: a new first phase `acquire` (take the newest DrawList slot once), so camera follow, picking, overlay and render all use the same slot.
-- `client.input.emit(code: number, a?: number, b?: number)` (0024 §7): the TypeScript-to-`ClientSide` channel for client-local UI intent. It writes one record of a new kind 7 ("game": `code` in the `pick_id` field, `a`/`b` in the tile fields) into M11's 32-byte `inputRing` layout; the record surfaces in `FrameCx::input()` like any other `InputEvent`. M33 is the first consumer (construction mode).
+- `client.input.emit(code: number, a = 0, b = 0): boolean` (0024 §7c): the TypeScript-to-`ClientSide` channel for client-local UI intent. It writes one record of a new kind 7 ("game": `code u32` in the `pick_id` field, `a`/`b` as `i32` in the tile field, all else zero) into M11's 32-byte `inputRing` layout; the record surfaces in `FrameCx::input()` in ring order, is not delivered to `client.input.on`, is never dropped by `InputQueue` overflow, and `emit` returns `false` when the ring is full. M33 is the first consumer (construction mode).
 - Device page: `?anchors=50`.
 
 Rust side
-- `client/frame_cx.rs`: fills M12's `FrameCx` shell; `frame(t_ms)` order becomes build `FrameView` → `ClientSide::frame` → `extract` → header (`follow`, anchors) → sort → publish → clear `InputQueue`. Because `frame` may change client-side state, M16b's `ui` call now runs after every `ClientSide::frame` (its re-run rule, 0024 §7; the `PartialEq` gate is unchanged).
+- `client/frame_cx.rs`: fills M12's `FrameCx` shell; `frame(t_ms)` order becomes build `FrameView` → `ClientSide::frame` → `extract` → header (`follow`, anchors) → sort → publish → clear `InputQueue`. `FrameCx::ui_dirty()` (0024 §7d) sets M16b's client-side dirty flag, so `ui` re-runs this frame when `frame` changed state the `Ui` depends on; the `PartialEq` gate is unchanged.
 - `DrawList::anchor(slot, pos)`.
 - Main: `camera.setFollow` from the slot header in the frame that draws that slot.
 
@@ -39,7 +39,7 @@ Presence sampling and uplink (M19: it gives meaning to `frame`'s `presence` argu
 ## Seams
 **Provides**
 - TS on `Client`: `overlay.anchor(el, worldX, worldY, opts?)` → `{ set(x, y), remove() }`, `overlay.anchorSlot(el, slot)` → `{ remove() }` (0019 §5 signatures). `ClientOptions.overlay?: { root?: HTMLElement; mode?: 'properties' | 'translate' }` (default root: the canvas's parent; the engine appends one anchor-layer element there and **re-parents each anchored `el` into it**).
-- `client.input.emit(code, a?, b?)` (0024 §7) and `InputEvent` kind 7 "game" (`code()`, `a()`, `b()` accessors), consumed by M33.
+- `client.input.emit(code, a = 0, b = 0): boolean` (0024 §7c), `FrameCx::ui_dirty()` (0024 §7d), and `InputEvent` kind 7 "game" (`code()`, `a()`, `b()` accessors), consumed by M33.
 - `pickAt(cssX, cssY): number` internal, used by the semantic layer; `engine/test`: `pickAt(client, cssX, cssY)`, counters `styleWrites`, `pickScanned`.
 - **`FrameCx<'a, G>`** (this brief owns the shape; it fills M12's shell, and M19 adds nothing to it beyond using `frame`'s `presence` argument):
   - `view() -> &FrameView<G>`: the same value `extract` receives (M17: `WorldRead`, ticks, `visible`, `zoom`, `cursor_tile`, `me`), built before `frame` runs
@@ -47,12 +47,13 @@ Presence sampling and uplink (M19: it gives meaning to `frame`'s `presence` argu
   - `dt_ms() -> f32` (difference of successive `frame_time_ms`, clamped to 0..100)
   - `input() -> &[InputEvent]`: the events drained from `inputRing` since the previous `frame`, oldest first, at most 64, valid for this call only
   - `follow(&mut self, target: Option<WorldPos>)`
+  - `ui_dirty(&mut self)` (0024 §7d; M20b is the first user)
   - no `dispatch` (see Planning decisions)
 - The call of `ClientSide::frame(&mut self, cx: &mut FrameCx<G>, presence: &mut G::Presence)` (M12 declared it) once per `frame(t_ms)`, before `extract`. If M19 has not landed, the engine passes a scratch `G::Presence` it then ignores; if it has, M19's kept value.
 - `DrawList::anchor(&mut self, slot: u8, pos: WorldPos)` (64 slots); header fields `follow_valid`, `follow`, `anchor_mask`, `anchors` (offsets in M17).
 - `budgets.json`: `gc.pages.anchors` (its `main` = the strict number + the overlay string constant, spelled out in `formula`).
 
-**Consumes** M12: `FrameCx` shell, `ClientSide`. M16b: the `ui` call policy and its re-run rule. M17: slot header layout, `Draw` layout and kind constants, `FrameView`, triple-buffer reader, GC page `drawables`. M11: semantic events, `inputRing`, `InputQueue`, `camera.setFollow`, `camera.cursorTile`, `transform.ts`, injection helpers. M09b: `renderer.onViewportChange`, `device.html`. M03: `pnpm device:serve --tunnel`. M17b (optional): sprite pivots from `sprites.json` for sprite picking; without it a sprite picks by its `pos`/`size` rectangle. M04: `installGcPage`, `zeroGcSuite`, `budgets.json`, `pnpm gc reliability`.
+**Consumes** M12: `FrameCx` shell, `ClientSide`. M16b: the `ui` call policy and its client-side dirty flag. M17: slot header layout, `Draw` layout and kind constants, `FrameView`, triple-buffer reader, GC page `drawables`. M11: semantic events, `inputRing`, `InputQueue`, `camera.setFollow`, `camera.cursorTile`, `transform.ts`, injection helpers. M09b: `renderer.onViewportChange`, `device.html`. M03: `pnpm device:serve --tunnel`. M17b (optional): sprite pivots from `sprites.json` for sprite picking; without it a sprite picks by its `pos`/`size` rectangle. M04: `installGcPage`, `zeroGcSuite`, `budgets.json`, `pnpm gc reliability`.
 
 ## Planning decisions
 - **How input reaches the game's Rust (PRE-PLAN §10 gap).** As a borrowed slice, `cx.input()`, of the same 32-byte records main wrote (M11 layout), including `pick_id`. `frame` has `&mut self`, so the game copies what it needs (selection, tool state, ghost rotation) into its `Client` value and `extract` reads it from `&self`. A slice costs nothing, keeps ordering, and needs no callback registration inside WASM.
@@ -68,7 +69,7 @@ Presence sampling and uplink (M19: it gives meaning to `frame`'s `presence` argu
 
 ## Tests added
 - `unit` suite: `pick.contains_per_kind`, `pick.front_to_back_order`, `pick.skips_zero_id_and_cursor_anchored`, `overlay.rebase_math`, `overlay.align_offsets`.
-- Rust native: `framecx.input_slice_order_and_clear`, `input.game_record_round_trip`, `drawlist.anchor_table_and_mask`, `framecx.follow_written_to_header`.
+- Rust native: `framecx.input_slice_order_and_clear`, `input.game_record_round_trip`, `input.game_record_survives_overflow`, `framecx.ui_dirty_reruns_ui`, `drawlist.anchor_table_and_mask`, `framecx.follow_written_to_header`.
 - Browser (Chromium): `pick.tap_reports_entity_pick_id`, `pick.hover_once_per_raf_on_change`, `pick.matches_interpolated_frame_on_screen` (pick uses the slot being drawn, not a newer one), `overlay.anchor_tracks_world_point` (element rect vs `worldToScreen` within 0.5 px through pan and zoom; reading layout is allowed in tests only), `overlay.idle_writes_nothing`, `overlay.pan_one_write_zoom_two` (`styleWrites` counter), `overlay.slot_anchor_follows_rust`, `overlay.rebase_beyond_50000px`, `overlay.offscreen_hidden_on_transition_only`, `overlay.widget_click_not_a_tap`, `overlay.translate_mode_equivalent`, `framecx.tap_visible_in_frame`, `framecx.emit_visible_in_frame` (`client.input.emit(3, 1, 2)` arrives as one kind-7 event with the same three values; allocates nothing), `follow.centres_in_same_frame_pan_ignored_zoom_works`, `ghost.mouse_tracks_cursor_tile`, `ghost.touch_tap_then_confirm`.
 - Zero-GC: page id `anchors` through `zeroGcSuite`; strict pages unchanged.
 

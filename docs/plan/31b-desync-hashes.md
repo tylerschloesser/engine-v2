@@ -2,7 +2,7 @@
 
 Status: not started · After: 31 · Tyler-dependent: no
 
-Second half of the PLAN.md row "rates and integrity" (split explained in M31). PLAN.md needs this row; M34 must list it in `After`.
+Second half of the PLAN.md row "rates and integrity" (split explained in M31). M34 lists it in `After`.
 
 ## Goal
 The host piggybacks per-chunk, Global and OwnPlayer hashes on frames; each client compares them with its replica right after applying that frame, asks for a resync of whatever differs, and both sides count a desync report. In hash-all mode every subscribed chunk is checked every frame and a mismatch dumps both encodings, which turns every other netcode scenario into a replication-correctness test.

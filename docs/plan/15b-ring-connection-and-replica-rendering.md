@@ -2,7 +2,7 @@
 
 Status: not started · After: 11, 15 · Tyler-dependent: no
 
-Split from M15 (see that brief). PLAN.md needs a row; M16 depends on this milestone.
+Split from M15 (see that brief). M16 depends on this milestone.
 
 ## Goal
 In a single-player page the sim worker and the client worker exchange the M14 bytes over the uplink/downlink ring pair through a `Connection`-shaped adapter. Panning the camera changes the subscription; overlay tiles written by the sim appear on screen through the existing chunk-upload path; nothing allocates in steady state in either worker.
@@ -24,14 +24,14 @@ Mine from spikes: `spikes/cross-origin-sab` (ring drain into a non-shared memory
 - **`engine/test`:** `netCounters(client)` (M15 counters + `downlinkRetries`), `replicaHash(client)`, `hostRegionHash(client, conn)`; M06b's `untilQuiescent` already covers both rings, extend it with "the client has applied the host's latest tick".
 
 ## Non-scope
-Net worker and sockets (M29). `createWorldServer` (M27). Handshake (M28). Pacing (M31), heartbeat (M28), hashes (M31b). Actions (M16). DrawList, entities on screen (M17): only tiles are visible here. "Reveal when visible chunks are received and generated" (M28/M20).
+Net worker and sockets (M29). `createWorldServer` (M27). Handshake (M28). Pacing (M31), heartbeat (M28), hashes (M31b). Actions (M16). DrawList, entities on screen (M17): only tiles are visible here. "Reveal when visible chunks are received and generated" (M28 builds `ClientCore::revealed()`; M29 gates the first draw on it).
 
 ## Files, packages and crates touched
 `packages/engine/src` (`server.ts`, `worker.ts`, `ring-connection.ts`, `abi.ts`, `test.ts`), `packages/engine/crates/engine` (`abi/registry.rs`, `host/`, `client/`), `packages/engine/fixtures/puts` (test page).
 
 ## Seams
 **Provides:** exports above; `RingConnection`; `SimHost.accept`; `engine/test` `netCounters`/`replicaHash`/`hostRegionHash`. The visible overlay comes from the `puts` tick rule's once-per-second `set_tile` (M12b); do not change the fixture's rules here, its goldens are fixed.
-**Consumes:** M15 `Host`, `ClientCore`, `drain_dirty`, `region_hash`; M13 `SimHost`, sim worker kind, `stepTick`; M11 `injectPointer`/`injectWheel`; M09 `Uploader::{patch_tile, enqueue_chunk}`, `renderTo`/`readPixels`/`expectPixel`, `uploadBytes` counter; M08b client `TerrainStore`, `gen_view`; M06 `RingProducer`/`RingConsumer`, `SabSet`; M06b `CameraBlock`, `setCamera`, `untilQuiescent`, worker shell; M04 zero-GC harness.
+**Consumes:** M15 `Host`, `ClientCore`, `drain_dirty`, `region_hash`; M13 `SimHost`, sim worker kind, `stepTick`; M11 `injectPointer`/`injectWheel`; M09 `Uploader::{patch_tile, enqueue_chunk}`, `renderTo`/`readPixels`/`expectPixel`, `uploadBytes` counter; M08b `TerrainFeed` beside the client `TerrainStore`, `GenView`; M06 `RingProducer`/`RingConsumer`, `SabSet`; M06b `CameraBlock`, `setCamera`, `untilQuiescent`, worker shell; M04 zero-GC harness.
 
 ## Planning decisions
 - **Patch per tile, slab per snapshot.** M09 already has both records; a snapshot with a handful of overlay entries still re-enqueues the slab because the chunk's previous overlay is unknown to the uploader. The 0018 per-frame upload budget paces a burst of snapshots exactly like a burst of generated chunks.

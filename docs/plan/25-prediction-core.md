@@ -1,6 +1,6 @@
 # M25: Prediction core
 
-Status: not started · After: 21b · Tyler-dependent: no
+Status: not started · After: 21b, 16b · Tyler-dependent: no
 
 ## Goal
 The client role predicts the local player's own actions by running the game's `apply` on a `Predicting` overlay over the replica, keeps a pending queue, and resets and replays on every received frame. `Unknown` reads, RNG use and `predict() == false` decline to predict and still send. The taint rule is chosen by the tests written here. Verified natively with a fixture game, including a zero-allocation replay test.

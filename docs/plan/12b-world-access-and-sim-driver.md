@@ -2,7 +2,7 @@
 
 Status: not started · After: 12 · Tyler-dependent: no
 
-Split from M12 (see that brief). PLAN.md needs a row; M13 and M14 depend on this milestone, not on M12.
+Split from M12 (see that brief). M13 and M14 depend on this milestone, not on M12.
 
 ## Goal
 `genesis`, `on_player`, `apply` and `tick` of a fixture game run natively through `Authority<G>`; every put applies to the `Store` and is recorded as one scoped `Delta`. A `Sim<G>` driver runs recorded frames in 0004 order and ends scenarios in checked-in golden hashes. `Ticks` conversions are `const fn`s.

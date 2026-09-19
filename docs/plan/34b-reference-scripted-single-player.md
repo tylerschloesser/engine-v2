@@ -2,7 +2,7 @@
 
 Status: not started · After: 34, 23, 24b · Tyler-dependent: no
 
-Split from M34 during planning (see that brief). Needs a new PLAN.md row; M23 and M24b are not upstream of M34 in PLAN.md, so they are listed here explicitly.
+Split from M34 during planning (see that brief). M23 and M24b are not upstream of M34 in PLAN.md, so they are listed under After explicitly.
 
 ## Goal
 One scripted playthrough of the whole reference game runs in the browser suite through the real DOM, and a recorded log of the same play is a golden replayed in every runtime. The coverage items `0003` Consequences assigns to scripted tests that need storage (state budget full, panic recovery, `SaveIncompatible`, export/import) are pinned against the reference game. Every single-player row of the Requirement matrix in `docs/plan/reference-coverage.md` names a passing test.

@@ -31,7 +31,7 @@ Construction UI and placement (M33). Cancelling a craft (no Requirement). A craf
 
 ## Seams
 **Provides:** `rules::craft`, `content::{ItemId, RECIPES}`, `RefScenario::{disconnect, connect, give}` (`give` grants inventory with a direct player put through the native host's test access, because later native tests should not replay hundreds of collect ticks to get a furnace), browser helper `collectN(page, resource, n)`.
-**Consumes:** everything M20 and M20b provide; `PlayerEvent` injection in the native host harness (M12/M16); full `TickCx` and the state-budget check (M21; no call in this brief depends on M21, the order is PLAN.md's).
+**Consumes:** everything M20 and M20b provide; `PlayerEvent` injection in the native host harness (M12/M16); the state-budget check (M21) and full `TickCx` (M21b); no call in this brief depends on either, the order is PLAN.md's.
 
 ## Planning decisions
 - **Cost is paid at `StartCraft`, output is granted at completion.** Validate first, write after (`0003`); a craft in flight cannot be starved by a later action.

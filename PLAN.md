@@ -14,10 +14,10 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 
 | | # | Brief | Lands | After | Marks |
 |---|---|---|---|---|---|
-| [ ] | 01 | `01-scaffolding.md` | pnpm + cargo workspaces, toolchain pins, format/lint, `.claude/settings.json` + commit hook, `write-adr` skill, skeleton `pnpm test` / `pnpm lint` | — | T |
-| [ ] | 02 | `02-build-and-determinism.md` | engine crate ABI + `export_game!` + loader, `buildGame`, first fixture, import allowlist, state hash equal natively / Node / Bun | 01 | T |
+| [ ] | 01 | `01-scaffolding.md` | pnpm + cargo workspaces, toolchain pins, format/lint, `.claude/settings.json` + commit hook, `write-adr` skill, skeleton `pnpm test` / `pnpm lint` | — | |
+| [ ] | 02 | `02-build-and-determinism.md` | engine crate ABI + `export_game!` + loader, `buildGame`, first fixture, import allowlist, state hash equal natively / Node / Bun | 01 | |
 | [ ] | 02b | `02b-vite-plugin.md` | Vite plugin, `virtual:engine/wasm`, COOP/COEP fixture app | 02 | |
-| [ ] | 03 | `03-browser-harness.md` | Playwright in `pnpm test`, `engine/test` skeleton (clock, stepping, quiescence), determinism hash in three browsers, `run-tests` skill | 02b | T D |
+| [ ] | 03 | `03-browser-harness.md` | Playwright in `pnpm test`, `engine/test` skeleton (clock, stepping, quiescence), determinism hash in three browsers, `run-tests` skill | 02b | D |
 | [ ] | 04 | `04-zero-gc-harness.md` | zero-allocation assertion with permanent negative controls, `budgets.json`, `gc-test` skill. **Harness complete.** | 03 | |
 | [ ] | 05 | `05-codec-and-state-hash.md` | `Codec`, NaN canonicalisation, `StateHash`, golden-bytes pattern | 04 | |
 | [ ] | 06 | `06-sab-primitives-and-workers.md` | SAB ring / seqlock / triple buffer, control block, camera block | 04 | |
@@ -35,14 +35,14 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [ ] | 14 | `14-wire-framing.md` | frame + sections + uplink batch, golden bytes | 12b | |
 | [ ] | 15 | `15-connection-and-subscriptions.md` | subscriptions, frame building, client replica (Rust core) | 13, 14 | |
 | [ ] | 15b | `15b-ring-connection-and-replica-rendering.md` | in-browser `Connection` over rings, worker plumbing, replica → renderer | 11, 15 | |
-| [ ] | 16 | `16-action-round-trip.md` | `dispatch` → admit → apply → ack → `onActionResult`, `add-action-type` skill. **Vertical slice complete.** | 15b | T D |
-| [ ] | 16b | `16b-ui-observation-and-clock.md` | `G::Ui` → UI ring → `onUi`, `client.clock()`, ts-rs bindings | 16 | T |
+| [ ] | 16 | `16-action-round-trip.md` | `dispatch` → admit → apply → ack → `onActionResult`, `add-action-type` skill. **Vertical slice complete.** | 15b | D |
+| [ ] | 16b | `16b-ui-observation-and-clock.md` | `G::Ui` → UI ring → `onUi`, `client.clock()`, ts-rs bindings | 16 | |
 | [ ] | 17 | `17-drawlist-and-sprites.md` | `extract` → DrawList, `FrameView`, shapes, triple-buffer publish | 16b | |
 | [ ] | 17b | `17b-sprites-and-frame-budget.md` | sprite atlas, frame-time budget, `profile-frame` skill | 17, 09b | D |
-| [ ] | 18 | `18-picking-and-overlay.md` | CPU picking, DOM anchoring, `FrameCx` | 17 | D |
+| [ ] | 18 | `18-picking-and-overlay.md` | CPU picking, DOM anchoring, `FrameCx` | 17, 09b | D |
 | [ ] | 19 | `19-presence-channel.md` | presence uplink, host table, `admit` witness, relay | 17 | |
-| [ ] | 20 | `20-reference-game-v0.md` | `games/reference`: worldgen, assets, headless collect rules | 16b | T |
-| [ ] | 20b | `20b-reference-player-and-collect-ui.md` | player spring + presence, collect UI. **First playable.** | 20, 17b, 18, 19 | T |
+| [ ] | 20 | `20-reference-game-v0.md` | `games/reference`: worldgen, assets, headless collect rules | 16b | |
+| [ ] | 20b | `20b-reference-player-and-collect-ui.md` | player spring + presence, collect UI. **First playable.** | 20, 17b, 18, 19 | |
 | [ ] | 21 | `21-entities-and-timers.md` | prototypes, footprints, occupancy, state budget + `growth` | 16 | |
 | [ ] | 21b | `21b-timers-wakeups-and-tickcx.md` | timer wheel, wake-ups, active lists, full `TickCx`, undo-journal decision | 21 | |
 | [ ] | 22 | `22-persistence-log-and-snapshots.md` | containers, write-ahead log, snapshots, native replay + heavy mode | 21b | |
@@ -50,9 +50,9 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [ ] | 23 | `23-persistence-opfs-and-lifecycle.md` | OPFS + Web Lock, storage events, export/import | 22b | T D |
 | [ ] | 24 | `24-recovery-and-migration.md` | panic recovery by re-instantiation (sim role) | 23 | |
 | [ ] | 24b | `24b-upgrade-and-migration.md` | `SCHEMA_VERSION`, `migrate`, `OldStore`, `SaveIncompatible`, tick rescale | 24 | T |
-| [ ] | 25 | `25-prediction-core.md` | `Predicting` overlay, pending queue, taint rule, provisional ids, `entities_in` | 21b | |
-| [ ] | 26 | `26-prediction-rendering-and-clocks.md` | overlay diff → renderer, ghost/real swap, lead estimation, host clock | 25, 17 | T |
-| [ ] | 27 | `27-server-entrypoint-and-netcode-harness.md` | `createWorldServer`, Node adapter, in-memory pairs, virtual-clock netcode suite | 22b | |
+| [ ] | 25 | `25-prediction-core.md` | `Predicting` overlay, pending queue, taint rule, provisional ids, `entities_in` | 21b, 16b | |
+| [ ] | 26 | `26-prediction-rendering-and-clocks.md` | overlay diff → renderer, ghost/real swap, lead estimation, host clock | 25, 17 | |
+| [ ] | 27 | `27-server-entrypoint-and-netcode-harness.md` | `createWorldServer`, Node adapter, in-memory pairs, virtual-clock netcode suite | 22b, 24, 16b | |
 | [ ] | 28 | `28-sessions-and-reconnect.md` | handshake, identity, heartbeat, link policy | 27 | |
 | [ ] | 28b | `28b-reconnect-and-lifecycle.md` | resume hint, epochs, grace, idle, resend | 28, 19, 24 | |
 | [ ] | 29 | `29-net-worker-and-reference-server.md` | net worker, loopback `ws`, `games/reference-server`, multiplayer in a browser | 28b | D |
@@ -63,7 +63,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [ ] | 33 | `33-reference-furnace.md` | furnace entity, predicted placement | 32, 26 | T |
 | [ ] | 33b | `33b-reference-furnace-operation.md` | deposit/take, smelting, panel | 33 | T |
 | [ ] | 34 | `34-reference-multiplayer.md` | roster, remote players, play through the reference server | 33b, 30, 31b | D |
-| [ ] | 34b | `34b-reference-scripted-single-player.md` | scripted full game, golden log, persistence extras | 34, 23, 24b | |
+| [ ] | 34b | `34b-reference-scripted-single-player.md` | scripted full game, golden log, persistence extras | 34, 23, 24b | T |
 | [ ] | 34c | `34c-reference-scripted-multiplayer.md` | scripted multiplayer races + reconnect in the netcode suite | 34b | |
 | [ ] | 35b | `35b-bun-and-deno-adapters.md` | Bun and Deno server adapters | 29 | |
 | [ ] | 35 | `35-packaging-and-adapters.md` | final exports map, tarball + size tests, pattern B, `checkSupport`, release profile | 29, 35b | D |
@@ -71,8 +71,8 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [ ] | 36b | `36b-suite-audit-and-measurements.md` | suite audit, deferred measurements (byte diffing, `wasm-opt`/simd, rebuild time) | 36 | |
 | [ ] | 37b | `37b-device-loss.md` | WebGPU device loss, `rendererLost` | 34c | D |
 | [ ] | 37 | `37-robustness-events.md` | trap reactions, `onFatal`, engine-event surface audit | 34c, 37b | |
-| [ ] | 38 | `38-hosting-checks.md` | Durable Objects go/no-go, COOP/COEP on a real host, Fly deploy | 35 | T D |
-| [ ] | 39 | `39-acceptance.md` | coverage + budget audit, full device checklist, Phase 3 exit | all above | T D |
+| [ ] | 38 | `38-hosting-checks.md` | Durable Objects go/no-go, COOP/COEP on a real host, Fly deploy | 35, 31 | D |
+| [ ] | 39 | `39-acceptance.md` | coverage + budget audit, full device checklist, Phase 3 exit | all above | D |
 | [ ] | 39b | `39b-phase-4-handoff.md` | capture what code cannot say in ADRs, `PROMPT.md` for Phase 4 | 39 | |
 
 ## Companion files

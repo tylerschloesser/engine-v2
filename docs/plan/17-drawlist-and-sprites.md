@@ -2,7 +2,7 @@
 
 Status: not started · After: 16b · Tyler-dependent: no
 
-Split during planning: the sprite atlas, the sprite kind, the 65,536-record frame benchmark, the `profile-frame` skill and the manual Safari/Firefox harness run are **M17b** (`17b-sprites-and-frame-budget.md`). M18 and M19 depend on this brief only; M20 also needs M17b.
+Split during planning: the sprite atlas, the sprite kind, the 65,536-record frame benchmark, the `profile-frame` skill and the manual Safari/Firefox harness run are **M17b** (`17b-sprites-and-frame-budget.md`). M18 and M19 depend on this brief only; PLAN.md lists M17b under M20b's After.
 
 ## Goal
 `ClientSide::extract` fills an engine-owned `DrawList` from a `FrameView` once per produced frame; the engine counting-sorts it by layer into the staging region, the client worker publishes it to the DrawList triple buffer, and the main thread shows the newest slot with one `writeBuffer` and one instanced draw per non-empty layer through the uber-quad pipeline (every kind except sprite). DrawList bytes are hashed exactly without a GPU; shapes are verified by readback probes. The final main-thread bytes-per-frame number goes into `budgets.json`.

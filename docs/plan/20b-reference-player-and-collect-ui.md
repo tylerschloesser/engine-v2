@@ -2,7 +2,7 @@
 
 Status: not started · After: 20, 17b, 18, 19 · Tyler-dependent: Q4 (collect range; default 3 tiles assumed)
 
-Split from M20 during planning (see that brief). Needs a new PLAN.md row.
+Split from M20 during planning (see that brief).
 
 ## Goal
 A single-player game you can play: a circle springs after the camera, collect buttons appear over every resource in range, a press fills the button for the collect duration, the item lands in the player's state and the tile visibly depletes; panning out of range cancels. The witness range check of `0001` is enforced in `admit` and `apply`.
@@ -34,9 +34,9 @@ Remote players and roster (M34). Crafting menu and unlock (M32). Styling beyond 
 
 ## Seams
 **Provides:** `RefClient` (spring state, `pos()`), `PlayerPresence`, the `Ui` type and its binding, `src/ui/dom.ts` (`el()`, keyed-list diff helper reused by M32–M34), browser helpers `panTo(page, tile)`, `uiState(page)`, `clickCollect(page, tile)` in `tests/helpers/game.ts`.
-**Consumes:** `RefGame`, `in_range`, `RefScenario`, `landmarks.json`, `openGame` (M20); `ClientSide::extract`, `DrawList`, `FrameView` (M17); `client.overlay.anchor`, picking-free taps on DOM, `ClientSide::frame`, `FrameCx::camera()` (M18); `Presence` uplink, `PresenceTable`, `admit` call site (M19); `onActionResult` (M16); `onUi` with the `ui` re-run rule, `clock()` (M16b); `client.camera.moveTo`/`read`/`restored`, `ClientOptions.cameraKey` (M11).
+**Consumes:** `RefGame`, `in_range`, `RefScenario`, `landmarks.json`, `openGame` (M20); `ClientSide::extract`, `DrawList`, `FrameView` (M17); `client.overlay.anchor`, picking-free taps on DOM, `ClientSide::frame`, `FrameCx::camera()` (M18); `Presence` uplink, `PresenceTable`, `admit` call site (M19); `onActionResult` (M16); `onUi`, `clock()` (M16b); `FrameCx::ui_dirty()` (M18); `client.camera.moveTo`/`read`/`restored`, `ClientOptions.cameraKey` (M11).
 **Relied on from other milestones (in their briefs; if one is missing in code, stop and fix the plan):**
-- M16b/M18: the engine re-runs `ClientSide::ui` when client-side state changed, not only when the replica changed (0024 §7; `in_range` depends on the spring).
+- M16b/M18: `FrameCx::ui_dirty()` (0024 §7d): `frame` calls it when the spring moved, so `ClientSide::ui` re-runs although the replica did not change (`in_range` depends on the spring).
 - M11: `client.camera.restored` and `ClientOptions.cameraKey` (pass the world id).
 
 ## Planning decisions

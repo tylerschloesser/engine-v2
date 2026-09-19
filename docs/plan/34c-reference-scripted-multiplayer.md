@@ -2,7 +2,7 @@
 
 Status: not started · After: 34b · Tyler-dependent: no
 
-Split from M34 during planning (see that brief). Needs a new PLAN.md row. M36, M36b and M37 list M34 under After; they should list M34c.
+Split from M34 during planning (see that brief). M36, M37b and M37 list M34c under After.
 
 ## Goal
 The netcode suite plays the whole reference game with several headless clients against the real server entrypoint over conditioned links, and pins every multiplayer coverage item `0003` Consequences leaves to scripted tests: the three rejection races, the subscription-edge `NotPredictable`, a furnace across a chunk border under partial subscription, plus late join, reconnect, the disconnect grace and the idle pause. Every multiplayer row of the Requirement matrix names a passing test.
@@ -40,7 +40,7 @@ Eight-client soak and the standard large save (M36). Version-mismatch reload, `S
 
 ## Seams
 **Provides:** `tests/helpers/net.ts::refHarness({ clients, seed, conditions?, world? })` returning the harness plus one `headlessDriver` per client; `tornStateProbe(client)` (per-frame invariant check used by the three races).
-**Consumes:** `createNetHarness`, `HeadlessClient` (with `setCamera` and `ui`, see M34 Seams), `conditionLink`, `VirtualClock`, `settle`, `assertConverged`, `counters` (M27); `secrets`, `joinKey`, `leave`, `connectRaw` (M28); `link(i).disconnect/reconnect`, `serverInternals(server).isTicking` (M28b); `transport: 'ws'` (M29); byte ceilings and per-chunk hashes (M31, M31b); `script.ts` (M34b); pending queue statuses incl. `NotPredictable` and the taint rule (M25).
+**Consumes:** `createNetHarness`, `HeadlessClient` (with `setCamera` and `ui()`), `conditionLink`, `VirtualClock`, `settle`, `assertConverged`, `counters` (M27); `secrets`, `joinKey`, `leave`, `connectRaw` (M28); `link(i).disconnect/reconnect`, `serverInternals(server).isTicking` (M28b); `transport: 'ws'` (M29); byte ceilings and per-chunk hashes (M31, M31b); `script.ts` (M34b); pending queue statuses incl. `NotPredictable` and the taint rule (M25).
 
 ## Planning decisions
 - **Races are made deterministic by the virtual clock, not by sleeping.** Both actions are dispatched, then `advanceTo` releases them in the harness's total order; swapping link latencies swaps the winner, and each race asserts both orders.

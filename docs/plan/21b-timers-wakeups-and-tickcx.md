@@ -2,7 +2,7 @@
 
 Status: not started · After: 21 · Tyler-dependent: no
 
-Split from M21 (see that brief). PLAN.md needs a row; M22, M25 and M32 should list 21b in **After**.
+Split from M21 (see that brief). M22, M25 and M32 list 21b in **After**.
 
 ## Goal
 Tick cost is O(active entities): a machine computes its finish tick, sleeps on the timer wheel and costs nothing until it is due; an action that touches a sleeping entity wakes it at one fixed point of the next tick. `TickCx` has its final shape. Timers, wake queue and active lists are sim state: encoded in canonical order, hashed, replayed. The milestone also measures the host undo journal and decides it.

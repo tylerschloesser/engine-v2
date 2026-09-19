@@ -2,7 +2,7 @@
 
 Status: not started · After: 33 · Tyler-dependent: R2 (`FurnaceTake` opts out of prediction; default: yes), see `docs/plan/reference-coverage.md` "Questions"
 
-Split from M33 during planning (see that brief). Needs a new PLAN.md row.
+Split from M33 during planning (see that brief).
 
 ## Goal
 Clicking a furnace opens a panel; any player can deposit iron and fuel and take all ingots; the furnace smelts on the timer wheel at the Requirement's rates, keeps smelting when nobody is looking, and costs nothing when idle.
@@ -31,7 +31,7 @@ Removing furnaces; taking ore or fuel back; partial take; more than one open pan
 
 ## Seams
 **Provides:** `rules::furnace::advance`, `content::{SMELT, COAL_INGOTS, WOOD_INGOTS}`, browser helpers `openFurnace(page, tile)`, `deposit(page, item, n)`, `takeAll(page)`; `RefScenario::{deposit, take, furnace_at}`.
-**Consumes:** `Furnace`, `can_place`, `local::CLOSE_PANEL`, `placeFurnace`, `craftFurnace` (M33); `TickCx::{next_woken, next_due, wake_at}` and "a put from `apply` wakes the entity" (M21b, as fixed in M12b's planning decisions); entity picking from the DrawList and `tap` events in `FrameCx` (M18); `DrawList::{bar, rect}`, sprite frames (M17); `Game::predict` honoured by the pending queue (M25).
+**Consumes:** `Furnace`, `can_place`, `local::CLOSE_PANEL`, `placeFurnace`, `craftFurnace` (M33); `TickCx::{next_woken, next_due, wake_at}` and "a put from `apply` wakes the entity" (M21b; 0024 §7); entity picking from the DrawList and `tap` events in `FrameCx` (M18); `DrawList::{bar, rect}` (M17), sprite frames (M17b); `Game::predict` honoured by the pending queue (M25).
 
 ## Planning decisions
 - **`advance` is the only furnace rule** and is idempotent for a furnace with nothing to do, so the wake from a deposit and the wheel's due timer share one code path.

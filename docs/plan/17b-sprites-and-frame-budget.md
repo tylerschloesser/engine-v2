@@ -2,7 +2,7 @@
 
 Status: not started · After: 17, 09b · Tyler-dependent: no
 
-Split out of M17 during planning. M20 (reference game v0) needs it; M18 and M19 do not. Carries one manual desktop check (Safari and Firefox).
+Split out of M17 during planning. PLAN.md lists it under M20b's After (M33 is the first milestone to draw a sprite); M18 and M19 do not need it. Carries one manual desktop check (Safari and Firefox).
 
 ## Goal
 The sprite half of the art contract works: `sprites.png` + `sprites.json` load into a padded atlas with two mip levels, and the uber-quad pipeline draws the sprite kind with pivot, size in tiles, frames and `FLIP_X`. The worst-case frame of 0018 §6 (65,536 records) is measured against the desktop proxy of 0018 §9 in the slow tier: this is the repo's first frame-time exit criterion, so the `profile-frame` skill is written here.
