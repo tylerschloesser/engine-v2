@@ -2,9 +2,9 @@
 
 ## Status
 
-- **Phase:** 1 of 4, not started. (Updated 2026-09-19.)
-- **State:** The repo holds only context files. No code, no research, no decisions yet.
-- **Next step:** Begin at "What to do" below.
+- **Phase:** 1 of 4, in progress on branch `phase-1-pre-plan`. (Updated 2026-09-19.)
+- **State:** Steps 1–2 done: spec gaps added, all eight research files are in `docs/research/`. Tyler ruled that the camera is not an action (recorded in `docs/spec/overview.md`). Step 3 spikes are running under `spikes/` (`vite-lib-worker-wasm`, `cross-origin-sab`, `determinism-hash`, `prediction-api`, `zero-gc-webgpu`); each writes a `RESULT.md`. Step 4: the batch is in `docs/research/questions-for-tyler.md`, awaiting answers.
+- **Next step:** Check each spike's `RESULT.md` (re-run any that is missing) and link results from the research files. Record Tyler's answers in the spec Requirements and delete the questions file. Then steps 5–8.
 
 If you stop early (context budget, blocker), update this Status block with the current state and exact next steps, commit, and end. Leave the rest of this file intact.
 
