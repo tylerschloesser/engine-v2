@@ -124,7 +124,7 @@ function unescapeXml(s) {
     .replaceAll('&amp;', '&')
 }
 
-function stripAnsi(s) {
+export function stripAnsi(s) {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes is the point
   return s.replaceAll(/\x1b\[[0-9;]*m/g, '')
 }
