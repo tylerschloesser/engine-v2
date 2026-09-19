@@ -34,5 +34,34 @@
         "organizeImports": "on"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": [
+        "packages/engine/src/**",
+        "!packages/engine/src/clock.ts",
+        "!packages/engine/src/test/**",
+        "!packages/engine/src/vite.ts",
+        "!packages/engine/src/build-game.ts"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedGlobals": {
+              "level": "error",
+              "options": {
+                "deniedGlobals": {
+                  "Date": "ambient time: take a Clock (docs/decisions/0020 §8, src/clock.ts)",
+                  "performance": "ambient time: take a Clock (docs/decisions/0020 §8, src/clock.ts)",
+                  "setTimeout": "ambient time: take a Scheduler (docs/decisions/0020 §8, src/clock.ts)",
+                  "setInterval": "ambient time: take a Scheduler (docs/decisions/0020 §8, src/clock.ts)",
+                  "requestAnimationFrame": "ambient time: take a Scheduler (docs/decisions/0020 §8, src/clock.ts)"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }
