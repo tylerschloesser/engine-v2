@@ -11,18 +11,31 @@ import { createStepBlock, StepBlockField, StepOp, stepBlockView } from './step-b
 /** Busy-wait ceiling for an ack: the spike's ack-timeout guard (spikes/zero-gc-webgpu/public/main.js). */
 const SPIN_LIMIT = 2_000_000_000
 
-export type HarnessWorkerSpec = { name: string; role: Role; config: InstanceConfig }
+export type HarnessWorkerSpec = {
+  name: string
+  role: Role
+  config: InstanceConfig
+  /** M04 (docs/plan/04-zero-gc-harness.md, Seams): drives `coreTick`'s fixed-block SAB<->region
+   * copy every tick, instead of a bare `sim_tick`. */
+  rxTx?: { rx: SharedArrayBuffer; tx: SharedArrayBuffer }
+}
 
 export interface Harness {
   readonly clock: ManualClock
+  /** Names of every worker, in the order given to `createHarness` ('main' is reserved and never
+   * included: docs/plan/04-zero-gc-harness.md, Seams). */
+  readonly workerNames: string[]
   /** Every sim-role worker runs one `sim_tick`; returns when all have acknowledged. Synchronous and
    * allocation-free once every target worker is resumed. */
   stepTick(): void
   /** `clock.frame(dtMs)` on main, then one step of every client-role worker (none exist before
    * M06b: main-only for now). */
   stepFrame(dtMs: number): void
-  /** Workers enter their blocking wait loop; resolves once every one reports blocked-and-ready. */
-  resume(): Promise<void>
+  /** Workers enter their blocking wait loop; resolves once every one reports blocked-and-ready.
+   * `opts.except` (M04) leaves the named workers idle instead -- the `post-message` negative
+   * control drives them by plain `postMessage` (`messageTick`), which a worker blocked in
+   * `Atomics.wait` cannot receive. */
+  resume(opts?: { except?: string[] }): Promise<void>
   /** Workers return to their event loops so messages and CDP reach them. */
   park(): Promise<void>
   /** The awaitable cross-thread quiescence point of 0020 §8: resolves once every worker has
@@ -34,6 +47,20 @@ export interface Harness {
   admit(worker: string, bytes: Uint8Array): Promise<Status>
   memoryBytes(): Promise<Record<string, number>>
   memGrows(): Promise<Record<string, number>>
+  /** M04: one tick by message round trip (docs/plan/04-zero-gc-harness.md, Seams, `post-message`
+   * negative control). Valid only for a worker excluded from `resume()` (never armed), so it is
+   * reachable through its normal event loop. */
+  messageTick(worker: string): Promise<void>
+  /** M04: every worker emits `performance.mark('gc-isolate:<name>')` (Planning decisions "Naming
+   * isolates"). Requires every worker parked. */
+  markIsolates(): Promise<void>
+  /** M04: writes a `StepControl` into a worker's step block (`step-block.ts`); read fresh on its
+   * next tick, so this is safe to call while parked (the usual case) or armed. */
+  setWorkerControl(worker: string, control: number): void
+  /** M04: `typeof gc === 'function'` in each worker's own isolate, captured at setup
+   * (`--js-flags=--expose-gc`, 0016 §3). Main's own is a plain page-side check (not through the
+   * harness: `installGcPage` does it directly). */
+  workerGcExposed(): Record<string, boolean>
   errors(): string[]
   dispose(): void
 }
@@ -52,6 +79,8 @@ type WorkerHandle = {
   seq: number
   armed: boolean
   pending: Pending | null
+  /** From the worker's `ready` message; `false` until setup resolves. */
+  gcExposed: boolean
 }
 
 function setupWorker(
@@ -74,6 +103,7 @@ function setupWorker(
       seq: 0,
       armed: false,
       pending: null,
+      gcExposed: false,
     }
     worker.onerror = (e) => reject(new Error(`harness worker '${spec.name}' error: ${e.message}`))
     worker.onmessage = (ev: MessageEvent<FromWorker>) => {
@@ -94,7 +124,14 @@ function setupWorker(
         pending.resolve(m)
       }
     }
-    handle.pending = { replyType: 'ready', resolve: () => resolve(), reject }
+    handle.pending = {
+      replyType: 'ready',
+      resolve: (m) => {
+        if (m.type === 'ready') handle.gcExposed = m.gcExposed
+        resolve()
+      },
+      reject,
+    }
     handles.set(spec.name, handle)
     const setup: ToWorker = {
       type: 'setup',
@@ -103,6 +140,7 @@ function setupWorker(
       role: spec.role,
       config: spec.config,
       sab: sabBuffer,
+      ...(spec.rxTx ? { rxTx: spec.rxTx } : {}),
     }
     worker.postMessage(setup)
   })
@@ -199,6 +237,7 @@ export async function createHarness(opts: {
 
   return {
     clock,
+    workerNames: opts.workers.map((s) => s.name),
 
     stepTick() {
       stepAll(Role.Sim, StepOp.Tick)
@@ -208,14 +247,35 @@ export async function createHarness(opts: {
       stepAll(Role.Client, StepOp.Frame)
     },
 
-    async resume() {
-      await Promise.all(all().map(resumeOne))
+    async resume(resumeOpts) {
+      const except = new Set(resumeOpts?.except ?? [])
+      await Promise.all(
+        all()
+          .filter((h) => !except.has(h.name))
+          .map(resumeOne),
+      )
     },
     async park() {
       await Promise.all(all().map(parkOne))
     },
     async untilQuiescent() {
       await Promise.all(all().map(parkOne))
+    },
+    async messageTick(name) {
+      const h = findWorker(name)
+      await send(h, { type: 'pmTick' }, 'pmTick')
+    },
+    async markIsolates() {
+      await Promise.all(all().map((h) => send(h, { type: 'markIsolate' }, 'markedIsolate')))
+    },
+    setWorkerControl(name, control) {
+      const h = findWorker(name)
+      Atomics.store(h.sab, StepBlockField.Control, control)
+    },
+    workerGcExposed() {
+      const out: Record<string, boolean> = {}
+      for (const h of all()) out[h.name] = h.gcExposed
+      return out
     },
 
     async hash(name) {

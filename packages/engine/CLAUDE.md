@@ -39,24 +39,8 @@ The one publishable package (working name `engine`, private for now). Layout and
 
 ## Browser test pages
 
-`tests/browser/pages/` is the page host for every browser test from M03 on (`engine()` on
-`fixtures/hash`, `profile: 'dev'`; test-only `fixturesPlugin()` serves the rest). Add a page: add
-`<name>.html` at its root plus `src/<name>.ts` (the config globs `*.html` into the build input). A
-page for any fixture other than `hash` loads it through `fixtureWasm(name)` (`fixture-wasm.ts`),
-shaped exactly like `virtual:engine/wasm`'s `EngineWasm`; `wiring.html` is the only page importing
-the real virtual module, so the public path stays tested. A page's script ends by setting
-`window.__pageReady = true` (after its top-level `await`s): `openPage` waits for that flag, not for
-`load`. Port: `ENGINE_TEST_PORT` (default 4517,
-`strictPort`), so two worktrees can run the browser suite at once.
+`tests/browser/pages/` is the page host for every browser test from M03 on (`engine()` on `fixtures/hash`, `profile: 'dev'`; test-only `fixturesPlugin()` serves the rest). Add a page: add `<name>.html` at its root plus `src/<name>.ts` (the config globs `*.html` into the build input). A page for any fixture other than `hash` loads it through `fixtureWasm(name)` (`fixture-wasm.ts`), shaped exactly like `virtual:engine/wasm`'s `EngineWasm`; `wiring.html` and `gc-loop.html` are the pages importing the real virtual module, so the public path stays tested. A page's script ends by setting `window.__pageReady = true` (after its top-level `await`s): `openPage` waits for that flag, not for `load`. Port: `ENGINE_TEST_PORT` (default 4517, `strictPort`), so two worktrees can run the browser suite at once.
 
 ## Adding a browser spec
 
-A `*.spec.ts` under `tests/browser/` (one level up from `tests/browser/pages/`), importing `test`
-and `expect` from `@playwright/test` and `openPage` from `./support/page.js` (navigates, asserts
-`crossOriginIsolated`, fails the test on any page error or console error). Put `@engines` in a
-test's title to also run it in WebKit and Firefox (`playwright.config.ts`'s `webkit`/`firefox`
-projects grep for it; chromium runs everything); put `@slow` in the title to move it to
-`pnpm test:slow` (0020 §4). `engine/test` (`createHarness`, `createManualClock`) is what a spec
-drives through `page.evaluate` against a page's `window.__harness`; `src/test/harness.ts`'s own
-doc comment has the exact contract (`resume`/`park`/`untilQuiescent`/`stepTick`/`stepFrame`/`hash`/
-`admit`/`memoryBytes`/`memGrows`/`errors`).
+A `*.spec.ts` under `tests/browser/` (one level up from `tests/browser/pages/`), importing `test` and `expect` from `@playwright/test` and `openPage` from `./support/page.js` (navigates, asserts `crossOriginIsolated`, fails the test on any page error or console error). Put `@engines` in a test's title to also run it in WebKit and Firefox (`playwright.config.ts`'s `webkit`/`firefox` projects grep for it; chromium runs everything); put `@slow` in the title to move it to `pnpm test:slow` (0020 §4). `engine/test` (`createHarness`, `createManualClock`) is what a spec drives through `page.evaluate` against a page's `window.__harness`; `src/test/harness.ts`'s own doc comment has the exact contract (`resume`/`park`/`untilQuiescent`/`stepTick`/`stepFrame`/`hash`/`admit`/`memoryBytes`/`memGrows`/`errors`). `gc-test` skill: the `gc` project's zero-allocation suite (M04).

@@ -9,6 +9,9 @@ const baseURL = `http://127.0.0.1:${port}`
 
 export default defineConfig({
   testDir: './tests/browser',
+  // Default matches `*.test.ts` too (M04's `gc/analyse.test.ts` is a Vitest unit test, run by the
+  // `unit` suite instead: vitest.config.ts).
+  testMatch: '**/*.spec.ts',
   fullyParallel: true,
   // One browser per Playwright worker (Planning decisions).
   workers: 3,
