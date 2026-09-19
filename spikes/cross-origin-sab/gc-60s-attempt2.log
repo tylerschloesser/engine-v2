@@ -1,0 +1,56 @@
+chromium 153.0.8010.12
+{
+ "variant": "raf",
+ "elapsedMs": 60349,
+ "frames": 3622,
+ "wakes": 0,
+ "msgs": 0,
+ "seqErrors": 0,
+ "maxDrainPerFrame": 0,
+ "ringDrops": 0,
+ "heapUsedBefore": 685360,
+ "heapUsedAfter": 728572,
+ "heapGrowthBytes": 43212,
+ "bytesPerFrame": 11.9,
+ "bytesPerMsg": null,
+ "heapDecreasesSeen": 0,
+ "mainThreadGC": {},
+ "workerThreadGC": {},
+ "otherGC": {},
+ "errors": [],
+ "sampling": {
+  "sampledTotalBytes": 44388,
+  "top": [
+   "44220 B  (IDLE_EXTERNAL) @ (native):-1",
+   "168 B  h @ bench-DoSDDDnX.js:0"
+  ]
+ }
+}
+{
+ "variant": "sab",
+ "elapsedMs": 60347,
+ "frames": 3621,
+ "wakes": 0,
+ "msgs": 37720,
+ "seqErrors": 0,
+ "maxDrainPerFrame": 20,
+ "ringDrops": 0,
+ "heapUsedBefore": 719932,
+ "heapUsedAfter": 766300,
+ "heapGrowthBytes": 46368,
+ "bytesPerFrame": 12.8,
+ "bytesPerMsg": 1.2,
+ "heapDecreasesSeen": 0,
+ "mainThreadGC": {},
+ "workerThreadGC": {},
+ "otherGC": {},
+ "errors": [],
+ "sampling": {
+  "sampledTotalBytes": 45028,
+  "top": [
+   "42468 B  (IDLE_EXTERNAL) @ (native):-1",
+   "2560 B  e @ bench-DoSDDDnX.js:0"
+  ]
+ }
+}
+exit=0

@@ -1,0 +1,27 @@
+chromium 153.0.8010.12
+{
+ "variant": "timer",
+ "elapsedMs": 10049,
+ "frames": 628,
+ "wakes": 0,
+ "msgs": 0,
+ "seqErrors": 0,
+ "maxDrainPerFrame": 0,
+ "ringDrops": 0,
+ "heapUsedBefore": 684716,
+ "heapUsedAfter": 684716,
+ "heapGrowthBytes": 0,
+ "bytesPerFrame": 0,
+ "bytesPerMsg": null,
+ "heapDecreasesSeen": 0,
+ "mainThreadGC": {},
+ "workerThreadGC": {},
+ "otherGC": {},
+ "errors": [],
+ "sampling": {
+  "sampledTotalBytes": 84,
+  "top": [
+   "84 B  (anonymous) @ bench-DoSDDDnX.js:0"
+  ]
+ }
+}

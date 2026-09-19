@@ -1,0 +1,39 @@
+chromium 153.0.8010.12
+{
+ "variant": "sab",
+ "elapsedMs": 60247,
+ "frames": 3615,
+ "wakes": 0,
+ "msgs": 37660,
+ "seqErrors": 0,
+ "maxDrainPerFrame": 20,
+ "ringDrops": 0,
+ "heapUsedBefore": 720852,
+ "heapUsedAfter": 766216,
+ "heapGrowthBytes": 45364,
+ "bytesPerFrame": 12.5,
+ "bytesPerMsg": 1.2,
+ "heapDecreasesSeen": 0,
+ "mainThreadGC": {},
+ "workerThreadGC": {},
+ "otherGC": {},
+ "errors": [],
+ "sampling": {
+  "sampledTotalBytes": 46004,
+  "top": [
+   "43728 B  (IDLE_EXTERNAL) @ (native):-1",
+   "2276 B  e @ bench-DoSDDDnX.js:0"
+  ]
+ }
+}
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+cdpSession.send: Target page, context or browser has been closed
+    at passA (/Users/tyler/repos/engine-v2/spikes/cross-origin-sab/scripts/gc.mjs:48:25)
+    at async file:///Users/tyler/repos/engine-v2/spikes/cross-origin-sab/scripts/gc.mjs:121:15 {
+  log: []
+}
+
+Node.js v22.18.0

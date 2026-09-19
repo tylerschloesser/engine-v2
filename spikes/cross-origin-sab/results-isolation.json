@@ -1,0 +1,903 @@
+{
+  "versions": {
+    "chromium": "153.0.8010.12",
+    "webkit": "26.6",
+    "firefox": "155.0"
+  },
+  "all": [
+    {
+      "server": "dev",
+      "mode": "require-corp",
+      "engine": "chromium",
+      "workerScriptHeaders": {
+        "url": "/src/isolation-worker.ts",
+        "coep": "require-corp"
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+        "main": {
+          "crossOriginIsolated": true,
+          "sabDefined": true,
+          "sabConstruct": 16,
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": true,
+          "type": "report",
+          "crossOriginIsolated": true,
+          "sabConstruct": 16,
+          "atomicsWait": "timed-out",
+          "sharedRoundTrip": "ok"
+        },
+        "images": {
+          "plain, no crossorigin attr": "blocked",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "rejected: Failed to fetch"
+      },
+      "consoleErrors": [
+        "Failed to load resource: net::ERR_BLOCKED_BY_RESPONSE.NotSameOriginAfterDefaultedToSameOriginByCoep",
+        "Access to image at 'http://127.0.0.1:5999/plain.png?0.9836065914378275' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the r",
+        "Failed to load resource: net::ERR_FAILED",
+        "Failed to load resource: net::ERR_BLOCKED_BY_RESPONSE.NotSameOriginAfterDefaultedToSameOriginByCoep"
+      ]
+    },
+    {
+      "server": "dev",
+      "mode": "require-corp",
+      "engine": "webkit",
+      "workerScriptHeaders": {
+        "url": "/src/isolation-worker.ts",
+        "coep": "require-corp"
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+        "main": {
+          "crossOriginIsolated": true,
+          "sabDefined": true,
+          "sabConstruct": 16,
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": true,
+          "type": "report",
+          "crossOriginIsolated": true,
+          "sabConstruct": 16,
+          "atomicsWait": "timed-out",
+          "sharedRoundTrip": "ok"
+        },
+        "images": {
+          "plain, no crossorigin attr": "blocked",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "rejected: Load failed"
+      },
+      "consoleErrors": [
+        "Cancelled load to http://127.0.0.1:5999/plain.png?0.4952021000388902 because it violates the resource's Cross-Origin-Resource-Policy response header.",
+        "Cannot load image http://127.0.0.1:5999/plain.png?0.4952021000388902 due to access control checks.",
+        "Failed to load resource: Cancelled load to http://127.0.0.1:5999/plain.png?0.4952021000388902 because it violates the resource's Cross-Origin-Resource-Policy response header.",
+        "Origin http://localhost:5173 is not allowed by Access-Control-Allow-Origin. Status code: 200",
+        "Cannot load image http://127.0.0.1:5999/plain.png?0.4467068749383607 due to access control checks.",
+        "Failed to load resource: Origin http://localhost:5173 is not allowed by Access-Control-Allow-Origin. Status code: 200",
+        "Cancelled load to http://127.0.0.1:5999/plain.png because it violates the resource's Cross-Origin-Resource-Policy response header.",
+        "Failed to load resource: Cancelled load to http://127.0.0.1:5999/plain.png because it violates the resource's Cross-Origin-Resource-Policy response header."
+      ]
+    },
+    {
+      "server": "dev",
+      "mode": "require-corp",
+      "engine": "firefox",
+      "workerScriptHeaders": {
+        "url": "/src/isolation-worker.ts",
+        "coep": "require-corp"
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+        "main": {
+          "crossOriginIsolated": true,
+          "sabDefined": true,
+          "sabConstruct": 16,
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": true,
+          "type": "report",
+          "crossOriginIsolated": true,
+          "sabConstruct": 16,
+          "atomicsWait": "timed-out",
+          "sharedRoundTrip": "ok"
+        },
+        "images": {
+          "plain, no crossorigin attr": "blocked",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "rejected: NetworkError when attempting to fetch resource."
+      },
+      "consoleErrors": [
+        "[JavaScript Error: \"The resource at “http://127.0.0.1:5999/plain.png?0.9231065939228759” was blocked due to its Cross-Origin-Resource-Policy header (or lack thereof). See https://developer.mozilla.org",
+        "[JavaScript Error: \"Cross-Origin Request Blocked: The Same Origin Policy disallows reading the remote resource at http://127.0.0.1:5999/plain.png?0.10822210879843308. (Reason: CORS header ‘Access-Cont",
+        "[JavaScript Error: \"The resource at “http://127.0.0.1:5999/plain.png” was blocked due to its Cross-Origin-Resource-Policy header (or lack thereof). See https://developer.mozilla.org/docs/Web/HTTP/Cros"
+      ]
+    },
+    {
+      "server": "dev",
+      "mode": "credentialless",
+      "engine": "chromium",
+      "workerScriptHeaders": {
+        "url": "/src/isolation-worker.ts",
+        "coep": "credentialless"
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+        "main": {
+          "crossOriginIsolated": true,
+          "sabDefined": true,
+          "sabConstruct": 16,
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": true,
+          "type": "report",
+          "crossOriginIsolated": true,
+          "sabConstruct": 16,
+          "atomicsWait": "timed-out",
+          "sharedRoundTrip": "ok"
+        },
+        "images": {
+          "plain, no crossorigin attr": "loaded",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "ok (opaque)"
+      },
+      "consoleErrors": [
+        "Access to image at 'http://127.0.0.1:5999/plain.png?0.7612093632271988' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the r",
+        "Failed to load resource: net::ERR_FAILED"
+      ]
+    },
+    {
+      "server": "dev",
+      "mode": "credentialless",
+      "engine": "webkit",
+      "workerScriptHeaders": {
+        "url": "/src/isolation-worker.ts",
+        "coep": "credentialless"
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+        "main": {
+          "crossOriginIsolated": false,
+          "sabDefined": false,
+          "sabConstruct": "threw: Can't find variable: SharedArrayBuffer",
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": true,
+          "type": "report",
+          "crossOriginIsolated": false,
+          "sabConstruct": "threw: Can't find variable: SharedArrayBuffer",
+          "atomicsWait": "threw: Can't find variable: SharedArrayBuffer",
+          "sharedRoundTrip": "threw: Can't find variable: SharedArrayBuffer"
+        },
+        "images": {
+          "plain, no crossorigin attr": "loaded",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "ok (opaque)"
+      },
+      "consoleErrors": [
+        "Origin http://localhost:5173 is not allowed by Access-Control-Allow-Origin. Status code: 200",
+        "Cannot load image http://127.0.0.1:5999/plain.png?0.8006870842404731 due to access control checks.",
+        "Failed to load resource: Origin http://localhost:5173 is not allowed by Access-Control-Allow-Origin. Status code: 200"
+      ]
+    },
+    {
+      "server": "dev",
+      "mode": "credentialless",
+      "engine": "firefox",
+      "workerScriptHeaders": {
+        "url": "/src/isolation-worker.ts",
+        "coep": "credentialless"
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+        "main": {
+          "crossOriginIsolated": true,
+          "sabDefined": true,
+          "sabConstruct": 16,
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": true,
+          "type": "report",
+          "crossOriginIsolated": true,
+          "sabConstruct": 16,
+          "atomicsWait": "timed-out",
+          "sharedRoundTrip": "ok"
+        },
+        "images": {
+          "plain, no crossorigin attr": "loaded",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "ok (opaque)"
+      },
+      "consoleErrors": [
+        "[JavaScript Error: \"Cross-Origin Request Blocked: The Same Origin Policy disallows reading the remote resource at http://127.0.0.1:5999/plain.png?0.37695739801501027. (Reason: CORS header ‘Access-Cont"
+      ]
+    },
+    {
+      "server": "dev",
+      "mode": "none",
+      "engine": "chromium",
+      "workerScriptHeaders": {
+        "url": "/src/isolation-worker.ts",
+        "coep": null
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+        "main": {
+          "crossOriginIsolated": false,
+          "sabDefined": false,
+          "sabConstruct": "threw: SharedArrayBuffer is not defined",
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": true,
+          "type": "report",
+          "crossOriginIsolated": false,
+          "sabConstruct": "threw: SharedArrayBuffer is not defined",
+          "atomicsWait": "threw: SharedArrayBuffer is not defined",
+          "sharedRoundTrip": "threw: SharedArrayBuffer is not defined"
+        },
+        "images": {
+          "plain, no crossorigin attr": "loaded",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "ok (opaque)"
+      },
+      "consoleErrors": [
+        "Access to image at 'http://127.0.0.1:5999/plain.png?0.2582065609453097' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the r",
+        "Failed to load resource: net::ERR_FAILED"
+      ]
+    },
+    {
+      "server": "dev",
+      "mode": "none",
+      "engine": "webkit",
+      "workerScriptHeaders": {
+        "url": "/src/isolation-worker.ts",
+        "coep": null
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+        "main": {
+          "crossOriginIsolated": false,
+          "sabDefined": false,
+          "sabConstruct": "threw: Can't find variable: SharedArrayBuffer",
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": true,
+          "type": "report",
+          "crossOriginIsolated": false,
+          "sabConstruct": "threw: Can't find variable: SharedArrayBuffer",
+          "atomicsWait": "threw: Can't find variable: SharedArrayBuffer",
+          "sharedRoundTrip": "threw: Can't find variable: SharedArrayBuffer"
+        },
+        "images": {
+          "plain, no crossorigin attr": "loaded",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "ok (opaque)"
+      },
+      "consoleErrors": [
+        "Origin http://localhost:5173 is not allowed by Access-Control-Allow-Origin. Status code: 200",
+        "Cannot load image http://127.0.0.1:5999/plain.png?0.1314134924664755 due to access control checks.",
+        "Failed to load resource: Origin http://localhost:5173 is not allowed by Access-Control-Allow-Origin. Status code: 200"
+      ]
+    },
+    {
+      "server": "dev",
+      "mode": "none",
+      "engine": "firefox",
+      "workerScriptHeaders": {
+        "url": "/src/isolation-worker.ts",
+        "coep": null
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+        "main": {
+          "crossOriginIsolated": false,
+          "sabDefined": false,
+          "sabConstruct": "threw: SharedArrayBuffer is not defined",
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": true,
+          "type": "report",
+          "crossOriginIsolated": false,
+          "sabConstruct": "threw: SharedArrayBuffer is not defined",
+          "atomicsWait": "threw: SharedArrayBuffer is not defined",
+          "sharedRoundTrip": "threw: SharedArrayBuffer is not defined"
+        },
+        "images": {
+          "plain, no crossorigin attr": "loaded",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "ok (opaque)"
+      },
+      "consoleErrors": [
+        "[JavaScript Error: \"Cross-Origin Request Blocked: The Same Origin Policy disallows reading the remote resource at http://127.0.0.1:5999/plain.png?0.6734321560242886. (Reason: CORS header ‘Access-Contr"
+      ]
+    },
+    {
+      "server": "dev",
+      "mode": "require-corp, headers on HTML only",
+      "engine": "chromium",
+      "workerScriptHeaders": null,
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+        "main": {
+          "crossOriginIsolated": true,
+          "sabDefined": true,
+          "sabConstruct": 16,
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": false,
+          "error": "worker error event: "
+        },
+        "images": {
+          "plain, no crossorigin attr": "blocked",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "rejected: Failed to fetch"
+      },
+      "consoleErrors": [
+        "Failed to load resource: net::ERR_BLOCKED_BY_RESPONSE.NotSameOriginAfterDefaultedToSameOriginByCoep",
+        "Access to image at 'http://127.0.0.1:5999/plain.png?0.3842158252659994' from origin 'http://localhost:5173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the r",
+        "Failed to load resource: net::ERR_FAILED",
+        "Failed to load resource: net::ERR_BLOCKED_BY_RESPONSE.NotSameOriginAfterDefaultedToSameOriginByCoep"
+      ]
+    },
+    {
+      "server": "dev",
+      "mode": "require-corp, headers on HTML only",
+      "engine": "webkit",
+      "workerScriptHeaders": null,
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+        "main": {
+          "crossOriginIsolated": true,
+          "sabDefined": true,
+          "sabConstruct": 16,
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": false,
+          "error": "worker error event: "
+        },
+        "images": {
+          "plain, no crossorigin attr": "blocked",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "rejected: Load failed"
+      },
+      "consoleErrors": [
+        "Refused to load 'http://localhost:5173/src/isolation-worker.ts?worker_file&type=module' worker because of Cross-Origin-Embedder-Policy.",
+        "Worker load was blocked by Cross-Origin-Embedder-Policy",
+        "Failed to load resource: Worker load was blocked by Cross-Origin-Embedder-Policy",
+        "Cancelled load to http://127.0.0.1:5999/plain.png?0.5314722529768189 because it violates the resource's Cross-Origin-Resource-Policy response header.",
+        "Cannot load image http://127.0.0.1:5999/plain.png?0.5314722529768189 due to access control checks.",
+        "Failed to load resource: Cancelled load to http://127.0.0.1:5999/plain.png?0.5314722529768189 because it violates the resource's Cross-Origin-Resource-Policy response header.",
+        "Origin http://localhost:5173 is not allowed by Access-Control-Allow-Origin. Status code: 200",
+        "Cannot load image http://127.0.0.1:5999/plain.png?0.09384976056592165 due to access control checks.",
+        "Failed to load resource: Origin http://localhost:5173 is not allowed by Access-Control-Allow-Origin. Status code: 200",
+        "Cancelled load to http://127.0.0.1:5999/plain.png because it violates the resource's Cross-Origin-Resource-Policy response header.",
+        "Failed to load resource: Cancelled load to http://127.0.0.1:5999/plain.png because it violates the resource's Cross-Origin-Resource-Policy response header."
+      ]
+    },
+    {
+      "server": "dev",
+      "mode": "require-corp, headers on HTML only",
+      "engine": "firefox",
+      "workerScriptHeaders": {
+        "url": "/src/isolation-worker.ts",
+        "coep": null
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+        "main": {
+          "crossOriginIsolated": true,
+          "sabDefined": true,
+          "sabConstruct": 16,
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": false,
+          "error": "worker error event: "
+        },
+        "images": {
+          "plain, no crossorigin attr": "blocked",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "rejected: NetworkError when attempting to fetch resource."
+      },
+      "consoleErrors": [
+        "[JavaScript Error: \"The resource at “http://127.0.0.1:5999/plain.png?0.3787878261616686” was blocked due to its Cross-Origin-Resource-Policy header (or lack thereof). See https://developer.mozilla.org",
+        "[JavaScript Error: \"Cross-Origin Request Blocked: The Same Origin Policy disallows reading the remote resource at http://127.0.0.1:5999/plain.png?0.8176498469411031. (Reason: CORS header ‘Access-Contr",
+        "[JavaScript Error: \"The resource at “http://127.0.0.1:5999/plain.png” was blocked due to its Cross-Origin-Resource-Policy header (or lack thereof). See https://developer.mozilla.org/docs/Web/HTTP/Cros"
+      ]
+    },
+    {
+      "server": "preview",
+      "mode": "require-corp",
+      "engine": "chromium",
+      "workerScriptHeaders": {
+        "url": "/assets/isolation-worker-CR3rMWRA.js",
+        "coep": "require-corp"
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+        "main": {
+          "crossOriginIsolated": true,
+          "sabDefined": true,
+          "sabConstruct": 16,
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": true,
+          "type": "report",
+          "crossOriginIsolated": true,
+          "sabConstruct": 16,
+          "atomicsWait": "timed-out",
+          "sharedRoundTrip": "ok"
+        },
+        "images": {
+          "plain, no crossorigin attr": "blocked",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "rejected: Failed to fetch"
+      },
+      "consoleErrors": [
+        "Failed to load resource: net::ERR_BLOCKED_BY_RESPONSE.NotSameOriginAfterDefaultedToSameOriginByCoep",
+        "Access to image at 'http://127.0.0.1:5999/plain.png?0.738447997316848' from origin 'http://localhost:4173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the re",
+        "Failed to load resource: net::ERR_FAILED",
+        "Failed to load resource: net::ERR_BLOCKED_BY_RESPONSE.NotSameOriginAfterDefaultedToSameOriginByCoep"
+      ]
+    },
+    {
+      "server": "preview",
+      "mode": "require-corp",
+      "engine": "webkit",
+      "workerScriptHeaders": {
+        "url": "/assets/isolation-worker-CR3rMWRA.js",
+        "coep": "require-corp"
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+        "main": {
+          "crossOriginIsolated": true,
+          "sabDefined": true,
+          "sabConstruct": 16,
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": true,
+          "type": "report",
+          "crossOriginIsolated": true,
+          "sabConstruct": 16,
+          "atomicsWait": "timed-out",
+          "sharedRoundTrip": "ok"
+        },
+        "images": {
+          "plain, no crossorigin attr": "blocked",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "rejected: Load failed"
+      },
+      "consoleErrors": [
+        "Cancelled load to http://127.0.0.1:5999/plain.png?0.1860131854545054 because it violates the resource's Cross-Origin-Resource-Policy response header.",
+        "Cannot load image http://127.0.0.1:5999/plain.png?0.1860131854545054 due to access control checks.",
+        "Failed to load resource: Cancelled load to http://127.0.0.1:5999/plain.png?0.1860131854545054 because it violates the resource's Cross-Origin-Resource-Policy response header.",
+        "Origin http://localhost:4173 is not allowed by Access-Control-Allow-Origin. Status code: 200",
+        "Cannot load image http://127.0.0.1:5999/plain.png?0.9254287735817575 due to access control checks.",
+        "Failed to load resource: Origin http://localhost:4173 is not allowed by Access-Control-Allow-Origin. Status code: 200",
+        "Cancelled load to http://127.0.0.1:5999/plain.png because it violates the resource's Cross-Origin-Resource-Policy response header.",
+        "Failed to load resource: Cancelled load to http://127.0.0.1:5999/plain.png because it violates the resource's Cross-Origin-Resource-Policy response header."
+      ]
+    },
+    {
+      "server": "preview",
+      "mode": "require-corp",
+      "engine": "firefox",
+      "workerScriptHeaders": {
+        "url": "/assets/isolation-worker-CR3rMWRA.js",
+        "coep": "require-corp"
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+        "main": {
+          "crossOriginIsolated": true,
+          "sabDefined": true,
+          "sabConstruct": 16,
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": true,
+          "type": "report",
+          "crossOriginIsolated": true,
+          "sabConstruct": 16,
+          "atomicsWait": "timed-out",
+          "sharedRoundTrip": "ok"
+        },
+        "images": {
+          "plain, no crossorigin attr": "blocked",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "rejected: NetworkError when attempting to fetch resource."
+      },
+      "consoleErrors": [
+        "[JavaScript Error: \"The resource at “http://127.0.0.1:5999/plain.png?0.8928411029991693” was blocked due to its Cross-Origin-Resource-Policy header (or lack thereof). See https://developer.mozilla.org",
+        "[JavaScript Error: \"Cross-Origin Request Blocked: The Same Origin Policy disallows reading the remote resource at http://127.0.0.1:5999/plain.png?0.6965060113873281. (Reason: CORS header ‘Access-Contr",
+        "[JavaScript Error: \"The resource at “http://127.0.0.1:5999/plain.png” was blocked due to its Cross-Origin-Resource-Policy header (or lack thereof). See https://developer.mozilla.org/docs/Web/HTTP/Cros"
+      ]
+    },
+    {
+      "server": "preview",
+      "mode": "credentialless",
+      "engine": "chromium",
+      "workerScriptHeaders": {
+        "url": "/assets/isolation-worker-CR3rMWRA.js",
+        "coep": "credentialless"
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+        "main": {
+          "crossOriginIsolated": true,
+          "sabDefined": true,
+          "sabConstruct": 16,
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": true,
+          "type": "report",
+          "crossOriginIsolated": true,
+          "sabConstruct": 16,
+          "atomicsWait": "timed-out",
+          "sharedRoundTrip": "ok"
+        },
+        "images": {
+          "plain, no crossorigin attr": "loaded",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "ok (opaque)"
+      },
+      "consoleErrors": [
+        "Access to image at 'http://127.0.0.1:5999/plain.png?0.7174865913622419' from origin 'http://localhost:4173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the r",
+        "Failed to load resource: net::ERR_FAILED"
+      ]
+    },
+    {
+      "server": "preview",
+      "mode": "credentialless",
+      "engine": "webkit",
+      "workerScriptHeaders": {
+        "url": "/assets/isolation-worker-CR3rMWRA.js",
+        "coep": "credentialless"
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+        "main": {
+          "crossOriginIsolated": false,
+          "sabDefined": false,
+          "sabConstruct": "threw: Can't find variable: SharedArrayBuffer",
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": true,
+          "type": "report",
+          "crossOriginIsolated": false,
+          "sabConstruct": "threw: Can't find variable: SharedArrayBuffer",
+          "atomicsWait": "threw: Can't find variable: SharedArrayBuffer",
+          "sharedRoundTrip": "threw: Can't find variable: SharedArrayBuffer"
+        },
+        "images": {
+          "plain, no crossorigin attr": "loaded",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "ok (opaque)"
+      },
+      "consoleErrors": [
+        "Origin http://localhost:4173 is not allowed by Access-Control-Allow-Origin. Status code: 200",
+        "Cannot load image http://127.0.0.1:5999/plain.png?0.6204086580423607 due to access control checks.",
+        "Failed to load resource: Origin http://localhost:4173 is not allowed by Access-Control-Allow-Origin. Status code: 200"
+      ]
+    },
+    {
+      "server": "preview",
+      "mode": "credentialless",
+      "engine": "firefox",
+      "workerScriptHeaders": {
+        "url": "/assets/isolation-worker-CR3rMWRA.js",
+        "coep": "credentialless"
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+        "main": {
+          "crossOriginIsolated": true,
+          "sabDefined": true,
+          "sabConstruct": 16,
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": true,
+          "type": "report",
+          "crossOriginIsolated": true,
+          "sabConstruct": 16,
+          "atomicsWait": "timed-out",
+          "sharedRoundTrip": "ok"
+        },
+        "images": {
+          "plain, no crossorigin attr": "loaded",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "ok (opaque)"
+      },
+      "consoleErrors": [
+        "[JavaScript Error: \"Cross-Origin Request Blocked: The Same Origin Policy disallows reading the remote resource at http://127.0.0.1:5999/plain.png?0.47972820085939427. (Reason: CORS header ‘Access-Cont"
+      ]
+    },
+    {
+      "server": "preview",
+      "mode": "none",
+      "engine": "chromium",
+      "workerScriptHeaders": {
+        "url": "/assets/isolation-worker-CR3rMWRA.js",
+        "coep": null
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+        "main": {
+          "crossOriginIsolated": false,
+          "sabDefined": false,
+          "sabConstruct": "threw: SharedArrayBuffer is not defined",
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": true,
+          "type": "report",
+          "crossOriginIsolated": false,
+          "sabConstruct": "threw: SharedArrayBuffer is not defined",
+          "atomicsWait": "threw: SharedArrayBuffer is not defined",
+          "sharedRoundTrip": "threw: SharedArrayBuffer is not defined"
+        },
+        "images": {
+          "plain, no crossorigin attr": "loaded",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "ok (opaque)"
+      },
+      "consoleErrors": [
+        "Access to image at 'http://127.0.0.1:5999/plain.png?0.3547639525764269' from origin 'http://localhost:4173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the r",
+        "Failed to load resource: net::ERR_FAILED"
+      ]
+    },
+    {
+      "server": "preview",
+      "mode": "none",
+      "engine": "webkit",
+      "workerScriptHeaders": {
+        "url": "/assets/isolation-worker-CR3rMWRA.js",
+        "coep": null
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+        "main": {
+          "crossOriginIsolated": false,
+          "sabDefined": false,
+          "sabConstruct": "threw: Can't find variable: SharedArrayBuffer",
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": true,
+          "type": "report",
+          "crossOriginIsolated": false,
+          "sabConstruct": "threw: Can't find variable: SharedArrayBuffer",
+          "atomicsWait": "threw: Can't find variable: SharedArrayBuffer",
+          "sharedRoundTrip": "threw: Can't find variable: SharedArrayBuffer"
+        },
+        "images": {
+          "plain, no crossorigin attr": "loaded",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "ok (opaque)"
+      },
+      "consoleErrors": [
+        "Origin http://localhost:4173 is not allowed by Access-Control-Allow-Origin. Status code: 200",
+        "Cannot load image http://127.0.0.1:5999/plain.png?0.10405021202599518 due to access control checks.",
+        "Failed to load resource: Origin http://localhost:4173 is not allowed by Access-Control-Allow-Origin. Status code: 200"
+      ]
+    },
+    {
+      "server": "preview",
+      "mode": "none",
+      "engine": "firefox",
+      "workerScriptHeaders": {
+        "url": "/assets/isolation-worker-CR3rMWRA.js",
+        "coep": null
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+        "main": {
+          "crossOriginIsolated": false,
+          "sabDefined": false,
+          "sabConstruct": "threw: SharedArrayBuffer is not defined",
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": true,
+          "type": "report",
+          "crossOriginIsolated": false,
+          "sabConstruct": "threw: SharedArrayBuffer is not defined",
+          "atomicsWait": "threw: SharedArrayBuffer is not defined",
+          "sharedRoundTrip": "threw: SharedArrayBuffer is not defined"
+        },
+        "images": {
+          "plain, no crossorigin attr": "loaded",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "ok (opaque)"
+      },
+      "consoleErrors": [
+        "[JavaScript Error: \"Cross-Origin Request Blocked: The Same Origin Policy disallows reading the remote resource at http://127.0.0.1:5999/plain.png?0.7814972762241874. (Reason: CORS header ‘Access-Contr"
+      ]
+    },
+    {
+      "server": "preview",
+      "mode": "require-corp, headers on HTML only",
+      "engine": "chromium",
+      "workerScriptHeaders": null,
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+        "main": {
+          "crossOriginIsolated": true,
+          "sabDefined": true,
+          "sabConstruct": 16,
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": false,
+          "error": "worker error event: "
+        },
+        "images": {
+          "plain, no crossorigin attr": "blocked",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "rejected: Failed to fetch"
+      },
+      "consoleErrors": [
+        "Failed to load resource: net::ERR_BLOCKED_BY_RESPONSE.NotSameOriginAfterDefaultedToSameOriginByCoep",
+        "Access to image at 'http://127.0.0.1:5999/plain.png?0.14617926160621275' from origin 'http://localhost:4173' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the ",
+        "Failed to load resource: net::ERR_FAILED",
+        "Failed to load resource: net::ERR_BLOCKED_BY_RESPONSE.NotSameOriginAfterDefaultedToSameOriginByCoep"
+      ]
+    },
+    {
+      "server": "preview",
+      "mode": "require-corp, headers on HTML only",
+      "engine": "webkit",
+      "workerScriptHeaders": null,
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+        "main": {
+          "crossOriginIsolated": true,
+          "sabDefined": true,
+          "sabConstruct": 16,
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": false,
+          "error": "worker error event: "
+        },
+        "images": {
+          "plain, no crossorigin attr": "blocked",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "rejected: Load failed"
+      },
+      "consoleErrors": [
+        "Refused to load 'http://localhost:4173/assets/isolation-worker-CR3rMWRA.js' worker because of Cross-Origin-Embedder-Policy.",
+        "Worker load was blocked by Cross-Origin-Embedder-Policy",
+        "Failed to load resource: Worker load was blocked by Cross-Origin-Embedder-Policy",
+        "Cancelled load to http://127.0.0.1:5999/plain.png?0.5096900775224723 because it violates the resource's Cross-Origin-Resource-Policy response header.",
+        "Cannot load image http://127.0.0.1:5999/plain.png?0.5096900775224723 due to access control checks.",
+        "Failed to load resource: Cancelled load to http://127.0.0.1:5999/plain.png?0.5096900775224723 because it violates the resource's Cross-Origin-Resource-Policy response header.",
+        "Origin http://localhost:4173 is not allowed by Access-Control-Allow-Origin. Status code: 200",
+        "Cannot load image http://127.0.0.1:5999/plain.png?0.7151547462640476 due to access control checks.",
+        "Failed to load resource: Origin http://localhost:4173 is not allowed by Access-Control-Allow-Origin. Status code: 200",
+        "Cancelled load to http://127.0.0.1:5999/plain.png because it violates the resource's Cross-Origin-Resource-Policy response header.",
+        "Failed to load resource: Cancelled load to http://127.0.0.1:5999/plain.png because it violates the resource's Cross-Origin-Resource-Policy response header."
+      ]
+    },
+    {
+      "server": "preview",
+      "mode": "require-corp, headers on HTML only",
+      "engine": "firefox",
+      "workerScriptHeaders": {
+        "url": "/assets/isolation-worker-CR3rMWRA.js",
+        "coep": null
+      },
+      "result": {
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+        "main": {
+          "crossOriginIsolated": true,
+          "sabDefined": true,
+          "sabConstruct": 16,
+          "waitAsyncDefined": true
+        },
+        "worker": {
+          "loaded": false,
+          "error": "worker error event: "
+        },
+        "images": {
+          "plain, no crossorigin attr": "blocked",
+          "CORP: cross-origin, no attr": "loaded",
+          "ACAO:*, crossorigin attr": "loaded",
+          "plain, crossorigin attr": "blocked"
+        },
+        "fetchNoCorsPlain": "rejected: NetworkError when attempting to fetch resource."
+      },
+      "consoleErrors": [
+        "[JavaScript Error: \"The resource at “http://127.0.0.1:5999/plain.png?0.7982936793819442” was blocked due to its Cross-Origin-Resource-Policy header (or lack thereof). See https://developer.mozilla.org",
+        "[JavaScript Error: \"Cross-Origin Request Blocked: The Same Origin Policy disallows reading the remote resource at http://127.0.0.1:5999/plain.png?0.3575337515031253. (Reason: CORS header ‘Access-Contr",
+        "[JavaScript Error: \"The resource at “http://127.0.0.1:5999/plain.png” was blocked due to its Cross-Origin-Resource-Policy header (or lack thereof). See https://developer.mozilla.org/docs/Web/HTTP/Cros"
+      ]
+    }
+  ]
+}

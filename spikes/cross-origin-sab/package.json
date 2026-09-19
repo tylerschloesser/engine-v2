@@ -1,0 +1,17 @@
+{
+  "name": "spike-cross-origin-sab",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test:isolation": "node scripts/isolation.mjs",
+    "test:gc": "node scripts/gc.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0",
+    "typescript": "^7.0.2",
+    "vite": "8.3.0"
+  }
+}
