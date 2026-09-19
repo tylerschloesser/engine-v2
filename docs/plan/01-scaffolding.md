@@ -1,6 +1,6 @@
 # M01: Scaffolding
 
-Status: not started · After: none · Tyler-dependent: no (code style answered, Q11 in `docs/plan/questions-for-tyler.md`: 2-space indent, single quotes, semicolons as needed, line width 100, rustfmt defaults)
+Status: done (2026-09-19) · After: none · Tyler-dependent: no (code style answered, Q11 in `docs/plan/questions-for-tyler.md`: 2-space indent, single quotes, semicolons as needed, line width 100, rustfmt defaults)
 
 ## Goal
 A fresh clone can run `pnpm install && pnpm setup:tools && pnpm test && pnpm lint` and see one quiet `pass` line per suite and per lint check. The repo has its pnpm and cargo workspaces, exact toolchain pins, an empty `engine` package and `engine` crate, a test runner that later milestones only add rows to, the Claude Code allowlist and commit gate, the `write-adr` skill, and the first nested `CLAUDE.md` files. No engine code exists yet.
@@ -148,20 +148,20 @@ The lists are 0021 §7's; do not widen them. The file arrives in two parts: step
 - `scripts/lib/context-artifacts.test.mjs`: `context-artifacts` (0021 §1, §4 and Consequences; permanent, and the only check later briefs need for the files they list under Context artifacts). Over `git ls-files --cached --others --exclude-standard`, outside `spikes/` and `docs/`: every nested `CLAUDE.md` is at most 60 lines; every `.claude/rules/*.md` has `paths:` frontmatter and each of its globs matches at least one listed file (a glob-to-regex of a dozen lines in the test: `**`, `*`, `{a,b}`; no dependency); every `.claude/skills/*/SKILL.md` has frontmatter with `name` and `description`; root `CLAUDE.md` is at most 60 lines and names every rule file as `.claude/rules/<file>.md`. With no rule files yet the rule clauses pass vacuously; M02 meets them first.
 
 ## Exit criteria
-- [ ] `pnpm install --frozen-lockfile` succeeds; `pnpm-lock.yaml` and `Cargo.lock` are committed; every devDependency is an exact version (no `^` or `~`; `grep -n '[\^~]' package.json` prints nothing), matching 0017 §10 where it has a row.
-- [ ] `pnpm setup:tools` exits 0, and a second run prints no `install` line (decision (c)) and exits 0; `cargo nextest --version` reports the pin.
-- [ ] `pnpm test` prints exactly two stdout lines (`rust`, `unit`), both `pass` with a non-zero test count, exit 0.
-- [ ] Each of these exits 0 with exactly the stdout lines named: `pnpm test unit` → one `unit pass` line; `pnpm test rust -t runner_negative_control` → one `rust pass 1 tests` line; `pnpm test -t no_such_test` → two lines, `rust pass 0 tests` and `unit pass 0 tests`; `pnpm test:slow` → the same two `pass 0 tests` lines, without a budget. `pnpm test nosuch` prints the known suite names and exits 2.
-- [ ] `pnpm test --self-check-fail` prints two `FAIL` lines and two failure blocks (name + message, no raw runner output), then exactly one more stdout line, pnpm's `[ELIFECYCLE]` line (Runner behaviour, Exit codes), and nothing else; exit 1. `pnpm test --budget-scale 0.000001` fails both suites as over budget, exit 1.
-- [ ] `pnpm lint` prints four `pass` lines, exit 0; with two deliberately mis-formatted scratch files, a root `scratch.mjs` and `packages/engine/crates/engine/tests/scratch_fmt.rs` (it must compile, and it must sit there: `cargo fmt --check` only sees files in some target's module tree, so a stray `.rs` elsewhere passes silently), it names `biome` and `rustfmt` with their fix commands, exit 1. Delete both afterwards with `command rm -f` (Verification commands).
-- [ ] Hook, by pipe: `{"tool_name":"Bash","cwd":"<repo>","tool_input":{"command":"ls"}}` → exit 0 silently; `…"git add -A && git commit -m x"` → exit 0 on a clean tree, exit 2 with the fix command on stderr while the lint criterion's two scratch files exist; the `time` line under Verification commands shows wall time on a clean tree under the 0021 §6 target.
-- [ ] The `node -e` line under Verification commands exits 0. It checks that `.claude/settings.json` parses, that its top-level keys are exactly `permissions` and `hooks`, that `permissions.allow` and `permissions.deny` equal the lists of the JSON block above (0021 §7's; order ignored), and that `Object.keys` of the hook handler are exactly `type`, `if`, `command`, `args`, `timeout` (the ones the hooks page documents). The hook criterion above passes against the committed script. Not checkable by command: note under Deviations that the next session start must be eyeballed for a settings warning (M02's session does this).
-- [ ] `write-adr` skill, both nested `CLAUDE.md` files and the root map update exist; root `CLAUDE.md` is within its line cap and has no `@` import.
-- [ ] `pnpm test unit -t toolEnv` prints a `unit pass` line with a non-zero test count.
-- [ ] `pnpm test unit -t context-artifacts` prints a `unit pass` line with a non-zero test count.
-- [ ] A scratch 61-line `packages/engine/src/CLAUDE.md` makes `pnpm test unit -t context-artifacts` fail naming the file (check, then remove it with `command rm -f`). Run this after the nested `CLAUDE.md` files and the skill exist (step 7), so the passing run above was not vacuous.
-- [ ] `git status` is clean after `pnpm test && pnpm lint` (artefacts are all gitignored).
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `pnpm install --frozen-lockfile` succeeds; `pnpm-lock.yaml` and `Cargo.lock` are committed; every devDependency is an exact version (no `^` or `~`; `grep -n '[\^~]' package.json` prints nothing), matching 0017 §10 where it has a row.
+- [x] `pnpm setup:tools` exits 0, and a second run prints no `install` line (decision (c)) and exits 0; `cargo nextest --version` reports the pin.
+- [x] `pnpm test` prints exactly two stdout lines (`rust`, `unit`), both `pass` with a non-zero test count, exit 0.
+- [x] Each of these exits 0 with exactly the stdout lines named: `pnpm test unit` → one `unit pass` line; `pnpm test rust -t runner_negative_control` → one `rust pass 1 tests` line; `pnpm test -t no_such_test` → two lines, `rust pass 0 tests` and `unit pass 0 tests`; `pnpm test:slow` → the same two `pass 0 tests` lines, without a budget. `pnpm test nosuch` prints the known suite names and exits 2.
+- [x] `pnpm test --self-check-fail` prints two `FAIL` lines and two failure blocks (name + message, no raw runner output), then exactly one more stdout line, pnpm's `[ELIFECYCLE]` line (Runner behaviour, Exit codes), and nothing else; exit 1. `pnpm test --budget-scale 0.000001` fails both suites as over budget, exit 1.
+- [x] `pnpm lint` prints four `pass` lines, exit 0; with two deliberately mis-formatted scratch files, a root `scratch.mjs` and `packages/engine/crates/engine/tests/scratch_fmt.rs` (it must compile, and it must sit there: `cargo fmt --check` only sees files in some target's module tree, so a stray `.rs` elsewhere passes silently), it names `biome` and `rustfmt` with their fix commands, exit 1. Delete both afterwards with `command rm -f` (Verification commands).
+- [x] Hook, by pipe: `{"tool_name":"Bash","cwd":"<repo>","tool_input":{"command":"ls"}}` → exit 0 silently; `…"git add -A && git commit -m x"` → exit 0 on a clean tree, exit 2 with the fix command on stderr while the lint criterion's two scratch files exist; the `time` line under Verification commands shows wall time on a clean tree under the 0021 §6 target.
+- [x] The `node -e` line under Verification commands exits 0. It checks that `.claude/settings.json` parses, that its top-level keys are exactly `permissions` and `hooks`, that `permissions.allow` and `permissions.deny` equal the lists of the JSON block above (0021 §7's; order ignored), and that `Object.keys` of the hook handler are exactly `type`, `if`, `command`, `args`, `timeout` (the ones the hooks page documents). The hook criterion above passes against the committed script. Not checkable by command: note under Deviations that the next session start must be eyeballed for a settings warning (M02's session does this).
+- [x] `write-adr` skill, both nested `CLAUDE.md` files and the root map update exist; root `CLAUDE.md` is within its line cap and has no `@` import.
+- [x] `pnpm test unit -t toolEnv` prints a `unit pass` line with a non-zero test count.
+- [x] `pnpm test unit -t context-artifacts` prints a `unit pass` line with a non-zero test count.
+- [x] A scratch 61-line `packages/engine/src/CLAUDE.md` makes `pnpm test unit -t context-artifacts` fail naming the file (check, then remove it with `command rm -f`). Run this after the nested `CLAUDE.md` files and the skill exist (step 7), so the passing run above was not vacuous.
+- [x] `git status` is clean after `pnpm test && pnpm lint` (artefacts are all gitignored).
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 ```
@@ -195,4 +195,20 @@ PRE-PLAN §7 "Test suite" and "Dev loop" rows: M01 builds the mechanism that mea
 None.
 
 ## Deviations
-(filled in during Phase 3)
+No split: steps 1–7 fitted one session, so there is no `01b`. Small corrections, none changing a decision:
+
+- **Root `CLAUDE.md`.** The sentence "Nothing is built yet" was not in the file; the **Commands** line was added under the `PROMPT.md` pointer instead. The commit rule also says to run `pnpm format` first.
+- **Extra module `scripts/lib/args.mjs`** (`parseArgs`, `usage`) with `args.test.mjs`, so argument handling is unit-tested rather than living in `test.mjs`.
+- **Seams, exact shapes** (the source files carry the doc comments):
+  - `run(cmd, args, { log, cwd?, env? })`: `log` is the required output path and is what comes back as `log`. `run.mjs` also exports `readLog`, `firstLines`, `lastLines`.
+  - `report.mjs` also exports `formatDuration`, `findSeed` (the seed convention: a failing test prints `seed=<n>`, `seed: 0x…` or `seed <n>` in its message) and `stripAnsi`.
+  - `suites.mjs` also exports `buildBudgetMs` (the 0020 §3 compile budget).
+  - A `TOOLS` row is `{ name, pin, probe: { cmd, args, match }, install: { cmd, args } | null, hint? }`; `pin: null` means report only. `setup-tools.mjs` exports `probeTool(tool)`, which `test.mjs` uses for every pinned row. The nextest row is named `nextest`, so the miss line reads as this brief words it. `pnpm setup:tools` prints one `<name> <version>` line per tool, plus the `install` line when it installs.
+  - The runner merges `toolEnv()` into every suite child, not only cargo ones (harmless for Vitest, and later adapters need no env of their own for it).
+- **Adapters' shared `parse`.** Both adapters go through one helper: report present → parsed; exit 0 without a report → 0 tests; non-zero exit that the report does not explain → one failure holding the last 20 log lines and the log path. Vitest failure messages keep the message lines plus the first stack frame outside `node_modules`; nextest messages drop the `RUST_BACKTRACE` note.
+- **Captured reports are fixtures** in `scripts/lib/fixtures/` (nextest JUnit pass/fail, Vitest JSON pass/fail/all-filtered), paths rewritten to `/repo`.
+- **Hook.** It runs `node_modules/.bin/biome check .` directly instead of `pnpm exec biome check .` (the same check of 0021 §6 without pnpm's start-up). Measured on a clean tree: 0.14 s wall, against the 0021 §6 target. Command detection (JSON parse + shell-segment match) is one `node -e` call. Its tests point the hook at an empty directory, so a recognised commit stops at `run: pnpm install` (exit 2) and a non-commit exits 0 silently: no lint tool runs in either case.
+- **`pnpm lint` strips ANSI codes** from the quoted tool output: `cargo fmt --check` colours its diff even when writing to a file.
+- **`context-artifacts` failures name the file** through the assertion message (`<path>: 61 lines, cap 60`); the bare `toEqual([])` printed only `[ Array(1) ]`.
+- **pnpm's `[ELIFECYCLE]` stdout line** also follows the usage output on exit 2 (`pnpm test nosuch`), as "any non-zero exit" implies.
+- **Not checkable by command (for M02's session):** eyeball the session start for a `.claude/settings.json` warning. The `hooks` block was added mid-session; the commits made after it went through, but whether the live hook fired was not observed, so the pipe tests above are the evidence.

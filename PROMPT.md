@@ -3,9 +3,9 @@
 ## Status
 
 - **Phase:** 3 of 4. (Updated 2026-09-19.)
-- **Current milestone:** M01, `docs/plan/01-scaffolding.md`. Not started.
-- **State:** Phase 2 is complete: `PLAN.md` indexes 60 milestones in execution order, one brief each in `docs/plan/`. There is no engine code yet. Open questions for Tyler (none blocking; defaults stand): `docs/plan/questions-for-tyler.md`.
-- **Exact next step:** Branch `m01-scaffolding` from the newest of `main` and `phase-2-plan` (the plan lives on `phase-2-plan` until Tyler merges it; `git merge-base --is-ancestor phase-2-plan main` succeeds once he has), then follow "The loop" below.
+- **Current milestone:** M02, `docs/plan/02-build-and-determinism.md`. Not started.
+- **State:** M01 is done on branch `m01-scaffolding` (not yet merged to `main`): workspaces, toolchain pins, empty `engine` package and crate, `pnpm test` / `pnpm test:slow` / `pnpm lint` / `pnpm setup:tools`, `.claude/settings.json` with the commit gate, the `write-adr` skill, nested `CLAUDE.md` files. `pnpm test && pnpm lint` is green. No engine code yet. Open questions for Tyler (none blocking; defaults stand): `docs/plan/questions-for-tyler.md`.
+- **Exact next step:** On a new machine run `pnpm install && pnpm setup:tools` first. At session start, check that Claude Code shows no warning about `.claude/settings.json` (M01 could not verify this by command; note the result in M01's Deviations). Branch `m02-build-and-determinism` from whichever of `main` and `m01-scaffolding` contains the other, then follow "The loop" below.
 - **Blockers:** none.
 
 Overwrite this block (never append to it) whenever you stop: current milestone, state, exact next step, blockers. Leave the rest of this file intact.

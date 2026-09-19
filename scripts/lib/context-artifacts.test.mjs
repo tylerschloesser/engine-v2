@@ -69,7 +69,7 @@ describe('context-artifacts', () => {
       .map((f) => [f, read(f)])
       .filter(([, text]) => text !== null && lineCount(text) > MAX_LINES)
       .map(([f, text]) => `${f}: ${lineCount(text)} lines, cap ${MAX_LINES}`)
-    expect(tooLong).toEqual([])
+    expect(tooLong, tooLong.join('\n')).toEqual([])
   })
 
   test('every rule file has paths: globs that match a file, and root CLAUDE.md names it', () => {
@@ -86,7 +86,7 @@ describe('context-artifacts', () => {
       }
       if (!rootMap.includes(rule)) problems.push(`CLAUDE.md does not name ${rule}`)
     }
-    expect(problems).toEqual([])
+    expect(problems, problems.join('\n')).toEqual([])
   })
 
   test('every skill has name and description frontmatter', () => {
@@ -99,6 +99,6 @@ describe('context-artifacts', () => {
         if (!new RegExp(`^${key}:\\s*\\S`, 'm').test(fm)) problems.push(`${skill}: no ${key}`)
       }
     }
-    expect(problems).toEqual([])
+    expect(problems, problems.join('\n')).toEqual([])
   })
 })
