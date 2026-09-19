@@ -104,4 +104,28 @@ describe('plugin-build', () => {
     expect(wasmRes.headers.get('cross-origin-embedder-policy')).toBe('require-corp')
     expect(wasmRes.headers.get('content-type')).toBe('application/wasm')
   })
+
+  test('plugin-build: default profile writes a release game.json @slow', async () => {
+    // No `profile` option, so a real `vite build` (unlike the option-only test above) must pick
+    // 'release' on its own; the fixture app's own config pins 'dev', so this uses a fresh plugin
+    // instance and root instead of CONFIG_FILE.
+    const releaseOutDir = await mkdtemp(join(tmpdir(), 'engine-plugin-build-release-'))
+    const releaseDir = join(fixtureDir('hash'), 'target', 'engine', 'release')
+    try {
+      await build({
+        configFile: false,
+        root: fileURLToPath(new URL('../browser/pages', import.meta.url)),
+        plugins: [engine({ crate: fixtureDir('hash') })],
+        build: { outDir: releaseOutDir, emptyOutDir: true },
+        logLevel: 'silent',
+      })
+      const json = JSON.parse(await readFile(join(releaseDir, 'game.json'), 'utf8')) as {
+        profile: string
+      }
+      expect(json.profile).toBe('release')
+    } finally {
+      await rm(releaseOutDir, { recursive: true, force: true })
+      await rm(releaseDir, { recursive: true, force: true })
+    }
+  }, 60_000)
 })
