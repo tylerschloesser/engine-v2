@@ -4,6 +4,8 @@ Multiplayer web game engine (Rust→WASM + TypeScript, custom WebGPU renderer) f
 
 **Start every session at `PROMPT.md`.** It names the current milestone, the loop to follow, and when you're done.
 
+**Commands:** `pnpm setup:tools` (once per machine) · `pnpm test [suite] [-t pattern]` · `pnpm test:slow` · `pnpm lint` · `pnpm format`. Both checks are quiet: one line per suite or check, details only on failure, logs under `test-results/`.
+
 ## Context map
 
 Read only what the task needs. A sub-agent should be briefable with `docs/spec/overview.md` plus one or two other files.
@@ -11,6 +13,9 @@ Read only what the task needs. A sub-agent should be briefable with `docs/spec/o
 | Path | What it holds | Lifetime |
 |---|---|---|
 | `PROMPT.md` | Current phase and milestone: status block, the session loop, rules | Rewritten each phase; deleted in Phase 4 |
+| `packages/engine/` | The engine package (TypeScript in `src/`) and, in `crates/engine/`, the Rust crate; each has a nested `CLAUDE.md` with its commands and test placement | Permanent |
+| `scripts/` | `pnpm test` / `lint` / `setup:tools` runners (plain Node `.mjs`); `scripts/suites.mjs` is where suites and build steps are registered | Permanent |
+| `.claude/` | `settings.json` (allowlist, commit gate running `hooks/pre-commit-check.sh`: Biome + rustfmt), `skills/` (`write-adr`) | Permanent |
 | `docs/process.md` | The four phases; rules common to every session | Until Phase 4 |
 | `docs/context-architecture.md` | How context is split and why (nested `CLAUDE.md`, `.claude/rules/`, skills, sub-agent briefs); target layout after bootstrap | Permanent |
 | `docs/spec/overview.md` | Goal, engine/game split, fixed decisions, scale, non-goals, glossary | Folded into architecture docs in Phase 4 |
@@ -29,4 +34,5 @@ Read only what the task needs. A sub-agent should be briefable with `docs/spec/o
 - Tyler owns the **Requirements** sections in `docs/spec/`. Edit them only to record something Tyler said. Resolve **Open questions** by writing a decision in `docs/decisions/` and replacing the question with a link.
 - Every fact lives in exactly one file. Link, don't copy.
 - This file is a map, not content. Keep it under ~60 lines and never `@import` large files into it.
-- Commit early and often.
+- Commit early and often. The commit gate needs a formatted tree: run `pnpm format` first.
+- On Tyler's machine `cp`, `mv` and `rm` are aliased to their `-i` forms and hang a Bash call: use `command cp -f`, `command mv -f`, `command rm -f`. Scripts use `node:fs`, never shell file operations.
