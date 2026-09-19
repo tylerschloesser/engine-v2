@@ -36,6 +36,7 @@ Phase 1 output (2026-09-19). Input to Phase 2, which turns it into `PLAN.md` (se
 | [0022] | Entity ids and provisional ids | Real ids are monotonic, never reused and layout-free; provisional ids are client-local (bit 31); actions address anything predictable by tile, so `Applied` carries nothing |
 | [0023] | Action growth declaration | Provided `Game::growth(&Action) -> Option<Growth>` bounds what `apply` may add, so a world at its state budget still accepts actions that free state; audited, not trusted |
 | [0024] | Planning amendments | Fifteen numbered fixes to gaps and contradictions in 0001–0020 found while writing the milestone briefs; cited as "0024 §n" |
+| [0025] | Phase 3 orchestration | One orchestrating session lands milestones in serial on `main`; a Sonnet `milestone-implementer` sub-agent builds each; the orchestrator gates (`pnpm gate`) and is the only writer of checkboxes, `PLAN.md` and `PROMPT.md`; tags at markers. Amends 0021 |
 
 ## 2. Architecture overview
 
@@ -404,3 +405,4 @@ Every item an ADR or spec file marks "Deferred". "2" = Phase 2 decides it in `PL
 [0022]: docs/decisions/0022-entity-ids-and-provisional-ids.md
 [0023]: docs/decisions/0023-action-growth-declaration.md
 [0024]: docs/decisions/0024-planning-amendments.md
+[0025]: docs/decisions/0025-phase-3-orchestration.md

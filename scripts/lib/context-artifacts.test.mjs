@@ -1,5 +1,5 @@
-// Permanent check of the context files of docs/decisions/0021 (§1, §4, Consequences): the only
-// test a milestone needs for the nested CLAUDE.md, rule and skill files it creates.
+// Permanent check of the context files of docs/decisions/0021 (§1, §4, Consequences) and 0025 §2:
+// the only test a milestone needs for the nested CLAUDE.md, rule, skill and agent files it creates.
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -97,6 +97,24 @@ describe('context-artifacts', () => {
       const fm = frontmatter(text) ?? ''
       for (const key of ['name', 'description']) {
         if (!new RegExp(`^${key}:\\s*\\S`, 'm').test(fm)) problems.push(`${skill}: no ${key}`)
+      }
+    }
+    expect(problems, problems.join('\n')).toEqual([])
+  })
+
+  // docs/decisions/0025 §2: the model is the reason a custom agent exists, so it must be stated.
+  test('every custom agent has name, description and model frontmatter', () => {
+    const problems = []
+    for (const agent of files.filter((f) => /^\.claude\/agents\/[^/]+\.md$/.test(f))) {
+      const text = read(agent)
+      if (text === null) continue
+      const fm = frontmatter(text) ?? ''
+      for (const key of ['name', 'description', 'model']) {
+        if (!new RegExp(`^${key}:\\s*\\S`, 'm').test(fm)) problems.push(`${agent}: no ${key}`)
+      }
+      const name = /^name:\s*(\S+)/m.exec(fm)?.[1]
+      if (name && agent !== `.claude/agents/${name}.md`) {
+        problems.push(`${agent}: name ${name} does not match the file name`)
       }
     }
     expect(problems, problems.join('\n')).toEqual([])

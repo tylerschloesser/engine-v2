@@ -1,6 +1,6 @@
 # 0021: Context architecture for Claude Code sessions
 
-Status: Accepted (2026-09-19)
+Status: Accepted (2026-09-19). Amended by [0025](0025-phase-3-orchestration.md) (Context, §3, §5, §7).
 
 ## Context
 

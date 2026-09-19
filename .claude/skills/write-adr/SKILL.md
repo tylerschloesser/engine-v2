@@ -13,7 +13,9 @@ Write an ADR when:
 - a decision in an accepted ADR changes, or two ADRs turn out to contradict each other;
 - an item marked deferred to Phase 3 (`PRE-PLAN.md` §10, `docs/plan/deferred-ledger.md`) or an Open question in `docs/spec/` gets settled;
 - the engine crate gains a runtime dependency (the evidence `docs/decisions/0017-packaging-and-build.md` §7 demands goes in the ADR);
-- a custom sub-agent is proposed (`docs/decisions/0021-context-architecture.md` §5).
+- a custom sub-agent is proposed beyond `milestone-implementer` (trigger: `docs/decisions/0021-context-architecture.md` §5; the first one and its reasoning: `docs/decisions/0025-phase-3-orchestration.md` §2).
+
+Who writes it: in Phase 3 the orchestrating session decides that an ADR is needed and what it decides, a Sonnet sub-agent drafts it with this skill, and the orchestrator reviews the draft before it is committed (0025 §1). A milestone implementer writes one only when its brief's Scope or Exit criteria name it.
 
 A small correction that changes no decision (a wrong file name, a flag, a step order, a split milestone) goes in the brief's **Deviations** section instead; fix any later brief it affects. Scope, taste, cost, or a change to a spec Requirements section is Tyler's call: batch it in `docs/plan/questions-for-tyler.md` with a recommended default.
 
