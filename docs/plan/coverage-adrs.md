@@ -1,6 +1,6 @@
 # Coverage: ADR decisions, budgets, engine events and context artifacts
 
-Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023 and 0024), every budget row of `PRE-PLAN.md` §7, every engine event of the `PRE-PLAN.md` §4 TS sketch and every ADR 0021 context artifact, mapped to the milestone exit criterion or named test that verifies it. Status: **covered** (an exit criterion, or a named test that an exit criterion requires to pass), **unverified** (in a brief's Scope, Seams, Budgets or Context artifacts only), **uncovered** (in no brief), **n/a** (a constraint with nothing to build or test); the open rows are collected under Gaps at the end with an owner and a proposed criterion.
+Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023 and 0024), every budget row of `PRE-PLAN.md` §7, every engine event of the `PRE-PLAN.md` §4 TS sketch and every ADR 0021 context artifact, mapped to the milestone exit criterion or named test that verifies it. Status: **covered** (an exit criterion, or a named test that an exit criterion requires to pass), **unverified** (in a brief's Scope, Seams, Budgets or Context artifacts only), **uncovered** (in no brief), **n/a** (a constraint with nothing to build or test), and one row ruled **unverified by decision (Q6), carried to 39b**; the open rows are collected under Gaps at the end with an owner and a proposed criterion.
 
 ## ADR 0001: Camera and presence
 
@@ -34,18 +34,18 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §1 One artifact: browser and server run the same `.wasm`; no native server; `.wasm` runs are the authoritative determinism tests | M02, M12b, M27 | criterion "golden ... identical natively, under Node and under Bun"; M12b criterion "the `.wasm` value is authoritative"; criterion "`pnpm test wasm` runs its logs through `createWorldServer` under Node and Bun" | covered |
 | §1 Sim identity is the content hash of the file | M02, M24b | `build: game.json matches bytes`; `identity_compare_matrix` | covered |
 | §2 Allowed float ops are bit-identical everywhere | M02, M03, M10 | `determinism: node matches golden`, Bun leg, `determinism.spec.ts @engines`; M10 criterion "`x86_64` ... determinism tests passing against unchanged goldens" | covered |
-| §2 No std transcendentals; hand polynomials or pinned `libm` | M02, M20 | M02 Scope fills `clippy.toml` lists but no criterion shows the lint firing in engine crates; M20 criterion covers `reference-sim` only | unverified |
-| §2 `libm` pinned with `=` when used (also Consequences) | | no brief checks the pin form | uncovered |
+| §2 No std transcendentals; hand polynomials or pinned `libm` | M02, M20 | M02 exit (a temporary `f32::sin` in `fx-hash` fails `pnpm lint` naming `clippy::disallowed_methods`; fixtures carry `[lints] workspace = true`); M20 criterion covers `reference-sim` | covered |
+| §2 `libm` pinned with `=` when used (also Consequences) | M02 | `crate-policy` (`unit`): any `libm` requirement in a workspace manifest starts with `=` | covered |
 | §2 `mul_add` allowed but avoided in hot paths | | guidance only | n/a |
 | §2 NaN bits never observable (guards; no `to_bits`, `total_cmp` ... on possibly-NaN) | M05, M02 | `canon_bits_table`, `codec_nan_debug_asserts`, `codec_nan_release_canonical`; the NaN-observing method ban shares the unverified lint row above | covered |
-| §2 Persistent quantities are integers or fixed-point; no `usize`/`isize` in hashed or serialized state; explicit wrapping ops | M05 | M05 planning decision 7 says "lint and review rule, stated in `determinism.md`"; its criterion on `determinism.md` does not name the `usize` rule | unverified |
+| §2 Persistent quantities are integers or fixed-point; no `usize`/`isize` in hashed or serialized state; explicit wrapping ops | M05 | `no_usize_in_serialized_types` (source scan); M05 exit "`determinism.md` names ... the no-`usize`-in-state rule" | covered |
 | §2 No `HashMap`/`HashSet` in sim state | M07, M12, M20 | criteria "No `HashMap`/`HashSet` ... under `src/world/`"; "`grep -r "HashMap" crates/engine/src/store*` is empty"; M20 criterion for `sim/` | covered |
 | §2 `SimRng`: owned PCG32, state in the snapshot, reachable only through the write context; predicted `apply` declines | M12, M12b, M25, M34 | `simrng_golden_sequence`; `puts_script_a_golden` (includes `Roll`); `rng_declines`; `colour_assignment_replays_identically` (RNG state in the snapshot) | covered |
 | §2 Worldgen uses stateless coordinate hashes only | M08 | `hash2_vectors`, `worldgen_contract_fixture` (order and repetition do not change output) | covered |
 | §2 No wall clock, no I/O, no ambient input | M02, M03, M13 | `import allowlist`; criterion "Adding `Date.now()` to `src/loader.ts` makes `pnpm lint` fail"; M13 criterion on ambient timers | covered |
 | §2 Default target features only; stable Rust; `panic=abort` (0024 §13: wasm32 aborts by target default) | M02 | `target features`; `loader: panic marks instance dead with message` | covered |
 | §3 Import allowlist test plus target-feature assertion | M02 | `import allowlist`, `target features`; criterion "adding `getrandom` ... makes `import allowlist` fail naming the module" | covered |
-| §3 Lint bans: `disallowed_methods`, `disallowed_types` for engine sim crates and game crates; `#[allow]` needs a comment | M01, M02, M07, M20 | M01 turns lints on, M02 Scope fills lists; only M07 ("no `#[allow(clippy::disallowed_types)]`") and M20 ("clippy bans run against `reference-sim`") have criteria; no negative check that a banned call fails `pnpm lint` | unverified |
+| §3 Lint bans: `disallowed_methods`, `disallowed_types` for engine sim crates and game crates; `#[allow]` needs a comment | M01, M02, M07, M20 | M02 exit (a temporary `HashMap` field and `std::time::Instant` in `fx-hash` fail `pnpm lint` naming `clippy::disallowed_types`; `clippy.toml` lists match 0002 §3); M07 ("no `#[allow(clippy::disallowed_types)]`") and M20 criteria | covered |
 | §3 NaN canonicalization in `Codec`; snapshots and hash only from `Codec` bytes | M05 | `canon_bits_table`, `codec_nested_nan_canonical`, `hash_value_equals_hash_of_encoded_bytes` | covered |
 | §3 Heavy mode (save, load into fresh instance, compare; N=1 in slow suite) | M22, M22b, M36 | `heavy_mode_fixture_n25`, `heavy_mode_fixture_n1`; `heavy_wasm_n50`, `heavy_wasm_n1`; criterion "`heavy-n1 all logs` ... pass" | covered |
 | §3 Replay equality | M12b, M21b, M22, M20 | `replay_equals_live`, `truncated_log_differs`; `replay_equals_live_with_timers`; `replay_from_genesis_checkpoints`; `replay_equals_live_hash` | covered |
@@ -94,17 +94,17 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | Outside the deterministic core: subscriptions, camera, presence, session table, pacing, storage, `admit`, `ClientSide` unhashed and unreachable | M07, M13, M19, M28b | `cache_invisible_matrix`; `warm_is_invisible_to_hash`; `presence_is_not_state`; `reconnect/within-grace-logs-nothing`. M15's module-visibility test is "if cheap" only | covered |
 | `Codec` = serde + postcard with canonical floats; all game-typed bytes on wire, log, snapshot | M05, M14, M22 | `varint_matches_postcard`, `codec_roundtrip_plain_data`; `golden_uplink_batch`; `persist_frame_golden_bytes` | covered |
 | `seq`, `Tick`, `EntityId` are `u32`; `PlayerId` small integer at first join | M12, M16, M28 | `entity_id_policy_*`; `dispatch_returns_monotonic_seq_from_seed`; `handshake/join-then-return-same-player` | covered |
-| TS-facing types avoid `u64` | M02, M16 | `HexU64` config strings exist (M02 Provides) but no criterion checks generated bindings for `bigint` | unverified |
+| TS-facing types avoid `u64` | M02, M16 | M16 exit "`grep -rn bigint packages/engine/fixtures/*/bindings` prints nothing" | covered |
 | TypeScript types by `ts-rs` on `Params`, `Action`, `Reject`, `Ui`; bindings written by build tooling | M16, M16b, M20, M35 | criteria "`bindings/*.ts` ... committed and regenerate byte-identically"; "`bindings/PutsUi.ts` ... type-checks"; M20 `git diff --exit-code ... bindings`; `ts-rs zero bytes @slow` | covered |
 | `client.dispatch` returns `seq` synchronously; JSON into a SAB ring; main assigns `seq` from a counter seeded by `Welcome` | M16, M28 | `dispatch_returns_monotonic_seq_from_seed`, `dispatch_before_ready_throws`, `vertical_slice` | covered |
 | Client WASM parses JSON to `G::Action`, emits postcard; host never sees JSON | M16 | `wasm_script_a_matches_native`, `malformed_action_is_protocol_error`, `vertical_slice` | covered |
-| `serde_json` 1.x with `default-features = false`, `alloc` only | M02, M16 | used in Scope of both; no criterion asserts the feature set | unverified |
+| `serde_json` 1.x with `default-features = false`, `alloc` only | M02, M16 | `crate-policy`: declared `default-features = false` with `alloc` only, and `cargo tree -p engine --target wasm32-unknown-unknown -e normal,features` shows no `std` | covered |
 | UI observation: `ui` on replica, overlay or `ui_dirty` change (amended by 0024 §7d); `PartialEq` gate; JSON to ring; `onUi` only on change | M16b, M18 | `ui_reruns_when_dirty_flag_set`, `onui_gets_only_latest_per_drain`, `no_ui_change_no_main_allocation`; `framecx.ui_dirty_reruns_ui` | covered |
 | Per-frame values never via `Ui`: anchors from an engine-filled array; progress from `done_at` and `client.clock()` | M16b, M18 | `progress_from_done_at_and_clock`, `clock_returns_same_object`; `overlay.slot_anchor_follows_rust` | covered |
 | `onActionResult(seq, Confirmed or Rejected)`; `NotPredictable` reported at dispatch | M16, M25 | `ui_ring_delivers_results_in_order`, `vertical_slice`; `predict_not_predictable_event` | covered |
 | 0024 §7b: puts through `Authority` outside `G::tick` wake the entity in the same tick; queue is sim state | M21b | `put_from_apply_wakes_same_tick`, `put_from_tick_does_not_self_wake`, `wake_dedup_and_order`, `timers_survive_encode_decode` | covered |
 | 0024 §7c: `client.input.emit` writes a kind-7 game record surfaced in `FrameCx::input()` | M18 | `framecx.emit_visible_in_frame`, `input.game_record_round_trip`, `input.game_record_survives_overflow` | covered |
-| Consequences: reference-game feature coverage list | M34b, M34c | criteria "Every single-player row ... has its test column filled"; "Every multiplayer row ... names a test that exists" (`reference-coverage.md`) | covered |
+| Consequences: reference-game feature coverage list | M34b, M34c | criteria "Every single-player row ... filled with a test that exists"; "Every multiplayer row ... names a test that exists" (the `reference-game.md` table of `coverage.md` and the engine-feature table of `reference-coverage.md`) | covered |
 | Consequences, scripted: furnace spanning a chunk border | M33, M34c | `place_across_chunk_corner_sets_occupancy_in_four_chunks`; `reference_furnace_across_chunk_border` | covered |
 | Consequences, scripted: rejection races (last unit, same spot, same ingots) | M34c | `reference_race_last_unit`, `reference_race_same_spot`, `reference_race_same_ingots` | covered |
 | Consequences, scripted: action at the subscription edge | M33, M34c | `predicted_place_at_subscription_edge_is_not_predictable`; `reference_subscription_edge_not_predictable` | covered |
@@ -134,7 +134,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | Pipeline 3: frame written to the log before it is applied; storage failure fatal | M22, M37 | `write_ahead_order`, `storage_onError_is_fatal`; `fatal: storage error` | covered |
 | Pipeline 4: `apply` validates then writes; rejected action stays in the log and replays identically; rejecting `apply` wrote nothing | M16, M12b, M22 | `apply_reject_is_recorded_and_replays`; `rejecting_apply_wrote_nothing`; `replay_includes_rejected_actions` | covered |
 | State-budget check before `apply`, `StateBudgetFull`, deterministic in live, replay, recovery (amended by 0023: growth declaration) | M21 | `full_world_rejects_place_accepts_remove_then_place`, `budget_verdict_replays_identically`, `under_declared_growth_panics_in_debug` | covered |
-| State-budget check never covers `on_player`, `genesis` or tick-rule writes (soft budget) | M21 | no test in M21 shows a join or a tick write succeeding at a full budget | unverified |
+| State-budget check never covers `on_player`, `genesis` or tick-rule writes (soft budget) | M21, M21b | `full_world_still_accepts_join` (M21), `tick_rule_put_past_limit_is_applied` (M21b) | covered |
 | Predicting client does not run the budget check; the ack decides | M25, M34b | M25 Non-scope states it; `reference_state_budget_full_shows_reason` (item stays, reason shown after the ack) | covered |
 | Acks ride on deltas: results in the T+1 frame, in `seq` order, applied atomically; a frame is sent whenever there is an ack | M16, M15 | `ack_and_deltas_share_a_frame`, `ui_ring_delivers_results_in_order`, `vertical_slice` (rejected `Paint` yields a result with no deltas); `frame_is_atomic_on_malformed_tail` | covered |
 | `Ack`, `Rejected::{Game, Engine}`, `EngineReject::{RateLimited, StateBudgetFull, EngineFault}` | M14, M31, M21, M24 | `golden_action_results_all_tags`; `rates/action-rate-limited`; `full_world_*`; `skipped_action_acked_engine_fault` | covered |
@@ -146,7 +146,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | Log growth: about 12 to 18 bytes per action, about 9 per connection event; no compaction needed | M22 | `bytes_per_logged_action`; criterion "`budgets.json` has `logBytesPerAction`"; `persist_frame_golden_bytes` | covered |
 | Consequences: latency to authority at most one tick | M16 | `action_lands_on_next_tick` (Budgets: Latency row) | covered |
 | Consequences: host asserts a rejecting `apply` recorded no writes | M12b | `rejecting_apply_wrote_nothing` with its `#[should_panic]` twin | covered |
-| Consequences: rate limit is an engine default, overridable per game | M31 | Scope names `WorldConfig.actionRate`; `rates/action-rate-limited` is not stated to run with an override | unverified |
+| Consequences: rate limit is an engine default, overridable per game | M31 | `rates/action-rate-limited` (run at the default and with `WorldConfig.actionRate` overridden) | covered |
 | Consequences: shrinking actions at a full budget (per-action growth declaration) | M21 | ADR 0023; `full_world_rejects_place_accepts_remove_then_place` | covered |
 | Deferred: typed fast path for continuous action streams | M14 | deferred-ledger row: decided not built | n/a |
 
@@ -164,7 +164,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | Sealed segments may be gzip-compressed | M22 | optional in the ADR; M22 Non-scope records "not built" | n/a |
 | Cadence: snapshot every 1,200 ticks if dirty | M22 | `snapshot_every_1200_ticks_if_dirty`, `no_snapshot_when_clean` | covered |
 | Cadence: snapshot at clean boundaries: zero-player pause, hidden tab, `pagehide` | M22b, M23, M28b | `pause_flushes_and_snapshots_if_dirty`; `hidden_pauses_and_snapshots`; `lifecycle/idle-stops-ticks-then-onidle` | covered |
-| Cadence: snapshot on server shutdown signal | M27, M35b, M29 | `server/load-or-create` and the adapter tests assert a clean `stop()`; no brief wires or tests a process signal calling it | unverified |
+| Cadence: snapshot on server shutdown signal | M38 | `reference-server/sigterm-snapshots` (M38 part C wires `SIGTERM`/`SIGINT` to `stop()`; fast-tier criterion) | covered |
 | Cadence: write-ahead append; `sync` at most once per second when dirty | M22, M23 | `write_ahead_order`, `sync_at_most_once_per_second`; M23 Budgets: `persistenceCounters()` in-browser | covered |
 | Loss windows (tab close, crash, panic: 0 admitted actions lost; OS crash up to 1 s) | M22b, M24 | criterion "crash matrix covers every byte cut of the final frame"; `panic_in_apply_writes_skip_then_resumes` | covered |
 | Loss window, object-store adapter (2 s parts) | M38 | deployer-written; exercised only if the Durable Object check is a go | n/a |
@@ -183,7 +183,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | Adapter: memory (`durable: false`) | M22 | `storage_conformance_memory` | covered |
 | Adapter: object store / Durable Object with numbered parts (deployer-written) | M38 | `do/local-smoke` only if go; criterion "The DO ADR exists ... (or the skip is recorded)" | covered |
 | Browser: Web Lock held for the worker's lifetime; `WorldBusy` | M23, M34b | `second_tab_gets_world_busy`; `reference_world_busy_second_tab` | covered |
-| Browser: `navigator.storage.persist()` once after a gesture; expose `{ persisted, usage, quota }` | M23, M37 | M23 Scope and planning decision 5 only; no named test. M37's audit row pairs it with `durable: false`, so one test for that row could skip the estimate | unverified |
+| Browser: `navigator.storage.persist()` once after a gesture; expose `{ persisted, usage, quota }` | M23 | `storage_status_reports_estimate` | covered |
 | Browser: no OPFS gives the memory adapter and `durable: false` | M23 | `no_opfs_falls_back_durable_false` | covered |
 | Server: engine ships a Node `fs` adapter with zero npm dependencies, plus memory | M22b, M35b | `storage_conformance_fs`; criterion "`packages/engine` still has zero `dependencies`" | covered |
 | Export/import: one gzip archive of manifest, segments, pruned snapshots, session table; import takes the normal load path including upgrade | M23, M24b | `archive_golden_bytes`, `export_import_roundtrip_browser`, `export_import_roundtrip_node`, `import_refuses_existing_world`, `export_works_after_load_failure`; `import_then_upgrade` | covered |
@@ -193,7 +193,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | Panic recovery 2: main thread respawns a dead sim worker | M37 | `sim worker death respawns and resyncs` | covered |
 | Panic recovery 3: recurring panic in `apply` appends `Skip`, sender acked `EngineFault`, replay stays exact | M24 | `panic_in_apply_writes_skip_then_resumes`, `skipped_action_acked_engine_fault`, `recovered_hash_equals_replay_with_skip`, `recovery_loop_guard` | covered |
 | Panic recovery 4: recurring panic in `tick` is fatal: stop, keep files, `onFatal` | M24, M37 | `panic_in_tick_is_fatal_and_files_untouched`; `fatal: server onFatal stops world and closes sockets` | covered |
-| Panic recovery 4: a failed `memory.grow` takes the same route | M24, M37 | M24 planning decision 5 and M37 Scope say so; no named test forces an allocation failure | unverified |
+| Panic recovery 4: a failed `memory.grow` takes the same route | M24, M37 | `alloc_failure_in_tick_is_fatal_and_files_untouched` (M24, fixture action `ArmTickAlloc`) | covered |
 | Idle pause: host snapshots and stops calling `tick`; nothing logged; resume on `Hello` | M28b, M23 | `lifecycle/idle-stops-ticks-then-onidle`, `lifecycle/hello-resumes`, `lifecycle/keep-ticking-when-empty`; `hidden_pauses_and_snapshots` | covered |
 | At most 5 catch-up ticks per wakeup; sim time falls behind | M13 | `simhost_caps_catchup_and_drops_time` | covered |
 | Consequences: sim worker is a dedicated worker and owns single-player storage | M23 | `storage_conformance_opfs`, `zero_gc_singleplayer_with_snapshot` (sync handles exist only there) | covered |
@@ -209,7 +209,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | Types: `Tick(u32)` point, `Ticks(u32)` duration; plain `number` in TS | M12b, M16b | `ticks_conversion_20_and_30_hz`; `clock_returns_same_object` | covered |
 | Sim state stores only `Tick`/`Ticks`, never seconds or floats of time | | authoring constraint; nothing to build | n/a |
 | Conversion rule: integer, nearest with ties up, never zero for non-zero | M12b, M24b | `ticks_conversion_20_and_30_hz`; `rescale_matches_0006_rounding` (non-zero floor) | covered |
-| `TickRate::hz` compile error outside 10..=60; `DT` const | M12b | Scope: "compile-fail doc test for `hz()` outside the range"; not under Tests added and nextest does not run doc tests unless the brief says so | unverified |
+| `TickRate::hz` compile error outside 10..=60; `DT` const | M12b | doc tests `tickrate_hz_out_of_range` (two `compile_fail` blocks), run by build step `doctests` (M12b exit: flipping one block fails the build phase); `dt_is_reciprocal` | covered |
 | No `f32` seconds entry point | | absence of an API | n/a |
 | Where: `const fn`, converted at compile time or at init, never inside a tick; handlers store `done_at` | M21b, M20 | fixture `const SMELT = TICK_RATE.secs(5)` under `smelt_cycle_golden`; `collect_completes_and_depletes` | covered |
 | Rates: ratios stay counts; integer accumulator; `DT` with closed-form springs | M33b, M20b | guidance; shown by `one_coal_smelts_exactly_ten`, `spring_settles_and_is_dt_independent` | n/a |
@@ -235,7 +235,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §2 u64 chunk key; ordered containers for state | M07, M12 | `chunk_key_roundtrip`, `overlay_sorted`; exit "No `HashMap`/`HashSet` under `src/world/`"; M12 grep on `store*` | covered |
 | §2 camera-relative rendering far from origin | M09 | `terrain.far_from_origin_exact` | covered |
 | §3 chunk size 16/32/64, default 32, compile-time const (runtime `ChunkDims`, amended by 0024 §9) | M07 | `dims_reject_unsupported_bits`; exit "pass by name at `CHUNK_BITS` 4, 5 and 6" | covered |
-| §3 chunk size recorded in world params | none | no brief names chunk size in `Identity`, manifest or `WorldParams` | uncovered |
+| §3 chunk size recorded in world params | M24b | `chunk_bits_mismatch_save_incompatible_files_untouched` (`ManifestV1.params.chunkBits`, reason `ChunkSize`) | covered |
 | 0024 §9 browser topology asserts `CHUNK_BITS = 5` with a readable fatal | M08b, M09 | `gen: oversize slab is a readable fatal` (M09's init check is Planning text only) | covered |
 | §4 `Tile` is 4 bytes, LE layer order, 4,096-byte row-major slab | M07 | `tile_le_byte_order`, `golden_terrain_canonical`; `memory_bytes()` asserted in `cache_events_report_slots` | covered |
 | §4 upload path: one copy into the upload ring is the texel pass; one `writeTexture` per chunk; delta patches one texel | M09 | `upload.record_layout_golden`, `terrain.probe_tile_colours`, `terrain.patch_one_texel`, `terrain.upload_budget_while_panning` | covered |
@@ -255,8 +255,8 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §8 cache budget: fixed pool at init, LRU, exploration never refused; host default 1,024 chunks | M07 | `lru_evicts_least_recent`, `no_alloc_terrain`, exact `memory_bytes()` for the default capacity | covered |
 | §8 client cache default 1,024; resident set at most 225 | M08b | `queue_counts_at_view_bound` | covered |
 | §8 state budget counts, enforced per action before `apply` (amended by 0023: `growth`) | M21 | `full_world_rejects_place_accepts_remove_then_place`, `undeclared_action_uses_max_action_growth`, `budget_verdict_replays_identically`, `growth_declarations_are_honest` | covered |
-| §8 nominal costs fixed by the engine (128 B, 12 B), not `size_of` | M21 | implied by `undeclared_action_uses_max_action_growth`; no test pins the two constants | unverified |
-| §8 tick-rule writes never refused; budget soft by the margin | M21, M21b | Scope only (0023 text); no test puts from `tick` past a limit | unverified |
+| §8 nominal costs fixed by the engine (128 B, 12 B), not `size_of` | M21 | `nominal_costs_are_constants` | covered |
+| §8 tick-rule writes never refused; budget soft by the margin | M21b | `tick_rule_put_past_limit_is_applied` | covered |
 | §8 init computes the split from real `size_of` and fails startup over budget or arena | M21 | `init_rejects_budget_over_arena` | covered |
 | §8 view bound arithmetic (81 / 121 / 128) | M15, M08b | `subs_clamps_oversized_and_zero_views`, `queue_counts_at_view_bound` | covered |
 | §9 `WORLDGEN_VERSION` + fingerprint of 16 fixed chunks | M08 | `fingerprint_stable_and_sensitive`, `fingerprint_golden` | covered |
@@ -306,12 +306,12 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | Decision (ADR §, few identifying words) | Milestone(s) | Exit criterion or test | Status |
 |---|---|---|---|
 | WebSocket binary, `arraybuffer`, one socket per client owned by the net worker | M29 | `ws/join-converges`, `mp/two-pages`; grep test "no frame parsing in `src/worker/net.ts`" | covered |
-| No `permessage-deflate` | M29 | Scope says "checked, readable error"; no named test or criterion | unverified |
+| No `permessage-deflate` | M29 | `ws/deflate-refused`; `ws/join-converges` asserts empty negotiated extensions | covered |
 | Message classes `reliable-ordered` / `latest-wins`; packed into one packet without datagrams; separate with `datagrams: true` | M27, M14 | `latest-wins-datagrams`, `golden_section_ids` | covered |
 | `Connection` interface (engine-owned buffer, optional `bufferedAmount`) | M27, M15b | `memory-connection`, `byte-pump-backpressure`, `ring_connection_roundtrip` | covered |
 | `HostServices` + `createWorldServer` (amended by 0024 §5: `ready`, `onFatal`) | M27, M37 | exit "return type and `HostServices.onFatal?` match 0024 §5 (type-asserted)"; `server/ready-rejects-on-corrupt-world`, `server/accept-before-ready-waits`, `fatal: server onFatal stops world and closes sockets` | covered |
 | `WorldConfig` field list, used unchanged by server and single-player sim worker | M13, M27 | type declared in M13; per field: `load_ignores_config_params_when_world_exists` (M22b), `handshake/bad-key`, `handshake/full`, `lifecycle/keep-ticking-when-empty`, `subs_clamps_oversized_and_zero_views`, `start.arena_config_rejected`, `rates/action-rate-limited`, `rates/bucket-refill-exact` | covered |
-| 0024 §5 seed stays decimal text; `createSimHost` converts once to `HexU64` | M13 | Scope only; no test with a seed above 2^53 | unverified |
+| 0024 §5 seed stays decimal text; `createSimHost` converts once to `HexU64` | M13 | `simhost_seed_decimal_to_hex_u64` | covered |
 | Params, budgets and `arenaBytes` reach the instance as one-time JSON config | M02, M21 | `abi::` config errors give `BadConfig`; `init_rejects_budget_over_arena` | covered |
 | Node adapter structurally typed; engine imports nothing, no RFC 6455 code | M29, M35b | `ws/join-converges`, `reference-server/smoke`; exit "`packages/engine` still has zero `dependencies`" | covered |
 | Bun and Deno adapters wrap built-in servers | M35b | `bun-adapter loopback`, `deno-adapter @slow`, `server adapters export parity` | covered |
@@ -334,23 +334,23 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | Decision (ADR §, few identifying words) | Milestone(s) | Exit criterion or test | Status |
 |---|---|---|---|
 | Rates: tick 20 Hz default, per-game constant, fixed for a world's life | M12b, M13, M24b | `ticks_conversion_20_and_30_hz`, `simhost_paces_at_tick_rate`, `tick_rate_change_without_bump_still_requires_migrate` | covered |
-| Rates: tick rate constant limited to 10 to 60 | none | no brief validates the range | uncovered |
+| Rates: tick rate constant limited to 10 to 60 | M12b | `tickrate_hz_out_of_range`: `TICK_RATE` can only be built by `TickRate::hz`, which fails to compile at 9 and 61 | covered |
 | Rates: one frame per tick when there is anything; idle sends nothing; heartbeat every 500 ms | M15, M28, M31 | `idle_tick_builds_no_frame`, `liveness/heartbeat-idle-world`, `golden_heartbeat_is_10_bytes`, `rates/idle-sends-only-heartbeats` | covered |
 | Rates: degrade to every 2nd then 4th tick on backlog or soft cap | M31 | `rates/degrade-on-stall` | covered |
 | Rates: adaptive interpolation delay (150 initial, 100 floor, 400 cap, ≤ 10 % dilation, never stepped) | M30 | `delay_initial_floor_cap`, `delay_follows_p95_formula`, `delay_never_steps`, `jitter_profile_adapts` | covered |
 | 0024 §15 conditional: extrapolation ratio above 0.2 forces a superseding ADR | M30 | `extrapolation_ratio`; exit "`extrapolation_ratio` and its verdict are written under Deviations" | covered |
 | Rates: uplink at most one batch per 50 ms; actions flushed at once; camera and presence ≤ 10 Hz on change; `last_received_tick` | M15, M19, M14 | `uplink_at_most_one_batch_per_interval`, `sampler_rate_and_on_change`, `golden_uplink_batch` | covered |
-| Rates: at least one uplink batch per 1 s | M15 | Scope "keep-alive batch"; only indirect mention in M30 `resting_player_stays_solid` | unverified |
+| Rates: at least one uplink batch per 1 s | M15 | `uplink_keepalive_batch_every_1s` | covered |
 | Rates: host drops camera reports beyond 20/s | M31 | `rates/camera-flood-dropped` | covered |
 | Tick CPU budget ≤ 10 ms; proxy median ≤ 3 ms on the large save | M36, M38 | `slow_tick_large_save` meets the 0010 desktop proxy; M38 results table (tick p50/p99 under 8 clients on Fly) | covered |
-| Tick overrunning 50 ms is counted and reported | M13 | `tickOverruns` counter named under Budgets only; no test forces an overrun | unverified |
+| Tick overrunning 50 ms is counted and reported | M13 | `simhost_counts_tick_overrun` | covered |
 | Camera report: 16 B `latest-wins`, never seen by the sim | M14, M19 | `golden_uplink_batch` (16 B fixed); `presence_is_not_state` pattern; M15 `host_and_client` outside `sim/` | covered |
-| Camera report sent on quantized change, leading-edge and trailing sends | M15, M15b | Scope (`poll_uplink`, `ClientCore::set_camera`); no named test | unverified |
+| Camera report sent on quantized change, leading-edge and trailing sends | M15, M15b | `camera_report_on_change_leading_and_trailing` (M15) | covered |
 | Subscription: ring 1 + look-ahead capped at 2 chunks | M15 | `subs_ring1_plus_lookahead` | covered |
 | Subscription: unsubscribe beyond ring 3 and 5 s outside; small pans cause no traffic | M15, M15b | `subs_unsubscribe_after_hold`, `subs_hysteresis_no_traffic_on_small_pan`, `pan_changes_subscription` | covered |
 | Subscription: cap 128, farthest-first eviction in priority order | M15, M15b | `subs_cap_evicts_farthest_first`, `join_at_max_zoom_out_never_drops` | covered |
 | Clamps: view ≤ 256 tiles per axis, centre in range, zero or oversize clamped not rejected | M15 | `subs_clamps_oversized_and_zero_views` | covered |
-| Clamps sent in `Welcome` so the client clamps zoom-out to match | M28, M11 | `golden-welcome` carries them; `camera.zoom_clamps_and_constraints`; the `Welcome` to `setViewClamp` wiring has no test | unverified |
+| Clamps sent in `Welcome` so the client clamps zoom-out to match | M28, M11 | `golden-welcome`, `camera.zoom_clamps_and_constraints`, `handshake/welcome-view-clamp-limits-zoom` | covered |
 | Camera teleports allowed; chunk pacing is the limit | M31 | `rates/join-dense-visible-first`, `zoomout/*` | covered |
 | Bandwidth: steady down 1 to 5 KB/s typical | M31, M34c | `rates/steady-busy-field`, `rates/seven-remote-presences`, `reference_bytes_and_mispredictions_in_budget` | covered |
 | Bandwidth: steady up about 0.4 KB/s panning, about 0 at rest | M31, M19 | `rates/uplink-panning`; `uplink_presence_bytes_per_s` ceiling | covered |
@@ -386,7 +386,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | Scopes: `Player` to that player only; `Global` to all; both sent in full on every connect | M15, M27 | `first_frame_has_global_and_own_player`, `late-join` | covered |
 | Scopes: `Presence` never hashed or logged | M19 | `presence_is_not_state`, `presence_section_golden` | covered |
 | Entity delivered if any footprint chunk subscribed, deduplicated by id; anchor chunk owns hashing | M15, M21 | `entity_straddling_subscribed_and_unsubscribed_chunks_delivered_once`, `border_machine_delivered_once_to_partial_subscriber` | covered |
-| Entity moving between chunks: full state on entering a subscription, `EntityGone` on leaving | M21 | `move_updates_old_and_new` covers the index only; no loopback test moves an entity across a subscription edge | unverified |
+| Entity moving between chunks: full state on entering a subscription, `EntityGone` on leaving | M21 | loopback `moved_entity_enters_and_leaves_subscription` (fixture action `Move`) | covered |
 | Chunk enter: pristine entry (coord only) or snapshot as of T; deltas from T+1; host never sends pristine tiles | M15, M14 | `pristine_chunk_enters_as_coord_only`, `modified_chunk_enters_as_snapshot_then_deltas_from_next_tick`, `golden_chunk_snapshot` | covered |
 | Chunk leave frees overlay and orphaned entities; pristine cache survives | M15, M21 | `leave_frees_overlay_keeps_pristine`, `border_machine_gone_when_last_overlapped_chunk_leaves` | covered |
 | Per-chunk version = tick of last replicated change, on both sides | M28b | `session/hint-diff`, `reconnect/resume-keeps-unchanged-chunks`, `reconnect/changed-while-away` | covered |
@@ -407,7 +407,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | `Confirmed` / `Rejected(reason)` raised to the UI (no id map, amended by 0022 §6) | M16, M25 | `vertical_slice` (`onActionResult` Confirmed and typed Rejected), `predict_not_predictable_event` | covered |
 | 0024 §8: client-side `Lost` result after reconnect | M28b | `reconnect/lost-ack-reports-lost` | covered |
 | 0 allocations over 190 frames x 4 pending | M25 | `predict_alloc`; exit "`predict_alloc` reports 0" | covered |
-| Pending queue fixed capacity 32; dispatch fails locally when full | M16, M25 | Scope and Planning only ("same queue full behaviour"); no test fills the queue | unverified |
+| Pending queue fixed capacity 32; dispatch fails locally when full | M16, M25 | `dispatch_when_queue_full_fails_locally` (M16; M25 inherits it unchanged) | covered |
 | `Unknown` reads: `saw_unknown` overrides, truncate, mark `NotPredictable`, still send | M25, M34c | `edge_action_declines_but_resolves`, `predict_not_predictable_event`, `reference_subscription_edge_not_predictable` | covered |
 | Local `Rejected` is a hint; the client always sends | M25 | `taint_dependency` (contradicted verdicts counted; host accepts both) | covered |
 | Frozen predicted tick per pending action | M25, M26 | `frozen_predicted_tick`, `lead_change_leaves_pending_frozen` | covered |
@@ -418,7 +418,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | Correction: `extract` marks overlay-sourced items `predicted` | M26 | `swap_is_one_render` (`PREDICTED` reads 1…1 0…0) | covered |
 | Correction: k-tick own-timer correction eases over about 200 ms | M26 | `own_timer_correction_eases` | covered |
 | Remote motion: Hermite interpolation at host time minus delay; extrapolate ≤ 250 ms then hold; fade after 2 s | M30 | `hermite_hits_samples_and_is_c1`, `extrapolates_then_holds`, `fades_after_silence_and_recovers`, `stall_then_recover` | covered |
-| Remote motion: moving entities share the presence buffer and code path | M30 | M30 Non-scope: buffer keyed `InterpKey::Entity` but entities are not fed (no v1 moving entity); no test | unverified |
+| Remote motion: moving entities share the presence buffer and code path | M30 | `interp_entity_key_same_path` (buffer and path; feeding entities stays M30 Non-scope: no v1 moving entity) | covered |
 | Remote machine and player progress derived from parameters + authoritative clock | M16b, M33b | `progress_from_done_at_and_clock`, `reference_furnace_flow` | covered |
 | Single-player runs the identical path with prediction on | M25, M26, M33 | exit "browser zero-GC test passes with prediction on"; `prediction-no-flicker`, `reference_place_mouse` on the single-player page | covered |
 | Consequences: author rules (validate first, `?` on reads) | M25 | `.claude/rules/prediction.md` created (Context artifacts); `under-validated` handler twin `rejecting_apply_wrote_nothing` (M12b) | covered |
@@ -442,7 +442,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | Identity: host session table `SHA-256(secret)` to `PlayerId`, persisted outside sim state | M28 | `handshake/join-then-return-same-player`, `handshake/crash-between-table-and-log` | covered |
 | Identity: first sight of a secret is a join (`Joined`, later `Connected`) | M28 | `handshake/join-then-return-same-player` (`Connected` not `Joined`) | covered |
 | Join key: shared secret from server config; `BadKey` | M28, M34c | `handshake/bad-key`, `reference_full_and_bad_key_rejected` | covered |
-| Join key travels in the invite link URL fragment | M29, M34 | `readInvite` is Scope only in M29; M34 checks the invite link by hand | unverified |
+| Join key travels in the invite link URL fragment | M29, M34 | `readInvite: parses #k= and ignores unknown parameters`; `mp/two-pages` joins through an invite URL | covered |
 | `max_players` cap and `Full`; default 8 | M28, M34c | `handshake/full`, `reference_full_and_bad_key_rejected`; the default value 8 is not asserted | covered |
 | Single-player uses the same handshake with an empty key | M28 | "Every netcode scenario opens with `Hello`; no provisional-join code path remains" + existing single-player browser tests | covered |
 | Handshake: `Hello` frozen prefix, layout (magic first byte >= 0x80, amended by 0024 §8) | M14, M28 | `session/golden-hello`; `handshake/garbage-before-hello`, `handshake/no-hello-timeout` | covered |
@@ -451,7 +451,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | Join is late join: logged connection event after `Welcome`; first frames carry `Global` + `Player`, visible chunks first | M15, M27, M31 | `first_frame_has_global_and_own_player`, `late-join`, `rates/join-dense-visible-first` | covered |
 | Client reveals world once visible chunks are received and generated | M28, M29 | `handshake/reveal-after-visible-chunks`, `mp/reveal-waits-for-visible-chunks` | covered |
 | Reconnect: resume hint, keep / snapshot / leave per chunk; host keeps no per-session state | M28b | `session/hint-diff`, `session/golden-keep-entry`, `reconnect/resume-keeps-unchanged-chunks`, `reconnect/changed-while-away` | covered |
-| Reconnect: `Global` and `Player` always resent | M28b | not named in any M28b test (implied by convergence only) | unverified |
+| Reconnect: `Global` and `Player` always resent | M28b | `reconnect/resume-keeps-unchanged-chunks` (first frame after the resume carries `Global` and `OwnPlayer` with every chunk kept) | covered |
 | Reconnect: `epoch` increments per host start; foreign-epoch hint ignored | M28b | `reconnect/host-restart-epoch`, `session/hint-diff` (foreign epoch) | covered |
 | Reconnect: pending actions resent above `last_processed_action_seq`, applied once, also across host restart | M28b, M22b, M34c | `reconnect/pending-resent-once`, `resend_after_recovery_not_applied_twice`, `reference_pending_place_applied_once_after_reconnect` | covered |
 | Reconnect: `Lost` result for acked-but-unreported actions (amended by 0024 §8) | M28b | `reconnect/lost-ack-reports-lost` | covered |
@@ -459,7 +459,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | Reconnect cost: one RTT, about 1 KB each way | M28b | `reconnect/cost` against `reconnectBytesUp/Down` rows | covered |
 | Discarded page reloads and rejoins with the same secret | M28, M34 | `secret/persists-across-reload`, `reference_returning_player_resumes` | covered |
 | Client policy: dead after 3 s without a frame, or on `close` | M28 | `liveness/dead-after-silence`, `liveness/heartbeat-idle-world` | covered |
-| Client policy: probe at once on `visible` / `online`, 1 s deadline | M28, M29 | `createLink.probe()` and the main to net `probe` message are Scope only; device check M29-socket-resume is manual | unverified |
+| Client policy: probe at once on `visible` / `online`, 1 s deadline | M28, M29 | `liveness/probe-on-visible`; the main to net `probe` message: device check M29-socket-resume | covered |
 | Client policy: backoff 0, 0.5, 1, 2, 5 s, jittered | M28 | `liveness/backoff-schedule` | covered |
 | Client policy: new socket opens before the old one is discarded | M28 | `liveness/stale-socket-ignored` | covered |
 | Client policy: game stays interactive; indicator after 1 s; no modal | M29, M34, M37 | M37 `engine event surface` row "reconnect indicator delay"; device check M29-play-through-drop | covered |
@@ -489,13 +489,13 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 |---|---|---|---|
 | §1 no wasm-bindgen / wasm-pack; fixed C ABI; build is plain `cargo build` | M02, M35 | `import allowlist`; exit criterion "imports of `fx-hash` is exactly `engine.panic`, `engine.log`"; tarball test asserts allowlist | covered |
 | §1 one fixed runtime-agnostic loader (worker, Node, Bun) | M02, M03 | `determinism: node matches golden`, Bun leg, `determinism @engines` | covered |
-| §2 numbers only: no `i64`, no multi-value, no `externref`, no strings | M02 | `abi registry` checks export names and enum numbers only, not signatures | unverified |
+| §2 numbers only: no `i64`, no multi-value, no `externref`, no strings | M02 | `abi registry` (signatures read through `readSections`: fails on `i64`, `externref` or more than one result) | covered |
 | §2 64-bit values cross as two `u32` halves | M02 | `sim_hash` through `readU64Hex`, exercised by every golden test | covered |
 | §2 JS never sees a game-specific symbol | M02 | `abi registry` (function exports equal `ABI_EXPORTS` exactly) | covered |
 | §3 exactly two imports, output-only; time, randomness, storage are never imports | M02 | `import allowlist`; the `getrandom` by-hand exit criterion | covered |
-| §3 `log` compiled out below `warn` in release builds | M02 | no brief mentions it | uncovered |
+| §3 `log` compiled out below `warn` in release builds | M35 | `release module drops info logs @slow` | covered |
 | §3 a `log` call inside the measured window fails 0016 | M04 | named as a usual cause in the `gc-test` skill; no control test | n/a |
-| §3 memory is exported, not imported | M02 | `import allowlist` (imports all of kind `function`); `abi registry` ignores `memory` rather than requiring it | unverified |
+| §3 memory is exported, not imported | M02 | `import allowlist` (`memory` is an export of kind `memory`; no import of kind `memory`) | covered |
 | §3 allowlist test: every fixture and the reference game; failure text names module and culprit | M02, M08b, M20, M24, M24b | `import allowlist` "failure text per 0014 §3"; "M02 import-allowlist test ... run against `reference-sim`" | covered |
 | §3 loader supplies only `engine.*` (LinkError otherwise) | M02 | follows from `import allowlist`; no separate test needed | covered |
 | §4 `engine_abi_version`; mismatch is a load error naming both versions | M02, M03 | `loader: abi mismatch`; `wiring.spec.ts` ABI version matches | covered |
@@ -511,7 +511,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §4 server uses the same regions without rings | M27 | `pnpm test wasm` logs through `createWorldServer` under Node and Bun with existing goldens | covered |
 | §5 `export_game!` is the only ABI line; emits all exports, allocator, panic hook | M02, M12 | `abi registry` on every fixture; `puts_fixture_builds_wasm32` | covered |
 | §5 one role for life; other role's export returns an error status | M02, M08 | `loader: wrong-role export returns WrongRole`, `gen: sim role returns WrongRole` | covered |
-| §5 wrong-role call traps in debug | M02 | not stated; the named test expects a status on the dev profile | unverified |
+| §5 wrong-role call traps in debug | M02 | M02 Planning decision "Wrong-role calls return `Status::WrongRole` on every profile": the debug trap is deliberately not built (departure recorded under M02 Deviations for M39b's ADR sweep); the status is `loader: wrong-role export returns WrongRole` | covered |
 | §6 `panic = "abort"`; dev-profile `.wasm` panic still traps (amended by 0024 §13) | M01, M02 | `loader: panic marks instance dead with message` (`panicAtTick`, dev profile) | covered |
 | §6 hook formats into boot region without allocating; `engine.panic` stores text | M02, M03 | message asserted by `loader: panic marks instance dead with message` and `wiring.spec.ts` (`EngineTrap` with the Rust message); the no-allocation property is order-of-work text only | covered |
 | §6 wrapper catches `RuntimeError`, marks instance dead, no further export call | M02, M24 | `loader: panic marks instance dead with message`, `dead_instance_memory_still_readable`, `host_never_calls_raw_exports` | covered |
@@ -529,7 +529,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | Decision (ADR §, few identifying words) | Milestone(s) | Exit criterion or test | Status |
 |---|---|---|---|
 | §1 main compiles the module once, spawns every worker, posts `Module` + SABs; no nested workers | M06b | `workers.spawn_local`, `workers.spawn_remote`, `workers.url_fallback` | covered |
-| §1 main thread never instantiates WASM | M06b, M35 | no test or scan asserts it | unverified |
+| §1 main thread never instantiates WASM | M06b (M35 cites it) | `main.no_wasm_instantiate` (M06b source scan; M35's `exports-map` bullet cites it and adds no second check) | covered |
 | §1 client worker owns replica, prediction, gen queue, `extract`, all uplink assembly | M08b, M15b, M19 | `pan_changes_subscription`, `presence-worker-path`, `uplink_at_most_one_batch_per_interval` | covered |
 | §1 net worker is a byte pump that never parses frames | M29 | grep test "no frame parsing in `src/worker/net.ts`"; `gc/net-negative-control` | covered |
 | §1 sim worker owns the world, tick loop, OPFS handles and Web Lock | M13, M23 | `sim_worker_steps_and_hashes`, `second_tab_gets_world_busy`, `world_survives_reload` | covered |
@@ -544,7 +544,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §2 full ring is backpressure, never loss; `drops` reads 0 in tests | M06, M15b, M27 | `ring.full_is_backpressure`, `ring_connection_backpressure_retries_not_drops`, `byte-pump-backpressure` | covered |
 | §2 seqlock block for small latest-wins records | M06 | `seqlock.no_torn_read`, `camera_block.roundtrip` | covered |
 | §2 triple buffer for large latest-wins frames | M06, M17 | `triple.newest_wins_never_partial`, `drawlist.triple_newest_wins` | covered |
-| §2 no `Atomics.waitAsync`; main never blocks, polls rings once per rAF | M06, M06b | not asserted by a scan; page `topology` budget would catch the allocation | unverified |
+| §2 no `Atomics.waitAsync`; main never blocks, polls rings once per rAF | M06, M06b | `sab.no_alloc_syntax` (fails on `waitAsync` under `src/` and on `Atomics.wait(` outside `sab/control.ts` and `src/test/**`); `main.no_wasm_instantiate` (main never names `waitForWake` or `Atomics.wait`) | covered |
 | §2 workers block in `Atomics.wait`; one wake word per consumer (amended by 0024 §10) | M06, M06b | `control.no_lost_wakeup`; page `topology` | covered |
 | §2 client worker frame clock: notified by main once per rAF after the camera-block write | M06b, M11 | page `topology`, `camera.block_reaches_worker_each_frame` | covered |
 | §2 sim worker waits with timeout to next tick deadline | M13 | `simhost_paces_at_tick_rate`, `sim_worker_steps_and_hashes` | covered |
@@ -555,22 +555,22 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §3 `credentialless` never used | M02b | header value asserted only indirectly by `crossOriginIsolated` in WebKit (`determinism @engines`) | covered |
 | §3 engine checks `crossOriginIsolated` at start; readable errors for not isolated and blocked worker | M06b, M29 | `start.not_isolated_error`, `start.worker_blocked_error`, `mp/coep-worker-error-message` | covered |
 | §3 what breaks (cross-origin resources, popups, iframes) | | documentation of platform behaviour | n/a |
-| §3 per-host header recipes; one real static host verified | M38 | `check-coi.mjs $PAGES_URL` exits 0; `deployed/coi-and-online` | covered |
+| §3 per-host header recipes; one real static host verified | M38, M39b | own handler only: `check-coi.mjs $FLY_URL`, `reference-server/static-headers`, `deployed/coi-and-online`; no static host is deployed (Pages not approved); M39b carries the open item | unverified by decision (Q6), carried to 39b |
 | §3 GitHub Pages and `coi-serviceworker` unsupported | | constraint, nothing to build | n/a |
 | §4 no WASM threads or shared memory; stable Rust; copy-in / copy-out | M01, M02 | toolchain pin criterion; `target features` rejects `atomics` | covered |
 | §5 one `memory.grow` to the role's arena at init, before views | M06b, M08b | `workers.spawn_local` (`W_MEM_PAGES` equals each arena), `engine_mem_grows() == 0` | covered |
-| §5 module declares no memory `maximum` | M02 | no brief mentions it | uncovered |
+| §5 module declares no memory `maximum` | M02 | `import allowlist` (memory section read through `readSections`: no `maximum`) | covered |
 | §5 arena sizes are per-game config per role; defaults 96 / 48 / 4 MiB | M06b | `workers.spawn_local`, `arena.sum_rule`; default values not asserted by name | covered |
 | §5 whole-tab target of 256 MiB on the baseline phone | M06, M06b, M11, M16 | `layout.sab_total_under_budget`; device checks M11-memory, M16-coexist | covered |
 | §5 instance checks its budgets against its arena at init | M21 | `init_rejects_budget_over_arena` | covered |
 | §5 main rejects a config whose arenas sum past the tab target | M06b | `start.arena_config_rejected`, `arena.sum_rule` | covered |
 | §5 growth counted: `engine_mem_grows()`, views rebuilt, 0 in steady state | M02, M06b, M36 | `loader: views survive memory growth`; zero-grow assertions on every gc page; soak zero grows | covered |
-| §5 dev and test builds trap with a message on arena exhaustion; release grows in 16 MiB steps to the ceiling; failed grow is a panic | M02 | M02's `Arena` wraps the system allocator; no brief states or tests this policy | uncovered |
+| §5 dev and test builds trap with a message on arena exhaustion; release grows in 16 MiB steps to the ceiling; failed grow is a panic | M02 (dev trap), M35 (release steps), M24 (failed grow) | `loader: arena exhaustion traps with message` (M02); `release growth steps 16 MiB and counts @slow` (M35); `alloc_failure_in_tick_is_fatal_and_files_untouched` (M24) | covered |
 | §5 memory never shrinks; leaving a world drops the instance | M06b | `workers.destroy_terminates` | covered |
 | §6 one `.wasm`, instantiated per role; no client-only build | M02, M06b | `abi registry` (every module carries every export); spawn tests | covered |
 | §6 size budgets: `.wasm` 1 MB warn / 2 MB fail, engine JS 50 KB brotli | M35 | `size @slow`; `size.json` criterion | covered |
 | §6 default target features only; never `relaxed-simd` | M02, M36b | `target features`; `feature-matrix @slow` | covered |
-| Consequences: hosting limits documented in the reference game's README | M38 | README hosting section is in M38's file list; no exit criterion names it | unverified |
+| Consequences: hosting limits documented in the reference game's README | M38 | M38 exit criterion on the `games/reference/README.md` Hosting section (0015 Consequences limits) | covered |
 | Consequences: worker to main only was measured; both directions owed | M06, M06b | `sab.ring_both_directions`, page `echo` | covered |
 | Deferred: on-device memory ceilings | M11 | device check M11-memory (M11 device section criterion) | covered |
 | Deferred: ring capacities, uplink poll period, control-block layout, `yield` protocol | M06, M06b, M15b | `layout.sab_total_under_budget`, `join_at_max_zoom_out_never_drops`, `workers.park_resume` | covered |
@@ -602,7 +602,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §3.6 assertion A: zero GC events inside the marks on every isolate | M04 | `gc analyse: GC events outside the marks are ignored`; burst controls | covered |
 | §3.7 assertion B: bytes / N within budget; failure prints top call frames | M04 | exit criterion: `{}` in `call0` fails `gc-loop clean` with `call0` among printed sites | covered |
 | §3.8 permanent negative controls, each failing on its named isolate only | M04, M06b, M09, M29 | `gc-loop neg *` tests; generated controls per page; `gc/net-negative-control` | covered |
-| Caveat a: `Tracing.start` stall reported as a named warning | M04 | `gc-tracing-start-stall` is in Planning decisions and the skill; no test or criterion | unverified |
+| Caveat a: `Tracing.start` stall reported as a named warning | M04 | `gc verdict: tracing stall is a warning`; M04 exit "`pnpm test unit -t \"gc verdict\"`" | covered |
 | Caveat b: software-adapter form of B (attributed bytes, smaller N) | M04, M10 | `gc verdict: software mode uses attributed bytes`; `pnpm gc software -t "gc-loop clean"`; M10 `software` block criterion | covered |
 | Caveat c: only the V8 heap is measured | | limitation statement | n/a |
 | Consequences: no `postMessage` on per-frame or per-tick paths | M04, M06b | `gc-loop neg post-message main<->sim`; grep criterion | covered |
@@ -623,7 +623,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §1 one pnpm workspace, one cargo workspace, one lockfile each, one `target/` | M01 | "`pnpm install --frozen-lockfile` succeeds; `pnpm-lock.yaml` and `Cargo.lock` are committed" | covered |
 | §1 `packages/engine`: `src` to `dist` by `tsc`, crate under `crates/`, fixtures outside `files` | M01, M35 | "`pack --json` lists only `dist/**`, `crates/**`, `package.json`" | covered |
 | §1 `games/reference` and `games/reference-server` layout | M20, M29 | `pnpm --filter reference dev` criterion; `reference-server/smoke` | covered |
-| §1 in-repo game depends on the crate by direct relative path, never `node_modules` | M20 | not stated in M20's tests or criteria | unverified |
+| §1 in-repo game depends on the crate by direct relative path, never `node_modules` | M20 | `reference_package_depends_only_on_engine` (relative `path` in `sim/Cargo.toml`, `workspace:*`) | covered |
 | §2 exports map: explicit subpaths, no runtime conditions | M35, M35b | `exports-map` (final); `server adapters export parity` | covered |
 | §2 zero runtime dependencies; `vite` optional types-only peer | M02b, M35, M35b | "`vite.ts` imports Node built-ins and types only"; "`packages/engine` still has zero `dependencies`" | covered |
 | §2 `dist/worker.js` self-contained; one worker script for every kind | M06b, M35 | `exports-map` (no bare import, no `import(`); tarball test "all four worker kinds" | covered |
@@ -638,7 +638,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §4 main `compileStreaming` once and posts `Module`; URL fallback in the worker | M06b, M11 | `workers.spawn_local`, `workers.url_fallback`; real-Safari device check | covered |
 | §4 server: every adapter exports `loadGame(dir)` | M02, M35b, M35 | `server adapters export parity`; tarball server leg (Node + Bun) | covered |
 | §4 build hash = SHA-256 of final bytes, after `wasm-opt` | M02, M35 | `build: game.json matches bytes`; `build: wasm-opt changes hash and sets game.json @slow` | covered |
-| §4 `vite dev` = dev profile, `vite build` = release; dev client cannot join release server | M02b | default-by-command is Seams text only; every plugin test passes `profile: 'dev'` | unverified |
+| §4 `vite dev` = dev profile, `vite build` = release; dev client cannot join release server | M02b | `plugin: default profile follows the Vite command`; `plugin-build: default profile writes a release game.json @slow` (M02b exit names both) | covered |
 | §5 `buildGame` = plain cargo, optional `wasm-opt`, hash; one function for plugin, tests, server scripts | M02, M34b | `pnpm test wasm` criterion; `build-game-features` | covered |
 | §5 plugin: build in `buildStart`, recursive watch of game and engine crates, debounce, `full-reload` | M02b, M10, M35 | `plugin-dev: touch triggers rebuild and full-reload`; `plugin-dev: nested touch triggers rebuild`; Linux criterion in M10 | covered |
 | §5 plugin: rustc error to overlay, recovery after fix | M02b | `plugin: rustc error reaches overlay and recovers @slow` | covered |
@@ -648,8 +648,8 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §6 what a game writes: three-line vite config, `sim/Cargo.toml`, `export_game!` | M20, M35 | `pnpm --filter reference dev` criterion; tarball scratch app | covered |
 | §6 profiles as listed (amended by 0024 §13: repo keeps them verbatim, no `panic = "abort"` in dev) | M01, M35 | M01 has no criterion on the profile tables; M35 "root `Cargo.toml` matches" the measured ADR | covered |
 | §6 external game must have no ancestor `[workspace]` | M35 | tarball scratch location outside the repo; rule recorded in `packages/engine/CLAUDE.md` | covered |
-| §6 reference README carries host recipes and the two-header requirement | M38 | file-list mention only; no criterion | unverified |
-| §7 engine crate runtime deps are exactly the listed set | M01, M02 | crate `CLAUDE.md` links the policy; no test compares `Cargo.toml` with the list | uncovered |
+| §6 reference README carries host recipes and the two-header requirement | M38 | M38 exit criterion on the README Hosting section (two headers, per-host listings, each marked unverified) | covered |
+| §7 engine crate runtime deps are exactly the listed set | M02 (M35 consumes) | `crate-policy` (M02; M35 adds no second test) | covered |
 | §7 `ts-rs` adds nothing reachable; size test watches it | M35 | `ts-rs zero bytes @slow` | covered |
 | §7 new dependency needs an ADR with the listed evidence | M01 | process rule, carried by the `write-adr` skill | n/a |
 | §7 game crates gated by the import allowlist and lint bans | M02, M20 | `import allowlist`; "No `HashMap`, std transcendental or wall clock in `sim/`" | covered |
@@ -676,13 +676,13 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 |---|---|---|---|
 | §1 TS renderer on main, all WebGPU calls in one rAF callback, no game knowledge | M09, M17 | zero-GC pages `terrain` and `drawables` on isolate `main`; `canvas.presents` (M09b) | covered |
 | §1 descriptors, submit array and views created once; wrapper floor is the main budget | M09, M17 | M09 criterion "`gc.pages.terrain` with `main` derived by 0016 §1's formula"; M17 final `main` number | covered |
-| §1 `GPUTexture`-as-view startup probe skips `createView()` | M09 | Scope only (`render/device.ts`); no test or criterion | unverified |
+| §1 `GPUTexture`-as-view startup probe skips `createView()` | M09 | `device.view_probe_both_paths` | covered |
 | §2 `extract` fills an engine-owned `DrawList`; shape helpers sprite, circle, ring, rect, bar, radial, ghost | M17, M17b | `draw.circle_and_ring_probe`, `draw.rect_bar_radial_probe`, `sprite.pivot_and_size_probe`, `drawlist.fixture_hash_golden` | covered |
 | §2 `Draw` is exactly 32 bytes little-endian | M17 | `draw.layout_is_32_bytes_le` | covered |
 | §2 capacity 65,536 records; a full list drops and counts | M17 | `drawlist.full_drops_and_counts`; criterion `drawListDropped == 0` | covered |
 | §2 publish = stable counting sort by layer into a SAB triple-buffer slot with header | M17 | `drawlist.counting_sort_stable`, `drawlist.layer_counts_and_prefix`, `drawlist.triple_newest_wins` | covered |
 | §2 one `writeBuffer`, one instanced draw per non-empty layer, no depth, bundles or indirect | M17 | `counters.draws_equal_nonempty_layers`; `counters["render.drawCallsMax"]` | covered |
-| §2 `pick_id` not bound as a vertex attribute | M17 | not mentioned in any brief | uncovered |
+| §2 `pick_id` not bound as a vertex attribute | M17 | `uberquad.vertex_layout_has_no_pick_id` (M17 Scope names `UBERQUAD_VERTEX_LAYOUT`) | covered |
 | §2 positions relative to window origin; one-frame-old list under newest camera has no error | M17 | `draw.one_frame_old_list_has_no_error`, `drawlist.pos_relative_to_window_origin_exact_at_2pow23` | covered |
 | §2 `tile_visual` default from tables, game override shows `aux` | M09 | `texel.default_identity`, `texel.registered_tables`, `texel.override_shows_aux` | covered |
 | §2 `FrameView` carries interpolated `WorldRead`, clocks, visible rect, cursor tile | M16b, M17, M18 | `frameview.entities_sorted_and_clipped`, `ghost.mouse_tracks_cursor_tile` | covered |
@@ -693,7 +693,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §3 neighbour reads through indirection; missing neighbour = self | M09b | `terrain.missing_neighbour_is_self` | covered |
 | §3 visual table as a 16 KiB uniform (first layer, variants, flags, priority, band) | M09, M09b | `terrain.variants_match_reference`, `terrain.dither_only_inside_band` read every field | covered |
 | §3 art sampling: tile array texture, PCG variant/flip/jitter, Bayer edge dither with fade, fat-pixel magnify, trilinear minify | M09b | `terrain.variants_match_reference`, `terrain.dither_only_inside_band`, `terrain.dither_fades_when_minified`, `terrain.magnified_texel_exact`, `terrain.minified_converges_to_mean` | covered |
-| §3 no zoom snapping; camera snaps to device pixels at rest | M11 | Scope only (`camera/camera.ts`); no test | unverified |
+| §3 no zoom snapping; camera snaps to device pixels at rest | M11 | `camera.snaps_to_device_px_at_rest_only` | covered |
 | §4 `tiles.png` + `tiles.json` contract, limits 256 images and 1,024 visuals, mips to 1x1, premultiplied load | M09, M09b, M20 | `manifest.schema_errors`, `terrain.minified_converges_to_mean`, `gen_assets_reproducible` | covered |
 | §4 `sprites.png` atlas with 2 px extrusion, 2 mips, `sprites.json`, 4,096 sprites | M17b | `sprites.schema_errors`, `sprite.no_bleed_at_mip1`, `sprite.frames_by_param` | covered |
 | §4 one uber-quad pipeline draws all kinds; no in-canvas text | M17, M17b | `wgsl.uberquad_validates`, `sprite.layering_with_shapes`, `counters["render.pipelineSwitches"]` | covered |
@@ -701,12 +701,12 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §5 camera-relative maths: i32 tile + f32 frac, precision independent of origin distance | M09, M11, M17 | `terrain.far_from_origin_exact`, `camera.precision_at_2pow23`, `drawlist.pos_relative_to_window_origin_exact_at_2pow23` | covered |
 | §6 zoom limits default 12 to 256 tiles | M11 | `camera.zoom_clamps_and_constraints` | covered |
 | §6 far zoom needs no terrain LOD (mips converge to mean colour); worst case 65,536 drawables | M09b, M17b | `terrain.minified_converges_to_mean`, `bench.frame_worstcase` | covered |
-| §6 `FrameView.zoom` exposed so a game can skip small drawables | M17 | accessor named in Scope (M18 line 45); no test reads it | unverified |
+| §6 `FrameView.zoom` exposed so a game can skip small drawables | M17 | `frameview.zoom_matches_camera_block` | covered |
 | §7 no non-WebGPU path; `checkSupport()` from the package root explains failures | M35, M06b | `checkSupport: each code`, `reference: capability screen on failure`, `support.report_shape` | covered |
 | §7 compatibility mode as a design constraint (feature level, limits not raised, vertex-buffer instances) | M09, M35 | ADR says not a test commitment; M09 Scope requests it, M35 adds `limits-too-low` | n/a |
 | §8 canvas configured once: preferred format, opaque, no depth, no MSAA | M09b | `canvas.presents` | covered |
 | §8 resize and DPR: observer records, next rAF applies and renders, clamp to max texture size | M09b | `viewport.resize_renders_same_frame`, `viewport.dpr_change`, `viewport.clamped_to_limit` | covered |
-| §8 render scale default `min(DPR, 2)`, per-game config | M09b | `ClientOptions.render.scale` in Scope; no named test of the default cap | unverified |
+| §8 render scale default `min(DPR, 2)`, per-game config | M09b | `viewport.render_scale_caps_at_2` | covered |
 | §8 backgrounding: stop rAF on hidden, reset clock and re-base interpolation on visible | M09b, M30 | `lifecycle.hidden_stops_visible_rebases`, `rebase-on-visible` | covered |
 | §8 device loss: rebuild device, pipelines, art, re-enqueue resident chunks; camera, input, overlay, sim never stop | M37b | `device loss recovers`, `upload.requeue_all_marks_every_resident_chunk_once`, `device loss: uploads stay under the frame budget` | covered |
 | §8 null adapter or two losses in the interval raise fatal `rendererLost`; tested with a test flag | M37b, M37 | `two losses raise rendererLost`, `null adapter raises rendererLost`, `no recovery attempt after rendererLost` | covered |
@@ -724,20 +724,20 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §1 camera block: seqlock SAB record written once per rAF, read by the client worker, nothing posted | M06, M06b, M11 | `camera_block.roundtrip`, `workers.camera_block_reaches_wasm`, `camera.block_reaches_worker_each_frame` | covered |
 | §1 camera saved to `localStorage` at rest and on `visibilitychange`, restored at start | M11 | `camera.persisted_and_restored` | covered |
 | §1 `client.camera.setConstraints / moveTo / read / worldToScreen / screenToWorld` | M11 | `camera.zoom_clamps_and_constraints`, `camera.moveto_cancelled_by_input`, `transform.roundtrip` | covered |
-| §1 camera controls clamped to the host's view clamp from `Welcome` | M28 (calls M11 `setViewClamp`) | Scope only in M28 and M11 Non-scope; no test | unverified |
+| §1 camera controls clamped to the host's view clamp from `Welcome` | M28 (calls M11 `setViewClamp`) | `handshake/welcome-view-clamp-limits-zoom` | covered |
 | §1 follow target via `cx.follow`, centred in the frame that draws that list; pan ignored, zoom works | M18 | `follow.centres_in_same_frame_pan_ignored_zoom_works`, `framecx.follow_written_to_header` | covered |
 | §2 camera report derived from the block, never a main-thread message | M15, M15b | `pan_changes_subscription`; M06b criterion `grep -n postMessage` shows lifecycle only | covered |
-| §2 reporting stops while the tab is hidden; subscriptions stay as last reported | M15b | not mentioned in any brief | uncovered |
+| §2 reporting stops while the tab is hidden; subscriptions stay as last reported | M15b | `hidden_tab_sends_no_camera_report` (M15b Scope "Hidden tab") | covered |
 | §3 Pointer Events on the canvas only, two fixed slots, never `getCoalescedEvents` | M11 | criterion "Source scan: no `getCoalescedEvents`, no listener outside the canvas"; zero-GC page `input` | covered |
-| §3 `setPointerCapture` on `pointerdown` (drag survives passing under a widget, §4) | M11 | not mentioned in any brief | uncovered |
+| §3 `setPointerCapture` on `pointerdown` (drag survives passing under a widget, §4) | M11 | `input.drag_survives_passing_under_widget` (M11 Scope: `input/pointers.ts`) | covered |
 | §3 one-pointer pan, two-pointer pan + zoom about midpoint | M11 | `camera.pan_keeps_world_point`, `camera.pinch_about_midpoint` | covered |
 | §3 wheel zoom about cursor, `deltaMode` and `ctrlKey` scaling, 100 ms notch easing | M11 | `camera.wheel_about_cursor` (constants in Planning decisions) | covered |
-| §3 macOS Safari trackpad pinch through `gesturechange.scale` | M11 | not mentioned in any brief | uncovered |
+| §3 macOS Safari trackpad pinch through `gesturechange.scale` | M11 | `camera.gesturechange_scale_zooms_about_cursor`; device check `M11-pinch-desktop-safari` | covered |
 | §3 inertia from an 80 ms sample ring, exponential decay, cancelled by `pointerdown` | M11 | `camera.inertia_decay_time_based`; device check `M11-gestures` (flick) | covered |
-| §3 WASD by `event.code`, speed proportional to extent, ramp | M11 | only exercised inside zero-GC page `input`; no behaviour test | unverified |
+| §3 WASD by `event.code`, speed proportional to extent, ramp | M11 | `camera.wasd_speed_scales_with_extent` | covered |
 | §3 canvas CSS, non-passive listeners with `preventDefault`, page-CSS helper against pull-to-refresh | M11, M20 | device check `M11-gestures` (pull down from top edge, double-tap); `installPageStyles` in Scope | covered |
 | §4 semantic events `tap`, `hover`, `longpress` with thresholds | M11 | `semantic.tap_vs_drag_thresholds`, `semantic.longpress`, `semantic.hover_only_on_change` | covered |
-| §4 tool mode: `setMode('tool')` gives `dragstart/drag/dragend`, two-finger pan still works | M11 | record kinds 4 to 6 in the layout golden; no behaviour test | unverified |
+| §4 tool mode: `setMode('tool')` gives `dragstart/drag/dragend`, two-finger pan still works | M11 | `semantic.tool_mode_drag_events` | covered |
 | §4 events as fixed records in a SAB ring drained by client Rust, and to `client.input.on` with one reused object | M11, M18 | `input.record_layout_golden`, `input.decode_record_golden`, `input.events_reach_wasm`, `framecx.tap_visible_in_frame` | covered |
 | §4 picking: tiles by arithmetic; entities by scanning the newest DrawList slot front to back; hover at most once per rAF | M18 | `pick.contains_per_kind`, `pick.front_to_back_order`, `pick.skips_zero_id_and_cursor_anchored`, `pick.hover_once_per_raf_on_change`, `pick.matches_interpolated_frame_on_screen` | covered |
 | §4 cursor tile in camera block and uniform; ghost with `ANCHOR_CURSOR_TILE`; touch tap-then-confirm | M17, M18, M33 | `draw.ghost_follows_cursor_same_frame`, `ghost.mouse_tracks_cursor_tile`, `ghost.touch_tap_then_confirm`, `reference_place_touch` | covered |
@@ -802,7 +802,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §8 deterministic counters | M09, M15, M27 | `terrain.upload_budget_while_panning`, `counters-exact`, `assertBudget` rows | covered |
 | §8 negative-control allocation hook | M04 | `gc-loop neg *`; criterion "every negative control's verdict matches 0016 §3.8" | covered |
 | §8 engine tests use fixture games, one per feature | M02, M12b | README rule; M12b `packages/engine/fixtures/CLAUDE.md`; no criterion needed | n/a |
-| §8 reference game adds the scripted coverage of 0003 | M34b, M34c | criteria that every row of `reference-coverage.md` names a test that exists | covered |
+| §8 reference game adds the scripted coverage of 0003 | M34b, M34c | criteria that every row of the `reference-game.md` table of `coverage.md` and of `reference-coverage.md` §1 names a test that exists | covered |
 | §9 `packages/engine/budgets.json`, exact counters with ceilings | M04, M09, M15, M31 | M04 lands the file; M09 and M31 criteria name rows in it | covered |
 | §9 budgets file outside the package `files` | M35 | criterion "`pack --json` lists only `dist/**`, `crates/**`, `package.json`" | covered |
 | §9 counter classes: net bytes/messages, JS bytes per isolate, draws, upload bytes, pipeline switches, WASM high-water | M09, M17, M31, M36 | `render.uploadBytesPerFrame`, `render.drawCallsMax`, `render.pipelineSwitches`, `net.*`, `gc.pages.*`, `mem.simHighWaterLargeSave` | covered |
@@ -814,7 +814,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §10 GitHub Actions on `ubuntu-latest`, fast and slow tiers, caches, timings recorded never gating | M10 | criteria on the green run URL and "a deliberately slow suite does not fail the job" | covered |
 | §10 real-GPU rendering and timing only on Tyler's Mac | M36 | bench gate fingerprint unit test | covered |
 | §10 iOS Safari manual checklist before a milestone is called done | M03 to M39 | `device-checks.md`; M39 criterion "every entry re-run on the final build and ticked" | covered |
-| §10 runner exports `DEVELOPER_DIR` on macOS when unset | M01 | `toolEnv()` in Scope; no unit test or criterion | unverified |
+| §10 runner exports `DEVELOPER_DIR` on macOS when unset | M01 | `toolEnv: sets DEVELOPER_DIR on darwin only when unset` (M01 exit names it) | covered |
 | Consequences: spike B with the first CI workflow | M10 | criterion "Spike B findings ... are under Deviations" | covered |
 | Consequences: spike C, byte-identical traces over loopback `ws` | M29 | `ws/trace-identical`, slow `ws/spike-c` | covered |
 | Consequences: measure rebuild and suite numbers; sccache vs shared target dir | M02, M36b | M36b criterion "Fresh-worktree and cached-CI build times are in the ADR with the decision" | covered |
@@ -824,10 +824,10 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 
 | Decision (ADR §, few identifying words) | Milestone(s) | Exit criterion or test | Status |
 |---|---|---|---|
-| §1 nested `CLAUDE.md` per package and crate, created with the package, ~60-line cap | M01; later files per the artifacts table | M01 exit "both nested `CLAUDE.md` files ... exist"; every later nested file sits only under a brief's Context artifacts; the nested line cap is checked nowhere | unverified |
+| §1 nested `CLAUDE.md` per package and crate, created with the package, ~60-line cap | M01; later files per the artifacts table | M01 exit "both nested `CLAUDE.md` files ... exist"; `context-artifacts` (`unit`, permanent, M01): every nested `CLAUDE.md` is at most 60 lines, so each later file listed under a brief's Context artifacts is checked through `pnpm test` | covered |
 | §1 path-scoped rule files `hot-paths.md` and `determinism.md`, created with the first code they govern, globs from the real layout | M02 (creates), M05, M06 | M05 exit "`determinism.md` names `Codec` ... under 40 lines"; M06 exit "`hot-paths.md` globs cover `src/sab/**` and `src/camera/**`" | covered |
-| §1 root `CLAUDE.md` names each global invariant in one line and links its rule file | none (M01 Context artifacts defers: "No invariant lines yet"; no later brief adds them) | none | uncovered |
-| §1 no rule file without `paths:` | M02, M25 | none (frontmatter is described in Context artifacts only) | unverified |
+| §1 root `CLAUDE.md` names each global invariant in one line and links its rule file | M02 (both lines; M25 adds the prediction line) | M02 exit "Root `CLAUDE.md` has one line each ..."; `context-artifacts` fails when root `CLAUDE.md` does not name a rule file | covered |
+| §1 no rule file without `paths:` | M01 (test), M02, M25 | `context-artifacts` | covered |
 | §2 no `@path` import in root `CLAUDE.md` | M01, M39b | M01 exit "root `CLAUDE.md` is within its line cap and has no `@` import" | covered |
 | §2 nested `CLAUDE.md` imports only a short file of its own package | none | constraint, nothing to build | n/a |
 | §3 sub-agents briefed with files | M39, M39b (Scope: "briefed per 0021 §3") | constraint on how sessions delegate | n/a |
@@ -844,7 +844,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §8 per-milestone state in `PLAN.md` and the brief's Deviations | M16, M39, M39b | M16 exit "PLAN.md marks the vertical slice complete"; M39 exit "every `PLAN.md` row is ticked or has a recorded deviation"; M39b exit "`PLAN.md` is fully ticked" | covered |
 | Consequences: root `CLAUDE.md` stays a map under its cap through Phase 4 | M01, M39b | M01 exit (line cap); M39b exit "`CLAUDE.md`'s map matches the files that exist and is within its line cap" | covered |
 | Consequences: briefs list the rule files that apply | Phase 2 (brief template, `docs/plan/README.md`) | planning artifact, 53 of 60 briefs carry the line | n/a |
-| Consequences: rule globs follow the layout (update `paths:` in the same commit) | M06, M07, M08b, M12, M20, M22, M29 | only M06 has an exit criterion on globs; the other glob extensions are Context artifacts prose | unverified |
+| Consequences: rule globs follow the layout (update `paths:` in the same commit) | M06, M07, M08b, M12, M20, M22, M29 | `context-artifacts` (every `paths:` glob matches at least one file; M06 no longer lists globs for directories that do not exist yet); M06 exit on globs | covered |
 | Consequences: settings, hook and `write-adr` in the first milestone; every other skill and rule attached to a milestone | M01 and the artifacts table | M01 exit criteria | covered |
 | Consequences: the hook script is small code with no dependencies | M01 | `scripts/lib/pre-commit-check.test.mjs` | covered |
 
@@ -855,8 +855,8 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 |---|---|---|---|
 | §1 real ids host-allocated from `next_entity_id`, from 1, monotonic, never reused, bit 31 clear | M12 | `entity_id_policy_*` | covered |
 | §1 ids in `spawn` call order so replay reproduces them | M12b, M21b | `replay_equals_live`, `replay_equals_live_with_timers` | covered |
-| §2 state-budget check rejects `StateBudgetFull` when too few ids remain | M21 | Scope names the clause; no test among M21's names | unverified |
-| §2 tick-rule `spawn` with no id left is an engine fault | M21 | not mentioned in any brief | uncovered |
+| §2 state-budget check rejects `StateBudgetFull` when too few ids remain | M21 | `id_exhaustion_rejects_state_budget_full` | covered |
+| §2 tick-rule `spawn` with no id left is an engine fault | M21b | `tick_spawn_without_ids_is_engine_fault` | covered |
 | §3 one ordered map keyed by id; layout is not state | M12 | criterion "`grep -r "HashMap" crates/engine/src/store*` is empty"; `store_roundtrip_bytes_equal` | covered |
 | §3 revisit trigger is the large-save tick benchmark | M36 | `slow_tick_large_save` | covered |
 | §4 hashed and snapshotted: `next_entity_id` then entities in ascending id order | M12, M22 | `store_hash_ignores_insertion_order`, `store_golden_bytes`, `persist_snapshot_golden_bytes` | covered |
@@ -867,7 +867,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §6 actions address predicted things by tile; `entity_at` resolves under both authorities | M25, M33b | `dependent_actions_replay_across_ack`, `deposit_into_predicted_furnace_before_ack` | covered |
 | §6 no id map in `Confirmed`; client state keyed by anchor tile survives the swap | M26, M33b | `swap_is_one_render`, `reference_furnace_panel_survives_swap` | covered |
 | §7 `entity(id)` on a client: `Unknown`, `Ok(None)` for provisional and tombstone | M25 | `entity_id_gone_vs_unsubscribed` (four cases) | covered |
-| Consequences: game-author rule "name buildings by tile" in the skill | M25 | `add-action-type` skill update (Context artifacts only) | unverified |
+| Consequences: game-author rule "name buildings by tile" in the skill | M25 | M01 `context-artifacts` (the brief lists the skill step under Context artifacts; ruling: no per-brief criterion) | covered |
 
 ## ADR 0023: Action growth declaration
 
@@ -876,15 +876,15 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | `Game::growth` provided hook and `Growth` type | M21 | `full_world_rejects_place_accepts_remove_then_place` | covered |
 | Check: declared growth rejects only when it exceeds free counts; `NONE` always passes | M21 | `full_world_rejects_place_accepts_remove_then_place` | covered |
 | Check: undeclared actions use `max_action_growth` | M21 | `undeclared_action_uses_max_action_growth` | covered |
-| Check is host only, before `apply`; never for `on_player`, `genesis`, `migrate`, tick rules or a predicting client | M21, M25 | M25 Non-scope sentence only; no test that tick rules or `on_player` bypass the check | unverified |
-| Id exhaustion uses the same declared number | M21 | Scope only | unverified |
-| Declaration above `max_action_growth` is a `debug_assert!` | M21 | not mentioned in any brief | uncovered |
+| Check is host only, before `apply`; never for `on_player`, `genesis`, `migrate`, tick rules or a predicting client | M21, M21b, M24b, M25 | `full_world_still_accepts_join` (M21), `tick_rule_put_past_limit_is_applied` (M21b); `migrate`: M24b Planning decision 4; predicting client: M25 Non-scope | covered |
+| Id exhaustion uses the same declared number | M21 | `id_exhaustion_rejects_state_budget_full` (a `Growth::NONE` action passes with no ids left) | covered |
+| Declaration above `max_action_growth` is a `debug_assert!` | M21 | `over_max_declaration_panics_in_debug` | covered |
 | Audit: debug and test builds panic on under-declaration | M21 | `under_declared_growth_panics_in_debug`, `growth_declarations_are_honest` | covered |
-| Audit: release builds keep writes, bump `growth_violations`, warn | M21 | counter named under Provides; no test | unverified |
+| Audit: release builds keep writes, bump `growth_violations`, warn | M21 | `under_declared_growth_counts_in_release` | covered |
 | Determinism: verdict replays exactly and stays in the log | M21 | `budget_verdict_replays_identically` | covered |
 | Reference game declares `PlaceFurnace` = one entity, others `NONE` | M33, M33b, M34b | `reference_state_budget_full`, `reference_state_budget_full_shows_reason` | covered |
 | Consequences: second half of the scripted "state budget when full" test | M21, M34b | `full_world_rejects_place_accepts_remove_then_place` | covered |
-| Consequences: `add-action-type` skill gains the `growth` step | M21 | Context artifacts only; no criterion | unverified |
+| Consequences: `add-action-type` skill gains the `growth` step | M21 | M01 `context-artifacts` (the brief lists the skill step under Context artifacts; ruling: no per-brief criterion) | covered |
 
 ## ADR 0024: Planning amendments
 
@@ -894,13 +894,13 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | §1 streamed snapshot exports `sim_snapshot_begin/next` | M22 | `persist_snapshot_golden_bytes`, `snapshot_roundtrip_random_blocks`; criterion "ABI registry test includes the four new exports" | covered |
 | §2 truncation by `write(logKey, validPrefix)`; adapters accept `append` after `write` | M22, M22b, M23 | `storage_conformance_memory/fs/opfs`, `crash_mid_frame_truncates_and_resumes` | covered |
 | §2 segment rolls at 4 MiB when a periodic snapshot is written | M22b | `segment_rolls_at_snapshot_over_limit`, `prune_keeps_bases_and_latest_two` | covered |
-| §3a `SCHEMA_VERSION` also covers `G::Action` layout | M24b | author rule; skill line not listed in any brief's Context artifacts | unverified |
+| §3a `SCHEMA_VERSION` also covers `G::Action` layout | M24b | M24b Context artifacts now lists the `add-action-type` step and the rustdoc sentence on `Game::SCHEMA_VERSION`; M01 `context-artifacts` (the brief lists them under Context artifacts; ruling: no per-brief criterion) | covered |
 | §3b tail re-executed only on equal `SCHEMA_VERSION`, else dropped and counted | M24b | `schema_bump_runs_migrate`, `rules_only_change_direct_load_new_segment` | covered |
 | §3c undecodable tail record dropped, counted, warned | M24b | `undecodable_tail_action_is_dropped_and_counted` | covered |
 | §4 probe OPFS `move()`; slot-file fallback | M23 | criterion "Decision 3 outcome recorded"; `storage_conformance_opfs` in three engines | covered |
 | §5 `createWorldServer` returns `{ ready, accept, stop }`; `ready` rejects with `WorldLoadError` | M27 | criterion "return type and `HostServices.onFatal?` match 0024 §5"; `server/ready-rejects-on-corrupt-world`, `server/accept-before-ready-waits` | covered |
 | §5 `HostServices.onFatal`; server stops ticking, closes sockets, touches no file | M24, M27, M37 | `panic_in_tick_is_fatal_and_files_untouched`, `fatal: server onFatal stops world and closes sockets` | covered |
-| §5 decimal seed converted once to `HexU64` in `createSimHost` | M13 | Scope only; no named test | unverified |
+| §5 decimal seed converted once to `HexU64` in `createSimHost` | M13 | `simhost_seed_decimal_to_hex_u64` | covered |
 | §6 `Presence: Default`; 32-byte limit per encoded sample, oversize dropped and counted | M19 | `oversize_dropped`; `impl Presence for ()` compiles | covered |
 | §7a required `Game::anchor`, scope and occupancy routed by it | M12, M12b, M21 | `every_put_is_one_delta_with_scope`, `footprint_sets_every_overlapped_chunk` | covered |
 | §7b puts through `Authority` outside `G::tick` queue a wake; queue is sim state | M21b | `put_from_apply_wakes_same_tick`, `put_from_tick_does_not_self_wake`, `wake_dedup_and_order`, `timers_survive_encode_decode` | covered |
@@ -938,33 +938,33 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | skill `bump-schema` (conditional, not named by 0021) | M24b, only if the procedure is performed | none; optional by 0021 §4 | n/a |
 | rule `.claude/rules/determinism.md` | M02 (globs extended M12, M20, M22) | M02 has no criterion; M05 exit "`determinism.md` names `Codec`, `ByteSink` and `decode_canonical` and is under 40 lines" | covered |
 | rule `.claude/rules/hot-paths.md` | M02 (extended M04, M06, M07, M08b, M29) | M02 has no criterion; M06 exit "`hot-paths.md` globs cover ..." | covered |
-| rule `.claude/rules/prediction.md` | M25 (extended M26) | Context artifacts only | unverified |
+| rule `.claude/rules/prediction.md` | M25 (extended M26) | M01 `context-artifacts` (the brief lists the file under Context artifacts; ruling: no per-brief criterion); the test also requires `paths:` and matching globs | covered |
 | root `CLAUDE.md`: commands line, map rows, alias caution | M01, M39b | M01 exit (map update, cap, no import); M39b exit (map matches files) | covered |
-| root `CLAUDE.md`: one line per global invariant linking `determinism.md`, `hot-paths.md` (0021 §1) | none | none | uncovered |
+| root `CLAUDE.md`: one line per global invariant linking `determinism.md`, `hot-paths.md` (0021 §1) | M02 | M02 exit; `context-artifacts` (M01) | covered |
 | `packages/engine/CLAUDE.md` | M01 (updated by most engine milestones) | M01 exit "both nested `CLAUDE.md` files" | covered |
 | `packages/engine/crates/engine/CLAUDE.md` | M01 | M01 exit, same criterion | covered |
-| `packages/engine/fixtures/worldgen/CLAUDE.md` | M08 | Context artifacts only | unverified |
-| `packages/engine/fixtures/CLAUDE.md` | M12b (line added M21b) | Context artifacts only | unverified |
-| `packages/engine/src/CLAUDE.md` | M13 (updated M15b, M16) | Context artifacts only | unverified |
-| `packages/engine/crates/engine/src/wire/CLAUDE.md` | M14 | Context artifacts only (the brief makes it the home of the id tables) | unverified |
-| `games/reference/CLAUDE.md` | M20 (updated M20b, M32–M34c, M36, M37) | Context artifacts only | unverified |
-| `packages/engine/crates/engine/src/persist/CLAUDE.md` | M22 (updated M22b, M24b) | Context artifacts only | unverified |
-| `packages/engine/src/storage/CLAUDE.md` | M22b (extended M23) | Context artifacts only | unverified |
-| `packages/engine/src/host/CLAUDE.md` | M24 | Context artifacts only | unverified |
-| `packages/engine/tests/netcode/CLAUDE.md` | M27 (updated M28, M28b, M31, M31b) | Context artifacts only | unverified |
-| `games/reference-server/CLAUDE.md` | M29 (updated M34, M35b) | Context artifacts only | unverified |
+| `packages/engine/fixtures/worldgen/CLAUDE.md` | M08 | `context-artifacts` (M01) through `pnpm test`; listed under M08 Context artifacts | covered |
+| `packages/engine/fixtures/CLAUDE.md` | M12b (line added M21b) | `context-artifacts` (M01) through `pnpm test`; listed under M12b Context artifacts | covered |
+| `packages/engine/src/CLAUDE.md` | M13 (updated M15b, M16) | `context-artifacts` (M01) through `pnpm test`; listed under M13 Context artifacts | covered |
+| `packages/engine/crates/engine/src/wire/CLAUDE.md` | M14 | `context-artifacts` (M01) through `pnpm test`; listed under M14 Context artifacts (its own cap is 30 lines) | covered |
+| `games/reference/CLAUDE.md` | M20 (updated M20b, M32–M34c, M36, M37) | M01 `context-artifacts` (the brief lists the file under Context artifacts; ruling: no per-brief criterion) | covered |
+| `packages/engine/crates/engine/src/persist/CLAUDE.md` | M22 (updated M22b, M24b) | M01 `context-artifacts` (the brief lists the file under Context artifacts; ruling: no per-brief criterion) | covered |
+| `packages/engine/src/storage/CLAUDE.md` | M22b (extended M23) | M01 `context-artifacts` (the brief lists the file under Context artifacts; ruling: no per-brief criterion) | covered |
+| `packages/engine/src/host/CLAUDE.md` | M24 | M01 `context-artifacts` (the brief lists the file under Context artifacts; ruling: no per-brief criterion) | covered |
+| `packages/engine/tests/netcode/CLAUDE.md` | M27 (updated M28, M28b, M31, M31b) | M01 `context-artifacts` (the brief lists the file under Context artifacts; ruling: no per-brief criterion) | covered |
+| `games/reference-server/CLAUDE.md` | M29 (updated M34, M35b) | M01 `context-artifacts` (the brief lists the file under Context artifacts; ruling: no per-brief criterion) | covered |
 | `games/reference-server-do/CLAUDE.md` (conditional on the DO go decision) | M38 | none; exists only if the package stays | n/a |
 
 ## Budgets (PRE-PLAN §7)
 
 | Budget row | Milestone(s) | Exit criterion or test | Status |
 |---|---|---|---|
-| Frame time, phone: main rAF callback share | M09b, M18, M39 (device) | device checks measure rAF interval and GPU latency only (`M09b-fill-rate`); no check reads the main callback share | unverified |
+| Frame time, phone: main rAF callback share | M09b, M36 (bench HUD), M39 (device) | device check `M39-frame-shares` (`main p95` on M36's bench HUD); M39 exit criterion that the M39 section is run | covered |
 | Frame time, phone: GPU share | M09b, M18 | device check `M09b-fill-rate`, `M18-fill-rate-with-anchors` (M09b and M18 exit: device-checks section matches) | covered |
-| Frame time, phone: client-worker `frame` share | none on a phone | desktop proxy only; no device check reads the worker share | unverified |
+| Frame time, phone: client-worker `frame` share | M36 (bench HUD), M39 (device) | device check `M39-frame-shares` (`frame p95`) | covered |
 | Frame time, desktop proxy (main and worker) | M17b, M18, M36, M37b | M17b exit "`pnpm bench:frame` meets the desktop proxy"; `bench.frame_worstcase`; M36 `bench.frame_reference` with baseline | covered |
 | Tick time, slowest host: Fly shared-cpu-1x | M38 | M38 exit "Deviations holds the results table ... tick p50/p99 under 8 clients"; verdict in M39 budgets ledger | covered |
-| Tick time, slowest host: phone sim worker | none | no device check reads tick milliseconds (`M39-large-save` passes on grows and reload only) | unverified |
+| Tick time, slowest host: phone sim worker | M36 (bench HUD), M39 (device) | device check `M39-large-save` (`tick p95` on the bench HUD) | covered |
 | Tick time, desktop proxy on the standard large save | M36 (guards: M21b, M33b) | M36 exit "`slow_tick_large_save` meets the 0010 desktop proxy"; `idle_world_visits_zero_entities`, `idle_furnaces_cost_nothing` | covered |
 | Chunk generation, per chunk on the phone | M08 | device check `M08-worldgen-ms-per-chunk`, `M08-warn-threshold` | covered |
 | Chunk generation, desktop warn threshold | M08, M36 | M08 exit "`pnpm test:slow wasm -t worldgen-bench` prints ms per chunk"; `worldgenMsPerChunkWarn`; M36 `baselines/worldgen.json` | covered |
@@ -977,17 +977,17 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | Bandwidth steady, soft cap for tick frames | M31 | `rates/degrade-on-stall`, `rates/deltas-collapse-to-snapshot` | covered |
 | Bandwidth burst, chunk token bucket (refill and burst) | M31 | `rates/bucket-refill-exact`, `rates/join-dense-visible-first`, `rates/join-wilderness` | covered |
 | Bandwidth burst, hard ceiling | M31 | `rates/hard-ceiling` | covered |
-| Bandwidth burst, megabytes per hour of play | none | none | uncovered |
+| Bandwidth burst, megabytes per hour of play | M34c | `reference_bytes_and_mispredictions_in_budget` (projected `net.bytesPerHour` ceiling in `budgets.json`) | covered |
 | Bandwidth burst, reconnect cost | M28b | M28b exit "`reconnect/cost` asserts `reconnectBytesUp/Down`" | covered |
 | Action rate, sustained and burst | M31 | `rates/action-rate-limited` | covered |
 | Log bytes per logged action | M22 | `bytes_per_logged_action`; M22 exit "`budgets.json` has `logBytesPerAction`" | covered |
-| Log bytes per active player-hour | none | none | uncovered |
+| Log bytes per active player-hour | M34b | `reference_golden_replay` (projected `logBytesPerPlayerHour` ceiling in `budgets.json`) | covered |
 | Memory per instance, arena sizes | M06b, M08b, M17 | `workers.spawn_local` (`W_MEM_PAGES`), `arena.sum_rule`, `start.arena_config_rejected` | covered |
 | Memory per instance, mobile ceiling | M11 | device check `M11-memory` | covered |
 | Memory per instance, world budget (entities, modified tiles) | M21, M36 | `init_rejects_budget_over_arena`, `full_world_rejects_place_accepts_remove_then_place`; M36 exit "builder's native test proves the §9 counts"; `mem.simHighWaterLargeSave` | covered |
 | Memory per instance, dense cache | M07 | `cache_events_report_slots` (exact `memory_bytes()`) | covered |
 | Memory, whole tab on the phone | M11, M16, M39 | device checks `M11-memory`, `M16-coexist`, `M39-large-save` | covered |
-| Memory, GPU (page, instances, art) | M09, M17b | Budgets prose only; no counter or assertion | unverified |
+| Memory, GPU (page, instances, art) | M09, M17b | `counters.gpu_bytes_within_budget` against `counters["render.gpuBytes"]` (M17b exit names the key) | covered |
 | Memory, SABs | M06 | `layout.sab_total_under_budget` | covered |
 | Download, game `.wasm` | M35 | M35 exit "`pnpm test:slow wasm -t size`"; `size @slow` | covered |
 | Download, engine JS | M35 (M35b adapters counted) | `size @slow` | covered |
@@ -1017,7 +1017,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | `SaveIncompatible` | M24b, M34b, M37 | `save_incompatible_rejects_ready_and_export_still_works`; `reference_save_incompatible_leaves_files`; audit `engine event surface` | covered |
 | `WorldBusy` | M23, M34b, M37 | `second_tab_gets_world_busy`, `reference_world_busy_second_tab`; audit | covered |
 | `durable: false` (`client.onStorage`) | M23, M37 | `no_opfs_falls_back_durable_false`; audit | covered |
-| storage estimate (`persisted`, `usage`, `quota`) | M23, M37 | M23 Scope defines `StorageStatus`; no named test reads the estimate fields; M37 audit type-asserts the member only | unverified |
+| storage estimate (`persisted`, `usage`, `quota`) | M23, M37 | `storage_status_reports_estimate` (M23); M37 audit type-asserts the member | covered |
 | `Resyncing` (`client.onResyncing`) | M28b, M37 | `reconnect/panic-recovery-resync`; `trap: client instance recovers and resyncs`; audit | covered |
 | `onFatal` (browser) | M24, M37 | `panic_in_tick_is_fatal_and_files_untouched`; `fatal: two client traps`, `fatal: storage error` | covered |
 | `onFatal` (server, `HostServices.onFatal?`, 0024 §5) | M27, M37 | M27 exit (type-asserted); `fatal: server onFatal stops world and closes sockets` | covered |
@@ -1028,7 +1028,7 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 | server `onIdle` | M28b, M29 | `lifecycle/idle-stops-ticks-then-onidle`; `reference-server/smoke` | covered |
 | beyond the sketch: `client.onLink` states incl. `superseded` | M29, M37 | `mp/reconnect`, `mp/superseded`; audit | covered |
 | beyond the sketch: `EngineFault` and `Lost` action results | M24, M28b | `skipped_action_acked_engine_fault`; `reconnect/lost-ack-reports-lost` | covered |
-| beyond the sketch: `client.onDesync` | M31b (report), M37 (surface) | host and client report: `integrity/corrupt-chunk-heals`; the TS callback has no named behaviour test in M37 | unverified |
+| beyond the sketch: `client.onDesync` | M31b (report), M37 (surface) | `integrity/corrupt-chunk-heals` (report); `desync: onDesync fires once per report` (M37) | covered |
 | beyond the sketch: reconnect indicator delay | M34 (Scope), M29 (device) | device check `M29-play-through-drop`; no automated test | covered |
 | beyond the sketch: `SimHost.onRecovered` | M24, M24b | `recovery_fires_onRecovered_once`; `rules_only_change_direct_load_new_segment` (`'upgrade'`) | covered |
 | beyond the sketch: `onLog`, `EngineTrap`, `EngineStartError` | M03, M06b | `wiring.spec.ts` (log line, panic as `EngineTrap`); `start.not_isolated_error`, `start.worker_blocked_error`, `start.arena_config_rejected` | covered |
@@ -1040,90 +1040,3 @@ Every decision of ADRs 0001 to 0024 (judged against the amendments of 0022, 0023
 
 Each line: item | status | owner milestone | proposed exit criterion. A milestone that closes a line edits the row above and deletes the line here.
 
-- ADR 0002 §2 no std transcendentals (lint) | unverified | M02 | Temporarily adding `f32::sin` to `fx-hash` makes `pnpm lint` fail naming `clippy::disallowed_methods` (check, then revert).
-- ADR 0002 §2 `libm` pinned with `=` | uncovered | M02 | A `unit` test scans every `Cargo.toml` in the workspace and fails on a `libm` requirement that does not start with `=`.
-- ADR 0002 §2 no `usize`/`isize` in hashed or serialized state | unverified | M05 | `.claude/rules/determinism.md` states the `usize` rule, and a source-scan test finds no `usize`/`isize` field in a type deriving `Serialize` under `crates/engine/src/{store,world,persist}`.
-- ADR 0002 §3 lint bans for engine and game crates | unverified | M02 | Temporarily adding a `HashMap` field and `std::time::Instant` to `fx-hash` makes `pnpm lint` fail naming `clippy::disallowed_types` (check, then revert); `clippy.toml` lists match 0002 §3.
-- ADR 0003 TS-facing types avoid `u64` | unverified | M16 | `grep -r bigint packages/engine/fixtures/*/bindings` is empty (repeated for `games/reference/src/bindings` in M20).
-- ADR 0003 `serde_json` feature set | unverified | M02 | `cargo tree -p engine --target wasm32-unknown-unknown -e features` shows `serde_json` with `alloc` and without `std`.
-- ADR 0004 soft budget for `on_player`, `genesis`, tick writes | unverified | M21 | Test `full_world_still_accepts_join_and_tick_writes`: at zero headroom a `Joined` event and a tick-rule put both apply and replay identically.
-- ADR 0004 rate limit overridable per game | unverified | M31 | `rates/action-rate-limited` runs at the default and with `WorldConfig.actionRate` overridden, asserting the limit moves.
-- ADR 0005 Cadence, snapshot on server shutdown signal | unverified | M29 | `reference-server/sigterm-snapshots` : SIGTERM makes the server await `stop()`, exit 0, and a reopen resumes at the same tick and hash.
-- ADR 0005 Browser `persist()` and storage estimate | unverified | M23 | Test `storage_status_reports_estimate`: `client.onStorage` delivers `{ durable, persisted, usage, quota }` at load and `navigator.storage.persist` is called exactly once after the first gesture on a created world.
-- ADR 0005 Panic recovery 4, failed `memory.grow` | unverified | M24 | Test `alloc_failure_in_tick_is_fatal_and_files_untouched` (`panicky` fixture exhausts its arena): `onFatal` fires and storage is byte-equal.
-- ADR 0006 `hz()` range compile error and `DT` | unverified | M12b | Tests added names the compile-fail doc test `tickrate_hz_out_of_range` and `dt_is_reciprocal`, and the Rust suite runs doc tests.
-- ADR 0007 §3 chunk size recorded in world params | uncovered | M24b (identity fields from M22) | `identity_compare_matrix` has a case where stored `CHUNK_BITS` differs from the build and the load returns `SaveIncompatible` with files untouched.
-- ADR 0007 §8 nominal costs fixed by the engine (128 B / 12 B) | unverified | M21 | `nominal_costs_are_constants`: headroom for the undeclared path equals `(max − count) × 128` and `× 12` for a fixture whose `size_of::<Entity>()` is not 128.
-- ADR 0007 §8 tick-rule writes never refused, budget soft by the margin | unverified | M21b | `tick_rule_put_past_limit_is_applied`: with `max_entities` reached a `TickCx` spawn succeeds, the count exceeds the limit, the next growing action is rejected and a `Growth::NONE` action passes.
-- ADR 0009 no `permessage-deflate` | unverified | M29 | `ws/deflate-refused`: `attachWebSocketServer` given a server with `perMessageDeflate` on throws the readable error; the negotiated extensions of `ws/join-converges` are empty.
-- ADR 0009 / 0024 §5 seed decimal text converted once to `HexU64` | unverified | M13 | TS unit `simhost_seed_decimal_to_hex_u64`: seed `"18446744073709551615"` reaches the instance config as `"0xffffffffffffffff"`; non-decimal text is a config error.
-- ADR 0010 Rates: tick-rate constant limited to 10 to 60 | uncovered | M12b (`Ticks`) | `tick_rate_out_of_range_fails_init`: a fixture game with `TICK_RATE` 5 or 61 fails at init (or at compile time) with a readable message.
-- ADR 0010 Rates: at least one uplink batch per 1 s | unverified | M15 | `uplink_keepalive_batch_every_1s`: an idle client with no camera change emits exactly one batch per second carrying `last_received_tick`.
-- ADR 0010 tick overrun counted and reported | unverified | M13 | `simhost_counts_tick_overrun`: a fake clock makes one tick exceed the interval; `counters.tickOverruns == 1` and sim time falls behind by the dropped amount.
-- ADR 0010 camera report on quantized change with leading and trailing sends | unverified | M15 | `camera_report_on_change_leading_and_trailing`: sub-tile motion sends nothing, motion start sends at once, rest sends one final report with zero velocity.
-- ADR 0010 clamps in `Welcome` drive the client zoom-out clamp | unverified | M28 | netcode or browser test `handshake/welcome-view-clamp-limits-zoom`: a server with `view.maxTilesPerAxis = 128` yields a client camera that cannot zoom past 128 tiles per axis.
-- ADR 0011 moving entity enters / leaves a client's subscription (full state, `EntityGone`) | unverified | M21 | loopback `moved_entity_enters_and_leaves_subscription`: moving a machine into a subscribed chunk delivers one `EntityPut`, moving it out delivers `EntityGone`, replica hash equals host region hash.
-- ADR 0012 pending queue capacity 32, dispatch fails locally when full | unverified | M16 (M25 inherits) | TS unit / WASM test `dispatch_when_queue_full_fails_locally`: the 33rd unacked dispatch fails without sending and the next ack frees a slot.
-- ADR 0012 moving entities share the interpolation buffer and path | unverified | M30 | `interp_entity_key_same_path`: samples pushed under `InterpKey::Entity` interpolate identically to `InterpKey::Player`; or record the deferral (no v1 moving entity) in the deferred ledger with an owner.
-- ADR 0013 Join key in the invite link URL fragment | unverified | M29 | `unit` test `readInvite: parses #k= and ignores unknown parameters`, and `mp/two-pages` joins through an invite URL.
-- ADR 0013 Reconnect: `Global` and `Player` always resent | unverified | M28b | `reconnect/resume-keeps-unchanged-chunks` asserts the first frame after a resume carries the `Global` and own-`Player` sections even when every chunk is kept.
-- ADR 0013 Client policy: probe on `visible` / `online` with 1 s deadline | unverified | M28 | netcode test `liveness/probe-on-visible` (virtual clock: `probe()` on a silently dead link redials within 1 s instead of waiting out the 3 s timer; a live link is left alone).
-- ADR 0014 §2 numbers only (no `i64`, multi-value, `externref`) | unverified | M02 | `abi registry` also parses each fixture's type section and fails on any export or import with an `i64`, `externref` or more than one result.
-- ADR 0014 §3 `log` compiled out below `warn` in release | uncovered | M35 | slow test `release module drops info logs`: a `release-names` build contains no `info`/`debug` log string from a fixture that logs at every level, and `onLog` never fires below `warn`.
-- ADR 0014 §3 memory exported, not imported | unverified | M02 | `import allowlist` asserts `Module.exports` contains `memory` of kind `memory` and that no import has kind `memory`.
-- ADR 0014 §5 wrong-role export traps in debug | unverified | M02 | Record under Planning decisions that the status return holds on every profile (one line in the measured-profiles ADR), or add `loader: wrong-role traps when debug_assertions` to match.
-- ADR 0015 §1 main thread never instantiates WASM | unverified | M35 | `exports-map` asserts `dist/client.js` and its static imports never reference `loader.js` or `WebAssembly.instantiate`.
-- ADR 0015 §2 no `Atomics.waitAsync`; main never blocks | unverified | M06 | extend `sab.no_alloc_syntax` to fail on `waitAsync` anywhere in `src/` and on `Atomics.wait(` in any module reachable from `client.ts`.
-- ADR 0015 §5 module declares no memory `maximum` | uncovered | M02 | `import allowlist` parses each fixture's memory section and fails if a `maximum` is declared.
-- ADR 0015 §5 exhaustion policy: dev traps with a message, release grows in 16 MiB steps to the ceiling, failed grow is a panic | uncovered | M02 (dev trap) and M35 (release steps) | `loader: arena exhaustion traps with message` on the dev profile; slow test `release growth steps 16 MiB and counts` asserts `memoryBytes()` deltas and `memGrows()`.
-- ADR 0015 Consequences / ADR 0017 §6 hosting limits and header recipes in the reference game's README | unverified | M38 | "`games/reference/README.md` has a Hosting section with the `_headers` listing used by `check-coi.mjs` and the GitHub Pages / third-party content limits."
-- ADR 0016 caveat a: `Tracing.start` stall is a named warning, not a failure | unverified | M04 | `unit` test `gc verdict: tracing stall is a warning` (a measure result with a slow `Tracing.start` yields a `gc-tracing-start-stall` warning and a passing verdict).
-- ADR 0017 §1 in-repo game path-depends on the crate directly | unverified | M20 | `reference_package_depends_only_on_engine` also asserts `sim/Cargo.toml` has `engine = { path = "../../../packages/engine/crates/engine" }` and `package.json` uses `workspace:*`.
-- ADR 0017 §4 default profile by Vite command | unverified | M02b | `plugin-build: default profile is release` and `plugin-dev: default profile is dev` (read `game.json.profile` with no `profile` option).
-- ADR 0017 §7 engine crate runtime dependency set | uncovered | M35 | `unit` test `crate dependency allowlist`: `[dependencies]` of `crates/engine/Cargo.toml` equals the 0017 §7 list (plus any added by ADR), with `postcard` `default-features = false`.
-- ADR 0018 §1 `GPUTexture`-as-view startup probe | unverified | M09 | `device.view_probe_both_paths`: with the probe forced true and false the terrain probes pass with no `uncapturederror`, and the chosen path is reported in `adapter.info` output.
-- ADR 0018 §2 `pick_id` not bound as a vertex attribute | uncovered | M17 | unit test `uberquad.vertex_layout_has_no_pick_id` scans the pipeline's vertex buffer layout (7 attributes, 28 of 32 bytes).
-- ADR 0018 §3 camera snaps to device pixels at rest, no zoom snapping | unverified | M11 | `camera.snaps_to_device_px_at_rest_only`: centre is a multiple of 1/(px per tile x dpr) when velocity is zero and unsnapped while moving.
-- ADR 0018 §6 `FrameView.zoom` | unverified | M17 | `frameview.zoom_matches_camera_block`: fixture `extract` skips a drawable below a zoom threshold and the DrawList hash changes accordingly.
-- ADR 0018 §8 render scale default `min(DPR, 2)` and per-game override | unverified | M09b | `viewport.render_scale_caps_at_2`: DPR 3 gives a canvas of 2x CSS size; `render.scale: 1` gives 1x.
-- ADR 0019 §1 camera clamped to the host view clamp from `Welcome` | unverified | M28 | browser or headless test `handshake/welcome-view-clamp-limits-camera`: a `Welcome` with a 128-tile clamp stops zoom-out at 128.
-- ADR 0019 §2 camera reporting stops while hidden | uncovered | M15b | `hidden_tab_sends_no_camera_report`: after `setVisibility('hidden')` `netCounters` uplink camera bytes stay 0 and the subscription set is unchanged.
-- ADR 0019 §3/§4 pointer capture | uncovered | M11 | `input.drag_survives_passing_under_widget`: a real-DOM drag that crosses a `pointer-events: auto` element keeps panning until `pointerup`.
-- ADR 0019 §3 macOS Safari `gesturechange` pinch | uncovered | M11 | unit test `camera.gesturechange_scale_zooms_about_cursor` on an injected gesture event, plus one desktop Safari line in `device-checks.md`.
-- ADR 0019 §3 WASD behaviour | unverified | M11 | `camera.wasd_speed_scales_with_extent`: same fraction of the view per second at 12 and 256 tiles, keyed by `event.code`.
-- ADR 0019 §4 tool-mode drag events | unverified | M11 | `semantic.tool_mode_drag_events`: after `setMode('tool')` a one-pointer drag emits dragstart/drag/dragend and does not pan; two pointers still pan and zoom.
-- ADR 0020 §10 `DEVELOPER_DIR` export | unverified | M01 | unit test `toolEnv: sets DEVELOPER_DIR on darwin only when unset`.
-- ADR 0022 §2 id exhaustion rejects with `StateBudgetFull` | unverified | M21 | `id_exhaustion_rejects_state_budget_full` with `next_entity_id` set near 2^31 through the testkit.
-- ADR 0022 §2 tick-rule spawn with no id left is an engine fault | uncovered | M21 | `tick_spawn_without_ids_is_engine_fault` (`#[should_panic]` or fatal status) in the same test file.
-- ADR 0022 Consequences skill rule "address by tile" | unverified | M25 | criterion: `add-action-type` skill contains the address-by-tile step (grep).
-- ADR 0023 check scope (never for `on_player`, `genesis`, `migrate`, tick rules) | unverified | M21 | `full_world_still_accepts_join_and_tick_puts`: at a full budget `on_player(Joined)` and a tick-rule put both succeed.
-- ADR 0023 id exhaustion uses the declared number | unverified | M21 | fold into `id_exhaustion_rejects_state_budget_full`: a `NONE` action passes with zero ids left.
-- ADR 0023 declaration above `max_action_growth` debug-asserts | uncovered | M21 | `over_max_declaration_panics_in_debug` (`#[should_panic]`).
-- ADR 0023 release audit bumps `growth_violations` | unverified | M21 | `under_declared_growth_counts_in_release`: with the audit in release mode (test cfg switch) the counter reads 1 and the hash equals the debug-off run.
-- ADR 0023 Consequences skill step "declare `growth`" | unverified | M21 | criterion: `add-action-type` skill contains the `growth` step (grep).
-- ADR 0024 §3a `SCHEMA_VERSION` covers `G::Action` | unverified | M24b | criterion: `add-action-type` skill (and `bump-schema` if created) states "action layout change = `SCHEMA_VERSION` bump"; rustdoc on `SCHEMA_VERSION` says the same.
-- ADR 0024 §5 decimal seed to `HexU64` conversion | unverified | M13 | unit test `simhost_seed_decimal_to_hex`: `"18446744073709551615"` becomes `"0xffffffffffffffff"`, non-decimal text is a config error.
-- 0021 §1 root `CLAUDE.md` one-line invariants linking rule files | uncovered | M02 (creates both rule files; M25 adds the prediction line) | Root `CLAUDE.md` has one line each for determinism and hot paths that names `.claude/rules/<file>.md` in backticks, and is still within its cap.
-- 0021 §1 nested `CLAUDE.md` per package, ~60-line cap | unverified | M01 (mechanism), each creating milestone | `unit` test `context: nested CLAUDE.md files` lists every directory with a `package.json` or `Cargo.toml` outside fixtures and fails if it has no `CLAUDE.md` in itself or an ancestor package, or if any nested `CLAUDE.md` exceeds 60 lines.
-- 0021 §1 no rule file without `paths:` | unverified | M02 | `unit` test `context: rules have paths` fails on any `.claude/rules/*.md` without `paths:` frontmatter.
-- 0021 Consequences rule globs follow the layout | unverified | M02 (test), M07/M08b/M12/M20/M22/M29 (globs) | same test asserts every `paths:` glob matches at least one tracked file; each glob-extending brief names the glob in an exit criterion.
-- Artifacts `.claude/rules/prediction.md` | unverified | M25 | `.claude/rules/prediction.md` exists with `paths:` covering the `predict` module and `fixtures/predict/`, under 40 lines.
-- Artifacts root `CLAUDE.md` invariant lines | uncovered | M02 | as the first gap.
-- Artifacts `packages/engine/fixtures/worldgen/CLAUDE.md` | unverified | M08 | file exists and names the bless command.
-- Artifacts `packages/engine/fixtures/CLAUDE.md` | unverified | M12b | file exists with one line per fixture crate present in `fixtures/`.
-- Artifacts `packages/engine/src/CLAUDE.md` | unverified | M13 | file exists and states the no-`node:`/no-DOM rule for the sim host.
-- Artifacts `crates/engine/src/wire/CLAUDE.md` | unverified | M14 | file exists, holds the section and tag id tables, is at most 30 lines.
-- Artifacts `games/reference/CLAUDE.md` | unverified | M20 | file exists, under 60 lines, and its commands were each run once.
-- Artifacts `crates/engine/src/persist/CLAUDE.md` | unverified | M22 | file exists, at most 20 lines, and `determinism.md` globs match `src/persist/**`.
-- Artifacts `packages/engine/src/storage/CLAUDE.md` | unverified | M22b | file exists, at most 15 lines, and names `runStorageConformance`.
-- Artifacts `packages/engine/src/host/CLAUDE.md` | unverified | M24 | file exists, at most 15 lines.
-- Artifacts `packages/engine/tests/netcode/CLAUDE.md` | unverified | M27 | file exists and the `run-tests` skill lists the `netcode` suite.
-- Artifacts `games/reference-server/CLAUDE.md` | unverified | M29 | file exists and its start command was run once.
-- Budgets frame time, phone main rAF share | unverified | M17b (HUD), M39 (device check) | device check `M39-frame-shares`: on the reference game's worst-case view the HUD's main-callback p95 is at or under the 0018 §9 phone figure.
-- Budgets frame time, phone client-worker share | unverified | M17b (HUD), M39 (device check) | same check: client-worker `frame` p95 at or under the 0018 §9 phone figure.
-- Budgets tick time, phone sim worker | unverified | M36 (HUD counter), M39 (device check) | `M39-large-save` also passes only if the HUD's tick p95 is at or under the 0010 tick budget.
-- Budgets bandwidth, megabytes per hour of play | uncovered | M34c | `reference_bytes_and_mispredictions_in_budget` projects bytes per client-hour from the scripted session and asserts a `net.bytesPerHour` ceiling.
-- Budgets log bytes per active player-hour | uncovered | M34b | the reference golden log asserts `logBytesPerPlayerHour` (log bytes / scripted player-ticks, scaled) against a `budgets.json` ceiling.
-- Budgets memory, GPU | unverified | M17b | `counters["render.gpuBytes"]` (page and indirection textures, instance buffer, atlas) has a `budgets.json` ceiling asserted on page `drawables`.
-- Events storage estimate | unverified | M23 | browser test `storage_status_reports_estimate`: `client.onStorage` fires at load with numeric `usage` and `quota` and a boolean `persisted`.
-- Events `client.onDesync` | unverified | M37 | browser or netcode test `desync: onDesync fires once per report` using M31b's corruption hook.

@@ -99,6 +99,12 @@ Phase 2 wrote one brief per milestone (`docs/plan/`). Turning each ADR into sign
 - Amendment: none yet. M30's scenario `extrapolation_ratio` measures `interpExtrapolatedFrames / interpRenderedFrames` at the median network profile. Above **0.2**, M30 records a Deviation and a new ADR supersedes the 0010 row with the presence sample interval as the formula's interval term. At or below 0.2 the row stands. No silent tuning.
 - Implemented in: M30.
 
+**16. 0014 wrong-role calls do not trap in debug.**
+- Says: 0014 §5, an export called on an instance of the wrong role returns a status "(traps in debug)".
+- Why it cannot stand: the fast tier builds every fixture on the dev profile only ([0020](0020-testing-strategy.md)), a trap marks the instance dead, and the loader test for this path must run there and go on using the instance.
+- Amendment: a wrong-role call returns `Status::WrongRole` on every profile; there is no debug trap. The loader turns the status into a thrown error on the TS side, so the mistake is still loud.
+- Implemented in: M02 (`loader: wrong-role export returns WrongRole`).
+
 ## Alternatives rejected
 
 - **Rewrite the ADRs in place.** Against the repo rule; and parallel planning sessions were already citing the old text.

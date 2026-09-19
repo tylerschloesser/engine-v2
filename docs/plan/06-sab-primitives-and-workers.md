@@ -72,7 +72,7 @@ Workers, `createClient`, WASM-side copies, the Rust `CameraBlock` struct (M06b).
 
 ## Exit criteria
 - [ ] Every test above passes by name; `drops` and `torn` read 0.
-- [ ] No function in `src/sab/` or `src/camera/block.ts` contains `new`, a closure, an array or object literal, or `subarray` outside a constructor (checked by a small source-scan unit test, `sab.no_alloc_syntax`).
+- [ ] No function in `src/sab/` or `src/camera/block.ts` contains `new`, a closure, an array or object literal, or `subarray` outside a constructor (checked by a small source-scan unit test, `sab.no_alloc_syntax`). The same test fails on `waitAsync` anywhere under `packages/engine/src/` and on `Atomics.wait(` outside `sab/control.ts` (`waitForWake`) and `src/test/**` (0015 §2 Wake-ups); that main never reaches `waitForWake` is M06b's `main.no_wasm_instantiate`.
 - [ ] `.claude/rules/hot-paths.md` globs cover `src/sab/**` and `src/camera/**`.
 - [ ] `pnpm test` and `pnpm lint` are green.
 
@@ -84,7 +84,7 @@ Workers, `createClient`, WASM-side copies, the Rust `CameraBlock` struct (M06b).
 - Allocation per isolate: these functions must contribute 0 B; the measuring pages are M06b's `topology` and `echo`.
 
 ## Context artifacts
-- `.claude/rules/hot-paths.md` (created by M02, verification line added by M04): add the globs `packages/engine/src/sab/**`, `packages/engine/src/camera/**`, and, so that M06b, M09 and M11 find the rule on their first read, `packages/engine/src/worker/**`, `packages/engine/src/render/**`, `packages/engine/src/input/**`, `packages/engine/src/overlay/**`. Add the rules this code introduces: views, descriptors and event objects are created in constructors and mutated afterwards; no `subarray`, closures or literals on a per-frame, per-tick or per-message path; no `postMessage` in steady state.
+- `.claude/rules/hot-paths.md` (created by M02, verification line added by M04): add the globs `packages/engine/src/sab/**` and `packages/engine/src/camera/**`. Do not list a glob for a directory that does not exist yet (`src/worker/`, `src/render/`, `src/input/`, `src/overlay/`): M01's `context-artifacts` test fails on a glob that matches no file, M02's `packages/engine/src/**` already reaches those directories once they exist, and the root `CLAUDE.md` invariant line is the fallback for new files (0021 §1). Add the rules this code introduces: views, descriptors and event objects are created in constructors and mutated afterwards; no `subarray`, closures or literals on a per-frame, per-tick or per-message path; no `postMessage` in steady state.
 - `packages/engine/CLAUDE.md`: one line for `src/sab/` (which shape to use when: ring = reliable stream, seqlock = small latest-wins record, triple buffer = large latest-wins frame).
 
 ## Manual device checks

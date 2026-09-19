@@ -95,13 +95,14 @@ packages/engine/playwright.config.ts                        (project `gc`)
 
 ## Tests added
 - `browser` (project `gc`): `gc-loop clean`, `gc-loop neg object main`, `gc-loop neg object sim`, `gc-loop neg burst main`, `gc-loop neg burst sim`, `gc-loop neg post-message main<->sim`, `gc: flat transport parity`.
-- `unit`: `gc analyse: sums selfSize exactly`, `gc analyse: inclusive attribution under roots`, `gc analyse: GC events outside the marks are ignored`, `gc analyse: events are attributed to named isolates`, `gc verdict: software mode uses attributed bytes`, `budgets: every gc page lists main`.
+- `unit`: `gc analyse: sums selfSize exactly`, `gc analyse: inclusive attribution under roots`, `gc analyse: GC events outside the marks are ignored`, `gc analyse: events are attributed to named isolates`, `gc verdict: software mode uses attributed bytes`, `gc verdict: tracing stall is a warning` (0016 caveat a: a canned measure result whose `Tracing.start` took longer than the threshold yields a `gc-tracing-start-stall <ms>` warning and a passing verdict; one under it yields none), `budgets: every gc page lists main`.
 
 ## Exit criteria
 - [ ] `pnpm test browser -t gc-loop` passes: clean within budget on `main` and `sim` with zero GC events; every negative control's verdict matches 0016 §3.8 on the named isolate only.
 - [ ] Temporarily allocating `{}` per call inside `call0` in `src/loader.ts` makes `gc-loop clean` fail on `sim` with `call0` among the printed top allocation sites (check, then revert). This is the proof that the instrument sees engine code.
 - [ ] `gc: flat transport parity` passes, or the gap is recorded under Deviations with risk 11 left open.
 - [ ] `pnpm gc software -t "gc-loop clean"` passes.
+- [ ] `pnpm test unit -t "gc verdict"` runs both verdict tests and passes.
 - [ ] `pnpm gc reliability`: clean 50/50, each control 15/15; numbers recorded.
 - [ ] Added `browser` suite time recorded; the slowest `gc` test is under the browser p95 rule of 0020 §4.
 - [ ] `.claude/skills/gc-test/SKILL.md` exists; its commands were each run once in this session.

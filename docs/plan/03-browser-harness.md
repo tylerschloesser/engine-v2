@@ -32,6 +32,7 @@ packages/engine/src/clock.ts
 packages/engine/src/test.ts
 packages/engine/src/test/{manual-clock.ts, harness.ts, harness-worker.ts, step-block.ts, protocol.ts}
 packages/engine/src/test/manual-clock.test.ts               (unit tests sit beside the source: M01 decision (a))
+packages/engine/src/no-ambient-random.test.ts
 packages/engine/tests/browser/pages/{determinism.html, src/determinism.ts, src/wiring.ts (extended), src/stepping.ts, stepping.html}
 packages/engine/tests/browser/{wiring,stepping,determinism}.spec.ts
 packages/engine/tests/browser/support/page.ts
@@ -46,6 +47,7 @@ packages/engine/package.json (exports: add `./test`)
 - `interface Clock { now(): number }` (ms, monotonic).
 - `interface Scheduler { setTimer(cb: () => void, delayMs: number): number; clearTimer(id: number): void; requestFrame(cb: (tMs: number) => void): number; cancelFrame(id: number): void }`.
 - `systemClock`, `systemScheduler`: **the only file in `packages/engine/src/` (outside `src/test/`) allowed to name `Date`, `performance`, `setTimeout`, `setInterval`, `requestAnimationFrame`**; enforced by Biome `noRestrictedGlobals` with an override for this file, `src/test/**` and `tests/**`. Every later subsystem takes `{ clock, scheduler }` by injection (0020 §8). The sim worker's `Atomics.wait` timeout (0015 §2) is computed from `clock.now()`; M13 owns that.
+- Ambient randomness gets the same treatment (spec `testing.md`, "Everything random is seeded"). `Math.random` is a member, which `noRestrictedGlobals` cannot name, and banning the whole `crypto` global would also ban WebCrypto hashing (M28), so the equivalent lint is a `unit` source scan, `lint.no_ambient_random`, over `packages/engine/src/**` outside `src/test/**`: it fails on `Math.random`, `getRandomValues` and `randomUUID`. Its allowlist has one documented entry, `src/client/secret.ts`, the device-secret module M28 adds; no other entry without an ADR.
 
 **Provides (`engine/test`):**
 - `createManualClock(startMs = 0): ManualClock` where `ManualClock extends Clock, Scheduler` plus `advance(ms)` (fires due timers in `(deadline, id)` order) and `frame(dtMs)` (advances, then runs the frame callbacks registered so far exactly once).
@@ -86,7 +88,7 @@ Tyler approved the tunnel (Q7: it installs `cloudflared` and exposes the fixture
 7. Write `run-tests` from what was actually run.
 
 ## Tests added
-- `unit`: `manual clock: timers fire in deadline order`, `manual clock: frame runs callbacks once`, `manual clock: cancel`.
+- `unit`: `manual clock: timers fire in deadline order`, `manual clock: frame runs callbacks once`, `manual clock: cancel`, `lint.no_ambient_random` (`src/no-ambient-random.test.ts`; Seams).
 - `browser` / `wiring.spec.ts` (Chromium): `crossOriginIsolated` and `SharedArrayBuffer` on main and in the worker; `Atomics.wait` works in the worker; wasm `Content-Type` and hashed `/assets/*.wasm` URL from `virtual:engine/wasm`; `buildHash` equals `game.json`; ABI version matches; an `engine.log` line arrives through `onLog`; a deliberate panic (`panicAtTick`) surfaces as `EngineTrap` with the Rust message and the harness reports it in `errors()`.
 - `browser` / `stepping.spec.ts` (Chromium): 1,000 `stepTick()` in one task give the same hash as the scenario's checkpoint; `untilQuiescent()` resolves only after the last ack (assert `REQ === ACK` and `STATE === idle` at resolution); `park()` then `hash()` then `resume()` round-trips; `memGrows()` is 0.
 - `browser` / `determinism.spec.ts` `@engines`: every checkpoint in `golden/golden.json` (read in Node, not trusted from the page) equals the page's in Chromium, WebKit and Firefox; on mismatch the message names the first divergent checkpoint (0020 §5).
@@ -95,7 +97,7 @@ Tyler approved the tunnel (Q7: it installs `cloudflared` and exposes the fixture
 - [ ] `pnpm test browser` passes and prints one line; `pnpm test` runs five suites in parallel.
 - [ ] `pnpm test browser -t determinism` shows the golden reproduced in three engines (project names in the JSON report).
 - [ ] Editing one checkpoint in `golden/golden.json` by hand makes native, `wasm` and all three browser projects fail naming that checkpoint (check, then revert).
-- [ ] Adding `Date.now()` to `src/loader.ts` makes `pnpm lint` fail (check, then revert).
+- [ ] Adding `Date.now()` to `src/loader.ts` makes `pnpm lint` fail, and adding `Math.random()` there makes `pnpm test unit -t no_ambient_random` fail naming the file (check, then revert).
 - [ ] `grep -r "test/" packages/engine/dist/{loader,clock,vite,server-node}.js` finds no import of test code.
 - [ ] `pnpm device:serve` serves `determinism.html` showing PASS in a desktop browser.
 - [ ] `.claude/skills/run-tests/SKILL.md` exists and its commands were each run once in this session.
@@ -111,7 +113,7 @@ Tyler approved the tunnel (Q7: it installs `cloudflared` and exposes the fixture
 
 ## Context artifacts
 - `.claude/skills/run-tests/SKILL.md`: `pnpm test [suite] [-t pattern]`, suite names, reading `test-results/`, `pnpm golden`, running one Playwright project, `ENGINE_TEST_PORT`, browser install, when to use the `playwright-cli` skill for a look at a page (0020 §1), `pnpm device:serve`.
-- `packages/engine/CLAUDE.md`: the ambient-time rule in one line; how to add a browser spec and tag it.
+- `packages/engine/CLAUDE.md`: the ambient-time and ambient-randomness rules in one line; how to add a browser spec and tag it.
 
 ## Manual device checks
 [device-checks.md, M03: Determinism page](device-checks.md#m03-determinism-page). Not gating.

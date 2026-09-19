@@ -67,6 +67,7 @@ One package, one crate, plus repo-root tooling.
 - `scripts/setup-tools.mjs`: `export const TOOLS` (name, pinned version, probe command, install command). M02 adds Bun, M03 adds the Playwright browsers.
 - Conventions: the slow tag (Rust test function named `slow_*`; Vitest title containing `@slow`); test placement (Planning decisions (a)); `test-results/<suite>/` as the only artefact root.
 - `.claude/settings.json`, the commit hook, `write-adr`.
+- The `context-artifacts` test (`unit`): every later brief that creates a nested `CLAUDE.md`, a rule file or a skill lists it under Context artifacts and is checked by this test through `pnpm test`; a brief that creates a rule file also adds the rule's one-line invariant and link to root `CLAUDE.md` (0021 §1), which the same test requires.
 
 **Consumes:** nothing.
 
@@ -143,6 +144,8 @@ The lists are 0021 §7's; do not widen them. The file arrives in two parts: step
 - `packages/engine/crates/engine/tests/runner_control.rs`: `runner_negative_control` passes unless `RUNNER_SELF_CHECK=fail`, then fails with a fixed message. `scripts/lib/runner-control.test.mjs`: the same for Vitest. Both are permanent: they prove the failure path of each adapter, in the spirit of 0016's negative controls. M03 adds one for Playwright.
 - `scripts/lib/report.test.mjs`: `classifyBudget` (pass, warn, fail boundaries, scale), `formatSuiteLine`, `parseJunit` on a captured passing and failing report (entities unescaped, multi-line message), `parseVitestJson` on captured reports (pass, fail, all filtered out), `formatFailure` line cap.
 - `scripts/lib/pre-commit-check.test.mjs`: spawns the hook with stdin JSON for the step-2 cases; asserts exit 0 and empty output for non-commits, without running any tool.
+- `scripts/lib/env.test.mjs`: `toolEnv: sets DEVELOPER_DIR on darwin only when unset` (0020 §10). `toolEnv({ platform, env, exists } = defaults)` takes its three inputs as parameters so the test needs no real CommandLineTools directory: darwin + unset + directory present sets it; already set, other platform, or directory absent leaves `env` untouched.
+- `scripts/lib/context-artifacts.test.mjs`: `context-artifacts` (0021 §1, §4 and Consequences; permanent, and the only check later briefs need for the files they list under Context artifacts). Over `git ls-files --cached --others --exclude-standard`, outside `spikes/` and `docs/`: every nested `CLAUDE.md` is at most 60 lines; every `.claude/rules/*.md` has `paths:` frontmatter and each of its globs matches at least one listed file (a glob-to-regex of a dozen lines in the test: `**`, `*`, `{a,b}`; no dependency); every `.claude/skills/*/SKILL.md` has frontmatter with `name` and `description`; root `CLAUDE.md` is at most 60 lines and names every rule file as `.claude/rules/<file>.md`. With no rule files yet the rule clauses pass vacuously; M02 meets them first.
 
 ## Exit criteria
 - [ ] `pnpm install --frozen-lockfile` succeeds; `pnpm-lock.yaml` and `Cargo.lock` are committed; every devDependency is an exact version (no `^` or `~`; `grep -n '[\^~]' package.json` prints nothing), matching 0017 §10 where it has a row.
@@ -154,6 +157,7 @@ The lists are 0021 §7's; do not widen them. The file arrives in two parts: step
 - [ ] Hook, by pipe: `{"tool_name":"Bash","cwd":"<repo>","tool_input":{"command":"ls"}}` → exit 0 silently; `…"git add -A && git commit -m x"` → exit 0 on a clean tree, exit 2 with the fix command on stderr while the scratch files exist; the `time` line under Verification commands shows wall time on a clean tree under the 0021 §6 target.
 - [ ] `.claude/settings.json` parses (the `node -e` line under Verification commands exits 0); its top-level keys are exactly `permissions` and `hooks`, the allow and deny lists equal 0021 §7's, and the handler's keys (`type`, `if`, `command`, `args`, `timeout`) are the ones the hooks page documents; the hook criterion above passes against the committed script. Not checkable by command: note under Deviations that the next session start must be eyeballed for a settings warning (M02's session does this).
 - [ ] `write-adr` skill, both nested `CLAUDE.md` files and the root map update exist; root `CLAUDE.md` is within its line cap and has no `@` import.
+- [ ] `pnpm test unit -t context-artifacts` and `pnpm test unit -t toolEnv` each run at least one test and pass; a scratch 61-line `packages/engine/src/CLAUDE.md` makes `context-artifacts` fail naming the file (check, then remove it with `command rm -f`).
 - [ ] `git status` is clean after `pnpm test && pnpm lint` (artefacts are all gitignored).
 - [ ] `pnpm test` and `pnpm lint` are green.
 
@@ -178,7 +182,7 @@ PRE-PLAN §7 "Test suite" and "Dev loop" rows: M01 builds the mechanism that mea
 - `.claude/settings.json`, `.claude/hooks/pre-commit-check.sh`, `.claude/skills/write-adr/SKILL.md`.
 - `packages/engine/CLAUDE.md` (TS side): package commands (`build`, `typecheck`, `pnpm test unit`); `src/` → `dist/` by `tsc`, no bundler; zero runtime dependencies and tools at the root; where each suite's tests live (decision (a)); the `@slow` tag; "add an export subpath only with the file that backs it". Only what is true today; later milestones extend it.
 - `packages/engine/crates/engine/CLAUDE.md` (Rust side): the crate is a workspace member (profiles, lints and `clippy.toml` are at the repo root); unit vs `tests/` placement; the `slow_` prefix; `pnpm test rust -t <name>`; dependency policy is 0017 §7 (link, no list); the split triggers are in this brief until an ADR replaces them.
-- Root `CLAUDE.md`: replace "Nothing is built yet" with a Commands line (`pnpm setup:tools`, `pnpm test [suite] [-t pattern]`, `pnpm lint`, `pnpm format`); add map rows for `packages/engine/`, `scripts/` and `.claude/`; add one rule line for the `cp`/`mv`/`rm` alias caution (auto memory does not reach sub-agents, 0021 Context). No invariant lines yet: their rule files do not exist.
+- Root `CLAUDE.md`: replace "Nothing is built yet" with a Commands line (`pnpm setup:tools`, `pnpm test [suite] [-t pattern]`, `pnpm lint`, `pnpm format`); add map rows for `packages/engine/`, `scripts/` and `.claude/`; add one rule line for the `cp`/`mv`/`rm` alias caution (auto memory does not reach sub-agents, 0021 Context). No invariant lines yet: their rule files do not exist (M02 creates both and adds the two lines).
 
 ## Manual device checks
 None.

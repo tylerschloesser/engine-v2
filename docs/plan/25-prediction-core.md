@@ -87,7 +87,7 @@ WASM-under-Node suite: `predict_not_predictable_event`: dispatch at the subscrip
 - Frame time, client-worker `frame` share (0018 section 9): new deterministic counter `predict_replays_per_frame` with a `budgets.json` ceiling equal to the pending-queue capacity.
 
 ## Context artifacts
-New `.claude/rules/prediction.md` with `paths:` covering the `predict` module and `fixtures/predict/`: validate first and write after; `?` on every read; never encode a provisional id; statuses are hints. Update the `add-action-type` skill with the address-by-tile rule.
+Add a one-line invariant linking the rule to root `CLAUDE.md` (0021 §1; M01's `context-artifacts` test requires it). New `.claude/rules/prediction.md` with `paths:` covering the `predict` module and `fixtures/predict/`: validate first and write after; `?` on every read; never encode a provisional id; statuses are hints. Update the `add-action-type` skill with the address-by-tile rule.
 
 ## Manual device checks
 none

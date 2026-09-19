@@ -17,6 +17,7 @@ The `migrate` signature is in code from M12 (`Game::migrate`, default `Err(SaveI
 ## Scope
 - Rust: `OldStore`, `Migrating` (the `WorldWrite` implementor handed to `migrate`), `Rescale` + `RescaleTicks`, `SaveIncompatible`, identity comparison with a reason code, engine-side carry-over of game-type-free state.
 - ABI + host: the upgrade sequence of 0005 Upgrades on top of M22b's `WorldLoadError { kind: 'identity' }`; manifest updates; the `SaveIncompatible` report on server and client.
+- Chunk size recorded in the world params (0007 §3): `Persistence.create` writes the build's `CHUNK_BITS` as `ManifestV1.params.chunkBits` (the manifest is M22's); `Persistence.open` compares it with the running build before any load and a difference is `'incompatible'` with reason `ChunkSize`, no write. No migration path: overlay and occupancy keys are chunk-relative.
 - Fixture games `migrate-v1`, `migrate-v2`, `migrate-v2-hz30`.
 
 ## Non-scope
@@ -33,7 +34,7 @@ A `migrate` for the reference game (not planned; M32–M34 may add one only if T
   - `pub struct SaveIncompatible;` (unit, as the M12 signature already assumes).
   - `OldStore` (decision 1): `schema() -> u32`, `tick_rate_hz() -> u32`, `tick() -> Tick`, `rescale() -> Rescale`, `global<T: DeserializeOwned>() -> Result<T, SaveIncompatible>`, `drain_players() -> impl Iterator<Item = OldValue<PlayerId>>`, `drain_entities() -> impl Iterator<Item = OldValue<EntityId>>`, `drain_tiles() -> impl Iterator<Item = (TilePos, Tile)>`, `carry_tiles(&mut self, w: &mut dyn WorldWrite<G>)`; `OldValue<K> { pub key: K, .. }` with `decode<T: DeserializeOwned>() -> Result<T, SaveIncompatible>`. All iteration is in key order.
   - `Rescale { ticks(Ticks) -> Ticks, deadline(Tick) -> Tick, is_identity() -> bool }` and `trait RescaleTicks { fn rescale(&mut self, r: &Rescale); }` implemented for `Tick`, `Ticks`, `Option<T>`, `[T; N]` (decision 2).
-- ABI (sim role): `sim_upgrade_begin(total_len: u32) -> status` / `sim_upgrade_push(len) -> status` / `sim_upgrade_end() -> status` (same block protocol as `sim_restore_*`; `end` runs the direct load or `migrate`); new statuses `STATUS_SAVE_INCOMPATIBLE` and a reason in the boot region: `IncompatReason ∈ { Schema, TickRate, Worldgen, MigrateDeclined, Container, Decode }`.
+- ABI (sim role): `sim_upgrade_begin(total_len: u32) -> status` / `sim_upgrade_push(len) -> status` / `sim_upgrade_end() -> status` (same block protocol as `sim_restore_*`; `end` runs the direct load or `migrate`); new statuses `STATUS_SAVE_INCOMPATIBLE` and a reason in the boot region: `IncompatReason ∈ { Schema, TickRate, Worldgen, MigrateDeclined, Container, Decode, ChunkSize }` (`ChunkSize` is raised by the TS host from the manifest, never by Rust).
 - TS: `Persistence.open` rejects with `WorldLoadError { kind: 'incompatible', reason, stored: IdentityJson, running: IdentityJson }` (M27 surfaces it from `createWorldServer`); in the browser `client.ready` rejects with `EngineStartError { code: 'save-incompatible', detail: { reason, stored, running } }` (M23's `start-failed` lifecycle message), and `client.exportWorld()` / `client.deleteWorld()` stay usable on that client. `upgradeWorld(...)` is internal to `Persistence.open`.
 - Manifest: sets `segments[i].tailReexecuted` and `sealed` (fields exist from M22).
 
@@ -59,7 +60,7 @@ A `migrate` for the reference game (not planned; M32–M34 may add one only if T
 
 ## Tests added
 - Rust native: `identity_compare_matrix`, `rescale_matches_0006_rounding` (20→30, 30→20, 20→60; non-zero floor; `deadline` for past and future ticks), `rescale_identity_is_noop`, `migrate_v1_to_v2_preserves_ids_and_occupancy`, `migrate_drops_timers_of_dropped_entities`, `migrate_hz_change_rescales_engine_timers`, `migrate_default_is_save_incompatible`, `carry_tiles_canonicalises_against_new_pristine`, `migrating_footprint_collision_is_incompatible`.
-- Vitest (WASM under Node): `rules_only_change_direct_load_new_segment` (same `.wasm`, different `buildHash`: tail re-executed, old segment sealed + `tailReexecuted`, new segment based on the new snapshot, `onRecovered` fired with `'upgrade'`), `schema_bump_runs_migrate` (v1 world → v2 build; a non-empty tail is dropped, `tailReexecuted: false`, dropped count reported: 0024 §3b), `tick_rate_change_without_bump_still_requires_migrate` (v2 → v2-hz30), `no_migrate_hook_save_incompatible_files_untouched` (v2 world → v1 build; storage byte-equal), `worldgen_stamp_mismatch_requires_migrate`, `undecodable_tail_action_is_dropped_and_counted`, `upgrade_crash_before_manifest_is_restartable` (`crashClone`), `import_then_upgrade` (archive from v1 imported under v2: 0005 "including the upgrade path").
+- Vitest (WASM under Node): `rules_only_change_direct_load_new_segment` (same `.wasm`, different `buildHash`: tail re-executed, old segment sealed + `tailReexecuted`, new segment based on the new snapshot, `onRecovered` fired with `'upgrade'`), `schema_bump_runs_migrate` (v1 world → v2 build; a non-empty tail is dropped, `tailReexecuted: false`, dropped count reported: 0024 §3b), `tick_rate_change_without_bump_still_requires_migrate` (v2 → v2-hz30), `no_migrate_hook_save_incompatible_files_untouched` (v2 world → v1 build; storage byte-equal), `chunk_bits_mismatch_save_incompatible_files_untouched` (a created world's manifest has `params.chunkBits` equal to the fixture's `CHUNK_BITS`; with the stored value rewritten to 4, `open` rejects with reason `ChunkSize` and storage is otherwise byte-equal), `worldgen_stamp_mismatch_requires_migrate`, `undecodable_tail_action_is_dropped_and_counted`, `upgrade_crash_before_manifest_is_restartable` (`crashClone`), `import_then_upgrade` (archive from v1 imported under v2: 0005 "including the upgrade path").
 - Browser: `save_incompatible_rejects_ready_and_export_still_works`.
 
 ## Exit criteria
@@ -76,7 +77,7 @@ A `migrate` for the reference game (not planned; M32–M34 may add one only if T
 - Dev loop / test suite rows: three extra fixture crates must not push the incremental build over 0020's 30 s; if they do, merge them into one crate with `cfg` features built three times.
 
 ## Context artifacts
-New skill `bump-schema` only if the session actually performs the procedure on a fixture end to end (0021 §4); otherwise none. Add two lines to `packages/engine/crates/engine/src/persist/CLAUDE.md`: path matrix lives in `Identity::compare`; never write during `SaveIncompatible`.
+New skill `bump-schema` only if the session actually performs the procedure on a fixture end to end (0021 §4). Either way add one step to the `add-action-type` skill (and to `bump-schema` if created) and one rustdoc sentence on `Game::SCHEMA_VERSION`: a change to `G::Action`'s layout is a `SCHEMA_VERSION` bump (0024 §3a). Add two lines to `packages/engine/crates/engine/src/persist/CLAUDE.md`: path matrix lives in `Identity::compare`; never write during `SaveIncompatible`.
 
 ## Manual device checks
 none

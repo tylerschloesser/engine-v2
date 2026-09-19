@@ -26,6 +26,8 @@ Rules that apply: none exist yet; this milestone creates `determinism.md` and `h
 - Runner registration in `scripts/suites.mjs` (M01): build step `fixtures` (after `tsc`: `buildGame` for every fixture, dev profile) and suite `wasm`; a `script` adapter in `scripts/lib/adapters.mjs` for the Bun leg; Bun added to `TOOLS` in `scripts/setup-tools.mjs`.
 - `packages/engine/package.json` `exports`: add `./vite` and `./server/node` (shape: 0017 §2). `src/client.ts` stays M01's placeholder (M06b owns it).
 - `clippy.toml`: fill the `disallowed-methods` / `disallowed-types` lists of 0002 §3 (M01 created the empty file and turned the lints on).
+- Memory declaration and the dev half of the exhaustion policy (0015 §5, "Growth is tolerated but counted"): the module exports its memory, imports none and declares no `maximum`; under `debug_assertions` an allocation that would take `Arena`'s live bytes past the reserved `arenaBytes` panics with a message naming the requested and reserved bytes (the panic hook does not allocate). Stepped growth on release builds is not built here. So that the two fixture switches do not collide, `growAtTick` calls `memory_grow` directly and a new `exhaustAtTick` allocates past the arena.
+- Engine-crate dependency policy as a test (0017 §7; the spec's crate policy): `crate-policy` below. M35 consumes it and adds no second test.
 
 ## Non-scope
 - The Vite plugin, `virtual:engine/wasm`, COOP/COEP, any page (M02b, M03). Workers, rings, the production control block (M06, M06b). `Codec`, snapshot bytes, the real state hash (M05). The `Game` trait of 0003 (M12). `createWorldServer` (M27); Bun/Deno adapters (M35b). `wasm-opt` execution (option is accepted and ignored with a warning until M35). Bindings step (M16).
@@ -39,9 +41,10 @@ packages/engine/src/{abi.ts, loader.ts, build-game.ts, vite.ts, server-node.ts}
 packages/engine/fixtures/hash/{Cargo.toml, src/lib.rs, golden/scenario.json, golden/golden.json}
 packages/engine/scripts/{build-fixtures.mjs, golden.mjs}
 packages/engine/tests/wasm/{allowlist,abi-registry,loader,determinism}.test.ts, bun-leg.mjs
-packages/engine/tests/support/{fixtures.ts, scenario.ts}
+packages/engine/tests/support/{fixtures.ts, scenario.ts, wasm-sections.ts}
+scripts/lib/crate-policy.test.mjs
 scripts/suites.mjs, scripts/lib/adapters.mjs, scripts/setup-tools.mjs, vitest.config.ts (project `wasm`), clippy.toml
-packages/engine/CLAUDE.md (M01 created it; extend), .claude/rules/{determinism.md, hot-paths.md}
+packages/engine/CLAUDE.md (M01 created it; extend), .claude/rules/{determinism.md, hot-paths.md}, CLAUDE.md (root: two invariant lines)
 ```
 Root `Cargo.toml`: add workspace member glob `packages/engine/fixtures/*` (every directory there is a crate; non-crate test assets live under `packages/engine/tests/`).
 
@@ -59,8 +62,8 @@ Root `Cargo.toml`: add workspace member glob `packages/engine/fixtures/*` (every
 - `src/loader.ts` (internal module, no exports-map entry): `instantiate(module: WebAssembly.Module, role: Role, config: InstanceConfig, hooks?: LoaderHooks): EngineInstance` (synchronous). `InstanceConfig = { arenaBytes: number, game: unknown }` (JSON keys camelCase; later milestones add keys). `LoaderHooks = { onLog?(level, text), onPanic?(text) }`. `EngineInstance`: `role`, `x` (raw exports, typed from `ABI_EXPORTS`), `call0(fn)`, `call1(fn, a)`, `call2(fn, a, b)` (the only way to call an export: trap capture, dead check, detach check; fixed arity so no rest array is allocated), `mem: { u8, u32 }` (whole-memory views, replaced on growth; read through `inst.mem` every time), `region(id): RegionView` (`{ ptr, len, u8 }`, a stable holder whose `u8` is rebuilt on growth; `null` if the role has no such region), `onViewsRebuilt(cb)`, `memoryBytes()`, `memGrows()`, `dead`, `panicMessage`, `readU64Hex(id, offset)`. Errors: `AbiMismatchError { expected, actual }`, `EngineInitError { status }`, `EngineTrap { role, panicMessage }`.
 - `buildGame({ crate, profile?: 'dev' | 'release', wasmOpt?: boolean, env?: NodeJS.ProcessEnv }): Promise<{ dir, wasmPath, jsonPath, buildHash, abiVersion, profile, cargoMs }>` from `engine/vite`; output files per 0017 §4. Throws `CargoBuildError { stderr }`.
 - `loadGame(dir): Promise<{ wasm: WebAssembly.Module, buildHash: string }>` from `engine/server/node` (0017 §4). M27 extends this file; M35b adds the Bun and Deno files.
-- Test support: `tests/support/fixtures.ts` `fixtureDir(name)`, `loadFixture(name) -> { wasm, buildHash }`; `tests/support/scenario.ts` `runHashScenario(inst, scenario) -> string[]` (shared by Node, Bun and, in M03, the browser page). **Hashes are 16-char lowercase hex strings everywhere in TS and JSON.**
-- Conventions: a fixture game is `packages/engine/fixtures/<name>/` with package name `fx-<name>`, `crate-type = ["cdylib", "rlib"]`, `publish = false`, `engine = { path = "../../crates/engine" }`, optional `golden/scenario.json` + `golden/golden.json` (directory fixed by M01 decision (a)). `pnpm golden [fixture]` (root script → `packages/engine/scripts/golden.mjs`) is the only writer of `golden.json` and writes from the `.wasm` run under Node (0020 §5). The allowlist and registry tests iterate every directory in `fixtures/`, so a new fixture is covered by adding the directory.
+- Test support: `tests/support/fixtures.ts` `fixtureDir(name)`, `loadFixture(name) -> { wasm, buildHash }`; `tests/support/scenario.ts` `runHashScenario(inst, scenario) -> string[]` (shared by Node, Bun and, in M03, the browser page); `tests/support/wasm-sections.ts` `readSections(bytes) -> { types, imports, funcs, exports, memories }` (a LEB128 section walk of under 100 lines; the JS API exposes neither signatures nor memory limits). **Hashes are 16-char lowercase hex strings everywhere in TS and JSON.**
+- Conventions: a fixture game is `packages/engine/fixtures/<name>/` with package name `fx-<name>`, `crate-type = ["cdylib", "rlib"]`, `publish = false`, `[lints] workspace = true` (so the 0002 §3 bans reach every fixture), `engine = { path = "../../crates/engine" }`, optional `golden/scenario.json` + `golden/golden.json` (directory fixed by M01 decision (a)). `pnpm golden [fixture]` (root script → `packages/engine/scripts/golden.mjs`) is the only writer of `golden.json` and writes from the `.wasm` run under Node (0020 §5). The allowlist and registry tests iterate every directory in `fixtures/`, so a new fixture is covered by adding the directory.
 
 **Consumes:** M01: workspaces, root profiles and lints, pins; `scripts/suites.mjs` (`buildSteps`, `suites`: the registration point), `scripts/lib/adapters.mjs` (`vitest`, `nextest`), `scripts/lib/env.mjs` `toolEnv()` (every cargo spawn in `buildGame`'s callers uses it; `buildGame` itself takes `env` so the package stays free of repo scripts), `TOOLS`, the `-t` substring rule, `test-results/<suite>/`, test placement (M01 decision (a)), the empty `clippy.toml`.
 
@@ -89,6 +92,8 @@ Exports that return `len` return `i32`; a negative value is `-(status)`. `Region
 
 **Target-feature assertion (0002 §3, second assertion).** On dev-profile modules read `WebAssembly.Module.customSections(module, 'target_features')`; every `+feature` must be in a committed allowlist captured from the pinned toolchain's default output, and `simd128`, `relaxed-simd`, `atomics` are named failures. Release modules are stripped (0017 §6) and are covered by building with the same flags.
 
+**Wrong-role calls return `Status::WrongRole` on every profile.** 0014 §5 adds "(traps in debug)"; 0024 §16 drops that: the fast tier builds fixtures on the dev profile only, a trap marks the instance dead, and `loader: wrong-role export returns WrongRole` must run there and go on using the instance. Recorded as 0024 §16.
+
 **Config numbers.** u64 values in config JSON (seeds) are `"0x…"` strings (`HexU64`); JS numbers cannot carry them.
 
 **Rebuild and suite numbers; sccache vs shared `CARGO_TARGET_DIR` (0020 deferred).** Decision: neither for now. A shared target dir serialises parallel worktrees on cargo's build lock and thrashes fingerprints when sources differ; sccache caches neither incremental crates nor the cdylib link, so it helps only cold dependency builds. Trigger to revisit: a cold build in a fresh worktree over 3 minutes on Tyler's Mac, or M10's cached CI build over 5 minutes; then adopt sccache. This milestone records the first real numbers (see Budgets); every later harness milestone records its suite's; M36 records the final table and M39 audits it.
@@ -103,14 +108,18 @@ Exports that return `len` return `i32`; a negative value is `-(status)`. `Region
 7. Context artifacts; measurements into Deviations.
 
 ## Tests added
+- `unit`: `crate-policy` (`scripts/lib/crate-policy.test.mjs`; `cargo metadata --format-version 1` through `toolEnv()`): the `engine` package's normal dependencies are a subset of the 0017 §7 list (the test holds the five names with a comment citing that section as owner; a new name arrives with its ADR); `postcard` and `serde_json` have `uses_default_features: false` and `serde_json`'s declared features are `alloc` only, and `cargo tree -p engine --target wasm32-unknown-unknown -e normal,features` shows no `serde_json` `std` feature (0003); any `libm` requirement in any workspace manifest starts with `=` (0002 §2).
 - Rust native (nextest): `abi::` unit tests (region table, config errors → `BadConfig`, `Fnv64` vectors); `fx-hash` `scenario_matches_golden` (drives the same `Instance` methods with the same input bytes as the JS driver, all checkpoints).
-- `wasm` suite: `import allowlist` and `target features` (every fixture; failure text per 0014 §3); `abi registry`; `loader: abi mismatch`, `loader: init failure carries status`, `loader: panic marks instance dead with message` (`panicAtTick`), `loader: wrong-role export returns WrongRole`, `loader: views survive memory growth` (`growAtTick`; also asserts `memGrows() > 0` there and `=== 0` in the golden run), `build: game.json matches bytes` (hash recomputed, `abiVersion`, `profile`); `determinism: node matches golden`; Bun leg prints one JSON line the runner compares with the same golden.
+- `wasm` suite: `import allowlist` and `target features` (every fixture; failure text per 0014 §3; `import allowlist` also asserts, through `readSections`, that `memory` is an export of kind `memory`, that no import has kind `memory`, and that the memory section declares no `maximum`: 0014 §3, 0015 §5); `abi registry` (also fails on any export or import whose signature has an `i64`, an `externref` or more than one result: 0014 §2); `loader: abi mismatch`, `loader: init failure carries status`, `loader: panic marks instance dead with message` (`panicAtTick`), `loader: wrong-role export returns WrongRole`, `loader: views survive memory growth` (`growAtTick`; also asserts `memGrows() > 0` there and `=== 0` in the golden run), `loader: arena exhaustion traps with message` (`exhaustAtTick` on the dev profile: `EngineTrap` whose `panicMessage` names the arena, and `memGrows() === 0`), `build: game.json matches bytes` (hash recomputed, `abiVersion`, `profile`); `determinism: node matches golden`; Bun leg prints one JSON line the runner compares with the same golden.
 - Scenario (in `golden/scenario.json`): fixed seed, 256 entities, 10,000 ticks, checkpoint every 1,000, 16 input bytes admitted every 7th tick derived from the tick number with integer ops only. Shrink the tick count if any runtime exceeds 0.2 s; never drop a runtime.
 
 ## Exit criteria
 - [ ] `pnpm test wasm` passes; the golden has ≥ 10 checkpoints and is identical natively, under Node and under Bun.
 - [ ] `pnpm test rust -t scenario_matches_golden` passes.
 - [ ] Temporarily adding `getrandom` with its JS backend to `fx-hash` makes `import allowlist` fail naming the module (done by hand once, result noted under Deviations, not committed).
+- [ ] Temporarily adding an `f32::sin` call, a `HashMap` field and a `std::time::Instant` to `fx-hash` makes `pnpm lint` fail naming `clippy::disallowed_methods` and `clippy::disallowed_types` (check, then revert); the `clippy.toml` lists match 0002 §3.
+- [ ] `pnpm test unit -t crate-policy` passes; temporarily adding `rand` to the engine crate's `[dependencies]` makes it fail naming `rand` (check, then revert).
+- [ ] Root `CLAUDE.md` has one line each for determinism and hot paths naming its rule file, and `pnpm test unit -t context-artifacts` (M01) passes with both rule files present.
 - [ ] `pnpm golden hash` rewrites an identical `golden.json` (no diff).
 - [ ] `WebAssembly.Module.imports` of `fx-hash` is exactly `engine.panic`, `engine.log`.
 - [ ] Rebuild time and `wasm` suite time recorded under Deviations.
@@ -126,8 +135,9 @@ Exports that return `len` return `i32`; a negative value is `-(status)`. `Region
 - Allocation per isolate: not measured here; `call0/1/2` and `region()` are written to the rule in `hot-paths.md` and first measured in M04.
 
 ## Context artifacts
-- `.claude/rules/determinism.md` (paths: `packages/engine/crates/**`, `packages/engine/fixtures/*/src/**`, `games/*/sim/**`): one screen linking 0002 §2–3.
+- `.claude/rules/determinism.md` (paths: `packages/engine/crates/**`, `packages/engine/fixtures/*/src/**`; M20 adds `games/reference/sim/**` with the first file there): one screen linking 0002 §2–3.
 - `.claude/rules/hot-paths.md` (paths: `packages/engine/src/**` except `src/test/**`): no allocation per frame or tick, views created once, fixed-arity calls; links 0014 §4 and 0016. M04 adds how to verify.
+- Root `CLAUDE.md`: one line per invariant (determinism; no allocation in hot paths), each naming its rule file as `.claude/rules/<file>.md` (0021 §1); still within the cap. M01's `context-artifacts` test requires the link and that every `paths:` glob matches a file, so list a glob only once a file exists under it (`games/*/sim/**` is added by M20).
 - `packages/engine/CLAUDE.md`: layout, fixture convention, the ABI rule above in three lines, where goldens live.
 
 ## Manual device checks

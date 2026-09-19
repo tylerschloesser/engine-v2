@@ -12,7 +12,7 @@ The netcode suite plays the whole reference game with several headless clients a
 2. `docs/decisions/0020-testing-strategy.md` (§7 netcode harness; §4 demotion)
 3. `docs/decisions/0003-game-facing-api.md` (Consequences: the coverage list)
 4. `docs/decisions/0012-prediction-and-reconciliation.md` (Mechanism; `Unknown` reads; Correction without snapping)
-Also: `docs/plan/reference-coverage.md`; the Seams of `docs/plan/27-server-entrypoint-and-netcode-harness.md`, `28-sessions-and-reconnect.md`, `28b-reconnect-and-lifecycle.md`.
+Also: `docs/plan/reference-coverage.md`, the `reference-game.md` table of `docs/plan/coverage.md`; the Seams of `docs/plan/27-server-entrypoint-and-netcode-harness.md`, `28-sessions-and-reconnect.md`, `28b-reconnect-and-lifecycle.md`.
 Look up at the step: grace, `Bye`, `Full`, `BadKey`, idle lifecycle `0013`; arrival order and acks `0004`.
 Rules that apply: `games/reference/CLAUDE.md`. Skill: `run-tests`.
 
@@ -29,7 +29,7 @@ All tests live in `games/reference/tests/netcode/`, run by the netcode suite, us
 - **Reconnect:** a drop shorter than the grace leaves the collect running and logs nothing; a drop longer than the grace logs `Disconnected` and cancels the collect, not the craft; a `PlaceFurnace` pending across the drop is applied exactly once; the returning client's presence seed equals its last sample.
 - **Admission:** `max_players = 2` rejects a third client with `Full`; a wrong join key gets `BadKey`; neither appears in the log.
 - **Idle pause:** both players leave; ticking stops after the last `Disconnected`; a fuelled furnace makes no progress until someone returns.
-- **Counters:** over the full game at default conditions, bytes per client per tick and mispredictions per client stay under the ceilings in `budgets.json`.
+- **Counters:** over the full game at default conditions, bytes per client per tick and mispredictions per client stay under the ceilings in `budgets.json`; the session's downlink bytes per client, scaled from its ticks to one hour of play, stay under the ceiling `net.bytesPerHour` (source: `PRE-PLAN.md` §7 bandwidth burst row, megabytes per hour of play; owner 0010).
 - **Real sockets:** the two-player full game once over loopback `ws` (`transport: 'ws'`), tagged `slow` if the suite budget needs it.
 
 ## Non-scope
@@ -54,14 +54,14 @@ Eight-client soak and the standard large save (M36). Version-mismatch reload, `S
 3. Subscription edge; chunk border.
 4. Late join; reconnect cases; admission; idle pause.
 5. Counters against `budgets.json`; `ws` repeat.
-6. Fill the matrix column in `reference-coverage.md`.
+6. Fill the test columns: the `reference-game.md` table of `coverage.md` and the engine-feature table of `reference-coverage.md`.
 
 ## Tests added
-Netcode: `reference_full_game_two_players`, `reference_race_last_unit`, `reference_race_same_spot`, `reference_race_same_ingots`, `reference_subscription_edge_not_predictable`, `reference_furnace_across_chunk_border`, `reference_late_join_sees_world`, `reference_short_drop_keeps_collect`, `reference_long_drop_cancels_collect_keeps_craft`, `reference_pending_place_applied_once_after_reconnect`, `reference_full_and_bad_key_rejected`, `reference_idle_world_pauses`, `reference_bytes_and_mispredictions_in_budget`, `reference_full_game_two_players_ws`.
+Netcode: `reference_full_game_two_players`, `reference_race_last_unit`, `reference_race_same_spot`, `reference_race_same_ingots`, `reference_subscription_edge_not_predictable`, `reference_furnace_across_chunk_border`, `reference_late_join_sees_world`, `reference_short_drop_keeps_collect`, `reference_long_drop_cancels_collect_keeps_craft`, `reference_pending_place_applied_once_after_reconnect`, `reference_full_and_bad_key_rejected`, `reference_idle_world_pauses`, `reference_bytes_and_mispredictions_in_budget` (also asserts the projected `net.bytesPerHour` ceiling), `reference_full_game_two_players_ws`.
 
 ## Exit criteria
 - [ ] All tests above pass by name, each reproducible from its printed seed.
-- [ ] Every multiplayer row of the Requirement matrix and every "scripted" row of the engine-feature table in `docs/plan/reference-coverage.md` names a test that exists.
+- [ ] Every multiplayer row of the Requirement matrix (the `reference-game.md` table of `docs/plan/coverage.md`) and every "scripted" row of the engine-feature table in `docs/plan/reference-coverage.md` names a test that exists.
 - [ ] The netcode suite stays inside its budget (`0020` §3); demotions follow §4 and are listed under Deviations.
 - [ ] `pnpm test` and `pnpm lint` are green.
 
@@ -69,7 +69,7 @@ Netcode: `reference_full_game_two_players`, `reference_race_last_unit`, `referen
 `pnpm test netcode -t reference_` · `pnpm test netcode -t reference_race` · `pnpm test`.
 
 ## Budgets
-Bandwidth per client, steady and burst (`PRE-PLAN.md` §7), measured by `reference_bytes_and_mispredictions_in_budget` from `counters(i)`; netcode suite time from the `pnpm test` summary line.
+Bandwidth per client, steady and burst, including megabytes per hour of play as a projection (`PRE-PLAN.md` §7), measured by `reference_bytes_and_mispredictions_in_budget` from `counters(i)`; netcode suite time from the `pnpm test` summary line.
 
 ## Context artifacts
 `games/reference/CLAUDE.md`: how to write a netcode scenario with `refHarness`. If this is the third milestone to hand-write the same scenario boilerplate, note it for `0021` §5; do not add an agent.

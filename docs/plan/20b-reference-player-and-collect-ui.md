@@ -55,7 +55,7 @@ Remote players and roster (M34). Crafting menu and unlock (M32). Styling beyond 
 
 ## Tests added
 - Rust native: `spring_settles_and_is_dt_independent` (same end state at 30, 60, 120 Hz within tolerance), `admit_rejects_far_witness`, `admit_rejects_without_sample`, `admit_accepts_within_tolerance` (the witness stands over a water tile: players may float over water), `ui_in_range_lists_each_resource_once`, `ui_from_is_within_range_of_its_tile`, `spawn_is_nearest_land_tile` (against `landmarks.json`), `extract_hash_player_circle` (DrawList hash, `0020` §6a).
-- Browser (stepped frames, injected input): `reference_collect_flow` (pan to the nearest stone landmark, a button appears anchored within 1 CSS px of the tile centre, click, step 40 ticks, inventory shows 1 stone and the button is enabled again), `reference_several_buttons` (two resources in range give two buttons), `reference_pan_out_cancels` (start, pan away, `collecting` becomes null, no item), `reference_new_player_spawns_on_land`.
+- Browser (stepped frames, injected input): `reference_collect_flow` (pan to the nearest stone landmark, a button appears anchored within 1 CSS px of the tile centre, click, the button's `getAnimations()` holds one running fill animation whose duration is the Scope formula, step 40 ticks, inventory shows 1 stone, the animation is gone and the button is enabled again), `reference_several_buttons` (two resources in range give two buttons), `reference_pan_out_cancels` (start, pan away, `collecting` becomes null, no item), `reference_new_player_spawns_on_land`.
 
 ## Exit criteria
 - [ ] All tests above pass by name.

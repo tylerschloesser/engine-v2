@@ -2,9 +2,9 @@
 
 Every Requirement in `docs/spec/` mapped to the milestone exit criterion, named test or device check that verifies it. This file holds the mapping only: the Requirement text lives in the spec, the test's definition lives in the brief (`docs/plan/<NN>-<slug>.md`, "Tests added" and "Exit criteria"). Quotes are a few identifying words, not the Requirement.
 
-Axis: spec Requirement → verifier. The other axis (engine feature → reference-game feature) is `reference-coverage.md` §1–2; its §3 is the coarse form of the last table here.
+Axis: spec Requirement → verifier. The other axis (engine feature → reference-game feature) is `reference-coverage.md` §1–2; its §3 links to the last table here, which is the only Requirement matrix for the reference game (M34b and M34c keep it true).
 
-**Status.** *covered*: an exit criterion, a named test an exit criterion requires, or a device-check item verifies it. *unverified*: a brief builds it (Goal or Scope) but nothing checks it. *uncovered*: no brief mentions it. *n/a*: a non-goal or a statement with nothing to build.
+**Status.** *covered*: an exit criterion, a named test an exit criterion requires, or a device-check item verifies it. *unverified*: a brief builds it (Goal or Scope) but nothing checks it. *uncovered*: no brief mentions it. *n/a*: a non-goal or a statement with nothing to build. Three rows carry a ruling instead: *waived (Q5)*, *covered by policy, pending Q12*, *unverified by decision (Q6), carried to 39b* (`questions-for-tyler.md`).
 
 **Keeping it true.** A Phase 3 session that adds, renames or drops an exit criterion or test updates the rows that cite it, in the same commit. A row turns *covered* only when the cited name exists in the brief. M39 re-audits the whole file against the code (`pnpm acceptance:check` finds every cited test; `39-acceptance.md`), and M39b carries forward whatever is still *unverified*. `-android` device-check rows are never cited (Q5: no device).
 
@@ -45,11 +45,11 @@ Audited 2026-09-19 against the working tree of `phase-2-plan`.
 | "TypeScript is for bootstrapping and UI" | 20, 20b | `reference_package_depends_only_on_engine`, `reference_collect_flow` | covered |
 | "single published npm package, with zero runtime npm dependencies" | 35, 35b | M35 exit 1 (`pack --json`), M35b exit 5 (zero `dependencies`) | covered |
 | "multiple entrypoints (main thread, worker, server)" | 35 | `exports-map` | covered |
-| "reference game is a separate, private package: Vite plus a simple game" | 20 | exit 1; `reference_package_depends_only_on_engine`. `private: true` itself is asserted nowhere | unverified |
+| "reference game is a separate, private package: Vite plus a simple game" | 20 | exit 1; `reference_package_depends_only_on_engine` (asserts `"private": true` and the single `workspace:*` dependency) | covered |
 | "Custom WebGPU renderer; no rendering library" | 09, 35b | `wgsl.terrain_validates`, M35b exit 5 | covered |
 | "WebSockets for multiplayer" | 29 | `ws/join-converges`, `mp/two-pages` | covered |
 | "Game UI is a game-owned DOM overlay; the engine renders no UI widgets" | 18, 20b | `overlay.widget_click_not_a_tap`, `reference_several_buttons` | covered |
-| "The camera never mutates the world, and is not an action" | 15 | built (camera reports feed `SubscriptionSet` only); no test compares state with and without camera traffic (presence has `presence_is_not_state`, M19) | unverified |
+| "The camera never mutates the world, and is not an action" | 15 | `camera_walk_changes_no_state` (same action script, different camera walks, equal state hashes); camera reports feed `SubscriptionSet` only | covered |
 | "host uses each client's camera + viewport only to decide chunk subscriptions" | 15, 27 | `subs_clamps_oversized_and_zero_views`, `headless-ui-and-camera` | covered |
 | "Only actions change the world" | 12b, 19, 22 | `rejecting_apply_wrote_nothing`, `presence_is_not_state`, `replay_from_genesis_checkpoints` | covered |
 | "server entrypoint should be agnostic to where it's hosted" | 27, 35b | M27 exit 3 (no `node:` import outside the adapter), `server adapters export parity` | covered |
@@ -58,7 +58,7 @@ Audited 2026-09-19 against the working tree of `phase-2-plan`.
 
 | Requirement | M | Verified by | Status |
 |---|---|---|---|
-| "2–8 players per world" | 28, 34, 38 | `handshake/full`, `joined_assigns_distinct_colours` (eight), M38 exit 2 (tick p50/p99 under 8 clients) | covered |
+| "2–8 players per world" | 28, 34, 38 | `handshake/full`, `joined_assigns_distinct_colours` (eight), M38 results-table criterion (tick p50/p99 under 8 clients) | covered |
 | "One process per world" | 27 | `server/load-or-create` | covered |
 | "The world fits in memory" | 21, 36 | `full_world_rejects_place_accepts_remove_then_place`, `slow_tick_large_save`, device M39-large-save | covered |
 | "Server-authoritative validation of actions is enough" | 16, 19, 31 | `admit_reject_is_not_recorded`, `admit_witness`, `rates/action-rate-limited` | covered |
@@ -92,7 +92,7 @@ Audited 2026-09-19 against the working tree of `phase-2-plan`.
 | "the world can be reconstructed exactly" | 12b, 22, 34b | `replay_equals_live`, `replay_from_genesis_checkpoints`, `reference_golden_replay` | covered |
 | "tracks which players are connected and what each is seeing" | 15 | `subs_ring1_plus_lookahead`, `first_frame_has_global_and_own_player` | covered |
 | "Some actions are engine-defined … others are game-defined" | 12b, 16, 28b | `joined_must_put_player`, `action_lands_on_next_tick`, `reconnect/after-grace-logs-disconnected` | covered |
-| "Camera + viewport updates … neither logged nor needed for replay" | 15, 22 | replay without cameras is proven (`reference_golden_replay`); "not logged" has no assertion | unverified |
+| "Camera + viewport updates … neither logged nor needed for replay" | 22, 34b | `camera_walk_changes_no_log` (different camera walks, byte-identical logs); replay without cameras: `reference_golden_replay` | covered |
 | "engine manages data storage: … browser, … server" | 22b, 23 | `storage_conformance_fs`, `storage_conformance_opfs` | covered |
 | "persisted occasionally, for crash recovery" | 22, 22b | `snapshot_every_1200_ticks_if_dirty`, `crash_mid_frame_truncates_and_resumes` | covered |
 | "Actions are stored indefinitely" | 22b | `prune_keeps_bases_and_latest_two`, `replay_world_checkpoints_node` (from genesis across rolled segments) | covered |
@@ -124,9 +124,9 @@ Audited 2026-09-19 against the working tree of `phase-2-plan`.
 | "Transport: likely WebSockets" | 29 | `ws/join-converges`, `ws/trace-identical` | covered |
 | Hosting: "a library that needs one long-lived context, a timer, injected connections, and injected storage" | 27 | exit 3, exit 4, `memory-connection`, `server/accept-before-ready-waits` | covered |
 | Hosting: "Node/Bun process … first" | 27, 29, 35b | M27 exit 2, `reference-server/smoke`, `bun-adapter loopback` | covered |
-| Hosting: "Cloudflare Durable Objects second" | 38 | exit 3 (DO ADR), `do/local-smoke` | covered |
-| Hosting: "Vercel is not a target for the sim (it can serve the static client)" | 38 | client is served by the Fly machine (`reference-server/static-headers`); M38 exit 2 records a separate static host as unverified and hands it to M39b | unverified |
-| Hosting: "about $5/month per always-available world, about $0 while idle" | 38 | exit 3 (results table: Fly always-on and idle cost, DO projected cost) | covered |
+| Hosting: "Cloudflare Durable Objects second" | 38 | DO ADR criterion, `do/local-smoke` | covered |
+| Hosting: "Vercel is not a target for the sim (it can serve the static client)" | 38, 39b | client is served by the Fly machine (`reference-server/static-headers`, `deployed/coi-and-online`); a separate static host is not deployed: M38's README criterion records it and M39b's exit criterion `grep -n "static host" PROMPT.md` carries it | unverified by decision (Q6), carried to 39b |
+| Hosting: "about $5/month per always-available world, about $0 while idle" | 38 | results-table criterion (Fly always-on and idle cost, DO projected cost) | covered |
 | Sessions: "join key in the invite link plus a device-local identity secret" | 28 | `handshake/bad-key`, `handshake/join-then-return-same-player`, `secret/persists-across-reload` | covered |
 | Sessions: "no cross-device recovery" | – | nothing to build | n/a |
 | Sessions: "exactly one world, created or loaded at startup" | 27 | `server/load-or-create`, `server/ready-rejects-on-corrupt-world` | covered |
@@ -146,7 +146,7 @@ Audited 2026-09-19 against the working tree of `phase-2-plan`.
 | "engine also exports a server entrypoint" | 27 | exit 4, `server/load-or-create` | covered |
 | "`engine/vite` plugin entrypoint … Node built-ins only; Vite is a types-only optional peer" | 02b | exit 3 | covered |
 | "injected transport adapter … the game's server package installs `ws`" | 29 | `reference-server/smoke`, `ws/join-converges` | covered |
-| Rust crate policy: allowed list (`serde`, `postcard`, `serde_json`, `ts-rs`, `libm`), "anything else needs an ADR" | 01 | built (`Cargo.toml` starts with no dependencies); no test compares the engine crate's dependency list with the allowed list | unverified |
+| Rust crate policy: allowed list (`serde`, `postcard`, `serde_json`, `ts-rs`, `libm`), "anything else needs an ADR" | 02 | `crate-policy` (`unit`; M02 exit: adding `rand` fails it); M35 consumes it | covered |
 | "`ts-rs` … code LTO removes; the size test checks that" | 35 | `ts-rs zero bytes @slow` | covered |
 | "Stable Rust only (so no WASM threads)" | 01, 02 | M01 exit 2 (pins), `target features` | covered |
 | "Rust crate is bundled inside the npm package; a tarball-install test" | 35 | exit 1, exit 2 | covered |
@@ -169,7 +169,7 @@ Audited 2026-09-19 against the working tree of `phase-2-plan`.
 | "Custom WebGPU rendering engine" | 09, 17 | `terrain.probe_tile_colours`, `counters.draws_equal_nonempty_layers` | covered |
 | "WebGPU calls are issued from TypeScript on the main thread" | 09, 09b | `terrain.upload_budget_while_panning`, `canvas.presents` | covered |
 | "Rust in a worker produces all frame data into shared memory" | 09, 17 | `upload.record_layout_golden`, `drawlist.triple_newest_wins` | covered |
-| "no WASM runs on the main thread" | 06b | built (main compiles the `Module`, workers instantiate); nothing asserts main never instantiates | unverified |
+| "no WASM runs on the main thread" | 06b | `main.no_wasm_instantiate` (source scan of `client.ts`'s import closure) | covered |
 | "camera is user-driven and engine-owned" | 11 | `camera.pan_keeps_world_point`, `camera.persisted_and_restored` | covered |
 | "A game can set constraints" | 11 | `camera.zoom_clamps_and_constraints` | covered |
 | "move it programmatically" | 11, 20b | `camera.moveto_cancelled_by_input`, `reference_new_player_spawns_on_land` | covered |
@@ -178,14 +178,14 @@ Audited 2026-09-19 against the working tree of `phase-2-plan`.
 | "Zoom range: 12 to 256 tiles … configurable per game" | 11, 31 | `camera.zoom_clamps_and_constraints`, `zoomout/baseline-256x144` | covered |
 | "about 128 subscribed chunks per client" | 15, 31 | `subs_cap_evicts_farthest_first`, M31 exit 2 (`zoomout/*` numbers) | covered |
 | Tier 1: Chrome desktop | 03 onward | the `browser` suite runs on Chromium | covered |
-| Tier 1: Chrome Android | – | `-android` device rows exist but are "not run: no device" (Q5, Tyler: iPhone only) | unverified |
+| Tier 1: Chrome Android | 39 | `-android` device rows are "not run: no device"; M39's `client.md` audit table records the waiver (Scope, "Tier 1 rows decided outside the suites") | waived (Q5): desktop Chrome only |
 | Tier 1: Safari macOS | 03, 17b, 35, 36 | `determinism @engines` (WebKit), `webkit-readback`; device M17b-harness-desktop-safari, M35-safari-build-mac | covered |
 | Tier 1: Safari iOS 26+ | 39 | exit 5 (every device-check entry re-run on the iPhone) | covered |
-| "current and previous major version" | – | no brief pins or tests a previous major version | uncovered |
+| "current and previous major version" | 35, 39 | M35 exit 5 (the ADR "Build profiles, measured" holds the browser-version policy: `checkSupport` feature-detects, current engine versions tested); M39's audit lists Q12 | covered by policy, pending Q12 |
 | Tier 2: Firefox desktop | 03, 06, 17b | `determinism @engines`, `sab.ring_both_directions`; device M17b-harness-desktop-firefox, M39-desktop-browsers | covered |
 | "Anything else gets a capability screen" | 35 | `checkSupport: each code`, `reference: capability screen on failure`; device M35-capability | covered |
-| "Design inside the WebGPU compatibility-mode subset" | 09 | built (`featureLevel: 'compatibility'`, limits not raised); no test asserts the requested feature level or limits | unverified |
-| "Desktop: WASD moves the camera" | 11 | built; WASD is injected in the `input` zero-GC page but no test asserts the camera moved (`input.keyboard_focus_rules` checks only the negative) | unverified |
+| "Design inside the WebGPU compatibility-mode subset" | 09 | `device.requests_compatibility_defaults` (`featureLevel`, no raised limits, no features) | covered |
+| "Desktop: WASD moves the camera" | 11 | `camera.wasd_speed_scales_with_extent` | covered |
 | "scroll zooms" | 11 | `camera.wheel_about_cursor` | covered |
 | "Mobile: pointer drag moves the camera" | 11 | `camera.pan_keeps_world_point`, `input.dom_path_pan_and_tap`; device M11-gestures | covered |
 | "pinch zooms" | 11 | `camera.pinch_about_midpoint`; device M11-gestures | covered |
@@ -215,7 +215,7 @@ Audited 2026-09-19 against the working tree of `phase-2-plan`.
 | [Implications](../spec/testing.md#implications-for-the-engines-design): "never reads wall-clock time" | 03, 13 | M03 exit 4 (`Date.now()` fails lint), M13 exit 2 | covered |
 | "Clock, frame stepping, tick stepping, and input are all injectable" | 03, 11 | `manual clock: *`, `stepping.spec.ts`, `input.events_reach_wasm` (via `injectPointer`) | covered |
 | "Everything random is seeded" (sim, tests, netcode) | 02, 12, 27 | M02 exit 3 (`getrandom` fails the import allowlist), `simrng_golden_sequence`, `conditioned-link` | covered |
-| "Everything random is seeded" (engine TypeScript) | 03 | the restricted-globals rule bans clocks and timers, not `Math.random` / `crypto.getRandomValues` | unverified |
+| "Everything random is seeded" (engine TypeScript) | 03 | `lint.no_ambient_random` (source scan: `Math.random`, `getRandomValues`, `randomUUID`; one allowlisted module, M28's `src/client/secret.ts`); M03 exit (adding `Math.random()` fails it) | covered |
 | "sim runs headless outside a browser (native `cargo test`, and the WASM module under a JS runtime)" | 02, 12b, 13 | `scenario_matches_golden`, `puts_script_a_golden`, `wasm_idle_100_matches_native` | covered |
 | "replay a recorded action log and compare a state hash across native, WASM, and each browser" | 22b, 34b | `replay_world_checkpoints_node`/`_bun`, `reference_golden_replay`, `golden_replay`, reference log on the determinism page | covered |
 
@@ -223,7 +223,7 @@ Audited 2026-09-19 against the working tree of `phase-2-plan`.
 
 | Requirement | M | Verified by | Status |
 |---|---|---|---|
-| Intro: "exercises every engine feature" | 34b, 34c | M34b exit 2, M34c exit 2 (`reference-coverage.md` rows filled) | covered |
+| Intro: "exercises every engine feature" | 34b, 34c | M34b exit 2, M34c exit 2 (this table and the engine-feature table of `reference-coverage.md` name tests that exist) | covered |
 | Intro: "in single-player and multiplayer" | 34b, 34c | `reference_full_game_single`, `reference_full_game_two_players` | covered |
 | [World](../spec/reference-game.md#world): "Simplex noise with multiple octaves" | 20 | `worldgen_golden` | covered |
 | "Simple tiles and biomes: grass, dirt, water, sand" | 20 | `reference_terrain_renders`, `landmarks_fixture_current` | covered |
@@ -242,7 +242,7 @@ Audited 2026-09-19 against the working tree of `phase-2-plan`.
 | "within 3 tiles … (centre … to centre)" | 20, 20b | `collect_out_of_range_rejected` (boundary at `RANGE`), `ui_from_is_within_range_of_its_tile` | covered |
 | "a collect button appears (several can show at once)" | 20b | `reference_collect_flow`, `reference_several_buttons`, `ui_in_range_lists_each_resource_once` | covered |
 | "Collecting takes 2 seconds" | 20 | `durations_at_20_and_30_hz`, `collect_completes_and_depletes` | covered |
-| "the button fills to show progress" | 20b | built (Order of work 4); `reference_collect_flow` does not look at the fill; only device M34-own-timer-bar sees it | unverified |
+| "the button fills to show progress" | 20b | `reference_collect_flow` (one running fill animation with the collect's duration on the clicked button, gone at completion); device M34-own-timer-bar | covered |
 | "One collect and one craft at a time; no queue" | 20, 32 | `collect_busy_rejected`, `craft_rejected_when_busy`, `collect_and_craft_run_together` | covered |
 | "Panning out of range cancels a collect" | 20b | `reference_pan_out_cancels` | covered |
 | "Inventory and unlocks are per player" | 32 | `unlock_is_per_player` | covered |
@@ -263,7 +263,7 @@ Audited 2026-09-19 against the working tree of `phase-2-plan`.
 | "smelts one ingot in 5 seconds" | 33b | `smelt_takes_five_seconds_at_20_and_30_hz` | covered |
 | "One coal fuels 10 ingots. One wood fuels 2" | 33b | `one_coal_smelts_exactly_ten`, `one_wood_smelts_exactly_two` | covered |
 | "Any player can use any furnace" | 33b | `any_player_can_use_any_furnace` | covered |
-| "Output ingots can be taken back out (take-all); ore and fuel stay in" | 33b, 34c | `take_all_moves_ingots`, `reference_race_same_ingots` | covered |
-| "An empty furnace … can be picked up by any player" | 33b | exit 2: `pickup_empty_despawns_and_returns_item`, `pickup_rejected_unless_empty`, `pickup_by_any_footprint_tile_and_any_player`, `reference_furnace_pick_up` | covered |
+| "Output ingots can be taken back out (take-all); ore and fuel stay in" | 33b, 34c | `take_all_moves_ingots`, `reference_race_same_ingots`, `reference_full_game_two_players` (no action removes ore or fuel) | covered |
+| "An empty furnace … can be picked up by any player" | 33b, 34b, 34c | exit 2: `pickup_empty_despawns_and_returns_item`, `pickup_rejected_unless_empty`, `pickup_by_any_footprint_tile_and_any_player`, `predicted_pickup_tombstone_then_ack`, `pickup_sends_entity_gone_and_closes_other_panel`, `reference_furnace_pick_up`; `reference_full_game_single`, `reference_full_game_two_players` | covered |
 | [UI](../spec/reference-game.md#ui): "Framework-free TypeScript. The engine must not care either way" | 20 | `reference_package_depends_only_on_engine` | covered |
 | Notes: "Durations above are in seconds" | 20 | `durations_at_20_and_30_hz` | covered |

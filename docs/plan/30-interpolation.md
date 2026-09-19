@@ -55,7 +55,7 @@ Mine from spikes: none (the prediction spike built no interpolation). Rules that
 6. One loopback-`ws` repeat of `constant_latency_tracks_path`.
 
 ## Tests added
-Rust suite (`interp_*`): `hermite_hits_samples_and_is_c1`, `extrapolates_then_holds` (limit by citation), `fades_after_silence_and_recovers`, `rerelay_refreshes_without_new_sample`, `drops_out_of_order`, `delay_initial_floor_cap`, `delay_follows_p95_formula`, `delay_never_steps` (per-frame change of `render_time` stays inside the dilation limit), `rebase_snaps_and_clears`, `interp_alloc` (0 allocations over 600 frames with 7 remote keys).
+Rust suite (`interp_*`): `hermite_hits_samples_and_is_c1`, `extrapolates_then_holds` (limit by citation), `fades_after_silence_and_recovers`, `rerelay_refreshes_without_new_sample`, `drops_out_of_order`, `delay_initial_floor_cap`, `delay_follows_p95_formula`, `delay_never_steps` (per-frame change of `render_time` stays inside the dilation limit), `rebase_snaps_and_clears`, `interp_entity_key_same_path` (the same samples pushed under `InterpKey::Entity` and `InterpKey::Player` sample identically: one buffer, one code path, 0012 "Remote motion"; the entity feed stays Non-scope), `interp_alloc` (0 allocations over 600 frames with 7 remote keys).
 Netcode suite (`interpolation.*`, seeded conditioner, virtual clock, two to eight headless clients):
 - `constant_latency_tracks_path`: a producer follows a known curve; the observer's sampled position stays within a stated tile error of the curve evaluated at `render_time`.
 - `jitter_profile_adapts`: jitter drawn at 0010's assumed figures; `interpDelayMs` converges into the formula's value; no step.

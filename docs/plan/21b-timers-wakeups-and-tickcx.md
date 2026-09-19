@@ -21,6 +21,7 @@ The `TickCx` method list is in `docs/plan/12b-world-access-and-sim-driver.md` (P
 - **Active lists.** `Registry::system(name) -> SystemId` (≤ 16); `activate`/`deactivate` are idempotent; iteration by `active_len`/`active_at` in insertion order; removals during iteration take effect at the next fixed point (tombstone then compact), so indices are stable within a tick; `despawn` deactivates everywhere.
 - **`TickCx` completed** with the M21b methods of the 12b list; `Sim::step` constructs it.
 - **State.** `Store::encode` gains timers (key order), `woken_next` (insertion order), active lists (system order, insertion order), exactly where 0005 "Snapshot" places them; `state_hash` covers them. A client replica holds none of it.
+- **Tick rules and the state budget.** A put or spawn through `TickCx` is never refused by the state-budget check (0007 §8 "soft by the margin", 0023 "The check", opening line); a `TickCx` spawn with no entity id left is an engine fault (0022 §2).
 - **Fixture `machines` tick rule:** woken + `fed` + idle → `done_at = now + SMELT` (`const SMELT: Ticks = TICK_RATE.secs(5)`), `wake_at`; due → `count += 1`, continue or sleep; a `Spinner` prototype lives on an active list and toggles a field every `TICK_RATE.millis(500)` through the integer-accumulator pattern of 0006.
 - **Undo journal experiment** (below).
 
@@ -32,7 +33,7 @@ Player timers (none: `tick` scans the player table, see 12b). Bucketed area effe
 
 ## Seams
 **Provides:** `TickCx::{next_woken, next_due, wake, wake_at, cancel_wake, activate, deactivate, active_len, active_at}`, `Registry::system`, `SystemId`; extended `Store::encode`/`state_hash`; counters `entities_visited_per_tick`, `timers_pending`, `apply_rollbacks`; goldens `machines/smelt-cycle`, `machines/idle-world-costs-zero`; the journal decision (ADR written with the `write-adr` skill).
-**Consumes:** M21 prototypes, fixture, `testkit::fill_world`; M12b `TickCx` minimal, `Authority`, `Sim`; M12 `Store`; M05 hash.
+**Consumes:** M21 prototypes, fixture, `testkit::fill_world`, `testkit::set_next_entity_id`, the state-budget check; M12b `TickCx` minimal, `Authority`, `Sim`; M12 `Store`; M05 hash.
 
 ## Planning decisions
 - **How `apply` starts a timer without a timer API (0024 §7 closes the gap between 0003 and 0007).** `apply` sees only `WorldWrite`, which must stay "every method is one put" and must behave identically under prediction, so it cannot call `wake_at`. Instead the put itself is the wake-up: the entity appears in `next_woken()` of the same tick's `G::tick` (actions run before tick rules, 0004), and the tick rule reads the value (`done_at`) and schedules. This is 0007 §7's "wake-ups are queued and applied at one fixed point" made concrete, adds no `Game` hook, and keeps the client free of tick machinery.
@@ -43,7 +44,7 @@ Player timers (none: `tick` scans the player table, see 12b). Bucketed area effe
 1. wake queue + auto-wake in `Authority`. 2. timer wheel. 3. active lists + `Registry::system`. 4. `TickCx` methods. 5. encode/hash + roundtrip. 6. fixture rules, goldens, O(active) counter tests. 7. journal, bench, ADR.
 
 ## Tests added
-Rust: `put_from_apply_wakes_same_tick`, `put_from_tick_does_not_self_wake`, `wake_dedup_and_order`, `undrained_wakes_are_dropped`, `timer_fires_at_exact_tick_in_key_order`, `wake_at_replaces`, `despawn_cancels_timer_and_lists`, `active_iteration_stable_under_deactivate`, `smelt_cycle_golden`, `idle_world_visits_zero_entities` (10k sleeping machines, `entities_visited_per_tick == 0` between due ticks), `timers_survive_encode_decode` (hash equal after roundtrip mid-cycle: the seed of heavy mode), `replay_equals_live_with_timers`, `tick_state_steady_no_alloc`; journal: `journal_rolls_back_store_indexes_wakes_counts`, bench `apply_journal_overhead` (slow tier; prints both medians).
+Rust: `put_from_apply_wakes_same_tick`, `put_from_tick_does_not_self_wake`, `wake_dedup_and_order`, `undrained_wakes_are_dropped`, `timer_fires_at_exact_tick_in_key_order`, `wake_at_replaces`, `despawn_cancels_timer_and_lists`, `active_iteration_stable_under_deactivate`, `smelt_cycle_golden`, `idle_world_visits_zero_entities` (10k sleeping machines, `entities_visited_per_tick == 0` between due ticks), `timers_survive_encode_decode` (hash equal after roundtrip mid-cycle: the seed of heavy mode), `replay_equals_live_with_timers`, `tick_state_steady_no_alloc`; budget (both on a test-local `Game` whose tick rule spawns one entity per tick, so the `machines` goldens stay fixed): `tick_rule_put_past_limit_is_applied` (with `max_entities` reached a `TickCx` spawn succeeds and the count exceeds the limit; the next growing action is rejected, a `Growth::NONE` action passes; replay identical), `tick_spawn_without_ids_is_engine_fault` (`testkit::set_next_entity_id` at the limit; `#[should_panic]`); journal: `journal_rolls_back_store_indexes_wakes_counts`, bench `apply_journal_overhead` (slow tier; prints both medians).
 
 ## Exit criteria
 - [ ] All fast tests above pass; the bench ran once and its numbers are in the new ADR.

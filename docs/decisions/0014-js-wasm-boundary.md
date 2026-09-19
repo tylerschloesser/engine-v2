@@ -1,6 +1,6 @@
 # 0014: The JS↔WASM boundary: a fixed, hand-rolled `extern "C"` ABI
 
-Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §1, §9.
+Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §1, §9, §16.
 
 ## Context
 

@@ -59,7 +59,7 @@ Rust native: `store_apply_is_idempotent`; `store_roundtrip_bytes_equal` (encode 
 None measured here. `Store` must not allocate in `apply` for an existing key with plain-data values (asserted with the counting allocator from the spike's `alloc.rs`, test `store_apply_existing_key_no_alloc`).
 
 ## Context artifacts
-Update `packages/engine/crates/engine/CLAUDE.md` (module map: `game`, `delta`, `store`). Extend `paths:` of `.claude/rules/determinism.md` to the new modules.
+Update `packages/engine/crates/engine/CLAUDE.md` (module map: `game`, `delta`, `store`). `paths:` of `.claude/rules/determinism.md`: M02's `packages/engine/crates/**` already reaches the new modules; add a glob only if one of them falls outside it, and never one that matches no file (M01's `context-artifacts` test).
 
 ## Manual device checks
 none

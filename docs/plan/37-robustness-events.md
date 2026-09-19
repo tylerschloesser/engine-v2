@@ -34,7 +34,7 @@ Sim-*instance* recovery, `Skip`, `EngineFault` (M24). Migration (M24b). Storage 
 
 ## Seams
 **Provides:** `client.onFatal`, `client.onDesync`, `DesyncReport` (TS mirror of M31b's record); `TestFlags` `trapClientAtFrame`, `trapGenAtChunk`, `killSimWorkerAtTick`; `src/engine-events.test.ts` (the audit); ADR "Engine failure surface".
-**Consumes:** `EngineTrap`, `dead`, `panicMessage`, `instantiate` (M02); `shell.fatal`, setup message, `EngineStartError`, kept `Module` (M06b); `SimHost.onFatal`, `onRecovered`, `recover()`, fixture `panicky` (M24); `'save-incompatible'` (M24b); `client.onStorage`, `StorageStatus`, `world-busy`, `exportWorld` / `importWorld` (M23); `HostServices.onFatal?`, `nodeHostServices`, `WorldServer` (M27); `createLink`, `CloseCode` (M28); second-`Welcome` resync, `client.onResyncing`, `Lost` (M28b); `client.onLink`, `client.onVersionMismatch` (M29); desync report ring (M31b); `client.onRendererLost` (37b); `status.ts` (M34, M34b); injected `Clock` (M03); plugin dev server and `watchCrate` (M02b).
+**Consumes:** `EngineTrap`, `dead`, `panicMessage`, `instantiate` (M02); `shell.fatal`, setup message, `EngineStartError`, kept `Module` (M06b); `SimHost.onFatal`, `onRecovered`, `recover()`, fixture `panicky` (M24); `'save-incompatible'` (M24b); `client.onStorage`, `StorageStatus`, `world-busy`, `exportWorld` / `importWorld` (M23); `HostServices.onFatal?`, `nodeHostServices`, `WorldServer` (M27); `createLink`, `CloseCode` (M28); second-`Welcome` resync, `client.onResyncing`, `Lost` (M28b); `client.onLink`, `client.onVersionMismatch` (M29); desync report ring and test export `client_corrupt_chunk` (M31b); `client.onRendererLost` (37b); `status.ts` (M34, M34b); injected `Clock` (M03); plugin dev server and `watchCrate` (M02b).
 
 Audit table (ADR name → owner → landed by; the behaviour test's name is filled in by the session):
 
@@ -61,10 +61,10 @@ Audit table (ADR name → owner → landed by; the behaviour test's name is fill
 1. Trap hooks in `panicky`; client-role reaction; gen-role reaction. 2. Sim-worker respawn; loop guards. 3. `client.onFatal` + sources; server path. 4. `client.onDesync`. 5. Audit test; close gaps. 6. `status.ts`. 7. `dev-reload-keeps-world`. 8. ADR, context artifacts.
 
 ## Tests added
-`browser`: `trap: client instance recovers and resyncs` (replica hash equals host hash afterwards; main kept presenting), `trap: gen instance recovers and chunk arrives`, `trap: gen twice is fatal`, `sim worker death respawns and resyncs` (no admitted action lost, by log comparison), `fatal: two client traps`, `fatal: storage error` (files byte-identical afterwards), `reference: status walks every event` (driven by `TestFlags`). `netcode`: `fatal: server onFatal stops world and closes sockets`, `trap: headless client resyncs`. `unit`: `engine event surface`. Slow: `dev-reload-keeps-world @slow`.
+`browser`: `trap: client instance recovers and resyncs` (replica hash equals host hash afterwards; main kept presenting), `trap: gen instance recovers and chunk arrives`, `trap: gen twice is fatal`, `sim worker death respawns and resyncs` (no admitted action lost, by log comparison), `fatal: two client traps`, `fatal: storage error` (files byte-identical afterwards), `desync: onDesync fires once per report` (M31b's `client_corrupt_chunk` on a multiplayer page: the callback receives one `DesyncReport` naming the chunk, a second sweep of the healed chunk fires nothing), `reference: status walks every event` (driven by `TestFlags`). `netcode`: `fatal: server onFatal stops world and closes sockets`, `trap: headless client resyncs`. `unit`: `engine event surface`. Slow: `dev-reload-keeps-world @slow`.
 
 ## Exit criteria
-- [ ] The trap, respawn and fatal tests above pass by name; the M04 zero-GC tests still pass untouched (healthy path unchanged).
+- [ ] The trap, respawn, fatal and desync tests above pass by name; the M04 zero-GC tests still pass untouched (healthy path unchanged).
 - [ ] `pnpm test unit -t "engine event surface"` passes with every table row present and every named behaviour test found.
 - [ ] The reference game shows a distinct, test-visible state for each event.
 - [ ] `pnpm test:slow -t dev-reload-keeps-world` passes; the ADR "Engine failure surface" exists.

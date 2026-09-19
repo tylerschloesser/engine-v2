@@ -53,7 +53,7 @@ Player circle, spring, `Presence`, `admit`, spawn, any DOM UI (M20b). Inventory 
 
 ## Tests added
 - Rust native (`sim/tests/`): `worldgen_golden` (raw tile bytes of 16 chunks incl. two near ±2^18), `worldgen_no_resource_on_water`, `landmarks_fixture_current`, `collect_completes_and_depletes`, `collect_out_of_range_rejected` (boundary at exactly `RANGE`), `collect_busy_rejected`, `collect_last_unit_clears_resource_and_overlay_is_canonical`, `collect_second_finisher_gets_nothing`, `cancel_collect_clears_timer`, `durations_at_20_and_30_hz` (`0006` Consequences), `replay_equals_live_hash`.
-- TS unit: `gen_assets_reproducible` (run the script twice into a temp dir, bytes equal the committed files; manifest obeys the limits of `0018` §4), `reference_package_depends_only_on_engine` (`package.json` has `engine` as its single runtime dependency: the UI stays framework-free).
+- TS unit: `gen_assets_reproducible` (run the script twice into a temp dir, bytes equal the committed files; manifest obeys the limits of `0018` §4), `reference_package_depends_only_on_engine` (`package.json` has `engine` as its single runtime dependency, as `workspace:*`, and `"private": true`: the UI stays framework-free; `sim/Cargo.toml` depends on the engine crate by a relative `path`, never through `node_modules`, `0017` §1), `reference_bindings_have_no_bigint` (no `bigint` in `src/bindings/`: `0003` TS-facing types; the fixture half is M16's).
 - Browser: `reference_terrain_renders` (semantic probes on three landmark tiles, `0020` §6), `reference_depletion_visible` (dispatch `StartCollect` from the test, step 40 ticks, the tile's resource texel changes stage).
 
 ## Exit criteria

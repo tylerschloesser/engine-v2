@@ -37,7 +37,7 @@ packages/engine/package.json   (exports: add `./virtual`)
 
 ## Seams
 **Provides:**
-- `engine(opts: { crate: string, profile?: 'dev' | 'release' }): Plugin` from `engine/vite`. Default profile per 0017 §4 (dev for `vite dev`, release for `vite build`).
+- `engine(opts: { crate: string, profile?: 'dev' | 'release' }): Plugin` from `engine/vite`. Default profile per 0017 §4 (dev for `vite dev`, release for `vite build`), exposed as `api.profile` on the returned plugin once the config is resolved.
 - `import wasm from 'virtual:engine/wasm'` → `{ url: string, buildHash: string }` (type `EngineWasm`, declared in `engine/virtual`). This object is what `createClient({ wasm })` takes (M06b) and what `engine/test` takes (M03).
 - The fixture app. Root `packages/engine/tests/browser/pages/`; **adding a page = adding `<name>.html` at the app root plus `src/<name>.ts`**; the config globs `*.html` into `build.rollupOptions.input`. Config: `engine({ crate: '../../../fixtures/hash', profile: 'dev' })`, `build.minify: false` (M04 attributes allocations by function name), `build.target: 'es2022'`, port from `ENGINE_TEST_PORT` (default 4517, `strictPort`), so two worktrees can run at once.
 - `fixturesPlugin()` (test-only, in the app): serves, in dev and in the built output, `/fixtures/<name>/game.wasm` (`application/wasm`) and `/fixtures/<name>/game.json` for every directory in `packages/engine/fixtures/` from its `target/engine/dev/` output (already built by `pnpm test`'s build step). `src/fixture-wasm.ts`: `fixtureWasm(name): Promise<EngineWasm>`. Pages for any fixture other than `hash` use this; `wiring.html` uses the real virtual module so the public path stays tested.
@@ -62,10 +62,10 @@ packages/engine/package.json   (exports: add `./virtual`)
 5. Slow test for the overlay path: `{ type: 'error' }` payload carries rustc's message; after restoring the source a `full-reload` follows.
 
 ## Tests added
-`wasm` suite: `plugin-dev: headers on every response`, `plugin-dev: wasm served as application/wasm`, `plugin-dev: virtual module carries url and buildHash`, `plugin-dev: fs.allow contains engine dir`, `plugin-dev: touch triggers rebuild and full-reload`, `plugin-build: hashed non-inlined wasm asset`, `plugin-build: preview sends COOP/COEP`. Slow tier (same suite, `@slow` title): `plugin: rustc error reaches overlay and recovers @slow`.
+`wasm` suite: `plugin-dev: headers on every response`, `plugin-dev: wasm served as application/wasm`, `plugin-dev: virtual module carries url and buildHash`, `plugin-dev: fs.allow contains engine dir`, `plugin-dev: touch triggers rebuild and full-reload`, `plugin-build: hashed non-inlined wasm asset`, `plugin-build: preview sends COOP/COEP`, `plugin: default profile follows the Vite command` (0017 §4; no `profile` option: Vite's `resolveConfig` with command `serve` then `build`, reading the chosen profile from the plugin's `api.profile`, gives `dev` then `release`; no cargo call, so the fast tier pays no release build). Slow tier (same suite, `@slow` title): `plugin: rustc error reaches overlay and recovers @slow`, `plugin-build: default profile writes a release game.json @slow` (a real `vite build` with no `profile` option; `game.json.profile === 'release'`).
 
 ## Exit criteria
-- [ ] All tests above pass by name (`pnpm test wasm -t plugin`, `pnpm test:slow wasm -t "rustc error"`).
+- [ ] All tests above pass by name (`pnpm test wasm -t plugin`, `pnpm test:slow wasm -t "rustc error"`, `pnpm test:slow wasm -t "default profile"`).
 - [ ] `pnpm --filter engine exec vite build -c tests/browser/pages/vite.config.ts` succeeds and `vite preview` serves `wiring.html` with `crossOriginIsolated === true` (checked by hand in one browser; automated in M03).
 - [ ] `packages/engine/src/vite.ts` imports Node built-ins and types only (`vite` stays a types-only optional peer, 0017 §2).
 - [ ] `wasm` suite still inside its budget with the plugin tests added; number recorded under Deviations.

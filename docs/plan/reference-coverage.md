@@ -4,7 +4,7 @@ Closes the item deferred in `PRE-PLAN.md` §10 ("Final check of reference-game f
 
 **Kind:** *play* = ordinary gameplay reaches it; *scripted* = reached only by luck in play, so a scripted reference-game test pins it (`0003`, `0020` §8); *fixture* = no reference feature reaches it; an engine fixture test is the only cover.
 
-M34b and M34c keep the test columns true: a row is done when the named test exists and passes.
+M34b and M34c keep the test columns true (here and in the `reference-game.md` table of `coverage.md`, see §3): a row is done when the named test exists and passes.
 
 ## 1. Engine feature → reference-game feature
 
@@ -77,29 +77,7 @@ M34b and M34c keep the test columns true: a row is done when the named test exis
 
 ## 3. Requirement matrix (`docs/spec/reference-game.md`)
 
-| Requirement | Test(s) | M |
-|---|---|---|
-| Simplex, octaves, biomes | `worldgen_golden`, `reference_terrain_renders` | 20 |
-| Pixel-art feel: variants, noise, dithering | `gen_assets_reproducible` (variants, priority, band present); engine shader tests (M09b); by hand | 20 |
-| Tile assets from a script; 16 px, 4 variants | `gen_assets_reproducible` | 20 |
-| Resource layer, deterministic scatter, none on water | `worldgen_no_resource_on_water`, `worldgen_golden` | 20 |
-| 10 units, depletion | `collect_last_unit_clears_resource_and_overlay_is_canonical`, `reference_depletion_visible` | 20 |
-| Players are circles; spring | `extract_hash_player_circle`, `spring_settles_and_is_dt_independent` | 20b |
-| Position is presence; relayed; witness range-checked | `admit_*`, `collect_out_of_range_rejected`, `reference_presence_only_to_subscribers`, `reference_two_players_see_each_other` | 20, 20b, 34 |
-| Collect button per resource in range; 2 s; fill | `reference_collect_flow`, `reference_several_buttons` | 20b |
-| One collect and one craft, no queue; pan-out cancels | `collect_busy_rejected`, `craft_rejected_when_busy`, `collect_and_craft_run_together`, `reference_pan_out_cancels` | 20–32 |
-| Inventory and unlocks per player | `unlock_is_per_player` | 32 |
-| Spawn on nearest land; returning player resumes; float over water | `spawn_is_nearest_land_tile`, `reference_new_player_spawns_on_land`, `reference_returning_player_resumes`, `reference_reload_resumes`; `admit_accepts_within_tolerance` uses a position over water | 20b, 34, 34b |
-| Roster of coloured dots | `joined_assigns_distinct_colours`, `reference_roster_follows_join_grace_and_return` | 34 |
-| Unlock at 5 stone; menu appears; furnace cost and time | `unlock_on_threshold_stone_not_before`, `craft_deducts_cost_then_completes_on_time`, `reference_craft_flow` | 32 |
-| Construction UI; 2x2; not on water or buildings; mouse and touch flows | `place_*`, `reference_place_mouse`, `reference_place_touch` | 33 |
-| The rule asks the tiles | `can_place_names_no_tile_type` | 33 |
-| Furnace UI: deposit iron, coal or wood | `deposit_validates_item_count_and_cap`, `reference_furnace_flow` | 33b |
-| One ingot per 5 s; coal 10, wood 2 | `smelt_takes_five_seconds_at_20_and_30_hz`, `one_coal_smelts_exactly_ten`, `one_wood_smelts_exactly_two` | 33b |
-| Any player, any furnace; take-all; ore and fuel stay | `any_player_can_use_any_furnace`, `take_all_moves_ingots`, `reference_full_game_two_players` (no action removes ore or fuel) | 33b, 34c |
-| An empty furnace can be picked up by any player; it leaves the world and returns to the inventory | `pickup_empty_despawns_and_returns_item`, `pickup_rejected_unless_empty`, `pickup_by_any_footprint_tile_and_any_player`, `predicted_pickup_tombstone_then_ack`, `pickup_sends_entity_gone_and_closes_other_panel`, `reference_furnace_pick_up`, `reference_full_game_single`, `reference_full_game_two_players` | 33b, 34b, 34c |
-| Framework-free TypeScript | `reference_package_depends_only_on_engine` | 20 |
-| Whole game, single-player and multiplayer | `reference_full_game_single`, `reference_golden_replay`, `reference_full_game_two_players` | 34b, 34c |
+Moved: the Requirement → test mapping is the [`reference-game.md` table of `coverage.md`](coverage.md#reference-gamemd), one row per Requirement. M34b and M34c keep its rows true for the single-player and multiplayer tests.
 
 ## 4. Questions (for `docs/plan/questions-for-tyler.md`; briefs assume the default)
 

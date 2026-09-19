@@ -75,7 +75,7 @@ Rust: `queue_orders_ring_class_then_distance`, `queue_resorts_only_on_chunk_or_z
 `PRE-PLAN.md` §7 rows: allocation per isolate (gen and client workers; the zero-GC test); memory per instance (gen arena of 0015 §5, `W_MEM_GROWS == 0`); chunk generation, join case (`genJoinChunks` exact in `budgets.json`). Wall-clock ms per chunk stays with M08's benchmark.
 
 ## Context artifacts
-Updates `packages/engine/CLAUDE.md`; extends `hot-paths.md` globs (created by M06). No skill.
+Updates `packages/engine/CLAUDE.md`; extends `hot-paths.md` globs (created by M02) with `packages/engine/crates/engine/src/gen_queue.rs` and `packages/engine/crates/engine/src/client/**`, both of which exist after this milestone (M01's `context-artifacts` test fails on a glob that matches no file). No skill.
 
 ## Manual device checks
 none here; the first on-device run of a worker/SAB page is M11's checklist, over M03's `pnpm device:serve --tunnel`.

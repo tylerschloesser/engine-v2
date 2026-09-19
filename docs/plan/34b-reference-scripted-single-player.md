@@ -12,7 +12,7 @@ One scripted playthrough of the whole reference game runs in the browser suite t
 2. `docs/decisions/0003-game-facing-api.md` (Consequences: the coverage list)
 3. `docs/decisions/0020-testing-strategy.md` (§3 suites and budgets, §4 demotion, §5 determinism, §8 test entrypoint)
 4. `docs/decisions/0005-persistence-and-recovery.md` (Recovery; Upgrades; Storage: Browser and Export/import bullets; Panic recovery)
-Also: `docs/plan/reference-coverage.md` (both tables). Skills: `run-tests`, `gc-test`.
+Also: `docs/plan/reference-coverage.md` (§1–2) and the `reference-game.md` table of `docs/plan/coverage.md`. Skills: `run-tests`, `gc-test`.
 Rules that apply: `games/reference/CLAUDE.md`; `.claude/rules/determinism.md` for the hook code.
 
 ## Scope
@@ -44,19 +44,19 @@ Multiplayer scripts and races (M34c). Heavy mode, soak, benchmarks, the standard
 ## Order of work
 1. `script.ts` and the headless driver; full game headless; `golden:record`; native, Node and Bun replays; determinism-page entry.
 2. DOM driver; `reference_full_game_single`; hash equality with the headless run.
-3. Persistence tests. 4. State budget. 5. `test-hooks` and the two slow tests. 6. GC window. 7. Fill the matrix column in `reference-coverage.md`.
+3. Persistence tests. 4. State budget. 5. `test-hooks` and the two slow tests. 6. GC window. 7. Fill the test columns: the `reference-game.md` table of `coverage.md` and the engine-feature table of `reference-coverage.md`.
 
 ## Tests added
 - Browser: `reference_full_game_single`, `reference_reload_resumes`, `reference_offscreen_furnace_keeps_smelting`, `reference_world_busy_second_tab`, `reference_export_import_roundtrip`, `reference_state_budget_full_shows_reason`, `gc.reference_single_player`.
 - WASM under Node (engine `wasm` suite): `build-game-features` (a fixture built with and without a feature lands in two directories with two build hashes).
-- WASM under Node and Bun: `reference_golden_replay` (checkpoint hashes; first divergent tick reported), `reference_single_player_save_to_server`, `reference_state_budget_full`.
+- WASM under Node and Bun: `reference_golden_replay` (checkpoint hashes; first divergent tick reported; also asserts `logBytesPerPlayerHour`: the golden log's bytes divided by its scripted player-ticks, scaled to one hour, against a `budgets.json` ceiling whose source is the `PRE-PLAN.md` §7 action rate / log row, owner 0004), `reference_single_player_save_to_server`, `reference_state_budget_full`.
 - Rust native: `golden_replay` (same log, same hashes).
 - Browser determinism page: the reference log added to the Chromium, WebKit and Firefox runs.
 - Slow: `reference_panic_in_apply_skips_and_recovers`, `reference_save_incompatible_leaves_files`.
 
 ## Exit criteria
 - [ ] All tests above pass by name; the slow ones under `pnpm test:slow`.
-- [ ] Every single-player row of the Requirement matrix in `docs/plan/reference-coverage.md` has its test column filled with a test that exists.
+- [ ] Every single-player row of the Requirement matrix (the `reference-game.md` table of `docs/plan/coverage.md`) has its "Verified by" column filled with a test that exists.
 - [ ] Fast-suite budgets of `0020` §3 still hold; anything demoted is tagged per §4 and listed under Deviations.
 - [ ] `pnpm test` and `pnpm lint` are green.
 
@@ -64,7 +64,7 @@ Multiplayer scripts and races (M34c). Heavy mode, soak, benchmarks, the standard
 `pnpm test browser -t reference_` · `pnpm test wasm -t reference_` · `pnpm test rust -t golden_replay` · `pnpm test:slow -t reference_` · `pnpm --filter reference golden:record` (must produce no diff).
 
 ## Budgets
-Test suite (`PRE-PLAN.md` §7): the browser suite's budget with these tests added, read from the `pnpm test` summary line. Allocation per isolate: `gc.reference_single_player` against `budgets.json`.
+Test suite (`PRE-PLAN.md` §7): the browser suite's budget with these tests added, read from the `pnpm test` summary line. Allocation per isolate: `gc.reference_single_player` against `budgets.json`. Action rate / log row, bytes per active player-hour: the `logBytesPerPlayerHour` projection in `reference_golden_replay`.
 
 ## Context artifacts
 `games/reference/CLAUDE.md`: the script helper, how to regenerate the golden, what `test-hooks` is and that it must never ship. Extend the `run-tests` skill with the `reference_` filter.

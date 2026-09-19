@@ -21,6 +21,7 @@ Mine from spikes: `spikes/zero-gc-webgpu/tests/harness.mjs` (CDP tracing session
 - Rust: `DrawList::sprite` already exists (M17); add `SpriteId` constants helper for fixtures only.
 - Slow-tier benchmark `bench.frame_worstcase`; baseline file; `.claude/skills/profile-frame/`.
 - The manual Safari/Firefox harness page mode.
+- GPU memory counter: `gpuBytes`, the sum of the byte sizes of every texture and buffer the renderer creates (page, indirection, tile art with mips, atlas, sprite data textures, instance buffer, uniforms), added up at creation.
 
 ## Non-scope
 Sprite animation clocks (a game passes the frame in `param`). Text. A second atlas (0018 Consequences). Reference-game art (M20). Frame time on the reference game's worst-case view and on phones (M36, M39).
@@ -33,6 +34,7 @@ Sprite animation clocks (a game passes the frame in `param`). Text. A second atl
 - `ClientOptions.assets.sprites?: string` (URL of `sprites.json`).
 - `sprites.json` schema v1: `{ "version": 1, "image": "sprites.png", "padding": 2, "sprites": { "<sprite id 0..4095>": { "rect": [x, y, w, h], "pivot": [px, py], "size": [w_tiles, h_tiles], "frames": 1 } } }`; frames are laid out left to right from `rect`; limits of 0018 §4 validated with the offending id in the message.
 - `pnpm bench:frame` (slow tier member) and `packages/engine/baselines/frame.json`.
+- `engine/test` counter `gpuBytes`.
 - `profile-frame` skill wrapping `scripts/profile-frame.mjs`.
 - Device page mode `?harness=1` (below).
 
@@ -49,13 +51,14 @@ Sprite animation clocks (a game passes the frame in `param`). Text. A second atl
 
 ## Tests added
 - `unit` suite: `sprites.schema_errors`.
+- Browser (Chromium): `counters.gpu_bytes_within_budget` (on page `drawables` with sprites loaded, `gpuBytes` is non-zero and within `counters["render.gpuBytes"]`, whose value and `formula` come from the GPU-side figure of 0015 §5 and 0018 Consequences).
 - Browser readback (Chromium): `sprite.pivot_and_size_probe`, `sprite.flip_x`, `sprite.frames_by_param`, `sprite.no_bleed_at_mip1` (neighbouring atlas cell of a contrasting colour never appears; relies on the 2 px extrusion), `sprite.layering_with_shapes`.
 - Rust native: `wgsl.uberquad_validates` still green.
 - Zero-GC: page `drawables` with sprites present (number unchanged).
 - Slow tier: `bench.frame_worstcase`.
 
 ## Exit criteria
-- [ ] All fast tests above pass by name.
+- [ ] All fast tests above pass by name; `budgets.json` holds `counters["render.gpuBytes"]` with its `formula`.
 - [ ] `pnpm bench:frame` meets the desktop proxy of 0018 §9 on Tyler's Mac and `baselines/frame.json` is checked in.
 - [ ] `.claude/skills/profile-frame/SKILL.md` exists and its command was run in this session.
 - [ ] The `docs/plan/device-checks.md` section for this milestone matches what was built.
@@ -67,7 +70,7 @@ Sprite animation clocks (a game passes the frame in `param`). Text. A second atl
 ## Budgets
 - Frame time, desktop proxy (PRE-PLAN §7 row 1, 0018 §9): `bench.frame_worstcase`.
 - Allocation per isolate: unchanged from M17.
-- Memory, GPU: atlas + instance buffer as 0018 Consequences; the data textures add 128 KiB.
+- Memory, GPU: atlas + instance buffer as 0018 Consequences; the data textures add 128 KiB. Measured by `gpuBytes` in `counters.gpu_bytes_within_budget`.
 
 ## Context artifacts
 Creates the `profile-frame` skill (0021 §4; PLAN.md listed it under M17 before the split). `packages/engine/CLAUDE.md`: `pnpm bench:frame`, baseline update rule.
