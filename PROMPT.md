@@ -3,9 +3,9 @@
 ## Status
 
 - **Phase:** 3 of 4. (Updated 2026-09-19.)
-- **Milestone:** next is M04, `docs/plan/04-zero-gc-harness.md` (marker: tag `harness-complete` at its `done` commit). Nothing in flight.
+- **Milestone:** M04 in flight, base `5cbf35e`, `docs/plan/04-zero-gc-harness.md` (marker: tag `harness-complete` at its `done` commit).
 - **State:** M01, M02, M02b and M03 are done and on `main`; `pnpm test && pnpm lint` is green (four suites: `rust`, `unit`, `wasm`, `browser`). Phase 3 runs as one orchestrating session with Sonnet implementers on `main` (ADR 0025). M03 landed Playwright in `pnpm test` (suite `browser`, build step `pages`, three engines for `@engines` specs), `src/clock.ts` with the ambient-time and ambient-randomness lints, the first `engine/test` (`createManualClock`, `createHarness`, harness worker, step block), `pnpm device:serve [--tunnel]` and the `run-tests` skill; exact seam shapes are in each brief's Deviations. Device check ready for Tyler: M03 determinism page (`docs/plan/device-checks.md`). Open questions for Tyler (none blocking; defaults stand): `docs/plan/questions-for-tyler.md`.
-- **Exact next step:** On a new machine run `pnpm install && pnpm setup:tools` first. Start the session on `main` with edits auto-accepted, confirm `milestone-implementer` is among the agent types, then follow "The loop". The first marker is M04 (`harness-complete`).
+- **Exact next step:** On a new machine run `pnpm install && pnpm setup:tools` first. Start the session on `main` with edits auto-accepted, confirm `milestone-implementer` is among the agent types, then follow "The loop" from step 2 (in flight: `git log 5cbf35e..HEAD` plus the brief's Deviations say how far M04 got). The first marker is M04 (`harness-complete`).
 - **Blockers:** none.
 
 Overwrite this block (never append to it) and commit it twice per milestone: before delegating (`M<NN> start`; Milestone reads "M<NN> in flight, base `<sha>`", the sha of the commit before it) and after accepting (`M<NN> done: …`; Milestone names the next row). Leave the rest of this file intact.
