@@ -23,7 +23,7 @@ Guiding idea: the game defines *what* (data and rules); the engine pieces everyt
 
 ## Fixed decisions (Tyler's)
 
-- pnpm monorepo. TypeScript on the JS side. Rust→WASM for everything that reasonably can be.
+- pnpm monorepo. TypeScript on the JS side. Rust→WASM for everything that reasonably can be. Accepted exception: the renderer's WebGPU calls, the camera, and input handling are TypeScript on the main thread (see `client.md`).
 - **Game authors write simulation logic in Rust** (worldgen, actions, tick rules, deltas, prediction). The game crate and engine crate compile into one WASM module. TypeScript is for bootstrapping and UI.
 - The engine is the single published npm package, with **zero runtime npm dependencies** and multiple entrypoints (main thread, worker, server). See `runtime-and-packaging.md`.
 - The reference game is a separate, private package: Vite plus a simple game.
@@ -31,7 +31,7 @@ Guiding idea: the game defines *what* (data and rules); the engine pieces everyt
 - WebSockets for multiplayer unless research finds something clearly better.
 - Game UI is a game-owned DOM overlay; the engine renders no UI widgets.
 - **The camera never mutates the world, and is not an action.** It is deliberately non-mutating so that it can live independently of the sim: the sim's host uses each client's camera + viewport only to decide chunk subscriptions. Only actions change the world.
-- The server entrypoint should be agnostic to where it's hosted (e.g. AWS vs. Vercel), within what `sync.md` finds feasible.
+- The server entrypoint should be agnostic to where it's hosted, as defined under Hosting in `sync.md`.
 
 ## Scale and trust
 
@@ -40,11 +40,11 @@ Guiding idea: the game defines *what* (data and rules); the engine pieces everyt
 - Server-authoritative validation of actions is enough; no further anti-cheat.
 - Networks: assume decent, modern mobile connections. Not worst-case, not great 5G.
 
-## Proposed non-goals
+## Non-goals
 
-Claude's defaults; Tyler hasn't confirmed these. Phase 1 should confirm them in its batch of questions.
+Confirmed by Tyler (2026-09-19).
 
-- Accounts/auth (a player is an opaque ID/token), matchmaking, lobbies.
+- Accounts/auth (a player is an opaque ID/token; see Sessions in `sync.md`), matchmaking, lobbies.
 - Audio.
 - A non-WebGPU rendering fallback.
 - Modding or loading game code at runtime.

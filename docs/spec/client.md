@@ -2,7 +2,10 @@
 
 ## Requirements
 
-- Custom WebGPU rendering engine.
+- Custom WebGPU rendering engine. The WebGPU calls are issued from TypeScript on the main thread; Rust in a worker produces all frame data into shared memory; no WASM runs on the main thread.
+- The camera is user-driven and engine-owned. A game can set constraints, move it programmatically, and attach an optional follow target. No "WASD moves a sim player" mode in v1.
+- Zoom range: 12 to 256 tiles across the long axis by default (about 128 subscribed chunks per client), configurable per game.
+- Supported browsers: Tier 1 is the current and previous major version of Chrome (desktop, Android) and Safari (macOS, iOS 26+). Tier 2 is Firefox desktop. Anything else gets a capability screen. Design inside the WebGPU compatibility-mode subset, with no testing commitment for those devices.
 - The engine is responsible for most user input:
   - Desktop: WASD moves the camera; scroll zooms.
   - Mobile: pointer drag moves the camera; pinch zooms.

@@ -9,6 +9,10 @@
 - Chunk size and max world size (chunk count or bytes) are configurable per game.
 - The world can be assumed to fit in memory.
 
+- "Infinite" means at least ±8.4 million tiles per axis.
+- Worldgen code and the seed ship to clients; there is no map secrecy.
+- In v1, worldgen emits tile data only: no generator-spawned entities.
+
 **Reading of "infinite" + "max world size":** coordinates are unbounded; the cap applies to *materialized* chunks held in memory.
 
 ## Open questions

@@ -13,6 +13,10 @@
 - The world only needs to be persisted occasionally, for crash recovery.
 - Actions are stored indefinitely so the world can be replayed.
 
+- **Idle worlds.** A multiplayer world pauses at zero connected players (a per-game flag can keep it ticking). A single-player world pauses when the tab is hidden. No offline progress.
+- **Upgrades may invalidate saves** during prototyping: saves and logs are version-stamped, a mismatch produces a clean "save incompatible" error, and a game may supply an optional `migrate` hook. Old sim binaries are not archived.
+- **Save export/import** at the engine level is in scope (protection against browser storage eviction, and the path from a single-player world to a hosted one). Game UI for it is optional.
+
 Tick rate lives in `sync.md`.
 
 ## Open questions

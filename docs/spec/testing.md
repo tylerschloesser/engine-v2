@@ -8,6 +8,10 @@
 - Low-level browser behavior must be testable, e.g. deterministically run the game and assert that no garbage collection occurred.
 - Tests must be fast; parallelization is fine. Budget: **under 1 minute for all tests**. If that's exceeded, Tyler will want to split into a fast suite and a slower, more comprehensive one.
 
+- The 1-minute budget assumes warm build caches. Separately, an incremental rebuild after a one-line Rust edit should take 30 seconds or less.
+- CI is GitHub Actions on Linux with a software WebGPU adapter. Real-GPU and timing-sensitive runs happen only on Tyler's Mac. iOS Safari is covered by a manual checklist on a real phone; no device cloud.
+- "Zero GC" means: in steady state, zero major GCs and approximately zero allocation on every engine-owned isolate, except a small fixed floor (about 100 B/frame) on the rendering thread for WebGPU's unavoidable wrapper objects, and the rare sub-millisecond scavenge that implies.
+
 ## Implications for the engine's design
 
 Testability is a design constraint, not an afterthought:

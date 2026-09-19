@@ -7,7 +7,8 @@
 - The engine abstracts this: the game defines the data model, the deltas, and the interpolation and prediction logic; the engine pieces everything together.
 - Tick rate is TBD. It must accommodate mobile network patterns: assume reasonably decent, modern speeds and bandwidth, but not great 5G.
 - Transport: likely WebSockets, unless there's a better option.
-- The server entrypoint should be host-agnostic (e.g. AWS vs. Vercel).
+- **Hosting.** The server entrypoint is host-agnostic in this sense: it is a library that needs one long-lived context, a timer, injected connections, and injected storage. Target a Node/Bun process (VM, container, Fly) first and Cloudflare Durable Objects second. Vercel is not a target for the sim (it can serve the static client). Cost target: about $5/month per always-available world, about $0 while idle.
+- **Sessions.** Access control is a join key in the invite link plus a device-local identity secret; no cross-device recovery. A server process hosts exactly one world, created or loaded at startup; mapping URLs to worlds is the deployer's problem.
 
 **Reading of the model:** this is server-authoritative with chunk-based interest management, not lockstep. Clients never hold the whole world. Determinism serves replay, persistence, testing, and client prediction (the client can run the same Rust rules). Single-player uses the identical protocol; the only difference is the transport (worker messages instead of a socket).
 
