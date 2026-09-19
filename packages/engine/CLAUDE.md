@@ -44,7 +44,9 @@ The one publishable package (working name `engine`, private for now). Layout and
 `<name>.html` at its root plus `src/<name>.ts` (the config globs `*.html` into the build input). A
 page for any fixture other than `hash` loads it through `fixtureWasm(name)` (`fixture-wasm.ts`),
 shaped exactly like `virtual:engine/wasm`'s `EngineWasm`; `wiring.html` is the only page importing
-the real virtual module, so the public path stays tested. Port: `ENGINE_TEST_PORT` (default 4517,
+the real virtual module, so the public path stays tested. A page's script ends by setting
+`window.__pageReady = true` (after its top-level `await`s): `openPage` waits for that flag, not for
+`load`. Port: `ENGINE_TEST_PORT` (default 4517,
 `strictPort`), so two worktrees can run the browser suite at once.
 
 ## Adding a browser spec

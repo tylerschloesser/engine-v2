@@ -1,6 +1,6 @@
 # M03: Browser harness: Playwright, fixture pages, `engine/test` skeleton, determinism in three browsers
 
-Status: not started · After: 02b · Tyler-dependent: no (Q7 answered: a Cloudflare quick tunnel is OK; Q5 answered: iPhone only, so the `adb reverse` path is documented but unused; see Planning decisions)
+Status: done · After: 02b · Tyler-dependent: no (Q7 answered: a Cloudflare quick tunnel is OK; Q5 answered: iPhone only, so the `adb reverse` path is documented but unused; see Planning decisions)
 
 ## Goal
 `pnpm test` runs a fifth suite, `browser`, under the same output contract: Playwright Test against the built fixture app, cross-origin isolated. A test-only worker runs the fixture `.wasm` through the M02 loader, stepped from the main thread through the first version of `engine/test` (injectable `Clock`/`Scheduler`, `stepTick`, `stepFrame`, an awaitable quiescence point). The M02 golden hashes are reproduced in Chromium, WebKit and Firefox. The `run-tests` skill exists.
@@ -94,15 +94,15 @@ Tyler approved the tunnel (Q7: it installs `cloudflared` and exposes the fixture
 - `browser` / `determinism.spec.ts` `@engines`: every checkpoint in `golden/golden.json` (read in Node, not trusted from the page) equals the page's in Chromium, WebKit and Firefox; on mismatch the message names the first divergent checkpoint (0020 §5).
 
 ## Exit criteria
-- [ ] `pnpm test browser` passes and prints one line; `pnpm test` runs five suites in parallel.
-- [ ] `pnpm test browser -t determinism` shows the golden reproduced in three engines (project names in the JSON report).
-- [ ] Editing one checkpoint in `golden/golden.json` by hand makes native, `wasm` and all three browser projects fail naming that checkpoint (check, then revert).
-- [ ] Adding `Date.now()` to `src/loader.ts` makes `pnpm lint` fail, and adding `Math.random()` there makes `pnpm test unit -t no_ambient_random` fail naming the file (check, then revert).
-- [ ] `grep -r "test/" packages/engine/dist/{loader,clock,vite,server-node}.js` finds no import of test code.
-- [ ] `pnpm device:serve` serves `determinism.html` showing PASS in a desktop browser.
-- [ ] `.claude/skills/run-tests/SKILL.md` exists and its commands were each run once in this session.
-- [ ] `browser` suite time recorded under Deviations.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `pnpm test browser` passes and prints one line; `pnpm test` runs its four registered suites (`rust`, `unit`, `wasm`, `browser`) in parallel. (Orchestrator correction: the brief said five; the fifth row of 0020 §3, `netcode`, is registered by M27.)
+- [x] `pnpm test browser -t determinism` shows the golden reproduced in three engines (project names in the JSON report).
+- [x] Editing one checkpoint in `golden/golden.json` by hand makes native, `wasm` and all three browser projects fail naming that checkpoint (check, then revert).
+- [x] Adding `Date.now()` to `src/loader.ts` makes `pnpm lint` fail, and adding `Math.random()` there makes `pnpm test unit -t no_ambient_random` fail naming the file (check, then revert).
+- [x] `grep -r "test/" packages/engine/dist/{loader,clock,vite,server-node}.js` finds no import of test code.
+- [x] `pnpm device:serve` serves `determinism.html` showing PASS in a desktop browser.
+- [x] `.claude/skills/run-tests/SKILL.md` exists and its commands were each run once in this session.
+- [x] `browser` suite time recorded under Deviations.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test` · `pnpm test browser` · `pnpm test browser -t determinism` · `pnpm test unit -t "manual clock"` · `pnpm lint` · `pnpm device:serve`
@@ -280,3 +280,4 @@ renamed, so no ADR. Exact shapes, findings and small corrections:
   what was verified for that branch. `pnpm device:serve` (no `--tunnel`) was verified for real:
   built the fixture app, served `determinism.html` on `127.0.0.1:4173`, and a `playwright-cli` read
   of `#result` showed `PASS | crossOriginIsolated: true | userAgent: ...HeadlessChrome/153...`.
+- **Orchestrator gate (2026-09-19):** `pnpm gate ddf879b` clean (44 files, +1860/−14, no goldens or markers changed); `pnpm test` green (`rust` 16, `unit` 51, `wasm` 23, `browser pass 13 tests 4.4s/25s`) and `pnpm lint` green, run by the orchestrator. `pnpm golden hash` re-run by the orchestrator: no diff. `dist/{loader,clock,vite,server-node}.js` contain no `import`/`export`/`require` of `test/` (the raw `grep "test/"` of the criterion also matches two doc-comment lines in `clock.js`; accepted). Accepted test substitutions, both technical decisions of the orchestrator: (1) `stepping: 1,000 stepTick()…` compares with a Node-side reference of 1,000 plain `sim_tick` calls on the same `.wasm` and config instead of a scenario checkpoint, because the scenario admits input between checkpoints and `stepTick` never admits; the tie to the golden is `determinism.spec.ts`. (2) `untilQuiescent` is asserted through the public API (a `hash()` that only a parked worker can answer) instead of reading `REQ`/`ACK`/`STATE`, because `stepTick` is synchronous (it returns after every ack) and the step block is internal; M06b re-asserts quiescence on the production control block. Exit criterion 1 reworded from five suites to four (`netcode` is M27). `window.__pageReady` added to the page contract in `packages/engine/CLAUDE.md`. Tunnel path of `pnpm device:serve --tunnel`: implemented, not run (Tyler-run, device checklist).

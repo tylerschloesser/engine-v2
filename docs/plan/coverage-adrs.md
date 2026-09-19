@@ -765,7 +765,7 @@ Every decision of ADRs 0001 to 0025 (judged against the amendments of 0022, 0023
 | §2 over budget warns, over 1.5x fails | M01 | `classifyBudget` unit test; criterion `--budget-scale 0.000001` fails both suites | covered |
 | §2 `pnpm test:slow` same contract; every test addressable by name | M01, M36 | M01 criterion `pnpm test:slow` exits 0; M36 criterion one line per suite | covered |
 | §2 `pnpm lint` quiet, separate; no-compile subset gates commits | M01 | criteria "`pnpm lint` prints four `pass` lines" and the hook-by-pipe criterion | covered |
-| §3 five suites with per-suite budgets | M01, M03, M27, M36b | M03 "runs five suites in parallel"; M27 "`pnpm test netcode` passes within the 0020 §3 budget"; M36b `pnpm test:timings` | covered |
+| §3 five suites with per-suite budgets | M01, M03, M27, M36b | M03 "runs its four registered suites … in parallel" (the fifth, `netcode`, is M27); M27 "`pnpm test netcode` passes within the 0020 §3 budget"; M36b `pnpm test:timings` | covered |
 | §3 compile budget: 30 s from a one-line Rust edit to tests starting | M02, M36b | M02 "Rebuild time ... recorded"; M36b "`pnpm measure:rebuild` ... meet the compile budget" | covered |
 | §3 browser tests step frames, never real rAF pacing | M03 | `stepping.spec.ts` (1,000 `stepTick()` in one task); `manual clock: frame runs callbacks once` | covered |
 | §4 demotion rule, p95 limits, `slow` tag mechanism | M01, M36b | M01 `@slow` and `slow_` filters; M36b criterion "no fast test over the 0020 §4 p95 limits ... no feature lost its only fast test" | covered |
