@@ -1,0 +1,8 @@
+[package]
+name = "spike-game"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+spike-engine = { path = "../engine" }
