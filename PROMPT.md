@@ -3,9 +3,9 @@
 ## Status
 
 - **Phase:** 3 of 4. (Updated 2026-09-19.)
-- **Milestone:** next is M02b, `docs/plan/02b-vite-plugin.md`. Nothing in flight.
+- **Milestone:** M02b in flight, base `2debfab`, `docs/plan/02b-vite-plugin.md`.
 - **State:** M01 and M02 are done and on `main`; `pnpm test && pnpm lint` is green. Phase 3 now runs as one orchestrating session with Sonnet implementers on `main` (ADR 0025); the old milestone branches are gone. M02 landed the engine crate ABI, `src/abi.ts`, the loader, `buildGame()`, `loadGame()`, fixture `fx-hash` with a golden equal natively, under Node and under Bun, the `wasm` suite, `crate-policy`, `pnpm golden` and the two rule files; exact seam shapes are in M02's Deviations. Open questions for Tyler (none blocking; defaults stand): `docs/plan/questions-for-tyler.md`.
-- **Exact next step:** On a new machine run `pnpm install && pnpm setup:tools` first. Start the session on `main` with edits auto-accepted, confirm `milestone-implementer` is among the agent types, then follow "The loop". The first marker is M04 (`harness-complete`).
+- **Exact next step:** On a new machine run `pnpm install && pnpm setup:tools` first. Start the session on `main` with edits auto-accepted, confirm `milestone-implementer` is among the agent types, then follow "The loop" from step 2 (in flight: `git log 2debfab..HEAD` plus the brief's Deviations say how far M02b got). The first marker is M04 (`harness-complete`).
 - **Blockers:** none.
 
 Overwrite this block (never append to it) and commit it twice per milestone: before delegating (`M<NN> start`; Milestone reads "M<NN> in flight, base `<sha>`", the sha of the commit before it) and after accepting (`M<NN> done: …`; Milestone names the next row). Leave the rest of this file intact.
