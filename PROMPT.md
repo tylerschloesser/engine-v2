@@ -1,52 +1,46 @@
-# PROMPT: Phase 1 (Pre-plan)
+# PROMPT: Phase 2 (Plan)
 
 ## Status
 
-- **Phase:** 1 of 4, in progress on branch `phase-1-pre-plan`. (Updated 2026-09-19.)
-- **State:** Steps 1–2 done: spec gaps added, all eight research files are in `docs/research/`. Tyler ruled that the camera is not an action (recorded in `docs/spec/overview.md`). Step 3 spikes are running under `spikes/` (`vite-lib-worker-wasm`, `cross-origin-sab`, `determinism-hash`, `prediction-api`, `zero-gc-webgpu`); each writes a `RESULT.md`. Step 4: the batch is in `docs/research/questions-for-tyler.md`, awaiting answers.
-- **Next step:** Check each spike's `RESULT.md` (re-run any that is missing) and link results from the research files. Record Tyler's answers in the spec Requirements and delete the questions file. Then steps 5–8.
+- **Phase:** 2 of 4, not started. (Updated 2026-09-19.)
+- **State:** Phase 1 is complete. Every open question in `docs/spec/` is resolved by an ADR in `docs/decisions/` (0001–0021) or deferred with a reason in `PRE-PLAN.md`. Five feasibility spikes ran; results are in `spikes/<name>/RESULT.md`. There is no engine code yet.
+- **Next step:** Begin at "What to do" below.
 
 If you stop early (context budget, blocker), update this Status block with the current state and exact next steps, commit, and end. Leave the rest of this file intact.
 
 ## Your job
 
-Turn Tyler's rough goals into a finished set of decisions. By the end of this session every big technical question is researched and decided, the repo contains all the context needed to write the final implementation plan, and `PROMPT.md` is rewritten so a fresh session can start Phase 2 with nothing else explained.
+Turn `PRE-PLAN.md` and the ADRs into `PLAN.md`: exactly how to write, test, and verify the engine and the reference game, as milestones that each fit in one Claude Code session. By the end of this session a fresh session pointed at `PROMPT.md` can start executing milestone 1 with nothing else explained.
 
-You are not writing engine code in this phase.
+You are not writing engine code in this phase, and you are not reopening decisions. If planning exposes a real flaw in an ADR, supersede it with a new ADR (don't rewrite the old one) and say so in `PLAN.md`.
 
 ## Read first
 
-1. `docs/process.md`: the phases and the rules every session follows (delegation, context budget, commits, who decides what).
-2. `docs/spec/overview.md`: the goal, the engine/game split, and the decisions Tyler has already made.
-3. The seven domain files in `docs/spec/`. They're short. Each has **Requirements** (Tyler's; treat as fixed) and **Open questions** (yours to resolve).
-4. `docs/context-architecture.md`: how context is organized, and its own open questions.
+1. `docs/process.md`: the phases and the rules every session follows. Its Phase 2 section lists what each milestone must contain.
+2. `docs/spec/overview.md`: the goal, the engine/game split, fixed decisions, non-goals.
+3. `PRE-PLAN.md`, all of it: architecture, layout, API and protocol sketches, testing strategy, budgets, ordering constraints, risks, the deferred-unknowns table, and the items awaiting Tyler.
+4. `docs/context-architecture.md` and `docs/decisions/0021-context-architecture.md`: how plan files, nested `CLAUDE.md`, `.claude/rules/`, skills, the commit hook, and the permission allowlist are laid out and when each gets created.
 
-`docs/archive/` holds Tyler's original brain dump. It's superseded by `docs/spec/`; don't use it as a source.
+Read an ADR or spec domain file when you plan the milestone that touches it, not up front; delegate per-subsystem planning to sub-agents briefed with `docs/spec/overview.md`, the relevant section of `PRE-PLAN.md`, and the one to three ADRs involved. `docs/research/` is evidence behind the ADRs; consult it only when an ADR's reasoning is unclear. `spikes/` is throwaway code: mine it for working snippets (the GC assertion harness, the Vite plugin, the SAB ring, the `WorldRead`/`WorldWrite` overlay), don't build on it in place.
 
 ## What to do
 
-1. **Challenge the spec.** Before researching, look for gaps, contradictions, and unstated assumptions across the spec files, beyond the open questions already listed. Add what you find to the relevant file's open questions.
-2. **Research in parallel with sub-agents**, one per domain file, plus one for the context architecture. Brief each with `overview.md` + its domain file. Each writes `docs/research/<topic>.md` containing: findings with sources, prior art and what to take from it, a recommendation per open question with confidence, and anything that needs a spike to settle. Each returns only a short summary to you. Research must use current sources (docs, support tables, release notes), not memory.
-3. **Spike only where a decision hinges on feasibility.** Throwaway code under `spikes/<name>/`, timeboxed, run by sub-agents. Likely candidates: asserting zero GC in headless Chrome with a real WebGPU device; a Vite app consuming a library that ships a worker and a game-built WASM module; SharedArrayBuffer under cross-origin isolation in dev and production. Record the result in the research file.
-4. **Ask Tyler once, in a batch.** Collect everything that is scope, taste, or cost, including the proposed non-goals in `overview.md` and the small gaps in `reference-game.md`. Offer a recommended default for each. Record answers in the spec's Requirements sections.
-5. **Decide.** The domains interact (cross-origin isolation ↔ hosting; renderer placement ↔ GC ↔ input latency; WASM vs. native server ↔ determinism ↔ host choice), so synthesize across research files before committing to anything. Write one ADR per decision in `docs/decisions/NNNN-<slug>.md`: context, decision, alternatives rejected and why, consequences. In each spec file, replace resolved open questions with a link to the ADR.
-6. **Write `PRE-PLAN.md`.** It links to ADRs rather than restating them, and contains:
-   - Architecture overview: processes, threads, memory ownership, and data flow for both single-player and multiplayer.
-   - Package and crate layout, entrypoints, and the build pipeline.
-   - Sketch of the game-facing API: the Rust traits a game implements and the TypeScript surface it uses.
-   - Protocol sketch: action and delta flow, tick and send rates, subscription changes, reconnect.
-   - Testing strategy: tools, suite structure, how GC and determinism are asserted, how the 1-minute budget is met.
-   - Performance budgets as numbers: frame time, tick time, chunk generation latency, bandwidth per client, memory.
-   - Risks, and the unknowns deliberately left for Phase 2.
-7. **Finalize the context architecture.** Apply what the research found to `docs/context-architecture.md` and `CLAUDE.md`.
-8. **Hand off.** Rewrite this file for Phase 2 per `docs/process.md`. Commit.
+1. **Settle the deferred unknowns.** Go through the "deferred to Phase 2" table in `PRE-PLAN.md`. For each item either decide it now (new ADR, or an amendment section in a plan file if it is too small for one), or assign it to a named milestone with the question it must answer. Nothing stays unowned.
+2. **Check the items awaiting Tyler** in `PRE-PLAN.md`. Anything still unanswered goes into one batch of questions, with a recommended default each, together with any new scope, taste, or cost question planning raises. Record answers in the spec Requirements.
+3. **Cut milestones.** Each fits one session, leaves the repo green, and lands something verifiable. Order them so the thin vertical slice in `docs/process.md` (chunked world on screen, camera input, sim in a worker, one action round trip, tests green) lands as early as possible, and so the test harness, including the zero-allocation assertion (ADR 0016) and the cross-runtime determinism hash (ADRs 0002, 0020), is an early milestone. Respect the ordering constraints in `PRE-PLAN.md`.
+4. **Write each milestone brief** with: scope and explicit non-scope; files, packages, and crates touched; the spec and ADR files to read (at most overview + three); exit criteria; the exact commands that verify them; which budgets from `PRE-PLAN.md` it must meet and how that is measured; which skills, rules files, or nested `CLAUDE.md` files it creates per ADR 0021.
+5. **Plan the first milestone in the most detail**: repo scaffolding (pnpm workspace, cargo workspace, toolchain pins), `.claude/settings.json` allowlist and the commit hook per ADR 0021, the `pnpm test` entrypoint with its quiet-on-success output contract, and CI.
+6. **Schedule the manual device checks** (real iPhone: determinism hash, terrain fill-rate, memory ceiling, DOM anchoring) as Tyler-run checklists attached to the milestones that make them possible.
+7. **Split the plan if it is long.** If `PLAN.md` outgrows one comfortable read, make it an index (ordering, dependencies, progress checkboxes) and put one brief per milestone in `docs/plan/<NN>-<slug>.md`, per `docs/context-architecture.md`.
+8. **Verify the plan.** Have a sub-agent read only `PROMPT.md` (as rewritten for Phase 3) and what it links to for milestone 1, then list what it would still need to know to start coding. Fix what it finds. Have a second sub-agent check coverage: every Requirement in `docs/spec/`, every ADR decision, and every reference-game feature maps to at least one milestone's exit criteria.
+9. **Hand off.** Rewrite this file for Phase 3 per `docs/process.md`: a status block naming the current milestone, the loop each session follows (read the milestone brief, implement, verify, tick it off in `PLAN.md`, update the status block, commit), and the rule that deviations get an ADR or a plan edit. Update `CLAUDE.md`'s map. Commit.
 
 ## Exit criteria
 
-- [ ] Every open question in `docs/spec/*.md` and `docs/context-architecture.md` is either resolved with a linked ADR or explicitly deferred to Phase 2 with a reason, listed in `PRE-PLAN.md`.
-- [ ] Every ADR names the alternatives it rejected. No technology is chosen without a checked, current source or a spike.
-- [ ] Every feasibility risk that a decision depends on has a spike result or a stated reason it didn't need one.
-- [ ] Tyler has answered the batched questions, and the answers are recorded in the spec.
-- [ ] `PRE-PLAN.md` contains every section listed above and contradicts no spec Requirement.
-- [ ] A fresh session given only `PROMPT.md` could write `PLAN.md` without doing new research. Check this by having a sub-agent read only `PROMPT.md` and what it links to, then list what it would still need to know. Fix what it finds.
-- [ ] `PROMPT.md` is rewritten for Phase 2, `CLAUDE.md`'s map is accurate, and everything is committed.
+- [ ] Every item in `PRE-PLAN.md`'s deferred table is decided or owned by a named milestone.
+- [ ] Every milestone has scope, files touched, reading list, exit criteria, and exact verification commands, and plausibly fits one session.
+- [ ] The vertical slice and the test harness (zero-allocation and determinism assertions included) land within the first few milestones.
+- [ ] The coverage check passes: every spec Requirement, ADR decision, and reference-game feature maps to a milestone.
+- [ ] The fresh-session check passes for milestone 1.
+- [ ] Tyler has answered any batched questions, and the answers are recorded in the spec.
+- [ ] `PROMPT.md` is rewritten for Phase 3, `CLAUDE.md`'s map is accurate, and everything is committed.
