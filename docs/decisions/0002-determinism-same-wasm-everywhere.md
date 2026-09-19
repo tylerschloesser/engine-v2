@@ -33,7 +33,7 @@ Speed is not a reason to go native: worldgen and the spring sim ran at about 1.1
 - **NaN canonicalization.** The engine `Codec` for `f32`/`f64` writes `0x7fc00000` (or the f64 equivalent) for any NaN and `debug_assert!`s finiteness; snapshots and the state hash are built only from `Codec` bytes. It is a backstop, not permission to store NaN.
 - **Heavy mode.** A test mode that, every N ticks (N=1 in the slow suite), saves, loads into a fresh instance, continues, and compares the state hash with an uninterrupted run. This is what finds hidden state (caches, free lists, RNG, table layout).
 - **Replay equality.** Run a script to hash H; replay its log from genesis; expect H.
-- **Cross-engine golden hashes.** One fixed seed and script, golden hashes checked in, run as `.wasm` in Node and Playwright Chromium/Firefox/WebKit, and natively. Raw float bits are hashed so drift cannot hide behind thresholds.
+- **Cross-engine golden hashes.** One fixed seed and script, golden hashes checked in, run as `.wasm` in Node, Bun and Playwright Chromium/Firefox/WebKit, and natively (suite placement: [0020](0020-testing-strategy.md)). Raw float bits are hashed so drift cannot hide behind thresholds.
 - The state hash is 64-bit FNV-1a over canonical snapshot bytes (as in the spike). It detects bugs, not adversaries.
 
 ## Alternatives rejected

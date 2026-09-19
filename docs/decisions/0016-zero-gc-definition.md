@@ -25,7 +25,7 @@ The main-thread floor is 16 B per WebGPU wrapper object (encoder, pass, command 
 
 Exempt by nature:
 - One-time setup: load, module compile, device/pipeline/pool creation, and the 120 warm-up frames (JIT tiers and inline caches settle).
-- The game's DOM UI and anything it triggers on the main thread. The engine cannot bound game DOM code; the test page mounts no UI.
+- The game's DOM UI and anything it triggers on the main thread. The engine cannot bound game DOM code; the test page mounts no UI. Overlay anchoring ([0019](0019-camera-input-and-overlay.md)) is engine code: with no anchors mounted it writes no styles, so the strict window above sees none of it; with anchors mounted, the 1–2 short style strings per moving-camera frame are a separate line in the budgets file, asserted by its own test with a fixed anchor count (number deferred below with the main-thread number).
 - UI-driven action dispatch: `client.dispatch` JSON-encodes on the main thread ([0003](0003-game-facing-api.md)), once per human gesture, not per frame. Only that encode is exempt. In the window the test writes pre-encoded action bytes into the ring, so the ring, the WASM parse, prediction and wire encode are all covered.
 - Rare discontinuities: resize/DPR change, device loss, reconnect, tab background/foreground, panic recovery ([0005](0005-persistence-and-recovery.md)).
 
@@ -64,7 +64,7 @@ use: { channel: 'chromium', headless: true, launchOptions: { args: ['--enable-un
 - Desktop Chromium only. JavaScriptCore and SpiderMonkey have no equivalent instrument; on iOS the rule is checked by feel ([0020](0020-testing-strategy.md) checklist).
 - `Target.sendMessageToTarget` is deprecated; if Chrome removes it the harness opens its own CDP WebSocket (`--remote-debugging-port`) and uses flattened sessions.
 - The 24 B per WebGPU task is unexplained, and one 16-byte control object measured +21.3 B; neither affects the 8 B / 12 B separation around the budget.
-- Deferred to Phase 3: the final main-thread number, because it is 16 B x the real renderer's wrapper count and no renderer exists; 110 is correct for a one-pass frame and the formula above fixes how it changes.
+- Deferred to Phase 3: the final main-thread number and the overlay-anchoring string constant, because the first is 16 B x the real renderer's wrapper count and no renderer or overlay exists; 110 is correct for a one-pass frame and the formula above fixes how it changes.
 - Deferred to Phase 3: the software-adapter form of B (scene, N, per-function numbers), because SwiftShader on a GitHub runner was not measured (spike B in [0020](0020-testing-strategy.md)); the rule in caveat (b) is decided, only the numbers are open.
 - Deferred to Phase 2: whether the periodic snapshot write ([0005](0005-persistence-and-recovery.md)) is inside the strict window or a budgeted event like a net message, because no persistence code or measurement exists. Default until measured: inside (the test forces one snapshot in the window through the injected clock).
 

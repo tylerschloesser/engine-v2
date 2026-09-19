@@ -13,7 +13,7 @@ Actions are the only way to change the sim from outside, and "all actions with t
 - An action received while tick *T* is current is scheduled for tick ***T+1***. Clients never choose ticks. There is no input delay and no waiting for slow clients.
 - Within a tick, actions apply in **host arrival order**, before the tick rules: `for a in frame(T+1) { apply(a) }; tick()`. The log records the order positionally. Engine-defined connection events (`Joined`, `Connected`, `Disconnected`; grace period in [0013](0013-sessions-and-integrity.md)) are sequenced in the same stream and reach the game through `on_player` ([0003](0003-game-facing-api.md)).
 - The host, never the client, stamps `who: PlayerId` from the connection.
-- Every client action carries a per-connection, monotonically increasing `seq: u32`; each host frame's header carries `ack_seq`, the last `seq` processed for that player (framing: [0011](0011-wire-format-and-deltas.md)).
+- Every client action carries a **per-player**, monotonically increasing `seq: u32`, assigned by the client ([0003](0003-game-facing-api.md)) and continuing across reconnects and page reloads. The host keeps the last processed `seq` per player as sim state: it is written in each logged action record ([0005](0005-persistence-and-recovery.md)), so replay and crash recovery rebuild it exactly and a resent action is never applied twice ([0013](0013-sessions-and-integrity.md)). Each host frame's header carries it as `ack_seq` (framing: [0011](0011-wire-format-and-deltas.md)).
 
 **Pipeline per action:**
 
@@ -36,15 +36,15 @@ pub enum EngineReject { RateLimited, StateBudgetFull, EngineFault /* skip record
 
 **Flow to the prediction layer.** The client keeps a queue of unacked actions. On each frame it applies the deltas to its replica, pops every pending action with `seq <= ack_seq`, clears the overlay, and re-runs `apply` for what is still pending ([0012](0012-prediction-and-reconciliation.md)). Because the ack and its deltas share a frame, a confirmed ghost is replaced by the real thing in one render, and a rejected one disappears with no intermediate state. For each popped action the game's TypeScript gets `onActionResult(seq, Confirmed | Rejected(reason))` so it can show feedback. A local prediction failure is a hint, never a verdict: the client always sends the action. After a reconnect the client resends pending actions with `seq` above the host's last processed value, so nothing applies twice ([0013](0013-sessions-and-integrity.md)).
 
-**Log growth.** With the log frame layout in [0005](0005-persistence-and-recovery.md), one action costs about 16 bytes alone in its frame and about 10 bytes when frames are shared (payload 3-8 bytes: two zigzag varint coordinates, an item or recipe id, a count). Connection events are about 9 bytes each.
+**Log growth.** With the log frame layout in [0005](0005-persistence-and-recovery.md), one action costs about 18 bytes alone in its frame and about 12 bytes when frames are shared (`seq` varint 2-3 bytes; payload 3-8 bytes: two zigzag varint coordinates, an item or recipe id, a count). Connection events are about 9 bytes each.
 
 | Play style | Actions per player-hour | Log per player-hour |
 |---|---|---|
-| Casual, one action per 4 s | 900 | 14 KB |
-| Active, 1 per second sustained | 3,600 | 58 KB |
-| Drag-building, 5 per second sustained | 18,000 | 180 KB |
+| Casual, one action per 4 s | 900 | 16 KB |
+| Active, 1 per second sustained | 3,600 | 65 KB |
+| Drag-building, 5 per second sustained | 18,000 | 216 KB |
 
-4 players x 200 hours at the "active" rate is about 46 MB before compression, against browser quotas of 10 GiB or more. "Indefinitely" therefore needs no compaction. The rate limit caps the worst case at 20 x 3,600 x 10 B = 720 KB per player-hour.
+4 players x 200 hours at the "active" rate is about 52 MB before compression, against browser quotas of 10 GiB or more. "Indefinitely" therefore needs no compaction. The rate limit caps the worst case at 20 x 3,600 x 12 B = 864 KB per player-hour.
 
 ## Alternatives rejected
 

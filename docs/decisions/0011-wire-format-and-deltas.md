@@ -8,7 +8,7 @@ Status: Accepted (2026-09-19)
 
 ## Decision
 
-**Encoding.** Tagless, non-self-describing binary with no schema evolution; the build-hash handshake ([0013](0013-sessions-and-integrity.md)) guarantees both ends run the same `.wasm`. Engine framing is hand-written little-endian: fixed-width coordinates and ticks, LEB128 varints for ids, counts, and lengths, run-length runs for tile overlays. Game-typed values (`G::Action`, `G::Entity`, `G::Player`, `G::Reject`, the presence payload) are `postcard` via `serde`, the same bytes used in the log ([0005](0005-persistence-and-recovery.md)). No `permessage-deflate`. Only the handshake prefix is layout-stable across builds.
+**Encoding.** Tagless, non-self-describing binary with no schema evolution; the build-hash handshake ([0013](0013-sessions-and-integrity.md)) guarantees both ends run the same `.wasm`. Engine framing is hand-written little-endian: fixed-width coordinates and ticks, LEB128 varints for ids, counts, and lengths, run-length runs for tile overlays. Game-typed values (`G::Action`, `G::Entity`, `G::Player`, `G::Global`, `G::Reject`, the presence payload) are `postcard` via `serde`, the same bytes used in the log ([0005](0005-persistence-and-recovery.md)). No `permessage-deflate`. Only the handshake prefix is layout-stable across builds.
 
 **Frame** (host → client, one transport packet per frame):
 

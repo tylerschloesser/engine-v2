@@ -41,7 +41,7 @@ engine_mem_grows() -> u32                     // growth counter (0015)
 | Role (`engine_init`) | Hot exports (shape fixed here; final list in Phase 2) |
 |---|---|
 | `0` sim | `sim_admit(conn, len) -> status`, `sim_tick() -> status`, `sim_build_frame(conn) -> len`, `sim_snapshot() -> len`, `sim_hash()` |
-| `1` client | `on_frame(ptr, len)` ([0011](0011-wire-format-and-deltas.md)), `on_action(len) -> seq` and `on_input(len)` (JSON and input records, [0003](0003-game-facing-api.md), [0019](0019-camera-input-and-overlay.md)), `frame(t_ms: f64) -> status` |
+| `1` client | `on_frame(ptr, len)` ([0011](0011-wire-format-and-deltas.md)), `on_action(len) -> status` and `on_input(len)` (JSON action records, each carrying the `seq` assigned on main, and input records, [0003](0003-game-facing-api.md), [0019](0019-camera-input-and-overlay.md)), `frame(t_ms: f64) -> status` |
 | `2` gen | `gen_chunk(cx: i32, cy: i32)` writing 4,096 B to its output region ([0008](0008-chunk-generation.md)) |
 
 - Regions (receive, transmit, DrawList staging, chunk-texel staging, UI JSON, log/snapshot output, camera-block copy) are laid out once by `engine_init` and **never move or resize** for the life of the instance. After init the loader reads each `(ptr, len)` once and builds its typed-array views once.
@@ -76,7 +76,7 @@ engine_mem_grows() -> u32                     // growth counter (0015)
 ## Sources
 
 - [`../research/runtime-and-packaging.md`](../research/runtime-and-packaging.md) 1.2, 1.6, 2 (miniquad as existence proof of a fixed hand-written loader), 3.1, 3.8.
-- Spikes: [`../../spikes/cross-origin-sab/RESULT.md`](../../spikes/cross-origin-sab/RESULT.md) (preallocated per-slot views, `wasmU8.set(slotView, off)` into a non-shared `WebAssembly.Memory`, 0 GCs over 37 k messages); [`../../spikes/zero-gc-webgpu/RESULT.md`](../../spikes/zero-gc-webgpu/RESULT.md) (a numbers-only WASM worker at 0.99 B/frame, all of it harness). Raw matrix of the unfinished `spikes/vite-lib-worker-wasm` (`game/test/matrix-result.json`): a cargo-only cdylib importing exactly `engine.panic, engine.log` instantiates in Chromium, Firefox and WebKit; its conclusions belong to [0017](0017-packaging-and-build.md).
+- Spikes: [`../../spikes/cross-origin-sab/RESULT.md`](../../spikes/cross-origin-sab/RESULT.md) (preallocated per-slot views, `wasmU8.set(slotView, off)` into a non-shared `WebAssembly.Memory`, 0 GCs over 37 k messages); [`../../spikes/zero-gc-webgpu/RESULT.md`](../../spikes/zero-gc-webgpu/RESULT.md) (a numbers-only WASM worker at 0.99 B/frame, all of it harness). [`../../spikes/vite-lib-worker-wasm/RESULT.md`](../../spikes/vite-lib-worker-wasm/RESULT.md): a cargo-only cdylib importing exactly `engine.panic, engine.log` instantiates in Chromium, Firefox and WebKit; its conclusions belong to [0017](0017-packaging-and-build.md).
 - wasm-bindgen: https://wasm-bindgen.github.io/wasm-bindgen/reference/deployment.html · https://wasm-bindgen.github.io/wasm-bindgen/contributing/design/js-objects-in-rust.html · rustwasm sunset: https://blog.rust-lang.org/inside-rust/2025/07/21/sunsetting-the-rustwasm-github-org · wasm-pack releases: https://github.com/wasm-bindgen/wasm-pack/releases
 - Component model in browsers: https://bytecodealliance.github.io/jco/transpiling.html · https://component-model.bytecodealliance.org/
 - C ABI on wasm32: https://blog.rust-lang.org/2025/04/04/c-abi-changes-for-wasm32-unknown-unknown/ · target defaults: https://doc.rust-lang.org/nightly/rustc/platform-support/wasm32-unknown-unknown.html

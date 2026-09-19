@@ -77,7 +77,7 @@ Measured in Chromium 153, WebKit 26.6 and Firefox 155, `vite dev` and `vite prev
 
 ## Sources
 
-- Spikes: [`../../spikes/cross-origin-sab/RESULT.md`](../../spikes/cross-origin-sab/RESULT.md) (isolation matrix, ring, heap table, host listings); [`../../spikes/zero-gc-webgpu/RESULT.md`](../../spikes/zero-gc-webgpu/RESULT.md) (`Atomics` lockstep at zero allocation; `postMessage` negative control). Raw data of the unfinished `spikes/vite-lib-worker-wasm` (`game/test/matrix-result.json`, `sizes-result.json`): a `Module` compiled on main instantiates in workers in Chromium, Firefox and WebKit; a stub engine + game cdylib is 7 KB brotli.
+- Spikes: [`../../spikes/cross-origin-sab/RESULT.md`](../../spikes/cross-origin-sab/RESULT.md) (isolation matrix, ring, heap table, host listings); [`../../spikes/zero-gc-webgpu/RESULT.md`](../../spikes/zero-gc-webgpu/RESULT.md) (`Atomics` lockstep at zero allocation; `postMessage` negative control). [`../../spikes/vite-lib-worker-wasm/RESULT.md`](../../spikes/vite-lib-worker-wasm/RESULT.md): a `Module` compiled on main instantiates in workers in Chromium, Firefox and WebKit; a stub engine + game cdylib is 7 KB brotli.
 - [`../research/runtime-and-packaging.md`](../research/runtime-and-packaging.md) 1.4–1.6, 2, 3.2, 3.3, 3.8, 3.9.
 - Isolation: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Cross-Origin-Embedder-Policy · https://web.dev/articles/coop-coep · https://bugs.webkit.org/show_bug.cgi?id=230550 · GitHub Pages: https://github.com/orgs/community/discussions/13309
 - `Atomics.waitAsync`: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics/waitAsync

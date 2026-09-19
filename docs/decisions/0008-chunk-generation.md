@@ -15,7 +15,8 @@ Status: Accepted (2026-09-19)
 **1. The game writes one pure, synchronous, non-allocating function.**
 ```rust
 pub trait Worldgen {
-    type Params: Serialize + DeserializeOwned;      // stored in world params next to the seed
+    type Params: Serialize + DeserializeOwned;      // stored in world params next to the seed; `TS` for the game's config (0003)
+    const WORLDGEN_VERSION: u32;                    // bumped by the author when output changes; stamping and fingerprint: 0007
     /// Must write every element of `out` (row-major, CHUNK_AREA tiles). No other inputs exist.
     fn generate(seed: u64, params: &Self::Params, chunk: ChunkCoord, out: &mut [Tile]);
 }
@@ -42,7 +43,7 @@ The signature is the enforcement: no `&self`, no world handle, no RNG, no clock.
 - At most 2 jobs in flight per worker, so re-prioritization takes effect within about 1 ms of work.
 - Cancellation = dropping not-yet-dispatched requests that fall outside ring 3. In-flight jobs are never cancelled (they cost well under 1 ms) and a late result is cached anyway.
 
-**5. Pregeneration margin** (rings of chunks around the visible rectangle; subscription rings are decided in `0010-rates-and-subscriptions.md`): **ring 1 = generate + upload; ring 2 = generate only, direction of motion first; retain through ring 3**, then LRU. The generation set is always a superset of the subscription set, because both use the shared look-ahead function. At the view bound (256 tiles per axis, at most 9x9 visible chunks) that is at most 13x13 = 169 generated and 15x15 = 225 retained, against a 1,024-chunk client cache. No Factorio-style 20-chunk ring: that is a gameplay feature.
+**5. Pregeneration margin** (rings of chunks around the visible rectangle; subscription rings are decided in `0010-rates-and-subscriptions.md`): **ring 1 = generate + upload; ring 2 = generate only, direction of motion first; retain through ring 3**, then LRU. The generation set is always a superset of the subscription set, because both use the shared look-ahead function: the chunks that `0010`'s look-ahead subscribes beyond ring 1 (at most 2 extra chunks in the direction of travel) are generated and uploaded like ring 1, and they lie inside the ring-3 retention bound below. At the view bound (256 tiles per axis, at most 9x9 visible chunks) that is at most 13x13 = 169 generated and 15x15 = 225 retained, against a 1,024-chunk client cache. No Factorio-style 20-chunk ring: that is a gameplay feature.
 
 **6. Measured cost and the budgets it implies.** `spikes/determinism-hash`: a 32x32 chunk at 8 simplex evaluations per tile (5-octave height + 3-octave moisture) plus a scatter hash costs **0.09-0.11 ms in every engine** (V8, JSC, SpiderMonkey), 1.1-1.3x native release, with 12 KiB of hashing inside the timed region; f64 costs the same as f32. A phone core is *extrapolated* (not measured) at 0.3-0.5 ms.
 

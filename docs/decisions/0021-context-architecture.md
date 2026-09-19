@@ -44,7 +44,7 @@ Almost all code in this repo is written by Claude Code sessions and their sub-ag
 - Tests, type-checking, and builds are **not** in the hook. They are slow when caches are cold, browser suites can flake, and work-in-progress commits at the 50% context stop must stay possible. They are enforced by milestone exit criteria and the `run-tests` skill.
 - Trigger to extend: if a milestone is twice found committed as done with a failing fast suite, add the fast suite to the gate, provided it runs under ~10 s warm and has had no flaky failure. Trigger to remove: any false block that costs a session more than one retry.
 
-**7. Permission allowlist in `.claude/settings.json`** (checked in; created in Phase 3's first milestone, when the commands exist). Allow: `Bash(pnpm *)`, `Bash(cargo *)`, the WASM build tool chosen in the packaging ADR, read-only git (`status`, `diff`, `log`, `show`), `Bash(git add *)`, `Bash(git commit *)`. Playwright runs through `pnpm` scripts, so it needs no separate entry. Deny: `Bash(pnpm publish *)`, `Bash(cargo publish *)`. Not allowlisted, so they still prompt: `git push`, `git reset`, `rm`, network tools. `pnpm *` and `cargo *` are broad (they run arbitrary repo scripts); accepted for a single-owner repo. File edits are left to the session's permission mode. Machine-specific entries go in `.claude/settings.local.json`.
+**7. Permission allowlist in `.claude/settings.json`** (checked in; created in Phase 3's first milestone, when the commands exist). Allow: `Bash(pnpm *)`, `Bash(cargo *)`, no separate WASM build tool (the build is plain `cargo`, [0017](0017-packaging-and-build.md)), read-only git (`status`, `diff`, `log`, `show`), `Bash(git add *)`, `Bash(git commit *)`. Playwright runs through `pnpm` scripts, so it needs no separate entry. Deny: `Bash(pnpm publish *)`, `Bash(cargo publish *)`. Not allowlisted, so they still prompt: `git push`, `git reset`, `rm`, network tools. `pnpm *` and `cargo *` are broad (they run arbitrary repo scripts); accepted for a single-owner repo. File edits are left to the session's permission mode. Machine-specific entries go in `.claude/settings.local.json`.
 
 **8. Phase 3 progress lives in the repo, in two places.** The `PROMPT.md` status block holds only: current milestone, state, exact next step, blockers. It is overwritten, never appended to. Per-milestone state (exit-criteria checkboxes, done/in progress, deviations) lives in `PLAN.md`, or in `docs/plan/<milestone>.md` if Phase 2 splits the plan. Nothing about project state is entrusted to auto memory, `--resume`, `/goal`, or scheduled tasks: a fresh session on any machine must be able to continue from `PROMPT.md` alone.
 
@@ -73,7 +73,8 @@ Almost all code in this repo is written by Claude Code sessions and their sub-ag
 
 ## Sources
 
-- Research: [`../research/context-architecture.md`](../research/context-architecture.md)- CLAUDE.md loading, imports, `.claude/rules/`, compaction, auto memory: https://code.claude.com/docs/en/memory.md
+- Research: [`../research/context-architecture.md`](../research/context-architecture.md)
+- CLAUDE.md loading, imports, `.claude/rules/`, compaction, auto memory: https://code.claude.com/docs/en/memory.md
 - Sub-agent startup context, `omitClaudeMd`, `skills` preload: https://code.claude.com/docs/en/sub-agents.md
 - Skills format and script bundling: https://code.claude.com/docs/en/skills.md
 - Hooks (`if` field, exit 2, timeouts, Stop override): https://code.claude.com/docs/en/hooks-guide.md

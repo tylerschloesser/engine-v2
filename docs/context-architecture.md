@@ -48,8 +48,9 @@ spikes/<name>/                throwaway feasibility code + RESULT.md (Phase 1 on
   hooks/pre-commit-check.sh   the hook's script
   rules/<invariant>.md        path-scoped invariants, each added with the first code it governs
   skills/<procedure>/SKILL.md procedures, each added when it becomes real
-packages/*/CLAUDE.md          ┐ per-package conventions, each added in the
-crates/*/CLAUDE.md            ┘ milestone that creates the package
+packages/engine/CLAUDE.md, packages/engine/crates/*/CLAUDE.md, games/*/CLAUDE.md
+                              per-package conventions, each added in the milestone that
+                              creates the package (layout: decisions/0017-packaging-and-build.md)
 ```
 
 If `PLAN.md` outgrows one comfortable read, Phase 2 splits it into `PLAN.md` (index + ordering + progress) and `docs/plan/<milestone>.md` (one brief per session, carrying that milestone's exit-criteria checkboxes and deviations). The `PROMPT.md` status block holds only the current milestone, state, exact next step, and blockers, and is overwritten rather than appended to.
@@ -58,9 +59,9 @@ If `PLAN.md` outgrows one comfortable read, Phase 2 splits it into `PLAN.md` (in
 
 ```
 CLAUDE.md                          map, commands, one line per global invariant (determinism, zero-GC, test budget)
-packages/engine/CLAUDE.md          JS-side conventions      ┐ loaded on demand when
-crates/<engine-crate>/CLAUDE.md    Rust-side conventions    │ Claude reads a file
-packages/reference-game/CLAUDE.md  how the game uses the engine ┘ in that directory
+packages/engine/CLAUDE.md                 JS-side conventions          ┐ loaded on demand when
+packages/engine/crates/<crate>/CLAUDE.md  Rust-side conventions        │ Claude reads a file
+games/reference/CLAUDE.md                 how the game uses the engine ┘ in that directory
 docs/
   context-architecture.md          this file, updated
   architecture/<subsystem>.md      how each subsystem works *now*
