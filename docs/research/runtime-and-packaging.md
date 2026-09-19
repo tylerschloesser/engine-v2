@@ -322,3 +322,10 @@ Output: the minimal required `vite.config.ts`, and A-vs-B.
 6. **Node WebSocket server: hand-roll ~300 lines of protocol code inside the engine, or have the game install and inject `ws`?** *Default: hand-roll the minimal binary-only server; keep `ws` injection as a documented alternative.*
 7. **Does an `<engine>/vite` plugin entrypoint fit "zero dependencies"?** It imports only Node built-ins; Vite is an optional, types-only peer. *Default: yes.*
 8. **Stable Rust only** (which forecloses WASM threads)? *Default: yes.*
+
+## Spike results
+
+- **S1 + S3 (build pipeline):** works. Vite 8.3 app, tarball-installed engine, plain `cargo build`, no wasm-bindgen; 192/192 headless runs across Chromium, Firefox, WebKit in dev and build. See `spikes/vite-lib-worker-wasm/RESULT.md`.
+- **S2:** works. Cross-origin isolation and SharedArrayBuffer in all three engines; a SAB ring adds no main-thread garbage, `postMessage` does. See `spikes/cross-origin-sab/RESULT.md`.
+- **S3 (hash equality):** covered by `spikes/determinism-hash/RESULT.md`.
+- **S4 (real-phone memory ceilings)** and **S5 (hand-rolled Node WebSocket server):** not run. S4 cannot be automated and is a Phase 3 manual device check; S5 is moot because the game injects `ws` (ADR 0009).

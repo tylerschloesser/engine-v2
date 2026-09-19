@@ -332,3 +332,8 @@ Not a spike: worker rendering. It is rejected on architecture (input and DOM liv
 5. **Zoom range.** Recommended default: 12 to 256 tiles across the long axis (host clamps to 256 tiles per axis and 128 chunks per client), render-scale cap DPR 2, snap-to-device-pixel at rest on, integer-zoom snapping off.
 6. **Tile art resolution for the reference game.** Recommended default: 16 x 16 art pixels per tile (dither dots read as deliberate pixel art); the engine supports any single square size per game.
 7. **Touch placement UX (no hover on phones).** Recommended default: tap positions the ghost, a DOM confirm button places it; on desktop the ghost follows the mouse and click places.
+
+## Spike results
+
+- **Desktop-testable parts** (per-frame WebGPU allocation floor, `writeBuffer` from shared memory): see `spikes/zero-gc-webgpu/RESULT.md`.
+- **Real-phone parts** (terrain fill-rate, anchoring on iOS Safari): not run; deferred as manual device checks in ADRs 0018 and 0019.

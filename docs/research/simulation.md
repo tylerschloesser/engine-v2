@@ -471,3 +471,7 @@ No decision here strictly hinges on feasibility; the WASM spec, not an experimen
 4. **Idle behavior.** Defaults: multiplayer **pauses at zero players**; single-player **pauses when the tab is hidden**; no offline progress. Per-game config can override the first.
 5. **Archive old sim binaries with the world** so every historical log segment stays replayable without rebuilding old commits (about 1-3 MB per version)? Default: **no for now**; headers record the wasm hash and game version, which is enough to rebuild from git.
 6. **Rust dependencies in the sim:** is `serde` + `postcard` (+ `ts-rs` at build time) acceptable under the spirit of "zero dependencies", which is stated for npm only? Default: **yes**; the alternative is an engine-owned derive macro, which is weeks of work for little gain.
+
+## Spike results
+
+- **Cross-engine determinism:** see `spikes/determinism-hash/RESULT.md` (std transcendentals and NaN bit patterns diverge; everything else tested matched).

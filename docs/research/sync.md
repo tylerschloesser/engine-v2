@@ -349,3 +349,8 @@ Confidence: **high** on the definition; **medium** on Node-first over Bun-first 
 4. **Should a world keep ticking with nobody connected?** Recommended default: **pause** (idle cost ~$0; furnaces do not run overnight), with a per-game flag to keep ticking.
 5. **Is a shared join key in the invite link enough access control**, with identity as a device-local secret and no cross-device recovery? Recommended default: **yes**; a "copy my player link" escape hatch can come later.
 6. **Hosting budget.** Recommended default: design for **about $5/month per always-available world and ~$0 while idle**; if Durable Objects are wanted, accept the 128 MB world ceiling on that host.
+
+## Spike results
+
+- **Spike 1 (`WorldAccess` overlay API):** works; one `apply` handler runs on the host and under the client's reset-and-replay overlay with zero steady-state allocation. See `spikes/prediction-api/RESULT.md`.
+- **Spike 2 (Durable Objects at 20 Hz):** not run; it needs an external deployment and gates only whether that host is supported. Deferred in ADR 0009.

@@ -236,3 +236,7 @@ Not required for a decision, but cheap and belongs to runtime: an on-device "all
 4. **Maximum zoom-out.** Proposed clamp: 640 x 384 tiles visible (about 4 CSS px per tile on a 2560-wide display; about 350 chunks). Taste: is that far enough out, or too far for pixel art? *Default: as proposed, per-game configurable.*
 5. **Baseline phone.** Proposed: iPhone 12-class, implying a whole-tab budget under 300 MB and a 64 MiB default sim world budget. *Default: as proposed.*
 6. **Does any planned game need generator-spawned entities (trees or enemies as entities rather than tile data) in v1?** The reference game does not. *Default: no; tile data only.*
+
+## Spike results
+
+- **Bit-identical worldgen:** confirmed for the restricted float subset across V8, JSC, SpiderMonkey and native aarch64/x86-64 Linux; ~0.1 ms per chunk. Not tested: a real iPhone, real x86 hardware. See `spikes/determinism-hash/RESULT.md`.
