@@ -1,0 +1,31 @@
+# Runtime, performance, and packaging
+
+## Requirements
+
+### Runtime and performance
+
+- In general, everything is async. The main thread does only what is necessary in JavaScript.
+- Do as much as possible in Rust→WASM running in web workers.
+- Optimize for minimal or no garbage collection, to prevent dropped frames.
+
+### Packaging
+
+- pnpm monorepo, TypeScript.
+- The engine has no dependencies and is the single export of the overall repo. The reference game is a separate package (Vite + a simple game).
+- Exports must be modeled so a bundler like Vite can import each piece in the right place. The exact web-worker bundle splitting is probably the game's responsibility, but the engine has to know about web workers, so the separation isn't perfectly clean. Figure out how to export things to accommodate this.
+- The engine also exports a server entrypoint, agnostic to where it runs.
+
+### Consequence of "games are written in Rust"
+
+Because the game crate and engine crate link into one WASM module, the engine **cannot ship a prebuilt WASM binary**. The engine is delivered as an npm package (main-thread client, worker bootstrap, server bootstrap) *plus* Rust crate(s), and the game's build produces the WASM. Every game therefore needs a Rust toolchain in its build, and the engine should make that painless.
+
+## Open questions
+
+- **JS↔WASM boundary.** wasm-bindgen (generated glue tends to allocate) vs. a hand-rolled ABI over linear memory; how much glue the zero-GC goal tolerates.
+- **Cross-thread communication.** SharedArrayBuffer + Atomics (ring buffers, shared state) vs. `postMessage` with transferables (structured clone creates garbage). SAB requires cross-origin isolation (COOP/COEP headers): what does that demand of the game's dev server and production hosting, and does it break anything the game might embed?
+- **Worker topology.** Which workers exist (sim, render via OffscreenCanvas, chunk generation pool, network decode), who owns which memory, and whether WASM threads (shared memory across workers) are worth their constraints.
+- **What "zero GC" means, measurably.** Proposed: after load, the steady-state hot paths (frame loop, tick, message handling) allocate nothing on the JS heap. DOM UI and one-time setup are exempt. Define how it's measured (see `testing.md`).
+- **Exports map.** Entry points (e.g. `engine`, `engine/worker`, `engine/server`), how `new Worker(new URL(...))` and `.wasm` assets resolve under Vite when they originate in a library, and exactly what a game must configure. Verify against the current Vite version with a spike.
+- **Rust build pipeline.** cargo + wasm-bindgen-cli, wasm-pack, or a Vite plugin; how the engine crate reaches the game (in-repo path, crates.io, bundled in the npm package); rebuild speed and what the dev loop (edit Rust → see change) feels like.
+- **Rust dependency policy.** "Zero dependencies" is stated for npm. What's the bar for crates (e.g. serialization, noise is the game's problem, wgpu if the renderer is Rust)?
+- **Server runtime.** Which JS runtimes the server entrypoint supports (Node, Bun, Deno, workerd) and how each loads the WASM module; or whether the server is a native Rust binary instead (ties to determinism in `simulation.md` and hosting in `sync.md`).
