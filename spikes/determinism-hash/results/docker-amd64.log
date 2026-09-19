@@ -1,0 +1,24 @@
+Unable to find image 'rust:1.93' locally
+1.93: Pulling from library/rust
+866771c43bf5: Pulling fs layer
+acad23588d43: Pulling fs layer
+ed881fbf1b07: Pulling fs layer
+9da421ddeb65: Pulling fs layer
+a793e3c6bce8: Pulling fs layer
+d1587f24866c: Download complete
+8cd2c629227c: Download complete
+ed881fbf1b07: Download complete
+9da421ddeb65: Download complete
+866771c43bf5: Download complete
+866771c43bf5: Pull complete
+ed881fbf1b07: Pull complete
+9da421ddeb65: Pull complete
+acad23588d43: Download complete
+a793e3c6bce8: Download complete
+a793e3c6bce8: Pull complete
+acad23588d43: Pull complete
+Digest: sha256:ecbe59a8408895edd02d9ef422504b8501dd9fa1526de27a45b73406d734d659
+Status: Image is up to date for rust:1.93
+rustc 1.93.1 (01f6ddf75 2026-02-11)
+x86_64
+ldd (Debian GLIBC 2.41-12+deb13u1) 2.41

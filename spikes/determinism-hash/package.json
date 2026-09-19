@@ -1,0 +1,11 @@
+{
+  "name": "spike-determinism-hash",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "all": "bash run-all.sh"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}
