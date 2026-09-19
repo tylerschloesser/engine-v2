@@ -1,0 +1,71 @@
+[
+  {
+    "variant": "opt-level=3 lto=fat cgu=1 panic=abort strip",
+    "coldBuildMs": 211,
+    "raw": 19836,
+    "gzip": 8500,
+    "brotli": 7263
+  },
+  {
+    "variant": "  + wasm-opt -O3",
+    "wasmOptMs": 446,
+    "raw": 16680,
+    "gzip": 7596,
+    "brotli": 6434
+  },
+  {
+    "variant": "  + wasm-opt -Oz",
+    "wasmOptMs": 432,
+    "raw": 16623,
+    "gzip": 7583,
+    "brotli": 6463
+  },
+  {
+    "variant": "opt-level=\"s\" lto=fat cgu=1 panic=abort strip",
+    "coldBuildMs": 203,
+    "raw": 20954,
+    "gzip": 8976,
+    "brotli": 7706
+  },
+  {
+    "variant": "  + wasm-opt -O3",
+    "wasmOptMs": 437,
+    "raw": 17379,
+    "gzip": 8006,
+    "brotli": 6847
+  },
+  {
+    "variant": "  + wasm-opt -Oz",
+    "wasmOptMs": 436,
+    "raw": 17323,
+    "gzip": 7986,
+    "brotli": 6837
+  },
+  {
+    "variant": "opt-level=\"z\" lto=fat cgu=1 panic=abort strip",
+    "coldBuildMs": 205,
+    "raw": 20892,
+    "gzip": 9138,
+    "brotli": 7869
+  },
+  {
+    "variant": "  + wasm-opt -O3",
+    "wasmOptMs": 445,
+    "raw": 17431,
+    "gzip": 8101,
+    "brotli": 6863
+  },
+  {
+    "variant": "  + wasm-opt -Oz",
+    "wasmOptMs": 434,
+    "raw": 17377,
+    "gzip": 8096,
+    "brotli": 6908
+  },
+  {
+    "variant": "dev profile (opt-level=1, deps 3, debuginfo)",
+    "raw": 1507880,
+    "gzip": 392815,
+    "brotli": 306450
+  }
+]

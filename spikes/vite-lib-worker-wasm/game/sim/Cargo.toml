@@ -1,0 +1,23 @@
+[package]
+name = "sim"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"] # cdylib -> the .wasm; rlib -> native `cargo test`
+
+[dependencies]
+engine = { path = "../node_modules/fake-engine/crates/engine" }
+
+[profile.dev]
+opt-level = 1
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
