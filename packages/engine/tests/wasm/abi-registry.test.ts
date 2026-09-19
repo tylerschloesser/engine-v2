@@ -29,8 +29,9 @@ function rustConsts(): Record<string, number> {
 
 describe('abi registry', () => {
   test('abi registry: enums match registry.rs', () => {
-    for (const name of ['Role', 'Status', 'RegionId', 'LogLevel'] as const) {
-      expect(abi[name], name).toEqual(rustEnum(name))
+    const { Role, Status, RegionId, LogLevel } = abi
+    for (const [name, mirror] of Object.entries({ Role, Status, RegionId, LogLevel })) {
+      expect(mirror, name).toEqual(rustEnum(name))
     }
   })
 

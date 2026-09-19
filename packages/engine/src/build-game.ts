@@ -81,11 +81,21 @@ async function artifactPath(crate: string, profile: Profile, env: NodeJS.Process
   return join(target_directory, 'wasm32-unknown-unknown', profileDir, file)
 }
 
-/** The module's `engine_abi_version()`, read with stub imports. */
+/**
+ * The module's `engine_abi_version()`. Every function import gets a stub, whatever its name, so a
+ * module with imports outside the allowlist still builds and the allowlist test can say why it is
+ * wrong (0014 §3); the loader would refuse it with a bare `LinkError`.
+ */
 function readAbiVersion(bytes: Uint8Array<ArrayBuffer>): number {
-  const stub = { engine: { panic() {}, log() {} } }
-  const { exports } = new WebAssembly.Instance(new WebAssembly.Module(bytes), stub)
-  const version = exports.engine_abi_version
+  const module = new WebAssembly.Module(bytes)
+  const stubs: Record<string, Record<string, () => void>> = {}
+  for (const entry of WebAssembly.Module.imports(module)) {
+    if (entry.kind !== 'function') continue
+    const space = stubs[entry.module] ?? {}
+    stubs[entry.module] = space
+    space[entry.name] = () => {}
+  }
+  const version = new WebAssembly.Instance(module, stubs).exports.engine_abi_version
   if (typeof version !== 'function') {
     throw new Error('buildGame: no engine_abi_version export; is `engine::export_game!` missing?')
   }

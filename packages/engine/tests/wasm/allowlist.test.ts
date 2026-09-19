@@ -21,10 +21,12 @@ const DEFAULT_FEATURES = [
 ]
 const BANNED_FEATURES = ['simd128', 'relaxed-simd', 'atomics']
 
+const WASM_BINDGEN =
+  "a crate pulled in wasm-bindgen (getrandom's JS backend, instant, web-time, chrono's wasmbind)"
 const CULPRITS: Record<string, string> = {
-  __wbindgen_placeholder__:
-    "a crate pulled in wasm-bindgen (getrandom's JS backend, instant, web-time, chrono's wasmbind)",
-  wbg: "a crate pulled in wasm-bindgen (getrandom's JS backend, instant, web-time, chrono's wasmbind)",
+  __wbindgen_placeholder__: WASM_BINDGEN,
+  __wbindgen_externref_xform__: WASM_BINDGEN,
+  wbg: WASM_BINDGEN,
   env: 'an unresolved C symbol',
   wasi_snapshot_preview1: 'wrong target: build for wasm32-unknown-unknown',
 }
@@ -51,10 +53,18 @@ describe.each(fixtureNames())('fixture %s', (name) => {
   const module = new WebAssembly.Module(bytes)
 
   test('import allowlist', () => {
-    const offenders = WebAssembly.Module.imports(module)
-      .filter((i) => i.kind !== 'function' || !ALLOWED_IMPORTS.includes(`${i.module}.${i.name}`))
-      .map((i) => `${i.module}.${i.name} (${i.kind}): ${CULPRITS[i.module] ?? 'not in 0014 §3'}`)
-    expect(offenders, `fx-${name} imports outside the allowlist`).toEqual([])
+    const offenders = WebAssembly.Module.imports(module).filter(
+      (i) => i.kind !== 'function' || !ALLOWED_IMPORTS.includes(`${i.module}.${i.name}`),
+    )
+    // One line per import module, in the message: Vitest elides a long array, and the names are
+    // the point.
+    const lines = [...new Set(offenders.map((i) => i.module))].map((from) => {
+      const names = offenders.filter((i) => i.module === from).map((i) => i.name)
+      const shown = names.slice(0, 3).join(', ') + (names.length > 3 ? ', …' : '')
+      return `  ${from} (${names.length}: ${shown}): ${CULPRITS[from] ?? 'not in 0014 §3'}`
+    })
+    const listed = `fx-${name} imports outside the allowlist:\n${lines.join('\n')}`
+    expect(offenders.length, listed).toBe(0)
 
     const exported = WebAssembly.Module.exports(module)
     expect(exported).toContainEqual({ name: 'memory', kind: 'memory' })
