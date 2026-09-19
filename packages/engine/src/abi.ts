@@ -1,0 +1,71 @@
+// Mirror of the ABI registry. The owner is `crates/engine/src/abi/registry.rs`, which also holds
+// the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
+// No imports: test drivers under Node, Bun and the browser load this file as it is.
+
+export const ABI_VERSION = 1
+
+/** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
+export const BOOT_BYTES = 65536
+/** Bytes at the end of the boot region kept for panic text; the config may use the rest. */
+export const BOOT_TEXT_BYTES = 4096
+/** Capacity of the `Result` region that every role has. */
+export const RESULT_BYTES = 64
+
+export const Role = { Sim: 0, Client: 1, Gen: 2 } as const
+export type Role = (typeof Role)[keyof typeof Role]
+
+export const Status = {
+  Ok: 0,
+  WrongRole: 1,
+  NotInitialised: 2,
+  AlreadyInitialised: 3,
+  BadConfig: 4,
+  BadLength: 5,
+  Decode: 6,
+  OutOfMemory: 7,
+  Unsupported: 8,
+} as const
+export type Status = (typeof Status)[keyof typeof Status]
+
+export const RegionId = {
+  Rx: 0,
+  Tx: 1,
+  Result: 2,
+  DrawList: 3,
+  ChunkTexels: 4,
+  Ui: 5,
+  Persist: 6,
+  Camera: 7,
+  GenOut: 8,
+} as const
+export type RegionId = (typeof RegionId)[keyof typeof RegionId]
+
+export const LogLevel = { Error: 0, Warn: 1, Info: 2, Debug: 3 } as const
+export type LogLevel = (typeof LogLevel)[keyof typeof LogLevel]
+
+export type ExportSpec = {
+  /** Which role may call it; every module carries every export whatever its role. */
+  role: 'all' | 'sim' | 'client' | 'gen'
+  /** Number of parameters, all numbers (0014 §2). */
+  params: 0 | 1 | 2
+  /** `len` is an i32 where a negative value is `-(status)`. */
+  result: 'status' | 'len' | 'ptr' | 'u32' | 'void'
+}
+
+export const ABI_EXPORTS = {
+  engine_abi_version: { role: 'all', params: 0, result: 'u32' },
+  engine_boot: { role: 'all', params: 0, result: 'ptr' },
+  engine_init: { role: 'all', params: 2, result: 'status' },
+  engine_region: { role: 'all', params: 1, result: 'ptr' },
+  engine_region_len: { role: 'all', params: 1, result: 'u32' },
+  engine_mem_grows: { role: 'all', params: 0, result: 'u32' },
+  sim_admit: { role: 'sim', params: 2, result: 'status' },
+  sim_tick: { role: 'sim', params: 0, result: 'status' },
+  sim_build_frame: { role: 'sim', params: 1, result: 'len' },
+  sim_hash: { role: 'sim', params: 0, result: 'status' },
+} as const satisfies Record<string, ExportSpec>
+
+export function statusName(n: number): string {
+  for (const [name, value] of Object.entries(Status)) if (value === n) return name
+  return `Status(${n})`
+}

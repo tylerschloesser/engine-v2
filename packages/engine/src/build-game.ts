@@ -1,0 +1,121 @@
+// `buildGame()`: a game crate in, `game.wasm` + `game.json` out (docs/decisions/0017 §4–§5). Plain
+// cargo and Node built-ins only. The Vite plugin (M02b), `pnpm test` and server scripts all call it.
+import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
+
+export type Profile = 'dev' | 'release'
+
+export type BuildGameOptions = {
+  /** Directory of the game crate (the one holding its `Cargo.toml`). */
+  crate: string
+  /** Default `dev`. A dev client cannot join a release server, by design (0017 §4). */
+  profile?: Profile
+  /** Accepted and ignored with a warning until M35 runs `wasm-opt`. */
+  wasmOpt?: boolean
+  /** Environment for the cargo spawns. Default `process.env`. */
+  env?: NodeJS.ProcessEnv
+}
+
+export type BuildGameResult = {
+  /** `<crate>/target/engine/<profile>/` */
+  dir: string
+  wasmPath: string
+  jsonPath: string
+  /** SHA-256 of the final bytes, as hex: the handshake token and log-segment stamp. */
+  buildHash: string
+  abiVersion: number
+  profile: Profile
+  cargoMs: number
+}
+
+/** What `game.json` holds. */
+export type GameJson = { buildHash: string; abiVersion: number; profile: Profile }
+
+export class CargoBuildError extends Error {
+  /** Everything cargo wrote to stderr, rustc's messages included. */
+  readonly stderr: string
+  constructor(what: string, stderr: string) {
+    super(`${what} failed\n${stderr}`)
+    this.name = 'CargoBuildError'
+    this.stderr = stderr
+  }
+}
+
+type Spawned = { code: number; stdout: string; stderr: string }
+
+function cargo(args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<Spawned> {
+  return new Promise((done) => {
+    const child = spawn('cargo', args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (d) => {
+      stdout += d
+    })
+    child.stderr.on('data', (d) => {
+      stderr += d
+    })
+    child.on('error', (e) => done({ code: 127, stdout, stderr: `cannot run cargo: ${e.message}` }))
+    child.on('close', (code) => done({ code: code ?? 1, stdout, stderr }))
+  })
+}
+
+type Metadata = {
+  target_directory: string
+  packages: { manifest_path: string; targets: { name: string; kind: string[] }[] }[]
+}
+
+/** Where cargo puts the crate's `.wasm`: the workspace's target directory plus the cdylib's name. */
+async function artifactPath(crate: string, profile: Profile, env: NodeJS.ProcessEnv) {
+  const meta = await cargo(['metadata', '--format-version', '1', '--no-deps'], crate, env)
+  if (meta.code !== 0) throw new CargoBuildError('cargo metadata', meta.stderr)
+  const { target_directory, packages } = JSON.parse(meta.stdout) as Metadata
+  const manifest = join(crate, 'Cargo.toml')
+  const lib = packages
+    .find((p) => p.manifest_path === manifest)
+    ?.targets.find((t) => t.kind.includes('cdylib'))
+  if (!lib) throw new CargoBuildError('buildGame', `${manifest} has no cdylib target`)
+  const file = `${lib.name.replaceAll('-', '_')}.wasm`
+  const profileDir = profile === 'release' ? 'release' : 'debug'
+  return join(target_directory, 'wasm32-unknown-unknown', profileDir, file)
+}
+
+/** The module's `engine_abi_version()`, read with stub imports. */
+function readAbiVersion(bytes: Uint8Array<ArrayBuffer>): number {
+  const stub = { engine: { panic() {}, log() {} } }
+  const { exports } = new WebAssembly.Instance(new WebAssembly.Module(bytes), stub)
+  const version = exports.engine_abi_version
+  if (typeof version !== 'function') {
+    throw new Error('buildGame: no engine_abi_version export; is `engine::export_game!` missing?')
+  }
+  return version() as number
+}
+
+export async function buildGame(opts: BuildGameOptions): Promise<BuildGameResult> {
+  const crate = resolve(opts.crate)
+  const profile = opts.profile ?? 'dev'
+  const env = opts.env ?? process.env
+  if (opts.wasmOpt) console.warn('buildGame: wasmOpt is ignored until the packaging milestone')
+
+  const artifact = await artifactPath(crate, profile, env)
+  const args = ['build', '--target', 'wasm32-unknown-unknown', '--color', 'never']
+  if (profile === 'release') args.push('--release')
+  const start = performance.now()
+  const built = await cargo(args, crate, env)
+  const cargoMs = performance.now() - start
+  if (built.code !== 0) throw new CargoBuildError('cargo build', built.stderr)
+
+  const bytes = await readFile(artifact)
+  const buildHash = createHash('sha256').update(bytes).digest('hex')
+  const abiVersion = readAbiVersion(bytes)
+
+  const dir = join(crate, 'target', 'engine', profile)
+  const wasmPath = join(dir, 'game.wasm')
+  const jsonPath = join(dir, 'game.json')
+  const json: GameJson = { buildHash, abiVersion, profile }
+  await mkdir(dirname(wasmPath), { recursive: true })
+  await writeFile(wasmPath, bytes)
+  await writeFile(jsonPath, `${JSON.stringify(json, null, 2)}\n`)
+  return { dir, wasmPath, jsonPath, buildHash, abiVersion, profile, cargoMs }
+}

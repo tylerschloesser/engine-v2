@@ -9,16 +9,34 @@ export const buildBudgetMs = 30_000
  */
 export const buildSteps = [
   { name: 'tsc', cmd: 'pnpm', args: ['--filter', 'engine', 'build'] },
+  // `buildGame()` (from dist/, hence after tsc) on the dev profile for every fixture crate.
+  { name: 'fixtures', cmd: 'node', args: ['packages/engine/scripts/build-fixtures.mjs'] },
   { name: 'cargo-tests', cmd: 'cargo', args: ['nextest', 'run', '--workspace', '--no-run'] },
 ]
 
 /**
- * A suite is `{ name, kind, tiers, budgetMs, args?, cwd?, env? }`; `kind` names an adapter in
- * scripts/lib/adapters.mjs. Ids follow the rows of the 0020 §3 table: `rust`, `unit`, and reserved
- * for later milestones `wasm`, `netcode`, `browser`. `budgetMs` is the fast-tier budget; owner of
+ * A suite is `{ name, kind, tiers, budgetMs, args?, cwd?, env?, legs? }`; `kind` names an adapter in
+ * scripts/lib/adapters.mjs. `legs` are extra runs reported on the suite's line, each
+ * `{ name, kind, ... }` with what its adapter needs. Ids follow the rows of the 0020 §3 table:
+ * `rust`, `unit`, `wasm`, and reserved for later milestones `netcode`, `browser`. `budgetMs` is the fast-tier budget; owner of
  * the numbers: docs/decisions/0020 §3. Slow-tier lines carry no budget.
  */
 export const suites = [
   { name: 'rust', kind: 'nextest', tiers: ['fast', 'slow'], budgetMs: 10_000 },
   { name: 'unit', kind: 'vitest', tiers: ['fast', 'slow'], budgetMs: 3_000 },
+  {
+    name: 'wasm',
+    kind: 'vitest',
+    tiers: ['fast', 'slow'],
+    budgetMs: 7_000,
+    legs: [
+      {
+        name: 'bun',
+        kind: 'script',
+        cmd: 'bun',
+        args: ['packages/engine/tests/wasm/bun-leg.mjs'],
+        tests: ['determinism: bun matches golden'],
+      },
+    ],
+  },
 ]

@@ -94,19 +94,37 @@ async function main() {
   return failed ? 1 : 0
 }
 
+/** A suite is its own adapter run plus one run per entry of `suite.legs`, reported as one line. */
 async function runSuite(suite, opts) {
-  const adapter = adapters[suite.kind]
-  const outDir = join('test-results', suite.name)
-  const logPath = join(results, suite.name, 'output.log')
-  const { cmd, args, env, reportPath } = adapter.command({
+  const legs = [
+    { ...suite, log: 'output.log' },
+    ...(suite.legs ?? []).map((leg) => ({ ...leg, log: `${leg.name}.log` })),
+  ]
+  const start = performance.now()
+  const parts = await Promise.all(legs.map((leg) => runLeg(suite, leg, opts)))
+  return {
     suite,
+    ms: performance.now() - start,
+    tests: parts.reduce((n, part) => n + part.tests, 0),
+    failures: parts.flatMap((part) => part.failures),
+  }
+}
+
+async function runLeg(suite, leg, opts) {
+  const adapter = adapters[leg.kind]
+  const outDir = join('test-results', suite.name)
+  const logPath = join(results, suite.name, leg.log)
+  const command = adapter.command({
+    suite: leg,
     pattern: opts.pattern,
     tier: opts.tier,
     outDir,
   })
+  if (command === null) return { tests: 0, failures: [] }
+  const { cmd, args, env, reportPath } = command
   const report = reportPath === null ? null : resolve(root, reportPath)
   if (report) rmSync(report, { force: true })
-  const { code, ms } = await run(cmd, args, {
+  const { code } = await run(cmd, args, {
     log: logPath,
     cwd: resolve(root, suite.cwd ?? '.'),
     env: {
@@ -116,8 +134,7 @@ async function runSuite(suite, opts) {
       ...(opts.selfCheckFail ? { RUNNER_SELF_CHECK: 'fail' } : {}),
     },
   })
-  const parsed = adapter.parse({ tier: opts.tier, reportPath: report, exitCode: code, logPath })
-  return { suite, ms, ...parsed }
+  return adapter.parse({ tier: opts.tier, reportPath: report, exitCode: code, logPath })
 }
 
 process.exit(await main())

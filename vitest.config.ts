@@ -11,6 +11,13 @@ export default defineConfig({
           include: ['packages/*/src/**/*.test.ts', 'scripts/**/*.test.mjs'],
         },
       },
+      {
+        test: {
+          name: 'wasm',
+          environment: 'node',
+          include: ['packages/engine/tests/wasm/**/*.test.ts'],
+        },
+      },
     ],
   },
 })

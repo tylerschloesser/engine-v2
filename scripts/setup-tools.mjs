@@ -9,7 +9,7 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 
 /**
  * One row per tool. `pin: null` means report only. `install: null` means it cannot be installed
- * from here; `hint` says what to do instead. M02 adds Bun, M03 the Playwright browsers.
+ * from here; `hint` says what to do instead. M03 adds the Playwright browsers.
  */
 export const TOOLS = [
   {
@@ -29,6 +29,16 @@ export const TOOLS = [
     install: {
       cmd: 'cargo',
       args: ['install', 'cargo-nextest', '--locked', '--version', '0.9.145'],
+    },
+  },
+  {
+    name: 'bun',
+    pin: '1.3.8', // the Bun leg of the `wasm` suite only; owner of the pin: docs/decisions/0017 §10
+    probe: { cmd: 'bun', args: ['--version'], match: /^(\d\S*)/m },
+    // The official installer, into ~/.bun/bin (it prints the PATH line to add on a first install).
+    install: {
+      cmd: 'bash',
+      args: ['-c', 'curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.8"'],
     },
   },
 ]

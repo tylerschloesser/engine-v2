@@ -1,7 +1,7 @@
 // One adapter per test runner. An adapter is two pure functions: `command` says what to spawn and
 // where the child writes its machine-readable report; `parse` turns that report into counts and
 // failures. The runner (scripts/test.mjs) deletes `reportPath` before spawning and hands the same
-// path back to `parse`, so a stale report is never read. M02 adds `script`, M03 adds `playwright`.
+// path back to `parse`, so a stale report is never read. M03 adds `playwright`.
 import { existsSync, readFileSync } from 'node:fs'
 import { parseJunit, parseVitestJson } from './report.mjs'
 import { lastLines, readLog } from './run.mjs'
@@ -78,5 +78,37 @@ export const adapters = {
       }
     },
     parse: fromReport(parseVitestJson),
+  },
+
+  // A plain script in any runtime (the Bun leg of `wasm`). `suite` is `{ cmd, args, tests }`:
+  // `tests` names what the script reports, so `-t` can skip a script none of whose tests match.
+  // The script prints one JSON line last, `{ tests: [{ name, ok, message? }] }`, and exits non-zero
+  // when any test failed. It has no slow tier.
+  script: {
+    command({ suite, pattern, tier }) {
+      const wanted = tier === 'fast' && suite.tests.some((name) => name.includes(pattern ?? ''))
+      return wanted ? { cmd: suite.cmd, args: suite.args, reportPath: null } : null
+    },
+    parse({ exitCode, logPath }) {
+      const log = readLog(logPath)
+      let reported
+      try {
+        reported = JSON.parse(lastLines(log, 1)).tests
+      } catch {
+        // Handled below: no parseable last line.
+      }
+      if (!Array.isArray(reported)) {
+        const name = `script exited ${exitCode} without a JSON result line`
+        return { tests: 0, failures: [{ name, message: lastLines(log, 20), artefacts: [logPath] }] }
+      }
+      const failures = reported
+        .filter((t) => !t.ok)
+        .map((t) => ({ name: t.name, message: t.message ?? 'failed', artefacts: [logPath] }))
+      if (exitCode !== 0 && failures.length === 0) {
+        const name = `script exited ${exitCode} but reported no failure`
+        failures.push({ name, message: lastLines(log, 20), artefacts: [logPath] })
+      }
+      return { tests: reported.length, failures }
+    },
   },
 }
