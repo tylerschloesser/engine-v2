@@ -1,0 +1,25 @@
+{
+  "head": {
+    "callFrame": { "functionName": "(root)", "url": "", "lineNumber": -1 },
+    "children": [
+      {
+        "callFrame": { "functionName": "idle", "url": "harness.js", "lineNumber": 3 },
+        "selfSize": 10
+      },
+      {
+        "callFrame": {
+          "functionName": "harnessWorkerStep",
+          "url": "harness-worker.js",
+          "lineNumber": 12
+        },
+        "selfSize": 5,
+        "children": [
+          {
+            "callFrame": { "functionName": "inner", "url": "loader.js", "lineNumber": 40 },
+            "selfSize": 7
+          }
+        ]
+      }
+    ]
+  }
+}

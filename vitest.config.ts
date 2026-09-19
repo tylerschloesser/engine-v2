@@ -8,7 +8,13 @@ export default defineConfig({
         test: {
           name: 'unit',
           environment: 'node',
-          include: ['packages/*/src/**/*.test.ts', 'scripts/**/*.test.mjs'],
+          include: [
+            'packages/*/src/**/*.test.ts',
+            'scripts/**/*.test.mjs',
+            // M04: pure CDP-analysis and budgets-file logic, unit-testable without a browser.
+            'packages/engine/tests/browser/gc/*.test.ts',
+            'packages/engine/tests/support/*.test.ts',
+          ],
         },
       },
       {

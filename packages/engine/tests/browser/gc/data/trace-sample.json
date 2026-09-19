@@ -1,0 +1,31 @@
+[
+  {
+    "name": "gc-isolate:main",
+    "cat": "blink.user_timing",
+    "ph": "R",
+    "pid": 100,
+    "tid": 1,
+    "ts": 999
+  },
+  {
+    "name": "gc-isolate:sim",
+    "cat": "blink.user_timing",
+    "ph": "R",
+    "pid": 100,
+    "tid": 2,
+    "ts": 998
+  },
+  {
+    "name": "window-start",
+    "cat": "blink.user_timing",
+    "ph": "R",
+    "pid": 100,
+    "tid": 1,
+    "ts": 1000
+  },
+  { "name": "MajorGC", "cat": "v8", "ph": "X", "pid": 100, "tid": 1, "ts": 500 },
+  { "name": "MinorGC", "cat": "v8", "ph": "X", "pid": 100, "tid": 2, "ts": 1500 },
+  { "name": "MinorGC", "cat": "v8", "ph": "E", "pid": 100, "tid": 2, "ts": 1501 },
+  { "name": "MajorGC", "cat": "v8", "ph": "X", "pid": 999, "tid": 9, "ts": 1600 },
+  { "name": "window-end", "cat": "blink.user_timing", "ph": "R", "pid": 100, "tid": 1, "ts": 2000 }
+]
