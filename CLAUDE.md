@@ -12,12 +12,14 @@ Read only what the task needs. A sub-agent should be briefable with `docs/spec/o
 |---|---|---|
 | `PROMPT.md` | Current phase: status, instructions, exit criteria | Rewritten each phase; deleted in Phase 4 |
 | `docs/process.md` | The four phases; rules common to every session | Until Phase 4 |
-| `docs/context-architecture.md` | How context is split and why; target layout after bootstrap | Permanent |
+| `docs/context-architecture.md` | How context is split and why (nested `CLAUDE.md`, `.claude/rules/`, skills, sub-agent briefs); target layout after bootstrap | Permanent |
 | `docs/spec/overview.md` | Goal, engine/game split, fixed decisions, scale, non-goals, glossary | Folded into architecture docs in Phase 4 |
 | `docs/spec/<domain>.md` | Tyler's requirements + open questions for one domain: `world`, `simulation`, `sync`, `runtime-and-packaging`, `client`, `testing`, `reference-game` | Same |
-| `docs/research/` | Phase 1 findings, one file per topic (evidence, not decisions) | Distilled into decisions, then deleted in Phase 4 |
-| `docs/decisions/` | ADRs: the *why* that can't be inferred from code | Permanent |
-| `PRE-PLAN.md`, `PLAN.md` | Phase 1 and Phase 2 outputs | Deleted in Phase 4 |
+| `docs/research/<topic>.md` | Phase 1 findings, one file per spec domain plus `context-architecture` (evidence, not decisions) | Deleted in Phase 4 |
+| `spikes/<name>/RESULT.md` | Result of each Phase 1 feasibility spike; the code beside it is throwaway | Deleted in Phase 4 |
+| `docs/decisions/NNNN-<slug>.md` | ADRs 0001–0021: what was chosen and the *why* that can't be inferred from code | Permanent; supersede, don't rewrite |
+| `PRE-PLAN.md` | Phase 1 output: architecture, budgets, index of ADRs | Deleted in Phase 4 |
+| `PLAN.md` | Phase 2 output: milestones and their progress (not written yet) | Deleted in Phase 4 |
 
 ## Rules
 

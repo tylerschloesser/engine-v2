@@ -12,7 +12,7 @@
 - **Root `CLAUDE.md`**: Loaded eagerly at every session launch. Applies universally.
 - **Nested `CLAUDE.md` files** (e.g., `packages/api/CLAUDE.md`): Loaded on-demand when Claude reads files in that directory subtree. A session started from `packages/api/` loads both the root and `packages/api/CLAUDE.md` at launch; nested files in other directories load when first accessed.
 - **`CLAUDE.local.md`**: Loaded at session start alongside root CLAUDE.md. Not inherited by sub-agents unless explicitly added to the hierarchy.
-- **`@path` imports**: The documentation (memory.md) does not mention explicit `@path` include syntax in CLAUDE.md files. Path-based loading is automatic based on directory traversal, not manual imports. This suggests no depth limits or special cost.
+- **`@path` imports**: Supported (memory.md, "Import additional files"). Imported files are expanded and loaded into context **at launch** alongside the `CLAUDE.md` that references them, recursively to a maximum depth of four hops. Imports outside the working directory need a one-time approval. The doc states that splitting into imports "helps organization but doesn't reduce context". Paths inside backticks or code fences are not imported.- **Rules loading**: `.claude/rules/*.md` without a `paths:` field load unconditionally at launch; with `paths:` they trigger "when Claude reads files matching the pattern, not on every tool use". After compaction, root `CLAUDE.md` is re-read from disk; nested `CLAUDE.md` and path-scoped rules reload only when Claude next reads a file they apply to.
 
 **Sub-agent Inheritance:**
 Sub-agents inherit the complete CLAUDE.md hierarchy:
