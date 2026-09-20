@@ -1,7 +1,8 @@
 // `checkSupport()` (docs/plan/06b-workers-and-spawn.md, Planning decisions "`checkSupport` minimum"):
-// synchronous facts plus a module-worker probe. `no-adapter` is filled in by M09 (needs an async
-// `requestAdapter()` this milestone does not make); the final list and the capability-screen
-// contract are M35's.
+// synchronous facts plus a module-worker probe, plus (docs/plan/09-renderer-terrain.md) an async
+// `requestAdapter()` probe for `no-adapter`. The final list and the capability-screen contract are
+// M35's.
+import { ADAPTER_REQUEST } from './render/device.js'
 
 export type SupportFailureCode =
   | 'not-isolated'
@@ -31,7 +32,7 @@ function moduleWorkerSupported(): boolean {
   }
 }
 
-export function checkSupport(): Promise<SupportReport> {
+export async function checkSupport(): Promise<SupportReport> {
   const failures: SupportFailure[] = []
   if (!globalThis.crossOriginIsolated) {
     failures.push({
@@ -52,8 +53,22 @@ export function checkSupport(): Promise<SupportReport> {
       message: 'new Worker(url, { type: "module" }) is not supported',
     })
   }
-  if (typeof navigator === 'undefined' || !(navigator as { gpu?: unknown }).gpu) {
+  const gpu = (typeof navigator === 'undefined' ? undefined : navigator) as
+    | { gpu?: GPU }
+    | undefined
+  if (!gpu?.gpu) {
     failures.push({ code: 'no-webgpu', message: 'navigator.gpu is not present' })
+  } else {
+    // `no-adapter` (docs/plan/09-renderer-terrain.md, Scope: "fills in `checkSupport`'s
+    // `no-adapter`"): the same `ADAPTER_REQUEST` `initDevice()` uses, so this reports exactly what a
+    // real `initDevice()` call would hit.
+    const adapter = await gpu.gpu.requestAdapter(ADAPTER_REQUEST)
+    if (!adapter) {
+      failures.push({
+        code: 'no-adapter',
+        message: 'navigator.gpu.requestAdapter() returned null: no compatible GPU adapter',
+      })
+    }
   }
-  return Promise.resolve({ ok: failures.length === 0, failures })
+  return { ok: failures.length === 0, failures }
 }

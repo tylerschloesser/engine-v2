@@ -22,3 +22,11 @@ export {
   type HarnessWorkerSpec,
 } from './test/harness.js'
 export { createManualClock, type ManualClock } from './test/manual-clock.js'
+export {
+  expectPixel,
+  type PixelBuffer,
+  type Renderable,
+  type RenderTarget,
+  renderTo,
+  tileCentrePx,
+} from './test/render.js'
