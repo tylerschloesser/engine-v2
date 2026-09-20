@@ -17,7 +17,7 @@ import {
   WORKER_HOST,
   workerWord,
 } from './sab/control.js'
-import { createSabSet, type SabSet, sabBytesTotal } from './sab/layout.js'
+import { createSabSet, MAX_GEN_WORKERS, type SabSet, sabBytesTotal } from './sab/layout.js'
 import type { FromWorker, TestFlags, ToWorker, WorkerKind } from './worker/protocol.js'
 
 export type { SupportFailure, SupportFailureCode, SupportReport } from './support.js'
@@ -138,8 +138,14 @@ export function clientTestHandle(client: Client): ClientTestHandle {
   return h
 }
 
-function defaultGenWorkers(): number {
-  return typeof navigator !== 'undefined' && navigator.hardwareConcurrency >= 8 ? 2 : 1
+/** 0008 §2: 1 worker by default, 2 when `hardwareConcurrency >= 8`. `requested` (`ClientOptions.
+ * genWorkers`) overrides the default when given, clamped to `[1, MAX_GEN_WORKERS]` --
+ * `createSabSet`'s own worst-case sizing (`sab/layout.ts`), which the whole-tab arena and SAB
+ * budgets (0015 §5) already assume. A pure function (docs/plan/08b-gen-workers-and-queue.md,
+ * Seams) so `genWorkerCount rule` can drive it without `navigator`. */
+export function genWorkerCount(hardwareConcurrency: number, requested?: number): number {
+  if (requested !== undefined) return Math.min(Math.max(requested, 1), MAX_GEN_WORKERS)
+  return hardwareConcurrency >= 8 ? 2 : 1
 }
 
 function spawnWorker(options: ClientOptions): Worker {
@@ -224,7 +230,10 @@ export function createClient(options: ClientOptions): Client {
     return { ready, destroy() {} }
   }
 
-  const genWorkers = options.genWorkers ?? defaultGenWorkers()
+  const genWorkers = genWorkerCount(
+    typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : 1,
+    options.genWorkers,
+  )
   const arenas = {
     sim: options.arenas?.sim ?? DEFAULT_ARENA_BYTES.sim,
     client: options.arenas?.client ?? DEFAULT_ARENA_BYTES.client,
