@@ -63,3 +63,9 @@ Every row of `PRE-PLAN.md` §10 (same order), with where Phase 2 settled it. **D
 | Whether `dispatch` before `Welcome` queues or fails | Decided: throws; `client.ready` waits for a live session | M16 |
 | The `TileTexel::from_tables` registration call | Decided: `Registry::set_base_visual` / `set_resource_visual` | M09 |
 | Where test files live | Decided: per package; goldens with their fixture | M01 |
+
+## Added during Phase 3
+
+| Item | Outcome | Where |
+|---|---|---|
+| `browser` suite headroom: 17 s of its 25 s budget at M06b, and M08b, M09, M13 and M16 each add a zero-GC page (a clean test plus two negative controls per isolate) | Owned: not a gate failure at M06b. Trip-wire: the first milestone whose quiet-machine `browser` line passes 20 s demotes per 0020 §4 (multi-engine repeats first) before it is accepted; whether production-topology `burst` negatives may move to `@slow` while `object` stays in the fast tier is a 0016-vs-0020 question settled then, by ADR. Otherwise the suite audit decides | trip-wire at any milestone's gate; else M36b |
