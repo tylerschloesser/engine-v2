@@ -77,9 +77,22 @@ export class Shell implements WorkerShell {
       .catch((e: unknown) => this.fatal(e instanceof Error ? e.message : String(e)))
       .finally(() => {
         if (this.#stopped) return
+        const seen = this.observeWake()
         Atomics.store(this.control.words, workerWord(this.index, W_PARKED), 0)
-        runBlockingLoop(this, loop.body, loop.timeoutMs)
+        runBlockingLoop(this, loop.body, loop.timeoutMs, seen)
       })
+  }
+
+  /**
+   * This thread's current value of its own wake word, read *before* it publishes that it is
+   * available again (`W_PARKED = 0`, or the `ready` post of the first entry). Handing it to
+   * `runBlockingLoop` as `lastSeen` is what closes the lost-wake window: a producer that sees the
+   * worker available and calls `ControlBlock.wake()` bumps the word past this value, so the
+   * worker's first `Atomics.wait` sees the mismatch and returns instead of sleeping on a wake that
+   * already happened (fix round 3, docs/plan/06b-workers-and-spawn.md, Deviations).
+   */
+  observeWake(): number {
+    return Atomics.load(this.control.words, workerWord(this.index, W_WAKE))
   }
 
   /** `runBlockingLoop` records its own arguments here so `runAsync` and `resume()` can re-enter
@@ -100,8 +113,9 @@ export class Shell implements WorkerShell {
     Atomics.store(this.control.words, workerWord(this.index, W_YIELD), 0)
     const loop = this.#loop
     if (loop) {
+      const seen = this.observeWake()
       Atomics.store(this.control.words, workerWord(this.index, W_PARKED), 0)
-      runBlockingLoop(this, loop.body, loop.timeoutMs)
+      runBlockingLoop(this, loop.body, loop.timeoutMs, seen)
     }
   }
 
@@ -125,15 +139,20 @@ export function createShell(control: ControlBlock, index: number): Shell {
  * The `yield` protocol (Planning decisions): the loop checks `W_YIELD` first on every wake; when
  * set, it stores `W_PARKED = 1` and returns to the event loop, where `onmessage`, CDP and promises
  * run. `resume()`/`runAsync` re-enter through this same function.
+ *
+ * `lastSeen` is the wake-word value the caller read *before* it published this worker as available
+ * (`Shell.observeWake`); every caller that publishes availability must pass it, or a wake issued
+ * between the publish and this function's own read is lost and the producer waits forever.
  */
 export function runBlockingLoop(
   shell: Shell,
   body: (wokenBy: number) => void,
   timeoutMs: () => number,
+  lastSeen?: number,
 ): void {
   shell.setLoop({ body, timeoutMs })
   const { control, index } = shell
-  let last = Atomics.load(control.words, workerWord(index, W_WAKE))
+  let last = lastSeen ?? Atomics.load(control.words, workerWord(index, W_WAKE))
   for (;;) {
     control.waitForWake(index, last, timeoutMs())
     if (shell.stopped()) return

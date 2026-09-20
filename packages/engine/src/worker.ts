@@ -63,8 +63,12 @@ export function run(): void {
       shell = s
       kinds[m.kind].setup(s, m).then(
         (loop) => {
+          // The wake word is read before `ready` goes out, not after: main can wake this worker the
+          // instant it sees `ready`, and a wake between the post and the loop's own first read
+          // would be lost (`Shell.observeWake`; fix round 3, docs/plan/06b-workers-and-spawn.md).
+          const seen = s.observeWake()
           post({ type: 'ready' })
-          if (loop) runBlockingLoop(s, loop.body, loop.timeoutMs)
+          if (loop) runBlockingLoop(s, loop.body, loop.timeoutMs, seen)
         },
         (e: unknown) => s.fatal(e instanceof Error ? e.message : String(e)),
       )

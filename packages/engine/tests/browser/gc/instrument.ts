@@ -40,6 +40,10 @@ const FRAMES = 600
 // `gc-loop` itself is unaffected by the higher figure (still well inside its own budget), so one
 // constant is simpler than threading a per-page override through `measure()`/`zeroGcSuite` again.
 const WARMUP = 8000
+/** Warm-up frames are driven in this many separate `run()` calls (fix round 3; see the call site):
+ * one pass warms the per-frame work but gives `run()`'s own resume/park path a single invocation,
+ * which is too few for V8 to have allocated its feedback before the measured window. */
+const WARMUP_PASSES = 8
 
 export type GcMode = 'hardware' | 'software'
 export type GcTransport = 'tunnel' | 'flat'
@@ -148,7 +152,17 @@ export async function measure(
   // long parking/ticking took, not with frame count, which is why no warm-up count (nor an
   // adaptive warm-up-until-stable loop, tried and removed here) fixed them. With both fixed, a
   // short fixed warm-up (matching `gc-loop`'s own long-tuned figure) is enough.
-  await page.evaluate((n) => window.__gc?.run(n, false), WARMUP)
+  // Split into `WARMUP_PASSES` calls, not one (fix round 3, same Deviations): the per-frame work
+  // inside `run()` was already warm after one long pass, but `run()`'s own *entry and exit* path --
+  // `harness.resume()` -> the worker's `armedLoop` invocation -> two `post()` calls -> `harness
+  // .park()` -- ran exactly once per pass, so with a single pass the measured window was that
+  // path's second-ever invocation, right at V8's lazy-feedback-allocation threshold. The feedback
+  // allocation for `armedLoop` (28 B + 108 B, measured per-sample) then landed inside the window on
+  // roughly a third of runs and before it on the rest: exactly the 136 B `gc: flat transport
+  // parity` kept catching on `sim`. Same total frames, so no measurement is shortened.
+  for (let i = 0; i < WARMUP_PASSES; i++) {
+    await page.evaluate((n) => window.__gc?.run(n, false), WARMUP / WARMUP_PASSES)
+  }
   const memBefore = await page.evaluate(() => window.__gc?.memoryBytes())
   if (!memBefore) throw new Error('gc instrument: memoryBytes() before the window returned nothing')
 
