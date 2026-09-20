@@ -536,3 +536,158 @@ Gate at `8efcfe4`: `pnpm test && pnpm lint` green (rust 140, unit 102, wasm 35, 
 7. **Counters are page-local getters.** Provides says `engine/test` exposes `drawCalls`, `uploadBytes`, `uploadRecords`, `pageSlotsUsed`. Export them from `engine/test` (reading the renderer's in-place counters), and use them from the pages; M17 and M17b consume them.
 
 Accepted as they are: `uploadRing.slotBytes` 4112 → 4120; the anchored `@slow` grep in `scripts/lib/adapters.mjs` with its regression test; `@webgpu/types` 0.1.74 (an exact-pinned types-only devDependency is within 0017 §7 and §10; no ADR, no pin-table row); `terrain.patch_one_texel` through a hand-built ring (M15b gives `patch_tile` a real caller); ring-1 residency by two chunk hashes; `frame-loop.ts` reached only by its unit test (M09b's device page owns wiring it to a real canvas and rAF: a later-brief fix at record time). The `browser` suite trip-wire (24 s) is the orchestrator's and is handled after this round: do not demote anything in this round.
+
+### Gate fix round 1
+
+Commits `4028188` (item 1), `23deff4` (items 5+6), `8106ff4` (item 7), `5d62685` (item 4),
+`1cd44c5` (item 3), plus this milestone's own item-2 commit. Order followed exactly as the
+delegation prompt fixed it: 1, 5, 6, 7, 4, 3, 2.
+
+**Item 1 -- preallocated descriptors, batched INDIR.** `render/terrain.ts` now builds `chunkDest`/
+`chunkDataLayout`/`chunkSize`, `texelDest`/`texelDataLayout`/`texelSize` and `indirDest`/
+`indirDataLayout`/`indirSize` once at `createTerrainRenderer` construction and mutates only
+`chunkDest.origin`/`texelDest.origin` in place per call; the old `slotOrigin` helper (one object
+literal per call) is gone in favour of plain-number origin math. **Entries are batched**, not sent
+row-by-row: a CPU-side `indirMirror: Uint16Array(64 * 64)` (the whole toroidal window, `INDIR_NONE`
+until something is resident) is mutated per touched entry inside `writeIndir`, then the *whole*
+mirror is written with one `writeTexture` call per `writeIndir` invocation -- collapsing up to 1,024
+separate queue calls (and as many 0016 §1 "tasks") per `INDIR` record into exactly one, at the cost
+of one 8,192-byte transfer instead of the 4-byte-per-entry ones. Row runs were not viable: entries in
+one record are not raster-contiguous (`Uploader::stage_indir` drains a `VecDeque` in eviction/
+residency order). None of `render/upload.ts`'s own call sites changed (`applyChunk`/`applyIndir`/
+`applyPatch` already called `writePageChunkBytes`/`writeIndir`/`writePageTexel` once per record, not
+once per entry -- the extra allocation was entirely inside `terrain.ts`'s own implementation of those
+three methods). Measured effect: `main`'s clean `bytesPerFrame` fell from 111.35-111.39 (round 1) to
+107.49-107.89 (this round, after every fix): about 3.6-3.9 B/frame, not the orchestrator's own guess
+of ~10 -- see item 2's own decomposition for why the guess overshot.
+
+**Items 5+6 -- `upload.budget_stops_and_takes_one`, `getCompilationInfo()` wired in.**
+`render/upload.test.ts` drives `createUploadDrain` against a real `sab/ring.ts` ring
+(`createRing(4120, 4)`) loaded with hand-built CHUNK/INDIR records (`record(kind, count)`, header
+bytes only -- the drain's own cost accounting reads only `kind`/`count`) and a fake `TerrainRenderer`
+(the `frame-loop.test.ts` pattern). `createTerrainRenderer` is now `async` (a real, if small, seam
+shape change: it awaits `opts.checkCompilation(label, module)` -- `RendererDevice`'s own method,
+threaded in as a plain function, not a whole `RendererDevice` object, since `terrain.ts` has no other
+reason to depend on `render/device.ts`'s own type) right after creating its one shader module, before
+returning; every call site (`terrain.ts`, `terrain-client.ts`, `gc-terrain.ts`) now `await`s it and
+passes `device.checkCompilation`. `RendererDevice.checkCompilation` no longer *throws*
+`ShaderCompilationError` on a non-empty `getCompilationInfo()` -- it pushes one formatted message into
+the same `errors()` array `uncapturederror` already uses (`formatCompilationMessages`, shared by both
+surfaces), so every existing `expectNoGpuErrors(await ... .errors())` call in every spec catches a bad
+shader for free, with no changes to the specs that already existed. `ShaderCompilationError` itself is
+kept (unused in the standard path) as a hard-failure escape hatch a caller could still throw
+explicitly. New negative: `window.__terrain.checkBadWgsl()` (`terrain.ts`) builds a shader module from
+a deliberately invalid WGSL string and returns `errors()` after awaiting `checkCompilation` on it;
+`terrain-readback.spec.ts`'s `device: bad wgsl fails the compilation check` asserts it is non-empty.
+
+**Item 7 -- `engine/test` counters.** `render/upload.ts`'s `UploadDrain` gained four cumulative,
+in-place counters, never reset, alongside the existing per-call `drain()` return value:
+`bytesTotal()`, `recordsTotal()`, `chunkRecordsTotal()` (count of CHUNK records only), `evictedTotal()`
+(count of INDIR entries seen with `value === INDIR_NONE` -- item 3's own eviction signal, no new ABI
+export needed). `src/test/render.ts` exports four thin, `Pick<...>`-typed pass-throughs -- `drawCalls`,
+`pageSlotsUsed` (over `TerrainRenderer`), `uploadBytes`, `uploadRecords` (over `UploadDrain`) --
+re-exported from `engine/test`'s `src/test.ts`. `terrain-client.ts`'s page now calls
+`drawCallsCounter(renderer)`/`pageSlotsUsedCounter(renderer)` instead of `renderer.drawCalls()`
+directly, and gains `uploadBytesTotal()`/`uploadRecordsTotal()` window methods over the new cumulative
+counters (distinct from `driveFrame`/`panAndDrive`'s own per-call `uploadBytes`/`uploadRecords`
+return fields, which stay as they were).
+
+**Item 4 -- slot-reuse ordering.** Confirmed the starvation from the code: `stage_one` drained every
+`pending_chunks` entry (dropping only ones evicted since queued) before ever trying `pending_indir`,
+so under continuous panning a slot's own eviction-`INDIR-none` record could queue indefinitely behind
+fresh CHUNK uploads while its physical page slot was already overwritten by a different chunk -- the
+old chunk's still-stale toroidal cell would then read the new chunk's texels. Fixed in
+`crates/engine/src/client/upload.rs`: `Uploader` gained `indir_none_pending: [bool; PAGE_SLOTS]`, set
+in `on_frame`'s eviction handler alongside the existing `pending_indir` push, cleared only once
+`stage_indir` actually stages that specific entry. `IndirEntry` gained an internal-only
+`evicted_slot: Option<u16>` field (never written to the wire) so `stage_indir` knows which slot each
+staged "none" entry frees. `stage_one` now *peeks* (`.front()`), not pops, the head of `pending_chunks`:
+if its target slot is still `indir_none_pending`, it stops trying chunks this call (falls through to
+`stage_indir`) rather than dropping or reordering the chunk; `requeue_all` resets the new array too.
+Native test `upload.evicted_slot_reuse_restages`: evicts, reuses the freed (capacity-1) slot, then
+calls `stage(1, ...)` three times, asserting the exact order INDIR-none, then CHUNK, then the new
+cell's own INDIR -- `record_layout_golden`/`indir_after_chunk` are byte-for-byte unchanged (the
+unblocked path never pops-then-checks differently from before). Browser test (`terrain-readback.spec.ts`,
+`terrain: evicted slot shows new chunk, never stale texels`): a real client with a 2-chunk cache under
+a half-extent-64 view (well past 0018 §6's 121-chunk ring-1 worst case) forces continuous slot
+competition; the assertion is `expectPixelOneOf` (a spec-local helper, not a new `engine/test` export)
+at each of the two known chunks' own screen positions -- its own correct colour or neutral, never the
+other's -- robust to exactly which chunks win the 2-slot race rather than asserting a specific final
+residency. `fixtures/terrain` gained `Config.client_cache_chunks: Option<u32>` (camelCase
+`clientCacheChunks` through `ClientOptions.test.game`, `unwrap_or(CLIENT_CACHE_CHUNKS)`); every
+existing real-client test passes no override and keeps the default 1,024. `terrain-client.ts`'s
+`init()` gained an optional `{ clientCacheChunks? }` parameter forwarding to `test.game`.
+
+**Item 3 -- forced eviction in the terrain zero-GC window.** `gc-terrain.ts`'s client now passes
+`test.game.clientCacheChunks = 8` (item 4's own knob) -- well under both the ~35 chunks the page's
+existing pan touches and the instantaneous ring-1+lookahead footprint at half-extent 24, forcing
+continuous eviction/reuse throughout the run (also exercising item 4's fix on every clean/negative-
+control run of this page). New browser test (`gc-terrain.spec.ts`, `terrain: chunks generate, upload
+and evict inside the window`): reads `window.__terrainGcCounters()` (a new page hook: `gen.stats(...)`.
+`delivered` for "generated", `uploadDrain.chunkRecordsTotal()`/`.evictedTotal()` for the other two,
+type shared via a new `tests/browser/support/gc-terrain-window.d.ts`, the same split
+`terrain-window.d.ts` already uses) before and after driving the same 600-frame window
+`window.__gc.run(600, false)` drives, asserting all three counters strictly increase across it. Not
+folded into `zeroGcSuite`'s own generated tests (those assert GC cleanliness only, by design) --
+added as a sibling `test()` in the same spec file.
+
+**Item 2 -- `main`'s formula, re-derived.** Measured (`playwright test --project gc --grep "terrain
+clean" --repeat-each 8 --workers 1`, this machine, on the code from items 1/3/4/5/6/7):
+`bytesPerFrame.main` 107.4867-107.8933 B/frame across 8 clean runs (down from round 1's
+111.35-111.39). Full per-function decomposition (one clean run, `gc/analyse.ts`'s `sumProfile` top-8
+cutoff temporarily widened to 40 locally to capture every site -- reverted, never committed):
+- **Named WebGPU wrapper objects**: `draw()` creates exactly 3 per frame --
+  `createCommandEncoder`/`beginRenderPass`/`encoder.finish()` (`target.createView()` is skipped: this
+  device's real, unforced `viewProbePasses` is `true`) -- `28,800 B / 600 = 48.0 B/frame = 3 x 16 B`,
+  identical in every one of the 8 runs.
+- **Tasks that touch WebGPU**: `render/upload.ts`'s `drain()` (TurboFan inlines
+  `applyChunk`/`writePageChunkBytes`/`writeChunkTexture`'s one `queue.writeTexture()` call into
+  `drain`'s own reported frame -- the attribution site, not a missed preallocation) --
+  `12,000 B / 600 / 24 B per task = 20.0 B/frame` (500 tasks over the window, identical in every run:
+  item 3's own 8-chunk cache under a wide view keeps the ring non-empty on roughly 5 of every 6
+  frames).
+- **Harness overhead**: every other named site -- `harness.stepFrame`'s own ack-spin and
+  `ManualClock.advance` (12.0 B/frame, one boxed value per pass, test-only: production's
+  `Client.writeCameraAndWake` is fire-and-forget with no ack spin), `page.evaluate`'s CDP JSON
+  round-trip of `run()`'s own return value (`evaluate`, `(V8 API)`, `next`, `isTypedArray`, `entries`,
+  `innerSerialize`, `_promiseAwareJsonValueNoThrow`, `jsonValue`, `serializeAsCallArgument`, `Promise`,
+  and related V8-internal buckets), and `run`/`setControl`/`parkWorkers`/`resumeWorkers`/`pollUntil`/
+  `errors`/`resume`/`park`/`now`/`tick`'s one-time-per-test-call setup amortised over 600 frames --
+  `23,816 B / 600 = 39.69 B/frame` in that run, the *only* bucket that varies run to run (V8
+  sampling-profiler timing noise: `draw`/`drain` were the bit-identical 28,800/12,000 B total in
+  every one of the 8 runs, so all of the 107.4867-107.8933 spread lives here).
+- Sum: `48.0 + 20.0 + 39.69 = 107.69` (that run's own figure); every run's own three-way sum matched
+  its own reported `bytesPerFrame.main` to 5 decimal places -- **residual 0 B/frame**, well under the
+  2 B/frame ceiling. The orchestrator's own guess ("~10 B/frame above the one-pass floor is item 1's
+  per-call descriptor literals amortised") was directionally right but the magnitude was too high:
+  item 1 alone brought the *measured total* down by only 3.6-3.9 B/frame (111.37 avg to 107.7 avg),
+  because it also collapsed up to 1,024 `INDIR`-entry `writeTexture` calls into one, which is what
+  actually kept the "tasks" bucket down at 20 B/frame instead of scaling with entry count.
+- `ceil(107.8933) = 108`, `+ 8 B margin (0016 §1's own convention) = 116` -- `gc.pages.terrain.
+  isolates.main.bytesPerFrame` in `budgets.json`, replacing the fitted 120. `client`/`gen0` rows
+  (fixed 8, unchanged by this round: item 2 names only `main`) still measured 2.52 B/frame in every
+  passing run.
+
+**Found, not fixed here: an intermittent `client`-isolate allocation, pre-dating this round.** Under
+`--repeat-each 16`, `terrain clean` failed 3/16 times with `client`'s own `bytesPerFrame` jumping to a
+constant 39.56 (not noise: identical across every failing run), `byFn.client` showing
+`waitForWake@sab/control.ts` at 22,224 B (37.04 B/frame) where a clean run shows nothing there at all.
+This is the same named site `docs/plan/08b-gen-workers-and-queue.md`'s own Deviations already
+documented and accepted ("a one-off, not per-pass or per-delivery... identical at pan rates 4 and
+8... absent entirely at pan rate 0") on the `gen` page, just far larger here (22,224 B vs. that page's
+1,660 B). **Confirmed unrelated to any fix in this round**: reproduces identically (3-4/16) with
+`CLIENT_CACHE_CHUNKS` at 8 (this round's own value), 32, and 1,024 (item 3 fully reverted) -- item 3's
+forced eviction changes nothing about this failure rate, so it is not something to fix as part of item
+3 or item 4. Not one of items 1-7, not touched: `sab/control.ts` is outside this brief's files, and
+the phenomenon was already known and accepted by an earlier milestone at a smaller magnitude. Flagged
+for the orchestrator rather than silently working around it (`client`'s budget is unchanged, at 8, in
+this commit) -- a decision needed on whether to investigate `waitForWake` directly, or derive and
+widen `terrain`'s own `client` row the way `main`'s was derived here.
+
+**Measured** (quiet-machine `pnpm test`, `uptime` load average 3.0-3.6 before the run): `rust pass 141
+tests 0.3-0.4s/10s` (+1 from round 1's 140: `upload.evicted_slot_reuse_restages`), `unit pass 104
+tests ~1s/3s` (+2: `upload.budget_stops_and_takes_one`, `render.test.ts`'s counter pass-through test),
+`wasm pass 35 tests ~1.3s/7s` (unchanged), `browser pass N tests` (+3 from round 1's 77: `device: bad
+wgsl fails the compilation check`, `terrain: evicted slot shows new chunk, never stale texels`,
+`terrain: chunks generate, upload and evict inside the window`) -- see the report for this round's
+own final line. `pnpm lint`: biome/rustfmt/clippy/tsc all green throughout.
