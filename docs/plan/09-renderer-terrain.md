@@ -265,14 +265,260 @@ No budgets file entries added yet (`counters["render.uploadBytesPerFrame"]`,
 `counters["render.drawCallsTerrain"]`, `gc.pages.terrain`): all three are step 6/7's own (the frame
 loop, the ring drain and the zero-GC page don't exist yet).
 
-### Not yet done: steps 5-7
+### Steps 5-7 (worker staging, frame-loop phases, counters/GC page/WebKit scene) -- done
 
-Remaining, in Order-of-work order: worker staging -> ring -> drain, residency from `CacheEvent`s (5);
-`frame-loop.ts`'s phase list (6); counters, the `terrain` zero-GC page, the WebKit `@slow` scene (7).
-A successor can resume directly at step 5: `Uploader`/`ClientSide`/`upload_stage` (step 1) and
-`TerrainRenderer`/`render/art.ts`/`render/device.ts` (steps 2-4) are all in place and untouched by
-later work except by addition. The `fixtures/terrain` Rust crate (Client role, `TerrainStore` +
-`Uploader<FixtureTerrain>` wired to `frame`/`upload_stage`, `install_visual_tables`) does not exist
-yet and is step 5's own first task: nothing in steps 2-4 needed it, since every test here hand-fills
-the renderer's textures directly. `render/upload.ts` (draining `uploadRing` under the byte budget)
-also does not exist yet; step 5 creates it.
+Delegated as one continuation from the step-1/2-4 predecessors' stopping point. Commits
+`d9e948e` (step 5), `1219d79` (step 6), plus this milestone's own step-7 commit.
+
+**`fixtures/terrain` (`fx-terrain`), the Rust crate steps 2-4 deferred.** Gen and Client roles
+(`Sim` rejected). `Worldgen for FixtureTerrain` is deterministic, not real worldgen: chunk (0, 0)
+is grass (`Tile::new(1, 0, 0)`) with one ore tile at local index 5 (`Tile::new(1, 5, 0)`), chunk
+(1, 0) is water (`Tile::new(2, 0, 0)`), everywhere else `Tile::VOID`. Base/resource layer ids
+(1/2/5) double as visual ids through `ClientSide`'s *default* identity table -- no
+`Registry::set_base_visual`/`install_visual_tables` call needed, since those ids already match
+`tests/browser/pages/public/terrain/tiles.json`'s grass/water/ore (the same sheet the hand-filled
+scenes from steps 2-4 use, so pixel expectations carry over unchanged). Client-role `init` declares
+`RegionId::GenIn` (`TerrainFeed::gen_in_bytes`) and `RegionId::ChunkTexels`, sized
+`MAX_STAGE_BATCH * RECORD_BYTES` = 16 * 4,112 = 65,792 bytes (`MAX_STAGE_BATCH = 16`, a
+crate-local const matching `worker/client-upload.ts`'s own `UPLOAD_BATCH_MAX`). `FixtureRole::
+Client`'s `uploader: Box<Uploader<FixtureTerrain>>` is boxed (clippy `large_enum_variant`: the
+`Gen(GenCore<..>)` variant is ~48 B, `Client{..}` was 1,344 B unboxed). `frame()` runs
+`feed.on_frame(camera, terrain)` then `uploader.on_frame(camera, terrain)`, in that order, every
+call; `upload_stage` forwards to `uploader.stage(max_records, terrain, out)`.
+
+**`worker/client-upload.ts`** (`createUploadPump`): mirrors `client-gen.ts`'s shape exactly. `want =
+min(ring.freeSlots(), UPLOAD_BATCH_MAX)` computed *before* calling `upload_stage`, per Planning
+decisions -- this is what makes it safe for `Uploader::stage` to never have a staged-but-undelivered
+record (the ring is never asked to hold more than it currently has room for). The copy loop uses
+`copyBytes(ring.slotView(claimed), 0, region.u8, i * RECORD_BYTES, RECORD_BYTES)` (`RECORD_BYTES =
+4112`, matching `client::upload::RECORD_BYTES` exactly) -- no per-slot cached view needed on this
+side, since `region.u8` (the `ChunkTexels` `RegionView`) is a stable, already-live-updated whole-
+region view. Wired into `worker/client.ts`'s `body()` as `uploadPump.pump()`, called every wake
+after `genPump.pump()`, unconditionally (same "costs nothing on a page with no `Uploader`" shape).
+
+**Found and fixed: `sab/layout.ts`'s `uploadRing.slotBytes` was wrong (4,112, not 4,120).** M06 sized
+it before the record layout existed (its own comment permits "an owning milestone may revise its own
+row"). The ring's *own* 8-byte per-slot header (`sab/ring.ts`) sits on top of `slotBytes`, so a
+4,112-byte `slotBytes` left only 4,104 payload bytes -- 8 short of one whole `RECORD_BYTES` (4,112)
+record, which the design requires never to span slots ("keeps each chunk contiguous in one slot").
+Fixed to 4,120. `sab/ring.ts` also gained `RingProducer.freeSlots()` (Planning decisions' own
+"min(ring free slots, 16)") and `RingConsumer.slotCount()` (lets `render/upload.ts` precompute one
+derived view per slot at setup, never mid-drain).
+
+**`render/upload.ts`** (`createUploadDrain(consumer, renderer, opts?: { sabWriteTextureOk?: boolean
+})`): `drain(budgetBytes)` walks the ring via the *slot-level* `RingConsumer` API (`peek`/
+`slotView`/`release`; one record is exactly one slot, `popInto`'s message-spanning path is never
+needed), charging `CHUNK_BYTE_COST = 4096` or `count * ENTRY_BYTE_COST` (`ENTRY_BYTE_COST = 64`,
+matching `client::upload`'s own accounting exactly) per record, stopping before the record that
+would exceed budget but always taking at least one. Reused scratch: `indirScratch: IndirEntry[]`
+(1,024, `INDIR_MAX_ENTRIES`) and one `patchTexelScratch: Texel`, both mutated in place.
+
+**The `writeTexture`-from-a-SAB-view probe (Planning decisions), implemented, not just recorded.**
+`render/device.ts`'s `probeWriteTextureFromSharedView(device)`: inside a validation error scope,
+`writeTexture`s a throwaway `rg16uint` 1x1 texture from a `Uint16Array` over a real
+`SharedArrayBuffer`; `RendererDevice.sabWriteTextureOk` is the result (`false`, not a probe failure,
+when the global itself is absent -- never throws on a non-isolated caller). `render/terrain.ts`
+gained `writePageChunkBytes(slot, le16: Uint16Array)` (`le16.length === CHUNK_EDGE*CHUNK_EDGE*2`,
+already the wire layout -- no `Texel[]` conversion, unlike `writePageChunk`, which now just fills
+`chunkScratch` and forwards to the same private `writeChunkTexture` helper). `render/upload.ts`'s
+CHUNK handling picks a path once, from `opts.sabWriteTextureOk` (default `false`): **fast** --
+`chunkViews: Uint16Array[]`, one per ring slot, precomputed entirely at `createUploadDrain`
+construction (`consumer.slotCount()` iterations, each `new Uint16Array(payload.buffer,
+payload.byteOffset + 16, 2048)`) so no view is ever derived mid-drain; **fallback** -- one
+preallocated non-shared `stagingU16`/`stagingU8` pair, filled with a manual byte loop. Both paths
+allocate nothing per record, matching Planning decisions exactly. **Measured on this machine**:
+`sabWriteTextureOk` is `true` on both headless Chromium (`vendor: apple, architecture: metal-3`) and
+headless WebKit (`vendor/architecture/device/description: apple`) -- no Safari difference found
+here; `terrain: probe tile colours` records the value as its own `sabWriteTextureOk` annotation on
+every run (both the fast-tier chromium test and its `@slow` WebKit repeat) so a future run on a
+browser that *does* reject the SAB view is visible without re-deriving anything.
+
+**`Client` gains `cameraState`/`uploadRing`/`writeCameraAndWake(): number`** (`src/client.ts`) --
+not a rename of anything under Seams' Provides, an addition: `frame-loop.ts` needs direct,
+production-shaped access to exactly these three things, and the existing `clientTestHandle`
+machinery is documented test-only ("later milestones add members" was its own forward-looking
+comment). `writeCameraAndWake` is fire-and-forget (writes the block, bumps `CB_FRAME_REQ`, wakes,
+returns the new value) -- no ack spin; that stays `engine/test.stepFrame`'s own job.
+`ClientOptions.assets: { tiles: string }` is added but not read by `createClient` itself (rendering
+never touches a WASM instance, 0018 §1): a caller passes the same `assets.tiles` string to both
+`createClient` and `render/art.ts`'s `loadTileArt` directly, so no plumbing was needed beyond the
+type existing.
+
+**`frame-loop.ts`** (`createFrameLoop`): `FRAME_PHASES = ['camera', 'writeCamera', 'upload',
+'render', 'overlay', 'ui']`. `tick()` runs them in order once; `start()`/`stop()` drive
+`scheduler.requestFrame`/`cancelFrame`. `onCamera`/`onOverlay`/`onUi` default to no-ops (M11/M18/
+M16). **Not exercised by any browser test in this milestone**: `writeCameraAndWake`'s fire-and-forget
+semantics are correct for a real 60 Hz loop (the render phase draws whatever the worker managed to
+stage since the last wake -- one frame of latency is the intended tradeoff) but wrong for the
+deterministic, pixel-exact tests steps 5/7 need (a chunk staged *this* frame must be visible in the
+*same* synchronous check), so every real-client test reimplements the phase sequence with `engine/
+test.stepFrame`'s lockstep instead of calling into `createFrameLoop`. Verified instead by
+`frame-loop.test.ts` against fake `Client`/`TerrainRenderer`/`Scheduler` objects (phase order, no-op
+defaults, `start`/`stop` wiring) -- not named in the brief's own Tests added list, added because the
+module otherwise had zero coverage.
+
+**`engine/test` (`src/test/render.ts`): `renderTo`/`readPixels` now overloaded, not just
+renderer-shaped.** `renderTo(renderer: Renderable, opts)` (steps 2-4's shape, kept: `far_from_origin_
+exact`, `nothing_outside_viewport` and `device.view_probe_both_paths` still hand-fill textures, no
+client) and `renderTo(client: Client, opts)` (new): the latter fully drains `client.uploadRing`
+(no budget -- a test convenience `src/test/**`'s hot-paths exemption allows) via a fresh
+`attachRenderer`-paired `TerrainRenderer`, draws once, and remembers the `RenderTarget` in a
+`WeakMap<Client, RenderTarget>` so `readPixels(client)` (also newly overloaded, alongside the
+original `readPixels(target: RenderTarget)`) can read it back with no target argument. `attachRenderer
+(client, renderer)` is the one-time pairing call every real-client test/page makes right after
+`client.ready`.
+
+**Real-client browser tests (`terrain-client.html`/`.ts`, a new page beside `terrain.html`)**:
+`probe_tile_colours` and `nonresident_is_neutral` are re-pointed exactly as instructed (real
+`createClient()` + `fx-terrain`, `setCamera`/`setHalfExtent`/`idle()` for the former, nothing at all
+for the latter). `far_from_origin_exact`, `nothing_outside_viewport` and `device.view_probe_both_
+paths` are **not** re-pointed: all three exist to probe the *shader's* own camera-relative maths and
+the view-as-attachment startup probe, neither of which depends on how texels arrived, so they stay
+on `terrain.html`'s hand-filled path (steps 2-4's own tests, untouched).
+
+**`patch_one_texel` -- interpretation call.** Not one of the two tests the brief names as needing a
+real client, and giving it one would need a mechanism this milestone has no other reason to build:
+`Uploader::patch_tile`/`enqueue_chunk` are M15b's own seam (network deltas), and there is no ABI
+export or test hook that reaches them from a real running client without inventing one (an ad hoc
+raw WASM export can't reach `export_instance!`'s macro-hygienic `__ENGINE_SLOT` from outside the
+macro invocation; a raw pointer stashed during `Instance::init` would dangle, since `init` returns
+an owned value moved into `Runtime<T>` afterwards). Implemented instead as a direct, real-ring
+integration test of `render/upload.ts`'s own CHUNK-then-PATCH handling: `terrain.html` gained
+`createTestRing`/`stageRecord(bytes)`/`drainRing(budgetBytes)` (a real `uploadRing`-shaped SAB,
+`createRing(4120, 4)`, driven by hand-built little-endian records, no worker), proving the
+CHUNK-then-PATCH-on-top-of-it path `terrain-readback.spec.ts`'s original hand-filled tests never
+exercised (they only ever called `writePageChunk`/`writePageTexel` on the renderer directly, never
+through `render/upload.ts` at all).
+
+**`upload_budget_while_panning`**: `terrain-client.ts` gained `panAndDrive(frames, dtMs,
+panPerFrameX, panPerFrameY, budgetBytes)`, running the whole 600-frame scripted pan inside one
+`page.evaluate` call (600 separate round trips would itself risk the browser-suite budget) and
+returning every frame's own `uploadBytes`. "Ring-1 chunks resident at rest" is checked by
+`gen.chunkHash(client, 0, 0)`/`(1, 0)` both non-null after the pan plus a settling `idle()` --
+**not** a reconstruction of `view::visible_rect`/`expanded(1)`'s exact rectangle in TypeScript (that
+would couple a test to Rust-internal view math for no real gain, since this fixture's only two
+chunks with distinguishable content are exactly (0, 0) and (1, 0)). "`drawCalls == 1`" is checked
+by rendering exactly once, after the pan, not once per simulated frame (0018 §1's "constant draws"
+claim is about one draw *regardless of upload traffic*, not about issuing 600 draws).
+
+**Not covered by any test here: a CHUNK split from its own INDIR across two separate frames by the
+byte budget.** The ordering (`Uploader::stage`'s own CHUNK-before-INDIR priority, proven natively by
+`upload.indir_after_chunk`) makes this safe by construction -- a slot's page texels land before its
+indirection entry regardless of which `drain()` call each one falls in -- but no browser test drives
+a budget small enough to force the split and then reads pixels mid-way to prove it stays correct.
+Flagged per the delegation prompt rather than added silently: it would need a deliberately tiny
+budget (splitting one CHUNK record from its INDIR across exactly two `driveFrame` calls) plus a
+pixel read in between.
+
+**Found and fixed: a lost-wake-shaped race in `idle()`'s first draft, not in production code.**
+`stepFrame`'s ack (`W_ACK`) is stored by `body()` *before* `uploadPump.pump()` runs (same ordering
+`genPump.pump()` already had), so a test that does `stepFrame(); drain(); checkGenStatsForIdle()`
+can observe an empty gen queue on a step whose own `upload_stage` call hasn't reached the ring yet.
+`untilQuiescent` doesn't have this problem (it polls ring stats over macrotasks instead of trusting
+one lockstep return), but `engine/test.gen.idle` ends with `untilQuiescent`, which would poll the
+full 10 s and reject here since nothing but this page's own test code ever drains `uploadRing`.
+`terrain-client.ts`'s own `idle()` is a from-scratch loop instead, requiring 8 *consecutive* frames
+with both an idle gen queue and a zero-record drain before declaring done -- found because the
+real-client tests were flaky specifically when run alongside other terrain tests (worker OS-thread
+contention shifts which side of the race wins), not in isolation.
+
+**Found and fixed: `scripts/lib/adapters.mjs`'s fast-tier `@slow` exclusion was a no-op.**
+`(?!.*@slow)` (no anchor) is tested by Playwright at every possible start position in the title; once
+the scan position moves past the literal `@slow` text, the negative lookahead trivially succeeds and
+`.*` matches the empty remainder, so the pattern matches *any* string containing `@slow` anywhere,
+not just ones that don't. Found by this milestone's own new `terrain: probe tile colours webkit
+@webkit-gpu @slow` test still running under `pnpm test` (fast tier) after being added. The sibling
+`vitest` adapter two lines above already anchors both its own tags with `^`; fixed `playwright`'s
+fast-tier tag to match (`^(?!.*@slow)`; the slow tier's `(?=.*@slow)` needed no anchor -- a positive
+lookahead satisfiable at position 0 has no equivalent problem). `scripts/lib/adapters.test.mjs`
+gained a regression test asserting the compiled pattern's actual `RegExp.test()` behaviour, not just
+its source string. This is shared test-runner infrastructure, not specific to this milestone, but the
+fix was necessary for the new `@slow` tag to mean anything.
+
+**`playwright.config.ts`'s `webkit` project**: `grep: /@engines/` widened to `/@engines|@webkit-gpu/`.
+A plain `@engines` tag would also pick the test up in `firefox` (same grep), where 0020 §6's own
+null-adapter-headless finding would fail `expectAdapter` outright; `@webkit-gpu` is a second, narrower
+tag only `webkit`'s own grep recognises. `terrain-readback.spec.ts`'s `runProbeTileColours` helper is
+shared between the fast-tier chromium test and the new `terrain: probe tile colours webkit
+@webkit-gpu @slow` test so the two scenes can never drift apart.
+
+**`gc-terrain.html`/`.ts`** (the `terrain` zero-GC page, `gc-test` skill's "Production-topology
+pages" shape): a real device/renderer plus a real `createClient()` over `fx-terrain`, parked before
+`__pageReady`. `drive()` bundles the scripted pan (`gc-gen.ts`'s own 8 tiles/second), `harness.
+stepFrame`/`stepTick`, one budgeted `uploadDrain.drain(DEFAULT_UPLOAD_BUDGET_BYTES)` and one
+`renderer.draw(target)` into a fixed 64x64 offscreen target -- so generation, conversion, upload and
+(over a longer run) eviction all happen inside the measured window, per 0016 §2. `installGcPage`
+gained an `opts.adapter?: object | null` parameter (default `null`, unchanged for every other page):
+the first page to pass a real one, since `gc-loop`/`topology`/`echo`/`gen` have no WebGPU at all.
+`controlKinds: ['object', 'burst']` (no `post-message`), same reasoning as `gen`/`echo`/`topology`.
+The `net` isolate (spawned by this page's `host: { kind: 'remote' }` topology, same as `gen`'s) is
+deliberately not in `budgets.json`'s `gc.pages.terrain.isolates`, for the same reason `gen`'s own
+Deviations give: it never enters `runBlockingLoop`, so there is no mechanism to apply a negative
+control to it.
+
+**Measured** (`playwright test --project gc --grep "terrain clean" --repeat-each 8 --workers 1`,
+this machine): `main` a constant 111.35-111.39 B/frame across all 8 clean runs (`draw`/`drain`'s own
+`writeTexture`/`writeBuffer`/`submit` wrapper objects plus harness overhead); `client`/`gen0` a
+constant 2.5067-2.52 B/frame each, comfortably under the fixed 8 B/frame strict-worker figure every
+other page's worker rows already use. `budgets.json`'s `gc.pages.terrain.main.bytesPerFrame = 120`
+(ceil(111.39) = 112, + 8 B margin, 0016 §1's own convention) -- **provisional**, per the Budgets
+section's own "M17 sets the final one on the page with the full frame" (this shader has no sprites/
+DrawList yet). `client`/`gen0` both `bytesPerFrame: 8` (the fixed figure, not a derived one).
+`counters["render.uploadBytesPerFrame"] = 65536` (`render/upload.ts`'s own `DEFAULT_UPLOAD_BUDGET_
+BYTES`, 0018 §3's default) and `counters["render.drawCallsTerrain"] = 1`.
+
+**Measured** (quiet-machine `pnpm test`, `uptime` load average 3.6-4.7 before each run; one run at
+an elevated ~9.4 load-average spike read `browser pass 77 tests 25s/25s WARN over budget`, right at
+the edge -- reported per the delegation prompt rather than smoothed over): `rust pass 140 tests
+0.4s/10s` (unchanged), `unit pass 102 tests 1.4-1.5s/3s` (+4 `frame-loop.*`, +1 `adapters` regression;
+was 98), `wasm pass 35 tests 1.4s/7s` (+3, the registry/allowlist iteration tests picking up the new
+`fx-terrain` fixture; unchanged from steps 2-4's own count of what those tests scan), `browser pass
+77 tests 23-24s/25s` (was 68 after steps 2-4: the two re-pointed tests don't change the count, +2
+new readback tests -- `patch_one_texel`, `upload_budget_while_panning` -- brings it to 70 [matches
+the step-5 commit's own measurement], +7 zero-GC `terrain` tests -- clean + object/burst x 3
+isolates -- brings it to 77. The `@webkit-gpu @slow`-tagged WebKit repeat never counts here at all,
+fast tier or slow: `pnpm test`'s own composed grep excludes any `@slow`-tagged title once the
+adapters.mjs anchor fix below landed; it only ever ran under `pnpm test:slow`). New/changed test
+durations (`test-results/browser/report.json`): readback --
+`probe_tile_colours` 331ms, `nonresident_is_neutral` 197ms, `patch_one_texel` 256ms, `far_from_origin_
+exact` 235ms, `nothing_outside_viewport` 266ms, `upload_budget_while_panning` 351ms; zero-GC --
+`terrain clean` 575ms, `neg object {main,client,gen0}` 651/767/910ms, `neg burst {main,client,gen0}`
+1267/1720/1775ms (about 7.7s total across all 7, run in parallel with everything else across 3
+workers, not serially). Existing multi-engine (`@engines`) repeats in the fast tier, from the same
+report: `determinism: golden reproduced` webkit 564ms / firefox 864ms; `sab.ring_both_directions`
+webkit 1000ms / firefox 899ms; `workers.spawn_local` webkit 463ms / firefox 847ms -- unchanged by
+this milestone, listed because the delegation prompt asked for them. `terrain: probe tile colours
+webkit @webkit-gpu @slow` (only under `pnpm test:slow`): chromium 369ms, webkit 783ms; both report
+a real adapter (`vendor: apple`, `architecture: metal-3` on Chromium, `apple`/`apple`/`apple` on
+WebKit) and `sabWriteTextureOk: true`. `pnpm lint`: biome/rustfmt/clippy/tsc all green (clippy
+needed the `Uploader` boxing fix above).
+
+### Notes for later briefs
+
+- **M09b** (art sampling, canvas lifecycle): `renderer.frameUniform`/`renderer.viewport` exist as
+  plain mutable objects with placeholder defaults (`frameUniform.tilesPerPx = 1`, everything else
+  0; `viewport = { widthPx: 0, heightPx: 0, dpr: 1, renderScale: 1 }`) -- nothing in this milestone
+  writes `viewport` at all, or `frameUniform` outside test setup and `frame-loop.ts`'s own
+  `writeFrameUniform(renderer.frameUniform)` call. M09b's resize observer is the first real writer
+  of `viewport`.
+- **M11** (camera integration): `frame-loop.ts`'s `onCamera` hook and `Client.writeCameraAndWake`
+  are the two seams to fill -- `onCamera` should mutate `client.cameraState` from input/gestures
+  before each tick; the write-and-wake mechanics underneath are already production-shaped and need
+  no change. `createFrameLoop`'s `tick()` is fire-and-forget by design (Deviations above); M11 is
+  also where a *stepped* variant might be reconsidered if a deterministic frame-time test needs one.
+- **M15b** (network deltas): `Uploader::enqueue_chunk`/`patch_tile` are called from nowhere in this
+  milestone except native Rust tests (`client/upload.rs`'s own `#[cfg(test)]` module) -- `patch_
+  one_texel`'s own Deviations entry above explains why a real end-to-end trigger wasn't built here.
+- **M17** (sprites, DrawList, frame-time budget): `gc.pages.terrain.main.bytesPerFrame = 120` is
+  explicitly provisional (this shader has no sprites yet); re-derive it once the full frame exists,
+  per the Budgets section's own "M17 sets the final one" line.
+- **M37b** (device loss): `Uploader::requeue_all` (from step 1) is unchanged and still minimal
+  (clears "on GPU" bits, doesn't replay chunks resident outside ring 1 + look-ahead) -- see step 1's
+  own Deviations.
+- Cross-thread correctness of a CHUNK split from its own INDIR across two frames by the byte budget
+  is safe by construction (Rust-side ordering, native `upload.indir_after_chunk`) but has no browser
+  test proving it end-to-end (see this section's own "Not covered" entry) -- a candidate for M10 or
+  M17b if a regression there is ever suspected.
+- `scripts/lib/adapters.mjs`'s fast-tier `@slow` exclusion was fixed as part of this milestone
+  (Deviations above); any other suite that starts using `@slow`-tagged Playwright tests benefits
+  automatically, no further action needed.
