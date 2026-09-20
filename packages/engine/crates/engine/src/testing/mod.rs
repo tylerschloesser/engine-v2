@@ -2,12 +2,17 @@
 
 use std::path::Path;
 
+pub mod cache_matrix;
 pub mod golden_bytes;
 
 // So `engine::testing::assert_golden_bytes!`/`assert_golden_hash!` work at the path their doc
 // comments advertise; the macros themselves are `#[macro_export]`ed at the crate root because
 // `env!("CARGO_MANIFEST_DIR")` inside them must expand in the *caller's* crate.
 pub use crate::{assert_golden_bytes, assert_golden_hash};
+pub use cache_matrix::{
+    CacheConfig, CountingHandle, CountingSource, DEFAULT_CACHE_CHUNKS, Prewarm, TestTerrain,
+    assert_cache_invisible, prewarm_chunks,
+};
 
 #[derive(serde::Deserialize)]
 struct Golden {

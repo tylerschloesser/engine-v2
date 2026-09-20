@@ -30,3 +30,9 @@ required-features = ["testing"]
 [[test]]
 name = "world_terrain"
 required-features = ["testing"]
+
+# `engine::testing::{assert_cache_invisible, CacheConfig, TestTerrain, CountingSource}` (feature
+# `testing`).
+[[test]]
+name = "world_cache_invisible"
+required-features = ["testing"]
