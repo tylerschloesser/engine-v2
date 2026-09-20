@@ -2,6 +2,7 @@
 // the `.wasm` produces under Node, which docs/decisions/0002 makes authoritative (0020 §5); the
 // native, Bun and browser legs are then compared with it. Rebuilds first, so the golden is never
 // taken from a stale module. Review the diff: a changed golden is a changed sim.
+import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,6 +22,7 @@ if (wanted !== undefined && !names.includes(wanted)) {
   process.exit(2)
 }
 
+const written = []
 for (const name of wanted === undefined ? names : [wanted]) {
   const golden = join(fixtures, name, 'golden')
   const scenario = JSON.parse(readFileSync(join(golden, 'scenario.json'), 'utf8'))
@@ -28,6 +30,20 @@ for (const name of wanted === undefined ? names : [wanted]) {
   const { wasm } = await loadGame(built.dir)
   const inst = instantiate(wasm, roleOf(scenario), scenario.config, { onLog() {} })
   const checkpoints = runHashScenario(inst, scenario)
-  writeFileSync(join(golden, 'golden.json'), `${JSON.stringify({ checkpoints }, null, 2)}\n`)
+  const path = join(golden, 'golden.json')
+  writeFileSync(path, `${JSON.stringify({ checkpoints }, null, 2)}\n`)
+  written.push(path)
   console.log(`${name}: ${checkpoints.length} checkpoints, last ${checkpoints.at(-1)}`)
+}
+
+// `JSON.stringify(..., null, 2)` above disagrees with Biome's line-width-based array wrapping for
+// a short `checkpoints` array (Biome collapses it to one line under `biome.json`'s `lineWidth`):
+// without this, `pnpm golden <fixture> && git diff --exit-code` would show a formatting-only diff
+// on every run for a fixture with few checkpoints, indistinguishable from a real golden change.
+// Reformat in place so the file this script writes already matches what `pnpm format` would do.
+if (written.length > 0) {
+  spawnSync('pnpm', ['exec', 'biome', 'check', '--write', ...written], {
+    stdio: 'inherit',
+    env: toolEnv(),
+  })
 }
