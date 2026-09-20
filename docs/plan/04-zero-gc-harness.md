@@ -1,6 +1,6 @@
 # M04: Zero-allocation assertion with permanent negative controls
 
-Status: not started · After: 03 · Tyler-dependent: no (Q2 answered: the zero-GC Requirement in `docs/spec/testing.md` is amended to 0016's reading; what is built does not change)
+Status: done · After: 03 · Tyler-dependent: no (Q2 answered: the zero-GC Requirement in `docs/spec/testing.md` is amended to 0016's reading; what is built does not change)
 
 ## Goal
 The assertion of 0016 §3 runs in the `browser` suite against the page that exists today: a main-thread frame loop plus one worker ticking the fixture `.wasm` in lockstep, with bytes crossing SAB ↔ WASM memory in both directions. Per isolate it asserts A (no GC trace events in the window) and B (exact sampled bytes per frame within budget), plus unchanged WASM memory size. Five permanent negative controls each fail on the named isolate and nowhere else. Budgets live in `packages/engine/budgets.json`. Later milestones add a zero-GC test for a new page with a budgets entry and a five-line spec.
@@ -98,15 +98,15 @@ packages/engine/playwright.config.ts                        (project `gc`)
 - `unit`: `gc analyse: sums selfSize exactly`, `gc analyse: inclusive attribution under roots`, `gc analyse: GC events outside the marks are ignored`, `gc analyse: events are attributed to named isolates`, `gc verdict: software mode uses attributed bytes`, `gc verdict: tracing stall is a warning` (0016 caveat a: a canned measure result whose `Tracing.start` took longer than the threshold yields a `gc-tracing-start-stall <ms>` warning and a passing verdict; one under it yields none), `budgets: every gc page lists main`.
 
 ## Exit criteria
-- [ ] `pnpm test browser -t gc-loop` passes: clean within budget on `main` and `sim` with zero GC events; every negative control's verdict matches 0016 §3.8 on the named isolate only.
-- [ ] Temporarily allocating `{}` per call inside `call0` in `src/loader.ts` makes `gc-loop clean` fail on `sim` with `call0` among the printed top allocation sites (check, then revert). This is the proof that the instrument sees engine code.
-- [ ] `gc: flat transport parity` passes, or the gap is recorded under Deviations with risk 11 left open.
-- [ ] `pnpm gc software -t "gc-loop clean"` passes.
-- [ ] `pnpm test unit -t "gc verdict"` runs both verdict tests and passes.
-- [ ] `pnpm gc reliability`: clean 50/50, each control 15/15; numbers recorded.
-- [ ] Added `browser` suite time recorded; the slowest `gc` test is under the browser p95 rule of 0020 §4.
-- [ ] `.claude/skills/gc-test/SKILL.md` exists; its commands were each run once in this session.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `pnpm test browser -t gc-loop` passes: clean within budget on `main` and `sim` with zero GC events; every negative control's verdict matches 0016 §3.8 on the named isolate only.
+- [x] Temporarily allocating `{}` per call inside `call0` in `src/loader.ts` makes `gc-loop clean` fail on `sim` with `call0` among the printed top allocation sites (check, then revert). This is the proof that the instrument sees engine code.
+- [x] `gc: flat transport parity` passes, or the gap is recorded under Deviations with risk 11 left open.
+- [x] `pnpm gc software -t "gc-loop clean"` passes.
+- [x] `pnpm test unit -t "gc verdict"` runs both verdict tests and passes.
+- [x] `pnpm gc reliability`: clean 50/50, each control 15/15; numbers recorded.
+- [x] Added `browser` suite time recorded; the slowest `gc` test is under the browser p95 rule of 0020 §4.
+- [x] `.claude/skills/gc-test/SKILL.md` exists; its commands were each run once in this session.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test browser -t gc-loop` · `pnpm test unit -t "gc analyse"` · `pnpm gc software -t "gc-loop clean"` · `pnpm gc flat -t "gc-loop clean"` · `pnpm gc reliability` · `pnpm test` · `pnpm lint`
@@ -284,3 +284,4 @@ reads it differently.
   (`strict` requires zero `MinorGC`+`MajorGC`; `budgeted` only zero `MajorGC`) and reads
   `bytesPerMessage` as a fallback when `bytesPerFrame` is absent -- built for this milestone's own
   isolates but exercised only by the `strict` path so far.
+- **Orchestrator gate (2026-09-19):** `pnpm gate 5cbf35e` clean (32 files, +1896/−38, no goldens or markers changed); `pnpm test` (`rust` 16, `unit` 60, `wasm` 23, `browser pass 20 tests 5.8s/25s`) and `pnpm lint` green, run by the orchestrator. Slow and check-then-revert evidence (`pnpm gc reliability` 50/50 and 75/75, the `call0` check, `pnpm gc software`) accepted from the implementer's pasted result lines above. Orchestrator fix: `src/test.ts` did not export the `engine/test` seams this brief provides; added `installGcPage`, `GcPageApi` and `NegativeControl` there (pages import them by relative path, so no test noticed). Seam wording corrected by this section: the control hook and the attribution roots are `run` (main, inside `installGcPage`) and `coreTick` (`harness-worker.ts`), not the `harnessStepFrame` / `harnessWorkerStep` names of Seams; no other brief names them. The `packages/engine/CLAUDE.md` line-cap failure the implementer found at the base sha was the orchestrator's own `__pageReady` edit, committed in `M03 done` without a re-run; `5cbf35e` and `e6767d6` are therefore red on `unit` (that one test), fixed by the reflow in this milestone.
