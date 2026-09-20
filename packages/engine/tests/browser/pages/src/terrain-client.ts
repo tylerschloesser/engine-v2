@@ -37,9 +37,10 @@ function requireClient(): import('../../../../src/client.ts').Client {
 window.__terrainClient = {
   async init() {
     device = await initDevice()
-    renderer = createTerrainRenderer(device.device, {
+    renderer = await createTerrainRenderer(device.device, {
       colorFormat: 'rgba8unorm',
       viewProbePasses: device.viewProbePasses,
+      checkCompilation: device.checkCompilation,
     })
     const art = await loadTileArt(device.device, '/terrain/tiles.json')
     renderer.setTileArray(art.texture)

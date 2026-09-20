@@ -125,10 +125,18 @@ function placeholderTileArray(device: GPUDevice): GPUTexture {
   return texture
 }
 
-export function createTerrainRenderer(
+export async function createTerrainRenderer(
   device: GPUDevice,
-  opts: { colorFormat: GPUTextureFormat; viewProbePasses: boolean },
-): TerrainRenderer {
+  opts: {
+    colorFormat: GPUTextureFormat
+    viewProbePasses: boolean
+    /** `RendererDevice.checkCompilation` (Open gate failures item 6, gate round 1): awaited here,
+     * right after the one shader module this renderer creates, so `getCompilationInfo()` is
+     * checked at the same "init, not per frame" point 0018 §1 places `uncapturederror` -- every
+     * caller passes its own `initDevice()` result's own method. */
+    checkCompilation(label: string, module: GPUShaderModule): Promise<void>
+  },
+): Promise<TerrainRenderer> {
   const pageTexture = device.createTexture({
     size: [PAGE_TEXTURE_EDGE, PAGE_TEXTURE_EDGE],
     format: 'rg16uint',
@@ -196,6 +204,7 @@ export function createTerrainRenderer(
   const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] })
 
   const shaderModule = device.createShaderModule({ code: TERRAIN_WGSL, label: 'terrain' })
+  await opts.checkCompilation('terrain', shaderModule)
   const pipeline = device.createRenderPipeline({
     label: 'terrain',
     layout: pipelineLayout,

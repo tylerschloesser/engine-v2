@@ -424,3 +424,17 @@ test('terrain: upload budget while panning', async ({ page }, testInfo) => {
 
   expectNoGpuErrors(await page.evaluate(() => window.__terrainClient?.errors() ?? []))
 })
+
+// Open gate failures item 6, gate round 1 negative: a deliberately invalid WGSL string must make
+// `checkCompilation` fail the check (`readback`'s own filename keeps this in M10's
+// `expectAdapter|readback` grep, docs/plan/09-renderer-terrain.md Consumes).
+test('device: bad wgsl fails the compilation check', async ({ page }, testInfo) => {
+  await openPage(page, '/terrain.html')
+  const init = await page.evaluate(() => window.__terrain?.init())
+  expectAdapter(testInfo, init?.adapterInfo ?? null)
+  const errors = await page.evaluate(() => window.__terrain?.checkBadWgsl() ?? [])
+  expect(
+    errors.length,
+    'a bad WGSL module must produce a getCompilationInfo() message',
+  ).toBeGreaterThan(0)
+})

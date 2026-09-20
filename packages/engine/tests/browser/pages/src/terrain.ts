@@ -44,9 +44,10 @@ window.__terrain = {
         ? { test: { forceViewProbe: opts.forceViewProbe } }
         : undefined,
     )
-    renderer = createTerrainRenderer(device.device, {
+    renderer = await createTerrainRenderer(device.device, {
       colorFormat: 'rgba8unorm',
       viewProbePasses: device.viewProbePasses,
+      checkCompilation: device.checkCompilation,
     })
     return { adapterInfo: device.adapterInfo, viewProbePasses: device.viewProbePasses }
   },
@@ -99,6 +100,20 @@ window.__terrain = {
 
   errors() {
     return device ? device.errors() : []
+  },
+
+  // Open gate failures item 6, gate round 1 negative: a deliberately invalid WGSL string must make
+  // `checkCompilation` push into `errors()` -- not a real scene, so it builds its own throwaway
+  // shader module rather than reusing `renderer`'s.
+  async checkBadWgsl() {
+    const d = device ?? (await initDevice())
+    device = d
+    const badModule = d.device.createShaderModule({
+      code: 'not valid wgsl at all !!!',
+      label: 'bad',
+    })
+    await d.checkCompilation('bad-wgsl-test', badModule)
+    return d.errors()
   },
 
   createTestRing() {

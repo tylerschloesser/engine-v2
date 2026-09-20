@@ -42,6 +42,11 @@ declare global {
         height: number,
       ): Promise<{ width: number; height: number; data: number[] }>
       errors(): string[]
+      /** Open gate failures item 6, gate round 1 negative (docs/plan/09-renderer-terrain.md
+       * Deviations "Gate fix round 1"): builds a shader module from a deliberately invalid WGSL
+       * string, awaits `checkCompilation` on it, and returns `errors()` afterwards -- must be
+       * non-empty. */
+      checkBadWgsl(): Promise<string[]>
       /** `terrain.patch_one_texel` (Tests added): a real `uploadRing`-shaped SAB driven by
        * hand-built records, not a worker (docs/plan/09-renderer-terrain.md Deviations
        * "Steps 5-7") -- proves `render/upload.ts`'s CHUNK/PATCH handling directly. */

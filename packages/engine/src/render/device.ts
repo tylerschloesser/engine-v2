@@ -31,12 +31,26 @@ export class NoAdapterError extends Error {
   }
 }
 
+/** Shared by `ShaderCompilationError` and `RendererDevice.checkCompilation`'s own `errors()` entry
+ * below (Open gate failures item 6, gate round 1) -- one formatting, two surfaces. */
+function formatCompilationMessages(
+  label: string,
+  messages: readonly GPUCompilationMessage[],
+): string {
+  return (
+    `shader '${label}': getCompilationInfo() is non-empty:\n` +
+    messages.map((m) => `  ${m.type} ${m.lineNum}:${m.linePos}: ${m.message}`).join('\n')
+  )
+}
+
+/** Not thrown by `checkCompilation` itself any more (Open gate failures item 6): kept for a caller
+ * that wants a hard failure from a single, already-known-bad module outside the standard init path
+ * (Scope's own "surfaced as errors" reads naturally as the same `errors()` channel
+ * `uncapturederror` already uses, not a second, throw-based one -- 0020 §6's every-GPU-test rule is
+ * "fails on ... a non-empty `getCompilationInfo()`", which `expectNoGpuErrors` now covers for free). */
 export class ShaderCompilationError extends Error {
   constructor(label: string, messages: readonly GPUCompilationMessage[]) {
-    super(
-      `shader '${label}': getCompilationInfo() is non-empty:\n` +
-        messages.map((m) => `  ${m.type} ${m.lineNum}:${m.linePos}: ${m.message}`).join('\n'),
-    )
+    super(formatCompilationMessages(label, messages))
     this.name = 'ShaderCompilationError'
   }
 }
@@ -55,7 +69,10 @@ export interface RendererDevice {
   /** Every `uncapturederror` message seen since this device was created, in order. Every GPU test
    * asserts this is empty (0020 §6). */
   errors(): string[]
-  /** Throws `ShaderCompilationError` if `module.getCompilationInfo()` is non-empty. */
+  /** Awaits `module.getCompilationInfo()` and, if it is non-empty, pushes one formatted message
+   * into `errors()` (Open gate failures item 6, gate round 1: the same channel `uncapturederror`
+   * already uses, so every existing `expectNoGpuErrors(await ... .errors())` call also catches a
+   * bad shader with no spec changes). Never throws. */
   checkCompilation(label: string, module: GPUShaderModule): Promise<void>
 }
 
@@ -165,7 +182,7 @@ export async function initDevice(opts?: {
     errors: () => errors.slice(),
     async checkCompilation(label, module) {
       const info = await module.getCompilationInfo()
-      if (info.messages.length > 0) throw new ShaderCompilationError(label, info.messages)
+      if (info.messages.length > 0) errors.push(formatCompilationMessages(label, info.messages))
     },
   }
 }
