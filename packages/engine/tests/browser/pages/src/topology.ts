@@ -31,7 +31,9 @@ declare global {
     __clientReady?: () => Promise<{ ok: true } | { ok: false; code: string; message: string }>
     __clientWorkers?: () => Record<string, { memPages: number; memGrows: number }>
     __clientDestroy?: () => void
-    __setCameraAndStep?: (x: number, y: number, tilesAcross: number, dtMs: number) => void
+    /** Returns the `frame_time_ms` this step wrote into the camera block, so a spec can compare
+     * it with what WASM saw as `t_ms` (`workers.camera_block_reaches_wasm`). */
+    __setCameraAndStep?: (x: number, y: number, tilesAcross: number, dtMs: number) => number
     /** A blocked worker cannot receive CDP (0015 §2, "a blocked worker receives no events"): a
      * spec that reaches into a worker with `worker.evaluate()` parks first. */
     __park?: () => Promise<void>
@@ -96,6 +98,7 @@ window.__setCameraAndStep = (x, y, tilesAcross, dtMs) => {
   if (!window.__client) throw new Error('__setCameraAndStep: no client')
   setCamera(window.__client, { x, y, tilesAcross })
   stepFrame(window.__client, dtMs)
+  return clientTestHandle(window.__client).cameraState.frameTimeMs
 }
 
 window.__pageReady = true

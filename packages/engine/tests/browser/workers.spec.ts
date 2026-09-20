@@ -18,7 +18,8 @@ declare global {
     __clientReady?: () => Promise<{ ok: true } | { ok: false; code: string; message: string }>
     __clientWorkers?: () => Record<string, { memPages: number; memGrows: number }>
     __clientDestroy?: () => void
-    __setCameraAndStep?: (x: number, y: number, tilesAcross: number, dtMs: number) => void
+    /** Returns the `frame_time_ms` the step wrote into the camera block (topology.ts). */
+    __setCameraAndStep?: (x: number, y: number, tilesAcross: number, dtMs: number) => number
     __park?: () => Promise<void>
     __resume?: () => Promise<void>
   }
@@ -157,10 +158,14 @@ test('workers.camera_block_reaches_wasm', async ({ page }) => {
 
   const centreX = 123.5
   const centreY = -987.25
-  await page.evaluate(({ x, y }) => window.__setCameraAndStep?.(x, y, 12, 16.6), {
-    x: centreX,
-    y: centreY,
-  })
+  // The page returns the `frame_time_ms` it wrote into the camera block for this step, so the
+  // assertion below compares it with the `t_ms` WASM saw instead of trusting either side alone.
+  const frameTimeMs = await page.evaluate(
+    ({ x, y }) => window.__setCameraAndStep?.(x, y, 12, 16.6),
+    { x: centreX, y: centreY },
+  )
+  expect(typeof frameTimeMs).toBe('number')
+  expect(frameTimeMs as number).toBeGreaterThan(0)
 
   await park(page)
   const echoed = await clientWorker.evaluate(() => {
@@ -171,12 +176,17 @@ test('workers.camera_block_reaches_wasm', async ({ page }) => {
     ).__engineInstance
     const region = inst?.region(2) // RegionId.Result
     if (!region) return null
-    return Array.from(region.u8.subarray(0, 16))
+    return Array.from(region.u8.subarray(0, 24))
   })
   expect(echoed).not.toBeNull()
   const view = new DataView(new Uint8Array(echoed as number[]).buffer)
   expect(view.getFloat64(0, true)).toBe(centreX)
   expect(view.getFloat64(8, true)).toBe(centreY)
+  // The fixture writes its `t_ms` *argument* at offset 16 (fixtures/hash/src/lib.rs), so this is
+  // the contract of decision A (fix round 3, docs/plan/06b-workers-and-spawn.md, Deviations):
+  // `Instance::frame` receives the frame's own `frame_time_ms`, bit for bit, even though the JS
+  // side passes the raw export a constant.
+  expect(view.getFloat64(16, true)).toBe(frameTimeMs)
 })
 
 test('workers.park_resume', async ({ page }) => {

@@ -135,7 +135,9 @@ pub trait Instance: Sized + 'static {
     }
 
     /// Called only when the client worker saw `CB_FRAME_REQ` advance (docs/plan/06b-workers-and-
-    /// spawn.md, Planning decisions "Worker frame clock"): `t_ms` is that frame's `frame_time_ms`.
+    /// spawn.md, Planning decisions "Worker frame clock"): `t_ms` is that frame's `frame_time_ms`,
+    /// taken from `camera` by the shim in `abi::frame` rather than from the export's own raw
+    /// argument (decision A of fix round 3; see that function).
     /// `camera` is this role's `Camera` region, already decoded; `result` is the whole `Result`
     /// region, for a role that wants to report something back (this milestone's own
     /// `workers.camera_block_reaches_wasm` test writes `camera.centre` there, proving

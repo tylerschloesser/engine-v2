@@ -154,13 +154,15 @@ pub fn sim_hash<T: Instance>(slot: &Slot<T>) -> Status {
     Status::Ok
 }
 
-/// `t_ms` is forwarded as-is; as of fix round 2 (docs/plan/06b-workers-and-spawn.md, Deviations)
-/// the worker no longer computes a meaningful value for it (that read boxed a fresh `HeapNumber`
-/// on every real frame), so an `Instance::frame` that wants the time reads `camera.frame_time_ms`
-/// instead -- already in `camera`, copied into this role's `Camera` region the same pass. The
-/// export keeps this signature (no `ABI_VERSION` bump): several later milestones' briefs cite
-/// `frame(t_ms)` by name.
-pub fn frame<T: Instance>(slot: &Slot<T>, t_ms: f64) -> Status {
+/// The raw export argument is **unused** (hence `_raw_t_ms`), and the `t_ms` an `Instance::frame`
+/// receives is `camera.frame_time_ms`, read out of this role's own `Camera` region -- decision A of
+/// fix round 3 (docs/plan/06b-workers-and-spawn.md, Deviations). The JS side stopped computing the
+/// argument in fix round 2 (a `Float64Array` element read boxed a fresh `HeapNumber` on every real
+/// frame: `worker/client.ts` passes a constant instead), and a parameter that is silently always
+/// zero would be a trap for every brief that cites `frame(t_ms)`. Both channels carry the same
+/// value by construction: JS writes the whole `CameraBlock`, `frame_time_ms` included, in the same
+/// pass that raises `CB_FRAME_REQ`. The export keeps its shape, so `ABI_VERSION` stays 2.
+pub fn frame<T: Instance>(slot: &Slot<T>, _raw_t_ms: f64) -> Status {
     let rt = match slot.client() {
         Ok(rt) => rt,
         Err(status) => return status,
@@ -173,7 +175,7 @@ pub fn frame<T: Instance>(slot: &Slot<T>, t_ms: f64) -> Status {
     // `Result` (`RegionLayout::region`) that never moves or resizes after init (0014 §4); the
     // instance is single-threaded and not re-entered, so nothing else touches it during this call.
     let camera = unsafe { &*camera_ptr };
-    rt.inst.frame(t_ms, camera, result)
+    rt.inst.frame(camera.frame_time_ms, camera, result)
 }
 
 #[cfg(test)]

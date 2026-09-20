@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import { ABI_VERSION, RegionId, Role, Status } from '../../src/abi.js'
 import {
   AbiMismatchError,
@@ -92,6 +92,42 @@ describe('loader', () => {
     // spawn.md, Scope: "RegionId::Camera sized here"), whatever the game; 80 bytes = the block
     // `packages/engine/src/camera/block.ts` defines.
     expect(inst.region(RegionId.Camera)?.len).toBe(80)
+  })
+
+  // Decision B of fix round 3 (docs/plan/06b-workers-and-spawn.md, Deviations): the detach check is
+  // picked once at module load from `'detached' in ArrayBuffer.prototype`. Without the detection a
+  // runtime that lacks the getter reads `undefined` -- falsy -- and silently never rebuilds its
+  // views after `memory.grow`. Here the getter is hidden and the loader re-imported, so the
+  // `byteLength === 0` fallback is the branch under test; the assertions are the growth test's own.
+  test('loader: views survive memory growth without ArrayBuffer.prototype.detached', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'detached')
+    expect(descriptor, 'this runtime has the getter, so hiding it tests the fallback').toBeDefined()
+    delete (ArrayBuffer.prototype as unknown as { detached?: unknown }).detached
+    try {
+      vi.resetModules()
+      const fresh = (await import('../../src/loader.js')) as typeof import('../../src/loader.js')
+      const inst = fresh.instantiate(wasm, Role.Sim, config({ growAtTick: 2 }), quiet)
+      let rebuilds = 0
+      inst.onViewsRebuilt(() => rebuilds++)
+      const rx = inst.region(RegionId.Rx)
+      if (!rx) throw new Error('fx-hash declares Rx')
+      const before = { rx: rx.u8, bytes: inst.memoryBytes() }
+
+      inst.call0(inst.x.sim_tick)
+      expect(rebuilds).toBe(0)
+      inst.call0(inst.x.sim_tick)
+
+      expect(inst.memGrows()).toBeGreaterThan(0)
+      expect(rebuilds).toBe(1)
+      expect(before.rx.byteLength).toBe(0)
+      expect(inst.memoryBytes()).toBeGreaterThan(before.bytes)
+      expect(inst.region(RegionId.Rx)).toBe(rx)
+      expect(rx.u8.byteLength).toBe(rx.len)
+      expect(inst.mem.u8.byteLength).toBe(inst.memoryBytes())
+    } finally {
+      Object.defineProperty(ArrayBuffer.prototype, 'detached', descriptor as PropertyDescriptor)
+      vi.resetModules()
+    }
   })
 
   test('loader: views survive memory growth', () => {

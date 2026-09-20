@@ -262,19 +262,17 @@ impl Instance for HashFixture {
     /// `centre` (two `f64`) then `frame_time_ms` (one `f64`), raw little-endian bytes, so the
     /// browser test can prove `CameraBlock`'s Rust layout agrees with `camera/block.ts`'s bit for
     /// bit, not just that JS copied bytes into the region (which would be true regardless of layout
-    /// agreement). Fix round 2 (Deviations, "frame(t_ms)"): the third value now comes from
-    /// `camera.frame_time_ms` (already in this role's own `Camera` region, copied there the same
-    /// pass) rather than the `t_ms` argument, which the worker now passes as a cheap constant
-    /// instead of boxing a fresh `Float64Array` read on every real frame; both channels carry the
-    /// identical value in practice (JS wrote the whole block, `frame_time_ms` included), so this
-    /// test's own assertion is unaffected.
-    fn frame(&mut self, _t_ms: f64, camera: &CameraBlock, result: &mut [u8]) -> Status {
+    /// agreement). The third value is the `t_ms` argument, *not* `camera.frame_time_ms`, so the
+    /// test proves the two agree bit for bit (decision A of fix round 3, Deviations: `abi::frame`
+    /// passes `camera.frame_time_ms` as `t_ms` because the JS side now hands the raw export a
+    /// constant; this write is what keeps that shim honest).
+    fn frame(&mut self, t_ms: f64, camera: &CameraBlock, result: &mut [u8]) -> Status {
         let Some(out) = result.get_mut(..24) else {
             return Status::BadLength;
         };
         out[0..8].copy_from_slice(&camera.centre[0].to_le_bytes());
         out[8..16].copy_from_slice(&camera.centre[1].to_le_bytes());
-        out[16..24].copy_from_slice(&camera.frame_time_ms.to_le_bytes());
+        out[16..24].copy_from_slice(&t_ms.to_le_bytes());
         Status::Ok
     }
 }
