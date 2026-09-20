@@ -18,7 +18,8 @@ The one publishable package (working name `engine`, private for now). Layout and
 - `pnpm --filter engine typecheck`: `tsc --noEmit` over `src/` including its tests, then over `tests/` (`tests/tsconfig.json`). `pnpm lint` runs it.
 - `pnpm test unit [-t pattern]`: the Vitest `unit` suite (this package's `src/**/*.test.ts` plus `scripts/**/*.test.mjs`).
 - `pnpm test wasm [-t pattern]`: Vitest project `wasm` (`tests/wasm/*.test.ts`, run against `src/`) plus the Bun leg (`tests/wasm/bun-leg.mjs`, run against `dist/`), reported on one line. The `fixtures` build step has built every fixture's dev-profile `.wasm` first.
-- `pnpm golden [fixture]`: rebuilds, runs `golden/scenario.json` on the `.wasm` under Node and rewrites `golden/golden.json`. The only writer of a golden (0020 §5); review the diff, because a changed golden is a changed sim.
+- `pnpm golden [fixture]`: rebuilds, runs `golden/scenario.json` on the `.wasm` under Node and rewrites `golden/golden.json`. The only writer of that golden kind (0020 §5); review the diff, a changed golden is a changed sim.
+- `pnpm golden:bytes [-- <nextest filter>]`: the other golden kind (M05), native-only: reruns the Rust suite with `GOLDEN_BLESS=1`, under which `assert_golden_bytes!`/`assert_golden_hash!` write `crates/*/tests/golden/<name>.hex`/`.hash` instead of comparing. Same review discipline.
 
 ## Conventions
 
@@ -32,7 +33,7 @@ The one publishable package (working name `engine`, private for now). Layout and
 
 - `unit`: `*.test.ts` beside the source in `src/`. No globals: import `test`, `expect` from `vitest`.
 - `wasm`: `tests/wasm/`. `netcode`, `browser` (later milestones): `tests/<suite>/`; browser pages under `tests/browser/pages/`. Shared helpers in `tests/support/`: `fixtures.ts` (find and load a built fixture), `scenario.ts` (the determinism driver shared by Node, Bun, `pnpm golden` and the browser page; its only runtime import is `src/abi.ts`, so plain runtimes load it unbuilt), `wasm-sections.ts` (signatures and memory limits, which the JS API does not expose).
-- Fixture game crates: `fixtures/<name>/`, package `fx-<name>`, `crate-type = ["cdylib", "rlib"]`, `publish = false`, `[lints] workspace = true`, `engine = { path = "../../crates/engine" }`; every directory there is a crate and a cargo workspace member. Low-level fixtures call `engine::export_instance!`. Optional `golden/scenario.json` + `golden/golden.json` (Rust, Node/Bun and browser suites read the same files; hashes are 16-digit lowercase hex). `buildGame()` output lands in `fixtures/<name>/target/engine/dev/` (gitignored). The allowlist and registry tests iterate the directory, so a new fixture is covered by existing.
+- Fixture game crates: `fixtures/<name>/`, package `fx-<name>`, `crate-type = ["cdylib", "rlib"]`, `publish = false`, `[lints] workspace = true`, `engine = { path = "../../crates/engine" }`; every directory there is a crate and a cargo workspace member. Low-level fixtures call `engine::export_instance!`. Optional `golden/scenario.json` + `golden/golden.json`, the checkpoint-hash golden kind (Rust, Node/Bun and browser suites read the same files; hashes are 16-digit lowercase hex; the other kind, byte-format goldens, is native-only and lives beside the crate that blesses it: `pnpm golden:bytes` above). `buildGame()` output lands in `fixtures/<name>/target/engine/dev/` (gitignored). The allowlist and registry tests iterate the directory, so a new fixture is covered by existing.
 - `tests/` and `fixtures/` are outside `files`, so neither is published.
 - Slow tier: put `@slow` in the Vitest test title. `pnpm test` skips it; `pnpm test:slow` runs only those.
 - New suites and build steps are registered in `scripts/suites.mjs`, nowhere else.

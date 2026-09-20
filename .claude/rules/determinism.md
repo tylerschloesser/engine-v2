@@ -15,9 +15,11 @@ In code under these paths:
 - No `HashMap`/`HashSet`: `BTreeMap`, a sorted `Vec`, or an engine arena. No `usize`/`isize` in hashed or serialised state. Integer wrapping is written explicitly (`wrapping_add`).
 - No wall clock, no I/O, no ambient input: time is the tick counter, randomness is engine-owned integer code whose state is in the snapshot. A new WASM import is an amendment to `docs/decisions/0014-js-wasm-boundary.md` §3.
 - No target features beyond the toolchain default (`simd128`, `relaxed-simd`, `atomics` are named failures).
+- State and hashes are built only from `engine::codec::Codec` and `ByteSink` bytes (M05): never hash with `std::hash`; floats entering state are finite; `usize`/`isize` never enters encoded state; untrusted bytes go through `codec::decode_canonical`, never plain `decode`.
 
 What catches a slip:
 
 - `pnpm lint`: the clippy ban lists in `clippy.toml` (owner: 0002 §3) reach every crate with `[lints] workspace = true`. An `#[allow(clippy::disallowed_methods)]` needs a comment saying why the value cannot influence state (example: `bits()` in `packages/engine/fixtures/hash/src/lib.rs`).
 - `pnpm test wasm -t "import allowlist"` and `-t "target features"`: every fixture's built module.
 - `pnpm test rust -t scenario_matches_golden` and `pnpm test wasm -t determinism`: the golden hashes natively, under Node and under Bun. `pnpm golden <fixture>` is the only writer of a `golden.json`, from the `.wasm` under Node; a native mismatch means the code is wrong, not the golden.
+- `pnpm test unit -t no_usize_in_serialized_types`: a source scan for `usize`/`isize` in a type deriving `Serialize`/`Codec`. `pnpm test rust -t codec`: canonicalisation and `decode_canonical`; `pnpm golden:bytes` blesses their native-only byte goldens.
