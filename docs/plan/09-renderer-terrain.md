@@ -1,6 +1,6 @@
 # M09: Renderer terrain data path
 
-Status: not started · After: 08b · Tyler-dependent: no
+Status: done · After: 08b · Tyler-dependent: no
 
 Split during planning: full art sampling (variants, jitter, edge dithering, fat-pixel filtering, mips) and the canvas lifecycle (resize, DPR, render scale, backgrounding) are **M09b** (`09b-terrain-art-and-lifecycle.md`). This brief proves the whole data path with the simplest shader that can be probed exactly.
 
@@ -63,9 +63,9 @@ M09b's list above. Sprites, DrawList, instance buffer (M17). Camera integration 
 - Zero-GC: page id `terrain` through `zeroGcSuite({ pageId: 'terrain', path, expectAdapter: true })`, driven by a scripted pan so chunks are generated, converted, uploaded and evicted inside the window (0016 §2); isolates `main`, `client`, `gen0`. `@slow`: `terrain.probe_tile_colours` on Playwright WebKit.
 
 ## Exit criteria
-- [ ] All tests above pass by name; every GPU test records `adapter.info` and fails on a null adapter, `uncapturederror` or a non-empty `getCompilationInfo()`.
-- [ ] `budgets.json` holds `counters["render.uploadBytesPerFrame"]`, `counters["render.drawCallsTerrain"] = 1`, and `gc.pages.terrain` with `main` derived by 0016 §1's formula (this is the first WebGPU page, as M04 expects) and its `formula` text; the page passes with its generated negative controls.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name; every GPU test records `adapter.info` and fails on a null adapter, `uncapturederror` or a non-empty `getCompilationInfo()`.
+- [x] `budgets.json` holds `counters["render.uploadBytesPerFrame"]`, `counters["render.drawCallsTerrain"] = 1`, and `gc.pages.terrain` with `main` derived by 0016 §1's formula (this is the first WebGPU page, as M04 expects) and its `formula` text; the page passes with its generated negative controls.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t texel` · `pnpm test rust -t upload` · `pnpm test rust -t wgsl` · `pnpm test unit -t manifest` · `pnpm test browser -t terrain` · `pnpm test:slow -t terrain` · `pnpm test` · `pnpm lint`.
@@ -850,3 +850,7 @@ FAIL browser [gc] gc-loop clean
 **Not done, orchestrator's call:** the `write-adr` skill's usual bookkeeping (PRE-PLAN.md's ADR index, a `PLAN.md` "Plan-level decisions" line, the ADR range in the root `CLAUDE.md`) was not applied — `PLAN.md` and other files outside this brief's own Deviations are outside what a milestone implementer may edit; 0016's `Status:` line got only the one amendment-pointer append the `write-adr` skill prescribes.
 
 `pnpm test && pnpm lint`, final: `rust pass 141 tests 0.4s/10s`, `unit pass 108 tests 1.4s/3s`, `wasm pass 35 tests 1.5s/7s`, `browser pass 60 tests 14s/25s`; `biome pass`, `rustfmt pass`, `clippy pass`, `tsc pass`.
+
+### Accepted (orchestrator)
+
+Gate at `06304ed`: `pnpm gate d014a1b` tree clean, 74 files, no existing golden changed (1 added), no markers; `pnpm test && pnpm lint` green (rust 141, unit 108, wasm 35, browser 60 at 15 s of 25 s); `node scripts/repeat.mjs browser`: 30 of 30 plain (slowest 16 s) and 30 of 30 under `--load 10` at a 1-minute load of 27 (slowest 20 s), 0 hangs. Built by three implementers (step 1; steps 2-4; steps 5-7) with a Sonnet review of the diff, two fix rounds and the trip-wire round. ADR 0026 accepted. Later briefs fixed from these Deviations (09b, 10, 11, 12, 13, 15b, 17, 18, 29, 34b, 36, 36b, 37b); M09b now owns wiring `frame-loop.ts` to a real canvas. Standing reservation: `extraSettleFrames` (gate round 3, first paragraph).

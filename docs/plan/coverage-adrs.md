@@ -601,7 +601,7 @@ Every decision of ADRs 0001 to 0025 (judged against the amendments of 0022, 0023
 | §3.3 to 3.5 warm-up, collect, sampling at interval 1, marks, N = 600 stepped frames in lockstep | M04 | `gc-loop clean` within budget; `pnpm gc reliability` clean 50/50 | covered |
 | §3.6 assertion A: zero GC events inside the marks on every isolate | M04 | `gc analyse: GC events outside the marks are ignored`; burst controls | covered |
 | §3.7 assertion B: bytes / N within budget; failure prints top call frames | M04 | exit criterion: `{}` in `call0` fails `gc-loop clean` with `call0` among printed sites | covered |
-| §3.8 permanent negative controls, each failing on its named isolate only | M04, M06b, M09, M29 | `gc-loop neg *` tests; generated controls per page; `gc/net-negative-control` | covered |
+| §3.8 permanent negative controls, each failing on its named isolate only | M04, M06b, M09, M29 | `gc-loop neg *` tests; generated controls per page (`burst` ones in the slow tier for every page but `gc-loop`, clean tests assert `presentIsolates`: 0026); `gc/net-negative-control` | covered |
 | Caveat a: `Tracing.start` stall reported as a named warning | M04 | `gc verdict: tracing stall is a warning`; M04 exit "`pnpm test unit -t \"gc verdict\"`" | covered |
 | Caveat b: software-adapter form of B (attributed bytes, smaller N) | M04, M10 | `gc verdict: software mode uses attributed bytes`; `pnpm gc software -t "gc-loop clean"`; M10 `software` block criterion | covered |
 | Caveat c: only the V8 heap is measured | | limitation statement | n/a |
@@ -769,7 +769,7 @@ Every decision of ADRs 0001 to 0025 (judged against the amendments of 0022, 0023
 | §3 compile budget: 30 s from a one-line Rust edit to tests starting | M02, M36b | M02 "Rebuild time ... recorded"; M36b "`pnpm measure:rebuild` ... meet the compile budget" | covered |
 | §3 browser tests step frames, never real rAF pacing | M03 | `stepping.spec.ts` (1,000 `stepTick()` in one task); `manual clock: frame runs callbacks once` | covered |
 | §4 demotion rule, p95 limits, `slow` tag mechanism | M01, M36b | M01 `@slow` and `slow_` filters; M36b criterion "no fast test over the 0020 §4 p95 limits ... no feature lost its only fast test" | covered |
-| §5 checkpointed golden hashes natively, under Node and Bun, and in three browsers | M02, M03 | M02 "identical natively, under Node and under Bun"; `determinism.spec.ts @engines`; first divergent checkpoint named | covered |
+| §5 checkpointed golden hashes natively, under Node and Bun, and in three browsers | M02, M03 | M02 "identical natively, under Node and under Bun"; `determinism.spec.ts @engines` (WebKit and Firefox in the slow-tier `engines` leg since M09, 0020 §4); first divergent checkpoint named | covered |
 | §5 reference-game log replayed in every runtime | M34b | `reference_golden_replay`, `golden_replay`, determinism page run with the reference log | covered |
 | §5 goldens regenerated only by an explicit command from the `.wasm` run | M02, M12b | M02 "`pnpm golden hash` rewrites an identical `golden.json`"; M12b criterion on switching to `.wasm`-blessed goldens | covered |
 | §5 worldgen golden hashes raw tile bytes and float bits | M08, M20 | `noise_raw_bits_golden`, `fixtures/worldgen/golden.json` criterion, `worldgen_golden` | covered |

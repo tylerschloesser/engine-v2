@@ -25,7 +25,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 07 | `07-world-model-core.md` | tiles, chunk coords, `Registry` + trait tables, pristine + overlays + invisible dense cache | 05 | |
 | [x] | 08 | `08-worldgen-and-gen-worker.md` | `Worldgen` trait, `gen` role, `engine::noise`, worldgen golden + benchmark | 05, 07 | D |
 | [x] | 08b | `08b-gen-workers-and-queue.md` | gen workers over request ring / result slabs, generation queue, client pristine-cache feed | 06b, 08 | |
-| [ ] | 09 | `09-renderer-terrain.md` | WebGPU ferry, terrain shader over page/indirection textures, chunk-upload ring, readback test | 08b | |
+| [x] | 09 | `09-renderer-terrain.md` | WebGPU ferry, terrain shader over page/indirection textures, chunk-upload ring, readback test | 08b | |
 | [ ] | 10 | `10-ci-workflow.md` | GitHub Actions + SwiftShader, x86-64 determinism, software-adapter GC assertion | 09 | T |
 | [ ] | 09b | `09b-terrain-art-and-lifecycle.md` | art contract sampling + mips, canvas lifecycle, device page | 09 | D |
 | [ ] | 11 | `11-camera-and-input.md` | main-thread camera, gestures, semantic input events, input ring | 09 | D |
@@ -91,3 +91,4 @@ ADRs written during Phase 2 and Phase 3:
 - `docs/decisions/0023-action-growth-declaration.md`: `Game::growth(&Action)` so shrinking actions pass the state-budget check. Amends 0004, 0003, 0007 §8.
 - `docs/decisions/0024-planning-amendments.md`: the ADR gaps and contradictions found while cutting milestones, each with the amendment and the milestone that implements it.
 - `docs/decisions/0025-phase-3-orchestration.md`: Phase 3 is one orchestrating session that lands milestones in serial on `main`; a Sonnet `milestone-implementer` sub-agent builds each; the orchestrator gates with `pnpm gate` and is the only writer of checkboxes, this file and `PROMPT.md`; tags at the markers above. Amends 0021 (Context, §3, §5, §7).
+- `docs/decisions/0026-zero-gc-burst-controls-in-slow-tier.md`: at M09's gate the `browser` suite trip-wire fired (24 s of 25 s). WebKit and Firefox repeats moved to the slow-tier `engines` leg (0020 §4, first rung), and generated `burst` negative controls are `@slow` for every zero-GC page but `gc-loop`, replaced in the fast tier by a discovered-isolates assertion in each clean test. `pnpm test` no longer proves three-browser determinism; `pnpm test:slow` and M10's CI do. Amends 0016 §3.8.

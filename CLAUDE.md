@@ -22,7 +22,7 @@ Read only what the task needs. A sub-agent should be briefable with `docs/spec/o
 | `docs/spec/<domain>.md` | Tyler's requirements + open questions for one domain: `world`, `simulation`, `sync`, `runtime-and-packaging`, `client`, `testing`, `reference-game` | Same |
 | `docs/research/<topic>.md` | Phase 1 findings, one file per spec domain plus `context-architecture` (evidence, not decisions) | Deleted in Phase 4 |
 | `spikes/<name>/RESULT.md` | Result of each Phase 1 feasibility spike; the code beside it is throwaway | Deleted in Phase 4 |
-| `docs/decisions/NNNN-<slug>.md` | ADRs 0001–0025 (index in `PRE-PLAN.md` §1): what was chosen and the *why* that can't be inferred from code | Permanent; supersede, don't rewrite |
+| `docs/decisions/NNNN-<slug>.md` | ADRs 0001–0026 (index in `PRE-PLAN.md` §1): what was chosen and the *why* that can't be inferred from code | Permanent; supersede, don't rewrite |
 | `docs/archive/` | Tyler's original brain dump, superseded by `docs/spec/`; not a source | Deleted in Phase 4 |
 | `PRE-PLAN.md` | Phase 1 output: architecture, budgets, index of ADRs | Deleted in Phase 4 |
 | `PLAN.md` | Phase 2 output: milestone index in execution order, dependencies, progress checkboxes | Deleted in Phase 4 |

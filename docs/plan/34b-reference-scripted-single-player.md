@@ -51,7 +51,7 @@ Multiplayer scripts and races (M34c). Heavy mode, soak, benchmarks, the standard
 - WASM under Node (engine `wasm` suite): `build-game-features` (a fixture built with and without a feature lands in two directories with two build hashes).
 - WASM under Node and Bun: `reference_golden_replay` (checkpoint hashes; first divergent tick reported; also asserts `logBytesPerPlayerHour`: the golden log's bytes divided by its scripted player-ticks, scaled to one hour, against a `budgets.json` ceiling whose source is the `PRE-PLAN.md` §7 action rate / log row, owner 0004), `reference_single_player_save_to_server`, `reference_state_budget_full`.
 - Rust native: `golden_replay` (same log, same hashes).
-- Browser determinism page: the reference log added to the Chromium, WebKit and Firefox runs.
+- Browser determinism page: the reference log added to the Chromium, WebKit and Firefox runs. Since M09's gate (Deviations "Gate round 3"), only `chromium` runs `determinism.spec.ts @engines` under `pnpm test`; WebKit and Firefox run it only in the `engines` leg of `pnpm test:slow` (its own `vite preview`, port 4518). The Chromium checkpoint is proven by `pnpm test`; the WebKit/Firefox checkpoints for this log need `pnpm test:slow` to be observed, even though this test itself is not one of the two named `slow`-tagged tests below.
 - Slow: `reference_panic_in_apply_skips_and_recovers`, `reference_save_incompatible_leaves_files`.
 
 ## Exit criteria
