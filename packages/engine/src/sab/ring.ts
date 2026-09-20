@@ -92,6 +92,15 @@ export class RingProducer {
     this.claimed = -1
   }
 
+  /** The maximum payload bytes a single slot holds (this ring's own `slotBytes` minus its 8-byte
+   * slot header): what a caller that writes a whole record into one claimed slot (never spanning,
+   * `docs/plan/08b-gen-workers-and-queue.md`'s `genRequest`/`genResult`) must check a record
+   * against, since `slotBytes`/`slots` are internal to `createRing` and the SAB's own `byteLength`
+   * is the whole ring, not one slot. */
+  slotPayloadBytes(): number {
+    return this.payloadBytes
+  }
+
   /** Claims exactly one slot; -1 if the ring is full. */
   tryClaim(): number {
     const tail = Atomics.load(this.control, RING_TAIL)

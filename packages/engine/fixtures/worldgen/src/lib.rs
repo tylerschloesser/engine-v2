@@ -118,10 +118,24 @@ struct Config {
     /// drives this with 1 and 2). Ignored by the gen role.
     #[serde(default = "default_gen_workers")]
     gen_workers: u32,
+    /// `ChunkDims` bits (0007 §3: 4/5/6, edge 16/32/64), default 5 (`EDGE = 32`, unchanged for
+    /// every other test and the golden). Not a general chunk-size feature (Non-scope of
+    /// docs/plan/08b-gen-workers-and-queue.md: "chunk sizes other than the default in the browser
+    /// topology"): the one caller that sets it is `gen: oversize slab is a readable fatal`,
+    /// simulating Planning decisions 6's "the first game that changes CHUNK_BITS" against the
+    /// browser topology's fixed `genResult` ring slot (16 + 4,096 B) -- `generate()`'s own `EDGE`
+    /// constant stays 32 regardless, so a non-default `chunkBits` must never reach `gen_chunk`
+    /// (the oversize test's gen worker fails in `setup()`, before any job is ever taken).
+    #[serde(default = "default_chunk_bits")]
+    chunk_bits: u32,
 }
 
 fn default_gen_workers() -> u32 {
     1
+}
+
+fn default_chunk_bits() -> u32 {
+    5
 }
 
 /// Client-role cache capacity (0007 §8's own default client cache size; 0008 §5's worst case at
@@ -131,7 +145,7 @@ const CLIENT_CACHE_CHUNKS: u32 = 1024;
 impl Instance for FixtureGen {
     fn init(role: Role, game_cfg_json: &str, layout: &mut RegionLayout) -> Result<Self, Status> {
         let cfg: Config = serde_json::from_str(game_cfg_json).map_err(|_| Status::BadConfig)?;
-        let dims = ChunkDims::new(5); // EDGE = 32
+        let dims = ChunkDims::new(cfg.chunk_bits); // default 5, EDGE = 32
         match role {
             Role::Gen => {
                 layout.region(RegionId::GenOut, dims.slab_bytes() as u32);

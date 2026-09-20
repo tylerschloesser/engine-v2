@@ -43,14 +43,19 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   const requests = new RingConsumer(requestSab)
   const results = new RingProducer(resultSab, { control: shell.control, index: WORKER_CLIENT })
 
-  // 0015 §6: the gen worker checks its own result slot against the region it will copy, once, at
-  // setup, and fails readably instead of writing past the slot on every job. A thrown `setup()`
-  // rejects, which `worker.ts`'s `run()` turns into `shell.fatal` *without* starting the blocking
-  // loop (`shell.fatal` itself would leave a loop that still blocks forever in `Atomics.wait`
-  // before ever observing `stopped()`).
-  if (genOut && genOut.len + HEADER_BYTES > resultSab.byteLength) {
+  // 0015 §6 / Planning decisions 6: the gen worker checks its own result *slot's payload capacity*
+  // against the region it will copy, once, at setup, and fails readably instead of writing past the
+  // slot on every job -- `results.slotPayloadBytes()`, not `resultSab.byteLength` (the whole ring's
+  // total bytes, `RING_CONTROL_BYTES + slotBytes * slots`: comparing against that instead would let
+  // a slab many times too big for one slot pass this check, only to throw a much less readable
+  // `RangeError` out of `Uint8Array.prototype.set` the first time a job actually ran). A thrown
+  // `setup()` rejects, which `worker.ts`'s `run()` turns into `shell.fatal` *without* starting the
+  // blocking loop (`shell.fatal` itself would leave a loop that still blocks forever in
+  // `Atomics.wait` before ever observing `stopped()`).
+  if (genOut && genOut.len + HEADER_BYTES > results.slotPayloadBytes()) {
     throw new Error(
-      `gen worker: GenOut (${genOut.len} B) + header does not fit the configured genResult slot`,
+      `gen worker: GenOut (${genOut.len} B) + header does not fit the configured genResult slot ` +
+        `(${results.slotPayloadBytes()} B payload)`,
     )
   }
 
