@@ -4,6 +4,7 @@ use std::path::Path;
 
 pub mod cache_matrix;
 pub mod golden_bytes;
+pub mod worldgen_contract;
 
 // So `engine::testing::assert_golden_bytes!`/`assert_golden_hash!` work at the path their doc
 // comments advertise; the macros themselves are `#[macro_export]`ed at the crate root because
@@ -13,6 +14,7 @@ pub use cache_matrix::{
     CacheConfig, CountingHandle, CountingSource, DEFAULT_CACHE_CHUNKS, Prewarm, TestTerrain,
     assert_cache_invisible, prewarm_chunks,
 };
+pub use worldgen_contract::assert_worldgen_contract;
 
 #[derive(serde::Deserialize)]
 struct Golden {
