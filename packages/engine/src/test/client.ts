@@ -106,15 +106,43 @@ export function parkWorkers(client: Client): Promise<void> {
   return pollUntil(() => allEqual(h, W_PARKED, 1), 'parkWorkers')
 }
 
-/** Resumes every parked worker: `W_YIELD = 0`, `{ type: 'resume' }` (a parked worker is not
- * blocked, so this is the one way to reach it: Planning decisions "`yield` protocol"). */
+/** Like `allEqual` but treats a `net`-kind worker as always resumed (docs/plan/
+ * 08b-gen-workers-and-queue.md, Deviations: found by this milestone's `gen.html`, the first page to
+ * combine a `net` worker -- `host: { kind: 'remote', ... }`, the only host kind `fx-worldgen` can
+ * use, since it has no `Sim` role -- with a real `resumeWorkers()` call). `net` never enters
+ * `runBlockingLoop` (`worker/net.ts`: `setup()` returns `null`, so it has no `#loop`), and
+ * `Shell.resume()` only stores `W_PARKED = 0` when a loop exists (`worker/shell.ts`), so a `net`
+ * worker's `W_PARKED` stays 1 forever -- by its own design ("always reachable the way a parked one
+ * is", `worker/net.ts`'s own doc comment), not a hang. `allEqual(h, W_PARKED, 0)` would poll forever
+ * whenever a `net` worker is spawned; a plain indexed loop, not `Array.prototype.every` with an
+ * inline arrow (same discipline as `allEqual`, immediately above). */
+function allResumed(h: ClientTestHandle): boolean {
+  for (let i = 0; i < h.workers.length; i++) {
+    const w = h.workers[i] as WorkerEntry
+    if (w.kind === 'net') continue
+    if (Atomics.load(h.control.words, workerWord(w.index, W_PARKED)) !== 0) return false
+  }
+  return true
+}
+
+/** Resumes every *parked* worker: `W_YIELD = 0`, `{ type: 'resume' }` (a parked worker is not
+ * blocked, so this is the one way to reach it: Planning decisions "`yield` protocol"). Skips a
+ * worker whose `W_PARKED` is not currently 1 (docs/plan/08b-gen-workers-and-queue.md, Deviations):
+ * a worker blocked in `Atomics.wait` cannot process a `postMessage` at all, so sending it a
+ * `resume` anyway would not be a no-op -- the message sits queued until that worker's *next* park,
+ * at which point it fires and un-parks it again immediately, racing whatever the caller of that
+ * next `parkWorkers()` was trying to do (`gen.idle`, called more than once in a row, found this the
+ * hard way: `parkWorkers`'s own poll saw `W_PARKED` flicker 1/0 and never stabilised). Calling
+ * `resumeWorkers` on an already-running client is therefore safe and cheap: nothing is sent, and
+ * `allResumed`'s poll is already true. */
 export function resumeWorkers(client: Client): Promise<void> {
   const h = clientTestHandle(client)
   for (const w of h.workers) {
+    if (Atomics.load(h.control.words, workerWord(w.index, W_PARKED)) !== 1) continue
     Atomics.store(h.control.words, workerWord(w.index, W_YIELD), 0)
     w.worker.postMessage({ type: 'resume' })
   }
-  return pollUntil(() => allEqual(h, W_PARKED, 0), 'resumeWorkers')
+  return pollUntil(() => allResumed(h), 'resumeWorkers')
 }
 
 /** Resolves once every worker has acknowledged every request and is parked (Seams): the client's

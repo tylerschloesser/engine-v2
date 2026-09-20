@@ -108,8 +108,12 @@ export async function chunkHash(client: Client, cx: number, cy: number): Promise
 }
 
 /** Steps frames until the queue is both empty and idle (`pending == 0 && in_flight == 0`), then
- * waits for every ring to drain (Seams). */
+ * waits for every ring to drain (Seams). `untilQuiescent` (which this ends with) always leaves
+ * every worker parked, so a second `idle()` call -- driving a further pan, say -- needs the client
+ * running again before it can `stepFrame`; resuming unconditionally here is harmless when it is
+ * already running (`resumeWorkers`'s own poll is then true on its first tick). */
 export async function idle(client: Client): Promise<void> {
+  await resumeWorkers(client)
   for (;;) {
     stepFrame(client, FRAME_MS)
     const s = await stats(client)

@@ -1,0 +1,177 @@
+// The client generation queue over real workers and SABs (docs/plan/08b-gen-workers-and-queue.md,
+// Tests added): `gen.html`'s imperative debug API, the same pattern `topology.ts` uses for
+// `workers.spec.ts`. The zero-GC test lives in `gen-gc.spec.ts` (production-topology page,
+// `gc-gen.html`), matching M06b's own `topology.html`/`gc-topology.html` split (Deviations).
+import { expect, test } from '@playwright/test'
+import type { GenStats } from '../../src/test/gen.ts'
+import { openPage } from './support/page.ts'
+
+declare global {
+  interface Window {
+    __genCreateClient?: (opts?: { genWorkers?: number; seed?: string; chunkBits?: number }) => void
+    __genClientReady?: () => Promise<{ ok: true } | { ok: false; code: string; message: string }>
+    __genClientDestroy?: () => void
+    __genSetView?: (opts: {
+      x: number
+      y: number
+      halfExtentX: number
+      halfExtentY: number
+      velocityX?: number
+      velocityY?: number
+    }) => void
+    __genStep?: (dtMs: number) => void
+    __genStats?: () => Promise<GenStats>
+    __genIdle?: () => Promise<void>
+    __genChunkHash?: (cx: number, cy: number) => Promise<string | null>
+    __genIsolates?: () => Record<string, { memPages: number; memGrows: number }>
+    __genRings?: () => Record<string, { drops: number; pushed: number; popped: number }>
+    __genProbeOrder?: () => Promise<{
+      ring0At: number
+      ring1At: number
+      ring2At: number
+      cycles: number
+    }>
+  }
+}
+
+type Page = import('@playwright/test').Page
+
+async function createClient(
+  page: Page,
+  opts?: { genWorkers?: number; seed?: string; chunkBits?: number },
+): Promise<void> {
+  await page.evaluate((o) => window.__genCreateClient?.(o), opts)
+}
+
+async function ready(page: Page): Promise<{ ok: boolean; code?: string; message?: string }> {
+  const r = await page.evaluate(() => window.__genClientReady?.())
+  if (!r) throw new Error('gen.spec: __genClientReady missing')
+  return r
+}
+
+// The 2x2 visible rect `__genProbeOrder` documents: `visible.expanded(2)` is a 6x6 = 36-chunk
+// generation set (ring 0 = 4, ring 1 = 12, ring 2 = 20).
+const VIEW = { x: 32, y: 32, halfExtentX: 16, halfExtentY: 16 }
+const GENERATION_SET_SIZE = 36
+
+async function setViewAndIdle(page: Page): Promise<void> {
+  await page.evaluate((v) => window.__genSetView?.(v), VIEW)
+  await page.evaluate(() => window.__genIdle?.())
+}
+
+test('gen: visible before ring 1 before ring 2', async ({ page }) => {
+  await openPage(page, '/gen.html')
+  await createClient(page, { genWorkers: 1 })
+  expect(await ready(page)).toEqual({ ok: true })
+
+  const r = await page.evaluate(() => window.__genProbeOrder?.())
+  expect(r, 'probe ran').toBeTruthy()
+  const { ring0At, ring1At, ring2At } = r as NonNullable<typeof r>
+  expect(ring0At, `ring0At=${ring0At}`).toBeGreaterThan(0)
+  expect(ring1At, `ring1At=${ring1At}`).toBeGreaterThan(0)
+  expect(ring2At, `ring2At=${ring2At}`).toBeGreaterThan(0)
+  expect(ring0At, `ring0=${ring0At} ring1=${ring1At}`).toBeLessThan(ring1At)
+  expect(ring1At, `ring1=${ring1At} ring2=${ring2At}`).toBeLessThan(ring2At)
+
+  await page.evaluate(() => window.__genClientDestroy?.())
+})
+
+test('gen: one and two workers give equal chunk hashes', async ({ page }) => {
+  async function hashesFor(genWorkers: number): Promise<(string | null)[]> {
+    await openPage(page, '/gen.html')
+    await createClient(page, { genWorkers })
+    expect(await ready(page)).toEqual({ ok: true })
+    await setViewAndIdle(page)
+    const out: (string | null)[] = []
+    for (let cy = -2; cy <= 3; cy++) {
+      for (let cx = -2; cx <= 3; cx++) {
+        out.push(
+          await page.evaluate(([x, y]) => window.__genChunkHash?.(x, y) ?? null, [cx, cy] as [
+            number,
+            number,
+          ]),
+        )
+      }
+    }
+    await page.evaluate(() => window.__genClientDestroy?.())
+    return out
+  }
+
+  const one = await hashesFor(1)
+  expect(one).toHaveLength(GENERATION_SET_SIZE)
+  expect(one.every((h) => typeof h === 'string')).toBe(true)
+
+  const two = await hashesFor(2)
+  expect(two).toEqual(one)
+})
+
+test('gen: drops 0, mem_grows 0, stats exact', async ({ page }) => {
+  await openPage(page, '/gen.html')
+  await createClient(page, { genWorkers: 1 })
+  expect(await ready(page)).toEqual({ ok: true })
+
+  await setViewAndIdle(page)
+  const join = (await page.evaluate(() => window.__genStats?.())) as GenStats
+  expect(join).toEqual({
+    requested: GENERATION_SET_SIZE,
+    dispatched: GENERATION_SET_SIZE,
+    delivered: GENERATION_SET_SIZE,
+    cancelled: 0,
+    requeued: 0,
+    pending: 0,
+    inFlight: 0,
+  })
+
+  const ringsAfterJoin = (await page.evaluate(() => window.__genRings?.())) as Record<
+    string,
+    { drops: number; pushed: number; popped: number }
+  >
+  for (const [name, s] of Object.entries(ringsAfterJoin)) {
+    expect(s.drops, `${name}.drops`).toBe(0)
+  }
+
+  // Pan one chunk edge east: visible shifts from {(0,0)-(1,1)} to {(1,0)-(2,1)}; the new
+  // `visible.expanded(2)` (still 6x6=36) overlaps the old one in 30 chunks (5x6), leaving 6 new
+  // ones (x=4, y=-2..3) -- `genPanChunks` in budgets.json.
+  await page.evaluate((v) => window.__genSetView?.(v), { ...VIEW, x: 64 })
+  await page.evaluate(() => window.__genIdle?.())
+  const pan = (await page.evaluate(() => window.__genStats?.())) as GenStats
+  expect(pan.cancelled).toBe(0)
+  expect(pan.requeued).toBe(0)
+  expect(pan.pending).toBe(0)
+  expect(pan.inFlight).toBe(0)
+  expect(pan.requested - join.requested).toBe(6)
+  expect(pan.dispatched - join.dispatched).toBe(6)
+  expect(pan.delivered - join.delivered).toBe(6)
+
+  const ringsAfterPan = (await page.evaluate(() => window.__genRings?.())) as Record<
+    string,
+    { drops: number; pushed: number; popped: number }
+  >
+  for (const [name, s] of Object.entries(ringsAfterPan)) {
+    expect(s.drops, `${name}.drops`).toBe(0)
+  }
+
+  const isolates = (await page.evaluate(() => window.__genIsolates?.())) as Record<
+    string,
+    { memPages: number; memGrows: number }
+  >
+  expect(isolates.client?.memGrows).toBe(0)
+  expect(isolates.gen0?.memGrows).toBe(0)
+
+  await page.evaluate(() => window.__genClientDestroy?.())
+})
+
+test('gen: oversize slab is a readable fatal', async ({ page }) => {
+  await openPage(page, '/gen.html')
+  // 0007 §3 chunk bits 4/5/6 (edge 16/32/64): 6 gives a 64x64x4 = 16,384 B slab, far over the
+  // browser topology's fixed genResult slot (16 + 4,096 B payload, `sab/layout.ts`'s `RING_
+  // DEFAULTS.genResult`) -- Planning decisions 6's "the first game that changes CHUNK_BITS".
+  await createClient(page, { chunkBits: 6 })
+  const r = await ready(page)
+  expect(r.ok).toBe(false)
+  expect(r.code).toBe('worker-fatal')
+  expect(r.message).toContain('does not fit the configured genResult slot')
+
+  await page.evaluate(() => window.__genClientDestroy?.())
+})
