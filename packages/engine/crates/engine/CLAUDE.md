@@ -17,8 +17,10 @@ A member of the root cargo workspace. These live at the repo root, not here: pro
 ## Layout
 
 - `src/abi/`: the JS↔WASM boundary (0014). `registry.rs` is the single owner of the ABI and states the rule for adding to it; `mod.rs` holds what the exports do; `boot.rs`, `regions.rs`, `arena.rs`, `panic.rs`, `config.rs` are the pieces. `panic::fatal` exists because std formats a panic message into a `String` before the hook runs: use it, not `panic!`, anywhere the allocator may be the failure.
-- `src/hash.rs`: `Fnv64`. `src/testing.rs` (feature `testing`, dev-dependencies only): `assert_golden`.
-- Determinism rules for everything here: `.claude/rules/determinism.md`.
+- `src/hash.rs`: `Fnv64`. `src/testing/` (feature `testing`, dev-dependencies only): `golden_bytes` (`assert_golden`, `assert_golden_bytes!`/`assert_golden_hash!`), `cache_matrix` (below).
+- `src/world/` (0007): `tile.rs`/`coords.rs`/`traits.rs` are plain data; `overlay.rs` is the sparse per-chunk state (`ChunkOverlay`, `Overlays`); `cache.rs` is the dense LRU slab pool (`CacheCapacity`/`CacheEvent` are its only public seam); `terrain.rs`'s `TerrainStore` composes them. **The cache is not state**: never serialized, hashed, or part of `modified_tiles`; `TerrainStore::tile`/`materialize` take `&self` (a `RefCell` inside) because a read may generate and evict. No method here returns a reference into a slab -- reads return `Tile` by value, `copy_chunk` copies out.
+- Adding or changing anything that touches the cache: prove invisibility with `engine::testing::assert_cache_invisible(|cfg| { .. build a store at cfg.capacity, prewarm with cfg.prewarm, run a script, return checkpoints .. })` (feature `testing`) -- it replays your closure at capacity 1, the default and `Unlimited`, crossed with three prewarm orders, and fails if any leg's checkpoints differ. `world_cache_invisible.rs`'s `cache_invisible_matrix` is the reference caller.
+- Determinism rules for everything here: `.claude/rules/determinism.md`. `world/cache.rs` also carries `.claude/rules/hot-paths.md` (reads are per-tick).
 
 ## Tests
 

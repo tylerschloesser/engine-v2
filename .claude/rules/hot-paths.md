@@ -1,6 +1,7 @@
 ---
 paths:
   - "packages/engine/src/**"
+  - "packages/engine/crates/engine/src/world/cache.rs"
 ---
 
 # Hot paths: no allocation per frame or per tick
@@ -18,3 +19,5 @@ In code that runs every frame, tick or message:
 - No double-valued temporaries on a per-pass path: integer or Smi values and module-level constants only; WASM reads times from its own region rather than JS reading a `Float64Array` element and passing it.
 
 Verified by the `gc-test` skill; a new hot path gets a page or joins one (`docs/decisions/0016-zero-gc-definition.md` §3, `docs/plan/04-zero-gc-harness.md`).
+
+`world/cache.rs` is Rust, not JS: the boundary-specific bullets above (views, `call0`/`call1`/`call2`, SAB) do not apply, but the same no-allocation-per-tick principle does -- `world.tile()` runs on every read, cache hit or miss. Verified natively by `no_alloc_terrain` (`abi::arena::live_bytes()` unchanged across reads and LRU churn); overlay growth (writes, world state) is the one allowed exception.
