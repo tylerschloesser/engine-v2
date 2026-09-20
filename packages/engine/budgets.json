@@ -94,5 +94,6 @@
       "totalBytes": 12582912,
       "formula": "docs/decisions/0015-threads-memory-and-topology.md §5's ~12 MiB SAB budget line, in bytes (12 * 1024 * 1024). Measured sab/layout.ts sabBytesTotal() (two gen workers, the worst case): 8,277,684 B (~7.9 MiB) -- control 256 B + camera 80 B + clock seqlock 36 B + drawList triple 3*(1,024 + 2,097,152) B + six single rings + two gen-worker ring pairs (docs/plan/06-sab-primitives-and-workers.md, Ring capacities)."
     }
-  }
+  },
+  "worldgenMsPerChunkWarn": 0.25
 }
