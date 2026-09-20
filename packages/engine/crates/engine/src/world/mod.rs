@@ -6,6 +6,7 @@
 //! generation pre-warmed in shuffled orders, and requires identical state hashes and reads.
 
 mod coords;
+mod overlay;
 mod tile;
 mod traits;
 
@@ -13,5 +14,6 @@ pub use coords::{
     ChunkCoord, ChunkDims, ChunkRect, ChunkRectIter, TILE_MAX, TILE_MIN, TilePos, TileRect,
     WorldPos,
 };
+pub use overlay::{ChunkOverlay, Overlays};
 pub use tile::Tile;
 pub use traits::{Footprint, PrototypeId, Registry, TraitSet};
