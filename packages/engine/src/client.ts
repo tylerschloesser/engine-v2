@@ -208,6 +208,22 @@ function setupWorker(
 /** `createClient` is synchronous (PRE-PLAN §4); spawn itself is asynchronous, tracked by
  * `client.ready`. */
 export function createClient(options: ClientOptions): Client {
+  // Checked first, synchronously, before anything below touches `SharedArrayBuffer`
+  // (`createSabSet`): on a page the browser never made cross-origin isolated, the global does not
+  // exist at all, so `new SharedArrayBuffer(...)` throws a bare `ReferenceError` synchronously out
+  // of `createClient` itself instead of the readable, awaitable `EngineStartError` `client.ready` is
+  // meant to reject with (0015 §3; docs/plan/06b-workers-and-spawn.md, Tests added
+  // `start.not_isolated_error`, Deviations).
+  if (!globalThis.crossOriginIsolated) {
+    const err = new EngineStartError(
+      'not-isolated',
+      'crossOriginIsolated is false: see checkSupport() for what to fix',
+    )
+    const ready = Promise.reject(err)
+    ready.catch(() => {}) // see `start()`'s own `.ready.catch()` comment below
+    return { ready, destroy() {} }
+  }
+
   const genWorkers = options.genWorkers ?? defaultGenWorkers()
   const arenas = {
     sim: options.arenas?.sim ?? DEFAULT_ARENA_BYTES.sim,
@@ -233,13 +249,6 @@ export function createClient(options: ClientOptions): Client {
   }
 
   async function start(): Promise<void> {
-    if (!globalThis.crossOriginIsolated) {
-      throw new EngineStartError(
-        'not-isolated',
-        'crossOriginIsolated is false: see checkSupport() for what to fix',
-      )
-    }
-
     checkArenaBudget(arenas, options.host.kind, genWorkers)
 
     const postModule = options.test?.flags?.postModule !== false

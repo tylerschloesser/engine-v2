@@ -13,6 +13,7 @@ declare global {
       arenas?: { sim?: number; client?: number; gen?: number }
       genWorkers?: number
       test?: { game?: unknown; flags?: { postModule?: boolean } }
+      createWorker?: () => Worker
     }) => void
     __clientReady?: () => Promise<{ ok: true } | { ok: false; code: string; message: string }>
     __clientWorkers?: () => Record<string, { memPages: number; memGrows: number }>

@@ -19,6 +19,9 @@ type CreateOptions = {
   arenas?: ClientOptions['arenas']
   genWorkers?: number
   test?: ClientOptions['test']
+  /** Pattern B (0017 §3): `start.worker_blocked_error` points this at a worker script served
+   * without COEP (docs/plan/06b-workers-and-spawn.md, Tests added). */
+  createWorker?: () => Worker
 }
 
 declare global {
@@ -40,10 +43,20 @@ declare global {
 window.__createClient = (opts = {}) => {
   const canvas = document.createElement('canvas')
   const host = opts.host ?? { kind: 'local', world: { game: DEFAULT_GAME } }
-  const test: ClientOptions['test'] = { game: DEFAULT_GAME, ...opts.test }
+  // `flags` defaults to `{}`, not omitted: every worker this test page spawns is a test worker, so
+  // its setup message should always carry `test` (orchestrator decision 1's gate on the setup
+  // message's own `test` field -- always empty for a real game, always present here) and expose
+  // `__engineWorkerKind`/`__engineInstance`/`__engineIsolateName` the way this file's own tests
+  // (`workers.spec.ts`, `start.spec.ts`) already read them.
+  const test: ClientOptions['test'] = {
+    game: DEFAULT_GAME,
+    ...opts.test,
+    flags: opts.test?.flags ?? {},
+  }
   const options: ClientOptions = { canvas, wasm, host, test }
   if (opts.arenas) options.arenas = opts.arenas
   if (opts.genWorkers !== undefined) options.genWorkers = opts.genWorkers
+  if (opts.createWorker) options.createWorker = opts.createWorker
   window.__client = createClient(options)
   // Swallow here, synchronously with creation, so the browser never reports this as an unhandled
   // rejection; `__clientReady` (called later, from a separate `page.evaluate`) observes the same
