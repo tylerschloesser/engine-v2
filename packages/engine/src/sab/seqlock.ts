@@ -10,6 +10,17 @@
 
 const SEQ_BYTES = 4
 const MAX_RETRIES = 8
+// An immediate re-check sees only nanoseconds of the writer's begin()/end() window; a real OS
+// scheduler quantum that preempts the writer mid-write is milliseconds long (docs/plan/06-sab-
+// primitives-and-workers.md Deviations: measured `seqlock.no_torn_read` failures under real
+// multi-thread contention on Tyler's machine, torn counts of 1-3 out of ~2-4 in 200 full-suite
+// runs, all from retries exhausted within microseconds of each other). This spin gives each retry
+// after the first real wall-clock spacing, so "up to 8 retries" can actually outlast a realistic
+// stall instead of exhausting the budget before the writer is ever rescheduled; it costs nothing on
+// the common, no-contention path (attempt 0 never spins). `Atomics.load` is the spin body, not a
+// plain counter, because an engine can dead-code-eliminate an unused counting loop but never an
+// atomic access.
+const RETRY_BACKOFF_SPINS = 200_000
 
 export function createSeqlock(bytes: number): SharedArrayBuffer {
   return new SharedArrayBuffer(SEQ_BYTES + bytes)
@@ -53,6 +64,9 @@ export class SeqlockReader {
    * `torn()`) only if every retry raced a writer. */
   readInto(dst: Uint8Array, off: number): boolean {
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        for (let k = 0; k < RETRY_BACKOFF_SPINS; k++) Atomics.load(this.seq, 0)
+      }
       const s1 = Atomics.load(this.seq, 0)
       if ((s1 & 1) === 1) continue // write in progress
       this.scratch.set(this.data)

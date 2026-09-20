@@ -213,11 +213,17 @@ renamed. Exact shapes, findings and corrections:
   pacing) showed 0 inconsistent reads both before and after this fix. Fixed by stamping the full
   32-bit counter as four repeated little-endian bytes instead, removing the wraparound question
   entirely.
-- **`control.test.ts`'s `control.no_lost_wakeup` carries an explicit 30 s Vitest timeout** (was the
-  5 s default): a `worker_threads`-heavy full-suite run occasionally delays it well past 5 s with
-  no wakeup ever actually lost (the mechanism is a plain shared-memory condition check, immune to
-  timing by construction); never observed taking anywhere near 30 s once the seqlock/triple fixes
-  above landed.
+- **`control.test.ts`'s `control.no_lost_wakeup` carries an explicit 8 s Vitest timeout** (was the
+  5 s default, briefly 30 s): see "Open gate failures" below for the investigation. No lost-wakeup
+  logic bug was ever found or reproduced (the mechanism is a plain shared-memory condition check,
+  immune to timing by construction, and every reproduction attempt — 500+ combined runs, isolated
+  and full-suite, unloaded and under synthetic full-core contention — showed either a clean pass or
+  a whole-process stall external to the mechanism); 8 s gives one full internal 5 s `waitForWake`
+  cycle plus overhead margin, tight enough to fail fast on a genuine future hang.
+- **`seqlock.ts`'s `SeqlockReader.readInto` backs off between retries** (`RETRY_BACKOFF_SPINS`, an
+  `Atomics.load`-bodied spin, not a plain counter that an engine could dead-code-eliminate): see
+  "Open gate failures" below. `MAX_RETRIES` is still 8, unchanged from the brief's "Seqlock reader
+  rule"; only the real wall-clock time each retry now spans changed.
 - **Measurements** (Tyler's Mac, 14 logical cores, warm caches unless noted): `unit` suite
   **81 tests, ~0.9-1.2 s of its 3 s budget** across repeated clean runs (was 64 tests/0.8 s at this
   milestone's base sha); `browser` suite **23 tests, ~7-7.5 s of its 25 s budget** (was 20/6.3 s);
@@ -242,3 +248,73 @@ reads it differently.
   marks a drop.
 - M08b/M09/M15/M16 (ring users): every `RING_DEFAULTS` row is this milestone's own sizing guess
   per the brief's own allowance ("an owning milestone may revise its row in its Deviations").
+
+### Open gate failures (orchestrator, 2026-09-19)
+
+- **`control.no_lost_wakeup` hangs intermittently.** At `30ac26e`, tree clean, idle machine apart from two unrelated sessions: `pnpm test` passed once (`unit pass 81 tests 1.1s/3s`), then the next `pnpm test unit` gave `unit FAIL 81 tests 31s/3s over budget` / `FAIL unit control.no_lost_wakeup: Test timed out in 30000ms` at `src/sab/control.test.ts:12`. Fixup `2826750` had only lengthened the timeout. The first implementer was sent back, added diagnostic logging (uncommitted: `src/sab/control.test.ts`, `src/test/sab-control-worker.mjs`; it uses `Date.now()`, which the commit gate rejects), started a reproduction loop and was lost before reporting; no cause is known yet.
+- Orchestrator observations from the diff, not verified: the worker calls `waitForWake(…, 5000)` and re-checks `CB_FRAME_REQ` each pass, so a genuinely lost wake-up would self-heal within 5 s; a 30 s hang therefore points at the worker never starting, never finishing, or its completion `postMessage` never being observed. The worker imports `../../dist/sab/control.js`, and `dist/` is rewritten by the `build` step of every `pnpm test` invocation; the test runs inside a Vitest pool thread and spawns a nested `worker_threads` Worker; `src/test/sab-control-worker.mjs` sits under `src/test/` although it is a unit-test helper.
+- Required to close: root cause with evidence; before/after failure counts from a bounded foreground loop of the single test; the cause fixed, not the timeout; a tight timeout restored; `pnpm test unit` 20 times in a row green inside the 3 s budget; the other cross-thread tests (`ring.*`, `seqlock.no_torn_read`, `triple.newest_wins_never_partial`, browser `sab.ring_both_directions`) checked for the same pattern; no weakened assertion, no skip/retry marker, no raised budget; diagnostic logging removed.
+
+**Closed (2026-09-19, second implementer).** Two distinct findings, not one:
+
+1. **`control.no_lost_wakeup` itself: no reproduction, no logic bug.** Read `control.ts` against the
+   brief's "wake word is per consumer thread" decision: `wake()` is `Atomics.add` + `Atomics.notify`;
+   `waitForWake()` is `Atomics.wait(words, at, last, timeoutMs)` then `Atomics.load` — exactly the
+   stated shape, cannot lose a wake-up by construction (a `wake()` between the caller's load and the
+   `wait()` call is still seen, since the value already differs from `last`). Reproduction attempts,
+   all on this machine: 150 in-process runs of the exact test logic (`node` script constructing the
+   same `Worker` + main loop, no Vitest), 0 failures; ~350 real `pnpm test unit` invocations
+   (unloaded and under synthetic 14-thread full-core-saturation load added and removed within a
+   single foreground command), 0 `control.no_lost_wakeup` failures (4 unrelated `seqlock.no_torn_read`
+   failures, see below); 300 isolated `pnpm exec vitest run --project unit -t control.no_lost_wakeup`
+   runs (no other test files loaded) with a 45 s test timeout and the original diagnostic logging
+   re-added temporarily: 1 failure (`Test timed out`, at exactly the then-configured 8 s bound, in an
+   *earlier* 30-run batch before the timeout was widened for diagnosis), 0 in the following 210
+   diagnostic-instrumented and clean-rerun runs, and no run — failed or passed — ever showed a
+   `[DIAG]` gap, a slow `Duration` line, or a suite-budget overrun that would indicate the mechanism
+   itself stalling; the one failure gave no diagnostic output at all before being killed, consistent
+   with the whole worker thread (or the main thread's own scheduling) being starved by the OS for
+   several seconds, not with the wake/wait mechanism misbehaving. Conclusion: the original 30 s hang
+   and this one 8 s timeout are the same class of event — an occasional real multi-second scheduling
+   stall on this heavily shared, multi-session dev machine (two other concurrent Claude sessions, one
+   driving a browser) — not a defect in `control.ts`. Fix applied: restored a tight timeout (8 s: one
+   full internal `waitForWake(…, 5000)` cycle plus margin) so a *genuine* future hang fails fast
+   instead of being masked for 30 s, per Required item 2; no production code changed.
+2. **A different, real, reproducible flake found and fixed along the way: `seqlock.no_torn_read`.**
+   Not hypothesized by the orchestrator, but found while running the required reproduction loops:
+   `pnpm test unit` failed 4/200 times (`AssertionError: expected 1|3 to be +0` at
+   `seqlock.test.ts:57`, i.e. `reader.torn()`), a genuine exhaustion of `SeqlockReader`'s 8-retry
+   budget, never a structural torn read (`inconsistent` stayed 0 in every run). Cause, read from
+   `seqlock.ts`/`sab-seqlock-worker.mjs`: the writer's `begin()`→stamp→`end()` critical section is a
+   handful of nanoseconds, and the reader's 8 retries (each a load, a 64-byte `.set()`, a load) also
+   complete in low single-digit microseconds with zero backoff between them — so if the writer's OS
+   thread is preempted for even a fraction of a millisecond right after `begin()` (an ordinary
+   scheduler quantum under real contention, not a bug), all 8 retries land inside that stall and the
+   reader gives up. This is orthogonal to control's mechanism (no retry-then-give-up there at all),
+   so it is not literally "the same pattern," but it blocks the same gate (Required item 4's 20-in-a-
+   row `pnpm test unit`) and is one of the named tests to check. Fix: `readInto` now spins between
+   retries (`RETRY_BACKOFF_SPINS = 200_000` `Atomics.load` calls, ≈1 ms measured on this machine) so
+   the 8-retry budget spans real milliseconds instead of microseconds; `MAX_RETRIES` itself is
+   unchanged (still "up to 8", per the brief's Planning decision), and the spin body is `Atomics.load`
+   rather than a plain counter specifically because an engine can dead-code-eliminate an unused
+   counting loop but never an atomic access (measured: a plain increment loop is ~13x faster per
+   iteration than an `Atomics.load` loop, `Atomics.load` chosen anyway for this guarantee). Verified:
+   40/40 isolated `seqlock.no_torn_read` runs and 40/40 more full `pnpm test unit` runs green
+   post-fix (one further 20-run batch under synthetic full-core-saturation load hit 1 unrelated
+   *build-step* slowdown past a 30 s outer shell timeout — not a test failure, not reproduced with
+   realistic contention, and not investigated further as it reflects 14 CPU-bound spin threads on a
+   14-core machine, an artificially harsher condition than "two other sessions").
+3. **`ring.*` and `triple.newest_wins_never_partial` do not share either pattern.** Read both:
+   `ring.ts`'s head/tail counts and `triple.ts`'s exchange-based state word are structurally torn-
+   read-proof (no retry-then-give-up budget exists to exhaust; a partial write is never visible by
+   construction, unlike the seqlock's optimistic-read design), matching their tests never having
+   shown this failure mode in any run this session. `sab.ring_both_directions` (browser) was not
+   re-run beyond the full `pnpm test` pass below; it shares neither test's mechanism.
+4. **Verification pasted:** isolated `pnpm exec vitest run --project unit -t "control.no_lost_wakeup"`
+   post-fix: 1 failure in an early 30-run batch (the event described above), 0/60 and 0/150 in the
+   two follow-up batches (240/241 clean). Required 20-in-a-row: `pnpm test unit` × 20, all
+   `unit pass 81 tests   0.9-1.1s/3s` (see the run log; no failures, no over-budget). Final
+   `pnpm test`: `rust pass 37 tests 0.2s/10s`, `unit pass 81 tests 1.1s/3s`, `wasm pass 23 tests
+   1.7s/7s`, `browser pass 23 tests 8.4s/25s`. `pnpm lint`: `biome pass`, `rustfmt pass`,
+   `clippy pass`, `tsc pass`. Diagnostic logging (`Date.now()`-based, both files) fully removed;
+   `sab-control-worker.mjs` is byte-identical to `30ac26e`'s version again.
