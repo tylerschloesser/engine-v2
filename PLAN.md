@@ -22,7 +22,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 05 | `05-codec-and-state-hash.md` | `Codec`, NaN canonicalisation, `StateHash`, golden-bytes pattern | 04 | |
 | [x] | 06 | `06-sab-primitives-and-workers.md` | SAB ring / seqlock / triple buffer, control block, camera block | 04 | |
 | [x] | 06b | `06b-workers-and-spawn.md` | worker kinds in `engine/worker`, `createClient` spawn path, `yield` protocol | 06 | |
-| [ ] | 07 | `07-world-model-core.md` | tiles, chunk coords, `Registry` + trait tables, pristine + overlays + invisible dense cache | 05 | |
+| [x] | 07 | `07-world-model-core.md` | tiles, chunk coords, `Registry` + trait tables, pristine + overlays + invisible dense cache | 05 | |
 | [ ] | 08 | `08-worldgen-and-gen-worker.md` | `Worldgen` trait, `gen` role, `engine::noise`, worldgen golden + benchmark | 05, 07 | D |
 | [ ] | 08b | `08b-gen-workers-and-queue.md` | gen workers over request ring / result slabs, generation queue, client pristine-cache feed | 06b, 08 | |
 | [ ] | 09 | `09-renderer-terrain.md` | WebGPU ferry, terrain shader over page/indirection textures, chunk-upload ring, readback test | 08b | |

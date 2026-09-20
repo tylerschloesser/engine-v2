@@ -15,7 +15,7 @@ The brief, then its **Read first** list with the sections it names, the `.claude
 
 - If `pnpm test` or `pnpm lint` is red before you change anything and the delegation prompt did not say so, stop and report.
 - Follow the brief's **Order of work**, inside **Scope**. **Non-scope** belongs to another milestone even when it looks easy.
-- Work on `main`. After each step: `pnpm format`, then commit with the subject `M<NN> step k: <what>`. This is mandatory: the subjects are the index a successor resumes from. Never branch, push, tag, amend, reset or stash.
+- Work on `main`. After each step: `pnpm format`, then commit with the subject `M<NN> step k: <what>`. This is mandatory: the subjects are the index a successor resumes from. A commit outside a step (a golden, Deviations) is `M<NN>: <what>`; the subject `M<NN> done:` is the orchestrator's marker, never yours. Never branch, push, tag, amend, reset or stash.
 - While working use `pnpm test <suite> -t <pattern>`; run the full `pnpm test && pnpm lint` once at the end.
 - Write the context artifacts the brief lists (its **Context artifacts** section) once the procedure is real. They are part of done whether or not a checkbox names them; report them like a criterion.
 

@@ -237,7 +237,7 @@ Every decision of ADRs 0001 to 0025 (judged against the amendments of 0022, 0023
 | §3 chunk size 16/32/64, default 32, compile-time const (runtime `ChunkDims`, amended by 0024 §9) | M07 | `dims_reject_unsupported_bits`; exit "pass by name at `CHUNK_BITS` 4, 5 and 6" | covered |
 | §3 chunk size recorded in world params | M24b | `chunk_bits_mismatch_save_incompatible_files_untouched` (`ManifestV1.params.chunkBits`, reason `ChunkSize`) | covered |
 | 0024 §9 browser topology asserts `CHUNK_BITS = 5` with a readable fatal | M08b, M09 | `gen: oversize slab is a readable fatal` (M09's init check is Planning text only) | covered |
-| §4 `Tile` is 4 bytes, LE layer order, 4,096-byte row-major slab | M07 | `tile_le_byte_order`, `golden_terrain_canonical`; `memory_bytes()` asserted in `cache_events_report_slots` | covered |
+| §4 `Tile` is 4 bytes, LE layer order, 4,096-byte row-major slab | M07 | `tile_le_byte_order`, `golden_terrain_canonical`; `memory_bytes()` asserted in `memory_bytes_is_pool_plus_overlay` | covered |
 | §4 upload path: one copy into the upload ring is the texel pass; one `writeTexture` per chunk; delta patches one texel | M09 | `upload.record_layout_golden`, `terrain.probe_tile_colours`, `terrain.patch_one_texel`, `terrain.upload_budget_while_panning` | covered |
 | §5 `ChunkTerrain` / `ChunkOverlay` / `ChunkIndex` lifetimes; index derived and rebuilt on load | M07, M21 | `lru_evicts_least_recent`, `overlay_sorted`, `index_rebuild_equals_incremental` | covered |
 | §5 entities stored globally keyed by `EntityId`, ids from a sim-state counter (amended by 0022 §1, §3: one ordered map, never reused) | M12 | `entity_id_policy_*`, `store_hash_ignores_insertion_order` | covered |
@@ -998,7 +998,7 @@ Process decisions, implemented outside the milestone table (before M02b).
 | Memory per instance, arena sizes | M06b, M08b, M17 | `workers.spawn_local` (`W_MEM_PAGES`), `arena.sum_rule`, `start.arena_config_rejected` | covered |
 | Memory per instance, mobile ceiling | M11 | device check `M11-memory` | covered |
 | Memory per instance, world budget (entities, modified tiles) | M21, M36 | `init_rejects_budget_over_arena`, `full_world_rejects_place_accepts_remove_then_place`; M36 exit "builder's native test proves the §9 counts"; `mem.simHighWaterLargeSave` | covered |
-| Memory per instance, dense cache | M07 | `cache_events_report_slots` (exact `memory_bytes()`) | covered |
+| Memory per instance, dense cache | M07 | `memory_bytes_is_pool_plus_overlay` (exact `memory_bytes()`) | covered |
 | Memory, whole tab on the phone | M11, M16, M39 | device checks `M11-memory`, `M16-coexist`, `M39-large-save` | covered |
 | Memory, GPU (page, instances, art) | M09, M17b | `counters.gpu_bytes_within_budget` against `counters["render.gpuBytes"]` (M17b exit names the key) | covered |
 | Memory, SABs | M06 | `layout.sab_total_under_budget` | covered |

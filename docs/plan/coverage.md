@@ -157,7 +157,7 @@ Audited 2026-09-19 against the working tree of `phase-2-plan`.
 | "There is no `postMessage` fallback" | 06b, 37 | M06b exit 2, M37 exit 5 | covered |
 | "Baseline phone: iPhone 12-class / 4 GB Android" | 11, 16 | device M11-memory, M16-coexist (iPhone; Android half: see `client.md` Chrome Android row) | covered |
 | "At most 256 MB per WASM instance" | 06b | `arena.sum_rule`, `start.arena_config_rejected`, `workers.spawn_local` (`W_MEM_PAGES`) | covered |
-| "64 MiB default world budget" | 07, 21, 36 | `cache_events_report_slots` (`memory_bytes()`), `init_rejects_budget_over_arena`, M36 exit 6; device M39-large-save | covered |
+| "64 MiB default world budget" | 07, 21, 36 | `memory_bytes_is_pool_plus_overlay` (`memory_bytes()`), `init_rejects_budget_over_arena`, M36 exit 6; device M39-large-save | covered |
 | "game `.wasm` ≤ 1 MB brotli (warn), 2 MB (fail)" | 35 | `size @slow`, exit 3 | covered |
 | [Consequence](../spec/runtime-and-packaging.md#consequence-of-games-are-written-in-rust): "cannot ship a prebuilt WASM binary … npm package plus Rust crate(s)" | 02, 35 | `build: game.json matches bytes`, M35 exit 1 (`crates/**` in the pack list) | covered |
 | "Every game therefore needs a Rust toolchain … make that painless" | 02b, 35 | `plugin-dev: touch triggers rebuild and full-reload`, `plugin: rustc error reaches overlay and recovers @slow`, `tarball-install @slow` | covered |

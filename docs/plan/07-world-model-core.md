@@ -1,6 +1,6 @@
 # M07: World model core
 
-Status: not started · After: 05 · Tyler-dependent: no
+Status: done · After: 05 · Tyler-dependent: no
 
 ## Goal
 The engine crate holds terrain exactly as 0007 defines it: 4-byte tiles, tile/chunk/world coordinates, trait tables in a `Registry`, and a `TerrainStore` whose *state* is sparse canonical overlays over a pure pristine function and whose dense chunks are an LRU cache nothing can observe. A native test matrix proves invisibility: the same scripted operations at cache capacity 1, default and unlimited, with generation pre-warmed in shuffled orders, give identical reads and identical state hashes.
@@ -66,11 +66,11 @@ If the session passes half its context before step 6, stop after step 5, commit,
 `tile_le_byte_order`, `tile_void_traits_all`, `chunk_of_negative_tiles_floors`, `local_index_row_major`, `chunk_key_roundtrip`, `worldpos_range_and_clamp`, `dims_reject_unsupported_bits`, `traits_union_of_tables`, `overlay_never_holds_pristine`, `set_back_to_pristine_drops_entry_and_count`, `overlay_sorted`, `canonical_bytes_independent_of_write_history`, `canonical_roundtrip`, `golden_terrain_canonical` (`assert_golden_bytes!`), `loaded_entries_learn_pristine_on_materialize`, `clear_overlay_restores_slab`, `out_of_range_reads_void_writes_rejected`, `lru_evicts_least_recent`, `touch_protects`, `cache_events_report_slots`, `cache_invisible_matrix` (seeded script of 5,000 mixed reads and writes over 300 chunks, checkpoints = hash every 500 ops + a hash of all read results), `cache_invisible_insert_pristine_any_order` (results early, late, duplicated), `source_called_once_per_chunk_when_unlimited` (`CountingSource`), `no_alloc_terrain` (after init, reads and cache churn allocate zero bytes; only overlay growth may allocate).
 
 ## Exit criteria
-- [ ] All tests above pass by name at `CHUNK_BITS` 4, 5 and 6 where parameterised.
-- [ ] `cache_invisible_matrix` covers 3 capacities x 3 prewarm modes and compares both state hashes and read results.
-- [ ] No `HashMap`/`HashSet` and no `#[allow(clippy::disallowed_types)]` under `src/world/`.
-- [ ] `grep -n "pub fn" src/world/terrain.rs` shows no method returning a reference into a slab.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name at `CHUNK_BITS` 4, 5 and 6 where parameterised.
+- [x] `cache_invisible_matrix` covers 3 capacities x 3 prewarm modes and compares both state hashes and read results.
+- [x] No `HashMap`/`HashSet` and no `#[allow(clippy::disallowed_types)]` under `src/world/`.
+- [x] `grep -n "pub fn" src/world/terrain.rs` shows no method returning a reference into a slab.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t world` · `pnpm test rust -t cache_invisible` · `pnpm test rust -t no_alloc_terrain` · `pnpm test && pnpm lint`.
@@ -163,3 +163,7 @@ shapes, and measured numbers:
   src/world/terrain.rs` (18 methods, listed above): none returns a reference into a slab. No
   `HashMap`/`HashSet`/`#[allow(clippy::disallowed_types)]` under `src/world/` (grep clean; clippy's
   `disallowed_types` deny would fail the build otherwise).
+
+### Gate (orchestrator, 2026-09-20)
+
+Accepted at `43a2db3`: `pnpm gate 6afd404` clean (2 goldens added, none changed, no markers, no new dependency); `rust 95` (was 39), `unit 85`, `wasm 25`, `browser 52`, lint green; all 24 names under **Tests added** and every **Provides** name found by `grep`. The exact `memory_bytes()` assertion for the default capacity lives in `memory_bytes_is_pool_plus_overlay` (`tests/world_terrain.rs`), not in `cache_events_report_slots`' setup as **Budgets** says; the coverage rows name the real test.
