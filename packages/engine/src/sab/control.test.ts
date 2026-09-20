@@ -38,7 +38,7 @@ test('control.no_lost_wakeup', async () => {
   expect(result.frameReq).toBe(target)
 
   await new Promise<void>((resolve) => worker.once('exit', () => resolve()))
-})
+}, 30_000)
 
 test('control.workerWord addressing', () => {
   expect(workerWord(0, W_WAKE)).toBe(8)

@@ -21,6 +21,17 @@ test('triple.newest_wins_never_partial', async () => {
   // A tight synchronous loop below never yields to the event loop, so it cannot depend on a
   // 'message' listener firing mid-loop; poll `done` as plain shared memory instead (`seqlock.
   // test.ts` has the same shape, with more detail on why).
+  // Decodes the worker's stamp: the full 32-bit counter as four repeated little-endian bytes (see
+  // sab-triple-worker.mjs), so every 4-byte chunk of header/body must read back the same value.
+  function decodeStamp(view: Uint8Array, off: number): number {
+    return (
+      (view[off] as number) |
+      ((view[off + 1] as number) << 8) |
+      ((view[off + 2] as number) << 16) |
+      ((view[off + 3] as number) << 24)
+    )
+  }
+
   let lastValue = 0
   let freshCount = 0
   let inconsistent = 0
@@ -29,15 +40,12 @@ test('triple.newest_wins_never_partial', async () => {
     const slot = reader.acquire()
     const header = reader.headerView(slot)
     const body = reader.bodyView(slot)
-    const value = header[0] as number
-    for (let b = 0; b < header.length; b++) if (header[b] !== value) inconsistent++
-    for (let b = 0; b < body.length; b++) if (body[b] !== (value & 0xff)) inconsistent++
+    const value = decodeStamp(header, 0)
+    for (let b = 0; b < header.length; b += 4) if (decodeStamp(header, b) !== value) inconsistent++
+    for (let b = 0; b < body.length; b += 4) if (decodeStamp(body, b) !== value) inconsistent++
     if (reader.fresh) {
       freshCount++
-      if (value !== 0 && value <= lastValue && lastValue !== 0) {
-        // values are stamped mod 256 (`i & 0xff`); only flag a real regression, not the wrap.
-        if (!(lastValue > 200 && value < 56)) wentBackwards++
-      }
+      if (value < lastValue) wentBackwards++
       lastValue = value
     }
   }

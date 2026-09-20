@@ -9,10 +9,10 @@ import { createRing } from './ring.js'
 import { createSeqlock } from './seqlock.js'
 import { createTriple } from './triple.js'
 
-export const WORKER_CLIENT = 0
-export const WORKER_HOST = 1 // sim or net
-export const WORKER_GEN0 = 2
-export const WORKER_GEN1 = 3
+// Worker indexes are named in this milestone's Seams under both control.ts (word layout) and
+// layout.ts (Scope); control.ts is the one definition, re-exported here so a `SabSet` caller needs
+// only this module.
+export { WORKER_CLIENT, WORKER_GEN0, WORKER_GEN1, WORKER_HOST } from './control.js'
 
 export const MAX_GEN_WORKERS = 2
 

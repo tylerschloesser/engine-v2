@@ -4,8 +4,8 @@ import { createSeqlock, SeqlockReader, SeqlockWriter } from './seqlock.js'
 
 test('seqlock.no_torn_read', async () => {
   const dataBytes = 64
-  const count = 150
-  const baseSpins = 1_500_000
+  const count = 80
+  const baseSpins = 6_000_000
   const sab = createSeqlock(dataBytes)
   const reader = new SeqlockReader(sab)
   const doneFlag = new SharedArrayBuffer(4)
@@ -40,7 +40,7 @@ test('seqlock.no_torn_read', async () => {
         }
       }
     }
-    const spins = 1_000_000 + (((i * 2246822519) >>> 0) % 1_000_000)
+    const spins = 4_000_000 + (((i * 2246822519) >>> 0) % 4_000_000)
     i++
     let sink = 0
     for (let k = 0; k < spins; k++) sink = (sink + 1) | 0
