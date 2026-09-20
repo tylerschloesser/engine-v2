@@ -84,4 +84,74 @@ Updates `packages/engine/CLAUDE.md`; adds `packages/engine/fixtures/worldgen/CLA
 This milestone builds `worldgen-bench.html` for it (median ms/chunk, golden match, user agent, `hardwareConcurrency`); what each number changes is stated there.
 
 ## Deviations
-(filled in during Phase 3)
+No split: all 8 steps fitted one session. No decision changed, so no ADR. Small corrections, exact
+shapes, and measured numbers:
+
+- **Step order 4/5 swapped.** `fx-worldgen`'s `Instance::gen_chunk` needs the ABI's defaulted trait
+  method to exist first, so the ABI wiring (registry.rs, `abi.ts`, `ABI_VERSION` 2 -> 3) landed
+  before the fixture crate, not after. `Slot::gen` is named `Slot::gen_role` and a local variable
+  `gen` is `gen_slot` (`gen` is a reserved keyword in the 2024 edition).
+- **`scenario.json`'s shape carries a `role` field** the Seams' one-line example omits (`{ kind:
+  "worldgen", role: "gen", config, chunks }`): the pre-existing sim scenario already required
+  `role: "sim"` (`fixtures/hash/golden/scenario.json`), and `roleOf(scenario)` (new export of
+  `tests/support/scenario.ts`) reads it to pick the ABI role -- `kind` alone cannot (a future
+  `client`-role kind would need one too). `HashScenario` is now `SimScenario | WorldgenScenario`,
+  discriminated on `kind` (absent = sim, matching the brief).
+- **`FINGERPRINT_CHUNKS`** (0007 §9 "near the origin and near `+-2^18`"): 8 chunks within 2 of the
+  origin plus 4 pairs straddling `(262144, 262144)` and its three other sign combinations, fixed
+  forever as a `const [(i32,i32); 16]` in `worldgen.rs`.
+- **`GenCore<W>` and `assert_worldgen_contract`'s zero-alloc proof.** `GenCore::gen_chunk` takes
+  `&self` (as specified) via a `RefCell<Vec<Tile>>` scratch slab reserved once in `new` (Planning
+  decisions 6's "abi::arena shows zero allocation inside generate" needs `W::generate` itself to
+  never allocate, which the scratch buffer makes possible). `fixtures/worldgen/tests/contract.rs`
+  needs no `#[global_allocator]` of its own: `fx_worldgen`'s `export_instance!(FixtureGen)` already
+  installs `engine::abi::Arena` for the crate, and it applies to that crate's own test binaries too
+  (declaring a second one conflicts) -- `no_alloc_terrain.rs`'s pattern (an explicit allocator in
+  a file with no `export_instance!` in its own crate) does not transfer verbatim to a fixture crate.
+- **`FixtureGen::init` accepts only `Role::Gen`** (`Err(Status::BadConfig)` otherwise): the fixture
+  is gen-only, so `gen: sim role returns WrongRole` (`tests/wasm/worldgen.test.ts`) instantiates the
+  `hash` fixture as `Role.Sim` instead and calls its `gen_chunk` export -- the role check in
+  `abi::gen_chunk` runs before `Instance::gen_chunk`, so any role-Sim instance proves the same
+  thing. Fixed chunk edge 32 (`ChunkDims::new(5)`, matching 0007 §3's default) hardcoded in both
+  `FixtureGen::generate` and `Instance::init`, mirroring how a real game's `CHUNK_BITS` is a
+  compile-time constant (Planning decisions 1 of docs/plan/07-world-model-core.md); `Worldgen::
+  generate`'s signature carries no `ChunkDims` parameter, so this is the only way a game's `out`
+  length and its own tiling math agree.
+- **A second, separate golden for the bench**, `fixtures/worldgen/golden/bench.json` (`{config,
+  hash}`): the 256-chunk cross-runtime golden (`golden/golden.json`, 4 checkpoints of 64 chunks
+  each) is a different chunk sequence from the bench's 200 warm-up + 2,000 timed chunks, so they
+  cannot share one file. `tests/support/bench-worldgen.ts` (`chunkAt`, `runWorldgenBench`) is the
+  one warm-up+timed loop shared by the Node slow test and `worldgen-bench.html`'s worker, so both
+  measure the identical sequence and produce the identical hash; not written by `pnpm golden`
+  (scoped to `golden/scenario.json` files) -- reblessed by hand from a passing run's printed hash.
+- **`golden.mjs` reformats the file it writes with Biome** after writing it. `JSON.stringify(...,
+  null, 2)` disagrees with Biome's line-width-based array wrapping once a `checkpoints` array is
+  short enough to collapse to one line (worldgen's 4; `hash`'s pre-existing 10 already exceeds
+  `biome.json`'s `lineWidth: 100` and was never affected): without this, `pnpm golden worldgen &&
+  git diff --exit-code` -- the brief's own verification command -- was dirty on every run from a
+  formatting-only diff, indistinguishable from a changed golden. Fixed once in `golden.mjs`, not
+  fixture-specific.
+- **`budgets.json`'s `worldgenMsPerChunkWarn`** is a flat top-level key (`0.25`, the desktop warn
+  figure of 0008 §6), not nested under `counters`: the `Budgets` TS type's `counters:
+  Record<string, number>` field is already inexact (`counters.sab` is an object, not a number) and
+  `budget(path)` walks the raw JSON generically regardless, so this follows the brief's literal
+  "budgets.json key `worldgenMsPerChunkWarn`" rather than the `counters` convention.
+- **Measured numbers.** `rust` 95 -> 112 tests (native run **0.3s of its 10s budget**); `unit`
+  unchanged at 85; `wasm` 25 -> 32 (`1.3-1.4s of its 7s budget`); `browser` unchanged at 52 (one
+  spec test now checks two fixtures instead of one, so the suite gained work without gaining a
+  test -- browser stayed at **16-18s of its 25s budget**, close to the 16-17s baseline the brief
+  noted). `worldgen-bench` (`pnpm test:slow wasm -t worldgen-bench`): median **0.0729-0.0800
+  ms/chunk** (Node release build and desktop Chromium alike), far under `worldgenMsPerChunkWarn`
+  (0.25) and 0008 §6's phone budget (1 ms) -- no `warn` line emitted on this machine. `fx-hash`
+  release `.wasm`: **151,209 B before this milestone -> 151,333 B after** (+124 B, 0.08%, measured
+  via a `git worktree` at `9c98dad`), confirming `engine::noise`/`engine::worldgen` vanish by LTO
+  from a module that never calls them (the residual bytes are ordinary codegen/section-layout
+  churn, not surviving dead code). `ABI_VERSION` 2 -> 3.
+- **`pnpm test && pnpm lint`** (final run): `rust pass 112 tests 0.3s/10s`, `unit pass 85 tests
+  1.2s/3s`, `wasm pass 32 tests 1.3s/7s`, `browser pass 52 tests 16s/25s`; `biome`/`rustfmt`/
+  `clippy`/`tsc` all pass. `pnpm golden worldgen && git diff --exit-code`: clean (checkpoints
+  `ada742b9264dc776`, `5caacc79d1543a2f`, `0356f02ef6a706ba`, `b2c2bbca91625e6a`).
+  `pnpm device:serve` + `playwright-cli` against desktop Chromium's loopback URL: `worldgen-
+  bench.html` printed `PASS`, `median ms/chunk: 0.0800`, `hash: 840c6111eafa61b0 ==
+  840c6111eafa61b0`, no console errors; `lsof -ti tcp:4173` confirmed empty after `playwright-cli
+  close` and killing the server.
