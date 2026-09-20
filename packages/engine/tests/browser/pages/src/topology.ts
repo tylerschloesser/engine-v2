@@ -45,6 +45,10 @@ window.__createClient = (opts = {}) => {
   if (opts.arenas) options.arenas = opts.arenas
   if (opts.genWorkers !== undefined) options.genWorkers = opts.genWorkers
   window.__client = createClient(options)
+  // Swallow here, synchronously with creation, so the browser never reports this as an unhandled
+  // rejection; `__clientReady` (called later, from a separate `page.evaluate`) observes the same
+  // promise's outcome independently (a promise may be `.then`/`.catch`-ed more than once).
+  window.__client.ready.catch(() => {})
 }
 
 window.__clientReady = async () => {
