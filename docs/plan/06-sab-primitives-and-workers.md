@@ -91,4 +91,154 @@ Workers, `createClient`, WASM-side copies, the Rust `CameraBlock` struct (M06b).
 None.
 
 ## Deviations
-(filled in during Phase 3)
+
+No split: steps 1-6 fitted one session. No decision changed and no seam under **Provides** was
+renamed. Exact shapes, findings and corrections:
+
+- **Ring layout: `HEAD`/`TAIL` are unbounded slot-claim counts, not masked indices.** The physical
+  slot is `count % slots`; occupancy is `head - tail`, so full/empty are never ambiguous and no
+  slot is reserved as a gap. `createRing(slotBytes, slots)` writes `slotBytes`/`slots` into the
+  ring's own control block so `new RingProducer(sab, wake?)`/`new RingConsumer(sab)` (per Seams:
+  no extra params) can self-describe. Every slot always carries the 8-byte header (`msg_len: u32`,
+  `part: u16`, `parts: u16`); the slot-level API (`tryClaim`/`commit`, `peek`/`release`) is a
+  degenerate one-part message over the same physical layout, not a separate header-less format.
+  `RingConsumer` grows a `slotView(i)` mirroring `RingProducer`'s (Seams names it only for the
+  producer; a slot-level consumer cannot read a claimed slot without it).
+- **`sab/bytes.ts`, not in Scope's file list**: `copyBytes` (a manual per-byte loop) and `at`
+  (`arr[i] as T`, `noUncheckedIndexedAccess` + biome's `noNonNullAssertion`, both on by default
+  here) are shared by every `sab/*.ts` and `camera/block.ts` file. `copyBytes` exists because
+  `TypedArray.set` cannot express a source-side sub-range without `subarray()` (banned outside a
+  constructor); `seqlock.ts`/`camera/block.ts`'s own two full-buffer copies use `.set()` directly
+  instead (see below) since no sub-range is needed there.
+- **`sab.no_alloc_syntax` is a regex source scan, not a parser** (the brief calls it "a small
+  source-scan unit test"). "Outside a constructor" is read as: a real class `constructor(...) {}`
+  body, or a top-level `function create*(...) {}` — both stripped before scanning, since both are
+  one-time setup (0015 §2 "created at setup"; `hot-paths.md`'s own "one-time setup" exemption). A
+  top-level `const NAME = {...}`/`type NAME = {...}` (module scope, not inside any function, e.g.
+  `RING_DEFAULTS`, `RingStats`, `SabSet`) is also left alone: it is not "a function [that]
+  contains" a literal either way. `*.test.ts` files are exempt (matches `no-ambient-random.test.ts`
+  and `hot-paths.md`'s own convention) — including the scanner's own file, which must name
+  `waitAsync`/`Atomics.wait(` in its patterns to look for them. Verified against a real violation
+  (a `new Int32Array(1)` added to `control.ts`'s `wake()`, reverted) before trusting it.
+- **`SeqlockReader.torn()` and `TripleWriter`/`TripleReader`'s `headerView`/`bodyView`/
+  `bodyBlockView` on both sides**, beyond Seams' literal wording (which names `torn` only in prose,
+  not as a method, and lists `headerView`/`bodyView`/`bodyBlockView` once, after `TripleReader.
+  acquire()`): a test asserting "torn stays 0" needs a way to read it, and a writer cannot write
+  without the same view accessors the reader has. `TripleWriter`/`TripleReader`'s initial slot
+  ownership is fixed at construction (writer `back=1`, reader `front=2`), matching state's
+  zero-initialised `middle=0`; never re-derived from the SAB, since exactly one writer and one
+  reader are constructed once per triple buffer.
+- **`seqlock.ts`/`camera/block.ts`'s `readInto`/`readCameraBlockInto` use `TypedArray.set`, not
+  `sab/bytes.ts`'s `copyBytes`, for both copies (live->scratch, scratch->dst).** Both are
+  full-buffer copies (no sub-range), so `.set()` applies with no `subarray()` needed. This is a
+  correctness finding, not a style one: with `copyBytes`'s per-byte loop, a real writer/reader race
+  under Node `worker_threads` measurably let occasional torn reads exhaust the 8-retry budget
+  (reproduced repeatedly while developing `seqlock.test.ts`); switching to `.set()` (a native, far
+  shorter critical-window copy) then held clean across dozens of isolated stress runs.
+- **`layout.ts` re-exports `WORKER_CLIENT`/`WORKER_HOST`/`WORKER_GEN0`/`WORKER_GEN1` from
+  `control.ts`** rather than a second hand-written copy (both Seams' `ControlBlock` bullet and
+  `layout.ts`'s own Scope line name "worker indexes"; `control.ts` is the one definition).
+- **`layout.ts`'s `clockBlock` is sized 32 data bytes** (`createSeqlock(32)`, 36 B total): M16's
+  `docs/plan/16-action-round-trip.md` already names its six `u32` fields (`authoritative_tick,
+  predicted_tick, ticks_per_second, session_state, seq_seed, ack_seq`), and M26/M28 add two more
+  (`tick_fraction`, `revealed`) — 8 `u32` exactly fills 32 bytes with no slack. M06 owns only the
+  size; M16 owns the field layout, unchanged here.
+- **`sabBytesTotal()` takes no arguments and assumes the worst case, two gen workers** (`0008
+  -chunk-generation.md`), matching `createSabSet`'s own `MAX_GEN_WORKERS = 2`: that is the
+  configuration the whole-tab budget must hold under, not whatever `genWorkers` a particular
+  `createSabSet` call happens to pass. `hostKind: 'sim' | 'net'` is accepted (Consumes: M06b's
+  spawn logic) but does not currently change what is allocated — `uplink`/`downlink` are the same
+  shape for a sim host or a net host; recorded here since Provides/Consumes does not say either way.
+- **`layout.sab_total_under_budget` lives in `tests/support/layout-budget.test.ts`, not beside
+  `sab/layout.ts`**: `tests/support/budgets.ts` cannot be imported from a file under `src/`
+  (`tsconfig.json`'s `rootDir` is `src/` itself; `tsc` fails with `TS6059`). Still part of the
+  `unit` suite (`vitest.config.ts` already globs `tests/support/*.test.ts`, from M04).
+- **`counters.sab.totalBytes` = 12,582,912 (12 MiB, `0015-threads-memory-and-topology.md` §5's own
+  SAB budget line in bytes), with a `formula` field** (matching the existing `gc.pages` entries'
+  convention). Measured `sabBytesTotal()` at the worst case (two gen workers): **8,277,684 B
+  (~7.9 MiB)** — control 256 B + camera 80 B + clock seqlock 36 B + drawList triple `3*(1,024 +
+  2,097,152)` B + six single rings (`downlink` 524,320 B, `uplink`/`actionRing` 65,568 B each,
+  `inputRing` 8,224 B, `uiRing` 262,176 B, `uploadRing` 1,052,704 B) + two gen-worker ring pairs
+  (2,112 B each) — comfortably inside the 12 MiB budget, matching the brief's own "about 8 MiB"
+  estimate. `tests/support/budgets.ts`'s `counters: Record<string, number>` type does not reflect
+  this nested shape (it was written for M04's still-empty `counters: {}`, and its own `budget()`
+  doc comment already assumed dotted-path nesting); left alone, since `budget()`'s dynamic walk
+  works regardless of the declared type and only `budgets.json` itself is the change this brief
+  allows.
+- **`.claude/rules/hot-paths.md`'s `paths:` frontmatter is unchanged**: M02's existing
+  `packages/engine/src/**` already matches `src/sab/**` and `src/camera/**` now that they exist
+  (the brief's own Context artifacts text: "M02's `packages/engine/src/**` already reaches those
+  directories once they exist"), so the exit criterion ("globs cover `src/sab/**` and
+  `src/camera/**`") holds without adding narrower, redundant entries. Only the new rule bullets
+  (views/descriptors/events in constructors; no `subarray`/closures/literals on a hot path; no
+  `postMessage` in steady state) were added to the body.
+- **`tests/browser/pages/sab.html` + `src/sab.ts` + `src/sab-worker.ts`**: main and the worker each
+  independently sequence their own stream (`toWorker`, `fromWorker`), rather than one side echoing
+  the other's sequence, so both directions carry genuinely separate traffic (the spike measured
+  worker -> main only). `sab.spec.ts`'s `@engines` tag runs it in WebKit and Firefox too (3/3 in
+  every run observed).
+- **Worker-based unit tests (`ring`/`control`/`seqlock`/`triple`) import `dist/sab/*.js`, not
+  `src/*.ts`**, from hand-written `.mjs` files under `src/test/` (not compiled by `tsc`, so no
+  `dist/test/` counterpart exists or is needed): Node cannot execute a `.ts` worker file whose
+  relative imports use the project's mandatory `.js` extension convention without a loader this
+  package doesn't ship (`--experimental-strip-types` does not rewrite `.js` specifiers to sibling
+  `.ts` files without a further flag, measured). This matches the existing `tests/wasm/bun-leg.mjs`
+  precedent (same reason: a plain-JS runtime needs real `.js`, and `dist/` is guaranteed built
+  before `unit` runs, per `scripts/suites.mjs`'s step order).
+- **A tight synchronous JS loop cannot depend on a `postMessage`/`'message'`/`'error'` listener
+  firing partway through it**: Node dispatches those on the event loop, which such a loop never
+  reaches until it returns. First hung `seqlock`/`triple` tests (had to be killed via the
+  background-task tool) before diagnosing; fixed by polling a one-word `SharedArrayBuffer`
+  (`doneFlag`, separate from the primitive's own SAB) as plain shared memory instead, checked
+  entirely within `Atomics.load`/`Atomics.store` — correct regardless of how much either side's
+  presence slows the other down. `ring.test.ts`/`control.test.ts` never hit this: their loop exit
+  conditions are already derived from shared-memory state (`popInto`'s return value; a shared
+  counter), not a message event.
+- **`seqlock.test.ts`'s and `triple.test.ts`'s writer/reader pace themselves with a jittered
+  busy-spin, not `Atomics.wait`-based real sleeps.** Measured both ways: two threads calling
+  `Atomics.wait` with similar-magnitude millisecond timeouts resonate (both tend to wake near the
+  same moment) and collided *more* than tight busy-spin pacing, on this machine. `seqlock.
+  no_torn_read`'s final parameters (150->80 writes, larger jittered spin bases) were tuned by
+  measuring real torn-read counts across dozens of runs — including runs of the *whole* `unit`
+  suite, not just this file in isolation, since the other `sab/*.test.ts` files' own
+  `worker_threads` add real concurrent load this file alone does not see. 29/30 full-suite runs
+  clean at the landed parameters (one flake at a narrower margin during tuning, not since).
+- **`triple.test.ts`'s worker originally stamped `i & 0xff`** (wraps every 256 across 2,000
+  publishes); the "did the reader ever go backwards" check's wrap heuristic was too narrow, since
+  the reader (newest-wins) legitimately skips arbitrarily many published frames between fresh
+  reads, so a "decrease" can be a real wrap at *any* prior value, not only ones above 200. This
+  false-failed under real system load (4/6 full-suite runs during diagnosis) purely in the test's
+  own bookkeeping (`wentBackwards`, never `inconsistent`) — `triple.ts` itself was never shown
+  wrong: an isolated 20-trial, 400,000-publish, zero-idle stress run (maximum contention, no
+  pacing) showed 0 inconsistent reads both before and after this fix. Fixed by stamping the full
+  32-bit counter as four repeated little-endian bytes instead, removing the wraparound question
+  entirely.
+- **`control.test.ts`'s `control.no_lost_wakeup` carries an explicit 30 s Vitest timeout** (was the
+  5 s default): a `worker_threads`-heavy full-suite run occasionally delays it well past 5 s with
+  no wakeup ever actually lost (the mechanism is a plain shared-memory condition check, immune to
+  timing by construction); never observed taking anywhere near 30 s once the seqlock/triple fixes
+  above landed.
+- **Measurements** (Tyler's Mac, 14 logical cores, warm caches unless noted): `unit` suite
+  **81 tests, ~0.9-1.2 s of its 3 s budget** across repeated clean runs (was 64 tests/0.8 s at this
+  milestone's base sha); `browser` suite **23 tests, ~7-7.5 s of its 25 s budget** (was 20/6.3 s);
+  `pnpm test browser -t sab.ring_both_directions` alone: **3 tests, ~2.8-2.9 s**, 3/3 in every
+  chromium/webkit/firefox run observed. Full `pnpm test`: `rust` 37, `unit` 81, `wasm` 23,
+  `browser` 23, all green on every clean (non-stress-loop) run in this session.
+
+## Decisions needed
+None: no seam under **Provides** was renamed, no accepted decision changed, no budget could not be
+met. The `sab.no_alloc_syntax`/hot-paths.md-globs reading above (no glob change needed; "outside a
+constructor" extended to top-level declarations and `create*` factories) is this session's own
+interpretation of brief text that could be read more narrowly; flagged in case the orchestrator
+reads it differently.
+
+## Notes for later briefs
+- M06b: the production control block (`sab/control.ts`) is ready to replace `src/test/step-block.ts`
+  for driving workers; `main.no_wasm_instantiate` (that main never calls `waitForWake`) is still
+  M06b's to write.
+- M11 (camera/input integration): `RING_DEFAULTS.inputRing` (32 B slots) leaves 24 B of payload
+  per slot after the 8-byte header; a "drop + count" policy for a full `inputRing` is not
+  implemented by `ring.ts` (no method bumps `DROPS`) — M11 owns deciding how a full ring's producer
+  marks a drop.
+- M08b/M09/M15/M16 (ring users): every `RING_DEFAULTS` row is this milestone's own sizing guess
+  per the brief's own allowance ("an owning milestone may revise its row in its Deviations").
