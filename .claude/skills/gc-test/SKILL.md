@@ -59,7 +59,9 @@ outside `test-results/`.
 
 1. A page under `packages/engine/tests/browser/pages/` that calls `installGcPage(harness, opts?)`
    after building its `Harness` (see `gc-loop.ts`; `opts.drive` is optional, default `stepFrame` +
-   `stepTick`).
+   `stepTick`). A page over a real `createClient()` result (not the M03/M04 harness) uses
+   `asHarness(client)` (`src/test/client.ts`) to get a `Harness`; see "Production-topology pages"
+   below for the two things that differ.
 2. A `gc.pages.<pageId>` entry in `packages/engine/budgets.json`: `isolates` (one entry per isolate
    the page's `ready.isolates` lists, always including `main`), `software` (`null` until a real
    number exists for that page, per 0016 caveat b).
@@ -70,6 +72,34 @@ outside `test-results/`.
 
 That's the whole registration; `zeroGcSuite` reads the isolate list and generates clean + every
 negative control from the budget entry alone.
+
+### Production-topology pages (`asHarness`, M06b)
+
+`gc-topology.ts`/`gc-echo.ts` are the model: a page building a real `createClient()` result instead
+of the M03/M04 harness. Two differences from a harness page:
+
+- **Park before `__pageReady`.** A production worker enters its blocking loop right after `ready`
+  (the M03/M04 harness starts idle instead, only entering its loop on the first `resume()`), so it
+  is unreachable by CDP the instant the page is ready unless the page itself calls `await
+  parkWorkers(client)` before setting `window.__pageReady = true`. Skipping this hangs `measure()`'s
+  own isolate-naming step (`Runtime.evaluate` on a blocked worker never returns) rather than failing
+  fast -- if a new production-topology page's `gc-*.spec.ts` test times out at 30 s with no other
+  clue, check this first.
+- **No `post-message` control.** A production worker kind body cannot call `performance.mark`
+  itself (`.claude/rules/hot-paths.md`) and this milestone added no new `postMessage` type to ask
+  one to; `instrument.ts`'s `measure()` marks every worker isolate through a CDP `Runtime.evaluate`
+  of `self.performance.mark(...)` directly instead (`main` still marks itself through
+  `page.evaluate()` -- routing `main` through a second CDP session too retained `PerformanceMark`
+  objects server-side and pushed `gc-loop`'s own `main` reading over budget). For the same reason
+  there is no message-driven tick to test: pass `zeroGcSuite({ ..., controlKinds: ['object',
+  'burst'] })` to skip the generated `post-message` negative controls.
+- **Warm up longer than 120 frames if the numbers look noisy.** `gc-loop`'s harness call chain
+  reaches steady optimized code by 120 warmup frames (`measure()`'s own default); the production
+  `yield`-protocol shell (`worker/shell.ts`, `ControlBlock`, `asHarness`'s own lockstep) is a deeper
+  call chain that needed `warmupFrames: 8000` (an option on `measure()`/`zeroGcSuite`, per page --
+  never change the global default, which would retune every existing page's tuned budget) before
+  `main`'s reading stopped occasionally spiking and started reliably separating from the `object`
+  negative control. Warmup frames are never counted; raising this costs a few ms, not a budget.
 
 ## Changing a budget
 

@@ -91,3 +91,159 @@ None here; the posted-`Module` and arena checks on a real iPhone are M11 items i
 
 ## Deviations
 (filled in during Phase 3)
+
+### Steps 1-4 and 6 (partial), not recorded by that implementer -- verified against the code here
+
+- **`frame(t_ms) -> status`** (`crates/engine/src/abi/mod.rs::frame`): camera and `Result` access is
+  split through a raw pointer (`CameraBlock::ptr(&rt.layout)`, `client/camera.rs`) dereferenced
+  after `rt.layout.bytes_mut(RegionId::Result)` is taken, to avoid a borrow conflict between an
+  immutable read of `Camera` and a `&mut` of `Result` on the same `RegionLayout`. `fx-hash`'s own
+  `frame()` writes `centre.x, centre.y, t_ms` (24 bytes LE) into `Result`, proven bit-exact against
+  `camera/block.ts`'s layout by `workers.camera_block_reaches_wasm`.
+- **`try_init` reserves `Camera`** (80 B) for every Client-role instance regardless of the game
+  (`abi/mod.rs::try_init`); `tests/wasm/loader.test.ts`'s `RegionId.Camera` assertion is `len` is 80
+  (not "region is null").
+- **A kind's `setup()` returns `{ body, timeoutMs }`** instead of calling `runBlockingLoop` itself
+  (`worker.ts::run()` posts `ready` first, then starts the loop -- otherwise the `setup()` promise
+  never settles and `ready` never posts, since `runBlockingLoop` blocks synchronously).
+- **Test hooks in production files**, now gated (this session, orchestrator decision 1; see below):
+  `clientTestHandle` (`client.ts`, unconditional -- it is a `WeakMap` lookup, not a global), `self.
+  __engineWorkerKind`/`self.__engineIsolateName` (`worker.ts`), `self.__engineInstance`
+  (`worker/client.ts`).
+- **Measured**: fixed per-role WASM footprint before arena reservation, 1,310,720 B (20 pages) for
+  `sim`/`gen`/pre-echo `client` on the dev-profile `fx-hash` module (`workers.spec.ts`'s own
+  comment). `arenaBudgetBytes()` = 256 MiB (0015 §5 tab target) − `sabBytesTotal()` (worst case, two
+  gen workers) − 20 MiB GPU share.
+- **A wake during `park()` is not replayed on `resume()`**: flagged by that implementer for M08b/M13
+  (not independently re-verified here; carried forward as a flag, not a re-derived finding).
+- **`abi-mismatch` vs `worker-fatal`** is chosen by string-matching the fatal message
+  (`m.message.includes('ABI mismatch')`, `client.ts::setupWorker`).
+
+### Steps 5-6 (this session)
+
+- **Debug-global gate is the setup message's `test` field, not `test.flags`.** `SetupMessage.test`
+  (`worker/protocol.ts`) is `TestFlags` -- it is populated from `options.test?.flags`, not the whole
+  `ClientOptions.test` (which also carries `game`/`clock`/`scheduler`). Gating on `message.test !==
+  undefined` (rather than requiring a specific flag) means: a production `createClient()` call
+  (no `options.test` at all) gets none of the three globals; `topology.ts`'s own `__createClient`
+  now defaults `flags` to `{}` (never omitted) so every worker it spawns still carries `test` and
+  every existing `workers.spec.ts` assertion that reads `__engineWorkerKind`/`__engineInstance`
+  keeps working. `self.__engineIsolateName` (new) is `'client' | 'sim' | 'gen0' | 'gen1' | 'net'`
+  (`worker/protocol.ts::isolateName`, shared by `worker.ts` and `asHarness`).
+- **`CB_TEST_CONTROL`**: global control word 4 (`sab/control.ts`; words 5-7 still reserved).
+  Encoding: `0` = none, else `((workerIndex + 1) << 8) | kind` (`kind`: 1 = object, 2 = burst, same
+  numbering as `src/test/step-block.ts`'s `StepControl`). `worker/gc-hook.ts::applyGcHook(control,
+  index)` is the production-side reader: a duplicate of `src/test/controls.ts`'s two allocation
+  shapes (production code cannot import `src/test/**`), read only when a kind's own `setup()` closed
+  over `message.test?.gcHook === true`; the word itself is never loaded otherwise.
+- **`sim`/`gen` kind bodies are no longer bare no-ops.** Each now stores `W_ACK = wokenBy` on every
+  real wake (a single `Atomics.store`, unconditional, not gated by `gcHook`) so a test driver can
+  lockstep a synthetic wake with them the same way `stepFrame` already locksteps the client role,
+  since neither has ring traffic of its own to synchronise on before M13/M08b. This is a small
+  addition beyond the brief's "no-op" wording for these stub bodies; flag for M13/M08b when real
+  work replaces `body()` -- keep the `W_ACK` store (or an equivalent) if anything still needs to
+  lockstep with these roles from outside.
+- **`asHarness(client): Harness`** (`test/client.ts`). Mapping: `park`/`resume` → `parkWorkers`/
+  `resumeWorkers`; `stepFrame` → this file's own `stepFrame`; `stepTick` → wakes every spawned
+  `sim`/`gen` worker and spins on their own `W_ACK` (preallocated scratch array, built once, so the
+  hot loop stays allocation-free on `main`); `setWorkerControl` → `CB_TEST_CONTROL`; `memoryBytes`/
+  `memGrows` → `W_MEM_PAGES`/`W_MEM_GROWS` read directly (no message). `markIsolates` is a no-op (see
+  the CDP-marking deviation below). `hash`/`admit`/`messageTick` reject: no production counterpart
+  exists yet. `workerGcExposed()` returns `true` for every isolate: the `gc` Playwright project
+  always launches Chromium with `--js-flags=--expose-gc` process-wide, so it is true in every real
+  worker too, but there is no message to ask a production worker to confirm this itself. `errors()`
+  is always `[]`: a running `Client` has no ongoing fault-reporting channel past `ready`/`fatal`
+  (`setupWorker`'s `onmessage`/`onerror` stop listening once the spawn promise settles) -- a gap for
+  whichever later milestone adds one.
+- **New pages are `gc-topology.html`/`gc-echo.html`, not `topology.html`/`echo.html`.** `topology.html`
+  already serves `workers.spec.ts`/`start.spec.ts`'s imperative debug API (a client created only on
+  an explicit `__createClient()` call, so those specs can count exactly the workers *they* spawn); a
+  zero-GC page must instead auto-create its client at load (`window.__gc.ready` has to resolve
+  without any prior call), which would spawn extra, uncounted workers on the same page and break
+  those specs' `expect.poll(() => created.length)` assertions. `budgets.json`'s `gc.pages` keys stay
+  `topology`/`echo` as named (`zeroGcSuite`'s `pageId` is independent of the HTML file name).
+- **`echo`'s round trip does not use the frame req/ack lockstep.** `worker/client.ts`'s `body()`
+  stores `W_ACK` only when `CB_FRAME_REQ` changed, *before* the unconditional ring-echo block runs
+  every call; two wakes issued back-to-back (a ring push, then a `stepFrame`) are not guaranteed not
+  to coalesce into one `body()` invocation, in which case the statement order inside that one call
+  (ack stored, *then* the ring drained) would let `main` observe the ack before the echoed message is
+  actually pushed to `uiRing`. `gc-echo.ts` instead spins directly on `RingConsumer.peekLen() >= 0`:
+  safe because `RingProducer.tryPush` writes the payload bytes before its atomic `HEAD` store, so
+  observing `HEAD` advance (via `Atomics.load`) already guarantees the payload is visible, with no
+  dependency on `body()`'s internal statement order.
+- **`fixtures/hash`'s `Rx`/`Tx` are sized per role**, not per test flag: `CLIENT_RX_TX_BYTES = 10 *
+  1024` for `Role::Client` (any Client instance, `echo` flag or not), unchanged 64 B for `Sim`/`Gen`.
+  `golden/golden.json` is untouched (Sim-role only path; `pnpm golden` was not run) and `pnpm test
+  rust`/`wasm` stayed green. This did grow the Client role's own fixed footprint past the shared
+  1,310,720 B figure `workers.spec.ts` assumes uniform across roles by roughly 20 KB before rounding
+  to the next 64 KB WASM page -- measured to still land inside the same 20-page bucket (every
+  existing `workers.spec.ts` assertion using `FIXED_FOOTPRINT_BYTES` for the client role stayed
+  green unmodified), but the page-boundary margin for `client` is now much smaller than for `sim`/
+  `gen`; flagged for whoever next grows the Client role's own fixed data.
+- **Isolate marks move to CDP for workers, stay `page.evaluate` for `main`** (`gc/instrument.ts`,
+  orchestrator decision 3). A production worker cannot call `performance.mark` itself (`.claude/
+  rules/hot-paths.md`) and this milestone adds no new `postMessage` type to ask one to, so `measure()`
+  now sends each worker session a `Runtime.evaluate` of `self.performance.mark('gc-isolate:' + self.
+  __engineIsolateName); undefined` (`returnByValue: true`, and the trailing `undefined`, so the
+  `PerformanceMark` `.mark()` returns is never wrapped as a retained remote object) while workers are
+  parked, exactly where the old `window.__gc.markIsolates()` call used to run. `main` still marks
+  itself through the page's own `page.evaluate(() => performance.mark('gc-isolate:main'))`: routing
+  `main` through the same CDP-session approach (a *second* CDP session on top of Playwright's own
+  automation session) measurably moved `gc-loop`'s own `main` clean reading from ~45.5 B/frame to
+  ~54 B/frame, tripping its existing 54 B budget -- found by running `gc-loop`'s suite after this
+  change, not by inspection. `installGcPage`'s own `markIsolates()`/`Harness.markIsolates()` are
+  unchanged and still callable; `measure()` just no longer calls them.
+- **`zeroGcSuite` takes an optional `controlKinds`** (default every kind, `gc-loop`'s existing
+  shape): `topology`/`echo` pass `['object', 'burst']`, skipping the generated `post-message`
+  control (no spare `postMessage` type on a production worker to drive a message-round-trip tick,
+  and none of the three pages' own kinds have one to test against).
+- **`measure()`/`zeroGcSuite` take an optional `warmupFrames`** (default `WARMUP = 120`, `gc-loop`'s
+  own tuned figure -- kept as the global default specifically so `gc-loop`'s entry stays untouched).
+  `topology`/`echo` pass `warmupFrames: 8000`. Measured: at 120, and even at 3000, the production
+  `yield`-protocol shell's deeper call chain (`ControlBlock`, `worker/shell.ts`, `asHarness`'s own
+  lockstep) had not reached steady optimized code -- `main` read as high as ~51.8 B/frame (`topology`)
+  with one run spiking to 53.86 B/frame (`echo`), and at that noise level the `object` negative
+  control (one small object per frame) did not reliably separate from clean. At `warmupFrames: 8000`
+  (adds tens of ms, never counted) `main` stabilised at 43.4-43.6 B/frame (`topology`) and 31.1-31.8
+  B/frame (`echo`) with no further spikes across 20-run batches, and every generated negative
+  control (including `object`) then tripped only its own named isolate.
+- **Production workers must be parked before `__pageReady`.** Unlike the M03/M04 harness (starts
+  idle, only entering `Atomics.wait` on the first `resume()`), a production worker enters its
+  blocking loop immediately after `ready` (Planning decisions: `ready` is posted, then
+  `runBlockingLoop` starts, synchronously, in the same task). `gc-topology.ts`/`gc-echo.ts` therefore
+  call `await parkWorkers(client)` before setting `window.__pageReady = true`; skipping this hung
+  `measure()`'s isolate-naming step (a CDP `Runtime.evaluate` on a blocked worker never returns)
+  rather than failing fast -- documented in the `gc-test` skill so a future page does not rediscover
+  it as a mystery 30 s timeout.
+- **`createClient()` checked `crossOriginIsolated` too late.** `createSabSet()` (hence `new
+  SharedArrayBuffer`) ran synchronously in `createClient()` itself, before the async `start()`'s own
+  isolation check, so a non-isolated page threw a bare `ReferenceError` (`SharedArrayBuffer is not
+  defined`) straight out of `createClient()` instead of `client.ready` rejecting with
+  `EngineStartError('not-isolated', ...)` -- found by `start.not_isolated_error`. Fixed by moving the
+  check to the top of `createClient()`, before any SAB is touched; on failure it now returns `{
+  ready: Promise.reject(err), destroy() {} }` directly, without creating any SAB, control block or
+  worker entry.
+- **`start.not_isolated_error`/`start.worker_blocked_error`** use two new `fixturesPlugin()` routes,
+  registered under `configurePreviewServer` (not `configureServer`: the browser suite navigates
+  against `vite preview`, which fires the former, not the latter). `/__no-isolation__/<built file>`
+  serves the exact built bytes from `dist/` with no COOP/COEP at all (a route that ends its own
+  response before Vite's header middleware runs never gets them, same trick as the existing fixture
+  route, M02b Deviations). `/__no-coep-worker__.js` serves the built `worker-auto-*.js` chunk
+  (globbed by filename pattern, since it is content-hashed) with `Cross-Origin-Opener-Policy` but no
+  `Cross-Origin-Embedder-Policy`; `topology.ts`'s `__createClient` gained a `createWorker` passthrough
+  (pattern B, already in `ClientOptions`) so the test can point every spawned worker at that route
+  from an otherwise normally-isolated page. Neither spec uses the shared `openPage` helper (it
+  asserts `crossOriginIsolated` and fails on any console error, both of which these two tests
+  deliberately trigger); a small `openWithoutIsolationChecks` in `start.spec.ts` just navigates and
+  waits for `__pageReady`.
+- **`grep -n postMessage packages/engine/src`**, summarised by file (production code only; `src/
+  test/**` has its own separate, pre-existing M03/M04 harness message protocol -- `setup`/`resume`/
+  `hash`/`admit`/`memory`/`memGrows`/`markIsolate`/`pmTick`/`dispose` -- unrelated to the production
+  worker protocol this criterion is about): `client.ts` (1, the `setup` message), `worker.ts` (2, the
+  `FromWorker` `postMessage` type and the shared `post()` used for `ready`/`fatal`), `worker/shell.ts`
+  (2, the shared `post()` used for `fatal`, plus its own doc comment), `worker/protocol.ts` (1,
+  comment), `sab/control.ts` (1, this session's own doc comment). No kind body calls `postMessage`
+  directly (`worker/shell.ts`'s `post()` is the one channel every kind shares); `resume`/`stop` are
+  not yet posted by any production code path (only by `test/client.ts`'s `resumeWorkers`/
+  `parkWorkers`'s wake, and `destroy()`'s own yield+terminate, which never posts `stop`) -- reserved
+  for whichever later milestone (M09's rAF loop, most likely) drives them from production code.
