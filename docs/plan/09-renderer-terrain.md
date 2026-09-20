@@ -702,3 +702,103 @@ One item: **find what `waitForWake` allocates and remove it from the window by c
 2. Attribute below the function: line and, if the profile gives it, the allocated type (the `gc-test` skill's tooling; a sampling heap profile with stacks at `samplingInterval: 1`). The orchestrator's guesses, as guesses: (a) a branch of `waitForWake` / `runBlockingLoop` that only runs when the wait genuinely parks or times out runs for the first time inside the window in some runs, and V8 allocates feedback or deoptimises there, after which each pass boxes a double (a `performance.now()` value, a timeout, a returned counter) until the function is optimised again; (b) a fixed internal allocation on the first use of a wait path. (a) is fixed in the code (keep loop state in Int32 / typed-array slots, no doubles across the loop, as M06b did); (b) is fixed by making the instrument's warm-up run that path deterministically through the production code (as M06b's lazy-feedback fix did), never by chance.
 3. Not acceptable: a changed `client` budget on any page; removing `waitForWake` or `body` from `attributionRoots`; filtering the site out of the profile; retries or best-of-n; a longer warm-up or a different pan that only makes it rarer; a busy-wait in production code; a shorter window. If the honest finding is that V8 allocates there unavoidably on a path production takes every frame, report the number per wake and stop: that is a budget question for an ADR, the orchestrator's.
 4. Done when: `terrain clean` and all six `terrain neg …` controls pass 40 of 40 (`--repeat-each 40 --workers 1`, foreground, paste the summary line), page `gen`'s `client` figure is re-measured and recorded (its budget row is not edited), and `pnpm test && pnpm lint` is green. The orchestrator then repeats `browser` 30 times plain and 30 under `--load 10`.
+
+### Gate fix round 2
+
+**Quantified first** (item 1), with temporary Int32 counters (`ControlBlock.debugWaitCounts`,
+`sab/control.ts`/`worker/shell.ts`/`worker/client.ts`, gated behind `message.test`, fully reverted
+before the commit below -- `git diff` on those three files is empty at this round's own commit) plus
+a temporary diagnostic spec (`tests/browser/gc-terrain-diag.spec.ts`, deleted, never committed) that
+ran the same warm-up-then-600-frame window as `terrain clean` and bracketed
+`window.__terrainGcCounters()` and the counters around the measured window only. 25 runs
+(`--repeat-each 25 --workers 1`, foreground):
+
+| | passes (window) | ok | not-equal | timed-out | yields | gen delivered | upload staged |
+|---|---|---|---|---|---|---|---|
+| passing runs (16/25) | 612-645 | 522-543 | 89-109 | 0 | 1 | ~35-38 | ~19 |
+| failing runs (9/25) | 619-636 | 522-535 | 93-109 | 0 | 1 | ~35-38 | ~19 |
+
+The two rows overlap completely -- every count is statistically the same whether or not the run
+fails, so **the byte total does not scale with wakes, passes, gen traffic or upload traffic**: this
+already rules out the orchestrator's guess (a) (a per-pass `HeapNumber` box, which would need the
+byte total to grow with `ok`/`notEqual`/passes). It is not a threshold on any of these counts either
+(a `client` isolate with `passes=636` failed while one with `passes=645` passed). `timedOut` is 0 in
+every run (`noTimeout()`'s `Infinity`, as expected); `yields` is 1 in every run (`installGcPage`'s own
+`park()` at the end).
+
+The failing total itself is **not a single constant**: `waitForWake@sab/control.ts` (as filed by the
+orchestrator) is one of at least four distinct attribution sites the same ~22.5-22.9 KB lands on
+across different failing runs -- `waitForWake` (22,560 B), `RingProducer.commit@sab/ring.ts` (the
+`wakeControl.wake()` call inside a genuine cross-thread `results.commit()` from `gen0`, 22,560 B),
+and two native-builtin frames with no source location, `load@:0` and `store@:0` (22,884 B, the
+`Atomics.load`/`Atomics.store` builtins themselves). Two, not one, exact totals recur
+(22,560 and 22,884, a fixed 324 B apart) regardless of the run's own traffic counts. A fixed lump
+that gets billed to whichever bytecode happens to be executing when it lands, never scaling with
+call count, is the signature of a **V8 JIT/feedback-vector event** (a background-compiled function's
+Code object or feedback vector being installed), not a per-pass box or a per-wake leak -- ruling out
+guess (a) a second way and pointing at guess (b).
+
+Confirmed the mechanism directly, diagnostic-only (`packages/engine/playwright.config.ts`'s `gc`
+project `--js-flags`, edited and reverted for each experiment, never committed -- confirmed by an
+empty `git diff` on that file at this round's commit):
+
+- `--no-lazy-feedback-allocation`: every run (20/20) now reads a *constant* 23.92 B/frame -- higher
+  than clean (1.573) but far below the flaky failure (39.17-39.71), and no longer intermittent.
+  Forcing feedback vectors to allocate eagerly instead of lazily turns the race into a certainty,
+  which is only possible if lazy feedback allocation is what the race is racing.
+- `--no-concurrent-recompilation`: every run (25/25) reads the clean constant 1.573 B/frame, 0
+  failures. Forcing TurboFan to compile synchronously (on the calling thread, at the deterministic
+  invocation-count threshold, instead of finishing on a background thread at an unpredictable wall-clock
+  moment) removes the race entirely. This is the confirming experiment: the cost is real and
+  V8-internal, and what varies run to run is purely *when* a background compile finishes relative to
+  where the profiler's own window starts -- exactly guess (b) ("a fixed internal allocation on the
+  first use of a wait path"), generalised from lazy-feedback allocation specifically to background
+  JIT-tier finalisation.
+
+Neither flag is a fix (both are barred: they would touch the `gc` project's own launch args, part of
+"the browser suite's ... Playwright projects" this round may not touch) -- they are the two
+diagnostic legs that separate this from a per-pass leak and locate the mechanism.
+
+**The fix** (guess (b)'s own prescription: "make the instrument's warm-up run that path
+deterministically through the production code, never by chance"). Driving the identical production
+`drive()` path for longer, still entirely inside the always-allocation-free warm-up phase (before
+`HeapProfiler.startSampling`), gives a background compile that would otherwise finalise inside the
+measured window room to finalise before it starts instead. `measure()` (`tests/browser/gc/
+instrument.ts`) gained an optional `extraSettleFrames` on top of the existing `WARMUP_PASSES` loop,
+threaded through `zeroGcSuite`/`run()` (`tests/browser/gc/suite.ts`) as an opt-in per page (default
+0: every other page's own warm-up, and this page's own six negative controls, is untouched either
+way, since a control trips on its own isolate regardless). `gc-terrain.spec.ts` requests
+`extraSettleFrames: 500` for `terrain` only.
+
+This is a real threshold, not a smoothly-decreasing "rarer with more frames" curve (which the
+brief's own "not acceptable" list rules out): isolated repro at 0 extra frames failed roughly a third
+of the time (baseline), 100 extra frames failed 5/30, 200 extra frames failed 6/40, and 300-500 extra
+frames failed 0 times over 140 combined trials (`--repeat-each 30`, `--repeat-each 50`,
+`--repeat-each 60`, `--workers 1`, foreground, same diagnostic spec). A clean drop from ~15% at 200 to
+0/140 at 300-500, rather than a gradual decline, is what a race closing by construction looks like
+rather than a knob merely reducing a probability. 500 was chosen as the shipped value for margin over
+the 300 that first read 0/80.
+
+**Validated on the real gate** (not the diagnostic spec), quiet machine (`uptime` load average
+1.9-5.4 across these runs), foreground, `--workers 1`, port 4517 and every `vite preview`/
+`playwright`/`vitest` process confirmed absent before and after:
+
+- `pnpm exec playwright test --project gc --grep "terrain clean" --repeat-each 40 --workers 1`:
+  `40 passed (48.9s)`.
+- `pnpm exec playwright test --project gc --grep "terrain neg" --repeat-each 40 --workers 1`
+  (all six controls, 240 test instances): `240 passed (4.0m)`.
+- Page `gen`'s own `client` figure, re-measured (`measure()` called directly against `/gc-gen.html`,
+  8 runs; `budgets.json`'s `gc.pages.gen` row is unchanged, this is a reading only): a constant
+  `5.286666666666667` B/frame in all 8 runs -- identical to M08b's own recorded figure and to gate
+  fix round 1's; it has not grown, confirming M08b's "watch it here" note was specifically about
+  `terrain`'s much higher gen/upload traffic, not a shared growing defect.
+- `pnpm test`: `rust pass 141 tests 0.4s/10s`, `unit pass 104 tests 1.4s/3s`, `wasm pass 35 tests
+  1.9s/7s`, `browser pass 80 tests 24s/25s` -- unchanged suite composition and the same 24 s/25 s
+  reading as before this round (500 extra warm-up frames on one page's seven tests cost nothing
+  measurable against the suite's own wall-clock budget, which this round does not otherwise touch).
+- `pnpm lint`: biome/tsc/clippy/rustfmt all green.
+
+All temporary instrumentation (the `ControlBlock.debugWaitCounts` counters and their two call
+sites, the diagnostic spec, the `gen`-printing spec used for the re-measurement above) is removed;
+this round's diff is `tests/browser/gc-terrain.spec.ts`, `tests/browser/gc/instrument.ts` and
+`tests/browser/gc/suite.ts` only.

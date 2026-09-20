@@ -109,6 +109,23 @@ export async function measure(
       page: Page,
       expectedWorkers: number,
     ) => Promise<{ main: IsolateSession; workers: IsolateSession[]; close?: () => void }>
+    /** Extra frames driven, through the same `window.__gc.run(n, false)` warm-up path, right after
+     * the `WARMUP_PASSES` loop and still before `HeapProfiler.startSampling` (docs/plan/
+     * 09-renderer-terrain.md, Deviations "Gate fix round 2"). `terrain`'s own `client` isolate races
+     * a background (concurrent) TurboFan recompilation of the hot `waitForWake`/`runBlockingLoop`
+     * path against the profiler's own start on roughly a third of runs (measured: `--no-concurrent-
+     * recompilation` made the flake a *constant* reading, `--no-lazy-feedback-allocation` did too --
+     * both point at JIT-tier finalization, not a per-pass leak or per-wake box: the extra bytes
+     * attribute to whichever of `waitForWake`/`commit`/`load`/`store` happens to be on the stack
+     * when the finalization lands, never scaling with the window's own wake/pass counts). Driving
+     * the identical production path for longer, still entirely inside the always-allocation-free
+     * warm-up phase, gives that recompilation time to land before sampling starts instead of during
+     * it -- 0/140 failures at 300-500 extra frames in isolated repro, against ~30% at 0 and ~15% at
+     * 200 (a real threshold, not a smooth "rarer with more frames" curve, docs/plan/
+     * 09-renderer-terrain.md, Deviations "Gate fix round 2" has the full table). Default 0: every
+     * other page's own warm-up (and terrain's own negative controls, which trip on `client` anyway
+     * and are unaffected either way) is unchanged. */
+    extraSettleFrames?: number
   },
 ): Promise<GcResult> {
   const mode = gcModeFromEnv()
@@ -162,6 +179,9 @@ export async function measure(
   // parity` kept catching on `sim`. Same total frames, so no measurement is shortened.
   for (let i = 0; i < WARMUP_PASSES; i++) {
     await page.evaluate((n) => window.__gc?.run(n, false), WARMUP / WARMUP_PASSES)
+  }
+  if (opts.extraSettleFrames) {
+    await page.evaluate((n) => window.__gc?.run(n, false), opts.extraSettleFrames)
   }
   const memBefore = await page.evaluate(() => window.__gc?.memoryBytes())
   if (!memBefore) throw new Error('gc instrument: memoryBytes() before the window returned nothing')

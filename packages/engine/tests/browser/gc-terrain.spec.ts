@@ -15,6 +15,11 @@ zeroGcSuite({
   path: '/gc-terrain.html',
   expectAdapter: true,
   controlKinds: ['object', 'burst'],
+  // Gate fix round 2 (docs/plan/09-renderer-terrain.md, Deviations): `client`'s own hot
+  // `waitForWake`/`runBlockingLoop` path races a background TurboFan recompilation against the
+  // profiler's own start on this page only (measured mechanism and evidence: `measure()`'s own
+  // `extraSettleFrames` doc comment, `tests/browser/gc/instrument.ts`).
+  extraSettleFrames: 500,
 })
 
 // Open gate failures item 3, gate round 1: counters read at both marks of the same 600-frame
