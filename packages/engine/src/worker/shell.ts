@@ -132,6 +132,22 @@ export function createShell(control: ControlBlock, index: number): Shell {
 }
 
 /**
+ * Runs `body(last)` once, turning a thrown error into `shell.fatal` the same way every iteration of
+ * `runBlockingLoop`'s own wait loop does (a trap, 0014 §6, or any other uncaught error in a kind
+ * body: mark the worker dead instead of letting it escape). Returns `false` when the worker is now
+ * stopped and the caller must not continue.
+ */
+function runBodyOnce(shell: Shell, body: (wokenBy: number) => void, last: number): boolean {
+  try {
+    body(last)
+    return true
+  } catch (e) {
+    shell.fatal(e instanceof Error ? e.message : String(e))
+    return false
+  }
+}
+
+/**
  * Blocks the worker thread in `Atomics.wait` (through `ControlBlock.waitForWake`), calling `body`
  * on every real wake, until yielded. `timeoutMs()` is read fresh before every wait: `Infinity` for
  * every kind until M13 gives the sim role a real tick deadline.
@@ -143,6 +159,16 @@ export function createShell(control: ControlBlock, index: number): Shell {
  * `lastSeen` is the wake-word value the caller read *before* it published this worker as available
  * (`Shell.observeWake`); every caller that publishes availability must pass it, or a wake issued
  * between the publish and this function's own read is lost and the producer waits forever.
+ *
+ * **Drains on entry, before the first wait** (docs/plan/08b-gen-workers-and-queue.md, orchestrator
+ * decision 2 at the step-5 boundary): a wake issued while this worker was parked (M06b, "a wake
+ * issued while a worker is parked is not replayed on `resume()`") can carry real ring traffic that
+ * arrived with nobody able to act on it -- a `genRequest` pushed to a parked gen worker, say. Every
+ * caller of this function (`worker.ts`'s first entry, `Shell.resume()`, `Shell.runAsync`'s re-entry)
+ * gets the same drain for free by running `body(last)` here once, unconditionally, before ever
+ * blocking. A body pass with nothing to do costs one allocation-free call and re-stores the same
+ * `W_ACK` value a `sim`/`gen` body already stores on every real wake, so it never disturbs the ack
+ * lockstep a test driver locksteps against.
  */
 export function runBlockingLoop(
   shell: Shell,
@@ -153,19 +179,13 @@ export function runBlockingLoop(
   shell.setLoop({ body, timeoutMs })
   const { control, index } = shell
   let last = lastSeen ?? Atomics.load(control.words, workerWord(index, W_WAKE))
+  if (!runBodyOnce(shell, body, last)) return
   for (;;) {
     control.waitForWake(index, last, timeoutMs())
     if (shell.stopped()) return
     if (Atomics.load(control.words, workerWord(index, W_YIELD))) break
     last = Atomics.load(control.words, workerWord(index, W_WAKE))
-    try {
-      body(last)
-    } catch (e) {
-      // A trap (0014 §6) or any other uncaught error in a kind body: mark the worker dead instead
-      // of letting it escape the loop (Non-scope: re-instantiation is M24; here it just stops).
-      shell.fatal(e instanceof Error ? e.message : String(e))
-      return
-    }
+    if (!runBodyOnce(shell, body, last)) return
   }
   Atomics.store(control.words, workerWord(index, W_PARKED), 1)
 }
