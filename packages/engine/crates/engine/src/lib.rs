@@ -4,6 +4,8 @@
 //! (docs/decisions/0014). A game writes one line of it: `engine::export_game!(MyGame);`.
 
 pub mod abi;
+pub mod bytes;
+pub mod codec;
 pub mod hash;
 #[cfg(feature = "testing")]
 pub mod testing;
