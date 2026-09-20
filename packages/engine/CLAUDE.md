@@ -28,6 +28,7 @@ The one publishable package (working name `engine`, private for now). Layout and
 - `tsconfig.json` type-checks everything in `src/`; `tsconfig.build.json` extends it and excludes `*.test.ts` from `dist/`. Base options are in the root `tsconfig.base.json` (`types: []`: a tsconfig that needs Node types opts in).
 - TypeScript must be erasable (`erasableSyntaxOnly`): no enums, namespaces or parameter properties. Relative imports carry the `.js` extension (`nodenext`).
 - No ambient time or randomness in `src/` outside `src/test/`: `src/clock.ts` is the only file allowed to name `Date`, `performance`, `setTimeout`/`setInterval`, `requestAnimationFrame` (Biome `noRestrictedGlobals`, `biome.json`), and `Math.random`/`getRandomValues`/`randomUUID` fail `pnpm test unit -t no_ambient_random`; take a `Clock`/`Scheduler` by injection instead (docs/decisions/0020 §8).
+- `src/sab/`: pick the shape by what the record means (docs/decisions/0015 §2) — ring = a reliable ordered stream, seqlock = a small latest-wins record, triple buffer = a large latest-wins frame.
 
 ## Where tests live
 
