@@ -9,6 +9,10 @@ The one publishable package (working name `engine`, private for now). Layout and
 - `scripts/` (repo-only, plain Node): `build-fixtures.mjs` is the `fixtures` build step of `pnpm test`; `golden.mjs` is `pnpm golden`. Both import `dist/`, so they run after `tsc`.
 - `tsconfig.json` adds `lib: dom` because only `lib.dom` and `lib.webworker` declare `WebAssembly`; keep `loader.ts` and `abi.ts` free of DOM-only globals all the same (they run in workers, Node, Bun and workerd). `tests/tsconfig.json` type-checks `tests/` (`allowImportingTsExtensions`).
 
+## Worldgen
+
+`engine::worldgen` (Rust; docs/decisions/0008-chunk-generation.md §1) is the game's `Worldgen` trait, `hash2`, `Pristine<W>`, `worldgen_fingerprint`/`WorldgenStamp` and `GenCore<W>` for the `gen` role; `engine::noise` is the optional f64 simplex/fBm a game's `generate` may call. `tests/support/scenario.ts`'s `kind: 'worldgen'` branch, `pnpm golden <fixture>` and `fixtures/worldgen`'s golden drive the cross-runtime proof the same way the `hash` fixture's sim scenario does; `tests/support/bench-worldgen.ts` is the ms-per-chunk loop shared by the Node slow test and `worldgen-bench.html`.
+
 ## The ABI
 
 `crates/engine/src/abi/registry.rs` is the single owner and states the rule. Adding to the ABI is one commit: the extern in `export_instance!` plus a defaulted `Instance` method there, the row in `ABI_EXPORTS` (or the constant) in `src/abi.ts`, and `ABI_VERSION` bumped in both. Numbers are appended, never reused. `pnpm test wasm -t "abi registry"` compares the two files and every built fixture; a new *import* is an ADR amendment (0014 §3).
