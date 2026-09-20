@@ -207,6 +207,35 @@ None here; the posted-`Module` and arena checks on a real iPhone are M11 items i
   (adds tens of ms, never counted) `main` stabilised at 43.4-43.6 B/frame (`topology`) and 31.1-31.8
   B/frame (`echo`) with no further spikes across 20-run batches, and every generated negative
   control (including `object`) then tripped only its own named isolate.
+- **Open issue, escalated: `main`'s clean reading is contention-sensitive under `pnpm test
+  browser`'s real parallelism, and no fix found in this session closes it.** All the numbers above
+  are from the `gc` Playwright project run alone (`pnpm gc`/`node scripts/gc.mjs`), at low
+  contention. Under the actual `pnpm test browser` command (`chromium`/`webkit`/`firefox`/`gc`
+  projects sharing one `workers: 3` pool, so up to three browsers' worth of tests run at once),
+  `topology`'s `main` repeatably read 83-85 B/frame with no code change at all -- a foreground loop
+  of 20 `pnpm test browser` runs on a busy machine failed 4-5 of them, all on a *different* isolate's
+  negative control (`main`'s own clean assertion contaminated, never `main`'s own `object`/`burst`
+  control failing to trip). Two mitigations were tried: raising `warmupFrames` further (already at
+  8000, no further gain) and halving `asHarness.stepTick`'s call frequency in the page's own drive
+  (`STEP_TICK_EVERY = 2`, kept: it cannot hurt and gave a small improvement). Widening `main`'s
+  budget to the contention ceiling (96, tried and reverted) hid the noise but also stopped `topology
+  neg object main` from tripping (measured directly) -- worse than the flakiness, since the `object`
+  control's own signal (~12-20 B/frame) is smaller than the clean/contended baseline's own swing
+  (~31-85 B/frame), so no single fixed byte threshold can both stay under the contended-but-clean
+  reading and over the isolated-clean-plus-object reading. Kept `main` at the tight, isolated-derived
+  52/40 budgets (correct for the signal) rather than widen past detecting a real control. On a
+  quieter machine (1-minute load under ~4, waited for) a 20-run `pnpm test browser` foreground loop
+  measured 18/20 pass, 2 fail (both `topology neg object client`, the same contamination shape on a
+  different isolate), 0 hang -- see the report for exact counts. Root cause not fully identified:
+  `gc-loop`'s own page (one sim worker, one wake per frame) stays reliable under the same stress
+  (35/35 in a dedicated `--repeat-each 5 --workers 3` check); `topology`/`echo` do two or three
+  busy-spin round trips per synthetic frame (`stepFrame` plus `stepTick`'s sim+gen0 wakes), and
+  reducing that by half only partly helped, so the mechanism is probably wall-clock exposure during
+  a busy-spin under real contention rather than a fixed per-call cost, but that is not verified.
+  **Orchestrator decision needed**: accept the residual flakiness (numbers above), or reduce this
+  milestone's own cross-thread synchronisation further, or change how `pnpm test browser` schedules
+  the `gc` project relative to the others (e.g. not sharing the worker pool) -- the last two are
+  bigger changes than this brief's step 5/6 scope covers on their own.
 - **Production workers must be parked before `__pageReady`.** Unlike the M03/M04 harness (starts
   idle, only entering `Atomics.wait` on the first `resume()`), a production worker enters its
   blocking loop immediately after `ready` (Planning decisions: `ready` is posted, then

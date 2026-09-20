@@ -34,7 +34,7 @@
           "main": {
             "class": "strict",
             "bytesPerFrame": 52,
-            "formula": "0016 §1 margin convention (docs/plan/06b-workers-and-spawn.md): measured max of 20 clean runs at `warmupFrames: 8000` = 43.64 B/frame (higher than gc-loop's own main since this page's drive also locksteps sim+gen0 through asHarness.stepTick), ceil = 44, + 8 B margin = 52. `warmupFrames: 8000` (Deviations): at gc-loop's own 120, and even at 3000, this page's deeper call chain had not fully reached steady optimized code -- main measured as high as 51.8 B/frame and occasionally spiked (once to 53.86 on `echo`), which also masked the `object` negative control; 8000 warmup frames (~50 ms extra, never counted) removed both the spikes and the extra baseline.",
+            "formula": "0016 §1 margin convention (docs/plan/06b-workers-and-spawn.md): measured max of 20 clean runs at `warmupFrames: 8000` = 43.64 B/frame, ceil = 44, + 8 B margin = 52. NOT widened past this to absorb the contention-driven noise recorded in Deviations (\"main's clean reading is contention-sensitive under pnpm test browser's real parallelism\"): a wider budget stopped `topology neg object main` from tripping (measured), which is worse than the flakiness it would trade for. `warmupFrames: 8000` (Deviations): at gc-loop's own 120, and even at 3000, this page's deeper call chain had not fully reached steady optimized code -- main measured as high as 51.8 B/frame and occasionally spiked (once to 53.86 on `echo`), which also masked the `object` negative control; 8000 warmup frames (~50 ms extra, never counted) removed both the spikes and the extra baseline in isolation.",
             "attributionRoots": ["stepFrame", "stepTick"]
           },
           "client": {
@@ -63,7 +63,7 @@
           "main": {
             "class": "strict",
             "bytesPerFrame": 40,
-            "formula": "0016 §1 margin convention: measured max of 20 clean runs at `warmupFrames: 8000` = 31.78 B/frame (the earlier 120/3000-warmup runs saw a 53.86 outlier and no separation from the `object` control; see `topology`'s own `main` formula), ceil = 32, + 8 B margin = 40.",
+            "formula": "0016 §1 margin convention: measured max of 20 clean runs at `warmupFrames: 8000` = 31.78 B/frame, ceil = 32, + 8 B margin = 40. See `topology`'s own `main` formula and Deviations for why this is not widened to absorb `pnpm test browser`'s real-parallelism contention noise instead.",
             "attributionRoots": ["drive"]
           },
           "client": {
