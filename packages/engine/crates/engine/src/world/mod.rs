@@ -5,11 +5,13 @@
 //! `assert_cache_invisible` replays the same script at capacity 1, default and unlimited, with
 //! generation pre-warmed in shuffled orders, and requires identical state hashes and reads.
 
+mod cache;
 mod coords;
 mod overlay;
 mod tile;
 mod traits;
 
+pub use cache::{CacheCapacity, CacheEvent};
 pub use coords::{
     ChunkCoord, ChunkDims, ChunkRect, ChunkRectIter, TILE_MAX, TILE_MIN, TilePos, TileRect,
     WorldPos,
