@@ -3,6 +3,13 @@
 // `vite.ts`, `server-node.ts` never import from `src/test/` or this file (checked by grepping
 // `dist/`, an exit criterion of docs/plan/03-browser-harness.md).
 export type { Clock, Scheduler } from './clock.js'
+export {
+  parkWorkers,
+  resumeWorkers,
+  setCamera,
+  stepFrame,
+  untilQuiescent,
+} from './test/client.js'
 export type { NegativeControl } from './test/controls.js'
 export { fnv1a64Hex } from './test/fnv.js'
 export { type GcPageApi, installGcPage } from './test/gc-page.js'
