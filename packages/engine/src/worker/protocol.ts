@@ -2,9 +2,20 @@
 // Seams: "the only steady use of postMessage besides fatal and resume"). Types only, erased at
 // compile time.
 import type { InstanceConfig } from '../loader.js'
+import { WORKER_GEN1 } from '../sab/control.js'
 import type { SabSet } from '../sab/layout.js'
 
 export type WorkerKind = 'client' | 'sim' | 'gen' | 'net'
+
+/** The isolate name budgets and controls use (docs/plan/06b-workers-and-spawn.md, orchestrator
+ * decision 1): `'client' | 'sim' | 'gen0' | 'gen1' | 'net'`; `'main'` is reserved for the page
+ * thread. Shared by `worker.ts` (sets `self.__engineIsolateName`) and `test/client.ts`'s
+ * `asHarness` (names `Harness.workerNames` the same way), so a CDP `Runtime.evaluate` of
+ * `self.__engineIsolateName` always agrees with what the test driver expects. */
+export function isolateName(kind: WorkerKind, index: number): string {
+  if (kind === 'gen') return index === WORKER_GEN1 ? 'gen1' : 'gen0'
+  return kind
+}
 
 /** Test-only behaviour carried in the setup message, never read by a production build that omits
  * `engine/test` (docs/plan/06b-workers-and-spawn.md, Consumes: M04's `gcHook`). */

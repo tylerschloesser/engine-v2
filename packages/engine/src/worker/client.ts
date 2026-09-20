@@ -8,6 +8,7 @@ import { CameraBlockView, readCameraBlockInto } from '../camera/block.js'
 import type { EngineInstance, RegionView } from '../loader.js'
 import { CB_FRAME_REQ, W_ACK, workerWord } from '../sab/control.js'
 import { RingConsumer, RingProducer } from '../sab/ring.js'
+import { applyGcHook } from './gc-hook.js'
 import { instantiateForSetup } from './instantiate.js'
 import type { SetupMessage } from './protocol.js'
 import type { LoopState, Shell } from './shell.js'
@@ -31,10 +32,14 @@ const NO_TIMEOUT = (): number => Number.POSITIVE_INFINITY
 
 export async function setup(shell: Shell, message: SetupMessage): Promise<LoopState> {
   const inst = await instantiateForSetup(shell, message, Role.Client)
-  // A debugging/test convenience only: lets a Playwright test read the client instance's own
-  // memory directly through `worker.evaluate()` (docs/plan/06b-workers-and-spawn.md, Tests added,
+  // A debugging/test convenience only, gated the same way as `worker.ts`'s own globals
+  // (orchestrator decision 1): lets a Playwright test read the client instance's own memory
+  // directly through `worker.evaluate()` (docs/plan/06b-workers-and-spawn.md, Tests added,
   // `workers.camera_block_reaches_wasm`) instead of inventing a message type for it.
-  ;(self as unknown as { __engineInstance?: EngineInstance }).__engineInstance = inst
+  if (message.test) {
+    ;(self as unknown as { __engineInstance?: EngineInstance }).__engineInstance = inst
+  }
+  const gcHook = message.test?.gcHook === true
   const cameraRegion = requireRegion(inst, RegionId.Camera, 'Camera')
   const cameraReader = new CameraBlockView(message.sabs.cameraBlock)
   let frameTime = frameTimeView(cameraRegion)
@@ -50,6 +55,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   const tx = echo ? requireRegion(inst, RegionId.Tx, 'Tx') : null
 
   function body(): void {
+    if (gcHook) applyGcHook(shell.control, shell.index)
     const frameReq = Atomics.load(shell.control.words, CB_FRAME_REQ)
     if (frameReq !== lastFrameReq) {
       lastFrameReq = frameReq

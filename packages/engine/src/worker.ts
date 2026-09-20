@@ -8,6 +8,7 @@ import * as clientKind from './worker/client.js'
 import * as genKind from './worker/gen.js'
 import * as netKind from './worker/net.js'
 import type { FromWorker, SetupMessage, ToWorker } from './worker/protocol.js'
+import { isolateName } from './worker/protocol.js'
 import { createShell, type LoopState, runBlockingLoop, type Shell } from './worker/shell.js'
 import * as simKind from './worker/sim.js'
 
@@ -46,10 +47,17 @@ export function run(): void {
   scope.onmessage = (ev) => {
     const m = ev.data
     if (m.type === 'setup') {
-      // A debugging/test convenience only (read, never relied on for behaviour): which kind this
-      // worker was set up as, reachable from the outside through `worker.evaluate()` in a
-      // Playwright test (docs/plan/06b-workers-and-spawn.md, Tests added).
-      ;(self as unknown as { __engineWorkerKind?: string }).__engineWorkerKind = m.kind
+      // Debugging/test globals only (read, never relied on for behaviour), set only when the setup
+      // message carries a `test` field (orchestrator decision 1): a production `createClient()`
+      // call never sets `options.test`, so a production worker exposes neither. `__engineWorkerKind`
+      // is reachable through `worker.evaluate()` in a Playwright test (Tests added);
+      // `__engineIsolateName` is what a CDP `Runtime.evaluate` names this isolate by (decision 3,
+      // `tests/browser/gc/instrument.ts`).
+      if (m.test) {
+        const dbg = self as unknown as { __engineWorkerKind?: string; __engineIsolateName?: string }
+        dbg.__engineWorkerKind = m.kind
+        dbg.__engineIsolateName = isolateName(m.kind, m.index)
+      }
       const control = new ControlBlock(m.sabs.control)
       const s = createShell(control, m.index)
       shell = s

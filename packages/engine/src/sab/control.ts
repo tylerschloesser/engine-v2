@@ -7,11 +7,17 @@
 export const CONTROL_BLOCK_INT32S = 64
 export const CONTROL_BLOCK_BYTES = CONTROL_BLOCK_INT32S * 4
 
-// Global words (indices 0-7; 4-7 reserved).
+// Global words (indices 0-7; 5-7 reserved).
 export const CB_VERSION = 0
 export const CB_LIFECYCLE = 1
 export const CB_FRAME_REQ = 2
 export const CB_FLAGS = 3
+/** Test-only negative-control target, read only by a worker whose setup carried `test.gcHook`
+ * (docs/plan/06b-workers-and-spawn.md, orchestrator decision 2: no new `postMessage` type for the
+ * zero-GC hook). `0` = no control armed; else `((workerIndex + 1) << 8) | kind`, `kind` a
+ * `StepControl`-shaped value (1 = object, 2 = burst) applied by `src/worker/gc-hook.ts`. One global
+ * word, not per-worker: `zeroGcSuite` arms at most one isolate's control at a time. */
+export const CB_TEST_CONTROL = 4
 
 export const Lifecycle = { Booting: 0, Running: 1, Stopping: 2, Fatal: 3 } as const
 export type Lifecycle = (typeof Lifecycle)[keyof typeof Lifecycle]

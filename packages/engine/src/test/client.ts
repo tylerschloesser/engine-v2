@@ -4,17 +4,25 @@
 
 import { writeCameraBlock } from '../camera/block.js'
 import type { CameraState } from '../camera/state.js'
-import type { Client } from '../client.js'
+import type { Client, WorkerEntry } from '../client.js'
 import { clientTestHandle } from '../client.js'
 import {
   CB_FRAME_REQ,
+  CB_TEST_CONTROL,
   W_ACK,
+  W_MEM_GROWS,
+  W_MEM_PAGES,
   W_PARKED,
+  W_WAKE,
   W_YIELD,
   WORKER_CLIENT,
   workerWord,
 } from '../sab/control.js'
 import { RingConsumer, type RingStats } from '../sab/ring.js'
+import { isolateName } from '../worker/protocol.js'
+import type { Harness } from './harness.js'
+import type { ManualClock } from './manual-clock.js'
+import { StepControl } from './step-block.js'
 
 /** The spike's ack-timeout guard (`spikes/zero-gc-webgpu/public/main.js`), reused by `stepFrame`
  * (Planning decisions "Stepped frames in tests"). */
@@ -149,3 +157,134 @@ export function setCamera(
 }
 
 export type { CameraState }
+
+const WASM_PAGE_BYTES = 65536
+
+/**
+ * `engine/test`: adapts a real `createClient()` result to the `Harness` shape `installGcPage`/
+ * `zeroGcSuite` (M04) already drive, so the same generated zero-GC suite runs unchanged against a
+ * production topology (docs/plan/06b-workers-and-spawn.md, Seams; orchestrator decision 4).
+ * `park`/`resume` map to the `yield` protocol (`parkWorkers`/`resumeWorkers` above), `stepFrame` to
+ * this file's own `stepFrame` (its `W_ACK` lockstep), `stepTick` wakes every `sim`/`gen` worker and
+ * locksteps on their own `W_ACK` the same way (they have no ring traffic of their own to
+ * synchronise on before M13/M08b: `worker/sim.ts`/`worker/gen.ts` store it on every real wake for
+ * exactly this), and `setWorkerControl` writes `CB_TEST_CONTROL` (`sab/control.ts`).
+ * `memoryBytes`/`memGrows` read `W_MEM_PAGES`/`W_MEM_GROWS` directly out of shared memory: no
+ * message needed, unlike the M03/M04 harness. `hash`/`admit`/`messageTick` have no production
+ * counterpart yet and reject if ever called; `errors()` is always empty (a running client has no
+ * ongoing fault-reporting channel past `ready`/`fatal` yet -- Deviations).
+ */
+export function asHarness(client: Client): Harness {
+  const h = clientTestHandle(client)
+  const names = h.workers.map((w) => isolateName(w.kind, w.index))
+  const byName = new Map<string, WorkerEntry>()
+  h.workers.forEach((w, i) => {
+    byName.set(names[i] as string, w)
+  })
+  const tickTargets = h.workers.filter((w) => w.kind === 'sim' || w.kind === 'gen')
+  // Preallocated scratch, reused every `stepTick()` call (`.claude/rules/hot-paths.md`): this runs
+  // inside the gc suite's measured window on `main`, same discipline as `stepFrame` above even
+  // though `src/test/**` is exempt from the rule itself.
+  const tickWant = new Int32Array(tickTargets.length)
+
+  function findWorker(name: string): WorkerEntry {
+    const w = byName.get(name)
+    if (!w) throw new Error(`asHarness: no worker named '${name}'`)
+    return w
+  }
+
+  function stepTick(): void {
+    for (let i = 0; i < tickTargets.length; i++) {
+      const w = tickTargets[i] as WorkerEntry
+      h.control.wake(w.index)
+      tickWant[i] = Atomics.load(h.control.words, workerWord(w.index, W_WAKE))
+    }
+    for (let i = 0; i < tickTargets.length; i++) {
+      const w = tickTargets[i] as WorkerEntry
+      const want = tickWant[i] as number
+      let spins = 0
+      while (Atomics.load(h.control.words, workerWord(w.index, W_ACK)) !== want) {
+        if (++spins > SPIN_LIMIT) {
+          throw new Error(`asHarness.stepTick: worker '${w.kind}${w.index}' did not ack`)
+        }
+      }
+    }
+  }
+
+  return {
+    clock: h.clock as unknown as ManualClock,
+    workerNames: names,
+
+    stepTick,
+    stepFrame(dtMs) {
+      stepFrame(client, dtMs)
+    },
+
+    resume() {
+      return resumeWorkers(client)
+    },
+    park() {
+      return parkWorkers(client)
+    },
+    untilQuiescent() {
+      return untilQuiescent(client)
+    },
+
+    hash() {
+      return Promise.reject(new Error('asHarness: hash() has no production counterpart yet'))
+    },
+    admit() {
+      return Promise.reject(new Error('asHarness: admit() has no production counterpart yet'))
+    },
+    messageTick() {
+      return Promise.reject(new Error('asHarness: messageTick() has no production counterpart yet'))
+    },
+
+    async memoryBytes() {
+      const out: Record<string, number> = {}
+      for (let i = 0; i < h.workers.length; i++) {
+        const w = h.workers[i] as WorkerEntry
+        out[names[i] as string] =
+          Atomics.load(h.control.words, workerWord(w.index, W_MEM_PAGES)) * WASM_PAGE_BYTES
+      }
+      return out
+    },
+    async memGrows() {
+      const out: Record<string, number> = {}
+      for (let i = 0; i < h.workers.length; i++) {
+        const w = h.workers[i] as WorkerEntry
+        out[names[i] as string] = Atomics.load(h.control.words, workerWord(w.index, W_MEM_GROWS))
+      }
+      return out
+    },
+
+    markIsolates() {
+      // A no-op: CDP marks every isolate directly (`tests/browser/gc/instrument.ts`, orchestrator
+      // decision 3), since a production worker cannot call `performance.mark` itself and this
+      // milestone adds no new `postMessage` type to ask one to.
+      return Promise.resolve()
+    },
+    setWorkerControl(name, control) {
+      const w = findWorker(name)
+      const enc = control === StepControl.None ? 0 : (((w.index + 1) << 8) | control) >>> 0
+      Atomics.store(h.control.words, CB_TEST_CONTROL, enc)
+    },
+    workerGcExposed() {
+      // The `gc` Playwright project launches Chromium with `--js-flags=--expose-gc` process-wide
+      // (docs/decisions/0016 §3), so every realm including a production worker's has `gc` exposed;
+      // there is no message to ask a production worker to report this itself (Deviations).
+      const out: Record<string, boolean> = {}
+      for (const name of names) out[name] = true
+      return out
+    },
+
+    errors() {
+      // A running client has no ongoing fault-reporting channel yet (Deviations): `setupWorker`'s
+      // `onmessage`/`onerror` only listen until `ready`/`fatal` settles the spawn promise.
+      return []
+    },
+    dispose() {
+      client.destroy()
+    },
+  }
+}

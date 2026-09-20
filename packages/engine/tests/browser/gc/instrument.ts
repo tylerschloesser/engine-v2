@@ -31,6 +31,10 @@ declare global {
 // 0016 §3 step 5 and the spike's own reliability numbers (RESULT.md).
 const TRACE_CATEGORIES = ['v8', 'devtools.timeline', 'blink.user_timing']
 const SAMPLING_INTERVAL = 1
+// M04's own measured figure for `gc-loop`'s (shallower) call chain; kept as the default so
+// `gc-loop`'s already-tuned budget entry is untouched (docs/plan/06b-workers-and-spawn.md,
+// Deviations: raising this retroactively shifted `gc-loop`'s own `main` baseline, so it is a
+// per-page override -- `warmupFrames` below -- not a global change).
 const WARMUP = 120
 const FRAMES = 600
 
@@ -98,6 +102,12 @@ export async function measure(
       page: Page,
       expectedWorkers: number,
     ) => Promise<{ main: IsolateSession; workers: IsolateSession[]; close?: () => void }>
+    /** Frames run before `HeapProfiler.startSampling`, never counted (default `WARMUP`, `gc-loop`'s
+     * own measured figure). A page whose call chain needs more iterations to reach steady optimized
+     * code before the JIT noise seen at 120 clears (docs/plan/06b-workers-and-spawn.md, Deviations:
+     * `topology`/`echo`'s production `yield`-protocol shell) raises this per page; `gc-loop`'s own
+     * entry is untouched since raising the *global* default shifted its `main` baseline measurably. */
+    warmupFrames?: number
   },
 ): Promise<GcResult> {
   const mode = gcModeFromEnv()
@@ -132,7 +142,7 @@ export async function measure(
   }
   const sessions: IsolateSession[] = [main, ...workers]
 
-  await page.evaluate((n) => window.__gc?.run(n, false), WARMUP)
+  await page.evaluate((n) => window.__gc?.run(n, false), opts.warmupFrames ?? WARMUP)
   const memBefore = await page.evaluate(() => window.__gc?.memoryBytes())
   if (!memBefore) throw new Error('gc instrument: memoryBytes() before the window returned nothing')
 
@@ -158,7 +168,27 @@ export async function measure(
   const stall = tracingStallWarning(tracingStartMs)
   if (stall) warnings.push(stall)
 
-  await page.evaluate(() => window.__gc?.markIsolates())
+  // Marks every isolate through CDP directly, not `window.__gc.markIsolates()` (orchestrator
+  // decision 3, docs/plan/06b-workers-and-spawn.md): a production worker cannot call
+  // `performance.mark` itself (`.claude/rules/hot-paths.md` restricts it to `src/clock.ts` and
+  // `src/test/**`) and this milestone adds no new `postMessage` type to ask one to. Workers are
+  // still parked here (the warmup `run()` above ends with `harness.park()`, and the measured
+  // `run()` below resumes them itself), so this is safe on every page, harness-driven (`gc-loop`)
+  // or production-topology (`topology`, `echo`) alike; `gc-page.ts`'s own `markIsolates()` stays
+  // available (M04's harness-worker message path), just unused from here on.
+  // Workers only: `main` still marks itself through `page.evaluate()`, same as before (a page
+  // script can always call `performance.mark` itself; only a production *worker* cannot). A second
+  // CDP session issuing `Runtime.evaluate` against `main` alongside Playwright's own automation
+  // session measurably moved `gc-loop`'s own `main` bytesPerFrame past its budget (Deviations);
+  // `returnByValue: true` and the trailing `; undefined` avoid retaining the `PerformanceMark`
+  // object `performance.mark()` returns as a remote object for the rest of the CDP session.
+  for (const w of workers) {
+    await w.send('Runtime.evaluate', {
+      expression: `self.performance.mark('gc-isolate:' + self.__engineIsolateName); undefined`,
+      returnByValue: true,
+    })
+  }
+  await page.evaluate(() => performance.mark('gc-isolate:main'))
 
   for (const s of sessions) {
     await s.send('HeapProfiler.startSampling', {

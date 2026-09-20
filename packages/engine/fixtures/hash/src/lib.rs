@@ -15,6 +15,10 @@ const INPUT_MAX: usize = 16;
 const FRAME_BYTES: usize = 64;
 /// Far more than any arena a test configures.
 const EXHAUST_BYTES: usize = 64 << 20;
+/// `Rx`/`Tx` for the `Client` role only (docs/plan/06b-workers-and-spawn.md, Deviations): the
+/// `echo` zero-GC page round-trips 10 KiB per frame through these two regions. `Sim`/`Gen` keep the
+/// 64-byte pair below unchanged, so `golden/golden.json` (Sim-role only) stays byte-identical.
+const CLIENT_RX_TX_BYTES: usize = 10 * 1024;
 
 const K: f32 = 40.0;
 const C: f32 = 6.0;
@@ -153,13 +157,18 @@ impl HashFixture {
 }
 
 impl Instance for HashFixture {
-    fn init(_role: Role, game_cfg_json: &str, layout: &mut RegionLayout) -> Result<Self, Status> {
+    fn init(role: Role, game_cfg_json: &str, layout: &mut RegionLayout) -> Result<Self, Status> {
         let cfg: Config = serde_json::from_str(game_cfg_json).map_err(|_| Status::BadConfig)?;
         if cfg.entities == 0 || cfg.entities > MAX_ENTITIES {
             return Err(Status::BadConfig);
         }
-        layout.region(RegionId::Rx, 64);
-        layout.region(RegionId::Tx, FRAME_BYTES as u32);
+        let (rx_bytes, tx_bytes) = if role == Role::Client {
+            (CLIENT_RX_TX_BYTES as u32, CLIENT_RX_TX_BYTES as u32)
+        } else {
+            (64, FRAME_BYTES as u32)
+        };
+        layout.region(RegionId::Rx, rx_bytes);
+        layout.region(RegionId::Tx, tx_bytes);
         let n = cfg.entities as usize;
         Ok(HashFixture {
             tick: 0,

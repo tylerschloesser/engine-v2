@@ -70,9 +70,14 @@ async function run(
   pageId: string,
   path: string,
   control: NegativeControl,
+  warmupFrames: number | undefined,
 ): Promise<GcResult> {
   await openPage(page, path)
-  const r = await measure(page, browser, { pageId, control })
+  const r = await measure(page, browser, {
+    pageId,
+    control,
+    ...(warmupFrames !== undefined ? { warmupFrames } : {}),
+  })
   // `Tracing.start` stall (0016 caveat a): a warning annotation, never a failure. The `playwright`
   // adapter (scripts/lib/adapters.mjs) turns this into `report.mjs`'s `warn` line under the suite.
   for (const description of r.warnings)
@@ -80,37 +85,59 @@ async function run(
   return r
 }
 
-export function zeroGcSuite(opts: { pageId: string; path: string; expectAdapter?: boolean }): void {
+/** Every negative-control kind `zeroGcSuite` knows how to generate. */
+const ALL_CONTROL_KINDS = ['object', 'burst', 'post-message'] as const
+type ControlKind = (typeof ALL_CONTROL_KINDS)[number]
+
+export function zeroGcSuite(opts: {
+  pageId: string
+  path: string
+  expectAdapter?: boolean
+  /** Which negative-control kinds to generate; default every kind (`gc-loop`'s own shape).
+   * `object`/`burst` are generated per isolate, `post-message` per worker isolate only.
+   * docs/plan/06b-workers-and-spawn.md, orchestrator decision 2: a production-topology page (no
+   * spare `postMessage` type to drive a message-round-trip tick) passes `['object', 'burst']`. */
+  controlKinds?: readonly ControlKind[]
+  /** Passed through to `measure()`'s own `warmupFrames` (default `WARMUP`, `gc-loop`'s own figure);
+   * see its comment. */
+  warmupFrames?: number
+}): void {
   const budgets = gcPage(opts.pageId)
   const isolates = Object.keys(budgets.isolates)
   const workers = isolates.filter((name) => name !== 'main')
+  const controlKinds = opts.controlKinds ?? ALL_CONTROL_KINDS
 
   test(`${opts.pageId} clean`, async ({ page, browser }) => {
-    const r = await run(page, browser, opts.pageId, opts.path, null)
+    const r = await run(page, browser, opts.pageId, opts.path, null, opts.warmupFrames)
     assertEnvironment(r, opts.path, opts)
     const expected = expectedVerdict(isolates, null)
     expect(r.verdict, detail(r)).toEqual({ pass: true, ...expected })
   })
 
-  for (const name of isolates) {
-    for (const kind of ['object', 'burst'] as const) {
-      test(`${opts.pageId} neg ${kind} ${name}`, async ({ page, browser }) => {
-        const control: NegativeControl = { isolate: name, kind }
-        const r = await run(page, browser, opts.pageId, opts.path, control)
+  if (controlKinds.includes('object') || controlKinds.includes('burst')) {
+    for (const name of isolates) {
+      for (const kind of ['object', 'burst'] as const) {
+        if (!controlKinds.includes(kind)) continue
+        test(`${opts.pageId} neg ${kind} ${name}`, async ({ page, browser }) => {
+          const control: NegativeControl = { isolate: name, kind }
+          const r = await run(page, browser, opts.pageId, opts.path, control, opts.warmupFrames)
+          assertEnvironment(r, opts.path, opts)
+          const expected = expectedVerdict(isolates, control)
+          expect(r.verdict, detail(r)).toEqual({ pass: false, ...expected })
+        })
+      }
+    }
+  }
+
+  if (controlKinds.includes('post-message')) {
+    for (const name of workers) {
+      test(`${opts.pageId} neg post-message main<->${name}`, async ({ page, browser }) => {
+        const control: NegativeControl = { isolate: name, kind: 'post-message' }
+        const r = await run(page, browser, opts.pageId, opts.path, control, opts.warmupFrames)
         assertEnvironment(r, opts.path, opts)
         const expected = expectedVerdict(isolates, control)
         expect(r.verdict, detail(r)).toEqual({ pass: false, ...expected })
       })
     }
-  }
-
-  for (const name of workers) {
-    test(`${opts.pageId} neg post-message main<->${name}`, async ({ page, browser }) => {
-      const control: NegativeControl = { isolate: name, kind: 'post-message' }
-      const r = await run(page, browser, opts.pageId, opts.path, control)
-      assertEnvironment(r, opts.path, opts)
-      const expected = expectedVerdict(isolates, control)
-      expect(r.verdict, detail(r)).toEqual({ pass: false, ...expected })
-    })
   }
 }
