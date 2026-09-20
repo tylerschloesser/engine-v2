@@ -1,6 +1,6 @@
 # M05: Codec and state hash
 
-Status: not started · After: 04 · Tyler-dependent: no
+Status: done · After: 04 · Tyler-dependent: no
 
 ## Goal
 The engine crate has the one byte-level foundation everything persistent or networked stands on: `Codec` (postcard with NaN canonicalisation), a byte sink/reader pair with the engine's single varint form, the 64-bit FNV-1a state hash fed by the same writers that produce snapshot bytes, and a golden-bytes test pattern with an explicit bless command. The `hash` fixture's cross-runtime golden is computed through these and still agrees natively, in Node, in Bun and in three browsers.
@@ -58,12 +58,12 @@ Mine from spikes: `spikes/determinism-hash/src/lib.rs` lines 11–61 (`mix64`), 
 Rust: `varint_matches_postcard`, `slice_sink_overflow_is_error`, `reader_truncation_is_error`, `fnv64_is_a_byte_sink`, `hash_value_equals_hash_of_encoded_bytes`, `codec_roundtrip_plain_data`, `canon_bits_table` (both quiet-NaN signs, payload NaN, signalling NaN, ±0, ±inf, f32 and f64), `codec_nested_nan_canonical` (via `encode_with(false, ..)`), `codec_nan_debug_asserts`, `codec_nan_release_canonical`, `decode_returns_rest`, `decode_canonical_rejects_{nan_payload,overlong_varint,trailing}`, `golden_codec_sample`, `golden_reports_first_diff`, `golden_missing_fails_without_bless`, `no_alloc_codec` (own test binary with `abi::Arena` as global allocator: encode, decode and `hash_value` of plain data leave `live_bytes` unchanged and allocate nothing in between). TS unit: `fnv1a64Hex vectors` (empty, `a`, `foobar`); `no_usize_in_serialized_types` (`scripts/lib/no-usize.test.mjs`, 0002 §2: in every `.rs` file under `packages/engine/crates/*/src`, `packages/engine/fixtures/*/src` and `games/*/sim/src`, a `struct` or `enum` whose `derive` list has `Serialize` or `Codec` and whose body names `usize` or `isize` fails with file and type name; a regex scan, not a parser). Cross-runtime: M02's `determinism: node matches golden`, the Bun leg and M03's `determinism @engines`, re-blessed.
 
 ## Exit criteria
-- [ ] Every test above passes by name.
-- [ ] `fx-hash` hashes part of its state through `Codec` + `Fnv64`; its `golden.json` matches natively, under Node, under Bun and in Chromium, WebKit and Firefox.
-- [ ] `grep -rn "0100_0000_01b3\|100000001b3" packages/engine/crates` finds the FNV prime in `hash.rs` only.
-- [ ] With `GOLDEN_BLESS` unset a deleted `.hex` fails its test; `pnpm golden:bytes` restores it byte-identically (`git diff --exit-code`).
-- [ ] `.claude/rules/determinism.md` names `Codec`, `ByteSink`, `decode_canonical` and the no-`usize`-in-state rule, and is under 40 lines.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Every test above passes by name.
+- [x] `fx-hash` hashes part of its state through `Codec` + `Fnv64`; its `golden.json` matches natively, under Node, under Bun and in Chromium, WebKit and Firefox.
+- [x] `grep -rn "0100_0000_01b3\|100000001b3" packages/engine/crates` finds the FNV prime in `hash.rs` only.
+- [x] With `GOLDEN_BLESS` unset a deleted `.hex` fails its test; `pnpm golden:bytes` restores it byte-identically (`git diff --exit-code`).
+- [x] `.claude/rules/determinism.md` names `Codec`, `ByteSink`, `decode_canonical` and the no-`usize`-in-state rule, and is under 40 lines.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t codec` · `pnpm test rust -t golden` · `pnpm test unit -t fnv1a64Hex` · `pnpm test wasm -t determinism` · `pnpm test browser -t determinism` · `pnpm golden hash && pnpm golden:bytes && git diff --exit-code` · `pnpm test && pnpm lint`.
@@ -85,3 +85,4 @@ none
 - **Postcard confirmed, not assumed:** read from the fetched `postcard` 1.1.3 source (`~/.cargo/registry/src/.../postcard-1.1.3`) rather than guessed: `f32`/`f64` serialize as 4/8 raw little-endian bytes (no varint); `Option` tag is one raw byte (0/1, not varint); the `u64` varint decoder (`try_take_varint_u64`) accepts an overlong encoding like `[0x80, 0x00]` for `0` without erroring — postcard does not police canonicality itself, which is why `decode_canonical`'s re-encode-and-compare is load-bearing, not redundant.
 - **No ADR needed for `postcard`.** It was already on the `docs/decisions/0017-packaging-and-build.md` §7 allowed-crate list (and `scripts/lib/crate-policy.test.mjs`'s `ALLOWED`); only `Cargo.toml` needed the new `[dependencies]` line, `default-features = false, features = ["alloc"]` as §7 specifies.
 - **Measured numbers.** `packages/engine/CLAUDE.md` 46 → 47 lines (cap 60). `.claude/rules/determinism.md` 23 → 25 lines (cap 40). `fx-hash` golden: 10 checkpoints, last `2fd8ac19d148e09d` (all prior checkpoints changed too, since `sim_hash` now mixes in `hash_value(&Sample)` in place of the old manual `tick`/`rng` writes — `golden/scenario.json` is byte-for-byte unchanged). `codec_sample.hex` = `071701060701090102030000c03f00000000000002c0` (23 bytes); `codec_sample_hash.hash` = `db8c83d5f184af3e`. `gc-loop`'s `sim` isolate stayed inside its 8 B/frame strict budget in `packages/engine/budgets.json` (untouched, per instruction) after the fixture change.
+- **Orchestrator gate (2026-09-19):** `pnpm gate 6682458`: tree clean, 24 files, +1680/−21, no markers; goldens CHANGED lists only `packages/engine/fixtures/hash/golden/golden.json`, the re-bless this brief plans in step 5 and the orchestrator authorised before delegating (`scenario.json` untouched; the `.hex`/`.hash` files are new). `pnpm test` (`rust` 37, `unit` 64, `wasm` 23, `browser pass 20 tests 6.3s/25s`, which includes `gc-loop` against the unchanged `budgets.json` and determinism in three engines on the new golden) and `pnpm lint` green, run by the orchestrator. Every name under Tests added and Provides found by grep. The delete-and-restore check of exit criterion 4 accepted from the implementer's pasted lines.

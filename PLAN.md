@@ -19,7 +19,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 02b | `02b-vite-plugin.md` | Vite plugin, `virtual:engine/wasm`, COOP/COEP fixture app | 02 | |
 | [x] | 03 | `03-browser-harness.md` | Playwright in `pnpm test`, `engine/test` skeleton (clock, stepping, quiescence), determinism hash in three browsers, `run-tests` skill | 02b | D |
 | [x] | 04 | `04-zero-gc-harness.md` | zero-allocation assertion with permanent negative controls, `budgets.json`, `gc-test` skill. **Harness complete.** | 03 | |
-| [ ] | 05 | `05-codec-and-state-hash.md` | `Codec`, NaN canonicalisation, `StateHash`, golden-bytes pattern | 04 | |
+| [x] | 05 | `05-codec-and-state-hash.md` | `Codec`, NaN canonicalisation, `StateHash`, golden-bytes pattern | 04 | |
 | [ ] | 06 | `06-sab-primitives-and-workers.md` | SAB ring / seqlock / triple buffer, control block, camera block | 04 | |
 | [ ] | 06b | `06b-workers-and-spawn.md` | worker kinds in `engine/worker`, `createClient` spawn path, `yield` protocol | 06 | |
 | [ ] | 07 | `07-world-model-core.md` | tiles, chunk coords, `Registry` + trait tables, pristine + overlays + invisible dense cache | 05 | |
