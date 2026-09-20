@@ -71,6 +71,21 @@ export function analyseTrace(events: readonly TraceEvent[]): {
   outside: GcCounts
   windowMs: number
   traceEvents: number
+  /** Every isolate name the trace's own `gc-isolate:<name>` mark discovery actually produced --
+   * the same `isolateNames` map A keys its GC-event attribution by -- regardless of that mark's own
+   * `ts` (gate round 3, docs/plan/09-renderer-terrain.md Deviations: "instrument A looks at this
+   * page's thread X", kept in the fast tier once `burst` negative controls move to `@slow` for
+   * every page but `gc-loop`). Deviation from the decision text, which asked for "at least one
+   * event inside the window-start/window-end marks": every `gc-isolate:<name>` mark is sent (via
+   * CDP `Runtime.evaluate`, `instrument.ts`) *before* `window.__gc.run`'s own `window-start` mark,
+   * so it is never inside the window on a real page -- checked here by running a clean page and
+   * finding every worker isolate absent under that literal reading (only `main` read present, by
+   * the `window-start`/`window-end` events themselves, on its own thread). What the assertion can
+   * actually prove from a clean run's own trace is unfiltered: did this isolate's naming mark reach
+   * the recorded trace *at all* -- catching a `Tracing.start` capture race (0016 caveat a) or a
+   * misattributed pid:tid dropping the mark, the same way a missing isolate would previously only
+   * surface through a `burst` control landing its GC event in the `unknown` bucket instead. */
+  presentIsolates: Set<string>
 } {
   let start: TraceEvent | undefined
   let end: TraceEvent | undefined
@@ -101,7 +116,16 @@ export function analyseTrace(events: readonly TraceEvent[]): {
     if (!gc[name]) gc[name] = { MinorGC: 0, MajorGC: 0 }
     gc[name][e.name]++
   }
-  return { gc, outside, windowMs: (end.ts - start.ts) / 1000, traceEvents: events.length }
+
+  const presentIsolates = new Set(isolateNames.values())
+
+  return {
+    gc,
+    outside,
+    windowMs: (end.ts - start.ts) / 1000,
+    traceEvents: events.length,
+    presentIsolates,
+  }
 }
 
 /** A `Tracing.start` call slower than this (0016 caveat a) is a warning, never a budget failure. */

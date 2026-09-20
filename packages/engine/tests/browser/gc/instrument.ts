@@ -57,6 +57,10 @@ export type GcResult = {
   crossOriginIsolated: boolean
   adapter: object | null
   gc: Record<string, GcCounts>
+  /** `analyseTrace(...).presentIsolates`, as an array (gate round 3, docs/plan/
+   * 09-renderer-terrain.md Deviations): isolate names with at least one trace event inside the
+   * window, proving the CDP thread-discovery A depends on actually found that isolate's thread. */
+  presentIsolates: string[]
   /** Exact sampled bytes over the whole window (`sumProfile(...).total`), before dividing by
    * `frames`: the flat-transport parity test compares these exactly, per isolate. */
   totalBytes: Record<string, number>
@@ -293,6 +297,7 @@ export async function measure(
     crossOriginIsolated: ready.crossOriginIsolated,
     adapter: ready.adapter,
     gc: trace.gc,
+    presentIsolates: [...trace.presentIsolates],
     totalBytes,
     bytesPerFrame,
     attributedBytesPerFrame,

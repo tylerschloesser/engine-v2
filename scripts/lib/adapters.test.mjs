@@ -6,10 +6,14 @@ import { adapters } from './adapters.mjs'
 
 const leg = { cmd: 'bun', args: ['leg.mjs'], tests: ['determinism: bun matches golden'] }
 
+function tmpFile(name, text) {
+  const path = join(mkdtempSync(join(tmpdir(), 'adapters-')), name)
+  writeFileSync(path, text)
+  return path
+}
+
 function logWith(text) {
-  const logPath = join(mkdtempSync(join(tmpdir(), 'adapters-')), 'leg.log')
-  writeFileSync(logPath, text)
-  return logPath
+  return tmpFile('leg.log', text)
 }
 
 describe('playwright adapter', () => {
@@ -69,6 +73,30 @@ describe('playwright adapter', () => {
       PLAYWRIGHT_JSON_OUTPUT_FILE: 'test-results/engines/report.json',
       ENGINE_TEST_PORT: '4518',
     })
+  })
+
+  // A leg's own `-t` pattern can match nothing in its own scoped projects (the `engines` leg under
+  // a pattern that only matches the main leg's tests) -- Playwright, unlike nextest/vitest, exits
+  // non-zero for an empty `--grep` with no flag to opt out, but still writes a valid, empty report.
+  test('parse: an empty report with a non-zero exit ("No tests found") is zero tests, not a failure', () => {
+    const reportPath = tmpFile(
+      'report.json',
+      JSON.stringify({ suites: [], errors: [{ message: 'Error: No tests found' }] }),
+    )
+    expect(
+      adapters.playwright.parse({
+        reportPath,
+        exitCode: 1,
+        logPath: logWith('Error: No tests found\n'),
+      }),
+    ).toEqual({ tests: 0, failures: [], warnings: [] })
+  })
+
+  test('parse: a non-zero exit with no report at all is still a failure', () => {
+    const logPath = logWith('Segmentation fault\n')
+    const result = adapters.playwright.parse({ reportPath: undefined, exitCode: 139, logPath })
+    expect(result.failures).toHaveLength(1)
+    expect(result.failures[0].name).toBe('runner exited 139 without a parseable report')
   })
 })
 

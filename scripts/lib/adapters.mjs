@@ -123,7 +123,32 @@ export const adapters = {
         reportPath: `test-results/${reportPath}`,
       }
     },
-    parse: fromReport(parsePlaywrightJson),
+    // Not `fromReport`: unlike nextest's `--no-tests=pass`/vitest's `--passWithNoTests`, Playwright
+    // has no flag to make an empty `--grep` match exit 0, and it does now happen legitimately (the
+    // `engines` leg above, gate round 3, under a narrow `-t` pattern that matches only the main
+    // leg's own tests) -- a successfully parsed, empty report (`suites: []`, an `errors: [{message:
+    // "Error: No tests found"}]` `fromReport` never reads) is zero tests, not a failure.
+    parse({ reportPath, exitCode, logPath }) {
+      let result = { tests: 0, failures: [] }
+      let parsed = false
+      if (reportPath && existsSync(reportPath)) {
+        try {
+          result = parsePlaywrightJson(readFileSync(reportPath, 'utf8'))
+          parsed = true
+        } catch {
+          // An unreadable report is handled like a missing one.
+        }
+      }
+      if (parsed && result.tests === 0 && result.failures.length === 0) return result
+      if (exitCode !== 0 && result.failures.length === 0) {
+        result.failures.push({
+          name: `runner exited ${exitCode} without a parseable report`,
+          message: lastLines(readLog(logPath), 20),
+          artefacts: [logPath],
+        })
+      }
+      return result
+    },
   },
 
   // A plain script in any runtime (the Bun leg of `wasm`). `suite` is `{ cmd, args, tests }`:

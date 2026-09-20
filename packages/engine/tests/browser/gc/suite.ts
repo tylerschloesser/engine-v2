@@ -111,6 +111,15 @@ export function zeroGcSuite(opts: {
   test(`${opts.pageId} clean`, async ({ page, browser }) => {
     const r = await run(page, browser, opts.pageId, opts.path, null, opts.extraSettleFrames)
     assertEnvironment(r, opts.path, opts)
+    // Gate round 3 (docs/plan/09-renderer-terrain.md, Deviations): with `burst` demoted to `@slow`
+    // for every page but `gc-loop`, this is what proves, in the fast tier, that instrument A's own
+    // thread discovery (`analyse.ts`'s `presentIsolates`) actually found every expected isolate's
+    // thread in the trace -- not just that it saw zero GC events there, which a mark dropped by a
+    // `Tracing.start` capture race (0016 caveat a) would also read as. Fails by isolate name, one
+    // assertion per isolate, if a thread is missing.
+    for (const name of isolates) {
+      expect(r.presentIsolates, `${opts.path}: ${name} thread present in trace`).toContain(name)
+    }
     const expected = expectedVerdict(isolates, null)
     expect(r.verdict, detail(r)).toEqual({ pass: true, ...expected })
   })
@@ -119,7 +128,14 @@ export function zeroGcSuite(opts: {
     for (const name of isolates) {
       for (const kind of ['object', 'burst'] as const) {
         if (!controlKinds.includes(kind)) continue
-        test(`${opts.pageId} neg ${kind} ${name}`, async ({ page, browser }) => {
+        // `zeroGcSuite` tags by page id, not by a caller option a future page could forget (gate
+        // round 3, orchestrator decision 3): every page's `burst` negatives move to `@slow` except
+        // `gc-loop`'s own, which stays fast so both instruments are proven live on every `pnpm
+        // test` (0016 §8's "permanent negative controls", amended by 0026). `object` stays fast for
+        // every page (instrument B, every isolate).
+        const slow = kind === 'burst' && opts.pageId !== 'gc-loop'
+        const title = `${opts.pageId} neg ${kind} ${name}${slow ? ' @slow' : ''}`
+        test(title, async ({ page, browser }) => {
           const control: NegativeControl = { isolate: name, kind }
           const r = await run(
             page,
