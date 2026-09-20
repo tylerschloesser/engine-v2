@@ -72,7 +72,12 @@ async function run(
   control: NegativeControl,
 ): Promise<GcResult> {
   await openPage(page, path)
-  return measure(page, browser, { pageId, control })
+  const r = await measure(page, browser, { pageId, control })
+  // `Tracing.start` stall (0016 caveat a): a warning annotation, never a failure. The `playwright`
+  // adapter (scripts/lib/adapters.mjs) turns this into `report.mjs`'s `warn` line under the suite.
+  for (const description of r.warnings)
+    test.info().annotations.push({ type: 'warning', description })
+  return r
 }
 
 export function zeroGcSuite(opts: { pageId: string; path: string; expectAdapter?: boolean }): void {
