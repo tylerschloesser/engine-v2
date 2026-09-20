@@ -2,7 +2,7 @@
 // cargo and Node built-ins only. The Vite plugin (M02b), `pnpm test` and server scripts all call it.
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 
 export type Profile = 'dev' | 'release'
@@ -29,6 +29,8 @@ export type BuildGameResult = {
   profile: Profile
   cargoMs: number
 }
+
+let writeSeq = 0
 
 /** What `game.json` holds. */
 export type GameJson = { buildHash: string; abiVersion: number; profile: Profile }
@@ -125,7 +127,12 @@ export async function buildGame(opts: BuildGameOptions): Promise<BuildGameResult
   const jsonPath = join(dir, 'game.json')
   const json: GameJson = { buildHash, abiVersion, profile }
   await mkdir(dirname(wasmPath), { recursive: true })
-  await writeFile(wasmPath, bytes)
-  await writeFile(jsonPath, `${JSON.stringify(json, null, 2)}\n`)
+  // Write beside the target, then rename: a reader (the dev server's wasm route, a concurrent
+  // build of the same crate, a test comparing bytes) never sees a truncated 3.7 MB file.
+  const tmp = `.${process.pid}.${++writeSeq}.tmp`
+  await writeFile(wasmPath + tmp, bytes)
+  await rename(wasmPath + tmp, wasmPath)
+  await writeFile(jsonPath + tmp, `${JSON.stringify(json, null, 2)}\n`)
+  await rename(jsonPath + tmp, jsonPath)
   return { dir, wasmPath, jsonPath, buildHash, abiVersion, profile, cargoMs }
 }

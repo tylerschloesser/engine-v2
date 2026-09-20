@@ -71,6 +71,7 @@ Mine from spikes: none with camera code; `spikes/zero-gc-webgpu/public/main.js` 
 ## Budgets
 - Allocation per isolate (0016): page `input`. DOM-dispatched event objects are the browser's and are not in the window (injection bypasses them, 0016 Consequences).
 - Frame time, main share (0018 §9): not asserted here; first asserted in M17b.
+- Seqlock reader backoff (from M06, Deviations "Fix round 2"): `SeqlockReader.readInto` busy-waits about 1 ms (`RETRY_BACKOFF_SPINS = 200_000` `Atomics.load` calls) before each retry after the first, up to 8 retries, so a camera-block read can cost up to about 8 ms when the writer is preempted mid-write. This milestone puts that read on a per-frame path: count retries on the `input` page over a normal pan (expect 0 at one write per frame) and record the number under Deviations; if retries are not rare, replace the spin with keep-the-previous-copy on the first collision and say so.
 - Bandwidth up while panning (0010): M15's counter, fed by this camera block.
 
 ## Context artifacts

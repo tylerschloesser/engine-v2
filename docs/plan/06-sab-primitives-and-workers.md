@@ -1,6 +1,6 @@
 # M06: SAB primitives, control block, camera block
 
-Status: not started · After: 04 · Tyler-dependent: no
+Status: done · After: 04 · Tyler-dependent: no
 
 Split during planning: the worker kinds, the `createClient` spawn path, the `yield` protocol and `checkSupport` are **M06b** (`06b-workers-and-spawn.md`). This brief is the data structures only, so they can be tested in Node before any worker topology exists.
 
@@ -71,10 +71,10 @@ Workers, `createClient`, WASM-side copies, the Rust `CameraBlock` struct (M06b).
 - `browser` suite, tagged `@engines` (Chromium, WebKit, Firefox): `sab.ring_both_directions`: worker → main and main → worker, 0 sequence errors, 0 drops (the spike measured one direction only).
 
 ## Exit criteria
-- [ ] Every test above passes by name; `drops` and `torn` read 0.
-- [ ] No function in `src/sab/` or `src/camera/block.ts` contains `new`, a closure, an array or object literal, or `subarray` outside a constructor (checked by a small source-scan unit test, `sab.no_alloc_syntax`). The same test fails on `waitAsync` anywhere under `packages/engine/src/` and on `Atomics.wait(` outside `sab/control.ts` (`waitForWake`) and `src/test/**` (0015 §2 Wake-ups); that main never reaches `waitForWake` is M06b's `main.no_wasm_instantiate`.
-- [ ] `.claude/rules/hot-paths.md` globs cover `src/sab/**` and `src/camera/**`.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Every test above passes by name; `drops` and `torn` read 0.
+- [x] No function in `src/sab/` or `src/camera/block.ts` contains `new`, a closure, an array or object literal, or `subarray` outside a constructor (checked by a small source-scan unit test, `sab.no_alloc_syntax`). The same test fails on `waitAsync` anywhere under `packages/engine/src/` and on `Atomics.wait(` outside `sab/control.ts` (`waitForWake`) and `src/test/**` (0015 §2 Wake-ups); that main never reaches `waitForWake` is M06b's `main.no_wasm_instantiate`.
+- [x] `.claude/rules/hot-paths.md` globs cover `src/sab/**` and `src/camera/**`.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test unit -t ring` · `pnpm test unit -t seqlock` · `pnpm test unit -t triple` · `pnpm test unit -t control` · `pnpm test browser -t sab.ring_both_directions` · `pnpm test` · `pnpm lint` (`-t` is a substring match, M01).
@@ -454,3 +454,11 @@ sab.ring_both_directions`: `browser pass 3 tests 3.2s/25s` (3/3 engines). Final 
 `sab-*-worker.mjs` files, which are byte-identical to their `1926729` versions again; only
 `ring.test.ts`, `seqlock.test.ts`, `triple.test.ts` (the deadline/livelock fix) and
 `control.test.ts` (the `worker.terminate()` fix) carry real changes this round.
+
+### Orchestrator gate (2026-09-19)
+
+- `pnpm gate 2be6625` clean (29 files, +2192/−5, no goldens or markers changed). On a quiet machine after `M06 fix 2` (`1620a12`): `pnpm test` (`rust` 37, `unit` 81 in 1.1 s/3 s, `wasm` 23, `browser pass 23 tests 7.9s/25s`) and `pnpm lint` green; the full `unit` project 30 times in a row under a 60 s per-run kill timeout: 30 pass, 0 fail, 0 hang, slowest suite line 1 s. Every name under Tests added and Provides found by grep.
+- History of the gate: round 1 attributed the hang to scheduling stalls and was wrong; the orchestrator then reproduced it on a quiet machine (run 8 of 10 spun one thread at 100 % CPU for over ten minutes); round 2 found the cause, a livelock in `triple.test.ts` (a reader loop requiring ten fresh reads after the writer had already finished). The orchestrator's own start-up-deadlock hypothesis was disproved by round 2's worker-start logging. No production defect in `src/sab/` was found by either round.
+- Decision (orchestrator, technical): the `SeqlockReader` retry backoff (`RETRY_BACKOFF_SPINS = 200_000`, about 1 ms per retry after the first) stays, on round 2's measurement (`torn` 2 in 1/40 loaded runs without it, 0 in 40/40 with it). It costs nothing on the uncontended path; M11, which puts the camera seqlock on the frame path, measures retries and revisits it (line added to M11's Budgets).
+- Accepted shape difference: the counter is nested, `counters.sab.totalBytes`, not the flat `"sab.totalBytes"` key of M04's schema comment; `budget('counters.sab.totalBytes')` resolves it and later counters should follow the nested form.
+- Found while gating, outside M06: `plugin-dev: wasm served as application/wasm` (M02b) failed once in about 13 `wasm` runs because `buildGame` wrote `game.wasm` with a plain `writeFile`, so a concurrent reader could see a truncated file (a dev server could serve one too). Orchestrator fix in `src/build-game.ts`: write to a temp name beside the target, then `rename`. `wasm` suite 12/12 afterwards.
