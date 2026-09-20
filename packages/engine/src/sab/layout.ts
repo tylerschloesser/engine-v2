@@ -35,8 +35,14 @@ export const RING_DEFAULTS = {
   inputRing: { slotBytes: 32, slots: 256 },
   uiRing: { slotBytes: 1024, slots: 256 },
   uploadRing: { slotBytes: 4112, slots: 256 },
-  genRequest: { slotBytes: 16, slots: 64 },
-  genResult: { slotBytes: 16, slots: 64 },
+  // Revised by docs/plan/08b-gen-workers-and-queue.md (M06's own allowance: "an owning milestone
+  // may revise its row in its Deviations"). M06 sized these before the record shapes existed;
+  // `slotBytes` here is the *ring's* total per-slot size (its own 8-byte header + payload,
+  // `sab/ring.ts`), and the payload must hold a whole record: 16 bytes for a request, `16 +
+  // 4,096` for a result at the default chunk size (0008 §2's own "4,096-byte result slabs"). Slot
+  // counts are generous relative to the in-flight cap of 2/worker (0008 §4), never a bottleneck.
+  genRequest: { slotBytes: 24, slots: 8 },
+  genResult: { slotBytes: 4120, slots: 8 },
 } as const
 
 export type SabSet = {
