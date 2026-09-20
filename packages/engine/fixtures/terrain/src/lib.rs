@@ -84,6 +84,12 @@ impl ClientSide for FixtureTerrain {}
 struct Config {
     #[serde(default = "default_gen_workers")]
     gen_workers: u32,
+    /// Open gate failures items 3/4, gate round 1 (docs/plan/09-renderer-terrain.md Deviations
+    /// "Gate fix round 1"): overrides `CLIENT_CACHE_CHUNKS` through `ClientOptions.test.game`
+    /// (`{ clientCacheChunks: N }`) so a caller can force continuous eviction/slot-reuse with a
+    /// small pan, without shrinking the default every other real-client test relies on.
+    #[serde(default)]
+    client_cache_chunks: Option<u32>,
 }
 
 fn default_gen_workers() -> u32 {
@@ -94,6 +100,7 @@ fn parse_config(game_cfg_json: &str) -> Result<Config, Status> {
     if game_cfg_json.is_empty() || game_cfg_json == "null" {
         return Ok(Config {
             gen_workers: default_gen_workers(),
+            client_cache_chunks: None,
         });
     }
     serde_json::from_str(game_cfg_json).map_err(|_| Status::BadConfig)
@@ -117,7 +124,7 @@ impl Instance for FixtureTerrain {
                 let terrain = TerrainStore::new(
                     dims,
                     Box::new(source),
-                    CacheCapacity::Chunks(CLIENT_CACHE_CHUNKS),
+                    CacheCapacity::Chunks(cfg.client_cache_chunks.unwrap_or(CLIENT_CACHE_CHUNKS)),
                 );
                 let feed = TerrainFeed::new(dims, cfg.gen_workers);
                 let uploader = Box::new(Uploader::<FixtureTerrain>::new(dims));

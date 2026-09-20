@@ -425,6 +425,63 @@ test('terrain: upload budget while panning', async ({ page }, testInfo) => {
   expectNoGpuErrors(await page.evaluate(() => window.__terrainClient?.errors() ?? []))
 })
 
+function pixelRgba(pixels: PixelBuffer, x: number, y: number): [number, number, number, number] {
+  const i = (y * pixels.width + x) * 4
+  return [
+    pixels.data[i] as number,
+    pixels.data[i + 1] as number,
+    pixels.data[i + 2] as number,
+    pixels.data[i + 3] as number,
+  ]
+}
+
+/** Not `expectPixel` (Seams: one target only) -- item 4's own assertion needs "one of two
+ * acceptable colours, never a third", so this stays a spec-local helper rather than a new
+ * `engine/test` export (out of item 7's own, already-named list). */
+function expectPixelOneOf(
+  pixels: PixelBuffer,
+  x: number,
+  y: number,
+  options: readonly (readonly [number, number, number, number])[],
+  tol: number,
+): void {
+  const got = pixelRgba(pixels, x, y)
+  const ok = options.some((want) => got.every((c, i) => Math.abs(c - (want[i] as number)) <= tol))
+  expect(
+    ok,
+    `pixel (${x}, ${y}) = [${got.join(', ')}] matched none of ${JSON.stringify(options)}`,
+  ).toBe(true)
+}
+
+// Open gate failures item 4, gate round 1: a small (2-chunk) cache under a wide view forces
+// continuous eviction/slot-reuse well beyond 0018 §6's own 121-chunk ring-1 worst case, so both
+// (0, 0)'s and (1, 0)'s page slots get reused by other chunks repeatedly while `idle()` converges.
+// If `Uploader::stage` ever staged a CHUNK reusing a slot before that slot's own previous-occupant
+// INDIR-none, this screen position could show whichever chunk most recently overwrote the slot's
+// texels through the *other* chunk's own stale toroidal cell -- any colour but grass/water/neutral
+// is exactly that bug, "the other chunk's texels" the brief names.
+test('terrain: evicted slot shows new chunk, never stale texels', async ({ page }, testInfo) => {
+  await openPage(page, '/terrain-client.html')
+  const init = await page.evaluate(() => window.__terrainClient?.init({ clientCacheChunks: 2 }))
+  expectAdapter(testInfo, init?.adapterInfo ?? null)
+
+  await page.evaluate(() => {
+    const t = window.__terrainClient as TerrainClient
+    t.setCamera(32, 8, 64)
+    t.setHalfExtent(64, 64)
+  })
+  await page.evaluate(async () => {
+    await (window.__terrainClient as TerrainClient).idle()
+  })
+
+  const camera = borderCamera(64, 32, 8)
+  const pixels = await readClientBorderScene(page, camera)
+  expectPixelOneOf(pixels, 31, 0, [GRASS, NEUTRAL], TOL)
+  expectPixelOneOf(pixels, 32, 0, [WATER, NEUTRAL], TOL)
+
+  expectNoGpuErrors(await page.evaluate(() => window.__terrainClient?.errors() ?? []))
+})
+
 // Open gate failures item 6, gate round 1 negative: a deliberately invalid WGSL string must make
 // `checkCompilation` fail the check (`readback`'s own filename keeps this in M10's
 // `expectAdapter|readback` grep, docs/plan/09-renderer-terrain.md Consumes).

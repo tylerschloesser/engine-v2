@@ -43,7 +43,7 @@ function requireClient(): import('../../../../src/client.ts').Client {
 }
 
 window.__terrainClient = {
-  async init() {
+  async init(opts) {
     device = await initDevice()
     renderer = await createTerrainRenderer(device.device, {
       colorFormat: 'rgba8unorm',
@@ -65,8 +65,17 @@ window.__terrainClient = {
       assets: { tiles: '/terrain/tiles.json' },
       // `flags: {}` (truthy): enables the `test-call` channel (`worker/test-call.ts`) `engine/
       // test.gen`'s `chunkHash`/`stats` need (`callParked`, "not enabled for this worker" without
-      // it).
-      test: { clock, flags: {} },
+      // it). `game` (Open gate failures items 3/4, gate round 1): forwarded verbatim to
+      // `fx-terrain`'s own config, overriding `CLIENT_CACHE_CHUNKS` only when the caller asks --
+      // every other test here passes no `clientCacheChunks` and keeps the fixture's own default.
+      test: {
+        clock,
+        flags: {},
+        game:
+          opts?.clientCacheChunks !== undefined
+            ? { clientCacheChunks: opts.clientCacheChunks }
+            : undefined,
+      },
     })
     await client.ready
     attachRenderer(client, renderer)

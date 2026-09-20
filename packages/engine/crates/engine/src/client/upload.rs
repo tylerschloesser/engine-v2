@@ -48,6 +48,12 @@ struct IndirEntry {
     x: u8,
     y: u8,
     value: u16,
+    /// Open gate failures item 4, gate round 1 (docs/plan/09-renderer-terrain.md Deviations "Gate
+    /// fix round 1"): `Some(slot)` only for the "none" entry an eviction pushes -- never written to
+    /// the wire (the record only ever encodes `x`/`y`/`value`) -- so `stage_indir` can clear
+    /// [`Uploader::indir_none_pending`] for exactly the slot this entry frees, once this entry is
+    /// actually staged.
+    evicted_slot: Option<u16>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -94,6 +100,14 @@ pub struct Uploader<C: ClientSide<G>, G = ()> {
     /// One bit per cache slot: "texels currently on the GPU" (Planning decisions "Which chunks
     /// upload").
     uploaded: [bool; PAGE_SLOTS as usize],
+    /// One bit per cache slot: "evicted, and its own INDIR-none record has not been staged yet"
+    /// (Open gate failures item 4, gate round 1). `stage_one` will not stage a `CHUNK` record that
+    /// reuses a slot while this is set -- the reviewer's starvation note: `stage_one` used to drain
+    /// every `pending_chunks` entry before any `pending_indir`, so under continuous panning a slot's
+    /// stale toroidal cell could keep pointing at it after its texels were already overwritten by a
+    /// new occupant, if that occupant's own chunk stayed queued indefinitely ahead of the old
+    /// occupant's eviction record.
+    indir_none_pending: [bool; PAGE_SLOTS as usize],
     /// Chunks queued for a fresh `CHUNK` record, already sorted nearest-first when pushed by
     /// `on_frame` (`enqueue_chunk` appends at the back instead: a dirty-chunk push, not a residency
     /// scan, docs/plan/09-renderer-terrain.md Deviations).
@@ -128,6 +142,7 @@ impl<C: ClientSide<G>, G> Uploader<C, G> {
         Uploader {
             dims,
             uploaded: [false; PAGE_SLOTS as usize],
+            indir_none_pending: [false; PAGE_SLOTS as usize],
             pending_chunks: VecDeque::with_capacity(PAGE_SLOTS as usize),
             pending_indir: VecDeque::with_capacity(PAGE_SLOTS as usize * 2),
             pending_patches: VecDeque::with_capacity(PATCH_MAX_ENTRIES * 4),
@@ -155,6 +170,7 @@ impl<C: ClientSide<G>, G> Uploader<C, G> {
             changed = true;
             if let CacheEvent::Evicted { chunk, slot } = event {
                 self.uploaded[slot as usize] = false;
+                self.indir_none_pending[slot as usize] = true;
                 let (x, y) = indir_coords(chunk);
                 push_bounded(
                     &mut self.pending_indir,
@@ -162,6 +178,7 @@ impl<C: ClientSide<G>, G> Uploader<C, G> {
                         x,
                         y,
                         value: INDIR_NONE,
+                        evicted_slot: Some(slot as u16),
                     },
                 );
             }
@@ -244,6 +261,7 @@ impl<C: ClientSide<G>, G> Uploader<C, G> {
     /// extension (docs/plan/09-renderer-terrain.md Deviations: out of this milestone's scope).
     pub fn requeue_all(&mut self) {
         self.uploaded = [false; PAGE_SLOTS as usize];
+        self.indir_none_pending = [false; PAGE_SLOTS as usize];
         self.last_visible = None;
         self.pending_indir.clear();
         self.pending_patches.clear();
@@ -270,11 +288,26 @@ impl<C: ClientSide<G>, G> Uploader<C, G> {
     }
 
     fn stage_one(&mut self, store: &TerrainStore, out: &mut [u8]) -> bool {
-        while let Some(chunk) = self.pending_chunks.pop_front() {
-            if self.stage_chunk(chunk, store, out) {
-                return true;
+        // Open gate failures item 4: peek, don't pop, so a chunk blocked on its target slot's own
+        // pending eviction record stays queued (in nearest-first order) rather than being dropped
+        // or reordered -- it is retried on a later call, once `stage_indir` below has had a chance
+        // to drain the record that unblocks it.
+        while let Some(&chunk) = self.pending_chunks.front() {
+            let Some(slot) = store.slot_of(chunk) else {
+                self.pending_chunks.pop_front(); // evicted since queued: drop it, try the next one
+                continue;
+            };
+            if self.indir_none_pending[slot as usize] {
+                // `slot`'s previous occupant was evicted but its own INDIR-none has not been
+                // staged yet: staging `chunk`'s CHUNK record now would let the shader address
+                // `slot`'s new texels through the old occupant's still-stale toroidal cell, if that
+                // cell is still on screen. Stop trying chunks this call and fall through to
+                // `stage_indir`, which is what actually clears this bit.
+                break;
             }
-            // Evicted since it was queued: drop it and try the next one.
+            self.pending_chunks.pop_front();
+            self.stage_chunk(chunk, slot, store, out);
+            return true;
         }
         if self.stage_indir(out) {
             return true;
@@ -282,10 +315,7 @@ impl<C: ClientSide<G>, G> Uploader<C, G> {
         self.stage_patch(store, out)
     }
 
-    fn stage_chunk(&mut self, chunk: ChunkCoord, store: &TerrainStore, out: &mut [u8]) -> bool {
-        let Some(slot) = store.slot_of(chunk) else {
-            return false;
-        };
+    fn stage_chunk(&mut self, chunk: ChunkCoord, slot: u32, store: &TerrainStore, out: &mut [u8]) {
         store.copy_chunk(chunk, &mut self.scratch_tiles);
         for (i, &tile) in self.scratch_tiles.iter().enumerate() {
             let texel = C::tile_visual(tile);
@@ -303,9 +333,9 @@ impl<C: ClientSide<G>, G> Uploader<C, G> {
                 x,
                 y,
                 value: slot as u16,
+                evicted_slot: None,
             },
         );
-        true
     }
 
     fn stage_indir(&mut self, out: &mut [u8]) -> bool {
@@ -319,6 +349,11 @@ impl<C: ClientSide<G>, G> Uploader<C, G> {
             out[base] = e.x;
             out[base + 1] = e.y;
             out[base + 2..base + 4].copy_from_slice(&e.value.to_le_bytes());
+            // Open gate failures item 4: this record's own bytes make `e`'s slot free to reuse --
+            // only now, not when it was merely queued.
+            if let Some(slot) = e.evicted_slot {
+                self.indir_none_pending[slot as usize] = false;
+            }
         }
         for b in &mut out[HEADER_BYTES + n * 4..RECORD_BYTES] {
             *b = 0;
@@ -536,5 +571,65 @@ mod tests {
             n, 0,
             "a patch on an evicted chunk must not produce a record"
         );
+    }
+
+    /// Open gate failures item 4, gate round 1: evict a chunk, load a different one into the same
+    /// (capacity-1) slot, then stage one record at a time and check the order is INDIR-none (the
+    /// old occupant's cell going empty) *before* CHUNK (the new occupant's texels), *before* INDIR
+    /// (the new occupant's own cell) -- proving `stage_one`'s block holds even when `max_records`
+    /// splits every record across its own `stage()` call.
+    #[test]
+    fn evicted_slot_reuse_restages() {
+        let mut up = Uploader::<Fixture>::new(ChunkDims::new(5));
+        let s = store(1); // capacity 1: materializing a second chunk evicts the first
+        let old_chunk = ChunkCoord::new(0, 0);
+        let new_chunk = ChunkCoord::new(5, 5);
+
+        s.materialize(old_chunk);
+        up.on_frame(&camera_at(0.0, 0.0), &s);
+        let mut region = vec![0u8; RECORD_BYTES * 2];
+        let n = up.stage(2, &s, &mut region) as usize;
+        assert_eq!(n, 2, "old_chunk's own CHUNK then its own INDIR");
+        assert_eq!(
+            u16::from_le_bytes([region[0], region[1]]),
+            KIND_CHUNK,
+            "old_chunk stages before its own residency INDIR"
+        );
+        let old_slot = u16::from_le_bytes([region[2], region[3]]);
+
+        // Evict old_chunk by materializing a second chunk into the same (capacity-1) slot; a wide
+        // camera around new_chunk also queues its upload in the same `on_frame` call.
+        s.materialize(new_chunk);
+        up.on_frame(&camera_wide(160.0, 160.0), &s);
+        assert_eq!(
+            s.slot_of(new_chunk),
+            Some(old_slot as u32),
+            "capacity 1 must reuse the just-freed slot"
+        );
+
+        // Call 1: the slot is still blocked (its old occupant's own INDIR-none has not staged
+        // yet), so new_chunk's CHUNK record must not come out yet -- an INDIR record naming the
+        // old cell "none" does instead.
+        let mut r1 = vec![0u8; RECORD_BYTES];
+        assert_eq!(up.stage(1, &s, &mut r1), 1);
+        assert_eq!(u16::from_le_bytes([r1[0], r1[1]]), KIND_INDIR);
+        let count1 = u16::from_le_bytes([r1[4], r1[5]]) as usize;
+        let saw_none = (0..count1).any(|i| {
+            let base = HEADER_BYTES + i * 4;
+            u16::from_le_bytes([r1[base + 2], r1[base + 3]]) == INDIR_NONE
+        });
+        assert!(saw_none, "expected the evicted slot's own INDIR-none first");
+
+        // Call 2: the block is now clear, so new_chunk's CHUNK record can reuse the slot.
+        let mut r2 = vec![0u8; RECORD_BYTES];
+        assert_eq!(up.stage(1, &s, &mut r2), 1);
+        assert_eq!(u16::from_le_bytes([r2[0], r2[1]]), KIND_CHUNK);
+        assert_eq!(u16::from_le_bytes([r2[2], r2[3]]), old_slot);
+
+        // Call 3: new_chunk's own residency INDIR follows its own CHUNK (`indir_after_chunk`'s own
+        // invariant, unchanged for the new cell).
+        let mut r3 = vec![0u8; RECORD_BYTES];
+        assert_eq!(up.stage(1, &s, &mut r3), 1);
+        assert_eq!(u16::from_le_bytes([r3[0], r3[1]]), KIND_INDIR);
     }
 }

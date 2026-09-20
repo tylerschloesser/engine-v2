@@ -9,7 +9,11 @@ declare global {
       /** Real `createClient()` over `fx-terrain` (Gen + Client roles), device init, tile art
        * loaded from `/terrain/tiles.json`, and `attachRenderer` -- the whole worker -> ring ->
        * drain data path, no hand-filled textures. */
-      init(): Promise<{
+      /** `opts.clientCacheChunks` (Open gate failures items 3/4, gate round 1): overrides
+       * `fx-terrain`'s own `CLIENT_CACHE_CHUNKS` through `ClientOptions.test.game`, so a test can
+       * force continuous eviction/slot-reuse with a small pan instead of the default 1,024-chunk
+       * cache every other real-client test relies on. */
+      init(opts?: { clientCacheChunks?: number }): Promise<{
         adapterInfo: {
           vendor: string
           architecture: string
