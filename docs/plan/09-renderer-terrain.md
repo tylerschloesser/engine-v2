@@ -137,13 +137,142 @@ Measured: `pnpm test rust` 139 tests (was 129; +10: 3 `texel`, 6 `upload`, 1 `tr
 (21s/25s -- unchanged, no browser test added this step). `pnpm lint` green after `pnpm format`
 (rustfmt reformatted the new test files' struct literals).
 
-### Not yet done: steps 2-7
+### Steps 2-4 (device init, fixture art, terrain shader and bind groups) -- done
 
-Stopped at this step boundary (brief's own escalation rule: "much done and much left"). Remaining,
-in Order-of-work order: device init + offscreen `renderTo`/`readPixels` (2); `fixtures/terrain`'s
-`tiles.png`/`tiles.json` generator + `render/art.ts` (3); `terrain.wgsl` + bind groups + first hand-
-filled-page probe scene (4); worker staging -> ring -> drain, residency from `CacheEvent`s (5);
-`frame-loop.ts`'s phase list (6); counters, the `terrain` zero-GC page, the WebKit
-`@slow` scene (7). None of these touch code this step already landed except by addition, so a
-successor can resume directly at step 2 with `Uploader`/`ClientSide`/`upload_stage` already in
-place to call from `render/upload.ts` and the worker pump.
+Delegated separately from step 1, with the delegation prompt explicitly permitting `terrain-
+readback.spec.ts` to land against a **hand-filled page/indirection texture** rather than the real
+worker -> ring -> drain data path (step 5). No `fixtures/terrain` Rust crate exists yet: every test
+in this range drives `render/device.ts`/`terrain.ts`/`art.ts` directly from `terrain.html`'s page
+script, with no worker and no ABI instance at all. `Uploader`/`ClientSide`/`upload_stage` from step 1
+are untouched and still exactly where a step-5 successor needs them.
+
+**Exact seam shapes**, since several differ from the brief's prose:
+
+- `render/device.ts`: `ADAPTER_REQUEST: GPURequestAdapterOptions = { featureLevel: 'compatibility' }`,
+  `DEVICE_REQUEST: GPUDeviceDescriptor = {}` -- **`featureLevel` is a `requestAdapter()` option, not
+  `requestDevice()`'s** (checked against
+  https://webgpufundamentals.org/webgpu/lessons/webgpu-compatibility-mode.html and Chrome's own
+  "What's new in WebGPU 146" post, 2026-09-20; 0018 §7's prose names neither call). `initDevice(opts?:
+  { test?: { forceViewProbe?: boolean } }): Promise<RendererDevice>`, `RendererDevice = { device,
+  adapterInfo, viewProbePasses, errors(): string[], checkCompilation(label, module): Promise<void> }`.
+  The `GPUTexture`-as-view probe (0018 §1) runs inside a `pushErrorScope('validation')` at `initDevice`
+  time; `checkSupport()`'s `no-adapter` now does a real `requestAdapter(ADAPTER_REQUEST)` call and is
+  `async` (was a bare `Promise.resolve(...)` wrapper before).
+- `engine/test` (`src/test/render.ts`): `renderTo(renderer: Renderable, opts: { width, height }):
+  RenderTarget` and `readPixels(target): Promise<PixelBuffer>` where `PixelBuffer = { width, height,
+  data: Uint8Array }` -- **the brief says `renderTo(client, ...)` / `readPixels(client):
+  Promise<Uint8Array>`**; there is no `Client` in this milestone's scope (rendering is main-thread-only
+  and no worker exists for a hand-filled scene), and `expectPixel`/`tileCentrePx` need a pixel's width
+  to index it with no other place to carry it, hence the small struct instead of a bare buffer.
+  `Renderable = { device: GPUDevice; draw(target: GPUTexture): void }` (structural, not `TerrainRenderer`
+  specifically). `tileCentrePx`'s camera parameter is `CameraFrame`, a structural subset of
+  `FrameUniformValues` (`camTileX/Y`, `camFracX/Y`, `viewportPxW/H`, `tilesPerPx`) -- kept local to
+  `test/render.ts` (step 2) rather than importing `render/terrain.ts` (step 4), so the two files have
+  no dependency in either direction.
+- `render/art.ts` **owns `VISUAL_TABLE_ENTRIES`/`VISUAL_TABLE_BYTES`** (1,024 x 16 B = 16,384),
+  not `render/terrain.ts`: `buildVisualTable` is what actually lays the bytes out, and step 3 precedes
+  step 4 in the Order of work, so `terrain.ts` imports and re-exports them instead of the other way
+  round. `validateManifest(value: unknown): TilesManifest` throws `ManifestError` naming the offending
+  id/field; `MAX_VISUALS = 1024`, `MAX_CELLS = 256` (0018 §4). The visual table's `flags` bit
+  assignment (`flip_x = 1, flip_y = 2, rotate = 4`) is this milestone's own choice: 0018 §3 fixes only
+  that the field exists. `loadTileArt(device, manifestUrl): Promise<LoadedArt>` resolves the image URL
+  against **`manifestRes.url`** (the fetch response's own, absolute, redirect-resolved URL), not the
+  caller's `manifestUrl` string -- `new URL(relative, base)` requires `base` itself to be absolute, and
+  a caller-supplied `manifestUrl` of `/terrain/tiles.json` is not one.
+- `render/terrain.ts` (`createTerrainRenderer(device, opts: { colorFormat, viewProbePasses })`): the
+  bind group layout is an **explicit `GPUBindGroupLayout`**, not `layout: 'auto'` -- this milestone's
+  shader never references `art_sampler` (binding 5: `textureLoad` only, no filtering yet), and an
+  auto-derived layout only includes bindings a pipeline's shader stages statically reference, so
+  `buildBindGroup`'s entry for an omitted binding 5 would be invalid. Every texture bound with a
+  non-default view dimension needs **`textureBindingViewDimension: '2d-array'`** at *texture creation*
+  time in compatibility mode (0018 §7's "each texture bound with one view dimension" turned out to mean
+  this, not just the bind group layout's own `viewDimension` field) -- found by
+  `device.view_probe_both_paths`'s own `uncapturederror`, on both the placeholder and the real tile-art
+  texture. The indirection texture is explicitly zero-filled to `INDIR_NONE` (`0xFFFF`) once at
+  construction: WebGPU zero-initialises new textures, but `0` is a valid page slot here, not "none", so
+  `terrain.nonresident_is_neutral` would otherwise read garbage (slot 0's stale content) instead of the
+  neutral colour. `TerrainRenderer` also exposes test/step-5 hand-fill methods not named in the brief's
+  Seams (`writePageChunk`, `writePageTexel`, `writeIndir`, `writeVisualTable`, `setTileArray`) plus
+  `drawCalls()`/`pageSlotsUsed()` counters.
+- `terrain.wgsl`'s `visual_table` binding is `var<uniform> visual_table: VisualTable` where `struct
+  VisualTable { entries: array<vec4<u32>, 1024> }` -- **a fixed-size array cannot be a uniform-address-
+  space variable's type directly** in WGSL (verified against https://www.w3.org/TR/WGSL/, 2026-09-20;
+  the brief's Planning decisions write the bare array type). Chunk/local tile math uses `tile.x >>
+  CHUNK_BITS` (arithmetic shift, sign-extending for negative `i32`) and toroidal indirection addressing
+  via `chunk & INDIR_MASK` (`63`) -- exactly `rem_euclid(64)` for a two's-complement `i32`, including
+  negative values, which is what makes `terrain.far_from_origin_exact` work: chunk `(1<<18, 1<<18)` and
+  chunk `(0, 0)` share the same masked cell since `1<<18` is a multiple of 64. Neutral colour is
+  `vec4(32/255, 32/255, 32/255, 1)`, chosen to round-trip exactly through an `rgba8unorm` readback.
+- `scripts/embed-wgsl.mjs` exports a pure `generate()` (and `outFile`), imported directly by
+  `src/render/wgsl.generated.test.ts` (`wgsl.generated_is_fresh`) so the freshness check never shells
+  out. `wgsl.generated.ts` is excluded from Biome's `files.includes` (`biome.json`, alongside the
+  existing `src/bindings` exclusion): Biome's own line-wrap reformatting of the generated file's one
+  long string literal made it disagree with `generate()`'s raw output after every `pnpm format`.
+- `crates/engine/tests/wgsl.rs`: `naga = { version = "30", features = ["wgsl-in"] }` (dev-dependency,
+  0017 §7 leaves those unrestricted) parses and validates every `.wgsl` file under
+  `src/render/wgsl/`, natively, no GPU.
+- `tests/browser/support/gpu.ts`: `expectAdapter(testInfo, info): void` (records `adapter.info` as a
+  Playwright annotation, fails -- via `expect` -- on `null`, never skips) and
+  `expectNoGpuErrors(errors): void`. Not named in the brief's Seams, but its own text says M10 finds
+  every GPU test by grepping `expectAdapter|readback`, so this name is now load-bearing.
+- `tests/browser/pages/public/terrain/{tiles.png,tiles.json}`: a checked-in 64x16 sheet of four 16px
+  flat-colour cells (visuals 0/1/2/5: black/grass-green/water-blue/ore-orange), generated by
+  `scripts/gen-terrain-art.mjs` (which uses `scripts/lib/png.mjs`, a from-scratch ~80-line PNG encoder
+  -- no PNG-writing devDependency existed and none was added). Served at `/terrain/*` because
+  `tests/browser/pages/vite.config.ts` has no explicit `publicDir` override, so Vite's default
+  (`<root>/public`) copies it into the built `dist/` the browser suite's `vite preview` serves.
+- Added `@webgpu/types@0.1.74` as an exact-pinned devDependency (this TypeScript's `lib.dom.d.ts` has
+  no WebGPU types yet). Not yet reflected in 0017 §10's toolchain-pin table (an accepted ADR, out of
+  scope to edit here) -- an orchestrator decision on whether that table needs a formal amendment.
+
+**Which browser tests landed against the hand-filled path, and what step 5 changes:** all five --
+`terrain.probe_tile_colours`, `terrain.nonresident_is_neutral`, `terrain.far_from_origin_exact`,
+`terrain.nothing_outside_viewport`, `device.view_probe_both_paths` -- pass today by writing
+page/indirection/visual-table bytes directly through `TerrainRenderer`'s test setters, with no worker
+and no `TerrainStore`/`Uploader` involved. Step 5 does not change any pixel these tests assert (the
+shader and its data layout are already final); it re-points *how the bytes arrive* -- `render/upload.ts`
+draining the real `uploadRing` instead of `terrain.html`'s direct `writePageChunk`/`writeIndir` calls --
+and adds `terrain.patch_one_texel` and `terrain.upload_budget_while_panning` (not landed here: both
+need the real ring and a scripted pan). `terrain-readback.spec.ts` itself is expected to gain a second
+scene-setup path (real ring) alongside the hand-filled one, or to be re-pointed wholesale, at the
+orchestrator's/step-5 implementer's discretion.
+
+**Interpretation calls the brief left open**, recorded rather than guessed silently:
+- `terrain.nothing_outside_viewport`: read as "nothing beyond a resident chunk's on-screen footprint
+  shows anything but the neutral colour" (a 64x64 target, one resident chunk at its centre, every
+  corner probed neutral) -- the brief names the test but not what "outside" means, and this is the
+  reading that doesn't collapse into a duplicate of `nonresident_is_neutral`.
+- `device.view_probe_both_paths`: runs the border-probe scene once with `forceViewProbe: false`, once
+  with `forceViewProbe: true` (both on fresh pages, since a `GPUDevice` cannot un-probe itself), asserts
+  identical pixels both ways, and separately records the real, unforced probe result next to
+  `adapter.info` (measured below) rather than asserting a specific value for it -- Chrome's own
+  behaviour here is exactly what's being observed, not a thing to pin down as "must be true".
+
+**Measured** (quiet-machine `pnpm test`, `uptime` load average 2.6-5.6 before each run):
+`rust pass 140 tests 0.4s/10s` (+1: `wgsl.terrain_validates`), `unit pass 98 tests 1.2s/3s` (+8:
+3 `art`, 1 `device`, 1 `wgsl.generated`, 3 `test/render`), `wasm pass 32 tests 1.4s/7s` (unchanged),
+`browser pass 68 tests 20s/25s` (+5, **well inside the 19-20s/25s trip-wire**: the five new tests'
+own durations, from `test-results/browser/report.json`, are `device.view_probe_both_paths` 323ms,
+`probe_tile_colours` 231ms, `nonresident_is_neutral` 217ms, `far_from_origin_exact` 263ms,
+`nothing_outside_viewport` 253ms -- about 1.3s total). `pnpm lint`: biome 0.3s, rustfmt 0.1s, clippy
+0.3-8.7s (cold vs. warm target dir), tsc 0.6-0.8s, all green. Real adapter recorded by every GPU test
+here: `{"vendor":"apple","architecture":"metal-3","device":"","isFallbackAdapter":false}` (headless
+Chromium, Tyler's Mac); the real, unforced `GPUTexture`-as-view probe reports `true` (this Chromium
+accepts a bare `GPUTexture` as a render-pass attachment `view`, consistent with 0018 §1's "Chrome
+140+").
+
+No budgets file entries added yet (`counters["render.uploadBytesPerFrame"]`,
+`counters["render.drawCallsTerrain"]`, `gc.pages.terrain`): all three are step 6/7's own (the frame
+loop, the ring drain and the zero-GC page don't exist yet).
+
+### Not yet done: steps 5-7
+
+Remaining, in Order-of-work order: worker staging -> ring -> drain, residency from `CacheEvent`s (5);
+`frame-loop.ts`'s phase list (6); counters, the `terrain` zero-GC page, the WebKit `@slow` scene (7).
+A successor can resume directly at step 5: `Uploader`/`ClientSide`/`upload_stage` (step 1) and
+`TerrainRenderer`/`render/art.ts`/`render/device.ts` (steps 2-4) are all in place and untouched by
+later work except by addition. The `fixtures/terrain` Rust crate (Client role, `TerrainStore` +
+`Uploader<FixtureTerrain>` wired to `frame`/`upload_stage`, `install_visual_tables`) does not exist
+yet and is step 5's own first task: nothing in steps 2-4 needed it, since every test here hand-fills
+the renderer's textures directly. `render/upload.ts` (draining `uploadRing` under the byte budget)
+also does not exist yet; step 5 creates it.
