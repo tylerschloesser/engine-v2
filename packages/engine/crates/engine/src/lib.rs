@@ -7,10 +7,12 @@ pub mod abi;
 pub mod bytes;
 pub mod client;
 pub mod codec;
+pub mod gen_queue;
 pub mod hash;
 pub mod noise;
 #[cfg(feature = "testing")]
 pub mod testing;
+pub mod view;
 pub mod world;
 pub mod worldgen;
 
