@@ -77,6 +77,12 @@ declare global {
       }>
       drawCalls(): number
       pageSlotsUsed(): number
+      /** `engine/test`'s `uploadBytes` counter (Seams, Provides; Open gate failures item 7, gate
+       * round 1): cumulative bytes drained since `init()`, not one `driveFrame`/`panAndDrive`
+       * call's own return value. */
+      uploadBytesTotal(): number
+      /** `engine/test`'s `uploadRecords` counter, cumulative since `init()`. */
+      uploadRecordsTotal(): number
       /** `null` when `(cx, cy)` is not cached (`gen.chunkHash`'s own `Status.NotCached` mapping). */
       chunkHash(cx: number, cy: number): Promise<string | null>
       errors(): string[]

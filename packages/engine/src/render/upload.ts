@@ -16,6 +16,9 @@ const KIND_INDIR = 3
 const CHUNK_EDGE = 32
 const CHUNK_TEXELS = CHUNK_EDGE * CHUNK_EDGE
 const INDIR_MAX_ENTRIES = 1024
+/** Matches `client::upload::INDIR_NONE`/`render/terrain.ts`'s own `INDIR_NONE` (Open gate failures
+ * item 3, gate round 1). */
+const INDIR_NONE = 0xffff
 
 /** Planning decisions "Byte budget accounting": a proxy for per-call cost, not the record's own
  * byte size (a CHUNK's on-wire payload is exactly 4,096 bytes; PATCH/INDIR charge per entry). */
@@ -28,9 +31,20 @@ export const DEFAULT_UPLOAD_BUDGET_BYTES = 64 * 1024
 
 export type UploadDrain = {
   /** Drains at most as many records as fit `budgetBytes`, always taking at least one when the ring
-   * is non-empty (Planning decisions). Returns the accounted bytes and record count --
-   * `engine/test`'s `uploadBytes`/`uploadRecords` counters read this return value directly. */
+   * is non-empty (Planning decisions). Returns the bytes/records accounted by *this call*. */
   drain(budgetBytes: number): { bytes: number; records: number }
+  /** Cumulative bytes drained since this `UploadDrain` was created, across every `drain()` call
+   * (Open gate failures item 7, gate round 1): `engine/test`'s `uploadBytes` counter reads this. */
+  bytesTotal(): number
+  /** Cumulative records drained since creation (`engine/test`'s `uploadRecords` counter). */
+  recordsTotal(): number
+  /** Cumulative CHUNK records drained since creation (Open gate failures item 3, gate round 1: the
+   * zero-GC page's own "uploaded CHUNK records > 0 inside the window" assertion). */
+  chunkRecordsTotal(): number
+  /** Cumulative count of INDIR entries seen with `value === INDIR_NONE` (Open gate failures item 3:
+   * a proxy for "an eviction reached the render side", one entry per `CacheEvent::Evicted` that
+   * made it through `Uploader::stage`'s own INDIR queue -- no new ABI export needed). */
+  evictedTotal(): number
 }
 
 function readU16(u8: Uint8Array, off: number): number {
@@ -70,6 +84,13 @@ export function createUploadDrain(
   for (let i = 0; i < INDIR_MAX_ENTRIES; i++) indirScratch.push({ x: 0, y: 0, value: 0 })
   const patchTexelScratch: Texel = { base: 0, resource: 0 }
 
+  // Cumulative counters (Open gate failures items 3 and 7, gate round 1): plain numbers mutated in
+  // place, never reset, never allocating (`.claude/rules/hot-paths.md`).
+  let bytesTotal = 0
+  let recordsTotal = 0
+  let chunkRecordsTotal = 0
+  let evictedTotal = 0
+
   function applyChunk(slot: number, ringIdx: number, payload: Uint8Array): void {
     if (sabWriteTextureOk) {
       renderer.writePageChunkBytes(slot, chunkViews[ringIdx] as Uint16Array)
@@ -87,6 +108,7 @@ export function createUploadDrain(
       e.x = payload[base] as number
       e.y = payload[base + 1] as number
       e.value = readU16(payload, base + 2)
+      if (e.value === INDIR_NONE) evictedTotal += 1
     }
     renderer.writeIndir(indirScratch, n)
   }
@@ -114,15 +136,25 @@ export function createUploadDrain(
       const count = readU16(payload, 4)
       const cost = kind === KIND_CHUNK ? CHUNK_BYTE_COST : count * ENTRY_BYTE_COST
       if (records > 0 && bytes + cost > budgetBytes) break
-      if (kind === KIND_CHUNK) applyChunk(slot, idx, payload)
-      else if (kind === KIND_INDIR) applyIndir(count, payload)
+      if (kind === KIND_CHUNK) {
+        applyChunk(slot, idx, payload)
+        chunkRecordsTotal += 1
+      } else if (kind === KIND_INDIR) applyIndir(count, payload)
       else if (kind === KIND_PATCH) applyPatch(count, payload)
       consumer.release()
       bytes += cost
       records += 1
     }
+    bytesTotal += bytes
+    recordsTotal += records
     return { bytes, records }
   }
 
-  return { drain }
+  return {
+    drain,
+    bytesTotal: () => bytesTotal,
+    recordsTotal: () => recordsTotal,
+    chunkRecordsTotal: () => chunkRecordsTotal,
+    evictedTotal: () => evictedTotal,
+  }
 }

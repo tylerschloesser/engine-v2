@@ -23,10 +23,14 @@ export {
 } from './test/harness.js'
 export { createManualClock, type ManualClock } from './test/manual-clock.js'
 export {
+  drawCalls,
   expectPixel,
   type PixelBuffer,
+  pageSlotsUsed,
   type Renderable,
   type RenderTarget,
   renderTo,
   tileCentrePx,
+  uploadBytes,
+  uploadRecords,
 } from './test/render.js'

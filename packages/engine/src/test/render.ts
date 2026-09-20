@@ -10,7 +10,7 @@
 // three tests that still hand-fill the renderer's textures directly (no client, no worker).
 import type { Client } from '../client.js'
 import type { TerrainRenderer } from '../render/terrain.js'
-import { createUploadDrain } from '../render/upload.js'
+import { createUploadDrain, type UploadDrain } from '../render/upload.js'
 import { RingConsumer } from '../sab/ring.js'
 
 /** The subset of `render/terrain.ts`'s `FrameUniformValues` (0018 §5) `tileCentrePx` needs; a
@@ -197,6 +197,38 @@ export function expectPixel(
       )
     }
   }
+}
+
+// Open gate failures item 7, gate round 1: Seams' Provides names these four as `engine/test`
+// counters, but `drawCalls`/`pageSlotsUsed` lived only as `TerrainRenderer` methods and
+// `uploadBytes`/`uploadRecords` only as a `drain()` call's own per-call return value -- every page
+// read them straight off the renderer/drain object instead of importing from `engine/test`. These
+// are thin pass-throughs (`Pick<...>` rather than the full interface, so a fake needs only the one
+// method a test actually exercises) reading each object's own in-place counter; M17/M17b are meant
+// to consume them from here rather than reaching into the renderer/drain themselves.
+
+/** `engine/test`'s `drawCalls` counter (Seams, Provides): total `draw()` calls since `renderer` was
+ * created. */
+export function drawCalls(renderer: Pick<TerrainRenderer, 'drawCalls'>): number {
+  return renderer.drawCalls()
+}
+
+/** `engine/test`'s `pageSlotsUsed` counter (Seams, Provides): total distinct page slots written
+ * since `renderer` was created. */
+export function pageSlotsUsed(renderer: Pick<TerrainRenderer, 'pageSlotsUsed'>): number {
+  return renderer.pageSlotsUsed()
+}
+
+/** `engine/test`'s `uploadBytes` counter (Seams, Provides): cumulative bytes drained since `drain`
+ * was created, across every `drain.drain(...)` call -- not one call's own return value. */
+export function uploadBytes(drain: Pick<UploadDrain, 'bytesTotal'>): number {
+  return drain.bytesTotal()
+}
+
+/** `engine/test`'s `uploadRecords` counter (Seams, Provides): cumulative records drained since
+ * `drain` was created. */
+export function uploadRecords(drain: Pick<UploadDrain, 'recordsTotal'>): number {
+  return drain.recordsTotal()
 }
 
 /** The pixel centre of tile `(tx, ty)` under `camera`'s frame-uniform values (0018 §5's own formula,

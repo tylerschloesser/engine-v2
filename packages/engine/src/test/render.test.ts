@@ -2,7 +2,15 @@
 // `expectPixel` need no GPU, so they get a plain unit test even though `terrain-readback.spec.ts`
 // exercises the GPU-backed `renderTo`/`readPixels` end to end instead.
 import { expect, test } from 'vitest'
-import { expectPixel, type PixelBuffer, tileCentrePx } from './render.js'
+import {
+  drawCalls,
+  expectPixel,
+  type PixelBuffer,
+  pageSlotsUsed,
+  tileCentrePx,
+  uploadBytes,
+  uploadRecords,
+} from './render.js'
 
 test('tileCentrePx: pixel index equals tile index at the pixel-aligned coincidence', () => {
   // The same camera shape `terrain-readback.spec.ts` uses: tilesPerPx 1, camTile == half viewport.
@@ -56,4 +64,14 @@ test('expectPixel: passes within tolerance, throws outside it', () => {
   expect(() => expectPixel(pixels, 1, 1, [12, 20, 30, 255], 2)).not.toThrow()
   expect(() => expectPixel(pixels, 1, 1, [13, 20, 30, 255], 2)).toThrow(/channel r/)
   expect(() => expectPixel(pixels, 5, 0, [10, 20, 30, 255], 0)).toThrow(/outside/)
+})
+
+// Open gate failures item 7, gate round 1: `engine/test`'s `drawCalls`/`pageSlotsUsed`/
+// `uploadBytes`/`uploadRecords` are thin pass-throughs over each object's own in-place counter --
+// `Pick<...>` typed, so a fake needs only the one method under test.
+test('drawCalls/pageSlotsUsed/uploadBytes/uploadRecords read the underlying counter', () => {
+  expect(drawCalls({ drawCalls: () => 3 })).toBe(3)
+  expect(pageSlotsUsed({ pageSlotsUsed: () => 7 })).toBe(7)
+  expect(uploadBytes({ bytesTotal: () => 4096 })).toBe(4096)
+  expect(uploadRecords({ recordsTotal: () => 2 })).toBe(2)
 })

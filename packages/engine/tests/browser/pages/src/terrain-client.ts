@@ -15,7 +15,15 @@ import { RingConsumer } from '../../../../src/sab/ring.ts'
 import { stepFrame as clientStepFrame } from '../../../../src/test/client.ts'
 import { chunkHash, stats as genStats } from '../../../../src/test/gen.ts'
 import { createManualClock } from '../../../../src/test/manual-clock.ts'
-import { attachRenderer, readPixels, renderTo } from '../../../../src/test/render.ts'
+import {
+  attachRenderer,
+  drawCalls as drawCallsCounter,
+  pageSlotsUsed as pageSlotsUsedCounter,
+  readPixels,
+  renderTo,
+  uploadBytes as uploadBytesCounter,
+  uploadRecords as uploadRecordsCounter,
+} from '../../../../src/test/render.ts'
 import { fixtureWasm } from './fixture-wasm.ts'
 
 declare global {
@@ -169,12 +177,22 @@ window.__terrainClient = {
     return { width: pixels.width, height: pixels.height, data: Array.from(pixels.data) }
   },
 
+  // Open gate failures item 7, gate round 1: through `engine/test`'s own counter accessors, not a
+  // direct `renderer.drawCalls()`/`.pageSlotsUsed()` call.
   drawCalls() {
-    return (renderer as TerrainRenderer).drawCalls()
+    return drawCallsCounter(renderer as TerrainRenderer)
   },
 
   pageSlotsUsed() {
-    return (renderer as TerrainRenderer).pageSlotsUsed()
+    return pageSlotsUsedCounter(renderer as TerrainRenderer)
+  },
+
+  uploadBytesTotal() {
+    return uploadBytesCounter(uploadDrain as UploadDrain)
+  },
+
+  uploadRecordsTotal() {
+    return uploadRecordsCounter(uploadDrain as UploadDrain)
   },
 
   async chunkHash(cx, cy) {
