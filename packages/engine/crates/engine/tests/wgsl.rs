@@ -14,7 +14,7 @@ fn wgsl_dir() -> PathBuf {
 }
 
 #[test]
-fn terrain_validates() {
+fn wgsl_terrain_validates() {
     let dir = wgsl_dir();
     let entries = fs::read_dir(&dir).unwrap_or_else(|e| panic!("reading {dir:?}: {e}"));
     let mut checked = 0usize;
