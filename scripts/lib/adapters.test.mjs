@@ -24,7 +24,7 @@ describe('playwright adapter', () => {
         '--config',
         'packages/engine/playwright.config.ts',
         '--grep',
-        '(?!.*@slow).*',
+        '^(?!.*@slow).*',
       ],
       env: { PLAYWRIGHT_JSON_OUTPUT_FILE: 'test-results/browser/report.json' },
       reportPath: 'test-results/browser/report.json',
@@ -32,6 +32,19 @@ describe('playwright adapter', () => {
     expect(
       command({ suite: { name: 'browser' }, tier: 'slow', pattern: 'determinism' }).args,
     ).toContain('(?=.*@slow).*determinism')
+  })
+
+  // docs/plan/09-renderer-terrain.md, Deviations "Steps 5-7": an *unanchored* `(?!.*@slow)` still
+  // matches a title containing "@slow" once Playwright's (or here, a plain `RegExp.test`) scan
+  // position moves past the literal text -- `.test()` tries every start position, and at the
+  // position right after "@slow" the lookahead trivially succeeds. `^` forces the lookahead to be
+  // evaluated only at position 0, where the title's own "@slow" is still ahead of it.
+  test('fast-tier grep actually excludes a title with @slow anywhere in it', () => {
+    const { command } = adapters.playwright
+    const grepSource = command({ suite: { name: 'browser' }, tier: 'fast' }).args.at(-1)
+    const re = new RegExp(grepSource)
+    expect(re.test('terrain: probe tile colours webkit @webkit-gpu @slow')).toBe(false)
+    expect(re.test('terrain: probe tile colours')).toBe(true)
   })
 })
 

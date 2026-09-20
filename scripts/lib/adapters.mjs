@@ -88,7 +88,14 @@ export const adapters = {
   playwright: {
     command({ suite, pattern, tier }) {
       const reportPath = `${suite.name}/report.json`
-      const tag = tier === 'slow' ? '(?=.*@slow)' : '(?!.*@slow)'
+      // `^` matters only for the fast tier: Playwright's `--grep` tests this pattern unanchored
+      // (any substring position), so an un-anchored `(?!.*@slow)` "succeeds" trivially once the
+      // scan position moves past the literal "@slow" text in the title -- found by docs/plan/
+      // 09-renderer-terrain.md's own `@webkit-gpu @slow` test still running under `pnpm test`
+      // (fast tier). The `vitest` adapter right below already anchors both of its own tags this
+      // way; this brings `playwright` in line with it. The slow tier's `(?=.*@slow)` needs no `^`:
+      // a positive lookahead that can match starting at position 0 needs no anchor to be correct.
+      const tag = tier === 'slow' ? '(?=.*@slow)' : '^(?!.*@slow)'
       return {
         cmd: 'pnpm',
         args: [

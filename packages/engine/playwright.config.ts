@@ -40,9 +40,14 @@ export default defineConfig({
     {
       // Sim hash only (0020 §6: Firefox returns a null WebGPU adapter headless); multi-engine repeats
       // stay to the determinism spec (`@engines`; Planning decisions, "Browsers and projects").
+      // `@webkit-gpu` (docs/plan/09-renderer-terrain.md, Tests added "`@slow`: `terrain.
+      // probe_tile_colours` on Playwright WebKit"): WebKit, unlike Firefox, does give a real WebGPU
+      // adapter headless (0018 §7's own support table), so this one extra tag lets a GPU test opt
+      // into WebKit without also being picked up by Firefox's `@engines`-only grep below -- a plain
+      // `@engines` tag on a GPU test would fail there on a null adapter.
       name: 'webkit',
       use: { ...devices['Desktop Safari'] },
-      grep: /@engines/,
+      grep: /@engines|@webkit-gpu/,
       testIgnore: '**/gc-*.spec.ts',
     },
     {

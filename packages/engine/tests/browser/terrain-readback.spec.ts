@@ -140,7 +140,13 @@ async function readClientBorderScene(
   return { width: raw.width, height: raw.height, data: Uint8Array.from(raw.data) }
 }
 
-test('terrain: probe tile colours', async ({ page }, testInfo) => {
+/** Shared by the fast-tier chromium test and its `@slow` WebKit repeat below (Tests added):
+ * `terrain-client.html`, a real client, the border/ore scene, then the same four pixel
+ * assertions. */
+async function runProbeTileColours(
+  page: import('@playwright/test').Page,
+  testInfo: import('@playwright/test').TestInfo,
+): Promise<void> {
   await openPage(page, '/terrain-client.html')
   const init = await page.evaluate(() => window.__terrainClient?.init())
   expectAdapter(testInfo, init?.adapterInfo ?? null)
@@ -172,6 +178,17 @@ test('terrain: probe tile colours', async ({ page }, testInfo) => {
   expectPixel(pixels, 10, 0, GRASS, TOL)
 
   expectNoGpuErrors(await page.evaluate(() => window.__terrainClient?.errors() ?? []))
+}
+
+test('terrain: probe tile colours', async ({ page }, testInfo) => {
+  await runProbeTileColours(page, testInfo)
+})
+
+// `@webkit-gpu` (playwright.config.ts's own webkit project grep) + `@slow` (0020 §4): runs only
+// under `pnpm test:slow`, only in the `webkit` project -- Firefox's own `@engines`-only grep never
+// matches this title, so a null WebGPU adapter there (0020 §6) never reaches `expectAdapter`.
+test('terrain: probe tile colours webkit @webkit-gpu @slow', async ({ page }, testInfo) => {
+  await runProbeTileColours(page, testInfo)
 })
 
 test('terrain: nonresident is neutral', async ({ page }, testInfo) => {

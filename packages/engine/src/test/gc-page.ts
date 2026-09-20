@@ -49,7 +49,10 @@ const FRAME_MS = 1000 / 60
  * be armed for the run, which is why `instrument.ts` resumes with `{ except: [isolate] }` whenever
  * that control is active (Planning decisions "Sequence").
  */
-export function installGcPage(harness: Harness, opts: { drive?(frame: number): void } = {}): void {
+export function installGcPage(
+  harness: Harness,
+  opts: { drive?(frame: number): void; adapter?: object | null } = {},
+): void {
   let control: NegativeControl = null
   const drive =
     opts.drive ??
@@ -108,7 +111,9 @@ export function installGcPage(harness: Harness, opts: { drive?(frame: number): v
     ready: Promise.resolve({
       isolates: ['main', ...harness.workerNames],
       crossOriginIsolated: window.crossOriginIsolated,
-      adapter: null,
+      // docs/plan/09-renderer-terrain.md, step 7: the first zero-GC page with a real WebGPU
+      // adapter (M04's own comment here: "a later page's script fills this in").
+      adapter: opts.adapter ?? null,
       gcExposed: { main: typeof window.gc === 'function', ...harness.workerGcExposed() },
     }),
     run,
