@@ -1,8 +1,9 @@
 // `client`-kind worker body (docs/plan/06b-workers-and-spawn.md, Scope): instantiate, reserve the
 // arena, copy the camera block into its `Camera` region and call `frame(t_ms)` when `CB_FRAME_REQ`
-// has advanced since the last wake, storing `W_ACK` (Planning decisions "Worker frame clock").
-// `test.echo` additionally drives the `echo` zero-GC page's SAB -> region -> region -> SAB round
-// trip (Tests added), gated so it never runs in a production build that never sets the flag.
+// has advanced since the last wake, storing `W_ACK` (Planning decisions "Worker frame clock",
+// amended: see `FRAME_ARG` below). `test.echo` additionally drives the `echo` zero-GC page's SAB ->
+// region -> region -> SAB round trip (Tests added), gated so it never runs in a production build
+// that never sets the flag.
 import { RegionId, Role } from '../abi.js'
 import { CameraBlockView, readCameraBlockInto } from '../camera/block.js'
 import type { EngineInstance, RegionView } from '../loader.js'
@@ -12,14 +13,20 @@ import { applyGcHook } from './gc-hook.js'
 import { instantiateForSetup } from './instantiate.js'
 import type { SetupMessage } from './protocol.js'
 import type { LoopState, Shell } from './shell.js'
+import { noTimeout } from './shell.js'
 
-/** `CAM_OFF_FRAME_TIME_MS` (`camera/block.ts`): where `frame_time_ms` lands once the whole 80-byte
- * block is copied into this role's `Camera` region. */
-const FRAME_TIME_BYTE_OFFSET = 24
-
-function frameTimeView(region: RegionView): Float64Array {
-  return new Float64Array(region.u8.buffer, region.u8.byteOffset + FRAME_TIME_BYTE_OFFSET, 1)
-}
+/**
+ * `frame(t_ms: f64)`'s own argument is a vestigial Smi, not the frame time (Planning decisions
+ * "Worker frame clock" amended, fix round 2: docs/plan/06b-workers-and-spawn.md, Deviations).
+ * `frameTime[0] as number`, a `Float64Array` read of the just-copied camera block, boxed a fresh
+ * `HeapNumber` on every real frame in the interpreter tier (`byFn` evidence on `topology clean`);
+ * the whole 80-byte block -- `frame_time_ms` included -- is already copied into this role's own
+ * `Camera` region by `readCameraBlockInto` on the very same pass, so Rust can read it there
+ * (`CameraBlock::frame_time_ms`, `client/camera.rs`) instead of receiving it a second time as a
+ * boxed argument. The export keeps its declared shape (`frame(t_ms: f64) -> status`, unchanged ABI,
+ * no `ABI_VERSION` bump) because docs/plan/{15b,17,18,19,26,30}.md and 08b's Consumes all cite
+ * `frame(t_ms)` by this name; only what crosses as the argument changed, from memory. */
+const FRAME_ARG = 0
 
 function requireRegion(inst: EngineInstance, id: RegionId, what: string): RegionView {
   const r = inst.region(id)
@@ -27,8 +34,6 @@ function requireRegion(inst: EngineInstance, id: RegionId, what: string): Region
     throw new Error(`client worker: ${what} region required but engine_init did not reserve it`)
   return r
 }
-
-const NO_TIMEOUT = (): number => Number.POSITIVE_INFINITY
 
 export async function setup(shell: Shell, message: SetupMessage): Promise<LoopState> {
   const inst = await instantiateForSetup(shell, message, Role.Client)
@@ -42,10 +47,6 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   const gcHook = message.test?.gcHook === true
   const cameraRegion = requireRegion(inst, RegionId.Camera, 'Camera')
   const cameraReader = new CameraBlockView(message.sabs.cameraBlock)
-  let frameTime = frameTimeView(cameraRegion)
-  inst.onViewsRebuilt(() => {
-    frameTime = frameTimeView(cameraRegion)
-  })
   let lastFrameReq = Atomics.load(shell.control.words, CB_FRAME_REQ)
 
   const echo = message.test?.echo === true
@@ -60,7 +61,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     if (frameReq !== lastFrameReq) {
       lastFrameReq = frameReq
       if (readCameraBlockInto(cameraReader, cameraRegion.u8, 0)) {
-        inst.call1(inst.x.frame, frameTime[0] as number)
+        inst.call1(inst.x.frame, FRAME_ARG)
       }
       Atomics.store(shell.control.words, workerWord(shell.index, W_ACK), frameReq)
     }
@@ -75,5 +76,5 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     }
   }
 
-  return { body, timeoutMs: NO_TIMEOUT }
+  return { body, timeoutMs: noTimeout }
 }

@@ -38,17 +38,15 @@ const harness = asHarness(client)
 await parkWorkers(client)
 setCamera(client, { x: 1, y: -1, tilesAcross: 12 })
 
-// `STEP_TICK_EVERY`: `sim`/`gen0` have no ring traffic of their own yet (Non-scope) and only need
-// enough wake cycles across the window for their own negative controls to trip clearly
-// (`asHarness`'s own comment); every frame's extra two busy-spin round trips measurably raised
-// `main`'s own noise floor under real contention (docs/plan/06b-workers-and-spawn.md, Deviations).
-// Every other frame halves that overhead while keeping the `object` control's margin over the 8 B
-// strict-worker budget (a bigger divisor thinned it too far).
-const STEP_TICK_EVERY = 2
+// Ticks every frame (fix round 2, docs/plan/06b-workers-and-spawn.md, Deviations): a prior
+// `STEP_TICK_EVERY = 2` halved `sim`/`gen0`'s own wake count to mask a real per-pass allocation bug
+// (`NO_TIMEOUT`'s `Number.POSITIVE_INFINITY` re-box, `worker/shell.ts`) rather than fix it; with
+// that bug (and `frame(t_ms)`'s own box, `worker/client.ts`) fixed, every isolate's clean reading is
+// far under budget at full tick rate and the mask is no longer needed.
 installGcPage(harness, {
-  drive(frame) {
+  drive() {
     harness.stepFrame(1000 / 60)
-    if (frame % STEP_TICK_EVERY === 0) harness.stepTick()
+    harness.stepTick()
   },
 })
 

@@ -24,9 +24,6 @@ const ECHO_BYTES = 10 * 1024
 // The spike's ack-timeout guard (`spikes/zero-gc-webgpu/public/main.js`), reused the same way
 // `test/client.ts`'s `stepFrame` does.
 const SPIN_LIMIT = 2_000_000_000
-// See `gc-topology.ts`'s own comment: `sim`/`gen0` only need *some* wake cycles across the window.
-const STEP_TICK_EVERY = 2
-
 const canvas = document.createElement('canvas')
 const client: Client = createClient({
   canvas,
@@ -68,8 +65,10 @@ installGcPage(harness, {
     void len
     void dst[0]
     // `sim`/`gen0` have no ring traffic of their own yet (Non-scope): locksteps a synthetic wake
-    // with them so their own negative controls trip reliably (`asHarness`'s own comment).
-    if (frame % STEP_TICK_EVERY === 0) harness.stepTick()
+    // with them so their own negative controls trip reliably (`asHarness`'s own comment). Every
+    // frame, not every other (fix round 2, docs/plan/06b-workers-and-spawn.md, Deviations): see
+    // `gc-topology.ts`'s own comment on why the mask is no longer needed.
+    harness.stepTick()
   },
 })
 

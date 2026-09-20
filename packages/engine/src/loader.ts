@@ -102,6 +102,22 @@ export class EngineTrap extends Error {
 const decoder = new TextDecoder()
 const encoder = new TextEncoder()
 
+/**
+ * Whether `buffer` was detached by a `memory.grow` (0014 §4): `ArrayBuffer.prototype.detached`
+ * (widely available; `lib: es2023` here predates its `.d.ts`, hence the cast) returns a plain
+ * `boolean`, never boxed, unlike the `this.mem.u8.byteLength === 0` check this replaces. That
+ * comparison's own comment claimed "allocates nothing", which fix round 2 (docs/plan/
+ * 06b-workers-and-spawn.md, Deviations) measured false: `TypedArray.prototype.byteLength`'s getter
+ * return value boxed a fresh `HeapNumber` on every `call0`/`call1`/`call2`, in every kind and every
+ * isolate that calls a WASM export at all -- the dominant source of `gc: flat transport parity`'s
+ * (M04) run-to-run byte mismatches on `sim`. This accessor still leaves a smaller, residual,
+ * intermittent allocation (see that Deviations entry for the evidence and why a buffer-identity
+ * comparison measured worse, not better); recorded as still open.
+ */
+function isDetached(buffer: ArrayBufferLike): boolean {
+  return (buffer as unknown as { detached: boolean }).detached
+}
+
 function defaultLog(level: LogLevel, text: string): void {
   if (level === LogLevel.Error) console.error(text)
   else if (level === LogLevel.Warn) console.warn(text)
@@ -171,8 +187,7 @@ class Instance implements EngineInstance {
     } catch (e) {
       throw this.#trapped(e)
     }
-    // `memory.grow` detaches every view; this comparison allocates nothing (0014 §4).
-    if (this.mem.u8.byteLength === 0) this.#rebuild()
+    if (isDetached(this.mem.u8.buffer)) this.#rebuild()
     return result
   }
 
@@ -184,7 +199,7 @@ class Instance implements EngineInstance {
     } catch (e) {
       throw this.#trapped(e)
     }
-    if (this.mem.u8.byteLength === 0) this.#rebuild()
+    if (isDetached(this.mem.u8.buffer)) this.#rebuild()
     return result
   }
 
@@ -196,7 +211,7 @@ class Instance implements EngineInstance {
     } catch (e) {
       throw this.#trapped(e)
     }
-    if (this.mem.u8.byteLength === 0) this.#rebuild()
+    if (isDetached(this.mem.u8.buffer)) this.#rebuild()
     return result
   }
 

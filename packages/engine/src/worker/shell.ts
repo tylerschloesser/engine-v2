@@ -16,6 +16,22 @@ import type { FromWorker } from './protocol.js'
 
 export type LoopState = { body: (wokenBy: number) => void; timeoutMs: () => number }
 
+/** Every kind's `timeoutMs` until M13 gives `sim` a real tick deadline: a module-level constant
+ * closed over once, not `Number.POSITIVE_INFINITY` read fresh on every pass. Fix round 2 evidence
+ * (docs/plan/06b-workers-and-spawn.md, Deviations, `byFn` attribution on `topology clean`) found
+ * each kind's own `const NO_TIMEOUT = (): number => Number.POSITIVE_INFINITY` was the single
+ * largest allocation site in the idle `sim`/`gen0`/`client` isolates: reading the named property
+ * `Number.POSITIVE_INFINITY` boxed a fresh `HeapNumber` on every call, in the interpreter tier a
+ * worker blocked in `Atomics.wait` most of its life may never leave. Returning an already-boxed
+ * local instead (computed once, at module load) avoids the re-box. */
+const INFINITE_TIMEOUT_MS: number = Number.POSITIVE_INFINITY
+
+/** Shared by every kind with no real deadline yet (`sim`, `gen`, `client`): see
+ * `INFINITE_TIMEOUT_MS`'s own comment. */
+export function noTimeout(): number {
+  return INFINITE_TIMEOUT_MS
+}
+
 export interface WorkerShell {
   readonly control: ControlBlock
   readonly index: number

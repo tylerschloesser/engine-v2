@@ -154,6 +154,12 @@ pub fn sim_hash<T: Instance>(slot: &Slot<T>) -> Status {
     Status::Ok
 }
 
+/// `t_ms` is forwarded as-is; as of fix round 2 (docs/plan/06b-workers-and-spawn.md, Deviations)
+/// the worker no longer computes a meaningful value for it (that read boxed a fresh `HeapNumber`
+/// on every real frame), so an `Instance::frame` that wants the time reads `camera.frame_time_ms`
+/// instead -- already in `camera`, copied into this role's `Camera` region the same pass. The
+/// export keeps this signature (no `ABI_VERSION` bump): several later milestones' briefs cite
+/// `frame(t_ms)` by name.
 pub fn frame<T: Instance>(slot: &Slot<T>, t_ms: f64) -> Status {
     let rt = match slot.client() {
         Ok(rt) => rt,

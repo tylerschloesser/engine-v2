@@ -11,8 +11,7 @@ import { applyGcHook } from './gc-hook.js'
 import { instantiateForSetup } from './instantiate.js'
 import type { SetupMessage } from './protocol.js'
 import type { LoopState, Shell } from './shell.js'
-
-const NO_TIMEOUT = (): number => Number.POSITIVE_INFINITY
+import { noTimeout } from './shell.js'
 
 export async function setup(shell: Shell, message: SetupMessage): Promise<LoopState> {
   await instantiateForSetup(shell, message, Role.Sim)
@@ -23,5 +22,5 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     Atomics.store(shell.control.words, workerWord(shell.index, W_ACK), wokenBy)
   }
 
-  return { body, timeoutMs: NO_TIMEOUT }
+  return { body, timeoutMs: noTimeout }
 }
