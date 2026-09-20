@@ -14,8 +14,12 @@ import { createUploadDrain, DEFAULT_UPLOAD_BUDGET_BYTES } from '../../../../src/
 import { RingConsumer } from '../../../../src/sab/ring.ts'
 import { asHarness, parkWorkers } from '../../../../src/test/client.ts'
 import { installGcPage } from '../../../../src/test/gc-page.ts'
+import { stats as genStats } from '../../../../src/test/gen.ts'
 import { createManualClock } from '../../../../src/test/manual-clock.ts'
 import { fixtureWasm } from './fixture-wasm.ts'
+
+// `window.__terrainGcCounters`'s type comes from `../support/gc-terrain-window.d.ts` (shared with
+// the spec file), the same split `terrain.ts` already uses for `window.__terrain`.
 
 declare global {
   interface Window {
@@ -45,13 +49,20 @@ const target = device.device.createTexture({
     GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC | GPUTextureUsage.TEXTURE_BINDING,
 })
 
+// Open gate failures item 3, gate round 1: `fx-terrain`'s own default cache (1,024 chunks) never
+// fills over this page's ~35-chunk pan, so `CacheEvent::Evicted`/`INDIR` none/slot reuse never ran
+// inside the measured window. A small cache (well under the ~35 chunks the pan below touches, and
+// under the instantaneous ring-1+lookahead footprint at half-extent 24) forces continuous eviction
+// throughout the run instead -- also exercising item 4's own slot-reuse-ordering fix on every
+// clean/negative-control run of this page.
+const CLIENT_CACHE_CHUNKS = 8
 const client = createClient({
   canvas,
   wasm,
   host: { kind: 'remote', url: 'ws://unused.invalid' },
   genWorkers: 1,
   assets: { tiles: '/terrain/tiles.json' },
-  test: { clock, flags: { gcHook: true } },
+  test: { clock, flags: { gcHook: true }, game: { clientCacheChunks: CLIENT_CACHE_CHUNKS } },
 })
 await client.ready
 // A production worker enters its blocking loop right after `ready`: park before `__pageReady`
@@ -89,5 +100,14 @@ installGcPage(harness, {
     renderer.draw(target)
   },
 })
+
+window.__terrainGcCounters = async () => {
+  const s = await genStats(client)
+  return {
+    generated: s.delivered,
+    uploadedChunks: uploadDrain.chunkRecordsTotal(),
+    evicted: uploadDrain.evictedTotal(),
+  }
+}
 
 window.__pageReady = true
