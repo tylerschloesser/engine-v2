@@ -83,3 +83,67 @@ None here. Fill-rate needs the full shader and a camera: `device-checks.md`, M09
 
 ## Deviations
 (filled in during Phase 3)
+
+### Step 1 (Rust: texel conversion, tables, `Uploader`, record golden) -- done
+
+Exact seam shapes, since the brief's prose abbreviates several:
+
+- `pub trait ClientSide<G = ()>` (`crates/engine/src/client/texel.rs`): the brief says "`G`
+  unbounded"; giving it a default of `()` lets a fixture write `impl ClientSide for Fixture {}`
+  and instantiate `Uploader<Fixture>` without ever naming `G`, with no loss of generality (M12
+  still supplies its own `G: Game` and drops the default).
+- `pub struct Uploader<C: ClientSide<G>, G = ()>` (`client/upload.rs`), matching. `Uploader::new`
+  panics (`assert_eq!`) when `dims.edge() != 32`, the same style `ChunkDims::new` already uses for
+  its own bits check -- not a `Result`, per Planning decisions "`CHUNK_BITS` is 5 here" ("fails at
+  init").
+- `Registry` gained `base_visual(u8) -> u16` / `resource_visual(u8) -> u16` getters (not named in
+  the brief) alongside the named `set_base_visual`/`set_resource_visual`, so
+  `client::texel::install_visual_tables(&Registry)` -- also not named in the brief, the function
+  that snapshots a filled-in `Registry` into the instance-wide cell -- never needs `Registry`'s
+  private fields. A fixture (or, from M12, `Game::register`'s tail) calls
+  `reg.set_base_visual(..)` / `set_resource_visual(..)` then `install_visual_tables(&reg)` once.
+- `Instance::upload_stage(&mut self, max_records: u32, out: &mut [u8]) -> u32`: the ABI export
+  itself is exactly `upload_stage(max_records: u32) -> u32` as specified (numbers only, per
+  0014 §2), but the *trait* method needs the `ChunkTexels` region handed in, the same shape
+  `gen_chunk`'s `Instance` method takes `out: &mut [u8]` while its export takes none. `abi::mod.rs`'s
+  new `upload_stage` dispatcher fetches `RegionId::ChunkTexels` via `rt.layout.bytes_mut` and
+  forwards it. `Uploader` itself exposes `stage(&mut self, max_records: u32, store: &TerrainStore,
+  region: &mut [u8]) -> u32` (not in Provides -- an implementation detail a fixture's own
+  `upload_stage` impl calls, passing its own `TerrainStore`), doing the CHUNK-then-INDIR-then-PATCH
+  priority ordering.
+- `view::lookahead_chunks`'s `velocity: (i32, i32)` only reads the *sign* of each axis (its own doc
+  comment). `Uploader::on_frame` passes `(sign_i32(camera.velocity[0]), sign_i32(camera.velocity[1]))`
+  rather than duplicating `TerrainFeed`'s private Q24.8 conversion for a value only ever compared to
+  zero.
+- `Uploader`'s nearest-first sort duplicates `view::nearest_first`'s private squared-distance
+  helper as `chunk_dist_sq` (that helper isn't `pub`); ring-1 chunks and the up-to-2 look-ahead
+  chunks are pooled into one `scratch_candidates` buffer (capacity 256, "0018 §6's 121 chunks"
+  worst case) and sorted together, rather than two separate orderings.
+- `requeue_all` (M37b's seam) is implemented minimally here: clears every "on GPU" bit and forces
+  the next `on_frame` to rescan ring 1 + look-ahead from scratch. It does **not** replay every
+  chunk resident outside that window -- a fuller device-loss re-enqueue (0018 §8: "ask the worker to
+  re-enqueue every resident chunk") is M37b's own extension; flagged here rather than guessed at,
+  since M09 has no device-loss test to drive the exact shape.
+- `PAGE_SLOTS = 1_024` and the `Uploader::uploaded` bit-array are sized to the fixed 1024x1024 page
+  texture (0018 §3), independent of a store's configured `CacheCapacity` -- a game must configure
+  its client cache to <= 1,024 chunks for terrain rendering to address every cached slot; nothing
+  here enforces that bound (Non-scope: cache capacity is 0007 §7's own concern).
+- ABI: `ABI_VERSION` 4 -> 5 (`crates/engine/src/abi/registry.rs`, `packages/engine/src/abi.ts`), one
+  new export `upload_stage: { role: 'client', params: 1, result: 'u32' }`.
+
+Measured: `pnpm test rust` 139 tests (was 129; +10: 3 `texel`, 6 `upload`, 1 `traits`),
+`pnpm test wasm` 32 (unchanged count, ABI-registry mirror test covers the new export),
+`pnpm test` overall: rust 139 (0.4s/10s), unit 90 (1.1s/3s), wasm 32 (1.4s/7s), browser 63
+(21s/25s -- unchanged, no browser test added this step). `pnpm lint` green after `pnpm format`
+(rustfmt reformatted the new test files' struct literals).
+
+### Not yet done: steps 2-7
+
+Stopped at this step boundary (brief's own escalation rule: "much done and much left"). Remaining,
+in Order-of-work order: device init + offscreen `renderTo`/`readPixels` (2); `fixtures/terrain`'s
+`tiles.png`/`tiles.json` generator + `render/art.ts` (3); `terrain.wgsl` + bind groups + first hand-
+filled-page probe scene (4); worker staging -> ring -> drain, residency from `CacheEvent`s (5);
+`frame-loop.ts`'s phase list (6); counters, the `terrain` zero-GC page, the WebKit
+`@slow` scene (7). None of these touch code this step already landed except by addition, so a
+successor can resume directly at step 2 with `Uploader`/`ClientSide`/`upload_stage` already in
+place to call from `render/upload.ts` and the worker pump.
