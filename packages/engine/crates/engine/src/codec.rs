@@ -484,8 +484,12 @@ pub fn decode_canonical<T: Codec>(bytes: &[u8]) -> Result<T, CodecError> {
     if !rest.is_empty() {
         return Err(CodecError::Trailing);
     }
+    // Non-strict: untrusted bytes may decode to a NaN, which is exactly the non-canonical case
+    // this function exists to reject as an ordinary `Err`, not the debug assert `encode` would
+    // hit on a NaN it was handed to *write* (Planning decisions 3).
     let mut scratch = vec![0u8; bytes.len()];
-    match encode(&value, &mut scratch) {
+    let mut sink = SliceSink::new(&mut scratch);
+    match encode_to_with(false, &value, &mut sink).and_then(|()| sink.finish()) {
         Ok(n) if scratch[..n] == *bytes => Ok(value),
         _ => Err(CodecError::NonCanonical),
     }

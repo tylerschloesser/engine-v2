@@ -15,7 +15,8 @@
     "setup:tools": "node scripts/setup-tools.mjs",
     "device:serve": "node packages/engine/scripts/device-serve.mjs",
     "format": "pnpm exec biome check --write . && cargo fmt",
-    "golden": "pnpm --silent --filter engine build && node --disable-warning=ExperimentalWarning packages/engine/scripts/golden.mjs"
+    "golden": "pnpm --silent --filter engine build && node --disable-warning=ExperimentalWarning packages/engine/scripts/golden.mjs",
+    "golden:bytes": "node scripts/golden-bytes.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",

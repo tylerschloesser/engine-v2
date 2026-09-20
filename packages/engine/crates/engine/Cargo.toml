@@ -16,3 +16,11 @@ testing = []
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 postcard = { version = "1", default-features = false, features = ["alloc"] }
+
+# `golden_codec_sample` uses `engine::assert_golden_bytes!`/`assert_golden_hash!`, feature
+# `testing`. In practice always on for `pnpm test rust` (fx-hash's dev-dependency on `engine`
+# unifies it across the `--workspace` build); this makes an isolated `cargo test -p engine`
+# without `--features testing` skip the target instead of failing to compile.
+[[test]]
+name = "codec"
+required-features = ["testing"]
