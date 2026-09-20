@@ -24,7 +24,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 06b | `06b-workers-and-spawn.md` | worker kinds in `engine/worker`, `createClient` spawn path, `yield` protocol | 06 | |
 | [x] | 07 | `07-world-model-core.md` | tiles, chunk coords, `Registry` + trait tables, pristine + overlays + invisible dense cache | 05 | |
 | [x] | 08 | `08-worldgen-and-gen-worker.md` | `Worldgen` trait, `gen` role, `engine::noise`, worldgen golden + benchmark | 05, 07 | D |
-| [ ] | 08b | `08b-gen-workers-and-queue.md` | gen workers over request ring / result slabs, generation queue, client pristine-cache feed | 06b, 08 | |
+| [x] | 08b | `08b-gen-workers-and-queue.md` | gen workers over request ring / result slabs, generation queue, client pristine-cache feed | 06b, 08 | |
 | [ ] | 09 | `09-renderer-terrain.md` | WebGPU ferry, terrain shader over page/indirection textures, chunk-upload ring, readback test | 08b | |
 | [ ] | 10 | `10-ci-workflow.md` | GitHub Actions + SwiftShader, x86-64 determinism, software-adapter GC assertion | 09 | T |
 | [ ] | 09b | `09b-terrain-art-and-lifecycle.md` | art contract sampling + mips, canvas lifecycle, device page | 09 | D |
