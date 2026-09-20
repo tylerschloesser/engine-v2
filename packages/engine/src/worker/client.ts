@@ -9,6 +9,7 @@ import { CameraBlockView, readCameraBlockInto } from '../camera/block.js'
 import type { EngineInstance, RegionView } from '../loader.js'
 import { CB_FRAME_REQ, W_ACK, workerWord } from '../sab/control.js'
 import { RingConsumer, RingProducer } from '../sab/ring.js'
+import { createGenPump } from './client-gen.js'
 import { applyGcHook } from './gc-hook.js'
 import { instantiateForSetup } from './instantiate.js'
 import type { SetupMessage } from './protocol.js'
@@ -59,6 +60,14 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   const rx = echo ? requireRegion(inst, RegionId.Rx, 'Rx') : null
   const tx = echo ? requireRegion(inst, RegionId.Tx, 'Tx') : null
 
+  // docs/plan/08b-gen-workers-and-queue.md, Order of work 4: the gen pump, built once and run every
+  // wake (orchestrator decision: it must cost nothing and answer 0 on a page whose client role has
+  // no `client::TerrainFeed`, e.g. `fx-hash`'s `topology`/`echo`). `GenIn` is optional: absent
+  // there, present wherever `Instance::init` declares it (`TerrainFeed::gen_in_bytes`).
+  const resultRegion = requireRegion(inst, RegionId.Result, 'Result')
+  const genIn = inst.region(RegionId.GenIn)
+  const genPump = createGenPump(inst, shell.control, message.sabs, genIn, resultRegion)
+
   function body(): void {
     if (gcHook) applyGcHook(shell.control, shell.index)
     const frameReq = Atomics.load(shell.control.words, CB_FRAME_REQ)
@@ -78,6 +87,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
         uiRing.tryPush(tx.u8, tx.u8.length)
       }
     }
+    genPump.pump()
   }
 
   return { body, timeoutMs: noTimeout }
