@@ -814,3 +814,39 @@ The trip-wire of `deferred-ledger.md` ("`browser` suite headroom") has tripped: 
 3. `zeroGcSuite` tags by page id, not by a caller option a future page could forget: only `gc-loop` keeps fast-tier bursts.
 4. Report the quiet-machine `browser` line after each rung (check `uptime`), and `pnpm test:slow -t terrain` plus the slow-tier line that shows the demoted tests running (count of `burst` and engine tests executed). Target: under 20 s quiet. If it is not, report the split again; do not take a third rung yourself.
 5. Do not edit `deferred-ledger.md`, `PLAN.md`, `PROMPT.md`, other briefs or `budgets.json` numbers; the suite's 25 s budget does not change.
+
+### Gate round 3
+
+**Mechanism, rung 1** (`scripts/lib/adapters.mjs`, `scripts/suites.mjs`). The `browser` suite gets a static `args: ['--project', 'chromium', '--project', 'gc']`, applied in every tier, so `pnpm test browser` never launches WebKit or Firefox at all (not a title-tag exclusion: the projects are simply not selected). A new `legs` entry, `engines` (`args: ['--project', 'webkit', '--project', 'firefox']`), carries two new fields the `playwright` adapter reads: `onlyTier: 'slow'` (`command()` returns `null` for any other tier, the same shape `script`'s existing null-command convention uses) and `noSlowTag: true` (the leg's own grep is plain `pattern ?? '.*'`, skipping the `(?=.*@slow)`/`^(?!.*@slow)` composition entirely, since WebKit/Firefox titles carry `@engines`/`@webkit-gpu`, never `@slow`). Because `runSuite`'s two legs run concurrently (`Promise.all`) and each is its own `playwright test` process against the same config, the `engines` leg also gets its own `port: 4518`, forwarded as `ENGINE_TEST_PORT` — without it both legs' `vite preview` webServers raced for `:4517` and the second to bind failed the whole leg. Found and fixed while measuring rung 1, not anticipated by the decision text.
+
+Second bug found the same way: Playwright (unlike nextest's `--no-tests=pass` / vitest's `--passWithNoTests`) exits non-zero when `--grep` matches nothing at all, which now happens legitimately whenever a `-t` pattern matches only the other leg's tests (e.g. `pnpm test:slow browser -t "neg burst"`, which matches nothing WebKit/Firefox run). The shared `fromReport` helper turned that into a synthetic "runner exited 1 without a parseable report" failure even though Playwright's own `report.json` (`suites: []`, `errors: [{message: "Error: No tests found"}]`) is fine. `adapters.mjs`'s `playwright.parse` is now its own function, not `fromReport(parsePlaywrightJson)`: a report that parses to zero tests and zero failures is zero tests, regardless of exit code; a report that cannot be parsed at all still falls back to the synthetic failure. Both fixes are covered in `adapters.test.mjs`.
+
+**Mechanism, rung 2** (`packages/engine/tests/browser/gc/{analyse,instrument,suite}.ts`). `analyseTrace` (`analyse.ts`) returns a new `presentIsolates: Set<string>`, built from the same `isolateNames` map (`pid:tid -> name`, populated from every `gc-isolate:<name>` mark event) instrument A already uses to attribute GC events — every value in that map, unfiltered by the `window-start`/`window-end` marks. `instrument.ts`'s `GcResult` carries it as `presentIsolates: string[]`. `zeroGcSuite`'s `clean` test (`suite.ts`) asserts, per isolate, `expect(r.presentIsolates, ...).toContain(name)` before its existing verdict check. Separately, still in `suite.ts`, a generated `<page> neg burst <isolate>` test's title gains ` @slow` whenever `opts.pageId !== 'gc-loop'` — an unconditional check inside `zeroGcSuite`, not a `controlKinds`-style caller option.
+
+**Deviation from the decision text's literal wording** ("at least one event inside the marks"): traced empirically before committing. `instrument.ts` sends every worker's `gc-isolate:<name>` mark over CDP *before* `window.__gc.run` emits `window-start`, so on a real page a worker's own naming mark is never inside the window — only `main` reads as inside it, and only because `window-start`/`window-end` themselves are events on main's own thread (the existing fallback-naming case). Implementing the literal window-filtered check and running `gc-loop clean` against it failed every worker isolate on an ordinary, correct, zero-GC page (`sim` reported absent when it plainly was not), which is what forced the correction: `presentIsolates` uses the full, unwindowed trace. This is recorded in ADR 0026's own Decision section, not only here.
+
+**Proof required by the brief**, run once, not committed (`suite.ts` temporarily read `for (const name of [...isolates, 'not-a-real-isolate'])`, `pnpm test browser -t "gc-loop clean"`, then reverted):
+
+```
+FAIL browser [gc] gc-loop clean
+  Error: /gc-loop.html: not-a-real-isolate thread present in trace
+
+  expect(received).toContain(expected) // indexOf
+
+  Expected value: "not-a-real-isolate"
+  Received array: ["sim", "main"]
+```
+
+**Quiet-machine `browser` line, each rung** (`uptime` load average given, all with no `vite preview`/`playwright` process left running before or after):
+
+- Before (cb7dc19, re-measured): `browser pass 80 tests   24s/25s` (load 2.76).
+- After rung 1: `browser pass 74 tests   20s/25s` (load 3.73) — the 6 fewer tests are the three `@engines` specs (`determinism.spec.ts`, `sab.spec.ts`, `workers.spec.ts`) on WebKit and Firefox.
+- After rung 2: `browser pass 60 tests   14s/25s` (load 4.88) — the 14 fewer tests are exactly the 14 `burst` negatives of `topology`/`echo`/`gen`/`terrain` the trip-wire measurement named. Under the 20 s target with margin.
+
+**`pnpm test:slow -t terrain`** (after both rungs): `browser pass 5 tests    4.6s` — `report.json` shows 3 demoted `burst` tests (`terrain neg burst main/client/gen0 @slow`, `gc` project) plus `terrain: probe tile colours webkit @webkit-gpu @slow` on `chromium` (pre-existing: that project carries no title-level grep, so it already ran this `@slow`-tagged test before this round too) and on `webkit` (the `engines` leg). `pnpm test:slow browser -t "neg burst"` alone: `browser pass 14 tests   9s` — every demoted control. Full `pnpm test:slow`: `rust pass 0 tests  0.2s`, `unit pass 2 tests  1s`, `wasm pass 3 tests  8.4s`, `browser pass 22 tests  11s` (15 on the main leg: 1 duplicate `@webkit-gpu` scene + 14 `burst`; 7 on the `engines` leg: 3 `@engines` specs x 2 browsers + the `@webkit-gpu` scene on `webkit`). The slow tier carries no budget (0020 §2); nothing here needed raising `scripts/suites.mjs`'s own slow-tier numbers.
+
+**Something the decision text got wrong, worth flagging beyond the deviation above:** the `chromium` project's own config (`playwright.config.ts`) has no project-level `grep`, so a `@slow`-tagged test like `terrain: probe tile colours webkit @webkit-gpu @slow` already ran on `chromium` under `pnpm test:slow` before this round (its own comment in `terrain-readback.spec.ts`, "runs only under `pnpm test:slow`, only in the `webkit` project", was already inaccurate pre-round-3). Rung 1 does not change or fix this; it is unrelated to the `browser`-suite-headroom trip-wire and outside this round's scope, left for whoever next touches that spec or the `chromium` project's grep.
+
+**Not done, orchestrator's call:** the `write-adr` skill's usual bookkeeping (PRE-PLAN.md's ADR index, a `PLAN.md` "Plan-level decisions" line, the ADR range in the root `CLAUDE.md`) was not applied — `PLAN.md` and other files outside this brief's own Deviations are outside what a milestone implementer may edit; 0016's `Status:` line got only the one amendment-pointer append the `write-adr` skill prescribes.
+
+`pnpm test && pnpm lint`, final: `rust pass 141 tests 0.4s/10s`, `unit pass 108 tests 1.4s/3s`, `wasm pass 35 tests 1.5s/7s`, `browser pass 60 tests 14s/25s`; `biome pass`, `rustfmt pass`, `clippy pass`, `tsc pass`.
