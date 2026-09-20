@@ -18,7 +18,20 @@ test('ring.spsc_sequence', async () => {
   let expectedSeq = 0
   let popped = 0
   let seqErrors = 0
+  // A deadline backstop, not a pacing mechanism: this loop is meant to spin as fast as possible
+  // (an empty ring is `continue`d immediately), so an iteration count is not a useful bound -- an
+  // idle spin can run hundreds of millions of iterations in well under a second. Checked against
+  // `process.hrtime.bigint()` (a duration, not one of `packages/engine/src/**`'s banned ambient-
+  // time globals) so a genuine stall (the producer worker never running at all) fails with this
+  // file's own message inside this test's 15s Vitest timeout, instead of Vitest's generic one.
+  const deadlineNs = 12_000_000_000n
+  const loopStart = process.hrtime.bigint()
   while (popped < count) {
+    if (process.hrtime.bigint() - loopStart > deadlineNs) {
+      throw new Error(
+        `ring.spsc_sequence: consumer made no progress (popped=${popped}/${count}) within ${deadlineNs}ns`,
+      )
+    }
     if (workerError) throw workerError
     const len = consumer.popInto(dst, 0)
     if (len < 0) continue

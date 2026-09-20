@@ -214,16 +214,32 @@ renamed. Exact shapes, findings and corrections:
   32-bit counter as four repeated little-endian bytes instead, removing the wraparound question
   entirely.
 - **`control.test.ts`'s `control.no_lost_wakeup` carries an explicit 8 s Vitest timeout** (was the
-  5 s default, briefly 30 s): see "Open gate failures" below for the investigation. No lost-wakeup
-  logic bug was ever found or reproduced (the mechanism is a plain shared-memory condition check,
-  immune to timing by construction, and every reproduction attempt — 500+ combined runs, isolated
-  and full-suite, unloaded and under synthetic full-core contention — showed either a clean pass or
-  a whole-process stall external to the mechanism); 8 s gives one full internal 5 s `waitForWake`
-  cycle plus overhead margin, tight enough to fail fast on a genuine future hang.
+  5 s default, briefly 30 s) **and terminates its worker with `worker.terminate()` instead of
+  awaiting its natural `'exit'`**: see "Fix round 2" below for the investigation and evidence (this
+  replaces this bullet's earlier text, which proposed only a longer timeout as the fix — that text
+  was wrong: no timeout length fixes a wait that isn't testing anything). No lost-wakeup logic bug
+  was ever found or reproduced (the mechanism is a plain shared-memory condition check, immune to
+  timing by construction); every reproduction attempt across both rounds — 500+ combined runs from
+  round one, another 500+ from round two, isolated and full-suite, unloaded and under synthetic
+  full-core contention — never once showed the wake/wait mechanism itself misbehave. What round two
+  found instead: after the mechanism's own correctness assertion already passed (tens of
+  milliseconds in), the test still separately awaited the worker's natural `'exit'` event, and that
+  wait — pure OS thread teardown, verified to hold no further assertions — could itself take several
+  real seconds under genuine contention (other `unit` test files' own concurrent `worker_threads`,
+  a busy shared machine), which is what was blowing the 8 s budget. `worker.terminate()` tears the
+  thread down directly instead of waiting on that same slow natural-exit path; 100/100 and 120/120
+  full `pnpm test unit` runs clean under synthetic full-core saturation after the change, versus
+  3-18 failures per 100 before it under the same conditions (exact counts in "Fix round 2").
 - **`seqlock.ts`'s `SeqlockReader.readInto` backs off between retries** (`RETRY_BACKOFF_SPINS`, an
   `Atomics.load`-bodied spin, not a plain counter that an engine could dead-code-eliminate): see
   "Open gate failures" below. `MAX_RETRIES` is still 8, unchanged from the brief's "Seqlock reader
-  rule"; only the real wall-clock time each retry now spans changed.
+  rule"; only the real wall-clock time each retry now spans changed. **Re-measured in fix round 2**
+  (Required item 3, "decide by measurement whether it is still needed"): temporarily set to 0 and
+  run under the same synthetic 12-thread full-core-saturation load used for the round's other
+  reproductions, `seqlock.no_torn_read` produced a real `torn() === 2` failure in 1/40
+  `pnpm exec vitest run --project unit` runs (structural torn-read exhaustion, not the livelock
+  below); restored to `200_000` and rerun under identical load, 40/40 clean. Kept, unchanged, with
+  this additional confirmation.
 - **Measurements** (Tyler's Mac, 14 logical cores, warm caches unless noted): `unit` suite
   **81 tests, ~0.9-1.2 s of its 3 s budget** across repeated clean runs (was 64 tests/0.8 s at this
   milestone's base sha); `browser` suite **23 tests, ~7-7.5 s of its 25 s budget** (was 20/6.3 s);
@@ -318,3 +334,123 @@ reads it differently.
    1.7s/7s`, `browser pass 23 tests 8.4s/25s`. `pnpm lint`: `biome pass`, `rustfmt pass`,
    `clippy pass`, `tsc pass`. Diagnostic logging (`Date.now()`-based, both files) fully removed;
    `sab-control-worker.mjs` is byte-identical to `30ac26e`'s version again.
+
+### Fix round 2 (2026-09-19, third implementer): the "Closed" conclusion above was wrong for the
+actual gate failure
+
+The orchestrator's new evidence (`pnpm test unit` × 10 on a quiet machine, load average 2.6: 7
+clean, 1 hung >10 minutes with exactly one thread pinned at 100 % CPU and every other thread
+asleep, `test-results/unit/output.log` empty, 2 more clean) does not match anything the "Closed"
+section above investigated. That section only ever reproduced `control.no_lost_wakeup` failing its
+*own* timeout (a bounded event, seconds, always eventually resolving on its own) — never an
+indefinite hang with one thread spinning forever. **The "Closed" conclusion was right that
+`control.no_lost_wakeup` has no lost-wakeup logic bug, but wrong to treat that as closing the
+orchestrator's hang report: the two were never the same event.** The real cause of the hang was a
+different test entirely, never examined in round one.
+
+**Root cause, found by experiment, not by trusting the orchestrator's ESM-loader/`execArgv`
+hypothesis.** First step was to add a one-line synchronous `fs.appendFileSync` diagnostic as the
+first statement of every `sab-*-worker.mjs` file's body, plus a handful more at key points in each
+`*.test.ts` file (creating the worker, entering the spin loop, periodic progress inside it), gated
+behind `process.env.SAB_DIAG` so none of it shipped. Reproducing with a bounded foreground loop
+(`child_process.spawn` with `detached: true`, a `setTimeout` that `process.kill(-pid, 'SIGKILL')`s
+the whole group, never a background task or monitor) under synthetic 12-thread full-core-saturation
+load (12 busy-spin `worker_threads`, this machine has 14 logical cores) reproduced a genuine
+60-second-plus hang on run 60 of 100. **The diagnostic log immediately ruled out the orchestrator's
+hypothesis**: every worker file's first line, and every worker's own completion, was logged within
+milliseconds of the `Worker` being constructed in every single run, hung or not — the nested
+`worker_threads` startup was never slow, never blocked, and `execArgv` inheritance was never
+implicated (not tested directly, since the evidence already showed startup was not the bottleneck).
+The log instead pinpointed the exact stuck test: `triple.test.ts`'s reader loop was still spinning,
+59+ seconds after the writer worker had already finished, with the writer's own log showing
+`writer loop done, storing done flag` at essentially the same moment the reader's periodic log
+showed `freshCount=2` — and every subsequent line, for the rest of the hang, showed the identical
+`freshCount=2 done=1`.
+
+That is a **livelock in the test's own loop-termination condition**, not the OS-scheduling noise
+"Closed" found in control: `triple.test.ts`'s original loop ran
+`while (Atomics.load(done, 0) === 0 || freshCount < 10)`. The writer thread completes a *fixed*
+2,000 publishes in well under 100 ms regardless of what the reader is doing (its own idle spin
+between publishes is tiny and unconditional). If the reader thread is scheduled rarely enough
+relative to the writer — plausible, even likely, whenever the machine is busy with other runnable
+threads (exactly "load average 2.6" or heavier), since `triple.newest_wins_never_partial`'s reader
+is a single un-paced busy-poll competing with everything else on the box — the writer can finish
+and set `done = 1` while `freshCount` is still under 10. Once the writer is gone, no future
+`acquire()` can ever be fresh again (nothing new is ever published), so `freshCount` can never
+reach 10, and the loop's own exit condition can never become false again: an unbounded spin,
+exactly matching "one thread at 100 % CPU, everything else asleep" (the writer thread has already
+exited; only the reader remains, spinning). This can happen on a **completely idle** machine too,
+given sufficiently unlucky scheduling — the orchestrator's "quiet machine" framing was consistent
+with the bug, not evidence against it.
+
+**Fix:** `triple.test.ts`'s loop no longer requires a minimum `freshCount` to exit. It loops until
+`done` is observed set (capturing the flag *before* that iteration's `acquire()`, so the iteration
+that sees `done` still gets to run once more — catching a final publish that might have raced the
+flag), then breaks; `freshCount > 0` is still asserted afterward, unchanged and exactly as strict as
+before, just no longer coupled to the loop's own liveness. A generous `process.hrtime.bigint()`
+deadline (12 s, under the test's 15 s Vitest timeout) is a backstop against a genuine future stall
+this shape of bug can't produce but a different one might — `process.hrtime` is not one of
+`packages/engine/src/**`'s banned ambient-time globals (`Date`/`performance`/timers), and this file
+is test-only regardless. `ring.test.ts` and `seqlock.test.ts` do not share this liveism defect
+(read both against the same question: `ring.test.ts`'s `popped < count` only ever grows, and the
+SPSC ring guarantees eventual delivery as long as either side gets any CPU at all; `seqlock.test.ts`
+already recovers on its own once the writer is done, since every subsequent uncontested read
+trivially succeeds and increments `reads` every iteration) — but both got the same `hrtime`-based
+deadline anyway, as defense in depth, per Required item 2 ("every synchronous spin gets a
+deadline"), calibrated generously (12 s) so it never trips under any load level observed this round.
+No `postMessage`/readiness-handshake change was made to any of the four tests: the diagnostic
+evidence showed worker startup was never the slow part, so a handshake would have added complexity
+without addressing the actual defect.
+
+**A second, distinct, real flake was found (and fixed) while re-running the required verification
+loop, unrelated to the hang above.** Once the triple fix was in place, 100/100 and 120/120 full
+`pnpm test unit` runs were clean under the same synthetic 12-thread saturation used to reproduce the
+hang — but a plain, uninstrumented `pnpm test unit` loop on this real, actively-used machine (no
+synthetic load added; `uptime` showed load averages of 4-18 from two other concurrent Claude
+sessions, Chrome, and `corespotlightd`/`spotlightknowledged` reindexing) still failed
+`control.no_lost_wakeup` on its own 8 s timeout 3/100 and 3/100 across two independent 100-run
+batches (0 hangs in either). Re-adding the round-one-style diagnostic logging (this time to
+`control.test.ts` and its worker specifically) to a failing run showed every step of the actual
+wake/wait/message protocol completing in under 30 ms total — `test start` to
+`await done resolved` — confirming yet again that the mechanism itself is sound. The *only* gap in
+the whole timeline was after that: the test's last line, `await new Promise<void>((resolve) =>
+worker.once('exit', () => resolve()))`, took the remaining ~7.97 s of the 8 s budget by itself, with
+no diagnostic in between (nothing runs there to log) — i.e., waiting for the already-finished
+worker's own natural OS-thread teardown to complete and its `'exit'` event to fire is itself what
+occasionally takes several real seconds under contention, not anything under test. Fix: replace that
+wait with `await worker.terminate()`, which tears the thread down directly rather than waiting on
+the same slow natural-exit path, called only after `expect(result.frameReq).toBe(target)` has
+already passed (so nothing about the assertion changed or weakened). Verified: 100/100 and 120/120
+full `pnpm test unit` runs clean under synthetic 12-thread full-core saturation (previously 82-97/100
+clean under the same load, all-and-only-`control.no_lost_wakeup` failures); 100/100 clean on this
+real machine at load averages of 4.0-18.8 immediately afterward (previously 3-6/100 failures at
+similar load levels, same failure). This is not the hang the orchestrator reported (it always
+resolved within its own 8 s budget, never spun a thread at 100 %) but it did block the "0 hangs, 0
+failures" verification bar this round required, so it is fixed here rather than left as a known
+flake.
+
+**Helper file location, checked per Required item 5.** `src/test/sab-*-worker.mjs` are plain `.mjs`
+files; `tsconfig.build.json` only compiles `.ts` (excluding `*.test.ts`), so `tsc` never touches
+them, and `dist/test/` (built from `src/test/*.ts`'s real production files — `harness.ts`,
+`controls.ts`, etc., the `engine/test` subpath) contains no `.mjs` output at all (checked directly:
+`ls dist/test/` lists only the compiled `.ts` files' `.js`/`.d.ts`/`.js.map`). `packages/engine/
+package.json`'s `"files"` is `["dist", "crates"]` — `src/` is never published — so these four files
+cannot leak into the npm package by either path. Left in place beside their production-code
+siblings in `src/test/`; not moved.
+
+**Verification (this round).** Reproduction, before the triple fix, foreground-looped
+`pnpm exec vitest run --project unit` under synthetic 12-thread full-core saturation with a 60 s
+hard per-run timeout: 1 hang in 40 runs (first batch), 1 hang in 100 runs including that one
+(second, instrumented batch; diagnostic evidence above is from this hang). After the triple fix,
+identical loop: 0 hangs in 100 runs, 0 hangs in a further 120 runs (both under the same synthetic
+load). `pnpm test unit` × 100 on a quiet-ish real machine (load average 2.6-7.8 observed via
+`uptime` across the two runs): 100/100 clean, all `unit pass 81 tests 0.9-1.0s/3s`, both before and
+after the control fix (the triple fix alone was already sufficient for the hang; the control flake
+only showed up in separate loops run specifically to hunt for it, see above). `pnpm test browser -t
+sab.ring_both_directions`: `browser pass 3 tests 3.2s/25s` (3/3 engines). Final `pnpm test`:
+`rust pass 37 tests 0.2s/10s`, `unit pass 81 tests 1s/3s`, `wasm pass 23 tests 1.2-1.8s/7s`,
+`browser pass 23 tests 7-7.3s/25s`. `pnpm lint`: `biome pass`, `rustfmt pass`, `clippy pass`,
+`tsc pass`. All temporary diagnostic logging removed from `control.test.ts` and all four
+`sab-*-worker.mjs` files, which are byte-identical to their `1926729` versions again; only
+`ring.test.ts`, `seqlock.test.ts`, `triple.test.ts` (the deadline/livelock fix) and
+`control.test.ts` (the `worker.terminate()` fix) carry real changes this round.

@@ -28,7 +28,17 @@ test('seqlock.no_torn_read', async () => {
   let reads = 0
   let inconsistent = 0
   let i = 0
+  // A deadline backstop, not a pacing mechanism (`ring.test.ts`'s loop has the same shape, with
+  // more detail on why an iteration count is not a useful bound here either, and why
+  // `process.hrtime.bigint()` is the right primitive in a lint-restricted `src/**` test file).
+  const deadlineNs = 12_000_000_000n
+  const loopStart = process.hrtime.bigint()
   while (Atomics.load(done, 0) === 0 || reads < 30) {
+    if (process.hrtime.bigint() - loopStart > deadlineNs) {
+      throw new Error(
+        `seqlock.no_torn_read: reader made no progress (reads=${reads}, done=${Atomics.load(done, 0)}) within ${deadlineNs}ns`,
+      )
+    }
     const ok = reader.readInto(dst, 0)
     if (ok) {
       reads++

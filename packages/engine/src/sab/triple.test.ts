@@ -36,7 +36,25 @@ test('triple.newest_wins_never_partial', async () => {
   let freshCount = 0
   let inconsistent = 0
   let wentBackwards = 0
-  while (Atomics.load(done, 0) === 0 || freshCount < 10) {
+  // Loop exactly until the writer's own `done` flag is observed set, plus the one iteration that
+  // observes it (never on `freshCount`, see the fix-round-2 Deviations note: requiring a minimum
+  // fresh-read count before exiting can livelock forever if the reader thread is starved relative
+  // to the writer -- the writer finishes its fixed 2,000 publishes regardless, and once it is gone
+  // no future acquire() can ever be fresh again). A deadline is still a backstop against a genuine
+  // stall (the writer's worker never finishing at all): `process.hrtime.bigint()` is not one of
+  // `packages/engine/src/**`'s banned ambient-time globals (`Date`/`performance`/timers), only a
+  // monotonic duration check, and this file is test-only.
+  const deadlineNs = 12_000_000_000n // 12s: under this test's own 15s Vitest timeout, so a genuine
+  // stall reports this file's own diagnostic message instead of Vitest's generic timeout.
+  const loopStart = process.hrtime.bigint()
+  for (;;) {
+    if (process.hrtime.bigint() - loopStart > deadlineNs) {
+      throw new Error(
+        `triple.newest_wins_never_partial: reader made no progress toward done within ` +
+          `${deadlineNs}ns (freshCount=${freshCount}, done=${Atomics.load(done, 0)})`,
+      )
+    }
+    const doneAlready = Atomics.load(done, 0) !== 0
     const slot = reader.acquire()
     const header = reader.headerView(slot)
     const body = reader.bodyView(slot)
@@ -48,6 +66,7 @@ test('triple.newest_wins_never_partial', async () => {
       if (value < lastValue) wentBackwards++
       lastValue = value
     }
+    if (doneAlready) break
   }
 
   await new Promise<void>((resolve, reject) => {

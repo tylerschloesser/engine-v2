@@ -37,7 +37,13 @@ test('control.no_lost_wakeup', async () => {
   if (workerError) throw workerError
   expect(result.frameReq).toBe(target)
 
-  await new Promise<void>((resolve) => worker.once('exit', () => resolve()))
+  // Terminates the worker rather than waiting for its own natural `'exit'`: by this point the
+  // worker's script has already finished and posted its result, so nothing further is being
+  // tested -- only its OS thread teardown remains, and a *natural* exit's teardown work (see the
+  // fix-round-2 Deviations note) can occasionally take several real seconds under heavy system
+  // load, which blew this test's timeout despite the assertion above having already passed.
+  // `terminate()` tears the thread down directly instead of waiting on that same slow path.
+  await worker.terminate()
 }, 8_000)
 
 test('control.workerWord addressing', () => {
