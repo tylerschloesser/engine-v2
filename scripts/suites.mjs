@@ -56,5 +56,27 @@ export const suites = [
       },
     ],
   },
-  { name: 'browser', kind: 'playwright', tiers: ['fast', 'slow'], budgetMs: 25_000 },
+  {
+    name: 'browser',
+    kind: 'playwright',
+    tiers: ['fast', 'slow'],
+    budgetMs: 25_000,
+    // `chromium` + `gc` in every tier (0020 §4, first rung: gate round 3, docs/plan/
+    // 09-renderer-terrain.md Deviations). WebKit and Firefox move to the `engines` leg below.
+    args: ['--project', 'chromium', '--project', 'gc'],
+    legs: [
+      {
+        name: 'engines',
+        kind: 'playwright',
+        onlyTier: 'slow',
+        noSlowTag: true,
+        args: ['--project', 'webkit', '--project', 'firefox'],
+        // Its own `vite preview` (port), distinct from the main leg's, which runs concurrently
+        // (`runSuite`'s `Promise.all`): both are separate `playwright test` processes against the
+        // same config, and `ENGINE_TEST_PORT` is what tells the config's own `webServer` which port
+        // to bind (playwright.config.ts, tests/browser/pages/vite.config.ts).
+        port: 4518,
+      },
+    ],
+  },
 ]

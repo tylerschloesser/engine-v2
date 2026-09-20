@@ -80,13 +80,19 @@ export const adapters = {
     parse: fromReport(parseVitestJson),
   },
 
-  // `browser` (docs/decisions/0020 §1, §3): Playwright Test against `packages/engine/playwright.config.ts`.
-  // `--grep` composes the `@slow` tag with `pattern` the same way the `vitest` adapter's `-t` does.
-  // All configured projects run (chromium, webkit/firefox grepped to @engines, and M04's `gc`); a
-  // `pnpm gc` mode (GC_MODE=software, GC_CDP=flat, --repeat-each) is a separate, local-only
-  // invocation of the same `gc` project (docs/plan/04-zero-gc-harness.md, Seams).
+  // `browser` (docs/decisions/0020 §1, §3, §4): Playwright Test against `packages/engine/
+  // playwright.config.ts`. `--grep` composes the `@slow` tag with `pattern` the same way the
+  // `vitest` adapter's `-t` does. `suite.args` (from scripts/suites.mjs) picks projects: the
+  // `browser` suite itself runs `chromium`+`gc` in every tier; a `legs` entry runs `webkit`+
+  // `firefox` only in the slow tier (`onlyTier`, gate round 3: docs/plan/09-renderer-terrain.md,
+  // Deviations "Gate round 3") -- WebKit/Firefox carry no `@slow` title tag (their own
+  // `@engines`/`@webkit-gpu` project-level `grep` already scopes them), so that leg's own grep is
+  // `noSlowTag`: plain `pattern`, no `@slow` composition. A `pnpm gc` mode (GC_MODE=software,
+  // GC_CDP=flat, --repeat-each) is a separate, local-only invocation of the same `gc` project
+  // (docs/plan/04-zero-gc-harness.md, Seams).
   playwright: {
     command({ suite, pattern, tier }) {
+      if (suite.onlyTier && suite.onlyTier !== tier) return null
       const reportPath = `${suite.name}/report.json`
       // `^` matters only for the fast tier: Playwright's `--grep` tests this pattern unanchored
       // (any substring position), so an un-anchored `(?!.*@slow)` "succeeds" trivially once the
@@ -95,7 +101,9 @@ export const adapters = {
       // (fast tier). The `vitest` adapter right below already anchors both of its own tags this
       // way; this brings `playwright` in line with it. The slow tier's `(?=.*@slow)` needs no `^`:
       // a positive lookahead that can match starting at position 0 needs no anchor to be correct.
-      const tag = tier === 'slow' ? '(?=.*@slow)' : '^(?!.*@slow)'
+      const grep = suite.noSlowTag
+        ? (pattern ?? '.*')
+        : `${tier === 'slow' ? '(?=.*@slow)' : '^(?!.*@slow)'}.*${pattern ?? ''}`
       return {
         cmd: 'pnpm',
         args: [
@@ -105,10 +113,13 @@ export const adapters = {
           '--config',
           'packages/engine/playwright.config.ts',
           '--grep',
-          `${tag}.*${pattern ?? ''}`,
+          grep,
           ...(suite.args ?? []),
         ],
-        env: { PLAYWRIGHT_JSON_OUTPUT_FILE: `test-results/${reportPath}` },
+        env: {
+          PLAYWRIGHT_JSON_OUTPUT_FILE: `test-results/${reportPath}`,
+          ...(suite.port ? { ENGINE_TEST_PORT: String(suite.port) } : {}),
+        },
         reportPath: `test-results/${reportPath}`,
       }
     },
