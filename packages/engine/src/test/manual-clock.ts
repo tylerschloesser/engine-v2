@@ -20,6 +20,15 @@ export function createManualClock(startMs = 0): ManualClock {
   let frames: Frame[] = []
 
   function fireDue(): void {
+    // Same optimisation as `frame()`'s own `frames.length === 0` check below, missed here until
+    // fix round 2 (docs/plan/06b-workers-and-spawn.md, Deviations): `test/client.ts`'s `stepFrame`
+    // calls `advance()` every frame, and no test page here ever registers a real timer, so the
+    // common case is an empty `timers` Map. Without this check, `for (const timer of
+    // timers.values())` still creates a `MapIterator` and calls `.next()` on it once per `advance()`
+    // call regardless of size; under an unoptimised JIT tier that allocates a `{value, done}` result
+    // object each time, which under CPU contention (a busy V8 background compiler thread completes
+    // tier-up late) showed up as `main`'s single biggest contended-only allocation site.
+    if (timers.size === 0) return
     for (;;) {
       let due: Timer | undefined
       for (const timer of timers.values()) {

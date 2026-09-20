@@ -31,12 +31,15 @@ declare global {
 // 0016 §3 step 5 and the spike's own reliability numbers (RESULT.md).
 const TRACE_CATEGORIES = ['v8', 'devtools.timeline', 'blink.user_timing']
 const SAMPLING_INTERVAL = 1
-// M04's own measured figure for `gc-loop`'s (shallower) call chain; kept as the default so
-// `gc-loop`'s already-tuned budget entry is untouched (docs/plan/06b-workers-and-spawn.md,
-// Deviations: raising this retroactively shifted `gc-loop`'s own `main` baseline, so it is a
-// per-page override -- `warmupFrames` below -- not a global change).
-const WARMUP = 120
 const FRAMES = 600
+// `gc-loop`'s own tuned figure is 120; the production `yield`-protocol shell (`ControlBlock`,
+// `worker/shell.ts`, `asHarness`) is a deeper call chain that needs more to reach steady optimised
+// code (docs/plan/06b-workers-and-spawn.md, Deviations "fix round 2"). Applied globally (not a
+// per-page option): with the two real allocation bugs on this path fixed (`parkWorkers`/
+// `resumeWorkers`'s per-tick closure, `ManualClock.fireDue`'s per-`advance()` empty-Map iterator),
+// `gc-loop` itself is unaffected by the higher figure (still well inside its own budget), so one
+// constant is simpler than threading a per-page override through `measure()`/`zeroGcSuite` again.
+const WARMUP = 8000
 
 export type GcMode = 'hardware' | 'software'
 export type GcTransport = 'tunnel' | 'flat'
@@ -102,12 +105,6 @@ export async function measure(
       page: Page,
       expectedWorkers: number,
     ) => Promise<{ main: IsolateSession; workers: IsolateSession[]; close?: () => void }>
-    /** Frames run before `HeapProfiler.startSampling`, never counted (default `WARMUP`, `gc-loop`'s
-     * own measured figure). A page whose call chain needs more iterations to reach steady optimized
-     * code before the JIT noise seen at 120 clears (docs/plan/06b-workers-and-spawn.md, Deviations:
-     * `topology`/`echo`'s production `yield`-protocol shell) raises this per page; `gc-loop`'s own
-     * entry is untouched since raising the *global* default shifted its `main` baseline measurably. */
-    warmupFrames?: number
   },
 ): Promise<GcResult> {
   const mode = gcModeFromEnv()
@@ -142,7 +139,16 @@ export async function measure(
   }
   const sessions: IsolateSession[] = [main, ...workers]
 
-  await page.evaluate((n) => window.__gc?.run(n, false), opts.warmupFrames ?? WARMUP)
+  // Fixed warm-up (docs/plan/06b-workers-and-spawn.md, Deviations "fix round 2"): the tiering
+  // hypothesis explained the *symptom* (unoptimised code boxes more per call) but the actual
+  // per-frame allocation, on inspection, came from two real bugs on this path -- `parkWorkers`/
+  // `resumeWorkers`'s poll predicate allocated a fresh closure and ran `Array.prototype.every`
+  // every tick (`src/test/client.ts`), and `ManualClock.fireDue` built a `Map` iterator on every
+  // `advance()` call even with zero timers (`src/test/manual-clock.ts`) -- both scaling with how
+  // long parking/ticking took, not with frame count, which is why no warm-up count (nor an
+  // adaptive warm-up-until-stable loop, tried and removed here) fixed them. With both fixed, a
+  // short fixed warm-up (matching `gc-loop`'s own long-tuned figure) is enough.
+  await page.evaluate((n) => window.__gc?.run(n, false), WARMUP)
   const memBefore = await page.evaluate(() => window.__gc?.memoryBytes())
   if (!memBefore) throw new Error('gc instrument: memoryBytes() before the window returned nothing')
 

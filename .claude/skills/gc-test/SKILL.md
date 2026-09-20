@@ -93,13 +93,26 @@ of the M03/M04 harness. Two differences from a harness page:
   objects server-side and pushed `gc-loop`'s own `main` reading over budget). For the same reason
   there is no message-driven tick to test: pass `zeroGcSuite({ ..., controlKinds: ['object',
   'burst'] })` to skip the generated `post-message` negative controls.
-- **Warm up longer than 120 frames if the numbers look noisy.** `gc-loop`'s harness call chain
-  reaches steady optimized code by 120 warmup frames (`measure()`'s own default); the production
-  `yield`-protocol shell (`worker/shell.ts`, `ControlBlock`, `asHarness`'s own lockstep) is a deeper
-  call chain that needed `warmupFrames: 8000` (an option on `measure()`/`zeroGcSuite`, per page --
-  never change the global default, which would retune every existing page's tuned budget) before
-  `main`'s reading stopped occasionally spiking and started reliably separating from the `object`
-  negative control. Warmup frames are never counted; raising this costs a few ms, not a budget.
+- **Warm up longer than 120 frames if the numbers look noisy, but check for a real bug first.**
+  `measure()`'s `WARMUP` constant is 8000 (raised from `gc-loop`'s original 120 for every page: the
+  production `yield`-protocol shell is a deeper call chain that needs more to reach steady optimised
+  code, and this did not move `gc-loop`'s own numbers). Before raising it further, or reaching for a
+  bigger budget, check `byFn` for a native-builtin bucket (`next@:0`, `values@:0`, or similar) that is
+  near-zero on a quiet run and tens of KB on a contended one: that shape is "one site that only
+  allocates while waiting" (M06b fix round 2 found two -- `parkWorkers`/`resumeWorkers`'s poll
+  predicate allocating a fresh closure and calling `Array.prototype.every` on every tick instead of
+  once per call, and `ManualClock.fireDue` building a `Map` iterator every `advance()` call even with
+  zero timers registered), not JIT tiering, and no warm-up count fixes it -- fix the allocation site.
+  A repeatable local reproduction that does not need another Playwright project running: `pnpm exec
+  playwright test --config packages/engine/playwright.config.ts --project gc --grep <page> --workers
+  3 --repeat-each 4`.
+- **A target isolate's own negative control can still nudge a sibling isolate's own reading.** Even
+  with the two bugs above fixed, a `burst`/`object` control on one isolate's own worker can measurably
+  raise a *different* isolate's own `bytesPerFrame` (reproduces at `--workers 1`, one test, no
+  external contention) -- the workers are separate OS threads sharing one renderer process, so this
+  is not a per-frame allocation site in this milestone's own code; as of M06b it is an open,
+  unresolved finding (docs/plan/06b-workers-and-spawn.md, Deviations "fix round 2"), not something to
+  paper over with a wider budget without saying so.
 
 ## Changing a budget
 

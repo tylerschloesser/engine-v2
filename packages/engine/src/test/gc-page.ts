@@ -79,8 +79,13 @@ export function installGcPage(harness: Harness, opts: { drive?(frame: number): v
     if (marked) performance.mark('window-end')
 
     await harness.park()
+    // Indexed loop, not `for...of` (fix round 2, docs/plan/06b-workers-and-spawn.md, Deviations):
+    // a `for...of` over `workerNames` goes through the array iterator protocol, which under an
+    // unoptimised JIT tier allocates a `{value, done}` result object per `.next()` call -- the same
+    // class of cost `src/test/harness.ts`'s own `stepAll` comment already flags for `for...of`.
     const acks: Record<string, number> = {}
-    for (const name of harness.workerNames) acks[name] = frames
+    const names = harness.workerNames
+    for (let i = 0; i < names.length; i++) acks[names[i] as string] = frames
     return { frames, acks, errors: harness.errors().slice(errorsBefore) }
   }
 

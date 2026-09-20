@@ -4,7 +4,7 @@
 
 import { writeCameraBlock } from '../camera/block.js'
 import type { CameraState } from '../camera/state.js'
-import type { Client, WorkerEntry } from '../client.js'
+import type { Client, ClientTestHandle, WorkerEntry } from '../client.js'
 import { clientTestHandle } from '../client.js'
 import {
   CB_FRAME_REQ,
@@ -75,6 +75,25 @@ function ringDrained(sab: SharedArrayBuffer): boolean {
   return stats.pushed === stats.popped
 }
 
+/** `Array.prototype.every` with an inline arrow allocates a fresh callback closure on every call
+ * (`.claude/rules/hot-paths.md`'s "no per-iteration closures/`Array.prototype` callbacks", and
+ * `src/test/**` is exempt from the *rule* but not from this being a real cost on this path: fix
+ * round 2, docs/plan/06b-workers-and-spawn.md, Deviations). `parkWorkers`/`resumeWorkers` are
+ * called from inside `installGcPage`'s own measured window (`harness.park()`/`resume()`), and
+ * `pollUntil` below calls its `predicate` once per macrotask until it is true -- normally 1-3
+ * ticks, but under CPU contention a worker's own OS thread can take many more event-loop turns to
+ * flip its `W_PARKED` word, so a per-tick closure allocation here scales with contention, not with
+ * frame count, and no amount of warm-up removes it. `allEqual` below is a named function created
+ * once per call (not per tick) and uses a plain indexed loop, matching the rest of this file's own
+ * discipline (`stepFrame`'s spin, `asHarness.stepTick`). */
+function allEqual(h: ClientTestHandle, field: number, want: number): boolean {
+  for (let i = 0; i < h.workers.length; i++) {
+    const w = h.workers[i] as WorkerEntry
+    if (Atomics.load(h.control.words, workerWord(w.index, field)) !== want) return false
+  }
+  return true
+}
+
 /** Parks every spawned worker: `W_YIELD = 1` then a wake, polling `W_PARKED` (main never blocks on
  * a `SharedArrayBuffer`, so this is a macrotask poll, not `Atomics.wait`). */
 export function parkWorkers(client: Client): Promise<void> {
@@ -83,11 +102,7 @@ export function parkWorkers(client: Client): Promise<void> {
     Atomics.store(h.control.words, workerWord(w.index, W_YIELD), 1)
     h.control.wake(w.index)
   }
-  return pollUntil(
-    () =>
-      h.workers.every((w) => Atomics.load(h.control.words, workerWord(w.index, W_PARKED)) === 1),
-    'parkWorkers',
-  )
+  return pollUntil(() => allEqual(h, W_PARKED, 1), 'parkWorkers')
 }
 
 /** Resumes every parked worker: `W_YIELD = 0`, `{ type: 'resume' }` (a parked worker is not
@@ -98,11 +113,7 @@ export function resumeWorkers(client: Client): Promise<void> {
     Atomics.store(h.control.words, workerWord(w.index, W_YIELD), 0)
     w.worker.postMessage({ type: 'resume' })
   }
-  return pollUntil(
-    () =>
-      h.workers.every((w) => Atomics.load(h.control.words, workerWord(w.index, W_PARKED)) === 0),
-    'resumeWorkers',
-  )
+  return pollUntil(() => allEqual(h, W_PARKED, 0), 'resumeWorkers')
 }
 
 /** Resolves once every worker has acknowledged every request and is parked (Seams): the client's

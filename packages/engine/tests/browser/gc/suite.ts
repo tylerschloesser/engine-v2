@@ -70,14 +70,9 @@ async function run(
   pageId: string,
   path: string,
   control: NegativeControl,
-  warmupFrames: number | undefined,
 ): Promise<GcResult> {
   await openPage(page, path)
-  const r = await measure(page, browser, {
-    pageId,
-    control,
-    ...(warmupFrames !== undefined ? { warmupFrames } : {}),
-  })
+  const r = await measure(page, browser, { pageId, control })
   // `Tracing.start` stall (0016 caveat a): a warning annotation, never a failure. The `playwright`
   // adapter (scripts/lib/adapters.mjs) turns this into `report.mjs`'s `warn` line under the suite.
   for (const description of r.warnings)
@@ -98,9 +93,6 @@ export function zeroGcSuite(opts: {
    * docs/plan/06b-workers-and-spawn.md, orchestrator decision 2: a production-topology page (no
    * spare `postMessage` type to drive a message-round-trip tick) passes `['object', 'burst']`. */
   controlKinds?: readonly ControlKind[]
-  /** Passed through to `measure()`'s own `warmupFrames` (default `WARMUP`, `gc-loop`'s own figure);
-   * see its comment. */
-  warmupFrames?: number
 }): void {
   const budgets = gcPage(opts.pageId)
   const isolates = Object.keys(budgets.isolates)
@@ -108,7 +100,7 @@ export function zeroGcSuite(opts: {
   const controlKinds = opts.controlKinds ?? ALL_CONTROL_KINDS
 
   test(`${opts.pageId} clean`, async ({ page, browser }) => {
-    const r = await run(page, browser, opts.pageId, opts.path, null, opts.warmupFrames)
+    const r = await run(page, browser, opts.pageId, opts.path, null)
     assertEnvironment(r, opts.path, opts)
     const expected = expectedVerdict(isolates, null)
     expect(r.verdict, detail(r)).toEqual({ pass: true, ...expected })
@@ -120,7 +112,7 @@ export function zeroGcSuite(opts: {
         if (!controlKinds.includes(kind)) continue
         test(`${opts.pageId} neg ${kind} ${name}`, async ({ page, browser }) => {
           const control: NegativeControl = { isolate: name, kind }
-          const r = await run(page, browser, opts.pageId, opts.path, control, opts.warmupFrames)
+          const r = await run(page, browser, opts.pageId, opts.path, control)
           assertEnvironment(r, opts.path, opts)
           const expected = expectedVerdict(isolates, control)
           expect(r.verdict, detail(r)).toEqual({ pass: false, ...expected })
@@ -133,7 +125,7 @@ export function zeroGcSuite(opts: {
     for (const name of workers) {
       test(`${opts.pageId} neg post-message main<->${name}`, async ({ page, browser }) => {
         const control: NegativeControl = { isolate: name, kind: 'post-message' }
-        const r = await run(page, browser, opts.pageId, opts.path, control, opts.warmupFrames)
+        const r = await run(page, browser, opts.pageId, opts.path, control)
         assertEnvironment(r, opts.path, opts)
         const expected = expectedVerdict(isolates, control)
         expect(r.verdict, detail(r)).toEqual({ pass: false, ...expected })

@@ -207,35 +207,73 @@ None here; the posted-`Module` and arena checks on a real iPhone are M11 items i
   (adds tens of ms, never counted) `main` stabilised at 43.4-43.6 B/frame (`topology`) and 31.1-31.8
   B/frame (`echo`) with no further spikes across 20-run batches, and every generated negative
   control (including `object`) then tripped only its own named isolate.
-- **Open issue, escalated: `main`'s clean reading is contention-sensitive under `pnpm test
-  browser`'s real parallelism, and no fix found in this session closes it.** All the numbers above
-  are from the `gc` Playwright project run alone (`pnpm gc`/`node scripts/gc.mjs`), at low
-  contention. Under the actual `pnpm test browser` command (`chromium`/`webkit`/`firefox`/`gc`
-  projects sharing one `workers: 3` pool, so up to three browsers' worth of tests run at once),
-  `topology`'s `main` repeatably read 83-85 B/frame with no code change at all -- a foreground loop
-  of 20 `pnpm test browser` runs on a busy machine failed 4-5 of them, all on a *different* isolate's
-  negative control (`main`'s own clean assertion contaminated, never `main`'s own `object`/`burst`
-  control failing to trip). Two mitigations were tried: raising `warmupFrames` further (already at
-  8000, no further gain) and halving `asHarness.stepTick`'s call frequency in the page's own drive
-  (`STEP_TICK_EVERY = 2`, kept: it cannot hurt and gave a small improvement). Widening `main`'s
-  budget to the contention ceiling (96, tried and reverted) hid the noise but also stopped `topology
-  neg object main` from tripping (measured directly) -- worse than the flakiness, since the `object`
-  control's own signal (~12-20 B/frame) is smaller than the clean/contended baseline's own swing
-  (~31-85 B/frame), so no single fixed byte threshold can both stay under the contended-but-clean
-  reading and over the isolated-clean-plus-object reading. Kept `main` at the tight, isolated-derived
-  52/40 budgets (correct for the signal) rather than widen past detecting a real control. On a
-  quieter machine (1-minute load under ~4, waited for) a 20-run `pnpm test browser` foreground loop
-  measured 18/20 pass, 2 fail (both `topology neg object client`, the same contamination shape on a
-  different isolate), 0 hang -- see the report for exact counts. Root cause not fully identified:
-  `gc-loop`'s own page (one sim worker, one wake per frame) stays reliable under the same stress
-  (35/35 in a dedicated `--repeat-each 5 --workers 3` check); `topology`/`echo` do two or three
-  busy-spin round trips per synthetic frame (`stepFrame` plus `stepTick`'s sim+gen0 wakes), and
-  reducing that by half only partly helped, so the mechanism is probably wall-clock exposure during
-  a busy-spin under real contention rather than a fixed per-call cost, but that is not verified.
-  **Orchestrator decision needed**: accept the residual flakiness (numbers above), or reduce this
-  milestone's own cross-thread synchronisation further, or change how `pnpm test browser` schedules
-  the `gc` project relative to the others (e.g. not sharing the worker pool) -- the last two are
-  bigger changes than this brief's step 5/6 scope covers on their own.
+- **Fix round 2 (orchestrator gate): the `main`-contention swing had two real causes, found and
+  fixed; a third, smaller, distinct one remains open.** The orchestrator's hypothesis was V8 tiering
+  (background compiler threads finishing late under contention, so the measured window runs
+  partly-unoptimised code that boxes more temporaries). Evidence gathering (`byFn` on `topology
+  clean`, quiet vs a reproducible contended run: `--project gc --grep topology --workers 3
+  --repeat-each 4`, which alone reproduced the failure reliably without needing another Playwright
+  project running) showed the growth was **not** spread across the frame path's own double-handling
+  functions (`stepFrame`/`advance`/camera-block reads stayed the same total bytes, just renamed
+  between "stepFrame" and "advance" as inlining boundaries shifted with tier state) -- it was
+  concentrated in two native builtin buckets, `next@:0` and `values@:0`, tens of KB in a single
+  contended run and near-zero quiet. That pointed at "one site that only allocates while waiting" per
+  the orchestrator's own decision rule, not spread-out double-boxing, so the fix was to find and fix
+  it rather than change measurement policy:
+  1. **`parkWorkers`/`resumeWorkers`'s poll predicate** (`src/test/client.ts`) was `() =>
+     h.workers.every((w) => Atomics.load(...) === N)`: `pollUntil` calls this once per macrotask
+     until a worker's `W_PARKED` flips, normally 1-3 ticks -- but under CPU contention a worker's own
+     OS thread can take many more event-loop turns to flip it, and the inline arrow passed to
+     `.every()` is a **new closure allocated on every tick**, so this cost scaled with contention, not
+     with frame count (which is why no warm-up frame count, fixed or adaptive, ever fixed it: `park`/
+     `resume` run once per `installGcPage.run()` call, warmed up just as much as everything else, but
+     their *own* cost is set by how many ticks *this specific call* happens to take). Fixed: a named
+     `allEqual(h, field, want)` using a plain indexed loop, created once per `parkWorkers`/
+     `resumeWorkers` call, not once per tick.
+  2. **`ManualClock.fireDue`** (`src/test/manual-clock.ts`), called by `test/client.ts`'s `stepFrame`
+     every frame via `clock.advance()`: `for (const timer of timers.values())` built a `Map` iterator
+     and called `.next()` on it every single call, even though no page here ever registers a real
+     timer (`timers` is always empty). `frame()` right below it already had the equivalent
+     `frames.length === 0` guard, added by M04 for `gc-loop`'s own budget -- `advance()`/`fireDue()`
+     was the same class of bug, just not exercised by any page before `topology`/`echo`. Fixed with
+     the same `timers.size === 0` early return.
+  Together these took a **reproducible** failure rate (4/36 to 15/36 depending on machine load, in
+  the `--repeat-each 4 --workers 3` repro) to 0/36-2/36 across five repeated checks, and the specific
+  contamination pattern moved from "main's own clean assertion fails" (gone) to a smaller residual:
+  **a target isolate's own `burst`/`object` control (2,000-object or one-object allocations on its
+  own worker) measurably raises a *sibling* isolate's own reading, even with no other Playwright
+  project or test running concurrently** (reproduced at `--workers 1`, single test, single browser).
+  Since every isolate's `HeapProfiler` session samples only its own V8 heap, this cannot be a
+  JS-level leak between isolates; the workers are separate OS threads inside one Chromium renderer
+  process, so this looks like OS/V8-process-level scheduling or memory-pressure interaction between
+  sibling isolates under heavy allocation, not a per-frame allocation site in this milestone's own
+  code -- no further per-site bug was found in the time available (a third distinct attempt: searched
+  the rest of `asHarness`/`gc-page.ts` for the same closure-in-a-poll-loop or iterator-in-a-hot-call
+  shape and found none). Two earlier attempts before finding the real causes are recorded for the
+  next person: **(a)** Chromium launch flags `--no-concurrent-recompilation --no-concurrent-osr
+  --no-concurrent-sparkplug --concurrent-maglev-max-threads=0` made every reading uniformly high
+  (forcing permanently-unoptimised code is worse than occasionally-late-optimised code) -- reverted.
+  **(b)** An adaptive "warm up in short `HeapProfiler`-sampled windows until two consecutive readings
+  agree within 1 B" loop (replacing the fixed frame count) did not fully fix the contended case either
+  (it can stabilise at a wrong, permanently-baseline-tier plateau if the background compiler thread is
+  never scheduled at all, not just briefly) and added real per-test CDP overhead -- reverted in favour
+  of a plain fixed `WARMUP = 8000` (unchanged from before this round; still needed, since `gc-loop`'s
+  own 120 is not enough for this deeper call chain even with both bugs fixed). Budgets were
+  **re-measured from scratch** post-fix (not widened from the pre-fix numbers): 8 clean runs per page
+  gave much lower, tighter baselines than before (`topology` main 38.71/client 13.22, `echo` main
+  27.49/client 8.59 B/frame, `sim`/`gen0` ~7.3 on both), each isolate's own `object`/`burst` control
+  measured comfortably above its own +8-margin budget (e.g. `topology` `client` clean-max 13.22 ->
+  budget 22 -> its own `object` control measured 36.64). **Orchestrator decision needed on the
+  residual cross-isolate interference**: it is real (reproducible single-worker, single-test, no
+  external contention) but its byte size is much smaller than the fixed bugs' contribution was, and
+  this session did not budget-widen to paper over it (instruction 3); a foreground `pnpm test browser`
+  loop on this machine right now still occasionally fails a `neg burst/object <isolate>` test on a
+  *different* isolate's own assertion because of it (exact counts in the report). Options: accept a
+  small, explicitly-justified margin for this specific interaction (a budget entry noting "isolate's
+  own clean max under a *sibling's* burst control", a different measurement than "isolate's own clean
+  max" alone), or investigate further (per-isolate CPU affinity/priority hints, or a longer
+  measurement window that averages out the interaction) -- both are beyond this round's remaining
+  time.
 - **Production workers must be parked before `__pageReady`.** Unlike the M03/M04 harness (starts
   idle, only entering `Atomics.wait` on the first `resume()`), a production worker enters its
   blocking loop immediately after `ready` (Planning decisions: `ready` is posted, then
