@@ -1,0 +1,103 @@
+// The `SabSet` every later milestone posts to its workers (docs/decisions/0015 §2, §5; docs/plan/
+// 06-sab-primitives-and-workers.md, Planning decisions "Ring capacities"). Ring sizes here are
+// internal constants, not game config; an owning milestone may revise its own row in its
+// Deviations. `sabBytesTotal()` assumes the worst case, two gen workers (docs/decisions/
+// 0008-chunk-generation.md), which is what the whole-tab budget must hold under.
+import { CAMERA_BLOCK_BYTES, createCameraBlock } from '../camera/block.js'
+import { CONTROL_BLOCK_BYTES, createControlBlock } from './control.js'
+import { createRing } from './ring.js'
+import { createSeqlock } from './seqlock.js'
+import { createTriple } from './triple.js'
+
+export const WORKER_CLIENT = 0
+export const WORKER_HOST = 1 // sim or net
+export const WORKER_GEN0 = 2
+export const WORKER_GEN1 = 3
+
+export const MAX_GEN_WORKERS = 2
+
+/** `Int32Array[8]` control words per ring (docs/plan/06-sab-primitives-and-workers.md, ring.ts). */
+const RING_CONTROL_BYTES = 32
+
+/** 0015 §2 "clocks": `authoritative_tick, predicted_tick, ticks_per_second, session_state,
+ * seq_seed, ack_seq` (M16), plus `revealed` (M28) and `tick_fraction` (M26) — 8 `u32` fields.
+ * M06 only sizes the seqlock; M16 owns the field layout. */
+const CLOCK_BLOCK_DATA_BYTES = 32
+
+/** M17 (0015 §5, 0018 §"why 0018's 256 does not fit"): 1,024 B header, 2 MiB body. */
+const DRAWLIST_HEADER_BYTES = 1024
+const DRAWLIST_BODY_BYTES = 2 * 1024 * 1024
+
+export const RING_DEFAULTS = {
+  downlink: { slotBytes: 1024, slots: 512 },
+  uplink: { slotBytes: 1024, slots: 64 },
+  actionRing: { slotBytes: 1024, slots: 64 },
+  inputRing: { slotBytes: 32, slots: 256 },
+  uiRing: { slotBytes: 1024, slots: 256 },
+  uploadRing: { slotBytes: 4112, slots: 256 },
+  genRequest: { slotBytes: 16, slots: 64 },
+  genResult: { slotBytes: 16, slots: 64 },
+} as const
+
+export type SabSet = {
+  control: SharedArrayBuffer
+  cameraBlock: SharedArrayBuffer
+  clockBlock: SharedArrayBuffer
+  drawList: SharedArrayBuffer
+  uploadRing: SharedArrayBuffer
+  actionRing: SharedArrayBuffer
+  inputRing: SharedArrayBuffer
+  uiRing: SharedArrayBuffer
+  uplink: SharedArrayBuffer
+  downlink: SharedArrayBuffer
+  genRequest: SharedArrayBuffer[]
+  genResult: SharedArrayBuffer[]
+}
+
+function ringBytes(spec: { slotBytes: number; slots: number }): number {
+  return RING_CONTROL_BYTES + spec.slotBytes * spec.slots
+}
+
+/** Allocates every SAB a topology needs. `hostKind` (single-player `sim`, multiplayer `net`) is
+ * carried for M06b's spawn logic; it does not currently change what is allocated here, since
+ * `uplink`/`downlink` are the same shape either way (docs/plan/06-sab-primitives-and-workers.md
+ * Consumes; recorded in this milestone's Deviations). */
+export function createSabSet(hostKind: 'sim' | 'net', genWorkers: number): SabSet {
+  void hostKind
+  const genRequest: SharedArrayBuffer[] = []
+  const genResult: SharedArrayBuffer[] = []
+  for (let i = 0; i < genWorkers; i++) {
+    genRequest.push(createRing(RING_DEFAULTS.genRequest.slotBytes, RING_DEFAULTS.genRequest.slots))
+    genResult.push(createRing(RING_DEFAULTS.genResult.slotBytes, RING_DEFAULTS.genResult.slots))
+  }
+  return {
+    control: createControlBlock(),
+    cameraBlock: createCameraBlock(),
+    clockBlock: createSeqlock(CLOCK_BLOCK_DATA_BYTES),
+    drawList: createTriple(DRAWLIST_HEADER_BYTES, DRAWLIST_BODY_BYTES),
+    uploadRing: createRing(RING_DEFAULTS.uploadRing.slotBytes, RING_DEFAULTS.uploadRing.slots),
+    actionRing: createRing(RING_DEFAULTS.actionRing.slotBytes, RING_DEFAULTS.actionRing.slots),
+    inputRing: createRing(RING_DEFAULTS.inputRing.slotBytes, RING_DEFAULTS.inputRing.slots),
+    uiRing: createRing(RING_DEFAULTS.uiRing.slotBytes, RING_DEFAULTS.uiRing.slots),
+    uplink: createRing(RING_DEFAULTS.uplink.slotBytes, RING_DEFAULTS.uplink.slots),
+    downlink: createRing(RING_DEFAULTS.downlink.slotBytes, RING_DEFAULTS.downlink.slots),
+    genRequest,
+    genResult,
+  }
+}
+
+/** Total SAB bytes for the worst-case topology (two gen workers), against the ~12 MiB budget of
+ * docs/decisions/0015-threads-memory-and-topology.md §5. */
+export function sabBytesTotal(): number {
+  let total = CONTROL_BLOCK_BYTES + CAMERA_BLOCK_BYTES + (4 + CLOCK_BLOCK_DATA_BYTES)
+  total += 3 * (DRAWLIST_HEADER_BYTES + DRAWLIST_BODY_BYTES)
+  total += ringBytes(RING_DEFAULTS.downlink)
+  total += ringBytes(RING_DEFAULTS.uplink)
+  total += ringBytes(RING_DEFAULTS.actionRing)
+  total += ringBytes(RING_DEFAULTS.inputRing)
+  total += ringBytes(RING_DEFAULTS.uiRing)
+  total += ringBytes(RING_DEFAULTS.uploadRing)
+  total +=
+    MAX_GEN_WORKERS * (ringBytes(RING_DEFAULTS.genRequest) + ringBytes(RING_DEFAULTS.genResult))
+  return total
+}
