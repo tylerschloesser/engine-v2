@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 2;
+pub const ABI_VERSION: u32 = 3;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -145,6 +145,13 @@ pub trait Instance: Sized + 'static {
     fn frame(&mut self, _t_ms: f64, _camera: &CameraBlock, _result: &mut [u8]) -> Status {
         Status::Unsupported
     }
+
+    /// `out` is the whole `GenOut` region for this role (docs/decisions/0008-chunk-generation.md
+    /// §1, §6): must write every element, tiles as little-endian bytes, row-major. A game
+    /// implementing `Worldgen` forwards to a `worldgen::GenCore` it owns (M08).
+    fn gen_chunk(&mut self, _cx: i32, _cy: i32, _out: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
 }
 
 /// Emits every export for every role, the `#[global_allocator]`, and the single-threaded instance
@@ -204,6 +211,12 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn frame(t_ms: f64) -> u32 {
             $crate::abi::frame(&__ENGINE_SLOT, t_ms) as u32
+        }
+
+        // gen
+        #[unsafe(no_mangle)]
+        pub extern "C" fn gen_chunk(cx: i32, cy: i32) -> u32 {
+            $crate::abi::gen_chunk(&__ENGINE_SLOT, cx, cy) as u32
         }
     };
 }

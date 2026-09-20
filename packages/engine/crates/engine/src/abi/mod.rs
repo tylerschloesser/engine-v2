@@ -61,6 +61,14 @@ impl<T> Slot<T> {
         }
         Ok(rt)
     }
+
+    fn gen_role(&self) -> Result<&mut Runtime<T>, Status> {
+        let rt = self.get().as_mut().ok_or(Status::NotInitialised)?;
+        if rt.role != Role::Gen {
+            return Err(Status::WrongRole);
+        }
+        Ok(rt)
+    }
 }
 
 impl<T> Default for Slot<T> {
@@ -178,6 +186,18 @@ pub fn frame<T: Instance>(slot: &Slot<T>, _raw_t_ms: f64) -> Status {
     rt.inst.frame(camera.frame_time_ms, camera, result)
 }
 
+/// `gen_chunk(cx, cy)` (0008 §1, §2 table): the whole `GenOut` region is handed to the instance as
+/// `out`, its length whatever the gen-role `init` declared (`dims.slab_bytes()`, Seams of
+/// docs/plan/08-worldgen-and-gen-worker.md -- never a literal).
+pub fn gen_chunk<T: Instance>(slot: &Slot<T>, cx: i32, cy: i32) -> Status {
+    let rt = match slot.gen_role() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let out = rt.layout.bytes_mut(RegionId::GenOut);
+    rt.inst.gen_chunk(cx, cy, out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +254,18 @@ mod tests {
         assert_eq!(sim_admit(&sim, 0, 9), Status::BadLength);
         assert_eq!(sim.get().as_ref().unwrap().inst.admitted, 8);
         assert_eq!(region_len(&sim, 99), 0);
+    }
+
+    #[test]
+    fn abi_gen_chunk_checks_role_before_the_default() {
+        let empty: Slot<Probe> = Slot::new();
+        assert_eq!(gen_chunk(&empty, 0, 0), Status::NotInitialised);
+
+        let sim = slot_with(Role::Sim);
+        assert_eq!(gen_chunk(&sim, 0, 0), Status::WrongRole);
+
+        let gen_slot = slot_with(Role::Gen);
+        assert_eq!(gen_chunk(&gen_slot, 0, 0), Status::Unsupported);
     }
 
     #[test]
