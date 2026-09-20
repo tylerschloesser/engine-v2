@@ -489,6 +489,47 @@ section's shorter list does not -- read the more specific Order-of-work line as 
 `packages/engine/src/**` already covers every TS file this milestone touches, so only the three new
 Rust globs were needed. `packages/engine/CLAUDE.md` is 57 lines (cap 60).
 
+### Gate fix round 1 (this session)
+
+**Fix 1 (`7e84a8c`): the join scripted at a reduced 2x2/36-chunk view, not the 0008 §5 view clamp,
+undeclared.** Coordinator finding. `gen: drops 0, mem_grows 0, stats exact` now joins at camera
+(0,0), half-extent (128,128) tiles: `visible = ChunkRect{(-4,-4)-(4,4)}` (9x9), the same rect
+`queue_counts_at_view_bound` hard-codes natively; `visible.expanded(2)` = 169 chunks
+(`genJoinChunks`, PRE-PLAN §7's own figure). Pan +32 tiles in x: 156 of the new 169 overlap the old
+set, 13 new (`genPanChunks`, x=7, y=-6..6). `gen: one and two workers give equal chunk hashes` keeps
+its own separate, smaller 2x2/36-chunk geometry (`SMALL_VIEW`, decoupled from `genJoinChunks`): no
+requirement it match the join case, and running the full view-bound set twice (once per worker
+count) buys nothing this test needs. `gen.idle(client, framesPerCheck = 16)` (new optional
+parameter, default 16): steps that many frames between each parked `stats()` read instead of one,
+since a `stats()` read parks/resumes every worker and 169 chunks needs tens of dispatch/delivery
+cycles to drain -- the workload itself is unchanged, only how often the caller checks.
+`pnpm test browser -t "gen: drops..."`: 2 s/25 s; full `browser`: 63 pass, 19 s/25 s (unchanged).
+
+**Fix 2 (no code change; evidence only): `client`'s 5.2867 B/frame is a one-off, not per-pass or
+per-delivery.** Coordinator finding: `client` at 5.2867 vs `gen0`/`topology`/`echo`'s own 2.5067
+baseline is 1,668 B excess over the 600-frame window, byFn's top hit `waitForWake@sab/control.ts:43`
+= 1,660 B. Counts for the window (a standalone replay of the exact same 8000-warmup + 600-measured
+script through `gen.html`, `gen.stats()` before/after): `requested` +18, `dispatched` +16,
+`delivered` +14. Bisected by pan rate (`PAN_TILES_PER_SECOND` in `gc-gen.ts`, one line changed and
+reverted each time, `pnpm gc -t "gen clean"`, `--workers 1`):
+- pan 0 (no real `gen0` traffic at all): `client` = 2.5067 B/frame, identical to `gen0`;
+  `waitForWake` absent from `client`'s `byFn` entirely.
+- pan 4 (≈7 deliveries/window): `client` = 5.2867 B/frame, `waitForWake` = 1,660 B.
+- pan 8 (≈14 deliveries/window, the shipped rate): `client` = 5.2867 B/frame, `waitForWake` = 1,660
+  B -- identical to pan 4, not double it.
+
+The cost is present whenever `gen0` has any real, independent traffic at all, but its *size* does
+not scale with how much (halving the delivery count in the window did not halve the bytes): a
+one-off, matching the class of lazy-feedback-vector allocations M06b's fix round 3 already found for
+a different site (its own 136 B, `armedLoop`'s feedback vector landing inside the window on the
+*second* invocation of a code path) -- V8 warming some branch inside `Atomics.wait`'s call path the
+first time `client`'s wait genuinely blocks on an asynchronously-arriving wake (from `gen0`'s own
+`results.commit()`) rather than one already-satisfied by the time it is issued (every wake on
+`topology`/`echo`, and on this page with panning disabled, is main-driven and already-satisfied by
+construction). Left the code alone, per the coordinator's own instruction for this shape of finding;
+`budgets.json`'s `client` formula records the numbers. `gen0` does not show the same site (its own
+reading is the unchanged 2.5067 constant at every pan rate tested).
+
 ### Notes for later briefs
 
 - `callParked`/`test/test-call.ts` are wired into `client`'s kind body only; `gen.ts`/`sim.ts` need

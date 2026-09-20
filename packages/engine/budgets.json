@@ -98,7 +98,7 @@
           "client": {
             "class": "strict",
             "bytesPerFrame": 8,
-            "formula": "0016 §1: the strict worker figure, same as `topology`/`echo`'s own `client` row. Measured: a constant 5.2867 B/frame across 8 clean runs (higher than `topology`/`echo`'s own ~2.52: this page's `client` role runs the gen pump and the queue's `frame()`/`on_frame` every wake, real work those pages' `fx-hash` client role never does), well under 8.",
+            "formula": "0016 §1: the strict worker figure, same as `topology`/`echo`'s own `client` row. Measured: a constant 5.2867 B/frame across 8 clean runs, well under 8. The 1,660 B excess over the 2.5067 B/frame baseline (`waitForWake@sab/control.ts`, byFn) is a one-off, not per-pass or per-delivery: identical at pan rates 4 and 8 tiles/second (not proportional to real traffic volume) and absent entirely at pan rate 0 (no real gen0 traffic at all) -- docs/plan/08b-gen-workers-and-queue.md, Deviations (fix 2).",
             "attributionRoots": ["body"]
           },
           "gen0": {
