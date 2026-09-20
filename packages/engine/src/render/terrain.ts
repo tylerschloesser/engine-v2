@@ -141,16 +141,10 @@ export function createTerrainRenderer(
   })
   // WebGPU zero-initialises new textures, but `0` is slot 0 here, not "none" -- every toroidal cell
   // must read `INDIR_NONE` until something is actually resident there (`terrain.nonresident_is_neutral`).
-  // One-time init cost, not a hot path.
-  {
-    const none = new Uint16Array(INDIR_TEXTURE_EDGE * INDIR_TEXTURE_EDGE).fill(INDIR_NONE)
-    device.queue.writeTexture(
-      { texture: indirTexture },
-      none,
-      { bytesPerRow: INDIR_TEXTURE_EDGE * 2, rowsPerImage: INDIR_TEXTURE_EDGE },
-      { width: INDIR_TEXTURE_EDGE, height: INDIR_TEXTURE_EDGE },
-    )
-  }
+  // The actual `writeTexture` call for this is below, once `indirMirror`/`indirDest` exist (Open
+  // gate failures item 1): it is the same "write the whole mirror" call `writeIndir` makes, run once
+  // here with every cell still at its initial `INDIR_NONE`, so the one-time init path and the hot
+  // path share one `writeTexture` call site instead of two.
   const visualTableBuffer = device.createBuffer({
     size: VISUAL_TABLE_BYTES,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -261,30 +255,60 @@ export function createTerrainRenderer(
   const frameScratch = new ArrayBuffer(FRAME_UNIFORM_BYTES)
   const frameView = new DataView(frameScratch)
 
-  // Test/step-5 hand-fill scratch (not per-frame): one chunk's worth of texel bytes, one page texel,
-  // one indirection texel.
+  // Test/step-5 hand-fill scratch (not per-frame): one chunk's worth of texel bytes, one page texel.
   const chunkScratch = new Uint16Array(CHUNK_EDGE * CHUNK_EDGE * 2)
   const singleTexelScratch = new Uint16Array(2)
-  const singleIndirScratch = new Uint16Array(1)
 
-  function slotOrigin(slot: number): { x: number; y: number } {
-    return {
-      x: (slot % SLOTS_PER_ROW) * CHUNK_EDGE,
-      y: Math.floor(slot / SLOTS_PER_ROW) * CHUNK_EDGE,
-    }
-  }
+  // Open gate failures (orchestrator, gate round 1) item 1: every `writeTexture` descriptor below
+  // is built once here and mutated in place (`.claude/rules/hot-paths.md`) instead of a fresh
+  // `{ texture, origin }`/`{ bytesPerRow, ... }`/`{ width, height }` literal per call -- the old
+  // `slotOrigin` helper (one more object per call) is gone, replaced by plain-number origin math
+  // written straight into the reused descriptor's `origin` field.
+  // Not annotated with `GPUTexelCopyTextureInfo` itself: that interface's `origin` field is
+  // `GPUOrigin3D`, a union that also admits a plain iterable, so a variable declared at that type
+  // loses the concrete `{ x, y }` shape `writeChunkTexture`/`writePageTexel` mutate in place below.
+  // Left to inference, `chunkDest.origin` keeps its own literal type; structural typing still makes
+  // `chunkDest` itself assignable wherever `GPUTexelCopyTextureInfo` is expected (`writeTexture`'s
+  // own parameter).
+  // None of these carry an explicit `GPU*` type annotation, matching this file's pre-existing style
+  // for every other descriptor literal (`colorAttachment`, `passDescriptor`, below): the ambient
+  // `@webgpu/types` unions (`GPUOrigin3D`, `GPUExtent3DStrict`, ...) are broader than any one
+  // concrete shape, so annotating a *variable* at one of those types --- rather than leaving it to
+  // ordinary structural inference from the literal, checked against the parameter type only at the
+  // `writeTexture` call site --- both loses the concrete `{ x, y }` shape these mutate in place and,
+  // empirically, made `tsc` pick the wrong branch of the union at the call site.
+  const chunkDest = { texture: pageTexture, origin: { x: 0, y: 0 } }
+  const chunkDataLayout = { bytesPerRow: CHUNK_EDGE * TEXEL_BYTES, rowsPerImage: CHUNK_EDGE }
+  const chunkSize = { width: CHUNK_EDGE, height: CHUNK_EDGE }
+
+  const texelDest = { texture: pageTexture, origin: { x: 0, y: 0 } }
+  const texelDataLayout = { bytesPerRow: TEXEL_BYTES }
+  const texelSize = { width: 1, height: 1 }
+
+  // Indirection texture: batched, not per-entry (Open gate failures item 1 -- "say ... whether
+  // entries are batched"). `indirMirror` is the authoritative CPU-side copy of every one of the
+  // 64x64 toroidal cells (`INDIR_NONE` until something is resident there, the same invariant the
+  // old per-entry zero-fill init kept); `writeIndir` mutates only the touched cells in place and
+  // re-uploads the *whole* mirror in one `writeTexture` call. Chosen over "row runs" (entries in one
+  // `INDIR` record are not generally contiguous: `Uploader::stage_indir` drains a `VecDeque` in
+  // eviction/residency order, not raster order) and over doing nothing (up to 1,024 separate
+  // `writeTexture` calls -- and as many queue "tasks" -- per record, 0016 §1's "+24 B per task").
+  // One 8,192-byte transfer is far cheaper than one CHUNK record's own 4,096 bytes and turns an
+  // O(entries) queue-call count into O(1) regardless of how many toroidal cells one record touches.
+  const indirMirror = new Uint16Array(INDIR_TEXTURE_EDGE * INDIR_TEXTURE_EDGE).fill(INDIR_NONE)
+  const indirDest = { texture: indirTexture, origin: { x: 0, y: 0 } }
+  const indirDataLayout = { bytesPerRow: INDIR_TEXTURE_EDGE * 2, rowsPerImage: INDIR_TEXTURE_EDGE }
+  const indirSize = { width: INDIR_TEXTURE_EDGE, height: INDIR_TEXTURE_EDGE }
+  // One-time init (not a hot path): every toroidal cell starts at `INDIR_NONE`.
+  device.queue.writeTexture(indirDest, indirMirror, indirDataLayout, indirSize)
 
   /** The one `writeTexture` call both `writePageChunk` (converts a `Texel[]` into `chunkScratch`
    * first) and `writePageChunkBytes` (already the right layout, no conversion) end in -- `u16`'s
    * length is `CHUNK_EDGE * CHUNK_EDGE * 2`, checked by each public caller. */
   function writeChunkTexture(slot: number, u16: Uint16Array): void {
-    const origin = slotOrigin(slot)
-    device.queue.writeTexture(
-      { texture: pageTexture, origin },
-      u16,
-      { bytesPerRow: CHUNK_EDGE * TEXEL_BYTES, rowsPerImage: CHUNK_EDGE },
-      { width: CHUNK_EDGE, height: CHUNK_EDGE },
-    )
+    chunkDest.origin.x = (slot % SLOTS_PER_ROW) * CHUNK_EDGE
+    chunkDest.origin.y = Math.floor(slot / SLOTS_PER_ROW) * CHUNK_EDGE
+    device.queue.writeTexture(chunkDest, u16, chunkDataLayout, chunkSize)
     usedSlots.add(slot)
   }
 
@@ -342,28 +366,24 @@ export function createTerrainRenderer(
     writePageTexel(slot, index, texel) {
       singleTexelScratch[0] = texel.base
       singleTexelScratch[1] = texel.resource
-      const origin = slotOrigin(slot)
-      const local = { x: index % CHUNK_EDGE, y: Math.floor(index / CHUNK_EDGE) }
-      device.queue.writeTexture(
-        { texture: pageTexture, origin: { x: origin.x + local.x, y: origin.y + local.y } },
-        singleTexelScratch,
-        { bytesPerRow: TEXEL_BYTES },
-        { width: 1, height: 1 },
-      )
+      const originX = (slot % SLOTS_PER_ROW) * CHUNK_EDGE
+      const originY = Math.floor(slot / SLOTS_PER_ROW) * CHUNK_EDGE
+      texelDest.origin.x = originX + (index % CHUNK_EDGE)
+      texelDest.origin.y = originY + Math.floor(index / CHUNK_EDGE)
+      device.queue.writeTexture(texelDest, singleTexelScratch, texelDataLayout, texelSize)
       usedSlots.add(slot)
     },
 
+    // Open gate failures item 1: batched, not one `writeTexture` per entry (see `indirMirror`'s own
+    // comment above). `count`'s scratch-array contract (Seams doc comment) is unchanged.
     writeIndir(entries, count) {
       const n = count ?? entries.length
       for (let i = 0; i < n; i++) {
         const e = entries[i] as IndirEntry
-        singleIndirScratch[0] = e.value
-        device.queue.writeTexture(
-          { texture: indirTexture, origin: { x: e.x, y: e.y } },
-          singleIndirScratch,
-          { bytesPerRow: 2 },
-          { width: 1, height: 1 },
-        )
+        indirMirror[e.y * INDIR_TEXTURE_EDGE + e.x] = e.value
+      }
+      if (n > 0) {
+        device.queue.writeTexture(indirDest, indirMirror, indirDataLayout, indirSize)
       }
     },
 
