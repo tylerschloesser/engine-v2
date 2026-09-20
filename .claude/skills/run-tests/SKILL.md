@@ -38,10 +38,17 @@ output (project name, per-test timing, `errors[]`, `attachments[]` for a trace) 
 
 ## The `browser` suite specifically
 
-Three projects: `chromium` runs everything under `packages/engine/tests/browser/*.spec.ts`; `webkit`
-and `firefox` run only specs tagged `@engines` in the title (the determinism spec: three engines,
-one hash). Both tags compose with `-t`: `pnpm test browser -t determinism` runs the determinism spec
-in all three; `pnpm test browser` alone runs chromium's full set plus the two `@engines` runs.
+Four projects: `chromium` runs everything under `packages/engine/tests/browser/*.spec.ts` except
+`gc-*.spec.ts`; `gc` runs only those (the zero-GC suite, `gc-test` skill); `webkit` and `firefox`
+run only specs tagged `@engines` (the determinism spec: three engines, one hash) or, for `webkit`
+alone, `@webkit-gpu`. `pnpm test browser` (fast tier) runs `chromium` and `gc` only -- WebKit and
+Firefox moved to the slow tier entirely at gate round 3 (`scripts/suites.mjs`'s `browser` suite
+`args: ['--project', 'chromium', '--project', 'gc']`; docs/decisions/0020 §4, first rung): `pnpm
+test:slow browser` (and CI) runs every `@engines`/`@webkit-gpu` test on WebKit and Firefox through
+a separate `engines` leg (`onlyTier: 'slow'`, its own preview port so it can run alongside the main
+leg), plus every `@slow`-tagged title as usual. `-t` composes with both: `pnpm test:slow browser -t
+determinism` runs the determinism spec on WebKit and Firefox (and on chromium/gc if also tagged
+`@slow`); `pnpm test browser -t determinism` runs it on chromium alone.
 
 Playwright's own `webServer` only runs `vite preview` against an already-built app (dev profile);
 `pnpm test`'s `pages` build step is what runs `vite build` first (`scripts/suites.mjs`). If you

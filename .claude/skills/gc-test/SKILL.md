@@ -13,6 +13,15 @@ bytes within a budget (assertion B), plus unchanged WASM memory. Every page that
 controls that must fail on the named isolate and nowhere else
 (`packages/engine/tests/browser/gc/suite.ts`'s `zeroGcSuite`).
 
+**Tiers (gate round 3, docs/decisions/0026):** `gc-loop` keeps every negative control (`object`,
+`burst`, `post-message`) in the fast tier -- it is the harness's own reference page, so this is what
+proves both instruments are still live on every `pnpm test`. Every other page's per-isolate `burst`
+negatives are tagged `@slow` by `zeroGcSuite` itself (by page id, not a caller option); `object`
+negatives stay fast for every page. What the fast tier loses -- "instrument A looks at this page's
+thread X" -- the `clean` test now asserts directly: `r.presentIsolates` (from `analyseTrace`) must
+contain every isolate the page's budget names, failing by name if the trace never discovered that
+isolate's thread at all (not merely saw zero GC events there).
+
 ## When to run it
 
 - A change touched anything in the hot path of a measured page: the harness (`src/test/harness.ts`,
