@@ -12,9 +12,18 @@ import {
   W_YIELD,
   workerWord,
 } from '../sab/control.js'
-import type { FromWorker } from './protocol.js'
+import type { FromWorker, TestCallMessage } from './protocol.js'
 
-export type LoopState = { body: (wokenBy: number) => void; timeoutMs: () => number }
+export type LoopState = {
+  body: (wokenBy: number) => void
+  timeoutMs: () => number
+  /** Optional: a kind with a WASM instance answers a parked-only `test-call` message through this
+   * (`worker/test-call.ts`'s `handleTestCall`, closed over its own instance). Absent for a kind
+   * with no instance (`net`). Not part of the loop `runBlockingLoop` re-enters with -- `worker.ts`
+   * reads it once, off the returned `LoopState`, and routes `test-call` messages to it directly
+   * (docs/plan/08b-gen-workers-and-queue.md, orchestrator decision 1 at the step-5 boundary). */
+  testCall?: (m: TestCallMessage) => FromWorker
+}
 
 /** Every kind's `timeoutMs` until M13 gives `sim` a real tick deadline: a module-level constant
  * closed over once, not `Number.POSITIVE_INFINITY` read fresh on every pass. Fix round 2 evidence

@@ -4,15 +4,18 @@
 // `dist/`, an exit criterion of docs/plan/03-browser-harness.md).
 export type { Clock, Scheduler } from './clock.js'
 export {
+  callParked,
   parkWorkers,
   resumeWorkers,
   setCamera,
   stepFrame,
+  type TestCallResult,
   untilQuiescent,
 } from './test/client.js'
 export type { NegativeControl } from './test/controls.js'
 export { fnv1a64Hex } from './test/fnv.js'
 export { type GcPageApi, installGcPage } from './test/gc-page.js'
+export * as gen from './test/gen.js'
 export {
   createHarness,
   type Harness,

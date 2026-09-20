@@ -45,6 +45,32 @@ export type SetupMessage = {
   test?: TestFlags
 }
 
-export type ToWorker = SetupMessage | { type: 'resume' } | { type: 'stop' }
+/**
+ * Main -> worker, parked-only: one generic test-gated call channel (docs/plan/
+ * 08b-gen-workers-and-queue.md, orchestrator decision 1 at the step-5 boundary), used by
+ * `engine/test`'s `callParked` instead of a new `SabSet` field or a query-specific message. `a`/`b`
+ * are the export's arguments in order (0 or 2 args covers every export named by this milestone;
+ * `undefined` means "not passed", not "pass 0"). Answered only by a worker whose setup message
+ * carried `test` (`worker/test-call.ts`) and only while it is parked (a worker blocked in
+ * `Atomics.wait` receives no events, 0015 §2).
+ */
+export type TestCallMessage = {
+  type: 'test-call'
+  id: number
+  name: string
+  a?: number
+  b?: number
+  resultBytes?: number
+}
 
-export type FromWorker = { type: 'ready' } | { type: 'fatal'; message: string }
+export type ToWorker = SetupMessage | { type: 'resume' } | { type: 'stop' } | TestCallMessage
+
+export type FromWorker =
+  | { type: 'ready' }
+  | { type: 'fatal'; message: string }
+  /** `test-call`'s reply: `value` is the export's return value, `result` a copy of the first
+   * `resultBytes` bytes of `Result` (empty when 0 or absent). */
+  | { type: 'test-result'; id: number; value: number; result: Uint8Array }
+  /** `test-call`'s reply for an unknown export, a missing instance (e.g. the `net` kind), or a
+   * trap. */
+  | { type: 'test-error'; id: number; message: string }

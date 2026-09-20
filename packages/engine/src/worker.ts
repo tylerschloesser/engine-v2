@@ -7,7 +7,7 @@ import { ControlBlock } from './sab/control.js'
 import * as clientKind from './worker/client.js'
 import * as genKind from './worker/gen.js'
 import * as netKind from './worker/net.js'
-import type { FromWorker, SetupMessage, ToWorker } from './worker/protocol.js'
+import type { FromWorker, SetupMessage, TestCallMessage, ToWorker } from './worker/protocol.js'
 import { isolateName } from './worker/protocol.js'
 import { createShell, type LoopState, runBlockingLoop, type Shell } from './worker/shell.js'
 import * as simKind from './worker/sim.js'
@@ -43,6 +43,12 @@ function post(m: FromWorker): void {
  * `worker.ts` (pattern B, 0017 §3). */
 export function run(): void {
   let shell: Shell | null = null
+  // Set once, off the resolved `LoopState`, only when this worker's own setup carried `test`
+  // (orchestrator decision 1 at the step-5 boundary, docs/plan/08b-gen-workers-and-queue.md): a
+  // production `createClient()` never sets `options.test`, so a production worker never answers a
+  // `test-call` message at all, whatever its kind returns.
+  let testEnabled = false
+  let testCall: ((m: TestCallMessage) => FromWorker) | null = null
 
   scope.onmessage = (ev) => {
     const m = ev.data
@@ -58,11 +64,13 @@ export function run(): void {
         dbg.__engineWorkerKind = m.kind
         dbg.__engineIsolateName = isolateName(m.kind, m.index)
       }
+      testEnabled = !!m.test
       const control = new ControlBlock(m.sabs.control)
       const s = createShell(control, m.index)
       shell = s
       kinds[m.kind].setup(s, m).then(
         (loop) => {
+          testCall = loop?.testCall ?? null
           // The wake word is read before `ready` goes out, not after: main can wake this worker the
           // instant it sees `ready`, and a wake between the post and the loop's own first read
           // would be lost (`Shell.observeWake`; fix round 3, docs/plan/06b-workers-and-spawn.md).
@@ -76,6 +84,14 @@ export function run(): void {
       shell?.resume()
     } else if (m.type === 'stop') {
       shell?.stop()
+    } else if (m.type === 'test-call') {
+      // Reachable only while this worker is parked (0015 §2: a blocked worker receives no events),
+      // so this branch never runs from inside a kind's blocking loop.
+      if (testEnabled && testCall) {
+        post(testCall(m))
+      } else {
+        post({ type: 'test-error', id: m.id, message: 'test-call: not enabled for this worker' })
+      }
     }
   }
 }

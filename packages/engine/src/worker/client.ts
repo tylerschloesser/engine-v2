@@ -15,6 +15,7 @@ import { instantiateForSetup } from './instantiate.js'
 import type { SetupMessage } from './protocol.js'
 import type { LoopState, Shell } from './shell.js'
 import { noTimeout } from './shell.js'
+import { handleTestCall } from './test-call.js'
 
 /**
  * The *raw export argument* of `frame(t_ms: f64)` is a vestigial Smi, not the frame time (Planning
@@ -90,5 +91,9 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     genPump.pump()
   }
 
-  return { body, timeoutMs: noTimeout }
+  // `engine/test`'s `callParked` reaches `client_gen_stats`/`client_chunk_hash` (this instance's
+  // own non-shared WASM memory) through this, while parked only (docs/plan/
+  // 08b-gen-workers-and-queue.md, orchestrator decision 1 at the step-5 boundary): `worker.ts`
+  // routes a `test-call` message here only when this worker's own setup carried `test`.
+  return { body, timeoutMs: noTimeout, testCall: (m) => handleTestCall(inst, m) }
 }

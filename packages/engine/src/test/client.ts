@@ -19,6 +19,7 @@ import {
   workerWord,
 } from '../sab/control.js'
 import { RingConsumer, type RingStats } from '../sab/ring.js'
+import type { FromWorker, ToWorker } from '../worker/protocol.js'
 import { isolateName } from '../worker/protocol.js'
 import type { Harness } from './harness.js'
 import type { ManualClock } from './manual-clock.js'
@@ -168,6 +169,65 @@ export function setCamera(
 }
 
 export type { CameraState }
+
+/** `callParked`'s answer: `value` is the export's return value, `result` a copy of the first
+ * `resultBytes` bytes of that worker's own `Result` region. */
+export type TestCallResult = { value: number; result: Uint8Array }
+
+let nextTestCallId = 1
+
+function findWorkerEntry(h: ClientTestHandle, isolate: string): WorkerEntry {
+  for (const w of h.workers) {
+    if (isolateName(w.kind, w.index) === isolate) return w
+  }
+  throw new Error(`callParked: no worker named '${isolate}'`)
+}
+
+/**
+ * Reads a worker's own instance state from main through the parked-only `test-call` channel
+ * (docs/plan/08b-gen-workers-and-queue.md, orchestrator decision 1 at the step-5 boundary): calls
+ * ABI export `name` with `args` (0, 1 or 2 numbers) on the `isolate`-named worker and returns its
+ * return value plus a copy of the first `resultBytes` bytes of `Result`. Rejects immediately,
+ * without sending anything, when that worker's `W_PARKED` is not 1 -- a worker blocked in
+ * `Atomics.wait` receives no events, so a call sent to one that is not parked would only resolve
+ * once it happens to park for some other reason, which is not a wait this helper should hide.
+ */
+export function callParked(
+  client: Client,
+  isolate: string,
+  name: string,
+  args?: number[],
+  resultBytes?: number,
+): Promise<TestCallResult> {
+  const h = clientTestHandle(client)
+  const w = findWorkerEntry(h, isolate)
+  if (Atomics.load(h.control.words, workerWord(w.index, W_PARKED)) !== 1) {
+    return Promise.reject(new Error(`callParked: worker '${isolate}' is not parked`))
+  }
+  const id = nextTestCallId++
+  const msg: ToWorker = {
+    type: 'test-call',
+    id,
+    name,
+    ...(args !== undefined && args.length > 0 ? { a: args[0] as number } : {}),
+    ...(args !== undefined && args.length > 1 ? { b: args[1] as number } : {}),
+    ...(resultBytes !== undefined && resultBytes > 0 ? { resultBytes } : {}),
+  }
+  return new Promise((resolve, reject) => {
+    const onMessage = (ev: MessageEvent<FromWorker>): void => {
+      const reply = ev.data
+      if (reply.type === 'test-result' && reply.id === id) {
+        w.worker.removeEventListener('message', onMessage as EventListener)
+        resolve({ value: reply.value, result: reply.result })
+      } else if (reply.type === 'test-error' && reply.id === id) {
+        w.worker.removeEventListener('message', onMessage as EventListener)
+        reject(new Error(reply.message))
+      }
+    }
+    w.worker.addEventListener('message', onMessage as EventListener)
+    w.worker.postMessage(msg)
+  })
+}
 
 const WASM_PAGE_BYTES = 65536
 
