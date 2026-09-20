@@ -46,18 +46,34 @@ pub struct Footprint {
 }
 
 /// Base and resource trait tables (256 entries each, one per `u8` tile layer id) plus the
-/// prototype table, registered once at init (`Game::register`, M12).
+/// prototype table, registered once at init (`Game::register`, M12). `base_visuals`/
+/// `resource_visuals` (docs/decisions/0018-renderer.md §2; docs/plan/09-renderer-terrain.md
+/// Planning decisions "TileTexel::from_tables registration") are the same shape, one visual id per
+/// tile layer id, identity by default so an unregistered game still renders something: visual ids
+/// share one namespace of 1,024 with `tiles.json`.
 pub struct Registry {
     base_traits: [TraitSet; 256],
     resource_traits: [TraitSet; 256],
+    base_visuals: [u16; 256],
+    resource_visuals: [u16; 256],
     prototypes: Vec<(TraitSet, Footprint)>,
 }
 
 impl Registry {
     pub fn new() -> Self {
+        let mut base_visuals = [0u16; 256];
+        let mut resource_visuals = [0u16; 256];
+        let mut i = 0usize;
+        while i < 256 {
+            base_visuals[i] = i as u16;
+            resource_visuals[i] = i as u16;
+            i += 1;
+        }
         Registry {
             base_traits: [TraitSet::EMPTY; 256],
             resource_traits: [TraitSet::EMPTY; 256],
+            base_visuals,
+            resource_visuals,
             prototypes: Vec::new(),
         }
     }
@@ -70,6 +86,29 @@ impl Registry {
     #[inline]
     pub fn set_resource_traits(&mut self, resource: u8, traits: TraitSet) {
         self.resource_traits[resource as usize] = traits;
+    }
+
+    /// 0018 §2: the base-layer terrain id's art visual. Identity until a game overrides it.
+    #[inline]
+    pub fn set_base_visual(&mut self, base_id: u8, visual: u16) {
+        self.base_visuals[base_id as usize] = visual;
+    }
+
+    /// 0018 §2: the resource-layer id's art visual. `resource_id = 0` (no resource) is identity
+    /// (visual 0, "no resource") unless a game deliberately overrides it.
+    #[inline]
+    pub fn set_resource_visual(&mut self, resource_id: u8, visual: u16) {
+        self.resource_visuals[resource_id as usize] = visual;
+    }
+
+    #[inline]
+    pub fn base_visual(&self, base_id: u8) -> u16 {
+        self.base_visuals[base_id as usize]
+    }
+
+    #[inline]
+    pub fn resource_visual(&self, resource_id: u8) -> u16 {
+        self.resource_visuals[resource_id as usize]
     }
 
     pub fn add_prototype(&mut self, traits: TraitSet, footprint: Footprint) -> PrototypeId {
@@ -141,6 +180,19 @@ mod tests {
             NOT_BUILDABLE | NOT_WALKABLE,
             NOT_BUILDABLE.union(NOT_WALKABLE)
         );
+    }
+
+    #[test]
+    fn visuals_default_identity_and_override() {
+        let mut reg = Registry::new();
+        assert_eq!(reg.base_visual(7), 7);
+        assert_eq!(reg.resource_visual(0), 0);
+        reg.set_base_visual(7, 200);
+        reg.set_resource_visual(3, 201);
+        assert_eq!(reg.base_visual(7), 200);
+        assert_eq!(reg.resource_visual(3), 201);
+        // Untouched entries stay identity.
+        assert_eq!(reg.base_visual(8), 8);
     }
 
     #[test]

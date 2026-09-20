@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 4
+export const ABI_VERSION = 5
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -82,6 +82,10 @@ export const ABI_EXPORTS = {
   client_gen_stats: { role: 'client', params: 0, result: 'status' },
   // `client_chunk_hash(cx, cy)`: lo, hi `u32` of an FNV hash into `Result`, or `Status.NotCached`.
   client_chunk_hash: { role: 'client', params: 2, result: 'status' },
+  // docs/plan/09-renderer-terrain.md: stages up to `max_records` upload-ring records into
+  // `RegionId.ChunkTexels`; returns the count actually staged (not a `Status`: costs nothing and
+  // always answers, even with no `client::Uploader`, the same shape as `gen_take`).
+  upload_stage: { role: 'client', params: 1, result: 'u32' },
 } as const satisfies Record<string, ExportSpec>
 
 export function statusName(n: number): string {

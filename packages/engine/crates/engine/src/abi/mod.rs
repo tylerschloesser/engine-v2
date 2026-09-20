@@ -249,6 +249,18 @@ pub fn client_chunk_hash<T: Instance>(slot: &Slot<T>, cx: i32, cy: i32) -> Statu
     rt.inst.client_chunk_hash(cx, cy, result)
 }
 
+/// `upload_stage(max_records) -> u32`: records staged into `ChunkTexels`, `0` on a wrong role or an
+/// instance with no `client::Uploader` (docs/plan/09-renderer-terrain.md, same "always answer, cost
+/// nothing" shape as `gen_take`, so no `Status` crosses here either).
+pub fn upload_stage<T: Instance>(slot: &Slot<T>, max_records: u32) -> u32 {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(_) => return 0,
+    };
+    let out = rt.layout.bytes_mut(RegionId::ChunkTexels);
+    rt.inst.upload_stage(max_records, out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -6,6 +6,10 @@
 
 pub mod camera;
 pub mod terrain_feed;
+pub mod texel;
+pub mod upload;
 
 pub use camera::CameraBlock;
 pub use terrain_feed::TerrainFeed;
+pub use texel::{ClientSide, TileTexel, install_visual_tables};
+pub use upload::Uploader;

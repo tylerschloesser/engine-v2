@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 4;
+pub const ABI_VERSION: u32 = 5;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -188,6 +188,15 @@ pub trait Instance: Sized + 'static {
     fn client_chunk_hash(&mut self, _cx: i32, _cy: i32, _result: &mut [u8]) -> Status {
         Status::Unsupported
     }
+
+    /// `docs/plan/09-renderer-terrain.md`: stages up to `max_records` upload-ring records (chunk
+    /// conversions, tile patches, indirection updates -- `client::Uploader::stage`) into `out`
+    /// (the whole `ChunkTexels` region), returns the count actually written. `0` on every fixture
+    /// with no `Uploader` (a client role that renders no terrain), same "always answer, cost
+    /// nothing on a page without one" shape as `gen_take`.
+    fn upload_stage(&mut self, _max_records: u32, _out: &mut [u8]) -> u32 {
+        0
+    }
 }
 
 /// Emits every export for every role, the `#[global_allocator]`, and the single-threaded instance
@@ -263,6 +272,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn client_chunk_hash(cx: i32, cy: i32) -> u32 {
             $crate::abi::client_chunk_hash(&__ENGINE_SLOT, cx, cy) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn upload_stage(max_records: u32) -> u32 {
+            $crate::abi::upload_stage(&__ENGINE_SLOT, max_records)
         }
 
         // gen
