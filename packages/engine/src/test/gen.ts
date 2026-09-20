@@ -111,11 +111,19 @@ export async function chunkHash(client: Client, cx: number, cy: number): Promise
  * waits for every ring to drain (Seams). `untilQuiescent` (which this ends with) always leaves
  * every worker parked, so a second `idle()` call -- driving a further pan, say -- needs the client
  * running again before it can `stepFrame`; resuming unconditionally here is harmless when it is
- * already running (`resumeWorkers`'s own poll is then true on its first tick). */
-export async function idle(client: Client): Promise<void> {
+ * already running (`resumeWorkers`'s own poll is then true on its first tick).
+ *
+ * `framesPerCheck` (default 16) steps that many frames between each parked `stats()` read, not one:
+ * a `stats()` read parks and resumes every worker (real `postMessage` round trips plus macrotask
+ * polling), and the workload is real work in real time regardless -- the view-bound join case (0008
+ * §5, 169 chunks) needs tens of dispatch/delivery cycles to drain, so checking every single frame
+ * would spend far more wall-clock time parking than generating. `gen0` keeps draining between
+ * checks (its own commits wake the client directly, independent of `stepFrame`); this only changes
+ * how often the *caller* asks. */
+export async function idle(client: Client, framesPerCheck = 16): Promise<void> {
   await resumeWorkers(client)
   for (;;) {
-    stepFrame(client, FRAME_MS)
+    for (let i = 0; i < framesPerCheck; i++) stepFrame(client, FRAME_MS)
     const s = await stats(client)
     if (s.pending === 0 && s.inFlight === 0) break
   }

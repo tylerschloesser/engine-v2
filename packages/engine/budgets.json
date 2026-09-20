@@ -118,9 +118,9 @@
       "formula": "docs/decisions/0015-threads-memory-and-topology.md §5's ~12 MiB SAB budget line, in bytes (12 * 1024 * 1024). Measured sab/layout.ts sabBytesTotal() (two gen workers, the worst case): 8,277,684 B (~7.9 MiB) -- control 256 B + camera 80 B + clock seqlock 36 B + drawList triple 3*(1,024 + 2,097,152) B + six single rings + two gen-worker ring pairs (docs/plan/06-sab-primitives-and-workers.md, Ring capacities)."
     },
     "gen": {
-      "genJoinChunks": 36,
-      "genPanChunks": 6,
-      "formula": "docs/plan/08b-gen-workers-and-queue.md, `gen: drops 0, mem_grows 0, stats exact`: a scripted join at camera (32,32), half-extent (16,16) tiles (dims bits 5, edge 32) gives `visible = ChunkRect{(0,0)-(1,1)}` (2x2), `visible.expanded(2) = {(-2,-2)-(3,3)}` (6x6 = 36 chunks) -- genJoinChunks, GenStats.requested/dispatched/delivered exactly, cancelled 0. A scripted pan of +32 tiles (one chunk edge) in x shifts visible to `{(1,0)-(2,1)}`; the new expanded(2) `{(-1,-2)-(4,3)}` overlaps the old one in 30 chunks (5x6), leaving 6 new ones (x=4, y=-2..3) -- genPanChunks, the exact incremental requested/dispatched/delivered delta, cancelled still 0 (the new ring-3 retention bound comfortably contains every previously-cached chunk)."
+      "genJoinChunks": 169,
+      "genPanChunks": 13,
+      "formula": "docs/plan/08b-gen-workers-and-queue.md, `gen: drops 0, mem_grows 0, stats exact`: a scripted join at the view clamp of 0008 §5 (camera (0,0), half-extent (128,128) tiles, dims bits 5, edge 32) gives `visible = ChunkRect{(-4,-4)-(4,4)}` (9x9, matching `queue_counts_at_view_bound`'s own hard-coded rect natively), `visible.expanded(2) = {(-6,-6)-(6,6)}` (13x13 = 169 chunks) -- genJoinChunks, GenStats.requested/dispatched/delivered exactly (PRE-PLAN §7's own 'chunk generation, join case' figure), cancelled 0. A scripted pan of +32 tiles (one chunk edge) in x shifts visible to `{(-3,-4)-(5,4)}`; the new expanded(2) `{(-5,-6)-(7,6)}` overlaps the old one in 156 chunks (12x13), leaving 13 new ones (x=7, y=-6..6) -- genPanChunks, the exact incremental requested/dispatched/delivered delta, cancelled still 0 (the new ring-3 retention bound comfortably contains every previously-cached chunk)."
     }
   },
   "worldgenMsPerChunkWarn": 0.25

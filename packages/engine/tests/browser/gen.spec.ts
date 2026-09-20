@@ -56,15 +56,23 @@ async function ready(page: Page): Promise<{ ok: boolean; code?: string; message?
   return r
 }
 
-// The 2x2 visible rect `__genProbeOrder` documents: `visible.expanded(2)` is a 6x6 = 36-chunk
-// generation set (ring 0 = 4, ring 1 = 12, ring 2 = 20) -- `budgets.json`'s own `counters.gen.
-// genJoinChunks` (Planning decisions 8: exact values are budgets).
-const VIEW = { x: 32, y: 32, halfExtentX: 16, halfExtentY: 16 }
+// A small 2x2 visible rect, used only by "one and two workers" below: `visible.expanded(2)` is a
+// 6x6 = 36-chunk generation set, its own scope, not the view-clamp join case (which has its own
+// geometry, `VIEW_CLAMP` below).
+const SMALL_VIEW = { x: 32, y: 32, halfExtentX: 16, halfExtentY: 16 }
+const SMALL_GENERATION_SET_SIZE = 36
+
+// The view clamp of 0008 §5: "at most 9x9 visible chunks" (worst-case alignment for a 256-tile
+// viewport, half-extent 128 tiles each axis) -- `visible_rect((0,0),(128,128),dims(5))` gives
+// exactly `ChunkRect{(-4,-4)-(4,4)}` (9x9), the same rect `queue_counts_at_view_bound` (Rust) hard-
+// codes. `visible.expanded(2)` = 13x13 = 169 -- PRE-PLAN §7's "chunk generation, join case" figure,
+// `budgets.json`'s `counters.gen.genJoinChunks` (Planning decisions 8: exact values are budgets).
+const VIEW_CLAMP = { x: 0, y: 0, halfExtentX: 128, halfExtentY: 128 }
 const GENERATION_SET_SIZE = budget('counters.gen.genJoinChunks')
 const PAN_CHUNKS = budget('counters.gen.genPanChunks')
 
-async function setViewAndIdle(page: Page): Promise<void> {
-  await page.evaluate((v) => window.__genSetView?.(v), VIEW)
+async function setViewAndIdle(page: Page, view: typeof SMALL_VIEW): Promise<void> {
+  await page.evaluate((v) => window.__genSetView?.(v), view)
   await page.evaluate(() => window.__genIdle?.())
 }
 
@@ -90,7 +98,7 @@ test('gen: one and two workers give equal chunk hashes', async ({ page }) => {
     await openPage(page, '/gen.html')
     await createClient(page, { genWorkers })
     expect(await ready(page)).toEqual({ ok: true })
-    await setViewAndIdle(page)
+    await setViewAndIdle(page, SMALL_VIEW)
     // One round trip for the whole rect, not one per chunk (browser suite time budget).
     const out = await page.evaluate(() => window.__genChunkHashRect?.(-2, -2, 3, 3) ?? [])
     await page.evaluate(() => window.__genClientDestroy?.())
@@ -98,7 +106,7 @@ test('gen: one and two workers give equal chunk hashes', async ({ page }) => {
   }
 
   const one = await hashesFor(1)
-  expect(one).toHaveLength(GENERATION_SET_SIZE)
+  expect(one).toHaveLength(SMALL_GENERATION_SET_SIZE)
   expect(one.every((h) => typeof h === 'string')).toBe(true)
 
   const two = await hashesFor(2)
@@ -110,7 +118,7 @@ test('gen: drops 0, mem_grows 0, stats exact', async ({ page }) => {
   await createClient(page, { genWorkers: 1 })
   expect(await ready(page)).toEqual({ ok: true })
 
-  await setViewAndIdle(page)
+  await setViewAndIdle(page, VIEW_CLAMP)
   const join = (await page.evaluate(() => window.__genStats?.())) as GenStats
   expect(join).toEqual({
     requested: GENERATION_SET_SIZE,
@@ -130,10 +138,10 @@ test('gen: drops 0, mem_grows 0, stats exact', async ({ page }) => {
     expect(s.drops, `${name}.drops`).toBe(0)
   }
 
-  // Pan one chunk edge east: visible shifts from {(0,0)-(1,1)} to {(1,0)-(2,1)}; the new
-  // `visible.expanded(2)` (still 6x6=36) overlaps the old one in 30 chunks (5x6), leaving 6 new
-  // ones (x=4, y=-2..3) -- `genPanChunks` in budgets.json.
-  await page.evaluate((v) => window.__genSetView?.(v), { ...VIEW, x: 64 })
+  // Pan one chunk edge east: visible shifts from {(-4,-4)-(4,4)} to {(-3,-4)-(5,4)}; the new
+  // `visible.expanded(2)` (still 13x13=169) overlaps the old one in 156 chunks (12x13), leaving 13
+  // new ones (x=7, y=-6..6) -- `genPanChunks` in budgets.json.
+  await page.evaluate((v) => window.__genSetView?.(v), { ...VIEW_CLAMP, x: 32 })
   await page.evaluate(() => window.__genIdle?.())
   const pan = (await page.evaluate(() => window.__genStats?.())) as GenStats
   expect(pan.cancelled).toBe(0)
