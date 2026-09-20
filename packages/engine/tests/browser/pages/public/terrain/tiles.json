@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "image": "tiles.png",
+  "tile_px": 16,
+  "columns": 4,
+  "visuals": {
+    "0": {
+      "first": 0,
+      "variants": 1,
+      "flags": [],
+      "priority": 0,
+      "band": 0
+    },
+    "1": {
+      "first": 1,
+      "variants": 1,
+      "flags": [],
+      "priority": 0,
+      "band": 0
+    },
+    "2": {
+      "first": 2,
+      "variants": 1,
+      "flags": [],
+      "priority": 0,
+      "band": 0
+    },
+    "5": {
+      "first": 3,
+      "variants": 1,
+      "flags": [],
+      "priority": 0,
+      "band": 0
+    }
+  }
+}
