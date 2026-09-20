@@ -11,6 +11,7 @@ import { RegionId, Role } from '../abi.js'
 import { W_ACK, WORKER_CLIENT, WORKER_GEN0, workerWord } from '../sab/control.js'
 import { RingConsumer, RingProducer } from '../sab/ring.js'
 import { applyGcHook } from './gc-hook.js'
+import { GEN_RECORD_HEADER_BYTES, readI32LE, writeGenHeader } from './gen-record.js'
 import { instantiateForSetup } from './instantiate.js'
 import type { SetupMessage } from './protocol.js'
 import type { LoopState, Shell } from './shell.js'
@@ -18,24 +19,7 @@ import { noTimeout } from './shell.js'
 
 /** Request/result header bytes (docs/plan/08b-gen-workers-and-queue.md, Seams: `[cx i32][cy
  * i32][0 u32][0 u32]`; a result record is the same header followed by `GenOut`'s tile bytes). */
-const HEADER_BYTES = 16
-
-function readI32LE(u8: Uint8Array, off: number): number {
-  return (
-    (u8[off] as number) |
-    ((u8[off + 1] as number) << 8) |
-    ((u8[off + 2] as number) << 16) |
-    ((u8[off + 3] as number) << 24) |
-    0
-  )
-}
-
-function writeI32LE(u8: Uint8Array, off: number, v: number): void {
-  u8[off] = v & 0xff
-  u8[off + 1] = (v >>> 8) & 0xff
-  u8[off + 2] = (v >>> 16) & 0xff
-  u8[off + 3] = (v >>> 24) & 0xff
-}
+const HEADER_BYTES = GEN_RECORD_HEADER_BYTES
 
 export async function setup(shell: Shell, message: SetupMessage): Promise<LoopState> {
   const inst = await instantiateForSetup(shell, message, Role.Gen)
@@ -90,10 +74,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
         inst.call2(inst.x.gen_chunk, cx, cy)
 
         const out = results.slotView(claimed)
-        writeI32LE(out, 0, cx)
-        writeI32LE(out, 4, cy)
-        writeI32LE(out, 8, 0)
-        writeI32LE(out, 12, 0)
+        writeGenHeader(out, 0, cx, cy)
         out.set(genOut.u8, HEADER_BYTES)
         results.commit()
       }
