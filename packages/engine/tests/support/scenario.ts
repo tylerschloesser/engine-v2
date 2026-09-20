@@ -1,11 +1,14 @@
 // The determinism scenario driver, shared by Vitest under Node, the Bun leg, `pnpm golden` and (M03)
-// the browser page. Its only runtime import is `abi.ts`, which has none, so a plain runtime can
-// load it as it is. The native leg makes the same calls: `fixtures/hash/tests/scenario.rs`.
-import { RegionId, Status, statusName } from '../../src/abi.ts'
+// the browser page. Its only runtime imports are `abi.ts` (no imports of its own) and
+// `src/test/fnv.ts` (BigInt only), so a plain runtime can load it as it is. The native legs make
+// the same calls: `fixtures/hash/tests/scenario.rs`, `fixtures/worldgen/tests/scenario.rs`.
+import { RegionId, Role, Status, statusName } from '../../src/abi.ts'
 import type { EngineInstance, InstanceConfig } from '../../src/loader.ts'
+import { fnv1a64Hex } from '../../src/test/fnv.ts'
 
-/** `fixtures/<name>/golden/scenario.json` */
-export type HashScenario = {
+/** `fixtures/hash/golden/scenario.json`: a sim-role tick/checkpoint scenario. */
+export type SimScenario = {
+  kind?: undefined
   role: 'sim'
   config: InstanceConfig
   ticks: number
@@ -14,15 +17,45 @@ export type HashScenario = {
   input: { everyTicks: number; bytes: number; rule: string }
 }
 
+/**
+ * `fixtures/worldgen/golden/scenario.json`: a gen-role chunk-list scenario
+ * (docs/plan/08-worldgen-and-gen-worker.md Seams). One checkpoint per 64 chunks, each the
+ * `fnv1a64Hex` of the concatenated `GenOut` bytes.
+ */
+export type WorldgenScenario = {
+  kind: 'worldgen'
+  role: 'gen'
+  config: InstanceConfig
+  chunks: [number, number][]
+}
+
+/** `kind` dispatches which scenario shape this is; absent means `SimScenario` (M02). */
+export type HashScenario = SimScenario | WorldgenScenario
+
 /** `fixtures/<name>/golden/golden.json`; written only by `pnpm golden`. */
 export type Golden = { checkpoints: string[] }
+
+const ROLE_OF = { sim: Role.Sim, client: Role.Client, gen: Role.Gen } as const
+
+/** The `Role` to `instantiate` with for this scenario's `role` field. */
+export function roleOf(scenario: HashScenario): Role {
+  return ROLE_OF[scenario.role]
+}
 
 function ok(status: number, what: string, tick: number): void {
   if (status !== Status.Ok) throw new Error(`${what} at tick ${tick}: ${statusName(status)}`)
 }
 
-/** Run the scenario on a fresh sim instance; one 16-digit hex state hash per checkpoint. */
+const CHECKPOINT_CHUNKS = 64
+
+/** Run the scenario on a fresh instance of the role its own `role` field names; one 16-digit hex
+ * hash per checkpoint. */
 export function runHashScenario(inst: EngineInstance, scenario: HashScenario): string[] {
+  if (scenario.kind === 'worldgen') return runWorldgenScenario(inst, scenario)
+  return runSimScenario(inst, scenario)
+}
+
+function runSimScenario(inst: EngineInstance, scenario: SimScenario): string[] {
   const { ticks, checkpointEvery, input } = scenario
   const rx = inst.region(RegionId.Rx)
   if (!rx || rx.len < input.bytes) throw new Error('scenario: Rx region is missing or too small')
@@ -37,6 +70,27 @@ export function runHashScenario(inst: EngineInstance, scenario: HashScenario): s
     if (t % checkpointEvery === 0) {
       ok(inst.call0(inst.x.sim_hash), 'sim_hash', t)
       checkpoints.push(inst.readU64Hex(RegionId.Result, 0))
+    }
+  }
+  return checkpoints
+}
+
+/** `gen_chunk(cx, cy)` over `scenario.chunks`; one checkpoint per 64 chunks, `fnv1a64Hex` of the
+ * concatenated `GenOut` bytes (no chunk coordinates: only what would actually ship). */
+function runWorldgenScenario(inst: EngineInstance, scenario: WorldgenScenario): string[] {
+  const out = inst.region(RegionId.GenOut)
+  if (!out) throw new Error('scenario: GenOut region is missing')
+  const batch = new Uint8Array(out.len * CHECKPOINT_CHUNKS)
+  let offset = 0
+  const checkpoints: string[] = []
+  for (let i = 0; i < scenario.chunks.length; i++) {
+    const pair = scenario.chunks[i] as [number, number]
+    ok(inst.call2(inst.x.gen_chunk, pair[0], pair[1]), 'gen_chunk', i)
+    batch.set(out.u8, offset)
+    offset += out.len
+    if ((i + 1) % CHECKPOINT_CHUNKS === 0) {
+      checkpoints.push(fnv1a64Hex(batch.subarray(0, offset)))
+      offset = 0
     }
   }
   return checkpoints

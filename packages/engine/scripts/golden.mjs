@@ -6,11 +6,10 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { toolEnv } from '../../../scripts/lib/env.mjs'
-import { Role } from '../dist/abi.js'
 import { instantiate } from '../dist/loader.js'
 import { loadGame } from '../dist/server-node.js'
 import { buildGame } from '../dist/vite.js'
-import { runHashScenario } from '../tests/support/scenario.ts'
+import { roleOf, runHashScenario } from '../tests/support/scenario.ts'
 
 const fixtures = fileURLToPath(new URL('../fixtures/', import.meta.url))
 const wanted = process.argv[2]
@@ -27,7 +26,7 @@ for (const name of wanted === undefined ? names : [wanted]) {
   const scenario = JSON.parse(readFileSync(join(golden, 'scenario.json'), 'utf8'))
   const built = await buildGame({ crate: join(fixtures, name), profile: 'dev', env: toolEnv() })
   const { wasm } = await loadGame(built.dir)
-  const inst = instantiate(wasm, Role.Sim, scenario.config, { onLog() {} })
+  const inst = instantiate(wasm, roleOf(scenario), scenario.config, { onLog() {} })
   const checkpoints = runHashScenario(inst, scenario)
   writeFileSync(join(golden, 'golden.json'), `${JSON.stringify({ checkpoints }, null, 2)}\n`)
   console.log(`${name}: ${checkpoints.length} checkpoints, last ${checkpoints.at(-1)}`)

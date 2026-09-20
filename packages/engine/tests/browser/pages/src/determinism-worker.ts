@@ -3,9 +3,8 @@
 // (the same function the native, Node and Bun legs use), reply with the checkpoints. No harness/SAB
 // machinery: `sim_admit` runs on every 7th tick throughout 10,000 ticks, for which the harness's
 // postMessage-only `admit` (park-required, setup-rate) would be far too slow.
-import { Role } from '../../../../src/abi.ts'
 import { instantiate } from '../../../../src/loader.ts'
-import { type HashScenario, runHashScenario } from '../../../support/scenario.ts'
+import { type HashScenario, roleOf, runHashScenario } from '../../../support/scenario.ts'
 
 type ToWorker = { type: 'run'; module: WebAssembly.Module; scenario: HashScenario }
 type FromWorker = { type: 'result'; checkpoints: string[] } | { type: 'error'; message: string }
@@ -19,7 +18,7 @@ scope.onmessage = (ev) => {
   const m = ev.data
   if (m.type !== 'run') return
   try {
-    const inst = instantiate(m.module, Role.Sim, m.scenario.config, { onLog() {} })
+    const inst = instantiate(m.module, roleOf(m.scenario), m.scenario.config, { onLog() {} })
     const checkpoints = runHashScenario(inst, m.scenario)
     scope.postMessage({ type: 'result', checkpoints })
   } catch (e) {

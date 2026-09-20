@@ -48,7 +48,11 @@ export const suites = [
         kind: 'script',
         cmd: 'bun',
         args: ['packages/engine/tests/wasm/bun-leg.mjs'],
-        tests: ['determinism: bun matches golden', 'loader: views survive memory growth (bun)'],
+        tests: [
+          'determinism: bun matches golden',
+          'loader: views survive memory growth (bun)',
+          'determinism: worldgen bun matches golden',
+        ],
       },
     ],
   },

@@ -1,0 +1,19 @@
+[package]
+name = "fx-worldgen"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"] # cdylib -> the .wasm; rlib -> the native golden test
+
+[lints]
+workspace = true
+
+[dependencies]
+engine = { path = "../../crates/engine" }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+engine = { path = "../../crates/engine", features = ["testing"] }

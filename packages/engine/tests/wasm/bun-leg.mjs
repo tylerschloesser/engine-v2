@@ -5,9 +5,10 @@
 import { RegionId, Role } from '../../dist/abi.js'
 import { instantiate } from '../../dist/loader.js'
 import { loadGame } from '../../dist/server-node.js'
-import { diffCheckpoints, runHashScenario } from '../support/scenario.ts'
+import { diffCheckpoints, roleOf, runHashScenario } from '../support/scenario.ts'
 
 const NAME = 'determinism: bun matches golden'
+const WORLDGEN_NAME = 'determinism: worldgen bun matches golden'
 const GROWTH_NAME = 'loader: views survive memory growth (bun)'
 
 /**
@@ -46,7 +47,19 @@ function checkMemoryGrowth(wasm, config) {
   return null
 }
 const fixture = new URL('../../fixtures/hash/', import.meta.url)
-const json = async (path) => JSON.parse(await Bun.file(new URL(path, fixture)).text())
+const json = async (path, base = fixture) => JSON.parse(await Bun.file(new URL(path, base)).text())
+
+/** The worldgen fixture's own golden, driven through `runHashScenario`'s `gen` branch. */
+async function runWorldgenLeg() {
+  const worldgenFixture = new URL('../../fixtures/worldgen/', import.meta.url)
+  const scenario = await json('golden/scenario.json', worldgenFixture)
+  const golden = await json('golden/golden.json', worldgenFixture)
+  const { wasm } = await loadGame(new URL('target/engine/dev', worldgenFixture).pathname)
+  const inst = instantiate(wasm, roleOf(scenario), scenario.config, { onLog() {} })
+  const checkpoints = runHashScenario(inst, scenario)
+  const message = diffCheckpoints(checkpoints, golden.checkpoints)
+  return { name: WORLDGEN_NAME, ok: message === null, message }
+}
 
 let result
 try {
@@ -54,16 +67,18 @@ try {
   const scenario = await json('golden/scenario.json')
   const golden = await json('golden/golden.json')
   const { wasm } = await loadGame(new URL('target/engine/dev', fixture).pathname)
-  const inst = instantiate(wasm, Role.Sim, scenario.config, { onLog() {} })
+  const inst = instantiate(wasm, roleOf(scenario), scenario.config, { onLog() {} })
   const checkpoints = runHashScenario(inst, scenario)
   const message =
     diffCheckpoints(checkpoints, golden.checkpoints) ??
     (inst.memGrows() === 0 ? null : `memory grew ${inst.memGrows()} pages after init`)
   const growth = checkMemoryGrowth(wasm, scenario.config)
+  const worldgen = await runWorldgenLeg()
   result = {
     tests: [
       { name: NAME, ok: message === null, message },
       { name: GROWTH_NAME, ok: growth === null, message: growth },
+      worldgen,
     ],
     checkpoints,
   }
