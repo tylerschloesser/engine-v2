@@ -13,6 +13,10 @@ The one publishable package (working name `engine`, private for now). Layout and
 
 `engine::worldgen` (Rust; docs/decisions/0008-chunk-generation.md §1) is the game's `Worldgen` trait, `hash2`, `Pristine<W>`, `worldgen_fingerprint`/`WorldgenStamp` and `GenCore<W>` for the `gen` role; `engine::noise` is the optional f64 simplex/fBm a game's `generate` may call. `tests/support/scenario.ts`'s `kind: 'worldgen'` branch, `pnpm golden <fixture>` and `fixtures/worldgen`'s golden drive the cross-runtime proof the same way the `hash` fixture's sim scenario does; `tests/support/bench-worldgen.ts` is the ms-per-chunk loop shared by the Node slow test and `worldgen-bench.html`.
 
+## Gen workers and the client queue
+
+`engine::gen_queue::GenQueue` (docs/decisions/0008-chunk-generation.md §4–5; docs/plan/08b-gen-workers-and-queue.md) is the prioritised generation queue, owned by the client instance in preallocated storage; `engine::client::TerrainFeed` (`crates/engine/src/client/terrain_feed.rs`) is its ABI-facing wrapper, driven from `frame` and turning `take`/`complete` into `genRequest`/`genResult` records. `src/worker/gen.ts` is the gen role's own body (drains `genRequest[i]`, calls `gen_chunk`, produces `genResult[i]`); `src/worker/client-gen.ts` is the client's pump, called from `worker/client.ts`'s `body()` after `frame()`, every wake. Records are little-endian: a 16-byte header (`[cx i32][cy i32][0 u32][0 u32]`), a result is the same header followed by `GenOut`'s tile bytes.
+
 ## The ABI
 
 `crates/engine/src/abi/registry.rs` is the single owner and states the rule. Adding to the ABI is one commit: the extern in `export_instance!` plus a defaulted `Instance` method there, the row in `ABI_EXPORTS` (or the constant) in `src/abi.ts`, and `ABI_VERSION` bumped in both. Numbers are appended, never reused. `pnpm test wasm -t "abi registry"` compares the two files and every built fixture; a new *import* is an ADR amendment (0014 §3).

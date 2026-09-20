@@ -2,6 +2,9 @@
 paths:
   - "packages/engine/src/**"
   - "packages/engine/crates/engine/src/world/cache.rs"
+  - "packages/engine/crates/engine/src/gen_queue.rs"
+  - "packages/engine/crates/engine/src/view.rs"
+  - "packages/engine/crates/engine/src/client/**"
 ---
 
 # Hot paths: no allocation per frame or per tick
@@ -21,3 +24,5 @@ In code that runs every frame, tick or message:
 Verified by the `gc-test` skill; a new hot path gets a page or joins one (`docs/decisions/0016-zero-gc-definition.md` §3, `docs/plan/04-zero-gc-harness.md`).
 
 `world/cache.rs` is Rust, not JS: the boundary-specific bullets above (views, `call0`/`call1`/`call2`, SAB) do not apply, but the same no-allocation-per-tick principle does -- `world.tile()` runs on every read, cache hit or miss. Verified natively by `no_alloc_terrain` (`abi::arena::live_bytes()` unchanged across reads and LRU churn); overlay growth (writes, world state) is the one allowed exception.
+
+`gen_queue.rs`, `view.rs` and `client/**` (docs/plan/08b-gen-workers-and-queue.md) are the same: `GenQueue::set_view`/`take`/`complete` and `client::TerrainFeed::on_frame` run every client frame, in the queue's own preallocated storage (`pending`/`in_flight` reserved once at `new`, never reallocated). Verified natively by `no_alloc_gen_queue` (its own binary, `tests/no_alloc_gen_queue.rs`: a `#[global_allocator]` only counts allocations in the binary that installs it, so this cannot be an inline `#[cfg(test)]` module inside `gen_queue.rs` itself).
