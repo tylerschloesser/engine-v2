@@ -1,0 +1,36 @@
+# 0026: `burst` negative controls move to the slow tier for every page but `gc-loop`
+
+Status: Accepted (2026-09-20). Amends [0016](0016-zero-gc-definition.md) §3 step 8 ("Permanent negative controls"); cites [0020](0020-testing-strategy.md) §4. Implemented in milestone M09 (gate round 3).
+
+## Context
+
+The `browser` suite's headroom trip-wire ([`deferred-ledger.md`](../plan/deferred-ledger.md), row "`browser` suite headroom") fired at M09's gate: quiet-machine `browser` measured 24 s of its 25 s budget with 80 tests. A proportional split of one loaded run (`report.json`) put the `gc` project at 69% of suite time, of which the per-isolate `burst` negative controls of the production-topology pages (`topology`, `echo`, `gen`, `terrain`: 36% of the whole suite, 14 tests) were the largest single share; `object` negatives were 21%, `gc-loop`'s own clean-plus-controls 6%. Demoting only the multi-engine repeats (WebKit/Firefox, [0020](0020-testing-strategy.md) §4 first rung, no decision needed: relocated by project selection, not a tag) left the suite at about 22 s projected, still leaving no margin as pages are still due at M13, M16, M18, M29 ([`deferred-ledger.md`](../plan/deferred-ledger.md)). A second rung was needed, and [0016](0016-zero-gc-definition.md) §3 step 8's "permanent negative controls, each of which must fail on the named isolate and nowhere else" is itself a fast-tier-shaped rule: it does not say every control runs on every commit, only that a control which runs must still trip.
+
+## Decision
+
+**1. `burst` negatives move to `@slow` by page id, not by an option a caller could forget.** `zeroGcSuite` (`packages/engine/tests/browser/gc/suite.ts`) tags a generated `<page> neg burst <isolate>` test's title with `@slow` for every `pageId` except `gc-loop`; `object` negatives keep no tag and stay in the fast tier for every page. The mechanism is unconditional inside `zeroGcSuite` itself (`kind === 'burst' && opts.pageId !== 'gc-loop'`), so a new page registered the ordinary way (a page calling `installGcPage`, a `budgets.json` entry, a spec calling `zeroGcSuite`, per the `gc-test` skill) gets the demotion automatically rather than needing its author to opt in.
+
+**2. `gc-loop` keeps every permanent negative control in the fast tier.** It is the harness's own reference page (M03/M04), not a production topology, and keeping its full control set (`object`, `burst`, `post-message`, on every isolate) on every `pnpm test` is what proves instrument A (GC-event trace attribution) and instrument B (sampled-byte attribution) are both still live and correctly wired on `main` and in a worker, on every commit, independent of which production page is being worked on.
+
+**3. What every page loses in the fast tier by demoting `burst` — "instrument A looks at this page's thread X" — is replaced by a new assertion in the clean test, not left uncovered.** `analyseTrace` (`packages/engine/tests/browser/gc/analyse.ts`) now also returns `presentIsolates`: every isolate name its own `gc-isolate:<name>` CDP-mark discovery actually produced, the same `pid:tid -> name` map instrument A keys its GC-event attribution by. `zeroGcSuite`'s clean test asserts, for every isolate the page's budget names, that it appears in `presentIsolates`, failing by isolate name if one does not. This is strictly a positive-discovery check, not a substitute for a `burst`-triggered GC event: it catches a `Tracing.start` capture race ([0016](0016-zero-gc-definition.md) caveat a) or a misattributed thread that would otherwise leave an isolate's GC events silently uncounted (bucketed as `unknown`, defaulting to a pass) — the same failure a `burst` control used to surface indirectly by tripping the wrong isolate. It is verified once, deliberately, by appending a nonexistent isolate name to a real `gc-loop clean` run and confirming the assertion fails naming it (not committed; see Deviations of the implementing milestone's brief for the pasted failure line).
+
+**Correction to how the instrument actually works, found while implementing this.** The natural reading of "instrument A looks at this page's thread X" is an event *inside* the `window-start`/`window-end` marks, matching how instrument A itself counts GC events. That does not hold for a worker: `instrument.ts` sends every `gc-isolate:<name>` mark over CDP *before* `window.__gc.run`'s own `window-start` mark, so a worker's naming mark is never inside the measured window on a real page (only `main` reads as inside it, trivially, because the `window-start`/`window-end` events are themselves on main's thread). `presentIsolates` therefore checks the full, unwindowed trace for that mark, not the windowed one — see `analyse.ts`'s own doc comment on the field.
+
+## Alternatives rejected
+
+- **Raising the suite budget.** Hides a real cost instead of shrinking it, and [0020](0020-testing-strategy.md) §3 owns the number, not a page's own gate.
+- **Fewer frames per window.** [0016](0016-zero-gc-definition.md) caveat (b) already ties `N` to the amortisation of harness overhead; shrinking it for every page (not only a software-adapter fallback) would need re-deriving every budget's formula.
+- **Dropping per-isolate `object` negatives instead of `burst`.** `object` is instrument B's only isolate-level proof (byte attribution); `burst` is redundant with it for B (both use `expectedVerdict`'s `B[isolate] = false`) and adds A-only value, which decision point 3 replaces more cheaply than a full negative-control run.
+- **More Playwright workers for the `gc` project.** Rejected already by the `gc` project's own CDP-tracing and wall-clock budgets, which are why it runs 3 workers, not reopened here.
+- **Exempting production-topology pages from `burst` entirely, or moving `object` too.** Loses the isolate-level GC-event proof and the byte-attribution proof respectively, for every page but `gc-loop`, forever — 0016's "each control must fail on the named isolate and nowhere else" is a per-commit fast-tier guarantee that the slow tier (and CI, which runs both tiers) is exactly as capable of giving on the same schedule as a spec's own multi-engine repeats.
+
+## Consequences
+
+- `pnpm test browser` and `pnpm test:slow browser` between them still run every negative control `0016` §3 step 8 lists, on every page; only the schedule changed.
+- A future zero-GC page (M13, M16, M18, M29) is demoted automatically: no brief needs to remember to pass a `controlKinds` option or tag anything by hand.
+- If `gc-loop`'s own fast-tier controls ever stop tripping (a Chrome update blinding the instrument, [0016](0016-zero-gc-definition.md) §3 step 8's own trigger), that is now the only fast-tier signal for instrument health across every page; `presentIsolates` catches a *discovery* failure, not an *attribution* failure once discovery succeeds.
+
+## Sources
+
+- [`deferred-ledger.md`](../plan/deferred-ledger.md), row "`browser` suite headroom"; the implementing milestone's brief, `docs/plan/09-renderer-terrain.md`, Deviations "Gate round 3" and "Open gate failures (orchestrator, gate round 3: the `browser` suite trip-wire)", for the measured proportions and command lines.
+- `packages/engine/tests/browser/gc/{suite,instrument,analyse}.ts`, current as of this ADR.
