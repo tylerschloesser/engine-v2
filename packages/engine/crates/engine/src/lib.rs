@@ -5,6 +5,7 @@
 
 pub mod abi;
 pub mod bytes;
+pub mod client;
 pub mod codec;
 pub mod hash;
 #[cfg(feature = "testing")]

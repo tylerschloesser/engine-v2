@@ -7,6 +7,7 @@
 
 use engine::abi::config::HexU64;
 use engine::abi::{Instance, RegionId, RegionLayout, Role, Status};
+use engine::client::CameraBlock;
 use engine::hash::{Fnv64, hash_value};
 
 const MAX_ENTITIES: u32 = 1024;
@@ -246,6 +247,20 @@ impl Instance for HashFixture {
             }
         }
         h.finish()
+    }
+
+    /// docs/plan/06b-workers-and-spawn.md, Tests added `workers.camera_block_reaches_wasm`:
+    /// `centre` (two `f64`) then `t_ms` (one `f64`), raw little-endian bytes, so the browser test
+    /// can prove `CameraBlock`'s Rust layout agrees with `camera/block.ts`'s bit for bit, not just
+    /// that JS copied bytes into the region (which would be true regardless of layout agreement).
+    fn frame(&mut self, t_ms: f64, camera: &CameraBlock, result: &mut [u8]) -> Status {
+        let Some(out) = result.get_mut(..24) else {
+            return Status::BadLength;
+        };
+        out[0..8].copy_from_slice(&camera.centre[0].to_le_bytes());
+        out[8..16].copy_from_slice(&camera.centre[1].to_le_bytes());
+        out[16..24].copy_from_slice(&t_ms.to_le_bytes());
+        Status::Ok
     }
 }
 

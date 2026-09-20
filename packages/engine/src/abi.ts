@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 1
+export const ABI_VERSION = 2
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -63,6 +63,10 @@ export const ABI_EXPORTS = {
   sim_tick: { role: 'sim', params: 0, result: 'status' },
   sim_build_frame: { role: 'sim', params: 1, result: 'len' },
   sim_hash: { role: 'sim', params: 0, result: 'status' },
+  // `t_ms: f64` (0014 §4's client hot-export table; docs/plan/06b-workers-and-spawn.md): called
+  // only when `CB_FRAME_REQ` has advanced since the last call (Planning decisions "Worker frame
+  // clock"). `params: 1` here means "one number", whatever its wasm type (0014 §2).
+  frame: { role: 'client', params: 1, result: 'status' },
 } as const satisfies Record<string, ExportSpec>
 
 export function statusName(n: number): string {

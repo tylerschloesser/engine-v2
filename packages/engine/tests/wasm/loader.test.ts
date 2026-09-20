@@ -88,7 +88,10 @@ describe('loader', () => {
     // A status, not a trap, on every profile (0024 §16): the instance goes on working.
     expect(inst.dead).toBe(false)
     expect(inst.region(RegionId.Result)?.len).toBe(64)
-    expect(inst.region(RegionId.Camera)).toBeNull()
+    // The engine reserves `Camera` for every Client-role instance (docs/plan/06b-workers-and-
+    // spawn.md, Scope: "RegionId::Camera sized here"), whatever the game; 80 bytes = the block
+    // `packages/engine/src/camera/block.ts` defines.
+    expect(inst.region(RegionId.Camera)?.len).toBe(80)
   })
 
   test('loader: views survive memory growth', () => {

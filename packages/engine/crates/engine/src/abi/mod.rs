@@ -12,6 +12,8 @@ pub mod registry;
 
 use core::cell::UnsafeCell;
 
+use crate::client::CameraBlock;
+
 pub use arena::Arena;
 pub use regions::RegionLayout;
 pub use registry::{
@@ -51,6 +53,14 @@ impl<T> Slot<T> {
         }
         Ok(rt)
     }
+
+    fn client(&self) -> Result<&mut Runtime<T>, Status> {
+        let rt = self.get().as_mut().ok_or(Status::NotInitialised)?;
+        if rt.role != Role::Client {
+            return Err(Status::WrongRole);
+        }
+        Ok(rt)
+    }
 }
 
 impl<T> Default for Slot<T> {
@@ -79,6 +89,9 @@ fn try_init<T: Instance>(slot: &Slot<T>, role: u32, cfg_len: u32) -> Result<(), 
     }
     let mut layout = RegionLayout::new();
     layout.region(RegionId::Result, RESULT_BYTES);
+    if role == Role::Client {
+        layout.region(RegionId::Camera, CameraBlock::BYTES as u32);
+    }
     let inst = T::init(role, &cfg.game_json, &mut layout)?;
     *state = Some(Runtime { role, layout, inst });
     panic::log(LogLevel::Debug, "engine_init ok");
@@ -139,6 +152,22 @@ pub fn sim_hash<T: Instance>(slot: &Slot<T>) -> Status {
     out[0..4].copy_from_slice(&(hash as u32).to_le_bytes());
     out[4..8].copy_from_slice(&((hash >> 32) as u32).to_le_bytes());
     Status::Ok
+}
+
+pub fn frame<T: Instance>(slot: &Slot<T>, t_ms: f64) -> Status {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let Some(camera_ptr) = CameraBlock::ptr(&rt.layout) else {
+        return Status::NotInitialised;
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    // SAFETY: `camera_ptr` addresses the `Camera` region, a separate heap allocation from
+    // `Result` (`RegionLayout::region`) that never moves or resizes after init (0014 §4); the
+    // instance is single-threaded and not re-entered, so nothing else touches it during this call.
+    let camera = unsafe { &*camera_ptr };
+    rt.inst.frame(t_ms, camera, result)
 }
 
 #[cfg(test)]

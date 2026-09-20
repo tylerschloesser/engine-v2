@@ -10,9 +10,11 @@
 //! The registry test parses this file: keep constants as `pub const NAME: u32 = N;` and enum
 //! variants one per line as `Name = N,`.
 
+use crate::client::CameraBlock;
+
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -131,6 +133,16 @@ pub trait Instance: Sized + 'static {
     fn sim_hash(&mut self) -> u64 {
         0
     }
+
+    /// Called only when the client worker saw `CB_FRAME_REQ` advance (docs/plan/06b-workers-and-
+    /// spawn.md, Planning decisions "Worker frame clock"): `t_ms` is that frame's `frame_time_ms`.
+    /// `camera` is this role's `Camera` region, already decoded; `result` is the whole `Result`
+    /// region, for a role that wants to report something back (this milestone's own
+    /// `workers.camera_block_reaches_wasm` test writes `camera.centre` there, proving
+    /// `CameraBlock`'s layout agrees with `packages/engine/src/camera/block.ts` byte for byte).
+    fn frame(&mut self, _t_ms: f64, _camera: &CameraBlock, _result: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
 }
 
 /// Emits every export for every role, the `#[global_allocator]`, and the single-threaded instance
@@ -184,6 +196,12 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_hash() -> u32 {
             $crate::abi::sim_hash(&__ENGINE_SLOT) as u32
+        }
+
+        // client
+        #[unsafe(no_mangle)]
+        pub extern "C" fn frame(t_ms: f64) -> u32 {
+            $crate::abi::frame(&__ENGINE_SLOT, t_ms) as u32
         }
     };
 }
