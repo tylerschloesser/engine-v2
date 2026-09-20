@@ -357,3 +357,149 @@ Partial gate at `d134527`: `pnpm gate 498b02f` clean (no goldens, no markers, `b
    - `engine/test`: `callParked(client, isolate: string, name: string, args?: number[], resultBytes?: number): Promise<{ value: number; result: Uint8Array }>`; it rejects with a readable error when that worker's `W_PARKED` is not 1. `gen.stats(client)` and `gen.chunkHash(client, cx, cy)` park the workers if they are not parked, call, and resume only if they parked them; `gen.idle(client)` loops `stepFrame` → `gen.stats` until `pending == 0 && in_flight == 0`, then `untilQuiescent`. Later milestones reuse `callParked` for their own worker-side reads.
    - M06b's exit criterion 2 is read as it was written, for the production protocol: `test-call`/`test-result`/`test-error` exist only behind the `test` gate and are listed beside it in `worker/protocol.ts`.
 2. **A ring-driven loop drains on (re-)entry before its first wait.** M06b recorded that a wake issued while a worker is parked is not replayed on `resume()`. With real traffic that is a hang: a request pushed to `genRequest[i]` while gen worker `i` is parked (every `gen.stats` call parks it) would sit in the ring with nobody woken. `runBlockingLoop` therefore runs `body(lastSeen)` once on every entry, before the first `Atomics.wait` (in `worker/shell.ts`, so every kind and `runAsync` re-entry get it). A body pass with nothing to do must stay allocation-free and must not disturb the `W_ACK` lockstep (`sim`/`gen` store `W_ACK = wokenBy`; on entry that re-stores the value already acknowledged). Proof it is safe: `shell.resume_does_not_lose_a_wake` and the `topology`/`echo` zero-GC pages unchanged and in budget, plus a new `unit` test `shell.entry_drains_before_waiting`. If this cannot hold without touching a budget or an existing test, stop and report.
+
+### Steps 6-8 (this session)
+
+Commits `dab4e27`..`cea40dc`. `pnpm gate 498b02f`-equivalent clean at every step (no goldens, no
+markers touched outside `budgets.json`'s own new `gen` entries and `counters.gen`). `pnpm test &&
+pnpm lint` green throughout; final: `rust 128`, `unit 90`, `wasm 32`, `browser 63` (19-21 s/25 s,
+`browser` line was 17 s/25 s at the step-5 boundary -- the two new pages plus their specs account
+for the rise; stayed under the 20 s first trip-wire after batching the "one and two workers" test's
+36 per-chunk reads into one `__genChunkHashRect` round trip).
+
+**Step 6a (`dab4e27`): decision 2, `runBlockingLoop`'s entry-drain, built and proved first.** Exactly
+as decided: a new module-level `runBodyOnce` helper (shared by the entry-drain call and every loop
+iteration) turns a thrown error into `shell.fatal` the same way both places already did. New test
+`shell.entry_drains_before_waiting` (`src/worker/shell.test.ts`): with no producer at all, `body`
+still runs once before the first `WAIT_MS`-long wait would otherwise burn. `shell.
+resume_does_not_lose_a_wake` unmodified and green (the entry-drain's own `body` call absorbs what
+that test's body used to do; the loop's real iteration is skipped by the `W_YIELD` check it already
+had, so `bodyCalls` stays 1 either way). `topology`/`echo` unchanged and in budget (`pnpm test
+browser`: 52 pass, 17 s/25 s, matching the step-5 baseline exactly).
+
+**Step 6b (`710b0c8`, `cc3bb56`): decision 1, the `test-call` channel; `gen-record.ts` extraction.**
+Built exactly to the orchestrator's shape. `worker/test-call.ts`'s `handleTestCall(inst, m)` picks
+`call0`/`call1`/`call2` by whether `m.a`/`m.b` are present (never both a missing `a` and a present
+`b`); `resultBytes` bytes are copied from `region(RegionId.Result)` via `subarray()` (test-only code,
+exempt from `.claude/rules/hot-paths.md`, and this never runs inside a measured window). Wired into
+`worker.ts` as a module-level `testCall` closure variable set once the setup promise resolves
+(*not* threaded through `shell.setLoop`/`runBlockingLoop`, which only ever see `body`/`timeoutMs`,
+so decision 2's entry-drain change needed no further touch); routed only when this worker's own
+setup carried `test`. Wired into only `worker/client.ts` (the one kind this milestone needs it for:
+`client_gen_stats`/`client_chunk_hash` are client-role exports) -- `gen.ts`/`sim.ts` untouched, left
+for whichever later milestone needs `callParked` against a different isolate. `test/client.ts`'s
+`callParked` matches the shape exactly; `test/gen.ts`'s `stats`/`chunkHash`/`idle` too, with a local
+`withParked` helper (parks all only if not already fully parked, resumes only if it did the
+parking) -- not `gen.stats`/`gen.chunkHash` themselves choosing per-isolate parking, since `callParked`
+only ever targets `'client'` here. `gen-record.ts` (new, `src/worker/gen-record.ts`) extracts
+`gen.ts`'s inline header read/write into a shared, directly-unit-tested module (`readI32LE`/
+`writeI32LE`/`writeGenHeader`, all allocation-free) so "gen record layout" (Tests added) has
+something to test without a browser; placed beside its source (`gen-record.test.ts`), not under
+`tests/unit/` as the brief's own Files-touched line names -- matches this package's own convention
+(`gen-worker-count.test.ts`, step 5) over the brief's literal path.
+
+**Bugfix, own commit (`183e690`): the oversize-`GenOut` check compared against the wrong length.**
+Step 3's `if (genOut.len + HEADER_BYTES > resultSab.byteLength)` compared against the *whole ring's*
+byte length (`RING_CONTROL_BYTES + slotBytes * slots`, ~33 KB) instead of one slot's own payload
+capacity (4,112 B), so only a slab many times too big for a single slot would ever trip it --
+everything else would pass this check and then throw a much less readable `RangeError` out of
+`Uint8Array.prototype.set` on the first real job. Found while building `gen: oversize slab is a
+readable fatal` (needed a real way to trigger it). Fixed with a new `RingProducer.slotPayloadBytes()`
+(`sab/ring.ts`) and checking against that. `fixtures/worldgen`'s `Config` gained `chunk_bits: u32`
+(default 5, `EDGE = 32` unchanged for every other test and the golden) so the test can simulate
+Planning decisions 6's "the first game that changes `CHUNK_BITS`" (bits 6, edge 64, slab 16,384 B)
+without a new fixture crate; `generate()`'s own `EDGE` constant stays 32 (never reached: the gen
+worker's `setup()` throws before any job is ever taken).
+
+**Step 6 (`58f6071`): `gen.html`/`src/gen.ts`, the four non-GC browser tests.** `host: { kind:
+'remote', url: 'ws://unused.invalid' }`, not `'local'`: `fx-worldgen` has no `Sim` role (rejects
+`Role::Sim` unconditionally), and `'local'` always spawns a `sim` worker, which would make
+`client.ready` reject for every test on this page. Every `window.__gen*`-prefixed global (not
+`__client`/`__createClient`/... as `topology.ts` already spells them): `tests/browser/pages/
+tsconfig.json` type-checks every page script in one program, so two files augmenting the same
+`Window` property with a differently-shaped type is a compile error, not a per-file concern --
+found by the compiler immediately, not a guess. `gen: visible before ring 1 before ring 2` is a
+self-contained `window.__genProbeOrder()` inside the page script (not exposed as smaller primitives
+to the spec): `gen0` held parked via page-local `parkOne`/`resumeOne` helpers except for one bounded
+resume/park burst per cycle, sequenced with the client's own park/resume (never left running in the
+background between cycles) so the polling from `page.evaluate` cannot race the real worker threads.
+Geometry: `visible_rect((32,32),(16,16),dims(5)) = ChunkRect{(0,0)-(1,1)}` (2x2 = 4 ring-0 members,
+`>=` the in-flight cap of 2/worker, so the very first dispatch batch is pure ring 0); `(2,0)` ring 1,
+`(3,0)` ring 2 (both outside `visible`, `(2,0)` inside `expanded(1)`, `(3,0)` only inside
+`expanded(2)`). Asserts `0 < ring0At < ring1At < ring2At` over up to 24 cycles, not exact cycle
+numbers (robust to the exact tie-break order among same-ring members, which `Vec::sort_unstable_by`
+does not guarantee). `gen: one and two workers give equal chunk hashes` and `gen: drops 0, mem_grows
+0, stats exact` share one geometry (same 2x2 visible, `visible.expanded(2)` = 6x6 = 36 chunks,
+`budgets.json`'s `counters.gen.genJoinChunks`); the pan test shifts `x` by one chunk edge (32 tiles),
+overlapping the old `expanded(2)` in 30 of 36 chunks, leaving exactly 6 new ones --
+`counters.gen.genPanChunks`. `gen: oversize slab is a readable fatal` uses the `chunkBits: 6` fixture
+knob from the bugfix above.
+
+Two real synchronization bugs in `test/client.ts` surfaced building this page (the first to combine
+a `net` worker with a real `resumeWorkers()` call, and the first to call `gen.idle()` more than once
+in a row against the same client) -- both fixed in the same commit, both proven by the existing
+`topology`/`echo`/`gc-loop` gc suites staying green afterward, not just by this milestone's own new
+tests:
+- `resumeWorkers` polled `allEqual(h, W_PARKED, 0)` for *every* spawned worker, but `net` never
+  enters `runBlockingLoop` (`worker/net.ts`'s `setup()` returns `null`, so it has no `#loop`) and
+  `Shell.resume()` only stores `W_PARKED = 0` when a loop exists -- `net`'s own `W_PARKED` stays 1
+  forever, by its own design ("always reachable the way a parked one is"), not a hang. Fixed with a
+  new `allResumed(h)` that skips `kind === 'net'` (a plain indexed loop, matching `allEqual`'s own
+  no-inline-closure discipline).
+- `resumeWorkers` sent `{ type: 'resume' }` to *every* worker unconditionally, including ones
+  already running. A worker blocked in `Atomics.wait` cannot process that message at all -- it sits
+  queued until that worker's *next* park, then fires and un-parks it again immediately, racing
+  whatever called that next `parkWorkers()`. `gen.idle()` calling `resumeWorkers()` unconditionally
+  at its own start (needed so a second `idle()` call works after `untilQuiescent`'s own parking, for
+  the pan phase) hit this immediately: `parkWorkers`'s own poll saw `W_PARKED` flicker 1/0/1/0 and
+  never stabilised. Fixed by skipping a worker whose `W_PARKED` is not currently 1 before sending it
+  anything.
+
+**Step 7 (`121eee7`): `gc-gen.html`/`src/gc-gen.ts`, `gen: zero-GC over a scripted pan`.** Named
+`gc-gen`, not `gen.html` (already `gen.spec.ts`'s own imperative debug page): matches M06b's own
+`topology.html`/`gc-topology.html` split (a zero-GC page auto-creates its client at load). Same
+`host: { kind: 'remote' }` reasoning as step 6. Camera pans 8 tiles/second (`velocityX` set to the
+same plain tiles/second value, `TerrainFeed::on_frame` converts to Q24.8 itself). A third
+synchronization bug, found tuning this page: `asHarness.stepTick()`'s poll compared `W_ACK` with
+strict inequality (`!== want`), correct only when nothing else ever wakes that worker between the
+tick's own wake and the check -- true of every isolate on every zero-GC page before this one, since
+`gen0` previously had no real traffic of its own (`asHarness`'s own doc comment names this exact
+reason `stepTick` exists). Here `gen0` has real, independent wakes (`genRequest`/`genResult`
+commits, from the panning camera); one racing `stepTick`'s own synthetic wake coalesces into one
+`body()` call whose single `W_ACK` store *overshoots* `want`, and the exact-match poll then spins
+forever having already passed the value it waited for (reproduced first by trying to drop
+`stepTick()` from `drive()` entirely instead, which surfaced a related but different failure: with
+no synthetic tick at all, `gen0` was woken far too rarely for the burst/object negative control to
+accumulate enough allocation, close enough together, to trigger an actual V8 scavenge within the
+window -- `neg burst gen0`'s `B` assertion correctly failed but its `A` assertion did not). Fixed
+`stepTick`'s own poll to `< want` ("has this worker acked at least this far"), strictly more
+permissive than the old check; re-verified `topology`/`echo`/`gc-loop`'s own `gc` suites (25 tests
+total) still green afterward. `budgets.json`'s `gc.pages.gen`: `main` 48 (`ceil(39.4467) + 8`,
+constant across 8 clean runs), `client` and `gen0` at the strict 8 (measured constant 5.2867 and
+2.5067 B/frame); `net` (also spawned by the remote-host topology) is deliberately unbudgeted --
+it is never ticked and never enters `runBlockingLoop`, so no negative control can reach it, and
+`verdict()`/`zeroGcSuite` both key off `budgets.json`'s own isolate list, not the harness's, so
+simply omitting it is enough (its unchanged-memory check under `assertEnvironment` still runs and
+trivially passes, since it never touches WASM at all). `pnpm gc -t "gen "`: 7/7 (clean + every
+object/burst control on main/client/gen0).
+
+**Step 8 (`cea40dc`): `packages/engine/CLAUDE.md`, `hot-paths.md` globs.** Exactly as named, plus
+`crates/engine/src/view.rs` (Order of work 8's own file list includes it; the Context artifacts
+section's shorter list does not -- read the more specific Order-of-work line as authoritative).
+`packages/engine/src/**` already covers every TS file this milestone touches, so only the three new
+Rust globs were needed. `packages/engine/CLAUDE.md` is 57 lines (cap 60).
+
+### Notes for later briefs
+
+- `callParked`/`test/test-call.ts` are wired into `client`'s kind body only; `gen.ts`/`sim.ts` need
+  their own one-line `testCall: (m) => handleTestCall(inst, m)` in their returned `LoopState` the
+  first time a later milestone needs `callParked` against those isolates.
+- `asHarness.stepTick()`'s wait is now `< want`, not `!== want`: any future kind whose `sim`/`gen`
+  role gains real, independent ring traffic (M13, most likely) inherits the same fix already, not a
+  new hazard to rediscover.
+- `net`'s `W_PARKED` stays 1 forever by design; `resumeWorkers` already knows to treat it as
+  always-resumed (`allResumed`), and it is deliberately absent from every `gc.pages.*.isolates` map
+  it is spawned under, since nothing can ever apply a negative control to it.
+- `fixtures/worldgen`'s `chunkBits` config key exists only for the oversize-fatal test; a real game
+  changing `CHUNK_BITS` still needs `sab/layout.ts`'s `RING_DEFAULTS.genResult`/`genRequest` resized
+  to match (M06 Planning decisions 6, still open).
