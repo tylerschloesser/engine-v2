@@ -7,9 +7,11 @@
 
 mod coords;
 mod tile;
+mod traits;
 
 pub use coords::{
     ChunkCoord, ChunkDims, ChunkRect, ChunkRectIter, TILE_MAX, TILE_MIN, TilePos, TileRect,
     WorldPos,
 };
 pub use tile::Tile;
+pub use traits::{Footprint, PrototypeId, Registry, TraitSet};
