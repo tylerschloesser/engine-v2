@@ -54,6 +54,13 @@ outside `test-results/`.
   assuming the harness is broken -- Vite's production build runs real Rollup tree-shaking, and a
   write to an unread local variable is exactly the shape it removes (`src/test/controls.ts`'s own
   `sinkHolder` comment has the story; write through a `globalThis` property, not a bare `let`).
+- Interpreter-tier boxing in code that lives blocked in `Atomics.wait` and may never tier up: a
+  property read of `Number.POSITIVE_INFINITY`, a `Float64Array` element read, or a
+  `TypedArray.prototype.byteLength` getter each box a fresh `HeapNumber` on a normal pass
+  (`docs/plan/06b-workers-and-spawn.md`, Deviations "fix round 2, second pass"). Fingerprint by the
+  method, not just the shape: `bytesPerFrame × frames ÷ wakes ≈ 12-16 B` means one
+  `HeapNumber` per pass (fix the boxing site); a fixed delta once per window (e.g. 136 B) means a
+  one-off such as lazy-feedback allocation (see "Warm-up is 8 passes" below), not a per-pass box.
 
 ## Adding a page
 

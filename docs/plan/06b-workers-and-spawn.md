@@ -1,6 +1,6 @@
 # M06b: Worker kinds and the `createClient` spawn path
 
-Status: not started · After: 06 · Tyler-dependent: no
+Status: done · After: 06 · Tyler-dependent: no
 
 Split out of M06 during planning (M06 alone would have been about 2,100 lines across two subsystems). M08b and M13 depend on this brief, not on M06 alone.
 
@@ -71,9 +71,9 @@ Any ring traffic with meaning (M08b, M09, M13, M15b, M16). The rAF frame loop (M
 - `unit` suite: `support.report_shape`, `arena.sum_rule`, `main.no_wasm_instantiate` (source scan, 0015 §1 and §2: the static relative-import closure of `src/client.ts`, which never includes `worker.ts` or `src/worker/**` because those are reached only through `new Worker(new URL(…))`, contains no `WebAssembly.instantiate`, `instantiateStreaming` or `new WebAssembly.Instance`, imports neither `loader.ts` nor `worker/**`, and never names `waitForWake` or `Atomics.wait`; `WebAssembly.compileStreaming` is the one allowed use).
 
 ## Exit criteria
-- [ ] All tests above pass by name; pages `topology` and `echo` within the budgets below with zero GC events and unchanged `memory.buffer.byteLength` on every instance.
-- [ ] `grep -n postMessage packages/engine/src` shows only setup, ready, fatal, resume and stop.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name; pages `topology` and `echo` within the budgets below with zero GC events and unchanged `memory.buffer.byteLength` on every instance.
+- [x] `grep -n postMessage packages/engine/src` shows only setup, ready, fatal, resume and stop.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test browser -t workers` · `pnpm test browser -t start.` · `pnpm test browser -t topology` · `pnpm test browser -t echo` · `pnpm test unit -t arena` · `pnpm test` · `pnpm lint`.
@@ -115,168 +115,99 @@ None here; the posted-`Module` and arena checks on a real iPhone are M11 items i
   comment). `arenaBudgetBytes()` = 256 MiB (0015 §5 tab target) − `sabBytesTotal()` (worst case, two
   gen workers) − 20 MiB GPU share.
 - **A wake during `park()` is not replayed on `resume()`**: flagged by that implementer for M08b/M13
-  (not independently re-verified here; carried forward as a flag, not a re-derived finding).
+  (not independently re-verified here; carried forward as a flag -- see Notes for later briefs).
 - **`abi-mismatch` vs `worker-fatal`** is chosen by string-matching the fatal message
   (`m.message.includes('ABI mismatch')`, `client.ts::setupWorker`).
 
 ### Steps 5-6 (this session)
 
 - **Debug-global gate is the setup message's `test` field, not `test.flags`.** `SetupMessage.test`
-  (`worker/protocol.ts`) is `TestFlags` -- it is populated from `options.test?.flags`, not the whole
-  `ClientOptions.test` (which also carries `game`/`clock`/`scheduler`). Gating on `message.test !==
-  undefined` (rather than requiring a specific flag) means: a production `createClient()` call
-  (no `options.test` at all) gets none of the three globals; `topology.ts`'s own `__createClient`
-  now defaults `flags` to `{}` (never omitted) so every worker it spawns still carries `test` and
-  every existing `workers.spec.ts` assertion that reads `__engineWorkerKind`/`__engineInstance`
-  keeps working. `self.__engineIsolateName` (new) is `'client' | 'sim' | 'gen0' | 'gen1' | 'net'`
+  (`worker/protocol.ts`) is `TestFlags`, populated from `options.test?.flags` only, so a production
+  `createClient()` call (no `options.test`) gets none of the three debug globals; `topology.ts`'s own
+  `__createClient` defaults `flags` to `{}` so existing `workers.spec.ts` assertions still hold.
+  `self.__engineIsolateName` (new) is `'client' | 'sim' | 'gen0' | 'gen1' | 'net'`
   (`worker/protocol.ts::isolateName`, shared by `worker.ts` and `asHarness`).
 - **`CB_TEST_CONTROL`**: global control word 4 (`sab/control.ts`; words 5-7 still reserved).
   Encoding: `0` = none, else `((workerIndex + 1) << 8) | kind` (`kind`: 1 = object, 2 = burst, same
   numbering as `src/test/step-block.ts`'s `StepControl`). `worker/gc-hook.ts::applyGcHook(control,
-  index)` is the production-side reader: a duplicate of `src/test/controls.ts`'s two allocation
-  shapes (production code cannot import `src/test/**`), read only when a kind's own `setup()` closed
-  over `message.test?.gcHook === true`; the word itself is never loaded otherwise.
-- **`sim`/`gen` kind bodies are no longer bare no-ops.** Each now stores `W_ACK = wokenBy` on every
-  real wake (a single `Atomics.store`, unconditional, not gated by `gcHook`) so a test driver can
-  lockstep a synthetic wake with them the same way `stepFrame` already locksteps the client role,
-  since neither has ring traffic of its own to synchronise on before M13/M08b. This is a small
-  addition beyond the brief's "no-op" wording for these stub bodies; flag for M13/M08b when real
-  work replaces `body()` -- keep the `W_ACK` store (or an equivalent) if anything still needs to
-  lockstep with these roles from outside.
-- **`asHarness(client): Harness`** (`test/client.ts`). Mapping: `park`/`resume` → `parkWorkers`/
+  index)` is the production-side reader (production code cannot import `src/test/**`), read only
+  when a kind's own `setup()` closed over `message.test?.gcHook === true`.
+- **`sim`/`gen` bodies are no longer bare no-ops.** Each stores `W_ACK = wokenBy` on every real wake
+  (unconditional `Atomics.store`, not gated by `gcHook`), beyond the brief's "no-op" wording for
+  these stub bodies, so a test driver can lockstep with them the way `stepFrame` already locksteps
+  the client role (Notes for later briefs, below).
+- **`asHarness(client): Harness`** (`test/client.ts`): `park`/`resume` → `parkWorkers`/
   `resumeWorkers`; `stepFrame` → this file's own `stepFrame`; `stepTick` → wakes every spawned
-  `sim`/`gen` worker and spins on their own `W_ACK` (preallocated scratch array, built once, so the
-  hot loop stays allocation-free on `main`); `setWorkerControl` → `CB_TEST_CONTROL`; `memoryBytes`/
-  `memGrows` → `W_MEM_PAGES`/`W_MEM_GROWS` read directly (no message). `markIsolates` is a no-op (see
-  the CDP-marking deviation below). `hash`/`admit`/`messageTick` reject: no production counterpart
-  exists yet. `workerGcExposed()` returns `true` for every isolate: the `gc` Playwright project
-  always launches Chromium with `--js-flags=--expose-gc` process-wide, so it is true in every real
-  worker too, but there is no message to ask a production worker to confirm this itself. `errors()`
-  is always `[]`: a running `Client` has no ongoing fault-reporting channel past `ready`/`fatal`
-  (`setupWorker`'s `onmessage`/`onerror` stop listening once the spawn promise settles) -- a gap for
-  whichever later milestone adds one.
-- **New pages are `gc-topology.html`/`gc-echo.html`, not `topology.html`/`echo.html`.** `topology.html`
-  already serves `workers.spec.ts`/`start.spec.ts`'s imperative debug API (a client created only on
-  an explicit `__createClient()` call, so those specs can count exactly the workers *they* spawn); a
-  zero-GC page must instead auto-create its client at load (`window.__gc.ready` has to resolve
-  without any prior call), which would spawn extra, uncounted workers on the same page and break
-  those specs' `expect.poll(() => created.length)` assertions. `budgets.json`'s `gc.pages` keys stay
-  `topology`/`echo` as named (`zeroGcSuite`'s `pageId` is independent of the HTML file name).
+  `sim`/`gen` worker and spins on `W_ACK` (scratch array preallocated once); `setWorkerControl` →
+  `CB_TEST_CONTROL`; `memoryBytes`/`memGrows` → `W_MEM_PAGES`/`W_MEM_GROWS` (no message);
+  `markIsolates` is a no-op (marking moved to CDP, below); `hash`/`admit`/`messageTick` reject (no
+  production counterpart yet); `workerGcExposed()` always `true` (no message asks a production
+  worker to confirm the `gc` project's process-wide `--expose-gc` itself); `errors()` always `[]` (no
+  ongoing fault channel past `ready`/`fatal`).
+- **New pages are `gc-topology.html`/`gc-echo.html`, not `topology.html`/`echo.html`.**
+  `topology.html` already serves `workers.spec.ts`/`start.spec.ts`'s imperative debug API (client
+  created only on explicit `__createClient()`, so those specs count exactly the workers *they*
+  spawn); a zero-GC page instead auto-creates its client at load (`window.__gc.ready` resolves with
+  no prior call), which would spawn extra, uncounted workers and break that count. `budgets.json`'s
+  `gc.pages` keys stay `topology`/`echo` regardless (`zeroGcSuite`'s `pageId` is independent of the
+  HTML file name).
 - **`echo`'s round trip does not use the frame req/ack lockstep.** `worker/client.ts`'s `body()`
-  stores `W_ACK` only when `CB_FRAME_REQ` changed, *before* the unconditional ring-echo block runs
-  every call; two wakes issued back-to-back (a ring push, then a `stepFrame`) are not guaranteed not
-  to coalesce into one `body()` invocation, in which case the statement order inside that one call
-  (ack stored, *then* the ring drained) would let `main` observe the ack before the echoed message is
-  actually pushed to `uiRing`. `gc-echo.ts` instead spins directly on `RingConsumer.peekLen() >= 0`:
-  safe because `RingProducer.tryPush` writes the payload bytes before its atomic `HEAD` store, so
-  observing `HEAD` advance (via `Atomics.load`) already guarantees the payload is visible, with no
-  dependency on `body()`'s internal statement order.
+  stores `W_ACK` only when `CB_FRAME_REQ` changed, *before* the unconditional ring-echo block runs;
+  two wakes issued back-to-back could coalesce into one `body()` call, letting `main` observe the ack
+  before the echoed message actually reaches `uiRing`. `gc-echo.ts` instead spins directly on
+  `RingConsumer.peekLen() >= 0`: safe because `RingProducer.tryPush` writes the payload bytes before
+  its atomic `HEAD` store, so observing `HEAD` advance already guarantees the payload is visible.
 - **`fixtures/hash`'s `Rx`/`Tx` are sized per role**, not per test flag: `CLIENT_RX_TX_BYTES = 10 *
   1024` for `Role::Client` (any Client instance, `echo` flag or not), unchanged 64 B for `Sim`/`Gen`.
-  `golden/golden.json` is untouched (Sim-role only path; `pnpm golden` was not run) and `pnpm test
-  rust`/`wasm` stayed green. This did grow the Client role's own fixed footprint past the shared
-  1,310,720 B figure `workers.spec.ts` assumes uniform across roles by roughly 20 KB before rounding
-  to the next 64 KB WASM page -- measured to still land inside the same 20-page bucket (every
-  existing `workers.spec.ts` assertion using `FIXED_FOOTPRINT_BYTES` for the client role stayed
-  green unmodified), but the page-boundary margin for `client` is now much smaller than for `sim`/
-  `gen`; flagged for whoever next grows the Client role's own fixed data.
+  `golden/golden.json` untouched (Sim-role only path; `pnpm golden` not run), `pnpm test rust`/`wasm`
+  stayed green. This grew the Client role's own fixed footprint by roughly 20 KB before rounding to
+  the next 64 KB WASM page -- still inside the same 20-page bucket every existing `workers.spec.ts`
+  `FIXED_FOOTPRINT_BYTES` assertion assumes (all stayed green unmodified), but the page-boundary
+  margin for `client` is now much smaller than for `sim`/`gen` (Notes for later briefs, below).
 - **Isolate marks move to CDP for workers, stay `page.evaluate` for `main`** (`gc/instrument.ts`,
   orchestrator decision 3). A production worker cannot call `performance.mark` itself (`.claude/
-  rules/hot-paths.md`) and this milestone adds no new `postMessage` type to ask one to, so `measure()`
-  now sends each worker session a `Runtime.evaluate` of `self.performance.mark('gc-isolate:' + self.
-  __engineIsolateName); undefined` (`returnByValue: true`, and the trailing `undefined`, so the
-  `PerformanceMark` `.mark()` returns is never wrapped as a retained remote object) while workers are
-  parked, exactly where the old `window.__gc.markIsolates()` call used to run. `main` still marks
-  itself through the page's own `page.evaluate(() => performance.mark('gc-isolate:main'))`: routing
-  `main` through the same CDP-session approach (a *second* CDP session on top of Playwright's own
-  automation session) measurably moved `gc-loop`'s own `main` clean reading from ~45.5 B/frame to
-  ~54 B/frame, tripping its existing 54 B budget -- found by running `gc-loop`'s suite after this
-  change, not by inspection. `installGcPage`'s own `markIsolates()`/`Harness.markIsolates()` are
-  unchanged and still callable; `measure()` just no longer calls them.
+  rules/hot-paths.md`), so `measure()` sends each worker session a `Runtime.evaluate` of
+  `self.performance.mark('gc-isolate:' + self.__engineIsolateName); undefined` (`returnByValue: true`,
+  trailing `undefined` so the `PerformanceMark` is never retained) while parked. Routing `main`
+  through the same second-CDP-session approach too measurably moved `gc-loop`'s own `main` clean
+  reading from ~45.5 to ~54 B/frame, tripping its 54 B budget, so `main` still marks itself through
+  `page.evaluate(() => performance.mark('gc-isolate:main'))`. `installGcPage`'s own `markIsolates()`
+  is unchanged and still callable; `measure()` just no longer calls it.
 - **`zeroGcSuite` takes an optional `controlKinds`** (default every kind, `gc-loop`'s existing
   shape): `topology`/`echo` pass `['object', 'burst']`, skipping the generated `post-message`
-  control (no spare `postMessage` type on a production worker to drive a message-round-trip tick,
-  and none of the three pages' own kinds have one to test against).
+  control (no spare `postMessage` type on a production worker to drive a message-round-trip tick).
 - **`measure()`/`zeroGcSuite` take an optional `warmupFrames`** (default `WARMUP = 120`, `gc-loop`'s
-  own tuned figure -- kept as the global default specifically so `gc-loop`'s entry stays untouched).
-  `topology`/`echo` pass `warmupFrames: 8000`. Measured: at 120, and even at 3000, the production
-  `yield`-protocol shell's deeper call chain (`ControlBlock`, `worker/shell.ts`, `asHarness`'s own
-  lockstep) had not reached steady optimized code -- `main` read as high as ~51.8 B/frame (`topology`)
-  with one run spiking to 53.86 B/frame (`echo`), and at that noise level the `object` negative
-  control (one small object per frame) did not reliably separate from clean. At `warmupFrames: 8000`
-  (adds tens of ms, never counted) `main` stabilised at 43.4-43.6 B/frame (`topology`) and 31.1-31.8
-  B/frame (`echo`) with no further spikes across 20-run batches, and every generated negative
-  control (including `object`) then tripped only its own named isolate.
-- **Fix round 2 (orchestrator gate): the `main`-contention swing had two real causes, found and
-  fixed; a third, smaller, distinct one remains open.** The orchestrator's hypothesis was V8 tiering
-  (background compiler threads finishing late under contention, so the measured window runs
-  partly-unoptimised code that boxes more temporaries). Evidence gathering (`byFn` on `topology
-  clean`, quiet vs a reproducible contended run: `--project gc --grep topology --workers 3
-  --repeat-each 4`, which alone reproduced the failure reliably without needing another Playwright
-  project running) showed the growth was **not** spread across the frame path's own double-handling
-  functions (`stepFrame`/`advance`/camera-block reads stayed the same total bytes, just renamed
-  between "stepFrame" and "advance" as inlining boundaries shifted with tier state) -- it was
-  concentrated in two native builtin buckets, `next@:0` and `values@:0`, tens of KB in a single
-  contended run and near-zero quiet. That pointed at "one site that only allocates while waiting" per
-  the orchestrator's own decision rule, not spread-out double-boxing, so the fix was to find and fix
-  it rather than change measurement policy:
-  1. **`parkWorkers`/`resumeWorkers`'s poll predicate** (`src/test/client.ts`) was `() =>
-     h.workers.every((w) => Atomics.load(...) === N)`: `pollUntil` calls this once per macrotask
-     until a worker's `W_PARKED` flips, normally 1-3 ticks -- but under CPU contention a worker's own
-     OS thread can take many more event-loop turns to flip it, and the inline arrow passed to
-     `.every()` is a **new closure allocated on every tick**, so this cost scaled with contention, not
-     with frame count (which is why no warm-up frame count, fixed or adaptive, ever fixed it: `park`/
-     `resume` run once per `installGcPage.run()` call, warmed up just as much as everything else, but
-     their *own* cost is set by how many ticks *this specific call* happens to take). Fixed: a named
-     `allEqual(h, field, want)` using a plain indexed loop, created once per `parkWorkers`/
-     `resumeWorkers` call, not once per tick.
-  2. **`ManualClock.fireDue`** (`src/test/manual-clock.ts`), called by `test/client.ts`'s `stepFrame`
-     every frame via `clock.advance()`: `for (const timer of timers.values())` built a `Map` iterator
-     and called `.next()` on it every single call, even though no page here ever registers a real
-     timer (`timers` is always empty). `frame()` right below it already had the equivalent
-     `frames.length === 0` guard, added by M04 for `gc-loop`'s own budget -- `advance()`/`fireDue()`
-     was the same class of bug, just not exercised by any page before `topology`/`echo`. Fixed with
-     the same `timers.size === 0` early return.
-  Together these took a **reproducible** failure rate (4/36 to 15/36 depending on machine load, in
-  the `--repeat-each 4 --workers 3` repro) to 0/36-2/36 across five repeated checks, and the specific
-  contamination pattern moved from "main's own clean assertion fails" (gone) to a smaller residual:
-  **a target isolate's own `burst`/`object` control (2,000-object or one-object allocations on its
-  own worker) measurably raises a *sibling* isolate's own reading, even with no other Playwright
-  project or test running concurrently** (reproduced at `--workers 1`, single test, single browser).
-  Since every isolate's `HeapProfiler` session samples only its own V8 heap, this cannot be a
-  JS-level leak between isolates; the workers are separate OS threads inside one Chromium renderer
-  process, so this looks like OS/V8-process-level scheduling or memory-pressure interaction between
-  sibling isolates under heavy allocation, not a per-frame allocation site in this milestone's own
-  code -- no further per-site bug was found in the time available (a third distinct attempt: searched
-  the rest of `asHarness`/`gc-page.ts` for the same closure-in-a-poll-loop or iterator-in-a-hot-call
-  shape and found none). Two earlier attempts before finding the real causes are recorded for the
-  next person: **(a)** Chromium launch flags `--no-concurrent-recompilation --no-concurrent-osr
-  --no-concurrent-sparkplug --concurrent-maglev-max-threads=0` made every reading uniformly high
-  (forcing permanently-unoptimised code is worse than occasionally-late-optimised code) -- reverted.
-  **(b)** An adaptive "warm up in short `HeapProfiler`-sampled windows until two consecutive readings
-  agree within 1 B" loop (replacing the fixed frame count) did not fully fix the contended case either
-  (it can stabilise at a wrong, permanently-baseline-tier plateau if the background compiler thread is
-  never scheduled at all, not just briefly) and added real per-test CDP overhead -- reverted in favour
-  of a plain fixed `WARMUP = 8000` (unchanged from before this round; still needed, since `gc-loop`'s
-  own 120 is not enough for this deeper call chain even with both bugs fixed). Budgets were
-  **re-measured from scratch** post-fix (not widened from the pre-fix numbers): 8 clean runs per page
-  gave much lower, tighter baselines than before (`topology` main 38.71/client 13.22, `echo` main
-  27.49/client 8.59 B/frame, `sim`/`gen0` ~7.3 on both), each isolate's own `object`/`burst` control
-  measured comfortably above its own +8-margin budget (e.g. `topology` `client` clean-max 13.22 ->
-  budget 22 -> its own `object` control measured 36.64). **Orchestrator decision needed on the
-  residual cross-isolate interference**: it is real (reproducible single-worker, single-test, no
-  external contention) but its byte size is much smaller than the fixed bugs' contribution was, and
-  this session did not budget-widen to paper over it (instruction 3); a foreground `pnpm test browser`
-  loop on this machine right now still occasionally fails a `neg burst/object <isolate>` test on a
-  *different* isolate's own assertion because of it (exact counts in the report). Options: accept a
-  small, explicitly-justified margin for this specific interaction (a budget entry noting "isolate's
-  own clean max under a *sibling's* burst control", a different measurement than "isolate's own clean
-  max" alone), or investigate further (per-isolate CPU affinity/priority hints, or a longer
-  measurement window that averages out the interaction) -- both are beyond this round's remaining
-  time.
+  own tuned figure; kept as the global default so its entry stays untouched). `topology`/`echo` pass
+  `warmupFrames: 8000`: at 120, and even 3000, the deeper production `yield`-protocol call chain had
+  not reached steady optimised code (`main` read as high as ~51.8-53.86 B/frame and the `object`
+  control did not reliably separate from clean); at 8000 every control tripped only its own named
+  isolate and readings stabilised -- **superseded**: fix round 3's own re-measurement below found
+  `WARMUP` alone was not the whole story; current figures are its "Measured after all of the above"
+  paragraph.
+- **Fix round 1 (`1fc1abf`).** The orchestrator's hypothesis for a `main`-contention swing seen at
+  this point was V8 tiering; `byFn` evidence on `topology clean` versus a reliably contended repro
+  (`--project gc --grep topology --workers 3 --repeat-each 4`) instead showed the growth concentrated
+  in two native-builtin buckets (`next@:0`, `values@:0`), pointing at one allocating site under
+  contention rather than spread-out double-boxing. Two real per-pass allocation bugs were found and
+  fixed: (1) `parkWorkers`/`resumeWorkers`'s poll predicate (`src/test/client.ts`) built a fresh
+  closure and called `.every()` every macrotask tick -- fixed with a named `allEqual(h, field, want)`
+  created once per call; (2) `ManualClock.fireDue` (`src/test/manual-clock.ts`) built a `Map`
+  iterator every `advance()` call with zero timers ever registered -- fixed with the same
+  `timers.size === 0` guard `frame()` already had. Two reverted attempts, kept for the next person:
+  **(a)** Chromium launch flags forcing permanently-unoptimised code
+  (`--no-concurrent-recompilation --no-concurrent-osr --no-concurrent-sparkplug
+  --concurrent-maglev-max-threads=0`) made every reading uniformly worse -- reverted. **(b)** An
+  adaptive "warm up in short `HeapProfiler`-sampled windows until two consecutive readings agree
+  within 1 B" loop did not fully fix the contended case either (it can stabilise at a wrong,
+  permanently-baseline-tier plateau) and added real per-test CDP overhead -- reverted in favour of
+  the plain fixed `WARMUP = 8000` above. What this round called "residual cross-isolate interference"
+  (a target isolate's own control measurably raising a *sibling* isolate's reading) turned out to be
+  per-pass `HeapNumber` boxing in the blocking loop scaling with the number of timeout passes (fix
+  round 2, second pass, below) plus the lost-wake race (fix round 3, below); its widened budgets and
+  `STEP_TICK_EVERY = 2` were rejected by the orchestrator and removed in fix round 2 (numbers there).
 - **Production workers must be parked before `__pageReady`.** Unlike the M03/M04 harness (starts
   idle, only entering `Atomics.wait` on the first `resume()`), a production worker enters its
-  blocking loop immediately after `ready` (Planning decisions: `ready` is posted, then
+  blocking loop immediately after `ready` (Planning decisions: `ready` posted, then
   `runBlockingLoop` starts, synchronously, in the same task). `gc-topology.ts`/`gc-echo.ts` therefore
   call `await parkWorkers(client)` before setting `window.__pageReady = true`; skipping this hung
   `measure()`'s isolate-naming step (a CDP `Runtime.evaluate` on a blocked worker never returns)
@@ -284,94 +215,86 @@ None here; the posted-`Module` and arena checks on a real iPhone are M11 items i
   it as a mystery 30 s timeout.
 - **`createClient()` checked `crossOriginIsolated` too late.** `createSabSet()` (hence `new
   SharedArrayBuffer`) ran synchronously in `createClient()` itself, before the async `start()`'s own
-  isolation check, so a non-isolated page threw a bare `ReferenceError` (`SharedArrayBuffer is not
-  defined`) straight out of `createClient()` instead of `client.ready` rejecting with
-  `EngineStartError('not-isolated', ...)` -- found by `start.not_isolated_error`. Fixed by moving the
-  check to the top of `createClient()`, before any SAB is touched; on failure it now returns `{
-  ready: Promise.reject(err), destroy() {} }` directly, without creating any SAB, control block or
-  worker entry.
-- **`start.not_isolated_error`/`start.worker_blocked_error`** use two new `fixturesPlugin()` routes,
-  registered under `configurePreviewServer` (not `configureServer`: the browser suite navigates
-  against `vite preview`, which fires the former, not the latter). `/__no-isolation__/<built file>`
-  serves the exact built bytes from `dist/` with no COOP/COEP at all (a route that ends its own
-  response before Vite's header middleware runs never gets them, same trick as the existing fixture
-  route, M02b Deviations). `/__no-coep-worker__.js` serves the built `worker-auto-*.js` chunk
-  (globbed by filename pattern, since it is content-hashed) with `Cross-Origin-Opener-Policy` but no
-  `Cross-Origin-Embedder-Policy`; `topology.ts`'s `__createClient` gained a `createWorker` passthrough
-  (pattern B, already in `ClientOptions`) so the test can point every spawned worker at that route
-  from an otherwise normally-isolated page. Neither spec uses the shared `openPage` helper (it
-  asserts `crossOriginIsolated` and fails on any console error, both of which these two tests
-  deliberately trigger); a small `openWithoutIsolationChecks` in `start.spec.ts` just navigates and
-  waits for `__pageReady`.
-- **`grep -n postMessage packages/engine/src`**, summarised by file (production code only; `src/
-  test/**` has its own separate, pre-existing M03/M04 harness message protocol -- `setup`/`resume`/
-  `hash`/`admit`/`memory`/`memGrows`/`markIsolate`/`pmTick`/`dispose` -- unrelated to the production
-  worker protocol this criterion is about): `client.ts` (1, the `setup` message), `worker.ts` (2, the
-  `FromWorker` `postMessage` type and the shared `post()` used for `ready`/`fatal`), `worker/shell.ts`
-  (2, the shared `post()` used for `fatal`, plus its own doc comment), `worker/protocol.ts` (1,
-  comment), `sab/control.ts` (1, this session's own doc comment). No kind body calls `postMessage`
-  directly (`worker/shell.ts`'s `post()` is the one channel every kind shares); `resume`/`stop` are
-  not yet posted by any production code path (only by `test/client.ts`'s `resumeWorkers`/
-  `parkWorkers`'s wake, and `destroy()`'s own yield+terminate, which never posts `stop`) -- reserved
-  for whichever later milestone (M09's rAF loop, most likely) drives them from production code.
+  isolation check, so a non-isolated page threw a bare `ReferenceError` instead of `client.ready`
+  rejecting with `EngineStartError('not-isolated', ...)` -- found by `start.not_isolated_error`.
+  Fixed by moving the check to the top of `createClient()`, before any SAB is touched; on failure it
+  now returns `{ ready: Promise.reject(err), destroy() {} }` directly, with nothing created.
+- **`start.not_isolated_error`/`start.worker_blocked_error`** use two new `fixturesPlugin()` routes
+  under `configurePreviewServer` (the browser suite runs against `vite preview`, which fires that
+  hook, not `configureServer`). `/__no-isolation__/<built file>` serves the exact built bytes with no
+  COOP/COEP at all (same end-response-early trick as the existing fixture route, M02b Deviations).
+  `/__no-coep-worker__.js` serves the built `worker-auto-*.js` chunk (globbed by filename,
+  content-hashed) with COOP but no COEP; `topology.ts`'s `__createClient` gained a `createWorker`
+  passthrough (pattern B, already in `ClientOptions`) to point spawned workers at that route. Neither
+  spec uses the shared `openPage` helper (both deliberately trigger a console error or
+  non-isolation); `openWithoutIsolationChecks` in `start.spec.ts` just navigates and waits for
+  `__pageReady`.
+- **`grep -n postMessage packages/engine/src`**, by file (production code only; `src/test/**` has its
+  own separate, pre-existing M03/M04 harness protocol, unrelated to this criterion): `client.ts` (1,
+  the `setup` message), `worker.ts` (2, the `FromWorker` type and the shared `post()` for
+  `ready`/`fatal`), `worker/shell.ts` (2, `post()` for `fatal`, plus a doc comment),
+  `worker/protocol.ts` (1, comment), `sab/control.ts` (1, doc comment). No kind body calls
+  `postMessage` directly (`worker/shell.ts`'s `post()` is the one channel every kind shares);
+  `resume`/`stop` are posted only by `test/client.ts`'s `resumeWorkers`/`parkWorkers` -- reserved for
+  whichever later milestone (M09's rAF loop, most likely) drives them from production code.
 
-### Open gate failures (orchestrator, 2026-09-20)
+### Gate history
 
-State at `1fc1abf`: everything in Scope is built; `pnpm test && pnpm lint` is green on a quiet run; fix round 1 found and fixed two real harness allocation bugs (`parkWorkers`/`resumeWorkers` poll closure, `ManualClock.fireDue` iterator). Not accepted, for three reasons:
+At `1fc1abf` (fix round 1) `pnpm test && pnpm lint` was green on a quiet run, but the orchestrator
+did not accept the milestone, for three reasons -- all now resolved:
 
-1. **`pnpm test browser` is not reliable:** 25/30 on the machine as it was (load 6–9) and 25/30 under synthetic saturation; failures were `topology` tests (1 and 2) and M04's `gc: flat transport parity` (4 and 3), 0 hangs.
-2. **Budgets above the ADR.** `topology.client` is budgeted 33 B/frame and `echo.client` 29, against the strict worker figure of 8 B/frame (0016 §1); `topology.main` 52 and `echo.main` 40 include "sibling-burst headroom". The orchestrator does not accept these numbers: a strict worker isolate is 8 B/frame or the question is escalated, and main is measured clean overhead + 8 B.
-3. **`STEP_TICK_EVERY = 2` masks a defect.** Idle `sim` and `gen0` measure exactly 7.33 B/frame: 4,400 B per 600-frame window over 300 wakes is about 14.7 B per wake, the size of one HeapNumber, where `gc-loop`'s `sim` (which does far more per tick) costs 2.97 B/frame. Halving the tick rate is what brought them under 8. `client` at 13.22 B/frame over about 600 wakes is the same per-wake figure.
+1. **`pnpm test browser` not reliable** (25/30 quiet, 25/30 under synthetic saturation; failures were
+   `topology` and M04's `gc: flat transport parity`, 0 hangs). **Resolved** at `5aec08f`: the
+   lost-wake fix (fix round 3, below).
+2. **Budgets above the ADR** (worker isolates budgeted well above the strict 8 B/frame figure of
+   0016 §1; `main` budgets carrying explicit "sibling-burst headroom"; numbers under fix round 2,
+   second pass, below). **Resolved** at `37008df`: strict 8 B/frame on every worker isolate, `main` =
+   ceil(clean max) + 8, no headroom.
+3. **`STEP_TICK_EVERY = 2` masked a defect** (halving the tick rate to keep idle `sim`/`gen0` under
+   budget; see fix round 2, second pass below for the reading it was hiding). **Resolved** at
+   `37008df`: the constant removed, ticking every frame again.
+4. **Round-3 gate failure**: after 1-3 were fixed, `gc: flat transport parity` still failed 2/10
+   foreground runs (`sim` differing by exactly 136 B, tunnel high). **Resolved** at `5aec08f`: the
+   136 B was V8's lazily-allocated feedback metadata for `armedLoop` landing inside the measured
+   window on some runs (fix round 3, below); fixed by splitting warm-up into 8 passes.
 
-Orchestrator reading, to be verified, not trusted: **one pass of the production blocking loop allocates about one HeapNumber**, whether the pass is a real wake or a `waitForWake` timeout. A worker spends its life blocked, so its loop and body may never leave the interpreter, where any double-valued temporary is boxed (a `timeoutMs()` result, a `Float64Array` read such as `frame_time_ms`, time arithmetic, a counter leaving Smi range). Bytes then scale with the number of passes, and the number of passes scales with timing: a sibling slowed by its `burst` control makes main spin longer, the other workers take more timeout passes, and their readings rise. That would explain the "residual cross-isolate interference" (which reproduces at `--workers 1`), the contention sensitivity, and possibly `flat transport parity` (it requires byte totals to be exactly equal between two runs; extra timeout passes in `harness-worker.ts` under load would break that).
+Decisions A, B and C (owed from the previous orchestrator session) were decided in this round and built at `24e0302`:
+**A**, `frame(t_ms)` stays a true contract -- JS keeps passing a constant, the Rust extern shim
+ignores the raw argument and reads `camera.frame_time_ms` instead (as-built text under Fix round 3
+below is authoritative); **B**, `isDetached` feature-detects `'detached' in ArrayBuffer.prototype`
+once at module load, falling back to the old check when absent (as-built text under Fix round 3
+below is authoritative); **C**, `browser` suite headroom (17 s of 25 s) not acted on now, trip-wire
+recorded in `docs/plan/deferred-ledger.md`.
 
-Required to close:
-- Evidence: per-function attribution (`byFn`, self bytes) for `sim`, `gen0` and `client` on `topology clean`, and for `gc-loop`'s `sim` in a passing and a failing `flat transport parity` run; name the allocating site(s) and the bytes per pass.
-- Fix: a pass through the blocking loop (woken or timed out) allocates 0 B in any tier, in `src/worker/shell.ts` and the kind bodies, and in `src/test/harness-worker.ts` if it shares the pattern: no double-valued temporaries on the pass (integer milliseconds or a preallocated typed-array slot for timeouts; let WASM read `frame_time_ms` from its own `Camera` region rather than JS reading a `Float64Array` element and passing it, if that read is the site: `frame(t_ms)` is a Provides seam, so if its signature must change, say so and grep `docs/plan/` for consumers rather than changing it silently).
-- Then: `STEP_TICK_EVERY` back to 1 (remove the constant); `client`, `sim`, `gen0` at 8 B/frame strict on both pages with measured values recorded (expect about 0–3); `main` = ceil(max clean) + 8 with no sibling headroom; every negative control trips on its named isolate only; readings agree quiet vs contended within a byte or two.
-- Proof: `pnpm test browser` 30/30 as the machine is and 30/30 under synthetic saturation, foreground loops with per-run kill timeouts, 0 hangs, suite line under about 20 s on a quiet machine; `pnpm gc reliability`-style repeat for the three pages; `pnpm test && pnpm lint` green.
-- Not allowed: widening a budget, weakening or dropping a control, retries, raising suite budgets or timeouts.
-
-### Open gate failures, round 3 (orchestrator, 2026-09-20, at `37008df`)
-
-Gate at `37008df` + `bc583db`: `pnpm gate ac7a24d` clean (49 files, +2707/−37, no goldens changed, no markers); `pnpm test && pnpm lint` green once (`browser` 52 tests, 17 s/25 s); every name under **Tests added** and **Provides** found by `grep` (`TestFlags` is a `type`, in `worker/protocol.ts`); exit criterion 2 holds (`postMessage` outside `src/test/**`: the `setup` post in `client.ts`, the shared `post()` for `ready`/`fatal` in `worker.ts` and `worker/shell.ts`, comments). Items 2 and 3 of the list above are resolved by `37008df` (strict 8 B/frame on every worker isolate, `main` = ceil(clean max) + 8, `STEP_TICK_EVERY` gone). Item 1 is **still open**:
-
-- `pnpm test browser` × 10, foreground script with per-run kill timeout, 1-minute load 4–8 (the suite's own Chromium included): **8/10**, 0 hangs, slowest suite line 17 s. Both failures are `gc: flat transport parity` (M04), and no `topology`/`echo` test failed:
-  - `{"tunnel":{"main":27320,"sim":2448},"flat":{"main":27344,"sim":2312}}`
-  - `{"tunnel":{"main":26572,"sim":2448},"flat":{"main":26572,"sim":2312}}`
-- Fingerprint: `sim` differs by exactly **136 B** both times, tunnel high, flat at what `budgets.json` calls the "perfectly reproducible" constant (2308–2312 B per 600 frames). 136 B once per window is not a per-pass box (12–16 B × passes): it is one allocation (or one small cluster) that lands inside the measured window on some runs and before it on others. In the first failure `main` also differs, by 24 B. `loader.ts`'s own comment at `isDetached` already admits a "smaller, residual, intermittent allocation".
-- Orchestrator reading, to be verified, not trusted: a one-time event on the `sim` isolate (lazy compile or tier-up of a function first reached late, a feedback or IC transition, a one-off in the CDP transport path itself) whose timing relative to the end of warm-up varies. The tunnel run being the high one both times suggests run order matters.
-
-Required to close: per-function attribution (`byFn`, self bytes) of `gc-loop`'s `sim` in a 2448 B run against a 2312 B run, naming the 136 B; a fix at the allocating site (or, if the site is provably V8-internal and not reachable from this repo's code, stop and report with the evidence: changing what `flat transport parity` asserts is the orchestrator's decision); then the proof loops of the list above. Still not allowed: a tolerance or retry in the parity test, a widened budget, a weakened or dropped control, raised timeouts or suite budgets.
-
-Decided by the orchestrator at this gate (`HANDOFF.md` §2.3), to be built in the same round:
-
-- **A. `frame(t_ms)` stays a true contract.** JS keeps passing the constant (nothing boxed); the Rust extern shim (`crates/engine/src/abi/mod.rs::frame`) ignores the raw argument and passes `camera.frame_time_ms` to `Instance::frame` as `t_ms`. ADR 0014 and briefs 08b, 15b, 16b, 17, 18, 19, 26, 30 stay true unedited. `fixtures/hash`'s `frame` goes back to writing `t_ms`, and `workers.camera_block_reaches_wasm` proves it equals the stepped `frame_time_ms` bit-exactly. The unused raw export argument is recorded here; `ABI_VERSION` stays 2 (export shape unchanged).
-- **B. `isDetached` feature-detects once at module load** (`'detached' in ArrayBuffer.prototype`), selecting between the `detached` getter and the old `byteLength === 0` check, so a runtime without the getter still rebuilds views after `memory.grow`. No per-call branch that handles a double. `loader: views survive memory growth` (`tests/wasm/loader.test.ts`) must run under Node and in the Bun leg.
-- **C. `browser` suite headroom** (17 s of 25 s): not acted on now; trip-wire recorded in `docs/plan/deferred-ledger.md` ("Added during Phase 3").
+**Orchestrator acceptance** (`9f9736d`, 2026-09-20): `pnpm gate ac7a24d` clean, no goldens changed,
+no markers; `pnpm test && pnpm lint` green (`rust 39`, `unit 85`, `wasm 25`, `browser 52`, 17 s/25 s);
+`browser` × 30 at ambient 1-minute load 10-13: 30/30, 0 hangs, slowest suite line 18 s; `browser` × 30
+with `--load 10` (1-minute load 27-35): 30/30, 0 hangs, slowest 22 s; `unit` × 15 plain 15/15 and ×
+10 with `--load 10` 10/10. The orchestrator accepted the split warm-up (`WARMUP_PASSES = 8`, same
+total frames) as a change to M04's instrument: it excludes one-time lazy-feedback allocation from a
+steady-state measurement and leaves the measured window, budgets and controls untouched.
 
 ### Fix round 2, second pass (`37008df`)
 
 Reconstructed after the fact from `git show 37008df`, `budgets.json` and the code comments that cite
-this entry by name: that implementer left no report. Three allocation sites, all of them a
-double-valued temporary boxed into a fresh `HeapNumber` in the interpreter tier, which code that
-spends its life blocked in `Atomics.wait` may never leave:
+this entry by name: that implementer left no report. Three allocation sites, all a double-valued
+temporary boxed into a fresh `HeapNumber` in the interpreter tier, which code that spends its life
+blocked in `Atomics.wait` may never leave:
 
-- **`NO_TIMEOUT`** (`src/worker/shell.ts`). Each kind declared its own
-  `const NO_TIMEOUT = (): number => Number.POSITIVE_INFINITY`, and `runBlockingLoop` calls
-  `timeoutMs()` before every wait, so the named-property read `Number.POSITIVE_INFINITY` re-boxed on
-  every pass -- woken or timed out. `byFn` attribution on `topology clean` named it the top site in
-  the idle `sim`/`gen0` isolates: ~3100 B over ~300 wakes, about 10 B per pass. Replaced by a
-  module-level `INFINITE_TIMEOUT_MS` constant returned by one shared `noTimeout()` (`sim.ts`,
-  `gen.ts`, `client.ts` all import it).
+- **`NO_TIMEOUT`** (`src/worker/shell.ts`). Each kind declared its own `const NO_TIMEOUT = (): number
+  => Number.POSITIVE_INFINITY`, and `runBlockingLoop` calls `timeoutMs()` before every wait, so the
+  named-property read re-boxed on every pass -- woken or timed out. `byFn` named it the top site in
+  idle `sim`/`gen0`: ~3100 B over ~300 wakes, about 10 B per pass. Replaced by a module-level
+  `INFINITE_TIMEOUT_MS` constant returned by one shared `noTimeout()` (`sim.ts`, `gen.ts`, `client.ts`
+  all import it).
 - **`frame(t_ms)`** (`src/worker/client.ts`). The worker read the just-copied camera block through a
-  `Float64Array` view (`frameTime[0] as number`) and passed it to `inst.call1(inst.x.frame, ...)`:
-  a `Float64Array` element read boxes, about 12 B on every real frame. The worker now passes the
+  `Float64Array` view (`frameTime[0] as number`) and passed it to `inst.call1(inst.x.frame, ...)`: a
+  `Float64Array` element read boxes, about 12 B on every real frame. The worker now passes the
   module-level Smi constant `FRAME_ARG = 0`; the 80-byte block, `frame_time_ms` included, is already
   in this role's own `Camera` region on the same pass, so Rust reads it there. The export's declared
-  shape is unchanged (no `ABI_VERSION` bump) because 0014 and briefs 08b, 15b, 16b, 17, 18, 19, 26,
-  30 cite `frame(t_ms)` by name -- what that meant for the *game-facing* contract was left open and
-  is decision A below.
+  shape is unchanged (no `ABI_VERSION` bump) because 0014 and briefs 08b, 15b, 16b, 17, 18, 19, 26, 30
+  cite `frame(t_ms)` by name -- what that meant for the *game-facing* contract was left open and is
+  decision A below.
 - **The loader's detach check** (`src/loader.ts`, M02 code, every runtime). `call0`/`call1`/`call2`
   ended with `this.mem.u8.byteLength === 0`, whose own comment claimed it allocated nothing;
   `TypedArray.prototype.byteLength`'s getter boxes its return value on an unpredictable fraction of
@@ -381,56 +304,46 @@ spends its life blocked in `Atomics.wait` may never leave:
   measured worse. The comment left behind said a "smaller, residual, intermittent allocation"
   remained on this check; fix round 3 found that residual to be somewhere else entirely (below).
 - **`STEP_TICK_EVERY` removed** from `gc-topology.ts`/`gc-echo.ts` (it had halved the tick rate to
-  hide the `NO_TIMEOUT` re-box: 7.33 B/frame at half rate is ~14.7 B per wake, one `HeapNumber`),
-  and `budgets.json` was re-derived: `client`/`sim`/`gen0` back to the strict 8 B/frame on both
-  pages (clean 0.83-1.31 measured, was 7.33-33 masked), `topology.main` 52 -> 50 (clean max 41.65,
-  ceil + 8) and `echo.main` 40 -> 38 (clean max 29.83, ceil + 8), both with the "sibling-burst
-  headroom" dropped. `gc-loop.sim` stayed 8 with its formula rewritten around a claimed
-  "perfectly reproducible" 3.85 B/frame. `fixtures/hash/golden/golden.json` untouched,
-  `ABI_VERSION` still 2.
+  hide the `NO_TIMEOUT` re-box: 7.33 B/frame at half rate is ~14.7 B per wake, one `HeapNumber`), and
+  `budgets.json` was re-derived -- **superseded history**: `client`/`sim`/`gen0` back to the strict
+  8 B/frame on both pages (clean 0.83-1.31 measured, was 7.33-33 masked), `topology.main` 52 → 50
+  (clean max 41.65, ceil + 8) and `echo.main` 40 → 38 (clean max 29.83, ceil + 8), both with the
+  "sibling-burst headroom" dropped. `gc-loop.sim` stayed 8 with its formula rewritten around a
+  claimed "perfectly reproducible" 3.85 B/frame -- later found wrong by fix round 3 (below); current
+  figures are its "Measured after all of the above" paragraph. `fixtures/hash/golden/golden.json`
+  untouched, `ABI_VERSION` still 2.
 
 ### Fix round 3 (this session)
 
 **The 136 B on `sim`, named.** `gc: flat transport parity` compares `sim`'s exact byte total between
-the tunnel and flat CDP transports; the tunnel run (the first of the two) read 2448 B where the flat
-run read 2312 B. Reproduction is cheap and needs no contention at all: the parity test *alone*,
-`pnpm exec playwright test --project gc --grep "flat transport parity" --workers 1`, failed 3 of 10
-runs at `03c69ca`. Per-sample attribution (`HeapProfiler.stopSampling`'s own `profile.samples`, with
-`--sampling-heap-profiler-suppress-randomness` every allocation is recorded exactly) shows the two
-runs are identical but for **two extra samples, 28 B and 108 B, inside
-`armedLoop` (`src/test/harness-worker.ts:69`)**, in one dump attributed to a child `load@:0`
-(`Atomics.load`) frame instead of to `armedLoop` itself. Nothing in `armedLoop` allocates: it is
-`Atomics.wait`/`load`/`store` only. The pair is V8's lazily-allocated feedback metadata for that
-function, and `--js-flags=--no-lazy-feedback-allocation` makes the difference vanish (8/8 runs a
-constant 2364 B, both transports), while `--no-flush-bytecode` does not (4/8 still high), so it is
-allocation timing, not bytecode flushing.
+tunnel and flat CDP transports; the tunnel run read 2448 B where the flat run read 2312 B,
+reproducible with no contention at all (`--grep "flat transport parity" --workers 1` failed 3/10 runs
+at `03c69ca`). Per-sample attribution (exact under `--sampling-heap-profiler-suppress-randomness`)
+showed the two runs identical but for two extra samples, 28 B and 108 B, inside `armedLoop`
+(`src/test/harness-worker.ts:69`, which allocates nothing itself) -- V8's lazily-allocated feedback
+metadata for that function, confirmed by `--js-flags=--no-lazy-feedback-allocation` (8/8 runs a
+constant 2364 B). `installGcPage`'s `run()` invokes `armedLoop` via `resume()` → two `post()` calls →
+`park()`; `measure()` warmed up with **one** `run()` call, so the measured `run()` was that path's
+*second* invocation -- right at V8's lazy-feedback threshold, which is why the 136 B landed inside
+the window on some runs and before it on others. Fix, at that site: `measure()` now drives its
+warm-up as `WARMUP_PASSES = 8` calls of `WARMUP / 8` frames each (`tests/browser/gc/instrument.ts`),
+same total frames, no tolerance or retry near the parity test. Result: the parity test passed 10/10
+(was 3/10 failing), and `gc-loop.sim` reads a constant 2172 B (3.62 B/frame) on both transports.
 
-*Why the window sometimes contains it:* `installGcPage`'s `run()` does `harness.resume()` -> the
-worker's `armedLoop` invocation -> two `post()` calls -> `harness.park()`. `measure()` warmed up
-with **one** `run()` call, so that entry/exit path had been invoked exactly once when the measured
-`run()` invoked it a second time -- right at V8's lazy-feedback threshold, which is why the 136 B
-landed inside the window on some runs and before it on others. The fix is at that site: `measure()`
-now drives its warm-up as `WARMUP_PASSES = 8` calls of `WARMUP / 8` frames each
-(`tests/browser/gc/instrument.ts`). Same total frames, nothing shortened, no tolerance and no retry
-anywhere near the parity test. Result: the parity test passed 10/10 alone where it had failed 3/10,
-and `gc-loop.sim` reads a constant 2172 B (3.62 B/frame) on both transports.
-
-**The lost wake, found on the way.** Eight warm-up passes per measurement made `pnpm gc` (28 tests,
-3 workers) fail 4-6 tests in 40-47 s with `stepFrame: the client worker did not ack the frame
-request` and `gc-echo: no response from the client worker`, where one pass passed 25/25 in 8.5 s.
-The cause is a real missed-wakeup in the production `yield` protocol, multiplied by the extra
-resume cycles rather than caused by them: `Shell.resume()`, `runAsync`'s re-entry and the first
-entry in `worker.ts` all published the worker as available (`W_PARKED = 0`, or the `ready` post)
-*before* `runBlockingLoop` read its own `W_WAKE` baseline. A producer that saw the worker available
-and called `ControlBlock.wake()` in that window bumped the word before the loop read it, so the
-loop's first `Atomics.wait` slept on a wake that had already happened; main then span out its
-2e9-iteration `W_ACK` spin and threw. Each caller now reads the word first (`Shell.observeWake()`)
-and passes it to `runBlockingLoop(shell, body, timeoutMs, lastSeen?)` -- one optional parameter
-appended, no seam renamed. With that, `pnpm gc` at 8 warm-up passes is 28 passed in 10.4 s. New
-test `shell.resume_does_not_lose_a_wake` (`src/worker/shell.test.ts`, `unit`) drives that exact
-ordering with a 400 ms wait timeout and requires the body to run in under 200 ms; without the fix it
-measures 405 ms and fails. This is very likely the defect behind the `topology`/`echo` failures of
-round 1 and the suite's contention sensitivity generally.
+**The lost wake, found on the way.** Eight warm-up passes per measurement made `pnpm gc` (28 tests, 3
+workers) fail 4-6 tests in 40-47 s with `stepFrame: the client worker did not ack the frame request`
+and `gc-echo: no response from the client worker`, where one pass passed 25/25 in 8.5 s. A real
+missed-wakeup in the production `yield` protocol, multiplied by the extra resume cycles rather than
+caused by them: `Shell.resume()`, `runAsync`'s re-entry and `worker.ts`'s first entry all published
+the worker as available (`W_PARKED = 0`, or the `ready` post) *before* `runBlockingLoop` read its own
+`W_WAKE` baseline, so a wake issued in that window was lost and main spun out its 2e9-iteration
+`W_ACK` spin and threw. Fixed: each caller now reads the word first (`Shell.observeWake()`) and
+passes it to `runBlockingLoop(shell, body, timeoutMs, lastSeen?)` -- one optional parameter appended,
+no seam renamed. With that, `pnpm gc` at 8 warm-up passes is 28 passed in 10.4 s. New test
+`shell.resume_does_not_lose_a_wake` (`src/worker/shell.test.ts`, `unit`) drives that exact ordering
+(400 ms wait timeout, body must run under 200 ms; without the fix it measures 405 ms and fails).
+Very likely the defect behind fix round 1's `topology`/`echo` failures and the suite's contention
+sensitivity generally.
 
 **Decision A as built.** `abi::frame` (`crates/engine/src/abi/mod.rs`) takes the raw argument as
 `_raw_t_ms` and calls `rt.inst.frame(camera.frame_time_ms, camera, result)`; the extern's own
@@ -443,29 +356,44 @@ wrote `camera.frame_time_ms` there after round 2, which made the assertion circu
 argument again the test fails, `Expected: 157.375, Received: 0`. The unused raw export argument is
 recorded here as decision A asked.
 
-**Decision B as built.** `src/loader.ts` now selects the detach check once at module load:
-`const isDetached: (buffer: ArrayBufferLike) => boolean = 'detached' in ArrayBuffer.prototype ? ...
-: (buffer) => buffer.byteLength === 0`. Two whole functions, one chosen once; no per-call branch.
+**Decision B as built.** `src/loader.ts` now selects the detach check once at module load: `const
+isDetached: (buffer: ArrayBufferLike) => boolean = 'detached' in ArrayBuffer.prototype ? ... :
+(buffer) => buffer.byteLength === 0`. Two whole functions, one chosen once; no per-call branch.
 Coverage: `loader: views survive memory growth` (Node, `wasm`) unchanged for the getter path; a new
-sibling, `loader: views survive memory growth without ArrayBuffer.prototype.detached`, deletes the
-getter, re-imports the loader with `vi.resetModules()` and proves the fallback rebuilds views
-(mutation-checked: a fallback returning `false` gives 0 rebuilds and fails it); and the Bun leg
-(`tests/wasm/bun-leg.mjs`, JavaScriptCore) gained `loader: views survive memory growth (bun)`,
-registered in `scripts/suites.mjs`'s `tests` list for that leg. The `wasm` suite is 25 tests, was
-23.
+sibling deletes the getter (`vi.resetModules()`) and proves the fallback rebuilds views
+(mutation-checked: a fallback returning `false` gives 0 rebuilds and fails it); the Bun leg
+(`tests/wasm/bun-leg.mjs`, JavaScriptCore) gained its own copy, registered in `scripts/suites.mjs`.
+The `wasm` suite is 25 tests, was 23.
 
 **Measured after all of the above** (8 clean runs per page, `bytesPerFrame`, budgets unchanged):
 `gc-loop` main 43.47 constant / `sim` 3.62 constant (budgets 54 / 8); `topology` main 39.47-39.73,
-`client`/`sim`/`gen0` 2.52 constant (50 / 8); `echo` main 27.45-27.49, workers 2.52 constant
-(38 / 8). `main` fell on every page; the worker isolates rose from ~1.3 to a constant 2.52 B/frame,
-which is the split warm-up moving which one-off allocations fall inside the window -- still far
-under the strict 8, and now identical run to run and transport to transport. Every negative control
-still trips on its own isolate only (`pnpm gc`: 25/25). `budgets.json` formula strings carry these
-re-measurements; no budget number moved.
+`client`/`sim`/`gen0` 2.52 constant (50 / 8); `echo` main 27.45-27.49, workers 2.52 constant (38 / 8).
+`main` fell on every page; the worker isolates rose from ~1.3 to a constant 2.52 B/frame, which is the
+split warm-up moving which one-off allocations fall inside the window -- still far under the strict 8,
+and now identical run to run and transport to transport. Every negative control still trips on its
+own isolate only (`pnpm gc`: 25/25). `budgets.json` formula strings carry these re-measurements; no
+budget number moved.
 
-**Proof** (this session, foreground, per-run kill timeout, load checked before each batch):
-`browser` x10 twice quiet -- `pass=10 fail=0 hang=0 slowestSuiteSeconds=17` and `pass=10 fail=0
-hang=0 slowestSuiteSeconds=16`; `browser` x10 with `--load 10` -- `pass=10 fail=0 hang=0
+**Proof** (this session, foreground, per-run kill timeout, load checked before each batch): `browser`
+x10 twice quiet -- `pass=10 fail=0 hang=0 slowestSuiteSeconds=17` and `pass=10 fail=0 hang=0
+slowestSuiteSeconds=16`; `browser` x10 with `--load 10` -- `pass=10 fail=0 hang=0
 slowestSuiteSeconds=20`. `pnpm test`: `rust 39`, `unit 85 (1.2 s/3 s)`, `wasm 25 (1.3 s/7 s)`,
 `browser 52 (17 s/25 s)`; `pnpm lint` all pass. `pgrep -x yes` = 0 and `lsof -ti tcp:4517` empty
 after the runs.
+
+### Notes for later briefs
+
+- `sim`/`gen` bodies store `W_ACK` on every wake (a single unconditional `Atomics.store`); M08b and
+  M13 must keep that store (or an equivalent) when real work replaces `body()`, since a test driver
+  may still need to lockstep a synthetic wake with these roles from outside.
+- A wake issued while a worker is parked is not replayed on `resume()`.
+- Every caller that re-enters `runBlockingLoop` must pass `lastSeen` from `Shell.observeWake()`, read
+  *before* publishing the worker as available (the lost-wake fix, Fix round 3 above).
+- M13 replaces `noTimeout()` for `sim` with a real deadline and must keep it allocation-free: integer
+  milliseconds, no double-valued temporary.
+- `CB_TEST_CONTROL` is global control word 4; words 5-7 are still reserved.
+- New zero-GC pages on the production topology must `parkWorkers` before setting `__pageReady`.
+- The raw argument of the `frame` export is unused (Rust passes `camera.frame_time_ms`, decision A).
+- The Client role's fixed footprint (grown by the `echo` Rx/Tx sizing) is close to its 20-page
+  boundary; the margin for `client` is now much smaller than for `sim`/`gen` -- flagged for whoever
+  next grows the Client role's own fixed data.
