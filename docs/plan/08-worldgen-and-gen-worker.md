@@ -1,6 +1,6 @@
 # M08: Worldgen and the gen role
 
-Status: not started · After: 05, 07 · Tyler-dependent: no (Q5 answered: the device page is checked on the iPhone only)
+Status: done · After: 05, 07 · Tyler-dependent: no (Q5 answered: the device page is checked on the iPhone only)
 
 **Split.** The PLAN row for M08 broke the sizing rule (about 1,900 lines across Rust, worker TypeScript and browser tests). This brief keeps everything that needs no SharedArrayBuffer: the `Worldgen` trait, the `gen` role, the fixture worldgen, the cross-runtime golden and the benchmark. Gen workers over `genRequest`/`genResult`, the client generation queue and the client pristine-cache feed are `docs/plan/08b-gen-workers-and-queue.md` (After: 06b, 08). M06 is therefore not a prerequisite here (M12 needs only this brief); M09 waits on 08b.
 
@@ -63,12 +63,12 @@ Mine from spikes: `spikes/determinism-hash/src/lib.rs` (`coord_hash` → `hash2`
 Rust: `hash2_vectors`, `noise_raw_bits_golden`, `noise_bounded`, `worldgen_contract_fixture` (every element written regardless of prior slab contents; chunk order and repetition do not change output; `abi::arena` shows zero allocation inside `generate`), `pristine_matches_generate`, `fingerprint_stable_and_sensitive`, `fingerprint_golden`, `fx-worldgen scenario_matches_golden`, `cache_invisible_real_worldgen`, `gen_core_wrong_len_is_bad_length`. `wasm` suite: `gen: gen_chunk fills GenOut`, `gen: sim role returns WrongRole`, `determinism: worldgen node matches golden`, the Bun leg, `abi registry` (now with `gen_chunk`). Browser: `determinism @engines` covers `worldgen`. Slow: `worldgen-bench`.
 
 ## Exit criteria
-- [ ] `fixtures/worldgen/golden.json` is matched natively, under Node, under Bun and in the three browsers; `pnpm golden worldgen && git diff --exit-code` is clean.
-- [ ] `worldgen_contract_fixture` and `cache_invisible_real_worldgen` pass.
-- [ ] Import-allowlist, target-feature and ABI-registry tests pass for every fixture with the bumped `ABI_VERSION`.
-- [ ] `pnpm test:slow wasm -t worldgen-bench` prints ms per chunk and exits 0; the number is recorded under Deviations.
-- [ ] `pnpm device:serve` lists `worldgen-bench.html`, and it completes with a golden match in desktop Chromium.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `fixtures/worldgen/golden.json` is matched natively, under Node, under Bun and in the three browsers; `pnpm golden worldgen && git diff --exit-code` is clean.
+- [x] `worldgen_contract_fixture` and `cache_invisible_real_worldgen` pass.
+- [x] Import-allowlist, target-feature and ABI-registry tests pass for every fixture with the bumped `ABI_VERSION`.
+- [x] `pnpm test:slow wasm -t worldgen-bench` prints ms per chunk and exits 0; the number is recorded under Deviations.
+- [x] `pnpm device:serve` lists `worldgen-bench.html`, and it completes with a golden match in desktop Chromium.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t worldgen` · `pnpm test rust -t noise` · `pnpm test wasm -t worldgen` · `pnpm test browser -t determinism` · `pnpm test:slow wasm -t worldgen-bench` · `pnpm golden worldgen && git diff --exit-code` · `pnpm test && pnpm lint`.
@@ -159,3 +159,7 @@ shapes, and measured numbers:
   bench.html` printed `PASS`, `median ms/chunk: 0.0800`, `hash: 840c6111eafa61b0 ==
   840c6111eafa61b0`, no console errors; `lsof -ti tcp:4173` confirmed empty after `playwright-cli
   close` and killing the server.
+
+### Gate (orchestrator, 2026-09-20)
+
+Accepted at `1d180bc` after one fix round: `pnpm gate 2eaf4b6` clean (5 goldens added, none changed, no markers, no new engine-crate dependency; `fx-worldgen` uses the workspace's existing `serde`/`serde_json`); `rust 112`, `unit 85`, `wasm 32`, `browser 52` (16 s/25 s), lint green; every name under **Tests added** and **Provides** found by `grep`; `ABI_VERSION` 3 in `registry.rs` and `abi.ts`. Fix round 1: `golden/bench.json` had been blessed by hand, against the rule that `pnpm golden` is the only writer of golden hashes; `pnpm golden worldgen` now writes it (verified by the orchestrator: file rewritten, `git diff --exit-code` clean, `pnpm golden` for all fixtures clean). Slow-tier and device-page evidence accepted from the implementer's pasted lines above (loop step 5). No cross-thread or timing-sensitive test was added, so no repeat runs.
