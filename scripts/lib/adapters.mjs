@@ -82,6 +82,9 @@ export const adapters = {
 
   // `browser` (docs/decisions/0020 §1, §3): Playwright Test against `packages/engine/playwright.config.ts`.
   // `--grep` composes the `@slow` tag with `pattern` the same way the `vitest` adapter's `-t` does.
+  // All configured projects run (chromium, webkit/firefox grepped to @engines, and M04's `gc`); a
+  // `pnpm gc` mode (GC_MODE=software, GC_CDP=flat, --repeat-each) is a separate, local-only
+  // invocation of the same `gc` project (docs/plan/04-zero-gc-harness.md, Seams).
   playwright: {
     command({ suite, pattern, tier }) {
       const reportPath = `${suite.name}/report.json`

@@ -167,7 +167,19 @@ export async function createHarness(opts: {
   await Promise.all(opts.workers.map((spec) => setupWorker(spec, module, handles, errors)))
 
   const all = (): WorkerHandle[] => [...handles.values()]
-  const byRole = (role: Role): WorkerHandle[] => all().filter((h) => h.role === role)
+  // M04 (docs/plan/04-zero-gc-harness.md, measured): `stepAll` runs every tick/frame in the gc
+  // suite's measured window; `byRole` used to be `all().filter(...)`, allocating two fresh arrays
+  // per call (~250 B/frame of the gc-loop `main` budget, dominating it). Grouped once here instead
+  // (.claude/rules/hot-paths.md, even though src/test/** is exempt from the rule itself: the
+  // allocation is real and this milestone measures it).
+  const EMPTY_HANDLES: WorkerHandle[] = []
+  const roleGroups = new Map<Role, WorkerHandle[]>()
+  for (const h of handles.values()) {
+    const group = roleGroups.get(h.role)
+    if (group) group.push(h)
+    else roleGroups.set(h.role, [h])
+  }
+  const byRole = (role: Role): WorkerHandle[] => roleGroups.get(role) ?? EMPTY_HANDLES
 
   function findWorker(name: string): WorkerHandle {
     const h = handles.get(name)
@@ -198,11 +210,14 @@ export async function createHarness(opts: {
 
   function stepAll(role: Role, op: number): void {
     const targets = byRole(role)
-    for (const h of targets) {
+    // Index loops, not `for...of`: measured to avoid an iterator-protocol allocation V8 otherwise
+    // takes on this path (docs/plan/04-zero-gc-harness.md).
+    for (let i = 0; i < targets.length; i++) {
+      const h = targets[i] as WorkerHandle
       if (!h.armed) throw new Error(`harness: worker '${h.name}' is not resumed`)
       wake(h, op)
     }
-    for (const h of targets) awaitAck(h)
+    for (let i = 0; i < targets.length; i++) awaitAck(targets[i] as WorkerHandle)
   }
 
   function send<T extends FromWorker['type']>(

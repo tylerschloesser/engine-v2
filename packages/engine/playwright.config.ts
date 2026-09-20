@@ -7,6 +7,13 @@ import { defineConfig, devices } from '@playwright/test'
 const port = Number(process.env.ENGINE_TEST_PORT ?? 4517)
 const baseURL = `http://127.0.0.1:${port}`
 
+// M04: base port for the `gc` project's `flat` CDP transport (docs/plan/04-zero-gc-harness.md,
+// Planning decisions "CDP transport"); `TEST_PARALLEL_INDEX` is set per worker process by
+// Playwright itself, so two workers of one run (and, with distinct `ENGINE_CDP_PORT`s, two
+// worktrees) never collide.
+const cdpPort =
+  Number(process.env.ENGINE_CDP_PORT ?? 9333) + Number(process.env.TEST_PARALLEL_INDEX ?? 0)
+
 export default defineConfig({
   testDir: './tests/browser',
   // Default matches `*.test.ts` too (M04's `gc/analyse.test.ts` is a Vitest unit test, run by the
@@ -27,6 +34,8 @@ export default defineConfig({
         channel: 'chromium',
         launchOptions: { args: ['--enable-unsafe-webgpu'] },
       },
+      // M04's gc-*.spec.ts run only in the `gc` project below, under `pnpm gc`, never `pnpm test`.
+      testIgnore: '**/gc-*.spec.ts',
     },
     {
       // Sim hash only (0020 §6: Firefox returns a null WebGPU adapter headless); multi-engine repeats
@@ -34,11 +43,32 @@ export default defineConfig({
       name: 'webkit',
       use: { ...devices['Desktop Safari'] },
       grep: /@engines/,
+      testIgnore: '**/gc-*.spec.ts',
     },
     {
       name: 'firefox',
       use: { ...devices['Desktop Firefox'] },
       grep: /@engines/,
+      testIgnore: '**/gc-*.spec.ts',
+    },
+    {
+      // docs/plan/04-zero-gc-harness.md, Seams: the zero-GC assertion of 0016 §3. Launch args:
+      // 0016 §3, plus a `--remote-debugging-port` (unused under the default `tunnel` transport) so
+      // `pnpm gc flat`/the flat-transport parity test can reach this same browser.
+      name: 'gc',
+      use: {
+        ...devices['Desktop Chrome'],
+        channel: 'chromium',
+        launchOptions: {
+          args: [
+            '--enable-unsafe-webgpu',
+            '--disable-features=SpareRendererForSitePerProcess',
+            '--js-flags=--expose-gc --sampling-heap-profiler-suppress-randomness',
+            `--remote-debugging-port=${cdpPort}`,
+          ],
+        },
+      },
+      testMatch: '**/gc-*.spec.ts',
     },
   ],
   webServer: {

@@ -64,7 +64,10 @@ export function createManualClock(startMs = 0): ManualClock {
     },
     frame(dtMs) {
       now += dtMs
-      // Callbacks registered while running are next frame's, not this one's.
+      // Callbacks registered while running are next frame's, not this one's. No client-role worker
+      // exists before M06b, so `frames` is normally empty here; skip the array churn in that case
+      // (measured: M04's gc-loop `main` budget, docs/plan/04-zero-gc-harness.md).
+      if (frames.length === 0) return
       const due = frames
       frames = []
       for (const f of due) f.cb(now)

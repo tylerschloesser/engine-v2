@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "gc": {
+    "pages": {
+      "gc-loop": {
+        "isolates": {
+          "main": {
+            "class": "strict",
+            "bytesPerFrame": 54,
+            "formula": "no WebGPU on this page (0016 §1's 110 B floor does not apply): measured harness overhead, ceil(max of 50 clean runs = 45.43-45.55 B/frame) = 46, + 8 B margin (0016 §1's own margin convention) = 54",
+            "attributionRoots": ["run"]
+          },
+          "sim": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the strict worker figure. Measured clean here: constant 2.97 B/frame (1784 B / 600) over 50 runs, comfortably under the 8 B figure the spike's minimal worker measured at 0.99 B/frame",
+            "attributionRoots": ["coreTick"]
+          }
+        },
+        "software": {
+          "frames": 600,
+          "isolates": {
+            "main": {
+              "attributedBytesPerFrame": 28
+            },
+            "sim": {
+              "attributedBytesPerFrame": 8
+            }
+          }
+        }
+      }
+    }
+  },
+  "counters": {}
+}

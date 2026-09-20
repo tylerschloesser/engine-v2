@@ -1,0 +1,111 @@
+// `zeroGcSuite({ pageId, path, expectAdapter? })` (docs/plan/04-zero-gc-harness.md, Seams):
+// generates the clean test and every permanent negative control from a page's `budgets.json` entry
+// alone, so "registering a zero-GC test later = a page that calls `installGcPage`, a `gc.pages.
+// <pageId>` entry, and a spec file calling `zeroGcSuite`" (M09, M13, M16, M18, M29).
+import { type Browser, expect, type Page, test } from '@playwright/test'
+import type { NegativeControl } from '../../../src/test/controls.ts'
+import { gcPage } from '../../support/budgets.ts'
+import { openPage } from '../support/page.ts'
+import { type GcResult, measure } from './instrument.ts'
+
+type ControlVerdict = { A: Record<string, boolean>; B: Record<string, boolean> }
+
+/** The verdict table of 0016 §3.8: a clean run passes everywhere; every negative control fails only
+ * the named isolate(s)/assertion(s) and nowhere else. */
+function expectedVerdict(isolates: string[], control: NegativeControl): ControlVerdict {
+  const A: Record<string, boolean> = {}
+  const B: Record<string, boolean> = {}
+  for (const name of isolates) {
+    A[name] = true
+    B[name] = true
+  }
+  if (control?.kind === 'object') {
+    B[control.isolate] = false
+  } else if (control?.kind === 'burst') {
+    A[control.isolate] = false
+    B[control.isolate] = false
+  } else if (control?.kind === 'post-message') {
+    // A message per frame allocates on both ends (0016 §3 step 8; the spike's own numbers).
+    B.main = false
+    B[control.isolate] = false
+  }
+  return { A, B }
+}
+
+/** What a failing test prints: budgets, exact bytes, GC counts, top allocation sites per isolate
+ * (0016 §3 step 7). */
+function detail(r: GcResult): string {
+  return JSON.stringify(
+    {
+      control: r.control,
+      mode: r.mode,
+      bytesPerFrame: r.bytesPerFrame,
+      attributedBytesPerFrame: r.attributedBytesPerFrame,
+      gc: r.gc,
+      byFn: r.byFn,
+      verdict: r.verdict,
+    },
+    null,
+    2,
+  )
+}
+
+function assertEnvironment(r: GcResult, path: string, opts: { expectAdapter?: boolean }): void {
+  expect(r.crossOriginIsolated, `${path}: crossOriginIsolated`).toBe(true)
+  if (opts.expectAdapter) expect(r.adapter, `${path}: WebGPU adapter`).not.toBeNull()
+  expect(r.errors, `${path}: errors`).toEqual([])
+  // 0016 §1 last row: every WASM instance's memory is unchanged across the window.
+  for (const name of r.isolates) {
+    if (name === 'main') continue
+    expect(r.memoryBytes.after[name], `${path}: ${name} memoryBytes`).toBe(
+      r.memoryBytes.before[name],
+    )
+    expect(r.memGrows[name], `${path}: ${name} memGrows`).toBe(0)
+  }
+}
+
+async function run(
+  page: Page,
+  browser: Browser,
+  pageId: string,
+  path: string,
+  control: NegativeControl,
+): Promise<GcResult> {
+  await openPage(page, path)
+  return measure(page, browser, { pageId, control })
+}
+
+export function zeroGcSuite(opts: { pageId: string; path: string; expectAdapter?: boolean }): void {
+  const budgets = gcPage(opts.pageId)
+  const isolates = Object.keys(budgets.isolates)
+  const workers = isolates.filter((name) => name !== 'main')
+
+  test(`${opts.pageId} clean`, async ({ page, browser }) => {
+    const r = await run(page, browser, opts.pageId, opts.path, null)
+    assertEnvironment(r, opts.path, opts)
+    const expected = expectedVerdict(isolates, null)
+    expect(r.verdict, detail(r)).toEqual({ pass: true, ...expected })
+  })
+
+  for (const name of isolates) {
+    for (const kind of ['object', 'burst'] as const) {
+      test(`${opts.pageId} neg ${kind} ${name}`, async ({ page, browser }) => {
+        const control: NegativeControl = { isolate: name, kind }
+        const r = await run(page, browser, opts.pageId, opts.path, control)
+        assertEnvironment(r, opts.path, opts)
+        const expected = expectedVerdict(isolates, control)
+        expect(r.verdict, detail(r)).toEqual({ pass: false, ...expected })
+      })
+    }
+  }
+
+  for (const name of workers) {
+    test(`${opts.pageId} neg post-message main<->${name}`, async ({ page, browser }) => {
+      const control: NegativeControl = { isolate: name, kind: 'post-message' }
+      const r = await run(page, browser, opts.pageId, opts.path, control)
+      assertEnvironment(r, opts.path, opts)
+      const expected = expectedVerdict(isolates, control)
+      expect(r.verdict, detail(r)).toEqual({ pass: false, ...expected })
+    })
+  }
+}
