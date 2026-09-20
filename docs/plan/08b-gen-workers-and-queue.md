@@ -82,3 +82,9 @@ none here; the first on-device run of a worker/SAB page is M11's checklist, over
 
 ## Deviations
 (filled in during Phase 3)
+
+### Orchestrator decisions before the start (2026-09-20)
+
+- **`W_ACK` on a gen worker keeps M06b's meaning, not "jobs finished".** Consumes and Order of work step 3 read `W_ACK` as a finished-jobs counter, but M06b's `asHarness(client).stepTick` wakes every `sim`/`gen` worker and spins until each worker's `W_ACK` equals the wake value it issued, and the `topology` and `echo` zero-GC pages run on that. The gen body therefore still ends every pass with the stub's `W_ACK = wokenBy` store (after any job work of that pass). Finished jobs are counted where they are consumed: `GenStats.delivered` through `client_gen_stats`, and the `genResult` ring's own counters. "Bump `W_ACK`" in step 3 means that store.
+- **`ABI_VERSION` goes 3 → 4** (M08 made it 3).
+- **The pump runs on every client wake of every page,** including `topology` and `echo` over `fx-hash`, whose client role has no `TerrainFeed`: `gen_take` must cost nothing and return 0 there, and those pages' budgets (strict 8 B/frame on `client` and `gen0`) do not move.
