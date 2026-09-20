@@ -122,8 +122,12 @@ shapes, and measured numbers:
   each) is a different chunk sequence from the bench's 200 warm-up + 2,000 timed chunks, so they
   cannot share one file. `tests/support/bench-worldgen.ts` (`chunkAt`, `runWorldgenBench`) is the
   one warm-up+timed loop shared by the Node slow test and `worldgen-bench.html`'s worker, so both
-  measure the identical sequence and produce the identical hash; not written by `pnpm golden`
-  (scoped to `golden/scenario.json` files) -- reblessed by hand from a passing run's printed hash.
+  measure the identical sequence and produce the identical hash. `pnpm golden worldgen` writes it
+  too (fix round 1: it was reblessed by hand at first, which the gate caught -- `pnpm golden` is
+  the only writer of any golden hash, root `CLAUDE.md`), from the same dev-profile `.wasm` as
+  `golden.json`, via `runWorldgenBench` with a zero clock (the hash needs no timing); any fixture
+  with a `golden/bench.json` present gets one written next to its `golden.json`, not worldgen-
+  specific logic in `golden.mjs`.
 - **`golden.mjs` reformats the file it writes with Biome** after writing it. `JSON.stringify(...,
   null, 2)` disagrees with Biome's line-width-based array wrapping once a `checkpoints` array is
   short enough to collapse to one line (worldgen's 4; `hash`'s pre-existing 10 already exceeds

@@ -1,7 +1,10 @@
 {
   "config": {
     "arenaBytes": 1048576,
-    "game": { "seed": "0x00c0ffee5eed1234", "params": {} }
+    "game": {
+      "seed": "0x00c0ffee5eed1234",
+      "params": {}
+    }
   },
   "hash": "840c6111eafa61b0"
 }

@@ -13,14 +13,16 @@ the worldgen fixture for gen workers and the client pristine-cache feed.
 
 - `golden/scenario.json`: `{ kind: "worldgen", role: "gen", config, chunks: [[cx, cy], ...] }`, 256
   chunks (origin block, all four sign quadrants, both edges of the valid chunk-coordinate range,
-  far diagonal) -- listed once, read by the Rust test (`serde_json`) and every TS leg. Rebless with
-  `pnpm golden worldgen` (writes `golden/golden.json` from the `.wasm` under Node, one checkpoint
-  per 64 chunks, each the `fnv1a64Hex` of the concatenated `GenOut` bytes).
+  far diagonal) -- listed once, read by the Rust test (`serde_json`) and every TS leg.
 - `golden/bench.json`: a second, separate golden (`config` + a single `hash`) for
   `worldgen-bench` -- the warm-up (200) + timed (2,000) chunk sequence of
-  `tests/support/bench-worldgen.ts`, shared by the Node slow test and `worldgen-bench.html`. Not
-  written by `pnpm golden`; rebless by hand from a passing run's printed hash if the fixture's
-  generation ever changes on purpose.
+  `tests/support/bench-worldgen.ts`, shared by the Node slow test and `worldgen-bench.html`. The
+  hash is a pure function of the chunk sequence (never the release profile or the warm-up timing),
+  so `pnpm golden worldgen` writes it from the same dev-profile `.wasm` under Node as
+  `golden/golden.json`, alongside it.
+
+Rebless both with `pnpm golden worldgen` (the only writer of either file); review the diff, a
+changed golden is a changed generator.
 
 ## Tests
 

@@ -7,9 +7,11 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { toolEnv } from '../../../scripts/lib/env.mjs'
+import { RegionId, Role } from '../dist/abi.js'
 import { instantiate } from '../dist/loader.js'
 import { loadGame } from '../dist/server-node.js'
 import { buildGame } from '../dist/vite.js'
+import { runWorldgenBench } from '../tests/support/bench-worldgen.ts'
 import { roleOf, runHashScenario } from '../tests/support/scenario.ts'
 
 const fixtures = fileURLToPath(new URL('../fixtures/', import.meta.url))
@@ -34,6 +36,23 @@ for (const name of wanted === undefined ? names : [wanted]) {
   writeFileSync(path, `${JSON.stringify({ checkpoints }, null, 2)}\n`)
   written.push(path)
   console.log(`${name}: ${checkpoints.length} checkpoints, last ${checkpoints.at(-1)}`)
+
+  // The bench golden (`worldgen-bench.html`, `tests/wasm/worldgen-bench.test.ts`): only the fixture
+  // that already has one keeps it up to date, from the same dev-profile `.wasm` under Node -- the
+  // hash is a pure function of the chunk sequence (`tests/support/bench-worldgen.ts`), not of the
+  // release profile or the warm-up timing, so a dev/release disagreement here is a determinism bug
+  // the slow test should catch, not something this writer special-cases around.
+  const benchPath = join(golden, 'bench.json')
+  if (existsSync(benchPath)) {
+    const bench = JSON.parse(readFileSync(benchPath, 'utf8'))
+    const benchInst = instantiate(wasm, Role.Gen, bench.config, { onLog() {} })
+    const region = benchInst.region(RegionId.GenOut)
+    if (!region) throw new Error(`${name}: golden/bench.json's config has no GenOut region`)
+    const { hash } = runWorldgenBench(benchInst, region, () => 0)
+    writeFileSync(benchPath, `${JSON.stringify({ config: bench.config, hash }, null, 2)}\n`)
+    written.push(benchPath)
+    console.log(`${name}: bench hash ${hash}`)
+  }
 }
 
 // `JSON.stringify(..., null, 2)` above disagrees with Biome's line-width-based array wrapping for
