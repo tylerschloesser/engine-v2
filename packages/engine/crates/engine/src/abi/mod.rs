@@ -198,6 +198,57 @@ pub fn gen_chunk<T: Instance>(slot: &Slot<T>, cx: i32, cy: i32) -> Status {
     rt.inst.gen_chunk(cx, cy, out)
 }
 
+/// `gen_take(worker) -> u32`: `1` when a 16-byte `genRequest` record now sits at offset 0 of
+/// `Result`, `0` otherwise -- including a wrong role or an instance with no `client::TerrainFeed`
+/// (docs/plan/08b-gen-workers-and-queue.md, orchestrator decisions: this must cost nothing and
+/// return 0 on a page whose client role has none, so no `Status` crosses here).
+pub fn gen_take<T: Instance>(slot: &Slot<T>, worker: u32) -> u32 {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(_) => return 0,
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    let Some(out) = result.get_mut(..16) else {
+        return 0;
+    };
+    // SAFETY-free: a 16-byte sub-slice always converts to `&mut [u8; 16]`.
+    let out: &mut [u8; 16] = out.try_into().expect("checked length above");
+    u32::from(rt.inst.gen_take(worker, out))
+}
+
+/// `gen_deliver(worker, len)`: `len` bytes of the `GenIn` region are the `genResult` record.
+pub fn gen_deliver<T: Instance>(slot: &Slot<T>, worker: u32, len: u32) -> Status {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    match rt.layout.bytes(RegionId::GenIn).get(..len as usize) {
+        Some(record) => rt.inst.gen_deliver(worker, record),
+        None => Status::BadLength,
+    }
+}
+
+/// `client_gen_stats()`: seven `u32`s into `Result` (`Instance::client_gen_stats`'s own doc names
+/// the field order).
+pub fn client_gen_stats<T: Instance>(slot: &Slot<T>) -> Status {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.client_gen_stats(result)
+}
+
+/// `client_chunk_hash(cx, cy)`: lo, hi `u32` of an FNV hash into `Result`, or `Status::NotCached`.
+pub fn client_chunk_hash<T: Instance>(slot: &Slot<T>, cx: i32, cy: i32) -> Status {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.client_chunk_hash(cx, cy, result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

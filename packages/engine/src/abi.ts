@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 3
+export const ABI_VERSION = 4
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -24,6 +24,7 @@ export const Status = {
   Decode: 6,
   OutOfMemory: 7,
   Unsupported: 8,
+  NotCached: 9,
 } as const
 export type Status = (typeof Status)[keyof typeof Status]
 
@@ -37,6 +38,7 @@ export const RegionId = {
   Persist: 6,
   Camera: 7,
   GenOut: 8,
+  GenIn: 9,
 } as const
 export type RegionId = (typeof RegionId)[keyof typeof RegionId]
 
@@ -70,6 +72,16 @@ export const ABI_EXPORTS = {
   // `gen_chunk(cx, cy)` (docs/decisions/0008-chunk-generation.md §1, §2 table): writes
   // `region(RegionId.GenOut).len` bytes, little-endian tiles, row-major.
   gen_chunk: { role: 'gen', params: 2, result: 'status' },
+  // docs/plan/08b-gen-workers-and-queue.md: `1` when a 16-byte genRequest record now sits at
+  // offset 0 of `Result`, `0` otherwise (not a `Status`: costs nothing, always answers, even with
+  // no `client::TerrainFeed`).
+  gen_take: { role: 'client', params: 1, result: 'u32' },
+  // `gen_deliver(worker, len)`: `len` bytes of `GenIn` are the genResult record.
+  gen_deliver: { role: 'client', params: 2, result: 'status' },
+  // Seven `u32`s (`GenStats`' fields) into `Result`.
+  client_gen_stats: { role: 'client', params: 0, result: 'status' },
+  // `client_chunk_hash(cx, cy)`: lo, hi `u32` of an FNV hash into `Result`, or `Status.NotCached`.
+  client_chunk_hash: { role: 'client', params: 2, result: 'status' },
 } as const satisfies Record<string, ExportSpec>
 
 export function statusName(n: number): string {

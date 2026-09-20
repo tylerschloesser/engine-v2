@@ -9,9 +9,11 @@
 
 use engine::abi::config::HexU64;
 use engine::abi::{Instance, RegionId, RegionLayout, Role, Status};
+use engine::client::CameraBlock;
+use engine::client::TerrainFeed;
 use engine::noise::fbm2;
-use engine::world::{ChunkCoord, ChunkDims, Tile};
-use engine::worldgen::{GenCore, hash2};
+use engine::world::{CacheCapacity, ChunkCoord, ChunkDims, TerrainStore, Tile};
+use engine::worldgen::{GenCore, Pristine, hash2};
 
 pub use engine::worldgen::Worldgen;
 
@@ -27,7 +29,19 @@ const FREQ: f64 = 1.0 / 128.0;
 pub struct FixtureParams {}
 
 pub struct FixtureGen {
-    core: GenCore<Self>,
+    role: FixtureRole,
+}
+
+/// Gen-role: `GenCore` wraps `Worldgen::generate` (M08). Client-role (docs/plan/
+/// 08b-gen-workers-and-queue.md): a `TerrainStore` over `Pristine<FixtureGen>` plus the
+/// `TerrainFeed` that drives its generation queue -- the worldgen fixture for gen workers and the
+/// client pristine-cache feed (CLAUDE.md).
+enum FixtureRole {
+    Gen(GenCore<FixtureGen>),
+    Client {
+        terrain: Box<TerrainStore>,
+        feed: TerrainFeed,
+    },
 }
 
 impl Worldgen for FixtureGen {
@@ -99,23 +113,120 @@ struct Config {
     seed: HexU64,
     #[serde(default)]
     params: FixtureParams,
+    /// Client role only: how many gen workers `TerrainFeed` sizes its in-flight bookkeeping for
+    /// (docs/plan/08b-gen-workers-and-queue.md, `gen: one and two workers give equal chunk hashes`
+    /// drives this with 1 and 2). Ignored by the gen role.
+    #[serde(default = "default_gen_workers")]
+    gen_workers: u32,
 }
+
+fn default_gen_workers() -> u32 {
+    1
+}
+
+/// Client-role cache capacity (0007 §8's own default client cache size; 0008 §5's worst case at
+/// the view bound, 225 retained, fits comfortably inside it).
+const CLIENT_CACHE_CHUNKS: u32 = 1024;
 
 impl Instance for FixtureGen {
     fn init(role: Role, game_cfg_json: &str, layout: &mut RegionLayout) -> Result<Self, Status> {
-        if role != Role::Gen {
-            return Err(Status::BadConfig);
-        }
         let cfg: Config = serde_json::from_str(game_cfg_json).map_err(|_| Status::BadConfig)?;
         let dims = ChunkDims::new(5); // EDGE = 32
-        layout.region(RegionId::GenOut, dims.slab_bytes() as u32);
-        Ok(FixtureGen {
-            core: GenCore::new(dims, cfg.seed.0, cfg.params),
-        })
+        match role {
+            Role::Gen => {
+                layout.region(RegionId::GenOut, dims.slab_bytes() as u32);
+                Ok(FixtureGen {
+                    role: FixtureRole::Gen(GenCore::new(dims, cfg.seed.0, cfg.params)),
+                })
+            }
+            Role::Client => {
+                layout.region(RegionId::GenIn, TerrainFeed::gen_in_bytes(dims) as u32);
+                let source = Pristine::<FixtureGen>::new(cfg.seed.0, cfg.params);
+                let terrain = TerrainStore::new(
+                    dims,
+                    Box::new(source),
+                    CacheCapacity::Chunks(CLIENT_CACHE_CHUNKS),
+                );
+                let feed = TerrainFeed::new(dims, cfg.gen_workers);
+                Ok(FixtureGen {
+                    role: FixtureRole::Client {
+                        terrain: Box::new(terrain),
+                        feed,
+                    },
+                })
+            }
+            Role::Sim => Err(Status::BadConfig),
+        }
     }
 
     fn gen_chunk(&mut self, cx: i32, cy: i32, out: &mut [u8]) -> Status {
-        self.core.gen_chunk(cx, cy, out)
+        match &self.role {
+            FixtureRole::Gen(core) => core.gen_chunk(cx, cy, out),
+            FixtureRole::Client { .. } => Status::Unsupported,
+        }
+    }
+
+    fn frame(&mut self, _t_ms: f64, camera: &CameraBlock, _result: &mut [u8]) -> Status {
+        match &mut self.role {
+            FixtureRole::Client { terrain, feed } => {
+                feed.on_frame(camera, terrain);
+                Status::Ok
+            }
+            FixtureRole::Gen(_) => Status::Unsupported,
+        }
+    }
+
+    fn gen_take(&mut self, worker: u32, out: &mut [u8; 16]) -> bool {
+        match &mut self.role {
+            FixtureRole::Client { feed, .. } => feed.take(worker, out),
+            FixtureRole::Gen(_) => false,
+        }
+    }
+
+    fn gen_deliver(&mut self, worker: u32, record: &[u8]) -> Status {
+        match &mut self.role {
+            FixtureRole::Client { terrain, feed } => feed.deliver(worker, record, terrain),
+            FixtureRole::Gen(_) => Status::Unsupported,
+        }
+    }
+
+    fn client_gen_stats(&mut self, result: &mut [u8]) -> Status {
+        match &self.role {
+            FixtureRole::Client { feed, .. } => {
+                let s = feed.stats();
+                let Some(out) = result.get_mut(..28) else {
+                    return Status::BadLength;
+                };
+                out[0..4].copy_from_slice(&s.requested.to_le_bytes());
+                out[4..8].copy_from_slice(&s.dispatched.to_le_bytes());
+                out[8..12].copy_from_slice(&s.delivered.to_le_bytes());
+                out[12..16].copy_from_slice(&s.cancelled.to_le_bytes());
+                out[16..20].copy_from_slice(&s.requeued.to_le_bytes());
+                out[20..24].copy_from_slice(&s.pending.to_le_bytes());
+                out[24..28].copy_from_slice(&s.in_flight.to_le_bytes());
+                Status::Ok
+            }
+            FixtureRole::Gen(_) => Status::Unsupported,
+        }
+    }
+
+    fn client_chunk_hash(&mut self, cx: i32, cy: i32, result: &mut [u8]) -> Status {
+        match &self.role {
+            FixtureRole::Client { terrain, feed } => {
+                match feed.chunk_hash(terrain, ChunkCoord::new(cx, cy)) {
+                    Some(h) => {
+                        let Some(out) = result.get_mut(..8) else {
+                            return Status::BadLength;
+                        };
+                        out[0..4].copy_from_slice(&(h as u32).to_le_bytes());
+                        out[4..8].copy_from_slice(&((h >> 32) as u32).to_le_bytes());
+                        Status::Ok
+                    }
+                    None => Status::NotCached,
+                }
+            }
+            FixtureRole::Gen(_) => Status::Unsupported,
+        }
     }
 }
 

@@ -44,6 +44,30 @@ impl CameraBlock {
     }
 }
 
+/// Test-only constructor (`docs/plan/08b-gen-workers-and-queue.md`, `TerrainFeed` tests): every
+/// reserved field zero, every other field as given. Gated behind `test`/`testing` so it never
+/// exists in a release build; private fields make a struct literal impossible from a sibling
+/// module (`client/terrain_feed.rs`), so this lives here.
+#[cfg(any(test, feature = "testing"))]
+impl CameraBlock {
+    pub fn for_test(centre: [f64; 2], velocity: [f32; 2], half_extent_tiles: [f32; 2]) -> Self {
+        CameraBlock {
+            seq: 0,
+            cursor_valid: 0,
+            centre,
+            frame_time_ms: 0.0,
+            velocity,
+            tiles_across: 0.0,
+            zoom_rate: 0.0,
+            half_extent_tiles,
+            dpr: 1.0,
+            _reserved0: 0,
+            cursor_tile: [0, 0],
+            _reserved1: [0, 0],
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

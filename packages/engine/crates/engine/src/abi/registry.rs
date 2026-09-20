@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 3;
+pub const ABI_VERSION: u32 = 4;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -47,6 +47,9 @@ pub enum Status {
     Decode = 6,
     OutOfMemory = 7,
     Unsupported = 8,
+    /// `client_chunk_hash` (docs/plan/08b-gen-workers-and-queue.md): the chunk is not resident in
+    /// the client's cache. Appended, never inserted (0014's numbering rule).
+    NotCached = 9,
 }
 
 /// Fixed regions in linear memory. Ids 3–8 are reserved so parallel milestones share names; each
@@ -63,6 +66,9 @@ pub enum RegionId {
     Persist = 6,
     Camera = 7,
     GenOut = 8,
+    /// `genResult` record staging (docs/plan/08b-gen-workers-and-queue.md): `16 + slab_bytes`,
+    /// sized by client-role `init` alongside its `TerrainFeed`, same as `GenOut` on the gen role.
+    GenIn = 9,
 }
 
 /// Levels of `engine.log`. Release builds compile out everything below `Warn` (0014 §3).
@@ -75,7 +81,7 @@ pub enum LogLevel {
     Debug = 3,
 }
 
-pub const REGION_COUNT: usize = 9;
+pub const REGION_COUNT: usize = 10;
 
 impl Role {
     pub const fn from_u32(n: u32) -> Option<Role> {
@@ -100,6 +106,7 @@ impl RegionId {
             6 => Some(RegionId::Persist),
             7 => Some(RegionId::Camera),
             8 => Some(RegionId::GenOut),
+            9 => Some(RegionId::GenIn),
             _ => None,
         }
     }
@@ -150,6 +157,35 @@ pub trait Instance: Sized + 'static {
     /// §1, §6): must write every element, tiles as little-endian bytes, row-major. A game
     /// implementing `Worldgen` forwards to a `worldgen::GenCore` it owns (M08).
     fn gen_chunk(&mut self, _cx: i32, _cy: i32, _out: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
+
+    /// `docs/plan/08b-gen-workers-and-queue.md`, ABI role `client`: writes a 16-byte `genRequest`
+    /// record into `out` (the first 16 bytes of `Result`) if there is a job to dispatch to
+    /// `worker`. `false` when there is nothing (the default, and every fixture with no
+    /// `client::TerrainFeed`): `gen_take` must cost nothing and always return 0 on a page whose
+    /// client role has none (`docs/plan/08b-gen-workers-and-queue.md`, orchestrator decisions).
+    fn gen_take(&mut self, _worker: u32, _out: &mut [u8; 16]) -> bool {
+        false
+    }
+
+    /// `record` is the whole `GenIn` region for this role: a `genResult` record, `16 +
+    /// slab_bytes()` (the request header followed by `GenOut`'s tile bytes). A game implementing
+    /// `client::TerrainFeed` forwards to `TerrainFeed::deliver`.
+    fn gen_deliver(&mut self, _worker: u32, _record: &[u8]) -> Status {
+        Status::Unsupported
+    }
+
+    /// Seven `u32`s (`gen_queue::GenStats`' fields, declaration order: `requested`, `dispatched`,
+    /// `delivered`, `cancelled`, `requeued`, `pending`, `in_flight`) written little-endian into
+    /// `result` (the whole `Result` region).
+    fn client_gen_stats(&mut self, _result: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
+
+    /// FNV of the cached effective slab of `(cx, cy)` as lo, hi `u32` into `result`;
+    /// `Status::NotCached` when the chunk is not resident (`client::TerrainFeed::chunk_hash`).
+    fn client_chunk_hash(&mut self, _cx: i32, _cy: i32, _result: &mut [u8]) -> Status {
         Status::Unsupported
     }
 }
@@ -211,6 +247,22 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn frame(t_ms: f64) -> u32 {
             $crate::abi::frame(&__ENGINE_SLOT, t_ms) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn gen_take(worker: u32) -> u32 {
+            $crate::abi::gen_take(&__ENGINE_SLOT, worker)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn gen_deliver(worker: u32, len: u32) -> u32 {
+            $crate::abi::gen_deliver(&__ENGINE_SLOT, worker, len) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_gen_stats() -> u32 {
+            $crate::abi::client_gen_stats(&__ENGINE_SLOT) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_chunk_hash(cx: i32, cy: i32) -> u32 {
+            $crate::abi::client_chunk_hash(&__ENGINE_SLOT, cx, cy) as u32
         }
 
         // gen
