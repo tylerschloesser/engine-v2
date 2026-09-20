@@ -64,6 +64,16 @@ Don't confuse the two when reading a report.
 both `tests/browser/pages/vite.config.ts` and `playwright.config.ts`. Set it to run the browser
 suite from two worktrees at once without a port clash.
 
+## GPU/readback tests
+
+`terrain-readback.spec.ts` and any later `*-readback.spec.ts` (docs/plan/09-renderer-terrain.md) are
+semantic pixel probes (0020 §6), not golden images: they render to an offscreen `rgba8unorm` target
+and assert individual pixels with `expectPixel` (`engine/test`), never a page screenshot. There is no
+actual/expected PNG pair checked in for them yet; if you add one for a failing scene's debugging (an
+`encodePNG` helper already exists at `packages/engine/scripts/lib/png.mjs`), write it under
+`test-results/browser/readback/<test-name>-{actual,expected}.png` (gitignored, next to every other
+suite's own artefacts under `test-results/`).
+
 ## Golden hashes
 
 `pnpm golden [fixture]` is the only writer of a fixture's `golden/golden.json` (rebuilds first, runs

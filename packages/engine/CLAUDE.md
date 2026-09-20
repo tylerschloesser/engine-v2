@@ -17,6 +17,22 @@ The one publishable package (working name `engine`, private for now). Layout and
 
 `engine::gen_queue::GenQueue` (docs/decisions/0008-chunk-generation.md §4–5; docs/plan/08b-gen-workers-and-queue.md) is the prioritised generation queue, owned by the client instance in preallocated storage; `engine::client::TerrainFeed` (`crates/engine/src/client/terrain_feed.rs`) is its ABI-facing wrapper, driven from `frame` and turning `take`/`complete` into `genRequest`/`genResult` records. `src/worker/gen.ts` is the gen role's own body (drains `genRequest[i]`, calls `gen_chunk`, produces `genResult[i]`); `src/worker/client-gen.ts` is the client's pump, called from `worker/client.ts`'s `body()` after `frame()`, every wake. Records are little-endian: a 16-byte header (`[cx i32][cy i32][0 u32][0 u32]`), a result is the same header followed by `GenOut`'s tile bytes.
 
+## Rendering
+
+`src/render/` (docs/decisions/0018-renderer.md; docs/plan/09-renderer-terrain.md): `device.ts`
+(adapter/device init, the `GPUTexture`-as-view probe, GPU errors surfaced not swallowed); `terrain.ts`
+(page/indirection/visual-table/tile-art textures, one pipeline, one draw); `art.ts` (`tiles.json`
+schema v1, `tiles.png` into the tile-art array texture; owns `VISUAL_TABLE_BYTES`, re-exported by
+`terrain.ts`). WGSL is edited in `wgsl/*.wgsl`, then `node scripts/embed-wgsl.mjs` regenerates the
+checked-in `wgsl.generated.ts` (`wgsl.generated_is_fresh` fails when it's stale; `crates/engine`'s
+`tests/wgsl.rs` validates every `.wgsl` file with `naga`, natively, no GPU). `src/test/render.ts`
+(`engine/test`) is `renderTo`/`readPixels`/`expectPixel`, 0020 §6's probe-not-screenshot rule: a page
+screenshot is never a pixel assertion (headless Linux captures WebGPU canvases as black); a browser
+test renders into a caller-supplied offscreen `rgba8unorm` target and reads it back instead. Every
+GPU test's own rule, `tests/browser/support/gpu.ts`: `expectAdapter` records `adapter.info` and fails
+(never skips) on a null adapter; `expectNoGpuErrors` fails on any `uncapturederror`. Keep "readback"
+in a GPU spec's file name (M10 greps `expectAdapter|readback`).
+
 ## The ABI
 
 `crates/engine/src/abi/registry.rs` is the single owner and states the rule. Adding to the ABI is one commit: the extern in `export_instance!` plus a defaulted `Instance` method there, the row in `ABI_EXPORTS` (or the constant) in `src/abi.ts`, and `ABI_VERSION` bumped in both. Numbers are appended, never reused. `pnpm test wasm -t "abi registry"` compares the two files and every built fixture; a new *import* is an ADR amendment (0014 §3).
