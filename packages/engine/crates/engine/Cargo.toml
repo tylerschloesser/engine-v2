@@ -17,6 +17,12 @@ serde = { version = "1", default-features = false, features = ["derive", "alloc"
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 
+# Dev-dependencies are unrestricted (0017 §7). `wgsl.terrain_validates` (docs/plan/
+# 09-renderer-terrain.md Planning decisions "Bind group layout") parses and validates every
+# `.wgsl` file the TypeScript renderer embeds, natively, with no GPU.
+[dev-dependencies]
+naga = { version = "30", default-features = false, features = ["wgsl-in"] }
+
 # `golden_codec_sample` uses `engine::assert_golden_bytes!`/`assert_golden_hash!`, feature
 # `testing`. In practice always on for `pnpm test rust` (fx-hash's dev-dependency on `engine`
 # unifies it across the `--workspace` build); this makes an isolated `cargo test -p engine`

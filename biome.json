@@ -7,7 +7,13 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!spikes", "!docs", "!**/src/bindings"]
+    "includes": [
+      "**",
+      "!spikes",
+      "!docs",
+      "!**/src/bindings",
+      "!packages/engine/src/render/wgsl.generated.ts"
+    ]
   },
   "formatter": {
     "enabled": true,
