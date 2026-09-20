@@ -16,8 +16,12 @@ import type { LoopState, Shell } from './shell.js'
 import { noTimeout } from './shell.js'
 
 /**
- * `frame(t_ms: f64)`'s own argument is a vestigial Smi, not the frame time (Planning decisions
- * "Worker frame clock" amended, fix round 2: docs/plan/06b-workers-and-spawn.md, Deviations).
+ * The *raw export argument* of `frame(t_ms: f64)` is a vestigial Smi, not the frame time (Planning
+ * decisions "Worker frame clock" amended, fix round 2: docs/plan/06b-workers-and-spawn.md,
+ * Deviations). The game-facing `Instance::frame(t_ms, ...)` still receives the real frame time:
+ * decision A of fix round 3 has `abi::frame` (`crates/engine/src/abi/mod.rs`) drop this argument on
+ * the floor and pass `camera.frame_time_ms` instead, and `workers.camera_block_reaches_wasm` holds
+ * it to that bit-exactly.
  * `frameTime[0] as number`, a `Float64Array` read of the just-copied camera block, boxed a fresh
  * `HeapNumber` on every real frame in the interpreter tier (`byFn` evidence on `topology clean`);
  * the whole 80-byte block -- `frame_time_ms` included -- is already copied into this role's own

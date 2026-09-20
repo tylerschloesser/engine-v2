@@ -349,3 +349,123 @@ Decided by the orchestrator at this gate (`HANDOFF.md` §2.3), to be built in th
 - **A. `frame(t_ms)` stays a true contract.** JS keeps passing the constant (nothing boxed); the Rust extern shim (`crates/engine/src/abi/mod.rs::frame`) ignores the raw argument and passes `camera.frame_time_ms` to `Instance::frame` as `t_ms`. ADR 0014 and briefs 08b, 15b, 16b, 17, 18, 19, 26, 30 stay true unedited. `fixtures/hash`'s `frame` goes back to writing `t_ms`, and `workers.camera_block_reaches_wasm` proves it equals the stepped `frame_time_ms` bit-exactly. The unused raw export argument is recorded here; `ABI_VERSION` stays 2 (export shape unchanged).
 - **B. `isDetached` feature-detects once at module load** (`'detached' in ArrayBuffer.prototype`), selecting between the `detached` getter and the old `byteLength === 0` check, so a runtime without the getter still rebuilds views after `memory.grow`. No per-call branch that handles a double. `loader: views survive memory growth` (`tests/wasm/loader.test.ts`) must run under Node and in the Bun leg.
 - **C. `browser` suite headroom** (17 s of 25 s): not acted on now; trip-wire recorded in `docs/plan/deferred-ledger.md` ("Added during Phase 3").
+
+### Fix round 2, second pass (`37008df`)
+
+Reconstructed after the fact from `git show 37008df`, `budgets.json` and the code comments that cite
+this entry by name: that implementer left no report. Three allocation sites, all of them a
+double-valued temporary boxed into a fresh `HeapNumber` in the interpreter tier, which code that
+spends its life blocked in `Atomics.wait` may never leave:
+
+- **`NO_TIMEOUT`** (`src/worker/shell.ts`). Each kind declared its own
+  `const NO_TIMEOUT = (): number => Number.POSITIVE_INFINITY`, and `runBlockingLoop` calls
+  `timeoutMs()` before every wait, so the named-property read `Number.POSITIVE_INFINITY` re-boxed on
+  every pass -- woken or timed out. `byFn` attribution on `topology clean` named it the top site in
+  the idle `sim`/`gen0` isolates: ~3100 B over ~300 wakes, about 10 B per pass. Replaced by a
+  module-level `INFINITE_TIMEOUT_MS` constant returned by one shared `noTimeout()` (`sim.ts`,
+  `gen.ts`, `client.ts` all import it).
+- **`frame(t_ms)`** (`src/worker/client.ts`). The worker read the just-copied camera block through a
+  `Float64Array` view (`frameTime[0] as number`) and passed it to `inst.call1(inst.x.frame, ...)`:
+  a `Float64Array` element read boxes, about 12 B on every real frame. The worker now passes the
+  module-level Smi constant `FRAME_ARG = 0`; the 80-byte block, `frame_time_ms` included, is already
+  in this role's own `Camera` region on the same pass, so Rust reads it there. The export's declared
+  shape is unchanged (no `ABI_VERSION` bump) because 0014 and briefs 08b, 15b, 16b, 17, 18, 19, 26,
+  30 cite `frame(t_ms)` by name -- what that meant for the *game-facing* contract was left open and
+  is decision A below.
+- **The loader's detach check** (`src/loader.ts`, M02 code, every runtime). `call0`/`call1`/`call2`
+  ended with `this.mem.u8.byteLength === 0`, whose own comment claimed it allocated nothing;
+  `TypedArray.prototype.byteLength`'s getter boxes its return value on an unpredictable fraction of
+  calls, which made every isolate that calls a WASM export at all allocate unpredictably -- a source
+  of `gc: flat transport parity`'s run-to-run mismatches on `sim`. Replaced by
+  `ArrayBuffer.prototype.detached` (a plain boolean). A buffer-identity comparison was tried and
+  measured worse. The comment left behind said a "smaller, residual, intermittent allocation"
+  remained on this check; fix round 3 found that residual to be somewhere else entirely (below).
+- **`STEP_TICK_EVERY` removed** from `gc-topology.ts`/`gc-echo.ts` (it had halved the tick rate to
+  hide the `NO_TIMEOUT` re-box: 7.33 B/frame at half rate is ~14.7 B per wake, one `HeapNumber`),
+  and `budgets.json` was re-derived: `client`/`sim`/`gen0` back to the strict 8 B/frame on both
+  pages (clean 0.83-1.31 measured, was 7.33-33 masked), `topology.main` 52 -> 50 (clean max 41.65,
+  ceil + 8) and `echo.main` 40 -> 38 (clean max 29.83, ceil + 8), both with the "sibling-burst
+  headroom" dropped. `gc-loop.sim` stayed 8 with its formula rewritten around a claimed
+  "perfectly reproducible" 3.85 B/frame. `fixtures/hash/golden/golden.json` untouched,
+  `ABI_VERSION` still 2.
+
+### Fix round 3 (this session)
+
+**The 136 B on `sim`, named.** `gc: flat transport parity` compares `sim`'s exact byte total between
+the tunnel and flat CDP transports; the tunnel run (the first of the two) read 2448 B where the flat
+run read 2312 B. Reproduction is cheap and needs no contention at all: the parity test *alone*,
+`pnpm exec playwright test --project gc --grep "flat transport parity" --workers 1`, failed 3 of 10
+runs at `03c69ca`. Per-sample attribution (`HeapProfiler.stopSampling`'s own `profile.samples`, with
+`--sampling-heap-profiler-suppress-randomness` every allocation is recorded exactly) shows the two
+runs are identical but for **two extra samples, 28 B and 108 B, inside
+`armedLoop` (`src/test/harness-worker.ts:69`)**, in one dump attributed to a child `load@:0`
+(`Atomics.load`) frame instead of to `armedLoop` itself. Nothing in `armedLoop` allocates: it is
+`Atomics.wait`/`load`/`store` only. The pair is V8's lazily-allocated feedback metadata for that
+function, and `--js-flags=--no-lazy-feedback-allocation` makes the difference vanish (8/8 runs a
+constant 2364 B, both transports), while `--no-flush-bytecode` does not (4/8 still high), so it is
+allocation timing, not bytecode flushing.
+
+*Why the window sometimes contains it:* `installGcPage`'s `run()` does `harness.resume()` -> the
+worker's `armedLoop` invocation -> two `post()` calls -> `harness.park()`. `measure()` warmed up
+with **one** `run()` call, so that entry/exit path had been invoked exactly once when the measured
+`run()` invoked it a second time -- right at V8's lazy-feedback threshold, which is why the 136 B
+landed inside the window on some runs and before it on others. The fix is at that site: `measure()`
+now drives its warm-up as `WARMUP_PASSES = 8` calls of `WARMUP / 8` frames each
+(`tests/browser/gc/instrument.ts`). Same total frames, nothing shortened, no tolerance and no retry
+anywhere near the parity test. Result: the parity test passed 10/10 alone where it had failed 3/10,
+and `gc-loop.sim` reads a constant 2172 B (3.62 B/frame) on both transports.
+
+**The lost wake, found on the way.** Eight warm-up passes per measurement made `pnpm gc` (28 tests,
+3 workers) fail 4-6 tests in 40-47 s with `stepFrame: the client worker did not ack the frame
+request` and `gc-echo: no response from the client worker`, where one pass passed 25/25 in 8.5 s.
+The cause is a real missed-wakeup in the production `yield` protocol, multiplied by the extra
+resume cycles rather than caused by them: `Shell.resume()`, `runAsync`'s re-entry and the first
+entry in `worker.ts` all published the worker as available (`W_PARKED = 0`, or the `ready` post)
+*before* `runBlockingLoop` read its own `W_WAKE` baseline. A producer that saw the worker available
+and called `ControlBlock.wake()` in that window bumped the word before the loop read it, so the
+loop's first `Atomics.wait` slept on a wake that had already happened; main then span out its
+2e9-iteration `W_ACK` spin and threw. Each caller now reads the word first (`Shell.observeWake()`)
+and passes it to `runBlockingLoop(shell, body, timeoutMs, lastSeen?)` -- one optional parameter
+appended, no seam renamed. With that, `pnpm gc` at 8 warm-up passes is 28 passed in 10.4 s. New
+test `shell.resume_does_not_lose_a_wake` (`src/worker/shell.test.ts`, `unit`) drives that exact
+ordering with a 400 ms wait timeout and requires the body to run in under 200 ms; without the fix it
+measures 405 ms and fails. This is very likely the defect behind the `topology`/`echo` failures of
+round 1 and the suite's contention sensitivity generally.
+
+**Decision A as built.** `abi::frame` (`crates/engine/src/abi/mod.rs`) takes the raw argument as
+`_raw_t_ms` and calls `rt.inst.frame(camera.frame_time_ms, camera, result)`; the extern's own
+signature, `ABI_VERSION` (2) and `fixtures/hash/golden/golden.json` are untouched, and no brief
+needed an edit. `fixtures/hash`'s `frame` writes its `t_ms` *argument* at `Result[16..24]` again (it
+wrote `camera.frame_time_ms` there after round 2, which made the assertion circular), and
+`workers.camera_block_reaches_wasm` now reads 24 bytes and compares that `f64` with the
+`frame_time_ms` the page reports for the same step (`__setCameraAndStep` returns
+`clientTestHandle(client).cameraState.frameTimeMs`). Mutation-checked: with the shim passing the raw
+argument again the test fails, `Expected: 157.375, Received: 0`. The unused raw export argument is
+recorded here as decision A asked.
+
+**Decision B as built.** `src/loader.ts` now selects the detach check once at module load:
+`const isDetached: (buffer: ArrayBufferLike) => boolean = 'detached' in ArrayBuffer.prototype ? ...
+: (buffer) => buffer.byteLength === 0`. Two whole functions, one chosen once; no per-call branch.
+Coverage: `loader: views survive memory growth` (Node, `wasm`) unchanged for the getter path; a new
+sibling, `loader: views survive memory growth without ArrayBuffer.prototype.detached`, deletes the
+getter, re-imports the loader with `vi.resetModules()` and proves the fallback rebuilds views
+(mutation-checked: a fallback returning `false` gives 0 rebuilds and fails it); and the Bun leg
+(`tests/wasm/bun-leg.mjs`, JavaScriptCore) gained `loader: views survive memory growth (bun)`,
+registered in `scripts/suites.mjs`'s `tests` list for that leg. The `wasm` suite is 25 tests, was
+23.
+
+**Measured after all of the above** (8 clean runs per page, `bytesPerFrame`, budgets unchanged):
+`gc-loop` main 43.47 constant / `sim` 3.62 constant (budgets 54 / 8); `topology` main 39.47-39.73,
+`client`/`sim`/`gen0` 2.52 constant (50 / 8); `echo` main 27.45-27.49, workers 2.52 constant
+(38 / 8). `main` fell on every page; the worker isolates rose from ~1.3 to a constant 2.52 B/frame,
+which is the split warm-up moving which one-off allocations fall inside the window -- still far
+under the strict 8, and now identical run to run and transport to transport. Every negative control
+still trips on its own isolate only (`pnpm gc`: 25/25). `budgets.json` formula strings carry these
+re-measurements; no budget number moved.
+
+**Proof** (this session, foreground, per-run kill timeout, load checked before each batch):
+`browser` x10 twice quiet -- `pass=10 fail=0 hang=0 slowestSuiteSeconds=17` and `pass=10 fail=0
+hang=0 slowestSuiteSeconds=16`; `browser` x10 with `--load 10` -- `pass=10 fail=0 hang=0
+slowestSuiteSeconds=20`. `pnpm test`: `rust 39`, `unit 85 (1.2 s/3 s)`, `wasm 25 (1.3 s/7 s)`,
+`browser 52 (17 s/25 s)`; `pnpm lint` all pass. `pgrep -x yes` = 0 and `lsof -ti tcp:4517` empty
+after the runs.

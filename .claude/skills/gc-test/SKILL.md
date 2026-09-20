@@ -93,7 +93,19 @@ of the M03/M04 harness. Two differences from a harness page:
   objects server-side and pushed `gc-loop`'s own `main` reading over budget). For the same reason
   there is no message-driven tick to test: pass `zeroGcSuite({ ..., controlKinds: ['object',
   'burst'] })` to skip the generated `post-message` negative controls.
-- **Warm up longer than 120 frames if the numbers look noisy, but check for a real bug first.**
+- **Warm-up is 8 passes, not one, and that matters (M06b fix round 3).** `measure()` drives
+  `WARMUP` frames as `WARMUP_PASSES = 8` separate `run()` calls. The per-frame work is warm after
+  one long pass, but `run()`'s own entry and exit -- resume, the worker's loop invocation, its two
+  `post()` calls, park -- runs once per pass, and with a single pass the measured window was that
+  path's *second* invocation, right at V8's lazy-feedback-allocation threshold. Its feedback vector
+  (28 B + 108 B) then landed inside the window on about a third of runs: exactly the 136 B
+  `gc: flat transport parity` kept catching on `sim`. Fingerprint for this class: a byte total with
+  two stable values a small constant apart, no per-frame scaling, and `profile.samples` (the raw
+  `HeapProfiler.stopSampling` payload, one entry per allocation under
+  `--sampling-heap-profiler-suppress-randomness`) differing by one or two samples in a function that
+  allocates nothing. Confirm it with `--js-flags=--no-lazy-feedback-allocation`: if the spread
+  disappears, it is feedback timing, not your code.
+- **Warm up longer than 8000 frames if the numbers look noisy, but check for a real bug first.**
   `measure()`'s `WARMUP` constant is 8000 (raised from `gc-loop`'s original 120 for every page: the
   production `yield`-protocol shell is a deeper call chain that needs more to reach steady optimised
   code, and this did not move `gc-loop`'s own numbers). Before raising it further, or reaching for a
@@ -106,6 +118,12 @@ of the M03/M04 harness. Two differences from a harness page:
   A repeatable local reproduction that does not need another Playwright project running: `pnpm exec
   playwright test --config packages/engine/playwright.config.ts --project gc --grep <page> --workers
   3 --repeat-each 4`.
+- **`did not ack the frame request` / `no response from the client worker` is a lost wake, not
+  contention.** A production worker that never runs after a resume leaves main spinning out its
+  2e9-iteration limit. M06b fix round 3 fixed one such race in the `yield` protocol (the wake-word
+  baseline was read after `W_PARKED = 0` was published, so a wake in that window was lost:
+  `Shell.observeWake`, `src/worker/shell.ts`). If this comes back, suspect another publish-then-read
+  ordering before blaming the machine.
 - **A target isolate's own negative control can still nudge a sibling isolate's own reading.** Even
   with the two bugs above fixed, a `burst`/`object` control on one isolate's own worker can measurably
   raise a *different* isolate's own `bytesPerFrame` (reproduces at `--workers 1`, one test, no

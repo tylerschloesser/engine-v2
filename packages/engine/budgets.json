@@ -7,13 +7,13 @@
           "main": {
             "class": "strict",
             "bytesPerFrame": 54,
-            "formula": "no WebGPU on this page (0016 §1's 110 B floor does not apply): measured harness overhead, ceil(max of 50 clean runs = 45.43-45.55 B/frame) = 46, + 8 B margin (0016 §1's own margin convention) = 54",
+            "formula": "no WebGPU on this page (0016 \u00a71's 110 B floor does not apply): measured harness overhead, ceil(max of 50 clean runs = 45.43-45.55 B/frame) = 46, + 8 B margin (0016 \u00a71's own margin convention) = 54 Fix round 3 (same Deviations): re-measured after the warm-up was split into 8 passes -- a constant 43.47 B/frame across 8 clean runs, under the unchanged 54.",
             "attributionRoots": ["run"]
           },
           "sim": {
             "class": "strict",
             "bytesPerFrame": 8,
-            "formula": "0016 §1: the strict worker figure. Re-measured post fix-round-2 (docs/plan/06b-workers-and-spawn.md, Deviations): `EngineInstance.call0`'s own detach check (`packages/engine/src/loader.ts`) now reads `ArrayBuffer.prototype.detached` instead of `TypedArray.prototype.byteLength === 0` (the old comparison boxed a fresh HeapNumber on an unpredictable fraction of calls, the source of `gc: flat transport parity`'s run-to-run mismatches on this isolate); the new accessor costs a slightly higher but now perfectly reproducible constant, 3.85 B/frame (2308 B / 600) every run, comfortably under 8 and not higher than this code already measured before this fix (2252-2444 B observed pre-fix on the same commit, the '1784' this formula previously cited having gone stale before this session)",
+            "formula": "0016 \u00a71: the strict worker figure. Re-measured post fix-round-2 (docs/plan/06b-workers-and-spawn.md, Deviations): `EngineInstance.call0`'s own detach check (`packages/engine/src/loader.ts`) now reads `ArrayBuffer.prototype.detached` instead of `TypedArray.prototype.byteLength === 0` (the old comparison boxed a fresh HeapNumber on an unpredictable fraction of calls, the source of `gc: flat transport parity`'s run-to-run mismatches on this isolate); the new accessor costs a slightly higher but now perfectly reproducible constant, 3.85 B/frame (2308 B / 600) every run, comfortably under 8 and not higher than this code already measured before this fix (2252-2444 B observed pre-fix on the same commit, the '1784' this formula previously cited having gone stale before this session) Fix round 3 (same Deviations): the \"perfectly reproducible\" claim above was wrong -- 2308 B was the low reading and 2448 B (+136 B, one feedback-vector allocation for the harness worker's own `armedLoop`) the high one, which is what `gc: flat transport parity` kept catching. With the warm-up split into 8 passes so that path is warm before the window, this isolate measures a constant 3.62 B/frame (2172 B / 600) across 8 clean runs and under both CDP transports.",
             "attributionRoots": ["coreTick"]
           }
         },
@@ -34,25 +34,25 @@
           "main": {
             "class": "strict",
             "bytesPerFrame": 50,
-            "formula": "0016 §1 margin convention. Fix round 2, second pass (docs/plan/06b-workers-and-spawn.md, Deviations): the prior 52-budget round masked two real per-pass allocation bugs in the production blocking loop (worker/shell.ts's NO_TIMEOUT re-boxing Number.POSITIVE_INFINITY every pass; worker/client.ts's frame(t_ms) call boxing a Float64Array read every real frame) behind STEP_TICK_EVERY=2 and 'sibling-burst headroom'. With both fixed and STEP_TICK_EVERY removed (ticks every frame again): clean max of 8 runs = 41.65 B/frame, ceil = 42, + 8 B margin = 50, no sibling headroom needed -- a sibling isolate's own `burst` control now measures main at 43.5-43.8 (was 44+ before), comfortably under 50. `object` control on `main` itself measured 66.7, `burst` on `main` itself ~40071, both far above.",
+            "formula": "0016 \u00a71 margin convention. Fix round 2, second pass (docs/plan/06b-workers-and-spawn.md, Deviations): the prior 52-budget round masked two real per-pass allocation bugs in the production blocking loop (worker/shell.ts's NO_TIMEOUT re-boxing Number.POSITIVE_INFINITY every pass; worker/client.ts's frame(t_ms) call boxing a Float64Array read every real frame) behind STEP_TICK_EVERY=2 and 'sibling-burst headroom'. With both fixed and STEP_TICK_EVERY removed (ticks every frame again): clean max of 8 runs = 41.65 B/frame, ceil = 42, + 8 B margin = 50, no sibling headroom needed -- a sibling isolate's own `burst` control now measures main at 43.5-43.8 (was 44+ before), comfortably under 50. `object` control on `main` itself measured 66.7, `burst` on `main` itself ~40071, both far above. Fix round 3 (same Deviations): re-measured after the warm-up split and the yield-protocol lost-wake fix -- clean max of 8 runs = 39.73 B/frame, under the unchanged 50.",
             "attributionRoots": ["stepFrame", "stepTick"]
           },
           "client": {
             "class": "strict",
             "bytesPerFrame": 8,
-            "formula": "0016 §1: the strict worker figure. Fix round 2, second pass: the prior 33-budget accommodated frame(t_ms)'s own Float64Array-read box (12 B/frame) plus a sibling-burst swing; with worker/client.ts passing a constant instead (Deviations, 'frame(t_ms)') and worker/shell.ts's NO_TIMEOUT fixed, clean max of 8 runs = 1.19 B/frame and a sibling's own `burst` control no longer raises it (1.19-1.31 seen either way). `object` control on `client` itself measured 24.28-24.56, `burst` ~40058, both well above 8.",
+            "formula": "0016 \u00a71: the strict worker figure. Fix round 2, second pass: the prior 33-budget accommodated frame(t_ms)'s own Float64Array-read box (12 B/frame) plus a sibling-burst swing; with worker/client.ts passing a constant instead (Deviations, 'frame(t_ms)') and worker/shell.ts's NO_TIMEOUT fixed, clean max of 8 runs = 1.19 B/frame and a sibling's own `burst` control no longer raises it (1.19-1.31 seen either way). `object` control on `client` itself measured 24.28-24.56, `burst` ~40058, both well above 8. Fix round 3 (same Deviations): now a constant 2.52 B/frame over 8 clean runs (up from 1.19 because the split warm-up moves which one-off allocations fall inside the window, down from unstable), still far under 8.",
             "attributionRoots": ["body"]
           },
           "sim": {
             "class": "strict",
             "bytesPerFrame": 8,
-            "formula": "0016 §1: the strict worker figure. Fix round 2, second pass: STEP_TICK_EVERY=2 had halved this isolate's own wake count to hide worker/shell.ts's NO_TIMEOUT re-box (7.33 B/frame at half rate, ~14.7 B/wake -- one HeapNumber). Fixed and ticking every frame again: clean max of 8 runs = 1.31 B/frame, unchanged whether ticked every frame or every other (the residual cost is fixed overhead, not per-wake). `object` control on `sim` itself measured 24.64, `burst` ~40059.",
+            "formula": "0016 \u00a71: the strict worker figure. Fix round 2, second pass: STEP_TICK_EVERY=2 had halved this isolate's own wake count to hide worker/shell.ts's NO_TIMEOUT re-box (7.33 B/frame at half rate, ~14.7 B/wake -- one HeapNumber). Fixed and ticking every frame again: clean max of 8 runs = 1.31 B/frame, unchanged whether ticked every frame or every other (the residual cost is fixed overhead, not per-wake). `object` control on `sim` itself measured 24.64, `burst` ~40059. Fix round 3 (same Deviations): now a constant 2.52 B/frame over 8 clean runs, still far under 8.",
             "attributionRoots": ["body"]
           },
           "gen0": {
             "class": "strict",
             "bytesPerFrame": 8,
-            "formula": "0016 §1: the strict worker figure. Identical measured shape and cause to `sim` (see its own formula): clean max of 8 runs = 1.31 B/frame. `object` control on `gen0` itself measured 24.67, `burst` ~40059.",
+            "formula": "0016 \u00a71: the strict worker figure. Identical measured shape and cause to `sim` (see its own formula): clean max of 8 runs = 1.31 B/frame. `object` control on `gen0` itself measured 24.67, `burst` ~40059. Fix round 3 (same Deviations): now a constant 2.52 B/frame over 8 clean runs, still far under 8.",
             "attributionRoots": ["body"]
           }
         },
@@ -63,25 +63,25 @@
           "main": {
             "class": "strict",
             "bytesPerFrame": 38,
-            "formula": "0016 §1 margin convention. Fix round 2, second pass (see `topology`'s own `main` formula for the same underlying bugs and their fix): clean max of 8 runs = 29.83 B/frame, ceil = 30, + 8 B margin = 38, no sibling headroom needed -- a sibling's own `burst` control now measures main at 31.7-32.0 (was up to 52 B before), comfortably under 38. `object` control on `main` itself measured 54.67, `burst` ~40052.",
+            "formula": "0016 \u00a71 margin convention. Fix round 2, second pass (see `topology`'s own `main` formula for the same underlying bugs and their fix): clean max of 8 runs = 29.83 B/frame, ceil = 30, + 8 B margin = 38, no sibling headroom needed -- a sibling's own `burst` control now measures main at 31.7-32.0 (was up to 52 B before), comfortably under 38. `object` control on `main` itself measured 54.67, `burst` ~40052. Fix round 3 (same Deviations): re-measured after the warm-up split and the yield-protocol lost-wake fix -- clean max of 8 runs = 27.49 B/frame, under the unchanged 38.",
             "attributionRoots": ["drive"]
           },
           "client": {
             "class": "strict",
             "bytesPerFrame": 8,
-            "formula": "0016 §1: the strict worker figure. Fix round 2, second pass (see `topology`'s own `client` formula for the same underlying bugs and their fix): clean max of 8 runs = 0.83-1.31 B/frame, unaffected by a sibling's own `burst` control now (was +~12 before). `object` control on `client` itself measured 24.56, `burst` ~40059.",
+            "formula": "0016 \u00a71: the strict worker figure. Fix round 2, second pass (see `topology`'s own `client` formula for the same underlying bugs and their fix): clean max of 8 runs = 0.83-1.31 B/frame, unaffected by a sibling's own `burst` control now (was +~12 before). `object` control on `client` itself measured 24.56, `burst` ~40059. Fix round 3 (same Deviations): now a constant 2.52 B/frame over 8 clean runs, still far under 8.",
             "attributionRoots": ["body"]
           },
           "sim": {
             "class": "strict",
             "bytesPerFrame": 8,
-            "formula": "0016 §1: the strict worker figure. See `topology`'s own `sim` formula for the same underlying bug and fix: clean max of 8 runs = 1.31 B/frame. `object` control on `sim` itself measured 24.56, `burst` ~40059.",
+            "formula": "0016 \u00a71: the strict worker figure. See `topology`'s own `sim` formula for the same underlying bug and fix: clean max of 8 runs = 1.31 B/frame. `object` control on `sim` itself measured 24.56, `burst` ~40059. Fix round 3 (same Deviations): now a constant 2.52 B/frame over 8 clean runs, still far under 8.",
             "attributionRoots": ["body"]
           },
           "gen0": {
             "class": "strict",
             "bytesPerFrame": 8,
-            "formula": "0016 §1: the strict worker figure. Identical measured shape to `sim`: clean max of 8 runs = 1.31 B/frame. `object` control on `gen0` itself measured 24.57, `burst` ~40059.",
+            "formula": "0016 \u00a71: the strict worker figure. Identical measured shape to `sim`: clean max of 8 runs = 1.31 B/frame. `object` control on `gen0` itself measured 24.57, `burst` ~40059. Fix round 3 (same Deviations): now a constant 2.52 B/frame over 8 clean runs, still far under 8.",
             "attributionRoots": ["body"]
           }
         },
@@ -92,7 +92,7 @@
   "counters": {
     "sab": {
       "totalBytes": 12582912,
-      "formula": "docs/decisions/0015-threads-memory-and-topology.md §5's ~12 MiB SAB budget line, in bytes (12 * 1024 * 1024). Measured sab/layout.ts sabBytesTotal() (two gen workers, the worst case): 8,277,684 B (~7.9 MiB) -- control 256 B + camera 80 B + clock seqlock 36 B + drawList triple 3*(1,024 + 2,097,152) B + six single rings + two gen-worker ring pairs (docs/plan/06-sab-primitives-and-workers.md, Ring capacities)."
+      "formula": "docs/decisions/0015-threads-memory-and-topology.md \u00a75's ~12 MiB SAB budget line, in bytes (12 * 1024 * 1024). Measured sab/layout.ts sabBytesTotal() (two gen workers, the worst case): 8,277,684 B (~7.9 MiB) -- control 256 B + camera 80 B + clock seqlock 36 B + drawList triple 3*(1,024 + 2,097,152) B + six single rings + two gen-worker ring pairs (docs/plan/06-sab-primitives-and-workers.md, Ring capacities)."
     }
   }
 }
