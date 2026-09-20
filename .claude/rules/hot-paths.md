@@ -14,3 +14,5 @@ In code that runs every frame, tick or message:
 - **Numbers only across the boundary.** No strings, objects, `BigInt`, closures or arrays per call. A 64-bit value is two `u32` in a region. Text (`engine.log`, panic, config, UI JSON) is for init and human-rate paths; a log call inside a measured window is meant to fail 0016.
 - No per-iteration closures, spreads, destructuring into new objects, `Array.prototype` callbacks, template strings, or `try` blocks that build an error on the normal path. Preallocate scratch objects at init and mutate them.
 - `memory.grow` after init is tolerated but counted (`memGrows()`, `docs/decisions/0015-threads-memory-and-topology.md` §5): steady state expects 0.
+
+Verified by the `gc-test` skill; a new hot path gets a page or joins one (`docs/decisions/0016-zero-gc-definition.md` §3, `docs/plan/04-zero-gc-harness.md`).
