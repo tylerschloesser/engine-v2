@@ -24,3 +24,9 @@ postcard = { version = "1", default-features = false, features = ["alloc"] }
 [[test]]
 name = "codec"
 required-features = ["testing"]
+
+# `golden_terrain_canonical` uses `engine::assert_golden_bytes!`/`assert_golden_hash!` (feature
+# `testing`), same reasoning as `codec` above.
+[[test]]
+name = "world_terrain"
+required-features = ["testing"]

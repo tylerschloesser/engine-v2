@@ -8,6 +8,7 @@
 mod cache;
 mod coords;
 mod overlay;
+mod terrain;
 mod tile;
 mod traits;
 
@@ -17,5 +18,6 @@ pub use coords::{
     WorldPos,
 };
 pub use overlay::{ChunkOverlay, Overlays};
+pub use terrain::{OutOfRange, PristineSource, TerrainStore, TileChange};
 pub use tile::Tile;
 pub use traits::{Footprint, PrototypeId, Registry, TraitSet};
