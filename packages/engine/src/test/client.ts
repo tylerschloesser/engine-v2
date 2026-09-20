@@ -302,7 +302,16 @@ export function asHarness(client: Client): Harness {
       const w = tickTargets[i] as WorkerEntry
       const want = tickWant[i] as number
       let spins = 0
-      while (Atomics.load(h.control.words, workerWord(w.index, W_ACK)) !== want) {
+      // `< want`, not `!== want` (docs/plan/08b-gen-workers-and-queue.md, Deviations: found by
+      // `gc-gen.ts`, the first zero-GC page whose `gen` target also has real, independent ring
+      // traffic waking it -- a `genRequest`/`genResult` commit wakes `gen0` the same way this
+      // synthetic tick does). `W_WAKE` is a monotonic counter shared by every wake source for this
+      // worker; a real wake racing this tick's own wake can coalesce into one body() call, whose
+      // single `W_ACK` store then *overshoots* `want` (acks a later value that already covers it).
+      // An exact-match poll then spins forever, having already missed the value it was waiting for;
+      // "has this worker acked at least as far as the wake I just issued" is what the caller
+      // actually needs; `W_ACK` only ever moves forward.
+      while (Atomics.load(h.control.words, workerWord(w.index, W_ACK)) < want) {
         if (++spins > SPIN_LIMIT) {
           throw new Error(`asHarness.stepTick: worker '${w.kind}${w.index}' did not ack`)
         }

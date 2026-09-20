@@ -86,6 +86,29 @@
           }
         },
         "software": null
+      },
+      "gen": {
+        "isolates": {
+          "main": {
+            "class": "strict",
+            "bytesPerFrame": 48,
+            "formula": "0016 §1 margin convention. Measured (this session, `pnpm exec playwright test --project gc --grep \"gen clean\" --repeat-each 8 --workers 1`, after restoring `harness.stepTick()` in `gc-gen.ts`'s `drive()` -- Deviations): a constant 39.4467 B/frame across all 8 clean runs. ceil(39.4467) = 40, + 8 B margin = 48.",
+            "attributionRoots": ["drive"]
+          },
+          "client": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the strict worker figure, same as `topology`/`echo`'s own `client` row. Measured: a constant 5.2867 B/frame across 8 clean runs (higher than `topology`/`echo`'s own ~2.52: this page's `client` role runs the gen pump and the queue's `frame()`/`on_frame` every wake, real work those pages' `fx-hash` client role never does), well under 8.",
+            "attributionRoots": ["body"]
+          },
+          "gen0": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the strict worker figure, same as `topology`/`echo`'s own `gen0` row. Measured: a constant 2.5067 B/frame across 8 clean runs, well under 8. `net` (also spawned by this page's `host: { kind: 'remote' }` topology, since `fx-worldgen` has no `Sim` role) is deliberately not budgeted here: it never enters `runBlockingLoop` (`worker/net.ts`) and is never ticked (`asHarness.stepTick`'s own targets are `sim`/`gen` only), so there is no mechanism to apply a negative control to it at all -- docs/plan/08b-gen-workers-and-queue.md, Deviations.",
+            "attributionRoots": ["body"]
+          }
+        },
+        "software": null
       }
     }
   },
@@ -93,6 +116,11 @@
     "sab": {
       "totalBytes": 12582912,
       "formula": "docs/decisions/0015-threads-memory-and-topology.md §5's ~12 MiB SAB budget line, in bytes (12 * 1024 * 1024). Measured sab/layout.ts sabBytesTotal() (two gen workers, the worst case): 8,277,684 B (~7.9 MiB) -- control 256 B + camera 80 B + clock seqlock 36 B + drawList triple 3*(1,024 + 2,097,152) B + six single rings + two gen-worker ring pairs (docs/plan/06-sab-primitives-and-workers.md, Ring capacities)."
+    },
+    "gen": {
+      "genJoinChunks": 36,
+      "genPanChunks": 6,
+      "formula": "docs/plan/08b-gen-workers-and-queue.md, `gen: drops 0, mem_grows 0, stats exact`: a scripted join at camera (32,32), half-extent (16,16) tiles (dims bits 5, edge 32) gives `visible = ChunkRect{(0,0)-(1,1)}` (2x2), `visible.expanded(2) = {(-2,-2)-(3,3)}` (6x6 = 36 chunks) -- genJoinChunks, GenStats.requested/dispatched/delivered exactly, cancelled 0. A scripted pan of +32 tiles (one chunk edge) in x shifts visible to `{(1,0)-(2,1)}`; the new expanded(2) `{(-1,-2)-(4,3)}` overlaps the old one in 30 chunks (5x6), leaving 6 new ones (x=4, y=-2..3) -- genPanChunks, the exact incremental requested/dispatched/delivered delta, cancelled still 0 (the new ring-3 retention bound comfortably contains every previously-cached chunk)."
     }
   },
   "worldgenMsPerChunkWarn": 0.25

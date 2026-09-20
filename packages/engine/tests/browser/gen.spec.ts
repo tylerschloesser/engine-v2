@@ -1,9 +1,10 @@
 // The client generation queue over real workers and SABs (docs/plan/08b-gen-workers-and-queue.md,
 // Tests added): `gen.html`'s imperative debug API, the same pattern `topology.ts` uses for
-// `workers.spec.ts`. The zero-GC test lives in `gen-gc.spec.ts` (production-topology page,
+// `workers.spec.ts`. The zero-GC test lives in `gc-gen.spec.ts` (production-topology page,
 // `gc-gen.html`), matching M06b's own `topology.html`/`gc-topology.html` split (Deviations).
 import { expect, test } from '@playwright/test'
 import type { GenStats } from '../../src/test/gen.ts'
+import { budget } from '../support/budgets.ts'
 import { openPage } from './support/page.ts'
 
 declare global {
@@ -23,6 +24,12 @@ declare global {
     __genStats?: () => Promise<GenStats>
     __genIdle?: () => Promise<void>
     __genChunkHash?: (cx: number, cy: number) => Promise<string | null>
+    __genChunkHashRect?: (
+      minCx: number,
+      minCy: number,
+      maxCx: number,
+      maxCy: number,
+    ) => Promise<(string | null)[]>
     __genIsolates?: () => Record<string, { memPages: number; memGrows: number }>
     __genRings?: () => Record<string, { drops: number; pushed: number; popped: number }>
     __genProbeOrder?: () => Promise<{
@@ -50,9 +57,11 @@ async function ready(page: Page): Promise<{ ok: boolean; code?: string; message?
 }
 
 // The 2x2 visible rect `__genProbeOrder` documents: `visible.expanded(2)` is a 6x6 = 36-chunk
-// generation set (ring 0 = 4, ring 1 = 12, ring 2 = 20).
+// generation set (ring 0 = 4, ring 1 = 12, ring 2 = 20) -- `budgets.json`'s own `counters.gen.
+// genJoinChunks` (Planning decisions 8: exact values are budgets).
 const VIEW = { x: 32, y: 32, halfExtentX: 16, halfExtentY: 16 }
-const GENERATION_SET_SIZE = 36
+const GENERATION_SET_SIZE = budget('counters.gen.genJoinChunks')
+const PAN_CHUNKS = budget('counters.gen.genPanChunks')
 
 async function setViewAndIdle(page: Page): Promise<void> {
   await page.evaluate((v) => window.__genSetView?.(v), VIEW)
@@ -82,17 +91,8 @@ test('gen: one and two workers give equal chunk hashes', async ({ page }) => {
     await createClient(page, { genWorkers })
     expect(await ready(page)).toEqual({ ok: true })
     await setViewAndIdle(page)
-    const out: (string | null)[] = []
-    for (let cy = -2; cy <= 3; cy++) {
-      for (let cx = -2; cx <= 3; cx++) {
-        out.push(
-          await page.evaluate(([x, y]) => window.__genChunkHash?.(x, y) ?? null, [cx, cy] as [
-            number,
-            number,
-          ]),
-        )
-      }
-    }
+    // One round trip for the whole rect, not one per chunk (browser suite time budget).
+    const out = await page.evaluate(() => window.__genChunkHashRect?.(-2, -2, 3, 3) ?? [])
     await page.evaluate(() => window.__genClientDestroy?.())
     return out
   }
@@ -140,9 +140,9 @@ test('gen: drops 0, mem_grows 0, stats exact', async ({ page }) => {
   expect(pan.requeued).toBe(0)
   expect(pan.pending).toBe(0)
   expect(pan.inFlight).toBe(0)
-  expect(pan.requested - join.requested).toBe(6)
-  expect(pan.dispatched - join.dispatched).toBe(6)
-  expect(pan.delivered - join.delivered).toBe(6)
+  expect(pan.requested - join.requested).toBe(PAN_CHUNKS)
+  expect(pan.dispatched - join.dispatched).toBe(PAN_CHUNKS)
+  expect(pan.delivered - join.delivered).toBe(PAN_CHUNKS)
 
   const ringsAfterPan = (await page.evaluate(() => window.__genRings?.())) as Record<
     string,

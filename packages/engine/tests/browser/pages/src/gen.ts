@@ -70,6 +70,12 @@ declare global {
     __genStats?: () => Promise<gen.GenStats>
     __genIdle?: () => Promise<void>
     __genChunkHash?: (cx: number, cy: number) => Promise<string | null>
+    __genChunkHashRect?: (
+      minCx: number,
+      minCy: number,
+      maxCx: number,
+      maxCy: number,
+    ) => Promise<(string | null)[]>
     __genIsolates?: () => Record<string, GenIsolateStat>
     __genRings?: () => Record<string, GenRingStat>
     /** Self-contained ordering probe (Deviations): keeps `gen0` parked except during a bounded
@@ -155,6 +161,19 @@ window.__genStep = (dtMs) => {
 window.__genStats = () => gen.stats(requireClient())
 window.__genIdle = () => gen.idle(requireClient())
 window.__genChunkHash = (cx, cy) => gen.chunkHash(requireClient(), cx, cy)
+/** Batched form of `__genChunkHash`, one `page.evaluate` round trip for a whole rect instead of one
+ * per chunk (`gen.spec.ts`'s "one and two workers" test: the `browser` suite's own time budget,
+ * docs/plan/deferred-ledger.md's "Added during Phase 3" trip-wire). */
+window.__genChunkHashRect = async (minCx, minCy, maxCx, maxCy) => {
+  const client = requireClient()
+  const out: (string | null)[] = []
+  for (let cy = minCy; cy <= maxCy; cy++) {
+    for (let cx = minCx; cx <= maxCx; cx++) {
+      out.push(await gen.chunkHash(client, cx, cy))
+    }
+  }
+  return out
+}
 
 window.__genIsolates = () => {
   const h = clientTestHandle(requireClient())
