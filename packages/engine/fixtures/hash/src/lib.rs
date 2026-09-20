@@ -7,7 +7,7 @@
 
 use engine::abi::config::HexU64;
 use engine::abi::{Instance, RegionId, RegionLayout, Role, Status};
-use engine::hash::Fnv64;
+use engine::hash::{Fnv64, hash_value};
 
 const MAX_ENTITIES: u32 = 1024;
 const INPUT_MAX: usize = 16;
@@ -41,6 +41,31 @@ struct Body<T> {
     target: [T; 2],
 }
 
+/// A `Codec` field of [`Sample`]: entity 0 is coasting, or was last pushed towards a target with
+/// this much speed-squared (bits, so the finite-float rule of 0002 §3 is a `debug_assert`, not a
+/// guess).
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+enum Motion {
+    Idle,
+    Moving { speed_sq_bits: u32 },
+}
+
+/// Part of `HashFixture`'s state, encoded through `engine::codec::Codec` and folded into
+/// [`HashFixture::sim_hash`] with `engine::hash::hash_value` (docs/plan/05-codec-and-state-hash.md
+/// Order of work 5): ints, an enum, an `Option`, a fixed array, and finite f32 and f64, the same
+/// byte-level foundation `codec_sample`'s golden exercises, here proven to agree natively, under
+/// Node, under Bun and in three browsers through the fixture's own cross-runtime golden.
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+struct Sample {
+    tick: u32,
+    rng: u64,
+    motion: Motion,
+    last_touched: Option<u16>,
+    grid: [i32; 2],
+    x: f32,
+    y: f64,
+}
+
 pub struct HashFixture {
     cfg: Config,
     tick: u32,
@@ -49,6 +74,8 @@ pub struct HashFixture {
     fixed: Vec<Body<i32>>,
     input: [u8; INPUT_MAX],
     input_len: usize,
+    /// Entity touched by the most recently admitted input, if any yet ([`Sample::last_touched`]).
+    last_touched: Option<u16>,
 }
 
 /// SplitMix64 finaliser.
@@ -85,6 +112,7 @@ impl HashFixture {
                 self.float[e].v[d] += push as f32 * 0.5;
                 self.fixed[e].v[d] = self.fixed[e].v[d].wrapping_add((push as i32) << 15);
             }
+            self.last_touched = Some(e as u16);
         }
         self.input_len = 0;
     }
@@ -139,6 +167,7 @@ impl Instance for HashFixture {
             fixed: vec![Body::default(); n],
             input: [0; INPUT_MAX],
             input_len: 0,
+            last_touched: None,
             cfg,
         })
     }
@@ -188,8 +217,24 @@ impl Instance for HashFixture {
 
     fn sim_hash(&mut self) -> u64 {
         let mut h = Fnv64::new();
-        h.write_u32(self.tick);
-        h.write_u64(self.rng);
+        let e0 = &self.float[0];
+        let speed_sq = e0.v[0] * e0.v[0] + e0.v[1] * e0.v[1];
+        let sample = Sample {
+            tick: self.tick,
+            rng: self.rng,
+            motion: if speed_sq == 0.0 {
+                Motion::Idle
+            } else {
+                Motion::Moving {
+                    speed_sq_bits: bits(speed_sq),
+                }
+            },
+            last_touched: self.last_touched,
+            grid: self.fixed[0].p,
+            x: e0.p[0],
+            y: e0.p[1] as f64,
+        };
+        h.write_u64(hash_value(&sample));
         for body in &self.float {
             for v in [body.p, body.v, body.target].as_flattened() {
                 h.write_u32(bits(*v));
