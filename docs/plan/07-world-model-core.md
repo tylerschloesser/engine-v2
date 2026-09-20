@@ -85,4 +85,81 @@ Updates `packages/engine/CLAUDE.md`. `determinism.md` globs (M02) already cover 
 None of its own. The 64 MiB split check (Planning decision 11) is item M39-large-save: [device-checks.md, M39](device-checks.md#m39-acceptance).
 
 ## Deviations
-(filled in during Phase 3)
+No split: steps 1-8 fitted one session. No decision changed, so no ADR. Small corrections, exact
+shapes, and measured numbers:
+
+- **Receivers not spelled out by the brief.** The brief gave `&self`/`&mut self` only for `tile`,
+  `set_tile`, `write_canonical`, `read_canonical`. Everything else that only touches the cache
+  (`materialize`, `insert_pristine`, `is_cached`, `slot_of`, `touch`, `copy_chunk`,
+  `drain_cache_events`, `memory_bytes`) is `&self`, via the `RefCell<Cache>` (Planning decisions 3).
+  `overlay`, `overlay_chunks`, `modified_tiles` are `&self`; `replace_overlay`, `clear_overlay` are
+  `&mut self` (they mutate `Overlays`, which is plain-owned, not behind the `RefCell`). To let
+  `materialize` (called from `tile`'s `&self` path) learn an overlay entry's pristine value without
+  `&mut self` on `TerrainStore`, `ChunkOverlay`'s per-entry pristine cache
+  (`pristine_known`/`pristine`) is `Cell<bool>`/`Cell<Tile>`, not plain fields -- `Overlays` itself
+  needed no `RefCell`. `ChunkOverlay::cached_pristine` is `pub`, not `pub(crate)`, so
+  `loaded_entries_learn_pristine_on_materialize` can observe it from `tests/`.
+- **`CountingSource::new` returns `(Self, CountingHandle)`,** not `Self` alone: the brief's "wraps a
+  source, records call order and count" doesn't say how a caller reads the count back after the
+  source is moved into `TerrainStore::new`'s `Box<dyn PristineSource>`. `CountingHandle` shares an
+  `Rc<RefCell<Vec<ChunkCoord>>>` (no atomics needed: the instance is single-threaded, 0015 §1).
+- **`memory_bytes()`** is pool bytes (`capacity_slots * dims.slab_bytes()`, exact for `Chunks(n)`;
+  current pool size for `Unlimited`) plus `modified_tiles() * size_of::<(u16, Tile)>()` (6 bytes:
+  overlay's *live* entry count, not `Vec::capacity()`, so it stays a pure function of state rather
+  than of allocator growth history).
+- **`insert_pristine`'s debug check** compares `tiles[i]` against the slab (no overlay entry) or the
+  overlay's cached pristine (entry with `pristine_known`); an overridden index whose pristine is not
+  yet known is skipped, since nothing available could confirm or refute it.
+- **`clear_overlay`** restores the cached slab in place from every entry's cached pristine when all
+  are known (cheap, keeps the chunk warm); otherwise it evicts the cached slab so the next read
+  regenerates. `replace_overlay` always evicts (the new entries' pristine is never known yet).
+- **`read_canonical`** drops every cached slab (`Cache::clear_all`) rather than trying to patch them:
+  simplest correct answer, and cache invisibility (0007 §1) makes it free to be simple. Not a hot
+  path (snapshot load), so the extra regeneration this can cause is not measured for allocation.
+- **`ChunkDims::new`** panics (`assert!`) on an unsupported `bits`, not a `Result`: the brief names
+  no `Result` type for it, and every other coordinate math method here is infallible.
+- **`WorldPos::clamped(x: i64, y: i64) -> Self`**, not a method on an existing `WorldPos`: the
+  raw `i32` already covers `[TILE_MIN, TILE_MAX]` 1:1 (`i32::MIN`/`i32::MAX` are exactly `TILE_MIN`/
+  `TILE_MAX` in Q24.8), so only a wider intermediate (movement math before it's clamped) can be out
+  of range; `clamped` saturates such an `i64` pair into `Self`.
+- **`Cache`'s index table** is `Vec<Option<(u64, u32)>>` open addressing over `mix64(key)`,
+  backward-shift delete (Wikipedia's "Open addressing" deletion algorithm), sized to
+  `next_power_of_two(2 * capacity)` and fixed forever for `CacheCapacity::Chunks(n)`; for
+  `Unlimited` (test-only) it starts small and doubles-and-rehashes when over half full, and the pool
+  itself grows one slab at a time. Neither growth path runs for a finite-capacity cache, which is
+  what `no_alloc_terrain` needs.
+- **Test placement.** Inline `#[cfg(test)] mod tests` for pure per-file unit tests (tile, coords,
+  traits, overlay, cache internals including a `mix64`-seeded random-churn check of the index
+  table's delete); black-box `TerrainStore`-level tests (including the cache-behavior ones named in
+  the brief: `cache_events_report_slots`, `lru_evicts_least_recent`, `touch_protects`) in
+  `tests/world_terrain.rs`, since they only need the public API; cache-invisibility tests in
+  `tests/world_cache_invisible.rs`; `tests/no_alloc_terrain.rs` its own binary (mirrors
+  `no_alloc_codec.rs`). `Cargo.toml` needed `required-features = ["testing"]` on both new test
+  binaries (same reasoning as `codec`'s existing entry).
+- **Seam shapes as landed** (all in `packages/engine/crates/engine/src/world/`, re-exported at
+  `engine::world::*`): `Tile(pub u32)` exactly as specified. `TilePos`/`ChunkCoord`/`WorldPos` with
+  `pub x, y: i32`; `ChunkDims::{new, bits, edge, area, slab_bytes, chunk_of, local_index, tile_at,
+  in_range}` exactly as specified. `TILE_MIN = -(1 << 23)`, `TILE_MAX = (1 << 23) - 1` (module
+  constants, not associated consts). `ChunkRect`/`TileRect` with `iter()`/`chunks()` exactly as
+  specified; `ChunkRect::iter()` returns a named `ChunkRectIter`, not `impl Iterator`, so it can be
+  named as a re-export. `TraitSet`/`PrototypeId`/`Footprint`/`Registry` exactly as specified, plus
+  `Registry::new`/`Default` (not named by the brief but obviously needed). `PristineSource`,
+  `CacheCapacity`, `CacheEvent`, `Overlays`, `TerrainStore` and its full method list exactly as
+  specified (receivers as noted above). `engine::testing::{CacheConfig, Prewarm,
+  assert_cache_invisible, TestTerrain, CountingSource, CountingHandle, prewarm_chunks,
+  DEFAULT_CACHE_CHUNKS}`: `Prewarm` and `prewarm_chunks`/`DEFAULT_CACHE_CHUNKS` are not named by the
+  brief but are what `assert_cache_invisible` and its callers need to build the "capacity 1, default,
+  unlimited x none/all/shuffled" matrix without duplicating it per call site.
+- **Measured numbers.** `rust` suite: 39 -> 95 tests, native run **0.2-0.3s of its 10s budget**
+  (`pnpm test rust`); `cache_invisible_matrix` alone **0.027s** (`cargo nextest run -E
+  'test(cache_invisible_matrix)'`), far inside budget, so the 5,000-op/300-chunk/9-leg script did not
+  need shrinking. `unit`/`wasm`/`browser` unchanged (39/85/25/52 -> 95/85/25/52 total): this
+  milestone is Rust-only. `packages/engine/crates/engine/CLAUDE.md` 36 -> 38 lines (cap 60);
+  `.claude/rules/hot-paths.md` 20 -> 23 lines. `golden/terrain_canonical.hex` (51 bytes) and
+  `golden/terrain_canonical_hash.hash` = `1ecce36a30759473`, blessed via `pnpm golden:bytes`
+  (full workspace run, 95 tests passed; every existing golden byte-for-byte unchanged).
+- **`pnpm test && pnpm lint`**: `rust pass 95 tests 0.3s/10s`, `unit pass 85 tests`, `wasm pass 25
+  tests`, `browser pass 52 tests`; `biome`/`rustfmt`/`clippy`/`tsc` all pass. `grep -n "pub fn"
+  src/world/terrain.rs` (18 methods, listed above): none returns a reference into a slab. No
+  `HashMap`/`HashSet`/`#[allow(clippy::disallowed_types)]` under `src/world/` (grep clean; clippy's
+  `disallowed_types` deny would fail the build otherwise).
