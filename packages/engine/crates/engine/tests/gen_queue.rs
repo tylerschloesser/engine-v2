@@ -61,6 +61,29 @@ fn queue_orders_ring_class_then_distance() {
 }
 
 #[test]
+fn queue_ties_break_by_chunk_key() {
+    let s = store(CacheCapacity::Unlimited);
+    let mut q = GenQueue::new(ChunkDims::new(4), 1);
+    q.set_view(&view_at(single(ChunkCoord::new(0, 0))), &s);
+    let order = drain_all(&mut q, 0);
+    // Ring-1 neighbours (0,-1) and (-1,0) of visible chunk (0,0) (dims edge 16, look-ahead point at
+    // tile (0,0)) are equidistant: squared distance 128 each ((8,-8) and (-8,8) from the point).
+    // `(ring, dist)` alone does not order them; `ChunkCoord::key()` (0007 §2, `(x as u32 as u64) <<
+    // 32 | y as u32 as u64`) does: a negative x sorts after a non-negative one, so (0,-1)'s key
+    // (4,294,967,295) is far below (-1,0)'s (~1.8e19) -- (0,-1) must dispatch immediately before
+    // (-1,0), not in whatever order an unstable sort on the tied pair alone would leave them.
+    let a = order
+        .iter()
+        .position(|&c| c == ChunkCoord::new(0, -1))
+        .unwrap();
+    let b = order
+        .iter()
+        .position(|&c| c == ChunkCoord::new(-1, 0))
+        .unwrap();
+    assert_eq!(b, a + 1, "order: {order:?}");
+}
+
+#[test]
 fn queue_resorts_only_on_chunk_or_zoom_change() {
     let s = store(CacheCapacity::Unlimited);
     let mut q = GenQueue::new(ChunkDims::new(4), 1);

@@ -7,6 +7,7 @@
 // second: 0008 §4's backpressure), copy the 16-byte request out of `Result` and commit, which wakes
 // the gen worker through its own `W_WAKE` (the request producer is constructed with it).
 
+import { Status } from '../abi.js'
 import type { EngineInstance, RegionView } from '../loader.js'
 import { at, copyBytes } from '../sab/bytes.js'
 import { type ControlBlock, WORKER_GEN0 } from '../sab/control.js'
@@ -33,6 +34,7 @@ export function createGenPump(
   sabs: SabSet,
   genIn: RegionView | null,
   result: RegionView,
+  fatal: (message: string) => void,
 ): GenPump {
   const pumps: WorkerPump[] = []
   for (let i = 0; i < sabs.genRequest.length; i++) {
@@ -49,7 +51,16 @@ export function createGenPump(
         for (;;) {
           const len = w.results.popInto(genIn.u8, 0)
           if (len < 0) break
-          inst.call2(inst.x.gen_deliver, i, len)
+          const status = inst.call2(inst.x.gen_deliver, i, len)
+          // Discarding this status let a bad-length or unsupported delivery fail silently. The
+          // message is built only here, on the failure branch, never on the (allocation-free) OK
+          // path (`.claude/rules/hot-paths.md`): a fixture with no `client::TerrainFeed` never
+          // reaches this call at all, since `genIn` is `null` there (see this file's own doc
+          // comment), so this can only ever fire for a real `TerrainFeed`.
+          if (status !== Status.Ok) {
+            fatal(`client gen pump: gen_deliver(worker=${i}, len=${len}) failed: status ${status}`)
+            return
+          }
         }
       }
       for (;;) {

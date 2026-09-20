@@ -67,7 +67,9 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // there, present wherever `Instance::init` declares it (`TerrainFeed::gen_in_bytes`).
   const resultRegion = requireRegion(inst, RegionId.Result, 'Result')
   const genIn = inst.region(RegionId.GenIn)
-  const genPump = createGenPump(inst, shell.control, message.sabs, genIn, resultRegion)
+  const genPump = createGenPump(inst, shell.control, message.sabs, genIn, resultRegion, (msg) =>
+    shell.fatal(msg),
+  )
 
   function body(): void {
     if (gcHook) applyGcHook(shell.control, shell.index)

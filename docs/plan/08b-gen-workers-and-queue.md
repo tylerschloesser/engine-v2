@@ -544,3 +544,14 @@ reading is the unchanged 2.5067 constant at every pan rate tested).
 - `fixtures/worldgen`'s `chunkBits` config key exists only for the oversize-fatal test; a real game
   changing `CHUNK_BITS` still needs `sab/layout.ts`'s `RING_DEFAULTS.genResult`/`genRequest` resized
   to match (M06 Planning decisions 6, still open).
+
+### Gate fix round 2 (this session)
+
+`gen_queue.rs`'s sort now breaks ties on `ChunkCoord::key()` (a pure function of the view, code
+review finding); new test `queue_ties_break_by_chunk_key`. No exact-order assertion in any existing
+test changed; `genJoinChunks`/`genPanChunks` unchanged (169/13).
+
+`client-gen.ts`'s pump now checks `gen_deliver`'s status against `Status.Ok` and calls `shell.fatal`
+with worker index/len/status on failure (string built only on that branch); `createGenPump` gained a
+`fatal` callback parameter, wired from `worker/client.ts` as `(msg) => shell.fatal(msg)`. `gen`
+clean's `client` reading re-measured unchanged at 5.2867 B/frame.

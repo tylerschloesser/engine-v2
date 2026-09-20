@@ -214,8 +214,14 @@ impl GenQueue {
             }
         }
 
-        self.pending
-            .sort_unstable_by(|a, b| (a.ring, a.dist).cmp(&(b.ring, b.dist)));
+        // `(ring, dist)` alone is not a total order: two chunks at the same ring and distance (the
+        // orthogonal neighbours of a view centre, say) compare equal, and `sort_unstable_by` makes
+        // no promise about their relative order in that case. `ChunkCoord::key()` (0007 §2, a
+        // canonical `(x, y)` packing) as the last tie-break makes dispatch order a pure function of
+        // the view alone (`queue_ties_break_by_chunk_key`).
+        self.pending.sort_unstable_by(|a, b| {
+            (a.ring, a.dist, a.chunk.key()).cmp(&(b.ring, b.dist, b.chunk.key()))
+        });
         true
     }
 
