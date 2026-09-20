@@ -10,5 +10,6 @@ pub mod codec;
 pub mod hash;
 #[cfg(feature = "testing")]
 pub mod testing;
+pub mod world;
 
 pub use abi::panic::log;
