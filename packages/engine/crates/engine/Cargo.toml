@@ -36,3 +36,13 @@ required-features = ["testing"]
 [[test]]
 name = "world_cache_invisible"
 required-features = ["testing"]
+
+# `engine::assert_golden_hash!` (feature `testing`), same reasoning as `codec` above.
+[[test]]
+name = "worldgen_noise"
+required-features = ["testing"]
+
+# `engine::testing::TestTerrain` and `engine::assert_golden_hash!` (feature `testing`).
+[[test]]
+name = "worldgen_core"
+required-features = ["testing"]

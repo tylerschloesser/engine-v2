@@ -8,8 +8,10 @@ pub mod bytes;
 pub mod client;
 pub mod codec;
 pub mod hash;
+pub mod noise;
 #[cfg(feature = "testing")]
 pub mod testing;
 pub mod world;
+pub mod worldgen;
 
 pub use abi::panic::log;
