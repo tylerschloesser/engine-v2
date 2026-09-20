@@ -71,11 +71,20 @@ export interface TerrainRenderer {
   /** Test/step-5 hand-fill: `texels.length === CHUNK_EDGE * CHUNK_EDGE`, row-major, for page slot
    * `slot` (0018 §3's one `writeTexture` per chunk). Not a per-frame path. */
   writePageChunk(slot: number, texels: readonly Texel[]): void
+  /** `render/upload.ts`'s own fast path (Planning decisions "`writeTexture` from a SAB view is
+   * unverified"): `le16` is already exactly the wire layout (`[base0, resource0, base1, ...]`,
+   * length `CHUNK_EDGE * CHUNK_EDGE * 2`) -- a CHUNK record's payload bytes reinterpreted as
+   * `Uint16Array`, whether that view is backed by a `SharedArrayBuffer` (the probe passed) or a
+   * preallocated non-shared staging copy (it didn't). No `Texel[]` conversion, unlike
+   * `writePageChunk`. */
+  writePageChunkBytes(slot: number, le16: Uint16Array): void
   /** Test/step-5 hand-fill: one page texel at `slot`'s local `index` (row-major within the chunk). */
   writePageTexel(slot: number, index: number, texel: Texel): void
   /** Test/step-5 hand-fill: indirection entries (toroidal `x`/`y` in `[0, 64)`, `value` a page slot
-   * or `INDIR_NONE`). */
-  writeIndir(entries: readonly IndirEntry[]): void
+   * or `INDIR_NONE`). `count` (default `entries.length`) lets `render/upload.ts`'s real drain pass
+   * a fixed-size, reused scratch array and only the first `count` entries of it are written --
+   * `.claude/rules/hot-paths.md` forbids a fresh per-record array there. */
+  writeIndir(entries: readonly IndirEntry[], count?: number): void
   /** Installs the tile-art array texture `render/art.ts` builds from `tiles.json`; rebuilds the bind
    * group (a one-time/init cost: WebGPU bind groups are immutable once created). */
   setTileArray(texture: GPUTexture): void
@@ -88,6 +97,15 @@ export interface TerrainRenderer {
   /** Count of distinct page slots written by `writePageChunk`/`writePageTexel` since creation
    * (`engine/test`'s `pageSlotsUsed` counter, Seams). */
   pageSlotsUsed(): number
+  /** Mutated in place by whoever owns the camera each frame (M11 writes `camTile*`/`camFrac*`/
+   * `tilesPerPx`, M17 writes the cursor fields); `frame-loop.ts`'s own "render" phase just calls
+   * `writeFrameUniform(frameUniform)` with whatever is currently set (Seams, Provides). Not written
+   * by this milestone's own code outside its constructor defaults -- M09's tests still call
+   * `writeFrameUniform` directly with their own values. */
+  readonly frameUniform: FrameUniformValues
+  /** Mutated in place by M09b's resize observer and M11's camera (Seams, Provides); not read by
+   * anything in this milestone. */
+  readonly viewport: { widthPx: number; heightPx: number; dpr: number; renderScale: number }
 }
 
 const TEXEL_BYTES = 4 // rg16uint: 2 x u16
@@ -200,6 +218,21 @@ export function createTerrainRenderer(
   let bindGroup = buildBindGroup()
   let drawCallCount = 0
   const usedSlots = new Set<number>()
+  const frameUniform: FrameUniformValues = {
+    camTileX: 0,
+    camTileY: 0,
+    camFracX: 0,
+    camFracY: 0,
+    viewportPxW: 0,
+    viewportPxH: 0,
+    tilesPerPx: 1,
+    seed: 0,
+    cursorTileX: 0,
+    cursorTileY: 0,
+    cursorValid: 0,
+    neighbourCutoffPx: 0,
+  }
+  const viewport = { widthPx: 0, heightPx: 0, dpr: 1, renderScale: 1 }
 
   function buildBindGroup(): GPUBindGroup {
     return device.createBindGroup({
@@ -241,6 +274,20 @@ export function createTerrainRenderer(
     }
   }
 
+  /** The one `writeTexture` call both `writePageChunk` (converts a `Texel[]` into `chunkScratch`
+   * first) and `writePageChunkBytes` (already the right layout, no conversion) end in -- `u16`'s
+   * length is `CHUNK_EDGE * CHUNK_EDGE * 2`, checked by each public caller. */
+  function writeChunkTexture(slot: number, u16: Uint16Array): void {
+    const origin = slotOrigin(slot)
+    device.queue.writeTexture(
+      { texture: pageTexture, origin },
+      u16,
+      { bytesPerRow: CHUNK_EDGE * TEXEL_BYTES, rowsPerImage: CHUNK_EDGE },
+      { width: CHUNK_EDGE, height: CHUNK_EDGE },
+    )
+    usedSlots.add(slot)
+  }
+
   return {
     device,
 
@@ -280,14 +327,16 @@ export function createTerrainRenderer(
         chunkScratch[i * 2] = t.base
         chunkScratch[i * 2 + 1] = t.resource
       }
-      const origin = slotOrigin(slot)
-      device.queue.writeTexture(
-        { texture: pageTexture, origin },
-        chunkScratch,
-        { bytesPerRow: CHUNK_EDGE * TEXEL_BYTES, rowsPerImage: CHUNK_EDGE },
-        { width: CHUNK_EDGE, height: CHUNK_EDGE },
-      )
-      usedSlots.add(slot)
+      writeChunkTexture(slot, chunkScratch)
+    },
+
+    writePageChunkBytes(slot, le16) {
+      if (le16.length !== CHUNK_EDGE * CHUNK_EDGE * 2) {
+        throw new RangeError(
+          `writePageChunkBytes: expected ${CHUNK_EDGE * CHUNK_EDGE * 2} u16s, got ${le16.length}`,
+        )
+      }
+      writeChunkTexture(slot, le16)
     },
 
     writePageTexel(slot, index, texel) {
@@ -304,8 +353,10 @@ export function createTerrainRenderer(
       usedSlots.add(slot)
     },
 
-    writeIndir(entries) {
-      for (const e of entries) {
+    writeIndir(entries, count) {
+      const n = count ?? entries.length
+      for (let i = 0; i < n; i++) {
+        const e = entries[i] as IndirEntry
         singleIndirScratch[0] = e.value
         device.queue.writeTexture(
           { texture: indirTexture, origin: { x: e.x, y: e.y } },
@@ -350,6 +401,9 @@ export function createTerrainRenderer(
     pageSlotsUsed() {
       return usedSlots.size
     },
+
+    frameUniform,
+    viewport,
   }
 }
 

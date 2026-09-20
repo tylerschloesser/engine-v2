@@ -110,6 +110,15 @@ export class RingProducer {
     return idx
   }
 
+  /** Slots free to claim right now (docs/plan/09-renderer-terrain.md Planning decisions:
+   * "`upload_stage` is called with `min(ring free slots, 16)`", so the worker's own conversion
+   * burst never exceeds what the ring can currently accept -- no bytes staged and then dropped for
+   * lack of a slot). A plain load and subtraction, no allocation. */
+  freeSlots(): number {
+    const tail = Atomics.load(this.control, RING_TAIL)
+    return this.slots - (this.head - tail)
+  }
+
   slotView(i: number): Uint8Array {
     return at(this.payload, i)
   }
@@ -189,6 +198,13 @@ export class RingConsumer {
 
   slotView(i: number): Uint8Array {
     return at(this.payload, i)
+  }
+
+  /** Total slot count (docs/plan/09-renderer-terrain.md, Deviations "Steps 5-7"): lets a caller
+   * (`render/upload.ts`) precompute one derived view per slot up front, at setup, instead of
+   * risking a first-sight allocation deep into a measured window. */
+  slotCount(): number {
+    return this.slots
   }
 
   /** Releases the slot returned by the last `peek()`. */

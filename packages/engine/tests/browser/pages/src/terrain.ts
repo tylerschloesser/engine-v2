@@ -8,6 +8,8 @@ import type { RendererDevice } from '../../../../src/render/device.ts'
 import { initDevice } from '../../../../src/render/device.ts'
 import type { TerrainRenderer } from '../../../../src/render/terrain.ts'
 import { createTerrainRenderer } from '../../../../src/render/terrain.ts'
+import { createUploadDrain } from '../../../../src/render/upload.ts'
+import { createRing, RingConsumer, RingProducer } from '../../../../src/sab/ring.ts'
 import { readPixels, renderTo } from '../../../../src/test/render.ts'
 
 // `window.__terrain`'s type comes from `../support/terrain-window.d.ts` (shared with the spec
@@ -23,6 +25,12 @@ declare global {
 
 let device: RendererDevice | undefined
 let renderer: TerrainRenderer | undefined
+/** `patch_one_texel`'s own scratch ring (`terrain.patch_one_texel`, Tests added): a real
+ * `uploadRing`-shaped SAB, driven by hand-built records instead of a worker, so `render/upload.ts`'s
+ * CHUNK/PATCH handling is proven directly without needing a full `createClient()` topology for a
+ * single-record test (docs/plan/09-renderer-terrain.md Deviations "Steps 5-7"). */
+let ringSab: SharedArrayBuffer | undefined
+let ringProducer: RingProducer | undefined
 
 function requireRenderer(): TerrainRenderer {
   if (!renderer) throw new Error('__terrain.init() must be called first')
@@ -91,6 +99,26 @@ window.__terrain = {
 
   errors() {
     return device ? device.errors() : []
+  },
+
+  createTestRing() {
+    ringSab = createRing(4120, 4)
+    ringProducer = new RingProducer(ringSab)
+  },
+
+  stageRecord(bytes) {
+    if (!ringProducer) throw new Error('createTestRing() must be called first')
+    const claimed = ringProducer.tryClaim()
+    if (claimed < 0) throw new Error('stageRecord: ring full')
+    ringProducer.slotView(claimed).set(bytes)
+    ringProducer.commit()
+  },
+
+  drainRing(budgetBytes) {
+    if (!ringSab) throw new Error('createTestRing() must be called first')
+    const consumer = new RingConsumer(ringSab)
+    const drain = createUploadDrain(consumer, requireRenderer())
+    return drain.drain(budgetBytes)
   },
 }
 

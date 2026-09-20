@@ -34,7 +34,12 @@ export const RING_DEFAULTS = {
   actionRing: { slotBytes: 1024, slots: 64 },
   inputRing: { slotBytes: 32, slots: 256 },
   uiRing: { slotBytes: 1024, slots: 256 },
-  uploadRing: { slotBytes: 4112, slots: 256 },
+  // docs/plan/09-renderer-terrain.md, Planning decisions "Upload-ring record layout": one fixed
+  // 4,112-byte record (16-byte header + 4,096-byte payload) per ring slot, never spanning -- the
+  // ring's own 8-byte slot header (`sab/ring.ts`) is on top of that, so `slotBytes` must be
+  // 4,112 + 8 = 4,120, not 4,112 (M06's own value here predated the record layout; this is the
+  // "an owning milestone may revise its own row" case its comment names).
+  uploadRing: { slotBytes: 4120, slots: 256 },
   // Revised by docs/plan/08b-gen-workers-and-queue.md (M06's own allowance: "an owning milestone
   // may revise its row in its Deviations"). M06 sized these before the record shapes existed;
   // `slotBytes` here is the *ring's* total per-slot size (its own 8-byte header + payload,

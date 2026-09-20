@@ -3,6 +3,15 @@
 // docs/decisions/0020-testing-strategy.md §6's "semantic pixel probes" gate). Never imported by
 // production code; this file is step 2's own (Deviations), so `tileCentrePx`'s camera parameter is a
 // small structural type rather than an import of step 4's `render/terrain.ts`.
+//
+// Step 5 (Deviations "Steps 5-7"): `renderTo`/`readPixels` are overloaded to also take a `Client`
+// (the brief's own Provides shape), paired with the `TerrainRenderer` a test built around it via
+// `attachRenderer` -- the two-argument `renderTo(renderer, opts)` shape from steps 2-4 stays for the
+// three tests that still hand-fill the renderer's textures directly (no client, no worker).
+import type { Client } from '../client.js'
+import type { TerrainRenderer } from '../render/terrain.js'
+import { createUploadDrain } from '../render/upload.js'
+import { RingConsumer } from '../sab/ring.js'
 
 /** The subset of `render/terrain.ts`'s `FrameUniformValues` (0018 §5) `tileCentrePx` needs; a
  * structural type, not an import, so this file has no dependency on `render/terrain.ts`. */
@@ -49,6 +58,46 @@ function align256(bytes: number): number {
   return Math.ceil(bytes / 256) * 256
 }
 
+function isClient(v: Renderable | Client | RenderTarget): v is Client {
+  return typeof (v as Client).writeCameraAndWake === 'function'
+}
+
+/** `renderTo(client, opts)`'s own bookkeeping: which `TerrainRenderer` a test built around a given
+ * client (`attachRenderer`), and the `RenderTarget` its last `renderTo` call produced (so
+ * `readPixels(client)` needs no target argument either). */
+const clientRenderers = new WeakMap<Client, TerrainRenderer>()
+const clientTargets = new WeakMap<Client, RenderTarget>()
+
+/** Pairs `client` with the `TerrainRenderer` a test built around it, so `renderTo(client, opts)`/
+ * `readPixels(client)` need no renderer argument (docs/plan/09-renderer-terrain.md Seams,
+ * Provides). Call once, before the first `renderTo(client, ...)`. */
+export function attachRenderer(client: Client, renderer: TerrainRenderer): void {
+  clientRenderers.set(client, renderer)
+}
+
+function rendererOf(client: Client): TerrainRenderer {
+  const r = clientRenderers.get(client)
+  if (!r) throw new Error('renderTo(client, ...): call attachRenderer(client, renderer) first')
+  return r
+}
+
+function newTarget(
+  renderer: TerrainRenderer | Renderable,
+  width: number,
+  height: number,
+): RenderTarget {
+  const texture = renderer.device.createTexture({
+    label: 'renderTo-target',
+    size: [width, height],
+    format: 'rgba8unorm',
+    usage:
+      GPUTextureUsage.RENDER_ATTACHMENT |
+      GPUTextureUsage.COPY_SRC |
+      GPUTextureUsage.TEXTURE_BINDING,
+  })
+  return { device: renderer.device, texture, width, height }
+}
+
 /** Creates a fresh `rgba8unorm` offscreen target (0020 §6) of `width`x`height`, draws one frame of
  * `renderer` into it, and returns the target for `readPixels`. A fresh texture per call is
  * test-only (`src/test/**` is exempt from `.claude/rules/hot-paths.md`); production reuses one
@@ -56,23 +105,49 @@ function align256(bytes: number): number {
 export function renderTo(
   renderer: Renderable,
   opts: { width: number; height: number },
+): RenderTarget
+/** `renderTo(client, opts)` (Seams, Provides): drains `client.uploadRing` fully -- not under a
+ * per-frame budget, a test convenience `src/test/**`'s own exemption from `.claude/rules/
+ * hot-paths.md` allows -- into the renderer `attachRenderer` paired with `client`, then draws.
+ * `renderer.writeFrameUniform`/camera state are the caller's own job first, same as the
+ * renderer-only overload above. */
+export function renderTo(client: Client, opts: { width: number; height: number }): RenderTarget
+export function renderTo(
+  target: Renderable | Client,
+  opts: { width: number; height: number },
 ): RenderTarget {
-  const texture = renderer.device.createTexture({
-    label: 'renderTo-target',
-    size: [opts.width, opts.height],
-    format: 'rgba8unorm',
-    usage:
-      GPUTextureUsage.RENDER_ATTACHMENT |
-      GPUTextureUsage.COPY_SRC |
-      GPUTextureUsage.TEXTURE_BINDING,
-  })
-  renderer.draw(texture)
-  return { device: renderer.device, texture, width: opts.width, height: opts.height }
+  if (isClient(target)) {
+    const renderer = rendererOf(target)
+    const consumer = new RingConsumer(target.uploadRing)
+    const drain = createUploadDrain(consumer, renderer)
+    for (;;) {
+      const { records } = drain.drain(Number.MAX_SAFE_INTEGER)
+      if (records === 0) break
+    }
+    const result = newTarget(renderer, opts.width, opts.height)
+    renderer.draw(result.texture)
+    clientTargets.set(target, result)
+    return result
+  }
+  const renderer = target
+  const result = newTarget(renderer, opts.width, opts.height)
+  renderer.draw(result.texture)
+  return result
 }
 
 /** `copyTextureToBuffer` + `mapAsync` (0020 §6), stripping `bytesPerRow` padding so the returned
  * buffer is tightly packed RGBA8 (`(y * width + x) * 4`). */
-export async function readPixels(target: RenderTarget): Promise<PixelBuffer> {
+export function readPixels(target: RenderTarget): Promise<PixelBuffer>
+/** `readPixels(client)` (Seams, Provides): reads back whatever the last `renderTo(client, ...)`
+ * call for this client drew. */
+export function readPixels(client: Client): Promise<PixelBuffer>
+export async function readPixels(arg: RenderTarget | Client): Promise<PixelBuffer> {
+  const target = isClient(arg) ? clientTargets.get(arg) : arg
+  if (!target) throw new Error('readPixels(client): call renderTo(client, ...) first')
+  return readPixelsFromTarget(target)
+}
+
+async function readPixelsFromTarget(target: RenderTarget): Promise<PixelBuffer> {
   const bytesPerRow = align256(target.width * BYTES_PER_PIXEL)
   const buffer = target.device.createBuffer({
     size: bytesPerRow * target.height,

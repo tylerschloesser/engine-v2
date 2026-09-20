@@ -7,5 +7,10 @@
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true
   },
-  "include": [".", "../../../src/virtual.d.ts", "../support/terrain-window.d.ts"]
+  "include": [
+    ".",
+    "../../../src/virtual.d.ts",
+    "../support/terrain-window.d.ts",
+    "../support/terrain-client-window.d.ts"
+  ]
 }

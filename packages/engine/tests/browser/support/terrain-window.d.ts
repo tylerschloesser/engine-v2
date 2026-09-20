@@ -42,6 +42,14 @@ declare global {
         height: number,
       ): Promise<{ width: number; height: number; data: number[] }>
       errors(): string[]
+      /** `terrain.patch_one_texel` (Tests added): a real `uploadRing`-shaped SAB driven by
+       * hand-built records, not a worker (docs/plan/09-renderer-terrain.md Deviations
+       * "Steps 5-7") -- proves `render/upload.ts`'s CHUNK/PATCH handling directly. */
+      createTestRing(): void
+      /** `bytes.length` must be exactly 4,112 (`RECORD_BYTES`): a whole record, little-endian,
+       * `client::upload::write_header`'s own layout. */
+      stageRecord(bytes: number[]): void
+      drainRing(budgetBytes: number): { bytes: number; records: number }
     }
   }
 }

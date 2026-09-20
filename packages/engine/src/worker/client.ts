@@ -10,6 +10,7 @@ import type { EngineInstance, RegionView } from '../loader.js'
 import { CB_FRAME_REQ, W_ACK, workerWord } from '../sab/control.js'
 import { RingConsumer, RingProducer } from '../sab/ring.js'
 import { createGenPump } from './client-gen.js'
+import { createUploadPump } from './client-upload.js'
 import { applyGcHook } from './gc-hook.js'
 import { instantiateForSetup } from './instantiate.js'
 import type { SetupMessage } from './protocol.js'
@@ -71,6 +72,12 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     shell.fatal(msg),
   )
 
+  // docs/plan/09-renderer-terrain.md, Order of work 5: the upload-staging pump, built once and run
+  // every wake, same shape as `genPump` above (`ChunkTexels` is optional: `null` on a client role
+  // with no `client::Uploader`, e.g. `fx-hash`'s `topology`/`echo`/`gen` pages).
+  const chunkTexels = inst.region(RegionId.ChunkTexels)
+  const uploadPump = createUploadPump(inst, message.sabs.uploadRing, chunkTexels)
+
   function body(): void {
     if (gcHook) applyGcHook(shell.control, shell.index)
     const frameReq = Atomics.load(shell.control.words, CB_FRAME_REQ)
@@ -91,6 +98,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       }
     }
     genPump.pump()
+    uploadPump.pump()
   }
 
   // `engine/test`'s `callParked` reaches `client_gen_stats`/`client_chunk_hash` (this instance's

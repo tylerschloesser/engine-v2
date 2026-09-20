@@ -120,39 +120,153 @@ test('device: view probe both paths', async ({ page }, testInfo) => {
   })
 })
 
-test('terrain: probe tile colours', async ({ page }, testInfo) => {
-  await openPage(page, '/terrain.html')
-  const init = await page.evaluate(() => window.__terrain?.init())
-  expectAdapter(testInfo, init?.adapterInfo ?? null)
+// The real-client scenes (docs/plan/09-renderer-terrain.md, step 5): a real `createClient()` over
+// `fx-terrain` (Gen + Client roles) instead of hand-filled textures -- readback (`expectAdapter|
+// readback`, M10's own grep) still runs through `terrain-client.html`. `fx-terrain`'s deterministic
+// generator (`fixtures/terrain/src/lib.rs`) puts the same grass/ore/water scene at the same chunk
+// coordinates the hand-filled scenes above use, so the pixel assertions below are unchanged from
+// the ones the predecessor's stop-gap `terrain.html` scene already proved.
+type TerrainClient = NonNullable<Window['__terrainClient']>
 
-  await stageBorderScene(page)
+async function readClientBorderScene(
+  page: import('@playwright/test').Page,
+  camera: FrameUniformValues,
+): Promise<PixelBuffer> {
+  const raw = await page.evaluate(async (cam) => {
+    const t = window.__terrainClient as TerrainClient
+    t.writeFrameUniform(cam)
+    return t.renderAndRead(cam.viewportPxW, cam.viewportPxH)
+  }, camera)
+  return { width: raw.width, height: raw.height, data: Uint8Array.from(raw.data) }
+}
+
+test('terrain: probe tile colours', async ({ page }, testInfo) => {
+  await openPage(page, '/terrain-client.html')
+  const init = await page.evaluate(() => window.__terrainClient?.init())
+  expectAdapter(testInfo, init?.adapterInfo ?? null)
+  // Planning decisions "`writeTexture` from a SAB view is unverified": recorded here, not
+  // asserted -- this is the `@slow` WebKit scene that "catches a Safari difference automatically".
+  testInfo.annotations.push({
+    type: 'sabWriteTextureOk',
+    description: String(init?.sabWriteTextureOk),
+  })
+
+  await page.evaluate(() => {
+    const t = window.__terrainClient as TerrainClient
+    t.setCamera(32, 8, 64)
+    t.setHalfExtent(64, 64)
+  })
+  await page.evaluate(async () => {
+    await (window.__terrainClient as TerrainClient).idle()
+  })
+
   const camera = borderCamera(64, 32, 8)
-  const pixels = await renderBorderScene(page, camera)
+  const pixels = await readClientBorderScene(page, camera)
 
   // Both sides of the chunk (0,0)/(1,0) border (tile 31 vs tile 32).
   expectPixel(pixels, 31, 0, GRASS, TOL)
   expectPixel(pixels, 32, 0, WATER, TOL)
-  // A resource tile (local index 5 of chunk 0) shows the resource's colour, not the base's.
+  // The resource tile (local index 5 of chunk 0) shows the resource's colour, not the base's.
   expectPixel(pixels, 5, 0, ORE, TOL)
   // A plain grass tile elsewhere in chunk 0.
   expectPixel(pixels, 10, 0, GRASS, TOL)
 
-  expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
+  expectNoGpuErrors(await page.evaluate(() => window.__terrainClient?.errors() ?? []))
 })
 
 test('terrain: nonresident is neutral', async ({ page }, testInfo) => {
+  await openPage(page, '/terrain-client.html')
+  const init = await page.evaluate(() => window.__terrainClient?.init())
+  expectAdapter(testInfo, init?.adapterInfo ?? null)
+  // No `setCamera`/`idle()` at all: nothing is ever requested from a gen worker, so no chunk is
+  // ever resident and every toroidal indirection cell stays `INDIR_NONE` from init.
+  const camera = borderCamera(64, 32, 8)
+  const pixels = await readClientBorderScene(page, camera)
+  expectPixel(pixels, 0, 0, NEUTRAL, TOL)
+  expectPixel(pixels, 31, 0, NEUTRAL, TOL)
+  expectPixel(pixels, 63, 0, NEUTRAL, TOL)
+  expectNoGpuErrors(await page.evaluate(() => window.__terrainClient?.errors() ?? []))
+})
+
+test('terrain: patch one texel', async ({ page }, testInfo) => {
+  // A real `uploadRing`-shaped SAB driven by hand-built records (no worker): proves `render/
+  // upload.ts`'s own CHUNK-then-PATCH handling directly (docs/plan/09-renderer-terrain.md
+  // Deviations "Steps 5-7" -- this test is not one of the two the brief names as needing a real
+  // client; hand-building the records this way exercises the code `render/upload.ts` itself added
+  // in step 5, which the hand-filled `writePageChunk`/`writePageTexel` calls above never touch).
   await openPage(page, '/terrain.html')
   const init = await page.evaluate(() => window.__terrain?.init())
   expectAdapter(testInfo, init?.adapterInfo ?? null)
   await page.evaluate(async () => {
     await (window.__terrain as Terrain).loadArt('/terrain/tiles.json')
   })
-  // No `writePageChunk`/`writeIndir` at all: every toroidal cell stays `INDIR_NONE` from init.
+
+  const HEADER = 16
+  function chunkRecord(slot: number, base: number): number[] {
+    const rec = new Array(4112).fill(0)
+    rec[0] = 1 // KIND_CHUNK
+    rec[2] = slot & 0xff
+    rec[3] = (slot >> 8) & 0xff
+    for (let i = 0; i < 1024; i++) {
+      rec[HEADER + i * 4] = base & 0xff
+      rec[HEADER + i * 4 + 1] = (base >> 8) & 0xff
+      // resource stays 0
+    }
+    return rec
+  }
+  function indirRecord(x: number, y: number, value: number): number[] {
+    const rec = new Array(4112).fill(0)
+    rec[0] = 3 // KIND_INDIR
+    rec[4] = 1 // count
+    rec[HEADER] = x
+    rec[HEADER + 1] = y
+    rec[HEADER + 2] = value & 0xff
+    rec[HEADER + 3] = (value >> 8) & 0xff
+    return rec
+  }
+  function patchRecord(slot: number, index: number, base: number, resource: number): number[] {
+    const rec = new Array(4112).fill(0)
+    rec[0] = 2 // KIND_PATCH
+    rec[4] = 1 // count
+    rec[HEADER] = slot & 0xff
+    rec[HEADER + 1] = (slot >> 8) & 0xff
+    rec[HEADER + 2] = index & 0xff
+    rec[HEADER + 3] = (index >> 8) & 0xff
+    rec[HEADER + 4] = base & 0xff
+    rec[HEADER + 5] = (base >> 8) & 0xff
+    rec[HEADER + 6] = resource & 0xff
+    rec[HEADER + 7] = (resource >> 8) & 0xff
+    return rec
+  }
+
+  await page.evaluate(
+    ([chunk, indir]) => {
+      const t = window.__terrain as Terrain
+      t.createTestRing()
+      t.stageRecord(chunk)
+      t.stageRecord(indir)
+      t.drainRing(1 << 20)
+    },
+    [chunkRecord(0, VISUAL_GRASS), indirRecord(0, 0, 0)] as const,
+  )
+
   const camera = borderCamera(64, 32, 8)
-  const pixels = await renderBorderScene(page, camera)
-  expectPixel(pixels, 0, 0, NEUTRAL, TOL)
-  expectPixel(pixels, 31, 0, NEUTRAL, TOL)
-  expectPixel(pixels, 63, 0, NEUTRAL, TOL)
+  let pixels = await renderBorderScene(page, camera)
+  expectPixel(pixels, 5, 0, GRASS, TOL) // local index 5: still plain grass, no patch yet
+
+  // Patch local index 5 of slot 0 to the ore resource, on top of the already-resident chunk.
+  await page.evaluate(
+    (patch) => {
+      const t = window.__terrain as Terrain
+      t.stageRecord(patch)
+      t.drainRing(1 << 20)
+    },
+    patchRecord(0, 5, VISUAL_GRASS, VISUAL_ORE),
+  )
+  pixels = await renderBorderScene(page, camera)
+  expectPixel(pixels, 5, 0, ORE, TOL) // now shows the patched resource
+  expectPixel(pixels, 10, 0, GRASS, TOL) // an untouched tile is unaffected
+
   expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
 })
 
@@ -222,4 +336,74 @@ test('terrain: nothing outside viewport', async ({ page }, testInfo) => {
   expectPixel(pixels, 63, 63, NEUTRAL, TOL) // bottom-right corner: chunk (1, 1)
   expectPixel(pixels, 32, 32, GRASS, TOL) // centre: inside chunk (0, 0)
   expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
+})
+
+test('terrain: upload budget while panning', async ({ page }, testInfo) => {
+  await openPage(page, '/terrain-client.html')
+  const init = await page.evaluate(() => window.__terrainClient?.init())
+  expectAdapter(testInfo, init?.adapterInfo ?? null)
+  await page.evaluate(() => {
+    const t = window.__terrainClient as TerrainClient
+    t.setCamera(0, 8, 64)
+    t.setHalfExtent(24, 24)
+  })
+
+  const UPLOAD_BUDGET_BYTES = 64 * 1024 // 0018 §3's own default
+  const FRAMES = 600
+  const FRAME_MS = 1000 / 60
+  // ~40 tiles over the whole run: crosses the chunk (0,0)/(1,0) boundary at x=32 partway through,
+  // so the queue keeps finding fresh work across most of the window (0016 §2's own "chunk-enter
+  // bursts are not exempt").
+  const PAN_PER_FRAME = 40 / FRAMES
+
+  const { uploadBytesPerFrame } = await page.evaluate(
+    ([frames, dtMs, panX, budget]) =>
+      (window.__terrainClient as TerrainClient).panAndDrive(frames, dtMs, panX, 0, budget),
+    [FRAMES, FRAME_MS, PAN_PER_FRAME, UPLOAD_BUDGET_BYTES] as const,
+  )
+  expect(uploadBytesPerFrame).toHaveLength(FRAMES)
+  for (const bytes of uploadBytesPerFrame) {
+    expect(bytes, 'uploadBytes per frame must stay within the byte budget').toBeLessThanOrEqual(
+      UPLOAD_BUDGET_BYTES,
+    )
+  }
+
+  // Let anything the budget deferred finish, then one verification draw (0018 §1: a constant
+  // one-draw-call frame regardless of upload traffic).
+  await page.evaluate(async () => {
+    await (window.__terrainClient as TerrainClient).idle()
+  })
+  await page.evaluate((cam) => (window.__terrainClient as TerrainClient).writeFrameUniform(cam), {
+    camTileX: 32,
+    camTileY: 8,
+    camFracX: 0,
+    camFracY: 0,
+    viewportPxW: 64,
+    viewportPxH: 16,
+    tilesPerPx: 1,
+    seed: 0,
+    cursorTileX: 0,
+    cursorTileY: 0,
+    cursorValid: 0,
+    neighbourCutoffPx: 0,
+  } satisfies FrameUniformValues)
+  await page.evaluate(([w, h]) => (window.__terrainClient as TerrainClient).renderAndRead(w, h), [
+    64, 16,
+  ] as const)
+  const drawCalls = await page.evaluate(() => window.__terrainClient?.drawCalls() ?? -1)
+  expect(drawCalls).toBe(1)
+
+  // Ring-1 chunks resident at rest: the pan's start (0, 0) and end (1, 0) both fall inside the
+  // half-extent-24 view at some point along the way, and this fixture's cache (1,024 chunks) never
+  // fills over a ~4-chunk-wide pan, so neither is ever evicted.
+  const hash00 = await page.evaluate(() =>
+    (window.__terrainClient as TerrainClient).chunkHash(0, 0),
+  )
+  const hash10 = await page.evaluate(() =>
+    (window.__terrainClient as TerrainClient).chunkHash(1, 0),
+  )
+  expect(hash00).not.toBeNull()
+  expect(hash10).not.toBeNull()
+
+  expectNoGpuErrors(await page.evaluate(() => window.__terrainClient?.errors() ?? []))
 })

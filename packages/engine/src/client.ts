@@ -1,12 +1,13 @@
 // Main-thread entrypoint (`engine`): `createClient`'s spawn path (docs/plan/06b-workers-and-spawn.md).
 // Checks isolation, compiles the module once, creates the `SabSet`, spawns the worker set for the
 // chosen topology, and posts each worker its `Module` (or `wasmUrl`), its SABs and its config.
-import { CameraBlockView } from './camera/block.js'
+import { CameraBlockView, writeCameraBlock } from './camera/block.js'
 import { CameraState } from './camera/state.js'
 import type { Clock, Scheduler } from './clock.js'
 import { systemClock, systemScheduler } from './clock.js'
 import type { InstanceConfig } from './loader.js'
 import {
+  CB_FRAME_REQ,
   CB_LIFECYCLE,
   ControlBlock,
   Lifecycle,
@@ -40,6 +41,11 @@ export interface ClientOptions {
   arenas?: { sim?: number; client?: number; gen?: number }
   /** Default per 0008: 2 when `navigator.hardwareConcurrency >= 8`, else 1. */
   genWorkers?: number
+  /** docs/plan/09-renderer-terrain.md, Seams (Provides): URL of `tiles.json` (M17b adds
+   * `sprites`). Not read by `createClient` itself -- rendering is main-thread-only and owns no
+   * WASM instance (0018 §1) -- kept here so a caller's one `ClientOptions` object is also what it
+   * hands `render/art.ts`'s `loadTileArt`, instead of a second, separately-threaded asset config. */
+  assets?: { tiles: string }
   /** Test-only escape hatch (Planning decisions: "`createClient` takes `{ clock, scheduler }`
    * through a test-only options field"); never set by a game. */
   test?: {
@@ -54,6 +60,23 @@ export interface ClientOptions {
 
 export interface Client {
   readonly ready: Promise<void>
+  /** docs/plan/09-renderer-terrain.md, Non-scope ("here the camera is set by `engine/test.
+   * setCamera` or a fixed `CameraState`"): a plain mutable object, later milestones add members to
+   * the public `Client` shape (this comment's own precedent) as production features need direct
+   * access instead of the test-only `clientTestHandle`. Mutate its fields directly, then call
+   * `writeCameraAndWake()`; M11 is the real camera integration that will drive this every frame. */
+  readonly cameraState: CameraState
+  /** The SAB the client worker's `client::Uploader` stages upload-ring records into
+   * (`worker/client-upload.ts`); `render/upload.ts`'s own `RingConsumer` drains it every frame
+   * under a byte budget (0018 §3). Exposed directly, not gated behind `clientTestHandle`: draining
+   * it is a production concern of any renderer built around a `createClient()` result, not a test
+   * concern. */
+  readonly uploadRing: SharedArrayBuffer
+  /** Writes the whole camera block from `cameraState`, bumps `CB_FRAME_REQ` and wakes the client
+   * worker (docs/plan/09-renderer-terrain.md Scope: `frame-loop.ts`'s "writeCameraBlock +
+   * CB_FRAME_REQ + wake" phase calls this directly). Returns the new `CB_FRAME_REQ` value (`engine/
+   * test`'s `stepFrame` uses it to spin on the worker's own ack; production code ignores it). */
+  writeCameraAndWake(): number
   destroy(): void
 }
 
@@ -227,7 +250,20 @@ export function createClient(options: ClientOptions): Client {
     )
     const ready = Promise.reject(err)
     ready.catch(() => {}) // see `start()`'s own `.ready.catch()` comment below
-    return { ready, destroy() {} }
+    // No `SharedArrayBuffer` exists on this path (that global is exactly what being isolated
+    // provides), so `uploadRing`/`writeCameraAndWake` cannot be real: any caller reaching them
+    // without first awaiting the already-rejected `ready` gets the same error repeated.
+    return {
+      ready,
+      cameraState: new CameraState(),
+      get uploadRing(): SharedArrayBuffer {
+        throw err
+      },
+      writeCameraAndWake(): number {
+        throw err
+      },
+      destroy() {},
+    }
   }
 
   const genWorkers = genWorkerCount(
@@ -255,6 +291,16 @@ export function createClient(options: ClientOptions): Client {
       control.wake(w.index)
     }
     for (const w of workers) w.worker.terminate()
+  }
+
+  /** docs/plan/09-renderer-terrain.md Scope: "writeCameraBlock + CB_FRAME_REQ + wake" as one
+   * seam (`Client.writeCameraAndWake`, Deviations). No spin/wait here (production never blocks
+   * main, 0015 §2): `engine/test`'s `stepFrame` is the one that spins on the returned value. */
+  function writeCameraAndWake(): number {
+    writeCameraBlock(cameraWriter, cameraState)
+    const req = (Atomics.add(control.words, CB_FRAME_REQ, 1) + 1) >>> 0
+    control.wake(WORKER_CLIENT)
+    return req
   }
 
   async function start(): Promise<void> {
@@ -305,7 +351,13 @@ export function createClient(options: ClientOptions): Client {
   }
 
   const ready = start()
-  const client: Client = { ready, destroy }
+  const client: Client = {
+    ready,
+    cameraState,
+    uploadRing: sabs.uploadRing,
+    writeCameraAndWake,
+    destroy,
+  }
   handles.set(client, { control, sabs, cameraState, cameraWriter, clock, scheduler, workers })
   return client
 }

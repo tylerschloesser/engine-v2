@@ -48,6 +48,10 @@ export interface RendererDevice {
    * `view` with no `uncapturederror` (Chrome 140+); `false` when `createView()` is still required.
    * The probe runs inside a `pushErrorScope`, so it never appears in `errors()`. */
   readonly viewProbePasses: boolean
+  /** `true` once this device accepts a `SharedArrayBuffer`-backed view as `writeTexture`'s `data`
+   * with no `uncapturederror` (Planning decisions "`writeTexture` from a SAB view is unverified");
+   * `render/upload.ts` reads this to pick its CHUNK-record fast path or fallback. */
+  readonly sabWriteTextureOk: boolean
   /** Every `uncapturederror` message seen since this device was created, in order. Every GPU test
    * asserts this is empty (0020 §6). */
   errors(): string[]
@@ -98,6 +102,38 @@ async function probeViewAsAttachment(device: GPUDevice): Promise<boolean> {
   return error === null
 }
 
+/** docs/plan/09-renderer-terrain.md, Planning decisions "`writeTexture` from a SAB view is
+ * unverified": inside a validation error scope, `writeTexture` a throwaway `rg16uint` 1x1 texture
+ * from a `Uint16Array` view backed by a `SharedArrayBuffer`; `true` iff `popErrorScope()` reports
+ * nothing. Runs once at startup, never per frame -- `render/upload.ts` reads the result to choose
+ * its CHUNK-record fast path (direct from the ring's own SAB-backed view) or fallback (copy into a
+ * preallocated non-shared staging array first); either way it allocates nothing per record. `false`
+ * (not `SharedArrayBuffer` unavailable) when the global itself is missing, so a non-isolated
+ * caller never throws here. */
+async function probeWriteTextureFromSharedView(device: GPUDevice): Promise<boolean> {
+  if (typeof SharedArrayBuffer === 'undefined') return false
+  device.pushErrorScope('validation')
+  const probeTex = device.createTexture({
+    size: [1, 1],
+    format: 'rg16uint',
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+  })
+  try {
+    const sab = new SharedArrayBuffer(4)
+    const view = new Uint16Array(sab)
+    device.queue.writeTexture(
+      { texture: probeTex },
+      view,
+      { bytesPerRow: 4 },
+      { width: 1, height: 1 },
+    )
+  } finally {
+    probeTex.destroy()
+  }
+  const error = await device.popErrorScope()
+  return error === null
+}
+
 /**
  * Requests an adapter and device (rejects with `NoAdapterError` on a null adapter or missing
  * `navigator.gpu`), wires `uncapturederror` into `errors()`, and runs the `GPUTexture`-as-view probe
@@ -120,10 +156,12 @@ export async function initDevice(opts?: {
     opts?.test?.forceViewProbe !== undefined
       ? opts.test.forceViewProbe
       : await probeViewAsAttachment(device)
+  const sabWriteTextureOk = await probeWriteTextureFromSharedView(device)
   return {
     device,
     adapterInfo: adapterInfoOf(adapter),
     viewProbePasses,
+    sabWriteTextureOk,
     errors: () => errors.slice(),
     async checkCompilation(label, module) {
       const info = await module.getCompilationInfo()
