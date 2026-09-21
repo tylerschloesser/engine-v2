@@ -31,7 +31,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 11 | `11-camera-and-input.md` | main-thread camera, gestures, semantic input events, input ring | 09 | D |
 | [x] | 12 | `12-store-and-game-trait.md` | `Game` trait, `Delta`, `Store` | 07, 08 | |
 | [x] | 12b | `12b-world-access-and-sim-driver.md` | `WorldRead`/`WorldWrite`, `Authority`, `Ticks`, `Sim` driver, goldens | 12 | |
-| [ ] | 13 | `13-sim-host-tick-loop.md` | TS sim host, sim worker, injected timer, catch-up cap, chunk warmer | 06b, 08b, 12b | |
+| [x] | 13 | `13-sim-host-tick-loop.md` | TS sim host, sim worker, injected timer, catch-up cap, chunk warmer | 06b, 08b, 12b | |
 | [ ] | 14 | `14-wire-framing.md` | frame + sections + uplink batch, golden bytes | 12b | |
 | [ ] | 15 | `15-connection-and-subscriptions.md` | subscriptions, frame building, client replica (Rust core) | 13, 14 | |
 | [ ] | 15b | `15b-ring-connection-and-replica-rendering.md` | in-browser `Connection` over rings, worker plumbing, replica → renderer | 11, 15 | |

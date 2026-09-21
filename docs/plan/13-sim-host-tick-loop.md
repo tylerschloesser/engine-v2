@@ -1,6 +1,6 @@
 # M13: TS sim host, sim worker and the tick loop
 
-Status: not started · After: 06b, 08b, 12b · Tyler-dependent: no
+Status: done (2026-09-21) · After: 06b, 08b, 12b · Tyler-dependent: no
 
 ## Goal
 One TypeScript `SimHost` drives a `role=sim` instance identically in the sim worker and under Node: injected clock and timer, 20 Hz pacing, the catch-up cap, seal → log sink → tick ordering, and the 2 ms chunk warmer. `createClient({ host: { kind: 'local', world } })` (M06b's option) spawns a real sim worker; `stepTick()` from `engine/test` steps it deterministically; the fixture's hash after 100 ticks equals the native golden in Node and in the browser.
@@ -47,9 +47,9 @@ Connections, subscriptions, frames (M15, M15b). Actions (M16). Storage, snapshot
 TS unit: `simhost_paces_at_tick_rate`, `simhost_caps_catchup_and_drops_time`, `simhost_seal_precedes_tick` (call-order spy), `simhost_pause_stops_ticks`, `simhost_warmer_respects_budget`, `simhost_counts_tick_overrun` (0010 "Tick CPU budget": the fake instance's `sim_tick` advances the fake clock past one interval once; `counters.tickOverruns === 1`, and sim time falls behind wall time by exactly the dropped amount), `simhost_seed_decimal_to_hex_u64` (0024 §5: seed `"18446744073709551615"` reaches the instance config as `"0xffffffffffffffff"` and `"0"` as `"0x0"`; non-decimal text, a sign or a value past 2^64 − 1 is a config error thrown by `createSimHost`). Rust: `warm_nearest_first`, `warm_is_invisible_to_hash`. WASM under Node/Bun: `wasm_idle_100_matches_native`. Browser: `sim_worker_steps_and_hashes` (hash after `stepTick(100)` = golden), `sim_worker_yields_for_cdp`, zero-GC test extended to the sim isolate.
 
 ## Exit criteria
-- [ ] All tests above pass in Node, Bun and Chromium.
-- [ ] No `Date.now`, `performance.now`, `setTimeout`, `setInterval` outside the injected `Clock`/timer in the files touched (lint rule or grep test from M03).
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass in Node, Bun and Chromium.
+- [x] No `Date.now`, `performance.now`, `setTimeout`, `setInterval` outside the injected `Clock`/timer in the files touched (lint rule or grep test from M03).
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test unit -t simhost` · `pnpm test wasm -t idle_100` · `pnpm test browser -t sim_worker` · `pnpm lint`.
@@ -669,10 +669,17 @@ budgets, `playwright --project gc --grep "sim clean" --repeat-each 8 --workers 1
 constant 21.4933 B/frame across all 8 runs, `sim` an exact constant 0.8133 B/frame across all 8 runs
 (zero run-to-run spread on both, unusually tight -- no reliability concern chased further given
 that). Software mode (`pnpm gc software -t "sim clean"`): passes; `attributedBytesPerFrame.main`
-measured 0 (this page's `drive()` calls `stepSimTickSync`, not a function literally named `drive`
-in the sampled call frames after inlining, so nothing attributes to `main`'s own `attributionRoots:
-["drive"]` today -- a real measurement, not a placeholder, but not independently cross-checked
-against a second run the way the hardware-mode number was). `pgrep`/`lsof -ti tcp:4517` /`:4518`
+measured 0. **The implementer's first explanation of that 0 was wrong and is corrected here by the
+orchestrator, because the wrong explanation is the dangerous artefact:** it read the 0 as `drive`
+not surviving inlining in the sampled frames, which is exactly ADR 0029's documented failure mode
+and would have made this budget vacuous. Measured directly instead of argued
+(`pnpm gc software -t "sim neg object main"`): the control **trips**, and since the `object`
+control causes no GC events by design it can only have tripped on assertion B -- so attribution
+under `drive` demonstrably works on this page. The real reason `main` attributes ~0 is that on
+`gc-sim.ts` the tick work happens in the **sim worker isolate**, not on main: main's `drive()` only
+pokes `CB_SIM_STEP_REQ`. The hardware figure of 21.49 B/frame is raw total including harness
+overhead outside the root, which is why the two numbers differ without contradicting each other.
+The budget of 0 is therefore real and is policed by a control that genuinely trips). `pgrep`/`lsof -ti tcp:4517` /`:4518`
 clean after every run in this session; no background process left running.
 
 ### Notes for later briefs
