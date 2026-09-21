@@ -7,7 +7,7 @@
 export const CONTROL_BLOCK_INT32S = 64
 export const CONTROL_BLOCK_BYTES = CONTROL_BLOCK_INT32S * 4
 
-// Global words (indices 0-7; 5-7 reserved).
+// Global words (indices 0-7; 6-7 reserved).
 export const CB_VERSION = 0
 export const CB_LIFECYCLE = 1
 export const CB_FRAME_REQ = 2
@@ -18,6 +18,17 @@ export const CB_FLAGS = 3
  * `StepControl`-shaped value (1 = object, 2 = burst) applied by `src/worker/gc-hook.ts`. One global
  * word, not per-worker: `zeroGcSuite` arms at most one isolate's control at a time. */
 export const CB_TEST_CONTROL = 4
+/**
+ * The sim worker's own step-tick request word (docs/plan/13-sim-host-tick-loop.md, Scope: "A
+ * `CB_*` step-tick request word serves `stepTick`"), the same monotonic-counter shape as
+ * `CB_FRAME_REQ` (`worker/client.ts`'s own `frameReq !== lastFrameReq` idiom): a caller
+ * `Atomics.add`s the number of ticks wanted, then wakes `WORKER_HOST`; `worker/sim.ts`'s `body()`
+ * diffs the word against what it last saw and runs that many ticks through `SimHost.stepTick`,
+ * bypassing the real-time pacing timer entirely (deterministic, for `engine/test`'s `stepTick` and
+ * `asHarness.stepTick`'s own generic per-call "run one tick" contract, not for production pacing,
+ * which never touches this word). One global word, not per-worker: there is at most one `sim`/`net`
+ * worker (`WORKER_HOST`) in any topology. */
+export const CB_SIM_STEP_REQ = 5
 
 export const Lifecycle = { Booting: 0, Running: 1, Stopping: 2, Fatal: 3 } as const
 export type Lifecycle = (typeof Lifecycle)[keyof typeof Lifecycle]

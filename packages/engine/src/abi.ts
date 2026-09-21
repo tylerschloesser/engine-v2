@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 7
+export const ABI_VERSION = 8
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -75,6 +75,11 @@ export const ABI_EXPORTS = {
   // (`host::warm`), nearest-to-view-centre first. `1`/`0` (not a `Status`: costs nothing, always
   // answers), the same shape as `gen_take`/`upload_stage`.
   sim_warm_one: { role: 'sim', params: 0, result: 'u32' },
+  // docs/plan/13-sim-host-tick-loop.md ("20 Hz is hardcoded" gap): the sim role's own tick rate
+  // (`u32`, e.g. `20`), read once by `SimHost` at construction. `20` (the `Instance` trait
+  // default) on any instance that never overrides it; not a `Status`, same shape as
+  // `sim_warm_one`.
+  tick_hz: { role: 'sim', params: 0, result: 'u32' },
   // `t_ms: f64` (0014 §4's client hot-export table; docs/plan/06b-workers-and-spawn.md): called
   // only when `CB_FRAME_REQ` has advanced since the last call (Planning decisions "Worker frame
   // clock"). `params: 1` here means "one number", whatever its wasm type (0014 §2).

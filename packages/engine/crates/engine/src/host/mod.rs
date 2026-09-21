@@ -157,4 +157,10 @@ where
         let terrain = sim.authority().store().terrain();
         u32::from(self.warm.warm_one(terrain).is_some())
     }
+
+    /// "20 Hz is hardcoded" gap (docs/plan/13-sim-host-tick-loop.md): `G`'s own real rate, not
+    /// the trait default.
+    fn tick_hz(&mut self) -> u32 {
+        G::TICK_RATE.hz_value()
+    }
 }

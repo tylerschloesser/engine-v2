@@ -81,7 +81,13 @@ declare global {
 
 window.__createClient = (opts = {}) => {
   const canvas = document.createElement('canvas')
-  const host = opts.host ?? { kind: 'local', world: { game: DEFAULT_GAME } }
+  // `world` is structurally valid but otherwise inert: `test.game` (below) overrides every
+  // worker's real config (docs/plan/13-sim-host-tick-loop.md, Scope "createClient local host"),
+  // same as before this milestone's real `WorldConfig` type replaced the old `{ game }` stub.
+  const host: ClientOptions['host'] = opts.host ?? {
+    kind: 'local',
+    world: { worldId: 'w', params: { seed: '1', worldgen: DEFAULT_GAME } },
+  }
   // `flags` defaults to `{}`, not omitted: every worker this test page spawns is a test worker, so
   // its setup message should always carry `test` (orchestrator decision 1's gate on the setup
   // message's own `test` field -- always empty for a real game, always present here) and expose

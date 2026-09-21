@@ -63,6 +63,19 @@ export type TestCallMessage = {
   resultBytes?: number
 }
 
+/**
+ * `SIM_COUNTERS_CALL`: the `test-call` `name` `worker/sim.ts`'s own `testCall` handler answers
+ * directly instead of forwarding to `handleTestCall` (docs/plan/13-sim-host-tick-loop.md, step 5):
+ * `SimHostCounters` is JS-side `SimHost` state, not an ABI export `handleTestCall` could ever reach
+ * through `EngineInstance`. Leading double underscore, same convention as `worker.ts`'s own
+ * `__engineWorkerKind`/`__engineIsolateName` debug globals: never a real ABI export name, so it can
+ * never collide with one. Shared here (not duplicated) so `worker/sim.ts` and `test/client.ts`'s
+ * `simCounters` agree on the exact string without either importing the other. */
+export const SIM_COUNTERS_CALL = '__sim_counters'
+/** Byte layout `simCounters` decodes: five little-endian `u32`s, `SimHostCounters`'s own field
+ * order (`server.ts`). */
+export const SIM_COUNTERS_BYTES = 20
+
 export type ToWorker = SetupMessage | { type: 'resume' } | { type: 'stop' } | TestCallMessage
 
 export type FromWorker =

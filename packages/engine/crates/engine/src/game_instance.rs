@@ -179,6 +179,14 @@ where
         }
     }
 
+    /// "20 Hz is hardcoded" gap (docs/plan/13-sim-host-tick-loop.md): `G::TICK_RATE`'s own value,
+    /// the same for every variant (a game-level constant, not role-specific) -- `abi::tick_hz`
+    /// only ever calls this while `role == Role::Sim` (its own "wrong role" branch never reaches
+    /// an instance method at all), but the answer would be identical from any variant.
+    fn tick_hz(&mut self) -> u32 {
+        G::TICK_RATE.hz_value()
+    }
+
     fn gen_chunk(&mut self, cx: i32, cy: i32, out: &mut [u8]) -> Status {
         match self {
             GameInstance::Gen(core) => core.gen_chunk(cx, cy, out),

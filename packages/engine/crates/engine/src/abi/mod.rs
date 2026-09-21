@@ -192,6 +192,16 @@ pub fn sim_warm_one<T: Instance>(slot: &Slot<T>) -> u32 {
     }
 }
 
+/// `tick_hz()`: the sim role's own tick rate ("20 Hz is hardcoded" gap, docs/plan/
+/// 13-sim-host-tick-loop.md). Same "always answer, cost nothing on a wrong role" shape as
+/// `sim_warm_one`: the trait default (`20`) on anything but `Role::Sim`, not an error.
+pub fn tick_hz<T: Instance>(slot: &Slot<T>) -> u32 {
+    match slot.sim() {
+        Ok(rt) => rt.inst.tick_hz(),
+        Err(_) => 20,
+    }
+}
+
 /// The raw export argument is **unused** (hence `_raw_t_ms`), and the `t_ms` an `Instance::frame`
 /// receives is `camera.frame_time_ms`, read out of this role's own `Camera` region -- decision A of
 /// fix round 3 (docs/plan/06b-workers-and-spawn.md, Deviations). The JS side stopped computing the

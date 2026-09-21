@@ -55,6 +55,7 @@ function fakeSim(overrides: Partial<SimInstance> = {}): SimInstance {
     simSealFrame: () => ({ len: 0 }),
     simHash: () => '0000000000000000',
     simWarmOne: () => 0,
+    tickHz: () => 20,
     ...overrides,
   }
 }
@@ -78,6 +79,39 @@ test('simhost_paces_at_tick_rate', () => {
   clock.advance(TICK_MS / 2)
   timer.fire()
   expect(host.counters.ticksRun).toBe(2)
+})
+
+test('simhost_paces_at_configured_tick_rate', () => {
+  // "20 Hz is hardcoded" gap (Deviations): a fake instance reporting a non-20 rate must actually
+  // pace at that rate -- the point of this test is that it can fail. If `SimHost` still paced off
+  // the private 20 Hz constant this milestone removed, every assertion below using `HZ_MS` (25,
+  // not 50) would instead need twice as many `clock.advance(HZ_MS)` calls to run one tick.
+  const HZ = 40
+  const HZ_MS = 1000 / HZ // 25, an exact integer already (Math.round is a no-op here).
+  const clock = manualClock()
+  const timer = manualTimer()
+  const host = createSimHostFromInstance(fakeSim({ tickHz: () => HZ }), {
+    clock,
+    timer: timer.services,
+  })
+  host.start()
+
+  // Half of one 40 Hz interval: nothing due yet at 50 (20 Hz's own interval) either, so this
+  // alone would not distinguish the two rates -- the assertions below do.
+  clock.advance(HZ_MS / 2)
+  timer.fire()
+  expect(host.counters.ticksRun).toBe(0)
+
+  // The other half: one whole 40 Hz interval has now elapsed (25 ms total), well under 20 Hz's
+  // own 50 ms interval -- only a host actually paced at 40 Hz runs a tick here.
+  clock.advance(HZ_MS / 2)
+  timer.fire()
+  expect(host.counters.ticksRun).toBe(1)
+
+  clock.advance(HZ_MS)
+  timer.fire()
+  expect(host.counters.ticksRun).toBe(2)
+  expect(host.counters.ticksDropped).toBe(0)
 })
 
 test('simhost_caps_catchup_and_drops_time', () => {
@@ -114,6 +148,7 @@ test('simhost_seal_precedes_tick', () => {
     },
     simHash: () => '0000000000000000',
     simWarmOne: () => 0,
+    tickHz: () => 20,
   }
   const logSpy = vi.fn((bytes: Uint8Array) => order.push(`log:${bytes.length}`))
   const host = createSimHostFromInstance(sim, { clock, timer: timer.services })

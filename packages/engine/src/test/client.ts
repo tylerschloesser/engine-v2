@@ -2,12 +2,14 @@
 // time driving a real `createClient()` result (docs/plan/06b-workers-and-spawn.md, Seams). Never
 // imported by production code.
 
+import { Status } from '../abi.js'
 import { writeCameraBlock } from '../camera/block.js'
 import type { CameraState } from '../camera/state.js'
 import type { Client, ClientTestHandle, WorkerEntry } from '../client.js'
 import { clientTestHandle } from '../client.js'
 import {
   CB_FRAME_REQ,
+  CB_SIM_STEP_REQ,
   CB_TEST_CONTROL,
   W_ACK,
   W_MEM_GROWS,
@@ -16,11 +18,13 @@ import {
   W_WAKE,
   W_YIELD,
   WORKER_CLIENT,
+  WORKER_HOST,
   workerWord,
 } from '../sab/control.js'
 import { RingConsumer, type RingStats } from '../sab/ring.js'
+import type { SimHostCounters } from '../server.js'
 import type { FromWorker, ToWorker } from '../worker/protocol.js'
-import { isolateName } from '../worker/protocol.js'
+import { isolateName, SIM_COUNTERS_BYTES, SIM_COUNTERS_CALL } from '../worker/protocol.js'
 import type { Harness } from './harness.js'
 import type { ManualClock } from './manual-clock.js'
 import { StepControl } from './step-block.js'
@@ -255,6 +259,80 @@ export function callParked(
     w.worker.addEventListener('message', onMessage as EventListener)
     w.worker.postMessage(msg)
   })
+}
+
+/**
+ * The synchronous core of `stepTick` (below): bumps `CB_SIM_STEP_REQ` by `n`, wakes the sim-kind
+ * worker (`WORKER_HOST`) and spins on its own `W_ACK` -- `stepFrame`'s own "wake, then spin until
+ * acked" idiom, confirming the request has already been served (`worker/sim.ts`'s `body()` runs
+ * the `n` ticks synchronously before it next acks) before returning. Exported separately
+ * (Deviations: a fourth name past the brief's own three) so a zero-GC page's synchronous `drive()`
+ * loop (`gc-sim.ts`) can call it directly, without `stepTick`'s own trailing `untilQuiescent` -- a
+ * `parkWorkers` round trip has no place inside a measured allocation window. Throws synchronously
+ * if no `sim`-kind worker was spawned, or if it never acks.
+ */
+export function stepSimTickSync(client: Client, n = 1): void {
+  const h = clientTestHandle(client)
+  if (!h.workers.some((w) => w.kind === 'sim')) {
+    throw new Error('stepSimTickSync: no sim-kind worker was spawned')
+  }
+  Atomics.add(h.control.words, CB_SIM_STEP_REQ, n)
+  h.control.wake(WORKER_HOST)
+  const want = Atomics.load(h.control.words, workerWord(WORKER_HOST, W_WAKE))
+  let spins = 0
+  while (Atomics.load(h.control.words, workerWord(WORKER_HOST, W_ACK)) < want) {
+    if (++spins > SPIN_LIMIT) {
+      throw new Error('stepSimTickSync: the sim worker did not ack the step request')
+    }
+  }
+}
+
+/**
+ * Runs `n` ticks on the sim-kind worker deterministically, bypassing real-time pacing entirely
+ * (docs/plan/13-sim-host-tick-loop.md, Scope: "A `CB_*` step-tick request word serves `stepTick`"):
+ * `stepSimTickSync` (above), then resolves with `untilQuiescent(client)`, which also settles every
+ * worker back to parked (a precondition `worldHash`/`simCounters`'s own `callParked` calls
+ * require).
+ */
+export function stepTick(client: Client, n = 1): Promise<void> {
+  stepSimTickSync(client, n)
+  return untilQuiescent(client)
+}
+
+/** `EngineInstance.readU64Hex`'s own byte order (`loader.ts`), replicated here over a plain
+ * `Uint8Array` copy: `callParked`'s reply is a copy of `Result` region bytes, not a live
+ * `EngineInstance` this file could call `readU64Hex` on directly. */
+function hex64(bytes: Uint8Array): string {
+  let hex = ''
+  for (let i = 7; i >= 0; i--) {
+    hex += (bytes[i] as number).toString(16).padStart(2, '0')
+  }
+  return hex
+}
+
+/** The `role=sim` instance's own state hash (16-digit lowercase hex, `sim_hash`'s own format):
+ * requires the sim worker parked (`stepTick`'s own end state; a bare `callParked` precondition). */
+export async function worldHash(client: Client): Promise<string> {
+  const { value, result } = await callParked(client, 'sim', 'sim_hash', [], 8)
+  if (value !== Status.Ok) {
+    throw new Error(`worldHash: sim_hash failed: status ${value}`)
+  }
+  return hex64(result)
+}
+
+/** `SimHost.counters` (`server.ts`), read out of the sim worker's own JS-side state through the
+ * synthetic `test-call` name `worker/sim.ts`'s `testCall` handles directly (`worker/protocol.ts`'s
+ * `SIM_COUNTERS_CALL`): requires the sim worker parked, same precondition as `worldHash`. */
+export async function simCounters(client: Client): Promise<SimHostCounters> {
+  const { result } = await callParked(client, 'sim', SIM_COUNTERS_CALL, [], SIM_COUNTERS_BYTES)
+  const view = new DataView(result.buffer, result.byteOffset, result.byteLength)
+  return {
+    ticksRun: view.getUint32(0, true),
+    ticksDropped: view.getUint32(4, true),
+    tickOverruns: view.getUint32(8, true),
+    chunksWarmed: view.getUint32(12, true),
+    genOnMiss: view.getUint32(16, true),
+  }
 }
 
 const WASM_PAGE_BYTES = 65536

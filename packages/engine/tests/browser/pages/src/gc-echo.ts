@@ -28,7 +28,10 @@ const canvas = document.createElement('canvas')
 const client: Client = createClient({
   canvas,
   wasm,
-  host: { kind: 'local', world: { game: DEFAULT_GAME } },
+  // `world` is structurally valid but otherwise inert: `test.game` (below) overrides every
+  // worker's real config (docs/plan/13-sim-host-tick-loop.md, Scope "createClient local host"),
+  // same as before this milestone's real `WorldConfig` type replaced the old `{ game }` stub.
+  host: { kind: 'local', world: { worldId: 'w', params: { seed: '1', worldgen: DEFAULT_GAME } } },
   genWorkers: 1,
   test: { game: DEFAULT_GAME, flags: { echo: true, gcHook: true } },
 })

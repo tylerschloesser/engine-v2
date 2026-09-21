@@ -8,9 +8,13 @@ export {
   parkWorkers,
   resumeWorkers,
   setCamera,
+  simCounters,
   stepFrame,
+  stepSimTickSync,
+  stepTick,
   type TestCallResult,
   untilQuiescent,
+  worldHash,
 } from './test/client.js'
 export type { NegativeControl } from './test/controls.js'
 export { fnv1a64Hex } from './test/fnv.js'

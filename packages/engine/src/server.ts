@@ -8,8 +8,14 @@
 // (`storage` is unused until M22: Non-scope here).
 
 import { RegionId, Role, Status } from './abi.js'
-import type { EngineInstance, InstanceConfig } from './loader.js'
+import type { EngineInstance } from './loader.js'
 import { instantiate } from './loader.js'
+import { buildSimInstanceConfig, type WorldConfig } from './sim-config.js'
+
+// `sim-config.ts`'s own pure helpers (Seams: no renamed Provides -- still `server.ts`'s own export
+// surface, just built elsewhere so `client.ts` can import them without also importing `loader.ts`,
+// `main.no_wasm_instantiate`'s own rule).
+export { buildSimInstanceConfig, seedToHexU64, type WorldConfig } from './sim-config.js'
 
 // ---------------------------------------------------------------------------------------------
 // 0009 / 0005 types, declared exactly (types only).
@@ -47,32 +53,6 @@ export interface HostServices {
   onIdle?: () => void
 }
 
-export interface WorldConfig<Params = unknown> {
-  worldId: string
-  buildHash: string
-  params: {
-    /** u64 as decimal text (0009); `createSimHost` converts it to `HexU64` form once (0024 §5). */
-    seed: string
-    worldgen: Params
-    maxEntities?: number
-    maxModifiedTiles?: number
-    maxActionGrowth?: number
-  }
-  joinKey?: string
-  maxPlayers?: number
-  keepTickingWhenEmpty?: boolean
-  view?: { maxTilesPerAxis?: number; maxChunks?: number }
-  cacheChunks?: number
-  arenaBytes?: number
-  actionRate?: { perSecond?: number; burst?: number }
-  bandwidth?: {
-    softCapBytesPerS?: number
-    chunkRefillBytesPerS?: number
-    chunkBurstBytes?: number
-    hardCapBytesPerS?: number
-  }
-}
-
 // ---------------------------------------------------------------------------------------------
 // Pacing constants.
 // ---------------------------------------------------------------------------------------------
@@ -83,55 +63,15 @@ export const MAX_CATCHUP_TICKS = 5
 export const WARM_BUDGET_MS = 2
 
 /**
- * `Game::TICK_RATE`'s own default (`TickRate::HZ_20`, 0006) and the only rate any existing game
- * (`fx-puts`) uses. 0009 fixes tick rate as "a compile-time constant of the game crate ... not
- * config", so `WorldConfig` carries no such field, and nothing in this milestone's ABI additions
- * exposes a per-game rate either (Scope names exactly `sim_genesis`/`sim_seal_frame`/
- * `sim_warm_one`). `SimHost` therefore paces at 20 Hz unconditionally; see Deviations for the gap
- * this leaves for a future non-default-rate game.
+ * `Game::TICK_RATE`'s own default (`TickRate::HZ_20`, 0006). 0009 fixes tick rate as "a compile-
+ * time constant of the game crate ... not config", so `WorldConfig` carries no such field; instead
+ * `SimHost` reads the real rate once, at construction, from the `tick_hz` ABI export (`Instance::
+ * tick_hz`, `Host<G>`/`GameInstance<G>` overriding the trait's `20` default with `G::TICK_RATE.
+ * hz_value()`) -- a game that never overrides `TICK_RATE` still gets exactly 20. Kept here only as
+ * the fallback tick rate `createSimHostFromInstance` rounds to whole milliseconds from
+ * (`Math.round(1000 / hz)`, "the pacing arithmetic stays in integer milliseconds").
  */
-const TICK_HZ = 20
-const TICK_MS = 1000 / TICK_HZ
-
-// ---------------------------------------------------------------------------------------------
-// Seed conversion (0024 §5).
-// ---------------------------------------------------------------------------------------------
-
-const DECIMAL_SEED = /^[0-9]+$/
-const U64_MAX = 0xffffffffffffffffn
-
-/**
- * Decimal text (`WorldConfig.params.seed`) to the engine's `HexU64` config form: `"0x"` plus
- * lowercase hex, no padding (`abi::config::HexU64`'s `Deserialize` accepts 1 to 16 hex digits, so
- * `"0"` -> `"0x0"` round-trips through Rust exactly as `"18446744073709551615"` ->
- * `"0xffffffffffffffff"` does). Throws on a sign, non-decimal text, or a value past 2^64 - 1.
- */
-export function seedToHexU64(seed: string): string {
-  if (!DECIMAL_SEED.test(seed)) {
-    throw new Error(`createSimHost: seed must be decimal digits, got ${JSON.stringify(seed)}`)
-  }
-  const n = BigInt(seed)
-  if (n > U64_MAX) {
-    throw new Error(`createSimHost: seed exceeds u64 (2^64 - 1): ${seed}`)
-  }
-  return `0x${n.toString(16)}`
-}
-
-/** `WorldConfig` -> the sim role's `InstanceConfig` (Scope "Sim-role config"). Pure: no
- * instantiation, so the seed conversion is testable without a module. */
-export function buildSimInstanceConfig(cfg: WorldConfig): InstanceConfig {
-  return {
-    arenaBytes: cfg.arenaBytes ?? 96 * 1024 * 1024,
-    game: {
-      seed: seedToHexU64(cfg.params.seed),
-      params: cfg.params.worldgen,
-      maxEntities: cfg.params.maxEntities,
-      maxModifiedTiles: cfg.params.maxModifiedTiles,
-      maxActionGrowth: cfg.params.maxActionGrowth,
-      cacheChunks: cfg.cacheChunks,
-    },
-  }
-}
+const DEFAULT_TICK_HZ = 20
 
 // ---------------------------------------------------------------------------------------------
 // `SimInstance`: the sim-role export surface `SimHost` drives.
@@ -160,6 +100,10 @@ export interface SimInstance {
   simHash(): string
   /** `1` if a chunk was generated, `0` if nothing was cold. */
   simWarmOne(): number
+  /** `Instance::tick_hz`'s own value ("20 Hz is hardcoded" gap): `G::TICK_RATE.hz_value()` for a
+   * real game, `20` (the trait default) for anything that never overrides it. Read once, by
+   * `createSimHostFromInstance`, at construction -- not on every tick. */
+  tickHz(): number
 }
 
 /** The real adapter: `SimInstance` over a real `EngineInstance` (role `Sim`). */
@@ -181,6 +125,7 @@ export function wrapEngineInstance(inst: EngineInstance): SimInstance {
       return inst.readU64Hex(RegionId.Result, 0)
     },
     simWarmOne: () => inst.call0(inst.x.sim_warm_one),
+    tickHz: () => inst.call0(inst.x.tick_hz),
   }
 }
 
@@ -224,6 +169,12 @@ type TimerServices = Pick<HostServices, 'clock' | 'timer'>
 
 /** The shared implementation, over an already-built [`SimInstance`] -- real or fake. */
 export function createSimHostFromInstance(sim: SimInstance, services: TimerServices): SimHost {
+  // Read once, here, not per tick (`SimInstance.tickHz`'s own doc comment): "the pacing arithmetic
+  // stays in integer milliseconds" -- `Math.round`, not the raw division, so an odd rate (e.g. 30
+  // Hz) still paces on a whole-millisecond boundary instead of carrying a fractional one through
+  // every `due`/`base` computation below. `|| DEFAULT_TICK_HZ` covers only a `tickHz()` of `0`
+  // (division by zero): a real ABI export never returns that (the trait default is `20`).
+  const tickMs = Math.round(1000 / (sim.tickHz() || DEFAULT_TICK_HZ))
   const counters: SimHostCounters = {
     ticksRun: 0,
     ticksDropped: 0,
@@ -261,14 +212,14 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
   function runOneTickTimed(): void {
     const tickStart = services.clock.now()
     runOneTick()
-    if (services.clock.now() - tickStart > TICK_MS) counters.tickOverruns++
+    if (services.clock.now() - tickStart > tickMs) counters.tickOverruns++
   }
 
   function warm(): void {
     const warmStart = services.clock.now()
     // The next not-yet-run tick's own deadline (tick `ticksRun` has just run; tick `ticksRun + 1`
     // is next).
-    const nextDeadline = base + (counters.ticksRun + 1) * TICK_MS
+    const nextDeadline = base + (counters.ticksRun + 1) * tickMs
     const deadline = Math.min(nextDeadline, warmStart + WARM_BUDGET_MS)
     while (services.clock.now() < deadline) {
       if (sim.simWarmOne() !== 1) break
@@ -280,12 +231,12 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
    * (and counting) the rest by moving `base` forward so sim time falls behind wall time. */
   function onFire(): void {
     const now = services.clock.now()
-    const due = Math.floor((now - base) / TICK_MS) - counters.ticksRun
+    const due = Math.floor((now - base) / tickMs) - counters.ticksRun
     if (due <= 0) return
     const runCount = Math.min(due, MAX_CATCHUP_TICKS)
     if (due > MAX_CATCHUP_TICKS) {
       const dropped = due - MAX_CATCHUP_TICKS
-      base += dropped * TICK_MS
+      base += dropped * tickMs
       counters.ticksDropped += dropped
     }
     for (let i = 0; i < runCount; i++) runOneTickTimed()
@@ -293,7 +244,7 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
   }
 
   function arm(): void {
-    stopTimer = services.timer.every(TICK_MS, onFire)
+    stopTimer = services.timer.every(tickMs, onFire)
   }
 
   function disarm(): void {

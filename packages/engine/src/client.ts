@@ -30,17 +30,25 @@ import {
   workerWord,
 } from './sab/control.js'
 import { createSabSet, MAX_GEN_WORKERS, type SabSet, sabBytesTotal } from './sab/layout.js'
+import {
+  buildSimInstanceConfig,
+  type WorldConfig as ServerWorldConfig,
+  seedToHexU64,
+} from './sim-config.js'
 import type { FromWorker, TestFlags, ToWorker, WorkerKind } from './worker/protocol.js'
 
 export type { SupportFailure, SupportFailureCode, SupportReport } from './support.js'
 export { checkSupport } from './support.js'
 
 /**
- * Provisional: the real shape belongs to M07's world model. Only `game` (forwarded verbatim, as
- * JSON, to the sim instance's config) is needed to route data through the spawn path this
- * milestone builds; a later milestone widens this without touching `ClientOptions`'s own shape.
+ * The real shape (docs/plan/13-sim-host-tick-loop.md, Scope "`createClient` local host"): `server.
+ * ts`'s own `WorldConfig` (0009), minus `buildHash` -- `createClient` fills that itself, from
+ * `ClientOptions.wasm.buildHash`, the same build the worker set it spawns is instantiated from (a
+ * caller would otherwise have to keep two copies of one hash in sync). `Params` defaults to
+ * `unknown`, matching `server.ts`'s own default; `ClientOptions` itself stays non-generic (Seams:
+ * no renamed Provides).
  */
-export type WorldConfig = { game?: unknown }
+export type WorldConfig<Params = unknown> = Omit<ServerWorldConfig<Params>, 'buildHash'>
 
 /** docs/plan/09b-terrain-art-and-lifecycle.md, Seams (Provides): `ClientOptions.render`'s exact
  * shape. Defaults (per that brief's own Seams line): `scale` per 0018 §8 (`render/viewport.ts`'s
@@ -519,10 +527,28 @@ export function createClient(options: ClientOptions): Client {
       }
     }
 
+    // The real `WorldConfig`, `buildHash` filled from `options.wasm.buildHash` (this milestone's
+    // own "the engine fills `buildHash`" rule): only present for a local host.
+    const worldConfig: ServerWorldConfig | undefined =
+      options.host.kind === 'local'
+        ? { ...options.host.world, buildHash: options.wasm.buildHash }
+        : undefined
+
+    // `options.test.game` is the documented escape hatch for *every* worker (its own doc comment:
+    // "overriding `host.world.game`"), so it still wins over a real `WorldConfig` when set. Absent
+    // that, each role gets its own config shape converted from the one real `WorldConfig`
+    // (Planning decisions: "the client and gen workers take them from `host.world.params`" until
+    // M28 delivers seed/params in `Welcome`) -- `sim`'s own shape (`SimConfig`, `host::mod.rs`) is
+    // `buildSimInstanceConfig`'s (already built, steps 1-3); `gen`/`client`'s own shape
+    // (`TerrainConfig`, `game_instance.rs`) needs only `seed`/`params`, the rest defaulted, so it
+    // is built inline here rather than through a second named export nothing else calls yet.
+    const simGame =
+      options.test?.game ?? (worldConfig ? buildSimInstanceConfig(worldConfig).game : null)
     const game =
       options.test?.game ??
-      (options.host.kind === 'local' ? options.host.world.game : undefined) ??
-      null
+      (worldConfig
+        ? { seed: seedToHexU64(worldConfig.params.seed), params: worldConfig.params.worldgen }
+        : null)
 
     type Spawn = { kind: WorkerKind; index: number; arenaBytes: number }
     const spawns: Spawn[] = [{ kind: 'client', index: WORKER_CLIENT, arenaBytes: arenas.client }]
@@ -539,7 +565,7 @@ export function createClient(options: ClientOptions): Client {
     const waits = spawns.map(({ kind, index, arenaBytes }) => {
       const worker = spawnWorker(options)
       workers.push({ kind, index, worker })
-      const config: InstanceConfig = { arenaBytes, game }
+      const config: InstanceConfig = { arenaBytes, game: kind === 'sim' ? simGame : game }
       const wasm: { module?: WebAssembly.Module; url?: string } = {}
       if (kind !== 'net') {
         if (module) wasm.module = module

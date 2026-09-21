@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 7;
+pub const ABI_VERSION: u32 = 8;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -165,6 +165,17 @@ pub trait Instance: Sized + 'static {
         0
     }
 
+    /// docs/plan/13-sim-host-tick-loop.md ("20 Hz is hardcoded" gap): the sim role's own tick
+    /// rate, read once by `SimHost` at construction instead of assuming 20 unconditionally. A
+    /// game exposes its real rate by overriding this to return `G::TICK_RATE.hz_value()`
+    /// (`host::Host<G>`, `game_instance::GameInstance<G>`); the default (`20`, `TickRate::HZ_20`'s
+    /// own value, 0006) is what every game that never overrides `TICK_RATE` already paces at, so
+    /// a low-level fixture with no `Sim` role at all still answers safely. Same "always answer,
+    /// cost nothing" shape as `sim_warm_one`/`gen_take`: no `Status` crosses.
+    fn tick_hz(&mut self) -> u32 {
+        20
+    }
+
     /// Called only when the client worker saw `CB_FRAME_REQ` advance (docs/plan/06b-workers-and-
     /// spawn.md, Planning decisions "Worker frame clock"): `t_ms` is that frame's `frame_time_ms`,
     /// taken from `camera` by the shim in `abi::frame` rather than from the export's own raw
@@ -297,6 +308,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_warm_one() -> u32 {
             $crate::abi::sim_warm_one(&__ENGINE_SLOT)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn tick_hz() -> u32 {
+            $crate::abi::tick_hz(&__ENGINE_SLOT)
         }
 
         // client
