@@ -42,7 +42,10 @@ impl ChunkOverlay {
 
     /// Sorted ascending by index: the canonical entry list (Planning decisions 6). M14's wire
     /// overlay-run encoding and `TerrainStore::write_canonical` both build on this same iterator.
-    pub fn entries(&self) -> impl Iterator<Item = (u16, Tile)> + '_ {
+    /// `Clone` (a plain `slice::Iter` under a non-capturing `.map`, so this is free) lets
+    /// `wire::OverlayRunsWriter` walk it twice -- once to count runs, once to write them -- without
+    /// collecting it into a buffer first (docs/plan/14-wire-framing.md).
+    pub fn entries(&self) -> impl Iterator<Item = (u16, Tile)> + Clone + '_ {
         self.entries.iter().map(|e| (e.index, e.tile))
     }
 

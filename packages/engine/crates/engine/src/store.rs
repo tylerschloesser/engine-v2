@@ -185,6 +185,15 @@ impl<G: Game> Store<G> {
         self.entities.get(&id)
     }
 
+    /// Every entity in ascending id order (`BTreeMap`'s own iteration order, 0022 §1's `Ord`).
+    /// Additive accessor beyond M12's own Provides list, like `terrain()`/`next_entity_id()`
+    /// (docs/plan/12-store-and-game-trait.md Deviations): nothing needed to enumerate every entity
+    /// before `wire::encode_chunk_snapshot` (M14), which scans them to find those anchored to one
+    /// chunk.
+    pub fn entities(&self) -> impl Iterator<Item = (EntityId, &G::Entity)> + '_ {
+        self.entities.iter().map(|(&id, e)| (id, e))
+    }
+
     pub fn global(&self) -> &G::Global {
         &self.global
     }
