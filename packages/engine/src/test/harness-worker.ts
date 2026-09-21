@@ -31,6 +31,21 @@ function post(m: FromWorker): void {
   scope.postMessage(m)
 }
 
+// Preallocated, never mutated: `armedLoop` posts each of these exactly once per call (worker entry
+// and exit, not per tick), but it is called fresh on every `harness.resume()`/`park()` round trip --
+// `gc-page.ts`'s `run()` does one such round trip per invocation, and `instrument.ts` calls `run()`
+// twice inside the measured windows (once per window) -- so a literal `{ type: 'armed' }`/`{ type:
+// 'parked' }` built at the call site allocates once inside *each* window, identically, surviving
+// 0028's lower-of-two-windows filter (which only removes an event confined to one window) and
+// making `gc: flat transport parity`'s exact byte-for-byte comparison depend on which of two small,
+// V8-internal-detail-sized byte counts a given session happened to land on (found via `windowByFn`,
+// gc-parity defect-fix session, 2026-09-21: `armedLoop@harness-worker.ts` carrying the entire 8-byte
+// discrepancy, present and stable in both windows, only its magnitude -- 32 vs 40 -- varying between
+// independently-instantiated sessions). Neither message carries a per-call value (`protocol.ts`'s
+// `FromWorker`), so both are ordinary module-level constants instead.
+const ARMED: FromWorker = { type: 'armed' }
+const PARKED: FromWorker = { type: 'parked' }
+
 /** One tick's engine work, shared by the SAB step protocol and the `post-message` control's message
  * handler (docs/plan/04-zero-gc-harness.md, Seams): copy the fixed block SAB -> `Rx`, `sim_admit`,
  * `sim_tick`, `sim_build_frame`, copy the fixed frame block `Tx` -> SAB, through the view pairs
@@ -78,7 +93,7 @@ function runOp(op: number, seq: number): void {
 function armedLoop(block: Int32Array): void {
   let last = Atomics.load(block, StepBlockField.Req)
   Atomics.store(block, StepBlockField.State, WorkerState.Armed)
-  post({ type: 'armed' })
+  post(ARMED)
   for (;;) {
     Atomics.wait(block, StepBlockField.Req, last)
     if (Atomics.load(block, StepBlockField.Yield)) break
@@ -90,7 +105,7 @@ function armedLoop(block: Int32Array): void {
   }
   Atomics.store(block, StepBlockField.Yield, 0)
   Atomics.store(block, StepBlockField.State, WorkerState.Idle)
-  post({ type: 'parked' })
+  post(PARKED)
 }
 
 scope.onmessage = (ev) => {
