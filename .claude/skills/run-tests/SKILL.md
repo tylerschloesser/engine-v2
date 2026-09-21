@@ -88,6 +88,39 @@ the scenario on the `.wasm` under Node, docs/decisions/0020 §5). Review the dif
 one: a changed golden is a changed sim, never something to regenerate to make a test pass. Never run
 it on an existing fixture just because a test disagrees with the checkpoint.
 
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`), `ubuntu-latest`, on every push to `main` and every
+`pull_request`: `pnpm lint`, then `pnpm test`, then `pnpm test:slow`, each with `CI=true
+ENGINE_GPU=swiftshader GC_MODE=software` and `--budget-scale 1000 --timings-json
+test-results/timings[-slow].json` (docs/plan/10-ci-workflow.md). `ENGINE_GPU=swiftshader` makes
+`playwright.config.ts` switch the `chromium`/`gc` projects to `channel: 'chromium-headless-shell'`
+and add the 0020 §6 SwiftShader launch flags (the full `chromium` channel, "new headless", returned
+a null adapter on this runner — the headless-shell channel is the one that works). `GC_MODE=software`
+makes every `gc`-project test use software-mode arithmetic: `main` compares `attributedBytesPerFrame`
+against `budgets.json`'s `gc.pages.<page>.software.isolates.main`; every other isolate compares raw
+`bytesPerFrame` against its own hardware budget, same as hardware mode (a page's `software.isolates`
+map needs only a `main` key). `--budget-scale 1000` means no suite fails on time; timings are
+recorded to the job summary and the `test-results` artifact, never gating.
+
+**Reading a failed run**: `gh run list` (find the run) → `gh run view <id> --log-failed` (the
+failing step's own output; the runner's own quiet contract, 0020 §2, keeps this short) → `gh run
+download <id> -n test-results` instead of re-running to look (Playwright traces, `report.json`,
+`timings.json`). `gh run watch <id>` blocks; prefer a bounded `gh run view --json status,conclusion`
+poll or just wait for the run to finish before reading it.
+
+**`@gpu-local`**: reserved, not used. M10's own spike B closed on the first working fallback
+(`chromium-headless-shell`); a GPU test that cannot run on a software adapter would be tagged
+`@gpu-local` and excluded from CI by grep, but no test needed this.
+
+**Per-adapter-class goldens**: also reserved, not used. Every M09 readback scene, pixel probe and
+the whole `gc` project (including `terrain`/`input`'s zero-GC pages) matched the Apple-silicon
+goldens exactly on SwiftShader (0020 §6's tolerance never approached, no golden mismatch at all) —
+0020 §6's naming (`<scene>.swiftshader.png`, checked in beside a scene's existing golden once one
+exists) is the convention a future scene reaches for only if Metal and SwiftShader ever disagree
+beyond tolerance; no scene has needed one, and no goldens directory exists yet for any scene (see
+"GPU/readback tests" above).
+
 ## A look at a running page
 
 For a one-off look at a page (not an assertion, not something to keep running) use the
