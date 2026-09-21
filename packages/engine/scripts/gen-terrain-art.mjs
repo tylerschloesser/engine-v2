@@ -9,8 +9,10 @@
 // art"): extends M09's four cells rather than replacing them (`tile_px` shrunk from 16 to 4 --
 // M09's own probes only ever assert flat cell *colours*, never a size, and every cell stays
 // uniformly coloured under any mip/filter, so this is colour-preserving for every M09 test) and
-// appends a 3-variant visual plus two differing-priority, 2-texel-band visuals for M09b's own
-// hash/dither probes.
+// appends a 3-variant visual, two differing-priority, 2-texel-band visuals, and (fix round 1: flip/
+// rotate had zero pixel coverage, since every prior cell is flat and a flip or rotate of a flat
+// colour is unobservable) one quadrant-patterned cell so a flip/rotate transform visibly changes
+// which quadrant a probed texel reads.
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { encodePNG } from './lib/png.mjs'
@@ -21,9 +23,10 @@ mkdirSync(outDir, { recursive: true })
 const TILE_PX = 4
 const COLUMNS = 4
 
-// Cell index -> flat RGBA colour. Visual ids (below) are independent of cell index: `tiles.json`'s
-// `first` is what maps one to the other (docs/plan/09-renderer-terrain.md Planning decisions
-// "tiles.json schema v1").
+// Cell index -> flat RGBA colour, or `{ quadrants: [TL, TR, BL, BR] }` for a 2x2-quadrant cell
+// (fix round 1, below). Visual ids (below) are independent of cell index: `tiles.json`'s `first` is
+// what maps one to the other (docs/plan/09-renderer-terrain.md Planning decisions "tiles.json
+// schema v1").
 const CELLS = [
   [0, 0, 0, 255], // cell 0: black -- visual 0, the "nothing drawn here" sentinel colour
   [34, 139, 34, 255], // cell 1: grass green -- visual 1 (a base terrain)
@@ -34,6 +37,17 @@ const CELLS = [
   [255, 255, 0, 255], // cell 6: variant 2 (yellow) -- visual 6's third variant
   [90, 90, 90, 255], // cell 7: dark grey -- visual 7, priority 1, band 2 (the dithering "loser")
   [220, 20, 60, 255], // cell 8: crimson -- visual 8, priority 2, band 2 (the dithering "winner")
+  // cell 9: visual 9 (flags: flip_x, flip_y, rotate) -- a 2x2-quadrant pattern (each quadrant flat,
+  // 2x2 texels of a 4x4 cell) so a flip or rotate visibly moves a different quadrant's colour under
+  // a fixed probe point. Distinct from every other cell's own colours.
+  {
+    quadrants: [
+      [255, 0, 0, 255], // top-left: red
+      [0, 255, 0, 255], // top-right: green
+      [0, 0, 255, 255], // bottom-left: blue
+      [255, 128, 0, 255], // bottom-right: orange
+    ],
+  },
 ]
 
 const rows = Math.ceil(CELLS.length / COLUMNS)
@@ -41,14 +55,18 @@ const width = COLUMNS * TILE_PX
 const height = rows * TILE_PX
 const rgba = new Uint8Array(width * height * 4)
 for (let cell = 0; cell < CELLS.length; cell++) {
-  const [r, g, b, a] = CELLS[cell]
   const col = cell % COLUMNS
   const row = Math.floor(cell / COLUMNS)
+  const spec = CELLS[cell]
+  const half = TILE_PX / 2
   for (let y = 0; y < TILE_PX; y++) {
     for (let x = 0; x < TILE_PX; x++) {
       const px = col * TILE_PX + x
       const py = row * TILE_PX + y
       const i = (py * width + px) * 4
+      const [r, g, b, a] = Array.isArray(spec)
+        ? spec
+        : spec.quadrants[(y < half ? 0 : 2) + (x < half ? 0 : 1)]
       rgba[i] = r
       rgba[i + 1] = g
       rgba[i + 2] = b
@@ -73,6 +91,8 @@ const manifest = {
     6: { first: 4, variants: 3, flags: [], priority: 0, band: 0 }, // variant selection
     7: { first: 7, variants: 1, flags: [], priority: 1, band: 2 }, // dithering "loser"
     8: { first: 8, variants: 1, flags: [], priority: 2, band: 2 }, // dithering "winner"
+    // fix round 1 (flip/rotate coverage): all three transforms allowed, one quadrant-patterned cell.
+    9: { first: 9, variants: 1, flags: ['flip_x', 'flip_y', 'rotate'], priority: 0, band: 0 },
   },
 }
 writeFileSync(`${outDir}tiles.json`, `${JSON.stringify(manifest, null, 2)}\n`)

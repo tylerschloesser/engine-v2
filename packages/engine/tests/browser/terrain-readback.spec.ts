@@ -9,13 +9,22 @@ import type { FrameUniformValues } from '../../src/render/terrain.ts'
 import { expectPixel, type PixelBuffer } from '../../src/test/render.ts'
 import { expectAdapter, expectNoGpuErrors } from './support/gpu.ts'
 import { openPage } from './support/page.ts'
-import { selectVariant } from './support/terrain-hash-ref.ts'
+import {
+  applyTransform,
+  jitterDelta,
+  jitteredChannelByte,
+  selectTransform,
+  selectVariant,
+} from './support/terrain-hash-ref.ts'
 
 const GRASS: readonly [number, number, number, number] = [34, 139, 34, 255]
 const WATER: readonly [number, number, number, number] = [30, 80, 200, 255]
 const ORE: readonly [number, number, number, number] = [230, 140, 20, 255]
 const NEUTRAL: readonly [number, number, number, number] = [32, 32, 32, 255]
 const TOL = 2 // 0020 §6: "≤ 2/255 per channel"
+// M09b fix round 1 (item 2): the jitter reference predicts the exact rounded 8-bit channel value,
+// not just "within 0020 §6's tolerance" -- 0 (exact) if the round-trip supports it.
+const JITTER_TOL = 0
 
 // M09b fixture additions (docs/plan/09b-terrain-art-and-lifecycle.md Planning decisions
 // "Probe-friendly fixture art"; `scripts/gen-terrain-art.mjs`): `tile_px` is 4, so every art texel
@@ -488,6 +497,117 @@ test('terrain: magnified texel exact', async ({ page }, testInfo) => {
   expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
 })
 
+// M09b fix round 1 (item 1, "flip and rotate have zero pixel coverage"): visual 9's quadrant-
+// patterned cell (`scripts/gen-terrain-art.mjs`) makes a flip/rotate transform visibly move a
+// different quadrant's colour under a fixed probe point.
+const TRANSFORM_VISUAL = 9
+const TRANSFORM_FLAGS = 7 // flip_x (1) | flip_y (2) | rotate (4): every transform allowed
+const QUADRANT_COLOURS: readonly (readonly [number, number, number, number])[] = [
+  [255, 0, 0, 255], // top-left: red
+  [0, 255, 0, 255], // top-right: green
+  [0, 0, 255, 255], // bottom-left: blue
+  [255, 128, 0, 255], // bottom-right: orange
+]
+// The probe's own untransformed uv (art texel (0, 2) of the quadrant cell): x < 0.5 (left), y >=
+// 0.5 (bottom) -- a rotate (swap) alone moves this to a *different* quadrant than flip_x or flip_y
+// alone would, unlike a diagonal (x === y) probe point, where a plain transpose is invisible.
+const TRANSFORM_PROBE_UV: readonly [number, number] = [texelFrac(0), texelFrac(2)]
+
+function quadrantColour(uv: readonly [number, number]): readonly [number, number, number, number] {
+  const [x, y] = uv
+  const index = (y < 0.5 ? 0 : 2) + (x < 0.5 ? 0 : 1)
+  return QUADRANT_COLOURS[index] as readonly [number, number, number, number]
+}
+
+test('terrain: flip and rotate match reference', async ({ page }, testInfo) => {
+  await openPage(page, '/terrain.html')
+  const init = await page.evaluate(() => window.__terrain?.init())
+  expectAdapter(testInfo, init?.adapterInfo ?? null)
+  await page.evaluate(async (chunk) => {
+    const t = window.__terrain as Terrain
+    await t.loadArt('/terrain/tiles.json')
+    t.writePageChunk(0, chunk)
+    t.writeIndir([{ x: 0, y: 0, value: 0 }])
+  }, flatChunk(TRANSFORM_VISUAL))
+
+  // Comfortably magnified (as `variants match reference`): probing the texel *centre* makes the
+  // "fat pixel" seam formula a no-op, so the read colour is exactly the transformed quadrant's own.
+  const MAGNIFIED_TILES_PER_PX = 1 / 8
+  // Eight tiles (row 0, `seed HASH_SEED`), one per possible `h.y & 7` hash-bit pattern (found by a
+  // scan recorded in Deviations): every rotate/flip_x/flip_y combination the hash can select is
+  // exercised at least once.
+  const probes: readonly (readonly [number, number])[] = [
+    [11, 0],
+    [13, 0],
+    [1, 0],
+    [4, 0],
+    [6, 0],
+    [0, 0],
+    [26, 0],
+    [8, 0],
+  ]
+  for (const [tx, ty] of probes) {
+    const transform = selectTransform(tx, ty, HASH_SEED, TRANSFORM_FLAGS)
+    const want = quadrantColour(applyTransform(TRANSFORM_PROBE_UV, transform))
+    const pixel = await renderBorderScene(
+      page,
+      microCamera({
+        camTileX: tx,
+        camTileY: ty,
+        camFracX: TRANSFORM_PROBE_UV[0],
+        camFracY: TRANSFORM_PROBE_UV[1],
+        tilesPerPx: MAGNIFIED_TILES_PER_PX,
+        seed: HASH_SEED,
+      }),
+    )
+    expectPixel(pixel, 0, 0, want, TOL)
+  }
+  expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
+})
+
+// M09b fix round 1 (item 2, "jitter is untestable by construction"): the TS reference predicts the
+// exact jittered 8-bit channel value, so a no-op, inverted, wrong-channel or unfaded jitter fails.
+test('terrain: jitter matches reference', async ({ page }, testInfo) => {
+  await openPage(page, '/terrain.html')
+  const init = await page.evaluate(() => window.__terrain?.init())
+  expectAdapter(testInfo, init?.adapterInfo ?? null)
+  await stageBorderScene(page) // grass (chunk 0) / water (chunk 1); band 0, so dithering never fires.
+
+  // Fully magnified (`fade === 1`, same convention as `variants match reference`): three tiles whose
+  // hash gives clearly different jitter bytes (41, 99 and 214 out of 255; Deviations records how
+  // they were found), probed at a tile *centre* so no dithering or seam correction is in play --
+  // only jitter can move the read pixel away from GRASS's own stored colour.
+  const MAGNIFIED_TILES_PER_PX = 1 / 8
+  const FADE = 1 // clamp(1 / (tilesPerPx * ART_SIZE), 0, 1) === 1 at this zoom
+  const tiles: readonly (readonly [number, number])[] = [
+    [11, 0],
+    [1, 0],
+    [6, 0],
+  ]
+  for (const [tx, ty] of tiles) {
+    const delta = jitterDelta(tx, ty, HASH_SEED, FADE)
+    const want: readonly [number, number, number, number] = [
+      jitteredChannelByte(GRASS[0], delta),
+      jitteredChannelByte(GRASS[1], delta),
+      jitteredChannelByte(GRASS[2], delta),
+      GRASS[3],
+    ]
+    const pixel = await renderBorderScene(
+      page,
+      microCamera({
+        camTileX: tx,
+        camTileY: ty,
+        camFracX: 0.5,
+        camFracY: 0.5,
+        tilesPerPx: MAGNIFIED_TILES_PER_PX,
+        seed: HASH_SEED,
+      }),
+    )
+    expectPixel(pixel, 0, 0, want, JITTER_TOL)
+  }
+  expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
+})
+
 // M09b step 3 (docs/plan/09b-terrain-art-and-lifecycle.md): stateless edge dithering.
 
 const PRIO_LOW_VISUAL = 7
@@ -554,9 +674,12 @@ test('terrain: dither only inside band', async ({ page }, testInfo) => {
   await stageDitherScene(page, true)
 
   // Tile (0, 0) is the lower-priority visual: its own centre (art texels 0 and 1, dist_right 3 and
-  // 2 -- outside the band, since band is 2) never dithers. (`missing_neighbour_is_self` below:
-  // texel 0/1's own *nearest* edge is actually left/top, at distance 0 -- but that neighbour is
-  // never staged either, so it falls back to self regardless.)
+  // 2 -- outside the band, since band is 2) never dithers, for two different reasons depending on
+  // which edge the nearest-edge search actually picks at distance 0: texel 0's nearest edge is left
+  // (tile 30, tied with top at distance 0 but checked first) -- tile 30 *is* staged (same chunk 0 as
+  // self) and simply ties on priority, so the comparison never fires; texel 1's nearest edge is top
+  // (tile (31, -1), strictly closer than its own left edge at distance 1) -- chunk (0, -1) is
+  // genuinely never staged, so that one *does* fall back through the missing-neighbour path.
   expectPixel(await ditherProbe(page, SELF_TILE_X, 0, 0, DITHER_TILES_PER_PX), 0, 0, PRIO_LOW, TOL)
   expectPixel(await ditherProbe(page, SELF_TILE_X, 1, 0, DITHER_TILES_PER_PX), 0, 0, PRIO_LOW, TOL)
   // Art texel 2, rows 1 and 2 (dist_right 1, coverage 0.5; rows 0 and 3 are closer to the tile's own

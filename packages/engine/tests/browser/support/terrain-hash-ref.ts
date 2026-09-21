@@ -53,3 +53,77 @@ export function selectVariant(
 ): number {
   return tileHash(tileX, tileY, seed).x % variantCount
 }
+
+// M09b fix round 1 (item 1, "flip and rotate have zero pixel coverage"): mirrors `terrain.wgsl`'s
+// `FLAG_FLIP_X`/`FLAG_FLIP_Y`/`FLAG_ROTATE` bit values exactly (`render/art.ts`'s own `FLAG_BITS`).
+export const FLAG_FLIP_X = 1
+export const FLAG_FLIP_Y = 2
+export const FLAG_ROTATE = 4
+
+export type Transform = {
+  readonly rotate: boolean
+  readonly flipX: boolean
+  readonly flipY: boolean
+}
+
+/** Mirrors `sample_tile_art`'s flip/rotate selection exactly: which of a visual's *allowed*
+ * transforms (`flagsMask`, the visual table's packed `flags` bitmask) this tile's hash turns on --
+ * the `h.y` lane, one bit per transform, gated by the same bit in `flagsMask`. */
+export function selectTransform(
+  tileX: number,
+  tileY: number,
+  seed: number,
+  flagsMask: number,
+): Transform {
+  const h = tileHash(tileX, tileY, seed)
+  return {
+    rotate: (flagsMask & FLAG_ROTATE) !== 0 && (h.y & FLAG_ROTATE) !== 0,
+    flipX: (flagsMask & FLAG_FLIP_X) !== 0 && (h.y & FLAG_FLIP_X) !== 0,
+    flipY: (flagsMask & FLAG_FLIP_Y) !== 0 && (h.y & FLAG_FLIP_Y) !== 0,
+  }
+}
+
+/** Mirrors `sample_tile_art`'s uv-transform order exactly -- rotate (`uv = uv.yx`), *then* flip_x,
+ * *then* flip_y -- applied to a tile-local `[x, y]` in `[0, 1)` per axis (the fragment's own
+ * `art_frac`, before any transform). Getting this order or either flip's sign wrong changes which
+ * quadrant a transformed probe point falls into for at least one of the 8 hash-bit combinations
+ * `terrain.flip_and_rotate_match_reference` drives, so a wrong order/sign fails that test even
+ * though a same-diagonal probe point (`x === y`) would not (a plain transpose is invisible there). */
+export function applyTransform(uv: readonly [number, number], t: Transform): [number, number] {
+  let [x, y] = uv
+  if (t.rotate) {
+    const swapped = y
+    y = x
+    x = swapped
+  }
+  if (t.flipX) x = 1 - x
+  if (t.flipY) y = 1 - y
+  return [x, y]
+}
+
+// M09b fix round 1 (item 2, "jitter is untestable by construction"): mirrors `terrain.wgsl`'s own
+// `JITTER_AMPLITUDE` constant exactly -- **not** a value this reference is free to choose; it must
+// track the shader's own constant of the same name (docs/plan/09b-terrain-art-and-lifecycle.md
+// Deviations records why 1/255 was picked, but this reference does not re-derive it).
+export const JITTER_AMPLITUDE = 1 / 255
+
+/** Mirrors `fs_main`'s jitter computation exactly: `(jitter_hash / 255 - 0.5) * 2 *
+ * JITTER_AMPLITUDE * fade`, a signed delta in normalised `[0, 1]` channel units (not yet scaled to
+ * 0..255 or applied to a colour -- `jitteredChannelByte` below does both). `fade` is the caller's
+ * own `clamp(1 / (tilesPerPx * artSize), 0, 1)` (same formula `fs_main` computes from
+ * `frame.tiles_per_px`). */
+export function jitterDelta(tileX: number, tileY: number, seed: number, fade: number): number {
+  const jitterHash = tileHash(tileX, tileY, seed).z & 0xff
+  return (jitterHash / 255 - 0.5) * 2 * JITTER_AMPLITUDE * fade
+}
+
+/** Mirrors the shader's own `clamp(out_color.rgb + vec3(jitter), 0, 1)` for one channel, plus the
+ * `rgba8unorm` render target's own float-to-8-bit-unorm rounding on the way out (`round(x * 255)`,
+ * ties away from zero -- the convention this reference found to match the real readback exactly,
+ * `terrain.jitter_matches_reference`'s own Deviations note). `base255` is the flat cell's own stored
+ * channel value (0..255). */
+export function jitteredChannelByte(base255: number, delta: number): number {
+  const normalised = base255 / 255
+  const jittered = Math.min(1, Math.max(0, normalised + delta))
+  return Math.round(jittered * 255)
+}

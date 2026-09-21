@@ -589,3 +589,101 @@ poll/timeout) to await it -- left as a gap for whoever next touches `render/view
 here since it is additive, not a fix for this flake, and the fix round's own scope is the flake.
 `device.html`'s own manual device check (steps 6-7, already run) is the closest existing evidence that
 the real observer path works end to end on a real page.
+
+### Fix round 1 (steps 1-3 range): flip/rotate and jitter test coverage
+
+Delegated as a fix round after a Sonnet review of the full M09b diff found three of the shader's
+headline features (flip/rotate, jitter, the seam formula) shipped with coverage that could not
+detect breakage. Items 1 and 2 below are implemented; item 3 was investigated but not implemented,
+and the investigation surfaced a real, unrelated finding recorded at the end of this section.
+Committed as `M09b fix 1: flip/rotate and jitter test coverage (item 3 investigated, not applied)`.
+
+**Item 1: flip/rotate coverage.** `scripts/gen-terrain-art.mjs` gains cell 9, a 2x2-quadrant pattern
+(red/green/blue/orange, one flat colour per 2x2-texel quadrant of the 4x4 cell) and visual 9
+(`flags: ['flip_x', 'flip_y', 'rotate']`, every transform allowed, one variant, no priority/band) --
+every prior cell stays exactly as it was (colour-preserving for every existing M09/M09b test,
+confirmed: `pnpm test` was 74 tests green both before and after this cell's addition, same counts).
+`tests/browser/support/terrain-hash-ref.ts` gains `selectTransform(tileX, tileY, seed, flagsMask):
+Transform` (mirrors `sample_tile_art`'s `h.y`-bit gating exactly) and `applyTransform(uv, transform):
+[number, number]` (mirrors the shader's own rotate-then-flip_x-then-flip_y order exactly). The new
+test `terrain: flip and rotate match reference` stages visual 9 in one chunk and probes 8 tiles (row
+0, `seed 12345`), one per possible `h.y & 7` hash-bit pattern -- found by a plain Node scan (not
+committed) mirroring `pcg3d`/`tileHash` to search tile coordinates 0..31 for the first tile giving
+each pattern: `{0: [11,0], 1: [13,0], 2: [1,0], 3: [4,0], 4: [6,0], 5: [0,0], 6: [26,0], 7: [8,0]}`.
+Every probe reads art texel (0, 2) (`x < 0.5`, `y >= 0.5`, i.e. the bottom-left quadrant
+untransformed) -- deliberately *not* a diagonal (`x === y`) point, since a rotate (plain transpose)
+is invisible there; asserts the exact predicted quadrant colour at the existing 2/255 tolerance.
+**What this catches that nothing did before:** an inverted flip (wrong sign on `1 - uv.x`/`1 -
+uv.y`), a swapped composition order (flip-then-rotate instead of rotate-then-flip), or a wrong hash
+bit (e.g. `FLAG_ROTATE` gated by `h.y & 1` instead of `h.y & 4`) each change the predicted quadrant
+for at least one of the 8 tiles, failing this test; previously every fixture cell was flat, so any of
+those bugs passed the entire suite silently.
+
+**Item 2: jitter coverage.** `terrain-hash-ref.ts` gains `JITTER_AMPLITUDE = 1 / 255` (tracking, not
+re-deriving, `terrain.wgsl`'s own constant of the same name -- not touched, per the fix round's own
+constraint), `jitterDelta(tileX, tileY, seed, fade): number` (mirrors `fs_main`'s jitter formula
+exactly) and `jitteredChannelByte(base255, delta): number` (the shader's own `clamp` plus the
+`rgba8unorm` render target's float-to-8-bit rounding on the way out). The new test `terrain: jitter
+matches reference` reuses the grass/water border scene (band 0, so dithering never interferes), at
+full fade (`tilesPerPx = 1/8`, `texels_per_px = 0.5 < 1`, `fade === 1`), probing 3 tiles whose jitter
+byte (`h.z & 0xFF`) differs clearly (41, 99, 214 out of 255 -- found by the same offline scan as
+item 1) at their own tile centre (`camFracX/Y = 0.5`, so no seam correction is in play either).
+**Tolerance used: 0 (exact), and it held on the first run with no adjustment** -- `Math.round(x *
+255)` (round-to-nearest, ties away from zero) matched the real `rgba8unorm` readback exactly for all
+3 tiles at both the first and second decimal-adjacent channel values tried, so no rounding-mode
+ambiguity needed resolving empirically beyond "does 0 tolerance already pass," which it did.
+**What this catches that nothing did before:** a no-op, inverted-sign, wrong-channel (e.g. jitter
+added to `.rgb` but read from a different hash lane) or unfaded (missing `* fade`) jitter each change
+the predicted byte for at least one of these 3 tiles from what the reference computes, failing this
+test at tolerance 0; previously `JITTER_AMPLITUDE`'s own smallness (chosen in steps 1-3 specifically
+to stay under every *other* test's 2/255 tolerance) made jitter's presence or absence unobservable to
+any existing assertion.
+
+**Item 3: not implemented, and a real bug found instead.** Investigating what a fractional-offset
+seam probe would assert required working out, from `sample_tile_art`'s own magnified-path code, what
+"seamed" position a given fractional `camFrac` should produce -- and that derivation turned up a bug
+in the formula itself, not just a coverage gap:
+
+- `sample_tile_art`'s magnified branch computes `seamed = floor(texel) + clamp((fract(texel) - 0.5) /
+  aa, -0.5, 0.5) + 0.5` (`aa = texel_per_px * 0.5`). Worked through symbolically: as `aa -> 0` (deep
+  magnification), for *any* fractional position except exactly a texel's own centre (`fract(texel)
+  === 0.5`), this clamp saturates and `seamed` collapses to `floor(texel)` or `floor(texel) + 1` --
+  the texel's own *edge*, shared with a neighbour -- not its centre. A bilinear sample taken exactly
+  at a shared texel edge blends 50/50 with the neighbour. So for *most* of a texel's own footprint
+  (everywhere except a vanishingly narrow band right at its own centre), deep magnification produces
+  a boundary blend instead of that texel's own crisp colour -- the opposite of the "fat pixel"
+  technique's purpose, and a real, wrong-almost-everywhere behaviour, not a rare edge case.
+- **Confirmed empirically**, not just on paper: an uncommitted, temporary test (added, run once,
+  then deleted -- never part of a commit) staged visual 9's quadrant cell at tile `(11, 0)` (`bits =
+  0`: no transform, from item 1's own scan), `tilesPerPx = 1/64` (`aa = 0.03125`, deep magnification),
+  `camFracX = 0.525` (art texel position 2.1: past the quadrant boundary at `uv = 0.5`, on the
+  *right*/green side). Expected (correct-formula) result: pure green `[0, 255, 0, 255]`. **Measured:
+  `[127, 127, 0, 255]`** -- an almost-exact 50/50 red/green blend, confirming the boundary-blend
+  bug, not a paper-only concern.
+- **The fix is known but not applied here**, per this fix round's own instruction not to change the
+  shader's behaviour: anchor on the *rounded* texel index instead of its floor -- `let seam =
+  floor(texel + 0.5); let offset = texel - seam; let seamed = seam + clamp(offset / aa, -0.5,
+  0.5);` -- which saturates to the *current* texel's own centre (`seam ± 0.5` lands on `seam`'s
+  neighbour's centre or its own, always a texel centre, never a shared edge) for most of its
+  footprint, with the transition band correctly centred on the real inter-texel boundary instead of
+  on the texel's own midpoint. Not applied; this is the coordinator's decision, not this range's.
+- **Every currently-committed test, including both new ones above, probes exactly at a texel's own
+  centre** (`fract(texel) === 0.5`, where `centre_offset === 0` and the buggy and correct formulas
+  agree trivially) -- this bug is completely unguarded by the automated suite today. It is also
+  invisible to `terrain.magnified_texel_exact` and `terrain.variants_match_reference` for the same
+  reason. Flagged here rather than fixed or covered by a new (necessarily failing) test, per "if this
+  does not fit cleanly, skip it and say so."
+
+**Item 4:** `terrain: dither only inside band`'s comment corrected -- art texel 0's nearest edge is
+its own tile's left edge (tile 30, ties on priority: staged, same chunk as self, not missing) while
+texel 1's nearest edge is genuinely its own tile's top edge (chunk `(0, -1)`, never staged): two
+different mechanisms landing on the same "self, always" outcome, not one.
+
+**Measured** (quiet-machine `pnpm test`, `uptime` load average 2.1-4.7): `rust pass 141 tests`,
+`unit pass 115 tests` (unchanged from steps 4-7's own count: this range added no new `unit`-suite
+file), `wasm pass 35 tests`, `browser pass 76 tests 15s/25s` (+2 over the 74-test baseline this fix
+round started from; comfortably under the 20s trip-wire). `pnpm lint`: biome/rustfmt/clippy/tsc all
+green. `playwright test --project gc --grep "terrain clean" --repeat-each 8 --workers 1`: `8 passed`
+-- `gc.pages.terrain`'s budget (116 B/frame) is unchanged, as expected (this round touches fixture
+art and TS-only test/reference code, no per-frame JS path). No existing test weakened, skipped or
+deleted; no golden changed; no tolerance widened.

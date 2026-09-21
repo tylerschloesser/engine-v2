@@ -52,6 +52,13 @@
       "flags": [],
       "priority": 2,
       "band": 2
+    },
+    "9": {
+      "first": 9,
+      "variants": 1,
+      "flags": ["flip_x", "flip_y", "rotate"],
+      "priority": 0,
+      "band": 0
     }
   }
 }
