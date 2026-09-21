@@ -65,9 +65,10 @@ none
 
 ## Deviations
 
-Built: steps 1-3 only (this brief's own cut line). Steps 4-6 (sim worker kind + `AtomicsTimer`,
-`engine/test` browser stepping, the zero-GC window) are the next implementer's, starting from what
-is recorded here.
+Built: steps 1-3 (this brief's own cut line, unchanged below) **plus steps 4-6**, built by the next
+implementer starting from what was recorded here; that range's own record is the new section below,
+"Steps 4-6: sim worker kind, browser stepping, the zero-GC window". All six steps of this milestone
+are now done.
 
 ### Rust: `host::Host<G>`, `host::warm::Warm`, `game_instance::GameInstance<G>`
 
@@ -432,3 +433,272 @@ process left running.
 - `Host<G>`'s `pending`/`sim` split (genesis deferred out of `init`) means a step-4/M22b load path
   can add a `sim_load(len)`-shaped export later that takes the same `pending.take()` branch
   `sim_genesis` does now, without changing `init`'s own shape.
+
+### Steps 4-6: sim worker kind, browser stepping, the zero-GC window
+
+Commits `M13 step 4`, `M13 step 5`, `M13 step 6` on `main`, starting from `fe632fc`. All exit
+criteria below are **met** unless noted.
+
+#### Orchestrator-mandated: `tick_hz` closes "20 Hz is hardcoded"
+
+Built exactly as specified in the delegation prompt, not redesigned: `Instance::tick_hz(&mut self)
+-> u32 { 20 }` (defaulted, `abi/registry.rs`, right after `sim_warm_one`), extern `tick_hz() ->
+u32` in `export_instance!`, generic `abi::tick_hz<T: Instance>(slot)` (same "always answer, cost
+nothing on a wrong role" shape as `sim_warm_one`: the trait default on anything but `Role::Sim`, not
+an error). `Host<G>` and `GameInstance<G>` both override it as `G::TICK_RATE.hz_value()`
+(`GameInstance<G>`'s own override does not match on its active variant: the answer is the same
+`G`-level constant regardless, and `abi::tick_hz` only ever calls it while `role == Role::Sim`
+anyway). **`ABI_VERSION` 7 -> 8** in both `registry.rs` and `abi.ts`; `abi.ts` gained the `tick_hz`
+row (`role: 'sim'`).
+
+`SimInstance` gained `tickHz(): number`; `wrapEngineInstance` implements it as `inst.call0(inst.x.
+tick_hz)`. `createSimHostFromInstance` reads it once, at construction (before the pacing timer ever
+arms, and before `sim_genesis` -- `Host<G>::tick_hz` doesn't touch `self.sim`, so this is safe pre-
+genesis): `const tickMs = Math.round(1000 / (sim.tickHz() || DEFAULT_TICK_HZ))`, and every pacing
+computation (`onFire`'s `due`, `warm`'s deadline, `runOneTickTimed`'s overrun check, `arm`'s
+`services.timer.every` call) now reads this local `tickMs` instead of a module constant. `TICK_HZ`/
+`TICK_MS` (module constants) are gone; `DEFAULT_TICK_HZ = 20` survives only as the `|| ...` fallback
+for a `tickHz()` of `0` (division by zero -- never returned by a real export, only reachable by a
+pathological fake). New test `simhost_paces_at_configured_tick_rate` (`server.test.ts`): a fake
+instance reporting `tickHz: () => 40` (25 ms/tick) actually paces at 25 ms, proven by asserting
+`ticksRun` stays 0 after `HZ_MS / 2` (would be wrong for 20 Hz too, so this alone doesn't
+distinguish) then becomes 1 after the other half (25 ms total -- well under 20 Hz's own 50 ms
+interval, so only a host actually paced at 40 Hz ticks here). `fakeSim()`'s default and the one
+hand-built `SimInstance` in `server.test.ts` both gained `tickHz: () => 20`.
+
+#### `worker/sim.ts`, `worker/atomics-timer.ts`: the real sim worker kind
+
+`createAtomicsTimer(clock)` (new file) implements `HostServices['timer']` (`{ every(ms, fn): stop
+}`, unchanged shape) plus `timeoutMs(): number` (for `runBlockingLoop`) and `poll(): void` (called
+on every `body()` pass, whatever woke it): `every()` records `ms`/`fn` and sets `nextFireAt =
+clock.now() + ms`; `poll()` runs `while (clock.now() >= nextFireAt) { fn(); nextFireAt += ms }`
+(0, one or more calls, self-correcting the same way `SimHost.onFire` already is); `timeoutMs()`
+returns `Math.max(0, nextFireAt - clock.now())` while armed, `Infinity` otherwise. Exactly the
+recipe the steps-1-3 Deviations laid out ("nothing from `SimHost`", integer `ms` throughout).
+
+`worker/sim.ts`: builds `createSimHostFromInstance(wrapEngineInstance(inst), { clock: systemClock,
+timer: atomicsTimer.timer })` (`systemClock` from `clock.ts`, not a bare `performance.now()` --
+`packages/engine/CLAUDE.md`'s `noRestrictedGlobals` rule). **`simHost.start()` (real-time pacing)
+is armed only when `!message.test`** -- an orchestrator decision made here, not asked for by the
+brief, recorded because it is load-bearing: a test/dev topology (`message.test` present, which
+every browser page in this suite sets) never arms the wall-clock pacing timer at all; it drives
+every tick itself, deterministically, through a new global control word. Reasoning: if pacing were
+armed unconditionally, a deterministic `stepTick(client, n)` call racing a real 50 ms wall-clock
+boundary on a slow CI machine could let `onFire`'s own catch-up loop run an *extra*, uncounted tick
+during the same test, corrupting a hash comparison that must match a golden bit-for-bit -- exactly
+the kind of intermittent failure this delegation prompt warned is a measurement, not a hiccup, to
+chase down after the fact. Gating on `!message.test` costs nothing today (no production caller ever
+sets `options.test`) and needs no new flag (the existing test-gate convention every other kind body
+already uses for `gcHook`/`echo`/`__engineWorkerKind`).
+
+**`CB_SIM_STEP_REQ` (`sab/control.ts`, global word index 5, was reserved):** the brief's own Scope
+line ("a `CB_*` step-tick request word serves `stepTick`"), built as a plain monotonic counter, the
+exact shape `CB_FRAME_REQ` already has (`worker/client.ts`'s `frameReq !== lastFrameReq` idiom): a
+caller `Atomics.add`s the number of ticks wanted, then wakes `WORKER_HOST`; `body()` diffs the word
+against what it last saw and calls `simHost.stepTick(delta)` for that many, bypassing pacing
+entirely (deterministic). `W_ACK` is stored unconditionally at the end of every `body()` pass
+(kept from the M06b stub, per that Deviations note's own question -- "keep or replace": **kept**,
+because `asHarness.stepTick()`'s *existing*, unmodified generic wake-then-ack lockstep for `sim`/
+`gen` targets (`test/client.ts`, built in M03/M08b) depends on it, and that mechanism is used by
+every pre-existing production-topology zero-GC page (`gc-topology.ts`, `gc-echo.ts`) this range
+must not break).
+
+**A real regression, found and reverted before it shipped:** the first version of this range made
+`asHarness.stepTick()` itself bump `CB_SIM_STEP_REQ` for a `sim`-kind target (so the one shared
+generic mechanism would drive real ticks everywhere). This broke `gc-topology`/`topology`/`gc-echo`
+outright: those pages spawn a `sim`-kind worker against `fixtures/hash`, whose own hand-written
+`Instance` never overrides `sim_genesis` (trait default `Status::Unsupported`); `SimHost.ensureGenesis`
+(steps 1-3, accepted, unchanged) throws on anything but `Ok`/`AlreadyInitialised`, which
+`runBlockingLoop`'s `runBodyOnce` turns into `shell.fatal` -- the worker died on its first
+tick request and `asHarness.stepTick`'s ack-spin then failed every time ("worker 'sim1' did not
+ack" across 8+ browser tests). **Fix:** `asHarness.stepTick()` is back to its original, byte-for-
+byte unmodified form (never touches `CB_SIM_STEP_REQ`); a *new*, separately exported
+`stepSimTickSync(client, n = 1)` (`test/client.ts`) is the one thing that bumps the word, and only a
+page that explicitly calls it (`gc-sim.ts`) or the async `stepTick` built on top of it drives real
+ticking. This is why `topology`/`gc-topology`/`gc-echo`'s own `sim` isolate stays exactly as inert
+as the M06b stub left it (their `drive()`/test code never calls `stepSimTickSync`), and it is
+deliberate, not an oversight: those pages' whole point is generic worker-kind plumbing over
+`fixtures/hash`, never a real `Sim<G>`.
+
+#### `engine/test`: `stepTick`, `worldHash`, `simCounters` (`test/client.ts`, `test.ts`)
+
+```ts
+export function stepSimTickSync(client: Client, n = 1): void        // sync core: bump, wake, spin on ack
+export function stepTick(client: Client, n = 1): Promise<void>      // stepSimTickSync then untilQuiescent(client)
+export async function worldHash(client: Client): Promise<string>    // callParked(client, 'sim', 'sim_hash', [], 8)
+export async function simCounters(client: Client): Promise<SimHostCounters>
+```
+
+`stepSimTickSync` is a fourth exported name past the brief's own three (Seams lists `stepTick`/
+`worldHash`/`simCounters`) -- needed because `stepTick`'s own trailing `untilQuiescent` (a
+`parkWorkers` round trip) has no place inside a zero-GC page's synchronous, measured `drive()` loop;
+`gc-sim.ts` (step 6) calls the sync core directly. `stepTick`'s own safety argument: it spins on
+`W_ACK` reaching the wake it just issued (`stepFrame`'s own idiom) *before* calling
+`untilQuiescent`, so the step request is confirmed served before `parkWorkers` sets `W_YIELD` --
+without that ordering, a `parkWorkers` wake racing the worker's *first* wake (before it ever checks
+`W_YIELD`) could make the worker break out of its loop and park without ever running `body()` at
+all, silently dropping the requested ticks. (`untilQuiescent` itself needed no change: by the time
+its own `parkWorkers` phase observes `W_PARKED === 1` for the host worker, that worker's single
+thread has necessarily already finished the synchronous `body()` call the earlier wake triggered.)
+
+`worldHash` reads `sim_hash` through `callParked` (the parked-only `test-call` channel, M08b) and
+formats the returned `Result`-region bytes the same way `EngineInstance.readU64Hex` does (a
+`hex64()` helper here, since `callParked`'s reply is a plain copy, not a live instance to call
+`readU64Hex` on). `simCounters` needed a channel `callParked`/`handleTestCall` cannot provide by
+itself: `SimHostCounters` is JS-side `SimHost` state, not an ABI export. Fix: `worker/sim.ts`'s own
+`testCall` handler is a small wrapper, not the one-line `handleTestCall(inst, m)` every other kind
+uses -- it special-cases one synthetic name (`SIM_COUNTERS_CALL = '__sim_counters'`, `worker/
+protocol.ts`, shared with `test/client.ts` so both sides agree on the string without either
+importing the other) and encodes `SimHost.counters` as five little-endian `u32`s
+(`SIM_COUNTERS_BYTES = 20`) into the reply; every other name still falls through to
+`handleTestCall`. This *is* the "one line" M08b's Deviations promised for wiring `sim` into
+`callParked`, plus this one extra name.
+
+#### `main.no_wasm_instantiate` and the `sim-config.ts` split
+
+Importing `buildSimInstanceConfig`/`seedToHexU64`/`WorldConfig` from `server.ts` directly into
+`client.ts` (needed for the "createClient local host" Scope item) failed `main.no_wasm_instantiate`
+immediately: `server.ts` also imports `instantiate` from `loader.ts`, and that test scans
+`client.ts`'s whole *runtime* (non-type-only) import closure, which a value import from `server.ts`
+pulls `loader.ts` into regardless of which name is actually used. Fix: the three pure names (no
+`EngineInstance`/`instantiate` dependency) moved to a new `sim-config.ts`; `server.ts` re-exports
+all three unchanged (Seams: no renamed Provides) and is the only thing that still imports
+`loader.ts`. `client.ts` imports `buildSimInstanceConfig`/`seedToHexU64`/`WorldConfig` from `sim-
+config.ts` directly, never touching `server.ts` at all.
+
+#### `createClient` local host (`client.ts`)
+
+`ClientOptions.host`'s `world` field is now `WorldConfig<Params> = Omit<ServerWorldConfig<Params>,
+'buildHash'>` (`Params` defaults `unknown`; `ClientOptions` itself stays non-generic), exactly as
+the Scope line specifies. `start()` builds `worldConfig = { ...options.host.world, buildHash:
+options.wasm.buildHash }` (local host only) and two per-worker config values: `simGame =
+options.test?.game ?? (worldConfig && buildSimInstanceConfig(worldConfig).game)` for the `sim`
+spawn, and `game = options.test?.game ?? (worldConfig && { seed: seedToHexU64(worldConfig.params.
+seed), params: worldConfig.params.worldgen })` for every other spawn (`client`/`gen`) -- the minimal
+`TerrainConfig` shape (`game_instance.rs`) needs (`seed`, `params`; `genWorkers`/`cacheChunks`
+defaulted), built inline rather than through a second named export nothing else calls yet. Both
+still fall back to `options.test?.game` first, preserving that field's own documented meaning
+("overriding `host.world.game`") for every worker kind, `sim` included -- this is what lets every
+*other* browser page in the suite (which all set `test.game`) keep passing unchanged; `sim-worker.
+ts`/`gc-sim.ts` (steps 5-6) are the only pages that omit `test.game` and so are the only ones
+exercising `simGame`/`game`'s real-`WorldConfig` path at all. `gc-echo.ts`/`gc-topology.ts`/
+`topology.ts`'s own `host.world` literals were updated from the old `{ game: DEFAULT_GAME }` stub
+shape to a structurally-valid (but runtime-inert, since `test.game` still wins) `WorldConfig`
+literal -- required for `tsc -p tests/browser/pages/tsconfig.json` alone (a third tsconfig
+`pnpm lint` runs that this range's own `npx tsc --noEmit -p .`/`-p tests/tsconfig.json` checks
+missed on the first pass).
+
+#### A real per-tick allocation, found by `gc-sim.ts` and fixed
+
+`wrapEngineInstance.simSealFrame` (steps 1-3) returned a fresh `{ len: 0 }` object literal on every
+call -- every tick this milestone ever runs, since `sim_seal_frame` always returns 0 until M22
+(Non-scope). `gc-sim.ts`'s first clean measurement caught it directly: `sim` isolate 16.81 B/frame,
+`byFn`'s top entry `simSealFrame@...: 9600` bytes over the 600-tick window (16 B x 600, one small
+object per tick). Fixed per `.claude/rules/hot-paths.md` ("preallocate scratch objects at init and
+mutate them"): `wrapEngineInstance` now closes over one `sealResult: { len: number; bytes?:
+Uint8Array }` object, mutated in place (`sealResult.len = 0; delete sealResult.bytes` on the always-
+taken `raw === 0` branch under this milestone's Non-scope; the `raw > 0` branch, unexercised today,
+still calls `.subarray()` -- M22's own problem once real log bytes exist). Re-measured after the
+fix: `sim` 0.8133 B/frame, a constant across 8 clean runs, matching the flat "8" worker budget every
+other page's `client`/`sim`/`gen0` row already uses. This was a correctness gap in already-accepted
+code, not a design choice; fixing it needed no signature or seam change.
+
+#### Browser pages and specs (steps 5-6)
+
+`sim-worker.html`/`src/sim-worker.ts` (step 5): a real `createClient()` local topology over `fx-
+puts`, **no `test.game` override** -- the one page in the whole browser suite exercising
+`createClient`'s real-`WorldConfig`-to-sim-config conversion end to end (`simGame`/`game`, above).
+`test: { flags: {} }` only (no `clock`, no `gcHook`): enables the parked `test-call` channel
+`worldHash`/`simCounters` need (`worker.ts`'s `testEnabled` gate reads `message.test`, which comes
+from `options.test?.flags`, not `options.test` itself). `world.params.seed: '1'` matches `fixtures/
+puts/golden/scenario.json`'s `seed: "0x1"` exactly (`seedToHexU64('1') === '0x1'`). `sim-worker.
+spec.ts`: `sim_worker_steps_and_hashes` (hash after `stepTick(100)` equals `readGolden<Golden>
+('puts', 'golden.json').checkpoints[0]`, the same file `wasm_idle_100_matches_native`/
+`puts_idle_100_golden` are each compared against; also asserts every `SimHostCounters` field for
+this idle-100 run, spelling out which are live -- see below) and `sim_worker_yields_for_cdp`
+(`park()`/CDP-`evaluate` proves the sim isolate reaches the `yield` protocol and steps correctly
+across a park/resume round trip, `workers.spec.ts`'s own pattern).
+
+`gc-sim.html`/`src/gc-sim.ts` (step 6): `asHarness(client)` built the normal way (park before
+`__pageReady`), but `installGcPage(harness, { drive() { stepSimTickSync(client, 1) } })` -- no
+`stepFrame`/generic `stepTick` at all, since neither would touch `CB_SIM_STEP_REQ`. `gc-sim.spec.
+ts`: `zeroGcSuite({ pageId: 'sim', path: '/gc-sim.html', controlKinds: ['object', 'burst'] })`, same
+`controlKinds` reasoning as `topology`/`echo`/`gen` (no spare `postMessage` type for a message-
+driven tick). `budgets.json`'s `gc.pages.sim` **only lists `main` and `sim`** -- `client`/`gen0` are
+spawned (`createClient`'s topology always does) but deliberately left out, matching `gen`'s own
+`net`-not-budgeted precedent (its Deviations: "no mechanism to apply a negative control to it at
+all"): `drive()` here never wakes `client`/`gen0`, so `applyGcHook`'s own check (inside `body()`,
+which only runs on a real wake) never runs for them either, and their `object`/`burst` negative
+controls could never trip -- confirmed by running with them included first (`sim neg object
+client`/`gen0` and `sim neg burst client`/`gen0` all failed to trip, plus a real cross-isolate
+"sibling nudge" on `sim`'s own reading, the same open, unresolved phenomenon `topology`'s own
+Deviations already names). Narrowing to `main`+`sim` is not a lowered bar: it is what "your clean
+test must show the sim isolate in `presentIsolates`" (the delegation prompt's own requirement) asks
+for, verbatim, and `client`/`gen0`'s own zero-GC coverage already exists on `topology`/`echo`/`gen`.
+
+#### Which counters are live (the delegation prompt's own instruction: say plainly)
+
+Exercised end to end by `sim_worker_steps_and_hashes` (a 100-tick idle run, no actions, no view
+set): `ticksRun` **live** (asserted `100`), `ticksDropped` **live but 0 in every test here**
+(`stepTick`/`stepSimTickSync` both bypass the pacing/catch-up path entirely -- only a real-time-
+paced host, never spawned by any test in this milestone, could ever make it nonzero; unit test
+`simhost_caps_catchup_and_drops_time` is the one place this counter is actually driven nonzero, and
+it uses a fake instance, not a real worker), `tickOverruns` **live but 0 in every test here** (same
+shape: `simhost_counts_tick_overrun`, a fake-instance unit test, is the one place this is driven
+nonzero; a real `fx-puts` tick never runs long enough to trip it). `chunksWarmed` **structurally 0
+this milestone, not a dead assertion in disguise but not yet reachable either**: `host::warm::Warm`
+warms only chunks inside a connection's own set view, and `set_view` has no caller before M15 (no
+production or test code calls it); `simhost_warmer_respects_budget` (unit, fake instance) is the
+only place `chunksWarmed` is ever nonzero today. `genOnMiss` **permanently 0** (steps 1-3's own
+finding, unchanged): no ABI export exists for it at all. `sim_worker_steps_and_hashes` asserts the
+whole `SimHostCounters` object against `{ ticksRun: 100, ticksDropped: 0, tickOverruns: 0,
+chunksWarmed: 0, genOnMiss: 0 }` with a comment spelling out which of the zeros are structural
+(`chunksWarmed`/`genOnMiss`) versus merely true-for-this-run (`ticksDropped`/`tickOverruns`), so a
+reader cannot mistake the assertion for coverage of paths it does not exercise.
+
+#### Measured
+
+`pnpm test` at acceptance: `rust 191` (unchanged: no Rust test added this range, only `tick_hz`'s
+extern/trait method, covered by `abi registry` fixture-export tests), `unit 154` (+1:
+`simhost_paces_at_configured_tick_rate`), `wasm 40` (unchanged), `browser 95` (+5:
+`sim_worker_steps_and_hashes`, `sim_worker_yields_for_cdp`, `sim clean`, `sim neg object main`,
+`sim neg object sim`; `sim neg burst main`/`sim neg burst sim` are `@slow`, confirmed passing under
+`pnpm test:slow -t "sim neg burst"`). `pnpm lint`: biome, rustfmt, clippy, all three `tsc` projects
+(`tsconfig.json`, `tests/tsconfig.json`, `tests/browser/pages/tsconfig.json`) green. `gc-sim`
+budgets, `playwright --project gc --grep "sim clean" --repeat-each 8 --workers 1`: `main` an exact
+constant 21.4933 B/frame across all 8 runs, `sim` an exact constant 0.8133 B/frame across all 8 runs
+(zero run-to-run spread on both, unusually tight -- no reliability concern chased further given
+that). Software mode (`pnpm gc software -t "sim clean"`): passes; `attributedBytesPerFrame.main`
+measured 0 (this page's `drive()` calls `stepSimTickSync`, not a function literally named `drive`
+in the sampled call frames after inlining, so nothing attributes to `main`'s own `attributionRoots:
+["drive"]` today -- a real measurement, not a placeholder, but not independently cross-checked
+against a second run the way the hardware-mode number was). `pgrep`/`lsof -ti tcp:4517` /`:4518`
+clean after every run in this session; no background process left running.
+
+### Notes for later briefs
+
+- **Software-mode `sim` budget (`attributedBytesPerFrame.main: 0`) was measured once, not repeated.**
+  If a later range touches `gc-sim.ts`'s `drive()` or `stepSimTickSync` and software mode starts
+  failing, re-derive from a fresh `pnpm gc software -t "sim clean"` run rather than assuming 0 is
+  permanently correct.
+- **`client`/`gen0` on `gc-sim.ts` have no zero-GC coverage of their own** (deliberately, above):
+  fine today since `topology`/`echo`/`gen` already cover them under `host.kind === 'local'`/
+  `'remote'` generically, but a future milestone that gives `fx-puts` real client/gen work (M15b's
+  frame pass, or terrain/worldgen wiring) should reconsider whether `gc-sim.ts` needs to wake them
+  too, or whether a fourth page is cleaner.
+- **`CB_SIM_STEP_REQ` is a plain `u32` counter wrap risk**, same as `CB_FRAME_REQ` already has: after
+  2^32 cumulative step-tick calls (`Atomics.add` wraps silently), `worker/sim.ts`'s own `(stepReq -
+  lastStepReq) >>> 0` delta computation stays correct across the wrap (unsigned subtraction), so
+  this is not a bug, just worth knowing the invariant it relies on if the word's own meaning ever
+  changes.
+- **`simGame`/`game`'s real-`WorldConfig` conversion path is exercised by exactly one page**
+  (`sim-worker.html`); every zero-GC/topology page still uses `test.game`. A later milestone wiring
+  a second real local-host game should watch for the same `TerrainConfig`/`SimConfig` field-name
+  mismatch this range worked around (`worldgen` vs `params`, decimal vs hex seed) rather than
+  assuming `worldConfig.params` can be forwarded verbatim to every role.
+- **The `sim_seal_frame` `raw > 0` branch's `.subarray()` call is still a per-call allocation**,
+  unexercised by any test today (Non-scope: `sim_seal_frame` always returns 0 until M22). M22 is
+  the one that gives it real content and should re-measure `gc-sim.ts`'s `sim` row once it does --
+  a `Uint8Array` view over the `Persist` region built once at init and re-sliced only when `len`
+  changes would avoid a second per-tick allocation there, the same pattern `sealResult` above uses
+  for the object itself.
