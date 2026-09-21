@@ -8,24 +8,31 @@ import { lastLines, readLog } from './run.mjs'
 
 /**
  * Shared `parse`: exit 0 with no report file means 0 tests, pass; a non-zero exit that the report
- * does not explain becomes one failure holding the tail of the log.
+ * does not explain becomes one failure holding the tail of the log. The failure's own name says
+ * which of those two happened (docs/plan/10-ci-workflow.md, Deviations: a run whose `wasm` step
+ * exited 1 with a report that parsed cleanly and showed 0 failures was still reported as "without a
+ * parseable report" -- true of neither the report nor the exit, and it cost a session real time to
+ * find that out from the artefact instead of the message) -- a report present but the run still
+ * exiting non-zero points at a process-level problem (an unhandled rejection outside any test, a
+ * worker crash) the JSON reporter's own summary does not capture, not a missing/corrupt report.
  */
 function fromReport(parseReport) {
   return ({ reportPath, exitCode, logPath }) => {
     let result = { tests: 0, failures: [] }
+    let parsed = false
     if (reportPath && existsSync(reportPath)) {
       try {
         result = parseReport(readFileSync(reportPath, 'utf8'))
+        parsed = true
       } catch {
         // An unreadable report is handled like a missing one.
       }
     }
     if (exitCode !== 0 && result.failures.length === 0) {
-      result.failures.push({
-        name: `runner exited ${exitCode} without a parseable report`,
-        message: lastLines(readLog(logPath), 20),
-        artefacts: [logPath],
-      })
+      const name = parsed
+        ? `runner exited ${exitCode} after a parseable report showed 0 failures`
+        : `runner exited ${exitCode} without a parseable report`
+      result.failures.push({ name, message: lastLines(readLog(logPath), 20), artefacts: [logPath] })
     }
     return result
   }
@@ -141,8 +148,11 @@ export const adapters = {
       }
       if (parsed && result.tests === 0 && result.failures.length === 0) return result
       if (exitCode !== 0 && result.failures.length === 0) {
+        const name = parsed
+          ? `runner exited ${exitCode} after a parseable report showed 0 failures`
+          : `runner exited ${exitCode} without a parseable report`
         result.failures.push({
-          name: `runner exited ${exitCode} without a parseable report`,
+          name,
           message: lastLines(readLog(logPath), 20),
           artefacts: [logPath],
         })

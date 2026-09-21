@@ -98,6 +98,69 @@ describe('playwright adapter', () => {
     expect(result.failures).toHaveLength(1)
     expect(result.failures[0].name).toBe('runner exited 139 without a parseable report')
   })
+
+  // docs/plan/10-ci-workflow.md, Deviations: a real CI run's own `wasm` step exited 1 with a
+  // report.json that parsed cleanly and showed every test passing -- the message named a missing
+  // report, which was simply false and cost a session real time to notice from the artefact.
+  test('parse: a non-zero exit with a parseable, all-passing report says so, not "no report"', () => {
+    const reportPath = tmpFile(
+      'report.json',
+      JSON.stringify({
+        suites: [
+          {
+            specs: [
+              {
+                title: 'a',
+                tests: [{ projectName: 'wasm', results: [{ status: 'passed' }] }],
+              },
+            ],
+          },
+        ],
+      }),
+    )
+    const result = adapters.playwright.parse({
+      reportPath,
+      exitCode: 1,
+      logPath: logWith('some process-level noise, not a test failure\n'),
+    })
+    expect(result.failures).toHaveLength(1)
+    expect(result.failures[0].name).toBe(
+      'runner exited 1 after a parseable report showed 0 failures',
+    )
+  })
+})
+
+describe('vitest adapter (fromReport)', () => {
+  // The exact shape of the CI finding this test exists to prevent recurring silently (docs/plan/
+  // 10-ci-workflow.md, Deviations): `wasm`'s own vitest process exited 1 on a run whose
+  // report.json parsed cleanly with 0 failed tests -- a process-level problem (unhandled rejection,
+  // worker crash) the JSON reporter's summary never captures, not a missing or corrupt report.
+  test('parse: a non-zero exit with a parseable, all-passing report says so, not "no report"', () => {
+    const reportPath = tmpFile(
+      'report.json',
+      JSON.stringify({ numPassedTests: 3, numFailedTests: 0, testResults: [] }),
+    )
+    const result = adapters.vitest.parse({
+      reportPath,
+      exitCode: 1,
+      logPath: logWith('some process-level noise, not a test failure\n'),
+    })
+    expect(result.tests).toBe(3)
+    expect(result.failures).toHaveLength(1)
+    expect(result.failures[0].name).toBe(
+      'runner exited 1 after a parseable report showed 0 failures',
+    )
+  })
+
+  test('parse: a non-zero exit with no report at all still says so', () => {
+    const result = adapters.vitest.parse({
+      reportPath: undefined,
+      exitCode: 1,
+      logPath: logWith('ENOMEM\n'),
+    })
+    expect(result.failures).toHaveLength(1)
+    expect(result.failures[0].name).toBe('runner exited 1 without a parseable report')
+  })
 })
 
 describe('script adapter', () => {

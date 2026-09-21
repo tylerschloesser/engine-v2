@@ -57,6 +57,19 @@ const chromiumChannel =
 // covering macOS the day WebGPU broke there.
 const webkitGrep = process.platform === 'linux' ? /@engines/ : /@engines|@webkit-gpu/
 
+// docs/plan/10-ci-workflow.md, Deviations: the `gc` project's own `burst` negative controls
+// (40 KB/frame, real GC work over 0028's two 600-frame windows) needed up to 29.9 s just to PASS
+// on the CI runner, and one timed out at 30.655 s against the local 30 s default -- measured from
+// run 35619437805's own `report.json` per-test durations (`echo`/`terrain neg burst main` both
+// 29,893 ms; `echo neg burst client` `timedOut` at 30,655 ms). ADR 0020 §10's "wall clock
+// recorded, never gating in CI" already covers `--budget-scale`; a per-test timeout is the same
+// kind of gate living in Playwright's own config instead of the runner, so it scales the same way
+// -- CI only (`ENGINE_GPU=swiftshader`), never locally, where a genuine hang must still fail fast.
+// 90 s: roughly 3x the worst *passing* CI duration (29.9 s), well above the timed-out test's own
+// likely true duration (its siblings, same page, same conditions, topped out at 29.9 s; a page
+// with no WebGPU at all has no reason to need dramatically more).
+const gcTimeoutMs = process.env.ENGINE_GPU === 'swiftshader' ? 90_000 : 30_000
+
 export default defineConfig({
   testDir: './tests/browser',
   // Default matches `*.test.ts` too (M04's `gc/analyse.test.ts` is a Vitest unit test, run by the
@@ -118,6 +131,7 @@ export default defineConfig({
         },
       },
       testMatch: '**/gc-*.spec.ts',
+      timeout: gcTimeoutMs,
     },
   ],
   webServer: {
