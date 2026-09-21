@@ -3,14 +3,26 @@
 // `page.evaluate`, since a `Client`'s own shape (`ready`, `destroy`) is not itself serialisable
 // across the CDP boundary Playwright's `page.evaluate` return value crosses.
 import wasm from 'virtual:engine/wasm'
+import { type CameraIntegrator, createCameraIntegrator } from '../../../../src/camera/camera.ts'
+import type { CameraViewport } from '../../../../src/camera/transform.ts'
 import {
   type Client,
   type ClientOptions,
   clientTestHandle,
   createClient,
 } from '../../../../src/client.ts'
+import { KeyState } from '../../../../src/input/keys.ts'
+import { PointerSlots } from '../../../../src/input/pointers.ts'
+import { WheelState } from '../../../../src/input/wheel.ts'
 import { W_MEM_GROWS, W_MEM_PAGES, workerWord } from '../../../../src/sab/control.ts'
 import { parkWorkers, resumeWorkers, setCamera, stepFrame } from '../../../../src/test/client.ts'
+import {
+  attachCameraInputTestHooks,
+  injectKey,
+  injectPointer,
+  injectWheel,
+  type PointerPhase,
+} from '../../../../src/test/input.ts'
 
 const DEFAULT_GAME = { seed: '0x1', entities: 4 }
 
@@ -38,6 +50,31 @@ declare global {
      * spec that reaches into a worker with `worker.evaluate()` parks first. */
     __park?: () => Promise<void>
     __resume?: () => Promise<void>
+    /** docs/plan/11-camera-and-input.md (M11, this range's own extension of this page): builds the
+     * fixed input-state objects (`PointerSlots`/`KeyState`/`WheelState`) and a `CameraIntegrator`,
+     * and attaches them to `__client` (`engine/test.attachCameraInputTestHooks`) so
+     * `__injectPointer`/`__injectWheel`/`__injectKey` and `__tickCamera` below can drive it. */
+    __setupCameraInput?: (viewport: CameraViewport) => void
+    __injectPointer?: (
+      phase: PointerPhase,
+      id: number,
+      cssX: number,
+      cssY: number,
+      tMs: number,
+      pointerType?: 'mouse' | 'touch' | 'pen',
+    ) => void
+    __injectWheel?: (deltaY: number, cssX: number, cssY: number, ctrlKey?: boolean) => void
+    __injectKey?: (code: string, down: boolean) => void
+    /** One `camera` phase (`integrate`) plus one `writeCamera` phase (`stepFrame`'s own lockstep,
+     * `engine/test`), the same order `frame-loop.ts`'s `tick()` runs them in. Returns the state
+     * `writeCamera` just wrote, so a spec can compare it against what the client worker echoes
+     * back over CDP for that same frame (`camera: block reaches worker each frame`). */
+    __tickCamera?: (dtMs: number) => {
+      centreX: number
+      centreY: number
+      tilesAcross: number
+      frameTimeMs: number
+    }
     __pageReady?: true
   }
 }
@@ -99,6 +136,46 @@ window.__setCameraAndStep = (x, y, tilesAcross, dtMs) => {
   setCamera(window.__client, { x, y, tilesAcross })
   stepFrame(window.__client, dtMs)
   return clientTestHandle(window.__client).cameraState.frameTimeMs
+}
+
+let cameraBundle: { pointers: PointerSlots; keys: KeyState; wheel: WheelState } | undefined
+let cameraIntegrator: CameraIntegrator | undefined
+let cameraViewport: CameraViewport | undefined
+
+window.__setupCameraInput = (viewport) => {
+  if (!window.__client) throw new Error('__setupCameraInput: no client')
+  cameraBundle = { pointers: new PointerSlots(), keys: new KeyState(), wheel: new WheelState() }
+  cameraIntegrator = createCameraIntegrator(cameraBundle)
+  cameraViewport = viewport
+  attachCameraInputTestHooks(window.__client, cameraBundle)
+}
+
+window.__injectPointer = (phase, id, cssX, cssY, tMs, pointerType) => {
+  if (!window.__client) throw new Error('__injectPointer: no client')
+  injectPointer(window.__client, phase, id, cssX, cssY, tMs, pointerType)
+}
+window.__injectWheel = (deltaY, cssX, cssY, ctrlKey) => {
+  if (!window.__client) throw new Error('__injectWheel: no client')
+  injectWheel(window.__client, deltaY, cssX, cssY, ctrlKey)
+}
+window.__injectKey = (code, down) => {
+  if (!window.__client) throw new Error('__injectKey: no client')
+  injectKey(window.__client, code, down)
+}
+
+window.__tickCamera = (dtMs) => {
+  if (!window.__client || !cameraIntegrator || !cameraViewport) {
+    throw new Error('__tickCamera: call __setupCameraInput first')
+  }
+  const state = clientTestHandle(window.__client).cameraState
+  cameraIntegrator.integrate(state, cameraViewport, dtMs)
+  stepFrame(window.__client, dtMs)
+  return {
+    centreX: state.centreX,
+    centreY: state.centreY,
+    tilesAcross: state.tilesAcross,
+    frameTimeMs: state.frameTimeMs,
+  }
 }
 
 window.__pageReady = true
