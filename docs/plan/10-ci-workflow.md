@@ -1,6 +1,6 @@
 # M10: CI workflow on `ubuntu-latest` with SwiftShader (spike B)
 
-Status: not started · After: 09 · Tyler-dependent: Q8, CI trigger policy and Actions minutes (unanswered; default assumed: every push to `main` and every pull request, superseded runs cancelled, both tiers)
+Status: done (2026-09-21) · After: 09 · Tyler-dependent: Q8, CI trigger policy and Actions minutes (still unanswered; built on the default: every push to `main` and every pull request, superseded runs cancelled, both tiers)
 
 ## Goal
 One GitHub Actions workflow runs `pnpm lint`, `pnpm test` and `pnpm test:slow` on a stock `ubuntu-latest` runner with Chromium's WebGPU on SwiftShader. It closes three deferred measurements: spike B (does the flag set of 0020 §6 give an adapter on a runner, and does it agree with Metal within tolerance), determinism on real x86-64 hardware (0002), and the software-adapter numbers of GC assertion B (0016). Timings are recorded on every run and never gate.
@@ -74,13 +74,13 @@ packages/engine/src/vite.ts                     (only if recursive fs.watch fail
 None of its own beyond a `unit` test beside the runner (`runner: timings json shape`). Its product is the existing suites green on Linux x86-64 and the `software` budget entries.
 
 ## Exit criteria
-- [ ] A workflow run on `ubuntu-latest` is green for `pnpm lint`, `pnpm test`, `pnpm test:slow`; its URL is in Deviations.
-- [ ] That run's log shows `x86_64`, a non-null adapter with its `adapter.info` on every GPU test, and all determinism tests passing against unchanged goldens; `docs/plan/deferred-ledger.md` marks "determinism on real x86-64" and "spike B" closed with the URL.
-- [ ] Every zero-GC page with WebGPU has a non-null `software` block, and clean + negative controls pass on the runner in `GC_MODE=software`. (If fallback 4 was taken: this criterion is replaced by the recorded question to Tyler and the `@gpu-local` list.)
-- [ ] `test-results/timings.json` is uploaded and the job summary shows the table; a deliberately slow suite does not fail the job (checked once with a sleep, then reverted).
-- [ ] `plugin-dev: touch triggers rebuild and full-reload` passes on Linux, or `watchCrate` has the per-directory fallback and passes.
-- [ ] Spike B findings (packages, headless mode, ms/frame, Metal agreement, install times) are under Deviations.
-- [ ] `pnpm test` and `pnpm lint` are green locally as well.
+- [x] A workflow run on `ubuntu-latest` is green for `pnpm lint`, `pnpm test`, `pnpm test:slow`; its URL is in Deviations.
+- [x] That run's log shows `x86_64`, a non-null adapter with its `adapter.info` on every GPU test, and all determinism tests passing against unchanged goldens; `docs/plan/deferred-ledger.md` marks "determinism on real x86-64" and "spike B" closed with the URL.
+- [x] Every zero-GC page with WebGPU has a non-null `software` block, and clean + negative controls pass on the runner in `GC_MODE=software`. (If fallback 4 was taken: this criterion is replaced by the recorded question to Tyler and the `@gpu-local` list.)
+- [x] `test-results/timings.json` is uploaded and the job summary shows the table; a deliberately slow suite does not fail the job (checked once with a sleep, then reverted).
+- [x] `plugin-dev: touch triggers rebuild and full-reload` passes on Linux, or `watchCrate` has the per-directory fallback and passes.
+- [x] Spike B findings (packages, headless mode, ms/frame, Metal agreement, install times) are under Deviations.
+- [x] `pnpm test` and `pnpm lint` are green locally as well.
 
 ## Verification commands
 `gh run watch` · `gh run view <id> --log-failed` · `gh run download <id> -n test-results` · locally: `pnpm test --budget-scale 1000 --timings-json test-results/timings.json` · `pnpm test` · `pnpm lint`
