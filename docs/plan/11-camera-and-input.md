@@ -195,11 +195,82 @@ own value here predated the record layout"). This range never constructs an `inp
 **Measured**: `pnpm test` -- `rust 141`, `unit 126`, `wasm 35`, `browser 78 (15s/25s)`; `pnpm lint`
 all green. `pgrep`/`lsof -ti tcp:4517` clean after the run (no orphaned browser/server processes).
 
+### Steps 4-5 (semantic events, `client.input`, `inputRing` producer; `on_input` -> `InputQueue`) -- done
+
+Delegated as steps 4-5 only; the 6-8 range takes `moveTo`, constraints, persistence, focus rules,
+the GC scenario and the device page. Commits: `9050c04` (step 4), `7222a46` (step 5).
+
+**Exact seam shapes**, since the brief's Scope/Seams describe behaviour, not exact signatures:
+
+- `input/record.ts`: `writeInputRecord(dst: Uint8Array, offset: number, fields: InputRecordFields)`
+  -- the single 32-byte little-endian encoder both the ring producer and `input: record layout
+  golden` go through; `INPUT_RECORD_BYTES = 32`, `InputKind = { Tap: 1, Hover: 2, Longpress: 3,
+  DragStart: 4, Drag: 5, DragEnd: 6 }` (matches the Rust `client::input::kind` module's own values).
+- `input/semantic.ts`: `createSemanticRecognizer(inputRingSab: SharedArrayBuffer):
+  SemanticRecognizer`, `SemanticRecognizer extends InputController` with `on`/`setMode`/`suspend`/
+  `resume` (0019's own signatures) plus `recognize(input: CameraInput, cameraState: CameraState,
+  viewport: CameraViewport, dtMs: number): void` -- **this range's own addition to the returned
+  object**, not itself a Seam name the brief pinned: the production-wiring counterpart of
+  `CameraIntegrator.integrate`, so a later range's real DOM wiring calls both from the same
+  `onCamera` hook. `Client.input` (`src/client.ts`) is one `SemanticRecognizer` per client, so
+  `recognize` is reachable directly off `client.input`, no test-only handle needed. `InputEventTs`
+  matches the brief's own field list exactly.
+- `sab/ring.ts`: `RingProducer.recordDrop(): void` -- a new method (Atomics-adds `RING_DROPS`),
+  additive to M06's own class. The generic ring's `tryClaim`/`tryPush` returning `-1`/`false` is
+  *not* itself counted as a drop (`ring.full_is_backpressure`'s own comment: "nothing was silently
+  discarded" -- correct for a producer that retries or blocks). `inputRing`'s own policy is the
+  opposite (Planning decisions "drop and count"), so its producer (`semantic.ts`'s `emit`) is the
+  one that decides a failed `tryClaim` is a drop and calls `recordDrop()` itself; it never retries.
+- `worker/client-input.ts`: `createInputPump(inst, inputRingSab, rx: RegionView | null):
+  InputPump` -- same "built once, `pump()` allocates nothing, `null` region means skip" shape as
+  `client-gen.ts`/`client-upload.ts`. Drains whole records into `rx.u8`, bounded by that region's
+  own byte length (not a fixed batch constant): a client role with no `Rx`-for-input declared never
+  calls `on_input` at all (its own gate, distinct from `fixtures/hash`'s unrelated `echo`-only `rx`
+  local in `worker/client.ts`, which is unconditional there for a different feature -- the two
+  never coexist on one instance today).
+- Rust `client::input`: `InputEvent` (`#[repr(C)]`, `BYTES = 32`, `decode(&[u8; 32])`,
+  `world_pos() -> (f64, f64)`); `InputQueue` (`CAPACITY = 64`, `push`, `decode_and_push_all`,
+  `events()`, `last()`, `clear()`). `FixtureTerrain`'s `on_input` writes queue length (`u32`) and
+  the last event's tile (`i32` x2) into `Result[0..12)` -- this range's own test export, reached
+  through `on_input` itself via the parked-only `test-call` channel (`len=0` decodes nothing new
+  but still reports current state; no new WASM export was added beyond `on_input` -- `abi registry:
+  fx-%s exports and signatures` requires every fixture's export set equal `ABI_EXPORTS` exactly, so
+  a second ad hoc test export was never an option).
+- ABI: `on_input(len: u32) -> status`, role `client`, decodes `Rx[0..len)`. `abi::on_input`'s own
+  `Rx` read is a raw pointer taken before `Result` is borrowed mutably -- the same deferred-borrow
+  shape `CameraBlock::ptr` already uses, since `RegionLayout` has no API to split its own borrow
+  across two regions at once. `ABI_VERSION` 5 -> 6 in both `registry.rs` and `src/abi.ts`, one
+  commit (step 5's).
+
+**`RING_DEFAULTS.inputRing` fix, as flagged for us.** `{ slotBytes: 32, slots: 256 }` ->
+`{ slotBytes: 40, slots: 256 }` (32-byte record + `sab/ring.ts`'s own 8-byte slot header), landed in
+step 4 alongside the producer that first needed it correctly sized -- the previous range's own
+reading matches what shipped; no disagreement to report.
+
+**A real gap, left flagged rather than silently patched over.** `input/pointers.ts`'s fixed slots
+(consumed, not changed, per this range's own brief) carry neither a `button` nor modifier
+(shift/ctrl/alt/meta) state -- nothing upstream of `semantic.ts` records them. Every event this
+range emits therefore has `button: 0` and every modifier `false` (and the wire record's own
+`modifiers` byte is always 0), which is enough for every test this range owns (none assert a real
+button/modifier value) but is not the real thing: a later range needs either a small additional
+canvas-scoped listener capturing `PointerEvent.button`/`*Key` at each real event, or an extension of
+`pointers.ts` itself. Likewise, `hover` in this range's own model fires for *any* active
+mouse-kind slot (a slot only becomes active on a real `pointerdown`), not a plain idle mouse move
+with no button held -- a real desktop mouse fires `pointermove` continuously regardless of button
+state, but `input/pointers.ts`'s `recordPointerMove` is a no-op unless `recordPointerDown` already
+activated that slot's id, so a genuinely idle hovering mouse (no button ever pressed) produces no
+state at all today. Both gaps are exercised as designed by this range's own unit tests (which
+control the low-level slots directly and never need a real idle-hover DOM sequence); a later range
+wiring real `installPointerListeners` onto a production canvas needs to know both exist.
+
+**Measured**: `pnpm test` -- `rust 145`, `unit 132`, `wasm 35`, `browser 79 (16s/25s)`; `pnpm lint`
+all green. `pgrep`/`lsof -ti tcp:4517` clean after the run.
+
 ### Notes for later briefs
 
 - The 4-5 range (semantic events, `inputRing` producer): `RING_DEFAULTS.inputRing`'s slot size looks
   short by 8 bytes for the pinned 32-byte record (above) -- check before assuming `tryPush`/`commit`
-  fits it as-is.
+  fits it as-is. **Done in step 4** (above): `slotBytes` is now 40.
 - The 6-8 range (`moveTo`, constraints, persistence, focus rules, GC scenario, device page):
   `CameraIntegrator.constraints` is mutable in place for `setConstraints` to write into directly;
   `device.ts`'s `onCamera` stand-in should be replaced with a real `createCameraIntegrator` wired to
@@ -209,3 +280,12 @@ all green. `pgrep`/`lsof -ti tcp:4517` clean after the run (no orphaned browser/
   `device.ts` already does with `Math.floor`, just fed by the real `tilesAcross`/`halfExtentTiles`
   this range computes instead of the stand-in's uniform formula).
 - Focus rules and `input/page-css.ts` are unbuilt (above); the 6-8 range's brief already names both.
+- The 6-8 range also owns wiring `client.input.recognize(...)` itself: call it from the same
+  `onCamera` hook as `CameraIntegrator.integrate`, after building the same `PointerSlots`/
+  `KeyState`/`WheelState` bundle both consume (`recognize`'s own doc comment in `input/semantic.ts`).
+  Two real gaps to close there (this range's own Deviations, above): real button/modifier capture,
+  and idle-mouse hover with no button held (today a mouse slot only activates on `pointerdown`).
+  The zero-GC page `input` (step 7) exercises `client.input`'s dispatch/ring-write path under the
+  strict budget; `CallbackList.dispatch`'s indexed loop (no `Set`, no `for...of`) is already written
+  to that discipline, but nothing in this range's own tests proves it under real allocation
+  measurement -- that is exactly what step 7's own page is for.
