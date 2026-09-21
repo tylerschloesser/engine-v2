@@ -1073,16 +1073,110 @@ mod tests {
 
         let _ = full_count;
         // Anti-vacuity: prove the corpus isn't uniformly rejected at byte 0 -- a healthy fraction
-        // of mutated inputs must reach at least one section body.
+        // of mutated inputs must reach at least one section body. The corpus is seeded (a fixed
+        // `SimRng` seed and a fixed `CASES`), so its reach is deterministic: measured 2624 on this
+        // exact generator (`cargo test --lib wire::tests::decoder_never_panics -- --nocapture`
+        // with a temporary `eprintln!`). `2600` leaves only trivial slack for that -- if this ever
+        // fires, the generator lost real reach, not noise. Changing the seed, `CASES`, or a
+        // mutator deliberately: re-measure and move this bound to match, in the same commit.
         assert!(
-            reached_sections > CASES / 4,
-            "corpus barely reaches section bodies: {reached_sections} of {CASES} cases produced a section"
+            reached_sections >= 2600,
+            "corpus barely reaches section bodies: {reached_sections} of {CASES} cases produced a section (expected >= 2600, measured 2624 on this exact generator)"
         );
         // And prove mutation actually produces malformed input at least sometimes (otherwise the
         // mutators themselves could have degenerated into no-ops).
         assert!(
             malformed_count > 0,
             "no mutation ever produced malformed input"
+        );
+
+        // -- Uplink batch corpus (M14 fix round 1) ---------------------------------------------
+        //
+        // An uplink batch is a top-level message off the network, exactly like a `Frame` is (0009
+        // "Message classes"), so it gets the same never-panics treatment: `UplinkReader::read`
+        // (and, inside it, `CameraReport::read`) must never panic on any byte string, and the
+        // corpus must actually reach it rather than be rejected at byte 0.
+        let mut good_batches: Vec<Vec<u8>> = Vec::new();
+        for i in 0..4u32 {
+            let mut buf = vec![0u8; 512];
+            let mut sink = SliceSink::new(&mut buf);
+            let action_bytes = [1u8, 2, 3];
+            let camera = uplink::CameraReport {
+                center_x: i as i32,
+                center_y: -(i as i32),
+                half_w: 64,
+                half_h: 36,
+                vel_x: 1,
+                vel_y: -1,
+            };
+            let presence = [9u8, 8, 7];
+            UplinkWriter::write(
+                &mut sink,
+                i,
+                [(i, action_bytes.as_slice())].into_iter(),
+                Some(camera),
+                Some(&presence),
+            );
+            let n = sink.finish().unwrap();
+            buf.truncate(n);
+            good_batches.push(buf);
+        }
+
+        let mut uplink_reached = 0u32;
+        let mut uplink_malformed = 0u32;
+        const UPLINK_CASES: u32 = 1000;
+
+        for i in 0..UPLINK_CASES {
+            let base = &good_batches[(i as usize) % good_batches.len()];
+            let mut mutated = base.clone();
+            match rng.below(4) {
+                0 => {
+                    let cut = rand_below(&mut rng, mutated.len() as u32) as usize;
+                    mutated.truncate(cut);
+                }
+                1 => {
+                    if !mutated.is_empty() {
+                        let idx = rand_below(&mut rng, mutated.len() as u32) as usize;
+                        let bit = 1u8 << (rng.below(8) as u8);
+                        mutated[idx] ^= bit;
+                    }
+                }
+                2 => {
+                    // Splice an oversized varint run right after the fixed 6-byte prefix
+                    // (type + flags + last_received_tick), where the action-count varint starts.
+                    let mut spliced = mutated[..6.min(mutated.len())].to_vec();
+                    spliced.extend(std::iter::repeat_n(0xFFu8, 12));
+                    spliced.extend_from_slice(&mutated[6.min(mutated.len())..]);
+                    mutated = spliced;
+                }
+                _ => {
+                    // Corrupt the flags byte: forces a camera/presence bit combination that may
+                    // not match what actually follows in the bytes.
+                    if mutated.len() > 1 {
+                        mutated[1] = rng.below(256) as u8;
+                    }
+                }
+            }
+
+            let mut got_actions = 0u32;
+            match UplinkReader::read(&mutated, |_, _| got_actions += 1) {
+                Ok(_) => uplink_reached += 1,
+                Err(WireError::Malformed) => uplink_malformed += 1,
+                Err(WireError::Full) => {}
+            }
+        }
+
+        // Anti-vacuity, same shape as the frame corpus above: seeded and deterministic, so a tight
+        // bound is not flaky. Measured 478 of 1000 on this exact generator (temporary `eprintln!`,
+        // same procedure as the frame corpus); `460` leaves only trivial slack. Re-measure and move
+        // this bound in the same commit as any deliberate seed/`UPLINK_CASES`/mutator change.
+        assert!(
+            uplink_reached >= 460,
+            "uplink corpus barely reaches a decoded batch: {uplink_reached} of {UPLINK_CASES} (expected >= 460, measured 478 on this exact generator)"
+        );
+        assert!(
+            uplink_malformed > 0,
+            "no uplink mutation ever produced malformed input"
         );
     }
 }

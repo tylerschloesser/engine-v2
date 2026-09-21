@@ -218,3 +218,76 @@ golden:bytes -- wire`, verified via `git status` that no pre-existing golden cha
 `wire_chunk_deltas.hex` 27 B, `wire_action_results_all_tags.hex` 9 B, `wire_global.hex` 7 B,
 `wire_own_player.hex` 2 B, `wire_uplink_batch.hex` 28 B. Commits `09dc7ed`..`4df8c45` (eight: seven
 `M14 step N` plus one `M14:` clippy-fix commit).
+
+**`Delta`'s 7th variant, `Ack`, is not this module's concern.** Nothing in `wire/` matches on
+`Delta` at all (deltas are built from a `ChangeLog`'s `(Scopes, Delta<G>)` pairs by M15, which
+hasn't landed); the brief's Consumes note about an exhaustive match needing to account for `Ack`
+deliberately is therefore M15's to handle when it writes that match, not something this milestone
+resolved. Passed on, not silently dropped.
+
+### M14 fix round 1 (orchestrator review, 2026-09-21)
+
+The first round's `encode_decode_no_alloc` measured only 5 of the 8 `wire/*.rs` files' write/read
+paths (`mod.rs`'s `FrameWriter`/`FrameReader`, `results.rs`'s `ActionResultsWriter`/`Reader`,
+`coordlist.rs`'s `ChunkCoordListWriter`/`Reader`, `snapshot.rs`'s `SnapshotWriter`/`Reader`,
+`overlay_runs.rs`'s `OverlayRunsWriter`), leaving `deltas.rs`, `global.rs` and `uplink.rs` with no
+allocation guarantee at all -- an orchestrator review proved this empirically by leaking a `Vec` in
+`write_global` and getting a silent `ok`. Fixed:
+
+- **`tests/no_alloc_wire.rs` now measures all eight files** in the same two regions: the encode
+  region adds a `Global` section (both roster and value halves), an `OwnPlayer` section, a
+  `ChunkDeltas` section (one tile group, one `Put` and one `Gone` entity op) and a *separate*
+  standalone uplink-batch encode (`UplinkWriter::write` plus its `CameraReport`); the decode region
+  reads all of them back, plus adds `Rejected::Game`/`Rejected::Engine` outcomes to the existing
+  `ActionResults` section so `results.rs`'s owned-value decode path (not just its `Applied` tag) is
+  measured too.
+- **Per-file proof, not a single run** (the deliverable the review asked for): for each of the
+  eight files, `let _leak: Vec<u8> = Vec::with_capacity(64); std::mem::forget(_leak);` was inserted
+  into one function the test reaches, `cargo test -p engine --test no_alloc_wire` was run and
+  confirmed `FAILED`, then reverted and confirmed `ok` again. All eight failed and all eight
+  reverted clean (`git status` empty afterward). The eight failing lines (`left`/`right` are
+  `abi::arena::live_bytes()` before/after the encode call; all fail on the encode-side assertion at
+  the same source line since the leak is 64 B either way):
+  - `mod.rs` (`FrameWriter::new`): `left: 48891  right: 48827`
+  - `coordlist.rs` (`ChunkCoordListWriter::write`): `left: 49339  right: 48827`
+  - `overlay_runs.rs` (`OverlayRunsWriter::write`): `left: 49083  right: 48827`
+  - `snapshot.rs` (`encode_chunk_snapshot`): `left: 49083  right: 48827`
+  - `deltas.rs` (`write_chunk_deltas`): `left: 48955  right: 48827`
+  - `results.rs` (`ActionResultsWriter::write`): `left: 48955  right: 48827`
+  - `global.rs` (`write_global` -- the exact function the review flagged): `left: 48955  right:
+    48827`
+  - `uplink.rs` (`UplinkWriter::write`): `left: 48891  right: 48827`
+- **Item 3 (owned-value decode) checked, found not to arise.** `deltas.rs`'s `EntityDeltaOp::Put`,
+  `global.rs`'s `read_global`/`read_own_player` and `results.rs`'s `Rejected::Game` tag all decode
+  an owned game-typed value via `codec::decode::<T>`, not a reference. The extended test measures
+  all three paths in the same single decode region and they do not allocate: 0011's "Decode path,
+  no JS allocation" already requires `G::Entity`/`G::Player`/`G::Action` to be "plain data (no
+  `Vec`, `String`, or `Box`)" for exactly this reason, and by the same reasoning `G::Global`/
+  `G::Reject` must be too for a decode-side claim to hold at all -- this fixture's types (plain
+  `u32`/`i32`/tuple fields, a unit-struct reject) satisfy that, so no narrower claim was needed. A
+  future game whose `G::Global`/`G::Reject`/etc. violate "plain data" would fail this same test the
+  same way the per-file proof above demonstrates, which is the intended enforcement.
+- **`decoder_never_panics`'s frame-corpus threshold tightened**: `reached_sections > CASES / 4`
+  (500) -> `reached_sections >= 2600` (measured 2624 on the seeded, deterministic generator; a
+  temporary `eprintln!` confirmed the exact figure, then was removed). Comment records the measured
+  value and the instruction to re-measure and move the bound in the same commit as any deliberate
+  seed/`CASES`/mutator change.
+- **`UplinkReader`/`CameraReport` added to the malformed-input corpus**: a second corpus loop in
+  the same test, seeded off the same `rng`, `UPLINK_CASES = 1000`, four good uplink batches
+  (varying tick/camera/presence) mutated by truncation, single-bit flip, an oversized varint
+  spliced after the 6-byte prefix, and flags-byte corruption. Tracks `uplink_reached`/
+  `uplink_malformed` separately from the frame corpus's counters. Threshold `uplink_reached >= 460`
+  (measured 478 of 1000 on this exact generator, same tight-bound convention as the frame corpus)
+  and `uplink_malformed > 0`.
+- **`overlay_runs.rs`'s `OverlayRunsReader::read`** now reads `head` through the range-checked
+  `varint_u32` instead of a raw `r.varint()`, for consistency with every other count in the module
+  (no live bug: the existing `checked_add`/`> u16::MAX` guard already caught an oversized value
+  either way; this just removes the one inconsistent read site so a future edit to the shift/mask
+  can't reintroduce a silent truncation unreviewed).
+- Not changed, per the orchestrator's explicit instruction: `encode_chunk_snapshot`'s `O(all
+  entities)` double scan (carried to M15 as a note) and the `Delta`/`Ack` exhaustive-match point
+  above (M15's to handle).
+
+Re-measured after this round: `pnpm test` -- `rust` 235 (unchanged: no new `#[test]` fns, only
+existing ones extended/tightened), `unit` 154, `wasm` 40, `browser` 95. `pnpm lint` green. `git
+status` clean (no stray leak left in the tree).

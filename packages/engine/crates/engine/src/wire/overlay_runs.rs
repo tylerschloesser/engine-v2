@@ -165,7 +165,12 @@ impl OverlayRunsReader {
         for _ in 0..n_runs {
             let gap = varint_u32(r)? as i64;
             let start = cursor_end + 1 + gap;
-            let head = r.varint().map_err(WireError::from)?;
+            // `varint_u32`, not a raw `r.varint()`, for the same reason every other count in this
+            // module goes through it (docs/plan/14-wire-framing.md M14 fix round 1): a bound
+            // consistent with `len`'s `u16`-range use below, so a future edit to the shift or mask
+            // cannot reintroduce a silent truncation without review, even though today's
+            // `checked_add`/`> u16::MAX` guard already catches an oversized run either way.
+            let head = varint_u32(r)?;
             let repeat = head & 1 == 1;
             let len = head >> 1;
             if len == 0 {
