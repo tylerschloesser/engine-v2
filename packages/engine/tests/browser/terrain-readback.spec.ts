@@ -16,6 +16,32 @@ const ORE: readonly [number, number, number, number] = [230, 140, 20, 255]
 const NEUTRAL: readonly [number, number, number, number] = [32, 32, 32, 255]
 const TOL = 2 // 0020 §6: "≤ 2/255 per channel"
 
+/** A `FrameUniformValues` for a 1x1 render target (Seams: no new `engine/test` surface needed --
+ * `renderBorderScene`/`renderAndRead` already accept any viewport size). */
+function microCamera(opts: {
+  camTileX: number
+  camTileY: number
+  camFracX: number
+  camFracY: number
+  tilesPerPx: number
+  seed?: number
+}): FrameUniformValues {
+  return {
+    camTileX: opts.camTileX,
+    camTileY: opts.camTileY,
+    camFracX: opts.camFracX,
+    camFracY: opts.camFracY,
+    viewportPxW: 1,
+    viewportPxH: 1,
+    tilesPerPx: opts.tilesPerPx,
+    seed: opts.seed ?? 0,
+    cursorTileX: 0,
+    cursorTileY: 0,
+    cursorValid: 0,
+    neighbourCutoffPx: 0,
+  }
+}
+
 const VISUAL_GRASS = 1
 const VISUAL_WATER = 2
 const VISUAL_ORE = 5
@@ -352,6 +378,43 @@ test('terrain: nothing outside viewport', async ({ page }, testInfo) => {
   expectPixel(pixels, 0, 63, NEUTRAL, TOL) // bottom-left corner: chunk (-1, 1)
   expectPixel(pixels, 63, 63, NEUTRAL, TOL) // bottom-right corner: chunk (1, 1)
   expectPixel(pixels, 32, 32, GRASS, TOL) // centre: inside chunk (0, 0)
+  expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
+})
+
+test('terrain: minified converges to mean', async ({ page }, testInfo) => {
+  await openPage(page, '/terrain.html')
+  const init = await page.evaluate(() => window.__terrain?.init())
+  expectAdapter(testInfo, init?.adapterInfo ?? null)
+  await stageBorderScene(page) // M09's own grass (chunk 0) / water (chunk 1) border scene.
+
+  // "1 px per tile" (Tests added): far enough out that a whole tile's own mip pyramid has converged
+  // to 1x1 (0018 §6: "the mip chain converges each tile to its mean colour") -- a looser 8/255
+  // tolerance than every other probe here, per Tests added, since minified sampling reads a
+  // trilinear-blended mip level rather than a single exact texel.
+  const FAR_TILES_PER_PX = 8
+  const MEAN_TOL = 8
+  const grassPixel = await renderBorderScene(
+    page,
+    microCamera({
+      camTileX: 3,
+      camTileY: 8,
+      camFracX: 0.5,
+      camFracY: 0.5,
+      tilesPerPx: FAR_TILES_PER_PX,
+    }),
+  )
+  expectPixel(grassPixel, 0, 0, GRASS, MEAN_TOL)
+  const waterPixel = await renderBorderScene(
+    page,
+    microCamera({
+      camTileX: 35,
+      camTileY: 8,
+      camFracX: 0.5,
+      camFracY: 0.5,
+      tilesPerPx: FAR_TILES_PER_PX,
+    }),
+  )
+  expectPixel(waterPixel, 0, 0, WATER, MEAN_TOL)
   expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
 })
 

@@ -161,9 +161,14 @@ export async function createTerrainRenderer(
     size: FRAME_UNIFORM_BYTES,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
+  // M09b (docs/plan/09b-terrain-art-and-lifecycle.md Scope): bilinear mag/min, trilinear across
+  // mips -- `terrain.wgsl` samples exclusively through `textureSampleLevel` with an explicit,
+  // possibly-fractional level (never an implicit-derivative `textureSample`/`fwidth` call, Deviations),
+  // so `mipmapFilter: 'linear'` is what makes a fractional level blend between its floor/ceil mips.
   const sampler = device.createSampler({
-    magFilter: 'nearest',
-    minFilter: 'nearest',
+    magFilter: 'linear',
+    minFilter: 'linear',
+    mipmapFilter: 'linear',
     addressModeU: 'clamp-to-edge',
     addressModeV: 'clamp-to-edge',
   })

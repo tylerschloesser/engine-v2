@@ -1,8 +1,10 @@
 // Terrain fragment shader (docs/decisions/0018-renderer.md §3, §5; docs/plan/09-renderer-terrain.md
-// Planning decisions "Bind group layout"): one full-viewport triangle, the fragment maps
-// pixel -> tile -> chunk -> slot -> texel -> art. This milestone's sampling only: `textureLoad`,
-// variant 0, nearest, no dithering; a non-resident chunk (indirection == NONE) draws a neutral
-// colour. Edit this file, then run `node scripts/embed-wgsl.mjs` (packages/engine/CLAUDE.md).
+// Planning decisions "Bind group layout"; docs/plan/09b-terrain-art-and-lifecycle.md Scope, Order of
+// work step 1): one full-viewport triangle, the fragment maps pixel -> tile -> chunk -> slot ->
+// texel -> art. This step: bilinear "fat pixel" seam sampling when magnified, trilinear mips
+// (`render/mips.ts`) when minified. Still M09's variant 0 only, no flip/rotate/jitter (step 2) and
+// no dithering (step 3). Edit this file, then run `node scripts/embed-wgsl.mjs`
+// (packages/engine/CLAUDE.md).
 
 struct FrameUniform {
   cam_tile: vec2<i32>,
@@ -62,7 +64,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VOut {
 // Euclidean remainder for a power-of-two `m` (`m - 1` passed as `mask`): equal to Rust's
 // `rem_euclid` for any `i32`, including negative values, because two's-complement `&` already wraps
 // toroidally (docs/plan/09-renderer-terrain.md Deviations: proved by `terrain.far_from_origin_exact`
-// -- chunk (1<<18, 1<<18) and chunk (0, 0) share the same `& 63` cell since 2^18 is a multiple of 64).
+// -- chunk (1<<18, 1<<18) and chunk (0, 0) share the same masked cell since 2^18 is a multiple of 64).
 fn wrap_mask(v: i32, mask: i32) -> u32 {
   return u32(v & mask);
 }
@@ -94,13 +96,36 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
   let visual_id = select(base_visual, resource_visual, resource_visual != 0u);
 
   let entry = visual_table.entries[visual_id];
-  let first_layer = entry.x & 0xFFFFu; // variants (entry.x >> 16) are M09b's
+  let first_layer = entry.x & 0xFFFFu; // variants (entry.x >> 16) are step 2's
 
-  let art_size = textureDimensions(art_tex, 0);
+  let art_size = vec2<f32>(textureDimensions(art_tex, 0));
   let art_frac = rel - rel_floor; // fractional part of `rel`, in [0, 1)
-  let art_texel = vec2<i32>(min(
-    vec2<u32>(art_frac * vec2<f32>(art_size)),
-    art_size - vec2<u32>(1u, 1u),
-  ));
-  return textureLoad(art_tex, art_texel, i32(first_layer), 0);
+  let uv = art_frac;
+  let layer = i32(first_layer);
+
+  // Art texels per screen pixel: 0 or less means magnified (>= 1 screen px per art texel), the
+  // explicit-LOD equivalent of `log2(texels-per-pixel)`, clamped at 0. Every texture-sample call
+  // below uses an *explicit* level, never an implicit-derivative `textureSample`/`fwidth` (docs/plan/
+  // 09b-terrain-art-and-lifecycle.md Deviations: sidesteps WGSL's uniform-control-flow restriction
+  // on implicit derivatives entirely, rather than relying on it being satisfied).
+  let texels_per_px = frame.tiles_per_px * art_size.x;
+  let lod = max(0.0, log2(max(texels_per_px, 1e-6)));
+
+  if (lod <= 0.0) {
+    // "Fat pixel" seam formula (0018 §3 sources: gpu-tilemap-rendering, pixel_art_filtering): snap
+    // toward the nearest texel centre in proportion to screen pixels per art texel, avoiding blur
+    // under magnification. The screen-to-tile mapping is affine (0018 §5: no perspective, one
+    // `tiles_per_px` scalar for the whole frame), so the derivative of `uv * art_size` w.r.t. screen
+    // pixels is the *same uniform constant* everywhere -- computed here in closed form rather than
+    // with the `fwidth` builtin.
+    let texel_pos = uv * art_size;
+    let texel_per_px = max(vec2<f32>(texels_per_px), vec2<f32>(1e-6));
+    let centre_offset = fract(texel_pos) - 0.5;
+    let seamed =
+      floor(texel_pos) +
+      clamp(centre_offset / (texel_per_px * 0.5), vec2<f32>(-0.5), vec2<f32>(0.5)) +
+      0.5;
+    return textureSampleLevel(art_tex, art_sampler, seamed / art_size, layer, 0.0);
+  }
+  return textureSampleLevel(art_tex, art_sampler, uv, layer, lod);
 }

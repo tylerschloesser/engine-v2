@@ -50,7 +50,9 @@ window.__terrainClient = {
       viewProbePasses: device.viewProbePasses,
       checkCompilation: device.checkCompilation,
     })
-    const art = await loadTileArt(device.device, '/terrain/tiles.json')
+    const art = await loadTileArt(device.device, '/terrain/tiles.json', {
+      checkCompilation: device.checkCompilation,
+    })
     renderer.setTileArray(art.texture)
     renderer.writeVisualTable(art.visualTableBytes)
 

@@ -37,7 +37,9 @@ const renderer = await createTerrainRenderer(device.device, {
   viewProbePasses: device.viewProbePasses,
   checkCompilation: device.checkCompilation,
 })
-const art = await loadTileArt(device.device, '/terrain/tiles.json')
+const art = await loadTileArt(device.device, '/terrain/tiles.json', {
+  checkCompilation: device.checkCompilation,
+})
 renderer.setTileArray(art.texture)
 renderer.writeVisualTable(art.visualTableBytes)
 // Reused every frame (`.claude/rules/hot-paths.md`), like production's own offscreen/canvas target

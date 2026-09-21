@@ -1,8 +1,11 @@
 // Tile art (docs/decisions/0018-renderer.md §4; docs/plan/09-renderer-terrain.md Scope, Planning
 // decisions "tiles.json schema v1", "Visual table comes from tiles.json on main"): fetches and
 // validates `tiles.json`, loads `tiles.png` with `createImageBitmap` + `copyExternalImageToTexture`
-// (`premultipliedAlpha: true`) into one `texture_2d_array<f32>` layer per sheet cell (no mips yet:
-// M09b), and builds the 16 KiB visual-table buffer `render/terrain.ts` uploads once.
+// (`premultipliedAlpha: true`) into one `texture_2d_array<f32>` layer per sheet cell, generates the
+// mip chain to 1x1 for every layer (docs/plan/09b-terrain-art-and-lifecycle.md Scope: `render/
+// mips.ts`), and builds the 16 KiB visual-table buffer `render/terrain.ts` uploads once.
+import { generateMips, mipLevelCountFor } from './mips.js'
+
 export type VisualFlag = 'flip_x' | 'flip_y' | 'rotate'
 
 export type VisualEntry = {
@@ -136,9 +139,17 @@ export type LoadedArt = {
   readonly cellCount: number
 }
 
-/** Fetches `manifestUrl`, validates it, fetches its (relative) `image`, and loads every sheet cell
- * into its own array layer. No mips (M09b). */
-export async function loadTileArt(device: GPUDevice, manifestUrl: string): Promise<LoadedArt> {
+/** Fetches `manifestUrl`, validates it, fetches its (relative) `image`, loads every sheet cell into
+ * its own array layer, and generates the mip chain to 1x1 for every layer (`render/mips.ts`).
+ * `opts.checkCompilation` (docs/plan/09b-terrain-art-and-lifecycle.md Deviations: not in the
+ * brief's own Seams -- the mip blit shader needs the same "init, not per frame" `getCompilationInfo()`
+ * check every other shader module gets, 0020 §6) is threaded straight to `generateMips`; a caller
+ * with a `RendererDevice` passes its own `checkCompilation` method. */
+export async function loadTileArt(
+  device: GPUDevice,
+  manifestUrl: string,
+  opts?: { checkCompilation?(label: string, module: GPUShaderModule): Promise<void> },
+): Promise<LoadedArt> {
   const manifestRes = await fetch(manifestUrl)
   if (!manifestRes.ok) {
     throw new Error(`loadTileArt: fetching ${manifestUrl}: HTTP ${manifestRes.status}`)
@@ -165,10 +176,12 @@ export async function loadTileArt(device: GPUDevice, manifestUrl: string): Promi
     throw new ManifestError(`tiles.json: image has ${cellCount} cells, over the ${MAX_CELLS} limit`)
   }
 
+  const mipLevelCount = mipLevelCountFor(manifest.tile_px)
   const texture = device.createTexture({
     label: 'tile-art',
     size: [manifest.tile_px, manifest.tile_px, cellCount],
     format: 'rgba8unorm',
+    mipLevelCount,
     usage:
       GPUTextureUsage.TEXTURE_BINDING |
       GPUTextureUsage.COPY_DST |
@@ -187,6 +200,15 @@ export async function loadTileArt(device: GPUDevice, manifestUrl: string): Promi
     )
   }
   bitmap.close()
+
+  // Mips generated after every layer's level-0 copy is enqueued (docs/plan/
+  // 09b-terrain-art-and-lifecycle.md Scope): WebGPU executes one queue's submissions in program
+  // order, so the blit passes below always read fully-written level-0 data with no extra await.
+  await generateMips(device, texture, {
+    layerCount: cellCount,
+    baseSize: manifest.tile_px,
+    ...(opts?.checkCompilation ? { checkCompilation: opts.checkCompilation } : {}),
+  })
 
   return { texture, manifest, visualTableBytes: buildVisualTable(manifest), cellCount }
 }
