@@ -1,0 +1,17 @@
+{
+  "role": "sim",
+  "genesis": true,
+  "config": {
+    "arenaBytes": 100663296,
+    "game": {
+      "seed": "0x1",
+      "params": null,
+      "maxEntities": 262144,
+      "maxModifiedTiles": 1048576,
+      "maxActionGrowth": 4096,
+      "cacheChunks": 1024
+    }
+  },
+  "ticks": 100,
+  "checkpointEvery": 100
+}

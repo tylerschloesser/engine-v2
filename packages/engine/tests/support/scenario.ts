@@ -13,8 +13,15 @@ export type SimScenario = {
   config: InstanceConfig
   ticks: number
   checkpointEvery: number
-  /** Before tick t (1-based) when t % everyTicks == 0; the byte rule is in the JSON. */
-  input: { everyTicks: number; bytes: number; rule: string }
+  /** Before tick t (1-based) when t % everyTicks == 0; the byte rule is in the JSON. Absent means
+   * no admit traffic at all -- a real `Game`'s sim role with no connections yet (`fixtures/puts`,
+   * docs/plan/13-sim-host-tick-loop.md: connections are M15, Non-scope there). */
+  input?: { everyTicks: number; bytes: number; rule: string }
+  /** Calls `sim_genesis()` once before ticking (docs/plan/13-sim-host-tick-loop.md): a real
+   * `Game`'s sim role needs a world before `sim_tick` does anything but `Status.NotInitialised`;
+   * a low-level fixture like `fixtures/hash` builds its state in `Instance::init` instead and
+   * leaves this absent. */
+  genesis?: boolean
 }
 
 /**
@@ -56,12 +63,15 @@ export function runHashScenario(inst: EngineInstance, scenario: HashScenario): s
 }
 
 function runSimScenario(inst: EngineInstance, scenario: SimScenario): string[] {
-  const { ticks, checkpointEvery, input } = scenario
-  const rx = inst.region(RegionId.Rx)
-  if (!rx || rx.len < input.bytes) throw new Error('scenario: Rx region is missing or too small')
+  const { ticks, checkpointEvery, input, genesis } = scenario
+  if (genesis) ok(inst.call0(inst.x.sim_genesis), 'sim_genesis', 0)
+  const rx = input ? inst.region(RegionId.Rx) : null
+  if (input && (!rx || rx.len < input.bytes)) {
+    throw new Error('scenario: Rx region is missing or too small')
+  }
   const checkpoints: string[] = []
   for (let t = 1; t <= ticks; t++) {
-    if (t % input.everyTicks === 0) {
+    if (input && rx && t % input.everyTicks === 0) {
       // Integer ops only, so every runtime derives the same bytes.
       for (let i = 0; i < input.bytes; i++) rx.u8[i] = (t * 31 + i * 17 + (t >> 3)) & 0xff
       ok(inst.call2(inst.x.sim_admit, 0, input.bytes), 'sim_admit', t)

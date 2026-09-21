@@ -122,6 +122,12 @@ fn script_a() -> Vec<(Tick, Record<Puts>)> {
     ]
 }
 
+/// `.wasm`-authoritative since M13 (docs/plan/13-sim-host-tick-loop.md exit note; M12b's own
+/// note on this test): `golden/golden.json` is written by `pnpm golden puts`, from the `.wasm`
+/// run over `golden/scenario.json` under Node (0002). This native run drives `Sim<Puts>` directly
+/// (the same call sequence `host::Host<Puts>`'s `sim_genesis`/`sim_tick` make) and is compared
+/// against that same file, so native and `.wasm` are proven equal transitively (`tests/wasm/
+/// puts.test.ts`'s `wasm_idle_100_matches_native` compares the `.wasm` run against it too).
 #[test]
 fn puts_idle_100_golden() {
     let mut sim = new_sim(1);
@@ -130,7 +136,7 @@ fn puts_idle_100_golden() {
         sim.step(&[], &mut out);
     }
     assert_eq!(sim.tick(), Tick(100));
-    engine::assert_golden_hash!("puts_idle_100", sim.state_hash());
+    engine::testing::assert_golden(env!("CARGO_MANIFEST_DIR"), &[sim.state_hash()]);
 }
 
 #[test]

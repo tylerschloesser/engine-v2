@@ -10,6 +10,7 @@ import { diffCheckpoints, roleOf, runHashScenario } from '../support/scenario.ts
 const NAME = 'determinism: bun matches golden'
 const WORLDGEN_NAME = 'determinism: worldgen bun matches golden'
 const GROWTH_NAME = 'loader: views survive memory growth (bun)'
+const PUTS_NAME = 'wasm_idle_100_matches_native (bun)'
 
 /**
  * The Bun half of decision B (fix round 3, docs/plan/06b-workers-and-spawn.md, Deviations): the
@@ -61,6 +62,19 @@ async function runWorldgenLeg() {
   return { name: WORLDGEN_NAME, ok: message === null, message }
 }
 
+/** `fx-puts`'s own idle-100 golden (docs/plan/13-sim-host-tick-loop.md step 3), driven through
+ * `runHashScenario`'s `sim` branch with `genesis: true`. */
+async function runPutsLeg() {
+  const putsFixture = new URL('../../fixtures/puts/', import.meta.url)
+  const scenario = await json('golden/scenario.json', putsFixture)
+  const golden = await json('golden/golden.json', putsFixture)
+  const { wasm } = await loadGame(new URL('target/engine/dev', putsFixture).pathname)
+  const inst = instantiate(wasm, roleOf(scenario), scenario.config, { onLog() {} })
+  const checkpoints = runHashScenario(inst, scenario)
+  const message = diffCheckpoints(checkpoints, golden.checkpoints)
+  return { name: PUTS_NAME, ok: message === null, message }
+}
+
 let result
 try {
   if (typeof Bun === 'undefined') throw new Error('not running under Bun')
@@ -74,11 +88,13 @@ try {
     (inst.memGrows() === 0 ? null : `memory grew ${inst.memGrows()} pages after init`)
   const growth = checkMemoryGrowth(wasm, scenario.config)
   const worldgen = await runWorldgenLeg()
+  const puts = await runPutsLeg()
   result = {
     tests: [
       { name: NAME, ok: message === null, message },
       { name: GROWTH_NAME, ok: growth === null, message: growth },
       worldgen,
+      puts,
     ],
     checkpoints,
   }
