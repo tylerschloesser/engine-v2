@@ -3,22 +3,26 @@
 // (`Client.writeCameraAndWake`, Deviations) -> `upload` (`render/upload.ts`'s byte-budgeted drain)
 // -> `render` (`renderer.writeFrameUniform` + `draw`) -> `overlay` (M18) -> `ui` (M16).
 //
-// docs/plan/09b-terrain-art-and-lifecycle.md Scope/Seams (M09b step 4): a viewport-apply step runs
-// before every other phase (not a new named `FRAME_PHASES` entry -- Seams only pins the phase
-// list's own name, not that it enumerates every internal step -- `renderer.onViewportChange(cb)`
-// "called at most once per frame, before the `camera` phase" is satisfied by `tick()` calling
+// docs/plan/09b-terrain-art-and-lifecycle.md Scope/Seams (M09b): a viewport-apply step runs before
+// every other phase (not a new named `FRAME_PHASES` entry -- Seams only pins the phase list's own
+// name, not that it enumerates every internal step -- `renderer.onViewportChange(cb)` "called at
+// most once per frame, before the `camera` phase" is satisfied by `tick()` calling
 // `ViewportController.applyPending()` as its very first statement); `FrameLoop.pause()`/`resume()`
 // (renamed from M09's own ad hoc `stop`/`start`, never a pinned Seam name there) drive the injected
-// `Scheduler`'s rAF and are what 0018 §8's backgrounding rule actually calls. Step 5 (a later commit
-// in this same milestone) adds `createRealFrameLoop`, the wiring of all this to a real canvas.
+// `Scheduler`'s rAF and are what 0018 §8's backgrounding rule actually calls; `createRealFrameLoop`
+// is the wiring this milestone's own Scope names ("Wire `createFrameLoop` ... to a real canvas").
 // Everything here is created once, at `createFrameLoop` time, and `tick()`'s own body is a fixed
 // sequence of calls with no per-frame closures, arrays or descriptor objects (`.claude/rules/
 // hot-paths.md`).
-import type { Client } from './client.js'
+import type { Client, RenderOptions } from './client.js'
 import type { Clock, Scheduler } from './clock.js'
 import type { TerrainRenderer } from './render/terrain.js'
 import { createUploadDrain, DEFAULT_UPLOAD_BUDGET_BYTES } from './render/upload.js'
-import type { ViewportController } from './render/viewport.js'
+import {
+  configureCanvasContext,
+  createViewportController,
+  type ViewportController,
+} from './render/viewport.js'
 import { FLAG_REBASE } from './sab/control.js'
 import { RingConsumer } from './sab/ring.js'
 
@@ -130,4 +134,81 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoop {
     },
     tick,
   }
+}
+
+export type RealFrameLoopOptions = {
+  client: Client
+  renderer: TerrainRenderer
+  canvas: HTMLCanvasElement
+  clock: Clock
+  scheduler: Scheduler
+  /** `ClientOptions.render`, threaded straight through (Seams, Provides): `scale`/`scaleCap` reach
+   * the viewport controller, `neighbourCutoffPx` is written once into `renderer.frameUniform`
+   * (`terrain.wgsl` already consumes the field; M09 defaulted it to 0, "always read neighbours"). */
+  render?: RenderOptions
+  /** Production passes `device.limits.maxTextureDimension2D` (0018 §7); a test passes a small
+   * number directly so a clamp test never allocates a huge real texture. */
+  maxTextureDimension2D: number
+  doc?: Document
+}
+
+export type RealFrameLoop = {
+  loop: FrameLoop
+  viewport: ViewportController
+  ctx: GPUCanvasContext
+  dispose(): void
+}
+
+/**
+ * M09b (docs/plan/09b-terrain-art-and-lifecycle.md Scope: "Wire `frame-loop.ts`'s `createFrameLoop`
+ * ... to a real canvas"): the one place a page assembles a real `Client`/`TerrainRenderer`/canvas
+ * into a running `FrameLoop`. Configures the canvas's WebGPU context once, wires `ClientOptions.
+ * render` into both the viewport controller and the frame uniform, and draws into
+ * `ctx.getCurrentTexture()` every frame (a fresh texture each frame, unlike a fixed offscreen
+ * target).
+ */
+export function createRealFrameLoop(opts: RealFrameLoopOptions): RealFrameLoop {
+  const ctx = configureCanvasContext(opts.canvas, opts.renderer.device)
+  opts.renderer.frameUniform.neighbourCutoffPx = opts.render?.neighbourCutoffPx ?? 0
+  // `exactOptionalPropertyTypes`: an optional key set to `undefined` is not the same as an absent
+  // key, so `render`/`doc` are added only when actually given, rather than built as one literal with
+  // `opts.render`/`opts.doc` spliced straight in.
+  const viewportOpts: Parameters<typeof createViewportController>[2] = {
+    maxTextureDimension2D: opts.maxTextureDimension2D,
+  }
+  if (opts.render !== undefined) viewportOpts.render = opts.render
+  if (opts.doc !== undefined) viewportOpts.doc = opts.doc
+  const viewport = createViewportController(opts.canvas, opts.renderer, viewportOpts)
+  const loop = createFrameLoop({
+    clock: opts.clock,
+    scheduler: opts.scheduler,
+    client: opts.client,
+    renderer: opts.renderer,
+    target: () => ctx.getCurrentTexture(),
+    viewport,
+  })
+  return {
+    loop,
+    viewport,
+    ctx,
+    dispose() {
+      loop.pause()
+      viewport.dispose()
+    },
+  }
+}
+
+/** 0018 §8 backgrounding, wired to the real `document`: `hidden` -> `pause()`, `visible` ->
+ * `resume()` (which is what actually re-checks size and sets `CB_FLAGS.REBASE`, above). Returns a
+ * disposer. Not used by this milestone's own tests (`engine/test.setVisibility` drives `pause`/
+ * `resume` directly -- headless Chromium's `document.hidden` cannot be forced from outside the page
+ * in a way this harness can reach); wired into a real page by whichever one first owns `document`
+ * (`device.html`, M09b step 7). */
+export function attachVisibilityHandling(loop: FrameLoop, doc: Document = document): () => void {
+  function onVisibilityChange(): void {
+    if (doc.hidden) loop.pause()
+    else loop.resume()
+  }
+  doc.addEventListener('visibilitychange', onVisibilityChange)
+  return () => doc.removeEventListener('visibilitychange', onVisibilityChange)
 }

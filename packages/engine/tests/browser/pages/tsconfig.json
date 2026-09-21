@@ -12,6 +12,7 @@
     "../../../src/virtual.d.ts",
     "../support/terrain-window.d.ts",
     "../support/terrain-client-window.d.ts",
-    "../support/gc-terrain-window.d.ts"
+    "../support/gc-terrain-window.d.ts",
+    "../support/viewport-window.d.ts"
   ]
 }

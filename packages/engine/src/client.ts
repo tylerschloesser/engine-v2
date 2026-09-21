@@ -32,6 +32,16 @@ export { checkSupport } from './support.js'
  */
 export type WorldConfig = { game?: unknown }
 
+/** docs/plan/09b-terrain-art-and-lifecycle.md, Seams (Provides): `ClientOptions.render`'s exact
+ * shape. Defaults (per that brief's own Seams line): `scale` per 0018 §8 (`render/viewport.ts`'s
+ * `computeRenderScale`, undefined here means "derive from DPR"), `scaleCap` none (undefined means
+ * the derivation's own built-in 2x cap, not a narrower one), `neighbourCutoffPx` 0 ("always read
+ * neighbours", already `terrain.wgsl`'s and `FrameUniformValues`'s own default since M09). Not read
+ * by `createClient` itself (rendering never touches a WASM instance, 0018 §1) -- kept here so one
+ * `ClientOptions` object is also what a caller hands `frame-loop.ts`'s `createRealFrameLoop`, the
+ * same pattern `assets` already uses for `render/art.ts`'s `loadTileArt`. */
+export type RenderOptions = { scale?: number; scaleCap?: number; neighbourCutoffPx?: number }
+
 export interface ClientOptions {
   canvas: HTMLCanvasElement
   wasm: { url: string; buildHash: string }
@@ -47,6 +57,9 @@ export interface ClientOptions {
    * WASM instance (0018 §1) -- kept here so a caller's one `ClientOptions` object is also what it
    * hands `render/art.ts`'s `loadTileArt`, instead of a second, separately-threaded asset config. */
   assets?: { tiles: string }
+  /** docs/plan/09b-terrain-art-and-lifecycle.md, Seams (Provides). See `RenderOptions`'s own doc
+   * comment for defaults and why `createClient` doesn't read this itself. */
+  render?: RenderOptions
   /** Test-only escape hatch (Planning decisions: "`createClient` takes `{ clock, scheduler }`
    * through a test-only options field"); never set by a game. */
   test?: {

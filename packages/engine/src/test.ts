@@ -34,3 +34,10 @@ export {
   uploadBytes,
   uploadRecords,
 } from './test/render.js'
+export {
+  attachViewportTestHooks,
+  clearRebaseFlag,
+  rebaseFlagSet,
+  setViewport,
+  setVisibility,
+} from './test/viewport.js'
