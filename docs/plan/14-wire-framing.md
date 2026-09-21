@@ -67,4 +67,154 @@ Bandwidth rows (PRE-PLAN §7) are not measured here, but the fixed costs they as
 none
 
 ## Deviations
-(filled in during Phase 3)
+
+**Module layout.** `wire/mod.rs` (`WireError`, `zigzag32`/`unzigzag32`, `varint_u32` (private,
+range-checked varint read), `MsgType`, `SectionId`, `FrameHeader`, `SectionWriter`, `FrameWriter`,
+`FrameReader`) plus one file per concern: `coordlist.rs`, `overlay_runs.rs`, `snapshot.rs`,
+`deltas.rs`, `results.rs`, `global.rs`, `uplink.rs`, each re-exported at `wire::*`. Id tables and
+byte layouts live in `crates/engine/src/wire/CLAUDE.md` (30 lines), the single home the brief asks
+for; this file does not repeat them.
+
+**Seam shapes as landed** (all `pub` at `engine::wire::`, all in `packages/engine/crates/engine/src/wire/`):
+- `WireError { Full, Malformed }`, `impl From<CodecError> for WireError` (`Overflow -> Full`,
+  everything else `-> Malformed`).
+- `zigzag32(i32) -> u32`, `unzigzag32(u32) -> i32` (both total, no `Result`).
+- `MsgType` (`#[repr(u8)]`: `Frame=1, UplinkBatch=2, Welcome=3, ResyncChunk=4, Bye=5`), `SectionId`
+  (`#[repr(u8)]`, table in `wire/CLAUDE.md`) with a private `from_u8`.
+- `FrameHeader { tick: u32, ack_seq: u32 }` (no `type`/`flags` fields: `FrameWriter::new` writes
+  those itself, always `MsgType::Frame`/`0`).
+- `SectionWriter::write(sink: &mut impl ByteSink, id: SectionId, body: impl Fn(&mut dyn ByteSink))`
+  -- the "measure, then write" trick (`CountSink` then the real sink), matching M05's `write_sized`.
+- `FrameWriter<'a, S: ByteSink>::{new(sink: &'a mut S, header: FrameHeader) -> Self, section(&mut
+  self, id: SectionId, body: impl Fn(&mut dyn ByteSink))}`; `FrameReader<'a>::{new(buf: &'a [u8]) ->
+  Result<Self, WireError>, header() -> FrameHeader, next_section(&mut self) -> Result<Option<
+  (SectionId, &'a [u8])>, WireError>}`.
+- `ChunkCoordListWriter::{new, write(&mut self, sink: &mut (impl ByteSink + ?Sized), coord:
+  ChunkCoord)}`, `ChunkCoordListReader::{new, read(&mut self, r: &mut ByteReader) ->
+  Result<ChunkCoord, WireError>}`.
+- `OverlayRunsWriter::write(sink: &mut (impl ByteSink + ?Sized), entries: impl Iterator<Item =
+  (u16, Tile)> + Clone)`; `OverlayRunsReader::read(r: &mut ByteReader, on_tile: impl FnMut(u16,
+  Tile)) -> Result<(), WireError>`.
+- `encode_chunk_snapshot<G: Game>(store: &Store<G>, chunk: ChunkCoord, version: u32, sink: &mut
+  (impl ByteSink + ?Sized))` -- **writes only `version`/overlay-runs/entities, not `chunk` itself**
+  (see "Chunk snapshot coordinate" below). `SnapshotWriter::{new, write_chunk<G: Game>(&mut self,
+  sink, store: &Store<G>, chunk: ChunkCoord, version: u32)}` (writes the coord via its own
+  `ChunkCoordListWriter`, then calls `encode_chunk_snapshot`). `SnapshotReader::{new,
+  read_chunk<G: Game>(&mut self, r, on_tile: impl FnMut(u16, Tile), on_entity: impl FnMut(EntityId,
+  G::Entity)) -> Result<(ChunkCoord, u32), WireError>}`.
+- `write_chunk_deltas<G: Game>(sink, tile_groups: &[(ChunkCoord, &[(u16, Tile)])], entity_ops:
+  &[EntityOp<'_, G>])`; `read_chunk_deltas<G: Game>(r, on_tile: impl FnMut(ChunkCoord, u16, Tile),
+  on_entity_op: impl FnMut(EntityDeltaOp<G>)) -> Result<(), WireError>`; `EntityOp<'a, G>{ Put{id,
+  entity: &'a G::Entity}, Gone{id} }`, `EntityDeltaOp<G>{ Put(EntityId, G::Entity), Gone(EntityId) }`
+  (borrowed on write, owned on read -- `codec::decode` produces an owned value). No dedicated
+  `ChunkDeltasWriter`/`Reader` type: the brief's Provides list names none, and M15's `ChangeLog` is
+  a plain ordered list, so a free function over slices is the natural shape.
+- `ActionResultsWriter::write<'a, G: Game>(sink, results: impl Iterator<Item = &'a
+  sim::Outcome<G>> + Clone)`; `ActionResultsReader::read<G: Game>(r, on_result: impl FnMut(u32,
+  Result<sim::Applied, sim::Rejected<G>>)) -> Result<(), WireError>`. `EngineReject` wire codes are
+  its declaration order: `RateLimited=0, StateBudgetFull=1, EngineFault=2`.
+- `write_global<G: Game>(sink, roster: Option<impl Iterator<Item = (PlayerId, bool)> + Clone>,
+  global: Option<&G::Global>)`; `read_global<G: Game>(r, on_roster: impl FnMut(PlayerId, bool)) ->
+  Result<Option<G::Global>, WireError>`; `write_own_player<G: Game>(sink, who: PlayerId, state:
+  &G::Player)`; `read_own_player<G: Game>(r) -> Result<(PlayerId, G::Player), WireError>`. No
+  dedicated writer/reader struct for either (Provides names none; each is one shot, no per-entry
+  cursor).
+- `CameraReport { center_x/center_y: i32, half_w/half_h: u16, vel_x/vel_y: i16 }` (`LEN = 16`,
+  `write`/`read`); `UplinkBatch<'a> { last_received_tick: u32, camera: Option<CameraReport>,
+  presence: Option<&'a [u8]> }`; `UplinkWriter::write<'a>(sink, last_received_tick: u32, actions:
+  impl Iterator<Item = (u32, &'a [u8])> + Clone, camera: Option<CameraReport>, presence:
+  Option<&[u8]>)`; `UplinkReader::read<'a>(buf: &'a [u8], on_action: impl FnMut(u32, &'a [u8])) ->
+  Result<UplinkBatch<'a>, WireError>` -- actions are handed back as raw `(seq, bytes)`, never
+  decoded into `G::Action`, so `UplinkReader` needs no `G` type parameter at all.
+
+**`?Sized` widened through the write path.** Every writer function's sink parameter is `&mut (impl
+ByteSink + ?Sized)`, not the brief's implied `&mut impl ByteSink`: a `FrameWriter::section` body
+closure receives `&mut dyn ByteSink` (so it can be invoked twice with the same trait object), and
+every section body (`ActionResultsWriter::write`, `write_global`, `write_own_player`,
+`ChunkCoordListWriter::write`, `SnapshotWriter::write_chunk`, `write_chunk_deltas`,
+`OverlayRunsWriter::write`) is called from inside one. M05's own `codec::encode_to`/
+`encode_to_with` needed the same widening (additive, non-breaking -- every existing caller still
+compiles unchanged since `S: ByteSink` still satisfies `S: ByteSink + ?Sized`).
+
+**Chunk snapshot coordinate is not written by `encode_chunk_snapshot`.** The brief's Planning
+decisions describes one "chunk snapshot entry" of `coord (list coding) · version · overlay runs ·
+entities`, and gives `encode_chunk_snapshot(&Store<G>, ChunkCoord, version, &mut impl ByteSink)` as
+the function that builds it -- but that same function is also named as "the canonical form hashed
+by M31" (0013 "Per-chunk desync hashes"), which must be self-contained bytes for *one* chunk,
+independent of any other chunk's position (a delta-coded coordinate chained from a neighbour would
+make the hash depend on unrelated data). Resolution: `encode_chunk_snapshot` writes only the
+content (version, overlay runs, entities); `SnapshotWriter`, the section-level type, writes the
+coordinate itself via its own `ChunkCoordListWriter` (chained across the section's several chunks,
+matching Planning decisions faithfully at the section level) and then calls
+`encode_chunk_snapshot` for the rest. M31 hashes `encode_chunk_snapshot`'s bytes directly, keyed by
+a chunk coordinate it already knows from elsewhere (the `Hashes` section, Non-scope here).
+
+**Entities in a chunk snapshot = entities anchored to that chunk (anchor-chunk equality, not full
+footprint overlap).** 0011 says "every entity whose scope includes the chunk", but `Authority`'s
+own scope derivation (M12b) is anchor-chunk-only until M21 widens it to the full footprint
+(`authority::Scopes` doc comment) -- so as of this milestone, "scope includes chunk C" and "anchor
+chunk is C" are the same set. This keeps a snapshot's entity list consistent with exactly what live
+deltas deliver for that chunk today; M21 will need to revisit both together. Implemented via an
+additive accessor, `Store::entities(&self) -> impl Iterator<Item = (EntityId, &G::Entity)> + '_`
+(ascending id order), filtered by `chunk_of::<G>(G::anchor(e)) == chunk` -- nothing needed to
+enumerate every entity before this milestone. Also additive: `ChunkOverlay::entries()`'s returned
+`impl Iterator` now also bears `+ Clone` (already true of the concrete type, a non-capturing `.map`
+over a `slice::Iter`; just not previously exposed) so `OverlayRunsWriter::write`'s two-pass
+count-then-write can walk it twice without buffering.
+
+**Overlay-run grouping.** The writer (`overlay_runs::RunCursor`) uses a 2-item-lookahead cursor
+(`peek`/`bump`/cheap `fork` -- a slice iterator under a non-capturing `.map` clones for free) to
+group a maximal run of `>= 2` equal consecutive tiles into one `repeat` run and everything else
+into the longest `literal` run that does not swallow the start of a following repeat, without
+buffering an unbounded chunk's worth of tiles on the stack. The reader supports any literal length
+the format allows; nothing requires the writer to prefer larger literal runs over more of them, only
+that repeats are used where possible (`golden_overlay_runs_literal_and_repeat` proves this by byte-
+count comparison: a 4-long repeat run costs strictly less than 4 spaced-out length-1 literal runs
+would).
+
+**`ChunkTiles` (10) is a valid, round-tripping id with no interpreted body**, per Non-scope
+("reserved by 0008 §3, unbuilt"); `decoder_never_panics`'s corpus never emits it, and any code path
+that reaches it is a no-op.
+
+**Test placement: `encode_decode_no_alloc` is its own binary, `tests/no_alloc_wire.rs`,** not
+inline in `wire::tests` as the brief's Tests-added list literally says. Same reasoning as
+`no_alloc_terrain.rs`/`no_alloc_store.rs`/`no_alloc_authority.rs`/`no_alloc_gen_queue.rs`
+(`packages/engine/crates/engine/CLAUDE.md`): a `#[global_allocator]` only counts allocations made
+in the binary that installs it, and every other no-alloc test in this crate already follows this
+convention. Verified it can fail: temporarily inserted `let _leak: Vec<u8> =
+Vec::with_capacity(64); std::mem::forget(_leak);` at the top of `FrameWriter::new`, which failed
+the test (`assertion left == right failed: wire encode allocated`, `left: 47867  right: 47803` --
+the leaked 64-byte `Vec`'s allocator overhead), then reverted it and reran to green (`test
+encode_decode_no_alloc ... ok`).
+
+**Anti-vacuity, per the three named tests:**
+- `encode_decode_no_alloc`: fails if `abi::arena::live_bytes()` changes across the measured encode
+  or decode call. Shown above to fail when an allocation is injected, and to pass once reverted.
+- `decoder_never_panics`: fails if `reached_sections <= CASES / 4` (a healthy fraction of the 2,000
+  mutated cases must get at least one section body back from `FrameReader`, not be rejected at byte
+  0 every time) or if `malformed_count == 0` (the mutators must actually produce malformed input at
+  least once). Both assertions are exercised by the real corpus and pass; deleting either mutator
+  branch or replacing the corpus with all-zero bytes would fail the first, and feeding it only
+  well-formed frames would fail the second.
+- `roundtrip_random_frames`: fails if any of the 9 built `SectionId`s (1-9) never appears across
+  1,000 generated frames, or if any of five two-sided coverage flags (`overlay_empty`/`nonempty`,
+  `snapshot_entities_zero`/`nonzero`, `global_roster_only`/`value_only`/`both`,
+  `deltas_with_groups`/`ops_only`, `action_results_applied`/`game_reject`/`engine_reject`) never
+  sees both its sides. Caught a real generator bug during development: `ChunkSnapshots` originally
+  always picked a fixed chunk prefix that happened to always contain entities, so
+  `snapshot_entities_zero_seen` never fired; fixed by picking distinct random chunk indices from
+  the full set instead of a prefix.
+- Every other new test's failure mode is stated in its own doc comment or is a direct round-trip/
+  golden-byte equality check (fails on any byte or field mismatch).
+
+**Measured.** `pnpm test`: `rust` 191 -> 235 (+44: 43 inline `wire::` tests, 1 `no_alloc_wire`
+binary test); `unit` 154, `wasm` 40, `browser` 95 (all unchanged -- Rust-only milestone). `pnpm
+test rust -t wire` -> `43 tests`. `pnpm lint` green (biome, rustfmt, clippy, tsc) after two fixes:
+two `collapsible_if` lets-chains in `overlay_runs.rs`, one `useless_vec` (a fixed test literal
+changed from `vec![..]` to an array) in `global.rs`. Ten new goldens, byte counts (`pnpm
+golden:bytes -- wire`, verified via `git status` that no pre-existing golden changed):
+`wire_frame_header.hex` 10 B, `wire_section_ids.hex` 17 B, `wire_coord_list_negative_and_far.hex`
+12 B, `wire_overlay_runs_literal_and_repeat.hex` 23 B, `wire_chunk_snapshot.hex` 20 B,
+`wire_chunk_deltas.hex` 27 B, `wire_action_results_all_tags.hex` 9 B, `wire_global.hex` 7 B,
+`wire_own_player.hex` 2 B, `wire_uplink_batch.hex` 28 B. Commits `09dc7ed`..`4df8c45` (eight: seven
+`M14 step N` plus one `M14:` clippy-fix commit).
