@@ -512,3 +512,54 @@ option or a fresh ADR, never a widened `attributionRoots`.
 
 **Commits this round:** `analyse.ts`/`analyse.test.ts` redesign, `gc/suite.ts` adapter.info wiring,
 and the five real `software` blocks (`budgets.json`).
+
+### Step 5's first slow-tier run, and its two fixes (2026-09-21, same day)
+
+Run [35618167031](https://github.com/tylerschloesser/engine-v2/actions/runs/35618167031) (`6a09a07`):
+job **5 m 9 s** cold (the runner's real cold-build ratio; no `rust-cache`/Playwright-cache hit yet on
+this branch). Fast tier green again, `browser` **83 s** this run against **102 s** the previous
+green run (35611003598) -- both well over the local 18-20 s quiet-machine reading (0020 §4's own
+demotion wire is a Mac number; the runner's own ratio, recorded here rather than acted on, is what
+decides whether the slow tier fits a job, not whether the fast tier passes: `--budget-scale 1000`
+means neither reading ever gates). Slow tier red on 2 of 27, both diagnosed from the log rather than
+re-derived, then fixed and verified locally:
+
+**Fix 1 -- `wasm` `plugin-rebuild-error.test.ts` built its temp fixture with an unpinned compiler.**
+`copyStandaloneHashCrate()` (`tests/wasm/plugin-rebuild-error.test.ts`) copies `fixtures/hash` into
+a fresh temp directory *outside* the repo tree with its own `[workspace]` table, specifically so
+cargo gives it a cold target dir (the test's own doc comment). That copy carried no
+`rust-toolchain.toml`, so `rustup`'s own upward directory search for one never reached the repo
+root's pin (1.93.0, `wasm32-unknown-unknown`) -- the runner's log: `Locking 18 packages to latest
+Rust 1.98.1 compatible versions` then `can't find crate for 'core' ... the wasm32-unknown-unknown
+target may not be installed`. This passed on every session so far only because this machine's own
+rustup default happens to have that target; it is latent on any machine whose default differs from
+the pin, exactly the inconsistency ADR 0002 exists to prevent, and CI happened to be the first
+machine to differ. **Not fixed by adding the target to `ci.yml`** (would paper over the real
+defect, an unpinned build, rather than closing it). Fixed by copying the repo's own
+`rust-toolchain.toml` into the temp crate (`ROOT_RUST_TOOLCHAIN`, read via `fileURLToPath` from the
+test's own module URL, not a second hard-coded version string -- a pin bump never needs a second
+edit here). Verified locally: `pnpm test:slow wasm -t "plugin: rustc error reaches overlay"` passes
+(5.2 s).
+
+**Fix 2 -- `[webkit] terrain: probe tile colours webkit @webkit-gpu @slow` fails on Linux: WebKitGTK
+has no WebGPU at all.** `navigator.gpu is not present` on `ubuntu-latest` -- not a software-adapter
+question, a platform capability fact (Playwright ships WebKitGTK on Linux, which has no WebGPU
+implementation; macOS WebKit does, 0018 §7's own support table). **Checked first, per instruction:
+`docs/spec/testing.md`'s Requirements name no WebKit-GPU-in-CI requirement** -- the only CI-specific
+line ("CI is GitHub Actions on Linux with a software WebGPU adapter... iOS Safari is covered by a
+manual checklist") is about the Chromium/SwiftShader path and is silent on WebKit, so this did not
+need to become a question for Tyler; proceeded on the orchestrator's own default. Fixed with a
+platform condition in `playwright.config.ts` (`webkitGrep = process.platform === 'linux' ? /@engines/
+: /@engines|@webkit-gpu/`), asserted against the platform rather than discovered by the test itself
+checking for `navigator.gpu` (which would make the test unable to fail and silently stop covering
+macOS the day WebGPU broke there): `@webkit-gpu` now runs only off Linux; `@engines` (sim hash, no
+GPU -- the test that just proved three-browser determinism on this exact runner) still runs
+everywhere. Verified locally (macOS, unaffected): `pnpm test:slow` still runs 25/25 browser slow
+tests including the `@webkit-gpu` one.
+
+**What did not fail, the headline of this run:** three-browser determinism passed on Linux --
+WebKit and Firefox both matched the Apple-silicon goldens, closing ADR 0002's own deferred item in
+full and confirming ADR 0026's bet (CI, not `pnpm test`, is what proves this now) on its first real
+run. `plugin-dev: touch triggers rebuild and full-reload` passed -- recursive `fs.watch` works on
+Linux, M02b's `watchCrate` needs no per-directory fallback. Both recorded in `docs/plan/
+deferred-ledger.md`.
