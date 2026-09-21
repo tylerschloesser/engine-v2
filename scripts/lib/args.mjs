@@ -1,6 +1,7 @@
 /**
  * Arguments of `pnpm test`: `[suite] [-t pattern] [--tier fast|slow] [--self-check-fail]
- * [--budget-scale <n>]`. Returns `{ error }` for anything else; the caller prints usage, exits 2.
+ * [--budget-scale <n>] [--timings-json <path>]`. Returns `{ error }` for anything else; the caller
+ * prints usage, exits 2.
  */
 export function parseArgs(argv, suiteNames) {
   const opts = {
@@ -9,6 +10,7 @@ export function parseArgs(argv, suiteNames) {
     tier: 'fast',
     selfCheckFail: false,
     scale: 1,
+    timingsJson: undefined,
   }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
@@ -21,6 +23,9 @@ export function parseArgs(argv, suiteNames) {
     } else if (arg === '--budget-scale') {
       opts.scale = Number(argv[++i])
       if (!(opts.scale > 0)) return { error: '--budget-scale needs a positive number' }
+    } else if (arg === '--timings-json') {
+      opts.timingsJson = argv[++i]
+      if (opts.timingsJson === undefined) return { error: '--timings-json needs a path' }
     } else if (arg === '--self-check-fail') {
       opts.selfCheckFail = true
     } else if (arg.startsWith('-')) {
@@ -38,7 +43,8 @@ export function parseArgs(argv, suiteNames) {
 
 export function usage(suiteNames) {
   return [
-    'usage: pnpm test [suite] [-t pattern] [--tier fast|slow] [--self-check-fail] [--budget-scale <n>]',
+    'usage: pnpm test [suite] [-t pattern] [--tier fast|slow] [--self-check-fail]',
+    '                 [--budget-scale <n>] [--timings-json <path>]',
     `suites: ${suiteNames.join(', ')}`,
   ].join('\n')
 }

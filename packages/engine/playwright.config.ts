@@ -14,6 +14,21 @@ const baseURL = `http://127.0.0.1:${port}`
 const cdpPort =
   Number(process.env.ENGINE_CDP_PORT ?? 9333) + Number(process.env.TEST_PARALLEL_INDEX ?? 0)
 
+// M10 (docs/plan/10-ci-workflow.md; docs/decisions/0020-testing-strategy.md §6): unset locally,
+// `channel: 'chromium'` gives a real Metal adapter headless and `--enable-unsafe-webgpu` alone is
+// enough. CI (`ubuntu-latest`) sets `ENGINE_GPU=swiftshader`, which adds the flags a software
+// WebGPU adapter needs; `libvulkan1`/`mesa-vulkan-drivers` are the matching apt packages (ci.yml).
+const swiftshaderArgs =
+  process.env.ENGINE_GPU === 'swiftshader'
+    ? [
+        '--enable-features=Vulkan',
+        '--use-angle=vulkan',
+        '--use-vulkan=swiftshader',
+        '--use-webgpu-adapter=swiftshader',
+        '--disable-vulkan-surface',
+      ]
+    : []
+
 export default defineConfig({
   testDir: './tests/browser',
   // Default matches `*.test.ts` too (M04's `gc/analyse.test.ts` is a Vitest unit test, run by the
@@ -32,7 +47,7 @@ export default defineConfig({
         ...devices['Desktop Chrome'],
         // Real Metal adapter headless on macOS; the same flag serves Linux SwiftShader (0020 §6).
         channel: 'chromium',
-        launchOptions: { args: ['--enable-unsafe-webgpu'] },
+        launchOptions: { args: ['--enable-unsafe-webgpu', ...swiftshaderArgs] },
       },
       // M04's gc-*.spec.ts run only in the `gc` project below, under `pnpm gc`, never `pnpm test`.
       testIgnore: '**/gc-*.spec.ts',
@@ -67,6 +82,7 @@ export default defineConfig({
         launchOptions: {
           args: [
             '--enable-unsafe-webgpu',
+            ...swiftshaderArgs,
             '--disable-features=SpareRendererForSitePerProcess',
             '--js-flags=--expose-gc --sampling-heap-profiler-suppress-randomness',
             `--remote-debugging-port=${cdpPort}`,

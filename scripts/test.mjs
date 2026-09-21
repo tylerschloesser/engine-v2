@@ -2,13 +2,16 @@
 // Output contract: docs/decisions/0020 §2. Suites and build steps: scripts/suites.mjs.
 // Exit codes: 0 all pass (warnings allowed); 1 test, suite-budget or build failure; 2 usage or
 // missing tool.
-import { rmSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { cpus } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { adapters } from './lib/adapters.mjs'
 import { parseArgs, usage } from './lib/args.mjs'
 import { toolEnv } from './lib/env.mjs'
 import {
+  buildTimingsReport,
   classifyBudget,
   formatDuration,
   formatFailure,
@@ -98,7 +101,31 @@ async function main() {
   for (const { suite, failures } of outcomes) {
     for (const failure of failures) console.log(formatFailure({ suite: suite.name, ...failure }))
   }
+
+  if (opts.timingsJson) writeTimingsJson(opts.timingsJson, { buildMs, outcomes })
+
   return failed ? 1 : 0
+}
+
+/** `--timings-json <path>`: recorded, never gating (docs/decisions/0020 §10). Written whether or
+ * not the run passed, so a failing CI run still uploads its timings. */
+function writeTimingsJson(path, { buildMs, outcomes }) {
+  const report = buildTimingsReport({ commit: gitCommit(), cpu: cpuModel(), buildMs, outcomes })
+  const out = resolve(root, path)
+  mkdirSync(dirname(out), { recursive: true })
+  writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`)
+}
+
+function gitCommit() {
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
+  } catch {
+    return null
+  }
+}
+
+function cpuModel() {
+  return cpus()[0]?.model ?? null
 }
 
 /** A suite is its own adapter run plus one run per entry of `suite.legs`, reported as one line. */

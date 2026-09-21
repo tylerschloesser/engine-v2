@@ -34,6 +34,18 @@ describe('parseArgs', () => {
     })
   })
 
+  test('--timings-json takes a path', () => {
+    expect(parseArgs(['--timings-json', 'test-results/timings.json'], names)).toEqual({
+      suite: undefined,
+      pattern: undefined,
+      tier: 'fast',
+      selfCheckFail: false,
+      scale: 1,
+      timingsJson: 'test-results/timings.json',
+    })
+    expect(parseArgs(['--timings-json'], names).error).toMatch(/--timings-json needs a path/)
+  })
+
   test('errors: unknown suite or flag, missing or bad values, two suites', () => {
     expect(parseArgs(['nosuch'], names).error).toMatch(/unknown suite nosuch/)
     expect(parseArgs(['--nope'], names).error).toMatch(/unknown flag --nope/)

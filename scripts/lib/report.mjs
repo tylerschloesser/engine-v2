@@ -36,6 +36,28 @@ export function formatSuiteLine({ name, failed, tests, ms, budgetMs, scale = 1, 
   return `${name.padEnd(nameWidth)} ${status} ${count} ${time}${note}`
 }
 
+/**
+ * The `--timings-json` artefact (docs/plan/10-ci-workflow.md, Seams: "writes `{ suite, ms,
+ * budgetMs, tests }[]` plus build ms, CPU model and commit"). Recorded, never gating (0020 §10):
+ * `budgetMs` is whatever the caller measured it against (the unscaled budget, since CI runs with
+ * `--budget-scale` applied only to pass/fail, not to this number) and is `undefined` for a suite
+ * run in the slow tier, which carries no budget. Pure: `commit`/`cpu` are read by the caller
+ * (`scripts/test.mjs`), not here.
+ */
+export function buildTimingsReport({ commit, cpu, buildMs, outcomes }) {
+  return {
+    commit,
+    cpu,
+    buildMs,
+    suites: outcomes.map(({ suite, ms, tests }) => ({
+      suite: suite.name,
+      ms,
+      budgetMs: suite.budgetMs,
+      tests,
+    })),
+  }
+}
+
 /** One warning line under a suite's line (an adapter's `warnings`, docs/decisions/0020 §3 extension:
  * M04 uses this for the `Tracing.start` stall). */
 export function formatWarning(text) {

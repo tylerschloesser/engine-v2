@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
 import {
+  buildTimingsReport,
   classifyBudget,
   findSeed,
   formatFailure,
@@ -199,5 +200,24 @@ describe('findSeed', () => {
     expect(findSeed('replay diverged, seed=1234')).toBe('1234')
     expect(findSeed('Seed: 0xBEEF at tick 3')).toBe('0xBEEF')
     expect(findSeed('no such thing')).toBeUndefined()
+  })
+})
+
+test('runner: timings json shape', () => {
+  const outcomes = [
+    { suite: { name: 'rust', budgetMs: 10_000 }, ms: 412.3, tests: 145 },
+    // The slow tier's suite line carries no budget (formatSuiteLine's own "undefined" case).
+    { suite: { name: 'browser', budgetMs: undefined }, ms: 21_004.7, tests: 90 },
+  ]
+  expect(
+    buildTimingsReport({ commit: 'abc123', cpu: 'AMD EPYC 7763', buildMs: 5_000, outcomes }),
+  ).toEqual({
+    commit: 'abc123',
+    cpu: 'AMD EPYC 7763',
+    buildMs: 5_000,
+    suites: [
+      { suite: 'rust', ms: 412.3, budgetMs: 10_000, tests: 145 },
+      { suite: 'browser', ms: 21_004.7, budgetMs: undefined, tests: 90 },
+    ],
   })
 })
