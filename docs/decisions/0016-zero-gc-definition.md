@@ -1,6 +1,6 @@
 # 0016: What "zero GC" means, and how it is asserted
 
-Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §12, [0026](0026-zero-gc-burst-controls-in-slow-tier.md) §1.
+Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §12, [0026](0026-zero-gc-burst-controls-in-slow-tier.md) §1, [0027](0027-zero-gc-excludes-blocking-primitive-bookkeeping.md) §3 step 7.
 
 ## Context
 
