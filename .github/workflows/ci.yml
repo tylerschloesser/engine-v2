@@ -1,7 +1,7 @@
 # docs/plan/10-ci-workflow.md. One job, `ubuntu-latest`, SwiftShader WebGPU (docs/decisions/
-# 0020-testing-strategy.md §6, §10). `pnpm lint` and `pnpm test` (the fast tier) only so far;
-# `pnpm test:slow` is added once the fast tier is green here (docs/plan/10-ci-workflow.md, Order of
-# work step 5).
+# 0020-testing-strategy.md §6, §10). `pnpm lint`, `pnpm test` (fast tier), `pnpm test:slow`
+# (Order of work step 5): three-browser determinism (ADR 0026: `pnpm test` alone no longer proves
+# it), every production page's `burst` negative control, the Linux `fs.watch` rebuild test.
 name: CI
 
 on:
@@ -97,6 +97,17 @@ jobs:
           GC_MODE: software
         run: pnpm test --budget-scale 1000 --timings-json test-results/timings.json
 
+      # The slow tier: three-browser determinism (webkit/firefox, `@engines`), every production
+      # page's `burst` negative control (`@slow` since ADR 0026), the Linux `fs.watch` rebuild test
+      # (`plugin-dev: touch triggers rebuild and full-reload`). A separate `--timings-json` path so
+      # the fast tier's own timings.json (uploaded above it in the artifact) is never overwritten.
+      - name: pnpm test:slow
+        env:
+          CI: 'true'
+          ENGINE_GPU: swiftshader
+          GC_MODE: software
+        run: pnpm test:slow --budget-scale 1000 --timings-json test-results/timings-slow.json
+
       - name: Upload test-results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -108,17 +119,23 @@ jobs:
       - name: Timings summary
         if: always()
         run: |
-          if [ -f test-results/timings.json ]; then
-            {
-              echo "### Suite timings"
-              echo
-              echo "| Suite | Tests | ms | Budget ms |"
-              echo "|---|---|---|---|"
-              jq -r '.suites[] | "| \(.suite) | \(.tests) | \(.ms | floor) | \(.budgetMs // "-") |"' test-results/timings.json
-              echo
-              build_ms=$(jq -r '.buildMs | floor' test-results/timings.json)
-              commit=$(jq -r '.commit' test-results/timings.json)
-              cpu=$(jq -r '.cpu' test-results/timings.json)
-              echo "Build: ${build_ms} ms · commit ${commit} · CPU ${cpu}"
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          summarize() {
+            local title="$1" path="$2"
+            if [ -f "$path" ]; then
+              {
+                echo "### ${title}"
+                echo
+                echo "| Suite | Tests | ms | Budget ms |"
+                echo "|---|---|---|---|"
+                jq -r '.suites[] | "| \(.suite) | \(.tests) | \(.ms | floor) | \(.budgetMs // "-") |"' "$path"
+                echo
+                build_ms=$(jq -r '.buildMs | floor' "$path")
+                commit=$(jq -r '.commit' "$path")
+                cpu=$(jq -r '.cpu' "$path")
+                echo "Build: ${build_ms} ms · commit ${commit} · CPU ${cpu}"
+                echo
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          }
+          summarize "Suite timings (fast)" test-results/timings.json
+          summarize "Suite timings (slow)" test-results/timings-slow.json
