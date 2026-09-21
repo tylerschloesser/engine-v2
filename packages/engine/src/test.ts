@@ -21,6 +21,14 @@ export {
   type Harness,
   type HarnessWorkerSpec,
 } from './test/harness.js'
+export {
+  attachCameraInputTestHooks,
+  type CameraInputBundle,
+  injectKey,
+  injectPointer,
+  injectWheel,
+  type PointerPhase,
+} from './test/input.js'
 export { createManualClock, type ManualClock } from './test/manual-clock.js'
 export {
   drawCalls,
