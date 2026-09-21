@@ -32,7 +32,7 @@ pub fn encode_chunk_snapshot<G: Game>(
     store: &Store<G>,
     chunk: ChunkCoord,
     version: u32,
-    sink: &mut impl ByteSink,
+    sink: &mut (impl ByteSink + ?Sized),
 ) {
     sink.put_u32(version);
     match store.terrain().overlay(chunk) {
@@ -64,7 +64,7 @@ impl SnapshotWriter {
 
     pub fn write_chunk<G: Game>(
         &mut self,
-        sink: &mut impl ByteSink,
+        sink: &mut (impl ByteSink + ?Sized),
         store: &Store<G>,
         chunk: ChunkCoord,
         version: u32,

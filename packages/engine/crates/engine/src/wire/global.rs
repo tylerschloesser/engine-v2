@@ -16,7 +16,7 @@ use super::{WireError, varint_u32};
 /// `roster`/`global` are each `None` when that half is unchanged and should be omitted (mask bit
 /// clear).
 pub fn write_global<G: Game>(
-    sink: &mut impl ByteSink,
+    sink: &mut (impl ByteSink + ?Sized),
     roster: Option<impl Iterator<Item = (PlayerId, bool)> + Clone>,
     global: Option<&G::Global>,
 ) {
@@ -70,7 +70,11 @@ pub fn read_global<G: Game>(
     }
 }
 
-pub fn write_own_player<G: Game>(sink: &mut impl ByteSink, who: PlayerId, state: &G::Player) {
+pub fn write_own_player<G: Game>(
+    sink: &mut (impl ByteSink + ?Sized),
+    who: PlayerId,
+    state: &G::Player,
+) {
     sink.put_varint(who.0 as u64);
     encode_to(state, sink).expect("encoding G::Player into a ByteSink cannot fail");
 }

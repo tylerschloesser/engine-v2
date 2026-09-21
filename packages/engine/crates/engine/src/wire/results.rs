@@ -32,7 +32,7 @@ pub struct ActionResultsWriter;
 impl ActionResultsWriter {
     /// Writes `n varint` (from `results.clone().count()`) then every result in order.
     pub fn write<'a, G: Game>(
-        sink: &mut impl ByteSink,
+        sink: &mut (impl ByteSink + ?Sized),
         results: impl Iterator<Item = &'a Outcome<G>> + Clone,
     ) {
         let n = results.clone().count() as u64;

@@ -76,7 +76,7 @@ impl<I: Iterator<Item = (u16, Tile)> + Clone> RunCursor<I> {
     /// Consumes and writes exactly one run (repeat or literal), returning the index it ends at.
     /// `last_end` is the previous run's end index (`-1` before the first run), used to compute
     /// `gap`.
-    fn advance_one_run(&mut self, sink: &mut impl ByteSink, last_end: i64) -> i64 {
+    fn advance_one_run(&mut self, sink: &mut (impl ByteSink + ?Sized), last_end: i64) -> i64 {
         let (idx0, tile0) = self
             .peek()
             .expect("advance_one_run called with nothing left");
@@ -126,7 +126,10 @@ impl OverlayRunsWriter {
     /// contract). Two passes over a cloned iterator -- count the runs, then write them -- the same
     /// "measure, then write" trick `write_sized` (`crate::store`) uses for a length prefix, so no
     /// scratch buffer is needed for an unbounded number of variable-length runs.
-    pub fn write(sink: &mut impl ByteSink, entries: impl Iterator<Item = (u16, Tile)> + Clone) {
+    pub fn write(
+        sink: &mut (impl ByteSink + ?Sized),
+        entries: impl Iterator<Item = (u16, Tile)> + Clone,
+    ) {
         let n_runs = Self::run_count(entries.clone());
         sink.put_varint(n_runs as u64);
         let mut cur = RunCursor::new(entries);

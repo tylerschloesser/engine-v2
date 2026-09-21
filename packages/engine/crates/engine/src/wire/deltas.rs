@@ -33,7 +33,7 @@ pub enum EntityDeltaOp<G: Game> {
 /// sorted by `(cy, cx)` (the same invariant [`ChunkCoordListWriter`] expects everywhere else).
 /// `entity_ops` in write order.
 pub fn write_chunk_deltas<G: Game>(
-    sink: &mut impl ByteSink,
+    sink: &mut (impl ByteSink + ?Sized),
     tile_groups: &[(ChunkCoord, &[(u16, Tile)])],
     entity_ops: &[EntityOp<'_, G>],
 ) {

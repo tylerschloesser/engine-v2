@@ -29,7 +29,7 @@ impl ChunkCoordListWriter {
     /// "entries sorted by (cy, cx)" is the caller's invariant to uphold; this only catches it in
     /// debug builds, since a release build must still emit *some* bytes for a caller bug rather
     /// than panic).
-    pub fn write(&mut self, sink: &mut impl ByteSink, coord: ChunkCoord) {
+    pub fn write(&mut self, sink: &mut (impl ByteSink + ?Sized), coord: ChunkCoord) {
         match self.prev {
             None => {
                 sink.put_varint(zigzag32(coord.x) as u64);

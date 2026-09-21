@@ -449,4 +449,640 @@ mod tests {
         let mut r2 = ByteReader::new(&buf2[..n2]);
         assert_eq!(varint_u32(&mut r2), Ok(u32::MAX));
     }
+
+    // -- `roundtrip_random_frames` / `decoder_never_panics` (Tests added) -------------------------
+    //
+    // A shared test `Game` with some real variety in its associated types (an `Option`, an enum
+    // with payload, a couple of fields), so the generator exercises more than one trivial shape.
+
+    use crate::game::{EntityId, Game, PlayerEvent, PlayerId, TickCx, Unknown, WorldWrite};
+    use crate::rng::SimRng;
+    use crate::sim::{Applied, EngineReject, Outcome, Rejected};
+    use crate::store::Store;
+    use crate::world::{
+        CacheCapacity, ChunkCoord, ChunkDims, PristineSource, PrototypeId, Registry, Tile, TilePos,
+    };
+    use crate::worldgen::Worldgen;
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct WEntity {
+        anchor: (i32, i32),
+        hp: u32,
+        tag: Option<u16>,
+    }
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct WPlayer {
+        score: u32,
+    }
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct WGlobal {
+        day: u32,
+    }
+    #[derive(
+        Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, ts_rs::TS,
+    )]
+    enum WReject {
+        Bad(u16),
+        NotFound,
+    }
+    impl From<Unknown> for WReject {
+        fn from(_: Unknown) -> Self {
+            WReject::NotFound
+        }
+    }
+    struct WGen;
+    impl Worldgen for WGen {
+        type Params = ();
+        const WORLDGEN_VERSION: u32 = 0;
+        fn generate(_seed: u64, _params: &(), _chunk: ChunkCoord, out: &mut [Tile]) {
+            out.fill(Tile::VOID);
+        }
+    }
+    struct WGame;
+    impl Game for WGame {
+        const SCHEMA_VERSION: u32 = 1;
+        const CHUNK_BITS: u32 = 4;
+        type Worldgen = WGen;
+        type Action = ();
+        type Reject = WReject;
+        type Entity = WEntity;
+        type Player = WPlayer;
+        type Global = WGlobal;
+        type Presence = ();
+        type Ui = ();
+        type Client = ();
+        fn register(_r: &mut Registry) {}
+        fn prototype(_e: &WEntity) -> PrototypeId {
+            PrototypeId(0)
+        }
+        fn anchor(e: &WEntity) -> TilePos {
+            TilePos::new(e.anchor.0, e.anchor.1)
+        }
+        fn genesis(_w: &mut dyn WorldWrite<Self>) {}
+        fn on_player(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _ev: PlayerEvent) {}
+        fn apply(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _a: &()) -> Result<(), WReject> {
+            Ok(())
+        }
+        fn tick(_cx: &mut TickCx<'_, Self>) {}
+    }
+
+    struct ZeroSource;
+    impl PristineSource for ZeroSource {
+        fn generate(&self, _chunk: ChunkCoord, out: &mut [Tile]) {
+            out.fill(Tile::VOID);
+        }
+    }
+
+    fn rand_below(rng: &mut SimRng, bound: u32) -> u32 {
+        rng.below(bound.max(1))
+    }
+
+    /// A `Store<WGame>` with a handful of chunks worth of tiles and entities, reused across every
+    /// generated frame (`encode_chunk_snapshot`/deltas read from it; nothing here mutates it after
+    /// construction).
+    fn corpus_store() -> Store<WGame> {
+        use crate::delta::Delta;
+        let terrain = TerrainStore::new(
+            ChunkDims::new(4),
+            Box::new(ZeroSource),
+            CacheCapacity::Chunks(64),
+        );
+        let mut s = Store::new(terrain, WGlobal { day: 0 });
+        for i in 0..8u16 {
+            s.apply(&Delta::Tile {
+                pos: TilePos::new(i as i32, 0),
+                tile: Tile::new(i as u8, 0, 0),
+            });
+            s.apply(&Delta::EntityPut {
+                id: EntityId((i + 1) as u32),
+                entity: WEntity {
+                    anchor: (i as i32, (i % 3) as i32 * 16), // spread across a few chunks
+                    hp: i as u32,
+                    tag: if i % 2 == 0 { Some(i) } else { None },
+                },
+            });
+        }
+        s
+    }
+
+    use crate::world::TerrainStore;
+
+    /// One generated frame's expected content, checked back against what `FrameReader` +
+    /// section-body readers hand back -- the coverage this test asserts (Tests added:
+    /// `roundtrip_random_frames`).
+    #[derive(Default)]
+    struct Coverage {
+        section_ids_seen: std::collections::BTreeSet<u8>,
+        overlay_empty_seen: bool,
+        overlay_nonempty_seen: bool,
+        snapshot_entities_zero_seen: bool,
+        snapshot_entities_nonzero_seen: bool,
+        global_roster_only_seen: bool,
+        global_value_only_seen: bool,
+        global_both_seen: bool,
+        deltas_with_groups_seen: bool,
+        deltas_ops_only_seen: bool,
+        action_results_applied_seen: bool,
+        action_results_game_reject_seen: bool,
+        action_results_engine_reject_seen: bool,
+    }
+
+    #[test]
+    fn roundtrip_random_frames() {
+        let mut rng = SimRng::new(0xC0FF_EE00_1234_5678);
+        let store = corpus_store();
+        let chunks: Vec<ChunkCoord> = (0..6)
+            .map(|i| ChunkCoord::new(0, i)) // ascending (cy, cx): valid for coord lists as-is
+            .collect();
+        let mut cov = Coverage::default();
+
+        for frame_no in 0..1000u32 {
+            let mut buf = vec![0u8; 16 * 1024];
+            let mut sink = SliceSink::new(&mut buf);
+            let header = FrameHeader {
+                tick: frame_no,
+                ack_seq: frame_no,
+            };
+            let mut fw = FrameWriter::new(&mut sink, header);
+
+            // ActionResults
+            let outcomes: Vec<Outcome<WGame>> = if rng.below(4) != 0 {
+                let n = 1 + rand_below(&mut rng, 3);
+                (0..n)
+                    .map(|seq| {
+                        let result = match rng.below(3) {
+                            0 => {
+                                cov.action_results_applied_seen = true;
+                                Ok(Applied)
+                            }
+                            1 => {
+                                cov.action_results_game_reject_seen = true;
+                                Err(Rejected::Game(WReject::Bad(seq as u16)))
+                            }
+                            _ => {
+                                cov.action_results_engine_reject_seen = true;
+                                Err(Rejected::Engine(EngineReject::RateLimited))
+                            }
+                        };
+                        Outcome { seq, result }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            if !outcomes.is_empty() {
+                fw.section(SectionId::ActionResults, |s| {
+                    ActionResultsWriter::write(s, outcomes.iter());
+                });
+            }
+
+            // Global
+            let want_roster = rng.below(3) != 0;
+            let want_value = rng.below(3) != 0;
+            let roster: Vec<(PlayerId, bool)> = if want_roster {
+                (1..=1 + rand_below(&mut rng, 3))
+                    .map(|id| (PlayerId(id), rng.below(2) == 1))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let global_value = WGlobal {
+                day: rand_below(&mut rng, 1000),
+            };
+            if want_roster || want_value {
+                match (want_roster, want_value) {
+                    (true, false) => cov.global_roster_only_seen = true,
+                    (false, true) => cov.global_value_only_seen = true,
+                    (true, true) => cov.global_both_seen = true,
+                    (false, false) => unreachable!(),
+                }
+                fw.section(SectionId::Global, |s| {
+                    write_global::<WGame>(
+                        s,
+                        want_roster.then(|| roster.iter().copied()),
+                        want_value.then_some(&global_value),
+                    );
+                });
+            }
+
+            // OwnPlayer
+            if rng.below(2) == 1 {
+                let own_player = WPlayer {
+                    score: rand_below(&mut rng, 500),
+                };
+                fw.section(SectionId::OwnPlayer, |s| {
+                    write_own_player::<WGame>(s, PlayerId(1), &own_player);
+                });
+            }
+
+            // ChunkEnterPristine
+            let n_enter = rand_below(&mut rng, 3);
+            if n_enter > 0 {
+                let entries: Vec<ChunkCoord> = chunks[..n_enter as usize].to_vec();
+                fw.section(SectionId::ChunkEnterPristine, |s| {
+                    let mut w = ChunkCoordListWriter::new();
+                    for &c in &entries {
+                        w.write(s, c);
+                    }
+                });
+            }
+
+            // ChunkSnapshots: pick distinct random chunks out of the full set (not just a fixed
+            // prefix) so both entity-bearing chunks (0..=2, per `corpus_store`'s spread) and empty
+            // ones (3..=5) get exercised -- a fixed prefix here previously never reached the empty
+            // ones, so `snapshot_entities_zero_seen` never fired.
+            let n_snap = rand_below(&mut rng, 3) as usize;
+            let mut snap_idxs: Vec<usize> = Vec::new();
+            while snap_idxs.len() < n_snap {
+                let idx = rand_below(&mut rng, chunks.len() as u32) as usize;
+                if !snap_idxs.contains(&idx) {
+                    snap_idxs.push(idx);
+                }
+            }
+            snap_idxs.sort_unstable();
+            let snap_chunks: Vec<ChunkCoord> = snap_idxs.iter().map(|&i| chunks[i]).collect();
+            if !snap_chunks.is_empty() {
+                fw.section(SectionId::ChunkSnapshots, |s| {
+                    let mut w = SnapshotWriter::new();
+                    for &c in &snap_chunks {
+                        w.write_chunk(s, &store, c, frame_no);
+                    }
+                });
+            }
+
+            // ChunkLeaves
+            let n_leave = rand_below(&mut rng, 2);
+            let leave_chunks: Vec<ChunkCoord> = if n_leave > 0 {
+                vec![chunks[chunks.len() - 1]]
+            } else {
+                Vec::new()
+            };
+            if !leave_chunks.is_empty() {
+                fw.section(SectionId::ChunkLeaves, |s| {
+                    let mut w = ChunkCoordListWriter::new();
+                    for &c in &leave_chunks {
+                        w.write(s, c);
+                    }
+                });
+            }
+
+            // ChunkDeltas: tile groups sometimes, entity ops sometimes, independently.
+            let has_groups = rng.below(3) != 0;
+            let tile_a: Vec<(u16, Tile)> = if has_groups {
+                vec![(0, Tile::new(rand_below(&mut rng, 250) as u8, 0, 0))]
+            } else {
+                Vec::new()
+            };
+            let groups: Vec<(ChunkCoord, &[(u16, Tile)])> = if has_groups {
+                vec![(chunks[0], tile_a.as_slice())]
+            } else {
+                Vec::new()
+            };
+            let entity_val = WEntity {
+                anchor: (2, 2),
+                hp: rand_below(&mut rng, 100),
+                tag: None,
+            };
+            let has_ops = rng.below(2) == 1;
+            let ops: Vec<EntityOp<'_, WGame>> = if has_ops {
+                if rng.below(2) == 1 {
+                    vec![EntityOp::Put {
+                        id: EntityId(1),
+                        entity: &entity_val,
+                    }]
+                } else {
+                    vec![EntityOp::Gone { id: EntityId(1) }]
+                }
+            } else {
+                Vec::new()
+            };
+            if has_groups || has_ops {
+                if has_groups {
+                    cov.deltas_with_groups_seen = true;
+                }
+                if has_ops && !has_groups {
+                    cov.deltas_ops_only_seen = true;
+                }
+                fw.section(SectionId::ChunkDeltas, |s| {
+                    write_chunk_deltas::<WGame>(s, &groups, &ops);
+                });
+            }
+
+            // Presence / Hashes / ChunkKeeps: opaque bytes (Non-scope bodies), still exercised so
+            // every SectionId this milestone builds is covered.
+            let presence_bytes: Vec<u8> = (0..(1 + rand_below(&mut rng, 4)))
+                .map(|_| rng.below(256) as u8)
+                .collect();
+            fw.section(SectionId::Presence, |s| s.put(&presence_bytes));
+            let hash_bytes: Vec<u8> = (0..8).map(|_| rng.below(256) as u8).collect();
+            fw.section(SectionId::Hashes, |s| s.put(&hash_bytes));
+            if rng.below(3) == 0 {
+                fw.section(SectionId::ChunkKeeps, |s| {
+                    let mut w = ChunkCoordListWriter::new();
+                    w.write(s, chunks[0]);
+                });
+            }
+
+            let n = sink
+                .finish()
+                .unwrap_or_else(|e| panic!("frame {frame_no} overflowed: {e:?}"));
+
+            // Decode and check every present section round-trips, tallying coverage.
+            let mut r = FrameReader::new(&buf[..n]).unwrap();
+            assert_eq!(r.header(), header);
+            while let Some((id, body)) = r.next_section().unwrap() {
+                cov.section_ids_seen.insert(id as u8);
+                let mut br = ByteReader::new(body);
+                match id {
+                    SectionId::ActionResults => {
+                        let mut got = Vec::new();
+                        ActionResultsReader::read::<WGame>(&mut br, |seq, res| {
+                            got.push((seq, res))
+                        })
+                        .unwrap();
+                        assert_eq!(got.len(), outcomes.len());
+                    }
+                    SectionId::Global => {
+                        let mut got_roster = Vec::new();
+                        let got_value =
+                            read_global::<WGame>(&mut br, |p, o| got_roster.push((p, o))).unwrap();
+                        if want_roster {
+                            assert_eq!(got_roster, roster);
+                        } else {
+                            assert!(got_roster.is_empty());
+                        }
+                        assert_eq!(got_value, want_value.then_some(global_value));
+                    }
+                    SectionId::OwnPlayer => {
+                        let (who, _state) = read_own_player::<WGame>(&mut br).unwrap();
+                        assert_eq!(who, PlayerId(1));
+                    }
+                    SectionId::ChunkEnterPristine => {
+                        let mut reader = ChunkCoordListReader::new();
+                        let mut got = Vec::new();
+                        while !br.rest().is_empty() {
+                            got.push(reader.read(&mut br).unwrap());
+                        }
+                        assert_eq!(got, chunks[..n_enter as usize]);
+                    }
+                    SectionId::ChunkSnapshots => {
+                        let mut reader = SnapshotReader::new();
+                        let mut got_chunks = Vec::new();
+                        while !br.rest().is_empty() {
+                            let mut n_tiles = 0u32;
+                            let mut n_entities = 0u32;
+                            let (c, v) = reader
+                                .read_chunk::<WGame>(
+                                    &mut br,
+                                    |_, _| n_tiles += 1,
+                                    |_, _| n_entities += 1,
+                                )
+                                .unwrap();
+                            if n_tiles == 0 {
+                                cov.overlay_empty_seen = true;
+                            } else {
+                                cov.overlay_nonempty_seen = true;
+                            }
+                            if n_entities == 0 {
+                                cov.snapshot_entities_zero_seen = true;
+                            } else {
+                                cov.snapshot_entities_nonzero_seen = true;
+                            }
+                            assert_eq!(v, frame_no);
+                            got_chunks.push(c);
+                        }
+                        assert_eq!(got_chunks, snap_chunks);
+                    }
+                    SectionId::ChunkLeaves => {
+                        let mut reader = ChunkCoordListReader::new();
+                        let mut got = Vec::new();
+                        while !br.rest().is_empty() {
+                            got.push(reader.read(&mut br).unwrap());
+                        }
+                        assert_eq!(got, leave_chunks);
+                    }
+                    SectionId::ChunkDeltas => {
+                        let mut got_tiles = 0;
+                        let mut got_ops = 0;
+                        read_chunk_deltas::<WGame>(
+                            &mut br,
+                            |_, _, _| got_tiles += 1,
+                            |_op: EntityDeltaOp<WGame>| got_ops += 1,
+                        )
+                        .unwrap();
+                        assert_eq!(got_tiles, tile_a.len());
+                        assert_eq!(got_ops, ops.len());
+                    }
+                    SectionId::Presence => assert_eq!(body, presence_bytes.as_slice()),
+                    SectionId::Hashes => assert_eq!(body, hash_bytes.as_slice()),
+                    SectionId::ChunkKeeps => {} // opaque here; just proves it round-trips as bytes
+                    SectionId::ChunkTiles => panic!("ChunkTiles is unbuilt; never generated"),
+                }
+            }
+        }
+
+        // Coverage assertions (Tests added, anti-vacuity instruction): every SectionId this
+        // milestone builds must have appeared, and both the empty and non-empty shape of the
+        // interesting variable-length fields must have appeared. If the generator regresses to
+        // "always include everything" or "always include nothing", one of these fails loudly.
+        let built_ids: [u8; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+        for id in built_ids {
+            assert!(
+                cov.section_ids_seen.contains(&id),
+                "section id {id} never appeared in 1000 generated frames"
+            );
+        }
+        assert!(
+            cov.overlay_empty_seen && cov.overlay_nonempty_seen,
+            "overlay coverage"
+        );
+        assert!(
+            cov.snapshot_entities_zero_seen && cov.snapshot_entities_nonzero_seen,
+            "snapshot entity-count coverage"
+        );
+        assert!(
+            cov.global_roster_only_seen && cov.global_value_only_seen && cov.global_both_seen,
+            "global mask coverage"
+        );
+        assert!(
+            cov.deltas_with_groups_seen && cov.deltas_ops_only_seen,
+            "chunk-deltas shape coverage"
+        );
+        assert!(
+            cov.action_results_applied_seen
+                && cov.action_results_game_reject_seen
+                && cov.action_results_engine_reject_seen,
+            "action-results tag coverage"
+        );
+    }
+
+    /// Seeded corpus of malformed inputs: truncations, single-bit flips, an oversized varint, and
+    /// descending section ids, run through `FrameReader`. Never panics; asserts the corpus actually
+    /// *reaches* the interesting decoders rather than being rejected at byte 0 every time (Tests
+    /// added, anti-vacuity instruction).
+    #[test]
+    fn decoder_never_panics() {
+        let mut rng = SimRng::new(0xDEC0_DE00_BAD0_0001);
+        let store = corpus_store();
+
+        // A handful of well-formed frames to mutate.
+        let mut good_frames: Vec<Vec<u8>> = Vec::new();
+        for tick in 0..8u32 {
+            let mut buf = vec![0u8; 4096];
+            let mut sink = SliceSink::new(&mut buf);
+            let mut fw = FrameWriter::new(
+                &mut sink,
+                FrameHeader {
+                    tick,
+                    ack_seq: tick,
+                },
+            );
+            fw.section(SectionId::ActionResults, |s| {
+                let outcomes = [Outcome::<WGame> {
+                    seq: 1,
+                    result: Ok(Applied),
+                }];
+                ActionResultsWriter::write(s, outcomes.iter());
+            });
+            fw.section(SectionId::Global, |s| {
+                write_global::<WGame>(
+                    s,
+                    Some([(PlayerId(1), true)].into_iter()),
+                    Some(&WGlobal { day: tick }),
+                );
+            });
+            fw.section(SectionId::ChunkSnapshots, |s| {
+                let mut w = SnapshotWriter::new();
+                w.write_chunk(s, &store, ChunkCoord::new(0, 0), tick);
+            });
+            fw.section(SectionId::ChunkDeltas, |s| {
+                let tiles: &[(u16, Tile)] = &[(0, Tile::new(1, 0, 0))];
+                let groups = [(ChunkCoord::new(0, 0), tiles)];
+                write_chunk_deltas::<WGame>(s, &groups, &[]);
+            });
+            let n = sink.finish().unwrap();
+            buf.truncate(n);
+            good_frames.push(buf);
+        }
+
+        let mut reached_sections = 0u32;
+        let mut malformed_count = 0u32;
+        let mut full_count = 0u32;
+        const CASES: u32 = 2000;
+
+        for i in 0..CASES {
+            let base = &good_frames[(i as usize) % good_frames.len()];
+            let mut mutated = base.clone();
+            match rng.below(4) {
+                0 => {
+                    // Truncate to a random prefix (including possibly 0 bytes).
+                    let cut = rand_below(&mut rng, mutated.len() as u32) as usize;
+                    mutated.truncate(cut);
+                }
+                1 => {
+                    // Flip a single random bit.
+                    if !mutated.is_empty() {
+                        let idx = rand_below(&mut rng, mutated.len() as u32) as usize;
+                        let bit = 1u8 << (rng.below(8) as u8);
+                        mutated[idx] ^= bit;
+                    }
+                }
+                2 => {
+                    // Splice in an oversized varint continuation run right after the header.
+                    let mut spliced = mutated[..10.min(mutated.len())].to_vec();
+                    spliced.extend(std::iter::repeat_n(0xFFu8, 12));
+                    spliced.extend_from_slice(&mutated[10.min(mutated.len())..]);
+                    mutated = spliced;
+                }
+                _ => {
+                    // Force descending section ids: swap the header-adjacent section id byte (at
+                    // offset 10, if present) with something smaller/larger.
+                    if mutated.len() > 10 {
+                        mutated[10] = rng.below(255) as u8 + 1;
+                    }
+                }
+            }
+
+            match FrameReader::new(&mutated) {
+                Err(_) => malformed_count += 1,
+                Ok(mut r) => loop {
+                    match r.next_section() {
+                        Ok(Some((id, body))) => {
+                            reached_sections += 1;
+                            let mut br = ByteReader::new(body);
+                            let result: Result<(), WireError> = match id {
+                                SectionId::ActionResults => {
+                                    ActionResultsReader::read::<WGame>(&mut br, |_, _| {})
+                                }
+                                SectionId::Global => {
+                                    read_global::<WGame>(&mut br, |_, _| {}).map(|_| ())
+                                }
+                                SectionId::OwnPlayer => {
+                                    read_own_player::<WGame>(&mut br).map(|_| ())
+                                }
+                                SectionId::ChunkEnterPristine
+                                | SectionId::ChunkLeaves
+                                | SectionId::ChunkKeeps => {
+                                    let mut reader = ChunkCoordListReader::new();
+                                    let mut res = Ok(());
+                                    while !br.rest().is_empty() {
+                                        if let Err(e) = reader.read(&mut br) {
+                                            res = Err(e);
+                                            break;
+                                        }
+                                    }
+                                    res
+                                }
+                                SectionId::ChunkSnapshots => {
+                                    let mut reader = SnapshotReader::new();
+                                    let mut res = Ok(());
+                                    while !br.rest().is_empty() {
+                                        if let Err(e) = reader.read_chunk::<WGame>(
+                                            &mut br,
+                                            |_, _| {},
+                                            |_, _| {},
+                                        ) {
+                                            res = Err(e);
+                                            break;
+                                        }
+                                    }
+                                    res
+                                }
+                                SectionId::ChunkDeltas => {
+                                    read_chunk_deltas::<WGame>(&mut br, |_, _, _| {}, |_| {})
+                                }
+                                SectionId::Presence | SectionId::Hashes | SectionId::ChunkTiles => {
+                                    Ok(())
+                                }
+                            };
+                            match result {
+                                Ok(()) => {}
+                                Err(WireError::Malformed) => malformed_count += 1,
+                                Err(WireError::Full) => full_count += 1,
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(_) => {
+                            malformed_count += 1;
+                            break;
+                        }
+                    }
+                },
+            }
+        }
+
+        let _ = full_count;
+        // Anti-vacuity: prove the corpus isn't uniformly rejected at byte 0 -- a healthy fraction
+        // of mutated inputs must reach at least one section body.
+        assert!(
+            reached_sections > CASES / 4,
+            "corpus barely reaches section bodies: {reached_sections} of {CASES} cases produced a section"
+        );
+        // And prove mutation actually produces malformed input at least sometimes (otherwise the
+        // mutators themselves could have degenerated into no-ops).
+        assert!(
+            malformed_count > 0,
+            "no mutation ever produced malformed input"
+        );
+    }
 }

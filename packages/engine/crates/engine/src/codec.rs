@@ -435,7 +435,7 @@ impl<S: ByteSink + ?Sized> postcard::ser_flavors::Flavor for SinkFlavor<'_, S> {
 pub(crate) fn encode_to_with<T: Codec>(
     strict: bool,
     value: &T,
-    sink: &mut impl ByteSink,
+    sink: &mut (impl ByteSink + ?Sized),
 ) -> Result<(), CodecError> {
     let mut ser = postcard::Serializer {
         output: SinkFlavor { sink },
@@ -450,8 +450,13 @@ pub(crate) fn encode_to_with<T: Codec>(
 }
 
 /// Encodes `value` into any [`ByteSink`] — a [`SliceSink`] for snapshot bytes, an
-/// [`crate::hash::Fnv64`] to hash without a buffer (Planning decisions 4).
-pub fn encode_to<T: Codec>(value: &T, sink: &mut impl ByteSink) -> Result<(), CodecError> {
+/// [`crate::hash::Fnv64`] to hash without a buffer (Planning decisions 4). `?Sized` (docs/plan/
+/// 14-wire-framing.md Deviations) so a caller inside `wire::FrameWriter::section`'s `&mut dyn
+/// ByteSink` body can call this directly, the same way M05's own callers use a concrete sink.
+pub fn encode_to<T: Codec>(
+    value: &T,
+    sink: &mut (impl ByteSink + ?Sized),
+) -> Result<(), CodecError> {
     encode_to_with(cfg!(debug_assertions), value, sink)
 }
 
