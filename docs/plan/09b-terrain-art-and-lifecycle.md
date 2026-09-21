@@ -202,3 +202,163 @@ burst"` (3 tests, slow tier) both passing).
 delegation prompt): `viewport.*`, `lifecycle.*`, `canvas.presents`, `frame-loop.production_runs_
 phases_in_order`, `pnpm device:serve`, the `docs/plan/device-checks.md` M09b section matching what
 was built, and the `packages/engine/CLAUDE.md` context artifact (how to open the device page).
+
+### Steps 4-5 (viewport observer, render scale, backgrounding; wiring `createFrameLoop` to a real
+canvas) -- done
+
+Delegated as steps 4-5 only; a third implementer takes steps 6-7. Commits `1e7ae65` (step 4),
+`a752109` (step 5), `5d5d785` (a fix to step 5's own test page, found under repeated load -- see
+"Found and fixed" below).
+
+**Exact seam shapes**, since the brief's Scope/Seams describe behaviour and defaults, not exact
+signatures:
+
+- `render/viewport.ts`: `computeRenderScale(dpr: number, opts?: RenderScaleOptions): number`
+  (`RenderScaleOptions = { scale?: number; scaleCap?: number }`) -- `opts.scale`, when given,
+  overrides the DPR-derived value entirely and is never clamped by `scaleCap`; otherwise
+  `min(dpr, opts.scaleCap ?? 2)`. `configureCanvasContext(canvas, device): GPUCanvasContext` --
+  `getPreferredCanvasFormat()`, `alphaMode: 'opaque'`, called once, never re-configured on resize (a
+  configured context's backbuffer already follows `canvas.width`/`height` on the next
+  `getCurrentTexture()`). `createViewportController(canvas, renderer: Pick<TerrainRenderer,
+  'viewport' | 'notifyViewportChange'>, opts: { render?: RenderScaleOptions; maxTextureDimension2D:
+  number; doc?: Document }): ViewportController` -- `maxTextureDimension2D` is a plain number, not
+  read from `device.limits` by this function itself, so `viewport: clamped to limit` never allocates
+  a huge real texture. `ViewportController = { applyPending(): boolean; invalidate(): void;
+  forceSize(cssWidth, cssHeight, dpr): void; dispose(): void }`.
+- `render/terrain.ts`'s `TerrainRenderer` (Scope's own files list names this file for steps 4-5 too,
+  not just M09's steps): gained a named `Viewport` type (`{ widthPx, heightPx, dpr, renderScale }`,
+  what `renderer.viewport` already was, just given a name) and two new interface members --
+  `onViewportChange(cb: (viewport: Viewport) => void): void` (registers `cb`) and
+  `notifyViewportChange(): void` (not itself a Seam name: `render/viewport.ts`'s own call, right
+  after mutating `viewport` in place, fires every registered callback with a plain indexed loop, no
+  `Array.prototype` iteration). `terrain.wgsl` itself is untouched, per the delegation prompt.
+- `frame-loop.ts`: `FrameLoop.start()`/`stop()` (M09's own ad hoc names -- Seams never pinned them,
+  only `FRAME_PHASES`) are renamed to `resume()`/`pause()`, the brief's own pinned names.
+  `FrameLoopOptions` gained `viewport?: ViewportController` (optional: a fakes-only unit test can
+  omit it) and `target: FrameTarget` widened from a fixed `GPUTexture | GPUTextureView` to also admit
+  a thunk (`() => GPUTexture | GPUTextureView`, re-evaluated every `tick()` -- a real canvas context's
+  `getCurrentTexture()` hands out a fresh texture every frame, which a fixed value cannot represent).
+  `tick()` calls `opts.viewport?.applyPending()` as its first statement, before `onCamera()` --
+  `renderer.onViewportChange(cb)`'s "before the camera phase" contract is satisfied this way, not by
+  adding a new `FRAME_PHASES` entry (Seams pins the phase list's own name, not that it enumerates
+  every internal step). `resume()` tracks `everResumed` so the very first call (an ordinary start) is
+  distinguished from a real restart after `pause()`: only the latter calls `viewport.invalidate()` and
+  `client.setFlags(FLAG_REBASE)`. `createRealFrameLoop(opts: RealFrameLoopOptions):
+  { loop: FrameLoop; viewport: ViewportController; ctx: GPUCanvasContext; dispose(): void }` is the
+  one place a page assembles a real `Client`/`TerrainRenderer`/canvas into a running `FrameLoop` --
+  configures the canvas context, writes `renderer.frameUniform.neighbourCutoffPx` once from
+  `opts.render?.neighbourCutoffPx ?? 0`, builds the `ViewportController`, and wires `target: () =>
+  ctx.getCurrentTexture()`. `attachVisibilityHandling(loop, doc = document): () => void` wires
+  0018 §8's real `document.visibilitychange` to `pause()`/`resume()`; not exercised by this range's
+  own tests (below), built because Scope names it as this milestone's own backgrounding rule and a
+  later page (device.html, step 7) needs it ready-made.
+- `client.ts`: `Client.setFlags(mask: number): void` (`Atomics.or` into the global `CB_FLAGS` word,
+  never a load-then-store, so a bit set by something else between isn't clobbered) -- an addition to
+  the public `Client` shape, not a rename, per the same precedent `writeCameraAndWake`/`cameraState`/
+  `uploadRing` already set (M09 Deviations, Steps 5-7). `ClientOptions.render?: RenderOptions`
+  (`RenderOptions = { scale?: number; scaleCap?: number; neighbourCutoffPx?: number }`, the exact
+  shape and field names the brief's Seams and the delegation prompt both specify) -- not read by
+  `createClient` itself (rendering never touches a WASM instance, 0018 §1), exactly the `assets`
+  precedent: a caller passes the same `ClientOptions.render` to `createRealFrameLoop`.
+- `engine/test` (`src/test/viewport.ts`): `attachViewportTestHooks(client, { viewport, loop }): void`
+  (not itself a Seam name, the attach-once-look-up-by-client mechanism `test/render.ts`'s
+  `attachRenderer` already uses), `setViewport(client, { cssWidth, cssHeight, dpr }): void` (queues a
+  forced override via `ViewportController.forceSize`; does **not** call `applyPending()` itself --
+  0018 §8's "applied at the start of the next frame" means the next `tick()`, not immediately, which
+  is what makes `viewport: resize renders same frame` provable at all), `setVisibility(client,
+  'hidden' | 'visible'): void` (calls `loop.pause()`/`resume()` directly, bypassing the real
+  `visibilitychange` event -- headless Chromium's `document.hidden` cannot be forced from outside the
+  page), plus two small additions not named in the brief's own Seams list but needed to assert the
+  REBASE flag from a spec: `rebaseFlagSet(client): boolean` and `clearRebaseFlag(client): void`.
+
+**Interpretation calls, recorded rather than guessed silently:**
+
+- **The render-scale formula's exact split between "default" and `scaleCap`.** The brief's own Seams
+  line ("scale per 0018 §8, cap = none") reads two ways: `scaleCap` could either replace 0018 §8's own
+  hard-coded 2x default entirely (so an unset `scaleCap` means *no* cap, `renderScale = dpr`), or it
+  could *narrow* a 2x cap that's already baked into "derive from DPR" regardless of whether the option
+  is set. The Tests added wording settles it: "`dpr: 3` gives a render target of twice the CSS size"
+  *with no `scaleCap` given at all* is only true under the second reading, so `computeRenderScale`
+  treats the 2x cap as 0018 §8's own fixed default (not `scaleCap`'s default value) and `scaleCap`
+  narrows it only when actually supplied.
+- **`viewport.*`/`lifecycle.*`'s own host page.** The brief's Non-scope and step split leave
+  `device.html`/`src/device.ts` to step 7; this range needed *some* real canvas + real `Client` to
+  drive `createRealFrameLoop` and prove the five named tests, so it adds `tests/browser/pages/
+  viewport.html` + `src/viewport.ts` (a new page, not a rename or early build of `device.html`) --
+  the same "one page per milestone-owned concern" precedent M09 itself set with `terrain.html` vs
+  `terrain-client.html`. It loads no tile art (`loadTileArt` is never called): every assertion here is
+  about canvas size/DPR/render-scale/draw-call timing and the REBASE flag, never pixel content, so the
+  placeholder 1x1 tile-art texture `createTerrainRenderer` already falls back to is sufficient.
+  `device.html` (step 7) is expected to be a second, independent page built the normal way, not a
+  refactor of this one.
+- **`viewport: render scale caps at 2`'s three cases as one test, not three.** The brief names exactly
+  one test by this title but its own Tests added parenthetical packs three assertions into it (`dpr:
+  3`, `dpr: 1.5`, `render: { scale: 1 }`); the last needs a different `ClientOptions.render` than the
+  first two, so the test calls `__viewport.init()` twice (a second, fresh canvas/client/loop inside the
+  same test) rather than splitting into extra named tests the brief doesn't ask for.
+- **One extra test not named by the brief**: `viewport: neighbourCutoffPx wired from
+  ClientOptions.render`, covering the delegation prompt's own additional ask ("wire `ClientOptions.
+  render.neighbourCutoffPx` ... through to `frameUniform`/viewport") that isn't one of the brief's
+  five named tests but has no other test proving it.
+
+**Found and fixed: a real `ResizeObserver` race in `viewport.html`'s own test page, not in
+`render/viewport.ts` itself.** Quantified before fixing, per the delegation prompt's own "quantify
+before hypothesising": `pnpm exec playwright test --project chromium --repeat-each 10 --workers 3
+tests/browser/viewport.spec.ts` failed `viewport: resize renders same frame` 1/10 times, always
+reverting to the *previous* applied size after a forced resize, never a stray one -- the tell that a
+report was correct for a moment that had already passed, not corrupt. Mechanism: the test page's
+canvas was created with no CSS `width`/`height` of its own, so its layout box came straight from the
+`width`/`height` content attributes -- exactly the two fields `ViewportController.applyPending()`
+writes every tick. The page deliberately leaves the real `ResizeObserver` live throughout (proving it
+doesn't crash/interfere alongside the test-only `forceSize` override), and that real observer was
+therefore reporting back whatever size a test's own forced override had *last actually applied*,
+racing a second, still-pending override queued between two separate `page.evaluate()` calls (`v.
+setViewport(64, 64, 1)` then, in a later, separate `evaluate`, `v.tick()`) and silently overwriting it
+before `tick()` ran. Fixed by pinning the canvas's CSS size (`style.width`/`height = '1px'`),
+decoupling its layout box from the backing-store attributes `applyPending()` writes -- not a retry, a
+longer wait, or a smaller workload. Verified: `--repeat-each 20 --workers 3` on the same spec, 120/120
+passes (was 1/10 failing before the fix). This is a bug in the *test page*, not in `render/
+viewport.ts`'s production logic (a real page with a CSS-sized canvas, the normal case, never has this
+feedback loop).
+
+**Measured** (`uptime` load average 1.8-7.7 across these runs, all below the delegation prompt's own
+~20 danger line; one `pnpm test` run mid-session hit `net::ERR_CONNECTION_REFUSED` on an unrelated
+`gc-topology` test against the shared `127.0.0.1:4517` webServer -- an environment hiccup, not a code
+regression: `lsof -i :4517` showed nothing listening at the time, and an immediate retry with no code
+change passed cleanly, `browser pass 72 tests 15s/25s`; not chased further since `gc-topology.spec.ts`
+is entirely outside this range's Files touched):
+
+- `pnpm test unit -t viewport`: `pass 4 tests` (`computeRenderScale`'s three cases). Full `pnpm test
+  unit`: `pass 114 tests` (was 110 before this range: +4).
+- `pnpm test rust`: `pass 141 tests 0.3-0.5s/10s` (unchanged: no Rust touched). `pnpm test wasm`:
+  `pass 35 tests` (unchanged).
+- `pnpm test browser -t viewport`: `pass 7 tests 2.5-2.7s/25s` (the five `viewport:`-titled tests plus
+  the extra `neighbourCutoffPx` one, plus one incidental match elsewhere in the suite whose title
+  happens to contain the substring). `pnpm test browser -t lifecycle`: `pass 1 tests 1.7-1.8s/25s`.
+  `pnpm test browser -t terrain`: `pass 20 tests 5.8s/25s` (unchanged from steps 1-3: nothing in this
+  range touches `terrain.wgsl`, `terrain.ts`'s existing methods, or the terrain fixture art).
+- Full `pnpm test`: `rust 141 (0.4-0.5s/10s), unit 114 (1.1-1.7s/3s), wasm 35 (1.4-1.9s/7s), browser 72
+  (14-16s/25s)` -- +6 browser tests over the 66 steps-1-3 left at, comfortably under the 20s trip-wire
+  the delegation prompt named even measured at load 5-8 (not quiet). `pnpm lint`:
+  biome/rustfmt/clippy/tsc all green throughout, every run.
+- `gc.pages.terrain` re-run twice (once before the ResizeObserver-race fix, once after, since the fix
+  touches a different page entirely): `playwright test --project gc --grep "terrain clean"
+  --repeat-each 8 --workers 1`, `8 passed (10.0-10.1s)` both times. `budgets.json` untouched by this
+  range (confirmed by `git status`) -- `gc.pages.terrain` is unchanged, as expected: nothing in `frame-
+  loop.ts`'s new `viewport`/`RealFrameLoop` code path runs inside `gc-terrain.ts`'s own measured
+  window (that page calls `renderer.draw(target)` directly through its own hand-rolled `drive()`,
+  never through `createFrameLoop`/`createRealFrameLoop`), and the two new `TerrainRenderer` interface
+  members are plain object methods, allocated once at construction like every other method there, not
+  per frame.
+- `0026`'s `burst`-negatives-`@slow`-by-page-id mechanism: untouched by this range (no new zero-GC page
+  added), confirmed by the `gc.pages.terrain` re-run above passing at its existing budget with no
+  change to `zeroGcSuite`'s own call for that page.
+- No orphan `vite preview`/Playwright/Chrome processes left running at any point this range's own
+  commands finished (checked by `pgrep` before every commit and before this report, per the delegation
+  prompt's own explicit rule).
+
+**Not verified in this range** (steps 6-7's own territory, "later range" per the delegation prompt):
+`canvas.presents`, `frame-loop.production_runs_phases_in_order`, `pnpm device:serve`, the `docs/plan/
+device-checks.md` M09b section, and `packages/engine/CLAUDE.md`'s own context-artifact update (how to
+open the device page). `attachVisibilityHandling` (this range's own addition) is built but not wired
+into any real page's `document` yet -- `device.html` is expected to be the first caller.
