@@ -26,6 +26,20 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
     cameraState,
     uploadRing,
     input,
+    // M11 step 6: `Client.camera` is likewise unused by anything `frame-loop.ts` itself exercises
+    // (this file's own fakes never call `onCamera`'s real production wiring), so a throwaway stub
+    // is enough here too.
+    camera: {
+      setConstraints() {},
+      moveTo() {},
+      read() {},
+      worldToScreen() {},
+      screenToWorld() {},
+      restored: false,
+      setViewClamp() {},
+      setFollow() {},
+      tick() {},
+    },
     wakeCount: 0,
     flagsSet: 0,
     writeCameraAndWake(): number {

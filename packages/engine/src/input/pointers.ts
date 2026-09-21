@@ -33,6 +33,17 @@ export class PointerSlot {
   kind: PointerKindValue = PointerKind.Mouse
   x = 0
   y = 0
+  /** M11 step 6 (mandatory gap #1, docs/plan/11-camera-and-input.md delegation prompt): captured
+   * at `recordPointerDown` (a button/modifier state doesn't change mid-press for `button`; the
+   * modifiers are refreshed on every `recordPointerMove` too, since a real drag can start or stop
+   * holding Shift etc partway through). `button` matches `PointerEvent.button` (0 primary, 1
+   * auxiliary, 2 secondary); always 0 for a touch/pen `pointerdown`, which never sets a nonzero
+   * `button`. */
+  button = 0
+  shift = false
+  ctrl = false
+  alt = false
+  meta = false
   readonly sampleX = new Float64Array(SAMPLE_CAPACITY)
   readonly sampleY = new Float64Array(SAMPLE_CAPACITY)
   readonly sampleT = new Float64Array(SAMPLE_CAPACITY)
@@ -49,6 +60,23 @@ export class PointerSlot {
   }
 }
 
+/** M11 step 6 (mandatory gap #2): a real desktop mouse fires `pointermove` continuously with no
+ * button held, which never activates a `PointerSlot` (that only happens on a real `pointerdown`,
+ * Deviations of the 4-5 range: "a genuinely idle hovering mouse ... produces no state at all
+ * today"). A mouse-kind `pointermove` updates this every time, independent of `PointerSlot`
+ * activation, so `semantic.ts`'s `recognize()` can fall back to it when no mouse slot is
+ * press-active -- `camera.ts`'s own pan logic never reads this (only `PointerSlot.active` drives
+ * `activeCount`), so an idle hover still cannot pan the camera. */
+export class MouseHoverState {
+  x = 0
+  y = 0
+  valid = false
+  shift = false
+  ctrl = false
+  alt = false
+  meta = false
+}
+
 /** macOS Safari trackpad pinch (0019 §3): `gesturechange.scale` is cumulative from `gesturestart`
  * (always 1 there), not a per-event delta -- `scale`/`x`/`y` are simply the latest reported values;
  * `camera/camera.ts` tracks how much of `scale` it has already applied. */
@@ -62,6 +90,7 @@ export class GestureState {
 export class PointerSlots {
   readonly slots: readonly [PointerSlot, PointerSlot] = [new PointerSlot(), new PointerSlot()]
   readonly gesture = new GestureState()
+  readonly mouseHover = new MouseHoverState()
 }
 
 function findSlot(state: PointerSlots, id: number): PointerSlot | undefined {
@@ -81,6 +110,11 @@ export function recordPointerDown(
   y: number,
   tMs: number,
   kind: PointerKindValue = PointerKind.Mouse,
+  button = 0,
+  shift = false,
+  ctrl = false,
+  alt = false,
+  meta = false,
 ): void {
   if (findSlot(state, id)) return // already tracked (duplicate down, ignore)
   const slot = freeSlot(state)
@@ -90,6 +124,11 @@ export function recordPointerDown(
   slot.kind = kind
   slot.x = x
   slot.y = y
+  slot.button = button
+  slot.shift = shift
+  slot.ctrl = ctrl
+  slot.alt = alt
+  slot.meta = meta
   slot.sampleCount = 0
   slot.sampleNext = 0
   slot.pushSample(x, y, tMs)
@@ -101,12 +140,42 @@ export function recordPointerMove(
   x: number,
   y: number,
   tMs: number,
+  shift = false,
+  ctrl = false,
+  alt = false,
+  meta = false,
 ): void {
   const slot = findSlot(state, id)
   if (!slot) return
   slot.x = x
   slot.y = y
+  slot.shift = shift
+  slot.ctrl = ctrl
+  slot.alt = alt
+  slot.meta = meta
   slot.pushSample(x, y, tMs)
+}
+
+/** M11 step 6: written by every mouse-kind `pointermove` regardless of whether a `PointerSlot` is
+ * press-active (mandatory gap #2 above); a real listener also calls this from `onMove` alongside
+ * `recordPointerMove`. */
+export function recordMouseHover(
+  state: PointerSlots,
+  x: number,
+  y: number,
+  shift = false,
+  ctrl = false,
+  alt = false,
+  meta = false,
+): void {
+  const hover = state.mouseHover
+  hover.x = x
+  hover.y = y
+  hover.valid = true
+  hover.shift = shift
+  hover.ctrl = ctrl
+  hover.alt = alt
+  hover.meta = meta
 }
 
 /** Shared by `pointerup` and `pointercancel`: both end a pointer's involvement the same way. The
@@ -194,16 +263,43 @@ export function installPointerListeners(state: PointerSlots, canvas: HTMLElement
       e.offsetY,
       e.timeStamp,
       pointerKindFromEventType(e.pointerType),
+      e.button,
+      e.shiftKey,
+      e.ctrlKey,
+      e.altKey,
+      e.metaKey,
     )
+    if (e.pointerType === 'mouse') {
+      recordMouseHover(state, e.offsetX, e.offsetY, e.shiftKey, e.ctrlKey, e.altKey, e.metaKey)
+    }
   }
   function onMove(e: PointerEvent): void {
-    recordPointerMove(state, e.pointerId, e.offsetX, e.offsetY, e.timeStamp)
+    recordPointerMove(
+      state,
+      e.pointerId,
+      e.offsetX,
+      e.offsetY,
+      e.timeStamp,
+      e.shiftKey,
+      e.ctrlKey,
+      e.altKey,
+      e.metaKey,
+    )
+    // Mandatory gap #2 (docs/plan/11-camera-and-input.md delegation prompt): a mouse fires
+    // `pointermove` whether or not any button is held, so this is written on every one of them --
+    // not only while a `PointerSlot` happens to be press-active for this same event.
+    if (e.pointerType === 'mouse') {
+      recordMouseHover(state, e.offsetX, e.offsetY, e.shiftKey, e.ctrlKey, e.altKey, e.metaKey)
+    }
   }
   function onUp(e: PointerEvent): void {
     recordPointerUp(state, e.pointerId, e.offsetX, e.offsetY, e.timeStamp)
   }
   function onCancel(e: PointerEvent): void {
     recordPointerUp(state, e.pointerId, e.offsetX, e.offsetY, e.timeStamp)
+  }
+  function onLeave(e: PointerEvent): void {
+    if (e.pointerType === 'mouse') state.mouseHover.valid = false
   }
   function onGestureStart(e: Event): void {
     e.preventDefault()
@@ -223,6 +319,7 @@ export function installPointerListeners(state: PointerSlots, canvas: HTMLElement
   canvas.addEventListener('pointermove', onMove)
   canvas.addEventListener('pointerup', onUp)
   canvas.addEventListener('pointercancel', onCancel)
+  canvas.addEventListener('pointerleave', onLeave)
   canvas.addEventListener('gesturestart', onGestureStart, { passive: false })
   canvas.addEventListener('gesturechange', onGestureChange, { passive: false })
   canvas.addEventListener('gestureend', onGestureEnd, { passive: false })
@@ -231,6 +328,7 @@ export function installPointerListeners(state: PointerSlots, canvas: HTMLElement
     canvas.removeEventListener('pointermove', onMove)
     canvas.removeEventListener('pointerup', onUp)
     canvas.removeEventListener('pointercancel', onCancel)
+    canvas.removeEventListener('pointerleave', onLeave)
     canvas.removeEventListener('gesturestart', onGestureStart)
     canvas.removeEventListener('gesturechange', onGestureChange)
     canvas.removeEventListener('gestureend', onGestureEnd)

@@ -212,6 +212,77 @@ test('camera: wasd speed scales with extent', () => {
   expect(at12).toBeCloseTo(at256, 9)
 })
 
+test('camera: moveto cancelled by input', () => {
+  const state = new CameraState()
+  state.centreX = 0
+  state.centreY = 0
+  state.tilesAcross = 40
+  const pointers = new PointerSlots()
+  const integrator = createCameraIntegrator({
+    pointers,
+    keys: new KeyState(),
+    wheel: new WheelState(),
+  })
+
+  integrator.moveTo(state, 1000, -1000, { tiles: 20, durationMs: 400 })
+  integrator.integrate(state, viewport, 16) // one partial step towards the target
+  const midX = state.centreX
+  expect(midX).toBeGreaterThan(0) // moving towards 1000, but nowhere near it yet
+  expect(midX).toBeLessThan(1000)
+
+  // A real pointer engages mid-flight: 0019 §1 "user input cancels it". The down frame itself
+  // never pans (camera.ts's own convention), so the centre this frame is still exactly `midX`.
+  recordPointerDown(pointers, 1, 800, 400, 32)
+  integrator.integrate(state, viewport, 16)
+  expect(state.centreX).toBe(midX)
+  expect(state.centreY).toBe(state.centreY) // sanity: still finite, not NaN from a stale ease
+
+  // Proof the move is *cancelled*, not merely paused: many more frames elapse (well past the
+  // original 400ms budget) and the camera never gets any closer to the far-away target -- it only
+  // moves by whatever the real drag below does.
+  recordPointerMove(pointers, 1, 810, 400, 48) // a small, known drag delta
+  for (let i = 0; i < 30; i++) integrator.integrate(state, viewport, 16)
+  expect(state.centreX).toBeLessThan(midX + 5) // nowhere near 1000: the ease never resumed
+})
+
+test('camera: snaps to device px at rest only', () => {
+  const state = new CameraState()
+  state.centreX = 10.130123 // deliberately not aligned to any pixel grid
+  state.centreY = -3.070456
+  state.tilesAcross = 23.7 // a non-integer zoom: "tiles_across is never snapped" must still hold
+  state.dpr = 2
+  const keys = new KeyState()
+  const integrator = createCameraIntegrator({
+    pointers: new PointerSlots(),
+    keys,
+    wheel: new WheelState(),
+  })
+
+  const ppt = 1600 / state.tilesAcross // pxPerTile at this viewport/tilesAcross (long axis: width)
+  const devicePerTile = ppt * state.dpr
+  const rawCentreXDevicePx = state.centreX * devicePerTile
+
+  // While WASD is held (a moving step), the centre is left exactly where the movement put it --
+  // *not* rounded to a device pixel. A no-op/always-on snap would fail this: rounding every step
+  // would make every one of these device-pixel positions already integral, indistinguishable from
+  // "unsnapped by design".
+  recordKey(keys, 'KeyD', true)
+  integrator.integrate(state, viewport, 16)
+  const movingDevicePxX = state.centreX * devicePerTile
+  expect(Math.abs(movingDevicePxX - Math.round(movingDevicePxX))).toBeGreaterThan(1e-6)
+  expect(state.tilesAcross).toBeCloseTo(23.7, 9) // zoom is never snapped, moving or not
+
+  // Release and let the WASD ramp-down finish, then rest: only *now* must the centre land exactly
+  // on a device pixel at the current zoom/DPR -- and the value must actually have moved to get
+  // there (proving this is a real snap, not a no-op that happens to already be integral).
+  recordKey(keys, 'KeyD', false)
+  for (let i = 0; i < 20; i++) integrator.integrate(state, viewport, 16) // past the 80ms ramp-down
+  const restedDevicePxX = state.centreX * devicePerTile
+  expect(Math.abs(restedDevicePxX - Math.round(restedDevicePxX))).toBeLessThan(1e-6)
+  expect(restedDevicePxX).not.toBeCloseTo(rawCentreXDevicePx, 3) // it actually moved to snap
+  expect(state.tilesAcross).toBeCloseTo(23.7, 9) // still never snapped
+})
+
 test('camera: gesturechange scale zooms about cursor', () => {
   const state = new CameraState()
   state.centreX = 5

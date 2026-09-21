@@ -8,6 +8,18 @@ import { openPage } from './support/page.js'
 
 declare global {
   interface Window {
+    __rcCreate?: (opts?: { cameraKey?: string }) => void
+    __rcReady?: () => Promise<{ ok: true } | { ok: false; code: string; message: string }>
+    __rcDestroy?: () => void
+    __rcRead?: () => { centreX: number; centreY: number; tilesAcross: number }
+    __rcRestored?: () => boolean
+    __rcMoveTo?: (x: number, y: number, opts?: { tiles?: number; durationMs?: number }) => void
+    __rcTick?: (dtMs: number) => void
+  }
+}
+
+declare global {
+  interface Window {
     __client?: unknown
     __createClient?: (opts?: {
       host?: { kind: 'local'; world: { game: unknown } } | { kind: 'remote'; url: string }
@@ -111,4 +123,54 @@ test('camera: block reaches worker each frame', async ({ page }) => {
   for (let i = 1; i < seen.length; i++) {
     expect(seen[i]?.x).not.toBe(seen[i - 1]?.x)
   }
+})
+
+// `camera: persisted and restored` (docs/plan/11-camera-and-input.md, Tests added; also: "`restored`
+// is false on a fresh key" and "two `cameraKey`s do not share a camera"): a real `client.camera`
+// (`real-camera.html`, this range's own page), a deliberately off-default position/zoom (a no-op
+// save, or two clients sharing one `localStorage` slot, would both be caught by comparing exact
+// values instead of just truthiness), and a fresh Playwright context per test (Playwright Test's own
+// default), so `localStorage` starts empty without this test picking its own unique key.
+test('camera: persisted and restored', async ({ page }) => {
+  await openPage(page, '/real-camera.html')
+
+  // Fresh key: nothing to restore yet.
+  await page.evaluate(() => window.__rcCreate?.({ cameraKey: 'world-a' }))
+  await page.evaluate(() => window.__rcReady?.())
+  expect(await page.evaluate(() => window.__rcRestored?.())).toBe(false)
+
+  // Jump to an off-default, off-grid position and zoom, then tick once: nothing else is engaged, so
+  // the camera is "at rest" on this very first tick and `onMotionEnd` fires immediately.
+  await page.evaluate(() => window.__rcMoveTo?.(1234.5, -987.25, { tiles: 33, durationMs: 0 }))
+  await page.evaluate(() => window.__rcTick?.(16))
+  const savedA = await page.evaluate(() => window.__rcRead?.())
+  expect(savedA?.centreX).not.toBe(0) // sanity: actually moved off the class default
+  await page.evaluate(() => window.__rcDestroy?.())
+
+  // A second, independent world uses a different key with a different position: proves the two
+  // don't share a slot, not just that each one's own round trip works.
+  await page.evaluate(() => window.__rcCreate?.({ cameraKey: 'world-b' }))
+  await page.evaluate(() => window.__rcReady?.())
+  expect(await page.evaluate(() => window.__rcRestored?.())).toBe(false)
+  await page.evaluate(() => window.__rcMoveTo?.(-42.75, 500.125, { tiles: 90, durationMs: 0 }))
+  await page.evaluate(() => window.__rcTick?.(16))
+  const savedB = await page.evaluate(() => window.__rcRead?.())
+  await page.evaluate(() => window.__rcDestroy?.())
+
+  // Re-open world-a: restored, and matches world-a's own values exactly (not world-b's).
+  await page.evaluate(() => window.__rcCreate?.({ cameraKey: 'world-a' }))
+  await page.evaluate(() => window.__rcReady?.())
+  expect(await page.evaluate(() => window.__rcRestored?.())).toBe(true)
+  const restoredA = await page.evaluate(() => window.__rcRead?.())
+  expect(restoredA).toEqual(savedA)
+  expect(restoredA).not.toEqual(savedB)
+  await page.evaluate(() => window.__rcDestroy?.())
+
+  // Re-open world-b: restored, and matches world-b's own values.
+  await page.evaluate(() => window.__rcCreate?.({ cameraKey: 'world-b' }))
+  await page.evaluate(() => window.__rcReady?.())
+  expect(await page.evaluate(() => window.__rcRestored?.())).toBe(true)
+  const restoredB = await page.evaluate(() => window.__rcRead?.())
+  expect(restoredB).toEqual(savedB)
+  await page.evaluate(() => window.__rcDestroy?.())
 })

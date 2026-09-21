@@ -8,13 +8,12 @@
 // production-wiring counterpart of `CameraIntegrator.integrate` -- a later range's real DOM wiring
 // calls both from the same `onCamera` hook, `frame-loop.ts`).
 //
-// Not built here (Non-scope of the delegating prompt, or a real gap this range leaves flagged):
-// `pick_id` (always 0 until M18); keyboard/pointer focus rules (a later range's own Non-scope
-// line); real button/modifier capture -- `input/pointers.ts`'s fixed slots (consumed, not changed,
-// per this range's own brief) carry neither, so every emitted event's `button`/`shift`/`ctrl`/
-// `alt`/`meta` is always 0/false in this range; a real source needs either a small additional
-// canvas-scoped listener or an extension of `pointers.ts` itself, left for whichever range wires
-// real production listeners.
+// Not built here (Non-scope of the delegating prompt): `pick_id` (always 0 until M18).
+//
+// M11 step 6 (mandatory gaps #1/#2 of the delegation prompt): `input/pointers.ts`'s fixed slots now
+// carry real button/modifier state and an idle-mouse hover position (`MouseHoverState`), threaded
+// through to every emitted event and the ring record below instead of the hardcoded 0/false the 4-5
+// range left in their place.
 import type { CameraInput } from '../camera/camera.js'
 import type { CameraState } from '../camera/state.js'
 import { type CameraViewport, type TilePoint, tileUnderPoint } from '../camera/transform.js'
@@ -176,6 +175,10 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
     fracX: number,
     fracY: number,
     button: number,
+    shift: boolean,
+    ctrl: boolean,
+    alt: boolean,
+    meta: boolean,
     pointerKind: PointerKindValue,
   ): void {
     const e = events[type]
@@ -185,10 +188,10 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
     e.tileY = tileY
     e.pickId = 0 // Non-scope: pick_id is 0 until M18
     e.button = button
-    e.shift = false
-    e.ctrl = false
-    e.alt = false
-    e.meta = false // Deviations: no real DOM modifier source in this range
+    e.shift = shift
+    e.ctrl = ctrl
+    e.alt = alt
+    e.meta = meta
     e.pointerType = pointerTypeName(pointerKind)
     callbacks[type].dispatch(e)
 
@@ -200,10 +203,11 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
       ring.recordDrop()
       return
     }
+    const modifiers = (shift ? 1 : 0) | (ctrl ? 2 : 0) | (alt ? 4 : 0) | (meta ? 8 : 0)
     writeInputRecord(ring.slotView(idx), 0, {
       kind: KIND_BY_TYPE[type],
       button,
-      modifiers: 0,
+      modifiers,
       pointer: pointerKind,
       seq,
       tileX,
@@ -229,7 +233,11 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
       tileScratch.tileY,
       tileScratch.fracX,
       tileScratch.fracY,
-      0,
+      slot.button,
+      slot.shift,
+      slot.ctrl,
+      slot.alt,
+      slot.meta,
       slot.kind,
     )
     dragging[i] = 0
@@ -270,7 +278,11 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
             tileScratch.tileY,
             tileScratch.fracX,
             tileScratch.fracY,
-            0,
+            slot.button,
+            slot.shift,
+            slot.ctrl,
+            slot.alt,
+            slot.meta,
             slot.kind,
           )
         } else {
@@ -280,7 +292,11 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
             tileScratch.tileY,
             tileScratch.fracX,
             tileScratch.fracY,
-            0,
+            slot.button,
+            slot.shift,
+            slot.ctrl,
+            slot.alt,
+            slot.meta,
             slot.kind,
           )
         }
@@ -305,7 +321,11 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
           tileScratch.tileY,
           tileScratch.fracX,
           tileScratch.fracY,
-          0,
+          slot.button,
+          slot.shift,
+          slot.ctrl,
+          slot.alt,
+          slot.meta,
           slot.kind,
         )
       }
@@ -325,7 +345,11 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
           tileScratch.tileY,
           tileScratch.fracX,
           tileScratch.fracY,
-          0,
+          slot.button,
+          slot.shift,
+          slot.ctrl,
+          slot.alt,
+          slot.meta,
           slot.kind,
         )
       }
@@ -345,7 +369,10 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
     const activeCount = (p0.active ? 1 : 0) + (p1.active ? 1 : 0)
 
     // 0019 §4: "hover (mouse only)"; the engine keeps a cursor tile (mouse: tile under the
-    // pointer; touch: tile of the last tap -- set by the `tap` emission above/below instead).
+    // pointer; touch: tile of the last tap -- set by the `tap` emission above/below instead). A
+    // press-active mouse slot (button held while moving) takes priority over the idle-hover
+    // fallback (mandatory gap #2): both report the same tile in practice, but only the slot carries
+    // the pressed button/modifiers for `hover`'s own event fields.
     let mouseSlot: PointerSlot | undefined
     if (p0.active && p0.kind === PointerKind.Mouse) mouseSlot = p0
     else if (p1.active && p1.kind === PointerKind.Mouse) mouseSlot = p1
@@ -363,9 +390,38 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
           tileScratch.tileY,
           tileScratch.fracX,
           tileScratch.fracY,
-          0,
+          mouseSlot.button,
+          mouseSlot.shift,
+          mouseSlot.ctrl,
+          mouseSlot.alt,
+          mouseSlot.meta,
           PointerKind.Mouse,
         )
+      }
+    } else {
+      const hover = input.pointers.mouseHover
+      if (hover.valid) {
+        tileUnderPoint(cameraState, viewport, hover.x, hover.y, tileScratch)
+        cameraState.cursorTileX = tileScratch.tileX
+        cameraState.cursorTileY = tileScratch.tileY
+        cameraState.cursorValid = true
+        if (tileScratch.tileX !== hoverTileX || tileScratch.tileY !== hoverTileY) {
+          hoverTileX = tileScratch.tileX
+          hoverTileY = tileScratch.tileY
+          emit(
+            'hover',
+            tileScratch.tileX,
+            tileScratch.tileY,
+            tileScratch.fracX,
+            tileScratch.fracY,
+            0,
+            hover.shift,
+            hover.ctrl,
+            hover.alt,
+            hover.meta,
+            PointerKind.Mouse,
+          )
+        }
       }
     }
 

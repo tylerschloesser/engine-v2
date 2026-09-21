@@ -2,7 +2,13 @@ import { expect, test } from 'vitest'
 import { CameraState } from '../camera/state.js'
 import { createRing } from '../sab/ring.js'
 import { KeyState } from './keys.js'
-import { PointerSlots, recordPointerDown, recordPointerMove, recordPointerUp } from './pointers.js'
+import {
+  PointerSlots,
+  recordMouseHover,
+  recordPointerDown,
+  recordPointerMove,
+  recordPointerUp,
+} from './pointers.js'
 import { INPUT_RECORD_BYTES } from './record.js'
 import { createSemanticRecognizer, type InputEventTs } from './semantic.js'
 import { WheelState } from './wheel.js'
@@ -121,6 +127,41 @@ test('semantic: hover only on change', () => {
   expect(hovers).toBe(2)
   expect(state.cursorTileX).toBe(1)
   expect(state.cursorValid).toBe(true)
+})
+
+test('semantic: hover from an idle mouse move, no press (mandatory gap #2)', () => {
+  // A real desktop mouse that only moves, never presses -- `recordPointerDown` is never called at
+  // all, so no `PointerSlot` is ever active for it; before M11 step 6 this produced zero hover
+  // events and never touched `cameraState.cursorTile*` (Deviations of the 4-5 range's own "real
+  // gap"). `recordMouseHover` is what a real `installPointerListeners`'s `onMove` now calls
+  // unconditionally for a mouse-kind event, active slot or not.
+  const state = new CameraState()
+  state.tilesAcross = 20
+  const recognizer = newRecognizer()
+  const bundle = newBundle()
+
+  let hovers = 0
+  recognizer.on('hover', () => {
+    hovers++
+  })
+
+  expect(state.cursorValid).toBe(false) // nothing has moved yet
+
+  recordMouseHover(bundle.pointers, 820, 400) // worldX = 0.25 -> tile 0
+  recognizer.recognize(bundle, state, viewport, 16)
+  expect(hovers).toBe(1)
+  expect(state.cursorValid).toBe(true)
+  expect(state.cursorTileX).toBe(0)
+
+  recordMouseHover(bundle.pointers, 900, 400) // worldX = 1.25 -> tile 1
+  recognizer.recognize(bundle, state, viewport, 16)
+  expect(hovers).toBe(2)
+  expect(state.cursorTileX).toBe(1)
+
+  // Never activates a `PointerSlot` (camera.ts's own pan logic never sees this): a bare mouse move
+  // must not be mistaken for a drag.
+  expect(bundle.pointers.slots[0].active).toBe(false)
+  expect(bundle.pointers.slots[1].active).toBe(false)
 })
 
 test('semantic: tool mode drag events', () => {

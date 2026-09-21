@@ -19,3 +19,21 @@ export class CameraState {
   cursorTileY = 0
   cursorValid = false
 }
+
+/** `client.camera.read(out)` (Seams: "fills a caller-owned object"): a plain field-by-field copy,
+ * allocation-free, so a game can call it every frame if it wants to. */
+export function copyCameraState(src: CameraState, dst: CameraState): void {
+  dst.centreX = src.centreX
+  dst.centreY = src.centreY
+  dst.velocityX = src.velocityX
+  dst.velocityY = src.velocityY
+  dst.tilesAcross = src.tilesAcross
+  dst.zoomRate = src.zoomRate
+  dst.halfExtentTilesX = src.halfExtentTilesX
+  dst.halfExtentTilesY = src.halfExtentTilesY
+  dst.dpr = src.dpr
+  dst.frameTimeMs = src.frameTimeMs
+  dst.cursorTileX = src.cursorTileX
+  dst.cursorTileY = src.cursorTileY
+  dst.cursorValid = src.cursorValid
+}

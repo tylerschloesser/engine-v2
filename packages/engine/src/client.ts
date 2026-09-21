@@ -2,10 +2,19 @@
 // Checks isolation, compiles the module once, creates the `SabSet`, spawns the worker set for the
 // chosen topology, and posts each worker its `Module` (or `wasmUrl`), its SABs and its config.
 import { CameraBlockView, writeCameraBlock } from './camera/block.js'
-import { CameraState } from './camera/state.js'
+import type { CameraInput, CameraIntegrator, MoveToOptions, Rect } from './camera/camera.js'
+import { createCameraIntegrator } from './camera/camera.js'
+import { cameraStorageKey, restoreCameraState, saveCameraState } from './camera/persistence.js'
+import { CameraState, copyCameraState } from './camera/state.js'
+import type { CameraViewport, ScreenPoint } from './camera/transform.js'
+import { screenToWorld, worldToScreen } from './camera/transform.js'
 import type { Clock, Scheduler } from './clock.js'
 import { systemClock, systemScheduler } from './clock.js'
+import { installBlurAndVisibilityReset } from './input/focus.js'
+import { installKeyListeners, KeyState } from './input/keys.js'
+import { installPointerListeners, PointerSlots } from './input/pointers.js'
 import { createSemanticRecognizer, type SemanticRecognizer } from './input/semantic.js'
+import { installWheelListeners, WheelState } from './input/wheel.js'
 import type { InstanceConfig } from './loader.js'
 import {
   CB_FLAGS,
@@ -53,6 +62,10 @@ export interface ClientOptions {
   arenas?: { sim?: number; client?: number; gen?: number }
   /** Default per 0008: 2 when `navigator.hardwareConcurrency >= 8`, else 1. */
   genWorkers?: number
+  /** docs/plan/11-camera-and-input.md Seams (Provides): the `localStorage` persistence suffix (a
+   * game passes its world id, so each world keeps its own camera). `camera/persistence.ts`'s
+   * `cameraStorageKey` turns this into the actual key; omitted means `'default'`. */
+  cameraKey?: string
   /** docs/plan/09-renderer-terrain.md, Seams (Provides): URL of `tiles.json` (M17b adds
    * `sprites`). Not read by `createClient` itself -- rendering is main-thread-only and owns no
    * WASM instance (0018 §1) -- kept here so a caller's one `ClientOptions` object is also what it
@@ -104,6 +117,25 @@ export interface Client {
    * integrate`, from the same externally-owned `pointers`/`keys`/`wheel` bundle -- rather than a
    * pinned Seam name). */
   readonly input: SemanticRecognizer
+  /** docs/plan/11-camera-and-input.md Seams (Provides): `camera.{setConstraints, moveTo, read,
+   * worldToScreen, screenToWorld}` with 0019's signatures, plus `camera.restored: boolean` and,
+   * internal (Seams: "Internal"), `setViewClamp`/`setFollow`. `tick(dtMs)` is this range's own
+   * addition (Deviations: not itself a pinned Seam name, mirroring `input.recognize`'s own
+   * precedent): runs one rAF's worth of `CameraIntegrator.integrate` then `input.recognize`, both
+   * over the real pointer/key/wheel listeners this same `createClient` call installed on
+   * `options.canvas`/`window` -- a page's own `onCamera` hook (`frame-loop.ts`) calls this once per
+   * rAF instead of reaching into a separately-built integrator/bundle. */
+  readonly camera: {
+    setConstraints(opts: { bounds?: Rect; minTiles?: number; maxTiles?: number }): void
+    moveTo(x: number, y: number, opts?: MoveToOptions): void
+    read(out: CameraState): void
+    worldToScreen(x: number, y: number, out: ScreenPoint): void
+    screenToWorld(px: number, py: number, out: ScreenPoint): void
+    readonly restored: boolean
+    setViewClamp(maxTilesPerAxis: number): void
+    setFollow(x: number, y: number, valid: boolean): void
+    tick(dtMs: number): void
+  }
   destroy(): void
 }
 
@@ -178,6 +210,13 @@ export interface ClientTestHandle {
   readonly clock: Clock
   readonly scheduler: Scheduler
   readonly workers: WorkerEntry[]
+  /** docs/plan/11-camera-and-input.md, step 6 (Deviations): the *same* `PointerSlots`/`KeyState`/
+   * `WheelState` the client's own real listeners write into and `camera.tick()` reads from --
+   * exposed so a test/dev page can pair it with `engine/test.attachCameraInputTestHooks` (the
+   * existing, pinned `injectPointer`/`injectWheel`/`injectKey` seam) instead of driving a second,
+   * unrelated bundle no real listener or `camera.tick()` call ever reads. */
+  readonly cameraBundle: CameraInput
+  readonly cameraIntegrator: CameraIntegrator
 }
 
 const handles = new WeakMap<Client, ClientTestHandle>()
@@ -309,6 +348,33 @@ export function createClient(options: ClientOptions): Client {
           throw err
         },
       },
+      camera: {
+        setConstraints(): void {
+          throw err
+        },
+        moveTo(): void {
+          throw err
+        },
+        read(): void {
+          throw err
+        },
+        worldToScreen(): void {
+          throw err
+        },
+        screenToWorld(): void {
+          throw err
+        },
+        restored: false,
+        setViewClamp(): void {
+          throw err
+        },
+        setFollow(): void {
+          throw err
+        },
+        tick(): void {
+          throw err
+        },
+      },
       destroy() {},
     }
   }
@@ -332,6 +398,83 @@ export function createClient(options: ClientOptions): Client {
   const input = createSemanticRecognizer(sabs.inputRing)
   const workers: WorkerEntry[] = []
 
+  // docs/plan/11-camera-and-input.md, step 6 (Deviations: "engine-owned camera", 0019 §1): the one
+  // real `PointerSlots`/`KeyState`/`WheelState` bundle this client's own real DOM listeners write
+  // into and `camera.tick()`/`input.recognize` both read from every rAF. Built here (not per-page)
+  // so `client.camera.{setConstraints, moveTo}` always affects the one camera actually driven by
+  // real gestures, whether or not a page ever calls `camera.tick()` at all (a headless spectator
+  // client still gets a working `moveTo`/`read`).
+  const cameraBundle: CameraInput = {
+    pointers: new PointerSlots(),
+    keys: new KeyState(),
+    wheel: new WheelState(),
+  }
+  const cameraStorageKeyValue = cameraStorageKey(options.cameraKey)
+  const cameraRestored = restoreCameraState(cameraStorageKeyValue, cameraState)
+  const cameraIntegrator = createCameraIntegrator(cameraBundle, {
+    onMotionEnd: (s) => saveCameraState(cameraStorageKeyValue, s),
+  })
+
+  // CSS-pixel viewport (`camera/transform.ts`'s own space, distinct from `render/viewport.ts`'s
+  // device-pixel one): read once at init and refreshed only on an actual resize
+  // (`ResizeObserver`), never per frame -- `getBoundingClientRect()` allocates a `DOMRect`, and
+  // `camera.tick()` runs on the strict per-rAF path this milestone's own zero-GC page proves
+  // (`.claude/rules/hot-paths.md`; 0016 §2 exempts a real resize as a rare discontinuity).
+  const cameraViewport: CameraViewport = { widthPx: 1, heightPx: 1 }
+  function refreshCameraViewport(): void {
+    const rect = options.canvas.getBoundingClientRect()
+    if (rect.width > 0) cameraViewport.widthPx = rect.width
+    if (rect.height > 0) cameraViewport.heightPx = rect.height
+  }
+  refreshCameraViewport()
+  let cameraResizeObserver: ResizeObserver | undefined
+  if (typeof ResizeObserver !== 'undefined') {
+    cameraResizeObserver = new ResizeObserver(refreshCameraViewport)
+    cameraResizeObserver.observe(options.canvas)
+  }
+
+  // Real DOM wiring (0019 §3-§4): pointer capture + gestures and wheel on the canvas, keys (with
+  // focus rules) and the blur/visibilitychange full-state reset on `window`/`document` -- the exact
+  // listener set the exit criterion's own source scan expects, and nowhere else. `typeof window`
+  // guards a non-browser embedding (none exists today; `createClient` is main-thread-only, Files
+  // touched) rather than assuming one.
+  const cameraInputDisposers: Array<() => void> = []
+  if (typeof window !== 'undefined') {
+    cameraInputDisposers.push(installPointerListeners(cameraBundle.pointers, options.canvas))
+    cameraInputDisposers.push(installWheelListeners(cameraBundle.wheel, options.canvas))
+    cameraInputDisposers.push(installKeyListeners(cameraBundle.keys, window))
+    cameraInputDisposers.push(installBlurAndVisibilityReset(cameraBundle, window, document))
+  }
+
+  const camera: Client['camera'] = {
+    setConstraints(opts) {
+      cameraIntegrator.setConstraints(opts)
+    },
+    moveTo(x, y, opts) {
+      cameraIntegrator.moveTo(cameraState, x, y, opts)
+    },
+    read(out) {
+      copyCameraState(cameraState, out)
+    },
+    worldToScreen(x, y, out) {
+      worldToScreen(cameraState, cameraViewport, x, y, out)
+    },
+    screenToWorld(px, py, out) {
+      screenToWorld(cameraState, cameraViewport, px, py, out)
+    },
+    restored: cameraRestored,
+    setViewClamp(maxTilesPerAxis) {
+      cameraIntegrator.setViewClamp(maxTilesPerAxis)
+    },
+    setFollow(x, y, valid) {
+      cameraIntegrator.setFollow(x, y, valid)
+    },
+    tick(dtMs) {
+      cameraIntegrator.integrate(cameraState, cameraViewport, dtMs)
+      input.recognize(cameraBundle, cameraState, cameraViewport, dtMs)
+    },
+  }
+
   function destroy(): void {
     Atomics.store(control.words, CB_LIFECYCLE, Lifecycle.Stopping)
     for (const w of workers) {
@@ -339,6 +482,8 @@ export function createClient(options: ClientOptions): Client {
       control.wake(w.index)
     }
     for (const w of workers) w.worker.terminate()
+    for (const dispose of cameraInputDisposers) dispose()
+    cameraResizeObserver?.disconnect()
   }
 
   /** docs/plan/09-renderer-terrain.md Scope: "writeCameraBlock + CB_FRAME_REQ + wake" as one
@@ -413,8 +558,19 @@ export function createClient(options: ClientOptions): Client {
     writeCameraAndWake,
     setFlags,
     input,
+    camera,
     destroy,
   }
-  handles.set(client, { control, sabs, cameraState, cameraWriter, clock, scheduler, workers })
+  handles.set(client, {
+    control,
+    sabs,
+    cameraState,
+    cameraWriter,
+    clock,
+    scheduler,
+    workers,
+    cameraBundle,
+    cameraIntegrator,
+  })
   return client
 }

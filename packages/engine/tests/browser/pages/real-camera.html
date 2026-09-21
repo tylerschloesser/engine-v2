@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="data:," />
+    <title>real-camera</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      #canvas-host {
+        position: relative;
+        width: 400px;
+        height: 300px;
+      }
+      canvas {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 400px;
+        height: 300px;
+      }
+      #text-field {
+        position: absolute;
+        left: 0;
+        top: 320px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="canvas-host"></div>
+    <input id="text-field" type="text" />
+    <script type="module" src="./src/real-camera.ts"></script>
+  </body>
+</html>

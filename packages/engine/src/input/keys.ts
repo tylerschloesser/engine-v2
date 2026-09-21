@@ -22,10 +22,35 @@ export function recordKey(state: KeyState, code: string, down: boolean): void {
   state.mask = down ? state.mask | bit : state.mask & ~bit
 }
 
+/** 0019 §4 focus rules: "ignored when the target is `input, textarea, select, [contenteditable]`,
+ * when `isComposing`, or with Ctrl/Meta/Alt held" -- keeps a real text field, a modal's own
+ * shortcut, or a browser accelerator (Ctrl+W, Cmd+Q, ...) from being read as a WASD pan. Exported
+ * for `input.keyboard_focus_rules` to probe directly. */
+export function shouldIgnoreKeyDown(e: {
+  isComposing: boolean
+  ctrlKey: boolean
+  metaKey: boolean
+  altKey: boolean
+  target: EventTarget | null
+}): boolean {
+  if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return true
+  const target = e.target
+  if (target instanceof HTMLElement) {
+    const tag = target.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
+    if (target.isContentEditable) return true
+  }
+  return false
+}
+
 /** `window`-level (0019 §4: "key listeners on `window`"), matched by `event.code` so layout doesn't
- * matter. Returns a disposer. */
+ * matter. `keydown` is filtered by `shouldIgnoreKeyDown`; `keyup` never is -- releasing a key must
+ * always be able to clear a bit `keydown` already set, even if a modifier got pressed or focus moved
+ * in between (otherwise a real user releasing D while also tapping Ctrl would leave `KeyBit.D` stuck
+ * on forever). Returns a disposer. */
 export function installKeyListeners(state: KeyState, target: Window = window): () => void {
   function onKeyDown(e: KeyboardEvent): void {
+    if (shouldIgnoreKeyDown(e)) return
     recordKey(state, e.code, true)
   }
   function onKeyUp(e: KeyboardEvent): void {
