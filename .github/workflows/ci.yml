@@ -1,0 +1,124 @@
+# docs/plan/10-ci-workflow.md. One job, `ubuntu-latest`, SwiftShader WebGPU (docs/decisions/
+# 0020-testing-strategy.md §6, §10). `pnpm lint` and `pnpm test` (the fast tier) only so far;
+# `pnpm test:slow` is added once the fast tier is green here (docs/plan/10-ci-workflow.md, Order of
+# work step 5).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to main cancels the older run of the same ref; only the tip needs to be green
+# (docs/decisions/0025-phase-3-orchestration.md §4: there are no other branches).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The x86-64 evidence for docs/decisions/0002-determinism-same-wasm-everywhere.md's deferred
+      # "determinism on real x86-64" item.
+      - name: Assert x86_64, print CPU model
+        run: |
+          arch="$(uname -m)"
+          echo "arch: $arch"
+          test "$arch" = "x86_64"
+          grep -m1 'model name' /proc/cpuinfo || true
+
+      # pnpm via the root package.json's `packageManager` field; must run before actions/setup-node
+      # so its `cache: pnpm` can find the `pnpm` binary.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.node-version'
+          cache: 'pnpm'
+
+      # Reads rust-toolchain.toml (channel 1.93.0, wasm32-unknown-unknown, rustfmt, clippy) and
+      # installs it if it isn't already the default (docs/decisions/0017-packaging-and-build.md §10).
+      - name: Setup Rust (rust-toolchain.toml)
+        run: rustup show
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # cargo-nextest, prebuilt binary at the pin of 0017 §10 (docs/plan/01-scaffolding.md decision
+      # (c): "M10 installs the same pin in CI with a prebuilt-binary action").
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2
+        with:
+          tool: cargo-nextest@0.9.145
+
+      # Bun leg of the `wasm` suite only (0017 §10).
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.8
+
+      # SwiftShader's Vulkan backend (0020 §6).
+      - name: Install Vulkan packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
+
+      - name: Read Playwright version
+        run: |
+          echo "PLAYWRIGHT_VERSION=$(node -p "require('./package.json').devDependencies['@playwright/test']")" >> "$GITHUB_ENV"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ env.PLAYWRIGHT_VERSION }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium webkit firefox
+
+      - name: pnpm lint
+        run: pnpm lint
+
+      # --budget-scale 1000: no suite can fail on time here (0020 §10; timings are recorded, never
+      # gating). --timings-json: docs/plan/10-ci-workflow.md Seams.
+      - name: pnpm test
+        env:
+          CI: 'true'
+          ENGINE_GPU: swiftshader
+          GC_MODE: software
+        run: pnpm test --budget-scale 1000 --timings-json test-results/timings.json
+
+      - name: Upload test-results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results
+          path: test-results/
+          if-no-files-found: ignore
+
+      - name: Timings summary
+        if: always()
+        run: |
+          if [ -f test-results/timings.json ]; then
+            {
+              echo "### Suite timings"
+              echo
+              echo "| Suite | Tests | ms | Budget ms |"
+              echo "|---|---|---|---|"
+              jq -r '.suites[] | "| \(.suite) | \(.tests) | \(.ms | floor) | \(.budgetMs // "-") |"' test-results/timings.json
+              echo
+              build_ms=$(jq -r '.buildMs | floor' test-results/timings.json)
+              commit=$(jq -r '.commit' test-results/timings.json)
+              cpu=$(jq -r '.cpu' test-results/timings.json)
+              echo "Build: ${build_ms} ms · commit ${commit} · CPU ${cpu}"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
