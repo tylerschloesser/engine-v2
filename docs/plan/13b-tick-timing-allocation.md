@@ -240,3 +240,111 @@ be verified. `pnpm test`: `rust 235`, `unit 154`, `wasm 40` unchanged; `browser`
 (biome, rustfmt, clippy, tsc all pass -- confirmed after this step's edits). No golden changed; no
 budget in `budgets.json` changed (the existing `sim` entry's numbers are untouched -- the fix, not
 the number, is what has to change here, per "Budgets": the strict worker figure is not negotiable).
+
+**Orchestrator correction, applied:** the above committed `pace: true` onto `gc-sim.ts` itself,
+which lost the deterministic `stepTick` coverage that page was built for -- it was measuring the
+paced path instead of the path it originally proved. Corrected: `gc-sim.ts` is restored to its
+original M13 form (byte-for-byte back to `pnpm --filter engine build`-verified state at commit
+`271941f`), and a **new** page, `gc-sim-paced.html`/`src/gc-sim-paced.ts` (pageId `sim-paced`),
+carries `test.flags.pace: true` instead. `gc-sim-paced.ts` does not override `drive()`
+(`installGcPage`'s default: `stepFrame` + `harness.stepTick()`) -- `asHarness.stepTick()` wakes the
+`sim`-kind worker generically without ever touching `CB_SIM_STEP_REQ` (`test/client.ts`), so every
+tick this page's `sim` isolate runs comes from `onFire` alone, cleanly isolating `AtomicsTimer`'s
+own allocation from `SimHost.runOneTickTimed`'s (which `gc-sim.ts` alone now covers again). New
+files: `packages/engine/tests/browser/pages/gc-sim-paced.html`, `.../src/gc-sim-paced.ts`,
+`packages/engine/tests/browser/gc-sim-paced.spec.ts`; `budgets.json` gained a `gc.pages["sim-paced"]`
+entry (`main: 30`, derived the same way as `sim`'s own `main` row -- measured 21.45-21.49 B/frame
+across 4 repeats, `ceil` + 8 B margin; `sim: 8`, the un-widened strict figure, expected red until
+the fix lands). Re-measured after the split: `pnpm gc -t "sim clean"` passes again (unchanged from
+before this milestone); `pnpm gc -t "sim-paced clean"` fails, reproducing the same class of defect
+(`main` 21.45 B/frame, `sim` 13.05 B/frame under default V8 -- lower than the pre-split combined
+page's 14.5 because this page's `sim` isolate no longer also runs `SimHost.stepTick`'s own two
+extra reads, isolating `AtomicsTimer` alone). `pnpm test`: `browser` now `98` tests (+3: `sim-paced
+clean`, `sim-paced neg object main/sim` in the fast tier; `sim-paced neg burst *` are `@slow`),
+`sim-paced clean` and `sim-paced neg object main` fail as expected, `sim-paced neg object sim`
+happens to pass (the control's own isolate is already over budget for an unrelated reason, so the
+verdict's `B.sim: false` expectation is met, coincidentally, until the real fix is in). `rust 235`,
+`unit 154`, `wasm 40` unchanged; `pnpm lint` green.
+
+### Design-candidate measurements, per the orchestrator's request, before building anything
+
+Three candidates for eliminating `AtomicsTimer`'s (`poll()`/`timeoutMs()`) and `runOneTickTimed`'s
+clock reads were measured under forced interpreter tier (`--js-flags=--expose-gc
+--sampling-heap-profiler-suppress-randomness --no-opt --no-sparkplug`, temporarily edited into
+`packages/engine/playwright.config.ts`'s `gc` project for each measurement, reverted immediately
+after -- never left in the tree, confirmed by `git status` after each). Each used a small, throwaway
+Playwright spec + (for candidate 3) a scratch Rust crate outside the repo (`/private/tmp/.../
+scratchpad/clockbench`), deleted/reverted after measuring; none of this scaffolding is committed.
+
+**1. Integer-only deadline arithmetic, read via `Atomics.load` on an `Int32Array`.** A bench function
+looping 600 times, each iteration doing exactly what `poll()`/`timeoutMs()` do today but with every
+value kept as a plain integer (`Atomics.load`/`Atomics.add` on a 4-byte typed array, integer
+subtraction, no `clock.now()` call at all): **the bench function does not appear anywhere in `byFn`
+-- zero attributed bytes.** Total window bytes (2380) are 100% pre-existing harness/eval/parser
+overhead, the same floor every other page's `main` isolate already carries. This is the `armedLoop`
+bar: the function disappears, it does not merely shrink.
+- **Who advances the integer word is the open question, and it cannot be "whenever main is
+  convenient" without giving up what `AtomicsTimer` exists for.** M13 chose an `Atomics.wait`-based
+  timer specifically so the sim worker keeps ticking while main is backgrounded/paused
+  (`packages/engine/CLAUDE.md`'s own `render/viewport.ts` "backgrounding pause/resume" line); a
+  design where main writes the shared word (the same pattern `worker/client.ts`'s already-accepted
+  `frame_time_ms` fix uses for the camera block) makes sim's pacing depend on main being alive,
+  which is a regression for exactly the case `AtomicsTimer` was built to handle. A worker cannot
+  advance its own word while blocked in `Atomics.wait` on its own thread (nothing else can run on
+  that thread meanwhile), so "the sim worker updates its own word" only works if the *full* clock
+  read backing it happens rarely enough to amortise under budget -- e.g. read `clock.now()` for
+  real only once every N wakes and extrapolate with integer arithmetic between reads, resyncing
+  periodically. This keeps sim self-contained (no main dependency) but is not identical to today's
+  exact per-wake precision: between full syncs, `due`/overrun detection runs against an
+  extrapolated, not measured, elapsed time. Whether that drift is small enough to be unobservable,
+  or is itself the kind of accuracy change that needs the ADR below, is a judgement call, not a
+  measurement -- flagged, not decided, here.
+- A dedicated non-main thread whose only job is advancing the word (independent of both main and
+  the sim worker's own blocked thread) avoids the main-dependency problem outright, at the cost of
+  a new, permanently-running worker per single-player session and its own zero-GC accounting
+  (0016 §1 measures every isolate; a new one needs its own row). Not built or measured -- a
+  structural option to note, not a recommendation.
+
+**2. Event-based on `Atomics.wait`'s own timeout.** Removing every `clock.now()` call and instead
+treating "the wait returned because of its own timeout" as "one tick is due" needs no measurement
+to know it allocates zero bytes -- there is no clock call left anywhere in the loop to box. The real
+cost is not allocation, it is that this **changes what `tickOverruns`/pacing accuracy mean**: no
+per-tick wall-clock measurement survives, so overrun detection and drift correction would need to be
+redefined around fixed-period waits rather than measured elapsed time. Squarely the "timer redesigned
+rather than relocated" case, and squarely the ADR-amending-M13 case the brief and the orchestrator
+both already named. Not built.
+
+**3. A WASM-imported monotonic clock.** Built and measured for real (not assumed): a scratch Rust
+`cdylib` (`clockbench`, `wasm32-unknown-unknown`, not part of this repo) declaring `#[link
+(wasm_import_module = "engine")] unsafe extern "C" { fn now_ms() -> f64; }` and an export that calls
+it 600 times in a loop, instantiated in a throwaway Playwright page supplying `now_ms: () =>
+performance.now()` as the import. Measured under forced interpreter tier: **`now_ms@...: 4788`
+bytes over 600 calls = 7.98 B/tick -- the import does not eliminate the allocation.** This confirms
+the suspicion recorded in Step 1's own Deviations: the import's JS-side glue closure is still an
+ordinary JS function, still governed by the JS optimizer tier flags (`--no-opt`/`--no-sparkplug`),
+regardless of being called from WASM. **Eliminated.**
+
+**Third-occurrence grep, as asked:** `grep -rn "\.now()\|performance\.now\|Date\.now" packages/
+engine/src --include="*.ts"`, excluding `*.test.ts`/`src/test/**` (exempt by `.claude/rules/
+hot-paths.md`). Only one other production hit: `render/frame-loop.ts:114`
+(`opts.client.cameraState.frameTimeMs = opts.clock.now()`) -- the **main thread's** own rAF loop,
+once per rendered frame, already the source that `worker/client.ts`'s `frame_time_ms` fix (M06b)
+feeds into the camera SAB block for the client worker to read back as a raw region copy, never a
+second read on the strict isolate. That is the same "region" pattern candidate 1 above extends to
+`sim`, already accepted precedent, not a third defect. No other per-tick/per-frame clock read exists
+outside `server.ts` and `worker/atomics-timer.ts`.
+
+**Recommendation:** candidate 1 (integer-only, `Atomics.load`-based) is the only one that is both a
+measured zero and does not by itself force a semantic redefinition of `tickOverruns`/`ticksDropped`
+-- *provided* the "who advances the word, how often is the real clock actually read" design lands on
+something that does not depend on main and does not coarsen overrun-detection precision in an
+observable way. That "provided" is exactly the open question stopped on below: a self-contained,
+throttled-real-read variant is the shape that seems to thread the needle, but whether its drift is
+observable is a judgement this brief reserves for the orchestrator, not something to decide by
+building it and hoping. Candidate 3 is measured out. Candidate 2 works but is an explicit, larger
+redesign of pacing semantics.
+
+**Stopping per the orchestrator's own instruction** ("Stop and report, do not decide, if: the winner
+changes what `tickOverruns` or `ticksDropped` counts, or changes pacing accuracy or drift behaviour
+in any way a game could observe"): every viable remaining direction (candidate 1's real-world form,
+or candidate 2) touches that line. Reporting for a decision rather than building further.

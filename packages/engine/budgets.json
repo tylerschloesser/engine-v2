@@ -211,6 +211,30 @@
             }
           }
         }
+      },
+      "sim-paced": {
+        "isolates": {
+          "main": {
+            "class": "strict",
+            "bytesPerFrame": 30,
+            "formula": "0016 §1's formula, no WebGPU adapter on this page, same shape as `sim`'s own `main` row: `ceil(measured clean) + 8 B` margin, no attribution. Measured (`playwright test --project gc --grep \"sim-paced clean\" --repeat-each 4 --workers 1`, this machine): 21.45-21.49 B/frame across all runs (`drive()` here is `installGcPage`'s default, `stepFrame` + `harness.stepTick()`, not `gc-sim.ts`'s custom one, but lands on the same number since main's own work per frame is the same harness overhead either way). ceil(21.49) = 22, + 8 B margin = 30.",
+            "attributionRoots": ["drive"]
+          },
+          "sim": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the strict worker figure, not to be widened (0028; the brief's own Budgets section). Expected red until docs/plan/13b-tick-timing-allocation.md's fix lands: this page arms `simHost.start()` for real (`test.flags.pace`) so `worker/atomics-timer.ts`'s `poll()`/`timeoutMs()` -- previously never exercised by any zero-GC page -- are measured for the first time. Deviations has the pre-fix numbers.",
+            "attributionRoots": ["body"]
+          }
+        },
+        "software": {
+          "frames": 600,
+          "isolates": {
+            "main": {
+              "attributedBytesPerFrame": 0
+            }
+          }
+        }
       }
     }
   },
