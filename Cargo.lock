@@ -116,6 +116,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fx-puts"
+version = "0.0.0"
+dependencies = [
+ "engine",
+ "serde",
+ "ts-rs",
+]
+
+[[package]]
 name = "fx-terrain"
 version = "0.0.0"
 dependencies = [
