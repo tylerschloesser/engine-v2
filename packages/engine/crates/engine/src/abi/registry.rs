@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 5;
+pub const ABI_VERSION: u32 = 6;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -197,6 +197,17 @@ pub trait Instance: Sized + 'static {
     fn upload_stage(&mut self, _max_records: u32, _out: &mut [u8]) -> u32 {
         0
     }
+
+    /// `docs/plan/11-camera-and-input.md`: decodes whole `client::input::InputEvent` records
+    /// (32 bytes each) from `rx` (the first `len` bytes of `Rx`, `abi::on_input`) into whatever
+    /// `InputQueue` this instance owns, and may write back anything it wants observable in
+    /// `result` (the whole `Result` region) -- this milestone's own fixture writes queue length
+    /// plus the last event's tile there, its own test export. `Status::Unsupported` by default,
+    /// same "answers something, does nothing" shape as every other role/feature an instance
+    /// doesn't implement.
+    fn on_input(&mut self, _rx: &[u8], _result: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
 }
 
 /// Emits every export for every role, the `#[global_allocator]`, and the single-threaded instance
@@ -276,6 +287,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn upload_stage(max_records: u32) -> u32 {
             $crate::abi::upload_stage(&__ENGINE_SLOT, max_records)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn on_input(len: u32) -> u32 {
+            $crate::abi::on_input(&__ENGINE_SLOT, len) as u32
         }
 
         // gen

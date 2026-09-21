@@ -16,7 +16,7 @@
 
 use engine::abi::{Instance, RegionId, RegionLayout, Role, Status};
 use engine::client::upload::RECORD_BYTES;
-use engine::client::{CameraBlock, ClientSide, TerrainFeed, Uploader};
+use engine::client::{CameraBlock, ClientSide, InputEvent, InputQueue, TerrainFeed, Uploader};
 use engine::world::{CacheCapacity, ChunkCoord, ChunkDims, TerrainStore, Tile};
 use engine::worldgen::{GenCore, Pristine, Worldgen};
 
@@ -26,6 +26,12 @@ use engine::worldgen::{GenCore, Pristine, Worldgen};
 const MAX_STAGE_BATCH: u32 = 16;
 const CLIENT_CACHE_CHUNKS: u32 = 1024;
 const EDGE: i32 = 32;
+
+/// `RegionId::Rx`'s size for input (docs/plan/11-camera-and-input.md, Order of work 5): whatever
+/// the client worker's own input-drain pump might hand `on_input` in one call is bounded by
+/// `InputQueue::CAPACITY` whole records (`worker/client-input.ts`'s own per-wake batch is bounded
+/// by this region's length), so that is exactly what `Rx` needs to hold.
+const INPUT_RX_BYTES: usize = InputQueue::CAPACITY * InputEvent::BYTES;
 
 const VISUAL_GRASS: u8 = 1;
 const VISUAL_WATER: u8 = 2;
@@ -49,6 +55,9 @@ enum FixtureRole {
         terrain: Box<TerrainStore>,
         feed: TerrainFeed,
         uploader: Box<Uploader<FixtureTerrain>>,
+        // Boxed like `terrain`/`uploader` above: `InputQueue`'s fixed 64-record array is large
+        // enough to trip clippy's `large_enum_variant` against `FixtureRole::Gen`'s own size.
+        input_queue: Box<InputQueue>,
     },
 }
 
@@ -120,6 +129,7 @@ impl Instance for FixtureTerrain {
             Role::Client => {
                 layout.region(RegionId::GenIn, TerrainFeed::gen_in_bytes(dims) as u32);
                 layout.region(RegionId::ChunkTexels, MAX_STAGE_BATCH * RECORD_BYTES as u32);
+                layout.region(RegionId::Rx, INPUT_RX_BYTES as u32);
                 let source = Pristine::<FixtureTerrain>::new(0, FixtureParams {});
                 let terrain = TerrainStore::new(
                     dims,
@@ -133,6 +143,7 @@ impl Instance for FixtureTerrain {
                         terrain: Box::new(terrain),
                         feed,
                         uploader,
+                        input_queue: Box::new(InputQueue::new()),
                     },
                 })
             }
@@ -153,9 +164,15 @@ impl Instance for FixtureTerrain {
                 terrain,
                 feed,
                 uploader,
+                input_queue,
             } => {
                 feed.on_frame(camera, terrain);
                 uploader.on_frame(camera, terrain);
+                // docs/plan/11-camera-and-input.md Seams: `InputQueue` is "cleared at the end of
+                // each `frame`" -- nothing in this milestone reads it for game logic yet
+                // (`FrameCx::input` is M18, Non-scope), so this only proves the contract, not a
+                // consumer of it.
+                input_queue.clear();
                 Status::Ok
             }
             FixtureRole::Gen(_) => Status::Unsupported,
@@ -221,6 +238,30 @@ impl Instance for FixtureTerrain {
                 terrain, uploader, ..
             } => uploader.stage(max_records, terrain, out),
             FixtureRole::Gen(_) => 0,
+        }
+    }
+
+    /// This range's own test export (docs/plan/11-camera-and-input.md, browser `input: events
+    /// reach wasm`): decodes `rx` into the queue, then writes the queue's own length (`u32`) and
+    /// its last event's tile (`i32` x2) into `result[0..12)` -- whatever `on_input` ran last owns
+    /// `Result`'s content, same idiom as `gen_take`/`client_gen_stats`.
+    fn on_input(&mut self, rx: &[u8], result: &mut [u8]) -> Status {
+        match &mut self.role {
+            FixtureRole::Client { input_queue, .. } => {
+                input_queue.decode_and_push_all(rx);
+                let Some(out) = result.get_mut(..12) else {
+                    return Status::BadLength;
+                };
+                out[0..4].copy_from_slice(&(input_queue.len() as u32).to_le_bytes());
+                let (tile_x, tile_y) = match input_queue.last() {
+                    Some(e) => (e.tile[0], e.tile[1]),
+                    None => (0, 0),
+                };
+                out[4..8].copy_from_slice(&tile_x.to_le_bytes());
+                out[8..12].copy_from_slice(&tile_y.to_le_bytes());
+                Status::Ok
+            }
+            FixtureRole::Gen(_) => Status::Unsupported,
         }
     }
 }

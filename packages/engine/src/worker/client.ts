@@ -10,6 +10,7 @@ import type { EngineInstance, RegionView } from '../loader.js'
 import { CB_FRAME_REQ, W_ACK, workerWord } from '../sab/control.js'
 import { RingConsumer, RingProducer } from '../sab/ring.js'
 import { createGenPump } from './client-gen.js'
+import { createInputPump } from './client-input.js'
 import { createUploadPump } from './client-upload.js'
 import { applyGcHook } from './gc-hook.js'
 import { instantiateForSetup } from './instantiate.js'
@@ -78,6 +79,13 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   const chunkTexels = inst.region(RegionId.ChunkTexels)
   const uploadPump = createUploadPump(inst, message.sabs.uploadRing, chunkTexels)
 
+  // docs/plan/11-camera-and-input.md, Order of work 5: the input-drain pump, built once and run
+  // every wake, same shape as `genPump`/`uploadPump` above. `RegionId.Rx` is looked up
+  // unconditionally, independent of the `echo`-only `rx` local above (`fixtures/hash`'s own `Rx`
+  // is unrelated to input; the two never coexist on one instance today, Deviations).
+  const inputRxRegion = inst.region(RegionId.Rx)
+  const inputPump = createInputPump(inst, message.sabs.inputRing, inputRxRegion)
+
   function body(): void {
     if (gcHook) applyGcHook(shell.control, shell.index)
     const frameReq = Atomics.load(shell.control.words, CB_FRAME_REQ)
@@ -99,6 +107,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     }
     genPump.pump()
     uploadPump.pump()
+    inputPump.pump()
   }
 
   // `engine/test`'s `callParked` reaches `client_gen_stats`/`client_chunk_hash` (this instance's

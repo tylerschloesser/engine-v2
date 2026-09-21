@@ -261,6 +261,31 @@ pub fn upload_stage<T: Instance>(slot: &Slot<T>, max_records: u32) -> u32 {
     rt.inst.upload_stage(max_records, out)
 }
 
+/// `on_input(len) -> status`: decodes `len` bytes of `Rx` as whole `client::input::InputEvent`
+/// records (docs/plan/11-camera-and-input.md). `Rx` is read through a raw pointer taken before
+/// `Result` is borrowed mutably -- the same deferred-borrow shape `CameraBlock::ptr` uses
+/// (`client/camera.rs`'s own doc comment): `Rx` and `Result` are separate allocations
+/// (`RegionLayout::region`) that never move or resize after init, so reading one immutably while
+/// writing the other is sound even though `RegionLayout` has no API to split its own borrow that
+/// way.
+pub fn on_input<T: Instance>(slot: &Slot<T>, len: u32) -> Status {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let rx_ptr = rt.layout.ptr(RegionId::Rx);
+    let rx_cap = rt.layout.len(RegionId::Rx);
+    if rx_ptr.is_null() || len > rx_cap {
+        return Status::BadLength;
+    }
+    // SAFETY: `rx_ptr` addresses the `Rx` region (a separate heap allocation from `Result`) that
+    // never moves or resizes after init; the instance is single-threaded and not re-entered, so
+    // nothing else touches it during this call.
+    let rx = unsafe { core::slice::from_raw_parts(rx_ptr, len as usize) };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.on_input(rx, result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
