@@ -8,7 +8,11 @@ declare global {
     __viewport?: {
       /** Real device + `TerrainRenderer` (no tile art: these tests assert canvas size/DPR/render-
        * scale/draw-call timing, never pixel content) + a real `createClient()` over `fx-terrain`,
-       * wired through `frame-loop.ts`'s `createRealFrameLoop`. `maxTextureDimension2D` defaults to a
+       * wired through `frame-loop.ts`'s `createRealFrameLoop` with `test: { observeReal: false }`
+       * (Fix round 1: every test here drives size/DPR exclusively through `setViewport`'s forced
+       * override, so the real `ResizeObserver`/`matchMedia` is never constructed at all -- a real
+       * one's delivery timing raced a still-pending forced override, intermittently, under the full
+       * suite's own cross-page rendering activity). `maxTextureDimension2D` defaults to a
        * real-looking limit; a clamp test passes a small one so it never allocates a huge texture. */
       init(opts?: {
         maxTextureDimension2D?: number
@@ -26,9 +30,7 @@ declare global {
       setViewport(cssWidth: number, cssHeight: number, dpr: number): void
       /** One synchronous `FrameLoop.tick()`. */
       tick(): { uploadBytes: number; uploadRecords: number }
-      /** `setViewport` + `tick()` in one call (no `page.evaluate` round trip between them, so the
-       * real `ResizeObserver`/`matchMedia` this page also has live can never race the forced
-       * override -- both run in the same task). */
+      /** `setViewport` + `tick()` in one call. */
       setViewportAndTick(
         cssWidth: number,
         cssHeight: number,

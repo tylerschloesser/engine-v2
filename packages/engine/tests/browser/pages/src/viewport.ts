@@ -46,17 +46,6 @@ function requireClient(): Client {
 window.__viewport = {
   async init(opts) {
     canvasEl = document.createElement('canvas')
-    // Pinned CSS size, decoupled from the backing store: a canvas with no CSS width/height of its
-    // own takes its *layout* box straight from the `width`/`height` content attributes -- exactly
-    // the two `applyPending()` writes every tick. Leaving CSS unset therefore lets the real
-    // `ResizeObserver` (left live on this page on purpose) faithfully report back whatever size a
-    // test's own forced override *last actually applied*, racing a still-pending, not-yet-applied
-    // override queued between two `page.evaluate()` calls (found the hard way: `viewport: resize
-    // renders same frame` flaked under `--repeat-each 10 --workers 3`, always reverting to the
-    // *previous* applied size, never a stray one -- the tell that the "real" report was correct for
-    // a moment that had already passed, not corrupt). A fixed CSS box breaks that feedback loop.
-    canvasEl.style.width = '1px'
-    canvasEl.style.height = '1px'
     document.body.appendChild(canvasEl)
 
     device = await initDevice()
@@ -106,6 +95,17 @@ window.__viewport = {
       clock,
       scheduler,
       maxTextureDimension2D: opts?.maxTextureDimension2D ?? 8192,
+      // Fix round 1 (docs/plan/09b-terrain-art-and-lifecycle.md Deviations): every test on this page
+      // drives size/DPR exclusively through `setViewport`'s forced override, so a real
+      // `ResizeObserver`/`matchMedia` is not just unneeded here, it is actively unsafe -- its own
+      // delivery timing is scheduled by the browser's rendering pipeline, not by JS task order, so
+      // it can (and, under the full suite's own real cross-page rendering activity, intermittently
+      // did) land in the gap between two `page.evaluate()` calls and silently overwrite a
+      // still-pending forced value with its own, real-but-untimed report. `observeReal: false` never
+      // constructs the real observer at all, matching production's own single-writer invariant
+      // (there `forceSize` is never called, so the real observer is `pending`'s only writer) instead
+      // of trying to out-time it.
+      test: { observeReal: false },
     }
     if (opts?.render !== undefined) realOpts.render = opts.render
     real = createRealFrameLoop(realOpts)

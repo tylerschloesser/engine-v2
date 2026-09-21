@@ -60,12 +60,23 @@ export interface ViewportController {
   /** 0018 §8 backgrounding, "on visible ... re-check size": re-reads the canvas's current CSS size
    * and the live `devicePixelRatio` directly (rather than waiting for a `ResizeObserver` report that
    * may never fire again if nothing actually changed) and marks it pending for the next
-   * `applyPending()`. */
+   * `applyPending()`. A no-op (Fix round 1) when `test.observeReal` is `false`: see `forceSize`'s own
+   * doc comment for why real and forced observation never coexist on one controller. */
   invalidate(): void
   /** Test-only (`engine/test.setViewport`): overrides the next observed size/DPR directly, bypassing
    * `ResizeObserver`/`matchMedia` entirely -- headless Chromium cannot really resize a window or
    * change display DPI. Takes effect on the next `applyPending()`, not immediately (the same "applied
-   * at the start of the next frame" contract a real resize report follows). */
+   * at the start of the next frame" contract a real resize report follows).
+   *
+   * Fix round 1 (docs/plan/09b-terrain-art-and-lifecycle.md Deviations, "Found and fixed: a real
+   * `ResizeObserver` race, attributed"): calling this while a real observer is also armed
+   * (`opts.test?.observeReal` unset or `true`) is a genuine, unfixable-by-timing race -- a
+   * `ResizeObserver`'s own delivery is scheduled by the browser's rendering pipeline, not by JS task
+   * order, so its callback can land in the gap between any two `page.evaluate()` calls no matter how
+   * that gap is timed. `viewport.html` now passes `test: { observeReal: false }`: the real observer
+   * is never constructed at all for that page, so `forceSize` is `pending`'s only writer, exactly
+   * matching production's own single-writer invariant (only the real observer ever calls
+   * `setPending` there; nothing there ever calls `forceSize`). */
   forceSize(cssWidth: number, cssHeight: number, dpr: number): void
   dispose(): void
 }
@@ -84,9 +95,20 @@ function readCssSizeAndDpr(canvas: HTMLCanvasElement): PendingSize {
 export function createViewportController(
   canvas: HTMLCanvasElement,
   renderer: Pick<TerrainRenderer, 'viewport' | 'notifyViewportChange'>,
-  opts: { render?: RenderScaleOptions; maxTextureDimension2D: number; doc?: Document },
+  opts: {
+    render?: RenderScaleOptions
+    maxTextureDimension2D: number
+    doc?: Document
+    /** Fix round 1: `observeReal: false` never constructs the real `ResizeObserver`/`matchMedia` at
+     * all, so `forceSize`/`invalidate` are the controller's only writers of `pending` -- a
+     * deterministic test's own escape hatch (`ClientOptions.test`'s own naming precedent), never set
+     * by a production caller (`frame-loop.ts`'s `createRealFrameLoop` never sets it). Default
+     * `true`. */
+    test?: { observeReal?: boolean }
+  },
 ): ViewportController {
   const doc = opts.doc ?? (typeof document !== 'undefined' ? document : undefined)
+  const observeReal = opts.test?.observeReal ?? true
   let pending: PendingSize | undefined
   let dirty = false
 
@@ -120,14 +142,6 @@ export function createViewportController(
     }
     setPending(readCssSizeAndDpr(canvas))
   }
-  try {
-    ro = new ResizeObserver(onResizeEntries)
-    ro.observe(canvas, { box: 'device-pixel-content-box' })
-  } catch {
-    usesDevicePixelBox = false
-    ro = new ResizeObserver(onResizeEntries)
-    ro.observe(canvas, { box: 'content-box' })
-  }
 
   // A re-armed one-shot `matchMedia` (0018 §8): a DPR change (browser zoom, monitor switch) with no
   // accompanying CSS-size change never fires `ResizeObserver` at all.
@@ -142,7 +156,18 @@ export function createViewportController(
     mq = doc?.defaultView?.matchMedia(`(resolution: ${dpr}dppx)`)
     mq?.addEventListener('change', onDprChange, { once: true })
   }
-  armDprWatch()
+
+  if (observeReal) {
+    try {
+      ro = new ResizeObserver(onResizeEntries)
+      ro.observe(canvas, { box: 'device-pixel-content-box' })
+    } catch {
+      usesDevicePixelBox = false
+      ro = new ResizeObserver(onResizeEntries)
+      ro.observe(canvas, { box: 'content-box' })
+    }
+    armDprWatch()
+  }
 
   return {
     applyPending() {
@@ -171,6 +196,10 @@ export function createViewportController(
     },
 
     invalidate() {
+      // Test-only-controlled pages (`observeReal: false`) have nothing to "re-check": `forceSize`
+      // is their only source of truth, and re-reading the real DOM here would itself reintroduce a
+      // second, competing writer.
+      if (!observeReal) return
       setPending(readCssSizeAndDpr(canvas))
     },
 

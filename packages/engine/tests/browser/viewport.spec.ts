@@ -2,8 +2,10 @@
 // and backgrounding (`FrameLoop.pause()`/`resume()`, `CB_FLAGS.REBASE`). Every test drives size/DPR
 // through `engine/test.setViewport` (headless Chromium cannot really resize a window or change
 // display DPI) and visibility through `engine/test.setVisibility` (`document.hidden` cannot be
-// forced from outside the page); `viewport.html`'s real `ResizeObserver`/`matchMedia` stay live
-// throughout (never disabled for these tests) but are never what these assertions read.
+// forced from outside the page); `viewport.html` disables the real `ResizeObserver`/`matchMedia`
+// entirely (`test: { observeReal: false }`, Fix round 1) so `setViewport`'s forced override is
+// `pending`'s only writer -- a real observer left armed alongside it raced it intermittently, since
+// a `ResizeObserver`'s own delivery is scheduled by the rendering pipeline, not JS task order.
 import { expect, test } from '@playwright/test'
 import { expectAdapter, expectNoGpuErrors } from './support/gpu.ts'
 import { openPage } from './support/page.ts'

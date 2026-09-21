@@ -172,6 +172,10 @@ export type RealFrameLoopOptions = {
   onCamera?(): void
   /** M09b step 6: forwarded straight to `createFrameLoop` (see its own doc comment). */
   onPhase?(phase: FramePhase): void
+  /** Fix round 1 (docs/plan/09b-terrain-art-and-lifecycle.md Deviations): forwarded straight to
+   * `createViewportController`'s own `test.observeReal` -- see that option's own doc comment.
+   * Never set by a production caller. */
+  test?: { observeReal?: boolean }
 }
 
 export type RealFrameLoop = {
@@ -200,6 +204,7 @@ export function createRealFrameLoop(opts: RealFrameLoopOptions): RealFrameLoop {
   }
   if (opts.render !== undefined) viewportOpts.render = opts.render
   if (opts.doc !== undefined) viewportOpts.doc = opts.doc
+  if (opts.test !== undefined) viewportOpts.test = opts.test
   const viewport = createViewportController(opts.canvas, opts.renderer, viewportOpts)
   const frameLoopOpts: FrameLoopOptions = {
     clock: opts.clock,
