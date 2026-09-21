@@ -1,6 +1,6 @@
 # M09b: Terrain art sampling, canvas lifecycle, device page
 
-Status: not started · After: 09 · Tyler-dependent: no (phone serving reuses M03's `pnpm device:serve --tunnel`; tunnel approved, Q7)
+Status: done · After: 09 · Tyler-dependent: no (phone serving reuses M03's `pnpm device:serve --tunnel`; tunnel approved, Q7)
 
 Split out of M09 during planning. Carries a **D** (device checklist): terrain fill-rate. Does not block M10 or M11.
 
@@ -57,11 +57,11 @@ Device loss (M37b). Sprites and their atlas mips (M17b). Camera gestures and the
 - Zero-GC: page `terrain` re-run with the final shader (numbers unchanged: no new per-frame wrappers).
 
 ## Exit criteria
-- [ ] All tests above pass by name.
-- [ ] `device.html` runs the production `createFrameLoop` (not a bespoke loop) against a real canvas, driven by `requestAnimationFrame` through the injected `Scheduler`; `frame-loop.production_runs_phases_in_order` passes.
-- [ ] `pnpm device:serve` serves `device.html` and the HUD shows non-zero frame statistics in desktop Chrome with `?autopan=1&tiles=256`.
-- [ ] The `docs/plan/device-checks.md` section for this milestone matches what was built.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name.
+- [x] `device.html` runs the production `createFrameLoop` (not a bespoke loop) against a real canvas, driven by `requestAnimationFrame` through the injected `Scheduler`; `frame-loop.production_runs_phases_in_order` passes.
+- [x] `pnpm device:serve` serves `device.html` and the HUD shows non-zero frame statistics in desktop Chrome with `?autopan=1&tiles=256`.
+- [x] The `docs/plan/device-checks.md` section for this milestone matches what was built.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test browser -t terrain` · `pnpm test browser -t viewport` · `pnpm test browser -t lifecycle` · `pnpm test browser -t canvas.presents` · `pnpm device:serve` · `pnpm test` · `pnpm lint`.
@@ -757,3 +757,40 @@ per-frame path touched.
 `unit pass 115 tests`, `wasm pass 35 tests`, `browser pass 77 tests 15s/25s` (+1 over fix round 1's
 76-test baseline; comfortably under the 20s trip-wire). `pnpm lint`: biome/rustfmt/clippy/tsc all
 green. No existing test weakened, skipped or deleted; no golden changed; no tolerance widened.
+
+### Orchestrator's gate (M09b accepted)
+
+`pnpm gate 0554e71` at `a3b4104`: tree clean, 36 files changed (packages/engine 34, docs 1,
+`PROMPT.md` 1), no existing golden modified or deleted (0 added), no skip/ignore/only/todo marker
+added, 3,274 insertions over 16 commits. `budgets.json` unchanged for the whole milestone; the diff
+carries no added timeout, retry, `expect.poll`, `repeatEach` or reduced workload. Built by three
+implementers (steps 1-3, 4-5, 6-7) plus two fix rounds, per the renderer-sizing rule M09 established.
+
+**`pnpm device:serve` verified by the orchestrator, not accepted as a claim.** The steps 6-7 report
+called the literal command blocked by a held port 4173 and substituted a hand-rolled serve on another
+port; that was a misdiagnosis. The other listener is an unrelated repo's `vite preview` bound to IPv6
+`localhost`, while `device-serve.mjs` binds IPv4 `127.0.0.1` -- no collision. The literal `pnpm
+device:serve` serves `device.html` (HTTP 200), and real desktop Chrome at
+`?autopan=1&tiles=256` gives: `isolated: true`, `adapter.info` apple/metal-3, workers ready,
+`1280x720px dpr=1 renderScale=1`, rAF interval p50/p95/worst `16.7 / 16.7 / 16.7 ms (n=601)`,
+intervals >20ms `0`, main rAF callback p95 `0.21 ms`, GPU latency p95 `2.06 ms (n=21)`, 683 frames,
+no page errors.
+
+**Repeat loops** (`node scripts/repeat.mjs browser <n> [--load 10]`, foreground, bounded, per-run
+kill timeout). Before fix round 1, at `dd87a1d`: **2 failures in 16 quiet runs** of `viewport: resize
+renders same frame`, 0 in 12 under `--load 10`. After the fix, at `a3b4104`: **30/30 quiet**
+(slowest suite 15 s) and **29/30 under `--load 10`** (slowest 20 s). The single loaded failure was
+`gc: flat transport parity` -- an M04 test, not this milestone's -- timing out with the whole suite
+at 46 s against its 25 s budget, at a 1-minute load average of **21.00** with Steam at 99.6 % CPU and
+another session's Claude at 18 %. That is the environmental failure mode `PROMPT.md`'s Rules name
+("at a 1-minute load near 20 every suite fails on timeouts only"), not a defect; it is recorded here
+rather than re-rolled for a clean number.
+
+**A Sonnet review of the 2,800-line diff found two coverage gaps and led to one real shader bug**,
+none of which a green suite showed: flip/rotate had zero pixel coverage (`flags: []` on every fixture
+visual), jitter's amplitude was chosen to sit under every probe tolerance so no test could see it
+break, and -- while deriving what a fractional-offset seam test should assert -- the magnified
+sampling inversion of fix round 2. All three are closed above. The lesson for later renderer
+milestones: **every probe in the suite sat exactly at a texel centre, the one point at which the
+correct and incorrect seam formulas agree.** A probe grid that never leaves texel centres cannot see
+a sampling bug, however many probes it has.

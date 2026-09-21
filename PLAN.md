@@ -27,7 +27,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 08b | `08b-gen-workers-and-queue.md` | gen workers over request ring / result slabs, generation queue, client pristine-cache feed | 06b, 08 | |
 | [x] | 09 | `09-renderer-terrain.md` | WebGPU ferry, terrain shader over page/indirection textures, chunk-upload ring, readback test | 08b | |
 | [ ] | 10 | `10-ci-workflow.md` | GitHub Actions + SwiftShader, x86-64 determinism, software-adapter GC assertion | 09 | T |
-| [ ] | 09b | `09b-terrain-art-and-lifecycle.md` | art contract sampling + mips, canvas lifecycle, device page | 09 | D |
+| [x] | 09b | `09b-terrain-art-and-lifecycle.md` | art contract sampling + mips, canvas lifecycle, device page | 09 | D |
 | [ ] | 11 | `11-camera-and-input.md` | main-thread camera, gestures, semantic input events, input ring | 09 | D |
 | [ ] | 12 | `12-store-and-game-trait.md` | `Game` trait, `Delta`, `Store` | 07, 08 | |
 | [ ] | 12b | `12b-world-access-and-sim-driver.md` | `WorldRead`/`WorldWrite`, `Authority`, `Ticks`, `Sim` driver, goldens | 12 | |
