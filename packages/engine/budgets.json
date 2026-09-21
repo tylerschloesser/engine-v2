@@ -187,6 +187,30 @@
             }
           }
         }
+      },
+      "sim": {
+        "isolates": {
+          "main": {
+            "class": "strict",
+            "bytesPerFrame": 30,
+            "formula": "0016 §1's formula, no WebGPU adapter on this page (the 110 B floor does not apply), same shape as `topology`/`gen`'s own `main` row: `ceil(measured clean) + 8 B` margin, no attribution. Measured (`playwright test --project gc --grep \"sim clean\" --repeat-each 8 --workers 1`, this machine): an exact constant 21.4933 B/frame across all 8 clean runs (`windowBytes.main` identical every run: [13064, 12868-12920]). ceil(21.4933) = 22, + 8 B margin = 30. Found by this page: `wrapEngineInstance.simSealFrame` (`server.ts`) returned a fresh `{ len: 0 }` object literal on every call -- every tick this milestone ever runs, `sim_seal_frame` always returning 0 (Non-scope until M22) -- costing `sim` its own ~16 B/frame before the fix below made it a preallocated, mutated-in-place scratch object.",
+            "attributionRoots": ["drive"]
+          },
+          "sim": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the strict worker figure, same fixed number every other page's `client`/`gen0`/`sim` row uses. Measured: a constant 0.8133 B/frame across 8 clean runs, ticking for real every frame (`stepSimTickSync(client, 1)`) -- the fix noted in `main`'s own formula (a preallocated `simSealFrame` scratch object) is what got this isolate under budget at all; before it this row read ~16.8 B/frame.",
+            "attributionRoots": ["body"]
+          }
+        },
+        "software": {
+          "frames": 600,
+          "isolates": {
+            "main": {
+              "attributedBytesPerFrame": 0
+            }
+          }
+        }
       }
     }
   },

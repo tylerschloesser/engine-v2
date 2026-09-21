@@ -108,16 +108,30 @@ export interface SimInstance {
 
 /** The real adapter: `SimInstance` over a real `EngineInstance` (role `Sim`). */
 export function wrapEngineInstance(inst: EngineInstance): SimInstance {
+  // Preallocated once, mutated and returned by reference on every `simSealFrame()` call
+  // (`.claude/rules/hot-paths.md`: "preallocate scratch objects at init and mutate them"; step 6's
+  // own zero-GC page, `gc-sim.ts`, is what found a fresh `{ len: 0 }` object literal here costing
+  // ~16 B/frame -- every tick this milestone ever runs, since `sim_seal_frame` always returns 0
+  // until M22, Deviations). `bytes` is only ever read synchronously, inside `runOneTick`'s own
+  // call, matching its own doc comment ("a view valid only during the call"), so overwriting it in
+  // place on the next call is safe.
+  const sealResult: { len: number; bytes?: Uint8Array } = { len: 0 }
   return {
     simGenesis: () => inst.call0(inst.x.sim_genesis),
     simTick: () => inst.call0(inst.x.sim_tick),
     simSealFrame: () => {
       const raw = inst.call0(inst.x.sim_seal_frame)
       if (raw < 0) throw new Error(`sim_seal_frame failed: status ${-raw}`)
-      if (raw === 0) return { len: 0 }
+      if (raw === 0) {
+        sealResult.len = 0
+        delete sealResult.bytes
+        return sealResult
+      }
       const region = inst.region(RegionId.Persist)
       if (!region) throw new Error('sim_seal_frame: len > 0 but the Persist region is absent')
-      return { len: raw, bytes: region.u8.subarray(0, raw) }
+      sealResult.len = raw
+      sealResult.bytes = region.u8.subarray(0, raw)
+      return sealResult
     },
     simHash: () => {
       const status = inst.call0(inst.x.sim_hash)
