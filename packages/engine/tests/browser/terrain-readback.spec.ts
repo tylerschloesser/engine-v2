@@ -9,12 +9,34 @@ import type { FrameUniformValues } from '../../src/render/terrain.ts'
 import { expectPixel, type PixelBuffer } from '../../src/test/render.ts'
 import { expectAdapter, expectNoGpuErrors } from './support/gpu.ts'
 import { openPage } from './support/page.ts'
+import { selectVariant } from './support/terrain-hash-ref.ts'
 
 const GRASS: readonly [number, number, number, number] = [34, 139, 34, 255]
 const WATER: readonly [number, number, number, number] = [30, 80, 200, 255]
 const ORE: readonly [number, number, number, number] = [230, 140, 20, 255]
 const NEUTRAL: readonly [number, number, number, number] = [32, 32, 32, 255]
 const TOL = 2 // 0020 §6: "≤ 2/255 per channel"
+
+// M09b fixture additions (docs/plan/09b-terrain-art-and-lifecycle.md Planning decisions
+// "Probe-friendly fixture art"; `scripts/gen-terrain-art.mjs`): `tile_px` is 4, so every art texel
+// is a quarter of a tile on each axis.
+const ART_SIZE = 4
+const VARIANT_VISUAL = 6
+const VARIANT_COLOURS: readonly (readonly [number, number, number, number])[] = [
+  [255, 0, 255, 255], // variant 0: magenta
+  [0, 255, 255, 255], // variant 1: cyan
+  [255, 255, 0, 255], // variant 2: yellow
+]
+const HASH_SEED = 12345
+
+/** The centre (as a `camFrac` value) of art texel `idx` (0..`ART_SIZE`-1) within a tile: with a 1x1
+ * render target (`microCamera` below), `frag_coord` is exactly the viewport's own centre pixel, so
+ * `rel == camFrac` and `art_frac == camFrac` (`camTile`'s `floor(camFrac)` contribution is always 0
+ * for `camFrac` in `[0, 1)`) -- this is what lets a single scalar pick out one specific art texel of
+ * one specific tile with no pixel-grid arithmetic at all. */
+function texelFrac(idx: number): number {
+  return (idx + 0.5) / ART_SIZE
+}
 
 /** A `FrameUniformValues` for a 1x1 render target (Seams: no new `engine/test` surface needed --
  * `renderBorderScene`/`renderAndRead` already accept any viewport size). */
@@ -378,6 +400,91 @@ test('terrain: nothing outside viewport', async ({ page }, testInfo) => {
   expectPixel(pixels, 0, 63, NEUTRAL, TOL) // bottom-left corner: chunk (-1, 1)
   expectPixel(pixels, 63, 63, NEUTRAL, TOL) // bottom-right corner: chunk (1, 1)
   expectPixel(pixels, 32, 32, GRASS, TOL) // centre: inside chunk (0, 0)
+  expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
+})
+
+// M09b step 2 (docs/plan/09b-terrain-art-and-lifecycle.md): the PCG-hash variant/flip/rotate/jitter
+// path. Both tests below drive `terrain.html`'s hand-filled path (no Rust fixture change, Files
+// touched: "No Rust"), reusing `microCamera`'s 1x1 render target so one scalar (`camFracX`/
+// `camFracY`) picks out one specific art texel of one specific tile with no pixel-grid arithmetic.
+
+test('terrain: variants match reference', async ({ page }, testInfo) => {
+  await openPage(page, '/terrain.html')
+  const init = await page.evaluate(() => window.__terrain?.init())
+  expectAdapter(testInfo, init?.adapterInfo ?? null)
+  await page.evaluate(async (chunk) => {
+    const t = window.__terrain as Terrain
+    await t.loadArt('/terrain/tiles.json')
+    t.writePageChunk(0, chunk)
+    t.writeIndir([{ x: 0, y: 0, value: 0 }])
+  }, flatChunk(VARIANT_VISUAL))
+
+  // Comfortably magnified (texels_per_px = 0.5 < 1, `fade === 1`): probing the texel *centre*
+  // (Planning decisions "Reference implementation of the hash in the test") makes the "fat pixel"
+  // seam formula a no-op, so the read colour is exactly variant `selectVariant(...)`'s own.
+  const MAGNIFIED_TILES_PER_PX = 1 / 8
+  const probes: readonly (readonly [number, number])[] = [
+    [0, 0],
+    [1, 0],
+    [5, 7],
+    [17, 3],
+    [31, 31],
+  ]
+  for (const [tx, ty] of probes) {
+    const variant = selectVariant(tx, ty, HASH_SEED, VARIANT_COLOURS.length)
+    const want = VARIANT_COLOURS[variant] as readonly [number, number, number, number]
+    const pixel = await renderBorderScene(
+      page,
+      microCamera({
+        camTileX: tx,
+        camTileY: ty,
+        camFracX: texelFrac(1),
+        camFracY: texelFrac(1),
+        tilesPerPx: MAGNIFIED_TILES_PER_PX,
+        seed: HASH_SEED,
+      }),
+    )
+    expectPixel(pixel, 0, 0, want, TOL)
+  }
+  expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
+})
+
+test('terrain: magnified texel exact', async ({ page }, testInfo) => {
+  await openPage(page, '/terrain.html')
+  const init = await page.evaluate(() => window.__terrain?.init())
+  expectAdapter(testInfo, init?.adapterInfo ?? null)
+  await stageBorderScene(page) // M09's own grass (chunk 0) / water (chunk 1) border scene.
+
+  // Exactly 1 screen px per art texel ("integer pixels-per-texel", Planning decisions): every one
+  // of the 4 texels on each side of the chunk (0,0)/(1,0) border -- tiles 31 and 32, `CHUNK_BITS ===
+  // 5` (docs/plan/09-renderer-terrain.md Planning decisions) -- reads its own tile's exact flat
+  // colour, with no blur or bleed across the array-layer boundary at the seam.
+  const INTEGER_TILES_PER_PX = 1 / ART_SIZE
+  for (let texel = 0; texel < ART_SIZE; texel++) {
+    const grassPixel = await renderBorderScene(
+      page,
+      microCamera({
+        camTileX: 31,
+        camTileY: 8,
+        camFracX: texelFrac(texel),
+        camFracY: texelFrac(0),
+        tilesPerPx: INTEGER_TILES_PER_PX,
+      }),
+    )
+    expectPixel(grassPixel, 0, 0, GRASS, TOL)
+
+    const waterPixel = await renderBorderScene(
+      page,
+      microCamera({
+        camTileX: 32,
+        camTileY: 8,
+        camFracX: texelFrac(texel),
+        camFracY: texelFrac(0),
+        tilesPerPx: INTEGER_TILES_PER_PX,
+      }),
+    )
+    expectPixel(waterPixel, 0, 0, WATER, TOL)
+  }
   expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
 })
 
