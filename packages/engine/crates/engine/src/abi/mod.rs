@@ -162,6 +162,36 @@ pub fn sim_hash<T: Instance>(slot: &Slot<T>) -> Status {
     Status::Ok
 }
 
+/// `sim_genesis()`: builds the world from the init config (`Sim::genesis` for a real `Game`).
+pub fn sim_genesis<T: Instance>(slot: &Slot<T>) -> Status {
+    match slot.sim() {
+        Ok(rt) => rt.inst.sim_genesis(),
+        Err(status) => status,
+    }
+}
+
+/// `sim_seal_frame()`: bytes written to `Persist`, or `-(status)` -- the same shape as
+/// `sim_build_frame`.
+pub fn sim_seal_frame<T: Instance>(slot: &Slot<T>) -> i32 {
+    let built = slot.sim().and_then(|rt| {
+        rt.inst
+            .sim_seal_frame(rt.layout.bytes_mut(RegionId::Persist))
+    });
+    match built {
+        Ok(len) => len as i32,
+        Err(status) => -(status as i32),
+    }
+}
+
+/// `sim_warm_one() -> u32`: same "always answer, cost nothing on a wrong role" shape as
+/// `gen_take`/`upload_stage` -- no `Status` crosses here either.
+pub fn sim_warm_one<T: Instance>(slot: &Slot<T>) -> u32 {
+    match slot.sim() {
+        Ok(rt) => rt.inst.sim_warm_one(),
+        Err(_) => 0,
+    }
+}
+
 /// The raw export argument is **unused** (hence `_raw_t_ms`), and the `t_ms` an `Instance::frame`
 /// receives is `camera.frame_time_ms`, read out of this role's own `Camera` region -- decision A of
 /// fix round 3 (docs/plan/06b-workers-and-spawn.md, Deviations). The JS side stopped computing the

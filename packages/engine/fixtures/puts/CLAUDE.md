@@ -7,6 +7,10 @@ M12 (docs/plan/12-store-and-game-trait.md) declares its replicated types only --
 against a real, non-trivial type set, natively and for `wasm32`. `impl Game` (`register`,
 `prototype`, `anchor`, `genesis`, `on_player`, `apply`, `tick`, the `Sim` role) lands in M12b.
 
-Until then `Instance` is implemented directly (M02 conventions), every role but `init` defaulting
-to `Status::Unsupported`: enough to build and pass the import allowlist test
-(`tests/wasm/allowlist.test.ts`), not to run.
+M13 (docs/plan/13-sim-host-tick-loop.md) switches the one line of ABI this fixture writes from
+`engine::export_instance!(Puts)` to `engine::export_game!(Puts)`, which re-points at
+`engine::game_instance::GameInstance<Puts>`: the `.wasm` now has a real sim role
+(`sim_genesis`/`sim_tick`/`sim_hash`, driving the same `Sim<Puts>` `tests/*.rs` already drove
+directly), so `puts_idle_100`'s golden is `.wasm`-authoritative (`fixtures/puts/golden/
+scenario.json` + `pnpm golden puts`) instead of native-blessed. The `gen`/`client` roles exist
+(every fixture's `.wasm` carries every export) but nothing in this fixture exercises them yet.

@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 6
+export const ABI_VERSION = 7
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -65,6 +65,16 @@ export const ABI_EXPORTS = {
   sim_tick: { role: 'sim', params: 0, result: 'status' },
   sim_build_frame: { role: 'sim', params: 1, result: 'len' },
   sim_hash: { role: 'sim', params: 0, result: 'status' },
+  // docs/plan/13-sim-host-tick-loop.md: creates the world from the init config (`Sim::genesis`
+  // for a real `Game`). M22b adds the load-from-storage path.
+  sim_genesis: { role: 'sim', params: 0, result: 'status' },
+  // docs/plan/13-sim-host-tick-loop.md: write-ahead log bytes for the frame about to be applied
+  // (0024 §1), written into `RegionId.Persist`. Always 0 until M22 (Non-scope here).
+  sim_seal_frame: { role: 'sim', params: 0, result: 'len' },
+  // docs/plan/13-sim-host-tick-loop.md: generates at most one uncached chunk from the warm list
+  // (`host::warm`), nearest-to-view-centre first. `1`/`0` (not a `Status`: costs nothing, always
+  // answers), the same shape as `gen_take`/`upload_stage`.
+  sim_warm_one: { role: 'sim', params: 0, result: 'u32' },
   // `t_ms: f64` (0014 §4's client hot-export table; docs/plan/06b-workers-and-spawn.md): called
   // only when `CB_FRAME_REQ` has advanced since the last call (Planning decisions "Worker frame
   // clock"). `params: 1` here means "one number", whatever its wasm type (0014 §2).

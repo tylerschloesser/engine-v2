@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 6;
+pub const ABI_VERSION: u32 = 7;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -141,6 +141,30 @@ pub trait Instance: Sized + 'static {
         0
     }
 
+    /// docs/plan/13-sim-host-tick-loop.md: creates the world from the init config (`Sim::genesis`
+    /// for a real `Game`); M22b adds the load-from-storage path. Called once per instance; a
+    /// second call is `Status::AlreadyInitialised`.
+    fn sim_genesis(&mut self) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/13-sim-host-tick-loop.md: write-ahead log bytes for the frame about to be
+    /// applied (0024 §1's export boundary), written into `persist` (the whole `Persist` region --
+    /// empty until a role declares it, which none does yet: Non-scope here, M22 gives this real
+    /// content and sizes the region). Returns the byte count, or `-(status)` on failure at the
+    /// export boundary, the same shape as `sim_build_frame`.
+    fn sim_seal_frame(&mut self, _persist: &mut [u8]) -> Result<u32, Status> {
+        Err(Status::Unsupported)
+    }
+
+    /// docs/plan/13-sim-host-tick-loop.md: generates at most one uncached chunk from the warm
+    /// list (`host::warm`), nearest-to-view-centre first. `1` if it generated one, `0` if nothing
+    /// is cold -- the "always answer, cost nothing" shape of `gen_take`/`upload_stage`: no
+    /// `Status` crosses here either.
+    fn sim_warm_one(&mut self) -> u32 {
+        0
+    }
+
     /// Called only when the client worker saw `CB_FRAME_REQ` advance (docs/plan/06b-workers-and-
     /// spawn.md, Planning decisions "Worker frame clock"): `t_ms` is that frame's `frame_time_ms`,
     /// taken from `camera` by the shim in `abi::frame` rather than from the export's own raw
@@ -262,6 +286,18 @@ macro_rules! export_instance {
         pub extern "C" fn sim_hash() -> u32 {
             $crate::abi::sim_hash(&__ENGINE_SLOT) as u32
         }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_genesis() -> u32 {
+            $crate::abi::sim_genesis(&__ENGINE_SLOT) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_seal_frame() -> i32 {
+            $crate::abi::sim_seal_frame(&__ENGINE_SLOT)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_warm_one() -> u32 {
+            $crate::abi::sim_warm_one(&__ENGINE_SLOT)
+        }
 
         // client
         #[unsafe(no_mangle)]
@@ -301,11 +337,15 @@ macro_rules! export_instance {
     };
 }
 
-/// The one line of ABI a game writes (0014 §5). Forwards to [`export_instance!`] until M13
-/// re-points it at the engine's generic host over the `Game` trait.
+/// The one line of ABI a game writes (0014 §5). Re-points at
+/// [`GameInstance<G>`](crate::game_instance::GameInstance), the engine's generic dispatcher over
+/// the `Game` trait (docs/plan/13-sim-host-tick-loop.md Scope): `Role::Sim` ->
+/// [`host::Host<G>`](crate::host::Host), `Role::Gen` -> `worldgen::GenCore<G::Worldgen>`,
+/// `Role::Client` -> [`ClientInstance<G>`](crate::game_instance::ClientInstance). A low-level
+/// fixture that implements `Instance` directly still calls `export_instance!` itself.
 #[macro_export]
 macro_rules! export_game {
     ($t:ty) => {
-        $crate::export_instance!($t);
+        $crate::export_instance!($crate::game_instance::GameInstance<$t>);
     };
 }

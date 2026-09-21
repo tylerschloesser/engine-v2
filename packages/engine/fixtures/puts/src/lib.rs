@@ -17,11 +17,12 @@
 //! a `Global` counter and paints the next tile of a fixed walk near the origin once per simulated
 //! second, independent of any action (M15b needs an overlay that changes on its own).
 //!
-//! `Instance` is implemented directly (M02 conventions, like `fx-hash`/`fx-terrain`), not through
-//! `Game`/`export_game!`: no ABI export exists yet (M13, Non-scope here). `Sim<Puts>` is driven
-//! directly by native tests (`tests/*.rs`) instead.
+//! `export_game!(Puts)` (M13, docs/plan/13-sim-host-tick-loop.md) re-points at
+//! `engine::game_instance::GameInstance<Puts>`, the engine's generic `Instance` dispatcher: the
+//! `.wasm` this fixture builds now has a real sim role (`sim_genesis`/`sim_tick`/`sim_hash`, driving
+//! the same `Sim<Puts>` native tests already drove directly through `tests/*.rs`), so
+//! `puts_idle_100`'s golden becomes `.wasm`-authoritative (0002) instead of native-blessed.
 
-use engine::abi::{Instance, RegionLayout, Role, Status};
 use engine::game::{Game, PlayerEvent, PlayerId, TickCx, Unknown, WorldRead, WorldWrite};
 use engine::world::{Footprint, Tile};
 use engine::world::{PrototypeId, Registry, TilePos, TraitSet};
@@ -252,13 +253,7 @@ impl engine::worldgen::Worldgen for FlatWorldgen {
     }
 }
 
-impl Instance for Puts {
-    fn init(_role: Role, _game_cfg_json: &str, _layout: &mut RegionLayout) -> Result<Self, Status> {
-        Ok(Puts)
-    }
-}
-
-engine::export_instance!(Puts);
+engine::export_game!(Puts);
 
 #[cfg(test)]
 mod tests {
