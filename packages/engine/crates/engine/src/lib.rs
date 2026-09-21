@@ -22,6 +22,7 @@ pub mod store;
 pub mod testing;
 pub mod time;
 pub mod view;
+pub mod wire;
 pub mod world;
 pub mod world_access;
 pub mod worldgen;
