@@ -21,6 +21,7 @@ let last = Atomics.load(control.words, wakeAt)
 for (;;) {
   const frameReq = Atomics.load(control.words, CB_FRAME_REQ)
   if (frameReq >= target) break
-  last = control.waitForWake(WORKER_CLIENT, last, 5000)
+  control.waitForWake(WORKER_CLIENT, last, 5000)
+  last = Atomics.load(control.words, wakeAt)
 }
 parentPort?.postMessage({ done: true, frameReq: Atomics.load(control.words, CB_FRAME_REQ) })

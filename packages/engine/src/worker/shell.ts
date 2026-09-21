@@ -193,6 +193,9 @@ export function runBlockingLoop(
     control.waitForWake(index, last, timeoutMs())
     if (shell.stopped()) return
     if (Atomics.load(control.words, workerWord(index, W_YIELD))) break
+    // `waitForWake` itself returns nothing (`sab/control.ts`'s own doc comment: this is a
+    // redundant-call removal, not the fix for the cost that method's own comment documents). Same
+    // word, same address `waitForWake` just waited on.
     last = Atomics.load(control.words, workerWord(index, W_WAKE))
     if (!runBodyOnce(shell, body, last)) return
   }

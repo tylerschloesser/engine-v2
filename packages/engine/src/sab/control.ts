@@ -77,14 +77,30 @@ export class ControlBlock {
   }
 
   /**
-   * Consumer side: block until the wake word differs from `last`, or `timeoutMs` elapses.
-   * Returns the word's current value (the next `last` to pass in). Cannot lose a wake-up: if
-   * `wake()` already ran between the caller's own load and this call, `Atomics.wait` sees the
-   * mismatch and returns immediately instead of blocking.
+   * Consumer side: block until the wake word differs from `last`, or `timeoutMs` elapses. Cannot
+   * lose a wake-up: if `wake()` already ran between the caller's own load and this call,
+   * `Atomics.wait` sees the mismatch and returns immediately instead of blocking.
+   *
+   * Deliberately returns nothing (docs/plan/11-camera-and-input.md step 7, Deviations, "fix 1"):
+   * `runBlockingLoop` used to discard this method's own return value and then re-read the same
+   * word a second time with its own separate `Atomics.load` one line later -- a genuine redundant
+   * native call on every single wake, removed here (the caller now does the one load it always
+   * needed anyway).
+   *
+   * That redundancy is *not* the fix for the cost this range actually chased: `client`'s own
+   * `bytesPerFrame` under a sibling `object`/`burst` control attributes a fixed ~13.5 KB over the
+   * 600-frame window to `waitForWake` by name, unchanged before and after this method stopped
+   * calling `Atomics.load` (or returning anything) at all -- measured, not guessed, by reducing
+   * this method to the bare `Atomics.wait` call alone and re-running the identical scenario. The
+   * cost is therefore inside `Atomics.wait` itself on the path where it genuinely blocks and is
+   * later woken by another thread's `Atomics.notify` (as opposed to the fast "already differs"
+   * path, which `gen0` -- woken and re-checked before `main` ever falls behind -- takes throughout
+   * and never shows this on), not in any surrounding JS this range's own code owns. Left in place
+   * as a real, safe cleanup on its own merits (one native call instead of two, every wake, forever)
+   * while the underlying cost is reported rather than chased further inside a JS engine's own
+   * blocking-primitive implementation.
    */
-  waitForWake(index: number, last: number, timeoutMs: number): number {
-    const at = workerWord(index, W_WAKE)
-    Atomics.wait(this.words, at, last, timeoutMs)
-    return Atomics.load(this.words, at)
+  waitForWake(index: number, last: number, timeoutMs: number): void {
+    Atomics.wait(this.words, workerWord(index, W_WAKE), last, timeoutMs)
   }
 }
