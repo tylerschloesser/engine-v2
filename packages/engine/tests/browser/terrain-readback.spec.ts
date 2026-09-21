@@ -488,6 +488,146 @@ test('terrain: magnified texel exact', async ({ page }, testInfo) => {
   expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
 })
 
+// M09b step 3 (docs/plan/09b-terrain-art-and-lifecycle.md): stateless edge dithering.
+
+const PRIO_LOW_VISUAL = 7
+const PRIO_HIGH_VISUAL = 8
+const PRIO_LOW: readonly [number, number, number, number] = [90, 90, 90, 255]
+const PRIO_HIGH: readonly [number, number, number, number] = [220, 20, 60, 255]
+
+/** Chunk (0, 0) is flat `PRIO_LOW_VISUAL` (priority 1, band 2), chunk (1, 0) is flat
+ * `PRIO_HIGH_VISUAL` (priority 2, band 2) -- `includeNeighbour` controls whether chunk (1, 0)'s own
+ * indirection entry is ever staged (`terrain.missing_neighbour_is_self`). */
+async function stageDitherScene(
+  page: import('@playwright/test').Page,
+  includeNeighbour: boolean,
+): Promise<void> {
+  await page.evaluate(async () => {
+    await (window.__terrain as Terrain).loadArt('/terrain/tiles.json')
+  })
+  await page.evaluate(
+    ([lowChunk, highChunk, includeNeighbour]) => {
+      const t = window.__terrain as Terrain
+      t.writePageChunk(0, lowChunk)
+      t.writePageChunk(1, highChunk)
+      const entries: { x: number; y: number; value: number }[] = [{ x: 0, y: 0, value: 0 }]
+      if (includeNeighbour) entries.push({ x: 1, y: 0, value: 1 })
+      t.writeIndir(entries)
+    },
+    [flatChunk(PRIO_LOW_VISUAL), flatChunk(PRIO_HIGH_VISUAL), includeNeighbour] as const,
+  )
+}
+
+// texels_per_px === 1 (fully magnified, fade === 1): the band=2 dithering zone spans art texels 2
+// and 3 (dist_right 1 and 0); texels 0 and 1 (dist_right 3 and 2) are outside it.
+const DITHER_TILES_PER_PX = 1 / ART_SIZE
+// Tiles 31/32 straddle the chunk (0,0)/(1,0) border (`CHUNK_BITS === 5`, docs/plan/
+// 09-renderer-terrain.md Planning decisions), matching `stageDitherScene`'s own chunk-index
+// indirection entries (`x: 0`/`x: 1`) -- an adjacent-tile *within* one chunk (e.g. tiles 0/1) would
+// never reach the neighbouring chunk's own staged visual at all.
+const SELF_TILE_X = 31
+const NEIGHBOUR_TILE_X = 32
+
+async function ditherProbe(
+  page: import('@playwright/test').Page,
+  tileX: number,
+  texelX: number,
+  texelY: number,
+  tilesPerPx: number,
+): Promise<PixelBuffer> {
+  return renderBorderScene(
+    page,
+    microCamera({
+      camTileX: tileX,
+      camTileY: 0,
+      camFracX: texelFrac(texelX),
+      camFracY: texelFrac(texelY),
+      tilesPerPx,
+    }),
+  )
+}
+
+test('terrain: dither only inside band', async ({ page }, testInfo) => {
+  await openPage(page, '/terrain.html')
+  const init = await page.evaluate(() => window.__terrain?.init())
+  expectAdapter(testInfo, init?.adapterInfo ?? null)
+  await stageDitherScene(page, true)
+
+  // Tile (0, 0) is the lower-priority visual: its own centre (art texels 0 and 1, dist_right 3 and
+  // 2 -- outside the band, since band is 2) never dithers. (`missing_neighbour_is_self` below:
+  // texel 0/1's own *nearest* edge is actually left/top, at distance 0 -- but that neighbour is
+  // never staged either, so it falls back to self regardless.)
+  expectPixel(await ditherProbe(page, SELF_TILE_X, 0, 0, DITHER_TILES_PER_PX), 0, 0, PRIO_LOW, TOL)
+  expectPixel(await ditherProbe(page, SELF_TILE_X, 1, 0, DITHER_TILES_PER_PX), 0, 0, PRIO_LOW, TOL)
+  // Art texel 2, rows 1 and 2 (dist_right 1, coverage 0.5; rows 0 and 3 are closer to the tile's own
+  // top/bottom edge than to its right edge, Deviations, so they are not usable here): row 2's Bayer
+  // value (1/16) is under coverage, row 1's (14/16) is not -- the checkerboard-like partial coverage
+  // the Bayer matrix is for.
+  expectPixel(await ditherProbe(page, SELF_TILE_X, 2, 1, DITHER_TILES_PER_PX), 0, 0, PRIO_LOW, TOL)
+  expectPixel(await ditherProbe(page, SELF_TILE_X, 2, 2, DITHER_TILES_PER_PX), 0, 0, PRIO_HIGH, TOL)
+  // Art texel 3, row 0 (dist_right 0, coverage 1.0: every possible Bayer value is under it -- and
+  // the tie with the top edge, also at distance 0, resolves to "right" since it is checked first).
+  expectPixel(await ditherProbe(page, SELF_TILE_X, 3, 0, DITHER_TILES_PER_PX), 0, 0, PRIO_HIGH, TOL)
+
+  // Tile (1, 0) is the higher-priority visual: its neighbour (tile (0, 0)) has *lower* priority, so
+  // the comparison never fires, even deep inside its own band.
+  expectPixel(
+    await ditherProbe(page, NEIGHBOUR_TILE_X, 0, 0, DITHER_TILES_PER_PX),
+    0,
+    0,
+    PRIO_HIGH,
+    TOL,
+  )
+  expectPixel(
+    await ditherProbe(page, NEIGHBOUR_TILE_X, 1, 1, DITHER_TILES_PER_PX),
+    0,
+    0,
+    PRIO_HIGH,
+    TOL,
+  )
+
+  expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
+})
+
+test('terrain: missing neighbour is self', async ({ page }, testInfo) => {
+  await openPage(page, '/terrain.html')
+  const init = await page.evaluate(() => window.__terrain?.init())
+  expectAdapter(testInfo, init?.adapterInfo ?? null)
+  await stageDitherScene(page, false) // chunk (1, 0)'s indirection cell is never written: stays NONE
+
+  // Every position that showed the neighbour's colour in the test above shows self instead: a
+  // missing neighbour reads as this tile's own visual (0018 §3: "a missing neighbour counts as same
+  // as self"), so the priority comparison never fires -- and nothing reads as `NEUTRAL_COLOR`
+  // either (that sentinel is only for the *primary* tile's own missing chunk).
+  expectPixel(await ditherProbe(page, SELF_TILE_X, 2, 1, DITHER_TILES_PER_PX), 0, 0, PRIO_LOW, TOL)
+  expectPixel(await ditherProbe(page, SELF_TILE_X, 2, 2, DITHER_TILES_PER_PX), 0, 0, PRIO_LOW, TOL)
+  expectPixel(await ditherProbe(page, SELF_TILE_X, 3, 0, DITHER_TILES_PER_PX), 0, 0, PRIO_LOW, TOL)
+
+  expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
+})
+
+test('terrain: dither fades when minified', async ({ page }, testInfo) => {
+  await openPage(page, '/terrain.html')
+  const init = await page.evaluate(() => window.__terrain?.init())
+  expectAdapter(testInfo, init?.adapterInfo ?? null)
+  await stageDitherScene(page, true)
+
+  // Control: at the immediate edge (art texel 3, dist_right 0, coverage 1.0 when fully faded in),
+  // fully magnified still dithers (matches the test above).
+  const magnified = await ditherProbe(page, SELF_TILE_X, 3, 0, DITHER_TILES_PER_PX)
+  expectPixel(magnified, 0, 0, PRIO_HIGH, TOL)
+
+  // Deep in the fade-out zone (Scope: "fade-out of dither and jitter below 1 screen px per art
+  // texel"): `texels_per_px` = 8 * `ART_SIZE` = 32, `coverage` = 1.0 / 32 ≈ 0.03 -- under every
+  // possible Bayer value at this Bayer column (10/16, 6/16, 9/16, 5/16), so the same position now
+  // shows self instead.
+  const FAR_TILES_PER_PX = 8
+  const minified = await ditherProbe(page, SELF_TILE_X, 3, 0, FAR_TILES_PER_PX)
+  expectPixel(minified, 0, 0, PRIO_LOW, TOL)
+
+  expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
+})
+
 test('terrain: minified converges to mean', async ({ page }, testInfo) => {
   await openPage(page, '/terrain.html')
   const init = await page.evaluate(() => window.__terrain?.init())
