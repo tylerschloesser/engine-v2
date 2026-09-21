@@ -563,3 +563,71 @@ full and confirming ADR 0026's bet (CI, not `pnpm test`, is what proves this now
 run. `plugin-dev: touch triggers rebuild and full-reload` passed -- recursive `fs.watch` works on
 Linux, M02b's `watchCrate` needs no per-directory fallback. Both recorded in `docs/plan/
 deferred-ledger.md`.
+
+### Run 35619437805 (`9fcc512`): both prior fixes worked, two new failures surfaced behind them
+
+Slow-tier `browser` dropped to 24 tests (was 25) -- the WebKit exclusion took. The temp-crate
+toolchain fix took too (no more `1.98.1`/missing-target errors anywhere in the log). Two different
+failures, both diagnosed from the downloaded artifact (`gh run download 35619437805 -n
+test-results`) before acting, neither re-derived from scratch.
+
+**1. `[gc] echo neg burst client @slow` -- `Test timeout of 30000ms exceeded`, real GC work, not a
+byte failure.** Measured from `browser/report.json`'s own per-test durations (`gc` project,
+`--workers 3`, the same concurrency CI always uses): `echo`/`terrain neg burst main` both
+**29,893 ms** (right at the previous 30 s default), `terrain neg burst gen0` **28,996 ms**,
+`terrain neg burst client` **26,643 ms**, `echo neg burst sim` **25,459 ms** -- and `echo neg burst
+client` itself **`timedOut` at 30,655 ms**, the only one to actually cross the line. Local baseline
+for the same 19 burst tests (`--workers 1`, this Mac, no contention): 1.1-2.7 s each. The CI/local
+ratio is not a flat 5.4x here -- it ranges roughly 3x to 19x per test depending on which others
+happen to run concurrently in the same 3-worker batch (`terrain neg burst main`: 1.6 s -> 29.9 s,
+~18.7x; `gen neg burst main`: 1.2 s -> 4.6 s, ~3.8x) -- CPU contention among 3 parallel
+allocation-heavy browsers on the runner, not a uniform hardware-speed multiplier. Not "many
+minutes": every measured duration, including the one that timed out, stayed under 31 s: `echo
+client`'s own siblings on the identical page (no WebGPU at all) topped out at 29.9 s under the same
+conditions, so its own true completion time is estimated at roughly 30-35 s, not a different order
+of magnitude.
+
+**Fix, CI-scoped, per ADR 0020 §10's own "wall clock recorded, never gating in CI" policy applied to
+where it was missing** (`playwright.config.ts`): `gcTimeoutMs = process.env.ENGINE_GPU ===
+'swiftshader' ? 90_000 : 30_000`, applied only to the `gc` project's own `timeout`. 90 s: roughly
+3x the worst *passing* CI duration (29.9 s) and comfortable margin over the timed-out test's own
+~30-35 s estimate -- not a round number chosen to just clear 30,655 ms, a multiple of the measured
+worst case with real headroom. Local runs are unaffected (`ENGINE_GPU` unset there); a genuine local
+hang still fails at 30 s.
+
+**2. `wasm runner exited 1 without a parseable report` -- and the report was fine.** Downloaded
+`wasm/report.json`: `success: true`, `numFailedTests: 0`, 3 passed, 32 skipped (the fast-tier tests,
+correctly filtered out by tag) -- every slow-tier `wasm` test (`plugin-build`, `worldgen-bench`,
+`plugin: rustc error reaches overlay`) passed. `wasm/output.log` held exactly one line, Vitest's own
+JSON-reporter confirmation (`JSON report written to ...`, verified as Vitest's own built-in message
+by grepping its own bundled `dist/chunks/*.js`, not anything `scripts/test.mjs` prints) -- nothing
+else, no stack trace, no unhandled-rejection notice. **The runner's own message was simply false**:
+`scripts/lib/adapters.mjs`'s shared `fromReport()` (used by `nextest` and `vitest`) and the
+`playwright` adapter's own parallel `parse()` both pushed the identical "without a parseable
+report" failure whenever `exitCode !== 0 && result.failures.length === 0`, regardless of whether a
+report had in fact parsed cleanly -- the `parsed` flag `playwright`'s own function already tracked
+was simply never read for the message text, and `fromReport()` didn't track one at all. **Fixed**:
+both now say `runner exited N after a parseable report showed 0 failures` when a report *did*
+parse with zero recorded failures, keeping `without a parseable report` for when one genuinely
+didn't. Two new unit tests (`adapters.test.mjs`): one on `vitest`'s `fromReport`-based path (the
+exact shape of this finding), one on `playwright`'s own parallel path; both assert the corrected
+message text. `pnpm test unit -t adapter`: 11/11 (was 9).
+
+**Root cause of the non-zero exit itself: investigated, not conclusively found.** Checked whether
+#2 reproduces locally under `pnpm test:slow wasm` before assuming Linux-only, per instruction: it
+does not, across 4 consecutive local runs (this Mac). Read all three slow-tier `wasm` test files'
+own `beforeAll`/`afterAll` cleanup (`plugin-build.test.ts`, `worldgen-bench.test.ts`,
+`plugin-rebuild-error.test.ts`) for an unawaited promise or an unclosed server/watcher that could
+reject after a test file's own tests already recorded as passed -- found nothing definitive in any
+of the three. This session's own change to `plugin-rebuild-error.test.ts` (copying `rust-
+toolchain.toml` into the temp crate) runs inside `beforeAll`, not `afterAll`: a failure there would
+fail the test itself, not produce a clean pass with a non-zero process exit, so it is an unlikely
+cause, though not proven impossible. The evidence (a report that parsed as fully passing, an exit
+code of 1, and a log with no stack trace or signal notice) is consistent with Vitest's own
+documented behaviour: an unhandled rejection or exception occurring *outside* the awaited test
+lifecycle (after a file's own `afterAll` already resolved) sets the process exit code without going
+through the reporter's own recorded-failures list, and with only the `--reporter=json` reporter
+active (no `default` alongside it), whatever console output Vitest would otherwise print for that
+case has nowhere configured to land. This is the leading hypothesis, not a finding: unconfirmed
+without a Linux reproduction, which this session could not get. If it recurs, the corrected message
+above will at least say so accurately instead of pointing at the wrong thing.
