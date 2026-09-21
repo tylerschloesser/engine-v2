@@ -124,6 +124,14 @@ impl<G: Game> Store<G> {
                     slot.online = *online;
                 }
             }
+            Delta::Ack { who, seq } => {
+                // Same no-slot convention as `Roster` (docs/plan/12b-world-access-and-sim-
+                // driver.md Deviations): `apply` never fails, so a missing slot is a harmless,
+                // idempotent no-op rather than a panic.
+                if let Some(slot) = self.players.get_mut(who) {
+                    slot.last_seq = *seq;
+                }
+            }
         }
     }
 
@@ -156,6 +164,21 @@ impl<G: Game> Store<G> {
     /// `state`, but the host's ack/roster paths need the rest.
     pub fn player_slot(&self, who: PlayerId) -> Result<&PlayerSlot<G>, Unknown> {
         self.players.get(&who).ok_or(Unknown)
+    }
+
+    /// `TickCx::player_count` (M12b): the player table's size, for index-based iteration (Planning
+    /// decisions of docs/plan/12b-world-access-and-sim-driver.md: "index-based so rules can write
+    /// while iterating").
+    pub fn player_count(&self) -> usize {
+        self.players.len()
+    }
+
+    /// `TickCx::player_id_at` (M12b): the `i`th player in ascending `PlayerId` order (`BTreeMap`'s
+    /// own iteration order, matching 0022 §1's `Ord`). The player table holds tens of rows
+    /// (Planning decisions: "no wheel... `tick` scans it"), so this linear scan is not a budget
+    /// concern.
+    pub fn player_id_at(&self, i: usize) -> Option<PlayerId> {
+        self.players.keys().nth(i).copied()
     }
 
     pub fn entity(&self, id: EntityId) -> Option<&G::Entity> {

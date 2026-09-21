@@ -80,11 +80,11 @@ pub enum PlayerEvent {
 pub trait Presence: Codec + Copy + 'static {}
 impl Presence for () {}
 
-/// Shell (M12b/M21b give it fields and a `WorldWrite` impl, 0003: "`TickCx` is a `WorldWrite` plus
-/// iteration over active entities", 0007 §7): the write context `Game::tick` receives. HOST ONLY.
-pub struct TickCx<'a, G: Game> {
-    _marker: core::marker::PhantomData<&'a mut G>,
-}
+/// The write context `Game::tick` receives (0003: "`TickCx` is a `WorldWrite` plus iteration over
+/// active entities", 0007 §7), built and filled in by M12b (`crate::authority::TickCx`, minimal:
+/// player iteration only; M21b adds wake/timer/active-list methods). HOST ONLY. Re-exported here
+/// because `Game::tick`'s own signature names it at this path.
+pub use crate::authority::TickCx;
 
 /// Shell (M16b/M18 give it fields, 0019): the per-client-frame context `ClientSide::frame`
 /// receives (the camera block, the spring, input events; `cx.follow(..)`).
@@ -118,14 +118,15 @@ pub struct OldStore {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct SaveIncompatible;
 
-/// Shell (M12b): every world read, object-safe so a handler compiles once against `&dyn
-/// WorldRead<G>` (0003: "`dyn` is deliberate ... relies on trait-object upcasting"). Empty until
-/// M12b adds `tile`/`traits_at`/`entity_at`/`entity`/`player`/`global`.
-pub trait WorldRead<G: Game> {}
+/// Every world read, object-safe so a handler compiles once against `&dyn WorldRead<G>` (0003:
+/// "`dyn` is deliberate ... relies on trait-object upcasting"). Built by M12b
+/// (`crate::world_access`); re-exported here because `Game`'s own method signatures name it at
+/// this path.
+pub use crate::world_access::WorldRead;
 
-/// Shell (M12b): every world write, one `Delta` per put (0011). Empty until M12b adds
-/// `set_tile`/`spawn`/`put_entity`/`despawn`/`put_player`/`put_global`/`rng`.
-pub trait WorldWrite<G: Game>: WorldRead<G> {}
+/// Every world write, one `Delta` per put (0011). Built by M12b (`crate::world_access`);
+/// re-exported here for the same reason as [`WorldRead`].
+pub use crate::world_access::WorldWrite;
 
 /// The game-facing API (0003 Decision). A game author implements this once; the engine derives
 /// deltas, hashing, snapshots and replay from it (0011, 0005).
