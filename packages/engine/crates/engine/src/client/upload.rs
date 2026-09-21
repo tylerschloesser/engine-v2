@@ -92,10 +92,13 @@ fn chunk_dist_sq(a: ChunkCoord, b: ChunkCoord) -> i64 {
 }
 
 /// The client-role uploader (Provides of docs/plan/09-renderer-terrain.md). `C: ClientSide<G>` is
-/// called generically (`C::tile_visual`, static, no instance): `G` defaults to `()` so a fixture
-/// with no `Game` yet (M09 runs before M12) can write `impl ClientSide for Fixture {}` and use
-/// `Uploader<Fixture>` directly.
-pub struct Uploader<C: ClientSide<G>, G = ()> {
+/// called generically (`C::tile_visual`, static, no instance). M12 adds the `G: Game` bound to
+/// `ClientSide` (docs/plan/12-store-and-game-trait.md Scope), which forces a concrete `G` here
+/// too: `G`'s own default of `()` predates M12 and is dropped along with `ClientSide`'s, since
+/// `(): Game` does not hold. A caller with no real game yet (a low-level fixture) names a local,
+/// unreachable `Game` shell -- see `fixtures/terrain`'s `NoGame` -- purely to satisfy this bound;
+/// `Uploader` never reads anything through `G` itself.
+pub struct Uploader<C: ClientSide<G>, G: crate::game::Game> {
     dims: ChunkDims,
     /// One bit per cache slot: "texels currently on the GPU" (Planning decisions "Which chunks
     /// upload").
@@ -130,7 +133,7 @@ pub struct Uploader<C: ClientSide<G>, G = ()> {
 /// 121 subscribed chunks at the view bound).
 const MAX_CANDIDATES: usize = 256;
 
-impl<C: ClientSide<G>, G> Uploader<C, G> {
+impl<C: ClientSide<G>, G: crate::game::Game> Uploader<C, G> {
     /// Fails fast (Planning decisions "`CHUNK_BITS` is 5 here") rather than producing
     /// wrongly-shaped `CHUNK` records at some other edge.
     pub fn new(dims: ChunkDims) -> Self {
@@ -419,7 +422,9 @@ fn write_header(out: &mut [u8], kind: u16, slot: u16, count: u16, seq: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::{CacheCapacity, PristineSource};
+    use crate::game::{Game, PlayerEvent, PlayerId, TickCx, Unknown, WorldWrite};
+    use crate::world::{CacheCapacity, PristineSource, PrototypeId};
+    use crate::worldgen::Worldgen;
 
     struct FixedSource;
     impl PristineSource for FixedSource {
@@ -428,8 +433,59 @@ mod tests {
         }
     }
 
+    /// A trivial `Worldgen`/`Game` pair, named only so `Fixture: ClientSide<G>` (below) has a
+    /// concrete `G: Game` to satisfy `Uploader`'s bound (docs/plan/12-store-and-game-trait.md
+    /// Scope): never driven (no `apply`/`tick`/`genesis` call in this file).
+    struct NoGen;
+    impl Worldgen for NoGen {
+        type Params = ();
+        const WORLDGEN_VERSION: u32 = 0;
+        fn generate(_seed: u64, _params: &(), _chunk: ChunkCoord, out: &mut [Tile]) {
+            out.fill(Tile::VOID);
+        }
+    }
+
+    #[derive(
+        Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, ts_rs::TS,
+    )]
+    struct NoReject;
+    impl From<Unknown> for NoReject {
+        fn from(_: Unknown) -> Self {
+            NoReject
+        }
+    }
+
+    struct NoGame;
+    impl Game for NoGame {
+        const SCHEMA_VERSION: u32 = 0;
+        type Worldgen = NoGen;
+        type Action = ();
+        type Reject = NoReject;
+        type Entity = ();
+        type Player = ();
+        type Global = ();
+        type Presence = ();
+        type Ui = ();
+        type Client = ();
+
+        fn register(_r: &mut crate::world::Registry) {}
+        fn prototype(_e: &()) -> PrototypeId {
+            unimplemented!("NoGame has no entities")
+        }
+        fn anchor(_e: &()) -> TilePos {
+            unimplemented!("NoGame has no entities")
+        }
+        fn genesis(_w: &mut dyn WorldWrite<Self>) {}
+        fn on_player(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _ev: PlayerEvent) {}
+        fn apply(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _a: &()) -> Result<(), NoReject> {
+            Ok(())
+        }
+        fn tick(_cx: &mut TickCx<'_, Self>) {}
+    }
+
+    #[derive(Default)]
     struct Fixture;
-    impl ClientSide for Fixture {}
+    impl ClientSide<NoGame> for Fixture {}
 
     fn store(capacity: u32) -> TerrainStore {
         TerrainStore::new(
@@ -464,7 +520,7 @@ mod tests {
     #[cfg(feature = "testing")]
     #[test]
     fn record_layout_golden() {
-        let mut up = Uploader::<Fixture>::new(ChunkDims::new(5));
+        let mut up = Uploader::<Fixture, NoGame>::new(ChunkDims::new(5));
         let s = store(16);
         s.materialize(ChunkCoord::new(0, 0));
         let cam = camera_at(0.0, 0.0);
@@ -477,7 +533,7 @@ mod tests {
 
     #[test]
     fn stage_respects_max() {
-        let mut up = Uploader::<Fixture>::new(ChunkDims::new(5));
+        let mut up = Uploader::<Fixture, NoGame>::new(ChunkDims::new(5));
         let s = store(64);
         materialize_grid(&s);
         up.on_frame(&camera_wide(0.0, 0.0), &s);
@@ -488,7 +544,7 @@ mod tests {
 
     #[test]
     fn indir_after_chunk() {
-        let mut up = Uploader::<Fixture>::new(ChunkDims::new(5));
+        let mut up = Uploader::<Fixture, NoGame>::new(ChunkDims::new(5));
         let s = store(64);
         materialize_grid(&s);
         up.on_frame(&camera_wide(0.0, 0.0), &s);
@@ -539,7 +595,7 @@ mod tests {
 
     #[test]
     fn eviction_clears_bit_and_queues_indir_none() {
-        let mut up = Uploader::<Fixture>::new(ChunkDims::new(5));
+        let mut up = Uploader::<Fixture, NoGame>::new(ChunkDims::new(5));
         let s = store(1); // capacity 1: the second chunk read evicts the first
         s.materialize(ChunkCoord::new(0, 0));
         s.materialize(ChunkCoord::new(5, 5)); // evicts (0,0)
@@ -555,7 +611,7 @@ mod tests {
 
     #[test]
     fn patch_dropped_when_chunk_no_longer_resident() {
-        let mut up = Uploader::<Fixture>::new(ChunkDims::new(5));
+        let mut up = Uploader::<Fixture, NoGame>::new(ChunkDims::new(5));
         let s = store(16);
         s.materialize(ChunkCoord::new(0, 0));
         up.patch_tile(TilePos::new(1, 1), Tile::new(9, 9, 9));
@@ -580,7 +636,7 @@ mod tests {
     /// splits every record across its own `stage()` call.
     #[test]
     fn evicted_slot_reuse_restages() {
-        let mut up = Uploader::<Fixture>::new(ChunkDims::new(5));
+        let mut up = Uploader::<Fixture, NoGame>::new(ChunkDims::new(5));
         let s = store(1); // capacity 1: materializing a second chunk evicts the first
         let old_chunk = ChunkCoord::new(0, 0);
         let new_chunk = ChunkCoord::new(5, 5);

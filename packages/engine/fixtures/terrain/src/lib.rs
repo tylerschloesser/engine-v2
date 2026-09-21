@@ -17,7 +17,10 @@
 use engine::abi::{Instance, RegionId, RegionLayout, Role, Status};
 use engine::client::upload::RECORD_BYTES;
 use engine::client::{CameraBlock, ClientSide, InputEvent, InputQueue, TerrainFeed, Uploader};
-use engine::world::{CacheCapacity, ChunkCoord, ChunkDims, TerrainStore, Tile};
+use engine::game::{Game, PlayerEvent, PlayerId, TickCx, Unknown, WorldWrite};
+use engine::world::{
+    CacheCapacity, ChunkCoord, ChunkDims, PrototypeId, Registry, TerrainStore, Tile, TilePos,
+};
 use engine::worldgen::{GenCore, Pristine, Worldgen};
 
 /// Matches `worker/client-upload.ts`'s own `UPLOAD_BATCH_MAX` (docs/plan/09-renderer-terrain.md
@@ -54,7 +57,7 @@ enum FixtureRole {
     Client {
         terrain: Box<TerrainStore>,
         feed: TerrainFeed,
-        uploader: Box<Uploader<FixtureTerrain>>,
+        uploader: Box<Uploader<Vis, NoGame>>,
         // Boxed like `terrain`/`uploader` above: `InputQueue`'s fixed 64-record array is large
         // enough to trip clippy's `large_enum_variant` against `FixtureRole::Gen`'s own size.
         input_queue: Box<InputQueue>,
@@ -86,7 +89,55 @@ impl Worldgen for FixtureTerrain {
     }
 }
 
-impl ClientSide for FixtureTerrain {}
+/// A trivial `Game`, named only so `Vis: ClientSide<G>` below has a concrete `G: Game` to satisfy
+/// `Uploader`'s bound (docs/plan/12-store-and-game-trait.md Scope: `ClientSide<G: Game>` replaces
+/// M09's unbounded, defaulted `G`). This fixture implements no `Sim` role (`Role::Sim` is rejected
+/// in `Instance::init` below), so none of `NoGame`'s required methods is ever called; `Worldgen`
+/// reuses `FixtureTerrain`'s own impl above rather than duplicating it.
+struct NoGame;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+struct NoReject;
+impl From<Unknown> for NoReject {
+    fn from(_: Unknown) -> Self {
+        NoReject
+    }
+}
+
+impl Game for NoGame {
+    const SCHEMA_VERSION: u32 = 0;
+    type Worldgen = FixtureTerrain;
+    type Action = ();
+    type Reject = NoReject;
+    type Entity = ();
+    type Player = ();
+    type Global = ();
+    type Presence = ();
+    type Ui = ();
+    type Client = ();
+
+    fn register(_r: &mut Registry) {}
+    fn prototype(_e: &()) -> PrototypeId {
+        unimplemented!("NoGame has no entities")
+    }
+    fn anchor(_e: &()) -> TilePos {
+        unimplemented!("NoGame has no entities")
+    }
+    fn genesis(_w: &mut dyn WorldWrite<Self>) {}
+    fn on_player(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _ev: PlayerEvent) {}
+    fn apply(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _a: &()) -> Result<(), NoReject> {
+        Ok(())
+    }
+    fn tick(_cx: &mut TickCx<'_, Self>) {}
+}
+
+/// The `ClientSide<NoGame>` implementor `Uploader` calls `tile_visual` through: kept separate from
+/// `FixtureTerrain` because `ClientSide<G>: Default` (0003) and `FixtureTerrain` has no sensible
+/// default (its `Gen`/`Client` roles are built from `Instance::init`'s arguments). Uses the
+/// inherited default `tile_visual` (identity table): see the module doc comment.
+#[derive(Default)]
+struct Vis;
+impl ClientSide<NoGame> for Vis {}
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -137,7 +188,7 @@ impl Instance for FixtureTerrain {
                     CacheCapacity::Chunks(cfg.client_cache_chunks.unwrap_or(CLIENT_CACHE_CHUNKS)),
                 );
                 let feed = TerrainFeed::new(dims, cfg.gen_workers);
-                let uploader = Box::new(Uploader::<FixtureTerrain>::new(dims));
+                let uploader = Box::new(Uploader::<Vis, NoGame>::new(dims));
                 Ok(FixtureTerrain {
                     role: FixtureRole::Client {
                         terrain: Box::new(terrain),

@@ -16,6 +16,10 @@ testing = []
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 postcard = { version = "1", default-features = false, features = ["alloc"] }
+# `Game::Action`/`Reject`/`Worldgen::Params`/`Ui` (0003): type-only until M17 wires the actual
+# `cargo test export_bindings` step that writes `bindings/*.ts` into a game package (0017 §7:
+# "nothing of it is reachable from an export, so LTO removes it; the size test watches this").
+ts-rs = "12"
 
 # Dev-dependencies are unrestricted (0017 §7). `wgsl.terrain_validates` (docs/plan/
 # 09-renderer-terrain.md Planning decisions "Bind group layout") parses and validates every

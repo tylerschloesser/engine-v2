@@ -9,6 +9,7 @@
 
 use core::cell::UnsafeCell;
 
+use crate::game::{DrawList, FrameCx, FrameView, Game};
 use crate::world::{Registry, Tile};
 
 /// GPU texel for one tile: `r` = base-layer visual id, `g` = resource-layer visual id (0 = none).
@@ -87,28 +88,108 @@ pub fn install_visual_tables(registry: &Registry) {
     }
 }
 
-/// The client-side rendering hooks a game may override (0018 §2, 0003's `ClientSide<G>`). `G` is
-/// unbounded here: M09 runs before M12's `Game` trait, and `Uploader` (`client/upload.rs`) only
-/// needs this one method, called generically as `C::tile_visual`. M12 adds the `G: Game` bound,
-/// `Game::Client` and the remaining methods of 0018 §2 as empty-default shells for M16b-M18 to
-/// fill, so fixtures written against this trait keep compiling unchanged.
-pub trait ClientSide<G = ()> {
+/// The client-side rendering hooks a game may override (0018 §2, 0003's `ClientSide<G>`). M09
+/// landed this with an unbounded, defaulted `G` (`ClientSide<G = ()>`) and one method,
+/// `tile_visual`, because M09 ran before M12's `Game` trait existed. M12 extends it in place: the
+/// `G: Game` bound and `Default` supertrait (0003, verbatim) replace the `= ()` default -- a
+/// defaulted, unconstrained `G` and a `G: Game` bound cannot coexist on the same parameter -- and
+/// `frame`/`extract`/`ui` join `tile_visual` with no-op defaults (docs/plan/12-store-and-game-
+/// trait.md Planning decisions "Shell types now, not later"), so `impl<G: Game> ClientSide<G> for
+/// ()` below lets a fixture write `type Client = ();`. `frame`, `extract` and `ui` are themselves
+/// shells: `FrameCx`/`FrameView`/`DrawList` (`crate::game`) grow fields in M16b-M18, at which point
+/// a real game overrides these bodies; nothing here changes when they do.
+pub trait ClientSide<G: Game>: Default {
+    /// Reads the camera block (the spring) and input events; `cx.follow(..)` (0019). No-op by
+    /// default.
+    fn frame(&mut self, _cx: &mut FrameCx<G>, _presence: &mut G::Presence) {}
+
+    /// Called once per frame after `frame` (0018 §2). No-op by default: draws nothing.
+    fn extract(&self, _view: &FrameView<G>, _out: &mut DrawList) {}
+
     /// Table lookup by default; a game overrides it to show `aux` instead (e.g. depletion).
     /// Called on chunk load/patch, never per frame (0018 §3).
     fn tile_visual(t: Tile) -> TileTexel {
         TileTexel::from_tables(t)
     }
+
+    /// What the DOM overlay observes (0003). No-op by default: leaves `out` unchanged.
+    fn ui(&self, _view: &FrameView<G>, _out: &mut G::Ui) {}
 }
+
+impl<G: Game> ClientSide<G> for () {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::Unknown;
+    use crate::world::PrototypeId;
+    use crate::worldgen::Worldgen;
 
+    /// The trivial `Worldgen`/`Game` pair this test module needs only to name a `G: Game` for
+    /// `ClientSide<G>` -- never driven (no `apply`/`tick`/`genesis` call in this file).
+    struct NoGen;
+    impl Worldgen for NoGen {
+        type Params = ();
+        const WORLDGEN_VERSION: u32 = 0;
+        fn generate(_seed: u64, _params: &(), _chunk: crate::world::ChunkCoord, out: &mut [Tile]) {
+            out.fill(Tile::VOID);
+        }
+    }
+
+    #[derive(
+        Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, ts_rs::TS,
+    )]
+    struct NoReject;
+    impl From<Unknown> for NoReject {
+        fn from(_: Unknown) -> Self {
+            NoReject
+        }
+    }
+
+    struct NoGame;
+    impl Game for NoGame {
+        const SCHEMA_VERSION: u32 = 0;
+        type Worldgen = NoGen;
+        type Action = ();
+        type Reject = NoReject;
+        type Entity = ();
+        type Player = ();
+        type Global = ();
+        type Presence = ();
+        type Ui = ();
+        type Client = ();
+
+        fn register(_r: &mut Registry) {}
+        fn prototype(_e: &()) -> PrototypeId {
+            unimplemented!("NoGame has no entities")
+        }
+        fn anchor(_e: &()) -> crate::world::TilePos {
+            unimplemented!("NoGame has no entities")
+        }
+        fn genesis(_w: &mut dyn crate::game::WorldWrite<Self>) {}
+        fn on_player(
+            _w: &mut dyn crate::game::WorldWrite<Self>,
+            _who: crate::game::PlayerId,
+            _ev: crate::game::PlayerEvent,
+        ) {
+        }
+        fn apply(
+            _w: &mut dyn crate::game::WorldWrite<Self>,
+            _who: crate::game::PlayerId,
+            _a: &(),
+        ) -> Result<(), NoReject> {
+            Ok(())
+        }
+        fn tick(_cx: &mut crate::game::TickCx<'_, Self>) {}
+    }
+
+    #[derive(Default)]
     struct DefaultClient;
-    impl ClientSide for DefaultClient {}
+    impl ClientSide<NoGame> for DefaultClient {}
 
+    #[derive(Default)]
     struct DepletionClient;
-    impl ClientSide for DepletionClient {
+    impl ClientSide<NoGame> for DepletionClient {
         fn tile_visual(t: Tile) -> TileTexel {
             // aux != 0 means "depleted": swap in a fixed aux-derived visual instead of the table.
             if t.aux() != 0 {
