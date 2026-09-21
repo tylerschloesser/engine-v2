@@ -669,3 +669,32 @@ rests on this and has not yet been shown to work, only argued to. Addressed next
 pushing `unit` (3 s unscaled budget, cheapest target) past 3 s but nowhere near its scaled 3,000 s,
 checked with a real push-and-read round trip per the orchestrator's own instruction, then reverted
 in a second commit.
+
+### Run 35622424035 (`0dbaf19`): the slow-suite criterion verified end to end
+
+**Success.** The runner's own `unit` line: `unit pass 146 tests 12s/3000s` -- **11,626 ms against
+the unscaled 3,000 ms budget, 3.9x over, job green.** The 4.7 s local sleep became ~12 s on the
+runner (consistent with every other suite's own multiple on this hardware, below); the experiment
+overshot its own design target and proved the point harder than planned, not more weakly. Every one
+of the job's 26 steps concluded `success`, "Timings summary" included. Both halves of the criterion
+confirmed by downloading the artifact directly: `test-results/timings.json` and `timings-slow.json`
+both present, both well-formed, **unscaled** `budgetMs` exactly as the Seams section specifies
+(`unit` 3000, `browser` 25000, `wasm` 7000, `rust` 10000), real commit `0dbaf195...`, real CPU
+`Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz`, build ms recorded for both tiers. `--budget-scale
+1000` keeping a suite arbitrarily far over its unscaled budget from failing the job is no longer
+argued from local arithmetic; it is shown, on the runner, with a number three orders of magnitude
+past the trigger.
+
+**The drift baseline this run also hands the milestone, recorded here as what "normal" looks like
+on this runner** -- worth having before the first time CI gets *slower* than this, since nothing
+about these ratios gates and nobody will notice a regression without a number to compare against.
+Fast tier: `browser` **103 s against its 25 s budget (4.1x)**. Slow tier: `browser` **131 s**,
+`wasm` **36 s against its 7 s budget (~5.1x)**. Every suite on this runner runs far over its
+Mac-derived budget, on every run so far, and none of it gates -- exactly as designed (0020 §10;
+`--budget-scale 1000`). CPU: `Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz` (recorded above),
+distinct from every earlier run's own `AMD EPYC 7763 64-Core Processor` -- `ubuntu-latest` does not
+pin a CPU model, so a future session comparing timings across runs should expect this kind of
+variance on top of the ratios themselves, not read it as a regression on its own.
+
+Reverted next commit, containing nothing else: `scripts/lib/temp-slow-suite.test.mjs` deleted, the
+scaffolding this criterion needed and no longer does.
