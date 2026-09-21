@@ -621,6 +621,87 @@ order for a V8 tier-up threshold, and every experiment that changed that count c
 but the rate is not monotone in it (8 -> 10%, 40 -> 69%, 120 -> 1%), so the trigger is not invocation
 count alone. 0028 makes the instrument robust to it rather than depending on the answer.
 
+### Fix round 4 (ADR 0028 Amendment: budgets re-derived) -- done
+
+Orchestrator-directed and orchestrator-authorised: existing budget numbers are the orchestrator's to
+change, and this round is that change. Commit: see below. Fix round 3's two-window instrument is
+unchanged; what moves is the numbers it is measured against.
+
+**Why.** Fix round 3 left two things conservative, both flagged in its own report and neither
+acceptable to carry forward: every page's `main` budget had been derived from a reading that
+silently included a one-off JIT burst, so the instrument tolerated ~24 B/frame of real regression
+where the formula intends 8; and the `object` negative control had been coarsened 1 -> 4 objects
+(16 -> 64 B/frame) to keep clearing those same stale budgets, so detection was only demonstrated at
+4x the threshold the budget names.
+
+**A. Every page's `main` re-derived**, 0016 §1's formula unchanged (`ceil(measured clean) + 8 B`),
+each measured the way its own `formula` string documents (`--grep "<page> clean" --repeat-each 8
+--workers 1`; `uptime` 1-minute load 2.1-2.4 throughout):
+
+| page | was | measured clean, 8 runs | now |
+|---|---|---|---|
+| `gc-loop` | 54 | 36.900-36.900 | 45 |
+| `topology` | 50 | 33.433-33.480 | 42 |
+| `echo` | 38 | 21.480-21.520 | 30 |
+| `gen` | 48 | 33.433-33.480 | 42 |
+| `terrain` | 116 | 101.533-101.580 | 110 |
+| `input` | 206 | 181.673-181.913 | 190 |
+
+Spreads across 8 runs are 0.000-0.240 B/frame, against the 0.4-4 B/frame the pre-0028 `formula`
+strings quote for the same rows -- independent evidence that the two-window minimum removes noise,
+not signal. Each row's `formula` text now records the re-derivation without discarding its original
+derivation history.
+
+**B. Strict worker rows stay at 8** (instructed, and correct: they were never derived from a
+measured reading). Measured clean under the two-window instrument, all 16 worker rows: 0.700-2.520
+B/frame. `input`'s own `client` is still exactly 2.507-2.520.
+
+**C. `allocateObject` restored to one small retained object per frame** (16 B/frame; `src/test/
+controls.ts` and its `src/worker/gc-hook.ts` mirror). **Verified, not assumed** -- every `object`
+control's own reading against its own re-derived budget, all 19, `--workers 1`:
+
+| | budget | read | margin |
+|---|---|---|---|
+| `echo main` | 30 | 37.61 | +7.61 |
+| `gen main` | 42 | 49.56 | +7.56 |
+| `input main` | 190 | 197.84 | +7.84 |
+| `gc-loop main` | 45 | 53.23 | +8.23 |
+| `terrain main` | 110 | 117.70 | +7.70 |
+| `topology main` | 42 | 49.61 | +7.61 |
+| worker rows (13) | 8 | 16.74-25.87 | +8.74 to +17.87 |
+
+Every one trips; none trips an isolate it does not name; `pass: false` with exactly the expected
+`A`/`B` table on all 48 tests. No page needed to keep the coarser control.
+
+**D. `terrain`'s `extraSettleFrames: 500` is now measurably inert -- kept, not removed** (the
+orchestrator's call, and M09b's Deviations stay true). Measured both ways, 8 clean runs each at
+`--workers 1`: `main` 101.533-101.580 with the option, 101.553-101.640 without; `client` 0.747 with,
+0.813-0.827 without; `gen0` 0.827 either way. Both are inside the re-derived 110, and all 32
+`terrain clean`/`terrain neg object *` runs passed without it. Fix round 3's own measurement of this
+option on `input` (where it took `client`'s burst rate from 8/80 to 72/80) is why it is not a knob a
+new page should reach for; under the two-window instrument it simply does nothing.
+
+**Still unexplained, and accepted as a known open question** (the orchestrator's own framing): why a
+V8 tier-up lands inside the measured window at all after 8,000 warm-up frames, and why the burst
+rate is not monotone in pre-window invocation count (8 passes -> 10%, 40 -> 69%, 120 -> 1%). ADR 0028
+does not depend on the answer: the two-window minimum is robust to *where* the event lands, not to
+any theory of *when*. Nobody is asked to chase it.
+
+**Verification (this session; `uptime` 1-minute load quoted per batch).**
+- `--project gc --grep input --workers 3 --repeat-each 20` (load 4.23): **160/160 passed (1.5m)**.
+- `--project gc --workers 3` (whole project, 48 tests incl. every `@slow` burst control and
+  `gc: flat transport parity`) (load 10.58): **48/48 passed (21.9s)**.
+- The same `--repeat-each 3`: **144/144 passed (1.0m)**.
+- `--project gc --workers 1` (the measurement run, 48 tests): **48/48 passed (49.8s)**.
+- `pnpm test` (load 9.56): `rust 145`, `unit 137`, `wasm 35`, `browser 90 (18s/25s)` -- green.
+- `pnpm lint`: `biome` / `rustfmt` / `clippy` / `tsc` all pass.
+- `pgrep`/`lsof -ti tcp:4517 tcp:4173` clean afterwards (4173 is an unrelated project's `vite
+  preview`, present before this session began and untouched).
+
+Temporary diagnostics used and removed before the commit (`git diff` on the file is empty): an
+env-gated `GC_DUMP_BYTES` append of each run's `bytesPerFrame`/`windowBytes` in `measure()`, and
+`gc-terrain.spec.ts` with `extraSettleFrames` deleted for item D's second measurement only.
+
 ### Notes for later briefs
 
 - The 4-5 range (semantic events, `inputRing` producer): `RING_DEFAULTS.inputRing`'s slot size looks

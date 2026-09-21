@@ -3,7 +3,9 @@
 Status: Accepted (2026-09-20). Supersedes [0027](0027-zero-gc-excludes-blocking-primitive-bookkeeping.md)
 entirely; amends [0016](0016-zero-gc-definition.md) §3 step 7 (assertion B) and §3 step 8 (the
 `object` control's size). [0026](0026-zero-gc-burst-controls-in-slow-tier.md) is the prior amendment
-in this area. Implemented in milestone M11 (fix round 3).
+in this area. Implemented in milestone M11 (fix round 3), and amended by its own **Amendment (M11 fix round 4)**
+section below, which re-derives every page's `main` budget downward and returns the `object` control
+to one object.
 
 ## Context
 
@@ -111,18 +113,64 @@ unchanged). This amendment changes what is counted, not what is allowed; every c
 - A measurement costs 600 more frames (about 30% more wall clock in the `gc` project; the whole
   project, 48 tests including the `@slow` burst controls, runs in about 22 s).
 - Readings drop by however much one-off noise a page's `main` used to carry, so every
-  `budgets.json` `formula` string derived as `ceil(measured) + 8 B` now has more headroom than it
-  says. Re-deriving those numbers downward is deliberately **not** part of this change (it would
-  move committed budgets); the trigger to do it is the next milestone that touches a page's budget
-  for its own reasons.
+  `budgets.json` `formula` string derived as `ceil(measured) + 8 B` had more headroom than it said.
+  Superseded by the Amendment below: rather than waiting for a later milestone, every page's `main`
+  was re-derived downward in this same milestone, which is also what let the `object` control go
+  back to one object.
 - `sab/no-alloc-syntax.test.ts`'s `sab.wait_for_wake_shape` is kept, now on its own merits alone
   (`worker/shell.ts` blocks only through that one method, so its body staying one statement is
   ordinary hot-path discipline) rather than as 0027 §2's guard.
 - Deferred: nothing new. If a future page is found where a *single* window is genuinely needed, or
   where an event lands in both windows, this ADR is amended rather than widened.
 
+## Amendment (M11 fix round 4): budgets re-derived, `object` control back to one object
+
+Decision §5 ("no page's budget number moves") held only for the surgical change §1-§4 describe, and
+is superseded by this section. Leaving it standing permanently would have been the worse outcome:
+§1 makes every reading lower, so every budget derived from a pre-0028 measurement carried that much
+extra slack -- `input`'s `main`, derived as `ceil(197.05) + 8 = 206`, measured 181.9 afterwards, so
+the instrument tolerated about 24 B/frame of real regression where the formula intends 8. §4's
+four-object control was a symptom of the same drift: it restored separation by making the *control*
+coarser, proving detection at 64 B/frame against a budget meant to be tripped at 16.
+
+**A. Every page's `main` budget is re-derived under the two-window instrument**, by 0016 §1's
+unchanged formula (`ceil(measured clean) + 8 B`, no attribution), each measured the way its own
+`formula` string documents (`--grep "<page> clean" --repeat-each 8 --workers 1`, 1-minute load
+2.1-2.4):
+
+| page | was | measured clean, 8 runs | now |
+|---|---|---|---|
+| `gc-loop` | 54 | 36.900-36.900 | **45** |
+| `topology` | 50 | 33.433-33.480 | **42** |
+| `echo` | 38 | 21.480-21.520 | **30** |
+| `gen` | 48 | 33.433-33.480 | **42** |
+| `terrain` | 116 | 101.533-101.580 | **110** |
+| `input` | 206 | 181.673-181.913 | **190** |
+
+The spreads are tighter than any single-window measurement these rows ever recorded (0.000-0.240
+B/frame across 8 runs, against the 0.4-4 B/frame the older `formula` strings quote) -- itself
+evidence that what §1 removes is noise rather than signal.
+
+**B. The strict worker figure and every worker row stay at 8** (0016 §1): those were never derived
+from a measured reading. Measured clean under §1: 0.700-2.520 B/frame on all 16 worker rows.
+
+**C. `allocateObject` returns to one small retained object per frame** (16 B/frame), reverting §4.
+With the re-derived budgets it clears by construction and in fact: every `object` control trips its
+own isolate by **7.56-8.23 B/frame** on `main` and **8.74-17.87 B/frame** on a worker, measured on
+all 19 of them, and no control trips an isolate it does not name.
+
+**D. `terrain`'s `extraSettleFrames: 500` is kept but is now measurably inert.** Measured both ways,
+8 clean runs each: `main` 101.533-101.580 with it, 101.553-101.640 without; `client` 0.747 with,
+0.813-0.827 without; every `terrain` negative control passes either way. §1 handles the mechanism
+that option was added for, so it no longer changes anything; it stays because M09b's own Deviations
+and this row's derivation were written with it, and removing it is that milestone's call, not this
+one's.
+
 ## Sources
 
+- `docs/plan/11-camera-and-input.md`, Deviations, "Fix round 4" (2026-09-20): the re-derivation
+  measurements, the 19 negative-control separation figures, and the `terrain` with/without
+  `extraSettleFrames` comparison.
 - `docs/plan/11-camera-and-input.md`, Deviations, "Fix round 3" (2026-09-20): the sample-level
   ordinal/size dumps, the five-configuration attribution table, the six warm-up settings and their
   burst rates, and the verification runs.

@@ -24,20 +24,18 @@ type SinkHolder = { __gcControlSink?: unknown }
 const sinkHolder = globalThis as unknown as SinkHolder
 
 /**
- * `OBJECT_COUNT` small retained objects -- 64 B/frame, the byte-budget control of 0016 §3 step 8.
+ * One small retained object -- 16 B/frame, the byte-budget control of 0016 §3 step 8.
  *
- * One object (16 B/frame) until [0028](../../../docs/decisions/0028-zero-gc-two-measured-windows.md).
- * Assertion B's byte total is now the lower of two measured windows, which removes the one-off V8
- * tier-up burst every page's `main` reading used to carry (10-18 B/frame of it, measured), so a
- * 16 B/frame control no longer clears the `ceil(clean) + 8 B` budget it has to trip: `gc-loop`,
- * `echo` and `input`'s own `neg object main` all stopped failing, which is the control failing, not
- * the page passing. Four objects keeps the same shape and the same "no GC event" property (A must
- * still hold: 0016 §3 step 8's table) with 40-47 B/frame of separation instead of 0-7.
+ * Briefly four objects (64 B/frame) between M11 fix rounds 3 and 4. 0028's two-window minimum made
+ * every page's `main` reading drop by the one-off JIT burst it used to carry, which left this
+ * control unable to clear budgets derived from the older, higher readings; fix round 4 re-derived
+ * those budgets downward instead (0028, Amendment), so one object clears again by construction --
+ * a budget is `ceil(clean) + 8 B`, so a `clean + 16` reading beats it by 7-8 B/frame, measured on
+ * every page. Kept at one deliberately: a bigger control would only prove detection at a coarser
+ * threshold than the budget it has to trip.
  */
-const OBJECT_COUNT = 4
-
 export function allocateObject(n: number): void {
-  for (let k = 0; k < OBJECT_COUNT; k++) sinkHolder.__gcControlSink = { n, k }
+  sinkHolder.__gcControlSink = { n }
 }
 
 /** `BURST_COUNT` small retained objects. */

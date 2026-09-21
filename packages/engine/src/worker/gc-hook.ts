@@ -10,10 +10,6 @@ import { CB_TEST_CONTROL, type ControlBlock } from '../sab/control.js'
 /** Mirrors `src/test/controls.ts`'s `BURST_COUNT` (0016 §3 step 8). */
 const BURST_COUNT = 2000
 
-/** Mirrors `src/test/controls.ts`'s `OBJECT_COUNT` (0016 §3 step 8, as amended by 0028 -- that
- * function's own comment has the reason it is no longer 1). */
-const OBJECT_COUNT = 4
-
 /** A `globalThis` property write, not a bare local (`src/test/controls.ts`'s own comment has the
  * story): Rollup's production build tree-shakes an unread local all the way down to nothing, but a
  * write to a property the bundler cannot prove has no outside reader survives. Each isolate that
@@ -32,7 +28,7 @@ export function applyGcHook(control: ControlBlock, index: number): void {
   if ((enc >>> 8) - 1 !== index) return
   const kind = enc & 0xff
   if (kind === 1) {
-    for (let k = 0; k < OBJECT_COUNT; k++) sinkHolder.__engineWorkerGcSink = { index, k }
+    sinkHolder.__engineWorkerGcSink = { index }
   } else if (kind === 2) {
     for (let k = 0; k < BURST_COUNT; k++) sinkHolder.__engineWorkerGcSink = { index, k }
   }
