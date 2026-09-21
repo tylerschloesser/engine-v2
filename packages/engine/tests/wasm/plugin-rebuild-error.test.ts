@@ -14,6 +14,17 @@ import { engine } from '../../src/vite.js'
 import { fixtureDir } from '../support/fixtures.js'
 
 const ENGINE_CRATE_DIR = fileURLToPath(new URL('../../crates/engine', import.meta.url))
+// Copied into the standalone crate below, not hand-duplicated: `rustup` resolves the active
+// toolchain by walking up from `cwd` for a `rust-toolchain.toml`, and this copy sits outside the
+// repo tree entirely (its own `[workspace]`, docs comment below), so without its own copy of this
+// file it silently picks up whatever toolchain happens to be the machine's rustup default -- found
+// by CI (docs/plan/10-ci-workflow.md, Deviations): the runner's default lacks the
+// `wasm32-unknown-unknown` target the pin adds, so this one test alone built with an unpinned,
+// target-less compiler. Reading the real file (not embedding the version string a second time)
+// means a future pin bump never needs a second edit here.
+const ROOT_RUST_TOOLCHAIN = fileURLToPath(
+  new URL('../../../../rust-toolchain.toml', import.meta.url),
+)
 const BROKEN_LINE = '\nfn __plugin_rebuild_error_test() { let x = ; }\n'
 
 /** A standalone copy of `fixtures/hash`: its own `[workspace]`, an absolute-path `engine`
@@ -36,6 +47,7 @@ async function copyStandaloneHashCrate(): Promise<string> {
     .replace('edition.workspace = true', 'edition = "2024"')
     .replace(/\[lints\]\nworkspace = true\n\n/, '')
   await writeFile(manifestPath, `[workspace]\n\n${rewritten}`)
+  await cp(ROOT_RUST_TOOLCHAIN, join(dir, 'rust-toolchain.toml'))
   return dir
 }
 

@@ -46,6 +46,17 @@ const swiftshaderArgs =
 const chromiumChannel =
   process.env.ENGINE_GPU === 'swiftshader' ? 'chromium-headless-shell' : 'chromium'
 
+// docs/plan/10-ci-workflow.md, Deviations: `[webkit] terrain: probe tile colours webkit
+// @webkit-gpu @slow` failed on ubuntu-latest with `navigator.gpu is not present` -- WebKitGTK,
+// what Playwright ships on Linux, has no WebGPU at all (a platform capability fact, not a
+// software-adapter question any flag fixes). `@webkit-gpu` therefore runs only off Linux, where
+// WebKit does have a real headless WebGPU adapter (0018 §7's own support table); `@engines` (sim
+// hash, no GPU) still runs everywhere, which is what proved three-browser determinism on this
+// same runner. The exclusion is asserted against the platform, not discovered by the test itself
+// finding `navigator.gpu` missing -- that would make the test unable to fail and silently stop
+// covering macOS the day WebGPU broke there.
+const webkitGrep = process.platform === 'linux' ? /@engines/ : /@engines|@webkit-gpu/
+
 export default defineConfig({
   testDir: './tests/browser',
   // Default matches `*.test.ts` too (M04's `gc/analyse.test.ts` is a Vitest unit test, run by the
@@ -79,7 +90,7 @@ export default defineConfig({
       // `@engines` tag on a GPU test would fail there on a null adapter.
       name: 'webkit',
       use: { ...devices['Desktop Safari'] },
-      grep: /@engines|@webkit-gpu/,
+      grep: webkitGrep,
       testIgnore: '**/gc-*.spec.ts',
     },
     {
