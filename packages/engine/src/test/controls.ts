@@ -23,9 +23,21 @@ const BURST_COUNT = 2000
 type SinkHolder = { __gcControlSink?: unknown }
 const sinkHolder = globalThis as unknown as SinkHolder
 
-/** One small retained object. */
+/**
+ * `OBJECT_COUNT` small retained objects -- 64 B/frame, the byte-budget control of 0016 §3 step 8.
+ *
+ * One object (16 B/frame) until [0028](../../../docs/decisions/0028-zero-gc-two-measured-windows.md).
+ * Assertion B's byte total is now the lower of two measured windows, which removes the one-off V8
+ * tier-up burst every page's `main` reading used to carry (10-18 B/frame of it, measured), so a
+ * 16 B/frame control no longer clears the `ceil(clean) + 8 B` budget it has to trip: `gc-loop`,
+ * `echo` and `input`'s own `neg object main` all stopped failing, which is the control failing, not
+ * the page passing. Four objects keeps the same shape and the same "no GC event" property (A must
+ * still hold: 0016 §3 step 8's table) with 40-47 B/frame of separation instead of 0-7.
+ */
+const OBJECT_COUNT = 4
+
 export function allocateObject(n: number): void {
-  sinkHolder.__gcControlSink = { n }
+  for (let k = 0; k < OBJECT_COUNT; k++) sinkHolder.__gcControlSink = { n, k }
 }
 
 /** `BURST_COUNT` small retained objects. */

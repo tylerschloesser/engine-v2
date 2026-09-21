@@ -1,8 +1,6 @@
 # 0027: The zero-GC byte total excludes V8's own blocking-primitive bookkeeping
 
-Status: Accepted (2026-09-20). Amends [0016](0016-zero-gc-definition.md) §3 step 7 (assertion B, the
-sampled-byte total); [0026](0026-zero-gc-burst-controls-in-slow-tier.md) is the prior amendment in
-the same area. Implemented in milestone M11.
+Status: Superseded by [0028](0028-zero-gc-two-measured-windows.md).
 
 ## Context
 

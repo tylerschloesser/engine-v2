@@ -103,12 +103,13 @@ test('sab.no_wait_async', () => {
 })
 
 test('sab.wait_for_wake_shape', () => {
-  // docs/decisions/0027-zero-gc-excludes-blocking-primitive-bookkeeping.md: the zero-GC instrument
-  // (tests/browser/gc/analyse.ts) excludes bytes attributed to `waitForWake`'s own call frame from
-  // the byte-total assertion, on the understanding that this method's body is exactly the one
-  // `Atomics.wait(...)` statement -- no load, no return, nothing a later edit could quietly turn
-  // into real, hidden allocation this exclusion would then swallow. This is the guard: widening
-  // `waitForWake`'s own body fails this test instead of silently widening what 0027 lets through.
+  // `worker/shell.ts`'s own header rule: "`Atomics.wait` itself lives only in
+  // `ControlBlock.waitForWake`; this file blocks only through that." This pins that method's body
+  // to exactly the one `Atomics.wait(...)` statement -- no load, no return, nothing else on the
+  // path every worker blocks on. Written for docs/decisions/0027 (which excluded this frame's own
+  // bytes from the zero-GC byte total and needed the body to stay trivial); kept after
+  // docs/decisions/0028-zero-gc-two-measured-windows.md superseded that exclusion, now purely as
+  // hot-path discipline on the one blocking primitive in `src/`.
   const raw = readFileSync(join(SRC, 'sab', 'control.ts'), 'utf8')
   const stripped = stripCommentsAndStrings(raw)
   const m = /waitForWake\s*\([^)]*\)\s*:\s*void\s*\{([\s\S]*?)\n {2}\}/.exec(stripped)

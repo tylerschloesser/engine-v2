@@ -9,18 +9,19 @@ import {
 import { profileSample, traceSample } from './fixtures.ts'
 
 test('gc analyse: sums selfSize exactly', () => {
-  const { total, byFn, excludedBytes } = sumProfile(profileSample())
+  const { total, byFn } = sumProfile(profileSample())
   expect(total).toBe(22) // 10 (idle) + 5 (harnessWorkerStep) + 7 (inner)
   expect(byFn['idle@harness.js:4']).toBe(10)
   expect(byFn['harnessWorkerStep@harness-worker.js:13']).toBe(5)
   expect(byFn['inner@loader.js:41']).toBe(7)
-  expect(excludedBytes).toBe(0) // no `waitForWake` frame in this fixture
 })
 
-// docs/decisions/0027-zero-gc-excludes-blocking-primitive-bookkeeping.md: bytes attributed to a
-// `waitForWake` frame anywhere in the tree are excluded from `total` (and hence `bytesPerFrame`),
-// but still reported (in `excludedBytes`, and in `byFn` by name) rather than silently dropped.
-test('gc analyse: waitForWake bytes are excluded from total but still reported', () => {
+// docs/decisions/0028-zero-gc-two-measured-windows.md, superseding 0027: no call frame is exempt
+// from the byte total -- not `waitForWake`, which 0027 briefly excluded by name, and not any other.
+// The one-off V8 tier-up burst 0027 was written to remove is billed to an arbitrary frame (measured
+// on seven different ones), so it is separated by the two-window minimum in `measure()` instead.
+// This test is what keeps a name-based exemption from coming back into `sumProfile`.
+test('gc analyse: no call frame is exempt from the total, waitForWake included', () => {
   const profile = {
     head: {
       selfSize: 0,
@@ -37,10 +38,9 @@ test('gc analyse: waitForWake bytes are excluded from total but still reported',
       ],
     },
   }
-  const { total, byFn, excludedBytes } = sumProfile(profile)
-  expect(total).toBe(100) // waitForWake's own 13544 is not in the counted total
-  expect(excludedBytes).toBe(13544)
-  expect(byFn['waitForWake@worker-auto.js:43']).toBe(13544) // still visible, never hidden
+  const { total, byFn } = sumProfile(profile)
+  expect(total).toBe(13644) // every sampled byte counts, waitForWake's 13544 included
+  expect(byFn['waitForWake@worker-auto.js:43']).toBe(13544)
   expect(byFn['drive@gc-input.js:61']).toBe(100)
 })
 

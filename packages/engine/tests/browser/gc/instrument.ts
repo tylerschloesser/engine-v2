@@ -67,10 +67,11 @@ export type GcResult = {
   bytesPerFrame: Record<string, number>
   attributedBytesPerFrame: Record<string, number>
   byFn: Record<string, Record<string, number>>
-  /** [0027](../../../../docs/decisions/0027-zero-gc-excludes-blocking-primitive-bookkeeping.md):
-   * bytes `sumProfile` left out of `totalBytes` per isolate (V8's own blocking-primitive
-   * bookkeeping), reported rather than hidden. */
-  excludedBytes: Record<string, number>
+  /** [0028](../../../../docs/decisions/0028-zero-gc-two-measured-windows.md): both measured
+   * windows' own byte totals per isolate, `[first, second]`. `totalBytes` is the lower of the two;
+   * the pair is reported alongside so the discarded window is always visible next to the verdict
+   * and the minimum is never a silent subtraction. */
+  windowBytes: Record<string, [number, number]>
   memoryBytes: { before: Record<string, number>; after: Record<string, number> }
   memGrows: Record<string, number>
   errors: string[]
@@ -132,7 +133,14 @@ export async function measure(
      * 200 (a real threshold, not a smooth "rarer with more frames" curve, docs/plan/
      * 09-renderer-terrain.md, Deviations "Gate fix round 2" has the full table). Default 0: every
      * other page's own warm-up (and terrain's own negative controls, which trip on `client` anyway
-     * and are unaffected either way) is unchanged. */
+     * and are unaffected either way) is unchanged.
+     *
+     * Superseded as a *fix* by [0028](../../../../docs/decisions/0028-zero-gc-two-measured-windows.md)
+     * (M11 fix round 3), which handles the same mechanism for every page at once. M11 re-measured
+     * this knob on the `input` page and found it moves the event's phase rather than settling it:
+     * `extraSettleFrames: 500` there took `client`'s burst rate from 8/80 runs to 72/80. `terrain`
+     * keeps its 500 because that page's own numbers were derived with it; the option is not one a
+     * new page should reach for. */
     extraSettleFrames?: number
   },
 ): Promise<GcResult> {
@@ -238,23 +246,55 @@ export async function measure(
   }
   await page.evaluate(() => performance.mark('gc-isolate:main'))
 
-  for (const s of sessions) {
-    await s.send('HeapProfiler.startSampling', {
-      samplingInterval: SAMPLING_INTERVAL,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    })
+  const startSampling = async (): Promise<void> => {
+    for (const s of sessions) {
+      await s.send('HeapProfiler.startSampling', {
+        samplingInterval: SAMPLING_INTERVAL,
+        includeObjectsCollectedByMajorGC: true,
+        includeObjectsCollectedByMinorGC: true,
+      })
+    }
+  }
+  const stopSampling = async (): Promise<Record<string, Profile>> => {
+    const out: Record<string, Profile> = {}
+    for (const s of sessions) {
+      const { profile } = await s.send('HeapProfiler.stopSampling')
+      out[s.name] = profile
+    }
+    return out
   }
 
   await page.evaluate((c) => window.__gc?.setControl(c), control)
 
+  // 0028: two consecutive measured windows, identical in every way but the `window-start`/
+  // `window-end` marks, which only the second carries (so assertion A keeps its single 600-frame
+  // trace window, exactly as 0016 §3 step 6 defines it). Assertion B's byte total is the *lower* of
+  // the two per isolate. A V8 tier-up/code-installation event is one-off by construction -- once a
+  // function is compiled it is not compiled again -- so it lands in at most one of the two windows;
+  // real per-frame allocation lands in both and survives the minimum untouched. Nothing is excluded
+  // by name, by size or by isolate: the discriminator is the one property the budget actually
+  // asserts, "does this recur every frame?".
+  await startSampling()
+  const firstRun = await page.evaluate((n) => window.__gc?.run(n, false), frames)
+  if (!firstRun) throw new Error('gc instrument: run() returned nothing')
+  const firstProfiles = await stopSampling()
+
+  await startSampling()
   const runResult = await page.evaluate((n) => window.__gc?.run(n, true), frames)
   if (!runResult) throw new Error('gc instrument: run() returned nothing')
+  const secondProfiles = await stopSampling()
 
+  // Per isolate, the window with the lower total wins outright -- its profile is what `byFn` and
+  // the software-mode `attributedBytes` are then read from too, so a failure's own printed
+  // allocation sites always belong to the total it failed on.
   const rawProfiles: Record<string, Profile> = {}
-  for (const s of sessions) {
-    const { profile } = await s.send('HeapProfiler.stopSampling')
-    rawProfiles[s.name] = profile
+  const windowBytes: Record<string, [number, number]> = {}
+  for (const name of Object.keys(secondProfiles)) {
+    const first = firstProfiles[name] as Profile
+    const second = secondProfiles[name] as Profile
+    const totals: [number, number] = [sumProfile(first).total, sumProfile(second).total]
+    windowBytes[name] = totals
+    rawProfiles[name] = totals[0] <= totals[1] ? first : second
   }
   await browserSession.send('Tracing.end')
   await traceDone
@@ -272,14 +312,12 @@ export async function measure(
   const attributedBytesPerFrame: Record<string, number> = {}
   const byFn: Record<string, Record<string, number>> = {}
   const totalBytes: Record<string, number> = {}
-  const excludedBytes: Record<string, number> = {}
   const attributedBytesTotal: Record<string, number> = {}
   for (const [name, profile] of Object.entries(rawProfiles)) {
     const summed = sumProfile(profile)
     totalBytes[name] = summed.total
     bytesPerFrame[name] = summed.total / frames
     byFn[name] = summed.byFn
-    excludedBytes[name] = summed.excludedBytes
     const roots = budgets.isolates[name]?.attributionRoots ?? []
     const attributed = attributedBytes(profile, roots)
     attributedBytesTotal[name] = attributed
@@ -308,10 +346,10 @@ export async function measure(
     bytesPerFrame,
     attributedBytesPerFrame,
     byFn,
-    excludedBytes,
+    windowBytes,
     memoryBytes: { before: memBefore, after: memAfter },
     memGrows,
-    errors: runResult.errors,
+    errors: [...firstRun.errors, ...runResult.errors],
     ms: { total: performance.now() - t0, tracingStart: tracingStartMs },
     warnings,
     verdict,

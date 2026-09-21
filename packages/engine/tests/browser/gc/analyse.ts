@@ -25,39 +25,30 @@ export type TraceEvent = {
 
 export type GcCounts = { MinorGC: number; MajorGC: number }
 
-/** [0027](../../../../docs/decisions/0027-zero-gc-excludes-blocking-primitive-bookkeeping.md): the
- * *only* call frame whose own bytes are V8's internal bookkeeping for a thread that genuinely
- * blocks in `Atomics.wait` and is later woken by a cross-thread `Atomics.notify`, not JS-heap
- * allocation by any engine or test code -- measured by reducing `sab/control.ts`'s
- * `ControlBlock.waitForWake` to its one bare `Atomics.wait(...)` statement and finding the cost
- * unchanged. Deliberately one name, not an isolate or a broader "blocking path": widening this set
- * needs a fresh ADR amendment, the same way this one amended 0016 §3 step 7.
- * `sab/no-alloc-syntax.test.ts`'s own source-shape assertion is what keeps `waitForWake` pinned to
- * that one statement, so this exclusion cannot silently widen on its own. */
-const BLOCKING_PRIMITIVE_FRAME_NAMES: ReadonlySet<string> = new Set(['waitForWake'])
-
-/** Total sampled bytes (0027's exclusion already applied) plus the top 8 allocation sites by bytes
- * (what a failing test prints: 0016 §3 step 7). `excludedBytes` is what 0027 left out of `total`,
- * reported rather than hidden so a future regression under an excluded name still shows up
- * somewhere in a failure's own JSON instead of silently vanishing. */
+/** Total sampled bytes plus the top 8 allocation sites by bytes (what a failing test prints: 0016
+ * §3 step 7).
+ *
+ * Every sampled byte counts, with no exemption by function name, size or isolate.
+ * [0028](../../../../docs/decisions/0028-zero-gc-two-measured-windows.md) superseded the one
+ * name-based exclusion this function briefly carried ([0027](../../../../docs/decisions/
+ * 0027-zero-gc-excludes-blocking-primitive-bookkeeping.md), `waitForWake`): the bytes it was meant
+ * to remove are a one-off V8 tier-up/code-installation burst that the sampled profile bills to
+ * whichever JS frame happens to be executing when it lands -- measured on `waitForWake`,
+ * `runBlockingLoop`, `body`, `call1`, `load`, `get detached` and `scope.onmessage` on one isolate
+ * of one page -- so no set of names can catch it. `measure()` separates it by running two windows
+ * and taking the lower total instead. */
 export function sumProfile(profile: Profile): {
   total: number
   byFn: Record<string, number>
-  excludedBytes: number
 } {
   let total = 0
-  let excludedBytes = 0
   const byFn = new Map<string, number>()
   const walk = (node: ProfileNode): void => {
     if (node.selfSize) {
       const cf = node.callFrame
       const key = `${cf.functionName || '(anonymous)'}@${(cf.url || '').split('/').pop()}:${cf.lineNumber + 1}`
       byFn.set(key, (byFn.get(key) ?? 0) + node.selfSize)
-      if (BLOCKING_PRIMITIVE_FRAME_NAMES.has(cf.functionName)) {
-        excludedBytes += node.selfSize
-      } else {
-        total += node.selfSize
-      }
+      total += node.selfSize
     }
     node.children?.forEach(walk)
   }
@@ -65,7 +56,6 @@ export function sumProfile(profile: Profile): {
   return {
     total,
     byFn: Object.fromEntries([...byFn].sort((a, b) => b[1] - a[1]).slice(0, 8)),
-    excludedBytes,
   }
 }
 

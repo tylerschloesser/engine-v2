@@ -38,7 +38,8 @@ Phase 1 output (2026-09-19). Input to Phase 2, which turns it into `PLAN.md` (se
 | [0024] | Planning amendments | Fifteen numbered fixes to gaps and contradictions in 0001–0020 found while writing the milestone briefs; cited as "0024 §n" |
 | [0025] | Phase 3 orchestration | One orchestrating session lands milestones in serial on `main`; a Sonnet `milestone-implementer` sub-agent builds each; the orchestrator gates (`pnpm gate`) and is the only writer of checkboxes, `PLAN.md` and `PROMPT.md`; tags at markers. Amends 0021 |
 | [0026] | Zero-GC `burst` controls in the slow tier | Generated per-isolate `burst` negative controls are `@slow` for every page but `gc-loop`; `object` negatives stay fast; each clean test asserts every expected isolate was discovered in the trace. Amends 0016 §3.8 |
-| [0027] | Zero-GC excludes blocking-primitive bookkeeping | The byte-total assertion no longer counts bytes attributed to `ControlBlock.waitForWake`'s own call frame: V8's own bookkeeping for a worker that genuinely blocks in `Atomics.wait` and is woken by a cross-thread `Atomics.notify`, not engine allocation. Narrow and self-policing (a source-shape test pins that function's body). Amends 0016 §3 step 7 |
+| [0027] | Zero-GC excludes blocking-primitive bookkeeping (superseded by [0028]) | The byte-total assertion no longer counts bytes attributed to `ControlBlock.waitForWake`'s own call frame: V8's own bookkeeping for a worker that genuinely blocks in `Atomics.wait` and is woken by a cross-thread `Atomics.notify`, not engine allocation. Narrow and self-policing (a source-shape test pins that function's body). Amends 0016 §3 step 7. **Superseded**: the cost is a one-off JIT code-installation burst billed to an arbitrary frame, not `Atomics.wait` bookkeeping |
+| [0028] | Zero-GC byte total is the lower of two measured windows | Assertion B runs two consecutive 600-frame windows and takes the lower per-isolate total, so a one-off V8 tier-up burst (which lands in at most one) is separated from allocation that recurs every frame; no frame, size or isolate is excluded by name. The `object` control grows to four objects per frame to keep its separation. Supersedes 0027; amends 0016 §3 steps 7-8 |
 
 ## 2. Architecture overview
 
@@ -410,3 +411,4 @@ Every item an ADR or spec file marks "Deferred". "2" = Phase 2 decides it in `PL
 [0025]: docs/decisions/0025-phase-3-orchestration.md
 [0026]: docs/decisions/0026-zero-gc-burst-controls-in-slow-tier.md
 [0027]: docs/decisions/0027-zero-gc-excludes-blocking-primitive-bookkeeping.md
+[0028]: docs/decisions/0028-zero-gc-two-measured-windows.md

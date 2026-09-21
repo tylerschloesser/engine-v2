@@ -40,8 +40,9 @@ runs itself.
 The failure message is JSON: `control` (which negative control, if any), `mode` (`hardware` or
 `software`), `bytesPerFrame`/`attributedBytesPerFrame` per isolate, `gc` (per-isolate `MinorGC`/
 `MajorGC` counts), `byFn` (top 8 allocation sites by bytes, per isolate -- this is where "who
-allocated" comes from), and `verdict` (`{ pass, A, B }` per isolate) next to the expected verdict
-Vitest/Playwright's own diff shows. Read `byFn` for the isolate(s) the verdict named: the top
+allocated" comes from), `windowBytes` (both measured windows' own totals per isolate, `[first,
+second]`; `bytesPerFrame` divides the *lower* of the two -- docs/decisions/0028), and `verdict`
+(`{ pass, A, B }` per isolate) next to the expected verdict Vitest/Playwright's own diff shows. Read `byFn` for the isolate(s) the verdict named: the top
 function name plus its `file:line` is almost always the fix. Artefact paths (Playwright's own trace
 etc.) print under the failure block same as any other browser test; nothing gc-specific lands
 outside `test-results/`.
@@ -63,6 +64,15 @@ outside `test-results/`.
   assuming the harness is broken -- Vite's production build runs real Rollup tree-shaking, and a
   write to an unread local variable is exactly the shape it removes (`src/test/controls.ts`'s own
   `sinkHolder` comment has the story; write through a `globalThis` property, not a bare `let`).
+- A one-off V8 JIT code-installation burst, *not* your allocation: a fixed multi-KB lump (13-16 KB
+  is typical for a worker) that does not scale with frames and is billed to whichever JS frame
+  happened to be executing -- measured on `waitForWake`, `runBlockingLoop`, `body`, `call1`, `load`
+  and `scope.onmessage` for one isolate of one page. Fingerprint it in the raw
+  `HeapProfiler.stopSampling` payload: a contiguous run of `profile.samples` ordinals with sizes
+  like 6272/3580/1556/344 (an instruction stream and its metadata), instead of ~600 small samples
+  spread over the window. docs/decisions/0028 is why assertion B takes the lower of two windows;
+  if one of these shows up anyway, `windowBytes` will show the two windows far apart, and no amount
+  of extra warm-up will move it (six settings measured in M11 fix round 3 -- each relocates it).
 - Interpreter-tier boxing in code that lives blocked in `Atomics.wait` and may never tier up: a
   property read of `Number.POSITIVE_INFINITY`, a `Float64Array` element read, or a
   `TypedArray.prototype.byteLength` getter each box a fresh `HeapNumber` on a normal pass

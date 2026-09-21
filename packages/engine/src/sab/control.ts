@@ -85,20 +85,16 @@ export class ControlBlock {
    * `runBlockingLoop` used to discard this method's own return value and then re-read the same
    * word a second time with its own separate `Atomics.load` one line later -- a genuine redundant
    * native call on every single wake, removed here (the caller now does the one load it always
-   * needed anyway).
+   * needed anyway). A real cleanup on its own merits, and nothing more: it did not move the byte
+   * total that motivated it.
    *
-   * That redundancy is *not* the fix for the cost this range actually chased: `client`'s own
-   * `bytesPerFrame` under a sibling `object`/`burst` control attributes a fixed ~13.5 KB over the
-   * 600-frame window to `waitForWake` by name, unchanged before and after this method stopped
-   * calling `Atomics.load` (or returning anything) at all -- measured, not guessed, by reducing
-   * this method to the bare `Atomics.wait` call alone and re-running the identical scenario. The
-   * cost is therefore inside `Atomics.wait` itself on the path where it genuinely blocks and is
-   * later woken by another thread's `Atomics.notify` (as opposed to the fast "already differs"
-   * path, which `gen0` -- woken and re-checked before `main` ever falls behind -- takes throughout
-   * and never shows this on), not in any surrounding JS this range's own code owns. Left in place
-   * as a real, safe cleanup on its own merits (one native call instead of two, every wake, forever)
-   * while the underlying cost is reported rather than chased further inside a JS engine's own
-   * blocking-primitive implementation.
+   * This method's body is pinned to that one statement by `sab/no-alloc-syntax.test.ts`'s
+   * `sab.wait_for_wake_shape` -- `worker/shell.ts` blocks only through here, so ordinary hot-path
+   * discipline. It is no longer load-bearing for the zero-GC instrument: the ~13.5 KB this frame
+   * was once blamed for is a one-off V8 JIT code-installation burst billed to whichever frame
+   * happens to be executing (measured on seven different ones, `waitForWake` among them), which
+   * docs/decisions/0028-zero-gc-two-measured-windows.md separates by measuring two windows and
+   * taking the lower total, not by excluding any name.
    */
   waitForWake(index: number, last: number, timeoutMs: number): void {
     Atomics.wait(this.words, workerWord(index, W_WAKE), last, timeoutMs)
