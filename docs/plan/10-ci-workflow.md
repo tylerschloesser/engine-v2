@@ -389,3 +389,126 @@ attempted, since both are downstream of (2) passing cleanly. This is the orchest
 rename above (`packages/engine/src/test/gc-page.ts`, `packages/engine/src/test/
 harness-worker.ts`, `packages/engine/budgets.json`), verified against 90/95 of the acceptance bar
 and zero hardware-mode regressions.
+
+### The premise check, and the redesign it authorised (2026-09-21, same day)
+
+The orchestrator asked one fact before deciding whether M10 splits: is `topology.client`'s
+assertion B vacuous in hardware mode too? Measured, not inferred (`GC_MODE` unset, real Metal,
+`topology clean` then `topology neg object client`): `attributedBytesPerFrame.client` reads **0**
+clean and **0.02666666666666667** under the control -- bit-identical to the software-mode reading.
+But `bytesPerFrame.client` (the raw total, what hardware's `verdict()` actually compares) reads
+**16.84** against the isolate's own hardware budget of **8**, so the test **passes**, tripping
+**B via the raw-bytes path**; A stays true throughout (the `object` control causes no GC events).
+`applyGcHook`'s own `byFn` self-size total for that window: **9,616 B** (~600 real wakes x ~16 B,
+the allocation genuinely happens every wake). This corrected the orchestrator's own guess: nothing
+was silently broken on `main` or anywhere else in hardware mode -- attribution is a software-mode-
+only code path (`analyse.ts`'s `verdict()` only reads `attributedBytesTotal` when
+`mode === 'software'`) that had simply never been exercised for a worker isolate's negative control
+until this milestone turned software mode on for real.
+
+**Checked against the source, not against the guess, per instruction.** 0016 caveat b, quoted
+verbatim: *"On SwiftShader (Linux CI) the spike's 4096-quad scene drained at ~58 ms/frame and N =
+600 timed out; with N = 100 the frame function still cost 64.2 B/frame with zero GCs, but total/N
+read 277 because harness overhead no longer amortises. On a software adapter the test therefore
+uses a trivial scene or smaller N and asserts on bytes attributed to the engine's frame and tick
+functions (exact constants in the spike: 38 424 B main, 0 B worker per 600 frames) instead of
+total/N."* Two findings against the orchestrator's proposed rationale ("a software adapter's
+CPU-side rasterisation allocates in the same isolate as the measurement, drowning the raw signal"):
+(1) that specific mechanism is **not what the text says** -- nowhere does 0016 mention SwiftShader's
+own CPU work landing in a JS isolate; the stated cause is narrower and purely arithmetic: a *slow
+scene forces N down*, and a small N means a roughly-constant per-run harness overhead (CDP round
+trips, `page.evaluate`, `HeapProfiler` bookkeeping) no longer amortises across enough frames, so
+`total/N` reads high for a reason that has nothing to do with engine allocation. (2) the text says
+"the engine's **frame and tick** functions" -- naming both roles, main's and a worker's, for the
+*same* reason, not a main-specific one. So the proposal **narrows** 0016's literal mechanism rather
+than contradicting it (0016 gives no separate, worker-specific justification the proposal defies),
+but the proposal's own guessed rationale is not textually supported either. **A bigger consequence
+follows from the text as written, not from the proposal:** the stated precondition for needing
+attribution *at all* -- "N = 600 timed out... with N = 100... harness overhead no longer amortises"
+-- is exactly what decision 3 (`software.frames: 600`, unchanged from hardware `FRAMES`) removes,
+for every isolate, `main` included. Under N = 600, 0016's own stated arithmetic gives harness
+overhead the same 600 frames to amortise across in both modes, so its literal justification for
+`main` keeping attribution evaporates too. `main` keeps it anyway -- not because 0016 demands it,
+but because decision 1 turned the mechanism into a live inlining detector (below); this is recorded
+so the ADR's own reasoning doesn't quietly borrow a justification the source text doesn't give.
+
+**Stability check (decision 2 of this round), measured, not inferred:** raw `bytesPerFrame` on
+every worker isolate, `GC_MODE=software`, `frames: 600`, clean and `object`-control readings,
+`--repeat-each 5`, all 9 worker-isolate-control pairs across the 5 production pages plus every
+page's own clean run (45 control readings + 25 clean readings, 70 total). Every clean reading sat
+at 0.70-2.52 B/frame; every control reading sat at 16.84-29.55 B/frame -- a minimum gap of roughly
+14 B/frame between the *highest* clean reading and the *lowest* control reading, against an 8 B/
+frame budget that sits cleanly between the two clusters on every isolate. **Not perfectly
+bit-stable**, worth recording plainly rather than rounding off: `gen`'s own `client` isolate showed
+a bimodal control reading (3 runs ~17.12, 2 runs ~29.49, a ~12 B/frame gap between clusters, most
+likely the same one-off JIT code-installation-timing mechanism 0028 already named, now landing on a
+worker's raw total instead of `main`'s), and `input`'s own `client` clean reading showed one low
+outlier (0.83 vs. four at 2.52). Neither ever came close to threatening an 8 B/frame budget in
+either cluster -- the premise holds with wide margin, unlike `topology.client`'s attribution
+reading, which was wrong by roughly 600x, not merely noisy inside a safe range.
+
+**Both checks held (narrowed, not contradicted; stable, not bit-perfect but with wide margin), so
+implemented, in the order given:**
+
+1. **`analyse.ts`'s `verdict()` redesigned**: software mode now special-cases only `name === 'main'`
+   (reads `attributedBytesTotal` against `software.isolates.main.attributedBytesPerFrame`); every
+   other isolate, in *either* mode, runs the identical raw-bytes check against the isolate's own
+   hardware `bytesPerFrame`/`bytesPerMessage` budget (`rawB`, shared by both branches). `page.
+   software.isolates` therefore only ever needs a `main` key from here on; `gc-loop`'s own now-dead
+   `software.isolates.sim` entry (unused the instant `sim !== 'main'`) was removed rather than left
+   stale. Two existing unit tests updated, not weakened (docs/plan's own "if an existing test
+   changes, report it" -- flagged here): `gc verdict: software mode uses attributed bytes` renamed
+   to `... on main only` and its fixture isolate renamed `sim` -> `main` (the old test's own premise
+   -- a non-`main` isolate reading attribution in software mode -- is no longer true, so the test
+   name and body needed to say what's actually asserted now); a new test, `gc verdict: software mode
+   uses raw bytes on every isolate but main`, asserts the exact regression this round exists to
+   prevent: a `client`-shaped isolate with `attributedBytesTotal: 0` and no `software.isolates.
+   client` entry at all still fails B correctly, from its raw total alone, throwing no "no software
+   budget" error for a key that no longer needs to exist.
+2. **`gc/suite.ts`'s `assertEnvironment`** now pushes an `adapter.info` annotation (mirroring `tests/
+   browser/support/gpu.ts`'s `expectAdapter`) whenever `expectAdapter: true`, closing the gap the
+   orchestrator named: `terrain`/`input`'s own `zeroGcSuite`-generated GPU tests now reach `scripts/
+   lib/report.mjs`'s `adapters` line the same way `terrain-readback.spec.ts`'s hand-written tests do.
+3. **Full acceptance bar, re-run under the new design**: `object` control, `GC_MODE=software`,
+   `--repeat-each 5`, all 6 pages x every isolate (25 unique tests x 5 = **125 runs**): **125/125
+   passed**, `topology neg object client` now among them (tripping on its raw `16.84` against
+   budget `8`, exactly as it already does in hardware mode). `neg burst` sanity-checked too (19
+   tests, once each, all pass; `--repeat-each` not required for burst since its own signal is
+   ~40,000 B/frame against an 8 B budget -- the acceptance bar's own margin analysis above already
+   covers `object`, the tighter of the two controls).
+4. **Decision 3's wall-time measurement.** `GC_MODE=software`, `frames: 600`, the *real* `gc-terrain`/
+   `gc-input` pages under the *full* instrument (CDP attach, `HeapProfiler.collectGarbage`,
+   `Tracing.start`, two full 600-frame sampling windows, not a proxy test): **terrain clean 586 ms,
+   input clean 707 ms**, on this Mac's real Metal adapter. This is a real number, not a proxy, but it
+   is not the SwiftShader number the decision actually asked to confirm -- this machine has no
+   SwiftShader/Vulkan path to run it on. Combined with run 35611003598's own real SwiftShader
+   evidence (917 ms / 600 real drawing frames =~ 1.53 ms/frame): this Mac's own reading is almost
+   entirely fixed CDP/instrument overhead (Metal's own per-frame draw cost is near zero), so adding
+   SwiftShader's incremental per-frame cost on top of that fixed overhead (~1.53 ms x 9,200 total
+   frames, 8,000 warm-up + 1,200 measured =~ 14.1 s) estimates roughly **14-15 s** per page's `clean`
+   test on the actual CI runner -- comfortably under Playwright's 30 s per-test timeout with real
+   margin. **Still an estimate, not the confirmed number**: only a CI run can give the real figure,
+   and this session cannot push. Flagged for the orchestrator's next run rather than asserted as
+   fact.
+5. **The five real `software` blocks, `frames: 600`, `main`-only** (`ceil(measured clean) + 8`, this
+   milestone's own margin convention, matching every existing row): `topology` **20** (measured
+   12.000, constant across every repeat), `echo` **8** (measured 0.000, constant), `gen` **20**
+   (measured 12.000, constant), `terrain` **89** (measured 80.02, constant), `input` **169**
+   (measured 160.17333333333335, constant). Every clean reading was bit-identical across every
+   repeat measured in this round (no spread to quote, unlike `main`'s own hardware-mode rows, which
+   the two-window rule still narrows but does not always fully flatten).
+
+**The standing guard, recorded as instructed, not as a caveat to explain away:** `main`'s own
+`drive` root is still exposed to the identical V8 inlining risk that made `topology.client` fail --
+nothing in this design *prevents* V8 from inlining `drive` away on some future page or Chromium
+version. That exposure is **accepted, not overlooked**, because decision 1 turned the nested control
+into a **live detector** of exactly that failure mode: if `drive` ever stops surviving as its own
+call-tree node, `main`'s own negative control stops tripping and the test goes red loudly, the same
+way `topology neg object client` did here -- it does not fail open, quietly, the way the pre-decision-1
+sibling-call placement did. A future session that sees a `main`-isolate control fail intermittently
+must read this section before reaching for a wider root or a softer margin: that failure *is* the
+instrument working, not the instrument breaking, and the fix is 0016 caveat b's trivial-scene
+option or a fresh ADR, never a widened `attributionRoots`.
+
+**Commits this round:** `analyse.ts`/`analyse.test.ts` redesign, `gc/suite.ts` adapter.info wiring,
+and the five real `software` blocks (`budgets.json`).
