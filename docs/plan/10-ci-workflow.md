@@ -631,3 +631,41 @@ active (no `default` alongside it), whatever console output Vitest would otherwi
 case has nowhere configured to land. This is the leading hypothesis, not a finding: unconfirmed
 without a Linux reproduction, which this session could not get. If it recurs, the corrected message
 above will at least say so accurately instead of pointing at the wrong thing.
+
+### Run 35621295966 (`8c0670d`): both tiers green -- and the one thing that green does not prove
+
+`pnpm lint`, `pnpm test`, `pnpm test:slow` all green on `ubuntu-latest`, job **5 m 41 s** (a full
+cold two-tier job -- no `rust-cache`/Playwright-cache hit yet on this branch, comparable to
+run 35618167031's own 5 m 9 s fast-tier-plus-first-slow-tier-attempt). 90 s cleared every burst
+control with room; the `wasm` exit-1 of the previous run did not recur here either. **A
+non-recurring failure with no identified cause is not fixed**: not ticked as closed on the strength
+of this green run; recorded as still-open evidence in `docs/plan/deferred-ledger.md` (new row,
+above) rather than treated as resolved by absence.
+
+**Spike B's fallback ladder, confirmed stopped at rung 1.** Rung 1 (`channel:
+'chromium-headless-shell'` under `ENGINE_GPU=swiftshader`, `playwright.config.ts`'s
+`chromiumChannel`) is the only fallback this milestone ever needed -- rungs 2 (flag variations), 3
+(Dawn node bindings, needs its own ADR) and 4 (`@gpu-local`, a question for Tyler) were never
+reached. `adapter.info` on the runner, every run since: `{"vendor":"google","architecture":
+"swiftshader","device":"","description":"","isFallbackAdapter":true}`.
+
+**The per-test-timeout decision, summarised where a later session will find it before wondering why
+one Playwright project has a different `timeout`.** Full reasoning and the measured numbers live in
+`playwright.config.ts`'s own comment beside `gcTimeoutMs` (permanent, not deleted in Phase 4, unlike
+this file): the `gc` project alone gets `timeout: 90_000` under `ENGINE_GPU=swiftshader` (`30_000`,
+Playwright's own default, everywhere else, always locally). Measured (run 35619437805,
+`browser/report.json`'s own per-test durations, `--workers 3`, CI's real concurrency): `echo neg
+burst client` `timedOut` at **30,655 ms**; `echo`/`terrain neg burst main` both **29,893 ms**,
+passing right at the previous 30 s default. Local baseline (`--workers 1`, this Mac, no contention):
+1.1-2.7 s per burst test -- the CI/local ratio ranged roughly **3x-19x per test** depending on which
+others shared the 3-worker batch (contention, not a flat hardware-speed multiplier). 90 s is ~3x the
+worst *passing* CI duration, not a round number picked to clear 30,655 ms. Confirmed by run
+35621295966: every burst control passed within the new timeout.
+
+**Exit criterion "a deliberately slow suite does not fail the job", still open at time of writing.**
+Nothing in any run so far has demonstrated `--budget-scale 1000` keeping a suite past its *unscaled*
+budget from failing CI end to end -- the whole milestone's "timings recorded, never gating" property
+rests on this and has not yet been shown to work, only argued to. Addressed next: a temporary sleep
+pushing `unit` (3 s unscaled budget, cheapest target) past 3 s but nowhere near its scaled 3,000 s,
+checked with a real push-and-read round trip per the orchestrator's own instruction, then reverted
+in a second commit.
