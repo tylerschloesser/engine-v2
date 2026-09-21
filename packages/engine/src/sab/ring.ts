@@ -167,6 +167,16 @@ export class RingProducer {
     out.pushed = Atomics.load(this.control, RING_PUSHED)
     out.popped = Atomics.load(this.control, RING_POPPED)
   }
+
+  /** Explicit drop accounting for a producer whose own policy is "drop the newest event, never
+   * block or retry" (docs/plan/11-camera-and-input.md Planning decisions "Full `inputRing`: drop
+   * and count"). Unlike `tryClaim`/`tryPush` returning `-1`/`false`, which is backpressure for a
+   * producer that itself retries or waits (`ring.full_is_backpressure`: a failed claim there is
+   * not by itself a loss), so the generic ring never assumes a failed claim is a drop on its own --
+   * only a producer that has *decided* to drop calls this. */
+  recordDrop(): void {
+    Atomics.add(this.control, RING_DROPS, 1)
+  }
 }
 
 export class RingConsumer {

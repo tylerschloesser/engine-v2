@@ -9,6 +9,7 @@ import { expect, test } from 'vitest'
 import { CameraState } from './camera/state.js'
 import type { Client } from './client.js'
 import { createFrameLoop, FRAME_PHASES } from './frame-loop.js'
+import { createSemanticRecognizer } from './input/semantic.js'
 import type { TerrainRenderer } from './render/terrain.js'
 import { FLAG_REBASE } from './sab/control.js'
 import { createRing } from './sab/ring.js'
@@ -16,10 +17,15 @@ import { createRing } from './sab/ring.js'
 function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
   const cameraState = new CameraState()
   const uploadRing = createRing(4120, 4)
+  // `input` is unused by anything `frame-loop.ts` itself exercises (M11, Non-scope: wiring a real
+  // recognizer is a later range's job); a real recognizer over a throwaway ring is simpler than a
+  // hand-written stub of `SemanticRecognizer`'s own five methods.
+  const input = createSemanticRecognizer(createRing(40, 4))
   return {
     ready: Promise.resolve(),
     cameraState,
     uploadRing,
+    input,
     wakeCount: 0,
     flagsSet: 0,
     writeCameraAndWake(): number {

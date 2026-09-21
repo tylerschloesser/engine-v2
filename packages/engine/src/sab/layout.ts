@@ -32,7 +32,14 @@ export const RING_DEFAULTS = {
   downlink: { slotBytes: 1024, slots: 512 },
   uplink: { slotBytes: 1024, slots: 64 },
   actionRing: { slotBytes: 1024, slots: 64 },
-  inputRing: { slotBytes: 32, slots: 256 },
+  // docs/plan/11-camera-and-input.md (M11, steps 4-5): `slotBytes` is the ring's own per-slot size
+  // (its own 8-byte header, `sab/ring.ts`, plus payload), and the payload must hold a whole
+  // `inputRing` record -- 32 bytes (Seams: `input/record.ts`'s `INPUT_RECORD_BYTES`). This was
+  // `{ slotBytes: 32, slots: 256 }` (a 32-byte *slot*, leaving only 24 payload bytes -- 8 short),
+  // the same defect `uploadRing` hit and was corrected for (M09's own comment on that row, "M06's
+  // own value here predated the record layout"); the previous range's Deviations flagged it and
+  // left the fix for this one. 32 + 8 = 40.
+  inputRing: { slotBytes: 40, slots: 256 },
   uiRing: { slotBytes: 1024, slots: 256 },
   // docs/plan/09-renderer-terrain.md, Planning decisions "Upload-ring record layout": one fixed
   // 4,112-byte record (16-byte header + 4,096-byte payload) per ring slot, never spanning -- the

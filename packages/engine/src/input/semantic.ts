@@ -1,0 +1,391 @@
+// Semantic input recognition (docs/decisions/0019-camera-input-and-overlay.md §4; docs/plan/
+// 11-camera-and-input.md Scope, Order of work step 4): tap/hover/longpress/drag* recognition, run
+// once per rAF from the same fixed pointer slots `camera/camera.ts`'s integrator reads -- no DOM,
+// so it is unit-testable with `dt` and plain state (Planning decisions: "integration functions take
+// `dt` and plain state, no DOM", the same discipline `camera.ts` follows). `client.input.{on,
+// setMode, suspend, resume}` is the public event-delivery surface (Seams, Provides); `recognize`
+// is this range's own addition to that same object (Deviations: not itself a pinned Seam name, the
+// production-wiring counterpart of `CameraIntegrator.integrate` -- a later range's real DOM wiring
+// calls both from the same `onCamera` hook, `frame-loop.ts`).
+//
+// Not built here (Non-scope of the delegating prompt, or a real gap this range leaves flagged):
+// `pick_id` (always 0 until M18); keyboard/pointer focus rules (a later range's own Non-scope
+// line); real button/modifier capture -- `input/pointers.ts`'s fixed slots (consumed, not changed,
+// per this range's own brief) carry neither, so every emitted event's `button`/`shift`/`ctrl`/
+// `alt`/`meta` is always 0/false in this range; a real source needs either a small additional
+// canvas-scoped listener or an extension of `pointers.ts` itself, left for whichever range wires
+// real production listeners.
+import type { CameraInput } from '../camera/camera.js'
+import type { CameraState } from '../camera/state.js'
+import { type CameraViewport, type TilePoint, tileUnderPoint } from '../camera/transform.js'
+import { RingProducer } from '../sab/ring.js'
+import { PointerKind, type PointerKindValue, type PointerSlot } from './pointers.js'
+import { INPUT_RECORD_BYTES, InputKind, type InputKindValue, writeInputRecord } from './record.js'
+
+export { INPUT_RECORD_BYTES }
+
+export type InputEventType = 'tap' | 'hover' | 'longpress' | 'dragstart' | 'drag' | 'dragend'
+export type InputPointerType = 'mouse' | 'touch' | 'pen'
+
+/** Seams, Provides: one reused instance per event type; a listener must copy what it keeps
+ * (mutated in place before every dispatch, per event type). */
+export type InputEventTs = {
+  type: InputEventType
+  worldX: number
+  worldY: number
+  tileX: number
+  tileY: number
+  pickId: number
+  button: number
+  shift: boolean
+  ctrl: boolean
+  alt: boolean
+  meta: boolean
+  pointerType: InputPointerType
+}
+
+/** 0019 §4: `'tool'` turns a one-pointer drag into `dragstart`/`drag`/`dragend`; a two-pointer
+ * gesture keeps panning/zooming regardless of mode. Default `'camera'`. */
+export type InputMode = 'camera' | 'tool'
+
+export type InputCallback = (e: InputEventTs) => void
+
+export interface InputController {
+  /** Registers `cb` for `type`; returns a disposer. */
+  on(type: InputEventType, cb: InputCallback): () => void
+  setMode(mode: InputMode): void
+  /** Stops recognition and ring writes entirely (0019 §4: "covers modal UI"). */
+  suspend(): void
+  resume(): void
+}
+
+export interface SemanticRecognizer extends InputController {
+  /** Runs once per rAF (Deviations: this range's own seam, not itself pinned by name).
+   * Allocates nothing in steady state: every scratch object below is created once, in
+   * `createSemanticRecognizer` (`.claude/rules/hot-paths.md`). */
+  recognize(
+    input: CameraInput,
+    cameraState: CameraState,
+    viewport: CameraViewport,
+    dtMs: number,
+  ): void
+}
+
+/** 0019 §4: "moved < 8 CSS px and < 300 ms" is a tap. */
+const TAP_RADIUS_PX = 8
+const TAP_MAX_MS = 300
+/** Planning decisions "Thresholds": "longpress = 500ms without leaving the tap radius". */
+const LONGPRESS_MS = 500
+
+function pointerTypeName(kind: PointerKindValue): InputPointerType {
+  if (kind === PointerKind.Touch) return 'touch'
+  if (kind === PointerKind.Pen) return 'pen'
+  return 'mouse'
+}
+
+const KIND_BY_TYPE: Record<InputEventType, InputKindValue> = {
+  tap: InputKind.Tap,
+  hover: InputKind.Hover,
+  longpress: InputKind.Longpress,
+  dragstart: InputKind.DragStart,
+  drag: InputKind.Drag,
+  dragend: InputKind.DragEnd,
+}
+
+/** A plain array plus indexed dispatch, not a `Set` (`.claude/rules/hot-paths.md`: `for...of` over
+ * a `Set` allocates a fresh iterator every call, and `dispatch` runs on the semantic-recognition
+ * path, once per emitted event -- a `tap` every 30 frames of the zero-GC page's own scenario,
+ * Tests added). Registration (`add`) is setup-shaped (called once per game listener, not per
+ * frame) and may allocate; `dispatch`'s own indexed loop does not. */
+class CallbackList {
+  private readonly cbs: InputCallback[] = []
+  add(cb: InputCallback): () => void {
+    this.cbs.push(cb)
+    return () => {
+      const i = this.cbs.indexOf(cb)
+      if (i >= 0) this.cbs.splice(i, 1)
+    }
+  }
+  dispatch(e: InputEventTs): void {
+    for (let i = 0; i < this.cbs.length; i++) (this.cbs[i] as InputCallback)(e)
+  }
+}
+
+function makeEvent(type: InputEventType): InputEventTs {
+  return {
+    type,
+    worldX: 0,
+    worldY: 0,
+    tileX: 0,
+    tileY: 0,
+    pickId: 0,
+    button: 0,
+    shift: false,
+    ctrl: false,
+    alt: false,
+    meta: false,
+    pointerType: 'mouse',
+  }
+}
+
+/** Builds the semantic recognizer + `client.input` API over `inputRingSab` (`SabSet.inputRing`,
+ * `sab/layout.ts`). One instance per `Client` (`createClient`, `src/client.ts`). */
+export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): SemanticRecognizer {
+  const ring = new RingProducer(inputRingSab)
+  let mode: InputMode = 'camera'
+  let suspended = false
+  let nextSeq = 0
+  let clockMs = 0
+
+  const callbacks: Record<InputEventType, CallbackList> = {
+    tap: new CallbackList(),
+    hover: new CallbackList(),
+    longpress: new CallbackList(),
+    dragstart: new CallbackList(),
+    drag: new CallbackList(),
+    dragend: new CallbackList(),
+  }
+  const events: Record<InputEventType, InputEventTs> = {
+    tap: makeEvent('tap'),
+    hover: makeEvent('hover'),
+    longpress: makeEvent('longpress'),
+    dragstart: makeEvent('dragstart'),
+    drag: makeEvent('drag'),
+    dragend: makeEvent('dragend'),
+  }
+
+  // Per-slot bookkeeping (index 0/1, matching `PointerSlots.slots` -- the same convention `camera/
+  // camera.ts`'s own integrator uses). Typed arrays created once, mutated every call.
+  const wasActive = new Uint8Array(2)
+  const downX = new Float64Array(2)
+  const downY = new Float64Array(2)
+  const heldMs = new Float64Array(2)
+  const movedPastThreshold = new Uint8Array(2)
+  const longpressFired = new Uint8Array(2)
+  const dragging = new Uint8Array(2)
+
+  let hoverTileX = Number.NaN
+  let hoverTileY = Number.NaN
+
+  const tileScratch: TilePoint = { tileX: 0, tileY: 0, fracX: 0, fracY: 0 }
+
+  function emit(
+    type: InputEventType,
+    tileX: number,
+    tileY: number,
+    fracX: number,
+    fracY: number,
+    button: number,
+    pointerKind: PointerKindValue,
+  ): void {
+    const e = events[type]
+    e.worldX = tileX + fracX
+    e.worldY = tileY + fracY
+    e.tileX = tileX
+    e.tileY = tileY
+    e.pickId = 0 // Non-scope: pick_id is 0 until M18
+    e.button = button
+    e.shift = false
+    e.ctrl = false
+    e.alt = false
+    e.meta = false // Deviations: no real DOM modifier source in this range
+    e.pointerType = pointerTypeName(pointerKind)
+    callbacks[type].dispatch(e)
+
+    const seq = nextSeq
+    nextSeq = (nextSeq + 1) >>> 0
+    const idx = ring.tryClaim()
+    if (idx < 0) {
+      // Planning decisions "Full `inputRing`: drop and count" -- never a block, a retry or a grow.
+      ring.recordDrop()
+      return
+    }
+    writeInputRecord(ring.slotView(idx), 0, {
+      kind: KIND_BY_TYPE[type],
+      button,
+      modifiers: 0,
+      pointer: pointerKind,
+      seq,
+      tileX,
+      tileY,
+      fracX,
+      fracY,
+      pickId: 0,
+      timeMs: clockMs >>> 0,
+    })
+    ring.commit()
+  }
+
+  function endDrag(
+    i: number,
+    slot: PointerSlot,
+    cameraState: CameraState,
+    viewport: CameraViewport,
+  ): void {
+    tileUnderPoint(cameraState, viewport, slot.x, slot.y, tileScratch)
+    emit(
+      'dragend',
+      tileScratch.tileX,
+      tileScratch.tileY,
+      tileScratch.fracX,
+      tileScratch.fracY,
+      0,
+      slot.kind,
+    )
+    dragging[i] = 0
+  }
+
+  function processSlot(
+    i: number,
+    slot: PointerSlot,
+    cameraState: CameraState,
+    viewport: CameraViewport,
+    activeCount: number,
+    dtMs: number,
+  ): void {
+    if (slot.active) {
+      if (wasActive[i] === 0) {
+        // Just engaged: reset this press's bookkeeping. The down frame itself never emits
+        // anything (same convention as `camera.ts`'s own "the down frame itself never pans").
+        downX[i] = slot.x
+        downY[i] = slot.y
+        heldMs[i] = 0
+        movedPastThreshold[i] = 0
+        longpressFired[i] = 0
+        dragging[i] = 0
+      } else {
+        heldMs[i] = (heldMs[i] as number) + dtMs
+        const dx = slot.x - (downX[i] as number)
+        const dy = slot.y - (downY[i] as number)
+        if (Math.hypot(dx, dy) >= TAP_RADIUS_PX) movedPastThreshold[i] = 1
+      }
+
+      if (mode === 'tool' && activeCount === 1 && movedPastThreshold[i] === 1) {
+        tileUnderPoint(cameraState, viewport, slot.x, slot.y, tileScratch)
+        if (dragging[i] === 0) {
+          dragging[i] = 1
+          emit(
+            'dragstart',
+            tileScratch.tileX,
+            tileScratch.tileY,
+            tileScratch.fracX,
+            tileScratch.fracY,
+            0,
+            slot.kind,
+          )
+        } else {
+          emit(
+            'drag',
+            tileScratch.tileX,
+            tileScratch.tileY,
+            tileScratch.fracX,
+            tileScratch.fracY,
+            0,
+            slot.kind,
+          )
+        }
+      } else if (dragging[i] === 1) {
+        // No longer a valid one-pointer tool-mode drag (mode changed, or a second pointer
+        // engaged): end it. Camera pan/zoom for a second pointer is `camera.ts`'s own concern.
+        endDrag(i, slot, cameraState, viewport)
+      }
+
+      if (
+        longpressFired[i] === 0 &&
+        movedPastThreshold[i] === 0 &&
+        dragging[i] === 0 &&
+        activeCount === 1 &&
+        (heldMs[i] as number) >= LONGPRESS_MS
+      ) {
+        longpressFired[i] = 1
+        tileUnderPoint(cameraState, viewport, slot.x, slot.y, tileScratch)
+        emit(
+          'longpress',
+          tileScratch.tileX,
+          tileScratch.tileY,
+          tileScratch.fracX,
+          tileScratch.fracY,
+          0,
+          slot.kind,
+        )
+      }
+    } else if (wasActive[i] === 1) {
+      // Just released.
+      if (dragging[i] === 1) {
+        endDrag(i, slot, cameraState, viewport)
+      } else if (
+        movedPastThreshold[i] === 0 &&
+        longpressFired[i] === 0 &&
+        (heldMs[i] as number) < TAP_MAX_MS
+      ) {
+        tileUnderPoint(cameraState, viewport, slot.x, slot.y, tileScratch)
+        emit(
+          'tap',
+          tileScratch.tileX,
+          tileScratch.tileY,
+          tileScratch.fracX,
+          tileScratch.fracY,
+          0,
+          slot.kind,
+        )
+      }
+    }
+    wasActive[i] = slot.active ? 1 : 0
+  }
+
+  function recognize(
+    input: CameraInput,
+    cameraState: CameraState,
+    viewport: CameraViewport,
+    dtMs: number,
+  ): void {
+    clockMs += dtMs
+    if (suspended) return
+    const [p0, p1] = input.pointers.slots
+    const activeCount = (p0.active ? 1 : 0) + (p1.active ? 1 : 0)
+
+    // 0019 §4: "hover (mouse only)"; the engine keeps a cursor tile (mouse: tile under the
+    // pointer; touch: tile of the last tap -- set by the `tap` emission above/below instead).
+    let mouseSlot: PointerSlot | undefined
+    if (p0.active && p0.kind === PointerKind.Mouse) mouseSlot = p0
+    else if (p1.active && p1.kind === PointerKind.Mouse) mouseSlot = p1
+    if (mouseSlot) {
+      tileUnderPoint(cameraState, viewport, mouseSlot.x, mouseSlot.y, tileScratch)
+      cameraState.cursorTileX = tileScratch.tileX
+      cameraState.cursorTileY = tileScratch.tileY
+      cameraState.cursorValid = true
+      if (tileScratch.tileX !== hoverTileX || tileScratch.tileY !== hoverTileY) {
+        hoverTileX = tileScratch.tileX
+        hoverTileY = tileScratch.tileY
+        emit(
+          'hover',
+          tileScratch.tileX,
+          tileScratch.tileY,
+          tileScratch.fracX,
+          tileScratch.fracY,
+          0,
+          PointerKind.Mouse,
+        )
+      }
+    }
+
+    processSlot(0, p0, cameraState, viewport, activeCount, dtMs)
+    processSlot(1, p1, cameraState, viewport, activeCount, dtMs)
+  }
+
+  return {
+    on(type, cb) {
+      return callbacks[type].add(cb)
+    },
+    setMode(m) {
+      mode = m
+    },
+    suspend() {
+      suspended = true
+    },
+    resume() {
+      suspended = false
+    },
+    recognize,
+  }
+}

@@ -5,6 +5,7 @@ import { CameraBlockView, writeCameraBlock } from './camera/block.js'
 import { CameraState } from './camera/state.js'
 import type { Clock, Scheduler } from './clock.js'
 import { systemClock, systemScheduler } from './clock.js'
+import { createSemanticRecognizer, type SemanticRecognizer } from './input/semantic.js'
 import type { InstanceConfig } from './loader.js'
 import {
   CB_FLAGS,
@@ -97,6 +98,12 @@ export interface Client {
    * ("on visible ... tell the client worker to re-base interpolation"); M30 is the one that clears
    * and consumes the flag, not this milestone. */
   setFlags(mask: number): void
+  /** docs/plan/11-camera-and-input.md Seams (Provides): `client.input.{on, setMode, suspend,
+   * resume}` with 0019's signatures, plus `recognize(...)` (Deviations: this range's own addition,
+   * the production-wiring seam a later range calls once per rAF -- mirroring `CameraIntegrator.
+   * integrate`, from the same externally-owned `pointers`/`keys`/`wheel` bundle -- rather than a
+   * pinned Seam name). */
+  readonly input: SemanticRecognizer
   destroy(): void
 }
 
@@ -285,6 +292,23 @@ export function createClient(options: ClientOptions): Client {
       setFlags(): void {
         throw err
       },
+      input: {
+        on(): () => void {
+          throw err
+        },
+        setMode(): void {
+          throw err
+        },
+        suspend(): void {
+          throw err
+        },
+        resume(): void {
+          throw err
+        },
+        recognize(): void {
+          throw err
+        },
+      },
       destroy() {},
     }
   }
@@ -305,6 +329,7 @@ export function createClient(options: ClientOptions): Client {
   const control = new ControlBlock(sabs.control)
   const cameraState = new CameraState()
   const cameraWriter = new CameraBlockView(sabs.cameraBlock)
+  const input = createSemanticRecognizer(sabs.inputRing)
   const workers: WorkerEntry[] = []
 
   function destroy(): void {
@@ -387,6 +412,7 @@ export function createClient(options: ClientOptions): Client {
     uploadRing: sabs.uploadRing,
     writeCameraAndWake,
     setFlags,
+    input,
     destroy,
   }
   handles.set(client, { control, sabs, cameraState, cameraWriter, clock, scheduler, workers })
