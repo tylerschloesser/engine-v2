@@ -29,6 +29,13 @@ export type TestFlags = {
    * runs, read fresh from the control block's `Control` word set up the same way `step-block.ts`
    * does it for the test harness. */
   gcHook?: boolean
+  /** `worker/sim.ts` only (docs/plan/13b-tick-timing-allocation.md, Order of work 1): arms
+   * `simHost.start()` (real-time pacing, `onFire` via `AtomicsTimer`) even though `test` is
+   * present, so a zero-GC page can prove the production pacing path itself is allocation-free --
+   * distinct from the blanket `!message.test` gate M13 built, which a page still driving ticks
+   * deterministically through `CB_SIM_STEP_REQ` (`gc-sim.ts`) must keep clear of (Deviations: why
+   * arming both at once is safe for a page that never asserts a resulting hash). */
+  pace?: boolean
 }
 
 export type SetupMessage = {

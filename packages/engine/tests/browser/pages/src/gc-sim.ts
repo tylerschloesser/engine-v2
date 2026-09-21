@@ -3,14 +3,21 @@
 // kind: 'local', world }`), the sim isolate driven by exactly one deterministic tick per measured
 // frame through `stepSimTickSync` (bypassing real-time pacing entirely, same as `stepTick`'s own
 // synchronous core -- `test/client.ts`) instead of `asHarness`'s generic `stepFrame`/`stepTick`
-// default (which never touches `CB_SIM_STEP_REQ` and so would never actually tick `sim`: real-time
-// pacing itself never arms in test mode, `worker/sim.ts`'s own `!message.test` gate). No `client`/
-// `gen` work is driven here (no camera, no view): this page's whole point is the sim isolate's own
-// allocation under real ticking, not a scripted pan. `client`/`gen0` are spawned (`createClient`'s
-// topology always does) but deliberately not in `budgets.json`'s own `isolates` for this page,
-// matching `gen`'s own `net`-not-budgeted precedent (Deviations there): a `drive()` that never
-// wakes them gives their own negative control nothing to fire on, and `zeroGcSuite` only generates
-// per-isolate assertions for names `budgets.isolates` lists.
+// default (which never touches `CB_SIM_STEP_REQ` and so would never actually tick `sim`). No
+// `client`/`gen` work is driven here (no camera, no view): this page's whole point is the sim
+// isolate's own allocation under real ticking, not a scripted pan. `client`/`gen0` are spawned
+// (`createClient`'s topology always does) but deliberately not in `budgets.json`'s own `isolates`
+// for this page, matching `gen`'s own `net`-not-budgeted precedent (Deviations there): a `drive()`
+// that never wakes them gives their own negative control nothing to fire on, and `zeroGcSuite` only
+// generates per-isolate assertions for names `budgets.isolates` lists.
+//
+// `test.flags.pace: true` (docs/plan/13b-tick-timing-allocation.md, Order of work 1, "arm an
+// existing page" -- the brief's own alternative to a brand-new one): arms `simHost.start()` for
+// real, so `worker/sim.ts`'s `AtomicsTimer`/`onFire` -- the production pacing path -- is actually
+// live on every wake this page drives, not only the deterministic `stepSimTickSync` call `drive()`
+// still makes every frame. Combining both is safe here only because this page asserts allocation,
+// never a resulting hash: an `onFire` catch-up racing a `stepTick` mid-run is a Deviations-recorded
+// non-issue for a page with no golden to match.
 import { createClient } from '../../../../src/client.ts'
 import { asHarness, parkWorkers, stepSimTickSync } from '../../../../src/test/client.ts'
 import { installGcPage } from '../../../../src/test/gc-page.ts'
@@ -33,7 +40,7 @@ const client = createClient({
     world: { worldId: 'gc-sim', params: { seed: '1', worldgen: null } },
   },
   genWorkers: 1,
-  test: { flags: { gcHook: true } },
+  test: { flags: { gcHook: true, pace: true } },
 })
 await client.ready
 // A production worker enters its blocking loop right after `ready`: park before `__pageReady`

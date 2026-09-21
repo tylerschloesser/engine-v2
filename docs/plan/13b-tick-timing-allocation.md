@@ -133,4 +133,110 @@ first thing to try for the next unreproducible CI-only zero-GC finding.
 none
 
 ## Deviations
-(filled in during Phase 3)
+
+### Step 1: built, reproduces, and found the direction is larger than this brief
+
+**Built** (per Order of work 1, "add a page or arm an existing one" -- armed the existing one):
+- `TestFlags.pace?: boolean` (`packages/engine/src/worker/protocol.ts`): a new, additive test flag.
+- `worker/sim.ts`'s gate changed from `if (!message.test) simHost.start()` to `if (!message.test ||
+  message.test.pace === true) simHost.start()` -- purely additive; every existing page (`gc-sim`
+  itself before this change, `topology`, `echo`, `gen`, `sim-worker`) never sets `pace`, so their
+  behaviour is bit-for-bit unchanged (`!message.test` alone still gates them). This is the seam a
+  follow-on brief should keep: it lets a page arm real pacing (`onFire` via `AtomicsTimer`) while
+  `test` stays present, so `gcHook`/the parked test-call channel remain available too.
+- `gc-sim.ts`: `test.flags` gained `pace: true`. `drive()` is unchanged (`stepSimTickSync(client,
+  1)` still drives one deterministic tick per measured frame); arming `pace` on top of that is safe
+  for this page specifically because it asserts allocation only, never a resulting hash -- an
+  `onFire` catch-up racing a manual `stepTick` mid-run has nothing to corrupt here.
+
+**Reproduces, confirming the defect is real and production-facing, not test-path-only:** rebuilt
+(`pnpm --filter engine build` + `vite build --config packages/engine/tests/browser/pages/
+vite.config.ts`; bundle hash changed, `gc-sim-DGfc5Pw3.js` -> `gc-sim-CX2A_hny.js`, confirming a
+fresh bundle was measured, not a stale one).
+
+- **Under default V8 (no forced tier), `pnpm gc -t "sim clean"`:** already fails, consistently, not
+  intermittently -- 5 repeats (`--repeat-each 5 --workers 1`) read `sim` at 14.43, 14.41, 14.61,
+  14.43 and (one outlier) 60.67 B/frame, all over the strict 8 B budget. `byFn` (the chosen, lower
+  window) shows `runBlockingLoop@...:842: 7148`, `scope.onmessage@...:1315: 1232`,
+  `poll@...:1219: 24`, `now@...:1054: 24`, `onFire@...:1142: 24` -- i.e. arming `simHost.start()`
+  for real costs the `sim` isolate budget headroom **even without forcing the interpreter tier**,
+  which the original (`runOneTickTimed`-only) defect never did on its own (it needed sibling-isolate
+  contention or `--no-opt --no-sparkplug` to show up at all).
+- **Under `--js-flags=--expose-gc --sampling-heap-profiler-suppress-randomness --no-opt
+  --no-sparkplug`** (temporary edit to `packages/engine/playwright.config.ts`'s `gc` project,
+  reverted immediately after this one measurement -- never left in the tree, per the brief's own
+  instruction not to leave the `gc` project permanently launched with it): `sim` reads 60.45
+  B/frame. `byFn.sim`: `timeoutMs@...:1227: 14280` (23.80 B/tick -- the same magnitude as the
+  brief's own `runOneTickTimed` finding, but from a *different* function), `stepTick@...:1196:
+  14220` (23.70 B/tick -- this is the brief's own already-known `runOneTickTimed` defect,
+  reproduced again here), `now@...:1054: 6336`, `poll@...:1219: 768`.
+- Full-suite run (`pnpm test`) stayed in the **fast tier's time budget** (`browser FAIL 95 tests
+  20s/25s`) -- this is not a slow, real-wall-clock-paced reproduction; `drive()` still ticks
+  deterministically and fast, `simHost.start()` firing `onFire` for real only incidentally (a
+  handful of times, from ordinary CDP/setup latency already elapsing more than one 50 ms tick
+  period before the measured window starts), which is enough to prove the `AtomicsTimer` code paths
+  are live and costly without needing a real 30-second window.
+- Cascading effect confirmed, not just the `clean` test: `sim neg object main` and other `sim neg
+  *` tests also now fail, because `sim`'s own baseline already exceeds its budget independent of
+  any control -- expected, and further evidence the defect is in `sim`'s own steady state, not
+  something a control introduces.
+
+**Why this is bigger than a "move two `clock.now()` reads into Rust" fix, and the step boundary
+this stops at:** the brief's own Scope/Files-touched anticipated one source
+(`SimHost.runOneTickTimed`, `server.ts`, confirmed above as `stepTick@...:1196`). Arming
+`simHost.start()` for real -- exactly what Step 1 asked for, and exactly why Step 1 had to come
+first -- surfaces a **second, independent, and comparably-sized** source that was never in the
+brief's Files-touched list: `worker/atomics-timer.ts`'s `poll()`/`timeoutMs()`. Both read
+`clock.now()` on every real wake (not every tick -- every wake of the blocking loop, `runBlockingLoop`
+in `worker/shell.ts`, which calls `body()` then `timeoutMs()` before every `Atomics.wait`), and
+`timeoutMs()` additionally computes a **float subtraction** (`nextFireAt - clock.now()`) and a
+`Math.max`-shaped comparison on the result -- a "double-valued temporary on a per-pass path"
+(`.claude/rules/hot-paths.md`'s own banned shape), not merely a raw clock read. The halving
+experiment already established that even *one* raw `clock.now()` read per tick (11.92 B/tick) blows
+the 8 B budget on its own; `timeoutMs()`/`poll()` together read the clock at least twice more per
+wake and additionally materialise a fresh float from arithmetic on top, which is why their measured
+cost (23.80 + a further 6336/600 B from `now`, plus `poll`'s own 768/600) is the same order of
+magnitude as `runOneTickTimed`'s own two reads, not a rounding error next to it.
+
+**This cannot be fixed by "relocating" the read into Rust the way `runOneTickTimed`'s two reads
+plausibly can.** `Atomics.wait`'s timeout argument is a JS-side value that only JS can compute --
+there is no WASM export that could compute it instead, because `Atomics.wait` is not something WASM
+code can call. Two directions were considered and rejected as *this brief's* fix, both because they
+are genuine redesigns, not relocations:
+- **A WASM import for a monotonic clock** (the brief's own suggested fallback, "adding that import
+  is in scope"). Analysis, not yet contradicted by a measurement because it would need the import
+  built first to test: the import's own JS-side glue closure (`() => performance.now()`) is still
+  an ordinary JS function, still subject to `--no-opt`/`--no-sparkplug`, and V8's WASM tiers
+  (Liftoff/TurboFan-for-WASM) are governed by separate flags than JS's (Sparkplug/TurboFan-for-JS)
+  -- forcing the JS tier down does not touch WASM code, but does still force the import's own glue
+  function down. An import very plausibly does not remove the allocation under forced interpreter
+  tier at all; it would only *relocate where the box is billed*, reproducing exactly the
+  "guarantee that holds only when V8 wins a compilation race" problem 0016 §1 already rejects. This
+  needs building and measuring to confirm either way, which is follow-on work.
+- **A SharedArrayBuffer time source written by a non-strict isolate** (main thread, using the same
+  "WASM reads times from its own region" pattern `worker/client.ts`'s `frame_time_ms` fix already
+  established for the camera block): sound in principle, but has no natural periodic writer on a
+  page with no render loop (every zero-GC page, and any backgrounded/paused-render single-player
+  session), and coarsens `tickOverruns`/`ticksDropped` precision to whatever interval the writer
+  runs at -- a real semantic change to what M13 built, needing the ADR the brief already flags
+  ("Any change to what `tickOverruns` or `ticksDropped` counts... needs a new ADR amending M13's").
+- A third option, noted for whoever writes the follow-on brief: stop deriving `due`/overrun from
+  measured wall-clock deltas at all and instead treat "woken by an `Atomics.wait` timeout" itself
+  (a fact `ControlBlock.waitForWake`'s own return already carries, not a fresh clock read) as "one
+  tick is due" -- a naive fixed-interval scheme with no drift correction and no wall-clock-derived
+  catch-up. This removes every remaining clock read but changes the pacing model itself, squarely
+  the "timer redesigned rather than relocated" case the brief names as its own cut line.
+
+**Decision: stop here, at the Step 1 boundary, per the brief's own instruction** ("If the direction
+proves larger than this brief... stop at a step boundary and report: the orchestrator writes the
+follow-on brief"). Steps 2-5 all depend on which of the above (or another) direction is chosen for
+`AtomicsTimer`, which is a design decision, not an implementation detail this milestone's Scope
+anticipated (`worker/atomics-timer.ts` is not in "Files, packages and crates touched").
+
+**State left on `main`:** `gc-sim`'s `sim clean` test (and its `sim neg *` siblings) fail by design
+-- this is Step 1's own deliverable, a reproduction that must exist and must fail before a fix can
+be verified. `pnpm test`: `rust 235`, `unit 154`, `wasm 40` unchanged; `browser` now shows the
+`sim`-isolate failures above (was 95 passing at the base commit). `pnpm lint`: unchanged, green
+(biome, rustfmt, clippy, tsc all pass -- confirmed after this step's edits). No golden changed; no
+budget in `budgets.json` changed (the existing `sim` entry's numbers are untouched -- the fix, not
+the number, is what has to change here, per "Budgets": the strict worker figure is not negotiable).

@@ -49,9 +49,13 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
 
   let lastStepReq = Atomics.load(shell.control.words, CB_SIM_STEP_REQ)
 
-  // Production topology only (Deviations, above): a test/dev page never calls this and drives
-  // every tick itself through `CB_SIM_STEP_REQ` instead.
-  if (!message.test) simHost.start()
+  // Production topology, or a test page that opts in with `test.pace` (docs/plan/
+  // 13b-tick-timing-allocation.md, Order of work 1): a test/dev page normally never calls this and
+  // drives every tick itself through `CB_SIM_STEP_REQ` instead. `pace` exists so a zero-GC page can
+  // arm real-time pacing (`onFire` via `AtomicsTimer`) while `test` stays present (`gcHook`/the
+  // parked test-call channel still need it) -- safe to combine with manual `CB_SIM_STEP_REQ`
+  // driving on the same page only because such a page asserts allocation, never a resulting hash.
+  if (!message.test || message.test.pace === true) simHost.start()
 
   function body(wokenBy: number): void {
     if (gcHook) applyGcHook(shell.control, shell.index)
