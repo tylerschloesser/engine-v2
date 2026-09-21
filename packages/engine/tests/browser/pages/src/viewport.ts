@@ -46,10 +46,17 @@ function requireClient(): Client {
 window.__viewport = {
   async init(opts) {
     canvasEl = document.createElement('canvas')
-    // 0 CSS px: nothing here relies on the real `ResizeObserver`'s own report (every test drives
-    // size through `setViewport`/`forceSize` instead, which is what makes these tests deterministic
-    // in a headless browser that cannot really resize a window or change display DPI) -- starting
-    // at 0 just keeps the *real* observer's own, unused, initial report harmless either way.
+    // Pinned CSS size, decoupled from the backing store: a canvas with no CSS width/height of its
+    // own takes its *layout* box straight from the `width`/`height` content attributes -- exactly
+    // the two `applyPending()` writes every tick. Leaving CSS unset therefore lets the real
+    // `ResizeObserver` (left live on this page on purpose) faithfully report back whatever size a
+    // test's own forced override *last actually applied*, racing a still-pending, not-yet-applied
+    // override queued between two `page.evaluate()` calls (found the hard way: `viewport: resize
+    // renders same frame` flaked under `--repeat-each 10 --workers 3`, always reverting to the
+    // *previous* applied size, never a stray one -- the tell that the "real" report was correct for
+    // a moment that had already passed, not corrupt). A fixed CSS box breaks that feedback loop.
+    canvasEl.style.width = '1px'
+    canvasEl.style.height = '1px'
     document.body.appendChild(canvasEl)
 
     device = await initDevice()
