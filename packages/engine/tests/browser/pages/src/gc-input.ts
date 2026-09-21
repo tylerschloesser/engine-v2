@@ -27,6 +27,9 @@ import { fixtureWasm } from './fixture-wasm.ts'
 declare global {
   interface Window {
     __pageReady?: true
+    /** Budgets (Exit criteria): "`inputRing` `drops == 0`" -- read after a run, same `RingStats`
+     * shape `src/test/client.ts`'s own `ringDrained` reads. */
+    __gcInputRingDrops?: () => number
   }
 }
 
@@ -153,5 +156,11 @@ installGcPage(harness, {
   adapter: device.adapterInfo,
   drive,
 })
+
+window.__gcInputRingDrops = () => {
+  const stats = { drops: 0, pushed: 0, popped: 0 }
+  new RingConsumer(clientTestHandle(client).sabs.inputRing).stats(stats)
+  return stats.drops
+}
 
 window.__pageReady = true
