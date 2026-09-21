@@ -362,3 +362,135 @@ is entirely outside this range's Files touched):
 device-checks.md` M09b section, and `packages/engine/CLAUDE.md`'s own context-artifact update (how to
 open the device page). `attachVisibilityHandling` (this range's own addition) is built but not wired
 into any real page's `document` yet -- `device.html` is expected to be the first caller.
+
+### Steps 6-7 (canvas-presentation smoke test, production phase order, device page and HUD) -- done
+
+Delegated as the final range. Commits `fff8f75` (step 6, which also lands `device.html`/`src/
+device.ts` -- see below for why) and `cae5c23` (step 7's remaining artifacts).
+
+**Order of work, deviated from, and why.** The brief's own exit criteria tie `frame-loop.
+production_runs_phases_in_order` to `device.html` by name ("`device.html` runs the production
+`createFrameLoop` ... `frame-loop.production_runs_phases_in_order` passes"), so step 6's test needed
+step 7's page to exist first. `device.html`/`src/device.ts` therefore landed whole in the step-6
+commit; step 7's own commit is the remaining, genuinely step-7 artifacts (`index.html`'s link,
+`packages/engine/CLAUDE.md`'s context artifact) plus this range's manual-check evidence. Recorded
+here rather than silently reordered.
+
+**Exact seam shapes:**
+
+- `frame-loop.ts` gains `FrameLoopOptions.onPhase?(phase: FramePhase): void` (default a shared
+  `noopPhase`, `noop`'s own precedent) and `RealFrameLoopOptions.onCamera?(): void` / `onPhase?(...)`,
+  forwarded straight through `createRealFrameLoop`. `tick()` calls `onPhase(<name>)` immediately
+  before each of the six `FRAME_PHASES` entries' own work (after `viewport?.applyPending()`, which
+  stays outside the six-phase sequence exactly as before -- Seams' "before the `camera` phase" is
+  unaffected). This is the one change to `frame-loop.ts` this range makes, and it exists because there
+  is no other way to observe "phase order, end to end, against a real `Client`/`TerrainRenderer`" from
+  outside the module: `upload`'s own internal step (`drain.drain(budget)`) calls no method on the
+  caller-supplied `renderer` at all when there is nothing to drain that frame, so wrapping
+  `renderer`'s or `client`'s own methods (the only alternative that needs no production change) cannot
+  prove the `upload` phase *ran* on a quiet frame, only that it *did something* on a busy one.
+  `onPhase` is unconditionally cheap (one already-bound function-reference call per phase per frame,
+  no allocation, no closure) when unset, so it costs nothing on every existing page.
+- `frame-loop.test.ts` gains `frame-loop.onPhase_called_with_each_FRAME_PHASE_in_order` (fakes,
+  matching every other phase-order assertion already in that file) -- not one of the brief's own
+  Tests added names, but the seam above had zero coverage otherwise.
+- `device.html`/`src/device.ts` (`tests/browser/pages/`): the one page using *production*
+  `systemClock`/`systemScheduler` (`src/clock.ts`) rather than a `ManualClock` -- every other
+  real-client page in this suite (`viewport.ts`, `terrain-client.ts`, `gc-terrain.ts`) exists
+  precisely to avoid real rAF pacing (0020 §3), but this page's whole point is to measure it. Its own
+  `Scheduler` passed to `createRealFrameLoop` is a thin wrapper around `systemScheduler` (still real
+  `requestAnimationFrame` underneath -- the exit criterion's "through the injected `Scheduler`" is
+  satisfied literally, not worked around) that times each real rAF interval and the whole wrapped
+  callback's own duration (0018 §9's "main-thread rAF callback" budget), and samples GPU latency via
+  `device.queue.onSubmittedWorkDone()` once every 30 real frames.
+- `window.__device`: `adapterInfo()`, `framesRendered()` (count of whole `tick()`s completed, via the
+  same scheduler wrapper), `phaseLog()` (the `onPhase` log, capped at `FRAME_PHASES.length * 40`
+  entries so a real, multi-minute Tyler session never grows it unbounded), `errors()`.
+- Camera integration is Non-scope (M11) but a device page with zero pixels moving cannot prove
+  anything: `device.ts`'s own `onCamera` callback (passed to `createRealFrameLoop`, run every tick via
+  the `onPhase('camera')` seam above) computes `camTileX/Y`/`camFracX/Y`/`viewportPxW/H`/`tilesPerPx`
+  fresh every frame from `client.cameraState` and the already-applied `renderer.viewport`, and, when
+  `?autopan=1`, advances `cameraState.centreX` by a fixed 4 tiles/second (real elapsed time, via
+  `performance.now()` -- allowed here: the `noRestrictedGlobals` ambient-time ban is scoped to
+  `packages/engine/src/**`, not `tests/`). `tilesPerPx = tilesAcross / max(viewportPxW, viewportPxH)`
+  (0018 §6: "tiles across the long axis") and `halfExtentTilesX/Y = tilesAcross / 2` are this page's
+  own stand-ins for M11's real camera -> half-extent/zoom maths -- reasonable, not specified, choices
+  recorded as interpretation calls below.
+- URL parameters, read once at load via `new URL(location.href).searchParams`: `tiles` ->
+  `cameraState.tilesAcross`, `x`/`y` -> `centreX`/`centreY` (default 0), `autopan` (`'1'` or `'true'`),
+  `scale`/`scaleCap`/`cutoff` -> one `RenderOptions` object passed to *both* `createClient` and
+  `createRealFrameLoop` (the same object, per `client.ts`'s own documented "one `ClientOptions.render`
+  object is also what a caller hands `createRealFrameLoop`" pattern). `probe`/`harness`/`anchors`/
+  `anchorMode`/`module` are never read: an unread `URLSearchParams` key is tolerance by construction,
+  no special-case code needed.
+
+**Interpretation calls, recorded rather than guessed silently:**
+
+- `tilesPerPx`/`camTile`/`camFrac`/`halfExtentTiles*` maths above: 0018 §5's camera-relative formulas
+  are M11's to implement for real; this page needs *some* working stand-in to show real terrain art
+  and real gen/upload traffic, so it derives the same fields the shader needs directly from
+  `cameraState`/`viewport` each frame. Not exercised by any assertion beyond "no GPU errors, non-zero
+  frame stats" -- pixel correctness under panning is `terrain-readback.spec.ts`'s job, unchanged here.
+- `canvas.spec.ts`'s two tests wait for `framesRendered() >= 1` / `>= 3` rather than a fixed sleep,
+  and the phase-order test checks every complete 6-entry group in the capped log, not just the first
+  -- "observed end to end" read as "holds across several consecutive real frames," not "true once."
+- `PAN_TILES_PER_SECOND = 4` (autopan): half `gc-terrain.ts`'s own 8 tiles/second precedent, chosen
+  because this page runs at real rAF pacing for minutes at a time (a Tyler device session), not a
+  fixed 600-frame window, so there is no reason to cross chunk boundaries as fast.
+- HUD rolling-window percentiles (`RollingStat`, 10 s, prune-by-timestamp) apply the same 10 s window
+  to `rAF interval`, `main rAF callback` and `GPU latency` alike; the brief's own Planning decisions
+  names "10 s" only for the rAF-interval figures, but using one consistent window for every rolling
+  stat was simpler than inventing a second, unstated one.
+- `docs/plan/device-checks.md`'s M09b section: read against what was actually built and left
+  unedited -- its URL (`device.html?autopan=1&tiles=256&scale=2`) and every HUD figure it names
+  (`isolated`/adapter, rAF interval p95, intervals > 20 ms, GPU latency p95) already match exactly.
+
+**Measured** (quiet-machine `pnpm test`, `uptime` load average 3.4-7.5 across these runs -- all well
+under the delegation prompt's own ~20 danger line): `rust pass 141 tests 0.4s/10s` (unchanged),
+`unit pass 115 tests 1.2-1.4s/3s` (+1 over the steps-4-5 count: `frame-loop.onPhase_...` -- the
+`context-artifacts` CLAUDE.md-line-cap test also required `packages/engine/CLAUDE.md`'s new paragraph
+to be folded into the existing one, not appended as a new line, to stay at exactly 60), `wasm pass 35
+tests 1.3-1.5s/7s` (unchanged), `browser pass 74 tests 14-15s/25s` (+2 over the steps-4-5 count: this
+range's own two new tests; comfortably under the 20s trip-wire named in the delegation prompt).
+`pnpm test browser -t "canvas: presents"`: `pass 1 tests 1.8s/25s`. `pnpm test browser -t "phases in
+order"`: `pass 1 tests 1.8s/25s`. `pnpm test browser -t viewport`: `pass 7 tests 2.5s/25s`
+(unchanged from steps 4-5). `pnpm test browser -t lifecycle`: `pass 1 tests 1.8s/25s` (unchanged).
+`pnpm test browser -t terrain`: `pass 20 tests 5.7s/25s` (unchanged). `playwright test --project gc
+--grep "terrain clean" --repeat-each 4 --workers 1`: `4 passed (5.3s)`, confirming this range's
+`frame-loop.ts` change is inert for the `terrain` zero-GC page (`gc-terrain.ts` draws directly through
+its own `drive()`, never through `createFrameLoop`/`createRealFrameLoop`). `pnpm lint`:
+biome/rustfmt/clippy/tsc all green throughout.
+
+**`pnpm device:serve` itself could not be run as the literal command**: its hardcoded port (4173,
+`scripts/device-serve.mjs`) was already bound by an unrelated, pre-existing process on this shared
+machine (a different repository's own `vite preview`, confirmed by `lsof -i :4173` / `ps -p <pid>` --
+not started by this session, not touched). Verification instead ran the identical build the script
+runs (`vite build --config .../vite.config.ts`, confirmed `device-*.js` present in the output) served
+by the same `vite preview` invocation on a free port (`ENGINE_TEST_PORT=4180`) -- functionally
+identical, since `device-serve.mjs`'s own port is just that env var's value. Via the `playwright-cli`
+skill against real desktop Chrome at `?autopan=1&tiles=256`, the HUD after ~14 s of real time read:
+`isolated: true`; `adapter.info: {"vendor":"apple","architecture":"metal-3","device":"",
+"description":"","isFallbackAdapter":false}`; `workers ready: true`; `canvas: 1280x720px dpr=1
+renderScale=1`; `rAF interval p50/p95/worst (10s): 16.7 / 16.7 / 16.7 ms (n=601)`; `rAF intervals
+>20ms (10s): 0`; `main rAF callback p95 (10s): 0.22 ms`; `GPU latency p95 (10s, sampled every 30
+frames): 2.25 ms (n=20)`; `frames rendered: 959`. `playwright-cli console`: 0 errors. Server and
+browser both stopped afterward; `pgrep`/`lsof` before and after showed no orphan `vite preview`/
+Playwright/Chrome process from this session (the unrelated port-4173 process was left running,
+untouched, exactly as found).
+
+**Found, not caused by and not fixed in this range: a residual `viewport.html` `ResizeObserver` race
+under combined multi-suite load.** One `pnpm test` run (all four suites in parallel, `uptime` load
+3.4-5.9) failed `viewport: resize renders same frame` with the forced-64x64 override reverting to the
+page's own pinned 1x1 CSS size -- the same race class steps 4-5's own Deviations already found and
+partially fixed (pinning `viewport.html`'s canvas CSS size at 1x1 to stop the real `ResizeObserver`
+from ever reporting a *changed* size). Quantified before guessing further, per the delegation prompt:
+re-run twice more (`pnpm test browser -t viewport` alone, twice; full `pnpm test` again once) all
+passed, so this is a load-sensitive flake, not a deterministic regression -- consistent with (a guess,
+stated as one) the real observer's very first callback, which always fires once at page load
+reporting the pinned 1x1 box, being delayed by heavier system-wide CPU contention long enough to land
+between this range's own test's two separate `page.evaluate()` calls (`setViewport(64,64,1)` then
+`tick()`), racing the forced override the same way the original bug did. Nothing in this range's own
+Files touched (`frame-loop.ts`'s `onPhase` addition, `device.html`/`device.ts`, `canvas.spec.ts`)
+touches `render/viewport.ts` or `viewport.html`; per "never mask a red gate" and "Escalate, don't
+decide," this is reported rather than patched -- `viewport.html`'s own test-page race is steps 4-5's
+file, not this range's Scope.
