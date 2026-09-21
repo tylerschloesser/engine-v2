@@ -1,6 +1,6 @@
 # M11: Camera and input
 
-Status: not started · After: 09 (09b recommended first for `onViewportChange`; not required) · Tyler-dependent: no
+Status: done · After: 09 (09b recommended first for `onViewportChange`; not required) · Tyler-dependent: no
 
 Carries a **D**: gestures on a real phone, the posted-`Module` check, and the on-device memory ceilings of 0015.
 
@@ -60,10 +60,10 @@ Mine from spikes: none with camera code; `spikes/zero-gc-webgpu/public/main.js` 
 - Zero-GC: page id `input` through `zeroGcSuite` (600 frames of injected drag, pinch, wheel and WASD with a `tap` every 30 frames; chunk streaming and the renderer active; isolates `main`, `client`, `gen0`). Per ADR 0026: this page's per-isolate `burst` negatives are tagged `@slow` automatically (only `gc-loop` keeps them in the fast tier); the `object` negatives stay fast-tier; the clean test asserts `presentIsolates` contains every isolate named above before its verdict check — no extra work needed here, `zeroGcSuite` does it unconditionally.
 
 ## Exit criteria
-- [ ] All tests above pass by name; page `input` within its `gc.pages.input` budgets on every isolate, `inputRing` `drops == 0`.
-- [ ] Source scan: no `getCoalescedEvents`, no listener outside the canvas except the `window` key, `blur` and `visibilitychange` listeners of 0019 §4.
-- [ ] The `docs/plan/device-checks.md` section for this milestone matches what was built.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name; page `input` within its `gc.pages.input` budgets on every isolate, `inputRing` `drops == 0`.
+- [x] Source scan: no `getCoalescedEvents`, no listener outside the canvas except the `window` key, `blur` and `visibilitychange` listeners of 0019 §4.
+- [x] The `docs/plan/device-checks.md` section for this milestone matches what was built.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test unit -t camera` · `pnpm test unit -t semantic` · `pnpm test rust -t input` · `pnpm test browser -t input` · `pnpm test browser -t camera` · `pnpm test` · `pnpm lint`.
@@ -725,3 +725,74 @@ env-gated `GC_DUMP_BYTES` append of each run's `bytesPerFrame`/`windowBytes` in 
   strict budget; `CallbackList.dispatch`'s indexed loop (no `Set`, no `for...of`) is already written
   to that discipline, but nothing in this range's own tests proves it under real allocation
   measurement -- that is exactly what step 7's own page is for.
+
+### Orchestrator's gate (M11 accepted)
+
+`pnpm gate 82f2e56` at `69d6fae`: tree clean, 39 files changed, no existing golden modified or deleted,
+no skip/ignore/only/todo marker added, 2,764 insertions over 12 commits. Built by three implementers
+(steps 1-3, 4-5, 6-8) plus **four fix rounds**, the last two on an Opus implementer per the
+two-rounds-then-Opus rule. Exit criteria verified by the orchestrator, not accepted as claims: the
+`getCoalescedEvents` / listener source scan re-run here, the `M11-*` items in `device-checks.md` read
+against what was built, `cameraKey` / `restored` grepped in `src/client.ts`.
+
+**The gate's real content was a four-round hunt, and every round's conclusion was wrong until the
+last.** Recorded here because the *sequence* is the lesson, not just the answer:
+
+1. Steps 6-8 reported `input neg object main` as an intermittent (~1/4) cross-isolate GC-noise flake,
+   of the class M06b already documented as unresolved, and offered three options: accept it,
+   investigate, or amend 0026 to demote `input`'s `object` negatives to `@slow`. Two of the three
+   were ways of not fixing it.
+2. The orchestrator's own `repeat.mjs browser 15` measured **0/15 passing** -- not 1-in-4, and the
+   `budgets.json` formula text committed that round claimed the fast tier was "reliable across 20/20
+   repeats". Three numbers, no two compatible. Per-function attribution named
+   `waitForWake@...: 13,544 B` = 22.57 B/frame on `client`, exactly its whole excess over the 8 B
+   strict figure.
+3. **Fix 1** (orchestrator hypothesis: a boxed `Atomics.load` return crossing out of a de-optimised
+   frame) removed the return value. Measured before 13,544 B, after 13,544 B -- *identical*. The
+   implementer then reduced `waitForWake` to a bare `Atomics.wait(...)` and the number still did not
+   move, which is the experiment that mattered. Hypothesis dead; the commit kept as honest cleanup.
+4. **Fix 2** (ADR 0027) excluded bytes attributed to the `waitForWake` frame by name. Orchestrator
+   verification: 15/15, then 14/15, then a failure at run 18 whose capture showed the same lump billed
+   to `runBlockingLoop` with `excludedBytes: 0`. 0027 had predicted exactly this, but assumed it would
+   take a Chromium update; it varied run to run. A second orchestrator hypothesis -- that fix 1 had
+   made `waitForWake` maximally inlinable and so unstable to attribute -- was also wrong.
+5. **Fix 3** (Opus, ADR 0028 superseding 0027) read the raw `profile.samples`, which no earlier round
+   had: 25 samples at consecutive ordinals, sized like an instruction stream plus relocation and deopt
+   metadata -- **a one-off V8 JIT code-installation burst**, billed to whichever JS frame was executing
+   (seven different ones were observed). Never `Atomics.wait` bookkeeping at all, which is why fix 1
+   changed nothing and fix 2's premise was false. The profile's `lineNumber` is a function's
+   *declaration* line, which killed the inlining hypothesis too. Assertion B now takes the lower of two
+   consecutive 600-frame windows: a one-off lands in at most one, per-frame allocation lands in both.
+   Six warm-up settings were measured and every one merely relocates the JIT phase -- including the
+   finding that M09's `extraSettleFrames` fixed `terrain` **by luck**.
+6. **Fix 4** (orchestrator-initiated): 0028 left every page's committed budget derived from a noisier
+   reading, so `input.main` carried ~24 B/frame of dead headroom against a formula intending 9, and the
+   `object` control had been grown 16 -> 64 B/frame to still trip it. That is a 4x less sensitive
+   instrument, which over the remaining milestones is worse than the flake. Budgets re-derived downward
+   under the two-window instrument (`gc-loop` 54->45, `topology` 50->42, `echo` 38->30, `gen` 48->42,
+   `terrain` 116->110, `input` 206->190), control restored to one object, all 19 `object` controls
+   verified still tripping with +7.6 to +8.2 B/frame of separation. Clean-run spread across 8 runs fell
+   to **0.000-0.240 B/frame** from the 0.4-4 the pre-0028 formulas quote -- independent evidence the
+   two-window minimum removes noise, not signal. The strict worker figure stayed **8** throughout all
+   four rounds: what is counted changed, never what is allowed.
+
+**Verification.** Implementer: `--project gc --grep input --workers 3 --repeat-each 20` 160/160;
+whole `gc` project 48/48; `--repeat-each 3` 144/144. Orchestrator `repeat.mjs browser 15` x2 after
+fix 4: **28/30**, the two failures being a `page.evaluate` timeout with the whole suite stalled at
+43 s (against a normal 16-18 s) and a `parkWorkers: timed out after 10000 ms`, on `gc-loop neg burst
+sim` and `terrain: probe tile colours` -- both pre-M11 tests, neither a GC verdict, at a 1-minute
+load average of 8-11 with iTerm2 alone at 69.7 % CPU. No GC budget verdict failed in 30 runs. An
+earlier batch at load 3.2 was 15/15.
+
+**Known open question, accepted, not to be chased:** why a JIT tier-up lands inside the measured
+window after 8,000 warm-up frames, with a rate non-monotone in pass count (8 passes 10 %, 40 passes
+69 %, 120 passes 1 %). 0028 does not depend on the answer.
+
+**Seams that fell between delegation prompts, and are the orchestrator's fault rather than any
+implementer's:** `input/pointers.ts` captured no button or modifier state, so every `InputEventTs`
+hardcoded `button: 0` and false modifiers despite Seams pinning those fields and the ring record
+reserving bytes for them; and an idle mouse produced no `hover`, which `camera.cursorTile` needs for
+M17's uniform and M18's picking. Steps 1-3 were never asked for them and steps 4-5 were told to
+consume `pointers.ts` unchanged. Both closed in the 6-8 range with `pointers.ts` explicitly unlocked.
+Cutting a brief into ranges moves a seam risk from *inside* one implementer's head to *between* two
+prompts: name the fields, not just the files.
