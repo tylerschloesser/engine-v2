@@ -54,17 +54,18 @@ impl<I: Iterator<Item = (u16, Tile)> + Clone> RunCursor<I> {
             let Some((idx, tile)) = probe.peek() else {
                 break;
             };
-            if let Some(p) = prev_idx {
-                if idx != p + 1 {
-                    break; // a gap ends the contiguous span entirely
-                }
+            if let Some(p) = prev_idx
+                && idx != p + 1
+            {
+                break; // a gap ends the contiguous span entirely
             }
             let mut ahead = probe.fork();
             ahead.bump();
-            if let Some((nidx, ntile)) = ahead.peek() {
-                if nidx == idx + 1 && ntile == tile {
-                    break; // the next pair starts a repeat; stop before it
-                }
+            if let Some((nidx, ntile)) = ahead.peek()
+                && nidx == idx + 1
+                && ntile == tile
+            {
+                break; // the next pair starts a repeat; stop before it
             }
             probe.bump();
             len += 1;

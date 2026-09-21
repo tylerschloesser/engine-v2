@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn roundtrip_roster_and_value_both_present() {
-        let roster = vec![(PlayerId(1), true), (PlayerId(2), false)];
+        let roster = [(PlayerId(1), true), (PlayerId(2), false)];
         let global = GGlobal { day: 9 };
         let mut buf = vec![0u8; 256];
         let mut sink = SliceSink::new(&mut buf);
@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn golden_global_and_own_player() {
-        let roster = vec![(PlayerId(1), true), (PlayerId(2), false)];
+        let roster = [(PlayerId(1), true), (PlayerId(2), false)];
         let global = GGlobal { day: 9 };
         let mut buf = vec![0u8; 256];
         let mut sink = SliceSink::new(&mut buf);
