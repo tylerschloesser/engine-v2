@@ -494,3 +494,98 @@ Files touched (`frame-loop.ts`'s `onPhase` addition, `device.html`/`device.ts`, 
 touches `render/viewport.ts` or `viewport.html`; per "never mask a red gate" and "Escalate, don't
 decide," this is reported rather than patched -- `viewport.html`'s own test-page race is steps 4-5's
 file, not this range's Scope.
+
+### Fix round 1 (`viewport: resize renders same frame`: a real flake, diagnosed and fixed) -- done
+
+The orchestrator's own quiet-machine measurements at `dd87a1d` (`pnpm test browser`: 2 failures in 16
+runs; `node scripts/repeat.mjs browser 15`: pass=14 fail=1, a second loop failing on its first run;
+the same suite under `--load 10`: 0 failures in 12) showed this was a real, load-*inverted* flake, not
+the environment hiccup steps 4-5's own Deviations first guessed at, nor the "load-sensitive... CPU
+contention" guess steps 6-7 restated -- both of those guesses were wrong in the same direction (more
+load = more failures), when the true pattern is the opposite. Commit `3ed481d`.
+
+**Diagnosed before changing anything, with real attribution, not renewed guessing.** Temporary
+instrumentation (a `globalThis.__vpDebug` array, pushed to on every `setPending()` call with a
+`source` tag and a wall-clock timestamp, plus one push inside `applyPending()` recording `dirty`/
+`pending` at entry; a page hook `window.__viewport.debugLog()`; the failing test's own assertion
+wrapped in a try/catch that dumped the log via `console.log` on failure -- all reverted before the fix
+commit, never shipped) reproduced the failure twice by looping plain `pnpm exec playwright test
+--project chromium --project gc` (the same two projects `pnpm test browser` itself selects) in the
+foreground, quiet machine, until one run failed (run 8 of 12, then run 22 of 30 after a `vite build`
+picked up the instrumentation). The captured sequence, verbatim, at the exact failure:
+
+```
+{ source: 'force',              cssWidth: 64, cssHeight: 64, dpr: 1, t: 1789955868635 }
+{ source: 'observer-devicebox', cssWidth: 1,  cssHeight: 1,  dpr: 1, t: 1789955868635 }  <- same ms
+{ source: 'applyPending-called', dirty: true, pending: { cssWidth: 1, cssHeight: 1, dpr: 1 } }
+```
+
+The real `ResizeObserver`'s callback (reporting the page's pinned 1x1 CSS box -- the steps-4-5 fix)
+arrived and overwrote the just-queued `forceSize(64, 64, 1)` in the same millisecond, before the next
+`page.evaluate()` call ran `tick()`. This is not a guess: the timestamps show the overwrite happening,
+not merely correlate with one.
+
+**Why `--repeat-each` on the spec alone never reproduced it, and why heavy load "fixed" it (both
+stated as reasoned mechanism, not re-confirmed by a second instrument -- flagged as such).** A
+`ResizeObserver` callback is scheduled by the browser's rendering pipeline (roughly, the "update the
+rendering" step), not by JS task/microtask order relative to `page.evaluate()`. Repeating only
+`viewport.spec.ts` gives the browser process little other reason to run that pipeline step promptly;
+the full suite's other pages (real canvases, real draws, real workers) keep it running regularly,
+so the pinned canvas's one-time initial notification gets an earlier opportunity to fire and can land
+inside the gap between two of this test's own `page.evaluate()` calls. Artificial CPU load
+(`--load 10`) delays *everything*, including that pipeline step, past the point the short-lived test
+has already asserted and torn the page down -- 0 failures under load is the corrupting event never
+getting a chance to fire in time, not a timing window closing.
+
+**Test-page defect, not a production defect (decided explicitly, as asked).** `ViewportController` in
+production has exactly one writer of `pending` -- the real observer/`matchMedia` pair; no production
+caller ever calls `forceSize`. `ResizeObserver`'s own spec collapses every interim layout change into
+one, always-current entry at delivery time, so under real DOM resizing a later callback is never
+stale or wrong relative to an earlier one it might race -- there is no "second, more recent intent" a
+real notification can ever clobber. The race exists only because `viewport.html` asked one controller
+to be driven by two writers at once (the real observer *and* the test's own `forceSize`), which no
+production page ever does. 0018 §8's "renders at once, no cleared flash" is therefore not at risk in
+production from this mechanism; `render/viewport.ts`'s core `applyPending`/`setPending` logic is
+unchanged by this fix.
+
+**The fix removes the second writer; it does not race it.** `createViewportController` gains
+`opts.test?.observeReal` (default `true`, so every existing caller's behaviour is unchanged);
+`observeReal: false` never constructs the `ResizeObserver` or arms `matchMedia` at all, so `forceSize`
+is `pending`'s only writer on that controller, matching production's own single-writer invariant by
+removing the contradiction rather than out-timing a browser-scheduled callback. `invalidate()` (0018
+§8's "on visible, re-check size") becomes a no-op under `observeReal: false`: a test-only-controlled
+page has nothing real to re-check, and re-reading the DOM there would just reintroduce a second
+writer. `RealFrameLoopOptions` gains `test?: { observeReal?: boolean }`, forwarded straight to
+`createViewportController` (the `ClientOptions.test` naming precedent: a test-only escape hatch never
+set by a production caller). `viewport.html`'s own CSS-size pin (`style.width/height = '1px'`, steps
+4-5's own fix) is removed -- it addressed a *different* race (the canvas's layout box tracking its own
+backing-store attributes) that no longer matters once the real observer is never constructed, and
+keeping a now-pointless pin would only read as load-bearing to a future reader.
+
+**Not a timeout, poll, retry, or relaxed assertion.** No `page.waitForFunction`, `expect.poll`,
+Playwright retry count, sleep, or widened tolerance appears anywhere in this fix; every one of the
+five named tests' assertions is unchanged from steps 4-5's own commit.
+
+**Proof** (`uptime` load average given; foreground; `node scripts/repeat.mjs browser 15` per the
+orchestrator's own ask, twice, quiet machine):
+
+- Batch 1: `browser x15 load=0: pass=15 fail=0 hang=0 slowestSuiteSeconds=17` (load average 4.68 at
+  start).
+- Batch 2: `browser x15 load=0: pass=15 fail=0 hang=0 slowestSuiteSeconds=15` (load average 12.61 at
+  start -- an incidentally busier machine than batch 1, included as measured, not re-run for a quieter
+  number).
+- 30/30 pass, 0 hangs, across both batches.
+- `pnpm test` (once, before the repeat batches): `rust 141, unit 115, wasm 35, browser 74 (15s/25s)`.
+  `pnpm lint`: biome/rustfmt/clippy/tsc all green.
+- No orphan `vite preview`/Chrome process at any point (`pgrep -fl "vite preview|Chrome for
+  Testing"`, empty every check) and no listener on `:4517` at handback (`lsof -ti tcp:4517`, empty).
+
+**Not verified by this fix round**: an automated test of the real `ResizeObserver`/`matchMedia` path
+succeeding on a genuine DOM/DPR change (as opposed to `observeReal`'s own existence proving it's
+*inert* when disabled) -- this milestone's own tests never needed one (they are deterministic by
+design), and headless Chromium cannot really change display DPI or move a window, so such a test would
+need a real CSS resize plus a deterministic "was it observed" signal the page exposes (not a
+poll/timeout) to await it -- left as a gap for whoever next touches `render/viewport.ts`, not built
+here since it is additive, not a fix for this flake, and the fix round's own scope is the flake.
+`device.html`'s own manual device check (steps 6-7, already run) is the closest existing evidence that
+the real observer path works end to end on a real page.
