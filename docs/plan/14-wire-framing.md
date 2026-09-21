@@ -1,6 +1,6 @@
 # M14: Wire framing: frame, sections, uplink batch
 
-Status: not started · After: 12b · Tyler-dependent: no
+Status: done · After: 12b · Tyler-dependent: no
 
 ## Goal
 The engine crate encodes and decodes every post-handshake message of 0011 into and out of caller-supplied byte slices with no allocation: the frame header and sections, chunk-coordinate lists, overlay runs, chunk snapshots, action results, and the uplink batch. Golden-bytes tests fix the numbers below; after this milestone they change only by a reviewed golden update.
@@ -50,9 +50,9 @@ Closes PRE-PLAN §10 "Exact section ids, varint coordinate coding, overlay run f
 Rust native, all in `wire::tests`: `golden_frame_header`, `golden_heartbeat_is_10_bytes`, `golden_section_ids`, `golden_coord_list_negative_and_far` (coords near ±2^18), `golden_overlay_runs_literal_and_repeat`, `golden_chunk_snapshot`, `golden_chunk_deltas`, `golden_action_results_all_tags`, `golden_global_and_own_player`, `golden_uplink_batch`; `roundtrip_random_frames` (seeded, 1,000 frames); `decoder_never_panics` (seeded corpus: truncations, bit flips, oversized varints, descending section ids); `sections_out_of_order_rejected`; `writer_full_is_error_not_panic`; `encode_decode_no_alloc` (counting allocator).
 
 ## Exit criteria
-- [ ] All goldens are checked in and were produced by `pnpm golden:bytes -- wire`.
-- [ ] `golden_coord_list_*` asserts a pristine enter of one chunk adjacent to the previous costs 2 bytes and a lone entry within ±63 chunks of the origin costs 2 bytes plus section overhead.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All goldens are checked in and were produced by `pnpm golden:bytes -- wire`.
+- [x] `golden_coord_list_*` asserts a pristine enter of one chunk adjacent to the previous costs 2 bytes and a lone entry within ±63 chunks of the origin costs 2 bytes plus section overhead.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t wire` · `pnpm lint`.

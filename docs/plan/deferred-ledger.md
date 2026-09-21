@@ -4,7 +4,7 @@ Every row of `PRE-PLAN.md` §10 (same order), with where Phase 2 settled it. **D
 
 | Item (`PRE-PLAN.md` §10) | Outcome | Where |
 |---|---|---|
-| Typed fast path + quantized deltas for continuous action streams | Decided: not built, not scheduled; uplink flag bits kept free | M14 |
+| Typed fast path + quantized deltas for continuous action streams | Decided: not built, not scheduled (no planned game has such a stream); uplink flag bits 2-7 kept free for a future stream record; revisit when a game sends an action every tick, which gets its own ADR | M14 |
 | Presence as an optional replay track | Decided: not built | M19 |
 | Determinism on real x86-64, physical iPhone, Android | **x86-64: closed.** Native (`scenario_matches_golden`), Node, Bun and Chromium all matched the Apple-silicon goldens on `ubuntu-latest` (run [35616810284](https://github.com/tylerschloesser/engine-v2/actions/runs/35616810284)); Linux WebKit and Firefox (`@engines`, `pnpm test:slow`) also matched, closing ADR 0002's own deferred item in full (run [35618167031](https://github.com/tylerschloesser/engine-v2/actions/runs/35618167031)) -- since ADR 0026, this CI leg is the only thing that proves three-browser determinism at all, `pnpm test` alone no longer does. The iPhone via the determinism page; Android not run: no device (Q5) | M10; M03 device check |
 | `+simd128` and `wasm-opt` for the sim module | Owned: both stay off until measured against the goldens | M36b |
@@ -29,7 +29,7 @@ Every row of `PRE-PLAN.md` §10 (same order), with where Phase 2 settled it. **D
 | WebTransport adapter | Decided: not built; revisit when Node LTS or workerd ships a stable server and the iOS floor has it, or when stalls exceed the interpolation cap | M27 |
 | Real frame sizes against the bandwidth budget | Owned: counters in M15, asserted against `budgets.json` in M31, reference-game measurement in M36b | M15 → M31 → M36b |
 | Engine-side byte diffing of old vs new values | Owned: measured on the busy furnace field; build only at ≥ 40 % saving (would be a new milestone `36c`) | M36b |
-| Exact section ids, varint coordinate coding, overlay run format | Owned: fixed by the encoder and its golden bytes | M14 |
+| Exact section ids, varint coordinate coding, overlay run format | **Closed by M14.** Fixed by the encoder and its golden bytes (`golden_section_ids`, `golden_coord_list_negative_and_far`, `golden_overlay_runs_literal_and_repeat`); table lives in `crates/engine/src/wire/CLAUDE.md` | M14 |
 | "Copy my player link" identity escape hatch | Decided: not built; the invite-fragment parser ignores unknown parameters so it can be added | M28 |
 | How iOS Safari reports a worker-owned socket after resume | Owned: on-page link log; tunes only 0013's dead timeout and probe deadline | M29 device check |
 | Final export list per role, region ids and sizes, status codes | Decided: initial list in M02; single owner is `crates/engine/src/abi/registry.rs` mirrored by `src/abi.ts`, with an `ABI_VERSION` bump and the `abi-registry` test; each milestone adds its own exports there | M02 |
