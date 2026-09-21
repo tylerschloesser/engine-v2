@@ -168,19 +168,30 @@ fn sample_tile_art(tile: vec2<i32>, visual_id: u32, uv_in: vec2<f32>, lod: f32) 
   }
 
   if (lod <= 0.0) {
-    // "Fat pixel" seam formula (0018 §3 sources: gpu-tilemap-rendering, pixel_art_filtering): snap
-    // toward the nearest texel centre in proportion to screen pixels per art texel, avoiding blur
-    // under magnification. The screen-to-tile mapping is affine (0018 §5: no perspective, one
-    // `tiles_per_px` scalar for the whole frame), so the derivative of `uv * art_size` w.r.t. screen
-    // pixels is the *same uniform constant* everywhere -- computed here in closed form rather than
-    // with the `fwidth` builtin.
+    // "Fat pixel" seam formula (0018 §3 sources: gpu-tilemap-rendering, pixel_art_filtering): anchor
+    // on the *nearest texel boundary* (`round(texel)`, integers are boundaries in this
+    // parameterisation), not the texel's own floor -- `offset` is then signed distance from the
+    // nearest seam, and clamping it to +-0.5 screen pixels saturates to `anchor +- 0.5`, i.e. the
+    // *texel's own centre*, away from a seam. The screen-to-tile mapping is affine (0018 §5: no
+    // perspective, one `tiles_per_px` scalar for the whole frame), so the derivative of `uv *
+    // art_size` w.r.t. screen pixels is the *same uniform constant* everywhere -- computed here in
+    // closed form rather than with the `fwidth` builtin.
+    //
+    // docs/plan/09b-terrain-art-and-lifecycle.md Deviations "Fix round 2: magnified sampling was
+    // inverted": an earlier draft anchored on `floor(texel)` and added `+ 0.5` *after* the clamp,
+    // which saturates to a texel's own *edge* (shared with a neighbour) instead -- a 50/50 neighbour
+    // blend almost everywhere a texel is sampled, the opposite of this formula's purpose.
+    // `terrain.seam_matches_reference` guards this.
     let art_size = vec2<f32>(textureDimensions(art_tex, 0));
     let texel = uv * art_size;
+    // Undivided (not halved): the canonical form, so the transition band this produces is exactly
+    // one screen pixel wide (clamping `offset` to +-0.5 *screen pixels*' worth of texel-space) --
+    // the standard antialiasing width, not an arbitrarily sharper one (Deviations records this as a
+    // deliberate choice, not a leftover).
     let texel_per_px = max(vec2<f32>(frame.tiles_per_px * art_size.x), vec2<f32>(1e-6));
-    let centre_offset = fract(texel) - 0.5;
-    let seamed =
-      floor(texel) + clamp(centre_offset / (texel_per_px * 0.5), vec2<f32>(-0.5), vec2<f32>(0.5)) +
-      0.5;
+    let anchor = floor(texel + 0.5);
+    let offset = texel - anchor;
+    let seamed = anchor + clamp(offset / texel_per_px, vec2<f32>(-0.5), vec2<f32>(0.5));
     return textureSampleLevel(art_tex, art_sampler, seamed / art_size, layer, 0.0);
   }
   return textureSampleLevel(art_tex, art_sampler, uv, layer, lod);

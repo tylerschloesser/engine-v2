@@ -687,3 +687,73 @@ green. `playwright test --project gc --grep "terrain clean" --repeat-each 8 --wo
 -- `gc.pages.terrain`'s budget (116 B/frame) is unchanged, as expected (this round touches fixture
 art and TS-only test/reference code, no per-frame JS path). No existing test weakened, skipped or
 deleted; no golden changed; no tolerance widened.
+
+### Fix round 2: magnified sampling was inverted between M09b and this fix (M17b: read this first)
+
+**For a later reader (M17b picks up sprite sampling and reuses this same seam formula):**
+`sample_tile_art`'s magnified ("fat pixel") branch shipped inverted from M09b's own steps 1-3
+through fix round 1: it anchored on a texel's own `floor` and added `+ 0.5` *after* clamping, which
+saturates (away from an exact texel centre) to a texel's own *edge*, not its centre. The symptom:
+under magnification, at any camera offset that is not *exactly* a texel's own centre, the sample
+blended ~50/50 with whichever neighbour texel shared that edge, instead of showing the current
+texel's own colour -- the opposite of what ADR 0018 §3 names magnification for. Every test written
+before this fix round probed exactly at a texel centre (where the buggy and correct formulas agree
+trivially, `centre_offset === 0`), so nothing caught it; `terrain.seam_matches_reference` (below) is
+the one guard against a regression back to this shape. If sprite sampling reuses `sample_tile_art`
+or a close copy of it, check that copy anchors on `floor(texel + 0.5)`, not `floor(texel)`, before
+assuming the terrain shader's own formula is a safe template to copy.
+
+**The fix** (`sample_tile_art`'s magnified branch, `terrain.wgsl`): anchor on the nearest texel
+*boundary* -- `let anchor = floor(texel + 0.5);` (`round(texel)`; integers are boundaries in this
+parameterisation) -- rather than the texel's own floor. `let offset = texel - anchor;` is then
+signed distance from the nearest seam; `let seamed = anchor + clamp(offset / texel_per_px, -0.5,
+0.5);` with no trailing `+ 0.5` (the old formula's `floor(texel) + clamp(...) + 0.5` conflated two
+different reference points -- the texel's own floor *and* its centre -- which is exactly what
+inverted the saturation direction). Worked through symbolically and confirmed both ways:
+- **Symbolically:** near an actual inter-texel boundary (texel space position `N`, integer), `round`
+  stays at `N` for `texel` on either side within `[N-0.5, N+0.5)`, so `offset = texel - N` passes
+  smoothly through 0 exactly at the boundary and saturates to `N ± 0.5` (a texel *centre*) just past
+  it on either side -- the transition band is centred on the real boundary, exactly as intended.
+- **Measured, before and after**, same probe (visual 9's quadrant cell, tile `(11, 0)` -- hash bits
+  0, no transform -- `tilesPerPx = 1/64`, `camFracX = 0.6`, `camFracY = texelFrac(0)`, i.e. art texel
+  `(2.4, 0.5)`, 0.4 into texel 2's own interior on x, comfortably past the old formula's own tiny
+  transition band): **before, `[127, 127, 0, 255]`** (a ~50/50 red/green blend -- the bug); **after,
+  `[0, 255, 0, 255]`** (pure green -- the correct quadrant, matching `seamSnap`'s own prediction
+  exactly, tolerance 2/255). The "before" run used a temporary, uncommitted revert of `terrain.wgsl`
+  to confirm `terrain.seam_matches_reference` actually exercises the bug rather than trivially
+  passing either way; the revert was never committed.
+
+**The `* 0.5` denominator: dropped, deliberately, not left over.** The pre-fix code divided `offset`
+by `texel_per_px * 0.5`; this fix divides by `texel_per_px` alone. Unit analysis: `offset` is in
+texel-space; dividing by `texel_per_px` (texels per screen pixel) converts it to screen pixels, so
+clamping to `±0.5` bounds the transition to `±0.5` *screen pixels* either side of the boundary -- one
+screen pixel wide in total, the standard antialiasing width (and what a plain, undivided `fwidth`-
+based implementation of this well-known technique gives -- ADR 0018 §3's own cited sources use this
+form). Dividing by half that (`texel_per_px * 0.5`, the pre-fix code's own choice) halves the
+transition band to half a screen pixel, sharper but narrower than the conventional width, and was
+never a deliberate design decision in steps 1-3 -- just an unverified guess that happened to still
+look plausible because every existing test probed exactly at a texel centre, where the band's width
+doesn't matter at all. Kept the undivided, one-pixel-wide form: it matches the cited technique
+exactly, and a narrower band has no stated benefit here to weigh against departing from the standard.
+
+**`terrain.seam_matches_reference`** (`terrain-hash-ref.ts`'s `seamSnap(uvComponent, artSize,
+texelsPerPx)`, mirroring the fixed formula exactly, one axis at a time): stages visual 9 (tile `(11,
+0)`, no transform), probes art texel `(2.4, 0.5)` at `tilesPerPx = 1/64`, and asserts the exact
+predicted quadrant colour. Confirmed failing against the pre-fix anchoring (above) and passing
+against the fix, on the same probe.
+
+**Existing tests and goldens: none moved.** Every probe added in steps 1-3 and fix round 1
+(`variants_match_reference`, `magnified_texel_exact`, `flip_and_rotate_match_reference`,
+`jitter_matches_reference`, all four dithering tests, `minified_converges_to_mean`) sits exactly at
+a texel centre or, for the dithering tests, a `floor`-aligned integer art-texel position where the
+seam formula's `lod <= 0.0` branch is reached but its own snap is a no-op either way (`centre_offset
+=== 0` under the old formula, `offset === 0` under the new one) -- confirmed by running the full
+`pnpm test` both before and after the fix with identical pass counts (`browser pass 77 tests`, +1 for
+`seam_matches_reference` itself, otherwise unchanged) and no golden file touched. `gc.pages.terrain`
+re-measured: `8/8 clean` passed, budget (116 B/frame) unchanged -- this fix is WGSL-only, no JS-side
+per-frame path touched.
+
+**Measured** (quiet-machine `pnpm test`, `uptime` load average 3.5-5.8): `rust pass 141 tests`,
+`unit pass 115 tests`, `wasm pass 35 tests`, `browser pass 77 tests 15s/25s` (+1 over fix round 1's
+76-test baseline; comfortably under the 20s trip-wire). `pnpm lint`: biome/rustfmt/clippy/tsc all
+green. No existing test weakened, skipped or deleted; no golden changed; no tolerance widened.

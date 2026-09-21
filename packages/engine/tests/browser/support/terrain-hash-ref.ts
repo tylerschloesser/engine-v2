@@ -127,3 +127,21 @@ export function jitteredChannelByte(base255: number, delta: number): number {
   const jittered = Math.min(1, Math.max(0, normalised + delta))
   return Math.round(jittered * 255)
 }
+
+// M09b fix round 2 ("magnified sampling was inverted"): mirrors `sample_tile_art`'s magnified
+// ("fat pixel") seam formula exactly, *after* the fix -- anchor on the nearest texel *boundary*
+// (`Math.floor(texel + 0.5)`), offset relative to that anchor, clamped to +-0.5 *screen pixels*'
+// worth of texel-space (no halving: docs/plan/09b-terrain-art-and-lifecycle.md Deviations explains
+// why the undivided, one-screen-pixel-wide band was kept over a sharper, halved one).
+/** One axis of the seam formula: `uvComponent` is the fragment's own tile-local `art_frac`
+ * component (`[0, 1)`); `artSize` is the art texture's base-level size (`ART_SIZE`); `texelsPerPx`
+ * is `tilesPerPx * artSize` (screen pixels' worth of texel-space per pixel, uniform across the
+ * whole draw). Returns the seam-corrected uv component the shader would sample at. */
+export function seamSnap(uvComponent: number, artSize: number, texelsPerPx: number): number {
+  const texel = uvComponent * artSize
+  const anchor = Math.floor(texel + 0.5)
+  const offset = texel - anchor
+  const denom = Math.max(texelsPerPx, 1e-6)
+  const clamped = Math.min(0.5, Math.max(-0.5, offset / denom))
+  return (anchor + clamped) / artSize
+}

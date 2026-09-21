@@ -13,6 +13,7 @@ import {
   applyTransform,
   jitterDelta,
   jitteredChannelByte,
+  seamSnap,
   selectTransform,
   selectVariant,
 } from './support/terrain-hash-ref.ts'
@@ -562,6 +563,51 @@ test('terrain: flip and rotate match reference', async ({ page }, testInfo) => {
     )
     expectPixel(pixel, 0, 0, want, TOL)
   }
+  expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
+})
+
+// M09b fix round 2 ("magnified sampling was inverted"): `magnified_texel_exact` above only ever
+// probes exactly at a texel *centre*, where the seam formula is a no-op regardless of whether its
+// anchoring is right or wrong -- this test probes a *fractional* offset, deep in one texel's own
+// interior but well away from its centre, where the old (buggy) anchoring and the fixed one predict
+// different quadrants. It fails against the pre-fix formula (Deviations records the measured
+// before/after pixel values from an uncommitted probe).
+test('terrain: seam matches reference', async ({ page }, testInfo) => {
+  await openPage(page, '/terrain.html')
+  const init = await page.evaluate(() => window.__terrain?.init())
+  expectAdapter(testInfo, init?.adapterInfo ?? null)
+  await page.evaluate(async (chunk) => {
+    const t = window.__terrain as Terrain
+    await t.loadArt('/terrain/tiles.json')
+    t.writePageChunk(0, chunk)
+    t.writeIndir([{ x: 0, y: 0, value: 0 }])
+  }, flatChunk(TRANSFORM_VISUAL))
+
+  // Tile (11, 0): bits 0 (from the flip/rotate scan above) -> no transform, so the untransformed uv
+  // maps straight through and this test needs no `applyTransform` step of its own.
+  const DEEP_TILES_PER_PX = 1 / 64 // texels_per_px = 0.0625: deep magnification (aa is tiny)
+  // (0.6, texelFrac(0)): art texel (2.4, 0.5) -- 0.4 into texel 2's own interior on the x axis (well
+  // past the aa-wide transition band around the x = 0.5 boundary), the top quadrant row on y.
+  const probeUV: readonly [number, number] = [0.6, texelFrac(0)]
+  const texelsPerPx = DEEP_TILES_PER_PX * ART_SIZE
+  const seamedUV: readonly [number, number] = [
+    seamSnap(probeUV[0], ART_SIZE, texelsPerPx),
+    seamSnap(probeUV[1], ART_SIZE, texelsPerPx),
+  ]
+  const want = quadrantColour(seamedUV)
+
+  const pixel = await renderBorderScene(
+    page,
+    microCamera({
+      camTileX: 11,
+      camTileY: 0,
+      camFracX: probeUV[0],
+      camFracY: probeUV[1],
+      tilesPerPx: DEEP_TILES_PER_PX,
+      seed: HASH_SEED,
+    }),
+  )
+  expectPixel(pixel, 0, 0, want, TOL)
   expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
 })
 
