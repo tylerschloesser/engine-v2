@@ -532,6 +532,95 @@ suspected.
 before fix 2; `client`'s own excluded-vs-counted split is what changed). One full `pnpm test browser`
 run: 90/90. `pgrep`/`lsof -ti tcp:4517 tcp:4173` clean.
 
+### Fix round 3 (ADR 0028: two measured windows) -- done
+
+Orchestrator-directed, authorised outside this milestone's own Files touched (`tests/browser/gc/*.
+ts`, `src/test/controls.ts`, `src/worker/gc-hook.ts`, `src/sab/control.ts`, `budgets.json` formula
+text only). Commit: `e5e27a7`. **Fix rounds 1-2 above, and ADR 0027, are superseded**: 0027's
+diagnosis was wrong and its exclusion cannot work. Fix round 1's `waitForWake` return-value removal
+stands on its own merits (one native call instead of two) and is untouched.
+
+**The diagnosis, from the raw profile.** `HeapProfiler.stopSampling` returns `profile.samples` (one
+entry per allocation at `samplingInterval: 1` under `--sampling-heap-profiler-suppress-randomness`),
+which neither earlier round looked at. Dumped for every run of an 80-run batch. On `input neg object
+gen0`, `client`'s 13,544 B excess is **25 samples at consecutive ordinals 29-53** (of 58 in the whole
+profile), sized `6272, 3580, 1556, 344, 324, 268, 152, 8, 8`, then `72` x9 and `48` x4. One
+contiguous burst, shaped like an instruction stream plus its relocation info, deoptimization data
+and metadata: a **V8 JIT code-installation event**. A genuine 22.6 B/frame cost would be ~600 small
+samples spread across the window. The burst total is a fixed constant within a configuration
+(`client` reads exactly `15,168 = 1,624 clean + 13,544` on every burst run).
+
+**Why any name-based exclusion is impossible.** Across five instrument configurations x 80 runs the
+same lump was billed on `client` to `waitForWake`, `runBlockingLoop`, `body`, `call1`, `load`,
+`get detached` and `scope.onmessage` -- whichever JS frame was executing when the install landed.
+0027 caught only the `waitForWake` subset. This also explains 0027's own null result: stripping
+`waitForWake` to a bare `Atomics.wait(...)` changed nothing because the bytes were never that
+function's. The orchestrator's inlining hypothesis is **not needed and not supported**: the profile's
+`callFrame.lineNumber` is the function's own declaration line (`runBlockingLoop@worker-auto-*.js:846`
+is its `function` line in the built bundle), and the burst appears on frames that never call
+`Atomics.wait` at all (`scope.onmessage`, `call1`).
+
+**`input clean`'s own ~1/15 is the same cause, not a distinct one** (the orchestrator's key
+question). `client` burst rate per 20 runs at the committed warm-up, `--workers 3 --repeat-each 20`,
+load 3.1-3.5: `input clean` **1/20**, `neg object main` **1/20**, `neg object gen0` **6/20**, `neg
+object client` **0/20** (that isolate is busy allocating, so it never blocks). The clean rate matches
+the orchestrator's measured 1/15 exactly.
+
+**No warm-up setting removes it** (same 80-run batch each, `client` burst rate; load 3.1-11.2):
+
+| setting | burst rate | note |
+|---|---|---|
+| `WARMUP_PASSES = 8` (committed) | 8/80 | baseline |
+| `WARMUP_PASSES = 40` | 55/80 | worse |
+| `WARMUP_PASSES = 120` | 1/79 | but `main` 119.7 KB -> 129.4 KB, over its committed 206 B/frame |
+| +150 zero-frame warm-up passes | 60/80 | constant 14,144 B |
+| `extraSettleFrames: 500` (terrain's own fix) | 72/80 | constant ~13,952-14,264 B, 3 failures |
+| `--js-flags=--no-concurrent-recompilation` | 80/80 | constant 15,720-15,772 B, 60 failures |
+
+Every knob *relocates* the event; none removes it. M09's `extraSettleFrames` worked on `terrain` by
+landing on a lucky phase, which is why its own table showed "a real threshold, not a smooth curve".
+`WARMUP_PASSES = 120` is the only one that fixed `client` (constant 592 B, 0 bursts in 60 runs) and
+it is disqualified by `main`.
+
+**The fix (ADR [0028](../decisions/0028-zero-gc-two-measured-windows.md)).** Assertion B runs two
+consecutive 600-frame windows (only the second marked, so assertion A keeps its single window) and
+takes the **lower** per-isolate total: a one-off compile lands in at most one window, per-frame
+allocation lands in both. Nothing is excluded by name, size or isolate; `GcResult.windowBytes`
+prints both totals next to every failure. 0027's `waitForWake` exclusion and `excludedBytes` are
+removed, and `gc/analyse.test.ts`'s rewritten `no call frame is exempt` test is what stops a
+name-based exemption coming back. `sab.wait_for_wake_shape` is **kept**, retargeted to plain
+hot-path discipline (`worker/shell.ts` blocks only through that method) -- no test was deleted,
+demoted or retagged.
+
+**One consequence needed handling: the `object` control stopped separating.** Removing 10-18
+B/frame of one-off noise from every page's `main` reading left a 16 B/frame `object` control unable
+to clear a `ceil(clean) + 8 B` budget -- `gc-loop`, `echo` and `input`'s own `neg object main` all
+stopped *failing*, which is the control failing, not the page passing (`input` main read 198.04
+B/frame with the control armed against a 206 budget; clean is now ~182 where 206 was derived from
+197.05). `allocateObject` therefore allocates four small objects per frame instead of one (64
+B/frame; `src/test/controls.ts` and its `src/worker/gc-hook.ts` mirror), restoring 40-47 B/frame of
+separation with assertion A still true for it. **No committed budget number moved** (0028 §5); the
+three `input` `formula` strings were rewritten to state the real mechanism, numbers untouched
+(`git diff` on `budgets.json` is 3 lines, none of them a number).
+
+**Verification (this session, load 3.6-8.4; `uptime` quoted with each batch above).**
+- `playwright test --project gc --grep input --workers 3 --repeat-each 20`: **160/160 passed**
+  (1.5m) -- every `input` test including both `@slow` burst controls, 20x each.
+- `playwright test --project gc` (whole project, 48 tests incl. every `@slow` burst control and
+  `gc: flat transport parity`): **48/48 passed** (22.0s).
+- The same `--repeat-each 3`: **144/144 passed** (1.0m).
+- `pnpm test`: `rust 145`, `unit 137`, `wasm 35`, `browser 90 (18s/25s)` -- green.
+- `pnpm lint`: biome / rustfmt / clippy / tsc all pass.
+- `pgrep`/`lsof -ti tcp:4517 tcp:4173` clean afterwards (4173 is an unrelated project's `vite
+  preview`, present before this session started and left alone).
+
+**Could not explain, and did not need to:** *why* the tier-up lands inside the window at all after
+8,000 warm-up frames. The invocation counts of the per-`run()`-call path (`scope.onmessage`,
+`resume`, `runBlockingLoop`'s entry, `body`) are only ~8-18 before the window, which is the right
+order for a V8 tier-up threshold, and every experiment that changed that count changed the phase --
+but the rate is not monotone in it (8 -> 10%, 40 -> 69%, 120 -> 1%), so the trigger is not invocation
+count alone. 0028 makes the instrument robust to it rather than depending on the answer.
+
 ### Notes for later briefs
 
 - The 4-5 range (semantic events, `inputRing` producer): `RING_DEFAULTS.inputRing`'s slot size looks
