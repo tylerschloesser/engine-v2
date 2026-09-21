@@ -12,6 +12,7 @@ pub mod game;
 pub mod gen_queue;
 pub mod hash;
 pub mod noise;
+pub mod store;
 #[cfg(feature = "testing")]
 pub mod testing;
 pub mod time;
