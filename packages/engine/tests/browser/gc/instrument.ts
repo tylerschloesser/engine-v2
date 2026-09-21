@@ -67,6 +67,10 @@ export type GcResult = {
   bytesPerFrame: Record<string, number>
   attributedBytesPerFrame: Record<string, number>
   byFn: Record<string, Record<string, number>>
+  /** [0027](../../../../docs/decisions/0027-zero-gc-excludes-blocking-primitive-bookkeeping.md):
+   * bytes `sumProfile` left out of `totalBytes` per isolate (V8's own blocking-primitive
+   * bookkeeping), reported rather than hidden. */
+  excludedBytes: Record<string, number>
   memoryBytes: { before: Record<string, number>; after: Record<string, number> }
   memGrows: Record<string, number>
   errors: string[]
@@ -268,12 +272,14 @@ export async function measure(
   const attributedBytesPerFrame: Record<string, number> = {}
   const byFn: Record<string, Record<string, number>> = {}
   const totalBytes: Record<string, number> = {}
+  const excludedBytes: Record<string, number> = {}
   const attributedBytesTotal: Record<string, number> = {}
   for (const [name, profile] of Object.entries(rawProfiles)) {
     const summed = sumProfile(profile)
     totalBytes[name] = summed.total
     bytesPerFrame[name] = summed.total / frames
     byFn[name] = summed.byFn
+    excludedBytes[name] = summed.excludedBytes
     const roots = budgets.isolates[name]?.attributionRoots ?? []
     const attributed = attributedBytes(profile, roots)
     attributedBytesTotal[name] = attributed
@@ -302,6 +308,7 @@ export async function measure(
     bytesPerFrame,
     attributedBytesPerFrame,
     byFn,
+    excludedBytes,
     memoryBytes: { before: memBefore, after: memAfter },
     memGrows,
     errors: runResult.errors,

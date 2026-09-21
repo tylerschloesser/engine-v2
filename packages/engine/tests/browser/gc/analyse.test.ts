@@ -9,11 +9,39 @@ import {
 import { profileSample, traceSample } from './fixtures.ts'
 
 test('gc analyse: sums selfSize exactly', () => {
-  const { total, byFn } = sumProfile(profileSample())
+  const { total, byFn, excludedBytes } = sumProfile(profileSample())
   expect(total).toBe(22) // 10 (idle) + 5 (harnessWorkerStep) + 7 (inner)
   expect(byFn['idle@harness.js:4']).toBe(10)
   expect(byFn['harnessWorkerStep@harness-worker.js:13']).toBe(5)
   expect(byFn['inner@loader.js:41']).toBe(7)
+  expect(excludedBytes).toBe(0) // no `waitForWake` frame in this fixture
+})
+
+// docs/decisions/0027-zero-gc-excludes-blocking-primitive-bookkeeping.md: bytes attributed to a
+// `waitForWake` frame anywhere in the tree are excluded from `total` (and hence `bytesPerFrame`),
+// but still reported (in `excludedBytes`, and in `byFn` by name) rather than silently dropped.
+test('gc analyse: waitForWake bytes are excluded from total but still reported', () => {
+  const profile = {
+    head: {
+      selfSize: 0,
+      callFrame: { functionName: '(root)', url: '', lineNumber: 0 },
+      children: [
+        {
+          selfSize: 100,
+          callFrame: { functionName: 'drive', url: 'gc-input.js', lineNumber: 60 },
+        },
+        {
+          selfSize: 13544,
+          callFrame: { functionName: 'waitForWake', url: 'worker-auto.js', lineNumber: 42 },
+        },
+      ],
+    },
+  }
+  const { total, byFn, excludedBytes } = sumProfile(profile)
+  expect(total).toBe(100) // waitForWake's own 13544 is not in the counted total
+  expect(excludedBytes).toBe(13544)
+  expect(byFn['waitForWake@worker-auto.js:43']).toBe(13544) // still visible, never hidden
+  expect(byFn['drive@gc-input.js:61']).toBe(100)
 })
 
 test('gc analyse: inclusive attribution under roots', () => {

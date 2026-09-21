@@ -25,22 +25,48 @@ export type TraceEvent = {
 
 export type GcCounts = { MinorGC: number; MajorGC: number }
 
-/** Total sampled bytes plus the top 8 allocation sites by bytes (what a failing test prints: 0016
- * §3 step 7). */
-export function sumProfile(profile: Profile): { total: number; byFn: Record<string, number> } {
+/** [0027](../../../../docs/decisions/0027-zero-gc-excludes-blocking-primitive-bookkeeping.md): the
+ * *only* call frame whose own bytes are V8's internal bookkeeping for a thread that genuinely
+ * blocks in `Atomics.wait` and is later woken by a cross-thread `Atomics.notify`, not JS-heap
+ * allocation by any engine or test code -- measured by reducing `sab/control.ts`'s
+ * `ControlBlock.waitForWake` to its one bare `Atomics.wait(...)` statement and finding the cost
+ * unchanged. Deliberately one name, not an isolate or a broader "blocking path": widening this set
+ * needs a fresh ADR amendment, the same way this one amended 0016 §3 step 7.
+ * `sab/no-alloc-syntax.test.ts`'s own source-shape assertion is what keeps `waitForWake` pinned to
+ * that one statement, so this exclusion cannot silently widen on its own. */
+const BLOCKING_PRIMITIVE_FRAME_NAMES: ReadonlySet<string> = new Set(['waitForWake'])
+
+/** Total sampled bytes (0027's exclusion already applied) plus the top 8 allocation sites by bytes
+ * (what a failing test prints: 0016 §3 step 7). `excludedBytes` is what 0027 left out of `total`,
+ * reported rather than hidden so a future regression under an excluded name still shows up
+ * somewhere in a failure's own JSON instead of silently vanishing. */
+export function sumProfile(profile: Profile): {
+  total: number
+  byFn: Record<string, number>
+  excludedBytes: number
+} {
   let total = 0
+  let excludedBytes = 0
   const byFn = new Map<string, number>()
   const walk = (node: ProfileNode): void => {
     if (node.selfSize) {
-      total += node.selfSize
       const cf = node.callFrame
       const key = `${cf.functionName || '(anonymous)'}@${(cf.url || '').split('/').pop()}:${cf.lineNumber + 1}`
       byFn.set(key, (byFn.get(key) ?? 0) + node.selfSize)
+      if (BLOCKING_PRIMITIVE_FRAME_NAMES.has(cf.functionName)) {
+        excludedBytes += node.selfSize
+      } else {
+        total += node.selfSize
+      }
     }
     node.children?.forEach(walk)
   }
   walk(profile.head)
-  return { total, byFn: Object.fromEntries([...byFn].sort((a, b) => b[1] - a[1]).slice(0, 8)) }
+  return {
+    total,
+    byFn: Object.fromEntries([...byFn].sort((a, b) => b[1] - a[1]).slice(0, 8)),
+    excludedBytes,
+  }
 }
 
 /** Inclusive `selfSize` of every node at or under a call frame whose `functionName` is in `roots`

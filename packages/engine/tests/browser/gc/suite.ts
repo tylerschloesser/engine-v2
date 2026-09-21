@@ -43,6 +43,9 @@ function detail(r: GcResult): string {
       attributedBytesPerFrame: r.attributedBytesPerFrame,
       gc: r.gc,
       byFn: r.byFn,
+      // 0027: what sumProfile left out of bytesPerFrame (V8's own blocking-primitive bookkeeping),
+      // printed alongside so it is never a silent subtraction.
+      excludedBytes: r.excludedBytes,
       verdict: r.verdict,
     },
     null,
