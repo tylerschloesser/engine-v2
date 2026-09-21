@@ -57,6 +57,15 @@ export type FrameLoopOptions = {
   onOverlay?(): void
   /** M16 (Non-scope): default no-op. */
   onUi?(): void
+  /** M09b step 6 (docs/plan/09b-terrain-art-and-lifecycle.md, Tests added:
+   * `frame-loop.production_runs_phases_in_order`): called with each of `FRAME_PHASES`, in order, at
+   * the start of that phase's own work, every `tick()`. Purely observational (a diagnostic/test
+   * hook, not a new phase: `FRAME_PHASES`' own six names are unchanged) -- default no-op, so
+   * production pages that don't pass one pay one extra already-bound function-reference call per
+   * phase per frame, no allocation (`.claude/rules/hot-paths.md`). `device.html` is the one real
+   * page that supplies it, to prove the order end to end against a real `Client`/`TerrainRenderer`/
+   * canvas instead of only the fakes `frame-loop.test.ts` uses. */
+  onPhase?(phase: FramePhase): void
 }
 
 export type FrameTickResult = { uploadBytes: number; uploadRecords: number }
@@ -78,12 +87,14 @@ export type FrameLoop = {
 }
 
 const noop = (): void => {}
+const noopPhase = (_phase: FramePhase): void => {}
 
 export function createFrameLoop(opts: FrameLoopOptions): FrameLoop {
   const budget = opts.uploadBudgetBytes ?? DEFAULT_UPLOAD_BUDGET_BYTES
   const onCamera = opts.onCamera ?? noop
   const onOverlay = opts.onOverlay ?? noop
   const onUi = opts.onUi ?? noop
+  const onPhase = opts.onPhase ?? noopPhase
   const consumer = new RingConsumer(opts.client.uploadRing)
   const drain = createUploadDrain(consumer, opts.renderer, {
     sabWriteTextureOk: opts.sabWriteTextureOk ?? false,
@@ -98,13 +109,19 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoop {
 
   function tick(): FrameTickResult {
     opts.viewport?.applyPending() // M09b: before every other phase, at most once per frame
+    onPhase('camera')
     onCamera() // camera (no-op until M11)
     opts.client.cameraState.frameTimeMs = opts.clock.now()
+    onPhase('writeCamera')
     opts.client.writeCameraAndWake() // writeCamera: writeCameraBlock + CB_FRAME_REQ + wake
+    onPhase('upload')
     const stats = drain.drain(budget) // upload
+    onPhase('render')
     opts.renderer.writeFrameUniform(opts.renderer.frameUniform)
     opts.renderer.draw(currentTarget()) // render
+    onPhase('overlay')
     onOverlay()
+    onPhase('ui')
     onUi()
     return { uploadBytes: stats.bytes, uploadRecords: stats.records }
   }
@@ -150,6 +167,11 @@ export type RealFrameLoopOptions = {
    * number directly so a clamp test never allocates a huge real texture. */
   maxTextureDimension2D: number
   doc?: Document
+  /** M09b step 7 (`device.html`): the page's own scripted camera (Non-scope: "the device page uses
+   * scripted motion via `autopan` until [M11]"), forwarded straight to `createFrameLoop`. */
+  onCamera?(): void
+  /** M09b step 6: forwarded straight to `createFrameLoop` (see its own doc comment). */
+  onPhase?(phase: FramePhase): void
 }
 
 export type RealFrameLoop = {
@@ -179,14 +201,17 @@ export function createRealFrameLoop(opts: RealFrameLoopOptions): RealFrameLoop {
   if (opts.render !== undefined) viewportOpts.render = opts.render
   if (opts.doc !== undefined) viewportOpts.doc = opts.doc
   const viewport = createViewportController(opts.canvas, opts.renderer, viewportOpts)
-  const loop = createFrameLoop({
+  const frameLoopOpts: FrameLoopOptions = {
     clock: opts.clock,
     scheduler: opts.scheduler,
     client: opts.client,
     renderer: opts.renderer,
     target: () => ctx.getCurrentTexture(),
     viewport,
-  })
+  }
+  if (opts.onCamera !== undefined) frameLoopOpts.onCamera = opts.onCamera
+  if (opts.onPhase !== undefined) frameLoopOpts.onPhase = opts.onPhase
+  const loop = createFrameLoop(frameLoopOpts)
   return {
     loop,
     viewport,

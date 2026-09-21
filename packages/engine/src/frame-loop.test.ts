@@ -138,6 +138,30 @@ test('frame-loop.tick_calls_camera_write_upload_render_in_order', () => {
   expect(client.wakeCount).toBe(1)
 })
 
+// M09b step 6 (docs/plan/09b-terrain-art-and-lifecycle.md, Tests added): `onPhase` (the seam
+// `frame-loop.production_runs_phases_in_order`, a real-canvas browser test, drives against a real
+// `Client`/`TerrainRenderer`) fires with each of `FRAME_PHASES`, in that order, once per `tick()` --
+// proven here against fakes alone, the same split every other phase-order assertion in this file
+// uses.
+test('frame-loop.onPhase_called_with_each_FRAME_PHASE_in_order', () => {
+  const seen: string[] = []
+  const loop = createFrameLoop({
+    clock: { now: () => 0 },
+    scheduler: {
+      setTimer: () => 0,
+      clearTimer: () => {},
+      requestFrame: () => 0,
+      cancelFrame: () => {},
+    },
+    client: fakeClient(),
+    renderer: fakeRenderer(),
+    target: {} as GPUTexture,
+    onPhase: (phase) => seen.push(phase),
+  })
+  loop.tick()
+  expect(seen).toEqual(FRAME_PHASES)
+})
+
 test('frame-loop.onCamera_onOverlay_onUi_default_to_noop', () => {
   const client = fakeClient()
   const renderer = fakeRenderer()

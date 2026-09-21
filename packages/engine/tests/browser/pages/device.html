@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="data:," />
+    <title>device</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #000;
+        overflow: hidden;
+        height: 100%;
+      }
+      canvas {
+        position: fixed;
+        inset: 0;
+        width: 100vw;
+        height: 100vh;
+        display: block;
+      }
+      #hud {
+        position: fixed;
+        top: 0;
+        left: 0;
+        margin: 0;
+        padding: 8px 10px;
+        max-width: calc(100vw - 20px);
+        background: rgba(0, 0, 0, 0.6);
+        color: #0f0;
+        font: 12px/1.5 ui-monospace, monospace;
+        white-space: pre-wrap;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <pre id="hud">device: starting…</pre>
+    <script type="module" src="./src/device.ts"></script>
+  </body>
+</html>
