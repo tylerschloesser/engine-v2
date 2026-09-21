@@ -7,6 +7,7 @@ pub mod abi;
 pub mod bytes;
 pub mod client;
 pub mod codec;
+pub mod delta;
 pub mod game;
 pub mod gen_queue;
 pub mod hash;
