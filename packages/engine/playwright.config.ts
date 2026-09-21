@@ -29,6 +29,23 @@ const swiftshaderArgs =
       ]
     : []
 
+// Spike B fallback rung 1 (docs/plan/10-ci-workflow.md "Fallbacks if SwiftShader fails"; first CI
+// run, M10 Deviations): `channel: 'chromium'` (new headless mode: playwright-core's own
+// `LaunchOptions.channel` doc comment, `'"chromium"' to opt in to new headless mode`) returned a
+// null adapter on ubuntu-latest even with the flags above. `channel: 'chromium-headless-shell'` is
+// a *separate*, non-aliased executable (playwright-core@1.63.0 lib/coreBundle.js:
+// `chromiumAliases = ['chrome-for-testing']` does not include it; `registry.getExecutableName`
+// passes an explicit non-alias channel straight through as the binary name) -- the "old shell" the
+// spike used locally (`spikes/zero-gc-webgpu/playwright.config.mjs`: `CHANNEL=shell -> old headless
+// shell, which with --enable-unsafe-webgpu yields the SwiftShader adapter`, confirmed in
+// `RESULT.md`: `vendor: google, architecture: swiftshader, isFallbackAdapter: true`, even on
+// macOS, because the shell binary has no real-GPU path at all and always falls back to software
+// rendering). Installed already: a bare `playwright install chromium` installs both `chromium` and
+// `chromium-headless-shell` (`registry.resolveBrowsers`'s `chromium` branch installs both unless
+// `--only-shell`/`--no-shell` is passed; `ci.yml` passes neither).
+const chromiumChannel =
+  process.env.ENGINE_GPU === 'swiftshader' ? 'chromium-headless-shell' : 'chromium'
+
 export default defineConfig({
   testDir: './tests/browser',
   // Default matches `*.test.ts` too (M04's `gc/analyse.test.ts` is a Vitest unit test, run by the
@@ -45,8 +62,8 @@ export default defineConfig({
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
-        // Real Metal adapter headless on macOS; the same flag serves Linux SwiftShader (0020 §6).
-        channel: 'chromium',
+        // Real Metal adapter headless on macOS; CI swaps to the headless-shell channel (above).
+        channel: chromiumChannel,
         launchOptions: { args: ['--enable-unsafe-webgpu', ...swiftshaderArgs] },
       },
       // M04's gc-*.spec.ts run only in the `gc` project below, under `pnpm gc`, never `pnpm test`.
@@ -78,7 +95,7 @@ export default defineConfig({
       name: 'gc',
       use: {
         ...devices['Desktop Chrome'],
-        channel: 'chromium',
+        channel: chromiumChannel,
         launchOptions: {
           args: [
             '--enable-unsafe-webgpu',
