@@ -225,7 +225,8 @@ export function createCameraIntegrator(
     viewport: CameraViewport,
     pointers: PointerSlots,
   ): number {
-    const [p0, p1] = pointers.slots
+    const p0 = pointers.slots[0]
+    const p1 = pointers.slots[1]
     const activeCount = (p0.active ? 1 : 0) + (p1.active ? 1 : 0)
     if (activeCount === 2) {
       const midX = (p0.x + p1.x) / 2
@@ -310,7 +311,8 @@ export function createCameraIntegrator(
    * `false` once a wheel event has ever occurred -- `applyWheelEasing`'s own early-return already
    * relies on `pendingDeltaLog === 0` for the same reason). */
   function hasLiveInput(pointers: PointerSlots, keys: KeyState, wheel: WheelState): boolean {
-    const [p0, p1] = pointers.slots
+    const p0 = pointers.slots[0]
+    const p1 = pointers.slots[1]
     return (
       p0.active ||
       p1.active ||
@@ -379,7 +381,8 @@ export function createCameraIntegrator(
     if (Number.isNaN(prevTilesAcross)) prevTilesAcross = state.tilesAcross
     const dtSec = dtMs / 1000
     const pointers = input.pointers
-    const [p0, p1] = pointers.slots
+    const p0 = pointers.slots[0]
+    const p1 = pointers.slots[1]
     const gesture = pointers.gesture
 
     if (moveActive && hasLiveInput(pointers, input.keys, input.wheel)) moveActive = false

@@ -365,7 +365,12 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
   ): void {
     clockMs += dtMs
     if (suspended) return
-    const [p0, p1] = input.pointers.slots
+    // A fixed indexed pair, not array destructuring (`.claude/rules/hot-paths.md`: found by the
+    // zero-GC `input` page, docs/plan/11-camera-and-input.md step 7 -- destructuring a plain
+    // `Array` still goes through the iterator protocol on a path this milestone is the first to
+    // drive hard inside a measured window).
+    const p0 = input.pointers.slots[0]
+    const p1 = input.pointers.slots[1]
     const activeCount = (p0.active ? 1 : 0) + (p1.active ? 1 : 0)
 
     // 0019 §4: "hover (mouse only)"; the engine keeps a cursor tile (mouse: tile under the

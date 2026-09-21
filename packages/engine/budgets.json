@@ -110,6 +110,29 @@
         },
         "software": null
       },
+      "input": {
+        "isolates": {
+          "main": {
+            "class": "strict",
+            "bytesPerFrame": 206,
+            "formula": "0016 §1's formula (`ceil(measured) + 8 B`, no attribution, same shape as `terrain`'s own row). Measured (`pnpm exec vite build --config tests/browser/pages/vite.config.ts` then `playwright test --project gc --grep \"input clean\" --repeat-each 8 --workers 1`, this machine): 196.51-197.05 B/frame across all 8 clean runs. ceil(197.05) = 198, + 8 B margin = 206. Every injected pointer is `'touch'` (`gc-input.ts`'s own comment): the first measurement, with the default `'mouse'`, read 206.51-206.75 -- about 10 B/frame higher, from `emit`'s own byte count (8,160 -> 2,240 in one clean run's own widened byFn) once idle-mouse `hover` (0019 §4 \"mouse only\", mandatory gap #2 of this range) stopped firing on every tile the drag/pinch crossed. Decomposition of one clean run's own full byFn (top-40, not committed): (a) 3 named WebGPU wrapper objects (`draw()`, same site as `terrain`'s own row) -- 28,800 B / 600 = 48.0 B/frame; (b) the upload drain's one `queue.writeTexture()` task (same site as `terrain`'s own row) -- 12,000 B / 600 = 20.0 B/frame; (c) this milestone's own camera/input code now that `findSlot`/`freeSlot` (`input/pointers.ts`) and the `[p0, p1] = pointers.slots` destructure (`camera/camera.ts`, `input/semantic.ts`) were changed to plain indexed access (found by this page itself: the `for...of`/destructure pair over a 2-element array went through the iterator protocol on a path no earlier gc page drove this hard, cutting `main` from 447.87 to ~206.5 B/frame in one step) -- `recognize`/`emit`/`applyWheelEasing`/`pxPerTile`/`integrate`/`writeFrameUniform`/`applyInertia`/`hypot`/`tileUnderPoint`/`applyWasd`/`applyPointers`/`processSlot`/`writeInputRecord` together, about 43,700 B / 600 = 72.8 B/frame, believed to be interpreter-tier double-field/argument boxing (gc-test skill: \"a Float64Array element read ... box a fresh HeapNumber\") on a path this page is the first to drive this hard inside a measured window, not chased further within this range's own budget; (d) harness/test-page overhead (`drive`'s own scratch, `stepFrame`, `page.evaluate`'s CDP JSON round-trip of `run()`'s return value, one-off compiler/promise bookkeeping) -- about 20,900 B / 600 = 34.8 B/frame, the only bucket that varied run to run, same shape `terrain`'s own formula already documents. (a)+(b)+(c)+(d) ≈ 196 B/frame, matching the measured total. Deviations: `input neg burst main`/`input neg burst gen0` (both `@slow`, ADR 0026) intermittently also fail `client`'s own B verdict (`client` jumps from its usual 2.52 B/frame to 20-25 under a sibling's own `burst`) -- the same class of cross-isolate measurement noise already documented as unresolved (`gc-test` skill, `docs/plan/06b-workers-and-spawn.md` Deviations \"fix round 2\"), reported rather than chased: `pnpm test`'s own fast tier (`clean` plus every `object` control) was reliable across 20/20 repeats.",
+            "attributionRoots": ["drive"]
+          },
+          "client": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the strict worker figure, same fixed number every other page's client/gen0/sim row uses. Measured: a constant 2.52 B/frame across 8 clean runs.",
+            "attributionRoots": ["body"]
+          },
+          "gen0": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the strict worker figure, same as client's own row. Measured: a constant 2.52 B/frame across 8 clean runs.",
+            "attributionRoots": ["body"]
+          }
+        },
+        "software": null
+      },
       "terrain": {
         "isolates": {
           "main": {

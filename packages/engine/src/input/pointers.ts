@@ -93,13 +93,24 @@ export class PointerSlots {
   readonly mouseHover = new MouseHoverState()
 }
 
+// A fixed two-element indexed check, not `for...of` (`.claude/rules/hot-paths.md`; found by the
+// zero-GC `input` page, docs/plan/11-camera-and-input.md step 7: `for...of` over `state.slots` --
+// a plain `Array`, not a `Set`/`Map` -- still goes through the iterator protocol on a path this
+// milestone is the first to drive hard inside a measured window, and `byFn` attributed real bytes
+// to `findSlot` itself). `MAX_POINTERS` is 2, so this never needs to generalise.
 function findSlot(state: PointerSlots, id: number): PointerSlot | undefined {
-  for (const s of state.slots) if (s.active && s.id === id) return s
+  const s0 = state.slots[0]
+  if (s0.active && s0.id === id) return s0
+  const s1 = state.slots[1]
+  if (s1.active && s1.id === id) return s1
   return undefined
 }
 
 function freeSlot(state: PointerSlots): PointerSlot | undefined {
-  for (const s of state.slots) if (!s.active) return s
+  const s0 = state.slots[0]
+  if (!s0.active) return s0
+  const s1 = state.slots[1]
+  if (!s1.active) return s1
   return undefined
 }
 
