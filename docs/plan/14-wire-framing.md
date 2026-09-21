@@ -27,7 +27,7 @@ Module `wire` in the engine crate. Writers are generic over M05's `ByteSink` (a 
 
 ## Seams
 **Provides:** `wire::{MsgType, SectionId, FrameHeader, FrameWriter, FrameReader, SectionWriter, UplinkWriter, UplinkReader, UplinkBatch, CameraReport, ChunkCoordListWriter/Reader, OverlayRunsWriter/Reader, SnapshotWriter/Reader, ActionResultsWriter/Reader, encode_chunk_snapshot, WireError, zigzag32, unzigzag32}`; goldens `wire_*` (M05 `assert_golden_bytes!`).
-**Consumes:** M05 `codec::{encode_to, decode}`, `ByteSink`, `SliceSink`, `ByteReader`, `CodecError`, `assert_golden_bytes!`, `pnpm golden:bytes`; M12 `Delta`, `Store`, ids; M12b `Outcome`, `EngineReject`; M07 `Tile`, `ChunkCoord`, overlay iteration.
+**Consumes:** M05 `codec::{encode_to, decode}`, `ByteSink`, `SliceSink`, `ByteReader`, `CodecError`, `assert_golden_bytes!`, `pnpm golden:bytes`; M12 `Delta`, `Store`, ids; M12b `Outcome`, `EngineReject`; M07 `Tile`, `ChunkCoord`, overlay iteration. M12b's 7th `Delta` variant, `Ack { who, seq }`, never reaches this module: `Authority::record_ack` applies it straight to `Store`, bypassing the `ChangeLog` a wire frame is built from, so it is never rebroadcast (M12b Deviations) — an exhaustive match over `Delta` in wire code should account for that arm deliberately rather than be surprised by it.
 
 ## Planning decisions
 Closes PRE-PLAN §10 "Exact section ids, varint coordinate coding, overlay run format".
