@@ -10,9 +10,10 @@ import { CameraState } from './camera/state.js'
 import type { Client } from './client.js'
 import { createFrameLoop, FRAME_PHASES } from './frame-loop.js'
 import type { TerrainRenderer } from './render/terrain.js'
+import { FLAG_REBASE } from './sab/control.js'
 import { createRing } from './sab/ring.js'
 
-function fakeClient(): Client & { wakeCount: number } {
+function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
   const cameraState = new CameraState()
   const uploadRing = createRing(4120, 4)
   return {
@@ -20,9 +21,13 @@ function fakeClient(): Client & { wakeCount: number } {
     cameraState,
     uploadRing,
     wakeCount: 0,
+    flagsSet: 0,
     writeCameraAndWake(): number {
       this.wakeCount += 1
       return this.wakeCount
+    },
+    setFlags(mask: number): void {
+      this.flagsSet |= mask
     },
     destroy() {},
   }
@@ -59,7 +64,32 @@ function fakeRenderer(): TerrainRenderer & { drawCallTargets: unknown[] } {
       neighbourCutoffPx: 0,
     },
     viewport: { widthPx: 0, heightPx: 0, dpr: 1, renderScale: 1 },
+    onViewportChange() {},
+    notifyViewportChange() {},
     drawCallTargets,
+  }
+}
+
+/** A fake `ViewportController` (docs/plan/09b-terrain-art-and-lifecycle.md): tracks calls instead of
+ * touching a real canvas/`ResizeObserver`, so `resume()`'s "re-check size" (`invalidate()`) is
+ * provable against fakes alone, no browser needed. */
+function fakeViewport(): {
+  applyPending(): boolean
+  invalidate(): void
+  forceSize(): void
+  dispose(): void
+  invalidateCount: number
+} {
+  return {
+    invalidateCount: 0,
+    applyPending() {
+      return false
+    },
+    invalidate() {
+      this.invalidateCount += 1
+    },
+    forceSize() {},
+    dispose() {},
   }
 }
 
@@ -126,7 +156,7 @@ test('frame-loop.onCamera_onOverlay_onUi_default_to_noop', () => {
   expect(() => loop.tick()).not.toThrow()
 })
 
-test('frame-loop.start_stop_drive_the_injected_scheduler', () => {
+test('frame-loop.pause_resume_drive_the_injected_scheduler', () => {
   const requested: Array<(t: number) => void> = []
   let cancelled = 0
   const scheduler = {
@@ -147,14 +177,48 @@ test('frame-loop.start_stop_drive_the_injected_scheduler', () => {
     renderer: fakeRenderer(),
     target: {} as GPUTexture,
   })
-  loop.start()
+  loop.resume()
   expect(requested).toHaveLength(1)
   // Driving the scheduler's own callback re-requests the next frame (the rAF loop shape).
   ;(requested[0] as (t: number) => void)(0)
   expect(requested).toHaveLength(2)
-  loop.stop()
+  loop.pause()
   expect(cancelled).toBe(1)
-  // A stopped loop's own re-armed callback is a no-op (checked via `running`).
+  // A paused loop's own re-armed callback is a no-op (checked via `running`).
   ;(requested[1] as (t: number) => void)(0)
   expect(requested).toHaveLength(2)
+})
+
+// docs/plan/09b-terrain-art-and-lifecycle.md Scope/Seams: 0018 §8's backgrounding rule, against
+// fakes -- no browser needed to prove `resume()` distinguishes its very first call (an ordinary
+// start) from a restart after `pause()` (a real return from backgrounding).
+test('frame-loop.resume_after_pause_rechecks_viewport_and_sets_rebase', () => {
+  const scheduler = {
+    setTimer: () => 0,
+    clearTimer: () => {},
+    requestFrame: () => 0,
+    cancelFrame: () => {},
+  }
+  const client = fakeClient()
+  const viewport = fakeViewport()
+  const loop = createFrameLoop({
+    clock: { now: () => 0 },
+    scheduler,
+    client,
+    renderer: fakeRenderer(),
+    target: {} as GPUTexture,
+    viewport,
+  })
+
+  loop.resume() // the very first start: no rebase, no re-check
+  expect(viewport.invalidateCount).toBe(0)
+  expect(client.flagsSet).toBe(0)
+
+  loop.pause()
+  loop.resume() // a real return from backgrounding
+  expect(viewport.invalidateCount).toBe(1)
+  expect(client.flagsSet & FLAG_REBASE).toBe(FLAG_REBASE)
+
+  loop.resume() // already running: idempotent, no second rebase
+  expect(viewport.invalidateCount).toBe(1)
 })

@@ -54,6 +54,8 @@ function fakeRenderer(): TerrainRenderer {
       neighbourCutoffPx: 0,
     },
     viewport: { widthPx: 0, heightPx: 0, dpr: 1, renderScale: 1 },
+    onViewportChange() {},
+    notifyViewportChange() {},
   }
 }
 

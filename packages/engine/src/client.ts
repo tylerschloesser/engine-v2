@@ -7,6 +7,7 @@ import type { Clock, Scheduler } from './clock.js'
 import { systemClock, systemScheduler } from './clock.js'
 import type { InstanceConfig } from './loader.js'
 import {
+  CB_FLAGS,
   CB_FRAME_REQ,
   CB_LIFECYCLE,
   ControlBlock,
@@ -77,6 +78,12 @@ export interface Client {
    * CB_FRAME_REQ + wake" phase calls this directly). Returns the new `CB_FRAME_REQ` value (`engine/
    * test`'s `stepFrame` uses it to spin on the worker's own ack; production code ignores it). */
   writeCameraAndWake(): number
+  /** Sets bits of `mask` in the global `CB_FLAGS` word (`sab/control.ts`) without clearing any
+   * other bit already set there. docs/plan/09b-terrain-art-and-lifecycle.md Scope/Seams:
+   * `frame-loop.ts`'s `resume()` calls this with `FLAG_REBASE` on a real return-from-background
+   * ("on visible ... tell the client worker to re-base interpolation"); M30 is the one that clears
+   * and consumes the flag, not this milestone. */
+  setFlags(mask: number): void
   destroy(): void
 }
 
@@ -262,6 +269,9 @@ export function createClient(options: ClientOptions): Client {
       writeCameraAndWake(): number {
         throw err
       },
+      setFlags(): void {
+        throw err
+      },
       destroy() {},
     }
   }
@@ -301,6 +311,13 @@ export function createClient(options: ClientOptions): Client {
     const req = (Atomics.add(control.words, CB_FRAME_REQ, 1) + 1) >>> 0
     control.wake(WORKER_CLIENT)
     return req
+  }
+
+  /** docs/plan/09b-terrain-art-and-lifecycle.md Scope: "set `CB_FLAGS.REBASE`". `Atomics.or`, not a
+   * load-then-store: another flag bit set by something else between the load and the store would
+   * otherwise be clobbered. */
+  function setFlags(mask: number): void {
+    Atomics.or(control.words, CB_FLAGS, mask)
   }
 
   async function start(): Promise<void> {
@@ -356,6 +373,7 @@ export function createClient(options: ClientOptions): Client {
     cameraState,
     uploadRing: sabs.uploadRing,
     writeCameraAndWake,
+    setFlags,
     destroy,
   }
   handles.set(client, { control, sabs, cameraState, cameraWriter, clock, scheduler, workers })

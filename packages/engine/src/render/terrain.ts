@@ -59,6 +59,11 @@ export type IndirEntry = { x: number; y: number; value: number }
 /** Base/resource visual ids for one tile (mirrors `client::texel::TileTexel`). */
 export type Texel = { base: number; resource: number }
 
+/** `renderer.viewport`'s own shape (Seams, Provides), named so `render/viewport.ts` and
+ * `engine/test`'s `setViewport` don't each restate it inline (docs/plan/
+ * 09b-terrain-art-and-lifecycle.md). */
+export type Viewport = { widthPx: number; heightPx: number; dpr: number; renderScale: number }
+
 export interface TerrainRenderer {
   readonly device: GPUDevice
   /** Writes the whole `FrameUniform` (0018 §5's camera-relative fields); called once per frame
@@ -103,9 +108,16 @@ export interface TerrainRenderer {
    * by this milestone's own code outside its constructor defaults -- M09's tests still call
    * `writeFrameUniform` directly with their own values. */
   readonly frameUniform: FrameUniformValues
-  /** Mutated in place by M09b's resize observer and M11's camera (Seams, Provides); not read by
-   * anything in this milestone. */
-  readonly viewport: { widthPx: number; heightPx: number; dpr: number; renderScale: number }
+  /** Mutated in place by M09b's resize observer (docs/plan/09b-terrain-art-and-lifecycle.md
+   * `render/viewport.ts`) and M11's camera (Seams, Provides). */
+  readonly viewport: Viewport
+  /** Registers `cb`: fired by `notifyViewportChange()` at most once per frame, only when the
+   * viewport actually changed (Seams, Provides: "M11 recomputes `half_extent_tiles`; M18 re-bases
+   * anchors"). */
+  onViewportChange(cb: (viewport: Viewport) => void): void
+  /** `render/viewport.ts`'s own call, right after mutating `viewport` in place -- not a Seam name
+   * itself, the wiring between this renderer and whatever owns its resize observer. */
+  notifyViewportChange(): void
 }
 
 const TEXEL_BYTES = 4 // rg16uint: 2 x u16
@@ -240,7 +252,8 @@ export async function createTerrainRenderer(
     cursorValid: 0,
     neighbourCutoffPx: 0,
   }
-  const viewport = { widthPx: 0, heightPx: 0, dpr: 1, renderScale: 1 }
+  const viewport: Viewport = { widthPx: 0, heightPx: 0, dpr: 1, renderScale: 1 }
+  const viewportChangeCallbacks: Array<(v: Viewport) => void> = []
 
   function buildBindGroup(): GPUBindGroup {
     return device.createBindGroup({
@@ -438,6 +451,18 @@ export async function createTerrainRenderer(
 
     frameUniform,
     viewport,
+
+    onViewportChange(cb) {
+      viewportChangeCallbacks.push(cb)
+    },
+
+    notifyViewportChange() {
+      // Plain indexed loop, not `Array.prototype.forEach` (`.claude/rules/hot-paths.md`: no
+      // per-iteration closures) -- matches this file's own `writeIndir`/`asHarness`'s discipline.
+      for (let i = 0; i < viewportChangeCallbacks.length; i++) {
+        ;(viewportChangeCallbacks[i] as (v: Viewport) => void)(viewport)
+      }
+    },
   }
 }
 
