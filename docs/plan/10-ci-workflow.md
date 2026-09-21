@@ -284,3 +284,108 @@ report.mjs`/`scripts/lib/adapters.test.mjs`/`scripts/lib/report.test.mjs`/`scrip
 (adapter.info logging, committed) changed in this round. `packages/engine/budgets.json` and
 `packages/engine/tests/browser/gc/instrument.ts` are byte-identical to `edb93b5`'s versions --
 every experiment above was local-only and reverted.
+
+### Orchestrator's decisions (2026-09-21)
+
+Recorded verbatim, per instruction, then implemented in the order given:
+
+> 1. Fix by nesting the control hook inside the root. Never widen `attributionRoots`. Widening a
+> root to enclose the control (`run` for `main`, `runOp` for `gc-loop`'s workers) would make clean
+> assertion B attribute harness scaffolding to the engine -- it would weaken the exact assertion the
+> control exists to police, and it would raise every clean baseline for a reason that has nothing to
+> do with engine allocation. Do the opposite: move the control hook *inside* the root function, so
+> it sits on the identical attribution path the clean measurement uses. `src/worker/{client,gen,
+> sim}.ts`'s `body()` calling `applyGcHook` as its first statement is the pattern that already works
+> and is already proven -- make `src/test/gc-page.ts`'s `main` control fire inside `drive()` (and
+> inside `stepFrame`/`stepTick` for `topology`, whichever root that page names), and `src/test/
+> harness-worker.ts`'s `applyStepControl` fire inside `coreTick()` rather than as `runOp`'s sibling.
+> These are test-scaffolding files, so this is a placement fix, not an engine change. A control that
+> fires outside the measured region was never testing the instrument; it was testing itself.
+>
+> 2. The nested control is its own inlining detector -- no separate investigation. This answers your
+> decision 2, and it is the reason 1 is worth doing properly. Once the hook is nested inside the
+> root, V8 inlining the root away removes *both* the control's bytes and the real per-frame work's
+> bytes from attribution. So a control that trips reliably is direct empirical proof that the root
+> node survived as a distinguishable tree node in that window -- the 0.027-vs-16 `topology client`
+> reading becomes a *measurable, failing* condition rather than a theory. Acceptance evidence I want,
+> and the bar for step 4 being done: every page x every isolate x both modes, `--repeat-each 5`,
+> tripping 5/5. An isolate that trips 4/5 or 3/5 is not a flake to be re-run -- it is the inlining
+> problem, quantified, and it is a stop-and-report blocker for me, not something to absorb with a
+> wider margin.
+>
+> 3. `software.frames: 600` uniformly -- accepted. Your arithmetic is sound and the 1.53 ms/frame CI
+> evidence beats the spike's 58 ms/frame worst case for the right reason (that stress scene was
+> never `terrain`'s real page). The decisive argument is not cost, though: 600 makes software mode
+> read *identically* to hardware under 0028's two-window rule, so a one-off lands in at most one
+> window in both modes and there is no second regime to reason about. Two conditions: measure the
+> real `gc-terrain`/`gc-input` pages' own wall time under the full instrument and report it (your
+> figure is a proxy and you said so), and if a page genuinely cannot finish, take 0016 caveat b's
+> trivial-scene option -- never a shortened window, which would destroy exactly the property that
+> makes 600 the right number.
+>
+> 4. Yes, wire `adapter.info` into `gc/suite.ts`'s `assertEnvironment`. An exit criterion names
+> `adapter.info` on every GPU test and `zeroGcSuite`'s generated tests are GPU tests. Close the gap
+> you flagged.
+>
+> Order: fix (1), prove it with (2)'s 5/5 evidence locally, then write the five `software` blocks
+> with real measured numbers and (4), then commit and name the sha for a push. If (2) fails on any
+> isolate, stop at that point and report the numbers -- do not write a single `software` block on
+> top of an unproven control. Unchanged: no widened budget, no shortened window, no retry, no
+> warm-up knob.
+
+**(1), implemented.** `src/test/gc-page.ts`: the main-isolate control (`allocateObject`/
+`allocateBurst`) now fires as the first thing inside a single function literally named `drive`,
+which then calls the page's own `opts.drive` (or, with none supplied, does what the old anonymous
+default did: `stepFrame`+`stepTick`) as a nested call -- not, as before, as a sibling statement in
+`run`'s own loop body. Consequence: `topology`'s previously-anonymous default drive is now this
+same named `drive` function too, so `topology`'s `main` `attributionRoots` moves from
+`["stepFrame", "stepTick"]` to `["drive"]` (committed) -- not a widened root: `drive` is the direct
+parent of the exact same `stepFrame`/`stepTick` calls that root already covered, so coverage is
+identical plus the now-correctly-nested control. `gc-loop`'s own `main` root (`["run"]`) and
+`terrain`/`input`/`echo`/`gen`'s own `["drive"]` roots are untouched (already correct: `run` already
+contained everything, and those four pages' own `opts.drive` was already a named shorthand method).
+`src/test/harness-worker.ts`: `coreTick` gained a parameter (`n`, the tick/frame sequence number)
+and now calls `applyStepControl(Atomics.load(sab, StepBlockField.Control), n)` as its own first
+statement; `runOp` now just calls `coreTick(seq)`. The `pmTick` message handler calls `coreTick(0)`
+(a post-message-controlled isolate is never simultaneously the SAB `Control` word's target, so this
+is always a no-op there regardless of the value). `gc-loop`'s own `attributionRoots` for its worker
+isolates (`["coreTick"]`) needed no change: `coreTick` was already the right name, it just didn't
+contain the control before. Verified no regression: hardware mode, every existing test (`pnpm test`
+90/90 browser, plus the 19 `@slow`-tagged `neg burst` tests run directly) still green, byte-for-byte
+unaffected (attribution is a software-mode-only code path; hardware's B reads raw totals).
+
+**(2), the acceptance run.** `object` control, software mode, `--repeat-each 5`, all six pages, every
+isolate (95 test executions: `gc-loop` main+sim, `topology`/`echo` main+client+sim+gen0,
+`gen`/`terrain`/`input` main+client+gen0): **90/95 passed, 5/5 failed on exactly one isolate --
+`topology neg object client`, 0/5, not a flake.** Every other isolate on every other page tripped
+5/5, including `gc-loop`'s own worker isolate (`sim`, now nested under `coreTick`) and `topology`'s
+own `sim`/`gen0` (the same `body()`-first-statement production pattern, same file family
+`src/worker/{sim,gen}.ts`, unaffected). `topology neg object client`'s own reading was
+**bit-identical across all 5 runs: `attributedBytesPerFrame.client = 0.02666666666666667`** (16.00 B
+total over the 600-frame window -- exactly one object's worth, not zero), against a budget-checking
+run that used the fixed worker convention (8 B/frame) as the ceiling, so the control needed to clear
+budget by rising, not merely register above zero: it never came close, reading 300x under 8 in every
+run. `byFn.client` in every failing run shows `applyGcHook@worker-auto-*.js:501: 9616` -- the full,
+expected total (600 real wake calls x ~16 B = ~9600 B, no dead-store elimination, the allocation
+genuinely happens every wake) -- but only 16 of those 9,616 bytes land on a call-tree node this
+session's own tree-walk found nested under a node literally named `body`; the rest attribute to
+`applyGcHook`'s own frame directly, with no `body` ancestor at all, meaning V8 inlined `body()` into
+its caller (`runBlockingLoop`, per the sibling `byFn` entries) for essentially the entire window,
+on this isolate, every one of 5 independent page loads. `topology`'s `client`-kind worker's `body()`
+(`src/worker/client.ts`) is likely the smallest/hottest instance of that shared file across every
+gc page (no real terrain/gen/camera work to do on the `fx-hash` fixture topology/echo use), making
+it TurboFan's best inlining candidate; `terrain`/`input`'s own busier `client` bodies did not show
+the same behaviour in this run, but this session did not test every isolate at a repeat count above
+5, so "busier bodies are safe" is not asserted, only "not observed failing at n=5."
+
+**Per the order given, stopped here.** `packages/engine/budgets.json`'s `software` blocks were not
+written for `topology`/`echo`/`gen`/`terrain`/`input` (every local experiment reverted, `git diff
+--exit-code` clean except the one `attributionRoots` rename above); (3)'s `software.frames: 600`
+measurement of `gc-terrain`/`gc-input`'s own real wall time and (4)'s `adapter.info` wiring were not
+attempted, since both are downstream of (2) passing cleanly. This is the orchestrator's own
+"stop-and-report blocker," not a flake to retry, a control to soften, or a margin to widen.
+
+**Commits this round:** the `drive`/`coreTick` placement fix and the `topology` `attributionRoots`
+rename above (`packages/engine/src/test/gc-page.ts`, `packages/engine/src/test/
+harness-worker.ts`, `packages/engine/budgets.json`), verified against 90/95 of the acceptance bar
+and zero hardware-mode regressions.
