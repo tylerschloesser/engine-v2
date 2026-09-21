@@ -72,6 +72,14 @@ export type GcResult = {
    * the pair is reported alongside so the discarded window is always visible next to the verdict
    * and the minimum is never a silent subtraction. */
   windowBytes: Record<string, [number, number]>
+  /** `sumProfile(...).byFn` for *both* windows, `[first, second]`, per isolate -- the same call
+   * already made to fill `windowBytes` above, its `byFn` half kept instead of discarded. `byFn`
+   * itself only ever carries the chosen (lower) window's sites; a mismatch whose cause is an event
+   * landing in both windows at a different magnitude (gc-parity defect-fix session, 2026-09-21:
+   * `scope.onmessage` on `gc-loop`'s `sim`, 388 B in the first window vs 348 B in the second, same
+   * page load) is invisible in `byFn`/`windowBytes` alone and needs both windows' own sites next to
+   * each other to name. */
+  windowByFn: Record<string, [Record<string, number>, Record<string, number>]>
   memoryBytes: { before: Record<string, number>; after: Record<string, number> }
   memGrows: Record<string, number>
   errors: string[]
@@ -289,11 +297,15 @@ export async function measure(
   // allocation sites always belong to the total it failed on.
   const rawProfiles: Record<string, Profile> = {}
   const windowBytes: Record<string, [number, number]> = {}
+  const windowByFn: Record<string, [Record<string, number>, Record<string, number>]> = {}
   for (const name of Object.keys(secondProfiles)) {
     const first = firstProfiles[name] as Profile
     const second = secondProfiles[name] as Profile
-    const totals: [number, number] = [sumProfile(first).total, sumProfile(second).total]
+    const firstSummed = sumProfile(first)
+    const secondSummed = sumProfile(second)
+    const totals: [number, number] = [firstSummed.total, secondSummed.total]
     windowBytes[name] = totals
+    windowByFn[name] = [firstSummed.byFn, secondSummed.byFn]
     rawProfiles[name] = totals[0] <= totals[1] ? first : second
   }
   await browserSession.send('Tracing.end')
@@ -347,6 +359,7 @@ export async function measure(
     attributedBytesPerFrame,
     byFn,
     windowBytes,
+    windowByFn,
     memoryBytes: { before: memBefore, after: memAfter },
     memGrows,
     errors: [...firstRun.errors, ...runResult.errors],

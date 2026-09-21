@@ -20,8 +20,21 @@ test('gc: flat transport parity', async ({ page, browser }) => {
   await openPage(page, '/gc-loop.html')
   const flat = await measure(page, browser, { pageId: 'gc-loop', attach: flatAttachForThisWorker })
 
-  expect(
-    flat.totalBytes.sim,
-    JSON.stringify({ tunnel: tunnel.totalBytes, flat: flat.totalBytes }),
-  ).toBe(tunnel.totalBytes.sim)
+  // Per-isolate, per-window attribution for both transports: a bare byte-total mismatch does not
+  // say *why* two independent sessions differ, and re-deriving that by hand (temporarily patching
+  // this file to dump `byFn`/`windowBytes`) cost a whole investigation round once already (gc-parity
+  // defect-fix session, 2026-09-21). `windowByFn` in particular exists because a mismatch can come
+  // from a one-off event landing in *both* measured windows at a different magnitude -- invisible in
+  // `byFn` (only the chosen, lower window's sites) or `windowBytes` (totals only) alone; see
+  // `instrument.ts`'s own doc comment on that field for the `scope.onmessage` case that motivated it.
+  const detail = JSON.stringify({
+    totalBytes: { tunnel: tunnel.totalBytes, flat: flat.totalBytes },
+    windowBytes: { tunnel: tunnel.windowBytes, flat: flat.windowBytes },
+    windowByFn: { tunnel: tunnel.windowByFn, flat: flat.windowByFn },
+  })
+  // `GC_PARITY_DEBUG=1`: the same detail on a *passing* run too, so a future session can diff a
+  // green run against a red one instead of only ever seeing this when it is already failing.
+  if (process.env.GC_PARITY_DEBUG) console.log(`gc parity detail: ${detail}`)
+
+  expect(flat.totalBytes.sim, detail).toBe(tunnel.totalBytes.sim)
 })
