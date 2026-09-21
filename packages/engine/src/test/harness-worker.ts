@@ -35,9 +35,19 @@ function post(m: FromWorker): void {
  * handler (docs/plan/04-zero-gc-harness.md, Seams): copy the fixed block SAB -> `Rx`, `sim_admit`,
  * `sim_tick`, `sim_build_frame`, copy the fixed frame block `Tx` -> SAB, through the view pairs
  * above (0014 §4: whole-block copies, no `subarray()`). A worker set up without `rxTx` (M03's
- * `stepping.html`) just ticks. */
-function coreTick(): void {
+ * `stepping.html`) just ticks.
+ *
+ * `applyStepControl` fires as this function's own first statement (docs/plan/10-ci-workflow.md,
+ * orchestrator's decision 1, 2026-09-21), not as a call sibling to it in `runOp` (where it lived
+ * before and why `gc-loop`'s software-mode B never saw a worker control: `attributionRoots` names
+ * `coreTick`, and a sibling call is not nested inside it). Mirrors `src/worker/{client,gen,sim}.ts`'s
+ * `body()` calling `applyGcHook` first, the pattern already proven to attribute correctly. `n`
+ * (`seq` from the SAB step protocol, `0` from the `post-message` handler below, where no real
+ * `Control` is ever armed on this isolate at the same time) is only ever used to vary the control's
+ * own retained object, never to gate whether it runs. */
+function coreTick(n: number): void {
   if (!inst) return
+  if (sab) applyStepControl(Atomics.load(sab, StepBlockField.Control), n)
   if (rxView && txView) {
     const rx = inst.region(RegionId.Rx)
     if (rx) rx.u8.set(rxView)
@@ -55,8 +65,7 @@ function runOp(op: number, seq: number): void {
   if (!inst) return
   try {
     if (op === StepOp.Tick) {
-      coreTick()
-      if (sab) applyStepControl(Atomics.load(sab, StepBlockField.Control), seq)
+      coreTick(seq)
     }
     // Client-role stepping arrives with the client instance in M06b; nothing to do yet
     // (docs/plan/03-browser-harness.md, "What stepFrame means before a client worker exists").
@@ -114,7 +123,10 @@ scope.onmessage = (ev) => {
     post({ type: 'markedIsolate' })
   } else if (m.type === 'pmTick') {
     try {
-      coreTick()
+      // `0`: a `post-message`-controlled isolate is never simultaneously the target of the SAB
+      // `Control` word (`gc-page.ts`'s `setControl` only calls `setWorkerControl` for a
+      // non-`post-message` control), so `applyStepControl` is a no-op here regardless of `n`.
+      coreTick(0)
     } catch (e) {
       post({ type: 'error', message: e instanceof Error ? e.message : String(e) })
       return

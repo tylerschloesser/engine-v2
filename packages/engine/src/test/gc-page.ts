@@ -54,12 +54,28 @@ export function installGcPage(
   opts: { drive?(frame: number): void; adapter?: object | null } = {},
 ): void {
   let control: NegativeControl = null
-  const drive =
-    opts.drive ??
-    ((): void => {
+
+  // docs/plan/10-ci-workflow.md, orchestrator's decision 1 (2026-09-21): the `main`-isolate
+  // control fires *inside* `drive`, on the identical attribution path every page's own clean
+  // measurement already uses for `main` (`attributionRoots` names `drive` -- or, since this makes
+  // the previously-anonymous default drive a real named function too, now also `topology`, whose
+  // `attributionRoots` moves from `["stepFrame", "stepTick"]` to `["drive"]`, an ancestor that
+  // already contained both and adds nothing else). Mirrors `src/worker/{client,gen,sim}.ts`'s
+  // `body()` calling `applyGcHook` as its own first statement -- not a sibling call in `run`'s own
+  // loop, which is where it lived before and why software-mode B never saw it (docs/plan/
+  // 10-ci-workflow.md, Deviations, part (a)).
+  function drive(f: number): void {
+    if (control && control.kind !== 'post-message' && control.isolate === 'main') {
+      if (control.kind === 'object') allocateObject(f)
+      else allocateBurst(f)
+    }
+    if (opts.drive) {
+      opts.drive(f)
+    } else {
       harness.stepFrame(FRAME_MS)
       harness.stepTick()
-    })
+    }
+  }
 
   async function run(frames: number, marked: boolean): Promise<GcRunResult> {
     const errorsBefore = harness.errors().length
@@ -68,10 +84,6 @@ export function installGcPage(
 
     if (marked) performance.mark('window-start')
     for (let f = 1; f <= frames; f++) {
-      if (control && control.kind !== 'post-message' && control.isolate === 'main') {
-        if (control.kind === 'object') allocateObject(f)
-        else allocateBurst(f)
-      }
       if (pmIsolate) {
         harness.stepFrame(FRAME_MS)
         await harness.messageTick(pmIsolate)
