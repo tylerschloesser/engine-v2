@@ -46,6 +46,13 @@ function detail(r: GcResult): string {
       // 0028: both measured windows' own totals, so the discarded one is visible next to the
       // verdict and the lower-of-two is never a silent subtraction.
       windowBytes: r.windowBytes,
+      // `byFn`'s sites are the chosen (lower) window's alone: a collateral allocation on a
+      // *sibling* isolate while a burst control fires elsewhere (gc-parity round 2, 2026-09-21:
+      // `sim neg burst main`/`sim neg burst sim` on CI, `sim`/`main` each tripping the other's
+      // strict budget) needs both windows' own sites side by side to name, the same reason
+      // `gc-loop`'s flat-transport parity test carries this field (`instrument.ts`'s own doc
+      // comment on `windowByFn`).
+      windowByFn: r.windowByFn,
       verdict: r.verdict,
     },
     null,
