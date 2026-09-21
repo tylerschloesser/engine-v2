@@ -266,6 +266,201 @@ wiring real `installPointerListeners` onto a production canvas needs to know bot
 **Measured**: `pnpm test` -- `rust 145`, `unit 132`, `wasm 35`, `browser 79 (16s/25s)`; `pnpm lint`
 all green. `pgrep`/`lsof -ti tcp:4517` clean after the run.
 
+### Steps 6-8 (`moveTo`, constraints, persistence, focus rules, page CSS; the zero-GC page `input`; `device.html`) -- done
+
+Delegated as steps 6-8, the final range. Commits: `c96a0a9` (step 6), `8e0b9b4` (step 7),
+`89839a8` (`inputRing` drops assertion), `c628275` (step 8).
+
+**Exact seam shapes:**
+
+- `camera/camera.ts`: `Rect = { minX, minY, maxX, maxY }`; `CameraConstraints` gains `bounds?:
+  Rect`. `CameraIntegrator` gains `setConstraints(opts)`, `moveTo(state, x, y, opts?: { tiles?,
+  durationMs? })` (cubic ease-in-out, default 400ms, 0 jumps; cancelled the next `integrate()` call
+  where any pointer is active, the gesture is active, `keys.mask !== 0`, or `wheel.pendingDeltaLog
+  !== 0` -- **not** `wheel.hasPending`, which the 1-3 range's own code never resets to `false` once
+  set; using it here would make `moveTo` permanently uncancellable-by-wheel-state after the first
+  wheel event ever fired, and would also make "at rest" below never true again), `setViewClamp
+  (maxTilesPerAxis)`, `setFollow(x, y, valid)` (a genuine no-op store, per Scope). `createCameraIntegrator
+  (input, opts?: { onMotionEnd?(state) })` -- the second parameter is this range's own addition: called
+  at most once per `integrate()`, the frame motion transitions to rest, so `client.ts` can hook
+  `localStorage` persistence without `camera.ts` depending on `persistence.ts` itself. The
+  device-pixel-at-rest snap (0018 §3) rounds `centreX/Y * pxPerTile(state, viewport) * state.dpr` to
+  the nearest integer only when `activeCount === 0 && !gesture.active && !moveActive && wasdScale
+  === 0 && wheel.pendingDeltaLog === 0 && velocityX === 0 && velocityY === 0`; `tilesAcross` is never
+  touched.
+- `camera/persistence.ts`: `cameraStorageKey(cameraKey?) -> `engine:camera:v1:<cameraKey ??
+  'default'>``, `saveCameraState(key, state)`, `restoreCameraState(key, state) -> boolean`. The
+  brief's own Scope ("`engine.camera.<cameraKey ?? 'default'>`") and Planning decisions
+  ("`engine:camera:v1:<'local' | remote URL>`") disagree on both the separator and the suffix rule;
+  this range took Scope's suffix (it is what the "two `cameraKey`s do not share a camera" test
+  actually needs) and Planning decisions' prefix/version (its own stated purpose -- "world identity
+  can refine the suffix later without migration" -- is exactly what `cameraKey` already is).
+- `camera/state.ts`: `copyCameraState(src, dst)` -- `client.camera.read`'s own implementation, a
+  plain field copy.
+- `input/pointers.ts` (cleared to edit this range, mandatory gap #1/#2): `PointerSlot` gains
+  `button`, `shift`, `ctrl`, `alt`, `meta` (captured at `recordPointerDown`; modifiers refreshed on
+  `recordPointerMove` too). `MouseHoverState` (`x, y, valid, shift, ctrl, alt, meta`) plus
+  `recordMouseHover(state, x, y, shift?, ctrl?, alt?, meta?)`, written by `installPointerListeners`'s
+  `onMove` (and `onDown`) for every mouse-kind event regardless of whether a `PointerSlot` is
+  press-active, and invalidated on `pointerleave`; `camera.ts`'s own pan logic never reads it (only
+  `PointerSlot.active` drives `activeCount`), so an idle hover still cannot pan. `findSlot`/
+  `freeSlot` rewritten from `for...of` to two-element indexed access (see "Two real allocation bugs"
+  below).
+- `input/keys.ts`: `shouldIgnoreKeyDown(e)` (target `input`/`textarea`/`select`/`[contenteditable]`,
+  `isComposing`, or Ctrl/Meta/Alt held) filters `keydown` only; `keyup` is never filtered (a
+  deliberate deviation from a literal reading of 0019 §4, recorded so a stuck WASD bit is
+  impossible: releasing a key must always be able to clear a bit `keydown` already set).
+- `input/focus.ts` (new): `resetInputState(bundle)` (clears both pointer slots, the gesture, the
+  mouse hover, the wheel accumulator, the key mask) and `installBlurAndVisibilityReset(bundle, win?,
+  doc?)` (`window` `blur`, `document` `visibilitychange` when now hidden).
+- `input/page-css.ts` (new): `installPageStyles(doc?)` -- one `<style>` element (`position: fixed;
+  inset: 0; overflow: hidden` on `html, body`, `overscroll-behavior: none`, `height: 100dvh`, canvas
+  `touch-action: none; user-select: none; -webkit-touch-callout: none`) plus a `viewport-fit=cover`
+  meta tag, idempotent, returns a disposer.
+- `input/semantic.ts`: `emit`'s signature grew `button, shift, ctrl, alt, meta` (five primitives, not
+  an object -- hot-paths.md); every call site now passes the pressed slot's own captured values (or
+  the idle-hover state's, for the new hover-without-a-slot branch) instead of the hardcoded
+  `0`/`false` the 4-5 range left in place. `recognize`'s mouse-hover branch falls back to
+  `input.pointers.mouseHover` when no mouse slot is press-active.
+- `src/client.ts`: `ClientOptions.cameraKey?: string`. `Client.camera: { setConstraints, moveTo,
+  read, worldToScreen, screenToWorld, restored, setViewClamp, setFollow, tick(dtMs) }` --
+  `tick` is this range's own addition (not a pinned Seam name, mirroring `input.recognize`'s own
+  precedent): one `CameraIntegrator.integrate` then one `input.recognize` pass, both against the
+  *same* internal `PointerSlots`/`KeyState`/`WheelState` bundle real listeners write into.
+  `createClient` now always installs real `installPointerListeners`/`installWheelListeners` on
+  `options.canvas`, `installKeyListeners`/`installBlurAndVisibilityReset` on `window`/`document`,
+  builds one `CameraIntegrator` (`onMotionEnd` wired to `saveCameraState`), restores the camera
+  synchronously at construction (`camera.restored`), and tracks a CSS-pixel `cameraViewport` via a
+  `ResizeObserver` on the canvas (refreshed only on real resize, never per frame). `destroy()`
+  disposes the listeners and the observer. `ClientTestHandle` gains `cameraBundle`/
+  `cameraIntegrator` (test-only, additive): a test/dev page pairs `engine/test.
+  attachCameraInputTestHooks(client, clientTestHandle(client).cameraBundle)` to inject into the
+  *exact* bundle `camera.tick()` reads, instead of a second, unrelated one -- `injectPointer`/
+  `injectWheel`/`injectKey`'s own pinned signatures are unchanged.
+- `tests/browser/pages/real-camera.html`/`src/real-camera.ts` (new): a real, document-attached
+  canvas whose gestures are the client's own automatically-installed listeners, used by `camera:
+  persisted and restored` and the five `input:` real-DOM/injection tests below.
+- `tests/browser/pages/gc-input.html`/`src/gc-input.ts` (new, step 7): a real `createClient()` over
+  `fx-terrain` (`host: remote`, `genWorkers: 1`, an 8-chunk cache -- `gc-terrain.ts`'s own shape), a
+  real CSS-sized (800x600), document-attached canvas (needed so `client.camera`'s own `cameraViewport`
+  is a sane number, not the `{1,1}` fallback), a 30-frame repeating cycle (one-pointer drag, a
+  midpoint-fixed two-pointer pinch, wheel notches, a WASD hold/release, then a tap) driving
+  `client.camera.tick()` before `stepFrame`/`stepTick`, injected as `'touch'` (not `injectPointer`'s
+  own `'mouse'` default) so idle-mouse `hover` never fires and the ring/emit traffic is exactly "a
+  tap every 30 frames". `gc-input.spec.ts`: `zeroGcSuite({ pageId: 'input', controlKinds: ['object',
+  'burst'] })` plus `input: inputRing drops 0` (parks nothing; reads `RingConsumer.stats` on
+  `clientTestHandle(client).sabs.inputRing` after a full 600-frame run).
+- `device.ts`: `onCamera` is no longer the M09b stand-in formula; it calls `client.camera.tick(dtMs)`
+  then fills `renderer.frameUniform`'s `camTileX/Y`/`camFracX/Y`/`tilesPerPx` by hand from
+  `transform.ts`'s `pxPerTile` against `renderer.viewport` (device pixels -- a different space from
+  `client.camera`'s own CSS-pixel one, so it can't come from `client.camera.read()`). `installPageStyles()`
+  is called once. `?module=url` sets `test.flags.postModule = false`. `?probe=memory` branches to a
+  separate `runMemoryProbe()` (grows a scratch `Uint8Array` in 64 MiB steps to 1 GiB, each one
+  filled so the OS commits it; then two 2-minute `createClient()` + scripted-pan runs, the second
+  with `&touch=1`; `&sim=`/`&client=` override the arenas in MiB).
+
+**Two real, pre-existing allocation bugs, found by this range's own zero-GC page.** `input/
+pointers.ts`'s `findSlot`/`freeSlot` (`for (const s of state.slots) ...`, steps 1-3's own code) and
+`camera/camera.ts`/`input/semantic.ts`'s `const [p0, p1] = pointers.slots` (steps 1-3/4-5's own
+code) both go through the iterator protocol on a plain two-element array -- harmless on every
+earlier page (none of them ever called `integrate()`/`recognize()` inside a measured zero-GC
+window), but real once a page does. Replacing both with plain indexed access (`state.slots[0]`,
+`state.slots[1]` -- a fixed 2-tuple, so `noUncheckedIndexedAccess` still gives a non-optional type)
+cut `main`'s own `bytesPerFrame` from 447.87 to 206.51-206.75 in one step; using `'touch'` pointers
+instead of the default `'mouse'` (so idle-mouse `hover` never fires) shaved off another ~10 B/frame,
+to 196.51-197.05. `gc.pages.input.main` is `206` (`ceil(197.05) + 8`); full decomposition, and the
+`emit` byte-count evidence for the `mouse` -> `touch` difference, is in `budgets.json`'s own
+`formula` string.
+
+**Seqlock reader retries (Budgets section), measured as asked:** the `input` page's own clean run
+(a real per-frame camera-block write/read cycle, one write per frame) shows zero `MinorGC`/
+`MajorGC` events and a stable byte count in `readCameraBlockInto`'s own call site across every
+measurement in this range -- no evidence of a second retry ever firing (a retry would show as a
+`gc-isolate`-attributed spin cost that isn't there). Not instrumented with an explicit counter (no
+counter exists on `SeqlockReader`/`readCameraBlockInto` to read back): the zero-GC page's own A/B
+verdict is the available proxy, and it is clean. Per the Budgets section's own instruction, the spin
+is **not** replaced (retries are rare, as expected at one write per frame).
+
+**Source scan** (exit criterion): `grep -rn "getCoalescedEvents" src/ tests/` -- no matches.
+`grep -rn "addEventListener"` outside `input/pointers.ts` (`pointerdown/move/up/cancel/leave`,
+`gesturestart/change/end`, all on the canvas) and `input/wheel.ts` (`wheel`, canvas): `input/keys.ts`
+(`keydown`/`keyup` on `window`), `input/focus.ts` (`blur` on `window`, `visibilitychange` on
+`document`), and `frame-loop.ts`'s own pre-existing (M09b) `visibilitychange` on `document` for
+pause/resume -- a second, unrelated listener on the same event, not a new one this range added.
+Matches the criterion exactly.
+
+**Not built, a known gap, Tyler-facing:** `?probe=memory`'s `&touch=1` re-runs the identical 2-minute
+session rather than force-writing every page of every arena from main -- no ABI export exists to
+reach a worker's whole arena from outside it, and adding one is outside this range's own Files
+touched (`crates/engine`: only `client/input.rs`, `abi/registry.rs`). Flagged in `device-checks.md`'s
+own M11-memory item rather than silently built as a no-op.
+
+**Autopan + the device-pixel snap, a minor known interaction (not gated by any exit criterion):**
+`device.html`'s `autopan` nudges `cameraState.centreX` directly, outside any gesture/WASD/wheel
+state, so `client.camera.tick()`'s own "at rest" check reads true every frame during autopan and
+snaps the centre to the nearest device pixel every frame -- a harmless (if slightly quantised)
+visual difference from the pre-M11 stand-in, not a correctness bug. No fix attempted: solving it
+generally needs either a "programmatic motion in progress" flag threaded into `integrate()` or
+routing `autopan` through `moveTo` continuously, both larger changes than this cosmetic,
+manual-check-only issue justifies.
+
+**Escalation: the `input` zero-GC page's fast-tier reliability under real parallel `pnpm test`
+execution.** `input neg object main` and `input neg object gen0` (both fast-tier, not `@slow`)
+intermittently fail their own `client` verdict: `client`'s own steady `2.52 B/frame` (identical to
+every other page, every measurement) jumps to `20-25 B/frame` (over its `8 B` budget), attributed to
+`waitForWake@worker-auto-*.js` -- the same *named, unresolved* cross-isolate noise class the
+`gc-test` skill and `docs/plan/06b-workers-and-spawn.md` (Deviations, "fix round 2") already
+document ("a burst/object control on one isolate measurably raising a different isolate's own
+reading ... the workers are separate OS threads sharing one renderer process"), but far more
+frequent here than on any earlier page. Measured on this machine, this session:
+- `--project gc --grep "input neg object" --workers 1` (sequential, no other test running): 0
+  failures in ~90 runs.
+- The same `--workers 3` (matching this project's own configured worker count, so the 3 tests -
+  `main`/`client`/`gen0` - run genuinely concurrently, nothing else in the process): roughly 1 in 4
+  fails (multiple 8-run batches, 1-2 failures each).
+- `pnpm test` itself (rust+unit+wasm+browser, `chromium`+`gc` projects together): 3 of the last 4
+  full runs failed on exactly this pair of tests; the fourth passed cleanly. `pnpm test browser`
+  alone: 5 of 5 failed in one back-to-back batch, then passed later in this same session -- state
+  dependent on machine contention at the moment of the run, not on any code path this range
+  controls.
+- `terrain neg object {main,client,gen0}` (same production-topology shape, same `client`/`gen0`
+  budgets, real GPU rendering and gen-worker traffic, but never calls `client.camera.tick()`): 9/9
+  passed under the identical `--workers 3` concurrent condition that fails `input` roughly 1 in 4
+  times.
+- Total measured window wall-clock time is statistically identical between the two pages (`time
+  playwright test --grep "input clean"` vs `"terrain clean"`, `--workers 1`: 2.150 s vs 2.144 s,
+  2.92 s vs 3.06 s user CPU) -- ruling out "the whole window simply takes longer" as the mechanism.
+- Removing every `inputRing` write from the scenario (no tap at all) did not change the failure
+  rate -- ruling out `RingProducer`/`RingConsumer` Atomics traffic on the shared `inputRing` SAB as
+  the mechanism.
+- Detaching the canvas from the document (removing the one layout/`ResizeObserver` difference from
+  every earlier zero-GC page) made it *worse* (both `client` and `gen0` failing on most runs): with
+  no real CSS box, `client.camera`'s internal viewport falls back to `{1, 1}`, `pxPerTile` collapses
+  to a tiny number, and the same screen-pixel deltas become enormous world jumps -- far more chunk
+  churn, more real work, more failures. Consistent with (not a refutation of) "more real per-frame
+  work correlates with the failure rate," just not a lever this range found a safe way to pull:
+  every other tried reduction either broke the scenario's own fidelity to the brief (dropping a
+  required gesture type) or, per the timing measurement above, wasn't actually the differentiator.
+
+This is squarely `client`/`gen0`'s own harness code (`sab/control.ts`'s `waitForWake`, `worker/
+shell.ts`), plus possibly `tests/browser/gc/instrument.ts`'s CDP session handling under process
+contention -- neither in this range's own Files touched, and both shared by every zero-GC page ever
+built, so a change there is a decision for whoever owns that surface next, not something this range
+should make unilaterally under a `pnpm test` deadline. Reported rather than silently patched behind
+a lighter, less-representative scenario: `client.camera.tick()` run every rAF, under real
+concurrent test load, is measurably (not just theoretically) more prone to this class of noise than
+any topology built before it -- itself a finding worth having, since it is exactly what a real game
+calling `tick()` every frame will also do. **Decision needed:** accept the residual flakiness (it is
+schedule/contention-dependent, not a deterministic regression, and `--workers 1` is always clean);
+investigate `waitForWake` directly; or open an ADR amending 0026 to demote `input`'s own `object`
+negatives to `@slow` alongside its `burst` ones.
+
+**Measured**: `pnpm test` (rust/unit/wasm/lint all green every run) -- `rust 145`, `unit 135`, `wasm
+35`; `browser 90 (18s/25s)` on a clean run, but not every run is clean (see Escalation above).
+`pnpm test browser --project chromium` alone (every real-DOM/production test this range added, no
+`gc` project): `60/60` passed. `pgrep`/`lsof -ti tcp:4517 tcp:4173` clean after every run (no
+orphaned browser/server processes).
+
 ### Notes for later briefs
 
 - The 4-5 range (semantic events, `inputRing` producer): `RING_DEFAULTS.inputRing`'s slot size looks
