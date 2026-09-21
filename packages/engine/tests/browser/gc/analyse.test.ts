@@ -76,34 +76,73 @@ test('gc analyse: presentIsolates finds every named thread, even one marked befo
   expect(presentIsolates).toEqual(new Set(['main', 'sim']))
 })
 
-test('gc verdict: software mode uses attributed bytes', () => {
+test('gc verdict: software mode uses attributed bytes on main only', () => {
   const page = {
     isolates: {
-      sim: {
+      main: {
         class: 'strict' as const,
         bytesPerFrame: 8,
         formula: 'measured',
-        attributionRoots: ['tick'],
+        attributionRoots: ['drive'],
       },
     },
-    software: { isolates: { sim: { attributedBytesPerFrame: 10 } } },
+    software: { isolates: { main: { attributedBytesPerFrame: 10 } } },
   }
   const passing = verdict(
-    { frames: 100, gc: {}, totalBytes: { sim: 100_000 }, attributedBytesTotal: { sim: 900 } },
+    { frames: 100, gc: {}, totalBytes: { main: 100_000 }, attributedBytesTotal: { main: 900 } },
     page,
     'software',
   )
   // Hardware total (100000/100=1000) would fail 8 B/frame; software mode ignores it and uses
   // attributedBytesTotal (900/100=9 <= 10) instead.
-  expect(passing).toEqual({ pass: true, A: { sim: true }, B: { sim: true } })
+  expect(passing).toEqual({ pass: true, A: { main: true }, B: { main: true } })
 
   const failing = verdict(
-    { frames: 100, gc: {}, totalBytes: { sim: 0 }, attributedBytesTotal: { sim: 1_100 } },
+    { frames: 100, gc: {}, totalBytes: { main: 0 }, attributedBytesTotal: { main: 1_100 } },
     page,
     'software',
   )
-  expect(failing.B.sim).toBe(false)
+  expect(failing.B.main).toBe(false)
   expect(failing.pass).toBe(false)
+})
+
+test('gc verdict: software mode uses raw bytes on every isolate but main (orchestrator decision, docs/plan/10-ci-workflow.md)', () => {
+  const page = {
+    isolates: {
+      main: {
+        class: 'strict' as const,
+        bytesPerFrame: 200,
+        formula: 'measured',
+        attributionRoots: ['drive'],
+      },
+      client: {
+        class: 'strict' as const,
+        bytesPerFrame: 8,
+        formula: 'measured',
+        attributionRoots: ['body'],
+      },
+    },
+    software: { isolates: { main: { attributedBytesPerFrame: 10 } } },
+  }
+  // `client`'s attributedBytesTotal is deliberately 0 (the exact `topology client` inlining
+  // finding: a control's real allocation not landing under the named root) -- if software mode
+  // read attribution for `client`, this would incorrectly pass. It must instead compare the raw
+  // total (1000/100=10) against `client`'s own hardware budget (8) and fail.
+  const result = verdict(
+    {
+      frames: 100,
+      gc: {},
+      totalBytes: { main: 900, client: 1_000 },
+      attributedBytesTotal: { main: 900, client: 0 },
+    },
+    page,
+    'software',
+  )
+  expect(result.B).toEqual({ main: true, client: false })
+  expect(result.pass).toBe(false)
+
+  // No `software.isolates.client` entry exists at all above, and no error was thrown for it:
+  // proof the worker path never consults `page.software`.
 })
 
 test('gc verdict: tracing stall is a warning', () => {

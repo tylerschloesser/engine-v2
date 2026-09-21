@@ -55,7 +55,15 @@ function detail(r: GcResult): string {
 
 function assertEnvironment(r: GcResult, path: string, opts: { expectAdapter?: boolean }): void {
   expect(r.crossOriginIsolated, `${path}: crossOriginIsolated`).toBe(true)
-  if (opts.expectAdapter) expect(r.adapter, `${path}: WebGPU adapter`).not.toBeNull()
+  if (opts.expectAdapter) {
+    // docs/plan/10-ci-workflow.md, Scope ("adapter class recorded by every GPU test") and
+    // orchestrator's decision 4: mirrors `tests/browser/support/gpu.ts`'s `expectAdapter` so a
+    // `zeroGcSuite`-generated GPU test's adapter also reaches `scripts/lib/report.mjs`'s
+    // `adapters` (the runner's quiet-by-default log), not just `terrain-readback.spec.ts`'s
+    // hand-written tests.
+    test.info().annotations.push({ type: 'adapter.info', description: JSON.stringify(r.adapter) })
+    expect(r.adapter, `${path}: WebGPU adapter`).not.toBeNull()
+  }
   expect(r.errors, `${path}: errors`).toEqual([])
   // 0016 §1 last row: every WASM instance's memory is unchanged across the window.
   for (const name of r.isolates) {

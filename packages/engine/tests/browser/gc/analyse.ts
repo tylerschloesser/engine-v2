@@ -182,9 +182,30 @@ export type Verdict = {
 
 /**
  * The two assertions of 0016 §3 steps 6-7 for every isolate the page's budget names. Hardware mode
- * compares `totalBytes / frames` with `bytesPerFrame`/`bytesPerMessage`; software mode (0016 caveat
- * b) compares `attributedBytesTotal / frames` with `software.isolates.<name>.attributedBytesPerFrame`
- * instead, because harness overhead no longer amortises at the smaller software `frames`.
+ * compares `totalBytes / frames` with `bytesPerFrame`/`bytesPerMessage` for every isolate.
+ *
+ * Software mode (0016 caveat b), **`main` only**: compares `attributedBytesTotal / frames` with
+ * `software.isolates.main.attributedBytesPerFrame` instead of the raw total. `main` hosts the
+ * renderer, the one isolate a software (SwiftShader) adapter's own CPU-side work can land in;
+ * every other isolate never touches WebGPU at all, so its raw byte count in software mode is
+ * exactly as clean as it already is in hardware -- same check, same budget, both modes (docs/plan/
+ * 10-ci-workflow.md, orchestrator's decision, 2026-09-21).
+ *
+ * **This was not always true and is not obviously true from 0016's own text**: caveat b's stated
+ * reason for attribution is "harness overhead no longer amortises" once a slow scene forces a
+ * *smaller* N -- a reason that, read literally, covers `main`'s "frame" function and a worker's
+ * "tick" function equally, not `main` alone. It stopped applying once `software.frames` became 600
+ * (the same as hardware `FRAMES`, decision 3 of the same round): nothing shrinks the window in
+ * either mode any more, so nothing needs compensating for on `main`'s own account either -- `main`
+ * keeps attribution not because 0016 demands it structurally but because the nested control (0016
+ * caveat b's mechanism, now sitting inside `drive`, its own attribution root) is a live inlining
+ * detector: if V8 ever inlined `drive` away the way it inlined a worker's `body`, a negative
+ * control would fail loudly instead of the clean test passing on an unrepresentative raw total.
+ * Worker isolates get no equivalent benefit from attribution (an isolate `runBlockingLoop` calls
+ * with no software adapter dependency has no reason to carry test-harness-specific scaffolding),
+ * so they were moved off it once the mechanism was found to depend on where a V8 inlining heuristic
+ * happened to land (`topology`'s own `client`, 0/5 on the nested control, `attributedBytesPerFrame`
+ * reading 0.0267 against a raw `16.84` the same window).
  */
 export function verdict(
   input: VerdictInput,
@@ -196,21 +217,24 @@ export function verdict(
 ): Verdict {
   const A: Record<string, boolean> = {}
   const B: Record<string, boolean> = {}
+  const rawB = (name: string, budget: IsolateBudget): boolean => {
+    const limit = budget.bytesPerFrame ?? budget.bytesPerMessage
+    if (limit === undefined) throw new Error(`gc verdict: isolate ${name} has no byte budget`)
+    const actual = (input.totalBytes[name] ?? 0) / input.frames
+    return actual <= limit
+  }
   for (const [name, budget] of Object.entries(page.isolates)) {
     const counts = input.gc[name] ?? { MinorGC: 0, MajorGC: 0 }
     A[name] =
       budget.class === 'strict' ? counts.MinorGC + counts.MajorGC === 0 : counts.MajorGC === 0
 
-    if (mode === 'software') {
+    if (mode === 'software' && name === 'main') {
       const softBudget = page.software?.isolates[name]
       if (!softBudget) throw new Error(`gc verdict: no software budget for ${name}`)
       const attributed = (input.attributedBytesTotal?.[name] ?? 0) / input.frames
       B[name] = attributed <= softBudget.attributedBytesPerFrame
     } else {
-      const limit = budget.bytesPerFrame ?? budget.bytesPerMessage
-      if (limit === undefined) throw new Error(`gc verdict: isolate ${name} has no byte budget`)
-      const actual = (input.totalBytes[name] ?? 0) / input.frames
-      B[name] = actual <= limit
+      B[name] = rawB(name, budget)
     }
   }
   const pass = Object.values(A).every(Boolean) && Object.values(B).every(Boolean)
