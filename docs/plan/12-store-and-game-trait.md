@@ -1,6 +1,6 @@
 # M12: `Game` trait, `Delta` and the `Store`
 
-Status: not started · After: 07, 08 · Tyler-dependent: no
+Status: done (2026-09-21) · After: 07, 08 · Tyler-dependent: no
 
 Split: the original M12 exceeded the reading-list and size rules. This brief lands the data side (trait, deltas, store, hash). `12b-world-access-and-sim-driver.md` lands `WorldRead`/`WorldWrite`, `Authority`, `Ticks` conversions, the `Sim` driver and the golden-hash scenarios.
 
@@ -48,9 +48,9 @@ Mine from spikes: `spikes/prediction-api/engine/src/lib.rs` (`Store`, `Store::ap
 Rust native: `store_apply_is_idempotent`; `store_roundtrip_bytes_equal` (encode → decode → encode); `store_hash_ignores_insertion_order`; `store_golden_bytes` (M05 pattern); `entity_id_policy_*` (cases named by 0022); `simrng_golden_sequence`; `puts_fixture_builds_wasm32` (import allowlist test from M02 picks the fixture up).
 
 ## Exit criteria
-- [ ] Every test above passes; the `puts` fixture appears in M02's allowlist test run.
-- [ ] `grep -r "HashMap" crates/engine/src/store*` is empty (ordered containers only, 0007 §2).
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Every test above passes; the `puts` fixture appears in M02's allowlist test run.
+- [x] `grep -r "HashMap" crates/engine/src/store*` is empty (ordered containers only, 0007 §2).
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t store` · `pnpm test rust -t simrng` · `pnpm test wasm -t allowlist` · `pnpm golden:bytes -- store` (only to bless new goldens) · `pnpm lint`.
