@@ -1,0 +1,168 @@
+//! Golden and replay scenarios for `fx-puts` (docs/plan/12b-world-access-and-sim-driver.md Tests
+//! added). Native-blessed (`assert_golden_hash!`): no sim ABI path exists yet (M13 switches
+//! `puts_idle_100` to the `.wasm`-authoritative `assert_golden`; M16 does the same for
+//! `puts_script_a`).
+
+use engine::game::{PlayerEvent, PlayerId};
+use engine::sim::{Record, Sim, WorldParams};
+use engine::testing::testkit::run_script;
+use engine::time::Tick;
+use fx_puts::{Action, Pos, Puts};
+
+fn new_sim(seed: u64) -> Sim<Puts> {
+    Sim::genesis(WorldParams {
+        seed,
+        worldgen: (),
+        max_entities: 262_144,
+        max_modified_tiles: 1_048_576,
+        max_action_growth: 4_096,
+    })
+}
+
+/// A script exercising every handler (docs/plan/12b-world-access-and-sim-driver.md Scope): a
+/// join, one put of each scope kind, both rejecting handlers (`Bump`/`Remove`, always `NotFound`
+/// this milestone -- see `fx_puts`'s module doc comment), and `Roll`, spread across enough ticks
+/// (idle gaps included) to also exercise `tick`'s own once-a-second walk/day bump.
+fn script_a() -> Vec<(Tick, Record<Puts>)> {
+    vec![
+        (
+            Tick(1),
+            Record::Player {
+                who: PlayerId(1),
+                ev: PlayerEvent::Joined,
+            },
+        ),
+        (
+            Tick(1),
+            Record::Action {
+                who: PlayerId(1),
+                seq: 1,
+                action: Action::Paint {
+                    pos: Pos { x: 2, y: 2 },
+                    base: 3,
+                    resource: 0,
+                },
+            },
+        ),
+        (
+            Tick(2),
+            Record::Action {
+                who: PlayerId(1),
+                seq: 2,
+                action: Action::Spawn {
+                    at: Pos { x: 5, y: 5 },
+                    kind: 1,
+                },
+            },
+        ),
+        (
+            Tick(3),
+            Record::Action {
+                who: PlayerId(1),
+                seq: 3,
+                action: Action::Bump {
+                    at: Pos { x: 5, y: 5 },
+                },
+            },
+        ),
+        (
+            Tick(4),
+            Record::Action {
+                who: PlayerId(1),
+                seq: 4,
+                action: Action::Remove {
+                    at: Pos { x: 5, y: 5 },
+                },
+            },
+        ),
+        (
+            Tick(5),
+            Record::Action {
+                who: PlayerId(1),
+                seq: 5,
+                action: Action::SetNote { n: 42 },
+            },
+        ),
+        (
+            Tick(6),
+            Record::Action {
+                who: PlayerId(1),
+                seq: 6,
+                action: Action::SetMotd { n: 7 },
+            },
+        ),
+        (
+            Tick(7),
+            Record::Action {
+                who: PlayerId(1),
+                seq: 7,
+                action: Action::Roll,
+            },
+        ),
+        (
+            Tick(25),
+            Record::Action {
+                who: PlayerId(1),
+                seq: 8,
+                action: Action::Roll,
+            },
+        ),
+        (
+            Tick(45),
+            Record::Action {
+                who: PlayerId(1),
+                seq: 9,
+                action: Action::Paint {
+                    pos: Pos { x: -3, y: 8 },
+                    base: 1,
+                    resource: 2,
+                },
+            },
+        ),
+    ]
+}
+
+#[test]
+fn puts_idle_100_golden() {
+    let mut sim = new_sim(1);
+    let mut out = Vec::new();
+    for _ in 0..100 {
+        sim.step(&[], &mut out);
+    }
+    assert_eq!(sim.tick(), Tick(100));
+    engine::assert_golden_hash!("puts_idle_100", sim.state_hash());
+}
+
+#[test]
+fn puts_script_a_golden() {
+    let mut sim = new_sim(1);
+    let hash = run_script(&mut sim, &script_a());
+    engine::assert_golden_hash!("puts_script_a", hash);
+}
+
+/// A replay from the same genesis, running the identical script, must reproduce the same hash
+/// (0004: "replay rejects it again, identically").
+#[test]
+fn replay_equals_live() {
+    let mut live = new_sim(1);
+    let live_hash = run_script(&mut live, &script_a());
+
+    let mut replay = new_sim(1);
+    let replay_hash = run_script(&mut replay, &script_a());
+
+    assert_eq!(live_hash, replay_hash);
+}
+
+/// What makes `replay_equals_live` meaningful: a replay of a *prefix* of the same log must differ,
+/// proving the hash actually depends on the whole log rather than passing vacuously.
+#[test]
+fn truncated_log_differs() {
+    let full_script = script_a();
+    let mut full = new_sim(1);
+    let full_hash = run_script(&mut full, &full_script);
+
+    let mut truncated = new_sim(1);
+    let truncated_hash = run_script(&mut truncated, &full_script[..full_script.len() - 1]);
+
+    assert_ne!(full_hash, truncated_hash);
+}

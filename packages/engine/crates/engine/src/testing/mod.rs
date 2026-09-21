@@ -4,6 +4,7 @@ use std::path::Path;
 
 pub mod cache_matrix;
 pub mod golden_bytes;
+pub mod testkit;
 pub mod worldgen_contract;
 
 // So `engine::testing::assert_golden_bytes!`/`assert_golden_hash!` work at the path their doc
