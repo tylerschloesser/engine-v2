@@ -461,6 +461,77 @@ negatives to `@slow` alongside its `burst` ones.
 `gc` project): `60/60` passed. `pgrep`/`lsof -ti tcp:4517 tcp:4173` clean after every run (no
 orphaned browser/server processes).
 
+**Resolved**: see "Fix rounds 1-2" immediately below. The Escalation above is superseded by
+[0027](../decisions/0027-zero-gc-excludes-blocking-primitive-bookkeeping.md); left in place as the
+record of what was actually measured and tried, not rewritten.
+
+### Fix rounds 1-2 (`waitForWake` / ADR 0027) -- done
+
+Orchestrator-directed, both rounds outside this milestone's own Files touched (`sab/control.ts`,
+`worker/shell.ts`, `tests/browser/gc/*.ts`), explicitly authorised. Commits: `6153c9a` (fix 1),
+`ad1490e` (ADR 0027), `11361b4` (fix 2).
+
+**Fix round 1.** The orchestrator's own 15-run measurement on a quiet machine (load 3.89, `node
+scripts/repeat.mjs browser 15`) found `input neg object main` **15/15**, deterministic under real
+contention rather than intermittent as this range's own (less representative, single-process)
+sampling had suggested. `worker/shell.ts`'s `runBlockingLoop` discarded `ControlBlock.waitForWake`'s
+own return value and then re-read the identical wake word a second time with its own separate
+`Atomics.load` one line later -- a genuine redundant native call on every wake, fixed by having
+`waitForWake` return nothing and the caller do the one load it always needed
+(`src/test/sab-control-worker.mjs`, `control.no_lost_wakeup`'s own worker, updated for the signature
+change). **This did not fix the underlying cost**: `client`'s own `bytesPerFrame` under `input neg
+object main` attributed a fixed ~13,544 B to `waitForWake` by name, before and after, unchanged even
+once `waitForWake` was reduced (temporarily, to test the hypothesis) to *only* its bare `Atomics.
+wait(...)` call. Reported honestly rather than claimed fixed; kept as a real, separate improvement
+(one native call instead of two, forever) with an honest doc comment.
+
+**Fix round 2 — ADR [0027](../decisions/0027-zero-gc-excludes-blocking-primitive-bookkeeping.md).**
+The stripped-to-bare-`Atomics.wait` result is what let the orchestrator make the real call: those
+13,544 B are V8's own bookkeeping for a thread that genuinely blocks in `Atomics.wait` and is later
+woken by a cross-thread `Atomics.notify` (the `input` page is the first to make `client`'s own wake
+cadence, tied to `main`'s per-frame `stepFrame`, slow enough under a sibling's own `object`/`burst`
+control to take that path at all -- `gen0` usually doesn't, though a control targeting it directly
+was also observed to, occasionally). Not JS-heap allocation any engine or test code performs, and
+not reachable from JS otherwise (a bounded-timeout retry loop was tried, in the same investigation,
+and did not remove the cost -- see the ADR's own "Alternatives rejected"). `tests/browser/gc/
+analyse.ts`'s `sumProfile` now excludes bytes attributed to a `waitForWake` call frame specifically
+(nothing broader: no isolate, no other function, no "blocking path" bucket) from `total`/
+`bytesPerFrame`, reporting them separately (`excludedBytes`) rather than hiding them, and
+`sab/no-alloc-syntax.test.ts`'s new `sab.wait_for_wake_shape` pins `waitForWake`'s own body to
+exactly its one statement so the exclusion cannot silently widen. The strict worker figure (8 B/
+frame, 0016 §1) is unchanged; `gc.pages.input.main` is unchanged too (`main` never itself calls
+`waitForWake`). No existing page's committed budget number moved.
+
+**`input clean`'s own 1/15 (the orchestrator's own measurement): the same fix, not a second cause,
+by the evidence available.** `input clean` runs the identical scenario with no control deliberately
+armed; every isolate-level cost this range ever measured above the universal 2.52 B/frame worker
+baseline was `waitForWake`'s by name, never a second, differently-named site -- ordinary contention
+from the rest of `pnpm test`'s own parallel suites (unit/wasm/rust processes, other `gc`/`chromium`
+project tests) is exactly the same kind of `main`-side slowdown a deliberate `object`/`burst` control
+manufactures on purpose, just rarer and smaller. One post-fix clean run measured here read `main`
+196.83 B/frame with `client`'s own `excludedBytes` at 0 (that particular run never took the slow
+path at all, consistent with 1/15 being rare) -- not itself proof the fix reaches this case, since a
+single clean run that doesn't trigger the path proves nothing about the case that does. The
+orchestrator's own 15-run re-verification is what settles this; no second cause was found or is
+suspected.
+
+**Also resolved, per the orchestrator's own questions:**
+- **The `net` isolate** shown in `input`'s own measurement (about 9.85 B/frame, almost all `(IDLE)`)
+  is expected, not a bug: `host: { kind: 'remote' }` (required, since `fx-terrain` has no `Sim`
+  role) spawns a `net`-kind worker on `terrain`/`echo`/`topology` too, and none of them budget it --
+  it never enters `runBlockingLoop` and cannot be ticked, so there is no mechanism to apply a
+  negative control to it (`gen`'s own `budgets.json` row already states this precedent).
+- **`workers.spawn_remote`'s `ERR_NETWORK_IO_SUSPENDED`** (one of the orchestrator's own 15 runs):
+  not reproduced in any run here, single or repeated. Consistent with an environmental, OS-level
+  network suspension under load rather than anything either fix round touched.
+
+**Measured (fix rounds 1-2, single runs only per the orchestrator's own instruction, no loops):**
+`pnpm test unit` 137 (2 new: `sab.wait_for_wake_shape`, the `analyse.ts` exclusion test), `wasm` 35,
+`rust` 145, `pnpm lint` all green. One `input clean` run: `main` 196.83 B/frame, `client` 2.52,
+`excludedBytes` all 0. One `input neg object main` run: passes (previously failed deterministically
+before fix 2; `client`'s own excluded-vs-counted split is what changed). One full `pnpm test browser`
+run: 90/90. `pgrep`/`lsof -ti tcp:4517 tcp:4173` clean.
+
 ### Notes for later briefs
 
 - The 4-5 range (semantic events, `inputRing` producer): `RING_DEFAULTS.inputRing`'s slot size looks
