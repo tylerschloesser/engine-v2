@@ -64,6 +64,12 @@ export function formatWarning(text) {
   return `  warn ${text}`
 }
 
+/** One distinct `adapter.info` line under a suite's line (docs/plan/10-ci-workflow.md, Scope:
+ * "adapter class recorded by every GPU test"; `parsePlaywrightJson`'s `adapters`). */
+export function formatAdapter(text) {
+  return `  adapter ${text}`
+}
+
 /** One failure block: name, message capped at `maxLines`, seed, artefact paths. */
 export function formatFailure(
   { suite, name, message, seed, artefacts = [] },
@@ -132,13 +138,18 @@ const FAILED_STATUSES = new Set(['failed', 'timedOut', 'interrupted'])
  * Playwright's `--reporter=json` report (docs/decisions/0020 §1, §3, §5, §6; a `playwright`
  * adapter entry of `scripts/lib/adapters.mjs`). `tests` counts one entry per spec x project (a
  * `@engines` spec run in three browsers is three tests); `warnings` comes from annotations of type
- * `warning` (M04's `Tracing.start` stall).
+ * `warning` (M04's `Tracing.start` stall). `adapters`: the distinct `adapter.info` strings recorded
+ * by `tests/browser/support/gpu.ts`'s `expectAdapter` (docs/plan/10-ci-workflow.md, Scope: "adapter
+ * class recorded by every GPU test") -- deduped, since every GPU test on one run typically shares
+ * the same adapter, so the runner's quiet-by-default log (0020 §2) still gets the string onto CI's
+ * own log without one line per test.
  */
 export function parsePlaywrightJson(json) {
   const report = JSON.parse(json)
   let tests = 0
   const failures = []
   const warnings = []
+  const adapters = new Set()
 
   const walkSpec = (spec) => {
     for (const t of spec.tests ?? []) {
@@ -154,6 +165,7 @@ export function parsePlaywrightJson(json) {
       }
       for (const a of t.annotations ?? []) {
         if (a.type === 'warning') warnings.push(`${name}: ${a.description ?? ''}`)
+        else if (a.type === 'adapter.info') adapters.add(a.description ?? '')
       }
     }
   }
@@ -163,7 +175,7 @@ export function parsePlaywrightJson(json) {
   }
   for (const suite of report.suites ?? []) walkSuite(suite)
 
-  return { tests, failures, warnings }
+  return { tests, failures, warnings, adapters: [...adapters] }
 }
 
 /** The message lines, then the first stack frame outside node_modules (where the test failed). */

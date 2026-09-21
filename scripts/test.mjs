@@ -13,6 +13,7 @@ import { toolEnv } from './lib/env.mjs'
 import {
   buildTimingsReport,
   classifyBudget,
+  formatAdapter,
   formatDuration,
   formatFailure,
   formatSuiteLine,
@@ -81,7 +82,7 @@ async function main() {
   // Phase 3: one line per suite in registration order, then one block per failure.
   const nameWidth = Math.max(...selected.map((s) => s.name.length))
   let failed = false
-  for (const { suite, tests, failures, warnings, ms } of outcomes) {
+  for (const { suite, tests, failures, warnings, adapters, ms } of outcomes) {
     const budgetMs = opts.tier === 'fast' ? suite.budgetMs : undefined
     const overBudget = budgetMs !== undefined && classifyBudget(ms, budgetMs, opts.scale) === 'fail'
     failed ||= failures.length > 0 || overBudget
@@ -97,6 +98,7 @@ async function main() {
       }),
     )
     for (const warning of warnings) console.log(formatWarning(warning))
+    for (const adapter of adapters ?? []) console.log(formatAdapter(adapter))
   }
   for (const { suite, failures } of outcomes) {
     for (const failure of failures) console.log(formatFailure({ suite: suite.name, ...failure }))
@@ -142,6 +144,9 @@ async function runSuite(suite, opts) {
     tests: parts.reduce((n, part) => n + part.tests, 0),
     failures: parts.flatMap((part) => part.failures),
     warnings: parts.flatMap((part) => part.warnings ?? []),
+    // Deduped again across legs (docs/plan/10-ci-workflow.md): the `chromium` and `gc` legs of the
+    // `browser` suite typically see the same adapter.
+    adapters: [...new Set(parts.flatMap((part) => part.adapters ?? []))],
   }
 }
 

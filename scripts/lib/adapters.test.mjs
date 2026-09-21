@@ -89,7 +89,7 @@ describe('playwright adapter', () => {
         exitCode: 1,
         logPath: logWith('Error: No tests found\n'),
       }),
-    ).toEqual({ tests: 0, failures: [], warnings: [] })
+    ).toEqual({ tests: 0, failures: [], warnings: [], adapters: [] })
   })
 
   test('parse: a non-zero exit with no report at all is still a failure', () => {

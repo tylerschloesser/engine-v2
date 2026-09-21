@@ -4,6 +4,7 @@ import {
   buildTimingsReport,
   classifyBudget,
   findSeed,
+  formatAdapter,
   formatFailure,
   formatSuiteLine,
   formatWarning,
@@ -139,7 +140,48 @@ describe('parsePlaywrightJson', () => {
       tests: 1,
       failures: [],
       warnings: [],
+      adapters: [],
     })
+  })
+
+  test('adapter.info annotations: deduped, in first-seen order', () => {
+    const report = {
+      suites: [
+        {
+          specs: [
+            {
+              title: 'a',
+              tests: [
+                {
+                  projectName: 'chromium',
+                  annotations: [{ type: 'adapter.info', description: '{"vendor":"apple"}' }],
+                  results: [{ status: 'passed' }],
+                },
+              ],
+            },
+            {
+              title: 'b',
+              tests: [
+                {
+                  projectName: 'gc',
+                  annotations: [{ type: 'adapter.info', description: '{"vendor":"apple"}' }],
+                  results: [{ status: 'passed' }],
+                },
+                {
+                  projectName: 'gc',
+                  annotations: [{ type: 'adapter.info', description: 'null' }],
+                  results: [{ status: 'failed', errors: [{ message: 'no adapter' }] }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    expect(parsePlaywrightJson(JSON.stringify(report)).adapters).toEqual([
+      '{"vendor":"apple"}',
+      'null',
+    ])
   })
 
   test('failing report: name carries the project, message from results.errors, trace as an artefact', () => {
@@ -162,6 +204,12 @@ describe('parsePlaywrightJson', () => {
 describe('formatWarning', () => {
   test('indented warn line', () => {
     expect(formatWarning('slow: Tracing.start')).toBe('  warn slow: Tracing.start')
+  })
+})
+
+describe('formatAdapter', () => {
+  test('indented adapter line', () => {
+    expect(formatAdapter('{"vendor":"apple"}')).toBe('  adapter {"vendor":"apple"}')
   })
 })
 
