@@ -80,3 +80,125 @@ This milestone builds `device.html` with the HUD fields and the `autopan`, `tile
 
 ## Deviations
 (filled in during Phase 3)
+
+### Steps 1-3 (mips/sampler, hash/variants/flips/jitter, dithering/neighbour reads) -- done
+
+Delegated as steps 1-3 only; two later implementers take steps 4-5 and 6-7. Commits `ca00771`
+(step 1), `6ce7b8c` (step 2), `fecf657` (step 3).
+
+**Exact seam shapes**, since the brief's Scope/Planning decisions describe behaviour, not exact
+signatures:
+
+- `render/mips.ts`: `mipLevelCountFor(size: number): number` (throws `RangeError` for a non-power-of-
+  two `size`; `4 -> 3` levels, `16 -> 5`) and `generateMips(device: GPUDevice, texture: GPUTexture,
+  opts: { layerCount: number; baseSize: number; checkCompilation?(label, module): Promise<void> }):
+  Promise<void>`. **Not exactly "one blit pipeline and reused descriptors" as literally as the
+  Planning decisions phrase it**: compatibility mode requires a `2d-array` *texture binding* to
+  reference every one of a texture's layers (found by `uncapturederror` on a first draft that bound
+  a single-layer-narrowed `2d-array` view, mirroring the same per-texture view-dimension lock M09's
+  own Deviations found for bind groups generally) -- the mip *source* view can therefore only be
+  narrowed by mip level, never by layer, so `mip_layer` (a tiny per-pass uniform buffer, one per
+  array layer, each written exactly once) selects the layer inside the shader instead. One shared
+  bind-group-layout/pipeline/sampler, one shared source view per mip level (reused across every
+  layer at that level), one command encoder, one queue submit -- `layerCount` small uniform buffers
+  is the one part of "reused descriptors" this finding forced open.
+- `render/art.ts`'s `loadTileArt(device, manifestUrl, opts?: { checkCompilation?(...): Promise<void>
+  })`: a third parameter not in the brief's Seams, threaded straight to `generateMips` so the mip
+  blit shader gets the same "init, not per frame" `getCompilationInfo()` check every other shader
+  module gets (0020 §6). Every page calling it (`terrain.ts`, `terrain-client.ts`, `gc-terrain.ts`)
+  now passes its own `RendererDevice.checkCompilation`.
+- `terrain.wgsl`'s hash: `fn pcg3d(v_in: vec3<u32>) -> vec3<u32>` (Mark Jarzynski & Marc Olano,
+  "Hash Functions for GPU Rendering", JCGT 2020) and `fn tile_hash(tile: vec2<i32>) -> vec3<u32>`
+  (`pcg3d(vec3<u32>(bitcast<u32>(tile.x), bitcast<u32>(tile.y), frame.seed))` -- `bitcast<u32>`, not
+  `u32(...)`, so a negative tile coordinate's raw bit pattern survives unchanged). The TS reference
+  (Planning decisions "Reference implementation of the hash in the test, not a golden image") lives
+  at `tests/browser/support/terrain-hash-ref.ts`: `pcg3d(vIn: Hash3): Hash3`, `tileHash(tileX,
+  tileY, seed): Hash3`, `selectVariant(tileX, tileY, seed, variantCount): number` -- test-only, not a
+  Seam. **Found and fixed against its own first test run**: an early draft's XOR-shift step
+  transcribed `v ^= v >> 16u` (each component shifts by *itself*) as a cross-component shift (`x ^=
+  y >> 16`), which `terrain.variants_match_reference` caught immediately (wrong colour on the very
+  first probe) -- WGSL and the fix are both the same-component form.
+- `sample_tile_art(tile: vec2<i32>, visual_id: u32, uv_in: vec2<f32>, lod: f32) -> vec4<f32>`: `lod`
+  is 0 for the magnified "fat pixel" path (explicit `textureSampleLevel(..., 0.0)`) or the minified
+  trilinear level otherwise (explicit, possibly fractional, `textureSampleLevel(..., lod)`) --
+  **never an implicit-derivative `textureSample`/`fwidth` call anywhere in the shader**, a
+  simplification not in the brief's own Scope wording ("bilinear sampler with the `fwidth` seam
+  formula"). The screen-to-tile mapping is affine (0018 §5: one `tiles_per_px` scalar, no
+  perspective), so `fwidth(uv * art_size)` is provably the same uniform constant everywhere and is
+  computed in closed form (`frame.tiles_per_px * art_size`) instead of with the `fwidth` builtin.
+  This was a deliberate choice to sidestep WGSL's uniform-control-flow restriction on implicit
+  derivatives entirely (a branch on `lod`, itself derived through several `let`s and one function
+  parameter, may or may not be provably uniform to naga's own analysis -- not tested, since the
+  closed-form route removes the question) rather than relying on the restriction being satisfied.
+- Dithering: nearest-*single*-edge only, not a 2D corner blend (0018 §3 does not specify corner
+  behaviour) -- a fragment near two edges at once (a tile corner) uses whichever edge is strictly
+  closer (`dist_left`/`dist_right`/`dist_top`/`dist_bottom` compared in that order; a tie resolves to
+  whichever was checked first). `bayer4x4`: the standard 4x4 ordered-dither matrix
+  (`0,8,2,10/12,4,14,6/3,11,1,9/15,7,13,5`), indexed `(texel.y % 4) * 4 + (texel.x % 4)`, normalised
+  by `/16.0`. `coverage(dist) = (band - dist) / band * fade`. A dithered-in neighbour's colour is its
+  own `sample_tile_art` result (its own variant/flip/hash) but **not** its own jitter -- jitter is
+  applied once, to whatever the primary tile's own `sample_tile_art` returned, before the dithering
+  block can overwrite it wholesale; a documented simplification, not a spec requirement either way.
+- `frame.neighbour_cutoff_px`'s fallback (0018 Consequences) is consumed by the shader
+  (`cutoff_active = neighbour_cutoff_px > 0.0 && (1.0 / tiles_per_px) < neighbour_cutoff_px` skips
+  the whole dithering block) but **`ClientOptions.render.neighbourCutoffPx` -> `frameUniform`
+  plumbing is not built here** -- `frameUniform.neighbourCutoffPx` is already a settable field from
+  M09 (default 0, "always read neighbours"), and wiring `ClientOptions.render` itself needs
+  `createClient`'s options plumbing, which is steps 4/5's own territory (viewport/Client wiring).
+  Flagged for whichever later step wires `ClientOptions.render` through.
+- **Brightness jitter's amplitude (`JITTER_AMPLITUDE = 1.0 / 255.0`) is this milestone's own choice**,
+  not fixed by 0018 §3 (which names the feature, not a magnitude): chosen specifically small enough
+  that every flat-colour pixel probe in this milestone's fixture (including every pre-existing M09
+  one) stays inside 0020 §6's existing 2/255 tolerance without a test needing to model jitter
+  numerically. A real game may want a larger, more visible amplitude; that is a follow-up tuning
+  knob (one named constant), not something this milestone needed to get right.
+- **Fixture art** (`scripts/gen-terrain-art.mjs`, extending M09's own rather than replacing it, per
+  Scope): `tile_px` shrunk from 16 to 4 (Planning decisions "4 px cells") -- every M09 cell keeps its
+  same colour and visual id, just at a quarter the resolution, which changes nothing any M09 pixel
+  probe asserts (flat per-cell colours are invariant under any mip level or filter). Three cells
+  appended for a 3-variant visual (id 6: `first: 4, variants: 3`, magenta/cyan/yellow) and two
+  single-variant, differing-priority/band visuals (id 7: priority 1, band 2, dark grey "loser"; id 8:
+  priority 2, band 2, crimson "winner"), giving 9 cells total (`tiles.png` now 16x12).
+
+**Interpretation calls, recorded rather than guessed silently:**
+
+- `terrain.minified_converges_to_mean` uses the *existing* grass/water border scene (`stageBorderScene`),
+  not the new 3-variant visual: at "1 px per tile" a whole tile's own mip pyramid has fully converged
+  to 1x1 regardless of which variant a hash would have picked (mip generation runs per array layer,
+  independent of variant selection), so this test needed no hash dependency and reads cleanly as a
+  step-1-only property (the brief's own Order of work names it under step 1, before step 2 adds the
+  hash at all).
+- `terrain.magnified_texel_exact` reads as "at exactly 1 screen px per art texel (an integer ratio),
+  every texel on both sides of a tile boundary shows its own tile's exact flat colour, with no
+  bleed" -- not a stress test of the seam formula's own blur-avoidance under a moving/fractional
+  offset, since every cell in this milestone's fixture is flat (uniform per array layer): any
+  sampling method, correct or not, returns that same uniform colour away from a layer boundary, so
+  the only thing worth asserting here is the *tile*-boundary case (a hard layer-index switch, unlike
+  a sample offset within one layer).
+- Every new test in this range uses `terrain.html`'s hand-filled path (`window.__terrain`), never
+  `terrain-client.html`'s real client/fixture: Files touched says "No Rust", and `fx-terrain`'s
+  generator only knows visual ids 0/1/2/5 (identity-mapped from its own base/resource ids) --
+  extending it to reach ids 6/7/8 would need a Rust change this range does not make.
+
+**Measured** (quiet-machine `pnpm test`, `uptime` load average 2.6-3.4 before the reading; the
+shared machine's load spiked to 12-29 partway through this session's own work, which the brief's own
+note about not trusting timings above ~20 predicts -- re-measured after it settled): `rust pass 141
+tests 0.4s/10s` (unchanged: no Rust touched), `unit pass 110 tests 1.3s/3s` (+2: `mips.test.ts`'s
+`mipLevelCountFor` cases), `wasm pass 35 tests` (unchanged), `browser pass 66 tests 14-19s/25s` (+6:
+the six tests this range adds; comfortably under the 20s trip-wire named in the delegation prompt
+even at the higher end, itself measured under load ~12-16, not quiet). `pnpm test rust -t wgsl`:
+naga validates `mips.wgsl` and `terrain.wgsl` (1 test, since `wgsl.terrain_validates` is one
+parameterised check over every `.wgsl` file, unchanged in count from M09). `pnpm test browser -t
+terrain`: `pass 20 tests` (the 14 pre-existing terrain tests plus the six new ones), `5.7-9.4s/25s`
+across several runs at varying load. `pnpm lint`: biome/rustfmt/clippy/tsc all green throughout.
+`playwright test --project gc --grep "terrain clean" --repeat-each 8 --workers 1`: `8 passed`
+(against the unchanged `gc.pages.terrain.main` budget of 116 B/frame, formula unchanged from M09 --
+`0026`'s `burst`-negatives-`@slow`-by-page-id mechanism applies automatically to `terrain` with no
+change needed here, confirmed by `pnpm test browser -t "terrain neg"` (3 tests, fast tier: `clean`'s
+own isolate-presence assertion plus every `object` negative) and `pnpm test:slow -t "terrain neg
+burst"` (3 tests, slow tier) both passing).
+
+**Not verified in this range** (steps 4-7's own territory, reported as "later range" per the
+delegation prompt): `viewport.*`, `lifecycle.*`, `canvas.presents`, `frame-loop.production_runs_
+phases_in_order`, `pnpm device:serve`, the `docs/plan/device-checks.md` M09b section matching what
+was built, and the `packages/engine/CLAUDE.md` context artifact (how to open the device page).
