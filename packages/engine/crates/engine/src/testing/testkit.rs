@@ -72,6 +72,10 @@ pub struct Loopback<G: Game> {
     /// milestone's own scenarios build (a `ChunkSnapshots`-heavy join burst included).
     frame_buf: Vec<u8>,
     uplink_buf: Vec<u8>,
+    /// Scratch for one action's `Codec` (postcard) encoding, ahead of wrapping it in an
+    /// `UplinkBatch` (docs/plan/16-action-round-trip.md): [`Loopback::action`]'s own real-wire
+    /// path, not the direct `Host::queue_action_for_test` backdoor it used to call.
+    action_buf: Vec<u8>,
     /// Per-player action sequence counter, for [`Loopback::action`].
     seqs: std::collections::BTreeMap<PlayerId, u32>,
 }
@@ -88,16 +92,50 @@ where
             clients: Vec::new(),
             frame_buf: vec![0u8; 64 * 1024],
             uplink_buf: vec![0u8; 512],
+            action_buf: vec![0u8; 512],
             seqs: std::collections::BTreeMap::new(),
         }
     }
 
-    /// Testkit-only backdoor (`Host::queue_action_for_test`'s own doc comment): applies `action`
-    /// as `who`, delivered at the next `Loopback::step`. Auto-increments a per-player `seq`.
+    /// Sends `action` as `who`'s next `seq`, through the real admit path (docs/plan/
+    /// 16-action-round-trip.md: an `UplinkBatch` of one action -> `Host::on_uplink` -> decode,
+    /// dedup, `G::admit`), delivered at the next `Loopback::step`/`Host::tick`. Auto-increments a
+    /// per-player `seq`. `who.0 - 1` recovers the connection id: `Host::connect` always assigns
+    /// `PlayerId(conn + 1)` (docs/plan/15-connection-and-subscriptions.md Deviations), and this
+    /// milestone's own admit pipeline has no other way to learn a connection from a `PlayerId`
+    /// (host state keeps no reverse map, by design -- one isn't needed anywhere else).
+    ///
+    /// Was `Host::queue_action_for_test` (a direct `pending_records` push, bypassing decode and
+    /// `G::admit` entirely): replaced per this milestone's own instruction to route this
+    /// milestone's *new* admit pipeline through its real path rather than build on the M15
+    /// backdoor. `Host::queue_action_for_test` itself is not deleted -- `tests/
+    /// no_alloc_connection.rs` (M15b's own no-alloc suite, not this milestone's) still calls it
+    /// directly, and must: going through the real wire path there would attribute
+    /// `codec::decode_canonical`'s own allocation (a scratch buffer sized to the input, every
+    /// call) to a measured no-alloc window that currently, correctly, asserts zero.
     pub fn action(&mut self, who: PlayerId, action: G::Action) {
-        let seq = self.seqs.entry(who).or_insert(0);
-        *seq += 1;
-        self.host.queue_action_for_test(who, *seq, action);
+        let seq = {
+            let s = self.seqs.entry(who).or_insert(0);
+            *s += 1;
+            *s
+        };
+        let conn = who.0 - 1;
+        let n = crate::codec::encode(&action, &mut self.action_buf)
+            .expect("action_buf is generously sized for this testkit's own scenarios");
+        let action_bytes = self.action_buf[..n].to_vec();
+        let mut sink = crate::bytes::SliceSink::new(&mut self.uplink_buf);
+        UplinkWriter::write(
+            &mut sink,
+            0,
+            core::iter::once((seq, action_bytes.as_slice())),
+            None,
+            None,
+        );
+        let n2 = sink
+            .finish()
+            .expect("uplink_buf is generously sized for this testkit's own scenarios");
+        let bytes = self.uplink_buf[..n2].to_vec();
+        let _ = self.host.on_uplink(conn, &bytes);
     }
 
     pub fn last_built_frame(&self, i: usize) -> &[u8] {
@@ -153,7 +191,7 @@ where
         UplinkWriter::write(&mut sink, 0, core::iter::empty(), Some(report), None);
         let n = sink.finish().expect("uplink buffer is generously sized");
         let bytes = self.uplink_buf[..n].to_vec();
-        self.host.on_uplink(conn, &bytes);
+        let _ = self.host.on_uplink(conn, &bytes);
     }
 
     /// Runs one tick end to end: `Host::tick`, a `build_frame` per client (queued behind that

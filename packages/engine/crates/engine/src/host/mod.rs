@@ -16,13 +16,14 @@ use std::collections::BTreeMap;
 use crate::abi::config::HexU64;
 use crate::abi::{Instance, RegionId, RegionLayout, Role, Status};
 use crate::authority::Scope;
+use crate::codec::decode_canonical;
 use crate::delta::Delta;
-use crate::game::{Game, PlayerEvent, PlayerId};
-use crate::sim::{Outcome, Record, Sim, WorldParams};
+use crate::game::{Game, PlayerEvent, PlayerId, PresenceTable, WorldRead};
+use crate::sim::{Outcome, Record, Rejected, Sim, WorldParams};
 use crate::time::Tick;
 use crate::wire::{
-    CameraReport, ChunkCoordListWriter, FrameHeader, FrameWriter, SectionId, SnapshotWriter,
-    UplinkReader, encode_chunk_snapshot, write_global, write_own_player,
+    ActionResultsWriter, CameraReport, ChunkCoordListWriter, FrameHeader, FrameWriter, SectionId,
+    SnapshotWriter, UplinkReader, encode_chunk_snapshot, write_global, write_own_player,
 };
 use crate::world::ChunkCoord;
 use crate::world_access::chunk_of;
@@ -35,6 +36,12 @@ use warm::Warm;
 /// directly (`host::mod` Deviations: one cap, not two).
 pub type ConnId = u32;
 pub const MAX_CONNS: usize = warm::MAX_VIEWS;
+
+/// [`Host::on_uplink`]'s one failure mode (docs/plan/16-action-round-trip.md Scope, 0004 step 1):
+/// a malformed `UplinkBatch` or a malformed/non-canonical action payload. A protocol error, not a
+/// game-level `Rejected` -- the caller closes the connection over it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct UplinkError;
 
 /// Per-connection-per-tick counters (Seams "Provides"). Cumulative across the connection's life,
 /// like `host_frame_bytes` in `packages/engine/src/server.ts`'s own convention for a similar
@@ -49,7 +56,7 @@ pub struct ConnCounters {
     pub bytes_up: u64,
 }
 
-struct ConnSlot {
+struct ConnSlot<G: Game> {
     player: PlayerId,
     camera: Option<CameraReport>,
     subs: SubscriptionSet,
@@ -58,6 +65,13 @@ struct ConnSlot {
     /// regardless of whether anything changed this tick (0011: "sent in full on every connect").
     first_frame_pending: bool,
     counters: ConnCounters,
+    /// Outcomes owed to this connection's next `build_frame` (docs/plan/16-action-round-trip.md
+    /// Scope: "outcomes go to the sender's next `build_frame` as `ActionResults` in `seq` order").
+    /// Two producers: `Host::on_uplink` pushes an admission-time `Rejected` immediately (0004
+    /// step 2: "not logged"), and `Host::tick` pushes every `Sim::step` outcome for an admitted
+    /// action once it has actually been applied (or rejected) at T+1. Drained and cleared by
+    /// `build_frame` every time it runs for this connection, so it never grows unbounded.
+    pending_results: Vec<Outcome<G>>,
 }
 
 fn default_max_entities() -> u32 {
@@ -135,7 +149,7 @@ pub struct Host<G: Game> {
     warm: Warm,
 
     // -- M15: connections and subscriptions (docs/plan/15-connection-and-subscriptions.md) -----
-    conns: Vec<Option<ConnSlot>>,
+    conns: Vec<Option<ConnSlot<G>>>,
     /// Whether `connect` has ever seen this slot before (survives `disconnect`, unlike `conns`
     /// itself): `Record::Player { Joined }` is queued only on first sight (Scope).
     ever_joined: Vec<bool>,
@@ -171,6 +185,16 @@ pub struct Host<G: Game> {
     /// re-read live from the store at write time (host/mod Deviations), so this only needs the id
     /// and which kind of op it resolved to.
     scratch_entity_ops: Vec<(crate::game::EntityId, EntityOpKind)>,
+    /// The `who` of every `Record::Action` in `pending_records`, gathered in `tick()` just before
+    /// `Sim::step` drains it (docs/plan/16-action-round-trip.md Deviations): `Sim::step` pushes
+    /// one `Outcome` per `Record::Action` it sees, in the same relative order, but an `Outcome`
+    /// itself carries no `who` (0004's `Ack<G>` shape, unchanged) -- zipping this against
+    /// `Host::outcomes` after the call is how each result finds its way back to the right
+    /// connection. A reused scratch `Vec` like every other buffer here: empty (no allocation) on
+    /// every tick with no actions, which is the common case this milestone's own no-alloc tests
+    /// (`no_alloc_connection.rs`, not this milestone's) still rely on for ticks with actions too,
+    /// since it settles at a steady capacity the same way `scratch_entity_ops` already does.
+    scratch_action_players: Vec<PlayerId>,
 }
 
 /// The last-wins kind of an entity op this tick (host/mod Deviations: `scratch_entity_ops`'s own
@@ -221,6 +245,7 @@ impl<G: Game> Host<G> {
             scratch_snapshot: Vec::new(),
             scratch_tile_flat: Vec::new(),
             scratch_entity_ops: Vec::new(),
+            scratch_action_players: Vec::new(),
         }
     }
 
@@ -297,6 +322,7 @@ impl<G: Game> Host<G> {
             subs: SubscriptionSet::new(crate::world::ChunkDims::new(G::CHUNK_BITS), G::TICK_RATE),
             first_frame_pending: true,
             counters: ConnCounters::default(),
+            pending_results: Vec::new(),
         });
         player
     }
@@ -316,21 +342,89 @@ impl<G: Game> Host<G> {
         }
     }
 
-    /// Decodes an `UplinkBatch` (0011): records the latest camera report and `bytes_up`. Actions
-    /// are decoded (so a malformed batch is still rejected wire-honestly) and discarded (Non-scope
-    /// here: M16); presence is discarded (Non-scope: M19). A malformed batch, or one for an unknown
-    /// connection, is silently ignored -- untrusted input never panics.
-    pub fn on_uplink(&mut self, conn: ConnId, bytes: &[u8]) {
+    /// Decodes an `UplinkBatch` (0011): records the latest camera report and `bytes_up`, and runs
+    /// every carried action through the admit pipeline (docs/plan/16-action-round-trip.md Scope):
+    /// decode (`WireError`/a failed canonical decode -> `Err`, a protocol error that closes the
+    /// connection, 0004 step 1 -- **not logged**, matching an admission `Rejected` below), drop a
+    /// resend (`seq <= ` the host's last processed `seq` for this player, silently -- 0004: "a
+    /// resent action is never applied twice"), then `G::admit`: failure queues an immediate
+    /// `Outcome::Rejected` on this connection's `pending_results` (0004: "not logged"); success
+    /// appends `Record::Action` to `pending_records`, collected for the next `tick()` (0004
+    /// step 3). Presence is discarded (Non-scope: M19). An unknown connection is silently
+    /// ignored -- untrusted input never panics.
+    ///
+    /// `Err(UplinkError)` on a malformed batch or a malformed action payload: the caller
+    /// (`sim_admit`) maps that to `Status::Decode`, which is what tells `SimHost` (TS, 15b/16
+    /// step 3) to close the connection. Every action already admitted earlier in the same batch,
+    /// before the malformed one was reached, keeps its effect -- only the batch's own further
+    /// decoding stops.
+    pub fn on_uplink(&mut self, conn: ConnId, bytes: &[u8]) -> Result<(), UplinkError> {
         let idx = conn as usize;
         let Some(Some(slot)) = self.conns.get_mut(idx) else {
-            return;
+            return Ok(());
         };
         slot.counters.bytes_up += bytes.len() as u64;
-        if let Ok(batch) = UplinkReader::read(bytes, |_, _| {})
-            && let Some(camera) = batch.camera
+        let player = slot.player;
+
+        let mut raw_actions: Vec<(u32, &[u8])> = Vec::new();
+        let batch = match UplinkReader::read(bytes, |seq, action_bytes| {
+            raw_actions.push((seq, action_bytes));
+        }) {
+            Ok(batch) => batch,
+            Err(_) => return Err(UplinkError),
+        };
+        if let Some(camera) = batch.camera
+            && let Some(Some(slot)) = self.conns.get_mut(idx)
         {
             slot.camera = Some(camera);
         }
+        if raw_actions.is_empty() {
+            return Ok(());
+        }
+        let Some(sim) = self.sim.as_ref() else {
+            // No world yet: an action arriving before `sim_genesis` has run has nothing to admit
+            // against. Untrusted-input tolerance, not expected in production (`connect` itself
+            // requires a live `Sim`, host/mod Deviations).
+            return Ok(());
+        };
+        let last_seq = sim.authority().store().last_seq(player).unwrap_or(0);
+        let mut decoded: Vec<(u32, G::Action)> = Vec::with_capacity(raw_actions.len());
+        for (seq, raw) in &raw_actions {
+            if *seq <= last_seq {
+                continue; // resend dedup: already processed, silently dropped (0004).
+            }
+            match decode_canonical::<G::Action>(raw) {
+                Ok(action) => decoded.push((*seq, action)),
+                Err(_) => return Err(UplinkError),
+            }
+        }
+        for (seq, action) in decoded {
+            let result = {
+                let sim = self.sim.as_ref().expect("checked above");
+                G::admit(
+                    sim.authority() as &dyn WorldRead<G>,
+                    &PresenceTable::empty(),
+                    player,
+                    &action,
+                )
+            };
+            match result {
+                Ok(()) => self.pending_records.push(Record::Action {
+                    who: player,
+                    seq,
+                    action,
+                }),
+                Err(reject) => {
+                    if let Some(Some(slot)) = self.conns.get_mut(idx) {
+                        slot.pending_results.push(Outcome {
+                            seq,
+                            result: Err(Rejected::Game(reject)),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Runs one tick: delivers every `connect`/`disconnect` queued since the last `tick()`, steps
@@ -346,9 +440,20 @@ impl<G: Game> Host<G> {
             chunk_versions,
             last_tick,
             conns,
+            scratch_action_players,
             ..
         } = self;
         let Some(sim) = sim.as_mut() else { return };
+        // docs/plan/16-action-round-trip.md Deviations: gathered *before* `sim.step` drains
+        // `pending_records`, since `Sim::step` pushes one `Outcome` per `Record::Action` it sees,
+        // in the same relative order, but never the `who` (0004's `Ack<G>` shape, unchanged) --
+        // this is how each outcome below finds its way back to the connection that sent it.
+        scratch_action_players.clear();
+        for record in pending_records.iter() {
+            if let Record::Action { who, .. } = record {
+                scratch_action_players.push(*who);
+            }
+        }
         let completed = sim.tick();
         sim.step(pending_records, outcomes);
         pending_records.clear();
@@ -358,6 +463,11 @@ impl<G: Game> Host<G> {
                 if let Scope::Chunk(c) = scope {
                     chunk_versions.insert(c, completed.0);
                 }
+            }
+        }
+        for (who, outcome) in scratch_action_players.drain(..).zip(outcomes.drain(..)) {
+            if let Some(slot) = conns.iter_mut().flatten().find(|s| s.player == who) {
+                slot.pending_results.push(outcome);
             }
         }
         for slot in conns.iter_mut().flatten() {
@@ -514,11 +624,19 @@ impl<G: Game> Host<G> {
         }
         insertion_sort_by_key(&mut self.scratch_tile_flat, |(c, i, _)| (c.y, c.x, *i));
 
+        // docs/plan/16-action-round-trip.md Scope: "in seq order". Robust against admission-time
+        // rejections (pushed by `on_uplink`, arrival order) and apply-time outcomes (pushed by
+        // `tick()`, `pending_records` order) interleaving out of seq order across ticks; cheap,
+        // like every other per-connection scratch sort here (a handful of entries at most).
+        insertion_sort_by_key(&mut slot.pending_results, |o| o.seq);
+        let want_action_results = !slot.pending_results.is_empty();
+
         // -- Nothing to say? ---------------------------------------------------------------------
         if !first
             && !want_roster
             && !want_global_value
             && !player_changed
+            && !want_action_results
             && self.scratch_pristine.is_empty()
             && self.scratch_snapshot.is_empty()
             && self.scratch_left.is_empty()
@@ -534,6 +652,15 @@ impl<G: Game> Host<G> {
         };
         let mut sink = crate::bytes::SliceSink::new(out);
         let mut fw = FrameWriter::new(&mut sink, header);
+
+        // `ActionResults` is section id 1, the lowest: `FrameWriter::section` requires strictly
+        // ascending ids, so this must be written before `Global` (id 2).
+        if want_action_results {
+            let results = &slot.pending_results;
+            fw.section(SectionId::ActionResults, |s| {
+                ActionResultsWriter::write::<G>(s, results.iter());
+            });
+        }
 
         if want_roster || want_global_value {
             let roster = &self.scratch_roster;
@@ -601,6 +728,10 @@ impl<G: Game> Host<G> {
         slot.counters.chunk_snapshots += self.scratch_snapshot.len() as u64;
         slot.counters.chunk_leaves += self.scratch_left.len() as u64;
         slot.first_frame_pending = false;
+        // This connection's own results have now had their one chance to ride a frame (Scope:
+        // "outcomes go to the sender's next build_frame"); clear so `pending_results` never grows
+        // past what a single tick's worth of admissions/applies can add (host/mod Deviations).
+        slot.pending_results.clear();
         n
     }
 
@@ -749,6 +880,7 @@ where
             scratch_snapshot: Vec::new(),
             scratch_tile_flat: Vec::new(),
             scratch_entity_ops: Vec::new(),
+            scratch_action_players: Vec::new(),
         })
     }
 
@@ -779,13 +911,17 @@ where
         Status::Ok
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md: `sim_admit(conn, len)` becomes real
-    /// -- `rx` (the first `len` bytes of `Rx`) is one whole uplink batch, routed to `host::Host::
-    /// on_uplink` (native, unchanged since M15: decodes a `CameraReport` when present, tolerates a
-    /// malformed batch or an unknown connection silently).
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md: `sim_admit(conn, len)` -- `rx` (the
+    /// first `len` bytes of `Rx`) is one whole uplink batch, routed to `host::Host::on_uplink`.
+    /// docs/plan/16-action-round-trip.md: `on_uplink` now also runs every carried action through
+    /// the admit pipeline; `Status::Decode` on `Err` (a malformed batch or a malformed action
+    /// payload, 0004 step 1's protocol error) is what tells the caller (`SimHost`, TS) to close
+    /// the connection. An unknown connection is still tolerated silently (`Ok`).
     fn sim_admit(&mut self, conn: u32, rx: &[u8]) -> Status {
-        self.on_uplink(conn, rx);
-        Status::Ok
+        match self.on_uplink(conn, rx) {
+            Ok(()) => Status::Ok,
+            Err(UplinkError) => Status::Decode,
+        }
     }
 
     /// docs/plan/15b-ring-connection-and-replica-rendering.md: `sim_tick()` becomes real, routing

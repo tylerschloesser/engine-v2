@@ -217,7 +217,7 @@ fn host_and_client_steady_state_no_alloc() {
         let mut sink = engine::bytes::SliceSink::new(&mut s.uplink_buf);
         UplinkWriter::write(&mut sink, 0, core::iter::empty(), Some(camera), None);
         let n = sink.finish().unwrap();
-        host.on_uplink(0, &s.uplink_buf[..n]);
+        let _ = host.on_uplink(0, &s.uplink_buf[..n]);
     }
     s.seq += 1;
     host.queue_action_for_test(
@@ -373,7 +373,7 @@ fn run_panning_tick(
         let mut sink = engine::bytes::SliceSink::new(&mut s.uplink_buf);
         UplinkWriter::write(&mut sink, 0, core::iter::empty(), Some(camera), None);
         let n = sink.finish().unwrap();
-        host.on_uplink(0, &s.uplink_buf[..n]);
+        let _ = host.on_uplink(0, &s.uplink_buf[..n]);
     }
 
     if i.is_multiple_of(2) {

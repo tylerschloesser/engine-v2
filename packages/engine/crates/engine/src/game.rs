@@ -109,6 +109,19 @@ pub struct PresenceTable<G: Game> {
     _marker: core::marker::PhantomData<fn() -> G>,
 }
 
+impl<G: Game> PresenceTable<G> {
+    /// No presence samples (M19 fills this table for real; until then every caller of `Game::
+    /// admit` -- `host::Host::on_uplink`, docs/plan/16-action-round-trip.md -- passes this empty
+    /// placeholder). Not `Default`: a shell type with fields would silently stop meaning "empty"
+    /// once M19 gives it real content, and a named constructor makes that day's diff obvious at
+    /// every call site.
+    pub fn empty() -> Self {
+        PresenceTable {
+            _marker: core::marker::PhantomData,
+        }
+    }
+}
+
 /// Shell (M24b gives it fields, 0005): the old-schema store `Game::migrate` reads from.
 pub struct OldStore {
     _private: (),

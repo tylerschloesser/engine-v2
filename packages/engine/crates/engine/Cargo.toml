@@ -67,3 +67,8 @@ required-features = ["testing"]
 [[test]]
 name = "no_alloc_connection"
 required-features = ["testing"]
+
+# `engine::testing::testkit::Loopback` (feature `testing`), same reasoning as `codec` above.
+[[test]]
+name = "action_round_trip"
+required-features = ["testing"]
