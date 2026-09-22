@@ -259,4 +259,16 @@ export class RingConsumer {
     out.pushed = Atomics.load(this.control, RING_PUSHED)
     out.popped = Atomics.load(this.control, RING_POPPED)
   }
+
+  /** The consumer-side counterpart of `RingProducer.recordDrop()`, same counter, same policy
+   * ("drop the newest event, never block or retry"): for a message this ring successfully
+   * delivered, but whose *consumer* then rejected on its own terms after popping it -- not a ring
+   * failure (docs/plan/16-action-round-trip.md gate item 3: `worker/client-action.ts`'s `on_action`
+   * call returning anything but `Status.Ok`, a locally-dropped action main's own `dispatch()` has
+   * already handed a `seq` for). Shares `RING_DROPS` with the producer's own drops rather than a
+   * second counter, since both answer the same question a caller of `stats()` actually has: "how
+   * many messages sent into this ring never had any further effect". */
+  recordDrop(): void {
+    Atomics.add(this.control, RING_DROPS, 1)
+  }
 }

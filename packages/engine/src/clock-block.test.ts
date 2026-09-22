@@ -35,6 +35,36 @@ test('clock_block: write then read round-trips every field', () => {
   expect(out[CLOCK_FIELD.AckSeq]).toBe(3)
 })
 
+test('clock_block: a read that never sees an even seq word exhausts its retries and reports it', () => {
+  // docs/plan/16-action-round-trip.md (gate check): `readClockBlockInto`'s own retry loop
+  // (`sab/seqlock.ts`'s `SeqlockReader`/`SeqlockWriter` are a *different* implementation --
+  // `clock-block.ts`'s own module doc comment: "hand-rolled shape ... for the same reason" as
+  // `camera/block.ts` -- so `seqlock.no_torn_read`'s real cross-worker race does not exercise this
+  // file's own loop) had no committed test at all before this one: every existing test here reads
+  // only after a write has fully completed, so the `(s1 & 1) === 1` branch never ran. A writer
+  // stuck mid-update (the seq word held odd) is the worst case that branch exists for: every
+  // attempt sees an odd seq, every attempt retries, and the read must give up and report `false`
+  // rather than hand back torn bytes -- `out` is untouched, still whatever it held before the call.
+  const sab = createSeqlock(CLOCK_BLOCK_DATA_BYTES)
+  const writer = new ClockBlockView(sab)
+  const reader = new ClockBlockView(sab)
+  writeClockBlock(writer, {
+    authoritativeTick: 1,
+    predictedTick: 1,
+    ticksPerSecond: 20,
+    sessionState: 1,
+    seqSeed: 0,
+    ackSeq: 0,
+  })
+  // Force the seq word odd, simulating a writer paused between its own `begin`/`end` (a real
+  // cross-thread race would see this transiently; here it is held, the worst case).
+  Atomics.store(writer.seqWord(), 0, 1)
+
+  const out = new Uint32Array([9, 9, 9, 9, 9, 9]) // sentinel: must survive a failed read untouched
+  expect(readClockBlockInto(reader, out)).toBe(false)
+  expect(Array.from(out)).toEqual([9, 9, 9, 9, 9, 9])
+})
+
 test('clock_block: a second write is what a second read sees', () => {
   const sab = createSeqlock(CLOCK_BLOCK_DATA_BYTES)
   const writer = new ClockBlockView(sab)

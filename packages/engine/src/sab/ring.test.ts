@@ -153,3 +153,33 @@ test('ring.wrap_and_span', () => {
   expect(stats.pushed).toBe(6)
   expect(stats.popped).toBe(6)
 })
+
+test('ring.consumer_record_drop_shares_the_producers_counter', () => {
+  // docs/plan/16-action-round-trip.md (gate item 3): `RingConsumer.recordDrop()` is the consumer
+  // side of the same policy `RingProducer.recordDrop()` already has -- a message this ring
+  // delivered, but whose consumer rejected on its own terms after popping it, is still counted as
+  // a drop. Both sides share one `RING_DROPS` counter (the same physical control block), so a
+  // producer's own drop and a consumer's own drop are indistinguishable to `stats()`, by design.
+  const sab = createRing(20, 8)
+  const producer = new RingProducer(sab)
+  const consumer = new RingConsumer(sab)
+  const msg = new Uint8Array([1, 2, 3])
+  const dst = new Uint8Array(12)
+
+  expect(producer.tryPush(msg, msg.length)).toBe(true)
+  expect(consumer.popInto(dst, 0)).toBe(msg.length) // popped fine; the consumer rejects it itself
+  consumer.recordDrop()
+
+  const fromConsumer: RingStats = { drops: -1, pushed: -1, popped: -1 }
+  consumer.stats(fromConsumer)
+  expect(fromConsumer).toEqual({ drops: 1, pushed: 1, popped: 1 })
+
+  const fromProducer: RingStats = { drops: -1, pushed: -1, popped: -1 }
+  producer.stats(fromProducer)
+  expect(fromProducer).toEqual({ drops: 1, pushed: 1, popped: 1 }) // same counter, either view
+
+  consumer.recordDrop()
+  consumer.recordDrop()
+  producer.stats(fromProducer)
+  expect(fromProducer.drops).toBe(3)
+})

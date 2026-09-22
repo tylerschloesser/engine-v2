@@ -8,6 +8,13 @@
 // -> region -> region -> SAB round trip): that path never calls `on_action`/`client_poll_ui` at
 // all, and the two are mutually exclusive (`worker/client.ts`'s `setup()` builds this pump only
 // when `echo` is not set).
+//
+// `on_action`'s own `Status` is checked (gate fix): a locally dropped action (a malformed ring
+// record, or the outbox backstop at capacity) produces no `onActionResult` and no host verdict --
+// see this file's own `pump()` for why -- so it is counted via `RingConsumer.recordDrop()` rather
+// than silently discarded, the same `stats().drops` counter `netCounters`/a HUD's own "ring drops"
+// field already reads for every other SAB ring in this package.
+import { Status } from '../abi.js'
 import type { EngineInstance, RegionView } from '../loader.js'
 import { RingConsumer, RingProducer } from '../sab/ring.js'
 
@@ -34,7 +41,20 @@ export function createActionPump(
       for (;;) {
         const len = actionConsumer.popInto(rx.u8, 0)
         if (len < 0) break
-        inst.call1(inst.x.on_action, len)
+        if (inst.call1(inst.x.on_action, len) !== Status.Ok) {
+          // `ActionError::Malformed -> Status.Decode` (a corrupt ring record: never expected from
+          // main's own `dispatch`/`dispatchRaw`, but `on_action` decodes untrusted-shaped bytes
+          // regardless) or `ActionError::Full -> Status.OutOfMemory` (the outbox backstop: main's
+          // own `dispatch` already enforces capacity synchronously by counting `seq - ack_seq`
+          // before ever writing a record, so this path is reachable only through `dispatchRaw`,
+          // test-only, or a real race between that check and this pump's own drain). Either way
+          // `dispatch()` has already handed the app a `seq` that will never resolve -- no host
+          // verdict exists for it (0004's `Rejected<G>` is a host-only shape; synthesising a local
+          // one is M25's pending-queue job, not this backstop's) -- so it is counted here, the same
+          // "drop and count, never block or retry" policy every other full/rejected ring write in
+          // this codebase already uses (`recordDrop`'s own doc comment).
+          actionConsumer.recordDrop()
+        }
       }
     }
     if (ui) {
