@@ -115,7 +115,7 @@ panning window (600 frames, `sim` + `client` within budget, `drops === 0`).
 - [x] `overlay_tile_reaches_screen` passes: pristine colour before, overlay colour after, by GPU readback.
 - [x] The zero-GC panning window passes for both `sim` and `client`, with `drops === 0`.
 - [x] `assert_cache_invisible` still passes at capacity 1, default and unlimited.
-- [x] The measured `browser` suite line is reported, and the rung taken (or the report that none remains).
+- [x] The measured `browser` suite line is reported, and the rung question ruled on: **none remains** (see the orchestrator's gate additions).
 - [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
@@ -449,3 +449,22 @@ with the nudge, passes; with **both calls at the same camera position**, passes;
 at all, fails. `__advance` runs exactly one `stepFrame`, so the mechanism is the frame count — the
 gen round trip is async and its `Loaded` event does not exist yet when the current frame's uploader
 pass has run. The camera now genuinely holds still, which is what this milestone's Goal claims.
+
+**The rung: none remains, and that is a measurement, not a shrug.** The implementer reported
+21-22 s and "no rung needed". My own gate measured 23 s, and 30 repeat runs measured a slowest of
+24 s with one `parkWorkers: timed out after 10000 ms` (29/30), against 15/15 at a slowest of 20 s on
+the pre-M15c base `b812092`. So M15c did spend roughly 3 s of a 4 s margin and the question was real.
+Ranking every test in the suite by duration answers it: **110 tests, 58.6 s of summed work, longest
+single test 1.79 s** (`echo clean`), with `poll_skips_a_spurious_tick_on_a_ring_wake` third at
+1.75 s. ADR 0020 §4's own fast-tier criterion is p95 ≤ 3 s for a browser test, and **every test in
+the suite passes it**. The suite is slow by accumulation, not because of an offender, so rungs 1-4
+are already taken or not yet applicable and rung 5 ("anything measuring wall clock") has only one
+real candidate — `poll_skips_a_spurious_tick_on_a_ring_wake`, the *only* fast-tier cover of ADR
+0030's wake guard, freshly repaired by M15e — whose demotion would buy under 1 s of wall clock
+against 58.6 s of summed work. §4 says never demote the only test covering a feature.
+
+**So the ladder is exhausted for this suite, which is M36b's audit being pulled forward.** Not acted
+on here, because it is a suite-wide decision rather than this milestone's, and because the suite is
+at 23 s of a 25 s budget where 0020 §2 makes 25 s a *warning* and 37.5 s a failure. Recorded in
+`PROMPT.md` so the next milestone that adds browser tests starts from this rather than re-deriving
+it.
