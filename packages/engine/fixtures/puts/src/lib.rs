@@ -65,8 +65,11 @@ impl ClientSide<Puts> for PutsClient {
 }
 
 /// A tile position, plain data (`Action` must stay `Codec + TS`; not `engine::world::TilePos`,
-/// which does not derive `TS`).
+/// which does not derive `TS`). `#[ts(export)]` (docs/plan/16-action-round-trip.md step 4): named
+/// by `Action`'s own two struct-variant fields, so it needs its own generated file too -- ts-rs
+/// inlines/imports a referenced type by name but only ever *writes* one for a type that opts in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize, TS)]
+#[ts(export)]
 pub struct Pos {
     pub x: i32,
     pub y: i32,
@@ -81,8 +84,11 @@ impl Pos {
 /// One action per handler this fixture exercises (docs/plan/12b-world-access-and-sim-driver.md
 /// Scope): `Paint`/`Spawn` are chunk-scoped puts, `Bump`/`Remove` exercise the reject path
 /// (occupancy is Non-scope, see the module doc comment), `SetNote` is player-scoped, `SetMotd` is
-/// global-scoped, `Roll` reads `SimRng`.
+/// global-scoped, `Roll` reads `SimRng`. `#[ts(export)]` (docs/plan/16-action-round-trip.md step
+/// 4, 0017 §5's bindings step): without it ts-rs's derive macro emits no `export_bindings_action`
+/// test at all, so `cargo test export_bindings` would silently write nothing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, TS)]
+#[ts(export)]
 pub enum Action {
     Paint { pos: Pos, base: u8, resource: u8 },
     Spawn { at: Pos, kind: u8 },
@@ -94,7 +100,9 @@ pub enum Action {
 }
 
 /// `From<Unknown>` (0003: "add a `?` to each read and `impl From<Unknown> for Reject`").
+/// `#[ts(export)]`: see `Action`'s own doc comment.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, TS)]
+#[ts(export)]
 pub enum Reject {
     /// A read the handler tried missed (`Unknown`).
     Unknown,
@@ -302,5 +310,17 @@ mod tests {
             Puts::TICK_RATE.secs(NOTE_TTL_SECS),
             Ticks(Puts::TICK_RATE.hz_value() * NOTE_TTL_SECS)
         );
+    }
+
+    /// docs/plan/16-action-round-trip.md step 4 (0017 §5's bindings step): `EngineReject` is
+    /// defined in `engine`, not here, so ts-rs's own derive-generated `export_bindings_*` test for
+    /// it lives in `engine`'s own test binary -- never run by `cargo test export_bindings` scoped
+    /// to this crate (0017 §5's exact command, no `-p`/`--workspace`). This hand-written test makes
+    /// the same call that generated test would have made, so `client.onActionResult`'s `Engine`
+    /// half is typed here too (`sim::EngineReject`'s own doc comment has the detail).
+    #[test]
+    fn export_bindings_enginereject() {
+        let cfg = ts_rs::Config::from_env();
+        <engine::sim::EngineReject as ts_rs::TS>::export_all(&cfg).expect("could not export type");
     }
 }

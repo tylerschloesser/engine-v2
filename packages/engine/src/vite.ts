@@ -7,13 +7,14 @@ import { readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Plugin, ViteDevServer } from 'vite'
-import { buildGame, CargoBuildError, type Profile } from './build-game.js'
+import { buildGame, CargoBuildError, exportBindings, type Profile } from './build-game.js'
 
 export {
   type BuildGameOptions,
   type BuildGameResult,
   buildGame,
   CargoBuildError,
+  exportBindings,
   type GameJson,
   type Profile,
 } from './build-game.js'
@@ -23,6 +24,14 @@ export interface EngineOptions {
   crate: string
   /** Default: `dev` for `vite dev`, `release` for `vite build` (0017 §4). */
   profile?: Profile
+  /**
+   * 0017 §5's bindings step (docs/plan/16-action-round-trip.md step 4): a game passes
+   * `{ dir: 'src/bindings' }` (0017 §1's layout). Absent by default. The initial `buildStart`
+   * build awaits it; a dev rebuild (triggered by a `.rs`/`Cargo.toml` watch) fires it without
+   * awaiting it (Deviations: "without gating the reload") so a slow native `cargo test` never
+   * delays the page's own `full-reload`.
+   */
+  bindings?: { dir: string }
 }
 
 /** `plugin.api.profile`, readable once the config has resolved (0017 §4). */
@@ -34,6 +43,10 @@ const VIRTUAL_ID = 'virtual:engine/wasm'
 const RESOLVED_VIRTUAL_ID = `\0${VIRTUAL_ID}`
 const DEV_ROUTE = '/@engine/game.wasm'
 const REBUILD_DEBOUNCE_MS = 30
+
+function errorMessage(e: unknown): string {
+  return e instanceof CargoBuildError ? e.stderr : e instanceof Error ? e.message : String(e)
+}
 
 const COI_HEADERS = {
   'Cross-Origin-Opener-Policy': 'same-origin',
@@ -83,6 +96,19 @@ export function engine(opts: EngineOptions): Plugin {
     wasmBytes = await readFile(result.wasmPath)
     buildHash = result.buildHash
     version++
+    // The very first build (`buildStart`) awaits its own bindings run, below; a later dev
+    // rebuild fires this same step without awaiting it, so it never gates the reload.
+  }
+
+  /** `EngineOptions.bindings`'s own `cargo test export_bindings` run. A rejection is logged, not
+   * thrown: a stale/missing `.ts` file fails `tsc`, loudly, on its own -- this step is not the one
+   * that should turn a bindings-generation hiccup into a build failure the game never asked this
+   * plugin to gate on (0017 §5: "without gating the reload"). */
+  const doBindings = (): Promise<void> => {
+    if (!opts.bindings) return Promise.resolve()
+    return exportBindings({ crate: crateDir, dir: opts.bindings.dir }).catch((e: unknown) => {
+      console.error(`engine:vite: bindings export failed: ${errorMessage(e)}`)
+    })
   }
 
   return {
@@ -109,7 +135,7 @@ export function engine(opts: EngineOptions): Plugin {
 
     async buildStart() {
       // Called once per environment/build; only the first call runs cargo.
-      built ??= doBuild()
+      built ??= doBuild().then(() => doBindings())
       await built
     },
 
@@ -157,6 +183,7 @@ export function engine(opts: EngineOptions): Plugin {
           const mod = server.moduleGraph.getModuleById(RESOLVED_VIRTUAL_ID)
           if (mod) server.moduleGraph.invalidateModule(mod)
           server.ws.send({ type: 'full-reload', path: '*' })
+          void doBindings() // 0017 §5: "without gating the reload" -- not awaited here
         } catch (e) {
           const message =
             e instanceof CargoBuildError ? e.stderr : e instanceof Error ? e.message : String(e)

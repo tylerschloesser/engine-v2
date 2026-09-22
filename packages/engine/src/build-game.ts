@@ -16,6 +16,16 @@ export type BuildGameOptions = {
   wasmOpt?: boolean
   /** Environment for the cargo spawns. Default `process.env`. */
   env?: NodeJS.ProcessEnv
+  /**
+   * 0017 §5's bindings step (docs/plan/16-action-round-trip.md step 4): run, after a successful
+   * `cargo build`, `cargo test export_bindings` in `crate` with `TS_RS_EXPORT_DIR=dir` (relative
+   * to `crate`; ts-rs's own default is `./bindings` when unset, which is exactly a fixture's own
+   * top-level `bindings/` convention -- a game passes `'src/bindings'` for 0017 §1's layout).
+   * Absent by default: most callers (every fixture but `puts` today) have no `#[ts(export)]` type
+   * at all, and `cargo test` is a second, slower native compile+link beyond the `cargo build`
+   * above that every other fixture would otherwise pay for nothing.
+   */
+  bindings?: { dir: string }
 }
 
 export type BuildGameResult = {
@@ -28,6 +38,8 @@ export type BuildGameResult = {
   abiVersion: number
   profile: Profile
   cargoMs: number
+  /** Set only when `opts.bindings` was given: how long the bindings `cargo test` took. */
+  bindingsMs?: number
 }
 
 let writeSeq = 0
@@ -134,5 +146,47 @@ export async function buildGame(opts: BuildGameOptions): Promise<BuildGameResult
   await rename(wasmPath + tmp, wasmPath)
   await writeFile(jsonPath + tmp, `${JSON.stringify(json, null, 2)}\n`)
   await rename(jsonPath + tmp, jsonPath)
-  return { dir, wasmPath, jsonPath, buildHash, abiVersion, profile, cargoMs }
+
+  const result: BuildGameResult = {
+    dir,
+    wasmPath,
+    jsonPath,
+    buildHash,
+    abiVersion,
+    profile,
+    cargoMs,
+  }
+  if (opts.bindings) {
+    const bindingsStart = performance.now()
+    await exportBindings({ crate, dir: opts.bindings.dir, env })
+    result.bindingsMs = performance.now() - bindingsStart
+  }
+  return result
+}
+
+/**
+ * 0017 §5's bindings step, split out so the Vite plugin's dev rebuild can call it without
+ * `await`ing it (Deviations: "without gating the reload") while `buildGame()` itself and
+ * `scripts/build-fixtures.mjs` always await it. `TS_RS_EXPORT_DIR=dir` (relative to `crate`) is
+ * the only thing distinguishing this from an ordinary native test run; a game/fixture with no
+ * `#[ts(export)]` type just runs zero matching tests and writes nothing (`cargo test`'s own
+ * behaviour for a name filter that matches no test).
+ */
+export async function exportBindings(opts: {
+  crate: string
+  dir: string
+  env?: NodeJS.ProcessEnv
+}): Promise<void> {
+  const crate = resolve(opts.crate)
+  // `TS_RS_IMPORT_EXTENSION=js`: ts-rs's own default is no extension at all (`import type { Pos }
+  // from "./Pos"`), which fails `tsc` under this repo's `nodenext` module resolution ("Relative
+  // imports carry the `.js` extension", `packages/engine/CLAUDE.md`) -- found when `puts-dispatch.
+  // ts` (docs/plan/16-action-round-trip.md step 4) first imported a generated type.
+  const env = {
+    ...(opts.env ?? process.env),
+    TS_RS_EXPORT_DIR: opts.dir,
+    TS_RS_IMPORT_EXTENSION: 'js',
+  }
+  const built = await cargo(['test', '--color', 'never', 'export_bindings'], crate, env)
+  if (built.code !== 0) throw new CargoBuildError('cargo test export_bindings', built.stderr)
 }
