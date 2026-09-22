@@ -1,6 +1,6 @@
 # M15d: The client's per-frame clock read, off the main-thread hot path
 
-Status: not started · After: 15b · Tyler-dependent: no (acts on `questions-for-tyler.md` Q13's recommended default)
+Status: done · After: 15b · Tyler-dependent: no (acts on `questions-for-tyler.md` Q13's recommended default)
 
 Written by the orchestrator at M15b's gate. This is M13b's fix applied to the isolate M13b did not
 touch, and it is now blocking rather than cosmetic: see "Why now" below.
@@ -95,12 +95,12 @@ forced-interpreter); `byFn` no longer naming any `now@`-shaped frame on `main`; 
 zero-GC page still green with its re-derived budget; every negative control still tripping.
 
 ## Exit criteria
-- [ ] Attribution table: every per-frame `main` clock read, its function and its B/frame, before and after.
-- [ ] `byFn` for `main` on `gc-sim-paced` names no clock read after the fix, forced-interpreter included.
-- [ ] Budgets re-derived downward where the old figure absorbed this cost, with each new number's derivation stated.
-- [ ] Every zero-GC negative control still trips (paste the trip counts).
-- [ ] `node scripts/repeat.mjs browser 15` is **15/15** with no injected load, and the `sim-paced` failures are gone.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Attribution table: every per-frame `main` clock read, its function and its B/frame, before and after.
+- [x] `byFn` for `main` on `gc-sim-paced` names no clock read after the fix, forced-interpreter included.
+- [x] Budgets re-derived downward where the old figure absorbed this cost, with each new number's derivation stated.
+- [x] Every zero-GC negative control still trips (paste the trip counts).
+- [x] `node scripts/repeat.mjs browser 15` is **15/15** with no injected load, and the `sim-paced` failures are gone.
+- [x] `pnpm test` and `pnpm lint` are green (orchestrator-run: rust 267, unit 157, wasm 43, browser 103 at 21 s; lint clean).
 
 ## Verification commands
 `pnpm gc software` · `pnpm gc flat` · `pnpm test browser -t sim-paced` · `node scripts/repeat.mjs browser 15` · `pnpm lint`.
@@ -239,3 +239,15 @@ fix rounds committed): `browser x15 load=0: pass=15 fail=0 hang=0 slowestSuiteSe
 `gc-sim`'s own `neg burst main`/`neg burst sim` (the M06b sibling-isolate nudge) was run 12x
 (`--repeat-each 6`) during verification and passed every time in this session -- not chased, not
 touched, reported as a measurement only, per the brief's own Non-scope.
+
+**Orchestrator verification at the gate.** The fix-round-2 measurement claim was written into a
+production source comment before it was confirmed, and its diagnostic asserted `expect(true).toBe(true)`
+-- a test that cannot fail -- so the orchestrator re-ran it and read the output rather than accept it:
+over 3 s on `device.html`'s real `createRealFrameLoop`, `byFn` names **no `tick@frame-loop` and no
+clock-read entry at all** (`push@:0` 9024, `(anonymous)@device` 2324, `drain@terrain` 1624,
+`integrate@client` 940, `applyPending@frame-loop:107` 848, three smaller). The claim holds; the 848 B at
+`applyPending` is M09b's viewport path on a different line. Repeats at the gate: **15/15 plain**
+(implementer, against the shipping commit) and **14/15 under `--load 10`** (orchestrator), whose single
+failure was `parkWorkers: timed out after 10000 ms` on a run that took 28 s against a 25 s budget --
+a harness timeout under saturation, not an assertion, and not a `sim-paced` failure. **No `sim-paced`
+failure occurred in either set**, against 7/15 plain before this milestone.
