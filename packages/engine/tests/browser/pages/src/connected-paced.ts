@@ -10,10 +10,24 @@
 // rate limit (0010 "Rates") should pace against *real* elapsed time, the same clock the sim's own
 // real-time pacing paces against, so the two interleave the way a real single-player session's
 // would.
+//
+// `__simCounters` is called twice by the spec (docs/plan/15e-paced-tick-measurement.md), once
+// before `__pokeFor` and once after: `SimHostCounters.ticksRun` is cumulative from
+// `simHost.start()` (called at the end of `worker/sim.ts`'s own `setup()`), not reset per call, so
+// the spec asserts on the *delta* between the two readings -- the ticks that ran during the poke
+// window -- rather than the lifetime total, which would also count every tick the sim ran while
+// the page was merely loading and instantiating WASM (slope: ~1 tick per 50 ms of that idle time,
+// the 20 Hz pacing rate, measured before this comment was written).
 import { createClient } from '../../../../src/client.ts'
 import { RingConsumer } from '../../../../src/sab/ring.ts'
 import type { SimHostCounters } from '../../../../src/server.ts'
-import { parkWorkers, setCamera, simCounters, stepFrame } from '../../../../src/test/client.ts'
+import {
+  parkWorkers,
+  resumeWorkers,
+  setCamera,
+  simCounters,
+  stepFrame,
+} from '../../../../src/test/client.ts'
 import { fixtureWasm } from './fixture-wasm.ts'
 
 declare global {
@@ -71,10 +85,20 @@ window.__pokeFor = async (ms, intervalMs) => {
 }
 // `simCounters` reaches the sim worker through the parked-only `test-call` channel
 // (`callParked`): real-time pacing means it is never parked on its own, unlike `connected.ts`'s
-// deterministic `stepTick`-driven page.
+// deterministic `stepTick`-driven page -- so every reading has to park first, and (unlike
+// `connected.ts`, which is done once its own single read completes) `resumeWorkers` afterward,
+// since the spec takes a before-poke reading and pacing has to keep running between it and the
+// after-poke one for the delta between them to mean anything. `resumeWorkers` re-enters
+// `runBlockingLoop`, whose entry `body()` pass runs with the wake word unchanged from the park and
+// therefore fires exactly one `poll()` -- one extra tick, folded into whichever window follows the
+// resume that caused it (the before-poke reading's resume lands inside the poke window; the
+// after-poke reading's resume lands after the window the spec measures and so never counts). Well
+// inside the `0.5`/`1.35` margin either way.
 window.__simCounters = async () => {
   await parkWorkers(client)
-  return simCounters(client)
+  const counters = await simCounters(client)
+  await resumeWorkers(client)
+  return counters
 }
 
 window.__pageReady = true

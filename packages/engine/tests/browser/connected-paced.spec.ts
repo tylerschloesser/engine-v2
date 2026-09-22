@@ -5,6 +5,13 @@
 // exercises is this repo's most-repeated defect" (this milestone's own brief): this file is what
 // fails if `worker/sim.ts`'s `wokenBy === lastWokenBy` comparison (or the fix it guards) is ever
 // removed. Chromium only: real-time pacing, not a GPU/renderer concern.
+//
+// docs/plan/15e-paced-tick-measurement.md: `SimHostCounters.ticksRun` is cumulative from
+// `simHost.start()` (called at the end of `worker/sim.ts`'s own `setup()`), not reset per read, so
+// the assertion below is over the *delta* between a reading taken right before the poke and one
+// taken right after -- the ticks the sim ran during the poke window -- not the lifetime total,
+// which also counts every tick the sim ran while the page was still loading and instantiating
+// WASM (page load, `openPage`'s own wait, is unpaced wall time before this test starts poking).
 import { expect, test } from '@playwright/test'
 import type { SimHostCounters } from '../../src/server.js'
 import { openPage } from './support/page.js'
@@ -23,6 +30,15 @@ const TICK_MS = 50
 test('poll_skips_a_spurious_tick_on_a_ring_wake', async ({ page }) => {
   await openPage(page, '/connected-paced.html')
 
+  // Before-poke reading. `__simCounters` parks the workers to read through the parked-only
+  // `test-call` channel, then resumes them (`src/test/client.ts`'s `parkWorkers`/`resumeWorkers`,
+  // 15e brief Scope) so real-time pacing keeps running for the poke that follows -- that resume's
+  // own re-entry into `runBlockingLoop` fires exactly one `poll()` on its first `body()` pass (wake
+  // word unchanged from the park), one extra tick folded into the window below. Well inside the
+  // margin the bounds already carry for real scheduling jitter.
+  const before = await page.evaluate(() => window.__simCounters?.())
+  const ticksBefore = before?.ticksRun ?? 0
+
   const pokeMs = 1500
   const pokeIntervalMs = 15 // well under `client_poll_uplink`'s own 50 ms rate limit (0010
   // "Rates"): most pokes are throttled away, but this still forces a real uplink push --
@@ -32,15 +48,15 @@ test('poll_skips_a_spurious_tick_on_a_ring_wake', async ({ page }) => {
     ms: pokeMs,
     interval: pokeIntervalMs,
   })
-  const counters = await page.evaluate(() => window.__simCounters?.())
-  const ticksRun = counters?.ticksRun ?? 0
+  const after = await page.evaluate(() => window.__simCounters?.())
+  const ticksRun = (after?.ticksRun ?? 0) - ticksBefore
 
   const expectedTicks = pokeMs / TICK_MS // ~30 at 20 Hz
-  // A correct `wokenBy` guard: `ticksRun` tracks *elapsed time*, not wake count, so it stays near
-  // `expectedTicks` regardless of how many external wakes this test forced (generous margin for
-  // real scheduling jitter, including under load). A reverted guard fires `poll()` -- and hence
-  // one extra tick -- on very nearly every external wake too, roughly doubling it: this bound sits
-  // well below that, so it fails loudly instead of by a hair.
+  // A correct `wokenBy` guard: `ticksRun` tracks *elapsed time*, not wake count, so this delta
+  // stays near `expectedTicks` regardless of how many external wakes this test forced (generous
+  // margin for real scheduling jitter, including under load, plus the +1 noted above). A reverted
+  // guard fires `poll()` -- and hence one extra tick -- on very nearly every external wake too,
+  // roughly doubling it: this bound sits well below that, so it fails loudly instead of by a hair.
   expect(ticksRun).toBeGreaterThan(expectedTicks * 0.5)
   expect(ticksRun).toBeLessThan(expectedTicks * 1.35)
 })
