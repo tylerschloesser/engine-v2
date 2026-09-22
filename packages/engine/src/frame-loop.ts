@@ -82,8 +82,13 @@ export type FrameLoop = {
   /** Runs exactly one iteration of the phase list, synchronously. Production only ever calls
    * `resume`/`pause`; `engine/test` and every browser test here drive frames with this instead of
    * racing `requestAnimationFrame` (the same "stepped, not real time" discipline `engine/test.
-   * stepFrame` already uses for the worker side, Non-scope). */
-  tick(): FrameTickResult
+   * stepFrame` already uses for the worker side, Non-scope). `tMs`, when given, is used as
+   * `cameraState.frameTimeMs` directly instead of reading the clock (Deviations, fix round 2): the
+   * production path (`resume()`'s own `frame(tMs)`, below) always has one, straight from
+   * `Scheduler.requestFrame`'s own callback argument -- a real `DOMHighResTimeStamp` under
+   * `systemScheduler`, no `clock.now()` call at all. Omitted only by a direct manual `tick()` call
+   * (`engine/test`, fakes-only unit tests): falls back to the resync clock in that case. */
+  tick(tMs?: number): FrameTickResult
 }
 
 const noop = (): void => {}
@@ -92,16 +97,17 @@ const noopPhase = (_phase: FramePhase): void => {}
 // docs/plan/15d-client-clock-allocation.md: `opts.clock.now()` used to be read fresh every `tick()`
 // -- a fractional double, boxed as a new `HeapNumber` on every read (the same defect class 0030
 // fixed on the sim worker; measured on `test/client.ts`'s own `stepFrame`, which drives this same
-// camera-block phase in every zero-GC page: ~11.96 B/frame, Deviations). No zero-GC page runs a
-// real `FrameLoop` yet (none call `createRealFrameLoop`), so this can't be measured on this exact
-// path the same way; the fix mirrors `stepFrame`'s own (already measured) shape rather than leave
-// production code failing the same rule unfixed (`.claude/rules/hot-paths.md`, "no double-valued
-// temporaries on a per-pass path"). `RESYNC_FRAMES`/`FRAME_MS` mirror `stepFrame`'s own constants
-// (Deviations: 30, not 0030's `RESYNC_TICKS = 8` -- the box measured here at ~12 B/*read*
-// regardless of V8 tier, so 8 would still cost ~1.5 B/frame amortised): the real clock is read only
-// once every `RESYNC_FRAMES` ticks; between reads `frameTimeMs` accumulates a nominal frame
-// duration instead (rAF has no fixed rate to assume `dtMs` from the way a tick loop does),
-// corrected back to the real elapsed time at every resync.
+// camera-block phase in every zero-GC page: ~11.96 B/frame, Deviations). Fix round 2 (Deviations,
+// coordinator correction): the production rAF path never needs to read the clock at all --
+// `Scheduler.requestFrame(cb: (tMs: number) => void)` already delivers a real timestamp to `frame`
+// below, so `tick(tMs)` assigns it straight to `cameraState.frameTimeMs`, no call and no box,
+// stronger than amortising one. Measured (Deviations) that assigning an already-in-hand double
+// allocates nothing, on `device.html`'s real `createRealFrameLoop` (`systemClock`/
+// `systemScheduler`, real `requestAnimationFrame`) -- the one production page this milestone did
+// not have a zero-GC page to measure against otherwise. `RESYNC_FRAMES` (`createResyncingClock`,
+// `clock.ts`) stays only as `tick()`'s own fallback for a caller with no `tMs` in hand (a direct
+// manual `tick()` call -- `engine/test`, fakes-only unit tests); `FRAME_MS` is that fallback's own
+// nominal per-call duration, never used on the real rAF path any more.
 const RESYNC_FRAMES = 30
 const FRAME_MS = 1000 / 60
 
@@ -124,11 +130,11 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoop {
     return typeof opts.target === 'function' ? opts.target() : opts.target
   }
 
-  function tick(): FrameTickResult {
+  function tick(tMs?: number): FrameTickResult {
     opts.viewport?.applyPending() // M09b: before every other phase, at most once per frame
     onPhase('camera')
     onCamera() // camera (no-op until M11)
-    opts.client.cameraState.frameTimeMs = frameClock.next(FRAME_MS)
+    opts.client.cameraState.frameTimeMs = tMs ?? frameClock.next(FRAME_MS)
     onPhase('writeCamera')
     opts.client.writeCameraAndWake() // writeCamera: writeCameraBlock + CB_FRAME_REQ + wake
     onPhase('upload')
@@ -143,9 +149,9 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoop {
     return { uploadBytes: stats.bytes, uploadRecords: stats.records }
   }
 
-  function frame(): void {
+  function frame(tMs: number): void {
     if (!running) return
-    tick()
+    tick(tMs)
     handle = opts.scheduler.requestFrame(frame)
   }
 
