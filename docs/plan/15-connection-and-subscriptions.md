@@ -266,3 +266,116 @@ budget, and this Deviations write-up). One earlier commit's `git add` named the 
 directory but not the sibling `src/client.rs` file it needed too (`pub mod core;`/`pub mod
 replica;`); that commit's tree is incomplete in isolation, fixed forward (staged into the next
 commit) rather than amended, per the no-amend rule.
+
+## Fix round 1
+
+**`chunksWarmed` is confirmed still structurally 0, and 15b is the milestone that makes it live.**
+`build_frame` (`host/mod.rs`) does call `Warm::set_view` with a real subscribed rect every time it
+runs, and `chunks_warmed_becomes_live` proves `Instance::sim_warm_one` then generates -- but that
+whole path is reachable only through `Host<G>`'s *native* Rust methods (`connect`, `on_uplink`,
+`tick`, `build_frame`), never through the ABI. `sim_admit`/`sim_build_frame` (the ABI exports
+`chunksWarmed`'s TS counter would need a real connection to reach through) are still at `Instance`'s
+defaults (`Status::Unsupported`) on `Host<G>`: this milestone's own Non-scope leaves them untouched,
+per the brief ("ABI exports, rings, TS (15b)"). No connection can reach the host through the ABI
+until 15b wires `sim_admit`/`sim_build_frame` to this milestone's native methods and something (a
+real `Connection`, or `tests/browser/sim-worker.spec.ts`'s own harness) actually calls `connect`
+through it. `tests/browser/sim-worker.spec.ts` asserting `chunksWarmed: 0` today is therefore still
+correct, not stale -- **15b is what makes this counter live**, not this milestone.
+
+**The `tests/module_layering.rs` scanner has a known blind spot, on record rather than rediscovered
+later**: it greps for `crate::host`/`crate::client` *references*, so it cannot catch a future same-
+file call to `Store::terrain_mut`/`Sim::authority_mut` written *inside* `store.rs`/`sim.rs`
+themselves -- those two accessors return `&mut TerrainStore`/`&mut Authority<G>` and are plain
+methods on types the deterministic core already owns, so a caller inside the core never has to name
+`host`/`client` at all to reach them. Nothing exploits this today (both accessors are called only
+from `client/replica.rs` and `host/mod.rs`, both outside the core, both already covered). It is a
+gap in the *enforcement*, not a violation: recorded so a future change that adds core-side logic
+behind one of these accessors is a deliberate review decision, not something that has to be
+rediscovered from scratch.
+
+**`host_and_client_steady_state_no_alloc`'s coverage gap (fixed-camera only) is closed** by a second
+measured workload, `host_and_client_panning_no_alloc`, in the same binary: a camera panning one
+full chunk edge per tick, an entity spawned at the leading edge and despawned one tick later (once
+its chunk is held and no longer entering, so the despawn routes as a wire `EntityGone`), a tile
+painted ahead of the pan path every other tick (so some entered chunks arrive as `ChunkSnapshots`,
+not just `ChunkEnterPristine`), and a `Global`/`OwnPlayer` change every 50/70 ticks. Two-phase
+warm-up: first past the 5 s (100-tick) unsubscribe hold so leaves actually reach their own steady
+rate, not just the join/pan-start transient, then 40 more iterations of the exact measured body (the
+same discipline the fixed-camera test already needed, for the same reason: buffer shapes specific to
+*this* workload, not the join's).
+
+**This test does not pass, and was not made to.** It measures a real, reproducible allocation:
+**90.72 B/tick average (27,216 B over the 300-tick measured window, exact given the fixed seeds and
+workload)**, from two calls, both triggered by a brand-new `BTreeMap` key every time (this workload
+pans forever in one direction, so every entered/snapshotted chunk this replica has never held
+before, every single tick -- unlike a real client, which turns around, oscillates, or is bounded):
+- `TerrainStore::replace_overlay` (`world/overlay.rs`'s `Overlays::load_chunk` ->
+  `BTreeMap<u64, ChunkOverlay>::entry(..).or_default()`), reached from `Replica::apply_snapshot_overlay`
+  (`client/replica.rs`) via `Store::terrain_mut`: **~48 B per `ChunkSnapshots` entry**.
+- `Replica::held: BTreeMap<ChunkCoord, u32>::insert` (`client/replica.rs`, both
+  `apply_enter_pristine` and `apply_snapshot_overlay`), for the same never-seen-before-key reason:
+  **~144 B per chunk entered**.
+
+Both were isolated by temporary `live_bytes()` probes bracketing each call (removed before
+committing): every section-level delta the coarse probe first reported was fully accounted for by
+these two calls, with `ChunkLeaves` showing a net *negative* delta (removal frees more than it costs)
+that does not fully offset the entries, hence net growth over the run.
+
+**This is `.claude/rules/hot-paths.md`'s own named exception, half of it.** That rule already says,
+verbatim, for `world/cache.rs`: "overlay growth (writes, world state) is the one allowed exception."
+`TerrainStore::replace_overlay`'s cost is exactly that exception, now measured for the connection/
+subscription path rather than just asserted. `Replica::held`'s growth is the same *kind* of thing --
+subscription bookkeeping tracking genuinely new world state, not per-frame garbage -- but that
+sentence names only `TerrainStore`, not `Replica::held`, so it is reported rather than assumed
+covered. Whether to extend the exception's wording, bound `held`'s growth some other way, or accept
+it as isolate as-is is not this milestone's decision (fix-round instruction: "that is my decision to
+make").
+
+Three inject-fail-revert sensitivity proofs (8 B/call injected via `Vec::with_capacity(8)` +
+`mem::forget`, then reverted; the test was already failing, so each proof reports the *increase*
+over the 27,216 B baseline, not a pass-to-fail transition) confirm the *other* new paths this
+workload exercises are genuinely measured, not accidentally skipped:
+
+| Path (file) | Baseline (300 ticks) | With injection | Increase | Calls implied |
+|---|---|---|---|---|
+| `host::Host::build_frame` (`host/mod.rs`) | 27,216 B | 29,616 B | +2,400 B | 300 (once per measured tick, exact) |
+| `client::ClientCore::apply` (`client/core.rs`) | 27,216 B | 29,616 B | +2,400 B | 300 (once per measured tick, exact) |
+| `client::Replica::apply_leave` (`client/replica.rs`) | 27,216 B | 36,816 B | +9,600 B | 1,200 (once per `ChunkLeaves` entry in the window, exact -- ~4/tick, matching ring 1's column height) |
+
+**`frame_is_atomic_on_malformed_tail`'s dead `bad` binding is now a real assertion**, not discarded:
+an append-corrupted frame (a valid frame plus one trailing `0xFF` byte -- `FrameReader` treats any
+unconsumed tail as another section header, and `0xFF` is not a valid `SectionId`, so this is
+guaranteed malformed, a different corruption shape than truncation) is now actually sent through
+`on_frame` and asserted rejected-and-non-mutating, alongside the existing truncation case.
+
+## Fix round 2: does the panning allocation scale, or plateau?
+
+`host_and_client_panning_no_alloc`'s measured window run at 300, 600 and 1,200 ticks (warm-up
+unchanged: join burst, then past the 5 s/100-tick unsubscribe hold, then 40 more iterations of the
+exact measured body -- each window a fresh `Host`/`ClientCore` from the same warm-up, not an
+extension of a shared run):
+
+| Measured ticks | Total allocated | B/tick |
+|---|---|---|
+| 300 | 27,216 B | 90.720 |
+| 600 | 55,744 B | 92.907 |
+| 1,200 | 114,320 B | 95.267 |
+
+`Replica::held_count()` and the new `Replica::debug_overlay_chunk_count()`, at the start and end of
+the 1,200-tick window: **`held` 128 -> 128; overlay 16 -> 16.** Both flat. The cap is working:
+neither map is growing past its bound, at any window length tested.
+
+**This is neither of the two anticipated readings, and is reported as such rather than forced into
+one.** It is not "constant because something grows without bound" -- `held`/the overlay map's own
+*sizes* do not grow at all, ruling out an unenforced cap or an unbounded `Overlays` map as the
+mechanism. It is not "falls ~1/ticks" either -- 90.72 -> 92.91 -> 95.27 is flat (a mild ~5% rise
+across 4x the ticks, not the ~2x/~4x drop a one-off warm-up shortfall would produce). The rate is a
+genuine per-tick constant, at a *bounded* map size: every measured tick, `Replica::held` and the
+overlay `Overlays` map each remove one key at the trailing edge and insert one brand-new key at the
+leading edge (continuous one-direction panning never revisits a freed key), and `BTreeMap`'s
+node-level insert/remove is not zero-sum in *bytes* even when it is zero-sum in *entry count*: a
+freed leaf node is deallocated, not pooled for reuse by the next insert at a completely different
+key range, so each tick's insert+remove pair costs a real alloc/free pair regardless of how long the
+map has been running or how stable its size is. Bounded state, unbounded (constant-rate) allocator
+churn -- a real property of this access pattern against `BTreeMap`, not a warm-up artifact and not
+an unenforced cap.

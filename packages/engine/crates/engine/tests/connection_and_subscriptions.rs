@@ -303,16 +303,31 @@ fn frame_is_atomic_on_malformed_tail() {
     lb.step();
     let before = lb.client(idx).region_hash();
     let good = lb.last_built_frame(idx).to_vec();
-    let mut bad = good.clone();
-    bad.push(0xFF); // valid frame plus one trailing malformed byte-ish (still likely malformed as
-    // a new section header): truncate the good frame instead, which is guaranteed malformed.
+
+    // Append-corrupted: a valid frame plus one trailing byte. `FrameReader::next_section` treats
+    // any unconsumed tail as another section header, and 0xFF is not a valid `SectionId`, so this
+    // is guaranteed malformed too (a different corruption *shape* than truncation: extra bytes,
+    // not missing ones).
+    let mut appended = good.clone();
+    appended.push(0xFF);
+    let result = lb.client_mut(idx).on_frame(&appended);
+    assert!(
+        result.is_err(),
+        "a frame with a trailing garbage byte must be rejected"
+    );
+    assert_eq!(
+        before,
+        lb.client(idx).region_hash(),
+        "a rejected append-corrupted frame must not mutate the replica"
+    );
+
+    // Truncated: guaranteed malformed (a partial header or a partial section body).
     let mut truncated = good.clone();
     truncated.truncate(good.len().saturating_sub(1).max(10));
     if truncated.len() < good.len() {
         let result = lb.client_mut(idx).on_frame(&truncated);
         assert!(result.is_err(), "a truncated frame must be rejected");
     }
-    let _ = bad;
     let after = lb.client(idx).region_hash();
     assert_eq!(
         before, after,

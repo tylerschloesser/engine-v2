@@ -102,6 +102,15 @@ impl<G: Game> Replica<G> {
         self.held.get(&chunk).copied().unwrap_or(0)
     }
 
+    /// The terrain overlay map's own entry count (distinct chunks holding a non-empty overlay),
+    /// separate from `held_count` (every held chunk, pristine or not): M15 fix round 2's scaling
+    /// measurement compares the two to see which map, if either, grows without bound under
+    /// continuous panning.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn debug_overlay_chunk_count(&self) -> usize {
+        self.store.terrain().overlay_chunks().count()
+    }
+
     pub fn held_count(&self) -> usize {
         self.held.len()
     }
