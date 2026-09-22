@@ -61,6 +61,10 @@ export interface HostServices {
 export const MAX_CATCHUP_TICKS = 5
 /** 0008 §2 "Sim host warmer": the between-tick warm budget. */
 export const WARM_BUDGET_MS = 2
+/** docs/plan/13b-tick-timing-allocation.md (ADR amending M13): how many ticks pass between the
+ * real clock reads that drive `tickOverruns`/`ticksDropped`/the chunk warmer -- see `resync`'s own
+ * doc comment for why this number and the byte math behind it. */
+export const RESYNC_TICKS = 8
 
 /**
  * `Game::TICK_RATE`'s own default (`TickRate::HZ_20`, 0006). 0009 fixes tick rate as "a compile-
@@ -164,12 +168,13 @@ export interface SimHost {
   /** Runs `sim_genesis()` once (a second `start()` after `stop()` does not re-run it) and arms
    * the pacing timer. */
   start(): void
-  /** Disarms the pacing timer. Counters and `base` are left as they are. */
+  /** Disarms the pacing timer. Counters are left as they are. */
   stop(): void
   /** Disarms the pacing timer (0005: "a paused host stops calling `sim_tick`, nothing is
    * logged"); the paused wall-clock interval is invisible to `resume()`'s pacing. */
   pause(): void
-  /** Re-arms the pacing timer, shifting `base` forward by however long `pause()` lasted. */
+  /** Re-arms the pacing timer with a fresh resync anchor, so the interval `pause()` covered is
+   * never counted as falling behind. */
   resume(): void
   /** Runs `n` ticks synchronously through the same tick procedure `onFire` uses, bypassing the
    * pacing timer entirely (a manual driver for tests and `engine/test`'s `stepTick`). */
@@ -186,8 +191,8 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
   // Read once, here, not per tick (`SimInstance.tickHz`'s own doc comment): "the pacing arithmetic
   // stays in integer milliseconds" -- `Math.round`, not the raw division, so an odd rate (e.g. 30
   // Hz) still paces on a whole-millisecond boundary instead of carrying a fractional one through
-  // every `due`/`base` computation below. `|| DEFAULT_TICK_HZ` covers only a `tickHz()` of `0`
-  // (division by zero): a real ABI export never returns that (the trait default is `20`).
+  // the resync arithmetic below. `|| DEFAULT_TICK_HZ` covers only a `tickHz()` of `0` (division by
+  // zero): a real ABI export never returns that (the trait default is `20`).
   const tickMs = Math.round(1000 / (sim.tickHz() || DEFAULT_TICK_HZ))
   const counters: SimHostCounters = {
     ticksRun: 0,
@@ -199,9 +204,24 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
   let genesisDone = false
   let running = false
   let stopTimer: (() => void) | null = null
-  /** Wall-clock time (`services.clock.now()`) at which `counters.ticksRun` was 0. */
-  let base = 0
-  let pausedAt: number | null = null
+
+  // docs/plan/13b-tick-timing-allocation.md (Deviations; ADR amending M13's per-tick decision):
+  // `runOneTickTimed`'s own two `services.clock.now()` reads and `onFire`'s own one (below) each
+  // boxed a fresh `HeapNumber` per tick in the interpreter tier -- a fractional double is never a
+  // Smi, so no amount of JS-side care after the read removed it, and even one such read per tick
+  // exceeds the strict 8 B/frame budget on its own (0016 §1: a guarantee that holds only when V8
+  // wins a compilation race is not a guarantee). Fix: the real clock is read only once every
+  // `RESYNC_TICKS` ticks (`resync`, below); between resyncs, a tick is assumed to cost exactly
+  // `tickMs` and no clock is read at all. That assumption drifts by however long the tick's own
+  // work actually took, bounded to at most `RESYNC_TICKS` ticks' worth before the next resync
+  // measures the real elapsed time and erases it.
+  /** Integer milliseconds (`Math.floor`, never a fractional double), the real clock's value at the
+   * last resync -- every tick between resyncs is priced against this without reading the clock
+   * again. Unset until the first tick ever runs (`syncInitialized`); `start()`/`resume()` clear it
+   * so a paused interval is never counted as falling behind. */
+  let syncBaseMs = 0
+  let ticksSinceSync = 0
+  let syncInitialized = false
 
   function ensureGenesis(): void {
     if (genesisDone) return
@@ -212,9 +232,16 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
     genesisDone = true
   }
 
+  function ensureSyncBase(): void {
+    if (syncInitialized) return
+    syncBaseMs = Math.floor(services.clock.now())
+    syncInitialized = true
+  }
+
   /** The tick procedure (Scope: "one function, the only caller of the tick exports"): `len =
    * sim_seal_frame()`; if `len > 0` call `logSink`; `sim_tick()`; the per-connection frame pass
-   * (empty until M15b, Non-scope). */
+   * (empty until M15b, Non-scope). No clock read here any more (Deviations): a tick's own overrun
+   * is no longer measured individually. */
   function runOneTick(): void {
     const seal = sim.simSealFrame()
     if (seal.len > 0 && host.logSink) host.logSink(seal.bytes as Uint8Array)
@@ -223,38 +250,67 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
     counters.ticksRun++
   }
 
-  function runOneTickTimed(): void {
-    const tickStart = services.clock.now()
-    runOneTick()
-    if (services.clock.now() - tickStart > tickMs) counters.tickOverruns++
-  }
-
-  function warm(): void {
-    const warmStart = services.clock.now()
-    // The next not-yet-run tick's own deadline (tick `ticksRun` has just run; tick `ticksRun + 1`
-    // is next).
-    const nextDeadline = base + (counters.ticksRun + 1) * tickMs
-    const deadline = Math.min(nextDeadline, warmStart + WARM_BUDGET_MS)
+  /** Runs the chunk warmer for at most `WARM_BUDGET_MS` from `now` (already read by `resync`, the
+   * only caller -- not re-read here for the starting point, only the loop condition below reads it,
+   * and only while there is warming left to do). */
+  function warm(now: number): void {
+    const deadline = now + WARM_BUDGET_MS
     while (services.clock.now() < deadline) {
       if (sim.simWarmOne() !== 1) break
       counters.chunksWarmed++
     }
   }
 
-  /** Pacing (Scope): on each timer fire, run at most `MAX_CATCHUP_TICKS` due ticks, dropping
-   * (and counting) the rest by moving `base` forward so sim time falls behind wall time. */
-  function onFire(): void {
+  /** The only place `services.clock.now()` is read on the tick path (Deviations): compares real
+   * elapsed time over the last `ticksSinceSync` ticks against what they were budgeted to cost.
+   * Behind schedule, catches up to `MAX_CATCHUP_TICKS` extra ticks synchronously (M13's own cap,
+   * evaluated once per resync window instead of once per wake) and drops the rest. `tickOverruns`
+   * now counts a window that ran long as a whole, not an individual slow tick -- the ADR's own
+   * "changed decision" line.
+   *
+   * `RESYNC_TICKS` (8) chosen by measurement (Deviations): one `clock.now()` read costs ~11.92 B in
+   * the interpreter tier; this function's own read plus `warm`'s loop condition below read the
+   * clock twice per resync (~23.84 B, the same order as the two-reads-per-tick figure this
+   * replaces), which amortised over 8 ticks is 23.84 / 8 = 2.98 B/tick -- real margin under the
+   * strict 8 B/frame budget for the rest of the loop's own overhead. At 20 Hz that is a 400 ms
+   * resync window: bounded, self-correcting drift, versus an uncorrected one at any window size. */
+  function resync(): void {
     const now = services.clock.now()
-    const due = Math.floor((now - base) / tickMs) - counters.ticksRun
-    if (due <= 0) return
-    const runCount = Math.min(due, MAX_CATCHUP_TICKS)
-    if (due > MAX_CATCHUP_TICKS) {
-      const dropped = due - MAX_CATCHUP_TICKS
-      base += dropped * tickMs
-      counters.ticksDropped += dropped
+    const expected = ticksSinceSync * tickMs
+    const elapsed = now - syncBaseMs
+    const overshoot = elapsed - expected
+    let accountedTicks = ticksSinceSync
+    if (overshoot > 0) {
+      counters.tickOverruns++
+      const behindTicks = Math.floor(overshoot / tickMs)
+      if (behindTicks > 0) {
+        const runCount = Math.min(behindTicks, MAX_CATCHUP_TICKS)
+        for (let i = 0; i < runCount; i++) runOneTick()
+        const dropped = behindTicks - runCount
+        if (dropped > 0) counters.ticksDropped += dropped
+        accountedTicks += runCount + dropped
+      }
     }
-    for (let i = 0; i < runCount; i++) runOneTickTimed()
-    warm()
+    syncBaseMs += accountedTicks * tickMs
+    ticksSinceSync = 0
+    warm(now)
+  }
+
+  /** Runs exactly one tick and resyncs against the real clock every `RESYNC_TICKS` ticks -- the one
+   * function both `onFire` (armed pacing) and `stepTick` (manual/test driving) call, so a real
+   * single-player session and `stepSimTickSync`-driven zero-GC coverage share one accounting path. */
+  function runPacedTick(): void {
+    ensureSyncBase()
+    runOneTick()
+    ticksSinceSync++
+    if (ticksSinceSync >= RESYNC_TICKS) resync()
+  }
+
+  /** Pacing (Scope): `AtomicsTimer` calls this on every real wake while armed. It no longer checks
+   * a deadline itself (`worker/atomics-timer.ts`'s own Deviations note says why the check moved) --
+   * assuming every wake is one tick's worth of elapsed time is what `resync` corrects for. */
+  function onFire(): void {
+    runPacedTick()
   }
 
   function arm(): void {
@@ -272,39 +328,37 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
     start() {
       if (running) return
       ensureGenesis()
-      if (pausedAt !== null) {
-        base += services.clock.now() - pausedAt
-        pausedAt = null
-      } else if (counters.ticksRun === 0) {
-        base = services.clock.now()
-      }
+      // A fresh resync anchor (Deviations): the first tick after this arms sets `syncBaseMs` from
+      // real "now" at that moment, so neither the time this call itself took nor (on a second
+      // `start()` after `stop()`) time spent stopped is ever counted as falling behind.
+      syncInitialized = false
+      ticksSinceSync = 0
       running = true
       arm()
     },
     stop() {
       disarm()
       running = false
-      pausedAt = null
     },
     pause() {
       if (!running) return
       disarm()
-      pausedAt = services.clock.now()
       running = false
     },
     resume() {
       if (running) return
       ensureGenesis()
-      if (pausedAt !== null) {
-        base += services.clock.now() - pausedAt
-        pausedAt = null
-      }
+      // Same reasoning as `start()`: a fresh anchor makes the paused wall-clock interval invisible
+      // to pacing (0005 "Idle pause is replay-safe"), with no separate `pausedAt` bookkeeping needed
+      // now that nothing computes a duration from it.
+      syncInitialized = false
+      ticksSinceSync = 0
       running = true
       arm()
     },
     stepTick(n = 1) {
       ensureGenesis()
-      for (let i = 0; i < n; i++) runOneTickTimed()
+      for (let i = 0; i < n; i++) runPacedTick()
     },
     hash() {
       return sim.simHash()

@@ -348,3 +348,110 @@ redesign of pacing semantics.
 changes what `tickOverruns` or `ticksDropped` counts, or changes pacing accuracy or drift behaviour
 in any way a game could observe"): every viable remaining direction (candidate 1's real-world form,
 or candidate 2) touches that line. Reporting for a decision rather than building further.
+
+### Steps 2-5: resync-based pacing built, both pages green, ADR written
+
+Decision made by the orchestrator (candidate 1's self-contained variant): built exactly as
+specified. **[0030](../decisions/0030-sim-host-resync-based-pacing.md)** is the ADR (amends M13's
+pacing decision, `docs/plan/13-sim-host-tick-loop.md`); it has the full decision text, the
+alternatives and why each was rejected, and every measured number -- not repeated here in full.
+
+**No ABI change, as the orchestrator suspected.** Every read that moved is JS-side (`server.ts`,
+`worker/atomics-timer.ts`, `worker/sim.ts`, `worker/protocol.ts`); `ABI_VERSION`, `abi/registry.rs`
+and `abi.ts` are untouched, and `pnpm test wasm -t "abi registry"` (part of every `pnpm test` run
+below) confirms this by construction.
+
+**`worker/atomics-timer.ts`**: `createAtomicsTimer()` no longer takes a `clock` (nothing left reads
+one). `poll()` calls its callback unconditionally on every wake while armed, no due-check;
+`timeoutMs()` always returns the fixed, already-integer `ms` it was armed with, or `Infinity`.
+
+**`server.ts`**: `RESYNC_TICKS = 8` (new export, alongside `MAX_CATCHUP_TICKS`/`WARM_BUDGET_MS`).
+`runOneTickTimed` is gone; `runOneTick` (unchanged) is now called by a new shared `runPacedTick`
+(one tick, `ticksSinceSync++`, resync every `RESYNC_TICKS`), which both `onFire` (armed pacing) and
+`stepTick(n)` call -- one accounting path for both a real session and `gc-sim.ts`'s own
+`stepSimTickSync`-driven coverage. `resync()` is the only function that reads `services.clock.now()`
+on the tick path; it also now owns `warm()`'s invocation (was every wake, now every resync window)
+and the `MAX_CATCHUP_TICKS` catch-up/drop logic (was per-wake, now per window). `base`/`pausedAt`
+are gone; `start()`/`resume()` reset `syncInitialized = false` instead, giving the next tick a fresh
+anchor (0030 §5).
+
+**Existing unit tests rewritten to match the new semantics** (`server.test.ts`), per the "if an
+existing test has to change, stop and report" rule -- not stopped on, because the orchestrator's own
+decision made this change explicit and expected ("with the semantics changing, that test matters
+more, not less"):
+- `simhost_paces_at_tick_rate` -> `simhost_paces_one_tick_per_fire`: proves every fire runs exactly
+  one tick unconditionally (the old assertion, "a fire before the next deadline runs nothing", is
+  the exact behaviour this milestone removed).
+- `simhost_paces_at_configured_tick_rate` -> `simhost_resync_reads_the_configured_tick_rate`: the
+  "20 Hz is hardcoded" gap stays closed, now proven at the resync level (a correctly-40-Hz-paced
+  host shows zero overrun/drop over one resync window, where a host still assuming 20 Hz would not).
+- `simhost_caps_catchup_and_drops_time` -> `simhost_resync_catches_up_and_drops_within_cap`: same
+  cap, same drop arithmetic, evaluated once per `RESYNC_TICKS`-tick window instead of once per fire.
+- `simhost_counts_tick_overrun`: kept its name, rewritten body -- one resync window overrunning by
+  less than a whole tick's worth still trips `tickOverruns` once, with nothing dropped.
+- `simhost_warmer_respects_budget`: needs `RESYNC_TICKS` fires to reach the one resync that now
+  calls `warm()`, instead of one fire.
+- `simhost_pause_stops_ticks`: assertions unchanged in substance, comment updated for the new
+  anchor-reset mechanism.
+- `simhost_seal_precedes_tick` and its `logSink`-not-called companion: unchanged (they drive
+  `stepTick`, whose call-order contract `runPacedTick`/`runOneTick` still honour exactly).
+
+**New test proving both counters live against the real `.wasm`, not a fake** (`tests/wasm/
+puts.test.ts`, per the brief's own Tests added: "M13 shipped these exercised only in unit tests;
+they must be real here"): `real overrun and drop increment tickOverruns/ticksDropped, driving the
+real .wasm` builds `wrapEngineInstance` over a real `fx-puts` `Role.Sim` instance (the same
+`scenario.json`/`loadFixture` machinery `wasm_idle_100_matches_native` already uses), drives it
+through `createSimHostFromInstance` with the identical scenario `server.test.ts`'s own
+`simhost_resync_catches_up_and_drops_within_cap` uses (only the clock/timer are doubles, as every
+`SimHost` caller supplies), and asserts the exact resulting counts -- then, on a second real
+instance paced exactly on schedule, that both counters read zero. A counter wired to a constant
+(0, or any other fixed value) would fail at least one of these four assertions.
+
+**Regression test pinning the tick loop as clock-free in JS** (Tests added's third bullet): not a
+separate test file -- `.claude/rules/hot-paths.md`'s own existing `no_ambient_random`-style
+convention doesn't reach `performance.now()` specifically, and a source-text grep test would be
+brittle against a legitimate future read inside `resync`/`start`/`resume`/`pause` (all rare,
+lifecycle-only, outside the strict window by design). The real regression proof is the zero-GC
+suite itself: `gc-sim-paced`'s own `sim clean` test (`budgets.json`'s `sim-paced.isolates.sim`,
+`bytesPerFrame: 8`, the un-widened strict figure) fails the instant a per-tick or per-wake clock
+read comes back, exactly as it did before this fix -- `pnpm test` running it on every commit is the
+regression guard, not a separate unit test asserting source shape.
+
+**Re-measured, both pages green** (`pnpm --filter engine build` + `vite build ...pages/vite.config.ts`
+first each time; bundle hashes changed, confirmed before trusting a number):
+- `pnpm gc -t "sim clean"`: passes (unchanged from before this milestone -- `gc-sim.ts` was restored
+  to its original M13 form in step 1's own correction and never touches `pace`).
+- `pnpm gc -t "sim-paced clean"`: passes. Hardware mode, 5 repeats (`--repeat-each 5 --workers 1`):
+  `sim` 3.73-3.81 B/frame, `byFn`'s only entry `resync@...` 1752-1800 B over 600 ticks (2.92-3.00
+  B/tick). Forced interpreter tier (`--no-opt --no-sparkplug`, temporary, reverted immediately):
+  `sim` 3.77 B/frame, `resync@...` 1800 B (3.00 B/tick) -- the same order of magnitude as hardware
+  mode, not the many-times-larger jump the pre-fix numbers showed; `poll`/`timeoutMs`/`onFire`/`now`/
+  `stepTick` do not appear anywhere in `byFn` under either mode, confirmed disappeared rather than
+  merely shrunk (the `armedLoop` bar the orchestrator asked for).
+- `pnpm gc software -t "sim-paced clean"` and `pnpm gc flat -t "sim clean"` / `"sim-paced clean"`:
+  all pass.
+- `pnpm test`: `rust 235`, `unit 154` (net unchanged: 3 tests replaced, not added, by the rewrite
+  above; +1 new one in `puts.test.ts` counted under `wasm` instead), `wasm 41` (+1), `browser 98`
+  (unchanged from step 1's own count -- `sim-paced`'s 3 fast-tier tests now pass instead of fail).
+  `pnpm lint`: biome, rustfmt, clippy, tsc all green.
+- `pnpm test:slow -t "sim-paced neg"` and `-t "sim neg"`: both pages' `@slow` burst controls
+  (`main`/`sim`, 2 each) pass.
+
+**Budget derived, not reused** (Order of work 5; `budgets.json`'s `gc.pages["sim-paced"]`): `main`
+unchanged from step 1 (21.45-21.49 B/frame measured with the actual fix now in place, same formula,
+`ceil` + 8 B = 30 -- confirmed still correct, not just carried over). `sim`'s row is the flat,
+un-widened strict figure of 8 (0016 §1, same as every other page's worker isolates), its `formula`
+string rewritten from "expected red" to the real post-fix numbers above, per 0020 §9.
+
+**Bookkeeping the `write-adr` skill asks for, explicitly not done here**: `PRE-PLAN.md` §1's ADR
+index, `PLAN.md`'s "Plan-level decisions", and the `docs/decisions/` range in the root `CLAUDE.md`
+context map are all outside a milestone implementer's "What you may edit" list (`PLAN.md` is
+explicitly on the "Never" list) -- left for the orchestrator. `grep -rln "tickOverruns\|
+ticksDropped\|MAX_CATCHUP_TICKS\|runOneTickTimed" docs/plan/*.md` found only this brief and M13's
+own (`docs/plan/13-sim-host-tick-loop.md`, not touched -- it is not mine to edit and the ADR amends
+it by citation, not by rewriting it); no other brief needs an update for this decision.
+
+Machine hygiene: `pgrep -x yes` and `lsof -ti tcp:4517`/`:4518` clean after every run in this
+session; no background process left running; the two temporary `playwright.config.ts` `--no-opt
+--no-sparkplug` edits (this range's own diagnostic measurements) were each reverted immediately
+after their one measurement, confirmed via `git diff`/`git status` before the next commit.

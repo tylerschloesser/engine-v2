@@ -9,6 +9,7 @@ import {
   buildSimInstanceConfig,
   createSimHostFromInstance,
   MAX_CATCHUP_TICKS,
+  RESYNC_TICKS,
   type SimInstance,
   seedToHexU64,
   WARM_BUDGET_MS,
@@ -60,32 +61,32 @@ function fakeSim(overrides: Partial<SimInstance> = {}): SimInstance {
   }
 }
 
-test('simhost_paces_at_tick_rate', () => {
+test('simhost_paces_one_tick_per_fire', () => {
+  // docs/plan/13b-tick-timing-allocation.md (ADR amending M13): pacing no longer checks a per-fire
+  // deadline against the clock at all (that check is what boxed on the strict isolate) -- every
+  // fire runs exactly one tick, unconditionally. Real accuracy is `resync`'s job, covered below;
+  // this test is the "fires unconditionally" half on its own, well under one resync window.
   const clock = manualClock()
   const timer = manualTimer()
   const host = createSimHostFromInstance(fakeSim(), { clock, timer: timer.services })
   host.start()
 
-  clock.advance(TICK_MS)
   timer.fire()
   expect(host.counters.ticksRun).toBe(1)
 
-  clock.advance(TICK_MS)
+  // No wall-clock advance at all between fires: still one tick per fire, proving there is no
+  // hidden due-check left (the old assertion this replaces, "a fire before the next deadline runs
+  // nothing", asserted the opposite on purpose -- that check is exactly what this milestone removed).
   timer.fire()
-  expect(host.counters.ticksRun).toBe(2)
+  timer.fire()
+  expect(host.counters.ticksRun).toBe(3)
   expect(host.counters.ticksDropped).toBe(0)
-
-  // A fire before the next deadline runs nothing.
-  clock.advance(TICK_MS / 2)
-  timer.fire()
-  expect(host.counters.ticksRun).toBe(2)
 })
 
-test('simhost_paces_at_configured_tick_rate', () => {
-  // "20 Hz is hardcoded" gap (Deviations): a fake instance reporting a non-20 rate must actually
-  // pace at that rate -- the point of this test is that it can fail. If `SimHost` still paced off
-  // the private 20 Hz constant this milestone removed, every assertion below using `HZ_MS` (25,
-  // not 50) would instead need twice as many `clock.advance(HZ_MS)` calls to run one tick.
+test('simhost_resync_reads_the_configured_tick_rate', () => {
+  // "20 Hz is hardcoded" gap (M13 Deviations), still closed: `resync`'s own expected-elapsed math
+  // (`ticksSinceSync * tickMs`) must use the real configured rate, not a hardcoded 50 ms, or a
+  // correctly-paced 40 Hz host would misreport every resync window as overrun.
   const HZ = 40
   const HZ_MS = 1000 / HZ // 25, an exact integer already (Math.round is a no-op here).
   const clock = manualClock()
@@ -96,40 +97,47 @@ test('simhost_paces_at_configured_tick_rate', () => {
   })
   host.start()
 
-  // Half of one 40 Hz interval: nothing due yet at 50 (20 Hz's own interval) either, so this
-  // alone would not distinguish the two rates -- the assertions below do.
-  clock.advance(HZ_MS / 2)
-  timer.fire()
-  expect(host.counters.ticksRun).toBe(0)
-
-  // The other half: one whole 40 Hz interval has now elapsed (25 ms total), well under 20 Hz's
-  // own 50 ms interval -- only a host actually paced at 40 Hz runs a tick here.
-  clock.advance(HZ_MS / 2)
-  timer.fire()
-  expect(host.counters.ticksRun).toBe(1)
-
-  clock.advance(HZ_MS)
-  timer.fire()
-  expect(host.counters.ticksRun).toBe(2)
+  // Exactly RESYNC_TICKS fires, the clock advancing by exactly HZ_MS between each -- a host paced
+  // correctly at the *configured* 40 Hz, not the old 20 Hz default (which would read this as
+  // running fast, never overrun, so this alone would not distinguish the two rates the way the
+  // overrun assertion below does).
+  for (let i = 0; i < RESYNC_TICKS; i++) {
+    clock.advance(HZ_MS)
+    timer.fire()
+  }
+  expect(host.counters.ticksRun).toBe(RESYNC_TICKS)
+  expect(host.counters.tickOverruns).toBe(0)
   expect(host.counters.ticksDropped).toBe(0)
 })
 
-test('simhost_caps_catchup_and_drops_time', () => {
+test('simhost_resync_catches_up_and_drops_within_cap', () => {
   const clock = manualClock()
   const timer = manualTimer()
   const host = createSimHostFromInstance(fakeSim(), { clock, timer: timer.services })
   host.start()
 
-  // A delayed wakeup: 10 ticks' worth of wall time elapse before the timer ever fires.
-  clock.advance(TICK_MS * 10)
-  timer.fire()
-  expect(host.counters.ticksRun).toBe(MAX_CATCHUP_TICKS)
-  expect(host.counters.ticksDropped).toBe(10 - MAX_CATCHUP_TICKS)
+  // RESYNC_TICKS fires, each assumed to cost TICK_MS with no clock read -- but wall time actually
+  // advances by 10x TICK_MS before each fire (10x more than budgeted per tick over the whole
+  // window), so the resync this triggers finds the window far behind schedule. The very first
+  // advance becomes the resync anchor itself (`ensureSyncBase` reads "now" at the first tick), so
+  // only the other RESYNC_TICKS - 1 advances count toward elapsed time against a budget of
+  // RESYNC_TICKS whole ticks: behind by (RESYNC_TICKS - 1) * 10 - RESYNC_TICKS = 62 ticks' worth.
+  for (let i = 0; i < RESYNC_TICKS; i++) {
+    clock.advance(TICK_MS * 10)
+    timer.fire()
+  }
 
-  // `base` moved forward by the dropped amount: with no further wall-clock advance, nothing is
-  // due on the very next fire.
-  timer.fire()
-  expect(host.counters.ticksRun).toBe(MAX_CATCHUP_TICKS)
+  // `RESYNC_TICKS` ticks already ran (one per fire, unconditionally) plus `MAX_CATCHUP_TICKS`
+  // caught up synchronously inside the resync; the remainder of the backlog is dropped.
+  const behindTicks = (RESYNC_TICKS - 1) * 10 - RESYNC_TICKS
+  expect(host.counters.ticksRun).toBe(RESYNC_TICKS + MAX_CATCHUP_TICKS)
+  expect(host.counters.ticksDropped).toBe(behindTicks - MAX_CATCHUP_TICKS)
+  expect(host.counters.tickOverruns).toBe(1)
+
+  // The resync anchor moved forward by everything it just accounted for: with no further
+  // wall-clock advance, the next RESYNC_TICKS fires find nothing behind schedule.
+  for (let i = 0; i < RESYNC_TICKS; i++) timer.fire()
+  expect(host.counters.ticksDropped).toBe(behindTicks - MAX_CATCHUP_TICKS)
 })
 
 test('simhost_seal_precedes_tick', () => {
@@ -178,7 +186,6 @@ test('simhost_pause_stops_ticks', () => {
   const host = createSimHostFromInstance(fakeSim(), { clock, timer: timer.services })
   host.start()
 
-  clock.advance(TICK_MS)
   timer.fire()
   expect(host.counters.ticksRun).toBe(1)
 
@@ -188,10 +195,11 @@ test('simhost_pause_stops_ticks', () => {
   expect(host.counters.ticksRun).toBe(1)
   expect(host.counters.ticksDropped).toBe(0)
 
-  // The paused interval is invisible to pacing: resuming and advancing one more interval runs
-  // exactly one tick, not a catch-up burst for the 5 intervals that elapsed while paused.
+  // The paused interval is invisible to pacing (Deviations: `resume()` resets the resync anchor):
+  // resuming runs exactly one tick on the next fire, never a catch-up burst for the 5 intervals
+  // that elapsed while paused. There is no per-fire due check left that could trigger one anyway;
+  // this only stays true because a resync (every RESYNC_TICKS ticks) never sees the paused span.
   host.resume()
-  clock.advance(TICK_MS)
   timer.fire()
   expect(host.counters.ticksRun).toBe(2)
   expect(host.counters.ticksDropped).toBe(0)
@@ -211,41 +219,48 @@ test('simhost_warmer_respects_budget', () => {
   const host = createSimHostFromInstance(sim, { clock, timer: timer.services })
   host.start()
 
-  clock.advance(TICK_MS)
-  timer.fire()
+  // The warmer now runs only at a resync (Deviations: amortised the same way the clock read is),
+  // so RESYNC_TICKS fires are needed to reach one.
+  for (let i = 0; i < RESYNC_TICKS; i++) {
+    clock.advance(TICK_MS)
+    timer.fire()
+  }
 
   expect(host.counters.chunksWarmed).toBe(WARM_BUDGET_MS)
   expect(warmCalls).toBe(host.counters.chunksWarmed)
 })
 
 test('simhost_counts_tick_overrun', () => {
+  // docs/plan/13b-tick-timing-allocation.md (ADR amending M13): an overrun is detected once per
+  // resync window, not per tick -- every tick in the window runs `OVERRUN_MS` over its own share,
+  // and the window's real elapsed time is only checked once, at the resync RESYNC_TICKS ticks in.
   const clock = manualClock()
   const timer = manualTimer()
   const OVERRUN_MS = 7
   const sim = fakeSim({
-    // The tick itself advances the fake clock past one interval, once.
     simTick: () => {
-      clock.advance(TICK_MS + OVERRUN_MS)
+      clock.advance(OVERRUN_MS)
       return Status.Ok
     },
   })
   const host = createSimHostFromInstance(sim, { clock, timer: timer.services })
   host.start()
-  const startedAt = clock.now()
 
-  clock.advance(TICK_MS)
+  // No advance before the first fire: it sets the resync anchor at wall time 0. Each of the other
+  // RESYNC_TICKS - 1 fires advances one full tick period first, same as real pacing would; every
+  // fire's own `simTick` adds `OVERRUN_MS` on top. Elapsed over the window is therefore
+  // `(RESYNC_TICKS - 1) * TICK_MS + RESYNC_TICKS * OVERRUN_MS` against a budget of
+  // `RESYNC_TICKS * TICK_MS` -- over by `RESYNC_TICKS * OVERRUN_MS - TICK_MS` = 8*7 - 50 = 6 ms,
+  // less than one whole tick, so this is an overrun with nothing behind by a full tick to drop.
   timer.fire()
+  for (let i = 1; i < RESYNC_TICKS; i++) {
+    clock.advance(TICK_MS)
+    timer.fire()
+  }
 
-  expect(host.counters.ticksRun).toBe(1)
+  expect(host.counters.ticksRun).toBe(RESYNC_TICKS)
   expect(host.counters.tickOverruns).toBe(1)
   expect(host.counters.ticksDropped).toBe(0)
-
-  // Sim time (one tick's worth) now falls behind wall time by exactly how long that one overrun
-  // tick actually took: `base` is never adjusted by an overrun (only a dropped catch-up tick
-  // moves it), so the deficit is `due`'s own formula, self-correcting on the next fire.
-  const wallElapsed = clock.now() - startedAt
-  const simElapsed = host.counters.ticksRun * TICK_MS
-  expect(wallElapsed - simElapsed).toBe(TICK_MS + OVERRUN_MS)
 })
 
 test('simhost_seed_decimal_to_hex_u64', () => {

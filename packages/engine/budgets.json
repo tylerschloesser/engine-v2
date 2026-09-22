@@ -193,13 +193,13 @@
           "main": {
             "class": "strict",
             "bytesPerFrame": 30,
-            "formula": "0016 §1's formula, no WebGPU adapter on this page (the 110 B floor does not apply), same shape as `topology`/`gen`'s own `main` row: `ceil(measured clean) + 8 B` margin, no attribution. Measured (`playwright test --project gc --grep \"sim clean\" --repeat-each 8 --workers 1`, this machine): an exact constant 21.4933 B/frame across all 8 clean runs (`windowBytes.main` identical every run: [13064, 12868-12920]). ceil(21.4933) = 22, + 8 B margin = 30. Found by this page: `wrapEngineInstance.simSealFrame` (`server.ts`) returned a fresh `{ len: 0 }` object literal on every call -- every tick this milestone ever runs, `sim_seal_frame` always returning 0 (Non-scope until M22) -- costing `sim` its own ~16 B/frame before the fix below made it a preallocated, mutated-in-place scratch object.",
+            "formula": "0016 \u00a71's formula, no WebGPU adapter on this page (the 110 B floor does not apply), same shape as `topology`/`gen`'s own `main` row: `ceil(measured clean) + 8 B` margin, no attribution. Measured (`playwright test --project gc --grep \"sim clean\" --repeat-each 8 --workers 1`, this machine): an exact constant 21.4933 B/frame across all 8 clean runs (`windowBytes.main` identical every run: [13064, 12868-12920]). ceil(21.4933) = 22, + 8 B margin = 30. Found by this page: `wrapEngineInstance.simSealFrame` (`server.ts`) returned a fresh `{ len: 0 }` object literal on every call -- every tick this milestone ever runs, `sim_seal_frame` always returning 0 (Non-scope until M22) -- costing `sim` its own ~16 B/frame before the fix below made it a preallocated, mutated-in-place scratch object.",
             "attributionRoots": ["drive"]
           },
           "sim": {
             "class": "strict",
             "bytesPerFrame": 8,
-            "formula": "0016 §1: the strict worker figure, same fixed number every other page's `client`/`gen0`/`sim` row uses. Measured: a constant 0.8133 B/frame across 8 clean runs, ticking for real every frame (`stepSimTickSync(client, 1)`) -- the fix noted in `main`'s own formula (a preallocated `simSealFrame` scratch object) is what got this isolate under budget at all; before it this row read ~16.8 B/frame.",
+            "formula": "0016 \u00a71: the strict worker figure, same fixed number every other page's `client`/`gen0`/`sim` row uses. Measured: a constant 0.8133 B/frame across 8 clean runs, ticking for real every frame (`stepSimTickSync(client, 1)`) -- the fix noted in `main`'s own formula (a preallocated `simSealFrame` scratch object) is what got this isolate under budget at all; before it this row read ~16.8 B/frame.",
             "attributionRoots": ["body"]
           }
         },
@@ -217,13 +217,13 @@
           "main": {
             "class": "strict",
             "bytesPerFrame": 30,
-            "formula": "0016 §1's formula, no WebGPU adapter on this page, same shape as `sim`'s own `main` row: `ceil(measured clean) + 8 B` margin, no attribution. Measured (`playwright test --project gc --grep \"sim-paced clean\" --repeat-each 4 --workers 1`, this machine): 21.45-21.49 B/frame across all runs (`drive()` here is `installGcPage`'s default, `stepFrame` + `harness.stepTick()`, not `gc-sim.ts`'s custom one, but lands on the same number since main's own work per frame is the same harness overhead either way). ceil(21.49) = 22, + 8 B margin = 30.",
+            "formula": "0016 \u00a71's formula, no WebGPU adapter on this page, same shape as `sim`'s own `main` row: `ceil(measured clean) + 8 B` margin, no attribution. Measured (`playwright test --project gc --grep \"sim-paced clean\" --repeat-each 4 --workers 1`, this machine): 21.45-21.49 B/frame across all runs (`drive()` here is `installGcPage`'s default, `stepFrame` + `harness.stepTick()`, not `gc-sim.ts`'s custom one, but lands on the same number since main's own work per frame is the same harness overhead either way). ceil(21.49) = 22, + 8 B margin = 30.",
             "attributionRoots": ["drive"]
           },
           "sim": {
             "class": "strict",
             "bytesPerFrame": 8,
-            "formula": "0016 §1: the strict worker figure, not to be widened (0028; the brief's own Budgets section). Expected red until docs/plan/13b-tick-timing-allocation.md's fix lands: this page arms `simHost.start()` for real (`test.flags.pace`) so `worker/atomics-timer.ts`'s `poll()`/`timeoutMs()` -- previously never exercised by any zero-GC page -- are measured for the first time. Deviations has the pre-fix numbers.",
+            "formula": "0016 \u00a71: the strict worker figure, same fixed number every other page's client/gen0/sim row uses, not to be widened (0028; the brief's own Budgets section). Measured after the fix (docs/plan/13b-tick-timing-allocation.md's resync-based timer, ADR amending M13): 3.73-3.81 B/frame across 5 repeats (`playwright test --project gc --grep \"sim-paced clean\" --repeat-each 5 --workers 1`, this machine), `byFn`'s only entry `resync@...` at 1752-1800 B over 600 ticks (2.92-3.00 B/tick, amortised over RESYNC_TICKS=8 as designed) -- `poll`/`timeoutMs`/`onFire`/`now` do not appear at all, confirmed disappeared rather than merely shrunk. Before the fix this page reproduced the defect (Deviations has the numbers, including under forced `--no-opt --no-sparkplug`: 3.77 B/frame, `resync@...` 1800 B, the same order of magnitude, confirming the fix holds under the interpreter tier too).",
             "attributionRoots": ["body"]
           }
         },

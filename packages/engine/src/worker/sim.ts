@@ -41,7 +41,10 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   const inst = await instantiateForSetup(shell, message, Role.Sim)
   const gcHook = message.test?.gcHook === true
 
-  const atomicsTimer = createAtomicsTimer(systemClock)
+  // `createAtomicsTimer()` no longer takes a clock (docs/plan/13b-tick-timing-allocation.md): it
+  // never reads one -- `systemClock` still reaches `SimHost` two lines below, which is the only
+  // clock read left on this worker's own tick path (amortised there, not per wake).
+  const atomicsTimer = createAtomicsTimer()
   const simHost = createSimHostFromInstance(wrapEngineInstance(inst), {
     clock: systemClock,
     timer: atomicsTimer.timer,
