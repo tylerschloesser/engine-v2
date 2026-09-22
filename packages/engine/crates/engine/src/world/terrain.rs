@@ -304,6 +304,16 @@ impl TerrainStore {
         }
     }
 
+    /// Monotonic count of chunks evicted (LRU or `replace_overlay`/`clear_overlay`) over this
+    /// store's lifetime, bumped whether or not [`TerrainStore::enable_cache_events`] was ever
+    /// called. A peek, not a drain: unlike [`TerrainStore::drain_cache_events`] (which
+    /// `client::upload`'s `Uploader::on_frame` already drains every frame), reading this never
+    /// consumes anything, so a second consumer in the same `frame()` call (`GenQueue::set_view`)
+    /// can compare it against its own last-seen value without starving the first.
+    pub fn cache_eviction_seq(&self) -> u64 {
+        self.cache.borrow().eviction_seq()
+    }
+
     /// Deterministic memory accounting (0007 §8, Planning decisions 11): the cache pool's reserved
     /// bytes plus the overlays' live entry bytes. Not an allocator measurement (`size_of`-based, so
     /// it is identical in every build).
@@ -430,6 +440,36 @@ mod tests {
         assert_eq!(s.tile(pos), before);
         assert_eq!(s.modified_tiles(), 0);
         assert!(s.overlay(chunk).is_none_or(|o| o.is_empty()));
+    }
+
+    /// M15c step 2: `replace_overlay`'s eviction (a host snapshot landing on an already-resident,
+    /// pristine-generated chunk -- the exact race in "The bug, confirmed at M15b's gate") must now
+    /// be observable the same way `materialize`'s own LRU eviction already is.
+    #[test]
+    fn replace_overlay_evicts_and_reports_cache_event() {
+        let mut s = store(CacheCapacity::Chunks(4));
+        s.enable_cache_events();
+        let chunk = ChunkCoord::new(0, 0);
+        s.materialize(chunk);
+        assert!(s.is_cached(chunk));
+        s.drain_cache_events(|_| {}); // discard the `Loaded` from `materialize`
+
+        let seq_before = s.cache_eviction_seq();
+        s.replace_overlay(chunk, &[(0, Tile::new(1, 0, 0))]);
+        assert!(
+            !s.is_cached(chunk),
+            "replace_overlay must still evict (0007 §1)"
+        );
+        assert_eq!(
+            s.cache_eviction_seq(),
+            seq_before + 1,
+            "cache_eviction_seq must bump even before anything drains the event queue"
+        );
+
+        let mut events = Vec::new();
+        s.drain_cache_events(|e| events.push(e));
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], CacheEvent::Evicted { chunk: c, .. } if c == chunk));
     }
 
     #[test]

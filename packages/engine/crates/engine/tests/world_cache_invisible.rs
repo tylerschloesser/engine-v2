@@ -71,6 +71,75 @@ fn cache_invisible_matrix() {
     assert_cache_invisible(run_script);
 }
 
+/// M15c step 2's own guard rail (Planning decisions: "a cache event that reaches any hash means the
+/// fix is wrong"). Interleaves `set_tile`, `replace_overlay` and `clear_overlay` -- so
+/// `evict_if_present`'s new `push_event` call and the always-on `eviction_seq` counter both fire --
+/// across two otherwise-identical stores, one with cache-event recording enabled and drained mid-run
+/// and one that never enables it. Final state hash and every tile read must agree regardless.
+#[test]
+fn cache_events_do_not_affect_any_hash() {
+    let dims = ChunkDims::new(5);
+    let seed = 0xCAFE_D00D_0000_0001u64;
+    let chunks: Vec<ChunkCoord> = (0..12).map(|i| ChunkCoord::new(i, -i)).collect();
+
+    let mut baseline = TerrainStore::new(
+        dims,
+        Box::new(engine::testing::TestTerrain::new(seed)),
+        engine::world::CacheCapacity::Chunks(4),
+    );
+    let mut with_events = TerrainStore::new(
+        dims,
+        Box::new(engine::testing::TestTerrain::new(seed)),
+        engine::world::CacheCapacity::Chunks(4),
+    );
+    with_events.enable_cache_events();
+
+    for (i, &chunk) in chunks.iter().enumerate() {
+        let local = (i as u32 % dims.area()) as u16;
+        let pos = dims.tile_at(chunk, local);
+        let tile = Tile::new((i as u8).wrapping_mul(7).wrapping_add(1), 1, i as u16);
+        let _ = baseline.set_tile(pos, tile);
+        let _ = with_events.set_tile(pos, tile);
+
+        if i % 3 == 0 {
+            let entries = [(local, tile)];
+            baseline.replace_overlay(chunk, &entries);
+            with_events.replace_overlay(chunk, &entries);
+        }
+        if i % 4 == 0 {
+            baseline.clear_overlay(chunk);
+            with_events.clear_overlay(chunk);
+        }
+        // Draining (or not draining) the event queue must never perturb state: only `with_events`
+        // has anything queued (opt-in), and this drains it every other step so both a drained and
+        // an undrained queue are exercised across the run.
+        if i % 2 == 0 {
+            with_events.drain_cache_events(|_| {});
+        }
+    }
+
+    let mut h1 = Fnv64::new();
+    baseline.hash_state(&mut h1);
+    let mut h2 = Fnv64::new();
+    with_events.hash_state(&mut h2);
+    assert_eq!(
+        h1.finish(),
+        h2.finish(),
+        "cache-event recording must not affect the state hash"
+    );
+
+    for &chunk in &chunks {
+        for local in 0..dims.area() as u16 {
+            let pos = dims.tile_at(chunk, local);
+            assert_eq!(
+                baseline.tile(pos),
+                with_events.tile(pos),
+                "cache-event recording must not affect reads, chunk {chunk:?} index {local}"
+            );
+        }
+    }
+}
+
 #[test]
 fn cache_invisible_insert_pristine_any_order() {
     let seed = 0x1234_5678_9abc_def0u64;
