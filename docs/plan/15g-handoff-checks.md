@@ -1,6 +1,6 @@
 # M15g: mechanical checks on `PROMPT.md`'s status block
 
-Status: not started · After: 15f · Tyler-dependent: no
+Status: done · After: 15f · Tyler-dependent: no
 
 ## Goal
 
@@ -99,14 +99,14 @@ the real sentence: a reference to `M15b` while `M15b` is ticked.
 
 ## Exit criteria
 
-- [ ] `scripts/lib/handoff.test.mjs` reproduces defects 1, 2 and 3 as fixtures and each check fails
+- [x] `scripts/lib/handoff.test.mjs` reproduces defects 1, 2 and 3 as fixtures and each check fails
       on its fixture and passes on the corrected version, with outputs pasted.
-- [ ] Each check is proved failable independently (inject, observe, revert), one per check.
-- [ ] `pnpm handoff` is quiet on success, one line per check, and exits non-zero on any failure.
-- [ ] The structural checks run inside `pnpm test`'s `unit` suite and pass on the current tree.
-- [ ] `PROMPT.md`'s current-ground figures are machine-readable, and the marker's shape is recorded
+- [x] Each check is proved failable independently (inject, observe, revert), one per check.
+- [x] `pnpm handoff` is quiet on success, one line per check, and exits non-zero on any failure.
+- [x] The structural checks run inside `pnpm test`'s `unit` suite and pass on the current tree.
+- [x] `PROMPT.md`'s current-ground figures are machine-readable, and the marker's shape is recorded
       in Deviations for the orchestrator to maintain.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 
@@ -239,3 +239,43 @@ expected of any substring `-t` pattern.
 `6daedf9` (step 3: `scripts/handoff.mjs`, `package.json`'s `handoff` script, the `PROMPT.md` marker).
 No step 2/4 commit: step 2's proof lives inside step 1's files (same commit); step 4 (re-verify
 against the four historical defects) needed no file change beyond what's recorded above.
+
+### Orchestrator's correction at the gate: defect 3 was my misdiagnosis, and coverage is 2 of 4
+
+The brief told you to catch "three of four". **It is two of four, and the error was mine, not the
+implementer's.** The implementer reported that defect 3's historical text "was actually
+paren-balanced by raw count" and used a synthetic fixture instead of the real bytes. That was the
+right call and it is worth spelling out why, because the way I produced the false defect is this
+session's own recurring lesson turned on myself.
+
+Checked at the gate, both sides of the fix commit:
+
+| commit | `PROMPT.md` parens |
+|---|---|
+| `e4e2c9d` (before the "fix") | 221 / 221 — balanced |
+| `0968273` (after) | 221 / 221 — balanced |
+
+Balanced per *status-block bullet* too, on both. **The counts were never wrong.** What I actually
+measured when I "found" the defect was an arbitrary 1,450-character window starting at `- **State:**`
+that cut off mid-sentence, and I reported the window's artefact as a property of the file. The real
+problem was prose: I had repurposed the opening paren of a clause, which left its closing paren
+reading as a stray `))`. That is a genuine edit defect and worth fixing — it is simply not a
+paren-count defect and no count check could find it.
+
+**So the honest scorecard is:** defect 1 (stale ground numbers) mechanised and verified live;
+defect 2 (a ticked milestone named as current/next) mechanised and verified live; defect 3
+misdiagnosed by me and not mechanisable as stated; defect 4 (prose about which session did what)
+out of reach as the brief already said. The parens check stays — it is nearly free and a genuinely
+unbalanced file is worth catching — but **its justification is "cheap always-true invariant", not
+"this caught a real defect", and it must not be cited as the latter.**
+
+Verified live at the gate by injection rather than from the fixtures:
+
+```
+milestones: STALE 1
+  M15f: ticked in PLAN.md, PROMPT.md says "M15f next"
+ground: STALE 1
+  unit: marker 157, actual 178
+```
+
+Both reverted, `git status` clean afterwards.
