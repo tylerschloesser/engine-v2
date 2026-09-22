@@ -311,10 +311,10 @@ impl Game for Puts {
         _who: PlayerId,
         a: &Action,
     ) -> Result<(), Reject> {
-        if let Action::Paint { pos, .. } = a {
-            if pos.x.abs() > PAINT_BOUND || pos.y.abs() > PAINT_BOUND {
-                return Err(Reject::OutOfRange);
-            }
+        if let Action::Paint { pos, .. } = a
+            && (pos.x.abs() > PAINT_BOUND || pos.y.abs() > PAINT_BOUND)
+        {
+            return Err(Reject::OutOfRange);
         }
         Ok(())
     }
