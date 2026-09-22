@@ -11,9 +11,15 @@
 //! shape `puts_idle_100` exercises directly, without this helper, by calling `step` in a bare
 //! loop).
 
-use crate::game::Game;
-use crate::sim::{Outcome, Record, Sim};
+use std::collections::VecDeque;
+
+use crate::client::{ClientCore, Replica};
+use crate::game::{Game, PlayerId};
+use crate::host::{ConnId, Host};
+use crate::sim::{Outcome, Record, Sim, WorldParams};
 use crate::time::Tick;
+use crate::wire::{CameraReport, UplinkWriter};
+use crate::world::{CacheCapacity, ChunkDims, PristineSource};
 
 pub fn run_script<G: Game>(sim: &mut Sim<G>, script: &[(Tick, Record<G>)]) -> u64
 where
@@ -38,4 +44,151 @@ where
         sim.step(&batch, &mut out);
     }
     sim.state_hash()
+}
+
+/// One [`Loopback`] client: a [`ClientCore`], its constant per-tick network delay, and the frames
+/// still in flight (docs/plan/15-connection-and-subscriptions.md Scope: "byte buffers, per-client
+/// delay in ticks"). `queue` holds one entry per `Loopback::step` so far this client hasn't drained
+/// yet -- an empty `Vec` stands for "no frame that tick" (`build_frame` returned 0), so delay is
+/// counted uniformly in ticks regardless of how often the host actually has something to say.
+struct LoopbackClient<G: Game> {
+    conn: ConnId,
+    core: ClientCore<G>,
+    delay: u32,
+    queue: VecDeque<Vec<u8>>,
+    /// The bytes `build_frame` produced for this client on the most recent `Loopback::step`
+    /// (empty if it returned 0): test/diagnostic convenience, independent of delivery delay.
+    last_built: Vec<u8>,
+}
+
+/// A native, byte-level loopback (Goal: "proven natively by a byte-level loopback"): one
+/// [`Host`], `K` [`ClientCore`]s, real wire bytes end to end (`Host::build_frame` ->
+/// `ClientCore::on_frame`, `UplinkWriter` -> `Host::on_uplink`), each client behind its own
+/// constant tick delay. Feature `testing`, dev-dependency use only, like every other type here.
+pub struct Loopback<G: Game> {
+    pub host: Host<G>,
+    clients: Vec<LoopbackClient<G>>,
+    /// Reused send buffer (`build_frame`'s own `out`); 64 KiB comfortably covers every frame this
+    /// milestone's own scenarios build (a `ChunkSnapshots`-heavy join burst included).
+    frame_buf: Vec<u8>,
+    uplink_buf: Vec<u8>,
+    /// Per-player action sequence counter, for [`Loopback::action`].
+    seqs: std::collections::BTreeMap<PlayerId, u32>,
+}
+
+impl<G: Game> Loopback<G>
+where
+    G::Global: Default,
+{
+    /// Builds a fresh `Host<G>` and runs `sim_genesis` (via the same `Sim::genesis` every other
+    /// native caller uses): no `Instance`/ABI plumbing, since that is 15b's (Non-scope here).
+    pub fn new(params: WorldParams<G>) -> Self {
+        Loopback {
+            host: Host::genesis_for_test(params),
+            clients: Vec::new(),
+            frame_buf: vec![0u8; 64 * 1024],
+            uplink_buf: vec![0u8; 512],
+            seqs: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// Testkit-only backdoor (`Host::queue_action_for_test`'s own doc comment): applies `action`
+    /// as `who`, delivered at the next `Loopback::step`. Auto-increments a per-player `seq`.
+    pub fn action(&mut self, who: PlayerId, action: G::Action) {
+        let seq = self.seqs.entry(who).or_insert(0);
+        *seq += 1;
+        self.host.queue_action_for_test(who, *seq, action);
+    }
+
+    pub fn last_built_frame(&self, i: usize) -> &[u8] {
+        &self.clients[i].last_built
+    }
+
+    pub fn last_build_frame_len(&self, i: usize) -> usize {
+        self.clients[i].last_built.len()
+    }
+
+    /// Connects a new client (`Host::connect`) and builds its `Replica` over its own pristine
+    /// terrain (client-side generation, M08b: "clients regenerate pristine terrain themselves").
+    /// Returns the client's index (`0..K`, in add order) and its assigned [`PlayerId`].
+    pub fn add_client(
+        &mut self,
+        delay_ticks: u32,
+        dims: ChunkDims,
+        source: Box<dyn PristineSource>,
+        cache: CacheCapacity,
+    ) -> (usize, PlayerId) {
+        let conn = self.clients.len() as ConnId;
+        let player = self.host.connect(conn);
+        let replica = Replica::<G>::new(dims, source, cache, player);
+        self.clients.push(LoopbackClient {
+            conn,
+            core: ClientCore::new(replica),
+            delay: delay_ticks,
+            queue: VecDeque::new(),
+            last_built: Vec::new(),
+        });
+        (self.clients.len() - 1, player)
+    }
+
+    pub fn client(&self, i: usize) -> &ClientCore<G> {
+        &self.clients[i].core
+    }
+
+    pub fn client_mut(&mut self, i: usize) -> &mut ClientCore<G> {
+        &mut self.clients[i].core
+    }
+
+    pub fn conn(&self, i: usize) -> ConnId {
+        self.clients[i].conn
+    }
+
+    /// Encodes a real `UplinkBatch` (0011) carrying only a fresh camera report and delivers it to
+    /// the host immediately (uplink has no modelled delay here: 0010's own budget is host-bound
+    /// download, and this milestone's `Tests added` name only downlink delay).
+    pub fn set_camera(&mut self, i: usize, report: CameraReport) {
+        use crate::bytes::SliceSink;
+        let conn = self.clients[i].conn;
+        let mut sink = SliceSink::new(&mut self.uplink_buf);
+        UplinkWriter::write(&mut sink, 0, core::iter::empty(), Some(report), None);
+        let n = sink.finish().expect("uplink buffer is generously sized");
+        let bytes = self.uplink_buf[..n].to_vec();
+        self.host.on_uplink(conn, &bytes);
+    }
+
+    /// Runs one tick end to end: `Host::tick`, a `build_frame` per client (queued behind that
+    /// client's delay), delivers every client's now-due frame, then `Host::seal`.
+    pub fn step(&mut self) {
+        self.host.tick();
+        for idx in 0..self.clients.len() {
+            let conn = self.clients[idx].conn;
+            let n = self.host.build_frame(conn, &mut self.frame_buf);
+            let bytes = if n > 0 {
+                self.frame_buf[..n].to_vec()
+            } else {
+                Vec::new()
+            };
+            self.clients[idx].last_built = bytes.clone();
+            self.clients[idx].queue.push_back(bytes);
+        }
+        self.host.seal();
+        for client in &mut self.clients {
+            while client.queue.len() > client.delay as usize {
+                let bytes = client.queue.pop_front().expect("just checked len");
+                if !bytes.is_empty() {
+                    client
+                        .core
+                        .on_frame(&bytes)
+                        .expect("Loopback bytes are host-produced and well-formed");
+                }
+            }
+        }
+    }
+
+    /// Runs `n` ticks with no camera changes (`Loopback::step` alone).
+    pub fn run(&mut self, n: u32) {
+        for _ in 0..n {
+            self.step();
+        }
+    }
 }

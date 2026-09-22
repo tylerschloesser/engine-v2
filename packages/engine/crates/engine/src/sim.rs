@@ -167,4 +167,13 @@ impl<G: Game> Sim<G> {
     pub fn authority(&self) -> &Authority<G> {
         &self.authority
     }
+
+    /// Mutable access, additive beyond this milestone's own Provides (docs/plan/
+    /// 15-connection-and-subscriptions.md Deviations): `host::Host::seal` clears the just-built
+    /// tick's `ChangeLog` (`Authority::clear_changes`) once every connection's frame has read it,
+    /// which needs `&mut Authority<G>` from outside this module -- `Authority::clear_changes`
+    /// itself was already `pub`, just previously unreachable from `Host` without this accessor.
+    pub fn authority_mut(&mut self) -> &mut Authority<G> {
+        &mut self.authority
+    }
 }

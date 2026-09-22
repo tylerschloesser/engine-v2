@@ -56,3 +56,8 @@ required-features = ["testing"]
 [[test]]
 name = "worldgen_core"
 required-features = ["testing"]
+
+# `engine::testing::testkit::Loopback` (feature `testing`), same reasoning as `codec` above.
+[[test]]
+name = "connection_and_subscriptions"
+required-features = ["testing"]

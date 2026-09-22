@@ -15,6 +15,7 @@ pub use cache_matrix::{
     CacheConfig, CountingHandle, CountingSource, DEFAULT_CACHE_CHUNKS, Prewarm, TestTerrain,
     assert_cache_invisible, prewarm_chunks,
 };
+pub use testkit::{Loopback, run_script};
 pub use worldgen_contract::assert_worldgen_contract;
 
 #[derive(serde::Deserialize)]

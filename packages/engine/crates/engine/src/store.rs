@@ -141,6 +141,17 @@ impl<G: Game> Store<G> {
         &self.terrain
     }
 
+    /// Mutable terrain access, additive beyond [`Store::apply`] (docs/plan/
+    /// 15-connection-and-subscriptions.md Deviations): a client replica applies a chunk snapshot
+    /// or leave through `TerrainStore::{replace_overlay, clear_overlay}` directly, and a
+    /// `ChunkDeltas` tile through `TerrainStore::set_tile` -- none of these is a `Delta<G>` variant
+    /// (a snapshot/leave is 0011's own mechanism, distinct from the puts a `Delta` records), so
+    /// `Store::apply` is not the seam for them. Every *replicated* (`Delta`-carried) mutation still
+    /// goes only through `Store::apply` on both sides of the wire, exactly as before.
+    pub fn terrain_mut(&mut self) -> &mut TerrainStore {
+        &mut self.terrain
+    }
+
     pub fn entity_count(&self) -> u32 {
         self.entities.len() as u32
     }
