@@ -113,7 +113,6 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       if (readCameraBlockInto(cameraReader, cameraRegion.u8, 0)) {
         inst.call1(inst.x.frame, FRAME_ARG)
       }
-      Atomics.store(shell.control.words, workerWord(shell.index, W_ACK), frameReq)
     }
     if (actionRing && uiRing && rx && tx) {
       const len = actionRing.popInto(rx.u8, 0)
@@ -134,6 +133,18 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     genPump.pump()
     uploadPump.pump()
     inputPump.pump()
+    // `W_ACK` is stored last, after every pump (not right after the `frame()` block, M09b's own
+    // original spot): `stepFrame`'s own spin and `untilQuiescent`'s `W_ACK === CB_FRAME_REQ` check
+    // both use this as "this wake's work is done" -- if it fires as soon as `frame()` returns, a
+    // caller can observe the ack (and, for `untilQuiescent`, an as-yet-untouched uplink ring, which
+    // reads as trivially "drained") *before* `netPump.pump()` -- later in this same function, but a
+    // separate statement Atomics can race a cross-thread reader on -- has actually produced and
+    // pushed this wake's own uplink batch. Storing the same `frameReq` value here instead (every
+    // wake, not only one where it changed: idempotent when it didn't) closes that window: by the
+    // time a caller sees the ack, this whole body() pass, `netPump` included, has finished. Found by
+    // `hidden_tab_sends_no_camera_report` failing 7/15 (`connected-terrain.spec.ts`): `bytesUp` had
+    // not grown by the time `netCounters` was read after `__advance`'s own `await stepTick(...)`.
+    Atomics.store(shell.control.words, workerWord(shell.index, W_ACK), frameReq)
   }
 
   // `engine/test`'s `callParked` reaches `client_gen_stats`/`client_chunk_hash` (this instance's
