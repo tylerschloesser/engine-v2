@@ -23,6 +23,11 @@ declare global {
      * `fixtures/puts/src/lib.rs`): the one deterministic way this fixture ever produces a
      * `Rejected` result. */
     __dispatchBumpNothing?: (x: number, y: number) => number
+    /** `add-action-type` skill exercise (docs/plan/16-action-round-trip.md step 7): `SetMotd` is
+     * an existing global-scoped action (`fixtures/puts/src/lib.rs`); dispatching it here proves
+     * the skill's steps end to end without touching the fixture's own Rust at all. Returns its
+     * `seq`; always `Confirmed` (`Puts::apply`'s `SetMotd` arm never rejects). */
+    __dispatchSetMotd?: (n: number) => number
     __confirmed?: number
     __rejected?: number
     __stepTick?: (n: number) => Promise<void>
@@ -73,6 +78,10 @@ window.__dispatchPaint = (x, y) => {
 }
 window.__dispatchBumpNothing = (x, y) => {
   const action: Action = { Bump: { at: { x, y } } }
+  return client.dispatch(action)
+}
+window.__dispatchSetMotd = (n) => {
+  const action: Action = { SetMotd: { n } }
   return client.dispatch(action)
 }
 window.__stepTick = (n) => stepTick(client, n)
