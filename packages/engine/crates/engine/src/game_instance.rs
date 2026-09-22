@@ -12,10 +12,11 @@ use crate::abi::config::HexU64;
 use crate::abi::{Instance, RegionId, RegionLayout, Role, Status};
 use crate::client::upload::RECORD_BYTES;
 use crate::client::{
-    CameraBlock, ClientCore, DirtyEvent, InputEvent, InputQueue, TerrainFeed, Uploader,
+    ActionError, CameraBlock, ClientCore, DirtyEvent, InputEvent, InputQueue, TerrainFeed, Uploader,
 };
 use crate::game::{Game, PlayerId};
 use crate::host::Host;
+use crate::sim::{Applied, Rejected};
 use crate::world::{CacheCapacity, ChunkCoord, ChunkDims};
 use crate::worldgen::{GenCore, Pristine, Worldgen};
 
@@ -23,6 +24,19 @@ use crate::worldgen::{GenCore, Pristine, Worldgen};
 /// docs/plan/11-camera-and-input.md): whatever the client worker's input-drain pump might hand
 /// `on_input` in one call is bounded by `InputQueue::CAPACITY` whole records.
 const INPUT_RX_BYTES: usize = InputQueue::CAPACITY * InputEvent::BYTES;
+/// One action-ring record's own worst case (docs/plan/16-action-round-trip.md Scope: `[seq u32
+/// LE][len u32 LE][UTF-8 JSON]`): the 8-byte header plus generous headroom for the JSON. `on_input`
+/// and `on_action` are different message kinds sharing one `Rx` region (the client role's single
+/// receive buffer, `RegionId::region`'s own "one declaration per id" rule) -- declared at
+/// whichever of the two is larger, so neither caller's record can ever overrun it.
+const ACTION_RX_BYTES: usize = 1024;
+/// `RegionId::Ui`'s size on the client role: at most `client::core::OUTBOX_CAPACITY` action-result
+/// records can be outstanding between two `client_poll_ui` polls (one per dispatched action, 0012's
+/// own pending-queue figure), each comfortably under 128 bytes of JSON
+/// (`{"seq":4294967295,"result":{"Rejected":<reject>}}` plus a generous reject payload). Provisional,
+/// like every other region size in this file: a real per-frame UI-ring budget is a later
+/// milestone's (M16b's `onUi` shares this region as record kind 1).
+const UI_BYTES: u32 = (crate::client::OUTBOX_CAPACITY * 128) as u32;
 /// `RegionId::Downlink`'s size on the client role (docs/plan/
 /// 15b-ring-connection-and-replica-rendering.md): must hold the largest frame `host::Host::
 /// build_frame` can ever produce, matching `host::mod`'s own `SIM_TX_BYTES` -- duplicated here
@@ -39,6 +53,37 @@ const CLIENT_UPLINK_BYTES: u32 = 4096;
 const MAX_STAGE_BATCH: u32 = 16;
 /// 0007 §8's host/client cache budget default (1,024 chunks = 4 MiB at the default chunk size).
 const DEFAULT_CACHE_CHUNKS: u32 = 1024;
+
+/// Kind byte for a UI-ring `ActionResults` record (docs/plan/16-action-round-trip.md Scope:
+/// "`[kind u8 = 2][len][JSON ...]`"). Kind 1 (`Ui`, `G::Ui` changed) is M16b's, sharing this same
+/// region.
+const UI_RECORD_KIND_ACTION_RESULT: u8 = 2;
+
+/// Appends one `[kind u8 = 2][len u32 LE][JSON]` record to `buf` for one decoded `ActionResults`
+/// entry (docs/plan/16-action-round-trip.md Scope): `{"seq":n,"result":"Confirmed"}` or
+/// `{"seq":n,"result":{"Rejected":<reason>}}`, where `<reason>` is `G::Reject`'s or
+/// `EngineReject`'s own `serde_json` output directly -- `Rejected<G>`'s two variants (`Game`,
+/// `Engine`) both read as this one `"Rejected"` shape, never a further `{"Game":..}`/`{"Engine":
+/// ..}` wrapper. Human-rate (called once per drained action outcome): allocates a `String`, the
+/// same exemption `ClientCore::on_action` already relies on (0016 §2).
+fn push_result_record<G: Game>(buf: &mut Vec<u8>, seq: u32, result: &Result<Applied, Rejected<G>>) {
+    let json = match result {
+        Ok(Applied) => format!("{{\"seq\":{seq},\"result\":\"Confirmed\"}}"),
+        Err(Rejected::Game(reject)) => {
+            let reason = serde_json::to_string(reject)
+                .expect("G::Reject is plain data (Codec): JSON encoding cannot fail");
+            format!("{{\"seq\":{seq},\"result\":{{\"Rejected\":{reason}}}}}")
+        }
+        Err(Rejected::Engine(code)) => {
+            let reason = serde_json::to_string(code)
+                .expect("EngineReject is plain data: JSON encoding cannot fail");
+            format!("{{\"seq\":{seq},\"result\":{{\"Rejected\":{reason}}}}}")
+        }
+    };
+    buf.push(UI_RECORD_KIND_ACTION_RESULT);
+    buf.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    buf.extend_from_slice(json.as_bytes());
+}
 
 fn default_gen_workers() -> u32 {
     1
@@ -89,6 +134,12 @@ pub struct ClientInstance<G: Game> {
     feed: TerrainFeed,
     uploader: Box<Uploader<G::Client, G>>,
     input_queue: Box<InputQueue>,
+    /// UI-ring bytes staged since the last `client_poll_ui` (docs/plan/16-action-round-trip.md
+    /// Scope): kind-2 (`ActionResults`) records only this milestone; M16b's `onUi` adds kind 1
+    /// into the same buffer. Appended to by `on_frame` (one record per `ClientCore::drain_
+    /// results` entry), copied out and cleared by `client_poll_ui`. Grows only on an action
+    /// result (human rate, 0016 §2's exemption), never on a per-frame path.
+    ui_buf: Vec<u8>,
 }
 
 impl<G: Game> ClientInstance<G> {
@@ -101,9 +152,10 @@ impl<G: Game> ClientInstance<G> {
         let dims = ChunkDims::new(G::CHUNK_BITS);
         layout.region(RegionId::GenIn, TerrainFeed::gen_in_bytes(dims) as u32);
         layout.region(RegionId::ChunkTexels, MAX_STAGE_BATCH * RECORD_BYTES as u32);
-        layout.region(RegionId::Rx, INPUT_RX_BYTES as u32);
+        layout.region(RegionId::Rx, INPUT_RX_BYTES.max(ACTION_RX_BYTES) as u32);
         layout.region(RegionId::Downlink, CLIENT_DOWNLINK_BYTES);
         layout.region(RegionId::Tx, CLIENT_UPLINK_BYTES);
+        layout.region(RegionId::Ui, UI_BYTES);
         let source = Pristine::<G::Worldgen>::new(cfg.seed.0, cfg.params);
         // Single-connection assumption (docs/plan/15b-ring-connection-and-replica-rendering.md,
         // Planning decisions "PlayerId = conn + 1, not conn"): this milestone's own topology never
@@ -131,6 +183,7 @@ impl<G: Game> ClientInstance<G> {
             feed,
             uploader,
             input_queue: Box::new(InputQueue::new()),
+            ui_buf: Vec::new(),
         })
     }
 }
@@ -362,12 +415,22 @@ where
     fn on_frame(&mut self, bytes: &[u8]) -> Status {
         match self {
             GameInstance::Client(c) => {
-                let ClientInstance { core, uploader, .. } = c;
+                let ClientInstance {
+                    core,
+                    uploader,
+                    ui_buf,
+                    ..
+                } = c;
                 match core.on_frame(bytes) {
                     Ok(_summary) => {
                         core.replica_mut().drain_dirty_for_upload(|e| match e {
                             DirtyEvent::Whole(chunk) => uploader.enqueue_chunk(chunk),
                             DirtyEvent::Tile(pos, tile) => uploader.patch_tile(pos, tile),
+                        });
+                        // docs/plan/16-action-round-trip.md Scope: "on_frame reads ActionResults
+                        // and writes one result record per entry to RegionId::Ui".
+                        core.drain_results(|seq, result| {
+                            push_result_record::<G>(ui_buf, seq, result);
                         });
                         Status::Ok
                     }
@@ -382,6 +445,38 @@ where
     fn client_poll_uplink(&mut self, t_ms: u32, out: &mut [u8]) -> usize {
         match self {
             GameInstance::Client(c) => c.core.poll_uplink(t_ms, out),
+            _ => 0,
+        }
+    }
+
+    /// docs/plan/16-action-round-trip.md: `ClientCore::on_action`. `Status::Decode` on a
+    /// malformed ring record; `Status::OutOfMemory` when the outbox is already at capacity
+    /// (`client::ActionError`'s two variants -- untrusted/backstop cases only, since the ring
+    /// producer on main is expected to enforce both before ever writing a record here).
+    fn on_action(&mut self, rx: &[u8]) -> Status {
+        match self {
+            GameInstance::Client(c) => match c.core.on_action(rx) {
+                Ok(()) => Status::Ok,
+                Err(ActionError::Malformed) => Status::Decode,
+                Err(ActionError::Full) => Status::OutOfMemory,
+            },
+            _ => Status::Unsupported,
+        }
+    }
+
+    /// docs/plan/16-action-round-trip.md: copies `ui_buf` (staged by `on_frame`) into `out`,
+    /// clearing it -- the "always answer, cost nothing" shape `upload_stage`/`gen_take` already
+    /// use, no `Status`. `out` is `RegionId::Ui`'s whole capacity (`UI_BYTES`, sized for
+    /// `OUTBOX_CAPACITY` outstanding results): silently truncates like `Host::build_frame`'s own
+    /// `SliceSink` convention if a caller ever exceeds that (Non-scope here to plumb further).
+    fn client_poll_ui(&mut self, out: &mut [u8]) -> usize {
+        match self {
+            GameInstance::Client(c) => {
+                let n = c.ui_buf.len().min(out.len());
+                out[..n].copy_from_slice(&c.ui_buf[..n]);
+                c.ui_buf.clear();
+                n
+            }
             _ => 0,
         }
     }
@@ -413,5 +508,154 @@ where
             GameInstance::Sim(h) => h.sim_conn_counters(conn, result),
             _ => Status::WrongRole,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::abi::RegionLayout;
+    use crate::game::{PlayerEvent, TickCx, Unknown, WorldWrite};
+    use crate::sim::Outcome;
+    use crate::wire::{ActionResultsWriter, FrameHeader, FrameWriter, SectionId};
+    use crate::world::{PrototypeId, Registry, Tile, TilePos};
+
+    #[derive(
+        Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, ts_rs::TS,
+    )]
+    struct GAction {
+        n: u32,
+    }
+    #[derive(
+        Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, ts_rs::TS,
+    )]
+    enum GReject {
+        NotFound,
+    }
+    impl From<Unknown> for GReject {
+        fn from(_: Unknown) -> Self {
+            GReject::NotFound
+        }
+    }
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct GEntity;
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct GPlayer;
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct GGlobal;
+
+    struct GWorldgen;
+    impl Worldgen for GWorldgen {
+        type Params = ();
+        const WORLDGEN_VERSION: u32 = 0;
+        fn generate(_seed: u64, _params: &(), _chunk: ChunkCoord, out: &mut [Tile]) {
+            out.fill(Tile::VOID);
+        }
+    }
+
+    struct TestGame;
+    impl Game for TestGame {
+        const SCHEMA_VERSION: u32 = 1;
+        type Worldgen = GWorldgen;
+        type Action = GAction;
+        type Reject = GReject;
+        type Entity = GEntity;
+        type Player = GPlayer;
+        type Global = GGlobal;
+        type Presence = ();
+        type Ui = ();
+        type Client = ();
+        fn register(_r: &mut Registry) {}
+        fn prototype(_e: &GEntity) -> PrototypeId {
+            PrototypeId(0)
+        }
+        fn anchor(_e: &GEntity) -> TilePos {
+            TilePos::new(0, 0)
+        }
+        fn genesis(_w: &mut dyn WorldWrite<Self>) {}
+        fn on_player(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _ev: PlayerEvent) {}
+        fn apply(
+            _w: &mut dyn WorldWrite<Self>,
+            _who: PlayerId,
+            _a: &GAction,
+        ) -> Result<(), GReject> {
+            Ok(())
+        }
+        fn tick(_cx: &mut TickCx<'_, Self>) {}
+    }
+
+    fn client_instance() -> GameInstance<TestGame> {
+        let mut layout = RegionLayout::new();
+        GameInstance::<TestGame>::init(
+            Role::Client,
+            r#"{"seed":"0x1","params":null,"genWorkers":1,"cacheChunks":1024}"#,
+            &mut layout,
+        )
+        .unwrap()
+    }
+
+    fn frame_with_results(outcomes: &[Outcome<TestGame>]) -> Vec<u8> {
+        let mut buf = [0u8; 512];
+        let mut sink = crate::bytes::SliceSink::new(&mut buf);
+        let mut fw = FrameWriter::new(
+            &mut sink,
+            FrameHeader {
+                tick: 1,
+                ack_seq: 1,
+            },
+        );
+        fw.section(SectionId::ActionResults, |s| {
+            ActionResultsWriter::write::<TestGame>(s, outcomes.iter());
+        });
+        let n = sink.finish().unwrap();
+        buf[..n].to_vec()
+    }
+
+    /// docs/plan/16-action-round-trip.md: the exact `client_poll_ui` JSON for a `Confirmed` and a
+    /// `Rejected` outcome, byte for byte -- `[kind u8 = 2][len u32 LE][JSON]`.
+    #[test]
+    fn client_poll_ui_produces_confirmed_and_rejected_json() {
+        let mut inst = client_instance();
+
+        let confirmed = vec![Outcome {
+            seq: 1,
+            result: Ok(Applied),
+        }];
+        assert_eq!(inst.on_frame(&frame_with_results(&confirmed)), Status::Ok);
+        let mut ui_out = [0u8; 256];
+        let n = inst.client_poll_ui(&mut ui_out);
+        assert!(n > 0, "a Confirmed result must produce a UI record");
+        assert_eq!(ui_out[0], 2, "kind byte: ActionResults record");
+        let len = u32::from_le_bytes(ui_out[1..5].try_into().unwrap()) as usize;
+        let json = std::str::from_utf8(&ui_out[5..5 + len]).unwrap();
+        assert_eq!(json, r#"{"seq":1,"result":"Confirmed"}"#);
+
+        let rejected = vec![Outcome {
+            seq: 2,
+            result: Err(Rejected::Game(GReject::NotFound)),
+        }];
+        assert_eq!(inst.on_frame(&frame_with_results(&rejected)), Status::Ok);
+        let n2 = inst.client_poll_ui(&mut ui_out);
+        assert!(n2 > 0, "a Rejected result must produce a UI record");
+        let len2 = u32::from_le_bytes(ui_out[1..5].try_into().unwrap()) as usize;
+        let json2 = std::str::from_utf8(&ui_out[5..5 + len2]).unwrap();
+        assert_eq!(json2, r#"{"seq":2,"result":{"Rejected":"NotFound"}}"#);
+
+        // Drained: nothing left to poll once no new frame has been applied.
+        let n3 = inst.client_poll_ui(&mut ui_out);
+        assert_eq!(n3, 0);
+    }
+
+    #[test]
+    fn on_action_parses_a_valid_record_and_rejects_a_malformed_one() {
+        let mut inst = client_instance();
+        let mut record = Vec::new();
+        record.extend_from_slice(&1u32.to_le_bytes());
+        let json = r#"{"n":7}"#;
+        record.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        record.extend_from_slice(json.as_bytes());
+        assert_eq!(inst.on_action(&record), Status::Ok);
+
+        assert_eq!(inst.on_action(&[1, 2, 3]), Status::Decode);
     }
 }

@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 10
+export const ABI_VERSION = 11
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -133,6 +133,15 @@ export const ABI_EXPORTS = {
   // ConnCounters` for `conn`, little-endian into `Result` (48 bytes: six `u64` fields,
   // `bytes_down, frames, chunk_enters_pristine, chunk_snapshots, chunk_leaves, bytes_up`).
   sim_conn_counters: { role: 'sim', params: 1, result: 'status' },
+  // docs/plan/16-action-round-trip.md: parses one action-ring record (`[seq u32 LE][len u32
+  // LE][UTF-8 JSON]`) out of `len` bytes of `RegionId.Rx` (shared with `on_input`'s own,
+  // differently-shaped records) into the game's `Action`, queues it for the next uplink batch.
+  // `Status.Decode` on a malformed record, `Status.OutOfMemory` when the outbox is already full.
+  on_action: { role: 'client', params: 1, result: 'status' },
+  // docs/plan/16-action-round-trip.md: copies at most one batch of UI-ring records (kind 2,
+  // `ActionResults` turned into JSON) into `RegionId.Ui`, returning the byte count (`0` = nothing
+  // new; not a `Status`, same shape as `client_poll_uplink`/`upload_stage`).
+  client_poll_ui: { role: 'client', params: 0, result: 'u32' },
 } as const satisfies Record<string, ExportSpec>
 
 export function statusName(n: number): string {

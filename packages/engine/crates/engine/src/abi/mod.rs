@@ -398,6 +398,33 @@ pub fn client_region_hash<T: Instance>(slot: &Slot<T>) -> Status {
     rt.inst.client_region_hash(result)
 }
 
+/// `on_action(len) -> status`: `len` bytes of `Rx` are one action-ring record (docs/plan/
+/// 16-action-round-trip.md; `Instance::on_action`'s own doc comment has the exact shape). `Rx` is
+/// read through a raw pointer taken before `Instance::on_action` runs, the same deferred-borrow
+/// shape `on_input`/`on_frame` already use for their own receive regions.
+pub fn on_action<T: Instance>(slot: &Slot<T>, len: u32) -> Status {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    match rt.layout.bytes(RegionId::Rx).get(..len as usize) {
+        Some(rx) => rt.inst.on_action(rx),
+        None => Status::BadLength,
+    }
+}
+
+/// `client_poll_ui() -> len`: copies at most one batch of UI-ring records into the whole `Ui`
+/// region, same "always answer, cost nothing" shape as `upload_stage` -- no `Status` crosses here
+/// either (docs/plan/16-action-round-trip.md).
+pub fn client_poll_ui<T: Instance>(slot: &Slot<T>) -> u32 {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(_) => return 0,
+    };
+    let out = rt.layout.bytes_mut(RegionId::Ui);
+    rt.inst.client_poll_ui(out) as u32
+}
+
 /// `sim_conn_counters(conn) -> status`: `host::ConnCounters` for `conn`, little-endian into
 /// `Result` (`Instance::sim_conn_counters`'s own doc comment names the field order and byte
 /// count). `engine/test`-only (`netCounters`).

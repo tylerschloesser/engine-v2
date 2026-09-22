@@ -74,8 +74,10 @@ pub enum Rejected<G: Game> {
 
 /// 0004 Decision, verbatim: `RateLimited` (admission, never reaches `apply`), `StateBudgetFull`
 /// (0007 §8's check), `EngineFault` (0005 skip-record recovery). None is produced by this
-/// milestone (docs/plan/12b-world-access-and-sim-driver.md Non-scope).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// milestone (docs/plan/12b-world-access-and-sim-driver.md Non-scope). `Serialize` (docs/plan/
+/// 16-action-round-trip.md): a rejected action's result JSON (`client.onActionResult`) needs to
+/// encode this half of `Rejected<G>` exactly like `G::Reject`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize)]
 pub enum EngineReject {
     RateLimited,
     StateBudgetFull,

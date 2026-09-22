@@ -13,7 +13,7 @@ pub mod texel;
 pub mod upload;
 
 pub use camera::CameraBlock;
-pub use core::{ClientCore, FrameSummary};
+pub use core::{ActionError, ClientCore, FrameSummary, OUTBOX_CAPACITY};
 pub use input::{InputEvent, InputQueue};
 pub(crate) use replica::DirtyEvent;
 pub use replica::Replica;

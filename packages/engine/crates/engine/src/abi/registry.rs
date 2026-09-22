@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 10;
+pub const ABI_VERSION: u32 = 11;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -313,6 +313,27 @@ pub trait Instance: Sized + 'static {
     fn sim_conn_counters(&mut self, _conn: u32, _result: &mut [u8]) -> Status {
         Status::Unsupported
     }
+
+    /// docs/plan/16-action-round-trip.md: parses one action-ring record (`[seq u32 LE][len u32
+    /// LE][UTF-8 JSON]`) out of `rx` -- the first `len` bytes of `Rx`, shared with `on_input`'s
+    /// own, differently-shaped records (a different message kind on the same client-role receive
+    /// buffer) -- into `G::Action` (`serde_json`), re-encodes it with `Codec` and queues it for
+    /// the next uplink batch (`client::ClientCore::on_action`). `Status::Decode` on a malformed
+    /// record; `Status::OutOfMemory` when the outbox is already full (0012's pending-queue
+    /// figure) -- a backstop only, since the caller's own ring/seq bookkeeping is expected to
+    /// prevent that before ever calling this.
+    fn on_action(&mut self, _rx: &[u8]) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/16-action-round-trip.md: copies at most one batch of UI-ring records into `out`
+    /// (the whole `Ui` region) -- kind 2, `ActionResults` turned into JSON by `client::ClientCore
+    /// ::drain_results` -- returning the byte count. `0` when there is nothing new: the same
+    /// "always answer, cost nothing" shape as `client_poll_uplink`/`upload_stage`/`gen_take`, no
+    /// `Status` crosses here either.
+    fn client_poll_ui(&mut self, _out: &mut [u8]) -> usize {
+        0
+    }
 }
 
 /// Emits every export for every role, the `#[global_allocator]`, and the single-threaded instance
@@ -440,6 +461,14 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_conn_counters(conn: u32) -> u32 {
             $crate::abi::sim_conn_counters(&__ENGINE_SLOT, conn) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn on_action(len: u32) -> u32 {
+            $crate::abi::on_action(&__ENGINE_SLOT, len) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_poll_ui() -> u32 {
+            $crate::abi::client_poll_ui(&__ENGINE_SLOT)
         }
 
         // gen
