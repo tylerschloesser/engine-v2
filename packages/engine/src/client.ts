@@ -305,6 +305,15 @@ export interface ClientTestHandle {
    * measured window (0016 §2). Returns `false` (nothing written) when the record cannot fit the
    * ring right now, the same "full" condition `dispatch` itself throws on. */
   writeActionRecord(seq: number, jsonBytes: Uint8Array): boolean
+  /** docs/plan/16-action-round-trip.md, gate-round fix: resolves once every spawned worker has
+   * posted its own `{ type: 'ready' }` -- `ready`'s own earlier, `start()`-only phase, well before
+   * `ready` itself (which, for a linked topology, also waits for `session_state = 1`). The one
+   * thing safe to await before calling anything that blocks the main thread on a worker's own ack
+   * (`stepSimTickSync`; see `engine/test.pumpUntilLive`, which awaits this before its first pump
+   * attempt): calling such a thing earlier busy-spins the main thread, which starves the very
+   * worker setup it is waiting for (measured: an 11.28 s spin ending exactly when every worker's
+   * `engine_init ok` finally logged, immediately after the spin gave up and yielded the thread). */
+  readonly workersReady: Promise<void>
 }
 
 const handles = new WeakMap<Client, ClientTestHandle>()
@@ -811,7 +820,17 @@ export function createClient(options: ClientOptions): Client {
     await Promise.all(waits)
   }
 
-  const ready = start().then(() => {
+  // Captured separately from `ready` itself (below), and exposed on `ClientTestHandle` as
+  // `workersReady` (docs/plan/16-action-round-trip.md, gate-round fix): the moment every spawned
+  // worker has actually posted its own `{ type: 'ready' }` handshake -- distinct from `ready`'s
+  // own, later "session live" meaning, and the one thing a test page needs before it is safe to
+  // call anything that blocks the main thread waiting on a worker's own ack (`stepSimTickSync`;
+  // `engine/test.pumpUntilLive`'s own doc comment has the incident this fixes: calling it *before*
+  // this moment busy-spins the main thread, which starves the very worker setup it is waiting for
+  // -- measured at 11.28 s of a tight spin ending exactly when every worker's own `engine_init ok`
+  // finally logged, immediately after the spin gave up and yielded the thread back).
+  const workersUp = start()
+  const ready = workersUp.then(() => {
     resultsFrameHandle = scheduler.requestFrame(resultsFrame)
     return linked ? waitForLive() : undefined
   })
@@ -838,6 +857,7 @@ export function createClient(options: ClientOptions): Client {
     cameraBundle,
     cameraIntegrator,
     writeActionRecord,
+    workersReady: workersUp,
   })
   return client
 }

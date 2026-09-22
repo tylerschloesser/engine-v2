@@ -352,29 +352,36 @@ export function stepTick(client: Client, n = 1): Promise<void> {
  * not exist yet, and nothing inside it drove a tick either. `pumpUntilLive` is the fix for any such
  * page: call it once, in place of a bare `await client.ready`, before any test hook is wired.
  *
- * Retries `stepSimTickSync` on a macrotask until it stops throwing: `clientTestHandle(client).
- * workers` is populated partway through `client.ready`'s own async `start()` phase (after the
- * WASM module compiles), and a page's top-level script has no way to know when that has happened
- * without this loop. Races `client.ready` itself so the loop stops pumping the instant a real
- * session-live poll succeeds, rather than retrying pointlessly forever. One real sim tick applies
- * `sim_connect`'s own queued `Joined` record (a real write, whatever `Game::on_player` does with
- * it), so `Host::build_frame` has something to send on the very first tick regardless of camera
- * state; the client worker's netPump wakes off the downlink ring itself (M15b), independent of
- * `CB_FRAME_REQ`/`stepFrame`, and `client.ready`'s own poll picks up the clock block once that
+ * **Awaits `ClientTestHandle.workersReady` first, before ever calling `stepSimTickSync`** --
+ * gate-round correction: an earlier version of this function used a caught `stepSimTickSync`
+ * throw as its own "are the workers up yet" probe, retrying the call itself until it stopped
+ * throwing. That call blocks the main thread in a tight spin until the sim worker acks, and
+ * `clientTestHandle(client).workers` (what decided whether to attempt it) is populated well
+ * *before* a worker has actually finished its own async setup (module instantiation, the `{ type:
+ * 'ready' }` handshake) -- so the first attempt reliably started too early, blocked the main
+ * thread for the rest of that setup, and *that block was itself what delayed the workers*: a
+ * `connect: true` page measured 11.28 s in that one spin, ending exactly when every worker's own
+ * `engine_init ok` log finally appeared, immediately after the spin gave up (hit its own iteration
+ * limit) and yielded the thread back. Main-thread-blocking work has to wait for a real "workers up"
+ * signal, not a proxy that can itself be the thing preventing that signal from ever arriving.
+ *
+ * Once workers are confirmed up, retries `stepSimTickSync` on a macrotask, racing `client.ready`
+ * itself so the loop stops pumping the instant a real session-live poll succeeds. One real sim
+ * tick applies `sim_connect`'s own queued `Joined` record (a real write, whatever `Game::on_player`
+ * does with it), so `Host::build_frame` has something to send on the very first tick regardless of
+ * camera state; the client worker's netPump wakes off the downlink ring itself (M15b), independent
+ * of `CB_FRAME_REQ`/`stepFrame`, and `client.ready`'s own poll picks up the clock block once that
  * frame is applied. A page with a real-time-paced sim (`test.flags.pace`, `connected-paced.ts`)
  * needs none of this: the sim ticks on its own, so a bare `await client.ready` already resolves.
  */
 export async function pumpUntilLive(client: Client): Promise<void> {
+  await clientTestHandle(client).workersReady
   let live = false
   client.ready.then(() => {
     live = true
   })
   while (!live) {
-    try {
-      stepSimTickSync(client, 1)
-    } catch {
-      // `clientTestHandle(client).workers` is still empty: the sim worker has not spawned yet.
-    }
+    stepSimTickSync(client, 1)
     await new Promise((resolve) => setTimeout(resolve, 0))
   }
   await client.ready
