@@ -106,25 +106,23 @@ test('hidden_tab_sends_no_camera_report', async ({ page }, testInfo) => {
   expectNoGpuErrors((await page.evaluate(() => window.__errors?.())) ?? [])
 })
 
-/** `Uploader::on_frame`'s own residency scan (`client/upload.rs`) gates on `!changed &&
- * self.last_visible == Some(visible)`, where `changed` comes only from drained `CacheEvent`s --
- * there is no "a chunk newly finished generating" event, so under a genuinely static camera the
- * *first* `on_frame` call (when the chunk is not yet resident) is also the *last* one to scan,
- * until either an eviction fires or the visible rect itself changes. `TerrainFeed::deliver`
- * (materializing a pristine or regenerated chunk) runs on the client worker's own gen-result pump,
- * not from `frame()`, so it never itself causes a rescan. This is a pre-existing gap in `Uploader`'s
- * own staleness detection -- separate from, and not fixed by, this milestone's `GenQueue`/
- * `invalidation_seq` change (Non-scope: "do not redesign the dense cache or its LRU"), and every
- * production/zero-GC page that already renders correctly does so because its camera moves every
- * frame, which this readback's own camera deliberately does not (the milestone's Goal: "with the
- * camera held still"). Nudging the camera one tile away and back, both across real `stepFrame`
- * calls with zero host ticks, forces two more `visible`-changing `on_frame` scans -- a test-only
- * workaround local to this file, not a production change, and harmless here: the world is 1x1
- * tile of interest and 0 ticks run, so this never touches host state or the tick-rule timing this
- * test depends on. */
-async function settleUploads(page: import('@playwright/test').Page): Promise<void> {
+/** Pumps two more frames at the *same* camera position (`x`/`y`/`tilesAcross` unchanged -- the
+ * camera genuinely never moves, matching the milestone's own Goal: "with the camera held still").
+ * `__advance` runs exactly one `stepFrame()` (one client `frame()`/`GenQueue::set_view`/
+ * `Uploader::on_frame` dispatch) before its own `stepTick`. A pristine or regenerated chunk's
+ * generation is an *async* round trip through the gen worker (`genRequest`/`genResult` rings), so
+ * it is not resident yet on the very `frame()` call that requested it -- `TerrainStore::
+ * insert_pristine`/`materialize` (`world/terrain.rs`, the exact path `TerrainFeed::deliver` takes
+ * for a gen result) push `CacheEvent::Loaded { chunk, slot }` once it lands, and `Uploader::
+ * on_frame`'s `store.drain_cache_events(|event| { changed = true; ... })` sets `changed = true` on
+ * *any* drained event, `Loaded` included -- so the *next* `frame()` call is what actually notices
+ * the chunk resident and stages it for upload, regardless of whether `view.visible` changed at all.
+ * Two pump frames is what this file verified reliable (`pnpm test browser -t overlay_tile`, 10/10
+ * repeats, foreground); one gen round trip inside this test's own tiny local topology (no network,
+ * one gen worker) resolves well within that. */
+async function pumpFrames(page: import('@playwright/test').Page): Promise<void> {
   await page.evaluate(([x, y, tilesAcross]) => window.__advance?.(x, y, tilesAcross, 0), [
-    1, 0, 8,
+    0, 0, 8,
   ] as const)
   await page.evaluate(([x, y, tilesAcross]) => window.__advance?.(x, y, tilesAcross, 0), [
     0, 0, 8,
@@ -149,11 +147,12 @@ async function readOriginPixel(
 
 // M15c steps 3-5 (Order of work step 3): the readback probe M15b's own Deviations left for this
 // milestone once the cache-invalidation bug (steps 1-2) had a fix. Camera fixed at tile (0, 0)
-// throughout -- the same "camera holds still" shape the milestone's own Goal names -- across a
-// sequence of `__advance` calls that never move the camera except inside `settleUploads`' own
-// test-only jiggle (see its doc comment):
+// throughout, at the exact same position for every `__advance`/`pumpFrames` call -- the camera
+// genuinely never moves anywhere in this test, matching the milestone's own Goal: "with the camera
+// held still":
 //   1. Zero host ticks: only the client's own `TerrainFeed` has run, so tile (0, 0) is resident
-//      from pristine client-side generation alone, with no host round trip yet. Pristine colour.
+//      from pristine client-side generation alone, with no host round trip yet (`pumpFrames` lets
+//      the async gen round trip resolve and stage -- see its own doc comment). Pristine colour.
 //   2. One host tick: `fx-puts`'s tick rule fires on this, its very first simulated tick (module
 //      comment above), painting tile (0, 0) and downlinking a snapshot that evicts it
 //      (`TerrainStore::replace_overlay`, `Cache::evict_if_present`).
@@ -171,7 +170,7 @@ test('overlay_tile_reaches_screen', async ({ page }, testInfo) => {
   await page.evaluate(([x, y, tilesAcross]) => window.__advance?.(x, y, tilesAcross, 0), [
     0, 0, 8,
   ] as const)
-  await settleUploads(page)
+  await pumpFrames(page)
   expectPixel(await readOriginPixel(page, camera), 8, 8, GRASS, TOL)
 
   // 2. One host tick: paints the tile and downlinks the snapshot that evicts it client-side.
@@ -184,14 +183,14 @@ test('overlay_tile_reaches_screen', async ({ page }, testInfo) => {
     'the tick rule must have painted tile (0, 0) and downlinked a snapshot for it',
   ).toBeGreaterThan(0)
 
-  // 3. Zero more ticks, camera back at rest: the next `frame()` call is what the M15c fix makes
-  // rescan despite `view.visible` being unchanged, re-requesting and re-materializing tile (0, 0)
-  // with its new overlay; `settleUploads` then forces `Uploader::on_frame` to notice it resident
-  // again (same pre-existing gap as step 1, not this milestone's own fix).
+  // 3. Zero more ticks, camera still at rest: the next `frame()` call is what the M15c fix makes
+  // rescan despite `view.visible` being unchanged, re-requesting tile (0, 0) with its new overlay;
+  // `pumpFrames` then lets that regeneration's own async round trip land and stage (same mechanism
+  // as step 1's own pristine generation, not this milestone's own fix).
   await page.evaluate(([x, y, tilesAcross]) => window.__advance?.(x, y, tilesAcross, 0), [
     0, 0, 8,
   ] as const)
-  await settleUploads(page)
+  await pumpFrames(page)
   expectPixel(await readOriginPixel(page, camera), 8, 8, WATER, TOL)
 
   expectNoGpuErrors((await page.evaluate(() => window.__errors?.())) ?? [])

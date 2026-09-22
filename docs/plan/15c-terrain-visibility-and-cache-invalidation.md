@@ -321,39 +321,43 @@ dithering/boundary reasoning at all.
 **Found: `fx-puts`'s tick rule paints tile `(0,0)` on tick 0, the very first simulated tick**
 (`Puts::tick`: `cx.tick().0 % secs_1 == 0` is true at tick 0), not merely "once per second" starting
 later -- so "pristine colour" is provable only strictly before any host tick runs, never merely
-before some elapsed interval. The test drives three `__advance(0,0,8,ticks)` calls with the camera
-never moving except inside `settleUploads` (below): 0 ticks (client-only pristine generation) ->
-render GRASS; 1 tick (paints + downlinks a snapshot that evicts the tile, `chunkSnapshots > 0`
-asserted); 0 more ticks (the M15c fix's own rescan) -> render WATER.
+before some elapsed interval. The test drives three `__advance(0,0,8,ticks)` calls, every one at
+the *same* camera position -- the camera genuinely never moves anywhere in this test, the milestone's
+own Goal ("with the camera held still") demonstrated literally, not approximated: 0 ticks
+(client-only pristine generation) -> render GRASS; 1 tick (paints + downlinks a snapshot that evicts
+the tile, `chunkSnapshots > 0` asserted); 0 more ticks (the M15c fix's own rescan) -> render WATER.
 
-**Found: a second, pre-existing gap, in `Uploader::on_frame` (`client/upload.rs`), separate from
-this milestone's own fix and out of its Non-scope ("do not redesign the dense cache or its LRU").**
-`Uploader::on_frame`'s early return is `!changed && self.last_visible == Some(visible)`, where
-`changed` comes only from drained `CacheEvent`s -- there is no event for "a chunk newly finished
-generating" (`TerrainFeed::deliver`, which materializes a pristine or regenerated chunk, runs on the
-client worker's own gen-result pump, not from `frame()`, so it never itself triggers a rescan).
-Under a genuinely static camera, the *first* `on_frame` call (when the chunk of interest is not yet
-resident) is also the *last* one to scan, until either an eviction fires or the visible rect itself
-changes -- so a chunk that finishes generating asynchronously, after that first call, never gets
-staged for upload at all while the camera holds still. Every existing page/test that already renders
-correctly does so because its camera moves every frame; this readback's own camera deliberately does
-not (the milestone's Goal: "with the camera held still"), which is exactly what exposed it. Not
-fixed (Non-scope for this milestone); worked around test-locally in `connected-terrain.spec.ts`'s
-`settleUploads()` -- a one-tile camera nudge and back, both across real `stepFrame` calls with zero
-host ticks, forcing two more `visible`-changing `on_frame` scans. Confirmed by fault injection: with
-`GenQueue::set_view`'s own `last_invalidation_seq == invalidation_seq` conjunct temporarily removed
-(reverted to the pre-fix `if self.last_visible == Some(view.visible) { return false }`), `pnpm test
-browser -t overlay_tile` fails at the WATER check (`expectPixel(8, 8) channel g: got 32, want 80` --
-32 is `NEUTRAL`'s own `g`, i.e. the tile never came back resident); restoring the fix passes again,
-with `git diff` on `gen_queue.rs` empty afterward (no stray edit left behind). This is real evidence
-the browser test depends on the fix, not just on the jiggle -- the jiggle only helps the *upload*
-side notice residency, never GenQueue's own re-request decision (verified by the same injection:
-`GenQueue`'s rescan-on-invalidation happens in the *un-jiggled* call, step 3's leading `__advance`,
-strictly before `settleUploads` ever moves the camera).
+**Fix round 1 (gate feedback): the first version of this Deviations entry misdiagnosed a real
+mechanism as a fictitious "static-camera" bug in `Uploader::on_frame`, and wrote that misdiagnosis
+into a source doc comment as if it were production behaviour -- both wrong, corrected here.**
+`CacheEvent::Loaded { chunk, slot }` exists and is pushed by both `TerrainStore::insert_pristine`
+and `materialize` (`world/terrain.rs:92,124`) -- `insert_pristine` is the exact path `TerrainFeed::
+deliver` takes for a gen worker's result. `Uploader::on_frame`'s `store.drain_cache_events(|event|
+{ changed = true; ... })` sets `changed = true` on *any* drained event, `Loaded` included, not only
+`Evicted` -- so a chunk finishing generation *does* make the very next `on_frame` call rescan,
+camera unchanged or not. The actual mechanism: `__advance` runs exactly one `stepFrame()` (one
+client `frame()`/`GenQueue::set_view`/`Uploader::on_frame` dispatch) before its own `stepTick`.
+Chunk generation is an async round trip through the gen worker (`genRequest`/`genResult` rings), so
+a chunk requested on one `frame()` call is not resident yet on that same call -- staging it needs a
+*later* `frame()` call, after the `Loaded` event has landed, to drain that event and rescan. The
+original version's own `settleUploads()` (a camera nudge one tile away and back) worked only because
+it happened to run two more `__advance` calls, each contributing one more `frame()` -- the camera
+motion inside it was never the active ingredient, confirmed by rerunning with the nudge removed
+(camera held at the exact same position for both extra calls: still passes) and by rerunning with
+those two extra calls removed entirely (fails at the step 1 GRASS check, coordinator's own
+measurement). Renamed `settleUploads` -> `pumpFrames`, camera position unchanged across every call
+it makes; its own doc comment now states this mechanism, not the retracted one. Re-verified by fault
+injection (unchanged from before this round): reverting `GenQueue::set_view`'s own
+`last_invalidation_seq == invalidation_seq` conjunct to the pre-fix `if self.last_visible ==
+Some(view.visible) { return false }` makes `pnpm test browser -t overlay_tile` fail at the WATER
+check (`expectPixel(8, 8) channel g: got 32, want 80` -- 32 is `NEUTRAL`'s own `g`, the tile never
+came back resident); restoring the fix passes again, `git diff` on `gen_queue.rs` empty afterward.
+Reliability: `pnpm test browser -t overlay_tile` run 10 times in the foreground, camera held fully
+still throughout every run, 10/10 passes.
 
-Verified: `pnpm test browser -t overlay_tile` (1 test, ~2s/25s), `pnpm test browser -t hidden_tab`
-(1 test, unaffected), `pnpm test browser -t terrain` (25 tests, unaffected), `pnpm --filter engine
-typecheck` (clean).
+Verified: `pnpm test browser -t overlay_tile` (1 test, ~2s/25s, 10/10 across repeats), `pnpm test
+browser -t hidden_tab` (1 test, unaffected), `pnpm test browser -t terrain` (25 tests, unaffected),
+`pnpm --filter engine typecheck` (clean).
 
 **4. The zero-GC panning window** (`gc-connected-terrain.html`/`.ts`, `gc-connected-terrain.spec.ts`,
 new `budgets.json` row `connected-terrain`). A real `createClient()` local, connected
@@ -414,3 +418,13 @@ call.
 (left `null`, 0016 caveat b, sanctioned by the `gc-test` skill's own "Adding a page" step 2);
 `pnpm gc reliability` (many-repeat stability check) was not run for the new page, only the
 skill-recommended `--repeat-each 8` used to derive the budget row above.
+
+**Note for later briefs (fix round 1, replacing the retracted "static-camera bug" claim above):**
+there is no static-camera production bug in `Uploader::on_frame` -- production runs frames
+continuously, so a chunk's `CacheEvent::Loaded` is drained on the very next frame regardless of
+camera motion. The real thing worth remembering is narrower: a readback test that holds the camera
+genuinely still across a chunk's *first* generation (pristine or regenerated) must still pump at
+least one extra frame after requesting it, because generation is an async round trip through the
+gen worker and is never resident on the same `frame()` call that requested it -- `pumpFrames`
+(`connected-terrain.spec.ts`) is that pattern, two calls, verified reliable (10/10 foreground
+repeats).
