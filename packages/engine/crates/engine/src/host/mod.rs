@@ -72,6 +72,19 @@ struct ConnSlot<G: Game> {
     /// action once it has actually been applied (or rejected) at T+1. Drained and cleared by
     /// `build_frame` every time it runs for this connection, so it never grows unbounded.
     pending_results: Vec<Outcome<G>>,
+    /// The highest `seq` this connection has ever had *admitted* (queued into `pending_records`,
+    /// not merely decoded), across every `on_uplink` call so far -- gate fix, docs/plan/
+    /// 16-action-round-trip.md: `Store::last_seq` only advances inside `Sim::step`, at the next
+    /// `tick()`, so a snapshot of it alone cannot dedup a resend that arrives in the same
+    /// tick-to-tick window as the original (`worker/sim.ts` drains the uplink ring on every wake,
+    /// and `poll_uplink` flushes a non-empty outbox immediately, so more than one `on_uplink` call
+    /// per tick window is ordinary, not a corner case). Never reset: a fresh `connect()` starts
+    /// this at 0, which is always safe because `Store::last_seq` (keyed by `PlayerId`, surviving
+    /// reconnect) is folded in via `.max()` on every read, so a genuine reconnect still dedups
+    /// correctly against the player's real history. Updated only when an action is actually
+    /// admitted (`G::admit` returns `Ok`); an admission-time *reject* does not advance it, since
+    /// 0004 never logs that seq and a resend of it is safe to re-admit (it touches no sim state).
+    highest_admitted_seq: u32,
 }
 
 fn default_max_entities() -> u32 {
@@ -323,6 +336,7 @@ impl<G: Game> Host<G> {
             first_frame_pending: true,
             counters: ConnCounters::default(),
             pending_results: Vec::new(),
+            highest_admitted_seq: 0,
         });
         player
     }
@@ -346,12 +360,25 @@ impl<G: Game> Host<G> {
     /// every carried action through the admit pipeline (docs/plan/16-action-round-trip.md Scope):
     /// decode (`WireError`/a failed canonical decode -> `Err`, a protocol error that closes the
     /// connection, 0004 step 1 -- **not logged**, matching an admission `Rejected` below), drop a
-    /// resend (`seq <= ` the host's last processed `seq` for this player, silently -- 0004: "a
-    /// resent action is never applied twice"), then `G::admit`: failure queues an immediate
-    /// `Outcome::Rejected` on this connection's `pending_results` (0004: "not logged"); success
-    /// appends `Record::Action` to `pending_records`, collected for the next `tick()` (0004
-    /// step 3). Presence is discarded (Non-scope: M19). An unknown connection is silently
+    /// resend (`seq <=` the highest `seq` this connection has ever had *admitted*, silently --
+    /// 0004: "a resent action is never applied twice"), then `G::admit`: failure queues an
+    /// immediate `Outcome::Rejected` on this connection's `pending_results` (0004: "not logged");
+    /// success appends `Record::Action` to `pending_records`, collected for the next `tick()`
+    /// (0004 step 3). Presence is discarded (Non-scope: M19). An unknown connection is silently
     /// ignored -- untrusted input never panics.
+    ///
+    /// **Dedup floor: `ConnSlot::highest_admitted_seq`, not a single `Store::last_seq` snapshot**
+    /// (gate fix, docs/plan/16-action-round-trip.md: `Store::last_seq` only advances inside
+    /// `Sim::step`, at the next `tick()` -- a single snapshot taken at the top of this call cannot
+    /// see an action this *same* connection had admitted into `pending_records` moments earlier by
+    /// an *earlier* `on_uplink` call in the same tick-to-tick window, and `worker/sim.ts` drains
+    /// the uplink ring, and `poll_uplink` flushes a non-empty outbox immediately, so more than one
+    /// `on_uplink` call per tick window is ordinary. Verified: resending the same `seq` before the
+    /// next `step()` used to apply it twice). Tracked as a running value across every action in
+    /// this call (so an in-batch duplicate is caught too, not only a duplicate across two calls),
+    /// seeded from `ConnSlot::highest_admitted_seq` and folded against `Store::last_seq` so a
+    /// resend after a real reconnect (a fresh `ConnSlot`, `highest_admitted_seq` back at 0) still
+    /// dedups correctly against the player's persisted history.
     ///
     /// `Err(UplinkError)` on a malformed batch or a malformed action payload: the caller
     /// (`sim_admit`) maps that to `Status::Decode`, which is what tells `SimHost` (TS, 15b/16
@@ -365,6 +392,7 @@ impl<G: Game> Host<G> {
         };
         slot.counters.bytes_up += bytes.len() as u64;
         let player = slot.player;
+        let mut highest_seen = slot.highest_admitted_seq;
 
         let mut raw_actions: Vec<(u32, &[u8])> = Vec::new();
         let batch = match UplinkReader::read(bytes, |seq, action_bytes| {
@@ -387,18 +415,26 @@ impl<G: Game> Host<G> {
             // requires a live `Sim`, host/mod Deviations).
             return Ok(());
         };
-        let last_seq = sim.authority().store().last_seq(player).unwrap_or(0);
-        let mut decoded: Vec<(u32, G::Action)> = Vec::with_capacity(raw_actions.len());
-        for (seq, raw) in &raw_actions {
-            if *seq <= last_seq {
-                continue; // resend dedup: already processed, silently dropped (0004).
-            }
-            match decode_canonical::<G::Action>(raw) {
-                Ok(action) => decoded.push((*seq, action)),
-                Err(_) => return Err(UplinkError),
-            }
+        let store_last_seq = sim.authority().store().last_seq(player).unwrap_or(0);
+        if store_last_seq > highest_seen {
+            highest_seen = store_last_seq;
         }
-        for (seq, action) in decoded {
+        for (seq, raw) in &raw_actions {
+            let seq = *seq;
+            if seq <= highest_seen {
+                continue; // resend dedup: already admitted (queued or applied), silently dropped.
+            }
+            let action = match decode_canonical::<G::Action>(raw) {
+                Ok(action) => action,
+                Err(_) => {
+                    // Persist whatever was genuinely admitted earlier in this same call before
+                    // reporting the protocol error -- those actions keep their effect.
+                    if let Some(Some(slot)) = self.conns.get_mut(idx) {
+                        slot.highest_admitted_seq = highest_seen;
+                    }
+                    return Err(UplinkError);
+                }
+            };
             let result = {
                 let sim = self.sim.as_ref().expect("checked above");
                 G::admit(
@@ -409,12 +445,17 @@ impl<G: Game> Host<G> {
                 )
             };
             match result {
-                Ok(()) => self.pending_records.push(Record::Action {
-                    who: player,
-                    seq,
-                    action,
-                }),
+                Ok(()) => {
+                    highest_seen = seq;
+                    self.pending_records.push(Record::Action {
+                        who: player,
+                        seq,
+                        action,
+                    });
+                }
                 Err(reject) => {
+                    // Not folded into `highest_seen`: 0004 never logs an admission reject, so a
+                    // resend of this exact `seq` is safe to re-admit (it touches no sim state).
                     if let Some(Some(slot)) = self.conns.get_mut(idx) {
                         slot.pending_results.push(Outcome {
                             seq,
@@ -423,6 +464,9 @@ impl<G: Game> Host<G> {
                     }
                 }
             }
+        }
+        if let Some(Some(slot)) = self.conns.get_mut(idx) {
+            slot.highest_admitted_seq = highest_seen;
         }
         Ok(())
     }

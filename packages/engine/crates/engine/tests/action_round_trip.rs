@@ -322,18 +322,11 @@ fn apply_reject_is_recorded_and_replays() {
     assert!(matches!(out_b[0].result, Err(Rejected::Game(RReject::Bad))));
 }
 
-#[test]
-fn resent_seq_is_dropped() {
-    let mut lb = loopback(105);
-    let (_idx, who) = add_client(&mut lb, 0);
-    lb.action(who, RAction::SetTotal { n: 9 }); // seq 1
-    lb.step();
-    assert_eq!(total(&lb), 9);
-
-    // Resend the identical seq (as a reconnect would): the host must drop it silently, not apply
-    // it a second time.
+/// Builds a one-action `UplinkBatch` for `seq`/`action` and hands it straight to `Host::on_uplink`
+/// for `who`'s own connection (`conn = who.0 - 1`, `PlayerId = conn + 1`), bypassing `Loopback::
+/// action`'s own auto-incrementing seq counter so a test can resend an exact `seq` on purpose.
+fn send_raw(lb: &mut Loopback<RGame>, who: PlayerId, seq: u32, action: RAction) {
     let conn = who.0 - 1;
-    let action = RAction::SetTotal { n: 999 };
     let mut abuf = [0u8; 64];
     let n = engine::codec::encode(&action, &mut abuf).unwrap();
     let mut ubuf = [0u8; 128];
@@ -341,14 +334,53 @@ fn resent_seq_is_dropped() {
     UplinkWriter::write(
         &mut sink,
         0,
-        core::iter::once((1u32, &abuf[..n])),
+        core::iter::once((seq, &abuf[..n])),
         None,
         None,
     );
     let un = sink.finish().unwrap();
     assert!(lb.host.on_uplink(conn, &ubuf[..un]).is_ok());
+}
+
+/// A resend *after* the first copy has already been applied (`Store::last_seq` has advanced,
+/// `tick()` already ran once) -- the case a reconnect resend ordinarily lands in.
+#[test]
+fn resent_seq_is_dropped_after_apply() {
+    let mut lb = loopback(105);
+    let (_idx, who) = add_client(&mut lb, 0);
+    lb.action(who, RAction::SetTotal { n: 9 }); // seq 1
+    lb.step();
+    assert_eq!(total(&lb), 9);
+
+    send_raw(&mut lb, who, 1, RAction::SetTotal { n: 999 });
     lb.step();
     assert_eq!(total(&lb), 9, "a resent seq must be dropped, not reapplied");
+}
+
+/// A resend *before* the first copy has ever been applied -- both `on_uplink` calls land in the
+/// same tick-to-tick window, so `Store::last_seq` has not advanced yet (docs/plan/
+/// 16-action-round-trip.md Deviations: it only advances inside `Sim::step`, at the next `tick()`).
+/// This is the case `resent_seq_is_dropped_after_apply` above does *not* exercise, and a dedup
+/// that only ever compared against a `Store::last_seq` snapshot passed that test while still
+/// double-applying here: `Bump` is additive, so a double-apply is visible as `10`, not masked by
+/// `SetTotal`'s own last-write-wins idempotence the way the sibling test's `999` would have hidden
+/// it. `worker/sim.ts` drains the uplink ring on every wake and `poll_uplink` flushes a non-empty
+/// outbox immediately, so more than one `on_uplink` call per tick window is the ordinary case, not
+/// a corner case -- this is the shape a real resend racing the next tick actually has.
+#[test]
+fn resent_seq_is_dropped_before_apply() {
+    let mut lb = loopback(1050);
+    let (_idx, who) = add_client(&mut lb, 0);
+    lb.action(who, RAction::Bump { n: 5 }); // seq 1, queued -- not yet applied
+
+    send_raw(&mut lb, who, 1, RAction::Bump { n: 5 }); // the identical seq, same tick window
+
+    lb.step();
+    assert_eq!(
+        total(&lb),
+        5,
+        "a resend that arrives before the first copy is even applied must still be dropped"
+    );
 }
 
 #[test]
