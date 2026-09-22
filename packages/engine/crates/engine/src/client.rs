@@ -15,6 +15,7 @@ pub mod upload;
 pub use camera::CameraBlock;
 pub use core::{ClientCore, FrameSummary};
 pub use input::{InputEvent, InputQueue};
+pub(crate) use replica::DirtyEvent;
 pub use replica::Replica;
 pub use terrain_feed::TerrainFeed;
 pub use texel::{ClientSide, TileTexel, install_visual_tables};

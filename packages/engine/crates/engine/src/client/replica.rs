@@ -29,6 +29,22 @@ use crate::world_access::{WorldRead, chunk_of};
 /// nothing about it can be asserted at construction).
 pub const CLIENT_CACHE_BUDGET_BYTES: usize = 4 * 1024 * 1024;
 
+/// One entry of [`Replica::dirty`] (docs/plan/15b-ring-connection-and-replica-rendering.md, Scope
+/// "Replica -> renderer"): a whole-chunk change (pristine enter, snapshot enter, leave) or a
+/// single tile delta, carrying enough to drive `Uploader::enqueue_chunk`/`patch_tile` respectively
+/// -- the *same* queue `drain_dirty`'s existing `ChunkCoord`-only signature (M15's landed seam)
+/// already bounds, not a second, parallel one: a second queue populated at the same call sites but
+/// drained only by a *different* caller than `drain_dirty`'s own caller grows without bound
+/// whenever a native test (or anything else) calls `drain_dirty` alone to keep memory in check
+/// (`no_alloc_connection.rs`'s own `client.drain_dirty(|_| {})") -- caught by
+/// `host_and_client_bounded_camera_no_alloc`/`host_and_client_steady_state_no_alloc` the first time
+/// this milestone tried a separate pair of vectors instead (Deviations).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum DirtyEvent {
+    Whole(ChunkCoord),
+    Tile(TilePos, Tile),
+}
+
 /// One replica's held chunk set: `ChunkCoord -> version` (the tick of that chunk's last replicated
 /// change, or `0` while it has never changed since it was subscribed -- the same convention the
 /// host side uses, `host::mod` Deviations).
@@ -41,7 +57,11 @@ pub struct Replica<G: Game> {
     /// 15-connection-and-subscriptions.md Deviations).
     own_player: PlayerId,
     held: BTreeMap<ChunkCoord, u32>,
-    dirty: Vec<ChunkCoord>,
+    /// One queue, one bound (see [`DirtyEvent`]'s own doc comment): `drain_dirty` (M15's landed,
+    /// `ChunkCoord`-only seam) and [`Self::drain_dirty_for_upload`] (this milestone's own richer
+    /// draining, `game_instance.rs`'s `on_frame`) both drain *this* `Vec`, never a copy of it --
+    /// whichever one a caller uses keeps memory bounded, since nothing is ever double-buffered.
+    dirty: Vec<DirtyEvent>,
     tick: Tick,
 }
 
@@ -119,12 +139,51 @@ impl<G: Game> Replica<G> {
         self.held.keys().copied()
     }
 
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md: the one `TerrainStore` this
+    /// replica's `Store<G>` owns, shared with `client::TerrainFeed`/`client::Uploader` (both take
+    /// `&TerrainStore`/build off `TerrainStore::copy_chunk`) so a client-role instance needs only
+    /// one store, not a `Replica`-owned one plus a second standalone one the way `game_instance.rs`
+    /// built it before this milestone. `pub(crate)`, not `pub`: the seam `ClientCore`/`Replica`
+    /// give the rest of the crate is these two accessors plus the `apply_*`/`drain_dirty` methods
+    /// already `pub(crate)` above, not the `Store<G>` itself.
+    pub(crate) fn terrain(&self) -> &TerrainStore {
+        self.store.terrain()
+    }
+
+    /// Mutable counterpart of [`Self::terrain`] (`TerrainFeed::deliver`'s own `&mut TerrainStore`
+    /// parameter, `game_instance.rs`'s `gen_deliver`).
+    pub(crate) fn terrain_mut(&mut self) -> &mut TerrainStore {
+        self.store.terrain_mut()
+    }
+
     /// Every chunk whose effective tiles changed since the last [`Replica::drain_dirty`] call
-    /// (pristine/snapshot enters and tile deltas; not a plain leave -- docs/plan/
-    /// 15-connection-and-subscriptions.md Deviations): for 15b's texel upload path.
+    /// (pristine/snapshot enters, tile deltas, and leaves -- docs/plan/
+    /// 15-connection-and-subscriptions.md Deviations left leave out, deferring the decision to
+    /// 15b's own texel upload path, which is the one thing that reads this: a leave clears the
+    /// chunk's overlay (`apply_leave`, below), which changes its *effective* tiles back to
+    /// pristine even though the chunk itself may still be GPU-resident from before this replica
+    /// stopped holding it -- `Uploader::enqueue_chunk` is 15b's own way to re-stage that reverted
+    /// slab, Scope: "a snapshot or a leave becomes `Uploader::enqueue_chunk`").
     pub fn drain_dirty(&mut self, mut f: impl FnMut(ChunkCoord)) {
-        for c in self.dirty.drain(..) {
-            f(c);
+        for e in self.dirty.drain(..) {
+            f(match e {
+                DirtyEvent::Whole(c) => c,
+                DirtyEvent::Tile(pos, _) => self.dims.chunk_of(pos),
+            });
+        }
+    }
+
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md, Scope "Replica -> renderer": the
+    /// same queue [`Self::drain_dirty`] drains, handed to `f` one [`DirtyEvent`] at a time instead
+    /// of coalesced to a bare `ChunkCoord` -- one closure, not two (`DirtyEvent::Whole`/`Tile`
+    /// need to become `Uploader::enqueue_chunk`/`patch_tile` calls on the *same* `Uploader`, which
+    /// two separate `FnMut`s cannot both borrow at once). `game_instance.rs`'s `on_frame` calls
+    /// this instead of `drain_dirty` when it wants the distinction; a caller that wants only
+    /// "which chunks changed" still has `drain_dirty` itself. Draining twice after one frame would
+    /// find the second call empty (see [`DirtyEvent`]'s own doc comment: one queue, drained once).
+    pub(crate) fn drain_dirty_for_upload(&mut self, mut f: impl FnMut(DirtyEvent)) {
+        for e in self.dirty.drain(..) {
+            f(e);
         }
     }
 
@@ -149,7 +208,7 @@ impl<G: Game> Replica<G> {
     /// modified, `host::mod` Deviations).
     pub(crate) fn apply_enter_pristine(&mut self, chunk: ChunkCoord) {
         self.held.insert(chunk, 0);
-        self.dirty.push(chunk);
+        self.dirty.push(DirtyEvent::Whole(chunk));
     }
 
     /// A chunk snapshot: replaces `chunk`'s overlay wholesale and applies every entity put
@@ -162,7 +221,7 @@ impl<G: Game> Replica<G> {
     ) {
         self.store.terrain_mut().replace_overlay(chunk, entries);
         self.held.insert(chunk, version);
-        self.dirty.push(chunk);
+        self.dirty.push(DirtyEvent::Whole(chunk));
     }
 
     pub(crate) fn apply_snapshot_entity(&mut self, id: EntityId, entity: G::Entity) {
@@ -174,6 +233,7 @@ impl<G: Game> Replica<G> {
     pub(crate) fn apply_leave(&mut self, chunk: ChunkCoord) {
         self.store.terrain_mut().clear_overlay(chunk);
         self.held.remove(&chunk);
+        self.dirty.push(DirtyEvent::Whole(chunk));
         let gone: Vec<EntityId> = self
             .store
             .entities()
@@ -189,7 +249,7 @@ impl<G: Game> Replica<G> {
         let pos = self.dims.tile_at(chunk, index);
         let _ = self.store.terrain_mut().set_tile(pos, tile);
         self.bump_version(chunk);
-        self.dirty.push(chunk);
+        self.dirty.push(DirtyEvent::Tile(pos, tile));
     }
 
     pub(crate) fn apply_entity_put(&mut self, id: EntityId, entity: G::Entity) {

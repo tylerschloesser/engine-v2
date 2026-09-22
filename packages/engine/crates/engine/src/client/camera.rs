@@ -7,6 +7,7 @@
 //! `seq`, the seqlock sequence word, arrives too but carries no meaning here.
 
 use crate::abi::{RegionId, RegionLayout};
+use crate::wire::CameraReport;
 
 #[repr(C)]
 pub struct CameraBlock {
@@ -41,6 +42,26 @@ impl CameraBlock {
             return None;
         }
         Some(ptr.cast())
+    }
+
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md, Planning decisions "The camera
+    /// report is built in Rust from the camera-block copy, not in TS": quantises this frame's
+    /// camera state into the 0010 wire shape `ClientCore::set_camera` takes. Tile-unit `f64`
+    /// centre and `f32` half-extent/velocity round to the nearest integer (`f64`/`f32::round`,
+    /// both determinism-rule-legal ops -- this module is client-role, outside the deterministic
+    /// core anyway, `crates/engine/CLAUDE.md`); `as i32`/`as u16`/`as i16` saturate rather than
+    /// wrap or panic on an out-of-range value (Rust's own defined `as` cast behaviour since 1.45),
+    /// so an extreme camera position clamps here already, ahead of `host::subs::clamp_report`'s
+    /// own untrusted-input clamp on the wire's far side.
+    pub fn to_report(&self) -> CameraReport {
+        CameraReport {
+            center_x: self.centre[0].round() as i32,
+            center_y: self.centre[1].round() as i32,
+            half_w: self.half_extent_tiles[0].round() as u16,
+            half_h: self.half_extent_tiles[1].round() as u16,
+            vel_x: self.velocity[0].round() as i16,
+            vel_y: self.velocity[1].round() as i16,
+        }
     }
 }
 

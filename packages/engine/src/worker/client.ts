@@ -11,6 +11,7 @@ import { CB_FRAME_REQ, W_ACK, workerWord } from '../sab/control.js'
 import { RingConsumer, RingProducer } from '../sab/ring.js'
 import { createGenPump } from './client-gen.js'
 import { createInputPump } from './client-input.js'
+import { createNetPump } from './client-net.js'
 import { createUploadPump } from './client-upload.js'
 import { applyGcHook } from './gc-hook.js'
 import { instantiateForSetup } from './instantiate.js'
@@ -86,6 +87,24 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   const inputRxRegion = inst.region(RegionId.Rx)
   const inputPump = createInputPump(inst, message.sabs.inputRing, inputRxRegion)
 
+  // docs/plan/15b-ring-connection-and-replica-rendering.md, step 4: the net pump, built only when
+  // this topology is linked (`message.link`, Orchestrator ruling 1) and run every wake, same shape
+  // as `genPump`/`uploadPump`/`inputPump` above -- unconditional, not gated behind `CB_FRAME_REQ`
+  // the way `frame()` itself still is (Scope's per-wake order lists it alongside `frame(t_ms)`, but
+  // draining the downlink and polling the uplink both have their own internal pacing/emptiness
+  // checks, so running them on every wake, not only a real render frame's, is what keeps a linked
+  // client caught up between renders too).
+  const netPump = message.link
+    ? createNetPump(
+        inst,
+        shell,
+        message.sabs.uplink,
+        message.sabs.downlink,
+        inst.region(RegionId.Downlink),
+        inst.region(RegionId.Tx),
+      )
+    : null
+
   function body(): void {
     if (gcHook) applyGcHook(shell.control, shell.index)
     const frameReq = Atomics.load(shell.control.words, CB_FRAME_REQ)
@@ -108,6 +127,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     genPump.pump()
     uploadPump.pump()
     inputPump.pump()
+    netPump?.pump()
   }
 
   // `engine/test`'s `callParked` reaches `client_gen_stats`/`client_chunk_hash` (this instance's

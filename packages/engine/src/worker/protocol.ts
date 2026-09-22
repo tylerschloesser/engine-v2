@@ -50,6 +50,20 @@ export type SetupMessage = {
   sabs: SabSet
   config: InstanceConfig
   test?: TestFlags
+  /**
+   * docs/plan/15b-ring-connection-and-replica-rendering.md, Orchestrator ruling 1: whether this
+   * topology's `sim`/`client` link the uplink/downlink ring pair -- a topology fact carried on
+   * the setup message both of them receive identically, not a `test`-scoped flag (`TestFlags`
+   * above is explicitly test-only; this is real production config, present or absent whether or
+   * not `test` is). `true` only when `ClientOptions.host` is `{ kind: 'local', connect: true,
+   * ... }` (`client.ts`'s `start()`); absent/`false` on every existing `sim`-kind test page
+   * (Planning decisions "sim-kind pages keep zero-connection topology by construction": those
+   * pages never set `host.connect`, so they get the default -- no flag to remember, nothing to
+   * turn off). `worker/sim.ts`'s `setup()` creates and accepts a `RingConnection` only when this
+   * is `true`; `worker/client.ts`'s `setup()` builds its own net pump (downlink drain, uplink
+   * poll) only then either. Ignored by `gen`/`net`.
+   */
+  link?: boolean
 }
 
 /**
@@ -82,6 +96,15 @@ export const SIM_COUNTERS_CALL = '__sim_counters'
 /** Byte layout `simCounters` decodes: five little-endian `u32`s, `SimHostCounters`'s own field
  * order (`server.ts`). */
 export const SIM_COUNTERS_BYTES = 20
+
+/** `worker/sim.ts`'s own `testCall` handler (docs/plan/15b-ring-connection-and-replica-
+ * rendering.md, `engine/test`'s `netCounters`): the one piece of a linked connection's own JS-side
+ * counters with no ABI export at all (`RingConnection.downlinkRetries`) -- `sim_conn_counters`
+ * (the `host::ConnCounters` half) is a real ABI export instead, reached through `callParked`
+ * directly by name. Same naming convention as `SIM_COUNTERS_CALL`. */
+export const NET_COUNTERS_CALL = '__net_counters'
+/** One little-endian `u32`: `RingConnection.downlinkRetries`. */
+export const NET_COUNTERS_BYTES = 4
 
 export type ToWorker = SetupMessage | { type: 'resume' } | { type: 'stop' } | TestCallMessage
 

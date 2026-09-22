@@ -340,6 +340,76 @@ pub fn on_input<T: Instance>(slot: &Slot<T>, len: u32) -> Status {
     rt.inst.on_input(rx, result)
 }
 
+/// `on_frame(len) -> status`: `len` bytes of `Downlink` are one whole host frame (0011), applied
+/// atomically into the client role's own replica (`Instance::on_frame`). `Downlink` is read
+/// through a raw pointer taken before `Result` would be borrowed -- unlike `on_input`, `on_frame`
+/// writes no `Result` of its own today, but the same deferred-borrow reasoning applies should a
+/// future milestone add one.
+pub fn on_frame<T: Instance>(slot: &Slot<T>, len: u32) -> Status {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    match rt.layout.bytes(RegionId::Downlink).get(..len as usize) {
+        Some(bytes) => rt.inst.on_frame(bytes),
+        None => Status::BadLength,
+    }
+}
+
+/// `client_poll_uplink(t_ms) -> len`, or `-(status)` -- the same shape as `sim_build_frame`. The
+/// raw `t_ms` argument is ignored (same reasoning as `frame`'s own `_raw_t_ms`, above): the real
+/// value is `camera.frame_time_ms`, already copied into this role's `Camera` region by the same
+/// worker pass that calls `frame` right before this (`worker/client.ts`'s own per-wake order),
+/// truncated to whole milliseconds (`Instance::client_poll_uplink`'s own `u32` parameter).
+pub fn client_poll_uplink<T: Instance>(slot: &Slot<T>, _raw_t_ms: f64) -> i32 {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return -(status as i32),
+    };
+    let Some(camera_ptr) = CameraBlock::ptr(&rt.layout) else {
+        return -(Status::NotInitialised as i32);
+    };
+    // SAFETY: see `frame`, above -- same region, same single-threaded, non-re-entrant instance.
+    let camera = unsafe { &*camera_ptr };
+    let t_ms = camera.frame_time_ms as u32;
+    let out = rt.layout.bytes_mut(RegionId::Tx);
+    rt.inst.client_poll_uplink(t_ms, out) as i32
+}
+
+/// `sim_region_hash(conn) -> status`: `host::Host::region_hash(conn)`, two LE `u32` into `Result`
+/// (`sim_hash`'s own crossing shape). `engine/test`-only (`hostRegionHash`).
+pub fn sim_region_hash<T: Instance>(slot: &Slot<T>, conn: u32) -> Status {
+    let rt = match slot.sim() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.sim_region_hash(conn, result)
+}
+
+/// `client_region_hash() -> status`: `client::Replica::region_hash()`, same crossing shape as
+/// `sim_region_hash`. `engine/test`-only (`replicaHash`).
+pub fn client_region_hash<T: Instance>(slot: &Slot<T>) -> Status {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.client_region_hash(result)
+}
+
+/// `sim_conn_counters(conn) -> status`: `host::ConnCounters` for `conn`, little-endian into
+/// `Result` (`Instance::sim_conn_counters`'s own doc comment names the field order and byte
+/// count). `engine/test`-only (`netCounters`).
+pub fn sim_conn_counters<T: Instance>(slot: &Slot<T>, conn: u32) -> Status {
+    let rt = match slot.sim() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.sim_conn_counters(conn, result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

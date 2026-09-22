@@ -11,16 +11,29 @@
 use crate::abi::config::HexU64;
 use crate::abi::{Instance, RegionId, RegionLayout, Role, Status};
 use crate::client::upload::RECORD_BYTES;
-use crate::client::{CameraBlock, InputEvent, InputQueue, TerrainFeed, Uploader};
-use crate::game::Game;
+use crate::client::{
+    CameraBlock, ClientCore, DirtyEvent, InputEvent, InputQueue, TerrainFeed, Uploader,
+};
+use crate::game::{Game, PlayerId};
 use crate::host::Host;
-use crate::world::{CacheCapacity, ChunkCoord, ChunkDims, TerrainStore};
+use crate::world::{CacheCapacity, ChunkCoord, ChunkDims};
 use crate::worldgen::{GenCore, Pristine, Worldgen};
 
 /// `RegionId::Rx`'s size for input on the client role (mirrors `fixtures/terrain`'s own constant,
 /// docs/plan/11-camera-and-input.md): whatever the client worker's input-drain pump might hand
 /// `on_input` in one call is bounded by `InputQueue::CAPACITY` whole records.
 const INPUT_RX_BYTES: usize = InputQueue::CAPACITY * InputEvent::BYTES;
+/// `RegionId::Downlink`'s size on the client role (docs/plan/
+/// 15b-ring-connection-and-replica-rendering.md): must hold the largest frame `host::Host::
+/// build_frame` can ever produce, matching `host::mod`'s own `SIM_TX_BYTES` -- duplicated here
+/// (that constant is private to `host::mod`) rather than shared, since keeping the two in step is
+/// already `host::mod`'s own Deviations to track, not a value either role's `Instance` reads from
+/// the other at runtime.
+const CLIENT_DOWNLINK_BYTES: u32 = 65536;
+/// `RegionId::Tx`'s size on the client role (`client_poll_uplink`'s `out`): must hold the largest
+/// uplink batch the client can ever build, matching `host::mod`'s own `SIM_RX_BYTES` for the same
+/// reason as [`CLIENT_DOWNLINK_BYTES`].
+const CLIENT_UPLINK_BYTES: u32 = 4096;
 /// Matches `worker/client-upload.ts`'s own `UPLOAD_BATCH_MAX` (docs/plan/09-renderer-terrain.md
 /// Planning decisions).
 const MAX_STAGE_BATCH: u32 = 16;
@@ -53,47 +66,68 @@ struct TerrainConfig<P> {
     cache_chunks: u32,
 }
 
-/// The client-role instance (docs/plan/13-sim-host-tick-loop.md Scope): a `TerrainStore` over
-/// `Pristine<G::Worldgen>`, the `TerrainFeed` that turns cache misses into `genRequest`/
-/// `genResult` traffic (docs/plan/08b-gen-workers-and-queue.md), the `Uploader` that turns
-/// residency into upload-ring records (docs/plan/09-renderer-terrain.md), and the `InputQueue`
-/// `on_input` decodes into (docs/plan/11-camera-and-input.md). Exactly `fixtures/terrain`'s own
-/// `FixtureRole::Client` arm, generalised over `G: Game` instead of a fixture-local `NoGame`.
+/// The client-role instance (docs/plan/13-sim-host-tick-loop.md Scope, extended by docs/plan/
+/// 15b-ring-connection-and-replica-rendering.md): a [`ClientCore<G>`] (whose [`crate::client::
+/// Replica<G>`] owns the one `TerrainStore` over `Pristine<G::Worldgen>` this instance has), the
+/// `TerrainFeed` that turns cache misses into `genRequest`/`genResult` traffic (docs/plan/
+/// 08b-gen-workers-and-queue.md), the `Uploader` that turns residency into upload-ring records
+/// (docs/plan/09-renderer-terrain.md), and the `InputQueue` `on_input` decodes into (docs/plan/
+/// 11-camera-and-input.md). Before 15b, this held its own standalone `TerrainStore` alongside a
+/// nonexistent replica; 15b merges the two (Deviations: "one client-role terrain store, not two")
+/// since `TerrainFeed`/`Uploader` only ever need `&TerrainStore`/`&mut TerrainStore`, which
+/// `ClientCore::replica()`/`replica_mut()` now supply via `Replica::terrain()`/`terrain_mut()`.
 ///
 /// Inherits `Uploader::new`'s own `CHUNK_BITS == 5` assertion (0024 §9 tracks generalising this):
 /// a `G` with a non-default `CHUNK_BITS` panics building this, same as it always has for
 /// `fixtures/terrain`.
 pub struct ClientInstance<G: Game> {
-    terrain: Box<TerrainStore>,
+    // Boxed (was already true of `terrain`/`uploader`/`input_queue` before 15b): `ClientCore<G>`
+    // now carries what `terrain` used to (a `TerrainStore`) plus `Replica`'s own held-chunk/dirty
+    // bookkeeping, large enough to keep tripping clippy's `large_enum_variant` against
+    // `GameInstance::Sim`/`Gen`'s own size otherwise.
+    core: Box<ClientCore<G>>,
     feed: TerrainFeed,
     uploader: Box<Uploader<G::Client, G>>,
-    // Boxed like `terrain`/`uploader`: `InputQueue`'s fixed 64-record array is large enough to
-    // trip clippy's `large_enum_variant` against `GameInstance::Sim`/`Gen`'s own size.
     input_queue: Box<InputQueue>,
 }
 
 impl<G: Game> ClientInstance<G> {
-    fn init(game_cfg_json: &str, layout: &mut RegionLayout) -> Result<Self, Status> {
+    fn init(game_cfg_json: &str, layout: &mut RegionLayout) -> Result<Self, Status>
+    where
+        G::Global: Default,
+    {
         let cfg: TerrainConfig<<G::Worldgen as Worldgen>::Params> =
             serde_json::from_str(game_cfg_json).map_err(|_| Status::BadConfig)?;
         let dims = ChunkDims::new(G::CHUNK_BITS);
         layout.region(RegionId::GenIn, TerrainFeed::gen_in_bytes(dims) as u32);
         layout.region(RegionId::ChunkTexels, MAX_STAGE_BATCH * RECORD_BYTES as u32);
         layout.region(RegionId::Rx, INPUT_RX_BYTES as u32);
+        layout.region(RegionId::Downlink, CLIENT_DOWNLINK_BYTES);
+        layout.region(RegionId::Tx, CLIENT_UPLINK_BYTES);
         let source = Pristine::<G::Worldgen>::new(cfg.seed.0, cfg.params);
-        let terrain = TerrainStore::new(
+        // Single-connection assumption (docs/plan/15b-ring-connection-and-replica-rendering.md,
+        // Planning decisions "PlayerId = conn + 1, not conn"): this milestone's own topology never
+        // gives one client instance more than one host link, and it is always `conn == 0`, so
+        // `own_player` is `PlayerId(1)` unconditionally rather than learned out of band (`Replica`'s
+        // own doc comment on `own_player` names this as a real connection's usual path; a real
+        // multi-connection handshake is M28's, Non-scope here).
+        let mut replica = crate::client::Replica::<G>::new(
             dims,
             Box::new(source),
             CacheCapacity::Chunks(cfg.cache_chunks),
+            PlayerId(1),
         );
-        // This store is paired with an `Uploader`, the one consumer of cache events
-        // (`Uploader::on_frame` drains them), so it opts into recording them; every other role's
-        // store leaves them off (`TerrainStore::enable_cache_events`).
-        terrain.enable_cache_events();
+        // The silent trap (docs/plan/15b-ring-connection-and-replica-rendering.md, Planning
+        // decisions): a store paired with an `Uploader` -- the one consumer of cache events,
+        // `Uploader::on_frame`'s drain -- must opt into recording them, or that drain silently
+        // sees nothing and the renderer never updates. This replica's own `TerrainStore` is that
+        // store now (it replaces the standalone one this instance used to build directly).
+        replica.terrain_mut().enable_cache_events();
+        let core = Box::new(ClientCore::new(replica));
         let feed = TerrainFeed::new(dims, cfg.gen_workers);
         let uploader = Box::new(Uploader::<G::Client, G>::new(dims));
         Ok(ClientInstance {
-            terrain: Box::new(terrain),
+            core,
             feed,
             uploader,
             input_queue: Box::new(InputQueue::new()),
@@ -215,8 +249,16 @@ where
     fn frame(&mut self, _t_ms: f64, camera: &CameraBlock, _result: &mut [u8]) -> Status {
         match self {
             GameInstance::Client(c) => {
-                c.feed.on_frame(camera, &c.terrain);
-                c.uploader.on_frame(camera, &c.terrain);
+                // docs/plan/15b-ring-connection-and-replica-rendering.md, Planning decisions "The
+                // camera report is built in Rust from the camera-block copy, not in TS": every
+                // real frame's camera state feeds `ClientCore::set_camera`, which queues an
+                // uplink send only on change (0010 "Rates") -- `client_poll_uplink` (a separate
+                // export, called right after this one every wake) is what actually drains it.
+                c.core
+                    .set_camera(camera.to_report(), camera.frame_time_ms as u32);
+                let terrain = c.core.replica().terrain();
+                c.feed.on_frame(camera, terrain);
+                c.uploader.on_frame(camera, terrain);
                 c.input_queue.clear();
                 Status::Ok
             }
@@ -233,7 +275,10 @@ where
 
     fn gen_deliver(&mut self, worker: u32, record: &[u8]) -> Status {
         match self {
-            GameInstance::Client(c) => c.feed.deliver(worker, record, &mut c.terrain),
+            GameInstance::Client(c) => {
+                c.feed
+                    .deliver(worker, record, c.core.replica_mut().terrain_mut())
+            }
             _ => Status::Unsupported,
         }
     }
@@ -260,7 +305,9 @@ where
 
     fn client_chunk_hash(&mut self, cx: i32, cy: i32, result: &mut [u8]) -> Status {
         match self {
-            GameInstance::Client(c) => match c.feed.chunk_hash(&c.terrain, ChunkCoord::new(cx, cy))
+            GameInstance::Client(c) => match c
+                .feed
+                .chunk_hash(c.core.replica().terrain(), ChunkCoord::new(cx, cy))
             {
                 Some(h) => {
                     let Some(out) = result.get_mut(..8) else {
@@ -278,7 +325,10 @@ where
 
     fn upload_stage(&mut self, max_records: u32, out: &mut [u8]) -> u32 {
         match self {
-            GameInstance::Client(c) => c.uploader.stage(max_records, &c.terrain, out),
+            GameInstance::Client(c) => {
+                c.uploader
+                    .stage(max_records, c.core.replica().terrain(), out)
+            }
             _ => 0,
         }
     }
@@ -300,6 +350,68 @@ where
                 Status::Ok
             }
             _ => Status::Unsupported,
+        }
+    }
+
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md: applies one whole host frame
+    /// (`ClientCore::on_frame`), then drains the two finer-grained halves of the replica's own
+    /// dirty tracking straight into the `Uploader` this instance already owns -- Scope's "a tile
+    /// delta becomes `patch_tile`... a snapshot or a leave becomes `enqueue_chunk`". A malformed
+    /// frame is `Status::Decode` and leaves the replica untouched (`ClientCore::on_frame`'s own
+    /// validate-first contract): nothing is drained in that case either, since nothing changed.
+    fn on_frame(&mut self, bytes: &[u8]) -> Status {
+        match self {
+            GameInstance::Client(c) => {
+                let ClientInstance { core, uploader, .. } = c;
+                match core.on_frame(bytes) {
+                    Ok(_summary) => {
+                        core.replica_mut().drain_dirty_for_upload(|e| match e {
+                            DirtyEvent::Whole(chunk) => uploader.enqueue_chunk(chunk),
+                            DirtyEvent::Tile(pos, tile) => uploader.patch_tile(pos, tile),
+                        });
+                        Status::Ok
+                    }
+                    Err(_e) => Status::Decode,
+                }
+            }
+            _ => Status::Unsupported,
+        }
+    }
+
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md: `ClientCore::poll_uplink`.
+    fn client_poll_uplink(&mut self, t_ms: u32, out: &mut [u8]) -> usize {
+        match self {
+            GameInstance::Client(c) => c.core.poll_uplink(t_ms, out),
+            _ => 0,
+        }
+    }
+
+    fn sim_region_hash(&mut self, conn: u32, result: &mut [u8]) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_region_hash(conn, result),
+            _ => Status::WrongRole,
+        }
+    }
+
+    fn client_region_hash(&mut self, result: &mut [u8]) -> Status {
+        match self {
+            GameInstance::Client(c) => {
+                let Some(out) = result.get_mut(..8) else {
+                    return Status::BadLength;
+                };
+                let hash = c.core.region_hash();
+                out[0..4].copy_from_slice(&(hash as u32).to_le_bytes());
+                out[4..8].copy_from_slice(&((hash >> 32) as u32).to_le_bytes());
+                Status::Ok
+            }
+            _ => Status::Unsupported,
+        }
+    }
+
+    fn sim_conn_counters(&mut self, conn: u32, result: &mut [u8]) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_conn_counters(conn, result),
+            _ => Status::WrongRole,
         }
     }
 }

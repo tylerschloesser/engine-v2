@@ -79,6 +79,14 @@ impl<G: Game> ClientCore<G> {
         &self.replica
     }
 
+    /// Mutable counterpart of [`Self::replica`] (docs/plan/15b-ring-connection-and-replica-
+    /// rendering.md): `game_instance.rs`'s `ClientInstance` reaches `Replica::terrain`/`terrain_mut`
+    /// through this for `TerrainFeed`/`Uploader`, which take `&TerrainStore`/`&mut TerrainStore`
+    /// directly rather than a `ClientCore`.
+    pub(crate) fn replica_mut(&mut self) -> &mut Replica<G> {
+        &mut self.replica
+    }
+
     /// The read-only view a renderer/UI would use (0003 "Contexts"): `Replica<G>` implements
     /// `WorldRead<G>` directly.
     pub fn view(&self) -> &Replica<G> {

@@ -18,13 +18,19 @@
 // does.
 import { Role } from '../abi.js'
 import { systemClock } from '../clock.js'
-import { CB_SIM_STEP_REQ, W_ACK, workerWord } from '../sab/control.js'
+import { RingConnection } from '../ring-connection.js'
+import { CB_SIM_STEP_REQ, W_ACK, WORKER_CLIENT, workerWord } from '../sab/control.js'
 import { createSimHostFromInstance, type SimHostCounters, wrapEngineInstance } from '../server.js'
 import { createAtomicsTimer } from './atomics-timer.js'
 import { applyGcHook } from './gc-hook.js'
 import { instantiateForSetup } from './instantiate.js'
 import type { SetupMessage } from './protocol.js'
-import { SIM_COUNTERS_BYTES, SIM_COUNTERS_CALL } from './protocol.js'
+import {
+  NET_COUNTERS_BYTES,
+  NET_COUNTERS_CALL,
+  SIM_COUNTERS_BYTES,
+  SIM_COUNTERS_CALL,
+} from './protocol.js'
 import type { LoopState, Shell } from './shell.js'
 import { handleTestCall } from './test-call.js'
 
@@ -45,50 +51,54 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // never reads one -- `systemClock` still reaches `SimHost` two lines below, which is the only
   // clock read left on this worker's own tick path (amortised there, not per wake).
   const atomicsTimer = createAtomicsTimer()
-  const simHost = createSimHostFromInstance(wrapEngineInstance(inst), {
+  const simInstance = wrapEngineInstance(inst)
+  const simHost = createSimHostFromInstance(simInstance, {
     clock: systemClock,
     timer: atomicsTimer.timer,
   })
 
   // docs/plan/15b-ring-connection-and-replica-rendering.md Scope: "the sim worker creates one
-  // RingConnection at startup and accepts it". **Not done in this range** (steps 1-3's own cut
-  // line): every existing browser page that spawns a `sim`-kind worker over `fx-puts` (`sim-
-  // worker.ts`, `gc-sim.ts`, `gc-topology.ts`, `gc-echo.ts`, `topology.ts`) would then always have
-  // one connection accepted at startup, and `Host::connect` queues `Record::Player{Joined,
-  // Connected}` -- delivered at the very first `tick()` -- which `fx-puts`'s own `on_player`
-  // handler turns into a real state write (`w.put_player(who, Player::default())`,
-  // `fixtures/puts/src/lib.rs`). That changes `sim_hash()` relative to `puts_idle_100`'s existing,
-  // accepted golden (zero connections ever), which `sim-worker.spec.ts`'s `sim_worker_steps_and_
-  // hashes` compares `stepTick(100)`'s hash against byte-for-byte. Wiring this unconditionally
-  // here would silently break that already-accepted test (or force re-blessing its golden, the
-  // orchestrator's decision, not this range's -- "never weaken, skip, or change an existing
-  // golden without asking"). `SimHost.accept`/`RingConnection` are both built and independently
-  // tested this range (`server.ts`, `ring-connection.ts`, `tests/wasm/puts.test.ts`'s
-  // `host_accepts_ring_connection_and_hashes_match`, over their own fresh instances) -- only this
-  // one line of *production* wiring is left for whoever builds the client worker loop (step 4),
-  // since only then does a real second party exist to connect, and a golden/topology decision (a
-  // dedicated fixture or scenario with an accepted connection, distinct from `puts_idle_100`) can
-  // be made deliberately rather than as a side effect.
+  // RingConnection at startup and accepts it" -- gated on `message.link` (Orchestrator ruling 1:
+  // "the sim worker accepts a connection when the SAB set it boots with actually carries a client
+  // link, and not otherwise"). Steps 1-3 left this line out entirely because every existing
+  // `sim`-kind test page (`sim-worker.ts`, `gc-sim.ts`, `gc-topology.ts`, `gc-echo.ts`,
+  // `topology.ts`) would otherwise always have one connection accepted at startup, and
+  // `Host::connect` queues `Record::Player{Joined, Connected}` -- delivered at the very first
+  // `tick()` -- which `fx-puts`'s own `on_player` handler turns into a real state write, changing
+  // `sim_hash()` relative to `puts_idle_100`'s existing, accepted golden (zero connections ever).
+  // None of those pages ever set `host.connect` (`client.ts`), so `message.link` is `undefined`
+  // there and this stays a no-op for them by construction, not by a flag someone has to remember
+  // not to set -- exactly the ruling's own reasoning. `simInstance.rxBytes()`/`txBytes()` size the
+  // connection's own preallocated buffers from the real `Rx`/`Tx` region capacities this instance
+  // just declared, rather than a magic number duplicated from `host::mod`'s `SIM_RX_BYTES`/
+  // `SIM_TX_BYTES`.
+  const connection =
+    message.link === true
+      ? new RingConnection(
+          message.sabs.uplink,
+          message.sabs.downlink,
+          { maxUplinkBytes: simInstance.rxBytes(), maxDownlinkBytes: simInstance.txBytes() },
+          { control: shell.control, index: WORKER_CLIENT },
+        )
+      : null
+  if (connection) simHost.accept(connection)
+
   let lastStepReq = Atomics.load(shell.control.words, CB_SIM_STEP_REQ)
-  // ADR 0030's `AtomicsTimer.poll()` revisited (Deviations, "the highest-risk item"): `poll()`
-  // fires its registered callback unconditionally on every `body()` pass, which was correct only
-  // while nothing but the pacing timeout itself ever wakes this worker (true today; still true
-  // after this fix -- no ring wake is wired above). The *next* range to wire an uplink ring's
-  // producer to wake this worker (`WORKER_HOST`) must not have to revisit this file to avoid a
-  // spurious tick per external wake, so the fix lands now, ready and inert: `W_WAKE` (`sab/
-  // control.ts`) only ever changes through an explicit `ControlBlock.wake()` call -- the timeout
-  // branch of `Atomics.wait` never touches it -- so comparing this call's `wokenBy` against the
-  // value seen last call is an *exact* test, not a heuristic: unchanged means nothing called
-  // `wake()` since the last pass, i.e. this call happened only because the deadline elapsed (a
-  // genuine timer fire, safe to hand to `atomicsTimer.poll()`); changed means some producer (a
-  // future uplink ring, `CB_SIM_STEP_REQ`, a future presence/action ring) woke this worker, and
-  // `poll()` is skipped for that pass so it does not also run a spurious tick. Provably inert
-  // today: `CB_SIM_STEP_REQ`'s own wake (`test/client.ts`'s `stepSimTickSync`) is the only thing
-  // that ever changes `W_WAKE` for `WORKER_HOST` in any existing topology, and real-time pacing
-  // (the only consumer of `atomicsTimer.poll()`) is armed only for `!message.test`, which no
-  // existing page sets -- so `poll()` is a no-op regardless of this comparison in every test that
-  // exists today; this range's own `pnpm test wasm`/`pnpm test unit` runs (267/42/157 passing,
-  // unchanged) are consistent with that.
+  // ADR 0030's `AtomicsTimer.poll()` fix (Deviations, "the highest-risk item"; Orchestrator ruling
+  // 3): `poll()` fires its registered callback unconditionally on every `body()` pass, which is
+  // correct only while nothing but the pacing timeout itself wakes this worker. Steps 1-3 landed
+  // this comparison ready but provably inert (nothing woke `WORKER_HOST` externally in any
+  // topology that existed then); this range is what makes it live, since a linked client's own
+  // uplink `RingProducer` (`worker/client.ts`'s net pump) now wakes this worker on every batch it
+  // pushes -- a genuine external wake, exactly what the fix exists for. `W_WAKE` (`sab/control.ts`)
+  // only ever changes through an explicit `ControlBlock.wake()` call -- the timeout branch of
+  // `Atomics.wait` never touches it -- so comparing this call's `wokenBy` against the value seen
+  // last call is an *exact* test, not a heuristic: unchanged means nothing called `wake()` since
+  // the last pass (a genuine timer fire, safe to hand to `atomicsTimer.poll()`); changed means some
+  // producer (a linked client's uplink push, `CB_SIM_STEP_REQ`, a future presence/action ring) woke
+  // this worker, and `poll()` is skipped for that pass so it does not also run a spurious tick.
+  // `net-worker.spec.ts`'s `poll_skips_a_spurious_tick_on_a_ring_wake` (Tests added) fails if this
+  // comparison is ever removed -- the "fix nothing exercises" defect this repo keeps repeating.
   let lastWokenBy: number | null = null
 
   // Production topology, or a test page that opts in with `test.pace` (docs/plan/
@@ -101,6 +111,12 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
 
   function body(wokenBy: number): void {
     if (gcHook) applyGcHook(shell.control, shell.index)
+    // Drains every pending uplink message unconditionally, every wake (Scope: "its Atomics.wait
+    // loop also wakes on the uplink ring's wake word") -- cheap when there is nothing queued
+    // (`RingConnection.drainUplink`'s own loop breaks on the first empty `popInto`), and this is
+    // what turns a client's `writeCameraAndWake`-style push into a real `sim_admit` call rather
+    // than waiting for the next real tick's own wake.
+    if (connection) connection.drainUplink()
     const stepReq = Atomics.load(shell.control.words, CB_SIM_STEP_REQ)
     if (stepReq !== lastStepReq) {
       const delta = (stepReq - lastStepReq) >>> 0
@@ -119,6 +135,14 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       if (m.name === SIM_COUNTERS_CALL) {
         const result = new Uint8Array(SIM_COUNTERS_BYTES)
         encodeCounters(simHost.counters, result)
+        return { type: 'test-result', id: m.id, value: 0, result }
+      }
+      if (m.name === NET_COUNTERS_CALL) {
+        // `RingConnection.downlinkRetries` (`ring-connection.ts`): JS-side state this sim worker's
+        // own `connection` holds, unreachable through any ABI export (`engine/test`'s
+        // `netCounters`, same synthetic-name shape as `SIM_COUNTERS_CALL`, above).
+        const result = new Uint8Array(NET_COUNTERS_BYTES)
+        new DataView(result.buffer).setUint32(0, connection?.downlinkRetries ?? 0, true)
         return { type: 'test-result', id: m.id, value: 0, result }
       }
       return handleTestCall(inst, m)

@@ -339,6 +339,14 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
     for (let conn = 0; conn < MAX_CONNS; conn++) {
       const connection = conns[conn]
       if (!connection) continue
+      // `RingConnection.pumpRetries()`'s own doc comment (docs/plan/
+      // 15b-ring-connection-and-replica-rendering.md): every tick, not only one whose
+      // `simBuildFrame` produced a fresh frame -- otherwise a connection that once fell behind a
+      // full downlink ring stays behind forever once the world goes idle (no more fresh frames to
+      // piggyback a retry on). A generic 0009 `Connection` carries no such method; the same
+      // optional-property pattern `SimHost.accept`'s own `onMessage` uses for `lastMessageLength`.
+      const withRetries = connection as Connection & { pumpRetries?: () => void }
+      withRetries.pumpRetries?.()
       const frame = sim.simBuildFrame(conn)
       if (frame.len > 0) {
         connection.send(MsgClass.ReliableOrdered, frame.bytes as Uint8Array)

@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 9
+export const ABI_VERSION = 10
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -39,6 +39,11 @@ export const RegionId = {
   Camera: 7,
   GenOut: 8,
   GenIn: 9,
+  // docs/plan/15b-ring-connection-and-replica-rendering.md: the client role's own inbound buffer
+  // for one whole host frame (`on_frame`'s `len` bytes), distinct from `Rx` (already the client
+  // role's input-record buffer, M11). The client's own outbound uplink batch reuses `Tx`,
+  // unclaimed by the client role until now.
+  Downlink: 10,
 } as const
 export type RegionId = (typeof RegionId)[keyof typeof RegionId]
 
@@ -110,6 +115,24 @@ export const ABI_EXPORTS = {
   // docs/plan/11-camera-and-input.md: decodes `len` bytes of `Rx` as whole `inputRing` records
   // (32 bytes each) into whatever `InputQueue` the instance owns.
   on_input: { role: 'client', params: 1, result: 'status' },
+  // docs/plan/15b-ring-connection-and-replica-rendering.md: `len` bytes of `RegionId.Downlink`
+  // are one whole host frame (0011), applied atomically into the client role's own replica.
+  on_frame: { role: 'client', params: 1, result: 'status' },
+  // docs/plan/15b-ring-connection-and-replica-rendering.md: writes at most one uplink batch into
+  // `RegionId.Tx`, returning its length (`0` = nothing due yet, 0010 "Rates"). `t_ms: f64` is
+  // ignored (same shape as `frame`'s own raw argument): the real value is read from the
+  // just-copied `CameraBlock.frame_time_ms`.
+  client_poll_uplink: { role: 'client', params: 1, result: 'len' },
+  // docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test` only: `host::Host::
+  // region_hash(conn)`, two LE `u32` into `Result` (`sim_hash`'s own crossing shape).
+  sim_region_hash: { role: 'sim', params: 1, result: 'status' },
+  // docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test` only:
+  // `client::Replica::region_hash()`, same crossing shape as `sim_region_hash`.
+  client_region_hash: { role: 'client', params: 0, result: 'status' },
+  // docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test` only: `host::
+  // ConnCounters` for `conn`, little-endian into `Result` (48 bytes: six `u64` fields,
+  // `bytes_down, frames, chunk_enters_pristine, chunk_snapshots, chunk_leaves, bytes_up`).
+  sim_conn_counters: { role: 'sim', params: 1, result: 'status' },
 } as const satisfies Record<string, ExportSpec>
 
 export function statusName(n: number): string {

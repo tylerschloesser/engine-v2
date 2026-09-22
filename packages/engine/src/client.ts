@@ -63,7 +63,20 @@ export type RenderOptions = { scale?: number; scaleCap?: number; neighbourCutoff
 export interface ClientOptions {
   canvas: HTMLCanvasElement
   wasm: { url: string; buildHash: string }
-  host: { kind: 'local'; world: WorldConfig } | { kind: 'remote'; url: string; joinKey?: string }
+  host:
+    | {
+        kind: 'local'
+        world: WorldConfig
+        /** docs/plan/15b-ring-connection-and-replica-rendering.md, Orchestrator ruling 1: links
+         * the sim and client workers over the uplink/downlink ring pair (`SimHost.accept`, the
+         * client's own net pump) -- the real single-player topology this milestone lands. Default
+         * `false` (unset), by design: every existing `sim`-kind test page constructs `host`
+         * without this field and so keeps its own zero-connection topology automatically, with no
+         * flag to remember to turn off (Planning decisions). A page that wants a real connected
+         * session sets this `true`. */
+        connect?: boolean
+      }
+    | { kind: 'remote'; url: string; joinKey?: string }
   /** Pattern B (0017 §3): the game constructs the worker itself. */
   createWorker?: () => Worker
   /** Bytes; defaults are 0015 §5's per-role arenas. */
@@ -269,6 +282,7 @@ function setupWorker(
   config: InstanceConfig,
   wasm: { module?: WebAssembly.Module; url?: string },
   test: TestFlags | undefined,
+  link: boolean,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false
@@ -303,6 +317,7 @@ function setupWorker(
       ...(wasm.module ? { module: wasm.module } : {}),
       ...(wasm.url ? { wasmUrl: wasm.url } : {}),
       ...(test ? { test } : {}),
+      ...(link ? { link } : {}),
     }
     worker.postMessage(setup)
   })
@@ -562,6 +577,10 @@ export function createClient(options: ClientOptions): Client {
       spawns.push({ kind: 'gen', index: genIndices[i] as number, arenaBytes: arenas.gen })
     }
 
+    // Orchestrator ruling 1 (Planning decisions): a topology fact, carried identically to the
+    // `sim` and `client` setup messages, never to `gen`/`net`.
+    const linked = options.host.kind === 'local' && options.host.connect === true
+
     const waits = spawns.map(({ kind, index, arenaBytes }) => {
       const worker = spawnWorker(options)
       workers.push({ kind, index, worker })
@@ -571,7 +590,8 @@ export function createClient(options: ClientOptions): Client {
         if (module) wasm.module = module
         else wasm.url = options.wasm.url
       }
-      return setupWorker(worker, kind, index, sabs, config, wasm, options.test?.flags)
+      const link = linked && (kind === 'sim' || kind === 'client')
+      return setupWorker(worker, kind, index, sabs, config, wasm, options.test?.flags, link)
     })
     await Promise.all(waits)
   }

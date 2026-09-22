@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 9;
+pub const ABI_VERSION: u32 = 10;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -69,6 +69,14 @@ pub enum RegionId {
     /// `genResult` record staging (docs/plan/08b-gen-workers-and-queue.md): `16 + slab_bytes`,
     /// sized by client-role `init` alongside its `TerrainFeed`, same as `GenOut` on the gen role.
     GenIn = 9,
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md: the client role's own inbound
+    /// buffer for one whole host frame (`on_frame`'s `len` bytes) -- distinct from `Rx`, which the
+    /// client role already uses for input records (`on_input`, M11): both are "receive" buffers
+    /// for the same role but for unrelated message kinds, and `RegionLayout::region` allows only
+    /// one declaration per id. The client's own outbound uplink batch (`client_poll_uplink`'s
+    /// `out`) reuses `Tx`, unclaimed by the client role until now -- the same Rx-in/Tx-out
+    /// convention the sim role already has, just declared by a different role.
+    Downlink = 10,
 }
 
 /// Levels of `engine.log`. Release builds compile out everything below `Warn` (0014 §3).
@@ -81,7 +89,7 @@ pub enum LogLevel {
     Debug = 3,
 }
 
-pub const REGION_COUNT: usize = 10;
+pub const REGION_COUNT: usize = 11;
 
 impl Role {
     pub const fn from_u32(n: u32) -> Option<Role> {
@@ -107,6 +115,7 @@ impl RegionId {
             7 => Some(RegionId::Camera),
             8 => Some(RegionId::GenOut),
             9 => Some(RegionId::GenIn),
+            10 => Some(RegionId::Downlink),
             _ => None,
         }
     }
@@ -260,6 +269,50 @@ pub trait Instance: Sized + 'static {
     fn on_input(&mut self, _rx: &[u8], _result: &mut [u8]) -> Status {
         Status::Unsupported
     }
+
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md: applies one whole host frame
+    /// (0011) -- the first `len` bytes of `RegionId::Downlink` -- atomically into the client
+    /// role's own replica (`client::ClientCore::on_frame`). A malformed frame is `Status::Decode`
+    /// and leaves the replica untouched (`ClientCore::on_frame`'s own "validate first" contract);
+    /// nothing else about a bad frame is reported here (Non-scope: resync/reconnect is M13/M28).
+    fn on_frame(&mut self, _bytes: &[u8]) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md: writes at most one uplink batch
+    /// (`client::ClientCore::poll_uplink`) into `out` (the whole `Tx` region for the client role),
+    /// returning its length, or `0` when nothing is due yet (0010 "Rates"). `t_ms` is already
+    /// milliseconds, read by the caller from the just-copied `CameraBlock::frame_time_ms`
+    /// (`abi::client_poll_uplink`'s own doc comment says why the raw export argument is ignored,
+    /// the same shape `frame`'s own `t_ms` already uses).
+    fn client_poll_uplink(&mut self, _t_ms: u32, _out: &mut [u8]) -> usize {
+        0
+    }
+
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test`'s `hostRegionHash`:
+    /// `host::Host::region_hash(conn)`, crossing as two LE `u32` into `Result` (`sim_hash`'s own
+    /// shape). Test/diagnostic only -- no production caller needs this on the wire (0011's own
+    /// `Hashes` section is M31b's).
+    fn sim_region_hash(&mut self, _conn: u32, _result: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test`'s `replicaHash`:
+    /// `client::Replica::region_hash()`, same crossing shape as `sim_region_hash`.
+    fn client_region_hash(&mut self, _result: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test`'s `netCounters`:
+    /// `host::ConnCounters` for `conn`, little-endian into `Result` in field-declaration order
+    /// (`bytes_down: u64`, `frames: u64`, `chunk_enters_pristine: u64`, `chunk_snapshots: u64`,
+    /// `chunk_leaves: u64`, `bytes_up: u64` -- 48 bytes). `Status::NotCached` reused here for "no
+    /// such connection" would be misleading (that status is chunk-cache-specific); an unknown
+    /// `conn` instead writes every field as 0 and still returns `Status::Ok`, since "never
+    /// connected" and "connected with zero traffic so far" cross the wire identically anyway.
+    fn sim_conn_counters(&mut self, _conn: u32, _result: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
 }
 
 /// Emits every export for every role, the `#[global_allocator]`, and the single-threaded instance
@@ -367,6 +420,26 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn on_input(len: u32) -> u32 {
             $crate::abi::on_input(&__ENGINE_SLOT, len) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn on_frame(len: u32) -> u32 {
+            $crate::abi::on_frame(&__ENGINE_SLOT, len) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_poll_uplink(t_ms: f64) -> i32 {
+            $crate::abi::client_poll_uplink(&__ENGINE_SLOT, t_ms)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_region_hash(conn: u32) -> u32 {
+            $crate::abi::sim_region_hash(&__ENGINE_SLOT, conn) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_region_hash() -> u32 {
+            $crate::abi::client_region_hash(&__ENGINE_SLOT) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_conn_counters(conn: u32) -> u32 {
+            $crate::abi::sim_conn_counters(&__ENGINE_SLOT, conn) as u32
         }
 
         // gen

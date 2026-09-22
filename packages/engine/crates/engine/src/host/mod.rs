@@ -845,4 +845,33 @@ where
     fn tick_hz(&mut self) -> u32 {
         G::TICK_RATE.hz_value()
     }
+
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md: `Host::region_hash(conn)`, two LE
+    /// `u32` into `result` (`sim_hash`'s own crossing shape). `engine/test`-only.
+    fn sim_region_hash(&mut self, conn: u32, result: &mut [u8]) -> Status {
+        let Some(out) = result.get_mut(..8) else {
+            return Status::BadLength;
+        };
+        let hash = self.region_hash(conn);
+        out[0..4].copy_from_slice(&(hash as u32).to_le_bytes());
+        out[4..8].copy_from_slice(&((hash >> 32) as u32).to_le_bytes());
+        Status::Ok
+    }
+
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md: `host::ConnCounters` for `conn`,
+    /// little-endian into `result` (`Instance::sim_conn_counters`'s own doc comment names the
+    /// field order). An unknown/never-connected `conn` writes every field as 0 (same doc comment).
+    fn sim_conn_counters(&mut self, conn: u32, result: &mut [u8]) -> Status {
+        let Some(out) = result.get_mut(..48) else {
+            return Status::BadLength;
+        };
+        let c = self.counters(conn).unwrap_or_default();
+        out[0..8].copy_from_slice(&c.bytes_down.to_le_bytes());
+        out[8..16].copy_from_slice(&c.frames.to_le_bytes());
+        out[16..24].copy_from_slice(&c.chunk_enters_pristine.to_le_bytes());
+        out[24..32].copy_from_slice(&c.chunk_snapshots.to_le_bytes());
+        out[32..40].copy_from_slice(&c.chunk_leaves.to_le_bytes());
+        out[40..48].copy_from_slice(&c.bytes_up.to_le_bytes());
+        Status::Ok
+    }
 }
