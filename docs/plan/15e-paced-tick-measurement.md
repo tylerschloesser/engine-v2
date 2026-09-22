@@ -1,6 +1,6 @@
 # M15e: the paced-tick test measures a window, not a lifetime
 
-Status: not started · After: 15b · Tyler-dependent: no
+Status: done · After: 15b · Tyler-dependent: no
 
 ## Goal
 
@@ -108,13 +108,13 @@ None. This milestone repairs the measurement inside an existing test; its eviden
 
 ## Exit criteria
 
-- [ ] `poll_skips_a_spurious_tick_on_a_ring_wake` asserts a poke-window delta, not a lifetime total,
+- [x] `poll_skips_a_spurious_tick_on_a_ring_wake` asserts a poke-window delta, not a lifetime total,
       and the `0.5` / `1.35` bounds and `expectedTicks` are unchanged in the diff.
-- [ ] Step 1's reproduction number and step 3's two numbers (guard reverted → fails; guard restored →
+- [x] Step 1's reproduction number and step 3's two numbers (guard reverted → fails; guard restored →
       passes) are pasted in Deviations.
-- [ ] Step 4's 20 local repeats: 0 failures, with the spread of deltas reported.
-- [ ] The `resync()` asymmetry has a row in `docs/plan/deferred-ledger.md`.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Step 4's 20 local repeats: 0 failures, with the spread of deltas reported.
+- [x] The `resync()` asymmetry has a row in `docs/plan/deferred-ledger.md`.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 
@@ -137,4 +137,58 @@ None.
 
 ## Deviations
 
-(filled in during Phase 3)
+**The implementer left this section empty and handed its content to the orchestrator in its report;
+written up here at the gate.** The agent definition asks the implementer to fill it — worth naming so
+the next delegation says so explicitly.
+
+### What changed
+
+The assertion is now over the delta between two `__simCounters` readings, one before `__pokeFor` and
+one after, instead of the single after-reading it took before. `expectedTicks`, `TICK_MS`, `pokeMs`,
+`pokeIntervalMs` and both bounds (`0.5`, `1.35`) are byte-identical in the diff; only comment text
+around them moved.
+
+`__simCounters` (`tests/browser/pages/src/connected-paced.ts`) now calls
+`parkWorkers` → `simCounters` → `resumeWorkers`, where before it parked and never resumed. Parking is
+forced: `simCounters` reaches the sim worker only through the parked-only `test-call` channel
+(`callParked`, M08b). No change was needed in `src/test/client.ts` — `resumeWorkers` already existed.
+
+### Measured numbers
+
+| | delta over the poke window |
+|---|---|
+| guard in place (implementer, 20 foreground repeats) | 26 (×15), 27 (×5) |
+| guard reverted to unconditional `poll()` (implementer) | 48 — fails `< 40.5` |
+| guard reverted (**orchestrator, re-run independently at the gate**) | **47 — fails `< 40.5`** |
+| guard restored (orchestrator, re-run) | passes |
+
+Step 1's reproduction of the underlying slope, 3000 ms of idle inserted before the poke on the
+unrepaired test: `ticksRun` = 87, against the 86 the brief's own table recorded. Consistent.
+
+`browser` suite after this milestone: 20 s of 25 s, against the 21 s baseline — the extra park/resume
+round trip per reading costs nothing measurable.
+
+### The `+1` from `resumeWorkers`, and why it is left in
+
+`resumeWorkers` re-enters `runBlockingLoop`, whose entry `runBodyOnce` runs one `body()` pass before
+ever waiting. On that pass the wake word is unchanged from the park, so `wokenBy === lastWokenBy`
+holds and `poll()` fires: exactly one extra tick. The before-poke reading's resume lands inside the
+measured window and contributes its +1; the after-poke reading's resume lands outside it and never
+counts. One tick against a window of ~30 with a `1.35` ceiling, so it is folded in and commented in
+both files rather than engineered away — the brief asked for that explicitly.
+
+### Recorded, not fixed
+
+`server.ts`'s `resync()` corrects the sim only when it is behind (`if (overshoot > 0)`) and has no
+branch for running ahead, so ADR 0030's claim that drift is "bounded at one window and
+self-correcting" holds in one direction only. Ledger row added; candidate owner M36b. Not reachable
+today: the measured error runs the other way, and the +1 above is the only thing on this path that
+pushes ticks upward at all.
+
+### Note for whoever next reads a counter in a browser test
+
+`SimHostCounters` is cumulative from `simHost.start()` and nothing resets it. Every counter on that
+struct has this property — `ticksRun` is simply the first one a test compared against a windowed
+expectation. A single read at the end of a window measures the lifetime, not the window, and the
+error scales with how slow the machine is *before* the window opens, which is why it was invisible
+locally and reproducible on `ubuntu-latest`.
