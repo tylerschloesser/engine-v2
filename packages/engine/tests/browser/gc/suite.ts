@@ -4,15 +4,26 @@
 // <pageId>` entry, and a spec file calling `zeroGcSuite`" (M09, M13, M16, M18, M29).
 import { type Browser, expect, type Page, test } from '@playwright/test'
 import type { NegativeControl } from '../../../src/test/controls.ts'
-import { gcPage } from '../../support/budgets.ts'
+import { gcPage, type IsolateBudget } from '../../support/budgets.ts'
 import { openPage } from '../support/page.ts'
 import { type GcResult, measure } from './instrument.ts'
 
 type ControlVerdict = { A: Record<string, boolean>; B: Record<string, boolean> }
 
 /** The verdict table of 0016 §3.8: a clean run passes everywhere; every negative control fails only
- * the named isolate(s)/assertion(s) and nowhere else. */
-function expectedVerdict(isolates: string[], control: NegativeControl): ControlVerdict {
+ * the named isolate(s)/assertion(s) and nowhere else. `classes` (`gc.pages.<id>.isolates.*.class`)
+ * matters for `burst` on a `"budgeted"` isolate: `analyse.ts`'s own assertion A is `MajorGC === 0`
+ * there, not `MinorGC + MajorGC === 0` (`"strict"`'s stronger check) -- a `burst` control's own
+ * fixed per-frame garbage (`allocateBurst`) reliably forces a minor GC but not necessarily a major
+ * one, so assertion A can stay `true` on a budgeted isolate even while it trips hard on assertion B
+ * (`gc-slice.ts`'s own `zero_gc_action neg burst main`, the first page to exercise this: `B.main`
+ * measured ~40,000 B/frame against a 115 B budget, `A.main` genuinely `true`, 0 `MajorGC` events).
+ * `"strict"` (every isolate before this milestone) is unchanged: `burst` still flips both. */
+function expectedVerdict(
+  isolates: string[],
+  control: NegativeControl,
+  classes: Record<string, IsolateBudget['class']>,
+): ControlVerdict {
   const A: Record<string, boolean> = {}
   const B: Record<string, boolean> = {}
   for (const name of isolates) {
@@ -22,7 +33,7 @@ function expectedVerdict(isolates: string[], control: NegativeControl): ControlV
   if (control?.kind === 'object') {
     B[control.isolate] = false
   } else if (control?.kind === 'burst') {
-    A[control.isolate] = false
+    if (classes[control.isolate] === 'strict') A[control.isolate] = false
     B[control.isolate] = false
   } else if (control?.kind === 'post-message') {
     // A message per frame allocates on both ends (0016 §3 step 8; the spike's own numbers).
@@ -123,6 +134,8 @@ export function zeroGcSuite(opts: {
 }): void {
   const budgets = gcPage(opts.pageId)
   const isolates = Object.keys(budgets.isolates)
+  const isolateClasses: Record<string, IsolateBudget['class']> = {}
+  for (const [name, budget] of Object.entries(budgets.isolates)) isolateClasses[name] = budget.class
   const workers = isolates.filter((name) => name !== 'main')
   const controlKinds = opts.controlKinds ?? ALL_CONTROL_KINDS
 
@@ -138,7 +151,7 @@ export function zeroGcSuite(opts: {
     for (const name of isolates) {
       expect(r.presentIsolates, `${opts.path}: ${name} thread present in trace`).toContain(name)
     }
-    const expected = expectedVerdict(isolates, null)
+    const expected = expectedVerdict(isolates, null, isolateClasses)
     expect(r.verdict, detail(r)).toEqual({ pass: true, ...expected })
   })
 
@@ -164,7 +177,7 @@ export function zeroGcSuite(opts: {
             opts.extraSettleFrames,
           )
           assertEnvironment(r, opts.path, opts)
-          const expected = expectedVerdict(isolates, control)
+          const expected = expectedVerdict(isolates, control, isolateClasses)
           expect(r.verdict, detail(r)).toEqual({ pass: false, ...expected })
         })
       }
@@ -177,7 +190,7 @@ export function zeroGcSuite(opts: {
         const control: NegativeControl = { isolate: name, kind: 'post-message' }
         const r = await run(page, browser, opts.pageId, opts.path, control, opts.extraSettleFrames)
         assertEnvironment(r, opts.path, opts)
-        const expected = expectedVerdict(isolates, control)
+        const expected = expectedVerdict(isolates, control, isolateClasses)
         expect(r.verdict, detail(r)).toEqual({ pass: false, ...expected })
       })
     }

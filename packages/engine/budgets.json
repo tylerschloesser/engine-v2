@@ -242,25 +242,25 @@
           "main": {
             "class": "strict",
             "bytesPerFrame": 111,
-            "formula": "0016 §1's formula, `terrain`'s own shape (a real WebGPU adapter, the 110 B floor applies): `ceil(measured clean) + 8 B` margin, no attribution. Measured (`playwright test --project gc --grep \"connected-terrain clean\" --repeat-each 8 --workers 1`, this machine): 102.09-102.29 B/frame across 8 clean runs. ceil(102.29) = 103, + 8 B margin = 111.",
+            "formula": "0016 \u00a71's formula, `terrain`'s own shape (a real WebGPU adapter, the 110 B floor applies): `ceil(measured clean) + 8 B` margin, no attribution. Measured (`playwright test --project gc --grep \"connected-terrain clean\" --repeat-each 8 --workers 1`, this machine): 102.09-102.29 B/frame across 8 clean runs. ceil(102.29) = 103, + 8 B margin = 111.",
             "attributionRoots": ["drive"]
           },
           "client": {
             "class": "strict",
             "bytesPerFrame": 8,
-            "formula": "0016 §1: the strict worker figure, same fixed number every other page's client/gen0/sim row uses. Measured: a constant 2.52 B/frame across 8 clean runs, well under 8.",
+            "formula": "0016 \u00a71: the strict worker figure, same fixed number every other page's client/gen0/sim row uses. Measured: a constant 2.52 B/frame across 8 clean runs, well under 8.",
             "attributionRoots": ["body"]
           },
           "sim": {
             "class": "strict",
             "bytesPerFrame": 17,
-            "formula": "Not the shared '8 B' worker figure every other page's `sim` row uses: this page's `sim` isolate is a real *connected* host tick (subscription admission, snapshot/downlink building over an active `RingConnection`, `fx-puts`'s tick rule painting a tile every simulated second) over a sustained pan, rather than an idle/bare `stepSimTickSync` loop. Measured 6.46-8.19 B/frame across 8 clean runs; ceil(8.19) = 9, + 8 B margin (0016 §1) = 17. **Attributed, not assumed** (orchestrator, M15c gate, `windowByFn` with the budget forced to 1): `runOneTick` 1360 B, `warm` 1152 B, `resync` 900 B over 600 frames, summing to the measured rate with the remainder in the shared `onmessage`/`resume`/`runBlockingLoop` entries every worker page carries. `warm` and `resync` are ADR 0030's own two accepted `clock.now()` reads per resync window (M13b measured `resync@` at 1752-1800 B over 600 ticks on `gc-sim-paced`); `runOneTick`'s 1360 B (~2.27 B/frame) is this page's own, new on a connected host tick and recorded on the deferred ledger. This is per-tick allocation with names, **not** warm-up noise. ",
+            "formula": "Not the shared '8 B' worker figure every other page's `sim` row uses: this page's `sim` isolate is a real *connected* host tick (subscription admission, snapshot/downlink building over an active `RingConnection`, `fx-puts`'s tick rule painting a tile every simulated second) over a sustained pan, rather than an idle/bare `stepSimTickSync` loop. Measured 6.46-8.19 B/frame across 8 clean runs; ceil(8.19) = 9, + 8 B margin (0016 \u00a71) = 17. **Attributed, not assumed** (orchestrator, M15c gate, `windowByFn` with the budget forced to 1): `runOneTick` 1360 B, `warm` 1152 B, `resync` 900 B over 600 frames, summing to the measured rate with the remainder in the shared `onmessage`/`resume`/`runBlockingLoop` entries every worker page carries. `warm` and `resync` are ADR 0030's own two accepted `clock.now()` reads per resync window (M13b measured `resync@` at 1752-1800 B over 600 ticks on `gc-sim-paced`); `runOneTick`'s 1360 B (~2.27 B/frame) is this page's own, new on a connected host tick and recorded on the deferred ledger. This is per-tick allocation with names, **not** warm-up noise. ",
             "attributionRoots": ["body"]
           },
           "gen0": {
             "class": "strict",
             "bytesPerFrame": 8,
-            "formula": "0016 §1: the strict worker figure, same fixed number every other page's client/gen0/sim row uses. Measured: a constant 0.8267 B/frame across 8 clean runs, well under 8.",
+            "formula": "0016 \u00a71: the strict worker figure, same fixed number every other page's client/gen0/sim row uses. Measured: a constant 0.8267 B/frame across 8 clean runs, well under 8.",
             "attributionRoots": ["body"]
           }
         },
@@ -269,7 +269,44 @@
           "isolates": {
             "main": {
               "attributedBytesPerFrame": 89,
-              "formula": "Fix round 2 (M15c gate, CI red under GC_MODE=software: `\"software\": null` is not a skip mechanism, `gc/instrument.ts` throws on it). ADR 0029: software mode attributes only `main`, every other isolate uses raw bytes in both modes, so `client`/`sim`/`gen0` get no row here. Measured (`GC_MODE=software playwright test --project gc --grep \"connected-terrain clean\" --repeat-each 8 --workers 1`, this machine): a tight 80.50-80.52 B/frame attributed across 8 clean runs. 0016 §1's ordinary margin convention (`ceil(measured) + 8 B`): ceil(80.52) = 81, + 8 = 89 -- not widened to avoid ADR 0029's own failure mode (M13b: a margin wide enough to swallow the `object` control's own stable ~16 B/frame stops it tripping), since 89 already sits 7.5 B below the control's own reading (below). `object` control on `main` measured a constant 96.50 B/frame attributed across 4 repeats (clean's own 80.5 + 16.0, ADR 0029's own figure exactly) -- verified still tripping at 89 (8/8 repeats: `neg object main` reports `pass` for the expected-mismatch verdict, i.e. `B.main` reads `false` as required). `burst` control on `main` verified still tripping (3/3 repeats, `@slow`; a multi-KB burst is nowhere near this margin). `client`/`sim`/`gen0` are unaffected by this round (ADR 0029, no software row for them) and their own hardware rows are unchanged."
+              "formula": "Fix round 2 (M15c gate, CI red under GC_MODE=software: `\"software\": null` is not a skip mechanism, `gc/instrument.ts` throws on it). ADR 0029: software mode attributes only `main`, every other isolate uses raw bytes in both modes, so `client`/`sim`/`gen0` get no row here. Measured (`GC_MODE=software playwright test --project gc --grep \"connected-terrain clean\" --repeat-each 8 --workers 1`, this machine): a tight 80.50-80.52 B/frame attributed across 8 clean runs. 0016 \u00a71's ordinary margin convention (`ceil(measured) + 8 B`): ceil(80.52) = 81, + 8 = 89 -- not widened to avoid ADR 0029's own failure mode (M13b: a margin wide enough to swallow the `object` control's own stable ~16 B/frame stops it tripping), since 89 already sits 7.5 B below the control's own reading (below). `object` control on `main` measured a constant 96.50 B/frame attributed across 4 repeats (clean's own 80.5 + 16.0, ADR 0029's own figure exactly) -- verified still tripping at 89 (8/8 repeats: `neg object main` reports `pass` for the expected-mismatch verdict, i.e. `B.main` reads `false` as required). `burst` control on `main` verified still tripping (3/3 repeats, `@slow`; a multi-KB burst is nowhere near this margin). `client`/`sim`/`gen0` are unaffected by this round (ADR 0029, no software row for them) and their own hardware rows are unchanged."
+            }
+          }
+        }
+      },
+      "zero_gc_action": {
+        "isolates": {
+          "main": {
+            "class": "budgeted",
+            "bytesPerFrame": 115,
+            "formula": "0016 \u00a71 formula (\"budgeted\" class, this page's own reasoning: a dispatched action's own result is JSON-parsed on main, which allocates by construction -- gc-slice.ts's own module comment): ceil(measured clean) + 8 B margin. Measured (playwright test --project gc --grep \"zero_gc_action clean\" --repeat-each 8 --workers 1, this machine): 106.59-106.92 B/frame across 8 clean runs (windowByFn: draw@terrain 28800 B, drain@terrain 12000 B, stepFrame@client 7200 B -- connected-terrain's own three sites, unchanged -- plus pollActionResults@client-* ~1296 B over the window, the one new site: 20 dispatched actions at DISPATCH_EVERY_FRAMES=30 over 600 frames, each result JSON.parsed once, ~65 B/parse). ceil(106.92) = 107, + 8 B margin = 115 -- only 4 B above connected-terrain's own 111, confirming the action path itself costs little: most of main's own budget here is the same terrain draw/upload-drain cost connected-terrain already pays.",
+            "attributionRoots": ["drive"]
+          },
+          "client": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 \u00a71: the shared \"8 B\" worker figure every other page's client/gen0 row uses. Measured: a constant 0.8267 B/frame across 8 clean runs, well under 8 -- dispatchRaw's own sending path (RingProducer.tryPush) costs nothing extra on this isolate (the client worker only drains the action ring and pushes to uplink, both already-proven-zero-alloc paths).",
+            "attributionRoots": ["body"]
+          },
+          "sim": {
+            "class": "strict",
+            "bytesPerFrame": 18,
+            "formula": "connected-terrain's own shape (a real connected host tick, subscription admission, snapshot/ downlink building over an active RingConnection, plus this page's own periodic admit path), not the shared \"8 B\" figure. Measured 7.93-9.94 B/frame across 8 clean runs (slightly above connected-terrain's own 6.46-8.19: the extra is the admit path's own per-batch UplinkReader/ decoded Vec allocation, proven to net to exactly 0 B/action once freed -- no_alloc_connection.rs's host_admit_path_allocates_zero_bytes_per_action, this milestone's own Deviations -- so what remains here is gross allocation inside the measured window before the matching free, the same shape connected-terrain's own sim row formula already documents for runOneTick/warm/resync). ceil(9.94) = 10, + 8 B margin (0016 \u00a71) = 18.",
+            "attributionRoots": ["body"]
+          },
+          "gen0": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 \u00a71: the shared \"8 B\" worker figure every other page's client/gen0 row uses. Measured: a constant 0.8267 B/frame across 8 clean runs, well under 8 -- unaffected by the action traffic (gen0 never sees an action).",
+            "attributionRoots": ["body"]
+          }
+        },
+        "software": {
+          "frames": 600,
+          "isolates": {
+            "main": {
+              "attributedBytesPerFrame": 89,
+              "formula": "ADR 0029: software mode attributes only main via attributionRoots (['drive']), every other isolate uses raw bytes in both modes. Measured (GC_MODE=software playwright test --project gc --grep \"zero_gc_action clean\" --repeat-each 6 --workers 1, this machine): a flat 80.9467 B/frame across 6 clean runs -- almost exactly connected-terrain's own 80.50-80.52 (the software instrument's own attribution walk does not appear to reach pollActionResults, which client.ts registers as its own scheduler.requestFrame callback rather than a call drive() itself makes -- the hardware-mode byFn measurement above is what actually prices that site). ceil(80.9467) = 81, + 8 B margin = 89."
             }
           }
         }
