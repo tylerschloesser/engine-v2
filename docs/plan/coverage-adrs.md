@@ -285,7 +285,7 @@ Every decision of ADRs 0001 to 0025 (judged against the amendments of 0022, 0023
 | §3 clients regenerate pristine; host sends pristine list entry or snapshot as of tick T, deltas from T+1 | M15 | `pristine_chunk_enters_as_coord_only`, `modified_chunk_enters_as_snapshot_then_deltas_from_next_tick` | covered |
 | §3 leave frees overlay and entities, pristine cache survives | M15 | `leave_frees_overlay_keeps_pristine` | covered |
 | §3 section id reserved for a full tile payload, not built | M14 | `golden_section_ids` | covered |
-| §3 generated chunk uploaded as pristine at once, patched when the snapshot arrives; `Unknown` until then | M15, M15b | `overlay_tile_reaches_screen`, `view_unknown_outside_subscription` | covered |
+| §3 generated chunk uploaded as pristine at once, patched when the snapshot arrives; `Unknown` until then | M15, M15c | `overlay_tile_reaches_screen`, `view_unknown_outside_subscription` | covered |
 | §4 queue in the client worker, preallocated, sorted in place | M08b | `no_alloc_gen_queue` | covered |
 | §4 priority ring class then look-ahead distance; re-sort on chunk or zoom change | M08b | `queue_orders_ring_class_then_distance`, `queue_resorts_only_on_chunk_or_zoom_change`, `gen: visible before ring 1 before ring 2` | covered |
 | §4 at most 2 in flight per worker | M08b | `queue_in_flight_cap_per_worker` | covered |
@@ -377,7 +377,7 @@ Every decision of ADRs 0001 to 0025 (judged against the amendments of 0022, 0023
 | 0024 §8: handshake magic first byte ≥ 0x80, type bytes 0x01..0x7F | M14, M28 | `golden_section_ids` / type table; `handshake/garbage-before-hello` | covered |
 | Frame: 10-byte header, fixed section order | M14 | `golden_frame_header`, `golden_section_ids`, `sections_out_of_order_rejected` | covered |
 | Frame applied atomically before the next `extract` | M15, M16 | `frame_is_atomic_on_malformed_tail`, `ack_and_deltas_share_a_frame`, `vertical_slice` (result and colour in the same stepped frame) | covered |
-| Decode path: net worker copies bytes to a ring, client worker to a receive region, one `on_frame` export, parse in place, no JS object per frame | M15, M15b, M29 | `encode_decode_no_alloc`, `host_and_client_steady_state_no_alloc`, M15b zero-GC page with panning, M29 grep test "no frame parsing in `src/worker/net.ts`" | covered |
+| Decode path: net worker copies bytes to a ring, client worker to a receive region, one `on_frame` export, parse in place, no JS object per frame | M15, M15c, M29 | `encode_decode_no_alloc`, `host_and_client_steady_state_no_alloc`, M15c zero-GC page with panning, M29 grep test "no frame parsing in `src/worker/net.ts`" | covered |
 | Plain-data requirement on `G::Entity`, `G::Player`, `G::Action` | M05, M12 | `no_alloc_codec`, `store_apply_existing_key_no_alloc` | covered |
 | `Delta<G>` is the only write path, derived mechanically; games write no encoders | M12, M12b | `every_put_is_one_delta_with_scope`, `store_apply_is_idempotent` | covered |
 | 0024 §8: engine-only `Delta::Roster` | M12, M14, M34 | `golden_global_and_own_player` (roster in `Global`), `reference_roster_follows_join_grace_and_return` | covered |
@@ -586,7 +586,7 @@ Every decision of ADRs 0001 to 0025 (judged against the amendments of 0022, 0023
 | §1 bytes per frame = exact sampled bytes / N main frames | M04 | `gc analyse: sums selfSize exactly` | covered |
 | §1 budgets in one checked-in file; raising one is a reviewed change; formula text kept | M04, M09, M18 | `budgets: every gc page lists main`; M09 and M18 criteria on `formula` | covered |
 | §1 renderer keeps wrapper-returning calls per frame constant | M09, M17 | `counters.draws_equal_nonempty_layers`; page budgets derived from the count | covered |
-| §2 window includes ticks, deltas, continuous pan and zoom, chunk generate / upload / evict | M09, M11, M15b | page `terrain` scripted pan; page `input`; M15b 600 frames with panning | covered |
+| §2 window includes ticks, deltas, continuous pan and zoom, chunk generate / upload / evict | M09, M11, M15c | page `terrain` scripted pan; page `input`; M15c 600 frames with panning | covered |
 | §2 window includes game actions from pre-encoded bytes | M16, M17 | "Zero-GC test now includes actions via `dispatchRaw`"; page `drawables` | covered |
 | §2 chunk-enter bursts not exempt; chunk CPU and GPU storage pooled at setup | M08b, M09 | `gen: zero-GC over a scripted pan`, page `terrain`, `terrain.upload_budget_while_panning` | covered |
 | §2 exempt: setup and 120 warm-up frames | M04 | harness sequence (`run(warmup)`); frame count not asserted | covered |
@@ -688,7 +688,7 @@ Every decision of ADRs 0001 to 0025 (judged against the amendments of 0022, 0023
 | §2 `FrameView` carries interpolated `WorldRead`, clocks, visible rect, cursor tile | M16b, M17, M18 | `frameview.entities_sorted_and_clipped`, `ghost.mouse_tracks_cursor_tile` | covered |
 | §3 terrain is one full-viewport triangle, pixel to tile to chunk to slot to texel | M09 | `terrain.probe_tile_colours`, `counters["render.drawCallsTerrain"] = 1` | covered |
 | §3 texel format `rg16uint`, converted by client-role WASM into the upload ring | M09 | `upload.record_layout_golden`, `texel.*` | covered |
-| §3 tile page texture, slot = dense-cache slab index, one `writeTexture` per chunk, one texel per delta, byte budget per frame | M09, M15b | `terrain.patch_one_texel`, `terrain.upload_budget_while_panning`, `upload.stage_respects_max`, `overlay_tile_reaches_screen` | covered |
+| §3 tile page texture, slot = dense-cache slab index, one `writeTexture` per chunk, one texel per delta, byte budget per frame | M09, M15c | `terrain.patch_one_texel`, `terrain.upload_budget_while_panning`, `upload.stage_respects_max`, `overlay_tile_reaches_screen` | covered |
 | §3 64x64 toroidal indirection texture, ±31 window, non-resident draws neutral | M09 | `upload.toroidal_window_pm31`, `upload.indir_after_chunk`, `terrain.nonresident_is_neutral` | covered |
 | §3 neighbour reads through indirection; missing neighbour = self | M09b | `terrain.missing_neighbour_is_self` | covered |
 | §3 visual table as a 16 KiB uniform (first layer, variants, flags, priority, band) | M09, M09b | `terrain.variants_match_reference`, `terrain.dither_only_inside_band` read every field | covered |

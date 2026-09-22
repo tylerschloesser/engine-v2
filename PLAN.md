@@ -35,8 +35,10 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 14 | `14-wire-framing.md` | frame + sections + uplink batch, golden bytes | 12b | |
 | [x] | 13b | `13b-tick-timing-allocation.md` | tick timing out of the JS hot path, zero-GC page on the real pacing path | 13 | |
 | [x] | 15 | `15-connection-and-subscriptions.md` | subscriptions, frame building, client replica (Rust core) | 13, 14 | |
-| [ ] | 15b | `15b-ring-connection-and-replica-rendering.md` | in-browser `Connection` over rings, worker plumbing, replica → renderer | 11, 15 | |
-| [ ] | 16 | `16-action-round-trip.md` | `dispatch` → admit → apply → ack → `onActionResult`, `add-action-type` skill. **Vertical slice complete.** | 15b | D |
+| [x] | 15b | `15b-ring-connection-and-replica-rendering.md` | in-browser `Connection` over rings, worker plumbing, replica → renderer | 11, 15 | |
+| [ ] | 15d | `15d-client-clock-allocation.md` | the client's per-frame clock read off the main-thread hot path; zero-GC budgets re-derived downward | 15b | |
+| [ ] | 15c | `15c-terrain-visibility-and-cache-invalidation.md` | cache invalidation on overlay replace, terrain on screen, zero-GC panning window | 15b | |
+| [ ] | 16 | `16-action-round-trip.md` | `dispatch` → admit → apply → ack → `onActionResult`, `add-action-type` skill. **Vertical slice complete.** | 15c | D |
 | [ ] | 16b | `16b-ui-observation-and-clock.md` | `G::Ui` → UI ring → `onUi`, `client.clock()`, ts-rs bindings | 16 | |
 | [ ] | 17 | `17-drawlist-and-sprites.md` | `extract` → DrawList, `FrameView`, shapes, triple-buffer publish | 16b | |
 | [ ] | 17b | `17b-sprites-and-frame-budget.md` | sprite atlas, frame-time budget, `profile-frame` skill | 17, 09b | D |
@@ -87,6 +89,9 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 ## Plan-level decisions
 
 ADRs written during Phase 2 and Phase 3:
+
+- **M15d was added at M15b's gate too, acting on `questions-for-tyler.md` Q13's recommended default.** M13b recorded `client.ts`'s per-frame `performance.now()` as costing ~11.96 B/frame on `main` in the interpreter tier and deliberately left it, absorbed by every page's `main` budget. Three measurements turned that into a blocker: 1 failure in 6 under `--load 10` at M15's gate (same rate on M15's *base* commit, so pre-existing), **7 in 15 with no injected load** once M15b grew the suite from 98 to 103 tests, and M15c will add another zero-GC page. A gate red half the time certifies nothing. **The remedy cannot be a budget** — ADR 0029 makes a budget that stops a control tripping the exact failure mode to avoid, and M13b held `main` at 30 for that reason — so M15d applies M13b's own fix to the isolate M13b did not touch, and re-derives the absorbing budgets *downward*. It runs before M15c: order in this table is execution order.
+- **M15c was added at M15b's gate, not planned in Phase 2.** Building M15b's last two deliverables found a real bug in pre-existing M07/M08b code: `Cache::evict_if_present` — the path `TerrainStore::replace_overlay` and `clear_overlay` take — frees the slot without calling `push_event`, and `GenQueue::set_view` returns early on an unchanged `view.visible` without consulting any cache event. So a chunk the client pristine-generated, then received a host snapshot for, is correctly evicted and then never regenerated while the camera holds still. Both halves were verified in source at the gate. It could not have been caught earlier: no code before M15b's `game_instance.rs` restructuring ever had a `Replica` and a `TerrainFeed` sharing one `TerrainStore`. M15b is ticked for what it landed (ring `Connection`, worker plumbing, ABI 8 → 9, connected-path tests); `overlay_tile_reaches_screen` and the zero-GC panning window moved to M15c, and **M16's After moved from 15b to 15c**, because "chunked world on screen" is part of the vertical slice its marker claims.
 
 - `docs/decisions/0022-entity-ids-and-provisional-ids.md`: `EntityId` is host-allocated, monotonic, never reused; predicted entities get client-local provisional ids and are addressed by tile. Supersedes the "type-segregated stores" wording of 0007 §5 and makes the interim rule of 0012 permanent.
 - `docs/decisions/0023-action-growth-declaration.md`: `Game::growth(&Action)` so shrinking actions pass the state-budget check. Amends 0004, 0003, 0007 §8.

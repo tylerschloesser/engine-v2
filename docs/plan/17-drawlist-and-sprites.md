@@ -15,6 +15,10 @@ Split during planning: the sprite atlas, the sprite kind, the 65,536-record fram
 
 Mine from spikes: `spikes/zero-gc-webgpu/public/main.js` (4,096-instance buffer from a shared view with the offset/size `writeBuffer` overload; instanced quad pipeline). Rules that apply: `.claude/rules/hot-paths.md`.
 
+Also read `docs/plan/15b-ring-connection-and-replica-rendering.md`'s Deviations for the client worker loop's shape this milestone's `extract`/publish step runs inside: `worker/client-net.ts` (new file at M15b), the client worker's net pump, built only when linked and run from `body()` *before* `uploadPump.pump()` — `on_frame` (inside the net pump) enqueues a newly dirty chunk into `Uploader`'s own pending queues, and that ordering is what stages a chunk onto the upload ring the same wake it arrived rather than one wake later. The replica → renderer path and the per-frame upload path this milestone builds a first production caller for are real only because of that ordering.
+
+**M15c is changing how cache eviction is reported.** `docs/plan/15c-terrain-visibility-and-cache-invalidation.md` makes `Cache::evict_if_present` start emitting a `CacheEvent` on an overlay-driven eviction (`TerrainStore::replace_overlay`/`clear_overlay`), where today it silently frees the slot. This milestone's DrawList/upload work sits downstream of `Uploader::on_frame`'s `changed` flag, which M15c's own generation-side fix uses as its precedent for the same shape — read M15c's Deviations (filled in once it lands) for the final seam before assuming today's `changed` semantics are the last word.
+
 ## Scope
 - Rust `client/drawlist.rs`: `DrawList`, `Draw` (0018 §2 layout), builder methods for every kind, full-list drop + debug counter, stable counting sort by `layer` from a scratch list into `RegionId::DrawList` (sized here: 1,024-byte header + the capacity of 0018 §2), header fill. Fills M12's `DrawList` shell.
 - Rust `client/frame_view.rs`: grows M16b's minimal `FrameView` to the shape below; window-origin choice.

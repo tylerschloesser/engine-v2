@@ -51,6 +51,7 @@ Mine from spikes: `spikes/prediction-api` (`host_replay_from_genesis_*` test sha
 5. **Pending-frame capacity is fixed** at what the rate limit allows for `maxPlayers` in one tick (0004 rate limit x 0009 `maxPlayers`), well under the region size; `sim_admit` answers `Rejected(Engine(RateLimited))` if it would overflow. No frame can exceed the `Persist` region.
 6. **Heavy mode is replay-driven.** Input is a recorded log; run A replays it uninterrupted recording the hash each tick; run B replays it but every N ticks snapshots, drops the `Sim`, restores into a fresh one and continues. First differing tick is reported. Fast tier: N = 25 on the `persist` fixture (~300 ticks). N = 1 is tagged `slow` (M36).
 7. **Dirty means "a put happened or a record was logged since the last snapshot"** (one flag set in `Authority`'s write path); timers merely advancing do not dirty the world, matching 0005's "if anything changed".
+8. **Overlay-driven cache eviction is now observable (M15c).** `TerrainStore::replace_overlay`/`clear_overlay` evict the affected chunk from the dense cache; as of `docs/plan/15c-terrain-visibility-and-cache-invalidation.md` that eviction emits a `CacheEvent` rather than staying silent. Anything here that replays or restores overlays in bulk (a snapshot decode driving repeated `replace_overlay` calls) should expect those events to fire rather than assume the cache is untouched underneath it.
 
 ## Order of work
 1. `crc32`, `Identity`, `SegmentHeader`, frame writer/reader with golden-bytes tests (pattern from M05).

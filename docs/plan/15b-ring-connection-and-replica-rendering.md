@@ -1,6 +1,6 @@
 # M15b: In-browser `Connection`, worker plumbing, replica to renderer
 
-Status: not started · After: 11, 15 · Tyler-dependent: no
+Status: done (two deliverables split to M15c) · After: 11, 15 · Tyler-dependent: no
 
 Split from M15 (see that brief). M16 depends on this milestone.
 
@@ -59,9 +59,9 @@ TS unit: `ring_connection_roundtrip`, `ring_connection_backpressure_retries_not_
 `tests/browser/sim-worker.spec.ts`'s existing `chunksWarmed: 0` assertion needs updating here: it is correct through M15 (see Planning decisions, "`chunksWarmed` becomes live here") and goes live once `sim_admit`/`sim_build_frame` are wired.
 
 ## Exit criteria
-- [ ] All tests above pass.
-- [ ] No `subarray`/`new Uint8Array` on the per-message or per-frame paths of both workers (the M04 assertion is the proof; a grep is the hint).
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass, **except `overlay_tile_reaches_screen` and the zero-GC panning window, which moved to `docs/plan/15c-terrain-visibility-and-cache-invalidation.md`** — both were blocked by a pre-existing M07/M08b cache-invalidation bug confirmed in source at this gate, not by anything this milestone built. Everything else listed passes.
+- [x] No `subarray`/`new Uint8Array` on the per-message or per-frame paths of both workers (the M04 assertion is the proof; a grep is the hint).
+- [x] `pnpm test` and `pnpm lint` are green (orchestrator-run: rust 267, unit 157, wasm 43, browser 103 at 22 s; biome/rustfmt/clippy/tsc clean).
 
 ## Verification commands
 `pnpm test unit -t ring_connection` · `pnpm test wasm -t ring_connection` · `pnpm test browser -t subscription` · `pnpm test browser -t zero_gc` · `pnpm lint`.
