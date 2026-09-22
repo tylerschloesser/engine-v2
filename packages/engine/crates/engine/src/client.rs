@@ -5,13 +5,17 @@
 //! embeds beside its own `TerrainStore`.
 
 pub mod camera;
+pub mod core;
 pub mod input;
+pub mod replica;
 pub mod terrain_feed;
 pub mod texel;
 pub mod upload;
 
 pub use camera::CameraBlock;
+pub use core::{ClientCore, FrameSummary};
 pub use input::{InputEvent, InputQueue};
+pub use replica::Replica;
 pub use terrain_feed::TerrainFeed;
 pub use texel::{ClientSide, TileTexel, install_visual_tables};
 pub use upload::Uploader;

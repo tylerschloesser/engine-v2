@@ -61,3 +61,9 @@ required-features = ["testing"]
 [[test]]
 name = "connection_and_subscriptions"
 required-features = ["testing"]
+
+# `engine::host::Host::queue_action_for_test`, `Host::genesis_for_test` (feature `testing`), and
+# its own `#[global_allocator]` (mirrors `no_alloc_terrain`/`no_alloc_authority`).
+[[test]]
+name = "no_alloc_connection"
+required-features = ["testing"]

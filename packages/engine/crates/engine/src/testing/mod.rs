@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+pub mod budgets;
 pub mod cache_matrix;
 pub mod golden_bytes;
 pub mod testkit;

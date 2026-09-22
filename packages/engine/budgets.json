@@ -253,6 +253,11 @@
       "uploadBytesPerFrame": 65536,
       "drawCallsTerrain": 1,
       "formula": "docs/decisions/0018-renderer.md \u00a73: 'drained from the upload ring at frame start under a byte budget (default 64 KiB per frame)' -- `render/upload.ts`'s own `DEFAULT_UPLOAD_BUDGET_BYTES` (64 * 1024). `drawCallsTerrain` is 0018 \u00a71's 'constant draws' invariant for this milestone's shader: one full-viewport triangle, one draw, regardless of upload traffic (`terrain.upload_budget_while_panning` asserts `drawCalls() === 1` after 600 stepped, panning frames)."
+    },
+    "subscription": {
+      "joinWildernessBytesDown": 63,
+      "joinModifiedBytesDown": 90,
+      "formula": "docs/plan/15-connection-and-subscriptions.md Budgets: 'join in wilderness below the 0010 worked number' (0010's own phone-join figure: <0.2 KB = 200 B for a 35-chunk view). Measured natively (testing::testkit::Loopback<LGame>, tests/connection_and_subscriptions.rs, one client, camera (0,0) half 16 tiles, chunk edge 32 -> ring1 4x4=16 chunks): a pristine (wilderness) join's first build_frame is 55 B (Global + OwnPlayer + 16 ChunkEnterPristine entries, ~3 B each per 0011); the same view with 5 tiles pre-painted inside it (ChunkSnapshots instead of ChunkEnterPristine for the touched chunks) is 82 B. Both figures are per this milestone's own small test view (16 chunks), not 0010's 35-chunk phone clamp -- the claim is the same shape (bytes-per-chunk in the low single digits for wilderness, still tiny once a few chunks carry an overlay), not a literal reproduction of 0010's number. Ceiling = measured + 8 B margin (the same fixed-margin convention `gc.pages.*.isolates.*.bytesPerFrame` already uses in this file)."
     }
   },
   "worldgenMsPerChunkWarn": 0.25

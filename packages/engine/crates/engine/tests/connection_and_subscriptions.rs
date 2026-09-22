@@ -529,3 +529,70 @@ fn camera_report_on_change_leading_and_trailing() {
     let n4 = core.poll_uplink(160, &mut buf);
     assert_eq!(n4, 0, "no further sends once at rest and unchanged");
 }
+
+#[test]
+fn budgets_join_wilderness_and_modified() {
+    use engine::testing::budgets::expect_within_budget;
+
+    let mut lb = loopback(20);
+    let (idx, _who) = add_client(&mut lb, 0);
+    lb.set_camera(idx, small_camera(0, 0));
+    lb.step();
+    expect_within_budget(
+        "counters.subscription.joinWildernessBytesDown",
+        lb.last_build_frame_len(idx) as u64,
+    );
+
+    let mut lb2 = loopback(21);
+    let (idx2, who2) = add_client(&mut lb2, 0);
+    for i in 0..5i32 {
+        lb2.action(
+            who2,
+            LAction::Paint {
+                pos: LPos { x: i, y: i },
+                base: 7,
+            },
+        );
+    }
+    lb2.step();
+    lb2.set_camera(idx2, small_camera(0, 0));
+    lb2.step();
+    expect_within_budget(
+        "counters.subscription.joinModifiedBytesDown",
+        lb2.last_build_frame_len(idx2) as u64,
+    );
+}
+
+/// Exact wilderness-join frame bytes (Tests added). Pinned so a change to header/section framing,
+/// coordinate coding, or the join scenario itself is a reviewed diff, not a silent drift --
+/// `pnpm golden:bytes` is the only writer.
+#[test]
+fn golden_frame_bytes_join_wilderness() {
+    let mut lb = loopback(20);
+    let (idx, _who) = add_client(&mut lb, 0);
+    lb.set_camera(idx, small_camera(0, 0));
+    lb.step();
+    engine::assert_golden_bytes!("join_wilderness_frame", lb.last_built_frame(idx));
+}
+
+/// Deviations #1: `chunksWarmed` was structurally unreachable since M13 (nothing ever called
+/// `host::warm::set_view`). `build_frame` now pushes the connection's subscribed view rect into it
+/// on every call, so the between-tick warmer has something real to generate from.
+#[test]
+fn chunks_warmed_becomes_live() {
+    use engine::abi::Instance;
+    let mut lb = loopback(22);
+    let (idx, _who) = add_client(&mut lb, 0);
+    lb.set_camera(idx, small_camera(0, 0));
+    lb.step(); // build_frame runs once: `Warm::set_view` now has a real rect for conn 0
+    let mut warmed = 0u32;
+    // `sim_warm_one` is `Instance`'s own ABI-facing method; calling it directly natively (no ABI
+    // plumbing) still exercises the exact same `Host::warm` state `build_frame` just fed.
+    for _ in 0..64 {
+        warmed += lb.host.sim_warm_one();
+    }
+    assert!(
+        warmed > 0,
+        "chunksWarmed must be reachable once a real subscribed view has been pushed"
+    );
+}
