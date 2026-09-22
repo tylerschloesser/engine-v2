@@ -84,9 +84,14 @@ The page is `slice.html` (Scope), listed by `pnpm device:serve --tunnel`; its HU
 
 ## Deviations
 
-Steps 1-2 only (host admit pipeline; `on_action`, the outbox, results -> UI-out). Steps 3-7 (TS
-`dispatch`/ring/clock block/`onActionResult`, bindings, fixture page, WASM-under-Node golden,
-Playwright slice, skill) are not built.
+Steps 1-5 (host admit pipeline; `on_action`, the outbox, results -> UI-out; TS `dispatch`/ring/
+clock block/`onActionResult`; bindings step + typed fixture page; the WASM-under-Node `puts_
+script_a` golden). Steps 6-7 (Playwright `vertical_slice` test on `slice.html`, the zero-GC window
+with `dispatchRaw`, the `add-action-type` skill) are not built -- a different implementer's own
+cut. Read this section in full before touching `client.ts`, `worker/client*.ts` or `tests/support/
+scenario.ts` again: the exact seam shapes below (especially the clock-block field layout, the
+`client_clock_stats` export, and `dispatch`'s "`ready` only waits when linked" rule) are what steps
+6-7 build against.
 
 ### ABI (`ABI_VERSION` 9 -> 10 in M15b, this milestone 10 -> 11)
 
@@ -386,3 +391,217 @@ in_order_confirmed_and_rejected}`; `game_instance::tests::{client_poll_ui_produc
 rejected_json, on_action_parses_a_valid_record_and_rejects_a_malformed_one}`, plus the two
 record-boundary tests and the allocation test named above (added at the gate, not in the original
 cut).
+
+### Steps 3-5, as landed
+
+Read this whole section before touching any of the files it names: it is the exact contract steps
+6-7 build against.
+
+### The one export that did not exist yet: `client_clock_stats` (`ABI_VERSION` 11 -> 12)
+
+```rust
+fn client_clock_stats(&mut self, _result: &mut [u8]) -> Status { Status::Unsupported }
+```
+`export_instance!`'s extern wrapper: `pub extern "C" fn client_clock_stats() -> u32`, role client,
+0 params, result `status` -- the same shape as `sim_region_hash`/`client_region_hash`. `abi::
+client_clock_stats(slot)` hands `Instance::client_clock_stats` the whole `Result` region. `Game
+Instance::client_clock_stats` writes exactly two LE `u32`s into `result[..8]`:
+`ClientCore::last_summary().tick.0` at offset 0, `.ack_seq` at offset 4 -- `Status::Ok` for a
+`Client` variant, `BadLength` if `result` is somehow under 8 bytes, `Unsupported` for `Sim`/`Gen`.
+**Deliberately carries nothing else**: `predicted_tick` (= `authoritative_tick` until M26),
+`ticks_per_second` and `session_state`/`seq_seed` are all derived on the TS side (below), not
+crossed here.
+
+**`tick_hz`'s role gate was widened from `'sim'` to `'all'`** (`abi.ts`'s `ABI_EXPORTS.tick_hz.role`
+and the Rust shim `abi::tick_hz`, which now matches on `slot.get()` instead of `slot.sim()`): the
+answer (`Instance::tick_hz`, `G::TICK_RATE.hz_value()`) is role-independent by construction, and the
+client worker now needs its own instance's real tick rate too, once at setup, for the clock block's
+`ticks_per_second` field. No `ABI_VERSION` bump for this alone: params/result are unchanged, only
+which role may call it, and `ABI_EXPORTS`'s `role` field is documentation the registry test does not
+check.
+
+### Clock block: field layout (`packages/engine/src/clock-block.ts`, new file)
+
+`SabSet.clockBlock` is M06's own seqlock (`createSeqlock(CLOCK_BLOCK_DATA_BYTES)`, 32 data bytes,
+`sab/layout.ts` -- now exported). This milestone uses the first 24 of those 32 bytes, six `u32`
+fields in this exact order (also `clock-block.ts`'s own `CLOCK_FIELD` enum, matching
+`readClockBlockInto`'s output array order):
+
+```
+offset  field
+0       authoritativeTick
+4       predictedTick        (= authoritativeTick until M26)
+8       ticksPerSecond       (mirrored from tick_hz(), read once at worker setup)
+12      sessionState         (SessionState.Connecting = 0, SessionState.Live = 1)
+16      seqSeed
+20      ackSeq
+```
+Bytes 24-31 are untouched, reserved for `revealed` (M28) and `tick_fraction` (M26): a future
+milestone extends `ClockBlockView`/`writeClockBlock`/`readClockBlockInto` rather than reworking this
+layout. `ClockBlockView` is hand-rolled exactly like `camera/block.ts`'s `CameraBlockView` (typed
+field views built once over the raw SAB, not `sab/seqlock.ts`'s generic `SeqlockWriter`/
+`SeqlockReader`, which would need an extra scratch-buffer reinterpretation on every read); both a
+writer and a reader construct their own `ClockBlockView` over the same `sabs.clockBlock`.
+
+### Who writes the clock block, and when
+
+`worker/client-net.ts`'s `createNetPump` (not a separate always-on pump): it is the only pump that
+learns, from `on_frame`'s own `Status` return, whether a real frame was actually applied this wake
+(`ClientCore::last_summary()`'s default -- `tick == 0, ack_seq == 0` -- is indistinguishable from a
+genuine first frame at those same values, so "a frame arrived" has to come from `on_frame`'s status,
+not from reading the summary alone). Only when at least one `on_frame` call in this wake's downlink-
+drain loop returned `Status.Ok` does it call `client_clock_stats()` and write the clock block. The
+first time this happens, `session_state` flips `Connecting` -> `Live` and `seqSeed` is set from that
+same read's `ack_seq` (Planning decisions' "read the seed exactly once, when `session_state` first
+becomes 1" -- this is the worker's own half of that; main's half is next). `ticksPerSecond` is
+`worker/client.ts`'s own `inst.call0(inst.x.tick_hz)`, read once at setup and passed into
+`createNetPump` as a plain number, never re-read per wake.
+
+**`createNetPump`'s signature changed** (three new trailing parameters): `createNetPump(inst, shell,
+uplinkSab, downlinkSab, downlink, tx, clockBlockSab: SharedArrayBuffer, result: RegionView | null,
+ticksPerSecond: number)`.
+
+### `worker/client-action.ts` (new file): the real action/UI pump
+
+Mirrors `client-gen.ts`/`client-upload.ts`/`client-input.ts`'s shape: built once at setup, run every
+wake, unconditionally (not gated on `message.link` -- a client role always exists, and draining an
+empty ring costs nothing). `createActionPump(inst, actionRingSab, uiRingSab, rx, ui)`: drains
+`actionRing` (`RingConsumer.popInto` into the shared `Rx` region view, the same one `client-input.ts`
+already uses for `on_input` -- `on_action` and `on_input` are different message kinds on one
+region, per the brief's own Scope) into `on_action(len)`, one call per popped message; then loops
+`client_poll_ui()` until it returns 0, pushing each non-empty batch onto `uiRing` via a plain
+`RingProducer` (no `wake` option: main drains `uiRing` on its own per-rAF poll, never blocked in
+`Atomics.wait`, so there is nothing to wake). **Mutually exclusive with `worker/client.ts`'s
+pre-existing `echo`-gated test-only actionRing/uiRing round trip**: both would otherwise construct
+independent `RingConsumer`/`RingProducer` pairs over the *same* SABs, corrupting each other's SPSC
+head/tail bookkeeping. `worker/client.ts`'s `setup()` builds this pump only when `message.test?.echo
+!== true`.
+
+### `client.ts`: `dispatch`, `onActionResult`, the extended `ready`
+
+`dispatch(action: unknown): number` and `onActionResult<Reject = unknown>(cb: (seq: number, result:
+ActionOutcome<Reject>) => void): () => void` are new `Client` members. Two new exported types:
+`EngineRejectReason = 'RateLimited' | 'StateBudgetFull' | 'EngineFault'` (hand-mirrored from `sim::
+EngineReject`, since `engine` has no game to run `export_bindings` against) and `ActionOutcome
+<Reject> = 'Confirmed' | { Rejected: { Game: Reject } } | { Rejected: { Engine: EngineRejectReason
+} }` (`game_instance::push_result_record`'s exact JSON shape, tag preserved).
+
+**`Client.ready`'s extended meaning is conditional, not universal**: it waits for `session_state ==
+Live` only when `linked` (`options.host.kind === 'local' && options.host.connect === true`) --
+computed once, above `start()`, and reused inside it so the two can never drift. Every other
+topology (no `connect`, `'remote'`, or a low-level fixture with no `Game` at all) keeps `ready`'s
+pre-M16 meaning ("the worker set is up"): the clock block is never written for such a topology, so
+waiting on `session_state` there would hang forever. This is a real, deliberate narrowing of the
+brief's own "`Client.ready` now also waits for `session_state = 1`" wording, made to avoid
+regressing the dozens of existing browser pages/tests that spawn an unconnected topology and
+`await client.ready` today. `'remote'` is excluded because `client.ts`'s own `linked` gate already
+excluded it from ever getting a `net` pump at all (M15b, unchanged): reaching a real `session_state
+= 1` over a remote connection is M27/M28's own work, Non-scope here.
+
+**`dispatch`'s readiness check is a fresh clock-block read every call, not a cached boolean**: it
+reads `session_state` straight from the clock block each time, so "dispatch before ready" and "the
+session went live" are the same one signal `ready`'s own `waitForLive()` polls. `waitForLive()`
+resolves the moment its first (synchronous, no timer needed) poll sees `Live`, seeding `nextSeq =
+seqSeed + 1` from that exact read -- "main reads the seed exactly once" is enforced by this being
+the only place `nextSeq` is ever assigned from `seqSeed`; every dispatch after that only ever does
+`nextSeq += 1` on success. Polling uses the injected `Scheduler.setTimer`, never a bare
+`setTimeout`.
+
+**`dispatch`'s queue-full check is `candidateSeq - ackSeq > OUTBOX_CAPACITY` (32, mirroring `client::
+core::OUTBOX_CAPACITY`), checked and the ring write attempted *before* `nextSeq` is advanced**: a
+throw (either the logical backstop or the physical action-ring being full, `RingProducer.tryPush`
+returning `false`) leaves `nextSeq` untouched, so the *next* successful call reuses the same
+candidate `seq` -- this is what makes `dispatch_when_queue_full_fails_locally`'s "advance `ack_seq`
+by one, exactly one more succeeds" true. `dispatch`'s own action-ring `RingProducer` is constructed
+once, with `{ control, index: WORKER_CLIENT }` as its wake target, so a successful `tryPush` already
+notifies the client worker (Scope's "then `Atomics.notify` of the client worker") with no separate
+call.
+
+**The per-rAF UI-ring drain lives inside `createClient()` itself**, not in `frame-loop.ts` (its own
+`onUi` hook stays exactly as before, a no-op default `FrameLoopOptions` field for M16b to use):
+`createClient()` registers its own `scheduler.requestFrame` loop, started once `start()` resolves,
+running for the client's whole life (cancelled in `destroy()`). Each tick calls a private
+`pollActionResults()` that drains `uiRing`, walks `[kind u8][len u32 LE][json]` records in a popped
+message, and for **kind 2 only** parses the JSON and fires every registered `onActionResult`
+listener, in ring order. **An unknown kind (M16b's future kind 1, `Ui`) is skipped by its own length
+field** (`i = bodyStart + recLen`), never parsed, never crashing -- this is what keeps M16b's own
+addition from being a breaking change to this code. This path is **not zero-GC** (JSON parsing
+inherently allocates, and the exit criterion's own "zero-GC window with `dispatchRaw`" -- step 6,
+Non-scope here -- is where that gets budgeted): a later cut owns making it allocation-free once
+actions are actually flowing; this design only guarantees it does not allocate more than the
+JSON-parse itself requires.
+
+**`ClientTestHandle` gained `writeActionRecord(seq: number, jsonBytes: Uint8Array): boolean`**: the
+exact low-level primitive `dispatch` itself uses (same `RingProducer`, same scratch buffer) minus
+the seq-counter/session-state bookkeeping, so `engine/test.dispatchRaw` (step 6, not built) has a
+single real producer to write through rather than a second, independent one racing `dispatch`'s own
+over the same SPSC `actionRing`.
+
+### `tests/support/scenario.ts`: the `script` scenario kind (step 5)
+
+New exported types `ScriptAction = { seq: number; action: unknown }`, `ScriptEntry = { tick: number;
+connect?: boolean; actions?: ScriptAction[] }`, `ScriptScenario = { kind: 'script'; role: 'sim';
+config: InstanceConfig; encoderConfig: InstanceConfig; genesis?: boolean; script: ScriptEntry[];
+checkpointAt: number }`, folded into `HashScenario`. **`runHashScenario` throws if handed a `script`
+scenario** (it takes one instance; a script scenario needs two) -- the real driver is the new
+`runScriptScenario(sim: EngineInstance, encoder: EngineInstance, scenario: ScriptScenario):
+string[]`, exported alongside it. No TS postcard encoder was written (0003 rejects that
+alternative): `encoder` is a second, client-role instance of the *same* `.wasm`, used purely to turn
+each scripted action's JSON into real wire bytes via `on_action` + `client_poll_uplink` -- exactly
+`client.dispatch`'s own client-side half -- whose output is copied byte-for-byte into the sim
+instance's `Rx` region for `sim_admit`. Per `ScriptEntry`, in order: idle-fill ticks up to `tick -
+1`, then `sim_connect`/every `actions` entry's admit (queuing, not yet applying), then exactly one
+`sim_tick()` call that applies everything queued together -- the same "one `Sim::step(batch)` call
+per distinct `Tick`" shape `engine::testing::testkit::run_script` uses natively. One checkpoint, at
+`checkpointAt`.
+
+**`Host::connect`'s extra `Record::Player{Connected}`** (`script_a()`, the native script, only ever
+queues a single `Joined` entry; `sim_connect` queues both `Joined` and `Connected`) **is a proven
+no-op for this fixture**: `Sim::step` calls `G::on_player` for every `Record::Player` regardless of
+variant, and `Puts::on_player` only ever matches `PlayerEvent::Joined`, so the extra record changes
+nothing `state_hash()` can see. Measured, not assumed: `pnpm golden puts` produced
+`golden-script-a.json`'s checkpoint as `7bdddfc9c749b1fb` on the first try, exactly the value this
+brief's own delegation prompt named in advance, and `puts_scenarios.rs`'s native `puts_script_a_
+golden` (still driving `Sim<Puts>` directly via `run_script`) reads the same file and agrees.
+
+`golden.mjs` special-cases `scenario.kind === 'script'`: it instantiates a second, client-role
+instance from `scenario.encoderConfig` and calls `runScriptScenario` instead of `runHashScenario`.
+New fixture files: `fixtures/puts/golden/scenario-script-a.json` (the script above, JSON-encoded
+exactly as `client.dispatch` would encode it) and the golden it wrote, `golden-script-a.json`.
+`tests/golden/puts_script_a.hash` (the old native-only byte golden) is deleted -- nothing else
+referenced it once `puts_script_a_golden` switched to `assert_golden_named`.
+
+**`testing::mod.rs` gained `assert_golden_named(fixture_dir, file_name, checkpoints)`**, `assert_
+golden`'s sibling with an explicit file name instead of the hardcoded `golden.json`: needed because
+`fx-puts` now has two native-checked goldens in one fixture directory. `assert_golden` itself is
+unchanged (calls `assert_golden_named(dir, "golden.json", checkpoints)`).
+
+### `EngineReject`'s TS binding, and a real footgun it exposed
+
+`EngineReject` (`sim.rs`) derives `ts_rs::TS` but **deliberately not `#[ts(export)]`**: that
+attribute only controls whether ts-rs's derive macro *also* emits its own `export_bindings_
+enginereject` test (`output_path()`/`export_all()` exist unconditionally either way), and adding it
+made every plain `cargo test -p engine` write an unwanted `crates/engine/bindings/EngineReject.ts`
+as a side effect (found the hard way, then reverted). `fixtures/puts/src/lib.rs` has its own `#[test]
+fn export_bindings_enginereject()` that calls `<engine::sim::EngineReject as ts_rs::TS>::
+export_all(&Config::from_env())` directly -- no `#[ts(export)]` needed for that call to work.
+
+**A real, separate footgun**: ts-rs's own default (`TS_RS_IMPORT_EXTENSION` unset) emits
+extension-less relative imports (`import type { Pos } from "./Pos"`), which fail `tsc` under this
+repo's `nodenext` module resolution. `buildGame()`'s new `bindings` option (`build-game.ts`) always
+sets `TS_RS_IMPORT_EXTENSION=js` alongside `TS_RS_EXPORT_DIR`, but that only covers regeneration
+routed through it (`scripts/build-fixtures.mjs`, the Vite plugin). A bare `cargo test`/`cargo
+nextest run` over `fx-puts` (no wrapper) regenerates the same files using ts-rs's raw defaults --
+losing the `.js` extension and the committed biome formatting both. Fixed with a new root
+`.cargo/config.toml`'s `[env]` table (`TS_RS_EXPORT_DIR = "bindings"`, `TS_RS_IMPORT_EXTENSION =
+"js"`), which cargo applies to every test binary it spawns, wrapper or not. The committed `.ts`
+files still won't byte-match a *bare* `cargo test` run's own output exactly (ts-rs's own quote/
+semicolon/trailing-comma style differs from biome's), only after `pnpm format` -- the same
+"reformat in place" step `golden.mjs` already takes for its own written files, for the same reason.
+
+### Measured: `puts-dispatch.html`'s build
+
+`pnpm exec vite build --config packages/engine/tests/browser/pages/vite.config.ts` succeeds with
+the new page included (`puts-dispatch-*.js` in the manifest); `pnpm --filter engine typecheck`
+(which includes `tests/browser/pages/tsconfig.json`) is clean. Never opened by a Playwright spec in
+this cut -- see the brief's own step-4/step-6 split in the delegation prompt.
