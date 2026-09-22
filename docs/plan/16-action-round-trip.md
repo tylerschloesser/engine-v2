@@ -945,13 +945,26 @@ brief's own Verification command -- matches every generated test title (`zeroGcS
 
 One `dispatchRaw(client, seq, PAINT_JSON_BYTES)` call every 30 frames inside the measured window
 (`PAINT_JSON_BYTES` built once via `TextEncoder`, outside `drive()` -- 0016 §2: JSON encoding never
-runs inside the window). `main`'s own `budgets.json` row is the first `class: "budgeted"` row this
-repo has ever written (every isolate on every other page is `"strict"`): a dispatched action's own
-*result* is drained and `JSON.parse`d by `client.ts`'s own per-rAF `pollActionResults` pump, which
-runs unconditionally once `createClient()` starts (registered inside `createClient` itself, not
-opt-in) and allocates by construction whenever a kind-2 record is actually present -- exactly the
-gap steps 1-5's own Deviations named ("a later cut owns making it allocation-free... the zero-GC
-window with `dispatchRaw` -- step 6 -- is where that gets budgeted").
+runs inside the window). A dispatched action's own *result* is drained and `JSON.parse`d by
+`client.ts`'s own per-rAF `pollActionResults` pump, which runs unconditionally once `createClient()`
+starts (registered inside `createClient` itself, not opt-in) and allocates by construction whenever
+a kind-2 record is actually present -- the gap steps 1-5's own Deviations named ("a later cut owns
+making it allocation-free... the zero-GC window with `dispatchRaw` -- step 6 -- is where that gets
+budgeted").
+
+**`main`'s own `budgets.json` row was first written `class: "budgeted"`, pre-emptively, without
+first measuring `"strict"` -- corrected at the gate.** The reasoning above (JSON parsing allocates
+by construction) explains *allocation*, not *GC events*, and assertion A is about GC events; the
+honest answer to "did `strict` actually fail" is that it was never tried first. Measured on review
+(`playwright test --project gc --grep "zero_gc_action clean" --repeat-each 8 --workers 1` with
+`class: "strict"`): 8/8 clean runs pass, and every negative control (`object main`, `burst main`
+included) passes 8/8 too, `burst main` now correctly tripping assertion A as well as B. The
+~1,296 B/600 frames `pollActionResults` adds (20 dispatches at `DISPATCH_EVERY_FRAMES = 30`,
+~65 B/parse) is real allocation but too small to cross V8's young-generation scavenge threshold --
+the same reason `connected-terrain`'s own ~102 B/frame, over the same 600-frame window, triggers no
+GC event either. `main` is now `"strict"`, matching every isolate on every other page; the row's own
+`bytesPerFrame` (115) and its derivation are unchanged (class does not change what is measured, only
+how assertion A reads the trace).
 
 **Measured** (`playwright test --project gc --grep "zero_gc_action clean" --repeat-each 8
 --workers 1`, this machine): `main` 106.59-106.92 B/frame (hardware; `byFn`: the same three sites
@@ -970,24 +983,48 @@ free -- `no_alloc_connection.rs`'s `host_admit_path_allocates_zero_bytes_per_act
 this nets to exactly 0 B/action once freed, the same gross-vs-net shape `connected-terrain`'s own
 `sim` formula documents for `runOneTick`/`warm`/`resync`) -- `ceil(9.94) + 8 = 18`.
 
-**Every negative control re-verified to still trip at these numbers** (0029: never widen a budget
-that stops a control tripping) -- `pnpm exec playwright test --project gc --grep "zero_gc_action
-neg"`, all 8 pass, `object main` included (proving `B.main` still separates clean from a genuine
-per-frame object leak at 115). One control needed a real infrastructure fix, not a budget change:
-`zero_gc_action neg burst main` failed its *expected verdict*, not its actual verdict -- `B.main`
-correctly tripped (measured ~40,000 B/frame against 115), but `analyse.ts`'s own assertion A is
-already class-aware (`class === 'strict' ? MinorGC + MajorGC === 0 : MajorGC === 0`), and a `burst`
-control's fixed per-frame garbage reliably forces a minor GC but not necessarily a major one, so
-`A.main` stayed genuinely `true` on this, the first `"budgeted"` isolate ever exercised. `gc/
-suite.ts`'s `expectedVerdict` assumed every isolate was `"strict"` (never previously false, since
-none was). Fixed by passing each isolate's own class through (`zeroGcSuite`'s own `isolateClasses`,
-derived from the same `budgets.isolates` it already reads) and only flipping `A[isolate] = false`
-for a `burst` control on a `"strict"` isolate; `B[isolate] = false` is unchanged for every class. No
-existing `"strict"` page's own expected verdict changes (re-verified: `connected-terrain neg object
-main`, `gc-loop neg burst main` both still pass). `pnpm gc software` (the full suite, both modes):
-77/77 pass (one transient `parkWorkers` timeout on an unrelated run, not reproduced on immediate
-retry or on a second full run -- session load from many consecutive Playwright invocations, not a
-real defect).
+**Every negative control re-verified to still trip at these numbers, against the final `"strict"`
+class** (0029: never widen a budget that stops a control tripping) -- `pnpm exec playwright test
+--project gc --grep "zero_gc_action neg"`, all 8 pass (now 9 with `burst main` also tripping
+assertion A, see below), `object main` included (proving `B.main` still separates clean from a
+genuine per-frame object leak at 115).
+
+**A real, separate infrastructure gap was found and fixed along the way, while `main` still read
+`"budgeted"`, and is kept** even though no page in this repo now uses `"budgeted"`: `zero_gc_action
+neg burst main` (while `"budgeted"`) failed its *expected verdict*, not its actual verdict --
+`B.main` correctly tripped (measured ~40,000 B/frame against 115), but `analyse.ts`'s own assertion
+A is already class-aware (`class === 'strict' ? MinorGC + MajorGC === 0 : MajorGC === 0`, pre-dating
+this milestone, untouched by it), and a `burst` control's fixed per-frame garbage reliably forces a
+minor GC but not necessarily a major one -- `A.main` stayed genuinely `true`. `gc/suite.ts`'s
+`expectedVerdict` assumed every isolate was `"strict"` (never previously false, since no page had
+ever used `"budgeted"` before this one, briefly). Fixed by passing each isolate's own class through
+(`zeroGcSuite`'s own `isolateClasses`, derived from the same `budgets.isolates` it already reads)
+and only flipping `A[isolate] = false` for a `burst` control on a `"strict"` isolate; `B[isolate] =
+false` is unchanged for every class. No existing `"strict"` page's own expected verdict changes
+(re-verified: `connected-terrain neg object main`, `gc-loop neg burst main` both still pass) --
+kept as a dormant but genuine correctness fix for whenever a future page's own isolate actually
+needs `"budgeted"` (a real `MinorGC`-tolerant isolate, unlike this one). `pnpm gc software` (the
+full suite, both modes), run three times across this cut: 77/77, 76/77 (one transient `parkWorkers`
+timeout on `zero_gc_action neg burst main`), 77/77; and once more after the `"strict"` fix: 77/77,
+76/77 (`sim neg object sim`, an unrelated pre-existing page, passed in isolation immediately after).
+Both misses were on different pages under sustained back-to-back Playwright load, neither
+reproduced on retry -- session load, not a real defect.
+
+#### `budgets.json` editing tool, gate-round fix: a `json.dump` round trip re-encoded 5 untouched `§`s
+
+Both `budgets.json` edits in this cut (the `zero_gc_action` page, the `uplinkBytesPerAction` row)
+were made by loading the whole file with Python's `json` module and writing it back out, which
+re-serializes every string in the file, not just the ones actually changed -- Python's default
+`ensure_ascii=True` turned 5 pre-existing literal `§` characters (in `connected-terrain`'s own
+`main`/`client`/`sim`/`gen0` and software formulas, untouched in content) into `§1` escape
+sequences, hiding the real, reviewable diff (a changed number in this file is meant to stand out)
+inside 41 lines of pure addition. Caught at the gate, not by this implementer. Fixed by restoring
+those 5 lines byte-for-byte against the commit before this cut's own first touch (confirmed via a
+line-by-line diff against that commit's own copy: zero non-addition lines remain), and by writing
+this cut's own new formula strings with the literal `§` character instead of the escape sequence,
+matching what the gate asked for. Lesson for a future edit of this specific file: edit the JSON
+text directly (or via a tool that only touches the lines that actually changed), never a full
+parse-and-reserialize round trip.
 
 #### `counters.action.uplinkBytesPerAction` in `budgets.json`
 

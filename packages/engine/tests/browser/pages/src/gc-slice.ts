@@ -8,11 +8,14 @@
 //
 // A dispatched action's own *result* (`onActionResult`, drained every real rAF frame by `client.ts`
 // itself, `client.dispatch`'s own Deviations: "not zero-GC ... a later cut owns making it
-// allocation-free") is genuinely not zero-GC: `JSON.parse`ing a `{"seq":n,"result":"Confirmed"}`
-// record allocates. `main`'s own row in `budgets.json` is `class: "budgeted"` for this page --
-// the first page in this repo to need it -- not `"strict"`: the brief's own step 3 Deviations
-// named this exact gap ("the exit criterion's own 'zero-GC window with dispatchRaw' -- step 6 -- is
-// where that gets budgeted"). `client`/`sim`/`gen0` stay `"strict"`: the *sending* side
+// allocation-free") allocates: `JSON.parse`ing a `{"seq":n,"result":"Confirmed"}` record costs real
+// bytes, folded into `main`'s own budget (`budgets.json`'s "the exit criterion's own 'zero-GC
+// window with dispatchRaw' -- step 6 -- is where that gets budgeted", steps 1-5's own Deviations).
+// `main` is still `class: "strict"` -- measured, not assumed (Deviations: a first draft tried
+// `"budgeted"` pre-emptively before measuring `"strict"` at all): the ~1,296 B/600 frames this adds
+// is real allocation too small to cross V8's young-generation scavenge threshold, so assertion A
+// (zero GC events) still holds, the same as `connected-terrain`'s own larger per-frame allocation
+// with no dispatched actions at all. `client`/`sim`/`gen0` also stay `"strict"`: the *sending* side
 // (`dispatchRaw`'s own `RingProducer.tryPush`, `on_action`'s outbox push, `poll_uplink`'s
 // immediate flush) and the *admit*/`apply` path are all proven zero-allocation already
 // (`no_alloc_connection.rs`'s `host_admit_path_allocates_zero_bytes_per_action`, this milestone's
