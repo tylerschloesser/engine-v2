@@ -83,4 +83,306 @@ Skill `add-action-type` (0021 §4). `packages/engine/src/CLAUDE.md`: ring record
 The page is `slice.html` (Scope), listed by `pnpm device:serve --tunnel`; its HUD shows the counters the items read: `confirmed` / `rejected`, `ring drops`, `engine_mem_grows` per instance, `tick`.
 
 ## Deviations
-(filled in during Phase 3)
+
+Steps 1-2 only (host admit pipeline; `on_action`, the outbox, results -> UI-out). Steps 3-7 (TS
+`dispatch`/ring/clock block/`onActionResult`, bindings, fixture page, WASM-under-Node golden,
+Playwright slice, skill) are not built.
+
+### ABI (`ABI_VERSION` 9 -> 10 in M15b, this milestone 10 -> 11)
+
+`crates/engine/src/abi/registry.rs`'s `Instance` trait:
+
+```rust
+fn on_action(&mut self, _rx: &[u8]) -> Status { Status::Unsupported }
+fn client_poll_ui(&mut self, _out: &mut [u8]) -> usize { 0 }
+```
+
+`export_instance!`'s extern C wrappers (both roles: client-role only in practice, since a
+non-client instance's `Instance::on_action`/`client_poll_ui` default straight to
+`Status::Unsupported`/`0`):
+
+```rust
+pub extern "C" fn on_action(len: u32) -> u32 { abi::on_action(&__ENGINE_SLOT, len) as u32 }
+pub extern "C" fn client_poll_ui() -> u32 { abi::client_poll_ui(&__ENGINE_SLOT) }
+```
+
+`abi::on_action(slot, len)` reads `len` bytes of `RegionId::Rx` and dispatches to
+`Instance::on_action`; `Status::BadLength` if `len` exceeds the region's declared capacity, the
+same shape `on_input`/`sim_admit` already use. `abi::client_poll_ui(slot)` hands `Instance::
+client_poll_ui` the whole `RegionId::Ui` region as `out` and returns its `usize` result cast to
+`u32` -- no `Status` crosses this export, the same "always answer, cost nothing" convention
+`upload_stage`/`gen_take`/`sim_warm_one` already use.
+
+`GameInstance<G>`'s own implementation (`game_instance.rs`):
+
+```rust
+fn on_action(&mut self, rx: &[u8]) -> Status {
+    match self {
+        GameInstance::Client(c) => match c.core.on_action(rx) {
+            Ok(()) => Status::Ok,
+            Err(ActionError::Malformed) => Status::Decode,
+            Err(ActionError::Full) => Status::OutOfMemory,
+        },
+        _ => Status::Unsupported,
+    }
+}
+fn client_poll_ui(&mut self, out: &mut [u8]) -> usize { /* see "UI-ring record boundary" below */ }
+```
+
+`client::core::ClientCore<G>::on_action(&mut self, bytes: &[u8]) -> Result<(), ActionError>`
+(`ActionError` is `pub enum ActionError { Malformed, Full }`, `pub` at `client::core` and
+re-exported at `client::ActionError`) parses `bytes` as one action-ring record, `serde_json`s it
+into `G::Action`, `Codec`-(postcard)-re-encodes it into a scratch `[u8; 512]`
+(`MAX_ACTION_ENCODED_BYTES`), and pushes `(seq, encoded_bytes.to_vec())` onto the outbox. `Full` is
+returned when the outbox already holds `OUTBOX_CAPACITY` entries; TS `dispatch` (step 3, not built)
+is expected to prevent that by construction (counting `seq - ack_seq`), so this is a defence-in-
+depth backstop, not the primary enforcement point.
+
+### `RegionId::Rx`: the action-ring record, sharing the region with `on_input`
+
+Layout exactly as the brief's Scope: `[seq u32 LE][len u32 LE][UTF-8 JSON]`, `len` counting only
+the JSON bytes that follow. `bytes.len() < 8` or `len` reaching past the record's own end is
+`ActionError::Malformed`.
+
+`Rx` is the client role's one receive buffer (`RegionLayout::region`'s "one declaration per id"
+rule) and is now shared by two unrelated, differently-shaped message kinds: `on_input`'s fixed
+32-byte `InputEvent` records (M11) and `on_action`'s one variable-length JSON record. Declared at
+`game_instance.rs`:
+
+```rust
+const INPUT_RX_BYTES: usize = InputQueue::CAPACITY * InputEvent::BYTES;   // 64 * 32 = 2048
+const ACTION_RX_BYTES: usize = 1024;                                     // generous, provisional
+layout.region(RegionId::Rx, INPUT_RX_BYTES.max(ACTION_RX_BYTES) as u32); // = 2048 today
+```
+
+Today `INPUT_RX_BYTES` (2048) dominates, so `ACTION_RX_BYTES` is inert headroom; a future input
+queue shrink or a very large `G::Action` JSON could flip which one governs, which is exactly why
+the declaration takes the `max` rather than assuming input always wins.
+
+### `RegionId::Ui`: the result record, and the bindings/`onActionResult` type this fixes
+
+Layout: `[kind u8][len u32 LE][JSON]`. Kind `2` is this milestone's own (`UI_RECORD_KIND_ACTION_
+RESULT`, `game_instance.rs`); kind `1` (`Ui`, `G::Ui` changed) is M16b's, sharing this same region
+and buffer -- a consumer must dispatch on the kind byte, not assume every record is an action
+result.
+
+**The exact JSON, copied from a real test (`game_instance::tests::client_poll_ui_produces_
+confirmed_and_rejected_json`), for all three cases `Result<Applied, Rejected<G>>` can be in:**
+
+```
+Ok(Applied)                                   -> {"seq":1,"result":"Confirmed"}
+Err(Rejected::Game(reject))                   -> {"seq":2,"result":{"Rejected":{"Game":"NotFound"}}}
+Err(Rejected::Engine(code))                   -> {"seq":3,"result":{"Rejected":{"Engine":"RateLimited"}}}
+```
+
+**The `Game`/`Engine` tag is preserved, not flattened** (orchestrator ruling at the M16 gate,
+reversing this milestone's own first draft, which had written `{"Rejected":<reason>}` with no
+inner tag). Why: 0004's Decision defines `Rejected<G>` as exactly the two-variant enum `Rejected<G>
+{ Game(G::Reject), Engine(EngineReject) }`, and `EngineReject`'s variants (`RateLimited`,
+`StateBudgetFull`, `EngineFault`) are placeholders today -- M31 makes `RateLimited` real (the
+action rate limit) and M21 makes `StateBudgetFull` real (the state-budget check), and a game whose
+own `Reject` happens to name a variant `RateLimited` or `StateBudgetFull` becomes indistinguishable
+from the engine's own reject by string alone if the tag is dropped. A game also needs the
+distinction behaviourally: its own reject means "tell the player why"; an `Engine` reject means
+"back off and retry" (or, later, "you're over budget"). **The ts-rs bindings (step 4) and `client.
+onActionResult`'s public type (frozen at cut B / M16b per the coordinator) must be generated from
+and match this shape** -- a flat `{"Rejected": <reason>}` union would be the wrong type to freeze.
+
+`push_result_record<G>` (`game_instance.rs`) builds this by hand (not via a `Serialize` impl on
+`Rejected<G>`, which doesn't exist and isn't added): `format!` for `Ok`, `serde_json::to_string`
+of the inner `G::Reject`/`EngineReject` value wrapped in a hand-written `{"Rejected":{"Game":...}}`
+/ `{"Rejected":{"Engine":...}}` shell for the two `Err` arms. `EngineReject` gained `#[derive(serde
+::Serialize)]` for this (it had none before).
+
+### `client_poll_ui`'s record-boundary contract (gate fix; the first draft was wrong)
+
+`GameInstance::client_poll_ui` walks `ClientInstance::ui_buf` record by record and copies only
+*whole* records into `out`:
+
+- A record that fits is copied and removed from `ui_buf`.
+- A record that doesn't fit **this** call is left in `ui_buf` (`ui_buf.drain(..consumed)`, not
+  `clear()`) for the next `client_poll_ui` call -- never split across two polls.
+- **A single record whose own `5 + len` exceeds `out.len()` in its entirety -- bigger than the
+  whole `Ui` region, so it can never fit any poll ever -- is silently dropped** (consumed from
+  `ui_buf`, never copied into `out`), rather than left stalling every record queued behind it
+  forever. `UI_BYTES`'s sizing (below) is generous headroom, not an enforced per-record cap, so a
+  game whose `G::Reject` carries a long `String` can hit this in practice.
+
+**This drop is not counted or reported anywhere today.** No counter, no log, nothing observable
+increments when it happens; a later milestone that wants to know whether it ever fires (or wants a
+different policy -- e.g. truncating the reject payload instead of dropping the whole record) has to
+add that itself. Tests: `client_poll_ui_never_splits_a_record_across_polls` (ten records through a
+64-byte `out`, drained across several polls, decoded and asserted lossless, in order, no
+duplicates) and `client_poll_ui_drops_a_record_too_big_for_any_poll_and_keeps_going` (a hand-built
+105-byte record ahead of a normal one, `out` = 64 bytes: the oversized one is dropped, the normal
+one still arrives).
+
+The first draft copied `ui_buf.len().min(out.len())` bytes and then unconditionally cleared
+`ui_buf` -- a record could be cut mid-`[kind][len][json]`, leaving a garbage `len` for whatever
+parses the ring downstream (the TS ring parser, step 3, not built) to choke on. Fixed at the gate,
+before step 3 could be built against the wrong contract.
+
+### Outbox and `Ui`-region capacity (a TS unit test in the next cut asserts against these)
+
+`client::core::OUTBOX_CAPACITY: usize = 32` (re-exported at `client::OUTBOX_CAPACITY`) -- the 0012
+pending-queue figure ("initially 32"), reused rather than picked twice; M25 turns this same number
+into the real prediction pending queue.
+
+`game_instance.rs`'s `UI_BYTES: u32 = (client::OUTBOX_CAPACITY * 128) as u32` = **4096 bytes** --
+32 outstanding results at a nominal 128 B of JSON each (comfortably over the three measured strings
+above, all under 60 B). Provisional, like every other region size in this file.
+
+### `poll_uplink` flushes actions immediately
+
+`ClientCore::poll_uplink`'s existing 0010 pacing (at most one batch per 50 ms, at least one per
+1 s) is **bypassed entirely whenever the outbox is non-empty**: `has_actions = !self.outbox.
+is_empty()`, and the two rate checks only run `if !has_actions`. An action's own latency budget
+(0004: "at most one tick plus the network") has no room for an extra pacing floor on top. The
+outbox is cleared only when a batch actually carrying it was sent (`sink.finish()` succeeds);
+otherwise it waits for the next poll. This is a judgement call, not literally specified by 0010 or
+the brief, and is worth a second look if M31's real rate limiting finds it too permissive for
+rapid-fire dispatch.
+
+### Host admit pipeline: exact shapes
+
+`host::Host::on_uplink` signature changed from `pub fn on_uplink(&mut self, conn: ConnId, bytes:
+&[u8])` (M15) to:
+
+```rust
+pub struct UplinkError; // unit struct; Clone, Copy, PartialEq, Eq, Debug
+pub fn on_uplink(&mut self, conn: ConnId, bytes: &[u8]) -> Result<(), UplinkError>
+```
+
+`Err(UplinkError)` on a malformed `UplinkBatch` (`UplinkReader::read` itself fails) or a malformed/
+non-canonical action payload (`codec::decode_canonical::<G::Action>` fails) -- 0004 step 1's
+protocol error. `Host`'s own `Instance::sim_admit` maps it:
+
+```rust
+fn sim_admit(&mut self, conn: u32, rx: &[u8]) -> Status {
+    match self.on_uplink(conn, rx) {
+        Ok(()) => Status::Ok,
+        Err(UplinkError) => Status::Decode,
+    }
+}
+```
+
+`Status::Decode` is what a later step (`SimHost`, TS) reads to close the connection; that wiring
+itself is not built here (Non-scope: this is steps 1-2 only).
+
+Per action, in order: dedup (`seq <=` the host's `store.last_seq(player).unwrap_or(0)` is dropped
+silently, no decode attempted) -> `codec::decode_canonical::<G::Action>` (malformed -> `Err
+(UplinkError)`, whole batch call aborts, actions already admitted earlier in the same batch keep
+their effect) -> `G::admit(sim.authority() as &dyn WorldRead<G>, &PresenceTable::empty(), player,
+&action)` -> `Ok(())` pushes `Record::Action { who, seq, action }` onto `pending_records` (applied
+at the next `tick()`); `Err(reject)` pushes `Outcome { seq, result: Err(Rejected::Game(reject)) }`
+onto that connection's own `ConnSlot::pending_results` immediately, not logged, per 0004.
+
+`ConnSlot` gained `pending_results: Vec<Outcome<G>>`. Two producers: `on_uplink` (admission-time
+rejects, above) and `Host::tick` (every `Sim::step` outcome for an admitted action, routed to the
+right connection by zipping a reused scratch field, `Host::scratch_action_players: Vec<PlayerId>`
+-- gathered from `pending_records`'s `Record::Action` entries, in order, *before* `sim.step` drains
+it, since `Sim::step` pushes one `Outcome` per `Record::Action` it sees in that same relative order
+but never the `who`). `Host::build_frame` drains and clears `pending_results` into the `ActionResults`
+wire section (id **1**, the lowest -- written *before* `Global`, id 2, since `FrameWriter::section`
+requires strictly ascending ids) every time it runs for that connection, sorted by `seq`
+(`insertion_sort_by_key`) first, so admission-time and apply-time results interleave correctly.
+
+`game::PresenceTable<G>` (a shell with only a private `PhantomData` field until M19) gained:
+
+```rust
+impl<G: Game> PresenceTable<G> {
+    pub fn empty() -> Self { PresenceTable { _marker: core::marker::PhantomData } }
+}
+```
+
+the placeholder every `G::admit` call passes until M19 gives the table real content. Not in the
+brief's own Files-touched list for `game.rs`, but there was no other owner for it.
+
+### Testkit: `Host::queue_action_for_test` retained, `Loopback::action` switched to the real path
+
+`Host::queue_action_for_test(&mut self, who: PlayerId, seq: u32, action: G::Action)` (the M15
+backdoor, a direct `pending_records.push`, bypassing decode/admit entirely) is **not deleted**.
+`tests/no_alloc_connection.rs` (M15b's own zero-allocation suite, outside this milestone's Files
+touched) still calls it directly in `run_steady_tick`/`run_panning_tick`, and must: those calls sit
+*inside* the exact windows `host_and_client_steady_state_no_alloc`/`host_and_client_bounded_camera_
+no_alloc` measure, and `codec::decode_canonical` allocates a scratch buffer sized to its input on
+every call -- going through the real wire path there would attribute that allocation to a window
+that currently, correctly, asserts zero.
+
+`testing::testkit::Loopback::action(&mut self, who: PlayerId, action: G::Action)` **was** switched:
+it now `Codec`-encodes `action`, wraps it in a real `UplinkWriter`-built `UplinkBatch` of one
+action, and calls the real `Host::on_uplink(conn, bytes)` (`conn = who.0 - 1`, recovering the
+connection id from `PlayerId = conn + 1`, M15b's own convention -- `Loopback` keeps no reverse map).
+Existing M15 tests in `tests/connection_and_subscriptions.rs` that call `lb.action(...)` are
+unaffected in observable behaviour, since `LGame` never overrides `admit` (default `Ok`).
+
+### Measured numbers
+
+**Uplink bytes per action**, measured natively (not committed to any test, computed once via a
+throwaway `eprintln!` and removed): `RAction::Bump { n: 12345 }` `Codec`-(postcard)-encodes to
+**3 bytes** (1-byte variant tag + 2-byte varint payload); wrapped in a one-action `UplinkBatch` with
+no camera and no presence (`UplinkWriter::write`), the whole batch is **12 bytes**
+(1 msgtype + 1 flags + 4 `last_received_tick` + 1 `n_actions` varint + 1 `seq` varint + 1 `len`
+varint + 3 action bytes). Not written into `budgets.json` -- see below.
+
+**Host-side allocation through the real admit path: 0 B/action**, `crates/engine/tests/
+no_alloc_connection.rs`'s `host_admit_path_allocates_zero_bytes_per_action` (own binary, `Arena`
+global allocator, `abi::arena::live_bytes()`), flat at every window length tried (100 through
+25,600 in a throwaway geometric probe; the committed test keeps 100 and 1,600, M15's own short/long
+template). Every allocation the real path makes (`UplinkReader::read`'s `raw_actions: Vec`,
+`Host::on_uplink`'s own `decoded: Vec`, `codec::decode_canonical`'s scratch buffer inside it) is
+local to one `on_uplink` call and freed before that call returns, so a matched alloc/free pair
+inside one measured call nets to zero in `live_bytes()` (allocated minus freed) -- the same
+gross-vs-net distinction M15 fix round 3 already drew for `Replica::held`/`TerrainStore::
+replace_overlay`.
+
+**A harness bug found and fixed while measuring this, worth recording so it is not rediscovered as
+a "defect": a run that calls `Host::on_uplink` + `Host::tick()` every action but never calls `Host
+::build_frame` measures a real, reproducible, *non-zero, non-per-action* number that looks like a
+leak but is a test-harness artefact.** First draft of the test did exactly that (omitted `build_
+frame`); every action here is admitted and applied successfully (the fixture game never overrides
+`admit`), so every tick pushed one more `Outcome` onto `ConnSlot::pending_results` -- and nothing
+ever drained it, because only `Host::build_frame` drains that queue. Measured: 13,824 B over 100
+actions, 32,256 B over 400, converging toward **~92 B/action** as the window grew (not a flat
+per-tick constant, and not equal at the two window lengths either -- itself the tell that something
+was still accumulating, the same shape M15's own fix-round-2/3 gate used to catch a similar
+mis-measurement). Fixed by giving the test the real per-tick call order every connection actually
+runs (`tick()`, `build_frame(conn)`, `seal()` -- `host::mod`'s own "Seam shapes as landed"); re-
+measured at exactly 0 across the same window range. The lesson: **any future measurement of a path
+that touches `ConnSlot::pending_results` (or, by the same shape, anything else `build_frame`
+drains) must call `build_frame` in its own measured loop, or it measures an undrained queue
+instead of the path it means to.**
+
+Failability of `host_admit_path_allocates_zero_bytes_per_action` proven: an 8 B/call leak injected
+into `Host::on_uplink` (`Vec::with_capacity(8)` + `mem::forget`) measured as exactly 800 B over 100
+actions; reverted.
+
+### `budgets.json`
+
+**Untouched.** The action-rate/log row the brief's Budgets section names ("uplink bytes per action
+recorded in `budgets.json`") is left to whichever cut actually owns editing that file -- its
+existing formula/history convention (see the `main`/clock-block rows already in it) is involved
+enough that editing it without full context risked corrupting entries unrelated to this milestone.
+The measured number above (12 B/action, one-action batch, no camera/presence) is what a later cut
+should record there.
+
+### Tests added (native, beyond the brief's own named list for steps 1-2)
+
+The brief's "Tests added" names eight Rust tests, all step 1's (host admit pipeline): `action_lands
+_on_next_tick`, `arrival_order_within_tick`, `ack_and_deltas_share_a_frame`, `admit_reject_is_not_
+recorded`, `apply_reject_is_recorded_and_replays`, `resent_seq_is_dropped`, `host_applies_only_
+sealed_records`, `malformed_action_is_protocol_error` (`crates/engine/tests/action_round_trip.rs`,
+new file, `[[test]] required-features = ["testing"]` in `Cargo.toml`). All eight proven to fail
+under a targeted single-defect injection (see the orchestrator report for which line each covers);
+`host_applies_only_sealed_records` is a real, distinct test (its middle assertion -- `total == 1`
+after the second `action()` call and before the second `step()` -- fails if admission ever applied
+directly instead of queueing), confirmed at the gate, not a duplicate of `action_lands_on_next_tick`.
+
+Step 2 has no named native tests in the brief (its tests are TS/WASM, steps 3-5); six supplementary
+tests were added for coverage of this step's own new code, all proven to fail under a targeted
+defect: `client::core::tests::{on_action_queues_and_poll_uplink_flushes_it_immediately,
+on_action_rejects_malformed_record, on_action_rejects_once_outbox_is_full, action_results_decode_
+in_order_confirmed_and_rejected}`; `game_instance::tests::{client_poll_ui_produces_confirmed_and_
+rejected_json, on_action_parses_a_valid_record_and_rejects_a_malformed_one}`, plus the two
+record-boundary tests and the allocation test named above (added at the gate, not in the original
+cut).
