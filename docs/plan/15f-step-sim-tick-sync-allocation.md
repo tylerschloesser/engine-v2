@@ -118,4 +118,64 @@ none
 
 ## Deviations
 
-(filled in during Phase 3)
+**Repro (step 1).** Temporarily added `--no-opt --no-sparkplug` to the `gc` project's `--js-flags`
+in `packages/engine/playwright.config.ts` (reverted before finishing, never committed:
+`git diff packages/engine/playwright.config.ts` is empty at the end of this milestone).
+`GC_MODE=software pnpm test:slow -t "neg burst sim"` then failed exactly as CI run `35761075119`
+did: `main` read 108.52 (`connected-terrain`) and 28 (`sim`), byFn's only `main` entry in both cases
+`stepSimTickSync@client-D90gg8O_.js:242: 16800` (16,800 B / 600 frames = 28.0 B/frame exactly, the
+whole discrepancy).
+
+**Confirmed by measurement, not by reading (step 2).** The hypothesis in the brief --
+`h.workers.some((w) => w.kind === 'sim')` allocating a fresh closure per call -- is the whole 28.0
+B/frame: after replacing it with a plain indexed loop (matching `allEqual`/`allResumed`'s own
+discipline immediately above it), `stepSimTickSync@...` no longer appears anywhere in `main`'s
+`byFn`, in either page, under forced interpreter. Nothing else in the function (`Atomics.add`,
+`h.control.wake`, the `Atomics.load` spin) shows up as an allocation site before or after; both were
+already Smi-only integer ops, as the brief suspected. `clientTestHandle` was checked too: it returns
+the same object every call (a property read off `Client`, no allocation).
+
+Since a passing test's failure-JSON `byFn` is not printed, disappearance was confirmed by the
+technique `connected-terrain`'s own `sim` row formula already used precedent for ("the budget forced
+to 1"): temporarily set each page's `gc.pages.<id>.software.isolates.main.attributedBytesPerFrame`
+to `-1` in `budgets.json` (forcing the otherwise-passing `clean` test to fail and print `byFn`),
+captured the artifact, then reverted the edit (`git diff packages/engine/budgets.json` is empty at
+the end of this milestone). Results, still under forced `--no-opt --no-sparkplug`:
+
+- `gc-sim clean`: `attributedBytesPerFrame.main = 0` (`bytesPerFrame.main` 21.49, all in `(V8 API)`/
+  `next`/`isTypedArray`/`entries`/`values`/`evaluate`/`run@gc-page`/`innerSerialize` -- instrument
+  overhead, none of it attributed and none of it `stepSimTickSync`).
+- `gc-connected-terrain clean`: `attributedBytesPerFrame.main = 80.5` -- exactly this page's existing
+  clean baseline (the same 80.50-80.52 B/frame the `main` software row's own formula already
+  measured before this milestone), unchanged. byFn: `draw` 28800, `drain` 12000, `stepFrame` 7200,
+  plus the same instrument-overhead tail; no `stepSimTickSync` entry.
+
+**Re-run at rest and under forced interpreter (steps 3-4).** After the fix,
+`GC_MODE=software pnpm test:slow -t "neg burst sim"` passes both under forced
+`--no-opt --no-sparkplug` (`browser pass 5 tests 15s`) and, after reverting the config edit, at rest
+(`browser pass 5 tests 7.2s`). `git status --short` at that point showed only
+`packages/engine/src/test/client.ts` modified -- the diagnostic edits left no trace.
+
+**No budget moved (step 5).** `gc-sim`'s software `main: 0` and `gc-connected-terrain`'s software
+`main: 89` both pass unchanged with the allocation gone (measured above: 0 and 80.5, both already
+under their existing budgets with existing margin). `budgets.json` has no diff in this milestone.
+
+**Audit of the rest of `src/test/client.ts` (Scope's second bullet).** Traced every function a
+zero-GC page's `drive()` calls per frame, across every `gc-*.ts` page
+(`gc-sim.ts`, `gc-connected-terrain.ts`, `gc-terrain.ts`, `gc-topology.ts`, `gc-gen.ts`;
+`gc-echo.ts`/`gc-input.ts`/`gc-sim-paced.ts`/`gc-loop.ts` call none of this file's functions from
+`drive()` itself): `stepSimTickSync` (fixed above), `stepFrame` (called through `harness.stepFrame`
+-- no closures; `clockLike.advance?.()` is an optional call, not a closure; `frameClocks.get`/`.set`
+on an already-created `WeakMap` entry after the first call; this path was M15d's own subject and
+stayed clean), and `asHarness`'s inline `stepTick()` (two plain indexed loops over a `tickTargets`
+array and a `tickWant` `Int32Array` both preallocated once at `asHarness()` call time, already
+carrying this file's own "reused every call" comment). `parkWorkers`/`resumeWorkers` are called once
+per page at setup, before `installGcPage`, not from any page's `drive()` -- not on this audit's own
+per-frame path, though `allEqual`'s doc comment already covers their own closure fix from a prior
+milestone. No other per-call-closure shape found; `stepSimTickSync`'s `.some()` was the only
+instance.
+
+**Verification commands run (targeted, no `pnpm test`/`pnpm lint` -- Tyler is the gate):**
+`pnpm --filter engine typecheck` (clean), `pnpm test unit` (`pass 157 tests`), `pnpm test browser`
+(`pass 110 tests`, fast tier, both default and `GC_MODE=software`), `GC_MODE=software pnpm test:slow
+-t "neg burst sim"` (before/after, above).
