@@ -543,7 +543,7 @@ or advances a `seq` counter -- the caller supplies both. `actionResults` subscri
 onActionResult` lazily, on its first call per `Client`, and returns the same live array every call
 (never a fresh subscription) -- read its contents, don't expect it to clear itself.
 
-### Gate-round fix: `connect: true` pages deadlocked at boot (found and fixed live)
+### Gate-round fix: `connect: true` pages deadlocked at boot, then a second fix for a self-inflicted 11 s stall
 
 Three existing pages -- `connected.ts`, `connected-terrain.ts`, `gc-connected-terrain.ts` (all
 pre-M16, M15b/M15c) -- `await client.ready` immediately after `createClient()`, before wiring any
@@ -551,41 +551,40 @@ of their own test hooks (`__stepTick`, `drive()`, ...). Once `ready` started wai
 `session_state = 1` (above), this deadlocked: nothing outside the page can reach a hook that
 doesn't exist yet, and nothing inside the page drives a tick either, since these pages' own sim
 ticks are test-driven (no `test.flags.pace`), not real-time-paced. `connected-paced.ts` (`test.
-flags.pace = true`) was never affected -- its sim ticks itself.
+flags.pace = true`) was never affected -- its sim ticks itself. All three pages now call `await
+pumpUntilLive(client)` (`engine/test`, new) in place of `await client.ready`, before wiring their
+own hooks. **Neither `Client.ready` nor `dispatch`'s own contract changed at all** -- this is
+entirely a page-boot-order fix, inside `tests/`, not a seam change: `dispatch_before_ready_throws`
+still fails if the readiness guard is removed, and `ready` still means exactly what this
+milestone's own Scope says.
 
-Fixed with a new `engine/test.pumpUntilLive(client)` (`test/client.ts`, exported through `test.ts`
-alongside `dispatchRaw`/`actionResults`): retries `stepSimTickSync` on a macrotask until it stops
-throwing (`clientTestHandle(client).workers` is populated partway through `client.ready`'s own
-async `start()`, before a page's top-level script can know it happened) and races `client.ready`
-itself, stopping the pump the instant a real session-live poll succeeds. One real sim tick applies
-`sim_connect`'s own queued `Joined` record (a real write, whatever `Game::on_player` does with it),
-so `Host::build_frame` has something to send on the very first tick regardless of camera state; the
-client worker's netPump wakes off the downlink ring itself (M15b), independent of `CB_FRAME_REQ`/
-`stepFrame`. All three pages now call `await pumpUntilLive(client)` in place of `await client.
-ready`, before wiring their own hooks. **Neither `Client.ready` nor `dispatch`'s own contract
-changed at all** -- this is entirely a page-boot-order fix, inside `tests/`, not a seam change:
-`dispatch_before_ready_throws` still fails if the readiness guard is removed (unaffected by this
-fix), and `ready` still means exactly what this milestone's own Scope says.
+**First version of `pumpUntilLive` was itself the cause of an 11.28 s stall the orchestrator caught
+before hand-off** (do not repeat this shape): it retried `stepSimTickSync` on a macrotask, using a
+caught throw as its own "are the workers up yet" signal (`clientTestHandle(client).workers.length
+=== 0` throws; `> 0` attempts the call for real). But `workers` is populated *before* a worker has
+finished its own async setup -- `stepSimTickSync` busy-spins the main thread until the sim worker
+acks, so the first attempt reliably started too early and then blocked the very thread the worker's
+own setup needed a turn on to finish. Measured with a precise timestamp probe (page start, each
+worker's `engine_init ok`, `stepSimTickSync` entry/exit, `client.ready` resolution): the first real
+`stepSimTickSync` attempt entered at 59 ms and did not return until 11,346 ms -- exactly when all
+three workers' `engine_init ok` logs fired, immediately after the spin gave up (its own iteration
+limit) and yielded the thread back. Not "waiting harmlessly through boot": the spin was the reason
+boot took that long. `pumpUntilLive`'s own convergence (~13 loop iterations once unblocked) was
+never the cost; a proxy readiness check that blocks was.
 
-**Verified functionally correct**: all 17 `connected`/`gc-connected` tests (`chromium` + `gc`
-projects) pass, repeatably, run directly through `pnpm exec playwright test ... -g connected`.
+**Fixed by exposing a real signal instead of inferring one from a blocking call's own failure
+mode**: `ClientTestHandle` gained `workersReady: Promise<void>` (`client.ts`'s own `workersUp`, the
+promise `start()` itself returns, captured separately from `ready`'s further `waitForLive()`
+chaining -- `ready`'s own composition is otherwise unchanged). `pumpUntilLive` now `await`s
+`workersReady` *before* its first `stepSimTickSync` call, never inferring readiness from a caught
+throw. Re-measured with the same probe: `pageReady` at **82 ms** (was 11,380 ms) -- `stepSimTickSync`
+never blocks at all once genuinely called after every worker's own handshake completed.
 
-**Not resolved, flagged for the orchestrator rather than acted on**: each `connect: true` page now
-takes roughly 11-15 seconds, dominated by `WebAssembly.compileStreaming` of `fx-puts`'s dev-profile
-`.wasm` (measured directly: one `stepSimTickSync` call spent 11.28s in its own busy-spin, exactly
-overlapping the interval before every worker's `engine_init ok` log appeared) -- not this fix's own
-overhead (`pumpUntilLive`'s loop itself converges in ~13 iterations, single-digit milliseconds).
-Running the `connected`/`gc-connected` group together therefore exceeds the `browser` suite's
-fast-tier wall-clock budget (`docs/decisions/0020-testing-strategy.md` §3): `pnpm test browser -t
-connected` and `pnpm test browser -t gc-connected` both report `FAIL ... over budget` even though
-every individual Playwright test in both reports passes (`test-results/browser/report.json`: 0
-failed both times) -- the budget classifier, not a real test failure. Whether the *old* `ready`
-(pre-M16, "workers are up") was ever actually this slow to reach is not something this cut could
-settle: it required the identical per-worker WASM instantiation to complete before resolving too,
-so if 11-15s is genuine for this machine/fixture size, it should have been just as slow before --
-but the orchestrator's own bisection measured `replica_hash_equals_host_in_browser` at 2s on
-`10bbde5`. Budget ownership and whatever this discrepancy means are the orchestrator's call, not
-this cut's.
+**Verified**: `pnpm test browser -t connected` -> `browser pass 12 tests 5.7s/25s`; `pnpm test
+browser -t gc-connected` -> `browser pass 6 tests 4.2s/25s`; the full `pnpm test browser` -> `browser
+pass 110 tests 22s/25s`, matching the pre-M16 baseline (~23 s) the orchestrator measured on
+`10bbde5`. All 17 `connected`/`gc-connected` tests also pass repeatably through a direct `pnpm exec
+playwright test --project chromium --project gc -g connected` invocation.
 
 ### `tests/support/scenario.ts`: the `script` scenario kind (step 5)
 
