@@ -1,6 +1,6 @@
 # M15: Subscriptions, frame building and the client replica (Rust core)
 
-Status: not started · After: 13, 14 (M11 is needed only by 15b) · Tyler-dependent: no
+Status: done · After: 13, 14 (M11 is needed only by 15b) · Tyler-dependent: no
 
 Split: the PLAN.md row for M15 is two subsystems in two languages. This brief is the Rust core, proven natively by a byte-level loopback. `15b-ring-connection-and-replica-rendering.md` adds the in-browser `Connection`, the worker plumbing and the renderer hand-off. M16 follows 15b.
 
@@ -53,8 +53,8 @@ Token bucket, visible-first pacing, soft cap, degrade, action rate limit: **M31*
 Rust native: `subs_ring1_plus_lookahead`, `subs_hysteresis_no_traffic_on_small_pan`, `subs_unsubscribe_after_hold`, `subs_cap_evicts_farthest_first`, `subs_clamps_oversized_and_zero_views`; `first_frame_has_global_and_own_player`; `pristine_chunk_enters_as_coord_only`; `modified_chunk_enters_as_snapshot_then_deltas_from_next_tick`; `leave_frees_overlay_keeps_pristine`; `entity_straddling_subscribed_and_unsubscribed_chunks_delivered_once`; `frame_is_atomic_on_malformed_tail`; `view_unknown_outside_subscription`; `idle_tick_builds_no_frame`; `replica_hash_equals_host_region_hash` (3 clients, seeded camera walk, 600 ticks, delays 0/2/5); `golden_frame_bytes_join_wilderness`; `uplink_at_most_one_batch_per_interval`; `uplink_keepalive_batch_every_1s` (0010 Rates: a client with no camera change and nothing queued emits exactly one batch per second of `t_ms`, carrying `last_received_tick`); `camera_report_on_change_leading_and_trailing` (0010 Rates: motion below the report quantum sends nothing, the start of motion sends at once, and coming to rest sends one final report with zero velocity); `camera_walk_changes_no_state` (spec overview, "The camera never mutates the world": two `Loopback` runs with the same action script and seed but different seeded camera walks, one of them with no camera traffic at all, give equal `Sim::state_hash()` at every checkpoint, while their subscription sets differ; the log half of that Requirement is M22's); `host_and_client_steady_state_no_alloc`.
 
 ## Exit criteria
-- [ ] All tests above pass; `budgets.json` holds ceilings for the counters on `join_wilderness` and `join_modified` scenarios.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass; `budgets.json` holds ceilings for the counters on `join_wilderness` and `join_modified` scenarios.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t subs` · `pnpm test rust -t replica` · `pnpm test rust -t golden_frame` · `pnpm lint`.

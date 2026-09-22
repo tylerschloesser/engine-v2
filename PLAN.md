@@ -34,7 +34,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 13 | `13-sim-host-tick-loop.md` | TS sim host, sim worker, injected timer, catch-up cap, chunk warmer | 06b, 08b, 12b | |
 | [x] | 14 | `14-wire-framing.md` | frame + sections + uplink batch, golden bytes | 12b | |
 | [x] | 13b | `13b-tick-timing-allocation.md` | tick timing out of the JS hot path, zero-GC page on the real pacing path | 13 | |
-| [ ] | 15 | `15-connection-and-subscriptions.md` | subscriptions, frame building, client replica (Rust core) | 13, 14 | |
+| [x] | 15 | `15-connection-and-subscriptions.md` | subscriptions, frame building, client replica (Rust core) | 13, 14 | |
 | [ ] | 15b | `15b-ring-connection-and-replica-rendering.md` | in-browser `Connection` over rings, worker plumbing, replica → renderer | 11, 15 | |
 | [ ] | 16 | `16-action-round-trip.md` | `dispatch` → admit → apply → ack → `onActionResult`, `add-action-type` skill. **Vertical slice complete.** | 15b | D |
 | [ ] | 16b | `16b-ui-observation-and-clock.md` | `G::Ui` → UI ring → `onUi`, `client.clock()`, ts-rs bindings | 16 | |
