@@ -116,4 +116,126 @@ If the fix establishes a rule for clock access on the client frame path, state i
 none
 
 ## Deviations
-(filled in during Phase 3)
+
+### Step 1: attribution (before)
+
+Forced-interpreter (`--js-flags=--no-opt --no-sparkplug`, temporary edit to `playwright.config.ts`'s
+`gc` project, reverted after each measurement session): `sim-paced clean` read `main` at
+33.4-33.5 B/frame against budget 30, `attributedBytesPerFrame.main` 11.94-11.96, `byFn.main`'s
+dominant entry `stepFrame@client-*.js:162` at 7164-7200 B / 600 frames -- `src/test/client.ts`'s
+`stepFrame` (`h.cameraState.frameTimeMs = clockLike.now()`), the only per-frame wall-clock read
+`gc-sim-paced`'s `main` isolate makes (it is the one zero-GC page whose `test.clock` defaults to
+the real `systemClock` *and* whose `drive()` is `installGcPage`'s default, i.e. calls `stepFrame`).
+
+Sweeping the other 7 zero-GC pages under the same forced condition (temporary
+`budgets.json` main-row zero-outs, reverted after each read) found no other page currently exercises
+this exact site with a real clock -- `echo`'s `drive()` never calls `stepFrame`; `gc-sim`'s custom
+`drive()` calls only `stepSimTickSync`; `topology`/`gen`/`terrain`/`input`/`gc-loop` all inject a
+`ManualClock` for `test.clock`, so their own `stepFrame`/`harness.stepFrame` calls read a fake
+clock, not `performance.now()`. Two *different* findings turned up on that same sweep, neither a
+wall-clock read, neither fixed here (below).
+
+### Step 2: fix, round 1 (superseded in part)
+
+`clock.ts`'s `createResyncingClock(clock, resyncEvery)`: reads the real clock once every
+`resyncEvery` calls, does integer arithmetic (`Math.floor`) between reads, corrects to the real
+elapsed time at each resync -- the same shape as `SimHost.resync()` (0030), applied to a frame path
+instead of a tick path. Wired into `test/client.ts`'s `stepFrame` (`RESYNC_FRAMES = 30`) and, in
+round 1, into `frame-loop.ts`'s production `tick()` too, using a nominal `FRAME_MS = 1000/60`
+between resyncs since `tick()` took no `dtMs` argument.
+
+**`RESYNC_FRAMES` is 30, not 0030's own `RESYNC_TICKS = 8`.** Measured (both `--repeat-each 8`,
+`playwright test --project gc --grep "sim-paced clean" --workers 1`, this machine): with
+`RESYNC_FRAMES = 8`, default-V8 clean read 22.93-22.99 B/frame (`next@client-*.js` attributing
+900 B / 600 frames = 1.5 B/frame), which would have required raising `sim-paced`'s `main` budget
+from 30 to 31 (`ceil(22.99) + 8 = 31`) -- the brief forbids that. Unlike 0030's own finding (its
+sim-worker read cost ~11.92 B only in the interpreter tier), **this box costs ~12 B per *read*
+regardless of V8 tier**: the same ~12 B/read total showed up whether `next()` ran under forced
+`--no-opt --no-sparkplug` or under default/optimised V8, once the read moved into
+`createResyncingClock`'s own closure-captured accumulator instead of a direct property store (the
+shape the *original* unfixed code had, which V8's optimiser could apparently eliminate entirely
+once warm -- the intermittency in "Why now" is exactly that: sometimes V8 wins that race, sometimes
+it does not). `RESYNC_FRAMES = 30` amortises the same ~12 B/read to ~0.4 B/frame (20 real reads over
+600 frames), measured: 21.83-21.89 B/frame default V8, 21.85-21.89 B/frame forced-interpreter --
+the two tiers now read the same, and `ceil(21.89) + 8 = 30`, unchanged from the existing budget.
+
+### Step 2: fix, round 2 (coordinator correction, accepted)
+
+Round 1's use of a nominal `FRAME_MS` on `frame-loop.ts`'s production `tick()` was wrong:
+`cameraState.frameTimeMs` is not a delta, it is a **timestamp**, copied into the camera block and
+read Rust-side as `camera.frame_time_ms` by both `Instance::frame` and `client_poll_uplink`
+(`crates/engine/src/abi/mod.rs`), which drive `ClientCore::poll_uplink`'s 50 ms uplink rate limit
+and 1 s keep-alive (0010 "Rates", M15). A nominal 60 fps advances that clock at the wrong *rate* on
+any other real refresh rate -- roughly 2x at 120 Hz, 0.5x at 30 Hz, snapping back to real time at
+every resync -- which is exactly the device-check class of bug this milestone must not introduce
+(Tyler's own device checks run on a phone, not a 60 Hz desktop).
+
+The actual fix needs no clock read at all on the production path: `Scheduler.requestFrame(cb:
+(tMs: number) => void)` (`clock.ts`) already delivers a real `DOMHighResTimeStamp` to its callback,
+and `systemScheduler.requestFrame = (cb) => requestAnimationFrame(cb)` means that argument *is*
+`requestAnimationFrame`'s own timestamp. `frame-loop.ts`'s `frame(tMs)` now forwards it to
+`tick(tMs)`, which assigns `tMs` straight to `cameraState.frameTimeMs` -- no `clock.now()` call,
+so nothing to box, stronger than amortising a read. `createResyncingClock` stays wired into
+`tick()` only as the fallback for a caller with no `tMs` in hand (a direct manual `tick()` call --
+`engine/test`, `frame-loop.test.ts`'s fakes-only unit tests); it is otherwise unchanged and remains
+the real fix for `test/client.ts`'s `stepFrame`, which owns its own clock and has no rAF-delivered
+timestamp to borrow.
+
+**Measured, not assumed, that assigning the already-in-hand double allocates nothing**: no
+committed zero-GC page runs a real `FrameLoop` (`createRealFrameLoop`), so this could not be
+measured the same way as `stepFrame`. A temporary, session-only diagnostic spec
+(`gc-tmp-measure.spec.ts`, deleted before this milestone's commit, never part of any suite) opened
+`device.html` -- the one production page running `createRealFrameLoop` against real
+`systemClock`/`systemScheduler` (real `requestAnimationFrame`) -- attached a CDP `HeapProfiler`
+sampling session (`samplingInterval: 1`, matching 0016 §3's own instrument), ran for 3 real
+seconds, and summed the resulting profile (`gc/analyse.ts`'s own `sumProfile`). Result: `byFn`
+contains no `tick@frame-loop` entry and no clock-read entry at all -- the top sites are
+`push@:0` 9024 B, `(anonymous)@device` 2324 B, `drain@terrain` 1624 B, `integrate@client` 940 B,
+`applyPending@frame-loop:107` 848 B (M09b's viewport path, a different line, unrelated to this
+fix) and three smaller ones. Assigning `tMs` is invisible to the sampler.
+
+### Budgets re-derived
+
+- `gc.pages["sim-paced"].isolates.main.bytesPerFrame`: **30 -> 30**, unchanged. `ceil(21.89) + 8 =
+  30` (measured clean, 8 runs, default V8 and forced-interpreter alike -- both tiers read the same
+  after the fix). `RESYNC_FRAMES = 30` was chosen specifically so this figure would not need to
+  rise.
+- `gc.pages["sim-paced"].software.isolates.main.attributedBytesPerFrame`: **14 -> 9**. Measured
+  (`GC_MODE=software`, `--repeat-each 8`): 0.38-0.40 B/frame attributed, clean. M13b's original
+  landing of this row used an ad hoc +2 B margin (`ceil(11.98) + 2 = 14`) because the ordinary
+  +8 B convention collided with the `object` control's own attributed 16 B/frame. With clean now at
+  0.40, the ordinary 0016 §1 margin applies without collision: `ceil(0.40) + 8 = 9`.
+- No other page's `main` row changed: none of them carries this cost (Step 1).
+
+### Controls verified tripping
+
+Hardware mode: `pnpm gc reliability -t sim-paced` (clean x50 within the run, every negative control
+x15) -- **60/60 passed**, i.e. every control tripped every time. A direct `--repeat-each 8` of all
+four `sim-paced neg *` controls: **32/32**. Software mode: `GC_MODE=software`, `--repeat-each 15`,
+clean plus all four controls: **75/75**.
+
+### Exit-criterion evidence
+
+`node scripts/repeat.mjs browser 15`, foreground, no injected load, against the final tree (both
+fix rounds committed): `browser x15 load=0: pass=15 fail=0 hang=0 slowestSuiteSeconds=20`.
+
+### Findings reported, not chased (Non-scope)
+
+1. **`src/test/manual-clock.ts`'s `ManualClock.frame()`/`.advance()`** box a fresh `HeapNumber` on
+   their own `now += ms` update, ~12 B/frame, on every page whose `test.clock` is a `ManualClock`
+   (`gc-loop` via `.frame()`; `topology`/`gen`/`terrain`/`input` in their `gc-*` forms via
+   `.advance()` inside `stepFrame`). Same defect class as this milestone's own fix, currently
+   absorbed by those pages' larger budgets, never causing a red test. Not a wall-clock read (no
+   `performance.now()` involved), so out of this milestone's Scope; a candidate for a future
+   milestone of its own, same shape as this one.
+2. **`gc-sim`'s own `main`** (via `test/client.ts`'s `stepSimTickSync`, `gc-sim.ts`'s custom
+   `drive()`) reads 28 B/frame under forced interpreter, attributed to `stepSimTickSync`'s own
+   `Atomics.add`/`Atomics.load` calls -- an Atomics-related box, not a clock read. Currently passes
+   because `sim`'s budget (30) happens to cover it under default V8; flagged for a future look, not
+   fixed here.
+
+### Non-scope respected
+
+`gc-sim`'s own `neg burst main`/`neg burst sim` (the M06b sibling-isolate nudge) was run 12x
+(`--repeat-each 6`) during verification and passed every time in this session -- not chased, not
+touched, reported as a measurement only, per the brief's own Non-scope.
