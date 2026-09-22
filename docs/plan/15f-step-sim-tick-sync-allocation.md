@@ -1,6 +1,6 @@
 # M15f: `stepSimTickSync` allocates 28 B/frame on `main` in the interpreter tier
 
-Status: not started · After: 15c · Tyler-dependent: no
+Status: done · After: 15c · Tyler-dependent: no
 
 ## Goal
 
@@ -90,12 +90,12 @@ a fast-tier assertion and is a finding, not a licence to add one.
 
 ## Exit criteria
 
-- [ ] `GC_MODE=software pnpm test:slow -t "neg burst sim"` passes at rest **and** under
+- [x] `GC_MODE=software pnpm test:slow -t "neg burst sim"` passes at rest **and** under
       `--no-opt --no-sparkplug`, with `main`'s `byFn` pasted before and after.
-- [ ] `stepSimTickSync@...` no longer appears in `main`'s `byFn` at all — gone, not smaller.
-- [ ] No budget raised. Any budget that moves, moves down, with its formula updated.
-- [ ] The audit of the rest of `src/test/client.ts` is reported, naming what was checked.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `stepSimTickSync@...` no longer appears in `main`'s `byFn` at all — gone, not smaller.
+- [x] No budget raised. Any budget that moves, moves down, with its formula updated.
+- [x] The audit of the rest of `src/test/client.ts` is reported, naming what was checked.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 
