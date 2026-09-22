@@ -277,6 +277,25 @@ impl TerrainStore {
         generated
     }
 
+    /// Starts recording [`CacheEvent`]s for a consumer that will drain them.
+    ///
+    /// Off by default: recording is opt-in, so a store nobody drains never queues anything
+    /// (M15 fix round 3 -- the host's own `TerrainStore` was queuing load/evict events forever for
+    /// a consumer that does not exist in the sim role). Call this wherever a store is paired with
+    /// something that calls [`TerrainStore::drain_cache_events`]; `drain_cache_events`' contract is
+    /// unchanged once enabled. Enabling is idempotent, and is normally done at construction, before
+    /// any read materializes a chunk -- events that happen while recording is off are not
+    /// retroactively queued.
+    pub fn enable_cache_events(&self) {
+        self.cache.borrow_mut().set_record_events(true);
+    }
+
+    /// Cache events queued and not yet drained. Exists so a store with no consumer can *assert*
+    /// it stays empty (`host_terrain_queues_no_cache_events`) rather than leaving that a claim.
+    pub fn queued_cache_events(&self) -> usize {
+        self.cache.borrow().queued_events()
+    }
+
     /// Empties the queued cache events, calling `f` for each in the order they occurred.
     pub fn drain_cache_events(&self, mut f: impl FnMut(CacheEvent)) {
         let mut cache = self.cache.borrow_mut();
@@ -509,6 +528,7 @@ mod tests {
     #[test]
     fn cache_events_report_slots() {
         let s = store(CacheCapacity::Chunks(2));
+        s.enable_cache_events();
         let mut events = Vec::new();
         let c0 = ChunkCoord::new(0, 0);
         let c1 = ChunkCoord::new(1, 0);

@@ -227,6 +227,16 @@ impl<G: Game> Host<G> {
         self.chunk_versions.get(&chunk).copied().unwrap_or(0)
     }
 
+    /// How many chunks [`Host::chunk_versions`] holds a version for -- the count of distinct
+    /// chunks this host has ever seen a replicated change in. It is also the denominator the
+    /// panning allocation test divides by: that test's ceiling is per *newly reached chunk*, since
+    /// the host's remaining growth (overlays, versions) is proportional to territory reached and
+    /// not to elapsed ticks (docs/plan/15-connection-and-subscriptions.md, fix round 3).
+    #[cfg(any(test, feature = "testing"))]
+    pub fn debug_chunk_version_count(&self) -> usize {
+        self.chunk_versions.len()
+    }
+
     /// Every chunk `conn` is currently subscribed to (test/diagnostic convenience).
     #[cfg(any(test, feature = "testing"))]
     pub fn debug_subscribed(&self, conn: ConnId) -> Vec<ChunkCoord> {

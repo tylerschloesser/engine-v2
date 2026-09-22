@@ -161,6 +161,14 @@ pub(crate) struct Cache {
     head: u32,
     tail: u32,
     events: Vec<CacheEvent>,
+    /// Off unless a consumer asked for events (`TerrainStore::enable_cache_events`). The sim/host
+    /// role has no consumer by construction -- nothing there calls `drain_cache_events` -- and an
+    /// unconsumed queue is an unbounded, time-proportional leak (M15 fix round 3 measured ~16 B per
+    /// load/evict event on the host's own store, the one term of that workload's allocation that
+    /// was *not* bounded by world size). Recording is therefore opt-in rather than
+    /// drop-on-overflow: `client::upload` is a real consumer, and silently discarding an `Evicted`
+    /// there would leave a stale page-table slot with no signal at all.
+    record_events: bool,
 }
 
 impl Cache {
@@ -193,6 +201,7 @@ impl Cache {
                     head: NONE,
                     tail: NONE,
                     events: Vec::new(),
+                    record_events: false,
                 }
             }
             CacheCapacity::Unlimited => Cache {
@@ -205,6 +214,7 @@ impl Cache {
                 head: NONE,
                 tail: NONE,
                 events: Vec::new(),
+                record_events: false,
             },
         }
     }
@@ -311,8 +321,22 @@ impl Cache {
         Some(slot)
     }
 
+    /// Records `event` only when a consumer has opted in ([`Cache::set_record_events`]); a no-op
+    /// otherwise, so a store nobody drains queues nothing at all.
     pub(crate) fn push_event(&mut self, event: CacheEvent) {
-        self.events.push(event);
+        if self.record_events {
+            self.events.push(event);
+        }
+    }
+
+    pub(crate) fn set_record_events(&mut self, on: bool) {
+        self.record_events = on;
+    }
+
+    /// Events queued and not yet drained. A store with no consumer must hold this at 0 forever
+    /// (`host_terrain_queues_no_cache_events`).
+    pub(crate) fn queued_events(&self) -> usize {
+        self.events.len()
     }
 
     /// Drains every queued event without shrinking the queue's capacity, so steady-state draining

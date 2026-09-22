@@ -506,3 +506,60 @@ or stays red. Reproduction, if it is wanted again: bracket the eight calls in `r
 with `live_bytes()`, and place probes at `Host::tick`'s three stages, `Authority::write`'s
 `store.apply`/`changes.push`, and `TerrainStore::set_tile`'s `materialize` /
 `overlays.get_or_create` / `overlay.write` -- those seven sites account for 100% of it.
+
+### Fix round 3b: the ruling implemented
+
+**1. `Cache::events` -- opt-in recording. Enable point: `TerrainStore::enable_cache_events(&self)`,
+called at the two places that pair a store with an `Uploader`** (`game_instance.rs`'s
+`ClientInstance::new` and `fixtures/terrain`'s `Role::Client` arm), plus `client/upload.rs`'s own
+test-store helper. Chosen over `TerrainStore::new` (a signature change at 30+ construction sites,
+most of which have no opinion), over `TerrainFeed` (which neither owns the store nor drains it), and
+over self-enabling inside `drain_cache_events` (the first drain would then silently miss every event
+queued before it, which breaks `cache_events_report_slots` today and would be a latent hole in
+`Uploader::on_frame` tomorrow). `Uploader::on_frame` is the drainer but receives `&TerrainStore` as
+an argument, so the pairing -- not the drain -- is the narrowest honest place to say "someone will
+consume these". `push_event` is a no-op while off; `drain_cache_events`' contract is unchanged once
+on. Two existing tests that assert event *content* (`world_terrain.rs` and `terrain.rs`'s own
+`cache_events_report_slots`) gained a one-line `enable_cache_events()`; the two that only drain to
+keep the queue empty (`no_alloc_terrain.rs`, `gen_queue.rs`) needed no change and still pass, as
+does `assert_cache_invisible`'s full matrix (events are not state). Whole native workspace: 264
+tests, all green. The panning measurement dropped by exactly the predicted term: **27,216 ->
+25,168 B over 300 ticks, -2,048 B**.
+
+**2. `chunk_versions` -- accepted as-is, not fixed.** Bounded by distinct modified chunks, not by
+time. **It grows faster than world state does**: in the 300-tick window it gained 300 keys while the
+overlay map gained 150 chunks, because a chunk gets a permanent version entry from an entity that
+merely passed through it -- **half the keys in this workload belong to chunks whose replicated state
+is empty**, never painted, entity spawned and despawned again, back to pristine, version entry
+retained for the host's lifetime. That is what makes it a future milestone's work rather than a
+shrug. **3. Overlay growth -- accepted**, `hot-paths.md`'s named exception, now measured on this
+path rather than asserted.
+
+**The panning test reshaped into two assertions**, replacing the single per-tick `assert_eq!(after,
+before)`:
+
+| Test | Asserts | Measured |
+|---|---|---|
+| `host_and_client_bounded_camera_no_alloc` | growth at 1,200 ticks **equals** growth at 300 ticks (two independent runs from the same warm-up), i.e. per-tick growth is exactly zero; only one-off buffer capacity steps may be non-zero, and those cost the same in both windows | **384 B at both** (`ChangeLog` 256 + `outcomes` 32 + `pending_records` 96, all one-off capacity steps; 0.000 B/tick of difference) |
+| `host_and_client_panning_allocates_per_new_chunk_not_per_tick` | bytes per **newly reached chunk** (the growth in `Host::chunk_versions`' key count) <= 88 B, never per tick | **83.32 B per new chunk** (99,984 B over 1,200 new chunks in 1,200 ticks) |
+| `host_terrain_queues_no_cache_events` | the host `TerrainStore`'s undrained queue is 0 after a 600-tick pan | **0** |
+
+The 88 B ceiling is the sum of the measured unit costs, not a number picked to fit: 48 B (a newly
+overlaid chunk's first `Vec<Entry>`, exact) + ~64 B (its `Overlays` `BTreeMap` node), paid on every
+second reached chunk since this workload paints every other tick = ~56 B/chunk; + ~26 B
+(`chunk_versions` entry), paid on every reached chunk. The ~4.7 B of headroom over the measured
+83.32 covers how full a B-tree node happens to be at a given window length (the two `BTreeMap` terms
+move ~1.5 B/chunk between 300- and 4,800-tick windows) -- deliberately tighter than the 8 B/call
+injection below, so the proof lands.
+
+Inject-fail-revert proofs, one per assertion (8 B leaked per call via `Vec::with_capacity(8)` +
+`mem::forget`, then reverted; both tests pass before and after):
+
+| Test | Injected at | Passing | Failing | What the failure message reported |
+|---|---|---|---|---|
+| `host_and_client_bounded_camera_no_alloc` | `host::Host::build_frame` | 384 B == 384 B | 2,784 B vs 9,984 B | "allocates per tick ... 8 B/tick of growth that the longer window alone paid for" -- the injected rate, recovered exactly |
+| `host_and_client_panning_allocates_per_new_chunk_not_per_tick` | `client::ClientCore::apply` | 83.32 B/chunk | 91.32 B/chunk | over the 88 B ceiling; +8.00 B/chunk, the injected rate at this workload's one new chunk per tick |
+
+The two injections are at opposite ends of the wire (host frame build, client frame apply) on
+purpose: each assertion catches a regression on either side, not only on the side it was written
+for.

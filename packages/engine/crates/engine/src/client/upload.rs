@@ -488,11 +488,15 @@ mod tests {
     impl ClientSide<NoGame> for Fixture {}
 
     fn store(capacity: u32) -> TerrainStore {
-        TerrainStore::new(
+        let s = TerrainStore::new(
             ChunkDims::new(5),
             Box::new(FixedSource),
             CacheCapacity::Chunks(capacity),
-        )
+        );
+        // `Uploader::on_frame` is the consumer, so these stores opt in exactly as the real client
+        // instance does (`game_instance.rs`).
+        s.enable_cache_events();
+        s
     }
 
     fn camera_at(x: f64, y: f64) -> CameraBlock {

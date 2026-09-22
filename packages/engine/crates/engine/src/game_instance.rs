@@ -86,6 +86,10 @@ impl<G: Game> ClientInstance<G> {
             Box::new(source),
             CacheCapacity::Chunks(cfg.cache_chunks),
         );
+        // This store is paired with an `Uploader`, the one consumer of cache events
+        // (`Uploader::on_frame` drains them), so it opts into recording them; every other role's
+        // store leaves them off (`TerrainStore::enable_cache_events`).
+        terrain.enable_cache_events();
         let feed = TerrainFeed::new(dims, cfg.gen_workers);
         let uploader = Box::new(Uploader::<G::Client, G>::new(dims));
         Ok(ClientInstance {

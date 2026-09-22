@@ -1,5 +1,6 @@
 //! Own test binary (mirrors `no_alloc_terrain.rs`/`no_alloc_authority.rs`: only a dedicated
-//! binary's global allocator is actually counted). Two measured workloads:
+//! binary's global allocator is actually counted). Three measured workloads, all driving the
+//! connection path end to end:
 //!
 //! `host_and_client_steady_state_no_alloc`: once a connection's subscription has settled (no chunk
 //! enters/leaves that tick), a steady stream of tile writes and entity moves inside the held view
@@ -7,32 +8,38 @@
 //! `ClientCore::on_frame`'s decode-twice-then-apply, `ClientCore::poll_uplink`, and
 //! `Replica::apply_tile_delta`/`apply_entity_put` -- allocate zero bytes. Does not cover
 //! `ChunkEnterPristine`/`ChunkSnapshots`/`ChunkLeaves`, `Global`/`OwnPlayer` changes, or
-//! `EntityGone`: none of those fire with a fixed camera. **`host_and_client_panning_no_alloc`**
-//! covers exactly that gap (M15 fix round 1) with a continuously panning camera, and **does not
-//! pass**: it measures a real, reproducible allocation of **90.72 B/tick** (27,216 B over the
-//! 300-tick measured window, exact and deterministic given the fixed seeds; 95.39 B/tick over
-//! 4,800 ticks). Every byte of it is **host-side and proportional to newly reached territory**;
-//! the client (`on_frame`, `drain_dirty`, `poll_uplink`) and `Host::build_frame`/`seal`/
-//! `on_uplink` allocate **exactly zero**. Attributed with `live_bytes()` brackets in M15 fix
-//! round 3 -- full table, host/client split and the bounded-camera control that isolates it in
-//! docs/plan/15-connection-and-subscriptions.md -- to three host containers: `TerrainStore`'s
-//! overlay map plus each chunk's first `Vec<Entry>` (~111.6 B per chunk first written to, which is
-//! `.claude/rules/hot-paths.md`'s own named exception, "overlay growth (writes, world state) is
-//! the one allowed exception"), `Host::chunk_versions` (~26.3 B per distinct chunk ever touched by
-//! a replicated change, never pruned), and the host's **undrained** `Cache::events` queue (~16 B
-//! per load/evict event; `TerrainStore::drain_cache_events` has no caller on the host path).
-//! Fix rounds 1 and 2 blamed `Replica::held::insert` and `TerrainStore::replace_overlay` on the
-//! client: both do allocate, but the trailing-edge leave frees the same bytes in the same tick,
-//! and `live_bytes()` is live bytes (allocated minus freed), so their net contribution is 0 --
-//! `held` stays at 128 and the replica's overlay map at 16 for the whole run.
-//! **Left failing on purpose** (docs/plan/
-//! 15-connection-and-subscriptions.md Deviations, and the coordinator's own fix-round instruction:
-//! "do not make it pass ... report ... and stop there" -- accepting or budgeting this is not this
-//! milestone's decision). Three inject-fail-revert sensitivity proofs (8 B/call injected, then
-//! reverted, confirming the *other* new paths are genuinely measured despite the test already
-//! failing) are in the Deviations doc, not repeated here.
+//! `EntityGone`: none of those fire with a fixed camera.
 //!
-//! Both tests drive `Host`/`ClientCore` directly, not `testing::testkit::Loopback` (`Loopback::step`
+//! `host_and_client_bounded_camera_no_alloc` covers exactly that gap and is **the zero-allocation
+//! guarantee for this path**: a camera oscillating over a 16-chunk band makes chunk enters,
+//! snapshots, leaves, `EntityGone` and `Global`/`OwnPlayer` changes the common case while the
+//! territory stays finite, and asserts the measured growth is **equal at 300 and at 1,200 ticks**
+//! -- so a reused buffer settling at its capacity is allowed (it costs the same in both windows)
+//! and anything per-tick is not. There is no budget in it to widen.
+//!
+//! `host_and_client_panning_allocates_per_new_chunk_not_per_tick` measures the case that *does*
+//! allocate: a camera panning forever reaches territory nobody has ever written to, and the host
+//! keeps state for it. Its ceiling is per **newly reached chunk** (88 B; 83.32 B measured), never
+//! per tick -- a per-tick ceiling would pass silently if the cost per chunk doubled while the pan
+//! rate halved. The three terms, attributed with `live_bytes()` brackets in M15 fix round 3 (full
+//! table in docs/plan/15-connection-and-subscriptions.md): `TerrainStore`'s overlay `BTreeMap` node
+//! and the chunk's first `Vec<Entry>` (~112 B per chunk first written to -- `.claude/rules/
+//! hot-paths.md`'s own named exception, "overlay growth (writes, world state) is the one allowed
+//! exception"), and `Host::chunk_versions`' per-chunk version entry (~26 B per chunk ever touched
+//! by a replicated change, retained for the host's lifetime -- accepted for M15 with that
+//! measurement on record). Every byte is host-side: the client (`on_frame`, `drain_dirty`,
+//! `poll_uplink`) and `Host::build_frame`/`seal`/`on_uplink` allocate **exactly zero**, at every
+//! window length measured. Earlier rounds blamed `Replica::held::insert` and
+//! `TerrainStore::replace_overlay` on the client; both do allocate, but the trailing-edge leave
+//! frees the same bytes in the same tick, and `live_bytes()` is live bytes (allocated minus
+//! freed), so their net contribution is 0.
+//!
+//! `host_terrain_queues_no_cache_events` pins the one term that was a real defect rather than
+//! territory-proportional growth: the host's `TerrainStore` queued a `CacheEvent` per load and
+//! evict for a consumer that does not exist in the sim role. Recording is opt-in now
+//! (`TerrainStore::enable_cache_events`), so that queue stays empty here forever.
+//!
+//! Every test here drives `Host`/`ClientCore` directly, not `testing::testkit::Loopback` (`Loopback::step`
 //! itself allocates a fresh `Vec<u8>` per client per call, by design -- a test-only convenience,
 //! never claimed allocation-free).
 
@@ -318,6 +325,13 @@ struct PanState {
     pan_x: i32,
     next_id: u32,
     pending_despawn: Option<u32>,
+    /// +1 / -1: the direction the camera is currently moving in. Always +1 while `bounded` is
+    /// false (the camera pans forever, reaching new territory every tick).
+    dir: i32,
+    /// True for the bounded-camera control: the camera turns around at the edges of a 16-chunk
+    /// band instead of panning forever, so the world it touches is finite and *every* byte the
+    /// tick loop still allocates is a per-tick allocation.
+    bounded: bool,
 }
 
 /// One panning tick: the camera moves one full chunk edge (32 tiles) in x, so a whole new column
@@ -337,13 +351,22 @@ fn run_panning_tick(
     p: &mut PanState,
     i: u32,
 ) {
-    p.pan_x += 32;
+    if p.bounded {
+        if p.pan_x >= BAND_TILES {
+            p.dir = -1;
+        } else if p.pan_x <= 0 {
+            p.dir = 1;
+        }
+        p.pan_x += 32 * p.dir;
+    } else {
+        p.pan_x += 32;
+    }
     let camera = CameraReport {
         center_x: p.pan_x,
         center_y: 0,
         half_w: 16,
         half_h: 16,
-        vel_x: 32,
+        vel_x: (32 * p.dir) as i16,
         vel_y: 0,
     };
     {
@@ -404,15 +427,26 @@ fn run_panning_tick(
     let _ = client.poll_uplink(s.t_ms, &mut s.uplink_buf);
 }
 
-/// The gap `.claude/rules/hot-paths.md` names but `host_and_client_steady_state_no_alloc` cannot
-/// prove: it holds the camera fixed, so `ChunkEnterPristine`/`ChunkSnapshots`/`ChunkLeaves`/
-/// `EntityGone` and `Global`/`OwnPlayer` changes never fire in its measured window. A panning
-/// camera makes those the *common* case, not a rare one, so this measures them for real instead of
-/// leaving them an unproven claim -- and the measurement is negative: see this file's own module
-/// doc comment for the exact allocating calls and bytes/tick. The assertion below is the real,
-/// unweakened claim ("zero"), left failing rather than loosened to match what was measured.
-#[test]
-fn host_and_client_panning_no_alloc() {
+/// One camera band for the bounded control: 16 chunks wide at `CHUNK_BITS = 5`.
+const BAND_TILES: i32 = 512;
+
+/// What one measured window of [`pan_run`] produced.
+struct PanRun {
+    /// `live_bytes()` growth over the measured window.
+    bytes: i64,
+    /// Chunks the host saw a replicated change in for the first time during the window -- the
+    /// "newly reached chunks" the panning ceiling is expressed per.
+    new_chunks: u64,
+    /// Cache events the host's own `TerrainStore` had queued at the end of the window.
+    host_queued_cache_events: usize,
+}
+
+/// Warm up a host + client to the panning workload's steady state, then measure `window` ticks of
+/// it. `bounded` picks the control (camera oscillating over `BAND_TILES`, finite territory) over
+/// the pan (camera advancing forever, one fresh chunk column per tick). Each call builds a fresh
+/// `Host`/`ClientCore`, so two windows are two independent runs from the same warm-up, never a
+/// short prefix of a long one.
+fn pan_run(bounded: bool, window: u32) -> PanRun {
     use engine::client::{ClientCore, Replica};
 
     let mut host = Host::<NGame>::genesis_for_test(WorldParams {
@@ -439,6 +473,8 @@ fn host_and_client_panning_no_alloc() {
         pan_x: 0,
         next_id: 1,
         pending_despawn: None,
+        dir: 1,
+        bounded,
     };
 
     // Connect + join burst, unmeasured.
@@ -450,31 +486,113 @@ fn host_and_client_panning_no_alloc() {
         }
         host.seal();
     }
-
-    // Warm-up phase 1: run the panning body long enough to clear the hold time (5s = 100 ticks at
-    // 20 Hz) so leaves actually start firing, reaching the steady state where enter and leave rates
-    // match -- not just the join/pan-start transient.
+    // Warm-up phase 1: past the 5 s (100-tick) unsubscribe hold, so leaves fire at their steady
+    // rate rather than the join/pan-start transient. Phase 2: 40 more iterations of the exact
+    // measured body, so every scratch buffer this shape touches settles at its own steady-state
+    // capacity before `before` is sampled.
     let hold = NGame::TICK_RATE.secs(5).0;
     for i in 0..(hold + 20) {
         run_panning_tick(&mut host, player, &mut client, &mut s, &mut p, i);
     }
-
-    // Warm-up phase 2: the exact measured body again, so every scratch buffer this specific shape
-    // touches settles at its own steady-state capacity before `before` is sampled (the same
-    // discipline `host_and_client_steady_state_no_alloc` already needed).
     for i in 0..40u32 {
         run_panning_tick(&mut host, player, &mut client, &mut s, &mut p, 1_000 + i);
     }
 
+    let chunks_before = host.debug_chunk_version_count();
     let before = live();
-    for i in 0..300u32 {
+    for i in 0..window {
         run_panning_tick(&mut host, player, &mut client, &mut s, &mut p, 2_000 + i);
     }
-    let after = live();
+    let bytes = live() as i64 - before as i64;
+    let new_chunks = (host.debug_chunk_version_count() - chunks_before) as u64;
+    let host_queued_cache_events = host
+        .sim()
+        .unwrap()
+        .authority()
+        .store()
+        .terrain()
+        .queued_cache_events();
+    PanRun {
+        bytes,
+        new_chunks,
+        host_queued_cache_events,
+    }
+}
+
+/// **The zero-allocation guarantee for the connection path.** A camera that turns around inside a
+/// 16-chunk band reaches no new territory, so a finite world is all this workload ever touches --
+/// and then *any* byte that scales with the number of ticks is a per-tick allocation, which is
+/// exactly what `.claude/rules/hot-paths.md` forbids. Measured over two window lengths and
+/// asserted **equal**: a reused buffer reaching its steady-state capacity costs the same once at
+/// 300 ticks as at 1,200, while anything allocating per tick, per frame or per chunk event costs
+/// four times as much in the longer window. Asserting equality rather than "under N bytes" is what
+/// keeps this from being a number that cannot fail -- there is no budget here to widen.
+///
+/// Unlike `host_and_client_steady_state_no_alloc` (fixed camera), this exercises the full set:
+/// `ChunkEnterPristine`, `ChunkSnapshots`, `ChunkLeaves`, `EntityGone` and `Global`/`OwnPlayer`
+/// changes all fire, on both sides of the wire.
+#[test]
+fn host_and_client_bounded_camera_no_alloc() {
+    let short = pan_run(true, 300);
+    let long = pan_run(true, 1_200);
     assert_eq!(
-        after,
-        before,
-        "panning host+client tick loop allocated (bytes over 300 ticks: {})",
-        after as i64 - before as i64
+        long.bytes,
+        short.bytes,
+        "bounded-camera host+client tick loop allocates per tick: {} B over 300 ticks but {} B \
+         over 1,200 ticks ({} B/tick of growth that the longer window alone paid for). Only \
+         one-off buffer capacity steps may differ from zero here, and those cost the same in both \
+         windows.",
+        short.bytes,
+        long.bytes,
+        (long.bytes - short.bytes) as f64 / 900.0,
+    );
+}
+
+/// The other half: a camera panning forever *does* allocate, and legitimately so -- it reaches
+/// territory nobody has ever written to, and the host keeps state for it (`TerrainStore`'s overlay
+/// map plus each newly written chunk's first `Vec<Entry>`, which is `.claude/rules/hot-paths.md`'s
+/// own named exception, "overlay growth (writes, world state) is the one allowed exception", plus
+/// `Host::chunk_versions`' per-chunk version). That growth is bounded by **territory**, not by
+/// time, so the ceiling here is per newly reached chunk and never per tick: a per-tick ceiling
+/// would pass silently if the cost per chunk doubled while the pan rate halved.
+///
+/// The number below is the sum of M15 fix round 3's measured unit costs, not a budget picked to
+/// fit: ~48 B for a newly overlaid chunk's first `Vec<Entry>` (exact) plus ~64 B for its node in
+/// `Overlays`' `BTreeMap`, which this workload pays on every second reached chunk (it paints one
+/// tile every other tick), so ~56 B per reached chunk; plus ~26 B for the chunk's
+/// `Host::chunk_versions` entry, paid on every reached chunk. ~82 B measured; 88 B here, the
+/// headroom covering how full a B-tree node happens to be at a given window length (the measured
+/// per-chunk cost of the two `BTreeMap` terms moves by ~1.5 B between 300- and 4,800-tick windows).
+#[test]
+fn host_and_client_panning_allocates_per_new_chunk_not_per_tick() {
+    const CEILING_BYTES_PER_NEW_CHUNK: f64 = 88.0;
+    let run = pan_run(false, 1_200);
+    assert!(run.new_chunks > 0, "the pan reached no new chunks");
+    let per_chunk = run.bytes as f64 / run.new_chunks as f64;
+    assert!(
+        per_chunk <= CEILING_BYTES_PER_NEW_CHUNK,
+        "panning host+client tick loop allocated {per_chunk:.2} B per newly reached chunk, over \
+         the {CEILING_BYTES_PER_NEW_CHUNK} B ceiling ({} B over {} new chunks in 1,200 ticks)",
+        run.bytes,
+        run.new_chunks,
+    );
+}
+
+/// The host's own `TerrainStore` has no consumer for `CacheEvent`s: nothing in the sim role calls
+/// `drain_cache_events` (`client::upload`, M09's texel path, is the only caller in the crate).
+/// Recording is opt-in for exactly that reason (M15 fix round 3 measured the undrained queue at
+/// ~16 B per load/evict event, the one term of the panning workload's allocation that grew with
+/// elapsed time rather than with territory), and this asserts the host really does opt out: a
+/// long pan materializes and evicts constantly, so a return to unconditional queueing shows up
+/// here immediately. The client `Replica`'s store has no consumer either today, and 15b is what
+/// gives it one.
+#[test]
+fn host_terrain_queues_no_cache_events() {
+    let run = pan_run(false, 600);
+    assert_eq!(
+        run.host_queued_cache_events, 0,
+        "the host's TerrainStore queued {} cache events over a 600-tick pan, and nothing on the \
+         host path ever drains them",
+        run.host_queued_cache_events,
     );
 }

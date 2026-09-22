@@ -187,6 +187,9 @@ impl Instance for FixtureTerrain {
                     Box::new(source),
                     CacheCapacity::Chunks(cfg.client_cache_chunks.unwrap_or(CLIENT_CACHE_CHUNKS)),
                 );
+                // Paired with an `Uploader`, which drains cache events: opt in, exactly as the
+                // real `ClientInstance` does (`game_instance.rs`).
+                terrain.enable_cache_events();
                 let feed = TerrainFeed::new(dims, cfg.gen_workers);
                 let uploader = Box::new(Uploader::<Vis, NoGame>::new(dims));
                 Ok(FixtureTerrain {

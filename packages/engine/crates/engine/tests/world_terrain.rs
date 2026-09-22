@@ -141,6 +141,7 @@ fn loaded_entries_learn_pristine_on_materialize() {
 #[test]
 fn cache_events_report_slots() {
     let s = store(CacheCapacity::Chunks(2));
+    s.enable_cache_events();
     let c0 = ChunkCoord::new(0, 0);
     let c1 = ChunkCoord::new(1, 0);
     let c2 = ChunkCoord::new(2, 0);
