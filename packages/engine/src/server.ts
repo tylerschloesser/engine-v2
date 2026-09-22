@@ -168,7 +168,11 @@ export function wrapEngineInstance(inst: EngineInstance): SimInstance {
       const region = inst.region(RegionId.Persist)
       if (!region) throw new Error('sim_seal_frame: len > 0 but the Persist region is absent')
       sealResult.len = raw
-      sealResult.bytes = region.u8.subarray(0, raw)
+      // The whole persistent region view (created once by `inst.region()`, `.claude/rules/
+      // hot-paths.md`), not `region.u8.subarray(0, raw)`: the real length travels alongside on
+      // `.len`, exactly like `simAdmit`'s own "whole buffer, real length as a separate number"
+      // discipline (`ring-connection.ts`'s own copy-discipline doc comment, `src/CLAUDE.md`).
+      sealResult.bytes = region.u8
       return sealResult
     },
     simHash: () => {
@@ -200,12 +204,13 @@ export function wrapEngineInstance(inst: EngineInstance): SimInstance {
       const region = inst.region(RegionId.Tx)
       if (!region) throw new Error('sim_build_frame: len > 0 but the Tx region is absent')
       frameResult.len = raw
-      // A per-tick `subarray` on the `Tx` region, same open question `simSealFrame`'s own `raw > 0`
-      // branch already carries (Deviations: unmeasured by any zero-GC page yet, matching 0014 §4's
-      // "a per-send subarray is acceptable" carve-out for the *server* -- the sim *worker* is
-      // 0016-budgeted, so this is flagged for the step 4-6 implementer's own zero-GC measurement,
-      // not asserted zero-alloc here).
-      frameResult.bytes = region.u8.subarray(0, raw)
+      // Orchestrator ruling 2: the whole persistent `Tx` region view, not `region.u8.subarray(0,
+      // raw)` -- this branch is live every real tick once a connection exists (step 4), so it is
+      // exactly what step 6's zero-GC panning window measures. `runOneTick`'s own `connection.
+      // send(cls, bytes, len)` call is what carries `.len` past `Connection.send`'s fixed
+      // `(cls, bytes)` shape (0009); `RingConnection.send`'s own optional third parameter reads it
+      // instead of `bytes.length` when given.
+      frameResult.bytes = region.u8
       return frameResult
     },
     rxBytes: () => inst.region(RegionId.Rx)?.len ?? 0,
@@ -332,6 +337,9 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
    * is no longer measured individually. */
   function runOneTick(): void {
     const seal = sim.simSealFrame()
+    // `seal.bytes` is the whole persistent `Persist` region view (Orchestrator ruling 2); `logSink`
+    // is unreachable with real data today (`sim_seal_frame` always returns 0 until M22, Non-scope
+    // here), so its own "exactly `len` bytes" contract is M22's to give a real shape, not fixed here.
     if (seal.len > 0 && host.logSink) host.logSink(seal.bytes as Uint8Array)
     const status = sim.simTick()
     if (status !== Status.Ok) throw new Error(`sim_tick failed: status ${status}`)
@@ -349,7 +357,17 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
       withRetries.pumpRetries?.()
       const frame = sim.simBuildFrame(conn)
       if (frame.len > 0) {
-        connection.send(MsgClass.ReliableOrdered, frame.bytes as Uint8Array)
+        // `frame.bytes` is the whole persistent `Tx` region view (Orchestrator ruling 2), not a
+        // per-tick `subarray`; `frame.len` is the real length, carried past `Connection.send`'s
+        // fixed `(cls, bytes)` shape (0009) the same optional-property way `pumpRetries`/
+        // `lastMessageLength` already do. A generic `Connection` that ignores the third argument
+        // falls back to `bytes.length` (`RingConnection.send`'s own default), which would be wrong
+        // here (`bytes` is the *whole* region) -- every real `Connection` this milestone builds is
+        // a `RingConnection`, so this is always exercised with a real length.
+        const withLen = connection as Connection & {
+          send: (cls: MsgClass, bytes: Uint8Array, len?: number) => void
+        }
+        withLen.send(MsgClass.ReliableOrdered, frame.bytes as Uint8Array, frame.len)
       }
     }
   }

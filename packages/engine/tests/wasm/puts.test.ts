@@ -13,6 +13,7 @@ import {
   type Connection,
   createSimHostFromInstance,
   MAX_CATCHUP_TICKS,
+  type MsgClass,
   RESYNC_TICKS,
   wrapEngineInstance,
 } from '../../src/server.js'
@@ -174,13 +175,20 @@ test('host_accepts_ring_connection_and_hashes_match', async () => {
   const simB = wrapEngineInstance(instB)
   const hostB = createSimHostFromInstance(simB, { clock: { now: () => 0 }, timer: noopTimer() })
   const framesB: Uint8Array[] = []
-  const fakeConnection: Connection = {
+  // `send`'s own type carries only 0009's fixed `(cls, bytes)` shape; the real `RingConnection`
+  // this fixture's own production path always uses instead reads a third, optional `len` (Deviations
+  // -- ruling 2's "whole persistent region view, real length as a separate number" fix), so this
+  // stand-in also accepts and respects it, the same way `frameA`'s own capture below does with
+  // `simA.txBytes()`/`n` rather than assuming `bytes.length` is the real message length.
+  const fakeConnection = {
     datagrams: false,
     onMessage: null,
     onClose: null,
-    send: (_cls, bytes) => framesB.push(bytes.slice()),
+    send: (_cls: MsgClass, bytes: Uint8Array, len?: number) => {
+      framesB.push(bytes.slice(0, len ?? bytes.length))
+    },
     close: () => {},
-  }
+  } satisfies Connection
   const connIdB = hostB.accept(fakeConnection)
   expect(connIdB).toBe(0)
 

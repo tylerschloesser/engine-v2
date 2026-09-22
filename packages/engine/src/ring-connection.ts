@@ -119,19 +119,28 @@ export class RingConnection implements Connection {
     return this.recvLen
   }
 
-  /** 0009 `Connection.send`: `bytes` is engine-owned, valid only during this call. */
-  send(cls: MsgClass, bytes: Uint8Array): void {
+  /**
+   * 0009 `Connection.send`: `bytes` is engine-owned, valid only during this call. `len` is an
+   * optional third parameter beyond 0009's own fixed `(cls, bytes)` shape (Orchestrator ruling 2):
+   * `server.ts`'s `wrapEngineInstance.simBuildFrame` hands the whole persistent `Tx` region view
+   * here, not a per-tick `subarray(0, raw)`, so the real message length has to travel alongside
+   * rather than as `bytes.length` (which would be the region's full capacity). Defaults to
+   * `bytes.length` for a caller that already hands a correctly-sized view (every test here, and any
+   * future `Connection.send` caller that never reads this third parameter at all, per 0009's own
+   * interface).
+   */
+  send(cls: MsgClass, bytes: Uint8Array, len: number = bytes.length): void {
     if (cls !== RELIABLE_ORDERED) {
       // `latest-wins` (Scope: unused this milestone -- camera reports and presence are uplink,
       // never sent through this method): one attempt, dropped (not queued) on failure, per 0009
       // ("may be dropped"). Never touches `downlinkRetries` (that counter is this milestone's own
       // reliable-frame backpressure signal) or the retry queue.
-      this.producer.tryPush(bytes, bytes.length)
+      this.producer.tryPush(bytes, len)
       return
     }
     this.flushRetries()
-    if (this.retryCount > 0 || !this.producer.tryPush(bytes, bytes.length)) {
-      this.enqueueRetry(bytes)
+    if (this.retryCount > 0 || !this.producer.tryPush(bytes, len)) {
+      this.enqueueRetry(bytes, len)
     }
   }
 
@@ -176,7 +185,7 @@ export class RingConnection implements Connection {
     }
   }
 
-  private enqueueRetry(bytes: Uint8Array): void {
+  private enqueueRetry(bytes: Uint8Array, len: number): void {
     this._downlinkRetries++
     if (this.retryCount >= this.retryDepth) {
       // Sustained backpressure past the queue's own depth (doc comment above): coalesce onto the
@@ -185,13 +194,13 @@ export class RingConnection implements Connection {
       const tailIdx = (this.retryHead + this.retryDepth - 1) % this.retryDepth
       const buf = this.retryBufs[tailIdx] as Uint8Array
       buf.set(bytes)
-      this.retryLens[tailIdx] = bytes.length
+      this.retryLens[tailIdx] = len
       return
     }
     const idx = (this.retryHead + this.retryCount) % this.retryDepth
     const buf = this.retryBufs[idx] as Uint8Array
     buf.set(bytes)
-    this.retryLens[idx] = bytes.length
+    this.retryLens[idx] = len
     this.retryCount++
   }
 }
