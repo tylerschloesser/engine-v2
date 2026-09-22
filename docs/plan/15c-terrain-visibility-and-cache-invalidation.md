@@ -1,6 +1,6 @@
 # M15c: Cache invalidation on overlay replace, and terrain on screen
 
-Status: not started · After: 15b · Tyler-dependent: no
+Status: done · After: 15b · Tyler-dependent: no
 
 Split from M15b at its gate, written by the orchestrator. M15b landed the ring `Connection`, the
 worker plumbing and the ABI, and its connected-path tests pass; building its last two deliverables
@@ -111,12 +111,12 @@ must fail before the fix and pass after -- paste both outputs); `cache_events_do
 panning window (600 frames, `sim` + `client` within budget, `drops === 0`).
 
 ## Exit criteria
-- [ ] The step 1 reproducer fails before the fix and passes after, with both outputs pasted.
-- [ ] `overlay_tile_reaches_screen` passes: pristine colour before, overlay colour after, by GPU readback.
-- [ ] The zero-GC panning window passes for both `sim` and `client`, with `drops === 0`.
-- [ ] `assert_cache_invisible` still passes at capacity 1, default and unlimited.
-- [ ] The measured `browser` suite line is reported, and the rung taken (or the report that none remains).
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] The step 1 reproducer fails before the fix and passes after, with both outputs pasted.
+- [x] `overlay_tile_reaches_screen` passes: pristine colour before, overlay colour after, by GPU readback.
+- [x] The zero-GC panning window passes for both `sim` and `client`, with `drops === 0`.
+- [x] `assert_cache_invisible` still passes at capacity 1, default and unlimited.
+- [x] The measured `browser` suite line is reported, and the rung taken (or the report that none remains).
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t overlay_replace` · `pnpm test rust -t cache_invisible` · `pnpm test browser -t overlay_tile` · `pnpm test browser -t panning` · `pnpm lint`.
@@ -428,3 +428,24 @@ least one extra frame after requesting it, because generation is an async round 
 gen worker and is never resident on the same `frame()` call that requested it -- `pumpFrames`
 (`connected-terrain.spec.ts`) is that pattern, two calls, verified reliable (10/10 foreground
 repeats).
+
+### Orchestrator's gate additions (M15c)
+
+**The `sim: 17` budget was attributed, not accepted on its formula.** The implementer's original
+formula read the isolate's 6.46-8.19 B/frame as "ordinary JIT/warm-up noise rather than a per-tick
+allocation bug". Forcing the budget to 1 and reading `windowByFn` shows three named frames over 600
+frames — `runOneTick` 1360 B, `warm` 1152 B, `resync` 900 B — summing to the measured rate. It is
+per-tick allocation with names. `warm` and `resync` are ADR 0030's two accepted `clock.now()` reads
+per resync window; `runOneTick`'s share (~2.27 B/frame) is new to a connected host tick and now has
+a ledger row. The number 17 stands; the reasoning behind it was rewritten, because the reasoning is
+what a later session would have acted on (M15's lesson, repeated here).
+
+**`settleUploads` → `pumpFrames` (fix round 1).** The first version nudged the camera one tile away
+and back, and its doc comment asserted a pre-existing production bug: no event for "a chunk newly
+finished generating", so a static camera never rescans. That claim was false. `insert_pristine`
+(`world/terrain.rs:124`), the path `TerrainFeed::deliver` takes, pushes `CacheEvent::Loaded`, and
+`Uploader::on_frame` sets `changed = true` on any drained event. Isolating the variable at the gate:
+with the nudge, passes; with **both calls at the same camera position**, passes; with no extra frames
+at all, fails. `__advance` runs exactly one `stepFrame`, so the mechanism is the frame count — the
+gen round trip is async and its `Loaded` event does not exist yet when the current frame's uploader
+pass has run. The camera now genuinely holds still, which is what this milestone's Goal claims.
