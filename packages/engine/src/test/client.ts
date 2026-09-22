@@ -303,7 +303,19 @@ export function callParked(
  */
 export function stepSimTickSync(client: Client, n = 1): void {
   const h = clientTestHandle(client)
-  if (!h.workers.some((w) => w.kind === 'sim')) {
+  // A plain indexed loop, not `Array.prototype.some` with an inline arrow (same discipline as
+  // `allEqual`/`allResumed`, above): this runs inside a zero-GC page's own measured `drive()` call
+  // every frame (`gc-sim.ts`/`gc-connected-terrain.ts`), and an inline-arrow `.some()` here was the
+  // whole of `main`'s +28 B/frame in the interpreter tier (docs/plan/15f-step-sim-tick-sync-
+  // allocation.md).
+  let hasSim = false
+  for (let i = 0; i < h.workers.length; i++) {
+    if ((h.workers[i] as WorkerEntry).kind === 'sim') {
+      hasSim = true
+      break
+    }
+  }
+  if (!hasSim) {
     throw new Error('stepSimTickSync: no sim-kind worker was spawned')
   }
   Atomics.add(h.control.words, CB_SIM_STEP_REQ, n)
