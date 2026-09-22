@@ -654,3 +654,94 @@ semicolon/trailing-comma style differs from biome's), only after `pnpm format` -
 the new page included (`puts-dispatch-*.js` in the manifest); `pnpm --filter engine typecheck`
 (which includes `tests/browser/pages/tsconfig.json`) is clean. Never opened by a Playwright spec in
 this cut -- see the brief's own step-4/step-6 split in the delegation prompt.
+
+### Gate fix: resend dedup covered only the post-apply window, not the same-tick one
+
+A review agent found and confirmed by running: `Host::on_uplink`'s resend dedup compared each
+incoming `seq` against a single `Store::last_seq(player)` snapshot taken at the top of the call,
+but `Store::last_seq` only advances inside `Sim::step`, at the next `tick()` -- not when an action
+is merely admitted into `pending_records`. Two `on_uplink` calls carrying the same `seq` *between*
+two ticks both saw the same stale snapshot, both admitted, and `Sim::step` applied both. Reachable
+in the ordinary case, not a corner case: `worker/sim.ts` drains the uplink ring on every wake, and
+`ClientCore::poll_uplink` flushes a non-empty outbox immediately (this milestone's own Scope), so
+more than one `on_uplink` call per tick window is normal, and a reconnect resend is exactly the
+case the guard exists for. Verified before the fix: `Bump{n:5}` as `seq` 1, then a resend of `seq`
+1 before any `step()`, totalled **10** instead of 5.
+
+Fixed with `ConnSlot::highest_admitted_seq: u32` -- the highest `seq` this connection has ever had
+*admitted* (queued into `pending_records`, not merely decoded), tracked as a running value across
+every action within one `on_uplink` call (so an in-batch duplicate is caught too) and persisted
+across calls. Seeded from itself each call and folded against `Store::last_seq` via `.max()`, so a
+genuine reconnect (a fresh `ConnSlot`, back at 0) still dedups correctly against the player's
+persisted history. Only advances on a successful admit (`Ok`), not on an admission-time reject,
+since 0004 never logs a rejected `seq` and a resend of it is safe to re-admit (it touches no sim
+state).
+
+**`resent_seq_is_dropped` (this milestone's own step-1 test) was the eighth instance of this
+repo's recurring "a test that cannot fail for the reason it claims" defect**, and was green across
+two prior gates with the bug present. It resent only *after* `lb.step()` had applied the first
+copy, exercising only the post-apply path, while its own comment ("as a reconnect would") implied
+the general guarantee; it also used `SetTotal` (idempotent last-write-wins), which would have
+masked a double-apply even if one had occurred in that window. Split into `resent_seq_is_dropped_
+after_apply` (the original, comment fixed to say exactly what it covers) and `resent_seq_is_
+dropped_before_apply` (new: `Bump`, additive, resent in the same tick-to-tick window, before the
+first copy is ever applied). The new test proven to fail against the pre-fix logic: the single-
+snapshot dedup restored temporarily, watched go red at `10 != 5`, reverted. `arrival_order_within_
+tick` re-verified unaffected.
+
+### Gate fix: a locally dropped action produced no `onActionResult` -- now counted, not silently lost
+
+`worker/client-action.ts`'s pump called `inst.call1(inst.x.on_action, len)` and discarded the
+returned `Status`. `ActionError::Malformed -> Status.Decode` (a corrupt ring record) and
+`ActionError::Full -> Status.OutOfMemory` (the outbox at capacity) therefore produced no visible
+effect at all: `dispatch()` had already handed the app a `seq` on main, and nothing would ever
+resolve it -- no error, no counter, no log.
+
+**Ruling (orchestrator, not this implementer's to relitigate): check the `Status` and surface it
+through the existing counters mechanism. Do not synthesise a local `Rejected` result record** -- a
+locally-dropped action never reached the host, so it is not a host verdict, and 0004's `Rejected<G>`
+is a host-only shape; a local-rejection path belongs to **M25's pending queue**, not this backstop.
+This is a defence-in-depth path, not the primary enforcement: main-thread `dispatch()` already
+enforces outbox capacity synchronously (counting `seq - ack_seq` before ever writing a ring
+record), and the malformed-record path is reachable in practice only through `engine/test`'s
+`dispatchRaw` (test-only) or a genuine race between that check and this pump's own drain.
+
+Fixed by adding `RingConsumer.recordDrop()` (`sab/ring.ts`) -- the consumer-side counterpart of the
+`RingProducer.recordDrop()` every other full/rejected ring write in this package already uses
+(`client-net.ts`'s uplink drop, this same file's own `uiProducer.recordDrop()`), sharing the same
+`RING_DROPS` counter/physical control word as the producer side: both answer "how many messages
+sent into this ring never had any further effect". `client-action.ts`'s pump now calls
+`actionConsumer.recordDrop()` whenever `on_action` returns anything but `Status.Ok`. New unit test
+`ring.consumer_record_drop_shares_the_producers_counter` (`sab/ring.test.ts`), proven to fail
+against a no-op `recordDrop()` injected into `RingConsumer`, reverted.
+
+**Nothing in this cut reads the action ring's own `stats().drops`.** `slice.html`'s own HUD field
+`ring drops` (the brief's own Scope, "sum of `stats().drops` over the `SabSet` rings") is step 6,
+not built yet; once it exists, a locally-dropped action will already be counted there without
+further plumbing, since it shares `netCounters`'s aggregation shape by construction. Until then,
+**a locally dropped action produces no `onActionResult` and is otherwise invisible except through
+`stats().drops` read directly off `SabSet.actionRing`.** This is a known, accepted gap, not a
+hidden one: a real local-rejection UX (so the app can tell the player "that action never left the
+device") is **M25's** job, when the pending queue gives prediction a real place to reconcile a
+locally-dropped `seq` against.
+
+### Gate check: the clock block's own seqlock retry loop had no committed test
+
+A review agent noted no committed test drives `readClockBlockInto`'s own torn-read retry branch
+(`clock-block.ts`). Checked: `sab/seqlock.test.ts`'s `seqlock.no_torn_read` (a real cross-worker
+race) covers `SeqlockReader`/`SeqlockWriter`, but `clock-block.ts` does not use that generic pair --
+its own module doc comment says why ("hand-rolled shape ... for the same reason" as `camera/
+block.ts`: individual typed `u32` field views, not one opaque byte blob through a scratch buffer).
+`camera/block.test.ts`, the same hand-rolled shape's own precedent, has no such test either. So
+this was a genuine, previously-uncovered gap, not a redundant check -- **added**:
+`clock_block: a read that never sees an even seq word exhausts its retries and reports it`
+(`clock-block.test.ts`), single-threaded (the seq word held odd via a direct `Atomics.store`,
+simulating a writer paused mid-update -- the worst case the retry loop exists for, not a real
+cross-thread race, which no test in this file or `camera/block.test.ts` attempts): asserts
+`readClockBlockInto` returns `false` and leaves `out` untouched after exhausting every retry.
+Proven to fail against a defect (the odd-seq check removed, forcing an unconditional `true`
+return): watched red at `expected true to be false`, reverted. The complementary case -- a real
+writer flipping the seq back even partway through a genuine race, so a later retry succeeds -- is
+not tested here either (it would need real thread interleaving, the same infrastructure `seqlock.
+no_torn_read` uses for the generic class); left as-is, matching the existing coverage level for
+this hand-rolled shape.
