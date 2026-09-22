@@ -39,6 +39,13 @@
 //! evict for a consumer that does not exist in the sim role. Recording is opt-in now
 //! (`TerrainStore::enable_cache_events`), so that queue stays empty here forever.
 //!
+//! `host_admit_path_allocates_zero_bytes_per_action` (docs/plan/16-action-round-trip.md,
+//! orchestrator gate item 3): the real admit path (`UplinkWriter` -> `Host::on_uplink` ->
+//! `codec::decode_canonical` -> `G::admit` -> `pending_records`, then the real per-tick
+//! `tick()`/`build_frame`/`seal()` order) allocates zero bytes per action, measured rather than
+//! left to `Host::queue_action_for_test`'s own bypass of it (see that test's own doc comment for
+//! the number and for a real measurement bug this test's first draft found in itself).
+//!
 //! Every test here drives `Host`/`ClientCore` directly, not `testing::testkit::Loopback` (`Loopback::step`
 //! itself allocates a fresh `Vec<u8>` per client per call, by design -- a test-only convenience,
 //! never claimed allocation-free).
@@ -594,5 +601,122 @@ fn host_terrain_queues_no_cache_events() {
         "the host's TerrainStore queued {} cache events over a 600-tick pan, and nothing on the \
          host path ever drains them",
         run.host_queued_cache_events,
+    );
+}
+
+/// One tick of the *admit-only* workload (docs/plan/16-action-round-trip.md, orchestrator gate
+/// item 3): the real wire path an action actually takes to get admitted -- `UplinkWriter::write`
+/// one action into a batch, `Host::on_uplink` (`codec::decode_canonical` -> `G::admit` ->
+/// `pending_records`), then `Host::tick()` every call so `pending_records` never holds more than
+/// one entry between calls (the same one-action-per-tick rate `run_steady_tick`'s own
+/// `queue_action_for_test` calls already exercise for `Host::tick` itself, above). This is the
+/// one path `Host::queue_action_for_test` exists specifically to bypass (host/mod Deviations,
+/// `testing::testkit::Loopback::action`'s own doc comment): measured here instead of asserted
+/// zero, since nothing upstream has actually measured it before.
+fn run_admit_tick(
+    host: &mut Host<NGame>,
+    seq: &mut u32,
+    uplink_buf: &mut [u8; 256],
+    frame_buf: &mut [u8; 4096],
+) {
+    *seq += 1;
+    let action = NAction::Paint {
+        pos: NPos { x: 1, y: 1 },
+        base: (*seq % 200) as u8,
+    };
+    let mut action_buf = [0u8; 32];
+    let alen = engine::codec::encode(&action, &mut action_buf).expect("action fits action_buf");
+    let mut sink = engine::bytes::SliceSink::new(uplink_buf);
+    UplinkWriter::write(
+        &mut sink,
+        0,
+        core::iter::once((*seq, &action_buf[..alen])),
+        None,
+        None,
+    );
+    let n = sink.finish().expect("uplink_buf is generously sized");
+    let _ = host.on_uplink(0, &uplink_buf[..n]);
+    // Real per-tick call order (host/mod Deviations, "Seam shapes as landed"): `tick()` once,
+    // `build_frame(conn)` once per connection, `seal()` once. `build_frame` is what drains
+    // `ConnSlot::pending_results` -- omitting it (an earlier draft of this test did) left every
+    // action's own `Outcome` accumulating forever and measured that Vec's own growth instead of
+    // the admit path.
+    host.tick();
+    let _ = host.build_frame(0, frame_buf);
+    host.seal();
+}
+
+/// `window` admit-only ticks (after a 40-tick warm-up, unmeasured), returning `live_bytes()`
+/// growth over that window -- same `i64`-signed-difference shape `pan_run` uses above, since a
+/// window that nets negative (more freed than allocated) is possible in principle and must not
+/// underflow a `usize` subtraction.
+fn admit_run(window: u32) -> i64 {
+    let mut host = Host::<NGame>::genesis_for_test(WorldParams {
+        seed: 7,
+        worldgen: (),
+        max_entities: 65536,
+        max_modified_tiles: 65536,
+        max_action_growth: 65536,
+    });
+    let _player = host.connect(0);
+    let mut seq = 0u32;
+    let mut uplink_buf = [0u8; 256];
+    let mut frame_buf = [0u8; 4096];
+
+    for _ in 0..40 {
+        run_admit_tick(&mut host, &mut seq, &mut uplink_buf, &mut frame_buf);
+    }
+
+    let before = live();
+    for _ in 0..window {
+        run_admit_tick(&mut host, &mut seq, &mut uplink_buf, &mut frame_buf);
+    }
+    live() as i64 - before as i64
+}
+
+/// docs/plan/16-action-round-trip.md (orchestrator gate item 3): bytes the *real* admit path
+/// allocates per action -- `Host::queue_action_for_test` exists specifically to bypass measuring
+/// this (host/mod Deviations, `testing::testkit::Loopback::action`'s own doc comment), so nothing
+/// upstream had actually measured it before this test.
+///
+/// **Measured: 0 B/action, at every window length tried (100 through 25,600, in a throwaway
+/// geometric probe not kept here) and both windows this test keeps.** `UplinkReader::read`'s
+/// per-call `raw_actions: Vec` and `Host::on_uplink`'s per-call `decoded: Vec`
+/// (`codec::decode_canonical`'s own scratch buffer inside it) are all local to one `on_uplink`
+/// call and freed before it returns -- `live_bytes()` is allocated-minus-freed (`abi::arena`'s
+/// own doc comment), so a matched alloc/free pair inside one measured call nets to zero in it,
+/// the same "gross vs. net" lesson M15 fix round 3 already drew (docs/plan/
+/// 15-connection-and-subscriptions.md). `pending_records` and `scratch_action_players` settle at
+/// a steady capacity after the warm-up and are cleared every `Host::tick`.
+///
+/// **First draft of this test measured a real, non-zero, *not*-per-action cost, and it was a
+/// test-harness bug, not a production one.** `run_admit_tick` originally called only `on_uplink`
+/// and `tick()`, never `build_frame` -- but `build_frame` is what drains a connection's
+/// `ConnSlot::pending_results` (this milestone's own new queue), and every action here is
+/// admitted and applied successfully (`NGame` never overrides `admit`), so every single tick
+/// pushed one more `Outcome` that nothing ever drained: 13,824 B/100 actions, 32,256 B/400,
+/// converging toward ~92 B/action as the window grew -- a real, reproducible number, but a
+/// `Vec<Outcome<G>>` growing forever because the test never called the one method that empties
+/// it, not a cost the admit path itself imposes. Fixed by giving `run_admit_tick` the real
+/// per-tick call order (`tick()`, `build_frame(conn)`, `seal()` -- host/mod Deviations, "Seam
+/// shapes as landed"), which is what a real connection always does every tick; re-measured at 0
+/// across the same window range. Recorded here rather than silently discarded, since it is
+/// exactly the kind of number this gate item asked to have on record.
+///
+/// Measured at two window lengths (M15's own template, `host_and_client_bounded_camera_no_alloc`
+/// above): a one-off warm-up artifact would shrink as the window grows; this stays at exactly
+/// zero at both, which is why the assertion below is equality to zero, not a ceiling.
+#[test]
+fn host_admit_path_allocates_zero_bytes_per_action() {
+    let short = admit_run(100);
+    let long = admit_run(1_600);
+    assert_eq!(
+        short, 0,
+        "the real admit path (on_uplink -> decode_canonical -> G::admit -> pending_records, \
+         then tick/build_frame/seal) allocated {short} B over 100 actions"
+    );
+    assert_eq!(
+        long, 0,
+        "the real admit path allocated {long} B over 1,600 actions"
     );
 }
