@@ -23,10 +23,46 @@
 //! the same `Sim<Puts>` native tests already drove directly through `tests/*.rs`), so
 //! `puts_idle_100`'s golden becomes `.wasm`-authoritative (0002) instead of native-blessed.
 
+use engine::client::{ClientSide, TileTexel};
 use engine::game::{Game, PlayerEvent, PlayerId, TickCx, Unknown, WorldRead, WorldWrite};
 use engine::world::{Footprint, Tile};
 use engine::world::{PrototypeId, Registry, TilePos, TraitSet};
 use ts_rs::TS;
+
+/// docs/plan/15b-ring-connection-and-replica-rendering.md, Provides: "the visible overlay comes
+/// from the puts tick rule's once-per-second `set_tile`" -- a pixel-readback test needs the tick
+/// rule's own tile to render *differently* from a pristine one, but `tick`'s `set_tile` only ever
+/// changes `aux` (`Tile::new(1, 0, g.day as u16)`, above), never `base`/`resource`, and the default
+/// `ClientSide<G> for ()` (`type Client = ();`, unused now) reads only `base`/`resource`
+/// (`TileTexel::from_tables`) -- so through the default impl a painted tile is pixel-identical to
+/// pristine terrain, and no browser test could ever tell them apart by reading pixels back. This
+/// is purely a client-side rendering hook (0018 §2): it never touches `Sim`/`Authority`/`apply`/
+/// `tick`, so it cannot change `sim_hash()` or any golden -- "do not change the fixture's rules"
+/// (this milestone's brief) is about the sim-role handlers above, not this. Reuses `tests/browser/
+/// pages/public/terrain/tiles.json`'s existing visual id `2` (a `TileTexel::from_tables` `()`
+/// impl never reaches, since resource id `0` -- "no resource layer" -- is what a pristine tile's
+/// `Tile::new(1, 0, 0)` already resolves to under the identity table `Puts::register` leaves in
+/// place): painted (`aux != 0`) swaps the resource layer to that id; pristine keeps the table
+/// lookup (resource `0`, "no resource", 0018 §2's own convention) untouched.
+#[derive(Default)]
+pub struct PutsClient;
+
+/// `tests/browser/pages/public/terrain/tiles.json`'s own visual id 2 (declared, distinct from
+/// every id a pristine `fx-puts` tile ever resolves to): the one number this file and that JSON
+/// must agree on. Not read from the JSON itself (this crate has no JSON parsing and never loads
+/// the asset -- only the *browser page* does, at a completely different layer, 0018 §1's "rendering
+/// never touches a WASM instance").
+const OVERLAY_VISUAL_ID: u16 = 2;
+
+impl ClientSide<Puts> for PutsClient {
+    fn tile_visual(t: Tile) -> TileTexel {
+        let mut texel = TileTexel::from_tables(t);
+        if t.aux() != 0 {
+            texel.resource = OVERLAY_VISUAL_ID;
+        }
+        texel
+    }
+}
 
 /// A tile position, plain data (`Action` must stay `Codec + TS`; not `engine::world::TilePos`,
 /// which does not derive `TS`).
@@ -128,7 +164,7 @@ impl Game for Puts {
     type Global = Global;
     type Presence = ();
     type Ui = ();
-    type Client = ();
+    type Client = PutsClient;
 
     fn register(r: &mut Registry) {
         // No trait bits are exercised this milestone (occupancy/traits_at's occupant term is

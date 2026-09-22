@@ -24,7 +24,12 @@ import {
 import { RingConsumer, type RingStats } from '../sab/ring.js'
 import type { SimHostCounters } from '../server.js'
 import type { FromWorker, ToWorker } from '../worker/protocol.js'
-import { isolateName, SIM_COUNTERS_BYTES, SIM_COUNTERS_CALL } from '../worker/protocol.js'
+import {
+  isolateName,
+  NET_COUNTERS_CALL,
+  SIM_COUNTERS_BYTES,
+  SIM_COUNTERS_CALL,
+} from '../worker/protocol.js'
 import type { Harness } from './harness.js'
 import type { ManualClock } from './manual-clock.js'
 import { StepControl } from './step-block.js'
@@ -332,6 +337,88 @@ export async function simCounters(client: Client): Promise<SimHostCounters> {
     tickOverruns: view.getUint32(8, true),
     chunksWarmed: view.getUint32(12, true),
     genOnMiss: view.getUint32(16, true),
+  }
+}
+
+/** docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test`: `host::Host::region_
+ * hash(conn)` (`sim_region_hash`, an ABI export reached directly by name through `callParked` --
+ * no wrapper in `server.ts`, the same way `worldHash` reaches `sim_hash`). Requires the sim worker
+ * parked. */
+export async function hostRegionHash(client: Client, conn = 0): Promise<string> {
+  const { value, result } = await callParked(client, 'sim', 'sim_region_hash', [conn], 8)
+  if (value !== Status.Ok) {
+    throw new Error(`hostRegionHash: sim_region_hash failed: status ${value}`)
+  }
+  return hex64(result)
+}
+
+/** docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test`: `client::Replica::
+ * region_hash()` (`client_region_hash`). Requires the client worker parked. */
+export async function replicaHash(client: Client): Promise<string> {
+  const { value, result } = await callParked(client, 'client', 'client_region_hash', [], 8)
+  if (value !== Status.Ok) {
+    throw new Error(`replicaHash: client_region_hash failed: status ${value}`)
+  }
+  return hex64(result)
+}
+
+/** docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test`: this milestone's own
+ * "M15 counters + `downlinkRetries`" bundle for one connection -- `host::ConnCounters` (a real ABI
+ * export, `sim_conn_counters`, reached directly by name), the underlying ring's own `drops`/
+ * `pushed`/`popped` for both `uplink` and `downlink` (read straight out of the shared `SabSet`
+ * buffers from main, the same way `ringDrained` above already does -- no worker round trip), and
+ * `RingConnection.downlinkRetries` (`worker/sim.ts`'s own synthetic `NET_COUNTERS_CALL`, the one
+ * piece with no ABI export at all). Requires the sim worker parked (the two `sim`-targeted calls
+ * do); the ring reads do not.
+ */
+export type NetCounters = {
+  bytesDown: number
+  frames: number
+  chunkEntersPristine: number
+  chunkSnapshots: number
+  chunkLeaves: number
+  bytesUp: number
+  downlinkRetries: number
+  uplink: RingStats
+  downlink: RingStats
+}
+
+function readU64LE(view: DataView, offset: number): number {
+  // JS `number` losslessly represents every value this milestone's own counters ever reach (a
+  // browser test's own byte/frame counts, nowhere near 2^53): `getBigUint64` would cross a
+  // `BigInt` back through this file's own arithmetic for no benefit here.
+  const lo = view.getUint32(offset, true)
+  const hi = view.getUint32(offset + 4, true)
+  return hi * 2 ** 32 + lo
+}
+
+export async function netCounters(client: Client, conn = 0): Promise<NetCounters> {
+  const { value, result } = await callParked(client, 'sim', 'sim_conn_counters', [conn], 48)
+  if (value !== Status.Ok) {
+    throw new Error(`netCounters: sim_conn_counters failed: status ${value}`)
+  }
+  const view = new DataView(result.buffer, result.byteOffset, result.byteLength)
+  const { result: netResult } = await callParked(client, 'sim', NET_COUNTERS_CALL, [], 4)
+  const downlinkRetries = new DataView(
+    netResult.buffer,
+    netResult.byteOffset,
+    netResult.byteLength,
+  ).getUint32(0, true)
+  const { sabs } = clientTestHandle(client)
+  const uplink: RingStats = { drops: 0, pushed: 0, popped: 0 }
+  const downlink: RingStats = { drops: 0, pushed: 0, popped: 0 }
+  new RingConsumer(sabs.uplink).stats(uplink)
+  new RingConsumer(sabs.downlink).stats(downlink)
+  return {
+    bytesDown: readU64LE(view, 0),
+    frames: readU64LE(view, 8),
+    chunkEntersPristine: readU64LE(view, 16),
+    chunkSnapshots: readU64LE(view, 24),
+    chunkLeaves: readU64LE(view, 32),
+    bytesUp: readU64LE(view, 40),
+    downlinkRetries,
+    uplink,
+    downlink,
   }
 }
 

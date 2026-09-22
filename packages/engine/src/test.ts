@@ -5,7 +5,11 @@
 export type { Clock, Scheduler } from './clock.js'
 export {
   callParked,
+  hostRegionHash,
+  type NetCounters,
+  netCounters,
   parkWorkers,
+  replicaHash,
   resumeWorkers,
   setCamera,
   simCounters,

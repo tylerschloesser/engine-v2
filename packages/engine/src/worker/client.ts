@@ -124,10 +124,16 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
         uiRing.tryPush(tx.u8, tx.u8.length)
       }
     }
+    // `netPump` runs before `uploadPump` (docs/plan/15b-ring-connection-and-replica-rendering.md,
+    // step 5): `on_frame` (inside `netPump.pump()`, when a downlink message arrived) enqueues any
+    // dirty chunks straight into `Uploader`'s own pending queues, and this order stages them onto
+    // the upload ring the very same wake, not one wake later -- `untilQuiescent`'s own "every ring
+    // drained" check would otherwise see the upload ring trivially drained (nothing pushed *yet*)
+    // before `uploadPump` ever got a chance to try.
+    netPump?.pump()
     genPump.pump()
     uploadPump.pump()
     inputPump.pump()
-    netPump?.pump()
   }
 
   // `engine/test`'s `callParked` reaches `client_gen_stats`/`client_chunk_hash` (this instance's
