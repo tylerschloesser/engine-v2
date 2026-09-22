@@ -174,8 +174,10 @@ TerrainStore` and already owns the exact early-return this bug lives in (`self.l
 Some(view.visible)`); fixing it there needed no new parameter anywhere in the call chain
 (`TerrainFeed::on_frame`, `game_instance.rs`'s `frame()` dispatch) and no change to either's public
 shape. The early-return condition is now `self.last_visible == Some(view.visible) &&
-self.last_eviction_seq == store.cache_eviction_seq()`; on any re-scan (view changed or an eviction
-happened since), `self.last_eviction_seq` is set to the freshly-read value before returning.
+self.last_invalidation_seq == store.cache_invalidation_seq()`; on any re-scan (view changed or an
+invalidation happened since), `self.last_invalidation_seq` is set to the freshly-read value before
+returning. (Named `invalidation_seq`, not `eviction_seq` -- see fix round 1 below; the field was
+renamed after the gate found the broader trigger livelocking.)
 
 **3. The two-consumer problem flagged in the delegation prompt was real, and is not fixed by
 reusing `drain_cache_events`.** `game_instance.rs`'s `frame()` calls `c.feed.on_frame(camera,
@@ -187,40 +189,111 @@ on_frame` ever saw it, permanently starving the uploader's own `changed` flag of
 eviction that makes it necessary (verified by reasoning about the call order in `game_instance.rs`;
 not fault-injected, since building it the starved way and then un-building it would have cost a
 step for a shape this brief already asked me not to pick blind). Fix shape chosen instead: **`Cache`
-gained a second, always-on signal separate from the opt-in event queue** -- `eviction_seq: u64`, a
-monotonic counter bumped in `Cache::push_event` on every `CacheEvent::Evicted` *regardless of
-`record_events`* (a scalar increment carries none of the unbounded-growth risk `record_events`
-exists to gate, per M15's own fix-round-3 comment on that field). Exposed as `TerrainStore::
-cache_eviction_seq(&self) -> u64`, a peek that never drains anything. `GenQueue` gained one field,
-`last_eviction_seq: u64`, compared against it. This means `GenQueue::set_view`'s own consultation
-works even for a store that never calls `enable_cache_events` at all (e.g. `tests/gen_queue.rs`'s
-`ZeroSource`-backed stores, `tests/no_alloc_gen_queue.rs`) -- deliberately: the counter's cost is
-one field and one branch per eviction, not a queue, so there was no reason to gate it the same way.
+gained a second, always-on signal separate from the opt-in event queue** -- `invalidation_seq: u64`,
+a monotonic counter bumped inside `Cache::evict_if_present` (fix round 1 narrowed this from "inside
+`push_event`, on every `Evicted`" -- see below) *regardless of `record_events`* (a scalar increment
+carries none of the unbounded-growth risk `record_events` exists to gate, per M15's own
+fix-round-3 comment on that field). Exposed as `TerrainStore::cache_invalidation_seq(&self) -> u64`,
+a peek that never drains anything. `GenQueue` gained one field, `last_invalidation_seq: u64`,
+compared against it. This means `GenQueue::set_view`'s own consultation works even for a store that
+never calls `enable_cache_events` at all (e.g. `tests/gen_queue.rs`'s `ZeroSource`-backed stores,
+`tests/no_alloc_gen_queue.rs`) -- deliberately: the counter's cost is one field and one branch per
+invalidation, not a queue, so there was no reason to gate it the same way.
 
 **4. `enable_cache_events`: no change needed.** `ClientInstance::init` (`game_instance.rs:125`)
 already calls `replica.terrain_mut().enable_cache_events()` unconditionally (landed with M15b's own
 fix for the M15 opt-in trap) on the one store `TerrainFeed`/`Uploader` now share, so the silent-drop
 case the brief's Scope names ("a store paired with an `Uploader` that was never enabled") was
 already closed before this milestone. Checked, not touched. A caller needing `GenQueue`'s new
-consultation to work has nothing extra to call: `cache_eviction_seq` reads `eviction_seq`, which is
-unconditional.
+consultation to work has nothing extra to call: `cache_invalidation_seq` reads `invalidation_seq`,
+which is unconditional.
 
 **No ordering constraint added.** Because `GenQueue::set_view`'s consultation is a peek
-(`cache_eviction_seq`) and not a drain, `TerrainFeed::on_frame` and `Uploader::on_frame` remain
+(`cache_invalidation_seq`) and not a drain, `TerrainFeed::on_frame` and `Uploader::on_frame` remain
 order-independent with respect to each other's correctness (unlike the two-drain shape rejected in
 item 3) -- `game_instance.rs`'s existing feed-then-uploader order is retained but is no longer load-
 bearing for this fix.
 
 **Context artifact written:** `world/cache.rs`'s own module doc comment now states that every
 eviction (LRU or `evict_if_present`) reports a `CacheEvent::Evicted`, why (a consumer cannot
-otherwise tell "never resident" from "resident, then invalidated"), and what `eviction_seq` is for.
+otherwise tell "never resident" from "resident, then invalidated"), and what `invalidation_seq` is
+for and why it is narrower than "every eviction" (updated again at fix round 1, below).
 
-**Verification, this range.** `pnpm test rust -t overlay_replace` (1, both outputs above), `pnpm
+**Verification, steps 1-2 as originally landed (superseded by fix round 1's own numbers below for
+the trigger's final shape).** `pnpm test rust -t overlay_replace` (1, both outputs above), `pnpm
 test rust -t cache_invisible` (6, includes the new `cache_events_do_not_affect_any_hash`), `pnpm
 test rust -t queue` (15), `pnpm test rust -t world` (53), `pnpm test rust -t no_alloc` (8, includes
 `no_alloc_gen_queue`/`no_alloc_terrain`/`no_alloc_connection` unaffected), `pnpm lint` (biome/
 rustfmt/clippy/tsc all pass). `pnpm test`/the browser suite were not run (Non-scope for this range;
-steps 3-5's own implementer measures the suite line per the brief's own gate).
+steps 3-5's own implementer measures the suite line per the brief's own gate) -- **this is exactly
+what let the livelock below through**: nothing in the targeted native runs above exercises a cache
+smaller than the generation set under a wide view, which is what the gate's browser run found.
+
+## Fix round 1 (gate feedback)
+
+**Gate failure.** `pnpm test` at `7f11cb2`: `browser FAIL 103 tests 32s/25s WARN over budget` (was
+21s/25s on the base commit), `terrain: evicted slot shows new chunk, never stale texels` failing
+with `__terrainClient.idle: never reached a quiet steady state`, plus three `gc input` budget
+failures (`main` 213.97/219.85/241.51 B/frame against a 190 B budget). The coordinator's hypothesis:
+`invalidation_seq` (then still named `eviction_seq`) bumped on *every* `Evicted`, including
+`materialize`'s own LRU capacity eviction, which closes a feedback loop under a cache smaller than
+the working set -- a livelock, not a slowdown.
+
+**Measured, natively, before touching the fix.** `terrain-readback.spec.ts`'s own failing test uses
+`clientCacheChunks: 2` under a wide view (`setHalfExtent(64, 64)`), i.e. deliberately smaller than
+the generation set, so `materialize`'s LRU eviction never stops. Reproduced the same shape in
+`gen_queue.rs` (temporary diagnostic, since removed): `CacheCapacity::Chunks(2)`, a 5x5-chunk view,
+500 simulated frames of `set_view` + one `take`/`materialize`/`complete` cycle each. **Before the
+fix:** `rescans over 500 frames = 498, materialize calls = 500, final GenStats = GenStats {
+requested: 578, dispatched: 500, delivered: 500, cancelled: 0, requeued: 0, pending: 78,
+in_flight: 0 }` -- confirms the mechanism exactly: `set_view` re-scans on all but the warm-up frame,
+and `requested` (578) far exceeds the true chunk count (the 5x5 view's own generation set is smaller
+than that), meaning chunks are being re-requested repeatedly rather than generated once. This
+matches "never reached a quiet steady state" directly: the gen queue itself never quiesces
+(`pending: 78` still nonzero at frame 500), so the browser page's `idle()` (which requires
+`pending === 0 && inFlight === 0` for 8 consecutive frames) can never return.
+
+**Cause, and the fix.** The trigger was too broad, exactly as hypothesized. `set_view`'s own touch
+pass (`for chunk in ring3.iter() { if store.is_cached(chunk) { store.touch(chunk) } }`) is what
+already protects a genuinely-wanted chunk from LRU eviction *when the cache has room*; when it does
+not (capacity 2 against a much larger retained ring), eviction inside the view is unavoidable and is
+a retention-sizing fact, not a content change -- `evict_if_present` (the invalidation path
+`replace_overlay`/`clear_overlay` use) is what the brief's own bug report is actually about.
+Narrowed the trigger to that path alone:
+- `Cache::invalidation_seq` (renamed from `eviction_seq`) now bumps **only inside
+  `Cache::evict_if_present`**, not generically in `Cache::push_event`. `push_event` still records
+  every `CacheEvent::Evicted` (LRU or invalidation) into the opt-in `events` queue exactly as
+  before -- `client::upload`'s `Uploader::on_frame` still needs to know about *every* eviction, to
+  free the GPU page slot and clear the stale indirection entry, regardless of cause. Only the
+  peek `GenQueue::set_view` consults got narrower.
+- `TerrainStore::cache_eviction_seq` renamed to `cache_invalidation_seq`; `GenQueue`'s
+  `last_eviction_seq` field renamed to `last_invalidation_seq`. Renamed rather than left as a
+  misleading name, since it no longer counts every eviction.
+- New permanent regression test, `set_view_reaches_quiescence_under_lru_capacity_churn`
+  (`tests/gen_queue.rs`, replacing the temporary diagnostic): same capacity-2, wide-view, 500-frame
+  shape; asserts `pending == 0`, `in_flight == 0`, `requested == delivered` (no runaway
+  re-requesting), and at most 2 re-sorts after warm-up. **After the fix:** `rescans over 500 frames
+  = 1, materialize calls = 81, final GenStats = GenStats { requested: 81, dispatched: 81,
+  delivered: 81, cancelled: 0, requeued: 0, pending: 0, in_flight: 0 }` -- quiescence reached
+  essentially immediately, `requested` equals the true chunk count with no further growth.
+- New permanent regression test, `lru_capacity_eviction_does_not_bump_invalidation_seq`
+  (`world/cache.rs`'s own `#[cfg(test)]`): capacity 2 against 10 distinct keys, asserting eviction
+  happened (`acquire` returned `Some`) but `invalidation_seq` did not move.
+
+**Step 1's reproducer still passes, and for the same reason as before** (not a different one under
+the narrower trigger): its own eviction is `replace_overlay`'s, i.e. `evict_if_present`, which is
+exactly the path `invalidation_seq` still counts. `assert_cache_invisible` (capacity 1/default/
+Unlimited) is unaffected -- narrowing when `invalidation_seq` bumps changes nothing about
+`CacheEvent`, state, or hashing.
+
+**Verified after the fix.** `pnpm test rust -t quiescence` (1), `pnpm test rust -t invalidation_seq`
+(4), `pnpm test rust -t lru_capacity` (2), `pnpm test rust -t overlay_replace` (1, unchanged),
+`pnpm test rust -t cache_invisible` (6, unchanged), `pnpm test rust -t cache_events` (4, unchanged),
+`pnpm test rust -t queue` (15), `pnpm test rust -t cache` (26), `pnpm test rust -t world` (54),
+`pnpm test rust -t no_alloc` (8), `pnpm lint` (biome/rustfmt/clippy/tsc all pass). The browser suite
+and `gc input` were **not** re-run by this implementer -- targeted foreground native runs only, per
+the coordinator's own instruction; the coordinator's own `pnpm test browser -t "evicted slot shows
+new chunk"` and `pnpm gc input` are how this gets confirmed against the actual failures.
 
 **Not done, and why (this range's own cut line).** Steps 3-5 (`overlay_tile_reaches_screen`, the
 zero-GC panning window, the suite-line rung) are untouched: `packages/engine/tests/browser` and
