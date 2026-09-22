@@ -596,3 +596,57 @@ fn chunks_warmed_becomes_live() {
         "chunksWarmed must be reachable once a real subscribed view has been pushed"
     );
 }
+
+/// Measurement, not an assertion (docs/plan/15-connection-and-subscriptions.md Planning
+/// decisions: "flag this as a known cost to measure... not a defect to fix blind"):
+/// `encode_chunk_snapshot`'s O(all entities in Store), twice, per chunk (M14 Deviations) under a
+/// realistic many-chunk join. 2,000 entities spread across a 121-chunk view (0010's own worked
+/// "ring1 is 11x11=121" at the view clamp), one fresh connection joining at once.
+#[test]
+fn measure_join_cost_many_chunks_many_entities() {
+    let mut lb = loopback(30);
+    let (idx, who) = add_client(&mut lb, 0);
+    // Spread 2000 entities across a wide area so they land throughout the 121-chunk view.
+    for i in 0..2000i32 {
+        lb.action(
+            who,
+            LAction::Spawn {
+                id_hint: 0,
+                pos: LPos {
+                    x: (i * 37) % 320 - 160,
+                    y: (i * 53) % 320 - 160,
+                },
+            },
+        );
+    }
+    lb.step(); // apply every spawn; still no camera set for the connection
+
+    // Wall-clock timing for a printed measurement only (never state, never hashed, never
+    // replayed): the determinism ban on `Instant` (0002 §2) is about sim/apply code, not a
+    // test's own stopwatch.
+    #[allow(clippy::disallowed_types)]
+    let start = std::time::Instant::now();
+    lb.set_camera(idx, small_camera_wide());
+    lb.step();
+    let elapsed = start.elapsed();
+    // Not a pass/fail budget (that is M31/M36's, Planning decisions: "flag ... not fix blind"):
+    // just proves the join completes and prints the measured cost for the record.
+    assert_eq!(lb.client(idx).view().held_count(), 121);
+    eprintln!(
+        "join_cost: {} chunks, {} bytes, {:?}",
+        lb.client(idx).view().held_count(),
+        lb.last_build_frame_len(idx),
+        elapsed
+    );
+}
+
+fn small_camera_wide() -> CameraReport {
+    CameraReport {
+        center_x: 0,
+        center_y: 0,
+        half_w: 128,
+        half_h: 128,
+        vel_x: 0,
+        vel_y: 0,
+    }
+}
