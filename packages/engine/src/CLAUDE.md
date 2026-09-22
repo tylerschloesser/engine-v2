@@ -57,3 +57,4 @@ Package-level layout, commands and conventions: `../CLAUDE.md`.
   (input, M11) -- the client's own `Tx` (unclaimed before) carries the uplink output. Test-only:
   `sim_region_hash`/`client_region_hash`/`sim_conn_counters`, reached by name through `callParked`
   -- `engine/test`'s `hostRegionHash`/`replicaHash`/`netCounters` (`test/client.ts`).
+- Ring records (M16): `actionRing` `[seq u32 LE][len u32 LE][UTF-8 JSON]`; `uiRing` `[kind u8][len u32 LE][JSON]` (kind `2` action result, `1` M16b's `Ui`), unknown kind skipped by `len`.
