@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 8;
+pub const ABI_VERSION: u32 = 9;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -124,6 +124,23 @@ pub trait Instance: Sized + 'static {
 
     /// `rx` is the first `len` bytes of the `Rx` region.
     fn sim_admit(&mut self, _conn: u32, _rx: &[u8]) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md: admits `conn` into the sim role's
+    /// connection table (`host::Host::connect`). The caller (`SimHost.accept`, TS) picks `conn`;
+    /// this export does no allocation of its own. Connecting an already-connected `conn` is left to
+    /// the implementor -- `Host<G>` treats it as a fresh join, since Scope names no dedicated error
+    /// for that case.
+    fn sim_connect(&mut self, _conn: u32) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md: frees `conn`'s slot (`host::Host::
+    /// disconnect`). A `conn` that was never connected, or already disconnected, is a no-op, not an
+    /// error (untrusted host input never panics, matching `sim_admit`'s own tolerance of a bad
+    /// connection id).
+    fn sim_disconnect(&mut self, _conn: u32) -> Status {
         Status::Unsupported
     }
 
@@ -284,6 +301,14 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_admit(conn: u32, len: u32) -> u32 {
             $crate::abi::sim_admit(&__ENGINE_SLOT, conn, len) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_connect(conn: u32) -> u32 {
+            $crate::abi::sim_connect(&__ENGINE_SLOT, conn) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_disconnect(conn: u32) -> u32 {
+            $crate::abi::sim_disconnect(&__ENGINE_SLOT, conn) as u32
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_tick() -> u32 {

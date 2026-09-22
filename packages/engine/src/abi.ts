@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 8
+export const ABI_VERSION = 9
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -62,6 +62,12 @@ export const ABI_EXPORTS = {
   engine_region_len: { role: 'all', params: 1, result: 'u32' },
   engine_mem_grows: { role: 'all', params: 0, result: 'u32' },
   sim_admit: { role: 'sim', params: 2, result: 'status' },
+  // docs/plan/15b-ring-connection-and-replica-rendering.md: admits `conn` into the sim role's
+  // connection table (`host::Host::connect`). The caller (`SimHost.accept`) picks `conn`.
+  sim_connect: { role: 'sim', params: 1, result: 'status' },
+  // docs/plan/15b-ring-connection-and-replica-rendering.md: frees `conn`'s slot (`host::Host::
+  // disconnect`). An unknown/already-disconnected `conn` is a tolerated no-op, not an error.
+  sim_disconnect: { role: 'sim', params: 1, result: 'status' },
   sim_tick: { role: 'sim', params: 0, result: 'status' },
   sim_build_frame: { role: 'sim', params: 1, result: 'len' },
   sim_hash: { role: 'sim', params: 0, result: 'status' },

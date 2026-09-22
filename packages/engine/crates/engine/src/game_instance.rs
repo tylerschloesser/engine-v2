@@ -141,6 +141,20 @@ where
         }
     }
 
+    fn sim_connect(&mut self, conn: u32) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_connect(conn),
+            _ => Status::WrongRole,
+        }
+    }
+
+    fn sim_disconnect(&mut self, conn: u32) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_disconnect(conn),
+            _ => Status::WrongRole,
+        }
+    }
+
     fn sim_tick(&mut self) -> Status {
         match self {
             GameInstance::Sim(h) => h.sim_tick(),

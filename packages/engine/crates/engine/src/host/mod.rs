@@ -14,7 +14,7 @@ pub mod warm;
 use std::collections::BTreeMap;
 
 use crate::abi::config::HexU64;
-use crate::abi::{Instance, RegionLayout, Role, Status};
+use crate::abi::{Instance, RegionId, RegionLayout, Role, Status};
 use crate::authority::Scope;
 use crate::delta::Delta;
 use crate::game::{Game, PlayerEvent, PlayerId};
@@ -76,6 +76,20 @@ fn default_max_action_growth() -> u32 {
 fn default_cache_chunks() -> u32 {
     1024
 }
+
+/// `RegionId::Rx`'s size on the sim role (docs/plan/15b-ring-connection-and-replica-rendering.md
+/// Scope: "one whole uplink batch"): matches [`default_max_action_growth`], the same 4,096-byte
+/// budget 0007 §8 already gives one action's worth of nominal headroom -- an uplink batch this
+/// milestone ever carries is a `CameraReport` (16 B) alone (actions are M16's), so this is
+/// generous headroom, not a tight fit. Provisional: 0010's own bandwidth/backpressure budget for
+/// this region is Non-scope here (deferred, like the ring capacities in Planning decisions).
+const SIM_RX_BYTES: u32 = 4096;
+/// `RegionId::Tx`'s size on the sim role: one connection's own built frame
+/// (`Host::build_frame`'s `out`). Provisional, generous for this milestone's own tests (a handful
+/// of chunks, one or two connections): a real join-burst budget is 0010's pacing/backpressure
+/// (Non-scope, M31), and `Host::build_frame`'s own `SliceSink` silently truncates rather than
+/// panicking if a real deployment ever needs more (Deviations records this as provisional).
+const SIM_TX_BYTES: u32 = 65536;
 
 /// The `game` value of `InstanceConfig` (0009 `WorldConfig.params` plus the host-only
 /// `cacheChunks` knob), read once by `Host::init` and held until `sim_genesis` consumes the
@@ -703,12 +717,14 @@ impl<G: Game> Instance for Host<G>
 where
     G::Global: Default,
 {
-    fn init(role: Role, game_cfg_json: &str, _layout: &mut RegionLayout) -> Result<Self, Status> {
+    fn init(role: Role, game_cfg_json: &str, layout: &mut RegionLayout) -> Result<Self, Status> {
         if role != Role::Sim {
             return Err(Status::BadConfig);
         }
         let cfg: SimConfig<<G::Worldgen as Worldgen>::Params> =
             serde_json::from_str(game_cfg_json).map_err(|_| Status::BadConfig)?;
+        layout.region(RegionId::Rx, SIM_RX_BYTES);
+        layout.region(RegionId::Tx, SIM_TX_BYTES);
         Ok(Host {
             pending: Some(WorldParams {
                 seed: cfg.seed.0,
@@ -747,18 +763,65 @@ where
         Status::Ok
     }
 
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md: `host::Host::connect` (native,
+    /// unchanged since M15). Out-of-range `conn` is `Host::connect`'s own `assert!` (a TS-side
+    /// contract violation -- `SimHost.accept` is what allocates `ConnId`s within `MAX_CONNS` -- not
+    /// untrusted wire input), so it is not pre-checked here.
+    fn sim_connect(&mut self, conn: u32) -> Status {
+        self.connect(conn);
+        Status::Ok
+    }
+
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md: `host::Host::disconnect` (native,
+    /// unchanged since M15) already tolerates an unknown/out-of-range `conn` as a no-op.
+    fn sim_disconnect(&mut self, conn: u32) -> Status {
+        self.disconnect(conn);
+        Status::Ok
+    }
+
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md: `sim_admit(conn, len)` becomes real
+    /// -- `rx` (the first `len` bytes of `Rx`) is one whole uplink batch, routed to `host::Host::
+    /// on_uplink` (native, unchanged since M15: decodes a `CameraReport` when present, tolerates a
+    /// malformed batch or an unknown connection silently).
+    fn sim_admit(&mut self, conn: u32, rx: &[u8]) -> Status {
+        self.on_uplink(conn, rx);
+        Status::Ok
+    }
+
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md: `sim_tick()` becomes real, routing
+    /// through `host::Host::tick` (native, connection- and subscription-aware) instead of M13's
+    /// bare `sim.step(&[], ..)`. **Seals the *previous* tick's `ChangeLog` first, not the one this
+    /// call is about to build** (Deviations, "seal timing"): `Loopback::step`'s reference order is
+    /// `tick()` -- per-connection `build_frame` -- `seal()` inside one Rust call, but the ABI splits
+    /// those across separate exports (`sim_build_frame` is called once per connection, from TS,
+    /// between two `sim_tick()` calls) with no export of its own for `seal()`. Nothing observes
+    /// `ChangeLog` between the last `sim_build_frame` of a tick and the next `sim_tick()` call
+    /// (`region_hash`/`debug_*` never read it), so sealing at the top of the *next* `sim_tick()`
+    /// is behaviourally identical to sealing right after that tick's last `build_frame` -- it is
+    /// simply where the call lands. A no-op on the very first `sim_tick()` after genesis (`seal`
+    /// clears an already-empty log); the final tick's own `ChangeLog` is never cleared before the
+    /// instance is dropped, which is memory, not correctness (nothing reads it again).
     fn sim_tick(&mut self) -> Status {
-        let Some(sim) = self.sim.as_mut() else {
+        if self.sim.is_none() {
             return Status::NotInitialised;
-        };
-        // No records this milestone (Non-scope: Actions are M16, connections are M15): every tick
-        // still runs `Game::tick` and advances the clock (`Sim::step`'s own contract).
-        sim.step(&[], &mut self.outcomes);
+        }
+        self.seal();
+        self.tick();
         Status::Ok
     }
 
     fn sim_hash(&mut self) -> u64 {
         self.sim.as_ref().map_or(0, Sim::state_hash)
+    }
+
+    /// docs/plan/15b-ring-connection-and-replica-rendering.md: `sim_build_frame(conn)` becomes
+    /// real, routing through `host::Host::build_frame` (native, unchanged since M15) into `tx`
+    /// (the whole `Tx` region for this role, `SIM_TX_BYTES`).
+    fn sim_build_frame(&mut self, conn: u32, tx: &mut [u8]) -> Result<u32, Status> {
+        if self.sim.is_none() {
+            return Err(Status::NotInitialised);
+        }
+        Ok(self.build_frame(conn, tx) as u32)
     }
 
     fn sim_seal_frame(&mut self, _persist: &mut [u8]) -> Result<u32, Status> {
