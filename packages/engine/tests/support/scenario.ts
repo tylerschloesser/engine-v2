@@ -22,6 +22,13 @@ export type SimScenario = {
    * a low-level fixture like `fixtures/hash` builds its state in `Instance::init` instead and
    * leaves this absent. */
   genesis?: boolean
+  /** docs/plan/15b-ring-connection-and-replica-rendering.md, Orchestrator ruling 1: calls
+   * `sim_connect(0)` once, right after `genesis` and before ticking -- the same "once, before the
+   * loop" shape `genesis` above already has. `Host::connect`'s own `Record::Player{Joined,
+   * Connected}` queue changes `sim_hash()` from the very first tick, which is exactly why
+   * `puts_idle_100` (this field absent) and a connected scenario (this field `true`) need separate
+   * goldens rather than one re-blessed in place. */
+  connect?: boolean
 }
 
 /**
@@ -63,8 +70,9 @@ export function runHashScenario(inst: EngineInstance, scenario: HashScenario): s
 }
 
 function runSimScenario(inst: EngineInstance, scenario: SimScenario): string[] {
-  const { ticks, checkpointEvery, input, genesis } = scenario
+  const { ticks, checkpointEvery, input, genesis, connect } = scenario
   if (genesis) ok(inst.call0(inst.x.sim_genesis), 'sim_genesis', 0)
+  if (connect) ok(inst.call1(inst.x.sim_connect, 0), 'sim_connect', 0)
   const rx = input ? inst.region(RegionId.Rx) : null
   if (input && (!rx || rx.len < input.bytes)) {
     throw new Error('scenario: Rx region is missing or too small')

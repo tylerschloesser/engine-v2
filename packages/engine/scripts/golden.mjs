@@ -27,15 +27,26 @@ if (wanted !== undefined && !names.includes(wanted)) {
 const written = []
 for (const name of wanted === undefined ? names : [wanted]) {
   const golden = join(fixtures, name, 'golden')
-  const scenario = JSON.parse(readFileSync(join(golden, 'scenario.json'), 'utf8'))
   const built = await buildGame({ crate: join(fixtures, name), profile: 'dev', env: toolEnv() })
   const { wasm } = await loadGame(built.dir)
-  const inst = instantiate(wasm, roleOf(scenario), scenario.config, { onLog() {} })
-  const checkpoints = runHashScenario(inst, scenario)
-  const path = join(golden, 'golden.json')
-  writeFileSync(path, `${JSON.stringify({ checkpoints }, null, 2)}\n`)
-  written.push(path)
-  console.log(`${name}: ${checkpoints.length} checkpoints, last ${checkpoints.at(-1)}`)
+
+  // Every `scenario*.json` in this fixture's own `golden/` dir gets its own `golden*.json` (docs/
+  // plan/15b-ring-connection-and-replica-rendering.md, Orchestrator ruling 1: "the connected
+  // scenario gets its own new golden ... beside `puts_idle_100`, not a change to it"). The
+  // canonical pair (`scenario.json`/`golden.json`) is what every other fixture still has and what
+  // `names` above discovers fixtures by; a second scenario file just needs the same suffix on both
+  // sides (`scenario-connected.json` -> `golden-connected.json`).
+  const scenarioFiles = readdirSync(golden).filter((f) => /^scenario(-.*)?\.json$/.test(f))
+  for (const scenarioFile of scenarioFiles) {
+    const suffix = scenarioFile.slice('scenario'.length, -'.json'.length) // '' or '-connected'
+    const scenario = JSON.parse(readFileSync(join(golden, scenarioFile), 'utf8'))
+    const inst = instantiate(wasm, roleOf(scenario), scenario.config, { onLog() {} })
+    const checkpoints = runHashScenario(inst, scenario)
+    const path = join(golden, `golden${suffix}.json`)
+    writeFileSync(path, `${JSON.stringify({ checkpoints }, null, 2)}\n`)
+    written.push(path)
+    console.log(`${name}${suffix}: ${checkpoints.length} checkpoints, last ${checkpoints.at(-1)}`)
+  }
 
   // The bench golden (`worldgen-bench.html`, `tests/wasm/worldgen-bench.test.ts`): only the fixture
   // that already has one keeps it up to date, from the same dev-profile `.wasm` under Node -- the

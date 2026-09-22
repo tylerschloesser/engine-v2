@@ -33,6 +33,28 @@ test('wasm_idle_100_matches_native', async () => {
   expect(inst.memGrows()).toBe(0)
 })
 
+// docs/plan/15b-ring-connection-and-replica-rendering.md, Orchestrator ruling 1: `puts_idle_100`
+// stays the zero-connection golden above; a connection changes `sim_hash()` from the very first
+// tick (`Host::connect`'s own queued `Record::Player{Joined, Connected}`, which `fx-puts`'s
+// `on_player` turns into a real state write), so it gets its own scenario/golden pair
+// (`scenario-connected.json`/`golden-connected.json`, `pnpm golden puts`) rather than a re-blessed
+// `golden.json`.
+test('wasm_connected_100_matches_its_own_golden', async () => {
+  const scenario = readGolden<HashScenario>('puts', 'scenario-connected.json')
+  const golden = readGolden<Golden>('puts', 'golden-connected.json')
+  const { wasm } = await loadFixture('puts')
+  const inst = instantiate(wasm, Role.Sim, scenario.config, { onLog() {} })
+
+  const checkpoints = runHashScenario(inst, scenario)
+
+  expect(checkpoints).toHaveLength(1)
+  expect(checkpoints).toEqual(golden.checkpoints)
+  // Different from the zero-connection golden (the whole point of a separate scenario/golden
+  // pair): a real assertion, not a tautology, since both fixtures share the same seed/config.
+  const idleGolden = readGolden<Golden>('puts', 'golden.json')
+  expect(checkpoints[0]).not.toBe(idleGolden.checkpoints[0])
+})
+
 // `fx-puts`'s own `TICK_RATE` is the trait default (`TickRate::HZ_20`, `server.ts`'s "20 Hz is
 // hardcoded" note): 50 ms/tick.
 const TICK_MS = 50

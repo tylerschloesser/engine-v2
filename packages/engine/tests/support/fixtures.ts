@@ -33,6 +33,12 @@ export function fixtureBytes(name: string): Uint8Array<ArrayBuffer> {
   return readFileSync(join(fixtureBuildDir(name), 'game.wasm'))
 }
 
-export function readGolden<T>(name: string, file: 'scenario.json' | 'golden.json'): T {
+/** `file` is normally `'scenario.json'`/`'golden.json'`, but a fixture may keep a second scenario
+ * beside its canonical one (docs/plan/15b-ring-connection-and-replica-rendering.md, Orchestrator
+ * ruling 1: "the connected scenario gets its own new golden ... beside `puts_idle_100`, not a
+ * change to it") -- `scripts/golden.mjs`'s own naming convention is `scenario<suffix>.json` /
+ * `golden<suffix>.json`, so this stays a plain `string` rather than a literal union that would
+ * need editing for every such pair. */
+export function readGolden<T>(name: string, file: string): T {
   return JSON.parse(readFileSync(join(root, name, 'golden', file), 'utf8')) as T
 }
