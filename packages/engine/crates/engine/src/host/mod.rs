@@ -8,6 +8,7 @@
 //! has already reserved the arena and parsed config, so `Host::init` only parses and holds the
 //! parameters; `sim_genesis` is what actually builds the `Sim<G>`.
 
+pub mod subs;
 pub mod warm;
 
 use crate::abi::config::HexU64;
