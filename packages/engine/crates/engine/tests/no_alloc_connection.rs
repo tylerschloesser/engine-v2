@@ -10,17 +10,22 @@
 //! `EntityGone`: none of those fire with a fixed camera. **`host_and_client_panning_no_alloc`**
 //! covers exactly that gap (M15 fix round 1) with a continuously panning camera, and **does not
 //! pass**: it measures a real, reproducible allocation of **90.72 B/tick** (27,216 B over the
-//! 300-tick measured window, exact and deterministic given the fixed seeds) in
-//! `TerrainStore::replace_overlay` (`Overlays`' `BTreeMap<u64, ChunkOverlay>` allocating a new
-//! B-tree node for a chunk key it has never held before -- `~48 B/call`, `world/overlay.rs`, via
-//! `Store::terrain_mut`) and in `Replica::held`'s own `BTreeMap<ChunkCoord, u32>::insert` for the
-//! same reason (`~144 B/call`, `client/replica.rs`). Both are genuinely new B-tree keys every call
-//! here because this workload pans forever in one direction, discovering territory the replica has
-//! never held before, tick after tick -- `.claude/rules/hot-paths.md` already names exactly this
-//! shape as the accepted exception for `world/cache.rs`'s overlay growth ("overlay growth (writes,
-//! world state) is the one allowed exception"); `Replica::held`'s own growth is the same *kind* of
-//! thing (subscription-state growth, not per-frame garbage) but is not literally covered by that
-//! sentence, which names only `TerrainStore`. **Left failing on purpose** (docs/plan/
+//! 300-tick measured window, exact and deterministic given the fixed seeds; 95.39 B/tick over
+//! 4,800 ticks). Every byte of it is **host-side and proportional to newly reached territory**;
+//! the client (`on_frame`, `drain_dirty`, `poll_uplink`) and `Host::build_frame`/`seal`/
+//! `on_uplink` allocate **exactly zero**. Attributed with `live_bytes()` brackets in M15 fix
+//! round 3 -- full table, host/client split and the bounded-camera control that isolates it in
+//! docs/plan/15-connection-and-subscriptions.md -- to three host containers: `TerrainStore`'s
+//! overlay map plus each chunk's first `Vec<Entry>` (~111.6 B per chunk first written to, which is
+//! `.claude/rules/hot-paths.md`'s own named exception, "overlay growth (writes, world state) is
+//! the one allowed exception"), `Host::chunk_versions` (~26.3 B per distinct chunk ever touched by
+//! a replicated change, never pruned), and the host's **undrained** `Cache::events` queue (~16 B
+//! per load/evict event; `TerrainStore::drain_cache_events` has no caller on the host path).
+//! Fix rounds 1 and 2 blamed `Replica::held::insert` and `TerrainStore::replace_overlay` on the
+//! client: both do allocate, but the trailing-edge leave frees the same bytes in the same tick,
+//! and `live_bytes()` is live bytes (allocated minus freed), so their net contribution is 0 --
+//! `held` stays at 128 and the replica's overlay map at 16 for the whole run.
+//! **Left failing on purpose** (docs/plan/
 //! 15-connection-and-subscriptions.md Deviations, and the coordinator's own fix-round instruction:
 //! "do not make it pass ... report ... and stop there" -- accepting or budgeting this is not this
 //! milestone's decision). Three inject-fail-revert sensitivity proofs (8 B/call injected, then

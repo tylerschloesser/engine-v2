@@ -416,3 +416,93 @@ not.
    decision, not the implementer's -- as is whether the panning test asserts zero, asserts a
    measured ceiling, or stays red pending a follow-up milestone. Do not make the test pass by
    widening a budget, shortening the window, weakening an assertion or marking anything `#[ignore]`.
+
+## Fix round 3: full attribution of the panning allocation, host and client measured separately
+
+Method (the gate's own instruction, and round 1's technique reused): the panning workload of
+`host_and_client_panning_no_alloc` was replayed byte-identically in a throwaway test binary with
+`live_bytes()` brackets (a) around each of the eight calls in `run_panning_tick`, and (b) inside
+`Host::tick`, `Sim::step`, `Authority::write`, `Store::apply` and `TerrainStore::set_tile`, feeding
+a temporary `crate::probe` counter array; plus start/end sizes of every candidate container. All
+instrumentation is reverted -- nothing here changed a source file, a test, an assertion, a window or
+a budget. The 300-tick window reproduces the committed number exactly (27,216 B), so the brackets
+are measuring the same thing the failing test measures. **Every table below sums to the measured
+total with a remainder of exactly 0 B**, at every window length.
+
+**Host/client split: the entire rate is host-side. The client allocates exactly zero.**
+
+| Call site (per `run_panning_tick`) | 300 ticks | 1,200 ticks | 4,800 ticks |
+|---|---|---|---|
+| `host.on_uplink` | 0 | 0 | 0 |
+| `host.queue_action_for_test` (`pending_records` `Vec` capacity) | 96 | 96 | 96 |
+| `host.tick` | 27,120 | 114,224 | 457,792 |
+| `host.build_frame` | **0** | **0** | **0** |
+| `client.on_frame` | **0** | **0** | **0** |
+| `host.seal` | 0 | 0 | 0 |
+| `client.drain_dirty` | **0** | **0** | **0** |
+| `client.poll_uplink` | **0** | **0** | **0** |
+| **HOST total** | 27,216 | 114,320 | 457,888 |
+| **CLIENT total** | **0** | **0** | **0** |
+| B/tick | 90.720 | 95.267 | 95.393 |
+
+Round 1's client-side attribution was therefore measuring **gross bytes allocated at those call
+sites, not net live bytes**: `Replica::held::insert` and `TerrainStore::replace_overlay` do allocate
+on a new key, but the matching `held.remove`/`clear_overlay` on the trailing-edge leave frees the
+same amount in the same tick, so `on_frame`'s net contribution to `live_bytes()` is 0 over 4,800
+ticks with `held` pinned at 128 and the overlay map at 16. Round 2 then reasoned about those two
+(correctly measured, wrongly signed) numbers as if they were live growth. Both are dismissed.
+
+**Attribution inside `Host::tick`** (4,800-tick window, the asymptotic rate; the 300-tick column is
+the number the committed test prints):
+
+| Site | 4,800 ticks | B/tick | 300 ticks | Unit cost, and what the unit is |
+|---|---|---|---|---|
+| `Overlays::get_or_create` -- `BTreeMap<u64, ChunkOverlay>` node growth, via `Store::apply(Delta::Tile)` -> `TerrainStore::set_tile` | 152,672 | 31.807 | 9,952 | ~63.6 B per chunk newly given an overlay (2,400 such chunks in the window) |
+| `ChunkOverlay::write` -- the chunk's first `Vec<Entry>` push, same path | 115,200 | 24.000 | 7,200 | **48 B exactly** per chunk newly given an overlay (consistent with a min-capacity-4 `Vec` of 12 B `Entry`) |
+| `TerrainStore::materialize` -> `Cache::push_event` -- the `Vec<CacheEvent>` queue, same path | 63,488 | 13.227 | 2,048 | ~16 B per queued load/evict event (3,856 events in the window); appears in a short window as a single `Vec` doubling, hence 6.8 B/tick at 300 ticks rising to 13.2 at 4,800 |
+| `Host::chunk_versions.insert` -- `BTreeMap<ChunkCoord, u32>` node growth (`tick()`'s scope loop) | 126,144 | 26.280 | 7,632 | ~26.3 B per chunk key newly inserted (4,800 keys, exactly one per tick) |
+| `Authority`'s `ChangeLog` `Vec` capacity (`changes.push`) | 256 | 0.053 | 256 | one-off capacity step, not growth |
+| `Sim::step`'s `outcomes` `Vec` capacity (`out.push`) | 32 | 0.007 | 32 | one-off capacity step |
+| `Host::pending_records` `Vec` capacity (`queue_action_for_test`) | 96 | 0.020 | 96 | one-off, test-harness path only |
+| **Total** | **457,888** | **95.393** | **27,216** | **remainder 0 B** |
+
+`SubscriptionSet::update`, `build_frame` (every section: enters, snapshots, leaves, deltas, entity
+ops, `Global`/`OwnPlayer`), `seal`, `on_uplink` and the whole client side contribute **0 B**.
+
+**Three unbounded growers, all `Host`-side, and one control that proves they are the whole story.**
+Rerunning the identical body with the camera *oscillating* over a 16-chunk band instead of panning
+forever (`bounded=true`: same actions, same rates, same warm-up, only the territory bounded) gives
+**384 B total at 300, 1,200 and 4,800 ticks alike** -- the three one-off `Vec` capacity steps and
+nothing else; 0.080 B/tick at 4,800 and still falling as 1/ticks. Host containers are flat across
+that whole run (overlay chunks 8 -> 8, `chunk_versions` 20 -> 20, cache events 8 -> 8). So there is
+**no time-proportional leak in the tick loop**: every byte of the ~95 B/tick is proportional to
+*newly reached territory*, which this workload manufactures forever by design.
+
+1. **`TerrainStore`'s overlay map + per-chunk overlay `Vec`** (~111.6 B per chunk first written to,
+   63.6 + 48). This is `.claude/rules/hot-paths.md`'s named exception verbatim ("overlay growth
+   (writes, world state) is the one allowed exception"), and it is genuine world state.
+2. **`Host::chunk_versions`** (~26.3 B per distinct chunk ever touched by a replicated change), the
+   grower the gate found. Confirmed unpruned, and confirmed to grow *faster than world state does*:
+   in the 300-tick window it gained 300 keys while the overlay map gained 150 chunks, because a
+   chunk gets a permanent version entry from an entity that merely passed through it. **Half the
+   keys in this workload belong to chunks whose replicated state is empty** -- never painted, entity
+   spawned and despawned again, back to pristine, version entry retained forever.
+3. **`Cache::events`, the host's undrained cache-event queue** (~16 B per load/evict event) --
+   **not anticipated by the gate or by either earlier round**. `TerrainStore::drain_cache_events`
+   has exactly one non-test caller in the crate, `client::upload` (M09's texel path). Nothing on the
+   host path ever drains it, so every `materialize` on the host pushes a `CacheEvent::Loaded` (and,
+   once the cache is full, an `Evicted`) onto a `Vec` that only ever grows. Unlike (1) and (2) this
+   one is **not bounded by world size**: a host whose cache churns (any camera that revisits more
+   chunks than the cache holds) queues events forever for a consumer that does not exist in the
+   sim role. In the 4,800-tick pan the queue reached 3,936 entries from 80.
+   The same latent hole exists on the client (`ClientCore`/`Replica` never drain either; only
+   `client::upload` does), it is simply not exercised here because this test never reads a replica
+   tile -- the client queue sat at 0 for the whole pan and 6 for the whole oscillation.
+
+Not decided here, per the gate's instruction: whether `chunk_versions` moves into the chunk (the
+brief's Scope wording), gets pruned, or is accepted; whether the host should drain or not queue
+cache events at all; and whether `host_and_client_panning_no_alloc` asserts zero, asserts a ceiling,
+or stays red. Reproduction, if it is wanted again: bracket the eight calls in `run_panning_tick`
+with `live_bytes()`, and place probes at `Host::tick`'s three stages, `Authority::write`'s
+`store.apply`/`changes.push`, and `TerrainStore::set_tile`'s `materialize` /
+`overlays.get_or_create` / `overlay.write` -- those seven sites account for 100% of it.
