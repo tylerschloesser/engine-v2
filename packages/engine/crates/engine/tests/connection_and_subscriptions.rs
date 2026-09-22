@@ -159,7 +159,7 @@ fn add_client(lb: &mut Loopback<LGame>, delay: u32) -> (usize, PlayerId) {
         delay,
         dims(),
         Box::new(FlatSource),
-        CacheCapacity::Chunks(4096),
+        CacheCapacity::Chunks(1024),
     )
 }
 

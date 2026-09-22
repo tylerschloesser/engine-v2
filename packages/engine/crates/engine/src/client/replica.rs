@@ -23,6 +23,12 @@ use crate::world::{
 };
 use crate::world_access::{WorldRead, chunk_of};
 
+/// 0015 §5's client-role arena line: "4 MiB dense cache, replica entities and overlays for <= 128
+/// subscribed chunks" -- the terrain cache's own slice of the 48 MiB client budget (entity/overlay
+/// memory is bounded by M21's state budget, Non-scope here: nothing caps entity count yet, so
+/// nothing about it can be asserted at construction).
+pub const CLIENT_CACHE_BUDGET_BYTES: usize = 4 * 1024 * 1024;
+
 /// One replica's held chunk set: `ChunkCoord -> version` (the tick of that chunk's last replicated
 /// change, or `0` while it has never changed since it was subscribed -- the same convention the
 /// host side uses, `host::mod` Deviations).
@@ -49,7 +55,23 @@ impl<G: Game> Replica<G> {
     where
         G::Global: Default,
     {
+        if let CacheCapacity::Chunks(n) = cache {
+            assert!(
+                n as usize >= crate::host::subs::CAP_CHUNKS,
+                "Replica cache capacity ({n} chunks) is smaller than the 128-chunk subscription \
+                 cap (0010): every held chunk must stay cached, or held chunks would evict each \
+                 other out from under the subscription"
+            );
+        }
         let terrain = TerrainStore::new(dims, source, cache);
+        assert!(
+            terrain.memory_bytes() <= CLIENT_CACHE_BUDGET_BYTES,
+            "Replica's terrain cache is {} B, over the 0015 \u{a7}5 client arena's {} B \
+             dense-cache share (docs/plan/15-connection-and-subscriptions.md Budgets: \
+             'replica for the chunk cap fits the client arena share of 0015 \u{a7}5')",
+            terrain.memory_bytes(),
+            CLIENT_CACHE_BUDGET_BYTES
+        );
         let mut registry = Registry::new();
         G::register(&mut registry);
         Replica {
@@ -240,5 +262,102 @@ impl<G: Game> WorldRead<G> for Replica<G> {
 
     fn global(&self) -> &G::Global {
         self.store.global()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::{PlayerEvent, TickCx, WorldWrite};
+    use crate::world::PrototypeId;
+    use crate::worldgen::Worldgen;
+
+    struct ZeroSource;
+    impl PristineSource for ZeroSource {
+        fn generate(&self, _chunk: ChunkCoord, out: &mut [Tile]) {
+            out.fill(Tile::VOID);
+        }
+    }
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct RGlobal;
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct RPlayer;
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct REntity;
+    #[derive(
+        Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, ts_rs::TS,
+    )]
+    struct RReject;
+    impl From<Unknown> for RReject {
+        fn from(_: Unknown) -> Self {
+            RReject
+        }
+    }
+    struct RGen;
+    impl Worldgen for RGen {
+        type Params = ();
+        const WORLDGEN_VERSION: u32 = 0;
+        fn generate(_seed: u64, _params: &(), _chunk: ChunkCoord, out: &mut [Tile]) {
+            out.fill(Tile::VOID);
+        }
+    }
+    struct RGame;
+    impl Game for RGame {
+        const SCHEMA_VERSION: u32 = 1;
+        type Worldgen = RGen;
+        type Action = ();
+        type Reject = RReject;
+        type Entity = REntity;
+        type Player = RPlayer;
+        type Global = RGlobal;
+        type Presence = ();
+        type Ui = ();
+        type Client = ();
+        fn register(_r: &mut Registry) {}
+        fn prototype(_e: &REntity) -> PrototypeId {
+            PrototypeId(0)
+        }
+        fn anchor(_e: &REntity) -> TilePos {
+            TilePos::new(0, 0)
+        }
+        fn genesis(_w: &mut dyn WorldWrite<Self>) {}
+        fn on_player(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _ev: PlayerEvent) {}
+        fn apply(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _a: &()) -> Result<(), RReject> {
+            Ok(())
+        }
+        fn tick(_cx: &mut TickCx<'_, Self>) {}
+    }
+
+    #[test]
+    #[should_panic(expected = "smaller than the 128-chunk subscription cap")]
+    fn cache_below_the_subscription_cap_panics() {
+        Replica::<RGame>::new(
+            ChunkDims::new(5),
+            Box::new(ZeroSource),
+            CacheCapacity::Chunks(64),
+            PlayerId(1),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "over the 0015 §5 client arena")]
+    fn cache_over_the_client_budget_panics() {
+        Replica::<RGame>::new(
+            ChunkDims::new(5),
+            Box::new(ZeroSource),
+            CacheCapacity::Chunks(4096), // 16 MiB at edge 32, over the 4 MiB budget
+            PlayerId(1),
+        );
+    }
+
+    #[test]
+    fn cache_at_the_cap_fits_the_budget() {
+        // 128 chunks at edge 32 (4096 B/chunk) = 512 KiB, comfortably under 4 MiB.
+        let _ = Replica::<RGame>::new(
+            ChunkDims::new(5),
+            Box::new(ZeroSource),
+            CacheCapacity::Chunks(128),
+            PlayerId(1),
+        );
     }
 }
