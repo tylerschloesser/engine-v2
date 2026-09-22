@@ -127,4 +127,115 @@ none
 
 ## Deviations
 
-(filled in during Phase 3)
+**Seam shapes.** `scripts/lib/handoff.mjs` exports pure functions over strings only (no I/O), in
+`gate.mjs`'s shape:
+
+- `parsePlanRows(planText)` → `{ id, ticked, brief }[]`, from `| [x] | 15b | \`15b-....md\` | ... |`
+  rows; header/separator rows are skipped by construction (no `[x]`/`[ ]` + id + backticked `.md`).
+- `findUpcomingRefs(promptText)` → `{ id, phrase }[]`, matching `M<NN[a-z]> next|in flight|is
+  ready|on current order`. The phrase list (`UPCOMING_PHRASES` in the module) is a **heuristic**,
+  commented as one in the source: it is a lower bound on defect 2's class, not a spec, and the next
+  session that finds a fifth phrasing should add it there.
+- `findStaleUpcomingRefs(rows, promptText)` → the subset of the above whose id is ticked in `rows`
+  (deduped by id). This is defect 2's check.
+- `countParens(text)` → `{ open, close }`; `parensAreBalanced(text)` → `open === close`. Defect 3's
+  check, over the whole file, not nesting-aware (see the finding below on why nesting doesn't help).
+- `findMissingBriefs(rows, existingBriefs: Set<string>)` → rows whose `brief` is not in the set.
+- `isStatusDone(briefText)` → `/^Status:\s*done\b/m` test (matches `Status: done`, `Status: done
+  (2026-09-19) ...`, never `Status: not started ...`).
+- `findStatusMismatches(rows, doneByBrief: Map<brief, boolean>)` → rows whose `ticked` disagrees
+  with `doneByBrief.get(row.brief)`; a brief absent from the map (unreadable/missing) is skipped, so
+  `findMissingBriefs` is the only check that reports it.
+- `parseGroundMarker(promptText)` → `{ rust, unit, wasm, browser } | null`.
+  `formatGroundMarker(ground)` → the exact marker string (below).
+  `compareGround(marker, actual)` → `{ suite, marker, actual }[]` for each of the four that differ.
+- `parseRustSummary(logText)` → the `N` in nextest's plain-text `Summary [...] N tests run: ...`
+  line (`test-results/rust/output.log`; nextest's own JUnit report lives under `target/nextest/`,
+  outside `test-results/`, which is why this check reads the log instead).
+- `parseBunLegCount(logText)` → the `wasm` suite's Bun leg's test count, from the last line of
+  `test-results/wasm/bun.log` (one JSON object, `{ tests: [...] }`, the same shape
+  `scripts/lib/adapters.mjs`'s `script` adapter already parses).
+
+`scripts/handoff.mjs` (the command) is the only place that touches the file system: it reads
+`PLAN.md`, `PROMPT.md`, every `docs/plan/<brief>.md` a row names, and
+`test-results/{rust/output.log, unit/report.json, wasm/report.json, wasm/bun.log,
+browser/report.json}`, calling `scripts/lib/report.mjs`'s already-exported `parseVitestJson` /
+`parsePlaywrightJson` for the JSON reports (Seams: "the `test-results/` report shape
+(`scripts/lib/report.mjs`)"). Exit 0 nothing flagged; exit 1 any check flagged; exit 2 no marker in
+`PROMPT.md` or no `test-results/` to read (run `pnpm test` first). It does not build or run tests
+itself.
+
+**The ground marker's exact shape**, inserted immediately after State's "current ground" sentence,
+before the `(Historic, ...)` parenthetical, with no other change to the status block:
+
+```
+<!-- handoff:ground rust=275 unit=157 wasm=43 browser=110 -->
+```
+
+One HTML comment, one line, four `key=N` pairs in the fixed order `rust unit wasm browser` (the
+`0020 §3` suite order), invisible in a rendered Markdown view. **To maintain it:** at a `done`
+commit, after `pnpm test && pnpm lint` passes, replace the four numbers with the fresh counts
+`pnpm test` just printed (same numbers that go into State's prose sentence) and leave everything
+else — including the surrounding sentence — untouched. `parseGroundMarker`/`formatGroundMarker` are
+the read/write pair; `compareGround` is what `pnpm handoff` diffs it against.
+
+**Defect-3 finding, worth recording so the next session does not re-derive it:** the actual
+committed `PROMPT.md` at `e4e2c9d` (the version the brief's Why section describes as carrying the
+defect) turned out to have **balanced total parens (221 open, 221 close)** and a clean stack-based
+nesting with zero orphans — verified with a script before writing any fixture. The `))` the commit
+message calls "an orphan close paren" was, by raw count, the correctly-matched close of an outer
+`(four suites: ...)` wrapper opened much earlier in the same bullet; the defect (if any) was a
+readability/meaning problem in a hand-edited sentence, not a mechanical count imbalance, and a
+count-based check would not have caught that specific historical byte sequence. `handoff.test.mjs`'s
+defect-3 fixture therefore reproduces the **defect class** the brief describes ("a string-replace
+edit that closed a clause early", i.e. one that genuinely drops or duplicates a `)`) with a
+synthetic-but-representative sentence, rather than the byte-exact historical one — noted here per
+"Record... anything that differs from the brief." Defect 2's fixture is unaffected and uses the real
+sentence exactly as it stood in `e4e2c9d`.
+
+**Order of work step 2 ("prove each check can fail... one per check") was done two ways:** every
+structural check has a fixture pair in `handoff.test.mjs` (broken input asserted to fail, corrected
+input asserted to pass), and three of the five checks (milestones, parens, ground) were additionally
+proved live against the real files — a real sentence was injected into `PROMPT.md`, `pnpm handoff`
+was run and observed to flag it, then the file was reverted and `pnpm handoff` re-run clean (git
+diff confirmed no residue). The ground check's own live proof came for free: this milestone's 21 new
+unit tests genuinely moved `unit` from 157 to 178, so `pnpm handoff` reports `ground: STALE 1 — unit:
+marker 157, actual 178` on the real tree right now (see "Known state at hand-off" below) — a live,
+unplanned instance of exactly the defect it exists to catch.
+
+**Measured, Budgets:** `unit` was 157 tests before this milestone; `pnpm test unit` (full suite, no
+pattern) now reports **`unit pass 178 tests 1.2s/3s`** — 21 new tests, all pure string/regex work in
+`handoff.test.mjs`'s own style, comfortably inside the 3 s budget (a pre-change timing number was
+not separately captured, since the budget line already has ~40% headroom left and the added tests
+are the same shape as the suite's existing ones — no reason to expect it moved the *rate*, only the
+count).
+
+**Known state at hand-off, not a defect:** as recorded above, `pnpm handoff` currently reports
+`ground: STALE 1` for `unit` (marker 157, actual 178), because this milestone's own new tests raised
+the count after the marker was seeded from the base commit's (`e4e2c9d`) true ground. This is the
+same staleness every milestone that adds tests already causes in State's prose; the marker is not
+special-cased for its own milestone's edits, by design — fixing it here would mean hand-editing the
+marker to a number `pnpm test && pnpm lint` had not actually re-verified at a `done` commit, exactly
+the shortcut this check exists to prevent. The orchestrator's own `pnpm test && pnpm lint` at M15g's
+`done` gate will produce the true final numbers (`unit` will include these 21 plus whatever else
+lands between now and then); update both State's prose sentence and the marker together from that
+run's output. All other three suites' markers (`rust` 275, `wasm` 43, `browser` 110) still match, and
+all four structural checks pass on the live tree (`milestones: none stale`, `parens: balanced
+(222/222)`, `briefs: all present (66)`, `status: consistent (66)`).
+
+**`scripts/suites.mjs` untouched:** `vitest.config.ts`'s `unit` project already globs
+`scripts/**/*.test.mjs`, so `handoff.test.mjs` is picked up with no registration, the same way
+`context-artifacts.test.mjs` and the other `scripts/lib/*.test.mjs` files are.
+
+**`pnpm test unit -t handoff` note:** every `describe`/`test` in `handoff.test.mjs` is nested under
+one outer `describe('handoff', ...)` specifically so this exact pattern (named in the brief's
+Verification commands) matches the whole file — vitest's `-t` matches the joined
+`describe > describe > test` name, not the file path. Run this way it also happens to pick up one
+unrelated pre-existing test elsewhere in the repo whose title contains the substring "handoff"
+(`packages/engine/src/sab/triple.test.ts`'s `triple.slot_handoff_never_aliases`) — harmless, and
+expected of any substring `-t` pattern.
+
+**Commits:** `c984eaf` (step 1: `scripts/lib/handoff.mjs` + `scripts/lib/handoff.test.mjs`),
+`6daedf9` (step 3: `scripts/handoff.mjs`, `package.json`'s `handoff` script, the `PROMPT.md` marker).
+No step 2/4 commit: step 2's proof lives inside step 1's files (same commit); step 4 (re-verify
+against the four historical defects) needed no file change beyond what's recorded above.
