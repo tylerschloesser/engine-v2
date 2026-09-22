@@ -24,7 +24,9 @@
 //! `puts_idle_100`'s golden becomes `.wasm`-authoritative (0002) instead of native-blessed.
 
 use engine::client::{ClientSide, TileTexel};
-use engine::game::{Game, PlayerEvent, PlayerId, TickCx, Unknown, WorldRead, WorldWrite};
+use engine::game::{
+    Game, PlayerEvent, PlayerId, PresenceTable, TickCx, Unknown, WorldRead, WorldWrite,
+};
 use engine::world::{Footprint, Tile};
 use engine::world::{PrototypeId, Registry, TilePos, TraitSet};
 use ts_rs::TS;
@@ -108,6 +110,13 @@ pub enum Reject {
     Unknown,
     /// `Bump`/`Remove`: no entity at that position (always, until M21's occupancy index exists).
     NotFound,
+    /// `Paint`: `pos` outside `PAINT_BOUND` (docs/plan/16-action-round-trip.md, `vertical_slice`'s
+    /// own "out-of-range Paint" test). A fixture-only demo bound for `G::admit`'s rejection path,
+    /// not a world-model rule: `docs/spec/world.md` ("coordinates are unbounded; the cap applies
+    /// to *materialized* chunks held in memory") is unaffected -- this never touches `apply`/
+    /// `Sim`/`sim_hash`, so it cannot change any golden (0004: an admission-time reject is never
+    /// logged or replayed).
+    OutOfRange,
 }
 
 impl From<Unknown> for Reject {
@@ -159,6 +168,12 @@ const WALK: [(i32, i32); 8] = [
 
 /// How long a `SetNote` note stays before `tick` clears it.
 const NOTE_TTL_SECS: u32 = 5;
+
+/// `Puts::admit`'s own out-of-range bound for `Paint` (see `Reject::OutOfRange`'s doc comment): a
+/// fixture-only demo threshold, well outside both `puts_script_a`'s own `Paint` coordinates
+/// ((2, 2), (-3, 8)) and `slice.html`'s own screen-centre tile, chosen only to be trivially
+/// reachable by a Playwright test ("dispatch a Paint far away").
+const PAINT_BOUND: i32 = 1_000_000;
 
 pub struct Puts;
 
@@ -282,6 +297,26 @@ impl Game for Puts {
                 cx.put_player(who, p2);
             }
         }
+    }
+
+    /// HOST ONLY, never replayed (0004 Pipeline step 2; the default `Game::admit` is `Ok` for
+    /// every other handler here, unchanged). `Paint` outside `PAINT_BOUND` is rejected before
+    /// `apply` ever runs: `vertical_slice`'s own "out-of-range Paint" test (docs/plan/
+    /// 16-action-round-trip.md) needs a real, deterministic `Reject::Game` path for an action that
+    /// (unlike `Bump`/`Remove`) always succeeds at `apply` time otherwise -- `set_tile` itself is
+    /// infallible (0003: "`WorldWrite` puts are infallible").
+    fn admit(
+        _w: &dyn WorldRead<Self>,
+        _p: &PresenceTable<Self>,
+        _who: PlayerId,
+        a: &Action,
+    ) -> Result<(), Reject> {
+        if let Action::Paint { pos, .. } = a {
+            if pos.x.abs() > PAINT_BOUND || pos.y.abs() > PAINT_BOUND {
+                return Err(Reject::OutOfRange);
+            }
+        }
+        Ok(())
     }
 }
 

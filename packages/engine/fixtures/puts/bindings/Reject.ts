@@ -4,4 +4,4 @@
  * `From<Unknown>` (0003: "add a `?` to each read and `impl From<Unknown> for Reject`").
  * `#[ts(export)]`: see `Action`'s own doc comment.
  */
-export type Reject = 'Unknown' | 'NotFound'
+export type Reject = 'Unknown' | 'NotFound' | 'OutOfRange'
