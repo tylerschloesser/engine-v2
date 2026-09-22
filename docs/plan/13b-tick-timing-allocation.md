@@ -455,3 +455,62 @@ Machine hygiene: `pgrep -x yes` and `lsof -ti tcp:4517`/`:4518` clean after ever
 session; no background process left running; the two temporary `playwright.config.ts` `--no-opt
 --no-sparkplug` edits (this range's own diagnostic measurements) were each reverted immediately
 after their one measurement, confirmed via `git diff`/`git status` before the next commit.
+
+### `sim-paced`'s `main` budgets, derived (not copied) after CI caught the copy
+
+CI (ubuntu/x86_64, commit `5372d7c`, the orchestrator's own push) verified the fix itself: `sim`
+on `sim-paced` read 3.97 B/frame raw, 0 attributed, `resync@` the only `byFn` entry at 1800 B over
+600 ticks -- exactly as designed, left alone. But the run was red on `main`: `software.isolates.
+main.attributedBytesPerFrame` had been copied from `gc-sim` (0), which is only true there because
+`gc-sim`'s own `drive()` only pokes `CB_SIM_STEP_REQ` and never runs `stepFrame`. `sim-paced`'s own
+`drive()` is `installGcPage`'s *default* (`stepFrame` + `harness.stepTick()`), so `main` does real
+per-frame work there, including `client.ts`'s own `frameTimeMs = opts.clock.now()` read
+(`render/frame-loop.ts:114`, named in step-1's own Deviations as the one other production
+`.now()`/`performance.now()`/`Date.now()` call this milestone's grep found, and dismissed there as
+"the accepted region-copy pattern, not a defect" -- true for the *worker* side of that pattern, not
+for this main-thread read itself). CI's own attribution named it precisely: `now@client...:808` =
+7164-7176 B over 600 frames, 11.94 B/frame -- the same box this whole milestone exists to fix,
+11.92 B for a single read, now caught on `main` instead of `sim`.
+
+**Re-derived, not copied, per 0020 §9** (both rows below are `sim-paced`'s own first real numbers,
+not a widening of any existing page's):
+- `isolates.main.bytesPerFrame` stays **30** (the pre-existing, default-V8-derived figure), *not*
+  raised to the forced-interpreter worst case (33.37-33.47 B/frame, measured and rejected): the
+  `object` negative control on this isolate adds a stable +16 B/frame regardless of V8 tier
+  (`allocateObject`'s own literal, unlike `now()`'s tier-dependent box), so a budget wide enough to
+  also cover 33.47 sits at or above the control's own resulting 37-50 B/frame range. Confirmed
+  empirically: at 42 (the number this correction's own first attempt used), `sim-paced neg object
+  main` stopped tripping entirely, 5/5 local runs reading `pass: true` where `false` is required.
+  This is 0016's own stated principle applying directly: a control that cannot separate from clean
+  means the page needs fixing, not the budget -- and the page that needs fixing is `client.ts`'s
+  `now()` call, explicitly out of this milestone's scope (below). Leaving `main`'s hardware figure
+  as-is accepts the same pre-existing, sibling-contention-triggered flake risk every other page's
+  own `main` row already carries identically (none of them are derived from a forced-interpreter
+  measurement either); it does not introduce a new one specific to this page.
+- `software.isolates.main.attributedBytesPerFrame` is **14**, not the usual flat "+8 B" margin
+  (which would give 20 and collides with the same control, measured: at 20, `sim-paced neg object
+  main` under software mode read a clean, reproducible attributed 16 every run, 0/8 tripped where
+  every run must). Chosen instead: `ceil(11.98) = 12, + 2 B = 14`, verified 5/5 on both default V8
+  and forced `--no-opt --no-sparkplug` to keep `sim-paced clean` passing at its own worst measured
+  case while `sim-paced neg object main` keeps tripping at its own stable 16 B/frame reading, in
+  both modes, on this machine and (via the same forced-interpreter measurement that matched CI's
+  own 11.94 almost exactly) the CI runner too. `budgets.ts`'s `SoftwarePage.isolates` type gained an
+  optional `formula?: string` field (previously undeclared, every existing page's own software
+  `main` row has always been `0` and needed no derivation) so this row's own formula string is
+  typed, not just present in the JSON.
+
+**Finding recorded, not fixed** (per the orchestrator's own instruction): `client.ts`'s `now()`
+(`frame-loop.ts:114`) allocates ~11.94 B/frame on the *main* isolate in the interpreter tier, the
+same defect class this milestone fixes on the sim worker. `main` is not held to zero (0016 §1's
+110 B WebGPU floor, or the no-adapter default-V8 clean figures every page here derives), so this is
+not an emergency -- but every other page's own `main` budget (`gc-loop` 45, `topology` 42, `echo`
+30, `gen` 42, `terrain` 110, `input` 190, all 0028's own re-derivation) has been quietly absorbing
+this exact cost, under whatever V8 tier the CI runner happened to compile it at, the entire time.
+Not fixed here: a separate decision (whether/how to eliminate `frameTimeMs`'s own clock read, or
+accept it as within main's floor permanently) and a separate milestone, per the orchestrator.
+
+`pnpm test`/`pnpm lint` re-run clean after this correction: `rust 235`, `unit 154`, `wasm 41`,
+`browser 98`, all green, repeated 3x for `sim-paced`'s own tests specifically with no flake seen.
+Machine hygiene: `pgrep -x yes`/`lsof -ti tcp:4517` clean throughout; the two further temporary
+`--no-opt --no-sparkplug` edits this correction needed were each reverted immediately, confirmed
+via `git diff` before committing.

@@ -16,7 +16,10 @@ export type IsolateBudget = {
 
 export type SoftwarePage = {
   frames: number
-  isolates: Record<string, { attributedBytesPerFrame: number }>
+  /** `formula` is optional (docs/plan/13b-tick-timing-allocation.md): most pages' `main` figure
+   * here has been `0` since ADR 0029 and needed no derivation; `sim-paced` is the first with a
+   * real, measured, non-zero one and carries its own `formula` string per 0020 §9. */
+  isolates: Record<string, { attributedBytesPerFrame: number; formula?: string }>
 }
 
 export type GcPageBudget = {
