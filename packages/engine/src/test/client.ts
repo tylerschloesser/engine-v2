@@ -7,6 +7,7 @@ import { writeCameraBlock } from '../camera/block.js'
 import type { CameraState } from '../camera/state.js'
 import type { Client, ClientTestHandle, WorkerEntry } from '../client.js'
 import { clientTestHandle } from '../client.js'
+import { createResyncingClock, type ResyncingClock } from '../clock.js'
 import {
   CB_FRAME_REQ,
   CB_SIM_STEP_REQ,
@@ -172,6 +173,25 @@ export async function untilQuiescent(client: Client): Promise<void> {
   await parkWorkers(client)
 }
 
+// docs/plan/15d-client-clock-allocation.md: `clockLike.now()` used to be read fresh on every call
+// -- a fractional double, which V8 boxes as a new `HeapNumber` on every read (the same defect class
+// 0030 fixed on the sim worker; measured here, `gc-sim-paced`'s `main`: ~11.96 B/frame,
+// `stepFrame@client-*.js` the only entry, Deviations). Unlike 0030's own finding, this box is not
+// purely an interpreter-tier artefact: it showed up at ~12 B/*read* under forced `--no-opt
+// --no-sparkplug` **and**, once the read moved into `createResyncingClock`'s own accumulator, under
+// default V8 too (Deviations) -- so the fix here is squarely about *frequency*, not tier. The real
+// clock is read only once every `RESYNC_FRAMES` calls (`createResyncingClock`, `clock.ts`); between
+// reads `frameTimeMs` accumulates this call's own `dtMs` with integer arithmetic, corrected back to
+// the real elapsed time at every resync -- bounded, periodically-corrected drift, not a
+// free-running synthetic clock, so a caller pacing against real elapsed time (`connected-paced.ts`'s
+// uplink rate limit) still gets it. `RESYNC_FRAMES = 30`, not 0030's own `RESYNC_TICKS = 8`: chosen
+// by measurement (Deviations) so the amortised cost (~0.4 B/frame) keeps `gc-sim-paced`'s
+// re-derived `main` budget at its existing 30 rather than raising it -- 8 would have amortised to
+// ~1.5 B/frame, enough to push the derived figure to 31. One entry per `Client`, created lazily on
+// that client's first `stepFrame` call.
+const RESYNC_FRAMES = 30
+const frameClocks = new WeakMap<Client, ResyncingClock>()
+
 /**
  * Advances the injected clock, writes the camera block, increments `CB_FRAME_REQ`, wakes the
  * client worker and spins on `W_ACK` (Planning decisions "Stepped frames in tests"; the spike's own
@@ -179,9 +199,14 @@ export async function untilQuiescent(client: Client): Promise<void> {
  */
 export function stepFrame(client: Client, dtMs: number): void {
   const h = clientTestHandle(client)
-  const clockLike = h.clock as unknown as { advance?(ms: number): void; now(): number }
+  const clockLike = h.clock as unknown as { advance?(ms: number): void }
   clockLike.advance?.(dtMs)
-  h.cameraState.frameTimeMs = clockLike.now()
+  let rc = frameClocks.get(client)
+  if (!rc) {
+    rc = createResyncingClock(h.clock, RESYNC_FRAMES)
+    frameClocks.set(client, rc)
+  }
+  h.cameraState.frameTimeMs = rc.next(dtMs)
   writeCameraBlock(h.cameraWriter, h.cameraState)
   const req = (Atomics.add(h.control.words, CB_FRAME_REQ, 1) + 1) >>> 0
   h.control.wake(WORKER_CLIENT)

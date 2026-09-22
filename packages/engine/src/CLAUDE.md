@@ -2,6 +2,10 @@
 
 Package-level layout, commands and conventions: `../CLAUDE.md`.
 
+- **A per-frame/per-tick path reads a `Clock` through `clock.ts`'s `createResyncingClock`, never a
+  bare `clock.now()` every call** (M15d, docs/plan/15d-client-clock-allocation.md): `clock.now()`
+  boxes a fresh `HeapNumber` on every read, not only in the interpreter tier as 0030 assumed.
+  `frame-loop.ts`'s `tick()` and `test/client.ts`'s `stepFrame` both use it.
 - `server.ts` (docs/plan/13-sim-host-tick-loop.md, docs/plan/
   15b-ring-connection-and-replica-rendering.md): the sim host is one module for the sim worker
   and a server (docs/decisions/0015 "Server" row) -- never import `node:` or DOM here. `worker/

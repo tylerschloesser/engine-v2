@@ -15,7 +15,7 @@
 // sequence of calls with no per-frame closures, arrays or descriptor objects (`.claude/rules/
 // hot-paths.md`).
 import type { Client, RenderOptions } from './client.js'
-import type { Clock, Scheduler } from './clock.js'
+import { type Clock, createResyncingClock, type Scheduler } from './clock.js'
 import type { TerrainRenderer } from './render/terrain.js'
 import { createUploadDrain, DEFAULT_UPLOAD_BUDGET_BYTES } from './render/upload.js'
 import {
@@ -89,6 +89,22 @@ export type FrameLoop = {
 const noop = (): void => {}
 const noopPhase = (_phase: FramePhase): void => {}
 
+// docs/plan/15d-client-clock-allocation.md: `opts.clock.now()` used to be read fresh every `tick()`
+// -- a fractional double, boxed as a new `HeapNumber` on every read (the same defect class 0030
+// fixed on the sim worker; measured on `test/client.ts`'s own `stepFrame`, which drives this same
+// camera-block phase in every zero-GC page: ~11.96 B/frame, Deviations). No zero-GC page runs a
+// real `FrameLoop` yet (none call `createRealFrameLoop`), so this can't be measured on this exact
+// path the same way; the fix mirrors `stepFrame`'s own (already measured) shape rather than leave
+// production code failing the same rule unfixed (`.claude/rules/hot-paths.md`, "no double-valued
+// temporaries on a per-pass path"). `RESYNC_FRAMES`/`FRAME_MS` mirror `stepFrame`'s own constants
+// (Deviations: 30, not 0030's `RESYNC_TICKS = 8` -- the box measured here at ~12 B/*read*
+// regardless of V8 tier, so 8 would still cost ~1.5 B/frame amortised): the real clock is read only
+// once every `RESYNC_FRAMES` ticks; between reads `frameTimeMs` accumulates a nominal frame
+// duration instead (rAF has no fixed rate to assume `dtMs` from the way a tick loop does),
+// corrected back to the real elapsed time at every resync.
+const RESYNC_FRAMES = 30
+const FRAME_MS = 1000 / 60
+
 export function createFrameLoop(opts: FrameLoopOptions): FrameLoop {
   const budget = opts.uploadBudgetBytes ?? DEFAULT_UPLOAD_BUDGET_BYTES
   const onCamera = opts.onCamera ?? noop
@@ -99,6 +115,7 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoop {
   const drain = createUploadDrain(consumer, opts.renderer, {
     sabWriteTextureOk: opts.sabWriteTextureOk ?? false,
   })
+  const frameClock = createResyncingClock(opts.clock, RESYNC_FRAMES)
   let handle = -1
   let running = false
   let everResumed = false
@@ -111,7 +128,7 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoop {
     opts.viewport?.applyPending() // M09b: before every other phase, at most once per frame
     onPhase('camera')
     onCamera() // camera (no-op until M11)
-    opts.client.cameraState.frameTimeMs = opts.clock.now()
+    opts.client.cameraState.frameTimeMs = frameClock.next(FRAME_MS)
     onPhase('writeCamera')
     opts.client.writeCameraAndWake() // writeCamera: writeCameraBlock + CB_FRAME_REQ + wake
     onPhase('upload')
