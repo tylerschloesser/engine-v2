@@ -379,3 +379,40 @@ key range, so each tick's insert+remove pair costs a real alloc/free pair regard
 map has been running or how stable its size is. Bounded state, unbounded (constant-rate) allocator
 churn -- a real property of this access pattern against `BTreeMap`, not a warm-up artifact and not
 an unenforced cap.
+
+## Open gate failures (written by the orchestrator at M15's gate, for the next implementer)
+
+**Fix round 2's stated explanation is wrong, and the wrong part is the part a later session would
+act on.** The three measured numbers are sound and stand (90.7 / 92.9 / 95.3 B/tick at 300 / 600 /
+1200 ticks; `held.len()` 128 -> 128; overlay entries 16 -> 16). The *reasoning* attached to them --
+"bounded state, constant-rate `BTreeMap` node churn ... each tick's insert+remove pair costs a real
+alloc/free pair" -- cannot produce that measurement, because `abi::arena::live_bytes()` is **live
+bytes, allocated minus freed** (`src/abi/arena.rs`: "Bytes currently allocated through `Arena`",
+`LIVE` incremented on alloc and decremented on dealloc). An alloc/free pair nets to **zero** in that
+counter by construction. A flat, run-length-independent rise in *live* bytes is therefore not churn:
+something's live footprint is growing without bound, and it is not `Replica::held` or the overlay
+map, whose sizes the same run proved constant.
+
+**One confirmed grower, found at the gate:** `Host::chunk_versions: BTreeMap<ChunkCoord, u32>`
+(`host/mod.rs:135`) is inserted into at `host/mod.rs:335` and **never** removed, retained or
+cleared (`grep` for `chunk_versions.remove|retain|clear` returns nothing). It gains a permanent
+entry for every chunk ever touched by a replicated write, so a long-running host's memory grows with
+the number of distinct chunks ever modified, without bound. This is also a deviation from the
+brief's own Scope wording, which says the per-chunk version is "stored **with the chunk** on both
+sides" -- the replica side honours that (`held`, bounded and pruned on leave); the host side does
+not.
+
+**What the next implementer owes this gate, in order:**
+1. Account for the **whole** measured rate, not just the first cause found. `chunk_versions` at
+   roughly one new chunk every other tick does not obviously add up to ~90 B/tick on its own.
+   Instrument every candidate container's live size (not its `len()`) at window start and end and
+   attribute the bytes, the same way fix round 1 correctly attributed `replace_overlay` and
+   `held::insert` with bracketing probes. Report the attribution table; if a remainder is left,
+   say so rather than rounding it into a named cause.
+2. Separate **`Host`** from **`ClientCore`** in the measurement. They are measured together today,
+   which is why a host-side grower could hide behind a client-side explanation.
+3. Then stop and report. Whether `chunk_versions` moves into the chunk (the brief's wording),
+   is pruned on some rule, or is accepted as unbounded with a recorded reason is the orchestrator's
+   decision, not the implementer's -- as is whether the panning test asserts zero, asserts a
+   measured ceiling, or stays red pending a follow-up milestone. Do not make the test pass by
+   widening a budget, shortening the window, weakening an assertion or marking anything `#[ignore]`.
