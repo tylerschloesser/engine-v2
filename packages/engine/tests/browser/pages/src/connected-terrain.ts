@@ -6,9 +6,16 @@
 // clock *and* scheduler together (so `FrameLoop.resume()` re-arming the scheduler never actually
 // fires a real `requestAnimationFrame`) plus `attachViewportTestHooks` for `engine/test.
 // setVisibility`. Reuses `/terrain/tiles.json`'s existing art and `PutsClient` (`fixtures/puts/src/
-// lib.rs`) -- built for `overlay_tile_reaches_screen` (this milestone's own Deviations: blocked by
-// a newly-found pre-existing bug, not built here) but left in place since a real renderer/art
-// pipeline is exactly what that test will need once the blocking bug is fixed.
+// lib.rs`).
+//
+// `overlay_tile_reaches_screen` (docs/plan/15c-terrain-visibility-and-cache-invalidation.md, steps
+// 3-5): `__writeFrameUniform`/`__renderAndRead` below are the GPU readback this page was built for
+// but could not use while the M15b-discovered cache-invalidation bug stood (M15c steps 1-2 fixed
+// it). Renders through the `renderer` object directly (`renderTo`'s `Renderable` overload, not its
+// `Client` overload) -- the `Client` overload builds its own `RingConsumer(client.uploadRing)`
+// internally, which would be a *second*, independent consumer racing the background drain below
+// over the same ring; the background interval already keeps `renderer`'s page/indirection textures
+// converged, so a plain `renderer.draw()` needs nothing more from the ring itself.
 import type { Client } from '../../../../src/client.ts'
 import { createClient } from '../../../../src/client.ts'
 import type { RealFrameLoop } from '../../../../src/frame-loop.ts'
@@ -16,7 +23,7 @@ import { createRealFrameLoop } from '../../../../src/frame-loop.ts'
 import { loadTileArt } from '../../../../src/render/art.ts'
 import type { RendererDevice } from '../../../../src/render/device.ts'
 import { initDevice } from '../../../../src/render/device.ts'
-import type { TerrainRenderer } from '../../../../src/render/terrain.ts'
+import type { FrameUniformValues, TerrainRenderer } from '../../../../src/render/terrain.ts'
 import { createTerrainRenderer } from '../../../../src/render/terrain.ts'
 import { createUploadDrain } from '../../../../src/render/upload.ts'
 import { RingConsumer } from '../../../../src/sab/ring.ts'
@@ -28,6 +35,7 @@ import {
   stepTick,
 } from '../../../../src/test/client.ts'
 import { createManualClock, type ManualClock } from '../../../../src/test/manual-clock.ts'
+import { readPixels, renderTo } from '../../../../src/test/render.ts'
 import { attachViewportTestHooks, setVisibility } from '../../../../src/test/viewport.ts'
 import { fixtureWasm } from './fixture-wasm.ts'
 
@@ -49,6 +57,17 @@ declare global {
       ticks: number,
     ) => Promise<import('../../../../src/test/client.ts').NetCounters>
     __netCounters?: (conn?: number) => Promise<import('../../../../src/test/client.ts').NetCounters>
+    /** `overlay_tile_reaches_screen`: writes the renderer's frame uniform directly (camera position
+     * and viewport shape for the next `__renderAndRead` call), the same shape `terrain-client.ts`'s
+     * own `writeFrameUniform` already uses. */
+    __writeFrameUniform?: (v: FrameUniformValues) => void
+    /** `overlay_tile_reaches_screen`: draws one frame into a fresh offscreen target and reads it
+     * back (`renderTo`/`readPixels`, `engine/test`, the `Renderable` overload -- see the module
+     * comment above for why not the `Client` one). */
+    __renderAndRead?: (
+      width: number,
+      height: number,
+    ) => Promise<{ width: number; height: number; data: number[] }>
     __errors?: () => string[]
   }
 }
@@ -138,6 +157,15 @@ window.__advance = async (x, y, tilesAcross, ticks) => {
   stepFrame(c, 2000)
   await stepTick(c, ticks)
   return netCounters(c)
+}
+
+window.__writeFrameUniform = (v) => {
+  ;(renderer as TerrainRenderer).writeFrameUniform(v)
+}
+window.__renderAndRead = async (width, height) => {
+  const target = renderTo(renderer as TerrainRenderer, { width, height })
+  const pixels = await readPixels(target)
+  return { width: pixels.width, height: pixels.height, data: Array.from(pixels.data) }
 }
 
 window.__errors = () => (device ? device.errors() : [])
