@@ -301,3 +301,116 @@ zero-GC panning window, the suite-line rung) are untouched: `packages/engine/tes
 now be able to build the readback test the bug previously blocked -- worth the next implementer
 re-reading "The bug, confirmed at M15b's gate" against this fix before starting, since that section
 is now historical (fixed), not current.
+
+## Steps 3-5 (readback, zero-GC panning window, suite-line measurement) -- done
+
+Delegated as steps 3-5 only, continuing from steps 1-2's own fix above. Commits `80d8061` (step 3),
+`888a6f5` (step 4).
+
+**3. `overlay_tile_reaches_screen`** (`connected-terrain.ts`/`connected-terrain.spec.ts`). Added
+`window.__writeFrameUniform(v: FrameUniformValues)` and `window.__renderAndRead(width, height):
+Promise<{width,height,data:number[]}>` to `connected-terrain.ts`, both routed through `renderTo`/
+`readPixels`'s **`Renderable` overload** (`renderer` directly), not the `Client` overload -- the
+`Client` overload builds its own `RingConsumer(client.uploadRing)` internally, which would be a
+*second*, independent consumer racing the page's own pre-existing background upload-drain interval
+over the same ring. Camera fixed at tile `(0, 0)` throughout (`originCamera(16)`: `tilesPerPx: 1`,
+"pixel index === tile index" convention, tile `(0,0)` lands on pixel `(8, 8)`); `GRASS`/`WATER`
+([34,139,34,255]/[30,80,200,255]) both have `"band": 0` in `tiles.json`, so this probe needed no
+dithering/boundary reasoning at all.
+
+**Found: `fx-puts`'s tick rule paints tile `(0,0)` on tick 0, the very first simulated tick**
+(`Puts::tick`: `cx.tick().0 % secs_1 == 0` is true at tick 0), not merely "once per second" starting
+later -- so "pristine colour" is provable only strictly before any host tick runs, never merely
+before some elapsed interval. The test drives three `__advance(0,0,8,ticks)` calls with the camera
+never moving except inside `settleUploads` (below): 0 ticks (client-only pristine generation) ->
+render GRASS; 1 tick (paints + downlinks a snapshot that evicts the tile, `chunkSnapshots > 0`
+asserted); 0 more ticks (the M15c fix's own rescan) -> render WATER.
+
+**Found: a second, pre-existing gap, in `Uploader::on_frame` (`client/upload.rs`), separate from
+this milestone's own fix and out of its Non-scope ("do not redesign the dense cache or its LRU").**
+`Uploader::on_frame`'s early return is `!changed && self.last_visible == Some(visible)`, where
+`changed` comes only from drained `CacheEvent`s -- there is no event for "a chunk newly finished
+generating" (`TerrainFeed::deliver`, which materializes a pristine or regenerated chunk, runs on the
+client worker's own gen-result pump, not from `frame()`, so it never itself triggers a rescan).
+Under a genuinely static camera, the *first* `on_frame` call (when the chunk of interest is not yet
+resident) is also the *last* one to scan, until either an eviction fires or the visible rect itself
+changes -- so a chunk that finishes generating asynchronously, after that first call, never gets
+staged for upload at all while the camera holds still. Every existing page/test that already renders
+correctly does so because its camera moves every frame; this readback's own camera deliberately does
+not (the milestone's Goal: "with the camera held still"), which is exactly what exposed it. Not
+fixed (Non-scope for this milestone); worked around test-locally in `connected-terrain.spec.ts`'s
+`settleUploads()` -- a one-tile camera nudge and back, both across real `stepFrame` calls with zero
+host ticks, forcing two more `visible`-changing `on_frame` scans. Confirmed by fault injection: with
+`GenQueue::set_view`'s own `last_invalidation_seq == invalidation_seq` conjunct temporarily removed
+(reverted to the pre-fix `if self.last_visible == Some(view.visible) { return false }`), `pnpm test
+browser -t overlay_tile` fails at the WATER check (`expectPixel(8, 8) channel g: got 32, want 80` --
+32 is `NEUTRAL`'s own `g`, i.e. the tile never came back resident); restoring the fix passes again,
+with `git diff` on `gen_queue.rs` empty afterward (no stray edit left behind). This is real evidence
+the browser test depends on the fix, not just on the jiggle -- the jiggle only helps the *upload*
+side notice residency, never GenQueue's own re-request decision (verified by the same injection:
+`GenQueue`'s rescan-on-invalidation happens in the *un-jiggled* call, step 3's leading `__advance`,
+strictly before `settleUploads` ever moves the camera).
+
+Verified: `pnpm test browser -t overlay_tile` (1 test, ~2s/25s), `pnpm test browser -t hidden_tab`
+(1 test, unaffected), `pnpm test browser -t terrain` (25 tests, unaffected), `pnpm --filter engine
+typecheck` (clean).
+
+**4. The zero-GC panning window** (`gc-connected-terrain.html`/`.ts`, `gc-connected-terrain.spec.ts`,
+new `budgets.json` row `connected-terrain`). A real `createClient()` local, connected
+(`host.connect: true`) topology over `fx-puts`, real device/renderer, `gc-terrain.ts`'s own panning
+shape (`~8 tiles/s`, `halfExtentTilesX/Y: 24`) -- the first zero-GC page combining a real `sim`
+isolate, a real `RingConnection` and a real renderer/pan. `drive()` differs from `gc-terrain.ts`'s
+in one way: `asHarness.stepTick()` alone never ticks `sim` for real (it never touches
+`CB_SIM_STEP_REQ`, `gc-sim.ts`'s own doc comment on why real-time pacing never arms in test mode),
+so `drive()` also calls `stepSimTickSync(client, 1)` (`gc-sim.ts`'s own precedent) every frame, in
+addition to (not instead of) `harness.stepTick()` (kept for `gen0`'s own reliable per-frame wake,
+`gc-terrain.ts`'s own reasoning) -- the redundant wake is harmless per ADR 0030's `wokenBy ===
+lastWokenBy` guard. `window.__netCounters` exposes `netCounters(client)` for the drops check.
+
+**Budget row, derived (not copied) -- measured `playwright test --project gc --grep
+"connected-terrain clean" --repeat-each 8 --workers 1`:** `main` 102.09-102.29 B/frame -> ceil(102.29)
+= 103, + 8 B margin = **111** (`terrain`'s own shape: a real adapter, the 110 B floor applies).
+`client` 2.52 B/frame constant, `gen0` 0.8267 B/frame constant -- both far under the repo's usual
+flat **8** B worker figure, kept unchanged. `sim` 6.46-8.19 B/frame across the 8 repeats
+(`windowBytes.sim` [4912, 5008] on the one high repeat vs. ~[3860, 3900] on the rest -- a modest
+run-to-run spread, not a fixed multi-KB lump, read as JIT/warm-up noise rather than a per-tick
+allocation bug) -- **not** given the repo's usual flat 8 B worker figure, since this isolate is a
+real connected-host tick (subscription admission, snapshot/downlink building, `fx-puts`'s own tick
+rule) rather than a bare `stepSimTickSync` loop, and measures well above every other page's `sim`
+row (all under ~4 B/frame): ceil(8.19) = 9, + 8 B margin = **17**. `software: null` (0016 caveat b;
+not derived this range -- `pnpm gc software` was not run).
+
+Verified: `pnpm test browser -t connected-terrain` (8 fast-tier tests: clean, `object` x4 isolates,
+the ring-drops test below, plus the two pre-existing `connected-terrain.spec.ts` tests the same grep
+also matches), `pnpm test:slow -t connected-terrain` (4 tests: `burst` x4 isolates), `pnpm --filter
+engine typecheck` (clean; `__netCounters`'s global `Window` augmentation had to match
+`connected.spec.ts`/`connected-terrain.spec.ts`'s own exact signature, `(conn?: number) =>
+Promise<NetCounters>`, since a `declare global` is project-wide).
+
+**"ring drops === 0"**: read as `RingStats.drops` on both `uplink` and `downlink`
+(`netCounters(client)`'s own shape, `join_at_max_zoom_out_never_drops`'s established precedent in
+`connected.spec.ts`) over the full 600-frame panning window, plus `chunkEntersPristine > 0` as
+evidence the pan actually moved chunks through subscription inside the window (not merely that the
+connection *could* survive an idle 600 frames). Both asserted `=== 0`; the test passed on first measured run.
+
+**5. Suite-line measurement and the rung decision.** Measured twice, `pnpm test browser` (quiet
+machine, `uptime` load average ~3.5, similar order to the base commit's own reported range):
+**`browser pass 110 tests 21s/25s`**, then **`browser pass 110 tests 22s/25s`**. Base (this
+delegation prompt): `103 tests, 21 s/25 s`. This milestone's own net addition across both
+implementers is +7 fast-tier tests (`overlay_tile_reaches_screen`; `connected-terrain`'s own `clean`
++ 4 `object` negatives + the ring-drops test -- `burst` x4 stay `@slow`, excluded from this line) and
+no measurable wall-clock growth (21-22 s both before and after, inside this machine's own normal
+run-to-run spread). **No rung was taken, because none is needed**: 3-4 s of headroom remains against
+the 25 s trip-wire, unchanged from the base commit's own margin -- unlike the gate-round-1 livelock
+this same milestone found and fixed (21 s -> 32 s), nothing here pushed the line. This is a
+measurement and a report only, per the delegation prompt's own instruction; taking ADR 0020 §4's
+next rung, if a future milestone's own additions do push past budget, remains the orchestrator's
+call.
+
+**Context artifacts.** No new artifact beyond steps 1-2's own `world/cache.rs` module-doc update
+(this range touched none of `packages/engine/crates/engine`).
+
+**Not verified in this range.** `pnpm gc software`/a real `software` budget for `connected-terrain`
+(left `null`, 0016 caveat b, sanctioned by the `gc-test` skill's own "Adding a page" step 2);
+`pnpm gc reliability` (many-repeat stability check) was not run for the new page, only the
+skill-recommended `--repeat-each 8` used to derive the budget row above.
