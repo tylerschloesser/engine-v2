@@ -12,6 +12,7 @@ import { clientTestHandle, createClient } from './client.js'
 import type { Scheduler } from './clock.js'
 import { ClockBlockView, SessionState, writeClockBlock } from './clock-block.js'
 import { RingConsumer, RingProducer } from './sab/ring.js'
+import { actionResults, dispatchRaw } from './test/client.js'
 
 /** A fake `Scheduler`: `setTimer`/`requestFrame` just queue the callback; `flush()` runs every
  * callback queued *before* the call, once each (a single "tick"), draining that same snapshot even
@@ -203,6 +204,43 @@ test('ui_ring_delivers_results_in_order', async () => {
     { seq: 1, result: 'Confirmed' },
     { seq: 2, result: { Rejected: { Game: 'NotFound' } } },
   ])
+
+  client.destroy()
+})
+
+test('dispatchRaw_and_actionResults_round_trip', async () => {
+  const scheduler = fakeScheduler()
+  // Not linked: `dispatchRaw` never checks readiness (Provides: only `dispatch` throws "before
+  // ready"), so this test needs no session-live setup for `dispatchRaw` itself -- `client.ready`
+  // is still awaited so the per-rAF results loop (`resultsFrameHandle`) is armed before `flush()`.
+  const client = createClient(baseOptions(scheduler, false))
+  await client.ready
+  const h = clientTestHandle(client)
+
+  const encoder = new TextEncoder()
+  dispatchRaw(client, 7, encoder.encode('{"n":1}'))
+  const ringStats = { drops: 0, pushed: 0, popped: 0 }
+  new RingConsumer(h.sabs.actionRing).stats(ringStats)
+  expect(ringStats.pushed).toBe(1)
+
+  // `actionResults` subscribes lazily, on its first call (Provides): called here, before the
+  // result actually arrives, exactly like a page that reads it every frame would.
+  const results = actionResults(client)
+  expect(results).toEqual([])
+
+  // Plays "the client worker's client_poll_ui output": one kind-2 record for seq 7.
+  const confirmedJson = encoder.encode('{"seq":7,"result":"Confirmed"}')
+  const batch = new Uint8Array(5 + confirmedJson.length)
+  batch[0] = 2
+  new DataView(batch.buffer).setUint32(1, confirmedJson.length, true)
+  batch.set(confirmedJson, 5)
+  expect(new RingProducer(h.sabs.uiRing).tryPush(batch, batch.length)).toBe(true)
+  scheduler.flush()
+
+  // The same array `actionResults` returned before now holds the delivered result (Provides:
+  // "the same live array on every call" -- not a fresh, empty subscription each time).
+  expect(results).toEqual([{ seq: 7, result: 'Confirmed' }])
+  expect(actionResults(client)).toBe(results)
 
   client.destroy()
 })

@@ -5,7 +5,7 @@
 import { Status } from '../abi.js'
 import { writeCameraBlock } from '../camera/block.js'
 import type { CameraState } from '../camera/state.js'
-import type { Client, ClientTestHandle, WorkerEntry } from '../client.js'
+import type { ActionOutcome, Client, ClientTestHandle, WorkerEntry } from '../client.js'
 import { clientTestHandle } from '../client.js'
 import { createResyncingClock, type ResyncingClock } from '../clock.js'
 import {
@@ -339,6 +339,91 @@ export function stepSimTickSync(client: Client, n = 1): void {
 export function stepTick(client: Client, n = 1): Promise<void> {
   stepSimTickSync(client, n)
   return untilQuiescent(client)
+}
+
+/**
+ * docs/plan/16-action-round-trip.md: a `host.connect: true` page's own bootstrap. `Client.ready`
+ * now also waits for `session_state = 1`, which the client worker only ever sets after it applies
+ * a real host frame -- and a page whose own ticks are test-driven (no `test.flags.pace`) produces
+ * one only by driving the sim itself, which normally happens through a test hook this same page
+ * would expose only *after* `await client.ready` resolves. Deadlock, found and fixed live: cut B's
+ * `connected`/`connected-terrain`/`gc-connected-terrain` pages each awaited `client.ready` before
+ * wiring their own `__stepTick`/`drive()` -- nothing outside the page could reach a hook that did
+ * not exist yet, and nothing inside it drove a tick either. `pumpUntilLive` is the fix for any such
+ * page: call it once, in place of a bare `await client.ready`, before any test hook is wired.
+ *
+ * Retries `stepSimTickSync` on a macrotask until it stops throwing: `clientTestHandle(client).
+ * workers` is populated partway through `client.ready`'s own async `start()` phase (after the
+ * WASM module compiles), and a page's top-level script has no way to know when that has happened
+ * without this loop. Races `client.ready` itself so the loop stops pumping the instant a real
+ * session-live poll succeeds, rather than retrying pointlessly forever. One real sim tick applies
+ * `sim_connect`'s own queued `Joined` record (a real write, whatever `Game::on_player` does with
+ * it), so `Host::build_frame` has something to send on the very first tick regardless of camera
+ * state; the client worker's netPump wakes off the downlink ring itself (M15b), independent of
+ * `CB_FRAME_REQ`/`stepFrame`, and `client.ready`'s own poll picks up the clock block once that
+ * frame is applied. A page with a real-time-paced sim (`test.flags.pace`, `connected-paced.ts`)
+ * needs none of this: the sim ticks on its own, so a bare `await client.ready` already resolves.
+ */
+export async function pumpUntilLive(client: Client): Promise<void> {
+  let live = false
+  client.ready.then(() => {
+    live = true
+  })
+  while (!live) {
+    try {
+      stepSimTickSync(client, 1)
+    } catch {
+      // `clientTestHandle(client).workers` is still empty: the sim worker has not spawned yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  await client.ready
+}
+
+/**
+ * docs/plan/16-action-round-trip.md Provides: pre-encoded `dispatch`, for a zero-GC window that
+ * must not encode JSON inside the measured window (0016 §2) -- `jsonBytes` is caller-supplied,
+ * already-UTF-8 bytes of one action's JSON, written through the exact same producer/scratch
+ * `client.dispatch` itself uses (`ClientTestHandle.writeActionRecord`, never a second, independent
+ * `RingProducer` racing it over the same SPSC `actionRing`). Unlike `dispatch`, this does not read
+ * the clock block or manage the `seq` counter at all: the caller supplies both `seq` and the
+ * bytes, and this throws the same `Error("engine: action queue full")` `dispatch` throws when the
+ * physical ring has no room, but never the "before ready" check (a caller driving `dispatchRaw` in
+ * a measured window already knows the session is live).
+ */
+export function dispatchRaw(client: Client, seq: number, jsonBytes: Uint8Array): void {
+  const h = clientTestHandle(client)
+  if (!h.writeActionRecord(seq, jsonBytes)) {
+    throw new Error('engine: action queue full')
+  }
+}
+
+const actionResultLogs = new WeakMap<
+  Client,
+  Array<{ seq: number; result: ActionOutcome<unknown> }>
+>()
+
+/**
+ * docs/plan/16-action-round-trip.md Provides: every `{ seq, result }` `client.onActionResult` has
+ * delivered so far, in ring order -- the read-back counterpart of `dispatch`/`dispatchRaw` a test
+ * needs without hand-rolling its own listener. Subscribes exactly once per `Client` (lazily, on
+ * first call: `client.onActionResult` itself is the only way to observe the UI-ring drain, so this
+ * is a thin accumulator over it, not a second, independent drain) and returns the same live array
+ * on every call -- callers read its current contents, they do not own or clear it.
+ */
+export function actionResults(
+  client: Client,
+): Array<{ seq: number; result: ActionOutcome<unknown> }> {
+  let log = actionResultLogs.get(client)
+  if (!log) {
+    log = []
+    const captured = log
+    client.onActionResult((seq, result) => {
+      captured.push({ seq, result })
+    })
+    actionResultLogs.set(client, captured)
+  }
+  return log
 }
 
 /** `EngineInstance.readU64Hex`'s own byte order (`loader.ts`), replicated here over a plain

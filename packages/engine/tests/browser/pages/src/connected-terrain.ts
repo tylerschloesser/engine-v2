@@ -29,6 +29,7 @@ import { createUploadDrain } from '../../../../src/render/upload.ts'
 import { RingConsumer } from '../../../../src/sab/ring.ts'
 import {
   netCounters,
+  pumpUntilLive,
   resumeWorkers,
   setCamera,
   stepFrame,
@@ -111,7 +112,11 @@ window.__init = async () => {
     genWorkers: 1,
     test: { clock, flags: {} },
   })
-  await client.ready
+  // `pumpUntilLive` (docs/plan/16-action-round-trip.md, `engine/test`'s own doc comment has the
+  // full reasoning): this page's own ticks are test-driven, and `client.ready` now needs one
+  // before it resolves, so a bare `await client.ready` here would deadlock against the very hooks
+  // wired below that would otherwise drive one.
+  await pumpUntilLive(client)
 
   real = createRealFrameLoop({
     client,

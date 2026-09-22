@@ -4,11 +4,14 @@
 // `dist/`, an exit criterion of docs/plan/03-browser-harness.md).
 export type { Clock, Scheduler } from './clock.js'
 export {
+  actionResults,
   callParked,
+  dispatchRaw,
   hostRegionHash,
   type NetCounters,
   netCounters,
   parkWorkers,
+  pumpUntilLive,
   replicaHash,
   resumeWorkers,
   setCamera,

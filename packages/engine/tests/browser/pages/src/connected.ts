@@ -17,6 +17,7 @@ import {
   hostRegionHash,
   netCounters,
   parkWorkers,
+  pumpUntilLive,
   replicaHash,
   resumeWorkers,
   setCamera,
@@ -78,7 +79,11 @@ const client = createClient({
   genWorkers: 1,
   test: { clock, flags: {} },
 })
-await client.ready
+// `pumpUntilLive` (docs/plan/16-action-round-trip.md, `engine/test`'s own doc comment has the
+// full reasoning): this page's own ticks are test-driven, and `client.ready` now needs one before
+// it resolves, so a bare `await client.ready` here would deadlock against the very hooks below
+// that would otherwise drive one.
+await pumpUntilLive(client)
 
 // This page draws nothing (no renderer/canvas wiring): `engine/test.untilQuiescent` waits for
 // *every* ring to reach `pushed === popped`, `uploadRing` included, and nothing else here would

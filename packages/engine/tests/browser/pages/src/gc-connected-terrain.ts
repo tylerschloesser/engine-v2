@@ -30,6 +30,7 @@ import {
   type NetCounters,
   netCounters,
   parkWorkers,
+  pumpUntilLive,
   stepSimTickSync,
 } from '../../../../src/test/client.ts'
 import { installGcPage } from '../../../../src/test/gc-page.ts'
@@ -81,7 +82,11 @@ const client = createClient({
   genWorkers: 1,
   test: { clock, flags: { gcHook: true } },
 })
-await client.ready
+// `pumpUntilLive` (docs/plan/16-action-round-trip.md, `engine/test`'s own doc comment has the
+// full reasoning): this page's own ticks are test-driven (`drive()`, wired below, well after this
+// point), and `client.ready` now needs a real first frame before it resolves, so a bare `await
+// client.ready` here would deadlock against the very hook that would otherwise drive one.
+await pumpUntilLive(client)
 // A production worker enters its blocking loop right after `ready`: park before `__pageReady`
 // (packages/engine/CLAUDE.md, `gc-topology.ts`'s own precedent) so CDP can reach it the instant the
 // test attaches.
