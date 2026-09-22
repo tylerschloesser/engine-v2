@@ -87,11 +87,13 @@ The page is `slice.html` (Scope), listed by `pnpm device:serve --tunnel`; its HU
 Steps 1-5 (host admit pipeline; `on_action`, the outbox, results -> UI-out; TS `dispatch`/ring/
 clock block/`onActionResult`; bindings step + typed fixture page; the WASM-under-Node `puts_
 script_a` golden). Steps 6-7 (Playwright `vertical_slice` test on `slice.html`, the zero-GC window
-with `dispatchRaw`, the `add-action-type` skill) are not built -- a different implementer's own
-cut. Read this section in full before touching `client.ts`, `worker/client*.ts` or `tests/support/
-scenario.ts` again: the exact seam shapes below (especially the clock-block field layout, the
-`client_clock_stats` export, and `dispatch`'s "`ready` only waits when linked" rule) are what steps
-6-7 build against.
+with `dispatchRaw`, the `add-action-type` skill) are now also built, by a second implementer --
+their own subsection, "Steps 6-7, as landed", is appended at the end of this section. Read this
+whole Deviations section in full before touching `client.ts`, `worker/client*.ts`, `tests/support/
+scenario.ts` or `slice.ts`/`slice.html`/`gc-slice.ts` again: the exact seam shapes below (especially
+the clock-block field layout, the `client_clock_stats` export, and `dispatch`'s "`ready` only waits
+when linked" rule) are what steps 6-7 were built against, and steps 6-7's own subsection records
+what those steps found and added on top.
 
 ### ABI (`ABI_VERSION` 9 -> 10 in M15b, this milestone 10 -> 11)
 
@@ -745,3 +747,281 @@ writer flipping the seq back even partway through a genuine race, so a later ret
 not tested here either (it would need real thread interleaving, the same infrastructure `seqlock.
 no_torn_read` uses for the generic class); left as-is, matching the existing coverage level for
 this hand-rolled shape.
+
+### Steps 6-7, as landed
+
+A second implementer's own cut, built against the Deviations above. Commits `M16 step 6: ...`
+(five commits: `Puts::admit` bound check, `slice.html`, the zero-GC window, the `uplinkBytesPerAction`
+row) and `M16 step 7: ...` (the skill), plus one lint-only fix commit.
+
+#### `Puts::admit` gained a real, deterministic `Reject::Game` path (`fixtures/puts/src/lib.rs`)
+
+`vertical_slice`'s own "out-of-range Paint yields Rejected" assertion needs a real `G::Reject`
+outcome for an action that (unlike `Bump`/`Remove`) can never fail at `apply` time -- `set_tile`
+itself is infallible (0003). Non-scope explicitly rules out both real `EngineReject` paths
+(`StateBudgetFull` is M21, `RateLimited` is M31), so the only place left is `Game::admit` (0004
+Pipeline step 2, admission-time, never logged). Added: `Reject::OutOfRange` (a new variant) and a
+`Puts::admit` override --
+
+```rust
+fn admit(
+    _w: &dyn WorldRead<Self>,
+    _p: &PresenceTable<Self>,
+    _who: PlayerId,
+    a: &Action,
+) -> Result<(), Reject> {
+    if let Action::Paint { pos, .. } = a
+        && (pos.x.abs() > PAINT_BOUND || pos.y.abs() > PAINT_BOUND)
+    {
+        return Err(Reject::OutOfRange);
+    }
+    Ok(())
+}
+```
+
+`PAINT_BOUND: i32 = 1_000_000` -- a fixture-only demo threshold, deliberately not a world-model
+rule (`docs/spec/world.md`: "coordinates are unbounded; the cap applies to *materialized* chunks
+held in memory" is unaffected: this never touches `apply`/`Sim`/`sim_hash`, so it changes no
+golden). Verified against both existing goldens by rebuild + rerun, unaffected: `puts_idle_100`
+(no Paint at all) and `puts_script_a` (`Paint` at `(2, 2)` and `(-3, 8)`, both far inside the
+bound). Bindings regenerated via `node scripts/build-fixtures.mjs` (never a bare `cargo test` --
+see the steps 1-5 section above, "A real footgun"): `bindings/Reject.ts` gained `'OutOfRange'`,
+byte-identical after `pnpm format`. Failability proof: reverting the check to `if false && (...)`
+made `vertical_slice`'s Phase 6 time out on `expect.poll(rejected).toBe(1)` after 5 s instead of
+seeing it flip -- watched red, reverted.
+
+#### `slice.html` + `src/slice.ts`: real production page, not a harness page
+
+Single-player topology (`host: { kind: 'local', world: { worldId: 'slice', params: { seed: '1',
+worldgen: null } }, connect: true }`, fixture `puts`, `genWorkers: 1`), a real, document-attached
+canvas, real camera/input (`createClient` installs both automatically whenever a real `canvas` and
+`window` are present -- no test scaffolding needed for this part), and `test: { flags: { pace:
+true } }` -- the same combination `connected-paced.ts` (M15b) already established: `pace: true`
+arms the sim worker's real-time `AtomicsTimer` pacing (`worker/sim.ts`'s `!message.test ||
+message.test.pace === true` gate) while `test` being present at all keeps the parked-only
+`test-call` channel (`worldHash`/`netCounters`/`simCounters`) reachable, which `client.ready`
+itself does not need but this page's own test hooks and the phone HUD's `engine_mem_grows` field
+do.
+
+**The canvas is configured `rgba8unorm`, not the browser's own preferred format.**
+`frame-loop.ts`'s `createRealFrameLoop` always calls `configureCanvasContext`, which hardcodes
+`navigator.gpu.getPreferredCanvasFormat()` (`bgra8unorm` on this machine) with no override. But
+`engine/test.renderTo`'s own offscreen probe target (the `Renderable` overload every existing
+pixel-probe test, `connected-terrain.spec.ts` included, already uses) is hardcoded `rgba8unorm`,
+and one `TerrainRenderer` draws through *one* pipeline built for *one* color format -- a page that
+both renders to a real canvas and offers a same-renderer pixel probe needs the two to agree. Fixed
+by not calling `createRealFrameLoop` at all: `slice.ts` configures the canvas context itself
+(`ctx.configure({ device, format: 'rgba8unorm', alphaMode: 'opaque' })` -- a canvas format WebGPU
+always accepts; "preferred" is a performance hint, not a requirement) and assembles
+`createViewportController` + `createFrameLoop` directly, `createRealFrameLoop`'s own two building
+blocks, with its own `onCamera` hook doing the same `pxPerTile`-based frame-uniform computation
+`device.ts` already does. `attachVisibilityHandling(loop)` is still wired (M16-background's own
+device check). No existing page had combined a real canvas render with a same-pipeline pixel probe
+before this; every other real-canvas page (`device.ts`) never reads pixels back, and every
+pixel-probe page (`connected-terrain.ts`) never draws to a real canvas.
+
+**HUD fields** (Provides, read verbatim by `docs/plan/device-checks.md`'s "M16: Vertical slice on
+the phone" section, already pre-written and left unchanged -- it already matched this shape):
+`isolated`, `adapter`, `workers ready`, `session live`, `confirmed`, `rejected`, `ring drops`,
+`engine_mem_grows`, `tick`. `ring drops` sums `RingConsumer(sab).stats().drops` (side-effect-free:
+`stats()` only `Atomics.load`s the shared drop counter, never the pop cursor) over every `SabSet`
+ring (`uploadRing`, `actionRing`, `inputRing`, `uiRing`, `uplink`, `downlink`, every `genRequest`/
+`genResult` pair) -- the same enumeration `test/client.ts`'s own private `ringSabs` uses, rebuilt
+here since that helper isn't exported. `tick` reads `authoritative_tick` straight from the clock
+block via `clock-block.ts`'s own `ClockBlockView`/`readClockBlockInto`/`CLOCK_FIELD`. `engine_mem_
+grows` requires the worker parked (`Harness.memGrows()`'s own doc comment) -- refreshed on a
+3-second interval, each reading its own brief park/resume pair, the same cost `connected-paced.ts`
+already accepts for a parked-only reading; `?hud=0` hides the DOM element (a long device session
+without the visual noise) but the counters underneath keep updating either way.
+
+**Test hooks** (all `__slice`-prefixed except `__setCamera`/`__writeFrameUniform`/`__renderAndRead`/
+`__errors`/`__adapterInfo`/`__tick`/`__netCounters`/`__worldHash`/`__ringDrops`/`__hudText`, which
+reuse existing shared names): `__dispatchPaintAt(x, y)`, `__paintUnderCentre()` (the production
+Paint control's own target -- `floor(cameraState.centreX/Y)`, the camera centre tile, since an
+on-screen-centred camera means the screen-centre world tile *is* the camera centre tile),
+`__sliceConfirmed()`/`__sliceRejected()`/`__sliceLastReject()` (plain accessors over module-level
+counters the one `client.onActionResult` subscription maintains -- not the bare `__confirmed`/
+`__rejected` `puts-dispatch.ts` already declares as plain `number` fields, nor topology.ts's own
+6-argument `__injectPointer`: `declare global` merges every page's `Window` augmentation into one
+shared TS project, so a same-named, differently-typed redeclaration is a real `tsc` error, not a
+style choice), `__sliceInjectPointer` (wraps `engine/test.injectPointer`, paired via
+`attachCameraInputTestHooks(client, clientTestHandle(client).cameraBundle)` at setup -- `real-
+camera.ts`'s own pattern), `__worldHashAndTick()` (see below).
+
+#### `vertical_slice` (`tests/browser/vertical-slice.spec.ts`): one test, seven phases
+
+Chromium only. Phase 1: `openPage` itself asserts `crossOriginIsolated`; `expectAdapter` records a
+real WebGPU adapter. Phase 2: a pristine-terrain probe at tile `(20, 20)` -- deliberately *not*
+`(0, 0)` or any other member of `fixtures/puts`'s own `WALK` constant (the tick rule's fixed
+once-a-second overlay near the origin): by the time this phase runs, the real-time-paced sim has
+already ticked at least once (a linked connection's very first frame already reports `tick: 1`),
+so `WALK`'s own tile `(0, 0)` is *already* non-pristine before the test ever touches it -- proven
+live: probing `(0, 0)` instead reads the overlay colour (`got 30, want 34`) immediately, not
+"eventually". Phase 3: a real drag (`__sliceInjectPointer` down/move.../up, `camera.spec.ts`'s own
+shape) at `tilesAcross: 64` (zoomed well out: at the Paint-probe camera's own `tilesAcross: 8`, the
+same drag distance pans only a couple of tiles, nowhere near a 32-tile chunk edge, and
+`chunkEntersPristine` never moves at all -- measured directly, twice, before widening the zoom and
+the drag distance) brings new chunks into subscription (`netCounters().chunkEntersPristine`
+grows). Phase 4: see "worldHash", below. Phase 5: a full `Paint` round trip with a pixel diff at
+tile `(50, 50)` (clear of both `WALK` and the Phase 2 probe tile) -- `resource: 2` maps through the
+*identity* resource table straight to visual id 2 (`WATER`, `connected-terrain.spec.ts`'s own
+colour), the same visual a player-dispatched `Paint` reaches regardless of `aux` (only the tick
+rule's own overlay goes through `PutsClient::tile_visual`'s `aux != 0` swap). Phase 6: an
+out-of-range `Paint` (`(2_000_000, 2_000_000)`) yields `{ Rejected: { Game: 'OutOfRange' } }`.
+Phase 7: the HUD text contains the same field values the assertions above just produced.
+
+**`worldHash()` "matches the golden at a fixed tick" turned out infeasible against a literal fixed
+tick, and was adapted.** The brief's own wording names `fixtures/puts/golden/scenario-connected.
+json`/`golden-connected.json` (`df47fa55da493c78` at tick 100, one connection, zero actions -- the
+exact scenario `slice.html`'s own topology matches up to Phase 4) as the obvious target. It does
+not work as a literal `expect.poll(tick).toBe(100)` followed by a plain `worldHash()` read, for a
+reason specific to real-time pacing under this page's own continuous rendering (see the next
+subsection): the sim can advance by dozens of ticks in one resync catch-up burst once pacing
+recovers, so a poll for `tick === 100` can jump straight over it and never observe it; polling for
+`tick >= 100` instead risks reading `worldHash()` at some tick *past* 100 (a real, different, but
+*correct* value for that later tick), which a literal `.toBe('df47fa55da493c78')` would then fail
+for the wrong reason. Fixed by comparing against a reference computed **the same way `pnpm golden`
+itself computes one**, parameterized by the tick actually observed instead of a hardcoded 100:
+`__worldHashAndTick()` (new) parks once, reads `worldHash()` and `simCounters().ticksRun` (==
+`Tick.0` for this page, which never drives a manual tick itself) in that same park window so the
+pair can never drift apart, then resumes; the spec (Node context, not `page.evaluate`) loads the
+built fixture (`tests/support/fixtures.ts`'s `loadFixture('puts')`), reads the committed `scenario-
+connected.json` (`tests/support/fixtures.ts`'s `readGolden`), and calls `runHashScenario` twice --
+once completely unmodified (self-check: `expect(...).toEqual(['df47fa55da493c78'])`, so a change to
+the fixture's own genesis/tick rule is caught here too, not only by `pnpm golden`'s own gate), once
+with `ticks`/`checkpointEvery` set to the tick actually observed -- and compares that second
+result against the browser's own reading. This is the exact mechanism `scripts/golden.mjs` itself
+runs; only the tick parameter is dynamic. `expect.poll(tick).toBeGreaterThanOrEqual(50)` (20 s
+timeout) gates entry to this phase.
+
+**A previously unexercised interaction: continuous real rendering can starve `AtomicsTimer.poll()`
+for seconds at a time under ADR 0030's own `wokenBy === lastWokenBy` guard.** `worker/sim.ts`'s
+`body()` only calls `atomicsTimer.poll()` (the thing that actually advances a paced tick) when this
+wake's `wokenBy` (the sim worker's own `W_WAKE` control word, read fresh each `body()` pass) is
+*unchanged* from the previous pass's -- the guard's whole point (steps 1-3's own inert landing,
+made live by steps 1-5, Deviations above) is to skip a spurious extra tick on a genuine *external*
+wake (a linked client's own uplink push) without ever missing a genuine timer-only wake. `slice.
+html` is the first page in this repo to pair `pace: true` with a *continuously rendering, really
+panning* topology: `createFrameLoop`'s own `tick()` calls `client.writeCameraAndWake()`
+unconditionally every real animation frame (not gated on whether the camera actually moved), and
+the client's own net pump sends a fresh uplink batch at the 0010 rate-limit ceiling (at most one
+per 50 ms) whenever there is anything to report -- which, while panning, is on essentially every
+eligible window. With external wakes arriving at close to the same ~50 ms cadence as the sim's own
+pacing timer, two *consecutive* `body()` passes with no external wake between them become rare, and
+`poll()` -- hence ticking -- can stall for whole seconds at a time (measured directly: `tick` held
+at exactly `1` across a full second of Phase 1-3 real elapsed time, then advanced from `69` to `460`
+in under 20 s once whatever jitter breaks the lock-step recovers -- never *permanently* stalled in
+every measurement taken, always eventually recovers). No existing page had exercised this
+combination: every other real-panning zero-GC page (`gc-connected-terrain.ts`) drives ticks through
+a manual clock and `stepSimTickSync`, never `pace: true`; `connected-paced.spec.ts`'s own poke is a
+bounded 1.5 s window, not a page that pans forever. **Not fixed here**: `worker/sim.ts` is outside
+this milestone's own Files touched (owned by M13/M15b/ADR 0030), and the guard itself is correct in
+isolation -- what's new is a real page that keeps the external-wake rate this high, continuously,
+which nothing before M16 did. `vertical_slice`'s own `expect.poll` calls around Phases 4-6 all
+carry generous, explicit timeouts (20 s) for exactly this reason, not Playwright's 5 s default.
+Recorded here as a genuine finding for whoever next touches real-time pacing or `worker/sim.ts`,
+not something this cut owns fixing.
+
+**A rare, unreproduced-on-demand race was observed once** during this milestone's own debugging
+(not since, across roughly 20 further runs, sequential and `--repeat-each 8`/`--workers 3`): Phase
+6's `confirmed` counter read `2` (the out-of-range dispatch reported `Confirmed`) while `rejected`
+stayed `0` for 400+ further ticks, even though `Puts::admit`'s own bound check was proven correct
+in isolation three separate ways (a direct native call, a JSON-parse-then-`Codec`-round-trip native
+call matching `ClientCore::on_action`'s exact steps, and the browser page itself passing on every
+other run). Not reproduced since fixing the `pace`/`configureCanvasContext` issues above, and not
+chased further given the time already spent and that the underlying admit logic is proven correct
+independent of the browser; `expect.poll`'s own 20 s timeouts (added for the pacing finding above)
+also make this shape fail loudly rather than hang, if it recurs. Worth a second look if `vertical_
+slice` ever shows this failure mode again.
+
+#### `gc-slice.html` + `src/gc-slice.ts`: the zero-GC window with actions (`pageId: 'zero_gc_action'`)
+
+A second, separate page from `slice.html` -- `installGcPage`'s manual-clock, harness-driven shape
+(`gc-connected-terrain.ts`'s own real connected+rendered+panning topology, reused near-verbatim)
+cannot share a script with a real `requestAnimationFrame` production loop. `pageId:
+'zero_gc_action'` (not the file's own `gc-slice` name) so `pnpm test browser -t zero_gc` -- the
+brief's own Verification command -- matches every generated test title (`zeroGcSuite` names tests
+`${pageId} clean`/`${pageId} neg ...`).
+
+One `dispatchRaw(client, seq, PAINT_JSON_BYTES)` call every 30 frames inside the measured window
+(`PAINT_JSON_BYTES` built once via `TextEncoder`, outside `drive()` -- 0016 §2: JSON encoding never
+runs inside the window). `main`'s own `budgets.json` row is the first `class: "budgeted"` row this
+repo has ever written (every isolate on every other page is `"strict"`): a dispatched action's own
+*result* is drained and `JSON.parse`d by `client.ts`'s own per-rAF `pollActionResults` pump, which
+runs unconditionally once `createClient()` starts (registered inside `createClient` itself, not
+opt-in) and allocates by construction whenever a kind-2 record is actually present -- exactly the
+gap steps 1-5's own Deviations named ("a later cut owns making it allocation-free... the zero-GC
+window with `dispatchRaw` -- step 6 -- is where that gets budgeted").
+
+**Measured** (`playwright test --project gc --grep "zero_gc_action clean" --repeat-each 8
+--workers 1`, this machine): `main` 106.59-106.92 B/frame (hardware; `byFn`: the same three sites
+`connected-terrain` already pays -- `draw@terrain` 28,800 B, `drain@terrain` 12,000 B,
+`stepFrame@client` 7,200 B -- plus `pollActionResults@client-*` ~1,296 B over the 600-frame window,
+20 dispatches at ~65 B/parse each). `ceil(106.92) + 8 = 115` -- only 4 B above `connected-terrain`'s
+own 111, confirming the action path itself is cheap. Software mode (`GC_MODE=software`,
+`--repeat-each 6`): a flat `80.9467` B/frame every run -- `ceil + 8 = 89`, almost exactly
+`connected-terrain`'s own 80.50-80.52 (the software instrument's own attribution walk does not
+appear to reach `pollActionResults`, a `scheduler.requestFrame` callback `client.ts` registers on
+its own rather than a call `drive()` itself makes -- the hardware-mode `byFn` figure above is what
+actually prices that site). `client`/`gen0`: constant 0.8267 B/frame, reused `connected-terrain`'s
+own `8` strict figure unchanged. `sim`: 7.93-9.94 B/frame (slightly above `connected-terrain`'s own
+6.46-8.19: the extra is the admit path's own gross allocation inside the window before its matching
+free -- `no_alloc_connection.rs`'s `host_admit_path_allocates_zero_bytes_per_action` already proves
+this nets to exactly 0 B/action once freed, the same gross-vs-net shape `connected-terrain`'s own
+`sim` formula documents for `runOneTick`/`warm`/`resync`) -- `ceil(9.94) + 8 = 18`.
+
+**Every negative control re-verified to still trip at these numbers** (0029: never widen a budget
+that stops a control tripping) -- `pnpm exec playwright test --project gc --grep "zero_gc_action
+neg"`, all 8 pass, `object main` included (proving `B.main` still separates clean from a genuine
+per-frame object leak at 115). One control needed a real infrastructure fix, not a budget change:
+`zero_gc_action neg burst main` failed its *expected verdict*, not its actual verdict -- `B.main`
+correctly tripped (measured ~40,000 B/frame against 115), but `analyse.ts`'s own assertion A is
+already class-aware (`class === 'strict' ? MinorGC + MajorGC === 0 : MajorGC === 0`), and a `burst`
+control's fixed per-frame garbage reliably forces a minor GC but not necessarily a major one, so
+`A.main` stayed genuinely `true` on this, the first `"budgeted"` isolate ever exercised. `gc/
+suite.ts`'s `expectedVerdict` assumed every isolate was `"strict"` (never previously false, since
+none was). Fixed by passing each isolate's own class through (`zeroGcSuite`'s own `isolateClasses`,
+derived from the same `budgets.isolates` it already reads) and only flipping `A[isolate] = false`
+for a `burst` control on a `"strict"` isolate; `B[isolate] = false` is unchanged for every class. No
+existing `"strict"` page's own expected verdict changes (re-verified: `connected-terrain neg object
+main`, `gc-loop neg burst main` both still pass). `pnpm gc software` (the full suite, both modes):
+77/77 pass (one transient `parkWorkers` timeout on an unrelated run, not reproduced on immediate
+retry or on a second full run -- session load from many consecutive Playwright invocations, not a
+real defect).
+
+#### `counters.action.uplinkBytesPerAction` in `budgets.json`
+
+Left unwritten by steps 1-5 (their own Deviations: "left to whichever cut actually owns editing
+that file"). Re-measured, not copied from that section's own `eprintln!` figure, via a throwaway
+native test (`crates/engine/tests/action_round_trip.rs`, `engine::bytes::CountSink` over
+`UplinkWriter::write`, computed once and removed): `RAction::Bump { n: 12345 }` postcard-encodes to
+**3 bytes**; wrapped in a one-action `UplinkBatch` with no camera and no presence, the whole batch
+is **12 bytes** -- both figures confirmed identical to steps 1-5's own measurement.
+
+#### `.claude/skills/add-action-type/SKILL.md`
+
+Written from what this cut actually touched (`Puts::admit`, the bindings regeneration step,
+`client.dispatch`'s typing) rather than from this brief. Exercised once, for real, before being
+considered done: `__dispatchSetMotd` added to `puts-dispatch.ts` (an existing action, `SetMotd`,
+already in `fixtures/puts`'s `Action` enum, so only the skill's steps 4-5 -- dispatch + typecheck --
+were actually exercised by this particular addition; steps 1-3 are what `Puts::admit`'s own new
+`Reject::OutOfRange` variant, above, exercised, before the skill document itself existed). Both
+typechecks (`pnpm --filter engine typecheck`) and builds (`vite build`) cleanly.
+
+#### Suite time
+
+`pnpm test browser -t vertical_slice`: 1 test, ~7.7 s (dominated by Phase 4's real-time tick-100
+wait). `pnpm test browser -t zero_gc`: 5 tests (clean + 4 fast-tier `object` negatives; `burst` is
+`@slow` for every page but `gc-loop`), ~4.3 s. Full `pnpm test browser` was not run by this
+implementer (the delegation prompt's own instruction: targeted runs only, the orchestrator gates
+the full suite) -- report its new wall-clock time from the orchestrator's own next gate run.
+
+#### Verified
+
+`pnpm test rust -t action` -> 11 tests pass. `pnpm test unit -t dispatch` -> 4 tests pass. `pnpm
+test wasm -t script_a` -> 1 test passes. `pnpm test browser -t vertical_slice` -> 1 test passes.
+`pnpm test browser -t zero_gc` -> 5 tests pass. `pnpm lint` -> clean (one clippy `collapsible_if`
+fixed along the way, a syntax-only change to `Puts::admit`, no behaviour change, re-verified against
+both existing puts goldens). `pnpm gc software` -> 77/77 pass. `grep -rn bigint packages/engine/
+fixtures/*/bindings` -> empty. `git diff fixtures/puts/bindings/` after the clippy fix -> empty
+(bindings unaffected by the syntax-only change).
