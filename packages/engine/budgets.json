@@ -332,6 +332,10 @@
       "joinWildernessBytesDown": 63,
       "joinModifiedBytesDown": 90,
       "formula": "docs/plan/15-connection-and-subscriptions.md Budgets: 'join in wilderness below the 0010 worked number' (0010's own phone-join figure: <0.2 KB = 200 B for a 35-chunk view). Measured natively (testing::testkit::Loopback<LGame>, tests/connection_and_subscriptions.rs, one client, camera (0,0) half 16 tiles, chunk edge 32 -> ring1 4x4=16 chunks): a pristine (wilderness) join's first build_frame is 55 B (Global + OwnPlayer + 16 ChunkEnterPristine entries, ~3 B each per 0011); the same view with 5 tiles pre-painted inside it (ChunkSnapshots instead of ChunkEnterPristine for the touched chunks) is 82 B. Both figures are per this milestone's own small test view (16 chunks), not 0010's 35-chunk phone clamp -- the claim is the same shape (bytes-per-chunk in the low single digits for wilderness, still tiny once a few chunks carry an overlay), not a literal reproduction of 0010's number. Ceiling = measured + 8 B margin (the same fixed-margin convention `gc.pages.*.isolates.*.bytesPerFrame` already uses in this file)."
+    },
+    "action": {
+      "uplinkBytesPerAction": 12,
+      "formula": "docs/plan/16-action-round-trip.md Budgets: \"uplink bytes per action recorded in budgets.json (fixture value; the log half is M22)\" -- left unwritten by steps 1-5 (that cut's own Deviations: \"left to whichever cut actually owns editing that file\"). Measured natively (crates/engine/tests/action_round_trip.rs, a throwaway debug_measure_uplink_bytes_per_action test, computed once and removed, engine::bytes::CountSink): RAction::Bump{n:12345} (1-byte variant tag + 2-byte varint payload) Codec-(postcard)-encodes to 3 bytes; wrapped by UplinkWriter::write into a one-action UplinkBatch with no camera and no presence, the whole batch is 12 bytes (1 msgtype + 1 flags + 4 last_received_tick + 1 n_actions varint + 1 seq varint + 1 len varint + 3 action bytes) -- confirmed against the real wire path, not copied from the prior cut's own eprintln! figure blind. Per-action cost only; the log half (0005 frame layout) is M22's own row."
     }
   },
   "worldgenMsPerChunkWarn": 0.25
