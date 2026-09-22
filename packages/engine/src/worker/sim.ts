@@ -97,8 +97,8 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // the last pass (a genuine timer fire, safe to hand to `atomicsTimer.poll()`); changed means some
   // producer (a linked client's uplink push, `CB_SIM_STEP_REQ`, a future presence/action ring) woke
   // this worker, and `poll()` is skipped for that pass so it does not also run a spurious tick.
-  // `net-worker.spec.ts`'s `poll_skips_a_spurious_tick_on_a_ring_wake` (Tests added) fails if this
-  // comparison is ever removed -- the "fix nothing exercises" defect this repo keeps repeating.
+  // `connected-paced.spec.ts`'s `poll_skips_a_spurious_tick_on_a_ring_wake` (Tests added) fails if
+  // this comparison is ever removed -- the "fix nothing exercises" defect this repo keeps repeating.
   let lastWokenBy: number | null = null
 
   // Production topology, or a test page that opts in with `test.pace` (docs/plan/
