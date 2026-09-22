@@ -10,6 +10,7 @@
     "test": "node scripts/test.mjs",
     "gc": "node scripts/gc.mjs",
     "gate": "node scripts/gate.mjs",
+    "handoff": "node scripts/handoff.mjs",
     "test:slow": "node scripts/test.mjs --tier slow",
     "lint": "node scripts/lint.mjs",
     "setup:tools": "node scripts/setup-tools.mjs",
