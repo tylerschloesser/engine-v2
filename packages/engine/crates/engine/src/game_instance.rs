@@ -549,6 +549,25 @@ where
             _ => Status::WrongRole,
         }
     }
+
+    /// docs/plan/16-action-round-trip.md: `ClientCore::last_summary()`'s `tick`/`ack_seq`, two LE
+    /// `u32` into `result` -- the client worker's own source for the clock block's
+    /// `authoritative_tick`/`ack_seq` fields (`predicted_tick`, `ticks_per_second`, `session_state`
+    /// and `seq_seed` are derived entirely in TS).
+    fn client_clock_stats(&mut self, result: &mut [u8]) -> Status {
+        match self {
+            GameInstance::Client(c) => {
+                let Some(out) = result.get_mut(..8) else {
+                    return Status::BadLength;
+                };
+                let s = c.core.last_summary();
+                out[0..4].copy_from_slice(&s.tick.0.to_le_bytes());
+                out[4..8].copy_from_slice(&s.ack_seq.to_le_bytes());
+                Status::Ok
+            }
+            _ => Status::Unsupported,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -652,6 +671,37 @@ mod tests {
     }
 
     /// docs/plan/16-action-round-trip.md: the exact `client_poll_ui` JSON for a `Confirmed` and a
+    /// docs/plan/16-action-round-trip.md: `client_clock_stats` reports zero before any frame is
+    /// applied, and the applied frame's own `tick`/`ack_seq` afterwards -- the two values the
+    /// client worker mirrors into the clock block after each `on_frame`.
+    #[test]
+    fn client_clock_stats_reports_last_applied_tick_and_ack_seq() {
+        let mut inst = client_instance();
+        let mut out = [0u8; 8];
+        assert_eq!(inst.client_clock_stats(&mut out), Status::Ok);
+        assert_eq!(u32::from_le_bytes(out[0..4].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(out[4..8].try_into().unwrap()), 0);
+
+        let mut buf = [0u8; 512];
+        let mut sink = crate::bytes::SliceSink::new(&mut buf);
+        let mut fw = FrameWriter::new(
+            &mut sink,
+            FrameHeader {
+                tick: 7,
+                ack_seq: 3,
+            },
+        );
+        fw.section(SectionId::ActionResults, |s| {
+            ActionResultsWriter::write::<TestGame>(s, core::iter::empty());
+        });
+        let n = sink.finish().unwrap();
+        assert_eq!(inst.on_frame(&buf[..n]), Status::Ok);
+
+        assert_eq!(inst.client_clock_stats(&mut out), Status::Ok);
+        assert_eq!(u32::from_le_bytes(out[0..4].try_into().unwrap()), 7);
+        assert_eq!(u32::from_le_bytes(out[4..8].try_into().unwrap()), 3);
+    }
+
     /// `Rejected` outcome, byte for byte -- `[kind u8 = 2][len u32 LE][JSON]`.
     #[test]
     fn client_poll_ui_produces_confirmed_and_rejected_json() {

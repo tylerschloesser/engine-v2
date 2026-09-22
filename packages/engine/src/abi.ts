@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 11
+export const ABI_VERSION = 12
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -86,11 +86,13 @@ export const ABI_EXPORTS = {
   // (`host::warm`), nearest-to-view-centre first. `1`/`0` (not a `Status`: costs nothing, always
   // answers), the same shape as `gen_take`/`upload_stage`.
   sim_warm_one: { role: 'sim', params: 0, result: 'u32' },
-  // docs/plan/13-sim-host-tick-loop.md ("20 Hz is hardcoded" gap): the sim role's own tick rate
+  // docs/plan/13-sim-host-tick-loop.md ("20 Hz is hardcoded" gap): the game's own tick rate
   // (`u32`, e.g. `20`), read once by `SimHost` at construction. `20` (the `Instance` trait
   // default) on any instance that never overrides it; not a `Status`, same shape as
-  // `sim_warm_one`.
-  tick_hz: { role: 'sim', params: 0, result: 'u32' },
+  // `sim_warm_one`. `role: 'all'` (docs/plan/16-action-round-trip.md, broadened from `'sim'`): the
+  // answer is role-independent (a game-level constant), and the client worker now also reads its
+  // own instance's rate once, at setup, for the clock block's `ticks_per_second`.
+  tick_hz: { role: 'all', params: 0, result: 'u32' },
   // `t_ms: f64` (0014 §4's client hot-export table; docs/plan/06b-workers-and-spawn.md): called
   // only when `CB_FRAME_REQ` has advanced since the last call (Planning decisions "Worker frame
   // clock"). `params: 1` here means "one number", whatever its wasm type (0014 §2).
@@ -142,6 +144,11 @@ export const ABI_EXPORTS = {
   // `ActionResults` turned into JSON) into `RegionId.Ui`, returning the byte count (`0` = nothing
   // new; not a `Status`, same shape as `client_poll_uplink`/`upload_stage`).
   client_poll_ui: { role: 'client', params: 0, result: 'u32' },
+  // docs/plan/16-action-round-trip.md (`ABI_VERSION` 11 -> 12): `authoritative_tick`, `ack_seq`
+  // (`ClientCore::last_summary()`) as two LE `u32` into `Result` -- the client worker's own source
+  // for the clock block's `authoritative_tick`/`ack_seq` fields, same crossing shape as
+  // `sim_region_hash`/`client_region_hash`.
+  client_clock_stats: { role: 'client', params: 0, result: 'status' },
 } as const satisfies Record<string, ExportSpec>
 
 export function statusName(n: number): string {

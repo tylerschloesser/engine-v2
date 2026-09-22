@@ -9,6 +9,7 @@ import { CameraBlockView, readCameraBlockInto } from '../camera/block.js'
 import type { EngineInstance, RegionView } from '../loader.js'
 import { CB_FRAME_REQ, W_ACK, workerWord } from '../sab/control.js'
 import { RingConsumer, RingProducer } from '../sab/ring.js'
+import { createActionPump } from './client-action.js'
 import { createGenPump } from './client-gen.js'
 import { createInputPump } from './client-input.js'
 import { createNetPump } from './client-net.js'
@@ -64,6 +65,29 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   const rx = echo ? requireRegion(inst, RegionId.Rx, 'Rx') : null
   const tx = echo ? requireRegion(inst, RegionId.Tx, 'Tx') : null
 
+  // docs/plan/16-action-round-trip.md, step 3: the real action/UI-result pump, mutually exclusive
+  // with the `echo`-gated test-only round trip immediately above (both would otherwise construct
+  // their own, independent `RingConsumer`/`RingProducer` over the *same* `actionRing`/`uiRing`
+  // SABs, corrupting each other's SPSC bookkeeping). `Rx`/`Ui` are looked up unconditionally
+  // (`fixtures/hash`'s own `Rx` is unrelated to actions, the same "no coexistence today" note
+  // `inputRxRegion` above already carries).
+  const actionPump = echo
+    ? null
+    : createActionPump(
+        inst,
+        message.sabs.actionRing,
+        message.sabs.uiRing,
+        inst.region(RegionId.Rx),
+        inst.region(RegionId.Ui),
+      )
+
+  // docs/plan/16-action-round-trip.md ("`tick_hz()` already exists as an export, so
+  // `ticks_per_second` need not be re-plumbed per frame"): read once here, at setup, from this
+  // instance's own role -- broadened from a sim-only export (`abi::tick_hz`'s own Deviations) --
+  // and handed to `createNetPump` below, which mirrors it into the clock block unchanged on every
+  // write rather than calling this export again every wake.
+  const ticksPerSecond = inst.call0(inst.x.tick_hz)
+
   // docs/plan/08b-gen-workers-and-queue.md, Order of work 4: the gen pump, built once and run every
   // wake (orchestrator decision: it must cost nothing and answer 0 on a page whose client role has
   // no `client::TerrainFeed`, e.g. `fx-hash`'s `topology`/`echo`). `GenIn` is optional: absent
@@ -102,6 +126,9 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
         message.sabs.downlink,
         inst.region(RegionId.Downlink),
         inst.region(RegionId.Tx),
+        message.sabs.clockBlock,
+        resultRegion,
+        ticksPerSecond,
       )
     : null
 
@@ -133,6 +160,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     genPump.pump()
     uploadPump.pump()
     inputPump.pump()
+    actionPump?.pump()
     // `W_ACK` is stored last, after every pump (not right after the `frame()` block, M09b's own
     // original spot): `stepFrame`'s own spin and `untilQuiescent`'s `W_ACK === CB_FRAME_REQ` check
     // both use this as "this wake's work is done" -- if it fires as soon as `frame()` returns, a

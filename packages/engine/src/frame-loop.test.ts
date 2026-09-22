@@ -42,6 +42,15 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
     },
     wakeCount: 0,
     flagsSet: 0,
+    // Unused by anything `frame-loop.ts` itself exercises (docs/plan/16-action-round-trip.md is a
+    // main-thread/worker/ring feature this file's fakes never touch): throwaway stubs, same
+    // precedent as `camera`/`input` above.
+    dispatch(): number {
+      throw new Error('fakeClient: dispatch not implemented')
+    },
+    onActionResult(): () => void {
+      return () => {}
+    },
     writeCameraAndWake(): number {
       this.wakeCount += 1
       return this.wakeCount

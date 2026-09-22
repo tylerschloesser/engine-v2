@@ -209,10 +209,17 @@ pub fn sim_warm_one<T: Instance>(slot: &Slot<T>) -> u32 {
 /// `tick_hz()`: the sim role's own tick rate ("20 Hz is hardcoded" gap, docs/plan/
 /// 13-sim-host-tick-loop.md). Same "always answer, cost nothing on a wrong role" shape as
 /// `sim_warm_one`: the trait default (`20`) on anything but `Role::Sim`, not an error.
+/// docs/plan/16-action-round-trip.md: broadened from `slot.sim()` to "any initialised role"
+/// (Deviations) -- `Instance::tick_hz`'s own doc comment already established the answer is
+/// role-independent (`GameInstance::tick_hz` ignores `self`'s variant), and the client worker now
+/// needs its own instance's tick rate for the clock block (`ticks_per_second`) the same way
+/// `SimHost` already reads it at construction. No `ABI_VERSION` bump: the export's params/result
+/// shape is unchanged, only which role may call it (`ABI_EXPORTS`'s `role` field is documentation,
+/// not itself checked by the registry test).
 pub fn tick_hz<T: Instance>(slot: &Slot<T>) -> u32 {
-    match slot.sim() {
-        Ok(rt) => rt.inst.tick_hz(),
-        Err(_) => 20,
+    match slot.get().as_mut() {
+        Some(rt) => rt.inst.tick_hz(),
+        None => 20,
     }
 }
 
@@ -423,6 +430,18 @@ pub fn client_poll_ui<T: Instance>(slot: &Slot<T>) -> u32 {
     };
     let out = rt.layout.bytes_mut(RegionId::Ui);
     rt.inst.client_poll_ui(out) as u32
+}
+
+/// `client_clock_stats() -> status`: `authoritative_tick`, `ack_seq` as two LE `u32` into
+/// `Result` (docs/plan/16-action-round-trip.md; `Instance::client_clock_stats`'s own doc comment
+/// has the exact shape and why only these two values cross here).
+pub fn client_clock_stats<T: Instance>(slot: &Slot<T>) -> Status {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.client_clock_stats(result)
 }
 
 /// `sim_conn_counters(conn) -> status`: `host::ConnCounters` for `conn`, little-endian into

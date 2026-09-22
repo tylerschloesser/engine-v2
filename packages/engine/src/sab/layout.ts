@@ -22,7 +22,9 @@ const RING_CONTROL_BYTES = 32
 /** 0015 §2 "clocks": `authoritative_tick, predicted_tick, ticks_per_second, session_state,
  * seq_seed, ack_seq` (M16), plus `revealed` (M28) and `tick_fraction` (M26) — 8 `u32` fields.
  * M06 only sizes the seqlock; M16 owns the field layout. */
-const CLOCK_BLOCK_DATA_BYTES = 32
+/** Exported so `clock-block.ts` (M16, which owns the field layout) can assert its own
+ * `CLOCK_FIELDS_BYTES` fits inside what M06 actually allocated here. */
+export const CLOCK_BLOCK_DATA_BYTES = 32
 
 /** M17 (0015 §5, 0018 §"why 0018's 256 does not fit"): 1,024 B header, 2 MiB body. */
 const DRAWLIST_HEADER_BYTES = 1024

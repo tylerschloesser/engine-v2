@@ -10,12 +10,14 @@ import type { CameraViewport, ScreenPoint } from './camera/transform.js'
 import { screenToWorld, worldToScreen } from './camera/transform.js'
 import type { Clock, Scheduler } from './clock.js'
 import { systemClock, systemScheduler } from './clock.js'
+import { CLOCK_FIELD, ClockBlockView, readClockBlockInto, SessionState } from './clock-block.js'
 import { installBlurAndVisibilityReset } from './input/focus.js'
 import { installKeyListeners, KeyState } from './input/keys.js'
 import { installPointerListeners, PointerSlots } from './input/pointers.js'
 import { createSemanticRecognizer, type SemanticRecognizer } from './input/semantic.js'
 import { installWheelListeners, WheelState } from './input/wheel.js'
 import type { InstanceConfig } from './loader.js'
+import { at, readU32LE } from './sab/bytes.js'
 import {
   CB_FLAGS,
   CB_FRAME_REQ,
@@ -30,6 +32,7 @@ import {
   workerWord,
 } from './sab/control.js'
 import { createSabSet, MAX_GEN_WORKERS, type SabSet, sabBytesTotal } from './sab/layout.js'
+import { RingConsumer, RingProducer } from './sab/ring.js'
 import {
   buildSimInstanceConfig,
   type WorldConfig as ServerWorldConfig,
@@ -59,6 +62,37 @@ export type WorldConfig<Params = unknown> = Omit<ServerWorldConfig<Params>, 'bui
  * `ClientOptions` object is also what a caller hands `frame-loop.ts`'s `createRealFrameLoop`, the
  * same pattern `assets` already uses for `render/art.ts`'s `loadTileArt`. */
 export type RenderOptions = { scale?: number; scaleCap?: number; neighbourCutoffPx?: number }
+
+/** `sim::EngineReject`'s TS shape, hand-mirrored here (docs/plan/16-action-round-trip.md step 4):
+ * `engine` itself has no game to run `export_bindings` against, so this one small, stable enum is
+ * kept in sync by hand rather than generated -- `fixtures/puts/bindings/EngineReject.ts` (and any
+ * later game's own copy) must read the same three variants. */
+export type EngineRejectReason = 'RateLimited' | 'StateBudgetFull' | 'EngineFault'
+
+/** `game_instance::push_result_record`'s exact JSON shape (docs/plan/16-action-round-trip.md
+ * Deviations, "The exact JSON"): `Rejected<G>`'s `Game`/`Engine` tag is preserved, not flattened.
+ * `Reject` is the game's own `G::Reject` TS type (`fixtures/puts/bindings/Reject.ts`, or a later
+ * game's own); `onActionResult`'s caller supplies it as a type parameter for full typing on both
+ * halves. */
+export type ActionOutcome<Reject = unknown> =
+  | 'Confirmed'
+  | { Rejected: { Game: Reject } }
+  | { Rejected: { Engine: EngineRejectReason } }
+
+/** `client::core::OUTBOX_CAPACITY` (docs/plan/16-action-round-trip.md Deviations): the 0012
+ * pending-queue figure, mirrored here so `dispatch` can enforce the same "queue full" backstop
+ * Rust's own `on_action` re-checks (defence in depth, not the primary enforcement point either
+ * side of the boundary). */
+const OUTBOX_CAPACITY = 32
+
+/** One action-ring record's own worst case (`ACTION_RX_BYTES`, `game_instance.rs`): an 8-byte
+ * `[seq][len]` header plus generous headroom for the JSON body. `dispatch`/`dispatchRaw` throw
+ * rather than silently truncate a payload that would not fit. */
+const ACTION_RECORD_BYTES = 1024
+
+/** `UI_BYTES` (`game_instance.rs`): the largest single `client_poll_ui` batch the client role can
+ * ever produce, and so the largest single `uiRing` message the per-rAF drain will ever pop. */
+const UI_POLL_BYTES = 4096
 
 export interface ClientOptions {
   canvas: HTMLCanvasElement
@@ -108,7 +142,32 @@ export interface ClientOptions {
 }
 
 export interface Client {
+  /** docs/plan/16-action-round-trip.md Scope: "M06b's `Client.ready` now also waits for
+   * `session_state = 1`" -- but only for the topology that actually links a connection
+   * (`ClientOptions.host = { kind: 'local', connect: true }`; `'remote'` is not yet linked at all,
+   * Non-scope until M27/M28): every other topology (no `connect`, or none at all) never writes the
+   * clock block and keeps `ready`'s pre-M16 meaning, "the worker set is up" -- otherwise `ready`
+   * would hang forever on the many existing unconnected test pages/fixtures that have no host to
+   * ever go live against. See Deviations for the full reasoning. */
   readonly ready: Promise<void>
+  /** docs/plan/16-action-round-trip.md Scope: JSON-encodes `action` into the action ring and
+   * returns its `seq`. Throws `Error("engine: dispatch before ready")` before the session is live
+   * (`ready`'s own extended meaning), and `Error("engine: action queue full")` once ready when
+   * either the 0012 pending-queue backstop (`seq - ack_seq > `[`OUTBOX_CAPACITY`]) or the action
+   * ring itself is full -- both leave `seq`'s own counter unadvanced, so the next call gets the
+   * same candidate `seq` again (Deviations: `dispatch_when_queue_full_fails_locally`'s own exact
+   * shape). JSON encoding is a human-rate, UI-driven path (0003, 0016 §2's own exemption): this
+   * method is not part of the zero-GC surface -- `engine/test.dispatchRaw` is, for a measured
+   * window. */
+  dispatch(action: unknown): number
+  /** docs/plan/16-action-round-trip.md Scope: fires once per drained kind-2 (`ActionResults`) UI-
+   * ring record, in ring order, on a per-rAF poll this `Client` runs on its own (no page wiring
+   * needed). Returns an unsubscribe function. `Reject` is the game's own `G::Reject` TS type,
+   * supplied by the caller for full typing (Deviations: "onActionResult's reason is fully typed on
+   * both halves"); default `unknown` when omitted. */
+  onActionResult<Reject = unknown>(
+    cb: (seq: number, result: ActionOutcome<Reject>) => void,
+  ): () => void
   /** docs/plan/09-renderer-terrain.md, Non-scope ("here the camera is set by `engine/test.
    * setCamera` or a fixed `CameraState`"): a plain mutable object, later milestones add members to
    * the public `Client` shape (this comment's own precedent) as production features need direct
@@ -238,6 +297,14 @@ export interface ClientTestHandle {
    * unrelated bundle no real listener or `camera.tick()` call ever reads. */
   readonly cameraBundle: CameraInput
   readonly cameraIntegrator: CameraIntegrator
+  /** docs/plan/16-action-round-trip.md Provides: `engine/test.dispatchRaw`'s own low-level
+   * primitive -- writes one pre-encoded `[seq][len][jsonBytes]` record through `dispatch`'s own
+   * `RingProducer` (never a second, independent one over the same `actionRing` SAB: an SPSC ring
+   * has exactly one producer). Skips the seq-counter/session-state bookkeeping `dispatch` itself
+   * does, so the zero-GC window can dispatch without JSON encoding *or* a clock-block read in the
+   * measured window (0016 §2). Returns `false` (nothing written) when the record cannot fit the
+   * ring right now, the same "full" condition `dispatch` itself throws on. */
+  writeActionRecord(seq: number, jsonBytes: Uint8Array): boolean
 }
 
 const handles = new WeakMap<Client, ClientTestHandle>()
@@ -346,6 +413,12 @@ export function createClient(options: ClientOptions): Client {
       ready,
       cameraState: new CameraState(),
       get uploadRing(): SharedArrayBuffer {
+        throw err
+      },
+      dispatch(): number {
+        throw err
+      },
+      onActionResult(): () => void {
         throw err
       },
       writeCameraAndWake(): number {
@@ -498,6 +571,148 @@ export function createClient(options: ClientOptions): Client {
     },
   }
 
+  // docs/plan/16-action-round-trip.md, step 3: `dispatch`/`onActionResult`/the extended `ready`.
+  // `linked` decides whether `ready` waits for `session_state = 1` (Client's own doc comment has
+  // the reasoning); it is the exact predicate `start()` below also uses for its own `link` field,
+  // computed once here so the two cannot drift.
+  const linked = options.host.kind === 'local' && options.host.connect === true
+
+  const clockView = new ClockBlockView(sabs.clockBlock)
+  // Built once (`.claude/rules/hot-paths.md`): every clock-block read copies into this same
+  // six-field scratch array, in `CLOCK_FIELD`'s own order. A torn read (every retry raced the
+  // writer) leaves it holding whatever the previous successful read saw -- stale, never garbage,
+  // and always a real snapshot the writer actually published at some point.
+  const clockScratch = new Uint32Array(6)
+
+  // `dispatch`'s own producer, wake target `WORKER_CLIENT` (Scope: "then Atomics.notify of the
+  // client worker" -- `RingProducer`'s own `wake` option does this on every successful push, the
+  // same pattern `client-net.ts`'s uplink producer already uses toward `WORKER_HOST`). Exactly one
+  // producer for `actionRing` ever exists (an SPSC ring): `engine/test.dispatchRaw` reaches this
+  // same instance through `writeActionRecord` below, never a second one of its own.
+  const actionRingProducer = new RingProducer(sabs.actionRing, { control, index: WORKER_CLIENT })
+  const actionScratch = new Uint8Array(ACTION_RECORD_BYTES)
+  const encoder = new TextEncoder()
+  const decoder = new TextDecoder()
+
+  /** The shared low-level primitive behind `dispatch` and `engine/test.dispatchRaw`
+   * (`writeActionRecord`, exposed on `ClientTestHandle`): `[seq u32 LE][len u32 LE][UTF-8 JSON]`
+   * (Scope), one whole record through `actionRingProducer.tryPush`. */
+  function writeActionRecord(seq: number, jsonBytes: Uint8Array): boolean {
+    const total = 8 + jsonBytes.length
+    if (total > actionScratch.length) {
+      throw new Error(`engine: action payload too large (${jsonBytes.length} bytes)`)
+    }
+    actionScratch[0] = seq & 0xff
+    actionScratch[1] = (seq >>> 8) & 0xff
+    actionScratch[2] = (seq >>> 16) & 0xff
+    actionScratch[3] = (seq >>> 24) & 0xff
+    const len = jsonBytes.length
+    actionScratch[4] = len & 0xff
+    actionScratch[5] = (len >>> 8) & 0xff
+    actionScratch[6] = (len >>> 16) & 0xff
+    actionScratch[7] = (len >>> 24) & 0xff
+    actionScratch.set(jsonBytes, 8)
+    return actionRingProducer.tryPush(actionScratch, total)
+  }
+
+  /** `seed + 1` (Scope), read exactly once, the moment `session_state` first becomes `Live`
+   * (Planning decisions "How main learns the `seq` seed"); `-1` means "not seeded yet", which
+   * `dispatch`'s own `session_state` check always rejects before this value could matter. Never
+   * reset for the life of this `Client` (Scope: "the counter is never reset"). */
+  let nextSeq = -1
+
+  function dispatch(action: unknown): number {
+    readClockBlockInto(clockView, clockScratch)
+    if (at(clockScratch, CLOCK_FIELD.SessionState) !== SessionState.Live) {
+      throw new Error('engine: dispatch before ready')
+    }
+    const candidateSeq = nextSeq
+    const ackSeq = at(clockScratch, CLOCK_FIELD.AckSeq)
+    if (candidateSeq - ackSeq > OUTBOX_CAPACITY) {
+      throw new Error('engine: action queue full')
+    }
+    const jsonBytes = encoder.encode(JSON.stringify(action))
+    if (!writeActionRecord(candidateSeq, jsonBytes)) {
+      throw new Error('engine: action queue full')
+    }
+    nextSeq = candidateSeq + 1
+    return candidateSeq
+  }
+
+  /** Resolves once `session_state` first reads `Live`, seeding `nextSeq` from that same read
+   * (Planning decisions: main reads the seed "exactly once"). Polls via the injected `Scheduler`
+   * (never a bare `setTimeout`: `.claude/rules/hot-paths.md`'s sibling rule in `src/CLAUDE.md`,
+   * "no ambient time outside `clock.ts`") -- main never blocks (0015 §2), so this is a macrotask
+   * poll, not `Atomics.wait`. */
+  function waitForLive(): Promise<void> {
+    return new Promise((resolve) => {
+      function poll(): void {
+        readClockBlockInto(clockView, clockScratch)
+        if (at(clockScratch, CLOCK_FIELD.SessionState) === SessionState.Live) {
+          nextSeq = at(clockScratch, CLOCK_FIELD.SeqSeed) + 1
+          resolve()
+          return
+        }
+        scheduler.setTimer(poll, 0)
+      }
+      poll()
+    })
+  }
+
+  // One listener array backs every `Reject` type `onActionResult<Reject>` is called with: each
+  // call site's own generic is erased to `unknown` here and recovered by the caller's own cast
+  // (the parsed JSON was never actually typed as `Reject` in the first place -- that typing is a
+  // compile-time convenience over data this module never validates against it).
+  type Listener = (seq: number, result: ActionOutcome<unknown>) => void
+  const actionResultListeners: Listener[] = []
+
+  function onActionResult<Reject = unknown>(
+    cb: (seq: number, result: ActionOutcome<Reject>) => void,
+  ): () => void {
+    const listener = cb as Listener
+    actionResultListeners.push(listener)
+    return () => {
+      const i = actionResultListeners.indexOf(listener)
+      if (i >= 0) actionResultListeners.splice(i, 1)
+    }
+  }
+
+  const uiRingConsumer = new RingConsumer(sabs.uiRing)
+  const uiScratch = new Uint8Array(UI_POLL_BYTES)
+
+  /** "Main rAF: drain the UI ring once" (Scope). Kind 2 (`ActionResults`) only this milestone;
+   * an unknown kind (M16b's kind 1, `Ui`) is skipped by its own length field, never crashing --
+   * Scope: "must skip an unknown record kind by its length field rather than crashing". JSON
+   * parsing is a human-rate path (0003, 0016 §2), not yet zero-GC (Deviations: a later milestone's
+   * own budget, not this one's -- "it cannot fix a design that allocates by construction"). */
+  function pollActionResults(): void {
+    for (;;) {
+      const len = uiRingConsumer.popInto(uiScratch, 0)
+      if (len < 0) break
+      let i = 0
+      while (i + 5 <= len) {
+        const kind = at(uiScratch, i)
+        const recLen = readU32LE(uiScratch, i + 1)
+        const bodyStart = i + 5
+        if (bodyStart + recLen > len) break // never split a record (defensive; producer never does)
+        if (kind === 2) {
+          const text = decoder.decode(uiScratch.subarray(bodyStart, bodyStart + recLen))
+          const parsed = JSON.parse(text) as { seq: number; result: ActionOutcome<unknown> }
+          for (let li = 0; li < actionResultListeners.length; li++) {
+            at(actionResultListeners, li)(parsed.seq, parsed.result)
+          }
+        }
+        i = bodyStart + recLen
+      }
+    }
+  }
+
+  let resultsFrameHandle = -1
+  function resultsFrame(): void {
+    pollActionResults()
+    resultsFrameHandle = scheduler.requestFrame(resultsFrame)
+  }
+
   function destroy(): void {
     Atomics.store(control.words, CB_LIFECYCLE, Lifecycle.Stopping)
     for (const w of workers) {
@@ -507,6 +722,7 @@ export function createClient(options: ClientOptions): Client {
     for (const w of workers) w.worker.terminate()
     for (const dispose of cameraInputDisposers) dispose()
     cameraResizeObserver?.disconnect()
+    scheduler.cancelFrame(resultsFrameHandle)
   }
 
   /** docs/plan/09-renderer-terrain.md Scope: "writeCameraBlock + CB_FRAME_REQ + wake" as one
@@ -578,9 +794,8 @@ export function createClient(options: ClientOptions): Client {
     }
 
     // Orchestrator ruling 1 (Planning decisions): a topology fact, carried identically to the
-    // `sim` and `client` setup messages, never to `gen`/`net`.
-    const linked = options.host.kind === 'local' && options.host.connect === true
-
+    // `sim` and `client` setup messages, never to `gen`/`net` (`linked` itself is computed once,
+    // above `start()`, so this and `ready`'s own extended meaning cannot drift apart).
     const waits = spawns.map(({ kind, index, arenaBytes }) => {
       const worker = spawnWorker(options)
       workers.push({ kind, index, worker })
@@ -596,11 +811,16 @@ export function createClient(options: ClientOptions): Client {
     await Promise.all(waits)
   }
 
-  const ready = start()
+  const ready = start().then(() => {
+    resultsFrameHandle = scheduler.requestFrame(resultsFrame)
+    return linked ? waitForLive() : undefined
+  })
   const client: Client = {
     ready,
     cameraState,
     uploadRing: sabs.uploadRing,
+    dispatch,
+    onActionResult,
     writeCameraAndWake,
     setFlags,
     input,
@@ -617,6 +837,7 @@ export function createClient(options: ClientOptions): Client {
     workers,
     cameraBundle,
     cameraIntegrator,
+    writeActionRecord,
   })
   return client
 }

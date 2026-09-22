@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 11;
+pub const ABI_VERSION: u32 = 12;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -336,6 +336,19 @@ pub trait Instance: Sized + 'static {
     fn client_poll_ui(&mut self, _out: &mut [u8]) -> usize {
         0
     }
+
+    /// docs/plan/16-action-round-trip.md (`ABI_VERSION` 11 -> 12): the two values only Rust knows
+    /// for the client-role clock block the client worker mirrors into `SabSet.clockBlock` after
+    /// each `on_frame` (0015 §2 "clocks") -- `authoritative_tick` and `ack_seq` from
+    /// `ClientCore::last_summary()`, two LE `u32` into `result` (the whole `Result` region), the
+    /// same crossing shape as `sim_region_hash`/`client_region_hash`. `predicted_tick` (=
+    /// `authoritative_tick` until M26), `ticks_per_second` (already `tick_hz()`, read once at
+    /// worker setup, not re-plumbed per frame) and `session_state`/`seq_seed` (learned from the
+    /// first frame's own `ack_seq`, PRE-PLAN §10) are derived entirely on the TS side -- this
+    /// export carries only what Rust alone has.
+    fn client_clock_stats(&mut self, _result: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
 }
 
 /// Emits every export for every role, the `#[global_allocator]`, and the single-threaded instance
@@ -471,6 +484,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn client_poll_ui() -> u32 {
             $crate::abi::client_poll_ui(&__ENGINE_SLOT)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_clock_stats() -> u32 {
+            $crate::abi::client_clock_stats(&__ENGINE_SLOT) as u32
         }
 
         // gen

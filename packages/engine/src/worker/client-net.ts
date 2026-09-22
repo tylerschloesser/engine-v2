@@ -9,7 +9,17 @@
 // Then polls `client_poll_uplink` once every wake and pushes whatever landed in the client's own
 // `Tx` region onto the uplink ring -- `RingProducer`'s own `wake` option notifies the sim worker on
 // every successful push, the external wake ADR 0030's `poll()` fix (`worker/sim.ts`) exists for.
+//
+// docs/plan/16-action-round-trip.md: also the clock block's own writer (Scope: "written by the
+// client worker after each `on_frame`"). Only this pump ever learns whether `on_frame` actually
+// applied a real frame (its own `Status` return, `Status.Ok`) -- the one reliable "a session is
+// live" signal (`ClientCore::last_summary()`'s default is indistinguishable from a genuine first
+// frame at `tick == 0, ack_seq == 0`) -- so `session_state`/`seq_seed` bookkeeping lives here, not
+// in a separate always-on pump.
+import { Status } from '../abi.js'
+import { ClockBlockView, type ClockFields, SessionState, writeClockBlock } from '../clock-block.js'
 import type { EngineInstance, RegionView } from '../loader.js'
+import { readU32LE } from '../sab/bytes.js'
 import { WORKER_HOST } from '../sab/control.js'
 import { RingConsumer, RingProducer } from '../sab/ring.js'
 import type { Shell } from './shell.js'
@@ -27,6 +37,11 @@ export type NetPump = { pump(): void }
  * link is only ever wired for a real `GameInstance`, `client.ts`'s own `host.connect` gate) --
  * kept null-tolerant anyway, the same "costs nothing, answers nothing" shape every other pump here
  * uses for a role/instance that doesn't have what it needs.
+ *
+ * `ticksPerSecond` is read once at setup (`worker/client.ts`'s own `tick_hz()` call, docs/plan/
+ * 16-action-round-trip.md: "need not be re-plumbed per frame") and mirrored into the clock block
+ * unchanged on every write; `clockBlock`/`result` are `null`/absent only for the same hand-rolled-
+ * fixture case as `downlink`/`tx`, above -- a real `GameInstance` always has a `Result` region.
  */
 export function createNetPump(
   inst: EngineInstance,
@@ -35,19 +50,35 @@ export function createNetPump(
   downlinkSab: SharedArrayBuffer,
   downlink: RegionView | null,
   tx: RegionView | null,
+  clockBlockSab: SharedArrayBuffer,
+  result: RegionView | null,
+  ticksPerSecond: number,
 ): NetPump {
   const downlinkConsumer = new RingConsumer(downlinkSab)
   const uplinkProducer = new RingProducer(uplinkSab, {
     control: shell.control,
     index: WORKER_HOST,
   })
+  const clockView = new ClockBlockView(clockBlockSab)
+  // Preallocated once (`.claude/rules/hot-paths.md`): mutated in place on every clock-block write
+  // instead of a fresh object literal per wake.
+  const clockFields: ClockFields = {
+    authoritativeTick: 0,
+    predictedTick: 0,
+    ticksPerSecond,
+    sessionState: SessionState.Connecting,
+    seqSeed: 0,
+    ackSeq: 0,
+  }
+  let live = false
 
   function pump(): void {
+    let sawFrame = false
     if (downlink) {
       for (;;) {
         const len = downlinkConsumer.popInto(downlink.u8, 0)
         if (len < 0) break
-        inst.call1(inst.x.on_frame, len)
+        if (inst.call1(inst.x.on_frame, len) === Status.Ok) sawFrame = true
       }
     }
     if (tx) {
@@ -59,6 +90,22 @@ export function createNetPump(
         // perspective (`sab/ring.ts`'s own "a producer that has decided to drop calls this").
         uplinkProducer.recordDrop()
       }
+    }
+    if (sawFrame && result && inst.call0(inst.x.client_clock_stats) === Status.Ok) {
+      const tick = readU32LE(result.u8, 0)
+      const ackSeq = readU32LE(result.u8, 4)
+      if (!live) {
+        // PRE-PLAN §10 / Planning decisions "How main learns the `seq` seed": the first frame's
+        // own `ack_seq` (the host's `last_seq` for this player) until M28 switches the source to
+        // `Welcome`. Read exactly once, the instant a session goes live.
+        live = true
+        clockFields.seqSeed = ackSeq
+        clockFields.sessionState = SessionState.Live
+      }
+      clockFields.authoritativeTick = tick
+      clockFields.predictedTick = tick // = authoritative until M26
+      clockFields.ackSeq = ackSeq
+      writeClockBlock(clockView, clockFields)
     }
   }
 
