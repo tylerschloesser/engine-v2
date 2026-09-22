@@ -1,6 +1,6 @@
 # M13b: Tick timing without a per-tick JS clock read
 
-Status: not started · After: 13 · Tyler-dependent: no
+Status: done · After: 13 · Tyler-dependent: no
 
 ## Goal
 The sim worker runs a tick without reading the wall clock in JavaScript, so `tickOverruns` and
@@ -108,13 +108,13 @@ the new zero-GC page's name.
   the point is that reintroducing a per-tick `clock.now()` fails a test rather than only CI, sometimes.
 
 ## Exit criteria
-- [ ] The new page reproduces the allocation before the fix and holds its budget after, shown with
+- [x] The new page reproduces the allocation before the fix and holds its budget after, shown with
       `--js-flags=--no-opt --no-sparkplug` (paste both runs).
-- [ ] `gc-sim`'s `sim` isolate holds its strict budget under `sim clean`, `sim neg object main`,
+- [x] `gc-sim`'s `sim` isolate holds its strict budget under `sim clean`, `sim neg object main`,
       `sim neg burst main` and `sim neg burst sim`, in software mode.
-- [ ] `tickOverruns` and `ticksDropped` are proven live by a test that fails if they are constant.
-- [ ] `ABI_VERSION` bumped, `abi-registry` updated, no golden changed without the orchestrator.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `tickOverruns` and `ticksDropped` are proven live by a test that fails if they are constant.
+- [x] `ABI_VERSION` bumped, `abi-registry` updated, no golden changed without the orchestrator. **No ABI change was needed** — the fix is entirely JS-side (`server.ts`, `worker/atomics-timer.ts`); `ABI_VERSION` and `abi/registry.rs` are untouched and `abi-registry` passes. Ticked as satisfied, not as done.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm gc software` · `pnpm gc flat` · `pnpm test` · `pnpm lint` · `pnpm test:slow -t "sim neg"`.
