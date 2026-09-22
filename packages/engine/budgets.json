@@ -264,7 +264,15 @@
             "attributionRoots": ["body"]
           }
         },
-        "software": null
+        "software": {
+          "frames": 600,
+          "isolates": {
+            "main": {
+              "attributedBytesPerFrame": 89,
+              "formula": "Fix round 2 (M15c gate, CI red under GC_MODE=software: `\"software\": null` is not a skip mechanism, `gc/instrument.ts` throws on it). ADR 0029: software mode attributes only `main`, every other isolate uses raw bytes in both modes, so `client`/`sim`/`gen0` get no row here. Measured (`GC_MODE=software playwright test --project gc --grep \"connected-terrain clean\" --repeat-each 8 --workers 1`, this machine): a tight 80.50-80.52 B/frame attributed across 8 clean runs. 0016 §1's ordinary margin convention (`ceil(measured) + 8 B`): ceil(80.52) = 81, + 8 = 89 -- not widened to avoid ADR 0029's own failure mode (M13b: a margin wide enough to swallow the `object` control's own stable ~16 B/frame stops it tripping), since 89 already sits 7.5 B below the control's own reading (below). `object` control on `main` measured a constant 96.50 B/frame attributed across 4 repeats (clean's own 80.5 + 16.0, ADR 0029's own figure exactly) -- verified still tripping at 89 (8/8 repeats: `neg object main` reports `pass` for the expected-mismatch verdict, i.e. `B.main` reads `false` as required). `burst` control on `main` verified still tripping (3/3 repeats, `@slow`; a multi-KB burst is nowhere near this margin). `client`/`sim`/`gen0` are unaffected by this round (ADR 0029, no software row for them) and their own hardware rows are unchanged."
+            }
+          }
+        }
       }
     }
   },

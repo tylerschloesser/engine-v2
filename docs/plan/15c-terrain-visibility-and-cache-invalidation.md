@@ -414,10 +414,11 @@ call.
 **Context artifacts.** No new artifact beyond steps 1-2's own `world/cache.rs` module-doc update
 (this range touched none of `packages/engine/crates/engine`).
 
-**Not verified in this range.** `pnpm gc software`/a real `software` budget for `connected-terrain`
-(left `null`, 0016 caveat b, sanctioned by the `gc-test` skill's own "Adding a page" step 2);
-`pnpm gc reliability` (many-repeat stability check) was not run for the new page, only the
-skill-recommended `--repeat-each 8` used to derive the budget row above.
+**Not verified in this range.** `pnpm gc reliability` (many-repeat stability check) was not run for
+the new page, only the skill-recommended `--repeat-each 8` used to derive the budget rows above.
+(A real `software` budget was left `null` in this range, on the mistaken belief that 0016 caveat b
+sanctions that as a "skip this page" mechanism -- it does not; CI disagreed, fix round 2 below has
+the real number.)
 
 **Note for later briefs (fix round 1, replacing the retracted "static-camera bug" claim above):**
 there is no static-camera production bug in `Uploader::on_frame` -- production runs frames
@@ -468,3 +469,43 @@ on here, because it is a suite-wide decision rather than this milestone's, and b
 at 23 s of a 25 s budget where 0020 §2 makes 25 s a *warning* and 37.5 s a failure. Recorded in
 `PROMPT.md` so the next milestone that adds browser tests starts from this rather than re-deriving
 it.
+
+## Fix round 2 (gate feedback: CI red under `GC_MODE=software`)
+
+**`connected-terrain`'s `"software": null` was not a "no number yet" placeholder -- it is an error.**
+CI (`ubuntu-latest`, `ENGINE_GPU=swiftshader GC_MODE=software`, run `35759854622` on `5347a14`) failed
+`connected-terrain clean`/`neg object main`/`neg object client` with `gc verdict: no software budget
+for connected-terrain` (`gc/instrument.ts:161`, thrown whenever `mode === 'software' && budgets.
+software === null`). `terrain` (the closest precedent -- also `expectAdapter: true`, also a real
+device) already carries a real software row (`attributedBytesPerFrame: 89`); `connected-terrain` was
+the only page in `budgets.json` with `null`, and the local gate never caught it because it runs
+hardware mode only, which is exactly the gap M10's CI exists to close.
+
+**Measured** (`GC_MODE=software playwright test --project gc --grep "connected-terrain clean"
+--repeat-each 8 --workers 1`, this machine): a tight **80.50-80.52 B/frame** attributed across 8
+clean runs. ADR 0029: software mode attributes only `main`; `client`/`sim`/`gen0` use raw bytes in
+both modes and get no software row (matching every other page's own shape). `ceil(80.52) = 81, + 8 B
+margin (0016 §1's ordinary convention) = **89**` -- coincidentally the same number as `terrain`'s own
+row, but independently derived, not copied (both pages share `terrain.wgsl`'s own `draw`/`drain`
+attribution shape, which is plausibly why they land close).
+
+**Checked the failure mode this convention exists to avoid (ADR 0029, M13b's own worked example):
+did the ordinary `+8` margin swallow the `object` control's own separation?** No -- measured
+separately (budget forced high to read the control's own number without tripping the test):
+`object` control on `main` measured a constant **96.50 B/frame** attributed across 4 repeats
+(clean's own 80.5 + 16.0, ADR 0029's own reference delta, exactly). 89 sits 8.48 B above clean and
+7.5 B below the control -- separated on both sides, not close to either. Verified tripping at 89:
+`object` on `main`, 8/8 repeats; `burst` on `main` (`@slow`), 3/3 repeats. No margin narrowing was
+needed here (unlike M13b's own +2 case): clean's own baseline (80.5) is high enough, relative to
+the fixed +16 B/frame the `object` control adds, that the ordinary +8 margin still separates
+cleanly -- M13b's narrower margin was needed there because that page's clean baseline was under
+1 B/frame, so +8 landed close to the control's own ~16-24 B/frame range; this page's clean baseline
+already does most of the separating work by itself.
+
+**Verified**, full `connected-terrain` gc suite under `GC_MODE=software` (10 tests: `clean`, `object`
+x4 isolates, `burst` x4 isolates, the ring-drops spec): all pass. Hardware mode unaffected and
+re-verified (`pnpm test browser -t connected-terrain`: 8 tests; `pnpm test:slow -t connected-terrain`:
+4 tests) -- this round touched only `budgets.json`'s `connected-terrain.software` block; the four
+hardware rows (`main: 111`, `client: 8`, `sim: 17`, `gen0: 8`, `sim`'s own formula from the
+orchestrator's gate addition above) are byte-for-byte unchanged (`git diff` confirms a 9-line
+insertion, one deletion, nothing else touched).
