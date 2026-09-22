@@ -533,9 +533,59 @@ JSON-parse itself requires.
 
 **`ClientTestHandle` gained `writeActionRecord(seq: number, jsonBytes: Uint8Array): boolean`**: the
 exact low-level primitive `dispatch` itself uses (same `RingProducer`, same scratch buffer) minus
-the seq-counter/session-state bookkeeping, so `engine/test.dispatchRaw` (step 6, not built) has a
-single real producer to write through rather than a second, independent one racing `dispatch`'s own
-over the same SPSC `actionRing`.
+the seq-counter/session-state bookkeeping. **`engine/test` now also has `dispatchRaw(client, seq,
+jsonBytes)` and `actionResults(client)` built on top of it** (added at the gate, corrected from an
+earlier report that called these step 6's -- they are this milestone's own Provides names and later
+briefs consume them by name, so they had to exist before handoff): `dispatchRaw` throws the same
+`"engine: action queue full"` `dispatch` does when the ring has no room, but never the "before
+ready" check (a zero-GC caller already knows the session is live) and never reads the clock block
+or advances a `seq` counter -- the caller supplies both. `actionResults` subscribes to `client.
+onActionResult` lazily, on its first call per `Client`, and returns the same live array every call
+(never a fresh subscription) -- read its contents, don't expect it to clear itself.
+
+### Gate-round fix: `connect: true` pages deadlocked at boot (found and fixed live)
+
+Three existing pages -- `connected.ts`, `connected-terrain.ts`, `gc-connected-terrain.ts` (all
+pre-M16, M15b/M15c) -- `await client.ready` immediately after `createClient()`, before wiring any
+of their own test hooks (`__stepTick`, `drive()`, ...). Once `ready` started waiting for
+`session_state = 1` (above), this deadlocked: nothing outside the page can reach a hook that
+doesn't exist yet, and nothing inside the page drives a tick either, since these pages' own sim
+ticks are test-driven (no `test.flags.pace`), not real-time-paced. `connected-paced.ts` (`test.
+flags.pace = true`) was never affected -- its sim ticks itself.
+
+Fixed with a new `engine/test.pumpUntilLive(client)` (`test/client.ts`, exported through `test.ts`
+alongside `dispatchRaw`/`actionResults`): retries `stepSimTickSync` on a macrotask until it stops
+throwing (`clientTestHandle(client).workers` is populated partway through `client.ready`'s own
+async `start()`, before a page's top-level script can know it happened) and races `client.ready`
+itself, stopping the pump the instant a real session-live poll succeeds. One real sim tick applies
+`sim_connect`'s own queued `Joined` record (a real write, whatever `Game::on_player` does with it),
+so `Host::build_frame` has something to send on the very first tick regardless of camera state; the
+client worker's netPump wakes off the downlink ring itself (M15b), independent of `CB_FRAME_REQ`/
+`stepFrame`. All three pages now call `await pumpUntilLive(client)` in place of `await client.
+ready`, before wiring their own hooks. **Neither `Client.ready` nor `dispatch`'s own contract
+changed at all** -- this is entirely a page-boot-order fix, inside `tests/`, not a seam change:
+`dispatch_before_ready_throws` still fails if the readiness guard is removed (unaffected by this
+fix), and `ready` still means exactly what this milestone's own Scope says.
+
+**Verified functionally correct**: all 17 `connected`/`gc-connected` tests (`chromium` + `gc`
+projects) pass, repeatably, run directly through `pnpm exec playwright test ... -g connected`.
+
+**Not resolved, flagged for the orchestrator rather than acted on**: each `connect: true` page now
+takes roughly 11-15 seconds, dominated by `WebAssembly.compileStreaming` of `fx-puts`'s dev-profile
+`.wasm` (measured directly: one `stepSimTickSync` call spent 11.28s in its own busy-spin, exactly
+overlapping the interval before every worker's `engine_init ok` log appeared) -- not this fix's own
+overhead (`pumpUntilLive`'s loop itself converges in ~13 iterations, single-digit milliseconds).
+Running the `connected`/`gc-connected` group together therefore exceeds the `browser` suite's
+fast-tier wall-clock budget (`docs/decisions/0020-testing-strategy.md` §3): `pnpm test browser -t
+connected` and `pnpm test browser -t gc-connected` both report `FAIL ... over budget` even though
+every individual Playwright test in both reports passes (`test-results/browser/report.json`: 0
+failed both times) -- the budget classifier, not a real test failure. Whether the *old* `ready`
+(pre-M16, "workers are up") was ever actually this slow to reach is not something this cut could
+settle: it required the identical per-worker WASM instantiation to complete before resolving too,
+so if 11-15s is genuine for this machine/fixture size, it should have been just as slow before --
+but the orchestrator's own bisection measured `replica_hash_equals_host_in_browser` at 2s on
+`10bbde5`. Budget ownership and whatever this discrepancy means are the orchestrator's call, not
+this cut's.
 
 ### `tests/support/scenario.ts`: the `script` scenario kind (step 5)
 
