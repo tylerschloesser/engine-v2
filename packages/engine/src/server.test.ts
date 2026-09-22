@@ -57,6 +57,12 @@ function fakeSim(overrides: Partial<SimInstance> = {}): SimInstance {
     simHash: () => '0000000000000000',
     simWarmOne: () => 0,
     tickHz: () => 20,
+    simConnect: () => Status.Ok,
+    simDisconnect: () => Status.Ok,
+    simAdmit: () => Status.Ok,
+    simBuildFrame: () => ({ len: 0 }),
+    rxBytes: () => 0,
+    txBytes: () => 0,
     ...overrides,
   }
 }
@@ -157,6 +163,12 @@ test('simhost_seal_precedes_tick', () => {
     simHash: () => '0000000000000000',
     simWarmOne: () => 0,
     tickHz: () => 20,
+    simConnect: () => Status.Ok,
+    simDisconnect: () => Status.Ok,
+    simAdmit: () => Status.Ok,
+    simBuildFrame: () => ({ len: 0 }),
+    rxBytes: () => 0,
+    txBytes: () => 0,
   }
   const logSpy = vi.fn((bytes: Uint8Array) => order.push(`log:${bytes.length}`))
   const host = createSimHostFromInstance(sim, { clock, timer: timer.services })

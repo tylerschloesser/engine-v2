@@ -7,7 +7,10 @@
 import { expect, test } from 'vitest'
 import { Role } from '../../src/abi.js'
 import { instantiate } from '../../src/loader.js'
+import { RingConnection } from '../../src/ring-connection.js'
+import { createRing, RingConsumer } from '../../src/sab/ring.js'
 import {
+  type Connection,
   createSimHostFromInstance,
   MAX_CATCHUP_TICKS,
   RESYNC_TICKS,
@@ -106,4 +109,78 @@ test('real overrun and drop increment tickOverruns/ticksDropped, driving the rea
   }
   expect(onScheduleHost.counters.tickOverruns).toBe(0)
   expect(onScheduleHost.counters.ticksDropped).toBe(0)
+})
+
+/**
+ * docs/plan/15b-ring-connection-and-replica-rendering.md step 3: `SimHost.accept` over a real, real
+ * `.wasm` instance, driven through a real SAB ring pair (`RingConnection`, an in-thread "client"
+ * consumer on the other end -- no worker, `createRing`/`RingProducer`/`RingConsumer` directly, same
+ * shape `ring-connection.test.ts` already exercises). Compared against a *second* real instance of
+ * the same fixture, `accept`-ed with a plain in-memory `Connection` that bypasses the ring entirely
+ * (captures every `send()` call's bytes verbatim): with the same config/seed and the same tick
+ * count, `Host::connect`'s own queued `Record::Player` events and every subsequent tick are
+ * bit-for-bit deterministic (0002), so both instances must reach the same `sim_hash()` and produce
+ * byte-identical frames, in order -- proving the ring path neither drops, reorders nor corrupts
+ * anything relative to the direct ABI path.
+ */
+function noopTimer() {
+  return { every: () => () => {} }
+}
+
+test('host_accepts_ring_connection_and_hashes_match', async () => {
+  const scenario = readGolden<HashScenario>('puts', 'scenario.json')
+  const { wasm } = await loadFixture('puts')
+
+  // A: the real, in-browser production path -- a real SAB ring pair, `RingConnection` on the sim
+  // side, a plain `RingProducer`/`RingConsumer` pair standing in for the client worker's own end.
+  const instA = instantiate(wasm, Role.Sim, scenario.config, { onLog() {} })
+  const simA = wrapEngineInstance(instA)
+  const hostA = createSimHostFromInstance(simA, { clock: { now: () => 0 }, timer: noopTimer() })
+  const uplink = createRing(1024, 64)
+  const downlink = createRing(1024, 512)
+  const clientDownlinkIn = new RingConsumer(downlink)
+  const connection = new RingConnection(uplink, downlink, {
+    maxUplinkBytes: simA.rxBytes(),
+    maxDownlinkBytes: simA.txBytes(),
+  })
+  const connIdA = hostA.accept(connection)
+  expect(connIdA).toBe(0)
+
+  // B: the direct ABI path, no ring at all -- `accept`'s own generic `Connection` contract lets a
+  // plain in-memory stub stand in, capturing exactly what `send()` was called with.
+  const instB = instantiate(wasm, Role.Sim, scenario.config, { onLog() {} })
+  const simB = wrapEngineInstance(instB)
+  const hostB = createSimHostFromInstance(simB, { clock: { now: () => 0 }, timer: noopTimer() })
+  const framesB: Uint8Array[] = []
+  const fakeConnection: Connection = {
+    datagrams: false,
+    onMessage: null,
+    onClose: null,
+    send: (_cls, bytes) => framesB.push(bytes.slice()),
+    close: () => {},
+  }
+  const connIdB = hostB.accept(fakeConnection)
+  expect(connIdB).toBe(0)
+
+  hostA.stepTick(20)
+  hostB.stepTick(20)
+
+  expect(hostA.hash()).toBe(hostB.hash())
+  expect(hostA.hash()).not.toBe('0000000000000000')
+
+  const dst = new Uint8Array(simA.txBytes())
+  const framesA: Uint8Array[] = []
+  for (;;) {
+    const n = clientDownlinkIn.popInto(dst, 0)
+    if (n < 0) break
+    framesA.push(dst.slice(0, n))
+  }
+  expect(framesA.length).toBeGreaterThan(0)
+  expect(framesA.length).toBe(framesB.length)
+  for (let i = 0; i < framesA.length; i++) {
+    expect(Array.from(framesA[i] as Uint8Array)).toEqual(Array.from(framesB[i] as Uint8Array))
+  }
+
+  expect(connection.downlinkRetries).toBe(0)
+  expect(connection.drops).toBe(0)
 })

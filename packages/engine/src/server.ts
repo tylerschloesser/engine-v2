@@ -57,6 +57,14 @@ export interface HostServices {
 // Pacing constants.
 // ---------------------------------------------------------------------------------------------
 
+/** `host::MAX_CONNS` (`host::warm::MAX_VIEWS`, `crates/engine/src/host/mod.rs`): the sim role's
+ * own fixed connection-table size, one cap reused rather than two (M15 Deviations). Not read from
+ * config or any ABI export (docs/plan/15b-ring-connection-and-replica-rendering.md Deviations:
+ * `ConnId` is a plain, host-picked `u32 < MAX_CONNS`, and `host::Host::connect` enforces this
+ * bound itself with a native `assert!`) -- mirrored here as a plain constant, the same relationship
+ * `DEFAULT_TICK_HZ` already has to `TickRate::HZ_20`. */
+export const MAX_CONNS = 8
+
 /** 0005 "Idle pause is replay-safe": "the host runs at most 5 catch-up ticks per wakeup". */
 export const MAX_CATCHUP_TICKS = 5
 /** 0008 §2 "Sim host warmer": the between-tick warm budget. */
@@ -108,6 +116,29 @@ export interface SimInstance {
    * real game, `20` (the trait default) for anything that never overrides it. Read once, by
    * `createSimHostFromInstance`, at construction -- not on every tick. */
   tickHz(): number
+  /** docs/plan/15b-ring-connection-and-replica-rendering.md: admits `conn` into the sim role's
+   * connection table (`sim_connect`, forwarding to `host::Host::connect`). `Status` (numeric). */
+  simConnect(conn: number): number
+  /** docs/plan/15b-ring-connection-and-replica-rendering.md: frees `conn`'s slot (`sim_disconnect`,
+   * `host::Host::disconnect`). `Status` (numeric); tolerates an unknown/already-freed `conn`. */
+  simDisconnect(conn: number): number
+  /** docs/plan/15b-ring-connection-and-replica-rendering.md: copies `bytes` (the whole buffer --
+   * only its first `len` bytes are read on the Rust side, `Host::sim_admit`'s own contract) into
+   * the sim role's own `Rx` region and calls `sim_admit(conn, len)`. `Status` (numeric). */
+  simAdmit(conn: number, bytes: Uint8Array, len: number): number
+  /** docs/plan/15b-ring-connection-and-replica-rendering.md: builds `conn`'s frame into the sim
+   * role's own `Tx` region (`sim_build_frame`), returning its byte length (`0` = nothing to say,
+   * `Host::build_frame`'s own "nothing to say" convention) -- throws on a negative/error status,
+   * the same convention `simSealFrame` uses for `sim_seal_frame`. `bytes` is a view over the `Tx`
+   * region valid only until the next call that touches it (the same "engine-owned buffer" contract
+   * 0009's `Connection.send` already carries); present only when `len > 0`. */
+  simBuildFrame(conn: number): { len: number; bytes?: Uint8Array }
+  /** docs/plan/15b-ring-connection-and-replica-rendering.md: the sim role's own `Rx`/`Tx` region
+   * capacities in bytes, read once so a `RingConnection`'s preallocated buffers can be sized to
+   * match exactly instead of a magic number duplicated between Rust and TS. `0` when the region is
+   * absent (a role/instance with no such region, e.g. a hand-rolled fixture `SimInstance`). */
+  rxBytes(): number
+  txBytes(): number
 }
 
 /** The real adapter: `SimInstance` over a real `EngineInstance` (role `Sim`). */
@@ -120,6 +151,9 @@ export function wrapEngineInstance(inst: EngineInstance): SimInstance {
   // call, matching its own doc comment ("a view valid only during the call"), so overwriting it in
   // place on the next call is safe.
   const sealResult: { len: number; bytes?: Uint8Array } = { len: 0 }
+  // Same discipline as `sealResult` above, for `simBuildFrame` (docs/plan/
+  // 15b-ring-connection-and-replica-rendering.md): one object, mutated in place every call.
+  const frameResult: { len: number; bytes?: Uint8Array } = { len: 0 }
   return {
     simGenesis: () => inst.call0(inst.x.sim_genesis),
     simTick: () => inst.call0(inst.x.sim_tick),
@@ -144,6 +178,38 @@ export function wrapEngineInstance(inst: EngineInstance): SimInstance {
     },
     simWarmOne: () => inst.call0(inst.x.sim_warm_one),
     tickHz: () => inst.call0(inst.x.tick_hz),
+    simConnect: (conn) => inst.call1(inst.x.sim_connect, conn),
+    simDisconnect: (conn) => inst.call1(inst.x.sim_disconnect, conn),
+    simAdmit: (conn, bytes, len) => {
+      const region = inst.region(RegionId.Rx)
+      if (!region) throw new Error('sim_admit: the Rx region is absent')
+      // Whole fixed buffer, not `bytes.subarray(0, len)`: `sim_admit`'s own Rust-side contract
+      // only ever reads the first `len` bytes of `Rx`, so copying the rest (unread garbage) costs
+      // nothing but a `.set()` call (`.claude/rules/hot-paths.md`: never `subarray()` here).
+      region.u8.set(bytes)
+      return inst.call2(inst.x.sim_admit, conn, len)
+    },
+    simBuildFrame: (conn) => {
+      const raw = inst.call1(inst.x.sim_build_frame, conn)
+      if (raw < 0) throw new Error(`sim_build_frame failed: status ${-raw}`)
+      if (raw === 0) {
+        frameResult.len = 0
+        delete frameResult.bytes
+        return frameResult
+      }
+      const region = inst.region(RegionId.Tx)
+      if (!region) throw new Error('sim_build_frame: len > 0 but the Tx region is absent')
+      frameResult.len = raw
+      // A per-tick `subarray` on the `Tx` region, same open question `simSealFrame`'s own `raw > 0`
+      // branch already carries (Deviations: unmeasured by any zero-GC page yet, matching 0014 §4's
+      // "a per-send subarray is acceptable" carve-out for the *server* -- the sim *worker* is
+      // 0016-budgeted, so this is flagged for the step 4-6 implementer's own zero-GC measurement,
+      // not asserted zero-alloc here).
+      frameResult.bytes = region.u8.subarray(0, raw)
+      return frameResult
+    },
+    rxBytes: () => inst.region(RegionId.Rx)?.len ?? 0,
+    txBytes: () => inst.region(RegionId.Tx)?.len ?? 0,
   }
 }
 
@@ -182,6 +248,21 @@ export interface SimHost {
   hash(): string
   readonly counters: SimHostCounters
   logSink: ((bytes: Uint8Array) => void) | null
+  /**
+   * docs/plan/15b-ring-connection-and-replica-rendering.md Scope: admits `connection` into the
+   * sim role's connection table. Allocates the next free `ConnId` (0-based, `< MAX_CONNS`, the
+   * same fixed cap `host::Host::connect` itself enforces), calls `sim_connect`, and wires
+   * `connection.onMessage`/`onClose` so every uplink message this connection ever delivers reaches
+   * `sim_admit` and a close reaches `sim_disconnect` automatically. Returns the `ConnId`. Throws if
+   * every slot is already taken (single-player never exceeds one connection; a real capacity limit
+   * for multiplayer is M27+, Non-scope here).
+   *
+   * The per-connection frame pass ("after each tick `sim_build_frame(conn)` -> `connection.send
+   * (MsgClass.ReliableOrdered, view)` when `len > 0`", Scope) happens automatically, every tick,
+   * for every accepted connection, from inside this host's own tick procedure -- nothing further
+   * to call per connection once `accept` has returned.
+   */
+  accept(connection: Connection): number
 }
 
 type TimerServices = Pick<HostServices, 'clock' | 'timer'>
@@ -204,6 +285,11 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
   let genesisDone = false
   let running = false
   let stopTimer: (() => void) | null = null
+
+  // docs/plan/15b-ring-connection-and-replica-rendering.md: one slot per `ConnId`, `null` when
+  // free. Reused array, sized once at construction (`.claude/rules/hot-paths.md`), never
+  // reallocated: `accept`/a future disconnect only ever write existing slots.
+  const conns: (Connection | null)[] = new Array(MAX_CONNS).fill(null)
 
   // docs/plan/13b-tick-timing-allocation.md (Deviations; ADR amending M13's per-tick decision):
   // `runOneTickTimed`'s own two `services.clock.now()` reads and `onFire`'s own one (below) each
@@ -239,8 +325,10 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
   }
 
   /** The tick procedure (Scope: "one function, the only caller of the tick exports"): `len =
-   * sim_seal_frame()`; if `len > 0` call `logSink`; `sim_tick()`; the per-connection frame pass
-   * (empty until M15b, Non-scope). No clock read here any more (Deviations): a tick's own overrun
+   * sim_seal_frame()`; if `len > 0` call `logSink`; `sim_tick()`; then the per-connection frame
+   * pass (docs/plan/15b-ring-connection-and-replica-rendering.md Scope: "after each tick
+   * `sim_build_frame(conn)` -> `connection.send(...)` when `len > 0`"), once per accepted
+   * connection, in `ConnId` order. No clock read here any more (Deviations): a tick's own overrun
    * is no longer measured individually. */
   function runOneTick(): void {
     const seal = sim.simSealFrame()
@@ -248,6 +336,14 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
     const status = sim.simTick()
     if (status !== Status.Ok) throw new Error(`sim_tick failed: status ${status}`)
     counters.ticksRun++
+    for (let conn = 0; conn < MAX_CONNS; conn++) {
+      const connection = conns[conn]
+      if (!connection) continue
+      const frame = sim.simBuildFrame(conn)
+      if (frame.len > 0) {
+        connection.send(MsgClass.ReliableOrdered, frame.bytes as Uint8Array)
+      }
+    }
   }
 
   /** Runs the chunk warmer for at most `WARM_BUDGET_MS` from `now` (already read by `resync`, the
@@ -365,6 +461,40 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
     },
     counters,
     logSink: null,
+    accept(connection: Connection): number {
+      let conn = -1
+      for (let i = 0; i < MAX_CONNS; i++) {
+        if (!conns[i]) {
+          conn = i
+          break
+        }
+      }
+      if (conn < 0) {
+        throw new Error(`SimHost.accept: no free connection slot (MAX_CONNS = ${MAX_CONNS})`)
+      }
+      const status = sim.simConnect(conn)
+      if (status !== Status.Ok) {
+        throw new Error(`sim_connect failed: status ${status}`)
+      }
+      conns[conn] = connection
+      connection.onMessage = (bytes) => {
+        // A `RingConnection` hands the same preallocated receive buffer every call and carries the
+        // real length on *its own* `lastMessageLength` (a side channel avoiding a per-message
+        // `subarray()`, docs/plan/15b-ring-connection-and-replica-rendering.md Deviations), read
+        // here synchronously (this callback runs inside `RingConnection.drainUplink`'s own loop,
+        // before the next iteration overwrites it). A generic 0009 `Connection` (a future
+        // socket-backed one, say) carries no such property, and `bytes.length` is then exactly the
+        // message length, as the interface itself implies.
+        const withLen = connection as Connection & { lastMessageLength?: number }
+        const len = withLen.lastMessageLength ?? bytes.length
+        sim.simAdmit(conn, bytes, len)
+      }
+      connection.onClose = (_code) => {
+        sim.simDisconnect(conn)
+        conns[conn] = null
+      }
+      return conn
+    },
   }
   return host
 }
