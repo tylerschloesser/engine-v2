@@ -215,3 +215,46 @@ fn queue_touches_retained() {
         "untouched chunk should have been the LRU victim"
     );
 }
+
+/// M15c step 1's reproducer, native and browser-free (docs/plan/
+/// 15c-terrain-visibility-and-cache-invalidation.md "The bug, confirmed at M15b's gate"): a chunk
+/// the client has already pristine-generated (here, `TerrainStore::materialize`, the same effect
+/// `TerrainFeed::deliver` -> `insert_pristine` has once a gen worker's result lands), then
+/// receives a host snapshot for (`Replica::apply_snapshot_overlay` -> `TerrainStore::
+/// replace_overlay`), is evicted from the cache -- and with the camera held perfectly still
+/// (`view.visible` identical across both `set_view` calls), `GenQueue::set_view` used to return
+/// early on `last_visible` alone and never re-request it, so `client_chunk_hash` would read
+/// `NotCached` forever. Before the `cache_eviction_seq` consultation this fails at the `resorted`
+/// assert (`set_view` returns `false`, and the chunk is never in `dispatched`); after, it passes.
+#[test]
+fn overlay_replace_evicts_and_regenerates_with_view_unchanged() {
+    let mut s = store(CacheCapacity::Chunks(16));
+    let mut q = GenQueue::new(ChunkDims::new(4), 1);
+    let chunk = ChunkCoord::new(0, 0);
+
+    // Pristine-generate the chunk, same as a gen worker's result landing via `TerrainFeed::deliver`.
+    s.materialize(chunk);
+    assert!(s.is_cached(chunk));
+
+    let view = view_at(single(chunk));
+    q.set_view(&view, &s); // establishes last_visible; the chunk is already cached, so nothing to queue
+
+    // A host snapshot arrives for this chunk and evicts it -- 0007 §1's own doc comment: "the next
+    // read regenerates and re-applies, which is always correct". Nothing about the camera changed.
+    s.replace_overlay(chunk, &[(0, Tile::new(9, 0, 0))]);
+    assert!(!s.is_cached(chunk));
+
+    // The camera never moved: `view.visible` is byte-identical to the call above.
+    let resorted = q.set_view(&view, &s);
+    assert!(
+        resorted,
+        "set_view must not skip its rescan: the chunk was evicted since the last call, even \
+         though the view is unchanged"
+    );
+
+    let dispatched = drain_all(&mut q, 0);
+    assert!(
+        dispatched.contains(&chunk),
+        "the evicted chunk must be re-queued for generation even though the view never changed"
+    );
+}
