@@ -376,7 +376,7 @@ fn run_panning_tick(
         host.on_uplink(0, &s.uplink_buf[..n]);
     }
 
-    if i % 2 == 0 {
+    if i.is_multiple_of(2) {
         s.seq += 1;
         host.queue_action_for_test(
             player,
@@ -407,11 +407,11 @@ fn run_panning_tick(
     }
     p.pending_despawn = Some(id);
 
-    if i % 50 == 0 {
+    if i.is_multiple_of(50) {
         s.seq += 1;
         host.queue_action_for_test(player, s.seq, NAction::SetGlobal { n: i });
     }
-    if i % 70 == 0 {
+    if i.is_multiple_of(70) {
         s.seq += 1;
         host.queue_action_for_test(player, s.seq, NAction::SetPlayer { n: i });
     }
