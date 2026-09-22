@@ -43,8 +43,43 @@ export type WorldgenScenario = {
   chunks: [number, number][]
 }
 
+/** One scripted action, JSON-encoded exactly as `client.dispatch` would encode it (docs/plan/
+ * 16-action-round-trip.md step 5): `seq` is the client-assigned per-player sequence (0004), and
+ * `action` is `G::Action`'s own external-tag JSON shape (a fixture author writes `{"Paint":
+ * {...}}` or a bare `"Roll"` for a unit variant, exactly as `serde_json` would produce). */
+export type ScriptAction = { seq: number; action: unknown }
+
+/** One tick's worth of a `ScriptScenario` (`fixtures/puts/tests/puts_scenarios.rs`'s `script_a()`,
+ * mirrored here): `connect` calls `sim_connect(0)` and `actions` are admitted, both *before* the
+ * one `sim_tick()` call that applies them together -- the same "one `Sim::step(batch)` call per
+ * distinct `Tick`" shape `engine::testing::testkit::run_script` uses natively. */
+export type ScriptEntry = { tick: number; connect?: boolean; actions?: ScriptAction[] }
+
+/**
+ * `fixtures/puts/golden/scenario-script-a.json` (docs/plan/16-action-round-trip.md step 5): a
+ * sim-role script of real per-tick actions, driven through the real admit pipeline (`sim_connect`/
+ * `sim_admit`) rather than `SimScenario.input`'s synthetic byte fill. No TS postcard encoder exists
+ * (0003: rejected) or is needed: `encoderConfig` is a second, client-role instance of the *same*
+ * `.wasm` used purely to turn each scripted action's JSON into real wire bytes (`on_action` +
+ * `client_poll_uplink`, the exact client-side half `client.dispatch` drives) which are then copied
+ * straight into the sim instance's own `Rx` region for `sim_admit` -- two real WASM instances, one
+ * script, no bytes ever hand-encoded. `runScriptScenario` (not `runHashScenario`, which takes only
+ * one instance) is this scenario kind's own driver. One checkpoint, at `checkpointAt` (`fixtures/
+ * puts/tests/puts_scenarios.rs`'s own `puts_script_a_golden` likewise returns one final hash, not a
+ * series).
+ */
+export type ScriptScenario = {
+  kind: 'script'
+  role: 'sim'
+  config: InstanceConfig
+  encoderConfig: InstanceConfig
+  genesis?: boolean
+  script: ScriptEntry[]
+  checkpointAt: number
+}
+
 /** `kind` dispatches which scenario shape this is; absent means `SimScenario` (M02). */
-export type HashScenario = SimScenario | WorldgenScenario
+export type HashScenario = SimScenario | WorldgenScenario | ScriptScenario
 
 /** `fixtures/<name>/golden/golden.json`; written only by `pnpm golden`. */
 export type Golden = { checkpoints: string[] }
@@ -63,9 +98,13 @@ function ok(status: number, what: string, tick: number): void {
 const CHECKPOINT_CHUNKS = 64
 
 /** Run the scenario on a fresh instance of the role its own `role` field names; one 16-digit hex
- * hash per checkpoint. */
+ * hash per checkpoint. A `ScriptScenario` needs two instances (`runScriptScenario`, below), so it
+ * is never valid here. */
 export function runHashScenario(inst: EngineInstance, scenario: HashScenario): string[] {
   if (scenario.kind === 'worldgen') return runWorldgenScenario(inst, scenario)
+  if (scenario.kind === 'script') {
+    throw new Error('runHashScenario: a script scenario needs runScriptScenario(sim, encoder, ..)')
+  }
   return runSimScenario(inst, scenario)
 }
 
@@ -89,6 +128,79 @@ function runSimScenario(inst: EngineInstance, scenario: SimScenario): string[] {
       ok(inst.call0(inst.x.sim_hash), 'sim_hash', t)
       checkpoints.push(inst.readU64Hex(RegionId.Result, 0))
     }
+  }
+  return checkpoints
+}
+
+const scriptEncoder = new TextEncoder()
+
+/**
+ * docs/plan/16-action-round-trip.md step 5: `sim`'s own admit pipeline driven by real per-tick
+ * actions, each turned into wire bytes by `encoder` (a second, client-role instance of the same
+ * `.wasm`) rather than a hand-written postcard encoder. Mirrors `engine::testing::testkit::
+ * run_script`'s own contract exactly: a `ScriptEntry`'s `tick` names the ordinal `sim_tick()` call
+ * that applies it (idle ticks in between are filled with a bare `sim_tick()`), `connect` and every
+ * `actions` entry for that tick are queued (`sim_connect`/`sim_admit`) *before* that tick's own
+ * `sim_tick()` call, so they land in the same batch a native `Sim::step(batch)` call would apply
+ * together -- `Host::connect`'s own extra `Record::Player{Connected}` (beyond `script_a()`'s single
+ * `Joined` entry) is a no-op for any `Game::on_player` that only handles `Joined`, so this reaches
+ * the identical `state_hash()` regardless. One checkpoint, at `checkpointAt`.
+ */
+export function runScriptScenario(
+  sim: EngineInstance,
+  encoder: EngineInstance,
+  scenario: ScriptScenario,
+): string[] {
+  if (scenario.genesis) ok(sim.call0(sim.x.sim_genesis), 'sim_genesis', 0)
+  const simRx = sim.region(RegionId.Rx)
+  if (!simRx) throw new Error('runScriptScenario: sim Rx region is missing')
+  const encoderRx = encoder.region(RegionId.Rx)
+  const encoderTx = encoder.region(RegionId.Tx)
+  if (!encoderRx || !encoderTx) {
+    throw new Error('runScriptScenario: encoder Rx/Tx region is missing')
+  }
+
+  let tick = 0
+  const checkpoints: string[] = []
+  const recordEntry = (t: number): void => {
+    while (tick + 1 < t) {
+      ok(sim.call0(sim.x.sim_tick), 'sim_tick', tick + 1)
+      tick += 1
+    }
+  }
+  for (const entry of scenario.script) {
+    recordEntry(entry.tick)
+    if (entry.connect) ok(sim.call1(sim.x.sim_connect, 0), 'sim_connect', entry.tick)
+    for (const { seq, action } of entry.actions ?? []) {
+      const json = scriptEncoder.encode(JSON.stringify(action))
+      const record = new Uint8Array(8 + json.length)
+      const view = new DataView(record.buffer)
+      view.setUint32(0, seq, true)
+      view.setUint32(4, json.length, true)
+      record.set(json, 8)
+      encoderRx.u8.set(record)
+      ok(encoder.call1(encoder.x.on_action, record.length), 'on_action', entry.tick)
+      const len = encoder.call1(encoder.x.client_poll_uplink, 0)
+      if (len <= 0) {
+        throw new Error(`runScriptScenario: encoder produced no uplink batch at tick ${entry.tick}`)
+      }
+      simRx.u8.set(encoderTx.u8.subarray(0, len))
+      ok(sim.call2(sim.x.sim_admit, 0, len), 'sim_admit', entry.tick)
+    }
+    ok(sim.call0(sim.x.sim_tick), 'sim_tick', entry.tick)
+    tick = entry.tick
+    if (entry.tick === scenario.checkpointAt) {
+      ok(sim.call0(sim.x.sim_hash), 'sim_hash', entry.tick)
+      checkpoints.push(sim.readU64Hex(RegionId.Result, 0))
+    }
+  }
+  while (tick < scenario.checkpointAt) {
+    ok(sim.call0(sim.x.sim_tick), 'sim_tick', tick + 1)
+    tick += 1
+  }
+  if (checkpoints.length === 0) {
+    ok(sim.call0(sim.x.sim_hash), 'sim_hash', tick)
+    checkpoints.push(sim.readU64Hex(RegionId.Result, 0))
   }
   return checkpoints
 }

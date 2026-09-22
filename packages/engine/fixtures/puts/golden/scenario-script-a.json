@@ -1,0 +1,72 @@
+{
+  "kind": "script",
+  "role": "sim",
+  "config": {
+    "arenaBytes": 100663296,
+    "game": {
+      "seed": "0x1",
+      "params": null,
+      "maxEntities": 262144,
+      "maxModifiedTiles": 1048576,
+      "maxActionGrowth": 4096,
+      "cacheChunks": 1024
+    }
+  },
+  "encoderConfig": {
+    "arenaBytes": 50331648,
+    "game": {
+      "seed": "0x1",
+      "params": null,
+      "genWorkers": 1,
+      "cacheChunks": 1024
+    }
+  },
+  "genesis": true,
+  "checkpointAt": 45,
+  "script": [
+    {
+      "tick": 1,
+      "connect": true,
+      "actions": [
+        { "seq": 1, "action": { "Paint": { "pos": { "x": 2, "y": 2 }, "base": 3, "resource": 0 } } }
+      ]
+    },
+    {
+      "tick": 2,
+      "actions": [{ "seq": 2, "action": { "Spawn": { "at": { "x": 5, "y": 5 }, "kind": 1 } } }]
+    },
+    {
+      "tick": 3,
+      "actions": [{ "seq": 3, "action": { "Bump": { "at": { "x": 5, "y": 5 } } } }]
+    },
+    {
+      "tick": 4,
+      "actions": [{ "seq": 4, "action": { "Remove": { "at": { "x": 5, "y": 5 } } } }]
+    },
+    {
+      "tick": 5,
+      "actions": [{ "seq": 5, "action": { "SetNote": { "n": 42 } } }]
+    },
+    {
+      "tick": 6,
+      "actions": [{ "seq": 6, "action": { "SetMotd": { "n": 7 } } }]
+    },
+    {
+      "tick": 7,
+      "actions": [{ "seq": 7, "action": "Roll" }]
+    },
+    {
+      "tick": 25,
+      "actions": [{ "seq": 8, "action": "Roll" }]
+    },
+    {
+      "tick": 45,
+      "actions": [
+        {
+          "seq": 9,
+          "action": { "Paint": { "pos": { "x": -3, "y": 8 }, "base": 1, "resource": 2 } }
+        }
+      ]
+    }
+  ]
+}

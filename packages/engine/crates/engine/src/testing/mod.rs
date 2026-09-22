@@ -29,7 +29,15 @@ struct Golden {
 /// Node, which docs/decisions/0002 makes authoritative: a mismatch here means the native build
 /// diverged from the `.wasm`, so fix the code, not the golden.
 pub fn assert_golden(fixture_dir: impl AsRef<Path>, checkpoints: &[u64]) {
-    let path = fixture_dir.as_ref().join("golden/golden.json");
+    assert_golden_named(fixture_dir, "golden.json", checkpoints);
+}
+
+/// `assert_golden`, against `<fixture_dir>/golden/<file_name>` instead of the canonical `golden.
+/// json` (docs/plan/16-action-round-trip.md step 5): a fixture with more than one scenario/golden
+/// pair (`scripts/golden.mjs`'s own `scenario<suffix>.json` -> `golden<suffix>.json` convention,
+/// e.g. `fixtures/puts/golden/golden-script-a.json`) names its own file explicitly.
+pub fn assert_golden_named(fixture_dir: impl AsRef<Path>, file_name: &str, checkpoints: &[u64]) {
+    let path = fixture_dir.as_ref().join("golden").join(file_name);
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("{}: {e} (write it with `pnpm golden`)", path.display()));
     let golden: Golden =

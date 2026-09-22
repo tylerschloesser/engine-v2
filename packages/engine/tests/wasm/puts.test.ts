@@ -18,7 +18,13 @@ import {
   wrapEngineInstance,
 } from '../../src/server.js'
 import { loadFixture, readGolden } from '../support/fixtures.js'
-import { type Golden, type HashScenario, runHashScenario } from '../support/scenario.js'
+import {
+  type Golden,
+  type HashScenario,
+  runHashScenario,
+  runScriptScenario,
+  type ScriptScenario,
+} from '../support/scenario.js'
 
 test('wasm_idle_100_matches_native', async () => {
   const scenario = readGolden<HashScenario>('puts', 'scenario.json')
@@ -54,6 +60,28 @@ test('wasm_connected_100_matches_its_own_golden', async () => {
   // pair): a real assertion, not a tautology, since both fixtures share the same seed/config.
   const idleGolden = readGolden<Golden>('puts', 'golden.json')
   expect(checkpoints[0]).not.toBe(idleGolden.checkpoints[0])
+})
+
+/**
+ * docs/plan/16-action-round-trip.md step 5: the WASM-under-Node leg of `puts_script_a`'s golden,
+ * `puts_scenarios.rs`'s `puts_script_a_golden` native leg's own counterpart -- both compare
+ * against `golden/golden-script-a.json`, so this and the native test prove `.wasm` matches native
+ * transitively (`wasm_idle_100_matches_native`'s own precedent, above). `runScriptScenario`'s own
+ * doc comment has the two-instance ("sim" + "encoder") shape this drives; the value must not move
+ * (`7bdddfc9c749b1fb`, unchanged from when this golden was native-only).
+ */
+test('wasm_script_a_matches_native', async () => {
+  const scenario = readGolden<ScriptScenario>('puts', 'scenario-script-a.json')
+  const golden = readGolden<Golden>('puts', 'golden-script-a.json')
+  const { wasm } = await loadFixture('puts')
+  const sim = instantiate(wasm, Role.Sim, scenario.config, { onLog() {} })
+  const encoder = instantiate(wasm, Role.Client, scenario.encoderConfig, { onLog() {} })
+
+  const checkpoints = runScriptScenario(sim, encoder, scenario)
+
+  expect(checkpoints).toHaveLength(1)
+  expect(checkpoints).toEqual(golden.checkpoints)
+  expect(checkpoints[0]).toBe('7bdddfc9c749b1fb')
 })
 
 // `fx-puts`'s own `TICK_RATE` is the trait default (`TickRate::HZ_20`, `server.ts`'s "20 Hz is

@@ -81,17 +81,23 @@ pub enum Rejected<G: Game> {
 /// flattening it away (orchestrator ruling at the M16 gate): 0004's Decision defines `Rejected<G>`
 /// as exactly this two-variant enum, and collapsing the tag would make a game's own reject variant
 /// indistinguishable from the engine's by name alone once `RateLimited` (M31) and `StateBudgetFull`
-/// (M21) are real. `TS` (docs/plan/16-action-round-trip.md step 4): `EngineReject` is engine-side,
-/// not a `G::Reject`, and ts-rs's own derive macro puts its `export_bindings_<type>` test in the
-/// crate that derives `TS` -- `engine` here, not a downstream game crate -- so `cargo test
-/// export_bindings` run from `fixtures/puts` (0017 §5's own command, scoped to that one package,
-/// no `-p`/`--workspace`) would never run it. `fixtures/puts/src/lib.rs` instead has its own
-/// `#[test] fn export_bindings_enginereject()` that calls `<engine::sim::EngineReject as ts_rs::
-/// TS>::export_all(&Config::from_env())` directly -- the exact call the derive macro's own
-/// generated test would have made, just written by hand in the crate whose `cargo test` actually
-/// runs, so `EngineReject.ts` lands in the fixture's `bindings/` alongside `Action`/`Reject`.
+/// (M21) are real. `TS` (docs/plan/16-action-round-trip.md step 4), deliberately **without**
+/// `#[ts(export)]`: `EngineReject` is engine-side, not a `G::Reject`, and ts-rs's own derive macro
+/// puts its `export_bindings_<type>` test in the crate that derives `TS` -- `engine` here, not a
+/// downstream game crate -- so `cargo test export_bindings` run from `fixtures/puts` (0017 §5's own
+/// command, scoped to that one package, no `-p`/`--workspace`) would never run it anyway; worse,
+/// `#[ts(export)]` here would make *every* `cargo test -p engine` (this crate's own fast-tier
+/// suite, `pnpm test rust`) write `crates/engine/bindings/EngineReject.ts` as an unwanted side
+/// effect, since ts-rs generates `output_path()`/`export_all()` unconditionally and only
+/// `#[ts(export)]` decides whether it *also* emits its own auto-run test (found the hard way: a
+/// stray `crates/engine/bindings/` appeared after running the plain engine suite once with the
+/// attribute present). `fixtures/puts/src/lib.rs` instead has its own `#[test] fn export_bindings_
+/// enginereject()` that calls `<engine::sim::EngineReject as ts_rs::TS>::export_all(&Config::
+/// from_env())` directly -- `export_all` needs no `#[ts(export)]` at all, so this is the same call
+/// the derive macro's own generated test would have made, just written by hand in the one crate
+/// whose `cargo test export_bindings` actually runs, landing `EngineReject.ts` in the fixture's own
+/// `bindings/` alongside `Action`/`Reject`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, ts_rs::TS)]
-#[ts(export)]
 pub enum EngineReject {
     RateLimited,
     StateBudgetFull,

@@ -1,7 +1,8 @@
 //! Golden and replay scenarios for `fx-puts` (docs/plan/12b-world-access-and-sim-driver.md Tests
-//! added). Native-blessed (`assert_golden_hash!`): no sim ABI path exists yet (M13 switches
-//! `puts_idle_100` to the `.wasm`-authoritative `assert_golden`; M16 does the same for
-//! `puts_script_a`).
+//! added). Both goldens here are `.wasm`-authoritative (`assert_golden`/`assert_golden_named`):
+//! `puts_idle_100` since M13, `puts_script_a` since M16 (docs/plan/16-action-round-trip.md step
+//! 5) -- it was native-blessed (`assert_golden_hash!`) until then, since no sim ABI admit path
+//! existed to drive `golden/scenario-script-a.json`'s real `sim_connect`/`sim_admit` traffic.
 
 use engine::game::{PlayerEvent, PlayerId};
 use engine::sim::{Record, Sim, WorldParams};
@@ -139,11 +140,24 @@ fn puts_idle_100_golden() {
     engine::testing::assert_golden(env!("CARGO_MANIFEST_DIR"), &[sim.state_hash()]);
 }
 
+/// `.wasm`-authoritative since M16 (docs/plan/16-action-round-trip.md step 5; was native-blessed
+/// via `assert_golden_hash!` reading `tests/golden/puts_script_a.hash`): `golden/golden-script-a.
+/// json` is written by `pnpm golden puts`, from the `.wasm` run over `golden/scenario-script-a.
+/// json` under Node (0002) -- the same script as `script_a()` below, driven through the real admit
+/// pipeline (`sim_connect`/`sim_admit`, `tests/support/scenario.ts`'s `runScriptScenario`) rather
+/// than this test's own direct-to-`Sim` `run_script` bypass. Both reach the identical hash
+/// (`7bdddfc9c749b1fb`, unmoved from the native-blessed value): `Host::connect`'s own extra
+/// `Record::Player{Connected}` (`script_a()` only ever queues `Joined`) is a no-op for `Puts::
+/// on_player`, which only handles `Joined` (Deviations has the full reasoning).
 #[test]
 fn puts_script_a_golden() {
     let mut sim = new_sim(1);
     let hash = run_script(&mut sim, &script_a());
-    engine::assert_golden_hash!("puts_script_a", hash);
+    engine::testing::assert_golden_named(
+        env!("CARGO_MANIFEST_DIR"),
+        "golden-script-a.json",
+        &[hash],
+    );
 }
 
 /// A replay from the same genesis, running the identical script, must reproduce the same hash

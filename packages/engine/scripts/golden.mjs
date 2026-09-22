@@ -12,7 +12,7 @@ import { instantiate } from '../dist/loader.js'
 import { loadGame } from '../dist/server-node.js'
 import { buildGame } from '../dist/vite.js'
 import { runWorldgenBench } from '../tests/support/bench-worldgen.ts'
-import { roleOf, runHashScenario } from '../tests/support/scenario.ts'
+import { roleOf, runHashScenario, runScriptScenario } from '../tests/support/scenario.ts'
 
 const fixtures = fileURLToPath(new URL('../fixtures/', import.meta.url))
 const wanted = process.argv[2]
@@ -41,7 +41,18 @@ for (const name of wanted === undefined ? names : [wanted]) {
     const suffix = scenarioFile.slice('scenario'.length, -'.json'.length) // '' or '-connected'
     const scenario = JSON.parse(readFileSync(join(golden, scenarioFile), 'utf8'))
     const inst = instantiate(wasm, roleOf(scenario), scenario.config, { onLog() {} })
-    const checkpoints = runHashScenario(inst, scenario)
+    // docs/plan/16-action-round-trip.md step 5: a `script` scenario needs a second, client-role
+    // instance of the same `.wasm` purely to encode each scripted action into real wire bytes
+    // (`runScriptScenario`'s own doc comment has the detail) -- every other scenario kind needs
+    // only the one instance `runHashScenario` already takes.
+    const checkpoints =
+      scenario.kind === 'script'
+        ? runScriptScenario(
+            inst,
+            instantiate(wasm, Role.Client, scenario.encoderConfig, { onLog() {} }),
+            scenario,
+          )
+        : runHashScenario(inst, scenario)
     const path = join(golden, `golden${suffix}.json`)
     writeFileSync(path, `${JSON.stringify({ checkpoints }, null, 2)}\n`)
     written.push(path)

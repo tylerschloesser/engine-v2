@@ -1,0 +1,15 @@
+# Repo-wide cargo config (applies to every `cargo`/`cargo nextest` invocation whose CWD is under
+# this tree, `.cargo/config.toml`'s own ancestor-directory discovery).
+[env]
+# ts-rs's own bindings step (docs/decisions/0017-packaging-and-build.md §5; docs/plan/
+# 16-action-round-trip.md step 4): `TS_RS_EXPORT_DIR = "bindings"` is ts-rs's own default made
+# explicit; `TS_RS_IMPORT_EXTENSION = "js"` matches this repo's `nodenext` module resolution
+# (`packages/engine/CLAUDE.md`: "Relative imports carry the `.js` extension"). `[env]` reaches
+# every process cargo spawns, test binaries included -- without it, a bare `cargo test`/`cargo
+# nextest run` over a crate with a `#[ts(export)]` type (not routed through `packages/engine/src/
+# build-game.ts`'s own `exportBindings()`, which sets both explicitly for portability outside this
+# workspace) regenerates its `bindings/*.ts` with ts-rs's raw defaults: no `.js` extension, which
+# fails `tsc` under `nodenext` resolution, silently corrupting the committed, `pnpm format`-run
+# files (found running the plain `fx-puts` suite directly while building M16).
+TS_RS_EXPORT_DIR = "bindings"
+TS_RS_IMPORT_EXTENSION = "js"
