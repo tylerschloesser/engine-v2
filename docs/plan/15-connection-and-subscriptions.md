@@ -69,4 +69,200 @@ Crate `CLAUDE.md`: "host/ and client/ are outside the deterministic core: they m
 none
 
 ## Deviations
-(filled in during Phase 3)
+
+**Seam shapes as landed** (all in `packages/engine/crates/engine/src/`):
+- `host::ConnId = u32`, `host::MAX_CONNS = host::warm::MAX_VIEWS` (8, one cap reused, not two).
+  `Host<G>::{connect(conn: ConnId) -> PlayerId, disconnect(conn), on_uplink(conn, bytes: &[u8]),
+  tick(&mut self), seal(&mut self), build_frame(conn, out: &mut [u8]) -> usize, region_hash(conn) ->
+  u64}`. Per-tick call order this milestone establishes (Scope names the methods, not an order):
+  `tick()` once (delivers queued `Record::Player`s, steps `Sim`, stamps `chunk_versions`, refreshes
+  every connection's `SubscriptionSet` from its last camera report) -- `build_frame(conn, ..)` once
+  per connection -- `seal()` once (clears the tick's `ChangeLog`). `testkit::Loopback::step` is the
+  reference caller.
+- `host::subs::SubscriptionSet::{new(dims, tick_rate), update(&mut self, report: CameraReport, tick:
+  Tick), entered() -> &[ChunkCoord], left() -> &[ChunkCoord], is_subscribed, chunks, warm_rect}`;
+  `clamp_report`, `CAP_CHUNKS = 128`, `MAX_HALF_TILES = 128`, `MIN_HALF_TILES = 1` (0010 names no
+  minimum for a zero/degenerate view -- "clamped about the centre, never rejected" -- 1 tile is this
+  milestone's own reading, same footing as `view::lookahead_chunks`'s own algorithm reading of
+  0008 §5). `warm_rect() = visible.expanded(2)`: exactly contains ring 1 and every look-ahead chunk
+  (`lookahead_chunks` places one at `visible.expanded(1)`'s edge plus one more chunk), so the
+  generation set `Host::build_frame` feeds `host::warm::set_view` stays a superset of the
+  subscription target (0008 §5), satisfying this milestone's Deviations item 1.
+- `client::Replica<G>::{new(dims, source, cache: CacheCapacity, own_player: PlayerId), is_held,
+  held_chunks, drain_dirty, region_hash}`, plus `pub(crate)` `apply_*` methods `ClientCore` drives.
+  Implements `WorldRead<G>` directly (not `world_access::View`, whose borrowed-`dyn Fn` held
+  predicate cannot outlive a method that returns a fresh `View`): `tile`/`traits_at` are `Unknown`
+  outside the held set; `entity`/`player`/`global` total, matching `View`'s own precedent.
+- `client::ClientCore<G>::{new(replica), view() -> &Replica<G>, on_frame(&[u8]) ->
+  Result<FrameSummary, WireError>, set_camera(CameraReport, t_ms: u32), poll_uplink(t_ms, out) ->
+  usize, drain_dirty, region_hash}`. `FrameSummary { tick, ack_seq, chunk_enters_pristine,
+  chunk_snapshots, chunk_leaves, tile_deltas, entity_ops }`.
+- `testing::testkit::Loopback<G>::{new(WorldParams<G>), add_client(delay_ticks, dims, source,
+  cache) -> (usize, PlayerId), client/client_mut/conn(i), set_camera(i, report), action(who,
+  action), step(), run(n), last_built_frame/last_build_frame_len(i)}`. `testing::budgets::{budget,
+  expect_within_budget}` -- this crate's first native reader of `budgets.json`.
+
+**PlayerId = conn + 1, not conn.** The brief's "`connect` assigns `PlayerId = conn`" is read loosely:
+`PlayerId(0)` is reserved ("none", `game::PlayerId`'s own doc comment), so conn 0 cannot map to it
+literally. `Host::connect` uses `PlayerId(conn + 1)`.
+
+**Chunk version default is 0 on both sides**, for a chunk never touched by a replicated write:
+absent from `Host`'s `chunk_versions: BTreeMap<ChunkCoord, u32>` (queried with
+`.unwrap_or(0)`), and inserted at `0` by `Replica::apply_enter_pristine`. Consistent by construction
+(never separately reasoned about per chunk), and exercised by every pristine chunk in
+`replica_hash_equals_host_region_hash`'s 600-tick run.
+
+**`ChunkDeltas` is hand-written from a flat buffer, not `wire::write_chunk_deltas`.** That function's
+signature takes `tile_groups: &[(ChunkCoord, &[(u16, Tile)])]` -- a slice-of-slices that cannot be a
+reused `Host` struct field (a self-referential lifetime) without either reallocating a
+`Vec<(ChunkCoord, Vec<(u16, Tile)>)>`'s inner `Vec`s every call or building the outer slice fresh
+every call. `Host::scratch_tile_flat: Vec<(ChunkCoord, u16, Tile)>` is gathered flat, deduplicated by
+`(chunk, index)` (last write wins) as `ChangeLog` entries are scanned, insertion-sorted by
+`(cy, cx, index)`, and `write_chunk_deltas_flat` (module-private, `host/mod.rs`) writes the identical
+wire bytes directly from it -- proven identical by every round-trip through the standard
+`read_chunk_deltas` reader in every test that exercises a `ChunkDeltas` section, and by
+`replica_hash_equals_host_region_hash`. Entity ops use the same flat-buffer trick
+(`scratch_entity_ops: Vec<(EntityId, EntityOpKind)>`); a `Put` re-reads the entity's current value
+from `Store` at write time rather than storing an owned clone, since the store already holds exactly
+the coalesced last-write value (0011 "puts are whole-value and idempotent").
+
+**Chunk-coordinate sorting never uses `ChunkCoord`'s derived `Ord`.** It compares `(x, y)` (field
+declaration order); the wire's own convention (`ChunkCoordListWriter`'s doc comment) is `(cy, cx)`.
+Every sort site here (`Host::region_hash`, `build_frame`'s entered/left/tile-group ordering,
+`SubscriptionSet`'s cap eviction) uses an explicit `(c.y, c.x)` key. **This was a real, caught bug**:
+`Replica::region_hash` first iterated its `held: BTreeMap<ChunkCoord, u32>` in the map's own
+(x, y)-derived order while `Host::region_hash` sorted (cy, cx) -- same chunk set, same per-chunk
+bytes, different `Fnv64` hash, since order feeds a sequential hash. Found by
+`replica_hash_equals_host_region_hash` failing after the 600-tick walk; a debug pass (chunk-set
+diff, then per-chunk version diff) narrowed it to ordering, not content, before the fix (an explicit
+sort in `Replica::region_hash`) landed.
+
+**Insertion sort, not `[T]::sort_by_key`, for every per-tick scratch buffer.** `Host`'s own
+buffers (entered/left/tile-flat) and `region_hash`'s chunk list use a hand-written, allocation-free,
+stable insertion sort (`host::insertion_sort_by_key`): `[T]::sort_by_key`'s standard-library
+implementation is not guaranteed allocation-free for larger inputs, which would have put
+`host_and_client_steady_state_no_alloc`'s claim on uncertain footing. Per-tick counts here are small
+(a connection's own touched-chunk/tile/entity count), so O(n²) is cheap.
+
+**`Delta::Roster` has no producer this milestone.** `0024 §8`/`delta.rs`'s own doc comment: "the
+roster changes only through logged connection events" -- but `Sim::step`'s `Record::Player` handling
+is M12b's, unchanged here (only `G::on_player` runs); nothing calls `Authority::write` with
+`Delta::Roster`. Wiring `Connected`/`Disconnected` to a `Roster` delta would mean adding write
+behaviour to `sim.rs`'s deterministic-state production, which is outside this brief's file list
+(`host/`, `client/`, `testkit/`) and changes hashed state -- a decision left to the orchestrator, not
+taken unilaterally. Consequence: `Global`'s roster half is built and wire-tested (M14 already
+covered it) but never actually populated by any of this milestone's own `Loopback` scenarios; a
+first frame's `Global` section carries `roster = []` (mask bit 0 clear) even though a player has
+joined, until some later milestone adds the producer. Not silently masked: flagged here, and
+`ConnCounters`/`PlayerSlot.online` are otherwise already correctly plumbed to receive it.
+
+**`Delta::Ack` gets its own explicit, empty match arm** in `build_frame`'s scan of `ChangeLog`
+entries, per this milestone's own instruction. In practice unreachable: `Authority::record_ack`
+applies it straight to `Store`, bypassing the `ChangeLog` (M12b Deviations), so no `Ack` ever
+appears in `sim.authority().changes()`. Not folded into a catch-all `_ => {}` regardless, so a
+future change that *did* start pushing `Ack` onto the log would not silently vanish into an
+unrelated wildcard.
+
+**Anchor-only entity delivery, not footprint overlap**, per M14's own precedent (`encode_chunk_
+snapshot`'s doc comment) and `Authority`'s scope derivation (`authority.rs`'s `Scopes` doc comment):
+both stay anchor-chunk-only until M21 widens them together (widening one alone would desync host and
+replica). `entity_straddling_subscribed_and_unsubscribed_chunks_delivered_once` is written and named
+against today's semantics; it does not test a footprint straddling two chunks (no such footprint
+exists in the M08b/M12b entity model this milestone builds on), only an entity whose *anchor* moves
+from a subscribed to an unsubscribed chunk, which the client must see leave (`Gone`) exactly once.
+
+**Testkit-only additions beyond the brief's own Provides list** (all `#[cfg(any(test, feature =
+"testing"))]`, `host/mod.rs`): `Host::genesis_for_test(WorldParams<G>) -> Self` (bypasses
+`Instance::init`'s JSON config parsing -- ABI wiring is 15b's, Non-scope here -- for `Loopback`'s own
+constructor and `tests/no_alloc_connection.rs`'s direct `Host` construction);
+`Host::queue_action_for_test(who, seq, action)` (a backdoor straight onto the same `pending_records`
+queue `connect`/`disconnect` use, delivered through the *existing, unchanged* `Sim::step`
+`Record::Action` path -- M16's own uplink admission pipeline, decode/admit/apply/`ActionResults`,
+does not exist yet, but this milestone's own frame-building tests need *some* way to change world
+state through a real `Sim::step` call); `Host::debug_subscribed`/`debug_version`,
+`Replica::debug_version` (equality-diagnostic accessors used once while debugging the region_hash
+bug above, kept since they are cheap and reusable). `Store::terrain_mut(&mut self) -> &mut
+TerrainStore` and `Sim::authority_mut(&mut self) -> &mut Authority<G>` are non-test, minimal,
+additive accessors: `Replica` needs `TerrainStore::{replace_overlay, clear_overlay, set_tile}`
+directly (none of those is a `Delta<G>` variant, so `Store::apply` is not the seam), and
+`Host::seal` needs `Authority::clear_changes` from outside `authority.rs`.
+
+**Memory budget (Budgets: "replica for the chunk cap fits the client arena share of 0015 §5"),
+addressed by two asserts in `Replica::new`**: the given `CacheCapacity` must cover at least
+`CAP_CHUNKS` (128, 0010) chunks, and `TerrainStore::memory_bytes()` (deterministic:
+`capacity_slots * dims.slab_bytes()`, reserved eagerly at construction, so this is checkable
+immediately) must not exceed `CLIENT_CACHE_BUDGET_BYTES = 4 MiB` (0015 §5's "4 MiB dense cache" line
+of the client role's 48 MiB share). 128 chunks at the default chunk edge (32) is 512 KiB, well under
+budget; this milestone's own test fixtures originally asked for 4096 chunks (16 MiB, over budget) and
+were changed to 1024 (0007 §8's own default, exactly 4 MiB) once the assert caught it. Three unit
+tests (`client/replica.rs`) prove both panics fire and the boundary (exactly 128 chunks) does not.
+
+**Measured, not fixed: `encode_chunk_snapshot`'s O(all entities), twice, per chunk**
+(`measure_join_cost_many_chunks_many_entities`). 2,000 entities spread across a 121-chunk view
+(0010's own worked "ring1 is 11x11=121" at the view clamp), one connection joining at once: **10.3 ms,
+11,131 bytes**. That single join alone exceeds 0010's entire 10 ms tick-CPU budget (which also has to
+cover every other connection's frame plus `apply`/`tick`/the log append) -- a concrete number for
+M31 (pacing) and M36 (the busy-furnace-field byte-diffing decision) to work from, not a defect fixed
+here (Planning decisions: "flag this as a known cost to measure ... not a defect to fix blind").
+
+**`budgets.json`: `counters.subscription.{joinWildernessBytesDown, joinModifiedBytesDown}`** = 63,
+90 (measured 55 B / 82 B for a one-client, 16-chunk join in wilderness and with 5 pre-painted tiles,
++ 8 B margin, the same fixed-margin convention `gc.pages.*.isolates.*.bytesPerFrame` already uses in
+this file). Both are far under 0010's own worked "< 0.2 KB" (200 B) phone-join figure, though at a
+smaller (16-chunk) view than 0010's 35-chunk phone clamp -- the claim carried is the same shape
+(bytes-per-chunk in the low single digits wilderness, still tiny with a few overlaid chunks), not a
+literal reproduction of 0010's number. `golden_frame_bytes_join_wilderness` pins the exact bytes.
+
+**`host_and_client_steady_state_no_alloc` (own binary, `tests/no_alloc_connection.rs`, drives
+`Host`/`ClientCore` directly -- `testkit::Loopback::step` itself allocates a `Vec<u8>` per client per
+call by design, so it cannot be the harness for a no-alloc claim) covers**: `Host::tick`,
+`Host::build_frame`'s `ChunkDeltas` routing (tile writes and entity moves), `Host::seal`,
+`host::subs::SubscriptionSet::update` (unchanged camera), `ClientCore::on_frame`'s validate-then-
+apply and `poll_uplink`, `Replica::apply_tile_delta`/`apply_entity_put`. **Does not cover**:
+`ChunkEnterPristine`, `ChunkSnapshots`, `ChunkLeaves`, `Global`/`OwnPlayer` (roster/value/player
+changes), or `EntityGone` -- none of those fire in the 300-tick measured window (stated in the
+file's own doc comment, not left implicit). A too-short warm-up (5 join ticks) was itself an early
+false failure here: several scratch buffers only reach steady-state capacity a few iterations into
+the *steady* workload's own shape, not the join's; fixed with a second, 40-iteration warm-up phase
+running the identical steady-state body before `live_bytes()` is first sampled.
+
+Inject-fail-revert proofs (8 B leaked per call via `Vec::with_capacity(8)` + `mem::forget`, then
+reverted), each confirming the no-alloc test actually fails when that path allocates:
+| Path | Passing `live_bytes()` delta | Failing delta | Per-call cost implied |
+|---|---|---|---|
+| `host::Host::build_frame` | 2400 B (300 ticks) | 4800 B | +8 B/call, exact |
+| `host::subs::SubscriptionSet::update` | 2400 B | 4800 B | +8 B/call, exact |
+| `client::ClientCore::apply` (the `on_frame` apply pass) | 2400 B | 4800 B | +8 B/call, exact |
+| `client::Replica::apply_tile_delta` | 2400 B | 4800 B | +8 B/call, exact |
+
+Same-suspicion checks on the other listed tests (not `Vec` injections; each breaks the specific
+property the test name claims and confirms the test catches it, then reverts):
+- `idle_tick_builds_no_frame`: forcing `build_frame`'s "nothing to say" early return to never fire
+  turned a passing `0 == 0` into a failing `10 == 0` (the 10-byte heartbeat header) on the very next
+  idle tick.
+- `view_unknown_outside_subscription`: forcing `Replica::tile` to always return `Err(Unknown)` failed
+  the test's own positive assertion (`.tile(held tile).is_ok()`), catching the "everything is always
+  Unknown" vacuous case the brief singled out.
+
+**`tests/module_layering.rs`** enforces the new crate `CLAUDE.md` line via a source scan (`host/`,
+`client/`, `abi/`, `testing/` directories and `client.rs`/`game_instance.rs`/`game.rs` files excluded
+as legitimate cross-boundary callers; a second test proves the scanner itself reaches a real,
+permitted `host::` reference in `game_instance.rs`, so an empty result above can't just mean the scan
+is broken).
+
+**ADR 0030 (`AtomicsTimer.poll()`'s unconditional per-wake tick) is unaffected, not acted on.** This
+milestone is native Rust only and wires no external wake into the sim worker -- `sim_admit`/
+`sim_build_frame`'s ABI wiring, the ring buffers, and the TS `Connection` are all 15b's (Non-scope
+here). `poll()`'s "correct only while nothing but the timer itself wakes a production sim worker"
+assumption is therefore still exactly as true as M13b left it; 15b is the milestone that has to
+revisit it, if 15b's own ring-wake design ends up waking the sim worker from outside the timer.
+
+**Commit-history note.** Steps 2-4 (Replica/`on_frame` for Global/OwnPlayer; enter/snapshot/leave;
+delta routing/dedup/`Gone` on scope loss) landed in one commit: `build_frame` and `on_frame` are two
+halves of one wire contract, and neither side is meaningfully testable alone. Step 5 (uplink pacing)
+landed in the same commit, already tested by the three uplink tests. Steps 1 and 6 are separate
+commits, plus three small follow-up commits (the entities-cost measurement, the `Replica` memory
+budget, and this Deviations write-up). One earlier commit's `git add` named the `src/client/`
+directory but not the sibling `src/client.rs` file it needed too (`pub mod core;`/`pub mod
+replica;`); that commit's tree is incomplete in isolation, fixed forward (staged into the next
+commit) rather than amended, per the no-amend rule.
