@@ -76,7 +76,12 @@ pub enum Rejected<G: Game> {
 /// (0007 §8's check), `EngineFault` (0005 skip-record recovery). None is produced by this
 /// milestone (docs/plan/12b-world-access-and-sim-driver.md Non-scope). `Serialize` (docs/plan/
 /// 16-action-round-trip.md): a rejected action's result JSON (`client.onActionResult`) needs to
-/// encode this half of `Rejected<G>` exactly like `G::Reject`.
+/// encode this half of `Rejected<G>`, tagged `{"Engine":<this>}` -- `game_instance::
+/// push_result_record` keeps `Rejected<G>`'s own `Game`/`Engine` level in the JSON rather than
+/// flattening it away (orchestrator ruling at the M16 gate): 0004's Decision defines `Rejected<G>`
+/// as exactly this two-variant enum, and collapsing the tag would make a game's own reject variant
+/// indistinguishable from the engine's by name alone once `RateLimited` (M31) and `StateBudgetFull`
+/// (M21) are real.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize)]
 pub enum EngineReject {
     RateLimited,

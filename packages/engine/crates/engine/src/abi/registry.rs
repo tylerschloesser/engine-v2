@@ -326,11 +326,13 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/16-action-round-trip.md: copies at most one batch of UI-ring records into `out`
+    /// docs/plan/16-action-round-trip.md: copies as many whole UI-ring records as fit into `out`
     /// (the whole `Ui` region) -- kind 2, `ActionResults` turned into JSON by `client::ClientCore
-    /// ::drain_results` -- returning the byte count. `0` when there is nothing new: the same
-    /// "always answer, cost nothing" shape as `client_poll_uplink`/`upload_stage`/`gen_take`, no
-    /// `Status` crosses here either.
+    /// ::drain_results` -- returning the byte count. Never splits a record across two calls: what
+    /// doesn't fit waits for the next poll (`game_instance::GameInstance::client_poll_ui`'s own
+    /// doc comment has the exact contract, including the one pathological drop case). `0` when
+    /// there is nothing new: the same "always answer, cost nothing" shape as `client_poll_uplink`/
+    /// `upload_stage`/`gen_take`, no `Status` crosses here either.
     fn client_poll_ui(&mut self, _out: &mut [u8]) -> usize {
         0
     }

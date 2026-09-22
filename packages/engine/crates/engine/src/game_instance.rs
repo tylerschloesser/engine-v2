@@ -33,9 +33,10 @@ const ACTION_RX_BYTES: usize = 1024;
 /// `RegionId::Ui`'s size on the client role: at most `client::core::OUTBOX_CAPACITY` action-result
 /// records can be outstanding between two `client_poll_ui` polls (one per dispatched action, 0012's
 /// own pending-queue figure), each comfortably under 128 bytes of JSON
-/// (`{"seq":4294967295,"result":{"Rejected":<reject>}}` plus a generous reject payload). Provisional,
-/// like every other region size in this file: a real per-frame UI-ring budget is a later
-/// milestone's (M16b's `onUi` shares this region as record kind 1).
+/// (`{"seq":4294967295,"result":{"Rejected":{"Game":<reject>}}}` plus a generous reject payload).
+/// Provisional, like every other region size in this file: a real per-frame UI-ring budget is a
+/// later milestone's (M16b's `onUi` shares this region as record kind 1). Not an enforced
+/// per-record cap -- `client_poll_ui`'s own doc comment covers the one record that exceeds it.
 const UI_BYTES: u32 = (crate::client::OUTBOX_CAPACITY * 128) as u32;
 /// `RegionId::Downlink`'s size on the client role (docs/plan/
 /// 15b-ring-connection-and-replica-rendering.md): must hold the largest frame `host::Host::
@@ -61,23 +62,28 @@ const UI_RECORD_KIND_ACTION_RESULT: u8 = 2;
 
 /// Appends one `[kind u8 = 2][len u32 LE][JSON]` record to `buf` for one decoded `ActionResults`
 /// entry (docs/plan/16-action-round-trip.md Scope): `{"seq":n,"result":"Confirmed"}` or
-/// `{"seq":n,"result":{"Rejected":<reason>}}`, where `<reason>` is `G::Reject`'s or
-/// `EngineReject`'s own `serde_json` output directly -- `Rejected<G>`'s two variants (`Game`,
-/// `Engine`) both read as this one `"Rejected"` shape, never a further `{"Game":..}`/`{"Engine":
-/// ..}` wrapper. Human-rate (called once per drained action outcome): allocates a `String`, the
-/// same exemption `ClientCore::on_action` already relies on (0016 §2).
+/// `{"seq":n,"result":{"Rejected":{"Game":<G::Reject>}}}` /
+/// `{"seq":n,"result":{"Rejected":{"Engine":<EngineReject>}}}` -- `Rejected<G>`'s two variants
+/// (`Game`, `Engine`) keep their own tag (orchestrator ruling at the gate, not flattened away):
+/// 0004's Decision defines `Rejected<G>` as exactly this two-variant enum
+/// (`Rejected(Engine(StateBudgetFull))`), and dropping the tag would make a game's own reject
+/// variant indistinguishable from the engine's by name alone once `EngineReject::RateLimited`
+/// (M31) and `StateBudgetFull` (M21) are real -- a game also needs the distinction behaviourally
+/// ("tell the player why" vs. "back off and retry"). Human-rate (called once per drained action
+/// outcome): allocates a `String`, the same exemption `ClientCore::on_action` already relies on
+/// (0016 §2).
 fn push_result_record<G: Game>(buf: &mut Vec<u8>, seq: u32, result: &Result<Applied, Rejected<G>>) {
     let json = match result {
         Ok(Applied) => format!("{{\"seq\":{seq},\"result\":\"Confirmed\"}}"),
         Err(Rejected::Game(reject)) => {
             let reason = serde_json::to_string(reject)
                 .expect("G::Reject is plain data (Codec): JSON encoding cannot fail");
-            format!("{{\"seq\":{seq},\"result\":{{\"Rejected\":{reason}}}}}")
+            format!("{{\"seq\":{seq},\"result\":{{\"Rejected\":{{\"Game\":{reason}}}}}}}")
         }
         Err(Rejected::Engine(code)) => {
             let reason = serde_json::to_string(code)
                 .expect("EngineReject is plain data: JSON encoding cannot fail");
-            format!("{{\"seq\":{seq},\"result\":{{\"Rejected\":{reason}}}}}")
+            format!("{{\"seq\":{seq},\"result\":{{\"Rejected\":{{\"Engine\":{reason}}}}}}}")
         }
     };
     buf.push(UI_RECORD_KIND_ACTION_RESULT);
@@ -464,18 +470,52 @@ where
         }
     }
 
-    /// docs/plan/16-action-round-trip.md: copies `ui_buf` (staged by `on_frame`) into `out`,
-    /// clearing it -- the "always answer, cost nothing" shape `upload_stage`/`gen_take` already
-    /// use, no `Status`. `out` is `RegionId::Ui`'s whole capacity (`UI_BYTES`, sized for
-    /// `OUTBOX_CAPACITY` outstanding results): silently truncates like `Host::build_frame`'s own
-    /// `SliceSink` convention if a caller ever exceeds that (Non-scope here to plumb further).
+    /// docs/plan/16-action-round-trip.md: copies as many *whole* records as fit out of `ui_buf`
+    /// (staged by `on_frame`) into `out` -- the "always answer, cost nothing" shape `upload_stage`/
+    /// `gen_take` already use, no `Status`. `out` is `RegionId::Ui`'s whole capacity (`UI_BYTES`).
+    ///
+    /// **Never splits a record across two polls** (gate ruling, replacing an earlier draft that
+    /// copied a raw byte prefix and discarded the tail): a record cut mid-`[kind][len][json]`
+    /// leaves a garbage `len` for the TS ring parser downstream to choke on. Copied records are
+    /// removed from `ui_buf`; whatever doesn't fit this call waits for the next one. The one
+    /// pathological case -- a single record whose own `5 + len` exceeds `out.len()` in its
+    /// entirety, so it can never fit *any* poll -- is dropped (consumed from `ui_buf`, never
+    /// copied) rather than stalling every later record behind it forever; `UI_BYTES`'s own sizing
+    /// (`OUTBOX_CAPACITY` results at a nominal 128 B) is provisional headroom, not an enforced
+    /// per-record cap, so a game whose `G::Reject` carries a long string can still hit this.
     fn client_poll_ui(&mut self, out: &mut [u8]) -> usize {
         match self {
             GameInstance::Client(c) => {
-                let n = c.ui_buf.len().min(out.len());
-                out[..n].copy_from_slice(&c.ui_buf[..n]);
-                c.ui_buf.clear();
-                n
+                let mut consumed = 0usize;
+                let mut copied = 0usize;
+                while consumed + 5 <= c.ui_buf.len() {
+                    let len = u32::from_le_bytes(
+                        c.ui_buf[consumed + 1..consumed + 5]
+                            .try_into()
+                            .expect("checked length"),
+                    ) as usize;
+                    let record_len = 5 + len;
+                    if consumed + record_len > c.ui_buf.len() {
+                        // An incomplete record: `push_result_record` always appends one whole
+                        // record atomically, so this should not happen -- treated the same as
+                        // "wait for the rest" rather than panicking on untrusted-shaped state.
+                        break;
+                    }
+                    if record_len > out.len() {
+                        // Can never fit any poll buffer at all: drop it, don't stall.
+                        consumed += record_len;
+                        continue;
+                    }
+                    if copied + record_len > out.len() {
+                        break; // doesn't fit *this* poll; try again next poll
+                    }
+                    out[copied..copied + record_len]
+                        .copy_from_slice(&c.ui_buf[consumed..consumed + record_len]);
+                    copied += record_len;
+                    consumed += record_len;
+                }
+                c.ui_buf.drain(..consumed);
+                copied
             }
             _ => 0,
         }
@@ -639,11 +679,32 @@ mod tests {
         assert!(n2 > 0, "a Rejected result must produce a UI record");
         let len2 = u32::from_le_bytes(ui_out[1..5].try_into().unwrap()) as usize;
         let json2 = std::str::from_utf8(&ui_out[5..5 + len2]).unwrap();
-        assert_eq!(json2, r#"{"seq":2,"result":{"Rejected":"NotFound"}}"#);
+        assert_eq!(
+            json2,
+            r#"{"seq":2,"result":{"Rejected":{"Game":"NotFound"}}}"#
+        );
+
+        // The engine's own half of `Rejected<G>` keeps the same tag, not the game's.
+        let rejected_engine = vec![Outcome {
+            seq: 3,
+            result: Err(Rejected::Engine(crate::sim::EngineReject::RateLimited)),
+        }];
+        assert_eq!(
+            inst.on_frame(&frame_with_results(&rejected_engine)),
+            Status::Ok
+        );
+        let n3 = inst.client_poll_ui(&mut ui_out);
+        assert!(n3 > 0, "a Rejected(Engine) result must produce a UI record");
+        let len3 = u32::from_le_bytes(ui_out[1..5].try_into().unwrap()) as usize;
+        let json3 = std::str::from_utf8(&ui_out[5..5 + len3]).unwrap();
+        assert_eq!(
+            json3,
+            r#"{"seq":3,"result":{"Rejected":{"Engine":"RateLimited"}}}"#
+        );
 
         // Drained: nothing left to poll once no new frame has been applied.
-        let n3 = inst.client_poll_ui(&mut ui_out);
-        assert_eq!(n3, 0);
+        let n4 = inst.client_poll_ui(&mut ui_out);
+        assert_eq!(n4, 0);
     }
 
     #[test]
@@ -657,5 +718,104 @@ mod tests {
         assert_eq!(inst.on_action(&record), Status::Ok);
 
         assert_eq!(inst.on_action(&[1, 2, 3]), Status::Decode);
+    }
+
+    /// Decodes every `[kind u8][len u32 LE][json]` record in `bytes`, asserting each one's own
+    /// `len` is honoured exactly (a split record would show up here as a bad UTF-8 slice or a
+    /// `len` reaching past `bytes`'s own end -- `str::from_utf8`/slicing panics, which is exactly
+    /// what a real TS ring parser would choke on too).
+    fn decode_ui_records(bytes: &[u8]) -> Vec<(u8, String)> {
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            assert!(i + 5 <= bytes.len(), "a record header must never be split");
+            let kind = bytes[i];
+            let len = u32::from_le_bytes(bytes[i + 1..i + 5].try_into().unwrap()) as usize;
+            assert!(
+                i + 5 + len <= bytes.len(),
+                "a record body must never be split"
+            );
+            let json = std::str::from_utf8(&bytes[i + 5..i + 5 + len])
+                .expect("a record's own bytes must be whole, valid UTF-8")
+                .to_string();
+            out.push((kind, json));
+            i += 5 + len;
+        }
+        out
+    }
+
+    /// docs/plan/16-action-round-trip.md (gate ruling): `client_poll_ui` must never split a
+    /// record across two polls. Ten `Confirmed` results are staged (bigger than a handful of
+    /// polls' worth of `out`); a deliberately small `out` forces several polls to drain them all,
+    /// and every record the caller ever sees must parse whole, none lost, none duplicated.
+    #[test]
+    fn client_poll_ui_never_splits_a_record_across_polls() {
+        let mut inst = client_instance();
+        for seq in 1..=10u32 {
+            let one = vec![Outcome {
+                seq,
+                result: Ok(Applied),
+            }];
+            assert_eq!(inst.on_frame(&frame_with_results(&one)), Status::Ok);
+        }
+        // One record (`{"seq":N,"result":"Confirmed"}`) is 5 + ~30 = ~35 B; 64 B fits at most one
+        // whole record per poll, forcing genuine multi-poll draining.
+        let mut out = [0u8; 64];
+        let mut seen = Vec::new();
+        loop {
+            let n = inst.client_poll_ui(&mut out);
+            if n == 0 {
+                break;
+            }
+            for (kind, json) in decode_ui_records(&out[..n]) {
+                assert_eq!(kind, 2);
+                seen.push(json);
+            }
+        }
+        let expected: Vec<String> = (1..=10)
+            .map(|seq| format!("{{\"seq\":{seq},\"result\":\"Confirmed\"}}"))
+            .collect();
+        assert_eq!(
+            seen, expected,
+            "every record must arrive exactly once, in order"
+        );
+    }
+
+    /// A record whose own length exceeds `out`'s entire capacity can never fit any poll: it must
+    /// be dropped (consumed, never copied), not stall every record queued behind it forever.
+    #[test]
+    fn client_poll_ui_drops_a_record_too_big_for_any_poll_and_keeps_going() {
+        let mut inst = client_instance();
+        {
+            let GameInstance::Client(c) = &mut inst else {
+                unreachable!()
+            };
+            // A hand-built oversized record: kind 2, a 100-byte body, no real `Reject` type
+            // needed -- `client_poll_ui`'s own walk only ever looks at `[kind][len]`, never the
+            // payload shape.
+            c.ui_buf.push(2);
+            c.ui_buf.extend_from_slice(&100u32.to_le_bytes());
+            c.ui_buf.extend_from_slice(&[b'x'; 100]);
+        }
+        // A normal record right behind it, which must still get through.
+        let normal = vec![Outcome {
+            seq: 1,
+            result: Ok(Applied),
+        }];
+        assert_eq!(inst.on_frame(&frame_with_results(&normal)), Status::Ok);
+
+        let mut out = [0u8; 64]; // smaller than the 105-byte oversized record
+        let n = inst.client_poll_ui(&mut out);
+        assert!(
+            n > 0,
+            "the oversized record must not block the one behind it"
+        );
+        let records = decode_ui_records(&out[..n]);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].1, r#"{"seq":1,"result":"Confirmed"}"#);
+
+        // Drained: the oversized record was dropped, not left stuck at the front forever.
+        let n2 = inst.client_poll_ui(&mut out);
+        assert_eq!(n2, 0);
     }
 }
