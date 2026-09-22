@@ -236,6 +236,35 @@
             }
           }
         }
+      },
+      "connected-terrain": {
+        "isolates": {
+          "main": {
+            "class": "strict",
+            "bytesPerFrame": 111,
+            "formula": "0016 §1's formula, `terrain`'s own shape (a real WebGPU adapter, the 110 B floor applies): `ceil(measured clean) + 8 B` margin, no attribution. Measured (`playwright test --project gc --grep \"connected-terrain clean\" --repeat-each 8 --workers 1`, this machine): 102.09-102.29 B/frame across 8 clean runs. ceil(102.29) = 103, + 8 B margin = 111.",
+            "attributionRoots": ["drive"]
+          },
+          "client": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the strict worker figure, same fixed number every other page's client/gen0/sim row uses. Measured: a constant 2.52 B/frame across 8 clean runs, well under 8.",
+            "attributionRoots": ["body"]
+          },
+          "sim": {
+            "class": "strict",
+            "bytesPerFrame": 17,
+            "formula": "Not the shared '8 B' worker figure every other page's `sim` row uses (this milestone's own new row, ADR 0028's two-window rule applies the same way): this page's `sim` isolate is a real *connected* host tick (subscription admission, snapshot/downlink building over an active `RingConnection`, `fx-puts`'s own tick rule painting a tile every simulated second) rather than an idle/bare `stepSimTickSync` loop, and measures noticeably higher than every other page's `sim` row (which stayed under ~4 B/frame). Measured (`playwright test --project gc --grep \"connected-terrain clean\" --repeat-each 8 --workers 1`, this machine): 6.46-8.19 B/frame across 8 clean runs (`windowBytes.sim` [4912, 5008] on the high repeat, [~3860, ~3900] on the rest -- a modest run-to-run spread, not a fixed multi-KB lump, so read as ordinary JIT/warm-up noise rather than a per-tick allocation bug). ceil(8.19) = 9, + 8 B margin (0016 §1's own convention) = 17.",
+            "attributionRoots": ["body"]
+          },
+          "gen0": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the strict worker figure, same fixed number every other page's client/gen0/sim row uses. Measured: a constant 0.8267 B/frame across 8 clean runs, well under 8.",
+            "attributionRoots": ["body"]
+          }
+        },
+        "software": null
       }
     }
   },
