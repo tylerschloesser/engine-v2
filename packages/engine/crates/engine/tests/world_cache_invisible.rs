@@ -73,7 +73,7 @@ fn cache_invisible_matrix() {
 
 /// M15c step 2's own guard rail (Planning decisions: "a cache event that reaches any hash means the
 /// fix is wrong"). Interleaves `set_tile`, `replace_overlay` and `clear_overlay` -- so
-/// `evict_if_present`'s new `push_event` call and the always-on `eviction_seq` counter both fire --
+/// `evict_if_present`'s new `push_event` call and the always-on `invalidation_seq` counter both fire --
 /// across two otherwise-identical stores, one with cache-event recording enabled and drained mid-run
 /// and one that never enables it. Final state hash and every tile read must agree regardless.
 #[test]

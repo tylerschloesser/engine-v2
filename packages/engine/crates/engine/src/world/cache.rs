@@ -11,12 +11,15 @@
 //! Before M15c, `evict_if_present` evicted silently: a chunk a client had already pristine-
 //! generated, then received a host snapshot for, stayed evicted forever with the camera held still,
 //! because nothing re-read it (docs/plan/15c-terrain-visibility-and-cache-invalidation.md, "The
-//! bug, confirmed at M15b's gate"). `Cache::eviction_seq` is a second, always-on signal for exactly
-//! this: a monotonic counter bumped on every `Evicted` regardless of [`Cache::set_record_events`],
-//! so a consumer that only needs "did anything get evicted since I last looked" (`GenQueue::
-//! set_view`) can peek it without draining the same `events` queue `client::upload`'s `Uploader::
-//! on_frame` already drains every frame -- two drains of one `Vec` in the same `frame()` call would
-//! starve whichever ran second.
+//! bug, confirmed at M15b's gate"). [`Cache::invalidation_seq`] is a second, always-on signal for
+//! exactly this: a monotonic counter, bumped only in [`Cache::evict_if_present`] (**not** on every
+//! `Evicted` -- fix round 1 found that counting `materialize`'s own LRU capacity eviction too turns
+//! a small cache under a wide view into a livelock, since capacity churn inside the retained ring
+//! never stops on its own; see [`Cache::invalidation_seq`]'s own doc comment for the mechanism and
+//! the number that confirmed it), so a consumer that only needs "was a resident chunk's *content*
+//! invalidated since I last looked" (`GenQueue::set_view`) can peek it without draining the same
+//! `events` queue `client::upload`'s `Uploader::on_frame` already drains every frame -- two drains
+//! of one `Vec` in the same `frame()` call would starve whichever ran second.
 
 use super::coords::ChunkDims;
 use super::tile::Tile;
@@ -184,16 +187,29 @@ pub(crate) struct Cache {
     /// drop-on-overflow: `client::upload` is a real consumer, and silently discarding an `Evicted`
     /// there would leave a stale page-table slot with no signal at all.
     record_events: bool,
-    /// Monotonic count of `CacheEvent::Evicted`s pushed, bumped in [`Cache::push_event`]
-    /// **regardless of `record_events`** -- a scalar, never a growing collection, so there is no
-    /// M15-shaped leak risk in leaving it always on. Exists so a second consumer can ask "did
-    /// anything get evicted since I last looked" without draining the same queue `client::upload`
-    /// drains: `GenQueue::set_view` (`gen_queue.rs`) peeks this instead of calling
+    /// Monotonic count of [`Cache::evict_if_present`] calls that actually removed something --
+    /// **not** every `CacheEvent::Evicted` (fix round 1, gate feedback on
+    /// docs/plan/15c-terrain-visibility-and-cache-invalidation.md): counting `materialize`'s own
+    /// LRU capacity eviction here too closed a feedback loop under a cache smaller than the working
+    /// set (`clientCacheChunks: 2` in `terrain-readback.spec.ts`'s own "evicted slot shows new
+    /// chunk" test, exactly the shape `set_view`'s retention-ring touch pass exists to keep quiet):
+    /// rescan enqueues -> generation materializes -> the small cache evicts something under
+    /// capacity -- content unchanged -- -> the counter moved -> `set_view` cannot early-return ->
+    /// rescan, forever (measured natively before this fix: 498/500 frames re-scanned, `requested`
+    /// climbing to 578 against ~78 chunks actually in view, `gen_queue.rs`'s own
+    /// `diagnostic_rescans_under_lru_churn`). `evict_if_present` is specifically the *invalidation*
+    /// path (`replace_overlay`/`clear_overlay`: a chunk's cached contents became stale, not merely
+    /// unpopular), which is the one case `set_view`'s own touch pass cannot protect against by
+    /// construction -- an LRU capacity eviction inside the retained ring is a bug in retention
+    /// sizing, not a signal this counter should ever have been carrying. A scalar, never a growing
+    /// collection, so bumping it unconditionally (regardless of `record_events`) carries none of the
+    /// M15-shaped leak risk `record_events` exists to gate. Exists so a second consumer can ask "was
+    /// a resident chunk's content invalidated since I last looked" without draining the same queue
+    /// `client::upload` drains: `GenQueue::set_view` (`gen_queue.rs`) peeks this instead of calling
     /// `drain_cache_events` itself, because `TerrainFeed::on_frame` and `Uploader::on_frame` run
     /// against the *same* store in the same `frame()` call, and two drains of one `Vec` starve
-    /// whichever runs second (docs/plan/15c-terrain-visibility-and-cache-invalidation.md
-    /// Deviations).
-    eviction_seq: u64,
+    /// whichever runs second.
+    invalidation_seq: u64,
 }
 
 impl Cache {
@@ -227,7 +243,7 @@ impl Cache {
                     tail: NONE,
                     events: Vec::new(),
                     record_events: false,
-                    eviction_seq: 0,
+                    invalidation_seq: 0,
                 }
             }
             CacheCapacity::Unlimited => Cache {
@@ -241,7 +257,7 @@ impl Cache {
                 tail: NONE,
                 events: Vec::new(),
                 record_events: false,
-                eviction_seq: 0,
+                invalidation_seq: 0,
             },
         }
     }
@@ -342,12 +358,17 @@ impl Cache {
     /// (0007 §1). Pushes a [`CacheEvent::Evicted`] the same way `materialize`'s own LRU-eviction
     /// path does (`Cache::acquire`'s caller in `terrain.rs`), so this eviction is distinguishable
     /// from "never resident" -- previously this returned silently, which is the bug this method's
-    /// fix closes (docs/plan/15c-terrain-visibility-and-cache-invalidation.md).
+    /// fix closes (docs/plan/15c-terrain-visibility-and-cache-invalidation.md). Also bumps
+    /// [`Cache::invalidation_seq`], **unlike** the LRU eviction `materialize`/`insert_pristine`
+    /// report through the same `CacheEvent::Evicted` variant (fix round 1: only this method's own
+    /// eviction is a genuine content invalidation; see the field's doc comment for why LRU capacity
+    /// churn must not move it).
     pub(crate) fn evict_if_present(&mut self, key: u64) -> Option<u32> {
         let slot = self.index.get(key)?;
         self.index.remove(key);
         self.unlink(slot);
         self.free.push(slot);
+        self.invalidation_seq = self.invalidation_seq.wrapping_add(1);
         self.push_event(CacheEvent::Evicted {
             chunk: super::coords::ChunkCoord::from_key(key),
             slot,
@@ -356,23 +377,25 @@ impl Cache {
     }
 
     /// Records `event` only when a consumer has opted in ([`Cache::set_record_events`]); a no-op
-    /// otherwise, so a store nobody drains queues nothing at all. `eviction_seq` bumps on every
-    /// `Evicted`, opt-in or not (see its own doc comment).
+    /// otherwise, so a store nobody drains queues nothing at all. Every `CacheEvent::Evicted` is
+    /// recorded the same way regardless of *why* the chunk was evicted (LRU capacity or
+    /// `evict_if_present`'s own invalidation) -- `client::upload`'s `Uploader::on_frame` needs to
+    /// know about both, to keep the GPU page table in sync. `invalidation_seq` is narrower and
+    /// bumps only inside [`Cache::evict_if_present`] itself, not here (fix round 1).
     pub(crate) fn push_event(&mut self, event: CacheEvent) {
-        if matches!(event, CacheEvent::Evicted { .. }) {
-            self.eviction_seq = self.eviction_seq.wrapping_add(1);
-        }
         if self.record_events {
             self.events.push(event);
         }
     }
 
-    /// Peek, never drained: how many chunks have been evicted (LRU or `evict_if_present`) over
-    /// this cache's lifetime. A consumer that cannot afford to compete with `client::upload`'s own
-    /// `drain_cache_events` for the same queue compares this against its own last-seen value
-    /// instead (`TerrainStore::cache_eviction_seq`, consulted by `GenQueue::set_view`).
-    pub(crate) fn eviction_seq(&self) -> u64 {
-        self.eviction_seq
+    /// Peek, never drained: how many times [`Cache::evict_if_present`] has actually removed a
+    /// chunk (content invalidation), over this cache's lifetime -- **not** LRU capacity eviction
+    /// (fix round 1; see [`Cache::invalidation_seq`]'s own field doc comment for the mechanism this
+    /// narrower trigger avoids). A consumer that cannot afford to compete with `client::upload`'s
+    /// own `drain_cache_events` for the same queue compares this against its own last-seen value
+    /// instead (`TerrainStore::cache_invalidation_seq`, consulted by `GenQueue::set_view`).
+    pub(crate) fn invalidation_seq(&self) -> u64 {
+        self.invalidation_seq
     }
 
     pub(crate) fn set_record_events(&mut self, on: bool) {
@@ -512,16 +535,16 @@ mod tests {
     /// take) must push a `CacheEvent::Evicted` the same way `materialize`'s own LRU eviction does
     /// -- "The bug, confirmed at M15b's gate" found it silently pushing nothing.
     #[test]
-    fn evict_if_present_reports_cache_event_and_bumps_eviction_seq() {
+    fn evict_if_present_reports_cache_event_and_bumps_invalidation_seq() {
         let mut c = Cache::new(dims(), CacheCapacity::Chunks(4));
         c.set_record_events(true);
         let (slot, evicted) = c.acquire(42);
         assert_eq!(evicted, None);
 
-        let before = c.eviction_seq();
+        let before = c.invalidation_seq();
         let removed_slot = c.evict_if_present(42);
         assert_eq!(removed_slot, Some(slot));
-        assert_eq!(c.eviction_seq(), before + 1);
+        assert_eq!(c.invalidation_seq(), before + 1);
 
         let events: Vec<_> = c.drain_events().collect();
         assert_eq!(events.len(), 1);
@@ -532,16 +555,16 @@ mod tests {
         ));
     }
 
-    /// `eviction_seq` is a scalar peek, not the opt-in event queue: a consumer that never calls
+    /// `invalidation_seq` is a scalar peek, not the opt-in event queue: a consumer that never calls
     /// `set_record_events` (or never drains) must still see it move, since `GenQueue::set_view`
     /// depends on that to avoid starving `Uploader::on_frame`'s own drain of the same queue.
     #[test]
-    fn eviction_seq_bumps_even_when_events_not_recorded() {
+    fn invalidation_seq_bumps_even_when_events_not_recorded() {
         let mut c = Cache::new(dims(), CacheCapacity::Chunks(4));
         c.acquire(7);
-        let before = c.eviction_seq();
+        let before = c.invalidation_seq();
         c.evict_if_present(7);
-        assert_eq!(c.eviction_seq(), before + 1);
+        assert_eq!(c.invalidation_seq(), before + 1);
         assert_eq!(
             c.queued_events(),
             0,
@@ -550,16 +573,42 @@ mod tests {
     }
 
     #[test]
-    fn evict_if_present_no_op_when_absent_does_not_bump_eviction_seq() {
+    fn evict_if_present_no_op_when_absent_does_not_bump_invalidation_seq() {
         let mut c = Cache::new(dims(), CacheCapacity::Chunks(4));
         c.set_record_events(true);
-        let before = c.eviction_seq();
+        let before = c.invalidation_seq();
         assert_eq!(c.evict_if_present(999), None);
         assert_eq!(
-            c.eviction_seq(),
+            c.invalidation_seq(),
             before,
             "no eviction happened, so the seq must not move"
         );
         assert_eq!(c.queued_events(), 0);
+    }
+
+    /// Fix round 1 (docs/plan/15c-terrain-visibility-and-cache-invalidation.md Deviations):
+    /// `acquire`'s own LRU capacity eviction pushes a `CacheEvent::Evicted` (`client::upload` still
+    /// needs it, to free the GPU page slot), but it must **not** move `invalidation_seq` -- only
+    /// [`Cache::evict_if_present`]'s own content-invalidation eviction does. Reproduces the
+    /// mechanism at the `Cache` level directly: capacity smaller than the working set, so `acquire`
+    /// evicts on every third insert with nothing ever calling `evict_if_present`.
+    #[test]
+    fn lru_capacity_eviction_does_not_bump_invalidation_seq() {
+        let mut c = Cache::new(dims(), CacheCapacity::Chunks(2));
+        let before = c.invalidation_seq();
+        let mut saw_eviction = false;
+        for key in 0..10u64 {
+            let (_slot, evicted) = c.acquire(key);
+            saw_eviction |= evicted.is_some();
+        }
+        assert!(
+            saw_eviction,
+            "capacity 2 against 10 distinct keys must have evicted something"
+        );
+        assert_eq!(
+            c.invalidation_seq(),
+            before,
+            "LRU capacity eviction (acquire's own evicted return) must not move invalidation_seq"
+        );
     }
 }

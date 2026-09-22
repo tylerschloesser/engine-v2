@@ -304,14 +304,20 @@ impl TerrainStore {
         }
     }
 
-    /// Monotonic count of chunks evicted (LRU or `replace_overlay`/`clear_overlay`) over this
-    /// store's lifetime, bumped whether or not [`TerrainStore::enable_cache_events`] was ever
-    /// called. A peek, not a drain: unlike [`TerrainStore::drain_cache_events`] (which
-    /// `client::upload`'s `Uploader::on_frame` already drains every frame), reading this never
-    /// consumes anything, so a second consumer in the same `frame()` call (`GenQueue::set_view`)
-    /// can compare it against its own last-seen value without starving the first.
-    pub fn cache_eviction_seq(&self) -> u64 {
-        self.cache.borrow().eviction_seq()
+    /// Monotonic count of chunks whose *cached contents were invalidated* -- `replace_overlay`/
+    /// `clear_overlay`'s own eviction (`Cache::evict_if_present`) -- over this store's lifetime,
+    /// bumped whether or not [`TerrainStore::enable_cache_events`] was ever called. **Not** a count
+    /// of every eviction: `materialize`'s own LRU capacity eviction does not move this (fix round 1,
+    /// docs/plan/15c-terrain-visibility-and-cache-invalidation.md Deviations -- counting capacity
+    /// churn here closed a feedback loop under a cache smaller than the working set, since
+    /// `set_view`'s own retention-ring touch pass cannot prevent LRU eviction from happening at all,
+    /// only from happening to the *wrong* chunk). A peek, not a drain: unlike
+    /// [`TerrainStore::drain_cache_events`] (which `client::upload`'s `Uploader::on_frame` already
+    /// drains every frame, for *every* eviction including LRU), reading this never consumes
+    /// anything, so a second consumer in the same `frame()` call (`GenQueue::set_view`) can compare
+    /// it against its own last-seen value without starving the first.
+    pub fn cache_invalidation_seq(&self) -> u64 {
+        self.cache.borrow().invalidation_seq()
     }
 
     /// Deterministic memory accounting (0007 §8, Planning decisions 11): the cache pool's reserved
@@ -454,16 +460,16 @@ mod tests {
         assert!(s.is_cached(chunk));
         s.drain_cache_events(|_| {}); // discard the `Loaded` from `materialize`
 
-        let seq_before = s.cache_eviction_seq();
+        let seq_before = s.cache_invalidation_seq();
         s.replace_overlay(chunk, &[(0, Tile::new(1, 0, 0))]);
         assert!(
             !s.is_cached(chunk),
             "replace_overlay must still evict (0007 §1)"
         );
         assert_eq!(
-            s.cache_eviction_seq(),
+            s.cache_invalidation_seq(),
             seq_before + 1,
-            "cache_eviction_seq must bump even before anything drains the event queue"
+            "cache_invalidation_seq must bump even before anything drains the event queue"
         );
 
         let mut events = Vec::new();

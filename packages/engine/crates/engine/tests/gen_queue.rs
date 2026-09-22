@@ -216,6 +216,57 @@ fn queue_touches_retained() {
     );
 }
 
+/// Fix round 1 (docs/plan/15c-terrain-visibility-and-cache-invalidation.md Deviations): the gate
+/// found the first fix livelocking `terrain-readback.spec.ts`'s "evicted slot shows new chunk"
+/// test (`clientCacheChunks: 2` under a wide view -- deliberately smaller than the generation set,
+/// so `materialize`'s own LRU capacity eviction is continuous). Counting *every* `Evicted` in
+/// `cache_invalidation_seq` (not just `evict_if_present`'s own content invalidation) meant
+/// `set_view` could never early-return while that churn continued: rescan enqueues -> generation
+/// materializes -> the small cache evicts something under capacity -> the counter moved anyway ->
+/// rescan again, forever. This reproduces the mechanism natively (mirroring the failing page's own
+/// shape: capacity 2, a 5x5-chunk view) and pins the fixed numbers: before the narrower trigger,
+/// 498 of 500 frames re-scanned and `requested` climbed to 578 against ~78 chunks actually in view
+/// (measured at the gate, not asserted here since that shape is the bug); after, quiescence is
+/// reached almost immediately and `requested`/`dispatched`/`delivered` all equal the true chunk
+/// count with no further growth.
+#[test]
+fn set_view_reaches_quiescence_under_lru_capacity_churn() {
+    let s = store(CacheCapacity::Chunks(2));
+    let mut q = GenQueue::new(ChunkDims::new(4), 1);
+    let view = GenView {
+        visible: ChunkRect::new(ChunkCoord::new(-2, -2), ChunkCoord::new(2, 2)),
+        center: WorldPos::from_tile(TilePos::new(0, 0)),
+        velocity: (0, 0),
+    };
+    let mut rescans_after_warmup = 0u32;
+    for frame in 0..500 {
+        let resorted = q.set_view(&view, &s);
+        if frame > 0 && resorted {
+            rescans_after_warmup += 1;
+        }
+        if let Some(c) = q.take(0) {
+            s.materialize(c);
+            q.complete(0, c);
+        }
+    }
+    let stats = q.stats();
+    assert_eq!(
+        stats.pending, 0,
+        "the queue must reach quiescence despite continuous LRU capacity churn"
+    );
+    assert_eq!(stats.in_flight, 0);
+    assert_eq!(
+        stats.requested, stats.delivered,
+        "requested must not keep climbing once every chunk in the generation set has been \
+         delivered once (the livelock this fix closes)"
+    );
+    assert!(
+        rescans_after_warmup <= 2,
+        "at most a couple of legitimate re-sorts (queue draining) after warm-up, not one per \
+         frame forever; got {rescans_after_warmup}"
+    );
+}
+
 /// M15c step 1's reproducer, native and browser-free (docs/plan/
 /// 15c-terrain-visibility-and-cache-invalidation.md "The bug, confirmed at M15b's gate"): a chunk
 /// the client has already pristine-generated (here, `TerrainStore::materialize`, the same effect
@@ -224,8 +275,9 @@ fn queue_touches_retained() {
 /// replace_overlay`), is evicted from the cache -- and with the camera held perfectly still
 /// (`view.visible` identical across both `set_view` calls), `GenQueue::set_view` used to return
 /// early on `last_visible` alone and never re-request it, so `client_chunk_hash` would read
-/// `NotCached` forever. Before the `cache_eviction_seq` consultation this fails at the `resorted`
-/// assert (`set_view` returns `false`, and the chunk is never in `dispatched`); after, it passes.
+/// `NotCached` forever. Before the `cache_invalidation_seq` consultation this fails at the
+/// `resorted` assert (`set_view` returns `false`, and the chunk is never in `dispatched`); after,
+/// it passes.
 #[test]
 fn overlay_replace_evicts_and_regenerates_with_view_unchanged() {
     let mut s = store(CacheCapacity::Chunks(16));

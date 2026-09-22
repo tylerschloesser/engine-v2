@@ -70,15 +70,28 @@ pub struct GenQueue {
     pending: Vec<Entry>,
     in_flight: Vec<[Option<ChunkCoord>; MAX_IN_FLIGHT_PER_WORKER]>,
     last_visible: Option<ChunkRect>,
-    /// `store.cache_eviction_seq()` as of the last `set_view` that actually re-scanned (Planning
-    /// decisions: "GenQueue::set_view ... must not skip its rescan when a chunk it cares about was
-    /// evicted since the last call"). A peek against `TerrainStore::cache_eviction_seq`, never a
-    /// drain of `drain_cache_events` -- that queue is `Uploader::on_frame`'s own, and `frame()`
-    /// calls `TerrainFeed::on_frame` (which owns this queue) before `Uploader::on_frame` in the
-    /// same tick, so a drain here would starve the uploader's `changed` check of exactly the event
-    /// that made it necessary (docs/plan/15c-terrain-visibility-and-cache-invalidation.md
-    /// Deviations).
-    last_eviction_seq: u64,
+    /// `store.cache_invalidation_seq()` as of the last `set_view` that actually re-scanned
+    /// (Planning decisions: "GenQueue::set_view ... must not skip its rescan when a chunk it cares
+    /// about was evicted since the last call"). A peek against `TerrainStore::
+    /// cache_invalidation_seq`, never a drain of `drain_cache_events` -- that queue is `Uploader::
+    /// on_frame`'s own, and `frame()` calls `TerrainFeed::on_frame` (which owns this queue) before
+    /// `Uploader::on_frame` in the same tick, so a drain here would starve the uploader's `changed`
+    /// check of exactly the event that made it necessary.
+    ///
+    /// **Deliberately narrower than "any eviction" (fix round 1,
+    /// docs/plan/15c-terrain-visibility-and-cache-invalidation.md Deviations).**
+    /// `cache_invalidation_seq` counts only `replace_overlay`/`clear_overlay`'s own content
+    /// invalidation, never `materialize`'s LRU capacity eviction: counting the latter too closed a
+    /// feedback loop under a cache smaller than the working set (rescan enqueues -> generation
+    /// materializes -> the small cache evicts something under capacity, content unchanged -> the
+    /// counter moved anyway -> `set_view` can never early-return -> rescan, forever -- measured
+    /// natively at 498/500 frames re-scanning, `requested` climbing unboundedly, before this fix;
+    /// `set_view_reaches_quiescence_under_lru_capacity_churn` in `tests/gen_queue.rs` pins the fixed
+    /// numbers). This method's own touch pass
+    /// below is what already keeps a genuinely-wanted chunk retained against LRU pressure; an LRU
+    /// eviction inside the view is a retention-sizing question, not a signal this field should ever
+    /// see.
+    last_invalidation_seq: u64,
     requested: u32,
     dispatched: u32,
     delivered: u32,
@@ -93,7 +106,7 @@ impl GenQueue {
             pending: Vec::with_capacity(MAX_PENDING),
             in_flight: vec![[None; MAX_IN_FLIGHT_PER_WORKER]; workers as usize],
             last_visible: None,
-            last_eviction_seq: 0,
+            last_invalidation_seq: 0,
             requested: 0,
             dispatched: 0,
             delivered: 0,
@@ -158,25 +171,29 @@ impl GenQueue {
     }
 
     /// Re-sorts the queue against `view` if the visible chunk rect changed since the last call, or
-    /// if a chunk was evicted from `store`'s cache since the last call even though the view did not
-    /// (`store.cache_eviction_seq()`, docs/plan/15c-terrain-visibility-and-cache-invalidation.md:
-    /// `replace_overlay`/`clear_overlay` evict a resident chunk with the camera held still, and
-    /// without this check the chunk would never be requested again -- Planning decisions "re-sort
-    /// when the camera crosses a chunk boundary or a zoom change alters the chunk set" predates
-    /// that finding). Returns whether it re-sorted. On a re-sort: cancels pending entries that fell
-    /// outside `visible.expanded(3)`; reclassifies and re-distances the survivors; enqueues
-    /// newly-entering chunks from `visible.expanded(2)` plus up to 2 look-ahead chunks (Planning
-    /// decisions 4, 8 of docs/decisions/0008-chunk-generation.md) -- `maybe_enqueue`'s own
-    /// `store.is_cached(chunk)` check is what actually re-requests an evicted chunk, once this
-    /// method decides not to skip the scan; touches every cached chunk within `visible.expanded(3)`
-    /// so the cache's own LRU never evicts it out from under the view.
+    /// if a chunk's cached contents were invalidated since the last call even though the view did
+    /// not (`store.cache_invalidation_seq()`,
+    /// docs/plan/15c-terrain-visibility-and-cache-invalidation.md: `replace_overlay`/`clear_overlay`
+    /// evict a resident chunk with the camera held still, and without this check the chunk would
+    /// never be requested again -- Planning decisions "re-sort when the camera crosses a chunk
+    /// boundary or a zoom change alters the chunk set" predates that finding). Deliberately does
+    /// **not** also trigger on plain LRU capacity eviction (fix round 1: that closed a feedback loop
+    /// under a cache smaller than the working set -- see `cache_invalidation_seq`'s own doc comment
+    /// for the mechanism and the number that confirmed it). Returns whether it re-sorted. On a
+    /// re-sort: cancels pending entries that fell outside `visible.expanded(3)`; reclassifies and
+    /// re-distances the survivors; enqueues newly-entering chunks from `visible.expanded(2)` plus up
+    /// to 2 look-ahead chunks (Planning decisions 4, 8 of docs/decisions/0008-chunk-generation.md)
+    /// -- `maybe_enqueue`'s own `store.is_cached(chunk)` check is what actually re-requests an
+    /// evicted chunk, once this method decides not to skip the scan; touches every cached chunk
+    /// within `visible.expanded(3)` so the cache's own LRU never evicts it out from under the view.
     pub fn set_view(&mut self, view: &GenView, store: &TerrainStore) -> bool {
-        let eviction_seq = store.cache_eviction_seq();
-        if self.last_visible == Some(view.visible) && self.last_eviction_seq == eviction_seq {
+        let invalidation_seq = store.cache_invalidation_seq();
+        if self.last_visible == Some(view.visible) && self.last_invalidation_seq == invalidation_seq
+        {
             return false;
         }
         self.last_visible = Some(view.visible);
-        self.last_eviction_seq = eviction_seq;
+        self.last_invalidation_seq = invalidation_seq;
 
         let ring1 = view.visible.expanded(RING_UPLOAD);
         let ring2 = view.visible.expanded(RING_GEN);
