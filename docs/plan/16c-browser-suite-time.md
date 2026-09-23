@@ -109,4 +109,51 @@ skill line that states it.
 none
 
 ## Deviations
-(filled in during Phase 3)
+
+### Step 1: attribution before changing (base `4ab945e`)
+
+Instrumented with temporary Node-side `performance.now()` marks (in the spec / in `measure()`
+itself, never committed) around each awaited phase, run against the base commit before any fix.
+
+**`vertical_slice`** (`pnpm test browser -t vertical_slice`, quiet, was 5704-5732 ms in
+`report.json`; consistent across 4 quiet + 3 loaded (`--load 10`) attributed runs):
+
+| phase | wall time | what it's waiting on |
+|---|---|---|
+| 1: page load | ~150-200 ms | navigation, WASM/device/worker boot |
+| 2: pristine probe (setCamera/settle/probe) | ~40-50 ms | one `__sliceSettle` round trip |
+| 3a: `dragPan` itself | ~110-120 ms | 6 real rAF-paced pointer moves |
+| **3b: poll for `chunkEntersPristine`** | **~0.4-2.9 s, bimodal** | a real sim tick to run at all (see below) |
+| **4a: poll for `tick >= 50`** | **~2.0-3.1 s** | the same stall, then a resync burst straight past 50 |
+| 4b: checkpoint + native hash re-check | ~25-45 ms | one park/resume + a native WASM replay |
+| 5: paint round trip (setCamera..postProbe) | ~150-200 ms | two `__sliceSettle` round trips |
+| 6: reject round trip | ~110 ms | one more `__sliceSettle`-shaped poll |
+| 7: HUD/errors | ~4-5 ms | synchronous reads |
+
+Phases 3b and 4a are **~85-90 % of the test's own 5.6-5.7 s**, and both are the *same* root cause:
+`worker/sim.ts`'s `wokenBy === lastWokenBy` guard (ADR 0030) starves `atomicsTimer.poll()` while
+`slice.html`'s real render loop calls `client.writeCameraAndWake()` unconditionally every rAF (M16
+Deviations, "A previously unexercised interaction," `docs/plan/16-action-round-trip.md`). Attributed
+`tick` value at the moment each poll resolves: stuck at exactly `1` for the whole of phase 3
+(never `0`, never `2+`) across every run measured, then jumping straight to `60`-`66` in one
+resync-catch-up burst the instant phase 4's poll resolves. `worker/sim.ts` is outside this
+milestone's Files touched (owned by M13/M15b/ADR 0030) -- Scope 2 below is bounded by that.
+
+**`echo clean`** (`pnpm gc -t "echo clean"`, one isolated run then confirmed over `--repeat-each 3`;
+`measure()`'s own internal marks, `pageId: 'echo'`, isolates `main`/`client`/`sim`/`gen0`):
+
+| phase | wall time | notes |
+|---|---|---|
+| attach + name sessions | ~2-9 ms | CDP session setup |
+| **warm-up (`WARMUP=8000`, 8 passes)** | **~1454-1500 ms** | `window.__gc.run(n, false)` x8 |
+| `memoryBytes()` before + `collectGarbage` | ~11-12 ms | |
+| mark isolates + `Tracing.start` | ~25-35 ms | includes the 0016 caveat (a) stall check |
+| measured window 1 (600 frames, sample+run+stop) | ~110-115 ms | 0028's first of two windows |
+| measured window 2 (600 frames, run+stop) | ~110-115 ms | 0028's second window |
+| trace end + `memoryBytes()` after + detach | ~13-14 ms | |
+| **`measure()` total** | **~1.72-1.79 s** | |
+| page open (before `measure()` starts) | ~300-450 ms | `openPage`, not instrumented in this pass |
+| **test total (`report.json`)** | **2069-2208 ms** | matches the gate's own 2147-2208 ms |
+
+Warm-up is **~83 %** of `measure()`'s own time and dwarfs the two 600-frame measured windows 0028
+protects (~110 ms each, ~13 % combined) -- the per-test fixed cost Scope 3 targets.
