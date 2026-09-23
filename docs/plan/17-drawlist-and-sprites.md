@@ -1,6 +1,6 @@
 # M17: DrawList, `FrameView`, shapes
 
-Status: not started · After: 16f · Tyler-dependent: no
+Status: done · After: 16f · Tyler-dependent: no
 
 Split during planning: the sprite atlas, the sprite kind, the 65,536-record frame benchmark, the `profile-frame` skill and the manual Safari/Firefox harness run are **M17b** (`17b-sprites-and-frame-budget.md`). M18 and M19 depend on this brief only; PLAN.md lists M17b under M20b's After.
 
@@ -68,10 +68,10 @@ Sprites and the atlas (M17b). Picking (M18 reads the same slot). `FrameCx`, `Cli
 - Zero-GC: page id `drawables` through `zeroGcSuite` (fixture with a few hundred entities, panning, actions from pre-encoded bytes; isolates `main`, `client`, `sim`, `gen0`).
 
 ## Exit criteria
-- [ ] All tests above pass by name.
-- [ ] `budgets.json`: final `main` number on `gc.pages.drawables` by the formula, `counters["render.drawCallsMax"]` (terrain + 8 layers), `counters["render.pipelineSwitches"]`; the page passes on every isolate with no `memory.grow`.
-- [ ] `drawListDropped == 0` in every test except the overflow test.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name.
+- [x] `budgets.json`: final `main` number on `gc.pages.drawables` by the formula, `counters["render.drawCallsMax"]` (terrain + 8 layers), `counters["render.pipelineSwitches"]`; the page passes on every isolate with no `memory.grow`.
+- [x] `drawListDropped == 0` in every test except the overflow test.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t draw` · `pnpm test rust -t frameview` · `pnpm test rust -t wgsl` · `pnpm test browser -t draw` · `pnpm test browser -t drawables` · `pnpm gc reliability` · `pnpm test` · `pnpm lint`.

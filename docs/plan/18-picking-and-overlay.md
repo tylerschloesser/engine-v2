@@ -43,7 +43,7 @@ Presence sampling and uplink (M19: it gives meaning to `frame`'s `presence` argu
 - `pickAt(cssX, cssY): number` internal, used by the semantic layer; `engine/test`: `pickAt(client, cssX, cssY)`, counters `styleWrites`, `pickScanned`.
 - **`FrameCx<'a, G>`** (this brief owns the shape; it fills M12's shell, and M19 adds nothing to it beyond using `frame`'s `presence` argument):
   - `view() -> &FrameView<G>`: the same value `extract` receives (M17: `WorldRead`, ticks, `visible`, `zoom`, `cursor_tile`, `me`), built before `frame` runs
-  - `camera() -> &CameraBlock` (M06b: centre, velocity, `tiles_across`, half extents, `dpr`): what the reference game's spring reads
+  - `camera() -> &CameraBlock` (M06b: centre, velocity, `tiles_across`, half extents, `dpr`; M17: `viewport_px: [f32; 2]` at offset 72, device pixels, which is what `FrameView::px_per_tile()` reads): what the reference game's spring reads
   - `dt_ms() -> f32` (difference of successive `frame_time_ms`, clamped to 0..100)
   - `input() -> &[InputEvent]`: the events drained from `inputRing` since the previous `frame`, oldest first, at most 64, valid for this call only
   - `follow(&mut self, target: Option<WorldPos>)`
