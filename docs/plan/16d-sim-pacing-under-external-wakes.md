@@ -237,3 +237,5 @@ observation word only): `samples 262ms:0 512ms:0 ... 2004ms:0; worst drift -40.1
     the client ack against the frame request.
 - **Result.** `vertical_slice` quiet: 1576, 1794, 1814 ms. `repeat.mjs browser 8 --load 10` twice: `pass=8
   fail=0 hang=0` (slowest 22 s and 23 s).
+- **CI round (orchestrator).** `fa19956` was red on `ubuntu-latest` only: `__sliceSettle: not settled after 10000 ms (resident true, drained true, quiet for 0 frames and 0 sim ticks)`. It was waiting for the whole page to go quiet, and a slower SwiftShader runner never reached that. `9d0af57` waits for the probed tile's own GPU value (and, after the Paint, for it to differ from the pre-paint value) instead. It could not be reproduced on macOS (local SwiftShader fails earlier, in `mapAsync`, on the pre-M16d code too), so CI run 35827172692 is its verification: **green**. **Lesson: a settle must wait on the specific event the probe needs, never on a global quiet period that a busy page, or a slow machine, may never reach.**
+
