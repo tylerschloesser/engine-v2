@@ -42,7 +42,8 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 15f | `15f-step-sim-tick-sync-allocation.md` | `stepSimTickSync`'s per-frame allocation off the `main` isolate; slow-tier CI green | 15c | |
 | [x] | 15g | `15g-handoff-checks.md` | mechanical staleness checks on `PROMPT.md`'s status block; `pnpm handoff` | 15f | |
 | [x] | 16 | `16-action-round-trip.md` | `dispatch` → admit → apply → ack → `onActionResult`, `add-action-type` skill. **Vertical slice complete.** | 15c | D |
-| [ ] | 16b | `16b-ui-observation-and-clock.md` | `G::Ui` → UI ring → `onUi`, `client.clock()`, ts-rs bindings | 16 | |
+| [ ] | 16c | `16c-browser-suite-time.md` | `browser` suite back inside 0020's budget: attribute, shrink `vertical_slice`, cheaper zero-GC setup, worker count measured | 16 | |
+| [ ] | 16b | `16b-ui-observation-and-clock.md` | `G::Ui` → UI ring → `onUi`, `client.clock()`, ts-rs bindings | 16c | |
 | [ ] | 17 | `17-drawlist-and-sprites.md` | `extract` → DrawList, `FrameView`, shapes, triple-buffer publish | 16b | |
 | [ ] | 17b | `17b-sprites-and-frame-budget.md` | sprite atlas, frame-time budget, `profile-frame` skill | 17, 09b | D |
 | [ ] | 18 | `18-picking-and-overlay.md` | CPU picking, DOM anchoring, `FrameCx` | 17, 09b | D |
