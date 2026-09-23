@@ -326,6 +326,47 @@ impl Default for DrawList {
     }
 }
 
+/// FNV-1a seeds for [`hash_region`] (M17 gate: native-vs-`.wasm` parity). Mirrors `test/client.ts`'s
+/// own `fnv1a32`/`FNV32_SEED_LO`/`FNV32_SEED_HI` bit for bit: `u32` XOR-then-`wrapping_mul` is the
+/// same operation as JS's `^=` then `Math.imul`, so the two independent implementations produce the
+/// same 32-bit words for the same bytes.
+const FNV32_PRIME: u32 = 0x0100_0193;
+const FNV32_SEED_LO: u32 = 0x811c_9dc5;
+const FNV32_SEED_HI: u32 = 0x1000_193b;
+
+fn fnv1a32(bytes: &[u8], seed: u32) -> u32 {
+    let mut h = seed;
+    for &b in bytes {
+        h ^= b as u32;
+        h = h.wrapping_mul(FNV32_PRIME);
+    }
+    h
+}
+
+/// A hash of `region` (a whole `RegionId::DrawList`-shaped buffer, [`REGION_BYTES`]) that is a
+/// **pure function of replica + camera**, deliberately excluding `frame_seq` (offset 0, a
+/// session-local call counter) and `frame_time_ms` (offset 96, wall-clock-derived) -- both would
+/// make a native, one-shot `extract`+`sort_into` disagree with a `.wasm` instance driven through
+/// several real ticks before the assertion, even when every replicated/camera-derived byte is
+/// identical (M17 gate: "native-vs-`.wasm` equality, not self-consistency"). Hashes `record_count`
+/// (4), `window_origin` (8) and `layer_count` (32) -- contiguous, offsets 4..48 -- then `dropped`
+/// (4, offset 88..92), then `record_count * 32` body bytes: two independent 32-bit FNV-1a passes,
+/// combined into one `u64` (`hi << 32 | lo`) so [`crate::assert_golden_hash`] can pin it directly.
+/// `test/client.ts`'s `hashDrawListFields` is the TypeScript twin this milestone's own end-to-end
+/// test (`tests/wasm/drawlist.test.ts`) and `fixtures/drawables/tests/drawlist_golden.rs` both call,
+/// reading the *same* checked-in `tests/golden/drawables_hash.hash` file.
+pub fn hash_region(region: &[u8], record_count: u32) -> u64 {
+    let used_body = (record_count as usize * DRAW_BYTES).min(BODY_BYTES);
+    let body = &region[HEADER_BYTES..HEADER_BYTES + used_body];
+    let mut lo = fnv1a32(&region[4..48], FNV32_SEED_LO);
+    lo = fnv1a32(&region[88..92], lo);
+    lo = fnv1a32(body, lo);
+    let mut hi = fnv1a32(&region[4..48], FNV32_SEED_HI);
+    hi = fnv1a32(&region[88..92], hi);
+    hi = fnv1a32(body, hi);
+    ((hi as u64) << 32) | lo as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

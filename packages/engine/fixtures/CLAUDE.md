@@ -17,7 +17,7 @@ the detail; `hash` has none yet, described here instead.
   changes state on its own (no action) once a simulated second.
 - `drawables` (`fx-drawables`, docs/plan/17-drawlist-and-sprites.md): `ClientSide::extract`/
   `FrameView::entities()`/`DrawList` -- three fixed genesis entities, one "small" and skipped by
-  `extract` once `FrameView::zoom()` crosses `SMALL_ZOOM_THRESHOLD`. `tests/drawlist_golden.rs`
-  proves `extract` + `sort_into`'s output is a pure function of replica + camera (a real, connected
-  `Replica` built through `engine::testing::testkit::Loopback`) and pins it with
-  `assert_golden_bytes!`.
+  `extract` once `FrameView::zoom()` crosses `SMALL_ZOOM_THRESHOLD`. `tests/drawlist_golden.rs`'s
+  `drawlist_fixture_hash_golden` drives a real `GameInstance` (sim + client) and pins a hash
+  (`assert_golden_hash!`) that `tests/wasm/drawlist.test.ts` also reads, off the real `.wasm` --
+  native-vs-`.wasm` parity, `puts_idle_100`'s own shape.

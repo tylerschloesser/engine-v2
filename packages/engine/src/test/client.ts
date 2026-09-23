@@ -729,11 +729,36 @@ function fnv1a32(bytes: Uint8Array, offset: number, len: number, seed: number): 
 const FNV32_SEED_LO = 0x811c_9dc5
 const FNV32_SEED_HI = 0x1000_193b
 
-/** docs/plan/17-drawlist-and-sprites.md, `engine/test`: a hash of the newest `drawList` triple-
- * buffer slot's header (all 1,024 bytes, `frame_seq`/`frame_time_ms` included) plus its used body
- * bytes (`record_count * 32`, `Draw::BYTES`) -- 16 lowercase hex digits, the same format `sim_hash`/
- * `worldHash` already use. Reads the SAB directly, no worker round trip (`netCounters`'s own ring
- * reads are the precedent): the triple buffer is main-thread-readable by design (0015 §2). */
+/** docs/plan/17-drawlist-and-sprites.md, M17 cut-1 gate ("native-vs-`.wasm` equality, not
+ * self-consistency"): a hash that is a **pure function of replica + camera**, deliberately
+ * excluding `frame_seq` (header offset 0, a session-local call counter -- a `.wasm` instance driven
+ * through several real ticks before the assertion has a different one than a native one-shot
+ * `extract`+`sort_into`, even when every replicated/camera-derived byte agrees) and `frame_time_ms`
+ * (offset 96, wall-clock-derived). Hashes `record_count`+`window_origin`+`layer_count` (header
+ * `[4, 48)`, contiguous), `dropped` (`[88, 92)`), then `recordCount * 32` body bytes: two
+ * independent 32-bit FNV-1a passes combined into 16 lowercase hex digits (`sim_hash`/`worldHash`'s
+ * own format). **Exact twin of `crates/engine/src/client/drawlist.rs`'s `hash_region`** (same
+ * seeds, same field order, `u32` XOR-then-`wrapping_mul` == JS `^=` then `Math.imul`) --
+ * `fixtures/drawables/tests/drawlist_golden.rs` and `tests/wasm/drawlist.test.ts` both read the
+ * same checked-in `fixtures/drawables/tests/golden/drawables_hash.hash` and must agree with it. */
+export function hashDrawListFields(
+  header: Uint8Array,
+  body: Uint8Array,
+  recordCount: number,
+): string {
+  const usedBodyBytes = Math.min(recordCount * 32, body.length)
+  let lo = fnv1a32(header, 4, 44, FNV32_SEED_LO)
+  lo = fnv1a32(header, 88, 4, lo)
+  lo = fnv1a32(body, 0, usedBodyBytes, lo)
+  let hi = fnv1a32(header, 4, 44, FNV32_SEED_HI)
+  hi = fnv1a32(header, 88, 4, hi)
+  hi = fnv1a32(body, 0, usedBodyBytes, hi)
+  return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0')
+}
+
+/** `hashDrawListFields` over the newest `drawList` triple-buffer slot. Reads the SAB directly, no
+ * worker round trip (`netCounters`'s own ring reads are the precedent): the triple buffer is
+ * main-thread-readable by design (0015 §2). */
 export function drawListHash(client: Client): string {
   const { sabs } = clientTestHandle(client)
   const reader = new TripleReader(sabs.drawList, DRAWLIST_HEADER_BYTES, DRAWLIST_BODY_BYTES)
@@ -744,20 +769,7 @@ export function drawListHash(client: Client): string {
     4,
     true,
   )
-  const usedBodyBytes = Math.min(recordCount * 32, DRAWLIST_BODY_BYTES)
-  const lo = fnv1a32(
-    body,
-    0,
-    usedBodyBytes,
-    fnv1a32(header, 0, DRAWLIST_HEADER_BYTES, FNV32_SEED_LO),
-  )
-  const hi = fnv1a32(
-    body,
-    0,
-    usedBodyBytes,
-    fnv1a32(header, 0, DRAWLIST_HEADER_BYTES, FNV32_SEED_HI),
-  )
-  return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0')
+  return hashDrawListFields(header, body, recordCount)
 }
 
 /** One decoded `Draw` record (0018 §2), for `drawListRecords` below. */

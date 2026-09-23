@@ -127,19 +127,25 @@ No region crosses. `src/abi.ts`'s `ABI_EXPORTS.drawlist_len = { role: 'client', 
 
 ### `drawListHash`/`drawListRecords`: exact definitions (`engine/test`, `test/client.ts`)
 
-Not specified by the brief beyond "hash of header fields + used body bytes" -- this cut's own
-reading, and it does **not** attempt to match `crates/engine`'s `Fnv64` bit for bit (no cross-
-runtime equality requirement was named for this specific hash, unlike `sim_hash`/`worldHash`).
-`drawListHash(client): string` reads the newest slot directly off the SAB (`TripleReader`, no
-worker round trip -- `netCounters`'s own ring-read precedent) and computes two independent 32-bit
-FNV-1a passes (no `BigInt`, `.claude/rules/hot-paths.md`'s own reasoning for avoiding it even
-though this is test-only code) over the **whole 1,024-byte header** (`frame_seq`/`frame_time_ms`
-included -- unlike the native `drawlist_fixture_hash_golden`'s own `assert_golden_bytes!`, which
-also hashes/pins the whole slice for the same reason) **plus** `record_count * 32` body bytes,
-returned as 16 lowercase hex digits (`sim_hash`/`worldHash`'s own format). `drawListRecords(client,
-out: DrawRecord[]): number` clears `out` and decodes every record's nine fields (`pos`, `size`,
-`kind`, `spriteId`, `layer`, `flags`, `color`, `param`, `pickId`), returning the count -- one object
-allocated per record, fine under the `src/test/**` exemption.
+Revised at the cut-1 gate ("native-vs-`.wasm` equality, not self-consistency"): the first draft
+hashed the whole 1,024-byte header, `frame_seq`/`frame_time_ms` included -- which cannot ever agree
+between a native one-shot `extract`+`sort_into` and a `.wasm` instance driven through several real
+ticks first (a session-local call counter and a wall-clock field, neither a function of replica or
+camera). **`hashDrawListFields(header, body, recordCount): string`** (exported, so both `drawListHash`
+and a wasm/browser test needing the same field selection over bytes it already has can call it) now
+hashes `record_count`+`window_origin`+`layer_count` (header bytes `[4, 48)`, contiguous) then
+`dropped` (`[88, 92)`), then `recordCount * 32` body bytes: two independent 32-bit FNV-1a passes (no
+`BigInt`, `.claude/rules/hot-paths.md`'s own reasoning for avoiding it even in test-only code),
+combined into 16 lowercase hex digits (`sim_hash`/`worldHash`'s own format). **This is now the exact
+twin of `crates/engine/src/client/drawlist.rs`'s own new `hash_region(region, record_count) -> u64`**
+(same two seeds, same field order, same byte ranges; a `u32` XOR-then-`wrapping_mul` is bit-identical
+to JS's `^=` then `Math.imul`) -- see "Prove the publish end to end", below, for the shared golden
+this makes possible. `drawListHash(client): string` reads the newest `drawList` slot directly off the
+SAB (`TripleReader`, no worker round trip -- `netCounters`'s own ring-read precedent) and calls
+`hashDrawListFields`. `drawListRecords(client, out: DrawRecord[]): number` clears `out` and decodes
+every record's nine fields (`pos`, `size`, `kind`, `spriteId`, `layer`, `flags`, `color`, `param`,
+`pickId`), returning the count -- one object allocated per record, fine under the `src/test/**`
+exemption.
 
 ### `FrameView<'a, G>`: exact grown shape (`client/frame_view.rs`)
 
@@ -178,14 +184,25 @@ outside `game_instance.rs`. Same reasoning promotes `DrawList::begin_frame`/`sor
 TilePos::new(origin.x + footprint.w - 1, origin.y + footprint.h - 1))` (inclusive rect, matching
 `TileRect`'s own convention) intersected against `visible()`.
 
-**`px_per_tile()` is a placeholder (`0.0`), not exact.** `CameraBlock` carries no real device/CSS
-viewport pixel size -- the main thread computes `tiles_per_px`/`pxPerTile` itself
-(`camera/transform.ts`) from a real `CameraViewport` that never crosses into WASM memory, and
-plumbing one through would mean growing `CameraBlock` (currently exactly 80 bytes, a tested seam)
-and touching `camera/block.ts`/`camera.ts` -- outside this brief's own Files-touched list. Nothing
-in steps 1-3 reads this value (not in "Tests added"; `SCREEN_PX_STROKE` is resolved in the vertex
-shader from the *real* main-thread value per the brief's own Planning decisions, not from this
-accessor). Left for a later cut to wire for real once something actually consumes it.
+**`px_per_tile()` is a placeholder (`0.0`), not exact -- for cut 2: exactly what is missing and
+where it comes from.** `CameraBlock` (`client/camera.rs`, 80 bytes, byte-for-byte matching
+`camera/block.ts`) carries `centre`, `half_extent_tiles`, `tiles_across`, `dpr`, `cursor_tile` --
+every quantity the *shader's* own `tiles_per_px` needs except the one this accessor would need: the
+**real device-pixel viewport size** (`viewport_px: vec2<f32>` in `render/wgsl/terrain.wgsl`'s
+`FrameUniform`, computed on the main thread from `renderer.viewport`/`ResizeObserver`, 0018 §8, and
+never copied into any SAB the client worker reads). The exact formula once that value exists:
+`pxPerTile = max(viewportPxW, viewportPxH) / tilesAcross` (`camera/transform.ts`'s own `pxPerTile`,
+already used for cursor/pointer math on the main thread) -- the missing piece is only the *carrier*:
+either (a) grow `CameraBlock` by 8 bytes (two `f32`, `viewport_px`) written by `camera.tick()`
+alongside `half_extent_tiles` every rAF, the same pass that already writes the block, or (b) have
+`FrameCx`/`ClientSide::frame` (M18) read it some other way once `FrameCx` itself is real (still a
+shell here). Nothing in steps 1-3 reads this value (not in "Tests added"); `draw.screen_px_stroke_
+constant_under_zoom` (cut 2's own test) is the first thing that will need it for real, since
+`SCREEN_PX_STROKE`'s own constant-screen-width behaviour has no other data source once a real
+shader exists (the vertex shader can read the frame uniform's `tiles_per_px` directly instead of
+this accessor, since it already has `viewport_px`/`tiles_across` there -- so route (a)/(b) above
+matters only if `extract()` itself, not the shader, ever needs to *decide* something from a real
+pixel size, e.g. a screen-space culling threshold). Left for cut 2 to choose (a) or (b) and wire it.
 
 ### `extract` relative to `on_frame`/`ui` inside the client wake
 
@@ -245,23 +262,54 @@ moving to the next step -- steps 1 and 2's own intermediate states pass `cargo c
 wires its one caller, so `pnpm lint`'s `-D warnings` clippy run is red on that one intermediate
 state only; the final state, after step 3, is clean).
 
-### "Prove the publish end to end": scope of what was actually proven
+### "Prove the publish end to end": native-vs-`.wasm`, not self-consistency (revised at the gate)
 
-The instruction's own wording ("the newest slot's hash equals the native `drawlist.fixture_hash_
-golden` for the same replica and camera") would need the TS test to reproduce the *exact* replica-
-building script the native golden pins (frame_seq, tick count, etc. all bit-identical) and a hash
-algorithm identical to Rust's `Fnv64` -- both reachable, but not attempted here given this cut's own
-time budget. What `tests/wasm/drawlist.test.ts` proves instead, against the real production pump
-code (`createDrawlistPump`, not a reimplementation): the newest published slot's header and used
-body bytes are **byte-for-byte identical** to `RegionId.DrawList`'s own WASM-memory bytes at the
-moment of publish, for a real `fx-drawables.wasm` client connected to a real `fx-drawables.wasm` sim
-over raw ABI calls (no SAB rings -- a plain region-to-region copy stands in, since the ring itself
-isn't under test), with all three genesis entities visible (`recordCount === 3`, `dropped === 0`).
-This is the property "cut 2 builds on a publish that is already proven" actually needs (the copy
-loop is correct and proportional), even though it does not cross-check against the *specific*
-blessed value `fixtures/drawables/tests/golden/drawables_extract_below_threshold.hex` pins. Left for
-cut 2, or a later gate, to close the gap fully if the exact cross-runtime hash match still matters
-once real rendering exists to make it worth the wire-format-reproduction cost.
+The first draft compared the published slot against the WASM region it was copied *from* -- proves
+the copy is faithful, but cannot catch the `.wasm` build's own `DrawList` diverging from native (a
+different sort, a different window-origin snap, a float difference). Fixed per the cut-1 gate, in
+the same shape `puts_idle_100`/`puts_script_a` already use: **one golden file, two runtimes.**
+
+- **`fixtures/drawables/tests/golden/drawables_hash.hash`** (native byte-format golden kind, M05):
+  a single `hash_region`/`hashDrawListFields` result, 16 lowercase hex digits, blessed with `GOLDEN_
+  BLESS=1 cargo nextest run -p fx-drawables -E 'test(drawlist_fixture_hash_golden)'` (`pnpm golden:
+  bytes`'s own wrapper rejects `-p`/`-E`, `packages/engine/CLAUDE.md`'s note).
+- **Native** (`fixtures/drawables/tests/drawlist_golden.rs`, rewritten): `drawlist_fixture_hash_
+  golden` no longer hand-assembles a `FrameView` over a `Loopback`-built replica. It drives
+  `GameInstance<Drawables>` **directly** -- `sim.sim_genesis()`/`sim_connect(0)`, then 8 rounds of
+  `client.frame()` -> `client_poll_uplink()` -> `sim.sim_admit()` -> `sim.sim_tick()` -> `sim.
+  sim_build_frame()` -> `client.on_frame()`, then one final `client.frame()` -- the exact `Instance`
+  methods `export_game!(Drawables)` points the compiled `.wasm`'s exports at, called as plain safe
+  Rust (no ABI marshaling needed natively). `RegionLayout::bytes(RegionId::DrawList)` (already
+  `pub`) reads the raw region afterward; `hash_region(region, drawlist_len())` is compared with
+  `assert_golden_hash!`.
+- **Wasm** (`tests/wasm/drawlist.test.ts`'s new `drawlist_hash_matches_native_golden`): the *literal
+  TS translation* of the same 8-round loop, against real `fx-drawables.wasm` sim/client instances
+  (`driveFixedScenario`, shared with the existing publish test), with the *same* camera (centre
+  `(0, 0)`, `tilesAcross` 10, half extent `(40, 40)`) and the *same* config (`seed`
+  `"0x1234567890abcdef"` -- does not actually change `fx-drawables`' fixed-entity output, kept
+  identical anyway so nothing needs to be reasoned about as "doesn't matter"). Reads `RegionId.
+  DrawList` directly, calls `hashDrawListFields`, reads the same `.hash` file with `node:fs`, and
+  asserts equality.
+- **Why this pairing catches real divergence, not just record count:** `hashDrawListFields`/
+  `hash_region` include `window_origin` and the body's own relative `pos` bytes -- a wrong snap, a
+  wrong sort key or a float rounding difference changes the hash even when `record_count` is
+  unchanged.
+
+**Verified: a perturbation goes red.** Temporarily set `tests/wasm/drawlist.test.ts`'s own
+`state.centreX = -1` (the wasm side only; native's `shared_camera()` untouched) -- `-1` still keeps
+every genesis entity inside `visible()` (`recordCount` stays `3`) but crosses `snap_window_origin`'s
+64-tile boundary the other way (`window_origin.x` becomes `-64`, not `0`), changing every `pos` byte
+in the body. Result: `drawlist_hash_matches_native_golden` failed at the hash comparison itself
+(`expected 'a79fe2eba7c25b7d' to be '07e82d2cb76fe412'`), not at an earlier assertion -- confirming
+the test actually exercises the window-origin/body-byte path, not just `recordCount`. Reverted
+(`git diff` on the file shows a no-op after revert); `pnpm test wasm -t drawlist` green again
+(2 tests).
+
+The one property still *not* covered: `tests/wasm/drawlist.test.ts`'s `drawlist_publish_matches_
+the_wasm_region_byte_for_byte` (unchanged from the first draft) is the copy-fidelity proof --
+together with the native-vs-`.wasm` golden above, "cut 2 builds on a publish that is already
+proven" now covers both halves: the `.wasm` build's own `DrawList` matches native, and the publish
+pump copies it faithfully.
 
 ### `no_alloc_drawlist.rs`: not fault-injected
 
@@ -285,40 +333,45 @@ Brief says "None" (M17b carries the manual run); untouched.
   floors_to_64`).
 - `pnpm test rust -t frameview` -> `rust pass 2 tests` (`frameview_entities_sorted_and_clipped`,
   `frameview_zoom_matches_camera_block`).
-- `cargo test -p fx-drawables --features engine/testing` (`pnpm test rust`'s own `-t`/`-p` substring
-  filter can't select one fixture crate; `cargo nextest`'s `-p`/`-E` flags aren't accepted through
-  `pnpm golden:bytes`'s own arg-passthrough either, so this and the next line are the raw commands)
-  -> 3 `drawlist_golden.rs` tests pass: `drawlist_fixture_hash_golden` (native golden, `GOLDEN_
-  BLESS=1 cargo nextest run -p fx-drawables -E 'test(drawlist_fixture_hash_golden)'`-blessed),
+- `cargo nextest run -p fx-drawables` (`pnpm test rust`'s own `-t`/`-p` substring filter can't select
+  one fixture crate; `cargo nextest`'s `-p`/`-E` flags aren't accepted through `pnpm golden:bytes`'s
+  own arg-passthrough either, so this and the next line are the raw commands) -> 6 tests pass:
+  `drawlist_fixture_hash_golden` (native-vs-`.wasm` golden, `GOLDEN_BLESS=1 cargo nextest run -p
+  fx-drawables -E 'test(drawlist_fixture_hash_golden)'`-blessed to `07e82d2cb76fe412`),
   `drawlist_zoom_threshold_hides_only_the_small_entity` (`below=3, at=3, above=2` -- `>`, not `>=`),
   `drawlist_fixture_hash_is_pure_function_of_replica_and_camera` (two independently built
-  `Loopback`s produce byte-identical output).
+  `Loopback`s produce byte-identical output), plus 3 `export_bindings_*` (ts-rs auto-generated).
 - `cargo nextest run -p engine --features testing -E 'binary(no_alloc_drawlist)'` -> 1 test passes,
   both windows `0` B growth.
-- `pnpm test wasm -t drawlist` -> `wasm pass 1 tests` (`drawlist_publish_matches_the_wasm_region_
-  byte_for_byte`).
-- Full `pnpm test rust` -> `rust pass 321 tests` (was 306 at M16b done). The `+15`: 6 `draw*`/
-  `drawlist_*` tests (step 1) + 2 `frameview_*` tests (step 2) + 3 `export_bindings_*` (ts-rs
-  auto-generated, one per `#[ts(export)]` type `fx-drawables` declares: `Pos`, `Action`, `Reject`)
-  + 3 `drawlist_golden.rs` tests (step 2) + 1 `no_alloc_drawlist` (step 3). Full `pnpm test wasm` ->
-  `wasm pass 48 tests` (was 44 at M16b done: +1 `drawlist.test.ts`, +3 from the new fixture joining
-  every fixture-iterating wasm-suite test, e.g. `abi-registry`/`allowlist`/`determinism`). Full
-  `pnpm test unit` -> `unit pass 196 tests` (unchanged: this cut touched no `src/**/*.test.ts`).
-  `pnpm lint` -> `biome pass · rustfmt pass · clippy pass · tsc pass`, at the final (post-step-3)
-  tree. `wgsl.uberquad_validates` and every browser test in "Tests added" are steps 4-6's, not run
-  here (no `uberquad.wgsl` exists yet).
+- `pnpm test wasm -t drawlist` -> `wasm pass 2 tests` (`drawlist_publish_matches_the_wasm_region_
+  byte_for_byte`, `drawlist_hash_matches_native_golden` -- the latter reads the same `drawables_
+  hash.hash` the native test above blesses and compares equal: `07e82d2cb76fe412`).
+- Full `pnpm test rust` -> `rust pass 321 tests` (was 306 at M16b done, unchanged by the gate fix:
+  one test replaced in place, not added). Full `pnpm test wasm` -> `wasm pass 49 tests` (was 48
+  before the gate fix: `+1`, the new native-vs-`.wasm` golden test). Full `pnpm test unit` -> `unit
+  pass 196 tests` (unchanged). `pnpm lint` -> `biome pass · rustfmt pass · clippy pass · tsc pass`,
+  at the final tree. `wgsl.uberquad_validates` and every browser test in "Tests added" are steps
+  4-6's, not run here (no `uberquad.wgsl` exists yet).
 - `pnpm test`/`pnpm test:slow`/the browser suite were not run (delegation prompt: "Don't run the
   full suites; I am the gate").
 
 ### Notes for cut 2 (steps 4-6)
 
-- `FrameView::px_per_tile()` is `0.0` always; wire it for real (a `CameraBlock` field, or a fresh one
-  computed some other way) before anything in steps 4-6 needs an actual pixel value.
+- **`FrameView::px_per_tile()`** is `0.0` always. Missing: a real device-pixel viewport size, which
+  no SAB/region currently carries into the client worker (`CameraBlock` has everything else
+  `tiles_per_px` needs). See the `px_per_tile()` Deviations entry above for the exact formula and
+  the two candidate carriers (grow `CameraBlock` by 8 bytes, or a `FrameCx`-era mechanism once M18
+  lands it) -- resolve before `draw.screen_px_stroke_constant_under_zoom` needs a real value.
 - The header's `flags` field (offset 52) has no named owner in the brief; this cut leaves it `0`.
   If steps 4-6 need a header-level flag before M18/M19 land, that ambiguity needs resolving then.
-- `drawListHash`'s definition (whole header + used body, two-lane FNV-1a32, no `BigInt`) is this
-  cut's own reading; if a later browser test (`drawlist.triple_newest_wins`, "Tests added") wants a
-  different shape, it is a test-only function with no other caller to keep in step.
+- `hashDrawListFields`/`hash_region`'s field selection (record_count + window_origin + layer_count +
+  dropped + body, `frame_seq`/`frame_time_ms` excluded) is this cut's own reading, fixed at the
+  cut-1 gate; if a later browser test (`drawlist.triple_newest_wins`, "Tests added") wants a
+  different shape, both the Rust and TS sides need updating together to stay twins.
+- `fixtures/drawables/tests/drawlist_golden.rs`'s `drawlist_fixture_hash_golden` now drives
+  `GameInstance<Drawables>` directly (sim + client, 8 rounds of `frame`/`client_poll_uplink`/
+  `sim_admit`/`sim_tick`/`sim_build_frame`/`on_frame`) rather than `Loopback`; the other two tests in
+  that file still use `Loopback` + a hand-built `FrameView` and were left alone.
 - `Draw`'s builder return value (`&mut Draw`) lets a caller chain further field writes (`.flags |=
   ...`, `.pick_id = ...`) after the initial call; no test in this cut exercises that chaining, but
   the shape is there for M18's picking/anchor work and M26's `PREDICTED` styling.

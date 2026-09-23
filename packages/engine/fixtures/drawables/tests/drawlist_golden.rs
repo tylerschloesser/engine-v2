@@ -1,16 +1,20 @@
-//! `drawlist.fixture_hash_golden` (docs/plan/17-drawlist-and-sprites.md, Tests added): a pure
-//! function of replica + camera (0020 §6 layer a) -- build a real, connected `Replica<Drawables>`
-//! through `engine::testing::testkit::Loopback` (real wire bytes end to end, the same tool
-//! `fixtures/puts` uses for its own connected golden), then `extract` + `sort_into` by hand (no
-//! `ClientInstance`/ABI needed for a native test: `client::drawlist`/`client::frame_view` are both
-//! `pub`) and hash the result with `engine::testing::assert_golden_hash!`.
+//! `drawlist.fixture_hash_golden` (docs/plan/17-drawlist-and-sprites.md, Tests added; M17 cut-1
+//! gate: "native-vs-`.wasm` equality, not self-consistency" -- `tests/golden/drawables_hash.hash`
+//! is read by *both* this native test and `tests/wasm/drawlist.test.ts`'s own `drawlist_hash_
+//! matches_native_golden`, exactly the `puts_idle_100`/`puts_script_a` shape: one committed golden
+//! file, two runtimes). This test drives `GameInstance<Drawables>` directly -- the same generic
+//! `Instance` dispatcher `export_game!(Drawables)` points the compiled `.wasm`'s exports at, not a
+//! hand-assembled `FrameView` -- so a real bug in the *production* `frame()`/window-origin/visible-
+//! rect path (not just `extract` in isolation) shows up here too.
 //!
-//! Also proves `frameview.zoom_matches_camera_block`'s own coverage: crossing
-//! [`fx_drawables::SMALL_ZOOM_THRESHOLD`] changes the record count and the hash, and nothing below
-//! it does.
+//! `drawlist_zoom_threshold_hides_only_the_small_entity`/`drawlist_fixture_hash_is_pure_function_
+//! of_replica_and_camera` (below) keep the lighter `Loopback` + hand-built `FrameView` harness:
+//! they only need *a* real replica, not byte-for-byte parity with `.wasm`.
 
-use engine::client::{ClientSide, Clocks, DrawList, FrameView};
+use engine::abi::{Instance, RegionId, RegionLayout, Role, Status};
+use engine::client::{CameraBlock, ClientSide, Clocks, DrawList, FrameView};
 use engine::game::PlayerId;
+use engine::game_instance::GameInstance;
 use engine::testing::testkit::Loopback;
 use engine::wire::CameraReport;
 use engine::world::{CacheCapacity, ChunkDims, TilePos};
@@ -83,18 +87,69 @@ fn extract_and_sort(lb: &Loopback<Drawables>, zoom: f32) -> (u32, Vec<u8>) {
     (n, out)
 }
 
+const GAME_CFG: &str = r#"{"seed":"0x1234567890abcdef","params":null}"#;
+
+/// The exact camera `tests/wasm/drawlist.test.ts`'s own `simConfig`/`CameraState` build: centre
+/// `(0, 0)`, `tilesAcross` 10 (below `SMALL_ZOOM_THRESHOLD`), half extent `(40, 40)`, no cursor.
+/// Any divergence here (a different centre, a different `tilesAcross`) would change `window_origin`
+/// or `visible()` on one side only -- exactly the class of bug this pairing exists to catch.
+fn shared_camera() -> CameraBlock {
+    let mut camera = CameraBlock::for_test([0.0, 0.0], [0.0, 0.0], [40.0, 40.0]);
+    camera.tiles_across = 10.0;
+    camera
+}
+
+/// Drives `GameInstance<Drawables>` (sim + client) through the *real* `Instance` methods
+/// `export_game!`'s `.wasm` exports also call -- `frame`/`on_frame`/`client_poll_uplink`/
+/// `sim_admit`/`sim_tick`/`sim_build_frame` -- with no ring/SAB plumbing (direct byte hand-off,
+/// same simplification `tests/wasm/drawlist.test.ts` makes; nothing about a ring is under test
+/// here either). Returns the client's own `RegionLayout` (alive for the caller to read
+/// `RegionId::DrawList` out of) and the record count `frame()` last produced.
+fn drive_real_game_instance() -> (RegionLayout, u32) {
+    let mut sim_layout = RegionLayout::new();
+    let mut sim = GameInstance::<Drawables>::init(Role::Sim, GAME_CFG, &mut sim_layout).unwrap();
+    assert_eq!(sim.sim_genesis(), Status::Ok);
+    assert_eq!(sim.sim_connect(0), Status::Ok);
+
+    let mut client_layout = RegionLayout::new();
+    let mut client =
+        GameInstance::<Drawables>::init(Role::Client, GAME_CFG, &mut client_layout).unwrap();
+    let camera = shared_camera();
+
+    let mut uplink_buf = [0u8; 4096];
+    let mut downlink_buf = [0u8; 65536];
+    for _ in 0..8 {
+        assert_eq!(client.frame(0.0, &camera, &mut []), Status::Ok);
+        let up_len = client.client_poll_uplink(0, &mut uplink_buf);
+        if up_len > 0 {
+            assert_eq!(sim.sim_admit(0, &uplink_buf[..up_len]), Status::Ok);
+        }
+        assert_eq!(sim.sim_tick(), Status::Ok);
+        if let Ok(down_len) = sim.sim_build_frame(0, &mut downlink_buf)
+            && down_len > 0
+        {
+            assert_eq!(
+                client.on_frame(&downlink_buf[..down_len as usize]),
+                Status::Ok
+            );
+        }
+    }
+    // The real frame this test asserts over: `extract` must see every genesis entity by now.
+    assert_eq!(client.frame(0.0, &camera, &mut []), Status::Ok);
+    let record_count = client.drawlist_len();
+    (client_layout, record_count)
+}
+
 #[test]
 fn drawlist_fixture_hash_golden() {
-    let lb = connected_client();
-    let (n, bytes) = extract_and_sort(&lb, 10.0);
+    let (client_layout, n) = drive_real_game_instance();
     assert_eq!(
         n, 3,
         "every genesis entity visible below the zoom threshold"
     );
-    engine::assert_golden_bytes!(
-        "drawables_extract_below_threshold",
-        &bytes[..1024 + n as usize * 32]
-    );
+    let region = client_layout.bytes(RegionId::DrawList);
+    let hash = engine::client::drawlist::hash_region(region, n);
+    engine::assert_golden_hash!("drawables_hash", hash);
 }
 
 #[test]
