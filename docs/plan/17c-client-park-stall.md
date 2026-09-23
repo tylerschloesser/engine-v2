@@ -331,8 +331,26 @@ directly:** `pnpm exec playwright test --config packages/engine/playwright.confi
 
 Per the delegation prompt's own binding rules, `pnpm test`/`pnpm lint` were not run by this session
 (the orchestrator gates); `pnpm typecheck` (part of `pnpm lint`) was run directly and is clean.
-`node scripts/repeat.mjs browser 15` and `... 15 --load 10` (the exit criterion's own commands) are
-reported in the final report, run once each, in the foreground.
+
+### Exit criterion: `node scripts/repeat.mjs browser 15` / `... 15 --load 10`
+
+Run once each, foreground, per-run kill timeout, after the fix (commit `4a0dc7d`):
+
+- `node scripts/repeat.mjs browser 15`: **`browser x15 load=0: pass=15 fail=0 hang=0
+  slowestSuiteSeconds=23`.** 0 occurrences of this milestone's own watch item (the
+  `isolate`/`W_YIELD`/`W_PARKED`/`W_WAKE`/`W_ACK`/`dead` shape, `src/test/client.ts`).
+- `node scripts/repeat.mjs browser 15 --load 10`: ambient `uptime` was already 9.51/10.05/8.20 at
+  the start (a shared machine, unrelated to this session, step 1's own note) before adding the
+  10 synthetic burners -- **`browser x15 load=10: pass=14 fail=1 hang=0 slowestSuiteSeconds=31`.**
+  The one failure is **not** this milestone's watch item: `gc-loop neg burst main` failed with
+  `` park('sim'): timed out after 10000 ms workers=[{"name":"sim","Req":3000,"Ack":3000,"State":1,
+  "Yield":1,"armed":true}] ``, a *different* shape (`name`/`Req`/`Ack`/`State`/`Yield`/`armed`) from
+  a *different* file -- `src/test/harness.ts`'s own M03/M04 harness (`gc-loop`'s own page uses
+  `createHarness`, not a real `createClient()`/`asHarness`), which independently carries an
+  M16e-shaped enriched message (`harness.ts:136`) but is not in this brief's own Files list and is
+  not the `parkWorkers` (`src/test/client.ts`) stall this brief targets. Recorded here rather than
+  silently folded into "0 failures": under ~20-effective-load (ambient plus the 10 burners) this
+  *other* harness's own wait timed out once in 15 runs, a pre-existing, separate mechanism.
 
 ### Notes for later briefs
 
@@ -342,3 +360,7 @@ reported in the final report, run once each, in the foreground.
   one), that is a materially different, likely worse finding worth its own brief.
 - `worker/gen.ts`'s own yield-free drain loop (flagged, not fixed, M16e) remains open and unrelated
   to this occurrence.
+- `src/test/harness.ts`'s own `park('sim')`/`createHarness` wait (M03/M04 harness, `gc-loop`'s own
+  page) timed out once under `node scripts/repeat.mjs browser 15 --load 10` (above), at ~20
+  effective load -- a different file, a different message shape, not this brief's Files list. Worth
+  a future brief if it recurs; not chased further here.
