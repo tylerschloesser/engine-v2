@@ -1,6 +1,6 @@
 # M17b: Sprite atlas, frame-time budget, `profile-frame`
 
-Status: not started · After: 17, 09b · Tyler-dependent: no
+Status: done · After: 17, 09b · Tyler-dependent: no
 
 Split out of M17 during planning. PLAN.md lists it under M20b's After (M33 is the first milestone to draw a sprite); M18 and M19 do not need it. Carries one manual desktop check (Safari and Firefox).
 
@@ -60,11 +60,11 @@ Sprite animation clocks (a game passes the frame in `param`). Text. A second atl
 - Slow tier: `bench.frame_worstcase`.
 
 ## Exit criteria
-- [ ] All fast tests above pass by name; `budgets.json` holds `counters["render.gpuBytes"]` with its `formula`.
-- [ ] `pnpm bench:frame` meets the desktop proxy of 0018 §9 on Tyler's Mac and `baselines/frame.json` is checked in.
-- [ ] `.claude/skills/profile-frame/SKILL.md` exists and its command was run in this session.
-- [ ] The `docs/plan/device-checks.md` section for this milestone matches what was built.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All fast tests above pass by name; `budgets.json` holds `counters["render.gpuBytes"]` with its `formula`.
+- [x] `pnpm bench:frame` meets the desktop proxy of 0018 §9 on Tyler's Mac and `baselines/frame.json` is checked in.
+- [x] `.claude/skills/profile-frame/SKILL.md` exists and its command was run in this session.
+- [x] The `docs/plan/device-checks.md` section for this milestone matches what was built.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test browser -t sprite` · `pnpm test browser -t drawables` · `pnpm bench:frame` · `node packages/engine/scripts/profile-frame.mjs` · `pnpm test` · `pnpm lint`.
