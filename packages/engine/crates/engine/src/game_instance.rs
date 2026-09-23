@@ -334,10 +334,12 @@ where
 
                 // docs/plan/16b-ui-observation-and-clock.md Scope: "inside frame(t_ms) ... iff a
                 // frame mutated the replica since the last call or the client-side dirty flag is
-                // set". By the time this runs, every `on_frame` applied since the last `frame`
-                // call has already landed on the replica (separate ABI export, driven by the net
-                // pump each wake, docs/plan/15b-ring-connection-and-replica-rendering.md), so
-                // `ClientCore::mutations()` already reflects them.
+                // set". Gate fix ("Delivery order"): the mutation half of this policy now also
+                // runs inside `on_frame` itself (see there), right when a frame's own mutation
+                // lands -- so by the time this call runs, `ui.maybe_run` is normally a no-op
+                // (`mutations` already matches what `on_frame` just recorded). This call still
+                // exists for the dirty-flag-only case: client-side state changed (M18's `FrameCx
+                // ::ui_dirty()`) with no new host frame since the last check.
                 let ClientInstance {
                     core,
                     client,
@@ -459,6 +461,8 @@ where
                 let ClientInstance {
                     core,
                     uploader,
+                    client,
+                    ui,
                     ui_buf,
                     ..
                 } = c;
@@ -468,6 +472,28 @@ where
                             DirtyEvent::Whole(chunk) => uploader.enqueue_chunk(chunk),
                             DirtyEvent::Tile(pos, tile) => uploader.patch_tile(pos, tile),
                         });
+                        // docs/plan/16b-ui-observation-and-clock.md gate fix ("Delivery order"):
+                        // the `ui` call policy runs *here*, right after this frame's own mutation
+                        // has landed on the replica and *before* this same frame's own results are
+                        // pushed below -- not in `frame(t_ms)` (a separate ABI export the client
+                        // worker calls *before* draining the downlink, docs/plan/
+                        // 15b-ring-connection-and-replica-rendering.md), which would only ever see
+                        // this mutation on the *next* wake. This guarantees a kind-1 record for
+                        // this frame's own state precedes this frame's own kind-2 result records in
+                        // `ui_buf`, satisfying "a result handler sees current state" (M16 brief,
+                        // M16b Planning decisions) with no extra latency. `frame(t_ms)`'s own call
+                        // to `ui.maybe_run` (unchanged) still exists for the dirty-flag-only case
+                        // (client-side state changed with no new host frame, M18); it is a no-op
+                        // here since `mutations` already matches what this call just recorded.
+                        let mutations = core.mutations();
+                        let replica = core.view();
+                        let clocks = Clocks {
+                            authoritative: replica.tick(),
+                            predicted: replica.tick(), // = authoritative until M26
+                        };
+                        let me = replica.own_player();
+                        let view = FrameView::new(replica as &dyn WorldRead<G>, clocks, me);
+                        ui.maybe_run(client, &view, mutations, ui_buf);
                         // docs/plan/16-action-round-trip.md Scope: "on_frame reads ActionResults
                         // and writes one result record per entry to RegionId::Ui".
                         core.drain_results(|seq, result| {
@@ -902,5 +928,159 @@ mod tests {
         // Drained: the oversized record was dropped, not left stuck at the front forever.
         let n2 = inst.client_poll_ui(&mut out);
         assert_eq!(n2, 0);
+    }
+
+    // Gate fix (docs/plan/16b-ui-observation-and-clock.md Deviations, "Delivery order"): a frame
+    // that both mutates state `ui` reads and carries an action result must produce a kind-1 record
+    // reflecting that same mutation *before* the kind-2 record for that result, in the same
+    // `ui_buf`/`client_poll_ui` drain -- "a result handler sees current state" (M16 brief, M16b
+    // Planning decisions). `OGame` is a separate, minimal `Game` from `TestGame` above so this
+    // test's real `Ui` cannot perturb the other `client_poll_ui_*` tests' exact-JSON assertions.
+
+    #[derive(
+        Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize, ts_rs::TS,
+    )]
+    struct OAction;
+    #[derive(
+        Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, ts_rs::TS,
+    )]
+    struct OReject;
+    impl From<Unknown> for OReject {
+        fn from(_: Unknown) -> Self {
+            OReject
+        }
+    }
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct OEntity;
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct OPlayer;
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct OGlobal {
+        counter: u32,
+    }
+
+    /// The one field `OClient::ui` mirrors from `Global`, so a real replica mutation is directly
+    /// observable in the emitted JSON.
+    #[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, ts_rs::TS)]
+    struct OUi {
+        counter: u32,
+    }
+
+    #[derive(Default)]
+    struct OClient;
+    impl crate::client::ClientSide<OGame> for OClient {
+        fn ui(&self, view: &FrameView<'_, OGame>, out: &mut OUi) {
+            out.counter = view.world().global().counter;
+        }
+    }
+
+    struct OWorldgen;
+    impl Worldgen for OWorldgen {
+        type Params = ();
+        const WORLDGEN_VERSION: u32 = 0;
+        fn generate(_seed: u64, _params: &(), _chunk: ChunkCoord, out: &mut [Tile]) {
+            out.fill(Tile::VOID);
+        }
+    }
+
+    struct OGame;
+    impl Game for OGame {
+        const SCHEMA_VERSION: u32 = 1;
+        type Worldgen = OWorldgen;
+        type Action = OAction;
+        type Reject = OReject;
+        type Entity = OEntity;
+        type Player = OPlayer;
+        type Global = OGlobal;
+        type Presence = ();
+        type Ui = OUi;
+        type Client = OClient;
+        fn register(_r: &mut Registry) {}
+        fn prototype(_e: &OEntity) -> PrototypeId {
+            PrototypeId(0)
+        }
+        fn anchor(_e: &OEntity) -> TilePos {
+            TilePos::new(0, 0)
+        }
+        fn genesis(_w: &mut dyn WorldWrite<Self>) {}
+        fn on_player(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _ev: PlayerEvent) {}
+        fn apply(
+            _w: &mut dyn WorldWrite<Self>,
+            _who: PlayerId,
+            _a: &OAction,
+        ) -> Result<(), OReject> {
+            Ok(())
+        }
+        fn tick(_cx: &mut TickCx<'_, Self>) {}
+    }
+
+    fn o_instance() -> GameInstance<OGame> {
+        let mut layout = RegionLayout::new();
+        GameInstance::<OGame>::init(
+            Role::Client,
+            r#"{"seed":"0x1","params":null,"genWorkers":1,"cacheChunks":1024}"#,
+            &mut layout,
+        )
+        .unwrap()
+    }
+
+    /// One frame carrying both a `Global` mutation (`counter` -> `new_counter`, which `OClient::ui`
+    /// reads) and an `ActionResults` section -- `ActionResults` is section id 1, `Global` is id 2,
+    /// so the *writer* calls are in that order (`FrameWriter::section`'s own ascending-id rule);
+    /// this is unrelated to which section `ClientCore::apply` finishes mutating state for first,
+    /// since both are fully applied before `on_frame` returns either way.
+    fn frame_with_global_and_results(new_counter: u32, outcomes: &[Outcome<OGame>]) -> Vec<u8> {
+        let mut buf = [0u8; 512];
+        let mut sink = crate::bytes::SliceSink::new(&mut buf);
+        let mut fw = FrameWriter::new(
+            &mut sink,
+            FrameHeader {
+                tick: 1,
+                ack_seq: 1,
+            },
+        );
+        fw.section(SectionId::ActionResults, |s| {
+            ActionResultsWriter::write::<OGame>(s, outcomes.iter());
+        });
+        fw.section(SectionId::Global, |s| {
+            crate::wire::write_global::<OGame>(
+                s,
+                None::<core::iter::Empty<(PlayerId, bool)>>,
+                Some(&OGlobal {
+                    counter: new_counter,
+                }),
+            );
+        });
+        let n = sink.finish().unwrap();
+        buf[..n].to_vec()
+    }
+
+    #[test]
+    fn ui_record_precedes_its_own_frames_action_result_and_reflects_the_mutation() {
+        let mut inst = o_instance();
+        let confirmed = vec![Outcome {
+            seq: 1,
+            result: Ok(Applied),
+        }];
+        let bytes = frame_with_global_and_results(7, &confirmed);
+        assert_eq!(inst.on_frame(&bytes), Status::Ok);
+
+        let mut out = [0u8; 256];
+        let n = inst.client_poll_ui(&mut out);
+        assert!(n > 0, "the frame must produce at least one UI record");
+        let records = decode_ui_records(&out[..n]);
+        assert_eq!(
+            records.len(),
+            2,
+            "one Ui record (the counter changed from Default's 0 to 7) and one ActionResults \
+             record, got: {records:?}"
+        );
+        assert_eq!(records[0].0, 1, "kind byte: Ui record must come first");
+        assert_eq!(
+            records[0].1, r#"{"counter":7}"#,
+            "the Ui record must already reflect this same frame's Global mutation"
+        );
+        assert_eq!(records[1].0, 2, "kind byte: ActionResults record");
+        assert_eq!(records[1].1, r#"{"seq":1,"result":"Confirmed"}"#);
     }
 }

@@ -146,39 +146,65 @@ flag_set`'s browser-level equivalent needs to set the flag from a Playwright tes
 real production setter. **Any such export bumps `ABI_VERSION`** (unchanged at 12 by this cut: no
 export was added, no existing export's params/result changed).
 
-### Where `G::Client` is constructed, and where the `ui` call sits in `frame(t_ms)` (`game_instance.rs`)
+### Where `G::Client` is constructed, and where the `ui` call sits (`game_instance.rs`)
 
 `ClientInstance<G>` gained two fields: `client: G::Client` (built once, `G::Client::default()`, in
 `ClientInstance::init` -- lives for the instance, never reconstructed) and `ui: UiObserver<G>`
-(`UiObserver::new()`, same place). `GameInstance::frame`'s `Client` arm, **after** the existing
-`set_camera`/`feed.on_frame`/`uploader.on_frame`/`input_queue.clear()` block, destructures `c` into
-`{ core, client, ui, ui_buf, .. }` and runs:
+(`UiObserver::new()`, same place).
+
+**Gate fix ("Delivery order"), replacing this section's own first draft.** The first draft ran
+`ui.maybe_run` only inside `GameInstance::frame` (the `frame(t_ms)` ABI export), reasoning "by the
+time this runs, every `on_frame` applied since the last `frame` call has already landed" -- true,
+but irrelevant to the bug: `worker/client.ts`'s `body()` calls `frame()` **before** `netPump.pump()`
+(which calls `on_frame`), so a given wake's `frame()` call reflects replica state as of the
+*previous* wake, not the frame `on_frame` is about to apply *this* wake. A frame that both mutates
+state `ui` reads and carries an action result therefore drained as `[Result(Confirmed)]` with no
+accompanying `Ui` record at all in that same drain -- the *opposite* of "a result handler sees
+current state" (M16 brief, M16b Planning decisions). Confirmed live: `ui_record_precedes_its_own_
+frames_action_result_and_reflects_the_mutation`, written against the first draft, failed with
+`records == [(2, "{\"seq\":1,\"result\":\"Confirmed\"}")]` -- zero kind-1 records, not merely
+mis-ordered ones.
+
+**Fix: the `ui` call now also runs inside `GameInstance::on_frame`'s `Client` arm**, immediately
+after `core.on_frame(bytes)` succeeds (replica already mutated) and the dirty-chunk drain, but
+**before** `core.drain_results` pushes that same frame's kind-2 records:
 
 ```rust
+// on_frame, right after core.on_frame(bytes) => Ok(_) and the drain_dirty_for_upload call:
 let mutations = core.mutations();
 let replica = core.view();                                    // &Replica<G>: WorldRead<G>
 let clocks = Clocks { authoritative: replica.tick(), predicted: replica.tick() };  // = until M26
 let me = replica.own_player();
 let view = FrameView::new(replica as &dyn WorldRead<G>, clocks, me);
-ui.maybe_run(client, &view, mutations, ui_buf);
+ui.maybe_run(client, &view, mutations, ui_buf);                // BEFORE core.drain_results below
+core.drain_results(|seq, result| push_result_record::<G>(ui_buf, seq, result));
 ```
 
-`ui_buf` is the *same* `Vec<u8>` `on_frame`'s `push_result_record` (kind 2) already appends to and
-`client_poll_ui` already drains record-by-record (M16, unchanged) -- a kind-1 record lands in it
-exactly like a kind-2 one, and `client_poll_ui`'s own never-split/drop-if-too-big contract (M16
-Deviations) applies identically to both kinds, since it only ever looks at `[kind][len]`.
+This ties a kind-1 record directly to the frame that produced it, at zero added latency (no "hold
+results pending a rAF" scheme, one of the two candidates offered -- rejected: it would cost a whole
+extra rAF of result latency against 0004/0012's "at most one tick plus the network" budget, for no
+benefit once the call site itself moves). `on_frame` can run more than once per wake (once per
+downlink message `netPump.pump()` drains); each call independently orders its own kind-1 before its
+own kind-2, which is correct regardless of how many times that happens.
 
-**Delivery order, and why it already holds without extra work.** `frame` and `on_frame` are
-separate ABI exports; within one client-worker wake, `worker/client.ts`'s `body()` calls `frame()`
-**before** `netPump.pump()` (which calls `on_frame`) -- established M15b, unchanged by this cut
-(`packages/engine/src/CLAUDE.md`'s own ordering note). Consequence: a given wake's `ui` call (if it
-runs) reflects replica state as of the *previous* wake's `on_frame` calls, and this wake's own kind-1
-append (if the value changed) lands in `ui_buf` **before** this same wake's kind-2 append from
-`on_frame`, which runs later in the same `body()` call. Since `client_poll_ui` drains `ui_buf` in
-append order, **the Provides' delivery-order rule ("`onUi` then results") already holds as a direct
-consequence of the existing `frame`-before-`on_frame` wake order, with nothing added in this cut to
-enforce it** -- worth re-verifying once cut 2's TS drain exists for real, since it depends on that
-specific ordering in `worker/client.ts` staying as it is.
+**`GameInstance::frame`'s own call to `ui.maybe_run` is unchanged and still there**, now normally a
+no-op (`mutations` already matches what the `on_frame` call above just recorded) -- it remains the
+only path for the dirty-flag-only case: client-side state changed (M18's future `FrameCx::
+ui_dirty()`) with **no** new host frame since the last check. No double-append risk: `UiObserver`'s
+own `should_run` gate (`mutations != last_mutations || dirty`) is false on this second call unless
+the flag was set in between.
+
+`ui_buf` is the *same* `Vec<u8>` `push_result_record` (kind 2) already appends to and `client_poll_
+ui` already drains record-by-record (M16, unchanged) -- a kind-1 record lands in it exactly like a
+kind-2 one, and `client_poll_ui`'s own never-split/drop-if-too-big contract (M16 Deviations) applies
+identically to both kinds, since it only ever looks at `[kind][len]`.
+
+**Delivery order now holds by construction, not by coincidence of wake ordering.** The Provides'
+rule ("`onUi` then results") no longer depends on `worker/client.ts`'s `frame`-before-`on_frame`
+wake order at all: it is enforced entirely inside `on_frame` itself, on the native side, so cut 2's
+TS drain has nothing further to prove about ordering -- it only needs to preserve `ui_buf`'s own
+append order when copying it onto `uiRing` (already true, unchanged: `client_poll_ui` copies whole
+records in order).
 
 ### `ui_json_matches_ts_shape`, and why it does not use `PutsUi`
 
@@ -204,13 +230,19 @@ committing.
 
 ### Verified
 
-`pnpm test rust -t ui_` -> `rust pass 8 tests` (the 4 new `client::ui::tests::*` plus 3 pre-existing
-`game_instance::tests::client_poll_ui_*` plus `no_alloc_ui`'s own test). `pnpm test rust` (full) ->
-`rust pass 303 tests`. `pnpm test wasm -t puts` -> `wasm pass 3 tests`; `pnpm test wasm -t terrain`
--> `wasm pass 3 tests` (both fixtures' `ClientSide` impls still compile and build to `.wasm`
-unchanged). `pnpm lint` -> `biome pass · rustfmt pass · clippy pass · tsc pass`. Full `pnpm test`/
-`pnpm test:slow`/browser suites not run (delegation prompt: targeted runs only, orchestrator gates
-the full suite).
+Pre-gate-fix: `pnpm test rust -t ui_` -> `rust pass 8 tests`; `pnpm test rust` (full) -> `rust pass
+303 tests`; `pnpm test wasm -t puts` -> `wasm pass 3 tests`; `pnpm test wasm -t terrain` -> `wasm
+pass 3 tests`; `pnpm lint` -> `biome pass · rustfmt pass · clippy pass · tsc pass`.
+
+Post-gate-fix (delivery order): `cargo nextest run --features testing -E 'test(ui_record_precedes)'`
+against the pre-fix code -> **FAILED**, `records == [(2, "{\"seq\":1,\"result\":\"Confirmed\"}")]`,
+`left: 1, right: 2` (asserted 2 records, got 1 -- zero `Ui` records at all in that drain). After the
+fix: same command -> `PASS`; `cargo nextest run --features testing -E 'test(ui_record_precedes) or
+test(ui_) or binary(no_alloc_ui) or test(client_poll_ui)'` -> `9 tests run: 9 passed` (the new
+ordering test, all `client::ui::tests::*`, all `client_poll_ui_*`, and `no_alloc_ui` still equal-
+growth). `pnpm test rust` (full) -> `rust pass 304 tests`. `pnpm lint` -> `biome pass · rustfmt pass
+· clippy pass · tsc pass`. Full `pnpm test`/`pnpm test:slow`/browser suites not run (delegation
+prompt: targeted runs only, orchestrator gates the full suite).
 
 ### Decisions needed / notes for cut 2
 
