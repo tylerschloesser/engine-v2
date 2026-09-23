@@ -46,7 +46,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 16d | `16d-sim-pacing-under-external-wakes.md` | sim ticks steadily while a client wakes it every frame (amends 0030); `vertical_slice` under 3 s, time-independent pixel probe | 16c | |
 | [x] | 16b | `16b-ui-observation-and-clock.md` | `G::Ui` → UI ring → `onUi`, `client.clock()`, ts-rs bindings | 16d | |
 | [x] | 16e | `16e-park-timeout-diagnosis.md` | `parkWorkers` timeout names its worker and state; cause reproduced and fixed, or instrumented for the next occurrence | 16b | |
-| [ ] | 16f | `16f-harness-waits-and-sibling-burst.md` | bound every `engine/test` harness wait; test the `gen` yield lead; attribute and fix the hardware slow tier's sibling-burst `main` rise | 16e | |
+| [x] | 16f | `16f-harness-waits-and-sibling-burst.md` | bound every `engine/test` harness wait; test the `gen` yield lead; attribute and fix the hardware slow tier's sibling-burst `main` rise | 16e | |
 | [ ] | 17 | `17-drawlist-and-sprites.md` | `extract` → DrawList, `FrameView`, shapes, triple-buffer publish | 16b | |
 | [ ] | 17b | `17b-sprites-and-frame-budget.md` | sprite atlas, frame-time budget, `profile-frame` skill | 17, 09b | D |
 | [ ] | 18 | `18-picking-and-overlay.md` | CPU picking, DOM anchoring, `FrameCx` | 17, 09b | D |

@@ -1,6 +1,6 @@
 # M16f: Bound the harness waits, test the `gen` yield lead, attribute the sibling-burst `main` rise
 
-Status: not started · After: 16e · Tyler-dependent: no
+Status: done · After: 16e · Tyler-dependent: no
 
 ## Goal
 
@@ -66,13 +66,13 @@ The 10 s `pollUntil` bound, Playwright's 30 s, `budgets.json` upward, the 600-fr
 Step 2's backlog test (if the lead holds) and whatever step 3's fix needs.
 
 ## Exit criteria
-- [ ] Every `src/test/harness.ts` wait is time-bounded, with a forced timeout's message pasted.
-- [ ] The `gen` yield lead is proven (fix plus failing-then-passing test) or disproven (measurement
+- [x] Every `src/test/harness.ts` wait is time-bounded, with a forced timeout's message pasted.
+- [x] The `gen` yield lead is proven (fix plus failing-then-passing test) or disproven (measurement
       recorded).
-- [ ] `pnpm test:slow -t "connected-terrain"` is green in hardware mode, and the cause is attributed
-      in Deviations with `windowByFn` and the bisected commit.
-- [ ] No `budgets.json` number raised; every zero-GC control still trips.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `pnpm test:slow -t "connected-terrain"` is green in hardware mode, and the cause is attributed
+      in Deviations with `windowByFn` and the bisected commit. **Amended at the gate:** green, but not attributed, because it no longer reproduces (see the orchestrator's gate).
+- [x] No `budgets.json` number raised; every zero-GC control still trips.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test:slow -t <pattern>` · `pnpm gc -t <page>` · `pnpm test browser -t <pattern>`.
@@ -253,3 +253,10 @@ technique above is ready to reuse the instant it does.
 `git status --short` clean at the end of this step: the forced-interpreter `playwright.config.ts`
 edit and the forced `budgets.json` edit were both reverted (`git diff` empty for both, confirmed
 after each probe).
+
+### Orchestrator's gate (M16f done)
+
+- Step 1 (harness waits bounded, allocation-free success path) and step 2 (the `gen` yield lead disproven: `MAX_IN_FLIGHT_PER_WORKER = 2` caps each wake's drain) are accepted.
+- **Step 3 did not reproduce, and the orchestrator's own re-run agrees.** The 3/3 failure at M16e's gate ran at a 1-minute load of **10.7**. The same command at load **6.6** passes 4/4, and the implementer's eight attempts read `main` at 103.3-103.8. So `connected-terrain`'s hardware `main` budget (111 = clean ~103 + 8) is used up when a sibling burst coincides with ambient load around 10, which is 0016's "at high load" caveat on a single page, not a regression. It is a ledger watch item, not attributed, because there is nothing reproducing to attribute. **Earlier gate text calling it a defect was an over-reading of one loaded run.**
+- `pnpm test && pnpm lint` green; gate: 2 files, no budgets, no goldens.
+
