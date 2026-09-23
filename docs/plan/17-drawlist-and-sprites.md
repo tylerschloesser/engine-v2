@@ -1,6 +1,6 @@
 # M17: DrawList, `FrameView`, shapes
 
-Status: not started · After: 16b · Tyler-dependent: no
+Status: not started · After: 16f · Tyler-dependent: no
 
 Split during planning: the sprite atlas, the sprite kind, the 65,536-record frame benchmark, the `profile-frame` skill and the manual Safari/Firefox harness run are **M17b** (`17b-sprites-and-frame-budget.md`). M18 and M19 depend on this brief only; PLAN.md lists M17b under M20b's After.
 
