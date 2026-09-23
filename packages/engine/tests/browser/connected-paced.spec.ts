@@ -20,6 +20,7 @@ declare global {
   interface Window {
     __pokeFor?: (ms: number, intervalMs: number) => Promise<void>
     __simCounters?: () => Promise<SimHostCounters>
+    __wakeSimFor?: (ms: number, intervalMs: number) => Promise<{ t: number[]; ticks: number[] }>
   }
 }
 

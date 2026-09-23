@@ -53,10 +53,10 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   const inst = await instantiateForSetup(shell, message, Role.Sim)
   const gcHook = message.test?.gcHook === true
 
-  // `createAtomicsTimer()` no longer takes a clock (docs/plan/13b-tick-timing-allocation.md): it
-  // never reads one -- `systemClock` still reaches `SimHost` two lines below, which is the only
-  // clock read left on this worker's own tick path (amortised there, not per wake).
-  const atomicsTimer = createAtomicsTimer()
+  // docs/decisions/0032-atomics-timer-bounds-external-wakes.md (M16d): the timer takes a clock
+  // again, but reads it only while external wakes interrupt its wait (about once per tick then) and
+  // never on an uninterrupted pass; `SimHost`'s resync (0030) is the other reader.
+  const atomicsTimer = createAtomicsTimer(systemClock)
   const simInstance = wrapEngineInstance(inst)
   const simHost = createSimHostFromInstance(simInstance, {
     clock: systemClock,
@@ -105,6 +105,13 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // this worker, and `poll()` is skipped for that pass so it does not also run a spurious tick.
   // `connected-paced.spec.ts`'s `poll_skips_a_spurious_tick_on_a_ring_wake` (Tests added) fails if
   // this comparison is ever removed -- the "fix nothing exercises" defect this repo keeps repeating.
+  //
+  // docs/decisions/0032-atomics-timer-bounds-external-wakes.md (M16d): the same comparison
+  // is also what tells `AtomicsTimer` how its wait ended: `poll()` (timed out) credits the wait to
+  // the timer's proven bound and fires once the deadline is reached; `interrupt()` (woken) credits
+  // nothing and fires only if a clock read proves the deadline passed. Without that, a
+  // producer waking this worker more often than once per interval restarted the full wait every
+  // time and no tick ran at all (`sim_ticks_steadily_under_external_wakes`, same spec file).
   let lastWokenBy: number | null = null
 
   // Production topology, or a test page that opts in with `test.pace` (docs/plan/
@@ -130,6 +137,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       simHost.stepTick(delta)
     }
     if (wokenBy === lastWokenBy) atomicsTimer.poll()
+    else atomicsTimer.interrupt()
     lastWokenBy = wokenBy
     Atomics.store(shell.control.words, CB_SIM_TICKS_RUN, simHost.counters.ticksRun)
     Atomics.store(shell.control.words, workerWord(shell.index, W_ACK), wokenBy)
