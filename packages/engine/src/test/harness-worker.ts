@@ -89,12 +89,36 @@ function runOp(op: number, seq: number): void {
   }
 }
 
-/** Blocks the worker thread in `Atomics.wait`, serving step requests until yielded (0015 §2). */
-function armedLoop(block: Int32Array): void {
+/**
+ * Blocks the worker thread in `Atomics.wait`, serving step requests until yielded (0015 §2).
+ *
+ * Checks `Yield` *before every wait, including this loop's own first one* -- fixed M17c step 3,
+ * fix round 3 (docs/plan/17c-client-park-stall.md): the original shape checked it only *after* a
+ * wait returned, so `harness.ts`'s `parkOne` -- which stores `Yield = 1` then calls
+ * `Atomics.notify(Req)` *without changing `Req`* (its own doc comment: "keeps `Req === Ack` true
+ * across a park") -- landing between this loop's own entry and its first wait, or between storing
+ * `Ack` and looping back for the next one, left the worker permanently blocked: with `Req`
+ * unchanged, that next `Atomics.wait(block, Req, last)` sees the value still equal to `last` and
+ * genuinely sleeps, with no further notify ever coming (`parkOne` sends exactly one). Checking
+ * first, on every pass, catches a yield already stored by the time control reaches here, before
+ * ever committing to wait. The *existing* post-wait check is kept alongside it, not replaced,
+ * because `runOp` is not idempotent the way a production kind's `body()` is (M17c fix round 2's own
+ * note for `runBlockingLoop`): a `parkOne` notify that happens to land while this thread is already
+ * registered as a waiter still wakes it (`Atomics.wait` returns "ok" on any notify regardless of
+ * whether the value moved, `parkOne`'s own doc comment), and without the second check this loop
+ * would re-run the same, unchanged `Req` as a fresh step -- a real double-tick, not a harmless extra
+ * call.
+ *
+ * Exported for `armed-loop-race-worker.ts` (`tests/browser/pages/src/`), which calls it directly
+ * against a caller-constructed block to prove the fix deterministically, without needing to time a
+ * real `parkOne` message race.
+ */
+export function armedLoop(block: Int32Array): void {
   let last = Atomics.load(block, StepBlockField.Req)
   Atomics.store(block, StepBlockField.State, WorkerState.Armed)
   post(ARMED)
   for (;;) {
+    if (Atomics.load(block, StepBlockField.Yield)) break
     Atomics.wait(block, StepBlockField.Req, last)
     if (Atomics.load(block, StepBlockField.Yield)) break
     last = Atomics.load(block, StepBlockField.Req)

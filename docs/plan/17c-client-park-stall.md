@@ -485,6 +485,97 @@ that found the failure in step 1, foreground, this machine's own `uptime` noted 
 
 160/160 total on the exact configurations that previously reproduced the stall 2/15 and 1/25.
 
+### Step 3, fix round 3: the same class of defect in the M03/M04 harness
+
+The coordinator's own quiet loop caught a second, independent occurrence while gating fix round 2:
+`gc-loop neg object main`, `` park('sim'): timed out after 10000 ms workers=[{"name":"sim",
+"Req":3500,"Ack":3500,"State":1,"Yield":1,"armed":true}] `` -- `src/test/harness.ts`/`harness-
+worker.ts`'s own M03/M04 protocol (`gc-loop`'s own page uses `createHarness`, not a real
+`createClient()`), out of this brief's original Files list until this round widened it to include
+both files.
+
+**Trace, checked against the code.** `harness.ts`'s `parkOne`: `Atomics.store(h.sab, Yield, 1)` then
+`Atomics.notify(h.sab, Req)` -- its own doc comment: "Wakes a worker blocked in `Atomics.wait`
+*without touching `Req`/`Ack`*... keeps `Req === Ack` true across a park." `harness-worker.ts`'s
+`armedLoop`:
+```
+let last = Atomics.load(block, Req)
+Atomics.store(block, State, Armed)
+post(ARMED)
+for (;;) {
+  Atomics.wait(block, Req, last)                    // <- first/every wait: no yield check before
+  if (Atomics.load(block, Yield)) break              //    checked only after
+  ...
+}
+```
+Confirmed, unambiguously: no check before any wait, first or later. `WorkerState.Armed` is `1`
+(`step-block.ts`), matching the captured `"State":1`. **This is a stricter defect than
+`runBlockingLoop`'s own** (fix round 2): `sab/control.ts`'s `wake()` always bumps the word it waits
+on, so even a yield-check that races is self-healing (the subsequent `Atomics.wait` sees a value
+mismatch and returns without blocking, M17c fix round 2's own analysis). `parkOne`'s own notify does
+*not* change `Req`, so a worker that reaches `Atomics.wait(block, Req, last)` *after* `parkOne`'s one
+notify already fired sees `Req` still equal to `last` and genuinely, permanently blocks (no timeout
+argument on this call at all) -- there is no self-healing case here, only "was a waiter already
+registered at the exact instant of the one notify."
+
+**Fix.** `armedLoop` (`src/test/harness-worker.ts`) now checks `Yield` at the top of the loop, before
+every `Atomics.wait` call including the first, mirroring `runBlockingLoop`'s own fix. The *existing*
+post-wait check is kept, not removed, unlike `runBlockingLoop`'s: `runOp` is not idempotent (it
+always calls `sim_tick()`/`sim_admit()` unconditionally), so a `parkOne` notify that lands while this
+thread is already a registered waiter still wakes it (`Atomics.wait` returns "ok" on any notify
+regardless of whether the value moved) -- without the second check this loop would treat that wake as
+a fresh step and re-run the same, unchanged `Req`, a real double-tick. Exported (`export function
+armedLoop`) for the new test below.
+
+**Test, built directly against `armedLoop` (the "smallest browser test" fallback: a plain Node unit
+test cannot drive it -- `self`/`postMessage` do not exist under Vitest's `node` environment for the
+`unit` project, and a still-broken, timeout-less `Atomics.wait` cannot be safely bounded from the
+same thread it blocks).** New files: `tests/browser/pages/src/armed-loop-race-worker.ts` (a minimal
+worker that calls the exported `armedLoop` directly against a caller-supplied step block, posting a
+plain `'returned'` string when it returns -- distinct from `armedLoop`'s own `{type:'armed'}`/
+`{type:'parked'}` protocol messages, which fire well before any wait and are not the completion
+signal), `tests/browser/pages/src/armed-loop-race.ts` (`armed-loop-race.html`'s script: stores
+`Yield = 1` on a fresh step block *before* ever starting the worker -- constructing the race
+directly rather than timing a real `parkOne` round trip -- then races the worker's own `'returned'`
+message against an external `setTimeout` + `worker.terminate()`, since a hung `Atomics.wait` blocks
+its own thread with nothing to bound it from inside), `tests/browser/armed-loop-race.spec.ts`
+(`harness-worker.armed_loop_checks_yield_before_its_first_wait`).
+
+Checked red first with a real bug in the test itself, worth recording: the first version's
+`worker.onmessage` treated *any* message as completion, so it resolved `'returned'` immediately on
+`armedLoop`'s own `post(ARMED)` (sent before the loop even starts) without ever actually waiting for
+the real result -- passing on both the buggy and fixed protocol, a false green. Fixed by filtering
+for the literal `'returned'` string. With that fixed, checked red on the base protocol (`export`
+added but the loop body left unfixed):
+```
+FAIL browser [chromium] harness-worker.armed_loop_checks_yield_before_its_first_wait
+  Error: expect(received).toBe(expected) // Object.is equality
+  Expected: "returned"
+  Received: "timed-out"
+```
+The worker genuinely hung for the full 3,000 ms bound, never returning. With the real fix restored:
+`browser pass 1 tests 1.9s/25s`; reliability `--repeat-each 10` -- **10 passed (3.0s)**.
+
+**`gc-loop`'s own negative controls, budgets unchanged:** `pnpm gc -t "gc-loop"` -- **7 passed
+(3.0s)**: `clean`, every `object`/`burst` negative control, the `post-message` control, and `gc:
+flat transport parity` all still pass; no `budgets.json` number touched.
+
+**Searched for every other `Atomics.wait` loop in `src/`/`tests/`** (`grep -rn "Atomics\.wait\("`,
+excluding comments and `dist/`):
+1. `src/sab/control.ts`'s `waitForWake`, called from `worker/shell.ts`'s `runBlockingLoop` --
+   **already fixed, fix round 2.**
+2. `src/test/harness-worker.ts`'s `armedLoop` -- **fixed this round.**
+3. `tests/browser/wiring.spec.ts`'s `` Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0,
+   50) `` -- a one-shot smoke probe ("wiring: crossOriginIsolated and Atomics.wait in the worker"),
+   not a loop, no yield/stop flag, asserting only that the primitive itself works and times out with
+   no waiter. **Not the same shape; no fix needed.**
+
+No fourth site exists to check by hand: `src/sab/no-alloc-syntax.test.ts`'s own `sab.
+atomics_wait_confined` (already in the suite, unmodified, reconfirmed green) walks every non-test
+file under `src/` and fails if `Atomics.wait(` appears anywhere but `sab/control.ts` or `src/test/**`
+-- an existing, automated guarantee that (1) and (2) above are the *only* two production/harness call
+sites in `src/`, not just the only two this session happened to find by hand.
+
 ### Not run
 
 Per the delegation prompt's own binding rules, `pnpm test`/`pnpm lint` were not run by this session
@@ -528,8 +619,11 @@ the note below).
   signal source the way `parkWorkers` is here.
 - `worker/gen.ts`'s own yield-free drain loop (flagged, not fixed, M16e) remains open and unrelated
   to this occurrence.
-- `src/test/harness.ts`'s own `park('sim')`/`createHarness` wait (M03/M04 harness, `gc-loop`'s own
-  page) timed out once under fix round 1's own `node scripts/repeat.mjs browser 15 --load 10` (at
-  ~20 effective load) and did not recur under fix round 2's own re-run at comparable load -- a
-  different file, a different message shape, not this brief's Files list. Worth a future brief if it
-  recurs; not chased further here.
+- **Resolved by fix round 3:** `src/test/harness.ts`/`harness-worker.ts` (M03/M04 harness,
+  `gc-loop`'s own page) had the same class of defect as fix round 2's own `runBlockingLoop`, and a
+  stricter one: `armedLoop` now checks `Yield` before every wait including its first, and the
+  existing post-wait check is kept alongside it because `runOp` is not idempotent (a coincidental
+  wake-plus-park would otherwise double-tick the sim). Confirmed by `sab.atomics_wait_confined`
+  (`src/sab/no-alloc-syntax.test.ts`) that these two files' own `Atomics.wait(` call sites --
+  `sab/control.ts`'s `waitForWake` and `harness-worker.ts`'s `armedLoop` -- are the *only* two in all
+  of `src/`, so no third site of this shape exists there to find later.

@@ -214,6 +214,33 @@ of the M03/M04 harness. Two differences from a harness page:
   harness-level retry (re-waking a not-yet-parked worker) is *not* the fix for this class of defect
   -- it hides exactly the regression the `parkWorkers` message exists to catch; fix the loop that
   drops the signal, not the caller that sends it.
+
+  **The M03/M04 harness had the same class of defect, one notch stricter (M17c, fix round 3).**
+  `src/test/harness-worker.ts`'s `armedLoop` (`gc-loop`'s own page) had the identical shape --
+  `Yield` checked only after a wait, never before the first -- behind `harness.ts`'s `parkOne`,
+  which stores `Yield = 1` then calls `Atomics.notify(Req)` *without ever changing `Req`* (its own
+  doc comment: "keeps `Req === Ack` true across a park"). That makes it *stricter* than
+  `runBlockingLoop`'s own case: `sab/control.ts`'s `wake()` always bumps the word a worker waits on,
+  so even a racing yield-check is self-healing (the next `Atomics.wait` sees a mismatch and returns
+  without blocking); `parkOne`'s notify never changes `Req`, so a worker that reaches its wait *after*
+  that one notify already fired sees the value unchanged and blocks for real, with nothing left to
+  wake it. Fixed the same way, checked before every wait including the first, with the *existing*
+  post-wait check kept too (unlike `runBlockingLoop`'s own fix): `runOp` always calls `sim_tick()`
+  unconditionally, so a coincidental wake-plus-park landing on an already-waiting worker still needs
+  catching *before* it re-runs an unchanged step as if it were a new one. Proved by a real worker
+  calling the (exported) `armedLoop` directly against a caller-built step block
+  (`tests/browser/pages/src/armed-loop-race{,-worker}.ts`, `armed-loop-race.spec.ts`) -- the "smallest
+  browser test" fallback, needed because a plain Node `unit` test cannot drive `armedLoop` at all
+  (`self`/`postMessage` do not exist under Vitest's `node` environment) and a still-broken,
+  timeout-less `Atomics.wait` can only be bounded from *outside* the thread it blocks.
+
+  **To find every `Atomics.wait` call site of this shape in one search:** `grep -rn
+  "Atomics\.wait\("` over `src/`/`tests/`, excluding comments and `dist/`. `src/sab/no-alloc-
+  syntax.test.ts`'s own `sab.atomics_wait_confined` already asserts, automatically, that `src/`
+  itself has exactly two -- `sab/control.ts`'s `waitForWake` and `harness-worker.ts`'s `armedLoop` --
+  so a third one appearing there fails that test outright; anything found only under `tests/` (a
+  one-shot smoke probe, say) is very likely not this shape at all -- check whether it sits in a loop
+  with a yield/stop flag before assuming it needs the same fix.
 - **`--no-opt --no-sparkplug` can manufacture its own false regression.** M16e's own new branches in
   a spin-wait ack loop (`spins++`, one bitwise mask check per iteration -- see the timeout-message
   bullet above) cost nothing measurable under normal V8, but under forced-interpreter flags every
