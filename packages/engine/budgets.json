@@ -310,6 +310,31 @@
             }
           }
         }
+      },
+      "no_ui_change": {
+        "isolates": {
+          "main": {
+            "class": "strict",
+            "bytesPerFrame": 31,
+            "formula": "docs/plan/16b-ui-observation-and-clock.md Budgets: \"unchanged Ui adds 0 B/frame (main row)\" -- proven by a page (gc-ui.ts) whose fx-puts Ui never actually differs from UiObserver's own Default-initialised previous across the whole window (Puts::tick's once-a-simulated-second Global.day bump never crosses fx-puts's own 20-tick rule boundary at TICK_EVERY_FRAMES=50's sparse real ticking), so client_poll_ui never hands pollActionResults a kind-1 record to parse -- 0016 §1's formula, no WebGPU adapter on this page (the 110 B floor does not apply), same shape as sim/topology/gen's own main row: ceil(measured clean) + 8 B margin, no attribution. Measured (playwright test --project gc --grep \"no_ui_change clean\" --repeat-each 8 --workers 1, this machine): 21.88-22.07 B/frame across 8 clean runs (byFn: next@:0, isTypedArray@:65, entries@:0, values@:0, evaluate@:305, run@gc-page -- the harness's own per-frame CDP round trip bookkeeping, not this milestone's code; no pollActionResults@client-* entry appears at all, confirming zero UI-ring JSON parsing happened). ceil(22.07) = 23, + 8 B margin = 31. object control on main measured a stable ~66 B/frame swing (comfortably above 31, verified tripping 8/8); burst control on main measured in the tens of thousands of B/frame (verified tripping).",
+            "attributionRoots": ["drive"]
+          },
+          "client": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the shared \"8 B\" worker figure every other page's client/gen0/sim row uses. Measured: a constant 0.8333 B/frame across 8 clean runs -- the ui call itself (Puts::tick's own Global mutation reaching PutsClient::ui through UiObserver::maybe_run) is Rust-side WASM-arena work, invisible to this isolate's own V8 heap; nothing new for this milestone to cost here. object/burst controls on client verified tripping the same as every sibling page's own client row.",
+            "attributionRoots": ["body"]
+          }
+        },
+        "software": {
+          "frames": 600,
+          "isolates": {
+            "main": {
+              "attributedBytesPerFrame": 9,
+              "formula": "ADR 0029: software mode attributes only main via attributionRoots (['drive']). Measured (GC_MODE=software playwright test --project gc --grep \"no_ui_change clean\" --repeat-each 6 --workers 1, this machine): a flat 0.4 B/frame attributed across 6 clean runs. ceil(0.4) = 1, + 8 B margin = 9."
+            }
+          }
+        }
       }
     }
   },
