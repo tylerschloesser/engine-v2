@@ -21,12 +21,13 @@
 // `frame()` export, and with it `UiObserver::maybe_run`'s own "no new mutation" no-op path) --
 // "ticks" (real per-frame client work) keep happening throughout, exactly what the test name
 // promises, with a provably unchanging `Ui`.
-import { createClient } from '../../../../src/client.ts'
+import { clientTestHandle, createClient } from '../../../../src/client.ts'
 import {
   asHarness,
   parkWorkers,
   pumpUntilLive,
   stepSimTickSync,
+  uiObserverStats,
 } from '../../../../src/test/client.ts'
 import { installGcPage } from '../../../../src/test/gc-page.ts'
 import { fixtureWasm } from './fixture-wasm.ts'
@@ -34,6 +35,17 @@ import { fixtureWasm } from './fixture-wasm.ts'
 declare global {
   interface Window {
     __pageReady?: true
+    /** Coordinator gate, M16b cut 2: `no_ui_change_asserts_ui_ran_and_wrote_nothing` (`gc-ui.
+     * spec.ts`) reads both the Rust-side call/record counters (`UiObserver`, via `client_ui_
+     * stats`) and the TS-side drain counters (`ClientTestHandle.uiDrainStats`) through this one
+     * hook, called *after* `window.__gc.run(...)` -- `run()`'s own trailing `harness.park()`
+     * already leaves the client worker parked, `client_ui_stats`'s own precondition. */
+    __uiTestStats?: () => Promise<{
+      rustCalls: number
+      rustRecords: number
+      recordsSeenMain: number
+      onUiFiredMain: number
+    }>
   }
 }
 
@@ -74,5 +86,16 @@ installGcPage(harness, {
     }
   },
 })
+
+window.__uiTestStats = async () => {
+  const rust = await uiObserverStats(client)
+  const ts = clientTestHandle(client).uiDrainStats()
+  return {
+    rustCalls: rust.calls,
+    rustRecords: rust.records,
+    recordsSeenMain: ts.recordsSeen,
+    onUiFiredMain: ts.onUi,
+  }
+}
 
 window.__pageReady = true

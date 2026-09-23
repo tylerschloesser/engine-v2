@@ -38,6 +38,13 @@ pub struct UiObserver<G: Game> {
     previous: G::Ui,
     dirty: bool,
     last_mutations: u64,
+    /// Test-only counters (coordinator gate, M16b cut 2: `no_ui_change_no_main_allocation` must
+    /// assert, not merely claim in a `formula` string, that `ui` actually ran and that zero kind-1
+    /// records were ever written). Plain `u32` wrapping counters, read only through the test-only
+    /// `client_ui_stats` ABI export -- incrementing one costs nothing a hot path doesn't already
+    /// pay (a field write), so this adds no allocation risk to the measured window itself.
+    calls: u32,
+    records: u32,
 }
 
 impl<G: Game> UiObserver<G> {
@@ -47,7 +54,22 @@ impl<G: Game> UiObserver<G> {
             previous: G::Ui::default(),
             dirty: false,
             last_mutations: 0,
+            calls: 0,
+            records: 0,
         }
+    }
+
+    /// Number of times `client.ui(..)` was actually invoked (`should_run` was true) since this
+    /// observer was created -- test-only, `client_ui_stats`'s own first field.
+    pub fn calls(&self) -> u32 {
+        self.calls
+    }
+
+    /// Number of times a kind-1 record was actually appended (a real `PartialEq` inequality, not
+    /// merely a call) since this observer was created -- test-only, `client_ui_stats`'s own second
+    /// field.
+    pub fn records(&self) -> u32 {
+        self.records
     }
 
     /// The client-side dirty flag's setter (Scope: "0024 §7d: `Ui` may depend on client-side state
@@ -80,9 +102,11 @@ impl<G: Game> UiObserver<G> {
         self.last_mutations = mutations;
         self.dirty = false;
         client.ui(view, &mut self.current);
+        self.calls = self.calls.wrapping_add(1);
         if self.current != self.previous {
             push_ui_record::<G>(out, &self.current);
             core::mem::swap(&mut self.current, &mut self.previous);
+            self.records = self.records.wrapping_add(1);
             true
         } else {
             false

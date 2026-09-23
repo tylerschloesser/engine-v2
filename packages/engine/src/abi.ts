@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 13
+export const ABI_VERSION = 14
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -155,6 +155,11 @@ export const ABI_EXPORTS = {
   // "test-only export, reached by name through `callParked`" shape as `sim_region_hash`/
   // `client_region_hash`/`sim_conn_counters`. No region crosses either way.
   client_ui_mark_dirty: { role: 'client', params: 0, result: 'status' },
+  // docs/plan/16b-ui-observation-and-clock.md (`ABI_VERSION` 13 -> 14), `engine/test` only:
+  // `UiObserver::{calls, records}` as two LE `u32` into `Result` -- proves "ui ran" and "zero
+  // records written" as an assertion (coordinator gate, M16b cut 2), same crossing shape as
+  // `sim_region_hash`/`client_region_hash`/`client_clock_stats`.
+  client_ui_stats: { role: 'client', params: 0, result: 'status' },
 } as const satisfies Record<string, ExportSpec>
 
 export function statusName(n: number): string {

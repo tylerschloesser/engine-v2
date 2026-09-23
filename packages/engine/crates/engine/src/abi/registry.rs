@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 13;
+pub const ABI_VERSION: u32 = 14;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -361,6 +361,15 @@ pub trait Instance: Sized + 'static {
     fn client_ui_mark_dirty(&mut self) -> Status {
         Status::Unsupported
     }
+
+    /// docs/plan/16b-ui-observation-and-clock.md (`ABI_VERSION` 13 -> 14), `engine/test` only:
+    /// `UiObserver::{calls, records}` as two LE `u32` into `result` (the whole `Result` region) --
+    /// coordinator gate, M16b cut 2: proves "ui ran" (`calls > 0`) and "zero records written"
+    /// (`records == 0`) as an assertion, not only a claim in a `budgets.json` `formula` string.
+    /// Same crossing shape as `sim_region_hash`/`client_region_hash`/`client_clock_stats`.
+    fn client_ui_stats(&mut self, _result: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
 }
 
 /// Emits every export for every role, the `#[global_allocator]`, and the single-threaded instance
@@ -504,6 +513,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn client_ui_mark_dirty() -> u32 {
             $crate::abi::client_ui_mark_dirty(&__ENGINE_SLOT) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_ui_stats() -> u32 {
+            $crate::abi::client_ui_stats(&__ENGINE_SLOT) as u32
         }
 
         // gen

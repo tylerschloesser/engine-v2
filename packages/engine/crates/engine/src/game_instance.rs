@@ -641,6 +641,22 @@ where
             _ => Status::Unsupported,
         }
     }
+
+    /// docs/plan/16b-ui-observation-and-clock.md, `engine/test` only: `UiObserver::{calls,
+    /// records}`, two LE `u32` into `result`.
+    fn client_ui_stats(&mut self, result: &mut [u8]) -> Status {
+        match self {
+            GameInstance::Client(c) => {
+                let Some(out) = result.get_mut(..8) else {
+                    return Status::BadLength;
+                };
+                out[0..4].copy_from_slice(&c.ui.calls().to_le_bytes());
+                out[4..8].copy_from_slice(&c.ui.records().to_le_bytes());
+                Status::Ok
+            }
+            _ => Status::Unsupported,
+        }
+    }
 }
 
 #[cfg(test)]

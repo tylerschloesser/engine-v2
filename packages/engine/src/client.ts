@@ -17,7 +17,7 @@ import { installPointerListeners, PointerSlots } from './input/pointers.js'
 import { createSemanticRecognizer, type SemanticRecognizer } from './input/semantic.js'
 import { installWheelListeners, WheelState } from './input/wheel.js'
 import type { InstanceConfig } from './loader.js'
-import { at, readU32LE } from './sab/bytes.js'
+import { at, copyBytes, readU32LE } from './sab/bytes.js'
 import {
   CB_FLAGS,
   CB_FRAME_REQ,
@@ -341,6 +341,12 @@ export interface ClientTestHandle {
    * worker setup it is waiting for (measured: an 11.28 s spin ending exactly when every worker's
    * `engine_init ok` finally logged, immediately after the spin gave up and yielded the thread). */
   readonly workersReady: Promise<void>
+  /** Coordinator gate, M16b cut 2: `pollActionResults`'s own running totals -- `recordsSeen` is
+   * how many kind-1 records this drain has ever popped off `uiRing` (before coalescing), `onUi` is
+   * how many times any `onUi` listener has ever fired. Never reset for the life of this `Client`;
+   * a test reads it once, after its own measured window, and compares against whatever it read
+   * before that window. */
+  uiDrainStats(): { recordsSeen: number; onUi: number }
 }
 
 const handles = new WeakMap<Client, ClientTestHandle>()
@@ -721,6 +727,13 @@ export function createClient(options: ClientOptions): Client {
 
   const uiRingConsumer = new RingConsumer(sabs.uiRing)
   const uiScratch = new Uint8Array(UI_POLL_BYTES)
+  // Coordinator gate (zero_gc_action attribution): holds the *bytes* of the latest kind-1 record
+  // seen so far in the current drain, copied with `copyBytes` (a plain loop, no allocation) rather
+  // than decoded immediately -- a coalesced-away kind-1 record (one a *later* record in the same
+  // drain overwrites) would otherwise still have paid a `TextDecoder.decode()` allocation for a
+  // string this same call throws away. Reused every drain; sized to the largest single record
+  // `client_poll_ui` can ever produce, the same bound `uiScratch` itself already uses.
+  const lastUiScratch = new Uint8Array(UI_POLL_BYTES)
 
   // docs/plan/16b-ui-observation-and-clock.md Scope: "keep only the last kind-1 record ... call
   // onUi(ui) before any onActionResult of the same drain". A kind-1 record can land anywhere in
@@ -734,6 +747,13 @@ export function createClient(options: ClientOptions): Client {
 
   type UiListener = (ui: unknown) => void
   const uiListeners: UiListener[] = []
+
+  // Coordinator gate, M16b cut 2: plain counters (never reset), read only through
+  // `ClientTestHandle.uiDrainStats()` -- a test-only accessor, never part of the per-frame path
+  // itself (incrementing an outer-scope `number` costs nothing the frame loop doesn't already pay,
+  // no allocation either way).
+  let uiRecordsSeenTotal = 0
+  let onUiFiredTotal = 0
 
   function onUi<Ui = unknown>(cb: (ui: Ui) => void): () => void {
     const listener = cb as UiListener
@@ -750,7 +770,7 @@ export function createClient(options: ClientOptions): Client {
    * not this one's -- "it cannot fix a design that allocates by construction"). No record of
    * either kind in a drain costs nothing beyond the empty `popInto` poll itself. */
   function pollActionResults(): void {
-    let lastUiText: string | undefined
+    let lastUiLen = -1
     let pendingCount = 0
     for (;;) {
       const len = uiRingConsumer.popInto(uiScratch, 0)
@@ -762,8 +782,16 @@ export function createClient(options: ClientOptions): Client {
         const bodyStart = i + 5
         if (bodyStart + recLen > len) break // never split a record (defensive; producer never does)
         if (kind === 1) {
-          // Coalesced to the newest: a later record in this same drain simply overwrites it.
-          lastUiText = decoder.decode(uiScratch.subarray(bodyStart, bodyStart + recLen))
+          // Coalesced to the newest: a later record in this same drain simply overwrites it. Copy
+          // the raw bytes only (`copyBytes`, no allocation): decoding here would pay a
+          // `TextDecoder.decode()` string allocation even for a record a later one in this same
+          // drain immediately discards -- only the final winner is ever decoded, once, below.
+          copyBytes(lastUiScratch, 0, uiScratch, bodyStart, recLen)
+          lastUiLen = recLen
+          // Coordinator gate, M16b cut 2: a plain counter (not itself an allocation) so a test can
+          // assert "zero kind-1 records drained" directly, instead of only reading `byFn` in a
+          // `budgets.json` `formula` string.
+          uiRecordsSeenTotal += 1
         } else if (kind === 2) {
           const text = decoder.decode(uiScratch.subarray(bodyStart, bodyStart + recLen))
           const parsed = JSON.parse(text) as { seq: number; result: ActionOutcome<unknown> }
@@ -774,8 +802,10 @@ export function createClient(options: ClientOptions): Client {
         i = bodyStart + recLen
       }
     }
-    if (lastUiText !== undefined) {
-      const ui: unknown = JSON.parse(lastUiText)
+    if (lastUiLen >= 0) {
+      const text = decoder.decode(lastUiScratch.subarray(0, lastUiLen))
+      const ui: unknown = JSON.parse(text)
+      onUiFiredTotal += 1
       for (let li = 0; li < uiListeners.length; li++) at(uiListeners, li)(ui)
     }
     for (let k = 0; k < pendingCount; k++) {
@@ -948,6 +978,7 @@ export function createClient(options: ClientOptions): Client {
     cameraIntegrator,
     writeActionRecord,
     workersReady: workersUp,
+    uiDrainStats: () => ({ recordsSeen: uiRecordsSeenTotal, onUi: onUiFiredTotal }),
   })
   return client
 }

@@ -454,6 +454,45 @@ vertical_slice` -> `browser pass 1 tests` (unchanged, M16). `pnpm test browser -
 `biome pass · rustfmt pass · clippy pass · tsc pass`. Full `pnpm test` -> all four suites pass, as
 above.
 
+### Coordinator gate response (post-cut-2)
+
+**1. `no_ui_change_no_main_allocation` now asserts, not just claims.** New test-only ABI export
+`client_ui_stats` (`ABI_VERSION` 13 -> 14): `UiObserver` gained `calls`/`records: u32` counters
+(bumped in `maybe_run`), read via `engine/test.uiObserverStats(client)`. `client.ts` gained
+`ClientTestHandle.uiDrainStats()` (TS-side `recordsSeen`/`onUi` counters in `pollActionResults`).
+New test `gc-ui.spec.ts`'s `no_ui_change_asserts_ui_ran_and_wrote_nothing` reads both *before* and
+*after* `window.__gc.run(600, false)` (counters are cumulative for the page's life -- `pumpUntilLive`
+itself already produces one real `ui` call/record before the window even starts, so only the delta
+across the window is meaningful) and asserts `rustCalls` moved (>0) while `rustRecords`/
+`recordsSeenMain`/`onUiFiredMain` did not. **Proven to fail**: reverting the `PartialEq` gate in
+`UiObserver::maybe_run` (`if self.current != self.previous` -> `if true`) moved `rustRecords` from
+1 (before) to 2 (after) -- `expect(after?.rustRecords).toBe(before?.rustRecords)` failed `1 !== 2`
+(pasted below), reverted and re-verified 8/8 `no_ui_change` (clean + both fast-tier negatives) plus
+the new assertion test still pass.
+
+```
+Expected: 1
+Received: 2
+  expect(after?.rustRecords).toBe(before?.rustRecords)
+```
+
+**2. `zero_gc_action`'s `main` rise, attributed.** Forcing its `main` budget to 1 and dumping
+`windowByFn` named two new sites beyond the pre-M16b baseline: `pollActionResults@client-*`
+(2448-2668 B over the window) and a new `subarray@:0` entry (3000 B) -- `gc-slice.ts` ticks the sim
+every measured frame (600 real ticks), crossing `Puts::tick`'s own 20-tick `Global.day` boundary
+~30 times, each a real kind-1 `Ui` record `pollActionResults` now parses on `main`. **Inherent to
+the feature** (a real, changing `Ui` on a page that ticks every frame), but with one **avoidable**
+cost inside it: the drain `TextDecoder.decode()`d *every* kind-1 record it popped, including ones a
+later record in the same drain immediately overwrites (coalesced away). Fixed: `client.ts` now
+`copyBytes`s (no allocation) each kind-1 record's raw bytes into a reused scratch buffer and decodes
+only the drain's final winner, once. Re-measured: `main` 112.06-112.51 B/frame -> 108.2-108.44 B/frame
+(within ~1.5 B of the pre-M16b 106.59-106.92 baseline). `ceil(108.44) + 8 = 117`, higher than the
+existing `115` -- **not applied**: the measured max already fits `115` with real margin (~6.6 B,
+close to the original ~8 B), and 0029 cuts against widening a budget the current code does not need.
+`object main` re-verified tripping 8/8 at the unchanged `115`. `budgets.json`'s `zero_gc_action.main`
+`formula` extended (not replaced) with this finding; the forced-1 probe edit was reverted before
+committing (`git diff` confirms a single-paragraph append, no other line touched).
+
 ### Decisions needed / notes for later milestones
 
 - `zero_gc_action`'s own `main` headroom is now ~2.5 B/frame, not ~8 B: a future change to

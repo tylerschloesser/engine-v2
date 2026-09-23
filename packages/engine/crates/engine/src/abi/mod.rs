@@ -455,6 +455,18 @@ pub fn client_ui_mark_dirty<T: Instance>(slot: &Slot<T>) -> Status {
     rt.inst.client_ui_mark_dirty()
 }
 
+/// `client_ui_stats() -> status`: `UiObserver::{calls, records}` as two LE `u32` into `Result`
+/// (docs/plan/16b-ui-observation-and-clock.md; `Instance::client_ui_stats`'s own doc comment).
+/// `engine/test`-only (`uiObserverStats`).
+pub fn client_ui_stats<T: Instance>(slot: &Slot<T>) -> Status {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.client_ui_stats(result)
+}
+
 /// `sim_conn_counters(conn) -> status`: `host::ConnCounters` for `conn`, little-endian into
 /// `Result` (`Instance::sim_conn_counters`'s own doc comment names the field order and byte
 /// count). `engine/test`-only (`netCounters`).

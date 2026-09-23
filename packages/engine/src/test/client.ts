@@ -505,6 +505,19 @@ export async function hostRegionHash(client: Client, conn = 0): Promise<string> 
   return hex64(result)
 }
 
+/** docs/plan/16b-ui-observation-and-clock.md, `engine/test` (coordinator gate, M16b cut 2):
+ * `UiObserver::{calls, records}` (`client_ui_stats`) -- `calls` is how many times `ClientSide::ui`
+ * actually ran, `records` is how many of those calls wrote a real kind-1 record. Requires the
+ * client worker parked. */
+export async function uiObserverStats(client: Client): Promise<{ calls: number; records: number }> {
+  const { value, result } = await callParked(client, 'client', 'client_ui_stats', [], 8)
+  if (value !== Status.Ok) {
+    throw new Error(`uiObserverStats: client_ui_stats failed: status ${value}`)
+  }
+  const view = new DataView(result.buffer, result.byteOffset, result.byteLength)
+  return { calls: view.getUint32(0, true), records: view.getUint32(4, true) }
+}
+
 /** docs/plan/16b-ui-observation-and-clock.md, `engine/test`: forces `UiObserver::mark_dirty()`
  * (`client_ui_mark_dirty`, a test-only ABI export -- see that milestone's Deviations, "the dirty
  * flag has no browser-reachable setter yet"), the same "reached directly by name through
