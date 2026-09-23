@@ -26,8 +26,7 @@ The one publishable package (working name `engine`, private for now). Layout and
 
 ## Commands
 
-- `pnpm --filter engine build`: `tsc -p tsconfig.build.json`, `src/` → `dist/`. No bundler. `pnpm test` runs this as its first build step.
-- `pnpm --filter engine typecheck`: `tsc --noEmit` over `src/` including its tests, then over `tests/` (`tests/tsconfig.json`). `pnpm lint` runs it.
+- `pnpm --filter engine build`: `tsc -p tsconfig.build.json`, `src/` → `dist/`. No bundler. `pnpm test` runs this as its first build step. `pnpm --filter engine typecheck`: `tsc --noEmit` over `src/` including its tests, then over `tests/` (`tests/tsconfig.json`). `pnpm lint` runs it.
 - `pnpm test unit [-t pattern]`: the Vitest `unit` suite (this package's `src/**/*.test.ts` plus `scripts/**/*.test.mjs`).
 - `pnpm test wasm [-t pattern]`: Vitest project `wasm` (`tests/wasm/*.test.ts`, run against `src/`) plus the Bun leg (`tests/wasm/bun-leg.mjs`, run against `dist/`), reported on one line. The `fixtures` build step has built every fixture's dev-profile `.wasm` first.
 - `pnpm golden [fixture]`: rebuilds, runs `golden/scenario.json` on the `.wasm` under Node and rewrites `golden/golden.json`. The only writer of that golden kind (0020 §5); review the diff, a changed golden is a changed sim.
