@@ -10,6 +10,7 @@
 
 use crate::abi::config::HexU64;
 use crate::abi::{Instance, RegionId, RegionLayout, Role, Status};
+use crate::client::drawlist;
 use crate::client::upload::RECORD_BYTES;
 use crate::client::{
     ActionError, CameraBlock, ClientCore, DirtyEvent, InputEvent, InputQueue, TerrainFeed,
@@ -18,7 +19,8 @@ use crate::client::{
 use crate::game::{Clocks, FrameView, Game, PlayerId};
 use crate::host::Host;
 use crate::sim::{Applied, Rejected};
-use crate::world::{CacheCapacity, ChunkCoord, ChunkDims};
+use crate::view;
+use crate::world::{CacheCapacity, ChunkCoord, ChunkDims, TILE_MAX, TILE_MIN, TilePos};
 use crate::world_access::WorldRead;
 use crate::worldgen::{GenCore, Pristine, Worldgen};
 
@@ -93,6 +95,44 @@ fn push_result_record<G: Game>(buf: &mut Vec<u8>, seq: u32, result: &Result<Appl
     buf.extend_from_slice(json.as_bytes());
 }
 
+/// `TILE_MIN as f64`/`TILE_MAX as f64`'s own floor/clamp, shared by `frame()`'s window-origin and
+/// visible-rect maths below (`view::visible_rect`'s own private `clamp_tile_axis` is not `pub`, and
+/// duplicating a two-line floor+clamp is cheaper than exporting it, docs/plan/
+/// 17-drawlist-and-sprites.md Deviations).
+fn clamp_floor_tile_axis(v: f64) -> i32 {
+    v.floor().clamp(TILE_MIN as f64, TILE_MAX as f64) as i32
+}
+
+/// This frame's own camera-derived `FrameView` fields (docs/plan/17-drawlist-and-sprites.md),
+/// cached on `ClientInstance` after every real `frame()` call so `on_frame`'s own `FrameView` (no
+/// `CameraBlock` in scope there -- `Instance::on_frame`'s signature is `bytes` only) can reuse the
+/// last real one instead of inventing a placeholder. `ui()` never reads these fields today (0003:
+/// `Ui` is UI/global/player-state derived), so reusing a frame-old value here is harmless; a future
+/// game that does read them from `ui()` gets the same one-wake-old staleness `frame`-before-
+/// `on_frame` already accepts elsewhere in this file (M16b Deviations).
+#[derive(Clone, Copy)]
+struct CachedCameraView {
+    visible: crate::world::TileRect,
+    zoom: f32,
+    px_per_tile: f32,
+    cursor_tile: Option<TilePos>,
+    window_origin: TilePos,
+    time_ms: f64,
+}
+
+impl Default for CachedCameraView {
+    fn default() -> Self {
+        CachedCameraView {
+            visible: crate::world::TileRect::new(TilePos::default(), TilePos::default()),
+            zoom: 0.0,
+            px_per_tile: 0.0,
+            cursor_tile: None,
+            window_origin: TilePos::default(),
+            time_ms: 0.0,
+        }
+    }
+}
+
 fn default_gen_workers() -> u32 {
     1
 }
@@ -156,6 +196,10 @@ pub struct ClientInstance<G: Game> {
     /// The `ui` call policy's own state (docs/plan/16b-ui-observation-and-clock.md): the reused
     /// `G::Ui` pair, the client-side dirty flag and the "since the last call" mutation counter.
     ui: UiObserver<G>,
+    /// The last real `frame()` call's own camera-derived `FrameView` fields (see
+    /// `CachedCameraView`'s own doc comment): `on_frame` reuses this since it has no `CameraBlock`
+    /// of its own.
+    camera_view: CachedCameraView,
 }
 
 impl<G: Game> ClientInstance<G> {
@@ -202,6 +246,7 @@ impl<G: Game> ClientInstance<G> {
             ui_buf: Vec::new(),
             client: G::Client::default(),
             ui: UiObserver::new(),
+            camera_view: CachedCameraView::default(),
         })
     }
 }
@@ -209,10 +254,13 @@ impl<G: Game> ClientInstance<G> {
 /// The `Instance` `export_game!` points every real `Game` at. `Sim`'s payload is boxed: `Host<G>`
 /// carries `host::warm::Warm`'s fixed 512-chunk scratch buffer (4 KiB), far larger than the other
 /// two variants, and an unboxed enum would size every `GameInstance<G>` to its biggest member.
+/// `Client`'s payload is boxed too (docs/plan/17-drawlist-and-sprites.md: `ClientInstance<G>` grew
+/// past clippy's `large_enum_variant` threshold once `drawlist`/`camera_view` joined it), same
+/// reasoning.
 pub enum GameInstance<G: Game> {
     Sim(Box<Host<G>>),
     Gen(GenCore<G::Worldgen>),
-    Client(ClientInstance<G>),
+    Client(Box<ClientInstance<G>>),
 }
 
 impl<G: Game> Instance for GameInstance<G>
@@ -233,9 +281,8 @@ where
                     dims, cfg.seed.0, cfg.params,
                 )))
             }
-            Role::Client => {
-                ClientInstance::<G>::init(game_cfg_json, layout).map(GameInstance::Client)
-            }
+            Role::Client => ClientInstance::<G>::init(game_cfg_json, layout)
+                .map(|c| GameInstance::Client(Box::new(c))),
         }
     }
 
@@ -340,22 +387,69 @@ where
                 // (`mutations` already matches what `on_frame` just recorded). This call still
                 // exists for the dirty-flag-only case: client-side state changed (M18's `FrameCx
                 // ::ui_dirty()`) with no new host frame since the last check.
+                // docs/plan/17-drawlist-and-sprites.md: this frame's own camera-derived `FrameView`
+                // fields, cached for `on_frame`'s own reuse (`CachedCameraView`'s doc comment).
+                // Window origin: the camera centre's tile, snapped to a multiple of 64 (Planning
+                // decisions "Window origin").
+                let centre_tile = TilePos::new(
+                    clamp_floor_tile_axis(camera.centre[0]),
+                    clamp_floor_tile_axis(camera.centre[1]),
+                );
+                c.camera_view = CachedCameraView {
+                    visible: view::visible_tile_rect(
+                        (camera.centre[0], camera.centre[1]),
+                        (camera.half_extent_tiles[0], camera.half_extent_tiles[1]),
+                        2.0,
+                    ),
+                    zoom: camera.tiles_across,
+                    px_per_tile: 0.0, // Deviations: no real viewport-px data crosses yet
+                    cursor_tile: if camera.cursor_valid != 0 {
+                        Some(TilePos::new(camera.cursor_tile[0], camera.cursor_tile[1]))
+                    } else {
+                        None
+                    },
+                    window_origin: drawlist::snap_window_origin(centre_tile),
+                    time_ms: camera.frame_time_ms,
+                };
+
                 let ClientInstance {
                     core,
                     client,
                     ui,
                     ui_buf,
+                    camera_view,
                     ..
-                } = c;
+                } = c.as_mut();
                 let mutations = core.mutations();
                 let replica = core.view();
                 let clocks = Clocks {
                     authoritative: replica.tick(),
                     predicted: replica.tick(), // = authoritative until M26
+                    tick_fraction: 0.0,        // a real lead is M26's
+                    ticks_per_second: G::TICK_RATE.hz_value(),
                 };
                 let me = replica.own_player();
-                let view = FrameView::new(replica as &dyn WorldRead<G>, clocks, me);
+                let view = FrameView::new(
+                    replica as &dyn WorldRead<G>,
+                    clocks,
+                    me,
+                    replica.entities_map(),
+                    replica.registry(),
+                    camera_view.visible,
+                    camera_view.zoom,
+                    camera_view.px_per_tile,
+                    camera_view.cursor_tile,
+                    camera_view.window_origin,
+                    camera_view.time_ms,
+                );
                 ui.maybe_run(client, &view, mutations, ui_buf);
+
+                // docs/plan/17-drawlist-and-sprites.md Scope: "frame(t_ms) now runs: build
+                // FrameView -> G::Client::extract -> sort" -- the `extract`/`sort_into` call and
+                // `drawlist_len` export are this milestone's own step 3 (Deviations: `FrameView`'s
+                // wiring here, including the window origin/visible-rect maths above, necessarily
+                // landed with this step since `FrameView::new`'s only caller is right here).
+
                 Status::Ok
             }
             _ => Status::Unsupported,
@@ -464,8 +558,9 @@ where
                     client,
                     ui,
                     ui_buf,
+                    camera_view,
                     ..
-                } = c;
+                } = c.as_mut();
                 match core.on_frame(bytes) {
                     Ok(_summary) => {
                         core.replica_mut().drain_dirty_for_upload(|e| match e {
@@ -490,9 +585,28 @@ where
                         let clocks = Clocks {
                             authoritative: replica.tick(),
                             predicted: replica.tick(), // = authoritative until M26
+                            tick_fraction: 0.0,        // a real lead is M26's
+                            ticks_per_second: G::TICK_RATE.hz_value(),
                         };
                         let me = replica.own_player();
-                        let view = FrameView::new(replica as &dyn WorldRead<G>, clocks, me);
+                        // docs/plan/17-drawlist-and-sprites.md: no `CameraBlock` is in scope here
+                        // (`Instance::on_frame`'s own signature is `bytes` only) -- reuses the last
+                        // real `frame()` call's own camera-derived fields (`CachedCameraView`'s doc
+                        // comment); `ui()` never reads them today, so one-wake staleness is
+                        // harmless.
+                        let view = FrameView::new(
+                            replica as &dyn WorldRead<G>,
+                            clocks,
+                            me,
+                            replica.entities_map(),
+                            replica.registry(),
+                            camera_view.visible,
+                            camera_view.zoom,
+                            camera_view.px_per_tile,
+                            camera_view.cursor_tile,
+                            camera_view.window_origin,
+                            camera_view.time_ms,
+                        );
                         ui.maybe_run(client, &view, mutations, ui_buf);
                         // docs/plan/16-action-round-trip.md Scope: "on_frame reads ActionResults
                         // and writes one result record per entry to RegionId::Ui".

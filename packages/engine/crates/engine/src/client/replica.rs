@@ -156,6 +156,24 @@ impl<G: Game> Replica<G> {
         self.store.terrain_mut()
     }
 
+    /// docs/plan/17-drawlist-and-sprites.md Seams: the replica's own entity table, for
+    /// `client::frame_view::EntityIter` (`FrameView::entities()`). `pub`, not `pub(crate)` like
+    /// `terrain`/`terrain_mut` above: a fixture's own native test (`fixtures/drawables`, a
+    /// different crate) builds a `FrameView` directly to prove `drawlist.fixture_hash_golden` is a
+    /// pure function of replica + camera, and `FrameView::new` needs this and `registry()` from
+    /// outside the engine crate to do that -- read-only, so the visibility bump carries no
+    /// mutation risk (`terrain_mut` stays `pub(crate)`).
+    pub fn entities_map(&self) -> &BTreeMap<EntityId, G::Entity> {
+        self.store.entities_map()
+    }
+
+    /// The prototype/footprint table `G::register` filled at construction (module doc comment):
+    /// `EntityIter` needs it to derive each entity's footprint rectangle from `G::prototype`. `pub`
+    /// for the same reason as `entities_map`, above.
+    pub fn registry(&self) -> &Registry {
+        &self.registry
+    }
+
     /// Every chunk whose effective tiles changed since the last [`Replica::drain_dirty`] call
     /// (pristine/snapshot enters, tile deltas, and leaves -- docs/plan/
     /// 15-connection-and-subscriptions.md Deviations left leave out, deferring the decision to

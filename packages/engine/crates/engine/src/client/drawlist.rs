@@ -139,8 +139,11 @@ pub fn snap_window_origin(centre: TilePos) -> TilePos {
 }
 
 /// Engine-owned, preallocated (Scope: "Fills M12's `DrawList` shell"). `extract` (`ClientSide<G>`)
-/// only ever sees this through its builder methods; `sort_into` (below, `pub(crate)`) is
-/// `game_instance.rs`'s own follow-up call, not part of the game-facing surface.
+/// only ever sees this through its builder methods; `begin_frame`/`sort_into` (below) are
+/// `game_instance.rs`'s own follow-up calls, not part of the game-facing surface -- `pub`, not
+/// `pub(crate)`, only because a fixture's own native golden test (a separate crate,
+/// `fixtures/drawables`) needs to drive them directly to prove `sort_into`'s output is a pure
+/// function of replica + camera (docs/plan/17-drawlist-and-sprites.md Deviations).
 pub struct DrawList {
     /// Reserved once at `new()` (`.claude/rules/hot-paths.md`), cleared (not reallocated) by
     /// `begin_frame`.
@@ -180,7 +183,7 @@ impl DrawList {
     /// Starts a new frame: clears the scratch list (capacity kept), resets the drop counter, and
     /// fixes `window_origin` for every builder call this frame (`game_instance.rs`'s `frame()`
     /// calls this before `G::Client::extract`).
-    pub(crate) fn begin_frame(&mut self, window_origin: TilePos) {
+    pub fn begin_frame(&mut self, window_origin: TilePos) {
         self.scratch.clear();
         self.window_origin = window_origin;
         self.dropped = 0;
@@ -276,7 +279,7 @@ impl DrawList {
     /// buffer, [`REGION_BYTES`]) and fills the header fields this milestone owns (module doc
     /// comment). Returns the record count (`Self::record_count`'s new value). `game_instance.rs`'s
     /// `frame()` calls this once, right after `G::Client::extract` returns.
-    pub(crate) fn sort_into(&mut self, out: &mut [u8], frame_time_ms: f64) -> u32 {
+    pub fn sort_into(&mut self, out: &mut [u8], frame_time_ms: f64) -> u32 {
         debug_assert!(out.len() >= REGION_BYTES);
         let mut counts = [0u32; LAYER_COUNT];
         for d in &self.scratch {

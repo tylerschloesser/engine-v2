@@ -235,8 +235,18 @@ mod tests {
             Clocks {
                 authoritative: r.tick(),
                 predicted: r.tick(),
+                tick_fraction: 0.0,
+                ticks_per_second: 20,
             },
             r.own_player(),
+            r.entities_map(),
+            r.registry(),
+            crate::world::TileRect::new(TilePos::new(0, 0), TilePos::new(0, 0)),
+            0.0,
+            0.0,
+            None,
+            TilePos::new(0, 0),
+            0.0,
         )
     }
 

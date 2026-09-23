@@ -6,7 +6,7 @@
 //! Float use is confined to `visible_rect`; everything else here is integer-only
 //! (`.claude/rules/determinism.md`: `floor`, comparisons and `as` casts only, no transcendentals).
 
-use crate::world::{ChunkCoord, ChunkDims, ChunkRect, TILE_MAX, TILE_MIN, TilePos};
+use crate::world::{ChunkCoord, ChunkDims, ChunkRect, TILE_MAX, TILE_MIN, TilePos, TileRect};
 
 #[inline]
 fn clamp_tile_axis(v: f64) -> i32 {
@@ -29,6 +29,25 @@ pub fn visible_rect(
     let min = TilePos::new(clamp_tile_axis(min_x), clamp_tile_axis(min_y));
     let max = TilePos::new(clamp_tile_axis(max_x), clamp_tile_axis(max_y));
     ChunkRect::new(dims.chunk_of(min), dims.chunk_of(max))
+}
+
+/// docs/plan/17-drawlist-and-sprites.md Seams: `FrameView::visible()` ("visible rectangle plus a
+/// 2-tile margin"). Tile-space counterpart of [`visible_rect`] (chunk-space): floors `[center -
+/// half_extent - margin, center + half_extent + margin]` to tile boundaries per axis, then clamps
+/// into the valid tile range -- same float/clamp shape as `visible_rect`, one level finer.
+pub fn visible_tile_rect(
+    center: (f64, f64),
+    half_extent_tiles: (f32, f32),
+    margin: f64,
+) -> TileRect {
+    let min_x = (center.0 - half_extent_tiles.0 as f64 - margin).floor();
+    let max_x = (center.0 + half_extent_tiles.0 as f64 + margin).floor();
+    let min_y = (center.1 - half_extent_tiles.1 as f64 - margin).floor();
+    let max_y = (center.1 + half_extent_tiles.1 as f64 + margin).floor();
+    TileRect::new(
+        TilePos::new(clamp_tile_axis(min_x), clamp_tile_axis(min_y)),
+        TilePos::new(clamp_tile_axis(max_x), clamp_tile_axis(max_y)),
+    )
 }
 
 /// Up to 2 extra chunks beyond `visible.expanded(1)`, in the direction of travel (0008 §5): one

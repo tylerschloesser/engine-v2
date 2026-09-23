@@ -107,6 +107,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
+name = "fx-drawables"
+version = "0.0.0"
+dependencies = [
+ "engine",
+ "serde",
+ "ts-rs",
+]
+
+[[package]]
 name = "fx-hash"
 version = "0.0.0"
 dependencies = [

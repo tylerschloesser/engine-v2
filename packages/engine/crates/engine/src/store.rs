@@ -205,6 +205,15 @@ impl<G: Game> Store<G> {
         self.entities.iter().map(|(&id, e)| (id, e))
     }
 
+    /// The entity table itself, ascending `EntityId` order (docs/plan/17-drawlist-and-sprites.md
+    /// Seams: `FrameView::entities()`/`EntityIter` need a concrete, nameable iterator type over a
+    /// borrow that outlives one method call -- `Self::entities`'s `impl Iterator` return cannot be
+    /// named as a struct field, so `client::frame_view::EntityIter` wraps `BTreeMap::iter` taken
+    /// straight from here instead of re-deriving it from the opaque iterator above.
+    pub(crate) fn entities_map(&self) -> &BTreeMap<EntityId, G::Entity> {
+        &self.entities
+    }
+
     pub fn global(&self) -> &G::Global {
         &self.global
     }

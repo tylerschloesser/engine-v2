@@ -21,7 +21,7 @@ pub use drawlist::{
     ANCHOR_CURSOR_TILE, Draw, DrawList, FLIP_X, KIND_BAR, KIND_CIRCLE, KIND_GHOST, KIND_RADIAL,
     KIND_RECT, KIND_RING, KIND_SPRITE, PREDICTED, SCREEN_PX_STROKE, SpriteId, snap_window_origin,
 };
-pub use frame_view::{Clocks, FrameView};
+pub use frame_view::{Clocks, EntityIter, FrameView};
 pub use input::{InputEvent, InputQueue};
 pub(crate) use replica::DirtyEvent;
 pub use replica::Replica;
