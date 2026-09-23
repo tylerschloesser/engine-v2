@@ -1,6 +1,6 @@
 # M16: Action round trip (vertical slice complete)
 
-Status: not started · After: 15b · Tyler-dependent: no (Q1 answered: `serde_json` approved) · Device checklist attached (**D**)
+Status: done · After: 15b · Tyler-dependent: no (Q1 answered: `serde_json` approved) · Device checklist attached (**D**)
 
 Split: `G::Ui` → UI ring → `onUi`, `client.clock()` and the minimal `FrameView` moved to `16b-ui-observation-and-clock.md` (size). M17 depends on 16b; M21 depends on this milestone only.
 
@@ -62,12 +62,12 @@ Prediction, `NotPredictable`, pending replay (M25). Persistence (M22). Action ra
 Rust: `action_lands_on_next_tick`, `arrival_order_within_tick`, `ack_and_deltas_share_a_frame`, `admit_reject_is_not_recorded`, `apply_reject_is_recorded_and_replays`, `resent_seq_is_dropped`, `host_applies_only_sealed_records`, `malformed_action_is_protocol_error`. TS unit: `dispatch_before_ready_throws`, `dispatch_returns_monotonic_seq_from_seed`, `ui_ring_delivers_results_in_order`, `dispatch_when_queue_full_fails_locally` (0012 pending-queue capacity: with `ack_seq` in the clock block held still, dispatches up to the capacity succeed, the next throws `action queue full` and writes nothing to the action ring; when `ack_seq` advances by one, one more dispatch succeeds. Main can know this synchronously only by counting `seq − ack_seq` from the clock block; M25 inherits the test unchanged). WASM under Node: `wasm_script_a_matches_native`. Browser: **`vertical_slice`**: page is cross-origin isolated; terrain probes pass; injected pan brings new chunks (probe + `netCounters`); a `sim` worker exists and `worldHash()` matches the golden at a fixed tick; `dispatch({ Paint })` returns 1, `onActionResult(1, "Confirmed")` fires and the probe at that tile shows the new colour in the same stepped frame as the result; `dispatch` of an out-of-range `Paint` yields `Rejected` with the typed reason. Zero-GC test now includes actions via `dispatchRaw`.
 
 ## Exit criteria
-- [ ] `vertical_slice` passes in Chromium; all other tests above pass.
+- [x] `vertical_slice` passes in Chromium; all other tests above pass.
 - [ ] `pnpm device:serve` lists `slice.html`; in desktop Chrome ten presses of its Paint control show `confirmed 10`, `rejected 0`, `ring drops 0`, `engine_mem_grows 0` on every instance and an advancing `tick` on the HUD (`vertical_slice` asserts the same HUD text after its own dispatches).
-- [ ] `bindings/*.ts` for `puts` are committed and regenerate byte-identically; `grep -rn bigint packages/engine/fixtures/*/bindings` prints nothing (0003: TS-facing types avoid `u64`).
-- [ ] `.claude/skills/add-action-type/SKILL.md` exists and was followed once to add `Action::SetMotd` handling to the test page (or another variant) without reading this brief.
-- [ ] PLAN.md marks the vertical slice complete.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `bindings/*.ts` for `puts` are committed and regenerate byte-identically; `grep -rn bigint packages/engine/fixtures/*/bindings` prints nothing (0003: TS-facing types avoid `u64`).
+- [x] `.claude/skills/add-action-type/SKILL.md` exists and was followed once to add `Action::SetMotd` handling to the test page (or another variant) without reading this brief.
+- [x] PLAN.md marks the vertical slice complete.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t action` · `pnpm test unit -t dispatch` · `pnpm test wasm -t script_a` · `pnpm test browser -t vertical_slice` · `pnpm test browser -t zero_gc` · `pnpm lint`.
@@ -1121,3 +1121,11 @@ pass after a `__sliceSettle` call, including two more calls to it later in the s
   passing again before committing). This confirms the atomic-probe half of the fix is load-bearing,
   not incidental, and pins the mechanism to instance 3 above (the two-call CDP gap), not merely the
   wall-clock waits.
+
+### Orchestrator's gate (M16 done)
+
+- **Skill verified standalone.** A fresh `general-purpose` Sonnet agent, told not to read `docs/plan/`, `PROMPT.md` or `PLAN.md`, followed `add-action-type` alone and added `Action::ClearMotd` (`SetMotd` already existed as the skill's worked example): `cargo nextest run -p fx-puts` 14/14, `bindings/Action.ts` regenerated with one line added, typecheck clean, `pnpm test wasm -t puts` and a browser page build green; then it reverted to a clean tree. It reported three gaps, all fixed in the skill at the gate: a fieldless variant serialises as a bare string (`'Roll'`), not an object; the skill never said to run the game's Rust tests; and **the golden-safety guidance covered only admission behaviour. A variant that adds a field to replicated state moves every golden hash, including `*_idle_*` scenarios that never dispatch it.** The agent hit that trap on its first try (a new `Global` field failed both `puts_idle_100` and `puts_script_a`) and backed out, so the skill now says so explicitly.
+- **Repeat loops after the pixel fix (`67c67b4`):** `browser x15 load=10: pass=6 fail=9 hang=0`, and **all nine failures were the suite's wall-clock budget alone** (38-45 s against 0020 §2's 37.5 s failure line). No assertion failed: no pixel failure, no `Error` line. Quiet: `browser x15 load=0: pass=14 fail=1`, the one failure being `parkWorkers: timed out after 10000 ms` on `zero_gc_action neg object client`. That is the same test that failed the same way in the earlier 30-run quiet batch. **In isolation it went 20/20**, so this is suite-level saturation (the ledger's watch item), not a defect in the page. A quiet `pnpm test` measured `browser` 116 at 27 s. The loaded budget failures are the suite-time question in `PROMPT.md`, now measured: under `--load 10` the suite crosses the failure line in most runs.
+- **Bindings:** `node packages/engine/scripts/build-fixtures.mjs` + `pnpm format` left `bindings/` byte-identical; `grep -rn bigint packages/engine/fixtures/*/bindings` printed nothing.
+- **Unticked, awaiting Tyler:** the desktop-Chrome ten-press HUD check (criterion 2). `vertical_slice` asserts the same HUD text after its own dispatches, but ten presses of the real control in desktop Chrome is a by-hand check.
+

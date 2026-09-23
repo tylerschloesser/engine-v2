@@ -41,7 +41,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 15c | `15c-terrain-visibility-and-cache-invalidation.md` | cache invalidation on overlay replace, terrain on screen, zero-GC panning window | 15b | |
 | [x] | 15f | `15f-step-sim-tick-sync-allocation.md` | `stepSimTickSync`'s per-frame allocation off the `main` isolate; slow-tier CI green | 15c | |
 | [x] | 15g | `15g-handoff-checks.md` | mechanical staleness checks on `PROMPT.md`'s status block; `pnpm handoff` | 15f | |
-| [ ] | 16 | `16-action-round-trip.md` | `dispatch` → admit → apply → ack → `onActionResult`, `add-action-type` skill. **Vertical slice complete.** | 15c | D |
+| [x] | 16 | `16-action-round-trip.md` | `dispatch` → admit → apply → ack → `onActionResult`, `add-action-type` skill. **Vertical slice complete.** | 15c | D |
 | [ ] | 16b | `16b-ui-observation-and-clock.md` | `G::Ui` → UI ring → `onUi`, `client.clock()`, ts-rs bindings | 16 | |
 | [ ] | 17 | `17-drawlist-and-sprites.md` | `extract` → DrawList, `FrameView`, shapes, triple-buffer publish | 16b | |
 | [ ] | 17b | `17b-sprites-and-frame-budget.md` | sprite atlas, frame-time budget, `profile-frame` skill | 17, 09b | D |

@@ -35,7 +35,7 @@ Detail for Q1–Q6 is in `PRE-PLAN.md` §11 (item numbers in brackets). Detail f
 
 Exit criteria that only Tyler can verify and that no command could stand in for (`PROMPT.md` loop step 5). They do not block the next milestone; the box in the brief stays unticked until Tyler confirms. One line each: milestone, the criterion, how to check it.
 
-(none)
+- **M16**: ten presses of `slice.html`'s Paint control in desktop Chrome show `confirmed 10`, `rejected 0`, `ring drops 0`, `engine_mem_grows 0` on every instance and an advancing `tick` on the HUD. Check: `pnpm device:serve`, open `slice.html`, press Paint ten times, read the HUD (steps in `docs/plan/device-checks.md`, M16).
 
 ## Resolved without asking
 

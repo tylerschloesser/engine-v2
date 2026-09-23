@@ -114,6 +114,9 @@ window.__dispatchYourNewAction = (field: number) => {
 }
 ```
 
+A fieldless variant (`Roll`, say) serialises as a bare string, not an object: `const action: Action
+= 'YourNewAction'`. The regenerated `bindings/Action.ts` shows which shape each variant takes.
+
 `client.dispatch(action: unknown): number` JSON-encodes `action` and returns its `seq` immediately
 (0003 "Actions across the boundary"); it throws `Error("engine: dispatch before ready")` if called
 before the session is live, and `Error("engine: action queue full")` if the outbox/ring is full.
@@ -131,11 +134,15 @@ The `Game`/`Engine` tag is never flattened (0004's `Rejected<G> { Game(G::Reject
 (EngineReject) }` is exactly two variants) -- match on `result === 'Confirmed'` first, then on
 `result.Rejected.Game` vs `result.Rejected.Engine`.
 
-## 5. Prove it type-checks
+## 5. Prove it type-checks and runs
 
 ```
+cargo nextest run -p fx-<game>
 pnpm --filter engine typecheck
 ```
+
+The first runs the game's Rust tests, its golden checks included; run it before regenerating
+bindings so a compile error surfaces in Rust, not as a missing binding.
 
 (`pnpm lint` runs this too.) This is what actually catches a mismatch between your dispatch call
 and the regenerated `Action` union -- a wrong field name or type fails here, at build time, not at
@@ -148,6 +155,12 @@ dispatches this exact action, or a native scenario test drives it directly: re-r
 <game>` and **review the diff** before committing -- `pnpm golden` is the only writer of a golden
 hash, and a changed golden is a changed sim (`packages/engine/CLAUDE.md`). A brand-new variant
 nothing existing scripts yet needs no golden re-bless.
+
+**New state is different.** A variant that adds a field to a replicated type (`Global`, a player
+or entity struct) changes the encoded state, so *every* golden hash moves, even `*_idle_*`
+scenarios that never dispatch it (`cargo nextest run -p fx-<game>` fails the golden checks at
+once). That is a changed sim: re-bless with `pnpm golden <game>` only as a deliberate, reviewed
+decision, never to make the new variant pass.
 
 ## What you do not need to touch
 
