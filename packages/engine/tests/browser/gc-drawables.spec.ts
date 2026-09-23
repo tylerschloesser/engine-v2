@@ -27,6 +27,7 @@ declare global {
       stepClientFrameOnly(): void
       acquireAndDraw(): void
       drawCallsNow(): number
+      populatedLayers(): number[]
     }
   }
 }
@@ -91,21 +92,26 @@ test('counters.draws_equal_nonempty_layers', async ({ page }, testInfo) => {
   const ready = await page.evaluate(() => window.__gc?.ready)
   expectAdapter(testInfo, (ready?.adapter as AdapterInfo | null) ?? null)
 
+  // Independent ground truth (fix round 1, coordinator review): the population loop's own
+  // bookkeeping of which layers it actually dispatched entities to (`gc-drawables.ts`'s own
+  // `POPULATE_LAYERS`, `[0, 3, 7]` -- a gap at 1/2/4/5/6), never `nonEmptyLayerCount()` or anything
+  // else derived from `render/drawables.ts`'s own `computeLayerOffsets`/`layerCounts` -- a bug
+  // there could move `drawCallsNow()`'s delta and a `layerCounts`-derived count together, and this
+  // comparison would never catch it.
+  const populatedLayers = await page.evaluate(() => window.__drawablesTest?.populatedLayers())
+  expect(populatedLayers).toEqual([0, 3, 7])
+
   await page.evaluate(() => window.__drawablesTest?.resume())
   await page.evaluate(() => window.__drawablesTest?.stepClientFrameOnly())
   const before = await page.evaluate(() => window.__drawablesTest?.drawCallsNow())
   await page.evaluate(() => window.__drawablesTest?.acquireAndDraw())
   const after = await page.evaluate(() => window.__drawablesTest?.drawCallsNow())
-  // `acquireAndDraw`'s own `acquire()` is what makes `nonEmptyLayerCount()` reflect the slot that
-  // was actually drawn (reading it any earlier, or through a second reader, could name a different
-  // slot -- Deviations, "two readers tear the handoff").
-  const nonEmptyLayers = await page.evaluate(() => window.__drawablesTest?.nonEmptyLayerCount())
-  expect(nonEmptyLayers).toBeGreaterThan(0) // the population loop's own entities must be visible.
 
   // One instanced draw per non-empty layer (0018 §2), never more (an empty layer costs nothing)
   // and never fewer (every non-empty layer gets its own draw call, `render/drawables.ts`'s own
-  // `encodeDraws`).
-  expect((after as number) - (before as number)).toBe(nonEmptyLayers)
+  // `encodeDraws`) -- checked against the population loop's own three-layer ground truth, not
+  // `render/drawables.ts`'s own layer-count parsing.
+  expect((after as number) - (before as number)).toBe((populatedLayers as number[]).length)
   expect(after as number).toBeLessThanOrEqual(budget('counters.render.drawCallsMax'))
 
   await page.evaluate(() => window.__drawablesTest?.park())

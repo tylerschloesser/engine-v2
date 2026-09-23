@@ -91,6 +91,11 @@ declare global {
       stepClientFrameOnly(): void
       acquireAndDraw(): void
       drawCallsNow(): number
+      /** Fix round 1: the distinct layers the population loop actually dispatched entities to
+       * (`[0, 3, 7]`), tracked by the page's own population bookkeeping -- an independent ground
+       * truth `counters.draws_equal_nonempty_layers` checks `drawCallsNow()`'s delta against,
+       * never derived from `render/drawables.ts`'s own `computeLayerOffsets`/`layerCounts`. */
+      populatedLayers(): number[]
     }
   }
 }
@@ -165,16 +170,29 @@ cameraState.halfExtentTilesY = POPULATE_HALF_EXTENT
 // A few hundred entities (Tests added), spread across a grid well inside `POPULATE_HALF_EXTENT` so
 // every one lands in a subscribed chunk from the very first tick. One-time setup (0016 §2): every
 // dispatch/tick pair below runs *before* `installGcPage`, outside any measured window.
+//
+// Fix round 1 (docs/plan/17-drawlist-and-sprites.md, coordinator review): spread across three
+// layers with a gap (0, 3, 7 -- layers 1/2/4/5/6 stay empty), not all on layer 0
+// (`fx-drawables`' own genesis entities are, unchanged -- `layer` defaults to `0` on `Entity`).
+// `counters.draws_equal_nonempty_layers` needs this to have more than one non-empty layer to prove
+// anything; `POPULATE_LAYERS`, tracked here in the page's own population bookkeeping, is the
+// independent ground truth that test reads (never derived from `computeLayerOffsets`/
+// `layerCounts` on the render side, so a bug there cannot move both sides of that test's own
+// comparison together).
 const POPULATE_COUNT = 300
 const GRID_COLS = 20
 const GRID_SPACING = 4
+const POPULATE_LAYERS = [0, 3, 7]
 let seq = 1
 for (let i = 0; i < POPULATE_COUNT; i++) {
   const gx = i % GRID_COLS
   const gy = Math.floor(i / GRID_COLS)
   const x = (gx - GRID_COLS / 2) * GRID_SPACING
   const y = (gy - Math.ceil(POPULATE_COUNT / GRID_COLS) / 2) * GRID_SPACING
-  const bytes = new TextEncoder().encode(JSON.stringify({ Spawn: { at: { x, y }, small: false } }))
+  const layer = POPULATE_LAYERS[i % POPULATE_LAYERS.length]
+  const bytes = new TextEncoder().encode(
+    JSON.stringify({ Spawn: { at: { x, y }, small: false, layer } }),
+  )
   dispatchRaw(client, seq, bytes)
   seq += 1
   harness.stepFrame(1000 / 60)
@@ -231,7 +249,7 @@ const target = device.device.createTexture({
 // never exercised), spawned far outside `POPULATE_HALF_EXTENT` so it never enters `visible()` and
 // never perturbs the rendered/counted DrawList.
 const EXTRA_SPAWN_JSON_BYTES = new TextEncoder().encode(
-  JSON.stringify({ Spawn: { at: { x: 1_000_000, y: 1_000_000 }, small: false } }),
+  JSON.stringify({ Spawn: { at: { x: 1_000_000, y: 1_000_000 }, small: false, layer: 0 } }),
 )
 const DISPATCH_EVERY_FRAMES = 30
 let frame = 0
@@ -308,6 +326,9 @@ window.__drawablesTest = {
   },
   drawCallsNow() {
     return drawablesDrawCalls(drawablesRenderer)
+  },
+  populatedLayers() {
+    return POPULATE_LAYERS
   },
 }
 

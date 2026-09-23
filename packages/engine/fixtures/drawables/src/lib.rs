@@ -34,23 +34,28 @@ impl Pos {
     }
 }
 
-/// One drawable entity: a fixed position and whether it is the "small" kind `extract` hides once
-/// `FrameView::zoom()` climbs past [`SMALL_ZOOM_THRESHOLD`].
+/// One drawable entity: a fixed position, whether it is the "small" kind `extract` hides once
+/// `FrameView::zoom()` climbs past [`SMALL_ZOOM_THRESHOLD`], and which DrawList layer it draws to
+/// (fix round 1, `docs/plan/17-drawlist-and-sprites.md`: `gc-drawables.ts`'s own population spreads
+/// entities across several layers, including a gap, so `counters.draws_equal_nonempty_layers` has
+/// more than one non-empty layer to prove against). `0` for every genesis entity (unchanged --
+/// `drawlist_fixture_hash_golden`'s own three `circle(0, ...)` calls are byte-identical either way).
 #[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Entity {
     pub pos: Pos,
     pub small: bool,
+    pub layer: u8,
 }
 
-/// One action, `Spawn` (docs/plan/17-drawlist-and-sprites.md step 6): the zero-GC `drawables` page's
-/// own way to reach a few hundred entities without hand-writing them into `genesis` (which stays
-/// fixed at its original three, module doc comment -- `drawlist_fixture_hash_golden` and
-/// `drawlist_zoom_threshold_hides_only_the_small_entity` both depend on that exact count). Same
-/// shape as `fx-puts`'s own `Action::Spawn`.
+/// One action, `Spawn` (docs/plan/17-drawlist-and-sprites.md step 6, `layer` added fix round 1):
+/// the zero-GC `drawables` page's own way to reach a few hundred entities without hand-writing them
+/// into `genesis` (which stays fixed at its original three, module doc comment --
+/// `drawlist_fixture_hash_golden` and `drawlist_zoom_threshold_hides_only_the_small_entity` both
+/// depend on that exact count). Same shape as `fx-puts`'s own `Action::Spawn`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, TS)]
 #[ts(export)]
 pub enum Action {
-    Spawn { at: Pos, small: bool },
+    Spawn { at: Pos, small: bool, layer: u8 },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, TS)]
@@ -90,7 +95,7 @@ impl ClientSide<Drawables> for DrawablesClient {
                 continue;
             }
             let pos = WorldPos::from_tile(origin);
-            out.circle(0, pos, [0.5, 0.5], color_for(id));
+            out.circle(e.layer, pos, [0.5, 0.5], color_for(id));
         }
     }
 }
@@ -129,14 +134,17 @@ impl Game for Drawables {
         w.spawn(Entity {
             pos: Pos { x: 0, y: 0 },
             small: false,
+            layer: 0,
         });
         w.spawn(Entity {
             pos: Pos { x: 5, y: 5 },
             small: false,
+            layer: 0,
         });
         w.spawn(Entity {
             pos: Pos { x: -3, y: 2 },
             small: true,
+            layer: 0,
         });
     }
 
@@ -144,8 +152,12 @@ impl Game for Drawables {
 
     fn apply(w: &mut dyn WorldWrite<Self>, _who: PlayerId, a: &Action) -> Result<(), Reject> {
         match *a {
-            Action::Spawn { at, small } => {
-                w.spawn(Entity { pos: at, small });
+            Action::Spawn { at, small, layer } => {
+                w.spawn(Entity {
+                    pos: at,
+                    small,
+                    layer,
+                });
                 Ok(())
             }
         }
