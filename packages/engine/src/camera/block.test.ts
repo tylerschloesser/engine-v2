@@ -8,6 +8,7 @@ import {
   CAM_OFF_HALF_EXTENT_TILES,
   CAM_OFF_TILES_ACROSS,
   CAM_OFF_VELOCITY,
+  CAM_OFF_VIEWPORT_PX,
   CAM_OFF_ZOOM_RATE,
   CAMERA_BLOCK_BYTES,
   CameraBlockView,
@@ -39,6 +40,8 @@ test('camera_block.roundtrip', () => {
   state.cursorTileX = -7
   state.cursorTileY = 1000
   state.cursorValid = true
+  state.viewportPxW = 1920
+  state.viewportPxH = 1080.5
 
   writeCameraBlock(block, state)
 
@@ -59,6 +62,8 @@ test('camera_block.roundtrip', () => {
   expect(view.getFloat32(CAM_OFF_DPR, true)).toBe(2)
   expect(view.getInt32(CAM_OFF_CURSOR_TILE, true)).toBe(-7)
   expect(view.getInt32(CAM_OFF_CURSOR_TILE + 4, true)).toBe(1000)
+  expect(view.getFloat32(CAM_OFF_VIEWPORT_PX, true)).toBe(1920)
+  expect(view.getFloat32(CAM_OFF_VIEWPORT_PX + 4, true)).toBeCloseTo(1080.5, 5)
 })
 
 test('camera_block.cursor_invalid_roundtrips_zero', () => {

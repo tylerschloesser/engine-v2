@@ -35,3 +35,27 @@ fn wgsl_terrain_validates() {
     }
     assert!(checked > 0, "no .wgsl files found under {}", dir.display());
 }
+
+/// docs/plan/17-drawlist-and-sprites.md Tests added: `wgsl.uberquad_validates`, named separately
+/// from the loop above so a broken uber-quad shader is named by test output rather than only by
+/// `wgsl_terrain_validates`'s generic loop -- also asserts the two entry points `render/
+/// drawables.ts` builds its pipeline against actually exist.
+#[test]
+fn wgsl_uberquad_validates() {
+    let path = wgsl_dir().join("uberquad.wgsl");
+    let source =
+        fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+    let module = naga::front::wgsl::parse_str(&source)
+        .unwrap_or_else(|e| panic!("{}: {}", path.display(), e.emit_to_string(&source)));
+    let mut validator = Validator::new(ValidationFlags::all(), Capabilities::empty());
+    validator
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let names: Vec<&str> = module
+        .entry_points
+        .iter()
+        .map(|ep| ep.name.as_str())
+        .collect();
+    assert!(names.contains(&"vs_main"), "no vs_main entry point");
+    assert!(names.contains(&"fs_main"), "no fs_main entry point");
+}

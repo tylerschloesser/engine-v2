@@ -18,6 +18,12 @@ export class CameraState {
   cursorTileX = 0
   cursorTileY = 0
   cursorValid = false
+  /** M17 (docs/plan/17-drawlist-and-sprites.md, steps 4-6): the real device-pixel viewport size,
+   * set by `frame-loop.ts`'s `tick()` each rAF from `renderer.viewport.widthPx/heightPx` (post
+   * render-scale) -- distinct from `camera/transform.ts`'s CSS-pixel `CameraViewport`. `0` until a
+   * real `TerrainRenderer.viewport` has been sized at least once. */
+  viewportPxW = 0
+  viewportPxH = 0
 }
 
 /** `client.camera.read(out)` (Seams: "fills a caller-owned object"): a plain field-by-field copy,
@@ -36,4 +42,6 @@ export function copyCameraState(src: CameraState, dst: CameraState): void {
   dst.cursorTileX = src.cursorTileX
   dst.cursorTileY = src.cursorTileY
   dst.cursorValid = src.cursorValid
+  dst.viewportPxW = src.viewportPxW
+  dst.viewportPxH = src.viewportPxH
 }

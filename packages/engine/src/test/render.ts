@@ -9,6 +9,7 @@
 // `attachRenderer` -- the two-argument `renderTo(renderer, opts)` shape from steps 2-4 stays for the
 // three tests that still hand-fill the renderer's textures directly (no client, no worker).
 import type { Client } from '../client.js'
+import type { DrawablesRenderer } from '../render/drawables.js'
 import type { TerrainRenderer } from '../render/terrain.js'
 import { createUploadDrain, type UploadDrain } from '../render/upload.js'
 import { RingConsumer } from '../sab/ring.js'
@@ -229,6 +230,27 @@ export function uploadBytes(drain: Pick<UploadDrain, 'bytesTotal'>): number {
  * `drain` was created. */
 export function uploadRecords(drain: Pick<UploadDrain, 'recordsTotal'>): number {
   return drain.recordsTotal()
+}
+
+// docs/plan/17-drawlist-and-sprites.md, `engine/test` (steps 4-6): pass-throughs for `render/
+// drawables.ts`'s own counters, same shape as `drawCalls`/`pageSlotsUsed` above.
+
+/** `engine/test`'s `instanceBytes` counter: cumulative bytes copied into the drawables instance
+ * buffer since `renderer` was created. */
+export function instanceBytes(renderer: Pick<DrawablesRenderer, 'instanceBytes'>): number {
+  return renderer.instanceBytes()
+}
+
+/** `engine/test`'s `pipelineSwitches` counter: cumulative uber-quad `setPipeline` calls since
+ * `renderer` was created. */
+export function pipelineSwitches(renderer: Pick<DrawablesRenderer, 'pipelineSwitches'>): number {
+  return renderer.pipelineSwitches()
+}
+
+/** `engine/test`'s `drawListDropped` counter: the last-acquired DrawList slot's own header
+ * `dropped` field. */
+export function drawListDropped(renderer: Pick<DrawablesRenderer, 'drawListDropped'>): number {
+  return renderer.drawListDropped()
 }
 
 /** The pixel centre of tile `(tx, ty)` under `camera`'s frame-uniform values (0018 §5's own formula,

@@ -135,6 +135,12 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoop {
     onPhase('camera')
     onCamera() // camera (no-op until M11)
     opts.client.cameraState.frameTimeMs = tMs ?? frameClock.next(FRAME_MS)
+    // M17 (docs/plan/17-drawlist-and-sprites.md, steps 4-6): the real device-pixel viewport size,
+    // straight off `renderer.viewport` (already refreshed this tick by `applyPending()`, above,
+    // before the `camera` phase) -- plain number assignments, no allocation
+    // (`.claude/rules/hot-paths.md`), the same pattern `frameTimeMs` just used on the line above.
+    opts.client.cameraState.viewportPxW = opts.renderer.viewport.widthPx
+    opts.client.cameraState.viewportPxH = opts.renderer.viewport.heightPx
     onPhase('writeCamera')
     opts.client.writeCameraAndWake() // writeCamera: writeCameraBlock + CB_FRAME_REQ + wake
     onPhase('upload')

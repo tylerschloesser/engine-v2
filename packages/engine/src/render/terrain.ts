@@ -97,7 +97,10 @@ export interface TerrainRenderer {
    * `draw(3, 1, 0, 0)`. `target` may be a `GPUTexture` (skips `createView()` when `viewProbePasses`)
    * or an explicit `GPUTextureView`. */
   draw(target: GPUTexture | GPUTextureView): void
-  /** Count of `draw()` calls since creation (`engine/test`'s `drawCalls` counter, Seams). */
+  /** Count of GPU `draw()` calls issued since creation (`engine/test`'s `drawCalls` counter, Seams):
+   * one per `TerrainRenderer.draw()` call for the terrain triangle, plus whatever `onEncode`'s
+   * callback (M17, `render/drawables.ts`) reports issuing in the same pass. Was "count of `draw()`
+   * *method* calls" before M17; identical for every caller that never registers `onEncode`. */
   drawCalls(): number
   /** Count of distinct page slots written by `writePageChunk`/`writePageTexel` since creation
    * (`engine/test`'s `pageSlotsUsed` counter, Seams). */
@@ -115,6 +118,16 @@ export interface TerrainRenderer {
    * viewport actually changed (Seams, Provides: "M11 recomputes `half_extent_tiles`; M18 re-bases
    * anchors"). */
   onViewportChange(cb: (viewport: Viewport) => void): void
+  /** M17 (docs/plan/17-drawlist-and-sprites.md, steps 4-6 Deviations "one shared render pass, not
+   * two"): registers `cb`, called inside `draw()`'s own pass right after the terrain triangle is
+   * encoded, before `pass.end()` -- the mechanism `render/drawables.ts`'s `attachDrawables` uses so
+   * "terrain and drawables share one render pass" (Planning decisions "Final main-thread bytes per
+   * frame": "the production wrapper count stays five") is real without this file exposing its own
+   * private `pipeline`/`bindGroup`/encoder state to a caller. `cb` returns how many additional GPU
+   * `draw()` calls it issued this pass, added to the `drawCalls()` counter alongside the terrain
+   * triangle's own one. At most one callback (a second `onEncode` call replaces the first): this
+   * milestone is the only caller. */
+  onEncode(cb: ((pass: GPURenderPassEncoder) => number) | undefined): void
   /** `render/viewport.ts`'s own call, right after mutating `viewport` in place -- not a Seam name
    * itself, the wiring between this renderer and whatever owns its resize observer. */
   notifyViewportChange(): void
@@ -254,6 +267,7 @@ export async function createTerrainRenderer(
   }
   const viewport: Viewport = { widthPx: 0, heightPx: 0, dpr: 1, renderScale: 1 }
   const viewportChangeCallbacks: Array<(v: Viewport) => void> = []
+  let encodeCallback: ((pass: GPURenderPassEncoder) => number) | undefined
 
   function buildBindGroup(): GPUBindGroup {
     return device.createBindGroup({
@@ -435,10 +449,12 @@ export async function createTerrainRenderer(
       pass.setPipeline(pipeline)
       pass.setBindGroup(0, bindGroup)
       pass.draw(3)
+      let calls = 1
+      if (encodeCallback) calls += encodeCallback(pass)
       pass.end()
       submitList[0] = encoder.finish()
       device.queue.submit(submitList)
-      drawCallCount++
+      drawCallCount += calls
     },
 
     drawCalls() {
@@ -454,6 +470,10 @@ export async function createTerrainRenderer(
 
     onViewportChange(cb) {
       viewportChangeCallbacks.push(cb)
+    },
+
+    onEncode(cb) {
+      encodeCallback = cb
     },
 
     notifyViewportChange() {

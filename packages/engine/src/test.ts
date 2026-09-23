@@ -6,7 +6,11 @@ export type { Clock, Scheduler } from './clock.js'
 export {
   actionResults,
   callParked,
+  type DrawRecord,
   dispatchRaw,
+  drawListHash,
+  drawListRecords,
+  hashDrawListFields,
   hostRegionHash,
   type NetCounters,
   netCounters,
@@ -43,9 +47,12 @@ export {
 export { createManualClock, type ManualClock } from './test/manual-clock.js'
 export {
   drawCalls,
+  drawListDropped,
   expectPixel,
+  instanceBytes,
   type PixelBuffer,
   pageSlotsUsed,
+  pipelineSwitches,
   type Renderable,
   type RenderTarget,
   renderTo,

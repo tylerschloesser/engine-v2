@@ -100,6 +100,7 @@ function fakeRenderer(): TerrainRenderer & { drawCallTargets: unknown[] } {
     },
     viewport: { widthPx: 0, heightPx: 0, dpr: 1, renderScale: 1 },
     onViewportChange() {},
+    onEncode() {},
     notifyViewportChange() {},
     drawCallTargets,
   }

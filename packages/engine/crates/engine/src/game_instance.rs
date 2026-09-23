@@ -417,7 +417,17 @@ where
                         2.0,
                     ),
                     zoom: camera.tiles_across,
-                    px_per_tile: 0.0, // Deviations: no real viewport-px data crosses yet
+                    // Steps 4-6 Deviations "px_per_tile() wired for real": `camera/transform.ts`'s
+                    // own `pxPerTile` formula (`max(viewportPxW, viewportPxH) / tilesAcross`), now
+                    // that `CameraBlock::viewport_px` carries the real device-pixel viewport size.
+                    // Guarded against `tiles_across <= 0` (every `CameraBlock::for_test` caller
+                    // defaults it to `0.0`; `0.0` here matches this field's own old placeholder
+                    // rather than an `inf`/`NaN` no downstream reader expects).
+                    px_per_tile: if camera.tiles_across > 0.0 {
+                        camera.viewport_px[0].max(camera.viewport_px[1]) / camera.tiles_across
+                    } else {
+                        0.0
+                    },
                     cursor_tile: if camera.cursor_valid != 0 {
                         Some(TilePos::new(camera.cursor_tile[0], camera.cursor_tile[1]))
                     } else {

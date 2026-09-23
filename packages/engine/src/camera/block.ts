@@ -18,6 +18,13 @@ export const CAM_OFF_ZOOM_RATE = 44
 export const CAM_OFF_HALF_EXTENT_TILES = 48
 export const CAM_OFF_DPR = 56
 export const CAM_OFF_CURSOR_TILE = 64
+/** M17 (docs/plan/17-drawlist-and-sprites.md, steps 4-6 Deviations "`px_per_tile()` wired for
+ * real"): the real device-pixel viewport size, written by `frame-loop.ts`'s `tick()` each rAF from
+ * `renderer.viewport.widthPx/heightPx` (post render-scale), right after `applyPending()` and before
+ * `writeCameraAndWake()`. Fills bytes 72..80, already reserved (unused) since M06 -- `CAMERA_BLOCK_
+ * BYTES` stays 80, no existing field moved.
+ */
+export const CAM_OFF_VIEWPORT_PX = 72
 
 const MAX_RETRIES = 8
 
@@ -36,6 +43,7 @@ export class CameraBlockView {
   private readonly halfExtentTiles: Float32Array
   private readonly dpr: Float32Array
   private readonly cursorTile: Int32Array
+  private readonly viewportPx: Float32Array
   private readonly bytes: Uint8Array
   private readonly scratch: Uint8Array
 
@@ -50,6 +58,7 @@ export class CameraBlockView {
     this.halfExtentTiles = new Float32Array(sab, CAM_OFF_HALF_EXTENT_TILES, 2)
     this.dpr = new Float32Array(sab, CAM_OFF_DPR, 1)
     this.cursorTile = new Int32Array(sab, CAM_OFF_CURSOR_TILE, 2)
+    this.viewportPx = new Float32Array(sab, CAM_OFF_VIEWPORT_PX, 2)
     this.bytes = new Uint8Array(sab, 0, CAMERA_BLOCK_BYTES)
     this.scratch = new Uint8Array(CAMERA_BLOCK_BYTES)
   }
@@ -94,6 +103,10 @@ export class CameraBlockView {
     return this.cursorTile
   }
 
+  viewportPxView(): Float32Array {
+    return this.viewportPx
+  }
+
   bytesView(): Uint8Array {
     return this.bytes
   }
@@ -124,6 +137,9 @@ export function writeCameraBlock(block: CameraBlockView, state: CameraState): vo
   const cursorTile = block.cursorTileView()
   cursorTile[0] = state.cursorTileX
   cursorTile[1] = state.cursorTileY
+  const viewportPx = block.viewportPxView()
+  viewportPx[0] = state.viewportPxW
+  viewportPx[1] = state.viewportPxH
   Atomics.add(block.seqWord(), 0, 1) // end: even, published
 }
 

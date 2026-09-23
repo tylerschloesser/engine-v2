@@ -141,12 +141,15 @@ impl<'a, G: Game> FrameView<'a, G> {
         self.zoom
     }
 
-    /// Approximate device pixels per tile (Deviations: `CameraBlock` carries no real viewport
-    /// pixel size -- adding one is outside this milestone's Files touched, `camera/block.ts`
-    /// untouched -- so this is a placeholder, `0.0`, until a later cut plumbs the real value the
-    /// main thread already computes, `camera/transform.ts`'s `pxPerTile`. Not read by any test in
-    /// this cut; `SCREEN_PX_STROKE` is resolved in the vertex shader from the real main-thread
-    /// value, not from this accessor, 0018 Planning decisions.
+    /// Device pixels per tile (steps 4-6 Deviations "`px_per_tile()` wired for real"):
+    /// `camera/transform.ts`'s own `pxPerTile` formula (`max(viewportPxW, viewportPxH) /
+    /// tilesAcross`), computed in `game_instance.rs` from `CameraBlock::viewport_px` (written by
+    /// `frame-loop.ts` each rAF from `renderer.viewport`) and `CameraBlock::tiles_across`. `0.0`
+    /// when `tiles_across <= 0` (untriggered production, or a native test built from `CameraBlock
+    /// ::for_test`, which never sets `viewport_px`/`tiles_across`). `SCREEN_PX_STROKE` is still
+    /// resolved in the vertex shader from its own uniform, not from this accessor (0018 Planning
+    /// decisions) -- this accessor exists for a game's own `extract()` to make a screen-space
+    /// decision (e.g. culling a drawable below one screen pixel), not for the renderer.
     pub fn px_per_tile(&self) -> f32 {
         self.px_per_tile
     }

@@ -22,7 +22,14 @@ pub struct CameraBlock {
     pub dpr: f32,
     _reserved0: u32,
     pub cursor_tile: [i32; 2],
-    _reserved1: [u32; 2],
+    /// M17 (docs/plan/17-drawlist-and-sprites.md, steps 4-6 Deviations "`px_per_tile()` wired for
+    /// real"): the real device-pixel viewport size (`render/viewport.ts`'s own `renderer.viewport.
+    /// widthPx/heightPx`, post render-scale), written by `frame-loop.ts`'s `tick()` every rAF, right
+    /// after `applyPending()` refreshes the renderer's viewport and before `writeCameraAndWake()`.
+    /// Fills what was `_reserved1: [u32; 2]` -- offset 72, no other field moved, no byte grown
+    /// (`CameraBlock::BYTES` stays 80: `camera/block.ts`'s own 80-byte layout already reserved this
+    /// pair, unused, since M06).
+    pub viewport_px: [f32; 2],
 }
 
 impl CameraBlock {
@@ -84,7 +91,7 @@ impl CameraBlock {
             dpr: 1.0,
             _reserved0: 0,
             cursor_tile: [0, 0],
-            _reserved1: [0, 0],
+            viewport_px: [0.0, 0.0],
         }
     }
 }
@@ -106,6 +113,7 @@ mod tests {
         assert_eq!(core::mem::offset_of!(CameraBlock, half_extent_tiles), 48);
         assert_eq!(core::mem::offset_of!(CameraBlock, dpr), 56);
         assert_eq!(core::mem::offset_of!(CameraBlock, cursor_tile), 64);
+        assert_eq!(core::mem::offset_of!(CameraBlock, viewport_px), 72);
     }
 
     #[test]
