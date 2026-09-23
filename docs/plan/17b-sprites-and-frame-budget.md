@@ -183,14 +183,12 @@ at `/drawables/*` under both `vite dev` and the built `vite preview` the browser
   either the blend equation needs to become genuinely premultiplied (affecting every existing shape
   test's own blending, M17's territory to revisit) or the atlas upload needs to stop premultiplying.
 - **`ClientOptions.assets.sprites?: string`** (`src/client.ts`): the field exists (widened from
-  `{ tiles: string }` to `{ tiles: string; sprites?: string }`) but is **not read by any real page in
-  this cut**. `drawables.html` (this cut's own test page) has no `Client`/`ClientOptions` at all --
-  M17's own "hand-filled scene, no worker, no ABI instance" precedent -- so it calls `loadSpriteAtlas`
-  with the literal string `'/drawables/sprites.json'` directly; there is no `ClientOptions` object on
-  that page for the field to flow through. Wiring a real `Client`-driven page (the `drawables`
-  zero-GC page, or `device.html`) to read `options.assets.sprites` is steps 4-6's own territory,
-  mirroring `ClientOptions.render`'s own field-then-wiring split (docs/plan/
-  09b-terrain-art-and-lifecycle.md Deviations).
+  `{ tiles: string }` to `{ tiles: string; sprites?: string }`). **Superseded by Fix round 1, below**
+  (the coordinator moved the real-page wiring into this cut instead of leaving it for cut 2): at
+  initial landing it was read by no real page (`drawables.html`, this cut's own test page, has no
+  `Client`/`ClientOptions` at all -- M17's own "hand-filled scene, no worker, no ABI instance"
+  precedent -- and calls `loadSpriteAtlas` with a literal string directly); `gc-drawables.ts` now
+  threads it through for real.
 - **Fixture `sprites.png`/`sprites.json`** (`scripts/gen-sprite-art.mjs`, 96x64 atlas, mip 1 48x32):
   three sprites, `EXTRUDE_PX = 2` (the manifest's own `padding`).
   - id 0 **"quad"** (`fx-drawables::sprite_id::QUAD`): 8x8, four 4x4 flat quadrants (red/green/blue/
@@ -206,8 +204,9 @@ at `/drawables/*` under both `vite dev` and the built `vite preview` the browser
     (see "no_bleed_at_mip1", below). No manifest entry for the blue block: it exists only as raw atlas
     pixels, addressed indirectly through mip 1's own averaging, never drawn.
   - `fixtures/drawables/src/lib.rs`'s new `sprite_id` module (Scope: "add `SpriteId` constants helper
-    for fixtures only") names these three; **not read by `extract()` in this cut** (still circles
-    only, unchanged) -- built for whichever later cut dispatches real sprite draws.
+    for fixtures only") names these three. At initial landing, none were read by `extract()`; **Fix
+    round 1** wires `QUAD` in (`Entity.sprite: bool`, below) -- `STRIP`/`BLEED` are still reached only
+    through `drawables.html`'s own hand-filled probes.
 
 ### `sprite.no_bleed_at_mip1`: found the wrong tool for the job, switched, and it worked
 
@@ -246,12 +245,13 @@ untracked files.
 ### Failability, every new browser test: injected, verified red, reverted
 
 Per the brief's binding instructions ("say what a wrong implementation would still pass ... prove
-failability by injection"), each of the five sprite-kind tests (`counters.gpu_bytes_within_budget` is
+failability by injection"), each of the six sprite-kind tests (`counters.gpu_bytes_within_budget` is
 a direct measurement, not proved by injection) was proven by a temporary, reverted edit:
 
 | Test | Injected fault | File / branch | Result before revert |
 |---|---|---|---|
 | `sprite.pivot_and_size_probe` | `quad_tiles = (box_uv - vec2(0.5, 0.5)) * box_size` (pivot ignored) | `uberquad.wgsl` `vs_main` | `expectPixel(40, 28)` failed (green channel 0, wanted 255) |
+| `sprite.seam_matches_reference` | Fix round 1: see its own section below | `uberquad.wgsl` `fs_main`, `KIND_SPRITE` | `expectPixel(41, 21)` failed (red channel 128, wanted 255 -- a 50/50 red/green blend) |
 | `sprite.flip_x` | `sample_uv = raw` (flip decoupling dropped) | `uberquad.wgsl` `vs_main` | `expectPixel(30, 28)` failed (red channel 255, wanted 0) |
 | `sprite.frames_by_param` | `frame_rect.x += 0.0 * frame_index * rect.z` (frame offset dropped) | `uberquad.wgsl` `fs_main`, `KIND_SPRITE` | `expectPixel(32, 32)` failed at `param=1` (red channel 0, wanted 255) |
 | `sprite.no_bleed_at_mip1` | fixture regenerated with `EXTRUDE_PX = 0` | `scripts/gen-sprite-art.mjs` | `expectPixel(18, 10)` failed (red channel 0, wanted 255) |
@@ -263,20 +263,100 @@ green (6 tests) at every commit boundary.
 
 ### `counters.gpu_bytes_within_budget`: measured, not estimated
 
-`budgets.json`'s `counters.render.gpuBytes = 2,400,000` (formula appended to the existing
-`counters.render` block, alongside `drawCallsMax`/`pipelineSwitches`). Measured on `drawables.html`
-with the real fixture atlas: instance buffer 2,097,152 + DrawFrame uniform 48 + atlas (96x64 mip 0 +
-48x32 mip 1, `rgba8unorm`: 24,576 + 6,144 = 30,720) + two sprite data textures (64x64 `rgba32float`
-each: 65,536 x 2 = 131,072) = **2,258,992 B exactly**, comfortably inside the 2,400,000 budget (a real
-game's own atlas will be larger; the row is revisited when one exists, not tightened preemptively).
-**Bug found and fixed while measuring**: `loadSpriteAtlas`'s first draft read `bitmap.width`/
-`bitmap.height` *after* `bitmap.close()` to compute `gpuBytes` -- `ImageBitmap.close()` zeroes those
-properties (confirmed empirically: the atlas rendered correctly throughout, since `atlasTexture`'s own
-size was already captured before the close, but `gpuBytes` itself read back as `131,076`, i.e.
-`SPRITE_TABLE_BYTES * 2 + 4`, as if the image were 1x1). Fixed by capturing `imageWidth`/`imageHeight`
-into local `const`s before `bitmap.close()` and using those throughout; not a production-visible bug
-(nothing else read `bitmap.width`/`height` after the close), found only because this cut measured the
-counter by hand rather than trusting the formula.
+**Superseded by Fix round 1, below** (the coordinator required the counter to cover the whole
+renderer, not drawables alone, and the budget to come from 0015 §5's own GPU-side figure rather than
+measured-plus-headroom). At initial landing: `budgets.json`'s `counters.render.gpuBytes = 2,400,000`,
+measured on `drawables.html` (drawables' own share only) at 2,258,992 B exactly.
+**Bug found and fixed while measuring, still true after Fix round 1**: `loadSpriteAtlas`'s first
+draft read `bitmap.width`/`bitmap.height` *after* `bitmap.close()` to compute `gpuBytes` --
+`ImageBitmap.close()` zeroes those properties (confirmed empirically: the atlas rendered correctly
+throughout, since `atlasTexture`'s own size was already captured before the close, but `gpuBytes`
+itself read back as `131,076`, i.e. `SPRITE_TABLE_BYTES * 2 + 4`, as if the image were 1x1). Fixed by
+capturing `imageWidth`/`imageHeight` into local `const`s before `bitmap.close()` and using those
+throughout; not a production-visible bug (nothing else read `bitmap.width`/`height` after the close),
+found only because this cut measured the counter by hand rather than trusting the formula.
+
+### Fix round 1 (coordinator review, three items)
+
+Three gaps found by the coordinator's own review of steps 1-3, each committed separately
+(`053e722`, item 1; `16e709c`, items 2 and 3 together -- their commit message explains why: the
+budget's correct value and formula can only be set once the page exercising both halves exists).
+
+**Item 1: the binding injection was missing.** None of the original five sprite tests proved that
+anchoring on `floor(texel)` instead of `floor(texel + 0.5)` fails at a fractional offset. Investigated
+before adding anything (quantify before hypothesising): a plain anchor swap on *this* formula's own
+shape (`anchor`, `offset = texel - anchor`, `seamed = anchor + clamp(offset / scale, ±0.5)`, no extra
+bias) is provably a no-op whenever the clamp saturates -- worked algebraically both ways (`anchor =
+floor(texel)` vs `floor(texel + 0.5)` always differ by exactly 1 when they disagree at all, and their
+respective offsets differ by exactly ∓1, so `anchor + clamped` lands on the *same* value, the texel's
+own centre, either way). Terrain's own historical bug was not a plain anchor swap: it kept an extra,
+now-mismatched `+ 0.5` and decoupled the offset from the anchor (`fract(texel) - 0.5`), which is what
+actually broke the cancellation and pushed the saturated result to a texel *edge* instead. Reproducing
+that exact shape in the sprite kind's own formula is what the injection below does. A probe whose
+*seamed* position sits close to (not past) the real quadrant boundary was needed to tell the two
+anchor choices apart even with the historically-accurate injection, since a probe deep in a texel's
+own interior still converges to the same texel centre under both. Found by an exact-fraction (not
+floating-point) search over camera/pixel combinations for the "quad" sprite: `sprite.
+seam_matches_reference` (`tests/browser/sprite-readback.spec.ts`) -- `tilesPerPx = 1/24`, pixel `(41,
+21)` on a 64x64 target, exact raw uv `(43/96, 5/16)`, `seamSnap` (imported from `terrain-hash-ref.ts`,
+unmodified -- this kind's own formula is structurally identical, redone per-axis) predicts seamed
+texel `(3.5, 2.5)`, the top-left red quadrant. Verified failing: injecting `anchor = floor(texel)`,
+`offset = fract(texel) - 0.5`, `seamed = anchor + clamp(offset / scale, ±0.5) + 0.5` into `uberquad
+.wgsl`'s sprite fragment branch made the probe read `[128, 65, 0, 255]` -- almost exactly a 50/50
+red/green blend at the boundary, matching the historical bug's own textbook symptom exactly -- instead
+of pure red. Reverted immediately (`git diff` on `uberquad.wgsl` empty before the commit).
+
+**Item 2: `gpuBytes` now covers the whole renderer.** `TerrainRenderer` gained `gpuBytes()`: the fixed
+page texture (`PAGE_TEXTURE_EDGE² × 4`, exactly 4 MiB), indirection texture (`INDIR_TEXTURE_EDGE² × 2`),
+visual-table buffer (`VISUAL_TABLE_BYTES`), frame uniform (`FRAME_UNIFORM_BYTES`), plus the installed
+tile array's own byte count. That last figure needed a new source: `render/art.ts`'s `LoadedArt`
+gained a `gpuBytes` field (summed across every mip level `mipLevelCountFor(tile_px)` produces,
+`cellCount × Σ_level max(1, tile_px >> level)² × 4`), and `TerrainRenderer.setTileArray` gained a
+**required** (not optional) second `gpuBytes` parameter -- deliberately not optional, so a caller can
+never silently under-count by forgetting it. Every real page's own `setTileArray(art.texture)` call
+site (11 of them: `connected-terrain.ts`, `device.ts` x2, `gc-connected-terrain.ts`, `gc-drawables.ts`,
+`gc-input.ts`, `gc-slice.ts`, `gc-terrain.ts`, `slice.ts`, `terrain-client.ts`, `terrain.ts`) was
+updated to `setTileArray(art.texture, art.gpuBytes)` -- a mechanical, one-line change at each, caught
+immediately by `tsc` (`tests/browser/pages/tsconfig.json`, a separate config from `tests/tsconfig.json`
+that the main typecheck run does not cover -- found the hard way, by running it explicitly after the
+main typecheck passed clean). `render/upload.test.ts`/`src/frame-loop.test.ts`'s own fake
+`TerrainRenderer` stand-ins each gained a trivial `gpuBytes() { return 0 }`.
+`window.__drawablesTest.gpuBytes()` (`gc-drawables.ts`) now returns `renderer.gpuBytes() +
+drawablesRenderer.gpuBytes()`, the whole renderer, not drawables' own share alone.
+**Budget value and formula, per the coordinator's own binding instruction ("from the GPU-side figure
+in 0015 §5 / 0018 Consequences, not measured + headroom")**: `budgets.json`'s
+`counters.render.gpuBytes` is now `20,971,520` (`20 * 1024 * 1024`) -- 0015 §5's own "~20 MiB
+GPU-side ([0018])" line, the same figure 0018 Consequences' own "4 MiB page + 2 MiB instances + art"
+breakdown names (art itself unsized there). Not measured-plus-headroom, unlike every other counter row
+in this file: a real game's own tile art and sprite atlas dwarf this milestone's tiny fixtures, so a
+fixed-headroom-over-measured convention would be a meaningless number here, revisited only once a real
+game's assets exist to measure against. Measured on the real page (item 3, below): **6,478,928 B**,
+comfortably inside 20 MiB with room to spare.
+
+**Item 3: the rendering half's wiring finished, moved out of cut 2.** `gc-drawables.ts` builds one
+`assets = { tiles: '/terrain/tiles.json', sprites: '/drawables/sprites.json' }` object and threads it
+into both `createClient({ ..., assets })` and the two real asset loaders (`loadTileArt(device.device,
+assets.tiles, ...)`, `loadSpriteAtlas(device.device, assets.sprites, ...)`) -- the first real page to
+build one shared object this way; every other real-client page still types each asset URL a second
+time (unchanged by this cut, a bigger refactor than this fix round's own scope). The sprite atlas
+loads and installs (`drawablesRenderer.setSpriteAtlas`) once, in one-time setup, never touched again
+inside `drive()`. `fx-drawables` gained `Entity.sprite: bool` and `Action::Spawn`'s own `sprite`
+field (every genesis entity explicit `sprite: false`, so `drawlist_fixture_hash_golden` is byte-
+identical, re-verified: `cargo nextest run -p fx-drawables` still blesses `07e82d2cb76fe412`);
+`extract()` now calls `out.sprite(e.layer, pos, sprite_id::QUAD)` instead of `out.circle(...)` when
+`e.sprite`. The population loop marks every 10th of its 300 entities (`SPRITE_EVERY = 10`, 30 of 300)
+as a sprite, so the measured window's own DrawList genuinely contains sprite-kind records, not just
+circles ("page `drawables` with sprites present", Tests added).
+**Budgets stayed exactly as they were, no widening needed.** `pnpm test browser -t "drawables clean"`
+passes at the existing, unchanged `gc.pages.drawables.isolates.main` budget (117 B/frame): loading and
+installing the atlas is one-time setup (0016 §2, the same exemption `loadTileArt` already has), and
+drawing a sprite reuses the *same* per-non-empty-layer instanced draw call a circle already used --
+nothing about the measured window's own wrapper shape changed, so the coordinator's own fallback
+("force the budget to 1, read `windowByFn`, report the attribution") was never needed.
+`counters.gpu_bytes_within_budget` moved from `drawables.html` (`sprite-readback.spec.ts`, which could
+only ever measure drawables' own share -- test removed there) to `gc-drawables.html`
+(`tests/browser/gc-drawables.spec.ts`), the one real page with both renderers: no separate page was
+cheaper to build, since `gc-drawables.html` already exists with everything item 3 needed.
 
 ### Notes for cut 2 (steps 4-6: benchmark, `profile-frame` skill, `?harness=1`)
 
@@ -302,15 +382,14 @@ counter by hand rather than trusting the formula.
      this scenario.
   - `Action::Spawn`'s existing `layer: u8` field (fix round 1, M17) already lets a bulk-spawn action
     spread entities across DrawList layers if the benchmark wants that; not itself a blocker.
-  - `extract()` still only calls `DrawList::circle`, never `.sprite(...)` -- fine for a raw
-    record-count benchmark (0018 §6 names 65,536 *drawables*, not specifically sprites), but if cut 2
-    wants the benchmark to also exercise the sprite kind's own atlas/data-texture reads under load,
-    `extract()` needs a sprite-drawing branch added (trivial: `sprite_id::QUAD` is ready-made).
-- **`ClientOptions.assets.sprites`** exists on the type but is read by no real page yet (see Deviations
-  above) -- the first page that needs it (very likely `device.html`, this milestone's own `?harness=1`
-  mode, or the zero-GC `drawables` page if cut 2 also loads a real atlas there) should read it the same
-  way `options.assets.tiles`/`options.render` are already read: a page's own explicit call, not
-  something `createClient` touches.
+  - `extract()` now has a sprite-drawing branch (Fix round 1: `Entity.sprite: bool` -> `DrawList::
+    sprite(e.layer, pos, sprite_id::QUAD)`), so cut 2's benchmark can spawn entities with `sprite:
+    true` directly if it wants the sprite kind's own atlas/data-texture reads exercised under load --
+    no further Rust change needed for that part.
+- **`ClientOptions.assets.sprites` is now read for real** by `gc-drawables.ts` (Fix round 1, moved into
+  this cut from cut 2's own territory) -- `device.html` (steps 4-6's own `?harness=1` page) still needs
+  its own wiring, the same way `options.assets.tiles`/`options.render` are already read there: a
+  page's own explicit call, not something `createClient` touches.
 - **`atlasTexture`'s `COPY_SRC` usage** (added for `readTextureMip`) is a production no-op but is now
   part of the texture's own creation flags; if a later cut tightens GPU memory/usage flags for
   production, this is the one flag in this cut's own additions that exists purely for test
@@ -318,31 +397,34 @@ counter by hand rather than trusting the formula.
 - **Premultiplied-blending gap** (see Deviations above): inert today (every fixture sprite is fully
   opaque), real once a game's own sprite art has soft edges.
 
-### Verified (commands and results)
+### Verified (commands and results, final state after Fix round 1)
 
-- `pnpm test unit -t sprites` -> `unit pass 3 tests` (`sprites: valid document round-trips`, `sprites:
-  schema errors`, `sprites: buildSpriteTables lays out rect/pivot+size at (id % 64, id / 64)`).
-- `pnpm test rust -t wgsl` -> `rust pass 2 tests` (`wgsl_terrain_validates`, `wgsl_uberquad_validates`
-  -- naga validates the grown `uberquad.wgsl`, five bindings, eight `VOut` locations).
-- `pnpm test browser -t sprite` -> `browser pass 6 tests` (2.6-2.7s of the 25s budget). Individual
-  durations (`playwright test --project chromium -g "sprite\.|gpu_bytes"`, this machine):
-  `sprite.no_bleed_at_mip1` 488ms, `sprite.pivot_and_size_probe` 485ms, `sprite.flip_x` 508ms,
-  `sprite.layering_with_shapes` 530ms, `sprite.frames_by_param` 583ms,
-  `counters.gpu_bytes_within_budget` 197ms.
-- `pnpm test browser -t draw` -> `browser pass 14 tests` (M17's own suite, unaffected). `pnpm test
-  browser -t drawables` -> `browser pass 8 tests` (unaffected). Full `pnpm test browser` -> `browser
-  pass 143 tests 21s/25s` (matches the delegation prompt's own quoted starting figure -- this cut's
-  six new tests fit inside existing headroom, not pushing the suite over budget).
-- `cargo nextest run -p fx-drawables` -> `7/7 pass`, golden hash unchanged (`drawlist_fixture_hash_golden`
-  still blessed to `07e82d2cb76fe412` -- the `sprite_id` module changes no `Draw` bytes any test
-  produces). `cargo clippy -p fx-drawables --all-targets -- -D warnings` and `cargo clippy --workspace
-  --all-targets -- -D warnings` -> both clean.
-- `pnpm test unit` -> `unit pass 202 tests` (+3 over this cut's own start, plus whatever earlier
-  milestones since M17 added -- not independently re-baselined here). `pnpm test wasm` -> `wasm pass 49
-  tests` (unaffected: nothing in this cut touches the WASM boundary). `pnpm test rust` -> `rust pass 322
-  tests`.
-- `pnpm exec tsc --noEmit` (both `tsconfig.json` and `tests/tsconfig.json`) -> clean. `pnpm format`
-  (`biome check --write` + `cargo fmt`) -> no fixes needed after the final state.
+- `pnpm test unit -t sprites` -> `unit pass 3 tests`. `pnpm test rust -t wgsl` -> `rust pass 2 tests`
+  (`wgsl_terrain_validates`, `wgsl_uberquad_validates`).
+- `pnpm test browser -t sprite` -> `browser pass 6 tests` (`sprite-readback.spec.ts`: `pivot_and_
+  size_probe`, `seam_matches_reference`, `flip_x`, `frames_by_param`, `no_bleed_at_mip1`,
+  `layering_with_shapes`; `counters.gpu_bytes_within_budget` moved off this file, see below).
+  Individual durations (`playwright test --project chromium -g "sprite"`, this machine):
+  `sprite.pivot_and_size_probe` ~485ms, `sprite.seam_matches_reference` 304ms, `sprite.flip_x`
+  ~508ms, `sprite.frames_by_param` ~583ms, `sprite.no_bleed_at_mip1` ~488ms, `sprite.layering_
+  with_shapes` ~530ms.
+- `pnpm test browser -t drawables` -> `browser pass 9 tests` (+1 over steps 1-3: `counters.gpu_
+  bytes_within_budget` now lives here). `counters.gpu_bytes_within_budget` alone (`playwright test
+  --project gc -g "gpu_bytes"`): 356ms.
+- `pnpm test browser -t draw` -> `browser pass 14 tests` (M17's own suite, unaffected). Full `pnpm
+  test browser` -> `browser pass 144 tests 22s/25s` (+1 over steps 1-3's 143: `sprite.seam_matches_
+  reference`; the `gpu_bytes` test moved, not duplicated).
+- `cargo nextest run -p fx-drawables` -> `7/7 pass`, golden hash unchanged (`drawlist_fixture_hash_
+  golden` still blessed to `07e82d2cb76fe412` -- confirms `Entity.sprite`/`Action::Spawn.sprite`
+  changed no genesis-driven `Draw` bytes). `cargo clippy --workspace --all-targets -- -D warnings` ->
+  clean.
+- `pnpm test unit` -> `unit pass 202 tests` (unchanged by the fix round: no new `unit`-suite file).
+  `pnpm test wasm` -> `wasm pass 49 tests` (unaffected). `pnpm test rust` -> `rust pass 322 tests`
+  (unaffected: the fix round's own Rust change adds a struct field, not a test).
+- `pnpm exec tsc --noEmit -p tsconfig.json`, `-p tests/tsconfig.json` and `-p tests/browser/pages/
+  tsconfig.json` (the third config the main typecheck run does not cover -- this is where every
+  `setTileArray` call-site error actually surfaced) -> all clean. `pnpm format` (`biome check
+  --write` + `cargo fmt`) -> no fixes needed after the final state.
 - `pnpm test`/`pnpm test:slow`/`pnpm lint` (the full runs) were not run (delegation prompt: "Don't run
   the full suites; I am the gate").
 
