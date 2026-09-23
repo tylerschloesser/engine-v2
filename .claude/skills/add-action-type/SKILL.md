@@ -148,7 +148,39 @@ bindings so a compile error surfaces in Rust, not as a missing binding.
 and the regenerated `Action` union -- a wrong field name or type fails here, at build time, not at
 runtime inside a browser.
 
-## 6. If an existing golden exercises this action
+## 6. Surface the outcome in `Ui` (optional)
+
+If a page needs to *show* the effect of this action -- a counter, a message, a progress bar --
+rather than only react once to its own `onActionResult`, mirror the changed state into `G::Ui`
+(docs/plan/16b-ui-observation-and-clock.md; `fixtures/puts`'s own `PutsUi`/`PutsClient::ui` is the
+worked example: `SetMotd`/`Puts::tick`'s `Global.day` bump both surface through `motd`/
+`global_ticks`, and `SetNote` surfaces through `note`/`note_until`). Skip this step for an action
+whose only observer is the player who dispatched it and who only needs a one-shot confirm/reject
+(`onActionResult` alone is enough for that).
+
+In `PutsClient::ui(&self, view: &FrameView<'_, Puts>, out: &mut PutsUi)`, read whatever replicated
+state this action wrote (through `view.world()`, a `WorldRead` -- `global()`, or `player(view.me())`
+for the caller's own player-scoped state) and write it into `out`'s matching field:
+
+```rust
+fn ui(&self, view: &FrameView<'_, Puts>, out: &mut PutsUi) {
+    let g = view.world().global();
+    out.motd = g.motd; // whatever field this action's own apply/tick rule wrote
+}
+```
+
+The engine calls this every frame the replica changed, but only actually writes a UI-ring record
+when the value differs from the last one it emitted (`PartialEq`, `UiObserver`'s own policy) -- a
+plain `WorldRead` in wins, no extra bookkeeping on the game's part. A page observes it with
+`client.onUi<PutsUi>((ui) => { ... })`, coalesced to the newest value per drain (never one call per
+action, unlike `onActionResult`) and always delivered before that same drain's own
+`onActionResult` calls.
+
+`type Ui = PutsUi` and `PutsClient` already exist once any action in the fixture surfaces through
+`Ui` -- a later action just adds its own field and reads it here, the same as adding a match arm to
+`apply`.
+
+## 7. If an existing golden exercises this action
 
 Only if a committed `fixtures/<game>/golden/scenario*.json` (a `"script"`-kind scenario) already
 dispatches this exact action, or a native scenario test drives it directly: re-run `pnpm golden
