@@ -91,6 +91,10 @@ declare global {
       stepClientFrameOnly(): void
       acquireAndDraw(): void
       drawCallsNow(): number
+      /** Fix round 1: `pipelineSwitches()`/`instanceBytes()` of `drawablesRenderer`, read directly
+       * (neither was asserted by any test before this round). */
+      pipelineSwitchesNow(): number
+      instanceBytesNow(): number
       /** Fix round 1: the distinct layers the population loop actually dispatched entities to
        * (`[0, 3, 7]`), tracked by the page's own population bookkeeping -- an independent ground
        * truth `counters.draws_equal_nonempty_layers` checks `drawCallsNow()`'s delta against,
@@ -326,6 +330,12 @@ window.__drawablesTest = {
   },
   drawCallsNow() {
     return drawablesDrawCalls(drawablesRenderer)
+  },
+  pipelineSwitchesNow() {
+    return pipelineSwitches(drawablesRenderer)
+  },
+  instanceBytesNow() {
+    return instanceBytes(drawablesRenderer)
   },
   populatedLayers() {
     return POPULATE_LAYERS

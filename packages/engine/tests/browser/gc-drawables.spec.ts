@@ -27,6 +27,8 @@ declare global {
       stepClientFrameOnly(): void
       acquireAndDraw(): void
       drawCallsNow(): number
+      pipelineSwitchesNow(): number
+      instanceBytesNow(): number
       populatedLayers(): number[]
     }
   }
@@ -113,6 +115,39 @@ test('counters.draws_equal_nonempty_layers', async ({ page }, testInfo) => {
   // `render/drawables.ts`'s own layer-count parsing.
   expect((after as number) - (before as number)).toBe((populatedLayers as number[]).length)
   expect(after as number).toBeLessThanOrEqual(budget('counters.render.drawCallsMax'))
+
+  await page.evaluate(() => window.__drawablesTest?.park())
+})
+
+test('counters.pipeline_switches_and_instance_bytes', async ({ page }, testInfo) => {
+  await openPage(page, '/gc-drawables.html')
+  const ready = await page.evaluate(() => window.__gc?.ready)
+  expectAdapter(testInfo, (ready?.adapter as AdapterInfo | null) ?? null)
+
+  await page.evaluate(() => window.__drawablesTest?.resume())
+  await page.evaluate(() => window.__drawablesTest?.stepClientFrameOnly())
+
+  // `pipelineSwitches`: `encodeDraws` sets the uber-quad pipeline at most once per `draw()`/
+  // `encodeInto()` call, regardless of how many of the three populated layers (0, 3, 7) are
+  // non-empty -- `budgets.json`'s own `counters.render.pipelineSwitches` (`1`) is read here, not
+  // hard-coded, so a budget change and this test stay in sync.
+  const pipelineBefore = await page.evaluate(() => window.__drawablesTest?.pipelineSwitchesNow())
+  await page.evaluate(() => window.__drawablesTest?.acquireAndDraw())
+  const pipelineAfter = await page.evaluate(() => window.__drawablesTest?.pipelineSwitchesNow())
+  expect((pipelineAfter as number) - (pipelineBefore as number)).toBeLessThanOrEqual(
+    budget('counters.render.pipelineSwitches'),
+  )
+
+  // `instanceBytes`: the one `queue.writeBuffer` call `acquire()` issues copies exactly
+  // `record_count * 32` bytes (`DRAW_BYTES`, 0018 §2) for the slot it just read -- checked as a
+  // fresh delta around one more `acquire()`, matched against `recordCount()` read immediately
+  // after (the same slot: no publish happens in between).
+  const bytesBefore = await page.evaluate(() => window.__drawablesTest?.instanceBytesNow())
+  await page.evaluate(() => window.__drawablesTest?.acquire())
+  const bytesAfter = await page.evaluate(() => window.__drawablesTest?.instanceBytesNow())
+  const recordCount = await page.evaluate(() => window.__drawablesTest?.recordCount())
+  expect(recordCount as number).toBeGreaterThan(0)
+  expect((bytesAfter as number) - (bytesBefore as number)).toBe((recordCount as number) * 32)
 
   await page.evaluate(() => window.__drawablesTest?.park())
 })
