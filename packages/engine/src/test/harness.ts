@@ -83,6 +83,73 @@ type WorkerHandle = {
   gcExposed: boolean
 }
 
+// M16f (docs/plan/16f-harness-waits-and-sibling-burst.md): every wait below now fails within a
+// bound instead of hanging (M16e's own finding: `gc-loop clean` once hit a bare 30 s Playwright
+// timeout inside this file's `resume`/`park`, docs/plan/16e-park-timeout-diagnosis.md, Deviations
+// "Two natural occurrences"). `POLL_TIMEOUT_MS` matches the bound `src/test/client.ts`'s
+// `pollUntil` already uses; `awaitAck`'s spin keeps its own pre-existing `SPIN_LIMIT`
+// iteration-count bound unchanged (Non-scope) -- only its failure message gains detail. The failure
+// message reuses M16e's shape (`<what>: timed out after <n> [ms|spins] ... workers=[...]`) built
+// only in the reject/throw branch, but names this harness's own step-block fields (`Req`/`Ack`/
+// `State`/`Yield`, `step-block.ts`) rather than `sab/control.ts`'s `W_*` words: a different
+// protocol, per M16e's own Deviations ("not in this milestone's Files list"). A message-wait here
+// (`setupWorker`/`send`/`parkOne`) is a single `setTimeout`, not a macrotask poll, so it has no
+// `turns`/`longestGapMs` to report the way `pollUntil` does -- just the bound and the per-worker
+// snapshot at the moment it fired.
+const POLL_TIMEOUT_MS = 10_000
+
+function now(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now()
+}
+
+/** Per-worker state for a timeout's failure message, read only when a wait is about to fail. */
+type WorkerDiag = {
+  name: string
+  Req: number
+  Ack: number
+  State: number
+  Yield: number
+  armed: boolean
+}
+
+function diagWorkers(handles: Map<string, WorkerHandle>): WorkerDiag[] {
+  const out: WorkerDiag[] = []
+  for (const h of handles.values()) {
+    out.push({
+      name: h.name,
+      Req: Atomics.load(h.sab, StepBlockField.Req),
+      Ack: Atomics.load(h.sab, StepBlockField.Ack),
+      State: Atomics.load(h.sab, StepBlockField.State),
+      Yield: Atomics.load(h.sab, StepBlockField.Yield),
+      armed: h.armed,
+    })
+  }
+  return out
+}
+
+/** A message-wait's timeout (`setupWorker`/`send`/`parkOne`): see the block comment above `WorkerHandle`. */
+function describeTimeout(
+  handles: Map<string, WorkerHandle>,
+  what: string,
+  limitMs: number,
+): string {
+  return `${what}: timed out after ${limitMs} ms workers=${JSON.stringify(diagWorkers(handles))}`
+}
+
+/** `awaitAck`'s own message, once `spins` has already exceeded `SPIN_LIMIT`: same shape
+ * `spinTimeoutMessage` uses in `src/test/client.ts` (M16e, CI round) -- iteration-count bound on
+ * the success path, `now()` read exactly once, only here, never on a periodic check. */
+function spinTimeoutMessage(
+  handles: Map<string, WorkerHandle>,
+  what: string,
+  spins: number,
+): string {
+  return (
+    `${what}: timed out after ${spins} spins (limit ${SPIN_LIMIT}, detectedAtMs=${now().toFixed(1)}) ` +
+    `workers=${JSON.stringify(diagWorkers(handles))}`
+  )
+}
+
 function setupWorker(
   spec: HarnessWorkerSpec,
   module: WebAssembly.Module,
@@ -105,7 +172,16 @@ function setupWorker(
       pending: null,
       gcExposed: false,
     }
-    worker.onerror = (e) => reject(new Error(`harness worker '${spec.name}' error: ${e.message}`))
+    const timer = setTimeout(() => {
+      handle.pending = null
+      reject(
+        new Error(describeTimeout(handles, `harness worker '${spec.name}' setup`, POLL_TIMEOUT_MS)),
+      )
+    }, POLL_TIMEOUT_MS)
+    worker.onerror = (e) => {
+      clearTimeout(timer)
+      reject(new Error(`harness worker '${spec.name}' error: ${e.message}`))
+    }
     worker.onmessage = (ev: MessageEvent<FromWorker>) => {
       const m = ev.data
       if (m.type === 'error') {
@@ -116,11 +192,13 @@ function setupWorker(
       if (!pending) return
       if (m.type === 'setupError') {
         handle.pending = null
+        clearTimeout(timer)
         pending.reject(new Error(`harness worker '${spec.name}': ${m.message}`))
         return
       }
       if (m.type === pending.replyType) {
         handle.pending = null
+        clearTimeout(timer)
         pending.resolve(m)
       }
     }
@@ -203,7 +281,13 @@ export async function createHarness(opts: {
     let spins = 0
     while (Atomics.load(h.sab, StepBlockField.Ack) !== h.seq) {
       if (++spins > SPIN_LIMIT) {
-        throw new Error(`harness: worker '${h.name}' did not ack a step (resume() first?)`)
+        throw new Error(
+          spinTimeoutMessage(
+            handles,
+            `harness: worker '${h.name}' did not ack a step (resume() first?)`,
+            spins,
+          ),
+        )
       }
     }
   }
@@ -226,7 +310,25 @@ export async function createHarness(opts: {
     replyType: T,
   ): Promise<Extract<FromWorker, { type: T }>> {
     return new Promise((resolve, reject) => {
-      h.pending = { replyType, resolve: resolve as (m: FromWorker) => void, reject }
+      const timer = setTimeout(() => {
+        h.pending = null
+        reject(
+          new Error(
+            describeTimeout(handles, `send('${msg.type}') to worker '${h.name}'`, POLL_TIMEOUT_MS),
+          ),
+        )
+      }, POLL_TIMEOUT_MS)
+      h.pending = {
+        replyType,
+        resolve: (m) => {
+          clearTimeout(timer)
+          resolve(m as Extract<FromWorker, { type: T }>)
+        },
+        reject: (e) => {
+          clearTimeout(timer)
+          reject(e)
+        },
+      }
       h.worker.postMessage(msg)
     })
   }
@@ -242,7 +344,21 @@ export async function createHarness(opts: {
   async function parkOne(h: WorkerHandle): Promise<void> {
     if (!h.armed) return
     const reply = new Promise<void>((resolve, reject) => {
-      h.pending = { replyType: 'parked', resolve: () => resolve(), reject }
+      const timer = setTimeout(() => {
+        h.pending = null
+        reject(new Error(describeTimeout(handles, `park('${h.name}')`, POLL_TIMEOUT_MS)))
+      }, POLL_TIMEOUT_MS)
+      h.pending = {
+        replyType: 'parked',
+        resolve: () => {
+          clearTimeout(timer)
+          resolve()
+        },
+        reject: (e) => {
+          clearTimeout(timer)
+          reject(e)
+        },
+      }
     })
     Atomics.store(h.sab, StepBlockField.Yield, 1)
     Atomics.notify(h.sab, StepBlockField.Req)
