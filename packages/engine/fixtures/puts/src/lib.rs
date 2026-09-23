@@ -23,7 +23,7 @@
 //! the same `Sim<Puts>` native tests already drove directly through `tests/*.rs`), so
 //! `puts_idle_100`'s golden becomes `.wasm`-authoritative (0002) instead of native-blessed.
 
-use engine::client::{ClientSide, TileTexel};
+use engine::client::{ClientSide, FrameView, TileTexel};
 use engine::game::{
     Game, PlayerEvent, PlayerId, PresenceTable, TickCx, Unknown, WorldRead, WorldWrite,
 };
@@ -64,6 +64,46 @@ impl ClientSide<Puts> for PutsClient {
         }
         texel
     }
+
+    /// docs/plan/16b-ui-observation-and-clock.md Scope: "what the DOM overlay observes". `motd`/
+    /// `global_ticks` mirror `Global` (visible to every client, 0011 "Scopes"); `note`/
+    /// `note_until` mirror the caller's own `Player` slot (`SetNote`'s own player-scoped put,
+    /// cleared by `Puts::tick`) -- `0`/`0` before the caller's own slot has replicated at all
+    /// (`view.world().player` returns `Unknown` for an unsubscribed/not-yet-seen player), the same
+    /// value a note that was never set or has already expired reads as, so a client never needs to
+    /// distinguish "no note yet" from "not replicated yet". `note_until` crosses as a raw tick
+    /// count (`Tick` itself has no `TS`/`Serialize` derive, 0006 "On the client": "the UI never
+    /// counts ticks itself", so a page pairs this with `client.clock()` to derive remaining time).
+    fn ui(&self, view: &FrameView<'_, Puts>, out: &mut PutsUi) {
+        let g = view.world().global();
+        out.motd = g.motd;
+        out.global_ticks = g.day;
+        match view.world().player(view.me()) {
+            Ok(p) => {
+                out.note = p.note;
+                out.note_until = p.note_until.0;
+            }
+            Err(Unknown) => {
+                out.note = 0;
+                out.note_until = 0;
+            }
+        }
+    }
+}
+
+/// docs/plan/16b-ui-observation-and-clock.md Scope: "`puts` gets `type Ui = PutsUi { motd, note,
+/// note_until, global_ticks }`". `global_ticks` mirrors `Global::day` (the tick rule's own
+/// once-a-simulated-second counter, module doc comment) -- named `_ticks` here, not `_day`, since
+/// the DOM-facing name is this milestone's own to choose and a plain "day" reads oddly as a page
+/// counter that advances every five seconds under `NOTE_TTL_SECS`-scale testing. `#[ts(export)]`:
+/// see `Action`'s own doc comment.
+#[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, TS)]
+#[ts(export)]
+pub struct PutsUi {
+    pub motd: u32,
+    pub note: u32,
+    pub note_until: u32,
+    pub global_ticks: u32,
 }
 
 /// A tile position, plain data (`Action` must stay `Codec + TS`; not `engine::world::TilePos`,
@@ -186,7 +226,7 @@ impl Game for Puts {
     type Player = Player;
     type Global = Global;
     type Presence = ();
-    type Ui = ();
+    type Ui = PutsUi;
     type Client = PutsClient;
 
     fn register(r: &mut Registry) {

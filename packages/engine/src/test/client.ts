@@ -405,6 +405,30 @@ export function dispatchRaw(client: Client, seq: number, jsonBytes: Uint8Array):
   }
 }
 
+const uiBoxes = new WeakMap<Client, { current: unknown }>()
+
+/**
+ * docs/plan/16b-ui-observation-and-clock.md Provides: the most recent value `client.onUi` has
+ * delivered so far (`undefined` before the first one), read-back counterpart of `onUi` for a test
+ * that just wants "what does the page currently see" rather than a log of every value in order
+ * (`Ui` is coalesced to the newest per drain by construction, so a log would only ever grow by one
+ * distinct entry per real change anyway). Subscribes exactly once per `Client` (lazily, on first
+ * call, the same shape `actionResults` below uses), so a call made after a value already arrived
+ * and was coalesced away still sees every value from that point on.
+ */
+export function lastUi<Ui = unknown>(client: Client): Ui | undefined {
+  let box = uiBoxes.get(client)
+  if (!box) {
+    box = { current: undefined }
+    const captured = box
+    client.onUi((ui) => {
+      captured.current = ui
+    })
+    uiBoxes.set(client, box)
+  }
+  return box.current as Ui | undefined
+}
+
 const actionResultLogs = new WeakMap<
   Client,
   Array<{ seq: number; result: ActionOutcome<unknown> }>

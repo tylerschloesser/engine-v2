@@ -3,9 +3,13 @@
 The puts-coverage fixture (docs/decisions/0003-game-facing-api.md Consequences: "the puts cover
 every replicated scope of [0011](../../../../docs/decisions/0011-wire-format-and-deltas.md)").
 M12 (docs/plan/12-store-and-game-trait.md) declares its replicated types only -- `Action`,
-`Reject`, `Entity`, `Player`, `Global` (`Ui` is `()`) -- so `Store<Puts>`/`Delta<Puts>` compile
+`Reject`, `Entity`, `Player`, `Global` (`Ui` was `()`) -- so `Store<Puts>`/`Delta<Puts>` compile
 against a real, non-trivial type set, natively and for `wasm32`. `impl Game` (`register`,
 `prototype`, `anchor`, `genesis`, `on_player`, `apply`, `tick`, the `Sim` role) lands in M12b.
+
+M16b (docs/plan/16b-ui-observation-and-clock.md) gives `Ui` a real shape: `PutsClient::ui` mirrors
+`Global::motd`/`day` (every client) and the caller's own `Player::note`/`note_until` (player-scoped)
+into `PutsUi { motd, note, note_until, global_ticks }` -- `bindings/PutsUi.ts`.
 
 M13 (docs/plan/13-sim-host-tick-loop.md) switches the one line of ABI this fixture writes from
 `engine::export_instance!(Puts)` to `engine::export_game!(Puts)`, which re-points at

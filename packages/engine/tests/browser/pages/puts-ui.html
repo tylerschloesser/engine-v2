@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- suppresses the browser's automatic /favicon.ico request, which openPage() (support/page.ts)
+         would otherwise fail the test on as a console error. -->
+    <link rel="icon" href="data:," />
+    <title>puts-ui</title>
+  </head>
+  <body>
+    <!-- The game-owned DOM overlay (0003 "Game UI is a game-owned DOM overlay; the engine renders
+         no UI widgets"): `src/puts-ui.ts`'s own `client.onUi` handler writes these two elements. -->
+    <div id="global"></div>
+    <div id="progress"></div>
+    <script type="module" src="./src/puts-ui.ts"></script>
+  </body>
+</html>
