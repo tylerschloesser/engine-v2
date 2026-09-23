@@ -92,13 +92,31 @@ pub struct Entity {
 /// page's own way to reach a few hundred entities without hand-writing them into `genesis` (which
 /// stays fixed at its original three, module doc comment -- `drawlist_fixture_hash_golden` and
 /// `drawlist_zoom_threshold_hides_only_the_small_entity` both depend on that exact count). Same
-/// shape as `fx-puts`'s own `Action::Spawn`.
+/// shape as `fx-puts`'s own `Action::Spawn`. `SpawnMany` (steps 4-6, `bench.frame_worstcase`,
+/// "Notes for cut 2": "No bulk-spawn action") is the benchmark's own way to reach a 65,536-record
+/// frame without a one-dispatch-per-entity loop -- always accepted, no rejection path, same as
+/// `Spawn`. Every entity it creates is `small: false` (Known from cut 1, blocker 3:
+/// `SMALL_ZOOM_THRESHOLD` would otherwise drop it at the benchmark's own max-zoom-out camera).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, TS)]
 #[ts(export)]
 pub enum Action {
     Spawn {
         at: Pos,
         small: bool,
+        layer: u8,
+        sprite: bool,
+    },
+    /// A `cols` x `rows` grid of entities, `spacing` tiles apart on both axes, `origin` the
+    /// grid's own top-left tile -- one call spawns `cols * rows` entities in a single admitted
+    /// action, so the benchmark's own setup (`frame-bench.ts`) needs one dispatch per *batch*
+    /// (kept well under the host's own 64 KiB per-tick frame budget, `host::mod::SIM_TX_BYTES`;
+    /// Non-scope here, so batching on the dispatch side is the fix, not growing that constant),
+    /// not one per entity.
+    SpawnMany {
+        origin: Pos,
+        cols: u32,
+        rows: u32,
+        spacing: i32,
         layer: u8,
         sprite: bool,
     },
@@ -220,6 +238,29 @@ impl Game for Drawables {
                 });
                 Ok(())
             }
+            Action::SpawnMany {
+                origin,
+                cols,
+                rows,
+                spacing,
+                layer,
+                sprite,
+            } => {
+                for r in 0..rows {
+                    for c in 0..cols {
+                        w.spawn(Entity {
+                            pos: Pos {
+                                x: origin.x + (c as i32) * spacing,
+                                y: origin.y + (r as i32) * spacing,
+                            },
+                            small: false,
+                            layer,
+                            sprite,
+                        });
+                    }
+                }
+                Ok(())
+            }
         }
     }
 
@@ -231,6 +272,7 @@ impl Game for Drawables {
     ) -> Result<(), Reject> {
         match *a {
             Action::Spawn { .. } => Ok(()),
+            Action::SpawnMany { .. } => Ok(()),
         }
     }
 
