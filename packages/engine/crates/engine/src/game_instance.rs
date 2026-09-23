@@ -12,12 +12,14 @@ use crate::abi::config::HexU64;
 use crate::abi::{Instance, RegionId, RegionLayout, Role, Status};
 use crate::client::upload::RECORD_BYTES;
 use crate::client::{
-    ActionError, CameraBlock, ClientCore, DirtyEvent, InputEvent, InputQueue, TerrainFeed, Uploader,
+    ActionError, CameraBlock, ClientCore, DirtyEvent, InputEvent, InputQueue, TerrainFeed,
+    UiObserver, Uploader,
 };
-use crate::game::{Game, PlayerId};
+use crate::game::{Clocks, FrameView, Game, PlayerId};
 use crate::host::Host;
 use crate::sim::{Applied, Rejected};
 use crate::world::{CacheCapacity, ChunkCoord, ChunkDims};
+use crate::world_access::WorldRead;
 use crate::worldgen::{GenCore, Pristine, Worldgen};
 
 /// `RegionId::Rx`'s size for input on the client role (mirrors `fixtures/terrain`'s own constant,
@@ -141,11 +143,19 @@ pub struct ClientInstance<G: Game> {
     uploader: Box<Uploader<G::Client, G>>,
     input_queue: Box<InputQueue>,
     /// UI-ring bytes staged since the last `client_poll_ui` (docs/plan/16-action-round-trip.md
-    /// Scope): kind-2 (`ActionResults`) records only this milestone; M16b's `onUi` adds kind 1
-    /// into the same buffer. Appended to by `on_frame` (one record per `ClientCore::drain_
-    /// results` entry), copied out and cleared by `client_poll_ui`. Grows only on an action
-    /// result (human rate, 0016 §2's exemption), never on a per-frame path.
+    /// Scope): kind-2 (`ActionResults`) records from `on_frame`, and kind-1 (`Ui`) records from
+    /// `frame`'s own `ui` call policy below (docs/plan/16b-ui-observation-and-clock.md). Copied
+    /// out and cleared by `client_poll_ui`; each kind grows this only at its own event's rate
+    /// (action result, or a real `Ui` change), never on a per-frame path with nothing to report.
     ui_buf: Vec<u8>,
+    /// The game's own per-client-frame hooks (0003 `ClientSide<G>`): constructed once with
+    /// `Default` and lives for the instance (docs/plan/16b-ui-observation-and-clock.md Scope: "`G
+    /// ::Client` is constructed with `Default` at client init and lives for the instance"). `frame`
+    /// (M18) and `extract` (M17) are still no-ops; `ui` is real as of this milestone.
+    client: G::Client,
+    /// The `ui` call policy's own state (docs/plan/16b-ui-observation-and-clock.md): the reused
+    /// `G::Ui` pair, the client-side dirty flag and the "since the last call" mutation counter.
+    ui: UiObserver<G>,
 }
 
 impl<G: Game> ClientInstance<G> {
@@ -190,6 +200,8 @@ impl<G: Game> ClientInstance<G> {
             uploader,
             input_queue: Box::new(InputQueue::new()),
             ui_buf: Vec::new(),
+            client: G::Client::default(),
+            ui: UiObserver::new(),
         })
     }
 }
@@ -319,6 +331,29 @@ where
                 c.feed.on_frame(camera, terrain);
                 c.uploader.on_frame(camera, terrain);
                 c.input_queue.clear();
+
+                // docs/plan/16b-ui-observation-and-clock.md Scope: "inside frame(t_ms) ... iff a
+                // frame mutated the replica since the last call or the client-side dirty flag is
+                // set". By the time this runs, every `on_frame` applied since the last `frame`
+                // call has already landed on the replica (separate ABI export, driven by the net
+                // pump each wake, docs/plan/15b-ring-connection-and-replica-rendering.md), so
+                // `ClientCore::mutations()` already reflects them.
+                let ClientInstance {
+                    core,
+                    client,
+                    ui,
+                    ui_buf,
+                    ..
+                } = c;
+                let mutations = core.mutations();
+                let replica = core.view();
+                let clocks = Clocks {
+                    authoritative: replica.tick(),
+                    predicted: replica.tick(), // = authoritative until M26
+                };
+                let me = replica.own_player();
+                let view = FrameView::new(replica as &dyn WorldRead<G>, clocks, me);
+                ui.maybe_run(client, &view, mutations, ui_buf);
                 Status::Ok
             }
             _ => Status::Unsupported,
