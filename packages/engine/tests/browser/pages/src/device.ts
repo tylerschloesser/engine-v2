@@ -25,7 +25,7 @@
 // `client.camera.read()`.
 import { pxPerTile } from '../../../../src/camera/transform.ts'
 import type { Client, ClientOptions, RenderOptions } from '../../../../src/client.ts'
-import { createClient } from '../../../../src/client.ts'
+import { clientTestHandle, createClient } from '../../../../src/client.ts'
 import type { Scheduler } from '../../../../src/clock.ts'
 import { systemClock, systemScheduler } from '../../../../src/clock.ts'
 import type { FramePhase, RealFrameLoop } from '../../../../src/frame-loop.ts'
@@ -36,15 +36,37 @@ import {
 } from '../../../../src/frame-loop.ts'
 import { installPageStyles } from '../../../../src/input/page-css.ts'
 import { loadTileArt } from '../../../../src/render/art.ts'
+import { loadSpriteAtlas } from '../../../../src/render/atlas.ts'
 import type { AdapterInfo, RendererDevice } from '../../../../src/render/device.ts'
 import { initDevice } from '../../../../src/render/device.ts'
+import {
+  attachDrawables,
+  createDrawablesRenderer,
+  type DrawablesRenderer,
+} from '../../../../src/render/drawables.ts'
 import type { TerrainRenderer } from '../../../../src/render/terrain.ts'
 import { createTerrainRenderer } from '../../../../src/render/terrain.ts'
+import {
+  asHarness,
+  dispatchRaw,
+  pumpUntilLive,
+  stepSimTickSync,
+} from '../../../../src/test/client.ts'
 import { fixtureWasm } from './fixture-wasm.ts'
 
 declare global {
   interface Window {
     __pageReady?: true
+    /** `?harness=1` (docs/plan/17b-sprites-and-frame-budget.md, Planning decisions "Manual harness
+     * shape"): Tyler's own troubleshooting via the Playwright CLI skill; the HUD text is the primary
+     * output (`docs/plan/device-checks.md`, M17b: read from the browser's own DevTools UI, not this
+     * hook). */
+    __deviceHarness?: {
+      errors(): string[]
+      viewProbePasses: boolean
+      sabWriteTextureOk: boolean
+      memoryBytes(): Record<string, number>
+    }
   }
 }
 
@@ -393,7 +415,203 @@ async function runMemoryProbe(): Promise<void> {
   say('probe=memory: complete')
 }
 
-if (params.get('probe') === 'memory') {
+// --- `?harness=1` (docs/plan/17b-sprites-and-frame-budget.md, Planning decisions "Manual harness
+// shape"; docs/plan/device-checks.md, M17b: desktop Safari and Firefox, closing 0018 Consequences'
+// deferral -- "the CDP instrument of 0016 is Chromium-only"). A real, connected `fx-drawables`
+// client (`gc-drawables.ts`'s own topology, TerrainRenderer + DrawablesRenderer + sprite atlas)
+// stepped -- not real rAF: Tyler drives this from his own DevTools "record" button, so a fast,
+// deterministic step count (`engine/test.stepFrame`, the same lockstep every zero-GC page uses) is
+// what lets the recording bracket exactly this page's own work, unlike `device.html`'s default real-
+// rAF HUD mode -- through 120 warm-up frames then 600 measured frames, then prints every probe the
+// deferral named: any `uncapturederror`, the `GPUTexture`-as-view probe, whether `writeTexture`
+// accepted a SAB-backed view (or the staged-copy path engaged, `render/upload.ts`), whether
+// `writeBuffer` from a SAB-backed view (`drawablesRenderer.acquire()`, real production path) ran
+// error-free, and `memory.buffer.byteLength` per instance (`engine/test.memoryBytes`, already a SAB
+// read -- no worker round trip needed).
+const HARNESS_WARMUP_FRAMES = 120
+const HARNESS_MEASURED_FRAMES = 600
+
+async function runHarness(): Promise<void> {
+  const hudEl = document.getElementById('hud') as HTMLPreElement
+  const log: string[] = []
+  function report(): void {
+    hudEl.textContent = log.join('\n')
+  }
+  function say(line: string): void {
+    log.push(line)
+    report()
+  }
+  say('device.html?harness=1: starting…')
+
+  const harnessWasm = await fixtureWasm('drawables')
+  const canvas = document.createElement('canvas')
+  document.body.appendChild(canvas)
+
+  const device: RendererDevice = await initDevice()
+  const gpuApi = (navigator as unknown as { gpu: GPU }).gpu
+  const colorFormat = gpuApi.getPreferredCanvasFormat()
+  const renderer: TerrainRenderer = await createTerrainRenderer(device.device, {
+    colorFormat,
+    viewProbePasses: device.viewProbePasses,
+    checkCompilation: device.checkCompilation,
+  })
+  const assets = { tiles: '/terrain/tiles.json', sprites: '/drawables/sprites.json' }
+  const art = await loadTileArt(device.device, assets.tiles, {
+    checkCompilation: device.checkCompilation,
+  })
+  renderer.setTileArray(art.texture, art.gpuBytes)
+  renderer.writeVisualTable(art.visualTableBytes)
+
+  const client: Client = createClient({
+    canvas,
+    wasm: harnessWasm,
+    host: {
+      kind: 'local',
+      world: { worldId: 'harness', params: { seed: '1', worldgen: null } },
+      connect: true,
+    },
+    genWorkers: 1,
+    assets,
+  })
+  await pumpUntilLive(client)
+  const harness = asHarness(client)
+
+  const drawListSab = clientTestHandle(client).sabs.drawList
+  const drawablesRenderer: DrawablesRenderer = await createDrawablesRenderer(device.device, {
+    colorFormat,
+    drawListSab,
+    checkCompilation: device.checkCompilation,
+  })
+  attachDrawables(renderer, drawablesRenderer)
+  const spriteAtlas = await loadSpriteAtlas(device.device, assets.sprites, {
+    checkCompilation: device.checkCompilation,
+  })
+  drawablesRenderer.setSpriteAtlas(spriteAtlas)
+
+  // A modest population (`gc-drawables.ts`'s own precedent, not M17b's own 65,536-record worst
+  // case): this check is about the SAB/GPUTexture probes and allocation growth over the step count,
+  // not frame time (`bench.frame_worstcase` owns that).
+  const cameraState = client.cameraState
+  cameraState.centreX = 0
+  cameraState.centreY = 0
+  cameraState.tilesAcross = 24
+  cameraState.halfExtentTilesX = 120
+  cameraState.halfExtentTilesY = 120
+  const POPULATE_COUNT = 300
+  const GRID_COLS = 20
+  const GRID_SPACING = 4
+  let seq = 1
+  for (let i = 0; i < POPULATE_COUNT; i++) {
+    const gx = i % GRID_COLS
+    const gy = Math.floor(i / GRID_COLS)
+    const x = (gx - GRID_COLS / 2) * GRID_SPACING
+    const y = (gy - Math.ceil(POPULATE_COUNT / GRID_COLS) / 2) * GRID_SPACING
+    const sprite = i % 10 === 0
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({ Spawn: { at: { x, y }, small: false, layer: 0, sprite } }),
+    )
+    dispatchRaw(client, seq, bytes)
+    seq += 1
+    harness.stepFrame(1000 / 60)
+    stepSimTickSync(client, 1)
+  }
+  harness.stepFrame(1000 / 60)
+  stepSimTickSync(client, 1)
+  harness.stepTick()
+
+  const target = device.device.createTexture({
+    size: [64, 64],
+    format: colorFormat,
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+  })
+  renderer.frameUniform.viewportPxW = 64
+  renderer.frameUniform.viewportPxH = 64
+  drawablesRenderer.writeFrameUniform({
+    camTileX: 0,
+    camTileY: 0,
+    camFracX: 0,
+    camFracY: 0,
+    windowOriginX: 0,
+    windowOriginY: 0,
+    cursorTileX: 0,
+    cursorTileY: 0,
+    viewportPxW: 64,
+    viewportPxH: 64,
+    tilesPerPx: 1 / 8,
+    cursorValid: 0,
+  })
+
+  function driveOne(): void {
+    harness.stepFrame(1000 / 60)
+    stepSimTickSync(client, 1)
+    harness.stepTick()
+    drawablesRenderer.acquire() // the real SAB-backed writeBuffer path this check reports on
+    renderer.writeFrameUniform(renderer.frameUniform)
+    renderer.draw(target)
+  }
+
+  // `docs/plan/device-checks.md`'s own M17b steps: "record, press 'run' on the page, stop after it
+  // prints" -- setup (above) is one-time and not what the check measures, so it runs immediately;
+  // the actual warm-up + measured steps wait for this button, so Tyler's own DevTools recording
+  // (started first) brackets only the work being checked.
+  say('setup complete -- press Run to start the 120 warm-up + 600 measured frames.')
+  const runButton = document.createElement('button')
+  runButton.textContent = 'Run'
+  runButton.id = 'harness-run'
+  // Plain in-flow elements paint under a `position: fixed` canvas regardless of DOM order (CSS
+  // paint order: positioned descendants paint after non-positioned ones) -- `device.html`'s own
+  // canvas covers the whole viewport, so without this the button exists but nothing can click it
+  // (found running this step's own Chromium verification: Playwright's `click()` reported "canvas
+  // intercepts pointer events" until this was added).
+  runButton.style.cssText =
+    'position:fixed;top:8px;right:8px;z-index:1000;font:14px ui-monospace,monospace;padding:6px 14px;'
+  document.body.appendChild(runButton)
+  // Setup (the awaits above -- WASM/device/asset loading, population) is what `window.__pageReady`
+  // conventionally marks the end of (`packages/engine/CLAUDE.md`, "Adding a browser spec"); the
+  // button click below is a manual gate on top of that, not part of it, so `__pageReady` fires here,
+  // not after the click (nothing automated opens this page in `harness=1` mode today, but a Node
+  // script driving it by hand, per the binding rule this step was built under, still needs a real
+  // signal to click "Run" against instead of guessing a timeout).
+  window.__pageReady = true
+  await new Promise<void>((resolve) => {
+    runButton.addEventListener('click', () => resolve(), { once: true })
+  })
+  runButton.remove()
+
+  say(`warm-up: ${HARNESS_WARMUP_FRAMES} frames…`)
+  for (let i = 0; i < HARNESS_WARMUP_FRAMES; i++) driveOne()
+
+  say(`measured: ${HARNESS_MEASURED_FRAMES} frames…`)
+  for (let i = 0; i < HARNESS_MEASURED_FRAMES; i++) driveOne()
+
+  const memBytes = await harness.memoryBytes()
+  const errors = device.errors()
+  say('')
+  say('harness=1 result (stop your DevTools recording now):')
+  say(`  uncapturederror: ${errors.length === 0 ? 'none' : JSON.stringify(errors)}`)
+  say(`  GPUTexture-as-view probe: ${device.viewProbePasses}`)
+  say(
+    `  writeTexture from SAB view: ${device.sabWriteTextureOk ? 'accepted' : 'rejected (staged-copy path engaged)'}`,
+  )
+  say(
+    `  writeBuffer from SAB view (drawablesRenderer.acquire, ` +
+      `${HARNESS_WARMUP_FRAMES + HARNESS_MEASURED_FRAMES} calls): ` +
+      `${errors.length === 0 ? 'accepted (no uncapturederror)' : 'see uncapturederror above'}`,
+  )
+  say('  memory.buffer.byteLength per instance:')
+  for (const [name, bytes] of Object.entries(memBytes)) say(`    ${name}: ${bytes}`)
+
+  window.__deviceHarness = {
+    errors: () => errors,
+    viewProbePasses: device.viewProbePasses,
+    sabWriteTextureOk: device.sabWriteTextureOk,
+    memoryBytes: () => memBytes,
+  }
+}
+
+if (params.get('harness') === '1') {
+  await runHarness()
+} else if (params.get('probe') === 'memory') {
   await runMemoryProbe()
 } else {
   await runFillRateHud()
