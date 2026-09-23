@@ -1,9 +1,11 @@
-//! Fixture game `fx-drawables` (docs/plan/17-drawlist-and-sprites.md, step 2): a `Game` whose only
-//! interesting behaviour is `ClientSide::extract` -- one circle per replica entity, skipping the
-//! smallest ones above a zoom threshold (`frameview.zoom_matches_camera_block`'s own coverage:
-//! "the record count and DrawList hash change across it and nowhere else"). `apply`/`tick` do
-//! nothing; every entity is spawned once, at `genesis`, at a fixed position -- this fixture exists
-//! to exercise `FrameView::entities()`/`DrawList` deterministically, not to be a realistic game.
+//! Fixture game `fx-drawables` (docs/plan/17-drawlist-and-sprites.md, steps 2 and 6): a `Game` whose
+//! only interesting behaviour is `ClientSide::extract` -- one circle per replica entity, skipping
+//! the smallest ones above a zoom threshold (`frameview.zoom_matches_camera_block`'s own coverage:
+//! "the record count and DrawList hash change across it and nowhere else"). `genesis` still spawns
+//! exactly three fixed entities (unchanged since step 2: `drawlist_fixture_hash_golden`/
+//! `drawlist_zoom_threshold_hides_only_the_small_entity` depend on that count); the one `Action`,
+//! `Spawn` (step 6), is how the `drawables` zero-GC page reaches a few hundred entities without
+//! touching `genesis` -- always accepted, no rejection path. `tick` does nothing.
 
 use engine::client::{ClientSide, DrawList, FrameView};
 use engine::game::{
@@ -40,10 +42,16 @@ pub struct Entity {
     pub small: bool,
 }
 
-/// No real actions: this fixture's own state is fixed at `genesis` (module doc comment).
+/// One action, `Spawn` (docs/plan/17-drawlist-and-sprites.md step 6): the zero-GC `drawables` page's
+/// own way to reach a few hundred entities without hand-writing them into `genesis` (which stays
+/// fixed at its original three, module doc comment -- `drawlist_fixture_hash_golden` and
+/// `drawlist_zoom_threshold_hides_only_the_small_entity` both depend on that exact count). Same
+/// shape as `fx-puts`'s own `Action::Spawn`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, TS)]
 #[ts(export)]
-pub enum Action {}
+pub enum Action {
+    Spawn { at: Pos, small: bool },
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, TS)]
 #[ts(export)]
@@ -134,8 +142,13 @@ impl Game for Drawables {
 
     fn on_player(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _ev: PlayerEvent) {}
 
-    fn apply(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, a: &Action) -> Result<(), Reject> {
-        match *a {}
+    fn apply(w: &mut dyn WorldWrite<Self>, _who: PlayerId, a: &Action) -> Result<(), Reject> {
+        match *a {
+            Action::Spawn { at, small } => {
+                w.spawn(Entity { pos: at, small });
+                Ok(())
+            }
+        }
     }
 
     fn admit(
@@ -144,7 +157,9 @@ impl Game for Drawables {
         _who: PlayerId,
         a: &Action,
     ) -> Result<(), Reject> {
-        match *a {}
+        match *a {
+            Action::Spawn { .. } => Ok(()),
+        }
     }
 
     fn tick(_cx: &mut TickCx<'_, Self>) {}

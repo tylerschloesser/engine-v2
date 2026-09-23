@@ -25,6 +25,7 @@ const INSTANCE_BUFFER_BYTES = CAPACITY * DRAW_BYTES
 // Header field offsets (`client/drawlist.rs`'s own `OFF_*`; Planning decisions "Slot header is
 // 1,024 bytes"): the four this renderer reads. `frame_seq`/`dropped`/`frame_time_ms` are read too
 // (`drawListDropped()`), everything else (follow/anchors, M18/M19) is untouched here.
+const OFF_FRAME_SEQ = 0
 const OFF_RECORD_COUNT = 4
 const OFF_WINDOW_ORIGIN = 8
 const OFF_LAYER_COUNT = 16
@@ -170,6 +171,19 @@ export interface DrawablesRenderer {
    * field (`client/drawlist.rs`'s `DrawList::dropped()`, published every frame) -- not cumulative,
    * a plain pass-through of whatever the most recent `acquire()`/`acquireFromBytes()` read. */
   drawListDropped(): number
+  /** Test-only (docs/plan/17-drawlist-and-sprites.md Tests added: `drawlist.triple_newest_wins`):
+   * the last-acquired slot's own header `frame_seq` field, read through this renderer's own
+   * `TripleReader` -- never build a second, independent `TripleReader` over the same `drawList` SAB
+   * to check this (`sab/triple.ts`'s own `acquire()` mutates shared triple-buffer state on every
+   * call, so two readers racing each other tear the "current front slot" handoff). */
+  frameSeq(): number
+  /** Test-only: the last-acquired slot's own header `record_count` field. */
+  recordCount(): number
+  /** Test-only (docs/plan/17-drawlist-and-sprites.md Tests added: `counters.draws_equal_nonempty_
+   * layers`): how many of the last-acquired slot's 8 `layer_count` entries are non-zero -- a plain
+   * count, not the array itself, so a caller never allocates to ask "how many draws should this
+   * frame have issued". */
+  nonEmptyLayerCount(): number
 }
 
 function isTextureView(t: GPUTexture | GPUTextureView): t is GPUTextureView {
@@ -244,6 +258,8 @@ export async function createDrawablesRenderer(
   const layerCounts = new Uint32Array(LAYER_COUNT)
   const layerFirst = new Uint32Array(LAYER_COUNT)
   let lastDropped = 0
+  let lastFrameSeq = 0
+  let lastRecordCount = 0
   let drawCallCount = 0
   let instanceByteTotal = 0
   let pipelineSwitchCount = 0
@@ -275,6 +291,8 @@ export async function createDrawablesRenderer(
   function acquireCore(header: DataView, body: Uint8Array, recordCount: number): void {
     const bytes = recordCount * DRAW_BYTES
     lastDropped = header.getUint32(OFF_DROPPED, true)
+    lastFrameSeq = header.getUint32(OFF_FRAME_SEQ, true)
+    lastRecordCount = recordCount
     void header.getInt32(OFF_WINDOW_ORIGIN, true) // read for parity with the header shape; unused
     // here (the DrawFrame uniform's own `windowOriginX/Y` is written by the caller, not derived
     // from this header -- `window_origin` changes only when the DrawList is republished, and a
@@ -372,6 +390,20 @@ export async function createDrawablesRenderer(
 
     drawListDropped() {
       return lastDropped
+    },
+
+    frameSeq() {
+      return lastFrameSeq
+    },
+
+    recordCount() {
+      return lastRecordCount
+    },
+
+    nonEmptyLayerCount() {
+      let n = 0
+      for (let i = 0; i < LAYER_COUNT; i++) if ((layerCounts[i] as number) > 0) n++
+      return n
     },
   }
 }

@@ -335,6 +335,43 @@
             }
           }
         }
+      },
+      "drawables": {
+        "isolates": {
+          "main": {
+            "class": "strict",
+            "bytesPerFrame": 117,
+            "formula": "0016 §1's formula (`ceil(measured clean) + 8 B` margin, no attribution), `terrain`/`connected-terrain`'s own shape: a real WebGPU adapter, so the 110 B floor applies. Wrapper count stays `terrain`'s own 3 (encoder, pass, command buffer per `TerrainRenderer.draw()` call): `drawablesRenderer.acquire()`'s own `queue.writeBuffer` and `encodeInto`'s `pass.setPipeline`/`setBindGroup`/`setVertexBuffer`/`draw` calls return nothing, so they add no new wrapper object, only one more WebGPU-touching task. Measured (`playwright test --project gc --grep \"drawables clean\" --repeat-each 8 --workers 1`, this machine): 107.9667-108.2133 B/frame across 8 clean runs (`byFn`: `draw@terrain` 28800 B, `drain@wgsl.generated` 12000 B, `stepFrame@client` ~7200 B -- `terrain`'s own three sites, unchanged -- plus `pollActionResults@client-*` ~1280 B, the `EXTRA_SPAWN` dispatch's own result parse, `gc-slice.ts`'s own precedent). ceil(108.2133) = 109, + 8 B margin = 117.",
+            "attributionRoots": ["drive"]
+          },
+          "client": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the shared \"8 B\" worker figure every other page's client/gen0/sim row uses. Measured: a constant 0.8133 B/frame across 8 clean runs, well under 8 -- the client worker's own drawlist-publish pump (`worker/client-drawlist.ts`) costs nothing extra here beyond what `terrain`/`connected-terrain`'s own client row already measures.",
+            "attributionRoots": ["body"]
+          },
+          "sim": {
+            "class": "strict",
+            "bytesPerFrame": 13,
+            "formula": "`connected-terrain`/`zero_gc_action`'s own shape (a real connected host tick, subscription admission, snapshot/downlink building over an active `RingConnection`), not the shared \"8 B\" figure -- `ceil(measured clean) + 8 B` margin, no attribution. Measured (`playwright test --project gc --grep \"drawables clean\" --repeat-each 8 --workers 1`, this machine): 4.6667-4.9333 B/frame across 8 clean runs (lower than `connected-terrain`'s own 6.46-8.19: this page's own `EXTRA_SPAWN` dispatch is rarer, once per 30 frames, and every populated entity's own chunk stays subscribed the whole run, so no new-chunk admission churn). ceil(4.9333) = 5, + 8 B margin = 13.",
+            "attributionRoots": ["body"]
+          },
+          "gen0": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the shared \"8 B\" worker figure every other page's client/gen0/sim row uses. Measured: a constant 0.8133 B/frame across 8 clean runs, well under 8 -- this page's own wide, static camera generates its own chunk set once during setup (exempt, one-time) and pans within it, so `gen0` sees little traffic inside the measured window.",
+            "attributionRoots": ["body"]
+          }
+        },
+        "software": {
+          "frames": 600,
+          "isolates": {
+            "main": {
+              "attributedBytesPerFrame": 91,
+              "formula": "ADR 0029: software mode attributes only `main` via `attributionRoots` (`[\"drive\"]`), every other isolate uses raw bytes in both modes. Measured (`GC_MODE=software playwright test --project gc --grep \"drawables clean\" --repeat-each 6 --workers 1`, this machine): a tight 82.02-82.0467 B/frame attributed across 6 clean runs. ceil(82.0467) = 83, + 8 B margin = 91."
+            }
+          }
+        }
       }
     }
   },
@@ -351,7 +388,9 @@
     "render": {
       "uploadBytesPerFrame": 65536,
       "drawCallsTerrain": 1,
-      "formula": "docs/decisions/0018-renderer.md \u00a73: 'drained from the upload ring at frame start under a byte budget (default 64 KiB per frame)' -- `render/upload.ts`'s own `DEFAULT_UPLOAD_BUDGET_BYTES` (64 * 1024). `drawCallsTerrain` is 0018 \u00a71's 'constant draws' invariant for this milestone's shader: one full-viewport triangle, one draw, regardless of upload traffic (`terrain.upload_budget_while_panning` asserts `drawCalls() === 1` after 600 stepped, panning frames)."
+      "drawCallsMax": 9,
+      "pipelineSwitches": 1,
+      "formula": "docs/decisions/0018-renderer.md \u00a73: 'drained from the upload ring at frame start under a byte budget (default 64 KiB per frame)' -- `render/upload.ts`'s own `DEFAULT_UPLOAD_BUDGET_BYTES` (64 * 1024). `drawCallsTerrain` is 0018 \u00a71's 'constant draws' invariant for this milestone's shader: one full-viewport triangle, one draw, regardless of upload traffic (`terrain.upload_budget_while_panning` asserts `drawCalls() === 1` after 600 stepped, panning frames). `drawCallsMax` (docs/plan/17-drawlist-and-sprites.md Exit criteria): `drawCallsTerrain` (1) + one instanced draw per non-empty DrawList layer (0..8) = 9 worst case. `pipelineSwitches`: `render/drawables.ts`'s own `encodeDraws` calls `pass.setPipeline(uberquadPipeline)` at most once per frame regardless of how many layers are non-empty (Scope: 'one instanced draw ... per non-empty layer' through one shared pipeline, not one switch per layer)."
     },
     "subscription": {
       "joinWildernessBytesDown": 63,
