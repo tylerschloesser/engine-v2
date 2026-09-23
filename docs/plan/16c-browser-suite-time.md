@@ -157,3 +157,53 @@ milestone's Files touched (owned by M13/M15b/ADR 0030) -- Scope 2 below is bound
 
 Warm-up is **~83 %** of `measure()`'s own time and dwarfs the two 600-frame measured windows 0028
 protects (~110 ms each, ~13 % combined) -- the per-test fixed cost Scope 3 targets.
+
+### Step 2: shrink `vertical_slice` -- attempted, reverted, escalated
+
+**Attempted**: changed the phase-4 threshold from `expect.poll(tick).toBeGreaterThanOrEqual(50)` to
+`toBeGreaterThanOrEqual(1)`. Justification, measured: because the tick count does not climb
+gradually while starved (it holds at exactly `1`, then jumps straight past 50 in one burst -- Step
+1's own table), every threshold between 2 and the burst's landing value resolves at the *identical*
+wall-clock moment; the real, cheaper event is phase 3's own `chunkEntersPristine` condition, which --
+across 30 sequential runs measured (quiet and `--load 10`, `--repeat-each`, `--workers 1`) -- never
+resolved with `tick` below 1, and all 30 passed. Every phase's own assertion was unchanged;
+`__sliceSettle`/`__probeTile` untouched. Result on those 30 runs: `vertical_slice` fell from
+5704-5732 ms to 3687-3752 ms (35 % cut) -- still not under the 3 s budget (see below), but a real
+improvement with no failure in 30 sequential tries.
+
+**Reverted.** `node scripts/repeat.mjs browser 8 --load 10` (the brief's own verification command,
+run by this session, not sequential single-test repeats) found **2/8 full-suite runs failing** with
+`vertical_slice`'s own pre-existing pixel race: `expectPixel(8, 8) channel r: got 34, want 30` --
+exactly the Phase-5 post-paint flake `docs/plan/16-action-round-trip.md`'s own gate-round fix
+(`__sliceSettle`/atomic `__probeTile`) was built to close. **Isolated to this change**: the identical
+command, same machine, immediately before/after (stash/pop, no other code difference) --
+`WARMUP=4000` alone (this milestone's own Step 3, present in both legs) -- read `pass=6 fail=2
+hang=0` with the threshold-1 change and **`pass=8 fail=0 hang=0` on the unmodified base** (`4ab945e`)
+under the same `--load 10` invocation run back to back. The change is reverted;
+`vertical-slice.spec.ts` is byte-identical to base.
+
+**Why**: the old `>= 50` wait was never just "waiting for a number" -- it also spent ~2-3 s of real
+wall-clock time letting Phase 3's own chunk-generation/upload backlog (created by the real drag pan)
+fully drain before Phase 5 probes a *different* tile. `__sliceSettle`'s own `untilQuiescent` is
+supposed to make that draining deterministic regardless of elapsed real time, but resolving Phase 4
+near-instantly moves Phase 5's own probe much closer, in wall-clock terms, to Phase 3's burst of
+activity -- and under `--load 10` specifically, `__sliceSettle`'s own ring-drain check is
+apparently satisfiable at a moment when a *subsequent* production frame can still race the very next
+probe, reproducing the exact class of race M16's own Deviations ("A rare, unreproduced-on-demand
+race was observed once") already flagged as not fully understood. This is a **real, load-dependent
+regression this change would have introduced**, not a flake in the test itself -- caught only
+because this milestone's own verification command (`repeat.mjs ... --load 10`) is exactly the tool
+built to catch it, and not by the 30 sequential single-test runs above (which never reproduced it).
+
+**Left in place, not attempted further**: the underlying cost (Phase 3's own poll, gated by the same
+`worker/sim.ts` `wokenBy === lastWokenBy` stall Step 1 attributes it to) remains ~0.4-2.9 s of
+genuinely idle real time on every run, `worker/sim.ts` is outside this milestone's Files touched
+(owned by M13/M15b/ADR 0030), and `slice.ts`'s own render-loop cadence is the same script Tyler's
+device check opens (`docs/plan/device-checks.md`, "M16: Vertical slice on the phone") -- changing it
+to make the test faster would change the real page's own behaviour under Tyler's hands, not shrink a
+test-only cost. **`vertical_slice` stays at its base 5704-5732 ms and above the 3 s line.** This
+exit criterion is unmet; **decision needed from the orchestrator** (see report). The suite-level
+Goal (quiet `pnpm test browser` under 25 s) is still met regardless, on Step 3 alone (below) --
+`vertical_slice`'s own individual budget and the suite's own wall-clock budget turned out to be
+separable.
+
