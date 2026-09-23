@@ -89,4 +89,236 @@ Sprites and the atlas (M17b). Picking (M18 reads the same slot). `FrameCx`, `Cli
 None (M17b carries the manual Safari/Firefox run).
 
 ## Deviations
-(filled in during Phase 3)
+
+**This section covers steps 1-3 only** (commits `M17 step 1: ...`, `M17 step 2: ...`, `M17 step 3:
+...`, base `6a84f10`). Steps 4-6 (main acquire/draw, kinds, ghost, counters, zero-GC page, final
+number) are a second implementer's, built against the exact seam shapes below.
+
+### Header, as landed (`client/drawlist.rs`)
+
+The 1,024-byte layout is exactly the brief's own Planning decisions table. This cut writes six
+fields: `frame_seq` (0, `u32`, wraps every `begin_frame`), `record_count` (4, `u32`), `window_origin`
+(8, `i32`x2), `layer_count` (16, `u32`x8), `dropped` (88, `u32`), `frame_time_ms` (96, `f64`). Every
+other field (`follow_valid` 48, `flags` 52, `follow` 56, `camera_seq` 72, `anchor_mask` 76, `anchors`
+128..640) is left at its zero-initialised default -- reserved for M18 (follow/anchors) and M19
+(presences); nothing in this cut ever writes them, including `flags` at 52, whose owner the brief
+does not name (Non-scope reads as M18's, by elimination with `camera_seq`/`anchor_mask`).
+
+### `usedBytes`/block count: `drawlist_len()` and where the arithmetic lives
+
+`Instance::drawlist_len(&mut self) -> u32` (new, `ABI_VERSION` 14 -> 15) returns `DrawList::
+record_count()` -- **records, not bytes**. `worker/client-drawlist.ts`'s `createDrawlistPump`
+computes `usedBytes = recordCount * 32` (`Draw::BYTES`, duplicated as a local `DRAW_BYTES` const
+with a comment, the same "an owning milestone may revise its row" allowance `client-upload.ts`'s
+`RECORD_BYTES` already uses) and `blocks = Math.ceil(usedBytes / BLOCK_BYTES)`. The header (1,024 B)
+is always copied whole, in one `copyBytes` call; each body block is copied only up to `min(BLOCK_
+BYTES, usedBytes - blockStart)`, so a frame with e.g. 300 records (9,600 B) copies one 64 KiB block,
+not 2 MiB, matching Planning decisions "Proportional publish" exactly. `sab/layout.ts`'s
+`DRAWLIST_HEADER_BYTES`/`DRAWLIST_BODY_BYTES` and `sab/triple.ts`'s `BLOCK_BYTES` are now exported
+(were private consts) so the pump and `test/client.ts`'s two new helpers don't each carry a third
+copy of the same two numbers.
+
+### `ABI_VERSION` 14 -> 15
+
+`drawlist_len() -> u32`: client role, zero params, `Status`-free ("always answer, cost nothing" --
+`0` on a wrong role or before the first `frame()` call, same shape as `sim_warm_one`/`upload_stage`).
+No region crosses. `src/abi.ts`'s `ABI_EXPORTS.drawlist_len = { role: 'client', params: 0, result:
+'u32' }`.
+
+### `drawListHash`/`drawListRecords`: exact definitions (`engine/test`, `test/client.ts`)
+
+Not specified by the brief beyond "hash of header fields + used body bytes" -- this cut's own
+reading, and it does **not** attempt to match `crates/engine`'s `Fnv64` bit for bit (no cross-
+runtime equality requirement was named for this specific hash, unlike `sim_hash`/`worldHash`).
+`drawListHash(client): string` reads the newest slot directly off the SAB (`TripleReader`, no
+worker round trip -- `netCounters`'s own ring-read precedent) and computes two independent 32-bit
+FNV-1a passes (no `BigInt`, `.claude/rules/hot-paths.md`'s own reasoning for avoiding it even
+though this is test-only code) over the **whole 1,024-byte header** (`frame_seq`/`frame_time_ms`
+included -- unlike the native `drawlist_fixture_hash_golden`'s own `assert_golden_bytes!`, which
+also hashes/pins the whole slice for the same reason) **plus** `record_count * 32` body bytes,
+returned as 16 lowercase hex digits (`sim_hash`/`worldHash`'s own format). `drawListRecords(client,
+out: DrawRecord[]): number` clears `out` and decodes every record's nine fields (`pos`, `size`,
+`kind`, `spriteId`, `layer`, `flags`, `color`, `param`, `pickId`), returning the count -- one object
+allocated per record, fine under the `src/test/**` exemption.
+
+### `FrameView<'a, G>`: exact grown shape (`client/frame_view.rs`)
+
+```rust
+pub struct Clocks { pub authoritative: Tick, pub predicted: Tick, pub tick_fraction: f32, pub ticks_per_second: u32 }  // Eq dropped (f32)
+
+pub struct EntityIter<'a, G: Game> { /* private */ }
+impl<'a, G: Game> Iterator for EntityIter<'a, G> { type Item = (EntityId, &'a G::Entity, TilePos); }
+
+impl<'a, G: Game> FrameView<'a, G> {
+    pub fn new(
+        world: &'a dyn WorldRead<G>, clocks: Clocks, me: PlayerId,
+        entities: &'a BTreeMap<EntityId, G::Entity>, registry: &'a Registry,
+        visible: TileRect, zoom: f32, px_per_tile: f32,
+        cursor_tile: Option<TilePos>, window_origin: TilePos, time_ms: f64,
+    ) -> Self;
+    pub fn world(&self) -> &dyn WorldRead<G>;
+    pub fn clocks(&self) -> Clocks;
+    pub fn me(&self) -> PlayerId;
+    pub fn entities(&self) -> EntityIter<'a, G>;
+    pub fn visible(&self) -> TileRect;
+    pub fn zoom(&self) -> f32;
+    pub fn px_per_tile(&self) -> f32;
+    pub fn cursor_tile(&self) -> Option<TilePos>;
+    pub fn window_origin(&self) -> TilePos;
+    pub fn time_ms(&self) -> f64;
+}
+```
+
+`entities`/`registry` come from `Replica::{entities_map, registry}` -- made **`pub`, not
+`pub(crate)`** (a real, deliberate visibility bump, not an oversight): `WorldRead<G>` stays
+object-safe by design (0003), so `EntityIter` cannot be built through it, and `fixtures/drawables`'s
+own native golden test (a *different* crate) needs both accessors to build a `FrameView` directly,
+outside `game_instance.rs`. Same reasoning promotes `DrawList::begin_frame`/`sort_into` from
+`pub(crate)` to `pub`. `entities()`'s footprint-intersection test uses `TileRect::new(origin,
+TilePos::new(origin.x + footprint.w - 1, origin.y + footprint.h - 1))` (inclusive rect, matching
+`TileRect`'s own convention) intersected against `visible()`.
+
+**`px_per_tile()` is a placeholder (`0.0`), not exact.** `CameraBlock` carries no real device/CSS
+viewport pixel size -- the main thread computes `tiles_per_px`/`pxPerTile` itself
+(`camera/transform.ts`) from a real `CameraViewport` that never crosses into WASM memory, and
+plumbing one through would mean growing `CameraBlock` (currently exactly 80 bytes, a tested seam)
+and touching `camera/block.ts`/`camera.ts` -- outside this brief's own Files-touched list. Nothing
+in steps 1-3 reads this value (not in "Tests added"; `SCREEN_PX_STROKE` is resolved in the vertex
+shader from the *real* main-thread value per the brief's own Planning decisions, not from this
+accessor). Left for a later cut to wire for real once something actually consumes it.
+
+### `extract` relative to `on_frame`/`ui` inside the client wake
+
+Unchanged from M16b: `worker/client.ts`'s `body()` still calls `frame(t_ms)` before `netPump.pump()`
+(which calls `on_frame`), so `extract` (inside `frame()`) runs against replica state as of the
+*previous* wake's `on_frame`, same as `ui.maybe_run`'s own dirty-flag-only call already did.
+Within `frame()` itself, the order is: `set_camera`/`feed.on_frame`/`uploader.on_frame` (unchanged)
+-> build this frame's `CachedCameraView` (window origin, visible rect, zoom, cursor tile) -> build
+`FrameView` -> `ui.maybe_run(client, &view, ...)` -> `drawlist.begin_frame(window_origin)` ->
+`client.extract(&view, drawlist)` -> `drawlist.sort_into(region, time_ms)`. `ui` runs *before*
+`extract` on the same `view` (arbitrary but harmless: neither reads state the other writes).
+
+`on_frame`'s own `FrameView` (built for its `ui.maybe_run` call, unchanged from M16b otherwise) has
+no `CameraBlock` in scope (`Instance::on_frame`'s signature is `bytes` only) -- it reuses the last
+real `frame()` call's own camera-derived fields, cached on `ClientInstance` as `CachedCameraView`.
+`ui()` never reads them today, so the one-wake staleness this can introduce is harmless; flagged
+here in case a future game's `ui()` does read `visible()`/`zoom()`/etc.
+
+### `ClientInstance<G>`'s own new fields, and the raw-pointer pattern
+
+`drawlist: Box<DrawList>` (boxed for the same reason `core`/`uploader`/`input_queue` are: a 65,536-
+capacity `Vec<Draw>` alone is 2 MiB). `drawlist_region: *mut u8`, taken once at `init` from
+`layout.ptr(RegionId::DrawList)` -- **not** a new `Instance::frame` parameter: `CameraBlock::ptr`'s
+own precedent and safety argument (`client/camera.rs`'s doc comment) is reused verbatim rather than
+changing `Instance::frame`'s signature (which three low-level fixtures -- `terrain`, `worldgen`,
+`hash` -- also implement directly; a signature change would have forced edits there too, for no
+seam benefit). `GameInstance::Client` is now `Box<ClientInstance<G>>` (clippy's `large_enum_variant`
+tripped once `drawlist`/`drawlist_region`/`camera_view` joined the struct); every `GameInstance::
+Client(c) => c.field` call site is unaffected (`Box`'s `Deref` makes field/method access
+transparent), the two `let ClientInstance { .. } = c;` struct-destructures now read `c.as_mut()`.
+
+### Builder signatures (0018 §2 elides everything past `sprite`/`circle`/`ring`)
+
+This cut's own reading, uniform across every non-sprite kind: `fn KIND(&mut self, layer: u8, pos:
+WorldPos, size: [f32; 2], color: u32[, progress: f32 for bar/radial]) -> &mut Draw`. `sprite`
+matches the ADR exactly (`layer, pos, SpriteId`). `layer` clamps to `0..=7` (`layer.min(7)`) rather
+than panicking on a game's own out-of-range value (client-role code, outside the deterministic
+core). Kind constants: `KIND_SPRITE=0, KIND_CIRCLE=1, KIND_RING=2, KIND_RECT=3, KIND_BAR=4,
+KIND_RADIAL=5, KIND_GHOST=6` (top 4 bits of `kind_sprite`). Flag bits: `ANCHOR_CURSOR_TILE=1,
+SCREEN_PX_STROKE=2, PREDICTED=4, FLIP_X=8`. Window origin snap: `(tile >> 6) << 6` per axis
+(floor to a multiple of 64, arithmetic shift -- matches `ChunkDims::chunk_of`'s own negative-correct
+style), exposed as `client::drawlist::snap_window_origin(TilePos) -> TilePos`.
+
+### Steps 2/3 boundary: real, not clean (recorded rather than hidden)
+
+`FrameView::new`'s only caller is `game_instance.rs`'s `frame()`/`on_frame()`; growing the
+constructor necessarily broke that call site immediately. Step 2's own commit therefore also wires
+the new `FrameView` arguments from the real camera block (`CachedCameraView`, the window-origin/
+visible-rect maths, the `Box<ClientInstance<G>>` clippy fix) -- everything needed to *compile* and
+give `FrameView` real values. Step 3's own commit is strictly the *new* behaviour on top: `drawlist`/
+`drawlist_region` fields, the `begin_frame`/`extract`/`sort_into` call sequence, and `drawlist_len`.
+Verified independently: `packages/engine` was `cargo check`ed (and the full `rust` suite run) at
+each of the three step boundaries in isolation (temporarily stashing the following step's files) to
+confirm each commit's own tree actually compiles and its own tests pass, before restoring and
+moving to the next step -- steps 1 and 2's own intermediate states pass `cargo check --workspace
+--features testing` clean (step 2's leaves `DrawList::record_count` genuinely dead until step 3
+wires its one caller, so `pnpm lint`'s `-D warnings` clippy run is red on that one intermediate
+state only; the final state, after step 3, is clean).
+
+### "Prove the publish end to end": scope of what was actually proven
+
+The instruction's own wording ("the newest slot's hash equals the native `drawlist.fixture_hash_
+golden` for the same replica and camera") would need the TS test to reproduce the *exact* replica-
+building script the native golden pins (frame_seq, tick count, etc. all bit-identical) and a hash
+algorithm identical to Rust's `Fnv64` -- both reachable, but not attempted here given this cut's own
+time budget. What `tests/wasm/drawlist.test.ts` proves instead, against the real production pump
+code (`createDrawlistPump`, not a reimplementation): the newest published slot's header and used
+body bytes are **byte-for-byte identical** to `RegionId.DrawList`'s own WASM-memory bytes at the
+moment of publish, for a real `fx-drawables.wasm` client connected to a real `fx-drawables.wasm` sim
+over raw ABI calls (no SAB rings -- a plain region-to-region copy stands in, since the ring itself
+isn't under test), with all three genesis entities visible (`recordCount === 3`, `dropped === 0`).
+This is the property "cut 2 builds on a publish that is already proven" actually needs (the copy
+loop is correct and proportional), even though it does not cross-check against the *specific*
+blessed value `fixtures/drawables/tests/golden/drawables_extract_below_threshold.hex` pins. Left for
+cut 2, or a later gate, to close the gap fully if the exact cross-runtime hash match still matters
+once real rendering exists to make it worth the wire-format-reproduction cost.
+
+### `no_alloc_drawlist.rs`: not fault-injected
+
+Built exactly on `no_alloc_ui.rs`'s own template (measured at two window lengths, asserted equal).
+Unlike M16b's own `no_alloc_ui` work, this cut did not additionally break the code to watch the
+assertion fail before reverting -- the template itself is already trusted (this is its third use:
+`no_alloc_connection`, `no_alloc_ui`, now this), and time was spent elsewhere. `drawlist_extract_
+and_sort_does_not_grow_the_arena` passes (both windows read `0` growth) via `DrawList`'s own fixed-
+capacity scratch `Vec` (reserved once at `CAPACITY = 65,536`) and `sort_into` writing into a
+caller-owned region rather than a buffer of its own.
+
+### `docs/plan/device-checks.md`
+
+Brief says "None" (M17b carries the manual run); untouched.
+
+### Verified (commands and results)
+
+- `pnpm test rust -t draw` -> `rust pass 6 tests` (step 1: `draw_layout_is_32_bytes_le`,
+  `drawlist_counting_sort_stable`, `drawlist_layer_counts_and_prefix`, `drawlist_full_drops_and_
+  counts`, `drawlist_pos_relative_to_window_origin_exact_at_2pow23`, `drawlist_snap_window_origin_
+  floors_to_64`).
+- `pnpm test rust -t frameview` -> `rust pass 2 tests` (`frameview_entities_sorted_and_clipped`,
+  `frameview_zoom_matches_camera_block`).
+- `cargo test -p fx-drawables --features engine/testing` (`pnpm test rust`'s own `-t`/`-p` substring
+  filter can't select one fixture crate; `cargo nextest`'s `-p`/`-E` flags aren't accepted through
+  `pnpm golden:bytes`'s own arg-passthrough either, so this and the next line are the raw commands)
+  -> 3 `drawlist_golden.rs` tests pass: `drawlist_fixture_hash_golden` (native golden, `GOLDEN_
+  BLESS=1 cargo nextest run -p fx-drawables -E 'test(drawlist_fixture_hash_golden)'`-blessed),
+  `drawlist_zoom_threshold_hides_only_the_small_entity` (`below=3, at=3, above=2` -- `>`, not `>=`),
+  `drawlist_fixture_hash_is_pure_function_of_replica_and_camera` (two independently built
+  `Loopback`s produce byte-identical output).
+- `cargo nextest run -p engine --features testing -E 'binary(no_alloc_drawlist)'` -> 1 test passes,
+  both windows `0` B growth.
+- `pnpm test wasm -t drawlist` -> `wasm pass 1 tests` (`drawlist_publish_matches_the_wasm_region_
+  byte_for_byte`).
+- Full `pnpm test rust` -> `rust pass 321 tests` (was 306 at M16b done). The `+15`: 6 `draw*`/
+  `drawlist_*` tests (step 1) + 2 `frameview_*` tests (step 2) + 3 `export_bindings_*` (ts-rs
+  auto-generated, one per `#[ts(export)]` type `fx-drawables` declares: `Pos`, `Action`, `Reject`)
+  + 3 `drawlist_golden.rs` tests (step 2) + 1 `no_alloc_drawlist` (step 3). Full `pnpm test wasm` ->
+  `wasm pass 48 tests` (was 44 at M16b done: +1 `drawlist.test.ts`, +3 from the new fixture joining
+  every fixture-iterating wasm-suite test, e.g. `abi-registry`/`allowlist`/`determinism`). Full
+  `pnpm test unit` -> `unit pass 196 tests` (unchanged: this cut touched no `src/**/*.test.ts`).
+  `pnpm lint` -> `biome pass · rustfmt pass · clippy pass · tsc pass`, at the final (post-step-3)
+  tree. `wgsl.uberquad_validates` and every browser test in "Tests added" are steps 4-6's, not run
+  here (no `uberquad.wgsl` exists yet).
+- `pnpm test`/`pnpm test:slow`/the browser suite were not run (delegation prompt: "Don't run the
+  full suites; I am the gate").
+
+### Notes for cut 2 (steps 4-6)
+
+- `FrameView::px_per_tile()` is `0.0` always; wire it for real (a `CameraBlock` field, or a fresh one
+  computed some other way) before anything in steps 4-6 needs an actual pixel value.
+- The header's `flags` field (offset 52) has no named owner in the brief; this cut leaves it `0`.
+  If steps 4-6 need a header-level flag before M18/M19 land, that ambiguity needs resolving then.
+- `drawListHash`'s definition (whole header + used body, two-lane FNV-1a32, no `BigInt`) is this
+  cut's own reading; if a later browser test (`drawlist.triple_newest_wins`, "Tests added") wants a
+  different shape, it is a test-only function with no other caller to keep in step.
+- `Draw`'s builder return value (`&mut Draw`) lets a caller chain further field writes (`.flags |=
+  ...`, `.pick_id = ...`) after the initial call; no test in this cut exercises that chaining, but
+  the shape is there for M18's picking/anchor work and M26's `PREDICTED` styling.
