@@ -43,14 +43,10 @@ Package-level layout, commands and conventions: `../CLAUDE.md`.
   and `client` get, from `client.ts`'s `host: { kind: 'local', connect: true }`; no existing
   `sim`-kind test page sets it, so `puts_idle_100` keeps its zero-connection topology by
   construction). `body()` drains the uplink ring every wake, before `CB_SIM_STEP_REQ`. ADR 0030's
-  `poll()` guard (`wokenBy === lastWokenBy`) is live here -- a linked client's own uplink push is
-  the first external wake this worker ever gets -- and `connected-paced.spec.ts`'s `poll_skips_a_
-  spurious_tick_on_a_ring_wake` fails if it is removed (fault-injection verified: an unconditional
-  `true` there measured ~2x `ticksRun` inflation over a fixed real-time window). Since M16d
-  ([0032](../../../docs/decisions/0032-atomics-timer-bounds-external-wakes.md)) the other branch
-  calls `atomicsTimer.interrupt()`: a ring wake adds no tick but can no longer starve the timer
-  (`sim_ticks_steadily_under_external_wakes`); the timer reads the clock only while external wakes
-  interrupt it. `CB_SIM_TICKS_RUN` mirrors `ticksRun` for tests that must not park the sim.
+  `poll()` guard (`wokenBy === lastWokenBy`) is live here (a linked client's uplink push wakes this
+  worker); `poll_skips_a_spurious_tick_on_a_ring_wake` fails if it is removed. The other branch
+  calls `atomicsTimer.interrupt()` ([0032](../../../docs/decisions/0032-atomics-timer-bounds-external-wakes.md)):
+  ring wakes add no tick and cannot starve the timer (`sim_ticks_steadily_under_external_wakes`).
 - `worker/client-net.ts` (M15b): the client's net pump, built only when linked, run from `body()`
   *before* `uploadPump.pump()` (`on_frame`'s own dirty-chunk enqueue stages the same wake it
   arrives, not one wake later). Drains the downlink ring straight into `on_frame(len)` (`RegionId.
