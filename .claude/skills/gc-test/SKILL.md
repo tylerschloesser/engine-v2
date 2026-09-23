@@ -173,6 +173,27 @@ of the M03/M04 harness. Two differences from a harness page:
   cdp-flat}.ts`) has no bounded timeout of its own; M16e reproduced exactly this once, under an
   artificially extreme ~40-way Chromium process oversubscription (`--workers 14 --repeat-each 3` on
   a 14-core machine), and left it unaddressed (different subsystem, not this milestone's files).
+- **Finding a stalled worker's real position: `Debugger.pause` over CDP, not code reading (M17c,
+  docs/plan/17c-client-park-stall.md).** `W_WAKE`/`W_ACK` alone cannot always tell (a) a worker stuck
+  inside its own `body()` from (b) a lost wake: for `client`, `W_ACK` stores `CB_FRAME_REQ`'s own
+  *value* (idempotent, re-stored every wake whether or not the frame request changed), not a wake
+  tally, so "W_ACK frozen below W_WAKE" can be entirely normal (`sim`/`gen0` genuinely do get more
+  than one wake per driven frame: `asHarness.stepTick` wakes every `sim`/`gen` target once, and
+  `stepSimTickSync` wakes `sim` again). To see what a worker is *actually doing* while its own
+  `parkWorkers`/`resumeWorkers`/ack-spin is stuck, attach a CDP session to that worker's own target
+  (`tests/browser/gc/sessions.ts`'s `TunnelSession`, extended with an `onEvent(method, cb)` for
+  unsolicited events -- `Target.receivedMessageFromTarget` carries both responses, keyed by `id`, and
+  events, keyed by `method`, and the tunnel only forwards the former by default) and call
+  `Debugger.enable` then `Debugger.pause`: this interrupts a worker blocked in `Atomics.wait` itself
+  (a plain `Runtime.evaluate` does not, per the bullet above) and fires `Debugger.paused` with a real
+  `callFrames` stack, `functionName`/`location` included; `Debugger.evaluateOnCallFrame` can then read
+  that frame's own locals (`waitForWake`'s `index`/`last`, `sab/control.ts`) against the live SAB
+  words. Found this way, live, against a real `zero_gc_action neg object main` occurrence: the
+  `client` isolate was genuinely inside `ControlBlock.waitForWake`'s own `Atomics.wait`, reached
+  through `Shell.resume()` -> `runBlockingLoop` -> the worker's own `scope.onmessage` (`worker.ts`) --
+  not stuck inside `body()` or any pump, not dead. Diagnostics built this way are temporary and
+  reverted (a `wake()` call is a hot-path primitive, `.claude/rules/hot-paths.md`); the finding they
+  produce is what's permanent.
 - **`--no-opt --no-sparkplug` can manufacture its own false regression.** M16e's own new branches in
   a spin-wait ack loop (`spins++`, one bitwise mask check per iteration -- see the timeout-message
   bullet above) cost nothing measurable under normal V8, but under forced-interpreter flags every
