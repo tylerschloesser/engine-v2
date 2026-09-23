@@ -79,6 +79,16 @@ export type ActionOutcome<Reject = unknown> =
   | { Rejected: { Game: Reject } }
   | { Rejected: { Engine: EngineRejectReason } }
 
+/** `Client.clock()`'s own return shape (docs/plan/16b-ui-observation-and-clock.md Scope): tick
+ * counts, not seconds (0006 "On the client": "the UI never counts ticks itself" -- a page derives
+ * remaining seconds from a replicated `done_at` tick and this pair). Returned as the same reused
+ * object on every call (Planning decisions: "`clock()` returns a reused object"). */
+export type ClockSnapshot = {
+  authoritative: number
+  predicted: number
+  ticksPerSecond: number
+}
+
 /** `client::core::OUTBOX_CAPACITY` (docs/plan/16-action-round-trip.md Deviations): the 0012
  * pending-queue figure, mirrored here so `dispatch` can enforce the same "queue full" backstop
  * Rust's own `on_action` re-checks (defence in depth, not the primary enforcement point either
@@ -168,6 +178,23 @@ export interface Client {
   onActionResult<Reject = unknown>(
     cb: (seq: number, result: ActionOutcome<Reject>) => void,
   ): () => void
+  /** docs/plan/16b-ui-observation-and-clock.md Scope: fires with the decoded JSON of the *latest*
+   * kind-1 (`Ui`) UI-ring record in a drain, at most once per per-rAF poll (Planning decisions:
+   * "`Ui` is coalesced to the newest value per rAF; action results are never coalesced"), and
+   * always before any `onActionResult` callback of that same drain (Provides: the delivery-order
+   * rule "`onUi` then results", enforced natively by `game_instance::GameInstance::on_frame`,
+   * docs/plan/16b Deviations "Delivery order"). No record in a drain, no call. Returns an
+   * unsubscribe function. `Ui` is the game's own `G::Ui` TS type, supplied by the caller for full
+   * typing, the same convention `onActionResult<Reject>` already uses; default `unknown` when
+   * omitted. */
+  onUi<Ui = unknown>(cb: (ui: Ui) => void): () => void
+  /** docs/plan/16b-ui-observation-and-clock.md Scope: `client.clock()` exposes the clock block --
+   * `authoritative`/`predicted` tick counts (`predicted` equals `authoritative` until M26 gives
+   * prediction a real lead, 0012) and the game's own `ticksPerSecond` -- refreshed from the clock
+   * block on every call and returned as the *same* reused object (Planning decisions: "a fresh
+   * object per call would put game-UI polling on the main isolate's budget"): read the fields, do
+   * not keep the object past the next call. */
+  clock(): ClockSnapshot
   /** docs/plan/09-renderer-terrain.md, Non-scope ("here the camera is set by `engine/test.
    * setCamera` or a fixed `CameraState`"): a plain mutable object, later milestones add members to
    * the public `Client` shape (this comment's own precedent) as production features need direct
@@ -430,6 +457,12 @@ export function createClient(options: ClientOptions): Client {
       onActionResult(): () => void {
         throw err
       },
+      onUi(): () => void {
+        throw err
+      },
+      clock(): ClockSnapshot {
+        throw err
+      },
       writeCameraAndWake(): number {
         throw err
       },
@@ -689,12 +722,36 @@ export function createClient(options: ClientOptions): Client {
   const uiRingConsumer = new RingConsumer(sabs.uiRing)
   const uiScratch = new Uint8Array(UI_POLL_BYTES)
 
-  /** "Main rAF: drain the UI ring once" (Scope). Kind 2 (`ActionResults`) only this milestone;
-   * an unknown kind (M16b's kind 1, `Ui`) is skipped by its own length field, never crashing --
-   * Scope: "must skip an unknown record kind by its length field rather than crashing". JSON
-   * parsing is a human-rate path (0003, 0016 §2), not yet zero-GC (Deviations: a later milestone's
-   * own budget, not this one's -- "it cannot fix a design that allocates by construction"). */
+  // docs/plan/16b-ui-observation-and-clock.md Scope: "keep only the last kind-1 record ... call
+  // onUi(ui) before any onActionResult of the same drain". A kind-1 record can land anywhere in
+  // the byte stream relative to a kind-2 one (more than one `on_frame` call can land between two
+  // drains), so every kind-2 record's own `{seq, result}` must be held until the whole drain has
+  // been walked and it is known whether a `Ui` record showed up at all -- these two reused,
+  // parallel arrays (index by `pendingCount`, never `.push`ed/`.length`-reset) are that holding
+  // pen, cleared only by overwrite on the next drain that actually uses them.
+  const pendingSeqs: number[] = []
+  const pendingOutcomes: ActionOutcome<unknown>[] = []
+
+  type UiListener = (ui: unknown) => void
+  const uiListeners: UiListener[] = []
+
+  function onUi<Ui = unknown>(cb: (ui: Ui) => void): () => void {
+    const listener = cb as UiListener
+    uiListeners.push(listener)
+    return () => {
+      const i = uiListeners.indexOf(listener)
+      if (i >= 0) uiListeners.splice(i, 1)
+    }
+  }
+
+  /** "Main rAF: drain the UI ring once" (Scope). Kind 1 (`Ui`, M16b) and kind 2 (`ActionResults`,
+   * M16): an unknown kind is skipped by its own length field, never crashing. JSON parsing is a
+   * human-rate path (0003, 0016 §2), not yet zero-GC (Deviations: a later milestone's own budget,
+   * not this one's -- "it cannot fix a design that allocates by construction"). No record of
+   * either kind in a drain costs nothing beyond the empty `popInto` poll itself. */
   function pollActionResults(): void {
+    let lastUiText: string | undefined
+    let pendingCount = 0
     for (;;) {
       const len = uiRingConsumer.popInto(uiScratch, 0)
       if (len < 0) break
@@ -704,16 +761,47 @@ export function createClient(options: ClientOptions): Client {
         const recLen = readU32LE(uiScratch, i + 1)
         const bodyStart = i + 5
         if (bodyStart + recLen > len) break // never split a record (defensive; producer never does)
-        if (kind === 2) {
+        if (kind === 1) {
+          // Coalesced to the newest: a later record in this same drain simply overwrites it.
+          lastUiText = decoder.decode(uiScratch.subarray(bodyStart, bodyStart + recLen))
+        } else if (kind === 2) {
           const text = decoder.decode(uiScratch.subarray(bodyStart, bodyStart + recLen))
           const parsed = JSON.parse(text) as { seq: number; result: ActionOutcome<unknown> }
-          for (let li = 0; li < actionResultListeners.length; li++) {
-            at(actionResultListeners, li)(parsed.seq, parsed.result)
-          }
+          pendingSeqs[pendingCount] = parsed.seq
+          pendingOutcomes[pendingCount] = parsed.result
+          pendingCount++
         }
         i = bodyStart + recLen
       }
     }
+    if (lastUiText !== undefined) {
+      const ui: unknown = JSON.parse(lastUiText)
+      for (let li = 0; li < uiListeners.length; li++) at(uiListeners, li)(ui)
+    }
+    for (let k = 0; k < pendingCount; k++) {
+      const seq = at(pendingSeqs, k)
+      const result = at(pendingOutcomes, k)
+      for (let li = 0; li < actionResultListeners.length; li++) {
+        at(actionResultListeners, li)(seq, result)
+      }
+    }
+  }
+
+  // docs/plan/16b-ui-observation-and-clock.md Scope: "`client.clock()` returns a reused object
+  // `{ authoritative, predicted, ticksPerSecond }` refreshed from the clock block on call (no
+  // allocation per call)". Reuses `clockScratch` (above): `dispatch`/`waitForLive`'s own reads and
+  // this one never run inside the same call, so sharing the one scratch array costs nothing.
+  const clockSnapshot: ClockSnapshot = { authoritative: 0, predicted: 0, ticksPerSecond: 0 }
+
+  // Named `readClockSnapshot`, not `clock`: `clock` (above) already names the injected `Clock`
+  // (`options.test?.clock ?? systemClock`) this whole function scope closes over. Exposed on the
+  // public `Client` shape as `clock()` (below) regardless.
+  function readClockSnapshot(): ClockSnapshot {
+    readClockBlockInto(clockView, clockScratch)
+    clockSnapshot.authoritative = at(clockScratch, CLOCK_FIELD.AuthoritativeTick)
+    clockSnapshot.predicted = at(clockScratch, CLOCK_FIELD.PredictedTick)
+    clockSnapshot.ticksPerSecond = at(clockScratch, CLOCK_FIELD.TicksPerSecond)
+    return clockSnapshot
   }
 
   let resultsFrameHandle = -1
@@ -840,6 +928,8 @@ export function createClient(options: ClientOptions): Client {
     uploadRing: sabs.uploadRing,
     dispatch,
     onActionResult,
+    onUi,
+    clock: readClockSnapshot,
     writeCameraAndWake,
     setFlags,
     input,

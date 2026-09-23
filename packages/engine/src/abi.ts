@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 12
+export const ABI_VERSION = 13
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -149,6 +149,12 @@ export const ABI_EXPORTS = {
   // for the clock block's `authoritative_tick`/`ack_seq` fields, same crossing shape as
   // `sim_region_hash`/`client_region_hash`.
   client_clock_stats: { role: 'client', params: 0, result: 'status' },
+  // docs/plan/16b-ui-observation-and-clock.md (`ABI_VERSION` 12 -> 13), `engine/test` only: forces
+  // `UiObserver::mark_dirty()` (0024 §7d's dirty flag). No production caller exists yet (M18's
+  // `FrameCx.uiDirty()` is the real one); reached only through `engine/test.markUiDirty`, the same
+  // "test-only export, reached by name through `callParked`" shape as `sim_region_hash`/
+  // `client_region_hash`/`sim_conn_counters`. No region crosses either way.
+  client_ui_mark_dirty: { role: 'client', params: 0, result: 'status' },
 } as const satisfies Record<string, ExportSpec>
 
 export function statusName(n: number): string {

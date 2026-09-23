@@ -481,6 +481,18 @@ export async function hostRegionHash(client: Client, conn = 0): Promise<string> 
   return hex64(result)
 }
 
+/** docs/plan/16b-ui-observation-and-clock.md, `engine/test`: forces `UiObserver::mark_dirty()`
+ * (`client_ui_mark_dirty`, a test-only ABI export -- see that milestone's Deviations, "the dirty
+ * flag has no browser-reachable setter yet"), the same "reached directly by name through
+ * `callParked`" shape as `replicaHash`/`hostRegionHash`. Requires the client worker parked. No
+ * production caller exists yet (M18's `FrameCx.uiDirty()` is the real one). */
+export async function markUiDirty(client: Client): Promise<void> {
+  const { value } = await callParked(client, 'client', 'client_ui_mark_dirty', [], 0)
+  if (value !== Status.Ok) {
+    throw new Error(`markUiDirty: client_ui_mark_dirty failed: status ${value}`)
+  }
+}
+
 /** docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test`: `client::Replica::
  * region_hash()` (`client_region_hash`). Requires the client worker parked. */
 export async function replicaHash(client: Client): Promise<string> {

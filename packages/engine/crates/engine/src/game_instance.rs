@@ -629,6 +629,18 @@ where
             _ => Status::Unsupported,
         }
     }
+
+    /// docs/plan/16b-ui-observation-and-clock.md, `engine/test` only: `UiObserver::mark_dirty()`.
+    /// No region crosses; the flag lives entirely on the WASM side.
+    fn client_ui_mark_dirty(&mut self) -> Status {
+        match self {
+            GameInstance::Client(c) => {
+                c.ui.mark_dirty();
+                Status::Ok
+            }
+            _ => Status::Unsupported,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1082,5 +1094,146 @@ mod tests {
         );
         assert_eq!(records[1].0, 2, "kind byte: ActionResults record");
         assert_eq!(records[1].1, r#"{"seq":1,"result":"Confirmed"}"#);
+    }
+
+    // docs/plan/16b-ui-observation-and-clock.md, steps 3-5: `client_ui_mark_dirty` (the test-only
+    // ABI export those steps add, `ABI_VERSION` 12 -> 13) reaches `ClientInstance::ui.mark_dirty()`
+    // end to end. `MClient::ui` reads a `static` signal rather than anything in the replica
+    // (mirroring `client::ui::tests::UClient`'s own "client-side state, not replica state" shape,
+    // 0024 §7d) -- this test drives a `GameInstance` from the outside, with no handle on
+    // `ClientInstance::client` itself, so a plain `AtomicU32` stands in for a real client-side
+    // field the way `FrameCx::ui_dirty()` will drive one once M18 lands. Each native test gets its
+    // own process (nextest: `client/texel.rs`'s own doc comment on `VISUAL_TABLES`), so this
+    // `static` is never shared across tests.
+    static M_SIGNAL: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+    #[derive(
+        Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize, ts_rs::TS,
+    )]
+    struct MAction;
+    #[derive(
+        Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, ts_rs::TS,
+    )]
+    struct MReject;
+    impl From<Unknown> for MReject {
+        fn from(_: Unknown) -> Self {
+            MReject
+        }
+    }
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct MEntity;
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct MPlayer;
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct MGlobal;
+    #[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, ts_rs::TS)]
+    struct MUi {
+        n: u32,
+    }
+
+    #[derive(Default)]
+    struct MClient;
+    impl crate::client::ClientSide<MGame> for MClient {
+        fn ui(&self, _view: &FrameView<'_, MGame>, out: &mut MUi) {
+            out.n = M_SIGNAL.load(core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    struct MWorldgen;
+    impl Worldgen for MWorldgen {
+        type Params = ();
+        const WORLDGEN_VERSION: u32 = 0;
+        fn generate(_seed: u64, _params: &(), _chunk: ChunkCoord, out: &mut [Tile]) {
+            out.fill(Tile::VOID);
+        }
+    }
+
+    struct MGame;
+    impl Game for MGame {
+        const SCHEMA_VERSION: u32 = 1;
+        type Worldgen = MWorldgen;
+        type Action = MAction;
+        type Reject = MReject;
+        type Entity = MEntity;
+        type Player = MPlayer;
+        type Global = MGlobal;
+        type Presence = ();
+        type Ui = MUi;
+        type Client = MClient;
+        fn register(_r: &mut Registry) {}
+        fn prototype(_e: &MEntity) -> PrototypeId {
+            PrototypeId(0)
+        }
+        fn anchor(_e: &MEntity) -> TilePos {
+            TilePos::new(0, 0)
+        }
+        fn genesis(_w: &mut dyn WorldWrite<Self>) {}
+        fn on_player(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _ev: PlayerEvent) {}
+        fn apply(
+            _w: &mut dyn WorldWrite<Self>,
+            _who: PlayerId,
+            _a: &MAction,
+        ) -> Result<(), MReject> {
+            Ok(())
+        }
+        fn tick(_cx: &mut TickCx<'_, Self>) {}
+    }
+
+    fn m_instance() -> GameInstance<MGame> {
+        let mut layout = RegionLayout::new();
+        GameInstance::<MGame>::init(
+            Role::Client,
+            r#"{"seed":"0x1","params":null,"genWorkers":1,"cacheChunks":1024}"#,
+            &mut layout,
+        )
+        .unwrap()
+    }
+
+    /// A bare heartbeat frame (no sections): enough for `on_frame` to bump `ClientCore::
+    /// mutations()` without any real replicated-state change (`no_alloc_ui.rs`'s own template).
+    fn m_heartbeat(tick: u32) -> Vec<u8> {
+        let mut buf = [0u8; 32];
+        let mut sink = crate::bytes::SliceSink::new(&mut buf);
+        FrameWriter::new(&mut sink, FrameHeader { tick, ack_seq: 0 });
+        let n = sink.finish().unwrap();
+        buf[..n].to_vec()
+    }
+
+    #[test]
+    fn client_ui_mark_dirty_forces_a_rerun_with_no_new_frame() {
+        let mut inst = m_instance();
+        // A real replica mutation (tick 1) with the signal still at its `Default` value (0): `ui`
+        // runs and matches `MUi::default()`, so no record is written yet.
+        assert_eq!(inst.on_frame(&m_heartbeat(1)), Status::Ok);
+        let mut out = [0u8; 64];
+        assert_eq!(
+            inst.client_poll_ui(&mut out),
+            0,
+            "no change yet: nothing to poll"
+        );
+
+        // The client-side signal changes with *no* new host frame -- `frame()` alone, unmarked,
+        // must not notice (`mutations` is unchanged since the last check).
+        M_SIGNAL.store(5, core::sync::atomic::Ordering::Relaxed);
+        let camera = CameraBlock::for_test([0.0, 0.0], [0.0, 0.0], [4.0, 4.0]);
+        assert_eq!(inst.frame(1.0, &camera, &mut []), Status::Ok);
+        assert_eq!(
+            inst.client_poll_ui(&mut out),
+            0,
+            "no dirty flag, no new mutation: still nothing to poll"
+        );
+
+        // `client_ui_mark_dirty` (this milestone's own test-only ABI export) forces the next
+        // `frame()` call to rerun `ui` regardless -- the real production setter is M18's `FrameCx::
+        // ui_dirty()`; this is `engine/test`'s own way to reach the same flag today.
+        assert_eq!(inst.client_ui_mark_dirty(), Status::Ok);
+        assert_eq!(inst.frame(2.0, &camera, &mut []), Status::Ok);
+        let n = inst.client_poll_ui(&mut out);
+        assert!(
+            n > 0,
+            "the dirty flag must force a rerun that finds a real change"
+        );
+        let records = decode_ui_records(&out[..n]);
+        assert_eq!(records, vec![(1, r#"{"n":5}"#.to_string())]);
     }
 }

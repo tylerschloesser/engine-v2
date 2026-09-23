@@ -57,6 +57,31 @@ function fakeCanvas(): HTMLCanvasElement {
   } as unknown as HTMLCanvasElement
 }
 
+/** Builds one `[kind u8][len u32 LE][json]` UI-ring record (`client_poll_ui`'s own shape, docs/
+ * plan/16b-ui-observation-and-clock.md Scope). */
+function uiRecord(kind: number, json: string): Uint8Array {
+  const body = new TextEncoder().encode(json)
+  const rec = new Uint8Array(5 + body.length)
+  rec[0] = kind
+  new DataView(rec.buffer).setUint32(1, body.length, true)
+  rec.set(body, 5)
+  return rec
+}
+
+/** Concatenates whole records into one ring message and pushes it. */
+function pushUiBatch(uiRing: SharedArrayBuffer, records: Uint8Array[]): void {
+  const total = records.reduce((n, r) => n + r.length, 0)
+  const batch = new Uint8Array(total)
+  let off = 0
+  for (const r of records) {
+    batch.set(r, off)
+    off += r.length
+  }
+  if (!new RingProducer(uiRing).tryPush(batch, off)) {
+    throw new Error('pushUiBatch: ring full')
+  }
+}
+
 /** `createClient` options common to every test here: a fake worker/scheduler, a minimal `local`
  * host stub (`test.game` overrides every worker's real config, so the stub's own field values
  * never reach a real WASM instance -- there is none), `postModule: false` (no real fetch/compile).
@@ -171,9 +196,10 @@ test('ui_ring_delivers_results_in_order', async () => {
     seen.push({ seq, result })
   })
 
-  // One batch, as `client_poll_ui` would produce it: an unknown kind (1, M16b's future `Ui`
-  // record) first, then two kind-2 `ActionResults` records -- the drain must skip the first by
-  // its own length field, not crash, and deliver the other two in order.
+  // One batch, as `client_poll_ui` would produce it: a genuinely unknown kind (99 -- kind 1 is now
+  // M16b's own real `Ui` record, covered by its own tests below) first, then two kind-2
+  // `ActionResults` records -- the drain must skip the first by its own length field, not crash,
+  // and deliver the other two in order.
   const encoder = new TextEncoder()
   const unknownBody = new Uint8Array(6)
   const confirmedJson = encoder.encode('{"seq":1,"result":"Confirmed"}')
@@ -182,7 +208,7 @@ test('ui_ring_delivers_results_in_order', async () => {
     5 + unknownBody.length + 5 + confirmedJson.length + 5 + rejectedJson.length,
   )
   let off = 0
-  batch[off] = 1 // unknown kind
+  batch[off] = 99 // genuinely unknown kind
   new DataView(batch.buffer).setUint32(off + 1, unknownBody.length, true)
   batch.set(unknownBody, off + 5)
   off += 5 + unknownBody.length
@@ -241,6 +267,95 @@ test('dispatchRaw_and_actionResults_round_trip', async () => {
   // "the same live array on every call" -- not a fresh, empty subscription each time).
   expect(results).toEqual([{ seq: 7, result: 'Confirmed' }])
   expect(actionResults(client)).toBe(results)
+
+  client.destroy()
+})
+
+test('onui_gets_only_latest_per_drain', async () => {
+  const scheduler = fakeScheduler()
+  const client = createClient(baseOptions(scheduler, false))
+  await client.ready
+  const h = clientTestHandle(client)
+
+  const seen: unknown[] = []
+  client.onUi((ui) => seen.push(ui))
+
+  // Three kind-1 records in one drain (docs/plan/16b-ui-observation-and-clock.md Planning
+  // decisions: "Ui is coalesced to the newest value per rAF"): only the last one's JSON reaches
+  // `onUi`, parsed exactly once.
+  pushUiBatch(h.sabs.uiRing, [
+    uiRecord(1, '{"n":1}'),
+    uiRecord(1, '{"n":2}'),
+    uiRecord(1, '{"n":3}'),
+  ])
+  scheduler.flush()
+
+  expect(seen).toEqual([{ n: 3 }])
+
+  // A drain with nothing new: no further call.
+  scheduler.flush()
+  expect(seen).toEqual([{ n: 3 }])
+
+  client.destroy()
+})
+
+test('onui_fires_before_action_results', async () => {
+  const scheduler = fakeScheduler()
+  const client = createClient(baseOptions(scheduler, false))
+  await client.ready
+  const h = clientTestHandle(client)
+
+  const order: string[] = []
+  client.onUi(() => order.push('ui'))
+  client.onActionResult(() => order.push('result'))
+
+  // The kind-2 record precedes the kind-1 one in the raw ring bytes (the reverse of the order
+  // `game_instance::GameInstance::on_frame` actually produces, docs/plan/
+  // 16b-ui-observation-and-clock.md Deviations "Delivery order") -- proving the drain's own
+  // delivery-order rule ("onUi then results", Provides) holds independent of byte order, since a
+  // real drain always sees the Rust-side order anyway; this is the stronger claim.
+  pushUiBatch(h.sabs.uiRing, [
+    uiRecord(2, '{"seq":1,"result":"Confirmed"}'),
+    uiRecord(1, '{"n":1}'),
+  ])
+  scheduler.flush()
+
+  expect(order).toEqual(['ui', 'result'])
+
+  client.destroy()
+})
+
+test('clock_returns_same_object', async () => {
+  const scheduler = fakeScheduler()
+  const client = createClient(baseOptions(scheduler, true))
+  const h = clientTestHandle(client)
+  writeClockBlock(new ClockBlockView(h.sabs.clockBlock), {
+    authoritativeTick: 42,
+    predictedTick: 42,
+    ticksPerSecond: 20,
+    sessionState: SessionState.Live,
+    seqSeed: 0,
+    ackSeq: 0,
+  })
+  await client.ready
+
+  const a = client.clock()
+  expect(a).toEqual({ authoritative: 42, predicted: 42, ticksPerSecond: 20 })
+  const b = client.clock()
+  expect(b).toBe(a) // the same reused object (Planning decisions: "clock() returns a reused object")
+
+  // Refreshed on the next call.
+  writeClockBlock(new ClockBlockView(h.sabs.clockBlock), {
+    authoritativeTick: 43,
+    predictedTick: 43,
+    ticksPerSecond: 20,
+    sessionState: SessionState.Live,
+    seqSeed: 0,
+    ackSeq: 0,
+  })
+  const c = client.clock()
+  expect(c).toBe(a)
+  expect(c).toEqual({ authoritative: 43, predicted: 43, ticksPerSecond: 20 })
 
   client.destroy()
 })

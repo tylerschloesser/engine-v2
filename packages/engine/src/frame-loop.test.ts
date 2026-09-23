@@ -51,6 +51,12 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
     onActionResult(): () => void {
       return () => {}
     },
+    onUi(): () => void {
+      return () => {}
+    },
+    clock(): { authoritative: number; predicted: number; ticksPerSecond: number } {
+      throw new Error('fakeClient: clock not implemented')
+    },
     writeCameraAndWake(): number {
       this.wakeCount += 1
       return this.wakeCount

@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 12;
+pub const ABI_VERSION: u32 = 13;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -349,6 +349,18 @@ pub trait Instance: Sized + 'static {
     fn client_clock_stats(&mut self, _result: &mut [u8]) -> Status {
         Status::Unsupported
     }
+
+    /// docs/plan/16b-ui-observation-and-clock.md (`ABI_VERSION` 12 -> 13), `engine/test` only:
+    /// forces the client role's `UiObserver::mark_dirty()` (that milestone's own Deviations,
+    /// steps 1-2: "the only setter that exists after this cut ... not yet reachable from
+    /// TypeScript or a browser test"). No production caller exists yet -- M18's `FrameCx::
+    /// ui_dirty()` is the real one -- so this is reached only through `engine/test`'s
+    /// `markUiDirty`, the same "test-only ABI export, reached by name through `callParked`" shape
+    /// as `sim_region_hash`/`client_region_hash`/`sim_conn_counters`. No region crosses either
+    /// way: the flag lives entirely on the WASM side.
+    fn client_ui_mark_dirty(&mut self) -> Status {
+        Status::Unsupported
+    }
 }
 
 /// Emits every export for every role, the `#[global_allocator]`, and the single-threaded instance
@@ -488,6 +500,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn client_clock_stats() -> u32 {
             $crate::abi::client_clock_stats(&__ENGINE_SLOT) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_ui_mark_dirty() -> u32 {
+            $crate::abi::client_ui_mark_dirty(&__ENGINE_SLOT) as u32
         }
 
         // gen
