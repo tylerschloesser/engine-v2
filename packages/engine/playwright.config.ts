@@ -93,7 +93,11 @@ export default defineConfig({
         launchOptions: { args: ['--enable-unsafe-webgpu', ...swiftshaderArgs] },
       },
       // M04's gc-*.spec.ts run only in the `gc` project below, under `pnpm gc`, never `pnpm test`.
-      testIgnore: '**/gc-*.spec.ts',
+      // `frame-bench.spec.ts` runs only in the `frame-bench` project below (its own launch flags,
+      // `--disable-frame-rate-limit --disable-gpu-vsync`): otherwise this project's own slow-tier
+      // grep (`(?=.*@slow)`) would also pick up `bench.frame_worstcase @slow` and run it a second
+      // time, without those flags, under real (capped) rAF pacing.
+      testIgnore: ['**/gc-*.spec.ts', '**/frame-bench.spec.ts'],
     },
     {
       // Sim hash only (0020 §6: Firefox returns a null WebGPU adapter headless); multi-engine repeats
@@ -113,6 +117,33 @@ export default defineConfig({
       use: { ...devices['Desktop Firefox'] },
       grep: /@engines/,
       testIgnore: '**/gc-*.spec.ts',
+    },
+    {
+      // docs/plan/17b-sprites-and-frame-budget.md, steps 4-6: `bench.frame_worstcase` alone, real
+      // `requestAnimationFrame` pacing (0020 §3's "browser tests never use real rAF pacing" rule is
+      // about lockstep determinism tests; this one exists specifically to measure real frame
+      // pacing, `device.html`'s own precedent). `--disable-frame-rate-limit --disable-gpu-vsync`
+      // (the spike's own flags, `spikes/zero-gc-webgpu/RESULT.md`: "600 frames in 93 ms" with them)
+      // are scoped to this project alone, not `chromium`/`gc`, so no other real-rAF-driven test
+      // (none exist yet) is affected by uncapped pacing.
+      name: 'frame-bench',
+      use: {
+        ...devices['Desktop Chrome'],
+        channel: chromiumChannel,
+        launchOptions: {
+          args: [
+            '--enable-unsafe-webgpu',
+            ...swiftshaderArgs,
+            '--disable-frame-rate-limit',
+            '--disable-gpu-vsync',
+          ],
+        },
+      },
+      testMatch: '**/frame-bench.spec.ts',
+      // 512 one-time setup dispatches (`frame-bench.ts`'s own batched `SpawnMany` population, well
+      // over the `chromium` project's own default page's worth of setup work) plus 420 real rAF
+      // frames comfortably exceed the config's own 30 s default.
+      timeout: 120_000,
     },
     {
       // docs/plan/04-zero-gc-harness.md, Seams: the zero-GC assertion of 0016 §3. Launch args:

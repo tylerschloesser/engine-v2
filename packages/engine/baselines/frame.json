@@ -1,0 +1,9 @@
+{
+  "recordCount": 65536,
+  "frames": 302,
+  "warmupFrames": 120,
+  "measuredAt": "2026-09-23T18:03:00Z",
+  "conditions": "Tyler's Mac (Mac15,10, 14 logical CPUs), channel: 'chromium' (real Metal adapter headless), --enable-unsafe-webgpu --disable-frame-rate-limit --disable-gpu-vsync, playwright.config.ts's 'frame-bench' project, load average ~2.96/2.79/3.14 (quiet); frame-bench.html: fx-drawables, host: { kind: 'local', connect: true }, genWorkers: 1, camera tilesAcross=256 (0018 §6 maximum zoom-out) static over a 256x256 grid of 65,536 sprite-drawing entities (DrawList::CAPACITY exactly). main p50/p95 over 302 mf-s/mf-e mark pairs (one per real rAF callback in the timed window); worker p50/p95 over 23 wf-s/wf-e mark pairs (one per real client-worker frame() call in the same wall-clock window -- fewer than main's own count because, under uncapped rAF, main vastly outpaces the worker's own ~2.2ms/call cost at this record count, coalescing several main frames' worth of CB_FRAME_REQ advances into each worker wake, same as production tolerates 0018 §1).",
+  "mainMs": { "p50": 0.642, "p95": 0.699 },
+  "workerMs": { "p50": 2.241, "p95": 2.492 }
+}

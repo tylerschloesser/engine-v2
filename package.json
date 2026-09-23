@@ -17,7 +17,8 @@
     "device:serve": "node packages/engine/scripts/device-serve.mjs",
     "format": "pnpm exec biome check --write . && cargo fmt",
     "golden": "pnpm --silent --filter engine build && node --disable-warning=ExperimentalWarning packages/engine/scripts/golden.mjs",
-    "golden:bytes": "node scripts/golden-bytes.mjs"
+    "golden:bytes": "node scripts/golden-bytes.mjs",
+    "bench:frame": "pnpm --silent --filter engine build && node packages/engine/scripts/build-fixtures.mjs && pnpm exec vite build --config packages/engine/tests/browser/pages/vite.config.ts && pnpm exec playwright test --config packages/engine/playwright.config.ts --project frame-bench"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",

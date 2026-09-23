@@ -80,6 +80,20 @@ export const suites = [
         // to bind (playwright.config.ts, tests/browser/pages/vite.config.ts).
         port: 4518,
       },
+      {
+        // docs/plan/17b-sprites-and-frame-budget.md, steps 4-6: `bench.frame_worstcase`, the one
+        // real-rAF frame-time benchmark, in its own project (`playwright.config.ts`'s own
+        // `--disable-frame-rate-limit --disable-gpu-vsync` launch flags) so the `chromium`/`gc`
+        // projects' own tests never run with uncapped rAF pacing. `pnpm bench:frame` (root
+        // package.json) runs the identical `--project frame-bench` command directly, for a human
+        // reading its printed table without the rest of the slow tier.
+        name: 'frame-bench',
+        kind: 'playwright',
+        onlyTier: 'slow',
+        noSlowTag: true,
+        args: ['--project', 'frame-bench'],
+        port: 4519,
+      },
     ],
   },
 ]
