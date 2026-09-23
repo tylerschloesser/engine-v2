@@ -7,7 +7,7 @@
 export const CONTROL_BLOCK_INT32S = 64
 export const CONTROL_BLOCK_BYTES = CONTROL_BLOCK_INT32S * 4
 
-// Global words (indices 0-7; 6-7 reserved).
+// Global words (indices 0-7; 7 reserved).
 export const CB_VERSION = 0
 export const CB_LIFECYCLE = 1
 export const CB_FRAME_REQ = 2
@@ -29,6 +29,13 @@ export const CB_TEST_CONTROL = 4
  * which never touches this word). One global word, not per-worker: there is at most one `sim`/`net`
  * worker (`WORKER_HOST`) in any topology. */
 export const CB_SIM_STEP_REQ = 5
+/**
+ * The sim worker's own `SimHostCounters.ticksRun`, mirrored by `worker/sim.ts`'s `body()` after
+ * every pass (one `Atomics.store` of a Smi, allocation-free) so a test can watch real-time pacing
+ * advance from main without parking the worker (docs/plan/16d-sim-pacing-under-external-wakes.md,
+ * step 1: a park/resume per sample would itself perturb the pacing under test). Read-only for
+ * everyone but the sim worker. One global word, same reasoning as `CB_SIM_STEP_REQ`. */
+export const CB_SIM_TICKS_RUN = 6
 
 export const Lifecycle = { Booting: 0, Running: 1, Stopping: 2, Fatal: 3 } as const
 export type Lifecycle = (typeof Lifecycle)[keyof typeof Lifecycle]

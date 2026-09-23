@@ -19,7 +19,13 @@
 import { Role } from '../abi.js'
 import { systemClock } from '../clock.js'
 import { RingConnection } from '../ring-connection.js'
-import { CB_SIM_STEP_REQ, W_ACK, WORKER_CLIENT, workerWord } from '../sab/control.js'
+import {
+  CB_SIM_STEP_REQ,
+  CB_SIM_TICKS_RUN,
+  W_ACK,
+  WORKER_CLIENT,
+  workerWord,
+} from '../sab/control.js'
 import { createSimHostFromInstance, type SimHostCounters, wrapEngineInstance } from '../server.js'
 import { createAtomicsTimer } from './atomics-timer.js'
 import { applyGcHook } from './gc-hook.js'
@@ -125,6 +131,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     }
     if (wokenBy === lastWokenBy) atomicsTimer.poll()
     lastWokenBy = wokenBy
+    Atomics.store(shell.control.words, CB_SIM_TICKS_RUN, simHost.counters.ticksRun)
     Atomics.store(shell.control.words, workerWord(shell.index, W_ACK), wokenBy)
   }
 

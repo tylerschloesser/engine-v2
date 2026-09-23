@@ -18,7 +18,8 @@
 // window -- rather than the lifetime total, which would also count every tick the sim ran while
 // the page was merely loading and instantiating WASM (slope: ~1 tick per 50 ms of that idle time,
 // the 20 Hz pacing rate, measured before this comment was written).
-import { createClient } from '../../../../src/client.ts'
+import { clientTestHandle, createClient } from '../../../../src/client.ts'
+import { CB_SIM_TICKS_RUN, WORKER_HOST } from '../../../../src/sab/control.ts'
 import { RingConsumer } from '../../../../src/sab/ring.ts'
 import type { SimHostCounters } from '../../../../src/server.ts'
 import {
@@ -39,6 +40,11 @@ declare global {
      * interleaved with the sim worker's own real ~50 ms tick timer. */
     __pokeFor?: (ms: number, intervalMs: number) => Promise<void>
     __simCounters?: () => Promise<SimHostCounters>
+    /** Wakes the sim worker directly (`ControlBlock.wake(WORKER_HOST)`, the call every external
+     * producer makes) every `intervalMs` for `ms` real milliseconds, with nothing else driving the
+     * page, and records `CB_SIM_TICKS_RUN` (the sim's own `ticksRun`, readable without parking) at
+     * every wake. docs/plan/16d-sim-pacing-under-external-wakes.md, step 1. */
+    __wakeSimFor?: (ms: number, intervalMs: number) => Promise<{ t: number[]; ticks: number[] }>
   }
 }
 
@@ -99,6 +105,22 @@ window.__simCounters = async () => {
   const counters = await simCounters(client)
   await resumeWorkers(client)
   return counters
+}
+
+window.__wakeSimFor = async (ms, intervalMs) => {
+  const { control } = clientTestHandle(client)
+  const t: number[] = []
+  const ticks: number[] = []
+  const start = performance.now()
+  for (;;) {
+    const now = performance.now() - start
+    t.push(now)
+    ticks.push(Atomics.load(control.words, CB_SIM_TICKS_RUN))
+    if (now >= ms) break
+    control.wake(WORKER_HOST)
+    await sleep(intervalMs)
+  }
+  return { t, ticks }
 }
 
 window.__pageReady = true
