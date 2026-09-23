@@ -11,6 +11,7 @@ import { expectWithinBudget } from '../support/budgets.ts'
 import { buildDrawListBytes, type DrawRecordSpec, microDrawCamera } from './support/draw-scene.ts'
 import { expectAdapter, expectNoGpuErrors } from './support/gpu.ts'
 import { openPage } from './support/page.ts'
+import { seamSnap } from './support/terrain-hash-ref.ts'
 
 const TOL = 2 // 0020 §6: "≤ 2/255 per channel"
 const KIND_SPRITE = 0
@@ -87,6 +88,61 @@ test('sprite.pivot_and_size_probe', async ({ page }, testInfo) => {
   expectPixel(pixels, 30, 32, BLUE, TOL) // bottom-left
   expectPixel(pixels, 40, 32, YELLOW, TOL) // bottom-right
   expectPixel(pixels, 10, 10, [0, 0, 0, 0], TOL) // well outside the sprite's own box
+
+  expectNoGpuErrors(await page.evaluate(() => window.__drawables?.errors() ?? []))
+})
+
+// Fix round 1 (coordinator review): the binding rule requires proving that anchoring the sprite
+// magnified formula on `floor(texel)` instead of `floor(texel + 0.5)` fails a probe placed at a
+// *fractional* offset, mirroring `terrain.seam_matches_reference`'s own approach -- none of the
+// probes above exercise this (they all land, once seamed, on a texel comfortably inside its own
+// quadrant, which every candidate anchor choice agrees on once `offset = texel - anchor` cancels the
+// anchor point algebraically; only a probe whose seamed position crosses close enough to a real
+// quadrant boundary tells the two anchor choices apart, the same way M09b's own bug was invisible to
+// probes at fractional-but-not-boundary-crossing positions). This test's own probe was found by a
+// small offline search (not committed) over camera/pixel combinations for the "quad" sprite, scoring
+// each by how far its seamed texel position sits off a texel centre (checked) and how close to the
+// real quadrant boundary (close, but not past it) -- `docs/plan/17b-sprites-and-frame-budget.md`
+// Deviations "Fix round 1" records the exact search and the algebraic finding that a plain anchor
+// swap alone (without also decoupling the offset from the anchor, as the real M09b bug did) cancels
+// out in the *centre* of a saturating region, so a probe close to the boundary is required to expose
+// it at all in this formula's own shape.
+test('sprite.seam_matches_reference', async ({ page }, testInfo) => {
+  await initWithSprites(page, testInfo)
+
+  // "quad" (id 0), `pos: [0, 0]`, `tilesPerPx = 1/24`: `scale.x = rect.w(8) * tilesPerPx / size.x(2)
+  // = 1/6`, `scale.y = rect.h(8) * tilesPerPx / size.y(1) = 1/3` (both < 1: the magnified/fat-pixel
+  // branch, `lod <= 0`). Pixel (41, 21) on a 64x64 target: `raw_uv = (43/96, 5/16)`, exactly (worked
+  // in exact fractions, not floats, to rule out rounding). `seamSnap` (the same reference `terrain.
+  // seam_matches_reference` uses -- this sprite kind's own fat-pixel formula is structurally
+  // identical, redone per-axis) predicts the seamed position lands at texel `(3.5, 2.5)`: solidly
+  // inside the top-left (red) quadrant, 0.5 texels off the x=4 quadrant boundary and comfortably off
+  // both axes' own texel centres.
+  const TILES_PER_PX = 1 / 24
+  const RECT_W = 8
+  const RECT_H = 8
+  const SIZE_W = 2
+  const SIZE_H = 1
+  const scaleX = (RECT_W * TILES_PER_PX) / SIZE_W
+  const scaleY = (RECT_H * TILES_PER_PX) / SIZE_H
+  const rawU = 43 / 96
+  const rawV = 5 / 16
+  const seamedU = seamSnap(rawU, RECT_W, scaleX)
+  const seamedV = seamSnap(rawV, RECT_H, scaleY)
+  expect(seamedU * RECT_W).toBeCloseTo(3.5, 9)
+  expect(seamedV * RECT_H).toBeCloseTo(2.5, 9)
+
+  const camera = microDrawCamera({ viewportPxW: 64, viewportPxH: 64, tilesPerPx: TILES_PER_PX })
+  const quad: DrawRecordSpec = {
+    pos: [0, 0],
+    size: [0, 0],
+    kind: KIND_SPRITE,
+    spriteId: SPRITE_QUAD,
+    layer: 0,
+    color: WHITE,
+  }
+  const pixels = await render(page, [quad], camera)
+  expectPixel(pixels, 41, 21, RED, TOL)
 
   expectNoGpuErrors(await page.evaluate(() => window.__drawables?.errors() ?? []))
 })
