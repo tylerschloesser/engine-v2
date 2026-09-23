@@ -619,6 +619,56 @@ not a new wrapper object.
 - `pnpm test`/`pnpm test:slow`/`pnpm lint` (the full runs) were not run (delegation prompt: "Don't
   run the full suites; I am the gate").
 
+### Fix round 1 (coordinator review, after M17 done)
+
+Three tests that could not fail as intended, found by review and fixed here, each its own commit
+(`037f5fa`, `f06a95d`, `60ef683`):
+
+1. **`counters.draws_equal_nonempty_layers`** only ever saw one non-empty layer (`fx-drawables`'
+   `extract` wrote every circle to layer 0), and both sides of its own comparison came from the
+   same `layerCounts` array in `render/drawables.ts` (a `computeLayerOffsets` bug would have moved
+   `drawCalls()`'s delta and `nonEmptyLayerCount()` together, undetected). `Entity`/`Action::Spawn`
+   gain a `layer: u8` field (genesis stays at layer `0`, golden unaffected, confirmed unchanged);
+   `gc-drawables.ts`'s population loop spreads its 300 entities across layers `0, 3, 7` (a gap at
+   1/2/4/5/6), tracked in its own `POPULATE_LAYERS` -- the test's ground truth now, never anything
+   derived from `render/drawables.ts`'s own layer-count parsing. Proven by injection: dropping the
+   last layer from `encodeDraws`'s loop bound, and removing its "skip empty layers" check, both
+   trip it (verified red, reverted).
+2. **`counters.render.pipelineSwitches`** (`budgets.json`) was read by nothing, and neither were
+   `pipelineSwitches()`/`instanceBytes()`/`__drawablesGcCounters`. New test `counters.pipeline_
+   switches_and_instance_bytes`: `pipelineSwitches`'s delta across one `acquireAndDraw()` call on
+   the (now three-layer) frame stays `<= budget('counters.render.pipelineSwitches')`; `instanceBytes`'s
+   delta across one `acquire()` call equals `record_count * 32`. Proven by injection: moving
+   `encodeDraws`'s `pass.setPipeline` call inside the per-layer loop (3 switches instead of 1) trips
+   the first; an off-by-one-record byte count in `acquireCore` trips the second (verified red,
+   reverted).
+3. **`frameview_zoom_matches_camera_block`** (`crates/engine/src/client/frame_view.rs:346`) built a
+   `FrameView` by hand with `zoom: 42.5` and read it straight back -- it proved the accessor exists,
+   never that `game_instance.rs` actually wires `zoom: camera.tiles_across`/`px_per_tile` from a
+   real `CameraBlock` through `Instance::frame`. Moved to `fixtures/drawables/tests/drawlist_
+   golden.rs` (the only place that can drive a real `GameInstance<Drawables>` through the real ABI
+   `frame()` method): three `CameraBlock`s with `tiles_across` at `SMALL_ZOOM_THRESHOLD - 1`/`at`/
+   `+ 1`, checking `client.drawlist_len()` (3, 3, 2, the same numbers `drawlist_zoom_threshold_
+   hides_only_the_small_entity` already pins via `Loopback`, now also proven through the real
+   wiring) and a new `LAST_PX_PER_TILE` thread-local (`fx-drawables`' `extract()` records `view.
+   px_per_tile()` on every call -- never touches a `Draw` record, so the golden hash is unaffected,
+   confirmed unchanged). The old `crates/engine` unit test is removed, not left behind: that crate
+   has no concrete `Game` whose `extract()` exposes `zoom()`/`px_per_tile()` observably. Proven by
+   injection: swapping `zoom: camera.tiles_across` for `camera.half_extent_tiles[0]` trips the
+   record-count assertions; dropping `.max(viewport_px[1])` from the `px_per_tile` formula trips
+   the `px_per_tile` assertion (the test's own `VIEWPORT_PX` is deliberately taller than wide so
+   the two candidate formulas disagree) -- both verified red, reverted.
+
+None of the three changed `drawlist_fixture_hash_golden`'s own blessed hash (`07e82d2cb76fe412`,
+re-verified after every fix). Re-verified at the end: `pnpm test browser -t drawables` -> `8 tests`
+(3.8s/25s); `pnpm test browser -t draw` -> `14 tests` (5.2s/25s, the new `counters.pipeline_
+switches_and_instance_bytes` at 529ms); `pnpm test rust -t drawlist/frameview/camera_block/wgsl` ->
+10/2/3/2; `cargo nextest run -p fx-drawables` -> 7/7; `pnpm test unit -t drawables/uberquad` ->
+2/1; `pnpm test wasm -t drawlist` -> 2 (unchanged); `cargo clippy --workspace --all-targets -- -D
+warnings`, `pnpm exec biome check .`, `cargo fmt --check`, `pnpm --filter engine typecheck` all
+clean. Targeted foreground runs only, nothing in the background left running, no full `pnpm test`/
+`pnpm lint` (per the fix-round instruction).
+
 ### Notes for later briefs
 
 - `window.__drawablesTest`'s `resume()`/`park()` bracketing requirement (a parked worker only
