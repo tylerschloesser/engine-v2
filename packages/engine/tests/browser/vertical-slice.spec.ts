@@ -33,7 +33,6 @@
 import { expect, test } from '@playwright/test'
 import { instantiate } from '../../src/loader.js'
 import type { AdapterInfo } from '../../src/render/device.js'
-import type { FrameUniformValues } from '../../src/render/terrain.js'
 import type { NetCounters } from '../../src/test/client.js'
 import type { PointerPhase } from '../../src/test/input.js'
 import { expectPixel } from '../../src/test/render.js'
@@ -60,13 +59,14 @@ declare global {
     __netCounters?: (conn?: number) => Promise<NetCounters>
     __worldHash?: () => Promise<string>
     __worldHashAndTick?: () => Promise<{ hash: string; tick: number }>
+    __sliceSettle?: () => Promise<void>
     __ringDrops?: () => number
     __tick?: () => number
     __hudText?: () => string
-    __writeFrameUniform?: (v: FrameUniformValues) => void
-    __renderAndRead?: (
-      width: number,
-      height: number,
+    __probeTile?: (
+      tileX: number,
+      tileY: number,
+      size: number,
     ) => Promise<{ width: number; height: number; data: number[] }>
     __errors?: () => string[]
     __adapterInfo?: () => AdapterInfo
@@ -84,36 +84,25 @@ const GRASS: readonly [number, number, number, number] = [34, 139, 34, 255]
 const WATER: readonly [number, number, number, number] = [30, 80, 200, 255]
 const TOL = 2 // 0020 §6
 
-/** `originCamera`'s own generalisation (`connected-terrain.spec.ts`): an axis-aligned camera whose
- * centre tile is exactly `(tileX, tileY)`, at zoom 1 tile/px, so tile `(tileX, tileY)` lands on the
- * exact centre pixel of a `viewportPx`-square target (`connected-terrain.spec.ts`'s own inverted-
- * formula precedent, generalised off tile (0, 0) to an arbitrary one by zigzag-encoding the tile
- * itself in `camTileX/Y` and keeping the fractional part at 0). */
-function cameraAt(tileX: number, tileY: number, viewportPx: number): FrameUniformValues {
-  return {
-    camTileX: tileX,
-    camTileY: tileY,
-    camFracX: 0,
-    camFracY: 0,
-    viewportPxW: viewportPx,
-    viewportPxH: viewportPx,
-    tilesPerPx: 1,
-    seed: 0,
-    cursorTileX: 0,
-    cursorTileY: 0,
-    cursorValid: 0,
-    neighbourCutoffPx: 0,
-  }
-}
-
+/** `readTilePixel`'s own camera: tile `(tileX, tileY)` exactly centred, zoom 1 tile/px, so it lands
+ * on the exact centre pixel of a 16x16 probe target (`connected-terrain.spec.ts`'s own inverted-
+ * formula precedent, generalised off tile (0, 0) to an arbitrary one). Gate-round fix: this used to
+ * be built here and sent to `__writeFrameUniform`, a *separate* `page.evaluate` call from
+ * `__renderAndRead` -- on `slice.html` specifically (unlike `connected-terrain.html`), a real
+ * production render loop keeps calling `renderer.draw()` on its own in the background, and the gap
+ * between those two calls was long enough, under contention, for a real animation frame to
+ * interleave and overwrite the probe's own camera before its draw ran (Deviations has the full
+ * mechanism and the reproduction). `__probeTile` (`slice.ts`) does both in one atomic call now;
+ * this function just forwards to it. */
 async function readTilePixel(
   page: import('@playwright/test').Page,
   tileX: number,
   tileY: number,
 ): Promise<import('../../src/test/render.js').PixelBuffer> {
-  const camera = cameraAt(tileX, tileY, 16)
-  await page.evaluate((cam) => window.__writeFrameUniform?.(cam), camera)
-  const raw = await page.evaluate(([w, h]) => window.__renderAndRead?.(w, h), [16, 16] as const)
+  const raw = await page.evaluate(([x, y]) => window.__probeTile?.(x, y, 16), [
+    tileX,
+    tileY,
+  ] as const)
   return {
     width: raw?.width ?? 0,
     height: raw?.height ?? 0,
@@ -161,12 +150,24 @@ test('vertical_slice', async ({ page }, testInfo) => {
   const adapterInfo = await page.evaluate(() => window.__adapterInfo?.())
   expectAdapter(testInfo, adapterInfo ?? null)
 
-  // Phase 2: pristine terrain probe, at a tile `fx-puts`'s own tick-rule `WALK` never touches (the
-  // module doc comment on `fixtures/puts/src/lib.rs`'s `WALK` constant: eight fixed offsets within
-  // one tile of the origin) -- (20, 20) is well clear of it, so its colour can only ever change
-  // through this test's own dispatched `Paint`, not the tick rule's own once-a-second overlay.
+  // Phase 2: pristine terrain probe, at a tile `fx-puts`'s own tick-rule `WALK` never touches --
+  // provably, for *any* tick count, not just early ones (gate-round check): `WALK` is a fixed
+  // 8-entry array (`fixtures/puts/src/lib.rs`), indexed `WALK[g.walk_i % WALK.len()]` forever, so
+  // it can only ever paint one of its own 8 fixed positions near the origin -- (20, 20) can never
+  // be one of them, regardless of how many simulated seconds elapse.
+  //
+  // Gate-round fix: a pixel probe taken after a fixed real-time wait is not deterministic on this
+  // real-time-paced page -- under contention the client worker's own chunk-generation round trip
+  // can still be in flight when a fixed `setTimeout` ends (`node scripts/repeat.mjs browser 15
+  // --load 10` found this: 2/30 failures, all `expectPixel(8, 8) channel r: got 34, want 30` --
+  // Phase 5's *post*-paint `WATER` read below finding pristine `GRASS` still there, not a `WALK`
+  // reach: 34 is `GRASS`'s own R channel exactly, and `WALK` cannot reach either probed tile at any
+  // tick count, so the race is in the render catching up, not in what the sim painted).
+  // `__sliceSettle` (`engine/test.untilQuiescent`) is deterministic instead: it waits for every SAB
+  // ring -- including both gen-worker ring pairs -- to fully drain, so it only resolves once
+  // whatever chunk-generation round trip was in flight has actually landed.
   await page.evaluate(() => window.__setCamera?.(20, 20, 8))
-  await page.evaluate(() => new Promise((r) => setTimeout(r, 200))) // let chunk (20,20)'s own generation land
+  await page.evaluate(() => window.__sliceSettle?.())
   expectPixel(await readTilePixel(page, 20, 20), 8, 8, GRASS, TOL)
 
   // Phase 3: injected pan brings new chunks into subscription -- a real drag through
@@ -194,12 +195,23 @@ test('vertical_slice', async ({ page }, testInfo) => {
   // unexercised interaction between real-time pacing and a real, continuously-rendering topology
   // (recorded in this milestone's Deviations, not fixed here: `worker/sim.ts` is outside this
   // milestone's Files touched, and the fix belongs with ADR 0030's own owner). Give it room.
-  await page.evaluate(() => new Promise((r) => setTimeout(r, 3000)))
-  const after = await page.evaluate(() => window.__netCounters?.())
-  expect(
-    after?.chunkEntersPristine ?? 0,
-    'a real drag must move the camera far enough to subscribe new chunks',
-  ).toBeGreaterThan(before?.chunkEntersPristine ?? -1)
+  // Gate-round fix: a fixed real-time wait here has the same shape the Phase 2/5 pixel probes had
+  // (`node scripts/repeat.mjs browser 15 --load 10`'s own finding, below) -- 3 s is a guess, not a
+  // guarantee, and under the wake-starvation this comment already describes the real wait could
+  // need to be longer. Polling for the specific condition this assertion is actually about (`
+  // chunkEntersPristine` increasing), with a generous ceiling, replaces the guess with the real
+  // thing: it waits exactly as long as needed and still fails, clearly, if panning genuinely never
+  // subscribes a new chunk.
+  const baseline = before?.chunkEntersPristine ?? -1
+  await expect
+    .poll(
+      async () => (await page.evaluate(() => window.__netCounters?.()))?.chunkEntersPristine ?? 0,
+      {
+        timeout: 20_000,
+        message: 'a real drag must move the camera far enough to subscribe new chunks',
+      },
+    )
+    .toBeGreaterThan(baseline)
 
   // Phase 4: a sim worker exists and `worldHash()` matches a golden at a fixed tick. `slice.html`
   // real-time-paces its own sim (Phase 3's own comment): the exact tick this page has reached at
@@ -236,9 +248,9 @@ test('vertical_slice', async ({ page }, testInfo) => {
 
   // Phase 5: `dispatch({ Paint })` returns 1 (this page's very first dispatch), `onActionResult(1,
   // 'Confirmed')` fires, and the probe at that tile shows the new colour. Tile (50, 50): clear of
-  // both `WALK` and the (20, 20) pristine-probe tile above.
+  // `WALK` at any tick count (Phase 2's own comment) and of the (20, 20) pristine-probe tile above.
   await page.evaluate(() => window.__setCamera?.(50, 50, 8))
-  await page.evaluate(() => new Promise((r) => setTimeout(r, 200)))
+  await page.evaluate(() => window.__sliceSettle?.()) // deterministic: let chunk (50, 50) land
   expectPixel(await readTilePixel(page, 50, 50), 8, 8, GRASS, TOL)
   const seq = await page.evaluate(() => window.__dispatchPaintAt?.(50, 50))
   expect(seq).toBe(1)
@@ -248,7 +260,15 @@ test('vertical_slice', async ({ page }, testInfo) => {
   await expect
     .poll(() => page.evaluate(() => window.__sliceConfirmed?.() ?? 0), { timeout: 20_000 })
     .toBe(1)
-  await page.evaluate(() => new Promise(requestAnimationFrame)) // let the render loop draw the applied delta
+  // Gate-round fix (Phase 2's own comment has the full story): `Confirmed` firing only proves the
+  // *result* reached `main`'s UI-ring drain -- it says nothing about whether the *matching* upload-
+  // ring record (the same `on_frame` call queues both, but they drain through two independent rAF-
+  // registered pumps on `main`) has been drained into `renderer`'s own textures yet. A fixed "one
+  // more `requestAnimationFrame`" wait assumes that always happens within one frame; under
+  // contention it does not (this is the exact failure `node scripts/repeat.mjs browser 15 --load
+  // 10` found: this line read pristine `GRASS` instead of the painted `WATER`). `__sliceSettle`
+  // waits for the upload ring to actually drain instead of guessing a frame count.
+  await page.evaluate(() => window.__sliceSettle?.())
   expectPixel(await readTilePixel(page, 50, 50), 8, 8, WATER, TOL)
 
   // Phase 6: an out-of-range Paint yields Rejected with the typed reason (`Puts::admit`'s new

@@ -1062,3 +1062,62 @@ fixed along the way, a syntax-only change to `Puts::admit`, no behaviour change,
 both existing puts goldens). `pnpm gc software` -> 77/77 pass. `grep -rn bigint packages/engine/
 fixtures/*/bindings` -> empty. `git diff fixtures/puts/bindings/` after the clippy fix -> empty
 (bindings unaffected by the syntax-only change).
+
+### gate round: vertical_slice pixel flake
+
+`node scripts/repeat.mjs browser 15 --load 10` found `vertical_slice` failing 2/30 runs, always
+`expectPixel(8, 8) channel r: got 34, want 30` -- 34 is `GRASS`'s own R channel exactly, so Phase
+5's post-paint `WATER` read was seeing pristine `GRASS` still there.
+
+**Hypothesis checked and rejected.** The orchestrator's hypothesis was `fx-puts`'s tick rule
+(`WALK`) reaching one of the probed tiles. `WALK` (`fixtures/puts/src/lib.rs:158-166`) is a `const
+[(i32, i32); 8]` of fixed offsets in `{-1,0,1}x{-1,0,1}` near the origin, indexed forever by `WALK
+[g.walk_i as usize % WALK.len()]` (line 280) -- it can only ever paint one of those 8 fixed
+positions, at any tick count, so it can never reach either probed tile ((20, 20) or (50, 50)). The
+race was in the render catching up to a real event, not in what the sim painted.
+
+**Real mechanism, three instances of the same shape.** `slice.html` real-time-paces its own render
+loop (`requestAnimationFrame`, continuously calling `renderer.writeFrameUniform`+`draw` with the
+*real* camera) and its own sim/gen/client workers, unlike every other test page in this suite. A
+probe or wait built against wall-clock time or a fixed frame count assumes a bounded amount of work
+finishes within that bound; under contention it does not:
+1. Phase 2/5 pre-paint probes: a `setTimeout(r, 200)` after `__setCamera` assumed chunk generation
+   for the new camera tile would land within 200ms of real time.
+2. Phase 5 post-paint probe: `await new Promise(requestAnimationFrame)` after `Confirmed` fired
+   assumed the *matching* upload-ring record (queued by the same `on_frame` call, but drained by an
+   independent rAF-registered pump from the UI-ring result) would drain into `renderer`'s textures
+   within one more frame.
+3. `readTilePixel` itself (independent of timing): `__writeFrameUniform` then `__renderAndRead` was
+   two separate `page.evaluate` calls, i.e. two separate CDP round trips with a real async gap
+   between them, on a page whose own production loop calls `renderer.draw()` every real frame. Under
+   contention the production loop's own rAF callback could interleave in that gap and overwrite
+   `renderer.frameUniform` with the *real* camera before the probe's own draw ran, so the probe read
+   the real camera's tile instead of the one it asked for -- silently, no error, just the wrong
+   pixel.
+
+**Fix, verified against the fixture (not assumed):** replaced every fixed wait with a wait on the
+actual condition (`engine/test.untilQuiescent`, one rAF first -- see the `__sliceSettle` doc comment
+in `slice.ts` for why the rAF has to come first, to avoid `untilQuiescent`'s own vacuous-pass trap:
+right after a bare `cameraState` mutation, "every ring drained + `W_ACK==CB_FRAME_REQ`" can hold
+trivially because nothing has been pushed yet), and made the pixel probe atomic (`__probeTile`: one
+`page.evaluate` call doing `writeFrameUniform` + the synchronous half of `renderTo` in the same JS
+turn, so nothing can interleave). Phase 3's fixed 3s wait was also replaced with `expect.poll` on
+`chunkEntersPristine` actually increasing. `resumeWorkers` at the end of `__sliceSettle` un-parks
+every worker `untilQuiescent`'s own trailing `parkWorkers` call parked, so the page's own production
+loop and workers are still live for the next phase (confirmed: all later phases in the same test run
+pass after a `__sliceSettle` call, including two more calls to it later in the same test).
+
+**Evidence.**
+- `pnpm test browser -t vertical_slice` x6 foreground (1 solo + 5 in a loop): 6/6 pass, ~7.3-7.6s
+  each.
+- A foreground, bounded (60s per-run kill timeout, nothing left running after) loop of `pnpm test
+  browser -t vertical_slice` x20 under `--load 10` (10 CPU-burner children, killed on completion):
+  `vertical_slice x20 load=10: pass=20 fail=0 hang=0`.
+- **Failability shown**, isolating the atomic-probe fix specifically: with `__sliceSettle`/
+  `expect.poll` left in place but `__probeTile` reverted to the pre-fix two-call `__writeFrameUniform`
+  + `__renderAndRead` split, the same bounded, foreground, `--load 10` loop reproduced the exact
+  original signature at run 15/30: `expectPixel(8, 8) channel r: got 34, want 30 (tol 2)`. Reverted
+  back to `__probeTile` immediately after (typecheck clean, `pnpm test browser -t vertical_slice`
+  passing again before committing). This confirms the atomic-probe half of the fix is load-bearing,
+  not incidental, and pins the mechanism to instance 3 above (the two-call CDP gap), not merely the
+  wall-clock waits.

@@ -33,7 +33,7 @@ import { installPageStyles } from '../../../../src/input/page-css.ts'
 import { loadTileArt } from '../../../../src/render/art.ts'
 import type { AdapterInfo, RendererDevice } from '../../../../src/render/device.ts'
 import { initDevice } from '../../../../src/render/device.ts'
-import type { FrameUniformValues, TerrainRenderer } from '../../../../src/render/terrain.ts'
+import type { TerrainRenderer } from '../../../../src/render/terrain.ts'
 import { createTerrainRenderer } from '../../../../src/render/terrain.ts'
 import { createViewportController } from '../../../../src/render/viewport.ts'
 import { RingConsumer, type RingStats } from '../../../../src/sab/ring.ts'
@@ -45,6 +45,7 @@ import {
   worldHash as readWorldHash,
   resumeWorkers,
   simCounters,
+  untilQuiescent,
 } from '../../../../src/test/client.ts'
 import {
   attachCameraInputTestHooks,
@@ -86,13 +87,16 @@ declare global {
     __netCounters?: (conn?: number) => Promise<NetCounters>
     __worldHash?: () => Promise<string>
     __worldHashAndTick?: () => Promise<{ hash: string; tick: number }>
+    __sliceSettle?: () => Promise<void>
     __ringDrops?: () => number
     __tick?: () => number
     __hudText?: () => string
-    __writeFrameUniform?: (v: FrameUniformValues) => void
-    __renderAndRead?: (
-      width: number,
-      height: number,
+    /** Atomic probe (Deviations, gate-round fix): sets the probe's own camera and submits its own
+     * draw in one `page.evaluate` call, so the real production loop's own draw can never race it. */
+    __probeTile?: (
+      tileX: number,
+      tileY: number,
+      size: number,
     ) => Promise<{ width: number; height: number; data: number[] }>
     __errors?: () => string[]
     __adapterInfo?: () => AdapterInfo
@@ -276,6 +280,34 @@ window.__worldHashAndTick = async () => {
   return { hash: h, tick: counters.ticksRun }
 }
 
+// Gate-round fix: a pixel probe taken after a fixed real-time wait (a `setTimeout`, or "one more
+// `requestAnimationFrame`") is not deterministic on a real-time-paced page -- under contention the
+// client worker's own chunk-generation round trip (Phase 2/5's pre-paint reads) or its own upload-
+// ring drain of a just-applied delta (Phase 5's post-paint read) can still be in flight when the
+// fixed wait ends, so the probe races real time instead of the actual event it needs. `engine/
+// test.untilQuiescent` is deterministic instead: it polls every `SabSet` ring (uploadRing and both
+// gen-worker ring pairs included) until `pushed === popped` and the client's own `W_ACK` has caught
+// up with `CB_FRAME_REQ`, so it only resolves once whatever was in flight has actually landed --
+// then parks every worker, which this page (a real production page that must keep running for
+// later phases and for Tyler's own use) immediately undoes with `resumeWorkers`.
+//
+// **`untilQuiescent` alone is not enough right after a bare `cameraState` mutation** (a real, first
+// draft of this fix regressed exactly this way, failing in ~400 ms reading uninitialised texture
+// memory): its own wait condition can be trivially satisfied *before* the new camera position has
+// even reached a real animation frame -- nothing has been pushed onto any ring yet, so "every ring
+// drained" is vacuously true, and `W_ACK === CB_FRAME_REQ` can also already hold from *before* the
+// mutation (neither has moved since the last check). One real `requestAnimationFrame` first
+// guarantees the production loop's own `onCamera`/`writeCameraAndWake` phase has actually run with
+// the *current* camera position (rAF callbacks fire in registration order, and this page's own real
+// loop was registered, and is continuously running, well before any test hook can call this one) --
+// only then does `CB_FRAME_REQ` reflect the change `untilQuiescent` needs to wait for the client
+// worker to catch up with.
+window.__sliceSettle = async () => {
+  await new Promise(requestAnimationFrame)
+  await untilQuiescent(client)
+  await resumeWorkers(client)
+}
+
 // --- `ring drops`: sum of `stats().drops` over every `SabSet` ring (Scope) ----------------------
 // Side-effect-free reads (`RingConsumer.stats` only `Atomics.load`s the shared drop counter, never
 // touches the pop cursor), so building one `RingConsumer` per ring purely to read `.stats()` never
@@ -360,16 +392,40 @@ setInterval(renderHud, 200)
 renderHud()
 window.__hudText = hudText
 
-// --- GPU readback probe (`vertical_slice`'s own terrain probes, `connected-terrain.ts`'s own
-// `__writeFrameUniform`/`__renderAndRead` shape verbatim: the `Renderable` overload of `renderTo`,
-// not `Client`'s -- the real render loop above already keeps `renderer`'s page/indirection
-// textures converged via its own `uploadDrain`, so a second, independent `RingConsumer` here would
-// race it over the same ring). -----------------------------------------------------------------
-window.__writeFrameUniform = (v) => {
-  renderer.writeFrameUniform(v)
-}
-window.__renderAndRead = async (width, height) => {
-  const target = renderTo(renderer, { width, height })
+// --- GPU readback probe (`vertical_slice`'s own terrain probes) --------------------------------
+// Gate-round fix: `connected-terrain.ts`'s own `__writeFrameUniform`/`__renderAndRead` pair (two
+// *separate* `page.evaluate` calls) is safe on that page because nothing else there ever calls
+// `renderer.draw()` on its own -- but `slice.html` runs a real, continuously-ticking production
+// loop (above) that calls `renderer.writeFrameUniform(renderer.frameUniform)` + `renderer.draw()`
+// every real animation frame, using the *real* (possibly still-settling) camera. Splitting the
+// probe into two page-evaluate calls leaves a real async gap (a CDP round trip) between "set the
+// probe's own camera" and "draw with it" -- long enough, under contention, for the production
+// loop's own rAF callback to interleave and overwrite `renderer.frameUniform` with the real camera
+// before the probe's own draw runs, so the probe silently reads the *real* camera's tile instead of
+// the one it asked for (`node scripts/repeat.mjs browser 15 --load 10`'s own finding: `Phase 5`'s
+// post-paint read got pristine `GRASS` where `WATER` was expected, reproduced once more locally
+// under `--load 10` after the first `untilQuiescent` fix, which did not close this gap). Fixed by
+// making the probe atomic: `writeFrameUniform` and the synchronous half of `renderTo` (which
+// submits the draw) now run in the *same* JS turn, inside one `page.evaluate` call -- nothing else
+// can run between them (JS is single-threaded; a real rAF callback only ever runs *between* turns,
+// never inside one), so the production loop can only ever race the probe's own *next* draw, not
+// this one, and by the time this one is submitted its own camera is already locked in.
+window.__probeTile = async (tileX, tileY, size) => {
+  renderer.writeFrameUniform({
+    camTileX: tileX,
+    camTileY: tileY,
+    camFracX: 0,
+    camFracY: 0,
+    viewportPxW: size,
+    viewportPxH: size,
+    tilesPerPx: 1,
+    seed: 0,
+    cursorTileX: 0,
+    cursorTileY: 0,
+    cursorValid: 0,
+    neighbourCutoffPx: 0,
+  })
+  const target = renderTo(renderer, { width: size, height: size })
   const pixels = await readPixels(target)
   return { width: pixels.width, height: pixels.height, data: Array.from(pixels.data) }
 }
