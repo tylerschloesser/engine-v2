@@ -113,4 +113,93 @@ Update `packages/engine/CLAUDE.md` or the `gc-test` skill only if a stated pacin
 none (M16's device check covers `slice.html`'s advancing tick).
 
 ## Deviations
-(filled in during Phase 3)
+
+### Seams provided (exact shapes)
+- `CB_SIM_TICKS_RUN = 6` (`src/sab/control.ts`): the sim worker's `ticksRun`, stored by `worker/sim.ts`'s
+  `body()` every pass. Global word 6 was reserved; the "6-7 reserved" comment now reads "7 reserved".
+- `createAtomicsTimer(clock: Clock): AtomicsTimer` (`src/worker/atomics-timer.ts`): takes a clock again.
+  `AtomicsTimer` gained `interrupt(): void`. `poll()` now means "the last wait timed out". `worker/sim.ts`:
+  `if (wokenBy === lastWokenBy) atomicsTimer.poll() else atomicsTimer.interrupt()`.
+- ADR: [0032](../decisions/0032-atomics-timer-bounds-external-wakes.md) (amends 0030 §2). Not done, because
+  they are outside the implementer's edit list: 0030's `Status:` "Amended by" line, `PRE-PLAN.md` §1,
+  `PLAN.md` "Plan-level decisions", and the root `CLAUDE.md` ADR range.
+- `__sliceSettle(tileX?, tileY?)` (`slice.ts`): an optional tile was added. `__probeTile` is unchanged.
+- `window.__wakeSimFor(ms, intervalMs)` (`connected-paced.ts`).
+
+### Step 1
+`sim_ticks_steadily_under_external_wakes` (`connected-paced.spec.ts`): wakes `WORKER_HOST` directly every
+16 ms for 2 s and samples `CB_SIM_TICKS_RUN` at every wake. Tolerance: 4 ticks at every ~250 ms sample, and
+no flat stretch longer than 120 ms (2 intervals + one wake interval + 4 ms). On base (`5de7f8c` plus the
+observation word only): `samples 262ms:0 512ms:0 ... 2004ms:0; worst drift -40.1 ticks; longest flat 2004 ms`.
+
+### Step 2 (the design differs from the brief's lead; ADR 0032 has the reasoning)
+- **Clock-free crediting was built first and measured insufficient.** It credits only timed-out waits and
+  quantises waits after an interruption. In Chrome, small `Atomics.wait` timeouts overshoot, so credited time
+  ran at ~60 % of real time for quantum shifts 2, 3 and 4. Step 1 then read drift -9.3, -5.3 and -8.2 ticks,
+  beyond resync's catch-up cap.
+- **Built instead: two integer bounds.** `lo` counts proven time (timed-out waits) and `hi` estimated time
+  (every wait handed out). The clock is read only when `lo < due <= hi`. Waits are capped at `ms >> 3` while
+  interrupted, and the cap halves down to 1 ms on back-to-back interruptions. There is never a read on an
+  uninterrupted pass (unit test: 0 reads over 40 fires).
+- Step 1 after the fix, 3 runs: `40` ticks at 2 s every time, worst drift 0.3 ticks, longest flat 69-70 ms.
+- `poll_skips_a_spurious_tick_on_a_ring_wake` is unchanged and passes; it reads **30** of an expected 30 (3
+  runs; M15e read 26-27). **Failability re-run:** with the guard reverted to an unconditional `atomicsTimer.poll()`,
+  it reads **46** and **47** against the `< 40.5` ceiling. Step 1's test also fails then, at +77.7 and +75.9
+  ticks, so it catches over-ticking as well as starvation.
+- Unit tests: `src/worker/atomics-timer.test.ts` (5, simulated clock). They cover producer rates from 0.25 to
+  49 ms with 0 and 2 ms overshoot: never early, at most one tick short in 2 s, at most 3.5 reads per fire at
+  producer intervals of 5 ms or more, and at most wakes/5 reads at any rate (measured maximum 0.18 reads per
+  wake at a 0.25 ms producer).
+- **Zero-GC**, `sim` isolate, budget 8 unchanged everywhere. `windowByFn` came from forcing
+  `gc.pages["sim-paced"].isolates.sim` to 1 (reverted).
+  - `sim-paced` under default V8: 3.83, 1.69 and 1.99 B/frame. The new site `settle@` is 372-696 B per 600
+    frames (the gated `clock.now()`, ~31-58 reads). `resync` does not appear.
+  - Under forced `--no-opt --no-sparkplug`: 3.05 and 3.43 B/frame, `settle@` 1332-1560 B.
+  - Base `sim-paced` passed even at a forced budget of 1: its sim never ticked inside the window. The 3.73-3.81
+    in its `formula` string predates M15b's guard.
+  - `pnpm gc -t "(sim|sim-paced|topology|echo|connected-terrain|zero_gc_action) (clean|neg)"`: **46 passed**
+    under forced `--no-opt --no-sparkplug` (the flag edit in `playwright.config.ts` was reverted; `git
+    checkout` confirmed), and **46 passed** under default V8. Every `object` and `@slow` `burst` control trips.
+
+### Step 3
+- The stall fix alone took `vertical_slice` from 5.7 s to 3.68-3.73 s.
+- Phase attribution: the phase-4 `tick >= 50` poll then cost 2.9 s. `__tick` reads the clock block, which
+  only moves on frames with content (the tick rule's paint at ticks 0, 20, 40, ...), so it resolved at tick 60.
+- The threshold is now **20** (the first tick-rule paint after genesis). The checkpoint hash assertion and
+  `referenceAt100` are unchanged. Result: 1.82-1.86 s.
+- **Deviation to review:** a threshold changed, no assertion dropped. It is not on the gate's mask list, but
+  it is a number in the spec.
+
+### Step 4
+- **Attribution.** Diagnostics used during the investigation were not committed.
+  - Under `repeat.mjs browser 8 --load 10` with step 3 in place: 2/8 fails, then 2/8 again. The failure was
+    no longer M16c's post-paint read but phase 2's pre-paint GRASS read.
+  - That read got `32,32,32`, the shader's `NEUTRAL_COLOR`: no indirection entry for chunk (0,0).
+  - At the failing read, parked: `client_chunk_hash(0,0)` = Ok, `client_gen_stats` 37/37 delivered with 0
+    pending and 0 in flight, rings drained. So the chunk was **in the client store, not on the GPU**.
+  - Another settle (one more client frame) fixed it. `Uploader::on_frame`, which queues resident chunks for
+    upload, runs only inside a client `frame()`, so `untilQuiescent` holds vacuously between gen delivery
+    and the next frame.
+  - A forced-failure run also showed a resident chunk dropping back to NEUTRAL: host snapshot replacement.
+- **Fix, test page only.**
+  - `slice.ts` keeps a main-side indirection mirror by wrapping `renderer.writeIndir`.
+  - `__sliceSettle` cycles rAF plus drain (client ack and every ring drained, no park). It ends when no ring
+    except the uplink has pushed for 5 frames and 4 sim ticks (`CB_SIM_TICKS_RUN`) and, given a tile, that
+    tile's chunk is in the mirror. There is a 10 s failure ceiling that throws.
+  - An intermediate version that required one quiet cycle still failed 1/8 loaded runs. One that required an
+    uplink batch hung, because the uplink sends only keepalives when the camera is still.
+- **Result.**
+  - Loaded: `repeat.mjs browser 8 --load 10`, twice: `pass=8 fail=0 hang=0` (slowest 25 s) and `pass=8
+    fail=0 hang=0` (slowest 21 s). The second batch ran at a 1-minute load average of 30: Spotlight's
+    `spotlightknowledged`/`mds_stores` and Steam were running, which is not this session's load.
+  - `vertical_slice` quiet: 2.32-2.65 s. Settles take ~260, ~350 and ~180 ms, and phase 4's wait for tick 20
+    ~700 ms.
+- **The stall and the pixel race do not share a cause.** The race is client-side upload scheduling. The
+  stall fix only changed which read lost the race (phase 2 instead of phase 5), because phase 4 no longer
+  spends 3 s draining everything.
+
+### Notes for later briefs
+- With a camera that has just moved, `client_poll_uplink` sent a batch about every 50 ms (`slice.html`,
+  phase 5 settle). Worth checking against 0010's "send only on change".
+- `untilQuiescent` (`engine/test`) has the same vacuous-quiescence hole for any page that probes GPU
+  residency. Only `slice.ts` was changed here.
