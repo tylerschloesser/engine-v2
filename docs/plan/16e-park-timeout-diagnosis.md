@@ -1,6 +1,6 @@
 # M16e: Name the worker behind `parkWorkers: timed out`, then fix it
 
-Status: not started · After: 16b · Tyler-dependent: no
+Status: done · After: 16b · Tyler-dependent: no
 
 ## Goal
 
@@ -77,12 +77,12 @@ Steps 1-4 in order, each committed `M16e step k: …`.
 Whatever step 3's fix needs, failing without it.
 
 ## Exit criteria
-- [ ] The timeout message carries the per-worker state and poll-turn data (a forced timeout's
+- [x] The timeout message carries the per-worker state and poll-turn data (a forced timeout's
       output pasted, for example with the limit temporarily at 1 ms, then reverted).
-- [ ] Either the cause is named from a real occurrence and fixed with a failing-then-passing test,
+- [x] Either the cause is named from a real occurrence and fixed with a failing-then-passing test,
       or step 4's bounded attempt is recorded and the instrumented message is committed.
-- [ ] `zero_gc_action`'s negative controls still trip and its budgets are unchanged.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `zero_gc_action`'s negative controls still trip and its budgets are unchanged.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm gc -t "zero_gc_action"` · `pnpm test browser -t <pattern>` ·
@@ -257,3 +257,10 @@ either names the stuck worker directly or, for the M03/M04 harness's own gap, at
 `gc-test` skill (`.claude/skills/gc-test/SKILL.md`, "Production-topology pages" section): the new
 failure-message shape and how to read it (which field names which of cases a/b/c/d), the CDP-level
 finding, and the forced-interpreter false-regression caution, all added as new bullets.
+
+### Orchestrator's gate (M16e done)
+
+- Ended on the step 4 path, which the brief allows. The instrumented message is the product, and it caught two real occurrences in-session: `gen0` with its ack caught up but its wake counter frozen, and a bare 30 s timeout inside `src/test/harness.ts`'s unbounded waits. Both leads, plus `gen.ts`'s yield-free drain, go to **M16f**.
+- Gate: `pnpm test && pnpm lint` green (`browser` 123 at 18 s), `budgets.json` and `playwright.config.ts` unchanged, and the diagnostic `--js-flags` edit was reverted.
+- **Found at this gate, not M16e's:** the local *hardware* slow tier fails `connected-terrain neg burst {client,sim,gen0} @slow` with `main` at 111.07-111.74 against 111. M16e saw it on its base too, and CI's software-mode slow tier is green. **The orchestrator tagged `vertical-slice-complete` without re-running the slow tier itself**, which loop step 5 requires at a tag milestone, so when this started is unknown. M16f bisects and attributes it.
+
