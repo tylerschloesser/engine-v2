@@ -59,7 +59,7 @@ declare global {
     __netCounters?: (conn?: number) => Promise<NetCounters>
     __worldHash?: () => Promise<string>
     __worldHashAndTick?: () => Promise<{ hash: string; tick: number }>
-    __sliceSettle?: () => Promise<void>
+    __sliceSettle?: (tileX?: number, tileY?: number) => Promise<void>
     __ringDrops?: () => number
     __tick?: () => number
     __hudText?: () => string
@@ -166,8 +166,11 @@ test('vertical_slice', async ({ page }, testInfo) => {
   // `__sliceSettle` (`engine/test.untilQuiescent`) is deterministic instead: it waits for every SAB
   // ring -- including both gen-worker ring pairs -- to fully drain, so it only resolves once
   // whatever chunk-generation round trip was in flight has actually landed.
+  // docs/plan/16d-sim-pacing-under-external-wakes.md, step 4: passing the tile makes the settle
+  // also wait for that tile's chunk to be resident on the GPU -- the real event this read needs
+  // (`slice.ts`'s `__sliceSettle` has the attribution).
   await page.evaluate(() => window.__setCamera?.(20, 20, 8))
-  await page.evaluate(() => window.__sliceSettle?.())
+  await page.evaluate(() => window.__sliceSettle?.(20, 20))
   expectPixel(await readTilePixel(page, 20, 20), 8, 8, GRASS, TOL)
 
   // Phase 3: injected pan brings new chunks into subscription -- a real drag through
@@ -254,7 +257,7 @@ test('vertical_slice', async ({ page }, testInfo) => {
   // 'Confirmed')` fires, and the probe at that tile shows the new colour. Tile (50, 50): clear of
   // `WALK` at any tick count (Phase 2's own comment) and of the (20, 20) pristine-probe tile above.
   await page.evaluate(() => window.__setCamera?.(50, 50, 8))
-  await page.evaluate(() => window.__sliceSettle?.()) // deterministic: let chunk (50, 50) land
+  await page.evaluate(() => window.__sliceSettle?.(50, 50)) // until chunk (50, 50) is on the GPU
   expectPixel(await readTilePixel(page, 50, 50), 8, 8, GRASS, TOL)
   const seq = await page.evaluate(() => window.__dispatchPaintAt?.(50, 50))
   expect(seq).toBe(1)
@@ -272,7 +275,7 @@ test('vertical_slice', async ({ page }, testInfo) => {
   // contention it does not (this is the exact failure `node scripts/repeat.mjs browser 15 --load
   // 10` found: this line read pristine `GRASS` instead of the painted `WATER`). `__sliceSettle`
   // waits for the upload ring to actually drain instead of guessing a frame count.
-  await page.evaluate(() => window.__sliceSettle?.())
+  await page.evaluate(() => window.__sliceSettle?.(50, 50))
   expectPixel(await readTilePixel(page, 50, 50), 8, 8, WATER, TOL)
 
   // Phase 6: an out-of-range Paint yields Rejected with the typed reason (`Puts::admit`'s new
