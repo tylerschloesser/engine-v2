@@ -12,7 +12,11 @@
 // -1)`) is a circle of *pixel* radius 16 inscribed in a 32x32 px box (real pixel distance from centre
 // is `dist * 16` isotropically, since the box is square and the scale factor is uniform).
 import { expect, test } from '@playwright/test'
-import { SCREEN_PX_STROKE, SCREEN_PX_STROKE_WIDTH } from '../../src/render/drawables.ts'
+import {
+  ANCHOR_CURSOR_TILE,
+  SCREEN_PX_STROKE,
+  SCREEN_PX_STROKE_WIDTH,
+} from '../../src/render/drawables.ts'
 import { expectPixel, type PixelBuffer } from '../../src/test/render.ts'
 import { buildDrawListBytes, type DrawRecordSpec, microDrawCamera } from './support/draw-scene.ts'
 import { expectAdapter, expectNoGpuErrors } from './support/gpu.ts'
@@ -76,6 +80,125 @@ test('draw.circle_and_ring_probe', async ({ page }, testInfo) => {
   expectPixel(pixels, 32, 26, [255, 0, 0, 255], TOL)
   // Outside both shapes entirely.
   expectPixel(pixels, 2, 2, TRANSPARENT, TOL)
+
+  expectNoGpuErrors(await page.evaluate(() => window.__drawables?.errors() ?? []))
+})
+
+// Step 5 (docs/plan/17-drawlist-and-sprites.md Order of work): the cursor-anchored ghost. Both
+// tests below `acquireFromBytes` exactly once, then call `writeFrameUniform`/`renderAndRead` twice
+// with no second `acquireFromBytes` in between -- proving the two behaviours 0018 §2/Planning
+// decisions promise happen entirely in the vertex shader, off whatever `writeFrameUniform` last
+// wrote, with no dependency on a fresh DrawList publish. Both the vertex shader's cursor-anchor
+// branch and the ghost kind's own fixed alpha landed already in step 4's single `uberquad.wgsl`
+// (Deviations, "Steps 4/5 boundary"); this step's own work is these two tests plus their failability
+// proofs.
+
+test('draw.ghost_follows_cursor_same_frame', async ({ page }, testInfo) => {
+  await openPage(page, '/drawables.html')
+  const init = await page.evaluate(() => window.__drawables?.init())
+  expectAdapter(testInfo, init?.adapterInfo ?? null)
+
+  // `pos: [0, 0]` is an offset from the cursor tile, not the window origin (`ANCHOR_CURSOR_TILE`).
+  const ghost: DrawRecordSpec = {
+    pos: [0, 0],
+    size: [4, 4],
+    kind: 6 /* KIND_GHOST */,
+    layer: 0,
+    flags: ANCHOR_CURSOR_TILE,
+    color: [200, 100, 50, 255],
+  }
+  const { header, body } = buildDrawListBytes([ghost])
+  await page.evaluate(([h, b]) => window.__drawables?.acquireFromBytes(h, b), [
+    header,
+    body,
+  ] as const)
+
+  // `KIND_GHOST`'s fixed alpha (0.5, `uberquad.wgsl`'s own `fs_main`) over a transparent-black clear,
+  // straight (non-premultiplied) alpha blending: rgb halves, alpha halves -- [200,100,50,255] ->
+  // [100,50,25,128] (127.5 rounds either way, TOL 2 covers it).
+  const GHOST_BLENDED: readonly [number, number, number, number] = [100, 50, 25, 128]
+
+  async function renderAtCursor(cursorTileX: number, cursorTileY: number): Promise<PixelBuffer> {
+    const camera = microDrawCamera({
+      viewportPxW: 64,
+      viewportPxH: 64,
+      tilesPerPx: 1 / 8,
+      cursorTileX,
+      cursorTileY,
+      cursorValid: 1,
+    })
+    await page.evaluate((cam) => window.__drawables?.writeFrameUniform(cam), camera)
+    const result = await page.evaluate(([w, h]) => window.__drawables?.renderAndRead(w, h), [
+      64, 64,
+    ] as const)
+    if (!result) throw new Error('renderAndRead returned nothing')
+    return { width: result.width, height: result.height, data: new Uint8Array(result.data) }
+  }
+
+  // px = (32, 32) + cursorTile * 8 (module doc comment's own formula, cursor tile in place of pos).
+  let pixels = await renderAtCursor(3, 2)
+  expectPixel(pixels, 56, 48, GHOST_BLENDED, TOL)
+  expectPixel(pixels, 16, 40, TRANSPARENT, TOL) // not yet at the second cursor tile's spot
+
+  // Same DrawList, no second `acquireFromBytes`: only the cursor tile moved, and the ghost must
+  // move with it, off the live frame uniform alone.
+  pixels = await renderAtCursor(-2, 1)
+  expectPixel(pixels, 16, 40, GHOST_BLENDED, TOL)
+  expectPixel(pixels, 56, 48, TRANSPARENT, TOL) // the first cursor tile's spot is empty now
+
+  expectNoGpuErrors(await page.evaluate(() => window.__drawables?.errors() ?? []))
+})
+
+test('draw.one_frame_old_list_has_no_error', async ({ page }, testInfo) => {
+  await openPage(page, '/drawables.html')
+  const init = await page.evaluate(() => window.__drawables?.init())
+  expectAdapter(testInfo, init?.adapterInfo ?? null)
+
+  // A plain world-anchored rect: `pos` is relative to `window_origin` (default [0, 0]), never to the
+  // live camera (0018 §2).
+  const rect: DrawRecordSpec = {
+    pos: [0, 0],
+    size: [4, 4],
+    kind: 3 /* KIND_RECT */,
+    layer: 0,
+    color: [10, 20, 30, 255],
+  }
+  const { header, body } = buildDrawListBytes([rect])
+  await page.evaluate(([h, b]) => window.__drawables?.acquireFromBytes(h, b), [
+    header,
+    body,
+  ] as const)
+
+  async function renderAtCamera(camTileX: number): Promise<PixelBuffer> {
+    const camera = microDrawCamera({
+      viewportPxW: 64,
+      viewportPxH: 64,
+      tilesPerPx: 1 / 8,
+      camTileX,
+    })
+    await page.evaluate((cam) => window.__drawables?.writeFrameUniform(cam), camera)
+    const result = await page.evaluate(([w, h]) => window.__drawables?.renderAndRead(w, h), [
+      64, 64,
+    ] as const)
+    if (!result) throw new Error('renderAndRead returned nothing')
+    return { width: result.width, height: result.height, data: new Uint8Array(result.data) }
+  }
+
+  // First frame's own camera (`cam_tile = [0, 0]`): the rect (32x32 px box) is centred at px (32, 32),
+  // spanning [16, 48). Probe near its left edge (inside now, outside once the box shifts right) and
+  // just past its right edge (outside now, inside once the box shifts right) -- the box is wide
+  // enough that its own centre pixel stays covered either way, so the edges are what discriminates.
+  let pixels = await renderAtCamera(0)
+  expectPixel(pixels, 18, 32, [10, 20, 30, 255], TOL)
+  expectPixel(pixels, 50, 32, TRANSPARENT, TOL)
+
+  // The camera moves (a real one-frame-old-list situation, 0018 §2's own "applied ... without
+  // error") with *no* second `acquireFromBytes`: `world_rel = (window_origin - cam_tile) - cam_frac
+  // + pos`, so moving `cam_tile` left by one tile shifts the box one tile (8px) right, to [24, 56),
+  // tracking the new camera correctly rather than staying stuck or erroring.
+  pixels = await renderAtCamera(-1)
+  expectPixel(pixels, 50, 32, [10, 20, 30, 255], TOL)
+  expectPixel(pixels, 18, 32, TRANSPARENT, TOL)
 
   expectNoGpuErrors(await page.evaluate(() => window.__drawables?.errors() ?? []))
 })
