@@ -161,13 +161,25 @@ function runBodyOnce(shell: Shell, body: (wokenBy: number) => void, last: number
  * on every real wake, until yielded. `timeoutMs()` is read fresh before every wait: `Infinity` for
  * every kind until M13 gives the sim role a real tick deadline.
  *
- * The `yield` protocol (Planning decisions): the loop checks `W_YIELD` first on every wake; when
- * set, it stores `W_PARKED = 1` and returns to the event loop, where `onmessage`, CDP and promises
- * run. `resume()`/`runAsync` re-enter through this same function.
+ * The `yield` protocol (Planning decisions): the loop checks `W_YIELD` *before every wait,
+ * including its own first one* -- fixed M17c step 3, round 2 (docs/plan/17c-client-park-stall.md):
+ * the original shape checked it only *after* a wait returned, so a park request whose own
+ * `W_YIELD = 1` store and wake both land before this function's first `waitForWake` call (inside
+ * the gap `Shell.resume()`'s own steps leave between reading `W_WAKE` and calling here, or
+ * symmetrically at `worker.ts`'s first entry or `Shell.runAsync`'s re-entry, every one of which
+ * builds `lastSeen`/`last` before ever consulting `W_YIELD`) was invisible until a *further* wake
+ * arrived -- with nothing left to send one, since the park's own wake was already folded into
+ * `last`, the worker slept in `Atomics.wait` forever, `W_YIELD = 1` and `W_PARKED` never set.
+ * Checking first, on every pass through the loop, means a yield that already happened by the time
+ * control reaches here is caught immediately, with no wait at all; when set, the loop stores
+ * `W_PARKED = 1` and returns to the event loop, where `onmessage`, CDP and promises run.
+ * `resume()`/`runAsync` re-enter through this same function.
  *
  * `lastSeen` is the wake-word value the caller read *before* it published this worker as available
  * (`Shell.observeWake`); every caller that publishes availability must pass it, or a wake issued
- * between the publish and this function's own read is lost and the producer waits forever.
+ * between the publish and this function's own read is lost and the producer waits forever. Its own
+ * ordering relative to clearing `W_YIELD` no longer matters for *this* class of loss (the check
+ * above catches it either way, whichever word ends up read first) -- it is unchanged here.
  *
  * **Drains on entry, before the first wait** (docs/plan/08b-gen-workers-and-queue.md, orchestrator
  * decision 2 at the step-5 boundary): a wake issued while this worker was parked (M06b, "a wake
@@ -190,12 +202,14 @@ export function runBlockingLoop(
   let last = lastSeen ?? Atomics.load(control.words, workerWord(index, W_WAKE))
   if (!runBodyOnce(shell, body, last)) return
   for (;;) {
+    if (Atomics.load(control.words, workerWord(index, W_YIELD))) break
     control.waitForWake(index, last, timeoutMs())
     if (shell.stopped()) return
-    if (Atomics.load(control.words, workerWord(index, W_YIELD))) break
     // `waitForWake` itself returns nothing (`sab/control.ts`'s own doc comment: this is a
     // redundant-call removal, not the fix for the cost that method's own comment documents). Same
-    // word, same address `waitForWake` just waited on.
+    // word, same address `waitForWake` just waited on. The loop's own top checks `W_YIELD` again
+    // before the *next* wait, so a wake that turns out to also carry a park request is caught one
+    // pass later rather than re-checked twice here.
     last = Atomics.load(control.words, workerWord(index, W_WAKE))
     if (!runBodyOnce(shell, body, last)) return
   }

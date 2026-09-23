@@ -268,9 +268,30 @@ one capture plus the numbers already in the evidence table:
   was not observed.** The root mechanism behind the one missed notification is not further named;
   said so per the binding rules, rather than presenting a guess as a finding.
 
-### Step 3: fixed at the protocol layer, with a test that fails on the base commit
+  **Superseded by fix round 2, below.** No engine-level lost notify is needed: the orchestrator
+  (coordinator gate on this milestone) traced a real gap in `runBlockingLoop` itself -- it checked
+  `W_YIELD` only *after* a wait returned, never before its own *first* one, so a park request whose
+  own `W_YIELD = 1` store and wake both land inside the gap `Shell.resume()`'s own steps leave
+  between reading `W_WAKE` (`seen`) and calling here is folded into that first wait's own baseline
+  with no further wake ever coming to reveal it. The stack this section captured (`waitForWake`
+  reached from `Shell.resume()` via `onmessage`) is exactly what that gap produces; this session's
+  own exhaustive Atomics-safety trace was real but answered a narrower question ("can a *registered*
+  waiter's notify go missing") than the one that mattered ("does the loop ever check its own flag
+  before committing to wait at all"). Fix round 2's own section has the corrected mechanism and the
+  deterministic, unit-level proof.
 
-**Fix.** `parkWorkers` (`src/test/client.ts`) used to `wake()` every worker exactly once, up front,
+### Step 3, fix round 1 -- superseded by fix round 2, below
+
+The coordinator gate on this milestone found the fix in this round landed at the wrong layer: a
+harness that keeps re-signalling until a worker parks measures away exactly the class of protocol
+defect this milestone actually found (a park request the worker's own loop structurally could not
+observe, not a one-off dropped OS-level notify), and the `parkWorkers` 10 s message is the only
+thing that would have caught a real regression of that kind. `rewakeUnparked` was reverted in favour
+of the real fix (`runBlockingLoop` itself, fix round 2); `parkWorkers` is back to a single up-front
+`wake()` per worker, unchanged from before this milestone. Kept here for the record, superseded in
+full by fix round 2.
+
+**Fix (round 1, reverted).** `parkWorkers` (`src/test/client.ts`) used to `wake()` every worker exactly once, up front,
 then poll `W_PARKED` for up to 10 s with no further signal. `pollUntil`'s own predicate
 (`rewakeUnparked`, replacing `allEqual` for this call site) now re-issues `wake()` to every
 not-yet-parked worker on *every* poll turn, not just once: a real park signal a worker's own thread
@@ -327,6 +348,143 @@ directly:** `pnpm exec playwright test --config packages/engine/playwright.confi
 --grep "zero_gc_action neg object" --workers 3 --repeat-each 30` -- **120 passed (56.1s)**, 0
 `parkWorkers` timeouts (matches step 1's own clean baseline exactly, with the fix now in place).
 
+### Step 3, fix round 2: the real cause, at the protocol layer
+
+**The coordinator's trace, checked against the code.** `worker/shell.ts`'s `Shell.resume()` does,
+in order: (1) `store W_YIELD = 0`; (2) `seen = observeWake()`; (3) `store W_PARKED = 0`; (4)
+`runBlockingLoop(..., seen)`. Re-read `runBlockingLoop` (fix round 1's own section quoted it) with
+this specific question in mind -- **does it check `W_YIELD` before its own first wait, the same way
+it checks after every later one?** It does not:
+```
+let last = lastSeen ?? Atomics.load(control.words, workerWord(index, W_WAKE))
+if (!runBodyOnce(shell, body, last)) return         // entry drain -- no yield check either side
+for (;;) {
+  control.waitForWake(index, last, timeoutMs())      // <- the loop's own first wait: nothing
+  if (shell.stopped()) return                        //    checked W_YIELD before this call
+  if (Atomics.load(control.words, workerWord(index, W_YIELD))) break   // checked only AFTER
+  ...
+}
+```
+Confirmed, unambiguously, by reading the code: this is real. A park request whose own `W_YIELD = 1`
+store and wake both land in the gap between `Shell.resume()`'s steps (1)/(2) and step (4)'s own
+first wait folds itself into `seen`/`last`, and nothing checks the flag until *after* a wake this
+worker now has no reason to expect arrives -- which, for a worker parked and never touched again,
+never happens. This is a **different, better-supported** mechanism than fix round 1's own guess (an
+engine/OS-level `Atomics.notify` miss against an *already-registered* waiter): it requires no
+unproven engine rarity, it is directly demonstrable in a single-threaded unit test (below), and it
+explains the exact captured shape (`W_YIELD: 1, W_PARKED: 0`, the stack through `Shell.resume()`).
+
+**Where this session's own live occurrence sits, honestly.** Reconstructing gc-slice.ts's own
+timeline in detail: `run()`'s per-pass `resume()`/drive/`park()` sequence is strictly gated on
+observable `SharedArrayBuffer` state on both ends -- `resumeWorkers()` only returns once `W_PARKED`
+reads 0 (already past `Shell.resume()`'s own step (3)), and `parkWorkers()` only returns once
+`W_PARKED` reads 1 (`runBlockingLoop` has already returned) -- and `stepFrame`'s own ack-spin
+locksteps main to the client one frame at a time throughout a pass, so `parkWorkers` for pass *N*
+cannot fire until client has already finished processing pass *N*'s own last frame, long past that
+pass's *own* one-time first-wait window. This session could not, by static reading, place a
+concurrent `parkWorkers` call inside *this specific page's* own per-pass `resume()` gap to explain
+"3 full passes, then frozen at exactly that boundary" end to end. What resolves this: the
+deterministic test below does not depend on that reconstruction -- it constructs the interleaving
+directly, on one thread, and it reproduces the *identical* failure shape from the *live* capture
+(same stack, same `{W_YIELD: 1, W_PARKED: 0}`) without needing gc-slice.ts, load, or CDP at all.
+Whatever the precise live trigger inside the browser (a worker OS thread scheduled late relative to
+main after storing its own ack -- plausible under the load this needed to reproduce, and outside
+what static reading alone can confirm), the *mechanism* the coordinator named is real, is a strictly
+better-supported explanation than fix round 1's own guess, and is now fixed at its actual source.
+
+**Fix.** `runBlockingLoop` (`worker/shell.ts`) now checks `W_YIELD` at the top of every pass through
+its loop, *before* calling `waitForWake`, not only after one returns -- covering the loop's own
+first pass (right after the entry drain) the same way as every later one, and uniformly for all
+three callers (`worker.ts`'s first entry, `Shell.resume()`, `Shell.runAsync`'s re-entry) without
+changing any of them. The post-wait check was removed rather than kept alongside the new one: it is
+not needed for correctness (the top-of-loop check now covers every wait), and the only thing it
+bought was skipping one possible extra `runBodyOnce` call on the rare pass where a wake turns out to
+also carry a park request -- a harmless, allocation-free extra call, not a hot-path concern (park is
+rare, not per-frame). `waitForWake` itself (`sab/control.ts`) is untouched, as the brief's own
+binding rule required -- `sab/no-alloc-syntax.test.ts` still passes, having pinned only that method.
+
+**`Shell.resume()`'s own step order was left unchanged** (`W_YIELD = 0` still stored before
+`observeWake()`). Reasoned through explicitly, since the brief asked for a choice: the new
+before-every-wait check re-validates `W_YIELD`'s *current* value at the exact instant before
+blocking, regardless of what `last`/`seen` captured or when -- so whichever order `resume()` uses,
+a park signal already visible by the time the loop is about to wait is always caught. Reordering
+would only matter if some *other* window depended on it, and none does: `W_YIELD` is a flag this
+worker reads on itself, never a value another thread polls to decide whether to interact with it
+(unlike `W_PARKED`, whose own ordering relative to `observeWake` is untouched and still load-bearing
+for `resumeWorkers`'s poll). Changing it would be motion with no corresponding safety gain.
+
+**Test, built to construct the race directly (not to reproduce it live), and checked red then
+green.** `shell.checks_yield_before_its_own_first_wait` (`src/worker/shell.test.ts`), beside the
+existing `shell.resume_does_not_lose_a_wake` this mirrors: on one thread, store `W_YIELD = 1` and
+call `control.wake(INDEX)` *before* reading `seen = shell.observeWake()` -- exactly the ordering the
+coordinator's trace describes, with a finite `timeoutMs` (`WAIT_MS = 400`, this file's own constant)
+so a still-broken protocol times out instead of hanging the test -- then calls `runBlockingLoop`
+with that `seen` as `lastSeen` and asserts it returns quickly, having parked, having run `body` only
+once (the entry drain).
+
+Checked red by temporarily reverting only `runBlockingLoop` (`git checkout HEAD -- src/worker/
+shell.ts`, saving the diff first; the new test stayed in place) and running `pnpm test unit -t
+"shell.checks_yield_before_its_own_first_wait"`:
+```
+FAIL unit shell.checks_yield_before_its_own_first_wait
+  AssertionError: expected 410.29420899999997 to be less than 200
+```
+410 ms is the full `WAIT_MS` (400) plus overhead -- the base protocol genuinely blocked for the
+whole timeout, exactly as the trace predicted, before its post-wait check finally saw `W_YIELD = 1`
+and broke out. The fix was then re-applied (`git apply` of the saved diff): `unit pass 1 tests`
+(0.8s), and the existing two `shell.*` tests plus `sab/no-alloc-syntax`/`atomics-timer` tests stay
+green (`pnpm test unit -t "shell\."` -- 3 passed; `pnpm test unit -t "no_alloc_syntax|atomics.timer"`
+-- 6 passed).
+
+**`rewakeUnparked` reverted.** `parkWorkers` (`src/test/client.ts`) is back to a single `wake()` per
+worker up front and `pollUntil(() => allEqual(h, W_PARKED, 1), ...)`, byte-identical to before this
+milestone (`git diff bec19fd..HEAD -- src/test/client.ts` now shows only a comment explaining why
+it is *not* retried, no behavioural change). `workers.park_recovers_from_missed_notify`
+(`tests/browser/workers.spec.ts`) and its `__testParkRecoversFromMissedNotify` hook
+(`tests/browser/pages/src/topology.ts`) were removed along with it (`git checkout bec19fd --
+tests/browser/workers.spec.ts tests/browser/pages/src/topology.ts`): that test exercised the
+harness-level symptom (a dropped notify to an already-registered waiter), which fix round 1's own
+retry papered over rather than fixing, and which fix round 2 no longer needs to simulate separately
+-- `shell.checks_yield_before_its_own_first_wait` exercises the real mechanism directly.
+
+**Production paths, checked (binding rule: say whether a production worker could hit this).**
+`grep -rn "\.resume(\|runAsync(" src/` (excluding tests) finds exactly three call sites of
+`runBlockingLoop`'s own re-entry: `worker.ts`'s first entry (once, at startup, before `ready`
+posts), `Shell.resume()` (called only from `worker.ts`'s own `onmessage` on a `{ type: 'resume' }`
+message), and `Shell.runAsync`'s own re-entry (defined, not yet called by any shipped kind body --
+reserved for a Promise-only host API, M23). **`{ type: 'resume' }` is posted only by `engine/test`'s
+`resumeWorkers`** (`grep -n "type: 'resume'" src/client.ts` -- nothing; M06b Deviations already
+recorded this: "`resume`/`stop` are posted only by `test/client.ts`'s `resumeWorkers`/`parkWorkers`
+-- reserved for whichever later milestone... drives them from production code"). **A production
+`createClient()` result today never calls `resume()` again after a worker's own first entry, and
+never calls `runAsync` at all** -- this race is unreachable in production as shipped: a production
+worker enters `runBlockingLoop` once and stays there (or traps) until `destroy()` terminates it
+outright. It is a live, real gap in the *protocol* `engine/test`'s own harness already exercises
+today, and a **latent one** for whichever future milestone wires real backgrounding pause/resume for
+a production client worker (`FrameLoop.pause()/resume()`, `src/frame-loop.ts`, is the *main-thread*
+rAF loop and is unrelated -- it never touches `Shell.resume()`/`W_YIELD` at all): if that milestone
+ever issues a park-like signal that can land in the gap this fix closes, the consequence there would
+be the same one this milestone found -- a worker thread permanently blocked in `Atomics.wait`
+(`timeoutMs()` is `Infinity` for every kind but `sim`'s own future tick deadline), invisible except
+as a silent freeze, since nothing in production polls `W_PARKED` the way `parkWorkers` does.
+
+**Hot-path re-check.** `runBlockingLoop` is not test-only -- it is the blocking-loop shell *every*
+worker kind runs inside, so the reordered check runs on every real wake of every isolate, not only
+during a park. `pnpm gc -t "gc-loop|topology|echo|zero_gc_action"` -- **34 passed (12.2s)**: every
+clean measurement and every `object`/`burst` negative control on every named isolate of every
+affected page still trips on its own isolate only, `gc: flat transport parity` still passes, and no
+`budgets.json` number changed (unchanged by this milestone throughout).
+
+**Reproduction re-run, protocol fix in place, harness re-wake reverted** (the same two configurations
+that found the failure in step 1, foreground, this machine's own `uptime` noted before each):
+- `--repeat-each 15 --workers 3` + 10 self-terminating burners (`uptime` 4.65/3.44/6.09 before):
+  **60 passed (36.4s)**, 0 failures.
+- `--repeat-each 25 --workers 3` + 14 burners (`uptime` 15.76/6.47/7.05 before, climbing to 18.94
+  mid-run -- this machine's own ambient load, unrelated to this session, step 1's own note): **100
+  passed (1.0m)**, 0 failures.
+
+160/160 total on the exact configurations that previously reproduced the stall 2/15 and 1/25.
+
 ### Not run
 
 Per the delegation prompt's own binding rules, `pnpm test`/`pnpm lint` were not run by this session
@@ -334,33 +492,44 @@ Per the delegation prompt's own binding rules, `pnpm test`/`pnpm lint` were not 
 
 ### Exit criterion: `node scripts/repeat.mjs browser 15` / `... 15 --load 10`
 
-Run once each, foreground, per-run kill timeout, after the fix (commit `4a0dc7d`):
+**Fix round 1 measurement (superseded by fix round 2's own re-measurement, below), kept for the
+record:** run once each, foreground, per-run kill timeout, after fix round 1 (commit `4a0dc7d`) --
+`browser x15 load=0: pass=15 fail=0 hang=0 slowestSuiteSeconds=23`; `browser x15 load=10: pass=14
+fail=1 hang=0 slowestSuiteSeconds=31`, the one failure being `src/test/harness.ts`'s own unrelated
+`park('sim')` wait (a different file, a different message shape, not this brief's Files list; see
+the note below).
 
-- `node scripts/repeat.mjs browser 15`: **`browser x15 load=0: pass=15 fail=0 hang=0
-  slowestSuiteSeconds=23`.** 0 occurrences of this milestone's own watch item (the
-  `isolate`/`W_YIELD`/`W_PARKED`/`W_WAKE`/`W_ACK`/`dead` shape, `src/test/client.ts`).
-- `node scripts/repeat.mjs browser 15 --load 10`: ambient `uptime` was already 9.51/10.05/8.20 at
-  the start (a shared machine, unrelated to this session, step 1's own note) before adding the
-  10 synthetic burners -- **`browser x15 load=10: pass=14 fail=1 hang=0 slowestSuiteSeconds=31`.**
-  The one failure is **not** this milestone's watch item: `gc-loop neg burst main` failed with
-  `` park('sim'): timed out after 10000 ms workers=[{"name":"sim","Req":3000,"Ack":3000,"State":1,
-  "Yield":1,"armed":true}] ``, a *different* shape (`name`/`Req`/`Ack`/`State`/`Yield`/`armed`) from
-  a *different* file -- `src/test/harness.ts`'s own M03/M04 harness (`gc-loop`'s own page uses
-  `createHarness`, not a real `createClient()`/`asHarness`), which independently carries an
-  M16e-shaped enriched message (`harness.ts:136`) but is not in this brief's own Files list and is
-  not the `parkWorkers` (`src/test/client.ts`) stall this brief targets. Recorded here rather than
-  silently folded into "0 failures": under ~20-effective-load (ambient plus the 10 burners) this
-  *other* harness's own wait timed out once in 15 runs, a pre-existing, separate mechanism.
+**Fix round 2 re-measurement**, after reverting `rewakeUnparked` and landing the real
+`runBlockingLoop` fix -- run in the foreground, in batches of 7-8 to fit comfortably inside a single
+10-minute call rather than one long 15-run call (no loop backgrounded this round):
+- `node scripts/repeat.mjs browser 8` then `... 7`: **`pass=8 fail=0 hang=0 slowestSuiteSeconds=22`**
+  then **`pass=7 fail=0 hang=0 slowestSuiteSeconds=23`** -- 15/15 total, 0 failures.
+- `node scripts/repeat.mjs browser 8 --load 10` then `... 7 --load 10` (`uptime` 12.17/10.52/9.84,
+  then 22.47/20.58/15.86 before the second batch -- this machine's own ambient load climbing
+  independently, per step 1's own note): **`pass=8 fail=0 hang=0 slowestSuiteSeconds=28`** then
+  **`pass=7 fail=0 hang=0 slowestSuiteSeconds=28`** -- 15/15 total, 0 failures, including 0
+  recurrences of fix round 1's own `harness.ts` `park('sim')` failure this time.
 
 ### Notes for later briefs
 
-- The root mechanism behind the one missed `Atomics.notify` (step 2's own last bullet) is still
-  open. If a `parkWorkers`-shaped stall is ever seen again with the *retry* also exhausting its own
-  10 s bound (which would mean every retried `wake()` for a whole 10 s window missed too, not just
-  one), that is a materially different, likely worse finding worth its own brief.
+- **Resolved by fix round 2:** the root mechanism behind the missed park signal is named and fixed
+  (`runBlockingLoop` now checks `W_YIELD` before every wait, including its own first one). The
+  remaining open question is narrower: this session could not place the *live* trigger (a concurrent
+  `parkWorkers` call) inside gc-slice.ts's own strictly-sequential per-pass `resume()` gap by static
+  reading alone (Step 3, fix round 2, "Where this session's own live occurrence sits, honestly") --
+  the deterministic unit test proves the mechanism without needing to. If a `parkWorkers`-shaped
+  stall is ever seen again with the *exact same* captured shape, the fix here should already prevent
+  it; a *different* shape would be a materially different finding worth its own brief.
+- **Latent production risk, not yet reachable (fix round 2, "Production paths, checked"):** a
+  production `createClient()` result never calls `Shell.resume()`/`runAsync` again after a worker's
+  first entry today, so this race is unreachable in production as shipped. Whichever future
+  milestone wires real backgrounding pause/resume for a production client worker should re-read that
+  section before assuming `resume()`/`runAsync` re-entry is safe to drive from a second, independent
+  signal source the way `parkWorkers` is here.
 - `worker/gen.ts`'s own yield-free drain loop (flagged, not fixed, M16e) remains open and unrelated
   to this occurrence.
 - `src/test/harness.ts`'s own `park('sim')`/`createHarness` wait (M03/M04 harness, `gc-loop`'s own
-  page) timed out once under `node scripts/repeat.mjs browser 15 --load 10` (above), at ~20
-  effective load -- a different file, a different message shape, not this brief's Files list. Worth
-  a future brief if it recurs; not chased further here.
+  page) timed out once under fix round 1's own `node scripts/repeat.mjs browser 15 --load 10` (at
+  ~20 effective load) and did not recur under fix round 2's own re-run at comparable load -- a
+  different file, a different message shape, not this brief's Files list. Worth a future brief if it
+  recurs; not chased further here.

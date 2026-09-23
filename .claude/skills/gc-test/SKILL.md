@@ -194,19 +194,26 @@ of the M03/M04 harness. Two differences from a harness page:
   not stuck inside `body()` or any pump, not dead. Diagnostics built this way are temporary and
   reverted (a `wake()` call is a hot-path primitive, `.claude/rules/hot-paths.md`); the finding they
   produce is what's permanent.
-- **A single `Atomics.notify` can go missing even though `Atomics.wait`/`Atomics.notify` are each
-  individually spec-safe (M17c).** A worker that has *not yet* re-entered `Atomics.wait` when a
-  producer's `wake()` runs always recovers on its own: `Atomics.wait`'s own check-then-sleep is
-  atomic, so if the word already differs from what it is told to wait for, it returns immediately
-  instead of blocking. A worker *already asleep, already registered* as a waiter is a different
-  case: if the matching `Atomics.notify` is ever missed for that waiter, nothing wakes it again until
-  its own timeout (`Infinity` for every production kind but `sim`'s post-M13 deadline) -- the word
-  itself changing further afterwards does not help, since nothing re-notifies. `parkWorkers`
-  (`src/test/client.ts`) now re-issues `wake()` to every not-yet-parked worker on each poll turn
-  (`rewakeUnparked`) instead of once up front, closing that single-shot gap without widening the 10 s
-  bound; `topology.ts`'s `__testParkRecoversFromMissedNotify` (`workers.spec.ts`'s
-  `workers.park_recovers_from_missed_notify`) drops one worker's own `Atomics.notify` (keeping its
-  `Atomics.add`, so this is not "wake() was never called") to prove it.
+- **A park signal can be missed by `runBlockingLoop`'s own first wait after `resume()` (M17c, fix
+  round 2).** A worker that has *not yet* re-entered `Atomics.wait` when a producer's `wake()` runs
+  always recovers on its own -- `Atomics.wait`'s own check-then-sleep is atomic, so if the word
+  already differs from what it is told to wait for, it returns immediately instead of blocking -- so
+  a plain "was the notify missed" theory does not hold up (an earlier round of this milestone
+  guessed exactly that, and reverted it: see its brief's own Deviations, "fix round 1 -- superseded").
+  The real gap: `runBlockingLoop` used to check `W_YIELD` only *after* a wait returned, never before
+  its own first one. `Shell.resume()` builds its `seen`/`last` baseline (`observeWake()`) *before*
+  calling `runBlockingLoop`; if a park request's own `W_YIELD = 1` store and wake both land in that
+  gap (or symmetrically at `worker.ts`'s first entry or `Shell.runAsync`'s re-entry), the park's own
+  wake is silently folded into that baseline, and nothing checks the flag until a *further* wake
+  arrives -- which, for a worker nobody touches again, never happens. Fixed by checking `W_YIELD` at
+  the top of every pass through the loop, before waiting, not only after
+  (`docs/plan/17c-client-park-stall.md`, Step 3 fix round 2); proved with a single-thread,
+  deterministic construction (`shell.checks_yield_before_its_own_first_wait`,
+  `src/worker/shell.test.ts`, beside `shell.resume_does_not_lose_a_wake`) rather than a live
+  reproduction, since the failure this depends on is a code-shape gap, not a timing rarity. A
+  harness-level retry (re-waking a not-yet-parked worker) is *not* the fix for this class of defect
+  -- it hides exactly the regression the `parkWorkers` message exists to catch; fix the loop that
+  drops the signal, not the caller that sends it.
 - **`--no-opt --no-sparkplug` can manufacture its own false regression.** M16e's own new branches in
   a spin-wait ack loop (`spins++`, one bitwise mask check per iteration -- see the timeout-message
   bullet above) cost nothing measurable under normal V8, but under forced-interpreter flags every
