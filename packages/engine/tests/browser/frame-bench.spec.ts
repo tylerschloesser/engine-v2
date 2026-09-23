@@ -25,9 +25,12 @@ declare global {
   interface Window {
     __frameBench?: {
       adapterInfo: AdapterInfo
-      recordCount: number
       errors(): string[]
       framesRendered(): number
+      /** The real published slot's own `record_count` (fix round 1: replaces a page-side constant
+       * that compared with itself and proved nothing -- see `frame-bench.ts`'s own doc comment). */
+      recordCount(): number
+      dropped(): number
       startMarking(): void
       stopMarking(): void
       park(): Promise<void>
@@ -130,10 +133,8 @@ test('bench.frame_worstcase @slow', async ({ page, browser }, testInfo) => {
 
   const setup = await page.evaluate(() => ({
     adapter: window.__frameBench?.adapterInfo ?? null,
-    recordCount: window.__frameBench?.recordCount ?? 0,
   }))
   expectAdapter(testInfo, setup.adapter)
-  expect(setup.recordCount, 'frame-bench.ts population: entities spawned').toBe(RECORD_COUNT)
 
   // A worker blocked in its normal `Atomics.wait` loop never processes a CDP `Runtime.evaluate`
   // (found empirically, this milestone: the loop's own synchronous call stack never returns to the
@@ -168,6 +169,19 @@ test('bench.frame_worstcase @slow', async ({ page, browser }, testInfo) => {
     { timeout: 60_000 },
   )
 
+  // Fix round 1 (coordinator review): the record count and drop count of the slot main actually
+  // `acquire()`d, read off `DrawablesRenderer`'s own live header fields -- not a page-side constant,
+  // which proves nothing about what `extract()`/`visible()` produced. Read once here (after
+  // warm-up, so at least one real published frame exists) and once more at the end of the timed
+  // window (below): both must show the full worst case, not a partial one `visible()`'s own clip
+  // silently narrowed.
+  const afterWarmup = await page.evaluate(() => ({
+    recordCount: window.__frameBench?.recordCount() ?? -1,
+    dropped: window.__frameBench?.dropped() ?? -1,
+  }))
+  expect(afterWarmup.recordCount, 'published record_count after warm-up').toBe(RECORD_COUNT)
+  expect(afterWarmup.dropped, 'published dropped after warm-up').toBe(0)
+
   const browserSession = await browser.newBrowserCDPSession()
   const events: TraceEvent[] = []
   browserSession.on('Tracing.dataCollected', (ev) => {
@@ -197,6 +211,17 @@ test('bench.frame_worstcase @slow', async ({ page, browser }, testInfo) => {
     startFrames + TIMED_FRAMES,
     { timeout: 60_000 },
   )
+
+  // Read again at the end of the timed window (still measuring `recordCount()`/`dropped()`'s own
+  // live state, not a snapshot from earlier that a mid-run regression could have moved past).
+  const atEnd = await page.evaluate(() => ({
+    recordCount: window.__frameBench?.recordCount() ?? -1,
+    dropped: window.__frameBench?.dropped() ?? -1,
+  }))
+  expect(atEnd.recordCount, 'published record_count at the end of the timed window').toBe(
+    RECORD_COUNT,
+  )
+  expect(atEnd.dropped, 'published dropped at the end of the timed window').toBe(0)
 
   await page.evaluate(() => window.__frameBench?.stopMarking())
   await browserSession.send('Tracing.end')

@@ -52,9 +52,17 @@ declare global {
     __pageReady?: true
     __frameBench?: {
       adapterInfo: AdapterInfo
-      recordCount: number
       errors(): string[]
       framesRendered(): number
+      /** The *real* record count of the slot `drawablesRenderer` last `acquire()`d (`render/
+       * drawables.ts`'s own `recordCount()`, a live header read off the published triple-buffer
+       * slot) -- fix round 1: the first cut of this page exposed a page-side `GRID_SIDE * GRID_SIDE`
+       * *constant* here instead, which a caller comparing it to `65_536` was comparing against
+       * itself, proving nothing about what `extract()`/`visible()` actually produced. */
+      recordCount(): number
+      /** The same slot's own `dropped` header field (`drawListDropped()`): must be `0` for this
+       * scene to be a clean 65,536-record worst case, not a truncated one. */
+      dropped(): number
       /** Arms per-frame `performance.mark` bracketing of the main-thread rAF callback
        * (`mf-s-<n>`/`mf-e-<n>`); resets the per-window counter to 0. */
       startMarking(): void
@@ -266,12 +274,17 @@ const real: RealFrameLoop = createRealFrameLoop({
 
 window.__frameBench = {
   adapterInfo: device.adapterInfo,
-  recordCount: GRID_SIDE * GRID_SIDE,
   errors(): string[] {
     return device.errors()
   },
   framesRendered(): number {
     return framesRendered
+  },
+  recordCount(): number {
+    return drawablesRenderer.recordCount()
+  },
+  dropped(): number {
+    return drawablesRenderer.drawListDropped()
   },
   startMarking(): void {
     markSeq = 0

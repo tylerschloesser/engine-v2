@@ -626,3 +626,46 @@ existing wording already matched what was built once the Run button existed.
 real hardware, not this session's to perform. The full `pnpm test:slow` (which would exercise the
 `frame-bench` leg through `scripts/suites.mjs` exactly as `pnpm bench:frame` does standalone) was not
 run, per the delegation prompt.
+
+### Fix round 1 (coordinator review): the record-count check was tautological
+
+`frame-bench.spec.ts`'s own `setup.recordCount === 65_536` compared `window.__frameBench.recordCount`
+-- a page-side `GRID_SIDE * GRID_SIDE` *constant* (`frame-bench.ts`) -- against the same literal
+constant restated in the spec. It could not fail: it said nothing about what `extract()`/`visible()`
+actually produced, published or drew.
+
+**Fixed**: `DrawablesRenderer` already has a real `recordCount()`/`drawListDropped()` (M17, reading
+the last-`acquire()`d slot's own header fields); `window.__frameBench.recordCount()`/`.dropped()`
+now call through to those instead of exposing a constant. `bench.frame_worstcase` reads both twice --
+once after warm-up (at least one real published frame exists), once more at the end of the timed
+window -- asserting `recordCount === 65_536` and `dropped === 0` each time.
+
+**The coordinator's own hypothesis for *why* it would under-count (viewport aspect ratio deriving
+`half_extent_tiles` from `tilesAcross`, leaving ~38k of 65,536 records visible) does not apply to
+this scene**: `frame-bench.ts` never calls `client.camera.tick()` (the only place `camera/
+transform.ts`'s own `halfExtentTiles()` -- the viewport-aspect-ratio formula -- runs); it sets
+`cameraState.halfExtentTilesX/Y = 130` directly, a fixed square independent of the canvas's own
+pixel viewport, and `writeCameraBlock` writes `state.halfExtentTilesX/Y` into `CameraBlock.half_
+extent_tiles` verbatim (`camera/block.ts`, no recompute); `FrameView::visible()`'s own `visible_tile_
+rect` reads `camera.half_extent_tiles` directly (`game_instance.rs`), not `tiles_across`. **The
+finding, run before any other change, with the old tautological check simply removed and the real
+one added in its place**: `recordCount() === 65536` on the very first run -- the workload was
+already the true worst case; the old check was vacuous, not wrong-and-hiding-a-shortfall.
+**Verified the new check is not itself vacuous, by injection**: temporarily set `halfExtentTilesX/Y
+= 70` (too small) -- the real check failed with `Expected: 65536, Received: 21025` (145² tiles, the
+smaller square that setting actually clips to), exactly the kind of shortfall the coordinator's own
+concern was about, caught for real this time. Reverted (`git diff` empty on `frame-bench.ts` before
+the next commit); five more clean runs after reverting all read `records=65536` and pass.
+
+**Item 2 (the brief's "make the worst case real") needed no geometry change**, per the finding above
+-- already real. **Item 5** (`device.html?harness=1`): checked; its own printed output never claims a
+record count (`POPULATE_COUNT = 300` is that page's own deliberately modest population, printed
+nowhere -- that check is about SAB/GPUTexture probes and allocation growth, not a worst-case record
+count, Planning decisions "Manual harness shape"), so no fix applied there.
+
+**Re-measured, baseline replaced**: five consecutive clean runs under the corrected test (`records=
+65536` every time), main p50 0.619-0.646 ms, worker p50 2.121-2.237 ms -- statistically the same
+numbers as before this fix round (expected, since the workload did not change) but now backed by a
+real assertion instead of a vacuous one. `baselines/frame.json` rewritten with the median of the five
+runs' own medians (main p50/p95 0.637/0.691 ms, worker p50/p95 2.152/2.344 ms) and a `conditions`
+field recording the fix and the injection proof.
