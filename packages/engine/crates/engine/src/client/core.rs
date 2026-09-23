@@ -82,6 +82,13 @@ pub struct ClientCore<G: Game> {
     /// comment where it is used.
     scratch_entity_ops: Vec<EntityDeltaOp<G>>,
     last_summary: FrameSummary,
+    /// Bumped every time [`Self::on_frame`] successfully applies a frame (docs/plan/
+    /// 16b-ui-observation-and-clock.md Scope: "iff a frame mutated the replica since the last
+    /// call"). `Self::apply` always calls `Replica::set_tick`, so "on_frame ran" and "the replica
+    /// mutated" coincide for every real frame; a caller (`UiObserver::maybe_run`) compares two
+    /// reads of this against its own last-seen value rather than re-deriving "did anything change"
+    /// from `FrameSummary`.
+    mutations: u64,
     /// Actions dispatched locally, `Codec`-encoded (postcard) and awaiting the next
     /// [`Self::poll_uplink`] (docs/plan/16-action-round-trip.md Scope): `(seq, encoded_bytes)`,
     /// oldest first. Bounded at [`OUTBOX_CAPACITY`]; [`Self::on_action`] is human-rate/UI-driven
@@ -106,6 +113,7 @@ impl<G: Game> ClientCore<G> {
             scratch_tiles: Vec::new(),
             scratch_entity_ops: Vec::new(),
             last_summary: FrameSummary::default(),
+            mutations: 0,
             outbox: Vec::new(),
             results: Vec::new(),
         }
@@ -148,6 +156,12 @@ impl<G: Game> ClientCore<G> {
     /// The last frame's summary applied by [`Self::on_frame`] (test/diagnostic convenience).
     pub fn last_summary(&self) -> &FrameSummary {
         &self.last_summary
+    }
+
+    /// How many frames [`Self::on_frame`] has successfully applied, ever (docs/plan/
+    /// 16b-ui-observation-and-clock.md Scope): the `ui` call policy's "since the last call" signal.
+    pub fn mutations(&self) -> u64 {
+        self.mutations
     }
 
     pub fn replica(&self) -> &Replica<G> {
@@ -229,6 +243,7 @@ impl<G: Game> ClientCore<G> {
         Self::validate(bytes)?;
         let summary = self.apply(bytes);
         self.last_summary = summary;
+        self.mutations = self.mutations.wrapping_add(1);
         Ok(summary)
     }
 

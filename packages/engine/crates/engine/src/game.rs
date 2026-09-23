@@ -4,8 +4,9 @@
 //! every fixture's `impl Game` header (docs/plan/12-store-and-game-trait.md Planning decisions
 //! "Shell types now, not later"). Behaviour lives elsewhere: `WorldRead`/`WorldWrite` are filled
 //! in by M12b (their methods, and `Authority`/`Predicting`/`View`, are out of scope here); so are
-//! `TickCx`/`FrameCx`/`FrameView`/`DrawList`/`PresenceTable`/`OldStore`'s fields, named on each
-//! shell below.
+//! `TickCx`/`FrameCx`/`DrawList`/`PresenceTable`/`OldStore`'s fields, named on each shell below.
+//! `FrameView`'s fields are real now (M16b, minimal), re-exported here the same way `TickCx`'s
+//! are.
 
 use ts_rs::TS;
 
@@ -92,11 +93,11 @@ pub struct FrameCx<G: Game> {
     _marker: core::marker::PhantomData<fn() -> G>,
 }
 
-/// Shell (M16b/M18 give it fields, 0003: "`FrameView`: `WorldRead` + clocks + presences"): the
-/// read-only view `ClientSide::extract`/`ui` receive.
-pub struct FrameView<G: Game> {
-    _marker: core::marker::PhantomData<fn() -> G>,
-}
+/// Real now, minimal (M16b: `world`/`clocks`/`me`; M17 adds the visible rect, zoom, cursor tile and
+/// presences, 0018/0019, 0003: "`FrameView`: `WorldRead` + clocks + presences"): built by
+/// `crate::client::frame_view`, re-exported here because `ClientSide::extract`/`ui`'s own
+/// signatures name it at this path (same pattern as `WorldRead`/`WorldWrite`/`TickCx` below).
+pub use crate::client::frame_view::{Clocks, FrameView};
 
 /// Shell (M17 gives it fields, 0018 §2): the per-frame draw list `ClientSide::extract` fills.
 pub struct DrawList {

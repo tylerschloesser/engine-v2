@@ -104,7 +104,7 @@ pub trait ClientSide<G: Game>: Default {
     fn frame(&mut self, _cx: &mut FrameCx<G>, _presence: &mut G::Presence) {}
 
     /// Called once per frame after `frame` (0018 §2). No-op by default: draws nothing.
-    fn extract(&self, _view: &FrameView<G>, _out: &mut DrawList) {}
+    fn extract(&self, _view: &FrameView<'_, G>, _out: &mut DrawList) {}
 
     /// Table lookup by default; a game overrides it to show `aux` instead (e.g. depletion).
     /// Called on chunk load/patch, never per frame (0018 §3).
@@ -113,7 +113,7 @@ pub trait ClientSide<G: Game>: Default {
     }
 
     /// What the DOM overlay observes (0003). No-op by default: leaves `out` unchanged.
-    fn ui(&self, _view: &FrameView<G>, _out: &mut G::Ui) {}
+    fn ui(&self, _view: &FrameView<'_, G>, _out: &mut G::Ui) {}
 }
 
 impl<G: Game> ClientSide<G> for () {}

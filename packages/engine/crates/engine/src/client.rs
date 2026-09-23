@@ -6,17 +6,21 @@
 
 pub mod camera;
 pub mod core;
+pub mod frame_view;
 pub mod input;
 pub mod replica;
 pub mod terrain_feed;
 pub mod texel;
+pub mod ui;
 pub mod upload;
 
 pub use camera::CameraBlock;
 pub use core::{ActionError, ClientCore, FrameSummary, OUTBOX_CAPACITY};
+pub use frame_view::{Clocks, FrameView};
 pub use input::{InputEvent, InputQueue};
 pub(crate) use replica::DirtyEvent;
 pub use replica::Replica;
 pub use terrain_feed::TerrainFeed;
 pub use texel::{ClientSide, TileTexel, install_visual_tables};
+pub use ui::UiObserver;
 pub use upload::Uploader;
