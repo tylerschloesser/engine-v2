@@ -84,6 +84,8 @@ declare global {
       recordCount(): number
       /** How many of the 8 `layer_count` entries of that same slot are non-zero. */
       nonEmptyLayerCount(): number
+      /** `engine/test`'s `drawListDropped` counter, of that same slot. */
+      drawListDropped(): number
       /** One real client-worker frame (`harness.stepFrame`) -- a real `extract`+`sort_into`
        * publish -- with no `acquire()`/draw call, unlike `drive()`. */
       stepClientFrameOnly(): void
@@ -292,6 +294,9 @@ window.__drawablesTest = {
   },
   nonEmptyLayerCount() {
     return drawablesRenderer.nonEmptyLayerCount()
+  },
+  drawListDropped() {
+    return drawListDropped(drawablesRenderer)
   },
   stepClientFrameOnly() {
     harness.stepFrame(1000 / 60)

@@ -23,6 +23,7 @@ declare global {
       frameSeq(): number
       recordCount(): number
       nonEmptyLayerCount(): number
+      drawListDropped(): number
       stepClientFrameOnly(): void
       acquireAndDraw(): void
       drawCallsNow(): number
@@ -78,6 +79,9 @@ test('drawlist.triple_newest_wins', async ({ page }, testInfo) => {
   expect(recordCount as number).toBeLessThanOrEqual(65_536)
 
   expect(await page.evaluate(() => window.__drawablesTest?.nonEmptyLayerCount())).toBeGreaterThan(0)
+  // Exit criteria: "drawListDropped == 0 in every test except the overflow test" -- 301-ish
+  // populated records are far under CAPACITY (65,536), so nothing here should ever drop.
+  expect(await page.evaluate(() => window.__drawablesTest?.drawListDropped())).toBe(0)
 
   await page.evaluate(() => window.__drawablesTest?.park())
 })
