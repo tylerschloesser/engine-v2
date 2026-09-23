@@ -1,6 +1,6 @@
 # M16b: `G::Ui` → UI ring → `onUi`, and `client.clock()`
 
-Status: not started · After: 16d · Tyler-dependent: no (Q1 answered: `serde_json` approved)
+Status: done · After: 16d · Tyler-dependent: no (Q1 answered: `serde_json` approved)
 
 Split from M16 (size). M17 depends on this milestone (it grows the `FrameView` defined here).
 
@@ -45,9 +45,9 @@ Rules: `.claude/rules/hot-paths.md`.
 Rust: `ui_called_only_after_replica_change` (no `ClientSide::frame` caller yet), `ui_reruns_when_dirty_flag_set` (a test `ClientSide` whose `ui` depends on a client-side field; the test hook mutates it and sets the flag; M18 adds `FrameCx::ui_dirty()` as the production setter), `ui_unchanged_value_writes_nothing`, `ui_json_matches_ts_shape` (golden JSON for `PutsUi`). TS unit: `onui_gets_only_latest_per_drain`, `onui_fires_before_action_results`, `clock_returns_same_object`. Browser: `dom_counter_follows_global` (fixture page text equals the `Global` counter after `stepTick(40)`), `no_ui_change_no_main_allocation` (M04 harness, 600 frames with ticks but a constant `Ui`), `progress_from_done_at_and_clock`.
 
 ## Exit criteria
-- [ ] All tests above pass; `vertical_slice` (M16) still passes.
-- [ ] Regenerated `bindings/PutsUi.ts` is committed and the fixture page type-checks against it.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass; `vertical_slice` (M16) still passes.
+- [x] Regenerated `bindings/PutsUi.ts` is committed and the fixture page type-checks against it.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t ui_` · `pnpm test unit -t onui` · `pnpm test browser -t dom_counter` · `pnpm lint`.
@@ -499,3 +499,11 @@ committing (`git diff` confirms a single-paragraph append, no other line touched
   `fx-puts`'s `Ui`/tick rule should re-measure that page, not assume the existing 115 still holds by
   a wide margin.
 - `docs/plan/device-checks.md`: brief says "none"; untouched.
+
+### Orchestrator's gate (M16b done)
+
+- **Cut 1 gate round, delivery order.** As first built, `ui` ran in `frame()`, which runs before `on_frame` each wake, so a wake's kind-1 record reflected the *previous* wake's frames. A frame that applied a Paint and carried its `Confirmed` drained as `[Result]` with no `Ui` at all. `ui` now runs inside `on_frame` before that frame's kind-2 results. `ui_record_precedes_its_own_frames_action_result_and_reflects_the_mutation` guards it, and the orchestrator re-ran its failability: removing the `on_frame` call fails it.
+- **Cut 2 gate round, a test that could not fail.** `no_ui_change_no_main_allocation` alone could not tell "no parse" from "parse every change", because at ~12 ticks per window a broken `PartialEq` gate costs ~1-2 B/frame against a budget of 31. `no_ui_change_asserts_ui_ran_and_wrote_nothing` now asserts from counters that `ui` ran and nothing was written or parsed (`client_ui_stats`, `ABI_VERSION` 13 -> 14). The orchestrator re-ran its failability (`if true` in place of `!=`: `Expected: 1, Received: 2`).
+- **`zero_gc_action`'s `main` rose ~107 -> ~112 B/frame.** Attributed to real kind-1 parsing, plus the drain decoding records that coalescing then discarded. The drain now copies bytes and decodes only the winning record: back to ~108, budget 115 unchanged, `object` control trips 8/8.
+- `pnpm test && pnpm lint` green: `rust` 306, `unit` 196, `wasm` 44, `browser` 123 at 18 s. Repeats: **15/15 quiet; 14/15 under `--load 10`**. The one failure was `zero_gc_action neg object main`, `parkWorkers: timed out after 10000 ms`. That is the third time this timeout has hit this page, twice without load at M16's gate, all before M16b. It is recorded, not charged to M16b; see M16e.
+
