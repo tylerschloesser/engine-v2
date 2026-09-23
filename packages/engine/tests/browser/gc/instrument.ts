@@ -39,7 +39,23 @@ const FRAMES = 600
 // `resumeWorkers`'s per-tick closure, `ManualClock.fireDue`'s per-`advance()` empty-Map iterator),
 // `gc-loop` itself is unaffected by the higher figure (still well inside its own budget), so one
 // constant is simpler than threading a per-page override through `measure()`/`zeroGcSuite` again.
-const WARMUP = 8000
+//
+// **Re-measured and halved, M16c step 3** (docs/plan/16c-browser-suite-time.md, Deviations):
+// attribution (Node-side `performance.now()` marks around each phase of `measure()`, temporary,
+// not committed) found this loop -- not the two 600-frame measured windows 0028 protects -- is the
+// dominant per-test fixed cost: ~1.45-1.5 s of `echo clean`'s own ~1.75 s internal `measure()` time
+// (each measured window is only ~0.11 s). `input`'s own `main` isolate is the one page in this
+// repo historically fragile to warm-up (0028's own Amendment): re-measured here at every value from
+// 8000 down to 2000, `--repeat-each` batches, quiet and under `--load 10` --
+// 4000: stable at 181.6-181.7 B/frame (matches the *pre-0028* historical 181.673-181.913 baseline
+// exactly, i.e. fully JIT-settled, comfortably under the 190 budget); 3000: 186.1-187.0 (too close
+// to 190 to keep as a committed margin); 2000: 196.2-196.7, over budget outright (a real, recurring
+// cost across both 0028 windows, not a one-off JIT burst -- insufficient warm-up, not noise). 4000
+// is therefore the floor with headroom preserved; every `budgets.json` number is unchanged. Full
+// `gc` project (77 tests, every page, `@slow` burst included) at 4000: 3/3 clean runs, 77/77 passing
+// each time, quiet and under `--load 10` (`docs/plan/16c-browser-suite-time.md`'s own verification);
+// fast tier alone (48 tests) fell from 17.4 s to 12.3 s wall.
+const WARMUP = 4000
 /** Warm-up frames are driven in this many separate `run()` calls (fix round 3; see the call site):
  * one pass warms the per-frame work but gives `run()`'s own resume/park path a single invocation,
  * which is too few for V8 to have allocated its feedback before the measured window. */

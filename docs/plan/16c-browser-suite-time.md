@@ -207,3 +207,52 @@ Goal (quiet `pnpm test browser` under 25 s) is still met regardless, on Step 3 a
 `vertical_slice`'s own individual budget and the suite's own wall-clock budget turned out to be
 separable.
 
+### Step 3: zero-GC warm-up halved (`WARMUP` 8000 -> 4000)
+
+Step 1's own table found warm-up, not the two 600-frame measured windows 0028 protects, as the
+dominant per-test fixed cost in every `zeroGcSuite`-generated test. Measured `input`'s own `main`
+isolate (the page 0028's own history shows is warm-up-sensitive) at every value from 2000 to 8000,
+`--repeat-each` batches, quiet and under `--load 10`:
+
+| `WARMUP` | `input clean` `main` B/frame | vs. 190 budget |
+|---|---|---|
+| 2000 | 196.2-196.7 | **over budget** (a real, recurring cost in both 0028 windows, not a one-off JIT burst) |
+| 3000 | 186.1-187.0 | under, but only ~3-4 B of margin left |
+| **4000** | **181.6-181.7** | matches the pre-0028 historical 181.673-181.913 baseline exactly (fully JIT-settled); same under `--load 10` |
+| 6000 | 181.7 | no further improvement over 4000 |
+| 8000 (was) | 181.9 (0028's own table) | unchanged from 4000's own reading |
+
+4000 is the floor with headroom preserved; chosen over 3000 for margin. No `budgets.json` number
+changed. Verified: the whole `gc` project (77 tests: every page, `object` and `@slow` `burst`
+negatives included) at `WARMUP=4000`, 3/3 full runs, 77/77 passing each time, quiet; fast tier alone
+(48 tests, `--grep-invert @slow`) fell from **17.4 s to 12.3 s** wall. `input`/`terrain`/
+`zero_gc_action`/`echo`/`topology`/`gc-loop` `clean` re-checked at `--repeat-each 10` (70/70 pass)
+and again under `--load 10` (35/35 pass).
+
+**Result** (`echo clean`): warm-up fell from ~1454-1500 ms to measured ~727-750 ms (proportional to
+the frame-count halving); `measure()` total ~1.05 s; test total in `report.json` fell to
+**1354-1458 ms** (was 2069-2208 ms), a 34-37 % cut, matching every other `${page} neg object ...`
+test's own fixed cost the same way (`echo neg object main/client/sim/gen0` all fell from ~2.05-2.1 s
+to ~1.35-1.4 s in the same full-suite run).
+
+### Suite-level result (Step 3 alone -- Step 2 reverted -- base `4ab945e` vs. this commit range)
+
+`pnpm test browser`, quiet, three consecutive runs (this session, load average re-checked before
+each: 1-min under 6 throughout): **22 s / 22 s / 22 s** (`user+sys` 40.1 s / 40.3 s / 40.6 s total,
+each printed plain `pass 116 tests 22s/25s` with no over-budget warning), against the base's own
+26.0-26.7 s -- **Step 3 alone already meets the suite's own 25 s budget with room to spare**, even
+with `vertical_slice` back at its base ~5.7 s (Step 2 reverted, above). `report.json`'s summed test
+work fell from 69.5 s to **57.1 s** (n=116 in both). Slowest tests after: `vertical_slice` 5694 ms
+(unchanged, Step 2's own line, above), `poll_skips_a_spurious_tick_on_a_ring_wake` 1773 ms,
+`workers.park_resume` 1766 ms (both chromium-project, untouched by this milestone -- Non-scope),
+`gc-loop neg burst sim` 1543 ms (`@slow`, not in the fast tier), then every `zeroGcSuite`
+`clean`/`neg object` test in the ~1.0-1.5 s band Step 3 left them in (was ~1.3-2.2 s).
+
+`node scripts/repeat.mjs browser <n> --load 10` (15/15, 0 hangs) is the orchestrator's own gate
+check per the brief; this session ran it in two batches of 8 (the brief's own "~8 per call" bound)
+against the exact code in this commit range (Step 3's `WARMUP=4000`, Step 2 reverted): **16/16 pass,
+0 fail, 0 hang** (`slowestSuiteSeconds` 29 and 30, i.e. still over the *quiet* 25 s budget under
+real load, as 0020's own "wall clock recorded, never gating under load" already expects, and under
+the §2 37.5 s failure line both times). Load average during these two batches ranged 7.4-15.4
+(1-min) -- a shared machine, not a clean lab bench, but every run passed regardless.
+
