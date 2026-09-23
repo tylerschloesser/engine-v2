@@ -107,6 +107,13 @@ declare global {
        * gpuBytes()` (terrain: page, indirection, tile art, visual table, frame uniform) plus
        * `drawablesRenderer.gpuBytes()` (instance buffer, DrawFrame uniform, sprite atlas + tables). */
       gpuBytes(): number
+      /** Fix round 2 (coordinator review, `counters.gpu_bytes_within_budget` nit): `renderer.
+       * gpuBytes()` alone (terrain's own share), so a test can subtract it from `gpuBytes()`'s own
+       * total and check the *drawables* share (instance buffer + DrawFrame uniform + sprite atlas +
+       * tables) specifically, instead of only asserting the combined total is non-zero -- which the
+       * page texture alone (terrain's own 4 MiB) already satisfies regardless of whether a sprite
+       * atlas ever loaded. */
+      terrainGpuBytes(): number
     }
   }
 }
@@ -373,6 +380,9 @@ window.__drawablesTest = {
   },
   gpuBytes() {
     return renderer.gpuBytes() + drawablesRenderer.gpuBytes()
+  },
+  terrainGpuBytes() {
+    return renderer.gpuBytes()
   },
 }
 

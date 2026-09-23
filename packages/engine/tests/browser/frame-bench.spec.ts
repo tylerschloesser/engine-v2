@@ -237,7 +237,31 @@ test('bench.frame_worstcase @slow', async ({ page, browser }, testInfo) => {
   expect(mainMs.length, 'main-thread rAF callback marks captured').toBeGreaterThanOrEqual(
     TIMED_FRAMES,
   )
-  expect(workerMs.length, 'client worker frame() marks captured').toBeGreaterThan(0)
+  // Fix round 2 (coordinator review, sample-size nit): `toBeGreaterThan(0)` let a single worker
+  // sample (or a handful) stand in for the whole p50/p95 -- a worker that is running but badly
+  // starved (a park/resume regression that only *partly* breaks wake delivery, say) would still
+  // pass. `WORKER_SAMPLE_FLOOR` is set from this session's own repeated measurements at this exact
+  // scene on Tyler's Mac (baselines/frame.json's own "Fix round 1"/"Fix round 2" Deviations): 20-24
+  // `wf-*` pairs per 300-main-frame window, every run, dozens of runs across two fix rounds -- never
+  // below 20. 12 is a little over half that floor: real machine-load jitter (the very thing that
+  // motivated moving this suite to `solo: true`, below) can plausibly cost a few samples without the
+  // worker being starved, but a run in the low single digits is not jitter, it is something
+  // structurally wrong with wake delivery -- caught here, verified by injection (Deviations).
+  // **Also gated on `isSwiftShader`** (found running this exact check under `CI=true ENGINE_GPU=
+  // swiftshader`, Fix round 2 item 5): a software adapter's own per-call cost at 65,536 records is
+  // high enough (measured: 2 samples in the same window, against 20-24 on real hardware) that this
+  // is the *same* machine-dependent timing effect the budget/baseline checks below already warn
+  // instead of fail on (0020 §10), not a real starvation bug -- SwiftShader was never proven to
+  // starve the worker's own wake delivery, only to make each wake far slower.
+  const WORKER_SAMPLE_FLOOR = 12
+  if (workerMs.length < WORKER_SAMPLE_FLOOR) {
+    const message = `client worker frame() marks captured: ${workerMs.length} below floor ${WORKER_SAMPLE_FLOOR}`
+    if (isSwiftShader) {
+      console.warn(`warn: ${message} (0020 §10: real-GPU timing gates only on Tyler's Mac)`)
+    } else {
+      expect(workerMs.length, message).toBeGreaterThanOrEqual(WORKER_SAMPLE_FLOOR)
+    }
+  }
 
   const mainP50 = percentile(mainMs, 0.5)
   const mainP95 = percentile(mainMs, 0.95)

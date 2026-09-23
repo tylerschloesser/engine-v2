@@ -31,11 +31,17 @@ export const buildSteps = [
 ]
 
 /**
- * A suite is `{ name, kind, tiers, budgetMs, args?, cwd?, env?, legs? }`; `kind` names an adapter in
- * scripts/lib/adapters.mjs. `legs` are extra runs reported on the suite's line, each
- * `{ name, kind, ... }` with what its adapter needs. Ids follow the rows of the 0020 §3 table:
- * `rust`, `unit`, `wasm`, `browser`, and reserved for a later milestone `netcode`. `budgetMs` is the
- * fast-tier budget; owner of the numbers: docs/decisions/0020 §3. Slow-tier lines carry no budget.
+ * A suite is `{ name, kind, tiers, budgetMs, args?, cwd?, env?, legs?, solo? }`; `kind` names an
+ * adapter in scripts/lib/adapters.mjs. `legs` are extra runs reported on the suite's line, each
+ * `{ name, kind, ... }` with what its adapter needs, run concurrently with the suite's own main leg
+ * (`runSuite`'s `Promise.all`). Ids follow the rows of the 0020 §3 table: `rust`, `unit`, `wasm`,
+ * `browser`, and reserved for a later milestone `netcode`; `frame-bench` (docs/plan/
+ * 17b-sprites-and-frame-budget.md, Fix round 2) is this repo's one addition outside that table, for
+ * the reason its own entry below explains. `budgetMs` is the fast-tier budget; owner of the numbers:
+ * docs/decisions/0020 §3. Slow-tier lines carry no budget. `solo: true` (`scripts/test.mjs`'s own
+ * Phase 2): this suite runs alone, after every non-`solo` suite of the same tier has fully finished,
+ * with no other suite's own Playwright/cargo/vitest process running concurrently -- for a suite
+ * whose own numbers are only meaningful with the machine to itself (today: `frame-bench` alone).
  */
 export const suites = [
   { name: 'rust', kind: 'nextest', tiers: ['fast', 'slow'], budgetMs: 10_000 },
@@ -80,20 +86,26 @@ export const suites = [
         // to bind (playwright.config.ts, tests/browser/pages/vite.config.ts).
         port: 4518,
       },
-      {
-        // docs/plan/17b-sprites-and-frame-budget.md, steps 4-6: `bench.frame_worstcase`, the one
-        // real-rAF frame-time benchmark, in its own project (`playwright.config.ts`'s own
-        // `--disable-frame-rate-limit --disable-gpu-vsync` launch flags) so the `chromium`/`gc`
-        // projects' own tests never run with uncapped rAF pacing. `pnpm bench:frame` (root
-        // package.json) runs the identical `--project frame-bench` command directly, for a human
-        // reading its printed table without the rest of the slow tier.
-        name: 'frame-bench',
-        kind: 'playwright',
-        onlyTier: 'slow',
-        noSlowTag: true,
-        args: ['--project', 'frame-bench'],
-        port: 4519,
-      },
     ],
+  },
+  {
+    // docs/plan/17b-sprites-and-frame-budget.md, steps 4-6 + Fix round 2: `bench.frame_worstcase`,
+    // the one real-rAF frame-time benchmark, in its own top-level suite rather than a `browser` leg
+    // -- `runSuite`'s own `Promise.all` runs every leg of one suite concurrently, and a frame-time
+    // gate cannot share the machine with the rest of the slow tier's Playwright worker pool
+    // (`browser`'s own `workers: 5`, zero-GC `burst` negative controls included: they exist to burn
+    // CPU). `solo: true` (below) makes `scripts/test.mjs` run this suite by itself, after every
+    // concurrent suite -- `browser` included -- has finished, so nothing else is asking Chromium or
+    // the CPU for anything while it measures. Its own project (`playwright.config.ts`'s own
+    // `--disable-frame-rate-limit --disable-gpu-vsync` launch flags) keeps the `chromium`/`gc`
+    // projects' own tests unaffected by uncapped rAF pacing either way. `pnpm bench:frame` (root
+    // package.json) runs the identical `--project frame-bench` command directly, for a human
+    // reading its printed table without the rest of the slow tier.
+    name: 'frame-bench',
+    kind: 'playwright',
+    tiers: ['slow'],
+    solo: true,
+    args: ['--project', 'frame-bench'],
+    port: 4519,
   },
 ]

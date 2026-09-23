@@ -9,6 +9,8 @@
 // 'burst']` (a production worker has no spare `postMessage` type for a message-driven tick, same
 // reasoning as every other production-topology page).
 import { expect, test } from '@playwright/test'
+import { SPRITE_TABLE_BYTES } from '../../src/render/atlas.ts'
+import { CAPACITY, DRAW_BYTES, DRAW_FRAME_UNIFORM_BYTES } from '../../src/render/drawables.ts'
 import { budget, expectWithinBudget } from '../support/budgets.ts'
 import { zeroGcSuite } from './gc/suite.ts'
 import { type AdapterInfo, expectAdapter } from './support/gpu.ts'
@@ -31,6 +33,7 @@ declare global {
       instanceBytesNow(): number
       populatedLayers(): number[]
       gpuBytes(): number
+      terrainGpuBytes(): number
     }
   }
 }
@@ -158,12 +161,40 @@ test('counters.pipeline_switches_and_instance_bytes', async ({ page }, testInfo)
 // that page (a real TerrainRenderer + DrawablesRenderer, sprites installed). No `resume()`/`park()`
 // bracketing needed: `gpuBytes()` reads only cached byte counts on the two renderer objects, never
 // the client worker.
+// Fix round 2 (coordinator review): `gpuBytes > 0` alone is satisfied by the page texture (terrain's
+// own fixed 4 MiB) whether or not a sprite atlas ever loaded -- it cannot fail on a broken
+// `setSpriteAtlas` wiring. `gc-sprite-art.mjs`'s own fixed fixture dimensions (96x64, mip 1 halved
+// to 48x32 by `render/atlas.ts`'s own `mip1W`/`mip1H` formula) let the drawables-side share be
+// recomputed independently of `DrawablesRenderer.gpuBytes()`'s own arithmetic, from exported
+// constants alone (`CAPACITY`/`DRAW_BYTES`/`DRAW_FRAME_UNIFORM_BYTES`, `render/drawables.ts`;
+// `SPRITE_TABLE_BYTES`, `render/atlas.ts`), and checked against `gpuBytes() - terrainGpuBytes()`.
+const FIXTURE_ATLAS_W = 96
+const FIXTURE_ATLAS_H = 64
+const FIXTURE_ATLAS_MIP1_W = FIXTURE_ATLAS_W >> 1
+const FIXTURE_ATLAS_MIP1_H = FIXTURE_ATLAS_H >> 1
+const EXPECTED_ATLAS_GPU_BYTES =
+  FIXTURE_ATLAS_W * FIXTURE_ATLAS_H * 4 +
+  FIXTURE_ATLAS_MIP1_W * FIXTURE_ATLAS_MIP1_H * 4 +
+  SPRITE_TABLE_BYTES * 2
+const EXPECTED_DRAWABLES_GPU_BYTES =
+  CAPACITY * DRAW_BYTES + DRAW_FRAME_UNIFORM_BYTES + EXPECTED_ATLAS_GPU_BYTES
+
 test('counters.gpu_bytes_within_budget', async ({ page }, testInfo) => {
   await openPage(page, '/gc-drawables.html')
   const ready = await page.evaluate(() => window.__gc?.ready)
   expectAdapter(testInfo, (ready?.adapter as AdapterInfo | null) ?? null)
 
   const gpuBytes = await page.evaluate(() => window.__drawablesTest?.gpuBytes())
+  const terrainGpuBytes = await page.evaluate(() => window.__drawablesTest?.terrainGpuBytes())
   expect(gpuBytes).toBeGreaterThan(0)
+  expect(terrainGpuBytes, 'terrain-only share, read independently').toBeGreaterThan(0)
+  // The sprite atlas's own specific contribution: the whole renderer's total minus terrain's own
+  // share, checked against an independently recomputed expectation (not `DrawablesRenderer.
+  // gpuBytes()`'s own cached sum) -- fails if `setSpriteAtlas` never installed a real atlas (the
+  // drawables share would fall back to the tiny placeholder's own few hundred bytes instead).
+  const drawablesGpuBytes = (gpuBytes ?? 0) - (terrainGpuBytes ?? 0)
+  expect(drawablesGpuBytes, 'drawables share (instance buffer + uniform + atlas + tables)').toBe(
+    EXPECTED_DRAWABLES_GPU_BYTES,
+  )
   expectWithinBudget('counters.render.gpuBytes', gpuBytes ?? Number.POSITIVE_INFINITY)
 })

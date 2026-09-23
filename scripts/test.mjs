@@ -76,8 +76,18 @@ async function main() {
     )
   }
 
-  // Phase 2: every selected suite at once.
-  const outcomes = await Promise.all(selected.map((suite) => runSuite(suite, opts)))
+  // Phase 2: every selected suite at once, except a `solo: true` suite (docs/plan/
+  // 17b-sprites-and-frame-budget.md, Fix round 2: a frame-time gate cannot share the machine with a
+  // parallel Playwright worker pool) -- those run one at a time, afterward, each with every other
+  // suite's own process already finished. `selected`'s own registration order is preserved either
+  // way (`suites.mjs` lists every `solo` suite after the ones it must not race), so this changes
+  // scheduling, not the reported order.
+  const concurrent = selected.filter((s) => !s.solo)
+  const solo = selected.filter((s) => s.solo)
+  const outcomes = await Promise.all(concurrent.map((suite) => runSuite(suite, opts)))
+  for (const suite of solo) {
+    outcomes.push(await runSuite(suite, opts))
+  }
 
   // Phase 3: one line per suite in registration order, then one block per failure.
   const nameWidth = Math.max(...selected.map((s) => s.name.length))

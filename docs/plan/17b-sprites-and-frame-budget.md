@@ -669,3 +669,111 @@ numbers as before this fix round (expected, since the workload did not change) b
 real assertion instead of a vacuous one. `baselines/frame.json` rewritten with the median of the five
 runs' own medians (main p50/p95 0.637/0.691 ms, worker p50/p95 2.152/2.344 ms) and a `conditions`
 field recording the fix and the injection proof.
+
+### Fix round 2 (coordinator review, four items)
+
+**Item 1: isolation.** `bench.frame_worstcase` failed on the coordinator's own gate inside `pnpm
+test:slow` (worker p50 2.775ms against the 2.7ms budget, 1-minute load 28 at that moment) --
+structural, not a real regression: `frame-bench`'s own leg of the `browser` suite ran *concurrently*
+with that suite's own other legs (`runSuite`'s `Promise.all`), including the slow tier's zero-GC
+`burst` negative controls, which exist to burn CPU. **Fixed**: `frame-bench` moved out of `browser`'s
+`legs` into its own top-level entry in `scripts/suites.mjs`, `solo: true`. `scripts/test.mjs`'s Phase
+2 now splits `selected` into `concurrent`/`solo`, runs `concurrent` via the existing `Promise.all`,
+then runs every `solo` suite one at a time, afterward -- `frame-bench` (`suites.mjs`'s own
+registration order keeps it last) now starts only once every other slow-tier suite's own process,
+Playwright included, has fully exited. Budget/tolerance/record count/frame counts/flags: unchanged.
+
+**Item 2: shown.** `pnpm test:slow`, full, twice, foreground (`uptime` before each):
+
+```
+11:36  up 6 days, 15:25, 5 users, load averages: 3.44 3.98 4.61
+$ pnpm test:slow
+rust        pass 0 tests    0.2s
+unit        pass 2 tests    1.4s
+wasm        pass 3 tests    13s
+browser     pass 44 tests   24s
+frame-bench pass 1 tests    5.1s
+```
+```
+bench.frame_worstcase: records=65536 frames=304/23 warmup=120 swiftshader=false
+  main   p50=0.637ms p95=0.683ms budget<=1.3ms baseline.p50=0.637ms (+/-25%)
+  worker p50=2.158ms p95=2.573ms budget<=2.7ms baseline.p50=2.152ms (+/-25%)
+```
+
+```
+11:38  up 6 days, 15:27, 5 users, load averages: 7.91 5.21 5.02
+$ pnpm test:slow
+rust        pass 0 tests    0.3s
+unit        pass 2 tests    1.3s
+wasm        pass 3 tests    13s
+browser     pass 44 tests   23s
+frame-bench pass 1 tests    5.1s
+```
+```
+bench.frame_worstcase: records=65536 frames=304/23 warmup=120 swiftshader=false
+  main   p50=0.644ms p95=0.687ms budget<=1.3ms baseline.p50=0.637ms (+/-25%)
+  worker p50=2.168ms p95=2.268ms budget<=2.7ms baseline.p50=2.152ms (+/-25%)
+```
+
+Both runs' own `frame-bench` line prints *after* `browser`'s own line finishes (5s wall each, not
+overlapping it) -- confirming isolation, not merely a clean result. The benchmark's own printed
+tables are read from `test-results/frame-bench/output.log` (`scripts/test.mjs`'s quiet-on-pass
+contract writes a passing suite's own stdout there, not to the terminal).
+
+**Item 3: sample-size floor.** `expect(workerMs.length).toBeGreaterThan(0)` let a single sample stand
+in for the whole worker p50/p95. Replaced with `WORKER_SAMPLE_FLOOR = 12`, reasoned from this
+session's own repeated measurement at this exact scene (20-24 `wf-*` pairs per window, every run
+across both fix rounds, on real hardware -- never below 20; 12 leaves headroom for real jitter
+without accepting a starved worker). **Verified by injection**: a temporary 20ms busy-wait inside the
+CDP-injected `call1` wrapper dropped the count to 7, failing exactly this assertion (`Expected: >=
+12, Received: 7`); reverted, re-confirmed clean (23 samples, pass). **Found while doing item 5**: the
+same floor, unconditional, also failed under `CI=true ENGINE_GPU=swiftshader` (2 samples -- a real,
+expected effect of SwiftShader's own far higher per-call cost at 65,536 records, not a starvation
+bug: the earlier `recordCount`/`dropped` checks, which run before this one and are hardware-
+independent, had already passed in that same run). Gated the sample-floor check behind `isSwiftShader`
+the same way the budget/baseline checks already are (warn, not fail) -- re-verified: `CI=true
+ENGINE_GPU=swiftshader` now prints `warn: client worker frame() marks captured: 1 below floor 12
+(0020 §10: ...)` and the test passes; the real-hardware injection above still fails hard afterward
+(re-run to confirm the gating didn't quietly defang it).
+
+**Item 4: `counters.gpu_bytes_within_budget`'s own nit.** `gpuBytes > 0` was satisfied by the page
+texture (terrain's own fixed 4 MiB) alone, regardless of whether `setSpriteAtlas` ever ran.
+`DrawablesRenderer.gpuBytes` gained an exported `DRAW_FRAME_UNIFORM_BYTES` (was private);
+`gc-drawables.ts` gained `window.__drawablesTest.terrainGpuBytes()` (`renderer.gpuBytes()` alone, the
+same object `gpuBytes()`'s own total already adds it to, but read independently). The spec now
+recomputes the expected drawables-side total from exported constants alone (`CAPACITY`/`DRAW_BYTES`/
+`DRAW_FRAME_UNIFORM_BYTES`, `render/drawables.ts`; `SPRITE_TABLE_BYTES`, `render/atlas.ts`) plus the
+fixture atlas's own known, documented pixel dimensions (`scripts/gen-sprite-art.mjs`'s `WIDTH = 96`/
+`HEIGHT = 64`, mip 1 halved to 48x32 by `render/atlas.ts`'s own `mip1W`/`mip1H` formula) -- entirely
+independent of `DrawablesRenderer.gpuBytes()`'s own internal arithmetic -- and asserts `gpuBytes() -
+terrainGpuBytes() === EXPECTED_DRAWABLES_GPU_BYTES` (computed: 2,258,992 B, which matches this
+milestone's own earlier "drawables' own share only" measurement in steps 1-3's Deviations exactly,
+an independent cross-check that the recomputation is right). `pnpm test browser -t gpu_bytes` -> 1
+test pass at this exact value.
+
+**Item 5: CI treatment, confirmed and cited.** Ran `CI=true ENGINE_GPU=swiftshader pnpm exec
+playwright test --config packages/engine/playwright.config.ts --project frame-bench` directly: every
+budget/baseline/sample-floor check that would otherwise fail prints a `warn:` line instead and the
+test still passes overall (`records=65536` -- the correctness checks are unaffected, as they should
+be). Code path: `frame-bench.spec.ts`'s `const isSwiftShader = process.env.ENGINE_GPU ===
+'swiftshader'`, read by `assertOrWarn` (main/worker vs the 0018 §9 budget and the `baselines/
+frame.json` tolerance) and, after this fix round, by the `WORKER_SAMPLE_FLOOR` check too -- matching
+0020 §10 ("Real-GPU rendering and timing runs happen only on Tyler's Mac") and the exact same
+convention `tests/wasm/worldgen-bench.test.ts` already uses for its own machine-dependent number.
+
+**`packages/engine/CLAUDE.md`**: one sentence in the `pnpm bench:frame` row updated to name the new
+`frame-bench` suite/`solo: true` instead of the old "browser suite leg" shape; line count unchanged
+(60, the coordinator's own prior fix in `384cff6` already brought it to the cap).
+
+### Verified (commands and results, Fix round 2)
+
+- `pnpm test:slow`, full, twice, foreground -- both green, numbers and `uptime` above.
+- `pnpm test browser -t gpu_bytes` -> `browser pass 1 tests`. `pnpm test browser -t drawables` ->
+  `browser pass 9 tests` (unchanged count).
+- `node scripts/test.mjs frame-bench --tier slow` (targeted) -> `frame-bench pass 1 tests`.
+- `pnpm exec tsc --noEmit` on `tsconfig.json`, `tests/tsconfig.json` and `tests/browser/pages/
+  tsconfig.json` -> all clean.
+- `pnpm format` -> no fixes needed at the final state.
+- Every injection in this fix round (item 1's isolation is structural, not provable by a single
+  injected value; items 3 and the SwiftShader gate were each proven failing, then reverted, as
+  recorded above).

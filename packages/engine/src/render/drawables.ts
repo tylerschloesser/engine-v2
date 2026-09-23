@@ -119,7 +119,12 @@ export type DrawFrameUniformValues = {
   cursorValid: number
 }
 
-const DRAW_FRAME_UNIFORM_BYTES = 48
+/** Exported (fix round 2, docs/plan/17b-sprites-and-frame-budget.md): `gc-drawables.spec.ts`'s own
+ * `counters.gpu_bytes_within_budget` recomputes the expected drawables-side `gpuBytes()` total from
+ * this plus `CAPACITY`/`DRAW_BYTES` (the instance buffer) and `render/atlas.ts`'s own
+ * `SPRITE_TABLE_BYTES`/the fixture atlas's known pixel dimensions, independent of `gpuBytes()`'s own
+ * arithmetic, instead of only asserting the combined total is non-zero. */
+export const DRAW_FRAME_UNIFORM_BYTES = 48
 const DFU_CAM_TILE_X = 0
 const DFU_CAM_TILE_Y = 4
 const DFU_CAM_FRAC_X = 8
