@@ -44,3 +44,40 @@ Measured before this design, as a clock-free candidate: crediting only timed-out
 - `docs/plan/16c-browser-suite-time.md` Deviations, Step 1 (the stall on `slice.html`).
 - `docs/plan/15e-paced-tick-measurement.md` Deviations (the original failability proof).
 - MDN, `Atomics.wait()` return values `"ok"`/`"not-equal"`/`"timed-out"` (checked 2026-09-22). Not used directly: the wake-word comparison already distinguishes the cases without changing `ControlBlock.waitForWake`, whose shape `sab.wait_for_wake_shape` pins.
+
+## Amendment (M16d CI round 3, 2026-09-23): the resync warmer boxes at most one read per resync
+
+CI run 35839212851 (`GC_MODE=software`, `ubuntu-latest`) failed `sim clean` with `sim` at 8.64 B/frame against the strict 8. Attribution comes from the bundle CI ran (`worker-auto-DRa3yvlc.js`, byte-identical locally):
+- `now@…:1241` is `systemClock.now`, called from `server.ts`'s `warm()` loop condition.
+- `warm@…:1507` is that function's fractional `now + WARM_BUDGET_MS` deadline.
+- This ADR's timer is not involved. `gc-sim` never arms it (no `test.pace`), and `settle@` does not appear.
+
+The cost was [0030](0030-sim-host-resync-based-pacing.md) §3's resync warmer:
+- Every resync boxed its own read plus a second value: the loop-condition read or the fractional deadline.
+- Every chunk actually warmed boxed one more read.
+- On a slower runner the warming backlog still ran inside the measured windows, and the other window carried a one-off 5 KB `scope.onmessage` lump.
+
+Reproduced locally under `--load 10` with software mode and forced `--no-opt --no-sparkplug`: the same `now@`/`warm@`/`simWarmOne@` sites in window 1 only.
+
+**Decision (amends 0030 §3's warmer line).**
+- `resync` floors its one reading, so every derived value (`elapsed`, `overshoot`, `behindTicks` by exact integer division) stays a Smi.
+- `warm(nowMs)` warms its first chunk on that reading instead of re-reading the clock. It keeps an integer deadline and reads the clock again only after a chunk has actually been warmed, to police 0008 §2's 2 ms budget.
+- A window that ran catch-up ticks skips warming, since its idle time was spent on ticks.
+
+So a resync with nothing to warm costs exactly one box, and each chunk warmed costs one more. That cost is proportional to work done, not to elapsed time.
+
+Measured (quiet; software mode with forced `--no-opt --no-sparkplug`; `sim` B/frame, before → after):
+
+| page | before | after |
+|---|---|---|
+| `sim` | 3.83, 3.83 | 2.31, 2.33 |
+| `connected-terrain` | 7.33, 7.63 | 5.83, 5.85 |
+| `zero_gc_action` | 7.85, 7.83 | 6.35, 6.35 |
+| `sim-paced` | 1.36, 2.68 | 2.11, 2.15 |
+| `topology`, `echo` | < 1 | < 1 |
+
+`resync@` went from 1800 to 900 B per window on `sim`, one box per resync. Under `--load 10` in the same mode: `sim` 2.33 (was 3.79), `connected-terrain` 5.85 (was 7.31), `zero_gc_action` 6.35 (was 7.81). No budget changed.
+
+**Residual, recorded rather than fixed:**
+- On `sim-paced`, this ADR's own read (`settle@`, §3) happens about once per tick of *real* time while the page wakes the sim every frame. It is therefore a per-time cost measured against a per-frame ceiling, like 0030's resync read on any paced page. It measured 0.4-2.2 B/frame here.
+- It has headroom but no bound independent of window duration. An integer clock source without a `HeapNumber` does not exist in JS (0030 Alternatives rejected). Revisit if a slower runner pushes `sim-paced` toward 8.

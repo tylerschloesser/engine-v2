@@ -372,14 +372,20 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
     }
   }
 
-  /** Runs the chunk warmer for at most `WARM_BUDGET_MS` from `now` (already read by `resync`, the
-   * only caller -- not re-read here for the starting point, only the loop condition below reads it,
-   * and only while there is warming left to do). */
-  function warm(now: number): void {
-    const deadline = now + WARM_BUDGET_MS
-    while (services.clock.now() < deadline) {
-      if (sim.simWarmOne() !== 1) break
+  /** Runs the chunk warmer for at most `WARM_BUDGET_MS` from `nowMs` (resync's own reading, already
+   * an integer). docs/plan/16d-sim-pacing-under-external-wakes.md, CI round 3: the first chunk is
+   * warmed on that reading rather than a fresh one, and the deadline stays an integer, so a resync
+   * with nothing to warm reads the clock once (in `resync`) and boxes nothing else; each chunk
+   * actually warmed costs one more read, to police the budget. Before this, every resync also read
+   * the clock in this loop's condition and boxed a fractional `now + WARM_BUDGET_MS`, and a warming
+   * backlog that happened to overlap a zero-GC window (on a slower runner) added a read per chunk
+   * on top: `sim` read 8.64 B/frame on CI against the strict 8. */
+  function warm(nowMs: number): void {
+    const deadline = nowMs + WARM_BUDGET_MS
+    for (;;) {
+      if (sim.simWarmOne() !== 1) return
       counters.chunksWarmed++
+      if (services.clock.now() >= deadline) return
     }
   }
 
@@ -397,17 +403,21 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
    * strict 8 B/frame budget for the rest of the loop's own overhead. At 20 Hz that is a 400 ms
    * resync window: bounded, self-correcting drift, versus an uncorrected one at any window size. */
   function resync(): void {
-    const now = services.clock.now()
+    // Floored once (CI round 3, `warm`'s doc comment): every value derived from it below stays an
+    // integer, so the read's own box is the only allocation here.
+    const now = Math.floor(services.clock.now())
     const expected = ticksSinceSync * tickMs
     const elapsed = now - syncBaseMs
     const overshoot = elapsed - expected
     let accountedTicks = ticksSinceSync
+    let caughtUp = false
     if (overshoot > 0) {
       counters.tickOverruns++
-      const behindTicks = Math.floor(overshoot / tickMs)
+      const behindTicks = (overshoot - (overshoot % tickMs)) / tickMs // exact: stays a Smi
       if (behindTicks > 0) {
         const runCount = Math.min(behindTicks, MAX_CATCHUP_TICKS)
         for (let i = 0; i < runCount; i++) runOneTick()
+        caughtUp = runCount > 0
         const dropped = behindTicks - runCount
         if (dropped > 0) counters.ticksDropped += dropped
         accountedTicks += runCount + dropped
@@ -415,7 +425,9 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
     }
     syncBaseMs += accountedTicks * tickMs
     ticksSinceSync = 0
-    warm(now)
+    // A window that had to catch up has already spent its idle time on ticks: no warming this time
+    // (the old loop re-read the clock after the catch-up and usually found the budget gone).
+    if (!caughtUp) warm(now)
   }
 
   /** Runs exactly one tick and resyncs against the real clock every `RESYNC_TICKS` ticks -- the one

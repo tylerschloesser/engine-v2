@@ -239,3 +239,19 @@ observation word only): `samples 262ms:0 512ms:0 ... 2004ms:0; worst drift -40.1
   fail=0 hang=0` (slowest 22 s and 23 s).
 - **CI round (orchestrator).** `fa19956` was red on `ubuntu-latest` only: `__sliceSettle: not settled after 10000 ms (resident true, drained true, quiet for 0 frames and 0 sim ticks)`. It was waiting for the whole page to go quiet, and a slower SwiftShader runner never reached that. `9d0af57` waits for the probed tile's own GPU value (and, after the Paint, for it to differ from the pre-paint value) instead. It could not be reproduced on macOS (local SwiftShader fails earlier, in `mapAsync`, on the pre-M16d code too), so CI run 35827172692 is its verification: **green**. **Lesson: a settle must wait on the specific event the probe needs, never on a global quiet period that a busy page, or a slow machine, may never reach.**
 
+
+### CI round 3 (`9c19e9d`, run 35839212851): `sim clean` at 8.64 B/frame
+- **The guess was refuted by the bundle's line numbers.** `now@…:1241` is `systemClock.now` called from
+  `warm()`, and `warm@…:1507` is its double deadline. ADR 0032's timer is never armed on `gc-sim`.
+  `settle@` is absent.
+- **Reproduced** under `--load 10`, software mode and forced interpreter: the same sites in window 1 only.
+- **Fixed in `server.ts`:** a floored resync reading, an integer deadline, and no clock read before the first
+  warmed chunk. ADR 0032's Amendment has the before/after table.
+- **Checks:**
+  - `pnpm gc -t "(sim|sim-paced|topology|echo|connected-terrain|zero_gc_action) (clean|neg)"`: 46 passed under
+    default V8 and 46 passed under `GC_MODE=software`.
+  - Under software mode plus forced interpreter, `sim neg object sim`/`sim neg burst sim` fail on `B.main`
+    (`main` attributed 0.093 against the page's software-mode `main` budget of 0). HEAD without this change
+    fails identically, so this is a pre-existing artefact of that diagnostic combination. CI does not run it.
+  - `sim_ticks_steadily_under_external_wakes`, `poll_skips_a_spurious_tick_on_a_ring_wake` and
+    `vertical_slice` pass. Unit 196, wasm 44.
