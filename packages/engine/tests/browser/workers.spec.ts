@@ -22,6 +22,9 @@ declare global {
     __setCameraAndStep?: (x: number, y: number, tilesAcross: number, dtMs: number) => number
     __park?: () => Promise<void>
     __resume?: () => Promise<void>
+    __testParkRecoversFromMissedNotify?: () => Promise<
+      { ok: true } | { ok: false; message: string }
+    >
   }
 }
 
@@ -211,4 +214,31 @@ test('workers.park_resume', async ({ page }) => {
   expect(answers).toEqual(['answered', 'answered', 'answered'])
 
   await resume(page)
+})
+
+/**
+ * M17c (docs/plan/17c-client-park-stall.md): `parkWorkers` recovers from a single missed
+ * `Atomics.notify` to an already-asleep worker, the real cause found live (CDP `Debugger.pause`,
+ * `zero_gc_action neg object main`) behind the `parkWorkers: timed out` watch item -- the client
+ * worker was genuinely blocked in `ControlBlock.waitForWake`'s own `Atomics.wait`, not stuck inside
+ * `body()` or dead. `__testParkRecoversFromMissedNotify` (`topology.ts`) drops exactly one
+ * `Atomics.notify` to the `client`-kind worker (keeping the matching `Atomics.add`, so this is not
+ * "wake() was never called") and calls `parkWorkers`; before the fix (`rewakeUnparked`,
+ * `src/test/client.ts`) that worker never parks and `parkWorkers` only ever gives up after its own
+ * 10 s bound, well past this test's own short race.
+ */
+test('workers.park_recovers_from_missed_notify', async ({ page }) => {
+  const created: PageWorker[] = []
+  page.on('worker', (w) => created.push(w))
+
+  await openPage(page, '/topology.html')
+  await page.evaluate(() => window.__createClient?.({ genWorkers: 1 }))
+  await expect.poll(() => created.length).toBe(3)
+  await ready(page)
+
+  const result = await Promise.race([
+    page.evaluate(() => window.__testParkRecoversFromMissedNotify?.()),
+    new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 3000)),
+  ])
+  expect(result).toEqual({ ok: true })
 })

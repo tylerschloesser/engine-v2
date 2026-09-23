@@ -194,38 +194,65 @@ function ringDrained(sab: SharedArrayBuffer): boolean {
  * `pollUntil` below calls its `predicate` once per macrotask until it is true -- normally 1-3
  * ticks, but under CPU contention a worker's own OS thread can take many more event-loop turns to
  * flip its `W_PARKED` word, so a per-tick closure allocation here scales with contention, not with
- * frame count, and no amount of warm-up removes it. `allEqual` below is a named function created
- * once per call (not per tick) and uses a plain indexed loop, matching the rest of this file's own
- * discipline (`stepFrame`'s spin, `asHarness.stepTick`). */
-function allEqual(h: ClientTestHandle, field: number, want: number): boolean {
+ * frame count, and no amount of warm-up removes it. `rewakeUnparked` (`parkWorkers`, below) and
+ * `allResumed` (`resumeWorkers`) are named functions created once per call (not per tick) and use a
+ * plain indexed loop, matching the rest of this file's own discipline (`stepFrame`'s spin,
+ * `asHarness.stepTick`).
+ *
+ * `parkWorkers`'s own poll predicate re-issues `wake()` to every not-yet-parked worker on every
+ * turn (M17c, docs/plan/17c-client-park-stall.md), not just once up front: found live, over CDP
+ * `Debugger.pause`, against a real `zero_gc_action neg object main` occurrence -- the client worker
+ * was genuinely blocked inside `ControlBlock.waitForWake`'s own `Atomics.wait`, reached through
+ * `Shell.resume()` -> `runBlockingLoop`, having already correctly processed every one of its own
+ * 1,500 frames (its `W_ACK` exactly matches `CB_FRAME_REQ`, its `W_WAKE` matches the independently
+ * derived wake count for that many completed frames) -- not stuck inside `body()` or any of its
+ * pumps (each is a bounded, non-blocking drain: `worker/client-{net,gen,upload,input,action}.ts`
+ * never retries against another worker), and not dead (`W_READY !== Dead`). The one remaining
+ * explanation `Atomics.wait`/`Atomics.notify`'s own spec allows: `wake()`'s `Atomics.add` is always
+ * visible to a worker that has *not yet* re-entered `Atomics.wait` (its next wait sees the value
+ * already changed and returns without blocking, so *that* race is self-healing) -- but a worker
+ * *already asleep, already registered* as a waiter when the matching `Atomics.notify` fires and
+ * still somehow misses it, sleeps until `timeoutMs()` (`Infinity` here) regardless of how many
+ * times the word itself changes afterwards, since nothing calls `Atomics.notify` again. This is not
+ * the orchestrator's park-ordering-deadlock guess (no pump ever blocks on another worker); it is a
+ * single-shot wake with no second chance if its one notification is ever missed, for whatever
+ * reason. Retrying costs nothing on the fast, normal path (`wake()` is two `Atomics` primitives, no
+ * allocation, and the predicate already walks every worker once per tick) and turns that one-shot
+ * signal into one that keeps trying for the whole existing 10 s bound, which is not widened. */
+function rewakeUnparked(h: ClientTestHandle): boolean {
+  let allParked = true
   for (let i = 0; i < h.workers.length; i++) {
     const w = h.workers[i] as WorkerEntry
-    if (Atomics.load(h.control.words, workerWord(w.index, field)) !== want) return false
+    if (Atomics.load(h.control.words, workerWord(w.index, W_PARKED)) !== 1) {
+      h.control.wake(w.index)
+      allParked = false
+    }
   }
-  return true
+  return allParked
 }
 
 /** Parks every spawned worker: `W_YIELD = 1` then a wake, polling `W_PARKED` (main never blocks on
- * a `SharedArrayBuffer`, so this is a macrotask poll, not `Atomics.wait`). */
+ * a `SharedArrayBuffer`, so this is a macrotask poll, not `Atomics.wait`) and re-waking any worker
+ * the poll still finds unparked (`rewakeUnparked`, above). */
 export function parkWorkers(client: Client): Promise<void> {
   const h = clientTestHandle(client)
   for (const w of h.workers) {
     Atomics.store(h.control.words, workerWord(w.index, W_YIELD), 1)
     h.control.wake(w.index)
   }
-  return pollUntil(() => allEqual(h, W_PARKED, 1), 'parkWorkers', h)
+  return pollUntil(() => rewakeUnparked(h), 'parkWorkers', h)
 }
 
-/** Like `allEqual` but treats a `net`-kind worker as always resumed (docs/plan/
+/** Like `rewakeUnparked` but treats a `net`-kind worker as always resumed (docs/plan/
  * 08b-gen-workers-and-queue.md, Deviations: found by this milestone's `gen.html`, the first page to
  * combine a `net` worker -- `host: { kind: 'remote', ... }`, the only host kind `fx-worldgen` can
  * use, since it has no `Sim` role -- with a real `resumeWorkers()` call). `net` never enters
  * `runBlockingLoop` (`worker/net.ts`: `setup()` returns `null`, so it has no `#loop`), and
  * `Shell.resume()` only stores `W_PARKED = 0` when a loop exists (`worker/shell.ts`), so a `net`
  * worker's `W_PARKED` stays 1 forever -- by its own design ("always reachable the way a parked one
- * is", `worker/net.ts`'s own doc comment), not a hang. `allEqual(h, W_PARKED, 0)` would poll forever
- * whenever a `net` worker is spawned; a plain indexed loop, not `Array.prototype.every` with an
- * inline arrow (same discipline as `allEqual`, immediately above). */
+ * is", `worker/net.ts`'s own doc comment), not a hang. Checking `W_PARKED === 0` for every worker
+ * unconditionally would poll forever whenever a `net` worker is spawned; a plain indexed loop, not
+ * `Array.prototype.every` with an inline arrow (same discipline as `rewakeUnparked`, above). */
 function allResumed(h: ClientTestHandle): boolean {
   for (let i = 0; i < h.workers.length; i++) {
     const w = h.workers[i] as WorkerEntry
@@ -410,7 +437,8 @@ export function callParked(
 export function stepSimTickSync(client: Client, n = 1): void {
   const h = clientTestHandle(client)
   // A plain indexed loop, not `Array.prototype.some` with an inline arrow (same discipline as
-  // `allEqual`/`allResumed`, above): this runs inside a zero-GC page's own measured `drive()` call
+  // `rewakeUnparked`/`allResumed`, above): this runs inside a zero-GC page's own measured `drive()`
+  // call
   // every frame (`gc-sim.ts`/`gc-connected-terrain.ts`), and an inline-arrow `.some()` here was the
   // whole of `main`'s +28 B/frame in the interpreter tier (docs/plan/15f-step-sim-tick-sync-
   // allocation.md).

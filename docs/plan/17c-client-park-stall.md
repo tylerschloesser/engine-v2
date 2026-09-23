@@ -267,3 +267,78 @@ one capture plus the numbers already in the evidence table:
   `Shell.resume()` -> `runBlockingLoop`, waiting on its own `W_WAKE` word for a notification that
   was not observed.** The root mechanism behind the one missed notification is not further named;
   said so per the binding rules, rather than presenting a guess as a finding.
+
+### Step 3: fixed at the protocol layer, with a test that fails on the base commit
+
+**Fix.** `parkWorkers` (`src/test/client.ts`) used to `wake()` every worker exactly once, up front,
+then poll `W_PARKED` for up to 10 s with no further signal. `pollUntil`'s own predicate
+(`rewakeUnparked`, replacing `allEqual` for this call site) now re-issues `wake()` to every
+not-yet-parked worker on *every* poll turn, not just once: a real park signal a worker's own thread
+was already asleep for and somehow missed gets a second (and third, ...) chance within the same,
+unwidened 10 s bound, at the cost of nothing on the success path (`wake()` is two `Atomics`
+primitives, no allocation, and the predicate already walked every worker once per tick before this
+change). `resumeWorkers` is unchanged: it resumes over `postMessage`, delivered through the
+browser's own message queue to a worker that is *not* asleep in `Atomics.wait` at the time (a
+parked worker is, by construction, back in its own event loop), so it is not exposed to this same
+class of miss.
+
+**Test, and how it was checked red on the base commit.** `workers.park_recovers_from_missed_notify`
+(`tests/browser/workers.spec.ts`) calls a new debug hook, `__testParkRecoversFromMissedNotify`
+(`tests/browser/pages/src/topology.ts`): settle every worker idle via `resumeWorkers` (so `client`
+is genuinely asleep in its own `Atomics.wait`, the exact precondition step 2 found), monkeypatch
+*this session's own* `ControlBlock` instance's `wake` method so the *first* call targeting the
+`client`-kind worker performs only the `Atomics.add` half of `wake()` (never `Atomics.notify` --
+faithfully simulating "the producer's own bookkeeping advanced, the signal did not", not "`wake()`
+was never called" -- restored via a `try/finally` regardless of outcome, and this shadows only the
+one JS object main holds, never the worker's own separate `ControlBlock` instance over the same
+SAB), then calls the real `parkWorkers`. The spec races the result against a 3 s timer.
+
+Checked red by temporarily reverting only the fix (`git checkout -- packages/engine/src/test/
+client.ts`, restoring `allEqual`/the single up-front `wake()`; the test hook and spec stayed in
+place) and running `pnpm test browser -t workers.park_recovers_from_missed_notify`:
+```
+FAIL browser [chromium] workers.park_recovers_from_missed_notify
+  Error: expect(received).toEqual(expected) // deep equality
+
+  Expected: {"ok": true}
+  Received: "timed-out"
+
+    238 |     new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 3000)),
+    239 |   ])
+  > 240 |   expect(result).toEqual({ ok: true })
+        |                  ^
+```
+The fix was then re-applied (`git apply` of the saved diff) and the same command passes:
+`browser pass 1 tests    1.8s/25s`. Reliability: `pnpm exec playwright test --config
+packages/engine/playwright.config.ts --project chromium --grep
+"workers.park_recovers_from_missed_notify" --repeat-each 10` -- **10 passed (2.8s)**.
+
+**Hot-path check (binding rule: `body()` and the park/resume path allocate nothing new on the
+success path).** `pnpm gc -t "topology clean|echo clean|zero_gc_action clean|gc-loop clean"` --
+**4 passed (2.4s)**, budgets unchanged (`rewakeUnparked`'s own success-path shape -- one indexed
+walk, `Atomics.load`, no allocation -- is the same one `allEqual` already had; `parkWorkers` runs
+inside every one of these pages' own measured windows, `.claude/rules/hot-paths.md`).
+`pnpm gc -t "gc-loop|topology|echo|zero_gc_action"` -- **34 passed (12.1s)**: every `object`/`burst`
+negative control on every named isolate of every affected page still trips (`zero_gc_action`'s own
+included), and `gc: flat transport parity` still passes.
+
+**`zero_gc_action`'s own negative controls, the ones this defect was found through, targeted
+directly:** `pnpm exec playwright test --config packages/engine/playwright.config.ts --project gc
+--grep "zero_gc_action neg object" --workers 3 --repeat-each 30` -- **120 passed (56.1s)**, 0
+`parkWorkers` timeouts (matches step 1's own clean baseline exactly, with the fix now in place).
+
+### Not run
+
+Per the delegation prompt's own binding rules, `pnpm test`/`pnpm lint` were not run by this session
+(the orchestrator gates); `pnpm typecheck` (part of `pnpm lint`) was run directly and is clean.
+`node scripts/repeat.mjs browser 15` and `... 15 --load 10` (the exit criterion's own commands) are
+reported in the final report, run once each, in the foreground.
+
+### Notes for later briefs
+
+- The root mechanism behind the one missed `Atomics.notify` (step 2's own last bullet) is still
+  open. If a `parkWorkers`-shaped stall is ever seen again with the *retry* also exhausting its own
+  10 s bound (which would mean every retried `wake()` for a whole 10 s window missed too, not just
+  one), that is a materially different, likely worse finding worth its own brief.
+- `worker/gen.ts`'s own yield-free drain loop (flagged, not fixed, M16e) remains open and unrelated
+  to this occurrence.

@@ -14,7 +14,7 @@ import {
 import { KeyState } from '../../../../src/input/keys.ts'
 import { PointerSlots } from '../../../../src/input/pointers.ts'
 import { WheelState } from '../../../../src/input/wheel.ts'
-import { W_MEM_GROWS, W_MEM_PAGES, workerWord } from '../../../../src/sab/control.ts'
+import { W_MEM_GROWS, W_MEM_PAGES, W_WAKE, workerWord } from '../../../../src/sab/control.ts'
 import { parkWorkers, resumeWorkers, setCamera, stepFrame } from '../../../../src/test/client.ts'
 import {
   attachCameraInputTestHooks,
@@ -50,6 +50,16 @@ declare global {
      * spec that reaches into a worker with `worker.evaluate()` parks first. */
     __park?: () => Promise<void>
     __resume?: () => Promise<void>
+    /** M17c (docs/plan/17c-client-park-stall.md): drops exactly one `Atomics.notify` (keeping the
+     * `Atomics.add`) on the *first* `wake()` this call issues to the `client`-kind worker, then
+     * calls `parkWorkers`. Simulates the one class of miss `Atomics.wait`/`Atomics.notify`'s own
+     * spec cannot rule out on its own: a worker already asleep, already registered as a waiter, that
+     * still never observes that one notification. Resolves `{ ok: true }` if `parkWorkers` still
+     * parks every worker (the fix); a caller can race this against a short timeout to see it hang
+     * instead (the pre-fix behaviour, `POLL_TIMEOUT_MS` unstubbed). */
+    __testParkRecoversFromMissedNotify?: () => Promise<
+      { ok: true } | { ok: false; message: string }
+    >
     /** docs/plan/11-camera-and-input.md (M11, this range's own extension of this page): builds the
      * fixed input-state objects (`PointerSlots`/`KeyState`/`WheelState`) and a `CameraIntegrator`,
      * and attaches them to `__client` (`engine/test.attachCameraInputTestHooks`) so
@@ -136,6 +146,41 @@ window.__clientDestroy = () => window.__client?.destroy()
 
 window.__park = () => (window.__client ? parkWorkers(window.__client) : Promise.resolve())
 window.__resume = () => (window.__client ? resumeWorkers(window.__client) : Promise.resolve())
+
+window.__testParkRecoversFromMissedNotify = async () => {
+  if (!window.__client) throw new Error('__testParkRecoversFromMissedNotify: no client')
+  const client = window.__client
+  const h = clientTestHandle(client)
+  const target = h.workers.find((w) => w.kind === 'client')
+  if (!target) throw new Error('__testParkRecoversFromMissedNotify: no client-kind worker')
+  // Settle every worker idle and asleep in its own `Atomics.wait` first (a resumed, quiescent
+  // worker with no pending frame work re-enters the wait almost immediately), so the dropped
+  // notify below has a real, already-registered waiter to miss, not a worker that has not yet
+  // called `Atomics.wait` at all (that race is already safe -- see `rewakeUnparked`'s own comment,
+  // `src/test/client.ts`).
+  await resumeWorkers(client)
+  const realWake = h.control.wake.bind(h.control)
+  let dropped = false
+  h.control.wake = (index: number) => {
+    if (index === target.index && !dropped) {
+      dropped = true
+      // The producer side of `ControlBlock.wake` (`src/sab/control.ts`) without its own
+      // `Atomics.notify` call: the word still advances (a real producer's own bookkeeping is
+      // never skipped), only the wake signal itself is missing.
+      Atomics.add(h.control.words, workerWord(target.index, W_WAKE), 1)
+      return
+    }
+    realWake(index)
+  }
+  try {
+    await parkWorkers(client)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : String(e) }
+  } finally {
+    h.control.wake = realWake
+  }
+}
 
 window.__setCameraAndStep = (x, y, tilesAcross, dtMs) => {
   if (!window.__client) throw new Error('__setCameraAndStep: no client')

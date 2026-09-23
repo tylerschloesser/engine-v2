@@ -194,6 +194,19 @@ of the M03/M04 harness. Two differences from a harness page:
   not stuck inside `body()` or any pump, not dead. Diagnostics built this way are temporary and
   reverted (a `wake()` call is a hot-path primitive, `.claude/rules/hot-paths.md`); the finding they
   produce is what's permanent.
+- **A single `Atomics.notify` can go missing even though `Atomics.wait`/`Atomics.notify` are each
+  individually spec-safe (M17c).** A worker that has *not yet* re-entered `Atomics.wait` when a
+  producer's `wake()` runs always recovers on its own: `Atomics.wait`'s own check-then-sleep is
+  atomic, so if the word already differs from what it is told to wait for, it returns immediately
+  instead of blocking. A worker *already asleep, already registered* as a waiter is a different
+  case: if the matching `Atomics.notify` is ever missed for that waiter, nothing wakes it again until
+  its own timeout (`Infinity` for every production kind but `sim`'s post-M13 deadline) -- the word
+  itself changing further afterwards does not help, since nothing re-notifies. `parkWorkers`
+  (`src/test/client.ts`) now re-issues `wake()` to every not-yet-parked worker on each poll turn
+  (`rewakeUnparked`) instead of once up front, closing that single-shot gap without widening the 10 s
+  bound; `topology.ts`'s `__testParkRecoversFromMissedNotify` (`workers.spec.ts`'s
+  `workers.park_recovers_from_missed_notify`) drops one worker's own `Atomics.notify` (keeping its
+  `Atomics.add`, so this is not "wake() was never called") to prove it.
 - **`--no-opt --no-sparkplug` can manufacture its own false regression.** M16e's own new branches in
   a spin-wait ack loop (`spins++`, one bitwise mask check per iteration -- see the timeout-message
   bullet above) cost nothing measurable under normal V8, but under forced-interpreter flags every
