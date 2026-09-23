@@ -375,3 +375,262 @@ Brief says "None" (M17b carries the manual run); untouched.
 - `Draw`'s builder return value (`&mut Draw`) lets a caller chain further field writes (`.flags |=
   ...`, `.pick_id = ...`) after the initial call; no test in this cut exercises that chaining, but
   the shape is there for M18's picking/anchor work and M26's `PREDICTED` styling.
+
+## Steps 4-6 (main acquire/draw, cursor-anchored ghost, counters, zero-GC page, final number)
+
+Base: `7a99608` was not the true base -- steps 1-3's committed head (`c64aa63`) already had an
+**uncommitted** step-4 tree (drawables renderer, uberquad shader, camera `viewport_px`, page/spec
+files) sitting in the working tree, left mid-flight by a prior session. This cut read it, kept what
+was sound (all of it, on inspection -- see below), finished step 4, and committed steps 4-6 as
+`7a99608`/`b9d9ae0`/`63fe6f1`.
+
+### `px_per_tile()` resolved for real -- option (a), `CameraBlock` grown
+
+The predecessor's uncommitted tree already chose and implemented option (a) from the "Notes for cut
+2" entry above: `CameraBlock::viewport_px: [f32; 2]` fills what was `_reserved1: [u32; 2]` at byte
+offset 72 (`CameraBlock::BYTES` stays 80, no field moved), written by `frame-loop.ts`'s `tick()`
+every rAF from `renderer.viewport.widthPx/heightPx` (post render-scale), right after
+`applyPending()` refreshes the renderer's viewport and before `writeCameraAndWake()`.
+`game_instance.rs` derives `px_per_tile = max(viewport_px[0], viewport_px[1]) / tiles_across` when
+`tiles_across > 0`, else `0.0` (every native test built from `CameraBlock::for_test` never sets
+`viewport_px`/`tiles_across`, so this guard is what keeps existing native tests unaffected). This
+cut inspected the diff, ran it against `pnpm test rust -t camera_block` (3 tests) and confirmed it
+matches the brief's own formula (Planning decisions references `camera/transform.ts`'s own
+`pxPerTile`); no changes made to this part.
+
+### `uberquad.wgsl`/`render/drawables.ts`: exact seam shapes, as landed
+
+- **`DrawablesRenderer`** (`render/drawables.ts`): `writeFrameUniform(v: DrawFrameUniformValues)`,
+  `acquire()` (production: pulls the newest `drawList` triple-buffer slot via one `TripleReader`
+  built once at `createDrawablesRenderer`, then one `queue.writeBuffer`), `acquireFromBytes(header,
+  body)` (the hand-filled-scene path `draw-readback.spec.ts` uses), `draw(target)` (standalone,
+  own encoder/pass/submit -- `renderTo(drawablesRenderer, opts)`), `encodeInto(pass)` (the
+  shared-pass path, returns the draw-call count it issued), `drawCalls()`/`instanceBytes()`/
+  `pipelineSwitches()`/`drawListDropped()` (the `engine/test` counters), plus three test-only
+  accessors this cut added in step 6 -- `frameSeq()`/`recordCount()`/`nonEmptyLayerCount()` -- all
+  reading fields the renderer's own `acquireCore` already caches on every `acquire()`/
+  `acquireFromBytes()` call (`lastFrameSeq`, `lastRecordCount`, the existing `layerCounts`
+  `Uint32Array`), never a second `TripleReader` (see "Two-reader torn read", below).
+- **`UBERQUAD_VERTEX_LAYOUT`**: `arrayStride: 32`, `stepMode: 'instance'`, five attributes covering
+  bytes `[0, 28)` of a `Draw` record (`pos` float32x2, `size` float32x2, `kind_sprite|layer<<16|
+  flags<<24` as one `uint32`, `color` as `unorm8x4` in byte order `[r,g,b,a]`, `param` float32);
+  `pick_id` (`[28, 32)`) is never bound. `packDrawColor(r,g,b,a)`/`packDrawKindLayerFlags(kind,
+  spriteId,layer,flags)` build the packed fields on the TS side (used by `draw-scene.ts`'s
+  `buildDrawListBytes`, the hand-filled-scene helper).
+- **`DrawFrameUniformValues`** (48-byte `DrawFrame` uniform, `uberquad.wgsl`): `camTileX/Y`,
+  `camFracX/Y`, `windowOriginX/Y`, `cursorTileX/Y`, `viewportPxW/H`, `tilesPerPx`, `cursorValid` --
+  a **separate** uniform buffer from terrain's own `FrameUniform` (Files touched lists neither
+  `render/terrain.ts`'s bind group nor `wgsl/terrain.wgsl`); every page driving both renderers
+  writes the overlapping fields into each renderer's own uniform once per frame (no engine-owned
+  camera-to-uniform bridge exists yet for either renderer, same as terrain's own precedent).
+- **`attachDrawables(terrain, drawables)`**: wires `drawables.encodeInto` into a new
+  `TerrainRenderer.onEncode(cb)` hook (`render/terrain.ts`), called inside `draw()`'s own pass right
+  after the terrain triangle, before `pass.end()`. `TerrainRenderer.drawCalls()`'s own doc comment
+  changed from "count of `draw()` *method* calls" to "count of GPU `draw()` calls" (identical for
+  every caller that never registers `onEncode`, which is every existing terrain/connected-terrain/
+  sim-paced/etc. page): **verified** this added no measurable cost to those pages by re-running their
+  own `pnpm test browser -t "<page> clean"` against the *unchanged* existing `budgets.json` rows for
+  `terrain`, `connected-terrain` (`zero_gc_action`), `input` and `sim-paced` -- all pass, confirming
+  the brief's own binding decision ("align terrain/input... if the formula gives a figure higher than
+  today's, keep today's number and report the formula's figure") needed no action: nothing about
+  those pages' own wrapper count or hot-path code changed (`encodeCallback` is a plain `undefined`-
+  by-default module closure, checked once per `draw()` call, no allocation).
+- **`wgsl_uberquad_validates`** (`crates/engine/tests/wgsl.rs`): `naga` parse + validate +
+  entry-point presence (`vs_main`/`fs_main`), the same shape `wgsl_terrain_validates` already uses,
+  named separately so a broken uber-quad shader is named by test output.
+
+### Steps 4/5 boundary: not clean, same as steps 2/3's own precedent
+
+The predecessor's single `uberquad.wgsl` commit already contained `ANCHOR_CURSOR_TILE`'s branch
+(`vs_main` selecting `cursor_tile` vs `window_origin` as the anchor, plus `hidden = cursor_valid ==
+0u`) and `KIND_GHOST`'s fixed `alpha = 0.5`, alongside every other kind -- the file was authored
+once, covering the whole Scope list. This cut's own step 5 work is therefore two tests only
+(`draw.ghost_follows_cursor_same_frame`, `draw.one_frame_old_list_has_no_error`), not new shader
+code; recorded here rather than silently treating step 4's commit as if it had left the ghost
+unfinished.
+
+### Failability, all six new browser tests: injected, verified red, reverted
+
+Per the brief's binding instructions ("say what a wrong implementation would still pass ... prove
+failability by injection"), each of the six new `draw-readback.spec.ts` tests was proven by a
+temporary, reverted edit to `uberquad.wgsl`/`render/drawables.ts` (each covers a distinct branch):
+
+| Test | Injected fault | File / branch | Result before revert |
+|---|---|---|---|
+| `draw.circle_and_ring_probe` | `alpha = outer_a` (dropped the ring's inner-hole term) | `uberquad.wgsl` `fs_main`, `KIND_RING` | `expectPixel(32,26)` failed (hole pixel read green, not red) |
+| `draw.rect_bar_radial_probe` (bar) | `in.uv.x >= in.param` (reversed fill direction) | `uberquad.wgsl` `fs_main`, `KIND_BAR` | `expectPixel(24,32)` failed at `param=0` |
+| `draw.rect_bar_radial_probe` (radial) | `atan2(-local.x, -local.y)` (reversed sweep) | `uberquad.wgsl` `fs_main`, `KIND_RADIAL` | `expectPixel(43,32)` failed at `param=0.5` |
+| `draw.layers_order` | iterate layers `7..0` instead of `0..7` | `render/drawables.ts` `encodeDraws` | `expectPixel(32,32)` failed (red won over blue) |
+| `draw.screen_px_stroke_constant_under_zoom` | `thickness_uv = RING_THICKNESS_DEFAULT` unconditionally (ignore `SCREEN_PX_STROKE`) | `uberquad.wgsl` `fs_main`, `KIND_RING` | the zoomed-in discriminating probe (`64,40`) read the ring colour instead of transparent |
+| `draw.ghost_follows_cursor_same_frame` | `if (false && (flags & ANCHOR_CURSOR_TILE) ...)` | `uberquad.wgsl` `vs_main` | ghost stayed at `window_origin` (px `0,0`), never moved to the cursor tile |
+| `draw.one_frame_old_list_has_no_error` | `rel_tile = vec2<f32>(origin_tile) - frame.cam_frac` (dropped `cam_tile`) | `uberquad.wgsl` `vs_main` | the rect stayed at its first-camera pixel after the camera moved |
+
+Every injection was reverted immediately after confirming the red result (`git diff` empty on
+`uberquad.wgsl`/`drawables.ts` before the next commit); `pnpm test browser -t draw` was green (13
+tests, ~5s of the 25s budget) at every commit boundary. Durations (`test-results/browser/report.json`):
+`draw.circle_and_ring_probe` 463ms, `draw.ghost_follows_cursor_same_frame` 498ms, `draw.
+one_frame_old_list_has_no_error` 490ms, `draw.rect_bar_radial_probe` 695ms, `draw.layers_order`
+477ms, `draw.screen_px_stroke_constant_under_zoom` 468ms, `drawlist.triple_newest_wins` 488ms,
+`counters.draws_equal_nonempty_layers` 474ms, `drawables clean`/`neg object *` 1.3-1.6s each.
+
+### `fixtures/drawables` gains one `Action`, `Spawn`
+
+`genesis` stays fixed at its original three entities (unchanged: `drawlist_fixture_hash_golden`'s
+own golden and `drawlist_zoom_threshold_hides_only_the_small_entity`'s `below=3, at=3, above=2` both
+depend on that exact count, verified still passing, golden unchanged). `Action::Spawn { at: Pos,
+small: bool }` is new -- always admitted, always applied (`w.spawn(Entity { pos: at, small })`),
+same shape as `fx-puts`'s own `Action::Spawn` -- the `drawables` zero-GC page's own way to reach a
+few hundred entities without hand-writing them into `genesis`. `cargo nextest run -p fx-drawables`:
+6/6 pass (golden hash unchanged: `drawlist_fixture_hash_golden` still blessed to
+`07e82d2cb76fe412`; `export_bindings_action` regenerates `fixtures/drawables/target/ts-rs-scratch/
+Action.ts` with the new variant, not committed -- `bindings/` for this fixture is scratch-only, no
+game package consumes it the way `fx-puts`'s `bindings/` does).
+
+### Two-reader torn read: found and fixed before commit
+
+A first draft of the `drawables` page's own `window.__drawablesTest` test hooks
+(`frameSeq()`/`recordCount()`/`layerCounts()`) each built a **second, independent** `TripleReader`
+over `clientTestHandle(client).sabs.drawList`, separate from `drawablesRenderer`'s own internal one.
+`sab/triple.ts`'s `TripleReader.acquire()` is not read-only: it does an `Atomics.exchange` that
+hands back its own front slot and takes whatever the writer last published, mutating **shared**
+triple-buffer state on every call. Two independent readers each calling `acquire()` raced that
+exchange: one manual check (`recordCount()` read `301`, `layerCounts()` read `[0,0,0,0,0,0,0,0]` on
+the very next call, against the same real published slot) confirmed the tear directly. Fixed by
+deleting the second reader entirely: `DrawablesRenderer` gained `frameSeq()`/`recordCount()`/
+`nonEmptyLayerCount()` (reading the same cached fields `acquireCore` already writes on every real
+`acquire()`), and every `window.__drawablesTest` hook routes through `drawablesRenderer`'s own
+`acquire()` exclusively. `engine/test`'s existing `drawListHash`/`drawListRecords`
+(`test/client.ts`) are unaffected -- they build their own lone `TripleReader` per call, safe only
+because nothing else on those call sites ever holds a second one alive at the same time; this
+milestone's own `drawablesRenderer` is the first place a page keeps one *and* a test wants to read
+the same SAB independently, which is what exposed the bug.
+
+### Parked-worker hang: found and fixed before commit
+
+A first draft of `gc-drawables.ts` called `parkWorkers(client)` immediately after `pumpUntilLive`
+(matching `gc-slice.ts`'s own line for line), then ran the ~300-entity population loop's
+`harness.stepFrame`/`stepSimTickSync` calls against the now-parked worker, before `installGcPage`.
+Every population-loop `stepFrame` call hung until `SPIN_LIMIT` (~12s wall clock), reporting
+`W_WAKE` climbing while `W_ACK` stayed frozen at 0 on the `client` isolate (`stepFrame`'s own
+`spinTimeoutMessage`). Root cause: **a parked worker only responds to a `{ type: 'resume' }`
+postMessage**, not a plain `Atomics.notify` wake (`resumeWorkers`'s own doc comment: "a parked
+worker is not blocked" -- parking's `W_YIELD`/`W_PARKED` protocol is a *different* idle mechanism
+from the normal `Atomics.wait` loop a freshly-spawned production worker sits in). No other
+production-topology page (`gc-terrain.ts`, `gc-connected-terrain.ts`, `gc-slice.ts`) ever calls
+`stepFrame` from its own top-level setup script after parking -- they park once and leave `drive()`
+unregistered until a test's own `window.__gc.run()` calls `harness.resume()` first (`gc-page.ts`'s
+`run()`); this milestone's own setup-time population loop is the first thing to need real frame
+stepping *during* page setup, which is what exposed the ordering requirement. Fixed by moving
+`parkWorkers(client)` to run once, after every other setup step (drawables renderer, camera,
+population loop, upload drain, `EXTRA_SPAWN` bytes), immediately before `installGcPage` -- the
+worker spends the whole population loop in its normal, unparked, wake-responsive state and is only
+parked right before `__pageReady`, matching what every other production-topology page's own
+`__pageReady` state already is. `gc-drawables.spec.ts`'s own `drawlist.triple_newest_wins`/
+`counters.draws_equal_nonempty_layers` tests hit the identical class of bug one level up (calling
+`stepClientFrameOnly()` against the page's parked-at-`__pageReady` state) and are fixed the same
+way: `window.__drawablesTest.resume()`/`.park()` (thin wrappers over `resumeWorkers`/
+`parkWorkers`) bracket each test's own direct driving, mirroring `window.__gc.run`'s own bracketing.
+
+### Population loop and entity count
+
+`POPULATE_COUNT = 300`, dispatched as `Action::Spawn` in a 20-column grid (`GRID_SPACING = 4`
+tiles) centred near the origin, one `dispatchRaw` + `harness.stepFrame` + `stepSimTickSync` triple
+per entity (all one-time setup, 0016 §2, before `installGcPage`). The camera is set wide
+(`POPULATE_HALF_EXTENT = 120` tiles, `tilesAcross = 24`) *before* population and stays that way for
+the whole run (including the measured window's own panning, `PAN_TILES_PER_SECOND = 8`) so every
+populated entity's own chunk stays subscribed and inside `visible()` throughout -- this page is not
+exercising eviction (unlike `gc-terrain.ts`'s small cache), only a DrawList genuinely wide enough to
+matter for `render.drawCallsMax`/`instanceBytes`. Measured: `window.__drawablesTest.recordCount()`
+reads `301` after population (3 genesis + 298 of the 300 dispatched Spawns had landed in the replica
+by the trailing extra tick at the time of that one manual check -- not re-verified to the exact
+integer since "a few hundred entities" is what the brief asks for and this comfortably clears it;
+the remaining stragglers land within the next tick or two regardless, well before any measured
+window begins). `drawListDropped()` was checked manually (via `__drawablesTest`) across a normal run
+and reads `0` throughout -- 301 records is far under `CAPACITY` (65,536), so the brief's Exit
+criterion ("`drawListDropped == 0` in every test except the overflow test") holds; the one sanctioned
+exception is `drawlist_full_drops_and_counts` (step 1, native, unaffected by this cut).
+
+### Budget derivations, `gc.pages.drawables`
+
+Formula throughout: 0016 §1 (`ceil(measured clean) + 8 B` margin, no attribution), the same shape
+every other WebGPU-adapter page (`terrain`, `connected-terrain`/`zero_gc_action`) already uses.
+Wrapper count stays `terrain`'s own 3 (`encoder`, `pass`, `commandBuffer` per `TerrainRenderer.draw()`
+call) -- `drawablesRenderer.acquire()`'s `queue.writeBuffer` and `encodeInto`'s `pass.setPipeline`/
+`setBindGroup`/`setVertexBuffer`/`draw` calls all return nothing, so they add WebGPU-touching work,
+not a new wrapper object.
+
+- `main`: measured `playwright test --project gc --grep "drawables clean" --repeat-each 8 --workers
+  1` (this machine): 107.9667-108.2133 B/frame across 8 clean runs (`byFn`: `draw@terrain` 28800 B,
+  `drain@wgsl.generated` 12000 B, `stepFrame@client` ~7200 B -- `terrain`'s own three sites,
+  unchanged -- plus `pollActionResults@client-*` ~1280 B, the `EXTRA_SPAWN` dispatch's own result
+  parse, `gc-slice.ts`'s own precedent for that site). `ceil(108.2133) = 109`, `+ 8 B margin = 117`.
+- `client`/`gen0`: constant `0.8133` B/frame across 8 clean runs each, well under the shared "8 B"
+  worker figure every other page's client/gen0 row uses -- kept at `8`, not re-derived tighter.
+- `sim`: measured 4.6667-4.9333 B/frame across 8 clean runs (lower than `connected-terrain`'s own
+  6.46-8.19: this page's `EXTRA_SPAWN` dispatch is rarer, once per 30 frames, and no new-chunk
+  admission churn since the wide camera never changes its subscribed set). `ceil(4.9333) = 5`,
+  `+ 8 B margin = 13`.
+- `software.main` (`GC_MODE=software`, ADR 0029's attribution-only-`main` rule, mandatory per this
+  cut's own binding decision: `gc/instrument.ts` throws on a `null` software block and CI runs this
+  mode): measured `GC_MODE=software playwright test --project gc --grep "drawables clean"
+  --repeat-each 6 --workers 1`: 82.02-82.0467 B/frame attributed across 6 clean runs. `ceil(82.0467)
+  = 83`, `+ 8 B margin = 91`. Verified: `drawables neg object main` still trips under `GC_MODE=
+  software` too (both hardware and software mode's own object control on `main` checked directly).
+- `counters.render.drawCallsMax = 9` (`drawCallsTerrain` 1 + up to 8 non-empty DrawList layers) and
+  `counters.render.pipelineSwitches = 1` (`encodeDraws` sets the uber-quad pipeline at most once per
+  `draw()`/`encodeInto()` call, regardless of how many layers are non-empty) -- both new entries
+  under `budgets.json`'s existing `counters.render` block, read by `counters.draws_equal_nonempty_
+  layers` via `budget('counters.render.drawCallsMax')` (the dotted path needs the `counters.` prefix;
+  a first draft's own `budget('render.drawCallsMax')` threw "no number at 'render.drawCallsMax'").
+- Every negative control verified still tripping at the derived numbers: `object` (fast tier,
+  `pnpm test browser -t drawables`, all 4 isolates) and `burst` (`@slow`,
+  `playwright test --project gc --grep "drawables neg burst"`, all 4 isolates) both pass (meaning
+  each control's own expected-mismatch verdict is observed), hardware mode; `object main` also
+  re-verified under `GC_MODE=software`.
+- **`terrain`/`input` alignment** (brief's own binding decision): no change made or needed. Verified
+  by re-running `pnpm test browser -t "terrain clean"`, `"connected-terrain clean"`
+  (`zero_gc_action`), `"input clean"` and `"sim-paced clean"` against their *existing, unchanged*
+  `budgets.json` rows -- all pass. Nothing about those pages' own wrapper count or hot-path code
+  changed (`TerrainRenderer.onEncode`'s `encodeCallback` is `undefined` by default, a plain checked
+  closure with no allocation, and none of those pages ever calls `attachDrawables`), so the formula
+  those rows already use produces the same figure it always has; there was no higher number to
+  report.
+
+### Verified (commands and results, steps 4-6)
+
+- `pnpm test browser -t draw` -> `browser pass 13 tests` (6 readback probes + `drawables clean` +
+  4 `drawables neg object *` + `drawlist.triple_newest_wins` + `counters.draws_equal_nonempty_
+  layers`), 5.1s of the 25s browser-suite budget.
+- `playwright test --project gc --grep "drawables neg burst"` -> 4/4 pass (`@slow`, not part of
+  `pnpm test browser`'s own default run).
+- `GC_MODE=software playwright test --project gc --grep "drawables clean"` -> 1/1 pass;
+  `GC_MODE=software playwright test --project gc --grep "drawables neg object main"` -> 1/1 pass.
+- `pnpm test rust -t drawlist` -> `rust pass 10 tests`; `-t frameview` -> `2 tests`; `-t camera_block`
+  -> `3 tests`; `-t wgsl` -> `2 tests` (unchanged from steps 1-3 plus `wgsl_uberquad_validates`).
+- `cargo nextest run -p fx-drawables` -> 6/6 pass, golden hash unchanged (`07e82d2cb76fe412`).
+- `pnpm test unit -t drawables` -> `2 tests` (`drawables.test.ts`'s own two, plus `render.ts`
+  passthrough coverage indirectly); `-t uberquad` -> `1 test`
+  (`uberquad.vertex_layout_has_no_pick_id`).
+- `pnpm test wasm -t drawlist` -> `wasm pass 2 tests` (unchanged from steps 1-3).
+- `DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo clippy --workspace --all-targets -- -D
+  warnings` -> clean. `pnpm exec biome check .` -> clean (321 files). `pnpm --filter engine
+  typecheck` -> clean (all three `tsc` projects, `tests/browser/gc-drawables.spec.ts` included via
+  `tests/tsconfig.json`).
+- `pnpm test`/`pnpm test:slow`/`pnpm lint` (the full runs) were not run (delegation prompt: "Don't
+  run the full suites; I am the gate").
+
+### Notes for later briefs
+
+- `window.__drawablesTest`'s `resume()`/`park()` bracketing requirement (a parked worker only
+  responds to `resume`, never a bare `Atomics.notify`) applies to *any* future production-topology
+  page whose own test wants to drive `stepFrame`/`stepSimTickSync` directly rather than through
+  `window.__gc.run()` -- worth promoting into the `gc-test` skill's own "Production-topology pages"
+  section if another milestone hits it again.
+- `render/drawables.ts`'s `frameSeq()`/`recordCount()`/`nonEmptyLayerCount()` are test-only (never
+  called by `attachDrawables`'s own production path) but live on the production interface rather
+  than a `src/test/**` wrapper, since they read state the renderer already caches privately -- the
+  same shape `TerrainRenderer.drawCalls()`/`pageSlotsUsed()` etc. already use for their own `engine/
+  test` counters.
+- M18 (picking) reads the same `drawList` slot and owns the header's `flags` field (offset 52,
+  still unwritten) and the anchor table (`128..640`); M19 owns `presences()`. Neither was touched
+  here.
