@@ -211,3 +211,29 @@ observation word only): `samples 262ms:0 512ms:0 ... 2004ms:0; worst drift -40.1
 - Masks checked: `budgets.json` untouched, no goldens changed, and no timeout, retry, sleep or `@slow` added. `tick >= 50` -> `>= 20` accepted: phase 4 compares the checkpoint to a native replay at the tick actually reached and still asserts the tick-100 golden separately, so a threshold of 20 still covers two tick-rule writes and drops no assertion.
 - The orchestrator rewrote `atomics-timer.ts`'s header comment, which still said the timer takes no clock, and did the ADR bookkeeping (0030's status line, `PLAN.md`, root `CLAUDE.md`). The three notes for later briefs went into `deferred-ledger.md`.
 
+
+### CI round (`fa19956`, run 35825232068): `__sliceSettle` never settled on `ubuntu-latest`
+- **Classification: (a), not (b).** The CI message was "quiet for 0 frames and 0 sim ticks". `windowFrames`
+  only reads 0 in the cycle that just reset the window, so some ring other than the uplink pushed in the last
+  cycle; the page never went idle for 5 frames. If the sim had not ticked, the rings would have gone quiet and
+  the message would show frames > 0 with 0 ticks. `sim_ticks_steadily_under_external_wakes` passed on the
+  same run. It covers the timer against raw wakes with no GPU or rendering. What it does not cover is a
+  settle condition that needs the whole SwiftShader page to stop producing traffic.
+- **Not reproduced locally.** `ENGINE_GPU=swiftshader` on this Mac fails at the probe instead: `mapAsync:
+  A valid external Instance reference no longer exists`. It fails identically with base (`5de7f8c`)
+  `slice.ts` and spec, so it is a local environment limit and predates M16d. Readback suites pass under
+  the same env.
+- **Fix: wait on the event the probe needs, not on page-wide quiet.** `slice.ts` now mirrors page texels
+  as well as indirection, by wrapping `writePageChunkBytes`/`writePageTexel`, and exposes `gpuTexel(tileX,
+  tileY)`: `base | resource << 16`, or -1 when not resident.
+  - `__sliceSettle(tileX?, tileY?, notTexel?)` checks once per rAF until the tile is resident and its texel
+    differs from `notTexel`.
+  - `__probeTile(tileX, tileY, size, notTexel?)` re-checks the same condition and submits its draw in the
+    same turn. It now also returns `texel`.
+  - Phase 5's post-paint read passes the pre-paint read's texel, so it waits for the Paint's delta itself to
+    reach the GPU.
+  - No quiet period, no park, no sleep, no retry. The only ceiling is the 10 s failure ceiling that was
+    already there; its message now names the texel, the texel changes seen, frames, the sim tick range and
+    the client ack against the frame request.
+- **Result.** `vertical_slice` quiet: 1576, 1794, 1814 ms. `repeat.mjs browser 8 --load 10` twice: `pass=8
+  fail=0 hang=0` (slowest 22 s and 23 s).

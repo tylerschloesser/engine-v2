@@ -40,6 +40,8 @@ import {
   INDIR_NONE,
   INDIR_TEXTURE_EDGE,
   type IndirEntry,
+  SLOTS_PER_ROW,
+  type Texel,
 } from '../../../../src/render/terrain.ts'
 import { createViewportController } from '../../../../src/render/viewport.ts'
 import {
@@ -101,7 +103,7 @@ declare global {
     __worldHashAndTick?: () => Promise<{ hash: string; tick: number }>
     /** Resolves once the pipeline has settled on the *current* camera: see the definition. With a
      * tile, also once that tile's chunk is resident on the GPU. */
-    __sliceSettle?: (tileX?: number, tileY?: number) => Promise<void>
+    __sliceSettle?: (tileX?: number, tileY?: number, notTexel?: number) => Promise<void>
     __ringDrops?: () => number
     __tick?: () => number
     __hudText?: () => string
@@ -111,7 +113,8 @@ declare global {
       tileX: number,
       tileY: number,
       size: number,
-    ) => Promise<{ width: number; height: number; data: number[] }>
+      notTexel?: number,
+    ) => Promise<{ width: number; height: number; data: number[]; texel: number }>
     __errors?: () => string[]
     __adapterInfo?: () => AdapterInfo
   }
@@ -165,12 +168,36 @@ renderer.writeIndir = (entries: readonly IndirEntry[], count?: number): void => 
   }
   rendererWriteIndir(entries, count)
 }
-function tileResident(tileX: number, tileY: number): boolean {
+// The same for page texels: every CHUNK and PATCH record reaches the GPU through
+// `writePageChunkBytes`/`writePageTexel`, so this is what the page texture holds, texel for texel
+// (`base | resource << 16`; 4 MiB, test/diagnostic state like the rest of this block).
+const SLOT_TEXELS = CHUNK_EDGE * CHUNK_EDGE
+const PAGE_SLOTS = SLOTS_PER_ROW * SLOTS_PER_ROW
+const texelMirror = new Uint32Array(PAGE_SLOTS * SLOT_TEXELS)
+const rendererWriteChunkBytes = renderer.writePageChunkBytes.bind(renderer)
+renderer.writePageChunkBytes = (slot: number, le16: Uint16Array): void => {
+  const at = slot * SLOT_TEXELS
+  for (let i = 0; i < SLOT_TEXELS; i++) {
+    texelMirror[at + i] = ((le16[i * 2] as number) | ((le16[i * 2 + 1] as number) << 16)) >>> 0
+  }
+  rendererWriteChunkBytes(slot, le16)
+}
+const rendererWriteTexel = renderer.writePageTexel.bind(renderer)
+renderer.writePageTexel = (slot: number, index: number, texel: Texel): void => {
+  texelMirror[slot * SLOT_TEXELS + index] = (texel.base | (texel.resource << 16)) >>> 0
+  rendererWriteTexel(slot, index, texel)
+}
+/** The texel the GPU holds for a tile (`base | resource << 16`), or `-1` while its chunk is not
+ * resident (no indirection entry: the shader draws `NEUTRAL_COLOR`). */
+function gpuTexel(tileX: number, tileY: number): number {
   const mod = (v: number): number =>
     ((v % INDIR_TEXTURE_EDGE) + INDIR_TEXTURE_EDGE) % INDIR_TEXTURE_EDGE
-  const cx = mod(Math.floor(tileX / CHUNK_EDGE))
-  const cy = mod(Math.floor(tileY / CHUNK_EDGE))
-  return indirMirror[cy * INDIR_TEXTURE_EDGE + cx] !== INDIR_NONE
+  const cx = Math.floor(tileX / CHUNK_EDGE)
+  const cy = Math.floor(tileY / CHUNK_EDGE)
+  const slot = indirMirror[mod(cy) * INDIR_TEXTURE_EDGE + mod(cx)] as number
+  if (slot === INDIR_NONE) return -1
+  const local = (tileY - cy * CHUNK_EDGE) * CHUNK_EDGE + (tileX - cx * CHUNK_EDGE)
+  return texelMirror[slot * SLOT_TEXELS + local] as number
 }
 
 const clientOptions: ClientOptions = {
@@ -345,95 +372,48 @@ window.__worldHashAndTick = async () => {
 // repeat.mjs browser 8 --load 10`): the settle above still passed partly because time elapsed.
 // Caught at the failing read (`expectPixel(8, 8) ... got 32`, the shader's own not-resident
 // colour): the chunk was **in the client's store** (`client_chunk_hash` Ok, gen queue idle, every
-// ring drained) **but not on the GPU**. A chunk the gen worker delivers is only queued for upload
-// by the next client `frame()` (`client::Uploader::on_frame`, run from the camera wake), so between
-// delivery and that frame every ring is empty and the client has acked -- `untilQuiescent` is
-// satisfied vacuously. Likewise a camera change reaches the host only when `client_poll_uplink`'s
-// 50 ms rate limit allows, with nothing in any ring meanwhile. So the settle now waits for the
-// events themselves, in repeated frame + drain cycles (each cycle: one real frame, then the client
-// has acked it and every ring is drained), until:
-// (a) no ring but the uplink has pushed anything for `SETTLE_FRAMES` cycles and `SETTLE_SIM_TICKS`
-//     sim ticks (`CB_SIM_TICKS_RUN`) in a row. In product units: the client's uploader and gen
-//     queue had nothing left to stage on any of those frames; `SETTLE_FRAMES` client frames is
-//     more frame time than `client_poll_uplink`'s 50 ms rate limit, so the current camera has gone
-//     out; and the host has since ticked more than once with nothing to send back. (Counting ring
-//     pushes alone is not enough: a single quiet cycle can fall between two ticks, which still
-//     failed 1 of 8 loaded runs. The uplink itself is left out because it carries keepalives.)
-// (b) when a tile is given, that tile's chunk is resident on the GPU (`indirMirror`, above).
-// Any push in (a) restarts the count. No fixed wait: the loop ends on state, counted in frames and
-// sim ticks, so it slows with the sim under load instead of racing it. No worker is parked:
-// nothing here needs one, and a parked sim would not tick.
-const SETTLE_FRAMES = 5
-const SETTLE_SIM_TICKS = 4
+// ring drained) **but not on the GPU** -- a chunk the gen worker delivers is only queued for upload
+// by the next client `frame()`, so `untilQuiescent` held vacuously in between; and a host snapshot
+// replacing a locally generated chunk briefly evicts it again. A first fix waited for a global
+// quiet period (no ring traffic for some frames and sim ticks); CI's slower SwiftShader runner
+// never reached one ("quiet for 0 frames and 0 sim ticks" after 10 s), because that waited on the
+// whole page going idle, which is not what a probe needs.
+//
+// So the settle waits for exactly the event the probe needs, read from what the GPU was actually
+// given (`indirMirror`/`texelMirror`, above): the tile's chunk is resident, and -- for a read after
+// a delta -- the tile's GPU texel differs from `notTexel` (its value before the delta). One check
+// per real animation frame (the production loop's upload drain runs in the frame before it); no
+// fixed wait, no quiet period. `__probeTile` repeats the same check in the same JS turn as its
+// draw, so nothing can change between the event and the read. The 10 s ceiling only turns a
+// genuine hang into a failure that names what was seen.
 const SETTLE_LIMIT_MS = 10_000
-const settleRingStats: RingStats = { drops: 0, pushed: 0, popped: 0 }
-let settleRings: RingConsumer[] | null = null
-let settleUplink: RingConsumer | null = null
-const settleProbe = { drained: false, uplink: 0 }
-/** Sum of every ring's push count except the uplink's (`settleProbe.uplink`); `settleProbe.drained`
- * when every ring's pops have caught up with its pushes. */
-function settleTraffic(): number {
-  if (!settleRings || !settleUplink) {
-    const { sabs } = clientTestHandle(client)
-    settleRings = [
-      sabs.uploadRing,
-      sabs.actionRing,
-      sabs.inputRing,
-      sabs.uiRing,
-      sabs.downlink,
-      ...sabs.genRequest,
-      ...sabs.genResult,
-    ].map((sab) => new RingConsumer(sab))
-    settleUplink = new RingConsumer(sabs.uplink)
-  }
-  let total = 0
-  settleUplink.stats(settleRingStats)
-  settleProbe.uplink = settleRingStats.pushed
-  settleProbe.drained = settleRingStats.pushed === settleRingStats.popped
-  for (const c of settleRings) {
-    c.stats(settleRingStats)
-    total += settleRingStats.pushed
-    if (settleRingStats.pushed !== settleRingStats.popped) settleProbe.drained = false
-  }
-  return total
-}
-window.__sliceSettle = async (tileX, tileY) => {
-  const words = clientTestHandle(client).control.words
-  const clientAck = workerWord(WORKER_CLIENT, W_ACK)
+async function untilTileEvent(tileX: number, tileY: number, notTexel: number): Promise<number> {
   const start = performance.now()
-  let windowTraffic = -1
-  let windowTick = 0
-  let windowFrames = 0
+  const words = clientTestHandle(client).control.words
+  const ticksAtStart = Atomics.load(words, CB_SIM_TICKS_RUN)
+  let frames = 0
+  let lastTexel = gpuTexel(tileX, tileY)
+  let texelChanges = 0
   for (;;) {
-    await new Promise(requestAnimationFrame)
-    // `untilQuiescent`'s own two conditions, without its park.
-    let traffic = settleTraffic()
-    while (
-      !settleProbe.drained ||
-      Atomics.load(words, clientAck) !== Atomics.load(words, CB_FRAME_REQ)
-    ) {
-      if (performance.now() - start > SETTLE_LIMIT_MS) break
-      await new Promise((resolve) => setTimeout(resolve, 0))
-      traffic = settleTraffic()
-    }
-    const ticks = Atomics.load(words, CB_SIM_TICKS_RUN)
-    const resident = tileX === undefined || tileY === undefined || tileResident(tileX, tileY)
-    if (traffic !== windowTraffic) {
-      windowTraffic = traffic
-      windowTick = ticks
-      windowFrames = 0
-    } else {
-      windowFrames++
-      if (resident && windowFrames >= SETTLE_FRAMES && ticks - windowTick >= SETTLE_SIM_TICKS) {
-        return
-      }
-    }
+    const texel = gpuTexel(tileX, tileY)
+    if (texel !== lastTexel) texelChanges++
+    lastTexel = texel
+    if (texel >= 0 && texel !== notTexel) return texel
     if (performance.now() - start > SETTLE_LIMIT_MS) {
       throw new Error(
-        `__sliceSettle: not settled after ${SETTLE_LIMIT_MS} ms (resident ${resident}, drained ${settleProbe.drained}, quiet for ${windowFrames} frames and ${ticks - windowTick} sim ticks)`,
+        `tile (${tileX}, ${tileY}) never reached the GPU${notTexel >= 0 ? ` with a texel other than ${notTexel}` : ''} in ${SETTLE_LIMIT_MS} ms: texel ${texel} (-1 = not resident), ${texelChanges} texel changes seen over ${frames} frames, sim ticks ${ticksAtStart} -> ${Atomics.load(words, CB_SIM_TICKS_RUN)}, client acked ${Atomics.load(words, workerWord(WORKER_CLIENT, W_ACK))} of frame request ${Atomics.load(words, CB_FRAME_REQ)}`,
       )
     }
+    await new Promise(requestAnimationFrame)
+    frames++
   }
+}
+window.__sliceSettle = async (tileX, tileY, notTexel) => {
+  // One real frame first, as before: the production loop writes the current camera and wakes the
+  // client with it before anything is checked.
+  await new Promise(requestAnimationFrame)
+  if (tileX === undefined || tileY === undefined) return
+  await untilTileEvent(tileX, tileY, notTexel ?? -1)
 }
 
 // --- `ring drops`: sum of `stats().drops` over every `SabSet` ring (Scope) ----------------------
@@ -538,7 +518,15 @@ window.__hudText = hudText
 // can run between them (JS is single-threaded; a real rAF callback only ever runs *between* turns,
 // never inside one), so the production loop can only ever race the probe's own *next* draw, not
 // this one, and by the time this one is submitted its own camera is already locked in.
-window.__probeTile = async (tileX, tileY, size) => {
+window.__probeTile = async (tileX, tileY, size, notTexel) => {
+  // The settle's event, re-checked in this turn: the draw below is submitted in the same turn, so
+  // the GPU texel it reads is the one checked here (M16d step 4).
+  const avoid = notTexel ?? -1
+  let texel = gpuTexel(tileX, tileY)
+  while (texel < 0 || texel === avoid) {
+    await untilTileEvent(tileX, tileY, avoid)
+    texel = gpuTexel(tileX, tileY) // synchronous from here to the draw's submission
+  }
   renderer.writeFrameUniform({
     camTileX: tileX,
     camTileY: tileY,
@@ -555,7 +543,7 @@ window.__probeTile = async (tileX, tileY, size) => {
   })
   const target = renderTo(renderer, { width: size, height: size })
   const pixels = await readPixels(target)
-  return { width: pixels.width, height: pixels.height, data: Array.from(pixels.data) }
+  return { width: pixels.width, height: pixels.height, data: Array.from(pixels.data), texel }
 }
 window.__errors = () => device.errors()
 window.__adapterInfo = () => device.adapterInfo

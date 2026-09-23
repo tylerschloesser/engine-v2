@@ -59,7 +59,7 @@ declare global {
     __netCounters?: (conn?: number) => Promise<NetCounters>
     __worldHash?: () => Promise<string>
     __worldHashAndTick?: () => Promise<{ hash: string; tick: number }>
-    __sliceSettle?: (tileX?: number, tileY?: number) => Promise<void>
+    __sliceSettle?: (tileX?: number, tileY?: number, notTexel?: number) => Promise<void>
     __ringDrops?: () => number
     __tick?: () => number
     __hudText?: () => string
@@ -67,7 +67,8 @@ declare global {
       tileX: number,
       tileY: number,
       size: number,
-    ) => Promise<{ width: number; height: number; data: number[] }>
+      notTexel?: number,
+    ) => Promise<{ width: number; height: number; data: number[]; texel: number }>
     __errors?: () => string[]
     __adapterInfo?: () => AdapterInfo
   }
@@ -98,15 +99,18 @@ async function readTilePixel(
   page: import('@playwright/test').Page,
   tileX: number,
   tileY: number,
-): Promise<import('../../src/test/render.js').PixelBuffer> {
-  const raw = await page.evaluate(([x, y]) => window.__probeTile?.(x, y, 16), [
+  notTexel = -1,
+): Promise<import('../../src/test/render.js').PixelBuffer & { texel: number }> {
+  const raw = await page.evaluate(([x, y, not]) => window.__probeTile?.(x, y, 16, not), [
     tileX,
     tileY,
+    notTexel,
   ] as const)
   return {
     width: raw?.width ?? 0,
     height: raw?.height ?? 0,
     data: Uint8Array.from(raw?.data ?? []),
+    texel: raw?.texel ?? -1,
   }
 }
 
@@ -258,7 +262,8 @@ test('vertical_slice', async ({ page }, testInfo) => {
   // `WALK` at any tick count (Phase 2's own comment) and of the (20, 20) pristine-probe tile above.
   await page.evaluate(() => window.__setCamera?.(50, 50, 8))
   await page.evaluate(() => window.__sliceSettle?.(50, 50)) // until chunk (50, 50) is on the GPU
-  expectPixel(await readTilePixel(page, 50, 50), 8, 8, GRASS, TOL)
+  const prePaint = await readTilePixel(page, 50, 50)
+  expectPixel(prePaint, 8, 8, GRASS, TOL)
   const seq = await page.evaluate(() => window.__dispatchPaintAt?.(50, 50))
   expect(seq).toBe(1)
   // A generous timeout, not Playwright's 5 s default: Phase 3's own comment explains why real-time
@@ -275,8 +280,10 @@ test('vertical_slice', async ({ page }, testInfo) => {
   // contention it does not (this is the exact failure `node scripts/repeat.mjs browser 15 --load
   // 10` found: this line read pristine `GRASS` instead of the painted `WATER`). `__sliceSettle`
   // waits for the upload ring to actually drain instead of guessing a frame count.
-  await page.evaluate(() => window.__sliceSettle?.(50, 50))
-  expectPixel(await readTilePixel(page, 50, 50), 8, 8, WATER, TOL)
+  // M16d: the real event is the Paint's delta reaching the GPU -- the tile's GPU texel differs from
+  // the one the pre-paint probe read. The probe re-checks it in the same turn as its draw.
+  await page.evaluate((t) => window.__sliceSettle?.(50, 50, t), prePaint.texel)
+  expectPixel(await readTilePixel(page, 50, 50, prePaint.texel), 8, 8, WATER, TOL)
 
   // Phase 6: an out-of-range Paint yields Rejected with the typed reason (`Puts::admit`'s new
   // `PAINT_BOUND` check, this cut's own Rust change -- `Reject::OutOfRange`).
