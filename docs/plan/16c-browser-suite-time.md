@@ -256,3 +256,42 @@ real load, as 0020's own "wall clock recorded, never gating under load" already 
 the §2 37.5 s failure line both times). Load average during these two batches ranged 7.4-15.4
 (1-min) -- a shared machine, not a clean lab bench, but every run passed regardless.
 
+### Step 4: `workers` measured at 3, 4 and 5 -- changed to 5, new ADR
+
+Measured quiet (three consecutive `pnpm test browser` runs each) and loaded (`node scripts/
+repeat.mjs browser 8 --load 10`, two batches of 8, the brief's own "~8 per call" bound), all on top
+of Step 3's `WARMUP=4000` (Step 2 reverted):
+
+| `workers` | quiet (3 runs) | `report.json` summed | loaded (16 runs, 2 batches) |
+|---|---|---|---|
+| 3 (was) | 22 / 22 / 22 s | 57.1 s | 16/16 pass, `slowestSuiteSeconds` 29, 30 |
+| 4 | 20 / 20 / 20 s | not re-measured | not run under load (see below) |
+| **5** | **21 / 19 / 18 s** | not re-measured | **16/16 pass, `slowestSuiteSeconds` 24, 24** |
+
+5 is not a speed/flakiness trade: it is faster quiet *and* faster loaded than 3, with zero new
+failures or hangs across 32 total runs (16 quiet-adjacent iterations across the workers values +
+16 loaded) and zero `parkWorkers: timed out` occurrences (the `deferred-ledger.md` watch item) at
+any worker count tried. One `pnpm test:slow browser` run at `workers: 5` (38 tests, the `webkit`/
+`firefox` `@engines` legs share the same global config setting) also passed at 18 s -- the slow tier
+is not destabilised by the shared setting. 4 was measured only quietly (it sits between 3 and 5 on
+every quiet run) and was dropped once 5's own loaded numbers came back clean, since Scope 4's own
+fallback ("if more workers only trade suite time for flakiness, keep 3") never triggered.
+
+**Changed `workers: 3` -> `5`** in `playwright.config.ts`, with a new ADR:
+[0031](../decisions/0031-browser-suite-five-workers.md) amends
+[0020](../decisions/0020-testing-strategy.md) §3. `0020`'s own `Status:` line now points to it (the
+one-line "Amended by" append the `write-adr` skill's own mechanism calls for); the skill's remaining
+bookkeeping steps (`PRE-PLAN.md` §1's ADR index, `PLAN.md`'s "Plan-level decisions", the root
+`CLAUDE.md` context-map's own ADR range) are **left for the orchestrator**: all three are outside
+this agent's permitted edit scope (`PLAN.md` is explicitly off-limits; `PRE-PLAN.md` and root
+`CLAUDE.md` are not in the "what you may edit" list), and the root `CLAUDE.md`'s own "ADRs
+0001-0028" line was already stale before this milestone (0029 and 0030 predate it too) -- consistent
+with that bookkeeping being batched by the orchestrator rather than done per-milestone.
+
+### Final suite-level numbers (Steps 3+4 together)
+
+Quiet `pnpm test browser` at `workers: 5` (this commit range's own final state): **21 s / 19 s /
+18 s**, well under the 25 s budget. Loaded: 16/16 pass at `--load 10`, `slowestSuiteSeconds` 24 both
+times -- better than the base's own 9/15 loaded failures at `workers: 3` before this milestone.
+`vertical_slice` remains at its base ~5.7 s (Step 2 reverted, unmet exit criterion, escalated above)
+but no longer drives the suite over its own wall-clock budget either quiet or loaded.

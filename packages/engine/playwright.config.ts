@@ -76,8 +76,10 @@ export default defineConfig({
   // `unit` suite instead: vitest.config.ts).
   testMatch: '**/*.spec.ts',
   fullyParallel: true,
-  // One browser per Playwright worker (Planning decisions).
-  workers: 3,
+  // One browser per Playwright worker. 5, not the original 3 (docs/decisions/
+  // 0031-browser-suite-five-workers.md): measured faster both quiet and under `--load 10` on
+  // Tyler's 14-logical-CPU Mac, with no new failure or `parkWorkers` timeout in 32 runs.
+  workers: 5,
   reporter: [['json', { outputFile: 'test-results/browser/report.json' }]],
   timeout: 30_000,
   use: { baseURL },

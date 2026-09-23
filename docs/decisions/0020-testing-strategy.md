@@ -1,6 +1,6 @@
 # 0020: Testing strategy
 
-Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §14.
+Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §14 and [0031](0031-browser-suite-five-workers.md) (§3's `workers: 3` line).
 
 ## Context
 
