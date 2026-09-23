@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 14;
+pub const ABI_VERSION: u32 = 15;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -370,6 +370,17 @@ pub trait Instance: Sized + 'static {
     fn client_ui_stats(&mut self, _result: &mut [u8]) -> Status {
         Status::Unsupported
     }
+
+    /// docs/plan/17-drawlist-and-sprites.md (`ABI_VERSION` 14 -> 15): how many `Draw` records the
+    /// last `frame()` call's own counting sort wrote into `RegionId::DrawList` (`DrawList::
+    /// record_count`) -- `0` on a wrong role or before the first `frame()` call, same "always
+    /// answer, cost nothing" shape as `sim_warm_one`/`gen_take`/`upload_stage`: no `Status`
+    /// crosses here either. The client worker reads this every wake it calls `frame()`, to know
+    /// how many `RegionId::DrawList` body blocks to copy into the `drawList` triple buffer
+    /// (`worker/client-drawlist.ts`).
+    fn drawlist_len(&mut self) -> u32 {
+        0
+    }
 }
 
 /// Emits every export for every role, the `#[global_allocator]`, and the single-threaded instance
@@ -517,6 +528,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn client_ui_stats() -> u32 {
             $crate::abi::client_ui_stats(&__ENGINE_SLOT) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn drawlist_len() -> u32 {
+            $crate::abi::drawlist_len(&__ENGINE_SLOT)
         }
 
         // gen

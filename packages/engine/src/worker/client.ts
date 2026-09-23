@@ -10,6 +10,7 @@ import type { EngineInstance, RegionView } from '../loader.js'
 import { CB_FRAME_REQ, W_ACK, workerWord } from '../sab/control.js'
 import { RingConsumer, RingProducer } from '../sab/ring.js'
 import { createActionPump } from './client-action.js'
+import { createDrawlistPump } from './client-drawlist.js'
 import { createGenPump } from './client-gen.js'
 import { createInputPump } from './client-input.js'
 import { createNetPump } from './client-net.js'
@@ -104,6 +105,12 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   const chunkTexels = inst.region(RegionId.ChunkTexels)
   const uploadPump = createUploadPump(inst, message.sabs.uploadRing, chunkTexels)
 
+  // docs/plan/17-drawlist-and-sprites.md, step 3: the DrawList publish pump, built once.
+  // `RegionId.DrawList` is optional, same shape as `chunkTexels`/`genIn` above: absent on a client
+  // role with no `Game` (e.g. `fx-hash`'s `topology`/`echo` pages).
+  const drawListRegion = inst.region(RegionId.DrawList)
+  const drawlistPump = createDrawlistPump(inst, message.sabs.drawList, drawListRegion)
+
   // docs/plan/11-camera-and-input.md, Order of work 5: the input-drain pump, built once and run
   // every wake, same shape as `genPump`/`uploadPump` above. `RegionId.Rx` is looked up
   // unconditionally, independent of the `echo`-only `rx` local above (`fixtures/hash`'s own `Rx`
@@ -139,6 +146,9 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       lastFrameReq = frameReq
       if (readCameraBlockInto(cameraReader, cameraRegion.u8, 0)) {
         inst.call1(inst.x.frame, FRAME_ARG)
+        // docs/plan/17-drawlist-and-sprites.md Scope: "once per produced frame" (0018 §2) -- only
+        // after a real `frame()` call, never on a wake where `CB_FRAME_REQ` did not advance.
+        drawlistPump.publish()
       }
     }
     if (actionRing && uiRing && rx && tx) {

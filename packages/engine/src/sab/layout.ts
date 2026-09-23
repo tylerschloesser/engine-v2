@@ -26,9 +26,12 @@ const RING_CONTROL_BYTES = 32
  * `CLOCK_FIELDS_BYTES` fits inside what M06 actually allocated here. */
 export const CLOCK_BLOCK_DATA_BYTES = 32
 
-/** M17 (0015 §5, 0018 §"why 0018's 256 does not fit"): 1,024 B header, 2 MiB body. */
-const DRAWLIST_HEADER_BYTES = 1024
-const DRAWLIST_BODY_BYTES = 2 * 1024 * 1024
+/** M17 (0015 §5, 0018 §"why 0018's 256 does not fit"): 1,024 B header, 2 MiB body. Exported (not
+ * just a local const): `worker/client-drawlist.ts`'s publish pump and `test/client.ts`'s
+ * `drawListHash`/`drawListRecords` both need the exact slot shape to build their own `TripleWriter`
+ * /`TripleReader`, and a third private copy of these two numbers was one too many. */
+export const DRAWLIST_HEADER_BYTES = 1024
+export const DRAWLIST_BODY_BYTES = 2 * 1024 * 1024
 
 export const RING_DEFAULTS = {
   downlink: { slotBytes: 1024, slots: 512 },

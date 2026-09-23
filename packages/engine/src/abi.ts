@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 14
+export const ABI_VERSION = 15
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -160,6 +160,13 @@ export const ABI_EXPORTS = {
   // records written" as an assertion (coordinator gate, M16b cut 2), same crossing shape as
   // `sim_region_hash`/`client_region_hash`/`client_clock_stats`.
   client_ui_stats: { role: 'client', params: 0, result: 'status' },
+  // docs/plan/17-drawlist-and-sprites.md (`ABI_VERSION` 14 -> 15): how many `Draw` records the
+  // last `frame()` call's own counting sort wrote into `RegionId.DrawList` (`0` on a wrong role or
+  // before the first `frame()` call; not a `Status`, same "always answer, cost nothing" shape as
+  // `sim_warm_one`/`upload_stage`). The client worker reads this every wake it calls `frame()`, to
+  // know how many `RegionId.DrawList` body blocks to copy into the `drawList` triple buffer
+  // (`worker/client-drawlist.ts`).
+  drawlist_len: { role: 'client', params: 0, result: 'u32' },
 } as const satisfies Record<string, ExportSpec>
 
 export function statusName(n: number): string {

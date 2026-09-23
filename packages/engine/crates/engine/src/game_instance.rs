@@ -13,8 +13,8 @@ use crate::abi::{Instance, RegionId, RegionLayout, Role, Status};
 use crate::client::drawlist;
 use crate::client::upload::RECORD_BYTES;
 use crate::client::{
-    ActionError, CameraBlock, ClientCore, DirtyEvent, InputEvent, InputQueue, TerrainFeed,
-    UiObserver, Uploader,
+    ActionError, CameraBlock, ClientCore, ClientSide, DirtyEvent, DrawList, InputEvent, InputQueue,
+    TerrainFeed, UiObserver, Uploader,
 };
 use crate::game::{Clocks, FrameView, Game, PlayerId};
 use crate::host::Host;
@@ -196,6 +196,17 @@ pub struct ClientInstance<G: Game> {
     /// The `ui` call policy's own state (docs/plan/16b-ui-observation-and-clock.md): the reused
     /// `G::Ui` pair, the client-side dirty flag and the "since the last call" mutation counter.
     ui: UiObserver<G>,
+    /// The per-frame draw list `ClientSide::extract` fills (docs/plan/17-drawlist-and-sprites.md,
+    /// 0018 §2): scratch list + header/body-write state. Boxed for the same reason `core`/
+    /// `uploader`/`input_queue` are (large, `Vec::with_capacity(65_536)` alone).
+    drawlist: Box<DrawList>,
+    /// A raw pointer into this instance's own `RegionId::DrawList` region, taken once at `init`
+    /// (mirrors `CameraBlock::ptr`'s own precedent and safety argument, `client/camera.rs`'s doc
+    /// comment): the region is a separate heap allocation from every other field of
+    /// `ClientInstance` that never moves or resizes after init, so `frame()` can take a `&mut
+    /// [u8]` from it for the duration of one `sort_into` call while `core`/`client`/`ui`/`ui_buf`
+    /// are borrowed elsewhere in that same call -- the pointer itself borrows nothing.
+    drawlist_region: *mut u8,
     /// The last real `frame()` call's own camera-derived `FrameView` fields (see
     /// `CachedCameraView`'s own doc comment): `on_frame` reuses this since it has no `CameraBlock`
     /// of its own.
@@ -216,6 +227,8 @@ impl<G: Game> ClientInstance<G> {
         layout.region(RegionId::Downlink, CLIENT_DOWNLINK_BYTES);
         layout.region(RegionId::Tx, CLIENT_UPLINK_BYTES);
         layout.region(RegionId::Ui, UI_BYTES);
+        layout.region(RegionId::DrawList, drawlist::REGION_BYTES as u32);
+        let drawlist_region = layout.ptr(RegionId::DrawList);
         let source = Pristine::<G::Worldgen>::new(cfg.seed.0, cfg.params);
         // Single-connection assumption (docs/plan/15b-ring-connection-and-replica-rendering.md,
         // Planning decisions "PlayerId = conn + 1, not conn"): this milestone's own topology never
@@ -246,6 +259,8 @@ impl<G: Game> ClientInstance<G> {
             ui_buf: Vec::new(),
             client: G::Client::default(),
             ui: UiObserver::new(),
+            drawlist: Box::new(DrawList::new()),
+            drawlist_region,
             camera_view: CachedCameraView::default(),
         })
     }
@@ -417,6 +432,8 @@ where
                     client,
                     ui,
                     ui_buf,
+                    drawlist,
+                    drawlist_region,
                     camera_view,
                     ..
                 } = c.as_mut();
@@ -445,14 +462,29 @@ where
                 ui.maybe_run(client, &view, mutations, ui_buf);
 
                 // docs/plan/17-drawlist-and-sprites.md Scope: "frame(t_ms) now runs: build
-                // FrameView -> G::Client::extract -> sort" -- the `extract`/`sort_into` call and
-                // `drawlist_len` export are this milestone's own step 3 (Deviations: `FrameView`'s
-                // wiring here, including the window origin/visible-rect maths above, necessarily
-                // landed with this step since `FrameView::new`'s only caller is right here).
+                // FrameView -> G::Client::extract -> sort". `drawlist_region`: see
+                // `ClientInstance::drawlist_region`'s own doc comment for the safety argument.
+                drawlist.begin_frame(camera_view.window_origin);
+                client.extract(&view, drawlist.as_mut());
+                // SAFETY: see `ClientInstance::drawlist_region`'s doc comment.
+                let region = unsafe {
+                    core::slice::from_raw_parts_mut(*drawlist_region, drawlist::REGION_BYTES)
+                };
+                drawlist.sort_into(region, camera_view.time_ms);
 
                 Status::Ok
             }
             _ => Status::Unsupported,
+        }
+    }
+
+    /// docs/plan/17-drawlist-and-sprites.md Provides: how many records the last `frame()` call's
+    /// own `sort_into` wrote (`0` on a wrong role, same "always answer, cost nothing" shape as
+    /// `sim_warm_one`/`tick_hz` -- no `Status` crosses here either).
+    fn drawlist_len(&mut self) -> u32 {
+        match self {
+            GameInstance::Client(c) => c.drawlist.record_count(),
+            _ => 0,
         }
     }
 

@@ -78,3 +78,8 @@ required-features = ["testing"]
 [[test]]
 name = "no_alloc_ui"
 required-features = ["testing"]
+
+# docs/plan/17-drawlist-and-sprites.md: same reason as `no_alloc_ui` above.
+[[test]]
+name = "no_alloc_drawlist"
+required-features = ["testing"]

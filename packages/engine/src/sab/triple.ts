@@ -10,7 +10,10 @@ import { at } from './bytes.js'
 const STATE_BYTES = 4
 const SLOT_INDEX_MASK = 0b011
 const DIRTY = 0b100
-const BLOCK_BYTES = 65536 // M17's proportional-copy block size
+/** M17's proportional-copy block size (docs/plan/17-drawlist-and-sprites.md Planning decisions
+ * "Proportional publish"): exported so `worker/client-drawlist.ts` can compute how many blocks a
+ * frame's own `usedBytes` spans without duplicating this constant. */
+export const BLOCK_BYTES = 65536
 
 function slotOffset(headerBytes: number, bodyBytes: number, slot: number): number {
   return STATE_BYTES + slot * (headerBytes + bodyBytes)

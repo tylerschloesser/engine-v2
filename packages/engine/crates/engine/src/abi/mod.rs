@@ -479,6 +479,15 @@ pub fn sim_conn_counters<T: Instance>(slot: &Slot<T>, conn: u32) -> Status {
     rt.inst.sim_conn_counters(conn, result)
 }
 
+/// `drawlist_len() -> u32`: `Instance::drawlist_len`'s own "always answer, cost nothing" shape --
+/// `0` on a wrong role (docs/plan/17-drawlist-and-sprites.md), not an error.
+pub fn drawlist_len<T: Instance>(slot: &Slot<T>) -> u32 {
+    match slot.client() {
+        Ok(rt) => rt.inst.drawlist_len(),
+        Err(_) => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

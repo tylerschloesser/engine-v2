@@ -24,7 +24,9 @@ import {
   WORKER_HOST,
   workerWord,
 } from '../sab/control.js'
+import { DRAWLIST_BODY_BYTES, DRAWLIST_HEADER_BYTES } from '../sab/layout.js'
 import { RingConsumer, type RingStats } from '../sab/ring.js'
+import { TripleReader } from '../sab/triple.js'
 import type { SimHostCounters } from '../server.js'
 import type { FromWorker, ToWorker } from '../worker/protocol.js'
 import {
@@ -708,6 +710,100 @@ export async function netCounters(client: Client, conn = 0): Promise<NetCounters
     uplink,
     downlink,
   }
+}
+
+/** docs/plan/17-drawlist-and-sprites.md, `engine/test`: one 32-bit FNV-1a pass over `bytes[offset,
+ * offset+len)`, seeded with `seed`. Two independent seeds (below) give `drawListHash` a 64-bit-wide
+ * hash without `BigInt` (`.claude/rules/hot-paths.md`'s own "no `BigInt`... per call" bullet is
+ * about a per-frame/per-message path, which this test-only helper is not, but there is no reason to
+ * reach for it here either). */
+function fnv1a32(bytes: Uint8Array, offset: number, len: number, seed: number): number {
+  let h = seed
+  for (let i = 0; i < len; i++) {
+    h ^= bytes[offset + i] as number
+    h = Math.imul(h, 0x0100_0193)
+  }
+  return h >>> 0
+}
+
+const FNV32_SEED_LO = 0x811c_9dc5
+const FNV32_SEED_HI = 0x1000_193b
+
+/** docs/plan/17-drawlist-and-sprites.md, `engine/test`: a hash of the newest `drawList` triple-
+ * buffer slot's header (all 1,024 bytes, `frame_seq`/`frame_time_ms` included) plus its used body
+ * bytes (`record_count * 32`, `Draw::BYTES`) -- 16 lowercase hex digits, the same format `sim_hash`/
+ * `worldHash` already use. Reads the SAB directly, no worker round trip (`netCounters`'s own ring
+ * reads are the precedent): the triple buffer is main-thread-readable by design (0015 §2). */
+export function drawListHash(client: Client): string {
+  const { sabs } = clientTestHandle(client)
+  const reader = new TripleReader(sabs.drawList, DRAWLIST_HEADER_BYTES, DRAWLIST_BODY_BYTES)
+  const slot = reader.acquire()
+  const header = reader.headerView(slot)
+  const body = reader.bodyView(slot)
+  const recordCount = new DataView(header.buffer, header.byteOffset, header.byteLength).getUint32(
+    4,
+    true,
+  )
+  const usedBodyBytes = Math.min(recordCount * 32, DRAWLIST_BODY_BYTES)
+  const lo = fnv1a32(
+    body,
+    0,
+    usedBodyBytes,
+    fnv1a32(header, 0, DRAWLIST_HEADER_BYTES, FNV32_SEED_LO),
+  )
+  const hi = fnv1a32(
+    body,
+    0,
+    usedBodyBytes,
+    fnv1a32(header, 0, DRAWLIST_HEADER_BYTES, FNV32_SEED_HI),
+  )
+  return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0')
+}
+
+/** One decoded `Draw` record (0018 §2), for `drawListRecords` below. */
+export type DrawRecord = {
+  pos: [number, number]
+  size: [number, number]
+  kind: number
+  spriteId: number
+  layer: number
+  flags: number
+  color: number
+  param: number
+  pickId: number
+}
+
+/** docs/plan/17-drawlist-and-sprites.md, `engine/test`: decodes every `Draw` record of the newest
+ * `drawList` slot into `out` (cleared first), returning the count. Test-only (allocates one object
+ * per record; `src/test/**` is exempt, `.claude/rules/hot-paths.md`). */
+export function drawListRecords(client: Client, out: DrawRecord[]): number {
+  const { sabs } = clientTestHandle(client)
+  const reader = new TripleReader(sabs.drawList, DRAWLIST_HEADER_BYTES, DRAWLIST_BODY_BYTES)
+  const slot = reader.acquire()
+  const header = reader.headerView(slot)
+  const body = reader.bodyView(slot)
+  const recordCount = new DataView(header.buffer, header.byteOffset, header.byteLength).getUint32(
+    4,
+    true,
+  )
+  out.length = 0
+  for (let i = 0; i < recordCount; i++) {
+    const base = i * 32
+    const view = new DataView(body.buffer, body.byteOffset + base, 32)
+    const kindSprite = view.getUint16(16, true)
+    out.push({
+      pos: [view.getFloat32(0, true), view.getFloat32(4, true)],
+      size: [view.getFloat32(8, true), view.getFloat32(12, true)],
+      kind: kindSprite >>> 12,
+      spriteId: kindSprite & 0x0fff,
+      layer: view.getUint8(18),
+      flags: view.getUint8(19),
+      color: view.getUint32(20, true),
+      param: view.getFloat32(24, true),
+      pickId: view.getUint32(28, true),
+    })
+  }
+  return recordCount
 }
 
 const WASM_PAGE_BYTES = 65536
