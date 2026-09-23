@@ -436,3 +436,193 @@ line (`pnpm bench:frame`, baseline update rule) -- all named by the brief's own 
 Exit criteria for steps 4-6, not this range. `packages/engine/CLAUDE.md`'s Rendering paragraph does
 not yet mention `render/atlas.ts`; left for cut 2 or a later editor, since the brief's own Context
 artifacts line for this milestone names only the `bench:frame`/baseline addition.
+
+## Steps 4-6 (benchmark, `profile-frame` skill, `?harness=1`)
+
+Base: `2d17dce` (steps 1-3 plus fix round 1, committed and gated). Commits `cde88b1`/`7009d1d`/
+`a083813`/`261523d`.
+
+### Known-from-cut-1 blockers, resolved
+
+**Bulk spawn**: `fx-drawables` gained `Action::SpawnMany { origin, cols, rows, spacing, layer,
+sprite }` (`fixtures/drawables/src/lib.rs`), spawning a `cols x rows` grid of `small: false`
+entities in one admitted action -- `genesis`/`Action::Spawn` untouched, `drawlist_fixture_hash_
+golden` unchanged (`07e82d2cb76fe412`, re-verified: `cargo nextest run -p fx-drawables`, 7/7 pass).
+**Camera**: `frame-bench.ts` sets `cameraState.tilesAcross = 256` (0018 §6's own zoom figure) with
+`halfExtentTilesX/Y = 130` over a 256x256, spacing-1 grid -- `visible()`'s clip sees exactly 65,536
+records (`DrawList::CAPACITY`), asserted in `frame-bench.spec.ts` (`recordCount === 65_536`).
+**`SMALL_ZOOM_THRESHOLD`**: sidestepped, not touched -- every `SpawnMany`-spawned entity is hard-coded
+`small: false` in `apply()`, so the zoom-256 camera never exercises the drop path for this scene.
+
+**A fourth blocker found here, not anticipated in cut 1's own notes**: `host::mod::SIM_TX_BYTES`
+(64 KiB, one connection's whole per-tick built frame) would silently truncate a single 65,536-entity
+`SpawnMany` dispatch's own delta. Fixed by batching: `frame-bench.ts` dispatches `BATCH_COLS = 128`
+entities per `SpawnMany` call, 512 calls total (one 128-entity row-half per tick), each batch's own
+one-tick delta staying comfortably under the cap. Not a fix to the constant itself (Non-scope,
+`host::mod.rs`'s own "provisional... a real join-burst budget is 0010's pacing/backpressure").
+
+### The real hang: a running worker never processes `Runtime.evaluate`
+
+Found empirically, cost the most debugging time of this range: `worker/shell.ts`'s blocking loop
+(`Atomics.wait`, notify, run `body()`, `Atomics.wait` again) never returns to the isolate's own
+message pump under normal operation, so a CDP `Runtime.evaluate` sent to a worker that is merely
+"idle, waiting for the next wake" -- not parked -- sits pending forever; only the park protocol's own
+`W_YIELD`/`W_PARKED` handshake (`resumeWorkers`'s own doc comment: "a parked worker is not blocked")
+actually returns control to the event loop. `tests/browser/gc/instrument.ts`'s own comment ("a
+production worker cannot call `performance.mark` itself") names half of this; the other half --
+that *reaching* an unparked worker from the outside at all requires parking it first, regardless of
+what you want to do with it -- was not documented anywhere and is the reason `bench.frame_worstcase`
+parks every worker, installs the `call1` wrapper, resumes, and only then calls `start()` (real rAF),
+rather than installing it mid-benchmark the way a first draft tried (hung at 30 s/120 s test
+timeouts twice before the cause was isolated with a standalone Playwright script outside the test
+framework, sequentially narrowing: page-only polling worked instantly; adding CDP worker attachment
+still worked; adding the *naming* `Runtime.evaluate` call was the exact point it hung).
+
+### `wf-*`/`mf-*` mark placement: what each side actually measures
+
+`mf-s-<n>`/`mf-e-<n>` (`frame-bench.ts`'s own `instrumentedScheduler`) bracket the *whole* rAF
+callback -- camera integration, the real `drawablesRenderer.acquire()` (SAB-backed `writeBuffer`),
+`renderer.writeFrameUniform`/`draw()` (terrain's triangle plus `attachDrawables`' own drawables
+layers in the same pass). `wf-s-<n>`/`wf-e-<n>` (the CDP-injected `call1` wrapper) bracket *only* the
+client role's `frame(t_ms)` WASM export -- extract + counting sort (M17's own "frame(t_ms) now runs:
+build FrameView -> extract -> sort" scope) -- not the surrounding `drawlistPump.publish()` or the
+net/gen/upload/input pumps `worker/client.ts`'s `body()` also runs on the same wake, since none of
+those are reachable through `self.__engineInstance.call1`. 0018 §9's own prose ("drain rings, apply
+network frames, interpolate, extract, sort and publish") reads as the *concept* of one frame-
+producing wake, wider than the raw export call; this cut measures the dominant, extract/sort-bound
+part of it (confirmed by `profile-frame.mjs`'s own CPU profile: `copyBytes`/`publish` are worker-side
+but outside the `wf-*` window and do show up in the *page's* own CPU profile as separate top-five
+entries) rather than the whole wake, because nothing reachable from outside the worker can bracket a
+JS-level span spanning several pump calls without editing `worker/client.ts` itself (a hot-path
+production file, out of reach for CDP-only instrumentation). Flagged for whoever next revisits this
+number.
+
+### Sample-count asymmetry: `main` vastly outpaces `worker` under uncapped rAF
+
+At 65,536 records the worker's own per-call cost (~2.1-2.6 ms measured) is well above main's
+(~0.6-0.7 ms); with `--disable-frame-rate-limit --disable-gpu-vsync` main races far ahead of real
+device pacing (roughly 1,500+ fps observed), so several main frames' own `CB_FRAME_REQ` advances
+routinely coalesce into one worker wake before `bench.frame_worstcase`'s own 300-main-frame window
+closes -- measured 22-24 `wf-*` pairs against 301-302 `mf-*` pairs, consistently, across a dozen runs.
+This is real, expected behaviour of this benchmark's own deliberately uncapped pacing at this record
+count (0018 §1's coalescing tolerance, exercised for real), not a bug: every individual sample is a
+genuine, uncoalesced measurement, just fewer of them on the worker side. `workerMs.length > 0` is the
+only assertion made on the count; `profile-frame`'s own SKILL.md documents the asymmetry so a future
+reader does not mistake a low worker frame count for a broken park/resume sequence. Left as-is rather
+than inflating the main-frame target to force more worker samples (considered, rejected: the brief's
+own "300 frames after 120 warm-up" is `bench.frame_worstcase`'s literal window size, and enlarging it
+to chase a worker sample count would be a unilateral reinterpretation of that number).
+
+### `bench.frame_worstcase`: measured (this session, Tyler's Mac)
+
+Five consecutive clean runs, `pnpm exec playwright test --config packages/engine/playwright.config.ts
+--project frame-bench` (quiet, load average ~2.9-3.1 at measurement time): main p50 0.618-0.660 ms,
+worker p50 2.131-2.302 ms -- every run comfortably under both 0018 §9's desktop proxy (main <=
+1.3 ms, worker <= 2.7 ms) and the checked-in baseline's 25% tolerance. **Both failure paths verified
+by injection, then reverted** (binding rule): a temporary 0.4 ms busy-wait in `frame-bench.ts`'s
+`onCamera` pushed main p50 to 1.020 ms -- under the 1.3 ms absolute budget but over the baseline's
+0.802 ms tolerance line, failing exactly that assertion (`main p50 vs baseline 0.642ms: 1.020ms
+exceeds 0.802ms`); a temporary 1.0 ms busy-wait inside the CDP-injected worker wrapper pushed worker
+p50 to 3.209 ms, over the absolute 2.7 ms budget, failing that assertion instead. Both reverted
+(`git diff` empty on `frame-bench.ts`/`frame-bench.spec.ts` before the next commit); five more clean
+runs confirmed the revert. `baselines/frame.json` was written from one representative clean run
+(records=65,536, frames main=302/worker=23, main p50/p95 0.642/0.699 ms, worker p50/p95 2.241/
+2.492 ms) with the machine, flags and load average recorded in its own `conditions` field.
+
+### `profile-frame`: run in this session
+
+`node packages/engine/scripts/profile-frame.mjs` (no args), twice, after `pnpm format`. Table from
+the second run:
+
+```
+bench.frame_worstcase profile: records=65536 frames main=302 worker=22 warmup=120
+  main   p50=0.666ms p95=0.714ms  budget<=1.3ms  baseline.p50=0.642ms (+25%=0.802ms)
+    top self-time (300.46ms sampled):
+      150.322ms  writeBuffer@:0
+      71.763ms  mark@:0
+      69.243ms  (program)@:0
+      6.692ms  (idle)@:0
+      0.496ms  requestAnimationFrame@:0
+  worker p50=2.595ms p95=2.782ms  budget<=2.7ms  baseline.p50=2.241ms (+25%=2.801ms)
+    top self-time (250.75ms sampled):
+      150.960ms  copyBytes@worker-auto-ZcU9N8lO.js:191
+      25.525ms  publish@worker-auto-ZcU9N8lO.js:550
+      19.331ms  _ZN4core5slice20copy_from_slice_impl17hcd56f5bb7b2e5ee3E@game.wasm:1
+      13.764ms  (program)@:0
+      9.377ms  mark@:0
+```
+
+`writeBuffer`/`copyBytes` dominating both sides matches M17's own Planning decisions ("the shares of
+0018 §9 ... are dominated by the 2 MiB `writeBuffer`, `extract` and the sort, which first exist at
+full size in M17"). `mark@:0`'s own ~9-23% share on each side is this tool's own instrumentation
+overhead (`performance.mark` calls), named as such in the SKILL.md so it is not mistaken for a real
+cost.
+
+### `device.html?harness=1`: a Run button was needed, not just a page mode
+
+The brief's own Planning decisions text describes the probes to print but not a UI; `docs/plan/
+device-checks.md`'s own M17b section (pre-existing, unedited by this cut) already said "record,
+press 'run' on the page, stop after it prints" -- read literally, this requires a clickable control
+so Tyler's own DevTools recording brackets only the measured 120+600 steps, not page/asset/WASM
+setup. Added a `<button id="harness-run">Run</button>`; setup (device/client/renderer/population)
+runs immediately and `window.__pageReady` fires once the button appears (the existing "`__pageReady`
+marks setup done" convention, `packages/engine/CLAUDE.md`'s "Adding a browser spec" -- decoupled from
+"the harness run finished", which only matters to a human waiting on the button). **Found by this
+step's own Chromium verification, not by inspection**: the button existed and was visible but every
+`page.click()` failed ("`<canvas>` intercepts pointer events") until given `position: fixed` --
+`device.html`'s own canvas covers the whole viewport with `position: fixed`, and CSS paints
+positioned elements after non-positioned in-flow ones regardless of DOM order, so a plain in-flow
+button always renders *under* it. Fixed with inline `position:fixed;z-index:1000` on the button.
+Verified end to end in Chromium (`playwright-core`'s `chromium.launch`, a throwaway Node script, not
+committed): navigate, wait for `__pageReady`, click `#harness-run`, wait for the HUD text to contain
+"harness=1 result", read it back --
+
+```
+device.html?harness=1: starting…
+setup complete -- press Run to start the 120 warm-up + 600 measured frames.
+warm-up: 120 frames…
+measured: 600 frames…
+
+harness=1 result (stop your DevTools recording now):
+  uncapturederror: none
+  GPUTexture-as-view probe: true
+  writeTexture from SAB view: accepted
+  writeBuffer from SAB view (drawablesRenderer.acquire, 720 calls): accepted (no uncapturederror)
+  memory.buffer.byteLength per instance:
+    client: 51707904
+    sim: 102039552
+    gen0: 5570560
+```
+
+Every probe's own Chromium result is recorded here only as proof the mechanism works end to end
+(the page loads, the button is reachable, every field prints); the actual Safari/Firefox pass/fail
+(`M17b-harness-desktop-safari`/`-firefox` in `docs/plan/device-checks.md`) is Tyler's own manual run,
+not performed by this session. `docs/plan/device-checks.md`'s M17b section needed no edit: its
+existing wording already matched what was built once the Run button existed.
+
+### Verified (commands and results, steps 4-6)
+
+- `pnpm test browser -t sprite` -> `browser pass 6 tests` (unchanged from steps 1-3/fix round 1).
+  `pnpm test browser -t drawables` -> `browser pass 9 tests` (unchanged).
+- `pnpm test wasm -t drawlist` -> `wasm pass 2 tests` (unaffected by `Action::SpawnMany`).
+- `cargo nextest run -p fx-drawables` -> 7/7 pass, golden unchanged (`07e82d2cb76fe412`).
+  `cargo clippy -p fx-drawables --all-targets -- -D warnings` -> clean.
+- `pnpm exec tsc --noEmit -p packages/engine/tests/browser/pages/tsconfig.json` and `-p packages/
+  engine/tests/tsconfig.json` -> both clean at every step's own final state.
+- `playwright test --config packages/engine/playwright.config.ts --project chromium --grep
+  "canvas|frame-loop"` -> 3/3 pass (device.html's own automated coverage, unaffected by the
+  `harness=1` addition or the new `runHarness`/`clientTestHandle`/`asHarness` imports).
+- `pnpm bench:frame` -> full rebuild + `bench.frame_worstcase` green, numbers as above.
+- `node packages/engine/scripts/profile-frame.mjs` -> ran clean, table as above, `test-results/
+  profile-frame/trace.json` written.
+- `pnpm format` (`biome check --write` + `cargo fmt`) run before every commit; clean (no fixes
+  needed) at the final state of each.
+- `pnpm test`/`pnpm test:slow`/`pnpm lint` (the full runs) were not run (delegation prompt: "I am
+  the gate").
+
+### Not verified in this range
+
+`M17b-harness-desktop-safari`/`-firefox` (`docs/plan/device-checks.md`): Tyler's own manual run, on
+real hardware, not this session's to perform. The full `pnpm test:slow` (which would exercise the
+`frame-bench` leg through `scripts/suites.mjs` exactly as `pnpm bench:frame` does standalone) was not
+run, per the delegation prompt.
