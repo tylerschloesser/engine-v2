@@ -1,6 +1,6 @@
 # M16c: Bring the `browser` suite back inside its budget
 
-Status: not started · After: 16 · Tyler-dependent: no
+Status: done · After: 16 · Tyler-dependent: no
 
 ## Goal
 
@@ -83,15 +83,16 @@ suite it measures should already be as cheap as steps 2-3 can make it.
 None. Existing tests get cheaper and keep every assertion.
 
 ## Exit criteria
-- [ ] Deviations hold the before-and-after wall-time attribution for `vertical_slice` and one
+- [x] Deviations hold the before-and-after wall-time attribution for `vertical_slice` and one
       `echo` zero-GC test.
 - [ ] `vertical_slice` takes under 3 s in `report.json` and keeps every phase's assertion.
-- [ ] Every zero-GC page's negative controls still trip (`pnpm gc` output pasted).
-- [ ] Quiet `pnpm test browser` is under 25 s (three consecutive runs pasted).
-- [ ] `node scripts/repeat.mjs browser 15 --load 10` is 15/15 under 37.5 s, 0 hangs (run by the
+      **Moved to M16d in writing, not met here.** Step 1 attributed 85-90 % of the test to a production sim-pacing stall (`worker/sim.ts` + `AtomicsTimer`, ADR 0030), which is outside this brief's Files touched. Shrinking the test first brought the pixel race back (Step 2).
+- [x] Every zero-GC page's negative controls still trip (`pnpm gc` output pasted).
+- [x] Quiet `pnpm test browser` is under 25 s (three consecutive runs pasted).
+- [x] `node scripts/repeat.mjs browser 15 --load 10` is 15/15 under 37.5 s, 0 hangs (run by the
       orchestrator at the gate).
-- [ ] If `workers` changed, a new ADR amends 0020 with the measurements.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] If `workers` changed, a new ADR amends 0020 with the measurements.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test browser` (read `test-results/browser/report.json` for per-test durations) ·
@@ -295,3 +296,13 @@ Quiet `pnpm test browser` at `workers: 5` (this commit range's own final state):
 times -- better than the base's own 9/15 loaded failures at `workers: 3` before this milestone.
 `vertical_slice` remains at its base ~5.7 s (Step 2 reverted, unmet exit criterion, escalated above)
 but no longer drives the suite over its own wall-clock budget either quiet or loaded.
+
+### Orchestrator's gate (M16c done)
+
+- `pnpm test && pnpm lint` green on `1dfe5c2`: `browser` 116 at **19 s of 25 s**, no warning (was 27-28 s).
+- `node scripts/repeat.mjs browser 15 --load 10`: **pass=15 fail=0 hang=0, slowest 26 s** (was 9/15 failing at 38-45 s on `4ab945e`).
+- Masks checked: `budgets.json` untouched, no timeout or retry added, `vertical-slice.spec.ts` byte-identical to base, measured windows unchanged. `WARMUP` was already a documented deviation from 0016's 120 frames, and 4000 was re-derived per page (`input.main` 181.6 against 190) rather than chosen for speed.
+- ADR 0031 bookkeeping the implementer could not do (PLAN "Plan-level decisions", root `CLAUDE.md`'s ADR range) was done by the orchestrator.
+- **The real product of this milestone is Step 1's finding**: a production sim linked to a continuously rendering client does not tick for seconds and then bursts. That is M16d (`16d-sim-pacing-under-external-wakes.md`), which also inherits the `vertical_slice` < 3 s criterion and the time-dependent pixel probe.
+- **CI caveat:** `workers: 5` was measured only on Tyler's 14-core Mac; CI's `ubuntu-latest` runs it too. Read the run.
+
