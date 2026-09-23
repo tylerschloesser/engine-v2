@@ -62,4 +62,162 @@ Update the `add-action-type` skill with the "surface the outcome in `Ui`" step i
 none
 
 ## Deviations
-(filled in during Phase 3)
+
+**This section covers steps 1-2 only** (commits `M16b step 1: ...`, `M16b step 2: ...`, base
+`df678f5`). Steps 3-5 (TS drain, `onUi`, `clock()`, fixture `Ui`, page, browser tests) are a second
+implementer's, built against the exact seam shapes below.
+
+### Files, beyond the brief's own list
+
+`packages/engine/crates/engine/src/client/frame_view.rs` (new), `client/ui.rs` (new) -- the brief's
+own Files-touched line already names these two. Also touched, not named there: `client/texel.rs`
+(`ClientSide::extract`/`ui` signatures), `client/core.rs` (`ClientCore::mutations()`), `game.rs`
+(`FrameView`/`Clocks` re-export), `client.rs` (module wiring), `Cargo.toml` (`no_alloc_ui`'s
+`[[test]]` entry). No fixture, page or TS file touched -- `fixtures/puts` is untouched; step 1's own
+`ui_json_matches_ts_shape` test uses a local test-only `Ui`/`Game` (see below), not `PutsUi`.
+
+### `FrameView<'a, G>` and `Clocks`: exact shapes (`client/frame_view.rs`)
+
+```rust
+pub struct Clocks { pub authoritative: Tick, pub predicted: Tick }  // Clone, Copy, PartialEq, Eq, Debug, Default
+
+pub struct FrameView<'a, G: Game> { /* private: world, clocks, me */ }
+impl<'a, G: Game> FrameView<'a, G> {
+    pub fn new(world: &'a dyn WorldRead<G>, clocks: Clocks, me: PlayerId) -> Self;
+    pub fn world(&self) -> &dyn WorldRead<G>;
+    pub fn clocks(&self) -> Clocks;
+    pub fn me(&self) -> PlayerId;
+}
+```
+
+Re-exported at `crate::client::{FrameView, Clocks}` and, for the existing `crate::game::FrameView`
+import path every `ClientSide` implementor already uses, `pub use crate::client::frame_view::
+{Clocks, FrameView};` in `game.rs` -- the same re-export pattern `TickCx` already established
+(`game.rs` no longer defines a `FrameView` shell struct at all). **`ClientSide::extract`/`ui`'s own
+signatures changed** from `&FrameView<G>` (never valid Rust once `FrameView` takes a lifetime) to
+`&FrameView<'_, G>` (`client/texel.rs`) -- the only breaking change to an existing seam in this cut;
+`fixtures/puts`'s `PutsClient` and `fixtures/terrain`'s `Vis` both compile unchanged (neither
+overrides `ui`/`extract`).
+
+### `ClientCore::mutations()`: the "since the last call" signal (`client/core.rs`)
+
+```rust
+pub fn mutations(&self) -> u64
+```
+
+New field `mutations: u64` on `ClientCore<G>`, `wrapping_add(1)`'d at the end of `on_frame`'s
+success path (after `apply`, before returning `Ok`). Every applied frame bumps it, including a bare
+heartbeat (no sections): `apply` always calls `Replica::set_tick`, so "on_frame ran" and "the
+replica mutated" coincide for every real frame -- this is a call counter, not a diff of the replica
+itself, and is documented as such at its definition.
+
+### `UiObserver<G>`: the policy (`client/ui.rs`)
+
+```rust
+pub struct UiObserver<G: Game> { /* private: current: G::Ui, previous: G::Ui, dirty: bool, last_mutations: u64 */ }
+impl<G: Game> UiObserver<G> {
+    pub fn new() -> Self;                                   // G::Ui::default() x2, dirty=false, last_mutations=0
+    pub fn mark_dirty(&mut self);                            // the dirty-flag setter -- see below
+    pub fn maybe_run(&mut self, client: &G::Client, view: &FrameView<'_, G>, mutations: u64, out: &mut Vec<u8>) -> bool;
+}
+impl<G: Game> Default for UiObserver<G> { .. }                // delegates to new()
+```
+
+`maybe_run`'s policy, exactly as Scope: `should_run = mutations != self.last_mutations ||
+self.dirty`; if not, returns `false` with zero cost (no `ui` call, no comparison). If it runs:
+records `last_mutations`, clears `dirty`, calls `client.ui(view, &mut self.current)`, compares
+`self.current != self.previous`; on a real change, appends the kind-1 record to `out` (`push_ui_
+record::<G>`, private to this module: `serde_json::to_string` + `[1u8][len u32 LE][json bytes]`)
+and `core::mem::swap`s `current`/`previous`, returning `true`; otherwise returns `false`. Re-exported
+at `crate::client::UiObserver`.
+
+**Kind-1 constant**: `const UI_RECORD_KIND_UI: u8 = 1`, private to `client::ui` (mirrors
+`game_instance.rs`'s own private `UI_RECORD_KIND_ACTION_RESULT: u8 = 2` -- neither is exported;
+a consumer outside the crate never needs the numeric value by name, only the record shape).
+
+**The dirty-flag setter, for cut 2**: `UiObserver::mark_dirty(&mut self)` is the only setter that
+exists after this cut. It is reachable natively (this cut's own tests call it directly) but **not
+yet reachable from TypeScript or a browser test** -- no ABI export was added for it, since nothing
+in steps 1-2 needs one and `ClientSide::frame`/`FrameCx` (M18's own job, still a no-op shell) is the
+only planned production caller. **Cut 2 needs to add its own test-only ABI export** (something in
+the shape of `sim_warm_one`/`client_gen_stats`'s "test hook" convention, e.g. a new `Instance`
+method + extern wrapper that reaches `ClientInstance::ui.mark_dirty()`) if `ui_reruns_when_dirty_
+flag_set`'s browser-level equivalent needs to set the flag from a Playwright test before M18 lands a
+real production setter. **Any such export bumps `ABI_VERSION`** (unchanged at 12 by this cut: no
+export was added, no existing export's params/result changed).
+
+### Where `G::Client` is constructed, and where the `ui` call sits in `frame(t_ms)` (`game_instance.rs`)
+
+`ClientInstance<G>` gained two fields: `client: G::Client` (built once, `G::Client::default()`, in
+`ClientInstance::init` -- lives for the instance, never reconstructed) and `ui: UiObserver<G>`
+(`UiObserver::new()`, same place). `GameInstance::frame`'s `Client` arm, **after** the existing
+`set_camera`/`feed.on_frame`/`uploader.on_frame`/`input_queue.clear()` block, destructures `c` into
+`{ core, client, ui, ui_buf, .. }` and runs:
+
+```rust
+let mutations = core.mutations();
+let replica = core.view();                                    // &Replica<G>: WorldRead<G>
+let clocks = Clocks { authoritative: replica.tick(), predicted: replica.tick() };  // = until M26
+let me = replica.own_player();
+let view = FrameView::new(replica as &dyn WorldRead<G>, clocks, me);
+ui.maybe_run(client, &view, mutations, ui_buf);
+```
+
+`ui_buf` is the *same* `Vec<u8>` `on_frame`'s `push_result_record` (kind 2) already appends to and
+`client_poll_ui` already drains record-by-record (M16, unchanged) -- a kind-1 record lands in it
+exactly like a kind-2 one, and `client_poll_ui`'s own never-split/drop-if-too-big contract (M16
+Deviations) applies identically to both kinds, since it only ever looks at `[kind][len]`.
+
+**Delivery order, and why it already holds without extra work.** `frame` and `on_frame` are
+separate ABI exports; within one client-worker wake, `worker/client.ts`'s `body()` calls `frame()`
+**before** `netPump.pump()` (which calls `on_frame`) -- established M15b, unchanged by this cut
+(`packages/engine/src/CLAUDE.md`'s own ordering note). Consequence: a given wake's `ui` call (if it
+runs) reflects replica state as of the *previous* wake's `on_frame` calls, and this wake's own kind-1
+append (if the value changed) lands in `ui_buf` **before** this same wake's kind-2 append from
+`on_frame`, which runs later in the same `body()` call. Since `client_poll_ui` drains `ui_buf` in
+append order, **the Provides' delivery-order rule ("`onUi` then results") already holds as a direct
+consequence of the existing `frame`-before-`on_frame` wake order, with nothing added in this cut to
+enforce it** -- worth re-verifying once cut 2's TS drain exists for real, since it depends on that
+specific ordering in `worker/client.ts` staying as it is.
+
+### `ui_json_matches_ts_shape`, and why it does not use `PutsUi`
+
+The brief allows adding `fixtures/puts`'s `type Ui = PutsUi`/`type Client = PutsClient` now if the
+golden-JSON test needs it (step 4's own fixture work, pulled forward). Not done: `push_ui_record`'s
+shape is plain `serde_json::to_string` with no envelope beyond the kind-1 record header, provable
+with any `Serialize + TS` type, so `client/ui.rs`'s own test module builds a local `UUi { n: u32 }`
+and asserts the record bytes decode to `{"n":42}`. Keeps this cut inside `crates/engine` only, as
+the brief's own Files-touched line for steps 1-2 lists; cut 2's step 4 adds `PutsUi` for real once a
+fixture page needs one.
+
+### Zero-GC proof: `tests/no_alloc_ui.rs` (new test binary, `required-features = ["testing"]`)
+
+`ui_constant_value_does_not_grow_the_arena`: builds a real `GameInstance::<NGame>` (`Role::Client`)
+with a `Copy`-only `NUi { motd_id: u32 }` and an `NClient` whose `ui` always writes the same value,
+drives 40 warm-up `(on_frame heartbeat, frame)` pairs (past the one real `Default` -> constant
+change), then measures `abi::arena::live_bytes()` growth over 300 and 1,200 further frames and
+asserts equality (M15's own template, "equality, not a budget"). **Measured**: both windows read `0`
+B of growth in the passing run. **Failability proven** (required by the brief) by temporarily making
+`NClient::ui` write a different value every call: `8,064` B over 300 frames vs `35,712` B over 1,200
+(`~30.72` B/frame of growth the longer window alone paid for) -- watched red, reverted before
+committing.
+
+### Verified
+
+`pnpm test rust -t ui_` -> `rust pass 8 tests` (the 4 new `client::ui::tests::*` plus 3 pre-existing
+`game_instance::tests::client_poll_ui_*` plus `no_alloc_ui`'s own test). `pnpm test rust` (full) ->
+`rust pass 303 tests`. `pnpm test wasm -t puts` -> `wasm pass 3 tests`; `pnpm test wasm -t terrain`
+-> `wasm pass 3 tests` (both fixtures' `ClientSide` impls still compile and build to `.wasm`
+unchanged). `pnpm lint` -> `biome pass · rustfmt pass · clippy pass · tsc pass`. Full `pnpm test`/
+`pnpm test:slow`/browser suites not run (delegation prompt: targeted runs only, orchestrator gates
+the full suite).
+
+### Decisions needed / notes for cut 2
+
+- A test-only ABI export for the dirty flag (see above) -- exact name/signature and the
+  `ABI_VERSION` bump are cut 2's to choose and record.
+- The `context artifacts` line ("update `add-action-type` with a 'surface the outcome in `Ui`' step
+  if the session found it missing") was not exercised: this cut never added an action whose outcome
+  is surfaced through `Ui` (that needs a real fixture `Ui` field, cut 2's step 4). Left for cut 2 to
+  judge once `PutsUi` exists.
+- `docs/plan/device-checks.md`: brief says "none"; untouched.
