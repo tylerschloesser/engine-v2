@@ -4,9 +4,10 @@
 //! every fixture's `impl Game` header (docs/plan/12-store-and-game-trait.md Planning decisions
 //! "Shell types now, not later"). Behaviour lives elsewhere: `WorldRead`/`WorldWrite` are filled
 //! in by M12b (their methods, and `Authority`/`Predicting`/`View`, are out of scope here); so are
-//! `TickCx`/`FrameCx`/`DrawList`/`PresenceTable`/`OldStore`'s fields, named on each shell below.
-//! `FrameView`'s fields are real now (M16b, minimal), re-exported here the same way `TickCx`'s
-//! are.
+//! `TickCx`/`FrameCx`/`PresenceTable`/`OldStore`'s fields, named on each shell below. `FrameView`'s
+//! fields are real (M16b, grown by M17), and `DrawList`'s are real as of M17 (0018 §2):
+//! `crate::client::drawlist`/`crate::client::frame_view` re-export here, the same way `TickCx`'s
+//! `authority.rs` does.
 
 use ts_rs::TS;
 
@@ -99,10 +100,9 @@ pub struct FrameCx<G: Game> {
 /// signatures name it at this path (same pattern as `WorldRead`/`WorldWrite`/`TickCx` below).
 pub use crate::client::frame_view::{Clocks, FrameView};
 
-/// Shell (M17 gives it fields, 0018 §2): the per-frame draw list `ClientSide::extract` fills.
-pub struct DrawList {
-    _private: (),
-}
+/// Real now (M17, 0018 §2): the per-frame draw list `ClientSide::extract` fills. Re-exported here
+/// (built by `crate::client::drawlist`) for the same reason `FrameView`/`Clocks` are, above.
+pub use crate::client::drawlist::DrawList;
 
 /// Shell (M19 gives it fields, 0001: "Presence is readable by exactly one game hook, `admit`"):
 /// the presence samples `Game::admit` reads.

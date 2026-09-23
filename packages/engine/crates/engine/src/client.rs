@@ -6,6 +6,7 @@
 
 pub mod camera;
 pub mod core;
+pub mod drawlist;
 pub mod frame_view;
 pub mod input;
 pub mod replica;
@@ -16,6 +17,10 @@ pub mod upload;
 
 pub use camera::CameraBlock;
 pub use core::{ActionError, ClientCore, FrameSummary, OUTBOX_CAPACITY};
+pub use drawlist::{
+    ANCHOR_CURSOR_TILE, Draw, DrawList, FLIP_X, KIND_BAR, KIND_CIRCLE, KIND_GHOST, KIND_RADIAL,
+    KIND_RECT, KIND_RING, KIND_SPRITE, PREDICTED, SCREEN_PX_STROKE, SpriteId, snap_window_origin,
+};
 pub use frame_view::{Clocks, FrameView};
 pub use input::{InputEvent, InputQueue};
 pub(crate) use replica::DirtyEvent;
