@@ -188,13 +188,9 @@ test('vertical_slice', async ({ page }, testInfo) => {
   // Panning + real per-connection state (camera, uplink pacing) wakes the sim worker externally
   // far more often than its own ~50 ms pacing timer fires (every `client.camera.tick()` real rAF
   // frame writes the camera block and, when the 0010 rate limit allows, sends a fresh uplink
-  // batch) -- `worker/sim.ts`'s `wokenBy === lastWokenBy` guard (ADR 0030) then skips
-  // `atomicsTimer.poll()` on most passes, since most passes see an external wake, not a clean
-  // timeout. Ticking does not stall (`SimHost`'s own resync catches up once a clean pass finally
-  // occurs), but it slows far below 20 Hz while this page pans continuously -- a real, previously
-  // unexercised interaction between real-time pacing and a real, continuously-rendering topology
-  // (recorded in this milestone's Deviations, not fixed here: `worker/sim.ts` is outside this
-  // milestone's Files touched, and the fix belongs with ADR 0030's own owner). Give it room.
+  // batch). Until M16d this starved the sim's pacing timer for seconds (`worker/sim.ts`'s
+  // `wokenBy === lastWokenBy` guard skipped every externally-woken pass); ADR 0032 fixed it and
+  // `connected-paced.spec.ts`'s `sim_ticks_steadily_under_external_wakes` guards it. Give it room.
   // Gate-round fix: a fixed real-time wait here has the same shape the Phase 2/5 pixel probes had
   // (`node scripts/repeat.mjs browser 15 --load 10`'s own finding, below) -- 3 s is a guess, not a
   // guarantee, and under the wake-starvation this comment already describes the real wait could
@@ -227,9 +223,17 @@ test('vertical_slice', async ({ page }, testInfo) => {
   // `golden-connected.json`'s `df47fa55da493c78` at tick 100 -- a sanity re-check of that exact
   // figure is `expect(referenceAt100).toBe('df47fa55da493c78')`, right below, so a change to the
   // fixture's own genesis/tick rule would be caught here too, not just by `pnpm golden`'s own gate.
+  //
+  // docs/plan/16d-sim-pacing-under-external-wakes.md, step 3: the threshold was 50 while the sim
+  // stalled under this page's own external wakes (ADR 0032); every tick then arrived in one resync
+  // burst, so the number did not matter. Now ticks arrive at 20 Hz and the wait is real time.
+  // `__tick` reads the clock block, which only moves when a frame carries content -- here the tick
+  // rule's once-a-second paint (ticks 0, 20, 40, ...) -- so any threshold resolves on a multiple of
+  // 20. 20 is the first one after genesis: the checkpoint hash below then covers two tick-rule
+  // writes, not genesis alone, and costs 1 s of real time instead of 3.
   await expect
     .poll(() => page.evaluate(() => window.__tick?.() ?? 0), { timeout: 20_000, intervals: [200] })
-    .toBeGreaterThanOrEqual(50)
+    .toBeGreaterThanOrEqual(20)
   const checkpoint = await page.evaluate(() => window.__worldHashAndTick?.())
   if (!checkpoint) throw new Error('vertical_slice: __worldHashAndTick missing')
 
