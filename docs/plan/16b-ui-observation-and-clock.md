@@ -253,3 +253,210 @@ prompt: targeted runs only, orchestrator gates the full suite).
   is surfaced through `Ui` (that needs a real fixture `Ui` field, cut 2's step 4). Left for cut 2 to
   judge once `PutsUi` exists.
 - `docs/plan/device-checks.md`: brief says "none"; untouched.
+
+## Cut 2 (steps 3-5): exact seam shapes as landed
+
+Built against the exact seam shapes in the section above (`UI_RECORD_KIND_UI = 1`,
+`UiObserver::mark_dirty()`, `ClientCore::mutations()`, the delivery-order fix). Commits `M16b step
+3: ...`, `M16b step 4: ...`, `M16b step 5: ...`, plus one `M16b: ...` context-artifact commit for
+the `add-action-type` skill. Base `20ef818`.
+
+### `client_ui_mark_dirty`: the dirty-flag test-only export (`ABI_VERSION` 12 -> 13)
+
+Exactly the shape steps 1-2's own Deviations named ("something in the shape of `sim_warm_one`/
+`client_gen_stats`'s own 'test hook' convention"), but actually mirrors `sim_region_hash`/
+`client_region_hash`/`sim_conn_counters`'s own shape more closely -- a zero-param, zero-region
+export reached only through `callParked`, not a production-facing one:
+
+```rust
+// abi/registry.rs, Instance trait:
+fn client_ui_mark_dirty(&mut self) -> Status { Status::Unsupported }
+// export_instance!'s extern wrapper:
+pub extern "C" fn client_ui_mark_dirty() -> u32 { $crate::abi::client_ui_mark_dirty(&__ENGINE_SLOT) as u32 }
+// abi/mod.rs:
+pub fn client_ui_mark_dirty<T: Instance>(slot: &Slot<T>) -> Status { .. rt.inst.client_ui_mark_dirty() }
+// game_instance.rs, GameInstance<G>:
+fn client_ui_mark_dirty(&mut self) -> Status {
+    match self { GameInstance::Client(c) => { c.ui.mark_dirty(); Status::Ok } _ => Status::Unsupported }
+}
+```
+
+`src/abi.ts`: `client_ui_mark_dirty: { role: 'client', params: 0, result: 'status' }`, `ABI_VERSION
+= 13`. No region crosses either way. `engine/test.markUiDirty(client): Promise<void>` (`test/
+client.ts`) reaches it through `callParked(client, 'client', 'client_ui_mark_dirty', [], 0)`, the
+same "reached by name through the parked-only `test-call` channel" shape `hostRegionHash`/
+`replicaHash`/`netCounters` already use -- requires the client worker parked. Native test
+`game_instance::tests::client_ui_mark_dirty_forces_a_rerun_with_no_new_frame` (a small `MGame`/
+`MClient` pair whose `ui` reads a module-level `static AtomicU32` standing in for real client-side
+state, since this test drives a `GameInstance` from the outside with no handle on `ClientInstance::
+client` itself) proves the whole path end to end: a real replica mutation with the signal still at
+`Default` writes nothing; the signal changing with no new host frame is unnoticed by a bare
+`frame()` call; `client_ui_mark_dirty()` then a `frame()` call forces a real rerun that finds the
+change and writes exactly `{"n":5}"`.
+
+### `client.ts`'s UI-ring drain: exact shape
+
+`pollActionResults` (unchanged name) now does one walk over every popped ring message in a drain,
+tracking `lastUiText: string | undefined` (overwritten on every kind-1 record seen -- Planning
+decisions' "coalesced to the newest value") and appending each kind-2 record's parsed `{seq,
+result}` into two **reused, index-tracked, parallel arrays** (`pendingSeqs: number[]`,
+`pendingOutcomes: ActionOutcome<unknown>[]`, a `pendingCount` local reset to 0 each call, `arr[i] =
+x` not `.push`) rather than firing `onActionResult` inline as the old M16 code did -- necessary
+because a kind-1 record can land *anywhere* in the byte stream relative to a kind-2 one (more than
+one `on_frame` call can land between two drains, each with its own kind-1-then-kind-2 pair), so
+whether a `Ui` record exists at all in this drain is only known once the whole walk is done. After
+the walk: if `lastUiText` is set, `JSON.parse` it once and call every `onUi` listener; then replay
+every pending `(seq, outcome)` pair to every `onActionResult` listener, in ring order -- "`onUi`
+then results" therefore holds inside one drain regardless of the two kinds' relative byte order
+(proven directly: `onui_fires_before_action_results` pushes the kind-2 record *first* in raw bytes
+and still observes `['ui', 'result']`).
+
+`client.onUi<Ui = unknown>(cb): () => void` mirrors `onActionResult<Reject>`'s own listener-array/
+unsubscribe shape exactly. `client.clock(): ClockSnapshot` (`ClockSnapshot = { authoritative,
+predicted, ticksPerSecond }`, all `number`) reads the clock block fresh every call into one reused
+object, mutating its three fields in place -- **the function implementing it is named
+`readClockSnapshot`, not `clock`**, because `clock` already names the injected `Clock` (`options.
+test?.clock ?? systemClock`) the whole `createClient` closure scope closes over; the public `Client`
+shape still gets the name `clock` via `clock: readClockSnapshot` in the returned object literal.
+Reuses the same `clockScratch: Uint32Array(6)` `dispatch`/`waitForLive` already read into -- never
+inside the same call as either, so sharing it costs nothing.
+
+### Existing test adjusted, not weakened: `ui_ring_delivers_results_in_order`'s "unknown kind"
+
+This M16-era unit test pushed a kind-1 record with 6 zero bytes as its body, commented "an unknown
+kind (1, M16b's future `Ui` record)" -- exactly the placeholder this milestone was always going to
+retire. Once kind 1 became real, `JSON.parse`ing that all-zero body would throw. Changed the raw
+kind byte from `1` to `99` (a genuinely unclaimed kind) and reworded the comment; every assertion
+and the two real kind-2 records the test proves arrive in order are untouched. This is a correction
+to keep the test proving what it always proved (skip-an-unknown-kind, deliver known kinds in order),
+not a weakening -- `onui_gets_only_latest_per_drain`/`onui_fires_before_action_results` (new) are
+what now cover kind 1's own real behaviour.
+
+### `fixtures/puts`: `PutsUi` and `PutsClient::ui`
+
+```rust
+#[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, TS)]
+#[ts(export)]
+pub struct PutsUi { pub motd: u32, pub note: u32, pub note_until: u32, pub global_ticks: u32 }
+```
+
+`note_until` crosses as a raw tick count (`u32`, `Tick::0`), not `engine::time::Tick` itself (no
+`TS`/`Serialize` derive there, and adding one to a core engine type for one fixture field felt like
+the wrong lever) -- 0006 "On the client" already expects the UI to derive remaining time from a raw
+`done_at` tick plus `client.clock()`, never to read a `Tick` type across the boundary directly.
+`PutsClient::ui` mirrors `Global::motd`/`day` (every client, 0011 "Scopes") into `motd`/
+`global_ticks`, and the caller's own `Player::note`/`note_until` (via `view.world().player(view.
+me())`) into `note`/`note_until` -- `0`/`0` on `Err(Unknown)` (not yet replicated), matching a
+never-set-or-already-expired note's own value, so a page never has to special-case "not replicated
+yet" separately from "no note".
+
+### `puts-ui.html`/`src/puts-ui.ts`: the fixture page, and a real trap it found
+
+A real, connected topology (`pumpUntilLive`, `puts-dispatch.ts`'s own shape), `onUi<PutsUi>`
+driving two `<div>`s (`#global` = `global_ticks`, `#progress` = a `note_until`/`clock()`-derived
+remaining-ticks value, `0` when `note_until === 0`) -- the game-owned DOM overlay 0003 names, never
+touched from anywhere but that one `onUi` handler. Both elements are seeded `'0'` at setup, before
+the handler is even registered: `onUi` only ever fires for a change delivered *after* a listener
+subscribes (the same "coalesced to the newest, but only from here on" shape `onActionResult` already
+has), and `pumpUntilLive`'s own ticking happens *before* this page's `onUi` call, so a real change it
+already produced (`Global.day`'s very first bump, `Puts::tick`'s own `cx.tick().0 % 20 == 0` firing
+at `cx.tick() == 0`, i.e. the first tick ever) would otherwise leave both elements blank forever.
+
+**A real, reproducible hang, found live and fixed before it reached a committed test**: two
+`stepTick`-family calls in a row, with no `resumeWorkers` in between, hangs the *second* one's own
+`stepSimTickSync` forever (`SPIN_LIMIT` exhausted, no error, no console output -- a silent spin, not
+a crash) -- `stepTick`'s own trailing `untilQuiescent()` parks every worker as its postcondition
+(Seams doc comment on `ClientTestHandle.workersReady` and `untilQuiescent` itself), and a parked
+worker's `Atomics.wait` is not woken by a bare `Atomics.notify` the way `stepSimTickSync`'s own wake
+assumes an already-running worker needs -- it needs the explicit `{ type: 'resume' }` message
+`resumeWorkers` sends. `connected.ts`'s own `__advance` already does exactly this (`await
+resumeWorkers(client)` first, every call, "safe and cheap" even when nothing was parked) but nothing
+documented it as a *rule* before this cut hit it directly: a fixed `page.evaluate` reproduction
+(`__dispatchSetNote` then a bare second `__stepTick(1)`) hung at `SPIN_LIMIT`, confirmed cured by
+inserting `__resume()` first. `puts-ui.spec.ts`'s own `advance(page, ticks)` helper does this before
+every `__stepTick` call, including the first (a no-op there). Recorded here since the next page that
+chains more than one `stepTick`/`stepSimTickSync` call per test will hit the identical silent hang
+otherwise.
+
+A **second, separate cross-thread-race finding**: dispatching an action and then advancing several
+ticks *in one batched `stepSimTickSync(n)` call* can apply all `n` ticks before the client worker's
+own action-ring drain (a real, separate OS thread, woken by `dispatch`'s own `RingProducer.tryPush`)
+ever gets a turn to admit it -- `stepSimTickSync` has no synchronous handshake with that drain the
+way `stepFrame`'s own lockstep has with the client's frame ack. Fixed in the spec by ticking one at a
+time, each its own `page.evaluate` round trip (a real wall-clock gap the client worker's OS thread
+can run in), polling `__confirmed` rather than assuming a fixed tick count.
+
+### `gc-ui.html`/`src/gc-ui.ts` + `budgets.json`'s `no_ui_change` entry: `no_ui_change_no_main_allocation`
+
+A real, connected, bare-canvas (no renderer, `gc-sim.ts`'s own shape) topology: `on_frame` only
+ever runs from a real client net pump, which only exists once linked, so a page with no connection
+at all would never call `ClientSide::ui` even once. A real host tick runs only every
+`TICK_EVERY_FRAMES = 50` frames (12 real ticks over the 600-frame window) -- ticking every frame,
+`gc-connected-terrain.ts`'s own shape, would cross `fx-puts`'s own 20-tick `Global.day` boundary
+roughly 30 times inside the window, which is a *different* test ( `dom_counter_follows_global`'s
+own territory), not this one. At 12 ticks (pre-tick 0..11), the rule's own `% 20 == 0` guard fires
+only at the very first tick, writing back exactly `PutsUi::default()`'s own values (`Global::
+default()` is already `day: 0, motd: 0`, and nothing here ever dispatches `SetNote`/`SetMotd`), so
+`push_ui_record` never runs for the life of this page -- `harness.stepFrame()` still runs every
+frame regardless, so real per-frame client work ("ticks") keeps happening throughout.
+
+**Measured `strict` first, as the brief's own note required** (no `"budgeted"` pre-emption):
+`main` 21.88-22.07 B/frame across 8 clean runs (`playwright test --project gc --grep "no_ui_change
+clean" --repeat-each 8 --workers 1`), `byFn` showing only the harness's own per-frame CDP
+bookkeeping (`next@:0`, `isTypedArray@:65`, `entries@:0`, `values@:0`, `evaluate@:305`, `run@gc-
+page`) -- **no `pollActionResults@client-*` entry at all**, the direct proof that zero UI-ring JSON
+parsing happened. `ceil(22.07) = 23`, `+ 8` margin `= 31`. `client`: a constant 0.8333 B/frame
+across 8 clean runs -- kept at the shared strict-worker `8` every sibling `client`/`gen0`/`sim` row
+uses, not `ceil(0.83) + 8`. Software mode: a flat `0.4` B/frame attributed to `main` across 6 clean
+runs (`GC_MODE=software`, `--repeat-each 6`); `ceil(0.4) = 1`, `+ 8 = 9`. Every control re-verified
+at these final numbers: `object`/`burst` on both `main` and `client`, hardware and software clean,
+all pass/trip as expected (`--repeat-each 4`, 20/20 hardware; `GC_MODE=software --repeat-each 4`,
+4/4 clean). `budgets.json` edited as text (never parse-and-reserialize), confirmed by `git diff` as
+a pure addition with no line outside the new block touched.
+
+### `zero_gc_action` re-measured, not changed: a real, permanent baseline shift
+
+Adding `type Ui = PutsUi` to `fixtures/puts` is a change every existing page built on that fixture
+inherits, including `gc-slice.ts`'s own `zero_gc_action` page (M16, unrelated to this cut's own
+Files touched, `slice.ts`/`gc-slice.ts` never edited here per the brief's own "don't touch" list).
+`gc-slice.ts` calls `stepSimTickSync(client, 1)` every one of its 600 measured frames, so `Global.
+day` now crosses `fx-puts`'s own 20-tick boundary about 30 times inside that window -- each one a
+real kind-1 record `main`'s own `pollActionResults` now parses, on top of the ~20 kind-2 `dispatchRaw`
+results the page already produced. **Re-measured** (`playwright test --project gc --grep
+"zero_gc_action clean" --repeat-each 8 --workers 1`): `main` now reads 112.06-112.51 B/frame (was
+106.59-106.92 pre-this-cut, M16's own Deviations) -- **still under the existing 115 B/frame budget**
+(headroom narrowed from ~8 B to ~2.5 B, not exceeded), so **no `budgets.json` change was made**: the
+brief names only `no_ui_change`'s own budget as this cut's to derive, and 0029's "never widen a
+budget that stops a control tripping" cuts the other way too -- a budget that still holds needs no
+touching. Every negative control on `zero_gc_action` (`object`/`burst`, all four isolates)
+re-verified still passing/tripping at the unchanged `115` (`--repeat-each 4`, 36/36). Recorded here
+as a genuine finding for whoever next changes `fx-puts`'s own `Ui` shape or tick rule: this page's
+own headroom is real but thin now, and a further `Ui`-producing change to this fixture should
+re-measure it again before assuming 115 still holds.
+
+### Suite time (report.json durations, this machine)
+
+`dom_counter_follows_global` 263 ms, `progress_from_done_at_and_clock` 276 ms, `no_ui_change clean`
+501 ms, `no_ui_change neg object main` 500 ms, `no_ui_change neg object client` 382 ms -- five new
+fast-tier tests, ~1.9 s combined, each well under 0020 §4's 3 s p95 target. Full `pnpm test`
+(quiet): `rust pass 306 tests`, `unit pass 196 tests`, `wasm pass 44 tests`, `browser pass 122 tests
+18s/25s` (was ~116-117 before this cut; +5 fast-tier tests here plus whatever M16c/M16d added in
+between).
+
+### Verified
+
+`pnpm test rust -t ui_` -> `rust pass 10 tests`. `pnpm test unit -t onui` -> `unit pass 2 tests`.
+`pnpm test browser -t dom_counter` -> `browser pass 1 tests`. `pnpm test browser -t
+progress_from_done` -> `browser pass 1 tests`. `pnpm test browser -t no_ui_change` -> `browser pass
+3 tests` (clean + 2 fast-tier `object` negatives; `burst` is `@slow`). `pnpm test browser -t
+vertical_slice` -> `browser pass 1 tests` (unchanged, M16). `pnpm test browser -t zero_gc_action`
+-> `browser pass 5 tests` (unchanged pass count, re-measured allocation above). Full `pnpm lint` ->
+`biome pass · rustfmt pass · clippy pass · tsc pass`. Full `pnpm test` -> all four suites pass, as
+above.
+
+### Decisions needed / notes for later milestones
+
+- `zero_gc_action`'s own `main` headroom is now ~2.5 B/frame, not ~8 B: a future change to
+  `fx-puts`'s `Ui`/tick rule should re-measure that page, not assume the existing 115 still holds by
+  a wide margin.
+- `docs/plan/device-checks.md`: brief says "none"; untouched.
