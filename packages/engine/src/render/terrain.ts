@@ -91,8 +91,11 @@ export interface TerrainRenderer {
    * `.claude/rules/hot-paths.md` forbids a fresh per-record array there. */
   writeIndir(entries: readonly IndirEntry[], count?: number): void
   /** Installs the tile-art array texture `render/art.ts` builds from `tiles.json`; rebuilds the bind
-   * group (a one-time/init cost: WebGPU bind groups are immutable once created). */
-  setTileArray(texture: GPUTexture): void
+   * group (a one-time/init cost: WebGPU bind groups are immutable once created). `gpuBytes` is
+   * `LoadedArt.gpuBytes` (docs/plan/17b-sprites-and-frame-budget.md fix round 1: `gpuBytes()` must
+   * cover "tile art with mips" too) -- a required argument, not optional, so a caller can never
+   * silently under-count by forgetting it. */
+  setTileArray(texture: GPUTexture, gpuBytes: number): void
   /** Encodes and submits one frame: the reused colour-attachment/pass-descriptor objects, one
    * `draw(3, 1, 0, 0)`. `target` may be a `GPUTexture` (skips `createView()` when `viewProbePasses`)
    * or an explicit `GPUTextureView`. */
@@ -131,9 +134,17 @@ export interface TerrainRenderer {
   /** `render/viewport.ts`'s own call, right after mutating `viewport` in place -- not a Seam name
    * itself, the wiring between this renderer and whatever owns its resize observer. */
   notifyViewportChange(): void
+  /** `engine/test`'s `gpuBytes` counter, this renderer's own share (docs/plan/
+   * 17b-sprites-and-frame-budget.md Scope: "page, indirection, tile art with mips" plus every other
+   * buffer this renderer creates): the fixed page texture (4 MiB), indirection texture, visual-table
+   * buffer and frame uniform, plus whatever the currently-installed tile array reports
+   * (`setTileArray`'s own `gpuBytes` argument, or the tiny placeholder's byte count before the first
+   * call). */
+  gpuBytes(): number
 }
 
 const TEXEL_BYTES = 4 // rg16uint: 2 x u16
+const INDIR_TEXEL_BYTES = 2 // r16uint
 
 function placeholderTileArray(device: GPUDevice): GPUTexture {
   const texture = device.createTexture({
@@ -248,6 +259,8 @@ export async function createTerrainRenderer(
   })
 
   let tileArray = placeholderTileArray(device)
+  // Placeholder: 1x1x1 rgba8unorm, no mips (matches `placeholderTileArray`'s own creation above).
+  let tileArrayGpuBytes = 4
   let bindGroup = buildBindGroup()
   let drawCallCount = 0
   const usedSlots = new Set<number>()
@@ -428,8 +441,9 @@ export async function createTerrainRenderer(
       }
     },
 
-    setTileArray(texture) {
+    setTileArray(texture, gpuBytes) {
       tileArray = texture
+      tileArrayGpuBytes = gpuBytes
       bindGroup = buildBindGroup()
     },
 
@@ -482,6 +496,16 @@ export async function createTerrainRenderer(
       for (let i = 0; i < viewportChangeCallbacks.length; i++) {
         ;(viewportChangeCallbacks[i] as (v: Viewport) => void)(viewport)
       }
+    },
+
+    gpuBytes() {
+      return (
+        PAGE_TEXTURE_EDGE * PAGE_TEXTURE_EDGE * TEXEL_BYTES +
+        INDIR_TEXTURE_EDGE * INDIR_TEXTURE_EDGE * INDIR_TEXEL_BYTES +
+        VISUAL_TABLE_BYTES +
+        FRAME_UNIFORM_BYTES +
+        tileArrayGpuBytes
+      )
     },
   }
 }

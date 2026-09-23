@@ -1,11 +1,13 @@
-//! Fixture game `fx-drawables` (docs/plan/17-drawlist-and-sprites.md, steps 2 and 6): a `Game` whose
-//! only interesting behaviour is `ClientSide::extract` -- one circle per replica entity, skipping
-//! the smallest ones above a zoom threshold (`frameview.zoom_matches_camera_block`'s own coverage:
-//! "the record count and DrawList hash change across it and nowhere else"). `genesis` still spawns
-//! exactly three fixed entities (unchanged since step 2: `drawlist_fixture_hash_golden`/
-//! `drawlist_zoom_threshold_hides_only_the_small_entity` depend on that count); the one `Action`,
-//! `Spawn` (step 6), is how the `drawables` zero-GC page reaches a few hundred entities without
-//! touching `genesis` -- always accepted, no rejection path. `tick` does nothing.
+//! Fixture game `fx-drawables` (docs/plan/17-drawlist-and-sprites.md, steps 2 and 6; docs/plan/
+//! 17b-sprites-and-frame-budget.md fix round 1): a `Game` whose only interesting behaviour is
+//! `ClientSide::extract` -- one circle (or, for an entity with `sprite: true`, one `sprite_id::QUAD`
+//! sprite instead) per replica entity, skipping the smallest ones above a zoom threshold
+//! (`frameview.zoom_matches_camera_block`'s own coverage: "the record count and DrawList hash
+//! change across it and nowhere else"). `genesis` still spawns exactly three fixed entities
+//! (unchanged since step 2: `drawlist_fixture_hash_golden`/`drawlist_zoom_threshold_hides_only_the_
+//! small_entity` depend on that count, every genesis entity's own `sprite` is `false`); the one
+//! `Action`, `Spawn` (step 6), is how the `drawables` zero-GC page reaches a few hundred entities
+//! without touching `genesis` -- always accepted, no rejection path. `tick` does nothing.
 
 use engine::client::{ClientSide, DrawList, FrameView, SpriteId};
 use engine::game::{
@@ -20,9 +22,9 @@ use ts_rs::TS;
 /// "add `SpriteId` constants helper for fixtures only"; `scripts/gen-sprite-art.mjs`'s own
 /// `sprites.json` output, `tests/browser/pages/public/drawables/`). Fixtures-only, not part of the
 /// engine crate's own `client` module: `SpriteId` itself and `DrawList::sprite` already exist (M17),
-/// this is just names for the three ids the fixture atlas happens to hold, for whichever later cut
-/// (the M17b frame-time benchmark, steps 4-6) wants to dispatch real sprite draws from `extract`
-/// without magic numbers. Not read by this cut's own `extract` (still circles only, unchanged).
+/// this is just names for the three ids the fixture atlas happens to hold. `QUAD` is read by
+/// `extract` (fix round 1: `Entity::sprite`); `STRIP`/`BLEED` are not dispatched by any entity,
+/// reached only through `drawables.html`'s own hand-filled `sprite.*` probes.
 pub mod sprite_id {
     use super::SpriteId;
 
@@ -69,27 +71,37 @@ impl Pos {
 }
 
 /// One drawable entity: a fixed position, whether it is the "small" kind `extract` hides once
-/// `FrameView::zoom()` climbs past [`SMALL_ZOOM_THRESHOLD`], and which DrawList layer it draws to
+/// `FrameView::zoom()` climbs past [`SMALL_ZOOM_THRESHOLD`], which DrawList layer it draws to
 /// (fix round 1, `docs/plan/17-drawlist-and-sprites.md`: `gc-drawables.ts`'s own population spreads
 /// entities across several layers, including a gap, so `counters.draws_equal_nonempty_layers` has
-/// more than one non-empty layer to prove against). `0` for every genesis entity (unchanged --
-/// `drawlist_fixture_hash_golden`'s own three `circle(0, ...)` calls are byte-identical either way).
+/// more than one non-empty layer to prove against), and whether `extract` draws it as a sprite
+/// (`sprite_id::QUAD`) instead of a circle (docs/plan/17b-sprites-and-frame-budget.md fix round 1:
+/// "the drawables zero-GC page loads sprites and draws some"). `false`/`0`/`false` for every
+/// genesis entity (unchanged -- `drawlist_fixture_hash_golden`'s own three `circle(0, ...)` calls
+/// are byte-identical either way).
 #[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Entity {
     pub pos: Pos,
     pub small: bool,
     pub layer: u8,
+    pub sprite: bool,
 }
 
-/// One action, `Spawn` (docs/plan/17-drawlist-and-sprites.md step 6, `layer` added fix round 1):
-/// the zero-GC `drawables` page's own way to reach a few hundred entities without hand-writing them
-/// into `genesis` (which stays fixed at its original three, module doc comment --
-/// `drawlist_fixture_hash_golden` and `drawlist_zoom_threshold_hides_only_the_small_entity` both
-/// depend on that exact count). Same shape as `fx-puts`'s own `Action::Spawn`.
+/// One action, `Spawn` (docs/plan/17-drawlist-and-sprites.md step 6, `layer` added fix round 1,
+/// `sprite` added docs/plan/17b-sprites-and-frame-budget.md fix round 1): the zero-GC `drawables`
+/// page's own way to reach a few hundred entities without hand-writing them into `genesis` (which
+/// stays fixed at its original three, module doc comment -- `drawlist_fixture_hash_golden` and
+/// `drawlist_zoom_threshold_hides_only_the_small_entity` both depend on that exact count). Same
+/// shape as `fx-puts`'s own `Action::Spawn`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, TS)]
 #[ts(export)]
 pub enum Action {
-    Spawn { at: Pos, small: bool, layer: u8 },
+    Spawn {
+        at: Pos,
+        small: bool,
+        layer: u8,
+        sprite: bool,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, TS)]
@@ -130,7 +142,11 @@ impl ClientSide<Drawables> for DrawablesClient {
                 continue;
             }
             let pos = WorldPos::from_tile(origin);
-            out.circle(e.layer, pos, [0.5, 0.5], color_for(id));
+            if e.sprite {
+                out.sprite(e.layer, pos, sprite_id::QUAD);
+            } else {
+                out.circle(e.layer, pos, [0.5, 0.5], color_for(id));
+            }
         }
     }
 }
@@ -170,16 +186,19 @@ impl Game for Drawables {
             pos: Pos { x: 0, y: 0 },
             small: false,
             layer: 0,
+            sprite: false,
         });
         w.spawn(Entity {
             pos: Pos { x: 5, y: 5 },
             small: false,
             layer: 0,
+            sprite: false,
         });
         w.spawn(Entity {
             pos: Pos { x: -3, y: 2 },
             small: true,
             layer: 0,
+            sprite: false,
         });
     }
 
@@ -187,11 +206,17 @@ impl Game for Drawables {
 
     fn apply(w: &mut dyn WorldWrite<Self>, _who: PlayerId, a: &Action) -> Result<(), Reject> {
         match *a {
-            Action::Spawn { at, small, layer } => {
+            Action::Spawn {
+                at,
+                small,
+                layer,
+                sprite,
+            } => {
                 w.spawn(Entity {
                     pos: at,
                     small,
                     layer,
+                    sprite,
                 });
                 Ok(())
             }

@@ -53,7 +53,7 @@ window.__terrainClient = {
     const art = await loadTileArt(device.device, '/terrain/tiles.json', {
       checkCompilation: device.checkCompilation,
     })
-    renderer.setTileArray(art.texture)
+    renderer.setTileArray(art.texture, art.gpuBytes)
     renderer.writeVisualTable(art.visualTableBytes)
 
     const wasm = await fixtureWasm('terrain')

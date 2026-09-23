@@ -9,7 +9,7 @@
 // 'burst']` (a production worker has no spare `postMessage` type for a message-driven tick, same
 // reasoning as every other production-topology page).
 import { expect, test } from '@playwright/test'
-import { budget } from '../support/budgets.ts'
+import { budget, expectWithinBudget } from '../support/budgets.ts'
 import { zeroGcSuite } from './gc/suite.ts'
 import { type AdapterInfo, expectAdapter } from './support/gpu.ts'
 import { openPage } from './support/page.ts'
@@ -30,6 +30,7 @@ declare global {
       pipelineSwitchesNow(): number
       instanceBytesNow(): number
       populatedLayers(): number[]
+      gpuBytes(): number
     }
   }
 }
@@ -150,4 +151,19 @@ test('counters.pipeline_switches_and_instance_bytes', async ({ page }, testInfo)
   expect((bytesAfter as number) - (bytesBefore as number)).toBe((recordCount as number) * 32)
 
   await page.evaluate(() => window.__drawablesTest?.park())
+})
+
+// docs/plan/17b-sprites-and-frame-budget.md fix round 1: "gpuBytes must cover the whole renderer
+// ... measured on a real page that has both terrain and drawables" -- `gc-drawables.html` is exactly
+// that page (a real TerrainRenderer + DrawablesRenderer, sprites installed). No `resume()`/`park()`
+// bracketing needed: `gpuBytes()` reads only cached byte counts on the two renderer objects, never
+// the client worker.
+test('counters.gpu_bytes_within_budget', async ({ page }, testInfo) => {
+  await openPage(page, '/gc-drawables.html')
+  const ready = await page.evaluate(() => window.__gc?.ready)
+  expectAdapter(testInfo, (ready?.adapter as AdapterInfo | null) ?? null)
+
+  const gpuBytes = await page.evaluate(() => window.__drawablesTest?.gpuBytes())
+  expect(gpuBytes).toBeGreaterThan(0)
+  expectWithinBudget('counters.render.gpuBytes', gpuBytes ?? Number.POSITIVE_INFINITY)
 })

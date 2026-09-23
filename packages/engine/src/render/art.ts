@@ -137,6 +137,11 @@ export type LoadedArt = {
   readonly manifest: TilesManifest
   readonly visualTableBytes: Uint8Array
   readonly cellCount: number
+  /** Sum of every mip level's byte size for `texture` (docs/plan/17b-sprites-and-frame-budget.md fix
+   * round 1: `gpuBytes` must cover "tile art with mips"): `cellCount` array layers x `rgba8unorm`'s
+   * 4 bytes/texel x each of `mipLevelCountFor(manifest.tile_px)` levels' own `max(1, tile_px >>
+   * level)^2` texels. `render/terrain.ts`'s `setTileArray` takes this alongside the texture. */
+  readonly gpuBytes: number
 }
 
 /** Fetches `manifestUrl`, validates it, fetches its (relative) `image`, loads every sheet cell into
@@ -210,5 +215,11 @@ export async function loadTileArt(
     ...(opts?.checkCompilation ? { checkCompilation: opts.checkCompilation } : {}),
   })
 
-  return { texture, manifest, visualTableBytes: buildVisualTable(manifest), cellCount }
+  let gpuBytes = 0
+  for (let level = 0; level < mipLevelCount; level++) {
+    const levelSize = Math.max(1, manifest.tile_px >> level)
+    gpuBytes += cellCount * levelSize * levelSize * 4
+  }
+
+  return { texture, manifest, visualTableBytes: buildVisualTable(manifest), cellCount, gpuBytes }
 }

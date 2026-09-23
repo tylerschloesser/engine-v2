@@ -136,12 +136,10 @@ export interface ClientOptions {
    * `createClient` itself -- rendering is main-thread-only and owns no WASM instance (0018 §1) --
    * kept here so a caller's one `ClientOptions` object is also what it hands `render/art.ts`'s
    * `loadTileArt`/`render/atlas.ts`'s `loadSpriteAtlas`, instead of a second, separately-threaded
-   * asset config. Steps 1-3 add the field only: no real page reads `options.assets.sprites` yet
-   * (`drawables.html`, this cut's own test page, has no `Client`/`ClientOptions` at all -- a
-   * hand-filled scene, M17's own precedent -- and calls `loadSpriteAtlas` with a literal URL
-   * directly); wiring a real `Client`-driven page to this field is steps 4-6's own territory,
-   * mirroring `ClientOptions.render`'s own field-then-wiring split (docs/plan/
-   * 09b-terrain-art-and-lifecycle.md Deviations). */
+   * asset config. `tests/browser/pages/src/gc-drawables.ts` (fix round 1) is the first real page to
+   * build one `assets` object and thread it into both `createClient` and the two asset loaders by
+   * reference, rather than typing the same URL a second time (every other real-client page still
+   * does the latter, unchanged by this cut). */
   assets?: { tiles: string; sprites?: string }
   /** docs/plan/09b-terrain-art-and-lifecycle.md, Seams (Provides). See `RenderOptions`'s own doc
    * comment for defaults and why `createClient` doesn't read this itself. */

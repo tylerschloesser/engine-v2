@@ -56,7 +56,7 @@ window.__terrain = {
     const r = requireRenderer()
     const d = device as RendererDevice
     const art = await loadTileArt(r.device, url, { checkCompilation: d.checkCompilation })
-    r.setTileArray(art.texture)
+    r.setTileArray(art.texture, art.gpuBytes)
     r.writeVisualTable(art.visualTableBytes)
   },
 

@@ -16,8 +16,10 @@
 // and visible in `extract()` throughout (`visible()`'s own margin, 0018 Provides) -- unlike `gc-
 // terrain.ts`'s small cache, this page is not testing eviction, only a DrawList genuinely wide
 // enough to matter for `render.drawCallsMax`/`instanceBytes`.
+
 import { clientTestHandle, createClient } from '../../../../src/client.ts'
 import { loadTileArt } from '../../../../src/render/art.ts'
+import { loadSpriteAtlas } from '../../../../src/render/atlas.ts'
 import { initDevice } from '../../../../src/render/device.ts'
 import {
   attachDrawables,
@@ -100,6 +102,11 @@ declare global {
        * truth `counters.draws_equal_nonempty_layers` checks `drawCallsNow()`'s delta against,
        * never derived from `render/drawables.ts`'s own `computeLayerOffsets`/`layerCounts`. */
       populatedLayers(): number[]
+      /** `engine/test`'s `gpuBytes` counter, the whole renderer (docs/plan/
+       * 17b-sprites-and-frame-budget.md fix round 1: "must cover the whole renderer"): `renderer.
+       * gpuBytes()` (terrain: page, indirection, tile art, visual table, frame uniform) plus
+       * `drawablesRenderer.gpuBytes()` (instance buffer, DrawFrame uniform, sprite atlas + tables). */
+      gpuBytes(): number
     }
   }
 }
@@ -108,16 +115,24 @@ const wasm = await fixtureWasm('drawables')
 const canvas = document.createElement('canvas')
 const clock = createManualClock()
 
+// One `ClientOptions.assets` object, threaded to both `createClient` (docs/plan/
+// 17b-sprites-and-frame-budget.md fix round 1: "ClientOptions.assets.sprites is read by the real
+// client path") and the two real asset loaders below, rather than the literal URL typed twice --
+// research found no existing real-client page building one shared object this way (every one of
+// them still passes `options.assets` decoratively and calls `loadTileArt` with a second, separately
+// typed literal); this page is the first to actually thread it.
+const assets = { tiles: '/terrain/tiles.json', sprites: '/drawables/sprites.json' }
+
 const device = await initDevice()
 const renderer = await createTerrainRenderer(device.device, {
   colorFormat: 'rgba8unorm',
   viewProbePasses: device.viewProbePasses,
   checkCompilation: device.checkCompilation,
 })
-const art = await loadTileArt(device.device, '/terrain/tiles.json', {
+const art = await loadTileArt(device.device, assets.tiles, {
   checkCompilation: device.checkCompilation,
 })
-renderer.setTileArray(art.texture)
+renderer.setTileArray(art.texture, art.gpuBytes)
 renderer.writeVisualTable(art.visualTableBytes)
 
 const client = createClient({
@@ -129,6 +144,7 @@ const client = createClient({
     connect: true,
   },
   genWorkers: 1,
+  assets,
   test: { clock, flags: { gcHook: true } },
 })
 await pumpUntilLive(client)
@@ -157,6 +173,14 @@ const drawablesRenderer: DrawablesRenderer = await createDrawablesRenderer(devic
   checkCompilation: device.checkCompilation,
 })
 attachDrawables(renderer, drawablesRenderer)
+
+// docs/plan/17b-sprites-and-frame-budget.md fix round 1: "loads the atlas into the real renderer".
+// One-time setup (0016 §2), like `loadTileArt` above -- `setSpriteAtlas` only swaps texture/bind-
+// group references, never touched again inside `drive()`.
+const spriteAtlas = await loadSpriteAtlas(device.device, assets.sprites, {
+  checkCompilation: device.checkCompilation,
+})
+drawablesRenderer.setSpriteAtlas(spriteAtlas)
 
 const { cameraState } = client
 // Wide enough to keep every populated entity's own chunk subscribed (and inside `visible()`,
@@ -187,6 +211,10 @@ const POPULATE_COUNT = 300
 const GRID_COLS = 20
 const GRID_SPACING = 4
 const POPULATE_LAYERS = [0, 3, 7]
+// docs/plan/17b-sprites-and-frame-budget.md fix round 1: "draws some" -- every 10th populated
+// entity draws as a sprite (`sprite_id::QUAD`) instead of a circle, 30 of the 300, so the measured
+// window's own DrawList genuinely contains sprite-kind records, not just circles.
+const SPRITE_EVERY = 10
 let seq = 1
 for (let i = 0; i < POPULATE_COUNT; i++) {
   const gx = i % GRID_COLS
@@ -194,8 +222,9 @@ for (let i = 0; i < POPULATE_COUNT; i++) {
   const x = (gx - GRID_COLS / 2) * GRID_SPACING
   const y = (gy - Math.ceil(POPULATE_COUNT / GRID_COLS) / 2) * GRID_SPACING
   const layer = POPULATE_LAYERS[i % POPULATE_LAYERS.length]
+  const sprite = i % SPRITE_EVERY === 0
   const bytes = new TextEncoder().encode(
-    JSON.stringify({ Spawn: { at: { x, y }, small: false, layer } }),
+    JSON.stringify({ Spawn: { at: { x, y }, small: false, layer, sprite } }),
   )
   dispatchRaw(client, seq, bytes)
   seq += 1
@@ -253,7 +282,9 @@ const target = device.device.createTexture({
 // never exercised), spawned far outside `POPULATE_HALF_EXTENT` so it never enters `visible()` and
 // never perturbs the rendered/counted DrawList.
 const EXTRA_SPAWN_JSON_BYTES = new TextEncoder().encode(
-  JSON.stringify({ Spawn: { at: { x: 1_000_000, y: 1_000_000 }, small: false, layer: 0 } }),
+  JSON.stringify({
+    Spawn: { at: { x: 1_000_000, y: 1_000_000 }, small: false, layer: 0, sprite: false },
+  }),
 )
 const DISPATCH_EVERY_FRAMES = 30
 let frame = 0
@@ -339,6 +370,9 @@ window.__drawablesTest = {
   },
   populatedLayers() {
     return POPULATE_LAYERS
+  },
+  gpuBytes() {
+    return renderer.gpuBytes() + drawablesRenderer.gpuBytes()
   },
 }
 

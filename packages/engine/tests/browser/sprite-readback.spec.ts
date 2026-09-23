@@ -7,7 +7,6 @@
 // centre" is exactly what let the M09b magnified-sampling inversion ship unnoticed.
 import { expect, test } from '@playwright/test'
 import { expectPixel, type PixelBuffer } from '../../src/test/render.ts'
-import { expectWithinBudget } from '../support/budgets.ts'
 import { buildDrawListBytes, type DrawRecordSpec, microDrawCamera } from './support/draw-scene.ts'
 import { expectAdapter, expectNoGpuErrors } from './support/gpu.ts'
 import { openPage } from './support/page.ts'
@@ -262,16 +261,6 @@ test('sprite.layering_with_shapes', async ({ page }, testInfo) => {
   const spriteBelow: DrawRecordSpec = { ...sprite, layer: 0 }
   pixels = await render(page, [rectOnTop, spriteBelow], CAMERA)
   expectPixel(pixels, 30, 28, [10, 20, 30, 255], TOL)
-
-  expectNoGpuErrors(await page.evaluate(() => window.__drawables?.errors() ?? []))
-})
-
-test('counters.gpu_bytes_within_budget', async ({ page }, testInfo) => {
-  await initWithSprites(page, testInfo)
-
-  const gpuBytes = await page.evaluate(() => window.__drawables?.gpuBytes())
-  expect(gpuBytes).toBeGreaterThan(0)
-  expectWithinBudget('counters.render.gpuBytes', gpuBytes ?? Number.POSITIVE_INFINITY)
 
   expectNoGpuErrors(await page.evaluate(() => window.__drawables?.errors() ?? []))
 })

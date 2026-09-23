@@ -57,6 +57,9 @@ function fakeRenderer(): TerrainRenderer {
     onViewportChange() {},
     onEncode() {},
     notifyViewportChange() {},
+    gpuBytes() {
+      return 0
+    },
   }
 }
 

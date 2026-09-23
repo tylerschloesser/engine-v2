@@ -102,6 +102,9 @@ function fakeRenderer(): TerrainRenderer & { drawCallTargets: unknown[] } {
     onViewportChange() {},
     onEncode() {},
     notifyViewportChange() {},
+    gpuBytes() {
+      return 0
+    },
     drawCallTargets,
   }
 }

@@ -149,7 +149,7 @@ const renderer: TerrainRenderer = await createTerrainRenderer(device.device, {
 const art = await loadTileArt(device.device, '/terrain/tiles.json', {
   checkCompilation: device.checkCompilation,
 })
-renderer.setTileArray(art.texture)
+renderer.setTileArray(art.texture, art.gpuBytes)
 renderer.writeVisualTable(art.visualTableBytes)
 
 // docs/plan/16d-sim-pacing-under-external-wakes.md, step 4: a main-side copy of the GPU indirection
