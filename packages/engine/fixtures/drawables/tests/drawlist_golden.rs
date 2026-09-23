@@ -175,3 +175,81 @@ fn drawlist_fixture_hash_is_pure_function_of_replica_and_camera() {
         "same replica-building script + same camera => byte-identical"
     );
 }
+
+/// Fix round 1 (docs/plan/17-drawlist-and-sprites.md, coordinator review): the version of this test
+/// that used to live in `crates/engine/src/client/frame_view.rs` built a `FrameView` by hand and
+/// read `zoom()` straight back -- it proved the accessor exists, never the *wiring*
+/// (`game_instance.rs`'s `camera_view.zoom = camera.tiles_across`, `px_per_tile` derived from
+/// `camera.viewport_px`). This version drives a real `GameInstance<Drawables>` (sim + client)
+/// through the actual `Instance::frame` ABI method, with a real `CameraBlock` whose `tiles_across`
+/// crosses `SMALL_ZOOM_THRESHOLD` -- `drawlist_len()` (fx-drawables' own zoom-skip logic in
+/// `extract`) is the observable proxy for `zoom()`'s wiring, and `LAST_PX_PER_TILE` (a thread-local
+/// `extract` records every call, module doc comment there) is the observable proxy for
+/// `px_per_tile()`'s. Self-contained rather than reusing `drive_real_game_instance` (deliberately
+/// not refactored: that function's own `RegionLayout`/`GameInstance` lifetime shape is exactly
+/// right for the golden test and not worth risking for this one).
+#[test]
+fn frameview_zoom_matches_camera_block() {
+    use fx_drawables::LAST_PX_PER_TILE;
+
+    let mut sim_layout = RegionLayout::new();
+    let mut sim = GameInstance::<Drawables>::init(Role::Sim, GAME_CFG, &mut sim_layout).unwrap();
+    assert_eq!(sim.sim_genesis(), Status::Ok);
+    assert_eq!(sim.sim_connect(0), Status::Ok);
+
+    let mut client_layout = RegionLayout::new();
+    let mut client =
+        GameInstance::<Drawables>::init(Role::Client, GAME_CFG, &mut client_layout).unwrap();
+
+    // Warm-up camera: only `centre`/`half_extent_tiles` matter for subscription (0010), so
+    // `tiles_across`/`viewport_px` here are irrelevant to which entities land in the replica --
+    // varied for real only in the loop below, after every genesis entity is already resident.
+    let warmup_camera = shared_camera();
+    let mut uplink_buf = [0u8; 4096];
+    let mut downlink_buf = [0u8; 65536];
+    for _ in 0..8 {
+        assert_eq!(client.frame(0.0, &warmup_camera, &mut []), Status::Ok);
+        let up_len = client.client_poll_uplink(0, &mut uplink_buf);
+        if up_len > 0 {
+            assert_eq!(sim.sim_admit(0, &uplink_buf[..up_len]), Status::Ok);
+        }
+        assert_eq!(sim.sim_tick(), Status::Ok);
+        if let Ok(down_len) = sim.sim_build_frame(0, &mut downlink_buf)
+            && down_len > 0
+        {
+            assert_eq!(
+                client.on_frame(&downlink_buf[..down_len as usize]),
+                Status::Ok
+            );
+        }
+    }
+
+    // The real device-pixel viewport (`CameraBlock::viewport_px`, steps 4-6 Deviations
+    // "`px_per_tile()` wired for real"): fixed across every zoom level below, matching a page that
+    // never resizes mid-check.
+    // Taller than wide, deliberately: `viewport_px[1]` (not `[0]`) is the max, so a formula that
+    // drops the `.max()` and reads only `viewport_px[0]` disagrees with the real one.
+    const VIEWPORT_PX: [f32; 2] = [450.0, 800.0];
+    let mut camera = warmup_camera;
+    camera.viewport_px = VIEWPORT_PX;
+
+    for (tiles_across, want_count, label) in [
+        (SMALL_ZOOM_THRESHOLD - 1.0, 3u32, "below"),
+        (SMALL_ZOOM_THRESHOLD, 3u32, "at (inclusive: `>`, not `>=`)"),
+        (SMALL_ZOOM_THRESHOLD + 1.0, 2u32, "above"),
+    ] {
+        camera.tiles_across = tiles_across;
+        assert_eq!(client.frame(0.0, &camera, &mut []), Status::Ok);
+        assert_eq!(
+            client.drawlist_len(),
+            want_count,
+            "record count at tiles_across={tiles_across} ({label})"
+        );
+        let want_px_per_tile = VIEWPORT_PX[0].max(VIEWPORT_PX[1]) / tiles_across;
+        assert_eq!(
+            LAST_PX_PER_TILE.with(|c| c.get()),
+            want_px_per_tile,
+            "px_per_tile() at tiles_across={tiles_across}"
+        );
+    }
+}

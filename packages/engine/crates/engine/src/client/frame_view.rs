@@ -342,16 +342,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn frameview_zoom_matches_camera_block() {
-        let world = FWorld;
-        let registry = registry_1x1();
-        let entities = BTreeMap::new();
-        let visible = TileRect::new(TilePos::new(0, 0), TilePos::new(0, 0));
-        // `zoom()` is a plain passthrough of whatever `game_instance.rs` wires in from
-        // `CameraBlock::tiles_across` -- this proves the accessor, the wiring itself is proven end
-        // to end by the wasm-under-Node publish test (Deviations).
-        let fv = view(&world, &entities, &registry, visible, 42.5);
-        assert_eq!(fv.zoom(), 42.5);
-    }
+    // `frameview_zoom_matches_camera_block` used to live here, built by hand through `view()`
+    // above -- it proved `FrameView::zoom()` reads back whatever field it was constructed with,
+    // never the real wiring (`game_instance.rs`'s `camera_view.zoom = camera.tiles_across`).
+    // Fix round 1 (docs/plan/17-drawlist-and-sprites.md, coordinator review): moved to
+    // `fixtures/drawables/tests/drawlist_golden.rs`, which can drive a real `GameInstance<
+    // Drawables>` through the actual `Instance::frame` ABI method with a real `CameraBlock` --
+    // `crates/engine` itself has no concrete `Game` whose `extract()` exposes `zoom()`/
+    // `px_per_tile()` observably, only the local test-only `FGame`/`TestGame`/`MGame` fixtures
+    // that don't route through a real camera at all.
 }

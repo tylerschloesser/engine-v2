@@ -13,7 +13,22 @@ use engine::game::{
 };
 use engine::world::{Footprint, Registry, Tile, TilePos, TraitSet, WorldPos};
 use engine::worldgen::Worldgen;
+use std::cell::Cell;
 use ts_rs::TS;
+
+thread_local! {
+    /// Test-only observation hook (docs/plan/17-drawlist-and-sprites.md, fix round 1):
+    /// `extract` records `view.px_per_tile()` here on every call, so a native test can observe
+    /// the real `game_instance.rs` wiring end to end (`GameInstance::frame` -> `extract`) without
+    /// touching any `Draw` record -- `drawlist_fixture_hash_golden` is unaffected, since nothing
+    /// about the DrawList bytes changes. `thread_local`, not a plain `static`/`AtomicU32`: this
+    /// crate's own tests (`cargo nextest`) run on separate threads, and a `Cell<f32>` needs no
+    /// `to_bits` (`.claude/rules/determinism.md`'s own ban -- `extract` is client-only, outside
+    /// the deterministic core, so the rule does not bind this value's *meaning*, but there is no
+    /// reason to reach for it when a thread-local `Cell` avoids the question entirely). Never read
+    /// by `extract`/`Drawables` itself.
+    pub static LAST_PX_PER_TILE: Cell<f32> = const { Cell::new(0.0) };
+}
 
 /// Tiles across the long axis above which a "small" entity (`Entity::small`) is skipped by
 /// `extract` (Tests added: `frameview.zoom_matches_camera_block`'s own zoom-threshold coverage).
@@ -90,6 +105,7 @@ fn color_for(id: engine::game::EntityId) -> u32 {
 
 impl ClientSide<Drawables> for DrawablesClient {
     fn extract(&self, view: &FrameView<'_, Drawables>, out: &mut DrawList) {
+        LAST_PX_PER_TILE.with(|c| c.set(view.px_per_tile()));
         for (id, e, origin) in view.entities() {
             if e.small && view.zoom() > SMALL_ZOOM_THRESHOLD {
                 continue;
