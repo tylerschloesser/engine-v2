@@ -150,6 +150,39 @@ of the M03/M04 harness. Two differences from a harness page:
   baseline was read after `W_PARKED = 0` was published, so a wake in that window was lost:
   `Shell.observeWake`, `src/worker/shell.ts`). If this comes back, suspect another publish-then-read
   ordering before blaming the machine.
+- **A `parkWorkers`/`resumeWorkers`/`untilQuiescent` timeout, or a `stepFrame`/`stepSimTickSync`/
+  `asHarness.stepTick` ack-spin timeout, now names the worker (M16e, docs/plan/
+  16e-park-timeout-diagnosis.md).** Every one of these waits rejects/throws with the same shape:
+  `<what>: timed out after <limitMs> ms (turns=<n>, elapsedMs=<n>, longestGapMs=<n>)
+  workers=[{"isolate":"client","W_YIELD":0|1,"W_PARKED":0|1,"W_WAKE":<n>,"W_ACK":<n>,"dead":
+  false|true}, ...]` -- one entry per spawned worker, `dead` meaning `W_READY === Ready.Dead`
+  (`shell.fatal` already ran). Read `W_WAKE` vs `W_ACK` on the named worker first: `W_ACK` frozen
+  below `W_WAKE` is a worker stuck inside its own `body()` or a lost wake (`worker/shell.ts`'s
+  `observeWake`/`lastSeen` discipline, the M06b fix round 3 class of bug -- see the bullet above);
+  `dead: true` is a trap that reached `shell.fatal`; both `W_WAKE`/`W_ACK` moving normally on every
+  worker but the wait still timing out is main's own poll/spin starved (`turns`/`elapsedMs` for
+  `pollUntil`, `elapsedMs` alone for a spin -- a spin has no macrotask "turns", so `longestGapMs`
+  there just repeats `elapsedMs`). `pollUntil` (`parkWorkers`/`resumeWorkers`/`untilQuiescent`) keeps
+  its 10 s bound; the three ack-spin sites additionally bound themselves to 20 s wall-clock (checked
+  every ~1.05 M spins, so a healthy ack -- normally a handful -- never pays for the check) on top of
+  the older 2e9-iteration `SPIN_LIMIT` fallback, so a `window.__gc.run` call that reaches one of them
+  fails with this message well inside Playwright's 30 s test timeout instead of a bare "Test timeout
+  of 30000ms exceeded" with no other clue. If a bare 30 s timeout still shows up with *none* of this
+  message, the stall is outside these waits entirely -- a raw CDP round trip in `measure()`
+  (`Runtime.evaluate`/`HeapProfiler.*`/`Tracing.*`, `tests/browser/gc/{instrument,sessions,
+  cdp-flat}.ts`) has no bounded timeout of its own; M16e reproduced exactly this once, under an
+  artificially extreme ~40-way Chromium process oversubscription (`--workers 14 --repeat-each 3` on
+  a 14-core machine), and left it unaddressed (different subsystem, not this milestone's files).
+- **`--no-opt --no-sparkplug` can manufacture its own false regression.** M16e's own new branches in
+  a spin-wait ack loop (`spins++`, one bitwise mask check per iteration -- see the timeout-message
+  bullet above) cost nothing measurable under normal V8, but under forced-interpreter flags every
+  extra bytecode is real per-iteration cost; at heavy contention (`--workers 8 --repeat-each 8`) this
+  alone flipped the pre-existing `zero_gc_action neg burst sim` cross-isolate flake (next bullet) from
+  16/16 passing to 8/8 failing, reproducibly, purely from the added overhead -- confirmed by the same
+  runs passing normally (15/16, comparable to base's own rate) once the forced-interpreter flag was
+  removed. A `--no-opt --no-sparkplug` reproduction that only fails with a new, small, per-iteration
+  change and passes without it is not proof the change is wrong; re-check under normal V8 before
+  concluding anything.
 - **A target isolate's own negative control can still nudge a sibling isolate's own reading.** Even
   with the two bugs above fixed, a `burst`/`object` control on one isolate's own worker can measurably
   raise a *different* isolate's own `bytesPerFrame` (reproduces at `--workers 1`, one test, no

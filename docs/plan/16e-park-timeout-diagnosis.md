@@ -99,4 +99,161 @@ Add the new failure message's fields to the `gc-test` skill's debugging section.
 none
 
 ## Deviations
-(filled in during Phase 3)
+
+### Step 1: the enriched failure message (Provides, exact format)
+
+Both places (`pollUntil`, used by `parkWorkers`/`resumeWorkers`/`untilQuiescent`, and the three
+`SPIN_LIMIT`-based synchronous ack spins `window.__gc.run` reaches on a production-topology page --
+`stepFrame`, `stepSimTickSync`, `asHarness.stepTick`'s inner loop, all `packages/engine/src/test/
+client.ts`) now fail with the same shape, built only in the reject/throw branch:
+
+```
+<what>: timed out after <limitMs> ms (turns=<n>, elapsedMs=<n.n>, longestGapMs=<n.n>)
+workers=[{"isolate":"client","W_YIELD":0,"W_PARKED":1,"W_WAKE":3,"W_ACK":2,"dead":false}, ...]
+```
+
+One `workers` entry per spawned worker (`isolate` = `worker/protocol.ts`'s `isolateName(kind,
+index)`), `dead` = `W_READY === Ready.Dead` (`shell.fatal` already ran). `pollUntil` keeps its
+existing 10 s bound (unchanged per the brief) and reports real macrotask-poll `turns` plus the
+`longestGapMs` between them (case c, main's own poll starved). The three ack-spins have no
+macrotask turns to count (a synchronous busy-wait never yields), so `turns` is the spin count and
+`longestGapMs` repeats `elapsedMs` (one continuous span, not a series of gaps) -- they gained their
+own new 20 s wall-clock bound (`SPIN_TIME_LIMIT_MS`), checked only every `SPIN_CHECK_MASK + 1`
+(~1.05 M) spins so the success path never calls `now()` (a healthy ack is a handful of spins), on
+top of the pre-existing 2e9-iteration `SPIN_LIMIT` as a fallback. 20 s leaves 10 s of headroom under
+Playwright's 30 s test timeout for the rest of `measure()`'s own CDP round trips.
+
+Proved with temporary, reverted forced-timeout hacks (never committed): `parkWorkers` --
+`POLL_TIMEOUT_MS` at 50 ms and `allEqual(h, W_PARKED, 1)`'s target bumped to the impossible value 2 --
+produced, against a real `gc-topology` page:
+```
+parkWorkers: timed out after 50 ms (turns=17, elapsedMs=50.1, longestGapMs=5.4) workers=[{"isolate":"client","W_YIELD":1,"W_PARKED":1,"W_WAKE":1,"W_ACK":0,"dead":false},{"isolate":"sim","W_YIELD":1,"W_PARKED":1,"W_WAKE":1,"W_ACK":0,"dead":false},{"isolate":"gen0","W_YIELD":1,"W_PARKED":1,"W_WAKE":1,"W_ACK":0,"dead":false}]
+```
+`stepSimTickSync` -- `SPIN_TIME_LIMIT_MS` at 50 ms, `SPIN_CHECK_MASK` at `(1 << 4) - 1`, and the
+`want` value offset by `+999999` (an ack that can never arrive) -- produced, against the `sim` page,
+thrown from exactly `gc/instrument.ts:221` (the warm-up `window.__gc.run` call the evidence table
+names):
+```
+stepSimTickSync: the sim worker did not ack the step request: timed out after 50 ms (turns=3024576, elapsedMs=50.0, longestGapMs=50.0) workers=[{"isolate":"client","W_YIELD":0,"W_PARKED":0,"W_WAKE":1,"W_ACK":0,"dead":false},{"isolate":"sim","W_YIELD":0,"W_PARKED":0,"W_WAKE":2,"W_ACK":2,"dead":false},{"isolate":"gen0","W_YIELD":0,"W_PARKED":0,"W_WAKE":1,"W_ACK":1,"dead":false}]
+```
+After reverting both hacks: `topology`/`echo`/`zero_gc_action` clean + every negative control pass
+unchanged, `pnpm test browser` 123/123 at 17-18 s/25 s (matched the base measurement), `pnpm test`
+and `pnpm lint` green.
+
+The M03/M04 harness's own waits (`src/test/harness.ts`'s `awaitAck` spin and its `send`/`parkOne`
+message promises, which have no timeout of their own at all) are a different protocol (`step-block.ts`
+field names, no `W_WAKE`/`W_YIELD`/`W_PARKED`/`W_ACK`) and are not in this milestone's Files list;
+left unbounded and uninstrumented (Notes for later briefs).
+
+### Step 2: reproduce, then attribute -- not reproduced
+
+Roughly 255 test-runs across five batches, well past the brief's "roughly 60 runs... plus two loaded
+suite batches" bound, none of which reproduced the specific `parkWorkers`/ack-spin timeout step 1
+instruments:
+
+1. `pnpm exec playwright ... --grep "zero_gc_action neg object" --workers 3 --repeat-each 15` (60
+   runs, quiet): 60/60 passed.
+2. `... --grep "gc-loop neg object" --workers 3 --repeat-each 20` (40 runs, quiet): 40/40 passed.
+3. Same two greps combined, `--workers 3 --repeat-each 10` (60 runs), under the diagnostic
+   `--js-flags=--no-opt --no-sparkplug` (`gc` project, reverted after): 60/60 passed.
+4. `node scripts/repeat.mjs browser 8 --load 10` (the orchestrator's own suggested loaded batch),
+   still under the forced-interpreter flags: `pass=8 fail=0 hang=0 slowestSuiteSeconds=30`.
+5. Every `neg` control across `gc-loop`/`zero_gc_action`/`topology`/`echo`, `--workers 14
+   --repeat-each 3` (an artificially extreme ~40-way Chromium process oversubscription on this
+   14-core machine, on top of an ambient load average of 3-4; still under the forced-interpreter
+   flags): 84/87 passed. Of the 3 failures, one (`zero_gc_action neg burst gen0`) was an ordinary
+   attribution-verdict mismatch (not a timeout). The other two, both `zero_gc_action neg burst sim`,
+   were a **bare `Test timeout of 30000ms exceeded` with no other output at all** -- the exact
+   symptom the evidence table names, but *not* attributable to anything step 1 instruments: every one
+   of `pollUntil`/`stepFrame`/`stepSimTickSync`/`asHarness.stepTick` now throws its own message well
+   under 30 s, so whichever wait actually stalled here is outside all four. The likeliest candidate
+   is a raw CDP round trip inside `measure()` itself (`Runtime.evaluate`/`HeapProfiler.*`/
+   `Tracing.*`, `tests/browser/gc/{instrument,sessions,cdp-flat}.ts`) -- none of those calls carry a
+   timeout of their own, and at ~40-way process oversubscription the browser's own CDP message pump
+   stalling for 30 s+ is plausible independent of any protocol defect in this repo's own code. This
+   is a different subsystem, not named in this brief's Files list, and is left unaddressed here
+   (Notes for later briefs).
+
+A sixth batch chased what first looked like a real regression from step 1: at `--workers 8
+--repeat-each 8` under the forced-interpreter flags, `zero_gc_action neg burst sim` (a pre-existing,
+documented, unresolved cross-isolate-interference flake, `gc-test` skill) went from 16/16 passing on
+the pre-step-1 code to 8/8, then 8/8 again, failing with step 1's code -- a real, reproducible
+difference. Re-run without the forced-interpreter flags (normal V8), the same code and contention
+level passed 8/8, then 7/8 (one ordinary flake, comparable to the pre-existing rate), matching base's
+own 16/16-clean baseline within noise. Conclusion: step 1's new per-iteration branches in the ack
+spins (`spins++`, one bitwise mask check) cost nothing measurable under normal V8 (JIT-inlined,
+predicted), but under `--no-opt --no-sparkplug` every extra bytecode is real per-iteration
+interpreter cost, and at heavy contention that alone was enough to shift the timing of an
+already-fragile, already-documented cross-isolate flake. Not a regression under real execution;
+recorded in the `gc-test` skill as a caution about over-trusting a forced-interpreter reproduction
+of a change this small.
+
+### Two natural occurrences, found after step 1 landed (not forced)
+
+Ambient load on this machine climbed sharply partway through this session (`uptime` load averages
+went from 3.06/2.88/4.56 at the start to 6.54/9.88/11.64 and 7.55/9.20/11.21 later -- other activity
+on a shared machine, not something this session started deliberately). Two plain `pnpm test browser`
+runs at that point turned up both symptoms from the evidence table for real, with no forced flags and
+no artificial oversubscription:
+
+1. **`terrain: evicted slot shows new chunk, never stale texels`**, `parkWorkers`:
+   ```
+   parkWorkers: timed out after 10000 ms (turns=2033, elapsedMs=10001.2, longestGapMs=6.0) workers=[{"isolate":"client","W_YIELD":1,"W_PARKED":1,"W_WAKE":26,"W_ACK":5,"dead":false},{"isolate":"net","W_YIELD":1,"W_PARKED":1,"W_WAKE":5,"W_ACK":0,"dead":false},{"isolate":"gen0","W_YIELD":1,"W_PARKED":0,"W_WAKE":21,"W_ACK":21,"dead":false}]
+   ```
+   Read per the new skill bullet: `client`/`net` both parked (their ack backlog is irrelevant to
+   parking); `gen0` alone never parked. `gen0`'s own `W_WAKE === W_ACK` (21 = 21, fully caught up, not
+   stuck mid-`body()` on a backlog) and `dead: false` (no trap) -- so this is neither case (a) nor
+   (d). `parkWorkers` unconditionally calls `h.control.wake(gen0)` (an `Atomics.add` + `notify`) as
+   part of its own opening loop, before `pollUntil` starts polling; if that had landed normally,
+   `W_WAKE` would read 22, not 21, ten seconds later. It does not, which is either (b) a wake gen0's
+   own `Atomics.wait` genuinely never observed, or a very literal reading of (c): the gen0 *worker's
+   own OS thread* (not main's poll, which is what case (c) was written to mean) never got scheduled
+   long enough even to re-check its wait condition, on a machine that was, by the `uptime` reading
+   two paragraphs up, under real contention at the time. Standalone, this exact spec passed 5/5 in
+   1.5 s (`--repeat-each 5`, its own worker, no contention) -- it does not fail on its own, only
+   alongside the rest of the browser suite's own parallel worker/window processes plus whatever else
+   was contending for this machine at the time.
+2. **`gc-loop clean`**, bare timeout, immediately confirming the M03-harness gap flagged in step 1:
+   ```
+   Test timeout of 30000ms exceeded.
+   Error: page.evaluate: Test timeout of 30000ms exceeded.
+      at gc/instrument.ts:221
+   ```
+   No JS-thrown message at all -- exactly the evidence table's own `gc-loop neg object sim` row, and
+   exactly what step 1's Deviations above predicted: `gc-loop` drives `src/test/harness.ts`'s
+   `createHarness` (`resume`/`park` -> `send`/`parkOne`, a bare `postMessage` + `Promise` with *no*
+   timeout of its own at all, and `awaitAck`'s own `SPIN_LIMIT`-only spin), not `asHarness`/
+   `test/client.ts` -- neither carries this milestone's new bound. Confirms the M03/M04 harness is a
+   real, live gap, not a hypothetical one; still out of this milestone's Files list.
+
+A candidate mechanism worth naming for whoever investigates the `gen0` case next, **found but not
+confirmed, and therefore not fixed here** (a plausible fix without a named cause is exactly what the
+brief rules out): `src/worker/gen.ts`'s `body()` drains its *entire* `genRequest` ring in one
+uninterrupted `for (;;)` loop (`inst.call2(inst.x.gen_chunk, cx, cy)` per request, `worker/gen.ts`
+lines ~59-80) with no `W_YIELD` check inside that inner loop -- `runBlockingLoop`'s own check only
+runs *between* wakes, never mid-`body()`. A large enough backlog (this test evicts and regenerates
+many chunks) could in principle hold `gen0` inside `body()` long enough to miss a park request
+entirely until the whole backlog drains. It does not fit *this* occurrence's own numbers (`W_ACK`
+already equals `W_WAKE`, i.e. gen0 had already returned from `body()` and re-entered `Atomics.wait`
+before the capture), but it is a real, separate risk in the same file worth a future brief's own
+targeted reproduction (a large synthetic `genRequest` backlog, not general contention).
+
+**Step 4: landing step 1 alone.** Per the brief's own cut line, the reproduction effort above --
+roughly 255 synthetic runs past the bounded-effort threshold, plus two real occurrences that arrived
+unforced once ambient load rose -- still does not produce a clean, single, attributable cause for the
+`gen0` park-timeout instance: the per-worker state rules out (a) and (d) but cannot distinguish a
+genuine lost wake (b) from OS-level scheduling starvation of that worker's own thread (c-adjacent) on
+this one occurrence's own evidence. A fix aimed at either would be a guess. Step 1's instrumentation
+is committed and verified, and this session's own two natural occurrences are the milestone's own
+proof that it works exactly as intended: both named the correct worker (or the correct absence of a
+name, for the M03-harness case) in a message that used to be either a bare 10 s "timed out" with no
+detail or an uninformative bare 30 s Playwright timeout. Step 3 (fix the named cause) does not apply
+-- no cause was named with enough confidence to fix. The next real occurrence, locally or on CI, now
+either names the stuck worker directly or, for the M03/M04 harness's own gap, at least confirms
+(as it just did here) that the stall is that same known, already-flagged gap.
+
+### Context artifacts
+
+`gc-test` skill (`.claude/skills/gc-test/SKILL.md`, "Production-topology pages" section): the new
+failure-message shape and how to read it (which field names which of cases a/b/c/d), the CDP-level
+finding, and the forced-interpreter false-regression caution, all added as new bullets.
