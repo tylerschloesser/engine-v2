@@ -131,11 +131,18 @@ export interface ClientOptions {
    * game passes its world id, so each world keeps its own camera). `camera/persistence.ts`'s
    * `cameraStorageKey` turns this into the actual key; omitted means `'default'`. */
   cameraKey?: string
-  /** docs/plan/09-renderer-terrain.md, Seams (Provides): URL of `tiles.json` (M17b adds
-   * `sprites`). Not read by `createClient` itself -- rendering is main-thread-only and owns no
-   * WASM instance (0018 §1) -- kept here so a caller's one `ClientOptions` object is also what it
-   * hands `render/art.ts`'s `loadTileArt`, instead of a second, separately-threaded asset config. */
-  assets?: { tiles: string }
+  /** docs/plan/09-renderer-terrain.md, Seams (Provides): URL of `tiles.json`; `sprites` (docs/plan/
+   * 17b-sprites-and-frame-budget.md Seams, Provides) is URL of `sprites.json`. Not read by
+   * `createClient` itself -- rendering is main-thread-only and owns no WASM instance (0018 §1) --
+   * kept here so a caller's one `ClientOptions` object is also what it hands `render/art.ts`'s
+   * `loadTileArt`/`render/atlas.ts`'s `loadSpriteAtlas`, instead of a second, separately-threaded
+   * asset config. Steps 1-3 add the field only: no real page reads `options.assets.sprites` yet
+   * (`drawables.html`, this cut's own test page, has no `Client`/`ClientOptions` at all -- a
+   * hand-filled scene, M17's own precedent -- and calls `loadSpriteAtlas` with a literal URL
+   * directly); wiring a real `Client`-driven page to this field is steps 4-6's own territory,
+   * mirroring `ClientOptions.render`'s own field-then-wiring split (docs/plan/
+   * 09b-terrain-art-and-lifecycle.md Deviations). */
+  assets?: { tiles: string; sprites?: string }
   /** docs/plan/09b-terrain-art-and-lifecycle.md, Seams (Provides). See `RenderOptions`'s own doc
    * comment for defaults and why `createClient` doesn't read this itself. */
   render?: RenderOptions

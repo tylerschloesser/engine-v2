@@ -24,16 +24,32 @@ struct DrawFrame {
 }
 @group(0) @binding(0) var<uniform> frame: DrawFrame;
 
+// Sprite atlas + sprite table (docs/plan/17b-sprites-and-frame-budget.md Scope, Planning decisions
+// "Sprite table in data textures, not uniforms"): `atlas_tex` is the padded, 2-mip sprite sheet
+// (`render/atlas.ts`); `sprite_rect_tex`/`sprite_pivot_size_tex` are the 64x64 `rgba32float` data
+// textures a sprite id addresses at `(id % 64, id / 64)` with `textureLoad` (unfilterable in
+// compatibility mode, 0018 §7 -- loaded, never sampled). One bind group (Planning decisions).
+@group(0) @binding(1) var atlas_tex: texture_2d_array<f32>;
+@group(0) @binding(2) var atlas_sampler: sampler;
+@group(0) @binding(3) var sprite_rect_tex: texture_2d<f32>;
+@group(0) @binding(4) var sprite_pivot_size_tex: texture_2d<f32>;
+
 const ANCHOR_CURSOR_TILE: u32 = 1u;
 const SCREEN_PX_STROKE: u32 = 2u;
 const FLIP_X: u32 = 8u;
 
+const KIND_SPRITE: u32 = 0u;
 const KIND_CIRCLE: u32 = 1u;
 const KIND_RING: u32 = 2u;
 const KIND_RECT: u32 = 3u;
 const KIND_BAR: u32 = 4u;
 const KIND_RADIAL: u32 = 5u;
 const KIND_GHOST: u32 = 6u;
+
+// `render/atlas.ts`'s own `SPRITE_TABLE_EDGE`/`SPRITE_MIP_LEVEL_COUNT` (duplicated the same way
+// `DRAW_BYTES`/`CAPACITY` mirror `client/drawlist.rs`'s constants).
+const SPRITE_TABLE_EDGE: u32 = 64u;
+const SPRITE_MAX_LOD: f32 = 1.0; // SPRITE_MIP_LEVEL_COUNT - 1
 
 /// `SCREEN_PX_STROKE`'s own fixed on-screen width (device pixels), applied to `KIND_RING`'s band
 /// thickness -- the one kind here with a natural "stroke" (docs/plan/17-drawlist-and-sprites.md
@@ -54,6 +70,12 @@ struct VOut {
   @location(3) @interpolate(flat, either) flags: u32,
   @location(4) param: f32,
   @location(5) @interpolate(flat, either) stroke_uv: f32,
+  // Sprite-only (docs/plan/17b-sprites-and-frame-budget.md steps 1-3): `sprite_rect` is frame 0's own
+  // atlas rect in pixels (`fs_main` offsets it by the frame index); `sprite_world_size` is the
+  // sprite's own size in tiles (`sprites.json`'s `size`) -- both looked up once per vertex from the
+  // sprite tables (below) rather than a second `textureLoad` per fragment. Zero for every other kind.
+  @location(6) @interpolate(flat, either) sprite_rect: vec4<f32>,
+  @location(7) @interpolate(flat, either) sprite_world_size: vec2<f32>,
 }
 
 // Two triangles, six vertices, uv in [0, 1]^2 (`UBERQUAD_VERTEX_LAYOUT`'s own instance-step
@@ -90,11 +112,42 @@ fn vs_main(
     hidden = frame.cursor_valid == 0u;
   }
 
+  // Sprite kind (docs/plan/17b-sprites-and-frame-budget.md steps 1-3): geometry is built from the
+  // *unflipped* quad uv and the sprite's own pivot/size (looked up by sprite id, low 12 bits of
+  // `kind_layer_flags` -- 0018 §2's own packing), never from `uv`/`inst_size` above -- `FLIP_X`
+  // mirrors only the *sampled* texture (`sample_uv`, passed to `fs_main` as `out.uv`), never the
+  // sprite's own world footprint (deliberately decoupled: flipping a sprite must not move it).
+  // Every non-sprite kind is completely unaffected below: `pivot`/`box_size`/`box_uv` default to
+  // `0.5`/`inst_size`/`uv` (the flipped uv, unchanged from before this kind existed).
+  var pivot = vec2<f32>(0.5, 0.5);
+  var box_size = inst_size;
+  var box_uv = uv;
+  var sample_uv = uv;
+  var sprite_rect = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+  var sprite_world_size = vec2<f32>(0.0, 0.0);
+  if (kind == KIND_SPRITE) {
+    let sprite_id = kind_layer_flags & 0xFFFu;
+    let coord = vec2<i32>(i32(sprite_id % SPRITE_TABLE_EDGE), i32(sprite_id / SPRITE_TABLE_EDGE));
+    let rect = textureLoad(sprite_rect_tex, coord, 0);
+    let ps = textureLoad(sprite_pivot_size_tex, coord, 0);
+    pivot = ps.xy;
+    box_size = ps.zw;
+    let raw = quad_uv(vertex_index);
+    box_uv = raw;
+    sample_uv = raw;
+    if ((flags & FLIP_X) != 0u) {
+      sample_uv.x = 1.0 - sample_uv.x;
+    }
+    sprite_rect = rect;
+    sprite_world_size = box_size;
+  }
+
   // `(origin_tile - cam_tile) - cam_frac`, then `+ inst_pos` (already relative to `origin_tile`,
-  // Rust's own `relative_pos`) `+` this vertex's own offset inside the instance's `size` box
-  // (centred: the quad's own uv [0,1] maps to `[-size/2, size/2]`).
+  // Rust's own `relative_pos`) `+` this vertex's own offset inside the instance's own box (centred
+  // at `pivot` for a sprite, at `0.5` -- box-centred -- for every other kind: the quad's own uv [0,1]
+  // maps to `[-pivot, 1 - pivot] * box_size`).
   let rel_tile = vec2<f32>(origin_tile - frame.cam_tile) - frame.cam_frac;
-  let quad_tiles = (uv - vec2<f32>(0.5, 0.5)) * inst_size;
+  let quad_tiles = (box_uv - pivot) * box_size;
   let world_rel = rel_tile + inst_pos + quad_tiles;
 
   let half_viewport = frame.viewport_px * 0.5;
@@ -104,7 +157,7 @@ fn vs_main(
 
   var out: VOut;
   out.pos = select(vec4<f32>(ndc_x, ndc_y, 0.0, 1.0), vec4<f32>(10.0, 10.0, 10.0, 1.0), hidden);
-  out.uv = uv;
+  out.uv = sample_uv;
   out.color = color_raw;
   out.kind = kind;
   out.flags = flags;
@@ -113,6 +166,8 @@ fn vs_main(
   // fraction of `size.x` (`local = uv * 2 - 1` has derivative 2, folded into `fs_main`'s own use of
   // this value rather than here).
   out.stroke_uv = (STROKE_PX * frame.tiles_per_px) / max(inst_size.x, 1e-6);
+  out.sprite_rect = sprite_rect;
+  out.sprite_world_size = sprite_world_size;
   return out;
 }
 
@@ -126,6 +181,7 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
   let aa = max(fwidth(dist) * 0.5, 1e-5);
 
   var alpha = 0.0;
+  var frag_rgb = in.color.rgb;
   if (in.kind == KIND_CIRCLE) {
     alpha = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, dist);
   } else if (in.kind == KIND_RING) {
@@ -145,14 +201,56 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     alpha = select(0.0, 1.0, dist <= 1.0 && norm_angle <= in.param);
   } else if (in.kind == KIND_GHOST) {
     alpha = 0.5;
+  } else if (in.kind == KIND_SPRITE) {
+    // Sprite sampling (docs/plan/17b-sprites-and-frame-budget.md steps 1-3; binding rule: anchor the
+    // magnified path on `floor(texel + 0.5)`, never `floor(texel)` -- `docs/plan/
+    // 09b-terrain-art-and-lifecycle.md` Deviations "Fix round 2" found the inverted form saturates to
+    // a shared texel *edge* instead of the texel's own centre, blending ~50/50 with the neighbour
+    // almost everywhere. This is the same formula as `terrain.wgsl`'s fixed `sample_tile_art`, redone
+    // here per-axis (a sprite's rect need not be square relative to its own world size) and with an
+    // explicit level clamped to `SPRITE_MAX_LOD` (only 2 mip levels exist, unlike tile art's full
+    // pyramid).
+    let atlas_dims = textureDimensions(atlas_tex, 0);
+    let atlas_size = vec2<f32>(f32(atlas_dims.x), f32(atlas_dims.y));
+
+    // "frames are laid out left to right from rect" (Seams): frame `i`'s rect is `rect` shifted by
+    // `i * rect.w`; `param` carries the frame index here (Non-scope: "a game passes the frame in
+    // param"), never rotation/progress for this kind.
+    var frame_rect = in.sprite_rect;
+    let frame_index = floor(max(in.param, 0.0));
+    frame_rect.x = frame_rect.x + frame_index * frame_rect.z;
+
+    // Art texels per screen pixel, per axis (mirrors `terrain.wgsl`'s own `texels_per_px`, generalised
+    // off a single `art_size` scalar since a sprite's rect and world size need not share one aspect
+    // ratio): `rect_px / world_tiles` is atlas texels per tile; `* tiles_per_px` (tiles per screen
+    // pixel) converts to atlas texels per screen pixel.
+    let scale = max(
+      vec2<f32>(frame_rect.z, frame_rect.w) * frame.tiles_per_px /
+        max(in.sprite_world_size, vec2<f32>(1e-6, 1e-6)),
+      vec2<f32>(1e-6, 1e-6),
+    );
+    let texels_per_px = max(scale.x, scale.y);
+    let lod = clamp(max(0.0, log2(max(texels_per_px, 1e-6))), 0.0, SPRITE_MAX_LOD);
+
+    let texel = frame_rect.xy + in.uv * frame_rect.zw;
+    var sample_color: vec4<f32>;
+    if (lod <= 0.0) {
+      let anchor = floor(texel + vec2<f32>(0.5, 0.5));
+      let offset = texel - anchor;
+      let seamed = anchor + clamp(offset / scale, vec2<f32>(-0.5, -0.5), vec2<f32>(0.5, 0.5));
+      sample_color = textureSampleLevel(atlas_tex, atlas_sampler, seamed / atlas_size, 0, 0.0);
+    } else {
+      sample_color = textureSampleLevel(atlas_tex, atlas_sampler, texel / atlas_size, 0, lod);
+    }
+    frag_rgb = sample_color.rgb * in.color.rgb;
+    alpha = sample_color.a;
   } else {
-    // `KIND_SPRITE` (0) or any future kind this pipeline does not know: the atlas is M17b's
-    // (Non-scope here) -- nothing to draw yet.
+    // Any future kind this pipeline does not know.
     discard;
   }
 
   if (alpha <= 0.0) {
     discard;
   }
-  return vec4<f32>(in.color.rgb, in.color.a * alpha);
+  return vec4<f32>(frag_rgb, in.color.a * alpha);
 }

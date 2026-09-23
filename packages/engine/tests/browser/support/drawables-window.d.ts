@@ -1,5 +1,6 @@
-// Ambient `window.__drawables` type (docs/plan/17-drawlist-and-sprites.md, steps 4-6), shared by
-// `drawables.html`'s page script and `draw.*.spec.ts` -- same shape as `terrain-window.d.ts`'s own
+// Ambient `window.__drawables` type (docs/plan/17-drawlist-and-sprites.md, steps 4-6; docs/plan/
+// 17b-sprites-and-frame-budget.md steps 1-3: `loadSprites`/`gpuBytes`), shared by `drawables.html`'s
+// page script and `draw.*.spec.ts`/`sprite.*.spec.ts` -- same shape as `terrain-window.d.ts`'s own
 // precedent (M09): a hand-filled scene, no worker, no ABI instance.
 export {}
 
@@ -42,6 +43,14 @@ declare global {
       pipelineSwitches(): number
       instanceBytes(): number
       drawListDropped(): number
+      /** Fetches and installs `/drawables/sprites.json` (`render/atlas.ts`'s `loadSpriteAtlas`);
+       * `init()` must be called first. */
+      loadSprites(): Promise<void>
+      /** `engine/test`'s `gpuBytes` counter (docs/plan/17b-sprites-and-frame-budget.md). */
+      gpuBytes(): number
+      /** Reads the sprite atlas's own mip level 1 back to CPU (`sprite.no_bleed_at_mip1`);
+       * `loadSprites()` must be called first. */
+      readAtlasMip1(): Promise<{ width: number; height: number; data: number[] }>
     }
   }
 }

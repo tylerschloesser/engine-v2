@@ -1,17 +1,20 @@
 // DrawList renderer (docs/decisions/0018-renderer.md §2, §4 "Shapes need no art"; docs/plan/
-// 17-drawlist-and-sprites.md Scope, steps 4-6): `acquire()` the newest `drawList` triple-buffer slot,
-// one `queue.writeBuffer(instanceBuf, 0, slotView, 0, usedBytes)`, then one instanced `draw(6, n, 0,
-// first)` per non-empty layer through the uber-quad pipeline (`wgsl/uberquad.wgsl`) -- every kind
-// except sprite (M17b). Terrain and drawables share one render pass (Planning decisions "Final
-// main-thread bytes per frame"): `attachDrawables` wires this renderer's own `encodeInto` into
-// `render/terrain.ts`'s `onEncode` hook, so production issues one encoder/pass/commandBuffer for
-// both, and `TerrainRenderer.draw()`'s own `drawCalls()` counts every GPU draw call, terrain's
-// triangle included. `draw()`/`acquireFromBytes()` below are the standalone path (`renderTo` against
-// this renderer alone, no terrain): a probe test builds a header+body byte scene by hand (the same
-// "hand-fill the renderer directly" precedent `render/terrain.ts`'s `writePageChunk` etc. set, M09)
-// instead of driving a real client/worker.
+// 17-drawlist-and-sprites.md Scope, steps 4-6; docs/plan/17b-sprites-and-frame-budget.md Scope, steps
+// 1-3): `acquire()` the newest `drawList` triple-buffer slot, one `queue.writeBuffer(instanceBuf, 0,
+// slotView, 0, usedBytes)`, then one instanced `draw(6, n, 0, first)` per non-empty layer through the
+// uber-quad pipeline (`wgsl/uberquad.wgsl`) -- every kind including sprite (M17b: the atlas + two
+// sprite data textures join this renderer's one bind group, `setSpriteAtlas`). Terrain and drawables
+// share one render pass (Planning decisions "Final main-thread bytes per frame"): `attachDrawables`
+// wires this renderer's own `encodeInto` into `render/terrain.ts`'s `onEncode` hook, so production
+// issues one encoder/pass/commandBuffer for both, and `TerrainRenderer.draw()`'s own `drawCalls()`
+// counts every GPU draw call, terrain's triangle included. `draw()`/`acquireFromBytes()` below are
+// the standalone path (`renderTo` against this renderer alone, no terrain): a probe test builds a
+// header+body byte scene by hand (the same "hand-fill the renderer directly" precedent `render/
+// terrain.ts`'s `writePageChunk` etc. set, M09) instead of driving a real client/worker.
+
 import { DRAWLIST_BODY_BYTES, DRAWLIST_HEADER_BYTES } from '../sab/layout.js'
 import { BLOCK_BYTES, TripleReader } from '../sab/triple.js'
+import type { LoadedSpriteAtlas } from './atlas.js'
 import type { TerrainRenderer } from './terrain.js'
 import { UBERQUAD_WGSL } from './wgsl.generated.js'
 
@@ -184,6 +187,19 @@ export interface DrawablesRenderer {
    * count, not the array itself, so a caller never allocates to ask "how many draws should this
    * frame have issued". */
   nonEmptyLayerCount(): number
+  /** Installs a loaded sprite atlas (`render/atlas.ts`'s `loadSpriteAtlas`): swaps the atlas + two
+   * sprite data textures into this renderer's one bind group (docs/plan/
+   * 17b-sprites-and-frame-budget.md Planning decisions "Sprite table in data textures") and updates
+   * `gpuBytes()`. Before the first call, the sprite kind reads a tiny placeholder (never referenced
+   * by a real `sprite_id` until a manifest is loaded) -- the same "placeholder, then install" shape
+   * `TerrainRenderer.setTileArray` already uses. */
+  setSpriteAtlas(atlas: LoadedSpriteAtlas): void
+  /** `engine/test`'s `gpuBytes` counter (docs/plan/17b-sprites-and-frame-budget.md Scope, Tests
+   * added: `counters.gpu_bytes_within_budget`): the sum of every texture/buffer byte this renderer
+   * has created -- the fixed instance buffer (2 MiB) and DrawFrame uniform (48 B), plus whatever the
+   * currently-installed sprite atlas (`setSpriteAtlas`, or the tiny placeholder before the first
+   * call) reports as its own `gpuBytes`. */
+  gpuBytes(): number
 }
 
 function isTextureView(t: GPUTexture | GPUTextureView): t is GPUTextureView {
@@ -209,14 +225,86 @@ export async function createDrawablesRenderer(
     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
   })
 
+  // Sprite atlas + tables (docs/plan/17b-sprites-and-frame-budget.md Planning decisions "Sprite table
+  // in data textures, not uniforms"): one bind group, same as terrain's own explicit (not `'auto'`)
+  // layout for the same reason (`render/terrain.ts`'s own comment) -- every binding is declared here
+  // regardless of whether a real sprite atlas has been installed yet.
   const bindGroupLayout = device.createBindGroupLayout({
     label: 'uberquad',
-    entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } }],
+    entries: [
+      // FRAGMENT too, not VERTEX-only (M17's own original binding): the sprite kind's fragment stage
+      // now reads `frame.tiles_per_px` for its own lod computation (found by `uncapturederror` on
+      // this cut's first run -- every prior uber-quad kind read the frame uniform from the vertex
+      // stage only).
+      {
+        binding: 0,
+        visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+        buffer: { type: 'uniform' },
+      },
+      {
+        binding: 1,
+        visibility: GPUShaderStage.FRAGMENT,
+        texture: { sampleType: 'float', viewDimension: '2d-array' },
+      },
+      { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+      {
+        binding: 3,
+        visibility: GPUShaderStage.VERTEX,
+        texture: { sampleType: 'unfilterable-float', viewDimension: '2d' },
+      },
+      {
+        binding: 4,
+        visibility: GPUShaderStage.VERTEX,
+        texture: { sampleType: 'unfilterable-float', viewDimension: '2d' },
+      },
+    ],
   })
-  const bindGroup = device.createBindGroup({
-    layout: bindGroupLayout,
-    entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
+  const atlasSampler = device.createSampler({
+    magFilter: 'linear',
+    minFilter: 'linear',
+    mipmapFilter: 'linear',
+    addressModeU: 'clamp-to-edge',
+    addressModeV: 'clamp-to-edge',
   })
+  // Tiny placeholders (never addressed by a real `sprite_id` until `setSpriteAtlas` installs a real
+  // manifest): a 2-mip `2d-array` atlas (a 1x1 texture cannot itself carry 2 mip levels) and two
+  // 1x1 `rgba32float` data textures -- the same "placeholder, then install" shape `render/terrain.ts`'s
+  // `placeholderTileArray`/`setTileArray` already use.
+  function placeholderAtlas(): GPUTexture {
+    return device.createTexture({
+      label: 'sprite-atlas-placeholder',
+      size: [2, 2, 1],
+      format: 'rgba8unorm',
+      mipLevelCount: 2,
+      usage: GPUTextureUsage.TEXTURE_BINDING,
+      textureBindingViewDimension: '2d-array',
+    })
+  }
+  function placeholderSpriteTable(): GPUTexture {
+    return device.createTexture({
+      label: 'sprite-table-placeholder',
+      size: [1, 1, 1],
+      format: 'rgba32float',
+      usage: GPUTextureUsage.TEXTURE_BINDING,
+    })
+  }
+  let atlasTexture = placeholderAtlas()
+  let rectTexture = placeholderSpriteTable()
+  let pivotSizeTexture = placeholderSpriteTable()
+  let spriteAtlasGpuBytes = 2 * 2 * 4 + 1 * 1 * 4 + 1 * 1 * 16 * 2 // placeholder atlas mips + tables
+  function buildBindGroup(): GPUBindGroup {
+    return device.createBindGroup({
+      layout: bindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: uniformBuffer } },
+        { binding: 1, resource: atlasTexture.createView({ dimension: '2d-array' }) },
+        { binding: 2, resource: atlasSampler },
+        { binding: 3, resource: rectTexture.createView({ dimension: '2d' }) },
+        { binding: 4, resource: pivotSizeTexture.createView({ dimension: '2d' }) },
+      ],
+    })
+  }
+  let bindGroup = buildBindGroup()
   const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] })
   const shaderModule = device.createShaderModule({ code: UBERQUAD_WGSL, label: 'uberquad' })
   await opts.checkCompilation('uberquad', shaderModule)
@@ -404,6 +492,18 @@ export async function createDrawablesRenderer(
       let n = 0
       for (let i = 0; i < LAYER_COUNT; i++) if ((layerCounts[i] as number) > 0) n++
       return n
+    },
+
+    setSpriteAtlas(atlas) {
+      atlasTexture = atlas.atlasTexture
+      rectTexture = atlas.rectTexture
+      pivotSizeTexture = atlas.pivotSizeTexture
+      spriteAtlasGpuBytes = atlas.gpuBytes
+      bindGroup = buildBindGroup()
+    },
+
+    gpuBytes() {
+      return INSTANCE_BUFFER_BYTES + DRAW_FRAME_UNIFORM_BYTES + spriteAtlasGpuBytes
     },
   }
 }

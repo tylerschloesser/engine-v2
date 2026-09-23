@@ -172,6 +172,45 @@ async function readPixelsFromTarget(target: RenderTarget): Promise<PixelBuffer> 
   return { width: target.width, height: target.height, data }
 }
 
+/** Reads one mip level of an arbitrary `rgba8unorm` texture back to CPU (docs/plan/
+ * 17b-sprites-and-frame-budget.md, `sprite.no_bleed_at_mip1`): the same `copyTextureToBuffer` +
+ * `mapAsync` shape `readPixelsFromTarget` uses for a render target, generalised with an explicit mip
+ * level and caller-supplied `width`/`height` (that level's own dimensions -- the JS `GPUTexture`
+ * object exposes only the base level's). Lets a test inspect what the mip chain actually generated
+ * (here, whether a sprite's own extruded padding survived into mip 1) directly, instead of reasoning
+ * through the vertex/fragment sampling math's own texel-centre bias to find a screen pixel that
+ * exercises it -- the same trap the brief's own binding rule warns about ("every readback probe
+ * sits off texel centres"), rediscovered here one level removed: a *screen* pixel chosen to avoid a
+ * geometry texel centre can still land exactly on a *mip* texel centre by the sampler's own -0.5
+ * bias, sampling one full, unblended source texel with no way to tell from outside whether the mip
+ * chain blended correctly. */
+export async function readTextureMip(
+  device: GPUDevice,
+  texture: GPUTexture,
+  mipLevel: number,
+  width: number,
+  height: number,
+): Promise<PixelBuffer> {
+  const bytesPerRow = align256(width * BYTES_PER_PIXEL)
+  const buffer = device.createBuffer({
+    size: bytesPerRow * height,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  })
+  const encoder = device.createCommandEncoder()
+  encoder.copyTextureToBuffer({ texture, mipLevel }, { buffer, bytesPerRow }, [width, height])
+  device.queue.submit([encoder.finish()])
+  await buffer.mapAsync(GPUMapMode.READ)
+  const mapped = new Uint8Array(buffer.getMappedRange())
+  const data = new Uint8Array(width * height * BYTES_PER_PIXEL)
+  const tightRowBytes = width * BYTES_PER_PIXEL
+  for (let y = 0; y < height; y++) {
+    data.set(mapped.subarray(y * bytesPerRow, y * bytesPerRow + tightRowBytes), y * tightRowBytes)
+  }
+  buffer.unmap()
+  buffer.destroy()
+  return { width, height, data }
+}
+
 /** Asserts pixel `(x, y)` of `pixels` is `rgba` within `tol` per channel (0020 §6's own tolerance
  * language: "≤ 2/255 per channel"). Throws a descriptive `Error` naming the pixel, channel and
  * values on the first mismatch. */

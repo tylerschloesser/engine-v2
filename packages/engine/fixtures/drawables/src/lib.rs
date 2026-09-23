@@ -7,7 +7,7 @@
 //! `Spawn` (step 6), is how the `drawables` zero-GC page reaches a few hundred entities without
 //! touching `genesis` -- always accepted, no rejection path. `tick` does nothing.
 
-use engine::client::{ClientSide, DrawList, FrameView};
+use engine::client::{ClientSide, DrawList, FrameView, SpriteId};
 use engine::game::{
     Game, PlayerEvent, PlayerId, PresenceTable, TickCx, Unknown, WorldRead, WorldWrite,
 };
@@ -15,6 +15,25 @@ use engine::world::{Footprint, Registry, Tile, TilePos, TraitSet, WorldPos};
 use engine::worldgen::Worldgen;
 use std::cell::Cell;
 use ts_rs::TS;
+
+/// Sprite ids this fixture's own atlas holds (docs/plan/17b-sprites-and-frame-budget.md Scope:
+/// "add `SpriteId` constants helper for fixtures only"; `scripts/gen-sprite-art.mjs`'s own
+/// `sprites.json` output, `tests/browser/pages/public/drawables/`). Fixtures-only, not part of the
+/// engine crate's own `client` module: `SpriteId` itself and `DrawList::sprite` already exist (M17),
+/// this is just names for the three ids the fixture atlas happens to hold, for whichever later cut
+/// (the M17b frame-time benchmark, steps 4-6) wants to dispatch real sprite draws from `extract`
+/// without magic numbers. Not read by this cut's own `extract` (still circles only, unchanged).
+pub mod sprite_id {
+    use super::SpriteId;
+
+    /// A four-quadrant flat-colour cell, pivot `[0.25, 0.75]`, size `[2, 1]` tiles, one frame.
+    pub const QUAD: SpriteId = SpriteId(0);
+    /// Three 8x8 frames laid left to right (cyan/magenta/orange), pivot `[0.5, 0.5]`, size `[1, 1]`.
+    pub const STRIP: SpriteId = SpriteId(1);
+    /// A flat-red 32x32 cell next to an unlisted flat-blue neighbour, separated only by its own 2px
+    /// extruded padding -- the `sprite.no_bleed_at_mip1` fixture, pivot `[0.5, 0.5]`, size `[1, 1]`.
+    pub const BLEED: SpriteId = SpriteId(2);
+}
 
 thread_local! {
     /// Test-only observation hook (docs/plan/17-drawlist-and-sprites.md, fix round 1):
