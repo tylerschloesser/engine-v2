@@ -82,4 +82,275 @@ Creates the `profile-frame` skill (0021 §4; PLAN.md listed it under M17 before 
 This milestone builds `device.html?harness=1` for it (Planning decisions, "Manual harness shape").
 
 ## Deviations
-(filled in during Phase 3)
+
+### Steps 1-3 (fixture sprite sheet + `sprites.json` v1; atlas upload/mips/data textures; sprite kind
+in `uberquad.wgsl` with probes) -- done
+
+Delegated as steps 1-3 only; steps 4-6 (benchmark, `profile-frame` skill, `?harness=1`) are a second
+implementer's, built against the exact seam shapes below.
+
+**Files added**: `packages/engine/src/render/atlas.ts` (+ `atlas.test.ts`), `packages/engine/scripts/
+gen-sprite-art.mjs`, `packages/engine/tests/browser/sprite-readback.spec.ts`. **Files changed**:
+`src/render/drawables.ts`, `src/render/wgsl/uberquad.wgsl` (+ regenerated `wgsl.generated.ts`),
+`src/test/render.ts` (`readTextureMip`), `src/client.ts` (`ClientOptions.assets.sprites`),
+`tests/browser/pages/src/drawables.ts`, `tests/browser/support/drawables-window.d.ts`,
+`budgets.json`, `packages/engine/fixtures/drawables/src/lib.rs` (`sprite_id` module).
+
+**Where the generated fixture art actually lives (deviates from the brief's own "Files touched"
+line).** The brief lists `packages/engine/fixtures/drawables/` for "generated sprites.png", but that
+directory is the Rust crate `fx-drawables` and has no `public/` of its own -- the exact same shape
+`fixtures/terrain/` (M09b) has for `tiles.png`. Followed that precedent literally:
+`scripts/gen-sprite-art.mjs` writes `sprites.png`/`sprites.json` into `tests/browser/pages/public/
+drawables/`, Vite's `publicDir` for the browser-suite fixture app, so `drawables.html` fetches them
+at `/drawables/*` under both `vite dev` and the built `vite preview` the browser suite runs against.
+
+### Exact seam shapes, as landed
+
+- **`sprites.json` v1** (`render/atlas.ts`'s `validateSpritesManifest`/`SpritesManifest`/
+  `SpriteEntry`): exactly the brief's own schema. `padding` is validated (non-negative integer) but
+  not otherwise consumed by `loadSpriteAtlas` -- it documents the atlas's own extrusion width for a
+  human/asset-script reader; nothing in the loader re-derives bleed protection from it (the atlas
+  image already has the padding baked in by the asset script). **`pivot` is a normalised `[0, 1]`
+  fraction of the sprite's own footprint** (this cut's own reading, not fixed by 0018 §4, which names
+  the field's existence only, not its units): `pivot: [0, 0]` is the sprite's own top-left corner,
+  `[1, 1]` its bottom-right, matching a common sprite-engine convention and keeping it
+  resolution-independent the same way `size` (tiles, not pixels) already is. Validated to `[0, 1]` on
+  each axis. `frames`' own layout ("frames are laid out left to right from rect") needs no per-frame
+  rect list: frame `i`'s rect is `rect` shifted by `i * rect.w` in x, computed in the shader from
+  `param` (`floor(max(param, 0.0))`), not looked up -- `frames` itself is read only by `loadSpriteAtlas`'s
+  own bounds check (`rect.x + rect.w * frames <= image.width`), never uploaded to the GPU: the shader
+  has no way to *clamp* a frame index against a sprite's own frame count (it isn't in either data
+  texture), so an out-of-range `param` reads whatever atlas pixels sit past the sprite's own last
+  frame -- a caller's own responsibility, not validated at draw time (Non-scope: "a game passes the
+  frame in `param`").
+- **`render/atlas.ts`'s `loadSpriteAtlas(device, manifestUrl, opts?)`** returns `LoadedSpriteAtlas =
+  { atlasTexture, rectTexture, pivotSizeTexture, manifest, gpuBytes }`. `atlasTexture`:
+  `rgba8unorm`, `mipLevelCount: 2`, `textureBindingViewDimension: '2d-array'` (a single layer --
+  compatibility mode requires a `2d-array` *binding* to reference a texture's layers at all, even one
+  layer, the same finding M09b's own `render/mips.ts` Deviations already made), `usage: TEXTURE_BINDING
+  | COPY_DST | COPY_SRC | RENDER_ATTACHMENT` (`COPY_SRC` is not a production need -- added only so
+  `sprite.no_bleed_at_mip1`'s own `readTextureMip` can read it back; found by `uncapturederror` on
+  this cut's first run of that test). `rectTexture`/`pivotSizeTexture`: `rgba32float`, 64x64, no mips,
+  `usage: TEXTURE_BINDING | COPY_DST`. Mip 1 is blit by a **new, local one-pass function**
+  (`blitSpriteMip1`), not `render/mips.ts`'s own `generateMips`: that function chases a full pyramid
+  to 1x1 through `mipLevelCountFor`, which requires a power-of-two *square* size -- a sprite atlas is
+  neither (0018 §4 fixes it at exactly 2 levels, independent axes, ≤ 4096² each). `blitSpriteMip1`
+  reuses `MIPS_WGSL` (the same shader module/technique, one bilinear tap per destination texel) with
+  its own bind-group-layout/pipeline/one-layer uniform buffer, doing exactly one level-0-to-1 pass.
+- **`DrawablesRenderer` grows two members**: `setSpriteAtlas(atlas: LoadedSpriteAtlas): void` (swaps
+  the atlas + two data textures into the renderer's one bind group and rebuilds it -- the same
+  "placeholder, then install" shape `TerrainRenderer.setTileArray` already uses; before the first
+  call, three tiny placeholders exist: a 2x2 2-mip atlas and two 1x1 data textures, never addressed
+  by a real `sprite_id`) and `gpuBytes(): number` (`INSTANCE_BUFFER_BYTES` (2,097,152, fixed) +
+  `DRAW_FRAME_UNIFORM_BYTES` (48, fixed) + the currently-installed atlas's own `gpuBytes`, updated on
+  every `setSpriteAtlas` call). The bind group layout is now five entries, not one: `binding 0` (the
+  DrawFrame uniform) gained `FRAGMENT` visibility alongside its existing `VERTEX` (the sprite
+  fragment's own `frame.tiles_per_px` read -- **found by `uncapturederror` on this cut's first test
+  run**: every prior uber-quad kind read the frame uniform from the vertex stage only), `binding 1`
+  `atlas_tex` (`texture_2d_array<f32>`, `FRAGMENT`), `binding 2` `atlas_sampler` (`filtering`,
+  `FRAGMENT`), `binding 3`/`4` `sprite_rect_tex`/`sprite_pivot_size_tex` (`texture_2d<f32>`,
+  `unfilterable-float`, `VERTEX` -- read there, not `FRAGMENT`, since geometry is what needs pivot/
+  size; `fs_main` gets `sprite_rect`/`sprite_world_size` as flat varyings instead of a second
+  `textureLoad`).
+- **`uberquad.wgsl`'s sprite kind**: `vs_main` looks up `pivot`/`box_size` (`sprite_pivot_size_tex`)
+  and `sprite_rect` (`sprite_rect_tex`) by `sprite_id = kind_layer_flags & 0xFFFu` (the low 12 bits of
+  the packed `kind_sprite`, 0018 §2) when `kind == KIND_SPRITE`; geometry is `quad_tiles = (raw_uv -
+  pivot) * box_size`, where `raw_uv` is **always the unflipped `quad_uv(vertex_index)`**, never the
+  early-flipped `uv` every other kind's geometry uses -- `FLIP_X` is deliberately decoupled from
+  position for a sprite: only the *sampled* uv (`sample_uv`, passed to `fs_main` as `out.uv`) mirrors,
+  so flipping a sprite never moves its own world footprint (a documented design choice, not specified
+  either way by 0018 §2, which names the flag but not its exact interaction with a pivot). Every
+  non-sprite kind's own vertex math is untouched (`pivot`/`box_size`/`box_uv` default to `0.5`/
+  `inst_size`/the pre-existing flipped `uv`). `fs_main`'s sprite branch: `frame_rect = sprite_rect`
+  shifted by `floor(max(param, 0)) * rect.w` in x; `scale = frame_rect.zw * frame.tiles_per_px /
+  sprite_world_size` (atlas texels per screen pixel, per axis, mirroring `terrain.wgsl`'s own
+  `texels_per_px` generalised off a single scalar since a sprite's rect and world size need not share
+  one aspect ratio); `lod = clamp(max(0, log2(max(scale.x, scale.y))), 0, 1)` (`SPRITE_MAX_LOD = 1`,
+  since only 2 mip levels exist, unlike tile art's full pyramid); magnified path (`lod <= 0`) anchors
+  on `floor(texel + 0.5)`, exactly `terrain.wgsl`'s fixed seam formula (the binding rule), redone
+  per-axis; minified path is a plain explicit-level `textureSampleLevel`. Output: `frag_rgb =
+  sample.rgb * in.color.rgb`, `alpha = sample.a` (a sprite's own `Draw.color` is a *tint*, not a fill
+  colour -- every test in this cut draws sprites with `color: [255, 255, 255, 255]`, i.e. no tint, so
+  the sampled atlas colour comes through exactly).
+- **Premultiplied blending: a known, inert gap, not fixed here.** The atlas is uploaded with
+  `premultipliedAlpha: true` (Scope), but the uber-quad pipeline's own blend state (fixed at pipeline
+  creation, shared by every kind including sprite) is *straight* alpha (`srcFactor: 'src-alpha'` on
+  colour, M17's own choice for shapes, recorded in its Deviations). Premultiplied atlas content
+  blended through a straight-alpha equation is wrong for a *semi-transparent* sprite edge, but every
+  sprite in this cut's own fixture is fully opaque everywhere (`alpha = 255`), where premultiplied and
+  straight colour are numerically identical -- so no test here can see the discrepancy. Flagged for
+  whichever later milestone's game passes real semi-transparent sprite art through this pipeline:
+  either the blend equation needs to become genuinely premultiplied (affecting every existing shape
+  test's own blending, M17's territory to revisit) or the atlas upload needs to stop premultiplying.
+- **`ClientOptions.assets.sprites?: string`** (`src/client.ts`): the field exists (widened from
+  `{ tiles: string }` to `{ tiles: string; sprites?: string }`) but is **not read by any real page in
+  this cut**. `drawables.html` (this cut's own test page) has no `Client`/`ClientOptions` at all --
+  M17's own "hand-filled scene, no worker, no ABI instance" precedent -- so it calls `loadSpriteAtlas`
+  with the literal string `'/drawables/sprites.json'` directly; there is no `ClientOptions` object on
+  that page for the field to flow through. Wiring a real `Client`-driven page (the `drawables`
+  zero-GC page, or `device.html`) to read `options.assets.sprites` is steps 4-6's own territory,
+  mirroring `ClientOptions.render`'s own field-then-wiring split (docs/plan/
+  09b-terrain-art-and-lifecycle.md Deviations).
+- **Fixture `sprites.png`/`sprites.json`** (`scripts/gen-sprite-art.mjs`, 96x64 atlas, mip 1 48x32):
+  three sprites, `EXTRUDE_PX = 2` (the manifest's own `padding`).
+  - id 0 **"quad"** (`fx-drawables::sprite_id::QUAD`): 8x8, four 4x4 flat quadrants (red/green/blue/
+    yellow, TL/TR/BL/BR), `pivot: [0.25, 0.75]`, `size: [2, 1]` tiles, 1 frame -- an off-centre pivot
+    on both axes and a non-square size, so a swapped w/h or an unapplied pivot moves the quadrant
+    boundaries a probe checks. Reused for `sprite.flip_x` (the quadrant pattern is asymmetric on both
+    axes) and `sprite.layering_with_shapes`.
+  - id 1 **"strip"** (`sprite_id::STRIP`): three 8x8 frames left to right (cyan/magenta/orange),
+    `pivot: [0.5, 0.5]`, `size: [1, 1]`, 3 frames.
+  - id 2 **"bleed"** (`sprite_id::BLEED`): 32x32 flat red, immediately next to an unlisted 32x32 flat
+    blue block, separated only by each side's own 2px extruded padding -- deliberately bigger than
+    the other two sprites so its own minified (mip 1) footprint is large enough to target reliably
+    (see "no_bleed_at_mip1", below). No manifest entry for the blue block: it exists only as raw atlas
+    pixels, addressed indirectly through mip 1's own averaging, never drawn.
+  - `fixtures/drawables/src/lib.rs`'s new `sprite_id` module (Scope: "add `SpriteId` constants helper
+    for fixtures only") names these three; **not read by `extract()` in this cut** (still circles
+    only, unchanged) -- built for whichever later cut dispatches real sprite draws.
+
+### `sprite.no_bleed_at_mip1`: found the wrong tool for the job, switched, and it worked
+
+**First attempt (on-screen sampling) could not be made to fail the way every other probe in this
+suite does.** Drew "bleed" at a camera zoomed out enough to force `lod = 1` (fully minified,
+`texels_per_px = 2` exactly) and probed screen pixels near the sprite's own right edge, expecting a
+red/blue blend to appear when the fixture's own `EXTRUDE_PX` was temporarily set to `0` and
+regenerated. It never did, at two different camera scales (`tilesPerPx = 1/16`, then `1/12`) and
+across the sprite's whole screen footprint (verified with a full horizontal pixel scan, not a guess).
+**Diagnosed, not just retried**: the hardware's own texel-centre sampling bias (`coordinate = uv *
+levelWidth - 0.5`) means a screen pixel chosen to land off a *geometry* texel centre can still land
+exactly on a *mip-sampling* texel centre by that same bias, at this atlas's own resolution and the
+screen sizes reachable at exactly the `lod = 1` threshold (texel-to-pixel ratio is inherently 2:1
+right at that threshold, so every reachable device pixel's own mip-space coordinate landed on an
+integer). This is the same class of trap the brief's own binding rule names for the fat-pixel formula
+("every readback probe sits off texel centres"), rediscovered one level removed, in the mip sampler's
+own bias rather than the seam formula.
+
+**Fixed by testing the actual mechanism instead of the sampling math around it.** Added `src/test/
+render.ts`'s `readTextureMip(device, texture, mipLevel, width, height): Promise<PixelBuffer>` (the
+same `copyTextureToBuffer` + `mapAsync` shape `readPixelsFromTarget` already uses, generalised with an
+explicit mip level and caller-given dimensions -- `GPUTexture` exposes only its base level's own
+`width`/`height`) and `window.__drawables.readAtlasMip1()`. `sprite.no_bleed_at_mip1` now reads the
+atlas's own generated mip 1 directly and asserts texel `(18, 10)` (measured: the last texel of
+bleed's own padded block) is pure red, `(19, 10)` (the unlisted neighbour's first texel) is pure blue
+-- a hard, unblended edge in mip 1 itself, because every mip 1 texel on bleed's own side pools two mip
+0 texels that are either both real content or both that content's own extruded copy, never one of
+each. This tests the actual thing the 2px extrusion protects (whether padding, not the neighbour,
+ended up inside the mip average nearest the edge) rather than a fragile screen-space coincidence.
+**Verified failing without the fix**: regenerated the fixture with `EXTRUDE_PX = 0` (bleed and its
+neighbour touch directly, no gap) -- `expectPixel(18, 10)` failed (`got 0, want 255`, i.e. no longer
+pure red), confirming the test exercises the extrusion for real. Reverted (`EXTRUDE_PX` back to `2`,
+atlas regenerated); `git status` shows only the intended `sprites.png`/`sprites.json` as new,
+untracked files.
+
+### Failability, every new browser test: injected, verified red, reverted
+
+Per the brief's binding instructions ("say what a wrong implementation would still pass ... prove
+failability by injection"), each of the five sprite-kind tests (`counters.gpu_bytes_within_budget` is
+a direct measurement, not proved by injection) was proven by a temporary, reverted edit:
+
+| Test | Injected fault | File / branch | Result before revert |
+|---|---|---|---|
+| `sprite.pivot_and_size_probe` | `quad_tiles = (box_uv - vec2(0.5, 0.5)) * box_size` (pivot ignored) | `uberquad.wgsl` `vs_main` | `expectPixel(40, 28)` failed (green channel 0, wanted 255) |
+| `sprite.flip_x` | `sample_uv = raw` (flip decoupling dropped) | `uberquad.wgsl` `vs_main` | `expectPixel(30, 28)` failed (red channel 255, wanted 0) |
+| `sprite.frames_by_param` | `frame_rect.x += 0.0 * frame_index * rect.z` (frame offset dropped) | `uberquad.wgsl` `fs_main`, `KIND_SPRITE` | `expectPixel(32, 32)` failed at `param=1` (red channel 0, wanted 255) |
+| `sprite.no_bleed_at_mip1` | fixture regenerated with `EXTRUDE_PX = 0` | `scripts/gen-sprite-art.mjs` | `expectPixel(18, 10)` failed (red channel 0, wanted 255) |
+| `sprite.layering_with_shapes` | `alpha = 0.0` unconditionally (sprite never covers anything) | `uberquad.wgsl` `fs_main`, `KIND_SPRITE` | `expectPixel(30, 28)` failed (red channel 10, wanted 255 -- the rect showed through) |
+
+Every injection was reverted immediately after confirming the red result (`git diff` empty on
+`uberquad.wgsl`/`scripts/gen-sprite-art.mjs` before the next step); `pnpm test browser -t sprite` was
+green (6 tests) at every commit boundary.
+
+### `counters.gpu_bytes_within_budget`: measured, not estimated
+
+`budgets.json`'s `counters.render.gpuBytes = 2,400,000` (formula appended to the existing
+`counters.render` block, alongside `drawCallsMax`/`pipelineSwitches`). Measured on `drawables.html`
+with the real fixture atlas: instance buffer 2,097,152 + DrawFrame uniform 48 + atlas (96x64 mip 0 +
+48x32 mip 1, `rgba8unorm`: 24,576 + 6,144 = 30,720) + two sprite data textures (64x64 `rgba32float`
+each: 65,536 x 2 = 131,072) = **2,258,992 B exactly**, comfortably inside the 2,400,000 budget (a real
+game's own atlas will be larger; the row is revisited when one exists, not tightened preemptively).
+**Bug found and fixed while measuring**: `loadSpriteAtlas`'s first draft read `bitmap.width`/
+`bitmap.height` *after* `bitmap.close()` to compute `gpuBytes` -- `ImageBitmap.close()` zeroes those
+properties (confirmed empirically: the atlas rendered correctly throughout, since `atlasTexture`'s own
+size was already captured before the close, but `gpuBytes` itself read back as `131,076`, i.e.
+`SPRITE_TABLE_BYTES * 2 + 4`, as if the image were 1x1). Fixed by capturing `imageWidth`/`imageHeight`
+into local `const`s before `bitmap.close()` and using those throughout; not a production-visible bug
+(nothing else read `bitmap.width`/`height` after the close), found only because this cut measured the
+counter by hand rather than trusting the formula.
+
+### Notes for cut 2 (steps 4-6: benchmark, `profile-frame` skill, `?harness=1`)
+
+- **`fx-drawables` cannot yet produce a 65,536-record frame; three separate things are missing, none
+  built here (per the delegation prompt: "record that; don't build it")**:
+  1. **No bulk-spawn action.** `Action::Spawn` creates exactly one entity per dispatched action; the
+     `drawables` zero-GC page's own 300-entity population loop already does this one-by-one (one
+     `dispatchRaw` + `stepFrame` + `stepSimTickSync` per entity) as one-time setup. Scaling that same
+     loop to 65,536 iterations is ~218x slower and is very unlikely to fit inside a benchmark's own
+     setup budget; a bulk `Action::SpawnMany { count, ... }` (or a `genesis`-time population, if the
+     benchmark's world can be fixed rather than built by dispatch) is needed.
+  2. **The camera needs to be zoomed out to the true worst case.** 0018 §6's 65,536-drawable worst
+     case is 256x256 tiles at maximum zoom-out (`tilesAcross = 256`); every existing `drawables`-page
+     camera (both the readback pages and the zero-GC page's own wide-population camera,
+     `tilesAcross = 24`) is far narrower. `extract()`'s own `visible()` clipping means fewer than
+     65,536 entities would ever reach the DrawList at a narrower zoom even with 65,536 entities
+     spawned.
+  3. **`SMALL_ZOOM_THRESHOLD` would drop entities at exactly the zoom the benchmark needs.**
+     `extract()` skips `Entity.small` entities once `FrameView::zoom() > 32.0` (`fixtures/drawables/
+     src/lib.rs`) -- at `tilesAcross = 256`, every entity marked `small` would be silently excluded
+     from the DrawList, undercounting the benchmark's own record count unless every benchmark entity
+     is spawned with `small: false`, or the fixture's own zoom-skip logic is bypassed/reconsidered for
+     this scenario.
+  - `Action::Spawn`'s existing `layer: u8` field (fix round 1, M17) already lets a bulk-spawn action
+    spread entities across DrawList layers if the benchmark wants that; not itself a blocker.
+  - `extract()` still only calls `DrawList::circle`, never `.sprite(...)` -- fine for a raw
+    record-count benchmark (0018 §6 names 65,536 *drawables*, not specifically sprites), but if cut 2
+    wants the benchmark to also exercise the sprite kind's own atlas/data-texture reads under load,
+    `extract()` needs a sprite-drawing branch added (trivial: `sprite_id::QUAD` is ready-made).
+- **`ClientOptions.assets.sprites`** exists on the type but is read by no real page yet (see Deviations
+  above) -- the first page that needs it (very likely `device.html`, this milestone's own `?harness=1`
+  mode, or the zero-GC `drawables` page if cut 2 also loads a real atlas there) should read it the same
+  way `options.assets.tiles`/`options.render` are already read: a page's own explicit call, not
+  something `createClient` touches.
+- **`atlasTexture`'s `COPY_SRC` usage** (added for `readTextureMip`) is a production no-op but is now
+  part of the texture's own creation flags; if a later cut tightens GPU memory/usage flags for
+  production, this is the one flag in this cut's own additions that exists purely for test
+  introspection, not rendering.
+- **Premultiplied-blending gap** (see Deviations above): inert today (every fixture sprite is fully
+  opaque), real once a game's own sprite art has soft edges.
+
+### Verified (commands and results)
+
+- `pnpm test unit -t sprites` -> `unit pass 3 tests` (`sprites: valid document round-trips`, `sprites:
+  schema errors`, `sprites: buildSpriteTables lays out rect/pivot+size at (id % 64, id / 64)`).
+- `pnpm test rust -t wgsl` -> `rust pass 2 tests` (`wgsl_terrain_validates`, `wgsl_uberquad_validates`
+  -- naga validates the grown `uberquad.wgsl`, five bindings, eight `VOut` locations).
+- `pnpm test browser -t sprite` -> `browser pass 6 tests` (2.6-2.7s of the 25s budget). Individual
+  durations (`playwright test --project chromium -g "sprite\.|gpu_bytes"`, this machine):
+  `sprite.no_bleed_at_mip1` 488ms, `sprite.pivot_and_size_probe` 485ms, `sprite.flip_x` 508ms,
+  `sprite.layering_with_shapes` 530ms, `sprite.frames_by_param` 583ms,
+  `counters.gpu_bytes_within_budget` 197ms.
+- `pnpm test browser -t draw` -> `browser pass 14 tests` (M17's own suite, unaffected). `pnpm test
+  browser -t drawables` -> `browser pass 8 tests` (unaffected). Full `pnpm test browser` -> `browser
+  pass 143 tests 21s/25s` (matches the delegation prompt's own quoted starting figure -- this cut's
+  six new tests fit inside existing headroom, not pushing the suite over budget).
+- `cargo nextest run -p fx-drawables` -> `7/7 pass`, golden hash unchanged (`drawlist_fixture_hash_golden`
+  still blessed to `07e82d2cb76fe412` -- the `sprite_id` module changes no `Draw` bytes any test
+  produces). `cargo clippy -p fx-drawables --all-targets -- -D warnings` and `cargo clippy --workspace
+  --all-targets -- -D warnings` -> both clean.
+- `pnpm test unit` -> `unit pass 202 tests` (+3 over this cut's own start, plus whatever earlier
+  milestones since M17 added -- not independently re-baselined here). `pnpm test wasm` -> `wasm pass 49
+  tests` (unaffected: nothing in this cut touches the WASM boundary). `pnpm test rust` -> `rust pass 322
+  tests`.
+- `pnpm exec tsc --noEmit` (both `tsconfig.json` and `tests/tsconfig.json`) -> clean. `pnpm format`
+  (`biome check --write` + `cargo fmt`) -> no fixes needed after the final state.
+- `pnpm test`/`pnpm test:slow`/`pnpm lint` (the full runs) were not run (delegation prompt: "Don't run
+  the full suites; I am the gate").
+
+### Not verified in this range (steps 4-6's own territory)
+
+`pnpm bench:frame`, `baselines/frame.json`, `.claude/skills/profile-frame/`, `?harness=1`, the
+`docs/plan/device-checks.md` M17b section, and `packages/engine/CLAUDE.md`'s own context-artifact
+line (`pnpm bench:frame`, baseline update rule) -- all named by the brief's own Context artifacts/
+Exit criteria for steps 4-6, not this range. `packages/engine/CLAUDE.md`'s Rendering paragraph does
+not yet mention `render/atlas.ts`; left for cut 2 or a later editor, since the brief's own Context
+artifacts line for this milestone names only the `bench:frame`/baseline addition.
