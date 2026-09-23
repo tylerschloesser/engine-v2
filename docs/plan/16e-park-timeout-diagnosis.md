@@ -100,6 +100,33 @@ none
 
 ## Deviations
 
+### CI round (post-landing fix)
+
+CI's software-mode slow tier (run 35846161792) caught a real regression from step 1: `sim neg burst
+sim`/`no_ui_change neg burst client` failed on `main` (`sim`'s `main` budget is exactly 0) whenever
+the *sibling* isolate's own `burst` control was active, not the target. Reproduced locally
+(`GC_MODE=software pnpm test:slow -t "sim neg burst sim|no_ui_change neg burst client"`):
+`attributedBytesPerFrame.main` 0.02-0.14 B/frame against budget 0. Cause: `checkSpinTimeout`'s
+periodic `now()` check, gated behind a coarse iteration mask so it never fired on a *quiet* success
+path, still fired -- and boxed a `HeapNumber` -- one or more times whenever a sibling's own `burst`
+control legitimately slowed this worker's ack without ever failing it (exactly what a `burst`
+control on `sim` does to `stepSimTickSync`'s own spin). Fixed by removing the periodic wall-clock
+check entirely: the three spin-wait loops (`stepFrame`/`stepSimTickSync`/`asHarness.stepTick`) are
+back to counting spins only (`SPIN_LIMIT`, iteration-count, unchanged from pre-M16e) with zero `now()`
+calls anywhere on the loop until it has already decided to fail; `spinTimeoutMessage` then calls
+`now()` exactly once, only on that throw path, and still reports the full per-worker diagnostic
+(`isolate`/`W_YIELD`/`W_PARKED`/`W_WAKE`/`W_ACK`/`dead`) plus the spin count -- `detectedAtMs`
+replaces `elapsedMs`/`longestGapMs` for this case (no real "elapsed since entry" exists without a
+start-of-call `now()` read, which would itself cost a per-pass double on the success path).
+`pollUntil` (`parkWorkers`/`resumeWorkers`/`untilQuiescent`) is unchanged -- its own `now()` calls
+were already per-real-poll-turn, not per-spin, and were never implicated. This reintroduces the
+pre-M16e property that a spin loop has no wall-clock ceiling of its own (only `SPIN_LIMIT`'s 2e9
+iterations); the 30 s-Playwright-timeout risk step 1 originally tried to bound for these three sites
+is therefore open again, traded for a real, confirmed CI regression fix. Verified: `GC_MODE=software
+pnpm test:slow -t "neg burst"` 31/31 (twice, plus the two named tests alone twice more), `pnpm gc -t
+sim`/`no_ui_change`/`topology`/`echo`/`zero_gc_action` all green (hardware mode), `pnpm test`/`pnpm
+lint` green.
+
 ### Step 1: the enriched failure message (Provides, exact format)
 
 Both places (`pollUntil`, used by `parkWorkers`/`resumeWorkers`/`untilQuiescent`, and the three

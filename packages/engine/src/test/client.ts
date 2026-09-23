@@ -38,29 +38,16 @@ import type { ManualClock } from './manual-clock.js'
 import { StepControl } from './step-block.js'
 
 /** The spike's ack-timeout guard (`spikes/zero-gc-webgpu/public/main.js`), reused by `stepFrame`
- * (Planning decisions "Stepped frames in tests"). Kept as a hard fallback ceiling alongside the
- * wall-clock bound below (docs/plan/16e-park-timeout-diagnosis.md): on a machine fast enough that
- * 2e9 raw `Atomics.load` iterations finish under `SPIN_TIME_LIMIT_MS`, this is what still stops the
- * loop. */
+ * (Planning decisions "Stepped frames in tests"). Iteration-count only, not wall-clock (docs/plan/
+ * 16e-park-timeout-diagnosis.md, CI round: a periodic `performance.now()` check -- even one gated
+ * behind a coarse iteration mask, so it never fired on a *quiet* success path -- still fired, and
+ * boxed, on a success path that was merely *slow*: a sibling isolate's own `burst` negative control
+ * measurably delays this worker's ack without ever failing it, so the spin can legitimately cross a
+ * periodic check many times before succeeding, and CI's software-mode budgets (`sim`'s `main` row is
+ * exactly 0) have no room for that. Reverted to counting spins alone -- no `now()` call anywhere on
+ * this path until the loop has already decided to fail. */
 const SPIN_LIMIT = 2_000_000_000
 const POLL_TIMEOUT_MS = 10_000
-/** Checked only every `SPIN_CHECK_MASK + 1` (~1.05 M) iterations of a spin-wait ack loop (below),
- * never every iteration: a healthy ack normally arrives within a handful of spins, so on the
- * success path this branch -- and the `now()` call inside it -- is never taken at all. That keeps
- * `stepFrame`/`stepSimTickSync`/`asHarness.stepTick` allocation-free in steady state (`.claude/
- * rules/hot-paths.md`'s "no double-valued temporaries on a per-pass path": a `now()` read costs one
- * only on the rare, already-failing path, not once per real pass). */
-const SPIN_CHECK_MASK = (1 << 20) - 1
-/** Bounds a spin-wait ack loop's own wall-clock time under Playwright's 30 s test timeout
- * (docs/plan/16e-park-timeout-diagnosis.md, Scope 1): a 2e9-iteration count has no relationship to
- * wall time, and the evidence this milestone diagnoses (`gc-loop neg object sim`, M16b done gate)
- * was Playwright's own 30 s test timeout firing with *no* JS-thrown message at all -- meaning the
- * spin was still short of `SPIN_LIMIT` a full 30 s in. 20 s leaves 10 s of headroom for the rest of
- * `measure()`'s own CDP round trips around the `window.__gc.run` call this loop runs inside. The
- * unrelated 10 s `POLL_TIMEOUT_MS` above (macrotask-polled `pollUntil`, not a spin) is unchanged
- * per the brief's own "the 10 s timeout does not change".
- */
-const SPIN_TIME_LIMIT_MS = 20_000
 
 function now(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now()
@@ -95,10 +82,8 @@ function diagWorkers(h: ClientTestHandle): WorkerDiag[] {
 }
 
 /** `${what}: timed out ...` message body shared by `pollUntil` and every spin-wait ack loop below
- * (Provides: "the enriched `parkWorkers` failure message" -- this is its exact shape). `stats` is
- * either `pollUntil`'s own "how many macrotask turns, how big was the widest gap between them"
- * (case c, main's own poll starved) or a spin loop's own "how many spins, how long" -- printed under
- * the same `turns`/`elapsed` labels so a reader does not need to know which wait produced it. */
+ * (Provides: "the enriched `parkWorkers` failure message" -- this is its exact shape). Called only
+ * from the reject branch, never the success path. */
 function describeTimeout(
   h: ClientTestHandle,
   what: string,
@@ -114,36 +99,26 @@ function describeTimeout(
 }
 
 /**
- * Checked only every `SPIN_CHECK_MASK + 1` spins by each of this file's three spin-wait ack loops
- * (`stepFrame`/`stepSimTickSync`/`asHarness.stepTick`, below): starts the clock on its first call
- * (`spinStart < 0`) and throws the same shape `pollUntil` throws once `SPIN_TIME_LIMIT_MS` has
- * passed since. A synchronous spin never yields to the event loop, so it has no macrotask "turns" to
- * count the way `pollUntil` does -- `turns` here is the spin count instead, and `longestGapMs` equals
- * `elapsedMs`: one continuous span, not a series of gaps between polls (case c's "main's own poll
- * was starved" is a `pollUntil`-only failure mode; a busy spin cannot be poll-starved, only slow or
- * genuinely stuck, which `elapsedMs` alone already distinguishes from a lost wake via the per-worker
- * state in `workers`). Returns the (possibly just-started) clock value so the caller's own `let`
- * carries it across spins without this function closing over anything.
+ * The per-worker-diagnostic message for one of this file's three spin-wait ack loops, once `spins`
+ * has already exceeded `SPIN_LIMIT` (docs/plan/16e-park-timeout-diagnosis.md, CI round): called
+ * *only* on that already-failing path, exactly once, so this is the one place these loops ever call
+ * `now()` -- no periodic wall-clock check remains (removed after CI's software-mode `sim`/
+ * `no_ui_change` budgets caught real allocation attributed to `main` from a *slow-but-succeeding*
+ * spin under a sibling isolate's own `burst` control: a check gated behind a coarse iteration mask
+ * still fires, and boxes, more than once whenever the spin legitimately runs long, which a sibling's
+ * own burst control does on purpose). A synchronous spin never yields to the event loop, so it has
+ * no macrotask "turns" the way `pollUntil` does, and recording a start timestamp to compute a real
+ * "elapsed since entry" would itself cost a `now()` call on every entry, including the success path
+ * -- so this reports `spins` (the iteration count) and the single `now()` reading taken here as
+ * "detectedAtMs", not an elapsed duration, alongside the same per-worker `workers` listing
+ * `describeTimeout` builds.
  */
-function checkSpinTimeout(
-  h: ClientTestHandle,
-  what: string,
-  spins: number,
-  spinStart: number,
-): number {
-  const t = now()
-  if (spinStart < 0) return t
-  const elapsedMs = t - spinStart
-  if (elapsedMs > SPIN_TIME_LIMIT_MS) {
-    throw new Error(
-      describeTimeout(h, what, SPIN_TIME_LIMIT_MS, {
-        turns: spins,
-        elapsedMs,
-        longestGapMs: elapsedMs,
-      }),
-    )
-  }
-  return spinStart
+function spinTimeoutMessage(h: ClientTestHandle, what: string, spins: number): string {
+  const workers = diagWorkers(h)
+  return (
+    `${what}: timed out after ${spins} spins (limit ${SPIN_LIMIT}, detectedAtMs=${now().toFixed(1)}) ` +
+    `workers=${JSON.stringify(workers)}`
+  )
 }
 
 /** Polls `predicate` on a macrotask (main never blocks, 0015 §2), rejecting after
@@ -338,19 +313,11 @@ export function stepFrame(client: Client, dtMs: number): void {
   const req = (Atomics.add(h.control.words, CB_FRAME_REQ, 1) + 1) >>> 0
   h.control.wake(WORKER_CLIENT)
   let spins = 0
-  let spinStart = -1
   while (Atomics.load(h.control.words, workerWord(WORKER_CLIENT, W_ACK)) !== req) {
-    spins++
-    if ((spins & SPIN_CHECK_MASK) === 0) {
-      spinStart = checkSpinTimeout(
-        h,
-        'stepFrame: the client worker did not ack the frame request',
-        spins,
-        spinStart,
+    if (++spins > SPIN_LIMIT) {
+      throw new Error(
+        spinTimeoutMessage(h, 'stepFrame: the client worker did not ack the frame request', spins),
       )
-    }
-    if (spins > SPIN_LIMIT) {
-      throw new Error('stepFrame: the client worker did not ack the frame request')
     }
   }
 }
@@ -459,19 +426,15 @@ export function stepSimTickSync(client: Client, n = 1): void {
   h.control.wake(WORKER_HOST)
   const want = Atomics.load(h.control.words, workerWord(WORKER_HOST, W_WAKE))
   let spins = 0
-  let spinStart = -1
   while (Atomics.load(h.control.words, workerWord(WORKER_HOST, W_ACK)) < want) {
-    spins++
-    if ((spins & SPIN_CHECK_MASK) === 0) {
-      spinStart = checkSpinTimeout(
-        h,
-        'stepSimTickSync: the sim worker did not ack the step request',
-        spins,
-        spinStart,
+    if (++spins > SPIN_LIMIT) {
+      throw new Error(
+        spinTimeoutMessage(
+          h,
+          'stepSimTickSync: the sim worker did not ack the step request',
+          spins,
+        ),
       )
-    }
-    if (spins > SPIN_LIMIT) {
-      throw new Error('stepSimTickSync: the sim worker did not ack the step request')
     }
   }
 }
@@ -792,7 +755,6 @@ export function asHarness(client: Client): Harness {
       const w = tickTargets[i] as WorkerEntry
       const want = tickWant[i] as number
       let spins = 0
-      let spinStart = -1
       // `< want`, not `!== want` (docs/plan/08b-gen-workers-and-queue.md, Deviations: found by
       // `gc-gen.ts`, the first zero-GC page whose `gen` target also has real, independent ring
       // traffic waking it -- a `genRequest`/`genResult` commit wakes `gen0` the same way this
@@ -803,17 +765,14 @@ export function asHarness(client: Client): Harness {
       // "has this worker acked at least as far as the wake I just issued" is what the caller
       // actually needs; `W_ACK` only ever moves forward.
       while (Atomics.load(h.control.words, workerWord(w.index, W_ACK)) < want) {
-        spins++
-        if ((spins & SPIN_CHECK_MASK) === 0) {
-          spinStart = checkSpinTimeout(
-            h,
-            `asHarness.stepTick: worker '${w.kind}${w.index}' did not ack`,
-            spins,
-            spinStart,
+        if (++spins > SPIN_LIMIT) {
+          throw new Error(
+            spinTimeoutMessage(
+              h,
+              `asHarness.stepTick: worker '${w.kind}${w.index}' did not ack`,
+              spins,
+            ),
           )
-        }
-        if (spins > SPIN_LIMIT) {
-          throw new Error(`asHarness.stepTick: worker '${w.kind}${w.index}' did not ack`)
         }
       }
     }
