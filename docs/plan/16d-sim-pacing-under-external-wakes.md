@@ -1,6 +1,6 @@
 # M16d: The sim keeps ticking while a client wakes it every frame
 
-Status: not started · After: 16c · Tyler-dependent: no
+Status: done · After: 16c · Tyler-dependent: no
 
 ## Goal
 
@@ -89,14 +89,14 @@ inference.
 Step 1's steady-tick test (name it in Deviations); any step 4 regression test.
 
 ## Exit criteria
-- [ ] Step 1's test fails on base (pasted) and passes after the fix.
-- [ ] `poll_skips_a_spurious_tick_on_a_ring_wake` passes unchanged in what it asserts.
-- [ ] Every zero-GC page with a `sim` isolate passes at an unchanged or lower budget, and its
+- [x] Step 1's test fails on base (pasted) and passes after the fix.
+- [x] `poll_skips_a_spurious_tick_on_a_ring_wake` passes unchanged in what it asserts.
+- [x] Every zero-GC page with a `sim` isolate passes at an unchanged or lower budget, and its
       controls still trip (`pnpm gc` pasted), including once under `--no-opt --no-sparkplug`.
-- [ ] A new ADR amends 0030.
-- [ ] `vertical_slice` is under 3 s in `report.json` with every assertion kept.
-- [ ] `node scripts/repeat.mjs browser 15 --load 10`: 0 failures, 0 hangs (orchestrator's gate).
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] A new ADR amends 0030.
+- [x] `vertical_slice` is under 3 s in `report.json` with every assertion kept.
+- [x] `node scripts/repeat.mjs browser 15 --load 10`: 0 failures, 0 hangs (orchestrator's gate).
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test unit|wasm|browser -t <pattern>` · `pnpm gc -t <page>` ·
@@ -203,3 +203,11 @@ observation word only): `samples 262ms:0 512ms:0 ... 2004ms:0; worst drift -40.1
   phase 5 settle). Worth checking against 0010's "send only on change".
 - `untilQuiescent` (`engine/test`) has the same vacuous-quiescence hole for any page that probes GPU
   residency. Only `slice.ts` was changed here.
+
+### Orchestrator's gate (M16d done)
+
+- **Failability re-run by the orchestrator:** restoring step 1's `worker/sim.ts` and `atomics-timer.ts` (`5aad01c`, which already writes `CB_SIM_TICKS_RUN`, so a zero there cannot be a missing counter) gives `samples 263ms:0 ... 2011ms:0; worst drift -40.2 ticks; longest flat 2011 ms`. Restored, it passes. Deleting only the `interrupt()` call does **not** make it fail, and that is by design, not a blind spot: `settle()` reads the clock from `poll()` too once `hi` reaches the deadline, so `interrupt()` only shortens the waits after an interruption.
+- `pnpm test && pnpm lint` green: `unit` 193, `browser` 117 at 18 s. `repeat.mjs browser 15 --load 10`: **15/15, slowest 28 s**; 15 quiet: **15/15, slowest 19 s**.
+- Masks checked: `budgets.json` untouched, no goldens changed, and no timeout, retry, sleep or `@slow` added. `tick >= 50` -> `>= 20` accepted: phase 4 compares the checkpoint to a native replay at the tick actually reached and still asserts the tick-100 golden separately, so a threshold of 20 still covers two tick-rule writes and drops no assertion.
+- The orchestrator rewrote `atomics-timer.ts`'s header comment, which still said the timer takes no clock, and did the ADR bookkeeping (0030's status line, `PLAN.md`, root `CLAUDE.md`). The three notes for later briefs went into `deferred-ledger.md`.
+

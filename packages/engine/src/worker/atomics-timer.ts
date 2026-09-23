@@ -9,16 +9,15 @@
 // `Atomics.wait`'s own timeout precisely. Both boxed a fresh `HeapNumber` per call in the
 // interpreter tier -- a fractional double, never a Smi -- exceeding the strict 8 B/frame budget
 // even for one read, every real wake in production (`worker/sim.ts` arms this unconditionally
-// there). Fixed by removing every clock read from this file: `timeoutMs()` always answers the same
-// fixed, integer `ms` (armed) or the module-level `INFINITE_TIMEOUT_MS` constant (idle), and
-// `poll()` fired its callback on every wake while armed, no due check (both superseded by M16d,
-// below; still no clock read). Accuracy
-// (was a real deadline check here) moves to `SimHost`'s own periodic resync (`server.ts`'s
-// `runPacedTick`/`resync`, ADR amending M13): assuming every wake is exactly one tick's worth of
-// elapsed time drifts by however long the tick's own work took, bounded and corrected there every
-// `RESYNC_TICKS` ticks, never here. This file no longer needs a `clock` at all -- `createAtomicsTimer`
-// takes none, unlike its M13 shape (Seams: not a Provides rename, the only two Consumers of
-// `AtomicsTimer` are `worker/sim.ts` and this file's own tests).
+// there). M13b removed every clock read: `timeoutMs()` answered a fixed interval and `poll()` fired
+// on every wake, with accuracy left to `SimHost`'s periodic resync (ADR 0030).
+//
+// M16d (docs/decisions/0032-atomics-timer-bounds-external-wakes.md) found that shape starves the
+// sim when an external producer wakes it faster than once per interval: every wake restarted the
+// full wait, so none timed out. The timer now keeps a proven (`lo`) and an estimated (`hi`) bound on
+// elapsed time, `timeoutMs()` answers the time left by `hi`, and `createAtomicsTimer` takes a
+// `clock` again. It reads the clock only when the two bounds disagree about the deadline (see
+// `settle`), which never happens while nothing interrupts a wait.
 
 import type { Clock } from '../clock.js'
 

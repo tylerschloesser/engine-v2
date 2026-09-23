@@ -1,6 +1,6 @@
 # 0030: `SimHost` pacing reads the wall clock only once every `RESYNC_TICKS` ticks
 
-Status: Accepted (2026-09-21). Amends the pacing decision of [`docs/plan/13-sim-host-tick-loop.md`](../plan/13-sim-host-tick-loop.md) (`onFire`'s per-wake `due` computation, `runOneTickTimed`'s per-tick overrun bracket) and narrows what `tickOverruns`/`ticksDropped` mean there. Implemented in M13b (`docs/plan/13b-tick-timing-allocation.md`).
+Status: Accepted (2026-09-21). Amends the pacing decision of [`docs/plan/13-sim-host-tick-loop.md`](../plan/13-sim-host-tick-loop.md) (`onFire`'s per-wake `due` computation, `runOneTickTimed`'s per-tick overrun bracket) and narrows what `tickOverruns`/`ticksDropped` mean there. Implemented in M13b (`docs/plan/13b-tick-timing-allocation.md`). §2 amended by [0032](0032-atomics-timer-bounds-external-wakes.md).
 
 ## Context
 

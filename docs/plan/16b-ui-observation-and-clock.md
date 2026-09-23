@@ -1,6 +1,6 @@
 # M16b: `G::Ui` → UI ring → `onUi`, and `client.clock()`
 
-Status: not started · After: 16 · Tyler-dependent: no (Q1 answered: `serde_json` approved)
+Status: not started · After: 16d · Tyler-dependent: no (Q1 answered: `serde_json` approved)
 
 Split from M16 (size). M17 depends on this milestone (it grows the `FrameView` defined here).
 
