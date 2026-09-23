@@ -777,3 +777,78 @@ convention `tests/wasm/worldgen-bench.test.ts` already uses for its own machine-
 - Every injection in this fix round (item 1's isolation is structural, not provable by a single
   injected value; items 3 and the SwiftShader gate were each proven failing, then reverted, as
   recorded above).
+
+### CI round 1 (smoke mode on a software adapter)
+
+CI's slow tier was red on `9f04ce1` (run 35904901201): `frame-bench FAIL ... TimeoutError: page.
+waitForFunction: Timeout 60000ms exceeded` waiting for `WARMUP_FRAMES` (120) rendered frames.
+`ubuntu-latest` under `ENGINE_GPU=swiftshader` cannot render 65,536 instanced quads/frame 120 times
+inside a 60 s wait at all -- the *setup wait itself* times out, which warn-not-fail (item 5 of Fix
+round 2) never covered, since it only gates the budget/baseline/sample-floor assertions, not how long
+getting there takes. This session's own local SwiftShader check (Fix round 2) passed only because
+this Mac's CPU is far faster than the CI runner's.
+
+**Fixed with a smoke mode**, switched on the same platform signal `isSwiftShader` (`process.env.
+ENGINE_GPU === 'swiftshader'`) already used for warn-not-fail -- never inferred from measured
+slowness. `frame-bench.spec.ts`: `WARMUP_FRAMES`/`TIMED_FRAMES` are now `isSwiftShader ? SMOKE_* :
+120/300` (`SMOKE_WARMUP_FRAMES = 5`, `SMOKE_TIMED_FRAMES = 20`, one place, both named constants).
+Same page, same 65,536-record scene, same park/wrap/resume/trace path, `recordCount === 65_536`/
+`dropped === 0` still hard assertions in both modes -- only the frame counts move. The printed line
+now reads `bench.frame_worstcase [smoke]: ...` or `[full]: ...` explicitly (previously only
+`swiftshader=true/false`, easy to miss in a CI log), plus `timed=${TIMED_FRAMES}` (was missing
+before this round).
+
+**A second, real bug found by smoke mode's own tiny warm-up, not by SwiftShader per se**: with only
+5 warm-up frames, `recordCount()` read `65408` (short by exactly one `BATCH_COLS` batch) instead of
+`65536`, locally under `CI=true ENGINE_GPU=swiftshader`. `frame-bench.ts`'s population loop's own
+trailing "let the last batch land" sequence was one `stepFrame` short: the sim's own trailing
+`stepSimTickSync` tick is what actually builds and sends the *final* batch's downlink frame, but
+nothing gave the *client* a wake to drain it afterward -- the real rAF loop's own first frame was the
+first such wake, and 120 real warm-up frames always gave enough slack for that to land unnoticed;
+5 does not reliably. Fixed by adding one more `harness.stepFrame(1000 / 60)` after the sim's trailing
+tick, so the drain happens deterministically during setup regardless of mode. Verified: three
+consecutive `CI=true ENGINE_GPU=swiftshader` runs of the `frame-bench` project, `records=65536` every
+time (previously reproduced short on the very first such run); two more `pnpm bench:frame`-equivalent
+real-hardware runs afterward, still `records=65536`, unaffected.
+
+**Verified the env reaches the Playwright child, by injection** (binding rule, item 2): a temporary
+`if (isSwiftShader) expect(1, '...').toBe(2)` at the top of the test body failed red under
+`CI=true ENGINE_GPU=swiftshader` and passed green without it; reverted (`git diff` empty before the
+next commit).
+
+**Shown** (`CI=true ENGINE_GPU=swiftshader GC_MODE=software pnpm test:slow`, the full CI env from
+`.github/workflows/ci.yml`'s own `pnpm test:slow` step, foreground):
+```
+rust        pass 0 tests    0.3s
+unit        pass 2 tests    1.4s
+wasm        pass 3 tests    11s
+browser     pass 44 tests   25s
+  adapter {"vendor":"google","architecture":"swiftshader",...,"isFallbackAdapter":true}
+frame-bench pass 1 tests    4.2s
+  adapter {"vendor":"google","architecture":"swiftshader",...,"isFallbackAdapter":true}
+```
+`frame-bench`'s own printed output (`test-results/frame-bench/output.log`):
+```
+bench.frame_worstcase [smoke]: records=65536 frames=56/1 warmup=5 timed=20 swiftshader=true
+  main   p50=0.010ms p95=0.025ms budget<=1.3ms baseline.p50=0.637ms (+/-25%)
+  worker p50=2.207ms p95=2.207ms budget<=2.7ms baseline.p50=2.152ms (+/-25%)
+```
+And `pnpm bench:frame` on real hardware, unchanged gate:
+```
+bench.frame_worstcase [full]: records=65536 frames=304/31 warmup=120 timed=300 swiftshader=false
+  main   p50=0.636ms p95=0.697ms budget<=1.3ms baseline.p50=0.637ms (+/-25%)
+  worker p50=2.272ms p95=2.437ms budget<=2.7ms baseline.p50=2.152ms (+/-25%)
+  1 passed (5.3s)
+```
+
+**The `wasm` flake (not chased, per instruction)**: looked at `scripts/lib/adapters.mjs`'s own
+`fromReport` (the shared nextest/vitest parse helper) and `tests/wasm/bun-leg.mjs` for anything
+obviously new. `fromReport`'s own comment already names this exact class ("a report present but the
+run still exiting non-zero points at a process-level problem ... the JSON reporter's own summary
+does not capture") and the message text CI showed ("runner exited 1 after a parseable report showed
+0 failures") is that helper's own wording, which only the `wasm` suite's *main* Vitest project leg
+uses -- `bun-leg.mjs`'s own `script`-kind adapter has different wording ("script exited ... but
+reported no failure") and does not run at all under the slow tier (`script`'s own `command()`:
+`tier === 'fast'` only), so it is not implicated by this slow-tier run either way. `bun-leg.mjs`
+itself looks sound (catches its own exceptions, exits with a code matching its own reported results).
+Nothing new found beyond what `adapters.mjs`'s own comment already documents; not pursued further.

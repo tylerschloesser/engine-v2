@@ -186,9 +186,19 @@ for (let row = 0; row < GRID_SIDE; row++) {
   }
 }
 // Lets the trailing batch's own delta actually land in the replica before the real rAF loop's first
-// `frame()` reads it (`gc-drawables.ts`'s own precedent, same reasoning).
+// `frame()` reads it (`gc-drawables.ts`'s own precedent, same reasoning). **A second trailing client
+// `stepFrame` was added here** (CI round 1: found under `CI=true ENGINE_GPU=swiftshader` locally,
+// smoke mode's own tiny warm-up first exposed it -- `recordCount()` read 65,408, short by exactly
+// one `BATCH_COLS` batch, immediately after warm-up): the sim's own trailing `stepSimTickSync` tick
+// is what actually builds and sends the *last* batch's own downlink frame, but nothing in the
+// original single-`stepFrame` sequence gave the *client* a wake **after** that tick to drain it --
+// the first opportunity was the real rAF loop's own first frame, which 120 real warm-up frames
+// always gave enough slack to land within (undetected) but 5 does not reliably. One more `stepFrame`
+// call, after the sim's own trailing tick, drains that final downlink deterministically during
+// setup instead of leaving it to real-frame timing.
 harness.stepFrame(1000 / 60)
 stepSimTickSync(client, 1)
+harness.stepFrame(1000 / 60)
 harness.stepTick()
 
 // --- Real rAF loop -------------------------------------------------------------------------------

@@ -40,8 +40,6 @@ declare global {
   }
 }
 
-const WARMUP_FRAMES = 120
-const TIMED_FRAMES = 300
 const RECORD_COUNT = 65_536 // 0018 §6: "65,536 drawables" == `DrawList::CAPACITY` exactly
 // `host: { kind: 'local', connect: true }, genWorkers: 1` (`frame-bench.ts`): client, sim, gen0.
 const EXPECTED_WORKERS = 3
@@ -53,7 +51,25 @@ const MAIN_BUDGET_MS = 1.3
 const WORKER_BUDGET_MS = 2.7
 const BASELINE_TOLERANCE = 0.25
 
+// The one switch between "full" (real hardware, gates for real) and "smoke" (CI's own SwiftShader
+// adapter) mode -- known from the platform (the same env var CI's own workflow sets, `isSwiftShader`
+// already gates the budget/baseline/sample-floor checks on), never inferred from how long anything
+// took. CI round 1: `ubuntu-latest` under `ENGINE_GPU=swiftshader` could not render 65,536 instanced
+// quads/frame 120 times inside the 60 s warm-up wait at all (`TimeoutError`, run 35904901201) -- the
+// setup wait itself, not a timing assertion, so warn-not-fail (which only covers the budget/
+// baseline/sample-floor checks below) could not save it. Real hardware keeps today's own 120 + 300;
+// smoke mode runs the identical page, the identical 65,536-record scene, and the identical park/
+// wrap/resume/trace path end to end, only far fewer frames -- 5 warm-up (enough for the worker to
+// take at least one real `frame()` call, which is all `recordCount()`/`dropped()` below need to read
+// something real) + 20 measured (enough to be virtually certain of at least one `wf-*` mark pair
+// even on a CPU an order of magnitude slower than this session's own Mac, without the wait itself
+// risking the same timeout this mode exists to avoid). `recordCount === 65_536`/`dropped === 0` stay
+// hard assertions in both modes; only the frame counts move, and only here.
 const isSwiftShader = process.env.ENGINE_GPU === 'swiftshader'
+const SMOKE_WARMUP_FRAMES = 5
+const SMOKE_TIMED_FRAMES = 20
+const WARMUP_FRAMES = isSwiftShader ? SMOKE_WARMUP_FRAMES : 120
+const TIMED_FRAMES = isSwiftShader ? SMOKE_TIMED_FRAMES : 300
 
 type Baseline = {
   recordCount: number
@@ -252,7 +268,10 @@ test('bench.frame_worstcase @slow', async ({ page, browser }, testInfo) => {
   // high enough (measured: 2 samples in the same window, against 20-24 on real hardware) that this
   // is the *same* machine-dependent timing effect the budget/baseline checks below already warn
   // instead of fail on (0020 §10), not a real starvation bug -- SwiftShader was never proven to
-  // starve the worker's own wake delivery, only to make each wake far slower.
+  // starve the worker's own wake delivery, only to make each wake far slower. Left uncalibrated for
+  // smoke mode's own much smaller `TIMED_FRAMES` (CI round 1): `isSwiftShader` already implies smoke
+  // mode (below), so this floor only ever fires as a hard failure in full mode, where it stays
+  // exactly the figure it was measured against.
   const WORKER_SAMPLE_FLOOR = 12
   if (workerMs.length < WORKER_SAMPLE_FLOOR) {
     const message = `client worker frame() marks captured: ${workerMs.length} below floor ${WORKER_SAMPLE_FLOOR}`
@@ -273,9 +292,12 @@ test('bench.frame_worstcase @slow', async ({ page, browser }, testInfo) => {
     ? (JSON.parse(readFileSync(baselineUrl, 'utf8')) as Baseline)
     : null
 
+  // Named explicitly (not just `warmup=`/`swiftshader=`, both already printed) so a CI log's own
+  // reader does not mistake a smoke run's own tiny numbers for a full one (CI round 1).
+  const mode = isSwiftShader ? 'smoke' : 'full'
   console.log(
-    `bench.frame_worstcase: records=${RECORD_COUNT} frames=${mainMs.length}/${workerMs.length} ` +
-      `warmup=${WARMUP_FRAMES} swiftshader=${isSwiftShader}`,
+    `bench.frame_worstcase [${mode}]: records=${RECORD_COUNT} frames=${mainMs.length}/${workerMs.length} ` +
+      `warmup=${WARMUP_FRAMES} timed=${TIMED_FRAMES} swiftshader=${isSwiftShader}`,
   )
   console.log(
     `  main   p50=${mainP50.toFixed(3)}ms p95=${mainP95.toFixed(3)}ms budget<=${MAIN_BUDGET_MS}ms` +
