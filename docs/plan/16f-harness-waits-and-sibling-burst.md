@@ -178,3 +178,78 @@ unchanged, per Scope.
 Verification commands run: `pnpm exec playwright test --config packages/engine/playwright.config.ts
 --project chromium --grep "TEMP M16f probe" --reporter=list` (the probe itself, reverted after);
 `pnpm --filter engine typecheck` clean (no diff outstanding).
+
+### Step 3: the `connected-terrain` sibling-burst `main` rise -- not reproducible on this machine
+today; escalated rather than bisected
+
+**`pnpm test:slow -t "connected-terrain neg burst"` is green, repeatedly, in hardware mode, on this
+machine, right now** -- the opposite of the brief's own evidence (3/3 failing, `main` 111.07-111.74
+against budget 111). Before concluding that, every escalating reproduction technique this repo's
+own precedent milestones established was tried, each a genuinely distinct attempt, none of which
+produced an overshoot:
+
+1. Plain `pnpm test:slow -t "connected-terrain neg burst"`, twice: pass (`browser pass 4 tests
+   5.5s` both times).
+2. `playwright test --project gc --grep "connected-terrain neg burst" --workers 1 --repeat-each 5`
+   (the `gc-test` skill's own "reproduces at `--workers 1`, one test, no external contention" case
+   for a sibling-isolate effect): 20/20 pass.
+3. Same at `--repeat-each 10`: 40/40 pass.
+4. M15f's own forced-interpreter technique (`--js-flags=... --no-opt --no-sparkplug` added to the
+   `gc` project, temporarily, reverted after) at `--workers 14 --repeat-each 6` (M16e's own "extreme
+   ~40-way-class oversubscription" shape on this 14-core machine): produced a *different* failure
+   entirely -- `connected-terrain neg burst sim` timing out at a bare 30 s (`Test timeout of 30000ms
+   exceeded` at `gc/instrument.ts:307`), the same CDP-round-trip-stall class M16e's own step 2 found
+   and left unaddressed, not the `main`-budget overshoot this step is chasing. `main` never
+   overshot; not the right kind of contention.
+5. Forced interpreter reverted; default config (`workers: 5`), `--repeat-each 5`: 20/20 pass.
+6. Same, plus eight `node -e` CPU-burner processes running throughout (the same burner shape
+   `scripts/repeat.mjs --load` uses, spawned directly since `repeat.mjs` only drives the fast
+   `browser` suite, not `test:slow`; load average 17.7/12.1/7.5 during the run): 20/20 pass, same
+   ~15.5 s wall time as unloaded.
+7. **Budget forced to 1** (`connected-terrain.isolates.main.bytesPerFrame`, edited as text, reverted
+   after -- CLAUDE.md's own diagnostic technique) to dump `byFn` regardless of pass/fail, one run of
+   `clean` + all three `neg burst` controls: `bytesPerFrame.main` read **103.61 (clean), 103.76
+   (burst client), 103.33 (burst sim), 103.69 (burst gen0)** -- all within ~0.4 B of each other, all
+   ~7 B *under* the 111 budget, and `byFn.main` **identical down to the byte** in every condition:
+   `draw@terrain` 28800, `drain@terrain` 12000, `stepFrame@client` 7200, plus a fixed ~8,796 B
+   instrument-overhead tail (`(V8 API)`/`next`/`isTypedArray`/`entries`/`values`, all `@:0`, the same
+   shape `gc-test`'s own "usual causes" section already names as measurement overhead, not a
+   per-frame site). No new site appears under any sibling burst -- nothing to attribute.
+8. The same forced-budget dump inside a full cross-page `--grep "neg burst"` run (every zero-GC
+   page's burst controls, `--repeat-each 2`, real simultaneous multi-page Chromium contention, the
+   closest local approximation to a real gate run): six independent `connected-terrain` burst
+   samples, `bytesPerFrame.main` = **103.78, 103.4, 103.76, 103.76, 103.53, 103.33** -- same tight
+   band, same margin, across genuinely different sibling pages contending at the same time.
+
+All eight attempts -- no-contention, single-isolate contention, 40-way oversubscription, forced
+interpreter tier, ambient CPU load, and real cross-page contention -- read `main` at 103.3-103.8,
+never above 104, with an identical allocation-site breakdown throughout. This is not the same shape
+as a borderline flake sitting just under a hard boundary (which would show some spread near the
+line): it is a flat, stable reading roughly 7 B of margin *inside* budget, in every condition tried.
+Whatever produced 111.07-111.74 was not reproduced today.
+
+**Bisection was not attempted as a formal `git bisect` / worktree exercise, because it has no
+reproducible signal to bisect against.** The brief's own instruction (a separate worktree, `git
+worktree add`) presumes a failing command at the tip to walk backward from; every attempt at the
+tip above passed. Re-running the same technique against an older commit, on the same machine on the
+same day, would not distinguish "this commit's code" from "this environment's condition" -- both
+M16e's own Deviations ("M16e saw it on its base too") and this session's own numbers point at an
+environment/scheduling-sensitive margin rather than a single introduced allocation: the brief's own
+evidence table already names it "not known when this started," and M16e's base (before any of
+M16e's own changes) already showed the same shape. A bisect run without a reliable failing signal at
+either end would produce noise, not an attributed commit.
+
+**Per the agent contract's "Escalate, don't decide":** this is the step 3 cut line. `pnpm test:slow
+-t "connected-terrain"` **is** green in hardware mode on this machine, right now (exit criterion's
+literal text, verified repeatedly above) -- but the "attributed in Deviations with `windowByFn` and
+the bisected commit" half of that same criterion cannot be completed without a reproducing failure
+to attribute. Handed to the orchestrator: either accept the current green state (nothing to fix,
+nothing regressed that this session can find), or re-run the exact repro command
+(`playwright test --project gc --grep "connected-terrain neg burst" --workers 1 --repeat-each N`,
+hardware mode) on whatever machine/session first saw 111.07-111.74, budget forced to 1 the moment it
+reproduces, to capture `windowByFn` before the process exits -- this session's own attempt 7/8
+technique above is ready to reuse the instant it does.
+
+`git status --short` clean at the end of this step: the forced-interpreter `playwright.config.ts`
+edit and the forced `budgets.json` edit were both reverted (`git diff` empty for both, confirmed
+after each probe).
