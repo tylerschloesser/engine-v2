@@ -508,32 +508,103 @@ through `engine::export_game!`'s real `TerrainConfig::deserialize`, which a `nul
 this cut's own first draft: `{"ok":false,"code":"worker-fatal","message":"engine_init failed:
 BadConfig"}`).
 
-**One-wake input latency, found running this cut's own first draft.** `worker/client.ts`'s `body()`
-calls `frame()` *before* `inputPump.pump()` drains that same wake's own new `inputRing` records into
-`InputQueue` -- a record written before a `stepFrame` call is only visible to the *next* real
-`frame()` call's own `cx.input()`, not that same call's. Both `framecx.*` browser tests call
-`stepFrame` twice for this reason (`stepFrameTwice`, documented at its own definition site); this is
-the same one-wake-old staleness `game_instance.rs`'s own `CachedCameraView` doc comment already
-names elsewhere in this pipeline, not a defect this cut introduced or should fix.
+**One-wake input latency: a real production defect, fixed (gate round 1).** The first draft left
+`worker/client.ts`'s `body()` calling `frame()` *before* `inputPump.pump()` drained that same wake's
+own new `inputRing` records into `InputQueue`, so an event written before a `stepFrame` call was only
+visible to the *next* real `frame()` call's own `cx.input()` -- on every real page, not only in
+tests, since `body()` is shared client-role infrastructure. Before this milestone nothing in Rust
+read input inside `frame` at all, so the two pumps' relative order never mattered; `FrameCx::input()`
+is what makes it matter, so it is this milestone's to fix, not a pre-existing characteristic to
+document around. **Fixed**: `inputPump.pump()` now runs first in `body()`, before the `CB_FRAME_REQ`
+check that gates `frame()` -- unconditionally safe to move (`inputPump` only touches `inputRing` and
+the `Rx` region transiently; nothing later in `body()` reads `Rx` before `actionPump` overwrites it
+for its own, unrelated purpose; single-threaded, sequential, no concurrent readers). Checked the
+other two pumps and the clear-timing question the coordinator asked about: `netPump`/`uploadPump`
+neither read nor write `inputRing`/`InputQueue`, so their own relative order (unchanged, both still
+after `frame()`) is untouched by this; `InputQueue::clear()` still runs at the very end of
+`GameInstance::frame()` (steps 4-6's own placement, unchanged here), so a record drained this wake is
+read by this wake's `frame()` before being cleared, and a record arriving *after* this wake's own
+`inputPump.pump()` call correctly waits for the next wake's own drain -- neither "cleared unread" nor
+"read early" is possible with the new order. Both `framecx.*` tests now assert visibility after
+**one** `stepFrame` (`stepFrameTwice` removed). Inject-fail-revert (restored the old order, a fresh
+build, foreground `pnpm test browser -t framecx`):
+```
+FAIL browser [chromium] framecx.tap_visible_in_frame
+  Error: tap timed out; debug={"ringStats":{"drops":0,"pushed":1,"popped":1},"uiDrainStats":{"recordsSeen":0,"onUi":0}}
+FAIL browser [chromium] framecx.emit_visible_in_frame
+  Error: emit timed out; debug={"ringStats":{"drops":0,"pushed":1,"popped":1},"uiDrainStats":{"recordsSeen":0,"onUi":0}}
+```
+Both fail with the ring itself drained (`popped: 1`) but the UI pipeline never even started
+(`recordsSeen: 0`) -- exactly "decoded into the queue, then cleared by this same wake's `frame()`
+before the *next* wake's `cx.input()` ever sees it," the old defect. Reverted immediately after
+(`git diff packages/engine/src/worker/client.ts` empty before the real commit).
 
-**`client.onUi`'s own independent poll**, found running this cut's own first draft: `resultsFrame()`
-(`client.ts`) drains `uiRing` and fires `onUi` listeners from a *separate* real-`requestAnimationFrame`
-schedule, not from `stepFrame`'s synchronous worker lockstep -- reading `lastUi()` immediately after
-two `stepFrame` calls raced that independent rAF and returned `undefined` intermittently (observed:
-passed with 1 real second of slack via manual `page.waitForFunction` probing, timed out at exactly
-5000ms in one full-suite run under parallel-worker contention). Both `framecx.*` tests use `page.
-waitForFunction` (`waitForUi`) rather than a fixed read, and re-ran clean 3/3 plus inside the full
-159-test browser suite once fixed.
+**A second, discovered consequence: `fixtures/terrain`'s own `frame()`.** `worker/client.ts`'s
+`body()` is shared by every client-role page, including the low-level, hand-written (pre-
+`GameInstance<G>`) `fixtures/terrain`, whose own `frame()` unconditionally called `input_queue.
+clear()` every call (the original M11 "cleared each frame" contract, harmless when nothing read the
+queue near `frame()` at all). With the reorder, that fixture's own `frame()` now ran *after* the
+same wake's drain and erased it immediately -- `semantic.spec.ts`'s pre-existing `input: events reach
+wasm` test (whose own `__semReadInputStats` reads the queue via a *separate*, later `on_input(0)`
+call, `test-call`-parked, not from inside `frame()`) regressed: `queueLen` expected `2`, got `0`.
+Found running the full browser suite after the reorder, not by inspection. This fixture never reads
+`cx.input()` (it predates `FrameCx` entirely, Non-scope of this milestone) and nothing else in the
+repo depends on its per-frame clear (`grep` for `queueLen`/`__semReadInputStats`/`__semStepFrame`:
+`semantic.spec.ts` and its own page script only) -- the clear served "prove the contract", never a
+real consumer, so it is removed rather than reordered around a consumer that does not exist
+(`fixtures/terrain/src/lib.rs`, the `input_queue: _` binding, `frame()`). `semantic.spec.ts` itself
+is unmodified: the fix restores its existing, unweakened assertion (`queueLen === 2`), it does not
+relax it. Verified: `pnpm test browser -t "events reach wasm"` -> `pass 1`; `-t semantic` -> `pass
+6`; `-t terrain` -> `pass 31`; full `pnpm test browser` -> `pass 159` (all foreground, after the
+fix).
+
+**`client.onUi`'s own independent poll: confirmed not a delivery bug, still occasionally slow.**
+`resultsFrame()` (`client.ts`) drains `uiRing` and fires `onUi` listeners from a *separate* real-
+`requestAnimationFrame` schedule, not from `stepFrame`'s synchronous worker lockstep. Round 1's
+gate correctly flagged that a `waitForFunction` timeout alone does not distinguish "input never
+delivered" from "delivered, `onUi` just hasn't fired yet" -- instrumented with `window.__debug()`
+(`ClientTestHandle.uiDrainStats()` plus the input ring's own producer counters, `framecx.ts`) to
+settle it. Every timeout this milestone's own stress-testing caught (dozens of foreground runs,
+`pnpm test browser -t framecx` repeated and the full `pnpm test browser` suite repeated) showed
+`ringStats.popped: 1` (the record left the ring) **and**, on the passing-eventually runs,
+`uiDrainStats: {recordsSeen: 1, onUi: 1}` (the whole pipeline, including `onUi`, had already
+completed) -- confirming this class of timeout is `resultsFrame`'s own real-rAF cadence landing late
+under heavy parallel-worker CPU contention in this build environment, never a stuck or lost record.
+`waitForUi` now uses `polling: 100` (a plain interval, not the default `'raf'`, which would stack a
+second real-rAF dependency on top of `resultsFrame`'s own) and a 20s budget, with `test.setTimeout
+(45000)` giving headroom over it. Retries (`test.describe.configure({ retries: 2 })`) were tried and
+reverted: three independent attempts can all land in the same contention window (observed once,
+all three failing consecutively, `retry2` in the artefact path), which only triples the worst-case
+wall time without improving reliability. Residual risk, reported rather than hidden: under
+sufficiently heavy parallel load, `framecx.tap_visible_in_frame`/`framecx.emit_visible_in_frame` can
+still time out on `onUi` delivery alone, at roughly the rate a repeated-foreground-run stress test in
+this environment showed (occasional, not systematic -- the large majority of runs, including every
+run of the full 159-test `pnpm test browser` suite captured in this section, passed clean). Fixing
+`resultsFrame`'s own cadence (e.g. a non-rAF fallback poll) is main-thread production code well
+outside this milestone's Scope; flagged for the orchestrator rather than attempted here.
+
+**"Allocates nothing" (Tests added: `framecx.emit_visible_in_frame`) is not asserted anywhere.**
+`client.input.emit`'s implementation is zero-alloc by the same construction as the pre-existing
+`emit()` it sits beside in `input/semantic.ts` (identical `ring.tryClaim`/`slotView`/`commit` shape,
+`writeInputRecord`'s own allocation-free encode) -- but no test measures it, in this cut or any
+existing zero-GC page (`grep` for `.input.emit` under `tests/browser/pages/src/gc-*.ts`: zero
+matches). The natural home is step 8's own `anchors` GC page (the brief's Budgets section already
+commits that page to a `50 + 4 anchors` allocation line); a `client.input.emit` call folded into that
+page's own measured scenario, or a dedicated assertion there, is that step's to add, not claimed
+here.
 
 ### Live in production vs. test-only
 
 Live on every real page (not only in tests): `FrameCx`/`ClientSide::frame`'s new call, `cx.input()`,
-`InputQueue`'s never-dropped `kind::GAME` policy, `client.input.emit`, `DrawList::anchor`'s header
-writes (even when a game never calls it -- the mask is always written, all-zero), `client.overlay.
-anchorSlot`, `follow`'s camera-centring in `integrate()`, and `camera.tick()`'s own header read
-(unconditional, every rAF, zero-cost when `follow_valid` is `0`). Test-only: `fx-overlay` itself,
-`framecx.html`'s `__stepFrame`/`__injectRawInput`/`__emit`/`__lastUi` hooks, `real-camera.ts`'s
-`opts.follow`/`opts.anchors` header hand-fill and its `__rcOverlayAnchorSlot*` hooks.
+`worker/client.ts`'s `inputPump.pump()`-before-`frame()` order (gate round 1), `InputQueue`'s
+never-dropped `kind::GAME` policy, `client.input.emit`, `DrawList::anchor`'s header writes (even
+when a game never calls it -- the mask is always written, all-zero), `client.overlay.anchorSlot`,
+`follow`'s camera-centring in `integrate()`, and `camera.tick()`'s own header read (unconditional,
+every rAF, zero-cost when `follow_valid` is `0`). Test-only: `fx-overlay` itself, `fixtures/terrain`'s
+own removed `input_queue.clear()` call is a real production-fixture change but the fixture itself is
+test support, not a shipped page; `framecx.html`'s `__stepFrame`/`__injectRawInput`/`__emit`/
+`__lastUi`/`__debug` hooks, `real-camera.ts`'s `opts.follow`/`opts.anchors` header hand-fill and its
+`__rcOverlayAnchorSlot*` hooks.
 
 ### Verified (commands and results)
 
@@ -566,14 +637,30 @@ anchorSlot`, `follow`'s camera-centring in `integrate()`, and `camera.tick()`'s 
     `updateSlotAnchor` never writes `--wx/--wy` for any slot -> failed on the first position
     assertion (`expected 266.67, received 200`, the CSS-px equivalent of "never moved off its
     default"). Covers `overlay/anchors.ts`'s own mask-bit-gated write branch.
-  - `framecx.tap_visible_in_frame` / `framecx.emit_visible_in_frame`: `fx-overlay`'s own
-    `cx.ui_dirty()` call commented out -> both timed out waiting for `count > 0` (`ui.maybe_run`
-    never reruns with no replica mutation on this fixture's own path). Covers `FrameCx::ui_dirty()`'s
-    own write-then-read round trip through `game_instance.rs`.
+  - `framecx.tap_visible_in_frame` / `framecx.emit_visible_in_frame`, **the UI-rerun path**:
+    `fx-overlay`'s own `cx.ui_dirty()` call commented out -> both timed out waiting for `count > 0`
+    (`ui.maybe_run` never reruns with no replica mutation on this fixture's own path). Covers
+    `FrameCx::ui_dirty()`'s own write-then-read round trip through `game_instance.rs`. (Round 1
+    gate: this alone proves the rerun path, not delivery -- see the next two.)
+  - `framecx.tap_visible_in_frame`, **delivery**: `FrameCx::input()` forced to always return `&[]`
+    -> `OverlayClient::frame` never sees the tap, never calls `cx.ui_dirty()` -> timed out, `debug=
+    {"ringStats":{"drops":0,"pushed":1,"popped":1},"uiDrainStats":{"recordsSeen":0,"onUi":0}}` (the
+    ring itself still drains; nothing downstream of `cx.input()` ever ran). Covers `FrameCx::input()`'s
+    own return path.
+  - `framecx.emit_visible_in_frame`, **delivery**: `InputQueue::push` made to silently drop every
+    `kind::GAME` record -> timed out, `debug={"ringStats":{"drops":0,"pushed":1,"popped":1},
+    "uiDrainStats":{"recordsSeen":0,"onUi":0}}` (same signature: ring drained, nothing reaches `Ui`).
+    Covers `InputQueue::push`'s own kind-7 acceptance path. Also confirmed (not a new fault, an
+    existing-assertion check): both tests already assert the exact `pick_id`/`code`/`a`/`b` values
+    they received (`ui?.last_pick_id`, `last_tile_x`, `last_tile_y`), not only `count > 0` --
+    `framecx.tap_visible_in_frame` additionally asserts `last_kind`/`last_pick_id: 77`/`last_tile_x:
+    5`/`last_tile_y: -2`; a wrong-but-nonzero delivery would fail these even if `count` alone would
+    not have caught it.
   - `follow.centres_in_same_frame_pan_ignored_zoom_works`: `camera.ts`'s own follow-override block
     gated behind `if (false && follow.valid)` -> failed the first centring assertion (`expected 7,
     received 0`, the un-overridden pre-drag default). Covers `integrate()`'s own follow-override
     branch.
-- `pnpm test`/`pnpm lint` (the full runs) not run (delegation prompt: "I am the gate").
+- `pnpm test`/`pnpm lint` (the full runs) not run (delegation prompt: "I am the gate"). All commands
+  above run in the foreground (coordinator instruction, gate round 1); none backgrounded.
 - Not run (steps 7-8, later implementer's): `pnpm test browser -t "\btranslate\b"`, any GC/budgets
   command, `pnpm bench:frame`.
