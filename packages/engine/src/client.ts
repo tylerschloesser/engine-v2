@@ -247,12 +247,13 @@ export interface Client {
     acquire(): void
     at(cssX: number, cssY: number): number
   }
-  /** docs/plan/18-picking-and-overlay.md Seams (Provides): `overlay.anchor` (0019 §5's own
-   * signature). `update()` is this cut's own addition (Deviations: not itself a pinned Seam name,
-   * mirroring `camera.tick`/`input.recognize`'s own precedent) -- a page's `onOverlay` hook
-   * (`frame-loop.ts`) calls it once per rAF. `anchorSlot` is a later step's (Non-scope here). */
+  /** docs/plan/18-picking-and-overlay.md Seams (Provides): `overlay.anchor`/`overlay.anchorSlot`
+   * (0019 §5's own signatures). `update()` is this cut's own addition (Deviations: not itself a
+   * pinned Seam name, mirroring `camera.tick`/`input.recognize`'s own precedent) -- a page's
+   * `onOverlay` hook (`frame-loop.ts`) calls it once per rAF. */
   readonly overlay: {
     anchor: Overlay['anchor']
+    anchorSlot: Overlay['anchorSlot']
     update(): void
   }
   /** docs/plan/11-camera-and-input.md Seams (Provides): `camera.{setConstraints, moveTo, read,
@@ -528,6 +529,9 @@ export function createClient(options: ClientOptions): Client {
         recognize(): void {
           throw err
         },
+        emit(): boolean {
+          throw err
+        },
       },
       pick: {
         acquire(): void {
@@ -539,6 +543,9 @@ export function createClient(options: ClientOptions): Client {
       },
       overlay: {
         anchor(): never {
+          throw err
+        },
+        anchorSlot(): never {
           throw err
         },
         update(): void {
@@ -628,6 +635,7 @@ export function createClient(options: ClientOptions): Client {
     cameraState,
     viewport: cameraViewport,
     canvas: options.canvas,
+    drawListSlot,
   }
   if (options.overlay !== undefined) overlayDeps.options = options.overlay
   const overlay: Overlay = createOverlay(overlayDeps)
@@ -686,6 +694,15 @@ export function createClient(options: ClientOptions): Client {
       cameraIntegrator.setFollow(x, y, valid)
     },
     tick(dtMs) {
+      // docs/plan/18-picking-and-overlay.md steps 4-6 (0019 §1): "the main thread centres on it in
+      // the frame that draws that DrawList" -- reads the *acquired* slot's own header (the `acquire`
+      // phase already ran this rAF, `frame-loop.ts`'s `FRAME_PHASES`), so a target the Rust side set
+      // this frame takes effect in this same `integrate()` call, not one rAF later.
+      cameraIntegrator.setFollow(
+        drawListSlot.followX,
+        drawListSlot.followY,
+        drawListSlot.followValid,
+      )
       cameraIntegrator.integrate(cameraState, cameraViewport, dtMs)
       input.recognize(cameraBundle, cameraState, cameraViewport, dtMs)
     },
@@ -1037,7 +1054,7 @@ export function createClient(options: ClientOptions): Client {
     setFlags,
     input,
     pick: { acquire: picker.acquire, at: picker.at },
-    overlay: { anchor: overlay.anchor, update: overlay.update },
+    overlay: { anchor: overlay.anchor, anchorSlot: overlay.anchorSlot, update: overlay.update },
     camera,
     destroy,
   }

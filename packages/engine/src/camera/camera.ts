@@ -6,11 +6,13 @@
 // "integration functions take `dt` and plain state, no DOM").
 //
 // Steps 1-3 (an earlier range of this same milestone) built pan/pinch/wheel/WASD/inertia and left
-// `constraints` mutable in place as a forward-compatible hook (Deviations); step 6 (this range) adds
-// `moveTo`, `setViewClamp`, `setFollow` (still a no-op store: centring on a follow target is M18's
-// own Non-scope), the device-pixel-at-rest snap and an `onMotionEnd` hook `client.ts` uses for
-// `localStorage` persistence. `client.camera.{setConstraints, moveTo, read}` and
-// `client.camera.restored` are thin wrappers in `client.ts` over what this file exposes.
+// `constraints` mutable in place as a forward-compatible hook (Deviations); step 6 of that same
+// earlier range added `moveTo`, `setViewClamp`, `setFollow` as a no-op store. Steps 4-6 of the
+// picking-and-overlay milestone's own second range (docs/plan/18-picking-and-overlay.md) give
+// `follow` real behaviour: `integrate()` centres on it and ignores pan while `valid`, zoom still
+// works. Also built by that earlier range: the device-pixel-at-rest snap and an `onMotionEnd` hook
+// `client.ts` uses for `localStorage` persistence. `client.camera.{setConstraints, moveTo, read}`
+// and `client.camera.restored` are thin wrappers in `client.ts` over what this file exposes.
 
 import type { KeyState } from '../input/keys.js'
 import { KeyBit } from '../input/keys.js'
@@ -104,9 +106,13 @@ export interface CameraIntegrator {
    * M28's own Non-scope -- this range only builds the setter). Narrower than `constraints.maxTiles`
    * only when it is itself the smaller number; never widens past `constraints.maxTiles`. */
   setViewClamp(maxTilesPerAxis: number): void
-  /** Internal (Seams, M18): stored, not yet consumed -- "no-op until M18 supplies a target" (Scope).
-   * `camera.ts` never reads `followX/Y/Valid` today; the follow-target centring itself is M18's own
-   * Non-scope line, and a follow target disabling panning (0019 §1) is also unimplemented here. */
+  /** Internal (Seams): 0019 §1 -- "the game's client Rust calls `cx.follow(Some(pos))` in
+   * `ClientSide::frame`; the engine puts it in the frame header and the main thread centres on it
+   * in the frame that draws that DrawList. While a target is set, pan input is ignored and zoom
+   * still works; `None` returns control." `src/client.ts`'s `camera.tick(dtMs)` calls this once per
+   * rAF, straight from the acquired `DrawListSlot`'s own header (`follow_valid`/`follow`), before
+   * `integrate()` runs -- so a target set this frame centres this same frame (docs/plan/
+   * 18-picking-and-overlay.md Tests added: `follow.centres_in_same_frame_pan_ignored_zoom_works`). */
   setFollow(x: number, y: number, valid: boolean): void
 }
 
@@ -124,9 +130,8 @@ export function createCameraIntegrator(
     maxTiles: DEFAULT_MAX_TILES,
   }
   let viewClampMaxTiles = Number.POSITIVE_INFINITY
-  // Non-scope (M18): stored, never consumed -- "no-op until M18 supplies a target" (Scope). A
-  // single object, not three separate `let`s, so `setFollow` writing it doesn't need a
-  // `noUnusedVariables`-dodging read of its own.
+  // 0019 §1: the follow target `integrate()` reads every call, below. A single object, not three
+  // separate `let`s, so `setFollow` writing it and `integrate` reading it are one field access each.
   const follow = { x: 0, y: 0, valid: false }
   let wasAtRest = false
 
@@ -408,6 +413,22 @@ export function createCameraIntegrator(
     applyWheelEasing(state, viewport, input.wheel, dtMs)
     applyMoveTo(state, dtMs)
     clampToBounds(state, constraints.bounds)
+
+    // 0019 §1: "while a target is set, pan input is ignored and zoom still works". Every pan-shaped
+    // effect above (gesture/pointer drag, WASD, inertia, `moveTo`, the bounds clamp) only ever
+    // reaches the camera through `state.centreX/Y`, so overriding those two fields here, after
+    // everything else ran, discards this frame's pan unconditionally without needing a branch inside
+    // any of the functions above -- `state.tilesAcross` (zoom) is untouched, so pinch/wheel zoom
+    // keeps working exactly as it does with no target set. Placed *after* `clampToBounds` so a
+    // follow target is authoritative even outside the camera's own pan bounds (it is not itself a
+    // pan). Velocity is zeroed too, so a drag in progress when a target is set (or inertia already
+    // running) cannot reappear as an unexpected jump the frame the target is later cleared.
+    if (follow.valid) {
+      state.centreX = follow.x
+      state.centreY = follow.y
+      state.velocityX = 0
+      state.velocityY = 0
+    }
 
     // 0018 §3: "the camera snaps to device pixels at rest" -- once *everything* above left the
     // camera untouched this frame (no active gesture, no WASD ramp in progress, no wheel easing
