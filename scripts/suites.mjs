@@ -1,11 +1,11 @@
 // What `pnpm test` builds and runs. Every later milestone registers its work here and nowhere else.
 
 // Edit → tests starting. Owner of the number: docs/decisions/0020 §3, docs/decisions/0033 §1
-// (15,000, down from 30,000: the fixtures/cargo-tests rebuild ping-pong fixed in M17d left a warm,
-// no-change build at ~6.3-6.6 s in isolation, ~8-9 s of it in `fixtures` alone right after a
-// browser-suite-heavy `pnpm test` -- machine contention, not a rebuild, confirmed by
-// `CARGO_LOG=cargo::core::compiler::fingerprint=info` staying clean).
-export const buildBudgetMs = 15_000
+// (10,000, down from 30,000: M17d fixed two independent rebuild-ping-pong causes -- the
+// fixtures/cargo-tests cargo package-selection scope mismatch, and plugin-dev.test.ts's own
+// `utimes()` touch of a real fixture source file never being restored -- leaving a warm, no-change
+// build at ~6.3-6.5 s repeatably, including immediately after the `browser` suite).
+export const buildBudgetMs = 10_000
 
 /**
  * Build steps run one after another, in order, before any suite (cargo steps would only queue on

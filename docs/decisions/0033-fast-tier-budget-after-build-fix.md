@@ -1,4 +1,4 @@
-# 0033: Fast tier budgets, re-divided after the build fix: 15 s build, 35 s browser
+# 0033: Fast tier budgets, re-divided after the build fix: 10 s build, 35 s browser
 
 Status: Accepted (2026-09-23). Amends [0020](0020-testing-strategy.md) §3 (the suites-and-budgets
 table and its "55 s if run serially" line). Implemented in milestone M17d.
@@ -12,75 +12,105 @@ measure"). By M17d, `pnpm test` on a warm tree with no source change actually co
 (`build WARN`) plus 23-24 s for the `browser` suite -- 58-66 s serially, over Tyler's one-minute
 requirement (`docs/spec/testing.md`).
 
-M17d step 1 added per-step build timings (`test-results/build/timings.json`,
-`scripts/lib/report.mjs`'s `buildStepsReport`). Step 2 named the cause with evidence
-(`CARGO_LOG=cargo::core::compiler::fingerprint=info`): the `fixtures` build step's own bindings
-call (`exportBindings`, `packages/engine/src/build-game.ts`) ran `cargo test` scoped to one package
-(`-p`, implicit from its working directory), while the `cargo-tests` build step ran `cargo nextest
-run --workspace --no-run`. Cargo's per-invocation feature/metadata-hash resolution is sensitive to
-that package-selection scope alone -- confirmed by ruling out the original suspect
-(`TS_RS_EXPORT_DIR`, M16's env override) with the *identical* value passed under both scopes and
-still seeing the same dirty fingerprint (`UnitDependencyInfoChanged` on the crate's own `serde`
-dependency edge) -- so the two steps recompiled one fixture crate for each other, every single
-`pnpm test`, warm or not. Step 3 fixed it: `exportBindings` now runs `--workspace` too, with no env
-override (the same ambient environment `.cargo/config.toml` already gives every other cargo
-invocation of the build), and copies only its own crate's output out of every workspace member's
-harmless, gitignored scratch write.
+**Two build-step problems, both now fixed with a named, reproducible cause.**
 
-**Measured** (Tyler's Mac, warm, no source change, `test-results/build/timings.json`):
+**1. The `fixtures`/`cargo-tests` rebuild ping-pong** (M17d steps 2-3). `exportBindings`'s own
+`cargo test` (`packages/engine/src/build-game.ts`) ran scoped to one package (`-p`, implicit from
+its working directory), while the `cargo-tests` build step ran `cargo nextest run --workspace
+--no-run`. `CARGO_LOG=cargo::core::compiler::fingerprint=info` named the dirty reason:
+`UnitDependencyInfoChanged` on the crate's own `serde` dependency edge, every time the scope
+switched between the two -- confirmed to be about *package-selection scope alone*, not env (the
+original suspect, `TS_RS_EXPORT_DIR`, was ruled out by passing it the *identical* value under both
+scopes and still seeing the dirty fingerprint). Fixed: `exportBindings` now runs `--workspace` too.
 
-| step | before (M17d's own evidence) | after |
+**2. A second, independent cause of the same symptom, found in fix round 1** (Tyler measured `build
+WARN 15s/15s` on two consecutive quiet-machine runs after 1 above landed). Attributed precisely:
+`packages/engine/tests/wasm/plugin-dev.test.ts`'s `"touch triggers rebuild and full-reload"` test
+calls `utimes(fixtures/hash/src/lib.rs, now, now)` to simulate a file-watcher touch for Vite's
+dev-rebuild path -- a **real fixture source file**, not a copy, and the mtime was never restored
+afterward. `CARGO_LOG` on the very next `pnpm test`'s `cargo-tests` step named it exactly:
+`FsStatusOutdated(StaleItem(ChangedFile { reference: ".../fx-hash.../dep-test-lib-fx_hash",
+reference_mtime: T0, stale: ".../fixtures/hash/src/lib.rs", stale_mtime: T1 > T0 }))` -- cargo saw
+the *untouched-in-content* source file as newer than its own fingerprint and recompiled `fx-hash`,
+every time the `wasm` suite (which runs concurrently with `unit`/`rust`/`browser`, so this fires on
+every ordinary `pnpm test`) ran before the next build. Fixed: the test now records the file's mtime
+before touching it and restores it in a `finally`, pass or fail (`packages/engine/tests/wasm/
+plugin-dev.test.ts`).
+
+**Measured** (Tyler's Mac, warm, no source change, `test-results/build/timings.json`, three
+consecutive full `pnpm test` runs after both fixes):
+
+| step | before (M17d's original evidence) | after both fixes |
 |---|---|---|
 | `tsc` | 0.5 s | ~0.4 s |
-| `fixtures` | 15.9 s | ~0.9 s |
-| `cargo-tests` | 15.9 s | ~0.2 s |
-| `doctests` | 5.7 s | ~4.2-5.5 s (unchanged; a `compile_fail` doctest re-pays its own compile check every run, by design -- not part of this fix) |
+| `fixtures` | 15.9 s | ~0.87-0.89 s, consistently, including immediately after the `browser` suite |
+| `cargo-tests` | 15.9 s | ~0.19-0.20 s, consistently |
+| `doctests` | 5.7 s | ~4.2-4.4 s (unchanged; a `compile_fail` doctest re-pays a real rustc invocation every run, by design -- not part of either fix) |
 | `pages` | 0.6 s | ~0.6 s |
-| **total build** | **35-42 s** | **~6.3-6.6 s** |
+| **total build** | **35-42 s** | **~6.3-6.5 s, repeatably, including right after `browser`** |
 
 `browser` (unchanged by this milestone, from M17d's own evidence and [0031](0031-browser-suite-five-workers.md)): 23-24 s quiet, 29 s under `node scripts/repeat.mjs browser 8 --load 10`.
 
-Step 4 measured the other spec target this milestone touches, the 30 s incremental rebuild
-(`docs/spec/testing.md`) from a one-line edit in `crates/engine/src/`: cargo's own reported compile
-time (`cargo nextest run --workspace --no-run`'s "Finished ... in Ns" line) was consistently
-**~17 s**, under the 30 s target. The wall-clock time this session actually observed around that
-figure was far higher (100-150 s) and did not track the source-code cost: `user`+`sys` CPU time
-accounted for well under half of it, and the gap reproduced across repeated isolated measurements
-after this same session had already run dozens of manual cargo invocations across many different
-package-selection experiments (`-p`, `-p a -p b`, `--workspace`, `--workspace --exclude ...`),
-swelling the shared `target/` directory to 6.6 GB with 481+ fingerprint entries. That overhead is
-recorded here as a finding, not folded into a budget: nothing in `scripts/suites.mjs` gates on the
-30 s rebuild figure (it is a spec target verified by hand, not a suite budget), and a machine-local,
-session-local artifact is not evidence for changing one. Deviations has the full trail; a clean
-`cargo clean` remeasurement is a fair follow-up if the gap recurs outside a long experimental
-session.
+**3. The 30 s incremental rebuild** (`docs/spec/testing.md`), from a one-line comment added to
+`crates/engine/src/lib.rs`, then `pnpm test`'s build. **This one is not reachable within 30 s in
+this milestone, with a precise, measured cause** -- attributed with `cargo test --workspace
+--timings` (cargo's own per-unit compile profiler, not a guess) plus direct process sampling during
+the slow window, not folded into a budget (nothing in `scripts/suites.mjs` measures this figure):
+
+- One cargo invocation dirties (`exportBindings`'s own `cargo test --workspace ... export_bindings`,
+  the first of the build's cargo invocations to touch the changed `engine` crate). Rust's rlib model
+  means every crate that depends on `engine` -- not just its lib, every one of its own *test
+  binaries* -- must recompile and relink, because `--workspace` makes every workspace member a
+  build target: `engine`'s own lib (2 units) + **19 separate `tests/*.rs` integration-test files,
+  each its own compiled binary** (22 units total for `engine` alone) + the 5 fixtures' own libs and
+  test binaries (18 more units). **40 units in total.**
+- `cargo --timings`'s own report (`target/cargo-timings/cargo-timing.html`, embedded `UNIT_DATA`):
+  213.7 s of aggregate per-unit compile time, but a **17.55 s wall-clock** finish (matching cargo's
+  own repeatedly-observed "Finished ... in 17.2-17.6 s" line exactly) -- already well parallelized,
+  about 12x over serial, close to this Mac's 14-core ceiling. **Compilation itself is not the
+  problem** and is comfortably inside the 30 s target on its own.
+- The gap between that 17.55 s and the observed **~150 s wall-clock** (`time`'s own report on the
+  real command, repeated across several isolated measurements: 140-215 s) does not appear anywhere
+  in cargo's own build-graph timing. Sampling `ps` every 2 s for the whole run's duration found
+  `com.apple.CodeSigningHelper.xpc` (`/System/Library/Frameworks/Security.framework/...`) active in
+  the large majority of samples: **macOS's mandatory ad-hoc code-signing of every freshly linked
+  Mach-O executable on Apple Silicon**, one operation per one of the 40 binaries this rebuild
+  produces. This is enforced by the OS, not by cargo, rustc or this repo's build scripts, and it is
+  outside anything `pnpm test`'s Node-level orchestration touches.
+- Tried and measured, not adopted: `[profile.test] debug = 0` (repo-wide). Shrank one representative
+  test binary by only ~9% (996,848 -> 907,536 bytes) -- signing cost did not track binary size
+  closely enough to be worth changing debug-info quality for every native test, repo-wide, for this.
+- **What would actually cut it**: fewer separately-signed binaries, i.e. fewer of `crates/engine`'s
+  own `tests/*.rs` files (each is its own compiled+linked+signed unit) -- consolidating them would
+  cut signing operations roughly proportionally. That is a test-content/organization change
+  (`tests/*.rs` file count and shape), outside this milestone's Non-scope line ("changing test
+  content"), and it trades per-file test isolation for build speed. **This is Tyler's question, not
+  a decision this milestone makes.**
 
 ## Decision
 
-**1. `buildBudgetMs` (`scripts/suites.mjs`): 30,000 → 15,000.** Comfortably above the ~6.3-6.6 s
-measured in isolation, and above the noisier figure seen right after a browser-suite-heavy `pnpm
-test`: back-to-back full runs on this machine repeatedly showed `fixtures` alone at 7-9 s (total
-build ~15-16 s) with a clean fingerprint every time (`CARGO_LOG=cargo::core::compiler::fingerprint
-=info` showed zero dirty entries) -- machine/disk contention, not a rebuild. 15,000 sits at the
-edge of that observed noise rather than inside it, so it does not cry wolf on ordinary back-to-back
-`pnpm test` use, while the existing WARN-at-budget/FAIL-at-1.5x-budget classification
-(`scripts/lib/report.mjs`'s `classifyBudget`, `FAIL_MULTIPLE`) still catches a real regression back
-toward the old ping-pong well before it could pass unnoticed: that cost 15-17 s *per affected step*
-(30+ s combined), double this budget's own FAIL line (22.5 s).
+**1. `buildBudgetMs` (`scripts/suites.mjs`): 30,000 → 10,000.** With both build-step causes fixed,
+the warm build measures ~6.3-6.5 s repeatably, including immediately after the `browser` suite;
+10,000 leaves comfortable margin (~50%) without being so loose that a real regression toward either
+fixed ping-pong (15-17 s per affected step) could pass unnoticed -- the existing WARN-at-budget/
+FAIL-at-1.5x-budget classification (`scripts/lib/report.mjs`'s `classifyBudget`) still fails clearly
+above 15,000.
 
-**2. `browser` suite budget (`scripts/suites.mjs`): 25,000 → 35,000.** The build no longer eats
-most of the one-minute budget, so the suite that was always the fast tier's real bottleneck gets
-the room this milestone's Goal asks for ("so M18 and later milestones have room for fast browser
-tests"): build (15 s) + browser (35 s) = 50 s, a 10 s margin under Tyler's 60 s requirement even at
-both budgets' own ceiling simultaneously -- today's actual wall time (~6.5-16 s build + 23-29 s
-browser, 30-40 s measured depending on machine load) sits comfortably inside that with room to
-spare. `rust` (10 s), `unit` (3 s) and `wasm` (7 s) are unchanged: neither this milestone's fix nor
-its Goal touches them, and none was ever the bottleneck (0020 §3's own table).
+**2. `browser` suite budget (`scripts/suites.mjs`): 25,000 → 35,000.** The build no longer eats most
+of the one-minute budget, so the suite that was always the fast tier's real bottleneck gets the room
+this milestone's Goal asks for ("so M18 and later milestones have room for fast browser tests"):
+build (10 s) + browser (35 s) = 45 s, a 15 s margin under Tyler's 60 s requirement even at both
+budgets' own ceiling simultaneously -- today's actual wall time (~6.5 s build + 23-29 s browser,
+30-36 s measured) sits comfortably inside that with room to spare. `rust` (10 s), `unit` (3 s) and
+`wasm` (7 s) are unchanged: neither this milestone's fix nor its Goal touches them, and none was
+ever the bottleneck (0020 §3's own table).
 
-**3. Nothing here raises a number `pnpm test`'s own warm build already meets in isolation.** The
-15,000 ms figure is a budget (a threshold to warn or fail on) sized to this session's own observed
-noise floor, not a claim that the build always takes that long; a clean, isolated run measures
-under 7 s.
+**3. The 30 s incremental-rebuild target is not met and is not addressed by a budget here.**
+Nothing in `scripts/suites.mjs` gates on it (it is a spec target verified by hand, `docs/spec/
+testing.md`, not a suite budget), and the true, measured cause (macOS's own per-binary code-signing,
+§Context) is outside what a checked-in number or this milestone's build-orchestration code can move.
+The true figure (~150 s, attributed) replaces M17d's original, wrong guess (session-local
+target-directory bloat, unsupported by any `cargo clean` measurement and withdrawn here).
 
 ## Alternatives rejected
 
@@ -91,24 +121,29 @@ under 7 s.
   near its own budget (0020 §3's table: 10 s / 3 s / 7 s against sub-2.5 s measured every one), and
   they run in parallel with `browser` -- raising their budgets would not change the fast tier's wall
   time, only hide a real regression in one of them later.
-- **Folding the ~17 s vs 100-150 s incremental-rebuild gap into a number here.** It never showed up
-  as a *budget* miss (nothing in `scripts/suites.mjs` measures it), and the session-local cause
-  (target-directory bloat from this milestone's own experimentation) is not evidence the number
-  belongs in a suite's checked-in budget.
+- **`[profile.test] debug = 0` (or similar) to cut code-signing cost.** Measured: ~9% smaller
+  binary, not enough to expect a meaningful signing-time win, at the cost of debug-info quality for
+  every native test in the repo. Not worth it for an unproven, marginal gain.
+- **Consolidating `crates/engine`'s `tests/*.rs` files to cut the number of signed binaries.** The
+  one lever that would actually move the number, deliberately not taken here: it changes test
+  content/organization (this milestone's own Non-scope line) and trades file-level test isolation
+  for build speed -- Tyler's call, not this milestone's.
 
 ## Consequences
 
 - `docs/plan/17d-fast-tier-wall-time.md` Deviations has the step-by-step measurements this ADR
-  rests on, including the incremental-rebuild finding's full trail.
+  rests on, including both build-step fixes' own before/after numbers and the incremental-rebuild
+  attribution's full trail (the `cargo --timings` report and the `ps`-sampling evidence).
 - If a future milestone's browser suite content pushes past ~35 s quiet, the next re-division is
   this ADR's job to redo, not a silent budget bump.
-- Follow-up, not blocking: a clean `cargo clean` remeasurement of the 30 s incremental-rebuild
-  target, to confirm cargo's own ~17 s figure (rather than this session's noisy 100-150 s) is what
-  a normal development session actually sees.
+- Open, for Tyler: whether `crates/engine`'s ~19 separate `tests/*.rs` files should be consolidated
+  to reduce the incremental-rebuild's code-signing cost, and if so by how much, against the
+  file-level test isolation that shape currently gives.
 
 ## Sources
 
 - `test-results/build/timings.json`, this session (2026-09-23), Tyler's Mac.
-- `docs/plan/17d-fast-tier-wall-time.md` (the brief and its Deviations).
+- `target/cargo-timings/cargo-timing.html` (`cargo test --workspace --timings`), this session.
+- `docs/plan/17d-fast-tier-wall-time.md` (the brief and its Deviations, "Fix round 1").
 - [0020](0020-testing-strategy.md) §3, §10. [0031](0031-browser-suite-five-workers.md) (the
   `browser` suite's own quiet/under-load figures, unchanged by this milestone).
