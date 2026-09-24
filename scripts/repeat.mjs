@@ -1,16 +1,23 @@
 // Repeat one suite N times for a reliability check at a milestone gate (orchestrator tool, PROMPT.md
 // Rules). Each run gets its own process group and a hard kill timeout; `--load <n>` adds n CPU burners
 // that exit on their own if this script dies. A Bash call is capped at 10 minutes: `browser` fits
-// about 20 runs quiet, 15 under load.
+// about 20 runs quiet, 15 under load. `--budget-scale <n>` and `--timings-json <dir>` are forwarded to
+// each `pnpm test <suite>` run; unlike `pnpm test`'s own `--timings-json <path>` (one file), here it's
+// a directory, written one file per run as `<dir>/run-<i>.json`.
 //
-// node scripts/repeat.mjs <suite> <runs> [--load <n>] [--timeout <seconds>]
+// node scripts/repeat.mjs <suite> <runs> [--load <n>] [--timeout <seconds>] [--budget-scale <n>]
+//                          [--timings-json <dir>]
 import { spawn } from 'node:child_process'
+import { join } from 'node:path'
 
 const [suite, runsArg, ...rest] = process.argv.slice(2)
 const opt = (name, d) => (rest.indexOf(name) < 0 ? d : Number(rest[rest.indexOf(name) + 1]))
+const str = (name) => (rest.indexOf(name) < 0 ? undefined : rest[rest.indexOf(name) + 1])
 const runs = Number(runsArg),
   load = opt('--load', 0),
-  timeoutMs = opt('--timeout', 120) * 1000
+  timeoutMs = opt('--timeout', 120) * 1000,
+  budgetScale = str('--budget-scale'),
+  timingsDir = str('--timings-json')
 const burner =
   'const p=process.ppid;(function s(){const t=Date.now();while(Date.now()-t<200);if(process.ppid!==p)process.exit();setImmediate(s)})()'
 const burners = Array.from({ length: load }, () =>
@@ -30,7 +37,10 @@ let pass = 0,
   slowest = 0
 for (let i = 0; i < runs; i++) {
   await new Promise((done) => {
-    const c = spawn('pnpm', ['test', suite], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const args = ['test', suite]
+    if (budgetScale !== undefined) args.push('--budget-scale', budgetScale)
+    if (timingsDir !== undefined) args.push('--timings-json', join(timingsDir, `run-${i + 1}.json`))
+    const c = spawn('pnpm', args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
     let out = ''
     c.stdout.on('data', (d) => (out += d))
     c.stderr.on('data', (d) => (out += d))
