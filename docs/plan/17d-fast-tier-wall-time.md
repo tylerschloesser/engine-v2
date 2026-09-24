@@ -42,6 +42,18 @@ Profiles, features or `RUSTFLAGS` could do the same. Measure; don't assume.
    env exists)
 
 ## Scope
+0. **CI's recurring `wasm` red (added by the orchestrator after M17c's push).** CI's slow tier
+   failed `wasm FAIL 3 tests` with `runner exited 1 after a parseable report showed 0 failures` on
+   runs 35619437805, 35904901201 and 35939177480: three occurrences, two of the last three pushes.
+   The report says `success: true`, 3 passed, 45 skipped. `wasm/output.log` (stdout and stderr share
+   it, `scripts/lib/run.mjs`) holds only Vitest's own "JSON report written" line, so the exit
+   reason is never printed. It has never reproduced locally. First make the next occurrence explain
+   itself: run the `wasm` suite's Vitest with a second, human reporter (or whatever option makes
+   Vitest print unhandled errors, worker crashes and teardown/close timeouts) into the same log.
+   Check current Vitest docs for which flag does that; don't recall it. Then try to reproduce under
+   CI-like constraints (for example fewer CPUs via Vitest's pool limits, `CI=true`, the slow
+   tier's exact command from `.github/workflows/ci.yml`). Fix it if named; otherwise land the
+   diagnostic. Say which. Never make the adapter ignore a non-zero exit.
 1. **Per-step build timings.** `scripts/test.mjs` records each build step's wall time and writes
    them to `test-results/build/` (and on `build WARN`, prints the slowest steps on the one line).
    Quiet output stays one line per suite.
@@ -78,7 +90,7 @@ its text in the report).
 **Consumes:** M01 runner, M16's `TS_RS_EXPORT_DIR` arrangement, M17b's `solo` suites.
 
 ## Order of work
-Steps 1-5 in order, each committed `M17d step k: …`.
+Steps 0-5 in order, each committed `M17d step k: …`.
 
 ## Tests added
 If step 1 adds runner logic with a branch, a `unit` test for it (scripts' own `*.test.mjs`
@@ -87,6 +99,9 @@ second consecutive build compiles nothing, in whatever tier is cheap enough. Say
 and prove it fails by reintroducing the difference.
 
 ## Exit criteria
+- [ ] Step 0: the `wasm` runner's non-zero exit reason is printed into its log on any future occurrence
+      (shown by forcing one, for example an unhandled rejection after the last test, then reverted), and
+      either the cause is fixed or the attempt is recorded.
 - [ ] The rebuild's cause is named with evidence (the dirty reason cargo gives), and fixed.
 - [ ] Warm no-change `pnpm test` build ≤ 5 s measured (paste per-step timings); committed
       bindings byte-identical; the tree is clean after `pnpm test`.
