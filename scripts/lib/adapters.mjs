@@ -67,7 +67,16 @@ export const adapters = {
       const tag = tier === 'slow' ? '^(?=.*@slow)' : '^(?!.*@slow)'
       return {
         cmd: 'pnpm',
-        // Without --passWithNoTests a project with no test files exits 1.
+        // Without --passWithNoTests a project with no test files exits 1. `--reporter=default`
+        // alongside `--reporter=json` (docs/plan/17d-fast-tier-wall-time.md step 0): the `json`
+        // reporter's own summary has no field for an error the JSON schema doesn't model -- an
+        // "Unhandled Rejection"/"Unhandled Error" Vitest catches outside any running test, which
+        // still fails the run (exit 1) while the summary shows 0 failures (a real CI occurrence,
+        // `docs/plan/10-ci-workflow.md` Deviations). `default`'s own "⎯ Unhandled Errors ⎯" block
+        // (with the offending stack) prints to this same log either way -- the log is only ever
+        // excerpted into console output on a non-zero exit (`run.mjs`), so a passing run stays
+        // exactly as quiet as before. Vitest accepts one bare `--outputFile=` with two reporters
+        // named (only `json` writes a file; `default` has none), so no dot-notation is needed.
         args: [
           'exec',
           'vitest',
@@ -75,6 +84,7 @@ export const adapters = {
           '--project',
           suite.name,
           '--passWithNoTests',
+          '--reporter=default',
           '--reporter=json',
           `--outputFile=${reportPath}`,
           '-t',
