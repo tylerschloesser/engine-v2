@@ -36,6 +36,16 @@ block's `artefact:` line. `test-results/browser/report.json` is Playwright's own
 output (project name, per-test timing, `errors[]`, `attachments[]` for a trace) when run through
 `pnpm test`; it is overwritten on every run, so read it right after a failing `pnpm test browser`.
 
+## Build step timings
+
+Every `pnpm test`/`pnpm test:slow` writes `test-results/build/timings.json` (`{ steps: [{ name,
+ms }] }`, one entry per `scripts/suites.mjs` build step, in order), win or WARN; a `build WARN`
+line also names its three slowest steps right there. Rule found the hard way (docs/plan/
+17d-fast-tier-wall-time.md): every cargo invocation of the build must share one environment and
+package-selection scope (`--workspace`, matching `cargo-tests`'s own `cargo nextest run
+--workspace --no-run`) -- a mismatched scope (even with an *identical* env var value) dirties a
+shared dependency's fingerprint and recompiles a crate on every single run, not just a cold one.
+
 ## The `browser` suite specifically
 
 Four projects: `chromium` runs everything under `packages/engine/tests/browser/*.spec.ts` except

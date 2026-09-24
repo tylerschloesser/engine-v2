@@ -2,7 +2,7 @@
 // cargo and Node built-ins only. The Vite plugin (M02b), `pnpm test` and server scripts all call it.
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 
 export type Profile = 'dev' | 'release'
@@ -164,13 +164,39 @@ export async function buildGame(opts: BuildGameOptions): Promise<BuildGameResult
   return result
 }
 
+// Where `.cargo/config.toml`'s own `[env]` points `TS_RS_EXPORT_DIR` by default, relative to
+// whichever crate's test binary is running (cargo always runs a test binary with its own manifest
+// directory as its cwd) -- gitignored, so every crate's `export_bindings_*` test can run harmlessly
+// there as part of an ordinary `cargo test`/`nextest run`.
+const TS_RS_SCRATCH_DIR = 'target/ts-rs-scratch'
+
 /**
  * 0017 §5's bindings step, split out so the Vite plugin's dev rebuild can call it without
  * `await`ing it (Deviations: "without gating the reload") while `buildGame()` itself and
- * `scripts/build-fixtures.mjs` always await it. `TS_RS_EXPORT_DIR=dir` (relative to `crate`) is
- * the only thing distinguishing this from an ordinary native test run; a game/fixture with no
- * `#[ts(export)]` type just runs zero matching tests and writes nothing (`cargo test`'s own
- * behaviour for a name filter that matches no test).
+ * `scripts/build-fixtures.mjs` always await it. A game/fixture with no `#[ts(export)]` type just
+ * runs zero matching tests and copies nothing (`cargo test`'s own behaviour for a name filter that
+ * matches no test).
+ *
+ * Runs plain `cargo test --workspace ... export_bindings` with *no* env override (docs/plan/
+ * 17d-fast-tier-wall-time.md step 2, measured with
+ * `CARGO_LOG=cargo::core::compiler::fingerprint=info`): a single-package `cargo test -p <crate>`
+ * -- with or without a `TS_RS_EXPORT_DIR` override, that made no difference -- resolves a
+ * different fingerprint for the crate's own `serde` dependency edge than `cargo nextest run
+ * --workspace --no-run` does (`UnitDependencyInfoChanged { old_name: "serde", ... }` on the
+ * crate's own lib target), even though every workspace member declares identical `serde`
+ * features; it is the *package-selection scope* (`-p` vs `--workspace`) that cargo's per-invocation
+ * feature/metadata-hash resolution is sensitive to, not anything this function used to set. Each
+ * mismatched scope re-dirtied the other's work on every `pnpm test` (M17d's evidence: 15-16 s of
+ * recompiling one crate, every single run). Matching `cargo-tests`'s own `--workspace` scope here
+ * -- with the *same*, un-overridden environment `.cargo/config.toml` already gives every other
+ * cargo invocation of the build -- fixes it by construction.
+ *
+ * `--workspace` also runs *every* workspace member's own `export_bindings_*` tests (any fixture
+ * with a `#[ts(export)]` type, not just `crate`), each writing to its own `TS_RS_SCRATCH_DIR`
+ * (harmless and gitignored, same as an ordinary `pnpm test rust` run today). This function then
+ * copies only `crate`'s own scratch output into the caller's real, committed `dir` -- the one
+ * place `BINDINGS_FIXTURES`-style opt-in still lives, now as "which crate's files get copied"
+ * rather than "which crate's tests get a separate, scope-mismatched cargo invocation".
  */
 export async function exportBindings(opts: {
   crate: string
@@ -178,15 +204,24 @@ export async function exportBindings(opts: {
   env?: NodeJS.ProcessEnv
 }): Promise<void> {
   const crate = resolve(opts.crate)
-  // `TS_RS_IMPORT_EXTENSION=js`: ts-rs's own default is no extension at all (`import type { Pos }
-  // from "./Pos"`), which fails `tsc` under this repo's `nodenext` module resolution ("Relative
-  // imports carry the `.js` extension", `packages/engine/CLAUDE.md`) -- found when `puts-dispatch.
-  // ts` (docs/plan/16-action-round-trip.md step 4) first imported a generated type.
-  const env = {
-    ...(opts.env ?? process.env),
-    TS_RS_EXPORT_DIR: opts.dir,
-    TS_RS_IMPORT_EXTENSION: 'js',
-  }
-  const built = await cargo(['test', '--color', 'never', 'export_bindings'], crate, env)
+  const env = opts.env ?? process.env
+  const built = await cargo(
+    ['test', '--workspace', '--color', 'never', 'export_bindings'],
+    crate,
+    env,
+  )
   if (built.code !== 0) throw new CargoBuildError('cargo test export_bindings', built.stderr)
+
+  const scratch = join(crate, TS_RS_SCRATCH_DIR)
+  const dest = join(crate, opts.dir)
+  await mkdir(dest, { recursive: true })
+  let entries: string[]
+  try {
+    entries = await readdir(scratch)
+  } catch {
+    entries = [] // No `#[ts(export)]` type in this crate: nothing to copy.
+  }
+  for (const name of entries) {
+    await copyFile(join(scratch, name), join(dest, name))
+  }
 }
