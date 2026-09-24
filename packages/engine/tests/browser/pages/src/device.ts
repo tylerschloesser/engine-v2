@@ -67,19 +67,29 @@ declare global {
       sabWriteTextureOk: boolean
       memoryBytes(): Record<string, number>
     }
+    /** docs/plan/18-picking-and-overlay.md step 8 (`device.html?anchors=50`): the `anchors` browser
+     * test's own hook, reading the exact world tile a device-check ring/button sits at -- the same
+     * grid `fixtures/overlay/src/lib.rs`'s own `extract()` uses, computed once here so a spec never
+     * duplicates the formula. `i` is `1..=50` (the pick id `extract()` assigns, `pick_id - 1` is the
+     * grid index). */
+    __anchorsRingWorld?: (pickId: number) => { x: number; y: number }
   }
 }
 
 // --- URL parameters (Seams, Provides) ------------------------------------------------------
-// `tiles`/`x`/`y`/`autopan`/`scale`/`scaleCap`/`cutoff` are M09b's own; `anchors`/`anchorMode` are
-// reserved for M18 -- "reserved" means this page tolerates them (an unknown `URLSearchParams` key is
-// simply never read), not that it acts on them. `module`/`probe` (with `probe=memory`'s own
-// `touch`/`sim`/`client`) are this range's own (M11 step 8), `harness` is M17b's.
+// `tiles`/`x`/`y`/`autopan`/`scale`/`scaleCap`/`cutoff` are M09b's own; `module`/`probe` (with
+// `probe=memory`'s own `touch`/`sim`/`client`) are this range's own (M11 step 8), `harness` is
+// M17b's. `anchors`/`anchorMode` (M18 step 8): `anchors=50` switches this page to `fx-overlay` and
+// the picking/overlay device check (`runAnchorsCheck`, below) instead of the fill-rate HUD;
+// `anchorMode=translate` opts that check into the per-anchor `translate()` fallback (0019
+// "Alternatives rejected") instead of the default custom-property mechanism.
 const params = new URL(location.href).searchParams
 const tilesAcross = params.has('tiles') ? Number(params.get('tiles')) : undefined
 const startX = params.has('x') ? Number(params.get('x')) : 0
 const startY = params.has('y') ? Number(params.get('y')) : 0
 const autopan = params.get('autopan') === '1' || params.get('autopan') === 'true'
+const anchorsCount = params.has('anchors') ? Number(params.get('anchors')) : undefined
+const anchorMode = params.get('anchorMode') === 'translate' ? 'translate' : 'properties'
 const renderOptions: RenderOptions = {}
 if (params.has('scale')) renderOptions.scale = Number(params.get('scale'))
 if (params.has('scaleCap')) renderOptions.scaleCap = Number(params.get('scaleCap'))
@@ -611,10 +621,156 @@ async function runHarness(): Promise<void> {
   }
 }
 
+// --- `?anchors=50[&anchorMode=translate]` (docs/plan/18-picking-and-overlay.md step 8;
+// docs/plan/device-checks.md, "M18: Picking and overlay anchoring") -- Tyler's own fill/pinch check
+// for overlay anchoring on a real phone (0019 Consequences: "Deferred to Phase 2/3 manual device
+// checks: anchoring on iOS Safari"), and the one exit criterion needing a real running page:
+// "device.html?anchors=50 shows pick_id on the HUD". A real, connected `fx-overlay` client (unlike
+// `runFillRateHud`'s `fx-terrain`): its own real `extract()` draws 50 pickable rings on a fixed grid
+// (`fixtures/overlay/src/lib.rs`'s own `RING_COUNT`/`RING_COLS`/`RING_ROWS`/`RING_SPACING_TILES`,
+// mirrored below) and 4 circles orbiting the origin, each also published through `DrawList::anchor`.
+// This page mounts one small DOM button per ring, anchored (`client.overlay.anchor`, `align:
+// 'bottom'`, the default) to the *same* world tile-centre a ring sits at, and one DOM marker per
+// slot anchor (`client.overlay.anchorSlot`) -- Tyler pans/pinches with real touch gestures (the same
+// real `installPointerListeners`/`installWheelListeners` every other mode here already installs) and
+// watches for anchor swim against the canvas. `align: 'bottom'` also makes the automated `anchors`
+// browser test's own "click the ring, not the button" case trivial: the button's own box sits
+// entirely *above* its anchor point (`translate(-50%, -100%)`), so a click exactly at the ring's own
+// screen centre never lands on the button.
+const RING_COUNT = 50
+const RING_COLS = 10
+const RING_ROWS = 5
+const RING_SPACING_TILES = 3
+const ANCHOR_SLOT_COUNT = 4
+const RING_BUTTON_CSS =
+  'width:14px;height:14px;padding:0;font-size:8px;line-height:14px;text-align:center;'
+
+function ringWorld(pickId: number): { x: number; y: number } {
+  const i = pickId - 1
+  const col = i % RING_COLS
+  const row = Math.floor(i / RING_COLS)
+  const tx = (col - Math.trunc(RING_COLS / 2)) * RING_SPACING_TILES
+  const ty = (row - Math.trunc(RING_ROWS / 2)) * RING_SPACING_TILES
+  return { x: tx + 0.5, y: ty + 0.5 }
+}
+
+async function runAnchorsCheck(count: number, mode: 'properties' | 'translate'): Promise<void> {
+  installPageStyles()
+  const hudEl = document.getElementById('hud') as HTMLPreElement
+  const canvas = document.createElement('canvas')
+  document.body.appendChild(canvas)
+
+  const device: RendererDevice = await initDevice()
+  const gpuApi = (navigator as unknown as { gpu: GPU }).gpu
+  const colorFormat = gpuApi.getPreferredCanvasFormat()
+  const renderer: TerrainRenderer = await createTerrainRenderer(device.device, {
+    colorFormat,
+    viewProbePasses: device.viewProbePasses,
+    checkCompilation: device.checkCompilation,
+  })
+  const assets = { tiles: '/terrain/tiles.json', sprites: '/drawables/sprites.json' }
+  const art = await loadTileArt(device.device, assets.tiles, {
+    checkCompilation: device.checkCompilation,
+  })
+  renderer.setTileArray(art.texture, art.gpuBytes)
+  renderer.writeVisualTable(art.visualTableBytes)
+
+  const overlayWasm = await fixtureWasm('overlay')
+  const clientOptions: ClientOptions = {
+    canvas,
+    wasm: overlayWasm,
+    host: { kind: 'remote', url: 'ws://unused.invalid' },
+    genWorkers: 1,
+    assets,
+    test: { flags: {}, game: { seed: '0x1', params: null } },
+    overlay: { mode },
+  }
+  const client: Client = createClient(clientOptions)
+  await client.ready
+
+  client.cameraState.centreX = startX
+  client.cameraState.centreY = startY
+  if (tilesAcross !== undefined) client.cameraState.tilesAcross = tilesAcross
+
+  const drawListSlot = clientTestHandle(client).drawListSlot
+  const drawablesRenderer: DrawablesRenderer = await createDrawablesRenderer(device.device, {
+    colorFormat,
+    drawListSlot,
+    checkCompilation: device.checkCompilation,
+  })
+  attachDrawables(renderer, drawablesRenderer)
+  const spriteAtlas = await loadSpriteAtlas(device.device, assets.sprites, {
+    checkCompilation: device.checkCompilation,
+  })
+  drawablesRenderer.setSpriteAtlas(spriteAtlas)
+
+  // 50 buttons, each anchored to the same tile a real Rust-drawn ring sits at (`ringWorld`, mirrors
+  // `fixtures/overlay/src/lib.rs`'s own grid). `count` is honoured only for a smaller manual check;
+  // the fixture's own `extract()` always draws the full 50 regardless (a smaller `count` here just
+  // mounts fewer buttons over the same fixed ring field).
+  for (let i = 0; i < Math.min(count, RING_COUNT); i++) {
+    const btn = document.createElement('button')
+    const pickId = i + 1
+    btn.textContent = String(pickId)
+    btn.style.cssText = RING_BUTTON_CSS
+    const w = ringWorld(pickId)
+    client.overlay.anchor(btn, w.x, w.y)
+  }
+  for (let slot = 0; slot < ANCHOR_SLOT_COUNT; slot++) {
+    const el = document.createElement('div')
+    el.textContent = `●${slot}`
+    el.style.cssText = 'color:#f0f;font:12px ui-monospace,monospace;'
+    client.overlay.anchorSlot(el, slot)
+  }
+
+  let lastPickIdHud = '-'
+  client.input.on('tap', (e) => {
+    lastPickIdHud = e.pickId === 0 ? '-' : String(e.pickId)
+  })
+
+  let lastCameraT: number | undefined
+  function onCamera(): void {
+    const t = performance.now()
+    const dtMs = lastCameraT === undefined ? 0 : t - lastCameraT
+    lastCameraT = t
+    client.camera.tick(dtMs)
+  }
+
+  const real: RealFrameLoop = createRealFrameLoop({
+    client,
+    renderer,
+    canvas,
+    clock: systemClock,
+    scheduler: systemScheduler,
+    maxTextureDimension2D: device.device.limits.maxTextureDimension2D,
+    onCamera,
+    onOverlay: () => client.overlay.update(),
+  })
+  attachVisibilityHandling(real.loop)
+  real.loop.resume()
+
+  function renderHud(): void {
+    const lines = [
+      `device.html?anchors=${count}&anchorMode=${mode}`,
+      `isolated: ${globalThis.crossOriginIsolated}`,
+      `adapter.info: ${JSON.stringify(device.adapterInfo)}`,
+      `camera: tilesAcross=${client.cameraState.tilesAcross} centre=(${client.cameraState.centreX.toFixed(2)},${client.cameraState.centreY.toFixed(2)})`,
+      `pick_id: ${lastPickIdHud}`,
+    ]
+    hudEl.textContent = lines.join('\n')
+  }
+  setInterval(renderHud, 100)
+  renderHud()
+
+  window.__anchorsRingWorld = ringWorld
+}
+
 if (params.get('harness') === '1') {
   await runHarness()
 } else if (params.get('probe') === 'memory') {
   await runMemoryProbe()
+} else if (anchorsCount !== undefined) {
+  await runAnchorsCheck(anchorsCount, anchorMode)
 } else {
   await runFillRateHud()
 }

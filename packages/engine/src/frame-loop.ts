@@ -215,6 +215,10 @@ export type RealFrameLoopOptions = {
   /** M09b step 7 (`device.html`): the page's own scripted camera (Non-scope: "the device page uses
    * scripted motion via `autopan` until [M11]"), forwarded straight to `createFrameLoop`. */
   onCamera?(): void
+  /** docs/plan/18-picking-and-overlay.md step 8 (`device.html?anchors=50`): forwarded straight to
+   * `createFrameLoop`, the first real page to need it (`FrameLoopOptions.onOverlay`'s own doc
+   * comment: "a page's own concern", default no-op). */
+  onOverlay?(): void
   /** M09b step 6: forwarded straight to `createFrameLoop` (see its own doc comment). */
   onPhase?(phase: FramePhase): void
   /** Fix round 1 (docs/plan/09b-terrain-art-and-lifecycle.md Deviations): forwarded straight to
@@ -260,6 +264,7 @@ export function createRealFrameLoop(opts: RealFrameLoopOptions): RealFrameLoop {
     viewport,
   }
   if (opts.onCamera !== undefined) frameLoopOpts.onCamera = opts.onCamera
+  if (opts.onOverlay !== undefined) frameLoopOpts.onOverlay = opts.onOverlay
   if (opts.onPhase !== undefined) frameLoopOpts.onPhase = opts.onPhase
   const loop = createFrameLoop(frameLoopOpts)
   return {
