@@ -26,8 +26,20 @@ import {
 import { FLAG_REBASE } from './sab/control.js'
 import { RingConsumer } from './sab/ring.js'
 
-/** Named, in call order (Seams, Provides: "`FrameLoop` phases by name"). */
-export const FRAME_PHASES = ['camera', 'writeCamera', 'upload', 'render', 'overlay', 'ui'] as const
+/** Named, in call order (Seams, Provides: "`FrameLoop` phases by name"). docs/plan/
+ * 18-picking-and-overlay.md Scope, step 1: `acquire` is the new first phase -- takes the newest
+ * DrawList slot once (`Client.pick.acquire()`, `render/drawlist-slot.ts`'s own `DrawListSlot`), so
+ * `camera` (follow, a later step), picking, `overlay` and `render` all read the same slot for the
+ * rest of this `tick()`. */
+export const FRAME_PHASES = [
+  'acquire',
+  'camera',
+  'writeCamera',
+  'upload',
+  'render',
+  'overlay',
+  'ui',
+] as const
 export type FramePhase = (typeof FRAME_PHASES)[number]
 
 /** A fixed value (every test here before M09b) or a thunk re-evaluated every tick (M09b: a real
@@ -53,7 +65,9 @@ export type FrameLoopOptions = {
   /** M11 fills this in for real (Non-scope): mutate `client.cameraState` from input/gestures
    * before this tick's `writeCamera` phase runs. Default no-op. */
   onCamera?(): void
-  /** M18 (Non-scope): default no-op. */
+  /** docs/plan/18-picking-and-overlay.md: default no-op; a page wires this to `client.overlay.
+   * update()` the same way `onCamera` wires `client.camera.tick(dtMs)` -- `frame-loop.ts` itself
+   * only guarantees the phase ordering (`overlay` after `camera`/`render`), not the call. */
   onOverlay?(): void
   /** M16 (Non-scope): default no-op. */
   onUi?(): void
@@ -132,6 +146,8 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoop {
 
   function tick(tMs?: number): FrameTickResult {
     opts.viewport?.applyPending() // M09b: before every other phase, at most once per frame
+    onPhase('acquire')
+    opts.client.pick.acquire() // docs/plan/18-picking-and-overlay.md: the newest DrawList slot, once
     onPhase('camera')
     onCamera() // camera (no-op until M11)
     opts.client.cameraState.frameTimeMs = tMs ?? frameClock.next(FRAME_MS)

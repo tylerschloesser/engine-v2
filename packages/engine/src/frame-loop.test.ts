@@ -40,6 +40,21 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
       setFollow() {},
       tick() {},
     },
+    // docs/plan/18-picking-and-overlay.md: `tick()` now calls `client.pick.acquire()`
+    // unconditionally (the new `acquire` phase) -- unused otherwise by anything this file exercises
+    // (a real `DrawListSlot`/`Overlay` needs a real SAB/canvas, Non-scope of this fakes-only file).
+    pick: {
+      acquire() {},
+      at() {
+        return 0
+      },
+    },
+    overlay: {
+      anchor() {
+        return { set() {}, remove() {} }
+      },
+      update() {},
+    },
     wakeCount: 0,
     flagsSet: 0,
     // Unused by anything `frame-loop.ts` itself exercises (docs/plan/16-action-round-trip.md is a
@@ -132,8 +147,19 @@ function fakeViewport(): {
   }
 }
 
+// docs/plan/18-picking-and-overlay.md Scope, step 1: `acquire` is a new first phase (Deviations:
+// this necessarily changes `FRAME_PHASES`' own literal contents, which this test pins -- recorded
+// there rather than silently edited).
 test('frame-loop.phases_named_in_order', () => {
-  expect(FRAME_PHASES).toEqual(['camera', 'writeCamera', 'upload', 'render', 'overlay', 'ui'])
+  expect(FRAME_PHASES).toEqual([
+    'acquire',
+    'camera',
+    'writeCamera',
+    'upload',
+    'render',
+    'overlay',
+    'ui',
+  ])
 })
 
 test('frame-loop.tick_calls_camera_write_upload_render_in_order', () => {

@@ -13,10 +13,13 @@ import { systemClock, systemScheduler } from './clock.js'
 import { CLOCK_FIELD, ClockBlockView, readClockBlockInto, SessionState } from './clock-block.js'
 import { installBlurAndVisibilityReset } from './input/focus.js'
 import { installKeyListeners, KeyState } from './input/keys.js'
+import { createPicker, type Picker } from './input/pick.js'
 import { installPointerListeners, PointerSlots } from './input/pointers.js'
 import { createSemanticRecognizer, type SemanticRecognizer } from './input/semantic.js'
 import { installWheelListeners, WheelState } from './input/wheel.js'
 import type { InstanceConfig } from './loader.js'
+import { createOverlay, type Overlay, type OverlayOptions } from './overlay/anchors.js'
+import { createDrawListSlot, type DrawListSlot } from './render/drawlist-slot.js'
 import { at, copyBytes, readU32LE } from './sab/bytes.js'
 import {
   CB_FLAGS,
@@ -144,6 +147,12 @@ export interface ClientOptions {
   /** docs/plan/09b-terrain-art-and-lifecycle.md, Seams (Provides). See `RenderOptions`'s own doc
    * comment for defaults and why `createClient` doesn't read this itself. */
   render?: RenderOptions
+  /** docs/plan/18-picking-and-overlay.md Seams (Provides): default root is the canvas's own parent
+   * element (the engine appends one anchor-layer element there and re-parents each anchored `el`
+   * into it, lazily, on the first `client.overlay.anchor` call -- `overlay/anchors.ts`'s own doc
+   * comment). `mode: 'translate'` is accepted for the full type but not built by this cut (Non-scope:
+   * the per-anchor `translate()` fallback is a later step's). */
+  overlay?: OverlayOptions
   /** Test-only escape hatch (Planning decisions: "`createClient` takes `{ clock, scheduler }`
    * through a test-only options field"); never set by a game. */
   test?: {
@@ -229,6 +238,23 @@ export interface Client {
    * integrate`, from the same externally-owned `pointers`/`keys`/`wheel` bundle -- rather than a
    * pinned Seam name). */
   readonly input: SemanticRecognizer
+  /** docs/plan/18-picking-and-overlay.md Seams (Provides): `pick.acquire()` pulls the newest
+   * DrawList slot (called once per rAF by `frame-loop.ts`'s new `acquire` phase, or directly by a
+   * page not built on `frame-loop.ts`); `pick.at(cssX, cssY)` is `input/pick.ts`'s internal
+   * `pickAt`, the same function `input.{on, recognize}` uses to fill every event's own `pickId`.
+   * `engine/test.pickAt(client, x, y)` is a thin wrapper over this. */
+  readonly pick: {
+    acquire(): void
+    at(cssX: number, cssY: number): number
+  }
+  /** docs/plan/18-picking-and-overlay.md Seams (Provides): `overlay.anchor` (0019 §5's own
+   * signature). `update()` is this cut's own addition (Deviations: not itself a pinned Seam name,
+   * mirroring `camera.tick`/`input.recognize`'s own precedent) -- a page's `onOverlay` hook
+   * (`frame-loop.ts`) calls it once per rAF. `anchorSlot` is a later step's (Non-scope here). */
+  readonly overlay: {
+    anchor: Overlay['anchor']
+    update(): void
+  }
   /** docs/plan/11-camera-and-input.md Seams (Provides): `camera.{setConstraints, moveTo, read,
    * worldToScreen, screenToWorld}` with 0019's signatures, plus `camera.restored: boolean` and,
    * internal (Seams: "Internal"), `setViewClamp`/`setFollow`. `tick(dtMs)` is this range's own
@@ -329,6 +355,12 @@ export interface ClientTestHandle {
    * unrelated bundle no real listener or `camera.tick()` call ever reads. */
   readonly cameraBundle: CameraInput
   readonly cameraIntegrator: CameraIntegrator
+  /** docs/plan/18-picking-and-overlay.md: the client's own single `DrawListSlot`/`Picker`/`Overlay`
+   * -- full test access (`.scanned()`/`.styleWrites()`, `engine/test`'s own counters) beyond the
+   * public `Client.pick`/`Client.overlay` surface. */
+  readonly drawListSlot: DrawListSlot
+  readonly picker: Picker
+  readonly overlay: Overlay
   /** docs/plan/16-action-round-trip.md Provides: `engine/test.dispatchRaw`'s own low-level
    * primitive -- writes one pre-encoded `[seq][len][jsonBytes]` record through `dispatch`'s own
    * `RingProducer` (never a second, independent one over the same `actionRing` SAB: an SPSC ring
@@ -497,6 +529,22 @@ export function createClient(options: ClientOptions): Client {
           throw err
         },
       },
+      pick: {
+        acquire(): void {
+          throw err
+        },
+        at(): number {
+          throw err
+        },
+      },
+      overlay: {
+        anchor(): never {
+          throw err
+        },
+        update(): void {
+          throw err
+        },
+      },
       camera: {
         setConstraints(): void {
           throw err
@@ -544,8 +592,45 @@ export function createClient(options: ClientOptions): Client {
   const control = new ControlBlock(sabs.control)
   const cameraState = new CameraState()
   const cameraWriter = new CameraBlockView(sabs.cameraBlock)
-  const input = createSemanticRecognizer(sabs.inputRing)
   const workers: WorkerEntry[] = []
+
+  // CSS-pixel viewport (`camera/transform.ts`'s own space, distinct from `render/viewport.ts`'s
+  // device-pixel one): read once at init and refreshed only on an actual resize
+  // (`ResizeObserver`), never per frame -- `getBoundingClientRect()` allocates a `DOMRect`, and
+  // `camera.tick()` runs on the strict per-rAF path this milestone's own zero-GC page proves
+  // (`.claude/rules/hot-paths.md`; 0016 §2 exempts a real resize as a rare discontinuity). Moved
+  // above `input`/`picker` (docs/plan/18-picking-and-overlay.md): both need it too, and `input`'s
+  // own `pick` argument needs a real `picker` in hand before it is constructed.
+  const cameraViewport: CameraViewport = { widthPx: 1, heightPx: 1 }
+  function refreshCameraViewport(): void {
+    const rect = options.canvas.getBoundingClientRect()
+    if (rect.width > 0) cameraViewport.widthPx = rect.width
+    if (rect.height > 0) cameraViewport.heightPx = rect.height
+  }
+  refreshCameraViewport()
+  let cameraResizeObserver: ResizeObserver | undefined
+  if (typeof ResizeObserver !== 'undefined') {
+    cameraResizeObserver = new ResizeObserver(refreshCameraViewport)
+    cameraResizeObserver.observe(options.canvas)
+  }
+
+  // docs/plan/18-picking-and-overlay.md, Order of work step 1: the client's own single
+  // `DrawListSlot` (the only `TripleReader` over `sabs.drawList` for this client's whole life,
+  // `render/drawlist-slot.ts`'s own doc comment) and the `Picker` built over it -- `input`'s own
+  // `pick` argument below is this same instance, so `client.input.on('tap', ...)`'s own `pickId`
+  // and `client.pick.at` always agree (the same cache, the same acquired slot).
+  const drawListSlot: DrawListSlot = createDrawListSlot(sabs.drawList)
+  const picker: Picker = createPicker({ drawListSlot, cameraState, viewport: cameraViewport })
+
+  const input = createSemanticRecognizer(sabs.inputRing, picker)
+
+  const overlayDeps: Parameters<typeof createOverlay>[0] = {
+    cameraState,
+    viewport: cameraViewport,
+    canvas: options.canvas,
+  }
+  if (options.overlay !== undefined) overlayDeps.options = options.overlay
+  const overlay: Overlay = createOverlay(overlayDeps)
 
   // docs/plan/11-camera-and-input.md, step 6 (Deviations: "engine-owned camera", 0019 §1): the one
   // real `PointerSlots`/`KeyState`/`WheelState` bundle this client's own real DOM listeners write
@@ -563,24 +648,6 @@ export function createClient(options: ClientOptions): Client {
   const cameraIntegrator = createCameraIntegrator(cameraBundle, {
     onMotionEnd: (s) => saveCameraState(cameraStorageKeyValue, s),
   })
-
-  // CSS-pixel viewport (`camera/transform.ts`'s own space, distinct from `render/viewport.ts`'s
-  // device-pixel one): read once at init and refreshed only on an actual resize
-  // (`ResizeObserver`), never per frame -- `getBoundingClientRect()` allocates a `DOMRect`, and
-  // `camera.tick()` runs on the strict per-rAF path this milestone's own zero-GC page proves
-  // (`.claude/rules/hot-paths.md`; 0016 §2 exempts a real resize as a rare discontinuity).
-  const cameraViewport: CameraViewport = { widthPx: 1, heightPx: 1 }
-  function refreshCameraViewport(): void {
-    const rect = options.canvas.getBoundingClientRect()
-    if (rect.width > 0) cameraViewport.widthPx = rect.width
-    if (rect.height > 0) cameraViewport.heightPx = rect.height
-  }
-  refreshCameraViewport()
-  let cameraResizeObserver: ResizeObserver | undefined
-  if (typeof ResizeObserver !== 'undefined') {
-    cameraResizeObserver = new ResizeObserver(refreshCameraViewport)
-    cameraResizeObserver.observe(options.canvas)
-  }
 
   // Real DOM wiring (0019 §3-§4): pointer capture + gestures and wheel on the canvas, keys (with
   // focus rules) and the blur/visibilitychange full-state reset on `window`/`document` -- the exact
@@ -854,6 +921,7 @@ export function createClient(options: ClientOptions): Client {
     for (const w of workers) w.worker.terminate()
     for (const dispose of cameraInputDisposers) dispose()
     cameraResizeObserver?.disconnect()
+    overlay.dispose()
     scheduler.cancelFrame(resultsFrameHandle)
   }
 
@@ -968,6 +1036,8 @@ export function createClient(options: ClientOptions): Client {
     writeCameraAndWake,
     setFlags,
     input,
+    pick: { acquire: picker.acquire, at: picker.at },
+    overlay: { anchor: overlay.anchor, update: overlay.update },
     camera,
     destroy,
   }
@@ -981,6 +1051,9 @@ export function createClient(options: ClientOptions): Client {
     workers,
     cameraBundle,
     cameraIntegrator,
+    drawListSlot,
+    picker,
+    overlay,
     writeActionRecord,
     workersReady: workersUp,
     uiDrainStats: () => ({ recordsSeen: uiRecordsSeenTotal, onUi: onUiFiredTotal }),
