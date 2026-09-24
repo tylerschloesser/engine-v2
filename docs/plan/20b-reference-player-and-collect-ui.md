@@ -37,6 +37,7 @@ Remote players and roster (M34). Crafting menu and unlock (M32). Styling beyond 
 **Consumes:** `RefGame`, `in_range`, `RefScenario`, `landmarks.json`, `openGame` (M20); `ClientSide::extract`, `DrawList`, `FrameView` (M17); `client.overlay.anchor`, picking-free taps on DOM, `ClientSide::frame`, `FrameCx::camera()` (M18); `Presence` uplink, `PresenceTable`, `admit` call site (M19); `onActionResult` (M16); `onUi`, `clock()` (M16b); `FrameCx::ui_dirty()` (M18); `client.camera.moveTo`/`read`/`restored`, `ClientOptions.cameraKey` (M11).
 **Relied on from other milestones (in their briefs; if one is missing in code, stop and fix the plan):**
 - M16b/M18: `FrameCx::ui_dirty()` (0024 §7d): `frame` calls it when the spring moved, so `ClientSide::ui` re-runs although the replica did not change (`in_range` depends on the spring).
+- M18: `client.overlay.anchor`'s per-frame refresh (`update(): void`) is not called automatically by `frame-loop.ts` — a page must wire it through its own `onOverlay` hook once per rAF, or collect buttons never track their tiles (M18 Deviations, steps 4-6).
 - M11: `client.camera.restored` and `ClientOptions.cameraKey` (pass the world id).
 
 ## Planning decisions

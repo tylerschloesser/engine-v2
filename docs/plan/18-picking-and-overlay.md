@@ -1,6 +1,6 @@
 # M18: Picking, overlay anchoring, `FrameCx`
 
-Status: not started · After: 17, 09b · Tyler-dependent: no
+Status: done · After: 17, 09b · Tyler-dependent: no
 
 Carries a **D**: overlay anchoring on iOS Safari. Order against M19 does not matter: both start from M12's `FrameCx` shell, and whichever lands first adds the `ClientSide::frame` call (M19's brief says the same).
 
@@ -75,12 +75,12 @@ Presence sampling and uplink (M19: it gives meaning to `frame`'s `presence` argu
 - Zero-GC: page id `anchors` through `zeroGcSuite`; strict pages unchanged. Per ADR 0026, `anchors`' `burst` negatives are `@slow` automatically (only `gc-loop` stays fast-tier); its clean test must show `presentIsolates` containing every isolate this page names before its verdict check.
 
 ## Exit criteria
-- [ ] All tests above pass by name.
-- [ ] `budgets.json` has `gc.pages.anchors` with the constant in its `formula`; pages `anchors`, `input` and `drawables` pass.
-- [ ] Source scan: no `getBoundingClientRect`, `offsetWidth` or other layout read under `src/overlay/` or `src/input/`.
-- [ ] In desktop Chrome `device.html?anchors=50` shows `pick_id` on the HUD: a click on a ring sets it to that ring's id, a click on empty ground to `-`, a click on an anchored button leaves it unchanged (asserted by the `anchors` browser test reading the HUD text).
-- [ ] The `docs/plan/device-checks.md` section for this milestone matches what was built.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name.
+- [x] `budgets.json` has `gc.pages.anchors` with the constant in its `formula`; pages `anchors`, `input` and `drawables` pass.
+- [x] Source scan: no `getBoundingClientRect`, `offsetWidth` or other layout read under `src/overlay/` or `src/input/`.
+- [x] In desktop Chrome `device.html?anchors=50` shows `pick_id` on the HUD: a click on a ring sets it to that ring's id, a click on empty ground to `-`, a click on an anchored button leaves it unchanged (asserted by the `anchors` browser test reading the HUD text).
+- [x] The `docs/plan/device-checks.md` section for this milestone matches what was built.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test unit -t pick` · `pnpm test unit -t overlay` · `pnpm test rust -t framecx` · `pnpm test browser -t pick` · `pnpm test browser -t overlay` · `pnpm test browser -t ghost` · `pnpm test browser -t anchors` · `pnpm test` · `pnpm lint`.
@@ -1084,3 +1084,15 @@ own new code) -- not reproduced or fixed here; a candidate for `docs/plan/deferr
   rule: "I am the gate"). Nothing backgrounded -- every fault injection and its revert was run
   directly in the foreground; the build's own `fixtures` step varied 21-177s run to run on this
   machine under load, unrelated to any of these changes.
+
+## Orchestrator's gate record
+
+Cut 1-3 / 4-6 / 7-8, three implementers. Cut 1 had one fix round, cut 2 two, cut 3 two (the second from a Sonnet review agent's read of the whole ~5,300-line diff). What each round found:
+- **Cut 1, two readers of one triple buffer.** `client.ts` built its `DrawListSlot` while `render/drawables.ts` kept its own `TripleReader` over the same SAB (live on `gc-drawables`, `frame-bench`, `device?harness=1`). Now one reader. `drawlist.picker_matches_renderer_frame_seq` guards it: I re-ran its injection (a second reader at the page) and got 302 against 0.
+- **Cut 2, input one wake late on every real page.** `worker/client.ts`'s `body()` ran `frame()` before `inputPump.pump()`, and both `framecx.*` tests stepped twice to hide it. Fixed by reordering.
+- **Cut 2, round 2.** `framecx.*` failed 2 in 12 isolated runs behind a 20 s wait. The cause was `lastUi()`'s lazy subscription (a test bug; `onUi`'s contract is unchanged). The wait is back to 5 s, and I measured 15/15 isolated.
+- **Cut 3, a press and release inside one frame was never a tap** (M11's `pointers.ts`/`semantic.ts`, pre-existing; a trackpad tap-to-click or a fast phone tap). The `anchors` test's 50 ms gap hid it. Fixed with a `quickTap` latch; the test uses plain `page.mouse.click()`.
+- **Review round.** A per-anchor `{wx, wy}` literal on the default per-frame path (fixed; the clean figure did not move, so V8 had been eliding it). `InputQueue::clear()` was untested (now `input_queue_cleared_between_frames`). Three weak assertions were strengthened.
+- **My own fix** (`render/drawlist-slot.ts`, under 20 lines). `createDrawListSlot` started its views on slot 0, the triple buffer's initial *middle*, which the writer's `publish()` takes and writes. So any read before the first `acquire()` raced the producer. The review round's no-op-`acquire` injection exposed it: the renderer read `frame_seq` 302 through a slot the reader never owned. It now starts on slot 2, the reader's initial `front`.
+
+Final gate: `rust` 334, `unit` 215, `wasm` 52, `browser` 168 at 25 s of 35 s, lint clean, no golden changed, `ABI_VERSION` unchanged at 15. Loops: `browser` 30/30 under `--load 10` (slowest 33 s) and 28/30 quiet. The two quiet failures were one `park('sim')` timeout on `gc: flat transport parity` (the standing `parkWorkers` watch item) and **one `stepping: 1,000 stepTick()` hash mismatch**, never seen before, 0/40 isolated, on a path M18 did not touch. That one is `docs/plan/18c-stepping-hash-under-load.md`. `bench.frame_worstcase` with hover picking: main p50 0.617 ms, worker p50 1.880 ms, inside `baselines/frame.json`.

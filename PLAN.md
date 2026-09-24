@@ -51,7 +51,8 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 17b | `17b-sprites-and-frame-budget.md` | sprite atlas, frame-time budget, `profile-frame` skill | 17, 09b | D |
 | [x] | 17c | `17c-client-park-stall.md` | the client worker that never parks on `zero_gc_action`: reproduce, locate, fix | 17b | |
 | [x] | 17d | `17d-fast-tier-wall-time.md` | `pnpm test` under a minute again: stop `fixtures` and `cargo-tests` rebuilding each other, per-step build timings, re-divide 0020 §3 by ADR | 17c | |
-| [ ] | 18 | `18-picking-and-overlay.md` | CPU picking, DOM anchoring, `FrameCx` | 17, 09b | D |
+| [x] | 18 | `18-picking-and-overlay.md` | CPU picking, DOM anchoring, `FrameCx` | 17, 09b | D |
+| [ ] | 18c | `18c-stepping-hash-under-load.md` | `stepping`'s one hash mismatch under suite load: make it explain itself, reproduce, fix | 18 | |
 | [ ] | 19 | `19-presence-channel.md` | presence uplink, host table, `admit` witness, relay | 17 | |
 | [ ] | 20 | `20-reference-game-v0.md` | `games/reference`: worldgen, assets, headless collect rules | 16b | |
 | [ ] | 20b | `20b-reference-player-and-collect-ui.md` | player spring + presence, collect UI. **First playable.** | 20, 17b, 18, 19 | |

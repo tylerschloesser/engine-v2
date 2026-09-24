@@ -71,10 +71,14 @@ export function createDrawListSlot(sab: SharedArrayBuffer): DrawListSlot {
     return new DataView(b.buffer, b.byteOffset, b.byteLength)
   })
 
+  // Start on the slot the reader owns before its first `acquire()` (`TripleReader`'s initial `front`,
+  // 2), never slot 0: 0 is the initial shared middle, which the writer's `publish()` takes back and
+  // writes into, so a read before the first `acquire()` would race the producer.
+  const INITIAL_FRONT = 2
   const slot: DrawListSlot = {
-    header: headerViews[0] as DataView,
-    body: reader.bodyView(0),
-    bodyView: bodyViews[0] as DataView,
+    header: headerViews[INITIAL_FRONT] as DataView,
+    body: reader.bodyView(INITIAL_FRONT),
+    bodyView: bodyViews[INITIAL_FRONT] as DataView,
     recordCount: 0,
     windowOriginX: 0,
     windowOriginY: 0,
