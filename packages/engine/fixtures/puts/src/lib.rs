@@ -23,13 +23,37 @@
 //! the same `Sim<Puts>` native tests already drove directly through `tests/*.rs`), so
 //! `puts_idle_100`'s golden becomes `.wasm`-authoritative (0002) instead of native-blessed.
 
-use engine::client::{ClientSide, FrameView, TileTexel};
+use engine::client::{ClientSide, FrameCx, FrameView, TileTexel};
 use engine::game::{
     Game, PlayerEvent, PlayerId, PresenceTable, TickCx, Unknown, WorldRead, WorldWrite,
 };
-use engine::world::{Footprint, Tile};
+use engine::world::{Footprint, Tile, WorldPos};
 use engine::world::{PrototypeId, Registry, TilePos, TraitSet};
 use ts_rs::TS;
+
+/// docs/plan/19-presence-channel.md steps 4-6: the zero-GC scene's own fixture gains a real
+/// presence type, so `gc-connected-terrain.html`'s existing panning window (docs/plan/
+/// 15c-terrain-visibility-and-cache-invalidation.md step 4) also exercises presence sampling,
+/// uplink and host decode allocation-free -- this game never spawns a player entity, so a
+/// camera-derived position (rather than a real player avatar) is the only thing to sample. Same
+/// shape as `fx-presence`'s own `PlayerPresence` (0001's own reference-game example).
+#[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct PutsPresence {
+    pub pos: [i32; 2],
+    pub vel: [i16; 2],
+}
+
+impl engine::game::Presence for PutsPresence {
+    fn pos(&self) -> WorldPos {
+        WorldPos {
+            x: self.pos[0],
+            y: self.pos[1],
+        }
+    }
+    fn vel(&self) -> [i32; 2] {
+        [self.vel[0] as i32, self.vel[1] as i32]
+    }
+}
 
 /// docs/plan/15b-ring-connection-and-replica-rendering.md, Provides: "the visible overlay comes
 /// from the puts tick rule's once-per-second `set_tile`" -- a pixel-readback test needs the tick
@@ -57,6 +81,23 @@ pub struct PutsClient;
 const OVERLAY_VISUAL_ID: u16 = 2;
 
 impl ClientSide<Puts> for PutsClient {
+    /// docs/plan/19-presence-channel.md steps 4-6: samples the camera's own position every client
+    /// frame (0001 Decision: "the spring lives here, in ordinary floats, with variable `dt`;
+    /// nothing depends on its bits" -- presence never enters `Store`/the log/a hash, so this file's
+    /// own `.claude/rules/determinism.md` coverage does not bind this one method the way it binds
+    /// `apply`/`tick` above). This fixture spawns no player entity, so the camera centre is the
+    /// only "where is this player" signal available; `gc-connected-terrain.html`'s own scripted pan
+    /// (docs/plan/15c-terrain-visibility-and-cache-invalidation.md step 4) already moves it every
+    /// frame, which is exactly what exercises the sampler's 10 Hz on-change path continuously.
+    fn frame(&mut self, cx: &mut FrameCx<'_, Puts>, presence: &mut PutsPresence) {
+        let c = cx.camera();
+        presence.pos = [(c.centre[0] * 256.0) as i32, (c.centre[1] * 256.0) as i32];
+        presence.vel = [
+            (c.velocity[0] * 256.0) as i16,
+            (c.velocity[1] * 256.0) as i16,
+        ];
+    }
+
     fn tile_visual(t: Tile) -> TileTexel {
         let mut texel = TileTexel::from_tables(t);
         if t.aux() != 0 {
@@ -225,7 +266,7 @@ impl Game for Puts {
     type Entity = Entity;
     type Player = Player;
     type Global = Global;
-    type Presence = ();
+    type Presence = PutsPresence;
     type Ui = PutsUi;
     type Client = PutsClient;
 
