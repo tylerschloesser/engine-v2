@@ -97,4 +97,210 @@ Presence sampling and uplink (M19: it gives meaning to `frame`'s `presence` argu
 This milestone builds `device.html?anchors=50` for it (50 text buttons anchored to tiles, each over an in-canvas ring, plus 4 slot anchors on moving circles), the `&anchorMode=translate` switch, and the last tap's `pick_id` on the HUD.
 
 ## Deviations
-(filled in during Phase 3)
+
+**This section covers steps 1-3 only** (commits `36314e3` step 1, `124b705` step 2, `0b05f87`
+step 3, base `4977d88`). Steps 4-6 (`FrameCx`, `ClientSide::frame`, `cx.input()`, `DrawList::anchor`,
+slot anchors, `follow`) and 7-8 (ghost flows, the GC page `anchors`, `translate` mode, `device.html`)
+are a later implementer's, built against the exact seam shapes below.
+
+### The acquired slot (`render/drawlist-slot.ts`, new file, not in the brief's own Files list)
+
+`DrawListSlot` (exported): `header: DataView` (1,024 B), `body: Uint8Array` (2 MiB, what
+`queue.writeBuffer` wants), `bodyView: DataView` (the same bytes, what a scan's `getUint32`/
+`getFloat32` wants), `recordCount`/`windowOriginX`/`windowOriginY`/`frameSeq`/`dropped: number`
+(copied out of the header on every `acquire()`), `fresh: boolean`, and `acquire(): void`. Three of
+each view are built once (`createDrawListSlot(sab)`); `acquire()` swaps which one the public fields
+*reference* -- a plain pointer reassignment, never a new object. `createClient` (`src/client.ts`)
+builds exactly **one** `DrawListSlot` per `Client`, over `sabs.drawList`, and it is the *only*
+`TripleReader` that `Client` ever owns over that SAB for its whole life -- docs/plan/
+17-drawlist-and-sprites.md's own "Two-reader torn read" finding (`TripleReader.acquire()` mutates
+shared state on every call; two independent readers racing it tear the handoff) is now a real risk
+the moment anything else builds a second one, which is why `test/client.ts`'s `drawListHash`/
+`drawListRecords` were rewritten in this cut to read through `clientTestHandle(client).drawListSlot`
+instead of building their own (previously safe only because nothing called them at all -- confirmed
+by grep, zero call sites anywhere in `src`/`tests` before this cut).
+
+`render/drawables.ts` was **not** changed to consume this slot. The brief's own delegation prompt
+asked for this to be recorded either way. Reasoning: no existing page combines a real
+`DrawablesRenderer` (which owns its own private `TripleReader` when given `drawListSab`) with real
+picking (`client.pick.acquire()`) on the same `Client` yet -- `device.html`'s production mode
+(`runFillRateHud`) never touches `DrawablesRenderer` at all; its `?harness=1` mode, `gc-drawables.ts`
+and `frame-bench.ts` all drive `drawablesRenderer.acquire()` directly and never call `client.pick.*`.
+The double-reader hazard above is therefore latent, not live, in this cut's own tree. It becomes live
+the moment a later step wires both onto one `Client` (most likely `device.html?anchors=50`, steps
+7-8): that implementer needs to replace `DrawablesRenderer.acquire()`'s internal reader with a
+`DrawListSlot`-shaped parameter (`acquireSlot(header, body)` or similar) fed from the same slot
+`client.pick.acquire()` populates, the same fix already applied to `drawListHash`/`drawListRecords`
+here. Flagged rather than done silently, since it touches `gc-drawables.ts`'s own zero-GC budget and
+`frame-bench.ts`'s baseline -- both explicitly this milestone's own Non-scope/later-step territory.
+
+### `Client.pick` / `input/pick.ts` (`Picker`), exact shape
+
+- `client.pick.acquire(): void` -- thin pass-through to `DrawListSlot.acquire()`. Called once per
+  `tick()` by `frame-loop.ts`'s new first phase, `'acquire'` (`FRAME_PHASES` is now `['acquire',
+  'camera', 'writeCamera', 'upload', 'render', 'overlay', 'ui']`), unconditionally -- every `Client`
+  has a `drawList` SAB regardless of topology, so this never needs an opt-in hook the way
+  `onCamera`/`onOverlay`/`onUi` do.
+- `client.pick.at(cssX: number, cssY: number): number` -- internal (Seams: "used by the semantic
+  layer"). Converts the point once via `camera/transform.ts`'s `screenToWorld` (continuous world
+  tiles, not floored), subtracts the acquired slot's own `windowOriginX/Y`, and scans. Caches the
+  last `(cssX, cssY, frameSeq)` it actually scanned; a repeated call at the same point against the
+  same acquired slot returns the cached answer with no new scan -- this is what gives hover its "at
+  most once per rAF, only when the pointer or slot changed" property (Planning decisions), and it
+  lives inside the picker itself, not in `input/semantic.ts`'s own hover-emission gating (which
+  already independently gates on tile change, unchanged from M11).
+- `engine/test`: `pickAt(client, cssX, cssY): number` (`src/test/client.ts`, thin wrapper over
+  `Client.pick.at`), `pickScanned(client): number` (cache-miss count).
+- Containment (`scanDrawListForPick`, exported, the pure step-1 function unit-tested on hand-built
+  headers/bodies): circle/ring/radial = `distance(pos, point) <= size.x / 2`; rect/bar/ghost/sprite =
+  the axis-aligned box centred at `pos`, half-extents `size / 2` (confirmed against `uberquad.wgsl`'s
+  own `vs_main`: every non-sprite kind's `pivot` is `(0.5, 0.5)`, i.e. `pos`-centred). `SCREEN_PX_
+  STROKE` floors the effective radius/half-extents to `6 / pxPerTile(cameraState, viewport)` tiles.
+  **Sprite pivot is not read** (Non-scope: "sprite pivot applied when M17b's table is loaded" needs a
+  loaded `LoadedSpriteAtlas`/pivot table this cut has no dependency on) -- a sprite picks by the same
+  centred box every other kind uses, not its own pivot offset. Whoever first needs sprite picking to
+  respect a real pivot (no named owner in the brief) should thread the same pivot lookup
+  `render/drawables.ts`'s own `vs_main`-equivalent uses into `createPicker`'s options.
+- Front-to-back order: layers `7..0`, and within a layer, body-record index descending (the *last*
+  submitted record in a layer wins, matching `encodeDraws`'s own ascending per-layer draw order --
+  later instances paint over earlier ones at the same pixel). The scan reads `pick_id` first and
+  skips a zero id or an `ANCHOR_CURSOR_TILE`-flagged record without reading `pos`/`size` at all.
+
+### `pick_id` in events and ring records (`input/semantic.ts`)
+
+`createSemanticRecognizer(inputRingSab, pick?: PickSource)` -- `PickSource = { at(cssX, cssY):
+number }`, a narrowed structural type (not importing `Picker` itself, to avoid `input/` depending on
+`render/drawlist-slot.ts` for a type-only reason). `emit`'s signature grew one parameter, `pickId:
+number`, inserted right after `fracY` (before `button`); every one of its seven call sites computes
+it at the point already in scope (`pickIdAt(slot.x, slot.y)` for the four `processSlot` branches and
+`endDrag`; `pickIdAt(mouseSlot.x, mouseSlot.y)` / `pickIdAt(hover.x, hover.y)` for the two hover
+branches) and passes it through to both `e.pickId` (`InputEventTs`) and `writeInputRecord`'s own
+`pickId` field -- the same local variable feeds both, so they can never disagree. `input/record.ts`
+itself needed **no change**: M11 already reserved `pick_id` at byte 24 of the 32-byte record and
+always wrote `0` there; this cut is only the first to write something else.
+
+### Client construction order (`src/client.ts`)
+
+`cameraViewport` (the CSS-pixel `ResizeObserver`-backed viewport) moved earlier in `createClient`'s
+own body, now built before `drawListSlot`/`picker`/`input` rather than after `cameraBundle` --
+`Picker` needs `cameraState` + `cameraViewport` before `createSemanticRecognizer` can take it as a
+constructor argument. No behavioural change, order only.
+
+### `Client.overlay` / `overlay/anchors.ts` (`createOverlay`), exact shape
+
+- `client.overlay.anchor(el, worldX, worldY, opts?: { align?: 'center' | 'top' | 'bottom' }):
+  { set(x, y): void; remove(): void }` (0019 §5's own signature, matched exactly). `client.overlay.
+  update(): void` is this cut's own addition (Deviations, not itself a pinned Seam name, mirroring
+  `camera.tick`/`input.recognize`'s own precedent): a page's `onOverlay` hook (`frame-loop.ts`) calls
+  it once per rAF; `frame-loop.ts` itself does **not** call it automatically (unlike the new
+  `acquire` phase) -- `onOverlay` stays page-wired, the same shape `onCamera`/`onUi` already use,
+  since not every page that builds a `Client` needs overlay writes every frame.
+- **Lazy layer.** `ensureLayer()` builds the one anchor-layer `<div>` (and injects the shared static
+  rule, once per `Document`, keyed by element id) only on the *first* `anchor()` call, not at
+  `createClient` time. This was necessary, not just tidy: several existing real pages
+  (`gc-drawables.ts`, `frame-bench.ts`, `?harness=1`) build a `canvas` that is **never appended to the
+  document** (`canvas.parentElement === null`), and `ClientOptions.overlay.root` defaults to that
+  parent -- eagerly building a layer in `createClient` would throw for every one of them even though
+  none touches overlay. A page that never calls `client.overlay.anchor` pays nothing and needs no DOM
+  parent at all.
+- **The static rule, per `align`.** 0019 §5 gives one literal transform (`bottom`'s own
+  `translate(-50%, -100%)`); this cut reads "one shared, static rule" as "one static rule *per align
+  value*" (3 total: `bottom` the base `.engine-anchor` class, `center`/`top` via
+  `[data-engine-align]`), selected by a class/attribute set once at `anchor()` time, never rewritten
+  per frame -- still zero per-anchor `style.transform` writes, the actual property the ADR's
+  "Alternatives rejected" line is about.
+- **At-most-two-writes.** `update()` writes at most two properties on the *layer* element per call:
+  `transform` (the origin tile's own current screen position, via `worldToScreen`) if it moved,
+  `--z` (`pxPerTile`) if zoom changed. Per-anchor `--wx`/`--wy` are written only at `anchor()`
+  creation, on `.set()`, and during a re-base -- never inside `update()`'s own per-frame path unless a
+  re-base fires that frame.
+  visibility (`visibility: hidden`/`visible`, a margin of 64 CSS px) is also checked every `update()`
+  call but **written** only on an actual transition, per anchor.
+- **Re-base.** `needsRebase(originScreenX, originScreenY)` (pure, unit-tested): true when either axis
+  of the origin's own current screen position exceeds 50,000 CSS px. On a re-base, the origin snaps to
+  `floor(cameraState.centreX/Y)` and every anchor's own `--wx`/`--wy` is rewritten
+  (`rebaseOffset`, also pure/unit-tested) -- an O(N) burst, acceptable since rare by construction.
+- **Not built (Non-scope, explicit in the delegation prompt):** `anchorSlot`, `mode: 'translate'`
+  (accepted in `OverlayOptions`'s type, stored, never read past a `void` -- a later step swaps that
+  for the real fallback), the header's anchor table (`128..640`) is untouched by this cut.
+- `packages/engine/CLAUDE.md` gained the context artifact the brief names: "overlay code never reads
+  layout... writes at most two style properties per frame on its one shared anchor-layer element."
+
+### Browser tests: no GPU needed, hand-filled DrawList over the real SAB
+
+`real-camera.html`/`src/real-camera.ts` (M11's own reused real-DOM page) gained both the picking and
+overlay hooks, rather than a new page: picking needs only a real `Client` + the real `drawList` SAB
+(no WASM extract, no renderer) -- `__rcPublishDrawList` builds one `TripleWriter` over
+`clientTestHandle(client).sabs.drawList` (the *only* one this page ever builds, matching the "one
+writer" production shape) and hand-fills a slot exactly the way `input/pick.test.ts`'s unit tests do,
+at browser scale. **Found and fixed before commit:** a first draft's own `frame_seq` bump read-
+modified-wrote the field on whichever physical slot `TripleWriter.backSlot()` currently was --
+since `publish()` alternates the three physical slots, two consecutive publishes into two different,
+previously-untouched slots each read a pristine `0` and wrote `1`, so `Picker.at`'s own
+`(x, y, frameSeq)` cache saw no change across a real second publish and returned the *first* frame's
+answer even after a fresh `acquire()` -- `pick.matches_interpolated_frame_on_screen` caught this
+directly (`nowB` read `1`, expected `2`) on this cut's own first run. Fixed with a page-level
+monotonic `nextFrameSeq` counter, independent of any slot's own bytes (matching what
+`client/drawlist.rs`'s real `begin_frame` does natively).
+
+Overlay tests needed no GPU either (DOM + camera math only); `overlay.rebase_beyond_50000px`'s first
+draft compared the anchor's screen position *before* a pan-away-and-back sequence against its
+position *after*, which is wrong on inspection (the camera itself ends at a different centre than it
+started -- `(0,0)` vs `(5,5)` -- so the two measurements are of different screen positions by
+construction, not a before/after of the same one). Fixed to assert the *final* position directly
+against `worldToScreen`, the same invariant `overlay.anchor_tracks_world_point` already checks,
+after two re-bases have fired along the way.
+
+### Not run: `pnpm test browser -t ghost`, `-t anchors`, `pnpm test rust -t framecx`
+
+No Rust was touched in steps 1-3 (`FrameCx`/`ClientSide::frame` are steps 4-6); no ghost or
+`anchors=50` device-page work exists yet (steps 7-8). `docs/plan/device-checks.md`'s own M18 section
+(already written, describing the *finished* milestone) is unchanged -- it names `device.html?
+anchors=50`, `&anchorMode=translate` and the HUD's `pick_id` field, none of which steps 1-3 build;
+left for whoever lands steps 7-8, per the brief's own line ("this milestone builds `device.html?
+anchors=50` for it").
+
+### Commit granularity: not perfectly self-buildable, by file ownership instead
+
+Each of the three commits is scoped to the files its own Order-of-work step names, not to "checks out
+and builds alone": `client.ts` (step 1's commit) already wires `picker`/`overlay` together since
+`createClient` is one function; `real-camera.ts` (step 3's commit) carries both the picking hooks
+`pick.spec.ts` needs and the overlay hooks `overlay.spec.ts` needs, since it is one page script. A
+successor bisecting by commit should expect step 1/2's own trees to reference `overlay/anchors.ts`
+(a step-3 file) without it existing yet; the final tree (after all three) is what was verified.
+
+### Verified (commands and results)
+
+- `pnpm test unit -t pick` -> `unit pass 5 tests` (this cut's own four: `pick.contains_per_kind`,
+  `pick.front_to_back_order`, `pick.skips_zero_id_and_cursor_anchored`, `pick.min_stroke_pick_radius_
+  constant`; plus the pre-existing `uberquad.vertex_layout_has_no_pick_id`, M17b, matched by the same
+  `-t pick` substring).
+- `pnpm test unit -t overlay` -> `unit pass 2 tests` (`overlay.rebase_math`, `overlay.align_offsets`).
+- `pnpm test unit` (full) -> `unit pass 214 tests`.
+- `pnpm test browser -t pick` -> `browser pass 3 tests` (`pick.tap_reports_entity_pick_id`,
+  `pick.hover_once_per_raf_on_change`, `pick.matches_interpolated_frame_on_screen`), ~2.2s/35s.
+- `pnpm test browser -t overlay` -> `browser pass 7 tests` (this cut's own six, plus the pre-existing
+  `overlay_tile_reaches_screen`, M09, matched by the same `-t overlay` substring), ~2.7s/35s.
+- `pnpm test browser -t "input"` -> `browser pass 11 tests` (the strict zero-GC page `input` and
+  `semantic.spec.ts`'s own real-DOM tests, unchanged, hover picking now live on that same page's own
+  code paths).
+- `pnpm test browser -t "drawables"` -> `browser pass 9 tests` (the zero-GC page `drawables`,
+  unaffected by this cut's own untouched `render/drawables.ts`).
+- `pnpm --filter engine typecheck` -> clean (all three `tsc` projects).
+- `pnpm format` (Biome + `cargo fmt`) run after every edit; final tree clean.
+- `pnpm test`/`pnpm lint` (the full runs) were not run (delegation prompt: "I am the gate").
+
+### Notes for steps 4-8
+
+- Header fields `follow_valid` (48), `follow` (56, f64x2), `anchor_mask` (76, u32x2), `anchors`
+  (128..640, f32x2x64) are all still zero-initialised/untouched (M17's own state, unchanged by this
+  cut) -- read them off the same `DrawListSlot.header` this cut built (`DataView`, little-endian).
+  `flags` (52) is likewise still untouched and still has no named owner.
+- `render/drawables.ts` rewiring (see above) is the concrete, scoped task for whichever step first
+  combines real drawables rendering with real picking on one `Client` -- most likely `device.html`'s
+  `anchors=50` mode.
+- `Picker`'s options (`createPicker(opts: { drawListSlot, cameraState, viewport })`) has no sprite-
+  pivot parameter; adding one is additive (an optional field), not a rename.
+- `client.overlay`'s public shape (`{ anchor, update }`) has no `anchorSlot` yet; add it as a third
+  member, not a rename, and it can read the same `DrawListSlot.header`'s `anchors`/`anchor_mask`
+  fields this cut already exposes.
