@@ -1,6 +1,6 @@
 # M18c: `stepping`'s hash mismatch under suite load
 
-Status: not started · After: 18 · Tyler-dependent: no
+Status: done · After: 18 · Tyler-dependent: no
 
 Written by the orchestrator at M18's gate, from one occurrence.
 
@@ -71,11 +71,11 @@ The regression test named by step 3, if the cause is found. `stepping.spec.ts`'s
 keep their meaning; the diagnostic only adds to the failure message.
 
 ## Exit criteria
-- [ ] A `stepping` hash mismatch prints both hashes, ticks run, the step-request and ack words, and
+- [x] A `stepping` hash mismatch prints both hashes, ticks run, the step-request and ack words, and
       parked state.
-- [ ] The cause is named and fixed with a test that fails without the fix, **or** step 2's bounded
+- [x] The cause is named and fixed with a test that fails without the fix, **or** step 2's bounded
       attempt is recorded in Deviations with its run counts and the diagnostic is committed.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test browser -t stepping` · `node scripts/repeat.mjs browser <n> [--load 10]` (foreground,
