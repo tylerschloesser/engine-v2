@@ -171,6 +171,15 @@ export async function buildGame(opts: BuildGameOptions): Promise<BuildGameResult
 const TS_RS_SCRATCH_DIR = 'target/ts-rs-scratch'
 
 /**
+ * The bindings step's own cargo invocation, exported so a test can compare its package-selection
+ * flags against `cargo-tests`'s (`scripts/suites.mjs`'s `buildSteps`) without calling cargo at all
+ * -- deterministically, not by measuring wall time. `--workspace` is load-bearing (see
+ * `exportBindings`'s own doc comment): reintroducing a `-p <crate>`/no-flag scope here is exactly
+ * the regression `./build-game-bindings-scope.test.ts` exists to catch.
+ */
+export const BINDINGS_CARGO_ARGS = ['test', '--workspace', '--color', 'never', 'export_bindings']
+
+/**
  * 0017 §5's bindings step, split out so the Vite plugin's dev rebuild can call it without
  * `await`ing it (Deviations: "without gating the reload") while `buildGame()` itself and
  * `scripts/build-fixtures.mjs` always await it. A game/fixture with no `#[ts(export)]` type just
@@ -205,11 +214,7 @@ export async function exportBindings(opts: {
 }): Promise<void> {
   const crate = resolve(opts.crate)
   const env = opts.env ?? process.env
-  const built = await cargo(
-    ['test', '--workspace', '--color', 'never', 'export_bindings'],
-    crate,
-    env,
-  )
+  const built = await cargo(BINDINGS_CARGO_ARGS, crate, env)
   if (built.code !== 0) throw new CargoBuildError('cargo test export_bindings', built.stderr)
 
   const scratch = join(crate, TS_RS_SCRATCH_DIR)
