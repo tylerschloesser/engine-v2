@@ -699,3 +699,206 @@ test support, not a shipped page; `framecx.html`'s `__stepFrame`/`__injectRawInp
   above run in the foreground (coordinator instruction, gate rounds 1-2); none backgrounded.
 - Not run (steps 7-8, later implementer's): `pnpm test browser -t "\btranslate\b"`, any GC/budgets
   command, `pnpm bench:frame`.
+
+## Deviations: steps 7-8 (ghost flows, GC page `anchors`, `translate` mode, `device.html`)
+
+Commits `945bc78` (step 7), `85e4474`, `d643882`, `d66666b`, `47f7f91` (step 8), base `c988533`
+(step 6's own final commit). "I am the gate" (delegation prompt): `pnpm test`/`pnpm lint` full runs
+not run; every command below is a targeted foreground run.
+
+### `fixtures/overlay/src/lib.rs`'s `extract()` (new; steps 4-6 left it the default no-op)
+
+Draws three unconditional groups every frame, shared by every page that loads this fixture
+(`framecx.html` never inspects the DrawList, so this is free there): `RING_COUNT = 50` pickable
+rings on a fixed grid (`RING_COLS = 10`, `RING_ROWS = 5`, `RING_SPACING_TILES = 3`, tile-centred:
+`tx = (col - 5) * 3`, `ty = (row - 2) * 3`, `pos = (tx + 0.5, ty + 0.5)` tiles, `pick_id = i + 1`,
+`size = [1.2, 1.2]` tiles i.e. pick radius `0.6` tiles); `ANCHOR_SLOT_COUNT = 4` circles orbiting the
+origin at `ANCHOR_ORBIT_RADIUS_TILES = 6.0`, one full orbit every 8 s (`view.time_ms() * TAU /
+8000.0`, `#[allow(clippy::disallowed_methods)]` on the two `sin`/`cos` calls: client-side draw
+position only, never replicated/hashed, 0003 "Outside the deterministic core" -- `.claude/rules/
+determinism.md`'s transcendentals ban is for the sim/worldgen/apply core), each also published
+through `out.anchor(slot, pos)`; a cursor-anchored ghost (`out.ghost(2, WorldPos::from_tile(view.
+window_origin()), [1.0, 1.0], color).flags |= ANCHOR_CURSOR_TILE`, only while `view.cursor_tile()`
+is `Some`) -- `pos` is always the origin tile itself (`relative_pos` of `window_origin` is exactly
+`(0, 0)`), since the *shader* places the instance at the live `cursor_tile` via the flag, not this
+record's own `pos`.
+
+### `input/semantic.ts`: touch tap now sets the cursor tile
+
+0019 §4's "touch: tile of the last tap" was never built in steps 1-6 (only mouse hover ever wrote
+`cameraState.cursorTileX/Y/cursorValid`) -- found because `ghost.touch_tap_then_confirm` needs it.
+Fixed in the one `emit('tap', ...)` call site (`wasActive[i] === 1` branch, `input/semantic.ts`):
+`cameraState.cursorTileX/Y/cursorValid` are set from the same `tileScratch` the emitted event uses,
+for every pointer kind (a mouse tap re-affirms what hover already published, so no behaviour change
+on that path). Inject-fail-revert: removing these three lines reproduces `cursor: {x:0,y:0,
+valid:false}` after a real touch tap (`ghost.touch_tap_then_confirm`'s own second assertion) --
+covers this exact branch.
+
+### `ghost.html`/`ghost.ts` (new): real connected `fx-overlay`, not `framecx.ts`'s unconnected shape
+
+`host: { kind: 'local', world: { worldId: 'ghost-test', params: { seed: '1', worldgen: null } },
+connect: true }`, `genWorkers: 1`, `test: { clock: createManualClock(), flags: {} }`,
+`pumpUntilLive(client)` (not a bare `await client.ready`) -- needed because `ghost.
+touch_tap_then_confirm` calls `client.dispatch(null)` for real, which throws unless `session_state
+=== Live` (`client.ts`'s own `dispatch`), and only a real net-pump round trip over a real sim
+connection ever sets that. `client.overlay.anchor`'s `worldX`/`worldY` grew no new option for this:
+the confirm button is plain page code (Planning decisions: "`FrameCx` has no `dispatch`").
+Hooks (all `__ghost`-prefixed after a rename, next paragraph): `__ghostInjectPointer`,
+`__ghostInjectHover` (`input/pointers.ts`'s own `recordMouseHover`, exported for the first time to
+a test page here -- genuine idle-mouse hover, unlike a held-and-moved pointer which the camera also
+reads as a pan gesture), `__ghostDriveFrame(dtMs)` (`client.pick.acquire()` then `client.camera.
+tick(dtMs)` then `stepFrame(client, dtMs)` then `client.overlay.update()`), `__ghostCursorTile`,
+`__ghostRecord` (the newest `KIND_GHOST` record via `drawListRecords`, or `undefined`),
+`__ghostLastTap`, `__ghostConfirmVisible`, `__ghostLastDispatchSeq`. **Found and fixed before
+commit**: the page's first draft used the plain names (`__injectPointer` etc.), which collided at
+the TypeScript `declare global` level with `camera.spec.ts`'s own same-named globals (a *different*
+page, `real-camera.html`, with an incompatible parameter list) -- `pnpm --filter engine typecheck`
+caught it (TS2717); every ghost hook renamed `__ghost*`.
+
+### `overlay/anchors.ts`: `mode: 'translate'` (the Non-scope line steps 1-3 explicitly deferred)
+
+No floating origin, no re-base: `applyTranslateAnchor` calls `worldToScreen` directly (full
+float64), computing each anchor's own screen position fresh, writing `el.style.transform` only when
+that position actually changed since the last write (`rec.lastTX/lastTY`, `NaN` initially) and
+`el.style.visibility` only on a transition -- the same "idle writes nothing" / "one write per
+visible anchor per moving frame" shape `'properties'` mode has, at a per-anchor cost instead of a
+per-layer one (0019's own "N strings and N style writes per frame" downside). `client.overlay.
+anchor`'s `.set()` and `anchorSlot`'s per-frame refresh both branch on `mode` (`refreshSlotAnchorValue`
+split out of the old `updateSlotAnchor`, so `'properties'` mode's own behaviour -- byte-for-byte,
+all 8 pre-existing `overlay.*` tests unchanged -- shares the read path with the new mode without
+duplicating the header-decode). `real-camera.ts`'s `__rcCreate` grew `opts.overlayMode`, threaded
+into `ClientOptions.overlay.mode`, for `overlay.translate_mode_equivalent` alone.
+
+### GC page `anchors`: real defect found, and the Planning decisions' own `+16 B` margin re-derived
+
+`gc-anchors.ts`: unconnected (`host: 'remote'`, `test.game = { seed: '0x1', params: null }` --
+`'0x1'`, not `'1'`: `TerrainConfig::seed` is `HexU64`, found via a `BadConfig` page error on the
+first run), `genWorkers: 1`, real terrain+drawables rendering (`gc-drawables.ts`'s own shape) over
+`fx-overlay`; 50 `client.overlay.anchor` + 4 `client.overlay.anchorSlot` mounted once at setup
+(never rebuilt inside `drive()`); a triangle-wave zoom (`tilesAcross` 20↔28↔20 every 120 frames) on
+top of the existing `gc-drawables.ts`-style pan; one `client.input.emit(3, ..., ...)` call per
+`drive()` frame.
+
+**Real defect, found by folding `client.input.emit` into a measured window for the first time**
+(step 4-6 Deviations flagged this as undone): `input/semantic.ts`'s `emit`/`emitGame` each passed
+`writeInputRecord` a fresh object literal per call, not the preallocated-scratch shape `.claude/
+rules/hot-paths.md` requires (`writeInputRecord`'s own doc comment already says "pure, allocation-
+free" -- only its callers were not). Fixed with one shared `InputRecordFields` scratch
+(`recordScratch`, mutated in place); saved ~56 B/frame on `gc-anchors`' own clean measurement (554.7
+-> 498.7 B/frame, 3 consecutive runs each direction). Inject-fail-revert: reverting to inline
+object literals in `emitGame` alone reproduces `anchors clean` failing at 554.71 B/frame against the
+final 508 B/frame budget -- covers `emitGame`'s own write path.
+
+**Budget, and where the brief's own `+16 B` estimate broke down**: `bytesPerFrame.main` measured
+498.29-499.14 B/frame across 50 clean `pnpm gc reliability`-shaped runs. A first pass followed the
+brief literally (`ceil(499.14) + 16 = 516`), but `anchors neg object main` (the fixed 16 B/frame
+`allocateObject` control) then measured a stable **514.43-514.49 B/frame** against that budget (3
+consecutive runs) -- *never* tripping: a 16 B margin cancels the object control's own 16 B delta
+almost exactly on this page's noisier baseline (the control is sized against the *standard* `0016
+§1` `+8 B` margin, `src/test/controls.ts`'s own doc comment: "a budget is `ceil(clean) + 8 B`, so a
+`clean + 16` reading beats it by 7-8 B/frame"). Re-derived using that ordinary formula instead:
+`ceil(499.14) + 8 = 508`. Verified: clean (499.14 max) < 508 < object (514.43 min), an 8.86 B/6.43 B
+split either side, the same shape every other page's own formula in `budgets.json` uses. Full
+formula strings and all four negative-control numbers: `budgets.json`'s own `gc.pages.anchors`
+entry. Software row (`GC_MODE=software`, `attributionRoots: ["drive"]`): 475.39-475.81 B/frame
+across 20 runs, `ceil(475.81) + 8 = 484` (the ordinary margin here too -- no separation problem
+found in software mode). `client`/`gen0`: the shared `8` B/frame figure, measured 0.81 B/frame,
+unchanged from every other page. `input`/`drawables` pages: unaffected (their own budgets untouched,
+both still green after the `emit` fix -- the fix only *lowers* their already-passing numbers).
+
+### `device.html?anchors=N[&anchorMode=translate]` (new mode) and `frame-loop.ts`
+
+`createRealFrameLoop`/`RealFrameLoopOptions` gained `onOverlay` (forwarded straight to
+`createFrameLoop`, matching the existing `onCamera`/`onPhase` shape) -- nothing forwarded it before
+this cut, since no real page had needed `client.overlay.update()` wired to a real rAF loop yet.
+
+`runAnchorsCheck` (`device.ts`) is a *separate* function from `runFillRateHud`, not a flag layered
+onto it: a real, connected `fx-overlay` client (`host: 'remote'`, `test.game = { seed: '0x1', params:
+null }`), not `fx-terrain` -- `device-checks.md`'s own pre-written M18 section assumed `&anchors=50`
+composed with `runFillRateHud`'s own `&autopan`/`&tiles`/`&scale` scene, which is not buildable (one
+WASM game per page); the section is rewritten to describe this instead. Mounts one small (`14x14px`)
+DOM button per Rust-drawn ring, anchored to the exact grid `fixtures/overlay/src/lib.rs`'s own
+`extract()` uses (`ringWorld(pickId)`, exported as `window.__anchorsRingWorld` for a spec), and one
+marker per slot anchor. HUD gained `pick_id` (the last canvas tap's `pick_id`, `-` on a miss) plus
+`runFillRateHud`'s own rAF-interval/GPU-latency fields (`RollingStat`/`percentile` hoisted to module
+scope so both modes share one implementation, rather than a second copy).
+
+**Found building the `anchors` browser test**: a synthetic `page.mouse.click(x, y)` dispatches a
+real `pointerdown`+`pointerup` pair at the *same* coordinates under 1 ms apart -- confirmed with a
+temporary `canvas.addEventListener` probe (`{"t":"pointerdown",...,"ts":1378.955}`, `{"t":
+"pointerup",...,"ts":1378.995}`, a 0.04 ms gap). `input/semantic.ts`'s recognizer only samples
+`PointerSlots.active` once per rAF (its own doc comment: "Runs once per rAF"), so a down-then-up
+inside one JS task, before the frame loop's next real `requestAnimationFrame` callback, is never
+observed as a state *transition* at all: `wasActive[i]` stays `0` through both events, and the
+"just released" tap branch (which requires `wasActive[i] === 1`) never runs -- `pick_id` stays `-`
+even for a click dead-centre on a ring. Confirmed by reproduction (`page.mouse.click()` on a fresh
+page: `pick_id` stays `-`) and by the fix (`page.mouse.move()` + `page.mouse.down()` + a real 50 ms
+`page.waitForTimeout` + `page.mouse.up()`: `pick_id` becomes the ring's id, reliably, every run).
+`anchors.spec.ts`'s own `tap()` helper is this fix; its own doc comment has the full trace. A
+second, smaller finding along the way: clicking exactly on a button's own bottom-edge pixel
+(`y = 320`, the anchor point itself, `align: 'bottom'`'s own `translate(-50%, -100%)`) is boundary-
+ambiguous and measurably missed the ring in an early draft (`RING_SCREEN` moved to `y = 330`, 10 px
+clear of the button's own box, still inside the ring's 24 px screen pick radius).
+
+### `frame-bench.ts`: hover picking added, re-run
+
+`onCamera` now calls `client.pick.at(renderer.viewport.widthPx / 2, renderer.viewport.heightPx / 2)`
+once per frame (Budgets: "worst-case hover pick scans 65,536 records ... `bench.frame_worstcase` ...
+is re-run with hover active"). No real pointer/DOM listener: the acquired slot's own `frame_seq`
+changes every real frame regardless of scene content (`worker/client-drawlist.ts`'s pump publishes
+unconditionally every wake), so `Picker.at`'s own `(cssX, cssY, frameSeq)` cache never hits at a
+fixed point either -- a genuine full 65,536-record scan every frame, not a one-off. `window.
+__frameBench` gained `pickScanned()` (`src/test/client.ts`'s own `pickScanned`) for a future spec to
+assert against; not asserted by any test in this cut (the brief's own ask was the re-run and its
+result line, not a new spec). **Re-run** (`pnpm bench:frame`, foreground, alone): `bench.
+frame_worstcase [full]: records=65536 frames=306/23 warmup=120 timed=300 swiftshader=false` --
+`main   p50=0.617ms p95=0.676ms budget<=1.3ms baseline.p50=0.637ms (+/-25%)`, `worker p50=1.880ms
+p95=1.953ms budget<=2.7ms baseline.p50=2.152ms (+/-25%)`. Both comfortably inside `baselines/
+frame.json`, unchanged (not touched).
+
+### Verified (commands and results)
+
+- `pnpm --filter engine typecheck` -> clean throughout (checked after every step; two real
+  collisions caught and fixed along the way, both recorded above).
+- `pnpm test unit -t pick` -> `unit pass 5 tests`; `-t overlay` -> `unit pass 2 tests`; `-t semantic`
+  -> `unit pass 5 tests`; full `pnpm test unit` -> `unit pass 214 tests`.
+- `pnpm test rust -t framecx` -> `rust pass 4 tests`; full `pnpm test rust` -> `rust pass 333 tests`
+  (unchanged from steps 4-6's own count: no Rust test added or removed this cut).
+- `pnpm test wasm -t "abi registry"` -> `wasm pass 9 tests` (`ABI_VERSION` unchanged: no new
+  export).
+- `pnpm test browser -t pick` -> `6`; `-t overlay` -> `9`; `-t ghost` -> `3` (this cut's own two plus
+  the pre-existing `draw.ghost_follows_cursor_same_frame` substring match); `-t anchors` -> `6`
+  (`gc-anchors`'s clean + 3 object controls, plus `anchors.spec.ts`'s own 2); `-t framecx` -> `2`;
+  `-t device` -> `2`; `-t canvas` -> `3`; `-t input` (the strict GC page) -> `11`; `-t drawables` ->
+  `10` (both unaffected by the `emit` fix beyond a lower, still-passing clean reading).
+- `pnpm test browser -t "anchors neg burst"` -> `3 passed` (`@slow`, run directly since `pnpm test`
+  skips it); `GC_MODE=software` (direct `playwright test --project gc --grep anchors`) -> `7 passed`
+  (clean + every object/burst control, software mode).
+- `pnpm gc reliability -t "anchors clean"` -> `50 passed` (hardware); a second, direct 20-run
+  `GC_MODE=software` pass for the software row.
+- `pnpm bench:frame` -> see the frame-bench paragraph above for the exact result line.
+- Source scan (`grep -rnE "getBoundingClientRect|offsetWidth|offsetHeight|getClientRects|offsetTop|
+  offsetLeft" src/overlay src/input`) -> zero matches outside comments (exit criterion 3).
+- `pnpm format` (Biome + `cargo fmt`) run after every edit; final tree clean.
+- `pnpm test`/`pnpm lint` (the full runs) not run (delegation prompt: "I am the gate"); nothing
+  backgrounded (the one background `vite preview` used for manual `playwright-cli` debugging was
+  killed before the final commit, not part of any test run).
+- Inject-fail-revert, one per new browser test (all reverted immediately after, confirmed by
+  `git diff --stat` matching only the intended change before the real commit):
+  - `ghost.mouse_tracks_cursor_tile`: `fixtures/overlay/src/lib.rs`'s `extract()` ghost branch
+    gated behind `if false && view.cursor_tile().is_some()` -> `ghost1` (`__ghostRecord()`)
+    `undefined` even with a real hover in place. Covers `extract()`'s own ghost-drawing branch.
+  - `ghost.touch_tap_then_confirm`: `input/semantic.ts`'s new cursor-tile-on-tap lines removed ->
+    `cursor` reads `{x:0,y:0,valid:false}` after a real touch tap. Covers the `emit('tap', ...)`
+    branch this cut added.
+  - `overlay.translate_mode_equivalent`: `applyTranslateAnchor`'s own transform-write `if` gated
+    behind `if (false)` -> the anchor never leaves its CSS default position (`box.x + box.width/2`
+    reads `0`, not the expected `420`). Covers the whole translate-mode write path (both the
+    creation-time and per-frame call sites share this one function).
+  - `anchors clean` (GC page): `emitGame`'s preallocated-scratch write reverted to an inline object
+    literal -> `bytesPerFrame.main` measured `554.71`, over the `508` budget. Covers the hot-path
+    fix itself (see "Real defect" above; this is the same fault, shown against the *final* budget
+    rather than the placeholder used while deriving it).
+  - `anchors: pick_id on the HUD`: `device.ts`'s `client.input.on('tap', ...)` HUD-update body
+    emptied -> `pick_id` never leaves `-` even for a direct ring click. Covers the HUD wiring
+    exit criterion 4 depends on.
