@@ -120,19 +120,49 @@ the moment anything else builds a second one, which is why `test/client.ts`'s `d
 instead of building their own (previously safe only because nothing called them at all -- confirmed
 by grep, zero call sites anywhere in `src`/`tests` before this cut).
 
-`render/drawables.ts` was **not** changed to consume this slot. The brief's own delegation prompt
-asked for this to be recorded either way. Reasoning: no existing page combines a real
-`DrawablesRenderer` (which owns its own private `TripleReader` when given `drawListSab`) with real
-picking (`client.pick.acquire()`) on the same `Client` yet -- `device.html`'s production mode
-(`runFillRateHud`) never touches `DrawablesRenderer` at all; its `?harness=1` mode, `gc-drawables.ts`
-and `frame-bench.ts` all drive `drawablesRenderer.acquire()` directly and never call `client.pick.*`.
-The double-reader hazard above is therefore latent, not live, in this cut's own tree. It becomes live
-the moment a later step wires both onto one `Client` (most likely `device.html?anchors=50`, steps
-7-8): that implementer needs to replace `DrawablesRenderer.acquire()`'s internal reader with a
-`DrawListSlot`-shaped parameter (`acquireSlot(header, body)` or similar) fed from the same slot
-`client.pick.acquire()` populates, the same fix already applied to `drawListHash`/`drawListRecords`
-here. Flagged rather than done silently, since it touches `gc-drawables.ts`'s own zero-GC budget and
-`frame-bench.ts`'s baseline -- both explicitly this milestone's own Non-scope/later-step territory.
+**Revised at gate round 1 (coordinator review, commit `afdd196`): `render/drawables.ts` now reads
+this slot.** The paragraph originally here called the double-reader hazard "latent, not live" because
+no existing page combined real drawables rendering with real picking on one `Client` yet -- true
+*today*, but wrong as a reason not to fix it: `gc-drawables.ts`, `frame-bench.ts` and `device.html?
+harness=1` all still built a *second*, independent `TripleReader` over the exact same `drawList` SAB
+the `Client`'s own `DrawListSlot` already owns, every time any of them passed the old `drawListSab`
+option -- a live defect in production rendering, not a hypothetical one, regardless of whether
+picking happened to be exercised on the same page yet. The gate caught this before it shipped.
+
+**Final shape.** `createDrawablesRenderer(device, { colorFormat, drawListSlot?: DrawListSlot,
+checkCompilation })` -- `drawListSab` is gone. `DrawablesRenderer.acquire()` no longer constructs or
+calls a `TripleReader` at all: it reads whatever `drawListSlot.header`/`.body` currently reference
+(a plain field read) and does the one `writeBuffer`, full stop. The caller is responsible for having
+called `drawListSlot.acquire()` (directly, or through `Client.pick.acquire()`) earlier in the same
+frame:
+- `frame-bench.ts` needs no change beyond the option rename -- it already drives `createRealFrameLoop`,
+  whose own `acquire` phase calls `client.pick.acquire()` before `onCamera`'s own
+  `drawablesRenderer.acquire()` call.
+- `gc-drawables.ts` (`drive()`, and the `__drawablesTest.acquire()`/`.acquireAndDraw()` test hooks)
+  and `device.ts`'s `?harness=1` `driveOne()` each hand-roll their own per-frame loop (no
+  `frame-loop.ts`): each now calls `client.pick.acquire()` once, immediately before
+  `drawablesRenderer.acquire()`.
+
+`grep -rn "new TripleReader" src` now shows exactly one production call site
+(`render/drawlist-slot.ts`), plus `sab/triple.test.ts`'s own direct unit coverage of the primitive
+itself -- **no remaining code path acquires the `drawList` SAB outside the `acquire` phase** (i.e.
+outside a `DrawListSlot.acquire()` call, whether reached through `Client.pick.acquire()` or, in the
+three hand-rolled pages above, directly).
+
+New test: `drawlist.picker_matches_renderer_frame_seq` (`gc-drawables.spec.ts`) -- `pick.
+matches_interpolated_frame_on_screen` (`pick.spec.ts`) never involves a real renderer, so it cannot
+show that picking uses "the slot being drawn" in the sense that matters: the *actual* GPU upload.
+This test drives a real `fx-drawables` client + real `DrawablesRenderer` through 20 real publishes;
+after each one's single `client.pick.acquire()` + `drawablesRenderer.acquire()`, it asserts
+`drawablesRenderer.frameSeq()` (what got uploaded) equals `clientTestHandle(client).drawListSlot.
+frameSeq` (what the picker sees) -- every iteration, not just once. **Proven to fail**: a temporary
+`FAULT_INJECT_SECOND_READER` reinstated a second `TripleReader` inside `render/drawables.ts`'s own
+`acquire()` (over the same SAB, passed as a second, temporary `drawListSab` option alongside
+`drawListSlot`), reproducing the exact bug this round fixed. Result: the two `frame_seq` values
+diverged on the very first iteration -- renderer `302`, picker `0` (the reinstated reader stole every
+fresh publish before the `DrawListSlot`'s own reader ever got one, starving it completely rather than
+merely lagging it) -- confirming the test would have caught the original defect. Reverted immediately
+after (`git diff` empty on `render/drawables.ts`/`gc-drawables.ts` before the real commit).
 
 ### `Client.pick` / `input/pick.ts` (`Picker`), exact shape
 
@@ -285,10 +315,29 @@ successor bisecting by commit should expect step 1/2's own trees to reference `o
   `semantic.spec.ts`'s own real-DOM tests, unchanged, hover picking now live on that same page's own
   code paths).
 - `pnpm test browser -t "drawables"` -> `browser pass 9 tests` (the zero-GC page `drawables`,
-  unaffected by this cut's own untouched `render/drawables.ts`).
+  budget unaffected by the gate-round-1 rewiring: same underlying `TripleReader.acquire()` cost, now
+  attributed to `client.pick.acquire()` instead of the renderer's own former internal call).
 - `pnpm --filter engine typecheck` -> clean (all three `tsc` projects).
 - `pnpm format` (Biome + `cargo fmt`) run after every edit; final tree clean.
 - `pnpm test`/`pnpm lint` (the full runs) were not run (delegation prompt: "I am the gate").
+
+### Gate round 1 (coordinator review): `render/drawables.ts` rewired, verified
+
+Commit `afdd196`. Full re-run after the fix (all foreground, targeted):
+- `pnpm test browser -t drawables` -> `browser pass 10 tests` (the nine above, plus the new
+  `drawlist.picker_matches_renderer_frame_seq`).
+- `pnpm test browser -t pick` -> `browser pass 4 tests` (the three from steps 1-3, plus
+  `drawlist.picker_matches_renderer_frame_seq` again, matched by the same `-t pick` substring
+  against `picker_matches`).
+- `pnpm test browser -t overlay` -> `browser pass 7 tests` (unchanged).
+- `pnpm test browser -t frame` -> `browser pass 9 tests`.
+- `pnpm test browser -t device` -> `browser pass 2 tests`.
+- `pnpm test unit` (full) -> `unit pass 214 tests` (unchanged: this round touched no unit-tested
+  code). `pnpm --filter engine typecheck` -> clean.
+- `grep -rn "new TripleReader" src` -> exactly `src/render/drawlist-slot.ts` (production) and
+  `src/sab/triple.test.ts` (the primitive's own unit test). **No remaining code path acquires the
+  DrawList SAB outside the `acquire` phase.**
+- `bench.frame_worstcase` not re-run (coordinator: "not needed now, step 8").
 
 ### Notes for steps 4-8
 
@@ -296,9 +345,10 @@ successor bisecting by commit should expect step 1/2's own trees to reference `o
   (128..640, f32x2x64) are all still zero-initialised/untouched (M17's own state, unchanged by this
   cut) -- read them off the same `DrawListSlot.header` this cut built (`DataView`, little-endian).
   `flags` (52) is likewise still untouched and still has no named owner.
-- `render/drawables.ts` rewiring (see above) is the concrete, scoped task for whichever step first
-  combines real drawables rendering with real picking on one `Client` -- most likely `device.html`'s
-  `anchors=50` mode.
+- `render/drawables.ts` already reads the acquired `DrawListSlot` (gate round 1, above) -- a later
+  step wiring `device.html?anchors=50` needs no renderer change for this reason, only its own new
+  work (picking + rendering already agree on one frame, proven by `drawlist.picker_matches_renderer_
+  frame_seq`).
 - `Picker`'s options (`createPicker(opts: { drawListSlot, cameraState, viewport })`) has no sprite-
   pivot parameter; adding one is additive (an optional field), not a rename.
 - `client.overlay`'s public shape (`{ anchor, update }`) has no `anchorSlot` yet; add it as a third
