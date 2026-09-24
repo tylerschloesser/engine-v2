@@ -50,6 +50,37 @@ export class PointerSlot {
   sampleCount = 0
   sampleNext = 0
 
+  /** M18 gate round 1 (a real, pre-M18 defect: `input/semantic.ts`'s recognizer samples `active`
+   * once per rAF, so a press *and* release both landing between two `recognize()` calls -- a
+   * macOS trackpad tap-to-click, a fast phone tap, both well under one ~16ms frame -- was never
+   * observed as an `active` transition at all, and no tap ever fired). `recordPointerDown` always
+   * captures the down position/button/modifiers here (every press might turn out to be quick);
+   * `recordPointerUp` always latches `quickTap = true` with the up position/time on top of it,
+   * regardless of whether this press was already being tracked normally -- cheap (a handful of
+   * field writes, no allocation) and safe, because the recognizer itself clears `quickTap`
+   * whenever it takes the *normal* path for this slot (a still-active press, or a release it
+   * already knows about via `wasActive`), so a normal multi-frame press's own already-correct
+   * handling can never be shadowed by a stale or redundant latch. Consumed (and cleared) by
+   * `processSlot`'s own new third branch when `active` is `false` and the slot was never observed
+   * active in between: fires one tap from `quickDownX/Y` (`pick_id` and tile) checked against
+   * `quickUpX/Y`/`quickUpTMs - quickDownTMs`, the same tap-radius/`TAP_MAX_MS` rules as a normal
+   * tap. A *second* full press+release before the recognizer next runs overwrites these fields
+   * with the newer cycle's own data: one tap surfaces, not two (documented, acceptable -- two full
+   * clicks inside one ~16ms rAF gap is not a rate any real pointer device reaches). */
+  quickTap = false
+  quickDownX = 0
+  quickDownY = 0
+  quickDownTMs = 0
+  quickUpX = 0
+  quickUpY = 0
+  quickUpTMs = 0
+  quickButton = 0
+  quickShift = false
+  quickCtrl = false
+  quickAlt = false
+  quickMeta = false
+  quickKind: PointerKindValue = PointerKind.Mouse
+
   pushSample(x: number, y: number, tMs: number): void {
     const i = this.sampleNext
     this.sampleX[i] = x
@@ -143,6 +174,17 @@ export function recordPointerDown(
   slot.sampleCount = 0
   slot.sampleNext = 0
   slot.pushSample(x, y, tMs)
+  // M18 gate round 1 (`PointerSlot.quickTap`'s own doc comment): captured on every press, since
+  // any press might complete (down and up) before the recognizer next samples this slot.
+  slot.quickDownX = x
+  slot.quickDownY = y
+  slot.quickDownTMs = tMs
+  slot.quickButton = button
+  slot.quickShift = shift
+  slot.quickCtrl = ctrl
+  slot.quickAlt = alt
+  slot.quickMeta = meta
+  slot.quickKind = kind
 }
 
 export function recordPointerMove(
@@ -206,6 +248,13 @@ export function recordPointerUp(
   slot.y = y
   slot.pushSample(x, y, tMs)
   slot.active = false
+  // M18 gate round 1 (`PointerSlot.quickTap`'s own doc comment): latched unconditionally -- the
+  // recognizer, not this listener, decides whether it matters (it clears the latch itself on
+  // every path that already handles this slot's release the normal way).
+  slot.quickUpX = x
+  slot.quickUpY = y
+  slot.quickUpTMs = tMs
+  slot.quickTap = true
 }
 
 export function recordGestureStart(state: PointerSlots, x: number, y: number): void {

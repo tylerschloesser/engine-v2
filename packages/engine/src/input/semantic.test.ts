@@ -18,8 +18,8 @@ import { WheelState } from './wheel.js'
 // doubled formula would still agree): `pxPerTile = 1600 / 20 = 80`.
 const viewport = { widthPx: 1600, heightPx: 800 }
 
-function newRecognizer() {
-  return createSemanticRecognizer(createRing(INPUT_RECORD_BYTES + 8, 64))
+function newRecognizer(pick?: Parameters<typeof createSemanticRecognizer>[1]) {
+  return createSemanticRecognizer(createRing(INPUT_RECORD_BYTES + 8, 64), pick)
 }
 
 function newBundle() {
@@ -61,6 +61,60 @@ test('semantic: tap vs drag thresholds', () => {
   recognizer.recognize(bundle, state, viewport, 16)
   expect(taps.length).toBe(1) // unchanged
   expect(drags).toEqual(['start', 'drag', 'end'])
+})
+
+// Gate round 1 (M18): a real, pre-M18 defect (`input/pointers.ts`'s `PointerSlot.active`,
+// `input/semantic.ts`'s `recognize` -- both from M11) -- a press *and* release landing between two
+// `recognize()` calls was never observed as an `active` transition at all, so no tap ever fired.
+// A macOS trackpad tap-to-click and a fast phone tap both release well within one ~16ms rAF gap.
+test('semantic: press and release inside one frame still taps', () => {
+  const state = new CameraState()
+  state.tilesAcross = 20
+  // `pick_id` from the *down* position, not the up position (a coordinator ruling): the up
+  // position here (803) deliberately picks a different id than the down position (800) would, so
+  // this assertion fails if the quick-tap path ever reads the wrong one.
+  const recognizer = newRecognizer({ at: (x) => (x === 800 ? 77 : 0) })
+  const bundle = newBundle()
+
+  const taps: InputEventTs[] = []
+  recognizer.on('tap', (e) => taps.push({ ...e }))
+
+  // Down then up, both *before* the recognizer's first `recognize()` call for this press -- it
+  // never observes `active === true`.
+  recordPointerDown(bundle.pointers, 1, 800, 400, 0)
+  recordPointerUp(bundle.pointers, 1, 803, 400, 10) // 3px away, under the 8px tap radius
+  recognizer.recognize(bundle, state, viewport, 16)
+
+  expect(taps.length).toBe(1)
+  expect(taps[0]?.tileX).toBe(0) // 800px, dead centre of the 1600px-wide viewport -> world tile 0
+  expect(taps[0]?.tileY).toBe(0)
+  expect(taps[0]?.pickId).toBe(77) // from the down position (800), not the up position (803)
+
+  // A second full press+release on the same slot, also inside one frame gap, before the next
+  // `recognize()` call: overwrites the latch: one tap surfaces (the second cycle's own data), not
+  // two (`PointerSlot.quickTap`'s own doc comment: "documented, acceptable").
+  recordPointerDown(bundle.pointers, 1, 900, 400, 20)
+  recordPointerUp(bundle.pointers, 1, 900, 400, 30)
+  recordPointerDown(bundle.pointers, 1, 950, 400, 40)
+  recordPointerUp(bundle.pointers, 1, 950, 400, 50)
+  recognizer.recognize(bundle, state, viewport, 16)
+  expect(taps.length).toBe(2) // one more, not two more
+  expect(taps[1]?.pickId).toBe(0) // the second cycle's own down position (950), not in the pick map
+
+  // A press that moves past the tap radius before releasing, all inside one frame gap: no tap (the
+  // same "moved past threshold" rule a normal tap already follows).
+  recordPointerDown(bundle.pointers, 1, 800, 400, 60)
+  recordPointerUp(bundle.pointers, 1, 820, 400, 70) // 20px, over the 8px radius
+  recognizer.recognize(bundle, state, viewport, 16)
+  expect(taps.length).toBe(2) // unchanged
+
+  // A press that reaches the recognizer normally (observed active before it releases) is
+  // unaffected by any of this -- the ordinary multi-call path, still a single tap.
+  recordPointerDown(bundle.pointers, 1, 800, 400, 80)
+  recognizer.recognize(bundle, state, viewport, 16)
+  recordPointerUp(bundle.pointers, 1, 800, 400, 96)
+  recognizer.recognize(bundle, state, viewport, 16)
+  expect(taps.length).toBe(3)
 })
 
 test('semantic: longpress', () => {

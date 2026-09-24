@@ -30,20 +30,6 @@ async function openAnchors(page: Page, extra = ''): Promise<void> {
   await page.waitForTimeout(300)
 }
 
-/** A real tap needs down and up to straddle at least one real animation frame: `input/semantic.ts`'s
- * recognizer only samples `PointerSlots.active` once per rAF (its own doc comment: "Runs once per
- * rAF"), so a synthetic `page.mouse.click()` -- down and up dispatched in the same JS task, under
- * 1 ms apart -- never registers `wasActive` at all (found running this test's own first draft: `page
- * .mouse.click()` left `pick_id` at `-` even directly over a ring, `page.locator(...).boundingBox()`
- * confirming the button sat exactly where expected). A short real delay between down and up (a real
- * human tap is easily this slow) gives the frame loop's own real rAF a chance to observe the press. */
-async function tap(page: Page, x: number, y: number): Promise<void> {
-  await page.mouse.move(x, y)
-  await page.mouse.down()
-  await page.waitForTimeout(50)
-  await page.mouse.up()
-}
-
 function pickIdFromHud(hud: string): string {
   const m = /pick_id: (\S+)/.exec(hud)
   expect(m, hud).not.toBeNull()
@@ -57,21 +43,21 @@ test('anchors: pick_id on the HUD (ring, ground, button)', async ({ page }) => {
   expect(before).toBe('-')
 
   // A click on empty ground: `pick_id` stays `-`.
-  await tap(page, GROUND_SCREEN.x, GROUND_SCREEN.y)
+  await page.mouse.click(GROUND_SCREEN.x, GROUND_SCREEN.y)
   await expect
     .poll(async () => pickIdFromHud((await page.locator('#hud').textContent()) ?? ''))
     .toBe('-')
 
   // A click on the ring itself (`align: 'bottom'`'s own button sits entirely *above* this point --
   // device.ts's own module doc comment): `pick_id` becomes that ring's id, 26.
-  await tap(page, RING_SCREEN.x, RING_SCREEN.y)
+  await page.mouse.click(RING_SCREEN.x, RING_SCREEN.y)
   await expect
     .poll(async () => pickIdFromHud((await page.locator('#hud').textContent()) ?? ''))
     .toBe('26')
 
   // A click on empty ground again, to have a known, different `pick_id` (`-`) right before the
   // button click below -- so "unchanged" is unambiguous either way it could have gone wrong.
-  await tap(page, GROUND_SCREEN.x, GROUND_SCREEN.y)
+  await page.mouse.click(GROUND_SCREEN.x, GROUND_SCREEN.y)
   await expect
     .poll(async () => pickIdFromHud((await page.locator('#hud').textContent()) ?? ''))
     .toBe('-')
@@ -89,7 +75,7 @@ test('anchors: anchorMode=translate reaches the same HUD picking behaviour', asy
   await openAnchors(page, '&anchorMode=translate')
   await expect(page.locator('#hud')).toContainText('anchorMode=translate')
 
-  await tap(page, RING_SCREEN.x, RING_SCREEN.y)
+  await page.mouse.click(RING_SCREEN.x, RING_SCREEN.y)
   await expect
     .poll(async () => pickIdFromHud((await page.locator('#hud').textContent()) ?? ''))
     .toBe('26')

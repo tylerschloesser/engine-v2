@@ -823,22 +823,61 @@ marker per slot anchor. HUD gained `pick_id` (the last canvas tap's `pick_id`, `
 `runFillRateHud`'s own rAF-interval/GPU-latency fields (`RollingStat`/`percentile` hoisted to module
 scope so both modes share one implementation, rather than a second copy).
 
-**Found building the `anchors` browser test**: a synthetic `page.mouse.click(x, y)` dispatches a
-real `pointerdown`+`pointerup` pair at the *same* coordinates under 1 ms apart -- confirmed with a
-temporary `canvas.addEventListener` probe (`{"t":"pointerdown",...,"ts":1378.955}`, `{"t":
-"pointerup",...,"ts":1378.995}`, a 0.04 ms gap). `input/semantic.ts`'s recognizer only samples
-`PointerSlots.active` once per rAF (its own doc comment: "Runs once per rAF"), so a down-then-up
-inside one JS task, before the frame loop's next real `requestAnimationFrame` callback, is never
-observed as a state *transition* at all: `wasActive[i]` stays `0` through both events, and the
-"just released" tap branch (which requires `wasActive[i] === 1`) never runs -- `pick_id` stays `-`
-even for a click dead-centre on a ring. Confirmed by reproduction (`page.mouse.click()` on a fresh
-page: `pick_id` stays `-`) and by the fix (`page.mouse.move()` + `page.mouse.down()` + a real 50 ms
-`page.waitForTimeout` + `page.mouse.up()`: `pick_id` becomes the ring's id, reliably, every run).
-`anchors.spec.ts`'s own `tap()` helper is this fix; its own doc comment has the full trace. A
-second, smaller finding along the way: clicking exactly on a button's own bottom-edge pixel
-(`y = 320`, the anchor point itself, `align: 'bottom'`'s own `translate(-50%, -100%)`) is boundary-
-ambiguous and measurably missed the ring in an early draft (`RING_SCREEN` moved to `y = 330`, 10 px
-clear of the button's own box, still inside the ring's 24 px screen pick radius).
+**A real, pre-M18 production defect, found building the `anchors` browser test and fixed at the
+coordinator's own gate round 1** (not a test quirk, not worked around by slowing the test down): a
+synthetic `page.mouse.click(x, y)` dispatches a real `pointerdown`+`pointerup` pair at the *same*
+coordinates under 1 ms apart -- confirmed with a temporary `canvas.addEventListener` probe
+(`{"t":"pointerdown",...,"ts":1378.955}`, `{"t":"pointerup",...,"ts":1378.995}`, a 0.04 ms gap) --
+and `input/semantic.ts`'s recognizer only samples `PointerSlots.active` once per rAF (its own doc
+comment: "Runs once per rAF"), so a down-then-up inside one JS task, before the frame loop's next
+real `requestAnimationFrame` callback, was never observed as a state *transition* at all:
+`wasActive[i]` stayed `0` through both events, and the "just released" tap branch (which requires
+`wasActive[i] === 1`) never ran. This is not specific to Playwright's synthetic events: `recordPointer
+Up` (`input/pointers.ts`) sets `slot.active = false` the instant a real `pointerup` fires, and the
+recognizer's own once-per-rAF sampling of `PointerSlots.active` (M11's own design, `input/pointers.ts`
++ `input/semantic.ts`, unchanged since) is exactly as blind to a **real** press-and-release that both
+land inside one ~16ms rAF gap -- a macOS trackpad tap-to-click and a fast phone tap both routinely do.
+M18's own exit criterion ("a click on a ring sets `pick_id`") and M20b's collect button both depend on
+this path, so masking it behind a slowed-down test (the first draft's own `tap()` helper, a real
+50 ms gap forced between down and up) would have shipped the defect. **Fixed** in `input/pointers.ts`/
+`input/semantic.ts` instead (gate round 1, coordinator ruling): `PointerSlot` gained a `quickTap`
+latch (`quickDownX/Y/TMs`, `quickUpX/Y/TMs`, `quickButton/Shift/Ctrl/Alt/Meta/Kind`) -- `recordPointer
+Down` always captures the down side (every press might turn out to be quick), `recordPointerUp`
+always latches `quickTap = true` with the up side on top, regardless of whether the press was already
+being tracked normally (cheap, no allocation, `.claude/rules/hot-paths.md`: listeners record, rAF
+integrates). `processSlot` (`input/semantic.ts`) gained a third branch, `else if (slot.quickTap)`,
+taken only when the slot is currently inactive *and* `wasActive[i]` never saw it active either: fires
+one `tap` from the latched down/up data (`pick_id` and tile from the *down* position, a coordinator
+ruling -- a real tap's down and up are the same point in practice; tap-radius and `TAP_MAX_MS` checked
+fresh from the latched positions/times, since this slot's own `movedPastThreshold`/`heldMs` arrays
+were never touched for this press). The other two branches (`slot.active` and `wasActive[i] === 1`,
+both unchanged in their own logic) each clear `slot.quickTap = false` on entry, so a normal
+multi-frame press's own already-correct handling can never be shadowed by a stale or redundant latch,
+and a normal press is never double-fired. **Two full clicks on the same slot inside one frame gap**:
+the second `recordPointerDown`/`recordPointerUp` pair simply overwrites the latch's own fields before
+the recognizer ever consumes it -- one tap surfaces, using the *second* cycle's own down/up data, not
+two (documented on `PointerSlot.quickTap`'s own doc comment: an input rate no real pointer device
+reaches). **Verified no regression** in camera inertia/drag recognition, which reads the same
+`PointerSlots` (`camera.ts`'s own pan/pinch/inertia never touches `quickTap` at all -- it is
+`processSlot`'s own local branch, not a new field `camera.ts` reads): `pnpm test browser -t input`
+(11), `-t camera` (4), `-t semantic` (6) -- see "Verified", below, for the ring-round-2 numbers.
+**Unit test** (`semantic.test.ts`, "press and release inside one frame still taps"): down+up recorded
+before a single `recognize()` call produces exactly one tap, `pick_id` from the down position (a
+`PickSource` deliberately returning a different id for the down vs. up coordinates), tile `(0, 0)`;
+a second full click-pair before the next `recognize()` call coalesces to one more tap (not two); a
+press that moves past the tap radius entirely inside one frame gap fires no tap; an ordinary
+multi-call press (observed active, then released) is unaffected. Inject-fail-revert (both the new
+unit test and `anchors: pick_id on the HUD`, `anchors.spec.ts`'s own `tap()` helper reverted to a
+plain `page.mouse.click()`): reverting `input/pointers.ts`/`input/semantic.ts` to their pre-round-2
+shape (`git show <pre-round-2 commit>:...`) reproduces both failures exactly --
+`semantic.test.ts`: `AssertionError: expected +0 to be 1` (zero taps fired); `anchors.spec.ts`:
+`pick_id` stays `-`, `Timeout 5000ms exceeded while waiting on the predicate`. Reverted immediately
+after (`git diff --stat` on both files showed only the intended fix before the real commit). A
+second, smaller finding along the way (unrelated to the rAF-sampling defect): clicking exactly on a
+button's own bottom-edge pixel (`y = 320`, the anchor point itself, `align: 'bottom'`'s own
+`translate(-50%, -100%)`) is boundary-ambiguous and measurably missed the ring in an early draft
+(`RING_SCREEN` moved to `y = 330`, 10 px clear of the button's own box, still inside the ring's 24 px
+screen pick radius).
 
 ### `frame-bench.ts`: hover picking added, re-run
 
@@ -902,3 +941,38 @@ frame.json`, unchanged (not touched).
   - `anchors: pick_id on the HUD`: `device.ts`'s `client.input.on('tap', ...)` HUD-update body
     emptied -> `pick_id` never leaves `-` even for a direct ring click. Covers the HUD wiring
     exit criterion 4 depends on.
+
+### Gate round 1 (coordinator review): a real pre-M18 defect, `quickTap`, fixed
+
+The "Found building the `anchors` browser test" paragraph above (originally: "a synthetic click
+never registers, masked by slowing the test down") is superseded by the real fix described there
+now: `input/pointers.ts`'s `PointerSlot.quickTap` latch + `input/semantic.ts`'s `processSlot` third
+branch. `anchors.spec.ts`'s `tap()` helper is removed; every call site is back to a plain
+`page.mouse.click()`. New unit test: `semantic: press and release inside one frame still taps`
+(`semantic.test.ts`).
+
+- `pnpm --filter engine typecheck` -> clean.
+- `pnpm test unit -t semantic` -> `unit pass 6 tests` (the new one); full `pnpm test unit` ->
+  `unit pass 215 tests` (214 + 1).
+- `pnpm test browser -t input` -> `11`; `-t camera` -> `4`; `-t semantic` -> `6`; `-t anchors` -> `6`;
+  `-t ghost` -> `3`; `-t overlay` -> `9`; `-t pick` -> `6`; `-t follow` -> `4` -- all unchanged from
+  before this round, confirming no regression in camera inertia or drag recognition (both read the
+  same `PointerSlots` `quickTap` now lives on).
+- `pnpm test browser -t "input clean"` -> `1 passed` (the strict zero-GC page, budget 190 B/frame,
+  untouched) -> passes unchanged. `pnpm exec playwright test --project gc --grep "input"` (direct,
+  every isolate/control) -> `8 passed`. `pnpm exec playwright test --project gc --grep "anchors"`
+  (direct) -> `7 passed` (unaffected: `gc-anchors.ts` never calls `client.camera.tick()`/
+  `recognize()` at all, so `quickTap` never executes on that page).
+- Inject-fail-revert (both tests the coordinator named, together): `input/pointers.ts`/
+  `input/semantic.ts` reverted to their pre-round-1 shape (`git show 5850fd6:...`, the commit before
+  this round) --
+  - `pnpm test unit -t "press and release inside one frame"` -> `FAIL`: `AssertionError: expected +0
+    to be 1` (zero taps fired for a down+up landing inside one `recognize()` gap).
+  - `pnpm test browser -t "anchors: pick_id"` -> `FAIL`: `Expected: "26" Received: "-"`, `Timeout
+    5000ms exceeded while waiting on the predicate` (a plain `page.mouse.click()` on a ring never
+    sets `pick_id`).
+  Reverted immediately after (`cat` from a pre-edit backup, not `git checkout`): `git diff --stat`
+  on both files showed only the intended `quickTap` addition before the real commit; both tests
+  re-verified passing (`unit pass 1 tests`, `browser pass 1 tests`).
+- `pnpm format` run after; final tree clean. `pnpm test`/`pnpm lint` (full) not run (same rule).
+  Nothing backgrounded.

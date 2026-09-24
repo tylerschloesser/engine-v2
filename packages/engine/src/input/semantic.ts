@@ -336,6 +336,10 @@ export function createSemanticRecognizer(
       if (wasActive[i] === 0) {
         // Just engaged: reset this press's bookkeeping. The down frame itself never emits
         // anything (same convention as `camera.ts`'s own "the down frame itself never pans").
+        // M18 gate round 1: this press is now being tracked the normal way, so any older,
+        // unconsumed `quickTap` latch on this slot (a *different*, already-over press) is stale --
+        // discarded, not fired (`PointerSlot.quickTap`'s own doc comment: "one tap is acceptable").
+        slot.quickTap = false
         downX[i] = slot.x
         downY[i] = slot.y
         heldMs[i] = 0
@@ -414,7 +418,11 @@ export function createSemanticRecognizer(
         )
       }
     } else if (wasActive[i] === 1) {
-      // Just released.
+      // Just released, the normal way (this press was observed active on an earlier call). M18
+      // gate round 1: clear any `quickTap` latch too -- `recordPointerUp` always sets it,
+      // redundantly in this case, and this branch (not the new one below) is already the correct
+      // handler for this exact release.
+      slot.quickTap = false
       if (dragging[i] === 1) {
         endDrag(i, slot, cameraState, viewport)
       } else if (
@@ -444,6 +452,39 @@ export function createSemanticRecognizer(
           slot.alt,
           slot.meta,
           slot.kind,
+        )
+      }
+    } else if (slot.quickTap) {
+      // M18 gate round 1: a press *and* release both landed between two `recognize()` calls, so
+      // `wasActive[i]` never saw the intervening `active === true` -- the normal branch above
+      // never ran. Fires one tap from the latched down/up data instead, the same radius/duration
+      // rules the normal path uses, computed fresh (this slot's own `movedPastThreshold`/`heldMs`
+      // arrays were never touched for this press, so they cannot be read here -- they still hold
+      // whatever the last *observed* press on this slot left them at). `pick_id`/tile come from
+      // the down position (`PointerSlot.quickTap`'s own doc comment), not the up position: a
+      // coordinator ruling, since a real tap's down and up are the same point in practice.
+      slot.quickTap = false
+      const qdx = slot.quickUpX - slot.quickDownX
+      const qdy = slot.quickUpY - slot.quickDownY
+      const heldMsQuick = slot.quickUpTMs - slot.quickDownTMs
+      if (Math.hypot(qdx, qdy) < TAP_RADIUS_PX && heldMsQuick < TAP_MAX_MS) {
+        tileUnderPoint(cameraState, viewport, slot.quickDownX, slot.quickDownY, tileScratch)
+        cameraState.cursorTileX = tileScratch.tileX
+        cameraState.cursorTileY = tileScratch.tileY
+        cameraState.cursorValid = true
+        emit(
+          'tap',
+          tileScratch.tileX,
+          tileScratch.tileY,
+          tileScratch.fracX,
+          tileScratch.fracY,
+          pickIdAt(slot.quickDownX, slot.quickDownY),
+          slot.quickButton,
+          slot.quickShift,
+          slot.quickCtrl,
+          slot.quickAlt,
+          slot.quickMeta,
+          slot.quickKind,
         )
       }
     }
