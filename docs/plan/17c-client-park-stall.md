@@ -1,6 +1,6 @@
 # M17c: The client worker that never parks on `zero_gc_action`
 
-Status: not started · After: 17b · Tyler-dependent: no
+Status: done · After: 17b · Tyler-dependent: no
 
 Written by the orchestrator at M17b's gate, from two instrumented occurrences.
 
@@ -99,12 +99,12 @@ Steps 1-4 in order, each committed `M17c step k: …`.
 A test for the step-3 fix that fails on the base commit. Say how you checked that it fails there.
 
 ## Exit criteria
-- [ ] The client's stall is reproduced and its location named (function + awaited condition), or
+- [x] The client's stall is reproduced and its location named (function + awaited condition), or
       step 4's bounded attempt is recorded and a diagnostic is committed.
-- [ ] If named: fixed, with a test that fails without the fix. `node scripts/repeat.mjs browser 15`
+- [x] If named: fixed, with a test that fails without the fix. `node scripts/repeat.mjs browser 15`
       and `... 15 --load 10` show no `parkWorkers` timeout.
-- [ ] `zero_gc_action`'s negative controls still trip and every budget is unchanged.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `zero_gc_action`'s negative controls still trip and every budget is unchanged.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm gc -t "zero_gc_action"` · `pnpm test browser -t <pattern>` ·
