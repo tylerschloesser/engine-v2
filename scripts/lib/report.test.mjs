@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
 import {
+  buildStepsReport,
   buildTimingsReport,
   classifyBudget,
   findSeed,
   formatAdapter,
+  formatBuildWarning,
   formatFailure,
   formatSuiteLine,
   formatWarning,
@@ -267,5 +269,42 @@ test('runner: timings json shape', () => {
       { suite: 'rust', ms: 412.3, budgetMs: 10_000, tests: 145 },
       { suite: 'browser', ms: 21_004.7, budgetMs: undefined, tests: 90 },
     ],
+  })
+})
+
+describe('buildStepsReport', () => {
+  test('one entry per build step, in the order given', () => {
+    const steps = [
+      { name: 'tsc', ms: 512.4 },
+      { name: 'fixtures', ms: 15_876.2 },
+    ]
+    expect(buildStepsReport(steps)).toEqual({
+      steps: [
+        { name: 'tsc', ms: 512.4 },
+        { name: 'fixtures', ms: 15_876.2 },
+      ],
+    })
+  })
+})
+
+describe('formatBuildWarning', () => {
+  const steps = [
+    { name: 'tsc', ms: 512 },
+    { name: 'fixtures', ms: 15_876 },
+    { name: 'cargo-tests', ms: 15_902 },
+    { name: 'doctests', ms: 5_700 },
+    { name: 'pages', ms: 600 },
+  ]
+
+  test('names the three slowest steps, slowest first', () => {
+    expect(formatBuildWarning(38_590, 30_000, 1, steps)).toBe(
+      'build WARN 39s/30s (slowest: cargo-tests 16s, fixtures 16s, doctests 5.7s)',
+    )
+  })
+
+  test('scale multiplies the printed budget, `top` changes how many steps are named', () => {
+    expect(formatBuildWarning(38_590, 15_000, 2, steps, 1)).toBe(
+      'build WARN 39s/30s (slowest: cargo-tests 16s)',
+    )
   })
 })

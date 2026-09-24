@@ -11,10 +11,11 @@ import { adapters } from './lib/adapters.mjs'
 import { parseArgs, usage } from './lib/args.mjs'
 import { toolEnv } from './lib/env.mjs'
 import {
+  buildStepsReport,
   buildTimingsReport,
   classifyBudget,
   formatAdapter,
-  formatDuration,
+  formatBuildWarning,
   formatFailure,
   formatSuiteLine,
   formatWarning,
@@ -56,6 +57,7 @@ async function main() {
 
   // Phase 1: build steps, in order.
   let buildMs = 0
+  const stepTimings = []
   for (const step of buildSteps) {
     const log = join(results, 'build', `${step.name}.log`)
     const { code, ms } = await run(step.cmd, step.args, {
@@ -64,16 +66,22 @@ async function main() {
       env: toolEnv(),
     })
     buildMs += ms
+    stepTimings.push({ name: step.name, ms })
     if (code !== 0) {
       console.log(`build FAIL ${step.name}\n${lastLines(readLog(log), 40)}\n${log}`)
       return 1
     }
   }
+  // Every run, pass or WARN: a step's own wall time, so a slow build is attributable without
+  // re-running under a stopwatch (docs/plan/17d-fast-tier-wall-time.md step 1).
+  mkdirSync(join(results, 'build'), { recursive: true })
+  writeFileSync(
+    join(results, 'build', 'timings.json'),
+    `${JSON.stringify(buildStepsReport(stepTimings), null, 2)}\n`,
+  )
   // stderr, never a failure: the runner cannot tell a cold build from a warm one.
   if (classifyBudget(buildMs, buildBudgetMs, opts.scale) !== 'pass') {
-    console.error(
-      `build WARN ${formatDuration(buildMs)}/${formatDuration(buildBudgetMs * opts.scale)}`,
-    )
+    console.error(formatBuildWarning(buildMs, buildBudgetMs, opts.scale, stepTimings))
   }
 
   // Phase 2: every selected suite at once, except a `solo: true` suite (docs/plan/

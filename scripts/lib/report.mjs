@@ -58,6 +58,30 @@ export function buildTimingsReport({ commit, cpu, buildMs, outcomes }) {
   }
 }
 
+/**
+ * `test-results/build/timings.json` (docs/plan/17d-fast-tier-wall-time.md step 1): each build
+ * step's own wall time, written on every `pnpm test` run (pass or WARN) so a slow build is
+ * attributable to one step without re-running under a stopwatch.
+ */
+export function buildStepsReport(steps) {
+  return { steps: steps.map(({ name, ms }) => ({ name, ms })) }
+}
+
+/**
+ * `build WARN <ms>/<budget> (slowest: ...)` (docs/plan/17d-fast-tier-wall-time.md step 1): the
+ * existing one-line build warning, with its `top` (default 3) slowest steps named so the warning
+ * is actionable on its own -- `test-results/build/timings.json` (`buildStepsReport`) holds every
+ * step for anything needing the rest.
+ */
+export function formatBuildWarning(ms, budgetMs, scale, steps, top = 3) {
+  const slowest = [...steps]
+    .sort((a, b) => b.ms - a.ms)
+    .slice(0, top)
+    .map((s) => `${s.name} ${formatDuration(s.ms)}`)
+    .join(', ')
+  return `build WARN ${formatDuration(ms)}/${formatDuration(budgetMs * scale)} (slowest: ${slowest})`
+}
+
 /** One warning line under a suite's line (an adapter's `warnings`, docs/decisions/0020 §3 extension:
  * M04 uses this for the `Tracing.start` stall). */
 export function formatWarning(text) {
