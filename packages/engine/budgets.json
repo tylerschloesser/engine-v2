@@ -372,6 +372,37 @@
             }
           }
         }
+      },
+      "anchors": {
+        "isolates": {
+          "main": {
+            "class": "strict",
+            "bytesPerFrame": 508,
+            "formula": "docs/plan/18-picking-and-overlay.md Planning decisions \"Overlay string constant\": main budget = M17's strict number (117, `drawables`' own row) + the constant, 0016 §2's own deferred \"overlay-anchoring string constant\", now measured: 50 static anchors (`client.overlay.anchor`) + 4 slot anchors (`client.overlay.anchorSlot`, tracking `fx-overlay`'s own real `DrawList::anchor`-published orbiting circles) mounted once at setup, the camera panning and zooming (a triangle wave, `tilesAcross` 20..28..20) every frame of the measured window, plus one `client.input.emit` call per frame (steps 4-6 Deviations: no earlier page folded that in). Measured (`playwright test --project gc --grep \"anchors clean\" --repeat-each 50 --workers 4`, this machine, after fixing a real defect this page's own first run found -- `input/semantic.ts`'s `emit`/`emitGame` each passed `writeInputRecord` a fresh object literal per call, not the preallocated-scratch shape `.claude/rules/hot-paths.md` requires; fixed, saving ~56 B/frame, `client.input.emit` now itself allocates nothing as documented): 498.29-499.14 B/frame across 50 clean runs. **Margin, re-derived from the Planning decisions' own +16 B estimate**: a first pass used `ceil(499.14) + 16 = 516` (constant = 516 - 117 = 399), but `anchors neg object main` (the fixed 16 B/frame `allocateObject` control, `src/test/controls.ts`'s own doc comment: \"a budget is `ceil(clean) + 8 B`, so a `clean + 16` reading beats it by 7-8 B/frame\") measured a stable 514.43-514.49 B/frame against that budget -- *below* 516, never tripping (verified 3 consecutive runs, all 514.43). A 16 B margin cancels the object control's own 16 B delta almost exactly on this page's own noisier baseline (the object control is sized against the *standard* `+8 B` margin, not a doubled one); re-derived using 0016 §1's ordinary formula instead, `ceil(measured clean) + 8 B` (the same shape every other page in this file uses): ceil(499.14) = 500, + 8 = 508. Verified: clean (499.14 max) < 508 < object (514.43 min, 3 runs), 8.86 B headroom above clean and 6.43 B below the object control -- the same 7-8 B separation shape `gc-loop`'s own doc comment describes. Constant = 508 - 117 = 391. byFn's own top sites: `updateProperties` (the layer's own `transform`/`--z` writes) ~92,200 B/600 = 153.7 B/frame, `String@:0` (the `--wx`/`--wy` string encodes) ~55,800-79,600 B/600, `writeSlotAnchorVars` (the 4 continuously-orbiting slot anchors, changing almost every frame) ~57,600-95,800 B/600, `draw@terrain`/`drain@wgsl.generated` (the same 3-wrapper-object WebGPU floor `drawables`' own row measures) 28,800 B/600 + 12,000 B/600.",
+            "attributionRoots": ["drive"]
+          },
+          "client": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the shared \"8 B\" worker figure every other page's client/gen0/sim row uses. Measured: a constant 0.8133 B/frame across every clean run (`fx-overlay`'s own `frame`/`extract` cost nothing extra here beyond what `drawables`'s own client row already measures).",
+            "attributionRoots": ["body"]
+          },
+          "gen0": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the shared \"8 B\" worker figure every other page's client/gen0/sim row uses. Measured: a constant 0.8133 B/frame across every clean run.",
+            "attributionRoots": ["body"]
+          }
+        },
+        "software": {
+          "frames": 600,
+          "isolates": {
+            "main": {
+              "attributedBytesPerFrame": 484,
+              "formula": "ADR 0029: software mode attributes only `main` via `attributionRoots` (`[\"drive\"]`), the same convention `drawables`' own software row uses, `ceil(measured) + 8 B` (the ordinary margin, not the hardware row's own wider +16 B -- Planning decisions names 16 B only for the hardware-mode `main` row). Measured (`GC_MODE=software`, `playwright test --project gc --grep \"anchors clean\" --repeat-each 20 --workers 4`, this machine): 475.3867-475.8067 B/frame attributed across 20 clean runs. ceil(475.8067) = 476, + 8 B margin = 484."
+            }
+          }
+        }
       }
     }
   },

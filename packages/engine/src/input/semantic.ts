@@ -26,7 +26,13 @@ import type { CameraState } from '../camera/state.js'
 import { type CameraViewport, type TilePoint, tileUnderPoint } from '../camera/transform.js'
 import { RingProducer } from '../sab/ring.js'
 import { PointerKind, type PointerKindValue, type PointerSlot } from './pointers.js'
-import { INPUT_RECORD_BYTES, InputKind, type InputKindValue, writeInputRecord } from './record.js'
+import {
+  INPUT_RECORD_BYTES,
+  InputKind,
+  type InputKindValue,
+  type InputRecordFields,
+  writeInputRecord,
+} from './record.js'
 
 export { INPUT_RECORD_BYTES }
 
@@ -176,6 +182,25 @@ export function createSemanticRecognizer(
     dragend: makeEvent('dragend'),
   }
 
+  // docs/plan/18-picking-and-overlay.md step 8 (`gc-anchors.ts`, folding `client.input.emit` into a
+  // measured window, found the defect): `writeInputRecord`'s own doc comment already says "pure,
+  // allocation-free", but both callers below used to pass it a fresh object literal per call --
+  // `.claude/rules/hot-paths.md`: "Preallocate scratch objects at init and mutate them". One
+  // `InputRecordFields` scratch, shared by `emit`/`emitGame` (never both in the same call).
+  const recordScratch: InputRecordFields = {
+    kind: InputKind.Tap,
+    button: 0,
+    modifiers: 0,
+    pointer: 0,
+    seq: 0,
+    tileX: 0,
+    tileY: 0,
+    fracX: 0,
+    fracY: 0,
+    pickId: 0,
+    timeMs: 0,
+  }
+
   // Per-slot bookkeeping (index 0/1, matching `PointerSlots.slots` -- the same convention `camera/
   // camera.ts`'s own integrator uses). Typed arrays created once, mutated every call.
   const wasActive = new Uint8Array(2)
@@ -233,19 +258,18 @@ export function createSemanticRecognizer(
       return
     }
     const modifiers = (shift ? 1 : 0) | (ctrl ? 2 : 0) | (alt ? 4 : 0) | (meta ? 8 : 0)
-    writeInputRecord(ring.slotView(idx), 0, {
-      kind: KIND_BY_TYPE[type],
-      button,
-      modifiers,
-      pointer: pointerKind,
-      seq,
-      tileX,
-      tileY,
-      fracX,
-      fracY,
-      pickId,
-      timeMs: clockMs >>> 0,
-    })
+    recordScratch.kind = KIND_BY_TYPE[type]
+    recordScratch.button = button
+    recordScratch.modifiers = modifiers
+    recordScratch.pointer = pointerKind
+    recordScratch.seq = seq
+    recordScratch.tileX = tileX
+    recordScratch.tileY = tileY
+    recordScratch.fracX = fracX
+    recordScratch.fracY = fracY
+    recordScratch.pickId = pickId
+    recordScratch.timeMs = clockMs >>> 0
+    writeInputRecord(ring.slotView(idx), 0, recordScratch)
     ring.commit()
   }
 
@@ -260,19 +284,18 @@ export function createSemanticRecognizer(
       ring.recordDrop()
       return false
     }
-    writeInputRecord(ring.slotView(idx), 0, {
-      kind: InputKind.Game,
-      button: 0,
-      modifiers: 0,
-      pointer: 0,
-      seq: 0,
-      tileX: a,
-      tileY: b,
-      fracX: 0,
-      fracY: 0,
-      pickId: code,
-      timeMs: 0,
-    })
+    recordScratch.kind = InputKind.Game
+    recordScratch.button = 0
+    recordScratch.modifiers = 0
+    recordScratch.pointer = 0
+    recordScratch.seq = 0
+    recordScratch.tileX = a
+    recordScratch.tileY = b
+    recordScratch.fracX = 0
+    recordScratch.fracY = 0
+    recordScratch.pickId = code
+    recordScratch.timeMs = 0
+    writeInputRecord(ring.slotView(idx), 0, recordScratch)
     ring.commit()
     return true
   }
