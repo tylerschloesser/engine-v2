@@ -1,6 +1,6 @@
 # M17d: `pnpm test` back under a minute: stop the build steps rebuilding each other
 
-Status: not started · After: 17c · Tyler-dependent: no
+Status: done · After: 17c · Tyler-dependent: no
 
 Written by the orchestrator at M17c's gate.
 
@@ -99,15 +99,15 @@ second consecutive build compiles nothing, in whatever tier is cheap enough. Say
 and prove it fails by reintroducing the difference.
 
 ## Exit criteria
-- [ ] Step 0: the `wasm` runner's non-zero exit reason is printed into its log on any future occurrence
+- [x] Step 0: the `wasm` runner's non-zero exit reason is printed into its log on any future occurrence
       (shown by forcing one, for example an unhandled rejection after the last test, then reverted), and
       either the cause is fixed or the attempt is recorded.
-- [ ] The rebuild's cause is named with evidence (the dirty reason cargo gives), and fixed.
-- [ ] Warm no-change `pnpm test` build ≤ 5 s measured (paste per-step timings); committed
+- [x] The rebuild's cause is named with evidence (the dirty reason cargo gives), and fixed.
+- [ ] *(Amended at the gate: measured 7.3 s, not ≤ 5 s. `doctests` is 4.9 s because a `compile_fail` doctest pays a real `rustc` run every time, by design; everything else totals 2.4 s. Not ticked; `buildBudgetMs` is 10 s and quiet runs no longer warn. The bindings and clean-tree parts are met.)* Warm no-change `pnpm test` build ≤ 5 s measured (paste per-step timings); committed
       bindings byte-identical; the tree is clean after `pnpm test`.
-- [ ] One-line-edit rebuild time measured and reported.
-- [ ] ADR amending 0020 §3 written, with `suites.mjs` matching it.
-- [ ] `pnpm test` and `pnpm lint` are green, and `pnpm test` wall time on a warm tree is under
+- [x] One-line-edit rebuild time measured and reported.
+- [x] ADR amending 0020 §3 written, with `suites.mjs` matching it.
+- [x] `pnpm test` and `pnpm lint` are green, and `pnpm test` wall time on a warm tree is under
       60 s (paste `time pnpm test`).
 
 ## Verification commands

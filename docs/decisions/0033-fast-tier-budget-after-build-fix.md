@@ -23,7 +23,7 @@ switched between the two -- confirmed to be about *package-selection scope alone
 original suspect, `TS_RS_EXPORT_DIR`, was ruled out by passing it the *identical* value under both
 scopes and still seeing the dirty fingerprint). Fixed: `exportBindings` now runs `--workspace` too.
 
-**2. A second, independent cause of the same symptom, found in fix round 1** (Tyler measured `build
+**2. A second, independent cause of the same symptom, found in fix round 1** (the orchestrator measured `build
 WARN 15s/15s` on two consecutive quiet-machine runs after 1 above landed). Attributed precisely:
 `packages/engine/tests/wasm/plugin-dev.test.ts`'s `"touch triggers rebuild and full-reload"` test
 calls `utimes(fixtures/hash/src/lib.rs, now, now)` to simulate a file-watcher touch for Vite's
@@ -84,8 +84,9 @@ the slow window, not folded into a budget (nothing in `scripts/suites.mjs` measu
   own `tests/*.rs` files (each is its own compiled+linked+signed unit) -- consolidating them would
   cut signing operations roughly proportionally. That is a test-content/organization change
   (`tests/*.rs` file count and shape), outside this milestone's Non-scope line ("changing test
-  content"), and it trades per-file test isolation for build speed. **This is Tyler's question, not
-  a decision this milestone makes.**
+  content"), and it trades per-file test isolation for build speed. **Not decided here:** the machine setting that likely removes the
+  scanning cost is Tyler's (`questions-for-tyler.md` Q14), and consolidating test files is the
+  orchestrator's fallback if it doesn't.
 
 ## Decision
 
