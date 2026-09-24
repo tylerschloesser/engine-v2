@@ -18,7 +18,7 @@ use crate::abi::{Instance, RegionId, RegionLayout, Role, Status};
 use crate::authority::Scope;
 use crate::codec::decode_canonical;
 use crate::delta::Delta;
-use crate::game::{Game, PlayerEvent, PlayerId, PresenceTable, WorldRead};
+use crate::game::{Game, PlayerEvent, PlayerId, Presence as _, PresenceTable, WorldRead};
 use crate::sim::{Outcome, Record, Rejected, Sim, WorldParams};
 use crate::time::Tick;
 use crate::wire::{
@@ -54,6 +54,15 @@ pub struct ConnCounters {
     pub chunk_snapshots: u64,
     pub chunk_leaves: u64,
     pub bytes_up: u64,
+    /// docs/plan/19-presence-channel.md step 3, Planning decisions ("The 32-byte limit is enforced
+    /// per encoded sample ... An oversize sample is dropped and counted (`presence_oversize`, must
+    /// read 0 in tests"): bumped by `Host::on_uplink` whenever a connection's presence bytes exceed
+    /// [`crate::presence::MAX_ENCODED_BYTES`] or fail to decode/canonicalise -- the sample is
+    /// dropped (the table keeps whatever it already held for that player), never a protocol error
+    /// (unlike a malformed action, which closes the connection): a stale or missing presence sample
+    /// only ever makes `admit` more conservative, never less. Live in production: every real `Host`
+    /// reaches this from `on_uplink`, not only tests.
+    pub presence_oversize: u64,
 }
 
 struct ConnSlot<G: Game> {
@@ -208,6 +217,13 @@ pub struct Host<G: Game> {
     /// (`no_alloc_connection.rs`, not this milestone's) still rely on for ticks with actions too,
     /// since it settles at a steady capacity the same way `scratch_entity_ops` already does.
     scratch_action_players: Vec<PlayerId>,
+    /// docs/plan/19-presence-channel.md step 3: the presence samples `G::admit` reads (0001:
+    /// "keeps the latest sample per player"). One table per world, not per connection -- keyed by
+    /// `PlayerId`, which survives a reconnect the way `Store::last_seq` does, so a fresh `ConnSlot`
+    /// for a returning player does not itself clear a held sample (only `Host::disconnect`, steps
+    /// 4-6, does that, per 0001: "on disconnect the host tells clients at once and drops the sample
+    /// from relay").
+    presence: PresenceTable<G>,
 }
 
 /// The last-wins kind of an entity op this tick (host/mod Deviations: `scratch_entity_ops`'s own
@@ -259,6 +275,7 @@ impl<G: Game> Host<G> {
             scratch_tile_flat: Vec::new(),
             scratch_entity_ops: Vec::new(),
             scratch_action_players: Vec::new(),
+            presence: PresenceTable::empty(),
         }
     }
 
@@ -287,6 +304,14 @@ impl<G: Game> Host<G> {
     #[cfg(any(test, feature = "testing"))]
     pub fn debug_chunk_version_count(&self) -> usize {
         self.chunk_versions.len()
+    }
+
+    /// `who`'s held presence sample, if any (test/diagnostic convenience, docs/plan/
+    /// 19-presence-channel.md step 3): `Self::presence` has no public accessor of its own since
+    /// nothing outside `Host` reads it yet (relay is steps 4-6's job).
+    #[cfg(any(test, feature = "testing"))]
+    pub fn debug_presence(&self, who: PlayerId) -> Option<G::Presence> {
+        self.presence.get(who).map(|e| e.sample)
     }
 
     /// Every chunk `conn` is currently subscribed to (test/diagnostic convenience).
@@ -364,7 +389,10 @@ impl<G: Game> Host<G> {
     /// 0004: "a resent action is never applied twice"), then `G::admit`: failure queues an
     /// immediate `Outcome::Rejected` on this connection's `pending_results` (0004: "not logged");
     /// success appends `Record::Action` to `pending_records`, collected for the next `tick()`
-    /// (0004 step 3). Presence is discarded (Non-scope: M19). An unknown connection is silently
+    /// (0004 step 3). docs/plan/19-presence-channel.md step 3: a carried presence sample is decoded
+    /// and recorded into `Self::presence` (32-byte-oversize or malformed bytes counted and dropped,
+    /// world-cap violations dropped) before the action path runs, so `G::admit` sees the update from
+    /// the *same* batch a witness-carrying action arrived in. An unknown connection is silently
     /// ignored -- untrusted input never panics.
     ///
     /// **Dedup floor: `ConnSlot::highest_admitted_seq`, not a single `Store::last_seq` snapshot**
@@ -406,6 +434,38 @@ impl<G: Game> Host<G> {
         {
             slot.camera = Some(camera);
         }
+        // docs/plan/19-presence-channel.md step 3: before the `raw_actions.is_empty()` early
+        // return below -- a steady-state uplink batch typically carries a presence sample with no
+        // actions at all (0010 "Rates": "the latest camera report and presence sample ... plus
+        // pending actions"), so handling presence only on the action path would silently discard
+        // it most of the time.
+        if let Some(raw) = batch.presence {
+            // Planning decisions: "The 32-byte limit is enforced per encoded sample ... not at
+            // init". Checked before attempting to decode (cheap, and avoids ever handing
+            // `decode_canonical` more bytes than a well-formed sample could legitimately be).
+            let sample = if raw.len() > crate::presence::MAX_ENCODED_BYTES {
+                None
+            } else {
+                decode_canonical::<G::Presence>(raw).ok()
+            };
+            match sample {
+                // World-cap check (0007 §2's own valid coordinate range, `crate::world_access`'s
+                // convention elsewhere): an untrusted client can report any `pos()` at all, so the
+                // host clamps at the door -- dropped, not clamped-and-kept, since a game's `admit`
+                // tolerance check (this fixture's own `TooFar`) already treats "no sample" and "an
+                // implausible one" the same way, and synthesising a clamped-but-fake position would
+                // only make an implausible claim look more plausible.
+                Some(sample) if sample.pos().tile().in_range() => {
+                    self.presence.on_sample(player, sample, self.last_tick);
+                }
+                Some(_) => {}
+                None => {
+                    if let Some(Some(slot)) = self.conns.get_mut(idx) {
+                        slot.counters.presence_oversize += 1;
+                    }
+                }
+            }
+        }
         if raw_actions.is_empty() {
             return Ok(());
         }
@@ -439,7 +499,7 @@ impl<G: Game> Host<G> {
                 let sim = self.sim.as_ref().expect("checked above");
                 G::admit(
                     sim.authority() as &dyn WorldRead<G>,
-                    &PresenceTable::empty(),
+                    &self.presence,
                     player,
                     &action,
                 )
@@ -925,6 +985,7 @@ where
             scratch_tile_flat: Vec::new(),
             scratch_entity_ops: Vec::new(),
             scratch_action_players: Vec::new(),
+            presence: PresenceTable::empty(),
         })
     }
 
