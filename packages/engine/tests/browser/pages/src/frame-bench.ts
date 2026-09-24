@@ -140,10 +140,12 @@ const client = createClient({
 await pumpUntilLive(client)
 const harness = asHarness(client)
 
-const drawListSab = clientTestHandle(client).sabs.drawList
+// docs/plan/18-picking-and-overlay.md gate round 1: no `drawListSab`/own `TripleReader` -- this page
+// already drives `createRealFrameLoop` (below), whose own `acquire` phase calls `client.pick.
+// acquire()` once per tick, before `onCamera`'s own `drawablesRenderer.acquire()` call.
 const drawablesRenderer: DrawablesRenderer = await createDrawablesRenderer(device.device, {
   colorFormat,
-  drawListSab,
+  drawListSlot: clientTestHandle(client).drawListSlot,
   checkCompilation: device.checkCompilation,
 })
 attachDrawables(renderer, drawablesRenderer)

@@ -12,9 +12,9 @@
 // header+body byte scene by hand (the same "hand-fill the renderer directly" precedent `render/
 // terrain.ts`'s `writePageChunk` etc. set, M09) instead of driving a real client/worker.
 
-import { DRAWLIST_BODY_BYTES, DRAWLIST_HEADER_BYTES } from '../sab/layout.js'
-import { BLOCK_BYTES, TripleReader } from '../sab/triple.js'
+import { BLOCK_BYTES } from '../sab/triple.js'
 import type { LoadedSpriteAtlas } from './atlas.js'
+import type { DrawListSlot } from './drawlist-slot.js'
 import type { TerrainRenderer } from './terrain.js'
 import { UBERQUAD_WGSL } from './wgsl.generated.js'
 
@@ -143,11 +143,20 @@ export interface DrawablesRenderer {
   /** Writes the whole DrawFrame uniform (module doc comment); called once per frame before `draw`/
    * `encodeInto` in production, any time in a test. */
   writeFrameUniform(v: DrawFrameUniformValues): void
-  /** Production `acquire()`: pulls the newest `drawList` triple-buffer slot (`TripleReader`, built
-   * once at `createDrawablesRenderer` from `drawListSab`) and does the one `writeBuffer` (Scope).
-   * A no-op when `drawListSab` was not given (a renderer built for a probe scene that only ever
-   * calls `acquireFromBytes`, mirroring `worker/client-drawlist.ts`'s "no region, no publish"
-   * shape). */
+  /** Production `acquire()`: reads whatever the caller-owned `DrawListSlot` (`opts.drawListSlot`,
+   * `render/drawlist-slot.ts`) currently holds and does the one `writeBuffer` (Scope). This renderer
+   * never pulls a new slot itself -- docs/plan/18-picking-and-overlay.md's own `acquire` phase
+   * (`Client.pick.acquire()`) is the *one* place that ever calls `TripleReader.acquire()` over
+   * `drawList`; a second independent reader here would tear the triple-buffer handoff (docs/plan/
+   * 17-drawlist-and-sprites.md Deviations, "Two-reader torn read", now a real defect this milestone's
+   * gate round 1 found live in production: `gc-drawables`/`frame-bench`/`device.html?harness=1` all
+   * built their own second reader through the old `drawListSab` option). A no-op when `drawListSlot`
+   * was not given (a renderer built for a probe scene that only ever calls `acquireFromBytes`,
+   * mirroring `worker/client-drawlist.ts`'s "no region, no publish" shape). The caller is
+   * responsible for calling `drawListSlot.acquire()` (directly, or through `Client.pick.acquire()`)
+   * *before* this, in the same frame -- production pages using `frame-loop.ts` get this for free
+   * from its own `acquire` phase; a hand-rolled `drive()` loop (a zero-GC/bench page) must call
+   * `client.pick.acquire()` itself, once, before this. */
   acquire(): void
   /** The shared core `acquire()` calls, and a probe test calls directly with a hand-built header +
    * body (no SAB, no client, no worker -- `render/terrain.ts`'s own `writePageChunk`-style test
@@ -180,10 +189,11 @@ export interface DrawablesRenderer {
    * a plain pass-through of whatever the most recent `acquire()`/`acquireFromBytes()` read. */
   drawListDropped(): number
   /** Test-only (docs/plan/17-drawlist-and-sprites.md Tests added: `drawlist.triple_newest_wins`):
-   * the last-acquired slot's own header `frame_seq` field, read through this renderer's own
-   * `TripleReader` -- never build a second, independent `TripleReader` over the same `drawList` SAB
-   * to check this (`sab/triple.ts`'s own `acquire()` mutates shared triple-buffer state on every
-   * call, so two readers racing each other tear the "current front slot" handoff). */
+   * the last-acquired slot's own header `frame_seq` field, read straight off `opts.drawListSlot`
+   * (which already carries it, `DrawListSlot.frameSeq`) -- never build a second, independent
+   * `TripleReader` over the same `drawList` SAB to check this (`sab/triple.ts`'s own `acquire()`
+   * mutates shared triple-buffer state on every call, so two readers racing each other tear the
+   * "current front slot" handoff). */
   frameSeq(): number
   /** Test-only: the last-acquired slot's own header `record_count` field. */
   recordCount(): number
@@ -215,9 +225,12 @@ export async function createDrawablesRenderer(
   device: GPUDevice,
   opts: {
     colorFormat: GPUTextureFormat
-    /** `drawList` triple-buffer SAB (production); omit for a renderer only ever driven through
-     * `acquireFromBytes` (a probe scene). */
-    drawListSab?: SharedArrayBuffer
+    /** docs/plan/18-picking-and-overlay.md: the *caller-owned* `DrawListSlot` (`render/
+     * drawlist-slot.ts`) whose `acquire()` some other code already calls this frame -- `Client.
+     * pick.acquire()` in production, or directly for a page that owns one without a full `Client`
+     * (none does today). Omit for a renderer only ever driven through `acquireFromBytes` (a probe
+     * scene). This renderer never constructs its own `TripleReader`. */
+    drawListSlot?: DrawListSlot
     checkCompilation(label: string, module: GPUShaderModule): Promise<void>
   },
 ): Promise<DrawablesRenderer> {
@@ -333,17 +346,11 @@ export async function createDrawablesRenderer(
     primitive: { topology: 'triangle-list' },
   })
 
-  const reader = opts.drawListSab
-    ? new TripleReader(opts.drawListSab, DRAWLIST_HEADER_BYTES, DRAWLIST_BODY_BYTES)
-    : undefined
-  // Built once (`.claude/rules/hot-paths.md`): one `DataView` per triple-buffer slot, over the
-  // `TripleReader`'s own fixed header view, reused every `acquire()`.
-  const headerViewsBySlot: DataView[] = reader
-    ? [0, 1, 2].map((slot) => {
-        const h = reader.headerView(slot)
-        return new DataView(h.buffer, h.byteOffset, h.byteLength)
-      })
-    : []
+  // docs/plan/18-picking-and-overlay.md gate round 1: no `TripleReader` here at all -- `opts.
+  // drawListSlot` (if given) is the *only* thing this renderer ever reads from, and it never calls
+  // that slot's own `acquire()` (someone else already did, this frame, before this renderer's own
+  // `acquire()` runs).
+  const slot = opts.drawListSlot
 
   const uniformScratch = new ArrayBuffer(DRAW_FRAME_UNIFORM_BYTES)
   const uniformView = new DataView(uniformScratch)
@@ -439,11 +446,9 @@ export async function createDrawablesRenderer(
     },
 
     acquire() {
-      if (!reader) return
-      const slot = reader.acquire()
-      const header = headerViewsBySlot[slot] as DataView
-      const recordCount = computeLayerOffsets(header)
-      acquireCore(header, reader.bodyView(slot), recordCount)
+      if (!slot) return
+      const recordCount = computeLayerOffsets(slot.header)
+      acquireCore(slot.header, slot.body, recordCount)
     },
 
     acquireFromBytes(header, body) {

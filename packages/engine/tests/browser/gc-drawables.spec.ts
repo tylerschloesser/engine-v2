@@ -23,6 +23,7 @@ declare global {
       park(): Promise<void>
       acquire(): void
       frameSeq(): number
+      pickerFrameSeq(): number
       recordCount(): number
       nonEmptyLayerCount(): number
       drawListDropped(): number
@@ -89,6 +90,35 @@ test('drawlist.triple_newest_wins', async ({ page }, testInfo) => {
   // Exit criteria: "drawListDropped == 0 in every test except the overflow test" -- 301-ish
   // populated records are far under CAPACITY (65,536), so nothing here should ever drop.
   expect(await page.evaluate(() => window.__drawablesTest?.drawListDropped())).toBe(0)
+
+  await page.evaluate(() => window.__drawablesTest?.park())
+})
+
+// docs/plan/18-picking-and-overlay.md gate round 1: `pick.matches_interpolated_frame_on_screen`
+// (`pick.spec.ts`) never involves a real renderer -- it hand-fills the DrawList itself, so it cannot
+// show that a real render pipeline and real picking agree on which frame is "the one on screen".
+// This does: a real `fx-drawables` client, a real `DrawablesRenderer`, many real publishes, and on
+// every one of them the `frame_seq` `drawablesRenderer.acquire()` just uploaded to the GPU
+// (`frameSeq()`) must equal the `frame_seq` on the picker's own `DrawListSlot` (`pickerFrameSeq()`,
+// the same object `client.pick.at` reads `window_origin`/the body off) -- both read *after* exactly
+// one `client.pick.acquire()` call (`__drawablesTest.acquire()`'s own new body, gc-drawables.ts).
+test('drawlist.picker_matches_renderer_frame_seq', async ({ page }, testInfo) => {
+  await openPage(page, '/gc-drawables.html')
+  const ready = await page.evaluate(() => window.__gc?.ready)
+  expectAdapter(testInfo, (ready?.adapter as AdapterInfo | null) ?? null)
+
+  await page.evaluate(() => window.__drawablesTest?.resume())
+
+  const FRAMES = 20
+  for (let i = 0; i < FRAMES; i++) {
+    // A real publish (a new `frame_seq`) every iteration, then the one real acquire both the
+    // renderer and the picker are fed from.
+    await page.evaluate(() => window.__drawablesTest?.stepClientFrameOnly())
+    await page.evaluate(() => window.__drawablesTest?.acquire())
+    const rendererSeq = await page.evaluate(() => window.__drawablesTest?.frameSeq())
+    const pickerSeq = await page.evaluate(() => window.__drawablesTest?.pickerFrameSeq())
+    expect(rendererSeq, `frame ${i}: renderer vs picker frame_seq`).toBe(pickerSeq)
+  }
 
   await page.evaluate(() => window.__drawablesTest?.park())
 })

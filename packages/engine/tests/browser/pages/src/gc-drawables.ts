@@ -60,13 +60,17 @@ declare global {
       drawListDropped: number
     }
     /** Test-only, outside `engine/test` (docs/plan/17-drawlist-and-sprites.md Tests added:
-     * `drawlist.triple_newest_wins`, `counters.draws_equal_nonempty_layers`): every read goes
-     * through `drawablesRenderer`'s own `TripleReader` (`acquire()`), never a second, independent
-     * one over the same `drawList` SAB -- `sab/triple.ts`'s own `acquire()` mutates shared
-     * triple-buffer state on every call, so two readers racing each other tear the "current front
-     * slot" handoff (found by this page's own first draft, Deviations). `stepClientFrameOnly`
-     * drives the client worker one real frame at a time with no `acquire()`/draw call, unlike
-     * `drive()` -- the fine-grained control both tests need. */
+     * `drawlist.triple_newest_wins`, `counters.draws_equal_nonempty_layers`; docs/plan/
+     * 18-picking-and-overlay.md gate round 1: `drawlist.picker_matches_renderer_frame_seq`): every
+     * read goes through `drawListSlot` (the client's own single `DrawListSlot`/`TripleReader`,
+     * `acquire()` below calling `client.pick.acquire()` then `drawablesRenderer.acquire()`, which
+     * itself builds no reader of its own), never a second, independent `TripleReader` over the same
+     * `drawList` SAB -- `sab/triple.ts`'s own `acquire()` mutates shared triple-buffer state on
+     * every call, so two readers racing each other tear the "current front slot" handoff (found by
+     * this page's own first draft at M17, and again -- live in `render/drawables.ts` itself, past
+     * the M17 fix -- at M18's gate round 1, Deviations). `stepClientFrameOnly` drives the client
+     * worker one real frame at a time with no `acquire()`/draw call, unlike `drive()` -- the
+     * fine-grained control both tests need. */
     __drawablesTest?: {
       /** `resumeWorkers(client)` -- required before `stepClientFrameOnly`/`acquireAndDraw` below,
        * since `window.__pageReady` is set with every worker already *parked* (`window.__gc.run`'s
@@ -78,10 +82,16 @@ declare global {
        * for the next `window.__gc.run()` (or the next spec) the same way `__pageReady` first found
        * it. */
       park(): Promise<void>
-      /** `drawablesRenderer.acquire()` alone -- no draw. */
+      /** `client.pick.acquire()` then `drawablesRenderer.acquire()` -- no draw. */
       acquire(): void
-      /** `frame_seq` of the slot `acquire()`/`acquireAndDraw()` last read. */
+      /** `frame_seq` of the slot `acquire()`/`acquireAndDraw()` last read, off `drawablesRenderer`
+       * itself (what got uploaded to the GPU). */
       frameSeq(): number
+      /** docs/plan/18-picking-and-overlay.md gate round 1: `frame_seq` off the *same* `DrawListSlot`
+       * object (`clientTestHandle(client).drawListSlot`), read independently of `drawablesRenderer`
+       * -- `drawlist.picker_matches_renderer_frame_seq` compares this against `frameSeq()` above to
+       * prove picking and rendering see the same frame every time, not just that each one works. */
+      pickerFrameSeq(): number
       /** `record_count` of the slot `acquire()`/`acquireAndDraw()` last read. */
       recordCount(): number
       /** How many of the 8 `layer_count` entries of that same slot are non-zero. */
@@ -169,14 +179,16 @@ await pumpUntilLive(client)
 // own new setup-time population loop exposed).
 const harness = asHarness(client)
 
-// Now built once `render/drawables.js` is loaded (`.claude/rules/hot-paths.md`'s own "views/scratch
-// built once at setup"): the drawList SAB comes off `clientTestHandle` (`ClientTestHandle.sabs`),
-// not the public `Client` interface, which this milestone leaves untouched (Files touched lists
-// `src/worker/client.ts`, not `src/client.ts`).
-const drawListSab = clientTestHandle(client).sabs.drawList
+// docs/plan/18-picking-and-overlay.md gate round 1: the renderer takes the client's own single
+// `DrawListSlot` (`ClientTestHandle.drawListSlot`) and never builds its own `TripleReader` -- `drive`
+// below calls `client.pick.acquire()` once, before `drawablesRenderer.acquire()`, the same order
+// `frame-loop.ts`'s own `acquire`/`render` phases use. Kept as its own binding (not just inlined into
+// the `createDrawablesRenderer` call below) so `__drawablesTest.pickerFrameSeq()` can read the exact
+// same object `drawablesRenderer.acquire()` itself reads from.
+const drawListSlot = clientTestHandle(client).drawListSlot
 const drawablesRenderer: DrawablesRenderer = await createDrawablesRenderer(device.device, {
   colorFormat: 'rgba8unorm',
-  drawListSab,
+  drawListSlot,
   checkCompilation: device.checkCompilation,
 })
 attachDrawables(renderer, drawablesRenderer)
@@ -313,6 +325,7 @@ installGcPage(harness, {
     stepSimTickSync(client, 1)
     harness.stepTick()
     uploadDrain.drain(DEFAULT_UPLOAD_BUDGET_BYTES)
+    client.pick.acquire() // the one real TripleReader.acquire() over drawList, this rAF
     drawablesRenderer.acquire()
     renderer.writeFrameUniform(renderer.frameUniform)
     renderer.draw(target) // one shared pass: terrain's triangle, then attachDrawables' own layers.
@@ -331,11 +344,13 @@ window.__drawablesGcCounters = () => ({
   drawListDropped: drawListDropped(drawablesRenderer),
 })
 
-// `window.__drawablesTest` reads exclusively through `drawablesRenderer`'s own `TripleReader`
-// (`acquire()`/`frameSeq()`/`recordCount()`/`nonEmptyLayerCount()`, `render/drawables.ts`) -- never
-// a second, independent `TripleReader` over the same `drawList` SAB (`sab/triple.ts`'s own
-// `acquire()` mutates shared triple-buffer state on every call, so two readers racing each other
-// tear the "current front slot" handoff; found by this page's own first draft, Deviations).
+// `window.__drawablesTest` reads exclusively through `client.pick.acquire()` (the client's own one
+// `DrawListSlot`/`TripleReader`) followed by `drawablesRenderer`'s own now-reader-free `acquire()`/
+// `frameSeq()`/`recordCount()`/`nonEmptyLayerCount()` (`render/drawables.ts`) -- never a second,
+// independent `TripleReader` over the same `drawList` SAB (`sab/triple.ts`'s own `acquire()` mutates
+// shared triple-buffer state on every call, so two readers racing each other tear the "current front
+// slot" handoff; found by this page's own first draft, Deviations, and again -- live in production,
+// this time -- at docs/plan/18-picking-and-overlay.md's gate round 1).
 window.__drawablesTest = {
   resume() {
     return resumeWorkers(client)
@@ -344,10 +359,14 @@ window.__drawablesTest = {
     return parkWorkers(client)
   },
   acquire() {
+    client.pick.acquire()
     drawablesRenderer.acquire()
   },
   frameSeq() {
     return drawablesRenderer.frameSeq()
+  },
+  pickerFrameSeq() {
+    return drawListSlot.frameSeq
   },
   recordCount() {
     return drawablesRenderer.recordCount()
@@ -362,6 +381,7 @@ window.__drawablesTest = {
     harness.stepFrame(1000 / 60)
   },
   acquireAndDraw() {
+    client.pick.acquire()
     drawablesRenderer.acquire()
     renderer.writeFrameUniform(renderer.frameUniform)
     renderer.draw(target)

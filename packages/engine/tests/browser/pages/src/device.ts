@@ -476,10 +476,11 @@ async function runHarness(): Promise<void> {
   await pumpUntilLive(client)
   const harness = asHarness(client)
 
-  const drawListSab = clientTestHandle(client).sabs.drawList
+  // docs/plan/18-picking-and-overlay.md gate round 1: no `drawListSab`/own `TripleReader` --
+  // `driveOne` below calls `client.pick.acquire()` once, before `drawablesRenderer.acquire()`.
   const drawablesRenderer: DrawablesRenderer = await createDrawablesRenderer(device.device, {
     colorFormat,
-    drawListSab,
+    drawListSlot: clientTestHandle(client).drawListSlot,
     checkCompilation: device.checkCompilation,
   })
   attachDrawables(renderer, drawablesRenderer)
@@ -545,6 +546,7 @@ async function runHarness(): Promise<void> {
     harness.stepFrame(1000 / 60)
     stepSimTickSync(client, 1)
     harness.stepTick()
+    client.pick.acquire() // the one real TripleReader.acquire() over drawList, this frame
     drawablesRenderer.acquire() // the real SAB-backed writeBuffer path this check reports on
     renderer.writeFrameUniform(renderer.frameUniform)
     renderer.draw(target)
