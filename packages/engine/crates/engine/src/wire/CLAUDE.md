@@ -20,6 +20,13 @@ chunk coord + `n varint` x `(index-gap varint, tile u32)`), then a flat entity-o
 section's end (`op u8`: `0 Put id value`, `1 Gone id`). **ActionResults**: `n varint` x
 `(seq varint, tag u8)`: `0 Applied`, `1 Rejected::Game+Codec`, `2 Rejected::Engine+u8`
 (`EngineReject`: `RateLimited=0, StateBudgetFull=1, EngineFault=2`); `Ack.tick` = frame tick.
+**Presence** (section 8, docs/plan/19-presence-channel.md steps 4-6): a flat entry list to the
+section's end (no leading count, `wire/presence.rs`'s own module doc comment), ascending
+`PlayerId`: `who varint` · `tag u8` (`0 Sample`, `1 Gone`); `Sample` continues `age_ticks varint`
+· `Codec G::Presence` (no length prefix -- the codec's own decode boundary is exact). `age_ticks =
+frame.tick − received_at`. A player's own sample is never relayed back to that player (0010 host
+drop rule); a held sample is re-relayed at >= 1 Hz with a growing `age_ticks`; `Gone` fires once,
+on disconnect, to every connection that had previously been relayed that player.
 **Global**: `mask u8` (bit0 roster, bit1 value) · roster `n varint` x `(PlayerId varint, online
 u8)` · `Codec G::Global`. **OwnPlayer**: `PlayerId varint · Codec G::Player`. **Uplink**: `type ·
 flags u8 (bit0 camera, bit1 presence) · last_received_tick u32 · n varint x (seq varint, len

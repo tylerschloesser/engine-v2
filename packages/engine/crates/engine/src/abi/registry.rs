@@ -310,6 +310,8 @@ pub trait Instance: Sized + 'static {
     /// such connection" would be misleading (that status is chunk-cache-specific); an unknown
     /// `conn` instead writes every field as 0 and still returns `Status::Ok`, since "never
     /// connected" and "connected with zero traffic so far" cross the wire identically anyway.
+    /// docs/plan/19-presence-channel.md steps 4-6: widened to 56 bytes, a 7th `u64`
+    /// (`presence_bytes_up`) -- `engine/test`'s `netCounters`' own `uplinkPresenceBytes`.
     fn sim_conn_counters(&mut self, _conn: u32, _result: &mut [u8]) -> Status {
         Status::Unsupported
     }

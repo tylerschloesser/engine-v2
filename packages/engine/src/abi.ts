@@ -132,8 +132,9 @@ export const ABI_EXPORTS = {
   // `client::Replica::region_hash()`, same crossing shape as `sim_region_hash`.
   client_region_hash: { role: 'client', params: 0, result: 'status' },
   // docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test` only: `host::
-  // ConnCounters` for `conn`, little-endian into `Result` (48 bytes: six `u64` fields,
-  // `bytes_down, frames, chunk_enters_pristine, chunk_snapshots, chunk_leaves, bytes_up`).
+  // ConnCounters` for `conn`, little-endian into `Result` (56 bytes: seven `u64` fields,
+  // `bytes_down, frames, chunk_enters_pristine, chunk_snapshots, chunk_leaves, bytes_up,
+  // presence_bytes_up` -- docs/plan/19-presence-channel.md steps 4-6 appended the 7th field).
   sim_conn_counters: { role: 'sim', params: 1, result: 'status' },
   // docs/plan/16-action-round-trip.md: parses one action-ring record (`[seq u32 LE][len u32
   // LE][UTF-8 JSON]`) out of `len` bytes of `RegionId.Rx` (shared with `on_input`'s own,

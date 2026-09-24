@@ -194,6 +194,29 @@ where
         let _ = self.host.on_uplink(conn, &bytes);
     }
 
+    /// Encodes a real `UplinkBatch` carrying only a fresh presence sample and delivers it to the
+    /// host immediately (docs/plan/19-presence-channel.md Provides: `testkit::Loopback::
+    /// set_presence(client, value)` "for scripted producers"), the presence-only sibling of
+    /// [`Self::set_camera`] -- same no-modelled-uplink-delay rationale.
+    pub fn set_presence(&mut self, i: usize, value: G::Presence) {
+        use crate::bytes::SliceSink;
+        let conn = self.clients[i].conn;
+        let mut sample_buf = [0u8; crate::presence::MAX_ENCODED_BYTES];
+        let n_sample = crate::codec::encode(&value, &mut sample_buf)
+            .expect("testkit::Loopback::set_presence: value must encode within MAX_ENCODED_BYTES");
+        let mut sink = SliceSink::new(&mut self.uplink_buf);
+        UplinkWriter::write(
+            &mut sink,
+            0,
+            core::iter::empty(),
+            None,
+            Some(&sample_buf[..n_sample]),
+        );
+        let n = sink.finish().expect("uplink buffer is generously sized");
+        let bytes = self.uplink_buf[..n].to_vec();
+        let _ = self.host.on_uplink(conn, &bytes);
+    }
+
     /// Runs one tick end to end: `Host::tick`, a `build_frame` per client (queued behind that
     /// client's delay), delivers every client's now-due frame, then `Host::seal`.
     pub fn step(&mut self) {

@@ -673,6 +673,12 @@ export async function replicaHash(client: Client): Promise<string> {
  * `RingConnection.downlinkRetries` (`worker/sim.ts`'s own synthetic `NET_COUNTERS_CALL`, the one
  * piece with no ABI export at all). Requires the sim worker parked (the two `sim`-targeted calls
  * do); the ring reads do not.
+ *
+ * `uplinkPresenceBytes` (docs/plan/19-presence-channel.md steps 4-6): `host::ConnCounters::
+ * presence_bytes_up`'s own field, appended to `sim_conn_counters`'s 56-byte reply -- cumulative
+ * presence-field wire bytes this connection has had recorded into the host's `PresenceTable`
+ * (`presence-worker-path.spec.ts`'s own "reaches the sim worker's table" proof, and the row
+ * `expectWithinBudget`s against `counters.presence.uplinkBytesPerSec`).
  */
 export type NetCounters = {
   bytesDown: number
@@ -681,6 +687,7 @@ export type NetCounters = {
   chunkSnapshots: number
   chunkLeaves: number
   bytesUp: number
+  uplinkPresenceBytes: number
   downlinkRetries: number
   uplink: RingStats
   downlink: RingStats
@@ -696,7 +703,7 @@ function readU64LE(view: DataView, offset: number): number {
 }
 
 export async function netCounters(client: Client, conn = 0): Promise<NetCounters> {
-  const { value, result } = await callParked(client, 'sim', 'sim_conn_counters', [conn], 48)
+  const { value, result } = await callParked(client, 'sim', 'sim_conn_counters', [conn], 56)
   if (value !== Status.Ok) {
     throw new Error(`netCounters: sim_conn_counters failed: status ${value}`)
   }
@@ -719,6 +726,7 @@ export async function netCounters(client: Client, conn = 0): Promise<NetCounters
     chunkSnapshots: readU64LE(view, 24),
     chunkLeaves: readU64LE(view, 32),
     bytesUp: readU64LE(view, 40),
+    uplinkPresenceBytes: readU64LE(view, 48),
     downlinkRetries,
     uplink,
     downlink,

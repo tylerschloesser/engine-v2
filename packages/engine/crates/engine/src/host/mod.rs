@@ -63,6 +63,17 @@ pub struct ConnCounters {
     /// only ever makes `admit` more conservative, never less. Live in production: every real `Host`
     /// reaches this from `on_uplink`, not only tests.
     pub presence_oversize: u64,
+    /// docs/plan/19-presence-channel.md steps 4-6, `engine/test`'s own `uplinkPresenceBytes`
+    /// (`sim_conn_counters`): cumulative presence-field wire bytes (`len varint + payload`, the
+    /// same scope `counters.presence.uplinkBytesPerSec` measures) this connection's uplink has had
+    /// *recorded* into `PresenceTable` -- bumped only on `on_uplink`'s accepted-sample arm (never
+    /// on an oversize/malformed/out-of-range drop), so a nonzero reading is also proof the sample
+    /// reached the table (the `presence-worker-path` browser test's own claim), not merely that
+    /// bytes arrived on the wire. Always `1 + raw.len()`: `raw.len() <= MAX_ENCODED_BYTES` (32) by
+    /// the time this runs (checked above), and a LEB128 varint for any value `0..=32` is always
+    /// exactly one byte (the same fact `budgets.json`'s own `counters.presence.uplinkBytesPerSec`
+    /// formula already relies on).
+    pub presence_bytes_up: u64,
 }
 
 struct ConnSlot<G: Game> {
@@ -94,6 +105,15 @@ struct ConnSlot<G: Game> {
     /// admitted (`G::admit` returns `Ok`); an admission-time *reject* does not advance it, since
     /// 0004 never logs that seq and a resend of it is safe to re-admit (it touches no sim state).
     highest_admitted_seq: u32,
+    /// docs/plan/19-presence-channel.md steps 4-6, Planning decisions ("Relay is built per client
+    /// per tick from the table, never queued: a sample is relayed when `received_at` is newer than
+    /// that client's last relayed tick for that player, or that was >= 1 s ago"): the tick this
+    /// connection was last sent each player's presence, whichever of a fresh `Sample` or a >= 1 Hz
+    /// re-relay caused it. `Host::build_frame`'s own two-loop merge (relay candidates from
+    /// `PresenceTable::iter`, `Gone` candidates from the keys here with no matching table entry)
+    /// reads this map; also a bounded per-connection set (at most `MAX_CONNS` players ever relayed
+    /// to one connection), never per-tick growth.
+    presence_relayed: BTreeMap<PlayerId, Tick>,
 }
 
 fn default_max_entities() -> u32 {
@@ -224,6 +244,12 @@ pub struct Host<G: Game> {
     /// 4-6, does that, per 0001: "on disconnect the host tells clients at once and drops the sample
     /// from relay").
     presence: PresenceTable<G>,
+    /// This connection's own presence relay + `Gone` set for the frame being built, merged and
+    /// sorted ascending by `PlayerId` (host/mod Deviations, steps 4-6: `Host::build_frame`'s own
+    /// two-loop merge over `PresenceTable::iter` and `ConnSlot::presence_relayed`). Reused scratch
+    /// (`.claude/rules/hot-paths.md`): cleared, refilled, then drained (never left non-empty)
+    /// every `build_frame` call.
+    scratch_presence: Vec<(PlayerId, PresenceRelayOp<G>)>,
 }
 
 /// The last-wins kind of an entity op this tick (host/mod Deviations: `scratch_entity_ops`'s own
@@ -231,6 +257,14 @@ pub struct Host<G: Game> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum EntityOpKind {
     Put,
+    Gone,
+}
+
+/// One entry of [`Host::scratch_presence`] (host/mod Deviations, steps 4-6): either this tick's
+/// relay of a held sample (fresh or re-relayed) or a `Gone` for a player whose table entry has
+/// disappeared since this connection last saw it.
+enum PresenceRelayOp<G: Game> {
+    Sample { sample: G::Presence, age_ticks: u32 },
     Gone,
 }
 
@@ -276,6 +310,7 @@ impl<G: Game> Host<G> {
             scratch_entity_ops: Vec::new(),
             scratch_action_players: Vec::new(),
             presence: PresenceTable::empty(),
+            scratch_presence: Vec::new(),
         }
     }
 
@@ -362,19 +397,31 @@ impl<G: Game> Host<G> {
             counters: ConnCounters::default(),
             pending_results: Vec::new(),
             highest_admitted_seq: 0,
+            presence_relayed: BTreeMap::new(),
         });
         player
     }
 
     /// Queues `Record::Player { Disconnected }` (grace: M28) and frees the slot immediately: no
-    /// more `build_frame`/`on_uplink` traffic for `conn` until a fresh `connect`.
+    /// more `build_frame`/`on_uplink` traffic for `conn` until a fresh `connect`. docs/plan/
+    /// 19-presence-channel.md steps 4-6 (0001: "on disconnect the host tells clients at once and
+    /// drops the sample from relay"): the player's held sample is dropped from [`Self::presence`]
+    /// right here, immediately -- not deferred to the next `tick()`. `Host::build_frame`'s own
+    /// `Gone` detection (a connection's `ConnSlot::presence_relayed` entry with no matching
+    /// `PresenceTable` entry) is what turns this into a wire `Gone` for every *other* connection's
+    /// very next `build_frame`, satisfying "at once" without a separate queued-event mechanism.
     pub fn disconnect(&mut self, conn: ConnId) {
         let idx = conn as usize;
-        if let Some(Some(slot)) = self.conns.get(idx) {
+        let player = match self.conns.get(idx) {
+            Some(Some(slot)) => Some(slot.player),
+            _ => None,
+        };
+        if let Some(player) = player {
             self.pending_records.push(Record::Player {
-                who: slot.player,
+                who: player,
                 ev: PlayerEvent::Disconnected,
             });
+            self.presence.remove(player);
         }
         if let Some(slot) = self.conns.get_mut(idx) {
             *slot = None;
@@ -457,6 +504,11 @@ impl<G: Game> Host<G> {
                 // only make an implausible claim look more plausible.
                 Some(sample) if sample.pos().tile().in_range() => {
                     self.presence.on_sample(player, sample, self.last_tick);
+                    // docs/plan/19-presence-channel.md steps 4-6: bumped only here, the accepted
+                    // path (`ConnCounters::presence_bytes_up`'s own doc comment).
+                    if let Some(Some(slot)) = self.conns.get_mut(idx) {
+                        slot.counters.presence_bytes_up += 1 + raw.len() as u64;
+                    }
                 }
                 Some(_) => {}
                 None => {
@@ -728,6 +780,51 @@ impl<G: Game> Host<G> {
         }
         insertion_sort_by_key(&mut self.scratch_tile_flat, |(c, i, _)| (c.y, c.x, *i));
 
+        // -- Presence: relay, >= 1 Hz re-relay, Gone (docs/plan/19-presence-channel.md steps 4-6,
+        // Planning decisions) --------------------------------------------------------------------
+        self.scratch_presence.clear();
+        // 0010 "Rates" ties the re-relay floor to the sim's own tick rate ("at least once per
+        // second"), not a hardcoded 20: `G::TICK_RATE.hz_value()` ticks is exactly one second for
+        // this game.
+        let rerelay_ticks = G::TICK_RATE.hz_value();
+        for (who, entry) in self.presence.iter() {
+            // 0001 / 0010 host drop rule: "a player's own sample is never relayed back to that
+            // player".
+            if who == slot.player {
+                continue;
+            }
+            let chunk = chunk_of::<G>(entry.sample.pos().tile());
+            if !slot.subs.is_subscribed(chunk) {
+                continue;
+            }
+            let due = match slot.presence_relayed.get(&who) {
+                None => true,
+                Some(&last) => {
+                    entry.received_at.0 > last.0
+                        || self.last_tick.0.wrapping_sub(last.0) >= rerelay_ticks
+                }
+            };
+            if due {
+                let age_ticks = self.last_tick.0.saturating_sub(entry.received_at.0);
+                self.scratch_presence.push((
+                    who,
+                    PresenceRelayOp::Sample {
+                        sample: entry.sample,
+                        age_ticks,
+                    },
+                ));
+            }
+        }
+        // `Gone`: every player this connection has previously been relayed a sample for, whose
+        // table entry has since disappeared (`Host::disconnect`'s own `presence.remove` call) --
+        // fires exactly once per connection, the very next `build_frame` after the disconnect.
+        for (&who, _) in slot.presence_relayed.iter() {
+            if self.presence.get(who).is_none() {
+                self.scratch_presence.push((who, PresenceRelayOp::Gone));
+            }
+        }
+        insertion_sort_by_key(&mut self.scratch_presence, |(who, _)| who.0);
+
         // docs/plan/16-action-round-trip.md Scope: "in seq order". Robust against admission-time
         // rejections (pushed by `on_uplink`, arrival order) and apply-time outcomes (pushed by
         // `tick()`, `pending_records` order) interleaving out of seq order across ticks; cheap,
@@ -746,6 +843,7 @@ impl<G: Game> Host<G> {
             && self.scratch_left.is_empty()
             && self.scratch_tile_flat.is_empty()
             && self.scratch_entity_ops.is_empty()
+            && self.scratch_presence.is_empty()
         {
             return 0;
         }
@@ -817,6 +915,12 @@ impl<G: Game> Host<G> {
                 write_chunk_deltas_flat::<G>(s, tiles, ops, store);
             });
         }
+        if !self.scratch_presence.is_empty() {
+            let presence_ops = &self.scratch_presence;
+            fw.section(SectionId::Presence, |s| {
+                write_presence_flat::<G>(s, presence_ops);
+            });
+        }
 
         let _ = fw;
         // `SliceSink`'s own overflow convention: a too-small `out` never panics, it just drops the
@@ -836,6 +940,20 @@ impl<G: Game> Host<G> {
         // "outcomes go to the sender's next build_frame"); clear so `pending_results` never grows
         // past what a single tick's worth of admissions/applies can add (host/mod Deviations).
         slot.pending_results.clear();
+        // Commits what this build decided to send (docs/plan/19-presence-channel.md steps 4-6),
+        // independent of `SliceSink`'s own overflow outcome -- the same "committed regardless of a
+        // truncated write" convention every other per-tick bookkeeping field above already follows
+        // (`first_frame_pending`, `pending_results.clear()`).
+        for (who, op) in self.scratch_presence.drain(..) {
+            match op {
+                PresenceRelayOp::Sample { .. } => {
+                    slot.presence_relayed.insert(who, self.last_tick);
+                }
+                PresenceRelayOp::Gone => {
+                    slot.presence_relayed.remove(&who);
+                }
+            }
+        }
         n
     }
 
@@ -948,6 +1066,33 @@ fn write_chunk_deltas_flat<G: Game>(
     }
 }
 
+/// Hand-written `Presence` (section 8) body, from [`Host::scratch_presence`] (already merged and
+/// sorted ascending by `PlayerId`, `build_frame`'s own two-loop pass): the same wire shape
+/// `wire::write_presence` produces (`wire/CLAUDE.md`, `wire/presence.rs`'s own module doc
+/// comment), but built directly from this module's own owned scratch entries rather than a
+/// temporary `Vec<wire::PresenceOp>` -- the same reason [`write_chunk_deltas_flat`] exists instead
+/// of calling `wire::write_chunk_deltas` (`.claude/rules/hot-paths.md`'s steady-state convention:
+/// `Host::build_frame` runs every tick per connection).
+fn write_presence_flat<G: Game>(
+    sink: &mut (impl crate::bytes::ByteSink + ?Sized),
+    ops: &[(PlayerId, PresenceRelayOp<G>)],
+) {
+    for (who, op) in ops {
+        sink.put_varint(who.0 as u64);
+        match op {
+            PresenceRelayOp::Sample { sample, age_ticks } => {
+                sink.put_u8(0);
+                sink.put_varint(*age_ticks as u64);
+                crate::codec::encode_to(sample, sink)
+                    .expect("encoding a presence sample into a ByteSink cannot fail");
+            }
+            PresenceRelayOp::Gone => {
+                sink.put_u8(1);
+            }
+        }
+    }
+}
+
 impl<G: Game> Instance for Host<G>
 where
     G::Global: Default,
@@ -986,6 +1131,7 @@ where
             scratch_entity_ops: Vec::new(),
             scratch_action_players: Vec::new(),
             presence: PresenceTable::empty(),
+            scratch_presence: Vec::new(),
         })
     }
 
@@ -1102,8 +1248,12 @@ where
     /// docs/plan/15b-ring-connection-and-replica-rendering.md: `host::ConnCounters` for `conn`,
     /// little-endian into `result` (`Instance::sim_conn_counters`'s own doc comment names the
     /// field order). An unknown/never-connected `conn` writes every field as 0 (same doc comment).
+    /// docs/plan/19-presence-channel.md steps 4-6: widened from 48 to 56 bytes, appending
+    /// `presence_bytes_up` (`ConnCounters`'s own doc comment) as a 7th `u64` -- `engine/test`'s
+    /// `netCounters`' own `uplinkPresenceBytes`. `presence_oversize` (added step 3) still has no
+    /// ABI reader: nothing in this milestone's own exit criteria needs it from a browser test.
     fn sim_conn_counters(&mut self, conn: u32, result: &mut [u8]) -> Status {
-        let Some(out) = result.get_mut(..48) else {
+        let Some(out) = result.get_mut(..56) else {
             return Status::BadLength;
         };
         let c = self.counters(conn).unwrap_or_default();
@@ -1113,6 +1263,7 @@ where
         out[24..32].copy_from_slice(&c.chunk_snapshots.to_le_bytes());
         out[32..40].copy_from_slice(&c.chunk_leaves.to_le_bytes());
         out[40..48].copy_from_slice(&c.bytes_up.to_le_bytes());
+        out[48..56].copy_from_slice(&c.presence_bytes_up.to_le_bytes());
         Status::Ok
     }
 }
