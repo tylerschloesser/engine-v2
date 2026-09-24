@@ -234,6 +234,36 @@ of the M03/M04 harness. Two differences from a harness page:
   (`self`/`postMessage` do not exist under Vitest's `node` environment) and a still-broken,
   timeout-less `Atomics.wait` can only be bounded from *outside* the thread it blocks.
 
+  **A narrower gap in the same file survived fix round 3, found and fixed by M19b
+  (docs/plan/19b-sim-park-while-armed.md).** Checking `Yield` before every wait (not just the first)
+  still leaves a gap between *that check* and the moment `Atomics.wait` itself registers this thread
+  as a waiter -- two separate statements, not one atomic operation. `parkOne`'s notify used to target
+  `Req` without ever changing it, so it had no self-healing property against this narrower gap the
+  way `wake()`'s own `Req`-bumping notify does: a signal landing in that specific window is lost for
+  good. `park('<name>')`/`send(...)` timeouts on the M03/M04 harness carry their own message shape,
+  distinct from the production `W_*` one above: `<what>: timed out after <limitMs> ms
+  workers=[{"name":"sim","Req":<n>,"Ack":<n>,"State":0|1|2,"Yield":0|1,"Waits":<n>,"armed":
+  true|false}, ...]` -- `State: 1` is `WorkerState.Armed` (blocked in `Atomics.wait`, ready for the
+  next request); `Req === Ack` with `State: Armed` means genuinely asleep with nothing outstanding,
+  exactly this occurrence's own shape; `Waits` (new, M19b) is a per-worker count of `Atomics.wait`
+  calls since last armed, read straight off the SAB (a stuck worker cannot answer a message) --
+  distinguishing "stuck on its very first wait" from "stuck after N". A `page.evaluate` rejection from
+  inside `gc: flat transport parity` (or any spec using `measure()`) is additionally prefixed
+  `measure[tunnel|flat] <warmup pass N/8|extra settle|measured window 1|2>:` so the two `measure()`
+  calls in one test never need a stack trace to tell apart. Fixed by giving `parkOne` and `wake()` a
+  shared word (`Wake`, `step-block.ts`) that both always bump *and* notify, mirroring `sab/
+  control.ts`'s own `W_WAKE` -- once every signal changes the value the wait compares against, no
+  interleaving can lose it (either the wait's own initial compare already sees the mismatch, or the
+  wait has registered and `Atomics.notify` reaches it directly; there is no third case). Proved by a
+  worker deliberately paused, on its own real OS thread, inside the exact gap via a test-only hook
+  (`armedLoop`'s optional `testHooks.beforeWait`, `tests/browser/pages/src/park-notify-race{,
+  -worker}.ts`, `park-notify-race.spec.ts`) rather than timed against a real `parkOne` round trip.
+  **`vite preview` serves a built bundle, not live source** (`playwright.config.ts`'s own header
+  comment): a direct `pnpm exec playwright test` call after editing `src/test/**` needs an explicit
+  rebuild (`pnpm --filter engine build && pnpm exec vite build --config tests/browser/pages/
+  vite.config.ts`) or it silently re-runs the *previous* build -- `pnpm test browser` does this step
+  itself and is the safe default when checking a fix red-then-green by hand.
+
   **To find every `Atomics.wait` call site of this shape in one search:** `grep -rn
   "Atomics\.wait\("` over `src/`/`tests/`, excluding comments and `dist/`. `src/sab/no-alloc-
   syntax.test.ts`'s own `sab.atomics_wait_confined` already asserts, automatically, that `src/`

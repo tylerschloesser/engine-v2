@@ -302,7 +302,12 @@ export async function createHarness(opts: {
     h.seq++
     Atomics.store(h.sab, StepBlockField.Op, op)
     Atomics.store(h.sab, StepBlockField.Req, h.seq)
-    Atomics.notify(h.sab, StepBlockField.Req)
+    // M19b step 3 (docs/plan/19b-sim-park-while-armed.md): `Wake`, not `Req`, is what `armedLoop`
+    // blocks on -- see `step-block.ts`'s own doc comment on that field for why `Req`'s own notify
+    // was not enough on its own (it is, for a real step: the value always changes; the field exists
+    // for `parkOne`, which cannot say the same).
+    Atomics.add(h.sab, StepBlockField.Wake, 1)
+    Atomics.notify(h.sab, StepBlockField.Wake)
   }
 
   function awaitAck(h: WorkerHandle): void {
@@ -367,8 +372,15 @@ export async function createHarness(opts: {
     h.armed = true
   }
 
-  /** Wakes a worker blocked in `Atomics.wait` without touching `Req`/`Ack` (`Atomics.wait` returns
-   * "ok" on any `notify`, whatever the word's value): keeps `Req === Ack` true across a park. */
+  /** Wakes a worker blocked in `Atomics.wait` without touching `Req`/`Ack`: keeps `Req === Ack`
+   * true across a park. M19b step 3 (docs/plan/19b-sim-park-while-armed.md): the notify targets
+   * `Wake` (bumped, not just notified -- `step-block.ts`'s own doc comment on that field), the same
+   * word `armedLoop` blocks on for a real step request, so this signal is self-healing regardless of
+   * exactly when `armedLoop`'s own thread reaches its next `Atomics.wait` call. It used to notify
+   * `Req` itself, unchanged (`Atomics.wait` returns "ok" on any notify, whatever the word's value) --
+   * safe only for a waiter *already registered* at the moment of the one notify, and silently lost
+   * for one caught between its own `Yield` check and actually registering, with nothing left to send
+   * a second notify. */
   async function parkOne(h: WorkerHandle): Promise<void> {
     if (!h.armed) return
     const reply = new Promise<void>((resolve, reject) => {
@@ -389,7 +401,8 @@ export async function createHarness(opts: {
       }
     })
     Atomics.store(h.sab, StepBlockField.Yield, 1)
-    Atomics.notify(h.sab, StepBlockField.Req)
+    Atomics.add(h.sab, StepBlockField.Wake, 1)
+    Atomics.notify(h.sab, StepBlockField.Wake)
     await reply
     h.armed = false
   }

@@ -99,47 +99,57 @@ function runOp(op: number, seq: number): void {
  * Blocks the worker thread in `Atomics.wait`, serving step requests until yielded (0015 §2).
  *
  * Checks `Yield` *before every wait, including this loop's own first one* -- fixed M17c step 3,
- * fix round 3 (docs/plan/17c-client-park-stall.md): the original shape checked it only *after* a
- * wait returned, so `harness.ts`'s `parkOne` -- which stores `Yield = 1` then calls
+ * fix round 3 (docs/plan/17c-client-park-stall.md). That closed the *wide* gap (a park request
+ * landing before this loop's own first wait of a `resume()` cycle, invisible until a further wake
+ * that was never coming), but a narrower one stayed open and was found live (M19b step 2,
+ * docs/plan/19b-sim-park-while-armed.md, Deviations: `park('sim')` timing out with `Req === Ack`
+ * and `State: Armed` -- this loop genuinely asleep in `Atomics.wait` with nothing outstanding): the
+ * gap between the `Yield` check just above and the moment `Atomics.wait` itself actually registers
+ * this thread as a waiter. `harness.ts`'s `parkOne` used to store `Yield = 1` then call
  * `Atomics.notify(Req)` *without changing `Req`* (its own doc comment: "keeps `Req === Ack` true
- * across a park") -- landing between this loop's own entry and its first wait, or between storing
- * `Ack` and looping back for the next one, left the worker permanently blocked: with `Req`
- * unchanged, that next `Atomics.wait(block, Req, last)` sees the value still equal to `last` and
- * genuinely sleeps, with no further notify ever coming (`parkOne` sends exactly one). Checking
- * first, on every pass, catches a yield already stored by the time control reaches here, before
- * ever committing to wait. The *existing* post-wait check is kept alongside it, not replaced,
- * because `runOp` is not idempotent the way a production kind's `body()` is (M17c fix round 2's own
- * note for `runBlockingLoop`): a `parkOne` notify that happens to land while this thread is already
- * registered as a waiter still wakes it (`Atomics.wait` returns "ok" on any notify regardless of
- * whether the value moved, `parkOne`'s own doc comment), and without the second check this loop
- * would re-run the same, unchanged `Req` as a fresh step -- a real double-tick, not a harmless extra
- * call.
+ * across a park") -- a real step request is self-healing against this exact gap (`wake()` bumps
+ * `Req`, so a late `Atomics.wait(Req, last)` call sees the mismatch and returns immediately instead
+ * of blocking), but a park request was not, since `Req`'s *value* never changed and `parkOne` sends
+ * exactly one notify. No repositioning of the check can close a gap between "read one word" and
+ * "block on another word not yet registered" -- the fix is a word whose value always changes on
+ * every signal, mirroring `sab/control.ts`'s `W_WAKE`/`ControlBlock.wake()`: this loop now waits on
+ * `Wake` (`StepBlockField.Wake`), which both `wake()` and `parkOne` bump *and* notify, never just
+ * `Req`. `runOp` is gated on `req !== last` instead, so a `Wake` bump that carries no new `Req` (a
+ * park signal, or a spurious wake) is a correct no-op rather than a double-tick -- the old post-wait
+ * `Yield` re-check this comment used to describe is no longer needed for that reason: a park-only
+ * wake just loops back to the top, where the `Yield` check now catches it.
  *
- * `Waits` (M19b step 2, docs/plan/19b-sim-park-while-armed.md): bumped once per `Atomics.wait` call,
- * diagnostic only (`harness.ts`'s `diagWorkers`) -- see that field's own doc comment
- * (`step-block.ts`). Still found timing out live after this fix (M19b Deviations): a *narrower* gap
- * than the one fixed above is still open, between the `Yield` check and the moment `Atomics.wait`
- * itself registers this thread as a waiter -- open per the brief's own step-4 cut line pending a
- * named cause.
+ * `Waits` (M19b step 2): bumped once per `Atomics.wait` call, diagnostic only (`harness.ts`'s
+ * `diagWorkers`) -- see that field's own doc comment (`step-block.ts`).
  *
- * Exported for `armed-loop-race-worker.ts` (`tests/browser/pages/src/`), which calls it directly
- * against a caller-constructed block to prove the fix deterministically, without needing to time a
- * real `parkOne` message race.
+ * `testHooks.beforeWait`, present only for `tests/browser/pages/src/park-notify-race-worker.ts`
+ * (M19b step 3): fires on every pass, on this loop's own thread, immediately before the
+ * `Atomics.wait` call -- the only way to construct the gap above deterministically instead of
+ * timing a real `parkOne` round trip against real OS scheduling luck (docs/plan/19b, Deviations).
+ *
+ * Exported for `armed-loop-race-worker.ts` and `park-notify-race-worker.ts` (`tests/browser/pages/
+ * src/`), which call it directly against a caller-constructed block to prove each fix
+ * deterministically, without needing to time a real `parkOne` message race.
  */
-export function armedLoop(block: Int32Array): void {
+export function armedLoop(block: Int32Array, testHooks?: { beforeWait?: () => void }): void {
   let last = Atomics.load(block, StepBlockField.Req)
+  let lastWake = Atomics.load(block, StepBlockField.Wake)
   Atomics.store(block, StepBlockField.State, WorkerState.Armed)
   post(ARMED)
   for (;;) {
     if (Atomics.load(block, StepBlockField.Yield)) break
+    testHooks?.beforeWait?.()
     Atomics.add(block, StepBlockField.Waits, 1)
-    Atomics.wait(block, StepBlockField.Req, last)
-    if (Atomics.load(block, StepBlockField.Yield)) break
-    last = Atomics.load(block, StepBlockField.Req)
-    Atomics.store(block, StepBlockField.State, WorkerState.Busy)
-    runOp(Atomics.load(block, StepBlockField.Op), last)
-    Atomics.store(block, StepBlockField.State, WorkerState.Armed)
-    Atomics.store(block, StepBlockField.Ack, last)
+    Atomics.wait(block, StepBlockField.Wake, lastWake)
+    lastWake = Atomics.load(block, StepBlockField.Wake)
+    const req = Atomics.load(block, StepBlockField.Req)
+    if (req !== last) {
+      last = req
+      Atomics.store(block, StepBlockField.State, WorkerState.Busy)
+      runOp(Atomics.load(block, StepBlockField.Op), last)
+      Atomics.store(block, StepBlockField.State, WorkerState.Armed)
+      Atomics.store(block, StepBlockField.Ack, last)
+    }
   }
   Atomics.store(block, StepBlockField.Yield, 0)
   Atomics.store(block, StepBlockField.State, WorkerState.Idle)

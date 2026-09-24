@@ -31,9 +31,22 @@ export const StepBlockField = {
    * already completed (`harness.ts`'s `diagWorkers`) -- distinguishing "stuck on its very first
    * wait" from "stuck after N real steps". */
   Waits: 6,
+  /** M19b step 3: bumped by *every* producer-side signal `armedLoop` blocks on -- a real step
+   * request (`harness.ts`'s `wake()`) and a park request (`parkOne`) alike -- so `Atomics.wait`'s
+   * own compare-then-sleep is self-healing regardless of interleaving, mirroring `sab/control.ts`'s
+   * `W_WAKE`/`ControlBlock.wake()`. `Req`/`Ack` keep their own separate step-sequencing meaning;
+   * `parkOne` still never touches them ("keeps `Req === Ack` true across a park", its own doc
+   * comment, unchanged). Before this field existed, `parkOne` notified on `Req` itself without
+   * changing its value: a real step request is self-healing (the value changes, so a late
+   * `Atomics.wait` call sees the mismatch and returns without blocking), but a park request was not
+   * -- a notify landing in the gap between `armedLoop`'s own `Yield` check and the moment its
+   * `Atomics.wait` call actually registers as a waiter was lost for good, with nothing left to send
+   * a second one. Fixed by giving every signal a word whose *value* always changes, not by
+   * narrowing the gap further (docs/plan/19b, Deviations). */
+  Wake: 7,
 } as const
 
-export const STEP_BLOCK_INT32S = 7
+export const STEP_BLOCK_INT32S = 8
 
 /** Negative-control allocation a worker applies once per tick (0016 §3 step 8); `None` is the
  * default a fresh `SharedArrayBuffer` already reads as zero. `'post-message'` controls are not

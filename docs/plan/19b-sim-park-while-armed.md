@@ -239,3 +239,116 @@ work; this hand-check was run once, near the end, against the finished state of 
 **Not otherwise reproduced with `--js-flags=--no-opt --no-sparkplug`**: not tried this session --
 the live reproduction on real V8 above was already a first-batch hit, and M16e's own Deviations
 records a forced-interpreter reproduction of a change this small as a caution, not a first resort.
+
+### Step 3: the fix, and a deterministic regression test
+
+**Fix.** `parkOne`'s notify used to target `Req` without changing it -- safe only for a waiter
+*already registered* at the exact instant of the one notify, per candidate 1 above. Added a new
+step-block word, `Wake` (`step-block.ts`), bumped and notified by **both** `wake()` (a real step
+request) and `parkOne` (a park request); `armedLoop` (`harness-worker.ts`) now calls
+`Atomics.wait(block, Wake, lastWake)` instead of waiting on `Req`, mirroring `sab/control.ts`'s
+already-proven `W_WAKE`/`ControlBlock.wake()` shape (M06b/M17c). `Req`/`Ack` are untouched by this
+change -- `parkOne` still never writes them, so the `Req === Ack` invariant `debugSnapshot`/
+`stepping.spec.ts` read is unaffected -- and `runOp` is now gated on `req !== last` (computed fresh
+after every wait) rather than being called unconditionally on any wake: a `Wake` bump that carries no
+new `Req` (a park signal, or a spurious wake) is a correct no-op, which let the old post-wait `Yield`
+re-check (kept in the pre-M19b shape specifically to stop a coincident park from double-ticking) be
+removed -- a park-only wake now just loops back to the top, where the `Yield` check catches it.
+
+**Why this closes the gap, not just narrows it (checked against the language, not only tested).**
+`Atomics.wait(ta, index, value)` compares the *current* value at `index` to `value` before deciding
+whether to sleep at all. Once every signal (`wake()`, `parkOne`) changes `Wake`'s value on every
+call, there is no interleaving left where a signal can be "lost": either it lands before the
+following `Atomics.wait` call, in which case that call's own initial comparison already sees the
+mismatch and returns immediately without sleeping, or it lands after the call has registered this
+thread as a waiter, in which case `Atomics.notify` wakes it directly. There is no third case, unlike
+the old `Req`-based design, where a value that never changes has no such property at all. This is the
+same reasoning M17c's own fix round 2 gave for `sab/control.ts`'s `W_WAKE` design (Deviations:
+"every JS-level ordering this session checked... is safe by the language's own spec").
+
+**A `pages` build-vs-source gotcha this session hit while proving the regression test, worth
+recording for the next session that touches this suite.** `playwright.config.ts`'s own header
+comment already says it ("`pnpm test`'s `pages` build step has already run `vite build`... `webServer`
+only runs `vite preview`"), but it is easy to miss in practice: a direct `pnpm exec playwright test`
+call (not through `pnpm test browser`) serves whatever `tests/browser/pages/dist/` last held, not
+live source. This session's first attempt at checking the regression test red (reverting only
+`armedLoop`'s wait target back to `Req`) appeared to pass -- twice, at `--repeat-each 5` and
+`--repeat-each 15` -- with the revert genuinely applied on disk, because the served bundle was still
+the one built *before* the revert. Rebuilding explicitly (`pnpm --filter engine build && pnpm exec
+vite build --config tests/browser/pages/vite.config.ts`) between every edit-and-rerun cycle fixed it;
+`pnpm test browser -t <pattern>` (which runs the `pages` build step itself) is the safe default and
+was used for every reported result below except the deliberately-isolated red/green checks, which
+name their own explicit rebuild step.
+
+**Deterministic regression test.** `tests/browser/park-notify-race.spec.ts` (plus `tests/browser/
+pages/{park-notify-race.html, src/park-notify-race.ts, src/park-notify-race-worker.ts}`), the same
+"smallest browser test" shape `armed-loop-race.spec.ts` (M17c) uses for the *other* gap: a Node unit
+test cannot drive `armedLoop` (`self`/`postMessage` do not exist under Vitest's `node` environment),
+and a still-broken `Atomics.wait` has no timeout of its own to bound from the same thread it blocks.
+Constructs the exact race directly rather than timing a real `parkOne` round trip against OS
+scheduling luck: `armedLoop` gained an optional `testHooks.beforeWait` parameter (test-only, a no-op
+when absent, `src/test/**` is exempt from the hot-path allocation rule) that fires on the worker's own
+thread immediately after the `Yield` check and immediately before the `Atomics.wait` call --
+`park-notify-race-worker.ts`'s own hook posts `'about-to-wait'` to the page, then busy-spins that
+worker's own OS thread for a real, bounded 150 ms of wall-clock time before actually calling
+`Atomics.wait`. `park-notify-race.ts` (the page script), the instant it receives `'about-to-wait'`,
+performs the exact two operations `parkOne` performs (`Atomics.store(Yield, 1)`, then
+`Atomics.add(Wake, 1)` + `Atomics.notify(Wake)`) -- landing, reliably, inside the 150 ms gap the
+worker's own hook is still spinning through, on a genuinely different OS thread, not a timing
+coincidence. Bounded from outside (`setTimeout` + `worker.terminate()`, 3 s) since a still-broken
+`Atomics.wait` blocks its own thread forever with nothing left to notify it again.
+
+**Checked red on the base (pre-M19b) protocol, with a properly rebuilt bundle (the gotcha above).**
+Reverted only `armedLoop`'s own wait line (`Atomics.wait(block, StepBlockField.Wake, lastWake)` ->
+`Atomics.wait(block, StepBlockField.Req, last)`, the new test files and every other M19b change left
+in place), rebuilt (`pnpm --filter engine build && pnpm exec vite build --config tests/browser/pages/
+vite.config.ts`), then `pnpm exec playwright test --config playwright.config.ts --project chromium
+--grep "armed_loop_survives_a_park_notify"`:
+```
+Error: expect(received).toBe(expected) // Object.is equality
+Expected: "returned"
+Received: "timed-out"
+```
+The worker genuinely hung for the full 3 s bound (the page script's own signal, on `Wake`, has no
+effect on a loop still waiting on `Req`). Restored the fix, rebuilt, re-verified green:
+`pnpm exec playwright test --config playwright.config.ts --project chromium --grep
+"armed_loop_survives_a_park_notify" --repeat-each 15` -- **15 passed (4.5s)**, 0 failures (this is a
+deterministically-constructed race, not a probabilistic one, so 100% is the expected reliability
+figure, unlike the ~1/15 rate of the live occurrence itself).
+
+**Exit criterion 3: `node scripts/repeat.mjs browser 15` quiet, twice.**
+- First batch: `browser x15 load=0: pass=15 fail=0 hang=0 slowestSuiteSeconds=25`
+- Second batch: `browser x15 load=0: pass=15 fail=0 hang=0 slowestSuiteSeconds=24`
+
+30/30 total, 0 `park('sim')` timeouts (the exact configuration -- `node scripts/repeat.mjs browser
+15`, quiet -- that reproduced the failure 1/15 in step 2's own first attempt).
+
+**Full suites, this session's own scoped commands (not `pnpm test`/`pnpm lint`, per the delegation
+prompt).** `pnpm test browser` -- **170 passed (23-24s/35s)**, up from the base 169 by exactly the
+one new spec. `pnpm test unit` -- **215 passed**. `pnpm test wasm` -- **55 passed**. `pnpm --filter
+engine typecheck` clean throughout. `pnpm format` (Biome + `cargo fmt`) clean, no fixes needed on the
+final tree.
+
+**`stepping.spec.ts`'s own `Req`/`Ack`/`State`/`Yield` reads (`debugSnapshot`) checked unaffected.**
+`pnpm test browser -t stepping` -- 3 passed; these tests read the step block's own diagnostic fields
+for a hash-mismatch message only, never assert `Req === Ack` as a pass/fail condition, and `Wake`
+carries no observable meaning outside `armedLoop`'s own wait target.
+
+### Notes for later briefs
+
+- The park/step-block protocol this milestone fixes (`src/test/harness.ts`/`harness-worker.ts`,
+  `step-block.ts`) is the M03/M04 harness (`createHarness`, driving `gc-loop.html` and every other
+  plain harness-driven browser spec), distinct from the production `Shell`/`ControlBlock` protocol
+  M17c fixed (`worker/shell.ts`, `sab/control.ts`) -- the two are read-alikes by design (M17c fix
+  round 3 already mirrored `runBlockingLoop`'s pre-M19b shape into `armedLoop`), and this milestone's
+  own fix brings the harness protocol the rest of the way into parity with `ControlBlock`'s own
+  already-safe `W_WAKE` design. No further `Atomics.wait` call site of either shape remains
+  unaddressed: `sab/no-alloc-syntax.test.ts`'s `sab.atomics_wait_confined` (unchanged by this
+  milestone) still confirms `sab/control.ts`'s `waitForWake` and `harness-worker.ts`'s `armedLoop`
+  are the only two production/harness call sites in `src/`.
+- Candidate 2 from step 1 (a worker crash after setup is not reported to the pending `parkOne`/`send`
+  promise, since `worker.onerror` still closes over the long-settled setup promise) is real but
+  unrelated to this occurrence and not fixed here -- out of this brief's own named cause, and not
+  observed in any capture this session made (no occurrence's message pattern is consistent with a
+  crash: every one shows a plausible live `Armed` state, not a stale one). Worth a future brief's own
+  attention if a `park`/`send` timeout is ever seen alongside evidence the worker actually died.
