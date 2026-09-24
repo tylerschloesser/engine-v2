@@ -400,6 +400,14 @@ export function createSemanticRecognizer(
         (heldMs[i] as number) < TAP_MAX_MS
       ) {
         tileUnderPoint(cameraState, viewport, slot.x, slot.y, tileScratch)
+        // docs/plan/18-picking-and-overlay.md (0019 §4 "Cursor tile and ghost"): "touch: tile of the
+        // last tap" -- a touch pointer has no hover, so a tap is the only way its cursor tile is
+        // ever set. Applied for every pointer kind (mouse included): a mouse tap lands on the same
+        // tile hover already published, so this is a no-op re-affirmation there, not a behaviour
+        // change to the mouse path.
+        cameraState.cursorTileX = tileScratch.tileX
+        cameraState.cursorTileY = tileScratch.tileY
+        cameraState.cursorValid = true
         emit(
           'tap',
           tileScratch.tileX,

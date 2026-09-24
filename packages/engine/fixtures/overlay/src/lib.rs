@@ -1,23 +1,54 @@
 //! Fixture game `fx-overlay` (docs/plan/18-picking-and-overlay.md, Files touched: "`fixtures/
-//! overlay/`: pickable circles, slot anchors, a ghost and a follow toggle"). Steps 4-6 build only
-//! what those steps' own browser tests need -- a real `ClientSide::frame` that makes `cx.input()`
-//! observably reach the DOM overlay through `client.onUi` (`framecx.tap_visible_in_frame`,
-//! `framecx.emit_visible_in_frame`), which needs a real WASM instance's `FrameCx` (picking, static
-//! and slot anchors, and `follow` itself are all provable with a hand-filled `DrawList` SAB over a
-//! real `Client` with no WASM at all, `real-camera.ts`'s own precedent, `tests/browser/{pick,overlay,
-//! follow}.spec.ts`) -- and is deliberately left easy for a later step to grow: `genesis` spawns no
-//! entities yet, and `extract`/`ui_dirty`'s own trigger condition (any input this frame) are the only
-//! behaviour here, so step 7 can add the cursor-anchored ghost to `extract` and a real follow-target
-//! rule to `frame` without restructuring anything.
+//! overlay/`: pickable circles, slot anchors, a ghost and a follow toggle"). Steps 4-6 built the
+//! minimal `ClientSide::frame`/`cx.input()`/`cx.ui_dirty()` proof (module doc comment history:
+//! `genesis` spawns no entities, `extract` was still the default no-op). Step 7-8 fill `extract`
+//! (`&self`, read-only -- 0003 "Outside the deterministic core": this file is client-side
+//! presentation, not sim/apply code, so `std::f32::sin/cos` below is fine, unlike `.claude/rules/
+//! determinism.md`'s ban inside the deterministic core) with three unconditional, always-drawn
+//! groups every page that loads this fixture shares: `RING_COUNT` pickable rings on a fixed grid
+//! (`pick_id` 1..=50, `docs/plan/18-picking-and-overlay.md` step 8's device-page/GC-page "50
+//! pickables" requirement), `ANCHOR_SLOT_COUNT` small circles orbiting the origin whose position is
+//! *also* published through `DrawList::anchor` (0019 §5's own "a moving position the game's Rust
+//! publishes"), and a cursor-anchored ghost (`ANCHOR_CURSOR_TILE`, 0019 "Cursor tile and ghost") that
+//! exists only while `FrameView::cursor_tile()` is `Some` (mouse hovering, or a touch device's last
+//! tap -- `input/semantic.ts`'s own tap handler sets `cameraState.cursorTile*` for exactly this).
 
-use engine::client::{ClientSide, FrameCx, FrameView};
+use engine::client::{ANCHOR_CURSOR_TILE, ClientSide, DrawList, FrameCx, FrameView};
 use engine::game::{
     Game, PlayerEvent, PlayerId, PresenceTable, TickCx, Unknown, WorldRead, WorldWrite,
 };
-use engine::world::{Registry, Tile, TilePos, TraitSet};
+use engine::world::{Registry, Tile, TilePos, TraitSet, WorldPos};
 use engine::worldgen::Worldgen;
 use std::cell::Cell;
+use std::f32::consts::TAU;
 use ts_rs::TS;
+
+/// Device page / GC page "50 pickables" (module doc comment). A 10x5 grid, 3 tiles apart, centred
+/// on the origin so `RING_COLS/2`th column, `RING_ROWS/2`th row sits exactly at world tile `(0,
+/// 0)` -- a convenient, exact-coordinates target for a browser test to click.
+const RING_COUNT: i32 = 50;
+const RING_COLS: i32 = 10;
+const RING_ROWS: i32 = 5;
+const RING_SPACING_TILES: i32 = 3;
+/// Tile diameter of a ring (pick radius = half this, `input/pick.ts`'s own "distance from `pos` <=
+/// `size.x / 2`" containment rule).
+const RING_SIZE_TILES: f32 = 1.2;
+const RING_COLOR: u32 = 0xffaa33ff;
+
+/// 0019 §5's own "4 slots" precedent (`docs/plan/18-picking-and-overlay.md` step 8, GC page
+/// `anchors`' own "4 slot anchors"): small circles orbiting the origin, `DrawList::anchor`
+/// published every frame so `client.overlay.anchorSlot` has something moving to follow.
+const ANCHOR_SLOT_COUNT: u8 = 4;
+const ANCHOR_ORBIT_RADIUS_TILES: f32 = 6.0;
+const ANCHOR_SIZE_TILES: f32 = 0.6;
+const ANCHOR_COLOR: u32 = 0x33aaffff;
+/// Radians/ms: one full orbit every 8 seconds -- slow enough that a GC page's own 600-frame window
+/// (10 s at 60 Hz) sees just short of one full loop, fast enough that `overlay.slot_anchor_follows_
+/// rust`-style motion is visible within a handful of frames.
+const ANCHOR_ANGULAR_RATE: f32 = TAU / 8000.0;
+
+const GHOST_SIZE_TILES: f32 = 1.0;
+const GHOST_COLOR: u32 = 0x44ffffaa;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Entity;
@@ -92,6 +123,57 @@ impl ClientSide<Overlay> for OverlayClient {
         let tile = self.last_tile.get();
         out.last_tile_x = tile[0];
         out.last_tile_y = tile[1];
+    }
+
+    /// Module doc comment: rings (pickable), moving anchors (`DrawList::anchor` + a visible
+    /// marker), then the cursor-anchored ghost. Unconditional every frame (no entities, no state
+    /// dependency) except the ghost, which only exists while a cursor tile is live.
+    fn extract(&self, view: &FrameView<'_, Overlay>, out: &mut DrawList) {
+        for i in 0..RING_COUNT {
+            let col = i % RING_COLS;
+            let row = i / RING_COLS;
+            let tx = (col - RING_COLS / 2) * RING_SPACING_TILES;
+            let ty = (row - RING_ROWS / 2) * RING_SPACING_TILES;
+            // Tile-centred (`+ 0.5` tile): matches the main-thread `worldX/Y` a page anchors its
+            // own DOM button to for the same ring (`tx + 0.5`, `ty + 0.5`).
+            let pos = WorldPos {
+                x: tx * 256 + 128,
+                y: ty * 256 + 128,
+            };
+            out.ring(0, pos, [RING_SIZE_TILES, RING_SIZE_TILES], RING_COLOR)
+                .pick_id = (i + 1) as u32;
+        }
+
+        let t = view.time_ms() as f32;
+        for slot in 0..ANCHOR_SLOT_COUNT {
+            let angle = t * ANCHOR_ANGULAR_RATE + (slot as f32) * (TAU / ANCHOR_SLOT_COUNT as f32);
+            // `.claude/rules/determinism.md`'s transcendentals ban is for the deterministic core
+            // (sim/worldgen/apply, 0002 §2: native-vs-WASM bit parity); this value is a per-frame
+            // client-side draw position, never replicated, hashed or read back into game state
+            // (0003 "Outside the deterministic core") -- the two runtimes drawing a moving marker
+            // one float-ULP apart is invisible and inconsequential.
+            #[allow(clippy::disallowed_methods)]
+            let wx = angle.cos() * ANCHOR_ORBIT_RADIUS_TILES;
+            #[allow(clippy::disallowed_methods)]
+            let wy = angle.sin() * ANCHOR_ORBIT_RADIUS_TILES;
+            let pos = WorldPos {
+                x: (wx * 256.0) as i32,
+                y: (wy * 256.0) as i32,
+            };
+            out.circle(1, pos, [ANCHOR_SIZE_TILES, ANCHOR_SIZE_TILES], ANCHOR_COLOR);
+            out.anchor(slot, pos);
+        }
+
+        if view.cursor_tile().is_some() {
+            // `ANCHOR_CURSOR_TILE` makes the shader place this instance at the *live* cursor tile
+            // (`uberquad.wgsl`'s own `origin_tile = frame.cursor_tile`), not at `view.cursor_tile()`
+            // read here -- a stale `pos` would still track correctly next frame. Zero offset from
+            // that origin: `relative_pos(WorldPos::from_tile(view.window_origin()))` is exactly
+            // `(0, 0)`, so the ghost sits on the origin tile the flag selects.
+            let pos = WorldPos::from_tile(view.window_origin());
+            out.ghost(2, pos, [GHOST_SIZE_TILES, GHOST_SIZE_TILES], GHOST_COLOR)
+                .flags |= ANCHOR_CURSOR_TILE;
+        }
     }
 }
 
