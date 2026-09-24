@@ -82,3 +82,25 @@ export function createStepBlock(): SharedArrayBuffer {
 export function stepBlockView(sab: SharedArrayBuffer): Int32Array {
   return new Int32Array(sab)
 }
+
+/** M19b (docs/plan/19b-sim-park-while-armed.md), gate round 1: the one place `Wake` is bumped and
+ * notified, so `harness.ts`'s `wake()` and `parkOne` -- and `tests/browser/pages/src/
+ * park-notify-race-worker.ts`'s own page script, which must send the *exact* signal `parkOne` sends
+ * to prove the fix rather than a hand-written copy of it -- share a single implementation. Calling
+ * this twice for one signal (as `signalPark` does, below) is deliberate, not a bug: `Wake` is a pure
+ * event counter `armedLoop` only ever compares for inequality (`Atomics.wait`'s own `!==` check), so
+ * two bumps are still exactly one event as far as any waiter can tell -- unlike `Req`, nothing here
+ * needs to land on a specific value. */
+export function signalWake(block: Int32Array): void {
+  Atomics.add(block, StepBlockField.Wake, 1)
+  Atomics.notify(block, StepBlockField.Wake)
+}
+
+/** M19b, gate round 1: the exact park signal `parkOne` sends -- store `Yield = 1`, then
+ * `signalWake` -- as one shared, exported function, so a regression test can call the *real*
+ * production signal instead of mirroring its two statements by hand (a copy that guards only
+ * `armedLoop`'s side of the fix, not `parkOne`'s own). */
+export function signalPark(block: Int32Array): void {
+  Atomics.store(block, StepBlockField.Yield, 1)
+  signalWake(block)
+}

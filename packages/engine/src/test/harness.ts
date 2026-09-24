@@ -6,7 +6,14 @@ import { Role, type Status } from '../abi.js'
 import type { InstanceConfig } from '../loader.js'
 import { createManualClock, type ManualClock } from './manual-clock.js'
 import type { FromWorker, ToWorker } from './protocol.js'
-import { createStepBlock, StepBlockField, StepOp, stepBlockView } from './step-block.js'
+import {
+  createStepBlock,
+  StepBlockField,
+  StepOp,
+  signalPark,
+  signalWake,
+  stepBlockView,
+} from './step-block.js'
 
 /** Busy-wait ceiling for an ack: the spike's ack-timeout guard (spikes/zero-gc-webgpu/public/main.js). */
 const SPIN_LIMIT = 2_000_000_000
@@ -305,9 +312,9 @@ export async function createHarness(opts: {
     // M19b step 3 (docs/plan/19b-sim-park-while-armed.md): `Wake`, not `Req`, is what `armedLoop`
     // blocks on -- see `step-block.ts`'s own doc comment on that field for why `Req`'s own notify
     // was not enough on its own (it is, for a real step: the value always changes; the field exists
-    // for `parkOne`, which cannot say the same).
-    Atomics.add(h.sab, StepBlockField.Wake, 1)
-    Atomics.notify(h.sab, StepBlockField.Wake)
+    // for `parkOne`, which cannot say the same). `signalWake` (gate round 1): the one shared
+    // implementation, also called by `parkOne` below and by the regression test's own page script.
+    signalWake(h.sab)
   }
 
   function awaitAck(h: WorkerHandle): void {
@@ -380,7 +387,11 @@ export async function createHarness(opts: {
    * `Req` itself, unchanged (`Atomics.wait` returns "ok" on any notify, whatever the word's value) --
    * safe only for a waiter *already registered* at the moment of the one notify, and silently lost
    * for one caught between its own `Yield` check and actually registering, with nothing left to send
-   * a second notify. */
+   * a second notify. **Gate round 1: calls `signalPark` (`step-block.ts`), the one exported,
+   * shared implementation of this exact signal** -- not a local copy of its two statements -- so
+   * `tests/browser/pages/src/park-notify-race-worker.ts`'s regression test can call the *real*
+   * production signal instead of a hand-written mirror that would guard only `armedLoop`'s own side
+   * of the fix and stay green if this function's own bump were ever dropped. */
   async function parkOne(h: WorkerHandle): Promise<void> {
     if (!h.armed) return
     const reply = new Promise<void>((resolve, reject) => {
@@ -400,9 +411,7 @@ export async function createHarness(opts: {
         },
       }
     })
-    Atomics.store(h.sab, StepBlockField.Yield, 1)
-    Atomics.add(h.sab, StepBlockField.Wake, 1)
-    Atomics.notify(h.sab, StepBlockField.Wake)
+    signalPark(h.sab)
     await reply
     h.armed = false
   }

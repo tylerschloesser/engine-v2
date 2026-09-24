@@ -1,11 +1,12 @@
-// `park-notify-race.html`'s script (M19b, docs/plan/19b-sim-park-while-armed.md): races a real
-// `parkOne`-shaped signal -- store `Yield`, then bump and notify `Wake` (`src/test/harness.ts`'s
-// `parkOne`, exact two operations, mirrored here rather than imported so the race can be sent the
-// instant the worker says it is about to wait, from the page's own thread) -- against a worker
-// deliberately paused inside the gap `park-notify-race-worker.ts`'s own hook widens. Bounded from
-// outside (`setTimeout` + `worker.terminate()`): a worker that misses the signal blocks in
-// `Atomics.wait` forever, since this test supplies no further notify.
-import { createStepBlock, StepBlockField, stepBlockView } from '../../../../src/test/step-block.ts'
+// `park-notify-race.html`'s script (M19b, docs/plan/19b-sim-park-while-armed.md): races the real
+// `parkOne` signal against a worker deliberately paused inside the gap `park-notify-race-worker.ts`'s
+// own hook widens. Gate round 1: calls `signalPark` (`src/test/step-block.ts`), the exact exported
+// function `src/test/harness.ts`'s `parkOne` itself calls -- not a hand-written copy of its two
+// statements -- so this test guards `parkOne`'s own side of the fix (a dropped `Atomics.add` inside
+// the shared signal) as well as `armedLoop`'s (the wait target). Bounded from outside (`setTimeout`
+// + `worker.terminate()`): a worker that misses the signal blocks in `Atomics.wait` forever, since
+// this test supplies no further notify.
+import { createStepBlock, signalPark, stepBlockView } from '../../../../src/test/step-block.ts'
 
 declare global {
   interface Window {
@@ -31,12 +32,10 @@ window.__testParkNotifySurvivesWaitRegistrationGap = (spinMs, timeoutMs) => {
     }, timeoutMs)
     worker.onmessage = (ev: MessageEvent<unknown>) => {
       if (ev.data === 'about-to-wait') {
-        // The exact signal `harness.ts`'s `parkOne` sends, fired the instant the worker says it is
-        // about to call `Atomics.wait` (still spinning in its own hook, not yet registered as a
-        // waiter).
-        Atomics.store(block, StepBlockField.Yield, 1)
-        Atomics.add(block, StepBlockField.Wake, 1)
-        Atomics.notify(block, StepBlockField.Wake)
+        // The real `parkOne` signal, called through the same exported function `parkOne` itself
+        // uses, fired the instant the worker says it is about to call `Atomics.wait` (still
+        // spinning in its own hook, not yet registered as a waiter).
+        signalPark(block)
         return
       }
       // `armedLoop` itself posts `{ type: 'armed' }`/`{ type: 'parked' }` (`harness-worker.ts`'s own

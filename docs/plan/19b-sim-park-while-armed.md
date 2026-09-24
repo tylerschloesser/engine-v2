@@ -334,6 +334,56 @@ final tree.
 for a hash-mismatch message only, never assert `Req === Ack` as a pass/fail condition, and `Wake`
 carries no observable meaning outside `armedLoop`'s own wait target.
 
+### Gate round 1: the race test guarded only `armedLoop`'s side, not `parkOne`'s
+
+The coordinator's own re-check found a real gap: `park-notify-race.ts` mirrored `parkOne`'s
+store/bump/notify as three hand-written statements instead of calling `parkOne`'s own code, so the
+test proved `armedLoop`'s wait target was fixed but proved nothing about the signal-sending side --
+deleting the `Atomics.add` from the real `parkOne` (leaving the `notify`) still passed `pnpm test
+browser -t park` (coordinator's own repro, `pass 4 tests`, `src/test/harness.ts:404`).
+
+**Fix.** The signal moved into one place both sides now call: `signalWake`/`signalPark`
+(`src/test/step-block.ts`, exported) -- `signalWake` is `Atomics.add(Wake, 1)` + `Atomics.notify
+(Wake)`, `signalPark` is `Atomics.store(Yield, 1)` then `signalWake`. `harness.ts`'s `wake()` and
+`parkOne` both call `signalWake`/`signalPark` instead of writing the two `Atomics` calls inline;
+`park-notify-race.ts` (the regression test's own page script) now imports and calls `signalPark`
+from the same module, the *exact* function `parkOne` itself calls, not a copy of its statements.
+
+**Both halves shown to fail, rebuilt before each run** (`pnpm test browser -t <pattern>` runs the
+`pages` build step itself, the gotcha from step 3 above):
+
+(a) **Bump removed from the shared function** (`signalWake`'s own `Atomics.add` deleted, `notify`
+kept -- the coordinator's own edit, now impossible to make without touching the one function both
+`wake()` and `parkOne` share): `pnpm test browser -t park` --
+```
+FAIL browser [chromium] harness-worker.armed_loop_survives_a_park_notify_in_the_wait_registration_gap
+  Error: expect(received).toBe(expected) // Object.is equality
+  Expected: "returned"
+  Received: "timed-out"
+```
+Reverted (`git diff` re-checked clean of the temporary comment before continuing).
+
+(b) **`armedLoop`'s wait target put back on `Req`** (unchanged from step 3's own red check, re-run
+here for the record against the now-shared-signal code): `pnpm test browser -t park` --
+```
+FAIL browser [chromium] harness-worker.armed_loop_survives_a_park_notify_in_the_wait_registration_gap
+  Error: expect(received).toBe(expected) // Object.is equality
+  Expected: "returned"
+  Received: "timed-out"
+```
+Two more failures appeared alongside it in this same run
+(`stepping: untilQuiescent() leaves the worker parked with nothing outstanding`,
+`stepping: park() then hash() then resume() round-trips`, both `harness: worker 'sim' did not ack a
+step`) -- expected collateral of this deliberately half-broken intermediate state (`armedLoop`
+waiting on `Req` while `wake()` now only ever signals `Wake`, so no ordinary step request can be
+observed either), not a second finding. Reverted.
+
+**Re-verified green after both reverts, rebuilt:** `pnpm test browser -t "armed_loop|park_notify|
+flat transport parity|gc-loop|stepping"` -- **13 passed**; `--repeat-each 15` on the race test alone
+-- **15 passed (4.4s)**; `pnpm test browser` -- **170 passed**; `pnpm test unit` -- **215 passed**;
+`pnpm test wasm` -- **55 passed**; `pnpm --filter engine typecheck` clean; `pnpm format` clean.
+`node scripts/repeat.mjs browser 15` quiet -- **pass=15 fail=0 hang=0**.
+
 ### Notes for later briefs
 
 - The park/step-block protocol this milestone fixes (`src/test/harness.ts`/`harness-worker.ts`,

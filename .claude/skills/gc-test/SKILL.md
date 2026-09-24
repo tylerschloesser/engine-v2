@@ -254,10 +254,16 @@ of the M03/M04 harness. Two differences from a harness page:
   shared word (`Wake`, `step-block.ts`) that both always bump *and* notify, mirroring `sab/
   control.ts`'s own `W_WAKE` -- once every signal changes the value the wait compares against, no
   interleaving can lose it (either the wait's own initial compare already sees the mismatch, or the
-  wait has registered and `Atomics.notify` reaches it directly; there is no third case). Proved by a
-  worker deliberately paused, on its own real OS thread, inside the exact gap via a test-only hook
-  (`armedLoop`'s optional `testHooks.beforeWait`, `tests/browser/pages/src/park-notify-race{,
-  -worker}.ts`, `park-notify-race.spec.ts`) rather than timed against a real `parkOne` round trip.
+  wait has registered and `Atomics.notify` reaches it directly; there is no third case). The signal
+  itself is two exported functions, `signalWake`/`signalPark` (`step-block.ts`) -- `wake()` and
+  `parkOne` both call them rather than writing the `Atomics` calls inline, and so does the regression
+  test's own page script, on purpose (gate round 1): a test that mirrors a signal by hand instead of
+  calling the real one only guards the *receiving* side of a fix, not the *sending* side -- the
+  coordinator's own re-check found exactly this gap (deleting `parkOne`'s `Atomics.add` left the old,
+  hand-copied test green). Proved by a worker deliberately paused, on its own real OS thread, inside
+  the exact gap via a test-only hook (`armedLoop`'s optional `testHooks.beforeWait`,
+  `tests/browser/pages/src/park-notify-race{,-worker}.ts`, `park-notify-race.spec.ts`) rather than
+  timed against a real `parkOne` round trip.
   **`vite preview` serves a built bundle, not live source** (`playwright.config.ts`'s own header
   comment): a direct `pnpm exec playwright test` call after editing `src/test/**` needs an explicit
   rebuild (`pnpm --filter engine build && pnpm exec vite build --config tests/browser/pages/
