@@ -53,6 +53,9 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
       anchor() {
         return { set() {}, remove() {} }
       },
+      anchorSlot() {
+        return { remove() {} }
+      },
       update() {},
     },
     wakeCount: 0,

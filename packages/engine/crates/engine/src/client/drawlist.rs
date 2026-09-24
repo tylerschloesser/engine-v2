@@ -29,15 +29,26 @@ pub const REGION_BYTES: usize = HEADER_BYTES + BODY_BYTES;
 pub const LAYER_COUNT: usize = 8;
 
 // Header field offsets (Planning decisions "Slot header is 1,024 bytes"). M17 (this module) writes
-// `frame_seq`, `record_count`, `window_origin`, `layer_count`, `dropped`, `frame_time_ms`; every
-// other field stays at its zero-initialised default until M18/M19 write it (Non-scope here: "the
-// header bytes are reserved").
+// `frame_seq`, `record_count`, `window_origin`, `layer_count`, `dropped`, `frame_time_ms`; steps 4-6
+// of docs/plan/18-picking-and-overlay.md (this cut) add `follow_valid`/`follow` (`cx.follow(..)`,
+// 0019 §1) and `anchor_mask`/`anchors` (`DrawList::anchor`, 0019 §5). `flags` at offset 52 and the
+// 24-byte gap `104..128` still have no owner (Deviations: left zero). None of these new offsets fall
+// inside `hash_region`'s own `[4, 48)`/`[88, 92)` ranges, so the `fixtures/drawables` DrawList golden
+// does not move.
 const OFF_FRAME_SEQ: usize = 0;
 const OFF_RECORD_COUNT: usize = 4;
 const OFF_WINDOW_ORIGIN: usize = 8;
 const OFF_LAYER_COUNT: usize = 16;
+const OFF_FOLLOW_VALID: usize = 48;
+const OFF_FOLLOW: usize = 56;
+const OFF_ANCHOR_MASK: usize = 76;
 const OFF_DROPPED: usize = 88;
 const OFF_FRAME_TIME_MS: usize = 96;
+const OFF_ANCHORS: usize = 128;
+
+/// `DrawList::anchor`'s own slot count (0019 §5: "64 slots"); `anchor_mask`'s two `u32` words cover
+/// exactly this many bits.
+pub const ANCHOR_SLOTS: usize = 64;
 
 /// Tiles a window origin is snapped to (Planning decisions "Window origin": "the camera centre's
 /// tile, snapped to a multiple of 64 tiles").
@@ -155,6 +166,13 @@ pub struct DrawList {
     dropped: u32,
     frame_seq: u32,
     record_count: u32,
+    /// Steps 4-6: bit `i` set means `anchors[i]` was written this frame by `Self::anchor` (0019 §5).
+    /// Cleared by `begin_frame`; a slot no `extract` call touches this frame keeps its mask bit
+    /// clear (Deviations: "frozen, not hidden" is the TS reader's own choice, not this type's).
+    anchor_mask: u64,
+    /// Tiles relative to `window_origin`, the same convention `Draw::pos` uses (`Self::
+    /// relative_pos`) -- only the slots `anchor_mask` marks valid are meaningful.
+    anchors: [[f32; 2]; ANCHOR_SLOTS],
 }
 
 impl DrawList {
@@ -166,6 +184,8 @@ impl DrawList {
             dropped: 0,
             frame_seq: 0,
             record_count: 0,
+            anchor_mask: 0,
+            anchors: [[0.0, 0.0]; ANCHOR_SLOTS],
         }
     }
 
@@ -188,6 +208,7 @@ impl DrawList {
         self.window_origin = window_origin;
         self.dropped = 0;
         self.frame_seq = self.frame_seq.wrapping_add(1);
+        self.anchor_mask = 0;
     }
 
     #[inline]
@@ -275,11 +296,35 @@ impl DrawList {
         self.build(layer, pos, size, KIND_GHOST << KIND_SHIFT, color, 0.0)
     }
 
+    /// Publishes a moving position a DOM anchor can follow (0019 §5: "`client.overlay.anchorSlot`
+    /// ... follows a moving position the game's Rust publishes with `out.anchor(slot, pos)`"). `pos`
+    /// is stored the same way `Draw::pos` is (tiles relative to this frame's `window_origin`, via
+    /// `Self::relative_pos`) -- the main thread's `anchorSlot` reads it back through the same
+    /// `worldToScreen`-shaped arithmetic every other anchor uses. `slot >= `[`ANCHOR_SLOTS`]` is
+    /// ignored (`Self::push`'s own "drop, don't panic" discipline for an out-of-range game value).
+    pub fn anchor(&mut self, slot: u8, pos: WorldPos) {
+        let slot = slot as usize;
+        if slot >= ANCHOR_SLOTS {
+            return;
+        }
+        self.anchor_mask |= 1u64 << slot;
+        self.anchors[slot] = self.relative_pos(pos);
+    }
+
     /// Counting-sorts the scratch list by `layer` into `out` (a whole `RegionId::DrawList`-shaped
     /// buffer, [`REGION_BYTES`]) and fills the header fields this milestone owns (module doc
-    /// comment). Returns the record count (`Self::record_count`'s new value). `game_instance.rs`'s
-    /// `frame()` calls this once, right after `G::Client::extract` returns.
-    pub fn sort_into(&mut self, out: &mut [u8], frame_time_ms: f64) -> u32 {
+    /// comment), including this frame's `follow` target (steps 4-6: `cx.follow(..)`, absolute world
+    /// tiles -- the same unit and origin `CameraBlock::centre` uses, not window-relative like
+    /// `Draw::pos`/`Self::anchors`, since the main thread hands it straight to `camera.setFollow(x,
+    /// y, valid)`, itself in that same absolute-tile space). Returns the record count (`Self::
+    /// record_count`'s new value). `game_instance.rs`'s `frame()` calls this once, right after `G::
+    /// Client::extract` returns.
+    pub fn sort_into(
+        &mut self,
+        out: &mut [u8],
+        frame_time_ms: f64,
+        follow: Option<WorldPos>,
+    ) -> u32 {
         debug_assert!(out.len() >= REGION_BYTES);
         let mut counts = [0u32; LAYER_COUNT];
         for d in &self.scratch {
@@ -315,6 +360,24 @@ impl DrawList {
         }
         out[OFF_DROPPED..OFF_DROPPED + 4].copy_from_slice(&self.dropped.to_le_bytes());
         out[OFF_FRAME_TIME_MS..OFF_FRAME_TIME_MS + 8].copy_from_slice(&frame_time_ms.to_le_bytes());
+
+        let (follow_valid, follow_x, follow_y) = match follow {
+            Some(pos) => (1u32, pos.x as f64 / 256.0, pos.y as f64 / 256.0),
+            None => (0u32, 0.0, 0.0),
+        };
+        out[OFF_FOLLOW_VALID..OFF_FOLLOW_VALID + 4].copy_from_slice(&follow_valid.to_le_bytes());
+        out[OFF_FOLLOW..OFF_FOLLOW + 8].copy_from_slice(&follow_x.to_le_bytes());
+        out[OFF_FOLLOW + 8..OFF_FOLLOW + 16].copy_from_slice(&follow_y.to_le_bytes());
+
+        let mask_lo = self.anchor_mask as u32;
+        let mask_hi = (self.anchor_mask >> 32) as u32;
+        out[OFF_ANCHOR_MASK..OFF_ANCHOR_MASK + 4].copy_from_slice(&mask_lo.to_le_bytes());
+        out[OFF_ANCHOR_MASK + 4..OFF_ANCHOR_MASK + 8].copy_from_slice(&mask_hi.to_le_bytes());
+        for (i, a) in self.anchors.iter().enumerate() {
+            let off = OFF_ANCHORS + i * 8;
+            out[off..off + 4].copy_from_slice(&a[0].to_le_bytes());
+            out[off + 4..off + 8].copy_from_slice(&a[1].to_le_bytes());
+        }
 
         record_count
     }
@@ -438,7 +501,7 @@ mod tests {
             dl.circle(layer, WorldPos::default(), [1.0, 1.0], i as u32);
         }
         let mut out = region();
-        let n = dl.sort_into(&mut out, 0.0);
+        let n = dl.sort_into(&mut out, 0.0, None);
         assert_eq!(n, layers.len() as u32);
 
         // Layer 0 records (push order 1, 4) come before layer 1 (push order 3) before layer 3
@@ -460,7 +523,7 @@ mod tests {
             dl.circle(7, WorldPos::default(), [1.0, 1.0], 0);
         }
         let mut out = region();
-        let n = dl.sort_into(&mut out, 0.0);
+        let n = dl.sort_into(&mut out, 0.0, None);
         assert_eq!(n, 8);
         assert_eq!(layer_count(&out, 2), 5);
         assert_eq!(layer_count(&out, 7), 3);
@@ -479,7 +542,7 @@ mod tests {
         }
         assert_eq!(dl.dropped(), 10);
         let mut out = region();
-        let n = dl.sort_into(&mut out, 0.0);
+        let n = dl.sort_into(&mut out, 0.0, None);
         assert_eq!(n, CAPACITY as u32);
         assert_eq!(record_count(&out), CAPACITY as u32);
         assert_eq!(dropped_field(&out), 10);
@@ -508,9 +571,9 @@ mod tests {
         far.circle(0, pos_far, [1.0, 1.0], 0);
 
         let mut out_near = region();
-        near.sort_into(&mut out_near, 0.0);
+        near.sort_into(&mut out_near, 0.0, None);
         let mut out_far = region();
-        far.sort_into(&mut out_far, 0.0);
+        far.sort_into(&mut out_far, 0.0, None);
 
         assert_eq!(
             read_record(&out_near, 0).pos,
@@ -535,5 +598,105 @@ mod tests {
             snap_window_origin(TilePos::new(-1, -65)),
             TilePos::new(-64, -128)
         );
+    }
+
+    fn follow_valid(out: &[u8]) -> u32 {
+        u32::from_le_bytes(
+            out[OFF_FOLLOW_VALID..OFF_FOLLOW_VALID + 4]
+                .try_into()
+                .unwrap(),
+        )
+    }
+
+    fn follow_xy(out: &[u8]) -> (f64, f64) {
+        (
+            f64::from_le_bytes(out[OFF_FOLLOW..OFF_FOLLOW + 8].try_into().unwrap()),
+            f64::from_le_bytes(out[OFF_FOLLOW + 8..OFF_FOLLOW + 16].try_into().unwrap()),
+        )
+    }
+
+    fn anchor_mask(out: &[u8]) -> u64 {
+        let lo = u32::from_le_bytes(
+            out[OFF_ANCHOR_MASK..OFF_ANCHOR_MASK + 4]
+                .try_into()
+                .unwrap(),
+        );
+        let hi = u32::from_le_bytes(
+            out[OFF_ANCHOR_MASK + 4..OFF_ANCHOR_MASK + 8]
+                .try_into()
+                .unwrap(),
+        );
+        (hi as u64) << 32 | lo as u64
+    }
+
+    fn anchor_xy(out: &[u8], slot: usize) -> (f32, f32) {
+        let off = OFF_ANCHORS + slot * 8;
+        (
+            f32::from_le_bytes(out[off..off + 4].try_into().unwrap()),
+            f32::from_le_bytes(out[off + 4..off + 8].try_into().unwrap()),
+        )
+    }
+
+    /// `drawlist.anchor_table_and_mask` (Tests added): `DrawList::anchor` writes both the mask bit
+    /// and the tiles-relative-to-`window_origin` value; a slot no `anchor` call touches this frame
+    /// keeps its mask bit clear; a later frame that calls `anchor` for a different slot set does not
+    /// resurrect a stale bit (`begin_frame` clears the whole mask).
+    #[test]
+    fn drawlist_anchor_table_and_mask() {
+        let mut dl = DrawList::new();
+        dl.begin_frame(TilePos::new(0, 0));
+        dl.anchor(0, WorldPos { x: 512, y: 768 }); // (2.0, 3.0) tiles
+        dl.anchor(63, WorldPos { x: 256, y: -256 }); // (1.0, -1.0) tiles
+        dl.anchor(200, WorldPos { x: 0, y: 0 }); // out of range: ignored
+        let mut out = region();
+        dl.sort_into(&mut out, 0.0, None);
+        assert_eq!(anchor_mask(&out), (1u64 << 0) | (1u64 << 63));
+        assert_eq!(anchor_xy(&out, 0), (2.0, 3.0));
+        assert_eq!(anchor_xy(&out, 63), (1.0, -1.0));
+        assert_eq!(
+            anchor_xy(&out, 1),
+            (0.0, 0.0),
+            "an untouched slot stays zero"
+        );
+
+        // A fresh frame with no `anchor` calls clears every bit (Deviations: "frozen, not hidden" is
+        // the TS reader's own policy -- this type's own contract is only that the mask reports
+        // exactly this frame's own `anchor` calls).
+        dl.begin_frame(TilePos::new(0, 0));
+        let mut out2 = region();
+        dl.sort_into(&mut out2, 0.0, None);
+        assert_eq!(anchor_mask(&out2), 0, "begin_frame clears the whole mask");
+    }
+
+    #[test]
+    fn drawlist_anchor_out_of_range_slot_ignored() {
+        let mut dl = DrawList::new();
+        dl.begin_frame(TilePos::new(0, 0));
+        dl.anchor(64, WorldPos { x: 256, y: 256 }); // one past the last valid slot (0..64)
+        let mut out = region();
+        dl.sort_into(&mut out, 0.0, None);
+        assert_eq!(anchor_mask(&out), 0);
+    }
+
+    /// `framecx.follow_written_to_header` (Tests added): `sort_into`'s own `follow` parameter
+    /// (`game_instance.rs` passes `FrameCx::take_follow()`'s value) becomes `follow_valid`/`follow`
+    /// in the header -- absolute world tiles (`WorldPos` divided by 256), the same unit `CameraBlock
+    /// ::centre` uses, not window-relative.
+    #[test]
+    fn framecx_follow_written_to_header() {
+        let mut dl = DrawList::new();
+        dl.begin_frame(TilePos::new(1000, 1000));
+        let mut out = region();
+        dl.sort_into(&mut out, 0.0, Some(WorldPos { x: 2560, y: -1280 }));
+        assert_eq!(follow_valid(&out), 1);
+        assert_eq!(follow_xy(&out), (10.0, -5.0));
+
+        // `None` writes `follow_valid = 0` and zeroes the coordinates, every frame -- a stale value
+        // from a previous frame's real target never leaks through once a game returns control.
+        dl.begin_frame(TilePos::new(1000, 1000));
+        let mut out2 = region();
+        dl.sort_into(&mut out2, 0.0, None);
+        assert_eq!(follow_valid(&out2), 0);
+        assert_eq!(follow_xy(&out2), (0.0, 0.0));
     }
 }

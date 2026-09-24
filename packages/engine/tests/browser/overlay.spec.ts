@@ -30,6 +30,29 @@ declare global {
     __rcOverlayRemove?: (id: string) => void
     __rcOverlayUpdate?: () => void
     __rcOverlayStyleWrites?: () => number
+    // docs/plan/18-picking-and-overlay.md steps 4-6: `overlay.anchorSlot`, and the hand-filled
+    // header publish `follow.spec.ts`/`pick.spec.ts` also use.
+    __rcOverlayAnchorSlot?: (id: string, slot: number) => void
+    __rcOverlayAnchorSlotRemove?: (id: string) => void
+    __rcPublishDrawList?: (
+      records: Array<{
+        posX: number
+        posY: number
+        sizeX: number
+        sizeY: number
+        kind: number
+        layer: number
+        flags?: number
+        pickId: number
+      }>,
+      windowOriginX?: number,
+      windowOriginY?: number,
+      opts?: {
+        follow?: { x: number; y: number }
+        anchors?: Array<{ slot: number; x: number; y: number }>
+      },
+    ) => void
+    __rcPickAcquire?: () => void
   }
 }
 
@@ -165,6 +188,42 @@ test('overlay.offscreen_hidden_on_transition_only', async ({ page }) => {
   await page.evaluate(() => window.__rcTick?.(16))
   await page.evaluate(() => window.__rcOverlayUpdate?.())
   await expect(page.locator('#a1')).toBeVisible()
+})
+
+test('overlay.slot_anchor_follows_rust', async ({ page }) => {
+  await createReal(page)
+  await page.evaluate(() =>
+    window.__rcPublishDrawList?.([], 0, 0, { anchors: [{ slot: 5, x: 2, y: -1 }] }),
+  )
+  await page.evaluate(() => window.__rcPickAcquire?.())
+  await page.evaluate(() => window.__rcOverlayAnchorSlot?.('s1', 5))
+  await page.evaluate(() => window.__rcOverlayUpdate?.())
+
+  const box = requireBox(await page.locator('#s1').boundingBox())
+  const expected = expectedScreen(2, -1, 0, 0)
+  expect(box.x + box.width / 2).toBeCloseTo(expected.x, 0)
+  expect(box.y + box.height).toBeCloseTo(expected.y, 0)
+
+  // A new publish moves the same slot: the anchor follows it, with no new `anchorSlot` call.
+  await page.evaluate(() =>
+    window.__rcPublishDrawList?.([], 0, 0, { anchors: [{ slot: 5, x: 5, y: 5 }] }),
+  )
+  await page.evaluate(() => window.__rcPickAcquire?.())
+  await page.evaluate(() => window.__rcOverlayUpdate?.())
+  const box2 = requireBox(await page.locator('#s1').boundingBox())
+  const expected2 = expectedScreen(5, 5, 0, 0)
+  expect(box2.x + box2.width / 2).toBeCloseTo(expected2.x, 0)
+  expect(box2.y + box2.height).toBeCloseTo(expected2.y, 0)
+
+  // A publish that never touches slot 5 (its own `anchor_mask` bit unset): the anchor freezes at
+  // its last known position rather than jumping to `(0, 0)` or hiding (Deviations: "frozen, not
+  // hidden" is the TS reader's own policy).
+  await page.evaluate(() => window.__rcPublishDrawList?.([], 0, 0, {}))
+  await page.evaluate(() => window.__rcPickAcquire?.())
+  await page.evaluate(() => window.__rcOverlayUpdate?.())
+  const box3 = requireBox(await page.locator('#s1').boundingBox())
+  expect(box3.x).toBeCloseTo(box2.x, 0)
+  expect(box3.y).toBeCloseTo(box2.y, 0)
 })
 
 test('overlay.widget_click_not_a_tap', async ({ page }) => {

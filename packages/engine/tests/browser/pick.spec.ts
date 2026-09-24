@@ -37,6 +37,10 @@ declare global {
       }>,
       windowOriginX?: number,
       windowOriginY?: number,
+      opts?: {
+        follow?: { x: number; y: number }
+        anchors?: Array<{ slot: number; x: number; y: number }>
+      },
     ) => void
     __rcPickAcquire?: () => void
     __rcPickAt?: (cssX: number, cssY: number) => number

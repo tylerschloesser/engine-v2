@@ -83,7 +83,7 @@ fn extract_and_sort(lb: &Loopback<Drawables>, zoom: f32) -> (u32, Vec<u8>) {
     dl.begin_frame(TilePos::new(0, 0));
     DrawablesClient.extract(&view, &mut dl);
     let mut out = vec![0u8; engine::client::drawlist::REGION_BYTES];
-    let n = dl.sort_into(&mut out, 0.0);
+    let n = dl.sort_into(&mut out, 0.0, None);
     (n, out)
 }
 

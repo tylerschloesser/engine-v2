@@ -16,11 +16,14 @@ import { DRAWLIST_BODY_BYTES, DRAWLIST_HEADER_BYTES } from '../sab/layout.js'
 import { TripleReader } from '../sab/triple.js'
 
 // `client/drawlist.rs`'s own header layout (docs/plan/17-drawlist-and-sprites.md Deviations,
-// "Header, as landed"): the four scalar fields this slot reads out. Duplicated here the same way
-// `render/drawables.ts`'s own `OFF_*` constants mirror the Rust layout (that file's own precedent).
+// "Header, as landed"; docs/plan/18-picking-and-overlay.md steps 4-6 add `follow_valid`/`follow`):
+// the scalar fields this slot reads out. Duplicated here the same way `render/drawables.ts`'s own
+// `OFF_*` constants mirror the Rust layout (that file's own precedent).
 const OFF_FRAME_SEQ = 0
 const OFF_RECORD_COUNT = 4
 const OFF_WINDOW_ORIGIN = 8
+const OFF_FOLLOW_VALID = 48
+const OFF_FOLLOW = 56
 const OFF_DROPPED = 88
 
 export type DrawListSlot = {
@@ -42,6 +45,13 @@ export type DrawListSlot = {
   frameSeq: number
   /** `header`'s own `dropped` counter. */
   dropped: number
+  /** docs/plan/18-picking-and-overlay.md steps 4-6: `header`'s own `follow_valid`/`follow` (0019
+   * §1) -- absolute world tiles, the same unit `camera.setFollow(x, y, valid)` takes. `client.ts`'s
+   * `camera.tick(dtMs)` reads these straight off the acquired slot before `integrate()` runs, so a
+   * target set this frame centres this same frame. */
+  followValid: boolean
+  followX: number
+  followY: number
   /** Whether this call's `acquire()` actually swapped in a new publish (`TripleReader.fresh`). */
   fresh: boolean
   /** Takes the newest published slot, once. Called at most once per rAF, from `frame-loop.ts`'s
@@ -70,6 +80,9 @@ export function createDrawListSlot(sab: SharedArrayBuffer): DrawListSlot {
     windowOriginY: 0,
     frameSeq: 0,
     dropped: 0,
+    followValid: false,
+    followX: 0,
+    followY: 0,
     fresh: false,
     acquire() {
       const s = reader.acquire()
@@ -82,6 +95,9 @@ export function createDrawListSlot(sab: SharedArrayBuffer): DrawListSlot {
       slot.windowOriginY = header.getInt32(OFF_WINDOW_ORIGIN + 4, true)
       slot.frameSeq = header.getUint32(OFF_FRAME_SEQ, true)
       slot.dropped = header.getUint32(OFF_DROPPED, true)
+      slot.followValid = header.getUint32(OFF_FOLLOW_VALID, true) !== 0
+      slot.followX = header.getFloat64(OFF_FOLLOW, true)
+      slot.followY = header.getFloat64(OFF_FOLLOW + 8, true)
       slot.fresh = reader.fresh
     },
   }

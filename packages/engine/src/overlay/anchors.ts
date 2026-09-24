@@ -20,6 +20,7 @@
 import type { CameraState } from '../camera/state.js'
 import type { CameraViewport, ScreenPoint } from '../camera/transform.js'
 import { pxPerTile, worldToScreen } from '../camera/transform.js'
+import type { DrawListSlot } from '../render/drawlist-slot.js'
 
 export type AnchorAlign = 'center' | 'top' | 'bottom'
 
@@ -81,6 +82,11 @@ export type AnchorHandle = {
   remove(): void
 }
 
+/** `client.overlay.anchorSlot`'s own handle (0019 §5): unlike a static [`AnchorHandle`], there is no
+ * `.set()` -- the position comes from the DrawList header's own anchor table (`DrawList::anchor`,
+ * Rust), read fresh every `update()` call. */
+export type SlotAnchorHandle = { remove(): void }
+
 export type AnchorOptions = { align?: AnchorAlign }
 
 export type OverlayMode = 'properties' | 'translate'
@@ -92,6 +98,16 @@ export interface Overlay {
    * (lazily built on the first call -- a page whose canvas is never attached to the DOM, or that
    * never touches overlay at all, pays nothing and needs no root) and returns a handle. */
   anchor(el: HTMLElement, worldX: number, worldY: number, opts?: AnchorOptions): AnchorHandle
+  /** docs/plan/18-picking-and-overlay.md steps 4-6 (0019 §5): re-parents `el` into the anchor layer
+   * (same lazy build as `anchor`) and follows the DrawList header's own `slot` entry (`DrawList::
+   * anchor(slot, pos)`, Rust) -- every `update()` call reads `anchor_mask`/`anchors[slot]` off the
+   * *acquired* `DrawListSlot` (Deviations: "the same slot the `acquire` phase pulled", never a second
+   * reader) and rewrites `--wx`/`--wy` only when the slot's own mask bit is set and its value
+   * (`window_origin + anchors[slot]`, converted to absolute world tiles) actually changed since the
+   * last write. A slot whose mask bit is unset this frame is left exactly where it last was
+   * ("frozen", Deviations) -- `DrawList::anchor` not being called for a slot on a given frame is not
+   * itself a signal to hide it. */
+  anchorSlot(el: HTMLElement, slot: number): SlotAnchorHandle
   /** Runs once per rAF (`frame-loop.ts`'s `overlay` phase, after `camera`): the layer's own
    * `transform`/`--z` writes (at most two) plus visibility toggling for every anchor (a write only on
    * a visible/hidden transition). No-op until the first `anchor()` call has built the layer. */
@@ -107,11 +123,21 @@ export type OverlayDeps = {
   cameraState: CameraState
   viewport: CameraViewport
   canvas: HTMLCanvasElement
+  /** docs/plan/18-picking-and-overlay.md steps 4-6: `anchorSlot`'s own source of truth -- the same
+   * single `DrawListSlot` `Client.pick`/`render/drawables.ts` already read (never a second
+   * `TripleReader`, steps 1-3 Deviations). */
+  drawListSlot: DrawListSlot
   options?: OverlayOptions
 }
 
 const LAYER_STYLE_ID = 'engine-overlay-anchor-style'
 const ANCHOR_CLASS = 'engine-anchor'
+
+// `client/drawlist.rs`'s own header layout (docs/plan/18-picking-and-overlay.md, steps 4-6
+// Deviations "Header, as landed"): duplicated here the same way `render/drawlist-slot.ts`'s own
+// `OFF_*` constants mirror the Rust layout.
+const OFF_ANCHOR_MASK = 76
+const OFF_ANCHORS = 128
 
 function ensureStaticRule(doc: Document): void {
   if (doc.getElementById(LAYER_STYLE_ID)) return
@@ -136,6 +162,25 @@ type AnchorRecord = {
   visible: boolean
 }
 
+type SlotAnchorRecord = {
+  el: HTMLElement
+  slot: number
+  worldX: number
+  worldY: number
+  visible: boolean
+  /** Whether `anchor_mask` has ever had this slot's bit set (a slot `anchorSlot` was called for but
+   * `DrawList::anchor` has not published yet stays at its CSS default, `var(--wx, 0)`, rather than a
+   * `writeAnchorVars`-style write of a meaningless `(0, 0)` world position). */
+  hasValue: boolean
+}
+
+/** `anchor_mask`'s own bit test (two `u32` words, `client/drawlist.rs`'s own `mask_lo`/`mask_hi`). */
+function anchorMaskBit(header: DataView, slot: number): boolean {
+  const word = header.getUint32(slot < 32 ? OFF_ANCHOR_MASK : OFF_ANCHOR_MASK + 4, true)
+  const bit = slot < 32 ? slot : slot - 32
+  return (word & (1 << bit)) !== 0
+}
+
 /** Builds `client.overlay` (`createClient`, `src/client.ts` -- one instance per `Client`, cheap:
  * no DOM touched until the first `anchor()` call). */
 export function createOverlay(deps: OverlayDeps): Overlay {
@@ -145,6 +190,7 @@ export function createOverlay(deps: OverlayDeps): Overlay {
   void (deps.options?.mode ?? 'properties')
 
   const anchors: AnchorRecord[] = []
+  const slotAnchors: SlotAnchorRecord[] = []
   let layer: HTMLElement | undefined
   let originX = 0
   let originY = 0
@@ -186,10 +232,21 @@ export function createOverlay(deps: OverlayDeps): Overlay {
     writeCount += 2
   }
 
+  function writeSlotAnchorVars(rec: SlotAnchorRecord): void {
+    const { wx, wy } = rebaseOffset(rec.worldX, rec.worldY, originX, originY)
+    rec.el.style.setProperty('--wx', String(wx))
+    rec.el.style.setProperty('--wy', String(wy))
+    writeCount += 2
+  }
+
   function rebase(): void {
     originX = Math.floor(deps.cameraState.centreX)
     originY = Math.floor(deps.cameraState.centreY)
     for (let i = 0; i < anchors.length; i++) writeAnchorVars(anchors[i] as AnchorRecord)
+    for (let i = 0; i < slotAnchors.length; i++) {
+      const rec = slotAnchors[i] as SlotAnchorRecord
+      if (rec.hasValue) writeSlotAnchorVars(rec)
+    }
   }
 
   function anchor(
@@ -221,6 +278,22 @@ export function createOverlay(deps: OverlayDeps): Overlay {
     }
   }
 
+  function anchorSlot(el: HTMLElement, slot: number): SlotAnchorHandle {
+    const l = ensureLayer()
+    el.classList.add(ANCHOR_CLASS)
+    l.appendChild(el)
+    const rec: SlotAnchorRecord = { el, slot, worldX: 0, worldY: 0, visible: true, hasValue: false }
+    slotAnchors.push(rec)
+    updateSlotAnchor(rec)
+    return {
+      remove() {
+        const i = slotAnchors.indexOf(rec)
+        if (i >= 0) slotAnchors.splice(i, 1)
+        rec.el.remove()
+      },
+    }
+  }
+
   function updateVisibility(): void {
     const z = lastZ
     for (let i = 0; i < anchors.length; i++) {
@@ -239,6 +312,42 @@ export function createOverlay(deps: OverlayDeps): Overlay {
         writeCount++
       }
     }
+    for (let i = 0; i < slotAnchors.length; i++) {
+      const rec = slotAnchors[i] as SlotAnchorRecord
+      if (!rec.hasValue) continue
+      const { wx, wy } = rebaseOffset(rec.worldX, rec.worldY, originX, originY)
+      const sx = lastOriginScreenX + wx * z
+      const sy = lastOriginScreenY + wy * z
+      const visible =
+        sx >= -VISIBILITY_MARGIN_PX &&
+        sx <= deps.viewport.widthPx + VISIBILITY_MARGIN_PX &&
+        sy >= -VISIBILITY_MARGIN_PX &&
+        sy <= deps.viewport.heightPx + VISIBILITY_MARGIN_PX
+      if (visible !== rec.visible) {
+        rec.el.style.visibility = visible ? 'visible' : 'hidden'
+        rec.visible = visible
+        writeCount++
+      }
+    }
+  }
+
+  /** Steps 4-6: one slot's own per-frame refresh -- reads the *acquired* slot's header (never a new
+   * `TripleReader`), and rewrites `--wx`/`--wy` only when the slot's mask bit is set and the decoded
+   * world position actually changed (0019 §5's own "rewrite ... only for slots whose value
+   * changed"). */
+  function updateSlotAnchor(rec: SlotAnchorRecord): void {
+    const header = deps.drawListSlot.header
+    if (!anchorMaskBit(header, rec.slot)) return // no publish this frame: frozen, not hidden
+    const off = OFF_ANCHORS + rec.slot * 8
+    const relX = header.getFloat32(off, true)
+    const relY = header.getFloat32(off + 4, true)
+    const worldX = deps.drawListSlot.windowOriginX + relX
+    const worldY = deps.drawListSlot.windowOriginY + relY
+    if (rec.hasValue && worldX === rec.worldX && worldY === rec.worldY) return
+    rec.worldX = worldX
+    rec.worldY = worldY
+    rec.hasValue = true
+    writeSlotAnchorVars(rec)
   }
 
   function update(): void {
@@ -260,11 +369,15 @@ export function createOverlay(deps: OverlayDeps): Overlay {
       lastZ = z
       writeCount++
     }
+    for (let i = 0; i < slotAnchors.length; i++) {
+      updateSlotAnchor(slotAnchors[i] as SlotAnchorRecord)
+    }
     updateVisibility()
   }
 
   return {
     anchor,
+    anchorSlot,
     update,
     styleWrites() {
       return writeCount
@@ -273,6 +386,7 @@ export function createOverlay(deps: OverlayDeps): Overlay {
       layer?.remove()
       layer = undefined
       anchors.length = 0
+      slotAnchors.length = 0
     },
   }
 }

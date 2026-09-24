@@ -10,7 +10,11 @@ import { CameraState } from '../../../../src/camera/state.ts'
 import type { Client, ClientOptions } from '../../../../src/client.ts'
 import { clientTestHandle, createClient } from '../../../../src/client.ts'
 import type { InputEventType } from '../../../../src/input/semantic.ts'
-import type { AnchorAlign, AnchorHandle } from '../../../../src/overlay/anchors.ts'
+import type {
+  AnchorAlign,
+  AnchorHandle,
+  SlotAnchorHandle,
+} from '../../../../src/overlay/anchors.ts'
 import {
   DRAW_BYTES,
   LAYER_COUNT,
@@ -64,6 +68,15 @@ declare global {
       }>,
       windowOriginX?: number,
       windowOriginY?: number,
+      // docs/plan/18-picking-and-overlay.md steps 4-6: hand-fills the same header bytes Rust's
+      // `DrawList::sort_into` would (`cx.follow(..)`'s own `follow_valid`/`follow`, `DrawList::
+      // anchor`'s own `anchor_mask`/`anchors`) -- the same "no WASM needed, hand-filled SAB" shape
+      // steps 1-3 already used for picking/overlay. `anchors` positions are tiles relative to
+      // `windowOriginX/Y` (the same convention `Draw.pos` uses), matching what real Rust writes.
+      opts?: {
+        follow?: { x: number; y: number }
+        anchors?: Array<{ slot: number; x: number; y: number }>
+      },
     ) => void
     __rcPickAcquire?: () => void
     __rcPickAt?: (cssX: number, cssY: number) => number
@@ -74,6 +87,9 @@ declare global {
     __rcOverlayAnchor?: (id: string, worldX: number, worldY: number, align?: AnchorAlign) => void
     __rcOverlaySet?: (id: string, worldX: number, worldY: number) => void
     __rcOverlayRemove?: (id: string) => void
+    // docs/plan/18-picking-and-overlay.md steps 4-6: `overlay.anchorSlot`.
+    __rcOverlayAnchorSlot?: (id: string, slot: number) => void
+    __rcOverlayAnchorSlotRemove?: (id: string) => void
     __rcOverlayUpdate?: () => void
     __rcOverlayStyleWrites?: () => number
     __pageReady?: true
@@ -180,8 +196,14 @@ const HEADER_OFF_FRAME_SEQ = 0
 const HEADER_OFF_RECORD_COUNT = 4
 const HEADER_OFF_WINDOW_ORIGIN = 8
 const HEADER_OFF_LAYER_COUNT = 16
+// docs/plan/18-picking-and-overlay.md steps 4-6: `client/drawlist.rs`'s own `follow_valid`/`follow`/
+// `anchor_mask`/`anchors` offsets (Deviations "Header, as landed").
+const HEADER_OFF_FOLLOW_VALID = 48
+const HEADER_OFF_FOLLOW = 56
+const HEADER_OFF_ANCHOR_MASK = 76
+const HEADER_OFF_ANCHORS = 128
 
-window.__rcPublishDrawList = (records, windowOriginX = 0, windowOriginY = 0) => {
+window.__rcPublishDrawList = (records, windowOriginX = 0, windowOriginY = 0, opts) => {
   const c = requireClient()
   if (!drawListWriter) {
     drawListWriter = new TripleWriter(
@@ -209,6 +231,28 @@ window.__rcPublishDrawList = (records, windowOriginX = 0, windowOriginY = 0) => 
   // two publishes of the same test.
   header.setUint32(HEADER_OFF_FRAME_SEQ, nextFrameSeq >>> 0, true)
   nextFrameSeq += 1
+
+  if (opts?.follow) {
+    header.setUint32(HEADER_OFF_FOLLOW_VALID, 1, true)
+    header.setFloat64(HEADER_OFF_FOLLOW, opts.follow.x, true)
+    header.setFloat64(HEADER_OFF_FOLLOW + 8, opts.follow.y, true)
+  } else {
+    header.setUint32(HEADER_OFF_FOLLOW_VALID, 0, true)
+    header.setFloat64(HEADER_OFF_FOLLOW, 0, true)
+    header.setFloat64(HEADER_OFF_FOLLOW + 8, 0, true)
+  }
+
+  let maskLo = 0
+  let maskHi = 0
+  for (const a of opts?.anchors ?? []) {
+    const off = HEADER_OFF_ANCHORS + a.slot * 8
+    header.setFloat32(off, a.x, true)
+    header.setFloat32(off + 4, a.y, true)
+    if (a.slot < 32) maskLo |= 1 << a.slot
+    else maskHi |= 1 << (a.slot - 32)
+  }
+  header.setUint32(HEADER_OFF_ANCHOR_MASK, maskLo >>> 0, true)
+  header.setUint32(HEADER_OFF_ANCHOR_MASK + 4, maskHi >>> 0, true)
 
   const bodyBytes = drawListWriter.bodyView(slot)
   const body = new DataView(bodyBytes.buffer, bodyBytes.byteOffset, bodyBytes.byteLength)
@@ -248,5 +292,20 @@ window.__rcOverlayRemove = (id) => {
 }
 window.__rcOverlayUpdate = () => requireClient().overlay.update()
 window.__rcOverlayStyleWrites = () => clientTestHandle(requireClient()).overlay.styleWrites()
+
+// docs/plan/18-picking-and-overlay.md steps 4-6: slot anchors.
+const overlaySlotHandles = new Map<string, SlotAnchorHandle>()
+
+window.__rcOverlayAnchorSlot = (id, slot) => {
+  const c = requireClient()
+  const el = document.createElement('div')
+  el.id = id
+  el.textContent = id
+  overlaySlotHandles.set(id, c.overlay.anchorSlot(el, slot))
+}
+window.__rcOverlayAnchorSlotRemove = (id) => {
+  overlaySlotHandles.get(id)?.remove()
+  overlaySlotHandles.delete(id)
+}
 
 window.__pageReady = true
