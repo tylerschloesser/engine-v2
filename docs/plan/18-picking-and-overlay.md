@@ -354,3 +354,226 @@ Commit `afdd196`. Full re-run after the fix (all foreground, targeted):
 - `client.overlay`'s public shape (`{ anchor, update }`) has no `anchorSlot` yet; add it as a third
   member, not a rename, and it can read the same `DrawListSlot.header`'s `anchors`/`anchor_mask`
   fields this cut already exposes.
+
+## Deviations: steps 4-6 (`FrameCx`, `ClientSide::frame`, `cx.input()`, `DrawList::anchor`,
+slot anchors, `follow`)
+
+Commits `d8df6df` (step 4), `1f578a2` (step 5), `c988533` (step 6), base `3517bd2` (steps 1-3's own
+final commit). Steps 7-8 (ghost flows, GC page `anchors`, `translate` mode, `device.html`) are a
+later implementer's, built against the exact seam shapes below. **Attribution note:** the harness's
+own git-commit-attribution reminder (`Co-Authored-By`/`Claude-Session` trailer) was not in this
+session's context until after the step 4/5 commits already landed; step 6's commit also went out
+without it before the gap was noticed. Not fixed by amending (forbidden: "never ... amend"); flagged
+here for the orchestrator.
+
+### `FrameCx<'a, G>` (`client/frame_cx.rs`, new file, fills M12's shell in `game.rs`)
+
+`pub struct FrameCx<'a, G: Game> { view: &'a FrameView<'a, G>, camera: &'a CameraBlock, dt_ms: f32,
+input: &'a [InputEvent], follow: Option<WorldPos>, ui_dirty: bool }`. Public accessors exactly as
+Seams: `view()`, `camera()`, `dt_ms()`, `input()`, `follow(&mut self, Option<WorldPos>)`,
+`ui_dirty(&mut self)`; two `pub(crate)` getters (`take_follow`, `took_ui_dirty`) let
+`game_instance.rs` read the two write-only fields back after `ClientSide::frame` returns, without
+exposing them to a game. `ClientSide::frame`'s own signature grew the lifetime `FrameCx<G>` never
+had (`fn frame(&mut self, cx: &mut FrameCx<'_, G>, presence: &mut G::Presence)`, `client/texel.rs`)
+-- the brief's own "this brief owns the shape" line for the previously-empty shell, not a change to
+an already-fixed seam.
+
+**`dt_ms()`'s source.** `ClientInstance` gained one `f64` field, `last_frame_time_ms` (`0.0` at
+`init`); `game_instance.rs`'s `frame()` computes `((camera.frame_time_ms - last_frame_time_ms) as
+f32).clamp(0.0, 100.0)` before doing anything else, then updates the field -- matching the Provides
+line ("difference of successive `frame_time_ms`, clamped to `0..100`") literally. The first real
+frame's own `dt_ms` is whatever `frame_time_ms - 0.0` clamps to (not specially zeroed): harmless,
+since no test or production code reads `dt_ms()` before a second real frame establishes a real
+delta.
+
+**The scratch `G::Presence`.** `impl<G: Game> Instance for GameInstance<G> where G::Global: Default`
+gained a second bound, `G::Presence: Default`, matching the existing precedent for `Global` rather
+than widening the `Presence` trait's own supertraits (`pub trait Presence: Codec + Copy + 'static
+{}` is untouched). `frame()` builds `let mut presence = G::Presence::default();` fresh each call (a
+stack value, `Presence: Copy`) and passes `&mut presence` to `ClientSide::frame`, then never reads
+it back -- exactly "a scratch `G::Presence` it then ignores" (Planning decisions). `()` (every
+existing fixture's `Presence`) already satisfies `Default` trivially, so no fixture needed a change.
+
+**`frame()`'s new order**, verbatim against the Scope line: build `FrameView` (unchanged) -> a
+`FrameCx` borrows it, `camera`, and `input_queue.events()` for one block scope -> `client.frame(&mut
+cx, &mut presence)` -> `cx.took_ui_dirty()` drives `ui.mark_dirty()` -> `cx.take_follow()` is read
+out and the `FrameCx` block ends (dropping its borrows) -> `ui.maybe_run(...)` (unchanged position,
+now *after* `frame` so a dirty flag `frame` just set is seen the same call, matching `ui_dirty()`'s
+own doc comment) -> `extract` (unchanged) -> `sort_into(region, time_ms, follow)` -> `input_queue.
+clear()`. The brief's own "-> publish -> clear InputQueue" collapses to "clear last": "publish" is
+`worker/client-drawlist.ts`'s pump, which runs *after* this whole ABI call returns, outside
+`GameInstance::frame` entirely -- `input_queue.clear()` being the literal last statement here is
+what "after publish" means from inside this function.
+
+### `InputEvent::code()`/`a()`/`b()`, `kind::GAME`, `InputQueue`'s "never dropped" policy
+
+`client::input::kind::GAME = 7`; `InputEvent::code()`/`a()`/`b()` are thin aliases over
+`pick_id`/`tile[0]`/`tile[1]` (Provides names them separately from the fields those already-named
+accessors would suggest, since a `kind::GAME` record's meaning for those bytes differs from every
+other kind's; the underlying storage is identical, so no wire change). "Never dropped ... with a
+fixed 64" (delegation prompt): `InputQueue::push`'s overflow branch tries, in order, (1) evict the
+oldest `hover`/`drag` (unchanged from M11), (2) **only if the incoming event is `kind::GAME`**, evict
+the oldest event of *any other* kind (`drop_oldest_non_game`, new) -- so a game event always finds
+room unless the queue is already 64 game events deep (a call-rate argument, not a hard guarantee:
+`client.input.emit` is human/UI-gesture-rate, M33's construction mode; 64 in one un-drained frame is
+not reachable by any real caller today). An *already-queued* `kind::GAME` event is never itself a
+victim of either eviction path (path 1 only ever matches `hover`/`drag`; path 2 explicitly excludes
+`kind::GAME`), so once enqueued it survives every later overflow regardless of what triggered it. No
+existing test's own assertions changed to make this true: `queue_overflow_drops_hover_first` and
+`queue_overflow_drops_incoming_when_nothing_droppable` pass unmodified (verified: neither test's own
+incoming event is ever `kind::GAME`, so both take exactly their pre-existing branch).
+
+### `DrawList::anchor`, header follow/anchor fields (`client/drawlist.rs`)
+
+`DrawList` gained `anchor_mask: u64` and `anchors: [[f32; 2]; 64]`, cleared (`0`) / left as stale
+bytes (never read while the corresponding mask bit is clear) respectively by `begin_frame`.
+`anchor(&mut self, slot: u8, pos: WorldPos)`: out-of-range `slot` (`>= 64`) is silently ignored
+(`push`'s own "drop, don't panic" precedent), in range sets the mask bit and `anchors[slot] =
+self.relative_pos(pos)` -- the *same* tiles-relative-to-`window_origin` conversion `Draw::pos`
+already uses, reused directly. `sort_into` grew a fourth parameter, `follow: Option<WorldPos>`
+(every call site updated: 5 in `drawlist.rs`'s own tests, 1 in `game_instance.rs`, 1 in
+`fixtures/drawables/tests/drawlist_golden.rs`) and now also writes: `follow_valid`/`follow` (`Some`
+-> `1` + two `f64`s; `None` -> `0` + two `0.0`s, every call, so a stale target never survives a
+frame where a game returned control) and `anchor_mask`/`anchors`. **Follow's unit and origin**:
+absolute world tiles (`pos.x as f64 / 256.0`, `pos.y as f64 / 256.0`), *not* window-relative like
+`Draw.pos`/`anchors` -- chosen because the main thread hands the decoded value straight to
+`camera.setFollow(x, y, valid)`, itself in `CameraState.centreX/Y`'s own space (absolute world
+tiles, matching `CameraBlock.centre`'s own convention already established by M06b). None of the four
+new offsets (48, 56, 76, 128..640) fall inside `hash_region`'s `[4, 48)`/`[88, 92)` ranges, so the
+`fixtures/drawables` DrawList golden does not move (confirmed: `drawlist_fixture_hash_golden` passes
+unmodified, and it drives the *real* `GameInstance::frame` -> `sort_into` path end to end, not a
+hand-called `sort_into` in isolation).
+
+### `client.overlay.anchorSlot` (`overlay/anchors.ts`)
+
+New `SlotAnchorRecord` list, parallel to (not merged with) the existing static `AnchorRecord` list:
+`anchorSlot(el, slot)` re-parents `el` into the same lazily-built layer `anchor()` uses and pushes a
+record with `hasValue: false` until the first `update()` call finds the slot's own `anchor_mask` bit
+set. **Per-frame read**: `update()`'s own new tail loop calls `updateSlotAnchor(rec)` for every
+registered slot anchor, which reads `deps.drawListSlot.header` directly via `DataView.getUint32`/
+`getFloat32` at the mirrored `OFF_ANCHOR_MASK`(76)/`OFF_ANCHORS`(128) offsets -- **not** the "long-
+lived `Float32Array`" 0019 §5's own prose names as the mechanism. Deviation, reasoned: `DataView`
+reads are already zero-allocation (`.claude/rules/hot-paths.md` bans `subarray()`/new views per
+frame, not `DataView.getFloat32` calls), and the acquired header's own backing view already changes
+reference every `acquire()` (`DrawListSlot`'s own doc comment) -- a *second*, parallel set of 3
+precomputed `Float32Array`s indexed by physical slot would duplicate that machinery for no measured
+benefit. World position is `windowOriginX/Y + anchors[slot]` (undoing the same conversion `DrawList
+::anchor` applied), then the *same* `rebaseOffset`/`writeAnchorVars`-shaped write `anchor()`/`.set()`
+already use. **"Frozen, not hidden"**: an unset mask bit is not itself a signal to hide (0019 §5 says
+nothing about a slot's absence meaning "hide"; it only defines the viewport-margin visibility rule,
+which slot anchors also participate in, `updateVisibility`'s own second loop, once `hasValue` is
+`true`) -- `overlay.slot_anchor_follows_rust`'s own third assertion pins this reading. `rebase()`
+also force-rewrites every slot anchor with `hasValue: true` (using its own last known world
+position), the same "every anchor rewritten on re-base" rule static anchors already follow.
+`OverlayDeps` gained a required `drawListSlot: DrawListSlot` field (`client.ts`'s only caller updated
+to pass its own single instance).
+
+### `follow` (camera.ts, client.ts)
+
+`CameraIntegrator.setFollow` was already a no-op store (steps 1-3); `integrate()` now reads `follow.
+valid` once, at a single point *after* every pan-shaped effect this frame has already run (gesture,
+pointer drag, WASD, inertia, `moveTo`, `clampToBounds`) and, if set, overwrites `state.centreX/Y`
+with `follow.x/y` and zeroes `state.velocityX/Y`. Deviation from a branch-per-function design
+(rejected): one override point after everything else is simpler, provably equivalent (every pan
+effect only ever reaches the camera through `centreX/Y`, so discarding those two fields discards
+every pan effect regardless of source), and needs no new parameter threaded through `applyGesture`/
+`applyPointers`/`applyWasd`/`applyWheelEasing`/`applyMoveTo`. Placed *after* `clampToBounds` so a
+follow target is authoritative even outside the camera's own pan bounds. `client.ts`'s `camera.
+tick(dtMs)` reads `drawListSlot.followValid/X/Y` (three new reused fields on `DrawListSlot`,
+populated at `acquire()` time the same way `recordCount`/`dropped`/etc. already are) and calls
+`cameraIntegrator.setFollow(...)` as its first statement, before `integrate()` -- since the `acquire`
+phase already ran earlier in the same `tick()` (`frame-loop.ts`'s `FRAME_PHASES`), a target the Rust
+side published reaches `integrate()` in the same rAF that draws the slot carrying it, matching 0019
+§1 literally. Device-pixel-at-rest snapping (0018 §3, unchanged code) can still fire after the
+override on a frame with no pointer active, rounding the follow target to the nearest device pixel
+-- a real, correct interaction between two independent rules, not a bug (`follow.spec.ts`'s own
+precision-1 tolerance on those specific assertions, precision-5 on the one assertion taken while a
+pointer is still down and `atRest` is provably `false`).
+
+### `fixtures/overlay` (`fx-overlay`) and `framecx.html`
+
+Minimal by design (module doc comment in `lib.rs`): `genesis` spawns no entities, `extract` is the
+still-default no-op. `OverlayClient::frame` records the last `cx.input()` event's raw `kind`/
+`pick_id`/`tile` into `Cell`s and calls `cx.ui_dirty()` whenever one arrived (the *only* way this
+fixture's `Ui` ever changes, since `apply`/`tick` never mutate the replica -- a real, not merely
+convenient, use of the dirty flag, 0024 §7d). `OverlayUi` is hand-mirrored in `framecx.ts` rather
+than generated (`fx-overlay` is not in `scripts/build-fixtures.mjs`'s `BINDINGS_FIXTURES` set: five
+plain numeric fields are cheaper to keep in sync by hand than a new bindings-export step). `framecx.
+html`'s own `createClient` uses an unconnected `host: { kind: 'remote', ... }` (`real-camera.ts`'s
+own precedent: the client role's WASM instance runs with no host link at all) but, unlike `real-
+camera.ts`'s `terrain` fixture (a hand-written pre-`GameInstance` `Instance` impl that tolerates no
+config), needs `options.test.game = { seed: '0x1', params: null }` explicitly -- `fx-overlay` goes
+through `engine::export_game!`'s real `TerrainConfig::deserialize`, which a `null` config (what a
+`'remote'` host with no `test.game` override otherwise sends) fails as `BadConfig` (found running
+this cut's own first draft: `{"ok":false,"code":"worker-fatal","message":"engine_init failed:
+BadConfig"}`).
+
+**One-wake input latency, found running this cut's own first draft.** `worker/client.ts`'s `body()`
+calls `frame()` *before* `inputPump.pump()` drains that same wake's own new `inputRing` records into
+`InputQueue` -- a record written before a `stepFrame` call is only visible to the *next* real
+`frame()` call's own `cx.input()`, not that same call's. Both `framecx.*` browser tests call
+`stepFrame` twice for this reason (`stepFrameTwice`, documented at its own definition site); this is
+the same one-wake-old staleness `game_instance.rs`'s own `CachedCameraView` doc comment already
+names elsewhere in this pipeline, not a defect this cut introduced or should fix.
+
+**`client.onUi`'s own independent poll**, found running this cut's own first draft: `resultsFrame()`
+(`client.ts`) drains `uiRing` and fires `onUi` listeners from a *separate* real-`requestAnimationFrame`
+schedule, not from `stepFrame`'s synchronous worker lockstep -- reading `lastUi()` immediately after
+two `stepFrame` calls raced that independent rAF and returned `undefined` intermittently (observed:
+passed with 1 real second of slack via manual `page.waitForFunction` probing, timed out at exactly
+5000ms in one full-suite run under parallel-worker contention). Both `framecx.*` tests use `page.
+waitForFunction` (`waitForUi`) rather than a fixed read, and re-ran clean 3/3 plus inside the full
+159-test browser suite once fixed.
+
+### Live in production vs. test-only
+
+Live on every real page (not only in tests): `FrameCx`/`ClientSide::frame`'s new call, `cx.input()`,
+`InputQueue`'s never-dropped `kind::GAME` policy, `client.input.emit`, `DrawList::anchor`'s header
+writes (even when a game never calls it -- the mask is always written, all-zero), `client.overlay.
+anchorSlot`, `follow`'s camera-centring in `integrate()`, and `camera.tick()`'s own header read
+(unconditional, every rAF, zero-cost when `follow_valid` is `0`). Test-only: `fx-overlay` itself,
+`framecx.html`'s `__stepFrame`/`__injectRawInput`/`__emit`/`__lastUi` hooks, `real-camera.ts`'s
+`opts.follow`/`opts.anchors` header hand-fill and its `__rcOverlayAnchorSlot*` hooks.
+
+### Verified (commands and results)
+
+- `pnpm test rust -t framecx` -> `rust pass 4 tests` (`framecx_input_slice_order_and_clear`,
+  `framecx_follow_defaults_to_none_and_records_a_set_target`, `framecx_follow_written_to_header`,
+  `framecx_ui_dirty_reruns_ui`).
+- `cargo nextest run --workspace --features testing` -> `333 tests run: 333 passed` (includes the
+  above plus `game_record_round_trip`, `game_record_survives_overflow`, `drawlist_anchor_table_and_
+  mask`, `drawlist_anchor_out_of_range_slot_ignored`, and `fx-overlay`'s own `export_bindings_*`
+  golden checks for `Action`/`Reject`/`OverlayUi`).
+- `cargo clippy --workspace --all-targets --features engine/testing -- -D warnings` -> clean.
+- `pnpm test unit -t pick` -> `unit pass 5 tests`; `-t overlay` -> `unit pass 2 tests`; full `pnpm
+  test unit` -> `unit pass 214 tests` (all three unchanged from steps 1-3's own numbers: this cut
+  touched no unit-tested TS code path).
+- `pnpm test wasm` -> `wasm pass 52 tests`; `-t "abi registry"` -> `wasm pass 9 tests` (`ABI_VERSION`
+  unchanged at 15: no new export).
+- `pnpm test browser` (full) -> `browser pass 159 tests`.
+- `pnpm test browser -t pick` -> `4`; `-t overlay` -> `8`; `-t framecx` -> `2`; `-t follow` -> `4`
+  (`follow.centres_in_same_frame_pan_ignored_zoom_works` plus three pre-existing matches of the same
+  substring: `draw.ghost_follows_cursor_same_frame`, `dom_counter_follows_global`, `overlay.
+  slot_anchor_follows_rust`); `-t drawables` -> `10`; `-t input` -> `11`; `-t ghost` -> `1`
+  (pre-existing, M17's `draw-readback.spec.ts`, matched by substring only -- no cursor-anchored ghost
+  exists yet, step 7's own); `-t anchors` -> `0` (device page is step 8's).
+- Source scan (`grep -rn "getBoundingClientRect|offsetWidth|offsetHeight|getClientRects|offsetTop|
+  offsetLeft" src/overlay src/input`): zero matches outside comments.
+- `pnpm format` run after every edit; final tree clean.
+- Inject-fail-revert, one per new browser test (all reverted immediately after, `git diff` confirmed
+  clean before the real commit):
+  - `overlay.slot_anchor_follows_rust`: `anchorMaskBit` forced to always return `false` ->
+    `updateSlotAnchor` never writes `--wx/--wy` for any slot -> failed on the first position
+    assertion (`expected 266.67, received 200`, the CSS-px equivalent of "never moved off its
+    default"). Covers `overlay/anchors.ts`'s own mask-bit-gated write branch.
+  - `framecx.tap_visible_in_frame` / `framecx.emit_visible_in_frame`: `fx-overlay`'s own
+    `cx.ui_dirty()` call commented out -> both timed out waiting for `count > 0` (`ui.maybe_run`
+    never reruns with no replica mutation on this fixture's own path). Covers `FrameCx::ui_dirty()`'s
+    own write-then-read round trip through `game_instance.rs`.
+  - `follow.centres_in_same_frame_pan_ignored_zoom_works`: `camera.ts`'s own follow-override block
+    gated behind `if (false && follow.valid)` -> failed the first centring assertion (`expected 7,
+    received 0`, the un-overridden pre-drag default). Covers `integrate()`'s own follow-override
+    branch.
+- `pnpm test`/`pnpm lint` (the full runs) not run (delegation prompt: "I am the gate").
+- Not run (steps 7-8, later implementer's): `pnpm test browser -t "\btranslate\b"`, any GC/budgets
+  command, `pnpm bench:frame`.
