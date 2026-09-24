@@ -93,4 +93,72 @@ If a cause is found: one line in the `gc-test` skill's debugging section.
 none
 
 ## Deviations
-(filled in during Phase 3)
+
+### Step 1: candidate list
+
+Read `armedLoop` (`src/test/harness-worker.ts`) against `parkOne`/`wake` (`src/test/harness.ts`) and
+`step-block.ts`'s field words, at the base commit (post-M17c fix round 3: the loop already checks
+`Yield` *before every wait, including its own first one*, not only after). Every path by which an
+armed worker (blocked in `Atomics.wait(block, Req, last)`, `Req === Ack`, `State: Armed`) can miss a
+park:
+
+1. **The residual gap fix round 3 left open: the check-to-wait registration race.** `armedLoop`'s
+   loop is `if (Yield) break; Atomics.wait(block, Req, last); ...`. The `Yield` check and the
+   `Atomics.wait` call are two separate statements, not one atomic operation. `parkOne` stores
+   `Yield = 1` then calls `Atomics.notify(block, Req)` **without changing `Req`** (its own doc
+   comment: "keeps `Req === Ack` true across a park"). A real step request (`wake()`) is
+   self-healing against this exact gap: `wake()` bumps `Req` itself, so if `Atomics.wait(Req, last)`
+   is called *after* `wake()` already ran, the value no longer equals `last` and the call returns
+   immediately instead of blocking (`Atomics.wait`'s own defined behaviour: it compares the current
+   value to the expected one *before* deciding to sleep). `parkOne`'s notify has no such property:
+   if its store-and-notify lands strictly between this loop's own `Yield` check (already read as 0)
+   and the moment the following `Atomics.wait` call actually registers this thread as a waiter, the
+   notify wakes no one (no waiter registered yet) and `Req` is unchanged (so the *subsequent*
+   `Atomics.wait` call, once it does register, sees a match and genuinely, permanently blocks --
+   `parkOne` sends exactly one notify, and no further step is ever requested once a suite has nothing
+   left to do with this worker). **Word: the check reads `Yield`; the wait blocks on `Req`; the park
+   signal writes `Yield` and notifies `Req` without changing it. What the woken loop checks before
+   waiting again: nothing protects the specific instant between "read `Yield`" and "start waiting on
+   `Req`" -- no repositioning of the check can close a gap between reading one word and registering
+   on another, since the two are inherently two separate machine operations with a real (if tiny) gap
+   between them on a worker's own thread.** This is the leading candidate: it exactly matches the
+   evidence (armed, `Req === Ack`, `Yield` would read 1 once observed after the fact) and differs
+   from M17c's own fixed gap only in *where* the notify can be lost (mid-loop, not only before the
+   very first wait of a `resume()` cycle).
+2. **A crash after setup is not reported to the pending `parkOne`/`send` promise.** `setupWorker`
+   installs `worker.onerror` once, closing over the `reject` of *that call's own* `Promise` (the
+   `ready` setup promise). Nothing reassigns `worker.onerror` afterward. If the worker thread threw
+   or trapped *after* setup (during a later `parkOne`), `onerror` would still fire and call that
+   long-since-settled setup promise's `reject` -- a no-op on an already-settled promise -- so the
+   *current* pending `parkOne`/`send` promise is never rejected with the real cause; it simply times
+   out at 10 s with the generic message, indistinguishable from a genuine stuck-but-alive worker.
+   Read `State`/`Yield`/`Req`/`Ack` off a crashed worker's SAB and they hold whatever they were at the
+   moment of the crash -- `State: Armed` could be stale, not live. Not this occurrence specifically
+   (a crash posts an `{ type: 'error' }` message first in every code path this session found, and
+   none of those appear in this milestone's own captures), but a real gap in what the diagnostic can
+   rule out, worth naming for whoever reads the next occurrence's message.
+3. **Two `openPage` calls in one tab, considered and ruled out.** `gc: flat transport parity` opens
+   `/gc-loop.html` twice, but each `openPage` navigation replaces the whole document, tearing down
+   the previous page's JS realm (including its `window.__harness`, its `createHarness()` call, its
+   workers and its `handles` map) and starting a fresh one. `harness.park()`/`resume()` are called
+   from *page-side* script (`gc-page.ts`'s `run()`, itself invoked over `page.evaluate` from
+   `instrument.ts`'s `measure()`); the Node-side `measure()` function never touches
+   `window.__harness` itself, only CDP sessions for the heap profiler and tracing, which are a
+   wholly separate concern from the step-block protocol. There is no shared or stale handle across
+   the two `measure()` calls: each gets an entirely fresh worker, fresh `SharedArrayBuffer`, fresh
+   `Req`/`Ack`/`Yield`/`State` starting at 0. Ruled out structurally, not just by absence of evidence.
+4. **Main's own poll starved (case (c) of M16e's own taxonomy), considered and ruled out for this
+   protocol shape.** `parkOne`'s wait is a single `setTimeout(POLL_TIMEOUT_MS)` raced against a
+   `worker.onmessage` resolve, not a macrotask poll like `client.ts`'s `pollUntil`. If main's own
+   thread were busy/contended, *both* the `setTimeout` callback and the delivery of the worker's real
+   `'parked'` reply would be delayed by the same contention -- neither races ahead of the other in a
+   way that manufactures a false timeout the way a `pollUntil`'s turn-counting predicate can. Only a
+   genuinely-never-arriving message produces this failure shape, which is consistent with candidate 1.
+5. **A wake in flight mistaken for a park resolving, or a double-tick from a coincident wake+park --
+   ruled out by the evidence itself.** `Req === Ack` in every captured occurrence means nothing was
+   outstanding when the park was requested; this is not the M17c-fixed class (a park request folded
+   into the loop's very first wait of a `resume()` cycle) either, since `Waits` (once step 2 adds it)
+   or a live capture would show more than one wait had already completed. Kept in the list for
+   completeness, not pursued further: nothing in the evidence supports it.
+
+Candidate 1 is the one carried into steps 2-3.
