@@ -8,7 +8,7 @@ import { openPage } from './support/page.js'
 
 declare global {
   interface Window {
-    __rcCreate?: (opts?: { cameraKey?: string }) => void
+    __rcCreate?: (opts?: { cameraKey?: string; overlayMode?: 'properties' | 'translate' }) => void
     __rcReady?: () => Promise<{ ok: true } | { ok: false; code: string; message: string }>
     __rcDestroy?: () => void
     __rcRead?: () => { centreX: number; centreY: number; tilesAcross: number }

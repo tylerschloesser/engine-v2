@@ -13,7 +13,7 @@ type InputEventType = 'tap' | 'hover' | 'longpress' | 'dragstart' | 'drag' | 'dr
 
 declare global {
   interface Window {
-    __rcCreate?: (opts?: { cameraKey?: string }) => void
+    __rcCreate?: (opts?: { cameraKey?: string; overlayMode?: 'properties' | 'translate' }) => void
     __rcReady?: () => Promise<{ ok: true } | { ok: false; code: string; message: string }>
     __rcTick?: (dtMs: number) => void
     __rcMoveTo?: (x: number, y: number, opts?: { tiles?: number; durationMs?: number }) => void
@@ -56,9 +56,12 @@ declare global {
   }
 }
 
-async function createReal(page: Page): Promise<void> {
+async function createReal(
+  page: Page,
+  opts?: { overlayMode?: 'properties' | 'translate' },
+): Promise<void> {
   await openPage(page, '/real-camera.html')
-  await page.evaluate(() => window.__rcCreate?.())
+  await page.evaluate((o) => window.__rcCreate?.(o), opts)
   const r = await page.evaluate(() => window.__rcReady?.())
   expect(r?.ok, JSON.stringify(r)).toBe(true)
 }
@@ -224,6 +227,39 @@ test('overlay.slot_anchor_follows_rust', async ({ page }) => {
   const box3 = requireBox(await page.locator('#s1').boundingBox())
   expect(box3.x).toBeCloseTo(box2.x, 0)
   expect(box3.y).toBeCloseTo(box2.y, 0)
+})
+
+test('overlay.translate_mode_equivalent', async ({ page }) => {
+  await createReal(page, { overlayMode: 'translate' })
+  await page.evaluate(() => window.__rcOverlayAnchor?.('a1', 3, -2))
+  await page.evaluate(() => window.__rcOverlayUpdate?.())
+
+  // Same invariant `overlay.anchor_tracks_world_point` checks against `'properties'` mode: the
+  // fallback mechanism (0019 "Alternatives rejected": per-anchor `translate()` writes) must place
+  // an anchor at the same screen position, not merely "some" position.
+  const box = requireBox(await page.locator('#a1').boundingBox())
+  const expected = expectedScreen(3, -2, 0, 0)
+  expect(box.x + box.width / 2).toBeCloseTo(expected.x, 0)
+  expect(box.y + box.height).toBeCloseTo(expected.y, 0)
+
+  // Idle: no further writes (the per-anchor `transform` write is skipped when the screen position
+  // hasn't changed, the same "idle writes nothing" invariant `'properties'` mode has, Planning
+  // decisions: "writes one `translate()` per visible anchor per *moving* frame").
+  const beforeIdle = await styleWrites(page)
+  await page.evaluate(() => window.__rcTick?.(16))
+  await page.evaluate(() => window.__rcOverlayUpdate?.())
+  const afterIdle = await styleWrites(page)
+  expect(afterIdle).toBe(beforeIdle)
+
+  // Pan the camera: the anchor still follows within 0.5 px (the same world point, a different
+  // mechanism to place it on screen).
+  await page.evaluate(() => window.__rcMoveTo?.(10, 4, { tiles: 12, durationMs: 0 }))
+  await page.evaluate(() => window.__rcTick?.(16))
+  await page.evaluate(() => window.__rcOverlayUpdate?.())
+  const box2 = requireBox(await page.locator('#a1').boundingBox())
+  const expected2 = expectedScreen(3, -2, 10, 4)
+  expect(box2.x + box2.width / 2).toBeCloseTo(expected2.x, 0)
+  expect(box2.y + box2.height).toBeCloseTo(expected2.y, 0)
 })
 
 test('overlay.widget_click_not_a_tap', async ({ page }) => {

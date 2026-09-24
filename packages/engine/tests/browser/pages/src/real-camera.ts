@@ -29,7 +29,7 @@ const wasm = await fixtureWasm('terrain')
 
 declare global {
   interface Window {
-    __rcCreate?: (opts?: { cameraKey?: string }) => void
+    __rcCreate?: (opts?: { cameraKey?: string; overlayMode?: 'properties' | 'translate' }) => void
     __rcReady?: () => Promise<{ ok: true } | { ok: false; code: string; message: string }>
     __rcDestroy?: () => void
     __rcRead?: () => { centreX: number; centreY: number; tilesAcross: number }
@@ -116,6 +116,11 @@ window.__rcCreate = (opts = {}) => {
     host: { kind: 'remote', url: 'ws://unused.invalid' },
     genWorkers: 1,
     ...(opts.cameraKey !== undefined ? { cameraKey: opts.cameraKey } : {}),
+    // docs/plan/18-picking-and-overlay.md step 8: `overlay.translate_mode_equivalent` opts into
+    // `mode: 'translate'` here rather than a new page -- every other overlay hook below already
+    // works unmodified in either mode (`Overlay.anchor/anchorSlot/update/styleWrites`'s own public
+    // shape does not change with `mode`).
+    ...(opts.overlayMode !== undefined ? { overlay: { mode: opts.overlayMode } } : {}),
   }
   client = createClient(options)
   client.ready.catch(() => {})

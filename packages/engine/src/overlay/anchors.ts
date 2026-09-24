@@ -17,6 +17,16 @@
 // scan of `src/overlay/`) -- every position is computed from `cameraState`/`viewport` (the same pure
 // `camera/transform.ts` math `input/pick.ts` and `camera/camera.ts` already use), never read back
 // off the DOM.
+//
+// `mode: 'translate'` (docs/plan/18-picking-and-overlay.md step 8, 0019 "Alternatives rejected":
+// "Per-anchor `translate()` writes (MapLibre): N strings and N style writes per frame; kept only as
+// the fallback below"): writes one `style.transform` directly per *visible* anchor whose own screen
+// position actually changed this frame (pan, zoom or its own world position moving), computed with
+// `worldToScreen` the same way picking/`follow` already do -- no floating origin, no re-base (no
+// precision concern: `worldToScreen` is already full-float64, unlike the CSS `calc()` chain
+// `'properties'` mode leans on to stay accurate far from the origin). Off by default
+// (`OverlayOptions.mode ?? 'properties'`); a page opts in for a device check to compare the two
+// mechanisms (0019 Consequences: "Fallback if the custom-property mechanism misbehaves").
 import type { CameraState } from '../camera/state.js'
 import type { CameraViewport, ScreenPoint } from '../camera/transform.js'
 import { pxPerTile, worldToScreen } from '../camera/transform.js'
@@ -160,6 +170,13 @@ type AnchorRecord = {
   worldX: number
   worldY: number
   visible: boolean
+  align: AnchorAlign
+  /** `mode: 'translate'` only: the last screen position actually written, so a frame whose camera
+   * didn't move (and whose own world position didn't change) writes nothing (`Number.NaN` initially,
+   * so the very first `mode: 'translate'` placement always writes). Unused, always `NaN`, in
+   * `'properties'` mode. */
+  lastTX: number
+  lastTY: number
 }
 
 type SlotAnchorRecord = {
@@ -172,6 +189,9 @@ type SlotAnchorRecord = {
    * `DrawList::anchor` has not published yet stays at its CSS default, `var(--wx, 0)`, rather than a
    * `writeAnchorVars`-style write of a meaningless `(0, 0)` world position). */
   hasValue: boolean
+  /** `mode: 'translate'` only, `AnchorRecord.lastTX/lastTY`'s own twin. */
+  lastTX: number
+  lastTY: number
 }
 
 /** `anchor_mask`'s own bit test (two `u32` words, `client/drawlist.rs`'s own `mask_lo`/`mask_hi`). */
@@ -184,10 +204,7 @@ function anchorMaskBit(header: DataView, slot: number): boolean {
 /** Builds `client.overlay` (`createClient`, `src/client.ts` -- one instance per `Client`, cheap:
  * no DOM touched until the first `anchor()` call). */
 export function createOverlay(deps: OverlayDeps): Overlay {
-  // `mode` is accepted for the full `ClientOptions.overlay` shape (Seams, Provides) but only
-  // `'properties'` is built in this cut (Non-scope: "the per-anchor `translate()` fallback mode" is
-  // a later step's); recorded rather than silently ignored.
-  void (deps.options?.mode ?? 'properties')
+  const mode: OverlayMode = deps.options?.mode ?? 'properties'
 
   const anchors: AnchorRecord[] = []
   const slotAnchors: SlotAnchorRecord[] = []
@@ -261,14 +278,24 @@ export function createOverlay(deps: OverlayDeps): Overlay {
     if (align === 'bottom') delete el.dataset.engineAlign
     else el.dataset.engineAlign = align
     l.appendChild(el)
-    const rec: AnchorRecord = { el, worldX, worldY, visible: true }
+    const rec: AnchorRecord = {
+      el,
+      worldX,
+      worldY,
+      visible: true,
+      align,
+      lastTX: Number.NaN,
+      lastTY: Number.NaN,
+    }
     anchors.push(rec)
-    writeAnchorVars(rec)
+    if (mode === 'translate') applyTranslateAnchor(rec, align)
+    else writeAnchorVars(rec)
     return {
       set(x, y) {
         rec.worldX = x
         rec.worldY = y
-        writeAnchorVars(rec)
+        if (mode === 'translate') applyTranslateAnchor(rec, align)
+        else writeAnchorVars(rec)
       },
       remove() {
         const i = anchors.indexOf(rec)
@@ -282,9 +309,22 @@ export function createOverlay(deps: OverlayDeps): Overlay {
     const l = ensureLayer()
     el.classList.add(ANCHOR_CLASS)
     l.appendChild(el)
-    const rec: SlotAnchorRecord = { el, slot, worldX: 0, worldY: 0, visible: true, hasValue: false }
+    const rec: SlotAnchorRecord = {
+      el,
+      slot,
+      worldX: 0,
+      worldY: 0,
+      visible: true,
+      hasValue: false,
+      lastTX: Number.NaN,
+      lastTY: Number.NaN,
+    }
     slotAnchors.push(rec)
-    updateSlotAnchor(rec)
+    if (mode === 'translate') {
+      if (refreshSlotAnchorValue(rec)) applyTranslateAnchor(rec, 'bottom')
+    } else {
+      updateSlotAnchor(rec)
+    }
     return {
       remove() {
         const i = slotAnchors.indexOf(rec)
@@ -331,26 +371,82 @@ export function createOverlay(deps: OverlayDeps): Overlay {
     }
   }
 
-  /** Steps 4-6: one slot's own per-frame refresh -- reads the *acquired* slot's header (never a new
-   * `TripleReader`), and rewrites `--wx`/`--wy` only when the slot's mask bit is set and the decoded
-   * world position actually changed (0019 §5's own "rewrite ... only for slots whose value
-   * changed"). */
-  function updateSlotAnchor(rec: SlotAnchorRecord): void {
+  /** Steps 4-6: one slot's own per-frame data refresh -- reads the *acquired* slot's header (never
+   * a new `TripleReader`) and updates `rec.worldX/worldY/hasValue` in place. Returns whether the
+   * decoded world position actually changed (0019 §5's own "rewrite ... only for slots whose value
+   * changed") -- `false` when the mask bit is unset (no publish this frame: frozen, not hidden) or
+   * the decoded value is unchanged. No DOM write of its own: `'properties'`/`'translate'` mode each
+   * decide separately what a changed value means to write. */
+  function refreshSlotAnchorValue(rec: SlotAnchorRecord): boolean {
     const header = deps.drawListSlot.header
-    if (!anchorMaskBit(header, rec.slot)) return // no publish this frame: frozen, not hidden
+    if (!anchorMaskBit(header, rec.slot)) return false
     const off = OFF_ANCHORS + rec.slot * 8
     const relX = header.getFloat32(off, true)
     const relY = header.getFloat32(off + 4, true)
     const worldX = deps.drawListSlot.windowOriginX + relX
     const worldY = deps.drawListSlot.windowOriginY + relY
-    if (rec.hasValue && worldX === rec.worldX && worldY === rec.worldY) return
+    if (rec.hasValue && worldX === rec.worldX && worldY === rec.worldY) return false
     rec.worldX = worldX
     rec.worldY = worldY
     rec.hasValue = true
-    writeSlotAnchorVars(rec)
+    return true
   }
 
-  function update(): void {
+  /** `'properties'` mode's own per-frame slot refresh: `refreshSlotAnchorValue` plus the `--wx/--wy`
+   * write a changed value gets. */
+  function updateSlotAnchor(rec: SlotAnchorRecord): void {
+    if (refreshSlotAnchorValue(rec)) writeSlotAnchorVars(rec)
+  }
+
+  /** `mode: 'translate'`'s own per-anchor write (module doc comment): the anchor's exact screen
+   * position via `worldToScreen` (no floating origin), a visibility check against the same margin
+   * `updateVisibility` uses, and a `transform` write only when the screen position actually changed
+   * since the last write -- together this is "one `translate()` write per visible anchor per moving
+   * frame" (Planning decisions), whether the motion is the camera's or the anchor's own world
+   * position (a slot anchor `DrawList::anchor` just moved). */
+  function applyTranslateAnchor(
+    rec: { el: HTMLElement; worldX: number; worldY: number; visible: boolean } & {
+      lastTX: number
+      lastTY: number
+    },
+    align: AnchorAlign,
+  ): void {
+    worldToScreen(deps.cameraState, deps.viewport, rec.worldX, rec.worldY, screenPoint)
+    const visible =
+      screenPoint.x >= -VISIBILITY_MARGIN_PX &&
+      screenPoint.x <= deps.viewport.widthPx + VISIBILITY_MARGIN_PX &&
+      screenPoint.y >= -VISIBILITY_MARGIN_PX &&
+      screenPoint.y <= deps.viewport.heightPx + VISIBILITY_MARGIN_PX
+    if (visible !== rec.visible) {
+      rec.el.style.visibility = visible ? 'visible' : 'hidden'
+      rec.visible = visible
+      writeCount++
+    }
+    if (screenPoint.x !== rec.lastTX || screenPoint.y !== rec.lastTY) {
+      const o = ALIGN_OFFSET_PERCENT[align]
+      rec.el.style.transform =
+        `translate(${screenPoint.x}px, ${screenPoint.y}px) ` + `translate(${o.x}%, ${o.y}%)`
+      rec.lastTX = screenPoint.x
+      rec.lastTY = screenPoint.y
+      writeCount++
+    }
+  }
+
+  function updateTranslate(): void {
+    for (let i = 0; i < slotAnchors.length; i++) {
+      refreshSlotAnchorValue(slotAnchors[i] as SlotAnchorRecord)
+    }
+    for (let i = 0; i < anchors.length; i++) {
+      const rec = anchors[i] as AnchorRecord
+      applyTranslateAnchor(rec, rec.align)
+    }
+    for (let i = 0; i < slotAnchors.length; i++) {
+      const rec = slotAnchors[i] as SlotAnchorRecord
+      if (rec.hasValue) applyTranslateAnchor(rec, 'bottom')
+    }
+  }
+
+  function updateProperties(): void {
     if (!layer) return
     worldToScreen(deps.cameraState, deps.viewport, originX, originY, screenPoint)
     if (needsRebase(screenPoint.x, screenPoint.y)) {
@@ -373,6 +469,12 @@ export function createOverlay(deps: OverlayDeps): Overlay {
       updateSlotAnchor(slotAnchors[i] as SlotAnchorRecord)
     }
     updateVisibility()
+  }
+
+  function update(): void {
+    if (!layer) return
+    if (mode === 'translate') updateTranslate()
+    else updateProperties()
   }
 
   return {

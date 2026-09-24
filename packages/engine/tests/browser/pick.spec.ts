@@ -13,7 +13,7 @@ type InputEventType = 'tap' | 'hover' | 'longpress' | 'dragstart' | 'drag' | 'dr
 
 declare global {
   interface Window {
-    __rcCreate?: (opts?: { cameraKey?: string }) => void
+    __rcCreate?: (opts?: { cameraKey?: string; overlayMode?: 'properties' | 'translate' }) => void
     __rcReady?: () => Promise<{ ok: true } | { ok: false; code: string; message: string }>
     __rcTick?: (dtMs: number) => void
     __rcCount?: (type: InputEventType) => number

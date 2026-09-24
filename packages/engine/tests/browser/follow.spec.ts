@@ -12,7 +12,7 @@ import { openPage } from './support/page.ts'
 
 declare global {
   interface Window {
-    __rcCreate?: (opts?: { cameraKey?: string }) => void
+    __rcCreate?: (opts?: { cameraKey?: string; overlayMode?: 'properties' | 'translate' }) => void
     __rcReady?: () => Promise<{ ok: true } | { ok: false; code: string; message: string }>
     __rcRead?: () => { centreX: number; centreY: number; tilesAcross: number }
     __rcMoveTo?: (x: number, y: number, opts?: { tiles?: number; durationMs?: number }) => void

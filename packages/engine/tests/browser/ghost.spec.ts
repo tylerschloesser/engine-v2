@@ -14,7 +14,7 @@ import { openPage } from './support/page.ts'
 declare global {
   interface Window {
     __ready?: () => Promise<{ ok: true } | { ok: false; code: string; message: string }>
-    __injectPointer?: (
+    __ghostInjectPointer?: (
       phase: 'down' | 'move' | 'up' | 'cancel',
       id: number,
       cssX: number,
@@ -22,13 +22,13 @@ declare global {
       tMs: number,
       kind?: 'mouse' | 'touch',
     ) => void
-    __injectHover?: (cssX: number, cssY: number) => void
-    __driveFrame?: (dtMs: number) => void
-    __cursorTile?: () => { x: number; y: number; valid: boolean }
+    __ghostInjectHover?: (cssX: number, cssY: number) => void
+    __ghostDriveFrame?: (dtMs: number) => void
+    __ghostCursorTile?: () => { x: number; y: number; valid: boolean }
     __ghostRecord?: () => { pos: [number, number]; flags: number } | undefined
-    __lastTap?: () => { tileX: number; tileY: number } | undefined
-    __confirmVisible?: () => boolean
-    __lastDispatchSeq?: () => number | undefined
+    __ghostLastTap?: () => { tileX: number; tileY: number } | undefined
+    __ghostConfirmVisible?: () => boolean
+    __ghostLastDispatchSeq?: () => number | undefined
   }
 }
 
@@ -42,7 +42,7 @@ test('ghost.mouse_tracks_cursor_tile', async ({ page }) => {
   await createReady(page)
 
   // No pointer yet: `view.cursor_tile()` is `None`, `extract()` draws no `KIND_GHOST` record.
-  await page.evaluate(() => window.__driveFrame?.(16))
+  await page.evaluate(() => window.__ghostDriveFrame?.(16))
   const before = await page.evaluate(() => window.__ghostRecord?.())
   expect(before).toBeUndefined()
 
@@ -50,9 +50,9 @@ test('ghost.mouse_tracks_cursor_tile', async ({ page }) => {
   // "mouse: tile under the pointer" path; unlike a held-and-moved pointer, this never pans the
   // camera, so "screen position -> world tile" stays the plain, unpanned conversion) -- at world
   // tile (0, 0).
-  await page.evaluate(() => window.__injectHover?.(200, 150))
-  await page.evaluate(() => window.__driveFrame?.(16))
-  const cursor1 = await page.evaluate(() => window.__cursorTile?.())
+  await page.evaluate(() => window.__ghostInjectHover?.(200, 150))
+  await page.evaluate(() => window.__ghostDriveFrame?.(16))
+  const cursor1 = await page.evaluate(() => window.__ghostCursorTile?.())
   expect(cursor1).toEqual({ x: 0, y: 0, valid: true })
   const ghost1 = await page.evaluate(() => window.__ghostRecord?.())
   expect(ghost1).toBeDefined()
@@ -63,9 +63,9 @@ test('ghost.mouse_tracks_cursor_tile', async ({ page }) => {
   // itself is unchanged (same shape, same `ANCHOR_CURSOR_TILE` flag) -- exactly what "tracks the
   // cursor" means for a record whose *screen* position is resolved by the GPU uniform, not by any
   // field this record carries (Deviations).
-  await page.evaluate(() => window.__injectHover?.(280, 150))
-  await page.evaluate(() => window.__driveFrame?.(16))
-  const cursor2 = await page.evaluate(() => window.__cursorTile?.())
+  await page.evaluate(() => window.__ghostInjectHover?.(280, 150))
+  await page.evaluate(() => window.__ghostDriveFrame?.(16))
+  const cursor2 = await page.evaluate(() => window.__ghostCursorTile?.())
   expect(cursor2).toEqual({ x: 2, y: 0, valid: true })
   const ghost2 = await page.evaluate(() => window.__ghostRecord?.())
   expect(ghost2).toBeDefined()
@@ -76,16 +76,16 @@ test('ghost.touch_tap_then_confirm', async ({ page }) => {
   await createReady(page)
 
   // A touch tap at world tile (2, 0): down then up inside `TAP_MAX_MS`, no movement past threshold.
-  await page.evaluate(() => window.__injectPointer?.('down', 1, 280, 150, 0, 'touch'))
-  await page.evaluate(() => window.__driveFrame?.(0))
-  await page.evaluate(() => window.__injectPointer?.('up', 1, 280, 150, 10, 'touch'))
-  await page.evaluate(() => window.__driveFrame?.(10))
+  await page.evaluate(() => window.__ghostInjectPointer?.('down', 1, 280, 150, 0, 'touch'))
+  await page.evaluate(() => window.__ghostDriveFrame?.(0))
+  await page.evaluate(() => window.__ghostInjectPointer?.('up', 1, 280, 150, 10, 'touch'))
+  await page.evaluate(() => window.__ghostDriveFrame?.(10))
 
   // "touch: tile of the last tap" (0019 "Cursor tile and ghost", `input/semantic.ts`'s own fix,
   // this cut): the tap itself sets the cursor tile, with no hover ever involved.
-  const tap = await page.evaluate(() => window.__lastTap?.())
+  const tap = await page.evaluate(() => window.__ghostLastTap?.())
   expect(tap).toEqual({ tileX: 2, tileY: 0 })
-  const cursor = await page.evaluate(() => window.__cursorTile?.())
+  const cursor = await page.evaluate(() => window.__ghostCursorTile?.())
   expect(cursor).toEqual({ x: 2, y: 0, valid: true })
 
   // The ghost appears there, drawn by the same `stepFrame` that carried the tap into `cx.input()`.
@@ -96,15 +96,15 @@ test('ghost.touch_tap_then_confirm', async ({ page }) => {
 
   // The page (acting as "the game", Planning decisions: `FrameCx` has no `dispatch`) shows a real
   // DOM confirm button anchored to that tile.
-  const visible = await page.evaluate(() => window.__confirmVisible?.())
+  const visible = await page.evaluate(() => window.__ghostConfirmVisible?.())
   expect(visible).toBe(true)
   await expect(page.locator('#ghost-confirm')).toBeVisible()
 
   // A real click dispatches the action.
   await page.click('#ghost-confirm')
-  await page.waitForFunction(() => (window.__lastDispatchSeq?.() ?? -1) >= 0)
-  const seq = await page.evaluate(() => window.__lastDispatchSeq?.())
+  await page.waitForFunction(() => (window.__ghostLastDispatchSeq?.() ?? -1) >= 0)
+  const seq = await page.evaluate(() => window.__ghostLastDispatchSeq?.())
   expect(seq).toBeGreaterThanOrEqual(0)
-  const goneVisible = await page.evaluate(() => window.__confirmVisible?.())
+  const goneVisible = await page.evaluate(() => window.__ghostConfirmVisible?.())
   expect(goneVisible).toBe(false)
 })

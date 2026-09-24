@@ -45,7 +45,7 @@ declare global {
   interface Window {
     __pageReady?: true
     __ready?: () => Promise<{ ok: true } | { ok: false; code: string; message: string }>
-    __injectPointer?: (
+    __ghostInjectPointer?: (
       phase: PointerPhase,
       id: number,
       cssX: number,
@@ -55,25 +55,25 @@ declare global {
     ) => void
     /** `input/pointers.ts`'s own `recordMouseHover` (0019 §4: "written by every mouse-kind
      * `pointermove` regardless of whether a `PointerSlot` is press-active"): the genuine "mouse
-     * hovering, no button held" path -- unlike a held+moved pointer (`__injectPointer('move', ...)`
+     * hovering, no button held" path -- unlike a held+moved pointer (`__ghostInjectPointer('move', ...)`
      * on an already-`'down'` id), which the camera also reads as a pan gesture. */
-    __injectHover?: (cssX: number, cssY: number) => void
+    __ghostInjectHover?: (cssX: number, cssY: number) => void
     /** `client.pick.acquire()` then `client.camera.tick(dtMs)` then `stepFrame(client, dtMs)`
      * (drains `inputRing`, writes the camera block, wakes the client worker, spins for its ack --
      * one real `frame()`+`extract()`+publish) then `client.overlay.update()`: the same phase order
      * `frame-loop.ts`'s `FRAME_PHASES` uses (`acquire`, `camera`, `writeCamera`/publish, `overlay`),
      * minus `upload`/`render` (no GPU on this page). */
-    __driveFrame?: (dtMs: number) => void
-    __cursorTile?: () => { x: number; y: number; valid: boolean }
+    __ghostDriveFrame?: (dtMs: number) => void
+    __ghostCursorTile?: () => { x: number; y: number; valid: boolean }
     /** The newest DrawList slot's own `KIND_GHOST` record, if any (`extract()` only emits one while
      * `view.cursor_tile()` is `Some`). `pos` is always `[0, 0]` by construction (Deviations: the
      * ghost's own `pos` argument is `WorldPos::from_tile(view.window_origin())`, so `relative_pos`
      * is exactly zero -- the *shader* places it at the live cursor tile via `ANCHOR_CURSOR_TILE`,
      * not this record's own `pos`). */
     __ghostRecord?: () => { pos: [number, number]; flags: number } | undefined
-    __lastTap?: () => { tileX: number; tileY: number } | undefined
-    __confirmVisible?: () => boolean
-    __lastDispatchSeq?: () => number | undefined
+    __ghostLastTap?: () => { tileX: number; tileY: number } | undefined
+    __ghostConfirmVisible?: () => boolean
+    __ghostLastDispatchSeq?: () => number | undefined
   }
 }
 
@@ -110,21 +110,21 @@ window.__ready = async () => {
   }
 }
 
-window.__injectPointer = (phase, id, cssX, cssY, tMs, kind) => {
+window.__ghostInjectPointer = (phase, id, cssX, cssY, tMs, kind) => {
   injectPointer(client, phase, id, cssX, cssY, tMs, kind)
 }
-window.__injectHover = (cssX, cssY) => {
+window.__ghostInjectHover = (cssX, cssY) => {
   recordMouseHover(clientTestHandle(client).cameraBundle.pointers, cssX, cssY)
 }
 
-window.__driveFrame = (dtMs) => {
+window.__ghostDriveFrame = (dtMs) => {
   client.pick.acquire()
   client.camera.tick(dtMs)
   stepFrame(client, dtMs)
   client.overlay.update()
 }
 
-window.__cursorTile = () => ({
+window.__ghostCursorTile = () => ({
   x: client.cameraState.cursorTileX,
   y: client.cameraState.cursorTileY,
   valid: client.cameraState.cursorValid,
@@ -163,8 +163,8 @@ client.input.on('tap', (e) => {
   confirmHandle = client.overlay.anchor(btn, e.tileX + 0.5, e.tileY + 0.5)
 })
 
-window.__lastTap = () => lastTap
-window.__confirmVisible = () => confirmBtn !== undefined && document.body.contains(confirmBtn)
-window.__lastDispatchSeq = () => lastDispatchSeq
+window.__ghostLastTap = () => lastTap
+window.__ghostConfirmVisible = () => confirmBtn !== undefined && document.body.contains(confirmBtn)
+window.__ghostLastDispatchSeq = () => lastDispatchSeq
 
 window.__pageReady = true
