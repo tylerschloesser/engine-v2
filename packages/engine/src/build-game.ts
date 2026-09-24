@@ -175,7 +175,7 @@ const TS_RS_SCRATCH_DIR = 'target/ts-rs-scratch'
  * flags against `cargo-tests`'s (`scripts/suites.mjs`'s `buildSteps`) without calling cargo at all
  * -- deterministically, not by measuring wall time. `--workspace` is load-bearing (see
  * `exportBindings`'s own doc comment): reintroducing a `-p <crate>`/no-flag scope here is exactly
- * the regression `./build-game-bindings-scope.test.ts` exists to catch.
+ * the regression `scripts/lib/build-game-bindings-scope.test.mjs` exists to catch.
  */
 export const BINDINGS_CARGO_ARGS = ['test', '--workspace', '--color', 'never', 'export_bindings']
 
