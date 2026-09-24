@@ -7,6 +7,10 @@
 //! ring -> `Rx` -> decode -> queue path end to end (`fixtures/terrain`'s own `on_input`).
 
 /// Wire `kind` byte values (docs/plan/11-camera-and-input.md Seams, `inputRing` record layout).
+/// `GAME` (docs/plan/18-picking-and-overlay.md Scope, 0024 §7c): `client.input.emit(code, a, b)`'s
+/// own kind -- client-local UI intent, never delivered to `client.input.on` (`input/semantic.ts`'s
+/// `emit`/dispatch-callback path is a different function entirely; `emitGame` only ever writes the
+/// ring record), and never dropped by [`InputQueue`]'s overflow policy (see [`InputQueue::push`]).
 pub mod kind {
     pub const TAP: u8 = 1;
     pub const HOVER: u8 = 2;
@@ -14,6 +18,7 @@ pub mod kind {
     pub const DRAGSTART: u8 = 4;
     pub const DRAG: u8 = 5;
     pub const DRAGEND: u8 = 6;
+    pub const GAME: u8 = 7;
 }
 
 /// One decoded `inputRing` record (docs/plan/11-camera-and-input.md Seams: 32 bytes, little-
@@ -67,13 +72,41 @@ impl InputEvent {
             self.tile[1] as f64 + self.frac[1] as f64,
         )
     }
+
+    /// `kind::GAME`'s own `code` (docs/plan/18-picking-and-overlay.md Provides): `client.input.
+    /// emit(code, ..)`'s first argument, carried in the `pick_id` field (the same field every other
+    /// kind uses for a picked entity's id -- `emit` never picks anything, so the field is free).
+    /// Meaningful only when `kind == kind::GAME`; reading it off any other kind just returns that
+    /// event's own `pick_id`.
+    pub fn code(&self) -> u32 {
+        self.pick_id
+    }
+
+    /// `kind::GAME`'s own `a` (Provides): `emit`'s second argument, carried in `tile[0]`.
+    pub fn a(&self) -> i32 {
+        self.tile[0]
+    }
+
+    /// `kind::GAME`'s own `b` (Provides): `emit`'s third argument, carried in `tile[1]`.
+    pub fn b(&self) -> i32 {
+        self.tile[1]
+    }
 }
 
-/// Fixed-capacity holding area for decoded events, cleared once per `frame` (Seams). On overflow,
-/// the *oldest* `hover` or `drag` record is dropped to make room -- the two kinds a later,
-/// in-progress gesture makes stale -- before any other kind; if none exists (every queued event is
-/// some other kind), the incoming event is dropped instead of displacing something the Seams call
-/// more important.
+/// Fixed-capacity holding area for decoded events, cleared once per `frame` (Seams -- steps 4-6 move
+/// the clear to *after* `ClientSide::frame` reads [`Self::events`], not before `frame` runs:
+/// `game_instance.rs`'s own `frame()` doc comment). On overflow, the *oldest* `hover` or `drag`
+/// record is dropped to make room -- the two kinds a later, in-progress gesture makes stale -- before
+/// any other kind; if none exists (every queued event is some other kind) **and the incoming event
+/// is not `kind::GAME`**, the incoming event is dropped instead of displacing something the Seams
+/// call more important. A `kind::GAME` event is never dropped this way (docs/plan/
+/// 18-picking-and-overlay.md Scope: "it is never dropped by `InputQueue` overflow"): if no hover/drag
+/// victim exists either, the *oldest event of any other kind* is evicted to make room instead (`Self
+/// ::drop_oldest_non_game`) -- `client.input.emit`'s own call rate (a handful of human-driven UI
+/// intents per frame, M33's construction mode) makes a queue of all 64 slots already holding
+/// `kind::GAME` events a pathological case this policy does not try to solve past its own guarantee:
+/// an *already-queued* `kind::GAME` event is itself never a victim of either eviction path, so once
+/// one is enqueued it survives every later overflow regardless of what triggered it.
 pub struct InputQueue {
     events: [InputEvent; Self::CAPACITY],
     len: usize,
@@ -121,8 +154,12 @@ impl InputQueue {
     }
 
     pub fn push(&mut self, event: InputEvent) {
-        if self.len == Self::CAPACITY && !self.drop_oldest_hover_or_drag() {
-            return; // full of "important" events: drop the incoming one instead
+        if self.len == Self::CAPACITY {
+            let made_room = self.drop_oldest_hover_or_drag()
+                || (event.kind == kind::GAME && self.drop_oldest_non_game());
+            if !made_room {
+                return; // full of "important" events: drop the incoming one instead
+            }
         }
         self.events[self.len] = event;
         self.len += 1;
@@ -132,6 +169,21 @@ impl InputQueue {
         for i in 0..self.len {
             let k = self.events[i].kind;
             if k == kind::HOVER || k == kind::DRAG {
+                for j in i..self.len - 1 {
+                    self.events[j] = self.events[j + 1];
+                }
+                self.len -= 1;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The `kind::GAME`-only fallback eviction (`Self::push`'s own doc comment): the oldest event
+    /// that is not itself `kind::GAME`, so an already-queued game event is never its victim.
+    fn drop_oldest_non_game(&mut self) -> bool {
+        for i in 0..self.len {
+            if self.events[i].kind != kind::GAME {
                 for j in i..self.len - 1 {
                     self.events[j] = self.events[j + 1];
                 }
@@ -234,5 +286,84 @@ mod tests {
         bytes[0] = kind::TAP;
         q.decode_and_push_all(&bytes);
         assert_eq!(q.len(), 1);
+    }
+
+    /// `input.game_record_round_trip` (Tests added): `code()`/`a()`/`b()` read back exactly what
+    /// `client.input.emit(code, a, b)` writes (`pick_id`/`tile[0]`/`tile[1]`), decoded off the same
+    /// 32-byte wire bytes `input/record.ts`'s own `writeInputRecord` produces (mirrors
+    /// `decode_record_golden`'s own byte layout, `kind::GAME` this time).
+    #[test]
+    fn game_record_round_trip() {
+        #[rustfmt::skip]
+        let bytes: [u8; InputEvent::BYTES] = [
+            kind::GAME, 0x00, 0x00, 0x00, // kind=7, button/modifiers/pointer=0 ("all else zero")
+            0x00, 0x00, 0x00, 0x00, // seq = 0
+            0x01, 0x00, 0x00, 0x00, // tile.x (a) = 1
+            0xfe, 0xff, 0xff, 0xff, // tile.y (b) = -2
+            0x00, 0x00, 0x00, 0x00, // frac.x = 0
+            0x00, 0x00, 0x00, 0x00, // frac.y = 0
+            0x03, 0x00, 0x00, 0x00, // pick_id (code) = 3
+            0x00, 0x00, 0x00, 0x00, // time_ms = 0
+        ];
+        let event = InputEvent::decode(&bytes);
+        assert_eq!(event.kind, kind::GAME);
+        assert_eq!(event.code(), 3);
+        assert_eq!(event.a(), 1);
+        assert_eq!(event.b(), -2);
+    }
+
+    fn made_game(code: u32) -> InputEvent {
+        InputEvent {
+            kind: kind::GAME,
+            pick_id: code,
+            ..Default::default()
+        }
+    }
+
+    /// `input.game_record_survives_overflow` (Tests added): a full queue of ordinary events still
+    /// makes room for an incoming `kind::GAME` event (dropping the oldest non-game event instead of
+    /// the incoming one), and an already-queued `kind::GAME` event is never itself evicted by a
+    /// later, ordinary push once no hover/drag victim exists.
+    #[test]
+    fn game_record_survives_overflow() {
+        let mut q = InputQueue::new();
+        for i in 0..InputQueue::CAPACITY as u32 {
+            q.push(made(kind::TAP, i));
+        }
+        assert_eq!(q.len(), InputQueue::CAPACITY);
+
+        // The queue is full of TAP events (no hover/drag victim): a normal event would be dropped
+        // here (`queue_overflow_drops_incoming_when_nothing_droppable`), but a game event still gets
+        // in by evicting the oldest TAP instead.
+        q.push(made_game(42));
+        assert_eq!(
+            q.len(),
+            InputQueue::CAPACITY,
+            "the game event was not dropped"
+        );
+        assert!(
+            q.events()
+                .iter()
+                .any(|e| e.kind == kind::GAME && e.code() == 42),
+            "the game event is present in the queue"
+        );
+        assert_eq!(
+            q.events()[0].seq,
+            1,
+            "the oldest TAP (seq 0) was evicted, not the incoming game event"
+        );
+
+        // The queue is still full (one TAP replaced by the game event); a further ordinary event
+        // with no hover/drag victim present must drop the incoming event, never the game event
+        // already queued.
+        q.push(made(kind::LONGPRESS, 999));
+        assert_eq!(q.len(), InputQueue::CAPACITY);
+        assert!(
+            q.events()
+                .iter()
+                .any(|e| e.kind == kind::GAME && e.code() == 42),
+            "the previously-queued game event survives a later ordinary overflow"
+        );
+        assert!(q.events().iter().all(|e| e.kind != kind::LONGPRESS));
     }
 }

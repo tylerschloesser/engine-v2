@@ -101,7 +101,7 @@ pub fn install_visual_tables(registry: &Registry) {
 pub trait ClientSide<G: Game>: Default {
     /// Reads the camera block (the spring) and input events; `cx.follow(..)` (0019). No-op by
     /// default.
-    fn frame(&mut self, _cx: &mut FrameCx<G>, _presence: &mut G::Presence) {}
+    fn frame(&mut self, _cx: &mut FrameCx<'_, G>, _presence: &mut G::Presence) {}
 
     /// Called once per frame after `frame` (0018 §2). No-op by default: draws nothing.
     fn extract(&self, _view: &FrameView<'_, G>, _out: &mut DrawList) {}

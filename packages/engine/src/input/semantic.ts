@@ -63,6 +63,13 @@ export interface InputController {
   /** Stops recognition and ring writes entirely (0019 §4: "covers modal UI"). */
   suspend(): void
   resume(): void
+  /** docs/plan/18-picking-and-overlay.md Scope (0024 §7c): the TypeScript-to-`ClientSide` channel
+   * for client-local UI intent -- writes one `InputKind.Game` record into `inputRing` (`code` in
+   * `pick_id`, `a`/`b` as `i32` in `tile`, all else zero), which surfaces in Rust's `FrameCx::
+   * input()` in ring order and is never delivered to `on`. Returns `false` (nothing written, same
+   * "drop and count, never block" convention every other emitted event already follows) when the
+   * ring is full. M33 is the first consumer (construction mode). */
+  emit(code: number, a?: number, b?: number): boolean
 }
 
 /** `input/pick.ts`'s own `Picker` shape, narrowed to what `emit` needs -- avoids a direct import
@@ -240,6 +247,34 @@ export function createSemanticRecognizer(
       timeMs: clockMs >>> 0,
     })
     ring.commit()
+  }
+
+  /** `client.input.emit`'s own implementation (`InputController.emit`'s doc comment): writes
+   * straight into `inputRing`, no callback dispatch (kind 7 is never delivered to `client.input.on`
+   * -- this function is the *only* producer of that kind, and it never calls `callbacks[..].
+   * dispatch`). `seq` is always `0` ("all else zero", Scope) -- `nextSeq` is reserved for the
+   * semantic-event stream `emit` (the module-private function above) advances. */
+  function emitGame(code: number, a = 0, b = 0): boolean {
+    const idx = ring.tryClaim()
+    if (idx < 0) {
+      ring.recordDrop()
+      return false
+    }
+    writeInputRecord(ring.slotView(idx), 0, {
+      kind: InputKind.Game,
+      button: 0,
+      modifiers: 0,
+      pointer: 0,
+      seq: 0,
+      tileX: a,
+      tileY: b,
+      fracX: 0,
+      fracY: 0,
+      pickId: code,
+      timeMs: 0,
+    })
+    ring.commit()
+    return true
   }
 
   function endDrag(
@@ -476,6 +511,7 @@ export function createSemanticRecognizer(
     resume() {
       suspended = false
     },
+    emit: emitGame,
     recognize,
   }
 }

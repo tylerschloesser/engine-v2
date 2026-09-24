@@ -18,6 +18,11 @@ export const InputKind = {
   DragStart: 4,
   Drag: 5,
   DragEnd: 6,
+  /** docs/plan/18-picking-and-overlay.md Scope (0024 §7c): `client.input.emit(code, a, b)`'s own
+   * kind -- client-local UI intent, `code` in `pick_id`, `a`/`b` as `i32` in `tile`, all else zero.
+   * Never delivered to `client.input.on` (`emitGame`, `input/semantic.ts`, never dispatches to any
+   * `CallbackList`); never dropped by `client/input.rs`'s `InputQueue` overflow policy. */
+  Game: 7,
 } as const
 export type InputKindValue = (typeof InputKind)[keyof typeof InputKind]
 

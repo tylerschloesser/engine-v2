@@ -88,11 +88,11 @@ impl Presence for () {}
 /// because `Game::tick`'s own signature names it at this path.
 pub use crate::authority::TickCx;
 
-/// Shell (M16b/M18 give it fields, 0019): the per-client-frame context `ClientSide::frame`
-/// receives (the camera block, the spring, input events; `cx.follow(..)`).
-pub struct FrameCx<G: Game> {
-    _marker: core::marker::PhantomData<fn() -> G>,
-}
+/// Real now (docs/plan/18-picking-and-overlay.md steps 4-6, 0019): the per-client-frame context
+/// `ClientSide::frame` receives (the camera block, the spring, input events; `cx.follow(..)`).
+/// Re-exported here (built by `crate::client::frame_cx`) for the same reason `FrameView`/`DrawList`
+/// are, below.
+pub use crate::client::frame_cx::FrameCx;
 
 /// Real now, minimal (M16b: `world`/`clocks`/`me`; M17 adds the visible rect, zoom, cursor tile and
 /// presences, 0018/0019, 0003: "`FrameView`: `WorldRead` + clocks + presences"): built by

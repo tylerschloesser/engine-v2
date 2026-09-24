@@ -13,8 +13,8 @@ use crate::abi::{Instance, RegionId, RegionLayout, Role, Status};
 use crate::client::drawlist;
 use crate::client::upload::RECORD_BYTES;
 use crate::client::{
-    ActionError, CameraBlock, ClientCore, ClientSide, DirtyEvent, DrawList, InputEvent, InputQueue,
-    TerrainFeed, UiObserver, Uploader,
+    ActionError, CameraBlock, ClientCore, ClientSide, DirtyEvent, DrawList, FrameCx, InputEvent,
+    InputQueue, TerrainFeed, UiObserver, Uploader,
 };
 use crate::game::{Clocks, FrameView, Game, PlayerId};
 use crate::host::Host;
@@ -211,6 +211,14 @@ pub struct ClientInstance<G: Game> {
     /// `CachedCameraView`'s own doc comment): `on_frame` reuses this since it has no `CameraBlock`
     /// of its own.
     camera_view: CachedCameraView,
+    /// docs/plan/18-picking-and-overlay.md steps 4-6: the previous real `frame()` call's own
+    /// `camera.frame_time_ms`, so `FrameCx::dt_ms()` (Provides: "difference of successive `frame_
+    /// time_ms`, clamped to `0..100`") has something to difference against. `0.0` at `init` --
+    /// the very first real frame's own `dt_ms` is whatever that clamps to, the same "first call has
+    /// no history" shape `camera/camera.ts`'s own `prevTilesAcross` (`Number.NaN` sentinel) accepts
+    /// on the TS side, just clamped instead of NaN-guarded since this value is never read before a
+    /// subtraction.
+    last_frame_time_ms: f64,
 }
 
 impl<G: Game> ClientInstance<G> {
@@ -262,6 +270,7 @@ impl<G: Game> ClientInstance<G> {
             drawlist: Box::new(DrawList::new()),
             drawlist_region,
             camera_view: CachedCameraView::default(),
+            last_frame_time_ms: 0.0,
         })
     }
 }
@@ -281,6 +290,12 @@ pub enum GameInstance<G: Game> {
 impl<G: Game> Instance for GameInstance<G>
 where
     G::Global: Default,
+    // docs/plan/18-picking-and-overlay.md steps 4-6: `frame()`'s own scratch `G::Presence` (Planning
+    // decisions, brief Deviations note: "the engine passes a scratch `G::Presence` it then ignores"
+    // until M19 gives presence real content) needs a value to construct, the same shape `G::Global:
+    // Default` already uses for `ClientInstance::init`'s own default `Global`. `()` (every existing
+    // fixture's `Presence`) already satisfies this trivially.
+    G::Presence: Default,
 {
     fn init(role: Role, game_cfg_json: &str, layout: &mut RegionLayout) -> Result<Self, Status> {
         match role {
@@ -392,7 +407,14 @@ where
                 let terrain = c.core.replica().terrain();
                 c.feed.on_frame(camera, terrain);
                 c.uploader.on_frame(camera, terrain);
-                c.input_queue.clear();
+
+                // docs/plan/18-picking-and-overlay.md steps 4-6: `FrameCx::dt_ms()`'s own source --
+                // computed (and this call's own `last_frame_time_ms` updated) before the destructure
+                // below, since it needs only `camera` (already in scope) and one scalar field of `c`
+                // itself, not any of the fields borrowed individually there.
+                let dt_ms =
+                    ((camera.frame_time_ms - c.last_frame_time_ms) as f32).clamp(0.0, 100.0);
+                c.last_frame_time_ms = camera.frame_time_ms;
 
                 // docs/plan/16b-ui-observation-and-clock.md Scope: "inside frame(t_ms) ... iff a
                 // frame mutated the replica since the last call or the client-side dirty flag is
@@ -400,8 +422,8 @@ where
                 // runs inside `on_frame` itself (see there), right when a frame's own mutation
                 // lands -- so by the time this call runs, `ui.maybe_run` is normally a no-op
                 // (`mutations` already matches what `on_frame` just recorded). This call still
-                // exists for the dirty-flag-only case: client-side state changed (M18's `FrameCx
-                // ::ui_dirty()`) with no new host frame since the last check.
+                // exists for the dirty-flag-only case: client-side state changed (`FrameCx::
+                // ui_dirty()`, steps 4-6) with no new host frame since the last check.
                 // docs/plan/17-drawlist-and-sprites.md: this frame's own camera-derived `FrameView`
                 // fields, cached for `on_frame`'s own reuse (`CachedCameraView`'s doc comment).
                 // Window origin: the camera centre's tile, snapped to a multiple of 64 (Planning
@@ -445,6 +467,7 @@ where
                     drawlist,
                     drawlist_region,
                     camera_view,
+                    input_queue,
                     ..
                 } = c.as_mut();
                 let mutations = core.mutations();
@@ -469,6 +492,23 @@ where
                     camera_view.window_origin,
                     camera_view.time_ms,
                 );
+
+                // docs/plan/18-picking-and-overlay.md Scope, steps 4-6: "frame(t_ms) order becomes
+                // build FrameView -> ClientSide::frame -> extract -> header (follow, anchors) ->
+                // sort -> publish -> clear InputQueue". `cx` borrows `view` (the same value `extract`
+                // receives below), `camera` and `input_queue`'s own events for exactly this call;
+                // `presence` is a scratch value until M19 gives `G::Presence` real content (Planning
+                // decisions: "the engine passes a scratch G::Presence it then ignores").
+                let mut presence = G::Presence::default();
+                let follow = {
+                    let mut cx = FrameCx::new(&view, camera, dt_ms, input_queue.events());
+                    client.frame(&mut cx, &mut presence);
+                    if cx.took_ui_dirty() {
+                        ui.mark_dirty();
+                    }
+                    cx.take_follow()
+                };
+
                 ui.maybe_run(client, &view, mutations, ui_buf);
 
                 // docs/plan/17-drawlist-and-sprites.md Scope: "frame(t_ms) now runs: build
@@ -480,7 +520,15 @@ where
                 let region = unsafe {
                     core::slice::from_raw_parts_mut(*drawlist_region, drawlist::REGION_BYTES)
                 };
-                drawlist.sort_into(region, camera_view.time_ms);
+                drawlist.sort_into(region, camera_view.time_ms, follow);
+
+                // "... -> publish -> clear InputQueue": the JS side's own "publish" (`worker/
+                // client-drawlist.ts`'s pump, run right after this ABI call returns) copies `region`
+                // into the real triple-buffer SAB -- outside this function entirely, so "after
+                // publish" collapses to "the last thing this call does" from here: every event
+                // `cx.input()` exposed this frame has now been through `ClientSide::frame`, and
+                // `extract`/`sort_into` never read the queue at all.
+                input_queue.clear();
 
                 Status::Ok
             }
@@ -1278,6 +1326,14 @@ mod tests {
     // own process (nextest: `client/texel.rs`'s own doc comment on `VISUAL_TABLES`), so this
     // `static` is never shared across tests.
     static M_SIGNAL: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    /// docs/plan/18-picking-and-overlay.md steps 4-6: when set, `MClient::frame` calls `cx.
+    /// ui_dirty()` -- the real production path `FrameCx::ui_dirty()` -- so `framecx_ui_dirty_
+    /// reruns_ui` (below) exercises the actual `frame()` -> `FrameCx` -> `UiObserver::mark_dirty`
+    /// wiring end to end, not only the `client_ui_mark_dirty` test hook `client_ui_mark_dirty_
+    /// forces_a_rerun_with_no_new_frame` (above) uses. Defaults `false`, so that existing test's own
+    /// `frame()` calls are unaffected by this addition.
+    static M_WANT_DIRTY: core::sync::atomic::AtomicBool =
+        core::sync::atomic::AtomicBool::new(false);
 
     #[derive(
         Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize, ts_rs::TS,
@@ -1306,6 +1362,11 @@ mod tests {
     #[derive(Default)]
     struct MClient;
     impl crate::client::ClientSide<MGame> for MClient {
+        fn frame(&mut self, cx: &mut FrameCx<'_, MGame>, _presence: &mut ()) {
+            if M_WANT_DIRTY.load(core::sync::atomic::Ordering::Relaxed) {
+                cx.ui_dirty();
+            }
+        }
         fn ui(&self, _view: &FrameView<'_, MGame>, out: &mut MUi) {
             out.n = M_SIGNAL.load(core::sync::atomic::Ordering::Relaxed);
         }
@@ -1407,5 +1468,36 @@ mod tests {
         );
         let records = decode_ui_records(&out[..n]);
         assert_eq!(records, vec![(1, r#"{"n":5}"#.to_string())]);
+    }
+
+    /// `framecx.ui_dirty_reruns_ui` (Tests added, docs/plan/18-picking-and-overlay.md steps 4-6):
+    /// the real end-to-end path -- `ClientSide::frame` calls `cx.ui_dirty()` (not the `client_ui_
+    /// mark_dirty` test-only ABI hook the test above uses) -- also forces `ui` to rerun this same
+    /// `frame()` call with no new host mutation.
+    #[test]
+    fn framecx_ui_dirty_reruns_ui() {
+        M_SIGNAL.store(0, core::sync::atomic::Ordering::Relaxed);
+        M_WANT_DIRTY.store(false, core::sync::atomic::Ordering::Relaxed);
+        let mut inst = m_instance();
+        let camera = CameraBlock::for_test([0.0, 0.0], [0.0, 0.0], [4.0, 4.0]);
+        let mut out = [0u8; 64];
+
+        // No mutation, no dirty flag: `ui` must not run.
+        assert_eq!(inst.frame(0.0, &camera, &mut []), Status::Ok);
+        assert_eq!(inst.client_poll_ui(&mut out), 0);
+
+        // `cx.ui_dirty()`, called from inside `MClient::frame` itself, forces a rerun this same
+        // `frame()` call even though nothing mutated the replica -- the new signal value (9) differs
+        // from the default previous one (0), so a record is written.
+        M_SIGNAL.store(9, core::sync::atomic::Ordering::Relaxed);
+        M_WANT_DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);
+        assert_eq!(inst.frame(1.0, &camera, &mut []), Status::Ok);
+        let n = inst.client_poll_ui(&mut out);
+        assert!(
+            n > 0,
+            "cx.ui_dirty() must force a rerun that finds a real change"
+        );
+        let records = decode_ui_records(&out[..n]);
+        assert_eq!(records, vec![(1, r#"{"n":9}"#.to_string())]);
     }
 }
