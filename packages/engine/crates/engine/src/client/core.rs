@@ -67,6 +67,11 @@ pub struct FrameSummary {
 
 const MIN_UPLINK_INTERVAL_MS: u32 = 50; // 0010: at most one batch per 50ms
 const KEEPALIVE_INTERVAL_MS: u32 = 1000; // 0010: at least one batch per 1s
+/// 0010 "Rates": "the latest camera report and presence sample at <= 10 Hz, on change" -- unlike
+/// the camera half (which relies on the 50 ms batch floor above plus the host's own drop rule,
+/// 0010 "Host drop rule"), presence has no host-side drop rule, so the sampler enforces its own 10
+/// Hz ceiling here (docs/plan/19-presence-channel.md step 2).
+const PRESENCE_MIN_INTERVAL_MS: u32 = 100;
 
 pub struct ClientCore<G: Game> {
     replica: Replica<G>,
@@ -100,10 +105,33 @@ pub struct ClientCore<G: Game> {
     /// [`Self::drain_results`]. Cleared at the top of every [`Self::apply`] (Scope: "`on_frame`
     /// reads `ActionResults`").
     results: Vec<(u32, Result<Applied, Rejected<G>>)>,
+    /// docs/plan/19-presence-channel.md step 2: this frame's presence sample, `Codec`-encoded
+    /// eagerly on every [`Self::set_presence`] call so the sampler (`poll_uplink`) only ever
+    /// compares bytes (Planning decisions: "'on change' means the encoded bytes differ from the
+    /// last sent sample") -- avoids requiring `G::Presence: PartialEq`, which the trait does not
+    /// have. Fixed-size, never reallocated (`.claude/rules/hot-paths.md`): a 32-byte array, the
+    /// same [`crate::presence::MAX_ENCODED_BYTES`] cap every encoded sample is held to.
+    presence_encoded: [u8; crate::presence::MAX_ENCODED_BYTES],
+    presence_len: usize,
+    /// The bytes of the presence sample most recently *sent* in an `UplinkBatch`, or `None` before
+    /// the first send. Compared against `presence_encoded`/`presence_len` in [`Self::presence_due`]
+    /// to decide "on change".
+    last_sent_presence: Option<([u8; crate::presence::MAX_ENCODED_BYTES], usize)>,
+    last_presence_sent_ms: Option<u32>,
 }
 
 impl<G: Game> ClientCore<G> {
     pub fn new(replica: Replica<G>) -> Self {
+        // `G::Presence::default()`, encoded once up front so `presence_encoded`/`presence_len`
+        // always describe a real sample (`set_presence` overwrites it before the first real
+        // `frame()` call in practice, `game_instance.rs`): matches the value `ClientInstance::init`
+        // seeds its own persistent `presence` field with. `Presence: Codec` guarantees an
+        // in-bounds default always encodes (no oversize-drop path needed for a fixed, at-most-12-
+        // byte-in-practice initial value; a game whose own `Default` somehow overflowed 32 bytes
+        // would need a bigger bug fixed elsewhere first).
+        let mut presence_encoded = [0u8; crate::presence::MAX_ENCODED_BYTES];
+        let presence_len =
+            crate::codec::encode(&G::Presence::default(), &mut presence_encoded).unwrap_or(0);
         ClientCore {
             replica,
             camera: None,
@@ -116,6 +144,10 @@ impl<G: Game> ClientCore<G> {
             mutations: 0,
             outbox: Vec::new(),
             results: Vec::new(),
+            presence_encoded,
+            presence_len,
+            last_sent_presence: None,
+            last_presence_sent_ms: None,
         }
     }
 
@@ -200,6 +232,44 @@ impl<G: Game> ClientCore<G> {
         }
     }
 
+    /// Records this frame's presence sample (docs/plan/19-presence-channel.md step 2, 0001: "the
+    /// game's client-side Rust writes `G::Presence` once per client frame"). Encodes eagerly so
+    /// [`Self::presence_due`] only ever compares bytes: an oversize encode (over
+    /// [`crate::presence::MAX_ENCODED_BYTES`]) is dropped silently here, leaving
+    /// `presence_encoded`/`presence_len` at their previous value -- a game whose sample briefly (or
+    /// by bug) exceeds the cap simply keeps sending its last valid one rather than corrupting the
+    /// uplink. The host's own `presence_oversize` counter (step 3, `host::mod`) is what covers an
+    /// untrusted decode of *received* bytes; a client failing to encode its own game's `Default`-
+    /// sized sample is not expected in practice (0001: "at most 32 bytes encoded").
+    pub fn set_presence(&mut self, sample: &G::Presence) {
+        let mut buf = [0u8; crate::presence::MAX_ENCODED_BYTES];
+        if let Ok(n) = crate::codec::encode(sample, &mut buf) {
+            self.presence_encoded = buf;
+            self.presence_len = n;
+        }
+    }
+
+    /// Whether [`Self::poll_uplink`] should attach the current presence sample to the next batch
+    /// (0010 "Rates": "presence sample at <= 10 Hz, on change"; Planning decisions: "'on change'
+    /// means the encoded bytes differ from the last sent sample" and "the final at-rest sample ...
+    /// goes out in the next slot"). `false` once the current sample equals the last one actually
+    /// sent, however long ago that was -- a resting player therefore sends nothing until the next
+    /// real change, and [`Self::poll_uplink`]'s own re-relay-at-rest concern belongs to the host
+    /// (0001: "the host therefore re-relays each connected player's held sample"), not this sampler.
+    fn presence_due(&self, t_ms: u32) -> bool {
+        let changed = match &self.last_sent_presence {
+            None => true,
+            Some((bytes, len)) => self.presence_encoded[..self.presence_len] != bytes[..*len],
+        };
+        if !changed {
+            return false;
+        }
+        match self.last_presence_sent_ms {
+            None => true,
+            Some(last) => t_ms.wrapping_sub(last) >= PRESENCE_MIN_INTERVAL_MS,
+        }
+    }
+
     /// Writes at most one `UplinkBatch` into `out`, returning its length, or `0` if nothing is due
     /// yet (0010 "Rates": at most one batch per 50 ms; at least one batch per 1 s; the camera half
     /// is included only on change, so a keepalive-only batch omits it). docs/plan/
@@ -209,16 +279,18 @@ impl<G: Game> ClientCore<G> {
     /// action goes out in the very next batch, whichever tick it is polled on.
     pub fn poll_uplink(&mut self, t_ms: u32, out: &mut [u8]) -> usize {
         let has_actions = !self.outbox.is_empty();
+        let presence_due = self.presence_due(t_ms);
         if !has_actions && let Some(last) = self.last_batch_ms {
             let elapsed = t_ms.wrapping_sub(last);
             if elapsed < MIN_UPLINK_INTERVAL_MS {
                 return 0;
             }
-            if !self.camera_pending && elapsed < KEEPALIVE_INTERVAL_MS {
+            if !self.camera_pending && !presence_due && elapsed < KEEPALIVE_INTERVAL_MS {
                 return 0;
             }
         }
         let camera = self.camera_pending.then_some(self.camera).flatten();
+        let presence = presence_due.then_some(&self.presence_encoded[..self.presence_len]);
         let mut sink = SliceSink::new(out);
         UplinkWriter::write(
             &mut sink,
@@ -227,11 +299,15 @@ impl<G: Game> ClientCore<G> {
                 .iter()
                 .map(|(seq, bytes)| (*seq, bytes.as_slice())),
             camera,
-            None,
+            presence,
         );
         let Ok(n) = sink.finish() else { return 0 };
         self.last_batch_ms = Some(t_ms);
         self.camera_pending = false;
+        if presence_due {
+            self.last_sent_presence = Some((self.presence_encoded, self.presence_len));
+            self.last_presence_sent_ms = Some(t_ms);
+        }
         if has_actions {
             self.outbox.clear();
         }

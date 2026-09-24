@@ -219,6 +219,13 @@ pub struct ClientInstance<G: Game> {
     /// on the TS side, just clamped instead of NaN-guarded since this value is never read before a
     /// subtraction.
     last_frame_time_ms: f64,
+    /// docs/plan/19-presence-channel.md step 2: this game's own persistent presence sample, one per
+    /// client frame (0001: "the game's client-side Rust writes `G::Presence` once per client frame
+    /// ... the engine samples it"). Replaces M18's scratch value, which `frame()` built fresh and
+    /// discarded every call (docs/plan/18-picking-and-overlay.md steps 4-6 Deviations) -- keeping it
+    /// here instead means a game that only writes on change (the common case, e.g. a spring at
+    /// rest) does not lose its last value between frames.
+    presence: G::Presence,
 }
 
 impl<G: Game> ClientInstance<G> {
@@ -271,6 +278,7 @@ impl<G: Game> ClientInstance<G> {
             drawlist_region,
             camera_view: CachedCameraView::default(),
             last_frame_time_ms: 0.0,
+            presence: G::Presence::default(),
         })
     }
 }
@@ -290,13 +298,15 @@ pub enum GameInstance<G: Game> {
 impl<G: Game> Instance for GameInstance<G>
 where
     G::Global: Default,
-    // docs/plan/18-picking-and-overlay.md steps 4-6: `frame()`'s own scratch `G::Presence` (Planning
-    // decisions, brief Deviations note: "the engine passes a scratch `G::Presence` it then ignores"
-    // until M19 gives presence real content) needs a value to construct, the same shape `G::Global:
-    // Default` already uses for `ClientInstance::init`'s own default `Global`. `()` (every existing
-    // fixture's `Presence`) already satisfies this trivially.
-    G::Presence: Default,
 {
+    // docs/plan/19-presence-channel.md step 2 (Deviations, carrying forward docs/plan/
+    // 18-picking-and-overlay.md steps 4-6's own note): M18 added a `G::Presence: Default`
+    // where-clause here to construct `frame()`'s scratch value, since `Presence`'s own supertraits
+    // (M12) did not include `Default` yet. 0024 §6 now puts `Default` directly on `Presence` itself
+    // (`crate::presence::Presence: Codec + Copy + Default + 'static`), and `Game::type Presence:
+    // Presence` carries that bound through automatically wherever `G: Game` is in scope -- this
+    // where-clause would now only restate it, so it is gone (`G::Global` has no such supertrait and
+    // still needs its own clause above).
     fn init(role: Role, game_cfg_json: &str, layout: &mut RegionLayout) -> Result<Self, Status> {
         match role {
             Role::Sim => {
@@ -468,6 +478,7 @@ where
                     drawlist_region,
                     camera_view,
                     input_queue,
+                    presence,
                     ..
                 } = c.as_mut();
                 let mutations = core.mutations();
@@ -497,12 +508,13 @@ where
                 // build FrameView -> ClientSide::frame -> extract -> header (follow, anchors) ->
                 // sort -> publish -> clear InputQueue". `cx` borrows `view` (the same value `extract`
                 // receives below), `camera` and `input_queue`'s own events for exactly this call;
-                // `presence` is a scratch value until M19 gives `G::Presence` real content (Planning
-                // decisions: "the engine passes a scratch G::Presence it then ignores").
-                let mut presence = G::Presence::default();
+                // `presence` (docs/plan/19-presence-channel.md step 2) is this instance's own
+                // persistent field now, not a fresh scratch value -- a game that writes it only on
+                // change keeps its last value across frames the way the field's own doc comment
+                // says.
                 let follow = {
                     let mut cx = FrameCx::new(&view, camera, dt_ms, input_queue.events());
-                    client.frame(&mut cx, &mut presence);
+                    client.frame(&mut cx, presence);
                     if cx.took_ui_dirty() {
                         ui.mark_dirty();
                     }
@@ -516,6 +528,16 @@ where
                 // `ClientInstance::drawlist_region`'s own doc comment for the safety argument.
                 drawlist.begin_frame(camera_view.window_origin);
                 client.extract(&view, drawlist.as_mut());
+
+                // docs/plan/19-presence-channel.md step 2: samples this frame's (possibly
+                // just-written) presence into the uplink sampler (0010 "Rates": "presence sample at
+                // <= 10 Hz, on change") -- `core.poll_uplink` (a separate export, called right after
+                // this one every wake, matching `set_camera`'s own precedent above) is what actually
+                // paces and sends it. Deferred to here, past `view`'s own last use just above,
+                // because `view` borrows `core` immutably (through `core.view()`'s `replica`) for the
+                // whole span between the two, and `set_presence` needs `core` mutably.
+                core.set_presence(presence);
+
                 // SAFETY: see `ClientInstance::drawlist_region`'s doc comment.
                 let region = unsafe {
                     core::slice::from_raw_parts_mut(*drawlist_region, drawlist::REGION_BYTES)
