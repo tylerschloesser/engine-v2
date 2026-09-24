@@ -336,11 +336,15 @@ export function createOverlay(deps: OverlayDeps): Overlay {
 
   function updateVisibility(): void {
     const z = lastZ
+    // M18 gate round 2 (review Finding 4): `rebaseOffset` returns a fresh `{wx, wy}` object literal
+    // -- fine for the game-driven `anchor()`/`.set()`/`rebase()` call sites above, but this loop runs
+    // unconditionally every rAF for every anchor (`.claude/rules/hot-paths.md`: "no ... literals" on
+    // a per-frame path). The subtraction is inlined directly instead of calling `rebaseOffset` here,
+    // so no intermediate object exists at all (not even one V8's escape analysis has to eliminate).
     for (let i = 0; i < anchors.length; i++) {
       const rec = anchors[i] as AnchorRecord
-      const { wx, wy } = rebaseOffset(rec.worldX, rec.worldY, originX, originY)
-      const sx = lastOriginScreenX + wx * z
-      const sy = lastOriginScreenY + wy * z
+      const sx = lastOriginScreenX + (rec.worldX - originX) * z
+      const sy = lastOriginScreenY + (rec.worldY - originY) * z
       const visible =
         sx >= -VISIBILITY_MARGIN_PX &&
         sx <= deps.viewport.widthPx + VISIBILITY_MARGIN_PX &&
@@ -355,9 +359,8 @@ export function createOverlay(deps: OverlayDeps): Overlay {
     for (let i = 0; i < slotAnchors.length; i++) {
       const rec = slotAnchors[i] as SlotAnchorRecord
       if (!rec.hasValue) continue
-      const { wx, wy } = rebaseOffset(rec.worldX, rec.worldY, originX, originY)
-      const sx = lastOriginScreenX + wx * z
-      const sy = lastOriginScreenY + wy * z
+      const sx = lastOriginScreenX + (rec.worldX - originX) * z
+      const sy = lastOriginScreenY + (rec.worldY - originY) * z
       const visible =
         sx >= -VISIBILITY_MARGIN_PX &&
         sx <= deps.viewport.widthPx + VISIBILITY_MARGIN_PX &&

@@ -686,6 +686,12 @@ mod tests {
     fn framecx_follow_written_to_header() {
         let mut dl = DrawList::new();
         dl.begin_frame(TilePos::new(1000, 1000));
+        // M18 gate round 2 (review Finding 3): one buffer, reused across both calls below -- a
+        // fresh, zero-filled `region()` for the `None` case cannot distinguish "explicitly zeroed"
+        // from "never written at all" (`out2` would start zero and stay zero either way).
+        // Production's real triple-buffer slots are reused physical buffers across frames, so this
+        // is the actual "stale target from a previous frame" scenario the comment below claims to
+        // prove doesn't leak.
         let mut out = region();
         dl.sort_into(&mut out, 0.0, Some(WorldPos { x: 2560, y: -1280 }));
         assert_eq!(follow_valid(&out), 1);
@@ -693,10 +699,12 @@ mod tests {
 
         // `None` writes `follow_valid = 0` and zeroes the coordinates, every frame -- a stale value
         // from a previous frame's real target never leaks through once a game returns control.
+        // Same buffer as above, still carrying the non-zero bytes `Some` just wrote: if the `None`
+        // arm skipped writing (relying on the caller's buffer already being zero), this would still
+        // read the *old*, nonzero `follow_valid`/coordinates instead.
         dl.begin_frame(TilePos::new(1000, 1000));
-        let mut out2 = region();
-        dl.sort_into(&mut out2, 0.0, None);
-        assert_eq!(follow_valid(&out2), 0);
-        assert_eq!(follow_xy(&out2), (0.0, 0.0));
+        dl.sort_into(&mut out, 0.0, None);
+        assert_eq!(follow_valid(&out), 0);
+        assert_eq!(follow_xy(&out), (0.0, 0.0));
     }
 }

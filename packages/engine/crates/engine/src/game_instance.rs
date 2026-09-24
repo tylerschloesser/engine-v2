@@ -1334,6 +1334,13 @@ mod tests {
     /// `frame()` calls are unaffected by this addition.
     static M_WANT_DIRTY: core::sync::atomic::AtomicBool =
         core::sync::atomic::AtomicBool::new(false);
+    /// M18 gate round 2 (review Finding 1: "nothing exercises `InputQueue::clear()`"):
+    /// `MClient::frame` stores `cx.input().len()` here every call, so `input_queue_cleared_
+    /// between_frames` (below) can observe, from outside `game_instance.rs`, whether the *previous*
+    /// call's own event is still in the queue on this call -- the one thing `framecx_input_slice_
+    /// order_and_clear` (`client/frame_cx.rs`) admits it cannot prove ("the 'clear' half of this
+    /// test's name is `game_instance.rs`'s own responsibility").
+    static M_LAST_INPUT_LEN: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
     #[derive(
         Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize, ts_rs::TS,
@@ -1363,6 +1370,10 @@ mod tests {
     struct MClient;
     impl crate::client::ClientSide<MGame> for MClient {
         fn frame(&mut self, cx: &mut FrameCx<'_, MGame>, _presence: &mut ()) {
+            M_LAST_INPUT_LEN.store(
+                cx.input().len() as u32,
+                core::sync::atomic::Ordering::Relaxed,
+            );
             if M_WANT_DIRTY.load(core::sync::atomic::Ordering::Relaxed) {
                 cx.ui_dirty();
             }
@@ -1499,5 +1510,43 @@ mod tests {
         );
         let records = decode_ui_records(&out[..n]);
         assert_eq!(records, vec![(1, r#"{"n":9}"#.to_string())]);
+    }
+
+    /// M18 gate round 2 (review Finding 1, "dead test"): `framecx_input_slice_order_and_clear`
+    /// (`client/frame_cx.rs`) only proves `FrameCx::new` hands back the slice it was built with --
+    /// its own doc comment admits "the 'clear' half of this test's name is `game_instance.rs`'s own
+    /// responsibility, not by this type in isolation." Nothing else in the suite calls `frame()`
+    /// twice and checks a first frame's own input is gone by the second. This does: one real event,
+    /// pushed through the real `on_input` ABI path (the same decode `InputQueue::decode_and_push_
+    /// all` exercises), is visible to `cx.input()` on the frame that follows it and gone on the
+    /// frame after that, with no second `on_input` call in between -- proving `frame()`'s own
+    /// trailing `input_queue.clear()` actually runs, not merely that nothing else emptied it.
+    #[test]
+    fn input_queue_cleared_between_frames() {
+        M_WANT_DIRTY.store(false, core::sync::atomic::Ordering::Relaxed);
+        let mut inst = m_instance();
+        let camera = CameraBlock::for_test([0.0, 0.0], [0.0, 0.0], [4.0, 4.0]);
+
+        let mut bytes = [0u8; InputEvent::BYTES];
+        bytes[0] = crate::client::input::kind::TAP;
+        let mut on_input_out = [0u8; 12];
+        assert_eq!(inst.on_input(&bytes, &mut on_input_out), Status::Ok);
+
+        // `frame()` #1: `cx.input()` sees the one event just queued.
+        assert_eq!(inst.frame(0.0, &camera, &mut []), Status::Ok);
+        assert_eq!(
+            M_LAST_INPUT_LEN.load(core::sync::atomic::Ordering::Relaxed),
+            1,
+            "frame 1 must see the queued event"
+        );
+
+        // `frame()` #2, with no new `on_input` call in between: if `InputQueue::clear()` (`frame()`'s
+        // own trailing statement) did not run after frame 1, the same event would still be here.
+        assert_eq!(inst.frame(1.0, &camera, &mut []), Status::Ok);
+        assert_eq!(
+            M_LAST_INPUT_LEN.load(core::sync::atomic::Ordering::Relaxed),
+            0,
+            "frame 2 must not see frame 1's already-consumed event"
+        );
     }
 }

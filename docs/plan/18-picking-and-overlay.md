@@ -976,3 +976,111 @@ branch. `anchors.spec.ts`'s `tap()` helper is removed; every call site is back t
   re-verified passing (`unit pass 1 tests`, `browser pass 1 tests`).
 - `pnpm format` run after; final tree clean. `pnpm test`/`pnpm lint` (full) not run (same rule).
   Nothing backgrounded.
+
+### Gate round 2 (coordinator review, full-diff review agent): five fixes
+
+A review agent read the whole `git diff 4977d88..HEAD` (22 commits) plus a targeted mutation-style
+pass over every named test. Full report:
+`/private/tmp/claude-501/-Users-tyler-repos-engine-v2/55b258e9-8b53-4237-883f-8e84e83cc072/scratchpad/m18-review.md`
+(not part of this repo; summarised here). Five findings fixed, across the whole milestone (not only
+steps 7-8); the rest are listed below as skipped, with reasons, per the coordinator's own ruling.
+
+**1. `overlay/anchors.ts`'s `rebaseOffset()` on the per-frame hot path (review Finding 4).**
+`updateVisibility()` (steps 1-3's own code, not steps 7-8's) called the exported, object-literal-
+returning `rebaseOffset()` once per anchor every rAF in `'properties'` mode (54 calls/frame on the
+`anchors` GC page: 50 static + 4 slot) -- a real `.claude/rules/hot-paths.md` violation ("no ...
+literals" on a per-frame path), invisible to the `anchors` GC budget only because V8's escape
+analysis eliminates the allocation in practice, not by any guarantee the rule or the harness
+enforces syntactically. `rebaseOffset` itself is unchanged (still returns a fresh object; `overlay.
+rebase_math` calls it directly and cannot be weakened) -- only its two per-frame call sites inside
+`updateVisibility()` are gone, replaced with the subtraction inlined directly (`(rec.worldX -
+originX) * z`, no function call, no intermediate object at all, not even one escape analysis has to
+eliminate). **Measured, not lowered**: 10 clean `pnpm gc reliability`-shaped runs after the fix read
+498.29-498.83 B/frame (main), essentially identical to the pre-fix 498.29-499.14 range -- confirming
+V8 was already eliminating this allocation, so the fix changes the *guarantee*, not the measured
+byte count. Budget (508) is unchanged, per the coordinator's own "I decide that."
+- `pnpm test unit -t overlay` -> `2`; `pnpm test browser -t overlay` -> `9`; `-t anchors` -> `6`,
+  unchanged.
+
+**2. `InputQueue::clear()` had no test (review Finding 1, "dead test," highest severity, whole
+milestone not just this cut).** New native test `input_queue_cleared_between_frames`
+(`game_instance.rs`): `MClient::frame` now stores `cx.input().len()` into a new test-only static,
+`M_LAST_INPUT_LEN`; one real event pushed through the real `on_input` ABI path, `frame()` called
+twice with no second `on_input` in between -- frame 1 sees length 1, frame 2 sees length 0, proving
+`frame()`'s own trailing `input_queue.clear()` actually runs. Inject-fail-revert (delete
+`input_queue.clear()`): `assertion left == right failed: frame 2 must not see frame 1's already-
+consumed event / left: 1 / right: 0`. Reverted; `git diff --stat` showed only the intended addition;
+full `pnpm test rust` -> `334` (333 + 1) both before and after the injected fault's revert.
+
+**3. `drawlist.picker_matches_renderer_frame_seq` never proved either side was live (review Finding
+2).** Added `expect(rendererSeq).toBeGreaterThan(previousSeq)` every iteration, `previousSeq`
+starting at `0` (not `-1`) so the check also forces the very first iteration nonzero -- one check for
+both properties the review named. Inject-fail-revert (coordinator's own prescribed fault, `DrawListSlot
+.acquire()` made a no-op): failed, but with a different pair of numbers than a naive "both stuck at
+0" guess -- `pickerFrameSeq()` (a cached number field, only ever written inside `acquire()`) froze at
+`0`, while `frameSeq()` (read live off a `DataView` whose *reference* also never updates, but whose
+*underlying SAB memory* keeps changing as the triple buffer's producer cycles back to the one frozen
+physical slot) kept advancing to a real-but-wrong value (302) -- `Expected: 0, Received: 302`. The
+pre-existing equality check alone already caught this particular fault; the new "advancing" check is
+what closes the *other* half the review named (both stuck together, which this fault didn't happen to
+produce, but the coordinator's own prescribed injection -- a no-op `acquire()` -- is exactly what was
+run, and it failed, as required).
+- `pnpm test browser -t drawlist.picker_matches_renderer_frame_seq` -> `1`; `-t drawables` -> `10`.
+
+**4. `framecx_follow_written_to_header`'s `None` case used a fresh buffer (review Finding 3).** Now
+reuses the one `out` buffer `Some` already wrote non-zero bytes into, across both `sort_into` calls.
+Inject-fail-revert (skip the `None` arm's writes entirely, relying on the caller's buffer already
+being zero -- the review's own suggested mutation): `assertion left == right failed / left: 1 /
+right: 0` at the `follow_valid(&out2)` (now `&out`) assertion -- the stale `1` from the `Some` call
+leaked through exactly as the review predicted. Reverted; `git diff --stat` clean; `pnpm test rust`
+-> `334`.
+
+**5. Quick-tap `TAP_MAX_MS` branch untested (review Finding 10).** Added one case to `semantic:
+press and release inside one frame still taps`: down and up latched 350ms apart (over `TAP_MAX_MS`,
+300ms), no movement -- fires no tap. Inject-fail-revert (drop the `heldMsQuick < TAP_MAX_MS` half of
+the quick-tap branch's own condition): `AssertionError: expected 3 to be 2` (the held-too-long press
+now wrongly fired a tap). Reverted; `pnpm test unit -t semantic` -> `6`.
+
+**Skipped, per the coordinator's own instruction ("leave ... unless one is a one-line addition")**:
+- Review Finding 5 (`overlay.rebase_beyond_50000px` never checks a rebase actually fired, only the
+  final position) -- not a one-line addition (needs a new counter or hook exposing rebase count).
+- Review Finding 6 (`needsRebase` unit test never checks the exact `50_000` boundary, only ±1px) --
+  arguably a one-line addition, but explicitly named in the coordinator's own "leave" list.
+- Review Finding 7 (`pick.hover_once_per_raf_on_change` never tests "same point, new `frame_seq`")
+  -- needs a second real publish at the same cached point, not a one-line addition.
+- Review Finding 8 (`pick.contains_per_kind` misses one axis for `bar`/`ghost`, and `KIND_SPRITE`
+  has no dedicated case) -- several new cases, not one line.
+- Review Finding 9 (`input.game_record_survives_overflow` never reaches "64 `kind::GAME` already
+  queued, one more `kind::GAME` push") -- already reasoned as "not reachable by any real caller
+  today" in the original Deviations; left as is.
+- Review Finding 10's second gap (quick-tap scores movement as net down-to-up displacement only,
+  never consulting intermediate `recordPointerMove` samples inside the same frame gap) -- needs
+  either a new per-slot sample-scan or a documented, deliberate simplification; not a one-line fix.
+- `follow.centres_in_same_frame_pan_ignored_zoom_works` never asserts velocity zeroing (Part 1,
+  Finding 11) -- no `__rcRead` field exposes velocity today; would need a new test hook.
+
+**Longpress slot-reuse state corruption (Part 3, review's own last bullet) -- pre-M18, not fixed,
+recorded for the ledger per the coordinator's instruction.** If the same physical pointer slot is
+reused by a second press while `wasActive[i]`/`heldMs[i]`/`downX/Y[i]` bookkeeping from a first,
+completed *multi-frame* longpress hasn't been reset (the "just engaged" branch that resets it only
+runs when `wasActive[i] === 0`, never fires if `wasActive[i]` is already `1` when a new press
+starts), the second press's own tap/drag/longpress classification can be corrupted by the first
+press's stale values. Same bug class `quickTap` fixed for the *same-frame* case (gate round 1); the
+*multi-frame* case is not covered by that fix. Confirmed by the review as pre-existing (`camera.ts`
+grepped directly for `quickTap`/`quickDown`/`quickUp`: zero matches, so this is unrelated to M18's
+own new code) -- not reproduced or fixed here; a candidate for `docs/plan/deferred-ledger.md`.
+
+### Verified (gate round 2, commands and results)
+
+- `pnpm --filter engine typecheck` -> clean.
+- `pnpm test rust` (full) -> `334 tests` (333 + `input_queue_cleared_between_frames`), both before
+  and after every inject-fail-revert's own revert.
+- `pnpm test unit -t semantic` -> `6`; `-t overlay` -> `2`.
+- `pnpm test browser -t overlay` -> `9`; `-t anchors` -> `6`; `-t drawables` -> `10`; `-t input` ->
+  `11`; `-t camera` -> `4`; `-t ghost` -> `3`; `-t pick` -> `6`; `-t follow` -> `4`; `-t framecx` ->
+  `2`; `-t drawlist.picker_matches_renderer_frame_seq` -> `1` -- all unchanged from before this
+  round, confirming no regression from any of the five fixes.
+- `pnpm format` run after every edit; final tree clean. `pnpm test`/`pnpm lint` (full) not run (same
+  rule: "I am the gate"). Nothing backgrounded -- every fault injection and its revert was run
+  directly in the foreground; the build's own `fixtures` step varied 21-177s run to run on this
+  machine under load, unrelated to any of these changes.

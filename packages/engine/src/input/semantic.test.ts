@@ -108,6 +108,13 @@ test('semantic: press and release inside one frame still taps', () => {
   recognizer.recognize(bundle, state, viewport, 16)
   expect(taps.length).toBe(2) // unchanged
 
+  // A press held past `TAP_MAX_MS` (300ms) before releasing, all inside one frame gap and with no
+  // movement at all: no tap (gate round 2, review Finding 10 -- this branch had no dedicated case).
+  recordPointerDown(bundle.pointers, 1, 800, 400, 100)
+  recordPointerUp(bundle.pointers, 1, 800, 400, 450) // 350ms held, over TAP_MAX_MS
+  recognizer.recognize(bundle, state, viewport, 16)
+  expect(taps.length).toBe(2) // unchanged
+
   // A press that reaches the recognizer normally (observed active before it releases) is
   // unaffected by any of this -- the ordinary multi-call path, still a single tap.
   recordPointerDown(bundle.pointers, 1, 800, 400, 80)

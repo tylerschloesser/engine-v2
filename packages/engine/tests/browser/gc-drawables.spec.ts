@@ -109,6 +109,12 @@ test('drawlist.picker_matches_renderer_frame_seq', async ({ page }, testInfo) =>
 
   await page.evaluate(() => window.__drawablesTest?.resume())
 
+  // docs/plan/18-picking-and-overlay.md gate round 2 (review Finding 2): `rendererSeq === pickerSeq`
+  // alone passes even if `DrawListSlot.acquire()` were a no-op and both readers stuck permanently at
+  // `frame_seq = 0` (twenty trivial `0 === 0` checks). `previousSeq` starts at `0` (not `-1`), so
+  // "greater than" also forces the very first iteration's own value to be nonzero, not merely
+  // increasing -- one check for both properties, every iteration.
+  let previousSeq = 0
   const FRAMES = 20
   for (let i = 0; i < FRAMES; i++) {
     // A real publish (a new `frame_seq`) every iteration, then the one real acquire both the
@@ -118,6 +124,11 @@ test('drawlist.picker_matches_renderer_frame_seq', async ({ page }, testInfo) =>
     const rendererSeq = await page.evaluate(() => window.__drawablesTest?.frameSeq())
     const pickerSeq = await page.evaluate(() => window.__drawablesTest?.pickerFrameSeq())
     expect(rendererSeq, `frame ${i}: renderer vs picker frame_seq`).toBe(pickerSeq)
+    expect(
+      rendererSeq as number,
+      `frame ${i}: frame_seq must be real and advancing`,
+    ).toBeGreaterThan(previousSeq)
+    previousSeq = rendererSeq as number
   }
 
   await page.evaluate(() => window.__drawablesTest?.park())
