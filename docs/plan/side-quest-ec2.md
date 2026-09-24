@@ -1,6 +1,6 @@
 # Side quest: can development continue on the EC2 box?
 
-Status: not started · Written 2026-09-24 at the end of the M18–M19b session · Temporary: delete once
+Status: **paused 2026-09-24 23:50 UTC in Phase 3** (Tyler travelling); see "Paused" below · Written 2026-09-24 at the end of the M18–M19b session · Temporary: delete once
 the decision is carried out.
 
 **How to start.** A new session, on the **Mac**, in `/Users/tyler/repos/engine-v2`, told: *"Execute
@@ -227,16 +227,72 @@ Record the answer under **Results → Decision**.
 - Fill **Results**, set `Status:` above, commit `side quest: EC2 fidelity results and decision`, and push.
 - Tell Tyler in a short message: the decision, where to resume `PROMPT.md` (Mac or box), and on the box, the one sentence to start with. For example: "Read `PROMPT.md`; run tests per the `run-tests` skill's GPU-less Linux section."
 
+## Paused (2026-09-24 23:50 UTC): how to resume
+
+- **On the box:** tmux `sq-T8-load10` runs the last measurement, a fresh 15-run `--load 10` batch into `~/sidequest/out/load10/` (8 of 15 done at 23:44, about 9 min per run). tmux `sq-release` waits for it, then removes `/run/claudebox/hold`, so the box hibernates about 20 min later. If the next ssh hangs, the resume came back without network: check `claudebox console` for `ena … error -62`, then `aws --profile admin --region us-west-2 ec2 reboot-instances --instance-ids i-0eaafbfc2bdd53ba7`. Everything needed is on disk in `~/sidequest/`.
+- **Next steps:** `sudo touch /run/claudebox/hold`; check that `sq-*` sessions are gone; copy `~/sidequest/out/` to the Mac (`ssh … 'tar -C ~/sidequest -czf - out' | tar -xzf - -C <scratch>`); write the box's T1–T9 tables from `out/log.txt`, `summary.tsv` and the json files; then Phase 4.
+- **Box results already known (from the stopped agent's interim report):** T1 cold build 143.7 s, `browser` 136.5 s. T2 warm build about 5.6 s, all pass. T3 pass. T4 about 150 s per Rust-edit rebuild. T5 had 5 passes and 1 fail (`terrain: chunks generate, upload and evict`, a ledger item). T6 pass. T7 pass, `frame-bench` smoke included. T9 `gc software` 104 of 104 pass, forced dump captured. T8 quiet 13/15, `--load 4` 14/15; all three failures were said to match a known ledger flake, still to be confirmed from the log. The first `--load 10` batch stopped at 14/15 when the box was force-hibernated (`out/load10-partial/`).
+- **Incident, which is a finding for P/E:** about 21:40 UTC the claudebox `unattended-hard` alarm (6 h with no tmux client) force-hibernated the box mid-run. That path **ignores the hold file**. The resume then came back with no network (`ena … PM: failed to restore async: error -62`). The orchestrator rebooted the instance at 22:10 UTC. Unattended runs on the box longer than 6 h need a tmux client attached, or a claudebox change.
+- **Scratch files** are in the Mac session's scratchpad, which is lost on a reboot. Their summaries are copied into Results → Phase 3 below. The measurement script's final text is in the Appendix.
+
 ## Results
 
 ### Phase 0
-(answers)
+Asked 2026-09-24. Tyler's answers:
+1. **Reboot:** end the other sessions, then reboot. The `tailscale` and `thai` sessions were already killed (no tmux server running at 15:42 UTC).
+2. **Release upgrade:** **yes**, 22.04 → 24.04 before measuring (against the recommendation). Before it, the orchestrator took EBS snapshot `snap-00cc2b8f3a434be2f` of root volume `vol-070bd9a0333b239c3` (instance `i-0eaafbfc2bdd53ba7`, tag `purpose=engine-v2-side-quest`) as the rollback path.
+3. **Contention:** the other sessions are killed, so measurements run on an otherwise idle box.
+
+Hold file `/run/claudebox/hold` touched 15:42 UTC. Uptime was 16 days, load1 0.29.
 
 ### Phase 1
-(versions before and after, run results, adapter line)
+Done 2026-09-24, 15:44–16:25 UTC.
+
+| | Before | After |
+|---|---|---|
+| Ubuntu | 22.04.5 | **24.04.5** (`do-release-upgrade`, 12 min, SSM dropped for ~6–8 min mid-upgrade and came back on its own) |
+| Kernel | 6.8.0-1063-aws | 7.0.0-1013-aws |
+| libc6 | 2.35-0ubuntu3.15 | 2.39-0ubuntu8.9 |
+| Mesa (`libgl1-mesa-dri`, `mesa-vulkan-drivers`) | 23.2.1 (vulkan drivers absent) | 25.2.8 |
+| `libvulkan1` | absent | 1.3.275 |
+| Claude Code | 2.1.278 | 2.1.281 |
+
+- **Hibernation config survived both reboots:** `/proc/cmdline` keeps `nokaslr`, `resume=` and `resume_offset=169984`; `/sys/power/state` lists `disk`; `claudebox-watchdog.timer` active and logging `hold=1`; SSM agent 3.3.4793.0 unchanged. `hibinit-agent` is inactive both before and after (a oneshot at first boot).
+- **Apt sources** the upgrade disabled: `github-cli.list` re-enabled as-is (`stable`), `tailscale.list` re-enabled with `jammy` → `noble`.
+- **Toolchain, next to the box's own:** Node 22.18.0 (nvm default still 22.23.2); pnpm 11.25.0 through pnpm's own `packageManager` switching, no corepack; rustup `--no-modify-path --default-toolchain none`, so `rust-toolchain.toml` picks 1.93.0; Bun 1.3.8 in `~/.bun-1.3.8/bin` (`~/.bun/bin/bun` still 1.4.2); nextest 0.9.145, built by `pnpm setup:tools`. Playwright cache: `chromium-1243`, `chromium_headless_shell-1243`, `firefox-1543`, `webkit-2359`.
+- `~/sidequest/env.zsh`: sources nvm, `nvm use 22.18.0`, prepends `~/.bun-1.3.8/bin` and `~/.cargo/bin` to `PATH`.
+- Step times: clone 12 s, `pnpm install --frozen-lockfile` 3 s, `pnpm setup:tools` 205 s (mostly the nextest build), `playwright install --with-deps` 60 s.
+
+**First runs, at `71abd9e`:**
+1. `ENGINE_GPU` unset, `pnpm test browser -t readback`: **passed, 30 tests, 22 s**. This contradicts the expected `expectAdapter` failure: on arm64 24.04 with Mesa's Vulkan installed, Chromium falls back to SwiftShader by itself. Its cold build took 141 s (`fixtures` 132 s).
+2. `CI=true ENGINE_GPU=swiftshader GC_MODE=software`, the same test: pass, 30 tests, 14 s. Adapter line, the same in both runs: `{"vendor":"google","architecture":"swiftshader","device":"","description":"","isFallbackAdapter":true}`. **SwiftShader WebGPU works on Linux arm64.**
+3. Full `pnpm test --budget-scale 1000` in CI mode: **all green**. `rust` 366 at 1.8 s, `unit` 215 at 10 s, `wasm` 55 at 6 s, `browser` 170 at 135 s; build 5.5 s (already warm from run 1); wall 145 s.
 
 ### Phase 3
-(tables T1–T10, box and Mac side by side, with the sha)
+Both machines at `71abd9e`. Box tables are still to write (see Paused). Raw notes follow.
+
+**Mac** (M3 Max, 14 cores, hardware mode):
+```
+Mac Phase 3 @71abd9e, M3 Max 14 cores, hardware mode. Raw: scratchpad/measure/out/
+T1: install 0.3s; cold pnpm test 80.9s wall (build 53s: fixtures 49s); browser 27.1s.
+T2 (n=6): wall median 31.5s (31.0–33.4); build 3.2–3.8s; rust 0.7, unit 1.6, wasm 1.7–1.9, browser 26.9/26.9/28.7.
+T3 lint: 12.3 (cold), 1.0, 1.0.
+T4 Rust edit: append 45.5/45.7/46.5, restore 45.0/47.0/45.9; median ~45.8s; buildMs 16.8–19.0 (fixtures 14–17s). NOT 151s.
+T5 TS edit: ~31s (= warm T2); buildMs 3.1–3.5.
+T6 wall medians: readback 8.8 (suite 4.8), anchors 8.1 (4.2), presence-worker-path 5.7 (1.8), rust -t presence 4.1, unit 4.9.
+T7 slow: wall 38.2; wasm 17.6, browser 29.2, frame-bench 5.3, unit 1.5. All pass.
+T8: quiet 15/15 pass (slowest 27s, 449s wall); load10 15/15 (slowest 34s of 35!, 580s). Spotlight reindexing load1 15–20 during T7/T8 (flag).
+T9: pnpm gc hw 104 pass; pnpm gc software 103/104: `sim neg object sim` fail = ledger line 8 (sibling isolate nudge, M06b). Margins all ~7–9 B except sim/sim hw 3.14 B; sim-page sw main budget 0 by design. Software: echo, no_ui_change ≤1 B unresolved.
+```
+
+**T10, CI:**
+```
+T10 CI reference (x86-64 ubuntu-latest, SwiftShader, scale 1000), runs 36021066170 (e3b733a, Xeon 6973P-C), 36016875505 (e72935c, Xeon 8370C), 36014036176 (c4b3225, EPYC 7763; attempt 1 failed on the known frame-bench record_count flake).
+Fast tier medians (s): rust 2.43, unit 11.00, wasm 6.92, browser 195.01 (range 137.8–199.6), buildMs 66.36. Step `pnpm test` wall median 263 s (190–271).
+Slow tier medians (s): rust 0.52, unit 13.63, wasm 54.64, browser 235.10, frame-bench 36.35, buildMs 4.11. Step wall median 278 s (197–310).
+Lint 6 s. Playwright install 37 s.
+Raw: scratchpad/t10/ci-<runId>/timings{,-slow}.json
+```
 
 ### Analysis
 (G, P, E, proposed thresholds)
@@ -245,4 +301,305 @@ Record the answer under **Results → Decision**.
 (Tyler's pick and what was done)
 
 ### Appendix: measurement script
-(final text)
+`~/sidequest/measure.sh` on the box. The box agent may have patched it there; diff before re-use.
+
+```bash
+#!/usr/bin/env bash
+# Side-quest-ec2.md Phase 3 measurement script. Same text runs on the Mac and the box.
+#
+# Usage:
+#   MODE=mac|box REPO=<path to engine-v2 checkout> OUT=<output dir> ./measure.sh [T1|T2|...|T9]
+#   With no section arg, runs T1..T9 in order (not recommended interactively -- takes a long time;
+#   the box agent should run sections individually inside tmux, per the side-quest brief).
+#
+# MODE=mac: every `pnpm test*`/`pnpm gc*` command runs exactly as a developer would run it --
+#   hardware GPU, no env overrides, no --budget-scale.
+# MODE=box: every `pnpm test`/`pnpm test:slow` (and anything that spawns one, i.e. repeat.mjs) gets
+#   CI=true ENGINE_GPU=swiftshader GC_MODE=software in its environment, plus --budget-scale 1000.
+#   `pnpm lint` and `pnpm gc*` are not `pnpm test*`, so they run in box mode with the CI env vars
+#   only (no --budget-scale/--timings-json: neither flag exists on those commands).
+#
+# Every timed command appends to $OUT/log.txt (uptime, top-5 CPU processes, the command, its full
+# output, exit code, wall ms) and one row to $OUT/summary.tsv (label, run, wall_ms, exit). Nothing
+# here is quiet -- read $OUT/log.txt for the actual pass/fail lines; this script only times and
+# records, it does not classify results.
+#
+# Do not run this concurrently with any other test run on the same machine (side-quest rule: two
+# agents on the same machine never run tests at once).
+
+set -uo pipefail
+
+MODE="${MODE:-mac}"
+REPO="${REPO:-$(pwd)}"
+OUT="${OUT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/out}"
+mkdir -p "$OUT"
+
+LOG="$OUT/log.txt"
+TSV="$OUT/summary.tsv"
+[ -f "$TSV" ] || printf 'label\trun\twall_ms\texit\n' > "$TSV"
+
+cd "$REPO" || { echo "REPO not found: $REPO" >&2; exit 2; }
+
+now_ms() { node -e 'console.log(Date.now())'; }
+
+ps_top5() {
+  if [ "$(uname)" = "Darwin" ]; then
+    ps -eo pcpu,comm -r | head -5
+  else
+    ps -eo pcpu,comm --sort=-pcpu | head -5
+  fi
+}
+
+# run_timed <label> <run> -- <argv...>
+# Runs argv, capturing full stdout+stderr into $LOG under a labelled section, plus a summary.tsv
+# row. Returns the command's own exit code (does not abort the script on failure -- a failure is
+# data, per the side-quest rule "do not debug anything").
+run_timed() {
+  local label="$1" run="$2"
+  shift 2
+  {
+    echo "=== $label run=$run mode=$MODE $(date -u +%FT%TZ) ==="
+    echo "-- uptime --"
+    uptime
+    echo "-- ps top5 --"
+    ps_top5
+    echo "-- cmd: $* --"
+  } >>"$LOG"
+  local start end code out
+  start=$(now_ms)
+  out=$("$@" 2>&1)
+  code=$?
+  end=$(now_ms)
+  {
+    echo "$out"
+    echo "-- exit=$code wall_ms=$((end - start)) --"
+  } >>"$LOG"
+  printf '%s\t%s\t%s\t%s\n' "$label" "$run" "$((end - start))" "$code" >>"$TSV"
+  return $code
+}
+
+# build_test_argv <test|test:slow> [suite args...] -- sets global array TCMD (without
+# --timings-json; the caller appends that with a run-specific path).
+build_test_argv() {
+  local sub="$1"
+  shift
+  if [ "$MODE" = "box" ]; then
+    TCMD=(env CI=true ENGINE_GPU=swiftshader GC_MODE=software pnpm "$sub" "$@" --budget-scale 1000)
+  else
+    TCMD=(pnpm "$sub" "$@")
+  fi
+}
+
+# box_env_prefix -- global array, empty on Mac, the CI env vars on the box. For commands that are
+# not `pnpm test*` (lint, gc) but should still see box conditions.
+box_env_prefix() {
+  if [ "$MODE" = "box" ]; then
+    BENV=(env CI=true ENGINE_GPU=swiftshader GC_MODE=software)
+  else
+    BENV=()
+  fi
+}
+
+find_cargo_target_dir() {
+  # The repo's own target/, not a spike's.
+  echo "$REPO/target"
+}
+
+# ---------------------------------------------------------------------------
+# T1: cold setup -- pnpm install, clean target/, first pnpm test. 1 run.
+t1() {
+  run_timed T1-install 1 pnpm install
+  local target
+  target=$(find_cargo_target_dir)
+  echo "=== T1 cargo clean: removing $target ===" >>"$LOG"
+  if [ -d "$target" ]; then
+    du -sh "$target" >>"$LOG" 2>&1
+    command rm -rf "$target"
+  else
+    echo "(no target dir at $target)" >>"$LOG"
+  fi
+  build_test_argv test
+  run_timed T1-first-test 1 "${TCMD[@]}" --timings-json "$OUT/T1-first-test.json"
+}
+
+# ---------------------------------------------------------------------------
+# T2: warm fast tier, x3.
+t2() {
+  for i in 1 2 3; do
+    build_test_argv test
+    run_timed T2 "$i" "${TCMD[@]}" --timings-json "$OUT/T2-run${i}.json"
+  done
+}
+
+# ---------------------------------------------------------------------------
+# T3: lint, x3.
+t3() {
+  box_env_prefix
+  for i in 1 2 3; do
+    run_timed T3 "$i" "${BENV[@]+"${BENV[@]}"}" pnpm lint
+  done
+}
+
+# ---------------------------------------------------------------------------
+# T4: one-line Rust edit rebuild, x3 (6 timed rebuilds: append, restore).
+t4() {
+  local f="packages/engine/crates/engine/src/lib.rs"
+  for i in 1 2 3; do
+    echo "// sq" >>"$f"
+    build_test_argv test
+    run_timed T4-append "$i" "${TCMD[@]}" --timings-json "$OUT/T4-append-${i}.json"
+    git checkout -- "$f"
+    build_test_argv test
+    run_timed T4-restore "$i" "${TCMD[@]}" --timings-json "$OUT/T4-restore-${i}.json"
+  done
+}
+
+# ---------------------------------------------------------------------------
+# T5: one-line TS edit rebuild, x3 (6 timed rebuilds).
+t5() {
+  local f="packages/engine/src/client.ts"
+  for i in 1 2 3; do
+    echo "// sq" >>"$f"
+    build_test_argv test
+    run_timed T5-append "$i" "${TCMD[@]}" --timings-json "$OUT/T5-append-${i}.json"
+    git checkout -- "$f"
+    build_test_argv test
+    run_timed T5-restore "$i" "${TCMD[@]}" --timings-json "$OUT/T5-restore-${i}.json"
+  done
+}
+
+# ---------------------------------------------------------------------------
+# T6: inner loop, x3 each.
+t6() {
+  local i
+  for i in 1 2 3; do
+    build_test_argv test browser -t readback
+    run_timed T6-browser-readback "$i" "${TCMD[@]}" --timings-json "$OUT/T6-browser-readback-${i}.json"
+  done
+  for i in 1 2 3; do
+    build_test_argv test browser -t anchors
+    run_timed T6-browser-anchors "$i" "${TCMD[@]}" --timings-json "$OUT/T6-browser-anchors-${i}.json"
+  done
+  for i in 1 2 3; do
+    build_test_argv test browser -t presence-worker-path
+    run_timed T6-browser-presence-worker-path "$i" "${TCMD[@]}" --timings-json "$OUT/T6-browser-presence-worker-path-${i}.json"
+  done
+  for i in 1 2 3; do
+    build_test_argv test rust -t presence
+    run_timed T6-rust-presence "$i" "${TCMD[@]}" --timings-json "$OUT/T6-rust-presence-${i}.json"
+  done
+  for i in 1 2 3; do
+    build_test_argv test unit
+    run_timed T6-unit "$i" "${TCMD[@]}" --timings-json "$OUT/T6-unit-${i}.json"
+  done
+}
+
+# ---------------------------------------------------------------------------
+# T7: slow tier, x1.
+t7() {
+  build_test_argv test:slow
+  run_timed T7 1 "${TCMD[@]}" --timings-json "$OUT/T7.json"
+}
+
+# ---------------------------------------------------------------------------
+# T8: reliability. Mac: quiet x15, then --load 10 x15. Box script (same text) also does --load 4.
+# Split into sub-labels so a batch that doesn't fit in a 10-minute Bash call can be run separately:
+# t8-quiet, t8-load4, t8-load10.
+t8_repeat() {
+  local label="$1" extra_load="$2"
+  box_env_prefix
+  local dir="$OUT/${label}"
+  mkdir -p "$dir"
+  local args=(node scripts/repeat.mjs browser 15)
+  if [ -n "$extra_load" ]; then
+    args+=(--load "$extra_load")
+  fi
+  if [ "$MODE" = "box" ]; then
+    # A box `browser` run takes ~135 s quiet, past repeat.mjs's 120 s default kill timeout.
+    args+=(--budget-scale 1000 --timeout 600)
+  fi
+  args+=(--timings-json "$dir")
+  run_timed "T8-${label}" 1 "${BENV[@]+"${BENV[@]}"}" "${args[@]}"
+}
+t8-quiet() { t8_repeat quiet ""; }
+t8-load4() { t8_repeat load4 4; }
+t8-load10() { t8_repeat load10 10; }
+t8() {
+  t8-quiet
+  [ "$MODE" = "box" ] && t8-load4
+  t8-load10
+}
+
+# ---------------------------------------------------------------------------
+# T9: zero-GC margins. Normal runs first (pass/fail only, no numbers on a pass), then a
+# forced-budget-of-1 run to dump every page/isolate's measured B/frame from the failure JSON
+# (gc-test skill). Always restores budgets.json, even if a step fails.
+BUDGETS="packages/engine/budgets.json"
+
+t9_force_budgets_to_1() {
+  node -e '
+    const fs = require("node:fs");
+    const path = "'"$BUDGETS"'";
+    const b = JSON.parse(fs.readFileSync(path, "utf8"));
+    for (const page of Object.values(b.gc.pages)) {
+      for (const iso of Object.values(page.isolates)) iso.bytesPerFrame = 1;
+      if (page.software) {
+        for (const iso of Object.values(page.software.isolates)) iso.attributedBytesPerFrame = 1;
+      }
+    }
+    fs.writeFileSync(path, JSON.stringify(b, null, 2) + "\n");
+  '
+}
+
+t9_restore_budgets() {
+  git checkout -- "$BUDGETS"
+}
+
+t9() {
+  box_env_prefix
+  # Normal runs (record pass/fail + wall; numbers usually absent on a pass). The box has no hardware
+  # adapter, so it runs the software mode only.
+  [ "$MODE" = "box" ] || run_timed T9-hardware-normal 1 "${BENV[@]+"${BENV[@]}"}" pnpm gc
+  run_timed T9-software-normal 1 "${BENV[@]+"${BENV[@]}"}" pnpm gc software
+
+  # Forced-budget-1 runs to dump every page/isolate's measured bytes. Restore always runs, even on
+  # failure of the forced runs themselves.
+  t9_force_budgets_to_1
+  [ "$MODE" = "box" ] || run_timed T9-hardware-forced 1 "${BENV[@]+"${BENV[@]}"}" pnpm gc -t clean
+  run_timed T9-software-forced 1 "${BENV[@]+"${BENV[@]}"}" pnpm gc software -t clean
+  t9_restore_budgets
+
+  echo "=== T9 git status after restore ===" >>"$LOG"
+  git status --short >>"$LOG"
+}
+
+# ---------------------------------------------------------------------------
+main() {
+  local sections=("$@")
+  if [ ${#sections[@]} -eq 0 ]; then
+    sections=(T1 T2 T3 T4 T5 T6 T7 T8 T9)
+  fi
+  for s in "${sections[@]}"; do
+    case "$s" in
+    T1) t1 ;;
+    T2) t2 ;;
+    T3) t3 ;;
+    T4) t4 ;;
+    T5) t5 ;;
+    T6) t6 ;;
+    T7) t7 ;;
+    T8) t8 ;;
+    T8-quiet) t8-quiet ;;
+    T8-load4) t8-load4 ;;
+    T8-load10) t8-load10 ;;
+    T9) t9 ;;
+    *)
+      echo "unknown section: $s (expected T1..T9, T8-quiet, T8-load4, T8-load10)" >&2
+      exit 2
+      ;;
+    esac
+  done
+}
+
+main "$@"
+```
