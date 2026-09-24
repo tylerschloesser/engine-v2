@@ -43,6 +43,12 @@ declare global {
     __injectRawInput?: (kind: number, tileX: number, tileY: number, pickId: number) => boolean
     __emit?: (code: number, a?: number, b?: number) => boolean
     __lastUi?: () => OverlayUi | undefined
+    /** Diagnostic-only (not a pinned Seam): `inputRing`'s own producer-side counters plus
+     * `ClientTestHandle.uiDrainStats()`, for a spec's own timeout-path diagnostics. */
+    __debug?: () => {
+      ringStats: { drops: number; pushed: number; popped: number }
+      uiDrainStats: { recordsSeen: number; onUi: number }
+    }
   }
 }
 
@@ -98,5 +104,10 @@ window.__injectRawInput = (kind, tileX, tileY, pickId) => {
 
 window.__emit = (code, a, b) => client.input.emit(code, a, b)
 window.__lastUi = () => lastUi<OverlayUi>(client)
+window.__debug = () => {
+  const ringStats = { drops: 0, pushed: 0, popped: 0 }
+  inputRing.stats(ringStats)
+  return { ringStats, uiDrainStats: clientTestHandle(client).uiDrainStats() }
+}
 
 window.__pageReady = true

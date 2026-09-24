@@ -218,15 +218,24 @@ impl Instance for FixtureTerrain {
                 terrain,
                 feed,
                 uploader,
-                input_queue,
+                input_queue: _,
             } => {
                 feed.on_frame(camera, terrain);
                 uploader.on_frame(camera, terrain);
-                // docs/plan/11-camera-and-input.md Seams: `InputQueue` is "cleared at the end of
-                // each `frame`" -- nothing in this milestone reads it for game logic yet
-                // (`FrameCx::input` is M18, Non-scope), so this only proves the contract, not a
-                // consumer of it.
-                input_queue.clear();
+                // docs/plan/11-camera-and-input.md Seams originally had this fixture clear
+                // `InputQueue` here, unconditionally, every call ("cleared at the end of each
+                // `frame`") -- harmless while nothing read the queue's contents from anywhere near
+                // `frame()` (`FrameCx::input` was M18, Non-scope at the time). docs/plan/
+                // 18-picking-and-overlay.md gate round 1 changed `worker/client.ts`'s own `body()`
+                // to drain `inputRing` into this queue *before* calling `frame()`, in the same wake
+                // (so `GameInstance<G>::frame`'s real `cx.input()` sees this wake's own events, not
+                // one wake late) -- with that reorder, clearing here unconditionally would erase
+                // what was *just* drained this same wake before `semantic.spec.ts`'s own `input:
+                // events reach wasm` test (a later, separate `on_input(0)` call, not this frame())
+                // ever gets to read it, since this fixture is hand-written and never consumes `cx.
+                // input()` itself (Non-scope, unaffected by the M18 reorder's own reasoning) --
+                // clearing here served only "prove the contract", never a real consumer, so it is
+                // simply removed rather than reordered around a consumer that does not exist.
                 Status::Ok
             }
             FixtureRole::Gen(_) => Status::Unsupported,

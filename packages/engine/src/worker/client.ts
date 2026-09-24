@@ -141,6 +141,18 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
 
   function body(): void {
     if (gcHook) applyGcHook(shell.control, shell.index)
+    // docs/plan/18-picking-and-overlay.md, gate round 1: `inputPump.pump()` must run *before*
+    // `frame()`, in this same wake, not after it -- `game_instance.rs`'s `GameInstance::frame` now
+    // reads `InputQueue` (`FrameCx::input()`) and clears it at the end of the same call, so an event
+    // drained into the queue only *after* `frame()` already ran would sit unread until the *next*
+    // real frame, one wake later, every time, on every real page. Before this milestone nothing in
+    // Rust read input inside `frame` at all, so the two pumps' relative order never mattered; it
+    // does now. Safe to move ahead of every other pump here: `inputPump` only touches `inputRing`
+    // and the `Rx` region transiently (`on_input` decodes and pushes into `InputQueue`'s own owned
+    // storage, retaining no reference to `Rx`'s bytes once the call returns), and nothing later in
+    // this function reads `Rx` before overwriting it for its own, unrelated purpose (`actionPump`'s
+    // own action-record decode, below) -- single-threaded, sequential, no concurrent readers.
+    inputPump.pump()
     const frameReq = Atomics.load(shell.control.words, CB_FRAME_REQ)
     if (frameReq !== lastFrameReq) {
       lastFrameReq = frameReq
@@ -169,7 +181,6 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     netPump?.pump()
     genPump.pump()
     uploadPump.pump()
-    inputPump.pump()
     actionPump?.pump()
     // `W_ACK` is stored last, after every pump (not right after the `frame()` block, M09b's own
     // original spot): `stepFrame`'s own spin and `untilQuiescent`'s `W_ACK === CB_FRAME_REQ` check
