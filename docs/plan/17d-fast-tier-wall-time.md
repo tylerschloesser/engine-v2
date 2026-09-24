@@ -127,4 +127,140 @@ in one line). Keep `CLAUDE.md` files within their 60-line cap.
 none
 
 ## Deviations
-(filled in during Phase 3)
+
+**Step 0 (CI's recurring `wasm` red).** Added `--reporter=default` alongside the existing
+`--reporter=json` in the shared `vitest` adapter (`scripts/lib/adapters.mjs`), for both `unit` and
+`wasm` (the adapter is shared; the fix is generic, not `wasm`-specific). Verified against
+`pnpm exec vitest run --help`/`--help --expand-help` (installed 5.0.1, from `pnpm-lock.yaml`): a
+bare `--outputFile=` still resolves to the one named reporter that supports it (`json`) when a
+second, fileless reporter (`default`) is also named, so no `--outputFile.json=` dot-notation was
+needed. Forced the exit-1-after-passing-report shape locally: a test that passes, then schedules an
+`Promise.reject` (via `setTimeout`) that fires while a *second* test in the same file is still
+running (an immediate scheduling inside the last test's own body never fired at all -- the fork
+running that one test file is torn down as soon as its own tests finish, before even a 0ms timer
+gets a turn). Baseline (`--reporter=json` alone) log held only `JSON report written to ...`; exit 1,
+report `success: true`, 0 failures -- the exact CI shape. With `--reporter=default` added, the same
+log gained a full "⎯ Unhandled Errors ⎯" block: `Vitest caught 1 unhandled error...`, the
+`Unhandled Rejection` stack, source frame, and "the last test to run before this error" note.
+Reverted the forced test file afterward (`git status` clean). Never reproduced the *real* CI
+occurrence, locally or under CI-like constraints (`--maxWorkers=4`, `CI=true`, 15 runs of the real
+`wasm` suite) -- landing the diagnostic per the brief's own fallback ("otherwise land the
+diagnostic").
+
+**Steps 2-3 (the rebuild's cause).** The brief's own guess (`TS_RS_EXPORT_DIR` differing between
+`exportBindings` and the ambient `.cargo/config.toml` default) is **wrong**, falsified directly:
+`cargo test -p fx-puts export_bindings` from a warm, `--workspace`-consistent state, given the
+*identical* `TS_RS_EXPORT_DIR=target/ts-rs-scratch` value as the ambient default, still dirtied and
+recompiled `fx-puts` (15.17s), and cargo-tests dirtied right back (16.46s) -- the env value made no
+difference at all. `CARGO_LOG=cargo::core::compiler::fingerprint=info` on the real dirtying:
+
+```
+fingerprint dirty for fx-puts v0.0.0 (.../fixtures/puts)/Build/TargetInner { ...lib_target("fx_puts", ...) }
+    dirty: UnitDependencyInfoChanged { old_name: "serde", old_fingerprint: 2803970787093500128, new_name: "serde", new_fingerprint: 11762131215592196171 }
+```
+
+Bisected package-selection combinations (all with the *same* env, only the cargo package-selection
+flags varying), each measured warm→edit→cargo-tests:
+- `-p fx-puts` (bare, either cwd): dirties every time, ~15s.
+- `-p fx-puts -p fx-drawables`: dirties, ~21s (worse -- also builds fx-drawables' own lib).
+- `-p fx-puts -p engine`: does **not** dirty (0.12s), but forces engine's own ~19 native test
+  binaries to rebuild/relink on any real `crates/engine/src/` edit (measured ~100s) -- an
+  incidental, unexplained fix I chose not to ship (see below).
+- `--workspace --exclude fx-drawables --exclude fx-hash --exclude fx-terrain --exclude fx-worldgen
+  --exclude engine`: dirties anyway (~15s) -- collapses back to `-p fx-puts`-equivalent resolution;
+  *any* exclude defeats it.
+- `--workspace` (no excludes): does not dirty, repeatable across 5+ consecutive cycles.
+
+Every workspace member declares identical `serde` features (`derive`, `alloc`, no default) --
+confirmed with `cargo tree -e features -i serde` both `-p fx-puts` and `--workspace` scoped, same
+three nodes either time. The dirtying is real but its exact resolver mechanism was not fully
+explained; `--workspace` is the only option that is *both* correct (matches `cargo-tests`'s own
+scope by construction, not incidentally) and empirically verified stable, so that is what shipped.
+
+Fix: `exportBindings` (`packages/engine/src/build-game.ts`) now runs `cargo test --workspace
+--color never export_bindings` with **no env override at all** (previously: `TS_RS_EXPORT_DIR:
+opts.dir, TS_RS_IMPORT_EXTENSION: 'js'`), relying on `.cargo/config.toml`'s own ambient values
+(`target/ts-rs-scratch`, `js`) -- identical to what `cargo-tests` and every other cargo invocation
+of the build already get. Because `--workspace` also runs *every* other fixture's own
+`export_bindings_*` test (`fx-drawables` has one too, matching type names `Pos`/`Action`/`Reject`
+-- collides with `fx-puts`'s own if pointed at the same directory), each fixture's test writes
+harmlessly to its own gitignored `target/ts-rs-scratch` (exactly what an ordinary `pnpm test rust`
+run already does today), and `exportBindings` then copies only its own crate's scratch output into
+the caller's real, committed `dir`. First implementation copied straight into the committed
+`bindings/` and left it in ts-rs's raw, unformatted style (Biome disagrees, see M16's fix of the
+same class of bug) -- caught by `git diff` showing a spurious quote/semicolon/trailing-comma-only
+diff after a raw regression-test run; the regression test's own scratch destination was moved under
+`target/` (gitignored) so it can never touch the committed directory.
+
+Per-step timings, warm, no source change (`test-results/build/timings.json`):
+
+| step | before (evidence table) | after |
+|---|---|---|
+| `tsc` | 0.5s | 0.40-0.46s |
+| `fixtures` | 15.9s | 0.86-0.90s (clean; **or** 7.6-8.9s right after a browser-suite-heavy `pnpm test` -- confirmed via `CARGO_LOG`: 0 dirty entries either way, disk/process contention with Playwright, not a rebuild) |
+| `cargo-tests` | 15.9s | 0.20-0.25s |
+| `doctests` | 5.7-5.9s | 4.2-6.5s (unchanged mechanism: a `compile_fail` doctest re-pays a real rustc invocation every run by design) |
+| `pages` | 0.6s | 0.59-0.64s |
+| **total** | **35-42s** (evidence table said 35-42s; this session also saw up to 46s) | **6.3-6.6s clean; up to ~16s right after a browser-heavy run** |
+
+**Regression test.** `scripts/lib/build-timings.test.mjs` (`unit` suite) asserts both `fixtures` and
+`cargo-tests` stay under `REBUILD_THRESHOLD_MS`, reading `test-results/build/timings.json` from
+*this same* `pnpm test` invocation's own build phase -- no second cargo call of its own. Two earlier
+designs were rejected before this one, each caught by actually running it:
+1. A first version called `cargo nextest run --workspace --no-run` directly from inside the test
+   (via `execFileSync`, which on a zero exit returns *stdout only* -- cargo's own "Compiling"/
+   "Finished" lines are stderr, so this version's `expect(...).not.toMatch(/Compiling/)` passed
+   even with the bug reintroduced: a silent false negative, caught by noticing the assertion never
+   actually failed when it should have).
+2. Switched to `spawnSync` (captures both streams) and a bare `/Compiling/` regex: now correctly
+   failed when the bug was reintroduced, but under the *full* `pnpm test` (`unit`/`wasm` run
+   concurrently with `rust`, `scripts/test.mjs` Phase 2, all hitting the same shared cargo
+   target-dir lock) it once failed by matching an *unrelated* concurrent `Compiling fx-hash` line
+   (lock contention, not this regression) and separately pushed the whole `wasm` suite to 11.3s
+   against its own 7s budget waiting for the lock.
+Rewritten a third time to read the already-written timings file instead of calling cargo at all:
+zero extra cargo calls, no shared-lock race, no possible cross-suite misattribution. Proved failing
+at the original `toBeLessThan(5000)` threshold by reverting `exportBindings` to the bare, pre-fix
+`cargo(['test', '--color', 'never', 'export_bindings'], crate, env)`: both assertions failed
+(`expected 15967.272083000002 to be less than 5000` / `expected 16245.826332999997 to be less than
+5000`), then passed again once reverted back. The threshold was then widened from 5,000 to the
+committed 12,000 *before* this fix was re-verified against it, once repeated full `pnpm test` runs
+showed `fixtures` alone reaching 7-9s under ordinary post-browser-suite load with a *clean*
+fingerprint (not re-run against the reintroduced bug a second time at the new threshold, but the
+regression's own measured 15-16s per step clears 12,000 by the same margin it cleared 5,000).
+
+**Step 4 (the 30s incremental rebuild -- measure only).** A one-line comment added inside
+`#[cfg(test)] mod tests` in `packages/engine/crates/engine/src/rng.rs`, then `cargo nextest run
+--workspace --no-run` (the unmodified `cargo-tests` build step -- step 3 never touched it). Cargo's
+own reported compile time (`Finished ... target(s) in Ns`) was consistently **~17s** across
+multiple isolated re-measurements -- under the 30s target. The wall-clock time the shell's own
+`time` reported around the *same* command was **100-150s** and did not track that: `user`+`sys` CPU
+time was 83-86s out of a 136-152s wall span (roughly 60% utilized, the rest spent waiting), and the
+gap reproduced on every attempt after this session had already run several dozen manual `cargo`
+invocations across many different package-selection experiments (the bisection above), swelling the
+shared `target/` to 6.6GB with 481+ `.fingerprint` entries. This reads as session-local
+target-directory bloat from this milestone's own extensive experimentation, not a property of the
+code or of the step-3 fix (the `cargo-tests` step's own `--workspace` scope was never changed by
+step 3 -- whatever this cost is, `cargo-tests` already paid it on any `crates/engine/src/` edit,
+before this milestone). Recorded as a finding in ADR 0033's Context/Consequences, not folded into a
+budget: nothing in `scripts/suites.mjs` measures the 30s figure, and this machine/session-local
+artifact is not evidence for a checked-in number. A clean `cargo clean` remeasurement is flagged
+there as a fair follow-up, deliberately not attempted here (a full cold rebuild of the whole
+workspace was judged too expensive for this session, on top of the extensive measurement already
+done).
+
+**Step 5.** ADR [0033](../decisions/0033-fast-tier-budget-after-build-fix.md): `buildBudgetMs`
+30,000 → 15,000 (sized to the noisy, post-browser-suite figure above, not the clean one, so it
+doesn't cry wolf on ordinary back-to-back `pnpm test` use); `browser` suite budget 25,000 → 35,000
+(room for M18+'s own fast browser tests, per the brief's Goal). `rust`/`unit`/`wasm` budgets
+untouched. 0020's `Status:` line now also credits 0033.
+
+**Verification (`time pnpm test`, twice in a row, both exit 0):** first run 29.9s (no build WARN);
+second run (immediately after, same browser-suite-aftermath pattern) 39.6s, `build WARN 16s/15s` --
+informational only (`console.error`, never sets the runner's exit code; confirmed `EXIT=0` both
+times), and both runs are comfortably under Tyler's 60s wall-time requirement.
+
+**Not done / left for the orchestrator:** a `cargo clean` remeasurement of the incremental-rebuild
+figure (flagged in ADR 0033's Consequences); the `--workspace`-fixes-the-fingerprint-mismatch
+mechanism itself was bisected and verified stable but not fully explained at the cargo-internals
+level (recorded above, not reopened).
