@@ -41,6 +41,7 @@ import {
   asHarness,
   dispatchRaw,
   parkWorkers,
+  pickScanned,
   pumpUntilLive,
   resumeWorkers,
   stepSimTickSync,
@@ -63,6 +64,11 @@ declare global {
       /** The same slot's own `dropped` header field (`drawListDropped()`): must be `0` for this
        * scene to be a clean 65,536-record worst case, not a truncated one. */
       dropped(): number
+      /** docs/plan/18-picking-and-overlay.md step 8 (Budgets: "worst-case hover pick scans 65,536
+       * records; `bench.frame_worstcase` ... is re-run with hover active"): `client.pick.scanned()`
+       * -- `pickCalls()` and `scanned()` rising in lockstep, one per frame, is what proves the hover
+       * call below is a real scan every frame, not a cache hit after the first. */
+      pickScanned(): number
       /** Arms per-frame `performance.mark` bracketing of the main-thread rAF callback
        * (`mf-s-<n>`/`mf-e-<n>`); resets the per-window counter to 0. */
       startMarking(): void
@@ -209,6 +215,16 @@ let marking = false
 let markSeq = 0
 
 function onCamera(): void {
+  // docs/plan/18-picking-and-overlay.md step 8 (Budgets: "worst-case hover pick scans 65,536
+  // records; `bench.frame_worstcase` ... is re-run with hover active"): one `client.pick.at()` call
+  // per frame, at a fixed CSS point -- not a real pointer/DOM listener (Non-scope here, unrelated to
+  // what this page measures), just the same call `input/semantic.ts`'s own hover path makes. The
+  // acquired slot's own `frameSeq` changes every real frame regardless of scene content (`worker/
+  // client-drawlist.ts`'s pump publishes unconditionally every wake), so `Picker.at`'s own
+  // `(cssX, cssY, frameSeq)` cache never hits here: this is a genuine full scan of all 65,536
+  // records, every frame, the real worst case 0018 §9's own budget is about.
+  client.pick.at(renderer.viewport.widthPx / 2, renderer.viewport.heightPx / 2)
+
   // Static camera (no autopan): 0018 §9's own "worst-case *view*", not a panning scene -- a fixed
   // camera keeps the measured window's own cost attributable to the DrawList/render path alone, not
   // camera-integration/pan work `draw.screen_px_stroke_constant_under_zoom` and friends already
@@ -297,6 +313,9 @@ window.__frameBench = {
   },
   dropped(): number {
     return drawablesRenderer.drawListDropped()
+  },
+  pickScanned(): number {
+    return pickScanned(client)
   },
   startMarking(): void {
     markSeq = 0

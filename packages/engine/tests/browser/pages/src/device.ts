@@ -101,39 +101,46 @@ const postModule = params.get('module') !== 'url'
 const wasm = await fixtureWasm('terrain')
 
 /** M09b step 7's own page, unchanged: the fill-rate/lifecycle HUD, gestures now real (M11). */
+// --- Rolling stats (10 s window; HUD-only, allocation not a concern here) -----------------
+// Module scope (docs/plan/18-picking-and-overlay.md step 8): `runAnchorsCheck`'s own rAF-interval
+// tracking, for M18-anchors' own device check ("HUD rAF p95 <= 17.5 ms during the pinch"), reuses
+// exactly what `runFillRateHud` already built rather than a second copy.
+const WINDOW_MS = 10_000
+
+class RollingStat {
+  private readonly ts: number[] = []
+  private readonly vs: number[] = []
+
+  push(t: number, v: number): void {
+    this.ts.push(t)
+    this.vs.push(v)
+    const cutoff = t - WINDOW_MS
+    let drop = 0
+    while (drop < this.ts.length && (this.ts[drop] as number) < cutoff) drop++
+    if (drop > 0) {
+      this.ts.splice(0, drop)
+      this.vs.splice(0, drop)
+    }
+  }
+
+  values(): readonly number[] {
+    return this.vs
+  }
+}
+
+function percentile(vals: readonly number[], p: number): number {
+  if (vals.length === 0) return 0
+  const sorted = [...vals].sort((a, b) => a - b)
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))
+  return sorted[idx] as number
+}
+
+function fmtStat(n: number, digits = 1): string {
+  return n.toFixed(digits)
+}
+
 async function runFillRateHud(): Promise<void> {
   installPageStyles() // 0019 §3 page CSS: pull-to-refresh structurally prevented, canvas touch-action
-
-  // --- Rolling stats (10 s window; HUD-only, allocation not a concern here) -----------------
-  const WINDOW_MS = 10_000
-
-  class RollingStat {
-    private readonly ts: number[] = []
-    private readonly vs: number[] = []
-
-    push(t: number, v: number): void {
-      this.ts.push(t)
-      this.vs.push(v)
-      const cutoff = t - WINDOW_MS
-      let drop = 0
-      while (drop < this.ts.length && (this.ts[drop] as number) < cutoff) drop++
-      if (drop > 0) {
-        this.ts.splice(0, drop)
-        this.vs.splice(0, drop)
-      }
-    }
-
-    values(): readonly number[] {
-      return this.vs
-    }
-  }
-
-  function percentile(vals: readonly number[], p: number): number {
-    if (vals.length === 0) return 0
-    const sorted = [...vals].sort((a, b) => a - b)
-    const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))
-    return sorted[idx] as number
-  }
 
   const rafInterval = new RollingStat()
   const callbackDuration = new RollingStat()
@@ -736,12 +743,44 @@ async function runAnchorsCheck(count: number, mode: 'properties' | 'translate'):
     client.camera.tick(dtMs)
   }
 
+  // `device.ts`'s own `runFillRateHud` precedent, and `docs/plan/device-checks.md`'s M18-anchors
+  // check ("HUD rAF p95 <= 17.5 ms during the pinch"): the rAF interval, not the callback's own
+  // duration (this page's own frame cost is dominated by the terrain/drawables draw, already
+  // covered by M09b/M17b's own checks; what M18-anchors adds is whether *mounting anchors* itself
+  // costs enough style-recalc time to widen the gap between frames).
+  const rafInterval = new RollingStat()
+  const gpuLatency = new RollingStat()
+  let lastRafTime: number | undefined
+  let framesRendered = 0
+  let gpuSampleCounter = 0
+  const GPU_SAMPLE_EVERY_N_FRAMES = 30
+  const instrumentedScheduler: Scheduler = {
+    setTimer: (cb, ms) => systemScheduler.setTimer(cb, ms),
+    clearTimer: (id) => systemScheduler.clearTimer(id),
+    requestFrame: (cb) =>
+      systemScheduler.requestFrame((tMs) => {
+        if (lastRafTime !== undefined) rafInterval.push(tMs, tMs - lastRafTime)
+        lastRafTime = tMs
+        cb(tMs)
+        framesRendered += 1
+        gpuSampleCounter += 1
+        if (gpuSampleCounter % GPU_SAMPLE_EVERY_N_FRAMES === 0) {
+          const gpuStart = performance.now()
+          device.device.queue.onSubmittedWorkDone().then(() => {
+            const now = performance.now()
+            gpuLatency.push(now, now - gpuStart)
+          })
+        }
+      }),
+    cancelFrame: (id) => systemScheduler.cancelFrame(id),
+  }
+
   const real: RealFrameLoop = createRealFrameLoop({
     client,
     renderer,
     canvas,
     clock: systemClock,
-    scheduler: systemScheduler,
+    scheduler: instrumentedScheduler,
     maxTextureDimension2D: device.device.limits.maxTextureDimension2D,
     onCamera,
     onOverlay: () => client.overlay.update(),
@@ -750,12 +789,19 @@ async function runAnchorsCheck(count: number, mode: 'properties' | 'translate'):
   real.loop.resume()
 
   function renderHud(): void {
+    const raf = rafInterval.values()
+    const gpuVals = gpuLatency.values()
+    const over20 = raf.filter((x) => x > 20).length
     const lines = [
       `device.html?anchors=${count}&anchorMode=${mode}`,
       `isolated: ${globalThis.crossOriginIsolated}`,
       `adapter.info: ${JSON.stringify(device.adapterInfo)}`,
       `camera: tilesAcross=${client.cameraState.tilesAcross} centre=(${client.cameraState.centreX.toFixed(2)},${client.cameraState.centreY.toFixed(2)})`,
       `pick_id: ${lastPickIdHud}`,
+      `rAF interval p50/p95/worst (10s): ${fmtStat(percentile(raf, 0.5))} / ${fmtStat(percentile(raf, 0.95))} / ${fmtStat(raf.length ? Math.max(...raf) : 0)} ms (n=${raf.length})`,
+      `rAF intervals >20ms (10s): ${over20}`,
+      `GPU latency p95 (10s, sampled every ${GPU_SAMPLE_EVERY_N_FRAMES} frames): ${fmtStat(percentile(gpuVals, 0.95), 2)} ms (n=${gpuVals.length})`,
+      `frames rendered: ${framesRendered}`,
     ]
     hudEl.textContent = lines.join('\n')
   }
