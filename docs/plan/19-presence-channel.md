@@ -1,6 +1,6 @@
 # M19: Presence channel
 
-Status: not started · After: 17 · Tyler-dependent: no
+Status: done · After: 17 · Tyler-dependent: no
 
 ## Goal
 A game's `ClientSide::frame` writes a `G::Presence` value every client frame; the engine samples it into the uplink batch, the host keeps it in a `PresenceTable`, hands that table to `G::admit` for witness checks, and relays samples in the frame's Presence section to clients subscribed to the sample's chunk. Verified with a fixture game in the Rust suite and through the single-player worker path; remote samples are exposed raw (snapped), interpolation is M30.
@@ -70,11 +70,11 @@ Rust suite (`presence_*`):
 Browser suite: `presence-worker-path`: single-player page, fixture presence reaches the sim worker's table (read through an `engine/test` hook) with `drops == 0` on both rings.
 
 ## Exit criteria
-- [ ] Every test above passes; the Presence golden is checked in.
-- [ ] `PresenceTable` appears in the signature of `admit` only; a compile-fail doc test shows `apply` cannot name it.
-- [ ] The zero-GC test still passes with the presence-enabled fixture.
-- [ ] `uplinkPresenceBytes` while changing every frame is within the budgets-file ceiling added below.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Every test above passes; the Presence golden is checked in.
+- [x] `PresenceTable` appears in the signature of `admit` only; a compile-fail doc test shows `apply` cannot name it.
+- [x] The zero-GC test still passes with the presence-enabled fixture.
+- [x] `uplinkPresenceBytes` while changing every frame is within the budgets-file ceiling added below.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t presence` · `pnpm test browser -t presence-worker-path` · `pnpm test browser -t zero-gc` · `pnpm test && pnpm lint`
@@ -413,3 +413,9 @@ in this session against the actual code, not a hypothetical**:
   prompt); every suite touched was run individually and green, plus a full `pnpm golden:bytes` run
   (366/366 native tests passing, no existing golden moved) and `pnpm --filter engine typecheck`
   (clean).
+
+## Orchestrator's gate record
+
+Cut 1-3 / 4-6, two implementers. Cut 1 had one fix round, cut 2 none. Cut 1's round added the missing inject-fail-revert proofs. Its `oversize_dropped` proof found that test dead: the "oversize" payload was not a valid encoding, so `decode_canonical` rejected it before the size gate. It now uses a genuinely wide presence type. The round also corrected the uplink ceiling's arithmetic: 320 counted payload, while the measurement counted whole batches. It is now presence-field bytes only, 59 B/s measured against 33 × 10 = 330. The zero-GC coverage is real: `fixtures/puts` writes `PutsPresence` from the live camera in `frame`, and `connected-terrain` pans through its measured window, so the sampler sends and the host records every changing sample. Relay to a *second* client is covered natively (`relay_recipients`, `rerelay_and_gone`), not by a zero-GC page, because no page has two connections.
+
+Final gate: `rust` 366, `unit` 215, `wasm` 55, `browser` 169 at 25-27 s of 35 s, lint clean. One byte golden added (`presence_section_golden`), none moved. Loops: 13/13 under `--load 10` (slowest 32 s) and 14/15 quiet. The quiet failure was `park('sim')` on `gc: flat transport parity` with the worker `Armed` and `Req` = `Ack`, the same signature as at M18's gate, on harness code M19 did not touch. That is `docs/plan/19b-sim-park-while-armed.md`.

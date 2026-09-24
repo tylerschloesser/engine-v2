@@ -16,6 +16,7 @@ Mine from spikes: none (the prediction spike built no interpolation). Rules that
 - `InterpBuffer`: per-key ring of samples `{ t: f64 host ticks, pos, vel }`, Hermite evaluation, extrapolation cap, hold, fade (limits by citation: 0012).
 - `JitterStats` and `InterpDelay`: the adaptive delay of 0010 (formula, initial value, floor, cap, dilation limit all by citation).
 - Wiring: `RemotePresences` (M19) feeds the buffer using `sample_tick = frame.tick − age_ticks`; `FrameView::presences` yields interpolated `pos`, `vel` and `alpha`.
+- **Thread a real arrival time into `RemotePresenceEntry::arrived_ms`.** Per M19 Deviations (steps 4-6), the field M19 landed is not wall-clock arrival: it is `sample_tick` converted through `G::TICK_RATE`, a deterministic proxy that would make the jitter formula below degenerate (arrival delta would always equal the tick-derived delta). M19 left this for this milestone and flagged that it may require widening `ClientCore::on_frame`'s fixed `(&mut self, bytes: &[u8])` signature (no `t_ms` today) to get a real client clock reading at the point a Presence section is decoded.
 - `rebase` on tab return (0018 section 8): main sets a control-block flag; the client worker calls `HostClock::rebase()` and clears buffers. The same clear runs on M28b's resync (`Welcome` while online).
 - Netcode-harness scenarios, including the conditioner-driven tests of M26's `HostClock` and `LeadEstimator` that M26 could not run.
 
