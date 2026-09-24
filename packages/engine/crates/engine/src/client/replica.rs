@@ -17,6 +17,8 @@ use crate::hash::Fnv64;
 use crate::store::Store;
 use crate::time::Tick;
 use crate::wire::encode_chunk_snapshot;
+
+use super::remote_presence::RemotePresences;
 use crate::world::{
     CacheCapacity, ChunkCoord, ChunkDims, PristineSource, Registry, TerrainStore, Tile, TilePos,
     TraitSet,
@@ -63,6 +65,10 @@ pub struct Replica<G: Game> {
     /// whichever one a caller uses keeps memory bounded, since nothing is ever double-buffered.
     dirty: Vec<DirtyEvent>,
     tick: Tick,
+    /// docs/plan/19-presence-channel.md steps 4-6: the newest presence sample per remote player,
+    /// applied from the wire's `Presence` section (`apply_presence_sample`/`apply_presence_gone`),
+    /// read by `FrameView::presences()`.
+    remote_presences: RemotePresences<G>,
 }
 
 impl<G: Game> Replica<G> {
@@ -102,6 +108,7 @@ impl<G: Game> Replica<G> {
             held: BTreeMap::new(),
             dirty: Vec::new(),
             tick: Tick(0),
+            remote_presences: RemotePresences::new(),
         }
     }
 
@@ -174,6 +181,13 @@ impl<G: Game> Replica<G> {
         &self.registry
     }
 
+    /// docs/plan/19-presence-channel.md steps 4-6: `FrameView::presences()`'s source, `pub` for
+    /// the same reason `entities_map`/`registry` are (`game_instance.rs`'s own `FrameView::new`
+    /// call sites, outside this module).
+    pub fn remote_presences(&self) -> &RemotePresences<G> {
+        &self.remote_presences
+    }
+
     /// Every chunk whose effective tiles changed since the last [`Replica::drain_dirty`] call
     /// (pristine/snapshot enters, tile deltas, and leaves -- docs/plan/
     /// 15-connection-and-subscriptions.md Deviations left leave out, deferring the decision to
@@ -219,6 +233,23 @@ impl<G: Game> Replica<G> {
 
     pub(crate) fn apply_own_player(&mut self, who: PlayerId, state: G::Player) {
         self.store.apply(&Delta::Player { who, state });
+    }
+
+    /// docs/plan/19-presence-channel.md steps 4-6: a decoded `Presence` section `Sample` entry
+    /// (`ClientCore::apply`'s own `SectionId::Presence` arm) -- never touches `self.store` (0001:
+    /// "presence never enters `Store`, the log or a hash").
+    pub(crate) fn apply_presence_sample(
+        &mut self,
+        who: PlayerId,
+        sample: G::Presence,
+        sample_tick: Tick,
+    ) {
+        self.remote_presences.apply_sample(who, sample, sample_tick);
+    }
+
+    /// docs/plan/19-presence-channel.md steps 4-6: a decoded `Presence` section `Gone` entry.
+    pub(crate) fn apply_presence_gone(&mut self, who: PlayerId) {
+        self.remote_presences.apply_gone(who);
     }
 
     /// A pristine chunk enter (0011: "no overlay, no entities"). Held from version 0 (never

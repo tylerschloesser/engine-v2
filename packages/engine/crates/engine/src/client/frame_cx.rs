@@ -206,6 +206,7 @@ mod tests {
         let world = FxWorld;
         let entities = std::collections::BTreeMap::new();
         let registry = Registry::new();
+        let remote = crate::client::RemotePresences::<FxGame>::new();
         let view = FrameView::new(
             &world as &dyn WorldRead<FxGame>,
             Clocks::default(),
@@ -218,6 +219,8 @@ mod tests {
             None,
             TilePos::new(0, 0),
             0.0,
+            (),
+            &remote,
         );
         let camera = CameraBlock::for_test([0.0, 0.0], [0.0, 0.0], [10.0, 10.0]);
         let evs = events(3);
@@ -233,6 +236,7 @@ mod tests {
         let world = FxWorld;
         let entities = std::collections::BTreeMap::new();
         let registry = Registry::new();
+        let remote = crate::client::RemotePresences::<FxGame>::new();
         let view = FrameView::new(
             &world as &dyn WorldRead<FxGame>,
             Clocks::default(),
@@ -245,6 +249,8 @@ mod tests {
             None,
             TilePos::new(0, 0),
             0.0,
+            (),
+            &remote,
         );
         let camera = CameraBlock::for_test([0.0, 0.0], [0.0, 0.0], [10.0, 10.0]);
         let evs: Vec<InputEvent> = Vec::new();

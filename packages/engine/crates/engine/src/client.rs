@@ -10,6 +10,7 @@ pub mod drawlist;
 pub mod frame_cx;
 pub mod frame_view;
 pub mod input;
+pub mod remote_presence;
 pub mod replica;
 pub mod terrain_feed;
 pub mod texel;
@@ -24,8 +25,9 @@ pub use drawlist::{
     snap_window_origin,
 };
 pub use frame_cx::FrameCx;
-pub use frame_view::{Clocks, EntityIter, FrameView};
+pub use frame_view::{Clocks, EntityIter, FrameView, RemotePresence};
 pub use input::{InputEvent, InputQueue};
+pub use remote_presence::{RemotePresenceEntry, RemotePresences};
 pub(crate) use replica::DirtyEvent;
 pub use replica::Replica;
 pub use terrain_feed::TerrainFeed;

@@ -17,6 +17,7 @@
 //! Both checks share [`dist_sq`], integer-only (`.claude/rules/determinism.md`: no floats in
 //! sim/`apply` code).
 
+use engine::client::{ClientSide, DrawList, FrameCx, FrameView};
 use engine::game::{
     Game, PlayerEvent, PlayerId, Presence as PresenceTrait, PresenceTable, TickCx, Unknown,
     WorldRead, WorldWrite,
@@ -148,6 +149,34 @@ pub struct Player {
     pub last_tile: TileXY,
 }
 
+/// The game's own per-client-frame hooks (docs/plan/19-presence-channel.md steps 4-6, Order of
+/// work step 5): `frame` writes a presence sample that changes every call (a simple counter-driven
+/// walk along `x`, independent of the camera -- this fixture's own worker-path browser test drives
+/// `frame()` directly through the harness, with no guarantee a camera ever moves, and the exit
+/// criterion is "`uplinkPresenceBytes` while changing every frame"); `extract` draws a circle per
+/// remote presence (Provides: "the fixture's `extract` draws a circle per presence"). In a
+/// single-player topology a player's own sample is never relayed back to them (0010 host drop
+/// rule), so `presences()` yields nothing there -- `extract`'s own loop still runs, exercising the
+/// (empty) iteration path.
+#[derive(Default)]
+pub struct PresenceClient {
+    t: i32,
+}
+
+impl ClientSide<Presence> for PresenceClient {
+    fn frame(&mut self, _cx: &mut FrameCx<'_, Presence>, presence: &mut PlayerPresence) {
+        self.t = self.t.wrapping_add(1);
+        presence.pos = [self.t, 0];
+        presence.vel = [1, 0];
+    }
+
+    fn extract(&self, view: &FrameView<'_, Presence>, out: &mut DrawList) {
+        view.presences(&mut |p| {
+            out.circle(0, p.pos, [0.5, 0.5], 0xFFFF_FFFF);
+        });
+    }
+}
+
 pub struct Presence;
 
 impl Game for Presence {
@@ -160,7 +189,7 @@ impl Game for Presence {
     type Global = ();
     type Presence = PlayerPresence;
     type Ui = ();
-    type Client = ();
+    type Client = PresenceClient;
 
     fn register(_r: &mut Registry) {
         // No entities, no prototypes: this fixture exercises the presence channel and

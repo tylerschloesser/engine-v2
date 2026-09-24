@@ -78,6 +78,8 @@ fn extract_and_sort(lb: &Loopback<Drawables>, zoom: f32) -> (u32, Vec<u8>) {
         None,
         TilePos::new(0, 0),
         0.0,
+        (),
+        replica.remote_presences(),
     );
     let mut dl = DrawList::new();
     dl.begin_frame(TilePos::new(0, 0));

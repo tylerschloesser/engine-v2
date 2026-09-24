@@ -490,6 +490,10 @@ where
                     ticks_per_second: G::TICK_RATE.hz_value(),
                 };
                 let me = replica.own_player();
+                // docs/plan/19-presence-channel.md steps 4-6: copied out *before* `client.frame`
+                // (below) writes `*presence` -- `FrameView::own_presence()`'s own doc comment
+                // explains why `FrameView` holds this by value rather than `&G::Presence`.
+                let own_presence = *presence;
                 let view = FrameView::new(
                     replica as &dyn WorldRead<G>,
                     clocks,
@@ -502,6 +506,8 @@ where
                     camera_view.cursor_tile,
                     camera_view.window_origin,
                     camera_view.time_ms,
+                    own_presence,
+                    replica.remote_presences(),
                 );
 
                 // docs/plan/18-picking-and-overlay.md Scope, steps 4-6: "frame(t_ms) order becomes
@@ -671,6 +677,7 @@ where
                     ui,
                     ui_buf,
                     camera_view,
+                    presence,
                     ..
                 } = c.as_mut();
                 match core.on_frame(bytes) {
@@ -718,6 +725,8 @@ where
                             camera_view.cursor_tile,
                             camera_view.window_origin,
                             camera_view.time_ms,
+                            *presence,
+                            replica.remote_presences(),
                         );
                         ui.maybe_run(client, &view, mutations, ui_buf);
                         // docs/plan/16-action-round-trip.md Scope: "on_frame reads ActionResults

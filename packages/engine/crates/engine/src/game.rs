@@ -95,11 +95,13 @@ pub use crate::authority::TickCx;
 /// are, below.
 pub use crate::client::frame_cx::FrameCx;
 
-/// Real now, minimal (M16b: `world`/`clocks`/`me`; M17 adds the visible rect, zoom, cursor tile and
-/// presences, 0018/0019, 0003: "`FrameView`: `WorldRead` + clocks + presences"): built by
-/// `crate::client::frame_view`, re-exported here because `ClientSide::extract`/`ui`'s own
-/// signatures name it at this path (same pattern as `WorldRead`/`WorldWrite`/`TickCx` below).
-pub use crate::client::frame_view::{Clocks, FrameView};
+/// Real now, minimal (M16b: `world`/`clocks`/`me`; M17 adds the visible rect, zoom, cursor tile;
+/// docs/plan/19-presence-channel.md steps 4-6 add `own_presence()`/`presences()`, 0018/0019, 0003:
+/// "`FrameView`: `WorldRead` + clocks + presences"): built by `crate::client::frame_view`,
+/// re-exported here because `ClientSide::extract`/`ui`'s own signatures name it at this path (same
+/// pattern as `WorldRead`/`WorldWrite`/`TickCx` below). `RemotePresence` is `FrameView::
+/// presences()`'s own per-call argument type, re-exported for the same reason.
+pub use crate::client::frame_view::{Clocks, FrameView, RemotePresence};
 
 /// Real now (M17, 0018 §2): the per-frame draw list `ClientSide::extract` fills. Re-exported here
 /// (built by `crate::client::drawlist`) for the same reason `FrameView`/`Clocks` are, above.

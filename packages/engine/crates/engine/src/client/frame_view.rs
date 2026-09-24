@@ -8,9 +8,12 @@
 use std::collections::BTreeMap;
 
 use crate::game::{EntityId, Game, PlayerId};
+use crate::presence::Presence as _;
 use crate::time::Tick;
-use crate::world::{Registry, TilePos, TileRect};
+use crate::world::{Registry, TilePos, TileRect, WorldPos};
 use crate::world_access::WorldRead;
+
+use super::remote_presence::RemotePresences;
 
 /// The authoritative and predicted tick a client observes (0003; 0006 "On the client" -- `client.
 /// clock()` exposes the same pair to TypeScript). `predicted` equals `authoritative` until M26
@@ -77,9 +80,31 @@ pub struct FrameView<'a, G: Game> {
     cursor_tile: Option<TilePos>,
     window_origin: TilePos,
     time_ms: f64,
+    own_presence: G::Presence,
+    remote_presences: &'a RemotePresences<G>,
+}
+
+/// One remote player's presence, as `FrameView::presences()` hands it to a game's own callback
+/// (docs/plan/19-presence-channel.md Provides, verbatim field list). `alpha` is always `1.0` until
+/// M30 (Goal: "remote samples are exposed raw (snapped)").
+pub struct RemotePresence<'a, G: Game> {
+    pub who: PlayerId,
+    pub pos: WorldPos,
+    pub vel: [i32; 2],
+    pub sample: &'a G::Presence,
+    pub alpha: f32,
 }
 
 impl<'a, G: Game> FrameView<'a, G> {
+    /// docs/plan/19-presence-channel.md steps 4-6, Deviations: `own_presence` crosses *by value*
+    /// (`G::Presence: Copy`), not `&'a G::Presence` as the brief's own Provides literally spells
+    /// it -- `game_instance.rs`'s fixed call order (M18: "build `FrameView` -> `ClientSide::frame`
+    /// -> `extract`") builds this `FrameView` *before* `ClientSide::frame` runs, and `frame`
+    /// receives `presence: &mut G::Presence` into the very same `ClientInstance` field a `&'a
+    /// G::Presence` held here would alias -- copying the value out at construction (the field's
+    /// value as of the *start* of this frame, i.e. last frame's final write) sidesteps that
+    /// conflict entirely, the same one-frame staleness this file's `camera_view` fields (cached in
+    /// `game_instance.rs`) already accept for `on_frame`'s own `FrameView`.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         world: &'a dyn WorldRead<G>,
@@ -93,6 +118,8 @@ impl<'a, G: Game> FrameView<'a, G> {
         cursor_tile: Option<TilePos>,
         window_origin: TilePos,
         time_ms: f64,
+        own_presence: G::Presence,
+        remote_presences: &'a RemotePresences<G>,
     ) -> Self {
         FrameView {
             world,
@@ -106,6 +133,27 @@ impl<'a, G: Game> FrameView<'a, G> {
             cursor_tile,
             window_origin,
             time_ms,
+            own_presence,
+            remote_presences,
+        }
+    }
+
+    /// This client's own persistent presence sample (Provides), as of the start of this frame --
+    /// see [`Self::new`]'s own doc comment for why it crosses by value.
+    pub fn own_presence(&self) -> G::Presence {
+        self.own_presence
+    }
+
+    /// Every remote player's newest known presence sample, ascending `PlayerId` (Provides).
+    pub fn presences(&self, f: &mut dyn FnMut(RemotePresence<'_, G>)) {
+        for (who, entry) in self.remote_presences.iter() {
+            f(RemotePresence {
+                who,
+                pos: entry.sample.pos(),
+                vel: entry.sample.vel(),
+                sample: &entry.sample,
+                alpha: 1.0,
+            });
         }
     }
 
@@ -287,6 +335,7 @@ mod tests {
         registry: &'a Registry,
         visible: TileRect,
         zoom: f32,
+        remote_presences: &'a RemotePresences<FGame>,
     ) -> FrameView<'a, FGame> {
         FrameView::new(
             world as &dyn WorldRead<FGame>,
@@ -300,6 +349,8 @@ mod tests {
             None,
             TilePos::new(0, 0),
             0.0,
+            (),
+            remote_presences,
         )
     }
 
@@ -329,7 +380,8 @@ mod tests {
             },
         ); // outside
         let visible = TileRect::new(TilePos::new(0, 0), TilePos::new(10, 10));
-        let fv = view(&world, &entities, &registry, visible, 20.0);
+        let remote = RemotePresences::<FGame>::new();
+        let fv = view(&world, &entities, &registry, visible, 20.0, &remote);
 
         let got: Vec<(EntityId, TilePos)> =
             fv.entities().map(|(id, _, origin)| (id, origin)).collect();
@@ -339,6 +391,156 @@ mod tests {
                 (EntityId(1), TilePos::new(0, 0)),
                 (EntityId(3), TilePos::new(5, 5)),
             ]
+        );
+    }
+
+    #[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct PPresence {
+        x: i32,
+    }
+    impl crate::presence::Presence for PPresence {
+        fn pos(&self) -> crate::world::WorldPos {
+            crate::world::WorldPos { x: self.x, y: 0 }
+        }
+        fn vel(&self) -> [i32; 2] {
+            [7, 0]
+        }
+    }
+    struct PGame;
+    impl Game for PGame {
+        const SCHEMA_VERSION: u32 = 0;
+        type Worldgen = FGen;
+        type Action = ();
+        type Reject = FReject;
+        type Entity = ();
+        type Player = ();
+        type Global = ();
+        type Presence = PPresence;
+        type Ui = ();
+        type Client = ();
+        fn register(_r: &mut Registry) {}
+        fn prototype(_e: &()) -> PrototypeId {
+            unimplemented!()
+        }
+        fn anchor(_e: &()) -> TilePos {
+            unimplemented!()
+        }
+        fn genesis(_w: &mut dyn WorldWrite<Self>) {}
+        fn on_player(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _ev: PlayerEvent) {}
+        fn apply(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _a: &()) -> Result<(), FReject> {
+            Ok(())
+        }
+        fn tick(_cx: &mut TickCx<'_, Self>) {}
+    }
+
+    /// `own_presence()` returns the value `FrameView::new` was built with (Provides), by value
+    /// (this file's own `Self::new` doc comment explains why not by reference).
+    #[test]
+    fn frameview_own_presence_returns_the_value_built_with() {
+        let registry = Registry::new();
+        let remote = RemotePresences::<PGame>::new();
+        struct PWorld;
+        impl WorldRead<PGame> for PWorld {
+            fn tick(&self) -> Tick {
+                Tick(0)
+            }
+            fn tile(&self, _p: TilePos) -> Result<Tile, Unknown> {
+                Err(Unknown)
+            }
+            fn traits_at(&self, _p: TilePos) -> Result<TraitSet, Unknown> {
+                Err(Unknown)
+            }
+            fn entity_at(&self, _p: TilePos) -> Result<Option<EntityId>, Unknown> {
+                Ok(None)
+            }
+            fn entity(&self, _id: EntityId) -> Result<Option<&()>, Unknown> {
+                Ok(None)
+            }
+            fn player(&self, _who: PlayerId) -> Result<&(), Unknown> {
+                Err(Unknown)
+            }
+            fn global(&self) -> &() {
+                &()
+            }
+        }
+        let pworld = PWorld;
+        let entities: BTreeMap<EntityId, ()> = BTreeMap::new();
+        let fv = FrameView::<PGame>::new(
+            &pworld as &dyn WorldRead<PGame>,
+            Clocks::default(),
+            PlayerId(1),
+            &entities,
+            &registry,
+            TileRect::new(TilePos::new(0, 0), TilePos::new(0, 0)),
+            0.0,
+            0.0,
+            None,
+            TilePos::new(0, 0),
+            0.0,
+            PPresence { x: 42 },
+            &remote,
+        );
+        assert_eq!(fv.own_presence(), PPresence { x: 42 });
+    }
+
+    /// `presences()`: ascending `PlayerId`, `pos`/`vel` derived from each sample's own trait
+    /// methods, `alpha` always `1.0` (Goal: "remote samples are exposed raw (snapped)" until M30).
+    /// Inject-fail-revert: swap `RemotePresences::iter`'s `self.entries.iter()` for `self.entries
+    /// .iter().rev()` -- the assertion on ascending order fails (`left: [3, 1], right: [1, 3]`);
+    /// reverted.
+    #[test]
+    fn frameview_presences_ascending_with_derived_pos_and_vel() {
+        let registry = Registry::new();
+        let mut remote = RemotePresences::<PGame>::new();
+        remote.apply_sample(PlayerId(3), PPresence { x: 30 }, Tick(1));
+        remote.apply_sample(PlayerId(1), PPresence { x: 10 }, Tick(1));
+        struct PWorld;
+        impl WorldRead<PGame> for PWorld {
+            fn tick(&self) -> Tick {
+                Tick(0)
+            }
+            fn tile(&self, _p: TilePos) -> Result<Tile, Unknown> {
+                Err(Unknown)
+            }
+            fn traits_at(&self, _p: TilePos) -> Result<TraitSet, Unknown> {
+                Err(Unknown)
+            }
+            fn entity_at(&self, _p: TilePos) -> Result<Option<EntityId>, Unknown> {
+                Ok(None)
+            }
+            fn entity(&self, _id: EntityId) -> Result<Option<&()>, Unknown> {
+                Ok(None)
+            }
+            fn player(&self, _who: PlayerId) -> Result<&(), Unknown> {
+                Err(Unknown)
+            }
+            fn global(&self) -> &() {
+                &()
+            }
+        }
+        let pworld = PWorld;
+        let entities: BTreeMap<EntityId, ()> = BTreeMap::new();
+        let fv = FrameView::<PGame>::new(
+            &pworld as &dyn WorldRead<PGame>,
+            Clocks::default(),
+            PlayerId(2),
+            &entities,
+            &registry,
+            TileRect::new(TilePos::new(0, 0), TilePos::new(0, 0)),
+            0.0,
+            0.0,
+            None,
+            TilePos::new(0, 0),
+            0.0,
+            PPresence::default(),
+            &remote,
+        );
+        let mut got: Vec<(PlayerId, i32, f32)> = Vec::new();
+        fv.presences(&mut |p| got.push((p.who, p.pos.x, p.alpha)));
+        assert_eq!(
+            got,
+            vec![(PlayerId(1), 10, 1.0), (PlayerId(3), 30, 1.0)],
+            "ascending PlayerId, pos derived from Presence::pos()"
         );
     }
 

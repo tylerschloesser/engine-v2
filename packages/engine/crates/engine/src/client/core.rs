@@ -352,7 +352,10 @@ impl<G: Game> ClientCore<G> {
                 SectionId::ActionResults => {
                     ActionResultsReader::read::<G>(&mut br, |_, _| {})?;
                 }
-                SectionId::Presence | SectionId::Hashes | SectionId::ChunkTiles => {} // Non-scope bodies (opaque here)
+                SectionId::Presence => {
+                    crate::wire::read_presence::<G>(&mut br, |_| {})?;
+                }
+                SectionId::Hashes | SectionId::ChunkTiles => {} // Non-scope bodies (opaque here)
             }
         }
         Ok(())
@@ -467,10 +470,30 @@ impl<G: Game> ClientCore<G> {
                     })
                     .expect("validated");
                 }
-                SectionId::Presence
-                | SectionId::Hashes
-                | SectionId::ChunkTiles
-                | SectionId::ChunkKeeps => {} // Non-scope bodies
+                SectionId::Presence => {
+                    // docs/plan/19-presence-channel.md steps 4-6: `age_ticks = frame.tick -
+                    // received_at` (`wire/CLAUDE.md`), so the sample's own capture tick is this
+                    // frame's tick minus `age_ticks` -- `RemotePresences`'s own `sample_tick`.
+                    let replica = &mut self.replica;
+                    crate::wire::read_presence::<G>(&mut br, |op| match op {
+                        crate::wire::PresenceDeltaOp::Sample {
+                            who,
+                            age_ticks,
+                            sample,
+                        } => {
+                            replica.apply_presence_sample(
+                                who,
+                                sample,
+                                Tick(header.tick.wrapping_sub(age_ticks)),
+                            );
+                        }
+                        crate::wire::PresenceDeltaOp::Gone { who } => {
+                            replica.apply_presence_gone(who);
+                        }
+                    })
+                    .expect("validated");
+                }
+                SectionId::Hashes | SectionId::ChunkTiles | SectionId::ChunkKeeps => {} // Non-scope bodies
             }
         }
         summary

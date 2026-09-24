@@ -247,6 +247,8 @@ mod tests {
             None,
             TilePos::new(0, 0),
             0.0,
+            (),
+            r.remote_presences(),
         )
     }
 
