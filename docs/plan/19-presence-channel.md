@@ -150,12 +150,17 @@ none
   from, so it is left for that cut.
 - **`budgets.json`**: new key is `counters.presence.uplinkBytesPerSec` (camelCase, matching this
   file's own `counters.<category>.*` convention -- `counters.subscription.*`, `counters.action.*`),
-  not the brief's literal snake_case `uplink_presence_bytes_per_s`. Value `320` (0001's own
-  worst-case per-sample cap, 32 B x 10/s), not a tight `measured + 8 B` margin: this fixture's own
-  `sampler_rate_and_on_change` measures 129 B/s at its own small test coordinates, but a real
-  game's coordinates range over the whole world and postcard's own varint cost grows with
-  magnitude, so a tight margin here would be meaningless (same reasoning `counters.render.gpuBytes`'s
-  own formula already gives for not using the tight-margin convention).
+  not the brief's literal snake_case `uplink_presence_bytes_per_s`. **Gate round 1 fix**: the first
+  cut counted whole `UplinkBatch`es (129 B measured, ceiling 320) although the counter's own name
+  and the row's own formula claimed only the presence field -- the ~8 B/batch of
+  type/flags/tick/action-count/camera-absent framing was uncounted-for slop hiding inside both
+  numbers. Re-scoped to the presence field alone (`len varint + payload`, matching the wire's own
+  `presence (len varint + bytes)` framing): `sampler_rate_and_on_change` now sums only that, measuring
+  59 B/s at its own small test coordinates; ceiling is `33 x 10 = 330` (1-byte len varint, always
+  exactly 1 for any payload `0..=32`, plus 0001's own 32-byte per-sample cap, at 10 Hz) -- the worst
+  case the `Presence` trait itself allows at any coordinate, not a measured-plus-margin guess. The
+  test compares its own measured figure against this exact `budgets.json` key via `engine::testing::
+  budgets::expect_within_budget`, never a constant in the test.
 - **`seed_presence`**: **not built.** The brief's own Provides lists `ClientCore::seed_presence(G::
   Presence)` "(M28 calls it from `Welcome`)" -- genuinely M28's own call site (the session-table
   restore path), nothing in steps 1-3 needs it, and adding an unused public method now would be
@@ -167,13 +172,14 @@ none
 filter) matches only the leaf test *function* name, not the crate/binary id -- it catches
 `presence_is_not_state`, everything under `engine::presence::tests`, and `engine::wire::uplink::
 tests::roundtrip_*_presence` (10 tests), but **misses** `admit_witness_*`, `apply_range_is_
-replayable`, `sampler_rate_and_on_change`, `oversize_dropped`, `outside_world_cap_dropped`,
-`well_formed_undersize_presence_is_recorded` and the two `dist_sq`/`within` unit tests -- everything
-in `fx-presence` whose function name doesn't literally contain "presence". Verified instead with
-`cargo nextest run --workspace -E 'package(fx-presence) or test(presence)'` (23 tests, all pass) and
-a full unfiltered `cargo nextest run --workspace` (355 tests, all pass, nothing else moved).
+replayable`, `sampler_rate_and_on_change`, `oversize_dropped`,
+`world_cap_check_accepts_representable_extremes`, `well_formed_undersize_presence_is_recorded` and
+the two `dist_sq`/`within` unit tests -- everything in `fx-presence` whose function name doesn't
+literally contain "presence". Verified instead with `cargo nextest run --workspace -E
+'package(fx-presence) or test(presence)'` (15 tests in `fx-presence` alone, all pass) and a full
+unfiltered `cargo nextest run --workspace` (355 tests, all pass, nothing else moved).
 
-**World-cap check: implemented, but its own "dropped" test cannot be made to fail honestly** --
+**World-cap check: implemented, but its own "dropped" case cannot be made to fail honestly** --
 escalating for the orchestrator/Tyler to weigh in on. `Host::on_uplink` checks `sample.pos().tile
 ().in_range()` (0007 §2's `TilePos::in_range`) before `PresenceTable::on_sample`, exactly reusing
 the Consumes item "World coordinate range check (M07)". But `Presence::pos()` returns `WorldPos`,
@@ -183,19 +189,65 @@ whose raw `i32` fields map 1:1 onto `[TILE_MIN, TILE_MAX]` once floored to a til
 out of range"). There is no `i32` bit pattern a `WorldPos` can hold whose `.tile()` fails
 `in_range()`: `i32::MIN`/`i32::MAX` map to exactly `TILE_MIN`/`TILE_MAX`. So for *any* conforming
 `Presence` implementation (whose `pos()` must return a real `WorldPos`), this check structurally
-cannot reject a sample -- it is correct, defensive, dead code today. `tests/presence_host.rs`'s
-`outside_world_cap_dropped` was rewritten to prove the check *accepts* both representable extremes
-(`i32::MIN`, `i32::MAX`) rather than fabricate a "dropped" assertion that can never really exercise
-the reject branch. If a future milestone wants a genuinely reachable rejection here, the check
-likely needs to move to a place that still holds a wider intermediate (before narrowing into
-`WorldPos`), which the `Presence` trait's fixed `pos() -> WorldPos` signature does not expose.
+cannot reject a sample -- it is correct, defensive, dead code today. **Gate round 1 fix**: renamed
+`outside_world_cap_dropped` to `world_cap_check_accepts_representable_extremes` in `tests/
+presence_host.rs` so its name matches what it actually asserts (it cannot fail on a drop path by
+construction -- there is no byte pattern that reaches that arm -- but it does have its own real
+inject-fail-revert on the *accept* arm, see below). If a future milestone wants a genuinely reachable
+rejection here, the check likely needs to move to a place that still holds a wider intermediate
+(before narrowing into `WorldPos`), which the `Presence` trait's fixed `pos() -> WorldPos` signature
+does not expose.
 
 **Measured**: `sampler_rate_and_on_change`'s own phase A (continuously changing sample, one client,
 polled every 10 ms for one second) sends exactly 10 presence-carrying `UplinkBatch`es (the 10 Hz
-ceiling, never more), totalling 129 B; the final at-rest value is sent exactly once more, then
-nothing further for the next 490 ms polled. `presence_oversize` reads 0 across every test that
-sends only well-formed samples (`well_formed_undersize_presence_is_recorded`), confirmed 1 for a
-33-byte payload (`oversize_dropped`).
+ceiling, never more), totalling 59 B of presence-field-only bytes (gate round 1 re-scoping, see the
+`budgets.json` entry above); the final at-rest value is sent exactly once more, then nothing further
+for the next 490 ms polled. `presence_oversize` reads 0 across every test that sends only
+well-formed samples (`well_formed_undersize_presence_is_recorded`), confirmed 1 for a genuinely
+oversize (36-byte, `WidePresence`) payload (`oversize_dropped`).
+
+**Failability proofs (gate round 1), one inject-fail-revert per test, each performed and reverted
+in this session; none is checked-in code -- every line below is a report of what was actually run**:
+
+- `sampler_rate_and_on_change` (`client/core.rs`'s `presence_due`): injected `fn presence_due(&self,
+  _t_ms: u32) -> bool { true }` (sends on every poll, ignoring on-change and the 10 Hz rate) -->
+  `assert_eq!(sent, 10)` failed (`left: 20, right: 10`); reverted. Covers the "sending on every
+  poll"/"ignoring on-change" branch pair (both collapse to the same over-count under this
+  injection).
+- `admit_witness_beyond_tolerance_is_rejected` + `admit_witness_no_sample_is_rejected`
+  (`fx-presence`'s `Presence::admit`): injected `Ok(())` unconditionally (ignores both the
+  `NoSample` and `TooFar` checks) --> both failed (`left: 1, right: 0`, `poke_count` wrongly
+  incremented); `admit_witness_inside_tolerance_is_recorded_and_applied` correctly still passed
+  (a true positive is not this injection's job to break); reverted.
+- `apply_range_is_replayable` (`fx-presence`'s `Presence::apply`): injected a `static
+  AtomicI64` call counter, forcing `OutOfRange` once the process-wide count reached 2 (simulating
+  `apply` depending on state outside the action's own bytes -- impossible for real, since `apply`'s
+  signature cannot name a `PresenceTable`, so this stands in for "any external dependency", not
+  presence specifically) --> `assert_eq!(hash1, hash2)` failed (two different hashes, since the
+  second `run_script` call inherited the first's tainted counter); reverted.
+- `presence_is_not_state` (`host/mod.rs`'s `on_uplink`, the accepted-sample arm): injected an
+  extra `self.pending_records.push(Record::Player { who: player, ev: PlayerEvent::Joined })`
+  alongside `self.presence.on_sample(..)` (a `Joined` re-push resets `poke_count` to 0 via `Presence
+  ::on_player`, generic enough to need no game-specific write) --> `assert_eq!(with_presence.hash,
+  without_presence.hash)` failed (`with_presence`'s 20 extra presence-only uplinks each reset its
+  state, `without_presence`'s did not); reverted.
+- `oversize_dropped` (`host/mod.rs`'s `raw.len() > MAX_ENCODED_BYTES` gate): first injection attempt
+  (delete the gate, decode unconditionally) against the *original* test (33 zero bytes) did **not**
+  fail -- `decode_canonical`'s own trailing-bytes rejection caught the garbage independently of the
+  size gate, since no genuine `PlayerPresence` encoding can reach 33 B (worst case 16 B) to begin
+  with. Per "fix the test, not the injection": rewrote the test around a new local `WidePresence`
+  (`pos`/`vel` plus a fixed `[u8; 32]` `padding` field, always >= 36 B when genuinely, validly
+  encoded) and its own minimal `WideGame`. Re-ran the same injection against the fixed test -->
+  `assert_eq!(presence_oversize, 1)` failed (`left: 0, right: 1`) and `debug_presence` returned
+  `Some` instead of `None`; reverted.
+- `well_formed_undersize_presence_is_recorded` (`host/mod.rs`'s `decode_canonical::<G::Presence>
+  (raw).ok()` call): injected forcing it to `None` unconditionally --> `assert_eq!(presence_oversize,
+  0)` failed (`left: 1, right: 0`); reverted.
+- `world_cap_check_accepts_representable_extremes` (`host/mod.rs`'s `sample.pos().tile().in_range()`
+  guard): injected replacing the guard with the literal `false` (never accepts) --> `debug_presence`
+  returned `None` for both `i32::MIN` and `i32::MAX` instead of `Some(sample)`, failing; reverted.
+  (This is the accept-arm proof the check's own doc comment above promises; the reject arm has no
+  possible injection, by the same structural argument.)
 
 **Not built (left for the next cut, per the brief's own step split)**: relay, re-relay at >= 1 Hz,
 `Gone`, the Presence section's own encode/decode and golden, `RemotePresences`, `FrameView::

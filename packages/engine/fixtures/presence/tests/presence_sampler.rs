@@ -28,20 +28,36 @@ fn client() -> ClientCore<Presence> {
     ClientCore::new(replica)
 }
 
-/// Polls once at `t_ms`, returning `Some(n)` (the whole batch's byte length) when it carried a
-/// presence sample, `None` otherwise (nothing due, or a batch with no presence attached).
-fn poll_presence_bytes(c: &mut ClientCore<Presence>, t_ms: u32) -> Option<usize> {
+/// LEB128 varint length in bytes, matching `ByteSink::put_varint`'s own encoding (7 payload bits
+/// per byte): the same count the wire's own `presence (len varint + bytes)` framing spends on the
+/// length prefix (`wire/CLAUDE.md`).
+fn varint_len(mut v: u64) -> usize {
+    let mut n = 1;
+    v >>= 7;
+    while v != 0 {
+        n += 1;
+        v >>= 7;
+    }
+    n
+}
+
+/// Polls once at `t_ms`, returning `Some(field_bytes)` -- just the presence field's own wire cost
+/// (`len varint + payload`, not the whole `UplinkBatch`: type/flags/tick/action-count/camera are
+/// counted separately by `counters.action.uplinkBytesPerAction`'s own row) -- when the batch
+/// carried a presence sample, `None` otherwise (nothing due, or a batch with no presence attached).
+fn poll_presence_field_bytes(c: &mut ClientCore<Presence>, t_ms: u32) -> Option<usize> {
     let mut buf = [0u8; 512];
     let n = c.poll_uplink(t_ms, &mut buf);
     if n == 0 {
         return None;
     }
     let batch = UplinkReader::read(&buf[..n], |_, _| {}).expect("well-formed uplink batch");
-    batch.presence.is_some().then_some(n)
+    let payload = batch.presence?;
+    Some(varint_len(payload.len() as u64) + payload.len())
 }
 
 fn poll_has_presence(c: &mut ClientCore<Presence>, t_ms: u32) -> bool {
-    poll_presence_bytes(c, t_ms).is_some()
+    poll_presence_field_bytes(c, t_ms).is_some()
 }
 
 #[test]
@@ -52,24 +68,28 @@ fn sampler_rate_and_on_change() {
     // `set_presence` runs every "frame"; `poll_uplink` runs right after, as `game_instance.rs`'s
     // own `frame()`/`client_poll_uplink` pair does.
     let mut sent = 0u32;
-    let mut bytes_this_second = 0u64;
+    let mut presence_field_bytes_this_second = 0u64;
     for t in (0..1000u32).step_by(10) {
         c.set_presence(&PlayerPresence {
             pos: [t as i32, 0],
             vel: [0, 0],
         });
-        if let Some(n) = poll_presence_bytes(&mut c, t) {
+        if let Some(field_bytes) = poll_presence_field_bytes(&mut c, t) {
             sent += 1;
-            bytes_this_second += n as u64;
+            presence_field_bytes_this_second += field_bytes as u64;
         }
     }
     // Budgets (docs/plan/19-presence-channel.md Budgets: "new budgets.json key
     // uplink_presence_bytes_per_s, measured by sampler_rate_and_on_change"):
     // `counters.presence.uplinkBytesPerSec` mirrors `counters.subscription.*`'s own convention
-    // (`packages/engine/crates/engine/src/testing/budgets.rs`).
+    // (`packages/engine/crates/engine/src/testing/budgets.rs`). Counts only the presence field's
+    // own wire bytes (len varint + payload), matching the counter's own name -- the whole
+    // `UplinkBatch`'s other bytes (type/flags/tick/action-count/camera) are a separate cost, not
+    // this row's job (gate round 1 fix: the previous cut counted whole batches here, so its 320 B
+    // ceiling silently included ~8 B/batch this row never claimed to cover).
     engine::testing::budgets::expect_within_budget(
         "counters.presence.uplinkBytesPerSec",
-        bytes_this_second,
+        presence_field_bytes_this_second,
     );
     // Inject-fail-revert (this test's own branch): raising `PRESENCE_MIN_INTERVAL_MS` above 100
     // (e.g. to 1) would let every one of the 100 polls above through -- `sent` would jump to 100,

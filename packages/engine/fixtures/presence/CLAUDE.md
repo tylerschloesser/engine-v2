@@ -19,7 +19,9 @@ Tests: `tests/presence_apply.rs` (`apply_range_is_replayable`, step 1: `testkit:
 no `Host`), `tests/presence_admit.rs` (`admit_witness_*`, `presence_is_not_state`, step 3: through
 the real `Host::on_uplink` pipeline, since `admit` needs a `PresenceTable` a real host actually
 populates), `tests/presence_sampler.rs` (`sampler_rate_and_on_change`, step 2: driving `ClientCore`
-directly with an injected clock), `tests/presence_host.rs` (`oversize_dropped`,
-`outside_world_cap_dropped`, step 3 -- see that file's own doc comment: the world-cap check is
-structurally unreachable for any `WorldPos`-encoded sample, 0007 §2, flagged in the milestone's own
-Deviations).
+directly with an injected clock), `tests/presence_host.rs` (`oversize_dropped` -- its own local
+`WideGame`/`WidePresence`, since `fx_presence::PlayerPresence`'s own worst-case encoding never
+exceeds 16 B and cannot exercise the 32-byte gate on its own; `well_formed_undersize_presence_is_
+recorded`; `world_cap_check_accepts_representable_extremes`, step 3, gate round 1 rename -- see that
+file's own doc comment: the world-cap check is structurally unreachable for any `WorldPos`-encoded
+sample, 0007 §2, flagged in the milestone's own Deviations).
