@@ -253,3 +253,163 @@ in this session; none is checked-in code -- every line below is a report of what
 `Gone`, the Presence section's own encode/decode and golden, `RemotePresences`, `FrameView::
 own_presence()`/`presences()`, the `presence-worker-path` browser test, the zero-GC fixture's own
 presence type, and `testkit::Loopback::set_presence`.
+
+## Deviations (steps 4-6)
+
+**Wire, `wire/presence.rs`** (section id 8, `wire/CLAUDE.md`): a flat entry list to the section's
+own end, ascending `PlayerId`: `who varint · tag u8 (0 Sample, 1 Gone)`, `Sample` continuing
+`age_ticks varint · Codec G::Presence` with no length prefix of its own (the codec's own decode
+boundary is exact, matching every other game-typed wire value). `write_presence`/`read_presence`
+are the shared, tested definition; `Host::build_frame` does **not** call `write_presence` on its
+own hot path -- it writes the identical bytes from its own flat, already-sorted `Vec<(PlayerId,
+PresenceRelayOp<G>)>` scratch buffer through a hand-written `write_presence_flat` (`host/mod.rs`),
+mirroring the existing `write_chunk_deltas_flat` precedent, to avoid building a temporary
+`Vec<wire::PresenceOp>` every tick (`.claude/rules/hot-paths.md`'s steady-state convention).
+`presence_section_golden` (one `Sample` + one `Gone` entry) blessed via `pnpm golden:bytes`; no
+existing golden moved (confirmed: `git status` after a full `pnpm golden:bytes` run showed only
+that one new `.hex` file).
+
+**Relay algorithm, `Host::build_frame`**: per connection, per tick, from `PresenceTable::iter()`
+(never queued): skip the sender's own player; skip a player whose chunk (`chunk_of::<G>(sample
+.pos().tile())`) this connection is not subscribed to; otherwise relay when `entry.received_at` is
+newer than `ConnSlot::presence_relayed[who]` (a fresh sample) or `self.last_tick -
+presence_relayed[who] >= G::TICK_RATE.hz_value()` (>= 1 Hz re-relay of a held sample), with
+`age_ticks = self.last_tick.saturating_sub(entry.received_at)`. A second pass over `ConnSlot::
+presence_relayed`'s own keys with no matching `PresenceTable` entry emits `Gone` (fires exactly
+once: `Host::disconnect` now removes the table entry immediately, not on the next `tick()`).
+Both passes feed one `Vec`, sorted ascending by `PlayerId` with the existing `insertion_sort_by_key`
+helper, before writing section 8 -- so a tick whose *only* change is a presence relay must still be
+counted in `build_frame`'s "nothing to say" early-return guard (added `&& self.scratch_presence
+.is_empty()`), or it would incorrectly return 0 and silently drop the relay.
+
+**Counters**: `ConnCounters::presence_bytes_up` (new `u64`), bumped in `Host::on_uplink` only on
+the accepted-sample arm (`self.presence.on_sample(..)`'s own call site), always `1 + raw.len()`
+(a LEB128 varint for any value `0..=32` is always exactly one byte, `MAX_ENCODED_BYTES` = 32,
+checked before this runs) -- never a separate `varint_len` helper. `sim_conn_counters` widened
+48 -> 56 bytes (a 7th `u64`), read by `engine/test`'s `netCounters()` as `uplinkPresenceBytes`.
+`presence_oversize` (added step 3) still has no ABI reader: nothing in this cut's exit criteria
+needs it from a browser test, so it stayed native-only.
+
+**`RemotePresences<G>`, `client/remote_presence.rs`**: `RemotePresenceEntry<G> { sample,
+sample_tick, arrived_ms }`, hand-written `Clone`/`Copy` (the same `PresenceEntry` pitfall: a
+derive would bound `G: Copy`, not `G::Presence: Copy`). `sample_tick = frame.tick - age_ticks`.
+**`arrived_ms` is not real wall-clock arrival**: it is `sample_tick` converted through `G::
+TICK_RATE` (`sample_tick.0 as f64 * 1000.0 / hz`), a deterministic proxy. Threading the client's
+real frame clock into `ClientCore::on_frame`'s fixed `(&mut self, bytes: &[u8])` signature (no
+`t_ms` parameter, and every existing native/wasm call site across the crate calls it that way) was
+judged a wider seam change than this cut should take on unasked; nothing in this cut's own exit
+criteria or tests reads `arrived_ms` (it is not part of the `RemotePresence` struct `presences()`
+hands to a game, only of the internal store `RemotePresences::debug_get` exposes to tests). M30,
+which owns the real interpolation buffer this field anticipates, will need a real value here and
+may need to widen `on_frame`'s signature to get one -- flagged for that milestone, not decided here.
+
+**`FrameView::own_presence()` crosses by value, not `&G::Presence`** as the brief's own Provides
+literally spells it (`FrameView::own_presence() -> &G::Presence`). `game_instance.rs`'s fixed call
+order (M18: "build `FrameView` -> `ClientSide::frame` -> `extract`") builds `FrameView` *before*
+`ClientSide::frame` runs, and `frame` receives `presence: &mut G::Presence` into the exact
+`ClientInstance` field a `&'a G::Presence` held inside `FrameView` would alias for that struct's
+whole lifetime (which spans past `client.frame`, into `extract`'s own use of the same `view`) --
+the borrow checker rejects a `&`/`&mut` pair to the same location coexisting that way. Since
+`Presence: Copy`, copying the value out at `FrameView` construction (`let own_presence =
+*presence;`, taken before `client.frame` writes it) sidesteps the conflict entirely; the value
+`own_presence()` returns is therefore the sample as of the *start* of this frame (last frame's
+final write), not this frame's own not-yet-written update -- the same one-frame staleness
+`camera_view`'s cached fields already accept for `on_frame`'s own `FrameView` construction. Every
+`FrameView::new` call site in the crate (`game_instance.rs` x2, `client/frame_cx.rs` x2, `client/
+ui.rs`, `fixtures/drawables/tests/drawlist_golden.rs`, `client/frame_view.rs`'s own tests) updated
+for the two new trailing parameters (`own_presence: G::Presence`, `remote_presences: &'a
+RemotePresences<G>`).
+
+**`Replica<G>` gains `remote_presences: RemotePresences<G>`** plus `apply_presence_sample`/
+`apply_presence_gone` (`pub(crate)`, called only from `ClientCore::apply`'s new `SectionId::
+Presence` arm) and a `pub fn remote_presences(&self) -> &RemotePresences<G>` accessor (`pub`, not
+`pub(crate)`, for the same reason `entities_map`/`registry` are: `fixtures/drawables`'s own native
+test builds a `FrameView` directly from a `Replica` it owns, outside this crate).
+
+**Fixture `fx-presence` gains `type Client = PresenceClient`**: `frame()` writes a sample derived
+from an internal counter (`self.t`, incremented every call), independent of the camera --
+deliberately, since the worker-path browser test drives `frame()` directly through the harness
+with no guarantee a camera ever moves, and the exit criterion is "while changing every frame".
+`extract()` draws one circle per `presences()` entry; in the single-player worker-path topology
+this is always zero entries (a player's own sample is never relayed back to them), so the loop body
+is exercised but never actually pushes a `Draw` there -- multiplayer circle-drawing itself has no
+dedicated test in this cut (Non-scope of the Tests added list; the accepted risk is the same class
+already covered structurally by `presences()`'s own unit tests in `client/frame_view.rs`, which do
+assert `pos`/`vel`/`alpha` derivation with a real multi-player `RemotePresences`).
+
+**Fixture `fx-puts` gains a real `PutsPresence` type** (`{ pos: [i32; 2], vel: [i16; 2] }`, same
+shape as `fx-presence`'s own `PlayerPresence`) so `gc-connected-terrain.html`'s existing zero-GC
+panning window (docs/plan/15c) also exercises presence sampling, uplink and host decode --
+"the zero-GC scene's fixture gains a presence type", per the brief's own step 6 wording. This
+fixture spawns no player entity, so `PutsClient::frame` samples the camera's own centre
+(`cx.camera().centre`, Q24.8-scaled: `(centre * 256.0) as i32`) every call instead; floats here are
+explicitly sanctioned by 0001 Decision ("the spring lives here, in ordinary floats ... nothing
+depends on its bits") even though this file otherwise falls under `.claude/rules/determinism.md`'s
+path scope, since presence never enters `Store`/the log/the hash. **Measured, not assumed**:
+`pnpm gc -t connected-terrain` (all 10 cases: `clean` + every negative control, `main`/`client`/
+`sim`/`gen0`) still passes at the existing `budgets.json` ceilings with no change -- in particular
+the `sim` isolate's 17 B/frame budget, the one row a naive reading of `codec::decode_canonical`'s
+own `vec![0u8; bytes.len()]` scratch allocation might predict would rise. It does not: that
+allocation happens inside the WASM instance's own bump-allocator arena (`abi::arena::Arena`), which
+is disjoint from the V8 JS heap the browser `gc` suite's CDP sampling profiler measures -- a small
+allocation that fits inside the arena's existing pre-reservation triggers no `memory.grow` and is
+therefore invisible to that profiler, unlike the *native* `no_alloc_connection.rs` suite (which
+measures `abi::arena::live_bytes()` directly and would have caught it -- that suite defines its own
+local `NGame` with `type Presence = ()`, so it is structurally unaffected by this change and still
+passes unmodified). No `budgets.json` value was edited.
+
+**`presence-worker-path`**: a `host.connect: true`, no-renderer page over `fx-presence` (`connected
+.ts`'s own precedent), exposing one `__run(frames)` hook that drives `frames` client frames at
+60 fps (`stepFrame`) with a sim tick every 3rd frame (`stepSimTickSync`, ~20 Hz) -- **not**
+`test/client.ts`'s own `stepTick`, which parks every worker on its own way out
+(`untilQuiescent`'s tail call) and would deadlock the very next `stepFrame` in the same loop
+without an explicit `resumeWorkers` round trip; `gc-connected-terrain.ts`'s own `drive()` is the
+precedent for `stepSimTickSync` + a raw frame loop sharing one tight loop. Settles once
+(`untilQuiescent`) at the end, then reads `netCounters()`. The spec runs 60 frames (~1 s of manual-
+clock time, matching `sampler_rate_and_on_change`'s own one-second window) and asserts
+`uplinkPresenceBytes > 0` (the "reaches the table" proof), `expectWithinBudget('counters.presence
+.uplinkBytesPerSec', ..)`, and `drops === 0` on both rings. **Measured**: 1.9 s of the fast
+`browser` suite's 35 s budget (one test added, as instructed).
+
+**Failability proof (steps 4-6), one inject-fail-revert per new test, each performed and reverted
+in this session against the actual code, not a hypothetical**:
+
+- `relay_recipients` / "relay to the sender": in `Host::build_frame`, changed `if who ==
+  slot.player { continue; }` to `if false && who == slot.player { .. }` (never skips) -->
+  this test's own "sender: never sees their own sample" assertion failed (panicked with "a
+  player's own sample must never be relayed back to them"); reverted. (Needed `a`'s own camera
+  subscribed to its own chunk in the test setup, or the *other* guard below masks it -- found live:
+  the first attempt at this injection did not fail, because connection 0 had never sent a camera
+  report at all, so the subscription guard alone already excluded it.)
+- `relay_recipients` / "relay to an unsubscribed client": changed `if !slot.subs.is_subscribed
+  (chunk) { continue; }` to `if false && !slot.subs.is_subscribed(chunk) { .. }` --> "never
+  subscribed: sees nothing" failed; reverted.
+- `rerelay_and_gone` / "drop the re-relay": changed the `due` match's `Some(&last) => ..` arm to
+  always `false` --> panicked with ">= 1 Hz re-relay must eventually fire" (the loop ran out after
+  20 ticks with no second hit); reverted.
+- `rerelay_and_gone` / "drop Gone": guarded the `Gone` push in `Host::build_frame`'s second
+  scratch-presence loop with `if false && ..` --> panicked with "the disconnect frame must carry a
+  Presence section" (`presence_entries` returned `None`); reverted.
+- `rerelay_and_gone` / "skip age_ticks": hardcoded the `age_ticks` varint to `0` in
+  `write_presence_flat`'s `Sample` arm --> panicked with "age_ticks must grow across a re-relay:
+  first 0, second 0"; reverted.
+- `presence-worker-path` / "stop the worker from reading the uplink field": forced `ClientCore::
+  presence_due` to always return `false` --> failed with "the sample must have reached the sim
+  worker's table" (`Received: 0`, `Expected: > 0`); reverted.
+
+**Exit criteria evidence**:
+- Every test above passes (`cargo nextest run --workspace -E 'test(presence) or
+  package(fx-presence)'`: all pass; `pnpm test browser -t presence-worker-path`: pass, 1.9 s); the
+  Presence golden is checked in (`presence_section_golden.hex`).
+- `PresenceTable` appears in `admit`'s signature only: unchanged from steps 1-3, still proved by
+  the compile-fail doc test on `PresenceTable` itself (`presence.rs`); steps 4-6 add no new
+  `PresenceTable` parameter anywhere.
+- The zero-GC test still passes with the presence-enabled fixture: `pnpm gc -t connected-terrain`,
+  10/10 cases pass, no budget changed.
+- `uplinkPresenceBytes` while changing every frame is within budget: `presence-worker-path.spec.ts`
+  asserts `expectWithinBudget('counters.presence.uplinkBytesPerSec', counters.uplinkPresenceBytes)`
+  directly; passes.
+- `pnpm test` / `pnpm lint` in full: not run by this session (Tyler is the gate, per the delegation
+  prompt); every suite touched was run individually and green, plus a full `pnpm golden:bytes` run
+  (366/366 native tests passing, no existing golden moved) and `pnpm --filter engine typecheck`
+  (clean).
