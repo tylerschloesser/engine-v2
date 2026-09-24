@@ -260,7 +260,123 @@ second run (immediately after, same browser-suite-aftermath pattern) 39.6s, `bui
 informational only (`console.error`, never sets the runner's exit code; confirmed `EXIT=0` both
 times), and both runs are comfortably under Tyler's 60s wall-time requirement.
 
-**Not done / left for the orchestrator:** a `cargo clean` remeasurement of the incremental-rebuild
-figure (flagged in ADR 0033's Consequences); the `--workspace`-fixes-the-fingerprint-mismatch
+**Not done / left for the orchestrator (round 0):** the `--workspace`-fixes-the-fingerprint-mismatch
 mechanism itself was bisected and verified stable but not fully explained at the cargo-internals
-level (recorded above, not reopened).
+level (recorded above, not reopened). The "cargo clean remeasurement" item below was overtaken by
+fix round 1: the incremental-rebuild figure is now fully attributed, no `cargo clean` needed.
+
+## Fix round 1
+
+The coordinator measured `2c1ba7e` (round 0's tip) on a quiet machine (load ~6) and found three
+problems. All three are fixed below, each with the pasted evidence.
+
+**Problem 1: warm no-change build measured 15 s, not 6.3-6.6 s.** Two consecutive `pnpm test` runs
+both printed `build WARN 15s/15s (slowest: fixtures 8.7s, doctests 5.4s, pages 0.6s)`.
+
+Attribution. `cargo metadata`/`cargo build --target wasm32-unknown-unknown` for each of the 5
+fixtures, measured directly: 0.02-0.05s each, every time -- never the cause. The `puts` fixture's own
+bindings call (`cargo test --workspace ... export_bindings`) was the one that spiked, to 7-9s,
+*right after a full `pnpm test` run that included the `browser` suite*, every time reproduced.
+`CARGO_LOG=cargo::core::compiler::fingerprint=info` on the very next `cargo-tests` build step named
+the real cause precisely:
+
+```
+fingerprint dirty for fx-hash v0.0.0 (.../fixtures/hash)/Test/TargetInner { ... lib_target("fx_hash", ...) }
+    dirty: FsStatusOutdated(StaleItem(ChangedFile { reference: ".../fx-hash-599df1e394bda2a7/dep-test-lib-fx_hash", reference_mtime: FileTime { seconds: 1790216952, .. }, stale: ".../fixtures/hash/src/lib.rs", stale_mtime: FileTime { seconds: 1790216980, .. } }))
+```
+
+`fixtures/hash/src/lib.rs`'s own mtime (`1790216980`) was 28 seconds newer than the fingerprint's
+recorded reference (`1790216952`) -- with **no content change at all**. Root cause:
+`packages/engine/tests/wasm/plugin-dev.test.ts`'s `"touch triggers rebuild and full-reload"` test
+calls `await utimes(LIB_RS, now, now)` against the **real** `fixtures/hash/src/lib.rs` (not a copy,
+`LIB_RS = .../fixtures/hash/src/lib.rs`) to simulate a file-watcher touch for Vite's dev-rebuild path,
+and never restored the mtime afterward. Every `pnpm test` run's own `wasm` suite left the file
+touched; the *next* `pnpm test`'s build phase then saw a "changed" source file that cargo had to
+recompile for, purely because of the stale mtime.
+
+Fix: `plugin-dev.test.ts` now `stat()`s the file before touching it and restores the original mtime
+in a `finally` block, pass or fail. Verified: three consecutive full `pnpm test` runs after the fix
+show `fixtures` at 0.87-0.89s and `cargo-tests` at 0.19-0.20s every time (`test-results/build/
+timings.json`), no more warm-build WARN, matching the original 6.3-6.6s total-build figure exactly
+and repeatably -- including immediately after `browser`.
+
+**Problem 2: the one-line-edit rebuild is real, not target-directory bloat.** The coordinator's own
+measurement (`build WARN 158s/15s`, `real 160.06`, reverting cost another `157s`) is confirmed: this
+is real, not session noise, and the original "session-local target-directory bloat" explanation in
+ADR 0033 is **withdrawn** (never supported by a `cargo clean` measurement, as instructed).
+
+Attribution, precise this time (`cargo test --workspace --timings --color never export_bindings` from
+a warm baseline with the one-line `crates/engine/src/lib.rs` edit applied -- cargo's own per-unit
+compile profiler, `target/cargo-timings/cargo-timing.html`'s embedded `UNIT_DATA`, not a guess):
+
+- **One cargo invocation** dirties: the bindings step's own `cargo test --workspace ...
+  export_bindings` is the first to touch the changed `engine` crate.
+- **40 compilation units** rebuild: `engine`'s own lib (2 units: rmeta + full) plus its **19 separate
+  `tests/*.rs` integration-test files, each its own compiled+linked binary** (22 units for `engine`
+  alone), plus 18 more units across the 5 fixtures (`fx-puts` 6, `fx-worldgen` 5, `fx-drawables` 3,
+  `fx-hash` 3, `fx-terrain` 1) -- all pulled in because `--workspace` makes every member a build
+  target, and Rust's rlib model forces every dependent of a changed crate to recompile and relink,
+  not just link.
+- **Compilation itself is fast and well parallelized**: 213.7s of aggregate per-unit duration
+  finishes at a **17.55s wall-clock** (`cargo --timings`'s own max `start + duration`), matching
+  cargo's repeatedly-observed self-reported "Finished ... in 17.2-17.6s" line exactly, every
+  isolated measurement. ~12x parallelism, close to this Mac's 14-core ceiling. This is comfortably
+  inside the 30s target on its own.
+- **The remaining ~130s is not in cargo's own timing at all.** Sampling `ps -eo pid,pcpu,comm` every
+  2s for the whole run (`while [ ! -f marker ]; do ps ...; sleep 2; done` alongside the real cargo
+  run) found `com.apple.CodeSigningHelper.xpc`
+  (`/System/Library/Frameworks/Security.framework/Versions/A/XPCServices/
+  com.apple.CodeSigningHelper.xpc/Contents/MacOS/com.apple.CodeSigningHelper`) present in 88 of
+  roughly 118 two-second samples -- the large majority of the run's duration. This is **macOS's
+  mandatory ad-hoc code-signing of every freshly linked Mach-O executable on Apple Silicon**, one
+  operation per one of the 40 binaries this rebuild produces, enforced by the OS kernel itself, not
+  by cargo, rustc, or anything in this repo's build scripts.
+- Ruled out: a fresh, already-signed binary re-run shows **no** first-run delay (`time
+  ./target/debug/deps/no_alloc_codec-... export_bindings --list` = 0.003s, twice); a second,
+  fully-warm `cargo test --workspace ... export_bindings` immediately after (nothing to rebuild) =
+  0.167s -- so it is neither a binary-execution cost nor a freshness-check-over-a-bloated-target-dir
+  cost, only the one-time signing operation on each newly linked binary.
+- Tried and measured, not adopted: `[profile.test] debug = 0` (repo-wide, temporary). One
+  representative test binary shrank from 996,848 to 907,536 bytes (~9%) -- not enough of a size
+  reduction to expect a meaningful cut in per-binary signing time, at the cost of debug-info quality
+  for every native test in the repo. Reverted.
+- **What would actually move the number**: fewer separately-signed binaries -- specifically,
+  consolidating `crates/engine`'s own ~19 separate `tests/*.rs` files (each is cargo's own unit of
+  compilation *and* linking *and* signing) into fewer files would cut signing operations roughly
+  proportionally. This changes test content/organization (this milestone's own Non-scope line:
+  "changing test content") and trades per-file test isolation for build speed. **Not decided here --
+  recorded as an open question for Tyler in ADR 0033's Consequences.**
+
+**Problem 3: the wall-clock regression test failed on legitimate work.** The coordinator's own
+edit-and-run reproduced it exactly: `fixtures` compiling for real (correctly, reacting to a genuine
+source change) made `scripts/lib/build-timings.test.mjs`'s `toBeLessThan(12000)` fail, which would
+turn red on every first `pnpm test` after any real `crates/engine/src/` edit.
+
+Fix: deleted `scripts/lib/build-timings.test.mjs`. Extracted `exportBindings`'s own cargo args into
+an exported `BINDINGS_CARGO_ARGS` constant (`packages/engine/src/build-game.ts`), so a test can read
+the exact array the runtime code uses without calling cargo. New test
+(`packages/engine/src/build-game-bindings-scope.test.ts`) reads `BINDINGS_CARGO_ARGS` and the
+`cargo-tests` build step's own `args` (`scripts/suites.mjs`'s `buildSteps`) and asserts both carry
+`--workspace` and neither narrows with `-p`/`--package` -- deterministic, no cargo call, no timing,
+tied directly to the actual dirty-reason mechanism (package-selection scope) rather than its
+wall-clock symptom.
+
+Proved failing by reverting `BINDINGS_CARGO_ARGS` to drop `--workspace`
+(`['test', '--color', 'never', 'export_bindings']`): fails with `expected [] to deeply equal [
+'--workspace' ]`, and the reintroduced ping-pong showed up for real in the same run (`build WARN
+48s/15s (slowest: fixtures 22s, cargo-tests 18s, ...)`) -- both signals agree. Reverted back: passes,
+0.9s.
+
+**Budgets after both fixes.** `buildBudgetMs` (`scripts/suites.mjs`): 15,000 → 10,000 (comfortable
+~50% margin over the now-consistent ~6.3-6.5s measured figure; still fails clearly, at 15,000, well
+before either fixed ping-pong's 15-17s-per-step cost could pass unnoticed). `browser`'s budget
+(35,000) is unchanged by this round.
+
+**Verification (`time pnpm test`, twice in a row, both exit 0, tree clean both times):** 30.0s, no
+build WARN; 30.4s, no build WARN. Both comfortably under Tyler's 60s requirement, and -- unlike
+round 0's report -- neither run shows the WARN that used to appear on the second of two consecutive
+runs.
+
+**Not done / open for Tyler:** whether to consolidate `crates/engine`'s ~19 separate `tests/*.rs`
+files to bring the 30s incremental-rebuild target back into reach, against the file-level test
+isolation that shape currently gives (ADR 0033's Consequences).
