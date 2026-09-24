@@ -10,6 +10,14 @@ import { CameraState } from '../../../../src/camera/state.ts'
 import type { Client, ClientOptions } from '../../../../src/client.ts'
 import { clientTestHandle, createClient } from '../../../../src/client.ts'
 import type { InputEventType } from '../../../../src/input/semantic.ts'
+import type { AnchorAlign, AnchorHandle } from '../../../../src/overlay/anchors.ts'
+import {
+  DRAW_BYTES,
+  LAYER_COUNT,
+  packDrawKindLayerFlags,
+} from '../../../../src/render/drawables.ts'
+import { DRAWLIST_BODY_BYTES, DRAWLIST_HEADER_BYTES } from '../../../../src/sab/layout.ts'
+import { TripleWriter } from '../../../../src/sab/triple.ts'
 import { attachCameraInputTestHooks, injectKey, injectPointer } from '../../../../src/test/input.ts'
 import { fixtureWasm } from './fixture-wasm.ts'
 
@@ -39,6 +47,35 @@ declare global {
     __rcInjectKey?: (code: string, down: boolean) => void
     __rcKeysMask?: () => number
     __rcMountWidget?: (x: number, y: number, w: number, h: number) => void
+    // docs/plan/18-picking-and-overlay.md: picking hooks -- a spec hand-fills the DrawList's own
+    // back slot and publishes it (the same "hand-built slot" shape `input/pick.test.ts`'s unit
+    // tests use, over the real triple-buffer SAB this time), then drives picking exactly the way
+    // `frame-loop.ts`'s `acquire` phase and `input/semantic.ts`'s recognizer do.
+    __rcPublishDrawList?: (
+      records: Array<{
+        posX: number
+        posY: number
+        sizeX: number
+        sizeY: number
+        kind: number
+        layer: number
+        flags?: number
+        pickId: number
+      }>,
+      windowOriginX?: number,
+      windowOriginY?: number,
+    ) => void
+    __rcPickAcquire?: () => void
+    __rcPickAt?: (cssX: number, cssY: number) => number
+    __rcPickScanned?: () => number
+    // docs/plan/18-picking-and-overlay.md: overlay hooks -- `id` names both the DOM element (its own
+    // `id` attribute, so a spec can query it with a Playwright locator, reading layout is allowed
+    // there) and the `AnchorHandle` this page keeps.
+    __rcOverlayAnchor?: (id: string, worldX: number, worldY: number, align?: AnchorAlign) => void
+    __rcOverlaySet?: (id: string, worldX: number, worldY: number) => void
+    __rcOverlayRemove?: (id: string) => void
+    __rcOverlayUpdate?: () => void
+    __rcOverlayStyleWrites?: () => number
     __pageReady?: true
   }
 }
@@ -128,5 +165,88 @@ window.__rcMountWidget = (x, y, w, h) => {
   widget.style.pointerEvents = 'auto'
   host.appendChild(widget)
 }
+
+// docs/plan/18-picking-and-overlay.md: picking. `writer` is built once, lazily (the client doesn't
+// exist until `__rcCreate`) -- the *only* `TripleWriter` this page ever builds over `sabs.drawList`,
+// matching production's own "one writer" shape (the client worker's real publish pump).
+let drawListWriter: TripleWriter | undefined
+// A globally monotonic counter (`client/drawlist.rs`'s own `frame_seq`, "wraps every `begin_frame`")
+// -- *not* read-modify-written from the slot's own bytes: `publish()` alternates which of the three
+// physical slots is `backSlot()`, so a per-slot read-increment would (and did, found running this
+// page's own first draft of `pick.matches_interpolated_frame_on_screen`) produce the *same* value
+// twice from two different, untouched slots, defeating `Picker.at`'s own cache key.
+let nextFrameSeq = 1
+const HEADER_OFF_FRAME_SEQ = 0
+const HEADER_OFF_RECORD_COUNT = 4
+const HEADER_OFF_WINDOW_ORIGIN = 8
+const HEADER_OFF_LAYER_COUNT = 16
+
+window.__rcPublishDrawList = (records, windowOriginX = 0, windowOriginY = 0) => {
+  const c = requireClient()
+  if (!drawListWriter) {
+    drawListWriter = new TripleWriter(
+      clientTestHandle(c).sabs.drawList,
+      DRAWLIST_HEADER_BYTES,
+      DRAWLIST_BODY_BYTES,
+    )
+  }
+  const slot = drawListWriter.backSlot()
+  const headerBytes = drawListWriter.headerView(slot)
+  const header = new DataView(headerBytes.buffer, headerBytes.byteOffset, headerBytes.byteLength)
+  const byLayer: (typeof records)[] = Array.from({ length: LAYER_COUNT }, () => [])
+  for (const r of records) byLayer[r.layer]?.push(r)
+  const ordered = byLayer.flat()
+  let recordCount = 0
+  for (let i = 0; i < LAYER_COUNT; i++) {
+    const count = (byLayer[i] as typeof records).length
+    header.setUint32(HEADER_OFF_LAYER_COUNT + i * 4, count, true)
+    recordCount += count
+  }
+  header.setUint32(HEADER_OFF_RECORD_COUNT, recordCount, true)
+  header.setInt32(HEADER_OFF_WINDOW_ORIGIN, windowOriginX, true)
+  header.setInt32(HEADER_OFF_WINDOW_ORIGIN + 4, windowOriginY, true)
+  // `frame_seq` bumped so `Picker.at`'s own cache (keyed on it) never reuses a stale answer across
+  // two publishes of the same test.
+  header.setUint32(HEADER_OFF_FRAME_SEQ, nextFrameSeq >>> 0, true)
+  nextFrameSeq += 1
+
+  const bodyBytes = drawListWriter.bodyView(slot)
+  const body = new DataView(bodyBytes.buffer, bodyBytes.byteOffset, bodyBytes.byteLength)
+  ordered.forEach((r, i) => {
+    const off = i * DRAW_BYTES
+    body.setFloat32(off, r.posX, true)
+    body.setFloat32(off + 4, r.posY, true)
+    body.setFloat32(off + 8, r.sizeX, true)
+    body.setFloat32(off + 12, r.sizeY, true)
+    body.setUint32(off + 16, packDrawKindLayerFlags(r.kind, 0, r.layer, r.flags ?? 0), true)
+    body.setUint32(off + 28, r.pickId, true)
+  })
+  drawListWriter.publish()
+}
+
+window.__rcPickAcquire = () => requireClient().pick.acquire()
+window.__rcPickAt = (cssX, cssY) => requireClient().pick.at(cssX, cssY)
+window.__rcPickScanned = () => clientTestHandle(requireClient()).picker.scanned()
+
+// docs/plan/18-picking-and-overlay.md: static overlay anchors.
+const overlayHandles = new Map<string, AnchorHandle>()
+
+window.__rcOverlayAnchor = (id, worldX, worldY, align) => {
+  const c = requireClient()
+  const el = document.createElement('div')
+  el.id = id
+  el.textContent = id
+  const opts = align !== undefined ? { align } : {}
+  // `client.overlay.anchor` re-parents `el` into the engine's own anchor layer itself (`overlay/
+  // anchors.ts`'s own doc comment) -- this page never appends `el` anywhere first.
+  overlayHandles.set(id, c.overlay.anchor(el, worldX, worldY, opts))
+}
+window.__rcOverlaySet = (id, worldX, worldY) => overlayHandles.get(id)?.set(worldX, worldY)
+window.__rcOverlayRemove = (id) => {
+  overlayHandles.get(id)?.remove()
+  overlayHandles.delete(id)
+}
+window.__rcOverlayUpdate = () => requireClient().overlay.update()
+window.__rcOverlayStyleWrites = () => clientTestHandle(requireClient()).overlay.styleWrites()
 
 window.__pageReady = true
