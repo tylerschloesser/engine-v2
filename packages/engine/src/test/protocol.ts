@@ -21,6 +21,11 @@ export type ToWorker =
   | { type: 'admit'; bytes: Uint8Array }
   | { type: 'memory' }
   | { type: 'memGrows' }
+  /** M18c (docs/plan/18c-stepping-hash-under-load.md): diagnostic only -- the worker's own count of
+   * ticks it has actually run (`harness-worker.ts`'s `ticksRun`, incremented once per `coreTick()`
+   * call), independent of the step block's `Req`/`Ack` words so a lost or duplicated tick shows up
+   * even when `Req`/`Ack` still agree. */
+  | { type: 'ticks' }
   /** M04: marks this isolate for `analyse.ts`'s trace-side naming (Planning decisions "Naming
    * isolates"). Only reachable while the worker is idle (parked), like every other message here. */
   | { type: 'markIsolate' }
@@ -39,6 +44,7 @@ export type FromWorker =
   | { type: 'admit'; status: number }
   | { type: 'memory'; bytes: number }
   | { type: 'memGrows'; grows: number }
+  | { type: 'ticks'; count: number }
   | { type: 'markedIsolate' }
   | { type: 'pmTick' }
   /** Panic or trap; accumulated by the harness, never rejects an in-flight step (Planning decisions). */

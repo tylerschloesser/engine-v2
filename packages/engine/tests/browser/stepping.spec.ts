@@ -5,7 +5,7 @@
 import { expect, test } from '@playwright/test'
 import { RegionId, Role } from '../../src/abi.js'
 import { instantiate } from '../../src/loader.js'
-import type { Harness } from '../../src/test/harness.js'
+import type { Harness, HarnessDebug } from '../../src/test/harness.js'
 import { loadFixture, readGolden } from '../support/fixtures.js'
 import type { HashScenario } from '../support/scenario.js'
 import { openPage } from './support/page.js'
@@ -28,17 +28,37 @@ test('stepping: 1,000 stepTick() in one task match a plain reference', async ({ 
   const expected = ref.readU64Hex(RegionId.Result, 0)
 
   await openPage(page, '/stepping.html')
-  const actual = await page.evaluate(async () => {
-    const harness = window.__harness
+  const result = await page.evaluate(async () => {
+    // `window.__harness` is declared as plain `Harness` (shared with `stepping.ts`); the M03/M04
+    // harness's own object also implements `HarnessDebug` (harness.ts's `createHarness` return
+    // type), so this cast is local to this one test rather than widening the page's ambient type.
+    const harness = window.__harness as (Harness & HarnessDebug) | undefined
     if (!harness) throw new Error('harness missing')
     await harness.resume()
     // The 1,000 calls are one synchronous JS task: stepTick() is synchronous and allocation-free
     // once resumed (Seams), so nothing here awaits between ticks.
     for (let t = 0; t < 1000; t++) harness.stepTick()
     await harness.park()
-    return harness.hash('sim')
+    const actual = await harness.hash('sim')
+    // M18c (docs/plan/18c-stepping-hash-under-load.md): gathered every run, not only on failure --
+    // cheap (one message round trip plus three shared-memory reads), and a mismatch needs this
+    // captured at the moment `hash` was read, not reconstructed afterwards.
+    const diag = await harness.debugSnapshot('sim')
+    return { actual, diag }
   })
-  expect(actual).toBe(expected)
+  // A plain `throw` here, not just `expect(...).toBe(...)`, because the JSON-reporter-based runner
+  // does not reliably carry a matcher's own Expected/Received diff into the failure message it
+  // captures (docs/plan/03-browser-harness.md, Deviations: the same lesson forced `no_ambient_random`
+  // off `toEqual` and onto a plain `throw`). This is the one occurrence this milestone exists to
+  // explain, so the message must show up on its own, not depend on how the reporter renders a diff.
+  if (result.actual !== expected) {
+    const d = result.diag
+    throw new Error(
+      `stepping hash mismatch: expected=${expected} actual=${result.actual} ` +
+        `ticksRun=${d.ticksRun} req=${d.req} ack=${d.ack} state=${d.state} yield=${d.yieldFlag}`,
+    )
+  }
+  expect(result.actual).toBe(expected)
 })
 
 test('stepping: untilQuiescent() leaves the worker parked with nothing outstanding', async ({

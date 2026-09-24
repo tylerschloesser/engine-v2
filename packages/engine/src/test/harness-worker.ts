@@ -22,6 +22,11 @@ const scope = self as unknown as {
 
 let inst: EngineInstance | undefined
 let sab: Int32Array | undefined
+// M18c (docs/plan/18c-stepping-hash-under-load.md): a plain counter, incremented once per
+// `coreTick()` call (both the SAB step protocol and the `post-message` `pmTick` path), never
+// inferred from `Req`/`Ack` -- those are set unconditionally by the loop regardless of how many
+// times `coreTick()` actually ran, so this is the only way a lost or duplicated tick is visible.
+let ticksRun = 0
 // M04 (docs/plan/04-zero-gc-harness.md, Seams): preallocated views over the fixed-block SABs, when
 // this worker was set up with `rxTx`. Never `subarray()`/re-created per tick (.claude/rules/hot-paths.md).
 let rxView: Uint8Array | undefined
@@ -62,6 +67,7 @@ const PARKED: FromWorker = { type: 'parked' }
  * own retained object, never to gate whether it runs. */
 function coreTick(n: number): void {
   if (!inst) return
+  ticksRun++
   if (sab) applyStepControl(Atomics.load(sab, StepBlockField.Control), n)
   if (rxView && txView) {
     const rx = inst.region(RegionId.Rx)
@@ -189,6 +195,8 @@ scope.onmessage = (ev) => {
     post({ type: 'memory', bytes: inst ? inst.memoryBytes() : 0 })
   } else if (m.type === 'memGrows') {
     post({ type: 'memGrows', grows: inst ? inst.memGrows() : 0 })
+  } else if (m.type === 'ticks') {
+    post({ type: 'ticks', count: ticksRun })
   } else if (m.type === 'dispose') {
     self.close()
   }

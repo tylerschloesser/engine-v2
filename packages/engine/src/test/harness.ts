@@ -65,6 +65,28 @@ export interface Harness {
   dispose(): void
 }
 
+/** M18c (docs/plan/18c-stepping-hash-under-load.md): diagnostic only, so a `stepping.spec.ts` hash
+ * mismatch can explain itself instead of guessing -- deliberately not folded into `Harness` above
+ * (Seams: this milestone provides nothing new there). `src/test/client.ts`'s `asHarness` (the
+ * production-topology counterpart) does not implement this; only `createHarness`'s own harness
+ * does, which is why it is a separate intersected type rather than a new `Harness` method. */
+export interface HarnessDebug {
+  /** Requires the worker parked, like `hash`/`admit`/`memoryBytes`/`memGrows`. `ticksRun` comes
+   * from the worker itself (a message round trip, never inferred from `req`/`ack`): those two are
+   * set unconditionally by the worker's loop regardless of how many times it actually ticked, so
+   * this is the only way a lost or duplicated tick is visible. `req`/`ack`/`state`/`yieldFlag` are
+   * the step block's own words (`step-block.ts`'s `StepBlockField`), read directly since they are
+   * shared memory -- `state` is a `WorkerState` value and doubles as "was this worker really
+   * parked (`WorkerState.Idle`) at the moment this was called". */
+  debugSnapshot(worker: string): Promise<{
+    ticksRun: number
+    req: number
+    ack: number
+    state: number
+    yieldFlag: number
+  }>
+}
+
 type Pending = {
   replyType: FromWorker['type']
   resolve: (m: FromWorker) => void
@@ -233,7 +255,7 @@ export async function createHarness(opts: {
   wasm: { url: string; buildHash: string } | WebAssembly.Module
   workers: HarnessWorkerSpec[]
   clock?: ManualClock
-}): Promise<Harness> {
+}): Promise<Harness & HarnessDebug> {
   for (const spec of opts.workers) {
     if (spec.name === 'main') throw new Error("createHarness: worker name 'main' is reserved")
   }
@@ -440,6 +462,19 @@ export async function createHarness(opts: {
         }),
       )
       return out
+    },
+
+    async debugSnapshot(name) {
+      const h = findWorker(name)
+      requireParked(h, 'debugSnapshot')
+      const reply = await send(h, { type: 'ticks' }, 'ticks')
+      return {
+        ticksRun: reply.count,
+        req: Atomics.load(h.sab, StepBlockField.Req),
+        ack: Atomics.load(h.sab, StepBlockField.Ack),
+        state: Atomics.load(h.sab, StepBlockField.State),
+        yieldFlag: Atomics.load(h.sab, StepBlockField.Yield),
+      }
     },
 
     errors() {
