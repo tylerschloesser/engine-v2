@@ -53,20 +53,66 @@ const COI_HEADERS = {
   'Cross-Origin-Embedder-Policy': 'require-corp',
 }
 
+/** What `watchCrate` returns: enough of `FSWatcher` for the plugin's own `close()` loop, backed by
+ * one or more real watchers underneath. */
+export interface CrateWatcher {
+  close(): void
+}
+
 /**
- * Recursive `fs.watch` on `dir` for `.rs` and `Cargo.toml` changes, `target/` ignored. Kept behind
- * one function so a Linux CI failure (0017 "untested") can swap the implementation (M10) without
- * touching the plugin around it. `undefined` when `dir` does not exist (an unbuilt fixture crate).
+ * Watches `dir` for `.rs` and `Cargo.toml`/`build.rs` changes without ever recursing into
+ * `target/` (docs/plan/17d-fast-tier-wall-time.md, CI round 1's fix): a *recursive* `fs.watch` on
+ * `src/`, plus a *non-recursive* `fs.watch` on `dir` itself for its root-level files
+ * (`Cargo.toml`, `build.rs`). The earlier version watched the whole crate directory recursively
+ * and filtered `target/` only inside its callback -- on Linux, `fs.watch(dir, {recursive: true})`
+ * is Node's own JS-level walker (`node:internal/fs/recursive_watch`, since libuv has no recursive
+ * inotify), and it still *descends into* `target/` to set up its own per-entry watches. Cargo's
+ * scratch dir there is rewritten constantly (temp files created and renamed away, e.g. its
+ * `*.temp-archive` incremental-compilation cache), so the walker would routinely `readdirSync` a
+ * path cargo had already removed, throw `ENOENT`, and its own `catch` block turns that into
+ * `this.emit('error', error)` -- with no `'error'` listener on the watcher, Node's `EventEmitter`
+ * throws it as an unhandled exception (`lib/events.js`'s `emit`: "If there is no 'error' event
+ * listener then throw"), which is exactly the crash CI hit (`plugin-rebuild-error.test.ts`,
+ * Deviations). Never watching `target/` at all removes the failure mode outright, on any OS, rather
+ * than relying on an `'error'` handler suppressing it (which would only help for errors raised
+ * *after* `fs.watch` returns the watcher -- the same walk can throw synchronously, before a caller
+ * ever gets the object back, if `target/` is already churning when the watch starts).
+ * `undefined` when `dir` does not exist (an unbuilt fixture crate).
  */
-export function watchCrate(dir: string, onChange: (file: string) => void): FSWatcher | undefined {
+export function watchCrate(
+  dir: string,
+  onChange: (file: string) => void,
+): CrateWatcher | undefined {
   if (!existsSync(dir)) return undefined
-  return watch(dir, { recursive: true }, (_event, file) => {
-    if (!file) return
-    const rel = file.replaceAll('\\', '/')
-    if (rel === 'target' || rel.startsWith('target/')) return
-    if (!(rel.endsWith('.rs') || rel.endsWith('Cargo.toml'))) return
-    onChange(rel)
-  })
+  const isSourceChange = (rel: string): boolean => rel.endsWith('.rs') || rel.endsWith('Cargo.toml')
+  const watchers: FSWatcher[] = []
+
+  const srcDir = join(dir, 'src')
+  if (existsSync(srcDir)) {
+    watchers.push(
+      watch(srcDir, { recursive: true }, (_event, file) => {
+        if (!file) return
+        const rel = file.replaceAll('\\', '/')
+        if (isSourceChange(rel)) onChange(`src/${rel}`)
+      }),
+    )
+  }
+  // Non-recursive: reports only `dir`'s own direct children (`Cargo.toml`, `build.rs`, and
+  // directory entries like `target`/`src`/`tests` themselves appearing or disappearing), never
+  // descending into any of them.
+  watchers.push(
+    watch(dir, { recursive: false }, (_event, file) => {
+      if (!file) return
+      const rel = file.replaceAll('\\', '/')
+      if (isSourceChange(rel)) onChange(rel)
+    }),
+  )
+
+  return {
+    close(): void {
+      for (const w of watchers) w.close()
+    },
+  }
 }
 
 /** The engine npm package's real directory, whether this file runs from `src/` or `dist/`: what
@@ -88,7 +134,7 @@ export function engine(opts: EngineOptions): Plugin {
   let buildHash = ''
   let wasmBytes: Buffer | undefined
   let built: Promise<void> | undefined
-  const watchers: FSWatcher[] = []
+  const watchers: CrateWatcher[] = []
   const api: EnginePluginApi = { profile }
 
   const doBuild = async (): Promise<void> => {

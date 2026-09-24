@@ -380,3 +380,93 @@ runs.
 **Not done / open for Tyler:** whether to consolidate `crates/engine`'s ~19 separate `tests/*.rs`
 files to bring the 30s incremental-rebuild target back into reach, against the file-level test
 isolation that shape currently gives (ADR 0033's Consequences).
+
+## CI round 1
+
+CI run 35951386457 (attempt 2), slow tier: `wasm FAIL 3 tests ... runner exited 1 after a
+parseable report showed 0 failures`, an unhandled error while `tests/wasm/plugin-rebuild-
+error.test.ts` ran: `Error: ENOENT: no such file or directory, scandir '/tmp/engine-plugin-
+rebuild-error-.../target/wasm32-unknown-unknown/debug/deps/.tmpRUqoVf.temp-archive'`, thrown from
+inside Node's own recursive-watch implementation.
+
+**Confirmation (required item 1).** `.node-version` pins `22.18.0` (`actions/setup-node`'s
+`node-version-file`). Fetched `lib/fs.js` and `lib/internal/fs/recursive_watch.js` at tag
+`v22.18.0` directly from `nodejs/node` (`gh api repos/nodejs/node/contents/...`): on Linux/other
+non-macOS/non-Windows, `fs.watch(dir, {recursive: true})` (`lib/fs.js` ~line 2541: "libuv does not
+support recursive file watch on all platforms, e.g. Linux due to the limitations of inotify")
+constructs `internal/fs/recursive_watch.js`'s own `FSWatcher` (a *JS-level* recursive walker, not
+a native one) and calls its `[kFSWatchStart]`. That file's `#watchFolder` (line 111:
+`readdirSync(folder, {...})`) is wrapped in `try { ... } catch (error) { this.emit('error',
+error) }` (line 142-144); its `#watchFile` callback (line 191: `this.#watchFolder(file)`, run when
+a previously-watched entry's native per-file watcher fires and a restat says it's now a directory)
+matches the CI stack's second and third frames exactly by line number, confirming the exact
+version and code path (CI's log names the walker's class "RecursiveWatcher" for clarity against
+the *other*, also-named `FSWatcher` from `internal/fs/watchers.js` two frames down -- both are
+literally `class FSWatcher` in Node's own source; `gh api search/code` over `nodejs/node` finds no
+class actually named `RecursiveWatcher` anywhere in the repo, confirming this is the brief's own
+paraphrase, not a literal log line). `lib/events.js`'s `EventEmitter.prototype.emit` (fetched same
+tag): `if (doError) { ... throw er; // Unhandled 'error' event }` when `events.error === undefined`
+-- exactly what turns `#watchFolder`'s caught `readdirSync` `ENOENT` into a process-level unhandled
+exception, and explains the CI stack's trailing `FSWatcher.emit`/`FSWatcher._handle.onchange`
+frames too (Node's `enhanceStackTrace` appends the `emit()` call site to an unhandled `'error'`
+event's displayed stack; the leading frames are the original error's own captured stack from
+`readdirSync`).
+
+**Correction to the brief's premise.** The claim "a watcher `'error'` listener would not catch it"
+does not hold in general: `this` inside `#watchFolder`/`#watchFile` is the *same* instance
+returned by `fs.watch()`, so `watcher.on('error', ...)` attached *after* construction would receive
+this exact event for any failure raised asynchronously (via a later native per-file callback, e.g.
+this CI occurrence) instead of throwing. It would *not* help for the same class of `ENOENT`
+happening *synchronously* during the initial recursive walk inside `fs.watch()` itself, before the
+caller ever receives the watcher object to attach a listener to (a real possibility if `target/`
+is already churning at watch-start). Relying on an `'error'` handler is also an undocumented
+implementation detail of a Node-internal fallback, not a contract. Not chosen as the fix either
+way -- noted here because required item 1 asked this claim to be checked, not assumed.
+
+**Fix (required item 2).** `watchCrate` (`packages/engine/src/vite.ts`) no longer makes one
+recursive `fs.watch` call on the whole crate directory. It now makes two: a recursive watch on
+`<crate>/src` (so a new `.rs` file in a new subdirectory is still seen -- Node's recursive walker,
+same file, adds watches for new subdirectories as they appear), and a non-recursive watch on the
+crate root itself (so `Cargo.toml` and any `build.rs` -- both direct children of the crate root --
+are still seen; a non-recursive watch never descends into a child directory's own contents, so
+`target/` appearing/churning under the crate root is reported, if at all, only as a single
+shallow, filtered-out `target` rename event, never scanned). `target/` is now never inside any
+recursively-watched path, by construction, on every OS -- not only working around the Linux
+crash but removing the previously-overbroad recursive descent into `tests/`, `golden/` etc. too
+(none of which matter to the dev-rebuild path: the plugin's own `cargo build` never reads them).
+Return type changed from `FSWatcher | undefined` to a new, minimal `CrateWatcher` (`{ close():
+void }`) since the function now owns two underlying `fs.watch` handles, not one; the "`undefined`
+when `dir` does not exist" contract is unchanged. Checked against both watch-surface tests: `tests/
+wasm/plugin-dev.test.ts`'s "touch triggers rebuild and full-reload" touches `fixtures/hash/src/
+lib.rs` (under `src/`, still recursively watched) and re-passed; `tests/wasm/plugin-rebuild-
+error.test.ts` writes to `<tempDir>/src/lib.rs` (also under the copied crate's own `src/`) and
+re-passed (`pnpm test wasm -t plugin`: 8 passed; `plugin-rebuild-error`'s own `@slow` test is not
+in that count -- it doesn't run in the fast tier and this session's own machine is macOS, where
+`fs.watch(recursive: true)` is native and never hit this bug in the first place, so it was never
+expected to reproduce the crash locally either before or after this fix).
+
+**Test (required item 3).** `packages/engine/src/vite.test.ts` (`unit` suite): mocks `node:fs`'s
+`watch` (keeping every other export real via `importOriginal`) and calls `watchCrate` against a
+real temp crate directory containing `src/`, `target/wasm32-unknown-unknown/debug/deps/` and
+`Cargo.toml`. Asserts no call recorded with `options.recursive === true` has a `path` that is
+`target/` or an ancestor of it, that `target/` is never a direct watch target either, and that
+`src/` is still watched recursively. Proved failing against the old implementation: reverted
+`watchCrate` to the pre-fix single whole-crate `watch(dir, {recursive: true}, cb)` body, re-ran
+`pnpm test unit -t watchCrate` --
+`AssertionError: expected [ Array(1) ] to not include '/var/folders/.../engine-watch-crate-...'`
+(the crate root itself, a recursive call and an ancestor of `target/`) -- then restored the fix,
+same command passes (1 test).
+
+**Not touched, per the brief:** the adapter's non-zero-exit handling, and no `try`/`catch` was
+added around any test.
+
+**Not fixed, recorded only:** on the same push, CI attempt 1's fast tier failed once, `browser [gc]
+terrain: chunks generate, upload and evict inside the window` / `CHUNK records must upload inside
+the window` under SwiftShader, and passed on the rerun without any code change here -- a
+transient, unrelated GPU-timing flake on CI's software renderer, not this round's `wasm`/`target/`
+issue.
+
+**Verification:** `pnpm test unit -t watchCrate` -- `unit pass 1 tests`; `pnpm test wasm -t
+plugin` -- `wasm pass 8 tests`; `tsc --noEmit -p packages/engine/tsconfig.json` -- clean, no
+output. Full `pnpm test`/`pnpm lint` intentionally not run this round (targeted foreground runs
+only, per the delegation).
