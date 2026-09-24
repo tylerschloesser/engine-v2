@@ -1,6 +1,6 @@
 # M19b: `park('sim')` times out while the worker is armed
 
-Status: not started · After: 19 · Tyler-dependent: no
+Status: done · After: 19 · Tyler-dependent: no
 
 Written by the orchestrator at M19's gate, from three occurrences with the same signature.
 
@@ -73,11 +73,11 @@ there).
 The regression test named by step 3, if the cause is found.
 
 ## Exit criteria
-- [ ] The timeout message names the park flag, the wait index and which `measure` it follows.
-- [ ] The cause is named and fixed with a test that fails without the fix, **or** step 4's bounded
+- [x] The timeout message names the park flag, the wait index and which `measure` it follows.
+- [x] The cause is named and fixed with a test that fails without the fix, **or** step 4's bounded
       attempt is recorded in Deviations with its run counts.
-- [ ] If fixed: `node scripts/repeat.mjs browser 15` quiet shows no `park('sim')` timeout.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] If fixed: `node scripts/repeat.mjs browser 15` quiet shows no `park('sim')` timeout.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test browser -t "flat transport parity"` · `node scripts/repeat.mjs browser <n> [--load 10]`
@@ -402,3 +402,7 @@ flat transport parity|gc-loop|stepping"` -- **13 passed**; `--repeat-each 15` on
   observed in any capture this session made (no occurrence's message pattern is consistent with a
   crash: every one shows a plausible live `Armed` state, not a stale one). Worth a future brief's own
   attention if a `park`/`send` timeout is ever seen alongside evidence the worker actually died.
+
+## Orchestrator's gate record
+
+One implementer, one fix round. Cause: `parkOne` stored `Yield = 1` and notified `Req` **without changing it**, so a park landing between `armedLoop`'s `Yield` check and its `Atomics.wait` registration was lost for good. A step request never had this problem, because `wake()` bumps `Req`. The fix is a `Wake` word that both signals bump and notify (production's `W_WAKE` design). It reproduced in the first quiet batch of 15, and two quiet batches after the fix were 30/30. **The gate round:** the race test imported the real `armedLoop` but *copied* `parkOne`'s three `Atomics` calls into its page. I deleted the bump from the real `parkOne` and the test stayed green. Now `signalPark`/`signalWake` (`src/test/step-block.ts`) are shared by `harness.ts` and the race page, and I re-ran the red check myself: with the bump removed from `signalWake`, the race test reads `timed-out`. Final gate: `rust` 366, `unit` 215, `wasm` 55, `browser` 170 at 26 s of 35 s, lint clean. Recorded for later, not fixed: step 1's candidate 2 (a worker that crashes after setup never rejects a pending `parkOne`/`send` promise), now a ledger row.
