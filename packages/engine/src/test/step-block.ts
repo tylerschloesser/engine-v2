@@ -25,9 +25,15 @@ export const StepBlockField = {
   /** A `StepControl` value: the negative-control allocation this worker applies on its next tick
    * (docs/decisions/0016 §3 step 8). Read fresh every tick, not latched. */
   Control: 5,
+  /** M19b (docs/plan/19b-sim-park-while-armed.md) step 2: diagnostic only, never read by
+   * production logic. Bumped once per `Atomics.wait` call `armedLoop` makes since this worker last
+   * armed, so a `park('<name>')`/`send(...)` timeout can report how many waits this worker had
+   * already completed (`harness.ts`'s `diagWorkers`) -- distinguishing "stuck on its very first
+   * wait" from "stuck after N real steps". */
+  Waits: 6,
 } as const
 
-export const STEP_BLOCK_INT32S = 6
+export const STEP_BLOCK_INT32S = 7
 
 /** Negative-control allocation a worker applies once per tick (0016 §3 step 8); `None` is the
  * default a fresh `SharedArrayBuffer` already reads as zero. `'post-message'` controls are not

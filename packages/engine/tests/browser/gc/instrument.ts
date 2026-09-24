@@ -191,6 +191,14 @@ export async function measure(
   const attach =
     opts.attach ??
     (gcTransportFromEnv() === 'flat' ? flatAttachForThisWorker : attachTunnelSessions)
+  // M19b (docs/plan/19b-sim-park-while-armed.md): `gc: flat transport parity` calls `measure()`
+  // twice against the same page (tunnel, then flat) inside one test; a `park`/`send` timeout thrown
+  // from inside one of the `page.evaluate` calls below used to carry no way to tell which of the two
+  // it came from short of reading the stack trace by hand. `attach.name` names the function actually
+  // in use (`attachTunnelSessions`/`flatAttachForThisWorker`, or a caller-supplied one), which is
+  // exactly "which of the two measures" for that test; every other caller passes no `attach` at all,
+  // so this is `gcTransportFromEnv()`'s own tunnel/flat choice there.
+  const transportLabel = opts.attach ? attach.name || 'custom' : gcTransportFromEnv()
   const { main, workers, close: closeSessions } = await attach(page, expectedWorkers)
 
   // Name every worker session (Planning decisions "Naming isolates", CDP side).
@@ -199,6 +207,20 @@ export async function measure(
     w.name = evaluated.result.value
   }
   const sessions: IsolateSession[] = [main, ...workers]
+
+  // M19b: labels a `park`/`send` timeout thrown from inside `fn` with which `measure()` call
+  // (`transportLabel`, above) and which phase of it was running -- the other half of "which of the
+  // two `measure`s it follows" (docs/plan/19b-sim-park-while-armed.md, exit criterion 1). Only
+  // wraps `page.evaluate` calls that reach `installGcPage`'s own `run()` (Seams), which is what can
+  // throw a `harness.park()`/`resume()` timeout in the first place.
+  async function runPhase<T>(label: string, fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn()
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      throw new Error(`measure[${transportLabel}] ${label}: ${message}`)
+    }
+  }
 
   // Fixed warm-up (docs/plan/06b-workers-and-spawn.md, Deviations "fix round 2"): the tiering
   // hypothesis explained the *symptom* (unoptimised code boxes more per call) but the actual
@@ -218,10 +240,15 @@ export async function measure(
   // roughly a third of runs and before it on the rest: exactly the 136 B `gc: flat transport
   // parity` kept catching on `sim`. Same total frames, so no measurement is shortened.
   for (let i = 0; i < WARMUP_PASSES; i++) {
-    await page.evaluate((n) => window.__gc?.run(n, false), WARMUP / WARMUP_PASSES)
+    await runPhase(`warmup pass ${i + 1}/${WARMUP_PASSES}`, () =>
+      page.evaluate((n) => window.__gc?.run(n, false), WARMUP / WARMUP_PASSES),
+    )
   }
-  if (opts.extraSettleFrames) {
-    await page.evaluate((n) => window.__gc?.run(n, false), opts.extraSettleFrames)
+  const extraSettleFrames = opts.extraSettleFrames
+  if (extraSettleFrames) {
+    await runPhase('extra settle', () =>
+      page.evaluate((n) => window.__gc?.run(n, false), extraSettleFrames),
+    )
   }
   const memBefore = await page.evaluate(() => window.__gc?.memoryBytes())
   if (!memBefore) throw new Error('gc instrument: memoryBytes() before the window returned nothing')
@@ -299,12 +326,16 @@ export async function measure(
   // by name, by size or by isolate: the discriminator is the one property the budget actually
   // asserts, "does this recur every frame?".
   await startSampling()
-  const firstRun = await page.evaluate((n) => window.__gc?.run(n, false), frames)
+  const firstRun = await runPhase('measured window 1', () =>
+    page.evaluate((n) => window.__gc?.run(n, false), frames),
+  )
   if (!firstRun) throw new Error('gc instrument: run() returned nothing')
   const firstProfiles = await stopSampling()
 
   await startSampling()
-  const runResult = await page.evaluate((n) => window.__gc?.run(n, true), frames)
+  const runResult = await runPhase('measured window 2', () =>
+    page.evaluate((n) => window.__gc?.run(n, true), frames),
+  )
   if (!runResult) throw new Error('gc instrument: run() returned nothing')
   const secondProfiles = await stopSampling()
 

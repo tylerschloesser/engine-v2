@@ -115,6 +115,13 @@ function runOp(op: number, seq: number): void {
  * would re-run the same, unchanged `Req` as a fresh step -- a real double-tick, not a harmless extra
  * call.
  *
+ * `Waits` (M19b step 2, docs/plan/19b-sim-park-while-armed.md): bumped once per `Atomics.wait` call,
+ * diagnostic only (`harness.ts`'s `diagWorkers`) -- see that field's own doc comment
+ * (`step-block.ts`). Still found timing out live after this fix (M19b Deviations): a *narrower* gap
+ * than the one fixed above is still open, between the `Yield` check and the moment `Atomics.wait`
+ * itself registers this thread as a waiter -- open per the brief's own step-4 cut line pending a
+ * named cause.
+ *
  * Exported for `armed-loop-race-worker.ts` (`tests/browser/pages/src/`), which calls it directly
  * against a caller-constructed block to prove the fix deterministically, without needing to time a
  * real `parkOne` message race.
@@ -125,6 +132,7 @@ export function armedLoop(block: Int32Array): void {
   post(ARMED)
   for (;;) {
     if (Atomics.load(block, StepBlockField.Yield)) break
+    Atomics.add(block, StepBlockField.Waits, 1)
     Atomics.wait(block, StepBlockField.Req, last)
     if (Atomics.load(block, StepBlockField.Yield)) break
     last = Atomics.load(block, StepBlockField.Req)

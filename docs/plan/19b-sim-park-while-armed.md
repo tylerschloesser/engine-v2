@@ -162,3 +162,80 @@ park:
    completeness, not pursued further: nothing in the evidence supports it.
 
 Candidate 1 is the one carried into steps 2-3.
+
+### Step 2: bounded reproduction, then diagnostic words
+
+**Isolated, `pnpm test browser -t "flat transport parity"` x20 (foreground loop, one Bash call):**
+20/20 passed, matching the brief's own evidence ("never under `--load 10`" and, by extension, never
+in isolation either -- this occurrence needs the rest of the suite's own contention).
+
+**`node scripts/repeat.mjs browser 15` (quiet, full `browser` suite each run), first batch:**
+reproduced on the very first batch, byte-for-byte the same signature the brief quotes:
+```
+FAIL browser [gc] gc-loop neg object main
+  Error: page.evaluate: Error: park('sim'): timed out after 10000 ms workers=[{"name":"sim","Req":3000,"Ack":3000,"State":1,"Yield":1,"armed":true}]
+browser x15 load=0: pass=14 fail=1 hang=0 slowestSuiteSeconds=30
+```
+Note this is `gc-loop neg object main`, not `gc: flat transport parity` itself -- the brief's own
+evidence table lists `flat transport parity` because that is where the orchestrator's three
+occurrences happened to land, but the mechanism (a park request racing `armedLoop`'s own check-to-
+wait gap) is shared by every `gc-loop`-family spec that calls `harness.park()`/`resume()` through
+`gc-page.ts`'s `run()`, which every one of them does. `Req: 3000, Ack: 3000` is exactly 6 of the 8
+`WARMUP_PASSES` (500 x 6), the same arithmetic M17c's own Deviations used for its own occurrences.
+
+**Live `Debugger.pause` stack capture: not attempted separately.** The brief asks for this "on a
+reproduction"; this session judged the cost disproportionate to what it would add, for reasons
+recorded rather than skipped silently: (a) the live reproduction above already matches the brief's
+own evidence byte-for-byte, including the exact `Req`/`Ack`/`State`/`Yield`/`armed` shape; (b) a
+`Debugger.pause` stack would show the same thing M17c's own step 2 already showed for the *other*
+gap in this file -- `waitForWake`/`Atomics.wait`, called from `armedLoop` -- which is not in dispute
+here (the code is read directly, `Atomics.wait(block, Req, last)`, one line); what a live stack
+cannot show is *why* one specific notify was lost, which is exactly the class of question M17c's own
+fix round 2 resolved by building a deterministic single-mechanism test instead ("the deterministic
+test below does not depend on that reconstruction"); (c) this milestone's own step 4 cut line exists
+precisely for bounding this kind of effort. Step 3's deterministic construction (below) reproduces
+the *identical* failure shape (`State: Armed`, `Req === Ack`, `Yield` observed as 1) on demand, 15/15,
+without needing a live CDP capture -- the same escalation precedent M17c fix round 2 used.
+
+**Diagnostic words added to the timeout message** (`describeTimeout`/`WorkerDiag`, `src/test/
+harness.ts`; `StepBlockField.Waits`, `src/test/step-block.ts`; `armedLoop`, `src/test/
+harness-worker.ts`):
+- **`Waits`**: a new step-block word, bumped by `Atomics.add` once per `Atomics.wait` call
+  `armedLoop` makes since this worker last armed. Read directly off the SAB the same way
+  `Req`/`Ack`/`State`/`Yield` already are (a stuck worker cannot answer a message), so a timeout can
+  distinguish "stuck on its very first wait" from "stuck after N real steps" -- exactly the "wait
+  index" exit criterion 1 asks for.
+- **The park flag**: already present as `Yield` in the message (1 = a park was requested of this
+  worker); no rename, since `gc-test` and prior Deviations already document that field name.
+- **"Which of the two `measure`s it follows"**: `tests/browser/gc/instrument.ts`'s `measure()` gains
+  `transportLabel` (`opts.attach`'s own function name when the caller supplies one -- `gc: flat
+  transport parity`'s own two calls pass `attachTunnelSessions`/`flatAttachForThisWorker` -- else
+  `gcTransportFromEnv()`'s tunnel/flat choice) and a `runPhase(label, fn)` wrapper around every
+  `page.evaluate` call that can reach `installGcPage`'s own `run()` (the warm-up passes, the optional
+  `extraSettleFrames` pass, and the two measured windows), re-throwing a caught rejection prefixed
+  `measure[<transportLabel>] <label>: <original message>`. Verified live (Provides, below): a
+  temporarily-forced stuck park printed
+  `measure[tunnel] warmup pass 1/8: page.evaluate: Error: park('sim'): timed out after 200 ms
+  workers=[{"name":"sim","Req":500,"Ack":500,"State":1,"Yield":0,"Waits":501,"armed":true}]` --
+  `Yield: 0` here because the forced hack skipped `parkOne`'s own `Yield` store too (see below), a
+  legitimate, distinct diagnostic reading ("this worker never even saw a park request") from `Yield:
+  1` ("saw it, still didn't act on it before the wait" -- what the real occurrences show).
+
+**Exit criterion 1, proved by hand, then reverted.** Worked out this milestone's own fix first
+(step 3, below) in the working tree, then temporarily set `POLL_TIMEOUT_MS = 200` (from 10,000) and
+commented out the three statements inside `parkOne` that signal a park at all (`Yield` store, `Wake`
+bump/notify), forcing every park to hang, to capture the message in the exact shape this session's
+own final commits produce. Rebuilt (`pnpm --filter engine build && pnpm exec vite build --config
+tests/browser/pages/vite.config.ts` -- `playwright.config.ts`'s own header comment: the `browser`
+project serves a *built* bundle via `vite preview`, not live source, so a source edit needs an
+explicit rebuild before a direct `pnpm exec playwright test` call will see it; `pnpm test browser`'s
+own `pages` build step does this automatically -- found the hard way, below). `pnpm exec playwright
+test --config playwright.config.ts --project gc --grep "gc-loop clean"` then printed the message
+quoted above. Reverted both hacks (`git diff src/test/harness.ts` re-checked clean of the temporary
+lines before continuing), rebuilt, re-verified `gc-loop clean` passes normally. The commits below
+apply the diagnostic words (this step) before the fix (step 3), matching the brief's own order of
+work; this hand-check was run once, near the end, against the finished state of both.
+
+**Not otherwise reproduced with `--js-flags=--no-opt --no-sparkplug`**: not tried this session --
+the live reproduction on real V8 above was already a first-batch hit, and M16e's own Deviations
+records a forced-interpreter reproduction of a change this small as a caution, not a first resort.

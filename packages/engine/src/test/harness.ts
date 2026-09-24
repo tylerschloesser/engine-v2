@@ -124,13 +124,18 @@ function now(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now()
 }
 
-/** Per-worker state for a timeout's failure message, read only when a wait is about to fail. */
+/** Per-worker state for a timeout's failure message, read only when a wait is about to fail.
+ * `Yield` is the park flag (1 = a park was requested of this worker); `Waits` (M19b,
+ * docs/plan/19b-sim-park-while-armed.md) is `armedLoop`'s own per-wait counter, read straight off
+ * the SAB the same way the other fields are -- a worker stuck in `Atomics.wait` cannot answer a
+ * message, so this is the only way to see "stuck on its very first wait" versus "stuck after N". */
 type WorkerDiag = {
   name: string
   Req: number
   Ack: number
   State: number
   Yield: number
+  Waits: number
   armed: boolean
 }
 
@@ -143,6 +148,7 @@ function diagWorkers(handles: Map<string, WorkerHandle>): WorkerDiag[] {
       Ack: Atomics.load(h.sab, StepBlockField.Ack),
       State: Atomics.load(h.sab, StepBlockField.State),
       Yield: Atomics.load(h.sab, StepBlockField.Yield),
+      Waits: Atomics.load(h.sab, StepBlockField.Waits),
       armed: h.armed,
     })
   }
