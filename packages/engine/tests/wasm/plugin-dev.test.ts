@@ -3,7 +3,7 @@
 // Against the real fixture app (tests/browser/pages), through Vite's JS API, on an ephemeral port.
 
 import { readFileSync } from 'node:fs'
-import { utimes } from 'node:fs/promises'
+import { stat, utimes } from 'node:fs/promises'
 import type { AddressInfo } from 'node:net'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -99,13 +99,25 @@ describe('plugin-dev', () => {
       ws.addEventListener('error', () => reject(new Error('vite-hmr socket errored')))
     })
 
-    const now = new Date()
-    await utimes(LIB_RS, now, now)
-    await fullReload
-    ws.close()
+    // Restore LIB_RS's own mtime afterward, pass or fail (content is never touched, only mtime):
+    // left at "now", it makes cargo see the *real* fixture source as newer than the fingerprint
+    // recorded by this same `pnpm test` run's own build phase, so the next `pnpm test`'s
+    // `fixtures`/`cargo-tests` steps recompile fx-hash for a fingerprint reason the source diff
+    // never explains (docs/plan/17d-fast-tier-wall-time.md, Fix round 1:
+    // `CARGO_LOG=...fingerprint=info`'s own `FsStatusOutdated(StaleItem(ChangedFile { ..
+    // reference_mtime: T0, stale_mtime: T1 > T0 }))` named this file exactly).
+    const beforeStat = await stat(LIB_RS)
+    try {
+      const now = new Date()
+      await utimes(LIB_RS, now, now)
+      await fullReload
+      ws.close()
 
-    const after = await virtualWasm()
-    const afterVersion = Number(/\?v=(\d+)$/.exec(after.url)?.[1])
-    expect(afterVersion).toBe(beforeVersion + 1)
+      const after = await virtualWasm()
+      const afterVersion = Number(/\?v=(\d+)$/.exec(after.url)?.[1])
+      expect(afterVersion).toBe(beforeVersion + 1)
+    } finally {
+      await utimes(LIB_RS, beforeStat.atime, beforeStat.mtime)
+    }
   })
 })
