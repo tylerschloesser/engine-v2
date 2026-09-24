@@ -8,7 +8,14 @@
 // production-wiring counterpart of `CameraIntegrator.integrate` -- a later range's real DOM wiring
 // calls both from the same `onCamera` hook, `frame-loop.ts`).
 //
-// Not built here (Non-scope of the delegating prompt): `pick_id` (always 0 until M18).
+// `pick_id` (docs/plan/18-picking-and-overlay.md Scope, step 2): filled from the optional `pick`
+// constructor argument -- `input/pick.ts`'s `Picker.at(cssX, cssY)`, `createClient`'s own real one
+// (`src/client.ts`) built over the same `DrawListSlot` the frame loop's `acquire` phase pulls. `emit`
+// takes the computed `pickId` as a plain parameter (not a closure over `pick` inside `emit` itself):
+// every call site already has the real CSS-pixel point (`slot.x/y`, `hover.x/y`) the tile/frac
+// arguments were themselves derived from, so the pick scan runs at that same point, once, per event
+// -- taps pick on the event; hover's own "at most once per rAF, only when the pointer or slot
+// changed" throttle lives inside `Picker.at` itself (its own doc comment), not here.
 //
 // M11 step 6 (mandatory gaps #1/#2 of the delegation prompt): `input/pointers.ts`'s fixed slots now
 // carry real button/modifier state and an idle-mouse hover position (`MouseHoverState`), threaded
@@ -57,6 +64,10 @@ export interface InputController {
   suspend(): void
   resume(): void
 }
+
+/** `input/pick.ts`'s own `Picker` shape, narrowed to what `emit` needs -- avoids a direct import
+ * dependency from `input/semantic.ts` on `render/drawlist-slot.ts` for a type-only reason. */
+export type PickSource = { at(cssX: number, cssY: number): number }
 
 export interface SemanticRecognizer extends InputController {
   /** Runs once per rAF (Deviations: this range's own seam, not itself pinned by name).
@@ -128,8 +139,13 @@ function makeEvent(type: InputEventType): InputEventTs {
 }
 
 /** Builds the semantic recognizer + `client.input` API over `inputRingSab` (`SabSet.inputRing`,
- * `sab/layout.ts`). One instance per `Client` (`createClient`, `src/client.ts`). */
-export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): SemanticRecognizer {
+ * `sab/layout.ts`). One instance per `Client` (`createClient`, `src/client.ts`). `pick` is optional
+ * (omitted by a unit test that never needs a real pick_id): every event's `pickId` is `0` without
+ * one, the same value this always had before docs/plan/18-picking-and-overlay.md. */
+export function createSemanticRecognizer(
+  inputRingSab: SharedArrayBuffer,
+  pick?: PickSource,
+): SemanticRecognizer {
   const ring = new RingProducer(inputRingSab)
   let mode: InputMode = 'camera'
   let suspended = false
@@ -168,12 +184,18 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
 
   const tileScratch: TilePoint = { tileX: 0, tileY: 0, fracX: 0, fracY: 0 }
 
+  /** `pick_id` at a real CSS-pixel point, or `0` when no `pick` was given (module doc comment). */
+  function pickIdAt(cssX: number, cssY: number): number {
+    return pick ? pick.at(cssX, cssY) : 0
+  }
+
   function emit(
     type: InputEventType,
     tileX: number,
     tileY: number,
     fracX: number,
     fracY: number,
+    pickId: number,
     button: number,
     shift: boolean,
     ctrl: boolean,
@@ -186,7 +208,7 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
     e.worldY = tileY + fracY
     e.tileX = tileX
     e.tileY = tileY
-    e.pickId = 0 // Non-scope: pick_id is 0 until M18
+    e.pickId = pickId
     e.button = button
     e.shift = shift
     e.ctrl = ctrl
@@ -214,7 +236,7 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
       tileY,
       fracX,
       fracY,
-      pickId: 0,
+      pickId,
       timeMs: clockMs >>> 0,
     })
     ring.commit()
@@ -233,6 +255,7 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
       tileScratch.tileY,
       tileScratch.fracX,
       tileScratch.fracY,
+      pickIdAt(slot.x, slot.y),
       slot.button,
       slot.shift,
       slot.ctrl,
@@ -278,6 +301,7 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
             tileScratch.tileY,
             tileScratch.fracX,
             tileScratch.fracY,
+            pickIdAt(slot.x, slot.y),
             slot.button,
             slot.shift,
             slot.ctrl,
@@ -292,6 +316,7 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
             tileScratch.tileY,
             tileScratch.fracX,
             tileScratch.fracY,
+            pickIdAt(slot.x, slot.y),
             slot.button,
             slot.shift,
             slot.ctrl,
@@ -321,6 +346,7 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
           tileScratch.tileY,
           tileScratch.fracX,
           tileScratch.fracY,
+          pickIdAt(slot.x, slot.y),
           slot.button,
           slot.shift,
           slot.ctrl,
@@ -345,6 +371,7 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
           tileScratch.tileY,
           tileScratch.fracX,
           tileScratch.fracY,
+          pickIdAt(slot.x, slot.y),
           slot.button,
           slot.shift,
           slot.ctrl,
@@ -395,6 +422,7 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
           tileScratch.tileY,
           tileScratch.fracX,
           tileScratch.fracY,
+          pickIdAt(mouseSlot.x, mouseSlot.y),
           mouseSlot.button,
           mouseSlot.shift,
           mouseSlot.ctrl,
@@ -419,6 +447,7 @@ export function createSemanticRecognizer(inputRingSab: SharedArrayBuffer): Seman
             tileScratch.tileY,
             tileScratch.fracX,
             tileScratch.fracY,
+            pickIdAt(hover.x, hover.y),
             0,
             hover.shift,
             hover.ctrl,

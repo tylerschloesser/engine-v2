@@ -24,9 +24,7 @@ import {
   WORKER_HOST,
   workerWord,
 } from '../sab/control.js'
-import { DRAWLIST_BODY_BYTES, DRAWLIST_HEADER_BYTES } from '../sab/layout.js'
 import { RingConsumer, type RingStats } from '../sab/ring.js'
-import { TripleReader } from '../sab/triple.js'
 import type { SimHostCounters } from '../server.js'
 import type { FromWorker, ToWorker } from '../worker/protocol.js'
 import {
@@ -771,20 +769,18 @@ export function hashDrawListFields(
   return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0')
 }
 
-/** `hashDrawListFields` over the newest `drawList` triple-buffer slot. Reads the SAB directly, no
- * worker round trip (`netCounters`'s own ring reads are the precedent): the triple buffer is
- * main-thread-readable by design (0015 §2). */
+/** `hashDrawListFields` over the newest `drawList` triple-buffer slot -- read through the client's
+ * own single `DrawListSlot` (docs/plan/18-picking-and-overlay.md, `render/drawlist-slot.ts`), never
+ * a second, independent `TripleReader` over the same SAB (docs/plan/17-drawlist-and-sprites.md
+ * Deviations, "Two-reader torn read": `TripleReader.acquire()` mutates shared state on every call,
+ * so two readers racing it tear the handoff -- now that every `Client` keeps one of its own alive
+ * for picking, a second one here would reintroduce exactly that bug). */
 export function drawListHash(client: Client): string {
-  const { sabs } = clientTestHandle(client)
-  const reader = new TripleReader(sabs.drawList, DRAWLIST_HEADER_BYTES, DRAWLIST_BODY_BYTES)
-  const slot = reader.acquire()
-  const header = reader.headerView(slot)
-  const body = reader.bodyView(slot)
-  const recordCount = new DataView(header.buffer, header.byteOffset, header.byteLength).getUint32(
-    4,
-    true,
-  )
-  return hashDrawListFields(header, body, recordCount)
+  const { drawListSlot } = clientTestHandle(client)
+  drawListSlot.acquire()
+  const { header } = drawListSlot
+  const headerBytes = new Uint8Array(header.buffer, header.byteOffset, header.byteLength)
+  return hashDrawListFields(headerBytes, drawListSlot.body, drawListSlot.recordCount)
 }
 
 /** One decoded `Draw` record (0018 §2), for `drawListRecords` below. */
@@ -804,15 +800,9 @@ export type DrawRecord = {
  * `drawList` slot into `out` (cleared first), returning the count. Test-only (allocates one object
  * per record; `src/test/**` is exempt, `.claude/rules/hot-paths.md`). */
 export function drawListRecords(client: Client, out: DrawRecord[]): number {
-  const { sabs } = clientTestHandle(client)
-  const reader = new TripleReader(sabs.drawList, DRAWLIST_HEADER_BYTES, DRAWLIST_BODY_BYTES)
-  const slot = reader.acquire()
-  const header = reader.headerView(slot)
-  const body = reader.bodyView(slot)
-  const recordCount = new DataView(header.buffer, header.byteOffset, header.byteLength).getUint32(
-    4,
-    true,
-  )
+  const { drawListSlot } = clientTestHandle(client)
+  drawListSlot.acquire()
+  const { body, recordCount } = drawListSlot
   out.length = 0
   for (let i = 0; i < recordCount; i++) {
     const base = i * 32
@@ -831,6 +821,25 @@ export function drawListRecords(client: Client, out: DrawRecord[]): number {
     })
   }
   return recordCount
+}
+
+/** docs/plan/18-picking-and-overlay.md `engine/test`: a thin wrapper over `Client.pick.at` -- the
+ * same `pick_id` `input/semantic.ts`'s recognizer would compute for a `tap`/`hover`/... at this same
+ * CSS-pixel point, without needing a real pointer event. */
+export function pickAt(client: Client, cssX: number, cssY: number): number {
+  return client.pick.at(cssX, cssY)
+}
+
+/** docs/plan/18-picking-and-overlay.md `engine/test` counter: how many times the picker has actually
+ * scanned the DrawList body (cache misses only) since this `Client` was created. */
+export function pickScanned(client: Client): number {
+  return clientTestHandle(client).picker.scanned()
+}
+
+/** docs/plan/18-picking-and-overlay.md `engine/test` counter: cumulative overlay style/custom-
+ * property writes since this `Client` was created (`overlay/anchors.ts`'s own `styleWrites()`). */
+export function styleWrites(client: Client): number {
+  return clientTestHandle(client).overlay.styleWrites()
 }
 
 const WASM_PAGE_BYTES = 65536
