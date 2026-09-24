@@ -558,30 +558,55 @@ relax it. Verified: `pnpm test browser -t "events reach wasm"` -> `pass 1`; `-t 
 6`; `-t terrain` -> `pass 31`; full `pnpm test browser` -> `pass 159` (all foreground, after the
 fix).
 
-**`client.onUi`'s own independent poll: confirmed not a delivery bug, still occasionally slow.**
-`resultsFrame()` (`client.ts`) drains `uiRing` and fires `onUi` listeners from a *separate* real-
-`requestAnimationFrame` schedule, not from `stepFrame`'s synchronous worker lockstep. Round 1's
-gate correctly flagged that a `waitForFunction` timeout alone does not distinguish "input never
-delivered" from "delivered, `onUi` just hasn't fired yet" -- instrumented with `window.__debug()`
-(`ClientTestHandle.uiDrainStats()` plus the input ring's own producer counters, `framecx.ts`) to
-settle it. Every timeout this milestone's own stress-testing caught (dozens of foreground runs,
-`pnpm test browser -t framecx` repeated and the full `pnpm test browser` suite repeated) showed
-`ringStats.popped: 1` (the record left the ring) **and**, on the passing-eventually runs,
-`uiDrainStats: {recordsSeen: 1, onUi: 1}` (the whole pipeline, including `onUi`, had already
-completed) -- confirming this class of timeout is `resultsFrame`'s own real-rAF cadence landing late
-under heavy parallel-worker CPU contention in this build environment, never a stuck or lost record.
-`waitForUi` now uses `polling: 100` (a plain interval, not the default `'raf'`, which would stack a
-second real-rAF dependency on top of `resultsFrame`'s own) and a 20s budget, with `test.setTimeout
-(45000)` giving headroom over it. Retries (`test.describe.configure({ retries: 2 })`) were tried and
-reverted: three independent attempts can all land in the same contention window (observed once,
-all three failing consecutively, `retry2` in the artefact path), which only triples the worst-case
-wall time without improving reliability. Residual risk, reported rather than hidden: under
-sufficiently heavy parallel load, `framecx.tap_visible_in_frame`/`framecx.emit_visible_in_frame` can
-still time out on `onUi` delivery alone, at roughly the rate a repeated-foreground-run stress test in
-this environment showed (occasional, not systematic -- the large majority of runs, including every
-run of the full 159-test `pnpm test browser` suite captured in this section, passed clean). Fixing
-`resultsFrame`'s own cadence (e.g. a non-rAF fallback poll) is main-thread production code well
-outside this milestone's Scope; flagged for the orchestrator rather than attempted here.
+**`client.onUi`'s own independent poll: gate round 2 found the real cause, in the test, not
+production.** Round 1's own diagnosis ("resultsFrame's real-rAF cadence occasionally landing late")
+was wrong -- it explained a `recordsSeen: 1, onUi: 1` timeout as "slow but complete," but never
+asked why `onUi: 1` (the callback fired once) and `window.__lastUi?.().count` *still* never became
+true. Round 2 instrumented for real: `fx-overlay` gained a temporary `dbg_stats()` export (packed
+`frame_calls`/`last_input_len`/`last_ui_dirty`/`last_count_after`, reached via `callParked`) plus
+`test/client.ts`'s existing `uiObserverStats()` (`UiObserver::calls`/`records`), snapshotted at four
+points in each test. A caught failure's own trace, `framecx.tap_visible_in_frame`:
+```
+DBG tap baseline        {"frameCalls":0,"lastInputLen":0,"lastUiDirty":0,"lastCountAfter":0,"uiCalls":0,"uiRecords":0}
+DBG tap after inject     {"frameCalls":0,"lastInputLen":0,"lastUiDirty":0,"lastCountAfter":0,"uiCalls":0,"uiRecords":0}
+DBG tap after stepFrame  {"frameCalls":1,"lastInputLen":1,"lastUiDirty":1,"lastCountAfter":1,"uiCalls":1,"uiRecords":1}
+DBG tap after timeout    {"frameCalls":1,"lastInputLen":1,"lastUiDirty":1,"lastCountAfter":1,"uiCalls":1,"uiRecords":1}
+```
+`frameCalls: 1` (never more than one, ruling out the coordinator's own "a wake the worker runs on
+its own" hypothesis outright: no incidental `frame()` call ever ran before `stepFrame`, in this or
+any other caught trace). `lastInputLen: 1`, `lastUiDirty: 1`, `lastCountAfter: 1`, `uiCalls: 1`,
+`uiRecords: 1` -- the whole Rust/WASM pipeline is provably correct on every single run, including
+failing ones: one `frame()` call, input seen, `ui_dirty` set, `ui.maybe_run` ran once and wrote one
+record with the right `count`. The bug is entirely on the main thread, in this test's own code, not
+`game_instance.rs`, not `worker/client.ts`, not `client.ts`'s `resultsFrame`.
+
+**The actual cause**: `test/client.ts`'s `lastUi()` subscribes to `client.onUi` *lazily, on its own
+first call* -- its own doc comment already says so: "a call made after a value already arrived and
+was coalesced away still sees every value from that point on" (i.e. **not** one delivered *before*
+the first call; `onUi` delivery is coalesced-to-newest with no replay for a late subscriber, `client.
+ts`'s own documented contract). `framecx.spec.ts` never called `window.__lastUi?.()` until
+`waitForUi`'s own first poll -- which runs *after* `stepFrame`, the state-changing call. `resultsFrame
+()`'s independent real-rAF poll can fire in the narrow window between `stepFrame` returning and
+`waitForFunction`'s first poll actually subscribing; when it does, it drains and decodes this page's
+one-and-only UI record (bumping `uiDrainStats().onUi` -- that counter increments unconditionally,
+once per record *decoded*, regardless of whether any listener is subscribed yet) with zero listeners
+attached, and the record is gone for good -- nothing else ever changes this fixture's `Ui` again.
+`puts-ui.spec.ts` already documents the identical gotcha for the identical helper ("Subscribes
+`lastUi` *before* the change that follows... a listener registered late simply never sees it, the
+same shape `onActionResult` already has") and works around it the same way this fix now does.
+**Fixed** in `framecx.spec.ts` alone (test code; not `client.ts`, not `game_instance.rs`, not `worker
+/client.ts` -- production's `onUi` contract is already correct and already documented, and every
+other existing caller subscribes early): `createReady` now calls `window.__lastUi?.()` once, right
+after the page is ready and *before* any input exists, so the subscription is always in place before
+`stepFrame` can possibly produce the one UI change this page ever makes. `waitForUi`'s timeout is
+back to an ordinary `5000`ms (`polling: 'raf'`, the default, restored) and `test.setTimeout(45000)`
+is removed -- nothing needs to be masked once the record can no longer be lost. Verified: 20/20
+clean, foreground, isolated (`pnpm test browser -t framecx` x20, each `pass 2 tests 1.9s/35s` --
+down from the worst case's `22s/35s` per failure); full `pnpm test browser` -> `pass 159 tests
+22s/35s`. All temporary instrumentation (`fx-overlay`'s `dbg_stats()`/`DBG_*` thread-locals,
+`framecx.ts`'s `__debug`/`__dbgSnapshot`, `framecx.spec.ts`'s `dbg()` helper and its call sites)
+removed before this commit; `git diff` against gate round 1's own commit confirms `fixtures/overlay/
+src/lib.rs` is now byte-identical to it.
 
 **"Allocates nothing" (Tests added: `framecx.emit_visible_in_frame`) is not asserted anywhere.**
 `client.input.emit`'s implementation is zero-alloc by the same construction as the pre-existing
@@ -603,7 +628,7 @@ when a game never calls it -- the mask is always written, all-zero), `client.ove
 every rAF, zero-cost when `follow_valid` is `0`). Test-only: `fx-overlay` itself, `fixtures/terrain`'s
 own removed `input_queue.clear()` call is a real production-fixture change but the fixture itself is
 test support, not a shipped page; `framecx.html`'s `__stepFrame`/`__injectRawInput`/`__emit`/
-`__lastUi`/`__debug` hooks, `real-camera.ts`'s `opts.follow`/`opts.anchors` header hand-fill and its
+`__lastUi` hooks, `real-camera.ts`'s `opts.follow`/`opts.anchors` header hand-fill and its
 `__rcOverlayAnchorSlot*` hooks.
 
 ### Verified (commands and results)
@@ -621,7 +646,10 @@ test support, not a shipped page; `framecx.html`'s `__stepFrame`/`__injectRawInp
   touched no unit-tested TS code path).
 - `pnpm test wasm` -> `wasm pass 52 tests`; `-t "abi registry"` -> `wasm pass 9 tests` (`ABI_VERSION`
   unchanged at 15: no new export).
-- `pnpm test browser` (full) -> `browser pass 159 tests`.
+- `pnpm test browser` (full) -> `browser pass 159 tests` (`22s/35s`, gate round 2's fix: down from
+  a worst case of one `framecx.*` timeout alone costing `22s` of the `35s` budget before the fix).
+- Gate round 2: `pnpm test browser -t framecx` x20, foreground, isolated, one at a time -> `20/20`
+  clean, each `pass 2 tests 1.9s/35s`.
 - `pnpm test browser -t pick` -> `4`; `-t overlay` -> `8`; `-t framecx` -> `2`; `-t follow` -> `4`
   (`follow.centres_in_same_frame_pan_ignored_zoom_works` plus three pre-existing matches of the same
   substring: `draw.ghost_follows_cursor_same_frame`, `dom_counter_follows_global`, `overlay.
@@ -660,7 +688,14 @@ test support, not a shipped page; `framecx.html`'s `__stepFrame`/`__injectRawInp
     gated behind `if (false && follow.valid)` -> failed the first centring assertion (`expected 7,
     received 0`, the un-overridden pre-drag default). Covers `integrate()`'s own follow-override
     branch.
+  - `framecx.tap_visible_in_frame`, **the `lastUi()` early-subscription fix (gate round 2)**: reverted
+    `createReady`'s own early `window.__lastUi?.()` call (subscribing only on `waitForUi`'s first
+    poll, as before round 2) -> reproduces the original failure signature intermittently (this is a
+    timing race, not a deterministic branch -- not re-verified with a fresh forced failure beyond the
+    original catch, since there is no code path left to gate behind a boolean; the fix is removing a
+    race window, confirmed instead by the 20/20 clean run above and the trace in `Deviations` showing
+    the pre-fix mechanism precisely).
 - `pnpm test`/`pnpm lint` (the full runs) not run (delegation prompt: "I am the gate"). All commands
-  above run in the foreground (coordinator instruction, gate round 1); none backgrounded.
+  above run in the foreground (coordinator instruction, gate rounds 1-2); none backgrounded.
 - Not run (steps 7-8, later implementer's): `pnpm test browser -t "\btranslate\b"`, any GC/budgets
   command, `pnpm bench:frame`.
