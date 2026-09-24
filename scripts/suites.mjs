@@ -1,7 +1,11 @@
 // What `pnpm test` builds and runs. Every later milestone registers its work here and nowhere else.
 
-// Edit → tests starting. Owner of the number: docs/decisions/0020 §3.
-export const buildBudgetMs = 30_000
+// Edit → tests starting. Owner of the number: docs/decisions/0020 §3, docs/decisions/0033 §1
+// (15,000, down from 30,000: the fixtures/cargo-tests rebuild ping-pong fixed in M17d left a warm,
+// no-change build at ~6.3-6.6 s in isolation, ~8-9 s of it in `fixtures` alone right after a
+// browser-suite-heavy `pnpm test` -- machine contention, not a rebuild, confirmed by
+// `CARGO_LOG=cargo::core::compiler::fingerprint=info` staying clean).
+export const buildBudgetMs = 15_000
 
 /**
  * Build steps run one after another, in order, before any suite (cargo steps would only queue on
@@ -69,7 +73,10 @@ export const suites = [
     name: 'browser',
     kind: 'playwright',
     tiers: ['fast', 'slow'],
-    budgetMs: 25_000,
+    // 35,000, up from 25,000 (docs/decisions/0033 §2): the build fix freed room under Tyler's
+    // one-minute wall time (docs/spec/testing.md) for M18+'s own fast browser tests, on the suite
+    // that was always the fast tier's real bottleneck (measured 23-24 s quiet, 29 s under load).
+    budgetMs: 35_000,
     // `chromium` + `gc` in every tier (0020 §4, first rung: gate round 3, docs/plan/
     // 09-renderer-terrain.md Deviations). WebKit and Firefox move to the `engines` leg below.
     args: ['--project', 'chromium', '--project', 'gc'],
