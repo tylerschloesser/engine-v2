@@ -90,4 +90,114 @@ Extend the engine crate's nested `CLAUDE.md` with one line: presence types never
 none
 
 ## Deviations
-(filled in during Phase 3)
+(steps 1-3 only; steps 4-6 -- relay, re-relay, `Gone`, section encode/golden, `RemotePresences`/
+`FrameView` accessors, the worker-path browser test, the zero-GC fixture -- are a later cut)
+
+**Seam shapes for the next cut, exactly as landed:**
+
+- **Trait**: `pub trait Presence: Codec + Copy + Default + 'static { fn pos(&self) -> WorldPos; fn
+  vel(&self) -> [i32; 2]; }` at `crates/engine/src/presence.rs`, re-exported as `engine::game::
+  Presence` (`game.rs`'s own `pub use`, same pattern as `TickCx`/`FrameCx`). `impl Presence for ()`
+  is there too. `MAX_ENCODED_BYTES: usize = 32` is `crate::presence::MAX_ENCODED_BYTES` (also
+  re-exported nowhere else -- reach it via `engine::presence::MAX_ENCODED_BYTES`, not `engine::
+  game::MAX_ENCODED_BYTES`, since only the trait and the table themselves are re-exported into
+  `game.rs`, not every constant in the module).
+- **`PresenceTable<G>`**, same file, re-exported as `engine::game::PresenceTable` (and
+  `PresenceEntry`, newly re-exported there too): `PresenceEntry<G> { pub sample: G::Presence, pub
+  received_at: Tick }`; `pub fn empty() -> Self`; `pub fn get(&self, who: PlayerId) -> Option<&
+  PresenceEntry<G>>`; `pub fn iter(&self) -> impl Iterator<Item = (PlayerId, &PresenceEntry<G>)>`
+  (ascending, `BTreeMap`-backed); `pub fn on_sample(&mut self, who: PlayerId, sample: G::Presence,
+  received_at: Tick)`; `pub fn remove(&mut self, who: PlayerId)`; `pub fn restore(&mut self, who:
+  PlayerId, sample: G::Presence)` (stamps `Tick(0)` -- no tick is known at a session-table restore
+  site with this two-argument signature; M28 may need to revisit if `Tick(0)` reads badly through
+  steps 4-6's `age_ticks` relay math). `on_sample`/`remove`/`restore` are plain `pub`, not `pub(crate)`
+  or feature-gated: "engine-internal" here is a doc-comment convention (matching `TickCx`'s "HOST
+  ONLY" precedent), not a visibility boundary -- the actual guarantee ("presence never enters
+  `Store`/log/hash") is structural, from `apply`/`tick`'s fixed signatures never naming
+  `PresenceTable` at all (proved by the compile-fail doc test on `PresenceTable` itself). The table
+  lives on `Host<G>` as a private field `presence: PresenceTable<G>` (one per world, not per
+  connection, keyed by `PlayerId` so it survives reconnect the way `Store::last_seq` does); a
+  `#[cfg(any(test, feature = "testing"))] pub fn debug_presence(&self, who: PlayerId) ->
+  Option<G::Presence>` exists for tests (no production accessor yet -- steps 4-6's relay is the
+  first real reader beyond `admit`).
+- **Wire**: used exactly as `wire/CLAUDE.md` already had it (uplink `flags` bit 1 "presence",
+  `presence (len varint + bytes)`); no second field added, nothing changed there.
+- **Client's persistent `G::Presence`**: `ClientInstance<G>`'s own field, `presence: G::Presence`
+  (`crates/engine/src/game_instance.rs`), constructed once at `init` with `G::Presence::default()`
+  and destructured alongside `core`/`client`/etc. in `frame()`. `client.frame(&mut cx, presence)`
+  writes it; `core.set_presence(presence)` is called *after* `client.extract(&view, ..)`, not
+  right after `client.frame`, because `view` (built from `core.view()`) borrows `core` immutably
+  for its own entire lifetime and `set_presence` needs `core` mutably -- the sample is still the
+  same value written earlier in the call, `set_presence` is just deferred past `view`'s last use.
+- **`ClientCore::poll_uplink`'s sampler state** (`crates/engine/src/client/core.rs`):
+  `presence_encoded: [u8; MAX_ENCODED_BYTES]` + `presence_len: usize` (this frame's latest encoded
+  sample, kept live by `set_presence`), `last_sent_presence: Option<([u8; MAX_ENCODED_BYTES],
+  usize)>` + `last_presence_sent_ms: Option<u32>` (the last one actually *sent*). `set_presence(&mut
+  self, sample: &G::Presence)` encodes eagerly; a `set_presence` encode failure (oversize for
+  *this* client's own `Default`, not expected in practice) silently keeps the previous
+  `presence_encoded`/`presence_len` rather than corrupting them. `PRESENCE_MIN_INTERVAL_MS = 100`
+  (10 Hz) is independent of and additional to the existing `MIN_UPLINK_INTERVAL_MS`/
+  `KEEPALIVE_INTERVAL_MS` camera/batch pacing -- camera relies on the 50 ms batch floor plus the
+  host's own drop rule (0010 "Host drop rule"); presence has no host-side drop rule, so the client
+  enforces its own ceiling.
+- **Counters added**: `host::ConnCounters::presence_oversize: u64` (per connection, cumulative) --
+  bumped on `Host::on_uplink` whenever a carried presence sample's encoded bytes exceed
+  `MAX_ENCODED_BYTES` *or* fail `decode_canonical`; both failure modes fold into this one counter
+  (not split into "oversize" vs. "malformed" -- both are "sample dropped for an encoding problem").
+  Live in production: every real `Host` reaches this from `on_uplink`, not only tests. No other new
+  counter; `uplinkPresenceBytes` (Provides, an `engine/test` browser-side counter) is **not**
+  built in this cut -- it needs the worker-path browser test (step 6) to have anywhere to be read
+  from, so it is left for that cut.
+- **`budgets.json`**: new key is `counters.presence.uplinkBytesPerSec` (camelCase, matching this
+  file's own `counters.<category>.*` convention -- `counters.subscription.*`, `counters.action.*`),
+  not the brief's literal snake_case `uplink_presence_bytes_per_s`. Value `320` (0001's own
+  worst-case per-sample cap, 32 B x 10/s), not a tight `measured + 8 B` margin: this fixture's own
+  `sampler_rate_and_on_change` measures 129 B/s at its own small test coordinates, but a real
+  game's coordinates range over the whole world and postcard's own varint cost grows with
+  magnitude, so a tight margin here would be meaningless (same reasoning `counters.render.gpuBytes`'s
+  own formula already gives for not using the tight-margin convention).
+- **`seed_presence`**: **not built.** The brief's own Provides lists `ClientCore::seed_presence(G::
+  Presence)` "(M28 calls it from `Welcome`)" -- genuinely M28's own call site (the session-table
+  restore path), nothing in steps 1-3 needs it, and adding an unused public method now would be
+  seam surface with no caller to keep honest. `PresenceTable::restore` (above) is the host-side
+  half of the same M28 feature and *is* built, since step 3's own Order of work item names it
+  explicitly ("PresenceTable<G> (with on_sample/remove/restore/get/iter)").
+
+**Test-filter nuance for the next session**: `pnpm test rust -t presence` (a bare nextest substring
+filter) matches only the leaf test *function* name, not the crate/binary id -- it catches
+`presence_is_not_state`, everything under `engine::presence::tests`, and `engine::wire::uplink::
+tests::roundtrip_*_presence` (10 tests), but **misses** `admit_witness_*`, `apply_range_is_
+replayable`, `sampler_rate_and_on_change`, `oversize_dropped`, `outside_world_cap_dropped`,
+`well_formed_undersize_presence_is_recorded` and the two `dist_sq`/`within` unit tests -- everything
+in `fx-presence` whose function name doesn't literally contain "presence". Verified instead with
+`cargo nextest run --workspace -E 'package(fx-presence) or test(presence)'` (23 tests, all pass) and
+a full unfiltered `cargo nextest run --workspace` (355 tests, all pass, nothing else moved).
+
+**World-cap check: implemented, but its own "dropped" test cannot be made to fail honestly** --
+escalating for the orchestrator/Tyler to weigh in on. `Host::on_uplink` checks `sample.pos().tile
+().in_range()` (0007 §2's `TilePos::in_range`) before `PresenceTable::on_sample`, exactly reusing
+the Consumes item "World coordinate range check (M07)". But `Presence::pos()` returns `WorldPos`,
+whose raw `i32` fields map 1:1 onto `[TILE_MIN, TILE_MAX]` once floored to a tile -- `docs/plan/
+07-world-model-core.md`'s own Deviations already says this exact thing ("the raw i32 already covers
+[TILE_MIN, TILE_MAX] 1:1 ... so only a wider intermediate (movement math before it's clamped) can be
+out of range"). There is no `i32` bit pattern a `WorldPos` can hold whose `.tile()` fails
+`in_range()`: `i32::MIN`/`i32::MAX` map to exactly `TILE_MIN`/`TILE_MAX`. So for *any* conforming
+`Presence` implementation (whose `pos()` must return a real `WorldPos`), this check structurally
+cannot reject a sample -- it is correct, defensive, dead code today. `tests/presence_host.rs`'s
+`outside_world_cap_dropped` was rewritten to prove the check *accepts* both representable extremes
+(`i32::MIN`, `i32::MAX`) rather than fabricate a "dropped" assertion that can never really exercise
+the reject branch. If a future milestone wants a genuinely reachable rejection here, the check
+likely needs to move to a place that still holds a wider intermediate (before narrowing into
+`WorldPos`), which the `Presence` trait's fixed `pos() -> WorldPos` signature does not expose.
+
+**Measured**: `sampler_rate_and_on_change`'s own phase A (continuously changing sample, one client,
+polled every 10 ms for one second) sends exactly 10 presence-carrying `UplinkBatch`es (the 10 Hz
+ceiling, never more), totalling 129 B; the final at-rest value is sent exactly once more, then
+nothing further for the next 490 ms polled. `presence_oversize` reads 0 across every test that
+sends only well-formed samples (`well_formed_undersize_presence_is_recorded`), confirmed 1 for a
+33-byte payload (`oversize_dropped`).
+
+**Not built (left for the next cut, per the brief's own step split)**: relay, re-relay at >= 1 Hz,
+`Gone`, the Presence section's own encode/decode and golden, `RemotePresences`, `FrameView::
+own_presence()`/`presences()`, the `presence-worker-path` browser test, the zero-GC fixture's own
+presence type, and `testkit::Loopback::set_presence`.
