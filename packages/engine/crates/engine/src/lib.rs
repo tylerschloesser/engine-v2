@@ -15,6 +15,7 @@ pub mod gen_queue;
 pub mod hash;
 pub mod host;
 pub mod noise;
+pub mod presence;
 pub mod rng;
 pub mod sim;
 pub mod store;

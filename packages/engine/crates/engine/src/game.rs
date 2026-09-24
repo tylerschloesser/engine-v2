@@ -3,11 +3,12 @@
 //! associated type defaults are unstable: a later milestone adding e.g. `type Ui` would break
 //! every fixture's `impl Game` header (docs/plan/12-store-and-game-trait.md Planning decisions
 //! "Shell types now, not later"). Behaviour lives elsewhere: `WorldRead`/`WorldWrite` are filled
-//! in by M12b (their methods, and `Authority`/`Predicting`/`View`, are out of scope here); so are
-//! `TickCx`/`FrameCx`/`PresenceTable`/`OldStore`'s fields, named on each shell below. `FrameView`'s
-//! fields are real (M16b, grown by M17), and `DrawList`'s are real as of M17 (0018 §2):
-//! `crate::client::drawlist`/`crate::client::frame_view` re-export here, the same way `TickCx`'s
-//! `authority.rs` does.
+//! in by M12b (their methods, and `Authority`/`Predicting`/`View`, are out of scope here); so is
+//! `OldStore`'s fields, named on its own shell below. `FrameView`'s fields are real (M16b, grown by
+//! M17), and `DrawList`'s are real as of M17 (0018 §2): `crate::client::drawlist`/`crate::client::
+//! frame_view` re-export here, the same way `TickCx`'s `authority.rs` does. `Presence`/
+//! `PresenceTable` are real as of M19 steps 1-3 (docs/plan/19-presence-channel.md):
+//! `crate::presence` re-exports here for the same reason.
 
 use ts_rs::TS;
 
@@ -77,10 +78,10 @@ pub enum PlayerEvent {
     Disconnected,
 }
 
-/// Ephemeral, unlogged, per-player, game-defined data (docs/decisions/0001-camera-and-presence.md
-/// "Presence is an engine channel"): fixed size, at most 32 bytes encoded; `()` = no presence.
-pub trait Presence: Codec + Copy + 'static {}
-impl Presence for () {}
+/// Real now (docs/plan/19-presence-channel.md steps 1-3, 0001 "Presence is an engine channel",
+/// 0024 §6): re-exported here (built by `crate::presence`) for the same reason `TickCx`/`FrameCx`/
+/// `FrameView`/`DrawList` are -- `Game`'s own `type Presence: Presence` names it at this path.
+pub use crate::presence::Presence;
 
 /// The write context `Game::tick` receives (0003: "`TickCx` is a `WorldWrite` plus iteration over
 /// active entities", 0007 §7), built and filled in by M12b (`crate::authority::TickCx`, minimal:
@@ -104,24 +105,10 @@ pub use crate::client::frame_view::{Clocks, FrameView};
 /// (built by `crate::client::drawlist`) for the same reason `FrameView`/`Clocks` are, above.
 pub use crate::client::drawlist::DrawList;
 
-/// Shell (M19 gives it fields, 0001: "Presence is readable by exactly one game hook, `admit`"):
-/// the presence samples `Game::admit` reads.
-pub struct PresenceTable<G: Game> {
-    _marker: core::marker::PhantomData<fn() -> G>,
-}
-
-impl<G: Game> PresenceTable<G> {
-    /// No presence samples (M19 fills this table for real; until then every caller of `Game::
-    /// admit` -- `host::Host::on_uplink`, docs/plan/16-action-round-trip.md -- passes this empty
-    /// placeholder). Not `Default`: a shell type with fields would silently stop meaning "empty"
-    /// once M19 gives it real content, and a named constructor makes that day's diff obvious at
-    /// every call site.
-    pub fn empty() -> Self {
-        PresenceTable {
-            _marker: core::marker::PhantomData,
-        }
-    }
-}
+/// Real now (docs/plan/19-presence-channel.md steps 1-3): re-exported here (built by
+/// `crate::presence`) for the same reason as [`Presence`] above -- `Game::admit`'s own signature
+/// names it at this path.
+pub use crate::presence::{PresenceEntry, PresenceTable};
 
 /// Shell (M24b gives it fields, 0005): the old-schema store `Game::migrate` reads from.
 pub struct OldStore {

@@ -21,3 +21,6 @@ the detail; `hash` has none yet, described here instead.
   `drawlist_fixture_hash_golden` drives a real `GameInstance` (sim + client) and pins a hash
   (`assert_golden_hash!`) that `tests/wasm/drawlist.test.ts` also reads, off the real `.wasm` --
   native-vs-`.wasm` parity, `puts_idle_100`'s own shape.
+- `presence` (`fx-presence`, docs/plan/19-presence-channel.md): the presence channel and
+  witness-carrying actions (0001) -- `Presence = { pos, vel }`, `Action::Poke { tile, from }`,
+  `admit`'s tolerance check and `apply`'s own deterministic range check. Own `CLAUDE.md`.
