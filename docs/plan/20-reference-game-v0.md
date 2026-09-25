@@ -76,4 +76,171 @@ Chunk generation (`PRE-PLAN.md` §7 row 3): a `slow`-tagged native bench prints 
 None.
 
 ## Deviations
-(filled in during Phase 3)
+
+Steps 1-3 only (a second implementer takes steps 4-6 from these commits and this section). Base
+`b2fe26f`; `pnpm test && pnpm lint` green there and still green after these steps (`rust 376`, `unit
+222`, `wasm 55`, `browser 171` at `26s/35s`; lint's four checks all pass).
+
+**Crate/package names.** `games/reference/sim`'s package is `reference-sim` (lib target
+`reference_sim` in Rust path syntax); the npm package is `reference`. `sim/Cargo.toml` depends on
+the engine crate at `../../../packages/engine/crates/engine` (a direct relative path, never through
+`node_modules`, 0017 §1/§6); no `[profile.*]` section (the workspace root's apply to every member,
+0017 §6's own note for an in-repo game).
+
+**Seam shapes (Provides), exact:**
+- `RefWorldgen`/`RefParams` in `sim/src/worldgen.rs`. `RefParams` has 12 fields (`height_octaves:
+  u32`, `height_freq: f64`, `moisture_octaves: u32`, `moisture_freq: f64`, `deep_water_level: f64`,
+  `water_level: f64`, `sand_level: f64`, `dirt_moisture_max: f64`, `iron_density`/`wood_density`/
+  `stone_density`/`coal_density: u32`), `#[serde(default)]` (container form, backed by its own
+  `Default` impl) so a world config's `params.worldgen` may be `{}`. Defaults: octaves 5/3, both
+  freqs `1/128`, `deep_water_level -0.25`, `water_level -0.05`, `sand_level 0.0`,
+  `dirt_moisture_max 0.0`, densities `1200/3500/1200/900` (out of 65,536, one `hash2` draw's low 16
+  bits). `TEST_SEED = 0x5EED_1234_ABCD_0042` (`6840143426475589698` decimal) lives in
+  `sim/tests/common/mod.rs` and is also the real page's own world seed (`src/main.ts`), so the
+  landmark tiles below are what a player actually sees.
+- `content.rs` (step 1/2, ahead of step 4's `register`/`TraitSet`s): `DEEP_WATER=0, WATER=1,
+  SAND=2, GRASS=3, DIRT=4`; `IRON=16, WOOD=19, STONE=22, COAL=25`; `RESOURCE_STAGE_{FULL,HALF,
+  LOW}=0/1/2`; `UNITS_PER_TILE=10`. **A resource id doubles as its own "full" depletion-stage
+  visual id**; step 5's `tile_visual` computes `resource_id + stage` (0/1/2) for the resource
+  layer's visual. This makes the *default* (identity) `Registry::resource_visual` mapping already
+  show correct "full" art with no `register` override at all -- confirmed by the browser test
+  below, which passes using only the step-1 no-op `register`.
+- `scatter_resource` (`worldgen.rs`, private): one `hash2` draw per tile, `& 0xffff` against a
+  fixed, ordered per-terrain resource list (grass: iron/wood/coal; dirt+sand: iron/stone/coal;
+  water: none), cumulative-threshold selection. Not itself a Provides seam (private fn), but
+  `content.rs`'s ids are.
+- `sim/tests/common/mod.rs` holds only `TEST_SEED` so far; `RefScenario` (new world, join, dispatch,
+  step ticks, read player/tile, state hash) is **left for step 4/5**, since it needs `Game::apply`/
+  real `PlayerState` to drive, neither of which exists before step 4.
+- `tests/fixtures/landmarks.json` + its guard test: **left for step 5** (same reason: "nearest land
+  tile"/spawn is collect/player logic). For steps 1-3's own browser test, three landmark tiles for
+  `TEST_SEED` were found by an ad hoc native scan (a scratch test, not committed) and hardcoded in
+  `tests/browser/terrain.spec.ts`: `(1, 0)` = plain `SAND`, no resource; `(3, 0)` = `WATER`; `(0,
+  0)` = `IRON`. Step 5 should either reuse these exact coordinates for `landmarks.json` or update
+  the spec if they differ.
+- `tests/helpers/game.ts::openGame(page, opts: { path?: string })`: mirrors `packages/engine/tests/
+  browser/support/page.ts::openPage` byte-for-byte (navigate, assert `crossOriginIsolated`, fail on
+  page error/console error, wait for `window.__pageReady`), duplicated rather than imported across
+  the package boundary (`reference_package_depends_only_on_engine` forbids a runtime dependency on
+  anything but `engine`, and a dev-only cross-package import would still be irregular for an
+  external game to copy).
+- Browser test wiring (exact files/pattern, per the delegation prompt's own ask): `packages/engine/
+  playwright.config.ts` gained a `reference` project (`testDir: '../../games/reference/tests/
+  browser'`, `use.baseURL` a fixed `http://127.0.0.1:4520`) and a second `webServer` array entry
+  (`vite preview --port 4520 --strictPort`, `cwd` = `games/reference`). `scripts/suites.mjs`: a new
+  `reference` build step (`vite build`, `cwd: 'games/reference'`, run after `pages`) and
+  `'--project', 'reference'` appended to the `browser` suite's own `args` (same leg as
+  `chromium`+`gc`, not a new leg -- a leg is a separate `playwright test` process that starts every
+  configured `webServer` regardless of `--project`, so a second leg would need its own *third* port
+  for the pages server too). The `playwright` adapter (`scripts/lib/adapters.mjs`) hardcodes this
+  one config file for every playwright-kind suite/leg, so a project + `testDir` override was the
+  only way in without editing that adapter. Measured: `pnpm test browser -t reference_` (this
+  brief's own verification command) -- `1 test, 2.3s/35s`; full `browser` suite `171 tests,
+  26s/35s` (was 170/24s before this milestone touched it elsewhere in Phase 3), so the new test's
+  own cost is about 1 test / +2s, comfortably under the "≤ 3s p95" budget note and the suite's own
+  headroom.
+- `unit` suite: `vitest.config.ts`'s `unit` project `include` gained `games/*/src/**/*.test.ts` and
+  `games/*/scripts/**/*.test.mjs` (previously `packages/*` only) so `gen_assets_reproducible`,
+  `reference_package_depends_only_on_engine` and `reference_bindings_have_no_bigint` (all three
+  Tests-added TS unit tests) actually run under `pnpm test unit`.
+
+**`engine/render`: a new public export subpath (packages/engine, "Engine only for bug fixes"),
+added because it did not exist.** No production code outside `packages/engine` could previously
+build a real WebGPU page at all: `initDevice`, `createTerrainRenderer`, `loadTileArt`,
+`createRealFrameLoop`, `attachVisibilityHandling`, `installPageStyles`, `systemClock`/
+`systemScheduler` were reachable only via relative imports into `packages/engine/src/*`, which
+`games/reference` (a `workspace:*` consumer of the *built* package, per 0017 §1/§8) cannot do.
+`packages/engine/CLAUDE.md`'s own rule ("Add an exports subpath only together with the file that
+backs it") anticipates exactly this: one new file, `packages/engine/src/render.ts`, re-exporting
+those eight names/types (not `camera/transform.ts`'s `pxPerTile`, a one-line formula inlined in
+`main.ts` instead of adding a ninth), plus one new `"./render"` entry in `package.json`'s `exports`
+map pointing at `dist/render.d.ts`/`dist/render.js`. No existing test asserts a closed/fixed exports
+map (checked: no `package.json`/`exports` string appears in any `packages/engine` test); the
+tarball-install test of 0017 §8 does not exist yet (a later milestone's). This is a **decision an
+orchestrator may want to confirm** rather than a pure bug fix, since it is new published surface,
+but it was made unilaterally here because the alternative (no way to build a real page from outside
+`packages/engine` at all) blocks this milestone's own Goal outright and the addition is purely
+additive, small, and matches the package's own stated extension process.
+
+**`games/reference/vite.config.ts`: `publicDir: 'assets'`.** The brief's own Scope/exit-criterion
+wording fixes the on-disk directory as `games/reference/assets/` (not `public/`), but Vite only
+serves a package's `public/` directory at the URL root by default; `assets/tiles.json` on disk is
+therefore `fetch('/tiles.json')` at runtime (not `/assets/tiles.json`) -- `main.ts` and
+`ClientOptions.assets.tiles` both use `/tiles.json`. Confirmed by Vite's own runtime error message
+when this was first wrong ("Instead of /assets/tiles.json, use /tiles.json").
+
+**`TerrainRenderer` has one colour-target format, fixed at creation** (`createTerrainRenderer`'s own
+contract): `main.ts` creates it with `navigator.gpu.getPreferredCanvasFormat()` (as the real canvas
+also uses, via `createRealFrameLoop`'s internal `configureCanvasContext`) and the diagnostic probe
+below creates its own offscreen target with that *same* format, swapping R/B channels back on
+readback when the preferred format is `bgra8unorm` (measured: this machine's preferred format is
+`bgra8unorm`). `slice.ts`'s own precedent (reconfiguring the canvas to `rgba8unorm` instead) was not
+followed, since `main.ts` never overrides `createRealFrameLoop`'s own canvas configuration.
+
+**Step 1's neutral-colour bar and step 3's real pipeline.** Step 1's `main.ts` was a single
+`createClient` call with no WebGPU pipeline at all (canvas painted via CSS, since `tiles.json`
+doesn't exist yet); step 3 replaced it wholesale with the real `initDevice`/`createTerrainRenderer`/
+`loadTileArt`/`createRealFrameLoop` wiring (`packages/engine/tests/browser/pages/src/device.ts`'s
+own shape), plus a `?`-free camera-drive `onCamera` (real pan/pinch/wheel/WASD/inertia via
+`client.camera.tick`) and two test-only diagnostic window hooks (`__setCamera`, `__probeTile`) built
+entirely from production `TerrainRenderer`/plain-WebGPU calls -- **never `engine/test`**, which must
+not be imported by production code; `__probeTile` polls real animation frames (up to 300) rendering
+the target tile alone into an 8x8 offscreen target until its centre pixel leaves
+`terrain.wgsl`'s own `NEUTRAL_COLOR` (`32,32,32,255`), the same "wait for the real event, not a
+fixed timer" discipline `slice.ts` uses, built without that page's own indirection-mirror machinery
+(not needed: nothing else races this renderer for a production page with no continuously-changing
+diagnostic overlay).
+
+**Asset script (`scripts/gen-assets.mjs`).** Terrain visuals 0-4 (4 variants each, cells 0-19,
+flat colours, no per-variant pixel noise); resource-stage visuals 16-27 (1 variant each, cells
+20-31). Exact flat RGB (opaque, `rgba8unorm`/`bgra8unorm`-normalised on readback): deep water
+`(20,40,110)`, water `(40,100,200)`, sand `(215,195,140)`, grass `(70,150,60)`, dirt `(120,85,55)`;
+iron full/half/low `(230,140,60)/(180,110,50)/(120,80,40)`; wood `(150,110,40)/(110,80,30)/
+(70,55,25)`; stone `(170,170,170)/(130,130,130)/(90,90,90)`; coal `(50,50,55)/(35,35,38)/
+(20,20,22)`. **"Slight per-tile randomness ... dithering" (Requirements) is not hand-baked into the
+art**: the engine's own shader-level PCG brightness jitter (±1/255) and stateless edge dithering
+(0018 §3) already provide it per tile at render time regardless of the art's own content, so each
+terrain's 4 variant cells are byte-identical flat colours -- simpler and exactly reproducible
+without a seeded PRNG. `tile_px=16`, `columns=8` (image `128x64`); `sprites.png`/`sprites.json` are
+a 1x1 transparent pixel and `{sprites: {}}` (valid against `render/atlas.ts`'s own
+`validateSpritesManifest`, checked directly). `--check`/`--out <dir>` flags: no dependency, so no
+prior art to match; documented in the script's own header. Verified: `node games/reference/scripts/
+gen-assets.mjs --check` passes; both `tiles.json` and `sprites.json` validated against the real,
+built `render/art.ts`/`render/atlas.ts` schema functions (not just this script's own idea of the
+schema).
+
+**M02 import-allowlist / target-features coverage gap, found and left open (escalated, not fixed).**
+Verified two different ways: (1) clippy's workspace lint bans (`disallowed_methods`/`disallowed_types`,
+`[lints] workspace = true` in `sim/Cargo.toml`) **do** reach `reference-sim` -- `cargo clippy -p
+reference-sim --all-targets -- -D warnings` is clean, and it is an ordinary workspace member so
+`pnpm lint`'s `cargo clippy --workspace ...` already covers it. (2) `packages/engine/tests/wasm/
+allowlist.test.ts` (the "import allowlist"/"target features" tests) does **not** reach it:
+`describe.each(fixtureNames())`, and `tests/support/fixtures.ts::fixtureNames()` only scans
+`packages/engine/fixtures/*` -- `games/reference/sim` is a different directory entirely, so its
+built `.wasm` is never checked there. No fix applied here (a shared M02 test's scope is not this
+brief's Scope to decide unilaterally); a follow-up should either extend `fixtureNames()`/
+`fixtureBytes()` to also cover `games/*/sim`, or add a small dedicated test in this package once its
+own `.wasm` is guaranteed built by a `pnpm test` build step (the `reference` step added above builds
+it via `vite build`, so the artifact exists by test time -- a future step could read it directly
+from `games/reference/sim/target/engine/dev/game.wasm`).
+
+**Verification command note.** `pnpm test rust -t reference` (this brief's own command) matches
+**1** unrelated pre-existing test (`engine::module_layering::scanner_reaches_a_real_host_reference`)
+and **none** of this crate's own tests: `cargo-nextest`'s bare positional filter matches the test
+*name* only, never the package/binary id, and none of this crate's test names contain the substring
+"reference" (they contain "worldgen"/"scatter"/"export_bindings" instead). The crate's own 10 tests
+were verified instead with `cargo nextest run -E 'package(reference-sim)'` (all pass) and are
+included in the `rust` suite's `376`-test total above.
+
+**Context artifacts.** `games/reference/CLAUDE.md` and the determinism-rule glob addition are **not
+written yet** (Scope names them as part of this whole milestone's Context artifacts; the module
+layout they'd document -- `sim/src/rules/`, one file per feature -- doesn't exist until step 5's
+collect rules land). Left for the step 4-6 implementer.
+
+**Not yet done (steps 4-6, for the next implementer):** `content.rs`'s `register`/`TraitSet`s; the
+real `Action`/`Reject`/`PlayerState`/`GlobalState`/`Ui` (replacing this step's placeholders
+verbatim, same type names `RefAction`/`RefReject`/`RefPlayer`/`RefGlobal`/`RefUi` -- rename only if
+there's a reason to); collect rules and `RefScenario`; `tile_visual` depletion override (formula
+above); `landmarks.json` + guard test; `reference_depletion_visible` browser test;
+`games/reference/CLAUDE.md`. `durations_at_20_and_30_hz`, `replay_equals_live_hash` and the rest of
+the collect-rule native tests are untouched (not yet written).
