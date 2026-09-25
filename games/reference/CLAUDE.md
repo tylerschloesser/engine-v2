@@ -45,8 +45,9 @@ with `client.overlay.anchor`; one CSS fill animation; `CancelCollect` on pan-out
 wired in `game.ts`'s `startGame` (the device/renderer/art/client/camera/UI wiring shared by `main.ts`,
 `test-entry.ts` and `gc-entry.ts`), which also calls `client.camera.moveTo` to `Ui.spawn` once, only
 when `client.camera.restored` is `false`. **`Ui.in_range`/`world.tile()` need a real sim tick**, not
-just `stepFrame` (on `gc-entry.ts`'s own topology, `engine/test.stepTick` deadlocks the client --
-`stepSimTickSync` + a manual upload-drain works instead, found live). `tests/helpers/game.ts`'s
+just `stepFrame` (`engine/test.stepTick`, docs/plan/20c-client-ack-freeze-under-untilquiescent.md:
+safe on every topology, `gc-entry.ts`'s own connected one included -- `untilQuiescent` no longer
+waits on `uploadRing`, a page's own job to drain). `tests/helpers/game.ts`'s
 `panTo`/`uiState`/`clickCollect`/`pumpUntil` poll a real `uiState` condition, never a fixed count.
 
 ## Conventions

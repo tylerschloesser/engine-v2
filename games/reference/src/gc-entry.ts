@@ -14,8 +14,9 @@ import {
   installGcPage,
   parkWorkers,
   pumpUntilLive,
+  resumeWorkers,
   stepFrame,
-  stepSimTickSync,
+  stepTick,
 } from 'engine/test'
 import { startGame } from './game.js'
 
@@ -115,25 +116,26 @@ function drainUploadsFully(): void {
 // before `installGcPage`'s own warmup starts (`games/reference/CLAUDE.md`: `Ui.in_range` needs a
 // real sim tick, not just `stepFrame`; `ui-smoke.spec.ts`'s own precedent for the counts).
 //
-// **Found live, this cut's own gap: `engine/test.stepTick` (the free function, `stepSimTickSync` +
-// `untilQuiescent`) deadlocks the client worker the first time it is called after a run of plain
-// `stepFrame` calls on this exact topology** (`host: { kind: 'local', connect: true }` driven by
-// `asHarness`/a manual clock with no real frame loop -- a combination no existing zero-GC page
-// exercises: `gc-topology.ts` never sets `connect: true`, `gc-terrain.ts`'s host has no `Sim` role
-// at all). Reproduced with `client`'s own `W_ACK` frozen at its last real `stepFrame` ack while
-// `W_WAKE` kept climbing from the sim's own downlink-ring pushes -- `untilQuiescent`'s own ring-
-// quiescence wait never resolves. `stepSimTickSync` alone (no `untilQuiescent`), followed by this
-// page's own `drainUploadsFully`, ticks the sim and reaches the same live state without it -- a
-// workaround, not a fix to the underlying engine gap, which is out of this milestone's own Files
-// touched (`packages/engine/src/test/**` beyond the barrel-export additions already justified as
-// bug fixes elsewhere in this cut).
+// M20b found live, on this exact topology (`host: { kind: 'local', connect: true }` driven by
+// `asHarness`/a manual clock with no real frame loop), that `engine/test.stepTick` (`stepSimTickSync`
+// + `untilQuiescent`) hung for `untilQuiescent`'s own 10s timeout the first time it ran after a run
+// of plain `stepFrame` calls, and worked around it with `stepSimTickSync` alone plus this page's own
+// `drainUploadsFully`. M20c named the cause (`packages/engine/src/test/client.ts`'s `ringSabs`,
+// Deviations): `untilQuiescent` waited on `uploadRing`, a ring only a page's own renderer/test code
+// ever drains, never a worker -- not a deadlocked client worker (its own `W_ACK`/`CB_FRAME_REQ`
+// equality already held; `uploadPump.pump()` never blocks on a full or undrained ring either).
+// Fixed at that layer (`ringSabs` no longer includes `uploadRing`), so the plain `stepTick` below is
+// now safe on this topology: `resumeWorkers` afterwards because `untilQuiescent`'s own trailing
+// `parkWorkers` leaves every worker parked, and a bare `stepFrame` cannot reach a parked worker
+// (`connected.ts`'s own `__advance` precedent).
 for (let i = 0; i < 20; i++) {
   pinCamera()
   stepFrame(client, 50)
   drainUploadsFully()
   await nextAnimationFrame()
 }
-stepSimTickSync(client, 5)
+await stepTick(client, 5)
+await resumeWorkers(client)
 drainUploadsFully()
 for (let i = 0; i < 10; i++) {
   pinCamera()
