@@ -2,6 +2,25 @@
 
 /**
  * Seed-independent knobs (Scope: "octave counts, scales, sea level, per-resource density").
- * Step 1 has no fields yet (nothing to configure about a flat world); step 2 fills these in.
+ * Densities are out of 65,536 (one `hash2` draw's low 16 bits), matching `fx-worldgen`'s own
+ * scatter convention. `#[serde(default)]` (container form, backed by this type's own `Default`
+ * impl below): a world config's `params.worldgen` may omit any or all fields, so `{}` is a valid
+ * "use the defaults" value -- `main.ts`'s own `host.world.params.worldgen` relies on this.
  */
-export type RefParams = Record<symbol, never>;
+export type RefParams = { height_octaves: number, height_freq: number, moisture_octaves: number, moisture_freq: number, 
+/**
+ * Height threshold below which a tile is deep water.
+ */
+deep_water_level: number, 
+/**
+ * Height threshold below which a tile is (shallow) water.
+ */
+water_level: number, 
+/**
+ * Height threshold below which a land tile is sand rather than grass/dirt.
+ */
+sand_level: number, 
+/**
+ * Above `sand_level`, a tile is dirt when moisture is below this, else grass.
+ */
+dirt_moisture_max: number, iron_density: number, wood_density: number, stone_density: number, coal_density: number, };

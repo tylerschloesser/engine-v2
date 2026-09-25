@@ -9,4 +9,14 @@ import { defineConfig } from 'vite'
 // `assets/tiles.json` on disk is `fetch('/tiles.json')` at runtime, the same "public dir contents
 // at /" rule `tests/browser/pages/public/terrain/tiles.json` already uses (there, the directory is
 // literally named `public`; here it is named `assets` to match this brief's own Scope wording).
-export default defineConfig({ publicDir: 'assets', plugins: [engine({ crate: './sim' })] })
+export default defineConfig({
+  publicDir: 'assets',
+  // `bindings.dir` is relative to the *crate* dir (`./sim`, `exportBindings`'s own contract), and
+  // this package's committed bindings live at `games/reference/src/bindings/` -- a sibling of
+  // `sim/`, not inside it (0017 §1's layout is the *package* root's `src/bindings/`, unlike a
+  // `fixtures/<game>` crate where the fixture root and the crate root are the same directory) --
+  // hence `../src/bindings`. Step 4's own scope ("ts-rs bindings written to `src/bindings/` and
+  // committed"); steps 1-3 left this unset since a no-op action/reject/ui carried nothing worth
+  // generating a real binding for yet.
+  plugins: [engine({ crate: './sim', bindings: { dir: '../src/bindings' } })],
+})
