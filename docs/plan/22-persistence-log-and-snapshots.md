@@ -302,3 +302,200 @@ tests, iterated automatically over every fixture directory per `packages/engine/
 - `fx-persist`'s `cdylib` builds and passes the existing wasm import-allowlist/registry tests
   automatically (it has no `golden/scenario.json` of its own yet); a real ABI-driven scenario test
   for it is steps 4-6's, if wanted.
+
+## Steps 4-6 (second implementer)
+
+Base `68c4b35` (steps 1-3's own head). Commits: `d41aa6e` (step 4: ABI exports + `Persist` region +
+`sim_dirty`), `557e395` (step 5: `Storage`/`memoryStorage`/`runStorageConformance`), `9f2931c`
+(step 6: `Persistence` wired into `SimHost`), `d383d46` (accepted-first-half fix: `SnapshotWriter`
+buffer sizing, see below).
+
+### Seam shapes actually landed
+
+- `ABI_VERSION` 15 -> 16. Four new sim-role exports, all forwarded through `GameInstance<G>` (which
+  steps 1-3 could not have wired, since `Host<G>` didn't have them yet -- **this dispatch was
+  missing on the first pass here too**, found by the very first Vitest run against `fx-persist`'s
+  real `.wasm`: every call returned `Status::WrongRole`/`Unsupported` until `game_instance.rs` grew
+  the four match arms alongside `sim_seal_frame`'s own):
+  - `sim_segment_header(segment: u32, base_tick: u32) -> len`: `_segment` is accepted but unused --
+    a segment's own index lives in its storage key (Planning decisions 3/4), never in the header
+    bytes (0005 Formats: `identity | base` only). `base_tick = 0xFFFF_FFFF` (`GENESIS_BASE_TICK`,
+    mirrored as a plain `const` on both sides, not a registry constant) means `SegmentBase::Genesis`.
+    **Does not require genesis to have run** (deliberately, unlike every other real sim export): its
+    body reads only `Host::identity()` (build hash/versions/schema/tick-rate/worldgen fingerprint,
+    all known at `Host::init` time), which is exactly what `Persistence.create` needs *before* the
+    world exists, to build segment 0's header as part of "create world".
+  - `sim_snapshot_begin(log_segment: u32, log_offset: u32) -> status` / `sim_snapshot_next() -> len`:
+    thin wrappers over `SnapshotWriter::begin`/`next`, sourcing `Identity` from `Host::identity()`
+    and `SimRng`/`Tick` from `Sim`/`Authority` (both reachable via `Host`, as steps 1-3's own notes
+    expected). `sim_snapshot_begin` also calls `Authority::clear_dirty()` (see below).
+  - `sim_dirty() -> u32`: `Authority::dirty()`, `0`/`1`.
+  - `Host::identity()` (new, private): assembles `persist::Identity` from `self.build_hash` (parsed
+    once at `Host::init` from a new `SimConfig::build_hash: String`, plain lowercase hex,
+    `#[serde(default)]` so every existing config keeps working), `engine::ENGINE_VERSION` (new,
+    `env!("CARGO_PKG_VERSION")` in `lib.rs`), `G::GAME_VERSION` (new defaulted assoc const on `Game`,
+    `"0.0.0"` unless a game overrides it with its *own* `env!` -- `fx-persist` does), `G::
+    SCHEMA_VERSION`, `G::TICK_RATE.hz_value()`, and `self.worldgen_fingerprint` (computed once, at
+    `Host::init`/`genesis_for_test`, via a new private `compute_worldgen_fingerprint` that borrows
+    the worldgen params rather than cloning them -- `Worldgen::Params` carries no `Clone` bound).
+  - `RegionId::Persist` is now actually declared by `Host::init` (`layout.region(RegionId::Persist,
+    PERSIST_BYTES)`, 256 KiB) -- **steps 1-3 could not have caught this: nothing before this half
+    ever called a sim-role export that reads or writes that region.** Its absence was the very first
+    real failure (`sim_seal_frame` returning `-(BadLength)` the moment it had non-empty bytes to
+    write), found the same way as the `GameInstance` dispatch gap above.
+  - `Host::sim_seal_frame` is real: reads (never drains) `self.pending_records`, encoding the exact
+    `len | tick_delta | count | records | crc32` container `persist::FrameWriter::finish` produces,
+    but **by hand, over borrowed records**, not via `FrameWriter::push_action` (which takes `G::
+    Action` by value). `pending_records: &[Record<G>]` only ever hands out `&G::Action`, and adding
+    a `G::Action: Clone` bound to reach `.push_action` would have landed on the whole `impl Instance
+    for Host<G>` block -- forcing it onto `GameInstance<G>`'s own generic dispatch, i.e. every game,
+    not just this one method. `crate::persist::write_sized`/`crc32`/`RecordKind` (all `pub(crate)`/
+    `pub`) are reused directly; the wire bytes are proven byte-identical to `FrameWriter::finish`'s
+    own output by `log_bytes_native_equals_wasm` (below), not merely asserted.
+  - `Authority::dirty: bool`, set in `Authority::write` (every `WorldWrite` put) **and** in
+    `Authority::record_ack` (every admitted action, applied or rejected -- connection events with no
+    state write, e.g. a bare `Connected` with no `on_player` write, do **not** set it, since neither
+    `write` nor `record_ack` runs for them; flagged, not fixed, since nothing in Tests added
+    exercises that exact corner and Planning decisions 7's own wording ("a record was logged") is
+    arguably about it too). Reset by `Authority::clear_dirty()`, called from `sim_snapshot_begin`
+    once the writer already holds a self-consistent copy of the state that flag described.
+    `Authority::rng()` (existing, from steps 1-3) is un-gated from `#[cfg(test, feature="testing")]`
+    to plain `pub`, since `sim_snapshot_begin` is a genuine production caller now.
+
+### TS Provides, as built
+
+- `packages/engine/src/storage/{types,memory,conformance}.ts`: `Storage` (moved out of `server.ts`'s
+  own inline declaration, re-exported unchanged), `worldKeys(worldId)` (`worlds/<id>/{manifest,
+  log/<6-digit>, snap/<10-digit>, sessions}`), `memoryStorage()`/`MemoryStorage.crashClone(opts)`,
+  `runStorageConformance(make)` (7 named checks, no test-runner import).
+- `packages/engine/src/host/persistence.ts`: `Persistence.create(storage, cfg: WorldConfig, sim:
+  EngineInstance)` (the *raw* `EngineInstance`, not `server.ts`'s `SimInstance` -- calls
+  `sim_dirty`/`sim_segment_header`/`sim_snapshot_begin`/`sim_snapshot_next`/`tick_hz` directly),
+  `appendFrame` (a fixed arrow-function class field, `SimHost.logSink`'s own target),
+  `afterTick(tick: number)`, `snapshotNow()`, `flush()`, `counters: { logBytes, frames, snapshots,
+  lastSnapshotBytes, syncs }` (exactly Seams' shape) plus one addition beyond it, a
+  `snapshotBufferHighWaterBytes` getter (Budgets: "host-side `SnapshotBuffer` high-water mark
+  exposed as a counter" -- kept off the fixed `counters` object rather than added to it). `ManifestV1`/
+  `IdentityJson`/`ManifestSegment` are new exported types: `IdentityJson` decodes `persist::
+  Identity`'s own wire bytes (build hash as hex, `worldgen.fingerprint` as decimal text, a `u64`
+  not always fitting a JS number) -- the one place this module parses a Rust container, right after
+  `sim_segment_header` produces it, so the manifest can carry the result as plain JSON afterward.
+- **Two separate "dirty" concepts, deliberately**: `sim_dirty()` (Rust, world-state-changed, gates
+  the snapshot cadence) and a JS-only `appendedSinceSync` flag (gates the sync cadence: "has
+  anything been appended since the last sync", set in `appendFrame`, cleared in `sync()`). 0005
+  discusses these as separate cadences with separate meanings of "dirty"; conflating them would
+  make `sync()` never fire on a tick that only queued a connection event with no state write.
+- **Snapshot/sync cadence is tick-counted, not wall-clock**: `SNAPSHOT_EVERY_TICKS = 1200` (a literal
+  tick count, not scaled by the game's real Hz -- Scope's own wording), and the "one second" sync
+  barrier is `ticksPerSecond` (`tick_hz()`, read once) ticks, not a `Clock` reading. No ambient time
+  import exists in this file at all. The Tests added name for the sync test, `sync_at_most_once_per_
+  second (virtual clock)`, is satisfied by this design's own determinism (ticks *are* the sim's
+  clock) rather than by injecting a `Clock` double; `tests/wasm/persistence.test.ts`'s own tests
+  drive ticks synchronously via `SimHost.stepTick`, never a real timer.
+- **`SimHost.logSink`'s call site needs a `subarray()`** (`server.ts`'s `runOneTick`): `seal.bytes`
+  is the whole persistent `Persist` region view (Orchestrator ruling 2, unchanged), but `logSink`'s
+  own fixed one-argument shape (`(bytes: Uint8Array) => void`, unlike `simBuildFrame`'s `bytes` +
+  separate `.len`) has no way to carry "exactly `len` bytes" except by slicing at the call site --
+  exactly what the pre-existing M13 comment on this line anticipated ("its own 'exactly `len` bytes'
+  contract is M22's to give a real shape"). This is a `.claude/rules/hot-paths.md` tension flagged,
+  not resolved: it only runs on a tick that actually logged something, and no zero-GC page wires a
+  real `Storage` through this milestone (`worker/sim.ts` is untouched -- `createSimHostFromInstance`'s
+  new `persistence` parameter is optional precisely so its existing two-argument call keeps working).
+  Whichever milestone first arms `Persistence` inside the sim worker needs to measure this and either
+  accept the allocation into that page's own budget or find another shape.
+- `createSimHostFromInstance(sim, services, persistence?)`: additive, optional third parameter, not
+  a renamed seam -- every existing call site (`worker/sim.ts`, `tests/wasm/puts.test.ts`,
+  `server.test.ts`) is unchanged. `createSimHost(cfg, services)` now builds one `Persistence` from
+  `services.storage` and passes it through; this is the only place `HostServices.storage` is read.
+- `sim-config.ts`'s `buildSimInstanceConfig` now forwards `cfg.buildHash` into the `game` config
+  object as camelCase `buildHash` (`SimConfig::build_hash` on the Rust side, via `rename_all =
+  "camelCase"`).
+
+### `log_bytes_native_equals_wasm`: a new golden, not the old one
+
+Exit criterion wording ("The native log written by step 3 ... byte-identical") names step 3's own
+recorded log, `fixtures/persist/tests/golden/persist_fixture_log.hex`. That golden cannot be the
+baseline here: it was built by `support::record()` pushing a hand-picked `Record::Player{Joined}`
+directly through testkit, bypassing `Host::connect`'s real admit pipeline entirely -- which always
+queues *both* `Joined` and `Connected` on a first connect (`Host::connect`'s own body, unchanged
+since M15). No real `.wasm` build can reach that testkit-only shape (`queue_action_for_test` and
+friends are `#[cfg(feature = "testing")]`), so a comparison against it would not be testing what the
+criterion asks for -- whether native and ABI-driven Rust agree on wire bytes for the *same real
+script*. Built a new golden instead, driven through the real admit pipeline on both sides:
+`fixtures/persist/tests/abi_log_parity.rs` (native, `testkit::Loopback::add_client`/`action`, blesses
+`persist_abi_log_parity.hex`) and `tests/wasm/persist-log-parity.test.ts` (the identical script,
+replayed over the real `.wasm` through `sim_connect`/`sim_admit` with a real client-role instance
+turning each action into real wire bytes -- no hand-encoded postcard). Byte-identical, confirmed
+(`pnpm test wasm -t log_bytes_native_equals_wasm`). Flagged for the orchestrator: the exit criterion
+is met in spirit (native vs WASM parity for a real script) but not literally (not the step-3 golden).
+
+### Anti-vacuity (inject/fail/revert; fail lines pasted verbatim)
+
+- `write_ahead_order`: moved the `logSink` call in `server.ts`'s `runOneTick` to *after* `sim_tick()`
+  -> `AssertionError: expected [ 'tick', 'append' ] to deeply equal [ 'append', 'tick' ]`. Reverted,
+  green. Without the order assertion, this test would still pass if `logSink` were never called at
+  all.
+- `sync_at_most_once_per_second`: dropped the `ticksSinceSync >= this.ticksPerSecond` half of the
+  throttle (kept only "if appended") -> `AssertionError: expected 1 to be +0` (synced on the very
+  first tick). Reverted, green. Without asserting `syncs === 0` *before* the boundary, this would
+  pass vacuously.
+- `no_snapshot_when_clean`: replaced `if (this.isDirty()) this.snapshotNow()` with an unconditional
+  `this.snapshotNow()` -> `AssertionError: expected 2 to be 1` (a second snapshot at the second
+  1,200-tick boundary, with nothing dirtied in between). Reverted, green. The test's own first
+  boundary already snapshots once (`Sim::genesis`'s own `put_global`/`set_tile` calls dirty the
+  world through `Authority::write`, same as any other put) -- without a *second* boundary asserted
+  to stay at 1, this would pass vacuously (dirty always true is indistinguishable from dirty
+  correctly true-once here).
+- `storage_onError_is_fatal`: removed both `this.checkFatal()` calls (`appendFrame`/`afterTick`) ->
+  `AssertionError: expected [Function] to throw an error`. Reverted, green. Without actually invoking
+  `storage.onError` and then ticking again, this would pass on a `Persistence` that never wired
+  `onError` to anything at all.
+- `tick_path_never_awaits`: **first version of this test passed vacuously** even with a genuine
+  defect injected (`appendFrame` made `async`, `await`-ing a never-resolving `storage.append`) --
+  `stepTick`'s own `ticksRun` counter still reached 1,300 synchronously, because nothing in
+  `runOneTick` ever awaits `logSink`'s return value either way, so an internally-`await`-ing
+  `appendFrame` is invisible to that assertion alone. Strengthened: also assert `persistence.
+  counters.frames/snapshots/syncs > 0` (only reachable if the code *after* each storage call in
+  `appendFrame`/`snapshotNow` actually ran, which cannot happen synchronously past a hung `await`).
+  Re-ran the same injection -> `AssertionError: expected 0 to be greater than 0` (frames stayed 0).
+  Reverted, green.
+- `bytes_per_logged_action`: not independently injection-tested (a golden-shaped exact-byte-count
+  assertion fails on any drift by construction, same reasoning steps 1-3 gave for their own golden
+  tests) -- drives one real `Roll` action through a real client-role encoder instance (`on_action` +
+  `client_poll_uplink`) into `sim_admit`, exactly `tests/support/scenario.ts`'s own technique, so the
+  measured 12 B is a real wire-driven number, not a hand-typed one.
+
+### Measured
+
+`cargo nextest run --workspace --features engine/testing,testing`: 512 tests, 512 passed, 2 skipped
+(unchanged slow tests). `pnpm test`: `rust pass 512 tests`, `unit pass 233 tests`, `wasm pass 72
+tests`, `browser pass 185 tests` (browser suite untouched by this half -- no sim-worker file was
+edited, so nothing there needed re-running beyond the standard full pass). `pnpm lint`: biome/
+rustfmt/clippy/tsc all green. `budgets.json`'s new `counters.action.logBytesPerAction = 12` (exact,
+not measured-plus-margin: `len varint(1) + tick_delta varint(1) + count varint(1) + record(kind(1) +
+player_slot(1) + seq varint(1) + write_sized(Action::Roll): len varint(1) + 1 postcard byte) +
+crc32(4) = 12`).
+
+### Context artifacts
+
+- `packages/engine/src/storage/CLAUDE.md` (new, 19 lines) and `packages/engine/src/host/CLAUDE.md`
+  (new, 25 lines): `packages/engine/src/CLAUDE.md` itself was already at the 60-line cap
+  (`scripts/lib/context-artifacts.test.mjs`'s own hard limit), so new nested files rather than an
+  addition to it.
+- `packages/engine/crates/engine/CLAUDE.md`: patched its pre-existing, already-stale `sim_seal_frame`
+  ("always 0 until M22") and `ABI_VERSION is 10` lines (stale since well before this milestone --
+  M16-M21b never updated them either) to name this half's four new exports and the real version.
+  Did not attempt a full reconciliation of that file's older drift beyond what this milestone itself
+  touched.
+
+### Deferred / flagged for the orchestrator
+
+- Identity is real but unvalidated end to end: nothing compares a loaded segment's `Identity`
+  against the running build's own (M22b/M24b's own Non-scope, unchanged), and `G::GAME_VERSION`
+  defaults to `"0.0.0"` for any game that doesn't override it (only `fx-persist` does, here).
+- `Authority::dirty` does not get set by a connection event with no accompanying state write (see
+  above) -- a real gap against Planning decisions 7's literal wording, left as found since no test
+  exercises it and the natural fix point (`Host::connect`'s own `Connected` push) is outside
+  `Authority` entirely.
+- The `logSink` `subarray()` tension (above) is real but inert until some later milestone wires a
+  live `Storage` into `worker/sim.ts` itself; flagged there for whoever does.
