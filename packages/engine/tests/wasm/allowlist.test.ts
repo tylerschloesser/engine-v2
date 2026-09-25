@@ -1,7 +1,7 @@
 // The boundary's guard (docs/decisions/0014 §3, 0002 §3, 0015 §5), run against every fixture.
 import { describe, expect, test } from 'vitest'
 import { ABI_EXPORTS } from '../../src/abi.js'
-import { fixtureBytes, fixtureNames } from '../support/fixtures.js'
+import { fixtureBytes, fixtureNames, gameCrateBytes, gameCrateNames } from '../support/fixtures.js'
 import { readSections } from '../support/wasm-sections.js'
 
 const ALLOWED_IMPORTS = ['engine.panic', 'engine.log']
@@ -48,8 +48,10 @@ function targetFeatures(module: WebAssembly.Module): string[] {
   return features.sort()
 }
 
-describe.each(fixtureNames())('fixture %s', (name) => {
-  const bytes = fixtureBytes(name)
+/** The two checks below, shared by every fixture and every in-repo game's `sim/` crate (docs/plan/
+ * 20-reference-game-v0.md, orchestrator ruling): identical assertions, `label` only changes what a
+ * failure names. */
+function checkAllowlist(label: string, bytes: Uint8Array<ArrayBuffer>): void {
   const module = new WebAssembly.Module(bytes)
 
   test('import allowlist', () => {
@@ -63,7 +65,7 @@ describe.each(fixtureNames())('fixture %s', (name) => {
       const shown = names.slice(0, 3).join(', ') + (names.length > 3 ? ', …' : '')
       return `  ${from} (${names.length}: ${shown}): ${CULPRITS[from] ?? 'not in 0014 §3'}`
     })
-    const listed = `fx-${name} imports outside the allowlist:\n${lines.join('\n')}`
+    const listed = `${label} imports outside the allowlist:\n${lines.join('\n')}`
     expect(offenders.length, listed).toBe(0)
 
     const exported = WebAssembly.Module.exports(module)
@@ -84,9 +86,21 @@ describe.each(fixtureNames())('fixture %s', (name) => {
       0,
     )
     for (const banned of BANNED_FEATURES) {
-      expect(features, `${banned} is off for the sim module (0002 §2)`).not.toContain(banned)
+      expect(features, `${banned} is off for ${label} (0002 §2)`).not.toContain(banned)
     }
     const unknown = features.filter((f) => !DEFAULT_FEATURES.includes(f))
     expect(unknown, 'features beyond the default target set (0002 §3)').toEqual([])
   })
+}
+
+describe.each(fixtureNames())('fixture %s', (name) => {
+  checkAllowlist(`fx-${name}`, fixtureBytes(name))
+})
+
+// Widened per docs/plan/20-reference-game-v0.md (orchestrator ruling): "the M02 import-allowlist
+// test and clippy bans run against reference-sim". `gameCrateNames()` returns `[]` (no `describe`
+// bodies at all) in a checkout with no `games/` yet, same as `fixtureNames()` would for an empty
+// `fixtures/`.
+describe.each(gameCrateNames())('game %s/sim', (name) => {
+  checkAllowlist(`games/${name}/sim`, gameCrateBytes(name))
 })

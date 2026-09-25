@@ -15,6 +15,10 @@ export const buildSteps = [
   { name: 'tsc', cmd: 'pnpm', args: ['--filter', 'engine', 'build'] },
   // `buildGame()` (from dist/, hence after tsc) on the dev profile for every fixture crate.
   { name: 'fixtures', cmd: 'node', args: ['packages/engine/scripts/build-fixtures.mjs'] },
+  // Same, for every in-repo game's `sim/` crate (docs/plan/20-reference-game-v0.md, orchestrator
+  // ruling): a dev-profile build the `wasm` suite's import-allowlist/target-features test can read,
+  // independent of the `reference` step's own release-profile build below.
+  { name: 'game-sims', cmd: 'node', args: ['scripts/build-game-sims-dev.mjs'] },
   { name: 'cargo-tests', cmd: 'cargo', args: ['nextest', 'run', '--workspace', '--no-run'] },
   // nextest runs no doc tests (docs/plan/12b-world-access-and-sim-driver.md Tests added): the
   // `compile_fail`/passing doc tests on `TickRate::hz` (0006) only run through this step.
