@@ -27,3 +27,29 @@ first two adapters. Full context: `../CLAUDE.md`'s own `storage/` bullet.
 
 Every adapter here copies `bytes` before returning (0005: "an engine-owned view valid only during
 the call"), never retains the argument itself.
+
+- `opfs.ts` (docs/plan/23-persistence-opfs-and-lifecycle.md steps 1-2): `opfsStorage(worldId)` --
+  the OPFS row of the 0005 Storage table, browser-only, sim worker only (0015). Rejects with
+  `OpfsUnavailable` when `getDirectory()`/the first `createSyncAccessHandle()` fails. Keys map onto
+  nested OPFS directories one-for-one on `/`. `append`/`sync`'s fast path is a plain (non-`async`)
+  method returning `undefined`, no options object (a reused `APPEND_SEEK`, `.at` overwritten, seeks
+  once at open; every later `append` is a bare `write(view)`, cursor auto-advancing) -- an `async`
+  function always allocates a Promise even doing nothing async, which would cost the sim worker's
+  zero-GC budget every tick (`.claude/rules/hot-paths.md`, Planning decision 4). `write` (snapshot/
+  manifest/sessions) writes synchronously into an already-open `.scratch` handle and returns
+  `undefined`; the promise-only half (close, `move()` onto the real key, reopen the next scratch)
+  is queued as one closure behind `pendingAsync()` -- the sim worker's own future hook, not wired in
+  yet, built and tested here (`storage-opfs.spec.ts`). `scratchReady()`/`snapshotDeferred` are for
+  that same future caller (Planning decision 2); a `write()` with no scratch ready falls back to a
+  direct, still-correct, non-allocation-free write, draining any queued continuation first so calls
+  land in call order. `read`/`list` consult an in-flight-write map first, so a caller sees its own
+  write immediately regardless of path. Decision 3 (Deviations): rename, not slot files --
+  `FileSystemFileHandle.move()`'s 2-arg form (`move(directory, name)`) works in Chromium, WebKit and
+  Firefox (WebKit's own 1-arg form throws) and overwrites an existing destination. Ambient types
+  (`createSyncAccessHandle`/`move`/`FileSystemSyncAccessHandle`, missing from `lib.dom.d.ts`) live in
+  `opfs-types.d.ts`, listed directly in any tsconfig that doesn't transitively import `opfs.ts`
+  (`../virtual.d.ts`'s own pattern). Test-only: Playwright's WebKit needs a real, on-disk profile for
+  OPFS at all (`launchPersistentContext`, not the default ephemeral context) -- any spec touching
+  OPFS uses `tests/browser/support/opfs-context.ts`'s `test`/`expect`, not the default ones -- and
+  does not isolate OPFS per profile the way Chromium/Firefox do, so a page using non-namespaced keys
+  wipes the whole OPFS root once at the very start (never in `opfsStorage` itself).

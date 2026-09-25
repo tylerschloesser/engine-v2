@@ -10,6 +10,7 @@
   "include": [
     ".",
     "../../../src/virtual.d.ts",
+    "../../../src/storage/opfs-types.d.ts",
     "../support/terrain-window.d.ts",
     "../support/drawables-window.d.ts",
     "../support/terrain-client-window.d.ts",

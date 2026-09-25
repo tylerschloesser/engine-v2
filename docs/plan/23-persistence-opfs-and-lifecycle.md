@@ -136,3 +136,102 @@ the 2-arg call form is the portable one -- a one-line ADR amendment, not a forma
 Device check callout for step 7 (not built here): the iOS probe (`opfs-latency.html`) should call
 `move()` with the 2-arg form from the start, matching this finding, rather than discovering the same
 `TypeError` on-device.
+
+### Step 2: `opfsStorage`, `storage_conformance_opfs` (also WebKit, Firefox)
+
+Built `packages/engine/src/storage/opfs.ts` (`opfsStorage(worldId): Promise<OpfsStorage>`,
+`OpfsStorage extends Storage`, `OpfsUnavailable`) and `opfs-types.d.ts` (ambient
+`createSyncAccessHandle`/`move`/`FileSystemSyncAccessHandle`, absent from TypeScript 6.0.3's
+`lib.dom.d.ts`). Conformance page `tests/browser/pages/storage-opfs.html` + `src/storage-opfs.ts` +
+`src/storage-opfs-worker.ts` (runs inside a dedicated Worker: every browser here only has working
+OPFS from one, matching where the adapter runs in production, 0015 "sim worker"). Spec
+`tests/browser/storage-opfs.spec.ts`, `storage_conformance_opfs @engines` -- passes in Chromium,
+WebKit and Firefox (`pnpm test browser -t opfs` for Chromium/fast tier;
+`pnpm test:slow browser -t opfs` runs the `engines` leg, 2 tests, 3.4 s).
+
+**Second critical finding (test-harness only): Playwright's WebKit does not isolate OPFS per
+`launchPersistentContext` profile directory.** A write to a bare key (no `worlds/<id>/` prefix,
+exactly what `runStorageConformance`'s own `'log'`/`'k'` keys are) from one `launchPersistentContext`
+call was still readable from a brand-new temp profile directory in a wholly separate Node process --
+measured directly: after wiping nothing, a fresh `debug-append` world's first-ever `append('log',
+'a')` read back as `"ababa"` (bytes from earlier, unrelated test runs) in WebKit; Chromium and
+Firefox both read back exactly `"a"`. `storage-opfs-worker.ts` therefore wipes the whole OPFS root
+(`navigator.storage.getDirectory()`'s own top-level entries, `removeEntry(name, {recursive:true})`)
+once, before touching `opfsStorage` at all -- confirmed this makes the result independent of run
+history and run order (10 consecutive three-browser runs, no flake). `opfsStorage` itself never does
+this; it is test-page hygiene only, kept in `storage-opfs-worker.ts`, documented in
+`storage/CLAUDE.md`. Root cause not fully isolated (plausibly WebKit's OPFS backing store is keyed by
+origin alone on the host machine, independent of which profile directory launched the browser); worth
+carrying into any later multi-browser OPFS spec (`world_survives_reload`, `second_tab_gets_world_busy`
+etc., steps 3-4) since they will hit the same thing the moment they touch WebKit.
+
+**Seam shapes for step 3 (verbatim, as requested):**
+- `opfsStorage(worldId: string): Promise<OpfsStorage>`; `OpfsStorage extends Storage` adds
+  `pendingAsync(): (() => Promise<void>) | null`, `scratchReady(): boolean`, `snapshotDeferred:
+  number` (a plain writable field). `OpfsUnavailable extends Error { reason: string }`, thrown (the
+  promise rejects) when `navigator.storage.getDirectory()` throws/is absent, or the first
+  `createSyncAccessHandle()` (opening the initial `.scratch` handle, done eagerly inside
+  `opfsStorage()` itself) fails.
+- The hook: `write()`'s synchronous half (already-open `.scratch` handle: `truncate`, `write(bytes,
+  {at:0})`, `flush()`) runs inline and `write()` returns `undefined`; it then builds one closure
+  (close the scratch handle, `scratchFileHandle.move(destDir, destName)`, reopen the next scratch)
+  and stores it as the adapter's own single pending slot. **The worker learns there is work** by
+  polling `pendingAsync()` itself (not an event/flag) -- cheap on a `null` read, and it both returns
+  and clears the slot in one call, so a body that polls every wake never double-runs it. Not wired
+  into `worker/sim.ts`'s `body()` yet (that is step 3's job: call `pendingAsync()` after the tick
+  pass, and if non-null, `shell.runAsync(fn)`). `snapshotDeferred` is a plain counter this adapter
+  never increments itself; a future `Persistence` reads `scratchReady()` before a periodic snapshot
+  and bumps `snapshotDeferred` itself if it chooses to skip rather than take the slower,
+  promise-returning path (`write()` never itself skips -- see Planning decision 1's own "expected 0"
+  language, which is about that future caller's choice, not this adapter refusing to write).
+  Failure inside the queued closure calls `this.onError?.(e)` and is swallowed there, matching 0005's
+  own error channel -- never rethrown to whatever calls `pendingAsync()`'s returned function, so a
+  generic `shell.runAsync` wrapper's own `.catch(() => shell.fatal(...))` is not also triggered by
+  the same failure through a second path.
+- `append(key, bytes): void | Promise<void>` is a **plain, non-`async`** method: `undefined`
+  synchronously once the key's sync access handle is open (a bare `handle.write(bytes)`, no options
+  object, no copy -- the handle consumes `bytes` synchronously before returning), a real
+  `Promise<void>` only for the first `append` to a given key (opens the handle, seeks once via a
+  reused `{at}` object whose field is overwritten, never a fresh literal). `sync(key)` is `void`
+  always, `handle.flush()` if the key's handle is open, a no-op otherwise (proven: `sync_never_throws
+  _on_an_unknown_key`).
+- No adapter header/slot format: Decision 3 (above) settled on rename.
+
+**Negative-control hunt (delegation prompt):** injected three mutations into `opfs.ts`, ran
+`storage_conformance_opfs` in Chromium, confirmed each failed, then reverted (verified `git diff`
+clean afterward):
+  - `append`'s fast path forced to `state.handle.write(bytes, { at: 0 })` (never advances) ->
+    `append_accumulates_in_call_order: expected 'ab', got 98` (fails, caught).
+  - `list()`'s final `.sort()` removed -> `list_returns_matching_keys_sorted: expected
+    ["worlds/a/log/000000","worlds/a/manifest"], got ["worlds/a/manifest","worlds/a/log/000000"]`
+    (fails, caught).
+  - "write after append on one key, out of order" (the delegation prompt's third example): tried
+    directly (`append('mixed','a')` then `write('mixed','replaced')` then `read`) -- succeeded
+    correctly in Chromium (`move()` onto a name with another handle's own *different* file still open
+    elsewhere is unaffected; the rename target here had no open handle of its own). **Gap found,
+    not fixed here**: `runStorageConformance` has no check that mixes `append` and `write` on one
+    key, and this adapter's own `#logHandles` entry for a key is not invalidated when a `write()`
+    later replaces that same key's file out from under it -- a subsequent `append()` to that key
+    would keep writing through the stale handle. Real 0005 usage never does this (append only
+    targets log segment keys, write only targets manifest/snapshot/session keys, disjoint key
+    spaces), so this is a documented adapter limitation, not a production bug, and not something
+    `storage_conformance_opfs` would catch either way.
+
+**Measured, per Constraints:** `append`/`sync`'s fast path is a plain method (not `async`), so it
+allocates no Promise regardless of what the JS engine does with an empty `async` body -- this is a
+by-construction claim (decision 1's own zero-GC *measurement* is step 6's job, not asserted here).
+No options object appears on `append`'s fast path; the one seek is `APPEND_SEEK.at = size` (a field
+write on a module-level, reused object) followed by `handle.write(EMPTY, APPEND_SEEK)`, once, at
+open.
+
+**Files:** `packages/engine/src/storage/{opfs.ts,opfs-types.d.ts}`,
+`packages/engine/tests/browser/pages/{storage-opfs.html,src/storage-opfs.ts,
+src/storage-opfs-worker.ts}`, `packages/engine/tests/browser/storage-opfs.spec.ts`,
+`packages/engine/tests/browser/support/opfs-context.ts` (the persistent-context fixture every
+OPFS-touching spec should use going forward), `packages/engine/tests/browser/pages/tsconfig.json`
+(added `opfs-types.d.ts` to `include`), `packages/engine/src/storage/CLAUDE.md` (extended, trimmed to
+stay under the 60-line cap `context-artifacts.test.mjs` enforces on every nested `CLAUDE.md`).
+
+**Not done (later steps' own scope):** the `gc-test` skill's "forcing a snapshot inside the window"
+extension (step 6); wiring `pendingAsync()`/`scratchReady()` into `worker/sim.ts` and `Persistence`
+(step 3); `opfs-latency.html` (step 7).
