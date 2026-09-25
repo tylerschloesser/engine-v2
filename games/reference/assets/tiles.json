@@ -1,0 +1,127 @@
+{
+  "version": 1,
+  "image": "tiles.png",
+  "tile_px": 16,
+  "columns": 8,
+  "visuals": {
+    "0": {
+      "first": 0,
+      "variants": 4,
+      "flags": [],
+      "priority": 0,
+      "band": 0
+    },
+    "1": {
+      "first": 4,
+      "variants": 4,
+      "flags": [],
+      "priority": 1,
+      "band": 2
+    },
+    "2": {
+      "first": 8,
+      "variants": 4,
+      "flags": [],
+      "priority": 2,
+      "band": 2
+    },
+    "3": {
+      "first": 12,
+      "variants": 4,
+      "flags": [],
+      "priority": 3,
+      "band": 2
+    },
+    "4": {
+      "first": 16,
+      "variants": 4,
+      "flags": [],
+      "priority": 4,
+      "band": 2
+    },
+    "16": {
+      "first": 20,
+      "variants": 1,
+      "flags": [],
+      "priority": 0,
+      "band": 0
+    },
+    "17": {
+      "first": 21,
+      "variants": 1,
+      "flags": [],
+      "priority": 0,
+      "band": 0
+    },
+    "18": {
+      "first": 22,
+      "variants": 1,
+      "flags": [],
+      "priority": 0,
+      "band": 0
+    },
+    "19": {
+      "first": 23,
+      "variants": 1,
+      "flags": [],
+      "priority": 0,
+      "band": 0
+    },
+    "20": {
+      "first": 24,
+      "variants": 1,
+      "flags": [],
+      "priority": 0,
+      "band": 0
+    },
+    "21": {
+      "first": 25,
+      "variants": 1,
+      "flags": [],
+      "priority": 0,
+      "band": 0
+    },
+    "22": {
+      "first": 26,
+      "variants": 1,
+      "flags": [],
+      "priority": 0,
+      "band": 0
+    },
+    "23": {
+      "first": 27,
+      "variants": 1,
+      "flags": [],
+      "priority": 0,
+      "band": 0
+    },
+    "24": {
+      "first": 28,
+      "variants": 1,
+      "flags": [],
+      "priority": 0,
+      "band": 0
+    },
+    "25": {
+      "first": 29,
+      "variants": 1,
+      "flags": [],
+      "priority": 0,
+      "band": 0
+    },
+    "26": {
+      "first": 30,
+      "variants": 1,
+      "flags": [],
+      "priority": 0,
+      "band": 0
+    },
+    "27": {
+      "first": 31,
+      "variants": 1,
+      "flags": [],
+      "priority": 0,
+      "band": 0
+    }
+  }
+}

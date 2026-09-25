@@ -32,6 +32,16 @@ export const buildSteps = [
       'packages/engine/tests/browser/pages/vite.config.ts',
     ],
   },
+  // docs/plan/20-reference-game-v0.md: the `reference` Playwright project's own app (built, not
+  // dev-served, same "Served build, not dev server" rule as `pages` above). `cwd` matters here (not
+  // for `pages`, whose config sets `root` explicitly): `games/reference/vite.config.ts` has no
+  // `root` override, so Vite defaults it to `process.cwd()` (Deviations).
+  {
+    name: 'reference',
+    cmd: 'pnpm',
+    args: ['exec', 'vite', 'build'],
+    cwd: 'games/reference',
+  },
 ]
 
 /**
@@ -79,7 +89,12 @@ export const suites = [
     budgetMs: 35_000,
     // `chromium` + `gc` in every tier (0020 §4, first rung: gate round 3, docs/plan/
     // 09-renderer-terrain.md Deviations). WebKit and Firefox move to the `engines` leg below.
-    args: ['--project', 'chromium', '--project', 'gc'],
+    // `reference` (docs/plan/20-reference-game-v0.md): `games/reference`'s own project, same leg
+    // (its own `testDir` and `webServer` entry keep it from ever running the other projects' specs
+    // or vice versa) -- a separate leg would need its own port for the *pages* server too, since a
+    // leg's own `playwright test` process starts every configured `webServer` regardless of
+    // `--project` (Deviations).
+    args: ['--project', 'chromium', '--project', 'gc', '--project', 'reference'],
     legs: [
       {
         name: 'engines',

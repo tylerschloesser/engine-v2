@@ -14,6 +14,10 @@ export default defineConfig({
             // M04: pure CDP-analysis and budgets-file logic, unit-testable without a browser.
             'packages/engine/tests/browser/gc/*.test.ts',
             'packages/engine/tests/support/*.test.ts',
+            // docs/plan/20-reference-game-v0.md: `games/reference`'s own unit tests (the asset
+            // script's reproducibility, package/bindings hygiene), same two glob shapes as above.
+            'games/*/src/**/*.test.ts',
+            'games/*/scripts/**/*.test.mjs',
           ],
         },
       },

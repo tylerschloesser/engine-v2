@@ -2,10 +2,21 @@
 // decisions "Browsers and projects"). `pnpm test`'s `pages` build step has already run `vite build`
 // on `tests/browser/pages`; `webServer` only runs `vite preview` (Planning decisions, "Served build,
 // not dev server").
+import { resolve } from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 
 const port = Number(process.env.ENGINE_TEST_PORT ?? 4517)
 const baseURL = `http://127.0.0.1:${port}`
+
+// docs/plan/20-reference-game-v0.md, Deviations: `games/reference`'s own browser tests reach the
+// `browser` suite through a second project (`reference`, below) and a second `webServer` entry
+// here, rather than a new top-level suite or a separate `playwright.config.ts` -- the `playwright`
+// adapter (`scripts/lib/adapters.mjs`) hardcodes this one config file for every playwright-kind
+// suite/leg, so a project + `testDir` override is the only way in without touching that adapter.
+// Fixed port (not `ENGINE_TEST_PORT`-derived like the pages server): a wholly separate Vite app,
+// never run concurrently on the same port as the pages preview by any suite/leg this repo has.
+const referencePort = 4520
+const referenceBaseURL = `http://127.0.0.1:${referencePort}`
 
 // M04: base port for the `gc` project's `flat` CDP transport (docs/plan/04-zero-gc-harness.md,
 // Planning decisions "CDP transport"); `TEST_PARALLEL_INDEX` is set per worker process by
@@ -166,13 +177,36 @@ export default defineConfig({
       testMatch: '**/gc-*.spec.ts',
       timeout: gcTimeoutMs,
     },
+    {
+      // docs/plan/20-reference-game-v0.md: `games/reference`'s own browser tests (`terrain.spec.ts`
+      // today), a wholly separate Vite app served by the second `webServer` entry below. `testDir`
+      // override (relative to this file, `packages/engine/`) is what keeps this project from ever
+      // seeing the other projects' specs and vice versa.
+      name: 'reference',
+      testDir: '../../games/reference/tests/browser',
+      use: {
+        ...devices['Desktop Chrome'],
+        channel: chromiumChannel,
+        launchOptions: { args: ['--enable-unsafe-webgpu', ...swiftshaderArgs] },
+        baseURL: referenceBaseURL,
+      },
+    },
   ],
-  webServer: {
-    // `--host 127.0.0.1`: Vite's default preview host resolves to `localhost`, which binds ::1 only
-    // on this machine (measured: 127.0.0.1 then refuses the connection); `baseURL` above is literal.
-    command: `pnpm exec vite preview --config tests/browser/pages/vite.config.ts --host 127.0.0.1`,
-    cwd: import.meta.dirname,
-    url: `${baseURL}/index.html`,
-    reuseExistingServer: true,
-  },
+  webServer: [
+    {
+      // `--host 127.0.0.1`: Vite's default preview host resolves to `localhost`, which binds ::1
+      // only on this machine (measured: 127.0.0.1 then refuses the connection); `baseURL` above is
+      // literal.
+      command: `pnpm exec vite preview --config tests/browser/pages/vite.config.ts --host 127.0.0.1`,
+      cwd: import.meta.dirname,
+      url: `${baseURL}/index.html`,
+      reuseExistingServer: true,
+    },
+    {
+      command: `pnpm exec vite preview --host 127.0.0.1 --port ${referencePort} --strictPort`,
+      cwd: resolve(import.meta.dirname, '../../games/reference'),
+      url: `${referenceBaseURL}/index.html`,
+      reuseExistingServer: true,
+    },
+  ],
 })

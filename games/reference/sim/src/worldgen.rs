@@ -20,8 +20,11 @@ const EDGE: i32 = 32;
 
 /// Seed-independent knobs (Scope: "octave counts, scales, sea level, per-resource density").
 /// Densities are out of 65,536 (one `hash2` draw's low 16 bits), matching `fx-worldgen`'s own
-/// scatter convention.
+/// scatter convention. `#[serde(default)]` (container form, backed by this type's own `Default`
+/// impl below): a world config's `params.worldgen` may omit any or all fields, so `{}` is a valid
+/// "use the defaults" value -- `main.ts`'s own `host.world.params.worldgen` relies on this.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(default)]
 #[ts(export)]
 pub struct RefParams {
     pub height_octaves: u32,

@@ -24,6 +24,10 @@
       "types": "./dist/vite.d.ts",
       "default": "./dist/vite.js"
     },
+    "./render": {
+      "types": "./dist/render.d.ts",
+      "default": "./dist/render.js"
+    },
     "./virtual": {
       "types": "./dist/virtual.d.ts"
     },

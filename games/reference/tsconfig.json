@@ -4,7 +4,7 @@
     "rootDir": "src",
     "noEmit": true,
     "lib": ["es2023", "dom"],
-    "types": ["engine/virtual", "vite/client", "@webgpu/types"]
+    "types": ["node", "engine/virtual", "vite/client", "@webgpu/types"]
   },
   "include": ["src"]
 }
