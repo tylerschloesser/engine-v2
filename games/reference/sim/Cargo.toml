@@ -18,3 +18,6 @@ ts-rs = "12"
 
 [dev-dependencies]
 engine = { path = "../../../packages/engine/crates/engine", features = ["testing"] }
+# `landmarks_fixture.rs` alone: parses `tests/fixtures/landmarks.json` (test-only, never in the
+# `.wasm` -- already a dependency elsewhere in the workspace, e.g. `packages/engine/crates/engine`).
+serde_json = { version = "1", default-features = false, features = ["alloc"] }

@@ -22,6 +22,7 @@ import {
   systemScheduler,
   type TerrainRenderer,
 } from 'engine/render'
+import type { RefAction } from './bindings/RefAction.js'
 
 declare global {
   interface Window {
@@ -39,6 +40,16 @@ declare global {
       tileX: number,
       tileY: number,
     ) => Promise<{ r: number; g: number; b: number; a: number }>
+    /** Test-only diagnostic hook (step 5, same precedent as `__setCamera`/`__probeTile`): dispatches
+     * a real `StartCollect` through the production `client.dispatch` path -- no `engine/test`,
+     * `client.dispatch` is itself a production API (0003 "Actions across the boundary"). Returns
+     * the action's own `seq`. */
+    __dispatchStartCollect?: (tileX: number, tileY: number, fromX: number, fromY: number) => number
+    /** Test-only diagnostic hook: the real camera's own current block, `client.cameraState` (a
+     * production, public field `createClient` already maintains from real pointer/wheel input --
+     * proving "pan and zoom work" needs only reading it before and after a real gesture, not a new
+     * production capability). */
+    __cameraState?: () => { x: number; y: number; tilesAcross: number }
   }
 }
 
@@ -120,6 +131,19 @@ window.__setCamera = (x, y, tilesAcross) => {
   client.cameraState.centreX = x
   client.cameraState.centreY = y
   client.cameraState.tilesAcross = tilesAcross
+}
+
+window.__cameraState = () => ({
+  x: client.cameraState.centreX,
+  y: client.cameraState.centreY,
+  tilesAcross: client.cameraState.tilesAcross,
+})
+
+window.__dispatchStartCollect = (tileX, tileY, fromX, fromY) => {
+  const action: RefAction = {
+    StartCollect: { tile: { x: tileX, y: tileY }, from: { x: fromX, y: fromY } },
+  }
+  return client.dispatch(action)
 }
 
 // `terrain.wgsl`'s own `NEUTRAL_COLOR`: 32/255 exactly on every channel, alpha opaque -- "chunk not
