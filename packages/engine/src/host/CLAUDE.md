@@ -23,3 +23,24 @@ write side of 0005 Persistence. One instance per world.
 - `createSimHost(cfg, services)` (`../server.ts`) builds one `Persistence` per world and wires it
   in; `createSimHostFromInstance`'s `persistence` parameter is optional, so existing two-argument
   callers (`worker/sim.ts`) are unaffected -- real storage there is a later milestone's.
+
+## Loading (docs/plan/22b-persistence-load-and-fs.md)
+
+- `Persistence.open(storage, cfg, newInstance)`: create-or-load. No manifest -> `Persistence.
+  create`'s own path (`outcome: 'created'`). A manifest -> `Persistence.loadLatest`, wrapped into a
+  live `Persistence` continuing exactly where the load left off (its `segment`/`logOffset`/`tick`
+  fields seeded from the load, not `0`); may self-heal a manifest a crash left stale
+  (`healManifest`, private).
+- `Persistence.loadLatest(storage, keys, manifest, newInstance)`: a `static` helper, not an instance
+  method (no live `Persistence` exists yet when `open` calls it) -- "the snapshot + tail step on its
+  own", reusable by M24 after a trap. Checks the running identity first (`sim_segment_header(0,
+  GENESIS_BASE_TICK)`, no genesis needed) against `manifest.created`, throwing `WorldLoadError` on a
+  mismatch (reported, not handled: M24b's own migrate path). Then tries every `snap/` key newest
+  first through `sim_restore_begin/push/end`, each candidate on a fresh `newInstance()`: a bad CRC/
+  container version, or a `logOffset` beyond its own segment's stored bytes (0005: "kept until the
+  new one verifies"), falls back to the next-older one, then to a genesis replay of segment 0 if
+  none verify. Either way, `sim_replay_begin/push/end` replays the chosen tail; a torn frame is
+  truncated with `storage.write` (`Storage` has no `truncate`) and reported in `truncatedBytes`.
+  `outcome` is `'recovered'` iff anything was skipped or truncated, else `'loaded'`.
+- `WorldLoadError { kind: 'identity' | 'corrupt' | 'container', running, stored? }`: thrown, not
+  returned -- storage is left untouched.

@@ -1,8 +1,12 @@
 // The write side of 0005 Persistence (docs/plan/22-persistence-log-and-snapshots.md steps 4-6):
 // creates a fresh world (manifest + segment 0), the write-ahead `appendFrame` `SimHost.logSink`
 // points at, the `sync`/snapshot cadence (0005 Cadence) driven from `afterTick`, and `flush()`.
-// Loading a stored world, segment rolling and pruning are M22b's (Non-scope here): `Persistence.
-// create` always starts a brand new world, in one segment, forever (this milestone).
+//
+// docs/plan/22b-persistence-load-and-fs.md adds the load side: `Persistence.open` (create-or-load,
+// recovery from whatever a crash left) and `Persistence.loadLatest` (the snapshot + tail-replay
+// step on its own, a static helper rather than an instance method -- at the point it runs there is
+// no live `Persistence` yet for `open`'s own "no manifest" branch to have skipped past). Segment
+// rolling and pruning are also here (this brief's own step 3).
 import { RegionId, Status } from '../abi.js'
 import type { EngineInstance } from '../loader.js'
 import type { WorldConfig } from '../sim-config.js'
@@ -52,6 +56,32 @@ export interface ManifestV1 {
   params: WorldConfig['params']
   created: IdentityJson
   segments: ManifestSegment[]
+}
+
+/** docs/plan/22b-persistence-load-and-fs.md Seams: thrown by `Persistence.open`/`loadLatest` when
+ * a stored world cannot simply be loaded. `identity`: the running build's own identity differs from
+ * the stored one (0005 Upgrades; M24b turns this into the upgrade path -- here it is reported, not
+ * handled, and nothing is written). `corrupt`: every candidate snapshot (and, if segment 0 is all
+ * there ever was, the log itself) failed to decode. `container`: reserved for a future container-
+ * version mismatch the engine cannot even attempt (nothing raises this yet: a version mismatch on a
+ * single candidate snapshot is instead treated the same as `corrupt`, falling back to an older one,
+ * since a *newer* running build can still read an *older* segment's own untouched history). */
+export class WorldLoadError extends Error {
+  readonly kind: 'identity' | 'corrupt' | 'container'
+  readonly running: IdentityJson
+  readonly stored?: IdentityJson
+
+  constructor(
+    kind: 'identity' | 'corrupt' | 'container',
+    running: IdentityJson,
+    stored?: IdentityJson,
+  ) {
+    super(`WorldLoadError: ${kind}`)
+    this.name = 'WorldLoadError'
+    this.kind = kind
+    this.running = running
+    if (stored !== undefined) this.stored = stored
+  }
 }
 
 function readVarint(bytes: Uint8Array, pos: number): [value: number, next: number] {
@@ -175,14 +205,16 @@ export class Persistence {
   private readonly ticksPerSecond: number
   private readonly snapshotBuffer = new SnapshotBuffer()
 
-  /** Single segment, forever (Non-scope here: segment rolling is M22b's). */
-  private readonly segment = 0
+  /** The currently open segment's index. `0` for a brand-new world; whatever `Persistence.open`'s
+   * own load found (a restored snapshot's `logSegment`, or `0` for a genesis-based load) otherwise.
+   * Mutable since docs/plan/22b-persistence-load-and-fs.md step 3: segment rolling changes it. */
+  private segment: number
   /** The host owns the log position (Planning decisions 4): every byte appended so far to
    * `keys.log(segment)`, header included. */
-  private logOffset = 0
+  private logOffset: number
   /** The most recently completed tick (`afterTick`'s own argument, mirrored here for
    * `snapshotNow`'s own `keys.snap(tick)` key). */
-  private tick = 0
+  private tick: number
   private ticksSinceSnapshotCheck = 0
   private ticksSinceSync = 0
   /** Whether `appendFrame` has run since the last `sync()` -- the sync cadence's own "dirty"
@@ -204,11 +236,19 @@ export class Persistence {
     keys: WorldKeys,
     sim: EngineInstance,
     ticksPerSecond: number,
+    initial: { segment: number; logOffset: number; tick: number } = {
+      segment: 0,
+      logOffset: 0,
+      tick: 0,
+    },
   ) {
     this.storage = storage
     this.keys = keys
     this.sim = sim
     this.ticksPerSecond = ticksPerSecond
+    this.segment = initial.segment
+    this.logOffset = initial.logOffset
+    this.tick = initial.tick
     storage.onError = (err) => {
       this.fatalError = err
     }
@@ -259,6 +299,241 @@ export class Persistence {
     p.logOffset = headerBytes.length
 
     return p
+  }
+
+  /** docs/plan/22b-persistence-load-and-fs.md Seams: create-or-load. No stored manifest -> exactly
+   * `Persistence.create`'s own path (`outcome: 'created'`); a stored manifest -> `loadLatest` picks
+   * the newest snapshot whose CRC verifies (falling back to older ones, then to a genesis replay of
+   * segment 0 if none verify), replays the tail, truncates a torn one, and this wraps the result in
+   * a live `Persistence` continuing from exactly where the load left off. `newInstance` is called
+   * once for `'created'`, and at least once (more on a corrupt/torn snapshot candidate) for a load:
+   * each attempt gets its own fresh instance rather than retrying restore on one (`sim_restore_begin`
+   * consumes the config's world params it needs, so a fresh instance is simplest and matches 0005
+   * Panic recovery's own "fresh instance, latest valid snapshot" pattern).
+   */
+  static async open(
+    storage: Storage,
+    cfg: WorldConfig,
+    newInstance: () => EngineInstance,
+  ): Promise<{
+    persistence: Persistence
+    sim: EngineInstance
+    outcome: 'created' | 'loaded' | 'recovered'
+    tick: number
+    truncatedBytes: number
+  }> {
+    const keys = worldKeys(cfg.worldId)
+    const manifestBytes = await storage.read(keys.manifest)
+    if (manifestBytes === null) {
+      const sim = newInstance()
+      const persistence = Persistence.create(storage, cfg, sim)
+      return { persistence, sim, outcome: 'created', tick: 0, truncatedBytes: 0 }
+    }
+
+    const manifest: ManifestV1 = JSON.parse(textDecoder.decode(manifestBytes)) as ManifestV1
+    const loaded = await Persistence.loadLatest(storage, keys, manifest, newInstance)
+    const ticksPerSecond = loaded.sim.call0(loaded.sim.x.tick_hz) || 20
+    const persistence = new Persistence(storage, keys, loaded.sim, ticksPerSecond, {
+      segment: loaded.logSegment,
+      logOffset: loaded.logOffset,
+      tick: loaded.tick,
+    })
+    await Persistence.healManifest(storage, keys, manifest, loaded)
+    return {
+      persistence,
+      sim: loaded.sim,
+      outcome: loaded.outcome,
+      tick: loaded.tick,
+      truncatedBytes: loaded.truncatedBytes,
+    }
+  }
+
+  /** docs/plan/22b-persistence-load-and-fs.md Seams: "the snapshot + tail step on its own, reused
+   * by M24 after a trap". A `static` helper, not an instance method: at the point it runs (from
+   * `Persistence.open`'s own "manifest exists" branch) there is no live `Persistence` yet to call it
+   * on. M24 (re-instantiation after a trap, Non-scope here) would call this the same way, with a
+   * fresh `newInstance` and the manifest its own now-garbage `Persistence` already holds, and swap
+   * the result's `sim` in -- not built here.
+   *
+   * Algorithm (0005 Recovery): the running build's own identity is checked first (`sim_segment_
+   * header(0, GENESIS_BASE_TICK)`, which needs no genesis) against `manifest.created` -- a mismatch
+   * throws before touching anything else (Non-scope: identity mismatch is reported, M24b handles
+   * it). Then every `snap/` key, newest tick first: restore it (a fresh instance per candidate); a
+   * bad CRC/container version, or a `logOffset` beyond what its own segment's log actually holds
+   * (Planning decisions 3: "a snapshot naming a segment offset beyond the segment's valid end is
+   * skipped as if its CRC failed"), moves on to the next-older one. If none verify, replay from
+   * genesis (always segment 0: Planning decisions 2, rolling only ever happens at a snapshot, so no
+   * roll can exist with no snapshot surviving it). Either way, the segment's own tail (from the
+   * chosen log position onward) is replayed and any torn frame truncated (Planning decisions 1:
+   * `Storage.write`, not a `truncate` this interface has no room for).
+   */
+  static async loadLatest(
+    storage: Storage,
+    keys: WorldKeys,
+    manifest: ManifestV1,
+    newInstance: () => EngineInstance,
+  ): Promise<{
+    sim: EngineInstance
+    logSegment: number
+    logOffset: number
+    /** The chosen base's own tick (the restored snapshot's tick, or `0` for a genesis base) --
+     * `healManifest`'s own "what base does a newly-discovered segment carry" question. */
+    baseTick: number
+    tick: number
+    truncatedBytes: number
+    outcome: 'loaded' | 'recovered'
+  }> {
+    let inst = newInstance()
+    const headerLen = inst.call2(inst.x.sim_segment_header, 0, GENESIS_BASE_TICK)
+    if (headerLen < 0) {
+      throw new Error(`Persistence.loadLatest: sim_segment_header failed: status ${-headerLen}`)
+    }
+    const headerRegion = inst.region(RegionId.Persist)
+    if (!headerRegion) throw new Error('Persistence.loadLatest: the Persist region is absent')
+    const runningIdentity = decodeIdentity(headerRegion.u8.slice(0, headerLen))
+    if (runningIdentity.buildHash !== manifest.created.buildHash) {
+      throw new WorldLoadError('identity', runningIdentity, manifest.created)
+    }
+
+    const snapPrefix = `worlds/${manifest.worldId}/snap/`
+    // Zero-padded decimal ticks (`worldKeys`'s own convention): a lexicographic sort is a numeric
+    // one too; reversed, newest first (0005 Recovery: "newest snapshot whose CRC verifies").
+    const snapKeys = [...(await storage.list(snapPrefix))].sort().reverse()
+
+    let recovered = false
+    let usedInstance = false
+    let picked: { logSegment: number; logOffset: number; baseTick: number } | null = null
+
+    for (const key of snapKeys) {
+      const bytes = await storage.read(key)
+      if (!bytes) continue
+      if (usedInstance) inst = newInstance()
+      usedInstance = true
+
+      const beginStatus = inst.call1(inst.x.sim_restore_begin, bytes.length)
+      const region = inst.region(RegionId.Persist)
+      if (!region) throw new Error('Persistence.loadLatest: the Persist region is absent')
+      let pushesOk = beginStatus === Status.Ok
+      if (pushesOk) {
+        for (let off = 0; off < bytes.length; ) {
+          const n = Math.min(region.len, bytes.length - off)
+          region.u8.set(bytes.subarray(off, off + n), 0)
+          const pushStatus = inst.call1(inst.x.sim_restore_push, n)
+          if (pushStatus !== Status.Ok) {
+            pushesOk = false
+            break
+          }
+          off += n
+        }
+      }
+      const endStatus = inst.call0(inst.x.sim_restore_end)
+      if (endStatus === Status.IdentityMismatch) {
+        throw new WorldLoadError('identity', runningIdentity, manifest.created)
+      }
+      if (!pushesOk || endStatus !== Status.Ok) {
+        recovered = true
+        continue
+      }
+      const result = inst.region(RegionId.Result)
+      if (!result) throw new Error('Persistence.loadLatest: the Result region is absent')
+      const view = new DataView(result.u8.buffer, result.u8.byteOffset, 8)
+      const logSegment = view.getUint32(0, true)
+      const logOffset = view.getUint32(4, true)
+      const baseTick = inst.call0(inst.x.sim_tick_now)
+      const logBytes = await storage.read(keys.log(logSegment))
+      if (!logBytes || logBytes.length < logOffset) {
+        // Planning decisions 3: the snapshot itself verified, but names a log position its own
+        // segment's stored bytes do not reach -- treated the same as a failed CRC.
+        recovered = true
+        continue
+      }
+      picked = { logSegment, logOffset, baseTick }
+      break
+    }
+
+    if (!picked) {
+      if (usedInstance) inst = newInstance()
+      const h = inst.call2(inst.x.sim_segment_header, 0, GENESIS_BASE_TICK)
+      if (h < 0) throw new Error(`Persistence.loadLatest: sim_segment_header failed: status ${-h}`)
+      const genStatus = inst.call0(inst.x.sim_genesis)
+      if (genStatus !== Status.Ok) {
+        throw new Error(`Persistence.loadLatest: sim_genesis failed: status ${genStatus}`)
+      }
+      picked = { logSegment: 0, logOffset: h, baseTick: 0 }
+      if (snapKeys.length > 0) recovered = true // snapshots existed; none of them were usable
+    }
+
+    const { logSegment, logOffset, baseTick } = picked
+    const logBytes = (await storage.read(keys.log(logSegment))) ?? new Uint8Array(0)
+    const tail = logBytes.subarray(logOffset)
+    const beginReplay = inst.call2(inst.x.sim_replay_begin, logSegment, logOffset)
+    if (beginReplay !== Status.Ok) {
+      throw new Error(`Persistence.loadLatest: sim_replay_begin failed: status ${beginReplay}`)
+    }
+    const replayRegion = inst.region(RegionId.Persist)
+    if (!replayRegion) throw new Error('Persistence.loadLatest: the Persist region is absent')
+    for (let off = 0; off < tail.length; ) {
+      const n = Math.min(replayRegion.len, tail.length - off)
+      replayRegion.u8.set(tail.subarray(off, off + n), 0)
+      inst.call1(inst.x.sim_replay_push, n)
+      off += n
+    }
+    const endReplay = inst.call0(inst.x.sim_replay_end)
+    const validEnd = inst.call0(inst.x.sim_replay_valid_end)
+    let truncatedBytes = 0
+    if (endReplay === Status.TornTail || validEnd < logBytes.length) {
+      truncatedBytes = logBytes.length - validEnd
+      if (truncatedBytes > 0) {
+        // Planning decisions 1: `Storage.write`, since `Storage` has no `truncate` -- adapters must
+        // accept `append` after `write` on the same key (the conformance helper asserts it).
+        await storage.write(keys.log(logSegment), logBytes.subarray(0, validEnd))
+      }
+      recovered = true
+    }
+    const tick = inst.call0(inst.x.sim_tick_now)
+    return {
+      sim: inst,
+      logSegment,
+      logOffset: validEnd,
+      baseTick,
+      tick,
+      truncatedBytes,
+      outcome: recovered ? 'recovered' : 'loaded',
+    }
+  }
+
+  /** docs/plan/22b-persistence-load-and-fs.md step 3: `loadLatest`'s own segment discovery (via
+   * `storage.list`/decoded snapshot bytes) never trusts `manifest.segments` -- proven by
+   * `crash_before_manifest_rewrite_on_roll`, a crash between a roll's own log/snapshot writes and
+   * its manifest rewrite. This is the self-heal: if the loaded segment is not the manifest's own
+   * last-known one, the manifest is rewritten to match (the old last entry sealed, a new one added)
+   * so a *second* load does not need to repeat this discovery. Best-effort and off the tick path:
+   * failure here does not fail the load itself, since `loadLatest` has already succeeded by the time
+   * this runs. */
+  private static async healManifest(
+    storage: Storage,
+    keys: WorldKeys,
+    manifest: ManifestV1,
+    loaded: { logSegment: number; baseTick: number },
+  ): Promise<void> {
+    const lastIndex = manifest.segments.at(-1)?.index ?? -1
+    if (loaded.logSegment <= lastIndex) return
+    const healed: ManifestV1 = {
+      ...manifest,
+      segments: [
+        ...manifest.segments.map((s, i) =>
+          i === manifest.segments.length - 1 ? { ...s, sealed: true } : s,
+        ),
+        {
+          index: loaded.logSegment,
+          identity: manifest.created,
+          base: loaded.logSegment === 0 ? 'genesis' : loaded.baseTick,
+          sealed: false,
+          tailReexecuted: false,
+        },
+      ],
+    }
+    await storage.write(keys.manifest, textEncoder.encode(JSON.stringify(healed)))
   }
 
   /** What `SimHost.logSink` is pointed at (`host.logSink = persistence.appendFrame`): a fixed
