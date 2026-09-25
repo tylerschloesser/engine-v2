@@ -68,7 +68,8 @@ test('wasm_connected_100_matches_its_own_golden', async () => {
  * against `golden/golden-script-a.json`, so this and the native test prove `.wasm` matches native
  * transitively (`wasm_idle_100_matches_native`'s own precedent, above). `runScriptScenario`'s own
  * doc comment has the two-instance ("sim" + "encoder") shape this drives; the value must not move
- * (`7bdddfc9c749b1fb`, unchanged from when this golden was native-only).
+ * (`d5fd55ce8f13a67e` since M21, when `entity_at` became real and the script's `Bump`/`Remove` began
+ * finding their entity; `7bdddfc9c749b1fb` before, unchanged from when this golden was native-only).
  */
 test('wasm_script_a_matches_native', async () => {
   const scenario = readGolden<ScriptScenario>('puts', 'scenario-script-a.json')
@@ -81,7 +82,7 @@ test('wasm_script_a_matches_native', async () => {
 
   expect(checkpoints).toHaveLength(1)
   expect(checkpoints).toEqual(golden.checkpoints)
-  expect(checkpoints[0]).toBe('7bdddfc9c749b1fb')
+  expect(checkpoints[0]).toBe('d5fd55ce8f13a67e')
 })
 
 // `fx-puts`'s own `TICK_RATE` is the trait default (`TickRate::HZ_20`, `server.ts`'s "20 Hz is

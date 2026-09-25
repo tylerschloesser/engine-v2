@@ -146,7 +146,7 @@ fn puts_idle_100_golden() {
 /// json` under Node (0002) -- the same script as `script_a()` below, driven through the real admit
 /// pipeline (`sim_connect`/`sim_admit`, `tests/support/scenario.ts`'s `runScriptScenario`) rather
 /// than this test's own direct-to-`Sim` `run_script` bypass. Both reach the identical hash
-/// (`7bdddfc9c749b1fb`, unmoved from the native-blessed value): `Host::connect`'s own extra
+/// (`d5fd55ce8f13a67e` since M21; `7bdddfc9c749b1fb` before): `Host::connect`'s own extra
 /// `Record::Player{Connected}` (`script_a()` only ever queues `Joined`) is a no-op for `Puts::
 /// on_player`, which only handles `Joined` (Deviations has the full reasoning).
 #[test]
