@@ -89,7 +89,23 @@ describe('playwright adapter', () => {
         exitCode: 1,
         logPath: logWith('Error: No tests found\n'),
       }),
-    ).toEqual({ tests: 0, failures: [], warnings: [], adapters: [] })
+    ).toEqual({
+      tests: 0,
+      failures: [],
+      warnings: [],
+      adapters: [],
+      errors: ['Error: No tests found'],
+    })
+  })
+
+  // docs/plan/20-reference-game-v0.md gate round 1: a leg whose `webServer` failed to start writes the
+  // same empty report with the same exit code; only `errors` tells it apart, and it must fail.
+  test('parse: an empty report whose errors name a webServer crash is a failure', () => {
+    const message = 'Error: Process from config.webServer was not able to start. Exit code: 1'
+    const reportPath = tmpFile('report.json', JSON.stringify({ suites: [], errors: [{ message }] }))
+    const result = adapters.playwright.parse({ reportPath, exitCode: 1, logPath: logWith('') })
+    expect(result.failures).toHaveLength(1)
+    expect(result.failures[0].message).toContain('webServer was not able to start')
   })
 
   test('parse: a non-zero exit with no report at all is still a failure', () => {

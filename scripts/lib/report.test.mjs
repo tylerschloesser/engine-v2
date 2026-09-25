@@ -143,7 +143,20 @@ describe('parsePlaywrightJson', () => {
       failures: [],
       warnings: [],
       adapters: [],
+      errors: [],
     })
+  })
+
+  test('top-level errors (a webServer that failed to start) are surfaced, not dropped', () => {
+    const report = {
+      suites: [],
+      errors: [
+        { message: 'Error: Process from config.webServer was not able to start. Exit code: 1' },
+      ],
+    }
+    expect(parsePlaywrightJson(JSON.stringify(report)).errors).toEqual([
+      'Error: Process from config.webServer was not able to start. Exit code: 1',
+    ])
   })
 
   test('adapter.info annotations: deduped, in first-seen order', () => {
