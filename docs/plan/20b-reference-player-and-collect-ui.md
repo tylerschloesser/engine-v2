@@ -330,3 +330,136 @@ nearest land tile, `Ui.spawn`, `main.ts`'s `camera.moveTo`), the scripted
 `reference_collect_flow`/`reference_several_buttons`/`reference_pan_out_cancels`/
 `reference_new_player_spawns_on_land` browser tests, the `gc` project wiring (step 0-2 Deviations),
 and the zero-allocation exit criterion itself.
+
+**Steps 5-6 and the zero-allocation criterion (this cut, base `672a8eb`; `pnpm test && pnpm lint`
+green there and still green after -- `rust 403`, `unit 232`, `wasm 57`, `browser 184` at 28-29s/35s;
+lint's four checks pass). Commits `fc5e8bd`..`3e45eaf`.**
+
+- **Orchestrator fix.** `content::RANGE_SCAN_TILES` (moved out of `client.rs`'s own `ui()` local
+  calc) and `MAX_IN_RANGE` are now `(2 * RANGE_SCAN_TILES + 1)^2` (81, the scanned square's own tile
+  count), a hard upper bound by construction rather than a chosen headroom number -- truncation
+  cannot happen regardless of how many scanned tiles carry a resource. The exact disc bound (every
+  tile whose centre can be within `RANGE_Q8` of some point) is 32, found by exhaustive search over
+  sub-tile offsets; the square (81) is what the scan loop actually visits, so it needs no separate
+  proof of correctness against the scan's own shape. New native test
+  `ui_in_range_fills_every_tile_in_range_without_truncation` (`sim/tests/ui.rs`): every tile the scan
+  visits carries a resource, `from` at the exact worst-case corner, asserting `in_range.len()`
+  against an independently recomputed count (not a hard-coded 32).
+- **Step 5 (spawn).** `client::nearest_land_tile(seed, params) -> TilePos` (`pub`, tested directly,
+  `spring_step`'s own precedent): a spiral outward in Chebyshev rings from `(0, 0)` over
+  `worldgen::terrain_at` (new, `pub(crate)`: `classify`'s own single-tile version, no chunk
+  generated), terminating once a candidate closer than the current ring's own minimum possible
+  distance is already in hand -- an exact nearest search. `content::SEED` (the literal every real
+  page already hardcodes) is the one seed this is ever computed against, since `ClientSide` has no
+  engine-supplied seed/params channel (Deviations documents this as a known v0 limitation, not a bug:
+  this game never lets a player choose a world). `sim/tests/common/mod.rs::TEST_SEED` now aliases
+  `content::SEED` rather than repeating the literal a third time. `RefClient` computes this once at
+  construction (`Default`/`with_spring_state`) and copies it into `Ui.spawn` unchanged on every
+  `ui()` call. New native test `spawn_is_nearest_land_tile` (`sim/tests/spawn.rs`) against
+  `landmarks.json`'s own `land` field. **Orchestrator ruling, this cut's own decision:** the brief's
+  Scope literally says "`main.ts` calls `client.camera.moveTo`"; this cut put it in `game.ts`'s
+  shared `startGame` instead (a new `onUi` subscription alongside `collectUi`/`inventoryUi`, guarded
+  by `client.camera.restored` and a once-only flag), the same "brief said `main.ts`, actually shared"
+  pattern steps 3-4 already established for the collect UI itself -- `test-entry.ts`'s own tests can
+  then observe it through `__cameraState()` with no new hook, which a literal `main.ts`-only
+  placement would have made unobservable from `test.html` at all. `game.ts` also now threads
+  `cameraKey` from the world id (M11 seam, Consumes) -- unused today (one world per session) but
+  correct once a second exists.
+- **Step 6 (scripted browser tests).** `tests/browser/collect-flow.spec.ts`
+  (`reference_collect_flow`/`reference_several_buttons`/`reference_pan_out_cancels`) and
+  `tests/browser/spawn.spec.ts` (`reference_new_player_spawns_on_land`), on the stepped test entry.
+  `tests/helpers/game.ts` gains the brief's own named seam (`panTo`/`uiState`/`clickCollect`) plus
+  `pumpUntil` (Provides, not brief-named but load-bearing): polls a real `uiState()` condition after
+  each `stepTick`+`stepFrame` round instead of a fixed count, found necessary when
+  `ui-smoke.spec.ts`'s own hand-picked counts (proven fine under `pnpm test browser` alone) flaked
+  under `--repeat-each`/concurrent load -- a fixed-count sequence is inherently marginal against
+  exactly how many ticks a given dispatch-to-effect round trip needs. `reference_collect_flow`'s
+  anchoring assertion computes the expected screen point from `__cameraState()`/the canvas bounding
+  box via the same `worldToScreen` formula `camera/transform.ts` uses, and compares against the
+  button's own `getBoundingClientRect()` bottom-centre (0019 §5's `align: 'bottom'` default) --
+  within 1 CSS px, both axes. The duration assertion reads the real CSS animation's
+  `getAnimations({ subtree: true })` (the animation targets `.collect-fill`, a child of the button,
+  not the button itself -- `{ subtree: true }` was needed, found live) and compares its numeric
+  `getTiming().duration` against the Scope formula computed from `Ui.collecting.done_at` and a new
+  `__clock()` hook (`client.clock()`, copied to a plain object: the live object it returns does not
+  survive a `page.evaluate` structured-clone round trip unchanged). `reference_several_buttons` uses
+  two wood tiles at `(58, 55)`/`(57, 56)` under `TEST_SEED`, found by a throwaway Rust example
+  (`games/reference/sim/examples/scan_pairs.rs`, deleted after use, never committed): isolated enough
+  (next-nearest resource over 9 tiles from their midpoint) that exactly two buttons, never a third,
+  can appear from one camera position. `engine/test.lastUi` existed in `packages/engine/src/test/
+  client.ts` (M16b's own read-back seam) but was never re-exported from `engine/test`'s barrel
+  (`packages/engine/src/test.ts`) -- unreachable from any external consumer until this cut, which
+  needed it for `uiState(page)`; added as a bug fix (one line). `lastUi`'s own subscription is lazy
+  on first call (its own doc comment): every new spec primes it once, immediately after `openGame`,
+  before triggering anything, or an early delivery is missed for good (`framecx.spec.ts`'s own
+  documented gotcha, hit live here on a fresh page for the first time in this package).
+- **The zero-allocation exit criterion.** `games/reference/gc.html`/`src/gc-entry.ts`: a real
+  production topology (`host: { kind: 'local', connect: true }`, this game's own `startGame`),
+  driven through `engine/test.asHarness` with a manual clock, panning a small `Math.sin` oscillation
+  around `(0, 0)` every measured frame with the iron and stone landmarks already mounted as two
+  buttons (both land inside `RANGE` at spawn, no separate scan needed for this page). New Playwright
+  project `gc-reference` (`playwright.config.ts`): the `gc` project's own launch flags/timeout,
+  `baseURL` pointed at the `reference` project's own shared preview server -- but its *spec file*
+  (`packages/engine/tests/browser/gc-reference.spec.ts`) stays under this package's own `tests/
+  browser/`, not `games/reference/tests/`, because `zeroGcSuite`/`gc/suite.ts` is exactly the
+  cross-package import `games/reference/CLAUDE.md`'s own "never import `packages/engine/tests/**`"
+  rule forbids; only `--project gc-reference`'s `use.baseURL` crosses the boundary, not the test
+  code. `scripts/suites.mjs`'s `browser` suite args gained `--project gc-reference` alongside the
+  existing three. `asHarness` had the identical unreachable-from-outside gap `lastUi` did (same fix,
+  same file).
+  - **Budget** (`budgets.json`, `gc.pages.reference`, measured `strict` first per the skill, never
+    `budgeted` pre-emptively): `main` 234 (`ceil(225.99333) + 8`, measured 225.82-225.99333 B/frame
+    across 8 clean runs, a real WebGPU adapter so 0016 §1's 110 B floor applies -- the one new site
+    over `terrain`'s own row is the overlay layer's per-panning-frame `style.transform` template
+    string; two *static* anchors that never call `.set()` cost far less than `anchors`'s own
+    50-anchor/4-slot-anchor row). `client`/`sim`/`gen0` at the shared, unwidened `8` every other page
+    uses (measured 0.81-0.83 B/frame, unaffected by this game's own code). Every `object`/`burst`
+    negative control verified tripping at these numbers.
+  - **Software mode**, verified by the skill's own method: injected `"software": null` first and
+    saw `gc verdict: no software budget for reference` (`gc/instrument.ts`'s own exact throw),
+    confirming the mechanism is live, before writing a real block. **Found live: this page's own
+    `attributedBytesPerFrame` read a flat `0` for every isolate, even under the `object` negative
+    control's own deliberate allocation, regardless of the budget chosen.** Root cause:
+    `games/reference/vite.config.ts` had no `minify` override (Vite's production default), and
+    `gc/instrument.ts`'s software-mode attribution matches `attributionRoots` (`["drive"]`) against
+    the *literal runtime function name* -- production minification renames every top-level function
+    (`drive` became a single letter in the built chunk), so the match always failed silently.
+    `minify: false` (`packages/engine/tests/browser/pages/vite.config.ts`'s own exact precedent,
+    same reasoning) fixed it: re-measured `main` at a constant 204.16 B/frame attributed across 8
+    clean runs, `ceil(204.16) + 8 = 213`, `object`/`burst` verified tripping at that number under
+    `GC_MODE=software`. Applies to the whole app's one build (`index.html`/`test.html` included, not
+    only `gc.html` -- Rollup has no per-entry minify option): an accepted v0/pre-launch trade-off,
+    not something this brief's own criteria ask to avoid.
+  - **Found live, a genuine engine gap, worked around but not fixed (out of this milestone's own
+    Files touched):** `engine/test.stepTick` (the free function, `stepSimTickSync` +
+    `untilQuiescent`) deadlocks the client worker the first time it is called after a run of plain
+    `stepFrame` calls, on this exact topology (`host: { kind: 'local', connect: true }`, driven by
+    `asHarness`/a manual clock with no real frame loop ever firing) -- a combination no existing
+    zero-GC page exercises (`gc-topology.ts` never sets `connect: true`; `gc-terrain.ts`'s host has
+    no `Sim` role at all). Reproduced deterministically: the client's own `W_ACK` freezes at its last
+    real `stepFrame` ack while `W_WAKE` keeps climbing from the sim's own downlink-ring pushes --
+    `untilQuiescent`'s ring-quiescence wait never resolves, failing at its own 10 s timeout.
+    `stepSimTickSync` alone (no `untilQuiescent`), followed by this page's own `drainUploadsFully`
+    (`test-entry.ts`'s own precedent, verbatim), reaches the identical live state (both landmark
+    tiles readable, two buttons mounted) without ever calling the async `stepTick`. `gc-entry.ts`'s
+    own module comment carries the full finding; the underlying fix (if any) belongs in `packages/
+    engine/src/test/client.ts`'s own `untilQuiescent`/ring-drain logic, past this milestone's Files
+    touched ("engine only for bug fixes" does not extend to a multi-worker deadlock root-cause fix).
+  - **Played by hand**, `playwright-cli` against `pnpm --filter reference build` + `vite preview`
+    (real production `index.html`, no test hooks): clicked the stone button at `(-1, 2)` ten times
+    (waiting out each real 2 s collect), inventory read `Stone: 10`, and the button was gone from the
+    DOM (tile depleted, no longer in `Ui.in_range`). A real mouse-drag pan (canvas point `(200, 600)`
+    to `(420, 450)`, avoiding the buttons themselves -- starting a drag *on* a button was tried first
+    and correctly did nothing, the button eating the pointerdown) moved the iron button's own
+    `getBoundingClientRect()` by exactly `(+220, -150)` px, matching the drag delta to the pixel; a
+    real wheel-zoom gesture afterward moved it smoothly toward the viewport centre with no jump.
+  - **Suite timing**: `pnpm test browser` (foreground) measured 28-29s of the 35s fast-tier budget,
+    up from 25-26s at cut 1's own baseline -- the four new `collect-flow`/`spawn` tests plus
+    `gc-reference`'s own fast tier (`clean` + 4 `object` controls; the four `burst` controls are
+    `@slow`, matching every page but `gc-loop`) account for the difference. Still inside budget.
+
+All four exit criteria are met: every named test passes by name (`pnpm test rust -t reference`,
+`pnpm test browser -t reference_`); played by hand (above, automated evidence since a live human
+session was not available); the zero-allocation assertion holds at the measured, derived budget
+above; `pnpm test`/`pnpm lint` are green. `docs/plan/device-checks.md` was not touched (this
+milestone's own "Manual device checks: None of its own").
