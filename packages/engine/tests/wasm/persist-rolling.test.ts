@@ -164,6 +164,58 @@ describe('segment rolling and pruning (fx-persist)', () => {
     expect(after).toEqual(expected)
   })
 
+  test('load_after_roll_with_idle_gap_replays_new_segment_tail', async () => {
+    // The production path segment rolling actually creates: a real frame logged, an idle gap
+    // (so the roll tick and the last-logged tick genuinely differ) *before* the roll-triggering
+    // `snapshotNow()`, then more frames logged in the new segment -- with an idle tick between them
+    // too, so the second segment-1 frame's own `tick_delta` reference must be whatever the first
+    // segment-1 frame actually left behind, not the segment's own base tick again. This is the
+    // "segment opened after an idle gap" shape docs/plan/22b-persistence-load-and-fs.md's own
+    // Deviations flagged M22 as never having tested.
+    const storage = memoryStorage()
+    const inst = await freshInstance()
+    const persistence = Persistence.create(storage, CFG, inst, {
+      segmentRollBytes: TINY_ROLL_BYTES,
+    })
+    const timer = manualTimer()
+    const host = createSimHostFromInstance(
+      wrapEngineInstance(inst),
+      { clock: { now: () => 0 }, timer: timer.services },
+      persistence,
+    )
+
+    // Grow segment 0's log past the tiny threshold (six real, logged connect frames).
+    for (let i = 0; i < 6; i++) {
+      expect(inst.call1(inst.x.sim_connect, i)).toBe(Status.Ok)
+      host.stepTick(1)
+    }
+    // Idle ticks with nothing logged: the roll tick (below) and segment 0's own last logged tick
+    // now genuinely differ.
+    host.stepTick(3)
+    persistence.snapshotNow() // rolls to segment 1; this snapshot is segment 1's own base.
+    const rollTick = host.counters.ticksRun
+
+    // More frames in segment 1, with an idle tick between them.
+    expect(inst.call1(inst.x.sim_connect, 6)).toBe(Status.Ok)
+    host.stepTick(1)
+    host.stepTick(1) // idle
+    expect(inst.call1(inst.x.sim_connect, 7)).toBe(Status.Ok)
+    host.stepTick(1)
+
+    const wantHash = host.hash()
+    const wantTick = host.counters.ticksRun
+    expect(wantTick).toBe(rollTick + 3)
+
+    const ni = await makeNewInstance()
+    const { outcome, tick, sim } = await Persistence.open(storage, CFG, ni, {
+      segmentRollBytes: TINY_ROLL_BYTES,
+    })
+    expect(outcome).toBe('loaded')
+    expect(tick).toBe(wantTick)
+    expect(sim.call0(sim.x.sim_hash)).toBe(Status.Ok)
+    expect(sim.readU64Hex(RegionId.Result, 0)).toBe(wantHash)
+  })
+
   test('crash_before_manifest_rewrite_on_roll', async () => {
     const storage = memoryStorage()
     const inst = await freshInstance()
