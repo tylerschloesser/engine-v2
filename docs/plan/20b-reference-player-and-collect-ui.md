@@ -1,6 +1,6 @@
 # M20b: Reference game v0: player, presence and collect UI (first playable)
 
-Status: not started · After: 20, 17b, 18, 19 · Tyler-dependent: no (Q4 answered: collect range is 3 tiles)
+Status: done · After: 20, 17b, 18, 19 · Tyler-dependent: no (Q4 answered: collect range is 3 tiles)
 
 Split from M20 during planning (see that brief).
 
@@ -59,10 +59,10 @@ Remote players and roster (M34). Crafting menu and unlock (M32). Styling beyond 
 - Browser (stepped frames, injected input): `reference_collect_flow` (pan to the nearest stone landmark, a button appears anchored within 1 CSS px of the tile centre, click, the button's `getAnimations()` holds one running fill animation whose duration is the Scope formula, step 40 ticks, inventory shows 1 stone, the animation is gone and the button is enabled again), `reference_several_buttons` (two resources in range give two buttons), `reference_pan_out_cancels` (start, pan away, `collecting` becomes null, no item), `reference_new_player_spawns_on_land`.
 
 ## Exit criteria
-- [ ] All tests above pass by name.
-- [ ] Played by hand with `pnpm --filter reference dev`: ten stone collected from one tile, the tile's resource disappears, the buttons never drift from their tiles while panning and zooming.
-- [ ] The M04 zero-allocation assertion, pointed at the reference page for 600 stepped frames of panning with two buttons mounted, stays inside the client-worker budget of `0016` (proves `ui()` and `extract` do not allocate).
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name.
+- [x] Played by hand with `pnpm --filter reference dev`: ten stone collected from one tile, the tile's resource disappears, the buttons never drift from their tiles while panning and zooming.
+- [x] The M04 zero-allocation assertion, pointed at the reference page for 600 stepped frames of panning with two buttons mounted, stays inside the client-worker budget of `0016` (proves `ui()` and `extract` do not allocate).
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t reference` · `pnpm test browser -t reference_` · `pnpm --filter reference dev`.
@@ -463,3 +463,11 @@ All four exit criteria are met: every named test passes by name (`pnpm test rust
 session was not available); the zero-allocation assertion holds at the measured, derived budget
 above; `pnpm test`/`pnpm lint` are green. `docs/plan/device-checks.md` was not touched (this
 milestone's own "Manual device checks: None of its own").
+
+### Orchestrator gate notes
+
+- **Review agent (Sonnet, ~2,900-line diff):** the `gc-reference` page certifies `RefClient::ui()`/`extract` (client worker, strict 8) and the overlay's panning writes (`main`), but **not** the DOM layer: `collect.ts`/`inventory.ts`'s `onUi` is polled on real rAF, which never fires inside the synchronous `drive()`, so the two buttons sit static through the 600 measured frames. Accepted: the exit criterion names the client-worker budget, and `onUi` runs at state-change rate, not per frame. A later milestone that makes `onUi` per-frame must measure it.
+- **Gate round 1:** `reference_new_player_spawns_on_land` could not fail (spawn `(0, 0)` equalled the search's fallback and the camera's default). Fixed on an `altSpawnParams` world with a natively guarded expected tile; both sabotages shown failing. It needed `ClientSide::on_init` (ADR 0035).
+- **Orchestrator fix:** the game's production build is minified again; only `scripts/suites.mjs`'s `reference` test build passes `--minify false` (verified: a minified build stops `neg object main` tripping under `GC_MODE=software`).
+- **Loops:** `repeat.mjs browser` 30 quiet (slowest 29 s) and 30 under `--load 10` (slowest 38 s, over the 35 s budget: a WARN, not a fail) all passed; `pnpm test:slow` hardware green (browser 51, frame-bench pass).
+- **Not fixed, now M20c:** `stepTick` freezes the client worker's `W_ACK` on this connected manual-clock topology (the workaround is in `gc-entry.ts`).
