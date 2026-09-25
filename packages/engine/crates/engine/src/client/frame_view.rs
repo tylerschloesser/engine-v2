@@ -320,6 +320,13 @@ mod tests {
         fn global(&self) -> &() {
             &()
         }
+        fn entities_in(
+            &self,
+            _rect: crate::world::TileRect,
+            _f: &mut dyn FnMut(EntityId, &FEntity),
+        ) -> Result<(), Unknown> {
+            Ok(())
+        }
     }
 
     fn registry_1x1() -> Registry {
@@ -462,6 +469,13 @@ mod tests {
             fn global(&self) -> &() {
                 &()
             }
+            fn entities_in(
+                &self,
+                _rect: TileRect,
+                _f: &mut dyn FnMut(EntityId, &()),
+            ) -> Result<(), Unknown> {
+                Ok(())
+            }
         }
         let pworld = PWorld;
         let entities: BTreeMap<EntityId, ()> = BTreeMap::new();
@@ -516,6 +530,13 @@ mod tests {
             }
             fn global(&self) -> &() {
                 &()
+            }
+            fn entities_in(
+                &self,
+                _rect: TileRect,
+                _f: &mut dyn FnMut(EntityId, &()),
+            ) -> Result<(), Unknown> {
+                Ok(())
             }
         }
         let pworld = PWorld;

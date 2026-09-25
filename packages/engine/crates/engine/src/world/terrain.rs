@@ -57,6 +57,14 @@ impl TerrainStore {
         }
     }
 
+    /// This store's chunk dimensions (M21, docs/plan/21-entities-and-timers.md): `Store<G>` needs
+    /// them to size and address a chunk's `ChunkIndex` without holding a second, possibly
+    /// inconsistent copy of `ChunkDims` alongside this one.
+    #[inline]
+    pub fn dims(&self) -> ChunkDims {
+        self.dims
+    }
+
     /// Total: every tile in the coordinate range has a value. Out-of-range reads return
     /// [`Tile::VOID`] (0007 §2). Materializes on a cache miss; that is the only observable effect
     /// (wall-clock time), because `P` is pure (0007 §1).

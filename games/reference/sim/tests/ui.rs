@@ -44,6 +44,13 @@ impl WorldRead<RefGame> for StubWorld {
     fn global(&self) -> &RefGlobal {
         &RefGlobal
     }
+    fn entities_in(
+        &self,
+        _rect: TileRect,
+        _f: &mut dyn FnMut(engine::game::EntityId, &RefEntity),
+    ) -> Result<(), Unknown> {
+        Ok(())
+    }
 }
 
 // `content::{STONE, IRON}` are private to `reference_sim` (a game-internal id, not part of its
@@ -171,6 +178,13 @@ impl WorldRead<RefGame> for AllResourceWorld {
     }
     fn global(&self) -> &RefGlobal {
         &RefGlobal
+    }
+    fn entities_in(
+        &self,
+        _rect: TileRect,
+        _f: &mut dyn FnMut(engine::game::EntityId, &RefEntity),
+    ) -> Result<(), Unknown> {
+        Ok(())
     }
 }
 

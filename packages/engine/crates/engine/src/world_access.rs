@@ -8,11 +8,13 @@
 //! Re-exported at `crate::game::{WorldRead, WorldWrite}` (game.rs) since the `Game` trait's own
 //! method signatures name them there and every existing caller imports them from that path.
 
+use std::cell::RefCell;
+
 use crate::game::{EntityId, Game, PlayerId, Unknown};
 use crate::rng::SimRng;
 use crate::store::Store;
 use crate::time::Tick;
-use crate::world::{ChunkCoord, ChunkDims, Registry, Tile, TilePos, TraitSet};
+use crate::world::{ChunkCoord, ChunkDims, Registry, Tile, TilePos, TileRect, TraitSet};
 
 /// `tile >> CHUNK_BITS` for `G` (0007 §2-3): shared by every `WorldRead`/`WorldWrite` implementor
 /// so none needs to carry a `ChunkDims` of its own -- `G::CHUNK_BITS` is a compile-time constant
@@ -37,6 +39,27 @@ pub trait WorldRead<G: Game> {
     fn entity(&self, id: EntityId) -> Result<Option<&G::Entity>, Unknown>;
     fn player(&self, who: PlayerId) -> Result<&G::Player, Unknown>;
     fn global(&self) -> &G::Global;
+    /// Every entity whose footprint intersects `rect`, ascending `EntityId`, visited once (0007
+    /// §5, M21). A replica answers `Err(Unknown)` *before calling `f` at all* if `rect` touches a
+    /// chunk it does not hold (docs/plan/21-entities-and-timers.md Scope); the host is always
+    /// total. M25 adds the prediction overlay's merge on top of this.
+    fn entities_in(
+        &self,
+        rect: TileRect,
+        f: &mut dyn FnMut(EntityId, &G::Entity),
+    ) -> Result<(), Unknown>;
+}
+
+/// Every chunk `rect` touches, under `dims`: shared by every `WorldRead::entities_in` implementor
+/// that must check "does this touch an unheld chunk?" before calling `Store::entities_in` (0007
+/// §1). A free function, not a method, since it is needed by `Authority`/`Replica`/`View` alike and
+/// none of them shares a common base type.
+pub(crate) fn touches_unheld(
+    rect: TileRect,
+    dims: &ChunkDims,
+    held: impl Fn(ChunkCoord) -> bool,
+) -> bool {
+    rect.chunks(dims).iter().any(|c| !held(c))
 }
 
 /// Every world write (0003 Decision, verbatim): one whole-value put, one `Delta` (0011).
@@ -61,6 +84,9 @@ pub struct View<'a, G: Game> {
     registry: &'a Registry,
     tick: Tick,
     held: &'a dyn Fn(ChunkCoord) -> bool,
+    /// Reused across `entities_in` calls (`.claude/rules/hot-paths.md`): a `RefCell` since
+    /// `WorldRead::entities_in` takes `&self`, matching `Authority`/`Replica`'s own scratch field.
+    entities_in_scratch: RefCell<Vec<EntityId>>,
 }
 
 impl<'a, G: Game> View<'a, G> {
@@ -75,6 +101,7 @@ impl<'a, G: Game> View<'a, G> {
             registry,
             tick,
             held,
+            entities_in_scratch: RefCell::new(Vec::new()),
         }
     }
 
@@ -86,6 +113,7 @@ impl<'a, G: Game> View<'a, G> {
             registry,
             tick,
             held: &|_| true,
+            entities_in_scratch: RefCell::new(Vec::new()),
         }
     }
 }
@@ -102,13 +130,21 @@ impl<G: Game> WorldRead<G> for View<'_, G> {
         Ok(self.store.terrain().tile(p))
     }
 
+    /// OR of the tile's traits and the occupant's traits (0007 §6): real as of M21.
     fn traits_at(&self, p: TilePos) -> Result<TraitSet, Unknown> {
-        Ok(self.registry.tile_traits(self.tile(p)?))
+        let tile_traits = self.registry.tile_traits(self.tile(p)?);
+        let occupant_traits = match self.entity_at(p)?.and_then(|id| self.store.entity(id)) {
+            Some(e) => self.registry.prototype_traits(G::prototype(e)),
+            None => TraitSet::EMPTY,
+        };
+        Ok(tile_traits.union(occupant_traits))
     }
 
-    fn entity_at(&self, _p: TilePos) -> Result<Option<EntityId>, Unknown> {
-        // Occupancy is M21 (Non-scope): no index exists yet to answer from.
-        Ok(None)
+    fn entity_at(&self, p: TilePos) -> Result<Option<EntityId>, Unknown> {
+        if !(self.held)(chunk_of::<G>(p)) {
+            return Err(Unknown);
+        }
+        Ok(self.store.entity_at(p))
     }
 
     fn entity(&self, id: EntityId) -> Result<Option<&G::Entity>, Unknown> {
@@ -121,6 +157,20 @@ impl<G: Game> WorldRead<G> for View<'_, G> {
 
     fn global(&self) -> &G::Global {
         self.store.global()
+    }
+
+    fn entities_in(
+        &self,
+        rect: TileRect,
+        f: &mut dyn FnMut(EntityId, &G::Entity),
+    ) -> Result<(), Unknown> {
+        let dims = ChunkDims::new(G::CHUNK_BITS);
+        if touches_unheld(rect, &dims, self.held) {
+            return Err(Unknown);
+        }
+        let mut scratch = self.entities_in_scratch.borrow_mut();
+        self.store.entities_in(rect, &mut scratch, f);
+        Ok(())
     }
 }
 

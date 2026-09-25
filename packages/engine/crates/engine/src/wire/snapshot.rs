@@ -18,7 +18,6 @@ use crate::codec::{self, encode_to};
 use crate::game::{EntityId, Game};
 use crate::store::Store;
 use crate::world::ChunkCoord;
-use crate::world_access::chunk_of;
 
 use super::{
     ChunkCoordListReader, ChunkCoordListWriter, OverlayRunsReader, OverlayRunsWriter, WireError,
@@ -26,8 +25,14 @@ use super::{
 };
 
 /// Writes one chunk's snapshot *content*: `version u32 LE`, overlay runs, then every entity
-/// anchored to `chunk` as `(EntityId varint, Codec entity)`. Does not write `chunk` itself (module
-/// doc comment); reused unmodified both by [`SnapshotWriter`] and by M31's per-chunk hash.
+/// **overlapping** `chunk` (0007 §5, widened from M14's anchor-chunk-only filter: docs/plan/
+/// 21-entities-and-timers.md Scope, "`encode_chunk_snapshot`'s entity filter" widens together with
+/// `Authority`'s scope derivation and M15's frame builder) as `(EntityId varint, Codec entity)`.
+/// Does not write `chunk` itself (module doc comment); reused unmodified both by [`SnapshotWriter`]
+/// and by M31's per-chunk hash. Reads `Store::chunk_overlapping` (a `ChunkIndex` lookup, already
+/// ascending and deduplicated) instead of M14's own `O(all entities)` scan -- a side effect of the
+/// widening, not a separate optimisation pass (M14 Deviations flagged the old scan as "a known
+/// cost to measure ... not a defect to fix blind"; the fix falls out of `ChunkIndex` existing).
 pub fn encode_chunk_snapshot<G: Game>(
     store: &Store<G>,
     chunk: ChunkCoord,
@@ -39,12 +44,13 @@ pub fn encode_chunk_snapshot<G: Game>(
         Some(overlay) => OverlayRunsWriter::write(sink, overlay.entries()),
         None => OverlayRunsWriter::write(sink, core::iter::empty()),
     }
-    let matches = |e: &G::Entity| chunk_of::<G>(G::anchor(e)) == chunk;
-    let n = store.entities().filter(|(_, e)| matches(e)).count() as u64;
-    sink.put_varint(n);
-    for (id, entity) in store.entities().filter(|(_, e)| matches(e)) {
-        sink.put_varint(id.0 as u64);
-        encode_to(entity, sink).expect("encoding an entity into a ByteSink cannot fail");
+    let overlapping = store.chunk_overlapping(chunk);
+    sink.put_varint(overlapping.len() as u64);
+    for &id in overlapping {
+        if let Some(entity) = store.entity(id) {
+            sink.put_varint(id.0 as u64);
+            encode_to(entity, sink).expect("encoding an entity into a ByteSink cannot fail");
+        }
     }
 }
 

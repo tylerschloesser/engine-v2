@@ -8,7 +8,8 @@ use engine::sim::WorldParams;
 use engine::testing::testkit::Loopback;
 use engine::wire::CameraReport;
 use engine::world::{
-    CacheCapacity, ChunkCoord, ChunkDims, PristineSource, PrototypeId, Registry, Tile, TilePos,
+    CacheCapacity, ChunkCoord, ChunkDims, Footprint, PristineSource, PrototypeId, Registry, Tile,
+    TilePos, TraitSet,
 };
 use engine::worldgen::Worldgen;
 
@@ -31,11 +32,32 @@ impl LPos {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub enum LAction {
-    Paint { pos: LPos, base: u8 },
-    Spawn { id_hint: u32, pos: LPos },
-    Move { id: u32, pos: LPos },
-    Despawn { id: u32 },
-    SetNote { n: u32 },
+    Paint {
+        pos: LPos,
+        base: u8,
+    },
+    Spawn {
+        id_hint: u32,
+        pos: LPos,
+    },
+    /// A 2x1-footprint entity (`PrototypeId(1)`, registered in `LGame::register`), used only by
+    /// the footprint-straddling tests (docs/plan/21-entities-and-timers.md Deviations: M15's
+    /// `entity_straddling_subscribed_and_unsubscribed_chunks_delivered_once` needed a real
+    /// footprint to rewrite against). Every other test's `Spawn`/`Move` stays 1x1, unaffected.
+    SpawnWide {
+        id_hint: u32,
+        pos: LPos,
+    },
+    Move {
+        id: u32,
+        pos: LPos,
+    },
+    Despawn {
+        id: u32,
+    },
+    SetNote {
+        n: u32,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, ts_rs::TS)]
@@ -52,6 +74,9 @@ impl From<Unknown> for LReject {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct LEntity {
     pub pos: LPos,
+    /// `0` = ordinary 1x1 entity (`PrototypeId(0)`); `1` = the 2x1 "wide" entity `SpawnWide`
+    /// creates (`PrototypeId(1)`). See `LAction::SpawnWide`'s own doc comment.
+    pub wide: bool,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct LPlayer {
@@ -85,9 +110,16 @@ impl Game for LGame {
     type Ui = ();
     type Client = ();
 
-    fn register(_r: &mut Registry) {}
-    fn prototype(_e: &LEntity) -> PrototypeId {
-        PrototypeId(0)
+    fn register(r: &mut Registry) {
+        r.add_prototype(TraitSet::EMPTY, Footprint { w: 1, h: 1 }); // PrototypeId(0): ordinary
+        r.add_prototype(TraitSet::EMPTY, Footprint { w: 2, h: 1 }); // PrototypeId(1): wide
+    }
+    fn prototype(e: &LEntity) -> PrototypeId {
+        if e.wide {
+            PrototypeId(1)
+        } else {
+            PrototypeId(0)
+        }
     }
     fn anchor(e: &LEntity) -> TilePos {
         e.pos.tile()
@@ -107,11 +139,27 @@ impl Game for LGame {
                 Ok(())
             }
             LAction::Spawn { pos, .. } => {
-                w.spawn(LEntity { pos: *pos });
+                w.spawn(LEntity {
+                    pos: *pos,
+                    wide: false,
+                });
+                Ok(())
+            }
+            LAction::SpawnWide { pos, .. } => {
+                w.spawn(LEntity {
+                    pos: *pos,
+                    wide: true,
+                });
                 Ok(())
             }
             LAction::Move { id, pos } => {
-                w.put_entity(engine::game::EntityId(*id), LEntity { pos: *pos });
+                w.put_entity(
+                    engine::game::EntityId(*id),
+                    LEntity {
+                        pos: *pos,
+                        wide: false,
+                    },
+                );
                 Ok(())
             }
             LAction::Despawn { id } => {
@@ -258,13 +306,66 @@ fn leave_frees_overlay_keeps_pristine() {
     );
 }
 
-/// 0011 Scopes: an entity delivered when *any* chunk under its footprint is subscribed; today
-/// (M12b/M14, anchor-only until M21) that means "delivered once, by its anchor chunk" -- this test
-/// is written against that semantics (docs/plan/15-connection-and-subscriptions.md Deviations
-/// records this explicitly, per M14's own precedent).
+/// 0011 Scopes, M21-widened (docs/plan/21-entities-and-timers.md Deviations: this test was
+/// M12b/M14's own `entity_straddling_subscribed_and_unsubscribed_chunks_delivered_once`, written
+/// against anchor-only delivery -- "straddling" meant only that an entity's *anchor* moved between
+/// a subscribed and an unsubscribed chunk, since no wider footprint existed in that milestone's
+/// entity model. Rewritten here to cover a real footprint straddling a subscribed chunk and an
+/// unsubscribed one: `SpawnWide`'s 2x1 footprint is anchored on the boundary between chunk `(1,0)`
+/// and chunk `(2,0)`, and the camera is set up so ring1 (`host::subs`) subscribes `(0,0)` and its
+/// eight neighbours -- including `(1,0)` -- but not `(2,0)`, one ring farther out. The entity must
+/// still be delivered once (through the subscribed half of its footprint), not `Unknown` and not
+/// rejected for touching an unheld chunk.
 #[test]
 fn entity_straddling_subscribed_and_unsubscribed_chunks_delivered_once() {
     let mut lb = loopback(5);
+    let (idx, who) = add_client(&mut lb, 0);
+    // Visible = exactly chunk (0,0) (camera well inside it, minimal half-extent): ring1 =
+    // chunks -1..=1 on both axes, so (1,0) is subscribed and (2,0) is not.
+    lb.set_camera(
+        idx,
+        CameraReport {
+            center_x: 10,
+            center_y: 10,
+            half_w: 1,
+            half_h: 1,
+            vel_x: 0,
+            vel_y: 0,
+        },
+    );
+    lb.step();
+    assert!(lb.client(idx).view().is_held(ChunkCoord::new(1, 0)));
+    assert!(!lb.client(idx).view().is_held(ChunkCoord::new(2, 0)));
+
+    // Anchor at local tile 31 of chunk (1,0): a 2-wide footprint covers world tile 63 (chunk
+    // (1,0), subscribed) and world tile 64 (chunk (2,0), not subscribed).
+    lb.action(
+        who,
+        LAction::SpawnWide {
+            id_hint: 0,
+            pos: LPos { x: 63, y: 0 },
+        },
+    );
+    lb.step();
+    let id = engine::game::EntityId(1);
+    assert_eq!(
+        lb.client(idx).view().entity(id),
+        Ok(Some(&LEntity {
+            pos: LPos { x: 63, y: 0 },
+            wide: true,
+        })),
+        "an entity overlapping a subscribed chunk must be delivered even though the rest of its \
+         footprint touches an unheld chunk"
+    );
+}
+
+/// The anchor-move case M15 originally covered (kept per docs/plan/
+/// 21-entities-and-timers.md Deviations, "keep an equivalent anchor-move case if one existed"): a
+/// plain (1x1) entity whose *anchor* moves from a subscribed chunk to a far, unsubscribed one must
+/// be seen leaving, exactly once.
+#[test]
+fn entity_move_between_subscribed_and_unsubscribed_delivered_once() {
+    let mut lb = loopback(31);
     let (idx, who) = add_client(&mut lb, 0);
     lb.set_camera(idx, small_camera(0, 0));
     lb.step();
@@ -280,7 +381,8 @@ fn entity_straddling_subscribed_and_unsubscribed_chunks_delivered_once() {
     assert_eq!(
         lb.client(idx).view().entity(id),
         Ok(Some(&LEntity {
-            pos: LPos { x: 1, y: 1 }
+            pos: LPos { x: 1, y: 1 },
+            wide: false,
         }))
     );
     // Move it far away, to an unsubscribed chunk: the client must see it go, exactly once.

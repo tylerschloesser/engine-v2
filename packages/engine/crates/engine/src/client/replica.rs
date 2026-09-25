@@ -9,6 +9,7 @@
 //! are total, exactly like `View`'s own impl, since neither is gated by chunk membership there
 //! either.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use crate::delta::Delta;
@@ -21,9 +22,9 @@ use crate::wire::encode_chunk_snapshot;
 use super::remote_presence::RemotePresences;
 use crate::world::{
     CacheCapacity, ChunkCoord, ChunkDims, PristineSource, Registry, TerrainStore, Tile, TilePos,
-    TraitSet,
+    TileRect, TraitSet,
 };
-use crate::world_access::{WorldRead, chunk_of};
+use crate::world_access::{WorldRead, chunk_of, touches_unheld};
 
 /// 0015 §5's client-role arena line: "4 MiB dense cache, replica entities and overlays for <= 128
 /// subscribed chunks" -- the terrain cache's own slice of the 48 MiB client budget (entity/overlay
@@ -52,7 +53,6 @@ pub(crate) enum DirtyEvent {
 /// host side uses, `host::mod` Deviations).
 pub struct Replica<G: Game> {
     store: Store<G>,
-    registry: Registry,
     dims: ChunkDims,
     /// This connection's own player id (0011 "OwnPlayer"), fixed at construction: a real
     /// connection learns it out of band, from `Host::connect`'s return value (docs/plan/
@@ -69,6 +69,9 @@ pub struct Replica<G: Game> {
     /// applied from the wire's `Presence` section (`apply_presence_sample`/`apply_presence_gone`),
     /// read by `FrameView::presences()`.
     remote_presences: RemotePresences<G>,
+    /// Reused across `entities_in` calls (`.claude/rules/hot-paths.md`): a `RefCell` since
+    /// `WorldRead::entities_in` takes `&self`.
+    entities_in_scratch: RefCell<Vec<EntityId>>,
 }
 
 impl<G: Game> Replica<G> {
@@ -98,17 +101,15 @@ impl<G: Game> Replica<G> {
             terrain.memory_bytes(),
             CLIENT_CACHE_BUDGET_BYTES
         );
-        let mut registry = Registry::new();
-        G::register(&mut registry);
         Replica {
             store: Store::new(terrain, G::Global::default()),
-            registry,
             dims,
             own_player,
             held: BTreeMap::new(),
             dirty: Vec::new(),
             tick: Tick(0),
             remote_presences: RemotePresences::new(),
+            entities_in_scratch: RefCell::new(Vec::new()),
         }
     }
 
@@ -178,7 +179,7 @@ impl<G: Game> Replica<G> {
     /// `EntityIter` needs it to derive each entity's footprint rectangle from `G::prototype`. `pub`
     /// for the same reason as `entities_map`, above.
     pub fn registry(&self) -> &Registry {
-        &self.registry
+        self.store.registry()
     }
 
     /// docs/plan/19-presence-channel.md steps 4-6: `FrameView::presences()`'s source, `pub` for
@@ -278,19 +279,29 @@ impl<G: Game> Replica<G> {
     }
 
     /// A chunk leave (0011): frees the overlay (pristine cache survives, M08b) and every entity no
-    /// longer overlapping a held chunk.
+    /// longer overlapping *any* held chunk (docs/plan/21-entities-and-timers.md Scope: a footprint
+    /// straddling this chunk and a still-held one must not disappear -- widened from M12b's
+    /// anchor-chunk-only check, which could never see that case since occupancy tracked only an
+    /// entity's single anchor tile).
     pub(crate) fn apply_leave(&mut self, chunk: ChunkCoord) {
+        let candidates: Vec<EntityId> = self.store.chunk_overlapping(chunk).to_vec();
         self.store.terrain_mut().clear_overlay(chunk);
         self.held.remove(&chunk);
         self.dirty.push(DirtyEvent::Whole(chunk));
-        let gone: Vec<EntityId> = self
-            .store
-            .entities()
-            .filter(|(_, e)| chunk_of::<G>(G::anchor(e)) == chunk)
-            .map(|(id, _)| id)
-            .collect();
-        for id in gone {
-            self.store.apply(&Delta::EntityGone { id });
+        let dims = self.dims;
+        for id in candidates {
+            let Some(entity) = self.store.entity(id) else {
+                continue;
+            };
+            let anchor = G::anchor(entity);
+            let footprint = self.store.registry().footprint(G::prototype(entity));
+            let still_held = crate::store::footprint_rect(anchor, footprint)
+                .chunks(&dims)
+                .iter()
+                .any(|c| self.held.contains_key(&c));
+            if !still_held {
+                self.store.apply(&Delta::EntityGone { id });
+            }
         }
     }
 
@@ -362,12 +373,21 @@ impl<G: Game> WorldRead<G> for Replica<G> {
         Ok(self.store.terrain().tile(p))
     }
 
+    /// OR of the tile's traits and the occupant's traits (0007 §6): real as of M21.
     fn traits_at(&self, p: TilePos) -> Result<TraitSet, Unknown> {
-        Ok(self.registry.tile_traits(self.tile(p)?))
+        let tile_traits = self.store.registry().tile_traits(self.tile(p)?);
+        let occupant_traits = match self.entity_at(p)?.and_then(|id| self.store.entity(id)) {
+            Some(e) => self.store.registry().prototype_traits(G::prototype(e)),
+            None => TraitSet::EMPTY,
+        };
+        Ok(tile_traits.union(occupant_traits))
     }
 
-    fn entity_at(&self, _p: TilePos) -> Result<Option<EntityId>, Unknown> {
-        Ok(None)
+    fn entity_at(&self, p: TilePos) -> Result<Option<EntityId>, Unknown> {
+        if !self.held.contains_key(&chunk_of::<G>(p)) {
+            return Err(Unknown);
+        }
+        Ok(self.store.entity_at(p))
     }
 
     fn entity(&self, id: EntityId) -> Result<Option<&G::Entity>, Unknown> {
@@ -380,6 +400,21 @@ impl<G: Game> WorldRead<G> for Replica<G> {
 
     fn global(&self) -> &G::Global {
         self.store.global()
+    }
+
+    /// `Err(Unknown)` before calling `f` at all if `rect` touches a chunk this replica does not
+    /// hold (docs/plan/21-entities-and-timers.md Scope).
+    fn entities_in(
+        &self,
+        rect: TileRect,
+        f: &mut dyn FnMut(EntityId, &G::Entity),
+    ) -> Result<(), Unknown> {
+        if touches_unheld(rect, &self.dims, |c| self.held.contains_key(&c)) {
+            return Err(Unknown);
+        }
+        let mut scratch = self.entities_in_scratch.borrow_mut();
+        self.store.entities_in(rect, &mut scratch, f);
+        Ok(())
     }
 }
 

@@ -57,6 +57,13 @@ pub struct Registry {
     base_visuals: [u16; 256],
     resource_visuals: [u16; 256],
     prototypes: Vec<(TraitSet, Footprint)>,
+    /// The game's configured chunk edge (0007 §3: 16, 32 or 64), set once by `Store::new` (M21,
+    /// docs/plan/21-entities-and-timers.md) before `Game::register` runs, so [`Registry::
+    /// add_prototype`] can assert "footprint <= chunk size" (0007 §5) at the point a game declares
+    /// an oversized one. Defaults to 64 (the largest legal edge, 0007 §3) so a `Registry` built
+    /// without ever calling [`Registry::set_chunk_edge`] (every pre-M21 test fixture, and any
+    /// caller that only wants trait tables) stays exactly as permissive as before this milestone.
+    chunk_edge: u32,
 }
 
 impl Registry {
@@ -75,7 +82,16 @@ impl Registry {
             base_visuals,
             resource_visuals,
             prototypes: Vec::new(),
+            chunk_edge: 64,
         }
+    }
+
+    /// Sets the edge [`Registry::add_prototype`] checks every footprint against (0007 §5: "the
+    /// engine asserts footprint <= chunk size, so an entity overlaps at most 4 chunks"). Called by
+    /// `Store::new` (M21) before `Game::register` runs; `pub(crate)` since only the engine, which
+    /// knows `G::CHUNK_BITS`, ever has a reason to call it.
+    pub(crate) fn set_chunk_edge(&mut self, edge: u32) {
+        self.chunk_edge = edge;
     }
 
     #[inline]
@@ -111,7 +127,19 @@ impl Registry {
         self.resource_visuals[resource_id as usize]
     }
 
+    /// Registers a prototype's trait set and footprint (0007 §5-§6). Panics if `footprint` exceeds
+    /// this game's configured chunk edge on either axis (`footprint_larger_than_chunk_panics_at_
+    /// register`, docs/plan/21-entities-and-timers.md): an entity that could not fit in at most 4
+    /// chunks would break every footprint-scoped read/write this milestone builds.
     pub fn add_prototype(&mut self, traits: TraitSet, footprint: Footprint) -> PrototypeId {
+        assert!(
+            footprint.w as u32 <= self.chunk_edge && footprint.h as u32 <= self.chunk_edge,
+            "prototype footprint {}x{} exceeds the chunk edge ({}): 0007 §5 requires an entity to \
+             overlap at most 4 chunks",
+            footprint.w,
+            footprint.h,
+            self.chunk_edge
+        );
         let id = self.prototypes.len() as u16;
         self.prototypes.push((traits, footprint));
         PrototypeId(id)
@@ -128,14 +156,27 @@ impl Registry {
         self.base_traits[tile.base() as usize].union(self.resource_traits[tile.resource() as usize])
     }
 
+    /// `TraitSet::EMPTY` for an id no `add_prototype` call ever returned (docs/plan/
+    /// 21-entities-and-timers.md Deviations: total rather than panicking, since every pre-M21 test
+    /// fixture across this crate uses `PrototypeId(0)` with nothing registered at all -- occupancy
+    /// was Non-scope before this milestone, so an out-of-range id was never reachable in practice
+    /// until `Store::apply` started consulting this table for every entity put).
     #[inline]
     pub fn prototype_traits(&self, id: PrototypeId) -> TraitSet {
-        self.prototypes[id.0 as usize].0
+        self.prototypes
+            .get(id.0 as usize)
+            .map_or(TraitSet::EMPTY, |(t, _)| *t)
     }
 
+    /// `Footprint { w: 1, h: 1 }` for an id no `add_prototype` call ever returned (same reasoning as
+    /// [`Registry::prototype_traits`]): a single-tile footprint is the natural default for "nothing
+    /// declared", and keeps every unregistered `PrototypeId(0)` entity occupying exactly its own
+    /// anchor tile rather than panicking.
     #[inline]
     pub fn footprint(&self, id: PrototypeId) -> Footprint {
-        self.prototypes[id.0 as usize].1
+        self.prototypes
+            .get(id.0 as usize)
+            .map_or(Footprint { w: 1, h: 1 }, |(_, f)| *f)
     }
 }
 
@@ -193,6 +234,29 @@ mod tests {
         assert_eq!(reg.resource_visual(3), 201);
         // Untouched entries stay identity.
         assert_eq!(reg.base_visual(8), 8);
+    }
+
+    #[test]
+    #[should_panic(expected = "exceeds the chunk edge")]
+    fn footprint_larger_than_chunk_panics_at_register() {
+        let mut reg = Registry::new();
+        reg.set_chunk_edge(16);
+        reg.add_prototype(TraitSet::EMPTY, Footprint { w: 17, h: 1 });
+    }
+
+    #[test]
+    fn footprint_exactly_the_chunk_edge_is_allowed() {
+        let mut reg = Registry::new();
+        reg.set_chunk_edge(16);
+        let id = reg.add_prototype(TraitSet::EMPTY, Footprint { w: 16, h: 16 });
+        assert_eq!(reg.footprint(id), Footprint { w: 16, h: 16 });
+    }
+
+    #[test]
+    fn unregistered_prototype_is_total_not_panicking() {
+        let reg = Registry::new();
+        assert_eq!(reg.prototype_traits(PrototypeId(0)), TraitSet::EMPTY);
+        assert_eq!(reg.footprint(PrototypeId(0)), Footprint { w: 1, h: 1 });
     }
 
     #[test]

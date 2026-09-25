@@ -704,11 +704,10 @@ impl<G: Game> Host<G> {
         self.scratch_snapshot.clear();
         for &c in &self.scratch_entered {
             let has_overlay = store.terrain().overlay(c).is_some_and(|o| !o.is_empty());
-            // Flagged as a known cost, not fixed here (Planning decisions: O(all entities) per
-            // chunk, twice, `encode_chunk_snapshot`'s own doc comment).
-            let has_entity = store
-                .entities()
-                .any(|(_, e)| chunk_of::<G>(G::anchor(e)) == c);
+            // M21: a `ChunkIndex` lookup (docs/plan/21-entities-and-timers.md, `encode_chunk_
+            // snapshot`'s own doc comment) -- the O(all entities) scan this replaced is gone, not
+            // merely deferred.
+            let has_entity = !store.chunk_overlapping(c).is_empty();
             if has_overlay || has_entity {
                 self.scratch_snapshot.push(c);
             } else {
@@ -737,24 +736,50 @@ impl<G: Game> Host<G> {
                     }
                 }
                 Delta::EntityPut { id, entity } => {
-                    let new_chunk = chunk_of::<G>(G::anchor(entity));
-                    let new_in = slot.subs.is_subscribed(new_chunk)
-                        && !self.scratch_entered.contains(&new_chunk);
-                    if new_in {
-                        upsert_entity_op(&mut self.scratch_entity_ops, *id, EntityOpKind::Put);
-                        continue;
-                    }
-                    // The new anchor is out of scope: a `Gone` only if some *other* scoped chunk
-                    // in this write (the old anchor, on a move) was in scope and not entering.
-                    let was_in = scopes.iter().any(|s| match s {
-                        Scope::Chunk(c) => {
-                            c != new_chunk
-                                && slot.subs.is_subscribed(c)
-                                && !self.scratch_entered.contains(&c)
+                    // M21 (docs/plan/21-entities-and-timers.md Scope, "Anchor-only entity
+                    // delivery" widened together with `Authority`'s scope derivation and
+                    // `encode_chunk_snapshot`): `scopes` is now every chunk under the old *and*
+                    // new footprint (up to 8, `Scopes::from_chunks`), not a single anchor chunk.
+                    // Per scoped chunk, ask the `ChunkIndex` whether the entity's *current*
+                    // (post-write) footprint still overlaps it:
+                    //   - `deliver_put`: some scoped chunk is subscribed, not entering this tick,
+                    //     and currently overlapped -> this connection needs an explicit `Put`
+                    //     (an entering chunk gets the same value for free via `ChunkSnapshots`).
+                    //   - `visible_anywhere`: some scoped chunk (entering or not) is subscribed
+                    //     and currently overlapped -> the entity is visible to this connection by
+                    //     *some* means, so a stale `Gone` must never be sent (an entity that just
+                    //     entered scope through a snapshot must not be immediately un-put by a
+                    //     `ChunkDeltas` `Gone` for a chunk it simultaneously left, since a frame's
+                    //     sections apply `ChunkSnapshots` before `ChunkDeltas`).
+                    //   - `left_a_delta_chunk`: some scoped chunk is subscribed, not entering, and
+                    //     no longer overlapped -- a chunk this connection was previously told
+                    //     about the entity through, that it has now left.
+                    // A footprint of 1x1 reproduces the pre-M21 anchor-only decision exactly (its
+                    // one scope chunk is trivially "current").
+                    let _ = entity;
+                    let mut deliver_put = false;
+                    let mut visible_anywhere = false;
+                    let mut left_a_delta_chunk = false;
+                    for scope in scopes.iter() {
+                        let Scope::Chunk(c) = scope else { continue };
+                        if !slot.subs.is_subscribed(c) {
+                            continue;
                         }
-                        _ => false,
-                    });
-                    if was_in {
+                        let entering = self.scratch_entered.contains(&c);
+                        let currently_overlaps =
+                            store.chunk_overlapping(c).binary_search(id).is_ok();
+                        if currently_overlaps {
+                            visible_anywhere = true;
+                            if !entering {
+                                deliver_put = true;
+                            }
+                        } else if !entering {
+                            left_a_delta_chunk = true;
+                        }
+                    }
+                    if deliver_put {
+                        upsert_entity_op(&mut self.scratch_entity_ops, *id, EntityOpKind::Put);
+                    } else if !visible_anywhere && left_a_delta_chunk {
                         upsert_entity_op(&mut self.scratch_entity_ops, *id, EntityOpKind::Gone);
                     }
                 }

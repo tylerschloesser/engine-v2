@@ -184,6 +184,13 @@ mod tests {
         fn global(&self) -> &FxGlobal {
             &FxGlobal
         }
+        fn entities_in(
+            &self,
+            _rect: crate::world::TileRect,
+            _f: &mut dyn FnMut(crate::game::EntityId, &FxEntity),
+        ) -> Result<(), Unknown> {
+            Ok(())
+        }
     }
 
     fn events(n: usize) -> Vec<InputEvent> {

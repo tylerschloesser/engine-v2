@@ -43,6 +43,13 @@ impl WorldRead<RefGame> for StubWorld {
     fn global(&self) -> &reference_sim::RefGlobal {
         &reference_sim::RefGlobal
     }
+    fn entities_in(
+        &self,
+        _rect: TileRect,
+        _f: &mut dyn FnMut(engine::game::EntityId, &reference_sim::RefEntity),
+    ) -> Result<(), Unknown> {
+        Ok(())
+    }
 }
 
 #[test]

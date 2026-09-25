@@ -16,6 +16,8 @@
 //! counters, overlays, entities", so it goes beside the player table it is broadcast alongside
 //! (0011 "Scopes": `Global` and `Player` are both "sent in full on every connect").
 
+mod index;
+
 use std::collections::BTreeMap;
 
 use crate::bytes::{ByteReader, ByteSink};
@@ -23,7 +25,43 @@ use crate::codec::{Codec, CodecError, decode_canonical, encode_to, encoded_len};
 use crate::delta::Delta;
 use crate::game::{EntityId, Game, PlayerId, Unknown};
 use crate::hash::{Fnv64, StateHash};
-use crate::world::TerrainStore;
+use crate::world::{ChunkCoord, ChunkDims, Footprint, Registry, TerrainStore, TilePos, TileRect};
+
+use index::ChunkIndex;
+
+/// The chunks (and each chunk-local tile index) a footprint anchored at `anchor` overlaps, under
+/// `dims` (0007 §5: at most 4, since `Registry::add_prototype` asserts footprint <= chunk edge).
+/// Always driven by the `Store`'s own `TerrainStore::dims()` rather than a separately derived
+/// `ChunkDims::new(G::CHUNK_BITS)` (docs/plan/21-entities-and-timers.md Deviations "One dims,
+/// always the terrain's own"): a handful of this crate's own pre-M21 unit tests build a
+/// `TerrainStore` at a different `ChunkDims` than their test `Game::CHUNK_BITS` default, which
+/// never mattered before `ChunkIndex`'s fixed-size bitset existed to index out of bounds over it.
+fn footprint_tiles(
+    dims: ChunkDims,
+    anchor: TilePos,
+    footprint: Footprint,
+    mut f: impl FnMut(ChunkCoord, u16),
+) {
+    for dy in 0..footprint.h as i32 {
+        for dx in 0..footprint.w as i32 {
+            let pos = TilePos::new(anchor.x + dx, anchor.y + dy);
+            f(dims.chunk_of(pos), dims.local_index(pos));
+        }
+    }
+}
+
+/// The inclusive tile rectangle a footprint anchored at `anchor` covers (min corner = anchor,
+/// 0007 §5). Shared by `Store::entities_in` (footprint/rect intersection) and
+/// `Authority::entity_scopes` (M21 widening: every overlapped chunk, not just the anchor's).
+pub(crate) fn footprint_rect(anchor: TilePos, footprint: Footprint) -> TileRect {
+    TileRect::new(
+        anchor,
+        TilePos::new(
+            anchor.x + footprint.w as i32 - 1,
+            anchor.y + footprint.h as i32 - 1,
+        ),
+    )
+}
 
 /// One player's replicated state (docs/plan/12-store-and-game-trait.md Planning decisions):
 /// `last_seq` is sim state (0004) and `online` is the engine roster bit (`Delta::Roster`, 0024
@@ -48,6 +86,22 @@ pub struct Store<G: Game> {
     next_entity_id: u32,
     players: BTreeMap<PlayerId, PlayerSlot<G>>,
     global: G::Global,
+    /// Trait tables + entity prototypes (0007 §6, §5), built once by `Game::register` at
+    /// construction (M21, docs/plan/21-entities-and-timers.md Deviations: moved here from
+    /// `Authority`/`Replica`, which each built and held their own copy before this milestone, so
+    /// `Store::apply` can consult footprints for `ChunkIndex` maintenance without `apply`'s own
+    /// signature growing a `&Registry` parameter -- a `Provides`-changing rename this milestone
+    /// does not make). Never encoded or hashed: derived from `G::register`, identical on every
+    /// build (0007 §6's own "the same tables exist in the client-role instance").
+    registry: Registry,
+    /// 0007 §5: derived from `entities`, rebuilt on load (`Store::rebuild_indexes`); never encoded
+    /// or hashed. Only chunks with at least one overlapping entity have an entry.
+    chunk_index: BTreeMap<ChunkCoord, ChunkIndex>,
+    /// Diagnostic only (Budgets: "occupancy maintenance is O(footprint), asserted by a counter
+    /// `index_ops_per_put <= footprint area + 4`"): bumped once per `ChunkIndex::add`/`remove`
+    /// call, i.e. once per covered tile, by `Store::add_to_index`/`remove_from_index`. Never
+    /// encoded, hashed, or reset automatically; a test reads the delta across one put.
+    index_ops: u64,
 }
 
 /// Length-prefixed `Codec` value: a varint byte count, then the value's canonical bytes. Lets
@@ -73,12 +127,18 @@ impl<G: Game> Store<G> {
     /// `global` is the value before `Game::genesis` runs (M12b), since `G::Global` has no `Default`
     /// bound (0003).
     pub fn new(terrain: TerrainStore, global: G::Global) -> Self {
+        let mut registry = Registry::new();
+        registry.set_chunk_edge(terrain.dims().edge());
+        G::register(&mut registry);
         Store {
             terrain,
             entities: BTreeMap::new(),
             next_entity_id: 1,
             players: BTreeMap::new(),
             global,
+            registry,
+            chunk_index: BTreeMap::new(),
+            index_ops: 0,
         }
     }
 
@@ -91,11 +151,25 @@ impl<G: Game> Store<G> {
                 let _ = self.terrain.set_tile(*pos, *tile);
             }
             Delta::EntityPut { id, entity } => {
+                let old_info: Option<(TilePos, Footprint)> = match self.entities.get(id) {
+                    Some(old) => Some((G::anchor(old), self.registry.footprint(G::prototype(old)))),
+                    None => None,
+                };
+                if let Some((old_anchor, old_fp)) = old_info {
+                    self.remove_from_index(*id, old_anchor, old_fp);
+                }
+                let new_anchor = G::anchor(entity);
+                let new_fp = self.registry.footprint(G::prototype(entity));
                 self.entities.insert(*id, entity.clone());
                 self.next_entity_id = self.next_entity_id.max(id.0.wrapping_add(1));
+                self.add_to_index(*id, new_anchor, new_fp);
             }
             Delta::EntityGone { id } => {
-                self.entities.remove(id);
+                if let Some(old) = self.entities.remove(id) {
+                    let old_anchor = G::anchor(&old);
+                    let old_fp = self.registry.footprint(G::prototype(&old));
+                    self.remove_from_index(*id, old_anchor, old_fp);
+                }
             }
             Delta::Player { who, state } => match self.players.get_mut(who) {
                 Some(slot) => slot.state = state.clone(),
@@ -214,6 +288,132 @@ impl<G: Game> Store<G> {
         &self.entities
     }
 
+    /// The trait tables + prototype table `Game::register` filled at construction (M21): every
+    /// `WorldRead` implementor's `traits_at`/`entities_in` reads through this instead of holding a
+    /// second copy (docs/plan/21-entities-and-timers.md Deviations "moved here from Authority/
+    /// Replica").
+    pub fn registry(&self) -> &Registry {
+        &self.registry
+    }
+
+    /// Adds `id`'s footprint (anchored at `anchor`) to every overlapped chunk's [`ChunkIndex`],
+    /// creating an index for a chunk that had none. `pub(crate)`: `Store::apply` is the only
+    /// production caller; `rebuild_indexes` is the other.
+    fn add_to_index(&mut self, id: EntityId, anchor: TilePos, footprint: Footprint) {
+        let dims = self.terrain.dims();
+        let Store {
+            chunk_index,
+            index_ops,
+            ..
+        } = self;
+        footprint_tiles(dims, anchor, footprint, |chunk, local| {
+            chunk_index
+                .entry(chunk)
+                .or_insert_with(|| ChunkIndex::new(dims))
+                .add(local, id);
+            *index_ops += 1;
+        });
+    }
+
+    /// Removes `id`'s footprint (anchored at `anchor`) from every overlapped chunk's
+    /// [`ChunkIndex`], dropping a chunk's index entirely once it holds no more entities (0007 §5:
+    /// "only for chunks with entities").
+    fn remove_from_index(&mut self, id: EntityId, anchor: TilePos, footprint: Footprint) {
+        let dims = self.terrain.dims();
+        let Store {
+            chunk_index,
+            index_ops,
+            ..
+        } = self;
+        footprint_tiles(dims, anchor, footprint, |chunk, local| {
+            if let Some(idx) = chunk_index.get_mut(&chunk) {
+                idx.remove(local, id);
+                *index_ops += 1;
+                if idx.is_empty() {
+                    chunk_index.remove(&chunk);
+                }
+            }
+        });
+    }
+
+    /// Every entity id whose footprint overlaps `chunk` at all, ascending (0007 §5): empty if
+    /// `chunk` holds no `ChunkIndex` (no entity has ever overlapped it).
+    pub(crate) fn chunk_overlapping(&self, chunk: ChunkCoord) -> &[EntityId] {
+        self.chunk_index
+            .get(&chunk)
+            .map_or(&[][..], |idx| idx.overlapping())
+    }
+
+    /// `WorldRead::entity_at` (0007 §5-§6): the lowest-id occupant of `pos`'s tile, or `None`.
+    /// Total -- a `Store` has no notion of "not held" of its own; that gate belongs to whichever
+    /// `WorldRead` implementor wraps it (`Replica` outside its subscription, 0007 §1).
+    pub fn entity_at(&self, pos: TilePos) -> Option<EntityId> {
+        let dims = self.terrain.dims();
+        let chunk = dims.chunk_of(pos);
+        let index = dims.local_index(pos);
+        self.chunk_index
+            .get(&chunk)
+            .and_then(|idx| idx.entity_at(index))
+    }
+
+    /// `WorldRead::entities_in` (0007 §5, M21 Provides): every entity whose footprint intersects
+    /// `rect`, ascending `EntityId`, each visited once. `scratch` is the caller's own reused
+    /// candidate buffer (`.claude/rules/hot-paths.md`: no allocation once its capacity has settled)
+    /// -- gathered from every touched chunk's `ChunkIndex::overlapping` (a superset: a chunk's
+    /// index lists every entity that overlaps that chunk at all, not only the part of its footprint
+    /// inside `rect`), deduplicated, then filtered down to a real intersection before `f` runs.
+    /// Total, like [`Store::entity_at`]: the "not held" gate is the caller's.
+    pub fn entities_in(
+        &self,
+        rect: TileRect,
+        scratch: &mut Vec<EntityId>,
+        f: &mut dyn FnMut(EntityId, &G::Entity),
+    ) {
+        scratch.clear();
+        let dims = self.terrain.dims();
+        for chunk in rect.chunks(&dims).iter() {
+            for &id in self.chunk_overlapping(chunk) {
+                if let Err(pos) = scratch.binary_search(&id) {
+                    scratch.insert(pos, id);
+                }
+            }
+        }
+        for &id in scratch.iter() {
+            let Some(entity) = self.entity(id) else {
+                continue;
+            };
+            let anchor = G::anchor(entity);
+            let footprint = self.registry.footprint(G::prototype(entity));
+            if footprint_rect(anchor, footprint).intersects(&rect) {
+                f(id, entity);
+            }
+        }
+    }
+
+    /// Rebuilds every [`ChunkIndex`] from the entity table (0007 §5: "rebuilt on load"). Called by
+    /// [`Store::decode`] so a decoded `Store` is never observed with a stale or absent index; also
+    /// callable directly (`index_rebuild_equals_incremental`) to prove it reaches exactly the state
+    /// incremental maintenance (`Store::apply`) would have.
+    pub fn rebuild_indexes(&mut self) {
+        self.chunk_index.clear();
+        let entries: Vec<(EntityId, TilePos, Footprint)> = self
+            .entities
+            .iter()
+            .map(|(&id, e)| (id, G::anchor(e), self.registry.footprint(G::prototype(e))))
+            .collect();
+        for (id, anchor, footprint) in entries {
+            self.add_to_index(id, anchor, footprint);
+        }
+    }
+
+    /// Diagnostic counter (Budgets: "occupancy maintenance is O(footprint), asserted by a counter
+    /// `index_ops_per_put <= footprint area + 4`"). `#[cfg(any(test, feature = "testing"))]`-free:
+    /// an 8-byte field with no runtime cost worth gating (host/mod's own `ConnCounters` follows the
+    /// same "always compiled" convention).
+    pub fn debug_index_ops(&self) -> u64 {
+        self.index_ops
+    }
+
     pub fn global(&self) -> &G::Global {
         &self.global
     }
@@ -291,6 +491,10 @@ impl<G: Game> Store<G> {
         self.next_entity_id = next_entity_id;
         self.global = global;
         self.entities = entities;
+        // 0007 §5 "rebuilt on load": a decoded `Store` must never be observed with a stale or
+        // absent `ChunkIndex` (docs/plan/21-entities-and-timers.md Provides "rebuilt by
+        // Store::rebuild_indexes() after decode").
+        self.rebuild_indexes();
         Ok(())
     }
 
@@ -604,5 +808,268 @@ mod tests {
         assert_eq!(s.entity_count(), 2);
         assert_eq!(s.modified_tile_count(), s.terrain().modified_tiles());
         assert_eq!(s.modified_tile_count(), 1);
+    }
+
+    // -- M21 footprint/`ChunkIndex` tests (docs/plan/21-entities-and-timers.md Tests added) -------
+    // A dedicated small game: `FpEntity` carries its own position and a `wide` flag selecting
+    // between a 1x1 prototype (id 0) and a 3x3 one (id 1), so a single footprint can be made to
+    // straddle up to 4 of `terrain()`'s edge-16 chunks (anchor near a multiple of 16).
+
+    use crate::world::{Footprint, TileRect, TraitSet};
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct FpEntity {
+        x: i32,
+        y: i32,
+        wide: bool,
+    }
+
+    struct FpGame;
+    impl Game for FpGame {
+        const SCHEMA_VERSION: u32 = 1;
+        const CHUNK_BITS: u32 = 4; // edge 16, matches this module's own `terrain()`
+        type Worldgen = TGen;
+        type Action = ();
+        type Reject = TReject;
+        type Entity = FpEntity;
+        type Player = TPlayer;
+        type Global = TGlobal;
+        type Presence = ();
+        type Ui = ();
+        type Client = ();
+
+        fn register(r: &mut Registry) {
+            r.add_prototype(TraitSet::EMPTY, Footprint { w: 1, h: 1 }); // id 0: ordinary
+            r.add_prototype(TraitSet::EMPTY, Footprint { w: 3, h: 3 }); // id 1: wide
+        }
+        fn prototype(e: &FpEntity) -> PrototypeId {
+            if e.wide {
+                PrototypeId(1)
+            } else {
+                PrototypeId(0)
+            }
+        }
+        fn anchor(e: &FpEntity) -> TilePos {
+            TilePos::new(e.x, e.y)
+        }
+        fn genesis(_w: &mut dyn WorldWrite<Self>) {}
+        fn on_player(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _ev: PlayerEvent) {}
+        fn apply(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _a: &()) -> Result<(), TReject> {
+            Ok(())
+        }
+        fn tick(_cx: &mut TickCx<'_, Self>) {}
+    }
+
+    fn fp_store() -> Store<FpGame> {
+        Store::new(terrain(), TGlobal { day: 0 })
+    }
+
+    /// Anchored at `(14, 14)` with a 3x3 footprint (edge-16 chunks): covers x/y in `14..=16`,
+    /// straddling all 4 chunks `(0,0)`, `(1,0)`, `(0,1)`, `(1,1)`.
+    const STRADDLE_CHUNKS: [(i32, i32); 4] = [(0, 0), (1, 0), (0, 1), (1, 1)];
+
+    #[test]
+    fn footprint_sets_every_overlapped_chunk() {
+        let mut s = fp_store();
+        s.apply(&Delta::EntityPut {
+            id: EntityId(1),
+            entity: FpEntity {
+                x: 14,
+                y: 14,
+                wide: true,
+            },
+        });
+        for (x, y) in STRADDLE_CHUNKS {
+            assert_eq!(
+                s.chunk_overlapping(ChunkCoord::new(x, y)),
+                &[EntityId(1)],
+                "chunk ({x},{y}) should overlap the footprint"
+            );
+        }
+        assert!(
+            s.chunk_overlapping(ChunkCoord::new(2, 2)).is_empty(),
+            "a chunk outside the footprint must not list it"
+        );
+    }
+
+    #[test]
+    fn despawn_clears_all_chunks() {
+        let mut s = fp_store();
+        s.apply(&Delta::EntityPut {
+            id: EntityId(1),
+            entity: FpEntity {
+                x: 14,
+                y: 14,
+                wide: true,
+            },
+        });
+        s.apply(&Delta::EntityGone { id: EntityId(1) });
+        for (x, y) in STRADDLE_CHUNKS {
+            assert!(
+                s.chunk_overlapping(ChunkCoord::new(x, y)).is_empty(),
+                "chunk ({x},{y}) must be cleared after despawn"
+            );
+        }
+        assert_eq!(s.entity_at(TilePos::new(14, 14)), None);
+    }
+
+    #[test]
+    fn move_updates_old_and_new() {
+        let mut s = fp_store();
+        s.apply(&Delta::EntityPut {
+            id: EntityId(1),
+            entity: FpEntity {
+                x: 14,
+                y: 14,
+                wide: true,
+            },
+        });
+        // Moved to a position whose 3x3 footprint sits entirely inside chunk (6,6) (tiles
+        // 100..=102 are inside 96..=111): no straddle, single-chunk case.
+        s.apply(&Delta::EntityPut {
+            id: EntityId(1),
+            entity: FpEntity {
+                x: 100,
+                y: 100,
+                wide: true,
+            },
+        });
+        for (x, y) in STRADDLE_CHUNKS {
+            assert!(
+                s.chunk_overlapping(ChunkCoord::new(x, y)).is_empty(),
+                "old chunk ({x},{y}) must be cleared after the move"
+            );
+        }
+        assert_eq!(
+            s.chunk_overlapping(ChunkCoord::new(6, 6)),
+            &[EntityId(1)],
+            "new chunk must hold the moved entity"
+        );
+        assert_eq!(s.entity_at(TilePos::new(100, 100)), Some(EntityId(1)));
+        assert_eq!(s.entity_at(TilePos::new(14, 14)), None);
+    }
+
+    #[test]
+    fn entity_at_any_covered_tile() {
+        let mut s = fp_store();
+        s.apply(&Delta::EntityPut {
+            id: EntityId(1),
+            entity: FpEntity {
+                x: 14,
+                y: 14,
+                wide: true,
+            },
+        });
+        for dx in 0..3 {
+            for dy in 0..3 {
+                assert_eq!(
+                    s.entity_at(TilePos::new(14 + dx, 14 + dy)),
+                    Some(EntityId(1)),
+                    "tile ({}, {}) should be covered",
+                    14 + dx,
+                    14 + dy
+                );
+            }
+        }
+        assert_eq!(s.entity_at(TilePos::new(17, 17)), None);
+        assert_eq!(s.entity_at(TilePos::new(13, 13)), None);
+    }
+
+    #[test]
+    fn entities_in_visits_each_once_in_id_order() {
+        let mut s = fp_store();
+        // A wide entity straddling chunks (0,0)/(1,0)/(0,1)/(1,1), and an ordinary one anchored
+        // well inside chunk (1,0) alone -- both overlap the query rect below.
+        s.apply(&Delta::EntityPut {
+            id: EntityId(2),
+            entity: FpEntity {
+                x: 14,
+                y: 14,
+                wide: true,
+            },
+        });
+        s.apply(&Delta::EntityPut {
+            id: EntityId(1),
+            entity: FpEntity {
+                x: 20,
+                y: 2,
+                wide: false,
+            },
+        });
+        // An entity entirely outside the rect: must not be visited.
+        s.apply(&Delta::EntityPut {
+            id: EntityId(3),
+            entity: FpEntity {
+                x: 200,
+                y: 200,
+                wide: false,
+            },
+        });
+
+        // The rect covers chunks (0,0) and (1,0) only (x: 0..=20, y: 0..=15) -- it intersects the
+        // wide entity's footprint (which also reaches chunks (0,1)/(1,1), outside the rect) and
+        // fully contains the ordinary one.
+        let rect = TileRect::new(TilePos::new(0, 0), TilePos::new(20, 15));
+        let mut scratch = Vec::new();
+        let mut seen = Vec::new();
+        s.entities_in(rect, &mut scratch, &mut |id, _e| seen.push(id));
+        assert_eq!(
+            seen,
+            vec![EntityId(1), EntityId(2)],
+            "ascending id order, each entity visited exactly once"
+        );
+    }
+
+    #[test]
+    fn index_rebuild_equals_incremental() {
+        let mut a = fp_store();
+        a.apply(&Delta::EntityPut {
+            id: EntityId(1),
+            entity: FpEntity {
+                x: 14,
+                y: 14,
+                wide: true,
+            },
+        });
+        a.apply(&Delta::EntityPut {
+            id: EntityId(2),
+            entity: FpEntity {
+                x: 20,
+                y: 2,
+                wide: false,
+            },
+        });
+        // A move, to prove the rebuild reaches the *current* state, not merely "every id ever
+        // put": the entity's original chunks must be absent from the rebuilt index too.
+        a.apply(&Delta::EntityPut {
+            id: EntityId(2),
+            entity: FpEntity {
+                x: 100,
+                y: 100,
+                wide: false,
+            },
+        });
+
+        let mut bytes = Vec::new();
+        a.encode(&mut VecSink(&mut bytes));
+        let mut b = fp_store();
+        b.decode(&mut ByteReader::new(&bytes)).unwrap(); // calls rebuild_indexes internally
+
+        let probe_chunks = [(0, 0), (1, 0), (0, 1), (1, 1), (1, 0), (6, 6), (9, 9)];
+        for (x, y) in probe_chunks {
+            let c = ChunkCoord::new(x, y);
+            assert_eq!(
+                a.chunk_overlapping(c),
+                b.chunk_overlapping(c),
+                "chunk ({x},{y}) index mismatch after rebuild"
+            );
+        }
+        for (x, y) in [(14, 14), (16, 16), (20, 2), (100, 100)] {
+            assert_eq!(
+                a.entity_at(TilePos::new(x, y)),
+                b.entity_at(TilePos::new(x, y)),
+                "entity_at({x},{y}) mismatch after rebuild"
+            );
+        }
     }
 }
