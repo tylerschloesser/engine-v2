@@ -81,6 +81,7 @@ export const suites = [
           'determinism: bun matches golden',
           'loader: views survive memory growth (bun)',
           'determinism: worldgen bun matches golden',
+          'replay_world_checkpoints_bun',
         ],
       },
     ],

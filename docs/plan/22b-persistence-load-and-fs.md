@@ -265,3 +265,181 @@ bytes`/`persist_abi_log_parity.hex` untouched).
 - Session/connection resume after a load (above) is real and flagged for M27/M28.
 - M36's own stall-measurement question about `SnapshotWriter`'s whole-buffer (not truly incremental)
   design, carried over from M22's own Deviations, is untouched by this half.
+
+## Steps 4-5 (second implementer)
+
+Base `dcf889b` (a new test added first, per the delegation prompt, before steps 4-5: see its own
+commit, `M22b: load_after_roll_with_idle_gap_replays_new_segment_tail`). Commits: `30414ba` (step 4:
+`fsStorage`), then `replayWorld`/`runHeavy` + the Bun leg (step 5, this commit).
+
+### The uncovered test (before steps 4-5)
+
+`load_after_roll_with_idle_gap_replays_new_segment_tail` (`tests/wasm/persist-rolling.test.ts`): six
+real connects grow segment 0 past `TINY_ROLL_BYTES`, three idle ticks (so the roll tick and segment
+0's own last-logged tick genuinely differ), `snapshotNow()` rolls to segment 1, then two more
+connects with an idle tick between them, then `Persistence.open` a fresh instance. Asserts `outcome:
+'loaded'`, `tick` and hash match the live host. Anti-vacuity: seeding `Host::sim_restore_end`'s own
+`last_logged_tick` from `Tick(0)` instead of `info.log_ref_tick` -> `AssertionError: expected 11 to
+be 12`. Reverted, green (no real production bug found here -- fix round 2's own `log_ref_tick`
+already covers this shape correctly).
+
+**A second injection tried per the brief's own suggestion turned out vacuous, a real finding.**
+Removing `sim_segment_header`'s reset of `last_logged_tick` for a non-genesis `base_tick` (leaving it
+at whatever segment 0's own last real frame left behind) does **not** fail this test: the same
+now-stale `last_logged_tick` value is used both to seed the new segment's base snapshot's own
+`log_ref_tick` *and* to compute every subsequent frame's `tick_delta` on the write side, so the two
+errors cancel exactly the way M22's own "restore silently reuses the old `Sim`" finding did (checked
+in that milestone's Deviations) -- a self-consistent bug is invisible to hash/tick comparison alone
+when both sides of a relative encoding share the same wrong reference. The reset is still correct and
+still matters (Planning decisions 2's own segment-base bookkeeping, and any future feature reading
+`log_ref_tick` on its own rather than only through the tick_delta chain), but no test built here or in
+the first half can catch its removal by hash comparison. Reverted; flagged for whoever next touches
+`sim_segment_header`'s reset.
+
+### `fsStorage` (step 4), as built
+
+- `fsStorage(dir: string, debug?: FsStorageDebug): Storage` (`src/storage/fs.ts`), exported only from
+  `engine/server/node` (`server-node.ts`). `debug` is an additive, test-only second parameter
+  (`createFsStorageDebug()` builds the placeholder `fsStorage` fills in) reading the summed
+  `fsBufferGrows` counter across every open key, without widening the `Storage` interface itself for
+  one test's own assertion.
+- Per log key: a two-buffer pool (`LogAppender`), not a fixed front/back pair -- `append` copies into
+  whichever buffer is checked out as "front"; a full buffer or `sync()` hands the filled one to an
+  async `fs.write` + `fdatasync` chain and checks a buffer out of the free pool for the next `append`;
+  when the pool is empty (both mid-flush) a one-off grown buffer is allocated and counted. Same shape
+  as Planning decisions 6, expressed as a pool rather than named front/back slots.
+- **`read`/`list` await a live appender's own `sync()` first.** Not in the brief's own wording, but
+  required for `append_accumulates_in_call_order` (`runStorageConformance`'s own read-right-after-
+  append shape) to pass at all: a real `fs`-backed `read()` sees only what has actually reached disk,
+  and 0005 groups `read`/`list` with `flush` as "off the tick path only", so awaiting a sync first
+  costs nothing the interface promises elsewhere.
+- `write` (snapshot/manifest/session, "atomic replace"): temp file (`<path>.tmp-<pid>-<counter>`,
+  a per-process counter, not `Math.random()` -- `lint.no_ambient_random` forbids it outside
+  `src/clock.ts`/`src/test/**`, and a first draft used `Math.random()` and failed that check, fixed
+  before commit), `datasync`, `rename`. Drops (closes) any open appender for the same key first, so a
+  subsequent `append` reopens cleanly against the new file (Planning decisions 1: "adapters must
+  accept `append` after `write` on one key").
+- `list(prefix)` is a full recursive walk from `dir` (tmpdir/test scale, not a real deployment's own
+  key index) -- adequate for `storage_conformance_fs` and the crash test, flagged if a later milestone
+  points `fsStorage` at a large real directory.
+- Anti-vacuity: `fs_append_allocates_no_buffers` -- injecting an unconditional `this.fsBufferGrows++`
+  at the top of `append` -> `AssertionError: expected 20 to be +0`. Reverted, green.
+  `fs_crash_truncated_file` -- injecting a `write()` that returns without doing anything (matching the
+  same class of defect `crash_mid_frame_truncates_and_resumes` guards against, but against a real file)
+  -> `AssertionError: expected 'created' to be 'recovered'` (broke `Persistence.create`'s own manifest
+  write too, since `write()` is shared -- still a genuine failure, not a vacuous pass). Reverted, green.
+
+### `replayWorld`/`runHeavy` (step 5), as built
+
+`src/test/replay.ts` (new), exported from `engine/test` (`test.ts`). Neither takes a raw log: both
+take `{ wasm, storage, worldId }` and walk `manifest.segments` from genesis through the latest,
+restoring each non-genesis segment's own base snapshot through the same `sim_restore_*` ABI
+`Persistence.loadLatest` uses, and driving each segment's log tail tick-by-tick (not through
+`sim_replay_push`'s own opaque multi-tick idle catch-up) so a caller can interject at an exact tick --
+`runHeavy`'s own requirement.
+
+- **`log_ref_tick` is derived from the manifest, not read off the wire.** `sim_restore_end`'s `Result`
+  output is only `logSegment`/`logOffset` (Seams, unchanged here); this module instead uses the fact
+  that for any segment this milestone's own `Persistence` produces, a roll's base snapshot is always
+  taken *immediately* when the new segment opens, before any frame is logged in it -- so
+  `manifest.segments[i].base` (the tick number) always equals that segment's own `log_ref_tick` too.
+  Recorded as a real, if narrow, assumption: a future producer of `ManifestV1` that snapshots a
+  segment's base at some *other* point (nothing does today) would break this module silently, not
+  loudly -- flagged for whoever builds one.
+  Documented in the module's own header comment.
+- A small frame scanner (`scanFrames`) reads only the leading `len` varint and the body's own leading
+  `tick_delta` varint per frame -- never a full record decode -- to find byte ranges and ticks in JS
+  without duplicating `FrameReader`'s own decode logic. Bug found and fixed while building
+  `replay_world_checkpoints_node`: the checked-in golden hex files (`assert_golden_bytes!`'s own
+  format) wrap at 32 bytes per line, and a first draft that only `.trim()`ed the file (not stripping
+  every whitespace byte) silently corrupted every byte after the first line -- caught immediately by
+  a real `Status::TornTail` (14) from `sim_replay_push`, not a silent wrong-hash pass, and confirmed
+  against a throwaway native probe (`engine::persist::FrameReader` decoding the same file) before
+  fixing the JS side.
+- **`runHeavy` replays only what the log actually holds** (native `heavy()`'s own shape: a raw log has
+  no representation of an idle tail past the last real frame at all), stopping at the last logged
+  frame's own tick rather than continuing to some caller-supplied ceiling -- `replayWorld` is the one
+  that continues idling up to a requested checkpoint past the last frame (the M22 fixture's own tick
+  320 checkpoint, well past its last real frame at tick 79).
+- Both runs of `runHeavy` (A uninterrupted, B restoring every `everyN` ticks) are driven sequentially,
+  not concurrently, comparing hash maps keyed by tick afterward -- they process the identical frame
+  sequence by construction, so this needs no lock-step live comparison.
+- Anti-vacuity: `replay_world_checkpoints_node` -- `frameTick = reference + tickDelta + 1` (an
+  off-by-one in the tick-delta chain) -> `AssertionError: expected [ { tick: 8, ... } ] to deeply
+  equal [ { tick: 8, ... } ]` (values differ under the collapsed diff). Reverted, green.
+  `replay_world_detects_a_segment_boundary_hash_mismatch` (new, permanent test: Planning decisions 5,
+  "make sure it is exercised and made failable" -- the single-segment cases can never reach this
+  check at all) -- disabling the boundary-hash assertion and tampering with segment 1's own base
+  snapshot (swapped for a valid-but-wrong one, a pristine genesis snapshot under the same identity) ->
+  `Error: promise resolved [...] instead of rejecting`. Reverted, green.
+  `heavy_wasm_n50`/`n1` (`runHeavy`'s own "never reuse the running instance") -- corrupting one byte
+  of the snapshot `takeSnapshotBytes` captures before `restoreFresh` decodes it -> `Error: runHeavy:
+  sim_restore_push failed: status 12` (`Status.Corrupt`), proving the swap path genuinely rebuilds and
+  redecodes rather than skipping the work. **The more literal injection the brief itself suggested
+  (skip `cell.sim = restoreFresh(bytes)` entirely, keep ticking on the same instance) passed
+  vacuously** at both N=50 and N=1: `fx-persist` has no hidden state a live instance could carry that
+  a correct restore wouldn't also reproduce (the exact class of gap M22's own Deviations already
+  documented for its native heavy mode, "a skipped restore is behaviourally identical to a real one"
+  with no deliberately-hidden state to exercise) -- the corrupted-bytes injection above is the one that
+  actually exercises this pipeline's own independence.
+
+### Two-segment real-pipeline coverage (Planning decisions 5)
+
+`replay_world_checkpoints_two_segment_real_pipeline` (`tests/wasm/replay-world.test.ts`): a real
+`SimHost` + `Persistence` run that actually rolls a segment (`segmentRollBytes: 64`), recording the
+live host's own per-tick hash, then asserting `replayWorld`'s own checkpoints (at every one of those
+ticks) match exactly -- no checked-in golden for this case (native and `.wasm` parity was not claimed
+for it; the live run and `replayWorld`'s own read of the same in-memory storage are compared directly
+within one test process). This is what exercises Planning decisions 5's cross-segment hash assertion
+against a genuine two-segment world at all, and `replay_world_detects_a_segment_boundary_hash_mismatch`
+(above) is what proves the assertion itself is real.
+
+### The Bun leg
+
+`tests/wasm/bun-leg.mjs` gained `runReplayLeg()` (`replay_world_checkpoints_bun`): the identical
+`replay_world_checkpoints_node` shape (M22's own checked-in fixture log, wrapped in a synthetic
+single-segment `MemoryStorage` with a real prepended segment-0 header), against `dist/` under
+JavaScriptCore. `scripts/suites.mjs`'s `wasm` suite's `bun` leg gained the name in its own `tests`
+list (used only for `-t` pattern matching, per `scripts/lib/adapters.mjs`'s `script` adapter) --
+no new leg, no new runner, per the brief's own instruction.
+
+### Exports-map test
+
+No `exports-map` test exists yet (M35's own is unbuilt); `src/test.test.ts` (new) is the first one:
+a direct-import source scan of every exports-map subpath's backing file plus `loader.ts`/`abi.ts` for
+any `test.js`/`test/` import (mirroring the exact files the docs/plan/03-browser-harness.md
+orchestrator gate once grepped `dist/` for by hand), plus a positive check that `replayWorld`/
+`runHeavy` really are exported. Anti-vacuity: adding `import { replayWorld as _x } from './test.js'`
+to `loader.ts` -> `Error: production entrypoints importing engine/test: loader.ts` (caught by
+`vitest run src/test.test.ts` directly; the same injection also broke the `pages` build step outright
+via a circular worker-import error, an even stronger real-world proof). Reverted, green.
+
+### Measured
+
+`cargo nextest run --workspace --features engine/testing,testing`: 518 tests, 518 passed, 2 skipped
+(unchanged). `pnpm test`: `rust pass 518 tests`, `unit pass 235 tests`, `wasm pass 98 tests`,
+`browser pass 185 tests` (31-33 s of the 48 s budget). `pnpm lint`: biome/rustfmt/clippy/tsc all
+green. `pnpm test:slow wasm -t heavy_wasm_n1`: `wasm pass 1 tests 0.7s`. No existing golden moved
+(nothing here writes a byte format; `persist_fixture_log.hex` and its checkpoint goldens are only
+read, never regenerated).
+
+### Context artifacts
+
+- `packages/engine/src/storage/CLAUDE.md`: extended with an `fs.ts` bullet (buffer pool, `write`'s
+  atomic-replace path, `read`/`list` awaiting a live appender's own sync first). 29 lines, under the
+  file's own 60-line hard cap (`scripts/lib/context-artifacts.test.mjs`).
+- `packages/engine/crates/engine/src/persist/CLAUDE.md`/`src/host/CLAUDE.md`: unchanged -- nothing in
+  steps 4-5 touches Rust `persist::` or `Persistence` itself; `src/test/replay.ts` only calls the same
+  ABI exports `Persistence.loadLatest` already does.
+
+### Deferred / flagged for the orchestrator
+
+- `replayWorld`/`runHeavy`'s own `log_ref_tick`-equals-`base` assumption (above) is narrow and
+  undocumented anywhere but this module's own header comment -- flagged for M24 (`Skip`/panic
+  recovery) and anything else that might one day snapshot a segment mid-stream rather than only at
+  its own base.
+- The segment-header-reset vacuity finding (above) is real: no test in either half of this milestone
+  can catch that specific defect by hash comparison. Not fixed (the code is already correct); flagged
+  for whoever next touches `sim_segment_header`.
+- `fsStorage`'s `list()` is a full recursive directory walk -- fine at tmpdir/test scale, flagged if a
+  later milestone (M27) points it at a real, larger deployment directory.

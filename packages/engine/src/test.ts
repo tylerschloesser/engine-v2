@@ -66,6 +66,12 @@ export {
   uploadRecords,
 } from './test/render.js'
 export {
+  type ReplayWorldOptions,
+  type RunHeavyOptions,
+  replayWorld,
+  runHeavy,
+} from './test/replay.js'
+export {
   attachViewportTestHooks,
   clearRebaseFlag,
   rebaseFlagSet,

@@ -18,6 +18,12 @@ import type { Storage } from './types.js'
 
 const BUFFER_BYTES = 1024 * 1024
 
+/** A per-process counter for temp-file uniqueness (`write`'s own atomic-replace path): no ambient
+ * randomness or time outside `src/clock.ts`/`src/test/**` (`.claude/rules` via `lint.no_ambient_
+ * random`) -- `process.pid` plus a monotonic counter is already unique within and across processes
+ * writing to the same directory. */
+let tmpCounter = 0
+
 /** One open log key's write-ahead state (Planning decisions 6). Never shipped to the browser
  * (0005: "the engine ships a Node `fs` adapter"; `.claude/rules/hot-paths.md` binds the browser
  * only) -- allocation here is counted, not forbidden, and only the *steady-state* count matters
@@ -233,7 +239,7 @@ export function fsStorage(dir: string, debug?: FsStorageDebug): Storage {
       await dropAppender(key)
       const path = keyPath(key)
       await mkdir(dirname(path), { recursive: true })
-      const tmp = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`
+      const tmp = `${path}.tmp-${process.pid}-${tmpCounter++}`
       const handle = await open(tmp, 'w')
       try {
         await handle.write(bytes, 0, bytes.length)
