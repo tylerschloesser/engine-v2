@@ -59,7 +59,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 20 | `20-reference-game-v0.md` | `games/reference`: worldgen, assets, headless collect rules | 16b | |
 | [x] | 20b | `20b-reference-player-and-collect-ui.md` | player spring + presence, collect UI. **First playable.** | 20, 17b, 18, 19 | |
 | [x] | 20c | `20c-client-ack-freeze-under-untilquiescent.md` | client worker stops acking under `stepTick` on a connected manual-clock page (deterministic; maybe the `parkWorkers` watch item): cause, fix, production hidden-tab answer | 20b | |
-| [ ] | 21 | `21-entities-and-timers.md` | prototypes, footprints, occupancy, state budget + `growth` | 16 | |
+| [x] | 21 | `21-entities-and-timers.md` | prototypes, footprints, occupancy, state budget + `growth` | 16 | |
 | [ ] | 21b | `21b-timers-wakeups-and-tickcx.md` | timer wheel, wake-ups, active lists, full `TickCx`, undo-journal decision | 21 | |
 | [ ] | 22 | `22-persistence-log-and-snapshots.md` | containers, write-ahead log, snapshots, native replay + heavy mode | 21b | |
 | [ ] | 22b | `22b-persistence-load-and-fs.md` | load path, crash recovery from storage, `node:fs` storage, heavy mode in `engine/test` | 22 | |
