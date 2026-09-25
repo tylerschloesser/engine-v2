@@ -132,11 +132,16 @@ fn default_max_action_growth() -> u32 {
 fn default_cache_chunks() -> u32 {
     1024
 }
-/// 0015 "256 MB per WASM instance" (`docs/spec/overview.md`): a generous sentinel meaning "no
-/// enforced arena ceiling" for a config that never sets `arenaBytes` (every pre-M21 fixture and
-/// test config, docs/plan/21-entities-and-timers.md Deviations): the init check below is then a
-/// no-op, exactly as it was before this milestone.
-fn default_arena_bytes() -> u32 {
+/// A generous sentinel meaning "no enforced ceiling" for a config that never sets
+/// `worldBudgetBytes` (every pre-M21 fixture and test config, docs/plan/
+/// 21-entities-and-timers.md Deviations): the init check below is then a no-op, exactly as it
+/// was before this milestone. **Distinct from the engine's own pre-existing, outer
+/// `InstanceConfig.arenaBytes`** (`src/sim-config.ts`, `src/client.ts`'s `DEFAULT_ARENA_BYTES`):
+/// that field is the real WASM memory size `instantiate()` allocates, one level up in the JSON
+/// this game-specific `SimConfig` never sees; `worldBudgetBytes` here is 0007 §8's own
+/// "configured budget" (the ADR's "raised state budgets on a desktop" line), a ceiling this
+/// milestone's init check compares its computed memory-split sum against.
+fn default_world_budget_bytes() -> u32 {
     u32::MAX
 }
 /// 0007 §8's own fixed estimate ("chunk indexes about 8 MiB"): not scaled by any config value,
@@ -189,11 +194,11 @@ struct SimConfig<P> {
     #[serde(default = "default_cache_chunks")]
     cache_chunks: u32,
     /// M21 (docs/plan/21-entities-and-timers.md Scope: "init check of the 0007 §8 memory split
-    /// against the arena with real `size_of`"): the instance's configured arena ceiling, in bytes.
-    /// Optional, defaulting to [`default_arena_bytes`] (effectively "unchecked") so every existing
-    /// config keeps working unmodified.
-    #[serde(default = "default_arena_bytes")]
-    arena_bytes: u32,
+    /// against the arena with real `size_of`"): the game's configured world-budget ceiling, in
+    /// bytes (0007 §8's own default is 64 MiB). Optional, defaulting to [`default_world_budget_
+    /// bytes`] (effectively "unchecked") so every existing config keeps working unmodified.
+    #[serde(default = "default_world_budget_bytes")]
+    world_budget_bytes: u32,
 }
 
 /// The sim-role `Instance` (Scope: "`Host<G>` (here: `Sim<G>` + warm list; M15 adds
@@ -1165,7 +1170,7 @@ where
             + overlay_bytes
             + CHUNK_INDEX_ESTIMATE_BYTES
             + SLACK_ESTIMATE_BYTES;
-        if computed > cfg.arena_bytes as u64 {
+        if computed > cfg.world_budget_bytes as u64 {
             return Err(Status::BudgetExceedsArena);
         }
 

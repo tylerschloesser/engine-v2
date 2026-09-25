@@ -1,0 +1,45 @@
+{
+  "kind": "script",
+  "role": "sim",
+  "config": {
+    "arenaBytes": 100663296,
+    "game": {
+      "seed": "0x2",
+      "params": null,
+      "maxEntities": 1,
+      "maxModifiedTiles": 4096,
+      "maxActionGrowth": 4096,
+      "cacheChunks": 1024
+    }
+  },
+  "encoderConfig": {
+    "arenaBytes": 50331648,
+    "game": {
+      "seed": "0x2",
+      "params": null,
+      "genWorkers": 1,
+      "cacheChunks": 1024
+    }
+  },
+  "genesis": true,
+  "checkpointAt": 4,
+  "script": [
+    {
+      "tick": 1,
+      "connect": true,
+      "actions": [{ "seq": 1, "action": { "Place": { "origin": { "x": 2, "y": 2 } } } }]
+    },
+    {
+      "tick": 2,
+      "actions": [{ "seq": 2, "action": { "Place": { "origin": { "x": 10, "y": 10 } } } }]
+    },
+    {
+      "tick": 3,
+      "actions": [{ "seq": 3, "action": { "Remove": { "at": { "x": 2, "y": 2 } } } }]
+    },
+    {
+      "tick": 4,
+      "actions": [{ "seq": 4, "action": { "Place": { "origin": { "x": 10, "y": 10 } } } }]
+    }
+  ]
+}

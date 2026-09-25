@@ -445,12 +445,12 @@ fn init_rejects_budget_over_arena() {
     use engine::abi::{Instance, RegionLayout, Role, Status};
 
     let ok_cfg = r#"{"seed":"0x1","params":null,"maxEntities":10,"maxModifiedTiles":10,
-        "maxActionGrowth":4096,"cacheChunks":1,"arenaBytes":1000000000}"#;
+        "maxActionGrowth":4096,"cacheChunks":1,"worldBudgetBytes":1000000000}"#;
     let mut layout = RegionLayout::new();
     assert!(engine::host::Host::<BGame>::init(Role::Sim, ok_cfg, &mut layout).is_ok());
 
     let bad_cfg = r#"{"seed":"0x1","params":null,"maxEntities":1000000,"maxModifiedTiles":1000000,
-        "maxActionGrowth":4096,"cacheChunks":1,"arenaBytes":1000}"#;
+        "maxActionGrowth":4096,"cacheChunks":1,"worldBudgetBytes":1000}"#;
     let mut layout2 = RegionLayout::new();
     let err = engine::host::Host::<BGame>::init(Role::Sim, bad_cfg, &mut layout2);
     assert_eq!(err.err(), Some(Status::BudgetExceedsArena));

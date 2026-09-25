@@ -50,6 +50,39 @@ at runtime and panics if it is violated); and every `WorldWrite` **put is infall
 reads something first (`w.entity_at(...)?`, propagating `Unknown` via the fixture's own `impl
 From<Unknown> for Reject`, this fixture's own `Bump`/`Remove` shape) or it needs the next step.
 
+**Ask the tiles, do not name tile types** (0007 §6, `fixtures/machines`'s own `Place`/`Move`):
+a placement-style action validates against `w.traits_at(pos)?.contains(YOUR_BIT)` for every tile
+its footprint would cover, never against a specific base/resource id or prototype. The engine
+unions the tile's own trait table with its occupant's registered prototype traits into one
+`TraitSet`, so "not on water" and "not on another building" are the same query as long as both
+carry the bit in `Game::register` -- a handler that instead matches on `tile.base() ==
+WATER_ID` only ever catches the tile source, silently missing an occupant that carries the same
+bit.
+
+**Declare `growth`** (docs/decisions/0023-action-growth-declaration.md): if your action can spawn
+an entity or modify a tile, add or extend the override so the host's state-budget check (`crate::
+budget`, run before `apply`) knows the worst case without having to guess:
+
+```rust
+fn growth(a: &Action) -> Option<Growth> {
+    match a {
+        Action::YourNewAction { .. } => Some(Growth::entities(1)), // or Growth::tiles(n), Growth::NONE
+        _ => Some(Growth::NONE), // every other action already declares its own arm
+    }
+}
+```
+
+Declare the *worst case* your `apply` arm can possibly add, not the common case -- the host audits
+this (debug/test builds panic if `apply` ever adds more than declared, `fixtures/machines`'s own
+`growth_declarations_are_honest`) and a declaration whose nominal cost exceeds the world's
+`max_action_growth` is itself a `debug_assert!`-caught bug. An action that only removes state (or
+overwrites an existing entity/tile without growing either count) declares `Growth::NONE`, which
+always passes the check even when the world is otherwise full (0023: "a world at its budget still
+accepts every action declared `NONE`"). Leaving `growth` undeclared (the trait's own `None`
+default) falls back to the coarser, world-wide `max_action_growth` headroom rule (0004) -- fine for
+an action that never grows state, but likely to reject unnecessarily for one that does, once the
+world is nearly full.
+
 **Whether it can be rejected before `apply` even runs** (0004 Pipeline step 2, "Admit"): a plain
 put action's *only* path to a `Reject::Game(...)` outcome is `Game::admit`, since `apply` itself
 can never fail for one. Add or extend the override:
