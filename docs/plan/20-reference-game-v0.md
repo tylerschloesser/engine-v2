@@ -1,6 +1,6 @@
 # M20: Reference game v0: world and collect rules
 
-Status: not started · After: 16b · Tyler-dependent: no (Q4 answered: collect range is 3 tiles)
+Status: done · After: 16b · Tyler-dependent: no (Q4 answered: collect range is 3 tiles)
 
 Split during planning: the PLAN.md row for M20 did not fit the sizing rule (about 2,100 lines, six files to read). This brief is the world and the headless rules; `20b-reference-player-and-collect-ui.md` is the player, presence and DOM, and is where the game becomes playable.
 
@@ -57,11 +57,11 @@ Player circle, spring, `Presence`, `admit`, spawn, any DOM UI (M20b). Inventory 
 - Browser: `reference_terrain_renders` (semantic probes on three landmark tiles, `0020` §6), `reference_depletion_visible` (dispatch `StartCollect` from the test, step 40 ticks, the tile's resource texel changes stage).
 
 ## Exit criteria
-- [ ] `pnpm --filter reference dev` serves a cross-origin-isolated page showing terrain and resources; pan and zoom work.
-- [ ] Every test above passes by name.
-- [ ] `git diff --exit-code games/reference/src/bindings games/reference/assets` is clean after a build and an asset-script run.
-- [ ] No `HashMap`, std transcendental or wall clock in `sim/` (the M02 import-allowlist test and clippy bans run against `reference-sim`).
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `pnpm --filter reference dev` serves a cross-origin-isolated page showing terrain and resources; pan and zoom work.
+- [x] Every test above passes by name.
+- [x] `git diff --exit-code games/reference/src/bindings games/reference/assets` is clean after a build and an asset-script run.
+- [x] No `HashMap`, std transcendental or wall clock in `sim/` (the M02 import-allowlist test and clippy bans run against `reference-sim`).
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t reference` · `pnpm test browser -t reference_` · `node games/reference/scripts/gen-assets.mjs --check` · `pnpm --filter reference dev` (suite names as the `run-tests` skill gives them).
