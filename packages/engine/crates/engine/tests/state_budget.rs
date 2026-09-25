@@ -434,9 +434,12 @@ fn under_declared_growth_counts_in_release() {
     // The same write, made directly through `Authority` and never touching the audit path at
     // all: `growth_violations` is a diagnostic field on `Authority`, never hashed, so the audit
     // (whichever branch it takes) cannot change `Store`'s own state -- proven directly rather
-    // than assumed.
+    // than assumed. One empty `step` follows the bare spawn so both runs pass the same tick fixed
+    // point (M21b): a put outside `G::tick` auto-wakes into `woken_next`, which is hashed, and only
+    // a tick drains it -- without the step the wake queue, not the audit, would differ.
     let mut direct = genesis(9, 1_000_000, 1_000_000, 4096);
     direct.authority_mut().spawn(BEntity::default());
+    direct.step(&[], &mut Vec::new());
     assert_eq!(hash_with_audit, direct.state_hash());
 }
 

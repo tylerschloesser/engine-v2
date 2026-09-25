@@ -227,8 +227,8 @@ test('vertical_slice', async ({ page }, testInfo) => {
   // (one connection, zero game actions -- exactly this page's own topology up to this point, no
   // `Paint` dispatched yet), with `ticks`/`checkpointEvery` set to the tick actually observed
   // instead of the committed file's own fixed 100. This is the same mechanism that produced
-  // `golden-connected.json`'s `df47fa55da493c78` at tick 100 -- a sanity re-check of that exact
-  // figure is `expect(referenceAt100).toBe('df47fa55da493c78')`, right below, so a change to the
+  // `golden-connected.json`'s `3a392e50dba8f378` at tick 100 -- a sanity re-check of that exact
+  // figure is `expect(referenceAt100).toBe('3a392e50dba8f378')`, right below, so a change to the
   // fixture's own genesis/tick rule would be caught here too, not just by `pnpm golden`'s own gate.
   //
   // docs/plan/16d-sim-pacing-under-external-wakes.md, step 3: the threshold was 50 while the sim
@@ -250,7 +250,7 @@ test('vertical_slice', async ({ page }, testInfo) => {
     instantiate(wasm, roleOf(scenario), scenario.config, { onLog() {} }),
     scenario,
   )
-  expect(referenceAt100).toEqual(['df47fa55da493c78']) // the committed golden itself, unchanged
+  expect(referenceAt100).toEqual(['3a392e50dba8f378']) // the committed golden itself, unchanged
   const [reference] = runHashScenario(
     instantiate(wasm, roleOf(scenario), scenario.config, { onLog() {} }),
     { ...scenario, ticks: checkpoint.tick, checkpointEvery: checkpoint.tick },
