@@ -29,42 +29,45 @@ declare global {
   }
 }
 
-// `content::COLLECT.0` (40) ticks at the real page's own 20 Hz = 2000 ms, plus margin for
-// scheduling jitter.
-const COLLECT_WAIT_MS = 2_200
-const COLLECTS_TO_CROSS_A_STAGE = 4
+// Condition-based, not a fixed wait per collect (CI run after M20's `done`: a fixed 2,200 ms per
+// collect left 200 ms of slack and read the full-stage colour on `ubuntu-latest`). Each round
+// dispatches `StartCollect` (rejected `Busy` while one is running, so a surplus dispatch is
+// harmless) and probes, until the tile shows the half stage or the deadline passes. The deadline
+// is generous because this page paces real 20 Hz ticks; M20b's stepped test entry replaces it.
+const ROUND_MS = 250
+const DEADLINE_MS = 25_000
 
 test('reference_depletion_visible @slow', async ({ page }) => {
-  test.setTimeout(30_000)
+  test.setTimeout(40_000)
   await openGame(page)
 
   const tile = { x: 0, y: 0 } // iron (`tests/fixtures/landmarks.json`)
   // The tile's own centre in Q24.8 raw units (`WorldPos::from_tile` + half a tile): always in
   // range regardless of `RANGE_Q8`'s exact value.
   const from = { x: 128, y: 128 }
+  const probe = () =>
+    page.evaluate(([x, y]) => window.__probeTile?.(x, y), [tile.x, tile.y] as const)
 
-  const full = await page.evaluate(([x, y]) => window.__probeTile?.(x, y), [
-    tile.x,
-    tile.y,
-  ] as const)
+  const full = await probe()
   // Iron, full stage (`content::IRON` = 16, `RESOURCE_STAGE_FULL` offset 0): `scripts/
   // gen-assets.mjs`'s own committed colour (docs/plan/20-reference-game-v0.md Deviations).
   expect(full).toEqual({ r: 230, g: 140, b: 60, a: 255 })
 
-  for (let i = 0; i < COLLECTS_TO_CROSS_A_STAGE; i++) {
+  const HALF = { r: 180, g: 110, b: 50, a: 255 }
+  const started = Date.now()
+  let half = full
+  while (Date.now() - started < DEADLINE_MS) {
     const seq = await page.evaluate(
       ([x, y, fx, fy]) => window.__dispatchStartCollect?.(x, y, fx, fy),
       [tile.x, tile.y, from.x, from.y] as const,
     )
-    expect(seq, `collect #${i + 1} dispatched`).toBeGreaterThan(0)
-    await page.waitForTimeout(COLLECT_WAIT_MS)
+    expect(seq, 'StartCollect dispatched').toBeGreaterThan(0)
+    await page.waitForTimeout(ROUND_MS)
+    half = await probe()
+    if (half?.r === HALF.r && half.g === HALF.g && half.b === HALF.b) break
   }
 
-  const half = await page.evaluate(([x, y]) => window.__probeTile?.(x, y), [
-    tile.x,
-    tile.y,
-  ] as const)
   // Iron, half stage (`RESOURCE_STAGE_HALF` offset 1): the tile visibly depleted.
-  expect(half).toEqual({ r: 180, g: 110, b: 50, a: 255 })
+  expect(half).toEqual(HALF)
   expect(half).not.toEqual(full)
 })
