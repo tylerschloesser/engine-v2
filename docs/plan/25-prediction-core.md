@@ -23,7 +23,7 @@ Mine from spikes: `spikes/prediction-api/engine/src/lib.rs` (`Overlay`, `read_*`
 
 ## Non-scope
 - Lead estimation and the clocks published to TypeScript: this milestone takes lead from `ClientCore::set_lead(Ticks)` (default 1; tests set it exactly as the spike did). M26 owns the estimator, the renderer hand-off, the `predicted` queries and the no-flicker test.
-- Resending pending actions after reconnect (M28b uses the seam below). Host-side undo journal (still asserted, 0004). The state-budget check is not run under prediction (0004).
+- Resending pending actions after reconnect (M28b uses the seam below). Host-side undo journal (adopted for release builds by ADR 0037, host only; debug and test builds still panic on a write-then-reject `apply`, and the client never journals). ADR 0037 §1 lists two things its rollback does not restore (a new player slot, `SimRng` draws): check whether either matters to reconciliation. The state-budget check is not run under prediction (0004).
 
 ## Files, packages and crates touched
 - `packages/engine/crates/engine/`: new module `predict` (`overlay.rs`, `predicting.rs`, `pending.rs`); edits to the client `on_action` and `on_frame` paths, `View`, and `EntityId`'s serde impls.

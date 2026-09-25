@@ -1,6 +1,6 @@
 # M21b: Timer wheel, wake-ups, active lists, the completed `TickCx`
 
-Status: not started · After: 21 · Tyler-dependent: no
+Status: done · After: 21 · Tyler-dependent: no
 
 Split from M21 (see that brief). M22, M25 and M32 list 21b in **After**.
 
@@ -47,9 +47,9 @@ Player timers (none: `tick` scans the player table, see 12b). Bucketed area effe
 Rust: `put_from_apply_wakes_same_tick`, `put_from_tick_does_not_self_wake`, `wake_dedup_and_order`, `undrained_wakes_are_dropped`, `timer_fires_at_exact_tick_in_key_order`, `wake_at_replaces`, `despawn_cancels_timer_and_lists`, `active_iteration_stable_under_deactivate`, `smelt_cycle_golden`, `idle_world_visits_zero_entities` (10k sleeping machines, `entities_visited_per_tick == 0` between due ticks), `timers_survive_encode_decode` (hash equal after roundtrip mid-cycle: the seed of heavy mode), `replay_equals_live_with_timers`, `tick_state_steady_no_alloc`; budget (both on a test-local `Game` whose tick rule spawns one entity per tick, so the `machines` goldens stay fixed): `tick_rule_put_past_limit_is_applied` (with `max_entities` reached a `TickCx` spawn succeeds and the count exceeds the limit; the next growing action is rejected, a `Growth::NONE` action passes; replay identical), `tick_spawn_without_ids_is_engine_fault` (`testkit::set_next_entity_id` at the limit; `#[should_panic]`); journal: `journal_rolls_back_store_indexes_wakes_counts`, bench `apply_journal_overhead` (slow tier; prints both medians).
 
 ## Exit criteria
-- [ ] All fast tests above pass; the bench ran once and its numbers are in the new ADR.
-- [ ] The journal ADR exists (numbered by the `write-adr` skill) and PLAN.md "Plan-level decisions" lists it.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All fast tests above pass; the bench ran once and its numbers are in the new ADR.
+- [x] The journal ADR exists (numbered by the `write-adr` skill) and PLAN.md "Plan-level decisions" lists it.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t timer` · `pnpm test rust -t wake` · `pnpm test rust -t smelt_cycle` · `pnpm test:slow rust -t apply_journal_overhead` · `pnpm lint`.
@@ -312,3 +312,5 @@ filtered by the fast-tier profile). `pnpm test wasm`: 60 tests, same three fx-pu
 `wasm_script_a_matches_native`, plus their Bun-leg mirror), native and `.wasm` agreeing on the new
 value in every case (checked). `pnpm test unit`: 232 passed, unaffected. `cargo clippy --workspace
 --all-targets -- -D warnings` and `cargo fmt --check`: both clean.
+
+**Gate (orchestrator).** `pnpm gate 599c802`: 26 files, 3,304 insertions, no existing golden file touched by the implementer, no markers. Orchestrator blessed by command the six values in the golden table above (`pnpm golden puts`, `pnpm golden machines`, `pnpm golden:bytes -- store_golden_bytes`; every value matched the table, native = `.wasm`) and moved the pinned copies in `tests/wasm/puts.test.ts` and `tests/browser/vertical-slice.spec.ts`. `under_declared_growth_counts_in_release`: its `direct` comparison run now takes one empty `step()` after the bare spawn, so both runs pass the tick fixed point and the audit is again the only variable (an orchestrator fix, `7450e33`; the debug build panics on the action, so "same action, audit off" is not available). Accepted deviations: `wake_dedup_and_order` landed as `sim::wake::tests::dedup_and_order`; no `budgets.json` row, because `idle_world_visits_zero_entities` asserts exactly 0, stronger than a ceiling. **The review agent (diff over 3,000 lines) found a real release-mode defect**: a rejecting `apply` that despawned an entity with a live timer or active-list slot lost both on rollback (`EntityGone` cancels them; the journal restored only the entity value), and `timers_survive_encode_decode` only ever round-tripped an empty wake queue. Fix round 1 (`001001b`) restores both and compares full `state_hash` + `encode` bytes against an untouched twin; orchestrator re-ran the timer-restore injection (`left: 0, right: 1`, fails as it must). Journal overhead after the fix: 6-8 % (ADR 0037), under the 10 % bar. Two known non-restorations recorded in ADR 0037 §1 and the ledger: a new player slot, and `SimRng` draws. Final gate: `rust` 475, `unit` 232, `wasm` 60, `browser` 185 at 31 s of 48 s, lint clean.
