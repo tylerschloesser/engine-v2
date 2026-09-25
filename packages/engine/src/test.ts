@@ -12,6 +12,7 @@ export {
   drawListRecords,
   hashDrawListFields,
   hostRegionHash,
+  lastUi,
   type NetCounters,
   netCounters,
   parkWorkers,

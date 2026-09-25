@@ -14,6 +14,7 @@ import {
   createManualClock,
   type DrawRecord,
   drawListRecords,
+  lastUi,
   pumpUntilLive,
   resumeWorkers,
   setCamera,
@@ -21,6 +22,7 @@ import {
   stepTick,
 } from 'engine/test'
 import type { RefAction } from './bindings/RefAction.js'
+import type { RefUi } from './bindings/RefUi.js'
 import { startGame } from './game.js'
 
 declare global {
@@ -68,6 +70,17 @@ declare global {
      * DrawList directly off its SAB (`engine/test.drawListRecords`): no GPU render needed to
      * observe the spring's own computed position. */
     __playerCircle?: () => { x: number; y: number } | null
+    /** M20b step 6 (Seams, Provides: "`uiState(page)`"): the most recent `Ui` `client.onUi` has
+     * delivered so far (`engine/test.lastUi`, M16b's own read-back seam -- not previously reached
+     * from outside the engine package itself, so this milestone's own "engine only for bug fixes"
+     * added it to `engine/test`'s barrel export, `packages/engine/src/test.ts`), or `null` before
+     * the first one has arrived. */
+    __uiState?: () => RefUi | null
+    /** M20b step 6: `client.clock()`'s own reading (M16b), copied into a plain object -- the live
+     * object `clock()` returns is reused across calls (Provides: "read the fields, do not keep the
+     * object past the next call"), which does not survive a `page.evaluate` structured-clone round
+     * trip unchanged the way a fresh literal does. */
+    __clock?: () => { authoritative: number; predicted: number; ticksPerSecond: number }
   }
 }
 
@@ -172,6 +185,17 @@ window.__dispatchStartCollect = (tileX, tileY, fromX, fromY) => {
 const drawRecordsScratch: DrawRecord[] = []
 /** `engine::client::KIND_CIRCLE` (0018 §2): bits 12..16 of `kind_sprite`. */
 const KIND_CIRCLE = 1
+
+window.__uiState = () => lastUi<RefUi>(client) ?? null
+
+window.__clock = () => {
+  const c = client.clock()
+  return {
+    authoritative: c.authoritative,
+    predicted: c.predicted,
+    ticksPerSecond: c.ticksPerSecond,
+  }
+}
 
 window.__playerCircle = () => {
   drawListRecords(client, drawRecordsScratch)

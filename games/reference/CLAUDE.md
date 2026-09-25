@@ -19,41 +19,41 @@ and-collect-ui.md`.
 
 ## Module layout (`sim/src`)
 
-- `content.rs`: terrain/resource ids, `TraitSet` bits, durations, `Game::register`.
-- `noise.rs`/`worldgen.rs`: `engine::noise` composition, `RefWorldgen`/`hash2` scatter.
+- `content.rs`: terrain/resource ids, `TraitSet` bits, durations, `SEED` (every real page's seed --
+  `ClientSide` gets no engine seed/params channel), `Game::register`.
+- `noise.rs`/`worldgen.rs`: `engine::noise` composition, `RefWorldgen`/`hash2` scatter, `terrain_at`
+  (single-tile `classify`, no chunk generated).
 - `rules/`: one file per feature (`collect.rs`: `StartCollect`/`CancelCollect`, `in_range`, `admit`).
 - `client.rs` (`.claude/rules/hot-paths.md` applies to the whole file): `ClientSide<RefGame>`
-  (`RefClient`) -- the camera-follow spring (`spring_step`), own-player circle/range-ring `extract`,
-  `ui()` (below), the depletion `tile_visual` override.
+  (`RefClient`) -- the camera-follow spring, own-player circle/range-ring `extract`, `ui()` (below;
+  `Ui.spawn` is `nearest_land_tile`'s one-time spiral, cached at construction), depletion visuals.
 - `lib.rs`: the `Game` impl, plus wire-facing plain-data types (`RefAction`, `RefPlayer`, `RefUi`,
   `TileXY`/`WorldXY`/`UiCollecting`/`UiInRange`) instead of `engine::world`/`time` types.
 
 ## The `Ui` rule, DOM modules (`src/ui/`) and the two page entries (`src/`)
 
 `Ui` changes at state-change rate, never per frame: `in_range`'s own `from` is cached at tile-entry
-time (`RefClient::ui`'s `tracked_range`), not the live spring position, so `Ui` stays `PartialEq`-
-stable while a player merely stands in range. A per-frame value never belongs in `Ui` (0003) -- it
-travels through `extract`'s DrawList or `client.overlay` instead.
+time (`tracked_range`), and `spawn` never changes at all, so `Ui` stays `PartialEq`-stable while a
+player merely stands in range. A per-frame value never belongs in `Ui` (0003).
 
-Framework-free (Requirements). `dom.ts`: `el()`, `diffKeyed()` (a generic keyed-list reconciler,
-reused by M32-M34). `collect.ts`: one `<button data-collect-tile="x,y">` per `Ui.in_range` entry,
-anchored with `client.overlay.anchor`; the fill is one CSS animation (`--collect-duration`, started
-once, others disabled meanwhile); `CancelCollect` on pan-out; a rejected `StartCollect` adds a
-`reject-<reason>` class. `inventory.ts`: a fixed, non-anchored readout. Both wired once in `game.ts`'s
-`startGame` -- follow this same shape for a new button-driven feature.
+Framework-free (Requirements). `dom.ts`: `el()`, `diffKeyed()` (generic keyed-list reconciler, reused
+by M32-M34). `collect.ts`: one `<button data-collect-tile="x,y">` per `Ui.in_range` entry, anchored
+with `client.overlay.anchor`; one CSS fill animation; `CancelCollect` on pan-out; a rejected
+`StartCollect` adds a `reject-<reason>` class. `inventory.ts`: a fixed, non-anchored readout. Both
+wired once in `game.ts`'s `startGame`, which also calls `client.camera.moveTo` to `Ui.spawn` once,
+only when `client.camera.restored` is `false` -- follow this shape for a new button-driven feature.
 
-`game.ts`'s `startGame(opts)` is the device/renderer/art/client/camera/UI wiring shared by `main.ts`
-(`index.html`, production, no `window.__*` hooks) and `test-entry.ts` (`test.html`, every diagnostic
-hook plus a manual clock: `engine/test`'s `stepFrame`/`stepTick`/`injectPointer`/`injectWheel`);
-`__stepFrame` also flushes the upload ring and calls `client.overlay.update()` (no real frame loop
-does either here). **`Ui.in_range` needs a real sim tick**, not just `stepFrame`: a tile is readable
-through the client's own replica only once the host has sent it in a downlink frame -- `__stepTick`
-at least once after the camera settles (`__dispatchStartCollect`/`__probeTile` need no replica read).
+`startGame(opts)` is the device/renderer/art/client/camera/UI wiring shared by `main.ts` (production,
+no `window.__*` hooks) and `test-entry.ts` (`test.html`, every diagnostic hook plus a manual clock).
+**`Ui.in_range`/`world.tile()` need a real sim tick**, not just `stepFrame`: a tile is readable
+through the replica only once the host has downlinked it. `tests/helpers/game.ts`'s `panTo`/
+`uiState`/`clickCollect`/`pumpUntil` do this choreography for a browser spec -- poll a real `uiState`
+condition, never a fixed tick/frame count (`ui-smoke.spec.ts`'s own fixed counts flaked under load).
 
 ## Conventions
 
-- `TEST_SEED` (`sim/tests/common/mod.rs`) is also `src/main.ts`'s own world seed; `RefScenario` there
-  is the shared native test harness.
+- `TEST_SEED` (`sim/tests/common/mod.rs`) aliases `content::SEED`, also `src/main.ts`'s own world
+  seed (a string literal there); `RefScenario` is the shared native test harness.
 - A resource id doubles as its own "full" depletion-stage visual id; `tile_visual` adds a stage
   offset from `aux`. Three stage buckets only (10/10 -> 7/10 is still "full").
 - Depends on `engine` alone (`reference_package_depends_only_on_engine`): never import across the
