@@ -89,4 +89,216 @@ Mine from spikes: `spikes/prediction-api` (`host_replay_from_genesis_*` test sha
 none
 
 ## Deviations
-(filled in during Phase 3)
+
+**Scope actually landed: steps 1-3 only** (base `8c9717e`, commits `3d3d86c`, `c84ae51`, `9b74706`,
+`14e404c`). Steps 4-6 (ABI exports, TS `Storage`, `Persistence`) are a second implementer's, per
+the delegation prompt. Everything below is native Rust: `packages/engine/crates/engine/src/persist/`
+(new), `crates/engine/src/testing/replay.rs` (new), `crates/engine/src/authority.rs`/`sim/mod.rs`
+(small additive seams), `packages/engine/fixtures/persist/` (new fixture). No TS file touched.
+
+### Seam shapes for the second half (record verbatim, per the delegation prompt)
+
+- `pub fn crc32(bytes: &[u8]) -> u32` (`persist::crc32`, re-exported at `persist::crc32`):
+  table-driven CRC-32/ISO-HDLC, `crc32(b"123456789") == 0xCBF43926`.
+- `pub struct Identity { build_hash: [u8; 16], engine_version: String, game_version: String,
+  schema_version: u32, tick_rate_hz: u32, worldgen: WorldgenStamp }`, `Identity::write(&self, sink:
+  &mut impl ByteSink)` / `Identity::read(reader: &mut ByteReader) -> Result<Self, PersistError>`.
+  Wire shape: `build_hash` (16 raw bytes) | `engine_version`/`game_version` (varint len + UTF-8,
+  each) | `schema_version` u32 | `tick_rate_hz` u32 | `worldgen.version` u32 |
+  `worldgen.fingerprint` u64. Nothing yet *populates* this from a real build hash/`SimConfig` --
+  that plumbing (`WorldConfig.buildHash` through `engine_init`, `engine_version`/`game_version`
+  strings) does not exist anywhere in the Rust crate today; steps 4-6 (or M22b) wire it. Every
+  native test here builds a placeholder `Identity` by hand; nothing validates one against another
+  (Non-scope: identity mismatch handling is M24b's).
+- `pub enum SegmentBase { Genesis, Snapshot(Tick) }`, `pub struct SegmentHeader { identity:
+  Identity, base: SegmentBase }`, `write`/`read` (same `ByteSink`/`ByteReader` pattern, tag byte 0/1
+  then `Tick` u32 for `Snapshot`). No CRC of its own (0005 does not specify one for the header).
+- `pub enum RecordKind { Action = 0, Connection = 1, Skip = 2 }` (u8 discriminants, part of the wire
+  format, not just an internal tag). `pub enum FrameRecord<G: Game> { Action { who: PlayerId, seq:
+  u32, action: G::Action }, Connection { who: PlayerId, ev: PlayerEvent }, Skip { segment: u32,
+  offset: u32 } }` -- the wire-facing sibling of `crate::sim::Record<G>` (which has no `Skip`).
+- `pub struct FrameWriter<G: Game>`: `new()`, `push_action(who, seq, action)`,
+  `push_connection(who, ev)`, `push_skip(segment, offset)`, `is_empty()`/`len()`,
+  `finish(&self, tick_delta: u32, sink: &mut impl ByteSink)` -- encodes `len varint | tick_delta
+  varint | count varint | records | crc32` in one call (builds the body into a local `Vec<u8>`
+  first, not zero-alloc; that is steps 4-6's problem if the ABI wiring needs it to be, since
+  `sim_seal_frame` writing straight into the fixed `Persist` region is explicitly Non-scope here).
+- `pub struct FrameReader<G: Game>`: `new()`, `push(&mut self, block: &[u8]) -> Result<FrameProgress<G>,
+  PersistError>` where `enum FrameProgress<G: Game> { NeedMore, Frame(DecodedFrame<G>) }` and
+  `struct DecodedFrame<G: Game> { tick_delta: u32, records: Vec<FrameRecord<G>> }`. Resumable: feeds
+  bytes in any split, returns at most one decoded frame per call, extra already-buffered bytes wait
+  for the next call (an empty slice drains them). `MAX_FRAME_BYTES = 64 KiB` bounds a corrupt `len`.
+- `pub struct SnapshotWriter`: `SnapshotWriter::begin<G: Game>(store: &Store<G>, tick: Tick, rng:
+  &SimRng, log_segment: u32, log_offset: u32, identity: &Identity) -> Self`, `next(&mut self, out:
+  &mut [u8]) -> usize` (bytes copied, 0 = done), `total_len(&self) -> usize`. **Builds the whole
+  encoded buffer in `begin`, not a genuine incremental per-section cursor** -- see the "Snapshot
+  format" note below; this is the one place this brief's own Planning decisions 1 wording ("section
+  index + last key") is not what landed, flagged for the orchestrator.
+- `pub struct SnapshotReader<G: Game>`: `SnapshotReader::new(shell: Store<G>) -> Self` (caller
+  supplies an empty `Store<G>` already constructed with the right terrain pristine
+  source/dims/cache capacity, exactly `Store::decode`'s own precondition), `push(&mut self, block:
+  &[u8]) -> Result<SnapshotProgress, PersistError>` where `enum SnapshotProgress { NeedMore,
+  Done(SnapshotInfo) }` and `struct SnapshotInfo { identity: Identity, tick: Tick, log_segment: u32,
+  log_offset: u32, rng: SimRng, state_hash: u64 }`; `into_store(self) -> Store<G>` after `Done`.
+- `pub enum PersistError { Malformed, Crc }`, `impl From<CodecError> for PersistError` (maps to
+  `Malformed`).
+- `pub(crate) fn write_sized`/`read_sized` in `persist::mod` (duplicated from `crate::store`'s own
+  private copy, not shared -- that one is private to `store`).
+- `sim_dirty`'s flag (Planning decision 7) was **not** built in steps 1-3: it names `Authority`'s
+  write path (`Authority::write`, the one function every `WorldWrite` put funnels through), which is
+  existing M12b code this brief's Files list does not include, and the ABI export itself is
+  explicitly step 4's. Left for the second implementer: add a `dirty: bool` field to `Authority`,
+  set to `true` in `Authority::write` (covers "a put happened"), and decide how "or a record was
+  logged" (an admitted action/connection event whose `apply` was a no-op, e.g. a rejected action)
+  also sets it -- `Authority::record_ack` is the natural place, since every admitted record reaches
+  it. Expose `dirty()`/a reset method (called after a snapshot) the same way `entities_visited_per_
+  tick`/`apply_rollbacks` are exposed today.
+- **The pending frame of tick T+1** (Consumes: "who appends records, when it is cleared"): already
+  exists, unchanged by this brief. `Host<G>.pending_records: Vec<Record<G>>` (`host/mod.rs`) is
+  appended to by `Host::connect`/`disconnect` (`Record::Player`) and `Host::on_uplink`'s admitted
+  actions (`Record::Action`); `Host::tick()` reads it, hands it to `Sim::step`, then clears it
+  (`pending_records.clear()`, right after the `sim.step(pending_records, outcomes)` call). The ABI
+  order (`sim_seal_frame()` -> `logSink(view)` -> `sim_tick()`) means step 4's real `sim_seal_frame`
+  must read (not yet clear) `pending_records` *before* `Host::tick()` runs -- a new accessor is
+  needed (`Host` has no read-only borrow of it today, only the test-only `queue_action_for_test`
+  push). `Host::sim_seal_frame` itself is still the M13 stub (`host/mod.rs`, "always 0 until M22" --
+  now specifically "until step 4").
+- **256 KiB `Persist` region vs. block size**: not exercised here (no ABI in steps 1-3). `FrameWriter`/
+  `SnapshotWriter` both build into ordinary heap `Vec<u8>`s; step 4 decides how that maps onto a
+  fixed-size region copy-out (`SnapshotWriter::next(&mut [u8])`'s block-draining shape already
+  matches "the host drains it in one loop between two ticks" -- just call it with a
+  region-sized slice repeatedly).
+
+### Snapshot format deviations from 0005's literal grammar
+
+0005 lists "magic | container_version u16 | identity | tick u32 | log position | engine section
+(tick, SimRng, player table, id counters, overlays, entities, active lists and timers in canonical
+order) | state_hash u64 | crc32" -- `tick` twice. Landed: `identity`, `tick` u32 (once), `log_segment`
+u32, `log_offset` u32, `SimRng` (length-prefixed `Codec`), then `Store::encode`'s own bytes (already
+player table onward, M21b's canonical order), `state_hash` u64, `crc32` u32 (over everything from
+`identity` through `state_hash`). **A `total_len` varint was added** right after `container_version`
+(byte length of `identity..crc32` inclusive) -- not in 0005's grammar, needed so `SnapshotReader`
+can tell "not enough bytes buffered yet" apart from "corrupt" while decoding a compound,
+variable-length body across arbitrary `push` splits, the same way the log frame's own leading `len`
+varint already does. Magic is `b"PSN1"`, `container_version = 1`.
+
+**`SnapshotWriter` is not a genuine incremental per-section cursor.** It encodes the whole snapshot
+into one `Vec<u8>` in `begin`, then `next` drains it in blocks. Planning decisions 1 frames the
+resumable-cursor design as avoiding "a fixed region inside a 96 MiB arena that also holds the
+world" -- but that constraint is about the ABI's *256 KiB region*, not the Rust heap: a ~15 MiB
+`Vec<u8>` fits the 96 MiB arena easily, and Planning decisions 1's own next sentence already accepts
+one snapshot's bytes living in memory at once (the host's own `SnapshotBuffer`, "the memory cost ...
+is recorded in Budgets"). Building it once, in the same process, is behaviourally identical to a
+true incremental cursor for every test here (`snapshot_roundtrip_random_blocks`,
+`snapshot_excludes_dense_cache`, `replay_from_snapshot_matches_genesis_replay`, both `heavy_mode_
+fixture_*`) and avoids a substantially larger amount of code (pausing and resuming mid-`BTreeMap`
+for players/entities/timers/active-lists/wake-queue at an arbitrary block boundary). Flagged for the
+orchestrator: if M36's own stall measurement (Planning decisions 2) later needs the *encode itself*
+to be interruptible (not just the copy-out), this is the place to revisit.
+
+**Each log-frame action payload is length-prefixed** (`seq varint | write_sized(G::Action)`), not
+0005's bare `seq varint | G::Action`: matches `Store::write_canonical`'s own convention for every
+game-typed value, so `read_sized` always runs `decode_canonical` over an exact, pre-sliced span
+(`.claude/rules/determinism.md`: "untrusted bytes go through `decode_canonical`") instead of a
+self-delimiting decode that consumes "as much as it needs" from an unverified tail.
+
+### A real, pre-existing bug found and fixed (not this milestone's own code)
+
+`TerrainStore::set_tile` -> `Overlays::get_or_create` always inserted a default (empty)
+`ChunkOverlay` before the write ran; a write that reverted a tile all the way back to pristine
+(`ChunkOverlay::write`'s `new == pristine` branch removes the entry) left that now-empty
+`ChunkOverlay` registered forever. `write_canonical`'s chunk count walks every *registered* chunk,
+so two stores with identical effective tiles could serialize/hash differently depending on write
+history, and `encode` -> `decode` -> `encode` was not idempotent (measured: 130 bytes -> 118 bytes,
+first differing offset 21 -- a phantom 12-byte zero-entry chunk header). Found by `fx-persist`'s own
+`heavy_mode_fixture_n25`/`n1` (`Harvest` runs a tile's resource to exactly zero, i.e. back to
+pristine) and confirmed with a plain `Store::encode`/`decode` round trip, no snapshot machinery
+involved. Pre-existing (M07-era `world/overlay.rs`/`terrain.rs`), outside this brief's Files list --
+fixed here rather than escalated, per the M21b precedent (a milestone implementer fixing a real bug
+in a related area its own testing found). Fix: `Overlays::prune_if_empty(chunk)`, called from
+`TerrainStore::set_tile` after every write. Regression test: `reverting_a_tile_to_pristine_leaves_
+no_phantom_chunk_entry` (`crates/engine/tests/world_terrain.rs`). **No existing golden moved**:
+`cargo nextest run --workspace --features engine/testing,testing` is 510/510 passed (2 skipped)
+with the fix in place; `puts_*`/`machines_*`/reference-sim/wire goldens all unchanged (checked, the
+full suite run, not assumed).
+
+### Anti-vacuity (inject/fail/revert, per test; fail lines pasted verbatim)
+
+- `truncated_log_changes_hash`: disabled `FrameReader`'s CRC check (`if false && crc32(body) !=
+  want_crc`) -> `"a corrupted trailing frame must not silently reproduce the untouched hash"`
+  panicked. Reverted, green.
+- `replay_includes_rejected_actions`: made `to_record` drop every `FrameRecord::Action` like `Skip`
+  -> `assertion left == right failed\n  left: [(Tick(5), 10562995635270236117)]\n right: [(Tick(5),
+  18143478537945809152)]`. Reverted, green.
+- `replay_from_snapshot_matches_genesis_replay`: commented out `SnapshotReader::push`'s
+  `self.store.decode(&mut reader)` call (the store section dropped, as if a reader forgot the last
+  section) -> `assertion left == right failed\n  left: [(Tick(5), 17230440382609520458)]\n right:
+  [(Tick(5), 18143478537945809152)]`. Reverted, green.
+- `snapshot_excludes_dense_cache`: first tried injecting a cache-derived byte into
+  `TerrainStore::write_canonical` (`self.cache.borrow().pool_bytes()`) against the test's *original*
+  warm-up (8 tiles inside one chunk) -- passed vacuously, because `CacheCapacity::Chunks(1)` and
+  `CacheCapacity::Unlimited` end up with the exact same one-chunk pool size when only one chunk is
+  ever touched. Fixed the test itself first (tiles spread across 8 chunks, so the two cache
+  policies' *occupancy* genuinely differs), then re-ran the same injection -> real byte-level
+  `assertion left == right failed` (full 179-byte vectors differing at the `pool_bytes` field).
+  Reverted, green with the strengthened test.
+- `heavy_mode_fixture_n25` / `slow_heavy_mode_fixture_n1`: injected "restore silently reuses the old
+  `Sim`" (`Authority::from_snapshot`'s result computed but never assigned back) -- **passed
+  vacuously**, both tiers: with no hidden/lossy state in `fx-persist`'s own design, a skipped restore
+  is behaviourally identical to a real one, so this specific defect class cannot be caught by
+  hash comparison alone regardless of `every_n`. Reverted (no fix possible without adding
+  deliberately-hidden state to the fixture, which would defeat its own purpose as a *positive*
+  example). Tried instead the defect heavy mode is actually for -- dropping the restored `SimRng`
+  (`Authority::from_snapshot` ignoring its `rng` parameter, seeding `SimRng::new(0)` instead) --
+  `slow_heavy_mode_fixture_n1` failed (`FirstDivergence { tick: Tick(8) }`, the fixture's first
+  `Roll`) but `heavy_mode_fixture_n25` stayed green: that `Roll` runs at tick ~8, before the first
+  N=25 restore boundary, so both runs process it identically before any restore happens -- a real
+  vacuity gap in the fast tier alone. Fixed by adding a second `Roll` well past several 25-tick
+  boundaries (`tests/support/mod.rs`), re-blessed the golden; re-ran the same RNG-drop injection ->
+  both `heavy_mode_fixture_n25` (`FirstDivergence { tick: Tick(79) }`) and `slow_heavy_mode_fixture_
+  n1` (`Tick(8)`) now fail. Reverted, green.
+- `skip_kind_decodes_as_noop`, `persist_frame_golden_bytes`, `persist_snapshot_golden_bytes`,
+  `replay_rebuilds_last_seq`, `replay_from_genesis_checkpoints`: not independently anti-vacuity-
+  tested beyond the above (golden tests fail on any byte drift by construction; `replay_rebuilds_
+  last_seq` and `_from_genesis_checkpoints` are covered transitively by the same injections above,
+  since they replay the identical script).
+
+### Measured
+
+`cargo nextest run --workspace --features engine/testing,testing`: 510 tests run, 510 passed, 2
+skipped (`slow_heavy_mode_fixture_n1`, `slow_apply_journal_overhead`, correctly filtered by the fast
+profile). `cargo nextest run --workspace --features engine/testing,testing -P slow`: 2 passed (both
+slow tests, including `slow_heavy_mode_fixture_n1`). `pnpm test`: `rust pass 510 tests`, `unit pass
+232 tests`, `wasm pass 63 tests` (60 base + 3: `fx-persist`'s own import-allowlist/ABI-registry
+tests, iterated automatically over every fixture directory per `packages/engine/CLAUDE.md`), browser
+185 tests, all green. `pnpm lint`: biome/rustfmt/clippy/tsc all green.
+
+### Context artifacts
+
+- `packages/engine/crates/engine/src/persist/CLAUDE.md` (new, 19 lines).
+- `.claude/rules/determinism.md`'s existing globs (`packages/engine/crates/**`,
+  `packages/engine/fixtures/*/src/**`) already cover `src/persist/**` and
+  `fixtures/persist/src/**` -- checked, not assumed; no edit needed.
+
+### Exit criteria (steps 1-3 subset; steps 4-6's own criteria are the second implementer's)
+
+- All Rust tests named in Tests added pass by name under `pnpm test` (verified above), except
+  `camera_walk_changes_no_log`, which needs `Host::seal`/`sim_seal_frame` wired for real (step 4) --
+  not attempted here; the seam it would exercise (`Host.pending_records`) is documented above for
+  whoever builds it.
+- `pnpm test` and `pnpm lint` are green (pasted above).
+- The ABI registry test, the `Persist` region, and `budgets.json`'s `logBytesPerAction` are steps
+  4-6's; not applicable to steps 1-3.
+
+### Notes for the next implementer (steps 4-6)
+
+- `sim_dirty`'s flag needs building (see Seams above): add it to `Authority`, not to `persist`.
+- `Host` needs a read accessor for `pending_records` reachable before `tick()` clears it, for
+  `sim_seal_frame`'s real body.
+- `SnapshotWriter::begin` takes `&Store<G>` + `Tick` + `&SimRng` + log position + `&Identity`
+  directly; the ABI export (`sim_snapshot_begin(segment, offset)`) will need to source `Identity`
+  from wherever step 4 first makes it real (see Seams above -- nothing does yet), and `SimRng`/`Tick`
+  from `Sim`/`Authority` (both already reachable via `Host`).
+- `fx-persist`'s `cdylib` builds and passes the existing wasm import-allowlist/registry tests
+  automatically (it has no `golden/scenario.json` of its own yet); a real ABI-driven scenario test
+  for it is steps 4-6's, if wanted.
