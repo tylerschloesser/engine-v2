@@ -2,10 +2,10 @@
 //! (Order of work) scaffolds the crate with `export_game!(RefGame)` and no-op rules only, so the
 //! page boots and the `.wasm` exists; every later step in this brief fills it in.
 //!
-//! Module layout (mirrors `games/reference/CLAUDE.md`, written in a later step): `noise.rs` (step
-//! 2, thin wrapper over `engine::noise`), `worldgen.rs` (`RefWorldgen`/`RefParams`; step 1 is a
-//! flat placeholder, step 2 is the real simplex/fBm generator), `content.rs` (terrain/resource ids
-//! and, from step 4 on, `TraitSet`s and `Game::register`).
+//! Module layout (mirrors `games/reference/CLAUDE.md`, written in a later step): `noise.rs`
+//! (composes `engine::noise` into the height/moisture channels), `worldgen.rs`
+//! (`RefWorldgen`/`RefParams`, the real simplex/fBm generator plus `hash2` scatter), `content.rs`
+//! (terrain/resource ids and, from step 4 on, `TraitSet`s and `Game::register`).
 
 use engine::client::ClientSide;
 use engine::game::{
@@ -15,6 +15,7 @@ use engine::world::{PrototypeId, Registry, TilePos};
 use ts_rs::TS;
 
 pub mod content;
+pub mod noise;
 pub mod worldgen;
 
 pub use worldgen::{RefParams, RefWorldgen};
@@ -119,20 +120,3 @@ impl Game for RefGame {
 }
 
 engine::export_game!(RefGame);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use engine::world::{ChunkCoord, Tile};
-    use engine::worldgen::Worldgen;
-
-    /// Proves the `Worldgen` impl compiles and produces something for the game's own `Tile`
-    /// pipeline, independent of `Game`/`Sim` (step 1's own smoke test; step 2 adds the real
-    /// coverage named in Tests added).
-    #[test]
-    fn worldgen_generate_fills_every_tile() {
-        let mut out = vec![Tile::VOID; 32 * 32];
-        RefWorldgen::generate(1, &RefParams::default(), ChunkCoord::new(0, 0), &mut out);
-        assert!(out.iter().all(|t| *t != Tile::VOID));
-    }
-}

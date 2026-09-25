@@ -27,8 +27,12 @@ pub const STONE: u8 = 22;
 pub const COAL: u8 = 25;
 
 /// `tile_visual`'s stage offsets (step 5), added to a resource id to get that stage's visual id.
-/// Thresholds (Planning decisions "Depletion stages"): full 7-10, half 4-6, low 1-3 units of the
-/// `UNITS_PER_TILE` Requirement (10).
+/// Thresholds (Planning decisions "Depletion stages"): full 7-10, half 4-6, low 1-3 units of
+/// [`UNITS_PER_TILE`].
 pub const RESOURCE_STAGE_FULL: u8 = 0;
 pub const RESOURCE_STAGE_HALF: u8 = 1;
 pub const RESOURCE_STAGE_LOW: u8 = 2;
+
+/// Requirements ("Resources deplete: 10 units per tile"): `aux`'s starting value on a resource
+/// tile (Scope: "`aux` starts at the units-per-tile Requirement").
+pub const UNITS_PER_TILE: u16 = 10;
