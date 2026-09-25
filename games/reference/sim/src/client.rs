@@ -1,0 +1,261 @@
+//! `RefClient: ClientSide<RefGame>` (docs/plan/20b-reference-player-and-collect-ui.md Scope):
+//! `PlayerPresence`, the critically damped camera-follow spring, the own-player circle + range
+//! ring, and the depletion `tile_visual` override moved here from `lib.rs` (steps 1-3 landed it
+//! there before this module existed).
+//!
+//! `.claude/rules/hot-paths.md` applies to everything in this file: `frame`/`extract` run once per
+//! client frame, so neither allocates in steady state (`RefClient`'s own spring state is fixed-size
+//! fields, never a `Vec`).
+
+use engine::client::{ClientSide, DrawList, FrameCx, FrameView, SCREEN_PX_STROKE, TileTexel};
+use engine::game::Presence;
+use engine::world::{Tile, WorldPos};
+
+use crate::{RefGame, content};
+
+/// `Presence` sketch from `0001-camera-and-presence.md` (Decision, `Presence` code block),
+/// verbatim: `PlayerPresence { pos: [i32; 2] /* Q24.8 */, vel: [i16; 2] }` = 12 bytes encoded, well
+/// inside the 32-byte cap (`engine::presence::MAX_ENCODED_BYTES`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct PlayerPresence {
+    pub pos: [i32; 2],
+    pub vel: [i16; 2],
+}
+
+impl Presence for PlayerPresence {
+    fn pos(&self) -> WorldPos {
+        WorldPos {
+            x: self.pos[0],
+            y: self.pos[1],
+        }
+    }
+
+    fn vel(&self) -> [i32; 2] {
+        [self.vel[0] as i32, self.vel[1] as i32]
+    }
+}
+
+/// The spring's natural frequency (rad/s, critically damped: 0001 Sources, closed-form damped
+/// spring). Chosen for feel (settles in well under a second at 20-120 Hz); "nothing depends on its
+/// bits" (0001 Decision, "Spring constants") -- not tuned against any test's exact numbers, only
+/// against "visibly lags, then settles" (`spring_settles_and_is_dt_independent`,
+/// `reference_player_circle_lags_and_settles`).
+const SPRING_OMEGA: f64 = 6.0;
+
+/// The own-player circle's diameter in tiles (Requirements: "Players are drawn as circles"; no
+/// number given, so a value that reads clearly at the default zoom is chosen here).
+const PLAYER_DIAMETER_TILES: f32 = 0.6;
+
+/// Opaque green-ish player colour (rgba8, arbitrary -- Requirements name no colour).
+const PLAYER_COLOR: u32 = 0x40c0_40ff;
+/// A faint ring colour (translucent, low alpha) so the range indicator reads as a hint, not a
+/// second solid shape.
+const RANGE_RING_COLOR: u32 = 0x40c0_4060;
+
+/// `extract`'s own layer for the player circle and range ring (`0..8`, 0018 §2); low, so terrain
+/// (layer 0, implicitly) sits under it and any future UI-ish drawable (buttons are DOM, not drawn)
+/// would sit above.
+const LAYER_PLAYER: u8 = 1;
+
+/// A drawable smaller than this many CSS px is skipped entirely (Scope: "both skipped when
+/// `FrameView.zoom` makes the circle smaller than 2 px" -- read via `px_per_tile()`, the accessor
+/// that exact wording names, not `zoom()` itself, since "smaller than 2 px" is a screen-space
+/// question `px_per_tile()` answers directly).
+const MIN_VISIBLE_PX: f32 = 2.0;
+
+/// One critically damped spring step, closed form (0001 Sources: https://www.ryanjuckett.com/
+/// damped-springs/, "Case 3: Critical Damping"), for a target that itself moves at a (locally)
+/// constant velocity: `x0`/`v0` are the offset and relative velocity from the target *at the start
+/// of this step*; the formula treats the target as stationary at its current position for the
+/// duration of `dt` (an ordinary approximation for a springy follow effect, not a physical
+/// simulation) and the caller adds `target_vel * dt` back on.  Pure, ordinary `f64`: this is
+/// `ClientSide` code, never hashed, replicated or replayed (0001 Decision: "the spring lives here,
+/// in ordinary floats ... nothing depends on its bits") -- `sim/**` is still globbed by
+/// `.claude/rules/determinism.md`, so the one transcendental this needs (`exp`) is called under an
+/// explicit `#[allow]` rather than silently exempted.
+///
+/// `dt < 0.0` is treated as `0.0` (no-op step): a defensive guard, never expected in practice
+/// (`FrameCx::dt_ms()` is already clamped to `0..100`, 0003).
+pub fn spring_step(
+    pos: f64,
+    vel: f64,
+    target: f64,
+    target_vel: f64,
+    omega: f64,
+    dt: f64,
+) -> (f64, f64) {
+    if dt <= 0.0 {
+        return (pos, vel);
+    }
+    let x0 = pos - target;
+    let v0 = vel - target_vel;
+    // SAFETY/justification (`.claude/rules/determinism.md`'s own required comment): `omega * dt`
+    // is a finite, non-negative product of two ordinary floats (never NaN by construction above);
+    // this whole function is `ClientSide`-only presence/visual state, never part of `Store`, the
+    // log, a snapshot or a hash (0001 Decision), so its bits cannot desync a replay.
+    #[allow(clippy::disallowed_methods)]
+    let exp_term = (-omega * dt).exp();
+    let new_x = (x0 + (v0 + omega * x0) * dt) * exp_term;
+    let new_v = (v0 - (v0 + omega * x0) * omega * dt) * exp_term;
+    (target + new_x, target_vel + new_v)
+}
+
+/// Q24.8 raw units per tile (0007 §2).
+const Q8: f64 = 256.0;
+
+fn quantize_pos(tiles: f64) -> i32 {
+    // Ordinary `round`/`as` (determinism-rule-legal): saturates rather than panics on an extreme
+    // value, matching `CameraBlock::to_report`'s own precedent for client-only float-to-int
+    // conversions.
+    (tiles * Q8).round() as i32
+}
+
+fn quantize_vel(tiles_per_sec: f64) -> i16 {
+    (tiles_per_sec * Q8)
+        .round()
+        .clamp(i16::MIN as f64, i16::MAX as f64) as i16
+}
+
+/// `ClientSide<RefGame>`: the camera-follow spring (`frame`), the own-player circle + range ring
+/// (`extract`), and the resource layer's depletion-stage `tile_visual` override (unchanged from
+/// steps 1-3, moved here).
+pub struct RefClient {
+    /// Tiles, world space. Not `Default`-initialized to the origin and left there: `frame`'s first
+    /// call (`initialized == false`) snaps it to the camera's own centre instead, so a fresh
+    /// client never visibly springs in from `(0, 0)`.
+    spring_pos: [f64; 2],
+    /// Tiles per second, world space.
+    spring_vel: [f64; 2],
+    initialized: bool,
+}
+
+impl Default for RefClient {
+    fn default() -> Self {
+        RefClient {
+            spring_pos: [0.0, 0.0],
+            spring_vel: [0.0, 0.0],
+            initialized: false,
+        }
+    }
+}
+
+impl RefClient {
+    /// Test-only convenience (native tests: `extract_hash_player_circle`, `sim/tests/`): a client
+    /// already settled at `pos`/`vel`, skipping `frame`'s first-call snap. Plain `pub`, not
+    /// feature-gated -- `reference-sim` is `publish = false` (never distributed), unlike the engine
+    /// crate's own `CameraBlock::for_test`.
+    pub fn with_spring_state(pos: [f64; 2], vel: [f64; 2]) -> Self {
+        RefClient {
+            spring_pos: pos,
+            spring_vel: vel,
+            initialized: true,
+        }
+    }
+
+    /// The spring's own current position, tiles (test-only accessor; Deviations).
+    pub fn spring_pos(&self) -> [f64; 2] {
+        self.spring_pos
+    }
+}
+
+/// Full (7-10) / half (4-6) / low (1-3) units of [`content::UNITS_PER_TILE`] (Planning decisions
+/// "Depletion stages").
+fn depletion_stage(aux: u16) -> u8 {
+    if aux >= 7 {
+        content::RESOURCE_STAGE_FULL
+    } else if aux >= 4 {
+        content::RESOURCE_STAGE_HALF
+    } else {
+        content::RESOURCE_STAGE_LOW
+    }
+}
+
+impl ClientSide<RefGame> for RefClient {
+    /// Integrates the spring toward the camera block's own centre/velocity (0001 Decision:
+    /// "writes `G::Presence` once per client frame from the camera block"), then writes the
+    /// quantized result into `presence`. Calls `cx.ui_dirty()` whenever the spring actually moved
+    /// this frame (M18's `FrameCx::ui_dirty()`, 0024 §7d): `in_range` (M20b step 3) depends on the
+    /// spring position, which changes every frame the camera moves even though no host mutation
+    /// occurred, so `ui()` must re-run on exactly those frames too.
+    fn frame(&mut self, cx: &mut FrameCx<'_, RefGame>, presence: &mut PlayerPresence) {
+        let camera = cx.camera();
+        let target = camera.centre;
+        let target_vel = [camera.velocity[0] as f64, camera.velocity[1] as f64];
+
+        if !self.initialized {
+            self.spring_pos = target;
+            self.spring_vel = target_vel;
+            self.initialized = true;
+        } else {
+            let dt = (cx.dt_ms() as f64 / 1000.0).max(0.0);
+            let (nx, nvx) = spring_step(
+                self.spring_pos[0],
+                self.spring_vel[0],
+                target[0],
+                target_vel[0],
+                SPRING_OMEGA,
+                dt,
+            );
+            let (ny, nvy) = spring_step(
+                self.spring_pos[1],
+                self.spring_vel[1],
+                target[1],
+                target_vel[1],
+                SPRING_OMEGA,
+                dt,
+            );
+            self.spring_pos = [nx, ny];
+            self.spring_vel = [nvx, nvy];
+        }
+        cx.ui_dirty();
+
+        presence.pos = [
+            quantize_pos(self.spring_pos[0]),
+            quantize_pos(self.spring_pos[1]),
+        ];
+        presence.vel = [
+            quantize_vel(self.spring_vel[0]),
+            quantize_vel(self.spring_vel[1]),
+        ];
+    }
+
+    /// Draws the own player as a `circle` plus a faint `ring` of radius `RANGE` with
+    /// `SCREEN_PX_STROKE` (Scope), both skipped when `view.px_per_tile()` would render the circle
+    /// smaller than [`MIN_VISIBLE_PX`].
+    fn extract(&self, view: &FrameView<'_, RefGame>, out: &mut DrawList) {
+        let px_per_tile = view.px_per_tile();
+        if px_per_tile > 0.0 && PLAYER_DIAMETER_TILES * px_per_tile < MIN_VISIBLE_PX {
+            return;
+        }
+        let pos = WorldPos {
+            x: quantize_pos(self.spring_pos[0]),
+            y: quantize_pos(self.spring_pos[1]),
+        };
+        out.circle(
+            LAYER_PLAYER,
+            pos,
+            [PLAYER_DIAMETER_TILES, PLAYER_DIAMETER_TILES],
+            PLAYER_COLOR,
+        );
+        let range_diameter_tiles = 2.0 * content::RANGE_Q8 as f32 / 256.0;
+        let ring = out.ring(
+            LAYER_PLAYER,
+            pos,
+            [range_diameter_tiles, range_diameter_tiles],
+            RANGE_RING_COLOR,
+        );
+        ring.flags |= SCREEN_PX_STROKE;
+    }
+
+    /// Table lookup (`TileTexel::from_tables`) for the base layer; the resource layer adds the
+    /// depletion stage on top (`content.rs`'s own doc comment: a resource id doubles as its own
+    /// "full" stage visual id, so `resource_id + stage` is the whole formula).
+    fn tile_visual(t: Tile) -> TileTexel {
+        let mut texel = TileTexel::from_tables(t);
+        let resource = t.resource();
+        if resource != 0 {
+            texel.resource = resource as u16 + depletion_stage(t.aux()) as u16;
+        }
+        texel
+    }
+}

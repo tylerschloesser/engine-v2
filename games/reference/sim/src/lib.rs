@@ -8,18 +8,19 @@
 //! generator plus `hash2` scatter), `content.rs` (terrain/resource ids, `TraitSet`s, durations and
 //! `Game::register`), `rules/` (one file per feature; `collect.rs` is the first).
 
-use engine::client::{ClientSide, TileTexel};
 use engine::game::{
     Game, PlayerEvent, PlayerId, PresenceTable, TickCx, Unknown, WorldRead, WorldWrite,
 };
-use engine::world::{PrototypeId, Registry, Tile, TilePos, WorldPos};
+use engine::world::{PrototypeId, Registry, TilePos, WorldPos};
 use ts_rs::TS;
 
+pub mod client;
 pub mod content;
 pub mod noise;
 pub mod rules;
 pub mod worldgen;
 
+pub use client::{PlayerPresence, RefClient};
 pub use worldgen::{RefParams, RefWorldgen};
 
 /// A tile coordinate, plain data (`Action` must stay `Codec + TS`; not `engine::world::TilePos`,
@@ -149,36 +150,6 @@ pub struct RefEntity;
 #[ts(export)]
 pub struct RefUi;
 
-/// `ClientSide<RefGame>`: the resource layer's depletion-stage `tile_visual` override (Scope).
-#[derive(Default)]
-pub struct RefClient;
-
-/// Full (7-10) / half (4-6) / low (1-3) units of [`content::UNITS_PER_TILE`] (Planning decisions
-/// "Depletion stages").
-fn depletion_stage(aux: u16) -> u8 {
-    if aux >= 7 {
-        content::RESOURCE_STAGE_FULL
-    } else if aux >= 4 {
-        content::RESOURCE_STAGE_HALF
-    } else {
-        content::RESOURCE_STAGE_LOW
-    }
-}
-
-impl ClientSide<RefGame> for RefClient {
-    /// Table lookup (`TileTexel::from_tables`) for the base layer; the resource layer adds the
-    /// depletion stage on top (`content.rs`'s own doc comment: a resource id doubles as its own
-    /// "full" stage visual id, so `resource_id + stage` is the whole formula).
-    fn tile_visual(t: Tile) -> TileTexel {
-        let mut texel = TileTexel::from_tables(t);
-        let resource = t.resource();
-        if resource != 0 {
-            texel.resource = resource as u16 + depletion_stage(t.aux()) as u16;
-        }
-        texel
-    }
-}
-
 pub struct RefGame;
 
 impl Game for RefGame {
@@ -189,7 +160,7 @@ impl Game for RefGame {
     type Entity = RefEntity;
     type Player = RefPlayer;
     type Global = RefGlobal;
-    type Presence = ();
+    type Presence = PlayerPresence;
     type Ui = RefUi;
     type Client = RefClient;
 
