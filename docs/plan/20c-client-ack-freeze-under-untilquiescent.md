@@ -1,6 +1,6 @@
 # M20c: the client worker stops acking under `stepTick` on a connected manual-clock page
 
-Status: pending · After: 20b · Tyler-dependent: no
+Status: done · After: 20b · Tyler-dependent: no
 
 Written by the orchestrator at M20b's gate, from a deterministic reproduction that M20b worked
 around in its zero-GC page.
@@ -76,14 +76,14 @@ check if the cause is upload backpressure). 4. Remove the workaround. 5. Ledger.
 The regression test from step 3; the hidden-tab browser test if step 3 calls for it.
 
 ## Exit criteria
-- [ ] The cause is named from a stack or counter reading, and fixed with a test that fails without
+- [x] The cause is named from a stack or counter reading, and fixed with a test that fails without
       the fix (red output pasted).
-- [ ] Whether a production client worker can reach the frozen-ack state is answered in writing,
+- [x] Whether a production client worker can reach the frozen-ack state is answered in writing,
       with a test if the answer is yes.
-- [ ] `games/reference/src/gc-entry.ts` no longer needs the workaround, or Deviations say why it
+- [x] `games/reference/src/gc-entry.ts` no longer needs the workaround, or Deviations say why it
       still does; `budgets.json` unchanged.
-- [ ] The `parkWorkers` watch item's ledger row says whether this explains it.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] The `parkWorkers` watch item's ledger row says whether this explains it.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test browser -t <pattern>` · `node scripts/repeat.mjs browser <n> [--load 10]` (foreground,
@@ -223,3 +223,7 @@ notes). No background processes left running.
 **Not fixed here, out of scope:** the `stepping` hash watch item (M18c) and the M06b sibling-isolate
 theory (`deferred-ledger.md`'s own open row) -- neither named by this brief's evidence and neither
 touched.
+
+### Orchestrator gate notes
+
+Re-ran the failing-first test against the reverted fix: with `sabs.uploadRing` restored to `ringSabs()`, `upload_quiescence: stepTick resolves without draining uploadRing` fails with `untilQuiescent: timed out after 10000 ms` (client `W_WAKE` 29 / `W_ACK` 1); removed again, it passes. `repeat.mjs browser` 15 quiet (slowest 28 s) and 15 under `--load 10` (slowest 39 s, a WARN) all passed. The orchestrator's brief framed this as "the client stops acking"; the measurement showed the client was never stuck (`W_ACK` equalled `CB_FRAME_REQ`): the harness's own wait included a ring only the page drains.
