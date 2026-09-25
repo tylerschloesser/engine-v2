@@ -9,6 +9,15 @@
 //! lists), with no second `tick` field to write (docs/plan/22-persistence-log-and-snapshots.md
 //! Deviations has the reasoning).
 //!
+//! **Fix round 2 adds a `log_ref_tick` u32 right after `log_offset`**: the tick of the most
+//! recently logged frame in this segment as of that log position (`0` = none yet, equivalent to
+//! genesis -- [`SnapshotWriter::begin`]'s own doc comment). Needed because a periodic snapshot can
+//! be taken well after the last real frame (an idle world, `sim_dirty()` still set from an old
+//! event); without it, `testing::replay`'s own `Base::Snapshot` path has no way to correctly
+//! interpret the *next* frame's `tick_delta`, which is always relative to that reference tick, not
+//! to the snapshot's own tick. `container_version` stays `1` (an ADR amendment covers this and the
+//! other two additions here together, docs/plan/22-persistence-log-and-snapshots.md Deviations).
+//!
 //! **A `total_len` varint, not named by 0005, is added right after `container_version`**: it is
 //! the byte length of everything from `identity` through the trailing `crc32`, inclusive. Without
 //! it, [`SnapshotReader`] (which -- like [`crate::persist::FrameReader`] -- must accept bytes in
@@ -64,12 +73,22 @@ pub struct SnapshotWriter {
 }
 
 impl SnapshotWriter {
+    /// `log_ref_tick` (fix round 2, docs/plan/22-persistence-log-and-snapshots.md): the tick of the
+    /// most recently *logged* frame in this segment as of `log_segment`/`log_offset` (`Host::
+    /// last_logged_tick`'s own value, unchanged by taking a snapshot -- see `Host::
+    /// sim_snapshot_begin`'s doc comment for why resetting it there was tried and reverted).
+    /// Sentinel `0` means "no frame has been logged in this segment yet", equivalent to a genesis
+    /// reference: a real frame's tick is never `0` (`Host::sim_seal_frame` always seals for
+    /// `sim.tick() + 1`, and `sim.tick()` starts at `0`), so `0` is unambiguous. Read back by
+    /// [`SnapshotReader`] into [`SnapshotInfo::log_ref_tick`] and consumed by `testing::replay`'s
+    /// own `Base::Snapshot` path to seed its `tick_delta` reference correctly.
     pub fn begin<G: Game>(
         store: &Store<G>,
         tick: Tick,
         rng: &SimRng,
         log_segment: u32,
         log_offset: u32,
+        log_ref_tick: u32,
         identity: &Identity,
     ) -> Self {
         // Orchestrator ruling (docs/plan/22-persistence-log-and-snapshots.md, second-half
@@ -83,6 +102,7 @@ impl SnapshotWriter {
         count.put_u32(tick.0);
         count.put_u32(log_segment);
         count.put_u32(log_offset);
+        count.put_u32(log_ref_tick);
         write_sized(rng, &mut count);
         store.encode(&mut count);
         count.put_u64(0); // state_hash: always exactly 8 bytes, whatever the real value is.
@@ -95,6 +115,7 @@ impl SnapshotWriter {
             sink.put_u32(tick.0);
             sink.put_u32(log_segment);
             sink.put_u32(log_offset);
+            sink.put_u32(log_ref_tick);
             write_sized(rng, &mut sink);
             store.encode(&mut sink);
             sink.put_u64(store.state_hash());
@@ -159,6 +180,9 @@ pub struct SnapshotInfo {
     pub tick: Tick,
     pub log_segment: u32,
     pub log_offset: u32,
+    /// Fix round 2 (docs/plan/22-persistence-log-and-snapshots.md): see [`SnapshotWriter::begin`]'s
+    /// own doc comment for the sentinel (`0` = no frame logged yet in this segment).
+    pub log_ref_tick: u32,
     pub rng: SimRng,
     pub state_hash: u64,
 }
@@ -227,6 +251,7 @@ impl<G: Game> SnapshotReader<G> {
         let tick = Tick(reader.u32().map_err(|_| PersistError::Malformed)?);
         let log_segment = reader.u32().map_err(|_| PersistError::Malformed)?;
         let log_offset = reader.u32().map_err(|_| PersistError::Malformed)?;
+        let log_ref_tick = reader.u32().map_err(|_| PersistError::Malformed)?;
         let rng: SimRng = read_sized(&mut reader)?;
         self.store
             .decode(&mut reader)
@@ -237,6 +262,7 @@ impl<G: Game> SnapshotReader<G> {
             tick,
             log_segment,
             log_offset,
+            log_ref_tick,
             rng,
             state_hash,
         }))
@@ -384,8 +410,15 @@ mod tests {
     fn persist_snapshot_golden_bytes() {
         let store = store_with(2, 1, CacheCapacity::Chunks(4));
         let rng = SimRng::new(7);
-        let mut w =
-            SnapshotWriter::begin(&store, Tick(100), &rng, 3, 456, &identity_for::<TGame>());
+        let mut w = SnapshotWriter::begin(
+            &store,
+            Tick(100),
+            &rng,
+            3,
+            456,
+            77,
+            &identity_for::<TGame>(),
+        );
         let bytes = drain(&mut w);
         crate::assert_golden_bytes!("persist_snapshot_golden_bytes", &bytes);
     }
@@ -395,7 +428,8 @@ mod tests {
         let store = store_with(5, 2, CacheCapacity::Chunks(4));
         let rng = SimRng::new(123);
         let want_hash = store.state_hash();
-        let mut w = SnapshotWriter::begin(&store, Tick(42), &rng, 1, 99, &identity_for::<TGame>());
+        let mut w =
+            SnapshotWriter::begin(&store, Tick(42), &rng, 1, 99, 17, &identity_for::<TGame>());
         let bytes = drain(&mut w);
 
         // Arbitrary, deterministic block splits (a fixed pattern, not a real RNG dependency): 1,
@@ -418,6 +452,7 @@ mod tests {
         assert_eq!(info.tick, Tick(42));
         assert_eq!(info.log_segment, 1);
         assert_eq!(info.log_offset, 99);
+        assert_eq!(info.log_ref_tick, 17);
         assert_eq!(info.rng, rng);
         assert_eq!(info.state_hash, want_hash);
         let decoded = reader.into_store();
@@ -514,8 +549,15 @@ mod tests {
         let store = sim.authority().store();
         let rng = sim.authority().rng();
         let want_hash = store.state_hash();
-        let mut w =
-            SnapshotWriter::begin(store, sim.tick(), &rng, 0, 0, &identity_for::<TimerGame>());
+        let mut w = SnapshotWriter::begin(
+            store,
+            sim.tick(),
+            &rng,
+            0,
+            0,
+            0,
+            &identity_for::<TimerGame>(),
+        );
         let bytes = drain(&mut w);
 
         let shell_terrain = crate::world::TerrainStore::new(
@@ -553,8 +595,8 @@ mod tests {
             let _ = b.terrain().tile(TilePos::new(i * 20, 0));
         }
         let rng = SimRng::new(5);
-        let mut wa = SnapshotWriter::begin(&a, Tick(1), &rng, 0, 0, &identity_for::<TGame>());
-        let mut wb = SnapshotWriter::begin(&b, Tick(1), &rng, 0, 0, &identity_for::<TGame>());
+        let mut wa = SnapshotWriter::begin(&a, Tick(1), &rng, 0, 0, 0, &identity_for::<TGame>());
+        let mut wb = SnapshotWriter::begin(&b, Tick(1), &rng, 0, 0, 0, &identity_for::<TGame>());
         let bytes_a = drain(&mut wa);
         let bytes_b = drain(&mut wb);
         assert_eq!(

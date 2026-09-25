@@ -33,6 +33,11 @@ pub struct SnapshotBase<G: Game> {
     pub store: Store<G>,
     pub tick: Tick,
     pub rng: SimRng,
+    /// Fix round 2 (docs/plan/22-persistence-log-and-snapshots.md): `persist::SnapshotInfo::
+    /// log_ref_tick`, verbatim -- [`replay`] seeds its own `tick_delta` reference from this instead
+    /// of assuming the log's first tail frame is relative to `tick` (true only when the snapshot
+    /// coincided with the last logged frame, false after any idle gap before it).
+    pub log_ref_tick: u32,
 }
 
 fn to_record<G: Game>(r: &FrameRecord<G>) -> Option<Record<G>>
@@ -77,9 +82,19 @@ where
     G::Global: Default,
     G::Action: Clone,
 {
-    let mut sim = match base {
-        Base::Genesis(params) => Sim::genesis(params),
-        Base::Snapshot(b) => Sim::from_parts(Authority::from_snapshot(b.store, b.rng, b.tick)),
+    // Fix round 2 (docs/plan/22-persistence-log-and-snapshots.md): `reference_tick` is the tick
+    // `frame.tick_delta` is relative to for the *next* frame decoded -- `0` from genesis (no frame
+    // logged before tick 0, matching `Host::sim_seal_frame`'s own convention), or the snapshot's
+    // own `log_ref_tick` when resuming mid-log. `sim.tick()` alone is *not* a safe stand-in for it:
+    // a snapshot taken after an idle gap (nothing logged since well before it) starts `sim.tick()`
+    // ahead of the true reference, and naively treating them as equal (this function's own
+    // behavior before this fix) misplaces every frame after the gap by exactly its length.
+    let (mut sim, mut reference_tick) = match base {
+        Base::Genesis(params) => (Sim::genesis(params), 0u32),
+        Base::Snapshot(b) => (
+            Sim::from_parts(Authority::from_snapshot(b.store, b.rng, b.tick)),
+            b.log_ref_tick,
+        ),
     };
     let mut out: Vec<Outcome<G>> = Vec::new();
     let mut reader: FrameReader<G> = FrameReader::new();
@@ -96,13 +111,16 @@ where
             FrameProgress::NeedMore => break,
             FrameProgress::Frame(f) => f,
         };
-        for _ in 0..frame.tick_delta.saturating_sub(1) {
+        let frame_tick = reference_tick.wrapping_add(frame.tick_delta);
+        let idle_ticks = frame_tick.saturating_sub(1).saturating_sub(sim.tick().0);
+        for _ in 0..idle_ticks {
             sim.step(&[], &mut out);
             record_checkpoints(&sim, checkpoints, &mut ci, &mut result);
         }
         let records: Vec<Record<G>> = frame.records.iter().filter_map(to_record).collect();
         sim.step(&records, &mut out);
         record_checkpoints(&sim, checkpoints, &mut ci, &mut result);
+        reference_tick = frame_tick;
     }
     result
 }
@@ -169,7 +187,15 @@ where
     *since = 0;
     let identity = placeholder_identity::<G>();
     let rng = sim.authority().rng();
-    let mut w = SnapshotWriter::begin(sim.authority().store(), sim.tick(), &rng, 0, 0, &identity);
+    let mut w = SnapshotWriter::begin(
+        sim.authority().store(),
+        sim.tick(),
+        &rng,
+        0,
+        0,
+        0,
+        &identity,
+    );
     let mut bytes = vec![0u8; w.total_len()];
     let n = w.next(&mut bytes);
     debug_assert_eq!(n, bytes.len(), "one block drains a freshly-begun writer");
@@ -489,8 +515,15 @@ mod tests {
 
         let rng = sim.authority().rng();
         let identity = placeholder_identity::<TGame>();
-        let mut w =
-            SnapshotWriter::begin(sim.authority().store(), sim.tick(), &rng, 0, 0, &identity);
+        let mut w = SnapshotWriter::begin(
+            sim.authority().store(),
+            sim.tick(),
+            &rng,
+            0,
+            0,
+            sim.tick().0,
+            &identity,
+        );
         let mut bytes = vec![0u8; w.total_len()];
         let n = w.next(&mut bytes);
         assert_eq!(n, bytes.len());
@@ -503,6 +536,7 @@ mod tests {
         };
         let store = reader.into_store();
         assert_eq!(info.tick, Tick(2));
+        assert_eq!(info.log_ref_tick, 2, "no idle gap before this snapshot");
 
         // The tail: everything `build_log_and_live_hash` logs from tick 2 on (its own third and
         // fourth frames, unchanged) -- the snapshot already carries ticks 1-2, so replaying the
@@ -521,6 +555,7 @@ mod tests {
                 store,
                 tick: info.tick,
                 rng: info.rng,
+                log_ref_tick: info.log_ref_tick,
             })),
             &tail,
             &[Tick(5)],

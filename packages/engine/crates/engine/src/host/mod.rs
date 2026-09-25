@@ -1500,9 +1500,29 @@ where
         };
         let mut sink = crate::bytes::SliceSink::new(persist);
         header.write(&mut sink);
-        sink.finish()
+        let result = sink
+            .finish()
             .map(|n| n as u32)
-            .map_err(|_| Status::BadLength)
+            .map_err(|_| Status::BadLength);
+        if result.is_ok() {
+            // Fix round 2 (docs/plan/22-persistence-log-and-snapshots.md): unlike a periodic
+            // snapshot mid-segment (`sim_snapshot_begin`, which deliberately leaves this alone --
+            // see its own doc comment), opening a segment *is* the tick_delta reference reset for
+            // that segment's own first frame: nothing preceded it in this segment, by definition, so
+            // there is no genesis-replay-of-this-same-log invariant to break the way there was for a
+            // mid-segment snapshot (0002 "replay equality" only ever replays one segment's own log
+            // against its own base -- 0005 "old segments stay replayable only by rebuilding the
+            // binary their header names", i.e. cross-segment replay was never a single continuous
+            // stream to begin with). M22b's own segment rolling (Non-scope here) will call this
+            // export to open every segment after the first, so this reset has to live here now to
+            // avoid reintroducing fix round 1's own bug for segment 1 onward.
+            self.last_logged_tick = if base_tick == GENESIS_BASE_TICK {
+                Tick(0)
+            } else {
+                Tick(base_tick)
+            };
+        }
+        result
     }
 
     /// docs/plan/22-persistence-log-and-snapshots.md steps 4-6: starts a streaming snapshot of the
@@ -1510,6 +1530,12 @@ where
     /// position"). Resets [`Authority::dirty`] once the writer holds a self-consistent copy of the
     /// state it describes -- everything after this call, until the *next* put or logged record,
     /// happened after the snapshot this method just began.
+    ///
+    /// Fix round 2: passes `self.last_logged_tick` (unchanged by this call, deliberately -- see the
+    /// fix-round-1 attempt this replaces) as the snapshot's own `log_ref_tick`, so `testing::
+    /// replay`'s `Base::Snapshot` path can correctly interpret the *next* frame's `tick_delta` even
+    /// when this snapshot was taken well after the last real frame (an idle world, `sim_dirty()`
+    /// still set from an old event -- a real, common case since fix round 1's own gap 2 fix).
     fn sim_snapshot_begin(&mut self, log_segment: u32, log_offset: u32) -> Status {
         let Some(sim) = self.sim.as_ref() else {
             return Status::NotInitialised;
@@ -1523,6 +1549,7 @@ where
             &rng,
             log_segment,
             log_offset,
+            self.last_logged_tick.0,
             &identity,
         ));
         if let Some(sim) = self.sim.as_mut() {

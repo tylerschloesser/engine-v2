@@ -517,24 +517,16 @@ final anchoring action. Checks `testing::replay` from genesis, `testing::replay`
 snapshot, and `testing::heavy(N=25)` all reproduce the live run's own checkpoint hashes exactly --
 all three pass.
 
-**A real architectural gap found, not fixed (escalated instead of patched under time pressure):**
-the snapshot in this test is deliberately taken *immediately* after a logged frame, not after a
-run of idle ticks. Taking it after an idle gap (e.g. snapshot at tick 10, last real frame at tick
-2) breaks `testing::replay`-from-that-snapshot: the *next* real frame's `tick_delta` is computed by
-`Host::sim_seal_frame` relative to `last_logged_tick` (tick 2), which is unknown to anyone resuming
-from the snapshot at tick 10 (0005 Formats' own snapshot grammar carries only `identity`, `tick`
-and `log position`, not this reference tick) -- resuming replay misplaces that frame by exactly the
-length of the idle gap before the snapshot. Tried the obvious fix (reset `last_logged_tick` to the
-snapshot's own tick in `sim_snapshot_begin`): it broke `replay_from_genesis_checkpoints` and this
-same test's own from-genesis leg, because a **full-log genesis replay has no way to know a snapshot
-ever happened partway through** (nothing is recorded in the log itself), so it cannot apply the same
-reset -- and 0002 "Replay equality"/"Cross-engine golden hashes" require genesis replay of the *same*
-log to always reproduce the live hash regardless of any snapshot cadence. Reverted. This is a real
-production scenario (Persistence's own 1,200-tick dirty check can fire long after the last real
-frame, once fix round 1's own gap 2 makes a stale-but-still-set dirty flag common), not a contrived
-one, and needs either a format addition (an ADR amendment, risking the accepted `persist_snapshot_
-golden_bytes` golden) or a different recovery algorithm (M22b's own "loading a stored world" is the
-natural owner) -- flagged for the orchestrator, not decided here.
+**A real architectural gap was found here, escalated, and fixed in fix round 2 (below):** the
+snapshot in this test was deliberately taken *immediately* after a logged frame, not after a run of
+idle ticks, because taking it after an idle gap (e.g. snapshot at tick 10, last real frame at tick
+2) broke `testing::replay`-from-that-snapshot at the time -- the *next* real frame's `tick_delta` is
+computed by `Host::sim_seal_frame` relative to `last_logged_tick` (tick 2), which was unknown to
+anyone resuming from the snapshot at tick 10. Tried resetting `last_logged_tick` to the snapshot's
+own tick in `sim_snapshot_begin` first: it broke `replay_from_genesis_checkpoints` and this same
+test's own from-genesis leg, because a full-log genesis replay has no way to know a snapshot ever
+happened partway through. Reverted that attempt; fix round 2's own `log_ref_tick` field is the real
+fix (below), and `replay_from_snapshot_after_idle_gap_matches_live` now covers exactly this shape.
 
 Anti-vacuity: disabled `to_record`'s own `FrameRecord::Connection -> Record::Player` mapping
 (treated it as a no-op, like `Skip`) -> `assertion left == right failed` (`replay from genesis must
@@ -557,3 +549,72 @@ failed` (`left: 0, right: 1`, the reconnect-only case). Reverted, green.
 `cargo nextest run --workspace --features engine/testing,testing`: 514 tests, 514 passed, 2 skipped
 (unchanged). `pnpm test`: `rust pass 514 tests`, `unit pass 233 tests`, `wasm pass 72 tests`,
 `browser pass 185 tests`. `pnpm lint`: biome/rustfmt/clippy/tsc all green. No existing golden moved.
+
+## Fix round 2
+
+Closes the architectural gap fix round 1 escalated: resuming `testing::replay` from a snapshot
+taken after an idle gap.
+
+### The fix: `log_ref_tick` in the snapshot container
+
+`persist::SnapshotWriter::begin` gains a `log_ref_tick: u32` parameter, written right after
+`log_offset` (both in the payload and in the `CountSink` counting pass); `SnapshotReader`/
+`SnapshotInfo` gain the matching decode field. Sentinel: `0` means "no frame has been logged in
+this segment yet" (equivalent to a genesis reference) -- unambiguous, since `Host::sim_seal_frame`
+never seals a frame for tick `0` (the first possible frame is for tick `1`). `container_version`
+stays `1` (nothing has shipped); this is the third format addition alongside `total_len` and the
+frame's own length-prefixed action payload (steps 1-3's Deviations) -- the coordinator is writing
+one ADR 0005 amendment covering all three, not built here. `src/persist/CLAUDE.md` names no
+individual fields (it points at 0005 Formats as the owner), so it needed no edit.
+
+`Host::sim_snapshot_begin` passes `self.last_logged_tick.0` (left **unchanged** by taking the
+snapshot -- the fix-round-1 attempt this replaces tried mutating it and broke genesis replay of the
+same log; see the reasoning restored in Gap 1, above). `testing::replay`'s own `Base::Snapshot` path
+now seeds a `reference_tick` from `SnapshotBase::log_ref_tick` (`0` for `Base::Genesis`) instead of
+assuming `sim.tick()` at start always equals the log's own delta reference, and computes each
+frame's absolute tick as `reference_tick + tick_delta`, idling from `sim.tick()` up to one before
+it -- for genesis replay `sim.tick() == reference_tick` always, so this is exactly the old
+`tick_delta.saturating_sub(1)` behavior; only the snapshot-with-a-gap case differs, which is the
+point. `testing::heavy`'s own internal restore-and-continue (`maybe_snapshot`) needed no change: it
+never re-derives tick_delta from a log tail at all (its outer loop reads the real log once,
+continuously, and only swaps `sim_b`'s *state*), so it passes `0` for `log_ref_tick` as an unread
+placeholder.
+
+**Segment header's `base_tick` has the analogous-looking but not identical problem, fixed the same
+way, preemptively.** `sim_segment_header` now also resets `self.last_logged_tick` (to `Tick(0)` for
+`GENESIS_BASE_TICK`, or `Tick(base_tick)` otherwise) whenever it succeeds. Unlike the snapshot case,
+this reset does **not** reintroduce fix round 1's own bug: opening a segment is *itself* the correct
+tick_delta reference reset for that segment's first frame (nothing precedes it in that segment, by
+definition), and 0002 "replay equality"/"cross-engine golden hashes" only ever replay one segment's
+own log against its own base (0005: "old segments stay replayable only by rebuilding the binary
+their header names" -- cross-segment replay was never one continuous stream). This milestone's own
+`Persistence.create` calls `sim_segment_header` exactly once, for segment 0, before any frame is
+ever logged (`last_logged_tick` is already `Tick(0)` at that point) -- a no-op today, but M22b's own
+segment rolling will call this export again to open segment 1 onward, and would otherwise inherit
+the identical bug for each new segment's first frame.
+
+### Tests
+
+`replay_from_snapshot_after_idle_gap_matches_live` (new, `fixtures/persist/tests/
+replay_real_host_log.rs`, sharing the existing test's script via a new `run_script`/`check` split):
+identical script, but 8 idle ticks (tick 2 -> tick 10) precede the snapshot instead of 0. Passes
+with the fix; with `log_ref_tick` seeded from `info.tick.0` instead of `info.log_ref_tick` (as if
+the field did not exist), fails:
+
+```
+assertion `left == right` failed: replay from the mid-run snapshot must match the live tail
+  left: [(Tick(30), 389520028661840756), (Tick(31), 389520028661840756), (Tick(60), 3586399577821007430)]
+ right: [(Tick(30), 389520028661840756), (Tick(31), 5324014682923496518), (Tick(60), 8680060105247801486)]
+```
+
+-- the exact reproduction of the bug originally found (Gap 1, above). Reverted, green.
+`persist_snapshot_golden_bytes` (`crates/engine/src/persist/snapshot.rs`) is this milestone's own
+golden: re-blessed by `GOLDEN_BLESS=1 cargo nextest run -p engine --features testing -E
+'test(persist_snapshot_golden_bytes)'`, reviewed (the only change is the new `log_ref_tick` field's
+4 bytes and the recomputed `total_len`/crc32). No other existing golden moved.
+
+### Measured (fix round 2)
+
+`cargo nextest run --workspace --features engine/testing,testing`: 515 tests, 515 passed, 2 skipped.
+`pnpm test`: `rust pass 515 tests`, `unit pass 233 tests`, `wasm pass 72 tests`, `browser pass 185
+tests`. `pnpm lint`: biome/rustfmt/clippy/tsc all green.
