@@ -189,6 +189,10 @@ impl TerrainStore {
         let old = overlay.write(index, pristine, new);
         let delta = overlay.len() as i64 - before as i64;
         self.modified_tiles = (self.modified_tiles as i64 + delta) as u32;
+        // `get_or_create` above always inserts a chunk entry, even one this write leaves (or
+        // finds) empty: prune it so an empty `ChunkOverlay` never lingers as a write-history
+        // artifact (`Overlays::prune_if_empty`'s own doc comment has the bug this fixes).
+        self.overlays.prune_if_empty(chunk);
 
         let mut cache = self.cache.borrow_mut();
         let slot = cache.slot_of(chunk.key()).expect("just materialized");

@@ -197,6 +197,25 @@ impl Overlays {
         self.0.entry(chunk.key()).or_default()
     }
 
+    /// Removes `chunk`'s entry if it is present and empty (M22's own bug fix, docs/plan/
+    /// 22-persistence-log-and-snapshots.md Deviations): [`Overlays::get_or_create`] always inserts
+    /// a default (empty) `ChunkOverlay` before its caller writes into it, so a write that reverts
+    /// the chunk's last live entry back to pristine (`ChunkOverlay::write`'s own `new == pristine`
+    /// branch), or that was already a no-op on a chunk touched for the first time, otherwise leaves
+    /// a *present but empty* entry lingering in this map forever -- silently violating this
+    /// module's own "an overlay never holds an entry equal to pristine" rule one level up, at the
+    /// chunk-count level: `write_canonical`'s chunk count (and therefore its bytes and the state
+    /// hash) would depend on write *history* ("was this chunk ever touched"), not on the current
+    /// effective state, and a decode of those bytes (`Overlays::load_chunk`, which already treats
+    /// an empty `entries` slice as "no chunk here", asymmetrically) would not reproduce them --
+    /// `TerrainStore::set_tile` calls this right after every write so the invariant holds
+    /// unconditionally, not only for the canonical-overlay-encoding callers that happen to notice.
+    pub(crate) fn prune_if_empty(&mut self, chunk: ChunkCoord) {
+        if self.0.get(&chunk.key()).is_some_and(ChunkOverlay::is_empty) {
+            self.0.remove(&chunk.key());
+        }
+    }
+
     pub(crate) fn clear_chunk(&mut self, chunk: ChunkCoord) {
         self.0.remove(&chunk.key());
     }

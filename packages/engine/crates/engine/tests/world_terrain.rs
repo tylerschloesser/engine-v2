@@ -216,6 +216,53 @@ fn set_tile_reports_change_and_count() {
     assert_eq!(s.modified_tiles(), 0);
 }
 
+/// M22's own bug fix (docs/plan/22-persistence-log-and-snapshots.md Deviations): `set_tile`
+/// reverting a tile all the way back to its pristine value (`TileChange::Changed`, `modified_tiles`
+/// back to 0, `set_tile_reports_change_and_count` above already covers that much) used to leave a
+/// *present but empty* `ChunkOverlay` registered for that chunk forever (`Overlays::get_or_create`
+/// always inserts one before the write runs) -- invisible to `modified_tiles()` or a `tile()` read,
+/// but not to `write_canonical`, whose chunk count walks every registered chunk regardless of
+/// whether it holds any entries. A store that touched-then-reverted a tile therefore serialized
+/// differently (and hashed differently) than an untouched store with the exact same effective
+/// state, and `write_canonical(store)` followed by `read_canonical` into a fresh store did not
+/// reproduce the original bytes (the round trip silently dropped the phantom empty chunk, since
+/// `read_canonical`/`Overlays::load_chunk` already treats an empty entry list as "no chunk here").
+#[test]
+fn reverting_a_tile_to_pristine_leaves_no_phantom_chunk_entry() {
+    let pos = TilePos::new(11, -3);
+
+    let mut touched = store(CacheCapacity::Chunks(4));
+    let pristine = touched.tile(pos);
+    touched.set_tile(pos, Tile::new(200, 0, 0)).unwrap();
+    assert_eq!(touched.modified_tiles(), 1);
+    assert_eq!(
+        touched.set_tile(pos, pristine).unwrap(),
+        TileChange::Changed {
+            old: Tile::new(200, 0, 0)
+        }
+    );
+    assert_eq!(touched.modified_tiles(), 0);
+
+    let untouched = store(CacheCapacity::Chunks(4));
+
+    let mut buf_touched = Vec::new();
+    let mut buf_untouched = Vec::new();
+    touched.write_canonical(&mut VecSink(&mut buf_touched));
+    untouched.write_canonical(&mut VecSink(&mut buf_untouched));
+    assert_eq!(
+        buf_touched, buf_untouched,
+        "a chunk touched and then fully reverted must serialize exactly like a never-touched one"
+    );
+
+    // The round trip must therefore reproduce the same bytes, not silently drop a phantom chunk.
+    let mut restored = store(CacheCapacity::Chunks(4));
+    let mut reader = ByteReader::new(&buf_touched);
+    restored.read_canonical(&mut reader).unwrap();
+    let mut buf_restored = Vec::new();
+    restored.write_canonical(&mut VecSink(&mut buf_restored));
+    assert_eq!(buf_touched, buf_restored);
+}
+
 #[test]
 fn copy_chunk_matches_individual_reads() {
     let dims = ChunkDims::new(5);
