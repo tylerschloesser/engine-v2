@@ -440,6 +440,94 @@ mod tests {
         assert_eq!(result, vec![(Tick(5), final_hash)]);
     }
 
+    /// Fix round 3 (docs/plan/22-persistence-log-and-snapshots.md): the previous claim that this
+    /// was "covered transitively" by the other replay tests was false -- none of them ever put a
+    /// `RecordKind::Skip` into a log `replay` actually decodes, so `to_record`'s own `FrameRecord::
+    /// Skip { .. } => None` arm was untested (a review agent replaced it with `panic!()` and the
+    /// whole workspace still passed). Builds two logs with *identical* tick alignment (same number
+    /// of frames, same `tick_delta` each) differing only in whether `Skip` records are present:
+    /// `with_skip` has one `Skip` sharing a frame with a real action (tick 2) and one `Skip` alone
+    /// in its own otherwise-empty frame (tick 3); `without_skip` is the same four frames with every
+    /// `Skip` simply omitted (tick 3's frame logs zero records instead of one `Skip`). Both must
+    /// replay to the exact same checkpoint hashes as a live run of the three real `Bump`s, proving
+    /// `Skip` really does decode as a no-op inside `replay`, not just inside `FrameReader` alone.
+    #[test]
+    fn replay_skip_records_decode_as_noop() {
+        let mut sim = Sim::<TGame>::genesis(params());
+        let mut out = Vec::new();
+        let mut live_checkpoints = Vec::new();
+        for seq in [1u32, 2] {
+            sim.step(
+                &[Record::Action {
+                    who: PlayerId(1),
+                    seq,
+                    action: TAction::Bump,
+                }],
+                &mut out,
+            );
+            live_checkpoints.push((sim.tick(), sim.state_hash()));
+        }
+        // Tick 3: idle in the live run -- both logs' own tick-3 frame carries no real record
+        // either (`with_skip`'s is `Skip`-only, `without_skip`'s is empty), so all three agree here.
+        sim.step(&[], &mut out);
+        live_checkpoints.push((sim.tick(), sim.state_hash()));
+        sim.step(
+            &[Record::Action {
+                who: PlayerId(1),
+                seq: 3,
+                action: TAction::Bump,
+            }],
+            &mut out,
+        );
+        live_checkpoints.push((sim.tick(), sim.state_hash()));
+        let checkpoints: Vec<Tick> = live_checkpoints.iter().map(|(t, _)| *t).collect();
+
+        let mut with_skip = Vec::new();
+        let mut w = FrameWriter::<TGame>::new();
+        w.push_action(PlayerId(1), 1, TAction::Bump);
+        w.finish(1, &mut V(&mut with_skip));
+        let mut w = FrameWriter::<TGame>::new();
+        w.push_skip(9, 999);
+        w.push_action(PlayerId(1), 2, TAction::Bump);
+        w.finish(1, &mut V(&mut with_skip));
+        let mut w = FrameWriter::<TGame>::new();
+        w.push_skip(3, 42);
+        w.finish(1, &mut V(&mut with_skip));
+        let mut w = FrameWriter::<TGame>::new();
+        w.push_action(PlayerId(1), 3, TAction::Bump);
+        w.finish(1, &mut V(&mut with_skip));
+
+        // The identical log with the `Skip` records removed: same four frames, same `tick_delta`
+        // each, tick 3's frame just logs zero records instead of a lone `Skip`.
+        let mut without_skip = Vec::new();
+        let mut w = FrameWriter::<TGame>::new();
+        w.push_action(PlayerId(1), 1, TAction::Bump);
+        w.finish(1, &mut V(&mut without_skip));
+        let mut w = FrameWriter::<TGame>::new();
+        w.push_action(PlayerId(1), 2, TAction::Bump);
+        w.finish(1, &mut V(&mut without_skip));
+        let w = FrameWriter::<TGame>::new();
+        w.finish(1, &mut V(&mut without_skip));
+        let mut w = FrameWriter::<TGame>::new();
+        w.push_action(PlayerId(1), 3, TAction::Bump);
+        w.finish(1, &mut V(&mut without_skip));
+
+        let result_with_skip = replay(Base::Genesis(params()), &with_skip, &checkpoints);
+        let result_without_skip = replay(Base::Genesis(params()), &without_skip, &checkpoints);
+        assert_eq!(
+            result_with_skip, live_checkpoints,
+            "a log containing Skip records must replay identically to the skip-free live run"
+        );
+        assert_eq!(
+            result_without_skip, live_checkpoints,
+            "sanity: the skip-free log must itself match the live run"
+        );
+        assert_eq!(
+            result_with_skip, result_without_skip,
+            "Skip records must be true no-ops: identical checkpoints with or without them"
+        );
+    }
+
     #[test]
     fn replay_rebuilds_last_seq() {
         let (log, _, _) = build_log_and_live_hash();

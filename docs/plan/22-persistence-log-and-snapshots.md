@@ -257,11 +257,17 @@ full suite run, not assumed).
   boundaries (`tests/support/mod.rs`), re-blessed the golden; re-ran the same RNG-drop injection ->
   both `heavy_mode_fixture_n25` (`FirstDivergence { tick: Tick(79) }`) and `slow_heavy_mode_fixture_
   n1` (`Tick(8)`) now fail. Reverted, green.
-- `skip_kind_decodes_as_noop`, `persist_frame_golden_bytes`, `persist_snapshot_golden_bytes`,
-  `replay_rebuilds_last_seq`, `replay_from_genesis_checkpoints`: not independently anti-vacuity-
-  tested beyond the above (golden tests fail on any byte drift by construction; `replay_rebuilds_
-  last_seq` and `_from_genesis_checkpoints` are covered transitively by the same injections above,
-  since they replay the identical script).
+- `persist_frame_golden_bytes`, `persist_snapshot_golden_bytes`, `replay_rebuilds_last_seq`,
+  `replay_from_genesis_checkpoints`: not independently anti-vacuity-tested beyond the above (golden
+  tests fail on any byte drift by construction; `replay_rebuilds_last_seq` and `_from_genesis_
+  checkpoints` are covered transitively by the same injections above, since they replay the
+  identical script). **Correction (fix round 3): the sentence that used to stand here also claimed
+  `skip_kind_decodes_as_noop` was covered transitively -- false. That test only round-trips a
+  `Skip` record's fields through `FrameWriter`/`FrameReader`, never through a log `testing::replay`
+  actually decodes, so `to_record`'s own `FrameRecord::Skip { .. } => None` arm was untested by
+  anything in this milestone until `replay_skip_records_decode_as_noop` (fix round 3, below) --
+  found by a review agent replacing that arm with `panic!()` and the whole workspace still
+  passing.**
 
 ### Measured
 
@@ -618,3 +624,35 @@ golden: re-blessed by `GOLDEN_BLESS=1 cargo nextest run -p engine --features tes
 `cargo nextest run --workspace --features engine/testing,testing`: 515 tests, 515 passed, 2 skipped.
 `pnpm test`: `rust pass 515 tests`, `unit pass 233 tests`, `wasm pass 72 tests`, `browser pass 185
 tests`. `pnpm lint`: biome/rustfmt/clippy/tsc all green.
+
+## Fix round 3
+
+`skip_kind_decodes_as_noop` (`crates/engine/src/persist/frame.rs`) only round-trips one `Skip`
+record's fields through `FrameWriter`/`FrameReader` -- it never builds a log `testing::replay`
+decodes, so `to_record`'s own `FrameRecord::Skip { .. } => None` arm was untested by anything: a
+review agent replaced that arm with `panic!()` and the full workspace (515 tests) still passed.
+
+New `replay_skip_records_decode_as_noop` (`crates/engine/src/testing/replay.rs`'s own test module):
+two hand-built logs, identical tick alignment (four frames, `tick_delta = 1` each), differing only
+in `Skip` records -- `with_skip` has one `Skip` sharing a frame with a real `Bump` (tick 2) and one
+`Skip` alone in its own otherwise-empty frame (tick 3); `without_skip` is the same four frames with
+every `Skip` omitted (tick 3 logs zero records instead). Both replay to the exact same checkpoint
+hashes as a live run of the three real `Bump`s (checked three ways: `with_skip` vs live, `without_
+skip` vs live, `with_skip` vs `without_skip`).
+
+Anti-vacuity, both directions the coordinator asked for:
+- `FrameRecord::Skip { .. } => panic!("injected")` ->
+  `thread ... panicked at .../replay.rs:55:37: injected`.
+- `FrameRecord::Skip { .. } => Some(Record::Player { who: PlayerId(1), ev: PlayerEvent::Joined })`
+  (a real record) -> `assertion left == right failed: a log containing Skip records must replay
+  identically to the skip-free live run` (every checkpoint from tick 2 on differed:
+  `left: [..., (Tick(2), 8934090279757670045), ...]  right: [..., (Tick(2), 3358290474670722519), ...]`).
+
+Both reverted; the arm is back to `FrameRecord::Skip { .. } => None`. Deviations' false "covered
+transitively" sentence corrected above.
+
+### Measured (fix round 3)
+
+`cargo nextest run --workspace --features engine/testing,testing`: 516 tests, 516 passed, 2 skipped.
+`pnpm test`: `rust pass 516 tests`, `unit pass 233 tests`, `wasm pass 72 tests`, `browser pass 185
+tests`. `pnpm lint`: biome/rustfmt/clippy/tsc all green. No golden moved.
