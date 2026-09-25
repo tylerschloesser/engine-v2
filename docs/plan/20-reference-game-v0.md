@@ -244,3 +244,152 @@ there's a reason to); collect rules and `RefScenario`; `tile_visual` depletion o
 above); `landmarks.json` + guard test; `reference_depletion_visible` browser test;
 `games/reference/CLAUDE.md`. `durations_at_20_and_30_hz`, `replay_equals_live_hash` and the rest of
 the collect-rule native tests are untouched (not yet written).
+
+---
+
+## Steps 4-6 (second implementer)
+
+Base `5dfbfd3`; `pnpm test && pnpm lint` green there and still green after these steps (`rust 388`,
+`unit 224`, `wasm 57`, `browser 172` fast tier at `26s/35s`; `browser` slow tier `41` tests at
+`31s`; lint's four checks all pass). Commits `a4b04d2`..`a47a06e`.
+
+**Seam shapes (Provides), exact, continuing cut 1's numbering:**
+- `content.rs` additions: `NOT_BUILDABLE = TraitSet(1 << 0)`, `COLLECTABLE = TraitSet(1 << 1)`;
+  `RANGE_Q8: i32 = 3 * 256` (768, three tiles in Q24.8 raw units); `pub const fn collect_ticks(rate:
+  TickRate) -> Ticks { rate.secs(2) }` and `COLLECT: Ticks = collect_ticks(RefGame::TICK_RATE)`
+  (`Ticks(40)` at the crate's own 20 Hz); `pub fn register(r: &mut Registry)` (both waters
+  `NOT_BUILDABLE`, all four resource ids `COLLECTABLE`, no prototypes).
+- `RefAction` (`lib.rs`): `StartCollect { tile: TileXY, from: WorldXY }` / `CancelCollect`, matching
+  0001's own reference-game example field-for-field. `RefReject`: `Unknown | NoResource |
+  OutOfRange | Busy`, in Scope's own validation order (minus `Unknown` = the "tile readable" read
+  failure). `TileXY`/`WorldXY` (`lib.rs`, `#[ts(export)]`): `{ x: i32, y: i32 }`, `.tile()`/
+  `.world()` convert to `engine::world::{TilePos, WorldPos}` -- needed because those engine types
+  derive neither `Serialize` nor `TS` (`fixtures/presence`'s own `TileXY`/`WorldXY` precedent,
+  independently re-derived here since this package cannot import across the package boundary).
+- `RefPlayer { inventory: Inventory, stone_mined: u32, collecting: Option<Collecting> }`.
+  `Inventory { iron, wood, stone, coal: u32 }` with an `add(resource: u8, n: u32)` helper (a no-op
+  for any id outside the four resources, defensive). `Collecting { tile: TileXY, done_at:
+  engine::time::Tick }` (`TileXY`, not `TilePos`, same Codec-derive reason as above).
+- `rules::collect` (`sim/src/rules/collect.rs`, the first file under `rules/`, one per feature):
+  `pub fn in_range(from: WorldPos, tile: TilePos) -> bool` (Provides, exact signature) -- squared
+  distance in `i128` against `RANGE_Q8^2`, never `sqrt` (avoids the NaN-guarding question entirely
+  rather than answering it). `pub fn start(w, who, tile: TilePos, from: WorldPos) -> Result<(),
+  RefReject>` and `pub fn cancel(w, who) -> Result<(), RefReject>` are the two `apply` handlers,
+  called from `lib.rs`'s `RefGame::apply` after converting the wire `TileXY`/`WorldXY` fields with
+  `.tile()`/`.world()`. `pub fn tick(cx: &mut TickCx<'_, RefGame>)` is the whole tick-completion
+  pass, called from `RefGame::tick`.
+- **Depletion completion (`complete_one`, private):** decrements `aux` by exactly 1 per completed
+  collect (Scope: "add one item" -- one unit per one item, ten total collects to fully deplete a
+  tile); at `aux == 0` also clears the resource id in the *same* `set_tile` call ("overlay is
+  canonical": no tile is ever left with a stray non-zero `aux` and no resource). `stone_mined` only
+  bumps when the harvested resource is `content::STONE` (Scope's own wording, "add one item, bump
+  stone_mined", read as two effects of one collect completion rather than an unconditional counter
+  -- `PRE-PLAN.md` §4's "unlock at 5 stone" only makes sense counting stone specifically). Re-reads
+  the tile at completion time rather than trusting what `apply` saw (Planning decisions "Collects
+  are not reservations"): `collect_second_finisher_gets_nothing` is this path's own proof.
+- `ClientSide::tile_visual` (`lib.rs`, `RefClient`): table lookup for the base layer
+  (`TileTexel::from_tables`) plus `resource_id + depletion_stage(aux)` for the resource layer, where
+  `depletion_stage` buckets `aux` into `RESOURCE_STAGE_{FULL,HALF,LOW}` at the thresholds Planning
+  decisions fixes (7-10/4-6/1-3). **A single completed collect never crosses a stage boundary from a
+  fresh tile** (10 -> 9 is still "full"): the fewest collects that do are four (10 -> 6, into
+  "half"), load-bearing for `reference_depletion_visible` below.
+- `sim/tests/common/mod.rs::RefScenario`: `new()` (genesis at `TEST_SEED`/default `RefParams`),
+  `join(who)`, `dispatch(who, action) -> Result<(), RefReject>` (auto-incrementing `seq`,
+  `Rejected::Engine` panics -- never expected here), `step_ticks(n)`, `player(who) -> RefPlayer`,
+  `tile(pos) -> Tile`, `set_tile(pos, tile)` (a direct write bypassing `apply`, native-test-only, used
+  to set up a near-depleted tile without nine real collects first), `hash() -> u64`. `#![allow
+  (dead_code)]` at the module's top: `landmarks_fixture.rs` uses neither `RefScenario` nor most of
+  its own methods, and each `tests/*.rs` file compiles this module as a separate, whole copy.
+- `tests/fixtures/landmarks.json` (`games/reference/tests/`, one level above `sim/`, shared by the
+  Rust guard test and (in principle) a browser test): `{ seed: "6840143426475589698", land: {x,y},
+  resources: { iron, wood, stone, coal: {x,y} } }`. For `TEST_SEED`: land and iron both `(0, 0)`
+  (the origin tile itself is grass with iron -- `terrain.spec.ts`'s own hardcoded iron probe from
+  cut 1 already used this coordinate), wood `(-4, -2)`, stone `(-1, 2)`, coal `(-4, -16)` (the
+  farthest, `dist_sq = 272`). `landmarks_fixture_current` (`sim/tests/landmarks_fixture.rs`)
+  recomputes all five by generating every chunk within a fixed `SEARCH_CHUNK_RADIUS = 4` (chunks
+  `-4..4` each axis, `256x256` tiles, ~0.03s) and comparing byte-for-byte against the JSON; no
+  separate regenerate script exists (Deviations note in `games/reference/CLAUDE.md`: update the JSON
+  to match the test's own computed values). `terrain.spec.ts` (cut 1) was **not** changed to read
+  this file -- its three hardcoded coordinates already agree with it exactly, and duplicating a tiny
+  amount of literal data across a Rust JSON fixture and a five-line TS test did not seem worth a new
+  cross-language read for three numbers that cannot drift independently (the guard test already
+  catches drift in the JSON itself).
+- `main.ts` gains three more test-only window hooks, all built from production APIs, never `engine/
+  test` (same discipline as step 3's `__setCamera`/`__probeTile`): `__dispatchStartCollect(tileX,
+  tileY, fromX, fromY) -> number` (`client.dispatch`, returns the action's `seq`); `__cameraState()
+  -> { x, y, tilesAcross }` (reads `client.cameraState`, a production public field the page's own
+  `onCamera` already reads every frame).
+
+**Depletion browser test cost, found and resolved by moving it to the slow tier (a real, measured
+budget conflict, not a design error left in place).** `reference_depletion_visible` needs four real,
+sequential `StartCollect` completions to see any texel change at all (previous bullet), each a real
+2-second wait (`content::COLLECT` = 40 ticks at the page's own real 20 Hz pace) -- `ClientOptions.
+test` (the only way to fast-forward a real `Client`'s sim deterministically, `engine/test`'s
+`stepTick`/`asHarness`) is documented in `packages/engine/src/client.ts` itself as "never set by a
+game", so this could not be sped up without either that or a change to the fixed depletion-stage
+thresholds (Planning decisions, not this brief's own step to relitigate). Measured: adding it to the
+fast `browser` project pushed the whole suite from a `170/26s` baseline to `173 tests/33s`, against
+a `35s` budget with almost no headroom left for any later milestone's own browser test. `@slow` in
+the test's title (`packages/engine/CLAUDE.md`'s own convention) moves it out of `pnpm test`
+entirely: fast tier is back to `172 tests/25s` (net: `+2` tests, `-1s`, since only `camera.spec.ts`'s
+`reference_pan_and_zoom_work` and the unchanged `terrain.spec.ts` remain fast); the slow tier runs
+it standalone in `10-11s`, well inside `pnpm test:slow`'s own, much larger budget. Verified with
+`pnpm exec playwright test --config packages/engine/playwright.config.ts --grep
+'(?=.*@slow).*reference_' --project chromium --project gc --project reference` (`1 passed (10.7s)`)
+-- `pnpm test:slow browser -t reference_depletion_visible` itself reports `0 tests` through
+`scripts/test.mjs`'s own slow-tier `-t` composition, reproduced identically with the pre-existing,
+unrelated `-t determinism` (also `0 tests` under `--tier slow`), so this is a runner-level quirk
+predating this milestone, not something introduced here; `pnpm test:slow browser` with no `-t` does
+run and pass it (`41` tests total). **A decision an orchestrator may want to record**: whether a
+future milestone should revisit the depletion-stage granularity (e.g. more, narrower stages) so a
+single collect is visibly demonstrable, given this workaround; not changed here since Planning
+decisions fixes the exact thresholds and changing them was outside this cut's own step.
+
+**M02 import-allowlist/target-features coverage gap, closed (cut 1 found and left it open).**
+`packages/engine/tests/support/fixtures.ts` gains `gameCrateNames`/`gameCrateBuildDir`/
+`gameCrateBytes` (scanning `games/*/sim`), kept separate from `fixtureNames`/`fixtureBytes` (other
+tests, e.g. `abi-registry.test.ts`, also iterate those, and widening them would silently pull every
+such test onto every game crate). `allowlist.test.ts`'s two checks are factored into one
+`checkAllowlist(label, bytes)` function, called once per fixture (`describe.each(fixtureNames())`,
+byte-identical to before) and once per game crate (a new, separate `describe.each
+(gameCrateNames())`). A new dev-profile build step, `game-sims` (`scripts/build-game-sims-dev.mjs`,
+mirroring `build-fixtures.mjs`), was needed: the existing `reference` build step is a plain `vite
+build`, which defaults to the *release* profile, and release (`lto = "fat"`, `strip = true`) strips
+the `target_features` custom section this test's second check reads -- confirmed by first pointing
+`gameCrateBuildDir` at the release output and seeing `target features` fail with "dev-profile
+modules keep the target_features section" (0 features found), then fixing it with the dedicated dev
+build step instead of loosening that assertion. Proof the widened test actually reaches
+`reference-sim` (per the delegation prompt's own ask): a temporary `unsafe extern "C" { fn
+__proof_of_banned_import(); }` called once from `content::register` made `import allowlist` fail
+with `games/reference/sim imports outside the allowlist:\n  env (1: __proof_of_banned_import): an
+unresolved C symbol`; reverted immediately after, `cargo nextest run -E 'package(reference-sim)'`
+and the widened `wasm` suite both clean again.
+
+**Context artifacts.** `games/reference/CLAUDE.md` (48 lines) and `.claude/rules/determinism.md`'s
+`games/reference/sim/**` glob addition are both written (commit `a47a06e`).
+
+**Verification commands, exact outputs:**
+- `cargo nextest run -E 'package(reference-sim)'`: `22 tests run: 22 passed, 0 skipped` (10 from cut
+  1's steps 1-3 plus 12 new: 8 collect tests, `in_range_boundary_is_inclusive`,
+  `landmarks_fixture_current`; `export_bindings_*` counted separately per binary above).
+- `pnpm test browser -t reference_`: `2 tests 2.6s/35s` (`reference_terrain_renders`,
+  `reference_pan_and_zoom_work`; `reference_depletion_visible` is `@slow`, see above).
+- `node games/reference/scripts/gen-assets.mjs --check`: `gen-assets.mjs --check: committed assets
+  match a fresh generation.` (unchanged by this cut; re-verified after every asset-adjacent change).
+- `pnpm --filter reference dev` (smoke, this session): `curl -sD -` on `/index.html` shows `HTTP/1.1
+  200 OK`, `Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`.
+- `pnpm test && pnpm lint`: green, exact counts above.
+
+**Exit criteria, met/unmet/not verified:**
+- "`pnpm --filter reference dev` serves a cross-origin-isolated page ... pan and zoom work": **met**
+  -- COI headers confirmed by curl above; pan/zoom by `reference_pan_and_zoom_work` (real drag +
+  wheel, `cameraState` read back, `1 passed` standalone).
+- "Every test above passes by name": **met** for the fast tier's two reference browser tests and all
+  22 `reference-sim` native tests; `reference_depletion_visible` **met but slow-tier-only** (see
+  above), a deviation from the brief's own implicit fast-tier placement, not from correctness.
+- "`git diff --exit-code` on bindings/assets after a build": **met** (re-verified after the final
+  `pnpm --filter reference build` of this cut).
+- "No `HashMap`, std transcendental or wall clock in `sim/` ...": **met** -- clippy bans pass
+  (`cargo clippy -p reference-sim --all-targets -- -D warnings` clean) and the widened `wasm` suite's
+  import-allowlist/target-features checks now cover `reference-sim` directly (proof above).
+- "`pnpm test` and `pnpm lint` are green": **met**, counts above.
