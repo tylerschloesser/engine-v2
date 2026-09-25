@@ -51,6 +51,13 @@ pub const COLLECTABLE: TraitSet = TraitSet(1 << 1);
 /// centre of the resource tile"), in Q24.8 raw units (0007 §2: 256 raw units = 1 tile).
 pub const RANGE_Q8: i32 = 3 * 256;
 
+/// `admit`'s witness tolerance (0001 "Witness-carrying actions" step 1: "reject if farther than 16
+/// tiles from the sample or if no sample exists"; `PRE-PLAN.md` §4 Presence row), in the same
+/// Q24.8 raw units as [`RANGE_Q8`]. Deliberately much larger than `RANGE_Q8`: it only guards
+/// against an implausible claim (staleness of half an RTT plus one 100 ms sample interval, 0001),
+/// while `RANGE_Q8` is `apply`'s own exact gameplay rule.
+pub const ADMIT_TOLERANCE_Q8: i32 = 16 * 256;
+
 /// Collect duration (Requirements: "Collecting takes 2 seconds"), as `TICK_RATE.secs(2)` (0006
 /// "Conversion rule"). Generic over the rate (not just [`crate::RefGame`]'s own fixed
 /// `TICK_RATE`) so `durations_at_20_and_30_hz` can check the same `const fn` at 20 and 30 Hz (0006

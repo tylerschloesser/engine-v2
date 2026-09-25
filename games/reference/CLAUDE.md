@@ -29,10 +29,32 @@ overlay are `20b-reference-player-and-collect-ui.md`.
 - `noise.rs`: `engine::noise` composed into height/moisture channels.
 - `worldgen.rs`: `RefWorldgen`/`RefParams`, the real fBm generator, `hash2` resource scatter.
 - `rules/`: one file per feature. `collect.rs` is the first (`StartCollect`/`CancelCollect`,
-  `in_range`); craft/furnace rules (M32) get their own file the same way.
+  `in_range`, and `admit`'s own witness-tolerance check); craft/furnace rules (M32) get their own
+  file the same way.
+- `client.rs`: `ClientSide<RefGame>` (`RefClient`): `PlayerPresence`, the closed-form camera-follow
+  spring (`spring_step`, `.claude/rules/hot-paths.md` applies to this whole file), the own-player
+  circle/range-ring `extract`, and the depletion `tile_visual` override.
 - `lib.rs`: the `Game` impl itself, plus the wire-facing plain-data types (`RefAction`, `RefPlayer`,
   `TileXY`/`WorldXY`, ...) `Action`/`Player` need instead of `engine::world::{TilePos, WorldPos}`
   (which aren't `Codec`/`TS`).
+
+## Two page entries (`src/`)
+
+- `game.ts`: `startGame(opts)` -- device/renderer/art/client/camera-drive wiring shared by both
+  pages. Takes an optional `clock`/`scheduler` (default: `engine/render`'s real ones) and an
+  optional `test` (forwarded verbatim to `createClient`).
+- `main.ts` + `index.html`: the production page. Never sets `ClientOptions.test`; a `window.__*`
+  hook here needs a deliberate reason (`__setCamera`/`__cameraState` are `camera.spec.ts`'s own
+  read/write access to the real camera -- see `main.ts`'s own Deviations note for why they are not
+  yet moved off).
+- `test-entry.ts` + `test.html`: every diagnostic `window.__*` hook and the one page that sets
+  `ClientOptions.test` (a manual clock, driving `engine/test`'s `stepFrame`/`stepTick`/
+  `stepSimTickSync`, `injectPointer`/`injectWheel` via `attachCameraInputTestHooks`). Built into the
+  `reference` Playwright preview alongside `index.html` (`vite.config.ts`'s two-entry `build.
+  rollupOptions.input`). A dispatched action sits on the client until a `stepFrame` call flushes the
+  uplink, and a delta's upload-ring record needs `test-entry.ts`'s own background drain interval
+  (nothing else on this page runs a real frame loop) -- see a stepped spec's own comments for the
+  exact sequencing a new one needs.
 
 ## Conventions
 

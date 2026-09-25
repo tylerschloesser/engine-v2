@@ -8,27 +8,51 @@
 //! players racing the same tile's last unit is possible by construction, not a bug (`0003`
 //! Consequences wants this scripted, M34c) -- [`complete_one`] is the one place that race resolves.
 
-use engine::game::{PlayerId, TickCx, WorldRead, WorldWrite};
+use engine::game::{PlayerId, PresenceTable, TickCx, WorldRead, WorldWrite};
+use engine::presence::Presence as _;
 use engine::world::{TilePos, WorldPos};
 
 use crate::{Collecting, RefGame, RefPlayer, RefReject, TileXY, content};
 
-/// `dist(from, tile centre) <= RANGE` in Q24.8 integers (Scope), compared as squared distance so
-/// no `sqrt` is needed at all (`.claude/rules/determinism.md`: `sqrt` is allowed, but avoiding it
-/// avoids the question). `i128`: `from` is a witness carried in the action's own bytes, so an
-/// adversarial claim can be any `i32`; the difference of two `i32`-derived Q24.8 values squared can
-/// exceed `i64::MAX` (`(2^32)^2` order of magnitude), but never `i128::MAX`.
+/// Squared Q24.8 distance between two world positions, `i128` throughout (shared by [`in_range`]
+/// and [`admit`]): `from` (and, for `admit`, the presence sample) are witnesses carried in
+/// untrusted bytes, so an adversarial claim can be any `i32`; the difference of two `i32`-derived
+/// Q24.8 values squared can exceed `i64::MAX` (`(2^32)^2` order of magnitude), but never
+/// `i128::MAX`. No `sqrt` (`.claude/rules/determinism.md`: allowed, but avoiding it avoids the
+/// question) -- both callers compare against a squared tolerance instead.
+fn dist_sq(a: WorldPos, b: WorldPos) -> i128 {
+    let dx = (a.x as i64 - b.x as i64) as i128;
+    let dy = (a.y as i64 - b.y as i64) as i128;
+    dx * dx + dy * dy
+}
+
+/// `dist(from, tile centre) <= RANGE` in Q24.8 integers (Scope).
 pub fn in_range(from: WorldPos, tile: TilePos) -> bool {
     let centre = WorldPos::from_tile(tile);
     // Tile centre: the tile's own origin (`WorldPos::from_tile`) plus half a tile (128 of 256 Q24.8
     // raw units, 0007 §2) on each axis.
-    let cx = centre.x as i64 + 128;
-    let cy = centre.y as i64 + 128;
-    let dx = (from.x as i64 - cx) as i128;
-    let dy = (from.y as i64 - cy) as i128;
-    let dist_sq = dx * dx + dy * dy;
+    let centre = WorldPos {
+        x: centre.x.wrapping_add(128),
+        y: centre.y.wrapping_add(128),
+    };
     let range = content::RANGE_Q8 as i128;
-    dist_sq <= range * range
+    dist_sq(from, centre) <= range * range
+}
+
+/// `Game::admit`'s own check for `StartCollect` (0001 "Witness-carrying actions" step 1, HOST
+/// ONLY, never replayed): rejects a claimed `from` farther than [`content::ADMIT_TOLERANCE_Q8`]
+/// tiles from `who`'s latest presence sample, or with no sample at all. The witness stands over
+/// whatever terrain is under it (Tests added: "players may float over water") -- this checks only
+/// distance, never `traits_at`.
+pub fn admit(p: &PresenceTable<RefGame>, who: PlayerId, from: WorldPos) -> Result<(), RefReject> {
+    let Some(entry) = p.get(who) else {
+        return Err(RefReject::ImplausiblePosition);
+    };
+    let tolerance = content::ADMIT_TOLERANCE_Q8 as i128;
+    if dist_sq(from, entry.sample.pos()) > tolerance * tolerance {
+        return Err(RefReject::ImplausiblePosition);
+    }
+    Ok(())
 }
 
 /// `apply(StartCollect)` (Scope, exact validation order): tile readable, resource present and

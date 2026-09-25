@@ -82,6 +82,12 @@ pub enum RefReject {
     NoResource,
     OutOfRange,
     Busy,
+    /// `admit`'s own rejection (0001 "Witness-carrying actions" step 1, HOST ONLY, never
+    /// replayed): the claimed `from` is farther than `content::ADMIT_TOLERANCE_Q8` from the
+    /// player's latest presence sample, or no sample exists yet. Distinct from `OutOfRange`
+    /// (`apply`'s own, much tighter, `RANGE_Q8` check against the *tile*) so a client can tell
+    /// "the host doesn't believe where you are" from "you really aren't close enough".
+    ImplausiblePosition,
 }
 
 impl From<Unknown> for RefReject {
@@ -199,11 +205,14 @@ impl Game for RefGame {
 
     fn admit(
         _w: &dyn WorldRead<Self>,
-        _p: &PresenceTable<Self>,
-        _who: PlayerId,
-        _a: &RefAction,
+        p: &PresenceTable<Self>,
+        who: PlayerId,
+        a: &RefAction,
     ) -> Result<(), RefReject> {
-        Ok(())
+        match a {
+            RefAction::StartCollect { from, .. } => rules::collect::admit(p, who, from.world()),
+            RefAction::CancelCollect => Ok(()),
+        }
     }
 }
 
