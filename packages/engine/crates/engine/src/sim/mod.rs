@@ -182,10 +182,10 @@ impl<G: Game> Sim<G> {
                         self.authority.store().entity_count(),
                         self.authority.store().modified_tile_count(),
                     );
-                    // The undo-journal experiment (docs/plan/21b-timers-wakeups-and-tickcx.md
-                    // Planning decisions): recording is cheap even while `UNDO_JOURNAL_ADOPTED` is
-                    // `false` (nothing reads what it captured), and keeps the mechanism exercised
-                    // by every native/`.wasm` run this milestone's own tests drive it through.
+                    // The undo journal (docs/plan/21b-timers-wakeups-and-tickcx.md Planning
+                    // decisions, adopted -- `authority::UNDO_JOURNAL_ADOPTED`'s own doc comment has
+                    // the measured numbers): always records, so a rejecting `apply` that wrote can
+                    // be rolled back below instead of only asserted against.
                     self.authority.begin_apply_journal();
                     let result =
                         G::apply(&mut self.authority as &mut dyn WorldWrite<G>, *who, action);

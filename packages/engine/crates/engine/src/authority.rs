@@ -18,10 +18,16 @@ use crate::world::{ChunkCoord, SystemId, TerrainStore, Tile, TilePos, TileRect, 
 use crate::world_access::{WorldRead, WorldWrite, chunk_of};
 
 /// The undo-journal experiment's adopt/not-adopt decision (docs/plan/
-/// 21b-timers-wakeups-and-tickcx.md Planning decisions, ADR: see Deviations for the measured
-/// numbers this constant follows). `false`: the pre-existing assert stays the only enforcement of
-/// "validate first, write after" in every build, exactly as before this milestone.
-pub(crate) const UNDO_JOURNAL_ADOPTED: bool = false;
+/// 21b-timers-wakeups-and-tickcx.md Planning decisions; the ADR this milestone writes has the full
+/// measurement). `true`: the bench (`fixtures/machines/tests/journal_bench.rs`,
+/// `slow_apply_journal_overhead`) measured a 2.5% median `apply` overhead and zero steady-state
+/// allocations against `fx-machines` (10k mixed actions, 5% rejecting) -- both inside 0023's own
+/// bar ("adopt if ... rises <= 10% and the counting allocator shows zero steady-state
+/// allocations"). Release builds now roll back a rejecting `apply` that wrote, instead of
+/// panicking (`Authority::handle_rejected_apply_write`); debug and test builds keep the panic
+/// regardless of this constant (`cfg!(debug_assertions)`), so every existing test -- all built in
+/// debug/test profile -- is unaffected by this flip.
+pub(crate) const UNDO_JOURNAL_ADOPTED: bool = true;
 
 /// Who a delta is scoped to (0011 "Scopes"), derived mechanically at write time -- never chosen by
 /// the game.
@@ -176,6 +182,9 @@ pub struct Authority<G: Game> {
     /// The undo-journal experiment (Planning decisions "Host-side atomicity of `apply`"): records
     /// enough to undo one `apply` call's writes, discarded on `Ok`, replayed backwards on `Err`.
     journal: UndoJournal<G>,
+    /// Test-only bench knob (`Authority::set_journal_disabled_for_test`).
+    #[cfg(any(test, feature = "testing"))]
+    journal_disabled_for_test: bool,
 }
 
 impl<G: Game> Authority<G> {
@@ -201,6 +210,8 @@ impl<G: Game> Authority<G> {
             entities_visited_per_tick: 0,
             apply_rollbacks: 0,
             journal: UndoJournal::new(),
+            #[cfg(any(test, feature = "testing"))]
+            journal_disabled_for_test: false,
         }
     }
 
@@ -306,8 +317,13 @@ impl<G: Game> Authority<G> {
         self.store.wake_clear_now();
     }
 
-    /// The undo-journal experiment (`Sim::step`, around one `G::apply` call): starts recording.
+    /// The undo-journal experiment (`Sim::step`, around one `G::apply` call): starts recording,
+    /// unless the bench's own `set_journal_disabled_for_test` knob is set (its "baseline" leg).
     pub(crate) fn begin_apply_journal(&mut self) {
+        #[cfg(any(test, feature = "testing"))]
+        if self.journal_disabled_for_test {
+            return;
+        }
         self.journal.begin();
     }
 
@@ -332,6 +348,15 @@ impl<G: Game> Authority<G> {
         } else {
             panic!("a rejecting apply recorded a write (0004 Consequences): who={who:?} seq={seq}");
         }
+    }
+
+    /// Test-only (the journal bench, `fixtures/machines/tests/journal_bench.rs`, feature
+    /// `testing`): when `true`, [`Authority::begin_apply_journal`] becomes a no-op, so `Sim::step`
+    /// runs exactly the code path this milestone found in place (no journal recording at all) --
+    /// the bench's own "baseline" leg.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn set_journal_disabled_for_test(&mut self, disabled: bool) {
+        self.journal_disabled_for_test = disabled;
     }
 
     /// Test-only direct control of the undo journal (docs/plan/21b-timers-wakeups-and-tickcx.md
