@@ -287,8 +287,8 @@ impl ClientSide<RefGame> for RefClient {
         };
         // A square wide enough that every tile whose *centre* could be within `RANGE_Q8` of `from`
         // is visited: `RANGE` tiles plus one, to cover the player's own fractional offset inside
-        // its own tile.
-        let range_tiles = content::RANGE_Q8 / 256 + 1;
+        // its own tile ([`content::RANGE_SCAN_TILES`], also [`MAX_IN_RANGE`]'s own derivation).
+        let range_tiles = content::RANGE_SCAN_TILES;
         let player_tile = TilePos::new(
             self.spring_pos[0].floor() as i32,
             self.spring_pos[1].floor() as i32,

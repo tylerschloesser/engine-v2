@@ -153,13 +153,21 @@ pub struct RefGlobal;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct RefEntity;
 
-/// The maximum number of simultaneous `Ui.in_range` entries (M20b step 3): a fixed cap so
-/// `RefUi::default`/`RefClient`'s own tracked set (`client.rs`) can reserve their capacity once and
-/// never grow in steady state (`.claude/rules/hot-paths.md`, applied to this crate by the brief's
-/// own "Rules that apply"). Resources are scattered sparsely (`worldgen.rs`'s own `hash2` scatter),
-/// so a handful in range at once is the realistic case; this is deliberately generous headroom, not
-/// a measured bound.
-pub(crate) const MAX_IN_RANGE: usize = 16;
+/// The maximum number of simultaneous `Ui.in_range` entries (M20b step 3, sized correctly in step
+/// 5's own orchestrator fix): `RefClient::ui`'s bounding-box scan (`client.rs`) visits every tile in
+/// a `(2 * RANGE_SCAN_TILES + 1)` square around the player's own tile and can push at most one
+/// `UiInRange` per tile it visits, so the scan's own tile count is a hard upper bound on how many
+/// entries `tracked_range`/`out.in_range` can ever hold -- truncation (`ui()` silently dropping an
+/// in-range resource past this cap, the Goal's own "every resource in range" broken) cannot happen
+/// by construction, not merely by generous headroom. The true worst case (every tile whose *centre*
+/// can be within `RANGE_Q8` of some point, the exact disc bound) is 32 for `RANGE_Q8 = 3 tiles`
+/// (found by exhaustive search over sub-tile offsets) -- well under this square's own 81, but the
+/// square is what the scan loop actually visits, so it is the bound that needs no separate proof of
+/// correctness against the scan's own shape.
+pub(crate) const MAX_IN_RANGE: usize = {
+    let side = (2 * content::RANGE_SCAN_TILES + 1) as usize;
+    side * side
+};
 
 /// `Ui.collecting`'s own shape (M20b step 3, Scope: "`collecting: Option<{ tile, done_at }>`"): not
 /// [`Collecting`] itself, which carries `done_at: engine::time::Tick` -- `Tick` has no `TS` impl (a

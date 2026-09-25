@@ -51,6 +51,12 @@ pub const COLLECTABLE: TraitSet = TraitSet(1 << 1);
 /// centre of the resource tile"), in Q24.8 raw units (0007 §2: 256 raw units = 1 tile).
 pub const RANGE_Q8: i32 = 3 * 256;
 
+/// Tiles per axis scanned around the player's own tile for the in-range check (`RefClient::ui`,
+/// M20b step 3 -- moved here so [`crate::MAX_IN_RANGE`] can be *derived* from it, not a separately
+/// chosen headroom number): `RANGE` tiles plus one, to cover the player's own fractional offset
+/// inside its own tile.
+pub const RANGE_SCAN_TILES: i32 = RANGE_Q8 / 256 + 1;
+
 /// `admit`'s witness tolerance (0001 "Witness-carrying actions" step 1: "reject if farther than 16
 /// tiles from the sample or if no sample exists"; `PRE-PLAN.md` §4 Presence row), in the same
 /// Q24.8 raw units as [`RANGE_Q8`]. Deliberately much larger than `RANGE_Q8`: it only guards
