@@ -40,6 +40,7 @@ import { createTerrainRenderer } from '../../../../src/render/terrain.ts'
 import {
   asHarness,
   dispatchRaw,
+  netCounters,
   parkWorkers,
   pickScanned,
   pumpUntilLive,
@@ -193,21 +194,51 @@ for (let row = 0; row < GRID_SIDE; row++) {
     stepSimTickSync(client, 1)
   }
 }
-// Lets the trailing batch's own delta actually land in the replica before the real rAF loop's first
-// `frame()` reads it (`gc-drawables.ts`'s own precedent, same reasoning). **A second trailing client
-// `stepFrame` was added here** (CI round 1: found under `CI=true ENGINE_GPU=swiftshader` locally,
-// smoke mode's own tiny warm-up first exposed it -- `recordCount()` read 65,408, short by exactly
-// one `BATCH_COLS` batch, immediately after warm-up): the sim's own trailing `stepSimTickSync` tick
-// is what actually builds and sends the *last* batch's own downlink frame, but nothing in the
-// original single-`stepFrame` sequence gave the *client* a wake **after** that tick to drain it --
-// the first opportunity was the real rAF loop's own first frame, which 120 real warm-up frames
-// always gave enough slack to land within (undetected) but 5 does not reliably. One more `stepFrame`
-// call, after the sim's own trailing tick, drains that final downlink deterministically during
-// setup instead of leaving it to real-frame timing.
-harness.stepFrame(1000 / 60)
-stepSimTickSync(client, 1)
-harness.stepFrame(1000 / 60)
-harness.stepTick()
+// Drain poll (docs/plan/19c-ci-reds-frame-bench-and-admit-path.md step A), replacing a fixed count
+// of trailing `stepFrame`s: CI round 1 (docs/plan/17b-sprites-and-frame-budget.md Deviations) added
+// one more trailing `stepFrame` after the sim's own trailing tick, reasoning that it "drains that
+// final downlink deterministically" -- true of `on_frame` *applying* the last batch, but M18 moved
+// the renderer onto the acquired `DrawListSlot` (docs/plan/18-picking-and-overlay.md Deviations),
+// and `worker/client.ts`'s own `body()` order runs `netPump.pump()` (which calls `on_frame`) *after*
+// this same wake's `frame()`/`drawlistPump.publish()` -- so a wake that *applies* the last batch
+// never *publishes* it; publishing it takes one more wake after that. A fixed trailing count assumes
+// exactly one apply-then-publish pair always lands it; this polls the real condition instead --
+// `record_count` on the slot `client.pick.acquire()` actually publishes -- bounded by an iteration
+// cap, each iteration a harmless no-op sim tick (every dispatched batch is already admitted; ticking
+// further with nothing new to admit just re-sends the same, by-then-unchanging world state) plus one
+// client wake.
+const TARGET_RECORD_COUNT = GRID_SIDE * GRID_SIDE
+const DRAIN_POLL_CAP = 20
+const drawListSlot = clientTestHandle(client).drawListSlot
+let drained = false
+for (let i = 0; i < DRAIN_POLL_CAP; i++) {
+  stepSimTickSync(client, 1)
+  harness.stepFrame(1000 / 60)
+  client.pick.acquire()
+  if (drawListSlot.recordCount === TARGET_RECORD_COUNT) {
+    drained = true
+    break
+  }
+}
+if (!drained) {
+  // Named where the last batch stopped (brief's own wording), not just "it didn't drain": the
+  // slot's own `frame_seq`/`record_count` plus the connection's downlink counters (`netCounters`,
+  // `engine/test`) -- frames the host has sent (`frames`), what the client's own downlink ring has
+  // received/still holds (`downlink.pushed`/`.popped`), `downlinkRetries` (host-side backpressure)
+  // and `downlink.drops` (ring overflow). `netCounters` reaches the sim role by name through
+  // `callParked`, so the workers are parked for this one diagnostic read and resumed right after --
+  // no real frame has run yet (`start()` is still below), so nothing races this.
+  await parkWorkers(client)
+  const counters = await netCounters(client)
+  await resumeWorkers(client)
+  throw new Error(
+    `frame-bench setup: drain poll cap (${DRAIN_POLL_CAP}) exceeded before record_count reached ` +
+      `${TARGET_RECORD_COUNT}: frame_seq=${drawListSlot.frameSeq} record_count=` +
+      `${drawListSlot.recordCount} downlink frames sent=${counters.frames} downlink ring ` +
+      `pushed=${counters.downlink.pushed} popped=${counters.downlink.popped} ` +
+      `drops=${counters.downlink.drops} downlinkRetries=${counters.downlinkRetries}`,
+  )
+}
 
 // --- Real rAF loop -------------------------------------------------------------------------------
 let framesRendered = 0
