@@ -1,6 +1,6 @@
 # Side quest: can development continue on the EC2 box?
 
-Status: **paused 2026-09-24 23:50 UTC in Phase 3** (Tyler travelling); see "Paused" below · Written 2026-09-24 at the end of the M18–M19b session · Temporary: delete once
+Status: **done 2026-09-25, outcome C: stay on the Mac** · Written 2026-09-24 at the end of the M18–M19b session · Temporary: delete once
 the decision is carried out.
 
 **How to start.** A new session, on the **Mac**, in `/Users/tyler/repos/engine-v2`, told: *"Execute
@@ -227,7 +227,9 @@ Record the answer under **Results → Decision**.
 - Fill **Results**, set `Status:` above, commit `side quest: EC2 fidelity results and decision`, and push.
 - Tell Tyler in a short message: the decision, where to resume `PROMPT.md` (Mac or box), and on the box, the one sentence to start with. For example: "Read `PROMPT.md`; run tests per the `run-tests` skill's GPU-less Linux section."
 
-## Paused (2026-09-24 23:50 UTC): how to resume
+## Paused (2026-09-24 23:50 UTC), resumed 2026-09-25 02:27 UTC
+
+Kept as a record. Resuming found the `--load 10` batch finished at 00:43 UTC. The `sq-release` waiter never fired, because its `pgrep -f` pattern matched its own command line; the hold file stayed set and the box idled about 1¾ h before the orchestrator removed it. When a waiter polls with `pgrep -f`, match on a pid instead.
 
 - **On the box:** tmux `sq-T8-load10` runs the last measurement, a fresh 15-run `--load 10` batch into `~/sidequest/out/load10/` (8 of 15 done at 23:44, about 9 min per run). tmux `sq-release` waits for it, then removes `/run/claudebox/hold`, so the box hibernates about 20 min later. If the next ssh hangs, the resume came back without network: check `claudebox console` for `ena … error -62`, then `aws --profile admin --region us-west-2 ec2 reboot-instances --instance-ids i-0eaafbfc2bdd53ba7`. Everything needed is on disk in `~/sidequest/`.
 - **Next steps:** `sudo touch /run/claudebox/hold`; check that `sq-*` sessions are gone; copy `~/sidequest/out/` to the Mac (`ssh … 'tar -C ~/sidequest -czf - out' | tar -xzf - -C <scratch>`); write the box's T1–T9 tables from `out/log.txt`, `summary.tsv` and the json files; then Phase 4.
@@ -269,36 +271,300 @@ Done 2026-09-24, 15:44–16:25 UTC.
 3. Full `pnpm test --budget-scale 1000` in CI mode: **all green**. `rust` 366 at 1.8 s, `unit` 215 at 10 s, `wasm` 55 at 6 s, `browser` 170 at 135 s; build 5.5 s (already warm from run 1); wall 145 s.
 
 ### Phase 3
-Both machines at `71abd9e`. Box tables are still to write (see Paused). Raw notes follow.
 
-**Mac** (M3 Max, 14 cores, hardware mode):
-```
-Mac Phase 3 @71abd9e, M3 Max 14 cores, hardware mode. Raw: scratchpad/measure/out/
-T1: install 0.3s; cold pnpm test 80.9s wall (build 53s: fixtures 49s); browser 27.1s.
-T2 (n=6): wall median 31.5s (31.0–33.4); build 3.2–3.8s; rust 0.7, unit 1.6, wasm 1.7–1.9, browser 26.9/26.9/28.7.
-T3 lint: 12.3 (cold), 1.0, 1.0.
-T4 Rust edit: append 45.5/45.7/46.5, restore 45.0/47.0/45.9; median ~45.8s; buildMs 16.8–19.0 (fixtures 14–17s). NOT 151s.
-T5 TS edit: ~31s (= warm T2); buildMs 3.1–3.5.
-T6 wall medians: readback 8.8 (suite 4.8), anchors 8.1 (4.2), presence-worker-path 5.7 (1.8), rust -t presence 4.1, unit 4.9.
-T7 slow: wall 38.2; wasm 17.6, browser 29.2, frame-bench 5.3, unit 1.5. All pass.
-T8: quiet 15/15 pass (slowest 27s, 449s wall); load10 15/15 (slowest 34s of 35!, 580s). Spotlight reindexing load1 15–20 during T7/T8 (flag).
-T9: pnpm gc hw 104 pass; pnpm gc software 103/104: `sim neg object sim` fail = ledger line 8 (sibling isolate nudge, M06b). Margins all ~7–9 B except sim/sim hw 3.14 B; sim-page sw main budget 0 by design. Software: echo, no_ui_change ≤1 B unresolved.
-```
+Both machines at `71abd9e`, box `arm64` Graviton3 4 vCPU / Ubuntu 24.04 / CI mode (`CI=true
+ENGINE_GPU=swiftshader GC_MODE=software --budget-scale 1000`), Mac M3 Max 14 cores / hardware mode.
+Raw: box `scratchpad/box-out/{out,logs}`, Mac `scratchpad/measure/out`, CI `scratchpad/t10/ci-<runId>`.
+`measure.sh` on the box is byte-identical to the Appendix (`command diff`, no output).
 
-**T10, CI:**
-```
-T10 CI reference (x86-64 ubuntu-latest, SwiftShader, scale 1000), runs 36021066170 (e3b733a, Xeon 6973P-C), 36016875505 (e72935c, Xeon 8370C), 36014036176 (c4b3225, EPYC 7763; attempt 1 failed on the known frame-bench record_count flake).
-Fast tier medians (s): rust 2.43, unit 11.00, wasm 6.92, browser 195.01 (range 137.8–199.6), buildMs 66.36. Step `pnpm test` wall median 263 s (190–271).
-Slow tier medians (s): rust 0.52, unit 13.63, wasm 54.64, browser 235.10, frame-bench 36.35, buildMs 4.11. Step wall median 278 s (197–310).
-Lint 6 s. Playwright install 37 s.
-Raw: scratchpad/t10/ci-<runId>/timings{,-slow}.json
-```
+**T1 — cold setup** (1 run)
+
+| | build | browser | wall |
+|---|---|---|---|
+| Box | 143.7 s | 136.5 s | 283.4 s |
+| Mac | 53 s (fixtures 49 s) | 27.1 s | 80.9 s |
+| Ratio | 2.7x | 5.0x | 3.5x |
+
+**T2 — warm fast tier** (median of 3, range)
+
+| | rust | unit | wasm | browser | build | wall |
+|---|---|---|---|---|---|---|
+| Box | 2.0 s (2.0–2.1) | 11.5 s (9.4–11.7) | 6.8 s (6.0–6.8) | 136.7 s (130.8–137.8) | 5.6 s (5.5–5.7) | 144.7 s (138.9–146.1) |
+| Mac | 0.7 s | 1.6 s | 1.7–1.9 s | 26.9–28.7 s (median 26.9) | 3.2–3.8 s | 31.5 s (31.0–33.4) |
+| Ratio | 2.9x | 7.2x | ~3.9x | 5.1x | 1.6x | 4.6x |
+
+Box `browser` CoV (T2, n=3): 2.3–2.8%. Corroborated by the 15 T8-quiet runs: mean 130.6 s, CoV 1.7%. Box
+run-to-run noise is *not* the limiting factor — quiet-machine spread is as tight as Mac's own (T2
+browser CoV there ≈ 3.1%, n=3).
+
+**T3 — lint**
+
+| | run 1 (cold) | run 2 | run 3 |
+|---|---|---|---|
+| Box | 39.9 s | 4.3 s | 4.3 s |
+| Mac | 12.3 s | 1.0 s | 1.0 s |
+
+**T4 — one-line Rust edit rebuild** (append+restore, n=6, median/range)
+
+| | wall | build step only |
+|---|---|---|
+| Box | 151.0 s (149.1–156.9) | 14.7 s (14.1–15.5) |
+| Mac (this run) | 45.8 s (45.0–47.0) | 16.8–19.0 s (fixtures 14–17 s) |
+| Ratio | 3.3x | **0.8x — box's incremental build step is not the bottleneck, it's slightly faster than Mac's** (Mac pays macOS's per-binary code-signing tax, ADR 0033 §Context; Linux doesn't) |
+
+Q14 (30 s incremental-rebuild target): **neither machine meets it** — box 151.0 s (5.0x over), Mac 45.8 s
+(1.5x over, itself well under ADR 0033's cited ~150 s figure for this machine — a large session-to-session
+swing on the Mac's own number, not something the box changes).
+
+**T5 — one-line TS edit rebuild** (append+restore, n=6, median/range)
+
+| | wall | build step only |
+|---|---|---|
+| Box | 142.6 s (139.5–145.0) | 5.6 s (5.5–6.2) |
+| Mac | ~31 s (= warm T2) | 3.1–3.5 s |
+| Ratio | 4.6x | 1.7x |
+
+One run (`T5-append` #2) exited 1: `terrain: chunks generate, upload and evict inside the window`
+(ledger match — see T8 below).
+
+**T6 — inner loop** (wall median of 3; suite-only ms in parens)
+
+| Test | Box | Mac | Ratio |
+|---|---|---|---|
+| `browser -t readback` | 21.9 s (13.7 s) | 8.8 s (4.8 s) | 2.5x |
+| `browser -t anchors` | 25.4 s (17.1–20.3 s) | 8.1 s (4.2 s) | 3.1x |
+| `browser -t presence-worker-path` | 13.0 s (4.9 s) | 5.7 s (1.8 s) | 2.3x |
+| `rust -t presence` | 8.3 s (0.26 s) | 4.1 s | 2.0x |
+| `unit` | 12.8 s (4.7 s) | 4.9 s | 2.6x |
+
+**T7 — slow tier** (1 run, both green)
+
+| | rust | unit | wasm | browser | frame-bench | wall |
+|---|---|---|---|---|---|---|
+| Box | 0.26 s (0 slow tests) | 9.7 s | 61.3 s | 180.0 s | 37.9 s (**smoke**, no GPU) | 226.3 s |
+| Mac | — | 1.5 s | 17.6 s | 29.2 s | 5.3 s (**real hardware**, 0020 §10) | 38.2 s |
+
+`frame-bench`'s two numbers are different code paths (smoke vs the real gated benchmark) — no ratio is
+meaningful between them.
+
+**T8 — reliability** (`node scripts/repeat.mjs browser 15`)
+
+| Batch | Machine | Result | Wall/run |
+|---|---|---|---|
+| quiet | Box | **13/15 pass**, 2 fail | ~131 s |
+| quiet | Mac | 15/15 pass | ~30 s (slowest 27 s) |
+| `--load 4` | Box | **14/15 pass**, 1 fail | ~284 s |
+| `--load 10` (1st attempt) | Box | **14/15 completed**, cut short by force-hibernate at ~21:40 UTC (`exit=130`); all 14 completed runs ran 503–544 s each — the same failure-length signature as the full rerun below, not the ~140 s quiet length | ~510 s |
+| `--load 10` (rerun, full) | Box | **0/15 pass** | 473–520 s |
+| `--load 10` | Mac | 15/15 pass (slowest 34 s of 35) | ~39 s |
+
+**Failure signatures, verified against `deferred-ledger.md` individually (do not take the interim
+report's blanket claim on faith — it is right for quiet/`--load 4` and wrong for `--load 10`):**
+
+- **quiet (2) + `--load 4` (1) + T5-append#2 (1) — 4 occurrences, one signature:**
+  `FAIL browser [gc] terrain: chunks generate, upload and evict inside the window` /
+  `Error: CHUNK records must upload inside the window`. **Exact match** to `deferred-ledger.md`'s row
+  "`terrain: chunks generate, upload and evict inside the window` failed once on CI's fast tier
+  (SwiftShader, run 35951386457 attempt 1) ... passed on the rerun ... open; watch." Same test, same
+  message, same adapter family (SwiftShader). This is the one known ledger item the interim report
+  meant, and the match is confirmed.
+- **`--load 10`, both attempts (29 of 29 completed runs failed) — a different, un-ledgered signature:**
+  `connected-terrain neg object {main,client,sim}` failing with
+  `measure[tunnel] warmup pass N/8: page.evaluate: Test timeout of 90000ms exceeded` (occasionally
+  `cdpSession.send: Target page, context or browser has been closed`; once, `vertical_slice`:
+  `callParked: worker 'sim' is not parked`). **`grep` of `deferred-ledger.md` for "neg object",
+  "measure\[tunnel\]", "callParked" and "cdpSession" finds no match.** This is **new**, not a known
+  ledger flake. Mechanism: the negative control's own 8-pass warmup measurement can't finish inside
+  the `gc` project's fixed 90 s per-test timeout once 5 Playwright workers plus 10 synthetic `--load`
+  burners are packed onto 4 vCPUs (≈15-way oversubscription) — every run in both `--load 10` attempts
+  took 473–544 s instead of the ~140 s quiet length, i.e. the suite is not merely slower under this
+  load, it stops completing correctly at all. This did not happen on the Mac's 14-core `--load 10`
+  (15/15 pass). Classification: a load/core-count artifact of running `--load 10` on a 4-vCPU box, not
+  arm64-specific (nothing points at architecture) and not a known ledger item — **the interim/paused
+  note ("all three failures were said to match a known ledger flake") is correct only for the
+  quiet+`--load 4` failures it was written about; it does not extend to `--load 10`, whose data arrived
+  after that note was written.**
+- T9-software-forced's `exit=1` is the intended forced-budget-of-1 dump (11 of 13 pages fail by
+  design; `echo`/`no_ui_change` pass because their real budget is already ≤ 1 B, unresolved by this
+  method on either machine).
+
+**T9 — zero-GC software margins** (`main`, the only isolate with a software-attributed budget; B/frame)
+
+| Page | Budget | Box attr | Box margin | Mac attr | Mac margin |
+|---|---|---|---|---|---|
+| gc-loop | 28 | 18.69 | 9.31 | 18.02 | 9.98 |
+| topology | 20 | 11.98 | 8.02 | 11.98 | 8.02 |
+| gen | 20 | 11.98 | 8.02 | 11.98 | 8.02 |
+| input | 169 | 157.18 | 11.82 | 157.18 | 11.82 |
+| terrain | 89 | 80.34 | 8.66 | 80.04 | 8.96 |
+| sim | 0 (by design) | 0 | 0 | 0 | 0 |
+| sim-paced | 9 | 0.40 | 8.60 | 0.40 | 8.60 |
+| connected-terrain | 89 | 84.80 | **4.20** ⚠ | 80.54 | 8.46 |
+| zero_gc_action | 89 | 85.20 | **3.80** ⚠ | 80.94 | 8.06 |
+| drawables | 91 | 82.67 | 8.33 | 82.02 | 8.98 |
+| anchors | 484 | 475.55 | 8.45 | 475.81 | 8.19 |
+| echo | 8 | ≤1 (unresolved) | n/a | ≤1 (unresolved) | n/a |
+| no_ui_change | 9 | ≤1 (unresolved) | n/a | ≤1 (unresolved) | n/a |
+
+No page crosses the ≤ 2 B/frame flag line, but **connected-terrain and zero_gc_action sit at about half
+the box's usual ~8 B margin** (4.20 and 3.80 vs Mac's 8.46/8.06 on the same two pages) — the only two
+pages where the box is measurably tighter than the Mac, worth a repeat-count remeasurement before
+trusting long-term. Box's normal 104-test run was **104/104 pass** (tighter than the Mac's own 103/104
+this session — Mac flaked once on `sim neg object sim`, deferred-ledger's still-open M06b sibling-isolate
+item, unrelated to the box). Hardware-mode rows (`sim`/`sim` hw margin 3.14 B, etc.) have no box
+equivalent — the box has no GPU and never runs hardware mode.
+
+**T10 — CI reference** (x86-64 `ubuntu-latest`, SwiftShader, `--budget-scale 1000`; runs 36021066170 /
+e3b733a / Xeon 6973P-C, 36016875505 / e72935c / Xeon 8370C, 36014036176 / c4b3225 / EPYC 7763, attempt 1
+of which failed on the known `frame-bench record_count` flake)
+
+| | rust | unit | wasm | browser | frame-bench | build | wall (fast/slow) |
+|---|---|---|---|---|---|---|---|
+| Fast tier median | 2.43 s | 11.00 s | 6.92 s | 195.01 s (137.8–199.6) | — | 66.36 s | 263 s (190–271) |
+| Slow tier median | 0.52 s | 13.63 s | 54.64 s | 235.10 s | 36.35 s | 4.11 s | 278 s (197–310) |
+
+CI's x86-64 `browser` (195 s median) sits *between* the box's arm64 `browser` (~137 s quiet) and the
+box's own `--load` runs — CI's own SwiftShader/CPU is not directly comparable (different runner class
+and unknown background contention), but it rules out "software WebGPU is inherently ~150s+" as an
+arm64-specific story: the box's own SwiftShader is actually faster quiet than CI's x86-64 SwiftShader.
 
 ### Analysis
-(G, P, E, proposed thresholds)
+
+**G — Fidelity**
+
+- **G1, tiers.** Both tiers ran green on the box in CI mode except the one known ledger item (4
+  occurrences, exact-matched above) and the new `--load 10` artifact (not a tier failure under
+  ordinary conditions — it only appears once 10 synthetic burners are added on top of the suite).
+  Under ordinary (unloaded) conditions the fast and slow tiers are fully green on arm64. No
+  arm64-specific failure was found: every failure either matches an existing x86-CI ledger item
+  byte-for-byte, or is attributable to core-count oversubscription rather than architecture.
+- **G1, goldens on aarch64-linux.** This was explicitly untested territory ("WebGPU on SwiftShader
+  under Linux arm64 has never been run for this repo", Known facts) and it is now closed for the
+  determinism side: every T1–T9 `rust`/`unit`/`wasm` run (366/215/55 tests) passed on real aarch64-linux
+  native binaries and under Node/Bun, which is exactly 0020 §5's golden-hash replay set
+  (`puts_idle_100`, `puts_script_a`, the wire/worldgen goldens). This is a new, closed leg of
+  deferred-ledger row 4 ("Determinism on real x86-64, physical iPhone, Android" — x86-64 was already
+  closed; native aarch64-linux now matches too, alongside the already-closed SwiftShader/arm64 WebGPU
+  spike from Phase 1).
+- **G2, T8 quiet flake rate.** Box: 2/15 (13.3%). Mac this session: 0/15 (Phase 4's own criterion cites
+  "about the Mac's, about 1 in 15 ≈ 6.7%" as the historical baseline). Same signature both box
+  occurrences, already ledgered. 2/15 vs a ~1/15 baseline is a small-N result (one extra occurrence
+  in 15 runs) — not strong enough on its own to call the box's flake rate genuinely higher, but it
+  does not *clear* the "at most the Mac's" bar either. **Marginal, not clearly met.**
+- **G3, T9 software budgets.** Hold on arm64: 104/104 pass, every page's margin ≥ 3.8 B (or 0/≤1 B by
+  design). Two pages (connected-terrain, zero_gc_action) are flagged as tighter on the box than the
+  Mac (table above) though neither crosses the ≤ 2 B/frame line.
+
+**P — What only the Mac can measure**
+
+33 unticked `PLAN.md` rows. **19 box-OK, 14 need a Mac gate.**
+
+*Needs a Mac gate* (14), one clause each:
+| # | Reason |
+|---|---|
+| 20b | tag (`first-playable`) + new client-worker zero-GC criterion |
+| 23 | "in desktop Chrome" `WorldBusy` check needs a real GUI browser, plus a new sim-worker software budget |
+| 25 | introduces a new browser zero-GC page (`predict_alloc`) |
+| 26 | modifies the M25 zero-GC page's script (predicted actions) — re-verification |
+| 29 | tag (`multiplayer-in-browser`) + new `gc/multiplayer-topology` zero-GC page + "in desktop Chrome" checks |
+| 30 | exercises the M29 zero-GC page under a new (interpolation) scenario |
+| 33 | re-runs the M20b hardware-defined allocation criterion under new load |
+| 34b | introduces a new zero-GC page (`gc.reference_single_player`) |
+| 34c | tag (`reference-game-complete`) |
+| 36 | Exit criteria literally say "exit 0 **on Tyler's Mac**"; real `bench.frame_reference` hardware proxy |
+| 36b | Exit criteria literally say "under the Requirement's one minute **on Tyler's Mac**" |
+| 37b | Exit criteria say "pass locally on the **real GPU**"; real `bench.frame_worstcase` baseline |
+| 39 | Exit criteria say "pass **on Tyler's Mac**"; full device/frame-HUD sign-off |
+| 39b | tag (`phase-3-complete`) |
+
+*Box-OK* (19): 20, 21, 21b, 22, 22b, 24, 24b, 27, 28, 28b, 31, 31b, 32, 33b, 34, 35, 35b, 37, 38 — each
+one's Exit criteria/Budgets are native Rust checks, ordinary `pnpm test`/`pnpm lint`, or a browser
+zero-GC assertion that is *unchanged* from an already-accepted page (box's CI-software mode already
+proves these; no new or modified hardware-defined number is at stake). "By hand"/manual checks in
+several of these (M32, M33, M33b, M34, M35b) don't change the classification — PROMPT.md step 5 says
+such criteria never block regardless of machine.
+
+**Next five in execution order:** M20 (box-OK), **M20b (needs Mac)**, M21 (box-OK), M21b (box-OK), M22
+(box-OK). Four of the next five milestones could be gated entirely on the box; the fifth (the
+`first-playable` tag) needs a Mac hardware-mode pass either way, tag or not.
+
+**E — Throughput**
+
+| | Box | Mac | Ratio | "Workable" bar | Met? |
+|---|---|---|---|---|---|
+| T2 wall | 144.7 s | 31.5 s | 4.6x | ≤ ~3x / ~90 s | **No** |
+| T4 wall | 151.0 s | 45.8 s (this run) | 3.3x | ≤ Mac's 151 s | Borderline — box's raw number ties the *old* 151 s figure, but judged against the Mac's *actual measured* 45.8 s this session, box is 3.3x over. Both machines already miss Q14's real 30 s target (box 5.0x, Mac 1.5x) |
+| T5 wall | 142.6 s | ~31 s | 4.6x | (not separately stated; same shape as T2) | **No** |
+| T6 (median of 5 cases) | 2.0–3.1x (median ~2.5x) | — | ~2.5x | ≤ ~2x | **No, borderline** (anchors worst at 3.1x, rust-presence closest at 2.0x) |
+| T2 `browser` CoV | 2.3–2.8% (n=3), 1.7% (n=15) | ~3.1% (n=3) | — | (noise, not a hard bar) | box is not noisier than Mac |
+
+None of the four stated ratios comfortably clears its bar; T2 and T5 clearly miss it (4.6x), T6 is
+modestly over on 4 of 5 sub-cases, and T4's verdict depends on which Mac baseline is used but both
+machines already miss the underlying Q14 target regardless. T8 adds a caveat (orchestrator's note):
+`--load 10` is 10 burners on 4 vCPUs, about 3.5× oversubscribed, while the Mac's `--load 10` is 0.7×
+on 14 cores. The proportionate box test is `--load 4`, which passed 14/15 with the same terrain flake
+as quiet. The 0/15 at `--load 10`, all 90 s gc-test warm-up timeouts, shows that `PROMPT.md`'s
+`--load 10` standard can't carry over to a 4-vCPU box unchanged. It is not evidence of an arm64 defect.
+
+**Proposed box thresholds** (not applied; per 0020 §3 / 0033's own rule — ceil(worst observed) plus a
+~25–50% margin, using unscaled base budgets, quiet-condition worst-observed numbers):
+
+| Suite/step | Mac budget (unscaled) | Box worst observed (quiet-ish) | Proposed box budget | Scale vs Mac |
+|---|---|---|---|---|
+| `rust` | 10,000 ms | 2.16 s | unchanged, 10,000 ms | 1x (already comfortable) |
+| `unit` | 3,000 ms | 12.7 s | ~18,000 ms | ~6x |
+| `wasm` | 7,000 ms | 8.0 s | ~10,500 ms | ~1.5x |
+| `browser` | 35,000 ms | 138 s | ~175,000 ms | ~5x |
+| `buildBudgetMs` | 10,000 ms | 15.5 s (post-Rust-edit) | ~20,000 ms | ~2x |
+
+**Ratios are not uniform (1x–6x across suites), so one machine-wide `--budget-scale` does not fit**: a
+scale generous enough for `unit`'s ~6x would badly over-loosen `rust`/`build`, and a scale tight enough
+for `rust`/`build` would leave `unit`/`browser` gating on numbers the box can never meet quiet.
+Per-suite thresholds are the only shape that matches the data. (`unit`'s outsized ~6x ratio, well past
+`browser`'s own ~5x, is notable: `unit`'s own standalone cost — measured in isolation by T6, 4.7 s — is
+close to Mac-scale; its ~12.7 s cost *inside* `pnpm test` comes from sharing 4 vCPUs with the
+concurrently-running 5-worker `browser` suite, a contention effect the Mac's 14 cores never show.)
+
+**Does the "headroom" signal survive?** Only partially, and only as a box-own relative number. Box's
+quiet `browser` (~131–138 s) against a proposed ~175 s budget is ~75–79% utilised — proportionally
+close to Mac's current ~24–27/35 s (~69–77%) — so a *proportional* trip-wire could be re-derived on the
+box's own thresholds. It does **not** survive as a *reliability* margin: at the same nominal
+utilisation, Mac stays 15/15 under `--load 10` while the box drops to 0/15. "17 s of headroom before
+the next milestone trips the wire" (PROMPT.md's Mac-scale language) has no box-scale analogue that
+means the same thing — the box's real constraint is concurrency tolerance, not suite-time margin.
+
+**Operational finding (also bears on P/E: long unattended runs).** The claudebox `unattended-hard` 6 h
+alarm force-hibernates **regardless of `/run/claudebox/hold`** — it is not the same guard the hold file
+was designed against. This side quest's own `--load 10` batch was a casualty of it (cut short at 14/15
+at ~21:40 UTC). Resumes from hibernation have **twice** come back with no network (2026-09-07, recorded in
+claudebox's `CLAUDE.md`, and 2026-09-24 in this quest) (`ena … PM:
+failed to restore async: error -62`), requiring a manual `aws ec2 reboot-instances` before the box is
+reachable again. Any unattended run on this box longer than 6 h needs either a live tmux client
+attached the whole time (claudebox's own stated exemption) or a change on the claudebox side; as-is, a
+milestone whose implementer + gate rounds run past 6 h unattended risks losing the run mid-way with no
+guarantee of a clean, networked resume.
+
+**Recommendation inputs.** G leans positive (no arm64-specific defect; the box's SwiftShader/aarch64
+path is sound; goldens now closed on a new platform) — this evidence does not argue for abandoning
+Linux/arm entirely (against C). E is not workable as measured: every stated throughput ratio misses or
+sits at the edge of its bar quiet, and the terrain flake shows up more often on the box (4 in 36 runs against once on CI) — this evidence argues against staying on the *current* box as-is
+(against A, at least without both non-uniform per-suite thresholds and a strict single-tenant rule, since
+even the box's own back-to-back test runs pushed load1 to 18–20). The `unit`/`browser` slowdown pattern
+specifically implicates **core count** (contention on 4 vCPUs, not an arm64/x86 difference) as the
+throughput driver, and the 6 h unattended-hibernate/no-network issue is an infra property of this
+particular box, not of arm64 Linux generally — both point toward evidence that would support **B**
+(prototype a differently-sized instance, per-core and architecture separated by trying `c7i.2xlarge`
+and `m7g.2xlarge` alongside each other) over A or C, stated here as evidence only, not as the decision.
 
 ### Decision
-(Tyler's pick and what was done)
+2026-09-25 02:45 UTC. **Tyler picked C: stay on the Mac.** The orchestrator had recommended B (prototype an 8-vCPU instance). `PROMPT.md` resumes on the Mac, unchanged. Nothing from Phase 6 was done: no ADR, no box thresholds, no `run-tests` skill section.
+
+What remains in place:
+- `scripts/repeat.mjs` forwards `--budget-scale` and `--timings-json` (`71abd9e`).
+- The box is on Ubuntu 24.04.5. It keeps `~/repos/engine-v2`, the pinned toolchain beside its own, and `~/sidequest/`: `env.zsh`, `measure.sh`, the raw `out/` and `logs/`. With these, the measurement can be re-run as is.
+- EBS snapshot `snap-00cc2b8f3a434be2f`, the pre-upgrade 22.04 rollback, is kept until Tyler says to delete it.
+
+Phase 7, at 02:49 UTC: hold file removed, no `sq-*` tmux sessions, none of our processes running. No Phase 6B instance was launched.
 
 ### Appendix: measurement script
 `~/sidequest/measure.sh` on the box. The box agent may have patched it there; diff before re-use.
