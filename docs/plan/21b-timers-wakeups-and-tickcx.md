@@ -218,6 +218,33 @@ before any action runs, which breaks `full_world_rejects_place_accepts_remove_th
 `max_entities: 1` world. `PlaceSpinner` is appended after the M21 variants (not inserted among
 them), so no pre-existing `Action` encoding shifts.
 
+**A seventh, pre-existing test now fails for a real semantic reason, not a golden move: `engine::
+state_budget::under_declared_growth_counts_in_release`.** It compares `sim.state_hash()` after one
+`sim.step()` call against `direct.authority_mut().spawn(..)`'s hash with no `step()` call at all, on
+the premise ("proven directly rather than assumed") that `growth_violations` is the only thing that
+differs between the two paths. That premise no longer holds: `sim.step()` always runs the fixed
+point (`begin_tick`/`end_tick`), so a `step()`-driven spawn's own auto-wake push is swapped into
+`now` and dropped by the time `step()` returns, while `direct.authority_mut().spawn(..)` never runs
+a tick at all, so its auto-wake push sits in `wake.next` forever -- a genuine, permanent state
+difference the wake queue's own new field (`Store::encode`'s "woken_next") now makes visible in the
+hash, where before this milestone nothing distinguished the two authorities' states at all. Left
+unmodified per "never weaken, skip or delete an existing test" and reported here per "if an existing
+test has to change, stop and report: that decision is the orchestrator's" -- the fix is almost
+certainly to make `direct` run one `sim.step(&[], ..)` after its own bare `spawn` before comparing
+hashes (or to accept that this particular direct-vs-stepped comparison is no longer valid and drop
+that half of the test), but changing the test is not this brief's call.
+
+**The same six root causes also turn up outside `cargo nextest`**, confirming they are not rust-
+suite-specific: `pnpm test wasm` shows the identical `puts_idle_100`/`puts-connected`/`puts_script_a`
+mismatches (`wasm_idle_100_matches_native`, `wasm_connected_100_matches_its_own_golden`,
+`wasm_script_a_matches_native`, plus the Bun-leg mirror of the first) with native and `.wasm`
+agreeing on the new value throughout (checked); `pnpm test browser` shows two more for the same
+underlying `puts_idle_100`/`puts-connected` goldens (`sim_worker_steps_and_hashes`,
+`vertical_slice`), same old/new values as the table above, nothing else red. `pnpm lint` (biome,
+rustfmt, clippy, tsc) is green throughout. **`pnpm test` and `pnpm lint` are therefore not fully
+green**: seven distinct, individually explained and expected failures (the six-row golden table plus
+`under_declared_growth_counts_in_release`), zero unexplained ones.
+
 **Measured.** `cargo nextest run --workspace --features engine/testing,testing`: 474 tests, 468
 passed, 6 failed (the golden table above), 1 skipped (`slow_apply_journal_overhead`, correctly
 filtered by the fast-tier profile). `pnpm test wasm`: 60 tests, same three fx-puts goldens red
