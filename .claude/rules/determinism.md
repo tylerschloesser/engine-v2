@@ -2,6 +2,7 @@
 paths:
   - "packages/engine/crates/**"
   - "packages/engine/fixtures/*/src/**"
+  - "games/reference/sim/**"
 ---
 
 # Determinism: sim, worldgen and `apply` code must agree bit for bit everywhere
