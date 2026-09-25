@@ -43,7 +43,9 @@ export const buildSteps = [
   {
     name: 'reference',
     cmd: 'pnpm',
-    args: ['exec', 'vite', 'build'],
+    // `--minify false`: software-mode zero-GC attribution needs real function names (M20b gate);
+    // the game's own production build stays minified.
+    args: ['exec', 'vite', 'build', '--minify', 'false'],
     cwd: 'games/reference',
   },
 ]

@@ -27,16 +27,9 @@ export default defineConfig({
   // `reference`/`gc-reference` Playwright projects' own shared webServer, M20/M20b Deviations) can
   // serve the other two.
   build: {
-    // `minify: false` (`packages/engine/tests/browser/pages/vite.config.ts`'s own precedent,
-    // verbatim comment there: needed so `gc.html`'s own software-mode zero-GC measurement can
-    // attribute samples by real function name -- `gc/instrument.ts`'s `attributionRoots` matching
-    // is a literal string compare against the *runtime* function name, and production minification
-    // renames every top-level function (found live: `attributedBytesPerFrame` read a flat `0` for
-    // every isolate, even under the `object` negative control's own deliberate allocation, until
-    // this was set). Applies to every entry in this one build (`index.html`/`test.html` included,
-    // not just `gc.html` -- Rollup has no per-entry minify option), an acceptable v0/pre-launch
-    // trade-off this milestone's own brief does not ask to avoid.
-    minify: false,
+    // Minified by default: the test build (`scripts/suites.mjs`'s `reference` step) passes
+    // `--minify false`, because `gc.html`'s software-mode zero-GC attribution matches
+    // `attributionRoots` against runtime function names, which minification renames (M20b gate).
     rollupOptions: {
       input: {
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
