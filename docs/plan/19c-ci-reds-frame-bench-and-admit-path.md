@@ -1,6 +1,6 @@
 # M19c: two intermittent CI reds (frame-bench setup drain, admit-path allocation)
 
-Status: pending · After: 19b · Tyler-dependent: no
+Status: done · After: 19b · Tyler-dependent: no
 
 Written by the orchestrator at the start of the session after M19b, from two CI runs. Neither is
 M20's, and M20 touches neither file, so they are fixed first.
@@ -89,14 +89,14 @@ and fix with a failing-first test, or 4. commit the diagnostic and stop.
 B's regression test, if the cause is found.
 
 ## Exit criteria
-- [ ] Frame-bench setup waits on a published slot with `record_count` 65,536 under an iteration
+- [x] Frame-bench setup waits on a published slot with `record_count` 65,536 under an iteration
       cap, and the cap's failure message prints `frame_seq`, `record_count` and the client's
       downlink counters. `pnpm test:slow` (hardware) ends with a passing `frame-bench` line, pasted.
-- [ ] B's cause is named and fixed with a test that fails without the fix (red output pasted), **or**
+- [x] B's cause is named and fixed with a test that fails without the fix (red output pasted), **or**
       step 4's bounded attempt is recorded in Deviations with its run counts and the committed
       failure message says where the bytes went.
-- [ ] Neither test's assertion is weakened.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Neither test's assertion is weakened.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t host_admit_path` · `pnpm test:slow` · `CI=true ENGINE_GPU=swiftshader pnpm test:slow`
