@@ -51,6 +51,7 @@
 //! never claimed allocation-free).
 
 use engine::abi::Arena;
+use engine::abi::arena::high_water_bytes;
 use engine::game::{EntityId, Game, PlayerEvent, PlayerId, TickCx, Unknown, WorldWrite};
 use engine::host::Host;
 use engine::sim::WorldParams;
@@ -646,11 +647,11 @@ fn run_admit_tick(
     host.seal();
 }
 
-/// `window` admit-only ticks (after a 40-tick warm-up, unmeasured), returning `live_bytes()`
-/// growth over that window -- same `i64`-signed-difference shape `pan_run` uses above, since a
-/// window that nets negative (more freed than allocated) is possible in principle and must not
-/// underflow a `usize` subtraction.
-fn admit_run(window: u32) -> i64 {
+/// Builds and warms up (40 unmeasured ticks) one admit-only `Host`, shared by `admit_run` and
+/// `admit_run_traced` so a diagnostic re-run (docs/plan/19c-ci-reds-frame-bench-and-admit-path.md
+/// step B.4) drives the exact same setup as the measured one, not a hand-copied approximation of
+/// it.
+fn warmed_admit_host() -> (Host<NGame>, u32, [u8; 256], [u8; 4096]) {
     let mut host = Host::<NGame>::genesis_for_test(WorldParams {
         seed: 7,
         worldgen: (),
@@ -662,16 +663,67 @@ fn admit_run(window: u32) -> i64 {
     let mut seq = 0u32;
     let mut uplink_buf = [0u8; 256];
     let mut frame_buf = [0u8; 4096];
-
     for _ in 0..40 {
         run_admit_tick(&mut host, &mut seq, &mut uplink_buf, &mut frame_buf);
     }
+    (host, seq, uplink_buf, frame_buf)
+}
 
+/// `window` admit-only ticks (after a 40-tick warm-up, unmeasured), returning `live_bytes()`
+/// growth over that window -- same `i64`-signed-difference shape `pan_run` uses above, since a
+/// window that nets negative (more freed than allocated) is possible in principle and must not
+/// underflow a `usize` subtraction.
+fn admit_run(window: u32) -> i64 {
+    let (mut host, mut seq, mut uplink_buf, mut frame_buf) = warmed_admit_host();
     let before = live();
     for _ in 0..window {
         run_admit_tick(&mut host, &mut seq, &mut uplink_buf, &mut frame_buf);
     }
     live() as i64 - before as i64
+}
+
+/// docs/plan/19c-ci-reds-frame-bench-and-admit-path.md step B.4: never collected on the passing
+/// path (would itself allocate a `Vec<i64>`, defeating the measurement it would be diagnosing) --
+/// called only after `admit_run` has already shown a non-zero net, to name where the bytes went
+/// for whichever run reproduces this next. Re-runs the identical admit-only workload once more
+/// (a fresh `Host`, same seed, same warm-up) and returns `high_water_bytes()` before/after the
+/// window (a real per-action leak grows the high-water mark right alongside the net; a one-off
+/// background allocation that later frees would not) plus each tick's own `live()` delta, so a
+/// future failure names *which* tick(s) inside the window actually grew, not just the total.
+fn admit_run_traced(window: u32) -> (usize, usize, Vec<i64>) {
+    let (mut host, mut seq, mut uplink_buf, mut frame_buf) = warmed_admit_host();
+    // Allocated, and `hw_before`/`prev` both captured, *before* the loop starts: this `Vec`'s own
+    // upfront allocation (`window * size_of::<i64>()` B -- 800 B at `window = 100`) must not be
+    // counted in either the per-tick trace or the high-water delta -- found by injection, below,
+    // first as a phantom tick-0 entry, then (once that was excluded from `prev`) as a phantom 800 B
+    // still inflating `hw_before`..`hw_after` because `hw_before` was read one line too early.
+    let mut per_tick = Vec::with_capacity(window as usize);
+    let hw_before = high_water_bytes();
+    let mut prev = live();
+    for _ in 0..window {
+        run_admit_tick(&mut host, &mut seq, &mut uplink_buf, &mut frame_buf);
+        let now = live();
+        per_tick.push(now as i64 - prev as i64);
+        prev = now;
+    }
+    (hw_before, high_water_bytes(), per_tick)
+}
+
+/// The tail appended to a failure message on either window (below): which ticks, by index into
+/// the re-run window, actually grew `live_bytes()`, and the high-water mark's own before/after.
+fn admit_diagnostic_tail(window: u32) -> String {
+    let (hw_before, hw_after, per_tick) = admit_run_traced(window);
+    let nonzero: Vec<(usize, i64)> = per_tick
+        .iter()
+        .enumerate()
+        .filter(|&(_, &d)| d != 0)
+        .map(|(i, &d)| (i, d))
+        .collect();
+    format!(
+        "; re-run: high_water {hw_before} B -> {hw_after} B ({:+} B), nonzero-delta ticks \
+         (index, bytes) = {nonzero:?}",
+        hw_after as i64 - hw_before as i64,
+    )
 }
 
 /// docs/plan/16-action-round-trip.md (orchestrator gate item 3): bytes the *real* admit path
@@ -705,18 +757,36 @@ fn admit_run(window: u32) -> i64 {
 ///
 /// Measured at two window lengths (M15's own template, `host_and_client_bounded_camera_no_alloc`
 /// above): a one-off warm-up artifact would shrink as the window grows; this stays at exactly
-/// zero at both, which is why the assertion below is equality to zero, not a ceiling.
+/// zero at both, which is why the checks below are equality to zero, not a ceiling.
+///
+/// **CI red, docs/plan/19c-ci-reds-frame-bench-and-admit-path.md step B**: run 36087861610 (a
+/// doc-only commit) failed with `short = 900` -- the first failure of this test in the last 40
+/// failed CI runs, passing locally every time since. 500 bounded local reproduction attempts this
+/// session (300 quiet + 200 under a 12-way `yes` CPU load, both `cargo nextest run --workspace
+/// --no-tests=pass -E 'test(host_admit_path)'` in a loop, this Mac) never reproduced it, and a
+/// grep of `src/host/`, `src/store.rs`/`src/store/`, `src/wire/` found no `HashMap`/`HashSet`/
+/// `RandomState` (the orchestrator's own first guess) anywhere in the crate outside a code comment
+/// in `world/cache.rs` explicitly saying it is *not* one. Since the cause could not be attributed
+/// this session, `assert_eq!`'s bare net-total message is replaced with one that also names where
+/// the bytes went the next time this fails (`admit_diagnostic_tail`, below): `high_water_bytes()`
+/// before/after a diagnostic re-run of the same window, and which tick(s) inside it actually grew
+/// `live_bytes()` -- collected only on this, already-failing path, never on the path that passes
+/// today, so it costs nothing there.
 #[test]
 fn host_admit_path_allocates_zero_bytes_per_action() {
     let short = admit_run(100);
     let long = admit_run(1_600);
-    assert_eq!(
-        short, 0,
-        "the real admit path (on_uplink -> decode_canonical -> G::admit -> pending_records, \
-         then tick/build_frame/seal) allocated {short} B over 100 actions"
-    );
-    assert_eq!(
-        long, 0,
-        "the real admit path allocated {long} B over 1,600 actions"
-    );
+    if short != 0 {
+        panic!(
+            "the real admit path (on_uplink -> decode_canonical -> G::admit -> pending_records, \
+             then tick/build_frame/seal) allocated {short} B over 100 actions{}",
+            admit_diagnostic_tail(100),
+        );
+    }
+    if long != 0 {
+        panic!(
+            "the real admit path allocated {long} B over 1,600 actions{}",
+            admit_diagnostic_tail(1_600),
+        );
+    }
 }
