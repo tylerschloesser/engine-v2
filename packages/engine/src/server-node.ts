@@ -4,6 +4,8 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { GameJson } from './build-game.js'
 
+export { fsStorage } from './storage/fs.js'
+
 /** Read one `buildGame()` output directory (0017 §4). */
 export async function loadGame(
   dir: string,
