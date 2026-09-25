@@ -1,6 +1,6 @@
 # M22: Persistence: containers, write-ahead log, snapshots (write side)
 
-Status: not started · After: 21b · Tyler-dependent: no
+Status: done · After: 21b · Tyler-dependent: no
 
 Split: the PLAN row "22" was too big for one session (formats + write path + load path + two adapters + heavy mode ≈ 2,500 lines). This brief is the formats, the write side and native replay/heavy mode. `22b-persistence-load-and-fs.md` is the load path, the `node:fs` adapter and heavy mode through `engine/test`. Nothing is scheduled between them.
 
@@ -66,11 +66,11 @@ Mine from spikes: `spikes/prediction-api` (`host_replay_from_genesis_*` test sha
 - Vitest (WASM under Node): `storage_conformance_memory`, `write_ahead_order` (memory storage records call order: `append` of frame T+1 precedes the `sim_tick` that applies it), `sync_at_most_once_per_second` (virtual clock), `snapshot_every_1200_ticks_if_dirty`, `no_snapshot_when_clean`, `tick_path_never_awaits` (an adapter whose methods return never-resolving promises does not stall `stepTick`), `storage_onError_is_fatal`, `bytes_per_logged_action` (counter vs budgets file).
 
 ## Exit criteria
-- [ ] All tests above pass by name under `pnpm test`.
-- [ ] The native log written by step 3 and the log written by the Node host for the same script are byte-identical (`log_bytes_native_equals_wasm`).
-- [ ] M02's ABI registry test includes the four new exports; import allowlist unchanged.
-- [ ] `packages/engine/budgets.json` has `logBytesPerAction` with the measured value and ceiling.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name under `pnpm test`.
+- [x] The native log written by step 3 and the log written by the Node host for the same script are byte-identical (`log_bytes_native_equals_wasm`).
+- [x] M02's ABI registry test includes the four new exports; import allowlist unchanged.
+- [x] `packages/engine/budgets.json` has `logBytesPerAction` with the measured value and ceiling.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t persist` · `pnpm test rust -t heavy_mode` · `pnpm test wasm -t write_ahead` · `pnpm test` · `pnpm lint`
@@ -656,3 +656,5 @@ transitively" sentence corrected above.
 `cargo nextest run --workspace --features engine/testing,testing`: 516 tests, 516 passed, 2 skipped.
 `pnpm test`: `rust pass 516 tests`, `unit pass 233 tests`, `wasm pass 72 tests`, `browser pass 185
 tests`. `pnpm lint`: biome/rustfmt/clippy/tsc all green. No golden moved.
+
+**Gate (orchestrator).** Cut 1-3 / 4-6, two implementers, three fix rounds on the second, one review agent. `pnpm gate 6bba40b`: no existing golden changed (new goldens only), no markers. Rulings: the whole-buffer `SnapshotWriter` behind the unchanged `begin`/`next` ABI is accepted (ADR 0005's arena argument vs 0007 §8's 8 MiB slack is unmeasured; ledger row, owner M36); `log_bytes_native_equals_wasm` compares native and `.wasm` against one shared real-pipeline golden (`persist_abi_log_parity.hex`) rather than step 3's log, whose shape no real host writes; this meets the criterion's intent (native = wasm, byte for byte). Fix round 1: replay and heavy mode had never run on a real host's log (`replay_real_host_log_matches_live`), and the dirty flag now follows Planning decision 7 (a logged record dirties). **Fix round 1 surfaced a real format defect**: a snapshot taken after an idle gap resumed replay with the wrong `tick_delta` reference; fix round 2 added `log_ref_tick` to the snapshot container and a segment-open reset (`replay_from_snapshot_after_idle_gap_matches_live`; the reviewer re-proved it: `left: 10, right: 2` with the fix reverted). The review agent found `skip_kind_decodes_as_noop` vacuous (the replay `Skip` arm replaced by `panic!()`, 515/515 still passed); fix round 3 added `replay_skip_records_decode_as_noop`, and the orchestrator re-ran that injection (panics, fails). The three container additions (`total_len`, length-prefixed action payloads, `log_ref_tick`) are recorded in an ADR amending 0005. Final gate: `rust` 516, `unit` 233, `wasm` 72, `browser` 185 at 31 s of 48 s, lint clean.
