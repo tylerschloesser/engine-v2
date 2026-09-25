@@ -199,7 +199,15 @@ export function parsePlaywrightJson(json) {
   }
   for (const suite of report.suites ?? []) walkSuite(suite)
 
-  return { tests, failures, warnings, adapters: [...adapters] }
+  // Gate round 1 fix (docs/plan/20-reference-game-v0.md): top-level `report.errors` -- global
+  // setup/teardown and `webServer` failures land only here, never inside `suites` (a `webServer`
+  // that fails to start crashes before any spec even runs, so `tests`/`failures` stay `0`/`[]`
+  // either way). Previously unread entirely; `scripts/lib/adapters.mjs`'s `playwright` adapter uses
+  // this to tell that crash apart from a `--grep` that legitimately matched nothing (Playwright
+  // exits 1 and reports 0 tests / 0 failures in *both* cases alike, so exit code cannot do it).
+  const errors = (report.errors ?? []).map((e) => e.message ?? String(e))
+
+  return { tests, failures, warnings, adapters: [...adapters], errors }
 }
 
 /** The message lines, then the first stack frame outside node_modules (where the test failed). */

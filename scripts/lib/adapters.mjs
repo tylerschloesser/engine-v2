@@ -143,10 +143,26 @@ export const adapters = {
     // Not `fromReport`: unlike nextest's `--no-tests=pass`/vitest's `--passWithNoTests`, Playwright
     // has no flag to make an empty `--grep` match exit 0, and it does now happen legitimately (the
     // `engines` leg above, gate round 3, under a narrow `-t` pattern that matches only the main
-    // leg's own tests) -- a successfully parsed, empty report (`suites: []`, an `errors: [{message:
-    // "Error: No tests found"}]` `fromReport` never reads) is zero tests, not a failure.
+    // leg's own tests) -- a successfully parsed, empty report (`suites: []`, top-level `errors:
+    // [{message: "Error: No tests found"}]`) is zero tests, not a failure, *and* Playwright still
+    // exits 1 for it (measured directly: `--grep` matching nothing exits 1 with exactly that
+    // message, same as every other empty-grep case) -- so exit code cannot tell this apart from a
+    // real crash before any test ran.
+    //
+    // Gate round 1 fix (docs/plan/20-reference-game-v0.md): the previous version of this function
+    // treated *any* parsed, empty (`tests: 0, failures: []`) report as this legitimate case, exit
+    // code unchecked -- but a `webServer` that fails to start produces the exact same shape (a
+    // crash before any spec runs still lets the JSON reporter finalize a valid, empty report), so it
+    // was silently reported as a pass too (found live: the `engines` leg's own `webServer` port
+    // collision -- `browser pass`, `test-results/engines/report.json` showed `expected: 0`, and
+    // WebKit/Firefox coverage vanished with no failure anywhere). The two cases share `tests`/
+    // `failures`/exit code; what differs is `errors` (`parsePlaywrightJson`'s new field, top-level
+    // `report.errors`, previously unread): the intentional case's only entry is always exactly
+    // "Error: No tests found"; a `webServer` crash's is a *different* message (measured: "Error:
+    // Process from config.webServer was not able to start. Exit code: 1"). Anything in `errors`
+    // other than "No tests found" is therefore a real failure, reported with that message.
     parse({ reportPath, exitCode, logPath }) {
-      let result = { tests: 0, failures: [] }
+      let result = { tests: 0, failures: [], errors: [] }
       let parsed = false
       if (reportPath && existsSync(reportPath)) {
         try {
@@ -156,14 +172,17 @@ export const adapters = {
           // An unreadable report is handled like a missing one.
         }
       }
-      if (parsed && result.tests === 0 && result.failures.length === 0) return result
-      if (exitCode !== 0 && result.failures.length === 0) {
+      const realErrors = (result.errors ?? []).filter((m) => !m.includes('No tests found'))
+      if (parsed && result.tests === 0 && result.failures.length === 0 && realErrors.length === 0) {
+        return result
+      }
+      if ((exitCode !== 0 || realErrors.length > 0) && result.failures.length === 0) {
         const name = parsed
           ? `runner exited ${exitCode} after a parseable report showed 0 failures`
           : `runner exited ${exitCode} without a parseable report`
         result.failures.push({
           name,
-          message: lastLines(readLog(logPath), 20),
+          message: realErrors.length > 0 ? realErrors.join('\n') : lastLines(readLog(logPath), 20),
           artefacts: [logPath],
         })
       }

@@ -192,7 +192,17 @@ async function runLeg(suite, leg, opts) {
       ...(opts.selfCheckFail ? { RUNNER_SELF_CHECK: 'fail' } : {}),
     },
   })
-  return adapter.parse({ tier: opts.tier, reportPath: report, exitCode: code, logPath })
+  const result = adapter.parse({ tier: opts.tier, reportPath: report, exitCode: code, logPath })
+  // Gate round 1 fix (docs/plan/20-reference-game-v0.md): a failure's own `name` (what
+  // `formatFailure` prints as `FAIL <suite> <name>`) never otherwise says *which leg* of a
+  // multi-leg suite it came from -- `suite` there is always the top-level suite name (`runSuite`'s
+  // own `suite.name`), the same for every leg. Tag it here, once, for every leg with its own name
+  // distinct from the suite's (an extra `legs` entry, e.g. `engines`/`bun`; the suite's own main
+  // leg needs no tag, it already reads as `browser: ...`).
+  if (leg.name !== suite.name && result.failures.length > 0) {
+    result.failures = result.failures.map((f) => ({ ...f, name: `${leg.name}: ${f.name}` }))
+  }
+  return result
 }
 
 process.exit(await main())

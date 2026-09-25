@@ -13,9 +13,20 @@ const baseURL = `http://127.0.0.1:${port}`
 // here, rather than a new top-level suite or a separate `playwright.config.ts` -- the `playwright`
 // adapter (`scripts/lib/adapters.mjs`) hardcodes this one config file for every playwright-kind
 // suite/leg, so a project + `testDir` override is the only way in without touching that adapter.
-// Fixed port (not `ENGINE_TEST_PORT`-derived like the pages server): a wholly separate Vite app,
-// never run concurrently on the same port as the pages preview by any suite/leg this repo has.
-const referencePort = 4520
+//
+// Gate round 1 fix: was a fixed `4520`, on the (wrong) assumption that a wholly separate Vite app
+// would never run concurrently with another leg's own copy of this same config. `webServer` is
+// config-level, not project-scoped, so *every* `playwright test` invocation of this file starts
+// *every* entry regardless of `--project` (this file's own `reference` project comment already
+// says as much for the *pages* server) -- `pnpm test:slow browser`'s `engines` leg (webkit+firefox,
+// its own `ENGINE_TEST_PORT`, `scripts/suites.mjs`) runs concurrently with the main leg and tried
+// to bind this same fixed port a second time, crashing with `EADDRINUSE` (found live: `engines.log`
+// -- `Error: Port 4520 is already in use` / `Process from config.webServer was not able to start.
+// Exit code: 1`). Derived from `port` the same way the *pages* server already is (`ENGINE_TEST_PORT`,
+// default 4517, so this stays `4520` for that default -- no behaviour change for a single leg),
+// giving every leg its own distinct pair of ports instead of a shared one no leg's process
+// coordinates over.
+const referencePort = port + 3
 const referenceBaseURL = `http://127.0.0.1:${referencePort}`
 
 // M04: base port for the `gc` project's `flat` CDP transport (docs/plan/04-zero-gc-harness.md,
