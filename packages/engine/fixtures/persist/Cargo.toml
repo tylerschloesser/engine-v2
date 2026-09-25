@@ -1,0 +1,19 @@
+[package]
+name = "fx-persist"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"] # cdylib -> the .wasm (M22b/steps 4-6); rlib -> the native tests here
+
+[lints]
+workspace = true
+
+[dependencies]
+engine = { path = "../../crates/engine" }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+ts-rs = "12"
+
+[dev-dependencies]
+engine = { path = "../../crates/engine", features = ["testing"] }

@@ -34,6 +34,25 @@ pub struct WorldParams<G: Game> {
     pub max_action_growth: u32,
 }
 
+// Bounded on the worldgen params' own `Clone` (mirrors `Record<G>`'s manual `Clone` above):
+// `testing::heavy` (docs/plan/22-persistence-log-and-snapshots.md) needs two independent geneses
+// from one `WorldParams` value (an uninterrupted run and a save/restore run, both from the same
+// seed and params).
+impl<G: Game> Clone for WorldParams<G>
+where
+    <G::Worldgen as Worldgen>::Params: Clone,
+{
+    fn clone(&self) -> Self {
+        WorldParams {
+            seed: self.seed,
+            worldgen: self.worldgen.clone(),
+            max_entities: self.max_entities,
+            max_modified_tiles: self.max_modified_tiles,
+            max_action_growth: self.max_action_growth,
+        }
+    }
+}
+
 /// One recorded input to a frame (0004: "Engine-defined connection events ... are sequenced in the
 /// same stream" as actions). `seq` is the client-assigned, per-player monotonic counter (0003,
 /// 0004).
@@ -228,6 +247,15 @@ impl<G: Game> Sim<G> {
 
     pub fn authority(&self) -> &Authority<G> {
         &self.authority
+    }
+
+    /// Wraps an already-built `Authority` (docs/plan/22-persistence-log-and-snapshots.md
+    /// `testing::replay`/`testing::heavy`, restoring from a decoded snapshot via
+    /// `Authority::from_snapshot`): the counterpart to [`Sim::genesis`] that skips building a
+    /// fresh world.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn from_parts(authority: Authority<G>) -> Self {
+        Sim { authority }
     }
 
     /// Mutable access, additive beyond this milestone's own Provides (docs/plan/

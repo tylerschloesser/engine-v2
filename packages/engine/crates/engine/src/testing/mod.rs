@@ -5,6 +5,7 @@ use std::path::Path;
 pub mod budgets;
 pub mod cache_matrix;
 pub mod golden_bytes;
+pub mod replay;
 pub mod testkit;
 pub mod worldgen_contract;
 
@@ -16,6 +17,7 @@ pub use cache_matrix::{
     CacheConfig, CountingHandle, CountingSource, DEFAULT_CACHE_CHUNKS, Prewarm, TestTerrain,
     assert_cache_invisible, prewarm_chunks,
 };
+pub use replay::{Base, FirstDivergence, SnapshotBase, heavy, replay};
 pub use testkit::{Loopback, run_script};
 pub use worldgen_contract::assert_worldgen_contract;
 
