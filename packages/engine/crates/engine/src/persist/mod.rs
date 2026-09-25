@@ -36,6 +36,10 @@ pub enum PersistError {
     Malformed,
     /// A trailing CRC-32 did not match the bytes it protects.
     Crc,
+    /// docs/plan/22b-persistence-load-and-fs.md: a snapshot's own `container_version` did not match
+    /// this build's (`snapshot::CONTAINER_VERSION`) -- distinct from `Malformed` so the ABI layer
+    /// can report `Status::ContainerVersion` rather than a generic `Status::Corrupt`.
+    ContainerVersion,
 }
 
 impl From<CodecError> for PersistError {

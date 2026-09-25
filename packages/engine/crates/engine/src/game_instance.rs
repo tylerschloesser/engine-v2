@@ -423,6 +423,63 @@ where
         }
     }
 
+    /// docs/plan/22b-persistence-load-and-fs.md.
+    fn sim_restore_begin(&mut self, total_len: u32) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_restore_begin(total_len),
+            _ => Status::WrongRole,
+        }
+    }
+
+    fn sim_restore_push(&mut self, bytes: &[u8]) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_restore_push(bytes),
+            _ => Status::WrongRole,
+        }
+    }
+
+    fn sim_restore_end(&mut self, result: &mut [u8]) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_restore_end(result),
+            _ => Status::WrongRole,
+        }
+    }
+
+    fn sim_replay_begin(&mut self, segment: u32, offset: u32) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_replay_begin(segment, offset),
+            _ => Status::WrongRole,
+        }
+    }
+
+    fn sim_replay_push(&mut self, bytes: &[u8]) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_replay_push(bytes),
+            _ => Status::WrongRole,
+        }
+    }
+
+    fn sim_replay_end(&mut self) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_replay_end(),
+            _ => Status::WrongRole,
+        }
+    }
+
+    fn sim_replay_valid_end(&mut self) -> u32 {
+        match self {
+            GameInstance::Sim(h) => h.sim_replay_valid_end(),
+            _ => 0,
+        }
+    }
+
+    fn sim_tick_now(&mut self) -> u32 {
+        match self {
+            GameInstance::Sim(h) => h.sim_tick_now(),
+            _ => 0,
+        }
+    }
+
     fn sim_warm_one(&mut self) -> u32 {
         match self {
             GameInstance::Sim(h) => h.sim_warm_one(),

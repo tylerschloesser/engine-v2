@@ -246,6 +246,16 @@ impl<G: Game> FrameReader<G> {
     /// Feeds `block` (any length, including empty -- an empty call just tries to drain whatever is
     /// already buffered) and returns at most one decoded frame. If more than one frame's worth of
     /// bytes is already buffered, the rest waits for the next call.
+    /// Bytes still buffered and not yet consumed by a decoded frame (docs/plan/
+    /// 22b-persistence-load-and-fs.md): the replay driver's own way to compute how many bytes of a
+    /// segment tail were consumed by valid, CRC-checked frames (`fed - buffered_len()`) without this
+    /// module exposing its internal parse state any further. On a decode error the malformed bytes
+    /// are left in the buffer (never drained), so this correctly still names the byte just before
+    /// them as "consumed".
+    pub fn buffered_len(&self) -> usize {
+        self.buf.len()
+    }
+
     pub fn push(&mut self, block: &[u8]) -> Result<FrameProgress<G>, PersistError> {
         self.buf.extend_from_slice(block);
         let (len, prefix) = match peek_varint(&self.buf) {

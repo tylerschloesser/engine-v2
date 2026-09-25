@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 16;
+pub const ABI_VERSION: u32 = 17;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -55,6 +55,27 @@ pub enum Status {
     /// startup error instead of an allocator failure partway through the first tick. Appended,
     /// never inserted (0014's numbering rule).
     BudgetExceedsArena = 10,
+    /// `sim_restore_end` (docs/plan/22b-persistence-load-and-fs.md): the decoded snapshot's own
+    /// `Identity::build_hash` differs from this running build's (0005 "Sim identity" hash). Reported,
+    /// not handled -- no migrate path exists here (M24b's own job); `Persistence.open` turns this
+    /// into a thrown `WorldLoadError` of kind `'identity'` and touches no storage.
+    IdentityMismatch = 11,
+    /// `sim_restore_begin`/`sim_restore_push`/`sim_restore_end`: the pushed bytes did not decode as
+    /// a valid snapshot (a bad CRC, or a `SnapshotReader` still `NeedMore` when `sim_restore_end`
+    /// was called -- a torn snapshot). `Persistence.open` treats this as "this candidate snapshot is
+    /// unusable" and falls back to the next older one (0005 Recovery: "newest snapshot whose CRC
+    /// verifies").
+    Corrupt = 12,
+    /// `sim_restore_begin`/`sim_restore_push`: the pushed bytes' `container_version` does not match
+    /// this build's own (`persist::snapshot::CONTAINER_VERSION`) -- distinct from `Corrupt` so a
+    /// caller could in principle tell "garbled" from "a newer/older format" apart, though nothing
+    /// yet acts on that distinction (no format migration exists, docs/decisions/0038).
+    ContainerVersion = 13,
+    /// `sim_replay_push`/`sim_replay_end`: a pushed block failed to decode as a whole, CRC-valid
+    /// frame (malformed or a bad CRC) -- 0005 Recovery's "re-apply frames until the first truncated
+    /// or CRC-failing frame". **Not an error for the last (currently open) segment**: that is simply
+    /// how recovery finds the torn tail to truncate. `sim_replay_valid_end()` reports where.
+    TornTail = 14,
 }
 
 /// Fixed regions in linear memory. Ids 3–8 are reserved so parallel milestones share names; each
@@ -430,6 +451,78 @@ pub trait Instance: Sized + 'static {
     fn sim_dirty(&mut self) -> u32 {
         0
     }
+
+    /// docs/plan/22b-persistence-load-and-fs.md (`ABI_VERSION` 16 -> 17), sim role: begins decoding
+    /// a snapshot of `total_len` bytes (the whole container, magic through the trailing crc32) fed
+    /// in blocks by [`Instance::sim_restore_push`]. Must not require [`Instance::sim_genesis`] to
+    /// have run (the whole point: this replaces it for a loaded world). `total_len` is advisory
+    /// (buffer-sizing hint); nothing about correctness depends on it being exact.
+    fn sim_restore_begin(&mut self, _total_len: u32) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/22b-persistence-load-and-fs.md: feeds the next block of the snapshot
+    /// [`Instance::sim_restore_begin`] started (`bytes`, the first `len` bytes of `Persist`, reused
+    /// here as a receive region -- the same region [`Instance::sim_snapshot_next`] writes *out*
+    /// through on the save side). `Status::Corrupt`/`Status::ContainerVersion` on a bad block;
+    /// `Status::Ok` otherwise, whether or not the snapshot is fully buffered yet.
+    fn sim_restore_push(&mut self, _bytes: &[u8]) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/22b-persistence-load-and-fs.md: finishes a restore. `Status::Ok` on success --
+    /// builds the live `Sim` from the decoded snapshot and writes `log_segment`, `log_offset` (two
+    /// LE `u32`, in that order) into `result` (the whole `Result` region), the position
+    /// `Instance::sim_replay_begin` resumes from. `Status::Corrupt` if the snapshot never finished
+    /// decoding (still `NeedMore`) or its CRC failed; `Status::IdentityMismatch` if its identity's
+    /// `build_hash` differs from this running build's own.
+    fn sim_restore_end(&mut self, _result: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/22b-persistence-load-and-fs.md, sim role: begins replaying a segment's log tail
+    /// from byte `offset` (a `Sim` must already exist -- from [`Instance::sim_restore_end`] or
+    /// [`Instance::sim_genesis`]). `segment` is accepted but unused by the default/`Host<G>`
+    /// implementation, the same "named because the seam names it, not read" shape as
+    /// `sim_segment_header`'s own `_segment`.
+    fn sim_replay_begin(&mut self, _segment: u32, _offset: u32) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/22b-persistence-load-and-fs.md: feeds the next block of log bytes (`bytes`, the
+    /// first `len` bytes of `Persist`, reused as a receive region exactly like
+    /// [`Instance::sim_restore_push`]): decodes as many whole frames as are buffered, applying each
+    /// through the same tick procedure a live host uses (idle ticks implied by `tick_delta` included,
+    /// no logged record). `Status::Ok` normally; `Status::TornTail` once a block fails to decode
+    /// (malformed or a bad CRC) -- not fatal, "not an error for the last segment"; further pushes are
+    /// then ignored until [`Instance::sim_replay_end`].
+    fn sim_replay_push(&mut self, _bytes: &[u8]) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/22b-persistence-load-and-fs.md: finishes a replay. `Status::Ok` if every pushed
+    /// block decoded cleanly (including a genuinely empty tail); `Status::TornTail` if
+    /// [`Instance::sim_replay_push`] ever hit a bad block. Either way the `Sim` is left at whatever
+    /// tick the last successfully applied frame reached ([`Instance::sim_tick_now`]).
+    fn sim_replay_end(&mut self) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/22b-persistence-load-and-fs.md: the byte offset, within the segment
+    /// [`Instance::sim_replay_begin`] named, just after the last frame whose CRC verified --
+    /// `offset` (the starting point) when nothing at all decoded. `0` on a wrong role or no replay
+    /// ever begun, same "always answer, cost nothing" shape as `sim_dirty`/`drawlist_len`.
+    fn sim_replay_valid_end(&mut self) -> u32 {
+        0
+    }
+
+    /// docs/plan/22b-persistence-load-and-fs.md: the sim's current tick (`Sim::tick`), read after a
+    /// restore/replay (or a live `sim_genesis`) to learn the resume tick (0005 Loss windows:
+    /// "resumes at max(latest snapshot tick, last logged frame tick)"). `0` on a wrong role or before
+    /// any world exists, same "always answer, cost nothing" shape as `sim_dirty`.
+    fn sim_tick_now(&mut self) -> u32 {
+        0
+    }
 }
 
 /// Emits every export for every role, the `#[global_allocator]`, and the single-threaded instance
@@ -523,6 +616,38 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_dirty() -> u32 {
             $crate::abi::sim_dirty(&__ENGINE_SLOT)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_restore_begin(total_len: u32) -> u32 {
+            $crate::abi::sim_restore_begin(&__ENGINE_SLOT, total_len) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_restore_push(len: u32) -> u32 {
+            $crate::abi::sim_restore_push(&__ENGINE_SLOT, len) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_restore_end() -> u32 {
+            $crate::abi::sim_restore_end(&__ENGINE_SLOT) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_replay_begin(segment: u32, offset: u32) -> u32 {
+            $crate::abi::sim_replay_begin(&__ENGINE_SLOT, segment, offset) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_replay_push(len: u32) -> u32 {
+            $crate::abi::sim_replay_push(&__ENGINE_SLOT, len) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_replay_end() -> u32 {
+            $crate::abi::sim_replay_end(&__ENGINE_SLOT) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_replay_valid_end() -> u32 {
+            $crate::abi::sim_replay_valid_end(&__ENGINE_SLOT)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_tick_now() -> u32 {
+            $crate::abi::sim_tick_now(&__ENGINE_SLOT)
         }
 
         // client

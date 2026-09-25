@@ -262,6 +262,49 @@ fn compute_worldgen_fingerprint<G: Game>(
     crate::worldgen::worldgen_fingerprint(&source, dims)
 }
 
+/// docs/plan/22b-persistence-load-and-fs.md: builds the same terrain shell [`Sim::genesis`] would
+/// (the cache is excluded from a snapshot, `snapshot_excludes_dense_cache`, so its capacity is
+/// inert here exactly as it is at genesis -- `crate::sim::DEFAULT_CACHE_CHUNKS`, not `self.
+/// cache_chunks`, matching `Sim::genesis`'s own hardcoded choice) -- the empty `Store<G>` shell
+/// [`crate::persist::SnapshotReader::new`] needs (its own doc comment: "correct terrain pristine
+/// source/dims/cache capacity, exactly `Store::decode`'s own precondition").
+fn restore_shell<G: Game>(
+    seed: u64,
+    worldgen: <G::Worldgen as Worldgen>::Params,
+) -> crate::store::Store<G>
+where
+    G::Global: Default,
+{
+    let dims = crate::world::ChunkDims::new(G::CHUNK_BITS);
+    let source: Box<dyn crate::world::PristineSource> = Box::new(crate::worldgen::Pristine::<
+        G::Worldgen,
+    >::new(seed, worldgen));
+    let terrain = crate::world::TerrainStore::new(
+        dims,
+        source,
+        crate::world::CacheCapacity::Chunks(crate::sim::DEFAULT_CACHE_CHUNKS),
+    );
+    crate::store::Store::new(terrain, G::Global::default())
+}
+
+/// docs/plan/22b-persistence-load-and-fs.md: `FrameRecord<G>` -> `Record<G>` (by value: the
+/// production replay path always holds an owned, freshly-decoded `Vec<FrameRecord<G>>` from
+/// `FrameReader::push`, so moving `action` out directly needs no `G::Action: Clone` bound on
+/// `Host<G>`'s own `Instance` impl -- unlike `testing::replay`'s own private copy of this function,
+/// which borrows because its caller keeps `frame` around). A `Skip` decodes as a no-op (0005 "Panic
+/// recovery" / this milestone's own Non-scope: nothing here ever produces one). That module is
+/// `#[cfg(feature = "testing")]` (dev-only), so production replay (`Host::sim_replay_push`) cannot
+/// reach its copy.
+fn to_record<G: Game>(r: crate::persist::FrameRecord<G>) -> Option<Record<G>> {
+    match r {
+        crate::persist::FrameRecord::Action { who, seq, action } => {
+            Some(Record::Action { who, seq, action })
+        }
+        crate::persist::FrameRecord::Connection { who, ev } => Some(Record::Player { who, ev }),
+        crate::persist::FrameRecord::Skip { .. } => None,
+    }
+}
+
 /// The sim-role `Instance` (Scope: "`Host<G>` (here: `Sim<G>` + warm list; M15 adds
 /// connections)"). Built by `GameInstance::<G>::init` for `Role::Sim`; also usable standalone
 /// (this crate's own tests, and any future low-level caller that wants a bare sim-role instance
@@ -358,6 +401,37 @@ pub struct Host<G: Game> {
     /// [`Host::sim_snapshot_next`]; `None` when no snapshot is in flight (including right after one
     /// finishes draining).
     snapshot_writer: Option<crate::persist::SnapshotWriter>,
+
+    // -- M22b: restore (load a snapshot) and replay (apply a log tail) drivers ------------------
+    /// The in-progress snapshot decode [`Host::sim_restore_begin`] started, fed by
+    /// [`Host::sim_restore_push`]; `None` when no restore is in flight.
+    restore_reader: Option<crate::persist::SnapshotReader<G>>,
+    /// Set by [`Host::sim_restore_push`] once [`crate::persist::SnapshotReader::push`] reports
+    /// `Done`; consumed (and cleared) by [`Host::sim_restore_end`]. Kept separate from
+    /// `restore_reader` (rather than matching on its return value again) since `SnapshotReader::
+    /// push` cannot be called a second time to re-observe the same `Done`.
+    restore_done: Option<crate::persist::SnapshotInfo>,
+    /// The state-budget fields [`Host::sim_restore_begin`] took out of `pending` (`WorldParams`
+    /// carries no `Clone` bound on `worldgen`, so building the restore shell moves the whole value
+    /// out of `pending`; these three plain `u32`s are kept aside for [`Host::sim_restore_end`] to
+    /// apply via `Authority::set_budget`, the same way `Sim::genesis` does).
+    restore_budget: Option<(u32, u32, u32)>,
+    /// The in-progress log replay [`Host::sim_replay_begin`] started, fed by
+    /// [`Host::sim_replay_push`]; `None` when no replay is in flight.
+    replay_reader: Option<crate::persist::FrameReader<G>>,
+    /// [`Host::sim_replay_begin`]'s own `offset` argument: the absolute byte offset, within the
+    /// segment being replayed, that the first pushed byte represents. [`Host::sim_replay_valid_end`]
+    /// adds bytes consumed by valid frames to this.
+    replay_base_offset: u32,
+    /// Total bytes ever handed to [`Host::sim_replay_push`] since the matching
+    /// [`Host::sim_replay_begin`] (cumulative across calls): `replay_base_offset + this -
+    /// replay_reader`'s own unconsumed buffer length is the valid-end offset
+    /// ([`Host::sim_replay_valid_end`]).
+    replay_fed: u64,
+    /// Set once a pushed replay block fails to decode (docs/plan/22b-persistence-load-and-fs.md:
+    /// "not an error for the last segment") -- further pushes are then ignored, and
+    /// [`Host::sim_replay_end`] reports `Status::TornTail` rather than treating it as fatal.
+    replay_torn: bool,
 }
 
 /// The last-wins kind of an entity op this tick (host/mod Deviations: `scratch_entity_ops`'s own
@@ -443,6 +517,13 @@ impl<G: Game> Host<G> {
             worldgen_fingerprint,
             last_logged_tick: Tick(0),
             snapshot_writer: None,
+            restore_reader: None,
+            restore_done: None,
+            restore_budget: None,
+            replay_reader: None,
+            replay_base_offset: 0,
+            replay_fed: 0,
+            replay_torn: false,
         }
     }
 
@@ -1315,6 +1396,13 @@ where
             worldgen_fingerprint,
             last_logged_tick: Tick(0),
             snapshot_writer: None,
+            restore_reader: None,
+            restore_done: None,
+            restore_budget: None,
+            replay_reader: None,
+            replay_base_offset: 0,
+            replay_fed: 0,
+            replay_torn: false,
         })
     }
 
@@ -1573,6 +1661,173 @@ where
         self.sim
             .as_ref()
             .map_or(0, |sim| u32::from(sim.authority().dirty()))
+    }
+
+    /// docs/plan/22b-persistence-load-and-fs.md: begins decoding a snapshot. Deliberately does not
+    /// require `self.sim.is_none()` to have run genesis -- the whole point is to replace it -- but
+    /// does require no `Sim` exists yet (a fresh instance, or one whose `pending` a prior failed
+    /// attempt has not already consumed; `Persistence.open`'s own design tries each candidate
+    /// snapshot on a fresh `newInstance()`, so this is never asked to retry on the same `Host`).
+    fn sim_restore_begin(&mut self, _total_len: u32) -> Status {
+        if self.sim.is_some() {
+            return Status::AlreadyInitialised;
+        }
+        let Some(WorldParams {
+            seed,
+            worldgen,
+            max_entities,
+            max_modified_tiles,
+            max_action_growth,
+        }) = self.pending.take()
+        else {
+            return Status::AlreadyInitialised;
+        };
+        let shell = restore_shell::<G>(seed, worldgen);
+        self.restore_reader = Some(crate::persist::SnapshotReader::new(shell));
+        self.restore_done = None;
+        self.restore_budget = Some((max_entities, max_modified_tiles, max_action_growth));
+        Status::Ok
+    }
+
+    fn sim_restore_push(&mut self, bytes: &[u8]) -> Status {
+        let Some(reader) = self.restore_reader.as_mut() else {
+            return Status::NotInitialised;
+        };
+        match reader.push(bytes) {
+            Ok(crate::persist::SnapshotProgress::NeedMore) => Status::Ok,
+            Ok(crate::persist::SnapshotProgress::Done(info)) => {
+                self.restore_done = Some(info);
+                Status::Ok
+            }
+            Err(crate::persist::PersistError::Crc)
+            | Err(crate::persist::PersistError::Malformed) => Status::Corrupt,
+            Err(crate::persist::PersistError::ContainerVersion) => Status::ContainerVersion,
+        }
+    }
+
+    /// docs/plan/22b-persistence-load-and-fs.md: `Status::Corrupt` when the snapshot never reached
+    /// `Done` (still `NeedMore` -- a torn snapshot) or when `sim_restore_push` was never called at
+    /// all after `sim_restore_begin`; `Status::IdentityMismatch` when the decoded `Identity` differs
+    /// from this build's own. On `Status::Ok`, writes `log_segment`/`log_offset` (two LE `u32`) into
+    /// `result` -- the position `sim_replay_begin` resumes replay from.
+    fn sim_restore_end(&mut self, result: &mut [u8]) -> Status {
+        let Some(reader) = self.restore_reader.take() else {
+            return Status::NotInitialised;
+        };
+        let Some(info) = self.restore_done.take() else {
+            return Status::Corrupt;
+        };
+        let running = self.identity();
+        if info.identity.build_hash != running.build_hash {
+            return Status::IdentityMismatch;
+        }
+        let store = reader.into_store();
+        let mut authority = crate::authority::Authority::from_snapshot(store, info.rng, info.tick);
+        if let Some((max_entities, max_modified_tiles, max_action_growth)) =
+            self.restore_budget.take()
+        {
+            authority.set_budget(max_entities, max_modified_tiles, max_action_growth);
+        }
+        self.sim = Some(Sim::from_parts(authority));
+        self.last_logged_tick = Tick(info.log_ref_tick);
+        let Some(out) = result.get_mut(..8) else {
+            return Status::BadLength;
+        };
+        out[0..4].copy_from_slice(&info.log_segment.to_le_bytes());
+        out[4..8].copy_from_slice(&info.log_offset.to_le_bytes());
+        Status::Ok
+    }
+
+    /// docs/plan/22b-persistence-load-and-fs.md: `self.sim` must already exist (from
+    /// `sim_restore_end` or `sim_genesis`) -- `_segment` unused, same shape as `sim_segment_header`'s
+    /// own.
+    fn sim_replay_begin(&mut self, _segment: u32, offset: u32) -> Status {
+        if self.sim.is_none() {
+            return Status::NotInitialised;
+        }
+        self.replay_reader = Some(crate::persist::FrameReader::new());
+        self.replay_base_offset = offset;
+        self.replay_fed = 0;
+        self.replay_torn = false;
+        Status::Ok
+    }
+
+    /// Applies every whole, CRC-valid frame `bytes` completes (idle ticks implied by `tick_delta`
+    /// stepped first, exactly `testing::replay`'s own algorithm) through the live tick procedure
+    /// (`Sim::step`), advancing `self.last_logged_tick` to each applied frame's own tick -- so live
+    /// logging continues correctly (`sim_seal_frame`'s own `tick_delta` reference) once replay hands
+    /// off to real ticking. Every sub-expression re-borrows `self.sim`/`self.replay_reader` fresh
+    /// (`.as_ref()`/`.as_mut()` per statement) rather than holding one across the loop, so mutating
+    /// `self.last_logged_tick`/`self.replay_torn` alongside never fights the borrow checker over one
+    /// long-lived borrow of a sibling field -- this runs once at load, off any tick or frame budget
+    /// (`.claude/rules/hot-paths.md` binds those paths only).
+    fn sim_replay_push(&mut self, bytes: &[u8]) -> Status {
+        if self.sim.is_none() {
+            return Status::NotInitialised;
+        }
+        if self.replay_reader.is_none() {
+            return Status::NotInitialised;
+        }
+        if self.replay_torn {
+            return Status::TornTail;
+        }
+        self.replay_fed += bytes.len() as u64;
+        let mut remaining = bytes;
+        let mut out: Vec<Outcome<G>> = Vec::new();
+        loop {
+            let progress = match self.replay_reader.as_mut().unwrap().push(remaining) {
+                Ok(p) => p,
+                Err(_) => {
+                    self.replay_torn = true;
+                    break;
+                }
+            };
+            remaining = &[];
+            let frame = match progress {
+                crate::persist::FrameProgress::NeedMore => break,
+                crate::persist::FrameProgress::Frame(f) => f,
+            };
+            let frame_tick = self.last_logged_tick.0.wrapping_add(frame.tick_delta);
+            let sim_tick_now = self.sim.as_ref().unwrap().tick().0;
+            let idle = frame_tick.saturating_sub(1).saturating_sub(sim_tick_now);
+            for _ in 0..idle {
+                self.sim.as_mut().unwrap().step(&[], &mut out);
+            }
+            let records: Vec<Record<G>> = frame.records.into_iter().filter_map(to_record).collect();
+            self.sim.as_mut().unwrap().step(&records, &mut out);
+            self.last_logged_tick = Tick(frame_tick);
+        }
+        if self.replay_torn {
+            Status::TornTail
+        } else {
+            Status::Ok
+        }
+    }
+
+    /// docs/plan/22b-persistence-load-and-fs.md: does **not** clear `self.replay_reader` (unlike
+    /// `sim_restore_end`'s own `.take()`) -- `sim_replay_valid_end` needs to keep reading its
+    /// `buffered_len()` afterward; the next `sim_replay_begin` replaces it anyway.
+    fn sim_replay_end(&mut self) -> Status {
+        if self.replay_reader.is_none() {
+            return Status::NotInitialised;
+        }
+        if self.replay_torn {
+            Status::TornTail
+        } else {
+            Status::Ok
+        }
+    }
+
+    fn sim_replay_valid_end(&mut self) -> u32 {
+        let Some(reader) = self.replay_reader.as_ref() else {
+            return 0;
+        };
+        let buffered = reader.buffered_len() as u64;
+        (self.replay_base_offset as u64 + self.replay_fed.saturating_sub(buffered)) as u32
+    }
+
+    fn sim_tick_now(&mut self) -> u32 {
+        self.sim.as_ref().map_or(0, |s| s.tick().0)
     }
 
     fn sim_warm_one(&mut self) -> u32 {

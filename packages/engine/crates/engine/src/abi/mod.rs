@@ -531,6 +531,82 @@ pub fn drawlist_len<T: Instance>(slot: &Slot<T>) -> u32 {
     }
 }
 
+/// `sim_restore_begin(total_len)` (docs/plan/22b-persistence-load-and-fs.md).
+pub fn sim_restore_begin<T: Instance>(slot: &Slot<T>, total_len: u32) -> Status {
+    match slot.sim() {
+        Ok(rt) => rt.inst.sim_restore_begin(total_len),
+        Err(status) => status,
+    }
+}
+
+/// `sim_restore_push(len)`: `len` bytes of `Persist`, reused as a receive region (the ABI's own
+/// "in vs out, same region" convention: `bytes` is a *view*, mirroring `sim_admit`'s own `Rx`).
+pub fn sim_restore_push<T: Instance>(slot: &Slot<T>, len: u32) -> Status {
+    let rt = match slot.sim() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    match rt.layout.bytes(RegionId::Persist).get(..len as usize) {
+        Some(bytes) => rt.inst.sim_restore_push(bytes),
+        None => Status::BadLength,
+    }
+}
+
+/// `sim_restore_end()`: writes `log_segment`/`log_offset` into `Result` on success (`Instance::
+/// sim_restore_end`'s own doc comment).
+pub fn sim_restore_end<T: Instance>(slot: &Slot<T>) -> Status {
+    let rt = match slot.sim() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.sim_restore_end(result)
+}
+
+/// `sim_replay_begin(segment, offset)`.
+pub fn sim_replay_begin<T: Instance>(slot: &Slot<T>, segment: u32, offset: u32) -> Status {
+    match slot.sim() {
+        Ok(rt) => rt.inst.sim_replay_begin(segment, offset),
+        Err(status) => status,
+    }
+}
+
+/// `sim_replay_push(len)`: same in-region-as-receive-buffer shape as `sim_restore_push`.
+pub fn sim_replay_push<T: Instance>(slot: &Slot<T>, len: u32) -> Status {
+    let rt = match slot.sim() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    match rt.layout.bytes(RegionId::Persist).get(..len as usize) {
+        Some(bytes) => rt.inst.sim_replay_push(bytes),
+        None => Status::BadLength,
+    }
+}
+
+/// `sim_replay_end()`.
+pub fn sim_replay_end<T: Instance>(slot: &Slot<T>) -> Status {
+    match slot.sim() {
+        Ok(rt) => rt.inst.sim_replay_end(),
+        Err(status) => status,
+    }
+}
+
+/// `sim_replay_valid_end() -> u32`: same "always answer, cost nothing" shape as `sim_dirty`.
+pub fn sim_replay_valid_end<T: Instance>(slot: &Slot<T>) -> u32 {
+    match slot.sim() {
+        Ok(rt) => rt.inst.sim_replay_valid_end(),
+        Err(_) => 0,
+    }
+}
+
+/// `sim_tick_now() -> u32`: same "always answer, cost nothing" shape as `sim_dirty`.
+pub fn sim_tick_now<T: Instance>(slot: &Slot<T>) -> u32 {
+    match slot.sim() {
+        Ok(rt) => rt.inst.sim_tick_now(),
+        Err(_) => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

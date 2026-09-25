@@ -222,7 +222,9 @@ impl<G: Game> SnapshotReader<G> {
         }
         let version = u16::from_le_bytes(self.buf[4..6].try_into().expect("2 bytes"));
         if version != CONTAINER_VERSION {
-            return Err(PersistError::Malformed);
+            // docs/plan/22b-persistence-load-and-fs.md: distinct from `Malformed` so the ABI layer
+            // (`Host::sim_restore_push`/`sim_restore_end`) can report `Status::ContainerVersion`.
+            return Err(PersistError::ContainerVersion);
         }
         let (total_len, len_bytes) = match peek_varint(&self.buf[6..]) {
             VarintPeek::Incomplete => return Ok(SnapshotProgress::NeedMore),

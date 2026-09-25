@@ -310,14 +310,14 @@ impl<G: Game> Authority<G> {
 
     /// The read side of [`Authority::rng`]/[`Authority::from_snapshot`]: rebuilds an `Authority`
     /// from a decoded snapshot's pieces (M22, docs/plan/22-persistence-log-and-snapshots.md
-    /// Non-scope: "loading a stored world ... M22b" -- this is the container-level piece only,
-    /// used natively by `testing::replay`/`testing::heavy` and this module's own tests; nothing
-    /// here touches `Storage`, a manifest, or identity validation). Budgets fall back to
+    /// Non-scope: "loading a stored world ... M22b" -- this is the container-level piece only;
+    /// nothing here touches `Storage`, a manifest, or identity validation). Budgets fall back to
     /// [`Authority::new`]'s own defaults, exactly as a fresh `Authority` would have, since a
     /// snapshot's container carries no budget fields of its own (0005 Formats) -- a caller that
     /// needs the original world's budgets calls [`Authority::set_budget`] afterward, the same way
-    /// `Sim::genesis` does.
-    #[cfg(any(test, feature = "testing"))]
+    /// `Sim::genesis` does. Plain `pub` since docs/plan/22b-persistence-load-and-fs.md: `host::
+    /// Host::sim_restore_end` is now a genuine production caller (previously only `testing::replay`/
+    /// `testing::heavy` and this module's own tests, behind the `testing` feature).
     pub fn from_snapshot(store: Store<G>, rng: SimRng, tick: Tick) -> Self {
         Authority {
             store,

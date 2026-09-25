@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 16
+export const ABI_VERSION = 17
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -26,6 +26,22 @@ export const Status = {
   Unsupported: 8,
   NotCached: 9,
   BudgetExceedsArena: 10,
+  // docs/plan/22b-persistence-load-and-fs.md: `sim_restore_end` -- the decoded snapshot's own
+  // `Identity.buildHash` differs from this running build's. Reported, not handled (M24b's own
+  // migrate path); `Persistence.open` throws `WorldLoadError { kind: 'identity' }`.
+  IdentityMismatch: 11,
+  // docs/plan/22b-persistence-load-and-fs.md: `sim_restore_begin`/`sim_restore_push`/
+  // `sim_restore_end` -- the pushed bytes did not decode as a valid snapshot (a bad CRC, or still
+  // `NeedMore` at `sim_restore_end`, i.e. a torn snapshot). `Persistence.open` falls back to the
+  // next older snapshot.
+  Corrupt: 12,
+  // docs/plan/22b-persistence-load-and-fs.md: `sim_restore_begin`/`sim_restore_push` -- the pushed
+  // bytes' `container_version` does not match this build's own.
+  ContainerVersion: 13,
+  // docs/plan/22b-persistence-load-and-fs.md: `sim_replay_push`/`sim_replay_end` -- a pushed block
+  // failed to decode as a whole, CRC-valid frame. Not an error for the last (currently open)
+  // segment: that is how recovery finds the torn tail to truncate (`sim_replay_valid_end`).
+  TornTail: 14,
 } as const
 export type Status = (typeof Status)[keyof typeof Status]
 
@@ -186,6 +202,35 @@ export const ABI_EXPORTS = {
   // put or logged record has happened since the last snapshot began draining, `0` otherwise (not a
   // `Status`: costs nothing, always answers, same shape as `sim_warm_one`/`drawlist_len`).
   sim_dirty: { role: 'sim', params: 0, result: 'u32' },
+  // docs/plan/22b-persistence-load-and-fs.md (`ABI_VERSION` 16 -> 17), sim role: begins decoding a
+  // snapshot of `totalLen` bytes fed in blocks by `sim_restore_push`. Does not require
+  // `sim_genesis` to have run (the whole point: this replaces it for a loaded world).
+  sim_restore_begin: { role: 'sim', params: 1, result: 'status' },
+  // docs/plan/22b-persistence-load-and-fs.md: feeds the next `len` bytes of `RegionId.Persist`
+  // (reused as a receive region) into the snapshot decode `sim_restore_begin` started.
+  sim_restore_push: { role: 'sim', params: 1, result: 'status' },
+  // docs/plan/22b-persistence-load-and-fs.md: finishes a restore. `Status.Ok` writes `logSegment`/
+  // `logOffset` (two LE `u32`) into `RegionId.Result`; `Status.Corrupt` if the snapshot never
+  // finished decoding or its CRC failed; `Status.IdentityMismatch` if its identity differs.
+  sim_restore_end: { role: 'sim', params: 0, result: 'status' },
+  // docs/plan/22b-persistence-load-and-fs.md: begins replaying a segment's log tail from byte
+  // `offset` (a `Sim` must already exist, from `sim_restore_end` or `sim_genesis`).
+  sim_replay_begin: { role: 'sim', params: 2, result: 'status' },
+  // docs/plan/22b-persistence-load-and-fs.md: feeds the next `len` bytes of `RegionId.Persist`
+  // (reused as a receive region), applying every whole, CRC-valid frame it completes.
+  // `Status.TornTail` once a block fails to decode -- not fatal for the currently open segment.
+  sim_replay_push: { role: 'sim', params: 1, result: 'status' },
+  // docs/plan/22b-persistence-load-and-fs.md: finishes a replay (`Status.Ok`, or `Status.TornTail`
+  // if any push hit a bad block).
+  sim_replay_end: { role: 'sim', params: 0, result: 'status' },
+  // docs/plan/22b-persistence-load-and-fs.md: the byte offset, within the segment `sim_replay_begin`
+  // named, just after the last frame whose CRC verified (not a `Status`: costs nothing, always
+  // answers, same shape as `sim_dirty`).
+  sim_replay_valid_end: { role: 'sim', params: 0, result: 'u32' },
+  // docs/plan/22b-persistence-load-and-fs.md: the sim's current tick, read after a restore/replay
+  // (or a live `sim_genesis`) to learn the resume tick (0005 Loss windows). Same shape as
+  // `sim_dirty`.
+  sim_tick_now: { role: 'sim', params: 0, result: 'u32' },
 } as const satisfies Record<string, ExportSpec>
 
 export function statusName(n: number): string {

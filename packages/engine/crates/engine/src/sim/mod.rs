@@ -22,7 +22,10 @@ use crate::worldgen::{Pristine, Worldgen};
 /// 0007 §8's host cache budget default (1,024 chunks = 4 MiB at the default 32x32 chunk size).
 /// Not part of [`WorldParams`]: 0009's `WorldConfig.params` only lists the state-budget fields
 /// this milestone's Scope names, and `cacheChunks` is a separate, host-only knob there.
-const DEFAULT_CACHE_CHUNKS: u32 = 1024;
+/// `pub(crate)` since docs/plan/22b-persistence-load-and-fs.md: `host::Host`'s own restore path
+/// builds an identical shell `Store` (the cache is excluded from a snapshot, so its capacity is
+/// inert either way -- reusing this constant just keeps the two shells built the same way).
+pub(crate) const DEFAULT_CACHE_CHUNKS: u32 = 1024;
 
 /// World params: seed, the game's worldgen params, and the state-budget fields of 0009
 /// `WorldConfig.params` (0007 §8's defaults; the check itself is M21/M21b, Non-scope here).
@@ -252,8 +255,9 @@ impl<G: Game> Sim<G> {
     /// Wraps an already-built `Authority` (docs/plan/22-persistence-log-and-snapshots.md
     /// `testing::replay`/`testing::heavy`, restoring from a decoded snapshot via
     /// `Authority::from_snapshot`): the counterpart to [`Sim::genesis`] that skips building a
-    /// fresh world.
-    #[cfg(any(test, feature = "testing"))]
+    /// fresh world. Plain `pub` since docs/plan/22b-persistence-load-and-fs.md: `host::Host::
+    /// sim_restore_end` is now a genuine production caller (the same "un-gated, real production
+    /// caller now exists" move M22 steps 4-6 already made for `Authority::rng`).
     pub fn from_parts(authority: Authority<G>) -> Self {
         Sim { authority }
     }
