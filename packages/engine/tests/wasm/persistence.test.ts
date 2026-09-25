@@ -262,4 +262,51 @@ describe('Persistence wired into a real SimHost (fx-persist)', () => {
       persistence.counters.lastSnapshotBytes,
     )
   })
+
+  test('pause_flushes_and_snapshots_if_dirty', async () => {
+    const inst = await freshInstance()
+    const storage = memoryStorage()
+    const { host, persistence } = setup(inst, storage)
+
+    let flushCalls = 0
+    const originalFlush = storage.flush.bind(storage)
+    storage.flush = async () => {
+      flushCalls++
+      await originalFlush()
+    }
+
+    host.start() // `pause()`'s own early return needs `running`, which `stepTick` alone never sets
+    inst.call1(inst.x.sim_connect, 0) // dirties the world (Joined -> put_player)
+    host.stepTick(1)
+    expect(persistence.counters.snapshots).toBe(0) // nowhere near the 1,200-tick cadence
+
+    await host.pause()
+    expect(persistence.counters.snapshots).toBe(1) // docs/plan/22b...: a clean boundary snapshots
+    expect(flushCalls).toBe(1) // ... and awaits flush()
+
+    // A second pause with nothing dirtied since must not snapshot again.
+    await host.resume()
+    await host.pause()
+    expect(persistence.counters.snapshots).toBe(1)
+    expect(flushCalls).toBe(2)
+  })
+
+  test('stop_flushes_and_snapshots_if_dirty', async () => {
+    const inst = await freshInstance()
+    const storage = memoryStorage()
+    const { host, persistence } = setup(inst, storage)
+
+    let flushCalls = 0
+    const originalFlush = storage.flush.bind(storage)
+    storage.flush = async () => {
+      flushCalls++
+      await originalFlush()
+    }
+
+    inst.call1(inst.x.sim_connect, 0)
+    host.stepTick(1)
+    await host.stop()
+    expect(persistence.counters.snapshots).toBe(1)
+    expect(flushCalls).toBe(1)
+  })
 })

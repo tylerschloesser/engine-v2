@@ -235,11 +235,17 @@ export interface SimHost {
   /** Runs `sim_genesis()` once (a second `start()` after `stop()` does not re-run it) and arms
    * the pacing timer. */
   start(): void
-  /** Disarms the pacing timer. Counters are left as they are. */
-  stop(): void
-  /** Disarms the pacing timer (0005: "a paused host stops calling `sim_tick`, nothing is
-   * logged"); the paused wall-clock interval is invisible to `resume()`'s pacing. */
-  pause(): void
+  /** docs/plan/22b-persistence-load-and-fs.md step 3: disarms the pacing timer, then (0005
+   * Cadence: "at every clean boundary the host can detect") snapshots if dirty, prunes old
+   * snapshots and awaits `flush()` when a `Persistence` is wired in -- resolves once everything is
+   * durable. Counters are left as they are. A `SimHost` with no `persistence` (`worker/sim.ts`'s
+   * own real topology, still unwired: this milestone's own Deviations) resolves immediately. */
+  stop(): Promise<void>
+  /** docs/plan/22b-persistence-load-and-fs.md step 3: disarms the pacing timer (0005: "a paused
+   * host stops calling `sim_tick`, nothing is logged"), then the same snapshot-if-dirty/prune/flush
+   * sequence as `stop()` (0013 World lifecycle: zero-player pause). The paused wall-clock interval
+   * is invisible to `resume()`'s pacing. */
+  pause(): Promise<void>
   /** Re-arms the pacing timer with a fresh resync anchor, so the interval `pause()` covered is
    * never counted as falling behind. */
   resume(): void
@@ -487,14 +493,20 @@ export function createSimHostFromInstance(
       running = true
       arm()
     },
-    stop() {
+    async stop() {
       disarm()
       running = false
+      persistence?.snapshotIfDirty()
+      await persistence?.pruneSnapshots()
+      await persistence?.flush()
     },
-    pause() {
+    async pause() {
       if (!running) return
       disarm()
       running = false
+      persistence?.snapshotIfDirty()
+      await persistence?.pruneSnapshots()
+      await persistence?.flush()
     },
     resume() {
       if (running) return

@@ -21,6 +21,16 @@ const GENESIS_BASE_TICK = 0xffff_ffff
  * names this as a tick count, not scaled by the game's own tick rate. */
 const SNAPSHOT_EVERY_TICKS = 1200
 
+/** Planning decisions 2: the open segment rolls when it exceeds this many bytes, at the moment a
+ * periodic snapshot is written; that snapshot becomes the new segment's base. */
+const SEGMENT_ROLL_BYTES = 4 * 1024 * 1024
+
+/** docs/plan/22b-persistence-load-and-fs.md Seams: the segment-roll option a test lowers to
+ * exercise rolling without writing `SEGMENT_ROLL_BYTES` of log. */
+export interface PersistenceOptions {
+  segmentRollBytes?: number
+}
+
 const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()
 
@@ -203,7 +213,12 @@ export class Persistence {
   private readonly keys: WorldKeys
   private readonly sim: EngineInstance
   private readonly ticksPerSecond: number
+  private readonly segmentRollBytes: number
   private readonly snapshotBuffer = new SnapshotBuffer()
+  /** Host metadata (Planning decisions 3), kept in memory and rewritten on a roll or a self-heal
+   * (`healManifest`) -- `pruneSnapshots`'s own "every segment's base" question reads this, not
+   * storage, so it must stay current. */
+  private manifest: ManifestV1
 
   /** The currently open segment's index. `0` for a brand-new world; whatever `Persistence.open`'s
    * own load found (a restored snapshot's `logSegment`, or `0` for a genesis-based load) otherwise.
@@ -236,6 +251,8 @@ export class Persistence {
     keys: WorldKeys,
     sim: EngineInstance,
     ticksPerSecond: number,
+    manifest: ManifestV1,
+    opts: PersistenceOptions = {},
     initial: { segment: number; logOffset: number; tick: number } = {
       segment: 0,
       logOffset: 0,
@@ -246,6 +263,8 @@ export class Persistence {
     this.keys = keys
     this.sim = sim
     this.ticksPerSecond = ticksPerSecond
+    this.segmentRollBytes = opts.segmentRollBytes ?? SEGMENT_ROLL_BYTES
+    this.manifest = manifest
     this.segment = initial.segment
     this.logOffset = initial.logOffset
     this.tick = initial.tick
@@ -270,10 +289,14 @@ export class Persistence {
    * and awaiting would change this from a constructor-shaped call to an async one for every
    * caller).
    */
-  static create(storage: Storage, cfg: WorldConfig, sim: EngineInstance): Persistence {
+  static create(
+    storage: Storage,
+    cfg: WorldConfig,
+    sim: EngineInstance,
+    opts: PersistenceOptions = {},
+  ): Persistence {
     const keys = worldKeys(cfg.worldId)
     const ticksPerSecond = sim.call0(sim.x.tick_hz) || 20
-    const p = new Persistence(storage, keys, sim, ticksPerSecond)
 
     const headerLen = sim.call2(sim.x.sim_segment_header, 0, GENESIS_BASE_TICK)
     if (headerLen < 0) {
@@ -294,6 +317,7 @@ export class Persistence {
       created: identity,
       segments: [{ index: 0, identity, base: 'genesis', sealed: false, tailReexecuted: false }],
     }
+    const p = new Persistence(storage, keys, sim, ticksPerSecond, manifest, opts)
     storage.write(keys.manifest, textEncoder.encode(JSON.stringify(manifest)))
     storage.append(keys.log(0), headerBytes)
     p.logOffset = headerBytes.length
@@ -315,6 +339,7 @@ export class Persistence {
     storage: Storage,
     cfg: WorldConfig,
     newInstance: () => EngineInstance,
+    opts: PersistenceOptions = {},
   ): Promise<{
     persistence: Persistence
     sim: EngineInstance
@@ -326,19 +351,26 @@ export class Persistence {
     const manifestBytes = await storage.read(keys.manifest)
     if (manifestBytes === null) {
       const sim = newInstance()
-      const persistence = Persistence.create(storage, cfg, sim)
+      const persistence = Persistence.create(storage, cfg, sim, opts)
       return { persistence, sim, outcome: 'created', tick: 0, truncatedBytes: 0 }
     }
 
     const manifest: ManifestV1 = JSON.parse(textDecoder.decode(manifestBytes)) as ManifestV1
     const loaded = await Persistence.loadLatest(storage, keys, manifest, newInstance)
+    const healedManifest = await Persistence.healManifest(storage, keys, manifest, loaded)
     const ticksPerSecond = loaded.sim.call0(loaded.sim.x.tick_hz) || 20
-    const persistence = new Persistence(storage, keys, loaded.sim, ticksPerSecond, {
-      segment: loaded.logSegment,
-      logOffset: loaded.logOffset,
-      tick: loaded.tick,
-    })
-    await Persistence.healManifest(storage, keys, manifest, loaded)
+    const persistence = new Persistence(
+      storage,
+      keys,
+      loaded.sim,
+      ticksPerSecond,
+      healedManifest,
+      opts,
+      { segment: loaded.logSegment, logOffset: loaded.logOffset, tick: loaded.tick },
+    )
+    // Planning decisions 3: pruning runs "at the next clean boundary or load", once the chosen
+    // snapshot has been read back and verified -- exactly what `loadLatest` just did.
+    await persistence.pruneSnapshots()
     return {
       persistence,
       sim: loaded.sim,
@@ -515,9 +547,9 @@ export class Persistence {
     keys: WorldKeys,
     manifest: ManifestV1,
     loaded: { logSegment: number; baseTick: number },
-  ): Promise<void> {
+  ): Promise<ManifestV1> {
     const lastIndex = manifest.segments.at(-1)?.index ?? -1
-    if (loaded.logSegment <= lastIndex) return
+    if (loaded.logSegment <= lastIndex) return manifest
     const healed: ManifestV1 = {
       ...manifest,
       segments: [
@@ -534,6 +566,7 @@ export class Persistence {
       ],
     }
     await storage.write(keys.manifest, textEncoder.encode(JSON.stringify(healed)))
+    return healed
   }
 
   /** What `SimHost.logSink` is pointed at (`host.logSink = persistence.appendFrame`): a fixed
@@ -570,6 +603,16 @@ export class Persistence {
     return this.sim.call0(this.sim.x.sim_dirty) !== 0
   }
 
+  /** docs/plan/22b-persistence-load-and-fs.md step 3: the clean-boundary snapshot (0005 Cadence:
+   * "at every clean boundary the host can detect"; 0013 World lifecycle: zero-player pause, then an
+   * idle timeout snapshots too -- the 30 s timer and `onIdle` themselves are M27/M28b's). Same guard
+   * as the periodic cadence: only if `sim_dirty()`. `SimHost.pause()`/`stop()` call this, then await
+   * `flush()`. */
+  snapshotIfDirty(): void {
+    this.checkFatal()
+    if (this.isDirty()) this.snapshotNow()
+  }
+
   private sync(): void {
     this.storage.sync(this.keys.log(this.segment))
     this.counters.syncs++
@@ -584,6 +627,7 @@ export class Persistence {
    * may call it directly too.
    */
   snapshotNow(): void {
+    const rolled = this.rollSegmentIfNeeded()
     const beginStatus = this.sim.call2(this.sim.x.sim_snapshot_begin, this.segment, this.logOffset)
     if (beginStatus !== Status.Ok) {
       throw new Error(`Persistence.snapshotNow: sim_snapshot_begin failed: status ${beginStatus}`)
@@ -603,6 +647,14 @@ export class Persistence {
     this.storage.write(this.keys.snap(this.tick), bytes)
     this.counters.snapshots++
     this.counters.lastSnapshotBytes = bytes.length
+    if (rolled) {
+      // docs/plan/22b-persistence-load-and-fs.md step 3: the manifest rewrite lands *last*, after
+      // the new segment's own header and its base snapshot are both already durable -- so a crash
+      // between them and this write leaves real, self-describing data behind and only a stale
+      // manifest (`loadLatest`'s own segment discovery never trusts it anyway; `healManifest`
+      // fixes it up on the next load). Proven by `crash_before_manifest_rewrite_on_roll`.
+      this.storage.write(this.keys.manifest, textEncoder.encode(JSON.stringify(this.manifest)))
+    }
   }
 
   /** The `SnapshotBuffer`'s own high-water mark, alongside the Rust-side `SnapshotWriter`'s own
@@ -610,6 +662,68 @@ export class Persistence {
    * Deviations). */
   get snapshotBufferHighWaterBytes(): number {
     return this.snapshotBuffer.highWaterBytes
+  }
+
+  /** Planning decisions 2: seals the currently open segment and opens a new one, based on the tick
+   * `snapshotNow`'s own caller is about to snapshot at, when the open segment's byte length has
+   * reached `segmentRollBytes`. Called from `snapshotNow` itself, before `sim_snapshot_begin` --
+   * "the roll happens at the moment a periodic snapshot is written". Off the tick path in the same
+   * sense `snapshotNow` already is (only reached from `afterTick`'s own 1,200-tick cadence or a
+   * clean boundary, never every tick): the `Storage.append` call here follows the same fire-and-
+   * forget convention as `snapshotNow`'s own `storage.write`, not awaited. Updates `this.manifest`
+   * in memory, but does **not** write it to storage -- `snapshotNow` does that itself, last, after
+   * the new segment's own base snapshot is also durable (see its own doc comment on why the order
+   * matters). Returns whether a roll happened. */
+  private rollSegmentIfNeeded(): boolean {
+    if (this.logOffset < this.segmentRollBytes) return false
+    const newSegment = this.segment + 1
+    const headerLen = this.sim.call2(this.sim.x.sim_segment_header, newSegment, this.tick)
+    if (headerLen < 0) {
+      throw new Error(`Persistence.snapshotNow: sim_segment_header failed: status ${-headerLen}`)
+    }
+    const region = this.sim.region(RegionId.Persist)
+    if (!region) throw new Error('Persistence.snapshotNow: the Persist region is absent')
+    const headerBytes = region.u8.slice(0, headerLen)
+    this.storage.append(this.keys.log(newSegment), headerBytes)
+
+    const lastIndex = this.manifest.segments.length - 1
+    this.manifest = {
+      ...this.manifest,
+      segments: [
+        ...this.manifest.segments.map((s, i) => (i === lastIndex ? { ...s, sealed: true } : s)),
+        {
+          index: newSegment,
+          identity: this.manifest.created,
+          base: this.tick,
+          sealed: false,
+          tailReexecuted: false,
+        },
+      ],
+    }
+
+    this.segment = newSegment
+    this.logOffset = headerBytes.length
+    return true
+  }
+
+  /** Planning decisions 3: "pruned to the base snapshot of every segment plus the latest two",
+   * "kept until the new one verifies". Off the tick path (needs `Storage.list`, 0005's own "off the
+   * tick path only" list): called from a clean boundary (`SimHost.pause`/`stop`, after
+   * `snapshotIfDirty`) and after a successful `Persistence.open` load, never from the periodic
+   * `afterTick` cadence itself.
+   */
+  async pruneSnapshots(): Promise<void> {
+    const prefix = `worlds/${this.manifest.worldId}/snap/`
+    // Zero-padded decimal ticks (`worldKeys`'s own convention): a lexicographic sort is numeric too.
+    const allKeys = [...(await this.storage.list(prefix))].sort()
+    const keep = new Set<string>()
+    for (const seg of this.manifest.segments) {
+      if (typeof seg.base === 'number') keep.add(this.keys.snap(seg.base))
+    }
+    for (const k of allKeys.slice(-2)) keep.add(k)
+    for (const k of allKeys) {
+      if (!keep.has(k)) await this.storage.delete(k)
+    }
   }
 
   /** 0005: "The host awaits `flush()` at the clean boundaries of Cadence ... and nowhere else." */
