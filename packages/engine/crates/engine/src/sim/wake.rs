@@ -109,6 +109,12 @@ impl WakeQueue {
         self.now.clear();
     }
 
+    /// Test-only peek (`journal_rolls_back_store_indexes_wakes_counts`): whether a rollback truly
+    /// removed a pushed wake-up, without needing to run a full tick to drain it.
+    pub(crate) fn next_len(&self) -> usize {
+        self.next.len()
+    }
+
     /// `Store::write_canonical`/`hash_state`: insertion order (docs/plan/
     /// 21b-timers-wakeups-and-tickcx.md Scope "woken_next (insertion order)").
     pub(crate) fn write_canonical(&self, sink: &mut impl ByteSink) {

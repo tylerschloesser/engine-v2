@@ -179,14 +179,24 @@ impl<G: Game> Store<G> {
                     Some(old) => Some((G::anchor(old), self.registry.footprint(G::prototype(old)))),
                     None => None,
                 };
-                if let Some((old_anchor, old_fp)) = old_info {
-                    self.remove_from_index(*id, old_anchor, old_fp);
-                }
                 let new_anchor = G::anchor(entity);
                 let new_fp = self.registry.footprint(G::prototype(entity));
+                // Skip the index churn entirely when neither the anchor nor the footprint moved
+                // (docs/plan/21b-timers-wakeups-and-tickcx.md Deviations "Unconditional index
+                // churn on every EntityPut"): a property-only update -- which every tick-rule put
+                // through `TickCx` is, since 0007 §7's own timer/wake/active machinery never moves
+                // an entity -- previously removed and immediately re-added the same occupancy
+                // entry every time, which for an entity alone in its chunk destroys and rebuilds
+                // that chunk's whole `ChunkIndex` (three fresh heap allocations) on every single
+                // put; `tick_state_steady_no_alloc` is what caught it.
+                if old_info != Some((new_anchor, new_fp)) {
+                    if let Some((old_anchor, old_fp)) = old_info {
+                        self.remove_from_index(*id, old_anchor, old_fp);
+                    }
+                    self.add_to_index(*id, new_anchor, new_fp);
+                }
                 self.entities.insert(*id, entity.clone());
                 self.next_entity_id = self.next_entity_id.max(id.0.wrapping_add(1));
-                self.add_to_index(*id, new_anchor, new_fp);
             }
             Delta::EntityGone { id } => {
                 if let Some(old) = self.entities.remove(id) {
@@ -480,6 +490,13 @@ impl<G: Game> Store<G> {
 
     pub(crate) fn wake_clear_now(&mut self) {
         self.wake.clear_now();
+    }
+
+    /// Test-only (`journal_rolls_back_store_indexes_wakes_counts`): peeks the wake queue's `next`
+    /// list without running a full tick to drain it.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn wake_next_len(&self) -> usize {
+        self.wake.next_len()
     }
 
     /// `entities_visited_per_tick`'s sibling counter (Provides: "`timers_pending`"): how many

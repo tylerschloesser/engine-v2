@@ -1,9 +1,21 @@
 //! The timer wheel (docs/decisions/0007-world-model.md §7: "a timer wheel keyed `(tick,
 //! EntityId)`"; docs/plan/21b-timers-wakeups-and-tickcx.md Scope "Timer wheel"): at most one timer
 //! per entity, `wake_at` replaces, `cancel_wake`/despawn removes, `next_due` pops entries with
-//! `tick <= now` in key order. A sorted `BTreeMap<(Tick, EntityId), ()>` gives exactly that
-//! iteration order for free; `by_entity` is the reverse index `wake_at`/`cancel_wake` need to find
-//! and remove an entity's *current* entry in O(log n) without a linear scan.
+//! `tick <= now` in key order.
+//!
+//! **Bucketed, not a flat `BTreeMap<(Tick, EntityId), ()>`** (Scope: "implementation free ... as
+//! long as ... steady state does not allocate"): a flat map's every `wake_at` reschedule inserts a
+//! *new* key (the tick strictly increases each cycle) while removing an old, scattered one --
+//! empirically this leaves `std::collections::BTreeMap` with slowly, unboundedly growing node
+//! storage even at a constant live-entry count (`tick_state_steady_no_alloc`'s own Deviations entry
+//! has the measured numbers), because inserts always land at the high end while removals happen
+//! throughout the tree. Bucketing by `Tick` first (`BTreeMap<Tick, Vec<EntityId>>`, each bucket
+//! sorted by id for key order within a tie) keeps the outer map's *own* key churn bounded by the
+//! number of distinct ticks with at least one pending entity -- small and, for a periodic workload,
+//! eventually constant -- while the actual per-entity churn moves into `Vec::insert`/`remove`,
+//! which reuses its own already-`realloc`'d capacity once warm. `by_entity` is the reverse index
+//! `wake_at`/`cancel` need to find and remove an entity's *current* bucket entry in O(log n) without
+//! a linear scan.
 
 use std::collections::BTreeMap;
 
@@ -14,7 +26,7 @@ use crate::time::Tick;
 
 #[derive(Default)]
 pub(crate) struct TimerWheel {
-    wheel: BTreeMap<(Tick, EntityId), ()>,
+    wheel: BTreeMap<Tick, Vec<EntityId>>,
     by_entity: BTreeMap<EntityId, Tick>,
 }
 
@@ -23,14 +35,29 @@ impl TimerWheel {
         TimerWheel::default()
     }
 
+    /// Removes `id` from its current bucket (if any), dropping the bucket entirely once empty.
+    fn remove_from_bucket(&mut self, id: EntityId, at: Tick) {
+        if let Some(v) = self.wheel.get_mut(&at) {
+            if let Ok(pos) = v.binary_search(&id) {
+                v.remove(pos);
+            }
+            if v.is_empty() {
+                self.wheel.remove(&at);
+            }
+        }
+    }
+
     /// Sets `id`'s one timer to `at`, replacing any existing one (0007 §7: "at most one timer per
     /// entity"). Returns the previous tick, if any (the undo journal's own rollback value).
     pub(crate) fn wake_at(&mut self, id: EntityId, at: Tick) -> Option<Tick> {
         let old = self.by_entity.insert(id, at);
         if let Some(old_tick) = old {
-            self.wheel.remove(&(old_tick, id));
+            self.remove_from_bucket(id, old_tick);
         }
-        self.wheel.insert((at, id), ());
+        let bucket = self.wheel.entry(at).or_default();
+        if let Err(pos) = bucket.binary_search(&id) {
+            bucket.insert(pos, id);
+        }
         old
     }
 
@@ -38,34 +65,44 @@ impl TimerWheel {
     /// state: `set_exact(id, Some(tick))`/`set_exact(id, None)`).
     pub(crate) fn cancel(&mut self, id: EntityId) -> Option<Tick> {
         let old = self.by_entity.remove(&id)?;
-        self.wheel.remove(&(old, id));
+        self.remove_from_bucket(id, old);
         Some(old)
     }
 
     /// Pops the earliest due entry (`tick <= now`) in key order, or `None` if the earliest entry
-    /// (if any) is not yet due. The wheel's own natural `BTreeMap` order is `(Tick, EntityId)`
-    /// ascending, so the first entry is always the earliest.
+    /// (if any) is not yet due. Within a tied tick, the bucket's own sorted `Vec` gives ascending
+    /// id order.
     pub(crate) fn next_due(&mut self, now: Tick) -> Option<EntityId> {
-        let (&(tick, id), _) = self.wheel.iter().next()?;
+        let (&tick, _) = self.wheel.iter().next()?;
         if tick > now {
             return None;
         }
-        self.wheel.remove(&(tick, id));
+        let bucket = self
+            .wheel
+            .get_mut(&tick)
+            .expect("just found by iter().next()");
+        let id = bucket.remove(0);
+        if bucket.is_empty() {
+            self.wheel.remove(&tick);
+        }
         self.by_entity.remove(&id);
         Some(id)
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.wheel.len()
+        self.by_entity.len()
     }
 
     /// `Store::write_canonical`/`hash_state`: key order (docs/plan/21b-timers-wakeups-and-tickcx.md
-    /// Scope "timers (key order)") -- the wheel's own iteration order.
+    /// Scope "timers (key order)") -- the wheel's own bucket order, then each bucket's own sorted
+    /// order, which together are exactly `(Tick, EntityId)` ascending.
     pub(crate) fn write_canonical(&self, sink: &mut impl ByteSink) {
-        sink.put_u32(self.wheel.len() as u32);
-        for &(tick, id) in self.wheel.keys() {
-            sink.put_u32(tick.0);
-            sink.put_u32(id.0);
+        sink.put_u32(self.by_entity.len() as u32);
+        for (&tick, ids) in &self.wheel {
+            for &id in ids {
+                sink.put_u32(tick.0);
+                sink.put_u32(id.0);
+            }
         }
     }
 
@@ -75,7 +112,7 @@ impl TimerWheel {
         for _ in 0..count {
             let tick = Tick(reader.u32()?);
             let id = EntityId(reader.u32()?);
-            w.wheel.insert((tick, id), ());
+            w.wheel.entry(tick).or_default().push(id);
             w.by_entity.insert(id, tick);
         }
         Ok(w)

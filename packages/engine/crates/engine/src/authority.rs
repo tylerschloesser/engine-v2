@@ -335,6 +335,15 @@ impl<G: Game> Authority<G> {
     }
 
     /// Test-only direct control of the undo journal (docs/plan/21b-timers-wakeups-and-tickcx.md
+    /// Tests added: `journal_rolls_back_store_indexes_wakes_counts`): starts recording without
+    /// going through `Sim::step`, so a test can drive `Authority`'s `WorldWrite` methods directly
+    /// and then roll them back.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn begin_apply_journal_for_test(&mut self) {
+        self.begin_apply_journal();
+    }
+
+    /// Test-only direct control of the undo journal (docs/plan/21b-timers-wakeups-and-tickcx.md
     /// Tests added: `journal_rolls_back_store_indexes_wakes_counts`), bypassing the debug/release
     /// branch in [`Authority::handle_rejected_apply_write`] so the rollback mechanism itself can be
     /// exercised under `cfg(test)` independent of [`UNDO_JOURNAL_ADOPTED`].
