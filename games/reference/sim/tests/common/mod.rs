@@ -11,8 +11,10 @@ use engine::sim::{Record, Rejected, Sim, WorldParams};
 use engine::world::{Tile, TilePos};
 use reference_sim::{RefAction, RefGame, RefParams, RefPlayer, RefReject};
 
-/// The one seed every native test in this crate shares (Provides: "the `TEST_SEED` value").
-pub const TEST_SEED: u64 = 0x5EED_1234_ABCD_0042;
+/// The one seed every native test in this crate shares (Provides: "the `TEST_SEED` value") --
+/// `reference_sim::content::SEED` (M20b step 5 Deviations) is now the single source of that literal;
+/// this alias keeps every existing test's own `TEST_SEED` reference unchanged.
+pub const TEST_SEED: u64 = reference_sim::content::SEED;
 
 /// A fresh `Sim<RefGame>` plus a per-player `seq` counter, so a test can `join`/`dispatch`/
 /// `step_ticks` without repeating `Sim::genesis`/`Sim::step` plumbing (Provides: "new world, join a

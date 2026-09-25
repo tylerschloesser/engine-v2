@@ -57,6 +57,17 @@ pub const RANGE_Q8: i32 = 3 * 256;
 /// inside its own tile.
 pub const RANGE_SCAN_TILES: i32 = RANGE_Q8 / 256 + 1;
 
+/// The one seed every real page of this v0 game uses (`games/reference/CLAUDE.md`: "`TEST_SEED` ...
+/// is also `src/main.ts`'s own world seed"). Duplicated here, as a plain `u64`, rather than read
+/// from a world config at runtime: `engine::client::ClientSide` is `Default`-only (no seed/params
+/// channel from the engine to a game's `Client`), so the spawn rule's own terrain function (M20b
+/// step 5 Scope: "spiralling over its own terrain function, pure, no engine read") has no way to
+/// learn a real session's seed except by already knowing it -- true today only because this v0 game
+/// never lets a player choose a world. `sim/tests/common/mod.rs::TEST_SEED` now aliases this
+/// constant instead of repeating the literal a third time; `main.ts`/`test-entry.ts`'s own string
+/// literal is the one copy no Rust `pub const` can reach.
+pub const SEED: u64 = 0x5EED_1234_ABCD_0042;
+
 /// `admit`'s witness tolerance (0001 "Witness-carrying actions" step 1: "reject if farther than 16
 /// tiles from the sample or if no sample exists"; `PRE-PLAN.md` §4 Presence row), in the same
 /// Q24.8 raw units as [`RANGE_Q8`]. Deliberately much larger than `RANGE_Q8`: it only guards

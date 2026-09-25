@@ -80,6 +80,11 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
     host: opts.host,
     genWorkers: 1,
     assets: { tiles: '/tiles.json' },
+    // M20b step 5 (Seams, Consumes: "`ClientOptions.cameraKey` (pass the world id)", M11): only
+    // `host.kind === 'local'` ever names a world here (the `'remote'` branch has none this game
+    // ever builds) -- one world per session today, so this only matters once a second world exists,
+    // but it is the seam M11 already provides for that day.
+    ...(opts.host.kind === 'local' ? { cameraKey: opts.host.world.worldId } : {}),
     ...(opts.test ? { test: opts.test } : {}),
   }
   const client: Client = createClient(options)
@@ -91,9 +96,22 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
   // wiring beyond subscribing here.
   const collectUi = createCollectUi(client)
   const inventoryUi = createInventoryUi(document.body)
+  // M20b step 5 (Scope: "`main.ts` calls `client.camera.moveTo(spawn, { durationMs: 0 })` only when
+  // the engine restored no camera"): built here, in the shared `onUi` subscription, the same
+  // reasoning as `collectUi`/`inventoryUi` above -- both `main.ts` and the stepped `test-entry.ts`
+  // get a camera that starts on the spawn tile for a fresh session, and `test-entry.ts`'s own specs
+  // can observe it through `__cameraState()` with no extra hook. `client.camera.restored` is a fixed
+  // snapshot taken once at `createClient` (M11), so it never needs rechecking after the first `Ui`.
+  let spawnDecided = false
   client.onUi<RefUi>((ui) => {
     collectUi.onUi(ui)
     inventoryUi.onUi(ui)
+    if (!spawnDecided) {
+      spawnDecided = true
+      if (!client.camera.restored) {
+        client.camera.moveTo(ui.spawn.x + 0.5, ui.spawn.y + 0.5, { durationMs: 0 })
+      }
+    }
   })
   client.onActionResult<RefReject>((seq, result) => collectUi.onActionResult(seq, result))
 

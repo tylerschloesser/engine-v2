@@ -14,7 +14,10 @@ use engine::game::Presence;
 use engine::world::{Tile, TilePos, WorldPos};
 
 use crate::rules::collect::in_range;
-use crate::{Inventory, MAX_IN_RANGE, RefGame, TileXY, UiCollecting, UiInRange, WorldXY, content};
+use crate::worldgen::terrain_at;
+use crate::{
+    Inventory, MAX_IN_RANGE, RefGame, RefParams, TileXY, UiCollecting, UiInRange, WorldXY, content,
+};
 
 /// `Presence` sketch from `0001-camera-and-presence.md` (Decision, `Presence` code block),
 /// verbatim: `PlayerPresence { pos: [i32; 2] /* Q24.8 */, vel: [i16; 2] }` = 12 bytes encoded, well
@@ -103,6 +106,70 @@ pub fn spring_step(
     (target + new_x, target_vel + new_v)
 }
 
+/// `nearest_land_tile`'s own defensive bound (M20b step 5): worldgen scatters land generously (a
+/// world is mostly land near any real seed, `worldgen.rs`'s own `classify`), so this is never
+/// expected to matter -- it only stops a pathological `RefParams` (all water, say) from spiralling
+/// forever, falling back to the origin instead.
+const SPAWN_SEARCH_MAX_RADIUS: i32 = 4096;
+
+/// The land tile (`content::SAND`, `GRASS` or `DIRT` -- anything that is not one of the two water
+/// ids) nearest the origin, by real squared-Euclidean distance, found by spiralling outward in
+/// Chebyshev rings (Scope: "spiralling over its own terrain function") from `(0, 0)`: ring `r`'s own
+/// closest possible point is `r` tiles away (axis-aligned), so once a candidate closer than `r` is
+/// already in hand, no larger ring can improve it -- an exact nearest search, not merely "first ring
+/// to contain any land". Pure: only [`terrain_at`] (worldgen's own per-tile classification, no I/O)
+/// and integer/float arithmetic on locals -- called once, at construction (`RefClient::default`/
+/// `with_spring_state`), never per frame, so the ring-by-ring scan itself is exempt from `.claude/
+/// rules/hot-paths.md`'s no-allocation rule the same way any one-time setup is (its own header
+/// comment) even though nothing here allocates anyway.
+pub fn nearest_land_tile(seed: u64, params: &RefParams) -> TilePos {
+    let mut best: Option<TilePos> = None;
+    let mut best_sq: i64 = i64::MAX;
+
+    for radius in 0..=SPAWN_SEARCH_MAX_RADIUS {
+        if (radius as i64) * (radius as i64) > best_sq {
+            break;
+        }
+        if radius == 0 {
+            consider_spawn_tile(seed, params, 0, 0, &mut best, &mut best_sq);
+            continue;
+        }
+        for x in -radius..=radius {
+            consider_spawn_tile(seed, params, x, -radius, &mut best, &mut best_sq);
+            consider_spawn_tile(seed, params, x, radius, &mut best, &mut best_sq);
+        }
+        for y in -(radius - 1)..=(radius - 1) {
+            consider_spawn_tile(seed, params, -radius, y, &mut best, &mut best_sq);
+            consider_spawn_tile(seed, params, radius, y, &mut best, &mut best_sq);
+        }
+    }
+    // Falls back to the origin only if [`SPAWN_SEARCH_MAX_RADIUS`] was exhausted with no land tile
+    // found at all (this const's own doc comment: not expected against any real seed/params).
+    best.unwrap_or(TilePos::new(0, 0))
+}
+
+/// One candidate tile for [`nearest_land_tile`]'s own spiral: updates `best`/`best_sq` in place
+/// when `(x, y)` is land and strictly closer (by squared distance) than the current best.
+fn consider_spawn_tile(
+    seed: u64,
+    params: &RefParams,
+    x: i32,
+    y: i32,
+    best: &mut Option<TilePos>,
+    best_sq: &mut i64,
+) {
+    if terrain_at(seed, x, y, params) < content::SAND {
+        return; // Water (`DEEP_WATER`/`WATER`), not land.
+    }
+    let dx = x as i64;
+    let dy = y as i64;
+    let d = dx * dx + dy * dy;
+    if d < *best_sq {
+        *best_sq = d;
+        *best = Some(TilePos::new(x, y));
+    }
+}
+
 /// Q24.8 raw units per tile (0007 §2).
 const Q8: f64 = 256.0;
 
@@ -140,6 +207,11 @@ pub struct RefClient {
     /// `with_spring_state`; `ui()` only ever pushes up to that capacity or removes, never grows it
     /// (`.claude/rules/hot-paths.md`).
     tracked_range: RefCell<Vec<UiInRange>>,
+    /// M20b step 5: the nearest land tile to the origin (`nearest_land_tile`, [`content::SEED`] +
+    /// default [`RefParams`] -- the only seed/params any real page of this game ever uses), computed
+    /// once here and copied into `Ui.spawn` unchanged on every `ui()` call (never a per-frame value,
+    /// the `Ui` rule).
+    spawn: TileXY,
 }
 
 impl Default for RefClient {
@@ -149,6 +221,7 @@ impl Default for RefClient {
             spring_vel: [0.0, 0.0],
             initialized: false,
             tracked_range: RefCell::new(Vec::with_capacity(MAX_IN_RANGE)),
+            spawn: TileXY::from_tile(nearest_land_tile(content::SEED, &RefParams::default())),
         }
     }
 }
@@ -164,6 +237,7 @@ impl RefClient {
             spring_vel: vel,
             initialized: true,
             tracked_range: RefCell::new(Vec::with_capacity(MAX_IN_RANGE)),
+            spawn: TileXY::from_tile(nearest_land_tile(content::SEED, &RefParams::default())),
         }
     }
 
@@ -262,17 +336,19 @@ impl ClientSide<RefGame> for RefClient {
         ring.flags |= SCREEN_PX_STROKE;
     }
 
-    /// `Ui { me, inventory, collecting, in_range }` (Scope; module doc comment "M20b step 3"):
-    /// `me`/`inventory`/`collecting` read straight off `view.world().player(view.me())`;
-    /// `in_range` from a bounding-box scan around the spring position, diffed against
-    /// [`Self::tracked_range`] so each entry's own `from` only changes when that tile's own
-    /// membership does. `out` is cleared and refilled, never grown past `Ui::default`'s own
+    /// `Ui { me, inventory, collecting, in_range, spawn }` (Scope; module doc comment "M20b step
+    /// 3", spawn added step 5): `me`/`inventory`/`collecting` read straight off
+    /// `view.world().player(view.me())`; `in_range` from a bounding-box scan around the spring
+    /// position, diffed against [`Self::tracked_range`] so each entry's own `from` only changes
+    /// when that tile's own membership does; `spawn` is copied from [`Self::spawn`] unchanged (never
+    /// recomputed here). `out` is cleared and refilled, never grown past `Ui::default`'s own
     /// reserved capacity ([`MAX_IN_RANGE`]).
     fn ui(&self, view: &FrameView<'_, RefGame>, out: &mut crate::RefUi) {
         let world = view.world();
         out.me = view.me().0;
         out.inventory = Inventory::default();
         out.collecting = None;
+        out.spawn = self.spawn;
         if let Ok(player) = world.player(view.me()) {
             out.inventory = player.inventory;
             out.collecting = player.collecting.map(|c| UiCollecting {

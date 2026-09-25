@@ -194,10 +194,14 @@ pub struct UiInRange {
     pub from: WorldXY,
 }
 
-/// `Ui { me, inventory, collecting, in_range }` (Scope, M20b step 3). `me` is a raw `u32`, not
-/// `engine::game::PlayerId` (same reason as [`UiCollecting::done_at`]: `PlayerId` has no `TS` impl).
-/// `Default` reserves `in_range`'s capacity once ([`MAX_IN_RANGE`]); `RefClient::ui` clears and
-/// refills it every call, so steady state allocates nothing (Scope, verbatim).
+/// `Ui { me, inventory, collecting, in_range, spawn }` (Scope, M20b steps 3 and 5). `me` is a raw
+/// `u32`, not `engine::game::PlayerId` (same reason as [`UiCollecting::done_at`]: `PlayerId` has no
+/// `TS` impl). `Default` reserves `in_range`'s capacity once ([`MAX_IN_RANGE`]); `RefClient::ui`
+/// clears and refills it every call, so steady state allocates nothing (Scope, verbatim). `spawn`
+/// (step 5, Scope: "publishes it as `Ui.spawn`") is the nearest land tile to the origin, computed
+/// once at `RefClient` construction (`client.rs`'s own `nearest_land_tile`) and copied in unchanged
+/// on every `ui()` call -- it never changes for the life of a client, so it is not itself a
+/// per-frame value (the `Ui` rule, `games/reference/CLAUDE.md`).
 #[derive(Clone, PartialEq, Debug, serde::Serialize, TS)]
 #[ts(export)]
 pub struct RefUi {
@@ -205,6 +209,7 @@ pub struct RefUi {
     pub inventory: Inventory,
     pub collecting: Option<UiCollecting>,
     pub in_range: Vec<UiInRange>,
+    pub spawn: TileXY,
 }
 
 impl Default for RefUi {
@@ -214,6 +219,7 @@ impl Default for RefUi {
             inventory: Inventory::default(),
             collecting: None,
             in_range: Vec::with_capacity(MAX_IN_RANGE),
+            spawn: TileXY::default(),
         }
     }
 }

@@ -83,6 +83,29 @@ fn classify(h: f64, m: f64, p: &RefParams) -> u8 {
     }
 }
 
+/// The single-tile version of `classify` (`RefWorldgen::generate`'s own per-tile step), exposed for
+/// `client.rs`'s own spawn rule (M20b step 5 Scope: "spiralling over its own terrain function, pure,
+/// no engine read") -- a one-tile query, not a whole `EDGE * EDGE` chunk's worth of `Tile`s.
+#[inline]
+pub(crate) fn terrain_at(seed: u64, wx: i32, wy: i32, params: &RefParams) -> u8 {
+    let seed32 = (seed as u32) ^ ((seed >> 32) as u32);
+    let h = noise::height(
+        seed32,
+        wx as f64,
+        wy as f64,
+        params.height_freq,
+        params.height_octaves,
+    );
+    let m = noise::moisture(
+        seed32,
+        wx as f64,
+        wy as f64,
+        params.moisture_freq,
+        params.moisture_octaves,
+    );
+    classify(h, m, params)
+}
+
 /// One `hash2` draw against a per-resource, per-terrain density (Planning decisions): land only,
 /// each terrain offering a fixed, ordered subset so the same draw always resolves to the same
 /// resource (or none) for that tile. Returns `0` ("no resource") on water or when the draw misses
