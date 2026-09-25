@@ -205,6 +205,20 @@ Steps 0-2 only (a second implementer takes steps 3-6 from these commits and this
   (one raw Q24.8 unit past tolerance), `admit_accepts_within_tolerance` (exactly at the tolerance
   boundary, inclusive), against a hand-built `PresenceTable::<RefGame>::empty()` + `on_sample`.
 
+**Found, not fixed (pre-existing, out of this cut's scope): `test.html` is unreachable under
+`pnpm --filter reference dev`.** `vite dev` serves `index.html` (200 OK, COI headers intact) but
+403s `test.html` ("outside of Vite serving allow list") -- `packages/engine/src/vite.ts`'s `engine()`
+plugin sets `server.fs.allow: [enginePackageDir()]`, which *replaces* Vite's own default allow list
+(normally the project root) rather than extending it, so no file under `games/reference/` itself is
+servable except the one HTML file Vite treats as "the" configured root entry. Pre-existing in the
+shared plugin (not introduced by this milestone, and would affect any second HTML page any game
+added); does not block anything here since every automated test reaches `test.html` through `vite
+preview` on the built `dist/`, which has no `fs.allow` restriction at all (confirmed: `pnpm --filter
+reference build` then `vite preview` serves both pages; the whole `reference` Playwright project
+passes). Left for whoever next needs interactive dev-server access to a second page to fix in
+`vite.ts` (likely: append to Vite's own default allow list, e.g. `[...serverFsAllowDefault,
+enginePackageDir()]`, rather than replacing it) or route around it.
+
 **Not yet done (steps 3-6, for the next implementer):** `Ui`/`ui()`/bindings, `src/ui/dom.ts`,
 collect buttons and anchoring, progress animation, cancel-on-pan-out, rejection flash, inventory
 readout, spawn rule, the scripted `reference_collect_flow`/`reference_several_buttons`/
