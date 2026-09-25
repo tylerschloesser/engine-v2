@@ -16,17 +16,19 @@ and-collect-ui.md`.
   reference` matches an unrelated engine test by substring).
 - `tests/fixtures/landmarks.json`: `landmarks_fixture_current` recomputes it from `RefWorldgen` at
   `TEST_SEED` and fails, naming this file, if it drifted.
+- `gc.html`/`src/gc-entry.ts`: the zero-GC page (spec: `packages/engine/tests/browser/gc-reference.
+  spec.ts`; budget: `gc.pages.reference`). `vite.config.ts`'s `minify: false` is load-bearing:
+  software-mode attribution matches by runtime function name (found live).
 
 ## Module layout (`sim/src`)
 
 - `content.rs`: terrain/resource ids, `TraitSet` bits, durations, `SEED` (every real page's seed --
   `ClientSide` gets no engine seed/params channel), `Game::register`.
-- `noise.rs`/`worldgen.rs`: `engine::noise` composition, `RefWorldgen`/`hash2` scatter, `terrain_at`
-  (single-tile `classify`, no chunk generated).
+- `noise.rs`/`worldgen.rs`: `engine::noise` composition, `RefWorldgen`/`hash2` scatter, `terrain_at`.
 - `rules/`: one file per feature (`collect.rs`: `StartCollect`/`CancelCollect`, `in_range`, `admit`).
-- `client.rs` (`.claude/rules/hot-paths.md` applies to the whole file): `ClientSide<RefGame>`
-  (`RefClient`) -- the camera-follow spring, own-player circle/range-ring `extract`, `ui()` (below;
-  `Ui.spawn` is `nearest_land_tile`'s one-time spiral, cached at construction), depletion visuals.
+- `client.rs` (`.claude/rules/hot-paths.md` applies): `ClientSide<RefGame>` (`RefClient`) -- the
+  camera-follow spring, own-player circle/range-ring `extract`, `ui()` (below; `Ui.spawn` is
+  `nearest_land_tile`'s one-time spiral, cached at construction), depletion visuals.
 - `lib.rs`: the `Game` impl, plus wire-facing plain-data types (`RefAction`, `RefPlayer`, `RefUi`,
   `TileXY`/`WorldXY`/`UiCollecting`/`UiInRange`) instead of `engine::world`/`time` types.
 
@@ -40,15 +42,12 @@ Framework-free (Requirements). `dom.ts`: `el()`, `diffKeyed()` (generic keyed-li
 by M32-M34). `collect.ts`: one `<button data-collect-tile="x,y">` per `Ui.in_range` entry, anchored
 with `client.overlay.anchor`; one CSS fill animation; `CancelCollect` on pan-out; a rejected
 `StartCollect` adds a `reject-<reason>` class. `inventory.ts`: a fixed, non-anchored readout. Both
-wired once in `game.ts`'s `startGame`, which also calls `client.camera.moveTo` to `Ui.spawn` once,
-only when `client.camera.restored` is `false` -- follow this shape for a new button-driven feature.
-
-`startGame(opts)` is the device/renderer/art/client/camera/UI wiring shared by `main.ts` (production,
-no `window.__*` hooks) and `test-entry.ts` (`test.html`, every diagnostic hook plus a manual clock).
-**`Ui.in_range`/`world.tile()` need a real sim tick**, not just `stepFrame`: a tile is readable
-through the replica only once the host has downlinked it. `tests/helpers/game.ts`'s `panTo`/
-`uiState`/`clickCollect`/`pumpUntil` do this choreography for a browser spec -- poll a real `uiState`
-condition, never a fixed tick/frame count (`ui-smoke.spec.ts`'s own fixed counts flaked under load).
+wired in `game.ts`'s `startGame` (the device/renderer/art/client/camera/UI wiring shared by `main.ts`,
+`test-entry.ts` and `gc-entry.ts`), which also calls `client.camera.moveTo` to `Ui.spawn` once, only
+when `client.camera.restored` is `false`. **`Ui.in_range`/`world.tile()` need a real sim tick**, not
+just `stepFrame` (on `gc-entry.ts`'s own topology, `engine/test.stepTick` deadlocks the client --
+`stepSimTickSync` + a manual upload-drain works instead, found live). `tests/helpers/game.ts`'s
+`panTo`/`uiState`/`clickCollect`/`pumpUntil` poll a real `uiState` condition, never a fixed count.
 
 ## Conventions
 

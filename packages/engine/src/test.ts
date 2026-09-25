@@ -5,6 +5,7 @@
 export type { Clock, Scheduler } from './clock.js'
 export {
   actionResults,
+  asHarness,
   callParked,
   type DrawRecord,
   dispatchRaw,

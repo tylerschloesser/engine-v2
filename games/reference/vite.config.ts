@@ -20,16 +20,28 @@ export default defineConfig({
   // committed"); steps 1-3 left this unset since a no-op action/reject/ui carried nothing worth
   // generating a real binding for yet.
   plugins: [engine({ crate: './sim', bindings: { dir: '../src/bindings' } })],
-  // Two entries (docs/plan/20b-reference-player-and-collect-ui.md step 0): `index.html` (the
-  // production page) and `test.html` (the test-only page with `ClientOptions.test` and every
-  // diagnostic `window.__*` hook, never shipped to a player). Vite only builds `index.html` by
-  // default; both must land in `dist/` so `vite preview` (the `reference` Playwright project's own
-  // webServer, M20 Deviations) can serve `test.html` too.
+  // Three entries: `index.html` (production), `test.html` (step 0: `ClientOptions.test` and every
+  // diagnostic `window.__*` hook), `gc.html` (step 6's own zero-allocation exit criterion: a
+  // production-topology page driven by `engine/test.asHarness`, never shipped to a player). Vite
+  // only builds `index.html` by default; all three must land in `dist/` so `vite preview` (the
+  // `reference`/`gc-reference` Playwright projects' own shared webServer, M20/M20b Deviations) can
+  // serve the other two.
   build: {
+    // `minify: false` (`packages/engine/tests/browser/pages/vite.config.ts`'s own precedent,
+    // verbatim comment there: needed so `gc.html`'s own software-mode zero-GC measurement can
+    // attribute samples by real function name -- `gc/instrument.ts`'s `attributionRoots` matching
+    // is a literal string compare against the *runtime* function name, and production minification
+    // renames every top-level function (found live: `attributedBytesPerFrame` read a flat `0` for
+    // every isolate, even under the `object` negative control's own deliberate allocation, until
+    // this was set). Applies to every entry in this one build (`index.html`/`test.html` included,
+    // not just `gc.html` -- Rollup has no per-entry minify option), an acceptable v0/pre-launch
+    // trade-off this milestone's own brief does not ask to avoid.
+    minify: false,
     rollupOptions: {
       input: {
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
         test: fileURLToPath(new URL('./test.html', import.meta.url)),
+        gc: fileURLToPath(new URL('./gc.html', import.meta.url)),
       },
     },
   },

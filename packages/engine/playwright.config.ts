@@ -185,7 +185,10 @@ export default defineConfig({
           ],
         },
       },
+      // `gc-reference.spec.ts` runs only in the `gc-reference` project below, against the
+      // `reference` app's own preview server, not this project's default one.
       testMatch: '**/gc-*.spec.ts',
+      testIgnore: ['**/gc-reference.spec.ts'],
       timeout: gcTimeoutMs,
     },
     {
@@ -201,6 +204,37 @@ export default defineConfig({
         launchOptions: { args: ['--enable-unsafe-webgpu', ...swiftshaderArgs] },
         baseURL: referenceBaseURL,
       },
+    },
+    {
+      // docs/plan/20b-reference-player-and-collect-ui.md, zero-allocation exit criterion (step 0-2
+      // Deviations: "a new project mirroring the existing `reference` project's own pattern ...
+      // and the `gc` project's own launch args/`testMatch`/timeout"). Its own *spec file*
+      // (`gc-reference.spec.ts`) lives under this package's own `tests/browser/`, not under
+      // `games/reference/tests/`, unlike `reference`'s own project above: `games/reference/CLAUDE.md`
+      // forbids that package's own tests from importing `packages/engine/tests/**` (even in its own
+      // `tests/`), and `zeroGcSuite`/`gc/suite.ts` -- the one mechanism a zero-GC page registers
+      // through -- is exactly such an import. `testDir` therefore stays this file's own default;
+      // only `baseURL` points at the reference app's own preview server (`games/reference/
+      // vite.config.ts`'s `gc.html` entry, served by the `reference` project's own `webServer`
+      // entry below -- one Vite app, no new server). `gc`'s own launch flags/timeout (0016 §3) are
+      // what any zero-GC page needs, regardless of which app it belongs to.
+      name: 'gc-reference',
+      use: {
+        ...devices['Desktop Chrome'],
+        channel: chromiumChannel,
+        launchOptions: {
+          args: [
+            '--enable-unsafe-webgpu',
+            ...swiftshaderArgs,
+            '--disable-features=SpareRendererForSitePerProcess',
+            '--js-flags=--expose-gc --sampling-heap-profiler-suppress-randomness',
+            `--remote-debugging-port=${cdpPort + 1}`,
+          ],
+        },
+        baseURL: referenceBaseURL,
+      },
+      testMatch: '**/gc-reference*.spec.ts',
+      timeout: gcTimeoutMs,
     },
   ],
   webServer: [

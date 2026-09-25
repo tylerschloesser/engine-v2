@@ -403,6 +403,43 @@
             }
           }
         }
+      },
+      "reference": {
+        "isolates": {
+          "main": {
+            "class": "strict",
+            "bytesPerFrame": 234,
+            "formula": "docs/plan/20b-reference-player-and-collect-ui.md, zero-allocation exit criterion: `games/reference`'s own production topology (`gc.html`/`gc-entry.ts`, real device/renderer/`startGame` wiring, real WebGPU adapter so 0016 §1's 110 B floor applies), two collect buttons mounted (the iron and stone landmarks near the origin) while the camera oscillates a little every frame. Measured strict first (never `budgeted` pre-emptively, `gc-test` skill): `playwright test --project gc-reference --grep \"reference clean\" --repeat-each 8 --workers 1`, this machine: 225.82-225.99333 B/frame across 8 clean runs (`byFn`: `draw@game` 28800 B, `writeFrameUniform@game` 14424 B, `C@game`/`f@gc`/`r@gc` -- this page's own `renderer.draw`/`writeFrameUniform`/`drive` sites -- plus the overlay layer's own per-panning-frame `layer.style.transform` template-string write, `overlay/anchors.ts`'s `updateProperties`, the one new site relative to `terrain`'s own row: two *static* anchors never call `.set()`, so only the shared layer transform costs anything here, far less than `anchors`'s own 50-anchor/4-slot-anchor row). ceil(225.99333) = 226, + 8 B margin (0016 §1's own convention) = 234. `object`/`burst` negative controls on `main` verified tripping at this budget (`neg object main`/`neg burst main`, this cut's own run).",
+            "attributionRoots": ["drive"]
+          },
+          "client": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the shared \"8 B\" worker figure every other page's client/gen0/sim row uses (brief's own instruction: do not raise). Measured: a constant 0.8133 B/frame across 8 clean runs, well under 8 -- `RefClient::ui()`/`extract`'s own ABI glue costs nothing extra here beyond what every other page's client row already measures.",
+            "attributionRoots": ["body"]
+          },
+          "sim": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the shared \"8 B\" worker figure every other page's client/gen0/sim row uses. Measured: a constant 0.8267 B/frame across 8 clean runs, well under 8.",
+            "attributionRoots": ["body"]
+          },
+          "gen0": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the shared \"8 B\" worker figure every other page's client/gen0/sim row uses. Measured: a constant 0.8133 B/frame across 8 clean runs, well under 8.",
+            "attributionRoots": ["body"]
+          }
+        },
+        "software": {
+          "frames": 600,
+          "isolates": {
+            "main": {
+              "attributedBytesPerFrame": 213,
+              "formula": "ADR 0029: software mode attributes only `main` via `attributionRoots` (`[\"drive\"]`), every other isolate uses raw bytes in both modes. **Found live: this page's own `games/reference/vite.config.ts` build was minified, and `gc/instrument.ts`'s software-mode attribution matches `attributionRoots` against the literal *runtime* function name -- every isolate read a flat `attributedBytesPerFrame: 0`, even under the `object` negative control's own deliberate allocation, until `minify: false` was set there (that file's own comment).** Measured after that fix (`GC_MODE=software playwright test --project gc-reference --grep \"reference clean\" --repeat-each 8 --workers 1`, this machine): an exact constant 204.16 B/frame attributed across 8 clean runs. ceil(204.16) = 205, + 8 B margin (0016 §1's own convention) = 213. `object`/`burst` on `main` verified tripping at this budget under `GC_MODE=software` (this cut's own run)."
+            }
+          }
+        }
       }
     }
   },

@@ -98,7 +98,19 @@ export const suites = [
     // or vice versa) -- a separate leg would need its own port for the *pages* server too, since a
     // leg's own `playwright test` process starts every configured `webServer` regardless of
     // `--project` (Deviations).
-    args: ['--project', 'chromium', '--project', 'gc', '--project', 'reference'],
+    args: [
+      '--project',
+      'chromium',
+      '--project',
+      'gc',
+      '--project',
+      'reference',
+      // docs/plan/20b-reference-player-and-collect-ui.md: the reference game's own zero-allocation
+      // page, same leg (same shared webServer as `reference`, `playwright.config.ts`'s own
+      // Deviations comment for that project).
+      '--project',
+      'gc-reference',
+    ],
     legs: [
       {
         name: 'engines',
