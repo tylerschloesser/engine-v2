@@ -170,6 +170,13 @@ pub trait Game: Sized + 'static {
     const TICK_RATE: TickRate = TickRate::HZ_20;
     /// 4, 5 or 6: chunk edge 16, 32 or 64 tiles (0007).
     const CHUNK_BITS: u32 = 5;
+    /// docs/plan/22-persistence-log-and-snapshots.md steps 4-6 (0005 "Sim identity"): the game
+    /// crate's own version, embedded in `Identity.game_version`. Defaulted so every existing `Game`
+    /// impl keeps compiling; a real game overrides it with `env!("CARGO_PKG_VERSION")` written in
+    /// its *own* crate root (macro hygiene: `env!` expanding inside `export_game!` would read the
+    /// invoking game crate's manifest, not the engine's, but this default -- evaluated here, in the
+    /// engine crate, if a game never overrides it -- cannot do that itself).
+    const GAME_VERSION: &'static str = "0.0.0";
 
     /// Pure per-chunk generator plus its `Params` (0008); not defined here.
     type Worldgen: Worldgen;

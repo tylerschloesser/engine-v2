@@ -86,6 +86,10 @@ pub struct Persist;
 
 impl Game for Persist {
     const SCHEMA_VERSION: u32 = 1;
+    // docs/plan/22-persistence-log-and-snapshots.md steps 4-6: `Game::GAME_VERSION`'s own doc
+    // comment -- `env!` here reads *this* crate's manifest (macro hygiene), unlike the trait
+    // default.
+    const GAME_VERSION: &'static str = env!("CARGO_PKG_VERSION");
     type Worldgen = FlatWorldgen;
     type Action = Action;
     type Reject = Reject;

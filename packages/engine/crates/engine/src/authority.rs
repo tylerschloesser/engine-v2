@@ -185,6 +185,14 @@ pub struct Authority<G: Game> {
     /// Test-only bench knob (`Authority::set_journal_disabled_for_test`).
     #[cfg(any(test, feature = "testing"))]
     journal_disabled_for_test: bool,
+    /// docs/plan/22-persistence-log-and-snapshots.md steps 4-6, Planning decisions 7 ("dirty means
+    /// a put happened or a record was logged since the last snapshot"): set by [`Authority::write`]
+    /// (every `WorldWrite` put funnels through it) and by [`Authority::record_ack`] (every admitted
+    /// action reaches it, applied or rejected -- 0004's own "a record was logged" case); reset by
+    /// [`Authority::clear_dirty`], called once a snapshot has captured the state this flag
+    /// describes (`Host::sim_snapshot_begin`). Timers/wakes advancing alone never call either
+    /// setter, matching "timers merely advancing do not dirty".
+    dirty: bool,
 }
 
 impl<G: Game> Authority<G> {
@@ -212,6 +220,7 @@ impl<G: Game> Authority<G> {
             journal: UndoJournal::new(),
             #[cfg(any(test, feature = "testing"))]
             journal_disabled_for_test: false,
+            dirty: false,
         }
     }
 
@@ -271,13 +280,24 @@ impl<G: Game> Authority<G> {
 
     /// A copy of the host driver's own `SimRng` state (`SimRng` is `Copy`): M22's snapshot writer
     /// needs it alongside `Store::encode`'s bytes, since `Store` itself holds neither `tick` nor
-    /// `SimRng` (docs/plan/12-store-and-game-trait.md Deviations). Gated like every other native
-    /// testing-only accessor here (`store_mut`, `wake_at_for_test`, ...): a game fixture's own
-    /// native tests build a snapshot manually the same way `crate::testing::replay`'s `heavy` does
-    /// internally.
-    #[cfg(any(test, feature = "testing"))]
+    /// `SimRng` (docs/plan/12-store-and-game-trait.md Deviations). Was gated `#[cfg(any(test,
+    /// feature = "testing"))]` through steps 1-3 (native-test-only callers: `testing::replay`/
+    /// `heavy`, this module's own tests); steps 4-6 un-gate it, since `Host::sim_snapshot_begin`
+    /// (the real ABI export) is now a genuine production caller.
     pub fn rng(&self) -> SimRng {
         self.rng
+    }
+
+    /// Planning decisions 7's own read side (see [`Authority::dirty`]'s doc comment on the struct
+    /// field it exposes).
+    pub fn dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Called once a snapshot has captured the state [`Authority::dirty`] described
+    /// (`Host::sim_snapshot_begin`, docs/plan/22-persistence-log-and-snapshots.md steps 4-6).
+    pub fn clear_dirty(&mut self) {
+        self.dirty = false;
     }
 
     /// The read side of [`Authority::rng`]/[`Authority::from_snapshot`]: rebuilds an `Authority`
@@ -306,6 +326,7 @@ impl<G: Game> Authority<G> {
             journal: UndoJournal::new(),
             #[cfg(any(test, feature = "testing"))]
             journal_disabled_for_test: false,
+            dirty: false,
         }
     }
 
@@ -444,6 +465,11 @@ impl<G: Game> Authority<G> {
     /// variant this calls into `Store::apply` through).
     pub(crate) fn record_ack(&mut self, who: PlayerId, seq: u32) {
         self.store.apply(&Delta::Ack { who, seq });
+        // Planning decisions 7: "or a record was logged" -- every admitted action reaches this,
+        // applied or rejected (`Sim::step`'s own state-budget-reject and normal-apply arms both
+        // call it), so a tick whose only work was a rejected action still dirties the world even
+        // though `write` below never ran for it.
+        self.dirty = true;
     }
 
     fn write(&mut self, delta: Delta<G>, scopes: Scopes) {
@@ -452,6 +478,7 @@ impl<G: Game> Authority<G> {
         }
         self.store.apply(&delta);
         self.changes.push(scopes, delta);
+        self.dirty = true;
     }
 
     /// [`WorldWrite::spawn`]'s real body (docs/plan/21b-timers-wakeups-and-tickcx.md Scope: "every

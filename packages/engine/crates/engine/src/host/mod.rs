@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use crate::abi::config::HexU64;
 use crate::abi::{Instance, RegionId, RegionLayout, Role, Status};
 use crate::authority::Scope;
+use crate::bytes::{ByteSink, SliceSink};
 use crate::codec::decode_canonical;
 use crate::delta::Delta;
 use crate::game::{Game, PlayerEvent, PlayerId, Presence as _, PresenceTable, WorldRead};
@@ -169,6 +170,16 @@ const SIM_RX_BYTES: u32 = 4096;
 /// panicking if a real deployment ever needs more (Deviations records this as provisional).
 const SIM_TX_BYTES: u32 = 65536;
 
+/// `RegionId::Persist`'s size on the sim role (docs/plan/22-persistence-log-and-snapshots.md
+/// Seams: "sized here at 256 KiB"): log frames (`sim_seal_frame`, `sim_segment_header`) and
+/// streaming snapshot blocks (`sim_snapshot_begin`/`sim_snapshot_next`) all copy through it.
+const PERSIST_BYTES: u32 = 256 * 1024;
+
+/// `sim_segment_header`'s own sentinel (docs/plan/22-persistence-log-and-snapshots.md Seams):
+/// `base_tick` equal to this means `SegmentBase::Genesis`; any other value is
+/// `SegmentBase::Snapshot(Tick(base_tick))`.
+const GENESIS_BASE_TICK: u32 = 0xFFFF_FFFF;
+
 /// The `game` value of `InstanceConfig` (0009 `WorldConfig.params` plus the host-only
 /// `cacheChunks` knob), read once by `Host::init` and held until `sim_genesis` consumes the
 /// world-params half of it. `seed`/`params` are 0008's (shared with the `gen`/`client` roles of
@@ -199,6 +210,56 @@ struct SimConfig<P> {
     /// bytes`] (effectively "unchecked") so every existing config keeps working unmodified.
     #[serde(default = "default_world_budget_bytes")]
     world_budget_bytes: u32,
+    /// docs/plan/22-persistence-log-and-snapshots.md steps 4-6 (0005 "Sim identity"): the build's
+    /// own content hash (0017), plain lowercase hex (no `0x` prefix -- `build-game.ts`'s own
+    /// `createHash('sha256').update(bytes).digest('hex')`), first 32 hex digits (128 bits) kept.
+    /// `#[serde(default)]` (empty string, parsed to all-zero) so every existing config -- native
+    /// tests, `testkit::Loopback`'s own JSON-free construction, anything built before `WorldConfig.
+    /// buildHash` reached this config -- keeps working unmodified; identity mismatch handling is
+    /// M24b's, so nothing validates this value yet.
+    #[serde(default)]
+    build_hash: String,
+}
+
+/// [`SimConfig::build_hash`]'s hex decode: the first 32 hex digits (128 bits), or all-zero on
+/// anything shorter or non-hex (never a parse error -- a config with no/garbled build hash still
+/// boots, since nothing validates identity yet, M24b's job).
+fn parse_build_hash(hex: &str) -> [u8; 16] {
+    let bytes = hex.as_bytes();
+    let mut out = [0u8; 16];
+    for (i, slot) in out.iter_mut().enumerate() {
+        let (Some(hi), Some(lo)) = (
+            bytes.get(i * 2).and_then(|b| (*b as char).to_digit(16)),
+            bytes.get(i * 2 + 1).and_then(|b| (*b as char).to_digit(16)),
+        ) else {
+            return [0u8; 16];
+        };
+        *slot = ((hi << 4) | lo) as u8;
+    }
+    out
+}
+
+/// [`Host::init`]/[`Host::genesis_for_test`]'s shared worldgen-fingerprint computation
+/// (docs/plan/22-persistence-log-and-snapshots.md steps 4-6): borrows `params` rather than cloning
+/// it (`worldgen::Worldgen::Params` carries no `Clone` bound), building a throwaway
+/// `PristineSource` the same way `worldgen::Pristine` does but over a reference instead of an owned
+/// value.
+fn compute_worldgen_fingerprint<G: Game>(
+    seed: u64,
+    params: &<G::Worldgen as Worldgen>::Params,
+) -> u64 {
+    struct Borrowed<'a, W: Worldgen> {
+        seed: u64,
+        params: &'a W::Params,
+    }
+    impl<W: Worldgen> crate::world::PristineSource for Borrowed<'_, W> {
+        fn generate(&self, chunk: crate::world::ChunkCoord, out: &mut [crate::world::Tile]) {
+            W::generate(self.seed, self.params, chunk, out);
+        }
+    }
+    let dims = crate::world::ChunkDims::new(G::CHUNK_BITS);
+    let source = Borrowed::<G::Worldgen> { seed, params };
+    crate::worldgen::worldgen_fingerprint(&source, dims)
 }
 
 /// The sim-role `Instance` (Scope: "`Host<G>` (here: `Sim<G>` + warm list; M15 adds
@@ -278,6 +339,25 @@ pub struct Host<G: Game> {
     /// (`.claude/rules/hot-paths.md`): cleared, refilled, then drained (never left non-empty)
     /// every `build_frame` call.
     scratch_presence: Vec<(PlayerId, PresenceRelayOp<G>)>,
+
+    // -- M22 steps 4-6: persistence identity, write-ahead sealing, snapshots -------------------
+    /// The first 128 bits of the build hash (0005 "Sim identity"), parsed once from `SimConfig::
+    /// build_hash` at `Host::init` (all-zero when the config carries none, e.g. a hand-built native
+    /// test config: identity mismatch handling is M24b's, so nothing validates this yet). `[0; 16]`
+    /// for [`Host::genesis_for_test`] too, for the same reason.
+    build_hash: [u8; 16],
+    /// `worldgen::worldgen_fingerprint` over this world's own pristine generator (0007 §9),
+    /// computed once (`Host::init`/`Host::genesis_for_test`) rather than on every `identity()` call
+    /// (it walks 16 chunks' worth of tiles).
+    worldgen_fingerprint: u64,
+    /// The tick of the most recently *logged* frame (0005: "ticks without actions are not logged;
+    /// they are implied by `tick_delta`") -- `Tick(0)` (genesis) before the first one.
+    /// `Host::sim_seal_frame` reads and advances this; nothing else touches it.
+    last_logged_tick: Tick,
+    /// The in-progress streaming snapshot [`Host::sim_snapshot_begin`] started, drained by
+    /// [`Host::sim_snapshot_next`]; `None` when no snapshot is in flight (including right after one
+    /// finishes draining).
+    snapshot_writer: Option<crate::persist::SnapshotWriter>,
 }
 
 /// The last-wins kind of an entity op this tick (host/mod Deviations: `scratch_entity_ops`'s own
@@ -302,6 +382,25 @@ impl<G: Game> Host<G> {
         self.sim.as_ref()
     }
 
+    /// docs/plan/22-persistence-log-and-snapshots.md steps 4-6 (0005 "Sim identity"): assembles
+    /// this instance's own `Identity` for `sim_segment_header`/`sim_snapshot_begin`.
+    /// `engine_version` is `engine::ENGINE_VERSION` (`env!("CARGO_PKG_VERSION")`, defined in the
+    /// engine crate itself); `game_version` is `G::GAME_VERSION` (defaulted to `"0.0.0"` unless the
+    /// game overrides it with its own `env!` call, `Game::GAME_VERSION`'s own doc comment).
+    fn identity(&self) -> crate::persist::Identity {
+        crate::persist::Identity {
+            build_hash: self.build_hash,
+            engine_version: crate::ENGINE_VERSION.to_string(),
+            game_version: G::GAME_VERSION.to_string(),
+            schema_version: G::SCHEMA_VERSION,
+            tick_rate_hz: G::TICK_RATE.hz_value(),
+            worldgen: crate::worldgen::WorldgenStamp {
+                version: <G::Worldgen as Worldgen>::WORLDGEN_VERSION,
+                fingerprint: self.worldgen_fingerprint,
+            },
+        }
+    }
+
     /// The `cacheChunks` config value, read but not yet wired anywhere (see
     /// [`SimConfig::cache_chunks`]'s own doc comment): exposed so a future milestone that does
     /// wire it does not also have to re-plumb it through `Host::init`.
@@ -318,6 +417,7 @@ impl<G: Game> Host<G> {
     where
         G::Global: Default,
     {
+        let worldgen_fingerprint = compute_worldgen_fingerprint::<G>(params.seed, &params.worldgen);
         Host {
             pending: None,
             cache_chunks: default_cache_chunks(),
@@ -339,6 +439,10 @@ impl<G: Game> Host<G> {
             scratch_action_players: Vec::new(),
             presence: PresenceTable::empty(),
             scratch_presence: Vec::new(),
+            build_hash: [0; 16],
+            worldgen_fingerprint,
+            last_logged_tick: Tick(0),
+            snapshot_writer: None,
         }
     }
 
@@ -1174,8 +1278,12 @@ where
             return Err(Status::BudgetExceedsArena);
         }
 
+        let worldgen_fingerprint = compute_worldgen_fingerprint::<G>(cfg.seed.0, &cfg.params);
+        let build_hash = parse_build_hash(&cfg.build_hash);
+
         layout.region(RegionId::Rx, SIM_RX_BYTES);
         layout.region(RegionId::Tx, SIM_TX_BYTES);
+        layout.region(RegionId::Persist, PERSIST_BYTES);
         Ok(Host {
             pending: Some(WorldParams {
                 seed: cfg.seed.0,
@@ -1203,6 +1311,10 @@ where
             scratch_action_players: Vec::new(),
             presence: PresenceTable::empty(),
             scratch_presence: Vec::new(),
+            build_hash,
+            worldgen_fingerprint,
+            last_logged_tick: Tick(0),
+            snapshot_writer: None,
         })
     }
 
@@ -1282,12 +1394,142 @@ where
         Ok(self.build_frame(conn, tx) as u32)
     }
 
-    fn sim_seal_frame(&mut self, _persist: &mut [u8]) -> Result<u32, Status> {
+    /// docs/plan/22-persistence-log-and-snapshots.md steps 4-6: real write-ahead frame bytes,
+    /// replacing M13's "always 0" stub. Reads (never clears) `self.pending_records` -- the same
+    /// queue `Host::tick`'s own `Sim::step` call drains and clears right after this returns, so the
+    /// ABI order (`sim_seal_frame()` -> `logSink(view)` -> `sim_tick()`) sees the *same* records
+    /// this tick's `sim_tick()` is about to apply, per 0005's write-ahead rule. Encodes the same
+    /// `len | tick_delta | count | records | crc32` container `persist::FrameWriter::finish` does
+    /// (byte for byte -- `log_bytes_native_equals_wasm` is what proves it), but by hand over
+    /// *borrowed* records rather than through `FrameWriter::push_action` (which takes `G::Action`
+    /// by value): only reading `pending_records` here, never draining it, means the very next line
+    /// of `Host::tick` still needs every record intact for its own `Sim::step` call, and adding a
+    /// `G::Action: Clone` bound to this whole `impl Instance for Host<G>` block would force it onto
+    /// every generic caller (`GameInstance<G>`, `export_game!`), not just this one method.
+    fn sim_seal_frame(&mut self, persist: &mut [u8]) -> Result<u32, Status> {
+        let Some(sim) = self.sim.as_ref() else {
+            return Err(Status::NotInitialised);
+        };
+        if self.pending_records.is_empty() {
+            // 0005: "ticks without actions are not logged; they are implied by `tick_delta`."
+            return Ok(0);
+        }
+        // `sim.tick()` here is the tick about to complete once `sim_tick()` runs right after this
+        // call (host/mod Deviations, "seal timing": the ABI splits `Sim::step`'s own internal
+        // tick-then-step into two exports, but `sim_seal_frame` runs *before* `Sim::step`, so the
+        // tick this frame is *for* is one past what `sim.tick()` currently reads).
+        let next_tick = sim.tick().add(crate::time::Ticks(1));
+        let tick_delta = next_tick.0.wrapping_sub(self.last_logged_tick.0);
+
+        let mut body = Vec::new();
+        struct VecSink<'a>(&'a mut Vec<u8>);
+        impl ByteSink for VecSink<'_> {
+            fn put(&mut self, b: &[u8]) {
+                self.0.extend_from_slice(b);
+            }
+        }
+        {
+            let mut v = VecSink(&mut body);
+            v.put_varint(tick_delta as u64);
+            v.put_varint(self.pending_records.len() as u64);
+            for record in &self.pending_records {
+                match record {
+                    Record::Action { who, seq, action } => {
+                        debug_assert!(who.0 <= u8::MAX as u32, "player_slot must fit a u8 (0005)");
+                        v.put_u8(crate::persist::RecordKind::Action as u8);
+                        v.put_u8(who.0 as u8);
+                        v.put_varint(*seq as u64);
+                        crate::persist::write_sized(action, &mut v);
+                    }
+                    Record::Player { who, ev } => {
+                        debug_assert!(who.0 <= u8::MAX as u32, "player_slot must fit a u8 (0005)");
+                        v.put_u8(crate::persist::RecordKind::Connection as u8);
+                        v.put_u8(who.0 as u8);
+                        v.put_u8(match ev {
+                            PlayerEvent::Joined => 0,
+                            PlayerEvent::Connected => 1,
+                            PlayerEvent::Disconnected => 2,
+                        });
+                    }
+                }
+            }
+        }
+        let crc = crate::persist::crc32(&body);
+        let mut sink = SliceSink::new(persist);
+        sink.put_varint((body.len() + 4) as u64);
+        sink.put(&body);
+        sink.put_u32(crc);
+        let n = sink.finish().map_err(|_| Status::BadLength)?;
+        self.last_logged_tick = next_tick;
+        Ok(n as u32)
+    }
+
+    fn sim_segment_header(
+        &mut self,
+        _segment: u32,
+        base_tick: u32,
+        persist: &mut [u8],
+    ) -> Result<u32, Status> {
         if self.sim.is_none() {
             return Err(Status::NotInitialised);
         }
-        // Non-scope (Storage, snapshots, real log bytes: M22): always 0 until then.
-        Ok(0)
+        let base = if base_tick == GENESIS_BASE_TICK {
+            crate::persist::SegmentBase::Genesis
+        } else {
+            crate::persist::SegmentBase::Snapshot(Tick(base_tick))
+        };
+        let header = crate::persist::SegmentHeader {
+            identity: self.identity(),
+            base,
+        };
+        let mut sink = crate::bytes::SliceSink::new(persist);
+        header.write(&mut sink);
+        sink.finish()
+            .map(|n| n as u32)
+            .map_err(|_| Status::BadLength)
+    }
+
+    /// docs/plan/22-persistence-log-and-snapshots.md steps 4-6: starts a streaming snapshot of the
+    /// current state at `(log_segment, log_offset)` (Planning decisions 4: "the host owns the log
+    /// position"). Resets [`Authority::dirty`] once the writer holds a self-consistent copy of the
+    /// state it describes -- everything after this call, until the *next* put or logged record,
+    /// happened after the snapshot this method just began.
+    fn sim_snapshot_begin(&mut self, log_segment: u32, log_offset: u32) -> Status {
+        let Some(sim) = self.sim.as_ref() else {
+            return Status::NotInitialised;
+        };
+        let identity = self.identity();
+        let rng = sim.authority().rng();
+        let tick = sim.tick();
+        self.snapshot_writer = Some(crate::persist::SnapshotWriter::begin(
+            sim.authority().store(),
+            tick,
+            &rng,
+            log_segment,
+            log_offset,
+            &identity,
+        ));
+        if let Some(sim) = self.sim.as_mut() {
+            sim.authority_mut().clear_dirty();
+        }
+        Status::Ok
+    }
+
+    fn sim_snapshot_next(&mut self, persist: &mut [u8]) -> Result<u32, Status> {
+        let Some(writer) = self.snapshot_writer.as_mut() else {
+            return Err(Status::NotInitialised);
+        };
+        let n = writer.next(persist);
+        if n == 0 {
+            self.snapshot_writer = None;
+        }
+        Ok(n as u32)
+    }
+
+    fn sim_dirty(&mut self) -> u32 {
+        self.sim
+            .as_ref()
+            .map_or(0, |sim| u32::from(sim.authority().dirty()))
     }
 
     fn sim_warm_one(&mut self) -> u32 {

@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 15
+export const ABI_VERSION = 16
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -81,7 +81,8 @@ export const ABI_EXPORTS = {
   // for a real `Game`). M22b adds the load-from-storage path.
   sim_genesis: { role: 'sim', params: 0, result: 'status' },
   // docs/plan/13-sim-host-tick-loop.md: write-ahead log bytes for the frame about to be applied
-  // (0024 §1), written into `RegionId.Persist`. Always 0 until M22 (Non-scope here).
+  // (0024 §1), written into `RegionId.Persist`. Real since docs/plan/
+  // 22-persistence-log-and-snapshots.md steps 4-6 (0 = nothing to log this tick).
   sim_seal_frame: { role: 'sim', params: 0, result: 'len' },
   // docs/plan/13-sim-host-tick-loop.md: generates at most one uncached chunk from the warm list
   // (`host::warm`), nearest-to-view-centre first. `1`/`0` (not a `Status`: costs nothing, always
@@ -169,6 +170,22 @@ export const ABI_EXPORTS = {
   // know how many `RegionId.DrawList` body blocks to copy into the `drawList` triple buffer
   // (`worker/client-drawlist.ts`).
   drawlist_len: { role: 'client', params: 0, result: 'u32' },
+  // docs/plan/22-persistence-log-and-snapshots.md (`ABI_VERSION` 15 -> 16), sim role: encodes a
+  // `SegmentHeader` (identity + base) into `RegionId.Persist`. `baseTick = 0xFFFF_FFFF` means
+  // genesis; any other value is `Snapshot(Tick(baseTick))`.
+  sim_segment_header: { role: 'sim', params: 2, result: 'len' },
+  // docs/plan/22-persistence-log-and-snapshots.md (`ABI_VERSION` 15 -> 16), sim role: starts a
+  // streaming snapshot of the current state at `(logSegment, logOffset)` -- the host owns the log
+  // position (Planning decisions 4). `sim_snapshot_next` drains it afterward.
+  sim_snapshot_begin: { role: 'sim', params: 2, result: 'status' },
+  // docs/plan/22-persistence-log-and-snapshots.md (`ABI_VERSION` 15 -> 16), sim role: copies the
+  // next block of the snapshot `sim_snapshot_begin` started into `RegionId.Persist`, `0` meaning
+  // fully drained.
+  sim_snapshot_next: { role: 'sim', params: 0, result: 'len' },
+  // docs/plan/22-persistence-log-and-snapshots.md (`ABI_VERSION` 15 -> 16), sim role: `1` if any
+  // put or logged record has happened since the last snapshot began draining, `0` otherwise (not a
+  // `Status`: costs nothing, always answers, same shape as `sim_warm_one`/`drawlist_len`).
+  sim_dirty: { role: 'sim', params: 0, result: 'u32' },
 } as const satisfies Record<string, ExportSpec>
 
 export function statusName(n: number): string {

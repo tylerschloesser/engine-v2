@@ -197,6 +197,49 @@ pub fn sim_seal_frame<T: Instance>(slot: &Slot<T>) -> i32 {
     }
 }
 
+/// `sim_segment_header(segment, base_tick)`: bytes written to `Persist`, or `-(status)` -- the same
+/// shape as `sim_seal_frame`/`sim_build_frame`.
+pub fn sim_segment_header<T: Instance>(slot: &Slot<T>, segment: u32, base_tick: u32) -> i32 {
+    let built = slot.sim().and_then(|rt| {
+        rt.inst
+            .sim_segment_header(segment, base_tick, rt.layout.bytes_mut(RegionId::Persist))
+    });
+    match built {
+        Ok(len) => len as i32,
+        Err(status) => -(status as i32),
+    }
+}
+
+/// `sim_snapshot_begin(segment, offset)`.
+pub fn sim_snapshot_begin<T: Instance>(slot: &Slot<T>, segment: u32, offset: u32) -> Status {
+    match slot.sim() {
+        Ok(rt) => rt.inst.sim_snapshot_begin(segment, offset),
+        Err(status) => status,
+    }
+}
+
+/// `sim_snapshot_next()`: bytes copied to `Persist` (`0` = done), or `-(status)` -- the same shape
+/// as `sim_seal_frame`.
+pub fn sim_snapshot_next<T: Instance>(slot: &Slot<T>) -> i32 {
+    let built = slot.sim().and_then(|rt| {
+        rt.inst
+            .sim_snapshot_next(rt.layout.bytes_mut(RegionId::Persist))
+    });
+    match built {
+        Ok(len) => len as i32,
+        Err(status) => -(status as i32),
+    }
+}
+
+/// `sim_dirty() -> u32`: same "always answer, cost nothing on a wrong role" shape as
+/// `sim_warm_one`/`drawlist_len` -- no `Status` crosses here either.
+pub fn sim_dirty<T: Instance>(slot: &Slot<T>) -> u32 {
+    match slot.sim() {
+        Ok(rt) => rt.inst.sim_dirty(),
+        Err(_) => 0,
+    }
+}
+
 /// `sim_warm_one() -> u32`: same "always answer, cost nothing on a wrong role" shape as
 /// `gen_take`/`upload_stage` -- no `Status` crosses here either.
 pub fn sim_warm_one<T: Instance>(slot: &Slot<T>) -> u32 {

@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 15;
+pub const ABI_VERSION: u32 = 16;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -388,6 +388,48 @@ pub trait Instance: Sized + 'static {
     fn drawlist_len(&mut self) -> u32 {
         0
     }
+
+    /// docs/plan/22-persistence-log-and-snapshots.md (`ABI_VERSION` 15 -> 16), sim role: encodes a
+    /// `persist::SegmentHeader` (identity + base) into `persist` (the whole `Persist` region).
+    /// `_segment` is unused by the default/`Host<G>` implementation -- a segment's own index lives
+    /// in its storage key (Planning decisions 3, 4), never inside the header bytes themselves
+    /// (0005 Formats: `identity | base` only) -- kept as a named parameter because the ABI seam
+    /// this brief fixes names it. `base_tick = 0xFFFF_FFFF` means `SegmentBase::Genesis`; any other
+    /// value is `SegmentBase::Snapshot(Tick(base_tick))`. Same `len`/`-(status)` crossing shape as
+    /// `sim_build_frame`/`sim_seal_frame`.
+    fn sim_segment_header(
+        &mut self,
+        _segment: u32,
+        _base_tick: u32,
+        _persist: &mut [u8],
+    ) -> Result<u32, Status> {
+        Err(Status::Unsupported)
+    }
+
+    /// docs/plan/22-persistence-log-and-snapshots.md (`ABI_VERSION` 15 -> 16), sim role: begins a
+    /// streaming snapshot (`persist::SnapshotWriter::begin`) of the current state at `(log_segment,
+    /// log_offset)` (Planning decisions 4: "the host owns the log position"). [`Instance::
+    /// sim_snapshot_next`] drains it afterward. `Status::Ok` starts a fresh writer, discarding any
+    /// previous one never fully drained.
+    fn sim_snapshot_begin(&mut self, _log_segment: u32, _log_offset: u32) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/22-persistence-log-and-snapshots.md (`ABI_VERSION` 15 -> 16), sim role: copies the
+    /// next block of the snapshot [`Instance::sim_snapshot_begin`] started into `persist` (the whole
+    /// `Persist` region), `0` meaning fully drained (`persist::SnapshotWriter::next`'s own "0 = done"
+    /// shape). Same `len`/`-(status)` crossing shape as `sim_seal_frame`.
+    fn sim_snapshot_next(&mut self, _persist: &mut [u8]) -> Result<u32, Status> {
+        Err(Status::Unsupported)
+    }
+
+    /// docs/plan/22-persistence-log-and-snapshots.md (`ABI_VERSION` 15 -> 16), sim role: `1` if any
+    /// put or logged record has happened since the last snapshot began draining (Planning decisions
+    /// 7), `0` otherwise -- including a wrong role or an instance with no such state, same "always
+    /// answer, cost nothing" shape as `sim_warm_one`/`drawlist_len`: no `Status` crosses here either.
+    fn sim_dirty(&mut self) -> u32 {
+        0
+    }
 }
 
 /// Emits every export for every role, the `#[global_allocator]`, and the single-threaded instance
@@ -465,6 +507,22 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn tick_hz() -> u32 {
             $crate::abi::tick_hz(&__ENGINE_SLOT)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_segment_header(segment: u32, base_tick: u32) -> i32 {
+            $crate::abi::sim_segment_header(&__ENGINE_SLOT, segment, base_tick)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_snapshot_begin(segment: u32, offset: u32) -> u32 {
+            $crate::abi::sim_snapshot_begin(&__ENGINE_SLOT, segment, offset) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_snapshot_next() -> i32 {
+            $crate::abi::sim_snapshot_next(&__ENGINE_SLOT)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_dirty() -> u32 {
+            $crate::abi::sim_dirty(&__ENGINE_SLOT)
         }
 
         // client

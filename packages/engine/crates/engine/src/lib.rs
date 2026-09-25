@@ -31,3 +31,10 @@ pub mod world_access;
 pub mod worldgen;
 
 pub use abi::panic::log;
+
+/// This crate's own build version (0005 "Sim identity": `Identity.engine_version`). Read directly
+/// off `CARGO_PKG_VERSION` at compile time, since it is defined here rather than through
+/// `export_game!`'s macro expansion (unlike [`game::Game::GAME_VERSION`], which must read the
+/// *game* crate's own manifest and so can only be captured where a game's own `env!` call would
+/// run).
+pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
