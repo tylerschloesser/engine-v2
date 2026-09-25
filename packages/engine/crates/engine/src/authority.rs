@@ -300,6 +300,14 @@ impl<G: Game> Authority<G> {
         self.dirty = false;
     }
 
+    /// Fix round 1, gap 2 (docs/plan/22-persistence-log-and-snapshots.md): `Host::sim_seal_frame`'s
+    /// own setter, for the "or a record was logged" half of Planning decisions 7 that neither
+    /// [`Authority::write`] nor [`Authority::record_ack`] reaches on its own (a reconnect's bare
+    /// `Record::Player{Connected}`, no state write and no admitted action).
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
     /// The read side of [`Authority::rng`]/[`Authority::from_snapshot`]: rebuilds an `Authority`
     /// from a decoded snapshot's pieces (M22, docs/plan/22-persistence-log-and-snapshots.md
     /// Non-scope: "loading a stored world ... M22b" -- this is the container-level piece only,

@@ -1461,6 +1461,19 @@ where
         sink.put_u32(crc);
         let n = sink.finish().map_err(|_| Status::BadLength)?;
         self.last_logged_tick = next_tick;
+        // Fix round 1, gap 2 (docs/plan/22-persistence-log-and-snapshots.md): Planning decisions 7
+        // says dirty means "a put happened *or a record was logged*". `Authority::write`/
+        // `record_ack` already cover the first half and most of the second (every admitted action,
+        // applied or rejected), but a *reconnect* (`Host::connect` on an already-`ever_joined`
+        // player pushes only `Record::Player{Connected}`, no `on_player` write and no `record_ack`
+        // call) reached neither -- a real, non-empty logged frame with `sim_dirty()` still reading
+        // 0. Marking it here, on any non-empty frame this export actually produces, covers every
+        // record kind uniformly rather than chasing each one's own write path individually.
+        if n > 0
+            && let Some(sim) = self.sim.as_mut()
+        {
+            sim.authority_mut().mark_dirty();
+        }
         Ok(n as u32)
     }
 

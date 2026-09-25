@@ -352,15 +352,20 @@ buffer sizing, see below).
     not just this one method. `crate::persist::write_sized`/`crc32`/`RecordKind` (all `pub(crate)`/
     `pub`) are reused directly; the wire bytes are proven byte-identical to `FrameWriter::finish`'s
     own output by `log_bytes_native_equals_wasm` (below), not merely asserted.
-  - `Authority::dirty: bool`, set in `Authority::write` (every `WorldWrite` put) **and** in
-    `Authority::record_ack` (every admitted action, applied or rejected -- connection events with no
-    state write, e.g. a bare `Connected` with no `on_player` write, do **not** set it, since neither
-    `write` nor `record_ack` runs for them; flagged, not fixed, since nothing in Tests added
-    exercises that exact corner and Planning decisions 7's own wording ("a record was logged") is
-    arguably about it too). Reset by `Authority::clear_dirty()`, called from `sim_snapshot_begin`
-    once the writer already holds a self-consistent copy of the state that flag described.
-    `Authority::rng()` (existing, from steps 1-3) is un-gated from `#[cfg(test, feature="testing")]`
-    to plain `pub`, since `sim_snapshot_begin` is a genuine production caller now.
+  - `Authority::dirty: bool`, set in `Authority::write` (every `WorldWrite` put), in `Authority::
+    record_ack` (every admitted action, applied or rejected), and (fix round 1, gap 2) in
+    `Host::sim_seal_frame` itself, via a new `Authority::mark_dirty()`, whenever it actually produces
+    a non-empty frame. The third setter is what closes the real gap fix round 1 named: a *reconnect*
+    (`Host::connect` on an already-`ever_joined` slot) pushes only `Record::Player{Connected}` -- no
+    `on_player` write (`Persist::on_player`'s own `Joined`-only arm) and no `record_ack` call
+    (admitted-action-only) -- so `sim_dirty()` stayed `0` after a real, non-empty logged frame.
+    Setting it in `sim_seal_frame` on any non-empty output covers every record kind uniformly rather
+    than chasing each one's own write path; `connect_only_tick_dirties_the_world`
+    (`fixtures/persist/tests/dirty_flag.rs`) proves it, injection-tested (below). Reset by
+    `Authority::clear_dirty()`, called from `sim_snapshot_begin` once the writer already holds a
+    self-consistent copy of the state that flag described. `Authority::rng()` (existing, from steps
+    1-3) is un-gated from `#[cfg(test, feature="testing")]` to plain `pub`, since `sim_snapshot_begin`
+    is a genuine production caller now.
 
 ### TS Provides, as built
 
@@ -493,9 +498,62 @@ crc32(4) = 12`).
 - Identity is real but unvalidated end to end: nothing compares a loaded segment's `Identity`
   against the running build's own (M22b/M24b's own Non-scope, unchanged), and `G::GAME_VERSION`
   defaults to `"0.0.0"` for any game that doesn't override it (only `fx-persist` does, here).
-- `Authority::dirty` does not get set by a connection event with no accompanying state write (see
-  above) -- a real gap against Planning decisions 7's literal wording, left as found since no test
-  exercises it and the natural fix point (`Host::connect`'s own `Connected` push) is outside
-  `Authority` entirely.
+- `Authority::dirty` not being set by a connection-only frame is fixed, fix round 1 (below).
 - The `logSink` `subarray()` tension (above) is real but inert until some later milestone wires a
   live `Storage` into `worker/sim.ts` itself; flagged there for whoever does.
+
+## Fix round 1
+
+Two gaps closed per the coordinator's own message.
+
+### Gap 1: replay/heavy against a real host's log
+
+New `fixtures/persist/tests/replay_real_host_log.rs`, `replay_real_host_log_matches_live`: a
+`testkit::Loopback<Persist>` script (real `Host::connect`/`Host::on_uplink`, not a hand-built
+`FrameWriter` log) with a self-rearming `PlaceTimer`, a mid-run snapshot (taken through the real
+`Host::sim_snapshot_begin`/`sim_snapshot_next` ABI methods, not a bare `SnapshotWriter::begin`
+call), a *second* connection after `testing::heavy`'s own first `N=25` restore boundary, and a
+final anchoring action. Checks `testing::replay` from genesis, `testing::replay` from the mid-run
+snapshot, and `testing::heavy(N=25)` all reproduce the live run's own checkpoint hashes exactly --
+all three pass.
+
+**A real architectural gap found, not fixed (escalated instead of patched under time pressure):**
+the snapshot in this test is deliberately taken *immediately* after a logged frame, not after a
+run of idle ticks. Taking it after an idle gap (e.g. snapshot at tick 10, last real frame at tick
+2) breaks `testing::replay`-from-that-snapshot: the *next* real frame's `tick_delta` is computed by
+`Host::sim_seal_frame` relative to `last_logged_tick` (tick 2), which is unknown to anyone resuming
+from the snapshot at tick 10 (0005 Formats' own snapshot grammar carries only `identity`, `tick`
+and `log position`, not this reference tick) -- resuming replay misplaces that frame by exactly the
+length of the idle gap before the snapshot. Tried the obvious fix (reset `last_logged_tick` to the
+snapshot's own tick in `sim_snapshot_begin`): it broke `replay_from_genesis_checkpoints` and this
+same test's own from-genesis leg, because a **full-log genesis replay has no way to know a snapshot
+ever happened partway through** (nothing is recorded in the log itself), so it cannot apply the same
+reset -- and 0002 "Replay equality"/"Cross-engine golden hashes" require genesis replay of the *same*
+log to always reproduce the live hash regardless of any snapshot cadence. Reverted. This is a real
+production scenario (Persistence's own 1,200-tick dirty check can fire long after the last real
+frame, once fix round 1's own gap 2 makes a stale-but-still-set dirty flag common), not a contrived
+one, and needs either a format addition (an ADR amendment, risking the accepted `persist_snapshot_
+golden_bytes` golden) or a different recovery algorithm (M22b's own "loading a stored world" is the
+natural owner) -- flagged for the orchestrator, not decided here.
+
+Anti-vacuity: disabled `to_record`'s own `FrameRecord::Connection -> Record::Player` mapping
+(treated it as a no-op, like `Skip`) -> `assertion left == right failed` (`replay from genesis must
+match the live run exactly`; every checkpoint from tick 1 onward differed). Reverted, green.
+
+### Gap 2: dirty flag on any logged record
+
+`Authority::mark_dirty()` (new), called from `Host::sim_seal_frame` whenever it actually produces a
+non-empty frame -- closing the exact gap Deviations flagged: a reconnect (`Host::connect` on an
+already-`ever_joined` slot) pushes only `Record::Player{Connected}`, reaching neither `Authority::
+write` (no state write) nor `Authority::record_ack` (admitted-action-only). New `fixtures/persist/
+tests/dirty_flag.rs`, `connect_only_tick_dirties_the_world`: connect (dirty, real write), snapshot
+(clears dirty), reconnect the same connection (`Connected` only) -> `sim_dirty() == 1`.
+
+Anti-vacuity: removed the `mark_dirty()` call from `sim_seal_frame` -> `assertion left == right
+failed` (`left: 0, right: 1`, the reconnect-only case). Reverted, green.
+
+### Measured (fix round 1)
+
+`cargo nextest run --workspace --features engine/testing,testing`: 514 tests, 514 passed, 2 skipped
+(unchanged). `pnpm test`: `rust pass 514 tests`, `unit pass 233 tests`, `wasm pass 72 tests`,
+`browser pass 185 tests`. `pnpm lint`: biome/rustfmt/clippy/tsc all green. No existing golden moved.
