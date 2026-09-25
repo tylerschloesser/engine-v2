@@ -130,8 +130,12 @@ called uniformly -- WebKit's implementation requires both arguments (the 1-arg `
 throws `TypeError: Not enough arguments` there; both forms work in Chromium and Firefox). `move()`
 onto an existing destination name overwrites it (measured: the destination's old bytes are gone,
 replaced by the source's), which is what the scratch-file rename in Planning decision 2 relies on.
-No slot files, no adapter header format, nothing to amend on 0005's OPFS row beyond recording that
-the 2-arg call form is the portable one -- a one-line ADR amendment, not a format change.
+No slot files, no adapter header format. **Correction (fix round 1): no 0005 amendment at all.**
+The earlier draft of this section called the 2-arg call form "a one-line ADR amendment, not a format
+change" -- wrong: 0005's OPFS row already just says "rename"; it never specified the 1-arg vs. 2-arg
+form, so nothing it says is contradicted or superseded. The 2-arg requirement is an implementation
+fact of this adapter (`opfs.ts`'s own comments, `storage/CLAUDE.md`), not a decision Tyler made that
+needs a superseding record. No ADR is written for Decision 3.
 
 Device check callout for step 7 (not built here): the iOS probe (`opfs-latency.html`) should call
 `move()` with the 2-arg form from the start, matching this finding, rather than discovering the same

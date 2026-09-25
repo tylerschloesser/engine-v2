@@ -49,6 +49,48 @@ export async function runStorageConformance(make: () => Storage): Promise<string
   }
 
   {
+    // docs/plan/22b-persistence-load-and-fs.md Planning decision 1: "adapters must accept `append`
+    // after `write` on one key" -- and the reverse, `append` then `write` then `append` again, is
+    // exactly the torn-tail-truncation shape (`Persistence.loadLatest`: `storage.write(keys.log(seg),
+    // logBytes.subarray(0, validEnd))` truncates a segment's log, and the tick path keeps appending
+    // to that same segment key afterward). `write` must replace *everything* appended so far
+    // (including bytes shorter than what was appended, the truncation case), and a later `append`
+    // must land after the written bytes, not after the pre-write appended ones.
+    const s = make()
+    await s.append('mixed', enc.encode('aaaa'))
+    await s.append('mixed', enc.encode('bbbb')) // 8 bytes appended so far
+    await s.write('mixed', enc.encode('xx')) // shorter than the 8 appended: replaces all of it
+    await s.append('mixed', enc.encode('yyy')) // lands after the written bytes, not the old 8
+    const back = await s.read('mixed')
+    if (!bytesEqual(back, enc.encode('xxyyy'))) {
+      throw new Error(
+        `write_after_append_then_append_lands_after: expected 'xxyyy', got ${back ? [...back] : back}`,
+      )
+    }
+    passed.push('write_after_append_then_append_lands_after')
+  }
+
+  {
+    // Same call order, with a `sync()`/`flush()` durability barrier between each call -- an adapter
+    // that buffers appends and only applies them to the real backing store at the next barrier must
+    // not let a barrier after `write` resurrect or reorder anything from before it.
+    const s = make()
+    await s.append('mixed2', enc.encode('cccc'))
+    await s.sync('mixed2')
+    await s.append('mixed2', enc.encode('dddd')) // 8 bytes appended, only the first 4 synced
+    await s.write('mixed2', enc.encode('z')) // 1 byte: shorter than either half
+    await s.flush()
+    await s.append('mixed2', enc.encode('ee'))
+    const back = await s.read('mixed2')
+    if (!bytesEqual(back, enc.encode('zee'))) {
+      throw new Error(
+        `write_after_append_survives_sync_and_flush: expected 'zee', got ${back ? [...back] : back}`,
+      )
+    }
+    passed.push('write_after_append_survives_sync_and_flush')
+  }
+
+  {
     const s = make()
     await s.write('k', enc.encode('x'))
     await s.delete('k')

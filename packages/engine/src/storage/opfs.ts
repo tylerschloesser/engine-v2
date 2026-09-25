@@ -156,18 +156,38 @@ class OpfsStorageAdapter implements OpfsStorage {
 
   append(key: string, bytes: Uint8Array): void | Promise<void> {
     const state = this.#logHandles.get(key)
-    if (state) {
+    // `#writtenPending.has(key)` means a `write()` to this same key hasn't landed on the real file
+    // yet (fast path: still behind a queued rename) -- fix round 1 (Deviations): an open log handle
+    // from *before* that `write()` is stale (it will read/write the pre-`write()` file, or a file
+    // `write()`'s own queued rename is about to replace out from under it), so this falls to the slow
+    // path below instead of trusting it.
+    if (state && !this.#writtenPending.has(key)) {
       // Decision 4: no options object here -- the cursor was already seeked once, at open.
       state.handle.write(bytes)
       return
     }
-    return this.#openLogHandleThenAppend(key, bytes)
+    return this.#appendSlow(key, bytes)
   }
 
-  async #openLogHandleThenAppend(key: string, bytes: Uint8Array): Promise<void> {
-    // Off the fast path (the first `append` to this key only): `bytes` is only valid for the
-    // synchronous part of this call (0005 Storage), and this continuation runs later.
+  /** The slow path: either the very first `append` to this key, or one arriving while a `write()` to
+   * the same key is still pending (fix round 1). `bytes` is copied immediately, before the first
+   * `await`, per 0005 Storage ("valid only during the call"). */
+  async #appendSlow(key: string, bytes: Uint8Array): Promise<void> {
     const copy = bytes.slice()
+    if (this.#writtenPending.has(key)) {
+      // Drain the whole pending chain (Planning decision 2: one slot, FIFO) so the real file
+      // reflects `write()`'s own value before this `append` opens a handle on it -- otherwise this
+      // append would land on the pre-`write()` file, and `write()`'s own queued rename would later
+      // clobber it back out (fix round 1's own failing case: `write_after_append_then_append_lands
+      // _after`).
+      const fn = this.pendingAsync()
+      if (fn) await fn()
+    }
+    const stale = this.#logHandles.get(key)
+    if (stale) {
+      stale.handle.close()
+      this.#logHandles.delete(key)
+    }
     const resolved = await this.#resolve(key, true)
     if (!resolved) throw new Error(`opfsStorage: cannot resolve key ${key}`)
     const fileHandle = await resolved.dir.getFileHandle(resolved.name, { create: true })
@@ -195,6 +215,19 @@ class OpfsStorageAdapter implements OpfsStorage {
     // path, until the direct write finishes), so a `read()` arriving in between sees the new value.
     const copy = bytes.slice()
     this.#writtenPending.set(key, copy)
+    // Fix round 1 (Deviations, `write_after_append_then_append_lands_after`): an `append`-opened log
+    // handle for this same key is invalidated the instant `write()` is called, not only once its own
+    // rename lands. Measured: a rename (`move()`) onto a name that still has another open sync access
+    // handle succeeds anyway (POSIX-rename-style -- the old handle keeps its now-unreachable-by-name
+    // file), so a later `append` reusing that handle would silently write into an orphaned file no
+    // `read`/`list` can ever see again. `sync(key)` on this now-closed handle after this point is a
+    // harmless no-op (`#logHandles.get(key)` is gone); `append(key, ...)` reopens fresh, in
+    // `#appendSlow` below.
+    const stale = this.#logHandles.get(key)
+    if (stale) {
+      stale.handle.close()
+      this.#logHandles.delete(key)
+    }
     const scratch = this.#scratch
     if (!scratch) return this.#writeViaFreshHandle(key, copy)
     this.#scratch = null

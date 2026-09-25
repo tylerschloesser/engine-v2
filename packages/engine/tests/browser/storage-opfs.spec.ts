@@ -21,6 +21,8 @@ test('storage_conformance_opfs @engines', async ({ opfsPage }) => {
     'write_then_read',
     'read_missing_key_is_null',
     'append_accumulates_in_call_order',
+    'write_after_append_then_append_lands_after',
+    'write_after_append_survives_sync_and_flush',
     'delete_removes_the_key',
     'list_returns_matching_keys_sorted',
     'sync_never_throws_on_an_unknown_key',

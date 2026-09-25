@@ -31,8 +31,8 @@ async function runConformance(): Promise<string[]> {
   // OPFS sync access handle is exclusive; the first instance's handle from its own `write()` call
   // stays open until that instance's `flush()` runs, which this helper never calls). Prebuilding one
   // instance per prefix, each its own worldId, sidesteps both problems. `conformance.ts` calls
-  // `make()` exactly 6 times today; 8 is a small buffer.
-  const PREBUILT = 8
+  // `make()` exactly 8 times today; 10 is a small buffer.
+  const PREBUILT = 10
   const instances: Storage[] = []
   for (let i = 0; i < PREBUILT; i++) {
     instances.push(await opfsStorage(`conformance-${i}`))
