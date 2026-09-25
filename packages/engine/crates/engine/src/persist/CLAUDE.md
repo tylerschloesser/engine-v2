@@ -17,3 +17,9 @@ Deviation) places it.
 
 Untrusted bytes (anything read back from storage) go through `decode_canonical`
 (`persist::read_sized`), never plain `decode`.
+
+Restore/replay drivers (`host::Host::sim_restore_*`/`sim_replay_*`, docs/plan/
+22b-persistence-load-and-fs.md) live in `host/mod.rs`, not here: this module stays the container
+level. Replay is single-pass over each decoded frame (Planning decisions 4's own "scan pass that
+collects `Skip` targets" is not built -- the set is always empty until M24 gives `Skip` real
+meaning, at which point that pass, and this line, need revisiting).

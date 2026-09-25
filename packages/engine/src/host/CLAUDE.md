@@ -44,3 +44,15 @@ write side of 0005 Persistence. One instance per world.
   `outcome` is `'recovered'` iff anything was skipped or truncated, else `'loaded'`.
 - `WorldLoadError { kind: 'identity' | 'corrupt' | 'container', running, stored? }`: thrown, not
   returned -- storage is left untouched.
+- Segment rolling (step 3, Planning decisions 2): `snapshotNow`'s own `rollSegmentIfNeeded` seals
+  the open segment and opens a new one when its byte length reaches `segmentRollBytes` (`4 MiB`,
+  overridable per `Persistence.create`/`open`'s own `opts` for tests). The new segment's own header
+  and its base snapshot are written *before* the manifest rewrite, in that order, so a crash between
+  them and the manifest leaves self-describing data behind (`loadLatest`'s own segment discovery
+  never trusts the manifest anyway) rather than nothing at all.
+- Pruning (step 3, Planning decisions 3, `pruneSnapshots`): keeps every segment's own base snapshot
+  plus the latest two overall, off the tick path (`Storage.list`) -- called from `SimHost.pause`/
+  `stop` (after `snapshotIfDirty`) and after a successful `Persistence.open` load, never from the
+  periodic cadence itself ("kept until the new one verifies").
+- `SimHost.pause()`/`stop()` are `async` (step 3): disarm the pacing timer synchronously, then (when
+  a `Persistence` is wired in) `snapshotIfDirty()`, `pruneSnapshots()`, `flush()`, in that order.
