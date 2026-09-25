@@ -29,7 +29,7 @@
 //! substantially more code for the same external contract (`begin`/`next(&mut [u8]) -> len`,
 //! draining in blocks, is exactly what this still does). Flagged here for the orchestrator.
 
-use crate::bytes::{ByteReader, ByteSink};
+use crate::bytes::{ByteReader, ByteSink, CountSink};
 use crate::game::Game;
 use crate::persist::{
     Identity, PersistError, VarintPeek, crc32, peek_varint, read_sized, write_sized,
@@ -72,7 +72,23 @@ impl SnapshotWriter {
         log_offset: u32,
         identity: &Identity,
     ) -> Self {
-        let mut payload = Vec::new();
+        // Orchestrator ruling (docs/plan/22-persistence-log-and-snapshots.md, second-half
+        // delegation prompt): "make its buffer sized exactly once (no doubling growth)". A first,
+        // count-only pass over the identical writes (`CountSink`, the same sink `codec::
+        // encoded_len` uses) gives the exact payload length up front, so the real pass below
+        // allocates `payload` with `Vec::with_capacity(payload_len)` and never reallocates -- unlike
+        // the original `Vec::new()` + push-as-you-go shape, which grew by doubling.
+        let mut count = CountSink::default();
+        identity.write(&mut count);
+        count.put_u32(tick.0);
+        count.put_u32(log_segment);
+        count.put_u32(log_offset);
+        write_sized(rng, &mut count);
+        store.encode(&mut count);
+        count.put_u64(0); // state_hash: always exactly 8 bytes, whatever the real value is.
+        let payload_len = count.0;
+
+        let mut payload = Vec::with_capacity(payload_len);
         {
             let mut sink = VecSink(&mut payload);
             identity.write(&mut sink);
@@ -83,9 +99,23 @@ impl SnapshotWriter {
             store.encode(&mut sink);
             sink.put_u64(store.state_hash());
         }
+        debug_assert_eq!(
+            payload.len(),
+            payload_len,
+            "the counting pass above must match the real pass exactly"
+        );
         let crc = crc32(&payload);
 
-        let mut buf = Vec::with_capacity(4 + 2 + 10 + payload.len() + 4);
+        // Same treatment for the outer container: an exact varint-length count instead of the
+        // fixed 10-byte over-reservation the outer `buf` used to carry (harmless there since it
+        // never triggered a second allocation either way, but this makes both buffers' sizing
+        // reasoning identical, and `total_len()` below is exactly this milestone's own "Rust-side
+        // snapshot buffer's peak size", the Budgets "Memory per instance" row).
+        let mut varint_len_count = CountSink::default();
+        varint_len_count.put_varint((payload.len() + 4) as u64);
+        let varint_bytes = varint_len_count.0;
+
+        let mut buf = Vec::with_capacity(4 + 2 + varint_bytes + payload.len() + 4);
         {
             let mut sink = VecSink(&mut buf);
             sink.put(&MAGIC);
@@ -94,6 +124,11 @@ impl SnapshotWriter {
             sink.put(&payload);
             sink.put_u32(crc);
         }
+        debug_assert_eq!(
+            buf.len(),
+            buf.capacity(),
+            "buf must be sized exactly once, with no reallocation"
+        );
         SnapshotWriter { buf, pos: 0 }
     }
 
@@ -108,7 +143,9 @@ impl SnapshotWriter {
     }
 
     /// The whole snapshot's byte length (for a caller that wants to size its own buffer up front,
-    /// e.g. a native test).
+    /// e.g. a native test). Also this milestone's own "Rust-side snapshot buffer's peak size"
+    /// (Budgets "Memory per instance"): `buf` is allocated at exactly this size in [`Self::begin`]
+    /// and never grows afterward, so this is the peak, not a snapshot of a still-growing value.
     pub fn total_len(&self) -> usize {
         self.buf.len()
     }
