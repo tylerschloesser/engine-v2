@@ -99,8 +99,10 @@ impl From<Unknown> for RefReject {
 /// Per-resource counts (Requirements: inventory is per player). Named fields, not an array indexed
 /// by resource id: only four resource kinds exist and will not grow within this game
 /// (`docs/spec/reference-game.md` fixes the list), so a fixed struct reads better than a `[u32; N]`
-/// the caller has to remember the index convention for.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+/// the caller has to remember the index convention for. `TS` (M20b step 3): also `Ui.inventory`'s
+/// own field type, read straight off the replicated `RefPlayer` -- one shape for both purposes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize, TS)]
+#[ts(export)]
 pub struct Inventory {
     pub iron: u32,
     pub wood: u32,
@@ -151,10 +153,62 @@ pub struct RefGlobal;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct RefEntity;
 
-/// `Ui` (Scope: "`Default` only; filled in M20b").
+/// The maximum number of simultaneous `Ui.in_range` entries (M20b step 3): a fixed cap so
+/// `RefUi::default`/`RefClient`'s own tracked set (`client.rs`) can reserve their capacity once and
+/// never grow in steady state (`.claude/rules/hot-paths.md`, applied to this crate by the brief's
+/// own "Rules that apply"). Resources are scattered sparsely (`worldgen.rs`'s own `hash2` scatter),
+/// so a handful in range at once is the realistic case; this is deliberately generous headroom, not
+/// a measured bound.
+pub(crate) const MAX_IN_RANGE: usize = 16;
+
+/// `Ui.collecting`'s own shape (M20b step 3, Scope: "`collecting: Option<{ tile, done_at }>`"): not
+/// [`Collecting`] itself, which carries `done_at: engine::time::Tick` -- `Tick` has no `TS` impl (a
+/// bug fix to the engine crate is out of this milestone's scope, Files touched), so the UI-facing
+/// mirror carries the raw tick number instead. The client reconstructs remaining time itself from
+/// `done_at` and `client.clock()` (0003 "How the UI observes state": "progress bars are derived
+/// from a `done_at` tick in `Ui` and `client.clock()`").
 #[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, TS)]
 #[ts(export)]
-pub struct RefUi;
+pub struct UiCollecting {
+    pub tile: TileXY,
+    pub done_at: u32,
+}
+
+/// One `Ui.in_range` entry (M20b step 3, Scope: "`{ tile, resource, from }`"). `from` is the
+/// player's own position when this tile entered range, refreshed only when the set of in-range
+/// tiles changes (Planning decisions "Where `from` comes from") -- computed and cached by
+/// `RefClient::ui` (`client.rs`), not recomputed fresh from the live spring every call.
+#[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, TS)]
+#[ts(export)]
+pub struct UiInRange {
+    pub tile: TileXY,
+    pub resource: u8,
+    pub from: WorldXY,
+}
+
+/// `Ui { me, inventory, collecting, in_range }` (Scope, M20b step 3). `me` is a raw `u32`, not
+/// `engine::game::PlayerId` (same reason as [`UiCollecting::done_at`]: `PlayerId` has no `TS` impl).
+/// `Default` reserves `in_range`'s capacity once ([`MAX_IN_RANGE`]); `RefClient::ui` clears and
+/// refills it every call, so steady state allocates nothing (Scope, verbatim).
+#[derive(Clone, PartialEq, Debug, serde::Serialize, TS)]
+#[ts(export)]
+pub struct RefUi {
+    pub me: u32,
+    pub inventory: Inventory,
+    pub collecting: Option<UiCollecting>,
+    pub in_range: Vec<UiInRange>,
+}
+
+impl Default for RefUi {
+    fn default() -> Self {
+        RefUi {
+            me: 0,
+            inventory: Inventory::default(),
+            collecting: None,
+            in_range: Vec::with_capacity(MAX_IN_RANGE),
+        }
+    }
+}
 
 pub struct RefGame;
 

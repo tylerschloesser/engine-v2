@@ -21,6 +21,10 @@ import {
   systemScheduler,
   type TerrainRenderer,
 } from 'engine/render'
+import type { RefReject } from './bindings/RefReject.js'
+import type { RefUi } from './bindings/RefUi.js'
+import { createCollectUi } from './ui/collect.js'
+import { createInventoryUi } from './ui/inventory.js'
 
 export type StartGameOptions = {
   canvas: HTMLCanvasElement
@@ -80,6 +84,19 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
   }
   const client: Client = createClient(options)
 
+  // M20b step 3-4 (Scope: collect buttons, progress, cancel-on-pan-out, rejection flash, inventory
+  // readout): wired here, not in each entry, so both `main.ts` and `test-entry.ts` get a working
+  // collect UI from one place. `onUi`/`onActionResult` are polled by `client` itself on its own
+  // `Scheduler` (`docs/plan/16-action-round-trip.md`/`16b-ui-observation-and-clock.md`); no page
+  // wiring beyond subscribing here.
+  const collectUi = createCollectUi(client)
+  const inventoryUi = createInventoryUi(document.body)
+  client.onUi<RefUi>((ui) => {
+    collectUi.onUi(ui)
+    inventoryUi.onUi(ui)
+  })
+  client.onActionResult<RefReject>((seq, result) => collectUi.onActionResult(seq, result))
+
   let lastCameraT: number | undefined
   function onCamera(): void {
     const t = performance.now()
@@ -109,6 +126,13 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
     canvas,
     maxTextureDimension2D: device.device.limits.maxTextureDimension2D,
     onCamera,
+    // M18 Deviations ("client.overlay.anchor's per-frame refresh is not called automatically by
+    // frame-loop.ts"): this page's own `onOverlay` hook, so collect buttons track their tiles.
+    // Wired here, not per-entry, for the same reason `onUi`/`onActionResult` are (above). The
+    // stepped test entry's own `real.loop` never actually ticks (Deviations, step 0: nothing calls
+    // `.frame()`/fires its scheduler), so `test-entry.ts` additionally calls `client.overlay.
+    // update()` directly from its own `__stepFrame` hook.
+    onOverlay: () => client.overlay.update(),
     clock: opts.clock ?? systemClock,
     scheduler: opts.scheduler ?? systemScheduler,
   })

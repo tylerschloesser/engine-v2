@@ -7,11 +7,14 @@
 //! client frame, so neither allocates in steady state (`RefClient`'s own spring state is fixed-size
 //! fields, never a `Vec`).
 
+use std::cell::RefCell;
+
 use engine::client::{ClientSide, DrawList, FrameCx, FrameView, SCREEN_PX_STROKE, TileTexel};
 use engine::game::Presence;
-use engine::world::{Tile, WorldPos};
+use engine::world::{Tile, TilePos, WorldPos};
 
-use crate::{RefGame, content};
+use crate::rules::collect::in_range;
+use crate::{Inventory, MAX_IN_RANGE, RefGame, TileXY, UiCollecting, UiInRange, WorldXY, content};
 
 /// `Presence` sketch from `0001-camera-and-presence.md` (Decision, `Presence` code block),
 /// verbatim: `PlayerPresence { pos: [i32; 2] /* Q24.8 */, vel: [i16; 2] }` = 12 bytes encoded, well
@@ -127,6 +130,16 @@ pub struct RefClient {
     /// Tiles per second, world space.
     spring_vel: [f64; 2],
     initialized: bool,
+    /// M20b step 3: the tiles currently in [`content::RANGE_Q8`] of the spring, each carrying the
+    /// live position at the moment it entered the set (Planning decisions "Where `from` comes
+    /// from"). `RefCell`, not a plain field: [`ClientSide::ui`] takes `&self` (the trait's own
+    /// signature), but the "which tiles are already tracked, and what was their own entry
+    /// position" bookkeeping can only be done where the *previous* call's result is still visible
+    /// -- `ui()` is also the one place `FrameView`'s tile reads are available at all (`frame` gets
+    /// no `WorldRead`). Fixed capacity ([`MAX_IN_RANGE`]) reserved once, at `Default`/
+    /// `with_spring_state`; `ui()` only ever pushes up to that capacity or removes, never grows it
+    /// (`.claude/rules/hot-paths.md`).
+    tracked_range: RefCell<Vec<UiInRange>>,
 }
 
 impl Default for RefClient {
@@ -135,6 +148,7 @@ impl Default for RefClient {
             spring_pos: [0.0, 0.0],
             spring_vel: [0.0, 0.0],
             initialized: false,
+            tracked_range: RefCell::new(Vec::with_capacity(MAX_IN_RANGE)),
         }
     }
 }
@@ -149,6 +163,7 @@ impl RefClient {
             spring_pos: pos,
             spring_vel: vel,
             initialized: true,
+            tracked_range: RefCell::new(Vec::with_capacity(MAX_IN_RANGE)),
         }
     }
 
@@ -245,6 +260,78 @@ impl ClientSide<RefGame> for RefClient {
             RANGE_RING_COLOR,
         );
         ring.flags |= SCREEN_PX_STROKE;
+    }
+
+    /// `Ui { me, inventory, collecting, in_range }` (Scope; module doc comment "M20b step 3"):
+    /// `me`/`inventory`/`collecting` read straight off `view.world().player(view.me())`;
+    /// `in_range` from a bounding-box scan around the spring position, diffed against
+    /// [`Self::tracked_range`] so each entry's own `from` only changes when that tile's own
+    /// membership does. `out` is cleared and refilled, never grown past `Ui::default`'s own
+    /// reserved capacity ([`MAX_IN_RANGE`]).
+    fn ui(&self, view: &FrameView<'_, RefGame>, out: &mut crate::RefUi) {
+        let world = view.world();
+        out.me = view.me().0;
+        out.inventory = Inventory::default();
+        out.collecting = None;
+        if let Ok(player) = world.player(view.me()) {
+            out.inventory = player.inventory;
+            out.collecting = player.collecting.map(|c| UiCollecting {
+                tile: c.tile,
+                done_at: c.done_at.0,
+            });
+        }
+
+        let from = WorldPos {
+            x: quantize_pos(self.spring_pos[0]),
+            y: quantize_pos(self.spring_pos[1]),
+        };
+        // A square wide enough that every tile whose *centre* could be within `RANGE_Q8` of `from`
+        // is visited: `RANGE` tiles plus one, to cover the player's own fractional offset inside
+        // its own tile.
+        let range_tiles = content::RANGE_Q8 / 256 + 1;
+        let player_tile = TilePos::new(
+            self.spring_pos[0].floor() as i32,
+            self.spring_pos[1].floor() as i32,
+        );
+
+        let mut tracked = self.tracked_range.borrow_mut();
+        let mut seen = [false; MAX_IN_RANGE];
+        for dy in -range_tiles..=range_tiles {
+            for dx in -range_tiles..=range_tiles {
+                let tile = TilePos::new(player_tile.x + dx, player_tile.y + dy);
+                let Ok(t) = world.tile(tile) else { continue };
+                let resource = t.resource();
+                if resource == 0 || !in_range(from, tile) {
+                    continue;
+                }
+                let key = TileXY::from_tile(tile);
+                if let Some(i) = tracked.iter().position(|e| e.tile == key) {
+                    tracked[i].resource = resource;
+                    seen[i] = true;
+                } else if tracked.len() < MAX_IN_RANGE {
+                    tracked.push(UiInRange {
+                        tile: key,
+                        resource,
+                        from: WorldXY {
+                            x: from.x,
+                            y: from.y,
+                        },
+                    });
+                    seen[tracked.len() - 1] = true;
+                }
+            }
+        }
+        // Drop anything not confirmed this pass (left range, or its resource is gone) -- in place,
+        // no allocation.
+        let mut i = 0;
+        tracked.retain(|_| {
+            let keep = seen[i];
+            i += 1;
+            keep
+        });
+
+        out.in_range.clear();
+        out.in_range.extend_from_slice(&tracked);
     }
 
     /// Table lookup (`TileTexel::from_tables`) for the base layer; the resource layer adds the

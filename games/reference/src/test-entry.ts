@@ -41,7 +41,22 @@ declare global {
     /** Instantly moves the camera (bypassing the integrator entirely: a direct `cameraState`
      * write, `engine/test.setCamera`) and pushes it to the client with one `stepFrame`. */
     __setCamera?: (x: number, y: number, tilesAcross: number) => Promise<void>
+    /** Reads `client.cameraState` back (a public, production field): works regardless of what last
+     * wrote it (`__setCamera` above, or real gestures integrated through `__tickCamera` below).
+     * Moved here from `main.ts` (orchestrator ruling on cut 1's flagged decision: "the production
+     * page exposes no `window.__*` hooks"). */
     __cameraState?: () => { x: number; y: number; tilesAcross: number }
+    /** Runs one main-thread camera integration step (`client.camera.tick(dtMs)`, the same call
+     * `game.ts`'s own `onCamera` makes every real rAF): a real Playwright pointer/wheel gesture
+     * against this page's canvas is recorded by the engine's own real DOM listeners (installed by
+     * `createClient` regardless of the manual clock) into fixed slots, same as production --
+     * nothing on this page ever calls `camera.tick()` on its own (step 0's own note: `real.loop`
+     * never fires), so `reference_pan_and_zoom_work` drives it explicitly instead. Deliberately
+     * *not* folded into `__stepFrame`: that hook's own behaviour must stay exactly what every other
+     * spec here already depends on (`player.spec.ts`, `depletion.spec.ts`), so this is a new, one-
+     * purpose hook rather than a change to an existing one. Pure main-thread state (no worker
+     * round trip, unlike `__stepFrame`): synchronous, no `resumeWorkers` needed. */
+    __tickCamera?: (dtMs: number) => void
     /** Advances the client by one stepped frame of `dtMs` (`engine/test.stepFrame`, synchronous:
      * resolves only once the client worker has acked it -- M20b's own "stepped frames" contract). */
     __stepFrame?: (dtMs: number) => Promise<void>
@@ -127,9 +142,19 @@ window.__cameraState = () => ({
   tilesAcross: client.cameraState.tilesAcross,
 })
 
+window.__tickCamera = (dtMs) => {
+  client.camera.tick(dtMs)
+}
+
 window.__stepFrame = async (dtMs) => {
   await resumeWorkers(client)
   stepFrame(client, dtMs)
+  // M20b step 3 (M18 Deviations: "a page must wire it through its own `onOverlay` hook once per
+  // rAF"): `startGame`'s own `onOverlay` is wired into `real.loop`'s per-rAF phase list, but
+  // nothing ever fires that loop on this page (step 0's own note: no `.frame()`/scheduler tick) --
+  // called directly here instead, so collect buttons track their tiles across every stepped frame,
+  // not only a real one.
+  client.overlay.update()
 }
 
 window.__stepTick = async (n) => {
