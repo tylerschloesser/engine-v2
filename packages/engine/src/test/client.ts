@@ -162,12 +162,38 @@ function pollUntil(predicate: () => boolean, what: string, h: ClientTestHandle):
   })
 }
 
-/** Every ring `SharedArrayBuffer` in a `SabSet` (`untilQuiescent`'s "every ring `PUSHED ==
- * POPPED`"). */
+/**
+ * Every *worker-owned* ring `SharedArrayBuffer` in a `SabSet` (`untilQuiescent`'s "every ring
+ * `PUSHED == POPPED`") -- one a worker's own per-wake `body()` drains by itself, on its own
+ * schedule, with no help from whatever page happens to be running: `actionRing`/`inputRing` (the
+ * client's own `actionPump`/`inputPump`, `worker/client.ts`), `uplink`/`downlink` (the sim/client's
+ * own net pumps), `genRequest`/`genResult` (the gen/client gen pumps). `uiRing` is drained inside
+ * `Client` itself (`resultsFrame`, below, off the injected `Scheduler`), not by a worker, but it is
+ * still *this* file's/`Client`'s own responsibility, not a caller's.
+ *
+ * **Deliberately excludes `uploadRing`** (docs/plan/20c-client-ack-freeze-under-untilquiescent.md):
+ * unlike every ring above, nothing in `engine/test` or `Client` ever constructs a consumer over it
+ * -- `client.uploadRing` is exposed as a public field precisely so a *page's own* renderer (`frame-
+ * loop.ts`'s real per-rAF "upload" phase) or test code (`connected.ts`'s own interval,
+ * `connected-terrain.ts`'s background drain, `gc-connected-terrain.ts`'s per-frame drain, `games/
+ * reference/src/gc-entry.ts`'s `drainUploadsFully`) can choose *when and whether* to drain it --
+ * rendering is not this file's job, and a topology with no renderer at all (most `connect: true`
+ * test pages) has nothing to drain into. Before this fix, `untilQuiescent` waited on `uploadRing`
+ * anyway: every one of those four call sites exists only to keep that wait from firing, and a page
+ * with no such workaround (`gc-entry.ts`'s own zero-GC priming, which must stay fully synchronous --
+ * no interval, no real rAF to await between `stepTick` calls) hung for the full `POLL_TIMEOUT_MS`
+ * the first time `stepTick` ran after real chunk uploads had landed (Deviations: the measured
+ * `pushed`/`popped` counters, frozen apart, for the whole hang). The client worker itself was never
+ * stuck: `worker/client-upload.ts`'s `pump()` asks for `min(freeSlots(), UPLOAD_BATCH_MAX)` and
+ * returns immediately when that is `0`, so a full or merely-undrained `uploadRing` never blocks a
+ * wake -- only this poll's own predicate did. `untilQuiescent` now settles the ack condition plus
+ * every ring a worker (or `Client`) actually owns; a caller that cares whether `uploadRing` is
+ * drained (a real render, or a test that reads its bytes) still drains it itself, exactly as every
+ * page above already had to.
+ */
 function ringSabs(client: Client): SharedArrayBuffer[] {
   const { sabs } = clientTestHandle(client)
   return [
-    sabs.uploadRing,
     sabs.actionRing,
     sabs.inputRing,
     sabs.uiRing,
@@ -268,7 +294,8 @@ export function resumeWorkers(client: Client): Promise<void> {
 }
 
 /** Resolves once every worker has acknowledged every request and is parked (Seams): the client's
- * `W_ACK` has caught up with `CB_FRAME_REQ`, every ring is drained, then every worker is parked. */
+ * `W_ACK` has caught up with `CB_FRAME_REQ`, every *worker-owned* ring is drained (`ringSabs`'s own
+ * doc comment: never `uploadRing`, a page's own job), then every worker is parked. */
 export async function untilQuiescent(client: Client): Promise<void> {
   const h = clientTestHandle(client)
   const hasClient = h.workers.some((w) => w.kind === 'client')
