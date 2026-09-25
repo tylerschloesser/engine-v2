@@ -9,6 +9,7 @@
 - Tests must be fast; parallelization is fine. Budget: **under 1 minute for all tests**. If that's exceeded, Tyler will want to split into a fast suite and a slower, more comprehensive one.
 
 - The 1-minute budget assumes warm build caches. Separately, an incremental rebuild after a one-line Rust edit should take 30 seconds or less.
+- "I would prefer to delegate optimal test execution to Claude as much as possible." (Tyler, 2026-09-25.)
 - CI is GitHub Actions on Linux with a software WebGPU adapter. Real-GPU and timing-sensitive runs happen only on Tyler's Mac. iOS Safari is covered by a manual checklist on a real phone; no device cloud.
 - "Zero GC" means: in steady state, zero major GCs and approximately zero allocation on every engine-owned isolate, with two exceptions. The rendering thread has a small fixed floor for WebGPU's unavoidable wrapper objects (measured at about 104–118 B/frame; the test budget is in [0016](../decisions/0016-zero-gc-definition.md)) and the rare sub-millisecond scavenge that implies. The net worker, whose WebSocket allocates a `MessageEvent` and an `ArrayBuffer` per message, is budgeted at ≤ 1 KB per message with zero major GCs, and that garbage is confined to its own heap. (Amended by Tyler, 2026-09-19.)
 
