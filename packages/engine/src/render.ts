@@ -5,6 +5,14 @@
 // pieces (docs/plan/20-reference-game-v0.md: a real dev page with terrain, pan and zoom), so it is
 // added now, together with this file (`packages/engine/CLAUDE.md`: "Add an exports subpath only
 // together with the file that backs it").
+//
+// `createUploadDrain`/`RingConsumer` (docs/plan/20b-reference-player-and-collect-ui.md step 0):
+// added for the same reason -- a page built outside `packages/engine` that drives its own frame
+// loop under a manual/stepped clock (`ClientOptions.test`, `engine/test`'s `stepFrame`) cannot rely
+// on `createRealFrameLoop`'s own per-rAF upload-ring drain, since nothing fires it without a real
+// `requestAnimationFrame`. `client.uploadRing` is already a public `Client` field; draining it into
+// a `TerrainRenderer` on demand is the same rendering concern this subpath already exists for,
+// previously reachable only through `packages/engine/src/render/upload.ts`'s internal path.
 
 export type { Clock, Scheduler } from './clock.js'
 export { systemClock, systemScheduler } from './clock.js'
@@ -21,3 +29,7 @@ export type { AdapterInfo, RendererDevice } from './render/device.js'
 export { initDevice, NoAdapterError, ShaderCompilationError } from './render/device.js'
 export type { FrameUniformValues, TerrainRenderer, Viewport } from './render/terrain.js'
 export { createTerrainRenderer } from './render/terrain.js'
+export type { UploadDrain } from './render/upload.js'
+export { createUploadDrain, DEFAULT_UPLOAD_BUDGET_BYTES } from './render/upload.js'
+export type { RingStats } from './sab/ring.js'
+export { RingConsumer } from './sab/ring.js'

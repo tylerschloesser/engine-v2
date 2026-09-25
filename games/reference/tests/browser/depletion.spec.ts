@@ -1,21 +1,21 @@
-// `reference_depletion_visible` (docs/plan/20-reference-game-v0.md Tests added): dispatches
+// `reference_depletion_visible` (docs/plan/20-reference-game-v0.md Tests added; moved onto the
+// stepped test entry by docs/plan/20b-reference-player-and-collect-ui.md step 0): dispatches
 // `StartCollect` through the production `client.dispatch` path (`window.__dispatchStartCollect`,
-// `main.ts`) and confirms the iron tile at `(0, 0)` (`tests/fixtures/landmarks.json`, `TEST_SEED`'s
-// nearest resource to the origin) visibly depletes.
+// `test-entry.ts`) and confirms the iron tile at `(0, 0)` (`tests/fixtures/landmarks.json`,
+// `TEST_SEED`'s nearest resource to the origin) visibly depletes.
 //
 // One completed collect only removes one of `content::UNITS_PER_TILE` (10) units, staying inside
 // the "full" depletion-stage bucket (7-10, docs/plan/20-reference-game-v0.md Planning decisions) --
 // the *rendered* texel cannot show anything finer than the three stage buckets (`scripts/
-// gen-assets.mjs` has exactly one flat colour per stage). Four real, sequential collects (`content::
-// COLLECT` = 40 ticks = 2 real seconds each at the real page's own 20 Hz pace, since a game must
-// never set `ClientOptions.test` -- `packages/engine/src/client.ts`'s own "never set by a game")
-// bring `aux` from 10 to 6, crossing into "half" -- the fewest collects that cross any stage
-// boundary at all from a fresh tile. This is real wall-clock time (~9 s total), well past this
-// package's own "browser test p95 <= 3s" budget note -- `@slow` in the title moves it out of the
-// fast `browser` suite entirely (`pnpm test`'s own budget, 35 s, had no room left for it: adding
-// it to the fast tier measured 173 tests/33s, against a 170/26s baseline), verified instead by
-// `pnpm test:slow browser -t reference_depletion_visible`. Flagged in this milestone's Deviations
-// rather than silently accepted in the fast tier or worked around by weakening the assertion.
+// gen-assets.mjs` has exactly one flat colour per stage). Four collects (`content::COLLECT` = 40
+// ticks each) bring `aux` from 10 to 6, crossing into "half" -- the fewest collects that cross any
+// stage boundary at all from a fresh tile.
+//
+// M20's own version of this test ran in real time (the production page must never set
+// `ClientOptions.test`, so it paced 20 Hz for real -- ~9 s total, `@slow`). The stepped test entry
+// (`test.html`/`test-entry.ts`) sets `ClientOptions.test`, so `window.__stepTick` (`engine/test.
+// stepTick`) advances the sim deterministically with no wall-clock wait at all -- back in the fast
+// tier (Deviations has the measured time).
 import { expect, test } from '@playwright/test'
 import { openGame } from '../helpers/game.js'
 
@@ -26,20 +26,25 @@ declare global {
       tileY: number,
     ) => Promise<{ r: number; g: number; b: number; a: number }>
     __dispatchStartCollect?: (tileX: number, tileY: number, fromX: number, fromY: number) => number
+    __stepTick?: (n: number) => Promise<void>
+    __setCamera?: (x: number, y: number, tilesAcross: number) => Promise<void>
+    __stepFrame?: (dtMs: number) => Promise<void>
   }
 }
 
-// Condition-based, not a fixed wait per collect (CI run after M20's `done`: a fixed 2,200 ms per
-// collect left 200 ms of slack and read the full-stage colour on `ubuntu-latest`). Each round
-// dispatches `StartCollect` (rejected `Busy` while one is running, so a surplus dispatch is
-// harmless) and probes, until the tile shows the half stage or the deadline passes. The deadline
-// is generous because this page paces real 20 Hz ticks; M20b's stepped test entry replaces it.
-const ROUND_MS = 250
-const DEADLINE_MS = 25_000
+// `content::collect_ticks` at 20 Hz (`sim/src/content.rs`): `TICK_RATE.secs(2)` = 40 ticks. `+ 1`:
+// unlike `RefScenario::dispatch` (native tests), which applies a record inside the same `Sim::step`
+// call that carries it, the real host queues an admitted action for the tick *after* the one it
+// arrived on (0004: "Host assigns tick T+1"). This test drives ticks and the client's own uplink
+// flush as two separate steps, so an action's `done_at` is always one tick later than the tick it
+// was dispatched at -- one extra stepped tick per round accounts for that, found live (a bare 40
+// left every other round's dispatch rejected `Busy`, one tick short of the previous collect's own
+// completion).
+const COLLECT_TICKS = 40 + 1
+const COLLECTS_TO_HALF = 4
 
-test('reference_depletion_visible @slow', async ({ page }) => {
-  test.setTimeout(40_000)
-  await openGame(page)
+test('reference_depletion_visible', async ({ page }) => {
+  await openGame(page, { path: '/test.html' })
 
   const tile = { x: 0, y: 0 } // iron (`tests/fixtures/landmarks.json`)
   // The tile's own centre in Q24.8 raw units (`WorldPos::from_tile` + half a tile): always in
@@ -53,21 +58,31 @@ test('reference_depletion_visible @slow', async ({ page }) => {
   // gen-assets.mjs`'s own committed colour (docs/plan/20-reference-game-v0.md Deviations).
   expect(full).toEqual({ r: 230, g: 140, b: 60, a: 255 })
 
-  const HALF = { r: 180, g: 110, b: 50, a: 255 }
-  const started = Date.now()
-  let half = full
-  while (Date.now() - started < DEADLINE_MS) {
+  // `admit`'s own witness check (0001 "Witness-carrying actions" step 1) rejects `StartCollect`
+  // until the host has a presence sample for this player: settle the camera near the tile and step
+  // enough frames for the spring's own presence sample to be produced and uplinked (M20b's own
+  // `PlayerPresence`) before dispatching.
+  await page.evaluate(() => window.__setCamera?.(0, 0, 20))
+  for (let i = 0; i < 20; i++) {
+    await page.evaluate(() => window.__stepFrame?.(50))
+  }
+
+  for (let i = 0; i < COLLECTS_TO_HALF; i++) {
     const seq = await page.evaluate(
       ([x, y, fx, fy]) => window.__dispatchStartCollect?.(x, y, fx, fy),
       [tile.x, tile.y, from.x, from.y] as const,
     )
     expect(seq, 'StartCollect dispatched').toBeGreaterThan(0)
-    await page.waitForTimeout(ROUND_MS)
-    half = await probe()
-    if (half?.r === HALF.r && half.g === HALF.g && half.b === HALF.b) break
+    // A dispatched action sits in the client's own action ring until the client's uplink pump
+    // flushes it to the host (`client_poll_uplink`, run from the client's own `frame()`) -- one
+    // `stepFrame` call before stepping sim ticks, so this collect is admitted before the ticks
+    // meant to complete it run.
+    await page.evaluate((dtMs) => window.__stepFrame?.(dtMs), 16)
+    await page.evaluate((n) => window.__stepTick?.(n), COLLECT_TICKS)
   }
 
+  const half = await probe()
   // Iron, half stage (`RESOURCE_STAGE_HALF` offset 1): the tile visibly depleted.
-  expect(half).toEqual(HALF)
+  expect(half).toEqual({ r: 180, g: 110, b: 50, a: 255 })
   expect(half).not.toEqual(full)
 })

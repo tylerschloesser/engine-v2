@@ -4,6 +4,10 @@
 // own world seed, `src/main.ts`). Landmark coordinates found by an ad hoc native scan of
 // `RefWorldgen` for this exact seed (Deviations has the scan and the coordinates); a real
 // `landmarks.json` fixture is step 5's (Provides: "left for step 4/5").
+//
+// Moved onto the stepped test entry by docs/plan/20b-reference-player-and-collect-ui.md step 0:
+// `__probeTile` now lives only on `test.html` (production's `index.html` exposes no `window.__*`
+// hooks at all). Same probe technique, same assertions -- only the page changed.
 import { expect, test } from '@playwright/test'
 import { openGame } from '../helpers/game.js'
 
@@ -17,7 +21,7 @@ declare global {
 }
 
 test('reference_terrain_renders', async ({ page }) => {
-  await openGame(page)
+  await openGame(page, { path: '/test.html' })
 
   // Water (base WATER = 1): `content::{DEEP_WATER, WATER, SAND, GRASS, DIRT}` colours are
   // `scripts/gen-assets.mjs`'s own flat colours (Deviations names the exact RGB per id).
