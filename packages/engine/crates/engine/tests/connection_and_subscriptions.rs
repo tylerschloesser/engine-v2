@@ -320,12 +320,16 @@ fn leave_frees_overlay_keeps_pristine() {
 fn entity_straddling_subscribed_and_unsubscribed_chunks_delivered_once() {
     let mut lb = loopback(5);
     let (idx, who) = add_client(&mut lb, 0);
-    // Visible = exactly chunk (0,0) (camera well inside it, minimal half-extent): ring1 =
-    // chunks -1..=1 on both axes, so (1,0) is subscribed and (2,0) is not.
+    // Visible = exactly chunk (3,0) (camera well inside it, minimal half-extent): ring1 covers
+    // chunks x in 2..=4, y in -1..=1, so (2,0) is subscribed and (1,0) -- the footprint's own
+    // *anchor* chunk, below -- is not. This is deliberate, not incidental: a camera that instead
+    // subscribed the anchor chunk would pass this test even with `Authority::entity_scopes` and
+    // the frame builder reverted to M15's anchor-only behaviour, proving nothing about the
+    // widening this test exists to cover (gate round 1 review finding).
     lb.set_camera(
         idx,
         CameraReport {
-            center_x: 10,
+            center_x: 100,
             center_y: 10,
             half_w: 1,
             half_h: 1,
@@ -334,11 +338,12 @@ fn entity_straddling_subscribed_and_unsubscribed_chunks_delivered_once() {
         },
     );
     lb.step();
-    assert!(lb.client(idx).view().is_held(ChunkCoord::new(1, 0)));
-    assert!(!lb.client(idx).view().is_held(ChunkCoord::new(2, 0)));
+    assert!(!lb.client(idx).view().is_held(ChunkCoord::new(1, 0)));
+    assert!(lb.client(idx).view().is_held(ChunkCoord::new(2, 0)));
 
-    // Anchor at local tile 31 of chunk (1,0): a 2-wide footprint covers world tile 63 (chunk
-    // (1,0), subscribed) and world tile 64 (chunk (2,0), not subscribed).
+    // Anchor at world tile 63 (chunk (1,0), *not* subscribed): a 2-wide footprint covers world
+    // tile 63 and world tile 64 (chunk (2,0), subscribed) -- the non-anchor tile is the only one
+    // in scope for this client.
     lb.action(
         who,
         LAction::SpawnWide {
@@ -354,8 +359,8 @@ fn entity_straddling_subscribed_and_unsubscribed_chunks_delivered_once() {
             pos: LPos { x: 63, y: 0 },
             wide: true,
         })),
-        "an entity overlapping a subscribed chunk must be delivered even though the rest of its \
-         footprint touches an unheld chunk"
+        "an entity overlapping a subscribed chunk must be delivered even though its anchor \
+         chunk is not held"
     );
 }
 
