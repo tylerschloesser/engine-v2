@@ -1470,9 +1470,12 @@ where
         base_tick: u32,
         persist: &mut [u8],
     ) -> Result<u32, Status> {
-        if self.sim.is_none() {
-            return Err(Status::NotInitialised);
-        }
+        // No `self.sim.is_none()` gate, unlike every other real export here: `self.identity()`
+        // reads only `build_hash`/`worldgen_fingerprint` (parsed/computed at `Host::init`, before
+        // `sim_genesis` ever runs) and `G`'s own consts, never `self.sim`. This is deliberate --
+        // `Persistence.create` (TS, docs/plan/22-persistence-log-and-snapshots.md steps 4-6) builds
+        // segment 0's header as part of *creating* a world, before the host has run genesis or
+        // ticked at all.
         let base = if base_tick == GENESIS_BASE_TICK {
             crate::persist::SegmentBase::Genesis
         } else {

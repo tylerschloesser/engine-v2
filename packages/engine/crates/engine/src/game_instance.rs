@@ -389,6 +389,40 @@ where
         }
     }
 
+    /// docs/plan/22-persistence-log-and-snapshots.md steps 4-6.
+    fn sim_segment_header(
+        &mut self,
+        segment: u32,
+        base_tick: u32,
+        persist: &mut [u8],
+    ) -> Result<u32, Status> {
+        match self {
+            GameInstance::Sim(h) => h.sim_segment_header(segment, base_tick, persist),
+            _ => Err(Status::WrongRole),
+        }
+    }
+
+    fn sim_snapshot_begin(&mut self, log_segment: u32, log_offset: u32) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_snapshot_begin(log_segment, log_offset),
+            _ => Status::WrongRole,
+        }
+    }
+
+    fn sim_snapshot_next(&mut self, persist: &mut [u8]) -> Result<u32, Status> {
+        match self {
+            GameInstance::Sim(h) => h.sim_snapshot_next(persist),
+            _ => Err(Status::WrongRole),
+        }
+    }
+
+    fn sim_dirty(&mut self) -> u32 {
+        match self {
+            GameInstance::Sim(h) => h.sim_dirty(),
+            _ => 0,
+        }
+    }
+
     fn sim_warm_one(&mut self) -> u32 {
         match self {
             GameInstance::Sim(h) => h.sim_warm_one(),

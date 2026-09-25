@@ -4,18 +4,25 @@
 // (packages/engine/src/CLAUDE.md).
 //
 // Types `Connection`, `MsgClass`, `HostServices`, `WorldConfig`, `Storage` are declared exactly as
-// docs/decisions/0009-transport-and-hosting.md / docs/decisions/0005-persistence-and-recovery.md
-// (`storage` is unused until M22: Non-scope here).
+// docs/decisions/0009-transport-and-hosting.md / docs/decisions/0005-persistence-and-recovery.md.
+// `storage` was unused through M13-M21b; docs/plan/22-persistence-log-and-snapshots.md steps 4-6
+// make it real (`createSimHost` below builds a `Persistence` from it).
 
 import { RegionId, Role, Status } from './abi.js'
+import { Persistence } from './host/persistence.js'
 import type { EngineInstance } from './loader.js'
 import { instantiate } from './loader.js'
 import { buildSimInstanceConfig, type WorldConfig } from './sim-config.js'
+import type { Storage } from './storage/types.js'
 
 // `sim-config.ts`'s own pure helpers (Seams: no renamed Provides -- still `server.ts`'s own export
 // surface, just built elsewhere so `client.ts` can import them without also importing `loader.ts`,
 // `main.no_wasm_instantiate`'s own rule).
 export { buildSimInstanceConfig, seedToHexU64, type WorldConfig } from './sim-config.js'
+// `storage/types.ts`'s own home for `Storage`/`worldKeys` (docs/plan/
+// 22-persistence-log-and-snapshots.md steps 4-6): re-exported unchanged, same "no renamed Provides"
+// convention as the `sim-config.ts` re-exports above.
+export type { Storage } from './storage/types.js'
 
 // ---------------------------------------------------------------------------------------------
 // 0009 / 0005 types, declared exactly (types only).
@@ -32,17 +39,6 @@ export interface Connection {
   onClose: ((code: number) => void) | null
   readonly datagrams: boolean
   readonly bufferedAmount?: number
-}
-
-export interface Storage {
-  append(key: string, bytes: Uint8Array): void | Promise<void>
-  sync(key: string): void | Promise<void>
-  write(key: string, bytes: Uint8Array): void | Promise<void>
-  delete(key: string): void | Promise<void>
-  onError: ((err: unknown) => void) | null
-  flush(): Promise<void>
-  read(key: string): Promise<Uint8Array | null>
-  list(prefix: string): Promise<string[]>
 }
 
 export interface HostServices {
@@ -272,8 +268,16 @@ export interface SimHost {
 
 type TimerServices = Pick<HostServices, 'clock' | 'timer'>
 
-/** The shared implementation, over an already-built [`SimInstance`] -- real or fake. */
-export function createSimHostFromInstance(sim: SimInstance, services: TimerServices): SimHost {
+/** The shared implementation, over an already-built [`SimInstance`] -- real or fake.
+ * `persistence` (docs/plan/22-persistence-log-and-snapshots.md steps 4-6) is optional so every
+ * existing caller (`worker/sim.ts`'s own two-argument call, this file's own tests) keeps working
+ * unmodified: when given, `logSink` is wired to `persistence.appendFrame` and `persistence.
+ * afterTick(tick)` runs once per completed tick, right after `sim_tick()` succeeds. */
+export function createSimHostFromInstance(
+  sim: SimInstance,
+  services: TimerServices,
+  persistence?: Persistence,
+): SimHost {
   // Read once, here, not per tick (`SimInstance.tickHz`'s own doc comment): "the pacing arithmetic
   // stays in integer milliseconds" -- `Math.round`, not the raw division, so an odd rate (e.g. 30
   // Hz) still paces on a whole-millisecond boundary instead of carrying a fractional one through
@@ -337,13 +341,26 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
    * is no longer measured individually. */
   function runOneTick(): void {
     const seal = sim.simSealFrame()
-    // `seal.bytes` is the whole persistent `Persist` region view (Orchestrator ruling 2); `logSink`
-    // is unreachable with real data today (`sim_seal_frame` always returns 0 until M22, Non-scope
-    // here), so its own "exactly `len` bytes" contract is M22's to give a real shape, not fixed here.
-    if (seal.len > 0 && host.logSink) host.logSink(seal.bytes as Uint8Array)
+    // `seal.bytes` is the whole persistent `Persist` region view (Orchestrator ruling 2), but
+    // `logSink`'s own contract (`SimHost.logSink`'s doc comment: "exactly `len` bytes") is fixed at
+    // one argument -- unlike `simBuildFrame`'s `bytes`+separate `.len` pair, `Storage.append`
+    // (`Persistence.appendFrame`, docs/plan/22-persistence-log-and-snapshots.md steps 4-6) has no
+    // second parameter to carry a real length past the whole-region view, so this is the one place
+    // a `subarray()` is unavoidable rather than a `.claude/rules/hot-paths.md` violation waiting to
+    // be found: it only ever runs on a tick that actually logged something (`seal.len > 0`), never
+    // on an idle tick, and no zero-GC page wires a real `Storage` through this milestone (Non-scope:
+    // that is whichever milestone first arms `Persistence` inside `worker/sim.ts`, flagged in this
+    // milestone's own Deviations for that milestone to measure).
+    if (seal.len > 0 && host.logSink) {
+      host.logSink((seal.bytes as Uint8Array).subarray(0, seal.len))
+    }
     const status = sim.simTick()
     if (status !== Status.Ok) throw new Error(`sim_tick failed: status ${status}`)
     counters.ticksRun++
+    // docs/plan/22-persistence-log-and-snapshots.md steps 4-6: the tick procedure's own persistence
+    // hook, right after `sim_tick()` succeeds -- `counters.ticksRun` is the same completed-tick
+    // count `Persistence.afterTick`'s own doc comment names as its `tick` argument.
+    persistence?.afterTick(counters.ticksRun)
     for (let conn = 0; conn < MAX_CONNS; conn++) {
       const connection = conns[conn]
       if (!connection) continue
@@ -534,12 +551,20 @@ export function createSimHostFromInstance(sim: SimInstance, services: TimerServi
       return conn
     },
   }
+  // docs/plan/22-persistence-log-and-snapshots.md steps 4-6: `SimHost.logSink` is pointed at
+  // `Persistence.appendFrame`, a fixed method value (`.claude/rules/hot-paths.md`: no per-call
+  // closure), overriding the `null` the object literal above starts with.
+  if (persistence) host.logSink = persistence.appendFrame
   return host
 }
 
 /** `createSimHost(cfg, services)` (Provides): instantiates a real `role=sim` instance from
- * `services.wasm` and drives it through [`createSimHostFromInstance`]. */
+ * `services.wasm`, builds a [`Persistence`] over `services.storage` (docs/plan/
+ * 22-persistence-log-and-snapshots.md steps 4-6: "create world (manifest + segment 0)" happens
+ * right here, once, before the host ever ticks), and drives both through
+ * [`createSimHostFromInstance`]. */
 export function createSimHost(cfg: WorldConfig, services: HostServices): SimHost {
   const inst = instantiate(services.wasm, Role.Sim, buildSimInstanceConfig(cfg))
-  return createSimHostFromInstance(wrapEngineInstance(inst), services)
+  const persistence = Persistence.create(services.storage, cfg, inst)
+  return createSimHostFromInstance(wrapEngineInstance(inst), services, persistence)
 }

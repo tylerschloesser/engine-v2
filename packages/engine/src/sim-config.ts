@@ -72,6 +72,12 @@ export function buildSimInstanceConfig(cfg: WorldConfig): InstanceConfig {
       maxModifiedTiles: cfg.params.maxModifiedTiles,
       maxActionGrowth: cfg.params.maxActionGrowth,
       cacheChunks: cfg.cacheChunks,
+      // docs/plan/22-persistence-log-and-snapshots.md steps 4-6 (Consumes: "M13 `WorldConfig.
+      // buildHash` reaching the instance through M02's `InstanceConfig` in the `engine_init`
+      // config"): plain lowercase hex (`build-game.ts`'s own `createHash('sha256')...digest('hex')`
+      // shape), parsed by `SimConfig::build_hash` (`host/mod.rs`) into `Identity.build_hash`'s
+      // first 128 bits.
+      buildHash: cfg.buildHash,
     },
   }
 }
