@@ -219,9 +219,114 @@ passes). Left for whoever next needs interactive dev-server access to a second p
 `vite.ts` (likely: append to Vite's own default allow list, e.g. `[...serverFsAllowDefault,
 enginePackageDir()]`, rather than replacing it) or route around it.
 
-**Not yet done (steps 3-6, for the next implementer):** `Ui`/`ui()`/bindings, `src/ui/dom.ts`,
-collect buttons and anchoring, progress animation, cancel-on-pan-out, rejection flash, inventory
-readout, spawn rule, the scripted `reference_collect_flow`/`reference_several_buttons`/
-`reference_pan_out_cancels`/`reference_new_player_spawns_on_land` browser tests, the `gc` project
-wiring above, and `games/reference/CLAUDE.md`'s own "`Ui` rule" / "how to add a button" context
-artifact (the module layout and page-split bullets already there are this cut's).
+**Steps 3-4 (a third implementer, from `569717c`; base `6c5406d`; this section).** `pnpm test &&
+pnpm lint` green at `6c5406d` and still green after these steps (`rust 401`, `unit 232`, `wasm 57`,
+`browser 175` at ~26s/35s; lint's four checks all pass). One commit (`569717c`): steps 3 and 4
+landed together (the whole vertical slice -- `Ui`/`ui()` through the inventory readout -- was built
+in one pass; splitting it after the fact into two commits would have meant inventing an artificial
+partial state, not a real resumption point).
+
+- **Orchestrator ruling on cut 1's flagged decision, resolved in this commit.** `main.ts` now
+  exposes no `window.__*` hooks at all. `__setCamera`/`__cameraState` moved to `test-entry.ts`
+  verbatim (same shapes); a new `__tickCamera(dtMs): void` (synchronous, pure main-thread --
+  `client.camera.tick(dtMs)`, the exact call `game.ts`'s own `onCamera` makes every real rAF, no
+  worker round trip) was added instead of folding this into `__stepFrame` (which stays behavioural
+  identical to steps 0-2's own version, for `player.spec.ts`/`depletion.spec.ts`'s sake).
+  `camera.spec.ts`'s `reference_pan_and_zoom_work` moved onto `/test.html`, kept its real Playwright
+  mouse-drag/wheel gestures verbatim (no `injectPointer`/`injectWheel`) and its assertions
+  unchanged; between the gesture and reading `__cameraState`, the test calls `__tickCamera(16)` the
+  number of times each gesture needs to integrate (one right after `pointerdown` to establish the
+  drag's own baseline -- `camera/camera.ts`'s per-slot bookkeeping never applies a pan delta on the
+  very first `integrate()` call after a pointer engages -- one after the `move`, one after `up`; ~10
+  for the wheel notch to ease in over `WHEEL_TAU_MS` = 22 ms).
+- **`Ui`/`UiCollecting`/`UiInRange`** (`lib.rs`): `RefUi { me: u32, inventory: Inventory, collecting:
+  Option<UiCollecting>, in_range: Vec<UiInRange> }`; `UiCollecting { tile: TileXY, done_at: u32 }`;
+  `UiInRange { tile: TileXY, resource: u8, from: WorldXY }`. `me`/`done_at` are raw numbers, not
+  `engine::game::PlayerId`/`engine::time::Tick` (neither implements `TS`, and adding it would be a
+  feature to the engine crate, not a bug fix -- Files touched). `Inventory` gained `TS`/`#[ts(export)]`
+  (already `Serialize`/`Deserialize` for `RefPlayer`'s own sake) since `Ui.inventory` reuses it
+  verbatim. `MAX_IN_RANGE: usize = 16` (a generous headroom bound, not measured -- resources are
+  scattered sparsely): `RefUi::default()` reserves `in_range`'s capacity to it once.
+- **`RefClient::ui()`** (`client.rs`): `me`/`inventory`/`collecting` read straight off
+  `view.world().player(view.me())`. `in_range`: a bounding-box scan (`RANGE_Q8/256 + 1` = 4 tiles
+  each way around `player_tile = floor(spring_pos)`) checking `world.tile(tile).resource() != 0` and
+  `rules::collect::in_range(from, tile)` (the same function `apply` uses -- Provides, already
+  `pub`), diffed against a new field, `tracked_range: RefCell<Vec<UiInRange>>` (fixed capacity
+  `MAX_IN_RANGE`, reserved at `Default`/`with_spring_state`): a tile already in `tracked_range` keeps
+  its own cached `from` (Planning decisions "Where `from` comes from"); a newly-entering tile gets
+  `from` = this frame's live spring position; a tile no longer confirmed this pass is dropped
+  (`Vec::retain` against a fixed `[bool; MAX_IN_RANGE]` "seen" scratch array, no allocation). `RefCell`,
+  not a plain field: `ClientSide::ui` takes `&self`, but the tile-entry-time caching needs the
+  *previous* call's own result, and `ui()` is the only place a `WorldRead` is available at all
+  (`frame` gets none) -- doing this bookkeeping in `frame()` instead (which has `&mut self`) would
+  make it untestable natively (`FrameCx::new` is `pub(crate)` to the engine crate, so no game crate
+  can build one and drive `frame()` -- `extract_hash_player_circle`'s own precedent).
+- **Native tests** (`sim/tests/ui.rs`, new file): `ui_in_range_lists_each_resource_once`,
+  `ui_from_is_within_range_of_its_tile`, `ui_reads_inventory_and_collecting_from_player` (a fourth,
+  beyond the brief's own two, since it was cheap against the same fixture) -- a hand-built
+  `StubWorld` with one resource in range, one out of it, driven through `RefClient::with_spring_state`
+  + a directly-constructed `FrameView` (`extract_golden.rs`'s own pattern).
+- **`src/ui/dom.ts`** (Provides): `el<K>(tag, className?): HTMLElementTagNameMap[K]`; `diffKeyed<T,
+  E>(live: Map<string, E>, items, key, { create, update?, remove? }): void` -- `E` is deliberately
+  unconstrained (not `HTMLElement`), so the same helper reconciles anchor handles or any other
+  per-key resource, not only visible DOM nodes; `update` is optional (a caller whose own per-item
+  state needs a separate later pass over `live` -- `collect.ts`'s own disabling/fill pass across
+  every button at once -- can omit it). Unit-tested with plain objects, no DOM
+  (`src/ui/dom.test.ts`, `unit` suite; `vitest.config.ts`'s `unit` project is `environment: 'node'`,
+  no jsdom in the lockfile, so `el()` itself is exercised only by the browser suite).
+- **`src/ui/collect.ts`** (Deviations: DOM identity): a button carries `data-collect-tile="x,y"`
+  (`tileKey()`, exported) -- `[data-collect-tile="x,y"]` is the selector. `createCollectUi(client,
+  doc?): { onUi(ui), onActionResult(seq, result) }`. Anchoring: `client.overlay.anchor(button, tile.x
+  + 0.5, tile.y + 0.5)` on create, `.remove()` on `diffKeyed`'s own `remove`. Progress: a `.collect-
+  fill` inner `<span>`, `--collect-duration` custom property in ms (`(done_at - clock().predicted) /
+  ticksPerSecond * 1000`), class `is-filling` toggled off/on (with a forced reflow, `void
+  button.offsetWidth`) to (re)start the CSS animation, added once per collect (guarded by a
+  per-button `filling` flag) and removed once `ui.collecting` no longer names that button. Every
+  other button disabled while one collects. Cancel-on-pan-out: `ui.collecting`'s own tile key not
+  present in the current button set dispatches `'CancelCollect'` once (`cancelSentFor`, reset when
+  `collecting` clears or points at a different tile). Rejection flash: `pendingSeq: Map<seq, tileKey>`
+  populated at dispatch time; `onActionResult` adds a `reject-<reason>` class (`reason.toLowerCase()`
+  of the `RefReject`/`EngineRejectReason` value), removed on `animationend`. `<style id=
+  "reference-collect-styles">` injected once, idempotently (`installPageStyles`'s own precedent).
+- **`src/ui/inventory.ts`**: `createInventoryUi(container, doc?): { onUi(ui) }`, a fixed
+  `<div class="inventory">` (not anchored) with one row per resource, `<style id=
+  "reference-inventory-styles">` likewise.
+- **Wiring** (`game.ts`'s `startGame`, shared by both pages): `createCollectUi`/`createInventoryUi`
+  built once, subscribed through `client.onUi<RefUi>`/`client.onActionResult<RefReject>`.
+  `createRealFrameLoop` gained `onOverlay: () => client.overlay.update()` (M18 Deviations: not
+  wired automatically by `frame-loop.ts`). `test-entry.ts`'s own `__stepFrame` additionally calls
+  `client.overlay.update()` directly (its own `real.loop` never ticks at all, step 0's note), so
+  anchors track their tiles across stepped frames too.
+- **Found live, worth a permanent note (now in `games/reference/CLAUDE.md`): `Ui.in_range`/
+  `world.tile()` need a real sim tick, not just `stepFrame`.** `FrameView::world()` inside `ui()` is
+  the client's own *replica* (`client/replica.rs::Replica::tile`: `Err(Unknown)` unless
+  `self.held.contains_key(chunk_of(p))`), not the host's authoritative world
+  `__dispatchStartCollect`/`admit`/`apply` validate against directly, and not the same data path
+  `__probeTile`'s rendered art comes from (pristine terrain the client generates locally, no host
+  round trip needed for an unmodified chunk's *bytes*). A chunk only becomes "held" once the host has
+  actually included it in a downlink frame, which the host only produces while ticking -- driven by
+  `__stepTick`, never by `__stepFrame` alone (confirmed by a scratch repro: `depletion.spec.ts`'s own
+  20x `__setCamera`+`__stepFrame(50)` loop, copied verbatim, left `world.tile((0,0))` at `Unknown`
+  indefinitely; adding `__stepTick(5)` after it immediately produced the expected `in_range` entry).
+  Every existing stepped spec before this one only ever validated against the *host*
+  (`__dispatchStartCollect`) or rendered locally-generated terrain (`__probeTile`), so this gap was
+  never hit until `Ui.in_range` needed a real `WorldRead`.
+- **Browser test**: `reference_ui_smoke_collect_and_inventory` (`tests/browser/ui-smoke.spec.ts`,
+  this cut's own short check, not one of the brief's reserved four names) -- pan to the iron
+  landmark at `(0, 0)`, settle, `__stepTick(5)` for the replica (above), the button appears, click,
+  `__stepFrame` to flush the uplink, `__stepTick(3)` more for `apply` to set `collecting`, then the
+  button is disabled and filling; `__stepTick(41)` completes it; the inventory readout shows
+  `Iron: 1` and the button resets. ~400 ms, not flaky across repeated local runs.
+- **Not verified by this cut** (steps 5-6's own exit criteria): "played by hand" (buttons never
+  drifting while panning/zooming, ten stones depleting a tile), the M04 zero-allocation assertion
+  against this page, and the `gc` Playwright project wiring noted in the step 0-2 Deviations above
+  (still missing, still blocking that assertion). The `hot-paths.md` no-allocation discipline for
+  `ui()`'s own new code was followed by construction (fixed-capacity `Vec`s, no closures that
+  capture by move, no per-call String work outside the JSON encode `0016 §2` already exempts) but
+  not measured by `gc-test` in this cut.
+
+**Not yet done (step 5-6, for the next implementer):** the spawn rule (`RefClient` finding the
+nearest land tile, `Ui.spawn`, `main.ts`'s `camera.moveTo`), the scripted
+`reference_collect_flow`/`reference_several_buttons`/`reference_pan_out_cancels`/
+`reference_new_player_spawns_on_land` browser tests, the `gc` project wiring (step 0-2 Deviations),
+and the zero-allocation exit criterion itself.
