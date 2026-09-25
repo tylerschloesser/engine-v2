@@ -244,6 +244,13 @@ impl<G: Game> ClientInstance<G> {
         layout.region(RegionId::Ui, UI_BYTES);
         layout.region(RegionId::DrawList, drawlist::REGION_BYTES as u32);
         let drawlist_region = layout.ptr(RegionId::DrawList);
+        // `ClientSide::on_init` (docs/plan/20b-reference-player-and-collect-ui.md, gate round 1
+        // fix): built and called *before* `cfg.params` moves into `Pristine::new` below (`Worldgen
+        // ::Params` is not required to be `Clone`, so this must borrow it while `cfg` still owns
+        // it) -- the one place a client can ever learn the seed/params its own world was created
+        // with, since `Default::default()` itself takes no arguments.
+        let mut client = G::Client::default();
+        client.on_init(cfg.seed.0, &cfg.params);
         let source = Pristine::<G::Worldgen>::new(cfg.seed.0, cfg.params);
         // Single-connection assumption (docs/plan/15b-ring-connection-and-replica-rendering.md,
         // Planning decisions "PlayerId = conn + 1, not conn"): this milestone's own topology never
@@ -272,7 +279,7 @@ impl<G: Game> ClientInstance<G> {
             uploader,
             input_queue: Box::new(InputQueue::new()),
             ui_buf: Vec::new(),
-            client: G::Client::default(),
+            client,
             ui: UiObserver::new(),
             drawlist: Box::new(DrawList::new()),
             drawlist_region,

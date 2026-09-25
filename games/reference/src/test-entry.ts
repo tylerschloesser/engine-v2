@@ -94,6 +94,17 @@ const canvas = document.getElementById('game') as HTMLCanvasElement
 // `real.loop.resume()` inside `startGame` registers a callback that simply never fires: harmless.
 const clock = createManualClock()
 
+// Gate round 1 fix (docs/plan/20b-reference-player-and-collect-ui.md Deviations): `?altSpawnParams`
+// -- a test-entry option for a *different world* (`ClientOptions.test.game`, the documented escape
+// hatch for every worker's own config, `packages/engine/src/client.ts`'s own doc comment) -- raises
+// `water_level` enough that the origin becomes water, so `spawn.spec.ts` can exercise the real
+// `RefClient::on_init` -> `Ui.spawn` -> `game.ts`'s `onUi` -> `client.camera.moveTo` pipeline against
+// a nearest land tile that is not `(0, 0)`, the trivial "origin is already land" case every real
+// seed hits (`content::SEED`'s own height-channel value at the exact origin lattice point is `0.0`
+// regardless of seed) and also `nearest_land_tile`'s own fallback value -- indistinguishable without
+// this. Every other test on this page omits the query param and gets the real, unmodified world.
+const altSpawnParams = new URLSearchParams(location.search).has('altSpawnParams')
+
 const { client, renderer, device, canvasFormat } = await startGame({
   canvas,
   host: {
@@ -101,7 +112,13 @@ const { client, renderer, device, canvasFormat } = await startGame({
     world: { worldId: 'reference', params: { seed: '6840143426475589698', worldgen: {} } },
     connect: true,
   },
-  test: { clock, flags: {} },
+  test: {
+    clock,
+    flags: {},
+    ...(altSpawnParams
+      ? { game: { seed: '0x5eed1234abcd0042', params: { water_level: 0.05 } } }
+      : {}),
+  },
   clock,
   scheduler: clock,
 })

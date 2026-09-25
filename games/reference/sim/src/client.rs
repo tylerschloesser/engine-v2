@@ -207,10 +207,11 @@ pub struct RefClient {
     /// `with_spring_state`; `ui()` only ever pushes up to that capacity or removes, never grows it
     /// (`.claude/rules/hot-paths.md`).
     tracked_range: RefCell<Vec<UiInRange>>,
-    /// M20b step 5: the nearest land tile to the origin (`nearest_land_tile`, [`content::SEED`] +
-    /// default [`RefParams`] -- the only seed/params any real page of this game ever uses), computed
-    /// once here and copied into `Ui.spawn` unchanged on every `ui()` call (never a per-frame value,
-    /// the `Ui` rule).
+    /// The nearest land tile to the origin (`nearest_land_tile`), copied into `Ui.spawn` unchanged
+    /// on every `ui()` call (never a per-frame value, the `Ui` rule). `Default`/`with_spring_state`
+    /// seed it with [`content::SEED`] + default [`RefParams`] (native tests never call `on_init`,
+    /// below); a real WASM instance immediately overwrites it with the seed/params its own world was
+    /// actually created with, via `ClientSide::on_init` (gate round 1 fix).
     spawn: TileXY,
 }
 
@@ -245,6 +246,12 @@ impl RefClient {
     pub fn spring_pos(&self) -> [f64; 2] {
         self.spring_pos
     }
+
+    /// The spawn tile `Ui.spawn` publishes (test-only accessor, gate round 1 fix): lets a native
+    /// test check `on_init`'s own effect directly, the same reason `spring_pos` exists.
+    pub fn spawn(&self) -> TileXY {
+        self.spawn
+    }
 }
 
 /// Full (7-10) / half (4-6) / low (1-3) units of [`content::UNITS_PER_TILE`] (Planning decisions
@@ -260,6 +267,22 @@ fn depletion_stage(aux: u16) -> u8 {
 }
 
 impl ClientSide<RefGame> for RefClient {
+    /// Gate round 1 fix (docs/plan/20b-reference-player-and-collect-ui.md; engine change: `client::
+    /// texel::ClientSide::on_init`, called once by `game_instance::ClientInstance::init` right
+    /// after `Default::default()`, before `frame`/`extract`/`ui` ever run): recomputes `Ui.spawn`
+    /// against the seed/params this instance's own world was *actually* created with, replacing the
+    /// `Default`/`with_spring_state` fallback's own `content::SEED` + `RefParams::default()` guess.
+    /// Real pages never notice (their own world already uses that exact seed/params); a browser
+    /// test can now exercise the real spawn pipeline against a *different* world (`test-entry.ts`'s
+    /// own `?altSpawnParams` option, `ClientOptions.test.game`) whose nearest land tile is not the
+    /// trivial "origin is already land" case every real seed hits (Deviations has the full finding:
+    /// `content::SEED`'s own height-channel value at the origin lattice point is `0.0` regardless of
+    /// seed, identical to `nearest_land_tile`'s own fallback, so a test asserting spawn `== (0, 0)`
+    /// could never tell a working search from a broken one without this).
+    fn on_init(&mut self, seed: u64, params: &RefParams) {
+        self.spawn = TileXY::from_tile(nearest_land_tile(seed, params));
+    }
+
     /// Integrates the spring toward the camera block's own centre/velocity (0001 Decision:
     /// "writes `G::Presence` once per client frame from the camera block"), then writes the
     /// quantized result into `presence`. Calls `cx.ui_dirty()` whenever the spring actually moved

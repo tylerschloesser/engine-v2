@@ -11,6 +11,7 @@ use core::cell::UnsafeCell;
 
 use crate::game::{DrawList, FrameCx, FrameView, Game};
 use crate::world::{Registry, Tile};
+use crate::worldgen::Worldgen;
 
 /// GPU texel for one tile: `r` = base-layer visual id, `g` = resource-layer visual id (0 = none).
 /// 4 bytes, `rg16uint` (0018 §3).
@@ -114,6 +115,14 @@ pub trait ClientSide<G: Game>: Default {
 
     /// What the DOM overlay observes (0003). No-op by default: leaves `out` unchanged.
     fn ui(&self, _view: &FrameView<'_, G>, _out: &mut G::Ui) {}
+
+    /// Called exactly once, right after `Default::default()` constructs this client
+    /// (`game_instance::ClientInstance::init`, before anything else ever calls `frame`/`extract`/
+    /// `ui`): the seed and worldgen params this instance's own world was created with -- the one
+    /// thing `Default` itself can never carry (docs/plan/20b-reference-player-and-collect-ui.md,
+    /// gate round 1 fix). No-op by default: most games have no per-client-frame state that depends
+    /// on the world's own seed at all.
+    fn on_init(&mut self, _seed: u64, _params: &<G::Worldgen as Worldgen>::Params) {}
 }
 
 impl<G: Game> ClientSide<G> for () {}
