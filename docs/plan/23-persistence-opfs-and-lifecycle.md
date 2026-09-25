@@ -93,4 +93,46 @@ Extend `packages/engine/src/storage/CLAUDE.md`: OPFS adapter rules (no options o
 This milestone builds `opfs-latency.html` (Planning decision 7) and `world.html` (Scope: hash, tick, `durable`, `WorldBusy`, export / import / delete controls); both are listed by `pnpm device:serve --tunnel`.
 
 ## Deviations
-(filled in during Phase 3)
+
+### Step 1: probe results, Decision 3 settled
+
+Probed with `@playwright/test` 1.63.0 (Chromium 153, WebKit 26.6, Firefox 155) against the
+`tests/browser/pages` app (COOP/COEP already global there via `engine()`'s Vite plugin, so no new
+fixture page was needed for the probe itself), from inside a dedicated Worker (matches where the
+adapter actually runs, 0015 "sim worker") plus a main-thread check for `getDirectory()` alone. Probe
+code was throwaway (a page + worker script + spec, written, run, and deleted; not committed) --
+paste below is the full captured output.
+
+**Critical, load-bearing finding: WebKit's OPFS only works under a persistent browser context.**
+Under Playwright's default `browser.newContext()` (what every existing project in
+`playwright.config.ts` uses), WebKit's `navigator.storage.getDirectory()` itself throws
+`UnknownError: The operation failed for an unknown transient reason (e.g. out of memory).` --
+on the main thread and inside a worker, before `move()`/`createSyncAccessHandle`/locks are ever
+reached. Under `webkit.launchPersistentContext(userDataDir, ...)` (a real on-disk profile), the
+exact same page succeeds completely. Chromium and Firefox work under the default ephemeral context
+either way. This is a Playwright/WebKit test-harness limitation (WebKit's OPFS backing store needs a
+real profile directory), not a real-Safari capability gap -- real Safari (desktop or iOS) always has
+a persistent profile. **Consequence for step 2 and later browser specs that touch OPFS**: they need
+a small fixture overriding `context`/`page` to use `launchPersistentContext` (all three browsers, for
+one code path); `storage-opfs.spec.ts` (step 2) carries it in
+`tests/browser/support/opfs-context.ts`, scoped to that file alone -- no other spec's fixtures
+change. Every result below, and step 2's own conformance run, uses that persistent-context path.
+
+| Browser | `move()` 1-arg | `move()` 2-arg (`move(dir, name)`) | overwrite via `move()` onto an existing name | `createSyncAccessHandle` | `navigator.locks` | OPFS at all, ephemeral context |
+|---|---|---|---|---|---|---|
+| Chromium 153 | works | works | works (dest bytes replaced) | works | works | works |
+| Firefox 155 | works | works | works | works | works | works |
+| WebKit 26.6 | **throws `TypeError: Not enough arguments`** | works | works | works | works | **fails** (`getDirectory()` itself throws; needs persistent context) |
+
+**Decision 3 outcome: rename, not slot files.** `FileSystemFileHandle.move()` is available and
+works in every browser we support, given the 2-arg form (`handle.move(directoryHandle, name)`)
+called uniformly -- WebKit's implementation requires both arguments (the 1-arg `move(name)` form
+throws `TypeError: Not enough arguments` there; both forms work in Chromium and Firefox). `move()`
+onto an existing destination name overwrites it (measured: the destination's old bytes are gone,
+replaced by the source's), which is what the scratch-file rename in Planning decision 2 relies on.
+No slot files, no adapter header format, nothing to amend on 0005's OPFS row beyond recording that
+the 2-arg call form is the portable one -- a one-line ADR amendment, not a format change.
+
+Device check callout for step 7 (not built here): the iOS probe (`opfs-latency.html`) should call
+`move()` with the 2-arg form from the start, matching this finding, rather than discovering the same
+`TypeError` on-device.
