@@ -55,6 +55,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 18c | `18c-stepping-hash-under-load.md` | `stepping`'s one hash mismatch under suite load: make it explain itself, reproduce, fix | 18 | |
 | [x] | 19 | `19-presence-channel.md` | presence uplink, host table, `admit` witness, relay | 17 | |
 | [x] | 19b | `19b-sim-park-while-armed.md` | `park('sim')` times out on an armed worker (`gc: flat transport parity`, 1 in 15 quiet runs): diagnose, fix or instrument | 19 | |
+| [ ] | 19c | `19c-ci-reds-frame-bench-and-admit-path.md` | two intermittent CI reds: frame-bench setup drain waits on the published slot; admit-path 900 B net allocation diagnosed or instrumented | 19b | |
 | [ ] | 20 | `20-reference-game-v0.md` | `games/reference`: worldgen, assets, headless collect rules | 16b | |
 | [ ] | 20b | `20b-reference-player-and-collect-ui.md` | player spring + presence, collect UI. **First playable.** | 20, 17b, 18, 19 | |
 | [ ] | 21 | `21-entities-and-timers.md` | prototypes, footprints, occupancy, state budget + `growth` | 16 | |
