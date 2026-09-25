@@ -1,6 +1,6 @@
 # M22b: Persistence: load, crash recovery from storage, `node:fs`, heavy mode in the test entry
 
-Status: not started · After: 22 · Tyler-dependent: no
+Status: done · After: 22 · Tyler-dependent: no
 
 Split from PLAN row 22 (see M22). M23 and M27 list 22b, not 22, under After.
 
@@ -69,10 +69,10 @@ Vitest (WASM under Node) unless noted:
 - `replay_world_checkpoints_node`, `replay_world_checkpoints_bun` (script), `heavy_wasm_n50`, `heavy_wasm_n1` (`@slow`).
 
 ## Exit criteria
-- [ ] All tests above pass by name; the crash matrix covers every byte cut of the final frame of the fixture log.
-- [ ] `replayWorld` hashes under Node and Bun equal the native golden hashes checked in by M22.
-- [ ] `engine/test` exports `replayWorld` and `runHeavy`; production entrypoints do not import them (exports-map test from M02/M35 pattern).
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name; the crash matrix covers every byte cut of the final frame of the fixture log.
+- [x] `replayWorld` hashes under Node and Bun equal the native golden hashes checked in by M22.
+- [x] `engine/test` exports `replayWorld` and `runHeavy`; production entrypoints do not import them (exports-map test from M02/M35 pattern).
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test wasm -t crash_` · `pnpm test wasm -t heavy_wasm` · `pnpm test wasm -t storage_conformance_fs` · `pnpm test` · `pnpm lint`
@@ -495,3 +495,5 @@ A review agent found four tests that could not fail or did not exist. All four f
 tests`. `pnpm lint`: biome/rustfmt/clippy/tsc all green. No existing golden moved; no existing test
 weakened (the two `pause`/`stop`/`fs_append_allocates_no_buffers` tests the review agent flagged are
 unchanged, kept alongside their new, stronger siblings).
+
+**Gate (orchestrator).** Cut 1-3 / 4-5, two implementers, one fix round, one review agent. `pnpm gate d17df87`: 3,644 lines, no golden or budget changed, no markers. The gate added `load_after_roll_with_idle_gap_replays_new_segment_tail` to the second half's work (the first half's roll test loaded straight after the roll with no frames in the new segment); it fails with a wrong seed (`expected 11 to be 12`). Two injections that passed without failing are accepted as explained: removing the segment-open reset changes writer and reader together, so no hash can see it (ledger: no byte golden pins a two-segment log), and restoring `runHeavy` into the running instance is hash-indistinguishable (the corrupted-snapshot injection is what proves restore reads the bytes). **The review agent found four gaps**: `pause()`/`stop()` passed with an un-awaited `flush()`; the exports-map test scanned one hop only; `load_ignores_config_params_when_world_exists` had not been built; `fs_append_allocates_no_buffers` never reached pool exhaustion. Fix round 1 closed all four; the orchestrator re-ran the un-awaited-flush injection (`expected true to be false`, fails as it must). Final gate: `rust` 518, `unit` 235, `wasm` 102, `browser` 185 at 32 s of 48 s, lint clean; `heavy_wasm_n1` (slow) `wasm pass 1` per the implementer.

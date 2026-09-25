@@ -47,6 +47,8 @@ Handshake, identity, reconnect (M28, M28b). Net worker, `ws`, loopback subset (M
 - **One thread, stepped actors.** Headless clients reuse the production client shell and rings in-thread rather than a second sync-layer implementation, so netcode tests cover the shipped decode path. M15's `testkit::Loopback` stays the Rust-native counterpart for byte-level tests.
 - **Test placement** follows M01: `packages/engine/tests/netcode/`.
 
+- **From M22b's Deviations.** `Persistence.open(storage, cfg, newInstance, options?)` returns a `Sim` whose connection table is **empty**: replay applies logged `Connected` records to game state but never calls `Host::connect`, so every client must reconnect through the normal accept path after a load or recovery (session resume itself is M28/M28b). `fsStorage(dir)` is exported from `engine/server/node`.
+
 ## Order of work
 1. `createWorldServer` (0024 §5 shape) over `createSimHost` + `Persistence.open`; move the `wasm` suite onto it.
 2. Memory pair, `VirtualClock`, conditioner, with TS unit tests (ordering, seeded reproducibility).

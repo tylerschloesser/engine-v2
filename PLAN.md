@@ -62,7 +62,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 21 | `21-entities-and-timers.md` | prototypes, footprints, occupancy, state budget + `growth` | 16 | |
 | [x] | 21b | `21b-timers-wakeups-and-tickcx.md` | timer wheel, wake-ups, active lists, full `TickCx`, undo-journal decision | 21 | |
 | [x] | 22 | `22-persistence-log-and-snapshots.md` | containers, write-ahead log, snapshots, native replay + heavy mode | 21b | |
-| [ ] | 22b | `22b-persistence-load-and-fs.md` | load path, crash recovery from storage, `node:fs` storage, heavy mode in `engine/test` | 22 | |
+| [x] | 22b | `22b-persistence-load-and-fs.md` | load path, crash recovery from storage, `node:fs` storage, heavy mode in `engine/test` | 22 | |
 | [ ] | 23 | `23-persistence-opfs-and-lifecycle.md` | OPFS + Web Lock, storage events, export/import | 22b | T D |
 | [ ] | 24 | `24-recovery-and-migration.md` | panic recovery by re-instantiation (sim role) | 23 | |
 | [ ] | 24b | `24b-upgrade-and-migration.md` | `SCHEMA_VERSION`, `migrate`, `OldStore`, `SaveIncompatible`, tick rescale | 24 | T |

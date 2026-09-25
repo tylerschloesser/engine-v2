@@ -49,6 +49,8 @@ Mine from spikes: none. Rules that apply: `.claude/rules/determinism.md`, `.clau
 5. **A failed `memory.grow` and allocation failure** arrive as a panic through the alloc-error path and take the same route (0005 Panic recovery 4); no separate detection.
 6. **The panic text** is what M02's `LoaderHooks.onPanic` already decoded; recovery logs it once at `error` level and puts it in `onFatal`. Nothing new is decoded on a steady-state path.
 
+- **From M22b's Deviations.** Replay is **single-pass**: M22b did not build 22b Planning decision 4's `Skip`-target scan pass because the set is always empty until this milestone. Giving `Skip` meaning here means adding that scan pass (collect `Skip` targets in a segment, then apply) to the restore/replay drivers and to `engine/test`'s `replayWorld`/`runHeavy`. `testing::replay`'s `Skip` arm is covered by `replay_skip_records_decode_as_noop` (M22). A loaded or recovered `Sim` has an empty connection table (replay never calls `Host::connect`). `Persistence.loadLatest(storage, keys, manifest, newInstance)` is static (M22b Deviations hold the exact shape).
+
 ## Order of work
 1. Call-path audit (one grep-style test: no `inst.x.` use outside `loader.ts`); `panicky` fixture; `sim_test_trap`.
 2. `Progress` region writes in Rust; reading it from a dead instance.
