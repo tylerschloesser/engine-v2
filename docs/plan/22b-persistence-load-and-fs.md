@@ -443,3 +443,55 @@ read, never regenerated).
   for whoever next touches `sim_segment_header`.
 - `fsStorage`'s `list()` is a full recursive directory walk -- fine at tmpdir/test scale, flagged if a
   later milestone (M27) points it at a real, larger deployment directory.
+
+## Fix round 1
+
+A review agent found four tests that could not fail or did not exist. All four fixed.
+
+1. **`pause_flushes_and_snapshots_if_dirty`/`stop_flushes_and_snapshots_if_dirty` never proved
+   completion, only that `storage.flush()` was called** (`flushCalls++` increments synchronously
+   inside `Persistence.flush()` before its own `await`, regardless of whether `server.ts`'s
+   `pause()`/`stop()` await the result). New `pause_is_still_pending_until_flush_resolves`/
+   `stop_is_still_pending_until_flush_resolves` (`tests/wasm/persistence.test.ts`): a storage whose
+   `flush()` returns a promise resolved by hand; asserts the snapshot already landed (re-reading
+   storage) by the time `flush()` was called, that `pause()`/`stop()` are still pending after that,
+   and that they resolve only once the flush promise does. Anti-vacuity: `persistence?.flush()`
+   without `await` in both `server.ts` methods -> `AssertionError: expected true to be false` (both
+   tests). Reverted, green.
+2. **The exports-map test was one hop deep.** A production module importing a helper that itself
+   re-exports `replayWorld` from `test/replay.js` would have passed the direct-scan version.
+   `src/test.test.ts` rewritten: `reachableFiles` walks the whole relative-import graph from each
+   production entrypoint (`.js` specifiers resolved back to `.ts` sources via `URL`, recursively),
+   failing on any reachable file under `src/test/` or `src/test.ts` itself. Anti-vacuity: a throwaway
+   `src/injected-leak-helper.ts` re-exporting `replayWorld` from `test/replay.js`, imported from
+   `loader.ts` -> `Error: production entrypoints transitively reaching engine/test: client.ts ->
+   test/replay.ts, worker.ts -> test/replay.ts, render.ts -> test/replay.ts, loader.ts ->
+   test/replay.ts`. Reverted (file deleted, import removed), green.
+3. **`load_ignores_config_params_when_world_exists` was never built.** New test (`tests/wasm/
+   persist-open.test.ts`): creates a world under one seed with real `Roll` actions (so the seed
+   genuinely drives `SimRng`-dependent state) and a mid-run snapshot (so reload restores, not
+   genesis-replays), reopens with a *different* `cfg.params` *and* a `newInstance` built from those
+   same different params (a careless caller, not merely an equivalent rewording), and asserts the
+   reload reproduces the original seed's own history byte-for-hash while the manifest's own `params`
+   (the whole manifest, in fact) is unchanged byte for byte. Not vacuous: an independent genesis run
+   under the other seed, replaying the identical script, reaches a provably different hash. Anti-
+   vacuity: `Persistence.open`'s load branch rewritten to overwrite the healed manifest's `params`
+   with `cfg.params` -> `AssertionError: expected Uint8Array[...511 items] to deeply equal
+   Uint8Array[...503 items]` (the manifest-equality assertion, at this test's own line). Reverted,
+   green.
+4. **`fs_append_allocates_no_buffers` never reached pool exhaustion** (20 tiny appends never fill a
+   1 MiB buffer once, let alone force a third concurrent flush). `FsStorageDebug` gained `gate: Promise
+   <void>` (every real `fs.write`/`fdatasync` awaits it, read fresh per write, default resolved) and
+   `fs.ts` exports `FS_BUFFER_BYTES`. New `fs_pool_exhaustion_forces_a_grown_buffer`: a pending gate
+   holds two flushes genuinely in flight while two full 1 MiB appends rotate both pooled buffers, a
+   third append forces a grown one (`fsBufferGrows === 1`), then the gate releases and every byte
+   (`a + b + c`, exact concatenation) is confirmed on disk in order. The existing steady-state test
+   (asserting `0`) is kept unchanged. Anti-vacuity: commenting out the `fsBufferGrows++` in `rotate()`'s
+   grown-buffer branch -> `AssertionError: expected +0 to be 1`. Reverted, green.
+
+### Measured (fix round 1)
+
+`pnpm test`: `rust pass 518 tests`, `unit pass 235 tests`, `wasm pass 102 tests`, `browser pass 185
+tests`. `pnpm lint`: biome/rustfmt/clippy/tsc all green. No existing golden moved; no existing test
+weakened (the two `pause`/`stop`/`fs_append_allocates_no_buffers` tests the review agent flagged are
+unchanged, kept alongside their new, stronger siblings).

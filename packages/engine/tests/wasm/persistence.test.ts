@@ -16,6 +16,7 @@ import {
 } from '../../src/server.js'
 import { memoryStorage } from '../../src/storage/memory.js'
 import type { Storage } from '../../src/storage/types.js'
+import { worldKeys } from '../../src/storage/types.js'
 import { expectWithinBudget } from '../support/budgets.js'
 import { loadFixture } from '../support/fixtures.js'
 
@@ -308,5 +309,59 @@ describe('Persistence wired into a real SimHost (fx-persist)', () => {
     await host.stop()
     expect(persistence.counters.snapshots).toBe(1)
     expect(flushCalls).toBe(1)
+  })
+
+  /** M22b fix round 1: `flushCalls++` alone (the two tests above) increments synchronously the
+   * moment `persistence.flush()` calls `storage.flush()` -- true whether or not `pause()`/`stop()`
+   * actually `await` the returned promise to completion, since `Persistence.flush` returns
+   * `Promise.resolve(this.storage.flush())` regardless. A bare (non-`await`ed) `persistence?.
+   * flush()` in `server.ts` passes both tests above unchanged. This test uses a storage whose
+   * `flush()` returns a promise this test resolves by hand, so `pause()`/`stop()` themselves must
+   * still be pending after `flush()` has been called but before that promise resolves. */
+  async function pauseOrStopAwaitsFlushToCompletion(which: 'pause' | 'stop'): Promise<void> {
+    const inst = await freshInstance()
+    const storage = memoryStorage()
+    const { host, persistence } = setup(inst, storage)
+
+    let flushWasCalled = false
+    let resolveFlush: (() => void) | undefined
+    storage.flush = () => {
+      flushWasCalled = true
+      return new Promise<void>((resolve) => {
+        resolveFlush = resolve
+      })
+    }
+
+    if (which === 'pause') host.start() // `pause()`'s own early return needs `running`
+    inst.call1(inst.x.sim_connect, 0) // dirties the world
+    host.stepTick(1)
+
+    let resolved = false
+    const outcome = (which === 'pause' ? host.pause() : host.stop()).then(() => {
+      resolved = true
+    })
+
+    // Flush the microtask queue until `storage.flush()` has actually been called -- however many
+    // internal awaits `snapshotIfDirty`/`pruneSnapshots` take first.
+    for (let i = 0; i < 50 && !flushWasCalled; i++) await Promise.resolve()
+    expect(flushWasCalled).toBe(true)
+    // The snapshot write already landed by the time `flush()` was called (0005 Cadence: snapshot,
+    // then await `flush()`) -- proven by re-reading storage, not merely trusting the counter.
+    expect(persistence.counters.snapshots).toBe(1)
+    const keys = worldKeys(CFG.worldId)
+    expect(await storage.read(keys.snap(1))).not.toBeNull()
+
+    expect(resolved).toBe(false) // still pending: a bare `persistence?.flush()` would already be true
+    resolveFlush?.()
+    await outcome
+    expect(resolved).toBe(true)
+  }
+
+  test('pause_is_still_pending_until_flush_resolves', async () => {
+    await pauseOrStopAwaitsFlushToCompletion('pause')
+  })
+
+  test('stop_is_still_pending_until_flush_resolves', async () => {
+    await pauseOrStopAwaitsFlushToCompletion('stop')
   })
 })

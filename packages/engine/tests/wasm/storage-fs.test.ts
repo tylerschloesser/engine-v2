@@ -16,7 +16,7 @@ import {
   wrapEngineInstance,
 } from '../../src/server.js'
 import { runStorageConformance } from '../../src/storage/conformance.js'
-import { createFsStorageDebug, fsStorage } from '../../src/storage/fs.js'
+import { createFsStorageDebug, FS_BUFFER_BYTES, fsStorage } from '../../src/storage/fs.js'
 import { worldKeys } from '../../src/storage/types.js'
 import { loadFixture } from '../support/fixtures.js'
 
@@ -85,6 +85,37 @@ describe('fsStorage', () => {
     expect(debug.fsBufferGrows()).toBe(0)
     const onDisk = await readFile(join(dir, ...key.split('/')))
     expect(onDisk.length).toBeGreaterThan(0)
+  })
+
+  /** M22b fix round 1: the steady-state case above never fills a whole 1 MiB buffer, so
+   * `fsBufferGrows` never had a chance to move -- removing the increment in `LogAppender.rotate()`'s
+   * own both-buffers-in-flight branch still passed. This genuinely holds two flushes in flight
+   * (`FsStorageDebug.gate`, a pending promise every real `fs.write` awaits) and forces a third. */
+  test('fs_pool_exhaustion_forces_a_grown_buffer', async () => {
+    const dir = await tmpDir()
+    const debug = createFsStorageDebug()
+    let releaseGate: (() => void) | undefined
+    debug.gate = new Promise((resolve) => {
+      releaseGate = resolve
+    })
+    const storage = fsStorage(dir, debug)
+    const key = 'worlds/w1/log/000000'
+
+    const a = Buffer.alloc(FS_BUFFER_BYTES, 0x41)
+    const b = Buffer.alloc(FS_BUFFER_BYTES, 0x42)
+    const c = new TextEncoder().encode('tail-c')
+
+    storage.append(key, a) // exactly fills buffer 1; no rotation yet
+    storage.append(key, b) // rotates buffer 1 into the (gated, pending) flush chain
+    expect(debug.fsBufferGrows()).toBe(0) // both pooled buffers accounted for, nothing grown yet
+    storage.append(key, c) // both pooled buffers are now checked out: forces a grown buffer
+    expect(debug.fsBufferGrows()).toBe(1)
+
+    releaseGate?.()
+    await storage.flush()
+
+    const onDisk = await readFile(join(dir, ...key.split('/')))
+    expect(onDisk.equals(Buffer.concat([a, b, c]))).toBe(true) // every byte landed, in order
   })
 
   test('fs_crash_truncated_file', async () => {

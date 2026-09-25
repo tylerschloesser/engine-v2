@@ -122,6 +122,70 @@ describe('Persistence.open (fx-persist, real pipeline)', () => {
     expect(sim.readU64Hex(RegionId.Result, 0)).toBe(wantHash)
   })
 
+  /** 0009 `WorldConfig.params`: "WORLD PARAMS: read only when storage holds no world, then stored
+   * with genesis and fixed for the world's life; a stored world ignores this block". Builds a world
+   * under one seed (real `Roll` actions, so the seed genuinely drives state through `SimRng` -- a
+   * `snapshotNow()` partway through, so the reload restores rather than genesis-replays), reopens
+   * with a *different* `cfg.params` and a `newInstance` built from those same different params (a
+   * careless caller, not merely a differently-worded but equivalent one), and checks the reload
+   * still reproduces the original seed's own history: the restored `Sim`'s `Authority`/`SimRng`
+   * always replace whatever `newInstance`'s own fresh genesis would have produced. */
+  test('load_ignores_config_params_when_world_exists', async () => {
+    const storage = memoryStorage()
+    const mod = await wasm()
+    const inst = instantiate(mod, Role.Sim, buildSimInstanceConfig(CFG))
+    const persistence = Persistence.create(storage, CFG, inst)
+    const timer = manualTimer()
+    const host = createSimHostFromInstance(
+      wrapEngineInstance(inst),
+      { clock: { now: () => 0 }, timer: timer.services },
+      persistence,
+    )
+    expect(inst.call1(inst.x.sim_connect, 0)).toBe(Status.Ok)
+    host.stepTick(1)
+    await admitRoll(inst, 1)
+    host.stepTick(1)
+    persistence.snapshotNow() // a real snapshot exists: reload restores, it does not genesis-replay
+    await admitRoll(inst, 2)
+    host.stepTick(1)
+    const wantHash = host.hash()
+    const wantTick = host.counters.ticksRun
+
+    const keys = worldKeys(CFG.worldId)
+    const manifestBefore = await storage.read(keys.manifest)
+    if (!manifestBefore) throw new Error('expected a manifest to exist')
+
+    const otherCfg = { ...CFG, params: { seed: '999999999', worldgen: null } }
+    const ni = () => instantiate(mod, Role.Sim, buildSimInstanceConfig(otherCfg))
+    const { outcome, tick, sim } = await Persistence.open(storage, otherCfg, ni)
+    expect(outcome).toBe('loaded')
+    expect(tick).toBe(wantTick)
+    expect(sim.call0(sim.x.sim_hash)).toBe(Status.Ok)
+    expect(sim.readU64Hex(RegionId.Result, 0)).toBe(wantHash)
+
+    // Not vacuous: the seed genuinely drives state here -- an independent genesis under the *other*
+    // seed, replaying the identical script from scratch, reaches a different hash.
+    const altInst = instantiate(mod, Role.Sim, buildSimInstanceConfig(otherCfg))
+    const altPersistence = Persistence.create(memoryStorage(), otherCfg, altInst)
+    const altTimer = manualTimer()
+    const altHost = createSimHostFromInstance(
+      wrapEngineInstance(altInst),
+      { clock: { now: () => 0 }, timer: altTimer.services },
+      altPersistence,
+    )
+    expect(altInst.call1(altInst.x.sim_connect, 0)).toBe(Status.Ok)
+    altHost.stepTick(1)
+    await admitRoll(altInst, 1)
+    altHost.stepTick(1)
+    await admitRoll(altInst, 2)
+    altHost.stepTick(1)
+    expect(altHost.hash()).not.toBe(wantHash)
+
+    // The manifest's own `params` (and the whole manifest) is unchanged, byte for byte.
+    const manifestAfter = await storage.read(keys.manifest)
+    expect(manifestAfter).toEqual(manifestBefore)
+  })
+
   /** Builds a world with two real logged frames (tick 1: Joined+Connected; tick 2: an admitted
    * `Roll`), returning the storage plus enough to compute exact cut points on the final frame. */
   async function buildTwoFrameWorld(): Promise<{

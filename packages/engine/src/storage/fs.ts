@@ -16,7 +16,10 @@ import { type FileHandle, mkdir, open, readdir, readFile, rename, rm } from 'nod
 import { dirname, join } from 'node:path'
 import type { Storage } from './types.js'
 
-const BUFFER_BYTES = 1024 * 1024
+/** Test-only (`createFsStorageDebug`, below): one preallocated buffer's own byte capacity, exported
+ * so a test can genuinely fill and rotate both pooled buffers without guessing the constant. */
+export const FS_BUFFER_BYTES = 1024 * 1024
+const BUFFER_BYTES = FS_BUFFER_BYTES
 
 /** A per-process counter for temp-file uniqueness (`write`'s own atomic-replace path): no ambient
  * randomness or time outside `src/clock.ts`/`src/test/**` (`.claude/rules` via `lint.no_ambient_
@@ -42,10 +45,12 @@ class LogAppender {
   fsBufferGrows = 0
   private readonly path: string
   private readonly onErr: (e: unknown) => void
+  private readonly debug: FsStorageDebug | undefined
 
-  constructor(path: string, onErr: (e: unknown) => void) {
+  constructor(path: string, onErr: (e: unknown) => void, debug: FsStorageDebug | undefined) {
     this.path = path
     this.onErr = onErr
+    this.debug = debug
     this.pooled = [Buffer.allocUnsafe(BUFFER_BYTES), Buffer.allocUnsafe(BUFFER_BYTES)]
     this.free = [this.pooled[1]]
     this.front = this.pooled[0]
@@ -115,6 +120,10 @@ class LogAppender {
   }
 
   private async writeToDisk(buf: Buffer, len: number): Promise<void> {
+    // Test-only: a caller can hold this write pending (`FsStorageDebug.gate`) to force two flushes
+    // genuinely in flight at once, so `fs_pool_exhaustion_forces_a_grown_buffer` exercises the real
+    // exhaustion branch instead of only asserting a counter that never had a chance to move.
+    if (this.debug) await this.debug.gate
     const handle = await this.ensureOpen()
     await handle.write(buf, 0, len)
     await handle.datasync()
@@ -176,12 +185,17 @@ async function listKeys(dir: string, prefix: string): Promise<string[]> {
  * own `debug` option, below. */
 export interface FsStorageDebug {
   fsBufferGrows(): number
+  /** Test-only: every real `fs.write`/`fdatasync` awaits this before starting. Defaults to an
+   * already-resolved promise (no delay); a test swaps in its own pending promise to hold one or more
+   * flushes in flight deterministically (`fs_pool_exhaustion_forces_a_grown_buffer`), then resolves
+   * it to let them proceed. Read fresh on every write, not captured once. */
+  gate: Promise<void>
 }
 
 /** A placeholder `fsStorage` fills in once it knows its own appenders (test-only helper, so a
  * caller need not hand-write the placeholder's own body). */
 export function createFsStorageDebug(): FsStorageDebug {
-  return { fsBufferGrows: () => 0 }
+  return { fsBufferGrows: () => 0, gate: Promise.resolve() }
 }
 
 /** `engine/server/node`'s own `Storage` adapter (Seams: `fsStorage(dir: string): Storage`). One
@@ -206,7 +220,7 @@ export function fsStorage(dir: string, debug?: FsStorageDebug): Storage {
   const appenderFor = (key: string): LogAppender => {
     let a = appenders.get(key)
     if (!a) {
-      a = new LogAppender(keyPath(key), reportError)
+      a = new LogAppender(keyPath(key), reportError, debug)
       appenders.set(key, a)
     }
     return a
