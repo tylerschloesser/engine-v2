@@ -369,7 +369,17 @@ impl<G: Game> Authority<G> {
     /// `wake` is `true` from `Authority`'s own `WorldWrite` impl (apply/on_player/genesis) and
     /// `false` from `TickCx`'s (Planning decisions: "puts made through `TickCx` do not auto-wake").
     fn do_spawn(&mut self, e: G::Entity, wake: bool) -> EntityId {
-        let id = EntityId(self.store.next_entity_id());
+        let next = self.store.next_entity_id();
+        // 0022 §2: "a tick-rule spawn with no id left is an engine fault." An action-driven spawn
+        // never reaches this: the state-budget check's own id-exhaustion clause (0023 "The check")
+        // rejects the action first. Checked here, not only there, because it is `WorldWrite::spawn`
+        // (both `Authority`'s and `TickCx`'s) that would otherwise silently allocate an id with bit
+        // 31 set -- indistinguishable from a provisional one (0022 §5).
+        assert!(
+            next < EntityId::PROVISIONAL_BIT,
+            "spawn with no entity id left (0022 §2): an engine fault"
+        );
+        let id = EntityId(next);
         let scope = self.entity_scopes(id, Some(&e));
         self.write(Delta::EntityPut { id, entity: e }, scope);
         if wake {

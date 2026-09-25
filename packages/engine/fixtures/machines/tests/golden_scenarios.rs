@@ -182,3 +182,138 @@ fn machines_full_world_golden() {
         &[hash],
     );
 }
+
+/// Mirrors `golden/scenario-smelt-cycle.json` exactly (docs/plan/21b-timers-wakeups-and-tickcx.md
+/// Seams): a `Place`d machine, `Feed`d twice (one smelt cycle each -- `SMELT` is 100 ticks at the
+/// default 20 Hz), and a `PlaceSpinner`d entity ticking on the active list the whole time.
+fn script_smelt_cycle() -> Vec<(Tick, Record<Machines>)> {
+    vec![
+        (
+            Tick(1),
+            Record::Player {
+                who: PlayerId(1),
+                ev: PlayerEvent::Joined,
+            },
+        ),
+        (
+            Tick(1),
+            Record::Action {
+                who: PlayerId(1),
+                seq: 1,
+                action: Action::Place {
+                    origin: Pos { x: 2, y: 2 },
+                },
+            },
+        ),
+        (
+            Tick(1),
+            Record::Action {
+                who: PlayerId(1),
+                seq: 2,
+                action: Action::PlaceSpinner {
+                    origin: Pos { x: 10, y: 10 },
+                },
+            },
+        ),
+        (
+            Tick(2),
+            Record::Action {
+                who: PlayerId(1),
+                seq: 3,
+                action: Action::Feed {
+                    at: Pos { x: 2, y: 2 },
+                },
+            },
+        ),
+        (
+            Tick(115),
+            Record::Action {
+                who: PlayerId(1),
+                seq: 4,
+                action: Action::Feed {
+                    at: Pos { x: 2, y: 2 },
+                },
+            },
+        ),
+    ]
+}
+
+#[test]
+fn machines_smelt_cycle_golden() {
+    let mut sim = new_sim(3, 4096);
+    // `run_script` batches same-tick entries into one `Sim::step` call (its own contract: "several
+    // entries sharing one Tick are delivered together"); pad up to `checkpointAt` afterwards.
+    let _ = run_script(&mut sim, &script_smelt_cycle());
+    let mut out = Vec::new();
+    while sim.tick().0 < 220 {
+        sim.step(&[], &mut out);
+    }
+    engine::testing::assert_golden_named(
+        env!("CARGO_MANIFEST_DIR"),
+        "golden-smelt-cycle.json",
+        &[sim.state_hash()],
+    );
+}
+
+/// Mirrors `golden/scenario-idle-world-costs-zero.json`: three placed, never-fed machines --
+/// nothing schedules a timer or an active-list entry for any of them, so `Store::encode`'s new
+/// sections (docs/plan/21b-timers-wakeups-and-tickcx.md) are present but empty at every checkpoint.
+fn script_idle_world_costs_zero() -> Vec<(Tick, Record<Machines>)> {
+    vec![
+        (
+            Tick(1),
+            Record::Player {
+                who: PlayerId(1),
+                ev: PlayerEvent::Joined,
+            },
+        ),
+        (
+            Tick(1),
+            Record::Action {
+                who: PlayerId(1),
+                seq: 1,
+                action: Action::Place {
+                    origin: Pos { x: 2, y: 2 },
+                },
+            },
+        ),
+        (
+            Tick(1),
+            Record::Action {
+                who: PlayerId(1),
+                seq: 2,
+                action: Action::Place {
+                    origin: Pos { x: 10, y: 10 },
+                },
+            },
+        ),
+        (
+            Tick(1),
+            Record::Action {
+                who: PlayerId(1),
+                seq: 3,
+                action: Action::Place {
+                    origin: Pos { x: 20, y: 20 },
+                },
+            },
+        ),
+    ]
+}
+
+#[test]
+fn machines_idle_world_costs_zero_golden() {
+    let mut sim = new_sim(4, 4096);
+    // `run_script`'s own contract only reaches the script's last `Tick` (here, `Tick(1)`); pad up
+    // to `checkpointAt` with idle steps afterwards, exactly like the JSON scenario's own runner
+    // does for the gap between its last scripted tick and `checkpointAt`.
+    let _ = run_script(&mut sim, &script_idle_world_costs_zero());
+    let mut out = Vec::new();
+    while sim.tick().0 < 30 {
+        sim.step(&[], &mut out);
+    }
+    engine::testing::assert_golden_named(
+        env!("CARGO_MANIFEST_DIR"),
+        "golden-idle-world-costs-zero.json",
+        &[sim.state_hash()],
+    );
+}

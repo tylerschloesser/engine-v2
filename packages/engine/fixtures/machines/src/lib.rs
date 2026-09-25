@@ -1,26 +1,63 @@
-//! Fixture game `fx-machines` (docs/plan/21-entities-and-timers.md): a 2x2 multi-tile entity that
-//! exercises footprint occupancy, footprint-scoped delta/snapshot delivery and the state-budget
-//! check end to end -- the things M21 makes real that no earlier fixture's 1x1 entities ever
-//! could.
+//! Fixture game `fx-machines` (docs/plan/21-entities-and-timers.md, docs/plan/
+//! 21b-timers-wakeups-and-tickcx.md): a 2x2 multi-tile entity that exercises footprint occupancy,
+//! footprint-scoped delta/snapshot delivery, the state-budget check and (M21b) the timer wheel,
+//! wake queue and an active-list "Spinner" end to end.
 //!
 //! Handlers: `Place { origin }` spawns a `Machine` anchored at `origin` (its footprint is the
 //! prototype's 2x2, 0024 §7) after asking the tiles it would cover for `NOT_BUILDABLE` (0007 §6:
 //! "the same bit query names no tile type" -- water and another machine share the bit, so this
 //! handler names neither). `Feed { at }`/`Remove { at }` look an entity up by position through the
 //! now-real `WorldRead::entity_at` (M21); `Move { at, to }` relocates one, checked the same way
-//! `Place` is. No tick rule yet (21b: timers, wake-ups, the `done_at` field this milestone only
-//! stores).
+//! `Place` is.
 //!
 //! `growth`: `Place` declares `Growth::entities(1)`; every other handler declares `Growth::NONE`
 //! (none of them ever adds an entity or a modified tile -- `Move`/`Feed` overwrite an existing
 //! entity's whole value, `Remove` only removes).
+//!
+//! **Tick rule (M21b)**: `Feed` sets `fed = true` and (through `Authority`'s auto-wake, being an
+//! apply-time put) queues the entity for the same tick's `next_woken()` -- the "put itself is the
+//! wake-up" pattern (docs/plan/21b-timers-wakeups-and-tickcx.md Planning decisions), since `apply`
+//! has no `wake_at` of its own to call. Woken + fed + idle (`done_at == 0`, i.e. not already
+//! smelting) schedules `done_at = now + SMELT` via `wake_at`; due pops from the timer wheel,
+//! `count += 1`, then sleeps (`fed = false`, `done_at = 0`) until fed again -- one smelt cycle per
+//! `Feed`. A second, non-smelting kind of `Machine` (`is_spinner: true`, spawned once at genesis)
+//! never touches the timer wheel at all: its first `next_woken()` visit puts it on the `SPINNER`
+//! active list, and every following tick the rule scans that list and toggles `lit` once its own
+//! per-tick accumulator reaches `SPIN_PERIOD` ticks -- the integer-accumulator pattern of 0006
+//! ("Rates and continuous quantities"), demonstrating the "always active, never sleeps" half of
+//! 0007 §7 alongside the smelter's "sleep until woken" half.
 
 use engine::game::{
     Game, Growth, PlayerEvent, PlayerId, PresenceTable, TickCx, Unknown, WorldRead, WorldWrite,
 };
-use engine::world::{ChunkCoord, Footprint, PrototypeId, Registry, Tile, TilePos, TraitSet};
+use engine::time::{Tick, TickRate, Ticks};
+use engine::world::{
+    ChunkCoord, Footprint, PrototypeId, Registry, SystemId, Tile, TilePos, TraitSet,
+};
 use engine::worldgen::Worldgen;
 use ts_rs::TS;
+
+/// 0006: "a furnace computes its finish tick and sleeps" (0007 §7). At the default 20 Hz, 100
+/// ticks.
+pub const SMELT: Ticks = TickRate::HZ_20.secs(5);
+
+/// The `Spinner`'s own toggle period (0006 "Rates and continuous quantities": the integer-
+/// accumulator pattern). At the default 20 Hz, 10 ticks.
+pub const SPIN_PERIOD: Ticks = TickRate::HZ_20.millis(500);
+
+/// The active-list system the Spinner registers with (docs/plan/21b-timers-wakeups-and-tickcx.md
+/// Scope: "a `Spinner` prototype lives on an active list"), set once by `Machines::register`
+/// (`Store::new`, before any tick runs) and read by `Machines::tick`. `Registry::system` always
+/// hands out the same sequential id (`0`, the only system this fixture ever registers) for any
+/// `Registry` it is called on, so `OnceLock` -- set at most once per process, read many -- holds the
+/// one value every `Store<Machines>` in this process agrees on, with no `unsafe`.
+static SPINNER_SYS: std::sync::OnceLock<SystemId> = std::sync::OnceLock::new();
+
+fn spinner_sys() -> SystemId {
+    *SPINNER_SYS
+        .get()
+        .expect("Machines::register must run before Machines::tick")
+}
 
 /// A tile position, plain data (`Action` must stay `Codec + TS`; not `engine::world::TilePos`,
 /// which does not derive `TS`). `#[ts(export)]`: `Action`'s own two struct-variant fields need a
@@ -54,10 +91,25 @@ pub const MACHINE_FOOTPRINT: Footprint = Footprint { w: 2, h: 2 };
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, TS)]
 #[ts(export)]
 pub enum Action {
-    Place { origin: Pos },
-    Feed { at: Pos },
-    Move { at: Pos, to: Pos },
-    Remove { at: Pos },
+    Place {
+        origin: Pos,
+    },
+    Feed {
+        at: Pos,
+    },
+    Move {
+        at: Pos,
+        to: Pos,
+    },
+    Remove {
+        at: Pos,
+    },
+    /// M21b: spawns a `Spinner` (`Machine.is_spinner = true`) at `origin`, checked the same way
+    /// `Place` is. Appended last, not inserted among the M21 variants, so every pre-existing
+    /// encoded `Action` value (goldens included) keeps its own postcard variant index.
+    PlaceSpinner {
+        origin: Pos,
+    },
 }
 
 /// `From<Unknown>` (0003: "add a `?` to each read and `impl From<Unknown> for Reject`").
@@ -81,14 +133,27 @@ impl From<Unknown> for Reject {
 }
 
 /// Replicated whole-value entity (0003: "plain data, no `Vec`"), anchored at its own `origin`
-/// (`Game::anchor`, 0024 §7). `fed`/`done_at`/`count` are 21b's own fields to actually act on
-/// (the timer wheel, wake-ups): this milestone only stores them.
+/// (`Game::anchor`, 0024 §7). Two kinds share this one type (0022 §3: "`G::Entity` is a single
+/// type"): an ordinary smelter (`fed`/`done_at`/`count`, the timer wheel) and a `Spinner`
+/// (`is_spinner`/`lit`/`spin_acc`, an active list) -- `is_spinner` selects which fields the tick
+/// rule (`Machines::tick`) reads.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Machine {
     pub origin: Pos,
+    /// Set by `Feed`; cleared once its smelt cycle completes (`Machines::tick`'s "due" handler).
     pub fed: bool,
+    /// The tick this machine's current smelt cycle finishes, or `0` if idle (not currently
+    /// smelting) -- `0` doubles as "idle" because a real `wake_at` never targets tick 0 (genesis
+    /// runs at tick 0, before any timer can be scheduled).
     pub done_at: u32,
     pub count: u32,
+    /// `true` for a `Spinner` (spawned by `Action::PlaceSpinner`): never smelts, lives on the
+    /// active list instead of the timer wheel.
+    pub is_spinner: bool,
+    /// The Spinner's own toggled field.
+    pub lit: bool,
+    /// The Spinner's per-tick integer accumulator (0006 "Rates and continuous quantities").
+    pub spin_acc: u32,
 }
 
 /// No per-player state this fixture needs yet.
@@ -141,6 +206,11 @@ impl Game for Machines {
         // The only prototype: `Machine`'s own 2x2, sharing the water bit (module doc comment).
         let id = r.add_prototype(NOT_BUILDABLE, MACHINE_FOOTPRINT);
         debug_assert_eq!(id, PrototypeId(0));
+        // M21b: the Spinner's own active-list system (`spinner_sys`, module doc comment). `set`
+        // is a no-op after the first `Store::new` in this process -- `Registry::system` always
+        // hands out the same sequential id, so every later call would only try to store the exact
+        // same value again.
+        let _ = SPINNER_SYS.set(r.system("spinner"));
     }
 
     fn prototype(_e: &Machine) -> PrototypeId {
@@ -170,9 +240,19 @@ impl Game for Machines {
                 }
                 w.spawn(Machine {
                     origin: *origin,
-                    fed: false,
-                    done_at: 0,
-                    count: 0,
+                    ..Default::default()
+                });
+                Ok(())
+            }
+            Action::PlaceSpinner { origin } => {
+                let r: &dyn WorldRead<Machines> = w;
+                if blocked(r, *origin)? {
+                    return Err(Reject::Blocked);
+                }
+                w.spawn(Machine {
+                    origin: *origin,
+                    is_spinner: true,
+                    ..Default::default()
                 });
                 Ok(())
             }
@@ -202,12 +282,58 @@ impl Game for Machines {
         }
     }
 
-    /// No v1 rule needs a tick rule yet (21b: timers, wake-ups, active lists).
-    fn tick(_cx: &mut TickCx<'_, Self>) {}
+    /// M21b tick rule (module doc comment): `next_woken` starts a smelt cycle for a freshly fed,
+    /// idle machine or puts a freshly placed Spinner on its active list; `next_due` finishes a
+    /// smelt cycle (`count += 1`, then sleep until fed again); the Spinner active list toggles
+    /// `lit` on its own per-tick accumulator.
+    fn tick(cx: &mut TickCx<'_, Self>) {
+        while let Some(id) = cx.next_woken() {
+            let Some(m) = cx.entity(id).ok().flatten().copied() else {
+                continue; // despawned before this tick got to it.
+            };
+            if m.is_spinner {
+                cx.activate(spinner_sys(), id);
+                continue;
+            }
+            if m.fed && m.done_at == 0 {
+                let mut m = m;
+                m.done_at = (cx.tick() + SMELT).0;
+                cx.wake_at(id, Tick(m.done_at));
+                cx.put_entity(id, m);
+            }
+        }
+
+        while let Some(id) = cx.next_due() {
+            let Some(mut m) = cx.entity(id).ok().flatten().copied() else {
+                continue;
+            };
+            m.count += 1;
+            // Sleep until fed again (module doc comment: "one smelt cycle per `Feed`").
+            m.fed = false;
+            m.done_at = 0;
+            cx.put_entity(id, m);
+        }
+
+        let sys = spinner_sys();
+        for i in 0..cx.active_len(sys) {
+            let Some(id) = cx.active_at(sys, i) else {
+                continue; // a tombstoned slot, not yet compacted (0007 §7).
+            };
+            let Some(mut m) = cx.entity(id).ok().flatten().copied() else {
+                continue;
+            };
+            m.spin_acc += 1;
+            if m.spin_acc >= SPIN_PERIOD.0 {
+                m.spin_acc -= SPIN_PERIOD.0;
+                m.lit = !m.lit;
+            }
+            cx.put_entity(id, m);
+        }
+    }
 
     fn growth(a: &Action) -> Option<Growth> {
         match a {
-            Action::Place { .. } => Some(Growth::entities(1)),
+            Action::Place { .. } | Action::PlaceSpinner { .. } => Some(Growth::entities(1)),
             Action::Feed { .. } | Action::Move { .. } | Action::Remove { .. } => Some(Growth::NONE),
         }
     }

@@ -90,3 +90,9 @@ required-features = ["testing"]
 [[test]]
 name = "timers_wakeups"
 required-features = ["testing"]
+
+# `engine::testing::testkit::set_next_entity_id` (feature `testing`), same reasoning as `codec`
+# above.
+[[test]]
+name = "state_budget_tick"
+required-features = ["testing"]
