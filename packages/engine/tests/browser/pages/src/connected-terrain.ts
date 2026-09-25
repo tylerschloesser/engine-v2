@@ -25,7 +25,7 @@ import type { RendererDevice } from '../../../../src/render/device.ts'
 import { initDevice } from '../../../../src/render/device.ts'
 import type { FrameUniformValues, TerrainRenderer } from '../../../../src/render/terrain.ts'
 import { createTerrainRenderer } from '../../../../src/render/terrain.ts'
-import { createUploadDrain } from '../../../../src/render/upload.ts'
+import { createUploadDrain, type UploadDrain } from '../../../../src/render/upload.ts'
 import { RingConsumer } from '../../../../src/sab/ring.ts'
 import {
   netCounters,
@@ -78,6 +78,7 @@ let renderer: TerrainRenderer | undefined
 let client: Client | undefined
 let real: RealFrameLoop | undefined
 let clock: ManualClock | undefined
+let bgUploadDrain: UploadDrain | undefined
 
 window.__init = async () => {
   const canvas = document.createElement('canvas')
@@ -129,15 +130,20 @@ window.__init = async () => {
   })
   attachViewportTestHooks(client, { viewport: real.viewport, loop: real.loop })
 
-  // `engine/test.untilQuiescent` (`stepTick`'s own trailing call) waits for *every* ring,
-  // `uploadRing` included, to reach `pushed === popped` -- and nothing else here drives a render
-  // loop that would drain it (`terrain-client.ts`'s own precedent, docs/plan/
-  // 09-renderer-terrain.md Deviations "Steps 5-7"). A background drain into the real renderer.
+  // `engine/test.untilQuiescent` no longer waits on `uploadRing` at all (docs/plan/
+  // 20c-client-ack-freeze-under-untilquiescent.md: it is a page-owned ring, never a worker's) --
+  // draining it is entirely this page's own job. The background interval keeps the renderer's
+  // page/indirection textures converged for anyone just watching the page run; `__advance` (below)
+  // additionally drains to empty, synchronously, every time, so a caller that reads pixels right
+  // after `__advance` resolves (`overlay_tile_reaches_screen`) never races the interval's own
+  // 16ms cadence -- found live, M20c's own gate: 2/8 quiet repeats of the fast suite failed
+  // `overlay_tile_reaches_screen` once `untilQuiescent` stopped incidentally giving the interval
+  // enough real time to fire first.
   const uploadConsumer = new RingConsumer(client.uploadRing)
-  const bgUploadDrain = createUploadDrain(uploadConsumer, renderer)
+  bgUploadDrain = createUploadDrain(uploadConsumer, renderer)
   setInterval(() => {
     for (;;) {
-      const { records } = bgUploadDrain.drain(64)
+      const { records } = (bgUploadDrain as UploadDrain).drain(64)
       if (records === 0) break
     }
   }, 16)
@@ -161,6 +167,15 @@ window.__advance = async (x, y, tilesAcross, ticks) => {
   setCamera(c, { x, y, tilesAcross })
   stepFrame(c, 2000)
   await stepTick(c, ticks)
+  // Drain to empty, deterministically, not once (`gc-connected-terrain.ts`'s own
+  // `drainUploadsFully` precedent): `stepTick`'s own `untilQuiescent` no longer waits on
+  // `uploadRing`, so a caller that needs the renderer caught up before reading pixels must ask for
+  // that itself.
+  const drain = bgUploadDrain as UploadDrain
+  for (;;) {
+    const { records } = drain.drain(1_000_000)
+    if (records === 0) break
+  }
   return netCounters(c)
 }
 
