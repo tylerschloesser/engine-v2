@@ -269,6 +269,46 @@ impl<G: Game> Authority<G> {
         &self.store
     }
 
+    /// A copy of the host driver's own `SimRng` state (`SimRng` is `Copy`): M22's snapshot writer
+    /// needs it alongside `Store::encode`'s bytes, since `Store` itself holds neither `tick` nor
+    /// `SimRng` (docs/plan/12-store-and-game-trait.md Deviations). Gated like every other native
+    /// testing-only accessor here (`store_mut`, `wake_at_for_test`, ...): a game fixture's own
+    /// native tests build a snapshot manually the same way `crate::testing::replay`'s `heavy` does
+    /// internally.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn rng(&self) -> SimRng {
+        self.rng
+    }
+
+    /// The read side of [`Authority::rng`]/[`Authority::from_snapshot`]: rebuilds an `Authority`
+    /// from a decoded snapshot's pieces (M22, docs/plan/22-persistence-log-and-snapshots.md
+    /// Non-scope: "loading a stored world ... M22b" -- this is the container-level piece only,
+    /// used natively by `testing::replay`/`testing::heavy` and this module's own tests; nothing
+    /// here touches `Storage`, a manifest, or identity validation). Budgets fall back to
+    /// [`Authority::new`]'s own defaults, exactly as a fresh `Authority` would have, since a
+    /// snapshot's container carries no budget fields of its own (0005 Formats) -- a caller that
+    /// needs the original world's budgets calls [`Authority::set_budget`] afterward, the same way
+    /// `Sim::genesis` does.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn from_snapshot(store: Store<G>, rng: SimRng, tick: Tick) -> Self {
+        Authority {
+            store,
+            rng,
+            tick,
+            changes: ChangeLog::new(),
+            entities_in_scratch: RefCell::new(Vec::new()),
+            max_entities: 262_144,
+            max_modified_tiles: 1_048_576,
+            max_action_growth: 4_096,
+            growth_violations: 0,
+            entities_visited_per_tick: 0,
+            apply_rollbacks: 0,
+            journal: UndoJournal::new(),
+            #[cfg(any(test, feature = "testing"))]
+            journal_disabled_for_test: false,
+        }
+    }
+
     /// Mutable store access (M21, testkit-only in practice): `testkit::fill_world`/`set_next_
     /// entity_id` need to reach `Store` directly to build a large world without hundreds of
     /// thousands of individual `Sim::step` calls.
