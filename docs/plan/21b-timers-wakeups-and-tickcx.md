@@ -65,6 +65,66 @@ none
 
 ## Deviations
 
+**Fix round 1 (post-report, a review agent's findings; base commit `7450e33`).**
+
+1. **Real rollback defect, production/release builds.** `Store::apply`'s `EntityGone` arm cancels a
+   despawned entity's timer and every active-list membership for real (0007 §7); the journal's own
+   `UndoEntry::Entity` only ever recorded the entity's *value*, so rolling back a despawn restored
+   the entity but not its timer or active membership. Fixed: `UndoEntry::Entity` gained `old_timer:
+   Option<Tick>` and `old_active_mask: u16` (`sim::timers::TimerWheel::tick_of`, `sim::active::
+   ActiveLists::active_mask`/`restore_mask`, both non-mutating-peek/idempotent-restore additions),
+   captured alongside the entity value on first touch and replayed after it on rollback.
+   `restore_mask` reactivates through the ordinary `ActiveList::activate`, which -- since a rollback
+   runs synchronously within the same `Sim::step` call that despawned the entity, strictly before
+   the next fixed point's own compaction -- restores a still-tombstoned slot **in place** rather
+   than appending, so iteration order and encoded bytes come back identical, not merely "an entry
+   with the right id somewhere."
+   - Extended `journal_rolls_back_store_indexes_wakes_counts` (via a shared `setup()` that now also
+     gives the entity a live timer and active membership through two new test-only `Authority`
+     methods, `wake_at_for_test`/`activate_for_test`) to assert `active_at`, not only `active_len`
+     (the reviewer's own finding: length alone passes even with a tombstoned slot), and to compare
+     the rolled-back `Authority`'s full `state_hash()`/`encode()` bytes against a second `Authority`
+     built from the identical `setup()` and never touched by the misbehaving apply at all -- one
+     assertion covering every section, present and future, not just the ones this fix round
+     happened to think of.
+   - New `journal_rollback_of_a_fresh_spawn_burns_the_id`: the one case deliberately kept *out* of
+     the hash-equality test, because it is not actually reversible by design -- a rolled-back fresh
+     spawn correctly leaves `next_entity_id` advanced (0022 §1 "monotonic and never reused"), so
+     comparing full state against a "never touched" reference would fail for a reason that is not a
+     defect. Discovered by running the extended test with the old script (which still spawned a
+     fresh entity) and finding the hash comparison genuinely, correctly red for this reason; split
+     into its own test rather than special-cased away.
+   - Anti-vacuity, both reverted after: disabling the `old_timer` restore ->
+     `"the timer must be restored, not merely absent from a count that happens to match" left: 0
+     right: 1`; disabling the `old_active_mask` restore -> `"restored in its original slot, not
+     tombstoned and not appended as a new entry" left: None right: Some(EntityId(1))`.
+   - **The general question, answered.** Enumerated every `WorldWrite` method `apply` can reach and
+     every `Store::apply` side effect; two further gaps found, neither fixed (out of this fix
+     round's scope, recorded in ADR 0037 §1):
+     - `put_player` for a `who` with no existing slot creates one the journal cannot remove on
+       rollback (`Delta` has no "unset a player" variant; pre-existing, not a fix-round-1
+       regression, and already flagged in the code before this round).
+     - `WorldWrite::rng()` draws advance `SimRng`'s own state permanently; `SimRng` lives in
+       `Authority`, not `Store`, so it is outside everything this journal touches. Deterministic
+       (replay draws the same numbers at the same point) but not atomic the way a rejected `apply`'s
+       *store* writes now are.
+2. **Wake-queue encode-coverage gap.** `timers_survive_encode_decode` encoded with `woken_next`
+   empty (nothing in that test's own script ever leaves an entry there at the encode point), so the
+   wake-queue section of `Store::encode`/`decode` only ever round-tripped the empty case. Fixed by
+   spawning one more entity directly through `Authority` (an apply-time put outside any `step()`
+   call, so its own auto-wake push is still sitting in `woken_next`, unswapped and undropped, at the
+   moment of encoding) and asserting `wake_next_len() == 1` on both sides of the round trip.
+3. **ADR 0037 updated**, not superseded (still this milestone's own, not yet accepted): its Decision
+   §1 now names the timer/active-list restoration explicitly and its own enumerated-gaps paragraph;
+   its Measured §3 carries both the original and the re-measured overhead (2.5% -> 6-8% across three
+   runs, still comfortably under 0023's 10% bar -- the two extra `Store` reads `capture_pre_image`
+   now performs per entity touch are real, measurable cost, not noise).
+
+**Measured (fix round 1).** `cargo nextest run --workspace --features engine/testing,testing`: 475
+tests, 475 passed, 1 skipped (`slow_apply_journal_overhead`). Full `pnpm test`: rust/unit/wasm/
+browser all green (rust 475, unit 232, wasm 60, browser 185). `pnpm lint`: biome/rustfmt/clippy/tsc
+all green. `slow_apply_journal_overhead` re-run three times post-fix: see ADR 0037 §3 for the table.
+
 **Seam shapes as landed** (`packages/engine/crates/engine/src/`):
 - `sim/` is now a directory (was `sim.rs`): `sim/mod.rs` (`Sim<G>`, unchanged Provides) plus three new
   `pub(crate)`-only siblings `sim/timers.rs` (`TimerWheel`), `sim/wake.rs` (`WakeQueue`),

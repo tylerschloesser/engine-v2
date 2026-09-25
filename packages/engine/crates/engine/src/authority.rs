@@ -379,6 +379,22 @@ impl<G: Game> Authority<G> {
         self.apply_rollbacks += 1;
     }
 
+    /// Test-only, `TickCx`-free setup (docs/plan/21b-timers-wakeups-and-tickcx.md fix round 1):
+    /// schedules `id`'s timer directly against `Authority`, for building a pre-apply baseline whose
+    /// later despawn (inside a misbehaving, journaled `apply`) has a real timer to cancel and a
+    /// rollback has to restore. `TickCx::wake_at` is the production path; this is a shortcut only a
+    /// test that never runs a real tick needs.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn wake_at_for_test(&mut self, id: EntityId, at: Tick) {
+        self.store.timer_wake_at(id, at);
+    }
+
+    /// The active-list sibling of [`Authority::wake_at_for_test`].
+    #[cfg(any(test, feature = "testing"))]
+    pub fn activate_for_test(&mut self, sys: SystemId, id: EntityId) {
+        self.store.active_activate(sys, id);
+    }
+
     /// The host's per-player last-processed `seq` (0004), updated through `Store::apply` --
     /// `Store::apply` is the only mutator of replicated state (`crate::store`'s own doc comment)
     /// -- but outside [`Authority::write`]/the [`ChangeLog`]: 0004 delivers acks to a client over
@@ -714,6 +730,13 @@ enum UndoEntry<G: Game> {
     Entity {
         id: EntityId,
         old: Option<G::Entity>,
+        /// `id`'s timer before this `apply` touched it, if any (fix round 1: `Store::apply`'s own
+        /// `EntityGone` arm cancels a despawned entity's timer as a side effect the entity *value*
+        /// alone cannot reconstruct).
+        old_timer: Option<Tick>,
+        /// Ditto, for active-list membership: a bitmask, bit `i` = system `i` (0007 §7: "despawn
+        /// deactivates everywhere").
+        old_active_mask: u16,
     },
     Player {
         who: PlayerId,
@@ -792,6 +815,8 @@ impl<G: Game> UndoJournal<G> {
                     self.entries.push(UndoEntry::Entity {
                         id: *id,
                         old: store.entity(*id).cloned(),
+                        old_timer: store.timer_tick_of(*id),
+                        old_active_mask: store.active_mask(*id),
                     });
                 }
             }
@@ -829,19 +854,38 @@ impl<G: Game> UndoJournal<G> {
     }
 
     /// Replays every recorded entry backwards against `store`, undoing exactly this `apply` call's
-    /// writes and wake-queue push. `store.apply` on the inverse `Delta` also restores every side
-    /// effect `Store::apply` itself derives (the `ChunkIndex`, `entity_count`/`modified_tile_count`,
-    /// and -- since `Store::apply`'s own `EntityGone` arm cancels them -- the timer/active-list
-    /// registrations of an entity a rolled-back spawn had woken): the journal only has to remember
-    /// enough to reconstruct the *value*, never the derived bookkeeping.
+    /// writes and wake-queue push. `store.apply` on the inverse `Delta` restores every side effect
+    /// `Store::apply` itself *derives* from the entity table for free (`ChunkIndex`,
+    /// `entity_count`/`modified_tile_count`) -- but the timer wheel and active lists are sim state,
+    /// not derived (0007 §7), so a despawn's own cancellation of them (`Store::apply`'s `EntityGone`
+    /// arm) needs its own explicit undo, `UndoEntry::Entity`'s `old_timer`/`old_active_mask` (fix
+    /// round 1: the entity *value* alone cannot reconstruct "this id used to have a timer").
     fn rollback(&mut self, store: &mut Store<G>) {
         for entry in self.entries.drain(..).rev() {
             match entry {
                 UndoEntry::Tile { pos, old } => store.apply(&Delta::Tile { pos, tile: old }),
-                UndoEntry::Entity { id, old } => match old {
-                    Some(e) => store.apply(&Delta::EntityPut { id, entity: e }),
-                    None => store.apply(&Delta::EntityGone { id }),
-                },
+                UndoEntry::Entity {
+                    id,
+                    old,
+                    old_timer,
+                    old_active_mask,
+                } => {
+                    match old {
+                        Some(e) => store.apply(&Delta::EntityPut { id, entity: e }),
+                        None => store.apply(&Delta::EntityGone { id }),
+                    }
+                    // Restore what `Store::apply`'s own `EntityGone` arm may have cancelled as a
+                    // side effect (0007 §7): the entity value alone does not carry this state, so
+                    // it needs its own explicit undo (fix round 1). A harmless no-op when nothing
+                    // was actually cancelled (`old_timer: None`, `old_active_mask: 0`) or when `old`
+                    // was `None` (a fresh spawn this apply made, which never had either).
+                    if let Some(tick) = old_timer {
+                        store.timer_wake_at(id, tick);
+                    }
+                    if old_active_mask != 0 {
+                        store.restore_active_mask(id, old_active_mask);
+                    }
+                }
                 UndoEntry::Player { who, old } => {
                     if let Some(p) = old {
                         store.apply(&Delta::Player { who, state: p });

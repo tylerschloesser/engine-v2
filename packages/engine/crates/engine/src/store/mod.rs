@@ -517,6 +517,12 @@ impl<G: Game> Store<G> {
         self.timers.next_due(now)
     }
 
+    /// The undo journal's own pre-image capture (docs/plan/21b-timers-wakeups-and-tickcx.md fix
+    /// round 1): `id`'s current timer, without removing it.
+    pub(crate) fn timer_tick_of(&self, id: EntityId) -> Option<Tick> {
+        self.timers.tick_of(id)
+    }
+
     pub(crate) fn active_activate(&mut self, sys: SystemId, id: EntityId) {
         self.active.activate(sys, id);
     }
@@ -535,6 +541,17 @@ impl<G: Game> Store<G> {
 
     pub(crate) fn active_compact_all(&mut self) {
         self.active.compact_all();
+    }
+
+    /// The undo journal's own pre-image capture / rollback (docs/plan/
+    /// 21b-timers-wakeups-and-tickcx.md fix round 1): which systems `id` is truly active in right
+    /// now, and restoring it to exactly that set.
+    pub(crate) fn active_mask(&self, id: EntityId) -> u16 {
+        self.active.active_mask(id)
+    }
+
+    pub(crate) fn restore_active_mask(&mut self, id: EntityId, mask: u16) {
+        self.active.restore_mask(id, mask);
     }
 
     /// The one host-side `Err(Unknown)` for a missing player (docs/plan/12-store-and-game-trait.md

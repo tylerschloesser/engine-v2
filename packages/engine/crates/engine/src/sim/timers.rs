@@ -93,6 +93,13 @@ impl TimerWheel {
         self.by_entity.len()
     }
 
+    /// Non-mutating peek (the undo journal's own pre-image capture, docs/plan/
+    /// 21b-timers-wakeups-and-tickcx.md fix round 1): `id`'s current timer tick, if any, without
+    /// removing it.
+    pub(crate) fn tick_of(&self, id: EntityId) -> Option<Tick> {
+        self.by_entity.get(&id).copied()
+    }
+
     /// `Store::write_canonical`/`hash_state`: key order (docs/plan/21b-timers-wakeups-and-tickcx.md
     /// Scope "timers (key order)") -- the wheel's own bucket order, then each bucket's own sorted
     /// order, which together are exactly `(Tick, EntityId)` ascending.

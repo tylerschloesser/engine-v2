@@ -3,7 +3,9 @@
 //! lists"). `activate`/`deactivate` are idempotent; a removal during the current tick's iteration
 //! is a tombstone (the slot becomes `None`, `active_len` unchanged) so indices already handed out
 //! this tick stay valid, and compaction (physically dropping tombstones, closing the gaps) happens
-//! only at the next fixed point (`Authority::end_tick`, alongside the wake queue's own swap).
+//! only at the *next* fixed point (`Authority::begin_tick`, alongside the wake queue's own swap --
+//! run before that tick's own `G::tick`, so indices are only ever observed stable or compacted,
+//! never mid-shift).
 
 use std::collections::BTreeMap;
 
@@ -39,6 +41,14 @@ impl ActiveList {
             self.items[idx] = None;
         }
         // Not present at all: idempotent no-op.
+    }
+
+    /// Truly active right now: present and not a pending (uncompacted) tombstone. The undo
+    /// journal's own pre-image capture (docs/plan/21b-timers-wakeups-and-tickcx.md fix round 1).
+    fn is_active(&self, id: EntityId) -> bool {
+        self.index_of
+            .get(&id)
+            .is_some_and(|&idx| self.items[idx].is_some())
     }
 
     fn len(&self) -> usize {
@@ -138,16 +148,44 @@ impl ActiveLists {
         self.systems[sys.index()].at(i)
     }
 
-    /// `Authority::end_tick`: every system's own tombstones, in one pass.
+    /// `Authority::begin_tick`: every system's own tombstones from the *previous* tick, in one pass.
     pub(crate) fn compact_all(&mut self) {
         for sys in &mut self.systems {
             sys.compact();
         }
     }
 
+    /// Every system `id` is truly active in right now, as a bitmask (bit `i` = system `i`) --
+    /// `SystemId::MAX` is 16, so this always fits a `u16` with room to spare. The undo journal's own
+    /// pre-image capture (docs/plan/21b-timers-wakeups-and-tickcx.md fix round 1): `Store::apply`'s
+    /// `EntityGone` arm deactivates every system unconditionally, so a rolled-back despawn has to
+    /// know which ones to restore.
+    pub(crate) fn active_mask(&self, id: EntityId) -> u16 {
+        let mut mask = 0u16;
+        for (i, sys) in self.systems.iter().enumerate() {
+            if sys.is_active(id) {
+                mask |= 1 << i;
+            }
+        }
+        mask
+    }
+
+    /// The undo journal's own rollback: re-activates `id` in every system named by `mask`. Each
+    /// call goes through the ordinary [`ActiveList::activate`], which restores a still-tombstoned
+    /// (not yet compacted) slot in place rather than appending -- exactly right here, since a
+    /// rollback runs synchronously within the same `Sim::step` call that despawned `id`, strictly
+    /// before the next fixed point's own compaction ever gets a chance to run.
+    pub(crate) fn restore_mask(&mut self, id: EntityId, mask: u16) {
+        for (i, sys) in self.systems.iter_mut().enumerate() {
+            if mask & (1 << i) != 0 {
+                sys.activate(id);
+            }
+        }
+    }
+
     /// `Store::write_canonical`/`hash_state`: system order, then each system's own insertion order
     /// (docs/plan/21b-timers-wakeups-and-tickcx.md Scope). Called only between ticks (after
-    /// `Authority::end_tick`'s own compaction), so no tombstone is ever observed here in practice --
+    /// `Authority::begin_tick`'s own compaction), so no tombstone is ever observed here in practice --
     /// `ActiveList::write_canonical` still encodes the tag byte defensively, so a mid-tick call
     /// (native tests only) round-trips exactly rather than silently dropping data.
     pub(crate) fn write_canonical(&self, sink: &mut impl ByteSink) {

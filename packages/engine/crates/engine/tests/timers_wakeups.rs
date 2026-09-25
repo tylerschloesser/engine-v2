@@ -537,6 +537,18 @@ fn timers_survive_encode_decode() {
     assert_eq!(sim.authority().store().timers_pending(), 1, "not due yet");
     assert_eq!(sim.authority().store().active_len(active_sys()), 1);
 
+    // A fourth entity, put directly through `Authority` -- an apply-time put outside any `step()`
+    // call, so its own auto-wake push is still sitting in `woken_next` at the moment of encoding
+    // below, rather than having been swapped into `now` and dropped by a further tick. Without
+    // this, the encode point below always has `woken_next` empty, and this test only ever proves
+    // the empty-wake-queue round trip (fix round 1's own gap).
+    sim.authority_mut().spawn(WEntity::default());
+    assert_eq!(
+        sim.authority().store().wake_next_len(),
+        1,
+        "the direct spawn's own auto-wake push must be sitting in woken_next"
+    );
+
     let mut bytes = Vec::new();
     sim.authority().store().encode(&mut VecSink(&mut bytes));
 
@@ -547,6 +559,11 @@ fn timers_survive_encode_decode() {
     assert_eq!(sim.authority().store().state_hash(), decoded.state_hash());
     assert_eq!(decoded.timers_pending(), 1);
     assert_eq!(decoded.active_len(active_sys()), 1);
+    assert_eq!(
+        decoded.wake_next_len(),
+        1,
+        "woken_next must round-trip non-empty too"
+    );
 }
 
 #[test]
