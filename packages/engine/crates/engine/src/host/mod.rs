@@ -132,6 +132,23 @@ fn default_max_action_growth() -> u32 {
 fn default_cache_chunks() -> u32 {
     1024
 }
+/// 0015 "256 MB per WASM instance" (`docs/spec/overview.md`): a generous sentinel meaning "no
+/// enforced arena ceiling" for a config that never sets `arenaBytes` (every pre-M21 fixture and
+/// test config, docs/plan/21-entities-and-timers.md Deviations): the init check below is then a
+/// no-op, exactly as it was before this milestone.
+fn default_arena_bytes() -> u32 {
+    u32::MAX
+}
+/// 0007 §8's own fixed estimate ("chunk indexes about 8 MiB"): not scaled by any config value,
+/// since the ADR gives no formula for it.
+const CHUNK_INDEX_ESTIMATE_BYTES: u64 = 8 * 1024 * 1024;
+/// 0007 §8's own fixed estimate ("8 MiB for lists, timers, players, and slack").
+const SLACK_ESTIMATE_BYTES: u64 = 8 * 1024 * 1024;
+/// 0007 §8's own nominal per-modified-tile cost for the memory-split sum (distinct from
+/// `TerrainStore::memory_bytes`'s own real `size_of::<(u16, Tile)>()` of 6 B: the ADR's own
+/// worked sum uses 12 B here, matching the state-budget check's nominal cost, `crate::budget::
+/// TILE_COST_BYTES`).
+const OVERLAY_ENTRY_ESTIMATE_BYTES: u64 = crate::budget::TILE_COST_BYTES as u64;
 
 /// `RegionId::Rx`'s size on the sim role (docs/plan/15b-ring-connection-and-replica-rendering.md
 /// Scope: "one whole uplink batch"): matches [`default_max_action_growth`], the same 4,096-byte
@@ -171,6 +188,12 @@ struct SimConfig<P> {
     /// 13-sim-host-tick-loop.md Deviations records this as a known gap, not a silent drop).
     #[serde(default = "default_cache_chunks")]
     cache_chunks: u32,
+    /// M21 (docs/plan/21-entities-and-timers.md Scope: "init check of the 0007 §8 memory split
+    /// against the arena with real `size_of`"): the instance's configured arena ceiling, in bytes.
+    /// Optional, defaulting to [`default_arena_bytes`] (effectively "unchecked") so every existing
+    /// config keeps working unmodified.
+    #[serde(default = "default_arena_bytes")]
+    arena_bytes: u32,
 }
 
 /// The sim-role `Instance` (Scope: "`Host<G>` (here: `Sim<G>` + warm list; M15 adds
@@ -1128,6 +1151,24 @@ where
         }
         let cfg: SimConfig<<G::Worldgen as Worldgen>::Params> =
             serde_json::from_str(game_cfg_json).map_err(|_| Status::BadConfig)?;
+
+        // M21: the 0007 §8 memory-split init check, against the real `size_of::<G::Entity>()`
+        // (not the nominal 128 B the state-budget check uses -- a game whose entity type happens
+        // to be larger is exactly what this catches). A clean startup error, not an allocator
+        // failure partway through the first tick.
+        let dims = crate::world::ChunkDims::new(G::CHUNK_BITS);
+        let cache_bytes = cfg.cache_chunks as u64 * dims.slab_bytes() as u64;
+        let entity_bytes = cfg.max_entities as u64 * size_of::<G::Entity>() as u64;
+        let overlay_bytes = cfg.max_modified_tiles as u64 * OVERLAY_ENTRY_ESTIMATE_BYTES;
+        let computed = cache_bytes
+            + entity_bytes
+            + overlay_bytes
+            + CHUNK_INDEX_ESTIMATE_BYTES
+            + SLACK_ESTIMATE_BYTES;
+        if computed > cfg.arena_bytes as u64 {
+            return Err(Status::BudgetExceedsArena);
+        }
+
         layout.region(RegionId::Rx, SIM_RX_BYTES);
         layout.region(RegionId::Tx, SIM_TX_BYTES);
         Ok(Host {

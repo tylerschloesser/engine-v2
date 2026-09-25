@@ -139,6 +139,17 @@ pub struct Authority<G: Game> {
     /// Reused across `entities_in` calls (`.claude/rules/hot-paths.md`): a `RefCell` since
     /// `WorldRead::entities_in` takes `&self`.
     entities_in_scratch: RefCell<Vec<EntityId>>,
+    /// The state budget (0007 §8), defaulted to the ADR's own baseline-phone figures so a test
+    /// that never calls [`Authority::set_budget`] still behaves like production; `Sim::genesis`
+    /// (M21) overrides all three from `WorldParams<G>` right after construction.
+    max_entities: u32,
+    max_modified_tiles: u32,
+    max_action_growth: u32,
+    /// 0023 "Honesty is audited, not trusted": bumped by the release-mode half of the growth
+    /// audit (`crate::budget`) whenever an action added more than it declared -- debug/test
+    /// builds panic instead (docs/plan/21-entities-and-timers.md Tests added: `under_declared_
+    /// growth_counts_in_release`/`_panics_in_debug`).
+    growth_violations: u64,
 }
 
 impl<G: Game> Authority<G> {
@@ -157,11 +168,59 @@ impl<G: Game> Authority<G> {
             tick: Tick(0),
             changes: ChangeLog::new(),
             entities_in_scratch: RefCell::new(Vec::new()),
+            max_entities: 262_144,
+            max_modified_tiles: 1_048_576,
+            max_action_growth: 4_096,
+            growth_violations: 0,
         }
+    }
+
+    /// Sets the state budget (M21, docs/plan/21-entities-and-timers.md): called once by
+    /// `Sim::genesis` right after construction, from `WorldParams<G>` (0009's `WorldConfig.params`,
+    /// already carried there since M13/M15 but unread until this milestone).
+    pub(crate) fn set_budget(
+        &mut self,
+        max_entities: u32,
+        max_modified_tiles: u32,
+        max_action_growth: u32,
+    ) {
+        self.max_entities = max_entities;
+        self.max_modified_tiles = max_modified_tiles;
+        self.max_action_growth = max_action_growth;
+    }
+
+    pub fn max_entities(&self) -> u32 {
+        self.max_entities
+    }
+
+    pub fn max_modified_tiles(&self) -> u32 {
+        self.max_modified_tiles
+    }
+
+    pub fn max_action_growth(&self) -> u32 {
+        self.max_action_growth
+    }
+
+    /// Cumulative count of under-declared actions the release-mode audit has caught (0023):
+    /// `engine/test`'s own counter, and this milestone's `under_declared_growth_counts_in_release`.
+    pub fn growth_violations(&self) -> u64 {
+        self.growth_violations
+    }
+
+    pub(crate) fn record_growth_violation(&mut self) {
+        self.growth_violations += 1;
     }
 
     pub fn store(&self) -> &Store<G> {
         &self.store
+    }
+
+    /// Mutable store access (M21, testkit-only in practice): `testkit::fill_world`/`set_next_
+    /// entity_id` need to reach `Store` directly to build a large world without hundreds of
+    /// thousands of individual `Sim::step` calls.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn store_mut(&mut self) -> &mut Store<G> {
+        &mut self.store
     }
 
     pub fn changes(&self) -> &[(Scopes, Delta<G>)] {

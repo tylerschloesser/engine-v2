@@ -50,6 +50,11 @@ pub enum Status {
     /// `client_chunk_hash` (docs/plan/08b-gen-workers-and-queue.md): the chunk is not resident in
     /// the client's cache. Appended, never inserted (0014's numbering rule).
     NotCached = 9,
+    /// `engine_init` (M21, docs/plan/21-entities-and-timers.md): the sim role's computed 0007 §8
+    /// memory split (state budget + cache) exceeds the instance's configured arena -- a clean
+    /// startup error instead of an allocator failure partway through the first tick. Appended,
+    /// never inserted (0014's numbering rule).
+    BudgetExceedsArena = 10,
 }
 
 /// Fixed regions in linear memory. Ids 3–8 are reserved so parallel milestones share names; each

@@ -241,6 +241,16 @@ impl<G: Game> Store<G> {
         self.next_entity_id
     }
 
+    /// Testkit-only backdoor (M21, `testkit::set_next_entity_id`): jumps the counter near 0022
+    /// §2's id-exhaustion boundary without actually spawning millions of entities
+    /// (`id_exhaustion_rejects_state_budget_full`). Never lowers it below the current value's own
+    /// invariant (`apply`'s `max(current, id+1)`, `crate::store`'s own doc comment) since nothing
+    /// but a test ever calls this on a freshly built `Store`.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn set_next_entity_id(&mut self, id: u32) {
+        self.next_entity_id = id;
+    }
+
     pub fn player(&self, who: PlayerId) -> Result<&G::Player, Unknown> {
         self.players.get(&who).map(|s| &s.state).ok_or(Unknown)
     }

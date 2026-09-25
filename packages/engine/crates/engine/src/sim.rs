@@ -4,6 +4,7 @@
 //! `Game::tick`, then advances the tick.
 
 use crate::authority::{Authority, TickCx};
+use crate::budget;
 use crate::game::{Game, PlayerEvent, PlayerId};
 use crate::time::Tick;
 use crate::world::{CacheCapacity, ChunkDims, PristineSource, TerrainStore};
@@ -133,14 +134,12 @@ impl<G: Game> Sim<G> {
             Box::new(Pristine::<G::Worldgen>::new(params.seed, params.worldgen));
         let terrain = TerrainStore::new(dims, source, CacheCapacity::Chunks(DEFAULT_CACHE_CHUNKS));
         let mut authority = Authority::new(terrain, G::Global::default(), params.seed);
-        G::genesis(&mut authority as &mut dyn WorldWrite<G>);
-        // `max_entities`/`max_modified_tiles`/`max_action_growth` are carried on `WorldParams` for
-        // a future milestone's state-budget check (Non-scope here); nothing reads them yet.
-        let _ = (
+        authority.set_budget(
             params.max_entities,
             params.max_modified_tiles,
             params.max_action_growth,
         );
+        G::genesis(&mut authority as &mut dyn WorldWrite<G>);
         Sim { authority }
     }
 
@@ -156,13 +155,34 @@ impl<G: Game> Sim<G> {
                     G::on_player(&mut self.authority as &mut dyn WorldWrite<G>, *who, *ev);
                 }
                 Record::Action { who, seq, action } => {
+                    // 0004 "State-budget check" / 0023 "The check": host only, before `apply`,
+                    // for game actions only. Reads only sim state and world params, so the live
+                    // host, replay and recovery decide identically (docs/plan/
+                    // 21-entities-and-timers.md Deviations: lives at `crate::budget`, not
+                    // `host::budget`, since this runs from here -- the deterministic core).
+                    let declared = G::growth(action);
+                    if let Err(reject) = budget::check(&self.authority, declared) {
+                        self.authority.record_ack(*who, *seq);
+                        out.push(Outcome {
+                            seq: *seq,
+                            result: Err(Rejected::Engine(reject)),
+                        });
+                        continue;
+                    }
                     let before = self.authority.changes().len();
+                    let counts_before = (
+                        self.authority.store().entity_count(),
+                        self.authority.store().modified_tile_count(),
+                    );
                     let result =
                         G::apply(&mut self.authority as &mut dyn WorldWrite<G>, *who, action);
                     assert!(
                         result.is_ok() || self.authority.changes().len() == before,
                         "a rejecting apply recorded a write (0004 Consequences): who={who:?} seq={seq}",
                     );
+                    if result.is_ok() {
+                        budget::audit(&mut self.authority, declared, counts_before);
+                    }
                     self.authority.record_ack(*who, *seq);
                     out.push(Outcome {
                         seq: *seq,

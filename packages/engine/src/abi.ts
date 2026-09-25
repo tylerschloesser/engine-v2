@@ -25,6 +25,7 @@ export const Status = {
   OutOfMemory: 7,
   Unsupported: 8,
   NotCached: 9,
+  BudgetExceedsArena: 10,
 } as const
 export type Status = (typeof Status)[keyof typeof Status]
 

@@ -5,6 +5,7 @@
 
 pub mod abi;
 pub mod authority;
+pub mod budget;
 pub mod bytes;
 pub mod client;
 pub mod codec;

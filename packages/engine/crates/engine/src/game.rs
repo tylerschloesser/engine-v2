@@ -131,6 +131,37 @@ pub use crate::world_access::WorldRead;
 /// re-exported here for the same reason as [`WorldRead`].
 pub use crate::world_access::WorldWrite;
 
+/// A worst-case declaration of what one action's `apply` may *add* to the two deterministic state
+/// counts of 0007 §8 (docs/decisions/0023-action-growth-declaration.md Decision, verbatim): read
+/// by the host's state-budget check (`crate::host::budget`), before `apply` runs, so a shrinking
+/// action (e.g. removing a building) is never refused just because the world happens to be full.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Growth {
+    pub entities: u16,
+    pub modified_tiles: u16,
+}
+
+impl Growth {
+    pub const NONE: Growth = Growth {
+        entities: 0,
+        modified_tiles: 0,
+    };
+
+    pub const fn entities(n: u16) -> Growth {
+        Growth {
+            entities: n,
+            modified_tiles: 0,
+        }
+    }
+
+    pub const fn tiles(n: u16) -> Growth {
+        Growth {
+            entities: 0,
+            modified_tiles: n,
+        }
+    }
+}
+
 /// The game-facing API (0003 Decision). A game author implements this once; the engine derives
 /// deltas, hashing, snapshots and replay from it (0011, 0005).
 pub trait Game: Sized + 'static {
@@ -177,6 +208,11 @@ pub trait Game: Sized + 'static {
     /// Per-action opt-out for actions that cascade (0012).
     fn predict(_a: &Self::Action) -> bool {
         true
+    }
+    /// Worst-case net growth of `apply(a)` (0023): `None` (the default) means undeclared, and the
+    /// world's `max_action_growth` applies instead (0004).
+    fn growth(_a: &Self::Action) -> Option<Growth> {
+        None
     }
     /// HOST ONLY. `TickCx` is a `WorldWrite`: the same recording write path.
     fn tick(cx: &mut TickCx<'_, Self>);

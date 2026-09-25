@@ -33,7 +33,11 @@ impl RefScenario {
             sim: Sim::genesis(WorldParams {
                 seed: TEST_SEED,
                 worldgen: RefParams::default(),
-                max_entities: 0,
+                // Was `0`: an inert placeholder while the state-budget check was Non-scope
+                // (M12b/M15). M21 makes it real, so this native test harness needs a genuine
+                // headroom figure -- 0007 §8's own default -- instead of a value that would now
+                // reject every entity-creating action as `StateBudgetFull`.
+                max_entities: 262_144,
                 max_modified_tiles: 1_048_576,
                 max_action_growth: 4_096,
             }),

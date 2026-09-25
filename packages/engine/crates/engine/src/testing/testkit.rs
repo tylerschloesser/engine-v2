@@ -14,12 +14,50 @@
 use std::collections::VecDeque;
 
 use crate::client::{ClientCore, Replica};
-use crate::game::{Game, PlayerId};
+use crate::delta::Delta;
+use crate::game::{EntityId, Game, PlayerId};
 use crate::host::{ConnId, Host};
 use crate::sim::{Outcome, Record, Sim, WorldParams};
 use crate::time::Tick;
 use crate::wire::{CameraReport, UplinkWriter};
-use crate::world::{CacheCapacity, ChunkDims, PristineSource};
+use crate::world::{CacheCapacity, ChunkDims, PristineSource, Tile, TilePos};
+
+/// Fills `sim`'s world directly, bypassing `Sim::step`'s per-action overhead, to exactly
+/// `entities` entities (ids `1..=entities`, each `G::Entity::default()`) and `tiles` modified
+/// tiles (`TilePos::new(0..tiles, 0)`, each set to `Tile::new(1, 0, 0)`) -- docs/plan/
+/// 21-entities-and-timers.md Provides: "bench-style genesis M36's standard large save reuses".
+/// Budget tests use this with small configured `max_entities`/`max_modified_tiles` (the Exit
+/// criteria's own "not the defaults"), not the full 0007 §8 defaults, to stay inside the fast
+/// tier: 262,144 real entities would still be several hundred thousand `BTreeMap` inserts.
+///
+/// The fill value (`Tile::new(1, 0, 0)`) must differ from whatever the store's `PristineSource`
+/// produces at `(0..tiles, 0)`, or that write is a no-op `TileChange::Unchanged` and the modified-
+/// tile count falls short of `tiles` -- every caller here uses a source that never produces it.
+pub fn fill_world<G: Game>(sim: &mut Sim<G>, entities: u32, tiles: u32)
+where
+    G::Entity: Default,
+{
+    let store = sim.authority_mut().store_mut();
+    for i in 0..entities {
+        store.apply(&Delta::EntityPut {
+            id: EntityId(i + 1),
+            entity: G::Entity::default(),
+        });
+    }
+    for i in 0..tiles {
+        store.apply(&Delta::Tile {
+            pos: TilePos::new(i as i32, 0),
+            tile: Tile::new(1, 0, 0),
+        });
+    }
+}
+
+/// Jumps `next_entity_id` directly (M21, docs/plan/21-entities-and-timers.md Provides), for
+/// `id_exhaustion_rejects_state_budget_full`: proving the 0022 §2 exhaustion clause without
+/// actually spawning billions of entities to reach it.
+pub fn set_next_entity_id<G: Game>(sim: &mut Sim<G>, id: u32) {
+    sim.authority_mut().store_mut().set_next_entity_id(id);
+}
 
 pub fn run_script<G: Game>(sim: &mut Sim<G>, script: &[(Tick, Record<G>)]) -> u64
 where
