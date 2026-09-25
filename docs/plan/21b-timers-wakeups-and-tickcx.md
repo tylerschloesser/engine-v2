@@ -64,4 +64,164 @@ Crate `CLAUDE.md`: the tick order (records → swap wake lists → `G::tick` →
 none
 
 ## Deviations
-(filled in during Phase 3)
+
+**Seam shapes as landed** (`packages/engine/crates/engine/src/`):
+- `sim/` is now a directory (was `sim.rs`): `sim/mod.rs` (`Sim<G>`, unchanged Provides) plus three new
+  `pub(crate)`-only siblings `sim/timers.rs` (`TimerWheel`), `sim/wake.rs` (`WakeQueue`),
+  `sim/active.rs` (`ActiveLists`) -- none of the three is exported at `engine::`; only `Authority`/
+  `TickCx`/`Store` reach them. `world/traits.rs` gained `SystemId` (re-exported at `engine::world`,
+  alongside `PrototypeId`) and `Registry::system(name: &str) -> SystemId` (sequential, no dedup by
+  name, ≤ 16, same convention as `add_prototype`).
+- `TickCx<'_, G>`'s M21b methods, exactly the 12b list: `next_woken`/`next_due` (pop, `None` when
+  empty/not-yet-due), `wake(id)`/`wake_at(id, Tick)`/`cancel_wake(id)`, `activate`/`deactivate(sys,
+  id)`, `active_len(sys) -> usize`, `active_at(sys, i) -> Option<EntityId>`.
+- `Authority<G>` new public surface: `entities_visited_per_tick() -> u64` (reset every tick,
+  bumped once per id a `next_woken`/`next_due`/`active_at` call actually yields), `apply_rollbacks()
+  -> u64`. New `pub(crate)`: `begin_tick`/`end_tick` (the fixed point, called by `Sim::step` around
+  `G::tick`), `begin_apply_journal`/`commit_apply_journal`/`handle_rejected_apply_write` (the undo
+  journal, below). `Authority::spawn`/`put_entity`/`despawn` (the `WorldWrite` impl) are now thin
+  wrappers over new `do_spawn`/`do_put_entity(_, _, wake: bool)`/`do_despawn`; `TickCx`'s own
+  `WorldWrite` impl calls the same `do_*` methods with `wake: false`, which is the entire mechanism
+  behind "puts made through `TickCx` do not auto-wake" (Planning decisions) -- both paths funnel
+  through one `Authority::write`, so the auto-wake push (`Authority::auto_wake`) is the *only*
+  thing that differs between them.
+- `Store<G>` gained `pub(crate)`-only wake/timer/active accessors (`wake_push_next`, `wake_pop_now`,
+  `wake_swap`, `wake_clear_now`, `wake_remove_next`, `timer_wake_at`, `timer_cancel`,
+  `timer_next_due`, `active_activate`, `active_deactivate`, `active_compact_all`) plus public
+  `timers_pending() -> usize`, `active_len(sys)`, `active_at(sys, i)`, and a testing-gated
+  `wake_next_len()`. `Delta::EntityGone`'s `Store::apply` arm now also calls `timers.cancel(id)` and
+  `active.deactivate_everywhere(id)` unconditionally (0007 §7 "despawn removes"/"despawn deactivates
+  everywhere") -- idempotent, harmless on a replica whose `timers`/`active` are always empty.
+
+**The fixed point is two calls, not one, at two different points in `Sim::step`** (not explicit in
+the brief's own Scope wording, which describes it as a single "engine swaps the lists" moment):
+`Authority::begin_tick` (wake-queue swap **and** active-list compaction of the *previous* tick's
+tombstones, run immediately before `G::tick`) and `Authority::end_tick` (drops the wake queue's
+leftover `now`, run immediately after `G::tick`). Active-list compaction specifically had to move
+from "end of this tick" to "start of the next" during development: compacting at the end of the
+*same* tick that requested a removal made the tombstone-then-compact behavior unobservable from
+outside a `Sim::step` call (nothing between `Sim::step` calls could ever see the tombstoned, pre-
+compaction shape), which is what `active_iteration_stable_under_deactivate`
+(`crates/engine/tests/timers_wakeups.rs`) is actually testing. Landed at "start of next tick"
+instead, so a caller inspecting `active_len`/`active_at` right after one `Sim::step` returns still
+sees last tick's tombstones, and only the *following* `Sim::step` (whose `begin_tick` runs first)
+compacts them.
+
+**A real bug found and fixed, not merely a test-tuning issue: `Store::apply`'s `EntityPut` arm
+unconditionally churned `ChunkIndex` on every put.** Building `tick_state_steady_no_alloc` (a
+population of entities continuously rescheduling their own timer, comparing allocator growth over a
+short vs. a 5x longer window) kept failing with real, if small, net growth. Cause: `Store::apply`
+removed-then-re-added every entity's occupancy entry on *every* `EntityPut`, even when neither the
+anchor nor the footprint changed -- for an entity alone in its own chunk (the common case for a
+lone timer/wake/active-list put, since none of those move an entity) this destroys and rebuilds
+that chunk's entire `ChunkIndex` (three fresh heap allocations: `occupancy: Vec<u64>`, `entries:
+Vec`, `overlapping: Vec`) on every single call. Fixed by skipping the remove/add pair when
+`(old_anchor, old_footprint) == (new_anchor, new_footprint)`. `ChunkIndex` is derived and never
+encoded (0007 §5), so this changes no golden or hash; `index_ops_per_put_is_bounded_by_footprint_
+area_plus_four` (fx-machines, M21) and every other pre-existing index test still passes unmodified.
+
+**`TimerWheel` is bucketed (`BTreeMap<Tick, Vec<EntityId>>`), not the flat `BTreeMap<(Tick,
+EntityId), ()>` the brief's own prose reads most naturally** ("Implementation free ... as long as
+... steady state does not allocate" -- the actual requirement, which the flat form fails). Measured
+directly, outside this crate (a throwaway `std::collections::BTreeMap<(u32,u32),()>` harness under a
+counting global allocator, 200 keys cycling with an ever-increasing first component): net live bytes
+kept growing indefinitely at a constant live-key count, because every reschedule inserts a brand new,
+always-larger key while removing an older, scattered one. The same workload against a bucketed
+`BTreeMap<Tick, Vec<u32>>` converged to exactly zero growth after enough warm-up. Same public API,
+same `(Tick, EntityId)` iteration order (bucket order, then each bucket's own sorted `Vec`); every
+pre-existing `sim::timers` unit test (`fires_at_exact_tick_in_key_order`, `wake_at_replaces`,
+`cancel_removes`, `roundtrip`) passes unmodified against the new internals.
+
+**Wake queue's encoded placement:** 0005 "Snapshot" lists "... entities, active lists and timers in
+canonical order" but predates the wake queue and names no place for it. Landed last of all (after
+active lists, then timers), next to the timer wheel it drives -- `Store::write_canonical`'s own
+comment records this as a placement choice, not a fact owned elsewhere.
+
+**Goldens moved** (0005 Snapshot's own field order gains three new sections, present even when
+empty -- any added bytes change every existing FNV hash; checked whether this could be avoided and
+it cannot, since a hash function has no "no-op" byte sequence). Per this brief's own ruling, none of
+these is re-blessed; each old value is left exactly as committed, for the orchestrator to bless:
+
+| Golden | Old | New (native, confirmed `.wasm`-identical where wasm-authoritative) |
+|---|---|---|
+| `machines/place-border` (`golden.json`) | `2f62009b92068963` | `58cf4dd2cba3ea96` |
+| `machines/full-world` (`golden-full-world.json`) | `a1e1b02f2725e3c0` | `a813319e1e3ca417` |
+| `puts_idle_100` (`fixtures/puts/golden/golden.json`) | `195e71ef0defbf7a` | `4e60d654ed1d2cba` |
+| `puts_script_a` (`golden-script-a.json`) | `d5fd55ce8f13a67e` | `0a7cc2623a83a03e` |
+| `puts-connected` (`golden-connected.json`) | `df47fa55da493c78` | `3a392e50dba8f378` |
+| `store_golden_bytes` (native-only byte golden, `crates/engine/tests/golden/store_golden_bytes.hex`) | 61 bytes | longer (18 new all-zero `u32` section-count fields: 16 active-list systems + timers + wake queue) |
+
+Confirmed unaffected (checked, not merely assumed): every `reference-sim`/`fx-worldgen` golden (none
+hashes a full `Store`, only worldgen/extract-specific state), every M14/M15 wire-format byte golden
+(a separate encoding from `Store::encode`), `fx-drawables`' own golden, and every `no_alloc_*` test's
+asserted number. Full accounting: a workspace-wide `cargo nextest run --workspace --features
+engine/testing,testing` shows exactly the six rows above and nothing else red, both before and after
+the undo-journal adopt flip (§ below).
+
+**Anti-vacuity, per the four named tests, inject/fail/revert (lines pasted from the actual run):**
+- `idle_world_visits_zero_entities` (`fixtures/machines/tests/idle_cost.rs`): the 10k-sleeping-
+  machines assertions alone would pass even if `entities_visited_per_tick` were a stub that always
+  read 0, since nothing in that scenario ever calls `Authority::bump_visited` either way -- added a
+  positive check (one `Place`d machine must show `entities_visited_per_tick() >= 1` the very tick it
+  is placed) to close the gap, then injected the stub (`bump_visited` body emptied) ->
+  `"a freshly placed machine must be visited (woken) the same tick it was placed"` panicked.
+  Reverted -> green.
+- `tick_state_steady_no_alloc`: re-injecting the original `ChunkIndex`-churn bug (above) did *not*
+  reliably fail this test -- a matched alloc-then-immediately-freed pair of the same size is
+  invisible to a net-live-bytes measurement, so this specific defect happened to be a bad anti-
+  vacuity case for this specific test (recorded here as a real limitation of the "compare two
+  windows' live-byte growth" tool itself, not fixed). A clearer, deliberate injection (one forgotten
+  `Vec::<u8>::with_capacity(8)` per `Store::apply` `EntityPut`) did fail unambiguously ->
+  `"steady-state growth must not scale with the number of ticks run (short: 159800 B over 500 ticks,
+  long: 800000 B over 2500 ticks)"`. Reverted -> green (`short: 0 B ... long: 0 B` in the version
+  committed).
+- `journal_rolls_back_store_indexes_wakes_counts` (`crates/engine/tests/undo_journal.rs`), three
+  passes, one per side effect (store/index/counts share one code path here, since restoring the
+  entity value is what restores all three at once; wake is independent):
+  - Tile capture emptied -> `left: Tile(9) right: Tile(2)`.
+  - Entity capture emptied -> `"the moved-then-despawned entity is restored" left: Ok(None) right:
+    Ok(Some(JEntity { x: 14, y: 14 }))`.
+  - `record_woke` emptied -> `left: 2 right: 1` (the wake-queue length assertion).
+  All three reverted -> green.
+- `put_from_tick_does_not_self_wake` (`crates/engine/tests/timers_wakeups.rs`): forced `TickCx`'s
+  `put_entity` to auto-wake (`wake: true` instead of `false`) -> `"a put made through TickCx must
+  not auto-wake (Planning decisions)" left: 2 right: 1`. Reverted -> green.
+
+**The undo journal is adopted:** [0037](../decisions/0037-undo-journal-adopted.md). Measured
+(`fixtures/machines/tests/journal_bench.rs`, `slow_apply_journal_overhead`, `pnpm test:slow rust -t
+apply_journal_overhead`): baseline median 1.990167 ms, journal median 2.040458 ms over 10,000 mixed
+actions (7 trials each) -- **2.5% overhead**; **0 B** arena growth over a further full script pass
+with the journal on. Both clear 0023's bar (≤ 10% / zero steady-state allocations) with room to
+spare. `UNDO_JOURNAL_ADOPTED = true`; debug and test builds keep the unconditional panic regardless
+(`cfg!(debug_assertions)`), so this flip changed no existing test (verified: identical six-row
+failure set before and after, above).
+
+**Bookkeeping the write-adr skill names but this milestone did not do:** the ADR index in
+`PRE-PLAN.md` §1 and the `docs/decisions/` row's ADR range in the root `CLAUDE.md` (already stale at
+0028 vs. the real 0036 before this milestone -- 0029-0036 were never backfilled by the milestones
+that added them either) are outside a milestone-implementer's own edit list; left for the
+orchestrator, along with `PLAN.md` "Plan-level decisions" (this brief's own Exit criteria names it,
+but `PLAN.md` is on the never-edit list).
+
+**`packages/engine/budgets.json` not touched.** The Budgets section's "Tick time row:
+`entities_visited_per_tick` ceiling in `budgets.json`" has no natural home there: that file holds
+only per-page, per-isolate browser zero-GC byte budgets (0016), nothing Rust-side or tick-cost-
+shaped, and the brief's own parenthetical ("the wall-clock proxy is M36's") confirms no numeric
+ceiling exists yet to record. Satisfied instead by the tests themselves (`entities_visited_per_tick
+== 0`/`>= 1` in `idle_world_visits_zero_entities`, allocation growth in `tick_state_steady_no_alloc`).
+
+**Fixture design notes.** `Machine` gained three new fields (`is_spinner`, `lit`, `spin_acc`) and
+`Action` gained one new, appended variant (`PlaceSpinner { origin }`) rather than reusing `genesis`
+to spawn the Spinner: a genesis-spawned entity would have consumed one real `max_entities` slot
+before any action runs, which breaks `full_world_rejects_place_accepts_remove_then_place`'s and
+`machines_full_world_golden`'s own assumption that the first `Place` succeeds against a
+`max_entities: 1` world. `PlaceSpinner` is appended after the M21 variants (not inserted among
+them), so no pre-existing `Action` encoding shifts.
+
+**Measured.** `cargo nextest run --workspace --features engine/testing,testing`: 474 tests, 468
+passed, 6 failed (the golden table above), 1 skipped (`slow_apply_journal_overhead`, correctly
+filtered by the fast-tier profile). `pnpm test wasm`: 60 tests, same three fx-puts goldens red
+(`wasm_idle_100_matches_native`, `wasm_connected_100_matches_its_own_golden`,
+`wasm_script_a_matches_native`, plus their Bun-leg mirror), native and `.wasm` agreeing on the new
+value in every case (checked). `pnpm test unit`: 232 passed, unaffected. `cargo clippy --workspace
+--all-targets -- -D warnings` and `cargo fmt --check`: both clean.

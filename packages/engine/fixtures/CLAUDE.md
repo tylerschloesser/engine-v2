@@ -24,3 +24,10 @@ the detail; `hash` has none yet, described here instead.
 - `presence` (`fx-presence`, docs/plan/19-presence-channel.md): the presence channel and
   witness-carrying actions (0001) -- `Presence = { pos, vel }`, `Action::Poke { tile, from }`,
   `admit`'s tolerance check and `apply`'s own deterministic range check. Own `CLAUDE.md`.
+- `machines` (`fx-machines`, docs/plan/21-entities-and-timers.md, docs/plan/
+  21b-timers-wakeups-and-tickcx.md): the 2x2 multi-tile entity, footprint occupancy and the state
+  budget (M21); the timer wheel, wake queue and an active-list "Spinner" (M21b) -- `Feed`'s own
+  apply-time put auto-wakes into the same tick's `next_woken`, which schedules a `SMELT`-tick
+  `wake_at`; due increments `count` then sleeps until fed again; `Action::PlaceSpinner` spawns the
+  other kind, which joins the "spinner" active list instead and toggles a field every `SPIN_PERIOD`
+  ticks. Goldens `place-border`, `full-world` (M21), `smelt-cycle`, `idle-world-costs-zero` (M21b).
