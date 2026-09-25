@@ -3,8 +3,9 @@
 //! from footprint or player"): wraps a `Store<G>` plus the host driver's own state, `SimRng` and
 //! the current `Tick`, that M12's `Store` deliberately does not hold (docs/plan/
 //! 12-store-and-game-trait.md Deviations). `TickCx` (0003: "`Authority` plus iteration over active
-//! entities", minimal here -- 0021b adds the rest) is built here too, since it delegates every
-//! `WorldRead`/`WorldWrite` method straight to one.
+//! entities") is built here too, since it delegates every `WorldRead`/`WorldWrite` method straight
+//! to one; docs/plan/21b-timers-wakeups-and-tickcx.md gives it its final shape (wake/timer/active-
+//! list methods) and adds the undo-journal experiment at the bottom of this file.
 
 use std::cell::RefCell;
 
@@ -13,8 +14,14 @@ use crate::game::{EntityId, Game, PlayerId, Unknown};
 use crate::rng::SimRng;
 use crate::store::Store;
 use crate::time::{Tick, Ticks};
-use crate::world::{ChunkCoord, TerrainStore, Tile, TilePos, TileRect, TraitSet};
+use crate::world::{ChunkCoord, SystemId, TerrainStore, Tile, TilePos, TileRect, TraitSet};
 use crate::world_access::{WorldRead, WorldWrite, chunk_of};
+
+/// The undo-journal experiment's adopt/not-adopt decision (docs/plan/
+/// 21b-timers-wakeups-and-tickcx.md Planning decisions, ADR: see Deviations for the measured
+/// numbers this constant follows). `false`: the pre-existing assert stays the only enforcement of
+/// "validate first, write after" in every build, exactly as before this milestone.
+pub(crate) const UNDO_JOURNAL_ADOPTED: bool = false;
 
 /// Who a delta is scoped to (0011 "Scopes"), derived mechanically at write time -- never chosen by
 /// the game.
@@ -110,6 +117,13 @@ impl<G: Game> ChangeLog<G> {
         self.changes.clear();
     }
 
+    /// The undo journal's own rollback (docs/plan/21b-timers-wakeups-and-tickcx.md): drops every
+    /// entry recorded since `len`, so a rolled-back `apply`'s writes never reach a client as
+    /// deltas.
+    pub(crate) fn truncate(&mut self, len: usize) {
+        self.changes.truncate(len);
+    }
+
     pub fn as_slice(&self) -> &[(Scopes, Delta<G>)] {
         &self.changes
     }
@@ -150,6 +164,18 @@ pub struct Authority<G: Game> {
     /// builds panic instead (docs/plan/21-entities-and-timers.md Tests added: `under_declared_
     /// growth_counts_in_release`/`_panics_in_debug`).
     growth_violations: u64,
+    /// Diagnostic counter (Budgets: "the tick time row"; docs/plan/21b-timers-wakeups-and-tickcx.md
+    /// Provides): every id `TickCx::next_woken`/`next_due`/`active_at` actually yields this tick.
+    /// Reset by [`Authority::begin_tick`]. Proves tick cost is O(active entities): a world of
+    /// sleeping machines with none due must read `0` here.
+    entities_visited_per_tick: u64,
+    /// 0023 "apply, measure, roll back" alternative (docs/plan/21b-timers-wakeups-and-tickcx.md
+    /// Planning decisions): bumped by the release-mode half of the undo-journal rollback, if
+    /// adopted (below).
+    apply_rollbacks: u64,
+    /// The undo-journal experiment (Planning decisions "Host-side atomicity of `apply`"): records
+    /// enough to undo one `apply` call's writes, discarded on `Ok`, replayed backwards on `Err`.
+    journal: UndoJournal<G>,
 }
 
 impl<G: Game> Authority<G> {
@@ -172,6 +198,9 @@ impl<G: Game> Authority<G> {
             max_modified_tiles: 1_048_576,
             max_action_growth: 4_096,
             growth_violations: 0,
+            entities_visited_per_tick: 0,
+            apply_rollbacks: 0,
+            journal: UndoJournal::new(),
         }
     }
 
@@ -211,6 +240,20 @@ impl<G: Game> Authority<G> {
         self.growth_violations += 1;
     }
 
+    /// docs/plan/21b-timers-wakeups-and-tickcx.md Provides.
+    pub fn entities_visited_per_tick(&self) -> u64 {
+        self.entities_visited_per_tick
+    }
+
+    fn bump_visited(&mut self) {
+        self.entities_visited_per_tick += 1;
+    }
+
+    /// Undo-journal rollbacks so far (0023's "apply, measure, roll back" alternative, if adopted).
+    pub fn apply_rollbacks(&self) -> u64 {
+        self.apply_rollbacks
+    }
+
     pub fn store(&self) -> &Store<G> {
         &self.store
     }
@@ -242,6 +285,66 @@ impl<G: Game> Authority<G> {
         self.tick = self.tick.add(Ticks(1));
     }
 
+    /// The fixed point at the start of `G::tick` (0007 §7; docs/plan/21b-timers-wakeups-and-tickcx.md
+    /// Scope "Wake queue"): swaps the wake queue's `next` into `now`, so this tick's `next_woken`
+    /// serves exactly what was queued since the previous fixed point. Also compacts every active
+    /// list's tombstones from the *previous* tick's `deactivate` calls (Scope "Active lists":
+    /// "removals ... take effect at the next fixed point") -- so a caller inspecting
+    /// `active_len`/`active_at` anywhere between the end of one `Sim::step` and the start of the
+    /// next still sees the old, tombstoned shape, and only this tick's own compaction (run before
+    /// this tick's `G::tick`, so this tick's rule already sees the closed-up list) changes it.
+    /// Also resets the per-tick visited counter.
+    pub(crate) fn begin_tick(&mut self) {
+        self.store.wake_swap();
+        self.store.active_compact_all();
+        self.entities_visited_per_tick = 0;
+    }
+
+    /// The fixed point at the end of `G::tick`: whatever `now` still holds is dropped (0007 §7:
+    /// "applied at one fixed point").
+    pub(crate) fn end_tick(&mut self) {
+        self.store.wake_clear_now();
+    }
+
+    /// The undo-journal experiment (`Sim::step`, around one `G::apply` call): starts recording.
+    pub(crate) fn begin_apply_journal(&mut self) {
+        self.journal.begin();
+    }
+
+    /// `apply` returned `Ok`, or returned `Err` with no write (the common, well-behaved case):
+    /// discard whatever the journal recorded (Planning decisions: "discarded on `Ok`" -- also true
+    /// of a clean rejection, which recorded nothing to discard in the first place).
+    pub(crate) fn commit_apply_journal(&mut self) {
+        self.journal.commit();
+    }
+
+    /// A rejecting `apply` that nonetheless wrote (violates "validate first, write after", 0003).
+    /// Debug and test builds panic immediately, so authors learn the mistake right away (docs/plan/
+    /// 21b-timers-wakeups-and-tickcx.md Planning decisions: "debug and test builds keep the
+    /// panic"). Release builds roll back through the undo journal instead, counting it, **only if**
+    /// [`UNDO_JOURNAL_ADOPTED`] -- Deviations records the measured numbers behind that constant;
+    /// while it is `false` this is unconditional, exactly the assert this milestone found in place.
+    pub(crate) fn handle_rejected_apply_write(&mut self, who: PlayerId, seq: u32, before: usize) {
+        if UNDO_JOURNAL_ADOPTED && !cfg!(debug_assertions) {
+            self.journal.rollback(&mut self.store);
+            self.changes.truncate(before);
+            self.apply_rollbacks += 1;
+        } else {
+            panic!("a rejecting apply recorded a write (0004 Consequences): who={who:?} seq={seq}");
+        }
+    }
+
+    /// Test-only direct control of the undo journal (docs/plan/21b-timers-wakeups-and-tickcx.md
+    /// Tests added: `journal_rolls_back_store_indexes_wakes_counts`), bypassing the debug/release
+    /// branch in [`Authority::handle_rejected_apply_write`] so the rollback mechanism itself can be
+    /// exercised under `cfg(test)` independent of [`UNDO_JOURNAL_ADOPTED`].
+    #[cfg(any(test, feature = "testing"))]
+    pub fn rollback_apply_journal_for_test(&mut self, before: usize) {
+        self.journal.rollback(&mut self.store);
+        self.changes.truncate(before);
+        self.apply_rollbacks += 1;
+    }
+
     /// The host's per-player last-processed `seq` (0004), updated through `Store::apply` --
     /// `Store::apply` is the only mutator of replicated state (`crate::store`'s own doc comment)
     /// -- but outside [`Authority::write`]/the [`ChangeLog`]: 0004 delivers acks to a client over
@@ -254,8 +357,50 @@ impl<G: Game> Authority<G> {
     }
 
     fn write(&mut self, delta: Delta<G>, scopes: Scopes) {
+        if self.journal.is_recording() {
+            self.journal.capture_pre_image(&self.store, &delta);
+        }
         self.store.apply(&delta);
         self.changes.push(scopes, delta);
+    }
+
+    /// [`WorldWrite::spawn`]'s real body (docs/plan/21b-timers-wakeups-and-tickcx.md Scope: "every
+    /// `EntityPut` made through `Authority` outside `G::tick` ... pushes the id to `woken_next`");
+    /// `wake` is `true` from `Authority`'s own `WorldWrite` impl (apply/on_player/genesis) and
+    /// `false` from `TickCx`'s (Planning decisions: "puts made through `TickCx` do not auto-wake").
+    fn do_spawn(&mut self, e: G::Entity, wake: bool) -> EntityId {
+        let id = EntityId(self.store.next_entity_id());
+        let scope = self.entity_scopes(id, Some(&e));
+        self.write(Delta::EntityPut { id, entity: e }, scope);
+        if wake {
+            self.auto_wake(id);
+        }
+        id
+    }
+
+    fn do_put_entity(&mut self, id: EntityId, e: G::Entity, wake: bool) {
+        let scope = self.entity_scopes(id, Some(&e));
+        self.write(Delta::EntityPut { id, entity: e }, scope);
+        if wake {
+            self.auto_wake(id);
+        }
+    }
+
+    fn do_despawn(&mut self, id: EntityId) {
+        let scope = self.entity_scopes(id, None);
+        self.write(Delta::EntityGone { id }, scope);
+        // `Store::apply`'s own `EntityGone` arm already cancels the timer and deactivates every
+        // active list for `id` (0007 §7: "despawn removes"/"despawn deactivates everywhere") --
+        // nothing further to do here.
+    }
+
+    /// Pushes `id` to the wake queue's `next` list, deduplicated (docs/plan/
+    /// 21b-timers-wakeups-and-tickcx.md Scope). Shared by every auto-wake put and `TickCx::wake`.
+    fn auto_wake(&mut self, id: EntityId) {
+        let pushed = self.store.wake_push_next(id);
+        if pushed && self.journal.is_recording() {
+            self.journal.record_woke(id);
+        }
     }
 
     /// Every chunk under the entity's old footprint (if it already existed) and its new one (if
@@ -341,20 +486,15 @@ impl<G: Game> WorldWrite<G> for Authority<G> {
     }
 
     fn spawn(&mut self, e: G::Entity) -> EntityId {
-        let id = EntityId(self.store.next_entity_id());
-        let scope = self.entity_scopes(id, Some(&e));
-        self.write(Delta::EntityPut { id, entity: e }, scope);
-        id
+        self.do_spawn(e, true)
     }
 
     fn put_entity(&mut self, id: EntityId, e: G::Entity) {
-        let scope = self.entity_scopes(id, Some(&e));
-        self.write(Delta::EntityPut { id, entity: e }, scope);
+        self.do_put_entity(id, e, true)
     }
 
     fn despawn(&mut self, id: EntityId) {
-        let scope = self.entity_scopes(id, None);
-        self.write(Delta::EntityGone { id }, scope);
+        self.do_despawn(id)
     }
 
     fn put_player(&mut self, who: PlayerId, p: G::Player) {
@@ -403,6 +543,65 @@ impl<'a, G: Game> TickCx<'a, G> {
     pub fn player_id_at(&self, i: usize) -> Option<PlayerId> {
         self.authority.store().player_id_at(i)
     }
+
+    /// Pops the next id the wake queue's fixed point (`Authority::begin_tick`) queued for this
+    /// tick, or `None` once drained (docs/plan/21b-timers-wakeups-and-tickcx.md Provides).
+    pub fn next_woken(&mut self) -> Option<EntityId> {
+        let id = self.authority.store.wake_pop_now();
+        if id.is_some() {
+            self.authority.bump_visited();
+        }
+        id
+    }
+
+    /// Pops the earliest entity whose timer is now due (`tick <= self.tick()`), in key order, or
+    /// `None` if the wheel is empty or its earliest entry is not yet due.
+    pub fn next_due(&mut self) -> Option<EntityId> {
+        let now = self.authority.tick;
+        let id = self.authority.store.timer_next_due(now);
+        if id.is_some() {
+            self.authority.bump_visited();
+        }
+        id
+    }
+
+    /// Queues `id` for the *next* tick's `next_woken` (Planning decisions: "`TickCx::wake(id)` does
+    /// the same" as an auto-waking put) -- deduplicated, insertion order.
+    pub fn wake(&mut self, id: EntityId) {
+        self.authority.auto_wake(id);
+    }
+
+    /// Sets `id`'s one timer (0007 §7: at most one per entity), replacing any existing one.
+    pub fn wake_at(&mut self, id: EntityId, at: Tick) {
+        self.authority.store.timer_wake_at(id, at);
+    }
+
+    /// Removes `id`'s timer, if any.
+    pub fn cancel_wake(&mut self, id: EntityId) {
+        self.authority.store.timer_cancel(id);
+    }
+
+    pub fn activate(&mut self, sys: SystemId, id: EntityId) {
+        self.authority.store.active_activate(sys, id);
+    }
+
+    pub fn deactivate(&mut self, sys: SystemId, id: EntityId) {
+        self.authority.store.active_deactivate(sys, id);
+    }
+
+    pub fn active_len(&self, sys: SystemId) -> usize {
+        self.authority.store.active_len(sys)
+    }
+
+    /// Reading a live slot counts as visiting that entity (`entities_visited_per_tick`); a
+    /// tombstoned or out-of-range index (`None`) does not.
+    pub fn active_at(&mut self, sys: SystemId, i: usize) -> Option<EntityId> {
+        let id = self.authority.store.active_at(sys, i);
+        if id.is_some() {
+            self.authority.bump_visited();
+        }
+        id
+    }
 }
 
 impl<G: Game> WorldRead<G> for TickCx<'_, G> {
@@ -440,14 +639,15 @@ impl<G: Game> WorldWrite<G> for TickCx<'_, G> {
     fn set_tile(&mut self, p: TilePos, t: Tile) {
         self.authority.set_tile(p, t);
     }
+    /// No auto-wake (Planning decisions: "puts made through `TickCx` do not auto-wake").
     fn spawn(&mut self, e: G::Entity) -> EntityId {
-        self.authority.spawn(e)
+        self.authority.do_spawn(e, false)
     }
     fn put_entity(&mut self, id: EntityId, e: G::Entity) {
-        self.authority.put_entity(id, e);
+        self.authority.do_put_entity(id, e, false);
     }
     fn despawn(&mut self, id: EntityId) {
-        self.authority.despawn(id);
+        self.authority.do_despawn(id);
     }
     fn put_player(&mut self, who: PlayerId, p: G::Player) {
         self.authority.put_player(who, p);
@@ -457,6 +657,164 @@ impl<G: Game> WorldWrite<G> for TickCx<'_, G> {
     }
     fn rng(&mut self) -> Result<&mut SimRng, Unknown> {
         self.authority.rng()
+    }
+}
+
+/// One key's pre-image, or the wake-queue push, recorded by [`UndoJournal::capture_pre_image`]/
+/// [`UndoJournal::record_woke`] (docs/plan/21b-timers-wakeups-and-tickcx.md Planning decisions).
+enum UndoEntry<G: Game> {
+    Tile {
+        pos: TilePos,
+        old: Tile,
+    },
+    Entity {
+        id: EntityId,
+        old: Option<G::Entity>,
+    },
+    Player {
+        who: PlayerId,
+        old: Option<G::Player>,
+    },
+    Global {
+        old: G::Global,
+    },
+    /// Undoes an [`Authority::auto_wake`] push: removed from the wake queue's `next` on rollback.
+    Woke {
+        id: EntityId,
+    },
+}
+
+/// The undo-journal experiment (docs/plan/21b-timers-wakeups-and-tickcx.md Planning decisions:
+/// "Host-side atomicity of `apply` via an undo journal"). Records the previous value (or absence)
+/// of each key touched by one `apply` call, on that key's *first* touch only (a later write to the
+/// same key within the same call must not overwrite the true original pre-image); discarded on
+/// `Ok`, replayed backwards on `Err`. `entries` is preallocated and only ever `clear`ed, never
+/// shrunk, so steady state after warm-up allocates nothing (`tick_state_steady_no_alloc` covers the
+/// whole tick path, not just this journal, but this is why it can).
+struct UndoJournal<G: Game> {
+    entries: Vec<UndoEntry<G>>,
+    recording: bool,
+}
+
+impl<G: Game> UndoJournal<G> {
+    fn new() -> Self {
+        UndoJournal {
+            entries: Vec::with_capacity(16),
+            recording: false,
+        }
+    }
+
+    fn is_recording(&self) -> bool {
+        self.recording
+    }
+
+    /// Starts recording for one `apply` call.
+    fn begin(&mut self) {
+        self.entries.clear();
+        self.recording = true;
+    }
+
+    /// `apply` returned `Ok` (or a clean `Err` that recorded nothing): discard.
+    fn commit(&mut self) {
+        self.entries.clear();
+        self.recording = false;
+    }
+
+    /// Captures `delta`'s target key's value in `store` *before* `Authority::write` applies it, if
+    /// this is that key's first touch this `apply` call. `Roster`/`Ack` are never reachable from
+    /// inside `G::apply` (`WorldWrite` has no method that produces either -- both are host-internal,
+    /// `crate::sim`/`Authority::record_ack`'s own doc comments), so the journal has nothing to do
+    /// for them.
+    fn capture_pre_image(&mut self, store: &Store<G>, delta: &Delta<G>) {
+        match delta {
+            Delta::Tile { pos, .. } => {
+                let touched = self
+                    .entries
+                    .iter()
+                    .any(|e| matches!(e, UndoEntry::Tile { pos: p, .. } if p == pos));
+                if !touched {
+                    self.entries.push(UndoEntry::Tile {
+                        pos: *pos,
+                        old: store.terrain().tile(*pos),
+                    });
+                }
+            }
+            Delta::EntityPut { id, .. } | Delta::EntityGone { id } => {
+                let touched = self
+                    .entries
+                    .iter()
+                    .any(|e| matches!(e, UndoEntry::Entity { id: i, .. } if i == id));
+                if !touched {
+                    self.entries.push(UndoEntry::Entity {
+                        id: *id,
+                        old: store.entity(*id).cloned(),
+                    });
+                }
+            }
+            Delta::Player { who, .. } => {
+                let touched = self
+                    .entries
+                    .iter()
+                    .any(|e| matches!(e, UndoEntry::Player { who: w, .. } if w == who));
+                if !touched {
+                    self.entries.push(UndoEntry::Player {
+                        who: *who,
+                        old: store.player(*who).ok().cloned(),
+                    });
+                }
+            }
+            Delta::Global { .. } => {
+                let touched = self
+                    .entries
+                    .iter()
+                    .any(|e| matches!(e, UndoEntry::Global { .. }));
+                if !touched {
+                    self.entries.push(UndoEntry::Global {
+                        old: store.global().clone(),
+                    });
+                }
+            }
+            Delta::Roster { .. } | Delta::Ack { .. } => {}
+        }
+    }
+
+    /// Records an [`Authority::auto_wake`] push that actually changed the queue (a deduplicated
+    /// no-op push has nothing to undo).
+    fn record_woke(&mut self, id: EntityId) {
+        self.entries.push(UndoEntry::Woke { id });
+    }
+
+    /// Replays every recorded entry backwards against `store`, undoing exactly this `apply` call's
+    /// writes and wake-queue push. `store.apply` on the inverse `Delta` also restores every side
+    /// effect `Store::apply` itself derives (the `ChunkIndex`, `entity_count`/`modified_tile_count`,
+    /// and -- since `Store::apply`'s own `EntityGone` arm cancels them -- the timer/active-list
+    /// registrations of an entity a rolled-back spawn had woken): the journal only has to remember
+    /// enough to reconstruct the *value*, never the derived bookkeeping.
+    fn rollback(&mut self, store: &mut Store<G>) {
+        for entry in self.entries.drain(..).rev() {
+            match entry {
+                UndoEntry::Tile { pos, old } => store.apply(&Delta::Tile { pos, tile: old }),
+                UndoEntry::Entity { id, old } => match old {
+                    Some(e) => store.apply(&Delta::EntityPut { id, entity: e }),
+                    None => store.apply(&Delta::EntityGone { id }),
+                },
+                UndoEntry::Player { who, old } => {
+                    if let Some(p) = old {
+                        store.apply(&Delta::Player { who, state: p });
+                    }
+                    // `old == None`: the slot did not exist before this `apply`. `Delta` has no
+                    // "unset a player" variant (0011 never needs one -- a player row is never
+                    // removed) and no fixture or reference-game rule creates a player row from
+                    // inside `G::apply` (only `on_player(Joined)` does, never inside `apply`), so
+                    // this is unreached in practice; recorded rather than silently assumed away.
+                }
+                UndoEntry::Global { old } => store.apply(&Delta::Global { state: old }),
+                UndoEntry::Woke { id } => {
+                    store.wake_remove_next(id);
+                }
+            }
+        }
+        self.recording = false;
     }
 }
 

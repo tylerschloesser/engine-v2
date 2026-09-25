@@ -2,6 +2,14 @@
 //! a fresh world and runs `Game::genesis` once at tick 0; `step` runs one frame's recorded inputs
 //! in 0004 order (`on_player`, or `apply` then the host's per-player `last_seq = seq`), then
 //! `Game::tick`, then advances the tick.
+//!
+//! `timers`/`wake`/`active` (docs/plan/21b-timers-wakeups-and-tickcx.md): the timer wheel, wake
+//! queue and per-system active lists `Store` holds as sim state (0007 §7); `Authority`/`TickCx`
+//! (`crate::authority`) are the only callers, so every type here is `pub(crate)`.
+
+pub(crate) mod active;
+pub(crate) mod timers;
+pub(crate) mod wake;
 
 use crate::authority::{Authority, TickCx};
 use crate::budget;
@@ -174,12 +182,19 @@ impl<G: Game> Sim<G> {
                         self.authority.store().entity_count(),
                         self.authority.store().modified_tile_count(),
                     );
+                    // The undo-journal experiment (docs/plan/21b-timers-wakeups-and-tickcx.md
+                    // Planning decisions): recording is cheap even while `UNDO_JOURNAL_ADOPTED` is
+                    // `false` (nothing reads what it captured), and keeps the mechanism exercised
+                    // by every native/`.wasm` run this milestone's own tests drive it through.
+                    self.authority.begin_apply_journal();
                     let result =
                         G::apply(&mut self.authority as &mut dyn WorldWrite<G>, *who, action);
-                    assert!(
-                        result.is_ok() || self.authority.changes().len() == before,
-                        "a rejecting apply recorded a write (0004 Consequences): who={who:?} seq={seq}",
-                    );
+                    if result.is_err() && self.authority.changes().len() != before {
+                        self.authority
+                            .handle_rejected_apply_write(*who, *seq, before);
+                    } else {
+                        self.authority.commit_apply_journal();
+                    }
                     if result.is_ok() {
                         budget::audit(&mut self.authority, declared, counts_before);
                     }
@@ -191,10 +206,15 @@ impl<G: Game> Sim<G> {
                 }
             }
         }
+        // The fixed point (0007 §7; docs/plan/21b-timers-wakeups-and-tickcx.md Scope): swap the
+        // wake queue at the start of `G::tick`, compact every active list's tombstones and drop
+        // whatever the wake queue's `now` list still holds at the end of it.
+        self.authority.begin_tick();
         {
             let mut cx = TickCx::new(&mut self.authority);
             G::tick(&mut cx);
         }
+        self.authority.end_tick();
         self.authority.advance_tick();
     }
 

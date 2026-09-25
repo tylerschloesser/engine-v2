@@ -83,3 +83,10 @@ required-features = ["testing"]
 [[test]]
 name = "no_alloc_drawlist"
 required-features = ["testing"]
+
+# `engine::testing::testkit::run_script`, `Store::new`/`decode` alone need nothing gated, but this
+# file's own `replay_equals_live_with_timers` uses `run_script` (feature `testing`), same reasoning
+# as `codec` above.
+[[test]]
+name = "timers_wakeups"
+required-features = ["testing"]

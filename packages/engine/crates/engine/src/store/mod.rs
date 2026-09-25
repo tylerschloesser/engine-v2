@@ -15,6 +15,14 @@
 //! Deviations: 0005 does not name where the single `Global` value sits among "player table, id
 //! counters, overlays, entities", so it goes beside the player table it is broadcast alongside
 //! (0011 "Scopes": `Global` and `Player` are both "sent in full on every connect").
+//!
+//! docs/plan/21b-timers-wakeups-and-tickcx.md widens this to 0007 §7's own three structures --
+//! active lists, timers, and the wake queue's `next` list -- placed after entities: 0005's own
+//! "Snapshot" line lists them in exactly that order ("... entities, active lists and timers in
+//! canonical order"). The wake queue is not named in 0005 (which predates it); it goes last of all,
+//! next to the timer wheel it drives (Deviations records this placement choice). A client replica's
+//! own `Store` never receives any of the three (they are never sent as deltas), so it always
+//! encodes/decodes as empty there -- only a host-side full snapshot (M22) round-trips real content.
 
 mod index;
 
@@ -25,7 +33,13 @@ use crate::codec::{Codec, CodecError, decode_canonical, encode_to, encoded_len};
 use crate::delta::Delta;
 use crate::game::{EntityId, Game, PlayerId, Unknown};
 use crate::hash::{Fnv64, StateHash};
-use crate::world::{ChunkCoord, ChunkDims, Footprint, Registry, TerrainStore, TilePos, TileRect};
+use crate::sim::active::ActiveLists;
+use crate::sim::timers::TimerWheel;
+use crate::sim::wake::WakeQueue;
+use crate::time::Tick;
+use crate::world::{
+    ChunkCoord, ChunkDims, Footprint, Registry, SystemId, TerrainStore, TilePos, TileRect,
+};
 
 use index::ChunkIndex;
 
@@ -102,6 +116,13 @@ pub struct Store<G: Game> {
     /// call, i.e. once per covered tile, by `Store::add_to_index`/`remove_from_index`. Never
     /// encoded, hashed, or reset automatically; a test reads the delta across one put.
     index_ops: u64,
+    /// M21b (0007 §7): the per-entity timer wheel. Sim state, encoded in key order.
+    timers: TimerWheel,
+    /// M21b (0007 §7): the wake queue's `now`/`next` lists. Only `next` is encoded (module doc
+    /// comment): `now` is never observed non-empty outside a `G::tick` call in progress.
+    wake: WakeQueue,
+    /// M21b (0007 §7): per-system active lists. Sim state, encoded in system then insertion order.
+    active: ActiveLists,
 }
 
 /// Length-prefixed `Codec` value: a varint byte count, then the value's canonical bytes. Lets
@@ -139,6 +160,9 @@ impl<G: Game> Store<G> {
             registry,
             chunk_index: BTreeMap::new(),
             index_ops: 0,
+            timers: TimerWheel::new(),
+            wake: WakeQueue::new(),
+            active: ActiveLists::new(),
         }
     }
 
@@ -170,6 +194,11 @@ impl<G: Game> Store<G> {
                     let old_fp = self.registry.footprint(G::prototype(&old));
                     self.remove_from_index(*id, old_anchor, old_fp);
                 }
+                // 0007 §7: "despawn removes" (the timer) / "despawn deactivates everywhere" (every
+                // active list). Idempotent, like every other `Store::apply` arm: a repeat despawn
+                // (or a client replica, whose `timers`/`active` are always empty) is a no-op.
+                self.timers.cancel(*id);
+                self.active.deactivate_everywhere(*id);
             }
             Delta::Player { who, state } => match self.players.get_mut(who) {
                 Some(slot) => slot.state = state.clone(),
@@ -428,6 +457,69 @@ impl<G: Game> Store<G> {
         &self.global
     }
 
+    // -- M21b: wake queue, timer wheel, active lists (0007 §7) -----------------------------------
+    // `pub(crate)`: only `Authority`/`TickCx` (`crate::authority`) call these; a client replica's
+    // own `Store` never receives any of this over the wire, so nothing outside the sim driver has
+    // a reason to reach it.
+
+    pub(crate) fn wake_push_next(&mut self, id: EntityId) -> bool {
+        self.wake.push_next(id)
+    }
+
+    pub(crate) fn wake_remove_next(&mut self, id: EntityId) -> bool {
+        self.wake.remove_next(id)
+    }
+
+    pub(crate) fn wake_pop_now(&mut self) -> Option<EntityId> {
+        self.wake.pop_now()
+    }
+
+    pub(crate) fn wake_swap(&mut self) {
+        self.wake.swap();
+    }
+
+    pub(crate) fn wake_clear_now(&mut self) {
+        self.wake.clear_now();
+    }
+
+    /// `entities_visited_per_tick`'s sibling counter (Provides: "`timers_pending`"): how many
+    /// entities currently have a timer registered.
+    pub fn timers_pending(&self) -> usize {
+        self.timers.len()
+    }
+
+    pub(crate) fn timer_wake_at(&mut self, id: EntityId, at: Tick) -> Option<Tick> {
+        self.timers.wake_at(id, at)
+    }
+
+    pub(crate) fn timer_cancel(&mut self, id: EntityId) -> Option<Tick> {
+        self.timers.cancel(id)
+    }
+
+    pub(crate) fn timer_next_due(&mut self, now: Tick) -> Option<EntityId> {
+        self.timers.next_due(now)
+    }
+
+    pub(crate) fn active_activate(&mut self, sys: SystemId, id: EntityId) {
+        self.active.activate(sys, id);
+    }
+
+    pub(crate) fn active_deactivate(&mut self, sys: SystemId, id: EntityId) {
+        self.active.deactivate(sys, id);
+    }
+
+    pub fn active_len(&self, sys: SystemId) -> usize {
+        self.active.len(sys)
+    }
+
+    pub fn active_at(&self, sys: SystemId, i: usize) -> Option<EntityId> {
+        self.active.at(sys, i)
+    }
+
+    pub(crate) fn active_compact_all(&mut self) {
+        self.active.compact_all();
+    }
+
     /// The one host-side `Err(Unknown)` for a missing player (docs/plan/12-store-and-game-trait.md
     /// Planning decisions "Missing player").
     pub fn last_seq(&self, who: PlayerId) -> Result<u32, Unknown> {
@@ -457,6 +549,13 @@ impl<G: Game> Store<G> {
             sink.put_u32(id.0);
             write_sized(entity, sink);
         }
+
+        // M21b (0007 §7, module doc comment): active lists, then timers, then the wake queue's own
+        // `next` list -- 0005 "Snapshot" orders "entities, active lists and timers"; the wake queue
+        // (not named there) goes last, next to the timer wheel it drives.
+        self.active.write_canonical(sink);
+        self.timers.write_canonical(sink);
+        self.wake.write_canonical(sink);
     }
 
     pub fn encode(&self, sink: &mut impl ByteSink) {
@@ -497,10 +596,17 @@ impl<G: Game> Store<G> {
             entities.insert(id, entity);
         }
 
+        let active = ActiveLists::decode(reader)?;
+        let timers = TimerWheel::decode(reader)?;
+        let wake = WakeQueue::decode(reader)?;
+
         self.players = players;
         self.next_entity_id = next_entity_id;
         self.global = global;
         self.entities = entities;
+        self.active = active;
+        self.timers = timers;
+        self.wake = wake;
         // 0007 §5 "rebuilt on load": a decoded `Store` must never be observed with a stale or
         // absent `ChunkIndex` (docs/plan/21-entities-and-timers.md Provides "rebuilt by
         // Store::rebuild_indexes() after decode").

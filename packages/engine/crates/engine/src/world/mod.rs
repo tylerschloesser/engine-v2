@@ -20,4 +20,4 @@ pub use coords::{
 pub use overlay::{ChunkOverlay, Overlays};
 pub use terrain::{OutOfRange, PristineSource, TerrainStore, TileChange};
 pub use tile::Tile;
-pub use traits::{Footprint, PrototypeId, Registry, TraitSet};
+pub use traits::{Footprint, PrototypeId, Registry, SystemId, TraitSet};

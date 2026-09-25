@@ -36,6 +36,23 @@ impl core::ops::BitOr for TraitSet {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct PrototypeId(pub u16);
 
+/// A handle to one of [`Registry`]'s active-list systems (docs/decisions/0007-world-model.md §7:
+/// "per-system active lists in deterministic (insertion) order"), returned by
+/// [`Registry::system`]. At most 16 (docs/plan/21b-timers-wakeups-and-tickcx.md Scope): the same
+/// small-bound convention as a chunk's footprint (0007 §5).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct SystemId(pub(crate) u8);
+
+impl SystemId {
+    /// The maximum number of systems [`Registry::system`] may hand out.
+    pub const MAX: usize = 16;
+
+    #[inline]
+    pub(crate) fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 /// A multi-tile entity's footprint, in tiles. The engine asserts `footprint <= chunk size` so an
 /// entity overlaps at most 4 chunks (0007 §5); that assertion belongs to the entity placement code
 /// (M12b), out of scope here.
@@ -64,6 +81,9 @@ pub struct Registry {
     /// without ever calling [`Registry::set_chunk_edge`] (every pre-M21 test fixture, and any
     /// caller that only wants trait tables) stays exactly as permissive as before this milestone.
     chunk_edge: u32,
+    /// How many [`SystemId`]s [`Registry::system`] has already handed out (docs/plan/
+    /// 21b-timers-wakeups-and-tickcx.md Scope: "at most 16").
+    system_count: u8,
 }
 
 impl Registry {
@@ -83,6 +103,7 @@ impl Registry {
             resource_visuals,
             prototypes: Vec::new(),
             chunk_edge: 64,
+            system_count: 0,
         }
     }
 
@@ -166,6 +187,22 @@ impl Registry {
         self.prototypes
             .get(id.0 as usize)
             .map_or(TraitSet::EMPTY, |(t, _)| *t)
+    }
+
+    /// Registers a new active-list system (0007 §7, docs/plan/21b-timers-wakeups-and-tickcx.md
+    /// Scope), called from `Game::register` like [`Registry::add_prototype`]. `name` is for panic
+    /// messages only -- there is no lookup-by-name, and no dedup: a game calls this once per system
+    /// and keeps the returned [`SystemId`] as a const, exactly like `add_prototype`'s own
+    /// `PrototypeId` convention.
+    pub fn system(&mut self, name: &str) -> SystemId {
+        assert!(
+            (self.system_count as usize) < SystemId::MAX,
+            "too many active-list systems (max {}): {name}",
+            SystemId::MAX
+        );
+        let id = SystemId(self.system_count);
+        self.system_count += 1;
+        id
     }
 
     /// `Footprint { w: 1, h: 1 }` for an id no `add_prototype` call ever returned (same reasoning as
