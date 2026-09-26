@@ -48,6 +48,8 @@ Net worker and browser reconnect (M29). Desync `ResyncChunk` (M31b). Log-tail lo
 - **Grace and idle timers are host-clock timers outside the sim;** only their outcome (`Disconnected`) is logged. Under the harness they run on the `VirtualClock`.
 - **Hint coordinates are relative to the `Hello` camera report's centre** (0013); chunks outside the `i16` range or beyond the bound are simply omitted and arrive as snapshots.
 
+- **From M24's Deviations.** `harness.panicServer()` should call `trapSim(host)` and then `await simHost.recover()`: the trap alone only kills the instance. After recovery, `onRecovered` fires once, open connections are re-attached (`sim_reattach`, same `ConnId` → `PlayerId`), and queued `EngineFault` acks go out on each player's next frame: for a skipped `ApplyRecord` (`Host::pending_fault_acks`) and for an Admit-phase trap (`sim_fault_ack(conn, seq)`, which also raises `highest_admitted_seq` so a resend is dropped). Actions admitted earlier in the same tick window as an Admit trap are lost with the dead instance's unsealed pending frame (within 0005's one-frame loss window); their resend is this milestone's.
+
 ## Order of work
 1. Keep entry + goldens; hint build and diff with native tests.
 2. Epoch in manifest, `restartServer`, second-`Welcome` resync.

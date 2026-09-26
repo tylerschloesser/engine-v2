@@ -64,7 +64,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 22 | `22-persistence-log-and-snapshots.md` | containers, write-ahead log, snapshots, native replay + heavy mode | 21b | |
 | [x] | 22b | `22b-persistence-load-and-fs.md` | load path, crash recovery from storage, `node:fs` storage, heavy mode in `engine/test` | 22 | |
 | [x] | 23 | `23-persistence-opfs-and-lifecycle.md` | OPFS + Web Lock, storage events, export/import | 22b | T D |
-| [ ] | 24 | `24-recovery-and-migration.md` | panic recovery by re-instantiation (sim role) | 23 | |
+| [x] | 24 | `24-recovery-and-migration.md` | panic recovery by re-instantiation (sim role) | 23 | |
 | [ ] | 24b | `24b-upgrade-and-migration.md` | `SCHEMA_VERSION`, `migrate`, `OldStore`, `SaveIncompatible`, tick rescale | 24 | T |
 | [ ] | 25 | `25-prediction-core.md` | `Predicting` overlay, pending queue, taint rule, provisional ids, `entities_in` | 21b, 16b | |
 | [ ] | 26 | `26-prediction-rendering-and-clocks.md` | overlay diff → renderer, ghost/real swap, lead estimation, host clock | 25, 17 | |

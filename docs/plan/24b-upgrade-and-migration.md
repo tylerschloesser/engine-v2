@@ -53,6 +53,8 @@ A `migrate` for the reference game (not planned; M32–M34 may add one only if T
 
 - **From M23's Deviations.** M23 already added `EngineStartError` code `'load-failed'`: any `Persistence.open` failure (a corrupt manifest is a plain `SyntaxError`, not a `WorldLoadError`) keeps the sim worker alive in a degraded state so `exportWorld`/`deleteWorld` still work. `'save-incompatible'` must be carved out of that path (an identity/schema mismatch reports `'save-incompatible'`; other failures stay `'load-failed'`), and both must keep export/delete working. New `postMessage` types go into `worker/protocol.ts`'s allowlists (`worker/protocol.test.ts` enforces them).
 
+- **From M24's Deviations.** `SimHost.recover()` hardcodes `onRecovered`'s `reason: 'panic'`; the upgrade path must widen it to `'upgrade'` (or fire `onRecovered` itself). Recovery rebinds `Persistence.sim` to the fresh instance, and `Host::reattach`/`sim_reattach` re-attaches open connections without logging a `Connected` record. The progress cursor is `RegionId` 11 (not 9). `ABI_VERSION` is 20.
+
 ## Order of work
 1. `Identity::compare -> Same | Direct | NeedsMigrate(reason) | Incompatible(reason)`; native tests.
 2. `Rescale`, `RescaleTicks`; property test against 0006's rule.

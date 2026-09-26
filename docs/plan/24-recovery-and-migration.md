@@ -1,6 +1,6 @@
 # M24: Panic recovery by re-instantiation (sim role)
 
-Status: not started · After: 23 · Tyler-dependent: no
+Status: done · After: 23 · Tyler-dependent: no
 
 Split: PLAN row 24 held two subsystems with a reading list over the limit. This brief is panic recovery. `24b-upgrade-and-migration.md` is `SCHEMA_VERSION`, `migrate`, `OldStore`, `SaveIncompatible`, the Tick rescale helper and the upgrade path. The file keeps its original name.
 
@@ -66,10 +66,10 @@ Mine from spikes: none. Rules that apply: `.claude/rules/determinism.md`, `.clau
 - Browser: `sim_worker_recovers_from_panic` (single-player page: sim hash via `engine/test` after recovery equals the Node result for the same script; `memGrows() === 0` on the new instance).
 
 ## Exit criteria
-- [ ] All tests above pass by name.
-- [ ] Import allowlist test still passes for `panicky` (no new imports); M02's ABI registry test includes `sim_log_skip`, `sim_test_trap` and `RegionId` 11 `Progress`.
-- [ ] Panic recovery stays out of the zero-GC window by construction (0016 §2 exempt list): no test asserts allocation here, and `zero_gc_singleplayer*` is still green.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name.
+- [x] Import allowlist test still passes for `panicky` (no new imports); M02's ABI registry test includes `sim_log_skip`, `sim_test_trap` and `RegionId` 11 `Progress`.
+- [x] Panic recovery stays out of the zero-GC window by construction (0016 §2 exempt list): no test asserts allocation here, and `zero_gc_singleplayer*` is still green.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test wasm -t trap` · `pnpm test rust -t skip` · `pnpm test wasm -t panic_in_` · `pnpm test browser -t sim_worker_recovers` · `pnpm test` · `pnpm lint`
@@ -601,3 +601,5 @@ on) rather than built out further.
 `browser pass 200`. `pnpm lint`: all green.
 
 ADR note: 0009 `HostServices` had no member through which a *server* host learns of `onFatal` (0005 Panic recovery 4). 0024 §5 adds `HostServices.onFatal?`; this brief exposes `SimHost.onFatal` and M27 maps it.
+
+**Gate (orchestrator).** Cut 1-3 / 4, two implementers, two fix rounds, one review agent. `Progress` landed at `RegionId` 11 (9 was `GenIn`); the brief's Seams were corrected in the same commit, and no other brief consumed the number. The gate required the Admit-phase `EngineFault` answer the implementer had escalated as seamless: without it, a client resending the action after resync re-trips a deterministic `PanicInAdmit` and the loop guard turns one bad action into a fatal stop. Built as `sim_fault_ack(conn, seq)` with `seq` in the cursor's `record` during `Admit`. The gate also required native `testing::replay`/`heavy` to honour `Skip` like every other replay path. Along the way the implementers found `sim_reattach` and `sim_fault_ack` unforwarded through `GameInstance`, `replay.ts`'s hardcoded `sim_replay_begin(0, 0)`, `runHeavy`'s restore skipping the scan pass, and `Persistence.sim` being `readonly`. The review agent found `inFlightAdmitConn`'s clearing untested (fix round 2: `unrelated_trap_does_not_fault_ack_a_stale_admit_conn`; the clearing and the phase gate each mask the other, so both stay). **The orchestrator found `recovery_loop_guard` could not fail on a changed limit**: it derived its loop counts from the exported constants, so the limit going 3 to 4 still passed; the test now pins 3 and 1,200 (`expected 4 to be 3` with the limit changed). Final gate: `rust` 529, `unit` 251, `wasm` 124, `browser` 200 at 32 s of 48 s, lint clean.
