@@ -554,4 +554,50 @@ are untouched, confirmed by re-running `pnpm test rust`/`pnpm test wasm` with no
 `browser pass 200`. `pnpm lint`: all green. `node scripts/repeat.mjs browser 5`: `pass=5 fail=0
 hang=0`.
 
+### M24 fix round 2
+
+**Gap closed:** `SimHost.recover()`'s Admit-fault-ack path is guarded by two independent
+conditions -- `originalCursor?.phase === Phase.Admit` and `admitConnAtTrap !== null` -- and nothing
+proved that *both* are load-bearing. New `unrelated_trap_does_not_fault_ack_a_stale_admit_conn`
+(`panicky-recovery.test.ts`): two connections; conn B admits and applies first, then conn A admits
+and applies (the *last* successful admit before the trap, so a stale `inFlightAdmitConn` would be
+stuck at exactly conn A's own id); a wholly unrelated `trapSim` trap (`Phase::Idle`, no `Skip`)
+follows; after `recover()`, conn A's next frame is decoded for real (`decodeActionResults`) and
+checked by *content*, not by a specific `seq` (`Phase::Idle`'s own cursor `record` is always `0`,
+never the real `seq`, so a `seq`-specific check would miss a bug that fires with the wrong `seq`
+attached -- found live, below); conn A's connection is then proven still fully usable (a new action
+admits and applies, changing the hash).
+
+**Anti-vacuity, all three combinations, exactly as asked:**
+- **Both defects together** (clearing removed *and* the phase check loosened to `admitConnAtTrap !==
+  null` alone) -> **fails**, but only once the assertion itself was fixed: the first version checked
+  `not.toContainEqual({ seq: 1, result: { Rejected: { Engine: 'EngineFault' } } })` and *passed even
+  with both defects injected*, because the spurious ack the loosened gate sends carries `seq: 0`
+  (`Phase::Idle`'s own cursor `record`, always `0`) -- not `1`, so the seq-specific check missed it.
+  Rewritten to check `resultsA.some(r => JSON.stringify(r.result).includes('EngineFault'))` instead;
+  re-run with both defects still injected -> `AssertionError: expected true to be false`. Reverted,
+  green. (This was a real near-miss the coordinator's own request surfaced: the first version of
+  this very test could not fail either.)
+- **Clearing removed alone** (phase gate intact): passes -- `Phase::Idle !== Phase::Admit` blocks it
+  regardless of the stale `conn` value.
+- **Phase gate loosened alone** (clearing intact): passes -- `inFlightAdmitConn` is correctly `null`
+  by the time the unrelated trap happens, so `admitConnAtTrap !== null` alone blocks it.
+
+**Neither check is redundant.** Each one alone stops the bug precisely when the *other* is broken;
+only breaking both at once exposes it. This is deliberate defense in depth, not two names for the
+same fact -- kept both, per the coordinator's own instruction not to delete either on a "redundant"
+guess.
+
+**`Phase::Replay`'s own write, noted as asked:** `sim_replay_begin` writes `Phase::Replay` once, at
+the start of a replay session; `sim_replay_push` writes it again (with the real per-record `record`)
+before every apply pass inside that same session. No test here writes zero records and then traps
+inside `sim_replay_begin` itself before any `sim_replay_push` ever runs, so `sim_replay_begin`'s own
+write is only ever observed transitively, through a value `sim_replay_push` immediately overwrites.
+Accepted as harmless (both write the identical `Phase`, and `record` for `sim_replay_begin` is always
+the segment's own starting `offset`, never read by anything this milestone's recovery logic branches
+on) rather than built out further.
+
+**Measured:** `pnpm test`: `rust pass 529`, `unit pass 251`, `wasm pass 124` (123 + the new test),
+`browser pass 200`. `pnpm lint`: all green.
+
 ADR note: 0009 `HostServices` had no member through which a *server* host learns of `onFatal` (0005 Panic recovery 4). 0024 §5 adds `HostServices.onFatal?`; this brief exposes `SimHost.onFatal` and M27 maps it.

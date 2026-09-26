@@ -284,6 +284,54 @@ test('admit_fault_ack_resend_is_dropped_not_retrapped', async () => {
   expect(recoveredCalls).toBe(0)
 })
 
+test('unrelated_trap_does_not_fault_ack_a_stale_admit_conn', async () => {
+  // M24 fix round 2: `SimHost.recover()`'s own Admit-fault-ack path (Planning decisions 2) is
+  // guarded by *two* independent conditions -- `originalCursor?.phase === Phase.Admit` and
+  // `admitConnAtTrap !== null` -- and both must hold for it to fire. Two connections, so the trap
+  // that follows conn A's own successful admit is unambiguously *not* about conn A: if
+  // `inFlightAdmitConn` were left stale after that admit (instead of cleared), or the phase gate
+  // were loosened, conn A must still never receive a spurious `EngineFault` for an action that
+  // already succeeded.
+  const storage = memoryStorage()
+  const { host, deps } = makeHost(storage)
+  const { connection: connA, lastSent: lastSentA } = fakeConnection()
+  const { connection: connB } = fakeConnection()
+  const connIdA = host.accept(connA)
+  const connIdB = host.accept(connB)
+  expect(connIdA).toBe(0)
+  expect(connIdB).toBe(1)
+  host.stepTick(1) // Joined/Connected for both
+
+  // conn B admits and applies first, so the *last* successful admit before the trap is conn A's own
+  // -- if `inFlightAdmitConn` were ever left stale, this is exactly the value it would be stuck at.
+  admitViaConnection(connB, 1, { ArmTickAlloc: { at: 999 } })
+  host.stepTick(1)
+  admitViaConnection(connA, 1, { ArmTickPanic: { at: 999 } })
+  host.stepTick(1) // applies cleanly; the admit's own `mark_idle` leaves `Phase::Idle` behind
+
+  // A wholly unrelated trap -- `sim_test_trap` panics in whatever phase the last successful call
+  // left behind (`Phase::Idle` here, never `Phase::Admit`) and names no connection at all.
+  const trapResult = catchThrown(() => trapSim(deps.instance))
+  expect(trapResult.threw).toBe(true)
+  expect(await host.recover()).toBe('resumed')
+
+  // conn A's next frame must carry no `EngineFault` ack for its own already-successful admit.
+  host.stepTick(1)
+  const frameBytesA = lastSentA()
+  if (!frameBytesA) throw new Error('expected a frame to have been sent to conn A')
+  const resultsA = decodeActionResults(frameBytesA)
+  // Checked by content, not by a specific `seq` (a stale-conn bug can attach *any* seq -- `Phase.
+  // Idle`'s own cursor `record` is always 0, never 1, so a `seq`-specific check would miss it).
+  const hasEngineFault = resultsA.some((r) => JSON.stringify(r.result).includes('EngineFault'))
+  expect(hasEngineFault).toBe(false)
+
+  // conn A's connection is still fully usable: a new real action admits and applies normally.
+  const hashBefore = host.hash()
+  admitViaConnection(connA, 2, { ArmTickAlloc: { at: 999 } })
+  host.stepTick(1)
+  expect(host.hash()).not.toBe(hashBefore)
+})
+
 test('panic_in_apply_writes_skip_then_resumes', async () => {
   const storage = memoryStorage()
   const { host, deps } = makeHost(storage)
