@@ -577,6 +577,38 @@ pub fn sim_restore_end<T: Instance>(slot: &Slot<T>) -> Status {
     rt.inst.sim_restore_end(result)
 }
 
+/// `sim_upgrade_begin(total_len)` (docs/plan/24b-upgrade-and-migration.md step 4).
+pub fn sim_upgrade_begin<T: Instance>(slot: &Slot<T>, total_len: u32) -> Status {
+    match slot.sim() {
+        Ok(rt) => rt.inst.sim_upgrade_begin(total_len),
+        Err(status) => status,
+    }
+}
+
+/// `sim_upgrade_push(len)`: same in-region-as-receive-buffer shape as `sim_restore_push`.
+pub fn sim_upgrade_push<T: Instance>(slot: &Slot<T>, len: u32) -> Status {
+    let rt = match slot.sim() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    match rt.layout.bytes(RegionId::Persist).get(..len as usize) {
+        Some(bytes) => rt.inst.sim_upgrade_push(bytes),
+        None => Status::BadLength,
+    }
+}
+
+/// `sim_upgrade_end()`: writes the outcome byte plus `log_segment`/`log_offset` into `Result` on
+/// success, or an `IncompatReason` byte on `Status::SaveIncompatible` (`Instance::sim_upgrade_end`'s
+/// own doc comment).
+pub fn sim_upgrade_end<T: Instance>(slot: &Slot<T>) -> Status {
+    let rt = match slot.sim() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.sim_upgrade_end(result)
+}
+
 /// `sim_replay_begin(segment, offset)`.
 pub fn sim_replay_begin<T: Instance>(slot: &Slot<T>, segment: u32, offset: u32) -> Status {
     match slot.sim() {
@@ -597,12 +629,15 @@ pub fn sim_replay_push<T: Instance>(slot: &Slot<T>, len: u32) -> Status {
     }
 }
 
-/// `sim_replay_end()`.
+/// `sim_replay_end()`: also writes the dropped-undecodable-record count into `Result`
+/// (`Instance::sim_replay_end`'s own doc comment, docs/plan/24b-upgrade-and-migration.md).
 pub fn sim_replay_end<T: Instance>(slot: &Slot<T>) -> Status {
-    match slot.sim() {
-        Ok(rt) => rt.inst.sim_replay_end(),
-        Err(status) => status,
-    }
+    let rt = match slot.sim() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.sim_replay_end(result)
 }
 
 /// `sim_replay_valid_end() -> u32`: same "always answer, cost nothing" shape as `sim_dirty`.
@@ -642,12 +677,15 @@ pub fn sim_replay_scan_push<T: Instance>(slot: &Slot<T>, len: u32) -> Status {
     }
 }
 
-/// `sim_replay_scan_end()`.
+/// `sim_replay_scan_end()`: also writes the total scanned record count into `Result`
+/// (`Instance::sim_replay_scan_end`'s own doc comment, docs/plan/24b-upgrade-and-migration.md).
 pub fn sim_replay_scan_end<T: Instance>(slot: &Slot<T>) -> Status {
-    match slot.sim() {
-        Ok(rt) => rt.inst.sim_replay_scan_end(),
-        Err(status) => status,
-    }
+    let rt = match slot.sim() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.sim_replay_scan_end(result)
 }
 
 /// `sim_log_skip(segment, offset)`: bytes written to `Persist`, or `-(status)` -- the same shape

@@ -20,7 +20,10 @@ use crate::bytes::{ByteSink, SliceSink};
 use crate::codec::decode_canonical;
 use crate::delta::Delta;
 use crate::game::{Game, PlayerEvent, PlayerId, Presence as _, PresenceTable, WorldRead};
-use crate::persist::{PROGRESS_BYTES, Phase, ProgressCursor};
+use crate::persist::{
+    Comparison, MismatchReason, PROGRESS_BYTES, Phase, ProgressCursor, UpgradeProgress,
+    UpgradeReader,
+};
 use crate::sim::{EngineReject, Outcome, Record, Rejected, Sim, WorldParams};
 use crate::time::Tick;
 use crate::wire::{
@@ -276,16 +279,26 @@ fn restore_shell<G: Game>(
 where
     G::Global: Default,
 {
+    crate::store::Store::new(fresh_terrain::<G>(seed, worldgen), G::Global::default())
+}
+
+/// docs/plan/24b-upgrade-and-migration.md: the terrain half of [`restore_shell`], factored out so
+/// `Host::sim_upgrade_end`'s migrate path (which needs a bare `TerrainStore` for `migrate::migrate`,
+/// not a whole `Store<G>` shell) can build the identical shape without duplicating the three-line
+/// construction.
+fn fresh_terrain<G: Game>(
+    seed: u64,
+    worldgen: <G::Worldgen as Worldgen>::Params,
+) -> crate::world::TerrainStore {
     let dims = crate::world::ChunkDims::new(G::CHUNK_BITS);
     let source: Box<dyn crate::world::PristineSource> = Box::new(crate::worldgen::Pristine::<
         G::Worldgen,
     >::new(seed, worldgen));
-    let terrain = crate::world::TerrainStore::new(
+    crate::world::TerrainStore::new(
         dims,
         source,
         crate::world::CacheCapacity::Chunks(crate::sim::DEFAULT_CACHE_CHUNKS),
-    );
-    crate::store::Store::new(terrain, G::Global::default())
+    )
 }
 
 /// docs/plan/22b-persistence-load-and-fs.md: `FrameRecord<G>` -> `Record<G>` (by value: the
@@ -333,6 +346,10 @@ fn to_record<G: Game>(r: crate::persist::FrameRecord<G>) -> Option<Record<G>> {
         }
         crate::persist::FrameRecord::Connection { who, ev } => Some(Record::Player { who, ev }),
         crate::persist::FrameRecord::Skip { .. } => None,
+        // docs/plan/24b-upgrade-and-migration.md decision 6: never applied -- `Host::sim_replay_push`
+        // counts and warns on this variant itself, before `to_record` is ever called on it, but the
+        // match here still needs to be exhaustive.
+        crate::persist::FrameRecord::Undecodable { .. } => None,
     }
 }
 
@@ -447,6 +464,18 @@ pub struct Host<G: Game> {
     /// out of `pending`; these three plain `u32`s are kept aside for [`Host::sim_restore_end`] to
     /// apply via `Authority::set_budget`, the same way `Sim::genesis` does).
     restore_budget: Option<(u32, u32, u32)>,
+    /// docs/plan/24b-upgrade-and-migration.md step 4: the in-progress envelope decode
+    /// [`Host::sim_upgrade_begin`] started, fed by [`Host::sim_upgrade_push`]; `None` when no
+    /// upgrade is in flight.
+    upgrade_reader: Option<crate::persist::UpgradeReader>,
+    /// Set by [`Host::sim_upgrade_push`] once [`crate::persist::UpgradeReader::push`] reports
+    /// `Done`; consumed (and cleared) by [`Host::sim_upgrade_end`] (mirrors `restore_done`).
+    upgrade_done: Option<crate::persist::UpgradeEnvelope>,
+    /// The whole [`WorldParams`] [`Host::sim_upgrade_begin`] took out of `pending` -- kept whole
+    /// (unlike `restore_budget`'s three loose fields) because *which* shell to build
+    /// (`restore_shell` for `Same`/`Direct`, a bare `TerrainStore` for `NeedsMigrate`) is not known
+    /// until [`Host::sim_upgrade_end`] has [`crate::persist::Identity::compare`]'s verdict.
+    upgrade_pending: Option<WorldParams<G>>,
     /// The in-progress log replay [`Host::sim_replay_begin`] started, fed by
     /// [`Host::sim_replay_push`]; `None` when no replay is in flight.
     replay_reader: Option<crate::persist::FrameReader<G>>,
@@ -463,6 +492,11 @@ pub struct Host<G: Game> {
     /// "not an error for the last segment") -- further pushes are then ignored, and
     /// [`Host::sim_replay_end`] reports `Status::TornTail` rather than treating it as fatal.
     replay_torn: bool,
+    /// docs/plan/24b-upgrade-and-migration.md decision 6: count of `Action` records
+    /// [`Host::sim_replay_push`]'s apply pass dropped this replay because they failed to decode
+    /// under this build (`persist::FrameRecord::Undecodable`). Reset by [`Host::sim_replay_begin`];
+    /// read back by [`Host::sim_replay_end`]'s own `result` write.
+    replay_dropped_undecodable: u32,
     /// [`Host::sim_replay_begin`]'s own `segment` argument -- unused for wire purposes (a
     /// segment's own index lives in its storage key, docs/plan/22b's Deviations), but needed here
     /// to filter [`crate::persist::FrameRecord::Skip`] targets to this replay's own segment
@@ -480,6 +514,12 @@ pub struct Host<G: Game> {
     /// Set once a pushed scan block fails to decode -- mirrors `replay_torn`, but for the scan
     /// pass's own reader.
     scan_torn: bool,
+    /// docs/plan/24b-upgrade-and-migration.md decision 6: total record count (any kind, `Skip`
+    /// included) seen across every frame [`Host::sim_replay_scan_push`] decoded this scan -- the
+    /// `migrate` path's own "how many records this abandoned tail held" report, since that path
+    /// never runs the real apply pass at all. Reset by [`Host::sim_replay_scan_begin`]; read back by
+    /// [`Host::sim_replay_scan_end`]'s own `result` write.
+    scan_record_count: u32,
     /// Byte offsets (absolute within the segment: `replay_base_offset` already added) named by
     /// every `Skip { segment, offset }` record the scan pass decoded whose `segment` matches
     /// `replay_segment`. `BTreeSet`, not a `HashSet` (`.claude/rules/determinism.md`), though
@@ -655,13 +695,18 @@ impl<G: Game> Host<G> {
             restore_reader: None,
             restore_done: None,
             restore_budget: None,
+            upgrade_reader: None,
+            upgrade_done: None,
+            upgrade_pending: None,
             replay_reader: None,
             replay_base_offset: 0,
             replay_fed: 0,
             replay_torn: false,
+            replay_dropped_undecodable: 0,
             replay_segment: 0,
             scan_reader: None,
             scan_torn: false,
+            scan_record_count: 0,
             replay_skip_targets: BTreeSet::new(),
             pending_fault_acks: Vec::new(),
             progress: ProgressCursor::default(),
@@ -1583,6 +1628,18 @@ fn write_presence_flat<G: Game>(
     }
 }
 
+/// docs/plan/24b-upgrade-and-migration.md: writes an `IncompatReason` byte to `result[0]` and
+/// returns `Status::SaveIncompatible` (Planning decisions 7: no write of any kind happens on this
+/// path -- this function itself never touches storage, only the scratch `Result` region). A free
+/// function, not a `Host` method, since `sim_upgrade_end`'s own `impl Instance for Host<G>` block
+/// may only define trait methods.
+fn write_incompatible(result: &mut [u8], reason: crate::abi::registry::IncompatReason) -> Status {
+    if let Some(byte) = result.first_mut() {
+        *byte = reason as u8;
+    }
+    Status::SaveIncompatible
+}
+
 impl<G: Game> Instance for Host<G>
 where
     G::Global: Default,
@@ -1653,13 +1710,18 @@ where
             restore_reader: None,
             restore_done: None,
             restore_budget: None,
+            upgrade_reader: None,
+            upgrade_done: None,
+            upgrade_pending: None,
             replay_reader: None,
             replay_base_offset: 0,
             replay_fed: 0,
             replay_torn: false,
+            replay_dropped_undecodable: 0,
             replay_segment: 0,
             scan_reader: None,
             scan_torn: false,
+            scan_record_count: 0,
             replay_skip_targets: BTreeSet::new(),
             pending_fault_acks: Vec::new(),
             progress: ProgressCursor::default(),
@@ -2030,6 +2092,139 @@ where
         Status::Ok
     }
 
+    /// docs/plan/24b-upgrade-and-migration.md step 4: begins the 0005 Upgrades sequence. Same
+    /// preconditions as `sim_restore_begin` (no live `Sim` yet, `pending` still holding the world's
+    /// own params) -- but the whole `WorldParams` is kept (`upgrade_pending`), not just the budget
+    /// fields, since which shell to build is not known until `sim_upgrade_end`.
+    fn sim_upgrade_begin(&mut self, _total_len: u32) -> Status {
+        if self.sim.is_some() {
+            return Status::AlreadyInitialised;
+        }
+        let Some(pending) = self.pending.take() else {
+            return Status::AlreadyInitialised;
+        };
+        self.upgrade_reader = Some(UpgradeReader::new());
+        self.upgrade_done = None;
+        self.upgrade_pending = Some(pending);
+        Status::Ok
+    }
+
+    fn sim_upgrade_push(&mut self, bytes: &[u8]) -> Status {
+        let Some(reader) = self.upgrade_reader.as_mut() else {
+            return Status::NotInitialised;
+        };
+        match reader.push(bytes) {
+            Ok(UpgradeProgress::NeedMore) => Status::Ok,
+            Ok(UpgradeProgress::Done(env)) => {
+                self.upgrade_done = Some(env);
+                Status::Ok
+            }
+            Err(crate::persist::PersistError::Crc)
+            | Err(crate::persist::PersistError::Malformed) => Status::Corrupt,
+            Err(crate::persist::PersistError::ContainerVersion) => Status::ContainerVersion,
+        }
+    }
+
+    /// docs/plan/24b-upgrade-and-migration.md step 4: finishes the upgrade sequence -- runs
+    /// [`crate::persist::Identity::compare`] between the decoded envelope's own identity and this
+    /// running build's, then either a direct `Store<G>` decode (`Same`/`Direct`) or `crate::migrate::
+    /// migrate` (`NeedsMigrate`, over a fresh `OldStore`/`TerrainStore`). Every branch that does not
+    /// end in `Status::Ok` leaves `self.sim` untouched (`None`), so a caller sees `SaveIncompatible`
+    /// (or `Corrupt`) with no live world at all -- exactly the "no write of any kind" contract
+    /// (Planning decisions 7), since a caller only ever writes storage after `Status::Ok`.
+    fn sim_upgrade_end(&mut self, result: &mut [u8]) -> Status {
+        let Some(_reader) = self.upgrade_reader.take() else {
+            return Status::NotInitialised;
+        };
+        let Some(pending) = self.upgrade_pending.take() else {
+            return Status::NotInitialised;
+        };
+        let Some(env) = self.upgrade_done.take() else {
+            return Status::Corrupt;
+        };
+        let WorldParams {
+            seed,
+            worldgen,
+            max_entities,
+            max_modified_tiles,
+            max_action_growth,
+        } = pending;
+        let running = self.identity();
+        match env.identity.compare(&running) {
+            Comparison::Same | Comparison::Direct => {
+                let mut store = restore_shell::<G>(seed, worldgen);
+                let mut reader = crate::bytes::ByteReader::new(&env.store_bytes);
+                if store.decode(&mut reader).is_err() {
+                    return Status::Corrupt;
+                }
+                let mut authority =
+                    crate::authority::Authority::from_snapshot(store, env.rng, env.tick);
+                authority.set_budget(max_entities, max_modified_tiles, max_action_growth);
+                self.sim = Some(Sim::from_parts(authority));
+                self.last_logged_tick = Tick(env.log_ref_tick);
+                let Some(out) = result.get_mut(..9) else {
+                    return Status::BadLength;
+                };
+                out[0] = 0; // direct/same: tail replay follows.
+                out[1..5].copy_from_slice(&env.log_segment.to_le_bytes());
+                out[5..9].copy_from_slice(&env.log_offset.to_le_bytes());
+                Status::Ok
+            }
+            Comparison::NeedsMigrate(mismatch) => {
+                crate::abi::panic::log(
+                    crate::abi::registry::LogLevel::Warn,
+                    match mismatch {
+                        MismatchReason::Schema => "upgrade: schema mismatch, attempting migrate",
+                        MismatchReason::TickRate => {
+                            "upgrade: tick rate mismatch, attempting migrate"
+                        }
+                        MismatchReason::Worldgen => {
+                            "upgrade: worldgen mismatch, attempting migrate"
+                        }
+                    },
+                );
+                let terrain = fresh_terrain::<G>(seed, worldgen);
+                let mut reader = crate::bytes::ByteReader::new(&env.store_bytes);
+                let old = match crate::migrate::OldStore::decode(
+                    &mut reader,
+                    env.identity.schema_version,
+                    env.identity.tick_rate_hz,
+                    running.tick_rate_hz,
+                    env.tick,
+                    G::CHUNK_BITS,
+                ) {
+                    Ok(old) => old,
+                    Err(_) => {
+                        return write_incompatible(
+                            result,
+                            crate::abi::registry::IncompatReason::Decode,
+                        );
+                    }
+                };
+                match crate::migrate::migrate::<G>(old, terrain, env.tick, env.rng) {
+                    Ok((mut authority, _outcome)) => {
+                        authority.set_budget(max_entities, max_modified_tiles, max_action_growth);
+                        self.sim = Some(Sim::from_parts(authority));
+                        // decision 6: the tail is dropped whole, never replayed -- the new segment
+                        // (opened by the TS host) starts with no frame logged yet.
+                        self.last_logged_tick = Tick(0);
+                        let Some(out) = result.get_mut(..9) else {
+                            return Status::BadLength;
+                        };
+                        out[0] = 1; // migrated: no tail replay.
+                        out[1..5].copy_from_slice(&env.log_segment.to_le_bytes());
+                        out[5..9].copy_from_slice(&env.log_offset.to_le_bytes());
+                        Status::Ok
+                    }
+                    Err(_) => write_incompatible(
+                        result,
+                        crate::abi::registry::IncompatReason::MigrateDeclined,
+                    ),
+                }
+            }
+        }
+    }
+
     /// docs/plan/24-recovery-and-migration.md: **scan pass** -- decodes `bytes` (fed the same way
     /// `sim_replay_push` is) purely to collect every `Skip { segment, offset }` target whose
     /// `segment` matches `segment`, into `self.replay_skip_targets`. Applies nothing and touches
@@ -2049,6 +2244,7 @@ where
         self.replay_segment = segment;
         self.replay_skip_targets = BTreeSet::new();
         self.scan_torn = false;
+        self.scan_record_count = 0;
         Status::Ok
     }
 
@@ -2075,6 +2271,10 @@ where
                 crate::persist::FrameProgress::NeedMore => break,
                 crate::persist::FrameProgress::Frame(f) => f,
             };
+            // docs/plan/24b-upgrade-and-migration.md decision 6: the migrate path's own "how many
+            // records this abandoned tail held" report -- every record, any kind (`Skip` included),
+            // since that path never runs the real apply pass at all to tell them apart.
+            self.scan_record_count += frame.records.len() as u32;
             for record in &frame.records {
                 if let crate::persist::FrameRecord::Skip { segment, offset } = record
                     && *segment == self.replay_segment
@@ -2091,10 +2291,14 @@ where
     }
 
     /// Finishes the scan pass. `self.replay_skip_targets` is left populated for the `sim_replay_*`
-    /// calls that follow -- unlike `sim_replay_begin`, this never resets it.
-    fn sim_replay_scan_end(&mut self) -> Status {
+    /// calls that follow -- unlike `sim_replay_begin`, this never resets it. Writes
+    /// `scan_record_count` (LE `u32`) to `result[0..4]` (decision 6).
+    fn sim_replay_scan_end(&mut self, result: &mut [u8]) -> Status {
         if self.scan_reader.take().is_none() {
             return Status::NotInitialised;
+        }
+        if let Some(out) = result.get_mut(..4) {
+            out.copy_from_slice(&self.scan_record_count.to_le_bytes());
         }
         if self.scan_torn {
             Status::TornTail
@@ -2120,6 +2324,7 @@ where
         self.replay_base_offset = offset;
         self.replay_fed = 0;
         self.replay_torn = false;
+        self.replay_dropped_undecodable = 0;
         self.replay_segment = segment;
         self.mark_idle(tick);
         Status::Ok
@@ -2210,6 +2415,27 @@ where
                     }
                     continue;
                 }
+                // docs/plan/24b-upgrade-and-migration.md decision 6 (amending 0024 §3b): an action
+                // whose own bytes failed `decode_canonical` under this build is dropped, not fatal --
+                // the frame's own crc32 already verified everything around it, so this is a content
+                // mismatch (an unbumped `SCHEMA_VERSION` change to `G::Action`'s layout, or defensive
+                // corruption tolerance), never a framing error. Counted and warned; the player's own
+                // `last_seq` still advances (an `EngineFault` ack, the same treatment a `Skip` target
+                // already gets) so a resend of this exact `seq` is not misapplied as new.
+                if let crate::persist::FrameRecord::Undecodable { who, seq } = &record {
+                    self.replay_dropped_undecodable += 1;
+                    crate::abi::panic::log(
+                        crate::abi::registry::LogLevel::Warn,
+                        "replay: a tail action failed to decode under this build; dropped (0024 §3b)",
+                    );
+                    self.sim
+                        .as_mut()
+                        .unwrap()
+                        .authority_mut()
+                        .record_ack(*who, *seq);
+                    self.pending_fault_acks.push((*who, *seq));
+                    continue;
+                }
                 if let Some(r) = to_record(record) {
                     filtered.push(r);
                     filtered_offsets.push(abs_offset);
@@ -2246,9 +2472,12 @@ where
     /// docs/plan/22b-persistence-load-and-fs.md: does **not** clear `self.replay_reader` (unlike
     /// `sim_restore_end`'s own `.take()`) -- `sim_replay_valid_end` needs to keep reading its
     /// `buffered_len()` afterward; the next `sim_replay_begin` replaces it anyway.
-    fn sim_replay_end(&mut self) -> Status {
+    fn sim_replay_end(&mut self, result: &mut [u8]) -> Status {
         if self.replay_reader.is_none() {
             return Status::NotInitialised;
+        }
+        if let Some(out) = result.get_mut(..4) {
+            out.copy_from_slice(&self.replay_dropped_undecodable.to_le_bytes());
         }
         if self.replay_torn {
             Status::TornTail

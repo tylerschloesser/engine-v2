@@ -99,12 +99,13 @@ fn build_log_with_one_action() -> (Vec<u8>, u64, PlayerId) {
 /// Feeds `log` through the scan pass then the real apply pass on `host` (segment 0, offset 0) --
 /// the exact two-call sequence `Persistence.loadLatest`/`test/replay.ts` use.
 fn replay(host: &mut engine::host::Host<Panicky>, log: &[u8]) {
+    let mut result = [0u8; 4];
     assert_eq!(host.sim_replay_scan_begin(0), Status::Ok);
     assert_eq!(host.sim_replay_scan_push(log), Status::Ok);
-    assert_eq!(host.sim_replay_scan_end(), Status::Ok);
+    assert_eq!(host.sim_replay_scan_end(&mut result), Status::Ok);
     assert_eq!(host.sim_replay_begin(0, 0), Status::Ok);
     assert_eq!(host.sim_replay_push(log), Status::Ok);
-    assert_eq!(host.sim_replay_end(), Status::Ok);
+    assert_eq!(host.sim_replay_end(&mut result), Status::Ok);
 }
 
 #[test]

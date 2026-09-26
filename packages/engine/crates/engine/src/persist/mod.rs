@@ -19,7 +19,10 @@ pub use frame::{DecodedFrame, FrameProgress, FrameReader, FrameRecord, FrameWrit
 pub use identity::{Comparison, Identity, MismatchReason};
 pub use progress::{PROGRESS_BYTES, Phase, ProgressCursor};
 pub use segment::{SegmentBase, SegmentHeader};
-pub use snapshot::{SnapshotInfo, SnapshotProgress, SnapshotReader, SnapshotWriter};
+pub use snapshot::{
+    SnapshotInfo, SnapshotProgress, SnapshotReader, SnapshotWriter, UpgradeEnvelope,
+    UpgradeProgress, UpgradeReader,
+};
 
 use crate::bytes::{ByteReader, ByteSink};
 use crate::codec::{Codec, CodecError, decode_canonical, encode_to, encoded_len};
@@ -66,6 +69,21 @@ pub(crate) fn read_sized<T: Codec>(reader: &mut ByteReader) -> Result<T, Persist
     let len = reader.varint().map_err(|_| PersistError::Malformed)? as usize;
     let bytes = reader.bytes(len).map_err(|_| PersistError::Malformed)?;
     decode_canonical(bytes).map_err(|_| PersistError::Malformed)
+}
+
+/// [`read_sized`]'s tolerant twin (docs/plan/24b-upgrade-and-migration.md decision 6, amending 0024
+/// §3b): a length-prefixed value whose own bytes fail `decode_canonical` is not a framing error --
+/// the length prefix already lets the reader skip exactly past it -- so this returns `Ok(None)`
+/// instead of `Err`. Only a genuinely truncated length prefix or missing bytes (the frame itself is
+/// short) is still `Err(PersistError::Malformed)`. Used by `persist::frame`'s own action-record
+/// decode: a `SCHEMA_VERSION`-unbumped rules change that still altered `G::Action`'s postcard layout
+/// must drop that one record, not treat the whole tail as torn.
+pub(crate) fn read_sized_or_undecodable<T: Codec>(
+    reader: &mut ByteReader,
+) -> Result<Option<T>, PersistError> {
+    let len = reader.varint().map_err(|_| PersistError::Malformed)? as usize;
+    let bytes = reader.bytes(len).map_err(|_| PersistError::Malformed)?;
+    Ok(decode_canonical(bytes).ok())
 }
 
 /// A leading varint's value, peeked without committing to consuming it from a growing buffer that

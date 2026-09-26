@@ -459,6 +459,28 @@ where
         }
     }
 
+    /// docs/plan/24b-upgrade-and-migration.md step 4.
+    fn sim_upgrade_begin(&mut self, total_len: u32) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_upgrade_begin(total_len),
+            _ => Status::WrongRole,
+        }
+    }
+
+    fn sim_upgrade_push(&mut self, bytes: &[u8]) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_upgrade_push(bytes),
+            _ => Status::WrongRole,
+        }
+    }
+
+    fn sim_upgrade_end(&mut self, result: &mut [u8]) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_upgrade_end(result),
+            _ => Status::WrongRole,
+        }
+    }
+
     /// docs/plan/24-recovery-and-migration.md.
     fn sim_replay_scan_begin(&mut self, segment: u32) -> Status {
         match self {
@@ -474,9 +496,9 @@ where
         }
     }
 
-    fn sim_replay_scan_end(&mut self) -> Status {
+    fn sim_replay_scan_end(&mut self, result: &mut [u8]) -> Status {
         match self {
-            GameInstance::Sim(h) => h.sim_replay_scan_end(),
+            GameInstance::Sim(h) => h.sim_replay_scan_end(result),
             _ => Status::WrongRole,
         }
     }
@@ -495,9 +517,9 @@ where
         }
     }
 
-    fn sim_replay_end(&mut self) -> Status {
+    fn sim_replay_end(&mut self, result: &mut [u8]) -> Status {
         match self {
-            GameInstance::Sim(h) => h.sim_replay_end(),
+            GameInstance::Sim(h) => h.sim_replay_end(result),
             _ => Status::WrongRole,
         }
     }

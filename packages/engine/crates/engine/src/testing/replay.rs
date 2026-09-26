@@ -108,6 +108,13 @@ where
             // Its own target was already collected by `scan_skip_targets`; the `Skip` record
             // itself is always a no-op (0005 "Panic recovery").
             FrameRecord::Skip { .. } => {}
+            // docs/plan/24b-upgrade-and-migration.md decision 6: an action whose own bytes failed
+            // `decode_canonical` under this build -- dropped like a skip target, `last_seq` still
+            // advances (`Host::sim_replay_push`'s own treatment, mirrored here for this native
+            // testkit path).
+            FrameRecord::Undecodable { who, seq } => {
+                acked.push((*who, *seq));
+            }
         }
     }
     (records, acked)

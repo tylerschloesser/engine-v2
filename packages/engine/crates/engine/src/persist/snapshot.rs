@@ -192,6 +192,129 @@ pub enum SnapshotProgress {
     Done(SnapshotInfo),
 }
 
+/// Container-envelope framing shared by [`SnapshotReader::push`] and [`UpgradeReader::push`]
+/// (docs/plan/24b-upgrade-and-migration.md step 4): magic, `container_version`, the `total_len`
+/// varint, and the trailing crc32 -- returns the crc-verified payload slice (identity through
+/// `state_hash`, inclusive) once a whole container has been buffered, `None` while more bytes are
+/// still needed. Factored out so the two readers' framing cannot drift apart (both call this, rather
+/// than each re-implementing the same magic/version/varint/crc checks).
+fn take_verified_payload(buf: &[u8]) -> Result<Option<&[u8]>, PersistError> {
+    if buf.len() < 4 + 2 {
+        return Ok(None);
+    }
+    if buf[0..4] != MAGIC {
+        return Err(PersistError::Malformed);
+    }
+    let version = u16::from_le_bytes(buf[4..6].try_into().expect("2 bytes"));
+    if version != CONTAINER_VERSION {
+        return Err(PersistError::ContainerVersion);
+    }
+    let (total_len, len_bytes) = match peek_varint(&buf[6..]) {
+        VarintPeek::Incomplete => return Ok(None),
+        VarintPeek::Malformed => return Err(PersistError::Malformed),
+        VarintPeek::Value(v, n) => (v as usize, n),
+    };
+    if total_len > MAX_SNAPSHOT_BYTES {
+        return Err(PersistError::Malformed);
+    }
+    if total_len < 8 {
+        // At minimum a state_hash (8 bytes) plus its crc32 (4 bytes) must fit.
+        return Err(PersistError::Malformed);
+    }
+    let prefix = 6 + len_bytes;
+    if buf.len() < prefix + total_len {
+        return Ok(None);
+    }
+    let whole = &buf[prefix..prefix + total_len];
+    let (payload, crc_bytes) = whole.split_at(total_len - 4);
+    let want_crc = u32::from_le_bytes(crc_bytes.try_into().expect("4 bytes"));
+    if crc32(payload) != want_crc {
+        return Err(PersistError::Crc);
+    }
+    Ok(Some(payload))
+}
+
+/// The envelope-only counterpart to [`SnapshotReader`] (docs/plan/24b-upgrade-and-migration.md step
+/// 4): buffers exactly the same container bytes (0005 Formats) and performs the exact same
+/// magic/version/total_len/crc checks ([`take_verified_payload`]), but stops short of decoding the
+/// store section into any particular `Store<G>` shell. The upgrade path needs [`crate::persist::
+/// Identity::compare`]'s verdict first, to know whether the store section is the running build's own
+/// `Store<G>` (`Same`/`Direct`) or an older schema's `OldStore` (`NeedsMigrate`;
+/// `crate::migrate::OldStore::decode`) -- a decision only `sim_upgrade_end` (host/mod.rs), which
+/// knows the concrete `G`, can make.
+pub struct UpgradeReader {
+    buf: Vec<u8>,
+}
+
+/// Everything [`UpgradeReader::push`] parses at the container-envelope level: identity and the
+/// fields 0005 Snapshot lists before "engine section" (tick, log position), the engine section's own
+/// `SimRng`, and the store section's own raw bytes (right after `rng`, up to but excluding the
+/// trailing `state_hash`) -- exactly what [`crate::store::Store::decode`] or [`crate::migrate::
+/// OldStore::decode`] each expect a fresh [`crate::bytes::ByteReader`] positioned at.
+pub struct UpgradeEnvelope {
+    pub identity: Identity,
+    pub tick: Tick,
+    pub log_segment: u32,
+    pub log_offset: u32,
+    pub log_ref_tick: u32,
+    pub rng: SimRng,
+    pub store_bytes: Vec<u8>,
+    pub state_hash: u64,
+}
+
+pub enum UpgradeProgress {
+    NeedMore,
+    Done(UpgradeEnvelope),
+}
+
+impl Default for UpgradeReader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl UpgradeReader {
+    pub fn new() -> Self {
+        UpgradeReader { buf: Vec::new() }
+    }
+
+    pub fn push(&mut self, block: &[u8]) -> Result<UpgradeProgress, PersistError> {
+        self.buf.extend_from_slice(block);
+        let payload = match take_verified_payload(&self.buf)? {
+            Some(p) => p,
+            None => return Ok(UpgradeProgress::NeedMore),
+        };
+        let mut reader = ByteReader::new(payload);
+        let identity = Identity::read(&mut reader)?;
+        let tick = Tick(reader.u32().map_err(|_| PersistError::Malformed)?);
+        let log_segment = reader.u32().map_err(|_| PersistError::Malformed)?;
+        let log_offset = reader.u32().map_err(|_| PersistError::Malformed)?;
+        let log_ref_tick = reader.u32().map_err(|_| PersistError::Malformed)?;
+        let rng: SimRng = read_sized(&mut reader)?;
+        let remaining = reader.rest();
+        let store_len = remaining
+            .len()
+            .checked_sub(8)
+            .ok_or(PersistError::Malformed)?;
+        let store_bytes = remaining[..store_len].to_vec();
+        let state_hash = u64::from_le_bytes(
+            remaining[store_len..]
+                .try_into()
+                .expect("checked_sub(8) above guarantees exactly 8 bytes remain"),
+        );
+        Ok(UpgradeProgress::Done(UpgradeEnvelope {
+            identity,
+            tick,
+            log_segment,
+            log_offset,
+            log_ref_tick,
+            rng,
+            store_bytes,
+            state_hash,
+        }))
+    }
+}
+
 /// The other half of [`SnapshotWriter`]: a resumable, block-split-tolerant reader that decodes
 /// into a caller-supplied, already-constructed empty `Store<G>` shell (correct terrain pristine
 /// source/dims/cache capacity, exactly what `Store::decode` already requires -- see its own doc
@@ -214,40 +337,10 @@ impl<G: Game> SnapshotReader<G> {
 
     pub fn push(&mut self, block: &[u8]) -> Result<SnapshotProgress, PersistError> {
         self.buf.extend_from_slice(block);
-        if self.buf.len() < 4 + 2 {
-            return Ok(SnapshotProgress::NeedMore);
-        }
-        if self.buf[0..4] != MAGIC {
-            return Err(PersistError::Malformed);
-        }
-        let version = u16::from_le_bytes(self.buf[4..6].try_into().expect("2 bytes"));
-        if version != CONTAINER_VERSION {
-            // docs/plan/22b-persistence-load-and-fs.md: distinct from `Malformed` so the ABI layer
-            // (`Host::sim_restore_push`/`sim_restore_end`) can report `Status::ContainerVersion`.
-            return Err(PersistError::ContainerVersion);
-        }
-        let (total_len, len_bytes) = match peek_varint(&self.buf[6..]) {
-            VarintPeek::Incomplete => return Ok(SnapshotProgress::NeedMore),
-            VarintPeek::Malformed => return Err(PersistError::Malformed),
-            VarintPeek::Value(v, n) => (v as usize, n),
+        let payload = match take_verified_payload(&self.buf)? {
+            Some(p) => p,
+            None => return Ok(SnapshotProgress::NeedMore),
         };
-        if total_len > MAX_SNAPSHOT_BYTES {
-            return Err(PersistError::Malformed);
-        }
-        if total_len < 8 {
-            // At minimum a state_hash (8 bytes) plus its crc32 (4 bytes) must fit.
-            return Err(PersistError::Malformed);
-        }
-        let prefix = 6 + len_bytes;
-        if self.buf.len() < prefix + total_len {
-            return Ok(SnapshotProgress::NeedMore);
-        }
-        let whole = &self.buf[prefix..prefix + total_len];
-        let (payload, crc_bytes) = whole.split_at(total_len - 4);
-        let want_crc = u32::from_le_bytes(crc_bytes.try_into().expect("4 bytes"));
-        if crc32(payload) != want_crc {
-            return Err(PersistError::Crc);
-        }
         let mut reader = ByteReader::new(payload);
         let identity = Identity::read(&mut reader)?;
         let tick = Tick(reader.u32().map_err(|_| PersistError::Malformed)?);

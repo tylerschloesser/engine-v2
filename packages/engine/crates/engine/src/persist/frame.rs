@@ -24,7 +24,9 @@
 
 use crate::bytes::{ByteReader, ByteSink};
 use crate::game::{Game, PlayerEvent, PlayerId};
-use crate::persist::{PersistError, VarintPeek, crc32, peek_varint, read_sized, write_sized};
+use crate::persist::{
+    PersistError, VarintPeek, crc32, peek_varint, read_sized_or_undecodable, write_sized,
+};
 
 /// A frame can never exceed the `Persist` region (Planning decisions 5 of docs/plan/
 /// 22-persistence-log-and-snapshots.md: "pending-frame capacity is fixed ... well under the region
@@ -62,6 +64,15 @@ pub enum FrameRecord<G: Game> {
         segment: u32,
         offset: u32,
     },
+    /// docs/plan/24b-upgrade-and-migration.md decision 6 (amending 0024 §3b): an `Action` record
+    /// whose own bytes failed `decode_canonical` under the *current* build (a `SCHEMA_VERSION`-
+    /// unbumped rules change that still altered `G::Action`'s own postcard layout). Dropped, never
+    /// applied -- `who`/`seq` are still decoded (they are engine-owned, never part of the undecodable
+    /// bytes) so a caller can count/log/ack it the same way a `Skip` target already is.
+    Undecodable {
+        who: PlayerId,
+        seq: u32,
+    },
 }
 
 impl<G: Game> Clone for FrameRecord<G>
@@ -79,6 +90,10 @@ where
             FrameRecord::Skip { segment, offset } => FrameRecord::Skip {
                 segment: *segment,
                 offset: *offset,
+            },
+            FrameRecord::Undecodable { who, seq } => FrameRecord::Undecodable {
+                who: *who,
+                seq: *seq,
             },
         }
     }
@@ -123,6 +138,9 @@ impl<G: Game> FrameRecord<G> {
                 sink.put_u32(*segment);
                 sink.put_u32(*offset);
             }
+            FrameRecord::Undecodable { .. } => {
+                unreachable!("FrameRecord::Undecodable is decode-only, never written to the log")
+            }
         }
     }
 
@@ -133,8 +151,10 @@ impl<G: Game> FrameRecord<G> {
         match kind {
             k if k == RecordKind::Action as u8 => {
                 let seq = reader.varint().map_err(|_| PersistError::Malformed)? as u32;
-                let action: G::Action = read_sized(reader)?;
-                Ok(FrameRecord::Action { who, seq, action })
+                match read_sized_or_undecodable::<G::Action>(reader)? {
+                    Some(action) => Ok(FrameRecord::Action { who, seq, action }),
+                    None => Ok(FrameRecord::Undecodable { who, seq }),
+                }
             }
             k if k == RecordKind::Connection as u8 => {
                 let ev = decode_player_event(reader.u8().map_err(|_| PersistError::Malformed)?)?;

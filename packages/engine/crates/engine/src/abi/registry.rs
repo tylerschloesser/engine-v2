@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 20;
+pub const ABI_VERSION: u32 = 21;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -76,6 +76,34 @@ pub enum Status {
     /// or CRC-failing frame". **Not an error for the last (currently open) segment**: that is simply
     /// how recovery finds the torn tail to truncate. `sim_replay_valid_end()` reports where.
     TornTail = 14,
+    /// `sim_upgrade_end` (docs/plan/24b-upgrade-and-migration.md): the load takes the `Game::migrate`
+    /// path (`persist::Comparison::NeedsMigrate`) and either `Game::migrate` itself declined
+    /// (`IncompatReason::MigrateDeclined`, its default `Err(SaveIncompatible)`) or the old-schema
+    /// bytes failed to decode (`IncompatReason::Decode`) -- the reason is written to byte 0 of
+    /// `Result` (`IncompatReason as u8`). Every stored byte stays untouched on this path (0005
+    /// Upgrades; Planning decisions 7): the caller must not write anything after seeing this status.
+    SaveIncompatible = 15,
+}
+
+/// `sim_upgrade_end`'s own `Status::SaveIncompatible` detail, written as one byte at `Result[0]`
+/// (docs/plan/24b-upgrade-and-migration.md Seams). `Schema`/`TickRate`/`Worldgen` mirror `persist::
+/// MismatchReason` 1:1 (kept as separate, wire-stable discriminants here rather than reusing that
+/// type directly, since this enum crosses the ABI boundary and that one does not); `Container` is
+/// reserved for a future container-version-driven incompatibility (never constructed by this
+/// milestone -- `Status::ContainerVersion` already covers a snapshot candidate's own envelope
+/// mismatch, which falls back to an older candidate rather than failing the whole load, this
+/// milestone's own Deviations has the reasoning) and `ChunkSize` is never constructed by Rust at all
+/// (raised by the TS host from the manifest, before any ABI call: Scope).
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IncompatReason {
+    Schema = 0,
+    TickRate = 1,
+    Worldgen = 2,
+    MigrateDeclined = 3,
+    Container = 4,
+    Decode = 5,
+    ChunkSize = 6,
 }
 
 /// Fixed regions in linear memory. Ids 3–8 are reserved so parallel milestones share names; each
@@ -506,6 +534,37 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
+    /// docs/plan/24b-upgrade-and-migration.md step 4: begins the 0005 Upgrades sequence -- the same
+    /// block protocol as [`Instance::sim_restore_begin`] (a fresh instance, `pending` still holding
+    /// the world's own params), but unlike a plain restore this may finish through `Game::migrate`
+    /// rather than a direct `Store<G>` decode: which one it is is not yet known when the first byte
+    /// arrives, only once [`Instance::sim_upgrade_end`] has the whole envelope's own `Identity` to
+    /// run [`crate::persist::Identity::compare`] against.
+    fn sim_upgrade_begin(&mut self, _total_len: u32) -> Status {
+        Status::Unsupported
+    }
+
+    /// Feeds the next block of the snapshot [`Instance::sim_upgrade_begin`] started (same
+    /// in-region-as-receive-buffer shape as [`Instance::sim_restore_push`]).
+    fn sim_upgrade_push(&mut self, _bytes: &[u8]) -> Status {
+        Status::Unsupported
+    }
+
+    /// Finishes the upgrade sequence. `Status::Ok` writes, into `result` (the whole `Result`
+    /// region): byte 0 (`0` = direct/same-schema load, tail replay follows; `1` = migrated, no tail
+    /// replay -- decision 6), then `log_segment`/`log_offset` (two LE `u32` at `result[1..9]`, the
+    /// *old* segment's own position, always present regardless of outcome) -- the position a caller
+    /// on the direct/same outcome resumes tail replay from, and the position a caller on the
+    /// migrated outcome uses only to know which log bytes were abandoned (for its own record count,
+    /// via a fresh [`Instance::sim_replay_scan_begin`]/`push`/`end` over them -- never replayed).
+    /// `Status::Corrupt` if the envelope never finished decoding (still `NeedMore`) or its CRC
+    /// failed; `Status::SaveIncompatible` (`IncompatReason` at `result[0]`) when `Game::migrate`
+    /// itself declines or the old-schema bytes fail to decode -- every stored byte must stay
+    /// untouched by the caller on that status (Planning decisions 7).
+    fn sim_upgrade_end(&mut self, _result: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
+
     /// docs/plan/22b-persistence-load-and-fs.md, sim role: begins replaying a segment's log tail
     /// from byte `offset` (a `Sim` must already exist -- from [`Instance::sim_restore_end`] or
     /// [`Instance::sim_genesis`]). `segment` is accepted but unused by the default/`Host<G>`
@@ -530,7 +589,13 @@ pub trait Instance: Sized + 'static {
     /// block decoded cleanly (including a genuinely empty tail); `Status::TornTail` if
     /// [`Instance::sim_replay_push`] ever hit a bad block. Either way the `Sim` is left at whatever
     /// tick the last successfully applied frame reached ([`Instance::sim_tick_now`]).
-    fn sim_replay_end(&mut self) -> Status {
+    ///
+    /// docs/plan/24b-upgrade-and-migration.md decision 6 (amending 0024 §3b): also writes, as one LE
+    /// `u32` at `result[0..4]`, how many `Action` records [`Instance::sim_replay_push`]'s apply pass
+    /// dropped because they failed to decode under this build (`persist::FrameRecord::Undecodable`,
+    /// warned at the point each is dropped) -- `0` when nothing was dropped, including on every
+    /// pre-M24b caller that never reads `result` at all.
+    fn sim_replay_end(&mut self, _result: &mut [u8]) -> Status {
         Status::Unsupported
     }
 
@@ -566,7 +631,13 @@ pub trait Instance: Sized + 'static {
 
     /// Finishes the scan pass; its own targets stay collected for the `sim_replay_*` calls that
     /// follow.
-    fn sim_replay_scan_end(&mut self) -> Status {
+    ///
+    /// docs/plan/24b-upgrade-and-migration.md decision 6: also writes, as one LE `u32` at
+    /// `result[0..4]`, the total record count seen across every frame the scan pass decoded (any
+    /// kind, `Skip` included) -- the `migrate` path's own "how many records this abandoned tail
+    /// held" report (0005 Upgrades: the tail is dropped whole, never replayed, so this is the only
+    /// count taken of it). `0` on every pre-M24b caller that never reads `result`.
+    fn sim_replay_scan_end(&mut self, _result: &mut [u8]) -> Status {
         Status::Unsupported
     }
 
@@ -705,6 +776,18 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_restore_end() -> u32 {
             $crate::abi::sim_restore_end(&__ENGINE_SLOT) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_upgrade_begin(total_len: u32) -> u32 {
+            $crate::abi::sim_upgrade_begin(&__ENGINE_SLOT, total_len) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_upgrade_push(len: u32) -> u32 {
+            $crate::abi::sim_upgrade_push(&__ENGINE_SLOT, len) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_upgrade_end() -> u32 {
+            $crate::abi::sim_upgrade_end(&__ENGINE_SLOT) as u32
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_replay_scan_begin(segment: u32) -> u32 {
