@@ -1,6 +1,6 @@
 # M23: Persistence in the browser: OPFS, Web Lock, lifecycle, export/import
 
-Status: not started · After: 22b · Tyler-dependent: Q9, "what should a game do with a save it cannot load?" (unanswered; default assumed: engine offers `exportWorld` and `deleteWorld` on an unloaded world; the reference game shows both). Device check attached (**D**).
+Status: done · After: 22b · Tyler-dependent: Q9, "what should a game do with a save it cannot load?" (unanswered; default assumed: engine offers `exportWorld` and `deleteWorld` on an unloaded world; the reference game shows both). Device check attached (**D**).
 
 ## Goal
 A single-player world survives tab close and reload: the sim worker owns OPFS sync access handles and a Web Lock, a second tab gets `WorldBusy`, a browser without OPFS runs on memory storage and reports `durable: false`, and `exportWorld` / `importWorld` round-trip a world between browser and Node. The zero-GC test runs with persistence on and decides, by measurement, whether the periodic snapshot write stays inside the strict window.
@@ -69,12 +69,12 @@ Panic recovery and worker respawn (M24, M37). `SaveIncompatible` (M24b; this mil
 - Vitest (Node): `archive_golden_bytes`, `export_import_roundtrip_node`, `export_browser_import_node_same_hash` (archive fixture produced by the browser test, consumed under Node: the single-player → hosted path of 0005), `import_refuses_existing_world`.
 
 ## Exit criteria
-- [ ] All tests above pass by name.
-- [ ] Decision 1 is resolved in writing: either the default is confirmed (measured bytes recorded under Deviations and in `budgets.json`), or the superseding ADR exists and `budgets.json` carries `simWorker.snapshotEventBytes`.
-- [ ] Decision 3 outcome recorded.
-- [ ] `pnpm device:serve` lists `opfs-latency.html` and `world.html`; in desktop Chrome `world.html` shows `hash`, `tick`, `durable: true`, and a second tab on the same `?world=` shows the `WorldBusy` banner (`second_tab_gets_world_busy` runs on this page).
-- [ ] The `docs/plan/device-checks.md` section for this milestone matches what was built.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name.
+- [x] Decision 1 is resolved in writing: either the default is confirmed (measured bytes recorded under Deviations and in `budgets.json`), or the superseding ADR exists and `budgets.json` carries `simWorker.snapshotEventBytes`.
+- [x] Decision 3 outcome recorded.
+- [x] `pnpm device:serve` lists `opfs-latency.html` and `world.html`; in desktop Chrome `world.html` shows `hash`, `tick`, `durable: true`, and a second tab on the same `?world=` shows the `WorldBusy` banner (`second_tab_gets_world_busy` runs on this page).
+- [x] The `docs/plan/device-checks.md` section for this milestone matches what was built.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test browser -t opfs` · `pnpm test browser -t zero_gc_singleplayer_with_snapshot` · `pnpm test wasm -t export_` · `pnpm test` · `pnpm lint`
@@ -257,3 +257,5 @@ extension (step 6); wiring `pendingAsync()`/`scratchReady()` into `worker/sim.ts
 5. **`window.__*` absent from production.** New unit test `src/window-globals.test.ts` duplicates `test.test.ts`'s own `PRODUCTION_ENTRYPOINTS`/`reachableFiles` walk (that file exports neither) and scans the reached files, comments stripped, for a literal `window.__`/`globalThis.__` assignment. Currently zero matches (this codebase's own real debug hooks -- `worker.ts`'s `dbg.__engineWorkerKind`, `worker/sim.ts`'s `leakSinkHolder.__engineSimLeakSink` -- go through a renamed local alias precisely so they don't match this shape). Failed as required with an injected `window.__gateFix5Proof = 1` in `client.ts`: `Error: production sources write window.__/globalThis.__: client.ts: window.__gateFix5Proof = 1`; reverted, `git diff` confirmed clean.
 
 Verification: `pnpm gc -t "sim|connected|reference|world"` (33 tests, all pass, including `zero_gc_singleplayer_with_snapshot`/`neg_control_snapshot_allocates`); `pnpm test` (rust 518, unit 250, wasm 102, browser 199, all green) and `pnpm lint` both green in the foreground, no background loops started.
+
+**Gate (orchestrator).** Cut 1-2 / 3-4 / 5-7, three implementers plus a fresh one for the gate fix round, one review agent. Every part found a real defect: the shared conformance helper had no write-after-append ordering check and `opfsStorage` failed it (bytes lost after a `write`); `Shell.runAsync` called inside a tick pass never left `runBlockingLoop` (an M06b seam never exercised before), so **a continuously ticking session landed zero snapshots on OPFS** until the fix; a HUD park/export deadlock and a reload Web Lock race (found by the implementer's own repeats); and ADR 0039's first derivation subtracted the 8 B/frame allowance instead of the measured 4.6-4.8 B/frame baseline, hiding a ~4.5 KB snapshot above the 4 KB cap. Attribution named ~2.9 KB of avoidable directory-handle resolution in `opfs.ts`; after caching it the snapshot costs 2,828 B, `snapshotEventBytes` 3,600, and the test asserts the snapshot's own delta against the measured baseline. The review agent found one cross-thread defect (`flush()` could resolve while a rename taken by `runAsync` was still in flight) and four coverage claims without tests (the `postMessage` allowlist was a one-time manual grep since M06b; `stop()` during `runAsync`; `runAsync` before the first loop dropping `fn`; `window.__*` in production), all fixed in the gate fix round; the orchestrator re-ran the `stop()`-guard injection (`expected 2 to be 1`). The `requestWorldLock` 5 × 50 ms retry is not a mask: a live second tab holds the lock for its life and still gets `world-busy`, only a torn-down reload's lock clears inside the window. Decision 3: `move()`'s 2-arg form in all three engines, no slot files, no 0005 amendment. Final gate: `rust` 518, `unit` 250, `wasm` 102, `browser` 199 at 33 s of 48 s, lint clean.

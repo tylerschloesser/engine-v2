@@ -51,6 +51,8 @@ A `migrate` for the reference game (not planned; M32–M34 may add one only if T
 7. **Order of writes makes the upgrade restartable:** new snapshot `write` → `flush()` → manifest `write` (old segment `sealed` with `tailReexecuted` true or false per decision 6, new segment entry) → new segment header `append`. A crash before the manifest write leaves the old world intact and the upgrade simply runs again; a stray new snapshot is pruned later. `SaveIncompatible` performs no write at all.
 8. **Build-hash stamping is asserted, not re-implemented:** M22 already stamps `Identity` into snapshots and segment headers; tests here fake a rules-only change by passing a different `WorldConfig.buildHash` to the same `.wasm`.
 
+- **From M23's Deviations.** M23 already added `EngineStartError` code `'load-failed'`: any `Persistence.open` failure (a corrupt manifest is a plain `SyntaxError`, not a `WorldLoadError`) keeps the sim worker alive in a degraded state so `exportWorld`/`deleteWorld` still work. `'save-incompatible'` must be carved out of that path (an identity/schema mismatch reports `'save-incompatible'`; other failures stay `'load-failed'`), and both must keep export/delete working. New `postMessage` types go into `worker/protocol.ts`'s allowlists (`worker/protocol.test.ts` enforces them).
+
 ## Order of work
 1. `Identity::compare -> Same | Direct | NeedsMigrate(reason) | Incompatible(reason)`; native tests.
 2. `Rescale`, `RescaleTicks`; property test against 0006's rule.
