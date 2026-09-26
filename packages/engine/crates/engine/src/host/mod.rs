@@ -780,6 +780,55 @@ impl<G: Game> Host<G> {
         player
     }
 
+    /// docs/plan/24-recovery-and-migration.md, Traps ("Connections stay open across recovery"): a
+    /// panic-recovery re-instantiation replaces the whole `Sim`/`Host`, but every in-host TS
+    /// `Connection` object survives untouched (the JS host process itself never died) -- this
+    /// installs a fresh `ConnSlot` for `conn` with the same deterministic `PlayerId` a live
+    /// `connect` would assign (`PlayerId(conn + 1)`), delivering this player's own
+    /// `pending_fault_acks` exactly like `connect` does, but queues **no** `Record::Player` event
+    /// and marks `ever_joined[idx]` true: the join and (re)connect already happened and are
+    /// durably part of the log the replay that built this instance just re-applied, so queuing a
+    /// fresh one here would both duplicate that history in the log's own next frame and re-run
+    /// `G::on_player` a second time, perturbing game state the replay already settled. Not
+    /// `connect` with a flag: a distinct, minimal export so the two call sites can never be
+    /// confused (0014 §2's "numbers only" also rules out a boolean parameter to misuse).
+    pub fn reattach(&mut self, conn: ConnId) -> PlayerId {
+        assert!(
+            (conn as usize) < MAX_CONNS,
+            "reattach: conn {conn} out of range (max {MAX_CONNS})"
+        );
+        let idx = conn as usize;
+        let player = PlayerId(conn + 1);
+        self.ever_joined[idx] = true;
+        let mut fault_acks = Vec::new();
+        self.pending_fault_acks.retain(|&(who, seq)| {
+            if who == player {
+                fault_acks.push(seq);
+                false
+            } else {
+                true
+            }
+        });
+        let pending_results = fault_acks
+            .into_iter()
+            .map(|seq| Outcome {
+                seq,
+                result: Err(Rejected::Engine(EngineReject::EngineFault)),
+            })
+            .collect();
+        self.conns[idx] = Some(ConnSlot {
+            player,
+            camera: None,
+            subs: SubscriptionSet::new(crate::world::ChunkDims::new(G::CHUNK_BITS), G::TICK_RATE),
+            first_frame_pending: true,
+            counters: ConnCounters::default(),
+            pending_results,
+            highest_admitted_seq: 0,
+            presence_relayed: BTreeMap::new(),
+        });
+        player
+    }
+
     /// Queues `Record::Player { Disconnected }` (grace: M28) and frees the slot immediately: no
     /// more `build_frame`/`on_uplink` traffic for `conn` until a fresh `connect`. docs/plan/
     /// 19-presence-channel.md steps 4-6 (0001: "on disconnect the host tells clients at once and
@@ -1611,6 +1660,13 @@ where
     /// untrusted wire input), so it is not pre-checked here.
     fn sim_connect(&mut self, conn: u32) -> Status {
         self.connect(conn);
+        Status::Ok
+    }
+
+    /// docs/plan/24-recovery-and-migration.md: `host::Host::reattach` -- same out-of-range
+    /// contract as `sim_connect` above (a TS-side bug, not untrusted wire input).
+    fn sim_reattach(&mut self, conn: u32) -> Status {
+        self.reattach(conn);
         Status::Ok
     }
 

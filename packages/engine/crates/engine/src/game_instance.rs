@@ -347,6 +347,13 @@ where
         }
     }
 
+    fn sim_reattach(&mut self, conn: u32) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_reattach(conn),
+            _ => Status::WrongRole,
+        }
+    }
+
     fn sim_disconnect(&mut self, conn: u32) -> Status {
         match self {
             GameInstance::Sim(h) => h.sim_disconnect(conn),

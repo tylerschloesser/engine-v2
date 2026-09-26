@@ -215,7 +215,11 @@ export class Persistence {
 
   private readonly storage: Storage
   private readonly keys: WorldKeys
-  private readonly sim: EngineInstance
+  /** docs/plan/24-recovery-and-migration.md: not `readonly` any more -- `recover()` rebinds this
+   * to the freshly recovered instance, since this class's own direct ABI calls (`sim_dirty`,
+   * `sim_segment_header`, `sim_snapshot_*`) must never run against the dead instance recovery just
+   * replaced (the same "read a dead instance is fine, call one is not" rule 0014 §6 states). */
+  private sim: EngineInstance
   private readonly ticksPerSecond: number
   private readonly segmentRollBytes: number
   private readonly snapshotEveryTicks: number
@@ -410,6 +414,13 @@ export class Persistence {
     keys: WorldKeys,
     manifest: ManifestV1,
     newInstance: () => EngineInstance,
+    /** docs/plan/24-recovery-and-migration.md: called once, right before `sim_replay_begin`, with
+     * the segment this call is about to replay -- `recovery.ts`'s own retry loop has no other way
+     * to learn which segment a replay-time trap happened in (`ProgressCursor.record` is the byte
+     * *offset* within it, Seams, but never names the segment itself; `Host::sim_log_skip`'s own
+     * `segment` argument needs both). Never called by `Persistence.open`'s ordinary load path,
+     * which has no such retry loop. */
+    onReplaySegment?: (segment: number) => void,
   ): Promise<{
     sim: EngineInstance
     logSegment: number
@@ -520,6 +531,7 @@ export class Persistence {
       off += n
     }
     inst.call0(inst.x.sim_replay_scan_end)
+    onReplaySegment?.(logSegment)
     const beginReplay = inst.call2(inst.x.sim_replay_begin, logSegment, logOffset)
     if (beginReplay !== Status.Ok) {
       throw new Error(`Persistence.loadLatest: sim_replay_begin failed: status ${beginReplay}`)
@@ -587,6 +599,54 @@ export class Persistence {
     }
     await storage.write(keys.manifest, textEncoder.encode(JSON.stringify(healed)))
     return healed
+  }
+
+  /** docs/plan/24-recovery-and-migration.md (0005 Panic recovery 2: "fresh instance, latest valid
+   * snapshot, replay the log tail"): re-derives a fresh `Sim` from storage after a trap, reusing
+   * `loadLatest` unchanged over this *live* Persistence's own `storage`/`keys`/`manifest` -- never
+   * a second `Persistence.open`/`create` call, which would re-run world-creation checks pointlessly
+   * and would not update this same, still-live instance's own `segment`/`logOffset`/`tick`. Continues
+   * this Persistence's own position from the result, exactly like the constructor already does for
+   * an ordinary `Persistence.open()` load. `onReplaySegment` is `loadLatest`'s own hook, threaded
+   * through unchanged for `recovery.ts`'s retry loop. */
+  async recover(
+    newInstance: () => EngineInstance,
+    onReplaySegment?: (segment: number) => void,
+  ): Promise<{ sim: EngineInstance; tick: number; outcome: 'loaded' | 'recovered' }> {
+    this.checkFatal()
+    const loaded = await Persistence.loadLatest(
+      this.storage,
+      this.keys,
+      this.manifest,
+      newInstance,
+      onReplaySegment,
+    )
+    this.manifest = await Persistence.healManifest(this.storage, this.keys, this.manifest, loaded)
+    this.segment = loaded.logSegment
+    this.logOffset = loaded.logOffset
+    this.tick = loaded.tick
+    // Rebind: every direct ABI call this class makes from here on (`isDirty`, `snapshotNow`, a
+    // future roll) must go through the fresh instance, never the dead one this replaced.
+    this.sim = loaded.sim
+    return { sim: loaded.sim, tick: loaded.tick, outcome: loaded.outcome }
+  }
+
+  /** docs/plan/24-recovery-and-migration.md Planning decisions 1: "the host appends a `Skip
+   * { segment, offset }` record ... restarts recovery honoring it". `sim` needs no live `Sim`
+   * (`Host::sim_log_skip`'s own doc comment: "call it on whatever fresh instance is at hand,
+   * including one about to be discarded") -- `recovery.ts` passes a throwaway instance built purely
+   * to encode this one frame. Appends to `segment`'s own log key (Planning decisions 1: "always the
+   * record's own segment") and syncs before returning, so a further crash mid-retry still finds the
+   * `Skip` durable. */
+  async appendSkip(segment: number, offset: number, sim: EngineInstance): Promise<void> {
+    this.checkFatal()
+    const len = sim.call2(sim.x.sim_log_skip, segment, offset)
+    if (len < 0) throw new Error(`Persistence.appendSkip: sim_log_skip failed: status ${-len}`)
+    const region = sim.region(RegionId.Persist)
+    if (!region) throw new Error('Persistence.appendSkip: the Persist region is absent')
+    const bytes = region.u8.slice(0, len)
+    this.storage.append(this.keys.log(segment), bytes)
+    await this.storage.sync(this.keys.log(segment))
   }
 
   /** What `SimHost.logSink` is pointed at (`host.logSink = persistence.appendFrame`): a fixed

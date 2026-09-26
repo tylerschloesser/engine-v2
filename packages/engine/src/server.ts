@@ -10,11 +10,20 @@
 
 import { RegionId, Role, Status } from './abi.js'
 import { Persistence } from './host/persistence.js'
+import {
+  RECOVERY_GOOD_TICKS_RESET,
+  RECOVERY_LOOP_LIMIT,
+  type RecoveryDeps,
+  runPanicRecovery,
+} from './host/recovery.js'
 import type { EngineInstance } from './loader.js'
 import { instantiate } from './loader.js'
 import { buildSimInstanceConfig, type WorldConfig } from './sim-config.js'
 import type { Storage } from './storage/types.js'
 
+// `host/recovery.ts` (docs/plan/24-recovery-and-migration.md): re-exported unchanged, same
+// "no renamed Provides" convention as the re-exports above.
+export type { RecoveryDeps } from './host/recovery.js'
 // `sim-config.ts`'s own pure helpers (Seams: no renamed Provides -- still `server.ts`'s own export
 // surface, just built elsewhere so `client.ts` can import them without also importing `loader.ts`,
 // `main.no_wasm_instantiate`'s own rule).
@@ -124,6 +133,12 @@ export interface SimInstance {
   /** docs/plan/15b-ring-connection-and-replica-rendering.md: admits `conn` into the sim role's
    * connection table (`sim_connect`, forwarding to `host::Host::connect`). `Status` (numeric). */
   simConnect(conn: number): number
+  /** docs/plan/24-recovery-and-migration.md, Traps ("Connections stay open across recovery"):
+   * re-attaches `conn` (`sim_reattach`, forwarding to `host::Host::reattach`) with the same
+   * deterministic `PlayerId` a live `simConnect` would assign, but queues no `Record::Player` event
+   * and touches no game state -- recovery's own call, distinct from `simConnect`. `Status`
+   * (numeric). */
+  simReattach(conn: number): number
   /** docs/plan/15b-ring-connection-and-replica-rendering.md: frees `conn`'s slot (`sim_disconnect`,
    * `host::Host::disconnect`). `Status` (numeric); tolerates an unknown/already-freed `conn`. */
   simDisconnect(conn: number): number
@@ -188,6 +203,7 @@ export function wrapEngineInstance(inst: EngineInstance): SimInstance {
     simWarmOne: () => inst.call0(inst.x.sim_warm_one),
     tickHz: () => inst.call0(inst.x.tick_hz),
     simConnect: (conn) => inst.call1(inst.x.sim_connect, conn),
+    simReattach: (conn) => inst.call1(inst.x.sim_reattach, conn),
     simDisconnect: (conn) => inst.call1(inst.x.sim_disconnect, conn),
     simAdmit: (conn, bytes, len) => {
       const region = inst.region(RegionId.Rx)
@@ -262,6 +278,29 @@ export interface SimHost {
    * pacing timer entirely (a manual driver for tests and `engine/test`'s `stepTick`). */
   stepTick(n?: number): void
   hash(): string
+  /**
+   * docs/plan/24-recovery-and-migration.md (0005 Panic recovery 2-4): call this once the caller has
+   * observed the current instance trap (an `EngineTrap` from any `SimInstance` call). Disarms
+   * pacing, then re-derives a fresh instance from storage (`Persistence.recover`, reusing
+   * `Persistence.loadLatest`); a repeat trap during that replay writes a `Skip` record and retries
+   * (Planning decisions 1) or, if wedged (`Tick`/`OnPlayer`/`Replay`), reports `onFatal` and leaves
+   * every file untouched. On success, re-attaches every still-open connection (`SimInstance.
+   * simReattach`, no new log record, no game-state change) and resumes pacing if it was running
+   * before. The loop guard (Planning decisions 3, `RECOVERY_LOOP_LIMIT`/`RECOVERY_GOOD_TICKS_RESET`
+   * in `host/recovery.ts`) refuses a recovery attempt outright once too many have happened without
+   * enough good ticks between them. Requires a `Persistence` and `recoveryDeps`
+   * (`createSimHostFromInstance`'s own optional 5th argument) -- without either, every trap is
+   * immediately fatal (nothing to recover from).
+   */
+  recover(): Promise<'resumed' | 'skipped' | 'fatal'>
+  /** Fires exactly once per successful `recover()` call (`'upgrade'` is M24b's own reason; this
+   * milestone only ever passes `'panic'`). `null` until set by the caller (`worker/sim.ts` leaves it
+   * unset: M28b wires `bumpEpoch()`/`resyncAll()` here). */
+  onRecovered: ((r: { reason: 'panic' | 'upgrade'; tick: number; skipped: number }) => void) | null
+  /** Fires when `recover()` gives up (no persistence configured, the loop guard tripped, or the
+   * world is wedged under this build). `null` until set by the caller (the sim worker maps this to
+   * `shell.fatal` with the tick prefixed). */
+  onFatal: ((f: { tick: number; message: string }) => void) | null
   /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5: whether the pacing timer is currently
    * armed -- `worker/sim.ts`'s own export-request handler reads this to decide whether it needs to
    * `pause()`/`resume()` around a snapshot-for-export itself, or whether the world is already paused
@@ -305,6 +344,10 @@ export function createSimHostFromInstance(
    * `this.tick` with a wrong, small value on the very first tick after a load -- corrupting every
    * `keys.snap(tick)` key it writes from then on. */
   initialTicksRun = 0,
+  /** docs/plan/24-recovery-and-migration.md: enables `SimHost.recover()`. Optional, additive (a
+   * 5th argument, every existing 2-4-argument caller unaffected) -- without it (or without
+   * `persistence`), `recover()` always reports `onFatal` immediately (nothing to recover from). */
+  recoveryDeps?: RecoveryDeps,
 ): SimHost {
   // Read once, here, not per tick (`SimInstance.tickHz`'s own doc comment): "the pacing arithmetic
   // stays in integer milliseconds" -- `Math.round`, not the raw division, so an odd rate (e.g. 30
@@ -322,6 +365,13 @@ export function createSimHostFromInstance(
   let genesisDone = false
   let running = false
   let stopTimer: (() => void) | null = null
+
+  // docs/plan/24-recovery-and-migration.md, Planning decisions 3 (the loop guard): "more than 3
+  // recoveries without 1,200 successfully ticked ticks in between is fatal". `recoveryCount` is how
+  // many `recover()` calls have happened since the last time `goodTicksSinceRecovery` reached
+  // `RECOVERY_GOOD_TICKS_RESET`; `runOneTick` (below) is the only place that increments the latter.
+  let recoveryCount = 0
+  let goodTicksSinceRecovery = 0
 
   // docs/plan/15b-ring-connection-and-replica-rendering.md: one slot per `ConnId`, `null` when
   // free. Reused array, sized once at construction (`.claude/rules/hot-paths.md`), never
@@ -385,6 +435,11 @@ export function createSimHostFromInstance(
     const status = sim.simTick()
     if (status !== Status.Ok) throw new Error(`sim_tick failed: status ${status}`)
     counters.ticksRun++
+    // docs/plan/24-recovery-and-migration.md, Planning decisions 3: "1,200 successfully ticked
+    // ticks in between" resets the loop guard's own count -- every real completed tick counts,
+    // whether or not it happened to log anything.
+    goodTicksSinceRecovery++
+    if (goodTicksSinceRecovery >= RECOVERY_GOOD_TICKS_RESET) recoveryCount = 0
     // docs/plan/22-persistence-log-and-snapshots.md steps 4-6: the tick procedure's own persistence
     // hook, right after `sim_tick()` succeeds -- `counters.ticksRun` is the same completed-tick
     // count `Persistence.afterTick`'s own doc comment names as its `tick` argument.
@@ -548,6 +603,56 @@ export function createSimHostFromInstance(
     hash() {
       return sim.simHash()
     },
+    async recover() {
+      const wasRunning = running
+      disarm()
+      running = false
+      const trapTick = counters.ticksRun
+      if (!recoveryDeps || !persistence) {
+        host.onFatal?.({
+          tick: trapTick,
+          message: 'recovery unavailable: no persistence configured for this world',
+        })
+        return 'fatal'
+      }
+      if (recoveryCount >= RECOVERY_LOOP_LIMIT) {
+        host.onFatal?.({
+          tick: trapTick,
+          message: `recovery loop guard: more than ${RECOVERY_LOOP_LIMIT} recoveries without ${RECOVERY_GOOD_TICKS_RESET} ticked ticks in between`,
+        })
+        return 'fatal'
+      }
+      recoveryCount++
+      goodTicksSinceRecovery = 0
+      const result = await runPanicRecovery(persistence, recoveryDeps.newInstance)
+      if (result.kind === 'fatal') {
+        host.onFatal?.({ tick: result.tick, message: result.message })
+        return 'fatal'
+      }
+      recoveryDeps.instance = result.sim
+      sim = wrapEngineInstance(result.sim)
+      genesisDone = true
+      counters.ticksRun = result.tick
+      // A fresh resync anchor, same reasoning as `start()`/`resume()`: the trap-and-recover
+      // interval is never counted as falling behind.
+      syncInitialized = false
+      ticksSinceSync = 0
+      // Traps ("Connections stay open across recovery"): every still-open connection is re-attached
+      // to the fresh instance, no new log record, no game-state change (`Host::reattach`'s own doc
+      // comment) -- its queued `EngineFault` ack (if any) then rides out on that connection's own
+      // next `simBuildFrame` call, from the very next `runOneTick`.
+      for (let conn = 0; conn < MAX_CONNS; conn++) {
+        if (conns[conn]) sim.simReattach(conn)
+      }
+      if (wasRunning) {
+        running = true
+        arm()
+      }
+      host.onRecovered?.({ reason: 'panic', tick: result.tick, skipped: result.skipped })
+      return result.skipped > 0 ? 'skipped' : 'resumed'
+    },
+    onRecovered: null,
+    onFatal: null,
     get running() {
       return running
     },

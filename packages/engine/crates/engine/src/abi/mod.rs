@@ -138,6 +138,13 @@ pub fn sim_connect<T: Instance>(slot: &Slot<T>, conn: u32) -> Status {
     }
 }
 
+pub fn sim_reattach<T: Instance>(slot: &Slot<T>, conn: u32) -> Status {
+    match slot.sim() {
+        Ok(rt) => rt.inst.sim_reattach(conn),
+        Err(status) => status,
+    }
+}
+
 pub fn sim_disconnect<T: Instance>(slot: &Slot<T>, conn: u32) -> Status {
     match slot.sim() {
         Ok(rt) => rt.inst.sim_disconnect(conn),

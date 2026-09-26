@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 18
+export const ABI_VERSION = 19
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -92,6 +92,11 @@ export const ABI_EXPORTS = {
   // docs/plan/15b-ring-connection-and-replica-rendering.md: admits `conn` into the sim role's
   // connection table (`host::Host::connect`). The caller (`SimHost.accept`) picks `conn`.
   sim_connect: { role: 'sim', params: 1, result: 'status' },
+  // docs/plan/24-recovery-and-migration.md, Traps ("Connections stay open across recovery"):
+  // re-attaches `conn` with the same deterministic `PlayerId` a live `sim_connect` would assign,
+  // but queues no `Record::Player` event and touches no game state (`host::Host::reattach`'s own
+  // doc comment). Recovery's own re-attach call site, distinct from `sim_connect`.
+  sim_reattach: { role: 'sim', params: 1, result: 'status' },
   // docs/plan/15b-ring-connection-and-replica-rendering.md: frees `conn`'s slot (`host::Host::
   // disconnect`). An unknown/already-disconnected `conn` is a tolerated no-op, not an error.
   sim_disconnect: { role: 'sim', params: 1, result: 'status' },

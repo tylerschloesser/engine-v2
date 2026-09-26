@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 18;
+pub const ABI_VERSION: u32 = 19;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -174,6 +174,16 @@ pub trait Instance: Sized + 'static {
     /// the implementor -- `Host<G>` treats it as a fresh join, since Scope names no dedicated error
     /// for that case.
     fn sim_connect(&mut self, _conn: u32) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/24-recovery-and-migration.md, Traps ("Connections stay open across recovery"):
+    /// re-attaches `conn` to the sim role's connection table with the same deterministic `PlayerId`
+    /// a live `connect` would assign, but queues no `Record::Player` event and touches no game
+    /// state (`host::Host::reattach`'s own doc comment has the full reasoning) -- distinct from
+    /// `sim_connect` so recovery's own re-attach call site can never be confused with a real,
+    /// logged (re)connect.
+    fn sim_reattach(&mut self, _conn: u32) -> Status {
         Status::Unsupported
     }
 
@@ -617,6 +627,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_connect(conn: u32) -> u32 {
             $crate::abi::sim_connect(&__ENGINE_SLOT, conn) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_reattach(conn: u32) -> u32 {
+            $crate::abi::sim_reattach(&__ENGINE_SLOT, conn) as u32
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_disconnect(conn: u32) -> u32 {

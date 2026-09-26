@@ -181,12 +181,26 @@ function driveCell(
   refTick: number,
   untilTick: number,
   onTick: (tick: number, cell: Cell) => void,
+  /** docs/plan/24-recovery-and-migration.md: the real segment index, threaded into
+   * `sim_replay_begin(segment, offset)` -- see `rearm`'s own doc comment for why this (and a real
+   * `offset`, not `0, 0`) is load-bearing once `Skip` targeting exists. */
+  segmentIndex: number,
 ): void {
   let curTick = cell.sim.call0(cell.sim.x.sim_tick_now)
   let reference = refTick
   let replayReady = false
-  const rearm = (): void => {
-    const beginStatus = cell.sim.call2(cell.sim.x.sim_replay_begin, 0, 0)
+  /** docs/plan/24-recovery-and-migration.md: `sim_replay_begin`'s own `offset` becomes
+   * `self.replay_base_offset`, and a `Skip` target is matched against `replay_base_offset +
+   * DecodedFrame::record_offsets[i]` -- the record's *absolute* byte position within the segment
+   * (Seams). Before this milestone, `(0, 0)` was harmless (nothing ever computed an absolute
+   * offset); once `Skip` targeting is live, `atOffset` must be the true absolute position of
+   * whatever byte `sim_replay_push` is about to be fed next (`startOffset` for the very first arm,
+   * or a frame's own `f.start` after a mid-drive instance swap re-arms), or `abs_offset` comes out
+   * wrong and a `Skip`'s own target is silently never matched (`heavy_mode_restore_mid_skip_
+   * matches_uninterrupted_replay`'s own bisection found this: with `(0, 0)`, `PanicInApply`'s own
+   * poisoned record was genuinely *applied* here, panicking for real). */
+  const rearm = (atOffset: number): void => {
+    const beginStatus = cell.sim.call2(cell.sim.x.sim_replay_begin, segmentIndex, atOffset)
     if (beginStatus !== Status.Ok) {
       throw new Error(`replay: sim_replay_begin failed: status ${beginStatus}`)
     }
@@ -201,13 +215,13 @@ function driveCell(
     if (cell.sim !== before) replayReady = false
   }
 
-  rearm()
+  rearm(startOffset)
   const frames = scanFrames(log, startOffset)
   for (const f of frames) {
     const frameTick = (reference + f.tickDelta) >>> 0
     if (frameTick > untilTick) break
     while (curTick < frameTick - 1) tick()
-    if (!replayReady) rearm()
+    if (!replayReady) rearm(f.start)
     const region = cell.sim.region(RegionId.Persist)
     if (!region) throw new Error('replay: the Persist region is absent')
     const pushStatus = feedBlocks(
@@ -289,9 +303,17 @@ export async function replayWorld(
     const logBytes = (await storage.read(keys.log(seg.index))) ?? new Uint8Array(0)
     scanSkipTargets(sim, seg.index, logBytes, offset)
     const cell: Cell = { sim }
-    driveCell(cell, logBytes, offset, refTick, untilTick, (tick) => {
-      if (targets.has(tick)) results.set(tick, readHash(cell.sim))
-    })
+    driveCell(
+      cell,
+      logBytes,
+      offset,
+      refTick,
+      untilTick,
+      (tick) => {
+        if (targets.has(tick)) results.set(tick, readHash(cell.sim))
+      },
+      seg.index,
+    )
     prevHash = readHash(cell.sim)
   }
 
@@ -388,24 +410,48 @@ export async function runHeavy(
 
     const hashesA = new Map<number, string>()
     const cellA: Cell = { sim: simA }
-    driveCell(cellA, logBytes, offset, refTick, untilTick, (tick) => {
-      hashesA.set(tick, readHash(cellA.sim))
-    })
+    driveCell(
+      cellA,
+      logBytes,
+      offset,
+      refTick,
+      untilTick,
+      (tick) => {
+        hashesA.set(tick, readHash(cellA.sim))
+      },
+      seg.index,
+    )
 
     const cellB: Cell = { sim: simB }
-    driveCell(cellB, logBytes, offset, refTick, untilTick, (tick, cell) => {
-      const hashB = readHash(cell.sim)
-      if (firstDivergentTick === null) {
-        const hashA = hashesA.get(tick)
-        if (hashA !== undefined && hashA !== hashB) firstDivergentTick = tick
-      }
-      sinceRestore++
-      if (sinceRestore >= everyN) {
-        const bytes = takeSnapshotBytes(cell.sim)
-        cell.sim = restoreFresh(bytes)
-        sinceRestore = 0
-      }
-    })
+    driveCell(
+      cellB,
+      logBytes,
+      offset,
+      refTick,
+      untilTick,
+      (tick, cell) => {
+        const hashB = readHash(cell.sim)
+        if (firstDivergentTick === null) {
+          const hashA = hashesA.get(tick)
+          if (hashA !== undefined && hashA !== hashB) firstDivergentTick = tick
+        }
+        sinceRestore++
+        if (sinceRestore >= everyN) {
+          const bytes = takeSnapshotBytes(cell.sim)
+          cell.sim = restoreFresh(bytes)
+          // docs/plan/24-recovery-and-migration.md: a genuinely fresh instance built by
+          // `restoreFresh` has an empty `replay_skip_targets` (only `sim_replay_scan_begin`/`push`/
+          // `end` populate it) -- without re-running the scan pass here, a `Skip` record whose
+          // target frame is still ahead of this restore point would silently be *applied* on the
+          // new instance for the rest of this segment, even though the uninterrupted run (`cellA`)
+          // correctly fences it off. Re-scanning the whole segment tail is cheap (it decodes, never
+          // applies) and correct regardless of how far `driveCell` has already progressed through it.
+          scanSkipTargets(cell.sim, seg.index, logBytes, offset)
+          sinceRestore = 0
+        }
+      },
+      seg.index,
+    )
   }
 
   return { firstDivergentTick }
