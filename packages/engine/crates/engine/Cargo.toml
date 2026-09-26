@@ -27,50 +27,10 @@ ts-rs = "12"
 [dev-dependencies]
 naga = { version = "30", default-features = false, features = ["wgsl-in"] }
 
-# `golden_codec_sample` uses `engine::assert_golden_bytes!`/`assert_golden_hash!`, feature
-# `testing`. In practice always on for `pnpm test rust` (fx-hash's dev-dependency on `engine`
-# unifies it across the `--workspace` build); this makes an isolated `cargo test -p engine`
-# without `--features testing` skip the target instead of failing to compile.
-[[test]]
-name = "codec"
-required-features = ["testing"]
-
-# `golden_terrain_canonical` uses `engine::assert_golden_bytes!`/`assert_golden_hash!` (feature
-# `testing`), same reasoning as `codec` above.
-[[test]]
-name = "world_terrain"
-required-features = ["testing"]
-
-# `engine::testing::{assert_cache_invisible, CacheConfig, TestTerrain, CountingSource}` (feature
-# `testing`).
-[[test]]
-name = "world_cache_invisible"
-required-features = ["testing"]
-
-# `engine::assert_golden_hash!` (feature `testing`), same reasoning as `codec` above.
-[[test]]
-name = "worldgen_noise"
-required-features = ["testing"]
-
-# `engine::testing::TestTerrain` and `engine::assert_golden_hash!` (feature `testing`).
-[[test]]
-name = "worldgen_core"
-required-features = ["testing"]
-
-# `engine::testing::testkit::Loopback` (feature `testing`), same reasoning as `codec` above.
-[[test]]
-name = "connection_and_subscriptions"
-required-features = ["testing"]
-
 # `engine::host::Host::queue_action_for_test`, `Host::genesis_for_test` (feature `testing`), and
 # its own `#[global_allocator]` (mirrors `no_alloc_terrain`/`no_alloc_authority`).
 [[test]]
 name = "no_alloc_connection"
-required-features = ["testing"]
-
-# `engine::testing::testkit::Loopback` (feature `testing`), same reasoning as `codec` above.
-[[test]]
-name = "action_round_trip"
 required-features = ["testing"]
 
 # `engine::client::CameraBlock::for_test` (feature `testing`), and its own `#[global_allocator]`
@@ -84,21 +44,15 @@ required-features = ["testing"]
 name = "no_alloc_drawlist"
 required-features = ["testing"]
 
-# `engine::testing::testkit::run_script`, `Store::new`/`decode` alone need nothing gated, but this
-# file's own `replay_equals_live_with_timers` uses `run_script` (feature `testing`), same reasoning
-# as `codec` above.
+# docs/plan/24c-engine-edit-rebuild-time.md: every ordinary (non-`#[global_allocator]`,
+# non-`runner_control`) integration test lives in `tests/main.rs` (`#[path]`-including
+# `tests/main/*.rs`) so cargo links, and macOS ad-hoc-signs, one binary instead of ~14 -- the
+# dominant cost of a one-line `crates/engine/src/` edit (Deviations has the measurement). Most of
+# `tests/main/*.rs` uses `engine::testing::*` (feature `testing`); a handful (`gen_queue`,
+# `module_layering`, `wgsl`) don't need it on their own, same trade as `codec`'s old entry used to
+# describe: an isolated `cargo test -p engine` without `--features testing` now skips the whole
+# binary rather than failing to compile. In practice always on for `pnpm test rust`/the bindings
+# step (fx-hash's dev-dependency on `engine` unifies it across the `--workspace` build).
 [[test]]
-name = "timers_wakeups"
-required-features = ["testing"]
-
-# `engine::testing::testkit::set_next_entity_id` (feature `testing`), same reasoning as `codec`
-# above.
-[[test]]
-name = "state_budget_tick"
-required-features = ["testing"]
-
-# `Authority::{begin_apply_journal_for_test, rollback_apply_journal_for_test}` (feature `testing`),
-# same reasoning as `codec` above.
-[[test]]
-name = "undo_journal"
+name = "main"
 required-features = ["testing"]

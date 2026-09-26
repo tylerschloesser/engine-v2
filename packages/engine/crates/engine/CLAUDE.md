@@ -28,9 +28,9 @@ A member of the root cargo workspace. These live at the repo root, not here: pro
 
 ## Tests
 
-- Unit tests inline (`#[cfg(test)] mod tests`); scenario and replay tests in `tests/*.rs`.
+- Unit tests inline (`#[cfg(test)] mod tests`); scenario and replay tests in `tests/main/*.rs`, an ordinary Rust module each, pulled into the one shared `tests/main.rs` binary with `#[path]` (docs/plan/24c-engine-edit-rebuild-time.md: a one-line edit here used to force macOS to first-execution-verify ~14 separately linked binaries; consolidating leaves that verification cost paid once). Add a new scenario/replay test as `tests/main/<name>.rs` plus a `#[path = "main/<name>.rs"] mod <name>;` line in `tests/main.rs`, not as a bare `tests/<name>.rs` -- `scripts/lib/engine-test-binary-layout.test.mjs` (the `unit` suite) fails the build if a new top-level file appears there without one of the two reasons below.
+- A test only gets its own top-level `tests/*.rs` binary for a real isolation reason: its own `#[global_allocator]` (`no_alloc_*.rs`, since Rust allows exactly one per binary) or being the runner's own negative control (`runner_control.rs`, keep it separate and keep it -- fails only under `pnpm test --self-check-fail`).
 - Slow tier: name the test function `slow_*`. `pnpm test` filters it out; `pnpm test:slow` runs only those.
-- `tests/runner_control.rs` is the runner's permanent negative control (fails only under `pnpm test --self-check-fail`). Keep it.
 - `cargo fmt --check` only sees files in a target's module tree: a stray `.rs` outside `src/` or `tests/` is never checked.
 
 ## Dependencies
