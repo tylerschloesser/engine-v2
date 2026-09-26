@@ -9,11 +9,12 @@
 //! `can_place` is shared by `apply` and (a later milestone's) placement ghost, taking only the read
 //! half (`&dyn WorldRead<Predict>`, 0003's own "shared rule helpers" example).
 
+use engine::client::{ClientSide, DrawList, FrameView, PREDICTED};
 use engine::game::{
     Game, PlayerEvent, PlayerId, PresenceTable, TickCx, Unknown, WorldRead, WorldWrite,
 };
 use engine::time::{TickRate, Ticks};
-use engine::world::{Footprint, PrototypeId, Registry, TilePos, TraitSet};
+use engine::world::{Footprint, PrototypeId, Registry, TilePos, TraitSet, WorldPos};
 use engine::worldgen::Worldgen;
 use ts_rs::TS;
 
@@ -147,6 +148,52 @@ pub fn can_place(w: &dyn WorldRead<Predict>, origin: Pos) -> Result<(), Reject> 
     Ok(())
 }
 
+/// What the DOM overlay observes (docs/plan/26-prediction-rendering-and-clocks.md step 1: fixture
+/// `ClientSide` `ui`): the local player's own inventory, read through `FrameView::predicted_player`
+/// (overlay-then-replica) so it reads the exact same value before and after an ack that changes
+/// nothing visible (M25's own "converges with no visible change" property, now also true of the
+/// `Ui` a game observes, not just `Loopback::visible`) -- `swap_is_one_render`'s own "Ui inventory
+/// is constant" assertion is what this exists to make true.
+#[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize, TS)]
+#[ts(export)]
+pub struct Ui {
+    pub furnaces: u16,
+    pub coal: u16,
+}
+
+/// `ClientSide<Predict>` (docs/plan/26-prediction-rendering-and-clocks.md step 1): one `rect` per
+/// visible `Machine`, at its anchor tile, `PREDICTED` set from `view.is_predicted(id)` (Planning
+/// decisions "`predicted` flag": "`extract` asks `view.is_predicted(id)` ... and sets `PREDICTED`"
+/// -- true for a provisional id or a real id the overlay currently overrides, so the flag reads
+/// `1` from the moment `Place`/`PlaceChecked` predicts a spawn until the ack pops it, then `0`
+/// forever after, with no other transition: `swap_is_one_render`/`reject_is_one_render`'s own
+/// pinned property).
+#[derive(Default)]
+pub struct PredictClient;
+
+const MACHINE_LAYER: u8 = 0;
+const MACHINE_COLOR: u32 = 0xB0_60_20_FF;
+
+impl ClientSide<Predict> for PredictClient {
+    fn extract(&self, view: &FrameView<'_, Predict>, out: &mut DrawList) {
+        for (id, _e, origin) in view.entities() {
+            let pos = WorldPos::from_tile(origin);
+            let size = [MACHINE_FOOTPRINT.w as f32, MACHINE_FOOTPRINT.h as f32];
+            let draw = out.rect(MACHINE_LAYER, pos, size, MACHINE_COLOR);
+            if view.is_predicted(id) {
+                draw.flags |= PREDICTED;
+            }
+        }
+    }
+
+    fn ui(&self, view: &FrameView<'_, Predict>, out: &mut Ui) {
+        if let Ok(p) = view.predicted_player(view.me()) {
+            out.furnaces = p.furnaces;
+            out.coal = p.coal;
+        }
+    }
+}
+
 pub struct Predict;
 
 impl Game for Predict {
@@ -158,8 +205,8 @@ impl Game for Predict {
     type Player = Player;
     type Global = Global;
     type Presence = ();
-    type Ui = ();
-    type Client = ();
+    type Ui = Ui;
+    type Client = PredictClient;
 
     fn register(r: &mut Registry) {
         r.set_base_traits(WATER_BASE, NOT_BUILDABLE);

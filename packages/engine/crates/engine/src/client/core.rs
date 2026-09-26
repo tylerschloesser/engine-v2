@@ -262,6 +262,15 @@ impl<G: Game> ClientCore<G> {
         self.pending.iter()
     }
 
+    /// M26 (docs/plan/26-prediction-rendering-and-clocks.md): the pending queue itself, for
+    /// `FrameView::with_prediction` (`game_instance.rs`'s own `FrameView::new(..)
+    /// .with_prediction(core.overlay(), core.pending_queue())` call sites) -- [`Self::pending`]
+    /// above only ever hands back an iterator, not something a `FrameView` can borrow for a whole
+    /// frame's lifetime.
+    pub(crate) fn pending_queue(&self) -> &PendingQueue<G> {
+        &self.pending
+    }
+
     /// M25 (docs/decisions/0012-prediction-and-reconciliation.md "Two clocks"): the estimated round
     /// trip, in ticks, `Self::predicted_tick` adds to the replica's own authoritative tick. Default
     /// 1 (Non-scope: M26 owns real lead estimation; every test here sets it exactly as the spike

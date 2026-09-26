@@ -7,10 +7,11 @@
 
 use std::collections::BTreeMap;
 
-use crate::game::{EntityId, Game, PlayerId};
+use crate::game::{EntityId, Game, PlayerId, Unknown};
+use crate::predict::{Overlay, PendingQueue, Prediction, footprint_of};
 use crate::presence::Presence as _;
 use crate::time::Tick;
-use crate::world::{Registry, TilePos, TileRect, WorldPos};
+use crate::world::{Registry, Tile, TilePos, TileRect, WorldPos};
 use crate::world_access::WorldRead;
 
 use super::remote_presence::RemotePresences;
@@ -33,31 +34,112 @@ pub struct Clocks {
 /// intersects `FrameView::visible()`, ascending `EntityId` (`BTreeMap`'s own iteration order --
 /// makes DrawList hashes stable, docs/plan/17-drawlist-and-sprites.md Seams). Built by
 /// `FrameView::entities()`; a game never constructs this directly.
-pub struct EntityIter<'a, G: Game> {
-    inner: std::collections::btree_map::Iter<'a, EntityId, G::Entity>,
-    registry: &'a Registry,
-    visible: TileRect,
+///
+/// M26 (docs/plan/26-prediction-rendering-and-clocks.md Scope: "`entities()` becomes
+/// overlay-aware"): with no overlay attached (`FrameView::with_prediction` never called, every
+/// pre-M26 caller), `Base` is the exact pre-M26 code path -- unchanged, so no existing DrawList
+/// hash moves. With one attached, `Merged` walks a reused, sorted id list (overlay ids covering
+/// `visible` merged with base ids intersecting it, `Overlay::render_entities_scratch`) and
+/// resolves each id's value the same way `predict::merge_entities_in` does: an overlay override
+/// replaces it (re-checked against `visible`, since an override may have moved the entity out of
+/// frame), an overlay tombstone skips it, and everything else falls back to the base map.
+pub enum EntityIter<'a, G: Game> {
+    Base {
+        inner: std::collections::btree_map::Iter<'a, EntityId, G::Entity>,
+        registry: &'a Registry,
+        visible: TileRect,
+    },
+    Merged {
+        ids: std::cell::RefMut<'a, Vec<EntityId>>,
+        idx: usize,
+        entities: &'a BTreeMap<EntityId, G::Entity>,
+        overlay: &'a Overlay<G>,
+        registry: &'a Registry,
+        visible: TileRect,
+    },
 }
 
 impl<'a, G: Game> Iterator for EntityIter<'a, G> {
     type Item = (EntityId, &'a G::Entity, TilePos);
 
     fn next(&mut self) -> Option<Self::Item> {
-        for (&id, e) in self.inner.by_ref() {
-            let origin = G::anchor(e);
-            let footprint = self.registry.footprint(G::prototype(e));
-            let rect = TileRect::new(
-                origin,
-                TilePos::new(
-                    origin.x + footprint.w as i32 - 1,
-                    origin.y + footprint.h as i32 - 1,
-                ),
-            );
-            if rect.intersects(&self.visible) {
-                return Some((id, e, origin));
+        match self {
+            EntityIter::Base {
+                inner,
+                registry,
+                visible,
+            } => {
+                for (&id, e) in inner.by_ref() {
+                    let origin = G::anchor(e);
+                    let footprint = registry.footprint(G::prototype(e));
+                    let rect = TileRect::new(
+                        origin,
+                        TilePos::new(
+                            origin.x + footprint.w as i32 - 1,
+                            origin.y + footprint.h as i32 - 1,
+                        ),
+                    );
+                    if rect.intersects(visible) {
+                        return Some((id, e, origin));
+                    }
+                }
+                None
+            }
+            EntityIter::Merged {
+                ids,
+                idx,
+                entities,
+                overlay,
+                registry,
+                visible,
+            } => {
+                while *idx < ids.len() {
+                    let id = ids[*idx];
+                    *idx += 1;
+                    let resolved = match overlay.find_entity(id) {
+                        Some(Some(e)) => {
+                            if footprint_of::<G>(registry, e).intersects(visible) {
+                                Some(e)
+                            } else {
+                                None
+                            }
+                        }
+                        Some(None) => None, // tombstone
+                        None => entities.get(&id),
+                    };
+                    if let Some(e) = resolved {
+                        return Some((id, e, G::anchor(e)));
+                    }
+                }
+                None
             }
         }
-        None
+    }
+}
+
+/// Builds the sorted, deduplicated id list [`EntityIter::Merged`] walks (base ids intersecting
+/// `visible`, plus overlay ids that cover it) into `scratch` -- reused, never reallocated once
+/// warm (`.claude/rules/hot-paths.md`; `Overlay::render_entities_scratch`'s own doc comment).
+fn merge_render_ids<G: Game>(
+    entities: &BTreeMap<EntityId, G::Entity>,
+    overlay: &Overlay<G>,
+    registry: &Registry,
+    visible: TileRect,
+    scratch: &mut Vec<EntityId>,
+) {
+    scratch.clear();
+    for (&id, e) in entities.iter() {
+        if footprint_of::<G>(registry, e).intersects(&visible) {
+            scratch.push(id); // `entities.iter()` is already ascending: stays sorted.
+        }
+    }
+    for (id, e) in overlay.entities() {
+        if let Some(e) = e
+            && footprint_of::<G>(registry, e).intersects(&visible)
+            && let Err(pos) = scratch.binary_search(&id)
+        {
+            scratch.insert(pos, id);
+        }
     }
 }
 
@@ -82,6 +164,12 @@ pub struct FrameView<'a, G: Game> {
     time_ms: f64,
     own_presence: G::Presence,
     remote_presences: &'a RemotePresences<G>,
+    /// `None` until [`Self::with_prediction`] attaches one (docs/plan/
+    /// 26-prediction-rendering-and-clocks.md Scope), mirroring `world_access::View::with_overlay`'s
+    /// own builder-step pattern: every existing caller (drawlist goldens, this file's own tests)
+    /// keeps its exact prior behaviour and hashes.
+    overlay: Option<&'a Overlay<G>>,
+    pending: Option<&'a PendingQueue<G>>,
 }
 
 /// One remote player's presence, as `FrameView::presences()` hands it to a game's own callback
@@ -135,7 +223,25 @@ impl<'a, G: Game> FrameView<'a, G> {
             time_ms,
             own_presence,
             remote_presences,
+            overlay: None,
+            pending: None,
         }
+    }
+
+    /// Attaches the client's prediction overlay and pending queue (docs/plan/
+    /// 26-prediction-rendering-and-clocks.md Scope): `entities()` becomes overlay-aware and
+    /// `is_predicted`/`tile_is_predicted`/`predicted_tiles`/`pending` start answering for real.
+    /// `game_instance.rs` calls this on every real client's own `FrameView`; every other caller
+    /// (a fixture's own drawlist golden, this file's tests) that never calls it keeps the exact
+    /// pre-M26 behaviour and hashes.
+    pub fn with_prediction(
+        mut self,
+        overlay: &'a Overlay<G>,
+        pending: &'a PendingQueue<G>,
+    ) -> Self {
+        self.overlay = Some(overlay);
+        self.pending = Some(pending);
+        self
     }
 
     /// This client's own persistent presence sample (Provides), as of the start of this frame --
@@ -169,13 +275,91 @@ impl<'a, G: Game> FrameView<'a, G> {
         self.me
     }
 
-    /// Replica entities whose footprint intersects [`Self::visible`], ascending `EntityId`.
+    /// Replica entities whose footprint intersects [`Self::visible`], ascending `EntityId` --
+    /// overlay-aware once [`Self::with_prediction`] has attached one (`EntityIter`'s own doc
+    /// comment): overlay values override by id, tombstones are skipped, provisional ids sort
+    /// last (`EntityId`'s own `Ord`, 0022 §5).
     pub fn entities(&self) -> EntityIter<'a, G> {
-        EntityIter {
-            inner: self.entities.iter(),
-            registry: self.registry,
-            visible: self.visible,
+        match self.overlay {
+            None => EntityIter::Base {
+                inner: self.entities.iter(),
+                registry: self.registry,
+                visible: self.visible,
+            },
+            Some(overlay) => {
+                let mut scratch = overlay.render_entities_scratch();
+                merge_render_ids::<G>(
+                    self.entities,
+                    overlay,
+                    self.registry,
+                    self.visible,
+                    &mut scratch,
+                );
+                EntityIter::Merged {
+                    ids: scratch,
+                    idx: 0,
+                    entities: self.entities,
+                    overlay,
+                    registry: self.registry,
+                    visible: self.visible,
+                }
+            }
         }
+    }
+
+    /// True for a provisional id, or a real id the overlay currently overrides (docs/plan/
+    /// 26-prediction-rendering-and-clocks.md Planning decisions "`predicted` flag"): what
+    /// `extract` asks to set [`super::drawlist::PREDICTED`] on a `Draw`. `false` with no overlay
+    /// attached.
+    pub fn is_predicted(&self, id: EntityId) -> bool {
+        id.is_provisional()
+            || self
+                .overlay
+                .is_some_and(|o| matches!(o.find_entity(id), Some(Some(_))))
+    }
+
+    /// True if the prediction overlay currently carries a put for `pos` (docs/plan/
+    /// 26-prediction-rendering-and-clocks.md Planning decisions "`predicted` flag": "the texel
+    /// carries the predicted *value* only; a game styles a pending tile by drawing a `rect` or
+    /// `ghost` from `predicted_tiles`" -- this is the query a game uses to decide *whether* to draw
+    /// one). `false` with no overlay attached.
+    pub fn tile_is_predicted(&self, pos: TilePos) -> bool {
+        self.overlay.is_some_and(|o| o.find_tile(pos).is_some())
+    }
+
+    /// Every tile the prediction overlay currently carries an effective value for, deduplicated
+    /// (`Overlay::effective_tiles`'s own doc comment): a game styles each with its own `rect`/
+    /// `ghost` draw (Planning decisions "`predicted` flag"). No-op with no overlay attached.
+    pub fn predicted_tiles(&self, f: &mut dyn FnMut(TilePos, Tile)) {
+        if let Some(overlay) = self.overlay {
+            overlay.effective_tiles(f);
+        }
+    }
+
+    /// Every action still pending, oldest first (docs/plan/26-prediction-rendering-and-clocks.md
+    /// Provides): `seq` plus its most recently (re-)predicted status, for a game that wants to
+    /// show "pending" independent of any single entity or tile (e.g. `NotPredictable`). No-op
+    /// with no pending queue attached.
+    pub fn pending(&self, f: &mut dyn FnMut(u32, &Prediction<G::Reject>)) {
+        if let Some(pending) = self.pending {
+            for p in pending.iter() {
+                f(p.seq, &p.status);
+            }
+        }
+    }
+
+    /// The overlay-then-replica-merged player state, the same one-liner
+    /// `Predicting::player`/`world_access::View::player` already use (docs/plan/
+    /// 26-prediction-rendering-and-clocks.md Deviations: not in the brief's own Seams list by
+    /// name -- added because `ClientSide::ui` has no other way to show "no visible change" for a
+    /// player's own predicted inventory the way `entities()` now does for occupants; [`Self::
+    /// world`] is deliberately left untouched, replica-only, for every other reader). Falls back
+    /// to [`Self::world`]'s own `player` when no overlay is attached or it has no opinion.
+    pub fn predicted_player(&self, who: PlayerId) -> Result<&'a G::Player, Unknown> {
+        if let Some(p) = self.overlay.and_then(|o| o.find_player(who)) {
+            return Ok(p);
+        }
+        self.world.player(who)
     }
 
     /// The visible rectangle plus a 2-tile margin (0018 §2's DrawList capacity assumes extract

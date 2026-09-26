@@ -41,6 +41,12 @@ pub struct Overlay<G: Game> {
     /// `RefCell` for the same reason `saw_unknown` is a `Cell`: every `WorldRead` method takes
     /// `&self`.
     entities_in_scratch: RefCell<Vec<EntityId>>,
+    /// M26's own scratch for `FrameView::entities()`'s overlay merge (docs/plan/
+    /// 26-prediction-rendering-and-clocks.md): a *separate* buffer from
+    /// [`Self::entities_in_scratch`], not a shared one, so a game's `extract()` calling both
+    /// `view.entities()` (this) and `view.world().entities_in(..)` (that) in the same frame never
+    /// double-borrows one `RefCell`.
+    render_entities_scratch: RefCell<Vec<EntityId>>,
 }
 
 impl<G: Game> Overlay<G> {
@@ -52,6 +58,7 @@ impl<G: Game> Overlay<G> {
             global: None,
             saw_unknown: Cell::new(false),
             entities_in_scratch: RefCell::new(Vec::new()),
+            render_entities_scratch: RefCell::new(Vec::new()),
         }
     }
 
@@ -215,6 +222,27 @@ impl<G: Game> Overlay<G> {
     /// `world_access::View::entities_in`).
     pub(crate) fn entities_in_scratch(&self) -> std::cell::RefMut<'_, Vec<EntityId>> {
         self.entities_in_scratch.borrow_mut()
+    }
+
+    /// M26's own scratch for `FrameView::entities()`'s overlay merge, kept separate from
+    /// [`Self::entities_in_scratch`] (its own doc comment).
+    pub(crate) fn render_entities_scratch(&self) -> std::cell::RefMut<'_, Vec<EntityId>> {
+        self.render_entities_scratch.borrow_mut()
+    }
+
+    /// Every *effective* (non-superseded) tile put, in overlay order: the position and its
+    /// last-write value, with an earlier entry for the same position skipped (docs/plan/
+    /// 26-prediction-rendering-and-clocks.md: "`OverlayDiff` keeps the previous deduplicated
+    /// overlay tile list"; also `FrameView::predicted_tiles`). Same "small, nested scan, no
+    /// allocation" shape as [`Self::find_entity_at`]'s own "superseded" check -- overlay entries
+    /// are single digits (0012), so the O(n^2) worst case never matters in practice.
+    pub(crate) fn effective_tiles(&self, f: &mut dyn FnMut(TilePos, Tile)) {
+        for (idx, &(pos, tile)) in self.tiles.iter().enumerate() {
+            let superseded = self.tiles[idx + 1..].iter().any(|&(p, _)| p == pos);
+            if !superseded {
+                f(pos, tile);
+            }
+        }
     }
 }
 

@@ -713,7 +713,8 @@ where
                     camera_view.time_ms,
                     own_presence,
                     replica.remote_presences(),
-                );
+                )
+                .with_prediction(core.overlay(), core.pending_queue());
 
                 // docs/plan/18-picking-and-overlay.md Scope, steps 4-6: "frame(t_ms) order becomes
                 // build FrameView -> ClientSide::frame -> extract -> header (follow, anchors) ->
@@ -932,7 +933,8 @@ where
                             camera_view.time_ms,
                             *presence,
                             replica.remote_presences(),
-                        );
+                        )
+                        .with_prediction(core.overlay(), core.pending_queue());
                         ui.maybe_run(client, &view, mutations, ui_buf);
                         // docs/plan/16-action-round-trip.md Scope: "on_frame reads ActionResults
                         // and writes one result record per entry to RegionId::Ui".
