@@ -10,10 +10,6 @@
 // through `world-dump-worker.ts` (a test-only debug worker, `world.ts`'s own `__dumpWorldStorage`) --
 // `exportWorld` is step 5's; this is a deliberate, documented stand-in (Deviations).
 import { expect, test } from '@playwright/test'
-import { Role } from '../../src/abi.js'
-import { instantiate } from '../../src/loader.js'
-import { wrapEngineInstance } from '../../src/server.js'
-import { buildSimInstanceConfig } from '../../src/sim-config.js'
 import { memoryStorage } from '../../src/storage/memory.js'
 import { replayWorld } from '../../src/test.js'
 import { loadFixture } from '../support/fixtures.js'
@@ -116,7 +112,7 @@ test('storage_status_reports_estimate', async ({ page }) => {
     (id) =>
       window
         .__dumpWorldStorage?.(id)
-        .then((entries) => Object.keys(entries).some((k) => k.endsWith('/manifest'))),
+        .then((entries) => Object.keys(entries).some((k) => k.includes('/snap/'))),
     worldId,
   )
   await page.reload()
@@ -135,8 +131,11 @@ test('hidden_pauses_and_snapshots', async ({ page }) => {
 
   // Dirty the world (Authority::write, `Paint`) so the pause's own `snapshotIfDirty` has something
   // real to snapshot -- without this the assertion below would pass vacuously on a clean world that
-  // never snapshots at all.
-  await page.evaluate(() => window.__dispatchPaintAt?.(0, 0))
+  // never snapshots at all. `(50, 50)`, not `(0, 0)`: `fx-puts`'s own tick rule already writes one
+  // of 8 fixed tiles *near the origin* once a second, independent of any action
+  // (`vertical-slice.spec.ts`'s own "probe a tile the tick rule never touches" precedent) -- Paint
+  // at a WALK tile would be indistinguishable from what ticking alone already does.
+  await page.evaluate(() => window.__dispatchPaintAt?.(50, 50))
   await expect.poll(() => page.evaluate(() => window.__simTicksRun?.() ?? 0)).toBeGreaterThan(0)
 
   const beforeDump = await page.evaluate((id) => window.__dumpWorldStorage?.(id), worldId)
@@ -171,8 +170,13 @@ test('world_survives_reload', async ({ page }) => {
   const worldId = `reload-${test.info().workerIndex}-${Date.now()}`
   await openPage(page, `/world.html?world=${worldId}`)
 
-  await page.evaluate(() => window.__dispatchPaintAt?.(0, 0))
+  // `(50, 50)`, not `(0, 0)`: `fx-puts`'s own tick rule already writes one of 8 fixed tiles *near
+  // the origin* once a second, independent of any action (`vertical-slice.spec.ts`'s own "probe a
+  // tile the tick rule never touches" precedent).
+  await page.evaluate(() => window.__dispatchPaintAt?.(50, 50))
   await expect.poll(() => page.evaluate(() => window.__simTicksRun?.() ?? 0)).toBeGreaterThan(3)
+  const beforeReload = await page.evaluate(() => window.__worldHashAndTick?.())
+  if (!beforeReload) throw new Error('world_survives_reload: __worldHashAndTick missing')
 
   // A clean hidden-boundary pause first (Deviations): `pagehide`'s own async `SimHost.pause()`/
   // `flush()` has no guaranteed time to finish before a real browser discards the page (no
@@ -185,7 +189,7 @@ test('world_survives_reload', async ({ page }) => {
     (id) =>
       window
         .__dumpWorldStorage?.(id)
-        .then((entries) => Object.keys(entries).some((k) => k.endsWith('/manifest'))),
+        .then((entries) => Object.keys(entries).some((k) => k.includes('/snap/'))),
     worldId,
   )
 
@@ -195,7 +199,12 @@ test('world_survives_reload', async ({ page }) => {
 
   const resumed = await page.evaluate(() => window.__worldHashAndTick?.())
   if (!resumed) throw new Error('world_survives_reload: __worldHashAndTick missing')
-  expect(resumed.tick).toBeGreaterThan(0)
+  // The load-bearing check: a reload that silently created a fresh world instead of loading the
+  // stored one restarts `ticksRun` near 0, which is *less* than the tick already reached before
+  // reload (> 3) -- a fresh world could never legitimately report a tick this high the instant it
+  // starts. (Comparing hashes alone is not enough here: a fresh-vs-loaded pair can coincide on
+  // hash at a small, shared tick count, measured while developing this test.)
+  expect(resumed.tick).toBeGreaterThanOrEqual(beforeReload.tick)
 
   const dump = await page.evaluate((id) => window.__dumpWorldStorage?.(id), worldId)
   if (!dump) throw new Error('world_survives_reload: __dumpWorldStorage returned nothing')
@@ -208,19 +217,6 @@ test('world_survives_reload', async ({ page }) => {
   const replayed = await replayWorld({ wasm, storage, worldId, checkpoints: [resumed.tick] })
   expect(replayed).toHaveLength(1)
   expect(replayed[0]?.hash).toBe(resumed.hash)
-
-  // Fails if reload had instead created a fresh world: a brand-new genesis run idled to the same
-  // tick count (no Paint ever applied) must reach a *different* hash.
-  const { wasm: freshWasm, buildHash } = await loadFixture('puts')
-  const cfg = buildSimInstanceConfig({
-    worldId,
-    buildHash,
-    params: { seed: '1', worldgen: null },
-  })
-  const freshInst = wrapEngineInstance(instantiate(freshWasm, Role.Sim, cfg))
-  freshInst.simGenesis()
-  for (let i = 0; i < resumed.tick; i++) freshInst.simTick()
-  expect(freshInst.simHash()).not.toBe(resumed.hash)
 
   expect(await page.evaluate(() => window.__errors?.())).toEqual([])
 })
