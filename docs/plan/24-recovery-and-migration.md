@@ -32,7 +32,7 @@ Mine from spikes: none. Rules that apply: `.claude/rules/determinism.md`, `.clau
 
 ## Seams
 **Provides**
-- ABI/region: `RegionId` 9 `Progress` (12 B, sim role; read from a *dead* instance through `inst.region(9).u8` / `inst.mem.u32`, which call no export): `ProgressCursor { phase: u32, tick: u32, record: u32 }`, `phase ∈ { Idle, Admit, ApplyRecord, OnPlayer, Tick, BuildFrame, Snapshot, Replay }`, written by Rust before each step; during replay `record` is the byte offset of the record in its segment (the `offset` of 0005's `Skip { segment, offset }`).
+- ABI/region: `RegionId` 11 `Progress` (9 was taken by `GenIn`; Deviations) (12 B, sim role; read from a *dead* instance through `inst.region(11).u8` / `inst.mem.u32`, which call no export): `ProgressCursor { phase: u32, tick: u32, record: u32 }`, `phase ∈ { Idle, Admit, ApplyRecord, OnPlayer, Tick, BuildFrame, Snapshot, Replay }`, written by Rust before each step; during replay `record` is the byte offset of the record in its segment (the `offset` of 0005's `Skip { segment, offset }`).
 - ABI: `sim_log_skip(segment: u32, offset: u32) -> len` (a frame holding one `Skip` record, `tick_delta = 0`, in the `Persist` region); `sim_test_trap()` (panics in phase `Idle`; test-only by convention, reached only through `engine/test`).
 - TS host: `SimHost.onRecovered: ((r: { reason: 'panic' | 'upgrade'; tick: number; skipped: number }) => void) | null` (M28b points it at `bumpEpoch()` + `resyncAll()`; M24b fires it with `'upgrade'`), `SimHost.onFatal: ((f: { tick: number; message: string }) => void) | null` (M27 maps it to `HostServices.onFatal?` for servers, 0024 §5; the sim worker maps it to `shell.fatal`), `SimHost.recover(): Promise<'resumed' | 'skipped' | 'fatal'>`.
 - `engine/test`: `trapSim(host): void` (calls `sim_test_trap`; this is the "M24 test trap hook" M28b's `harness.panicServer()` uses).
@@ -67,7 +67,7 @@ Mine from spikes: none. Rules that apply: `.claude/rules/determinism.md`, `.clau
 
 ## Exit criteria
 - [ ] All tests above pass by name.
-- [ ] Import allowlist test still passes for `panicky` (no new imports); M02's ABI registry test includes `sim_log_skip`, `sim_test_trap` and `RegionId` 9 `Progress`.
+- [ ] Import allowlist test still passes for `panicky` (no new imports); M02's ABI registry test includes `sim_log_skip`, `sim_test_trap` and `RegionId` 11 `Progress`.
 - [ ] Panic recovery stays out of the zero-GC window by construction (0016 §2 exempt list): no test asserts allocation here, and `zero_gc_singleplayer*` is still green.
 - [ ] `pnpm test` and `pnpm lint` are green.
 
