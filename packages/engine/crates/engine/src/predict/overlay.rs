@@ -11,10 +11,10 @@
 //! method takes `&self` (0003: object-safe), so a read that discovers `Unknown` must still be able
 //! to flag it through a shared reference -- the same reason the spike used one.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use crate::game::{EntityId, Game, PlayerId};
-use crate::world::{Registry, Tile, TilePos};
+use crate::world::{Registry, Tile, TilePos, TileRect};
 
 /// `Overlay::mark`'s return type: a rollback point. Carries a clone of the pre-write `Global` slot
 /// (`G::Global: Clone`, 0003) since that slot is a single value, not a vector index -- there is
@@ -34,6 +34,13 @@ pub struct Overlay<G: Game> {
     players: Vec<(PlayerId, G::Player)>,
     global: Option<G::Global>,
     saw_unknown: Cell<bool>,
+    /// M25 step 8's own scratch for the `entities_in` overlay merge (`merge_entities_in`, below):
+    /// `Predicting` is rebuilt fresh on every `predict()` call (`predicting.rs`'s module doc
+    /// comment), so this `Overlay` -- the one thing that survives across an entire replay pass --
+    /// is the only place a reusable buffer can live for it (`.claude/rules/hot-paths.md`). A
+    /// `RefCell` for the same reason `saw_unknown` is a `Cell`: every `WorldRead` method takes
+    /// `&self`.
+    entities_in_scratch: RefCell<Vec<EntityId>>,
 }
 
 impl<G: Game> Overlay<G> {
@@ -44,6 +51,7 @@ impl<G: Game> Overlay<G> {
             players: Vec::new(),
             global: None,
             saw_unknown: Cell::new(false),
+            entities_in_scratch: RefCell::new(Vec::new()),
         }
     }
 
@@ -201,6 +209,13 @@ impl<G: Game> Overlay<G> {
     pub(crate) fn overlays_id(&self, id: EntityId) -> bool {
         self.entities.iter().any(|(i, _)| *i == id)
     }
+
+    /// This overlay's own reusable `entities_in`-merge scratch buffer (see the field's own doc
+    /// comment): borrowed by [`merge_entities_in`]'s two callers (`Predicting::entities_in`,
+    /// `world_access::View::entities_in`).
+    pub(crate) fn entities_in_scratch(&self) -> std::cell::RefMut<'_, Vec<EntityId>> {
+        self.entities_in_scratch.borrow_mut()
+    }
 }
 
 impl<G: Game> Default for Overlay<G> {
@@ -209,10 +224,77 @@ impl<G: Game> Default for Overlay<G> {
     }
 }
 
-/// Whether entity `e`'s footprint (`G::anchor`/`G::prototype`, `Registry::footprint`) covers tile
-/// `p`. Shared by [`super::predicting::Predicting::entity_at`] and `world_access::View`'s own
-/// overlay merge (both need the identical "does this predicted/overlaid entity sit on this tile"
-/// check); `pub(crate)` since both callers are inside this crate.
+/// An entity's footprint rect (`G::anchor`/`G::prototype`, `Registry::footprint`): shared by
+/// [`covers`], [`merge_entities_in`] and `predicting.rs`'s own occupancy check in `put_entity`.
+pub(crate) fn footprint_of<G: Game>(registry: &Registry, e: &G::Entity) -> TileRect {
+    crate::store::footprint_rect(G::anchor(e), registry.footprint(G::prototype(e)))
+}
+
+/// Whether entity `e`'s footprint covers tile `p`. Shared by [`super::predicting::Predicting::
+/// entity_at`] and `world_access::View`'s own overlay merge (both need the identical "does this
+/// predicted/overlaid entity sit on this tile" check); `pub(crate)` since both callers are inside
+/// this crate.
 pub(crate) fn covers<G: Game>(registry: &Registry, e: &G::Entity, p: TilePos) -> bool {
-    crate::store::footprint_rect(G::anchor(e), registry.footprint(G::prototype(e))).contains(p)
+    footprint_of::<G>(registry, e).contains(p)
+}
+
+/// The overlay merge of `WorldRead::entities_in` (docs/plan/25-prediction-core.md Planning
+/// decisions "Iterating reads", M25 step 8): every id the overlay has an opinion about replaces or
+/// removes (a tombstone) whatever `run_base` visited; every id the overlay covers `rect` with,
+/// even one `run_base` never visits (a provisional spawn, or an entity moved to newly cover
+/// `rect`), is added. Ascending order falls out for free: both sources are merged through the same
+/// binary-search-insert `Store::entities_in` already uses, and `EntityId`'s `Ord` already puts
+/// every provisional id (bit 31 set) after every real one, so a provisional entry never needs to be
+/// resorted ahead of a real one.
+///
+/// `run_base` is the caller's own (already `Unknown`-checked) base pass -- `Predicting` wraps
+/// `self.base.entities_in`, `View` wraps `Store::entities_in` directly -- and returns whether it
+/// succeeded: `false` (base returned `Err(Unknown)`, and by that same contract never called its own
+/// callback) makes this return `false` too, *before* `f` is ever called for anything, including a
+/// pure-overlay entry -- matching `WorldRead::entities_in`'s own contract ("`Err(Unknown)` before
+/// any callback"). `base_entity` looks up a base-only id's value for the final emit pass (an id the
+/// overlay never mentions at all). `scratch` is the caller's own reused buffer (`.claude/rules/
+/// hot-paths.md`): cleared here, never reallocated once warm.
+pub(crate) fn merge_entities_in<'a, G: Game>(
+    overlay: &'a Overlay<G>,
+    registry: &Registry,
+    rect: TileRect,
+    scratch: &mut Vec<EntityId>,
+    mut run_base: impl FnMut(&mut dyn FnMut(EntityId, &G::Entity)) -> bool,
+    base_entity: impl Fn(EntityId) -> Option<&'a G::Entity>,
+    f: &mut dyn FnMut(EntityId, &'a G::Entity),
+) -> bool {
+    scratch.clear();
+    let ok = run_base(&mut |id, _| {
+        if let Err(pos) = scratch.binary_search(&id) {
+            scratch.insert(pos, id);
+        }
+    });
+    if !ok {
+        return false;
+    }
+    for (id, e) in overlay.entities() {
+        if let Some(e) = e
+            && footprint_of::<G>(registry, e).intersects(&rect)
+            && let Err(pos) = scratch.binary_search(&id)
+        {
+            scratch.insert(pos, id);
+        }
+    }
+    for &id in scratch.iter() {
+        match overlay.find_entity(id) {
+            Some(Some(e)) => {
+                if footprint_of::<G>(registry, e).intersects(&rect) {
+                    f(id, e);
+                }
+            }
+            Some(None) => {} // tombstone
+            None => {
+                if let Some(e) = base_entity(id) {
+                    f(id, e);
+                }
+            }
+        }
+    }
+    true
 }

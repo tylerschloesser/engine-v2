@@ -93,7 +93,15 @@ pub struct View<'a, G: Game> {
     overlay: Option<&'a Overlay<G>>,
     /// Reused across `entities_in` calls (`.claude/rules/hot-paths.md`): a `RefCell` since
     /// `WorldRead::entities_in` takes `&self`, matching `Authority`/`Replica`'s own scratch field.
+    /// `Store::entities_in`'s own internal candidate buffer -- a second, distinct buffer from
+    /// [`Self::merge_scratch`] below, since the two are live at once when an overlay is attached
+    /// (`predict::merge_entities_in`'s own `run_base` closure calls `Store::entities_in` while
+    /// `merge_entities_in` itself is still using its own scratch to build the merged candidate
+    /// list).
     entities_in_scratch: RefCell<Vec<EntityId>>,
+    /// M25 step 8: [`predict::merge_entities_in`]'s own reused candidate-id buffer, only used once
+    /// [`Self::with_overlay`] has attached an overlay.
+    merge_scratch: RefCell<Vec<EntityId>>,
 }
 
 impl<'a, G: Game> View<'a, G> {
@@ -110,6 +118,7 @@ impl<'a, G: Game> View<'a, G> {
             held,
             overlay: None,
             entities_in_scratch: RefCell::new(Vec::new()),
+            merge_scratch: RefCell::new(Vec::new()),
         }
     }
 
@@ -123,6 +132,7 @@ impl<'a, G: Game> View<'a, G> {
             held: &|_| true,
             overlay: None,
             entities_in_scratch: RefCell::new(Vec::new()),
+            merge_scratch: RefCell::new(Vec::new()),
         }
     }
 
@@ -202,6 +212,9 @@ impl<G: Game> WorldRead<G> for View<'_, G> {
             .unwrap_or_else(|| self.store.global())
     }
 
+    /// M25 step 8: unaffected when no overlay is attached (`Store::entities_in` directly, as
+    /// before); with one, merges it through [`crate::predict::merge_entities_in`] -- the same
+    /// helper `Predicting::entities_in` uses, `covers`'s own sibling.
     fn entities_in(
         &self,
         rect: TileRect,
@@ -211,8 +224,28 @@ impl<G: Game> WorldRead<G> for View<'_, G> {
         if touches_unheld(rect, &dims, self.held) {
             return Err(Unknown);
         }
-        let mut scratch = self.entities_in_scratch.borrow_mut();
-        self.store.entities_in(rect, &mut scratch, f);
+        match self.overlay {
+            None => {
+                let mut scratch = self.entities_in_scratch.borrow_mut();
+                self.store.entities_in(rect, &mut scratch, f);
+            }
+            Some(overlay) => {
+                let mut merge_scratch = self.merge_scratch.borrow_mut();
+                crate::predict::merge_entities_in::<G>(
+                    overlay,
+                    self.registry,
+                    rect,
+                    &mut merge_scratch,
+                    |emit| {
+                        let mut scratch = self.entities_in_scratch.borrow_mut();
+                        self.store.entities_in(rect, &mut scratch, emit);
+                        true
+                    },
+                    |id| self.store.entity(id),
+                    &mut |id, e| f(id, e),
+                );
+            }
+        }
         Ok(())
     }
 }

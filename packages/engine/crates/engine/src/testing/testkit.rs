@@ -309,6 +309,25 @@ where
         Visible { cells, me }
     }
 
+    /// M25 step 8 (docs/plan/25-prediction-core.md Tests added: `entities_in_merges_overlay`/
+    /// `entities_in_order_matches_authority`): every entity client `i`'s prediction-merged view
+    /// visits over `rect`, in the order `WorldRead::entities_in` itself promises (ascending
+    /// `EntityId`, ids not values -- `G::Entity: Clone` is what lets this collect owned copies
+    /// instead of borrowing into `self`).
+    pub fn entities_in(&self, i: usize, rect: TileRect) -> Vec<(EntityId, G::Entity)>
+    where
+        G::Entity: Clone,
+    {
+        let core = &self.clients[i].core;
+        let replica = core.view();
+        let held = |c: crate::world::ChunkCoord| replica.is_held(c);
+        let view = View::<G>::new(replica.store(), replica.registry(), replica.tick(), &held)
+            .with_overlay(core.overlay());
+        let mut out = Vec::new();
+        let _ = view.entities_in(rect, &mut |id, e| out.push((id, e.clone())));
+        out
+    }
+
     pub fn last_built_frame(&self, i: usize) -> &[u8] {
         &self.clients[i].last_built
     }

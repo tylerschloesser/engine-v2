@@ -12,27 +12,12 @@
 
 use crate::game::{EntityId, Game, PlayerId, Unknown};
 use crate::rng::SimRng;
-use crate::store::footprint_rect;
 use crate::time::Tick;
 use crate::world::{ChunkDims, Registry, Tile, TilePos, TileRect, TraitSet};
 use crate::world_access::{WorldRead, WorldWrite};
 
-use super::overlay::{Overlay, covers};
+use super::overlay::{Overlay, covers, footprint_of, merge_entities_in};
 use super::pending::Prediction;
-
-/// Placeholder client-local id for a predicted spawn: bit 31 set (so `EntityId::is_provisional()`
-/// holds), distinct per `(seq, n)` within one client instance for the lifetime of that `seq`. M25
-/// step 5 (docs/plan/25-prediction-core.md Order of work) replaces this with the ADR
-/// 0022 §5 exact layout (`EntityId::provisional`, the 513-spawn-per-action cap, the `Deserialize`
-/// guard that keeps one off the wire) -- deliberately *not* named `EntityId::provisional` here, so
-/// the next implementer adds that seam rather than renames this one.
-fn temp_provisional_id(seq: u32, n: u32) -> EntityId {
-    EntityId(EntityId::PROVISIONAL_BIT | ((seq & 0x00FF_FFFF) << 4) | (n & 0xF))
-}
-
-fn footprint_of<G: Game>(registry: &Registry, e: &G::Entity) -> TileRect {
-    footprint_rect(G::anchor(e), registry.footprint(G::prototype(e)))
-}
 
 /// What a predicted handler runs against (0003). `base` is the client's replica, upcast to
 /// `&dyn WorldRead<G>` by the caller (`client::core::ClientCore`); `registry` is needed alongside
@@ -118,13 +103,17 @@ impl<'a, G: Game> WorldRead<G> for Predicting<'a, G> {
         }
     }
 
-    /// Overlay first, else the replica -- total on `Replica` today (docs/plan/
-    /// 21-entities-and-timers.md loopback test Deviations: "an id the replica has never seen is
-    /// `Ok(None)`, not `Err(Unknown)`"). 0022 §7's Unknown-vs-unseen distinction for a *real* id is
-    /// this milestone's own item but lands with the taint/provisional-id steps (5-8), not here.
+    /// Overlay first (a tombstone short-circuits to `Ok(None)` without ever asking `base`); then a
+    /// provisional id the overlay has no opinion about is `Ok(None)` too (0022 §7: "that namespace
+    /// is the client's own" -- `base`, a real replica, is never even asked about one); otherwise
+    /// `base.entity(id)` (0022 §7: a real id the replica does not hold is `Err(Unknown)`, which
+    /// `client::Replica::entity` -- the production `base` -- now implements).
     fn entity(&self, id: EntityId) -> Result<Option<&G::Entity>, Unknown> {
         if let Some(found) = self.overlay.find_entity(id) {
             return Ok(found);
+        }
+        if id.is_provisional() {
+            return Ok(None);
         }
         self.base.entity(id)
     }
@@ -146,14 +135,31 @@ impl<'a, G: Game> WorldRead<G> for Predicting<'a, G> {
         self.overlay.global().unwrap_or_else(|| self.base.global())
     }
 
-    /// The overlay merge here is M25 step 8's own cut line (docs/plan/25-prediction-core.md Order
-    /// of work): delegates to the base read alone until then.
+    /// M25 step 8 (docs/plan/25-prediction-core.md Planning decisions "Iterating reads"): merges
+    /// the overlay on top of `base.entities_in` through [`merge_entities_in`], sharing its own
+    /// `Overlay`-owned scratch buffer (`Overlay::entities_in_scratch`) since `Predicting` itself is
+    /// rebuilt fresh every call and has nowhere else to keep one warm.
     fn entities_in(
         &self,
         rect: TileRect,
         f: &mut dyn FnMut(EntityId, &G::Entity),
     ) -> Result<(), Unknown> {
-        self.base.entities_in(rect, f)
+        let mut scratch = self.overlay.entities_in_scratch();
+        let ok = merge_entities_in::<G>(
+            self.overlay,
+            self.registry,
+            rect,
+            &mut scratch,
+            |emit| self.base.entities_in(rect, emit).is_ok(),
+            |id| self.base.entity(id).ok().flatten(),
+            &mut |id, e| f(id, e),
+        );
+        drop(scratch);
+        if !ok {
+            self.overlay.mark_unknown();
+            return Err(Unknown);
+        }
+        Ok(())
     }
 }
 
@@ -168,8 +174,17 @@ impl<'a, G: Game> WorldWrite<G> for Predicting<'a, G> {
         self.overlay.push_tile(p, t);
     }
 
+    /// 0022 §5: `EntityId::provisional(seq, spawned)`, stable across every replay of this same
+    /// pending action (`seq` and this per-`Predicting` spawn counter are both pure functions of
+    /// "the nth spawn this action makes", re-derived identically every time). A 513th spawn in one
+    /// action (`spawned == 512`) makes `provisional` return `None`; there is no valid id left to
+    /// hand back, so this sets `saw_unknown` (the whole action declines as `NotPredictable` and
+    /// rolls back, discarding the dummy id below along with everything else this replay wrote).
     fn spawn(&mut self, e: G::Entity) -> EntityId {
-        let id = temp_provisional_id(self.seq, self.spawned);
+        let id = EntityId::provisional(self.seq, self.spawned).unwrap_or_else(|| {
+            self.overlay.mark_unknown();
+            EntityId(EntityId::PROVISIONAL_BIT)
+        });
         self.spawned += 1;
         self.put_entity(id, e);
         id
@@ -244,5 +259,284 @@ pub(crate) fn predict<G: Game>(
                 Prediction::Rejected(e)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::{PlayerEvent, TickCx};
+    use crate::world::{Footprint, PrototypeId, Registry, TraitSet};
+    use crate::worldgen::Worldgen;
+    use std::collections::BTreeMap;
+
+    /// Carries a position (as plain `i32`s: `TilePos` itself has no `Serialize`/`Deserialize`, and
+    /// `Game::Entity` must be `Codec`) so `entities_in`'s own footprint/rect logic has something to
+    /// bite on (`entity_id_gone_vs_unsubscribed`, below, only ever compares by id and does not care
+    /// what position is inside).
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct TEntity(i32, i32);
+    impl TEntity {
+        fn at(p: TilePos) -> Self {
+            TEntity(p.x, p.y)
+        }
+        fn pos(self) -> TilePos {
+            TilePos::new(self.0, self.1)
+        }
+    }
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct TPlayer;
+    #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct TGlobal;
+    #[derive(
+        Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, ts_rs::TS,
+    )]
+    struct TReject;
+    impl From<Unknown> for TReject {
+        fn from(_: Unknown) -> Self {
+            TReject
+        }
+    }
+    struct TGen;
+    impl Worldgen for TGen {
+        type Params = ();
+        const WORLDGEN_VERSION: u32 = 0;
+        fn generate(_seed: u64, _params: &(), _chunk: crate::world::ChunkCoord, out: &mut [Tile]) {
+            out.fill(Tile::VOID);
+        }
+    }
+    struct TGame;
+    impl Game for TGame {
+        const SCHEMA_VERSION: u32 = 1;
+        type Worldgen = TGen;
+        type Action = ();
+        type Reject = TReject;
+        type Entity = TEntity;
+        type Player = TPlayer;
+        type Global = TGlobal;
+        type Presence = ();
+        type Ui = ();
+        type Client = ();
+        fn register(r: &mut Registry) {
+            let id = r.add_prototype(TraitSet::EMPTY, Footprint { w: 1, h: 1 });
+            debug_assert_eq!(id, PrototypeId(0));
+        }
+        fn prototype(_e: &TEntity) -> PrototypeId {
+            PrototypeId(0)
+        }
+        fn anchor(e: &TEntity) -> TilePos {
+            e.pos()
+        }
+        fn genesis(_w: &mut dyn WorldWrite<Self>) {}
+        fn on_player(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _ev: PlayerEvent) {}
+        fn apply(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _a: &()) -> Result<(), TReject> {
+            Ok(())
+        }
+        fn tick(_cx: &mut TickCx<'_, Self>) {}
+    }
+
+    /// A minimal, hand-rolled `WorldRead<TGame>` (not `Replica`: `predict/` may never name the
+    /// client module directly, `tests/main/module_layering.rs`'s own source scan). Models exactly
+    /// the contract `Replica::entity` now guarantees for a *real* id (0022 §7): `Ok(Some)` if
+    /// known, `Err(Unknown)` otherwise -- enough to prove `Predicting::entity`'s own merge is
+    /// correct regardless of what a real base happens to do.
+    struct FakeBase {
+        known: BTreeMap<EntityId, TEntity>,
+        global: TGlobal,
+        /// A knob for the "`Unknown` at the edge" case of `entities_in_merges_overlay`: when set,
+        /// `entities_in` declines before calling its own callback at all, matching
+        /// `WorldRead::entities_in`'s own contract for a rect that touches an unheld chunk.
+        unknown_entities_in: bool,
+    }
+    impl WorldRead<TGame> for FakeBase {
+        fn tick(&self) -> Tick {
+            Tick(0)
+        }
+        fn tile(&self, _p: TilePos) -> Result<Tile, Unknown> {
+            Ok(Tile::VOID)
+        }
+        fn traits_at(&self, _p: TilePos) -> Result<TraitSet, Unknown> {
+            Ok(TraitSet::EMPTY)
+        }
+        fn entity_at(&self, _p: TilePos) -> Result<Option<EntityId>, Unknown> {
+            Ok(None)
+        }
+        fn entity(&self, id: EntityId) -> Result<Option<&TEntity>, Unknown> {
+            self.known.get(&id).map(Some).ok_or(Unknown)
+        }
+        fn player(&self, _who: PlayerId) -> Result<&TPlayer, Unknown> {
+            Err(Unknown)
+        }
+        fn global(&self) -> &TGlobal {
+            &self.global
+        }
+        fn entities_in(
+            &self,
+            rect: TileRect,
+            f: &mut dyn FnMut(EntityId, &TEntity),
+        ) -> Result<(), Unknown> {
+            if self.unknown_entities_in {
+                return Err(Unknown);
+            }
+            for (&id, e) in self.known.iter() {
+                if rect.contains(e.pos()) {
+                    f(id, e);
+                }
+            }
+            Ok(())
+        }
+    }
+
+    /// 0022 §7's four cases, all through `Predicting::entity` (the real, production merge):
+    /// real+held -> `Ok(Some)`; real+unheld -> `Err(Unknown)` (delegated straight to `base`, which
+    /// -- in production, `client::Replica::entity` -- draws exactly this distinction, `client/
+    /// replica.rs`'s own `predict_replica_entity_seen_vs_unseen_vs_provisional`); a provisional id
+    /// the overlay has no opinion about -> `Ok(None)` (`Predicting`'s own short-circuit, `base` is
+    /// never even asked); an overlay tombstone -> `Ok(None)` regardless of what `base` would say
+    /// (constructed here to say `Err(Unknown)`, proving the tombstone truly short-circuits first).
+    #[test]
+    fn predict_entity_id_gone_vs_unsubscribed() {
+        let real_seen = EntityId(5);
+        let real_unseen = EntityId(6);
+        let provisional_unseen = EntityId::provisional(1, 0).unwrap();
+        let tombstoned = EntityId(7);
+
+        let mut known = BTreeMap::new();
+        let entity = TEntity::at(TilePos::new(0, 0));
+        known.insert(real_seen, entity);
+        let base = FakeBase {
+            known,
+            global: TGlobal,
+            unknown_entities_in: false,
+        };
+        let registry = Registry::new();
+        let mut overlay = Overlay::<TGame>::new();
+        overlay.push_entity(tombstoned, None);
+
+        let base: &dyn WorldRead<TGame> = &base;
+        let p = Predicting::new(base, &registry, &mut overlay, Tick(0), 1);
+
+        assert_eq!(p.entity(real_seen), Ok(Some(&entity)));
+        assert_eq!(p.entity(real_unseen), Err(Unknown));
+        assert_eq!(p.entity(provisional_unseen), Ok(None));
+        assert_eq!(p.entity(tombstoned), Ok(None));
+    }
+
+    /// M25 step 8 (docs/plan/25-prediction-core.md Tests added): override, tombstone,
+    /// provisional-last order, and `Unknown` at the edge -- all through `Predicting::entities_in`,
+    /// the real merge (`predict::merge_entities_in`).
+    #[test]
+    fn predict_entities_in_merges_overlay() {
+        let mut r = Registry::new();
+        TGame::register(&mut r);
+        let mut known = BTreeMap::new();
+        known.insert(EntityId(1), TEntity::at(TilePos::new(0, 0))); // untouched: still in rect
+        known.insert(EntityId(2), TEntity::at(TilePos::new(1, 0))); // overridden: moved out of rect
+        known.insert(EntityId(3), TEntity::at(TilePos::new(2, 0))); // tombstoned: removed
+        let base = FakeBase {
+            known,
+            global: TGlobal,
+            unknown_entities_in: false,
+        };
+        let base: &dyn WorldRead<TGame> = &base;
+
+        let mut overlay = Overlay::<TGame>::new();
+        overlay.push_entity(EntityId(2), Some(TEntity::at(TilePos::new(5, 0))));
+        overlay.push_entity(EntityId(3), None);
+        let prov = EntityId::provisional(9, 0).unwrap();
+        overlay.push_entity(prov, Some(TEntity::at(TilePos::new(1, 0)))); // new, covers the rect
+
+        let rect = TileRect::new(TilePos::new(0, 0), TilePos::new(3, 0));
+        let p = Predicting::new(base, &r, &mut overlay, Tick(0), 1);
+        let mut out = Vec::new();
+        p.entities_in(rect, &mut |id, e| out.push((id, *e)))
+            .expect("rect is fully held by this fake base");
+        assert_eq!(
+            out,
+            vec![
+                (EntityId(1), TEntity::at(TilePos::new(0, 0))),
+                (prov, TEntity::at(TilePos::new(1, 0))),
+            ],
+            "id 2 moved away, id 3 is a tombstone, the provisional id sorts last"
+        );
+
+        // "Unknown at the edge": before any callback, not merely an empty result.
+        let mut unknown_known = BTreeMap::new();
+        unknown_known.insert(EntityId(1), TEntity::at(TilePos::new(0, 0)));
+        let edge_base = FakeBase {
+            known: unknown_known,
+            global: TGlobal,
+            unknown_entities_in: true,
+        };
+        let edge_base: &dyn WorldRead<TGame> = &edge_base;
+        let mut overlay2 = Overlay::<TGame>::new();
+        overlay2.push_entity(prov, Some(TEntity::at(TilePos::new(1, 0))));
+        let p2 = Predicting::new(edge_base, &r, &mut overlay2, Tick(0), 1);
+        let mut calls = 0;
+        let result = p2.entities_in(rect, &mut |_, _| calls += 1);
+        assert_eq!(result, Err(Unknown));
+        assert_eq!(
+            calls, 0,
+            "no callback at all, not even for a pure-overlay entry"
+        );
+    }
+
+    /// M25 step 8: the merge preserves `entities_in`'s own ascending-`EntityId` order (the same
+    /// order the host/authority side already guarantees, M21), and a provisional id added out of
+    /// numeric creation order still lands after every real one and in its own sorted place.
+    #[test]
+    fn predict_entities_in_order_matches_authority() {
+        let mut r = Registry::new();
+        TGame::register(&mut r);
+        let mut known = BTreeMap::new();
+        known.insert(EntityId(5), TEntity::at(TilePos::new(2, 0)));
+        known.insert(EntityId(10), TEntity::at(TilePos::new(0, 0)));
+        known.insert(EntityId(20), TEntity::at(TilePos::new(1, 0)));
+        let base = FakeBase {
+            known,
+            global: TGlobal,
+            unknown_entities_in: false,
+        };
+        let base: &dyn WorldRead<TGame> = &base;
+        let rect = TileRect::new(TilePos::new(0, 0), TilePos::new(3, 0));
+
+        let mut overlay = Overlay::<TGame>::new();
+        let p = Predicting::new(base, &r, &mut overlay, Tick(0), 1);
+        let mut merged = Vec::new();
+        p.entities_in(rect, &mut |id, e| merged.push((id, *e)))
+            .unwrap();
+        assert_eq!(
+            merged,
+            vec![
+                (EntityId(5), TEntity::at(TilePos::new(2, 0))),
+                (EntityId(10), TEntity::at(TilePos::new(0, 0))),
+                (EntityId(20), TEntity::at(TilePos::new(1, 0))),
+            ],
+            "an empty overlay changes nothing: same order the base pass alone already gives"
+        );
+
+        let prov_a = EntityId::provisional(2, 0).unwrap();
+        let prov_b = EntityId::provisional(1, 0).unwrap();
+        assert!(
+            prov_b < prov_a,
+            "picked so insertion order is not sorted order"
+        );
+        overlay.push_entity(prov_a, Some(TEntity::at(TilePos::new(0, 0))));
+        overlay.push_entity(prov_b, Some(TEntity::at(TilePos::new(1, 0))));
+        let p2 = Predicting::new(base, &r, &mut overlay, Tick(0), 1);
+        let mut merged2 = Vec::new();
+        p2.entities_in(rect, &mut |id, e| merged2.push((id, *e)))
+            .unwrap();
+        assert_eq!(
+            merged2,
+            vec![
+                (EntityId(5), TEntity::at(TilePos::new(2, 0))),
+                (EntityId(10), TEntity::at(TilePos::new(0, 0))),
+                (EntityId(20), TEntity::at(TilePos::new(1, 0))),
+                (prov_b, TEntity::at(TilePos::new(1, 0))),
+                (prov_a, TEntity::at(TilePos::new(0, 0))),
+            ],
+            "both provisional ids sort after every real one, and between themselves by value"
+        );
     }
 }
