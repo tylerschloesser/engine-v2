@@ -18,6 +18,11 @@ Deviation) places it.
 Untrusted bytes (anything read back from storage) go through `decode_canonical`
 (`persist::read_sized`), never plain `decode`.
 
+The upgrade path's own mismatch matrix (`Same`/`Direct`/`NeedsMigrate`/`Incompatible`) lives in
+`Identity::compare` (`identity.rs`), not here or in `crate::migrate`. `SaveIncompatible` performs
+no write at all (0005): every stored byte stays untouched on that path (docs/plan/
+24b-upgrade-and-migration.md Planning decisions 7).
+
 Restore/replay drivers (`host::Host::sim_restore_*`/`sim_replay_*`/`sim_replay_scan_*`/
 `sim_log_skip`, docs/plan/22b-persistence-load-and-fs.md, docs/plan/
 24-recovery-and-migration.md) live in `host/mod.rs`, not here: this module stays the container

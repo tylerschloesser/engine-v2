@@ -1,0 +1,22 @@
+[package]
+name = "fx-migrate-v2-hz30"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"] # cdylib -> the .wasm (step 4's to build); rlib -> the native tests
+
+[lints]
+workspace = true
+
+[dependencies]
+engine = { path = "../../crates/engine" }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+ts-rs = "12"
+
+[dev-dependencies]
+engine = { path = "../../crates/engine", features = ["testing"] }
+# Test-only, to build real old-schema (v1) bytes for `migrate_hz_change_rescales_engine_timers`
+# (see `fx-migrate-v2/Cargo.toml`'s own comment: never a [dependencies] entry).
+fx-migrate-v1 = { path = "../migrate-v1", features = ["as_dependency"] }

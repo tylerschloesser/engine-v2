@@ -134,6 +134,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "fx-migrate-v1"
+version = "0.0.0"
+dependencies = [
+ "engine",
+ "serde",
+ "ts-rs",
+]
+
+[[package]]
+name = "fx-migrate-v2"
+version = "0.0.0"
+dependencies = [
+ "engine",
+ "fx-migrate-v1",
+ "serde",
+ "ts-rs",
+]
+
+[[package]]
+name = "fx-migrate-v2-hz30"
+version = "0.0.0"
+dependencies = [
+ "engine",
+ "fx-migrate-v1",
+ "serde",
+ "ts-rs",
+]
+
+[[package]]
 name = "fx-overlay"
 version = "0.0.0"
 dependencies = [

@@ -1,0 +1,24 @@
+[package]
+name = "fx-migrate-v2"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"] # cdylib -> the .wasm (step 4's to build); rlib -> the native tests
+
+[lints]
+workspace = true
+
+[dependencies]
+engine = { path = "../../crates/engine" }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+ts-rs = "12"
+
+[dev-dependencies]
+engine = { path = "../../crates/engine", features = ["testing"] }
+# Test-only, to build real old-schema (v1) bytes for the migration tests (docs/plan/
+# 24b-upgrade-and-migration.md Order of work 3: "both game types in one test binary"). Never a
+# [dependencies] entry: this crate's own `migrate()` keeps its own private copy of the old shapes
+# (Planning decisions 1, "new code cannot name old types") rather than importing this crate.
+fx-migrate-v1 = { path = "../migrate-v1", features = ["as_dependency"] }

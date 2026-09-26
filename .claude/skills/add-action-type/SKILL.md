@@ -39,6 +39,15 @@ If this action can be rejected for a reason the game itself defines (not the eng
 `EngineReject`), add or reuse a variant on the game's `Reject` enum the same way -- it carries the
 same two derive lines and lives beside `Action` in the same file.
 
+**Bump `Game::SCHEMA_VERSION`.** Adding, removing or reshaping an `Action` variant changes
+`Action`'s own postcard layout, and postcard is not self-describing: an old logged action's bytes
+can silently decode into a different, still-valid action once the shape changes, rather than
+failing to decode at all (0024 §3a). Bump the constant in the same commit as the variant, even
+though nothing else here forces a compile error if you forget -- a live world with this schema
+already logged is otherwise a correctness bug waiting for its log tail to be replayed under the new
+build (docs/plan/24b-upgrade-and-migration.md, `Identity::compare`/`crate::migrate` own the tail-
+drop rule this protects, but only once the version actually changed).
+
 ## 2. Handle it (Rust)
 
 **What it does**, in `impl Game for <Game>`'s `apply` match (`fn apply(w: &mut dyn WorldWrite<Self>,

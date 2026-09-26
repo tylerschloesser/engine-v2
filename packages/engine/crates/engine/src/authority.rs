@@ -612,6 +612,26 @@ impl<G: Game> WorldRead<G> for Authority<G> {
     }
 }
 
+impl<G: Game> Authority<G> {
+    /// `crate::migrate`'s own insertion path (M24b, Planning decisions 4): identical to
+    /// `WorldWrite::spawn` except it never auto-wakes -- mirrors `TickCx`'s own puts (Planning
+    /// decisions of docs/plan/21b-timers-wakeups-and-tickcx.md: "puts made through `TickCx` never
+    /// auto-wake"), because `Migrating` restores the wake queue's `next` list itself, from the old
+    /// snapshot's own membership (Planning decisions 3) -- an insertion-path auto-wake here would
+    /// unconditionally add every migrated entity to it regardless of whether the old entity was
+    /// ever there, and (found the hard way, this milestone's own Deviations) would let a game's
+    /// own "first sight of a freshly spawned entity" `next_woken` handler silently overwrite the
+    /// very timer deadline the engine just carried over.
+    pub(crate) fn spawn_no_wake(&mut self, e: G::Entity) -> EntityId {
+        self.do_spawn(e, false)
+    }
+
+    /// The `put_entity` sibling of [`Authority::spawn_no_wake`].
+    pub(crate) fn put_entity_no_wake(&mut self, id: EntityId, e: G::Entity) {
+        self.do_put_entity(id, e, false)
+    }
+}
+
 impl<G: Game> WorldWrite<G> for Authority<G> {
     fn set_tile(&mut self, p: TilePos, t: Tile) {
         if !p.in_range() {

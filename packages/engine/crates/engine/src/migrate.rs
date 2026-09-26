@@ -570,21 +570,24 @@ impl<G: Game> WorldWrite<G> for Migrating<'_, G> {
 
     /// Always a fresh id (Planning decisions 4: "spawn allocates above the carried id counter"),
     /// so a collision here can only be against an already-migrated entity, never against itself.
+    /// Never auto-wakes (`Authority::spawn_no_wake`'s own doc comment has the full reasoning: the
+    /// engine restores the wake queue's `next` list itself, from the old snapshot's own
+    /// membership, Planning decisions 3).
     fn spawn(&mut self, e: G::Entity) -> EntityId {
         self.check_collision(&e);
-        self.authority.spawn(e)
+        self.authority.spawn_no_wake(e)
     }
 
     /// "On an absent id inserts under that old id through the same insertion path as `spawn`
     /// (occupancy and footprint checks included)" (Planning decisions 4): a `put_entity` on an id
     /// that already exists is an ordinary update to an entity `migrate` itself already placed, and
     /// is not re-checked (matching every other `WorldWrite` implementor: production ticks never
-    /// check occupancy on their own puts either).
+    /// check occupancy on their own puts either). Never auto-wakes, same reasoning as `spawn`.
     fn put_entity(&mut self, id: EntityId, e: G::Entity) {
         if self.authority.entity(id) == Ok(None) {
             self.check_collision(&e);
         }
-        self.authority.put_entity(id, e);
+        self.authority.put_entity_no_wake(id, e);
     }
 
     fn despawn(&mut self, id: EntityId) {

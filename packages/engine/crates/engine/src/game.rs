@@ -176,7 +176,11 @@ impl Growth {
 /// The game-facing API (0003 Decision). A game author implements this once; the engine derives
 /// deltas, hashing, snapshots and replay from it (0011, 0005).
 pub trait Game: Sized + 'static {
-    /// Bumped when a replicated type's layout changes (0005).
+    /// Bumped when a replicated type's layout changes (0005). A change to `G::Action`'s own
+    /// layout is a `SCHEMA_VERSION` bump too (0024 §3a): postcard is not self-describing, so old
+    /// action bytes replayed under a changed `Action` can silently decode into a different valid
+    /// action instead of failing to decode at all -- 0024 §3's tail-drop rule (`Identity::
+    /// compare`/`crate::migrate`) exists specifically to catch this case.
     const SCHEMA_VERSION: u32;
     const TICK_RATE: TickRate = TickRate::HZ_20;
     /// 4, 5 or 6: chunk edge 16, 32 or 64 tiles (0007).

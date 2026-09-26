@@ -1,0 +1,28 @@
+[package]
+name = "fx-migrate-v1"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"] # cdylib -> the .wasm (step 4's to build); rlib -> the native tests
+
+[lints]
+workspace = true
+
+[features]
+# A native binary may link only one `engine::export_game!` crate at a time (it installs the one
+# `#[global_allocator]`, `crates/engine/fixtures/machines/tests/journal_bench.rs`'s own doc comment
+# has the precedent). `fx-migrate-v2`'s own cross-fixture test depends on both this crate (for real
+# schema-1 bytes) and `fx-migrate-v2` (whose `export_game!` it needs the allocator from): this
+# feature skips this crate's own `export_game!` call so it can be a plain, non-exporting `rlib`
+# dependency there. Never enabled for this crate's own standalone build (`.wasm`, its own tests).
+as_dependency = []
+
+[dependencies]
+engine = { path = "../../crates/engine" }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+ts-rs = "12"
+
+[dev-dependencies]
+engine = { path = "../../crates/engine", features = ["testing"] }
