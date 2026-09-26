@@ -500,6 +500,10 @@ test('test_trap_recovers_without_skip', async () => {
 })
 
 test('recovery_loop_guard', async () => {
+  // Planning decisions 3 fixes the numbers; the loops below derive from the constants, so pin them
+  // here or a changed limit would still pass (orchestrator, M24 gate).
+  expect(RECOVERY_LOOP_LIMIT).toBe(3)
+  expect(RECOVERY_GOOD_TICKS_RESET).toBe(1200)
   const storage = memoryStorage()
   const { host, deps } = makeHost(storage)
   host.accept(fakeConnection().connection)
