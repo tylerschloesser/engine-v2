@@ -607,6 +607,57 @@ pub fn sim_tick_now<T: Instance>(slot: &Slot<T>) -> u32 {
     }
 }
 
+/// `sim_replay_scan_begin(segment)`: starts the scan pass (docs/plan/24-recovery-and-migration.md).
+pub fn sim_replay_scan_begin<T: Instance>(slot: &Slot<T>, segment: u32) -> Status {
+    match slot.sim() {
+        Ok(rt) => rt.inst.sim_replay_scan_begin(segment),
+        Err(status) => status,
+    }
+}
+
+/// `sim_replay_scan_push(len)`: `len` bytes of `Persist`, reused as a receive region, same shape as
+/// `sim_replay_push`.
+pub fn sim_replay_scan_push<T: Instance>(slot: &Slot<T>, len: u32) -> Status {
+    let rt = match slot.sim() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    match rt.layout.bytes(RegionId::Persist).get(..len as usize) {
+        Some(bytes) => rt.inst.sim_replay_scan_push(bytes),
+        None => Status::BadLength,
+    }
+}
+
+/// `sim_replay_scan_end()`.
+pub fn sim_replay_scan_end<T: Instance>(slot: &Slot<T>) -> Status {
+    match slot.sim() {
+        Ok(rt) => rt.inst.sim_replay_scan_end(),
+        Err(status) => status,
+    }
+}
+
+/// `sim_log_skip(segment, offset)`: bytes written to `Persist`, or `-(status)` -- the same shape
+/// as `sim_seal_frame`/`sim_segment_header`.
+pub fn sim_log_skip<T: Instance>(slot: &Slot<T>, segment: u32, offset: u32) -> i32 {
+    let built = slot.sim().and_then(|rt| {
+        rt.inst
+            .sim_log_skip(segment, offset, rt.layout.bytes_mut(RegionId::Persist))
+    });
+    match built {
+        Ok(len) => len as i32,
+        Err(status) => -(status as i32),
+    }
+}
+
+/// `sim_test_trap()`: test-only by convention, reached only through `engine/test`'s `trapSim`
+/// (docs/plan/24-recovery-and-migration.md).
+pub fn sim_test_trap<T: Instance>(slot: &Slot<T>) -> Status {
+    match slot.sim() {
+        Ok(rt) => rt.inst.sim_test_trap(),
+        Err(status) => status,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 17;
+pub const ABI_VERSION: u32 = 18;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -103,6 +103,11 @@ pub enum RegionId {
     /// `out`) reuses `Tx`, unclaimed by the client role until now -- the same Rx-in/Tx-out
     /// convention the sim role already has, just declared by a different role.
     Downlink = 10,
+    /// docs/plan/24-recovery-and-migration.md: `ProgressCursor` (`crate::persist::Phase`/`tick`/
+    /// `record`, 12 B, sim role) -- written by `Host<G>` before starting risky work, readable from
+    /// a *dead* instance with no export call at all (0014 §6: `inst.region(id).u8`/`inst.mem`).
+    /// Not sim state (never hashed, snapshotted or logged).
+    Progress = 11,
 }
 
 /// Levels of `engine.log`. Release builds compile out everything below `Warn` (0014 §3).
@@ -115,7 +120,7 @@ pub enum LogLevel {
     Debug = 3,
 }
 
-pub const REGION_COUNT: usize = 11;
+pub const REGION_COUNT: usize = 12;
 
 impl Role {
     pub const fn from_u32(n: u32) -> Option<Role> {
@@ -142,6 +147,7 @@ impl RegionId {
             8 => Some(RegionId::GenOut),
             9 => Some(RegionId::GenIn),
             10 => Some(RegionId::Downlink),
+            11 => Some(RegionId::Progress),
             _ => None,
         }
     }
@@ -523,6 +529,49 @@ pub trait Instance: Sized + 'static {
     fn sim_tick_now(&mut self) -> u32 {
         0
     }
+
+    /// docs/plan/24-recovery-and-migration.md: begins the **scan pass** -- decodes a segment tail
+    /// purely to collect `Skip { segment, offset }` targets, before `sim_replay_begin`/`push`/`end`
+    /// (the real apply pass) ever runs. Needs a live `Sim` (like `sim_replay_begin`) even though it
+    /// never touches it, so a caller cannot scan before a world exists.
+    fn sim_replay_scan_begin(&mut self, _segment: u32) -> Status {
+        Status::Unsupported
+    }
+
+    /// Feeds the next block to the scan pass (same in-region-as-receive-buffer shape as
+    /// `sim_replay_push`).
+    fn sim_replay_scan_push(&mut self, _bytes: &[u8]) -> Status {
+        Status::Unsupported
+    }
+
+    /// Finishes the scan pass; its own targets stay collected for the `sim_replay_*` calls that
+    /// follow.
+    fn sim_replay_scan_end(&mut self) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/24-recovery-and-migration.md: appends one frame holding a single `Skip { segment,
+    /// offset }` record (`tick_delta = 0`, never a real elapsed tick) into `Persist` -- the same
+    /// "bytes written, or `-(status)`" shape as `sim_seal_frame`. Needs no live `Sim` (like
+    /// `sim_segment_header`): recovery calls this on whatever fresh instance is at hand, purely to
+    /// encode the frame; the caller (TS) appends the bytes to storage itself.
+    fn sim_log_skip(
+        &mut self,
+        _segment: u32,
+        _offset: u32,
+        _persist: &mut [u8],
+    ) -> Result<u32, Status> {
+        Err(Status::Unsupported)
+    }
+
+    /// docs/plan/24-recovery-and-migration.md: panics in whatever `Phase` the previous,
+    /// successfully-completed export left the `Progress` region in (`Phase::Idle` after any
+    /// ordinary call, since this writes nothing of its own before panicking). Test-only by
+    /// convention: reached only through `engine/test`'s `trapSim`. The default is a safe no-op
+    /// (`Status::Ok`, never reached in practice) so a fixture that never overrides it still links.
+    fn sim_test_trap(&mut self) -> Status {
+        Status::Ok
+    }
 }
 
 /// Emits every export for every role, the `#[global_allocator]`, and the single-threaded instance
@@ -630,6 +679,18 @@ macro_rules! export_instance {
             $crate::abi::sim_restore_end(&__ENGINE_SLOT) as u32
         }
         #[unsafe(no_mangle)]
+        pub extern "C" fn sim_replay_scan_begin(segment: u32) -> u32 {
+            $crate::abi::sim_replay_scan_begin(&__ENGINE_SLOT, segment) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_replay_scan_push(len: u32) -> u32 {
+            $crate::abi::sim_replay_scan_push(&__ENGINE_SLOT, len) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_replay_scan_end() -> u32 {
+            $crate::abi::sim_replay_scan_end(&__ENGINE_SLOT) as u32
+        }
+        #[unsafe(no_mangle)]
         pub extern "C" fn sim_replay_begin(segment: u32, offset: u32) -> u32 {
             $crate::abi::sim_replay_begin(&__ENGINE_SLOT, segment, offset) as u32
         }
@@ -648,6 +709,14 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_tick_now() -> u32 {
             $crate::abi::sim_tick_now(&__ENGINE_SLOT)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_log_skip(segment: u32, offset: u32) -> i32 {
+            $crate::abi::sim_log_skip(&__ENGINE_SLOT, segment, offset)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_test_trap() -> u32 {
+            $crate::abi::sim_test_trap(&__ENGINE_SLOT) as u32
         }
 
         // client

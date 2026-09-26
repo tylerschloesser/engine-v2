@@ -445,6 +445,28 @@ where
         }
     }
 
+    /// docs/plan/24-recovery-and-migration.md.
+    fn sim_replay_scan_begin(&mut self, segment: u32) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_replay_scan_begin(segment),
+            _ => Status::WrongRole,
+        }
+    }
+
+    fn sim_replay_scan_push(&mut self, bytes: &[u8]) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_replay_scan_push(bytes),
+            _ => Status::WrongRole,
+        }
+    }
+
+    fn sim_replay_scan_end(&mut self) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_replay_scan_end(),
+            _ => Status::WrongRole,
+        }
+    }
+
     fn sim_replay_begin(&mut self, segment: u32, offset: u32) -> Status {
         match self {
             GameInstance::Sim(h) => h.sim_replay_begin(segment, offset),
@@ -477,6 +499,26 @@ where
         match self {
             GameInstance::Sim(h) => h.sim_tick_now(),
             _ => 0,
+        }
+    }
+
+    /// docs/plan/24-recovery-and-migration.md.
+    fn sim_log_skip(
+        &mut self,
+        segment: u32,
+        offset: u32,
+        persist: &mut [u8],
+    ) -> Result<u32, Status> {
+        match self {
+            GameInstance::Sim(h) => h.sim_log_skip(segment, offset, persist),
+            _ => Err(Status::WrongRole),
+        }
+    }
+
+    fn sim_test_trap(&mut self) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_test_trap(),
+            _ => Status::WrongRole,
         }
     }
 

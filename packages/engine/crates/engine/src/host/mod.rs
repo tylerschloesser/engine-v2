@@ -11,7 +11,7 @@
 pub mod subs;
 pub mod warm;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::abi::config::HexU64;
 use crate::abi::{Instance, RegionId, RegionLayout, Role, Status};
@@ -20,7 +20,8 @@ use crate::bytes::{ByteSink, SliceSink};
 use crate::codec::decode_canonical;
 use crate::delta::Delta;
 use crate::game::{Game, PlayerEvent, PlayerId, Presence as _, PresenceTable, WorldRead};
-use crate::sim::{Outcome, Record, Rejected, Sim, WorldParams};
+use crate::persist::{PROGRESS_BYTES, Phase, ProgressCursor};
+use crate::sim::{EngineReject, Outcome, Record, Rejected, Sim, WorldParams};
 use crate::time::Tick;
 use crate::wire::{
     ActionResultsWriter, CameraReport, ChunkCoordListWriter, FrameHeader, FrameWriter, SectionId,
@@ -295,6 +296,36 @@ where
 /// recovery" / this milestone's own Non-scope: nothing here ever produces one). That module is
 /// `#[cfg(feature = "testing")]` (dev-only), so production replay (`Host::sim_replay_push`) cannot
 /// reach its copy.
+/// Builds a `(Phase, u32) -> ()` hook that writes into `*progress` and, when `progress_ptr` is
+/// non-null, into the `Progress` region itself (docs/plan/24-recovery-and-migration.md). A free
+/// function, not a `Host` method: `Host::tick`/`Host::sim_replay_end` both need to call this while
+/// a *different* field of `self` (`self.sim`) is already mutably borrowed via destructuring, so the
+/// hook itself must not need `&mut self` (`Host::mark_progress` does, for every other export).
+fn progress_writer<'a>(
+    progress: &'a mut ProgressCursor,
+    log: &'a mut Option<Vec<ProgressCursor>>,
+    progress_ptr: *mut u8,
+    tick: u32,
+) -> impl FnMut(Phase, u32) + 'a {
+    move |phase, record| {
+        *progress = ProgressCursor {
+            phase,
+            tick,
+            record,
+        };
+        if let Some(log) = log.as_mut() {
+            log.push(*progress);
+        }
+        if !progress_ptr.is_null() {
+            // SAFETY: see `Host::mark_progress` -- same region, same single-threaded,
+            // non-re-entrant instance.
+            let out =
+                unsafe { core::slice::from_raw_parts_mut(progress_ptr, PROGRESS_BYTES as usize) };
+            progress.write(out);
+        }
+    }
+}
+
 fn to_record<G: Game>(r: crate::persist::FrameRecord<G>) -> Option<Record<G>> {
     match r {
         crate::persist::FrameRecord::Action { who, seq, action } => {
@@ -432,6 +463,51 @@ pub struct Host<G: Game> {
     /// "not an error for the last segment") -- further pushes are then ignored, and
     /// [`Host::sim_replay_end`] reports `Status::TornTail` rather than treating it as fatal.
     replay_torn: bool,
+    /// [`Host::sim_replay_begin`]'s own `segment` argument -- unused for wire purposes (a
+    /// segment's own index lives in its storage key, docs/plan/22b's Deviations), but needed here
+    /// to filter [`crate::persist::FrameRecord::Skip`] targets to this replay's own segment
+    /// (docs/plan/24-recovery-and-migration.md Planning decisions 1: "always the record's own
+    /// segment").
+    replay_segment: u32,
+    /// The in-progress scan-pass decode [`Host::sim_replay_scan_begin`] started, fed by
+    /// [`Host::sim_replay_scan_push`]; `None` when no scan is in flight. A separate reader from
+    /// `replay_reader`: the scan pass runs once, over the whole segment tail, *before*
+    /// `sim_replay_begin`/`push`/`end`'s own real apply pass (docs/plan/
+    /// 24-recovery-and-migration.md, amending M22b's single-pass placeholder) -- a `Skip` record's
+    /// own target can (and typically does) live in an *earlier* frame than the `Skip` record
+    /// itself, so every frame must be seen once before any of them can be safely applied.
+    scan_reader: Option<crate::persist::FrameReader<G>>,
+    /// Set once a pushed scan block fails to decode -- mirrors `replay_torn`, but for the scan
+    /// pass's own reader.
+    scan_torn: bool,
+    /// Byte offsets (absolute within the segment: `replay_base_offset` already added) named by
+    /// every `Skip { segment, offset }` record the scan pass decoded whose `segment` matches
+    /// `replay_segment`. `BTreeSet`, not a `HashSet` (`.claude/rules/determinism.md`), though
+    /// iteration order is not itself observable here -- consistency with the rest of this crate.
+    replay_skip_targets: BTreeSet<u32>,
+    /// `(who, seq)` of every record [`Host::sim_replay_end`]'s apply pass skipped (docs/plan/
+    /// 24-recovery-and-migration.md Planning decisions 4): drained into that player's
+    /// `ConnSlot::pending_results` the next time [`Host::connect`] sees them (their first frame
+    /// after recovery reconnects), each becoming `Ack { seq, Rejected(Engine(EngineFault)) }`.
+    pending_fault_acks: Vec<(PlayerId, u32)>,
+    /// The last-written [`ProgressCursor`] (docs/plan/24-recovery-and-migration.md): mirrored into
+    /// `progress_ptr` (the `Progress` region, when this instance has one) but also kept here in
+    /// plain Rust so native tests can read it with no ABI/region involved at all.
+    progress: ProgressCursor,
+    /// Address of the `Progress` region (12 B), captured once at [`Host::init`] from the
+    /// `RegionLayout` (mirrors `client::CameraBlock::ptr`'s own stored-raw-pointer pattern,
+    /// `client/camera.rs`); null when this instance was built without one (`Host::genesis_for_test`
+    /// and other native-only constructors, which have no `RegionLayout` at all).
+    progress_ptr: *mut u8,
+    /// Diagnostic-only, always `None` unless a test calls [`Host::start_progress_log`] (docs/plan/
+    /// 24-recovery-and-migration.md: "prove failable per phase" -- `progress` alone only shows the
+    /// *last* write, always back to `Idle` by the time a successful call returns, so a test needs
+    /// the whole sequence to prove a write really happened for a phase that never panics on its
+    /// own). Kept as a plain field (not `#[cfg(test)]`) so the tick-path hook closures below can
+    /// destructure it alongside `sim`/`progress` with no extra conditional-compilation seam; a
+    /// real game never calls the enabling method, so this never allocates in production
+    /// (`.claude/rules/hot-paths.md`).
+    progress_log: Option<Vec<ProgressCursor>>,
 }
 
 /// The last-wins kind of an entity op this tick (host/mod Deviations: `scratch_entity_ops`'s own
@@ -482,6 +558,65 @@ impl<G: Game> Host<G> {
         self.cache_chunks
     }
 
+    /// Writes a [`ProgressCursor`] both into `self.progress` (native-testable with no ABI at all)
+    /// and, when this instance has a `Progress` region, into it directly (docs/plan/
+    /// 24-recovery-and-migration.md). Called *before* starting the work `phase` names, so a trap
+    /// partway through leaves exactly this value behind for a dead instance's own memory to be read
+    /// back from (0014 §6) -- never after, and never batched: `.claude/rules/hot-paths.md`'s "plain
+    /// stores into a fixed region, no allocation" is met by three `u32` LE stores, nothing else.
+    fn mark_progress(&mut self, phase: Phase, tick: u32, record: u32) {
+        self.progress = ProgressCursor {
+            phase,
+            tick,
+            record,
+        };
+        if let Some(log) = self.progress_log.as_mut() {
+            log.push(self.progress);
+        }
+        if !self.progress_ptr.is_null() {
+            // SAFETY: `progress_ptr` addresses the `Progress` region, a separate heap allocation
+            // from every other region (`RegionLayout::region`) that never moves or resizes after
+            // init; the instance is single-threaded and not re-entered, so nothing else touches it
+            // during this call (mirrors `client::CameraBlock::ptr`'s own justification).
+            let out = unsafe {
+                core::slice::from_raw_parts_mut(self.progress_ptr, PROGRESS_BYTES as usize)
+            };
+            self.progress.write(out);
+        }
+    }
+
+    /// The resting value every export leaves behind once it finishes without trapping -- what
+    /// makes `sim_test_trap` (which writes nothing of its own) show up as "trapped in `Phase::Idle`"
+    /// whenever it's called right after any ordinary, successful call.
+    fn mark_idle(&mut self, tick: u32) {
+        self.mark_progress(Phase::Idle, tick, 0);
+    }
+
+    /// The current [`ProgressCursor`] (test/diagnostic convenience: native tests read this
+    /// directly, with no `Progress` region or ABI call involved at all).
+    #[cfg(any(test, feature = "testing"))]
+    pub fn progress(&self) -> ProgressCursor {
+        self.progress
+    }
+
+    /// Starts recording every [`ProgressCursor`] this instance writes from now on (docs/plan/
+    /// 24-recovery-and-migration.md: `progress_cursor_written_before_each_phase`'s own mechanism).
+    /// Never called by production code.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn start_progress_log(&mut self) {
+        self.progress_log = Some(Vec::new());
+    }
+
+    /// Every `ProgressCursor` written since [`Host::start_progress_log`] (or the last call to this
+    /// method), in order; empty if logging was never started.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn take_progress_log(&mut self) -> Vec<ProgressCursor> {
+        self.progress_log
+            .as_mut()
+            .map(core::mem::take)
+            .unwrap_or_default()
+    }
+
     /// Builds a `Host<G>` with a fresh, genesis'd `Sim<G>` directly from `WorldParams<G>`, no
     /// `Instance`/JSON config parsing (that is `Host::init`'s job, and ABI wiring is 15b's,
     /// Non-scope here): `testkit::Loopback`'s own constructor, and any other native test that
@@ -524,6 +659,14 @@ impl<G: Game> Host<G> {
             replay_base_offset: 0,
             replay_fed: 0,
             replay_torn: false,
+            replay_segment: 0,
+            scan_reader: None,
+            scan_torn: false,
+            replay_skip_targets: BTreeSet::new(),
+            pending_fault_acks: Vec::new(),
+            progress: ProgressCursor::default(),
+            progress_ptr: core::ptr::null_mut(),
+            progress_log: None,
         }
     }
 
@@ -602,13 +745,35 @@ impl<G: Game> Host<G> {
             who: player,
             ev: PlayerEvent::Connected,
         });
+        // docs/plan/24-recovery-and-migration.md Planning decisions 4: a record `sim_replay_end`'s
+        // apply pass skipped still queues `Ack { seq, Rejected(Engine(EngineFault)) }` for "the
+        // player's first frame after recovery" -- delivered here, at (re)connect, since replay
+        // itself never has a live `ConnSlot` to queue into (a recovered/loaded `Sim` starts with an
+        // empty connection table, M22b Deviations). `Vec::retain` partitions in place, preserving
+        // relative order, so an unrelated player's own pending faults are left untouched.
+        let mut fault_acks = Vec::new();
+        self.pending_fault_acks.retain(|&(who, seq)| {
+            if who == player {
+                fault_acks.push(seq);
+                false
+            } else {
+                true
+            }
+        });
+        let pending_results = fault_acks
+            .into_iter()
+            .map(|seq| Outcome {
+                seq,
+                result: Err(Rejected::Engine(EngineReject::EngineFault)),
+            })
+            .collect();
         self.conns[idx] = Some(ConnSlot {
             player,
             camera: None,
             subs: SubscriptionSet::new(crate::world::ChunkDims::new(G::CHUNK_BITS), G::TICK_RATE),
             first_frame_pending: true,
             counters: ConnCounters::default(),
-            pending_results: Vec::new(),
+            pending_results,
             highest_admitted_seq: 0,
             presence_relayed: BTreeMap::new(),
         });
@@ -762,6 +927,8 @@ impl<G: Game> Host<G> {
             };
             let result = {
                 let sim = self.sim.as_ref().expect("checked above");
+                self.mark_progress(Phase::Admit, sim.tick().0, seq);
+                let sim = self.sim.as_ref().expect("checked above");
                 G::admit(
                     sim.authority() as &dyn WorldRead<G>,
                     &self.presence,
@@ -802,6 +969,7 @@ impl<G: Game> Host<G> {
     /// re-evaluated every tick, not only on a fresh uplink, so hysteresis advances in ticks exactly
     /// as Planning decisions requires even when uplinks arrive less than once a tick).
     pub fn tick(&mut self) {
+        let progress_ptr = self.progress_ptr;
         let Host {
             sim,
             pending_records,
@@ -810,6 +978,8 @@ impl<G: Game> Host<G> {
             last_tick,
             conns,
             scratch_action_players,
+            progress,
+            progress_log,
             ..
         } = self;
         let Some(sim) = sim.as_mut() else { return };
@@ -824,7 +994,15 @@ impl<G: Game> Host<G> {
             }
         }
         let completed = sim.tick();
-        sim.step(pending_records, outcomes);
+        // docs/plan/24-recovery-and-migration.md: `record` is the *index* of the record inside
+        // `pending_records` while ticking live (the byte-offset meaning only applies to the
+        // replay apply pass, `Host::sim_replay_end`) -- written before each per-record call so a
+        // dead instance's own `Progress` region names exactly which one trapped. `completed` is
+        // already the tick these records are *for* (`Host::last_tick`'s own doc comment: `Sim::
+        // step` advances the clock at the very end, so `sim.tick()` read just before it is the
+        // tick about to complete).
+        let mut hook = progress_writer(progress, progress_log, progress_ptr, completed.0);
+        sim.step_with_progress(pending_records, outcomes, &mut hook);
         pending_records.clear();
         *last_tick = completed;
         for (scopes, _delta) in sim.authority().changes() {
@@ -1365,6 +1543,8 @@ where
         layout.region(RegionId::Rx, SIM_RX_BYTES);
         layout.region(RegionId::Tx, SIM_TX_BYTES);
         layout.region(RegionId::Persist, PERSIST_BYTES);
+        layout.region(RegionId::Progress, PROGRESS_BYTES);
+        let progress_ptr = layout.ptr(RegionId::Progress);
         Ok(Host {
             pending: Some(WorldParams {
                 seed: cfg.seed.0,
@@ -1403,6 +1583,14 @@ where
             replay_base_offset: 0,
             replay_fed: 0,
             replay_torn: false,
+            replay_segment: 0,
+            scan_reader: None,
+            scan_torn: false,
+            replay_skip_targets: BTreeSet::new(),
+            pending_fault_acks: Vec::new(),
+            progress: ProgressCursor::default(),
+            progress_ptr,
+            progress_log: None,
         })
     }
 
@@ -1440,7 +1628,10 @@ where
     /// payload, 0004 step 1's protocol error) is what tells the caller (`SimHost`, TS) to close
     /// the connection. An unknown connection is still tolerated silently (`Ok`).
     fn sim_admit(&mut self, conn: u32, rx: &[u8]) -> Status {
-        match self.on_uplink(conn, rx) {
+        let result = self.on_uplink(conn, rx);
+        let tick = self.sim.as_ref().map_or(0, |s| s.tick().0);
+        self.mark_idle(tick);
+        match result {
             Ok(()) => Status::Ok,
             Err(UplinkError) => Status::Decode,
         }
@@ -1465,6 +1656,8 @@ where
         }
         self.seal();
         self.tick();
+        let tick = self.sim.as_ref().map_or(0, |s| s.tick().0);
+        self.mark_idle(tick);
         Status::Ok
     }
 
@@ -1479,7 +1672,11 @@ where
         if self.sim.is_none() {
             return Err(Status::NotInitialised);
         }
-        Ok(self.build_frame(conn, tx) as u32)
+        let tick = self.last_tick.0;
+        self.mark_progress(Phase::BuildFrame, tick, conn);
+        let n = self.build_frame(conn, tx) as u32;
+        self.mark_idle(tick);
+        Ok(n)
     }
 
     /// docs/plan/22-persistence-log-and-snapshots.md steps 4-6: real write-ahead frame bytes,
@@ -1628,9 +1825,11 @@ where
         let Some(sim) = self.sim.as_ref() else {
             return Status::NotInitialised;
         };
+        let tick = sim.tick();
+        self.mark_progress(Phase::Snapshot, tick.0, 0);
+        let sim = self.sim.as_ref().expect("checked above");
         let identity = self.identity();
         let rng = sim.authority().rng();
-        let tick = sim.tick();
         self.snapshot_writer = Some(crate::persist::SnapshotWriter::begin(
             sim.authority().store(),
             tick,
@@ -1643,17 +1842,22 @@ where
         if let Some(sim) = self.sim.as_mut() {
             sim.authority_mut().clear_dirty();
         }
+        self.mark_idle(tick.0);
         Status::Ok
     }
 
     fn sim_snapshot_next(&mut self, persist: &mut [u8]) -> Result<u32, Status> {
-        let Some(writer) = self.snapshot_writer.as_mut() else {
+        if self.snapshot_writer.is_none() {
             return Err(Status::NotInitialised);
-        };
+        }
+        let tick = self.sim.as_ref().map_or(0, |s| s.tick().0);
+        self.mark_progress(Phase::Snapshot, tick, 0);
+        let writer = self.snapshot_writer.as_mut().expect("checked above");
         let n = writer.next(persist);
         if n == 0 {
             self.snapshot_writer = None;
         }
+        self.mark_idle(tick);
         Ok(n as u32)
     }
 
@@ -1738,29 +1942,115 @@ where
         Status::Ok
     }
 
-    /// docs/plan/22b-persistence-load-and-fs.md: `self.sim` must already exist (from
-    /// `sim_restore_end` or `sim_genesis`) -- `_segment` unused, same shape as `sim_segment_header`'s
-    /// own.
-    fn sim_replay_begin(&mut self, _segment: u32, offset: u32) -> Status {
+    /// docs/plan/24-recovery-and-migration.md: **scan pass** -- decodes `bytes` (fed the same way
+    /// `sim_replay_push` is) purely to collect every `Skip { segment, offset }` target whose
+    /// `segment` matches `segment`, into `self.replay_skip_targets`. Applies nothing and touches
+    /// `self.sim` not at all: a `Skip` record's own target typically lives in an *earlier* frame
+    /// than the `Skip` record itself, so the caller must scan the **whole** segment tail once,
+    /// before replaying any of it, or an earlier frame could be applied before its own `Skip` is
+    /// even known (amending M22b's single-pass placeholder, which had no targets to honour yet). A
+    /// separate reader/pass from `sim_replay_begin`/`push`/`end` on purpose: those keep their own
+    /// pre-existing "apply each frame as soon as it's decoded" contract (`engine/test`'s
+    /// `replayWorld`/`runHeavy` drive it tick-by-tick, interjecting between calls), which a
+    /// buffer-everything-then-apply design would have broken.
+    fn sim_replay_scan_begin(&mut self, segment: u32) -> Status {
         if self.sim.is_none() {
             return Status::NotInitialised;
         }
+        self.scan_reader = Some(crate::persist::FrameReader::new());
+        self.replay_segment = segment;
+        self.replay_skip_targets = BTreeSet::new();
+        self.scan_torn = false;
+        Status::Ok
+    }
+
+    /// Feeds the next block to the scan pass (same in-region-as-receive-buffer shape as
+    /// `sim_replay_push`).
+    fn sim_replay_scan_push(&mut self, bytes: &[u8]) -> Status {
+        if self.scan_reader.is_none() {
+            return Status::NotInitialised;
+        }
+        if self.scan_torn {
+            return Status::TornTail;
+        }
+        let mut remaining = bytes;
+        loop {
+            let progress = match self.scan_reader.as_mut().unwrap().push(remaining) {
+                Ok(p) => p,
+                Err(_) => {
+                    self.scan_torn = true;
+                    break;
+                }
+            };
+            remaining = &[];
+            let frame = match progress {
+                crate::persist::FrameProgress::NeedMore => break,
+                crate::persist::FrameProgress::Frame(f) => f,
+            };
+            for record in &frame.records {
+                if let crate::persist::FrameRecord::Skip { segment, offset } = record
+                    && *segment == self.replay_segment
+                {
+                    self.replay_skip_targets.insert(*offset);
+                }
+            }
+        }
+        if self.scan_torn {
+            Status::TornTail
+        } else {
+            Status::Ok
+        }
+    }
+
+    /// Finishes the scan pass. `self.replay_skip_targets` is left populated for the `sim_replay_*`
+    /// calls that follow -- unlike `sim_replay_begin`, this never resets it.
+    fn sim_replay_scan_end(&mut self) -> Status {
+        if self.scan_reader.take().is_none() {
+            return Status::NotInitialised;
+        }
+        if self.scan_torn {
+            Status::TornTail
+        } else {
+            Status::Ok
+        }
+    }
+
+    /// docs/plan/22b-persistence-load-and-fs.md: `self.sim` must already exist (from
+    /// `sim_restore_end` or `sim_genesis`) -- `segment` unused for wire purposes, same shape as
+    /// `sim_segment_header`'s own (a segment's index lives in its storage key, never the wire), but
+    /// kept (docs/plan/24-recovery-and-migration.md) to name the same segment the scan pass already
+    /// ran over. Deliberately does **not** reset `self.replay_skip_targets`:
+    /// `sim_replay_scan_begin`/`push`/`end` (above) populates it first, over the same bytes, before
+    /// this real apply pass ever runs.
+    fn sim_replay_begin(&mut self, segment: u32, offset: u32) -> Status {
+        if self.sim.is_none() {
+            return Status::NotInitialised;
+        }
+        let tick = self.sim.as_ref().unwrap().tick().0;
+        self.mark_progress(Phase::Replay, tick, offset);
         self.replay_reader = Some(crate::persist::FrameReader::new());
         self.replay_base_offset = offset;
         self.replay_fed = 0;
         self.replay_torn = false;
+        self.replay_segment = segment;
+        self.mark_idle(tick);
         Status::Ok
     }
 
     /// Applies every whole, CRC-valid frame `bytes` completes (idle ticks implied by `tick_delta`
     /// stepped first, exactly `testing::replay`'s own algorithm) through the live tick procedure
-    /// (`Sim::step`), advancing `self.last_logged_tick` to each applied frame's own tick -- so live
-    /// logging continues correctly (`sim_seal_frame`'s own `tick_delta` reference) once replay hands
-    /// off to real ticking. Every sub-expression re-borrows `self.sim`/`self.replay_reader` fresh
-    /// (`.as_ref()`/`.as_mut()` per statement) rather than holding one across the loop, so mutating
-    /// `self.last_logged_tick`/`self.replay_torn` alongside never fights the borrow checker over one
-    /// long-lived borrow of a sibling field -- this runs once at load, off any tick or frame budget
-    /// (`.claude/rules/hot-paths.md` binds those paths only).
+    /// (`Sim::step_with_progress`), honouring every `Skip` target `sim_replay_scan_begin`/`push`/
+    /// `end` already collected into `self.replay_skip_targets`: a record whose own absolute byte
+    /// offset (`replay_base_offset` + its `DecodedFrame::record_offsets` entry) is a skip target is
+    /// never applied, but still advances that player's `last_seq` (`Authority::record_ack`, without
+    /// `apply`/`on_player`) and queues an `EngineFault` ack for their next `Host::connect`
+    /// (Planning decisions 4). **A frame with `tick_delta == 0` is a `Skip`-only administrative
+    /// frame, never a real elapsed tick** (0005: appending one must never disturb
+    /// `self.last_logged_tick` or any later frame's own idle-tick count): it is decoded (its own
+    /// `Skip` record was already seen by the scan pass) but never stepped at all. Advances
+    /// `self.last_logged_tick` to each applied frame's own tick, so live logging continues
+    /// correctly (`sim_seal_frame`'s own `tick_delta` reference) once replay hands off to real
+    /// ticking.
     fn sim_replay_push(&mut self, bytes: &[u8]) -> Status {
         if self.sim.is_none() {
             return Status::NotInitialised;
@@ -1771,9 +2061,18 @@ where
         if self.replay_torn {
             return Status::TornTail;
         }
+        let tick = self.sim.as_ref().unwrap().tick().0;
+        self.mark_progress(
+            Phase::Replay,
+            tick,
+            self.replay_base_offset.wrapping_add(self.replay_fed as u32),
+        );
         self.replay_fed += bytes.len() as u64;
+        let base_offset = self.replay_base_offset;
         let mut remaining = bytes;
         let mut out: Vec<Outcome<G>> = Vec::new();
+        let mut filtered: Vec<Record<G>> = Vec::new();
+        let mut filtered_offsets: Vec<u32> = Vec::new();
         loop {
             let progress = match self.replay_reader.as_mut().unwrap().push(remaining) {
                 Ok(p) => p,
@@ -1787,14 +2086,66 @@ where
                 crate::persist::FrameProgress::NeedMore => break,
                 crate::persist::FrameProgress::Frame(f) => f,
             };
+            if frame.tick_delta == 0 {
+                // Administrative `Skip`-only frame (0005 "Panic recovery"): never a real elapsed
+                // tick; its own record was already scanned into `replay_skip_targets`.
+                continue;
+            }
             let frame_tick = self.last_logged_tick.0.wrapping_add(frame.tick_delta);
             let sim_tick_now = self.sim.as_ref().unwrap().tick().0;
             let idle = frame_tick.saturating_sub(1).saturating_sub(sim_tick_now);
             for _ in 0..idle {
-                self.sim.as_mut().unwrap().step(&[], &mut out);
+                let progress_ptr = self.progress_ptr;
+                let Host {
+                    sim,
+                    progress,
+                    progress_log,
+                    ..
+                } = self;
+                let sim = sim.as_mut().unwrap();
+                let mut hook =
+                    progress_writer(progress, progress_log, progress_ptr, sim.tick().0 + 1);
+                sim.step_with_progress(&[], &mut out, &mut hook);
             }
-            let records: Vec<Record<G>> = frame.records.into_iter().filter_map(to_record).collect();
-            self.sim.as_mut().unwrap().step(&records, &mut out);
+            filtered.clear();
+            filtered_offsets.clear();
+            for (i, record) in frame.records.into_iter().enumerate() {
+                let abs_offset = base_offset.wrapping_add(frame.record_offsets[i] as u32);
+                if self.replay_skip_targets.contains(&abs_offset) {
+                    if let crate::persist::FrameRecord::Action { who, seq, .. } = &record {
+                        self.sim
+                            .as_mut()
+                            .unwrap()
+                            .authority_mut()
+                            .record_ack(*who, *seq);
+                        self.pending_fault_acks.push((*who, *seq));
+                    }
+                    continue;
+                }
+                if let Some(r) = to_record(record) {
+                    filtered.push(r);
+                    filtered_offsets.push(abs_offset);
+                }
+            }
+            let progress_ptr = self.progress_ptr;
+            let Host {
+                sim,
+                progress,
+                progress_log,
+                ..
+            } = self;
+            let sim = sim.as_mut().unwrap();
+            let mut base_hook = progress_writer(progress, progress_log, progress_ptr, frame_tick);
+            let mut hook = |phase: Phase, i: u32| {
+                let record = match phase {
+                    Phase::ApplyRecord | Phase::OnPlayer => {
+                        filtered_offsets.get(i as usize).copied().unwrap_or(0)
+                    }
+                    _ => 0,
+                };
+                base_hook(phase, record);
+            };
+            sim.step_with_progress(&filtered, &mut out, &mut hook);
             self.last_logged_tick = Tick(frame_tick);
         }
         if self.replay_torn {
@@ -1828,6 +2179,38 @@ where
 
     fn sim_tick_now(&mut self) -> u32 {
         self.sim.as_ref().map_or(0, |s| s.tick().0)
+    }
+
+    /// docs/plan/24-recovery-and-migration.md: encodes one frame holding a single `Skip { segment,
+    /// offset }` record, `tick_delta = 0` (never a real elapsed tick, so appending it never
+    /// disturbs `self.last_logged_tick` or any later frame's idle-tick count -- `sim_replay_end`'s
+    /// own apply pass never steps a `tick_delta == 0` frame at all). Needs no live `Sim`: purely an
+    /// encoding function, reusing `persist::FrameWriter` directly rather than `Host::sim_seal_frame`'s
+    /// own hand-rolled encoding (that one exists only because it must not require `G::Action:
+    /// Clone`; a `Skip` record carries no game-typed payload at all).
+    fn sim_log_skip(
+        &mut self,
+        segment: u32,
+        offset: u32,
+        persist: &mut [u8],
+    ) -> Result<u32, Status> {
+        let mut w: crate::persist::FrameWriter<G> = crate::persist::FrameWriter::new();
+        w.push_skip(segment, offset);
+        let mut sink = SliceSink::new(persist);
+        w.finish(0, &mut sink);
+        sink.finish()
+            .map(|n| n as u32)
+            .map_err(|_| Status::BadLength)
+    }
+
+    /// docs/plan/24-recovery-and-migration.md: panics in whatever `Phase` the previous,
+    /// successfully-completed export left the `Progress` region in -- writes nothing of its own, so
+    /// a call right after any ordinary export reports `Phase::Idle`. Uses `panic::fatal` (never
+    /// `panic!`, `.claude/rules/hot-paths.md`-adjacent reasoning even though this itself is never a
+    /// hot path: consistent with every other panic site in this crate) so the message reaches the
+    /// host through the same `engine.panic` import as a real bug, indistinguishable to a caller.
+    fn sim_test_trap(&mut self) -> Status {
+        crate::abi::panic::fatal(format_args!("sim_test_trap: deliberate test trap"))
     }
 
     fn sim_warm_one(&mut self) -> u32 {

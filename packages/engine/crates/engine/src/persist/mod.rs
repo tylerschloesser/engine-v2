@@ -10,12 +10,14 @@
 mod crc32;
 mod frame;
 mod identity;
+mod progress;
 mod segment;
 mod snapshot;
 
 pub use crc32::crc32;
 pub use frame::{DecodedFrame, FrameProgress, FrameReader, FrameRecord, FrameWriter, RecordKind};
 pub use identity::Identity;
+pub use progress::{PROGRESS_BYTES, Phase, ProgressCursor};
 pub use segment::{SegmentBase, SegmentHeader};
 pub use snapshot::{SnapshotInfo, SnapshotProgress, SnapshotReader, SnapshotWriter};
 

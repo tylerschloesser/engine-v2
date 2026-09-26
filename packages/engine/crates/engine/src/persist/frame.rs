@@ -214,6 +214,15 @@ impl<G: Game> FrameWriter<G> {
 pub struct DecodedFrame<G: Game> {
     pub tick_delta: u32,
     pub records: Vec<FrameRecord<G>>,
+    /// Byte offset of this frame's own leading `len` varint, relative to the first byte ever fed
+    /// to this [`FrameReader`] (docs/plan/24-recovery-and-migration.md: `sim_replay_begin`'s own
+    /// `offset` argument is what a caller adds to get an absolute segment offset -- the same basis
+    /// [`FrameReader::buffered_len`]'s own callers already use, e.g. `sim_replay_valid_end`).
+    pub frame_offset: u64,
+    /// Byte offset of each record's own leading `kind` byte, one entry per `records` entry in the
+    /// same order, same relative-to-reader-start basis as `frame_offset` (not relative to the
+    /// frame itself) -- 0005's `Skip { segment, offset }` names exactly this position.
+    pub record_offsets: Vec<u64>,
 }
 
 pub enum FrameProgress<G: Game> {
@@ -226,6 +235,10 @@ pub enum FrameProgress<G: Game> {
 /// splits"). One `FrameReader` can decode many frames back to back, one `push` call at a time.
 pub struct FrameReader<G: Game> {
     buf: Vec<u8>,
+    /// Total bytes ever consumed by a successfully decoded frame (docs/plan/
+    /// 24-recovery-and-migration.md): the basis `DecodedFrame::frame_offset`/`record_offsets` are
+    /// measured from. Distinct from `buffered_len()`, which reports bytes *not yet* consumed.
+    total_consumed: u64,
     _marker: core::marker::PhantomData<fn() -> G>,
 }
 
@@ -239,6 +252,7 @@ impl<G: Game> FrameReader<G> {
     pub fn new() -> Self {
         FrameReader {
             buf: Vec::new(),
+            total_consumed: 0,
             _marker: core::marker::PhantomData,
         }
     }
@@ -282,15 +296,22 @@ impl<G: Game> FrameReader<G> {
         let mut reader = ByteReader::new(body);
         let tick_delta = reader.varint().map_err(|_| PersistError::Malformed)? as u32;
         let count = reader.varint().map_err(|_| PersistError::Malformed)? as u32;
+        let frame_offset = self.total_consumed;
+        let body_base = frame_offset + prefix as u64;
         let mut records = Vec::with_capacity(count as usize);
+        let mut record_offsets = Vec::with_capacity(count as usize);
         for _ in 0..count {
+            record_offsets.push(body_base + reader.pos() as u64);
             records.push(FrameRecord::read(&mut reader)?);
         }
         let consumed = prefix + len;
         self.buf.drain(..consumed);
+        self.total_consumed += consumed as u64;
         Ok(FrameProgress::Frame(DecodedFrame {
             tick_delta,
             records,
+            frame_offset,
+            record_offsets,
         }))
     }
 }

@@ -18,8 +18,14 @@ Deviation) places it.
 Untrusted bytes (anything read back from storage) go through `decode_canonical`
 (`persist::read_sized`), never plain `decode`.
 
-Restore/replay drivers (`host::Host::sim_restore_*`/`sim_replay_*`, docs/plan/
-22b-persistence-load-and-fs.md) live in `host/mod.rs`, not here: this module stays the container
-level. Replay is single-pass over each decoded frame (Planning decisions 4's own "scan pass that
-collects `Skip` targets" is not built -- the set is always empty until M24 gives `Skip` real
-meaning, at which point that pass, and this line, need revisiting).
+Restore/replay drivers (`host::Host::sim_restore_*`/`sim_replay_*`/`sim_replay_scan_*`/
+`sim_log_skip`, docs/plan/22b-persistence-load-and-fs.md, docs/plan/
+24-recovery-and-migration.md) live in `host/mod.rs`, not here: this module stays the container
+level. Replay is two-pass (docs/plan/24-recovery-and-migration.md): `sim_replay_scan_begin/push/
+end` decode a segment tail once, purely to collect `Skip { segment, offset }` targets (a `Skip`'s
+own target typically lives in an *earlier* frame than the `Skip` record itself), before
+`sim_replay_begin/push/end`'s own real apply pass -- kept as a genuinely separate reader/pass
+rather than folded into the apply pass, so `sim_replay_push`'s pre-existing "apply each frame as
+soon as it's decoded" contract (`engine/test`'s `replayWorld`/`runHeavy` drive it tick-by-tick)
+stays intact. `persist::progress::{Phase, ProgressCursor}` (`RegionId::Progress`) is written by
+`Host<G>` around this and every other risky call, not by this module.

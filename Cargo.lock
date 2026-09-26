@@ -143,6 +143,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fx-panicky"
+version = "0.0.0"
+dependencies = [
+ "engine",
+ "serde",
+ "ts-rs",
+]
+
+[[package]]
 name = "fx-persist"
 version = "0.0.0"
 dependencies = [

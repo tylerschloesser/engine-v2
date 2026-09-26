@@ -178,13 +178,35 @@ impl<G: Game> Sim<G> {
     /// `apply` that recorded a write panics (0004 Consequences: "the host asserts that a rejecting
     /// `apply` recorded no writes").
     pub fn step(&mut self, records: &[Record<G>], out: &mut Vec<Outcome<G>>) {
+        self.step_with_progress(records, out, &mut |_, _| {});
+    }
+
+    /// [`Sim::step`]'s own body, plus a `Progress`-writing hook (docs/plan/
+    /// 24-recovery-and-migration.md) called `(Phase::OnPlayer | Phase::ApplyRecord, i)` right
+    /// before each record at index `i` (within `records`) runs its own game-authored code, and
+    /// once more as `(Phase::Tick, 0)` right before `Game::tick`. `Sim` itself has no region to
+    /// write into (only `Host<G>` does, via `abi::RegionLayout`): the hook is how a caller with
+    /// that access -- `Host::tick`, and the replay apply pass -- gets a write in *before* each
+    /// risky call, so a trap's own last-written `Progress` names exactly where it happened, without
+    /// coupling this deterministic core to the ABI (`tests/module_layering.rs`). Plain `step` above
+    /// passes a no-op hook, so every existing caller (native tests, `testkit`, `testing::replay`)
+    /// is unaffected.
+    pub fn step_with_progress(
+        &mut self,
+        records: &[Record<G>],
+        out: &mut Vec<Outcome<G>>,
+        on_phase: &mut dyn FnMut(crate::persist::Phase, u32),
+    ) {
+        use crate::persist::Phase;
         out.clear();
-        for record in records {
+        for (i, record) in records.iter().enumerate() {
             match record {
                 Record::Player { who, ev } => {
+                    on_phase(Phase::OnPlayer, i as u32);
                     G::on_player(&mut self.authority as &mut dyn WorldWrite<G>, *who, *ev);
                 }
                 Record::Action { who, seq, action } => {
+                    on_phase(Phase::ApplyRecord, i as u32);
                     // 0004 "State-budget check" / 0023 "The check": host only, before `apply`,
                     // for game actions only. Reads only sim state and world params, so the live
                     // host, replay and recovery decide identically (docs/plan/
@@ -231,6 +253,7 @@ impl<G: Game> Sim<G> {
         // The fixed point (0007 §7; docs/plan/21b-timers-wakeups-and-tickcx.md Scope): swap the
         // wake queue at the start of `G::tick`, compact every active list's tombstones and drop
         // whatever the wake queue's `now` list still holds at the end of it.
+        on_phase(Phase::Tick, 0);
         self.authority.begin_tick();
         {
             let mut cx = TickCx::new(&mut self.authority);
