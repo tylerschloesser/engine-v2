@@ -443,3 +443,39 @@ added in steps 1-3).
 the fingerprint flip reverted; `undecodable_tail_action_is_dropped_and_counted` fails (`0` not `1`)
 with a canonical (non-overlong) action payload; `schema_bump_runs_migrate` fails (`1` not `2`) with
 one tail frame instead of two. Each reverted after confirming.
+
+## Gate fix round: genesis-replay fallback never checked identity
+
+Fixed the known gap this milestone's own steps 4-5 Deviations flagged: `Persistence.loadLatest`'s
+genesis-only fallback (no snapshot has ever been written) called `sim_genesis()` and replayed
+segment 0's whole log under the running build with no `Identity::compare`-equivalent gate at all.
+`sim_upgrade_begin`/`push`/`end` cannot be reused here -- that trio decodes a whole snapshot
+container (0005 Formats' envelope), which does not exist before the first snapshot does -- so
+`host/upgrade.ts` gained `compareIdentity(stored, running)`, a small, explicitly-flagged TS mirror
+of `persist::Identity::compare`'s own decision matrix (buildHash, then schema/tick-rate/worldgen
+priority), operating on the same `IdentityJson` values `persistence.ts` already decodes with plain
+JS (`decodeIdentity`, no ABI call either way). `stored` comes from segment 0's own on-disk log
+bytes (`SegmentHeader::write` writes `Identity::write` first, no envelope, exactly like
+`Persistence.create`'s own header decode) -- a `NeedsMigrate` verdict now rejects with
+`WorldLoadError('incompatible', ..., cmp.reason)` before `sim_genesis()` ever runs (no write of any
+kind: Planning decisions 7), since a world this young has no old snapshot to build an `OldStore`
+from and so cannot take the `migrate` path, only `Same`/`Direct`. A `Direct` verdict sets the
+existing `identityChanged` flag, so the pre-existing "open a new segment, `tailReexecuted: true`,
+`onRecovered('upgrade')`" machinery (already shared with the snapshot-candidate path) runs
+unchanged. Container-version and `chunkBits`: audited, not touched -- `chunkBits` is already
+compared in `Persistence.open` unconditionally, before `loadLatest` runs at all, snapshot or no
+snapshot; `container_version` has no analogue on a log/segment-header (0005 Formats: only a
+snapshot's own container carries one), so there is nothing to check there.
+
+One pre-existing test needed a defensive addition, not a behaviour change: `persist-open.test.ts`'s
+`crash_snapshot_without_log_tail_is_skipped` drops segment 0's log down to zero bytes (a simulated
+crash that destroys even the header), so `storedIdentity` falls back to `runningIdentity` (a `Same`
+verdict) whenever segment 0's own bytes are absent or too short to decode -- caught by running the
+full suite once with only the null-check (no try/catch) in place, which still threw on this test's
+truncated-but-nonempty case; the `try/catch` around `decodeIdentity` was added to cover both.
+
+New tests (`tests/wasm/upgrade.test.ts`): `genesis_only_world_direct_load_reexecutes_tail`,
+`genesis_only_world_schema_bump_is_incompatible_files_untouched`. Both proved to fail with the
+check removed (reason `Schema`/outcome `upgraded` unmet); reverted after confirming. `pnpm test
+wasm`: 142 -> 144. `rust`/`unit`/`browser` unchanged (551/251/201): no Rust or browser change was
+needed. `pnpm test && pnpm lint` green on `HEAD`.

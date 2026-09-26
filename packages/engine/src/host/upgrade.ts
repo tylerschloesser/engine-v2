@@ -30,6 +30,47 @@ function decodeIncompatReason(byte: number): IncompatReasonName {
   return INCOMPAT_REASON_BY_BYTE[byte] ?? 'Decode'
 }
 
+/** Gate-fix (docs/plan/24b-upgrade-and-migration.md: "known gap" flagged in this milestone's own
+ * Deviations): mirrors `persist::Identity::compare`'s own decision matrix
+ * (`crates/engine/src/persist/identity.rs`) for the one path that can never reach that Rust
+ * function at all -- `Persistence.loadLatest`'s genesis-replay fallback (no snapshot has ever been
+ * written yet) has no snapshot container to feed `sim_upgrade_begin`/`push`/`end` (that trio decodes
+ * 0005 Formats' `magic|container_version|varint(len)|identity|...` envelope, which does not exist
+ * before the first snapshot does). `stored`/`running` are the two `IdentityJson` values
+ * `persistence.ts` already decodes with plain JS (`decodeIdentity`, no ABI call either): `stored` is
+ * segment 0's own on-disk header (`SegmentHeader::write` writes `identity.write` first, with no
+ * envelope in front of it -- `Persistence.create` already decodes the same bytes the same way), and
+ * `running` is this build's own (`sim_segment_header(0, GENESIS_BASE_TICK)`). Field priority (schema,
+ * then tick rate, then worldgen) matches `Identity::compare` exactly -- keep this in lockstep with
+ * that matrix if it ever changes; a world this young (no snapshot yet) can only take `Same`/`Direct`
+ * here, never `NeedsMigrate`'s own `migrate` path (there is no old snapshot to decode an `OldStore`
+ * from), so `Persistence.loadLatest` rejects a `NeedsMigrate` verdict outright, with no write of any
+ * kind, rather than attempting anything further. */
+export function compareIdentity(
+  stored: IdentityJson,
+  running: IdentityJson,
+): { kind: 'same' } | { kind: 'direct' } | { kind: 'needsMigrate'; reason: MismatchReasonName } {
+  if (stored.buildHash === running.buildHash) return { kind: 'same' }
+  if (
+    stored.schemaVersion === running.schemaVersion &&
+    stored.tickRateHz === running.tickRateHz &&
+    stored.worldgen.version === running.worldgen.version &&
+    stored.worldgen.fingerprint === running.worldgen.fingerprint
+  ) {
+    return { kind: 'direct' }
+  }
+  if (stored.schemaVersion !== running.schemaVersion) {
+    return { kind: 'needsMigrate', reason: 'Schema' }
+  }
+  if (stored.tickRateHz !== running.tickRateHz) return { kind: 'needsMigrate', reason: 'TickRate' }
+  return { kind: 'needsMigrate', reason: 'Worldgen' }
+}
+
+/** `persist::MismatchReason`'s three variants (`Identity::compare`'s own return type) -- a subset of
+ * `IncompatReasonName` (excludes the four reasons only ever produced downstream of `compare`, per
+ * this module's own Deviations). */
+export type MismatchReasonName = 'Schema' | 'TickRate' | 'Worldgen'
+
 /** One `sim_upgrade_begin`/`push`/`end` run over one candidate snapshot's bytes, mirroring
  * `Persistence.loadLatest`'s own pre-M24b `sim_restore_*` loop body exactly (same block-feeding
  * shape) but reporting the richer outcome `sim_upgrade_end` can now return. Never throws: a

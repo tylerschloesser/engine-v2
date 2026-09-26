@@ -506,6 +506,65 @@ describe('0005 Upgrades over the real fx-migrate-* pipeline', () => {
     expect(opened.upgrade?.reason).toBe('migrated')
   })
 
+  /** Gate fix (docs/plan/24b-upgrade-and-migration.md "known gap"): a world with no snapshot yet
+   * (played for less than the first 1,200-tick dirty snapshot) still checks identity on its
+   * genesis-replay fallback. `Comparison::Direct` (same schema/tick-rate/worldgen, different build
+   * hash): the whole log tail (there is no snapshot to resume from -- everything after segment 0's
+   * own header) is re-executed under the new build, exactly like a snapshot candidate's own Direct
+   * path, and the result matches an independent, uninterrupted replay of the same script. */
+  test('genesis_only_world_direct_load_reexecutes_tail', async () => {
+    const worldId = 'w-genesis-direct'
+    const c1 = cfg(worldId, 'aa'.repeat(32))
+    const storage = memoryStorage()
+    const inst = instantiate(v2, Role.Sim, buildSimInstanceConfig(c1))
+    const persistence = Persistence.create(storage, c1, inst)
+    const host = hostOver(inst, persistence)
+    expect(inst.call1(inst.x.sim_connect, 0)).toBe(Status.Ok)
+    host.stepTick(1) // Joined -> creates the player
+    const admit = admitAction(v2, c1)
+    await admit(inst, 1, 'Deposit')
+    host.stepTick(1)
+    const hashUninterrupted = host.hash()
+    // No snapshot was ever taken: the only candidate for `loadLatest` is the genesis fallback.
+    expect(await storage.list(`worlds/${worldId}/snap/`)).toHaveLength(0)
+
+    const c2 = cfg(worldId, 'bb'.repeat(32))
+    const ni = () => instantiate(v2, Role.Sim, buildSimInstanceConfig(c2))
+    const opened = await Persistence.open(storage, c2, ni)
+    expect(opened.outcome).toBe('upgraded')
+    expect(opened.upgrade?.reason).toBe('direct')
+    expect(opened.sim.call0(opened.sim.x.sim_hash)).toBe(Status.Ok)
+    expect(opened.sim.readU64Hex(RegionId.Result, 0)).toBe(hashUninterrupted)
+
+    const manifest = await readManifest(storage, worldId)
+    expect(manifest.segments).toHaveLength(2)
+    expect(manifest.segments[0]?.sealed).toBe(true)
+    expect(manifest.segments[0]?.tailReexecuted).toBe(true)
+    expect(manifest.segments[1]?.identity.buildHash).toBe('bb'.repeat(16))
+  })
+
+  /** Gate fix (docs/plan/24b-upgrade-and-migration.md "known gap"): a schema bump on a world with no
+   * snapshot yet is `Comparison::NeedsMigrate(Schema)`, but there is no old snapshot to decode an
+   * `OldStore` from -- rejected outright as `SaveIncompatible { Schema }`, never attempting
+   * `Game::migrate` (which would report `MigrateDeclined` instead), with every stored byte
+   * untouched. */
+  test('genesis_only_world_schema_bump_is_incompatible_files_untouched', async () => {
+    const worldId = 'w-genesis-schema'
+    const c1 = cfg(worldId, 'aa'.repeat(32))
+    const storage = memoryStorage()
+    const inst = instantiate(v1, Role.Sim, buildSimInstanceConfig(c1))
+    Persistence.create(storage, c1, inst)
+    expect(inst.call0(inst.x.sim_genesis)).toBe(Status.Ok)
+    // No snapshot was ever taken: the only candidate for `loadLatest` is the genesis fallback.
+    expect(await storage.list(`worlds/${worldId}/snap/`)).toHaveLength(0)
+    const before = await snapshotStorage(storage)
+
+    const c2 = cfg(worldId, 'bb'.repeat(32))
+    const ni = () => instantiate(v2, Role.Sim, buildSimInstanceConfig(c2))
+    await expectIncompatible(Persistence.open(storage, c2, ni), 'Schema')
+    await expectStorageUnchanged(storage, before)
+  })
+
   /** Planning decisions 7's own write order (snapshot write -> flush -> manifest write -> new
    * segment header) makes the upgrade restartable: a crash after the snapshot lands but before the
    * manifest is rewritten leaves the *old* world fully intact (the manifest still names the old,
