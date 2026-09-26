@@ -194,6 +194,18 @@ impl Game for Panicky {
         }
     }
 
+    /// Every action here exists solely to test host-side panic/recovery (module doc comment); none
+    /// is meant to run under prediction. `M25` (docs/decisions/0012-prediction-and-reconciliation.md)
+    /// makes `ClientCore::on_action` run `Game::apply` against `Predicting` for real, and every
+    /// variant here either panics inside `apply` directly (`PanicInApply`) or hits `apply`'s own
+    /// "never reached live" defensive panic (`PanicInAdmit`/`OverflowStackInAdmit`, since
+    /// `Predicting` never calls `Game::admit` at all) -- opting every one of them out is this
+    /// fixture's own use of 0012's per-action opt-out, the same mechanism a cascading action uses,
+    /// for a different reason (a deliberate test panic, not an unbounded write set).
+    fn predict(_a: &Action) -> bool {
+        false
+    }
+
     fn admit(
         _w: &dyn WorldRead<Self>,
         _p: &PresenceTable<Self>,
