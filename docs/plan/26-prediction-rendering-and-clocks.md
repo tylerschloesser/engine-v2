@@ -90,3 +90,167 @@ Owns item M34-own-timer-bar (own-timer bar on a real network), run in [M34's sec
 
 ## Deviations
 (filled in during Phase 3)
+
+**Steps 1-3 (this implementer).** Commits `d21bead`..`0c45af8`. All named seams landed under the
+brief's exact names except where noted below.
+
+- **`FrameView`'s new prediction fields are a separate builder step, `with_prediction(overlay,
+  pending)`**, mirroring `world_access::View::with_overlay`'s own precedent exactly (docs/plan/
+  25-prediction-core.md Deviations already used this pattern for the same reason): `FrameView::
+  new`'s own signature and every existing call site (fixtures/drawables' `drawlist_golden.rs`,
+  this file's own tests) is untouched, so no existing DrawList hash could move. `game_instance.rs`'s
+  two production call sites (`frame()`, `on_frame()`) chain `.with_prediction(core.overlay(),
+  core.pending_queue())` onto the existing `FrameView::new(..)` call -- `ClientCore::pending_queue()`
+  (new, `pub(crate)`) is the seam that makes the pending queue itself (not just an iterator over it)
+  reachable there.
+- **`FrameView::predicted_player(who) -> Result<&G::Player, Unknown>` is a seam beyond the brief's
+  own Provides list.** Needed because `swap_is_one_render`'s own "Ui inventory is constant"
+  property (Tests added, verbatim) requires `ClientSide::ui` to read the *overlay-merged* player
+  state -- the brief's own Seams give `entities()`/`is_predicted`/`tile_is_predicted`/
+  `predicted_tiles`/`pending`, none of which reach player state. Considered and rejected: widening
+  `FrameView::world()` itself to route through a `View`-with-overlay (0022 §7's own `View`/`Replica`
+  split, M25 Deviations, means `View::entity` never returns `Err(Unknown)` for a real unseen id the
+  way `Replica::entity` does -- swapping `world()`'s backing type would silently change that
+  behaviour for *every* game's `extract`/`ui`, not just this fixture's). `predicted_player` is the
+  same one-line overlay-then-replica merge `Predicting::player`/`View::player` already use, added
+  once, low risk, opt-in only for a caller that asks for it.
+- **`EntityIter` is now an enum (`Base`/`Merged`), not a struct.** `Base` is the exact pre-M26 code
+  (byte-for-byte unchanged) when no overlay is attached; `Merged` walks a reused, sorted id list
+  (`Overlay::render_entities_scratch`, a *separate* `RefCell<Vec<EntityId>>` from the pre-existing
+  `entities_in_scratch` -- so a game calling both `view.entities()` and `view.world().entities_in
+  (..)` in one `extract`/`ui` call never double-borrows one `RefCell`) built by a new free function,
+  `merge_render_ids`. Verified byte-identical to the pre-M26 path with an empty-but-attached
+  overlay: `fx-drawables`'s own `drawlist_fixture_hash_golden` (which drives `frame()`/`on_frame`
+  end to end, so its own `FrameView` now always carries `.with_prediction(..)` with an empty
+  overlay) is unmoved.
+- **`Overlay::effective_tiles`** (the deduplicated, last-write-wins scan over the overlay's own
+  tile vector, same "small, nested scan" shape as `find_entity_at`'s own "superseded" check) backs
+  *both* `FrameView::predicted_tiles` and `OverlayDiff::update` -- one shared implementation, not
+  two, since the brief's own Planning decisions describes both with the same words ("the previous
+  deduplicated overlay tile list").
+- **`Draw::predicted(bool)` was not added.** `Draw`'s fields (`flags` included) are already `pub`
+  (M17), and `fixtures/overlay`'s own `ANCHOR_CURSOR_TILE` usage already sets a flag by direct
+  field mutation (`draw.flags |= ANCHOR_CURSOR_TILE`) with no dedicated setter -- M17 does not
+  "lack a setter" in the sense the brief's own conditional names; `fixtures/predict`'s own
+  `PredictClient::extract` does the identical `draw.flags |= PREDICTED`.
+- **`ClientCore::mark_dirty`'s own dedup (`Replica::dirty_contains_chunk`) is load-bearing, not
+  defensive-only.** Originally reasoned about only for the "a wire delta and `OverlayDiff` both
+  want to dirty the same chunk in the *same* `on_frame` call" case; the inject-fail-revert proof
+  (below) additionally caught a chunk that was *already* dirty from earlier, undrained activity
+  (a warm-up tick's own `ChunkEnterPristine`) getting a redundant second `CHUNK` record at the very
+  next dispatch -- a broader case than first analysed, and exactly why "never two uploads of a
+  chunk in one frame" needed a real (not vacuous) dedup rather than "a wire delta and prediction
+  never race in the same frame" alone.
+- **`Uploader::stage_predicted` is a new method alongside the unchanged `stage`**, not a signature
+  change to `stage` itself: `fixtures/terrain`'s own hand-rolled `Instance` calls `stage` directly
+  and is outside this milestone's Files-touched list, so its call site needed no edit.
+  `game_instance.rs`'s `upload_stage` ABI method is the one production caller of `stage_predicted`.
+- **`fixtures/predict` gained `Action::Paint { tile, base }`** (`w.set_tile`, declining like
+  `Place` if the tile is already occupied by an entity): the fixture had no tile-mutating action
+  before this milestone, and the texel tests need one. Reuses `Place`'s own conflict shape (an
+  entity occupying the tile) so a rival's real `Place` landing before `Paint`'s own reject ack
+  reproduces 0012's "a conflicting delta arrives before the reject ack" case for a *tile*, the same
+  way `predict_rival_takes_the_spot_never_torn` already does for an *entity*.
+- **`testkit::Loopback` gained two new seams beyond the brief's own Seams list** (both needed so a
+  test can drive the game's own `extract`/`ui`/`Uploader` through the *real* production call shapes
+  rather than reimplementing them): `frame_view(i, visible, window_origin) -> FrameView<'_, G>` (a
+  real, prediction-merged `FrameView` over client `i`'s own state; `clocks.predicted` still equals
+  `authoritative`, since lead estimation is steps 4-6's) and `drain_and_stage(i, uploader,
+  max_records, region) -> u32` (drains client `i`'s dirty queue, coalesced to `ChunkCoord`, into a
+  caller-supplied `Uploader`, then stages through `stage_predicted` -- the coalesced drain loses the
+  `Whole`/`Tile` distinction `game_instance.rs`'s own `on_frame` preserves, which is fine for a test
+  that drives `Uploader` directly and has no `patch_tile` call site to route a `Tile` event to
+  anyway).
+- **Test naming: `-t one_render`/`-t texel_upload` (Verification commands) select by substring on
+  the test *name*, matching M25's own documented nextest quirk** (Deviations there: "nextest's bare
+  positional filter matches the test name only"). `swap_is_one_render`/`reject_is_one_render` (in
+  `tests/render.rs`) and `texel_upload_only_on_change`/`texel_upload_on_rejection_shows_replica_
+  texel` (in `tests/texel.rs`) are named to match both patterns exactly as given; verified with
+  `cargo nextest run -p fx-predict --features engine/testing -E 'test(is_one_render)'` (2 tests) and
+  `-E 'test(texel_upload)'` (2 tests). `pnpm test rust`'s own summary line still reports the full
+  586-test count regardless of `-t` (the same pre-existing `scripts/test.mjs` display quirk M25
+  already flagged, not re-verified against this base commit specifically) -- the raw `cargo
+  nextest` calls above are what were actually checked.
+- **`drawlist_hash_stable_across_replays`'s own warm-up needed `lb.run(10)`, not `4`.** `loopback(3)`
+  / `add_client(delay: 4)` at `lb.run(4)` left the client's own subscription incomplete at dispatch
+  time (`Prediction::NotPredictable` instead of `Applied`, `traits_at`/`entity_at` reading
+  `Unknown` at the placement's own footprint) -- raised to `10` (comfortably over `2*delay+2 = 10`,
+  the spike's own warm-up figure for `delay = 4`), matching every other test in this file's own
+  `delay`-vs-`run` pairing.
+- **Golden hashes: none moved.** `pnpm golden` was not run (nothing in this milestone's own scope
+  writes a fixture with its own golden). Verified directly: `fx-drawables`'s
+  `drawlist_fixture_hash_golden` (native) passes unchanged both before and after the `EntityIter`/
+  `FrameView` rewrite; the full `cargo nextest run --workspace --features engine/testing` (586
+  passed, 2 skipped -- every existing `*_golden`/`scenario_matches_golden`/`replay_equals_live` test
+  among them) passes identically to the base commit's own 577.
+- **`budgets.json`'s `counters.predictRender.overlayDiffEntries` (64) is measured-plus-margin, not
+  exact** (unlike `counters.predict.replaysPerFrame`'s architectural 32): no hard cap exists on how
+  many tiles a single pending action's own `set_tile` calls could touch. Measured:
+  `predict_overlay_diff_entries_counter_is_live` gets exactly 1 (one `Paint` dispatch, one tile).
+  64 is headroom for a future fixture predicting several tile writes per action, not a derived
+  bound -- flagged in the JSON's own `formula` string for whoever tightens it later.
+- **Failability, inject-fail-revert (all reverted before commit, none of these diffs are in the
+  tree):**
+  - Step 1/2 (`fixtures/predict/src/lib.rs`, `PredictClient::extract`): disabling `draw.flags |=
+    PREDICTED` fails `swap_is_one_render` at its first assertion (`left: [0], right: [4]`); drawing
+    every entity's rect twice fails both `swap_is_one_render` (`left: [4, 0], right: [4]`) and
+    `reject_is_one_render` (`left: 2, right: 1`, "never zero or two Draws").
+  - Step 3 (`upload.rs`): disabling the overlay merge inside `Uploader::stage_chunk` fails
+    `texel_upload_only_on_change` at the dispatch-time predicted-texel assertion (`left: (0, 0),
+    right: (9, 0)`).
+  - Step 3 (`client/core.rs`): disabling `ClientCore::mark_dirty`'s own dedup fails
+    `texel_upload_only_on_change` at "one upload of its chunk at dispatch" (`left: 2, right: 1`).
+  - Step 3 (`predict/diff.rs`): forcing `OverlayDiff::tiles()` to always return `&[]` fails
+    `predict_overlay_diff_entries_counter_is_live` (`left: 0, right: 1`).
+  - Step 3 (`fixtures/predict/src/lib.rs`, temporary): XORing a call counter into `extract`'s own
+    draw colour fails `drawlist_hash_stable_across_replays` (hash differs run to run).
+
+**Exit criteria, evidence (steps 1-3 only; steps 4-6 -- `HostClock`/`LeadEstimator`/`own_progress`/
+the browser `prediction-no-flicker` test -- are the second implementer's):**
+- Every test above passes: **met.** `cargo nextest run --workspace --features engine/testing`:
+  `586 tests run: 586 passed, 2 skipped` (base 577 + 9: `predict::diff::tests::*` (2),
+  `swap_is_one_render`, `reject_is_one_render`, `drawlist_hash_stable_across_replays`,
+  `texel_upload_only_on_change`, `texel_upload_on_rejection_shows_replica_texel`,
+  `predict_overlay_diff_entries_counter_is_live`, `export_bindings_ui`).
+- The measured gaps are recorded under Deviations: **not applicable to steps 1-3** (the
+  own-timer completion-gap measurement is step 6's `completion_gap_measured`).
+- The browser zero-GC test passes with predicted actions in its script: **not verified this
+  session** -- no browser suite change was made in steps 1-3, and the brief's own must-knows
+  restrict this implementer to foreground, targeted Rust runs only (no `pnpm test browser`).
+  Flagged for the orchestrator/second implementer to confirm at the milestone's own final gate.
+- Item M34-own-timer-bar in `docs/plan/device-checks.md` matches what was built: **not this
+  implementer's** (own-timer bar is step 6's `own_progress`).
+- `pnpm test` and `pnpm lint` are green: **not run, per this brief's own instruction** ("I am the
+  gate"). This implementer's own scope, run separately: `cargo nextest run --workspace --features
+  engine/testing` (586 passed, 2 skipped), `cargo clippy --workspace --all-targets --features
+  engine/testing -- -D warnings` (clean), `cargo fmt --check` (clean via `pnpm format`).
+  `pnpm test rust -t one_render` / `-t texel_upload` both run (586-test summary, the pre-existing
+  display quirk noted above); the underlying `cargo nextest -E 'test(..)'` calls are what were
+  actually checked for selection correctness.
+
+**Notes for the steps 4-6 implementer.**
+- `client.clock().predicted` still equals `.authoritative` everywhere in this milestone's own
+  code (`game_instance.rs`'s two `Clocks { .. }` literals, unchanged from before M26): the real
+  lead is entirely yours (`HostClock`, `LeadEstimator`, `Clocks::lead`/`own_progress`/`progress`).
+  `testkit::Loopback::frame_view`'s own `Clocks` literal has the identical placeholder -- update it
+  alongside `game_instance.rs` if `Clocks` grows a `lead` field, or every `frame_view`-based test in
+  this milestone's own `render.rs`/`texel.rs` silently keeps reading a stale value.
+  `ClientCore::set_lead`/`predicted_tick` (M25) are the existing hooks `LeadEstimator` drives, per
+  the brief's own Provides.
+- `FrameView::predicted_player` (this implementer's own addition, not in the original brief) is
+  available if the own-timer/`own_progress` work needs an overlay-merged player read anywhere
+  outside `ui()` -- reuse it rather than re-deriving the same one-line merge a third time.
+  `FrameView::pending()` gives `(seq, &Prediction<G::Reject>)` only (no action, no `predicted_tick`)
+  by design (the brief's own Seams, verbatim); if `own_progress`/the completion-gap measurement
+  needs a pending action's own `predicted_tick` from inside `extract`/`ui`, that is a new seam to
+  add deliberately, not something to reach for through `ClientCore` directly (which `FrameView`
+  intentionally does not expose).
+- `OverlayDiff`/`ClientCore::mark_dirty` fire from *both* `on_action` and `on_frame`'s own tail
+  (`ClientCore::sync_overlay_dirty`, private) -- the browser `prediction-no-flicker` test (step 4)
+  should see a chunk re-upload immediately on dispatch, not only after the first `on_frame` call;
+  worth asserting explicitly if the semantic pixel probe ever seems to lag one frame behind a tap.
+- `Uploader::stage_predicted`'s own overlay pass (`stage_chunk`) re-scans `Overlay::effective_tiles`
+  once per staged `CHUNK` record, filtering by chunk match inside the closure -- O(overlay size)
+  per chunk, not indexed by chunk. Fine at "single digits" overlay size (0012); revisit only if a
+  later milestone's own fixture predicts materially more tile writes per frame than this one ever
+  does.
