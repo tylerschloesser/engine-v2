@@ -87,6 +87,170 @@ New skill `bump-schema` only if the session actually performs the procedure on a
 none
 
 ## Deviations
-(filled in during Phase 3)
+Steps 1-3 only (this delegation's scope); steps 4-5 go to a second implementer. Base `6b43c09`.
+Commits: `3b87725` (step 1), `e47c820` (step 2+3 core), `b97ee78` (step 3 fixtures/tests).
+
+**Step 1 -- `Identity::compare`.** `impl Identity { pub fn compare(&self, running: &Identity) ->
+Comparison }` in `persist/identity.rs`, `self` = the identity stored in a save. `Comparison { Same,
+Direct, NeedsMigrate(MismatchReason), Incompatible(MismatchReason) }`, `MismatchReason { Schema,
+TickRate, Worldgen }` (both `pub`, re-exported at `persist::{Comparison, MismatchReason}`) --
+**not** the ABI's own 7-variant `IncompatReason` (`Schema, TickRate, Worldgen, MigrateDeclined,
+Container, Decode, ChunkSize`) named in this brief's own Seams section. That wire enum is a step-4
+superset: map `MismatchReason::{Schema,TickRate,Worldgen}` 1:1 into it and construct the other four
+downstream of `compare` (`MigrateDeclined` when `Game::migrate` itself returns `Err`; `Decode` when
+`OldStore::decode` or an `OldValue::decode` fails, or `Migrating` faults on a footprint collision;
+`Container` from the pre-existing `SnapshotReader`/`PersistError::ContainerVersion` envelope check,
+never from `compare`; `ChunkSize` from the TS host's manifest comparison, per Scope, never from
+Rust at all). `compare` never itself returns `Incompatible` for a Container/ChunkSize/Decode/
+MigrateDeclined reason -- those are structurally impossible to know from two `Identity` values
+alone.
+
+**Own addition, not in 0005/0006 literally:** `Incompatible(MismatchReason::Schema)` when the
+*stored* `schema_version` is newer than the running build's -- `Game::migrate` only ever brings an
+*older* schema forward (its own signature has no way to go the other direction), so a downgrade can
+never take the `NeedsMigrate` path. Flagged for the orchestrator; not tested beyond
+`identity_compare_matrix`'s own coverage of it.
+
+**Step 2 -- `Rescale`/`RescaleTicks`, `crates/engine/src/migrate.rs`.** `Rescale::new(old_hz,
+new_hz, snapshot_tick)`; `ticks(Ticks) -> Ticks` is 0006's own rounding rule generalised from a
+fixed 1000ms denominator to an arbitrary `old_hz` one: `round_half_up(num/den) ==
+floor((2*num+den)/(2*den))`, which reduces to exactly 0006's `(ms*hz+500)/1000` at `den=1000`, plus
+the non-zero floor. `deadline(Tick) -> Tick` rescales the distance from `snapshot_tick`, mirrored
+for a past tick, saturating at 0. `RescaleTicks` implemented for `Tick` (as a deadline), `Ticks` (as
+a duration), `Option<T>`, `[T; N]`. `rescale_matches_0006_rounding`'s own expected-value function is
+`f64`-based, never calls `Rescale`.
+
+**Step 3 -- `OldStore`/`OldValue`, `Migrating`, the `migrate()` driver, all in `migrate.rs`.**
+`OldStore` is **not** generic over any `Game`: every engine-owned field (player ids/`last_seq`/
+`online`, tile positions, entity ids, timer deadlines, wake-queue/active-list membership) is fully
+decoded; every game-typed value (`G::Entity`/`G::Player`/`G::Global`) stays raw postcard bytes
+behind `OldValue<K>::decode::<T: Codec>()` -- **`T: Codec` (`Serialize + DeserializeOwned`), not the
+brief's own `DeserializeOwned`-only wording**: `decode_canonical` (the determinism rule: untrusted
+bytes never go through plain `decode`) re-encodes to verify canonicality, which needs `Serialize`
+too. `carry_tiles<G: Game>(&mut self, w: &mut dyn WorldWrite<G>)` is the one method generic over the
+*new* `G` (inferred from `w`), since it is the one "what only migrate carries" default the engine
+supplies (Planning decisions 3); it drops an entry that now reads back equal to the new pristine
+(`w.tile(pos)` on an untouched position *is* the new pristine value, so no separate worldgen call is
+needed).
+
+**Bytes reach `OldStore` via `OldStore::decode(reader: &mut ByteReader, schema: u32,
+old_tick_rate_hz: u32, new_tick_rate_hz: u32, tick: Tick, chunk_bits: u32) -> Result<Self,
+SaveIncompatible>`** -- a `&mut ByteReader` already positioned at the start of a decoded snapshot's
+own *store* section (`Store::write_canonical`'s wire shape, i.e. right after a real
+`SnapshotReader`/step-4 caller has already parsed `identity`/`tick`/`log_segment`/`log_offset`/
+`log_ref_tick`/`rng` itself), **not** a whole `SnapshotReader`. `OldStore::decode` re-implements
+`Store::write_canonical`'s reader side byte-for-byte (players, next_entity_id, global, terrain
+overlay, entities, active lists, timers, wake queue's `next` list) rather than building a real
+`Store<OldG>` -- deliberate duplication, flagged here per `persist/CLAUDE.md`'s own "field order is
+fixed wire format" rule: **a change to that wire shape must update both `Store::write_canonical`/
+`decode` and `OldStore::decode`, or old saves silently misparse.** `chunk_bits` is the *running*
+build's `G::CHUNK_BITS` (a chunk-size mismatch is `SaveIncompatible { ChunkSize }` before this ever
+runs, per Scope, so old and new chunk bits are already known equal). `SimRng` and `tick` are **not**
+carried through `OldStore` at all -- neither is game-typed or schema-dependent, so step 4's caller
+passes them straight into `migrate()`'s own `tick`/`rng` parameters, sourced from the same
+`SnapshotInfo` it already has.
+
+**The entry point: `pub fn migrate<G: Game>(old: OldStore, terrain: TerrainStore, tick: Tick, rng:
+SimRng) -> Result<(Authority<G>, MigrationOutcome), SaveIncompatible> where G::Global: Default`.**
+`sim_upgrade_end` (step 4) is expected to call this only on the `NeedsMigrate` path (the `Direct`
+path is a plain `SnapshotReader`/tail-replay, no `migrate.rs` involvement at all). Builds a fresh
+`Store<G>`/`Authority<G>` via `Authority::from_snapshot` (carrying `tick`/`rng` in directly, no new
+setters needed -- that constructor already existed, M22's own), runs `Game::migrate` through a
+`Migrating`, then unconditionally applies the engine-owned carry (id counter via the new
+`Store::carry_next_entity_id`, raises-only; player `last_seq`/`online` via the new
+`Store::carry_player_meta`, onto an existing slot only; timer wheel filtered to surviving entities
+and passed through `Rescale::deadline`; wake-queue `next` and every active list filtered the same
+way, unrescaled since neither carries a deadline). Returns the new `Authority<G>` plus
+`MigrationOutcome { dropped_timers, dropped_wakes, dropped_active }` -- **distinct from
+`sim_upgrade_end`'s own tail-replay "dropped record" count (0024 §3b)**, which is a different
+concept step 4 will report separately. `rescale()` "was it called" tracking: `OldStore` has a
+private `Cell<bool>` set only by the *public* `rescale()` method; `migrate()`'s own internal use of
+the same numbers goes through a private `engine_rescale()` that never touches the flag, so the
+decision-2 warning genuinely reflects whether **the game's own `migrate` body** called it, not
+whether the engine's own mandatory carry did.
+
+**Real bug found while wiring the fixtures (see commit `b97ee78`):** `Migrating::spawn`/
+`put_entity` originally forwarded to `Authority`'s own `WorldWrite::spawn`/`put_entity`, which
+unconditionally auto-wakes (`wake: true`) every put made outside `G::tick`. That put *every*
+migrated entity into the new wake queue's `next` list regardless of the old snapshot's own
+membership, and then a completely ordinary game `tick()` handler's "first sight of a freshly
+spawned entity" `next_woken` branch (the exact pattern `fx-persist`/every migrate fixture here
+uses) silently **overwrote** the timer deadline the engine had just carried over, on the very first
+tick after migration -- caught by `migrate_drops_timers_of_dropped_entities` (fires stayed 0
+forever) before this was fixed. Fix: two new `pub(crate)` methods, `Authority::spawn_no_wake`/
+`put_entity_no_wake` (mirrors `TickCx`'s own "puts never auto-wake" convention, exactly the same
+reasoning); `Migrating` uses these instead. `Authority::store_mut()` also had its
+`#[cfg(any(test, feature = "testing"))]` gate removed (now plain `pub(crate)`, unconditional) so
+`migrate()`'s driver can reach it in production builds, not only under the `testing` feature.
+
+**Arena peak-use counter (Budgets).** `migrate_v1_to_v2_preserves_ids_and_occupancy`
+(`fixtures/migrate-v2/tests/migrate_v1_to_v2.rs`) measures `engine::abi::arena::{live_bytes,
+high_water_bytes}` around the `decode`/`migrate` calls: `old_store_live` = live-byte delta while
+decoding `OldStore`; `new_store_live` = live-byte delta left over after `migrate` returns (the old
+store, consumed and dropped by then); `peak_during_migrate` = high-water delta spanning the
+`migrate()` call itself. Asserts `peak_during_migrate <= old_store_live + new_store_live`. No
+separate `#[global_allocator]` in that test file: a native binary installs only one, and this one
+already gets `engine::abi::Arena` for free from `fx_migrate_v2::export_game!` (the same reason
+`fx-migrate-v1` needed its own `as_dependency` feature -- see below). Small-scale measured numbers
+(2 entities, `CacheCapacity::Chunks(4)`): `peak_during_migrate=3577 old_store_live=568
+new_store_live=20264` (bound 20832, comfortable margin). **Proved the assertion can fail** (Trap):
+with 4,000 entities, a temporarily-injected defect in `drain_entities` (clone every entry instead
+of draining it, so old bytes stay fully resident through the whole `migrate` call instead of being
+freed as consumed) measured `peak_during_migrate=885476` against `bound=856728` (`old_store_live=
+186593 new_store_live=670135`) -- **fails**, exactly as expected; the correct (draining)
+implementation on the same 4,000-entity world measured `peak_during_migrate=813856 <= 856728`. The
+defect and its one-off proof run were reverted before committing; only the small-scale assertion
+is a permanent test.
+
+**Cargo-workspace constraint, not anticipated by the brief:** a native test binary can install only
+one `#[global_allocator]` (pre-existing rule, `fixtures/machines/tests/journal_bench.rs`'s own doc
+comment), so the cross-fixture test crates (`fx-migrate-v2`, `fx-migrate-v2-hz30`) cannot depend on
+`fx-migrate-v1` normally -- both call `engine::export_game!`, which installs one each, and Cargo
+refuses to link two. Fix: `fx-migrate-v1` gained a Cargo feature `as_dependency` that skips its own
+`export_game!` call; `fx-migrate-v2`/`fx-migrate-v2-hz30`'s `[dev-dependencies]` enable it. This is
+why "both game types in one test binary" (Order of work 3) is satisfied by `fx-migrate-v1` +
+whichever `fx-migrate-v2*` crate owns the test, never by combining `fx-migrate-v2` and
+`fx-migrate-v2-hz30` together (neither ever needs to be in the same binary as the other).
+
+**Fixture sharing (Files: "three tiny crates sharing source by `#[path]`").** `fx-migrate-v2` and
+`fx-migrate-v2-hz30` share `fixtures/migrate-v2/src/game.rs` verbatim via
+`#[path = "../../migrate-v2/src/game.rs"] mod game;`; the tick rate is a const generic (`pub struct
+V2<const HZ: u32>`, `const TICK_RATE: TickRate = TickRate::hz(HZ)`), so the two crates differ only
+in which `HZ` they instantiate (`type V2Game = game::V2<20>` / `V2<30>`), never in the shared file's
+own text. `fx-migrate-v1` (a genuinely different schema, not just a different tick rate) is its own,
+separate file -- "three crates" holds; "sharing source" holds for two of the three, which is the
+whole reason a third, tick-rate-only variant needed no new logic at all.
+
+**Budgets "incremental build must not exceed 0020's 30s": not triggered by these fixtures.**
+Measured per-fixture `cargo` time via `node packages/engine/scripts/build-fixtures.mjs` (warm
+cache): each of `migrate-v1`/`migrate-v2`/`migrate-v2-hz30` costs ~535-541ms, in line with every
+other fixture here (419-1098ms) -- negligible, and no crate merge is needed. The *observed*
+`pnpm test rust`/`pnpm test wasm` "fixtures" build step is ~150-175s on this machine, but that is
+entirely `fx-puts`'s own pre-existing, unrelated `bindings` step (`BINDINGS_FIXTURES = {'puts'}` in
+`build-fixtures.mjs`: a second native `cargo test export_bindings` compile), measured at
+`bindings 149060ms` in isolation -- a cost this milestone never touches and that already existed on
+`6b43c09`. 0020 itself already defers "measuring the 30s rebuild target ... because no code exists
+to measure" as a known Phase 3 gap; this session's own measurement is the first real number for it,
+and it shows the budget was already far exceeded before M24b for a reason outside this brief's
+scope. Flagged for the orchestrator, not fixed here.
+
+**Test-injected-defect verifications (per-test "hunt for tests that cannot fail"):**
+- `identity_compare_matrix`: manually swapped an expected `NeedsMigrate(Schema)` case's expected
+  value to `Direct` -- failed with a clear mismatch, reverted.
+- `rescale_matches_0006_rounding`: temporarily changed `Rescale::ticks`'s rounding to plain
+  truncation (dropped the `2*`/ties-up doubling) -- `20->30` at `d=25` (12.5 exact) then rounded
+  down to 12 instead of 13, test failed; reverted.
+- `migrate_v1_to_v2_preserves_ids_and_occupancy`/`migrate_drops_timers_of_dropped_entities`: the
+  auto-wake bug above *was* exactly this category of finding, caught by the drop test's own
+  fires-progression assertion before any fix was in place.
+- `migrating_footprint_collision_is_incompatible`: temporarily removed the `check_collision` call
+  from `Migrating::put_entity` -- migrate then returned `Ok` (both entities silently overlapping
+  the same tile) instead of `Err(SaveIncompatible)`; test failed; reverted.
+- Arena peak-use: see the `drain_entities`-clone experiment above.
+
+No existing golden moved (`pnpm test rust`/`wasm` counts: 529->550 native, 124->133 wasm, both
+exactly the new tests added here, no existing test changed).
+
+ADR note: 0005 Upgrades says re-executing the tail is safe because "at worst an action is now rejected". With postcard that is not strictly true when `G::Action`'s layout changed between builds: old bytes can decode into a different *valid* action. 0024 §3 amends 0005 for this case (`SCHEMA_VERSION` also covers `G::Action`; the tail is dropped when it differs); decision 6 above implements it, it does not re-decide it.
 
 ADR note: 0005 Upgrades says re-executing the tail is safe because "at worst an action is now rejected". With postcard that is not strictly true when `G::Action`'s layout changed between builds: old bytes can decode into a different *valid* action. 0024 §3 amends 0005 for this case (`SCHEMA_VERSION` also covers `G::Action`; the tail is dropped when it differs); decision 6 above implements it, it does not re-decide it.
