@@ -2,7 +2,7 @@
 //! "loopback"): a real `Host<Machines>` <-> `ClientCore<Machines>` round trip over real wire bytes
 //! (`Loopback`), driving `fx-machines`'s own `Place`/`Move`/`Feed` through the real admit path.
 
-use engine::game::{EntityId, Game, PlayerId, WorldRead};
+use engine::game::{EntityId, Game, PlayerId, Unknown, WorldRead};
 use engine::sim::WorldParams;
 use engine::testing::testkit::Loopback;
 use engine::wire::CameraReport;
@@ -143,9 +143,12 @@ fn border_machine_gone_when_last_overlapped_chunk_leaves() {
         lb.step();
     }
     assert!(!lb.client(idx).view().is_held(ChunkCoord::new(2, 0)));
+    // `entity(id)`'s `Unknown`-vs-`None` split (0022 §7, landed by M25, docs/plan/
+    // 25-prediction-core.md): the client cannot tell "despawned" from "outside my subscription",
+    // so a real id it no longer holds is `Err(Unknown)`, not `Ok(None)`.
     assert_eq!(
         lb.client(idx).view().entity(id),
-        Ok(None),
+        Err(Unknown),
         "the entity must be gone once the last chunk it overlapped for this client is unsubscribed"
     );
 }
@@ -204,10 +207,10 @@ fn moved_entity_enters_and_leaves_subscription() {
     lb.step();
     let id = EntityId(1);
     // `entity(id)`'s `Unknown`-vs-`None` distinction for a real id the client has never been told
-    // about (0022 §7 decision 7) is explicitly M25's (0022 Consequences: "decision 7 land[s] with
-    // prediction"); this milestone's `Store::entity` stays a plain lookup, so an id the replica
-    // has never seen is `Ok(None)`, not `Err(Unknown)`.
-    assert_eq!(lb.client(idx).view().entity(id), Ok(None));
+    // about (0022 §7 decision 7): landed by M25 (docs/plan/25-prediction-core.md), which fixed
+    // `client::Replica::entity` to return `Err(Unknown)` here instead of `Ok(None)` -- the client
+    // cannot tell "despawned" from "outside my subscription".
+    assert_eq!(lb.client(idx).view().entity(id), Err(Unknown));
 
     // Move it into the subscribed chunk (1,0): one full delivery.
     lb.action(
@@ -237,7 +240,7 @@ fn moved_entity_enters_and_leaves_subscription() {
         },
     );
     lb.step();
-    assert_eq!(lb.client(idx).view().entity(id), Ok(None));
+    assert_eq!(lb.client(idx).view().entity(id), Err(Unknown));
     assert_eq!(
         lb.host.region_hash(lb.conn(idx)),
         lb.client(idx).region_hash(),

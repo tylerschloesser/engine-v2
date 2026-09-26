@@ -399,7 +399,11 @@ fn entity_move_between_subscribed_and_unsubscribed_delivered_once() {
         },
     );
     lb.step();
-    assert_eq!(lb.client(idx).view().entity(id), Ok(None));
+    // `entity(id)`'s `Unknown`-vs-`None` distinction for a real id the replica does not hold
+    // (0022 §7, landed by M25, docs/plan/25-prediction-core.md): the client cannot tell
+    // "despawned" from "outside my subscription", so this is `Err(Unknown)`, not `Ok(None)`
+    // (`client::Replica::entity`, M25's own fix).
+    assert_eq!(lb.client(idx).view().entity(id), Err(Unknown));
 }
 
 #[test]
