@@ -283,7 +283,11 @@ let rejected = 0
 let lastReject: unknown
 client.onActionResult<Reject>((_seq, result) => {
   if (result === 'Confirmed') confirmed += 1
-  else {
+  // `NotPredictable` (docs/plan/25-prediction-core.md) is a hint, never a verdict (0012): this
+  // page counts only the host's own eventual verdict, so a declined prediction does not inflate
+  // `rejected` -- the real ack for the same seq (`Confirmed` or a genuine `Rejected`) still
+  // arrives and is counted then.
+  else if (result !== 'NotPredictable') {
     rejected += 1
     lastReject = result
   }

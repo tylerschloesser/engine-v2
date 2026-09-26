@@ -181,7 +181,7 @@ To observe the outcome:
 
 ```ts
 client.onActionResult<Reject>((seq, result) => {
-  // result: 'Confirmed' | { Rejected: { Game: Reject } } | { Rejected: { Engine: EngineRejectReason } }
+  // result: 'Confirmed' | 'NotPredictable' | { Rejected: { Game: Reject } } | { Rejected: { Engine: EngineRejectReason } }
 })
 ```
 
