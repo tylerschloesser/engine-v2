@@ -27,6 +27,7 @@ import {
   CB_LIFECYCLE,
   ControlBlock,
   Lifecycle,
+  W_PARKED,
   W_YIELD,
   WORKER_CLIENT,
   WORKER_GEN0,
@@ -41,10 +42,22 @@ import {
   type WorldConfig as ServerWorldConfig,
   seedToHexU64,
 } from './sim-config.js'
-import type { FromWorker, TestFlags, ToWorker, WorkerKind } from './worker/protocol.js'
+import type {
+  FromWorker,
+  SimLifecycleMessage,
+  StorageStatus,
+  TestFlags,
+  ToWorker,
+  WorkerKind,
+} from './worker/protocol.js'
 
 export type { SupportFailure, SupportFailureCode, SupportReport } from './support.js'
 export { checkSupport } from './support.js'
+// docs/plan/23-persistence-opfs-and-lifecycle.md Seams (Provides): `StorageStatus` is declared in
+// `worker/protocol.ts` (so `SimLifecycleMessage` can reference it without a `client.ts` import
+// cycle) and re-exported here unchanged -- the same "no renamed Provides" convention `sim-config.ts`/
+// `storage/types.ts` already follow.
+export type { StorageStatus } from './worker/protocol.js'
 
 /**
  * The real shape (docs/plan/13-sim-host-tick-loop.md, Scope "`createClient` local host"): `server.
@@ -122,6 +135,13 @@ export interface ClientOptions {
          * flag to remember to turn off (Planning decisions). A page that wants a real connected
          * session sets this `true`. */
         connect?: boolean
+        /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: the sim worker's own startup
+         * order becomes Web Lock -> OPFS probe -> `Persistence.open` -> tick loop (a world survives
+         * tab close/reload, and a second tab opening the same `worldId` gets `WorldBusy`) instead of
+         * the M13 in-memory-only stub. Default `false` (unset), the same "no flag to remember to
+         * turn off" convention `connect` above already uses: no existing `sim`-kind test page sets
+         * this, so none of them gain the OPFS/Web-Lock startup order or its extra async work. */
+        persist?: boolean
       }
     | { kind: 'remote'; url: string; joinKey?: string }
   /** Pattern B (0017 §3): the game constructs the worker itself. */
@@ -202,6 +222,11 @@ export interface Client {
    * typing, the same convention `onActionResult<Reject>` already uses; default `unknown` when
    * omitted. */
   onUi<Ui = unknown>(cb: (ui: Ui) => void): () => void
+  /** docs/plan/23-persistence-opfs-and-lifecycle.md Seams: fires with the persisted world's own
+   * `StorageStatus` at load, after the `persist()` answer (Planning decision 5), and after each
+   * hidden-boundary snapshot -- `host: { kind: 'local', persist: true }` only; never fires otherwise.
+   * Returns an unsubscribe function, the same convention as `onActionResult`/`onUi`. */
+  onStorage(cb: (status: StorageStatus) => void): () => void
   /** docs/plan/16b-ui-observation-and-clock.md Scope: `client.clock()` exposes the clock block --
    * `authoritative`/`predicted` tick counts (`predicted` equals `authoritative` until M26 gives
    * prediction a real lead, 0012) and the game's own `ticksPerSecond` -- refreshed from the clock
@@ -286,6 +311,10 @@ export class EngineStartError extends Error {
     | 'abi-mismatch'
     | 'arena-config'
     | 'worker-fatal'
+    /** docs/plan/23-persistence-opfs-and-lifecycle.md Seams: a second tab (or any other running
+     * process) already holds the persisted world's own Web Lock (`world:<worldId>`) -- a start
+     * failure, not a trap (`SimLifecycleMessage`'s `start-failed` variant carries it). */
+    | 'world-busy'
   constructor(code: EngineStartError['code'], message: string) {
     super(message)
     this.name = 'EngineStartError'
@@ -395,6 +424,129 @@ export function clientTestHandle(client: Client): ClientTestHandle {
   return h
 }
 
+/**
+ * docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4, Scope: "Browser clean boundaries:
+ * `visibilitychange -> hidden` and `pagehide` -> `SimHost.pause()`; `visible -> resume()`" -- a
+ * page-invoked wiring function, `frame-loop.ts`'s own `attachVisibilityHandling`/`input/focus.ts`'s
+ * `installBlurAndVisibilityReset` precedent (an injectable `doc`, default the real `document`):
+ * headless Chromium's own `document.hidden` cannot be forced from outside the page, so a test page
+ * builds its own `{ hidden, addEventListener, removeEventListener }` object and drives it directly
+ * (`hidden-tab-upload.ts`'s `FakeDoc`) instead of the real one a manual device-check page uses
+ * unmodified. A no-op for any topology with no `sim`-kind host worker (`remote`, `gen`-only), and
+ * for one whose host worker never received `message.world` (`worker/sim.ts`'s `simControl` is then
+ * `undefined`, so `sim-pause`/`sim-resume` are silently ignored by `worker.ts`'s own dispatch) --
+ * calling this on a client with `host.persist` unset costs a spurious park/resume round trip per
+ * visibility change and nothing else.
+ *
+ * `SimHost` lives inside the sim worker, so main reaches it through the parked-only
+ * `sim-pause`/`sim-resume` protocol (`SimControlMessage`): park the host worker (`W_YIELD` + wake,
+ * polling `W_PARKED` -- the same low-level mechanism `engine/test`'s `parkWorkers` uses,
+ * reimplemented here since production code cannot import `src/test/**`), then post `sim-pause`; its
+ * own completion ack is the next `storage` message the sim worker posts back (Planning decision 5).
+ * `sim-resume` needs no separate park step (the worker is already parked from `sim-pause`).
+ *
+ * A small state machine (Rules and traps: "make sure a quick hidden -> visible -> hidden sequence
+ * can't interleave two pauses or resume before a pause settles"): `desiredHidden` is the latest
+ * state any caller (`visibilitychange`, `pagehide`) asked for; `pump` drains it one async step at a
+ * time, re-checking `desiredHidden` after every `await` so a state that changed mid-pause is only
+ * ever acted on once the in-flight pause has actually settled, never interleaved with it. Returns a
+ * disposer.
+ */
+export function attachHostLifecycle(
+  client: Client,
+  doc: {
+    hidden: boolean
+    addEventListener(type: 'visibilitychange', cb: () => void): void
+    removeEventListener(type: 'visibilitychange', cb: () => void): void
+  } = document,
+  win: { addEventListener(type: 'pagehide', cb: () => void): void } = window,
+): () => void {
+  const h = clientTestHandle(client)
+
+  function hostWorkerEntry(): WorkerEntry | undefined {
+    return h.workers.find((w) => w.index === WORKER_HOST)
+  }
+
+  function pollHostParked(): Promise<void> {
+    return new Promise((resolve) => {
+      function poll(): void {
+        if (Atomics.load(h.control.words, workerWord(WORKER_HOST, W_PARKED)) === 1) {
+          resolve()
+          return
+        }
+        h.scheduler.setTimer(poll, 0)
+      }
+      poll()
+    })
+  }
+
+  function pauseHostWorker(): Promise<void> {
+    const w = hostWorkerEntry()
+    if (!w) return Promise.resolve()
+    Atomics.store(h.control.words, workerWord(WORKER_HOST, W_YIELD), 1)
+    h.control.wake(WORKER_HOST)
+    return pollHostParked().then(
+      () =>
+        new Promise<void>((resolve) => {
+          const unsubscribe = client.onStorage(() => {
+            unsubscribe()
+            resolve()
+          })
+          w.worker.postMessage({ type: 'sim-pause' } satisfies ToWorker)
+        }),
+    )
+  }
+
+  function resumeHostWorker(): void {
+    const w = hostWorkerEntry()
+    if (!w) return
+    w.worker.postMessage({ type: 'sim-resume' } satisfies ToWorker)
+  }
+
+  let desiredHidden = false
+  let state: 'running' | 'pausing' | 'paused' = 'running'
+  let pumping = false
+  function pump(): void {
+    if (pumping) return
+    pumping = true
+    void (async () => {
+      try {
+        for (;;) {
+          if (desiredHidden && state === 'running') {
+            state = 'pausing'
+            await pauseHostWorker()
+            state = 'paused'
+          } else if (!desiredHidden && state === 'paused') {
+            resumeHostWorker()
+            state = 'running'
+          } else {
+            break
+          }
+        }
+      } finally {
+        pumping = false
+      }
+    })()
+  }
+
+  const onVisibilityChange = (): void => {
+    desiredHidden = doc.hidden
+    pump()
+  }
+  const onPageHide = (): void => {
+    desiredHidden = true
+    pump()
+  }
+  doc.addEventListener('visibilitychange', onVisibilityChange)
+  win.addEventListener('pagehide', onPageHide)
+  return () => {
+    doc.removeEventListener('visibilitychange', onVisibilityChange)
+    // `pagehide` has no matching `removeEventListener` requirement here (Seams: the type only
+    // names `addEventListener`) -- a real page tearing down over `pagehide` never calls its own
+    // disposer afterward anyway.
+  }
+}
+
 /** 0008 §2: 1 worker by default, 2 when `hardwareConcurrency >= 8`. `requested` (`ClientOptions.
  * genWorkers`) overrides the default when given, clamped to `[1, MAX_GEN_WORKERS]` --
  * `createSabSet`'s own worst-case sizing (`sab/layout.ts`), which the whole-tab arena and SAB
@@ -430,6 +582,13 @@ function setupWorker(
   wasm: { module?: WebAssembly.Module; url?: string },
   test: TestFlags | undefined,
   link: boolean,
+  world: { worldId: string; buildHash: string; params: ServerWorldConfig['params'] } | undefined,
+  /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: forwards every `SimLifecycleMessage`
+   * this worker ever posts, for the life of the worker -- not only during this handshake window
+   * (`storage` fires again after the `persist()` answer and after every hidden-boundary snapshot,
+   * long after `ready`/`reject` have already settled this function's own promise). Only the `sim`
+   * worker ever posts one; harmless to wire for every kind. */
+  onLifecycle: (m: SimLifecycleMessage) => void,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false
@@ -444,15 +603,24 @@ function setupWorker(
       )
     }
     worker.onmessage = (ev: MessageEvent<FromWorker>) => {
-      if (settled) return
       const m = ev.data
       if (m.type === 'ready') {
+        if (settled) return
         settled = true
         resolve()
       } else if (m.type === 'fatal') {
+        if (settled) return
         settled = true
         const code = m.message.includes('ABI mismatch') ? 'abi-mismatch' : 'worker-fatal'
         reject(new EngineStartError(code, m.message))
+      } else if (m.type === 'start-failed') {
+        // Posted once, before the worker also calls `shell.fatal` and dies (Seams): settle here so
+        // `client.ready` rejects with the real code/detail, and ignore the `fatal` that follows.
+        if (settled) return
+        settled = true
+        reject(new EngineStartError(m.code, m.detail))
+      } else if (m.type === 'storage') {
+        onLifecycle(m)
       }
     }
     const setup: ToWorker = {
@@ -465,6 +633,7 @@ function setupWorker(
       ...(wasm.url ? { wasmUrl: wasm.url } : {}),
       ...(test ? { test } : {}),
       ...(link ? { link } : {}),
+      ...(world ? { world } : {}),
     }
     worker.postMessage(setup)
   })
@@ -502,6 +671,9 @@ export function createClient(options: ClientOptions): Client {
         throw err
       },
       onUi(): () => void {
+        throw err
+      },
+      onStorage(): () => void {
         throw err
       },
       clock(): ClockSnapshot {
@@ -759,6 +931,11 @@ export function createClient(options: ClientOptions): Client {
   let nextSeq = -1
 
   function dispatch(action: unknown): number {
+    // docs/plan/23-persistence-opfs-and-lifecycle.md Planning decision 5: "or the first
+    // `client.dispatch`, whichever comes first" -- `tryPersist` itself no-ops outside a `persist:
+    // true` local host (`persistWorldCreated` never becomes `true` there).
+    persistGestureSeen = true
+    tryPersist()
     readClockBlockInto(clockView, clockScratch)
     if (at(clockScratch, CLOCK_FIELD.SessionState) !== SessionState.Live) {
       throw new Error('engine: dispatch before ready')
@@ -853,6 +1030,59 @@ export function createClient(options: ClientOptions): Client {
     }
   }
 
+  // docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: `client.onStorage` (Seams), fired by
+  // `setupWorker`'s own `onLifecycle` callback below whenever the sim worker posts a `storage`
+  // `SimLifecycleMessage` -- at load, after the `persist()` answer, and after each hidden-boundary
+  // snapshot (Planning decision 5). Never fires for a topology with no persisted sim worker.
+  type StorageListener = (status: StorageStatus) => void
+  const storageListeners: StorageListener[] = []
+
+  function onStorage(cb: (status: StorageStatus) => void): () => void {
+    const listener = cb as StorageListener
+    storageListeners.push(listener)
+    return () => {
+      const i = storageListeners.indexOf(listener)
+      if (i >= 0) storageListeners.splice(i, 1)
+    }
+  }
+
+  // docs/plan/23-persistence-opfs-and-lifecycle.md Planning decision 5: `navigator.storage.persist()`
+  // called exactly once, from the first engine-observed `pointerdown`/`keydown` or the first
+  // `client.dispatch`, whichever comes first -- and only when `Persistence.open` reported `created`
+  // (a reopened world never calls it). `persistWorldCreated` is `undefined` until the sim worker's
+  // first `storage` message says otherwise (a gesture arriving before that first message just sets
+  // `persistGestureSeen`; the call itself fires once both are known, whichever settles last).
+  let persistWorldCreated: boolean | undefined
+  let persistGestureSeen = false
+  let persistCalled = false
+  function tryPersist(): void {
+    if (persistCalled || persistWorldCreated !== true || !persistGestureSeen) return
+    persistCalled = true
+    void navigator.storage.persist()
+  }
+  function onLifecycle(m: SimLifecycleMessage): void {
+    if (m.type === 'storage') {
+      if (persistWorldCreated === undefined) persistWorldCreated = m.created
+      tryPersist()
+      for (const l of storageListeners) l(m.status)
+    }
+  }
+  const persistGestureDisposers: Array<() => void> = []
+  if (
+    options.host.kind === 'local' &&
+    options.host.persist === true &&
+    typeof window !== 'undefined'
+  ) {
+    const onGesture = (): void => {
+      persistGestureSeen = true
+      tryPersist()
+    }
+    window.addEventListener('pointerdown', onGesture, { once: true })
+    window.addEventListener('keydown', onGesture, { once: true })
+    persistGestureDisposers.push(() => window.removeEventListener('pointerdown', onGesture))
+    persistGestureDisposers.push(() => window.removeEventListener('keydown', onGesture))
+  }
+
   /** "Main rAF: drain the UI ring once" (Scope). Kind 1 (`Ui`, M16b) and kind 2 (`ActionResults`,
    * M16): an unknown kind is skipped by its own length field, never crashing. JSON parsing is a
    * human-rate path (0003, 0016 §2), not yet zero-GC (Deviations: a later milestone's own budget,
@@ -937,6 +1167,7 @@ export function createClient(options: ClientOptions): Client {
     }
     for (const w of workers) w.worker.terminate()
     for (const dispose of cameraInputDisposers) dispose()
+    for (const dispose of persistGestureDisposers) dispose()
     cameraResizeObserver?.disconnect()
     overlay.dispose()
     scheduler.cancelFrame(resultsFrameHandle)
@@ -1023,7 +1254,29 @@ export function createClient(options: ClientOptions): Client {
         else wasm.url = options.wasm.url
       }
       const link = linked && (kind === 'sim' || kind === 'client')
-      return setupWorker(worker, kind, index, sabs, config, wasm, options.test?.flags, link)
+      // docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: the sim spawn only, only when
+      // `host.persist` is set -- `worldConfig` already carries `worldId`/`buildHash`/`params`
+      // (`Persistence.open`'s own `WorldConfig` needs no more than these three).
+      const world =
+        kind === 'sim' && options.host.kind === 'local' && options.host.persist === true
+          ? worldConfig && {
+              worldId: worldConfig.worldId,
+              buildHash: worldConfig.buildHash,
+              params: worldConfig.params,
+            }
+          : undefined
+      return setupWorker(
+        worker,
+        kind,
+        index,
+        sabs,
+        config,
+        wasm,
+        options.test?.flags,
+        link,
+        world,
+        onLifecycle,
+      )
     })
     await Promise.all(waits)
   }
@@ -1049,6 +1302,7 @@ export function createClient(options: ClientOptions): Client {
     dispatch,
     onActionResult,
     onUi,
+    onStorage,
     clock: readClockSnapshot,
     writeCameraAndWake,
     setFlags,

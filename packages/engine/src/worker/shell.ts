@@ -12,7 +12,12 @@ import {
   W_YIELD,
   workerWord,
 } from '../sab/control.js'
-import type { FromWorker, TestCallMessage } from './protocol.js'
+import type {
+  FromWorker,
+  SimControlMessage,
+  SimLifecycleMessage,
+  TestCallMessage,
+} from './protocol.js'
 
 export type LoopState = {
   body: (wokenBy: number) => void
@@ -23,6 +28,10 @@ export type LoopState = {
    * reads it once, off the returned `LoopState`, and routes `test-call` messages to it directly
    * (docs/plan/08b-gen-workers-and-queue.md, orchestrator decision 1 at the step-5 boundary). */
   testCall?: (m: TestCallMessage) => FromWorker
+  /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: `worker/sim.ts`'s own handler for
+   * `SimControlMessage` (`sim-pause`/`sim-resume`), parked-only like `testCall` above -- `worker.ts`
+   * routes both message types here directly, never generically. Absent for every kind but `sim`. */
+  simControl?: (m: SimControlMessage) => void
 }
 
 /** Every kind's `timeoutMs` until M13 gives `sim` a real tick deadline: a module-level constant
@@ -53,6 +62,10 @@ export interface WorkerShell {
    * is reported through `fatal`.
    */
   runAsync(fn: () => Promise<void>): void
+  /** docs/plan/23-persistence-opfs-and-lifecycle.md Seams: the sim worker's own lifecycle
+   * notifications beyond `ready`/`fatal` (`SimLifecycleMessage`) -- `postMessage` after setup still
+   * carries lifecycle only (0015 §2). */
+  post(m: SimLifecycleMessage): void
 }
 
 /** `postMessage` is the worker's only channel to main outside setup (0015 §2): shared by every
@@ -76,6 +89,10 @@ export class Shell implements WorkerShell {
     this.#stopped = true
     Atomics.store(this.control.words, workerWord(this.index, W_READY), Ready.Dead)
     post({ type: 'fatal', message })
+  }
+
+  post(m: SimLifecycleMessage): void {
+    post(m)
   }
 
   runAsync(fn: () => Promise<void>): void {

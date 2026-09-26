@@ -18,6 +18,7 @@
 // does.
 import { Role } from '../abi.js'
 import { systemClock } from '../clock.js'
+import { Persistence } from '../host/persistence.js'
 import { RingConnection } from '../ring-connection.js'
 import {
   CB_SIM_STEP_REQ,
@@ -27,10 +28,13 @@ import {
   workerWord,
 } from '../sab/control.js'
 import { createSimHostFromInstance, type SimHostCounters, wrapEngineInstance } from '../server.js'
+import { memoryStorage } from '../storage/memory.js'
+import { OpfsUnavailable, opfsStorage } from '../storage/opfs.js'
+import type { Storage } from '../storage/types.js'
 import { createAtomicsTimer } from './atomics-timer.js'
 import { applyGcHook } from './gc-hook.js'
-import { instantiateForSetup } from './instantiate.js'
-import type { SetupMessage } from './protocol.js'
+import { instantiateFactoryForSetup } from './instantiate.js'
+import type { SetupMessage, StorageStatus } from './protocol.js'
 import {
   NET_COUNTERS_BYTES,
   NET_COUNTERS_CALL,
@@ -39,6 +43,68 @@ import {
 } from './protocol.js'
 import type { LoopState, Shell } from './shell.js'
 import { handleTestCall } from './test-call.js'
+
+/** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: the Web Lock name a persisted world's
+ * sim worker holds for its whole life (Planning decision 6: "Import ... takes lock `world:<id>` for
+ * the duration" -- the same convention, so a running world and a pending import of its own id
+ * contend on the identical lock). */
+function worldLockName(worldId: string): string {
+  return `world:${worldId}`
+}
+
+/** Web Lock acquisition without ever blocking this worker (`{ mode: 'exclusive', ifAvailable: true
+ * }`): resolves `true`/`false` the instant the browser knows whether the lock was free, while the
+ * lock itself (if granted) stays held until the returned `release` function is called -- the
+ * standard "hold a lock for an arbitrary duration" idiom (`navigator.locks.request`'s own callback
+ * keeps the lock for as long as the promise it returns is pending). Never releases on its own: a
+ * persisted world holds its lock for the sim worker's whole life (Planning decision 6), released
+ * only by whatever later milestone tears the worker down cleanly (Non-scope here, same as M23's own
+ * "clean boundaries" not covering worker respawn, M24/M37). */
+function requestWorldLock(worldId: string): Promise<boolean> {
+  return new Promise((resolveGranted) => {
+    navigator.locks.request(
+      worldLockName(worldId),
+      { mode: 'exclusive', ifAvailable: true },
+      (lock) => {
+        return new Promise<void>(() => {
+          // Never resolves: holding the lock for the worker's whole life, deliberately (above).
+          resolveGranted(lock !== null)
+        })
+      },
+    )
+  })
+}
+
+/** docs/plan/23-persistence-opfs-and-lifecycle.md steps 1-2 (Deviations): OPFS's own probe --
+ * `opfsStorage` rejects with `OpfsUnavailable` on a browser with no working OPFS (0005 "Browser":
+ * "No OPFS (Safari private mode): an in-memory adapter and `durable: false`"). Returns the adapter
+ * plus whether it is durable, never throwing for that one, expected failure mode. */
+async function openWorldStorage(worldId: string): Promise<{ storage: Storage; durable: boolean }> {
+  try {
+    return { storage: await opfsStorage(worldId), durable: true }
+  } catch (e) {
+    if (!(e instanceof OpfsUnavailable)) throw e
+    return { storage: memoryStorage(), durable: false }
+  }
+}
+
+/** `client.onStorage`'s own argument (Planning decision 5): `persisted`/`usage`/`quota` read fresh
+ * from `navigator.storage` every call (off the tick path -- called only at load and at a
+ * hidden-boundary pause, never per tick); `durable` is the fixed per-session value `openWorldStorage`
+ * already decided. Missing `estimate()`/`persisted()` (a browser too old to have them, though every
+ * browser this milestone supports does) degrade to `0`/`false` rather than throwing. */
+async function readStorageStatus(durable: boolean): Promise<StorageStatus> {
+  const persisted =
+    typeof navigator.storage?.persisted === 'function' ? await navigator.storage.persisted() : false
+  let usage = 0
+  let quota = 0
+  if (typeof navigator.storage?.estimate === 'function') {
+    const estimate = await navigator.storage.estimate()
+    usage = estimate.usage ?? 0
+    quota = estimate.quota ?? 0
+  }
+  return { durable, persisted, usage, quota }
+}
 
 function encodeCounters(c: SimHostCounters, out: Uint8Array): void {
   const view = new DataView(out.buffer, out.byteOffset, out.byteLength)
@@ -50,18 +116,59 @@ function encodeCounters(c: SimHostCounters, out: Uint8Array): void {
 }
 
 export async function setup(shell: Shell, message: SetupMessage): Promise<LoopState> {
-  const inst = await instantiateForSetup(shell, message, Role.Sim)
+  const newInstance = await instantiateFactoryForSetup(shell, message, Role.Sim)
   const gcHook = message.test?.gcHook === true
+
+  // docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: "Sim worker start-up order: Web Lock
+  // -> OPFS probe -> Persistence.open -> tick loop", gated entirely on `message.world` (present only
+  // for a persisted local host, `client.ts`'s own `host.persist` doc comment) -- every existing
+  // `sim`-kind test/dev page omits `host.persist`, so `message.world` is `undefined` there and this
+  // whole block is a no-op by construction, exactly `link`'s own precedent. `setup()` itself runs
+  // before `runBlockingLoop` ever starts (`worker.ts`: `ready` is posted, then the loop begins), so
+  // every `await` below runs in the worker's ordinary event loop, not through `shell.runAsync`.
+  let inst = newInstance()
+  let persistence: Persistence | undefined
+  let initialTicksRun = 0
+  let worldDurable = false
+
+  if (message.world) {
+    const world = message.world
+    const locked = await requestWorldLock(world.worldId)
+    if (!locked) {
+      shell.post({
+        type: 'start-failed',
+        code: 'world-busy',
+        detail: `world ${world.worldId} is already open elsewhere (its Web Lock is held)`,
+      })
+      throw new Error(`worker/sim: world ${world.worldId} is busy`)
+    }
+
+    const { storage, durable } = await openWorldStorage(world.worldId)
+    worldDurable = durable
+
+    const opened = await Persistence.open(storage, world, newInstance)
+    persistence = opened.persistence
+    inst = opened.sim
+    initialTicksRun = opened.tick
+
+    shell.post({
+      type: 'storage',
+      status: await readStorageStatus(durable),
+      created: opened.outcome === 'created',
+    })
+  }
 
   // docs/decisions/0032-atomics-timer-bounds-external-wakes.md (M16d): the timer takes a clock
   // again, but reads it only while external wakes interrupt its wait (about once per tick then) and
   // never on an uninterrupted pass; `SimHost`'s resync (0030) is the other reader.
   const atomicsTimer = createAtomicsTimer(systemClock)
   const simInstance = wrapEngineInstance(inst)
-  const simHost = createSimHostFromInstance(simInstance, {
-    clock: systemClock,
-    timer: atomicsTimer.timer,
-  })
+  const simHost = createSimHostFromInstance(
+    simInstance,
+    { clock: systemClock, timer: atomicsTimer.timer },
+    persistence,
+    initialTicksRun,
+  )
 
   // docs/plan/15b-ring-connection-and-replica-rendering.md Scope: "the sim worker creates one
   // RingConnection at startup and accepts it" -- gated on `message.link` (Orchestrator ruling 1:
@@ -143,6 +250,35 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     Atomics.store(shell.control.words, workerWord(shell.index, W_ACK), wokenBy)
   }
 
+  // docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: `sim-pause`/`sim-resume`, present
+  // only for a persisted world (`message.world`, same gate as the startup order above) --
+  // `exactOptionalPropertyTypes` (root `tsconfig.base.json`) rejects an explicit `undefined` for an
+  // optional field, so the field itself is only ever added via this conditional spread, never set to
+  // `undefined`. Reached only while this worker is parked (`SimControlMessage`'s own doc comment):
+  // main parks it (`W_YIELD` + wake, polling `W_PARKED`) before sending `sim-pause`; `sim-resume`
+  // needs no separate park step, since `sim-pause`'s own handler never calls `shell.resume()` itself
+  // -- the worker stays parked until `sim-resume` arrives.
+  const simControl = message.world
+    ? (m: Parameters<NonNullable<LoopState['simControl']>>[0]): void => {
+        if (m.type === 'sim-pause') {
+          void (async () => {
+            await simHost.pause()
+            // Planning decision 5: "`client.onStorage` fires ... after each hidden-boundary
+            // snapshot" -- this ack is also what `client.ts`'s own `pauseHostWorker` awaits to know
+            // the pause has genuinely settled (never before `flush()` resolves).
+            shell.post({
+              type: 'storage',
+              status: await readStorageStatus(worldDurable),
+              created: false,
+            })
+          })()
+        } else if (m.type === 'sim-resume') {
+          simHost.resume()
+          shell.resume()
+        }
+      }
+    : undefined
+
   return {
     body,
     timeoutMs: atomicsTimer.timeoutMs,
@@ -162,5 +298,6 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       }
       return handleTestCall(inst, m)
     },
+    ...(simControl ? { simControl } : {}),
   }
 }

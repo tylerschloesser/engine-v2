@@ -7,7 +7,13 @@ import { ControlBlock } from './sab/control.js'
 import * as clientKind from './worker/client.js'
 import * as genKind from './worker/gen.js'
 import * as netKind from './worker/net.js'
-import type { FromWorker, SetupMessage, TestCallMessage, ToWorker } from './worker/protocol.js'
+import type {
+  FromWorker,
+  SetupMessage,
+  SimControlMessage,
+  TestCallMessage,
+  ToWorker,
+} from './worker/protocol.js'
 import { isolateName } from './worker/protocol.js'
 import { createShell, type LoopState, runBlockingLoop, type Shell } from './worker/shell.js'
 import * as simKind from './worker/sim.js'
@@ -49,6 +55,9 @@ export function run(): void {
   // `test-call` message at all, whatever its kind returns.
   let testEnabled = false
   let testCall: ((m: TestCallMessage) => FromWorker) | null = null
+  // docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: `sim-pause`/`sim-resume`, `sim`-kind
+  // only (`worker/sim.ts`'s own `LoopState.simControl`), routed the same way `testCall` already is.
+  let simControl: ((m: SimControlMessage) => void) | null = null
 
   scope.onmessage = (ev) => {
     const m = ev.data
@@ -71,6 +80,7 @@ export function run(): void {
       kinds[m.kind].setup(s, m).then(
         (loop) => {
           testCall = loop?.testCall ?? null
+          simControl = loop?.simControl ?? null
           // The wake word is read before `ready` goes out, not after: main can wake this worker the
           // instant it sees `ready`, and a wake between the post and the loop's own first read
           // would be lost (`Shell.observeWake`; fix round 3, docs/plan/06b-workers-and-spawn.md).
@@ -92,6 +102,8 @@ export function run(): void {
       } else {
         post({ type: 'test-error', id: m.id, message: 'test-call: not enabled for this worker' })
       }
+    } else if (m.type === 'sim-pause' || m.type === 'sim-resume') {
+      simControl?.(m)
     }
   }
 }

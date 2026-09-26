@@ -72,6 +72,9 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
     onUi(): () => void {
       return () => {}
     },
+    onStorage(): () => void {
+      return () => {}
+    },
     clock(): { authoritative: number; predicted: number; ticksPerSecond: number } {
       throw new Error('fakeClient: clock not implemented')
     },

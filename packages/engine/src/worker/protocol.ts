@@ -4,6 +4,7 @@
 import type { InstanceConfig } from '../loader.js'
 import { WORKER_GEN1 } from '../sab/control.js'
 import type { SabSet } from '../sab/layout.js'
+import type { WorldConfig } from '../sim-config.js'
 
 export type WorkerKind = 'client' | 'sim' | 'gen' | 'net'
 
@@ -50,6 +51,16 @@ export type SetupMessage = {
   sabs: SabSet
   config: InstanceConfig
   test?: TestFlags
+  /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: the real `WorldConfig` a persisted
+   * single-player world was opened with, present only for the `sim`-kind spawn and only when
+   * `ClientOptions.host = { kind: 'local', persist: true, ... }` (`client.ts`'s `start()`) --
+   * additive, like `link` below: no existing `sim`-kind test page sets `host.persist`, so none of
+   * them gain this field or the OPFS/Web-Lock startup order it gates in `worker/sim.ts`. Only the
+   * three fields `Persistence.open`/`worldKeys` actually need, not the full `ClientOptions.host.world`
+   * (`params` is stored verbatim in the manifest; `buildHash` feeds `sim_segment_header`'s identity
+   * indirectly through `engine_init`, already carried by `config`, but `Persistence` also keeps its
+   * own JSON copy for `ManifestV1.created`/`.params`). */
+  world?: { worldId: string; buildHash: string; params: WorldConfig['params'] }
   /**
    * docs/plan/15b-ring-connection-and-replica-rendering.md, Orchestrator ruling 1: whether this
    * topology's `sim`/`client` link the uplink/downlink ring pair -- a topology fact carried on
@@ -106,7 +117,46 @@ export const NET_COUNTERS_CALL = '__net_counters'
 /** One little-endian `u32`: `RingConnection.downlinkRetries`. */
 export const NET_COUNTERS_BYTES = 4
 
-export type ToWorker = SetupMessage | { type: 'resume' } | { type: 'stop' } | TestCallMessage
+/** docs/plan/23-persistence-opfs-and-lifecycle.md Seams (Provides): `client.onStorage`'s own
+ * argument shape, verbatim. Declared here (not in `client.ts`) so `SimLifecycleMessage` below can
+ * reference it without `worker/protocol.ts` importing `client.ts` (which already imports this file
+ * -- a cycle); `client.ts` re-exports it unchanged, the same "no renamed Provides" convention
+ * `sim-config.ts`'s/`storage/types.ts`'s own types already follow. */
+export type StorageStatus = { durable: boolean; persisted: boolean; usage: number; quota: number }
+
+/** docs/plan/23-persistence-opfs-and-lifecycle.md Seams (Provides): the sim worker's own lifecycle
+ * notifications beyond `ready`/`fatal` (0015 §2: `postMessage` after setup carries lifecycle only --
+ * this milestone's own two new types, `M06b`'s grep criterion extended to name them). `storage`
+ * fires at load (Planning decision 5: "`client.onStorage` fires at load, after the `persist()`
+ * answer, and after each hidden-boundary snapshot") -- `created` is not part of the pinned
+ * `StorageStatus` shape itself (Seams gives that verbatim) but is carried alongside it so main knows
+ * whether this world was just created (Planning decision 5's own gate: "only when `Persistence.open`
+ * reported `created`") without a second round trip. `start-failed` is a start failure short of a
+ * trap (`EngineStartError`'s new `'world-busy'` code, Seams): posted once, before the worker also
+ * calls `shell.fatal` and dies (the world cannot be opened at all with the lock held elsewhere) --
+ * `client.ts`'s `setupWorker` settles `client.ready`'s rejection from this message, ignoring the
+ * `fatal` that follows once already settled. */
+export type SimLifecycleMessage =
+  | { type: 'storage'; status: StorageStatus; created: boolean }
+  | { type: 'start-failed'; code: 'world-busy'; detail: string }
+
+/** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: main -> sim worker, parked-only (like
+ * `TestCallMessage`, whose own doc comment gives the reason: a worker blocked in `Atomics.wait`
+ * receives no events, 0015 §2) -- the hidden/visible clean-boundary protocol. `client.ts` parks the
+ * sim worker (`W_YIELD` + wake, polling `W_PARKED`) before sending `sim-pause`; the sim worker's own
+ * `simControl` handler (`worker/sim.ts`) awaits `SimHost.pause()` there and posts a `storage` message
+ * back as the pause's own completion ack (Planning decision 5), then stays parked. `sim-resume` needs
+ * no separate park step (the worker is already parked from `sim-pause`): the handler calls
+ * `SimHost.resume()` then `shell.resume()` itself, in one message, so main sends exactly one message
+ * either way. */
+export type SimControlMessage = { type: 'sim-pause' } | { type: 'sim-resume' }
+
+export type ToWorker =
+  | SetupMessage
+  | { type: 'resume' }
+  | { type: 'stop' }
+  | TestCallMessage
+  | SimControlMessage
 
 export type FromWorker =
   | { type: 'ready' }
@@ -117,3 +167,4 @@ export type FromWorker =
   /** `test-call`'s reply for an unknown export, a missing instance (e.g. the `net` kind), or a
    * trap. */
   | { type: 'test-error'; id: number; message: string }
+  | SimLifecycleMessage

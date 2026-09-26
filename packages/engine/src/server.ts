@@ -283,6 +283,14 @@ export function createSimHostFromInstance(
   sim: SimInstance,
   services: TimerServices,
   persistence?: Persistence,
+  /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: seeds `counters.ticksRun` from a
+   * `Persistence.open()` load's own `tick` result -- additive (a 4th optional parameter, default
+   * `0`, every existing 3-argument caller unaffected), not a renamed seam. Without this, a reloaded
+   * world's own `logSink`/`afterTick(counters.ticksRun)` call would restart counting from tick 0
+   * (Deviations: real bug found here), clobbering `Persistence`'s own already-correctly-seeded
+   * `this.tick` with a wrong, small value on the very first tick after a load -- corrupting every
+   * `keys.snap(tick)` key it writes from then on. */
+  initialTicksRun = 0,
 ): SimHost {
   // Read once, here, not per tick (`SimInstance.tickHz`'s own doc comment): "the pacing arithmetic
   // stays in integer milliseconds" -- `Math.round`, not the raw division, so an odd rate (e.g. 30
@@ -291,7 +299,7 @@ export function createSimHostFromInstance(
   // zero): a real ABI export never returns that (the trait default is `20`).
   const tickMs = Math.round(1000 / (sim.tickHz() || DEFAULT_TICK_HZ))
   const counters: SimHostCounters = {
-    ticksRun: 0,
+    ticksRun: initialTicksRun,
     ticksDropped: 0,
     tickOverruns: 0,
     chunksWarmed: 0,

@@ -16,11 +16,29 @@ export async function instantiateForSetup(
   message: SetupMessage,
   role: Role,
 ): Promise<EngineInstance> {
+  const factory = await instantiateFactoryForSetup(shell, message, role)
+  return factory()
+}
+
+/** docs/plan/23-persistence-opfs-and-lifecycle.md step 3: `Persistence.open`'s own `newInstance: ()
+ * => EngineInstance` needs a fresh instance per restore candidate (`loadLatest` tries the newest
+ * snapshot, falling back to older ones on a bad CRC) -- the module is only ever compiled/fetched
+ * once, here, and every call of the returned factory builds a new `EngineInstance` over it (the same
+ * `publishMemory`/`onViewsRebuilt` wiring `instantiateForSetup` itself gives its own single
+ * instance). `instantiateForSetup` above is now this function's own one-call composition, so every
+ * existing caller (`client`/`gen`, and `sim` outside the persistence path) is unaffected. */
+export async function instantiateFactoryForSetup(
+  shell: Shell,
+  message: SetupMessage,
+  role: Role,
+): Promise<() => EngineInstance> {
   const module = message.module ?? (await WebAssembly.compileStreaming(fetch(wasmUrl(message))))
-  const inst = instantiate(module, role, message.config)
-  publishMemory(shell, inst)
-  inst.onViewsRebuilt(() => publishMemory(shell, inst))
-  return inst
+  return () => {
+    const inst = instantiate(module, role, message.config)
+    publishMemory(shell, inst)
+    inst.onViewsRebuilt(() => publishMemory(shell, inst))
+    return inst
+  }
 }
 
 function wasmUrl(message: SetupMessage): string {
