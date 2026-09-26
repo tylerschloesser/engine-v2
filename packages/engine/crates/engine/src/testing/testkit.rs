@@ -13,7 +13,7 @@
 
 use std::collections::VecDeque;
 
-use crate::client::{ClientCore, Replica};
+use crate::client::{ClientCore, Clocks, FrameView, Replica};
 use crate::delta::Delta;
 use crate::game::{EntityId, Game, PlayerId};
 use crate::host::{ConnId, Host};
@@ -342,6 +342,44 @@ where
         let view = View::<G>::new(replica.store(), replica.registry(), replica.tick(), &held)
             .with_overlay(core.overlay());
         view.global().clone()
+    }
+
+    /// M26 (docs/plan/26-prediction-rendering-and-clocks.md): a real `FrameView` over client `i`'s
+    /// own prediction-merged state -- `entities()`/`predicted_player`/`is_predicted`/... all real,
+    /// not reimplemented -- so a test can drive the game's own `ClientSide::extract`/`ui` exactly
+    /// as `game_instance.rs`'s `frame()`/`on_frame()` do. `visible`/`window_origin` are the
+    /// caller's own choice (a test's own camera); the clock block's `predicted` term is still
+    /// `authoritative` (Non-scope here: M26 steps 4-6 own the real lead estimator).
+    pub fn frame_view(
+        &self,
+        i: usize,
+        visible: TileRect,
+        window_origin: TilePos,
+    ) -> FrameView<'_, G> {
+        let core = &self.clients[i].core;
+        let replica = core.view();
+        let clocks = Clocks {
+            authoritative: replica.tick(),
+            predicted: replica.tick(),
+            tick_fraction: 0.0,
+            ticks_per_second: G::TICK_RATE.hz_value(),
+        };
+        FrameView::new(
+            replica as &dyn WorldRead<G>,
+            clocks,
+            replica.own_player(),
+            replica.entities_map(),
+            replica.registry(),
+            visible,
+            0.0,
+            0.0,
+            None,
+            window_origin,
+            0.0,
+            G::Presence::default(),
+            replica.remote_presences(),
+        )
+        .with_prediction(core.overlay(), core.pending_queue())
     }
 
     pub fn last_built_frame(&self, i: usize) -> &[u8] {
