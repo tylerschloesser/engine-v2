@@ -18,12 +18,25 @@ declare global {
   }
 }
 
-export async function openPage(page: Page, path: string): Promise<void> {
+export interface OpenPageOptions {
+  /** docs/plan/24-recovery-and-migration.md: a page that deliberately traps a WASM instance (a real
+   * panic recovery test) triggers the loader's own default `onPanic` (`console.error`, `loader.ts`)
+   * on purpose -- this predicate, matched against `msg.text()`, is the one, narrow way to keep that
+   * expected line from failing the test while every *unexpected* console error still does. Omitted
+   * (the default, every other spec) keeps the strict "no console error at all" rule unchanged. */
+  allowConsoleError?: (text: string) => boolean
+}
+
+export async function openPage(
+  page: Page,
+  path: string,
+  opts: OpenPageOptions = {},
+): Promise<void> {
   page.on('pageerror', (error) => {
     expect(error.message, `${path}: page error`).toBe('')
   })
   page.on('console', (msg) => {
-    if (msg.type() === 'error') {
+    if (msg.type() === 'error' && !opts.allowConsoleError?.(msg.text())) {
       expect(msg.text(), `${path}: console.error`).toBe('')
     }
   })

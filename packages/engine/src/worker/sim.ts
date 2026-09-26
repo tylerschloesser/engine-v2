@@ -19,6 +19,7 @@
 import { Role } from '../abi.js'
 import { systemClock, systemScheduler } from '../clock.js'
 import { Persistence, WorldLoadError } from '../host/persistence.js'
+import { EngineTrap } from '../loader.js'
 import { RingConnection } from '../ring-connection.js'
 import {
   CB_FORCE_SNAPSHOT_REQ,
@@ -28,7 +29,12 @@ import {
   WORKER_CLIENT,
   workerWord,
 } from '../sab/control.js'
-import { createSimHostFromInstance, type SimHostCounters, wrapEngineInstance } from '../server.js'
+import {
+  createSimHostFromInstance,
+  type RecoveryDeps,
+  type SimHostCounters,
+  wrapEngineInstance,
+} from '../server.js'
 import { deleteWorld, exportWorld, importWorld, unpackArchive } from '../storage/archive.js'
 import { memoryStorage } from '../storage/memory.js'
 import { type OpfsStorage, OpfsUnavailable, opfsStorage } from '../storage/opfs.js'
@@ -404,12 +410,24 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // never on an uninterrupted pass; `SimHost`'s resync (0030) is the other reader.
   const atomicsTimer = createAtomicsTimer(systemClock)
   const simInstance = wrapEngineInstance(inst)
+  // docs/plan/24-recovery-and-migration.md: `SimHost.recover()`'s own dependencies -- `instance` is
+  // kept in sync by `recover()` itself on every successful recovery, so this file's own `testCall`
+  // fallback (`handleTestCall`, below) always reaches the *current* raw instance instead of a stale,
+  // dead one after a recovery.
+  const recoveryDeps: RecoveryDeps = { instance: inst, newInstance }
   const simHost = createSimHostFromInstance(
     simInstance,
     { clock: systemClock, timer: atomicsTimer.timer },
     persistence,
     initialTicksRun,
+    recoveryDeps,
   )
+  // docs/plan/24-recovery-and-migration.md: the fatal report, through M06b's `shell.fatal`, with the
+  // tick prefixed (Scope: "wiring into ... the sim worker (fatal report via `shell.fatal` with the
+  // tick prefixed)").
+  simHost.onFatal = (f) => {
+    shell.fatal(`sim fatal at tick ${f.tick}: ${f.message}`)
+  }
 
   // docs/plan/15b-ring-connection-and-replica-rendering.md Scope: "the sim worker creates one
   // RingConnection at startup and accepts it" -- gated on `message.link` (Orchestrator ruling 1:
@@ -476,45 +494,66 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   const leakyAppendArmed = message.test?.leakyStorageAppend === true
 
   function body(wokenBy: number): void {
-    if (gcHook) applyGcHook(shell.control, shell.index)
-    // `neg_control_snapshot_allocates`'s own per-tick trigger (above): unconditional, every real
-    // wake, so the wrapped `append`'s own throwaway allocation actually fires inside the measured
-    // window regardless of gameplay.
-    if (leakyAppendArmed) worldStorage?.append(LEAK_PROBE_KEY, LEAK_PROBE_BYTES)
-    // Drains every pending uplink message unconditionally, every wake (Scope: "its Atomics.wait
-    // loop also wakes on the uplink ring's wake word") -- cheap when there is nothing queued
-    // (`RingConnection.drainUplink`'s own loop breaks on the first empty `popInto`), and this is
-    // what turns a client's `writeCameraAndWake`-style push into a real `sim_admit` call rather
-    // than waiting for the next real tick's own wake.
-    if (connection) connection.drainUplink()
-    const stepReq = Atomics.load(shell.control.words, CB_SIM_STEP_REQ)
-    if (stepReq !== lastStepReq) {
-      const delta = (stepReq - lastStepReq) >>> 0
-      lastStepReq = stepReq
-      simHost.stepTick(delta)
+    try {
+      if (gcHook) applyGcHook(shell.control, shell.index)
+      // `neg_control_snapshot_allocates`'s own per-tick trigger (above): unconditional, every real
+      // wake, so the wrapped `append`'s own throwaway allocation actually fires inside the measured
+      // window regardless of gameplay.
+      if (leakyAppendArmed) worldStorage?.append(LEAK_PROBE_KEY, LEAK_PROBE_BYTES)
+      // Drains every pending uplink message unconditionally, every wake (Scope: "its Atomics.wait
+      // loop also wakes on the uplink ring's wake word") -- cheap when there is nothing queued
+      // (`RingConnection.drainUplink`'s own loop breaks on the first empty `popInto`), and this is
+      // what turns a client's `writeCameraAndWake`-style push into a real `sim_admit` call rather
+      // than waiting for the next real tick's own wake.
+      if (connection) connection.drainUplink()
+      const stepReq = Atomics.load(shell.control.words, CB_SIM_STEP_REQ)
+      if (stepReq !== lastStepReq) {
+        const delta = (stepReq - lastStepReq) >>> 0
+        lastStepReq = stepReq
+        simHost.stepTick(delta)
+      }
+      // docs/plan/23-persistence-opfs-and-lifecycle.md step 6, Planning decision 1: `engine/test.
+      // forceSnapshot()`'s own request word -- a real, deterministic snapshot inside a zero-GC page's
+      // measured window, bypassing `sim_dirty()`'s own cadence guard the periodic path uses (this is a
+      // *test* forcing exactly one snapshot event, not the production cadence). A no-op when this
+      // world has no `persistence` (every page but a persisted one, `message.world`'s own gate).
+      const forceSnapshotReq = Atomics.load(shell.control.words, CB_FORCE_SNAPSHOT_REQ)
+      if (forceSnapshotReq !== lastForceSnapshotReq) {
+        lastForceSnapshotReq = forceSnapshotReq
+        persistence?.snapshotNow()
+      }
+      if (wokenBy === lastWokenBy) atomicsTimer.poll()
+      else atomicsTimer.interrupt()
+      lastWokenBy = wokenBy
+      Atomics.store(shell.control.words, CB_SIM_TICKS_RUN, simHost.counters.ticksRun)
+      Atomics.store(shell.control.words, workerWord(shell.index, W_ACK), wokenBy)
+      // Planning decision 2, wired for real (M23 fix round 1: `shell.runAsync` now actually leaves
+      // this pass's own enclosing loop instead of starving `fn` -- see `worker/shell.ts`). Polled after
+      // every pass, cheap on the (overwhelmingly common) `null` read: `pendingAsync()` itself allocates
+      // nothing (`opfs.ts`'s own doc comment), and `fn` here is a closure `write()` already built, not
+      // one created by this call (`.claude/rules/hot-paths.md`).
+      const pending = opfsAdapter?.pendingAsync()
+      if (pending) shell.runAsync(pending)
+    } catch (e) {
+      // docs/plan/24-recovery-and-migration.md (0005 Panic recovery 2): a trap anywhere in this
+      // pass (an admit, a tick, a snapshot -- any `SimInstance`/`Persistence` call whose underlying
+      // export threw) no longer falls through to `runBlockingLoop`'s own `shell.fatal` catch
+      // (`worker/shell.ts`'s `runBodyOnce`): it is caught here first and handed to `SimHost.
+      // recover()`, off the blocking loop (`shell.runAsync`, sanctioned for exactly this: "leaves
+      // the blocking loop, awaits `fn`, then re-enters it"). `recover()` itself reports `onFatal`
+      // (wired above, to `shell.fatal`) when it gives up; a successful recovery needs no further
+      // action here -- the next real wake resumes ticking on the fresh instance.
+      if (!(e instanceof EngineTrap)) throw e
+      // This wake is still acked (same two stores the happy path ends with, above): recovery
+      // continues asynchronously from here, but a caller waiting on this exact wake's own `W_ACK`
+      // (`engine/test`'s `stepSimTickSync`) must not spin until it hits its own timeout only
+      // because this pass happened to be the one that discovered the trap.
+      Atomics.store(shell.control.words, CB_SIM_TICKS_RUN, simHost.counters.ticksRun)
+      Atomics.store(shell.control.words, workerWord(shell.index, W_ACK), wokenBy)
+      shell.runAsync(async () => {
+        await simHost.recover()
+      })
     }
-    // docs/plan/23-persistence-opfs-and-lifecycle.md step 6, Planning decision 1: `engine/test.
-    // forceSnapshot()`'s own request word -- a real, deterministic snapshot inside a zero-GC page's
-    // measured window, bypassing `sim_dirty()`'s own cadence guard the periodic path uses (this is a
-    // *test* forcing exactly one snapshot event, not the production cadence). A no-op when this
-    // world has no `persistence` (every page but a persisted one, `message.world`'s own gate).
-    const forceSnapshotReq = Atomics.load(shell.control.words, CB_FORCE_SNAPSHOT_REQ)
-    if (forceSnapshotReq !== lastForceSnapshotReq) {
-      lastForceSnapshotReq = forceSnapshotReq
-      persistence?.snapshotNow()
-    }
-    if (wokenBy === lastWokenBy) atomicsTimer.poll()
-    else atomicsTimer.interrupt()
-    lastWokenBy = wokenBy
-    Atomics.store(shell.control.words, CB_SIM_TICKS_RUN, simHost.counters.ticksRun)
-    Atomics.store(shell.control.words, workerWord(shell.index, W_ACK), wokenBy)
-    // Planning decision 2, wired for real (M23 fix round 1: `shell.runAsync` now actually leaves
-    // this pass's own enclosing loop instead of starving `fn` -- see `worker/shell.ts`). Polled after
-    // every pass, cheap on the (overwhelmingly common) `null` read: `pendingAsync()` itself allocates
-    // nothing (`opfs.ts`'s own doc comment), and `fn` here is a closure `write()` already built, not
-    // one created by this call (`.claude/rules/hot-paths.md`).
-    const pending = opfsAdapter?.pendingAsync()
-    if (pending) shell.runAsync(pending)
   }
 
   // docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: `sim-pause`/`sim-resume`, present
@@ -593,7 +632,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
         view.setUint32(20, opfsAdapter?.snapshotDeferred ?? 0, true)
         return { type: 'test-result', id: m.id, value: 0, result }
       }
-      return handleTestCall(inst, m)
+      return handleTestCall(recoveryDeps.instance, m)
     },
   }
 }

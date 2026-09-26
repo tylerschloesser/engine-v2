@@ -313,4 +313,159 @@ offset=1234 | crc32`).
   and widening it would ripple into every hand-written fake `SimInstance` in this repo's existing
   tests. Wire it into whatever `SimHost`-level call `M28b`'s `harness.panicServer()` needs.
 
+### Step 4 (second implementer): `recovery.ts`, `SimHost` wiring, the sim worker, the browser test
+
+**Seams landed, exactly:**
+- `packages/engine/src/host/recovery.ts` (new): `Phase` (mirrors `persist::progress::Phase`),
+  `readProgressCursor(inst): ProgressCursor | null` (no export call), `RecoveryDeps { instance:
+  EngineInstance; newInstance: () => EngineInstance }`, `RECOVERY_LOOP_LIMIT = 3`,
+  `RECOVERY_GOOD_TICKS_RESET = 1200`, `runPanicRecovery(persistence, newInstance):
+  Promise<RecoveryOutcome>` (`{ kind: 'ok', sim, tick, skipped } | { kind: 'fatal', tick, message }`)
+  -- the whole Planning-decisions-1 retry loop for *one* live-trap event: builds a fresh instance via
+  `persistence.recover`, and on a repeat `EngineTrap` reads the *dead replaying instance's* own
+  `Progress` cursor; `Phase.ApplyRecord` writes a `Skip` (`Persistence.appendSkip`, on a *third*,
+  throwaway instance -- the dead one can never be called again) and retries; anything else is
+  `'fatal'`. A defensive `MAX_SKIP_ITERATIONS = 10_000` backstop, never expected to bind (each
+  `appendSkip` makes forward progress, proven never to bind by the anti-vacuity run below).
+- `packages/engine/src/host/persistence.ts`: `loadLatest` gained a 5th, optional parameter
+  `onReplaySegment?: (segment: number) => void`, called once, right before `sim_replay_begin` --
+  `recovery.ts`'s only way to learn which segment a replay-time trap happened in (`ProgressCursor.
+  record` is the byte *offset* within it, never the segment). New instance methods: `recover
+  (newInstance, onReplaySegment?)` (wraps `loadLatest` over this live `Persistence`'s own storage/
+  keys/manifest, then rebinds `segment`/`logOffset`/`tick` *and* `this.sim` -- see the bug below) and
+  `appendSkip(segment, offset, sim)` (`sim_log_skip` + `storage.append` + `storage.sync`, Planning
+  decisions 1's own three verbs). Both outside the brief's own Files list (unavoidable, same class as
+  steps 1-3's own `persistence.ts` touch).
+- `SimHost.recover(): Promise<'resumed' | 'skipped' | 'fatal'>` (no arguments, matching Seams
+  exactly -- `'upgrade'` reason support is a `reason: 'panic'` literal baked in for now, M24b's own
+  job to widen), `SimHost.onRecovered`/`onFatal` (plain mutable properties, `logSink`'s own
+  convention). `createSimHostFromInstance` gained a 5th, optional `recoveryDeps?: RecoveryDeps`
+  parameter (every 2-4-argument caller unaffected). `SimInstance.simReattach(conn): number` (wired
+  in `wrapEngineInstance`), used only by `recover()`'s own re-attach loop.
+- `worker/sim.ts`: `recoveryDeps: RecoveryDeps = { instance: inst, newInstance }` built once, passed
+  to `createSimHostFromInstance`; every later reference to the raw instance (the `testCall`
+  fallback) reads `recoveryDeps.instance`, never the old `inst` binding, so it survives a recovery.
+  `simHost.onFatal` maps to `shell.fatal(\`sim fatal at tick ${f.tick}: ${f.message}\`)`. `body()`'s
+  entire content is now wrapped in one `try`/`catch`: a caught `EngineTrap` still stores the same two
+  words the happy path ends with (`CB_SIM_TICKS_RUN`, this wake's own `W_ACK`) -- **load-bearing**,
+  not cosmetic: without it, `engine/test`'s `stepSimTickSync` (and thus `stepTick`) spins on a
+  `W_ACK` that a caught-and-recovered wake would otherwise never write, until it hits its own
+  `SPIN_LIMIT` and throws (found live, `sim-panicky.ts`'s own driver hit this before the fix) -- then
+  `shell.runAsync(() => simHost.recover())`, the sanctioned "leave the loop, await, re-enter" path.
+  No new SAB control word, no new `postMessage` type (Traps' own constraints): everything here is
+  existing plumbing (`EngineTrap`, `shell.runAsync`, the two ack words).
+- `tests/browser/support/page.ts`: `openPage` gained a 3rd, optional `opts: { allowConsoleError?:
+  (text: string) => boolean }` parameter (every existing 2-argument call site unaffected). Needed
+  because the loader's own default `onPanic` hook is `console.error` (`loader.ts`), and
+  `instantiateFactoryForSetup` (the sim worker's real instantiation path) installs no custom hooks
+  -- a deliberate in-browser trap is therefore an *expected* console error, and `openPage`'s own
+  "fail on any console error" rule needed one narrow, predicate-gated exception to stay strict for
+  everything else.
+
+**A real bug found, not merely an anti-vacuity injection: `sim_reattach` was never forwarded through
+`GameInstance<G>`.** `Instance`'s own default (`Status::Unsupported`) silently answered every call
+for the `fx-panicky` fixture (a `GameInstance<Panicky>`, not a bare `Host<Panicky>`) until this was
+found live by `connections_stay_open_across_recovery`: `sim_reattach` returned `8` (`Unsupported`),
+never touching `Host::reattach` at all, so `build_frame` for the re-attached `conn` still saw *no*
+slot and returned `0`. Fixed in `game_instance.rs`, next to `sim_connect`'s own forward (the same
+one-line shape every other sim export there already has) -- `sim_log_skip`/`sim_test_trap`/
+`sim_replay_scan_*` from steps 1-3 were already forwarded correctly; this was the one export step 4
+itself added and initially missed. Diagnosed by a throwaway native test (`Host::reattach` +
+`build_frame` alone, no ABI, `n2 = 22` -- correct) that isolated the bug to the `GameInstance`
+dispatch layer, not `Host::reattach` itself; not left in the tree.
+
+**A second real bug, found while writing the orchestrator-flagged heavy-mode test, in code that
+predates this milestone:** `engine/test`'s `driveCell` (`src/test/replay.ts`) called `sim_replay_
+begin(0, 0)` unconditionally, on every (re)arm -- harmless before this milestone (nothing ever
+computed an *absolute* byte offset), but once `Skip` targeting matches against `replay_base_offset +
+DecodedFrame::record_offsets[i]`, a hardcoded `offset = 0` makes every apply-time offset wrong by
+exactly the segment's own header/base length, so a `Skip`'s own target is never matched --
+`PanicInApply`'s poisoned record was genuinely *applied* here, panicking for real, inside
+`replayWorld`/`runHeavy`. Fixed by threading the real `segmentIndex` into `driveCell` (a new,
+required parameter, both call sites updated) and re-arming with the *true* absolute offset: `
+startOffset` for the initial arm, a frame's own `f.start` after a mid-drive instance swap. Both
+`replayWorld` and `runHeavy` were affected; the fix is one function.
+
+**The orchestrator-flagged gap itself (`runHeavy`'s `restoreFresh` never re-running the scan pass):
+fixed** by calling `scanSkipTargets(cell.sim, seg.index, logBytes, offset)` immediately after
+`cell.sim = restoreFresh(bytes)`, inside `runHeavy`'s own `onTick` callback -- cheap (scan never
+applies) and correct regardless of how far the drive has progressed. **Native `testing::heavy`/
+`replay` (`crates/engine/src/testing/replay.rs`) do *not* have the same gap**: `to_record`'s own
+`FrameRecord::Skip { .. } => None` arm (M22, "this milestone's own Non-scope") means neither run ever
+implements target-skipping at all, not even in the always-uninterrupted case -- both `sim_a`/`sim_b`
+in `heavy` treat every `Skip` identically (a no-op frame), so their own A-vs-B divergence check stays
+meaningful without it. Left untouched: implementing real target-skipping there is new behaviour, not
+a regression, and squarely out of scope here.
+
+**Decision needed, not made here: `panic_in_admit_recovers_and_rejects_engine_fault`'s own "rejects
+Engine(EngineFault)" half.** Planning decisions 2 states the outcome ("recovers and answers that
+action `Rejected(Engine(EngineFault))`"), but the mechanism Planning decisions 4 gives the
+`ApplyRecord` case (`pending_fault_acks`, populated during *replay*) cannot apply here: an
+`Admit`-phase trap is *never logged* (0004: an admission rejection is not a record at all), so no
+replay ever revisits it, and the panicking `G::admit` call itself never returns -- there is no
+surviving (`who`, `seq`) pair once the instance is dead, and `ProgressCursor` (12 B: `phase`, `tick`,
+`record = seq`) carries no `conn`/`who` to attach it to even if there were. This milestone's own test
+(`panicky-recovery.test.ts`) instead proves what the existing seams *do* support: the trap recovers
+cleanly (`'resumed'`, no `Skip`), storage is untouched by the doomed attempt, and the connection is
+fully usable again immediately after (a distinct, real action from the same player admits and
+applies normally). Delivering the actual `EngineFault` ack for the *original* seq would need either
+a new `Progress`-adjacent field naming the connection, or a JS-side "admit in flight" marker read
+back from the dead instance -- both new seams, not build-outs of an existing one. Flagged for the
+orchestrator rather than guessed at.
+
+**Anti-vacuity (inject/fail/revert; fail lines pasted verbatim), the five the orchestrator named:**
+- No `Skip` written (commented out `persistence.appendSkip`'s own call, `MAX_SKIP_ITERATIONS`
+  lowered to 5 for the run): `panic_in_apply_writes_skip_then_resumes` -> `AssertionError: expected
+  'fatal' to be 'skipped'`; the same failure hit `skipped_action_acked_engine_fault`,
+  `recovered_hash_equals_replay_with_skip`, `recovery_fires_onRecovered_once`,
+  `connections_stay_open_across_recovery` and `heavy_mode_restore_mid_skip_matches_uninterrupted_
+  replay` too (six tests, one injection). Reverted, green.
+- Fatal branch writing a file (`persistence.snapshotNow()` inserted right before the `onFatal` call
+  in `SimHost.recover()`): `panic_in_tick_is_fatal_and_files_untouched` and `alloc_failure_in_tick_
+  is_fatal_and_files_untouched` -> `EngineTrap: ... trapped` (the dead instance `snapshotNow` tried
+  to call on; either outcome -- a thrown trap or a bytes-changed assertion -- is the test catching a
+  file touched from the fatal path). Reverted, green.
+- `onRecovered` firing twice (the same call duplicated in `SimHost.recover()`):
+  `recovery_fires_onRecovered_once` -> `AssertionError: expected 2 to be 1`; `test_trap_recovers_
+  without_skip` (which also counts calls) failed identically. Reverted, green.
+- Guard counter never reset (commented out `if (goodTicksSinceRecovery >= RECOVERY_GOOD_TICKS_RESET)
+  recoveryCount = 0`): `recovery_loop_guard` -> `AssertionError: expected 'fatal' to be 'resumed'`
+  (the "1,200 good ticks resets it" half). Reverted, green.
+- Re-attach skipped (`if (conns[conn] && false) sim.simReattach(conn)`): `connections_stay_open_
+  across_recovery` -> `AssertionError: expected 1 to be greater than 1` (no second frame ever sent);
+  `skipped_action_acked_engine_fault` failed too (`expected X not to be X` -- with no `ConnSlot`, the
+  "new seq should apply" resend is silently dropped, not silently applied, the opposite direction
+  from what that assertion checks for). Reverted, green.
+
+**A real race found and fixed in the browser test itself, not production code:** the first version
+captured `ticksBeforeTrap` via a separate `page.evaluate(() => window.__simTicksRun?.())` call
+*before* invoking `__trapSim`. Real-time pacing keeps advancing that counter during the round trip
+to `__trapSim` itself, so the later `toBeGreaterThan(ticksBeforeTrap)` poll could pass on ordinary
+pre-trap ticking alone, before the trap (or its recovery) had even happened -- caught live
+(`page.evaluate: Error: ... trapped: sim_test_trap ...` from the *next* call, `__worldHashAndTick`,
+racing an as-yet-unrecovered instance). Fixed by having `__trapSim` itself return the tick count
+read *while parked*, immediately before triggering the trap (pacing cannot advance it further until
+genuinely resumed) -- a caller polling `__simTicksRun() > (that value)` is then only ever satisfied
+by a tick that ran on the fresh, recovered instance. 5/5 clean via `npx playwright test
+sim-panicky.spec.ts --project=chromium` after the fix, isolated from the rest of the suite's own
+unrelated environmental flakiness (a `browserContext`/CDP flake class already present before this
+milestone, hit twice more across the repeat runs below, in `gc-loop` and `puts-ui` specs neither of
+which this milestone touches).
+
+**Measured:**
+- `pnpm test`: `rust pass 528`, `unit pass 251`, `wasm pass 122`, `browser pass 200` (199 -> 200: one
+  new spec). `pnpm lint`: biome/rustfmt/clippy/tsc all green.
+- `sim_worker_recovers_from_panic` (Playwright, `chromium` only): ~2.0-2.1 s isolated (721 ms inside
+  the full suite's own warm run), under the 3 s budget either way. `node scripts/repeat.mjs browser
+  5`: `pass=5 fail=0 hang=0`; a second, manual `pnpm test browser` x5 also 5/5 on this spec (two
+  unrelated specs each flaked once, see above).
+- `pnpm gc -t singleplayer`: `zero_gc_singleplayer_with_snapshot` still green (1 passed) -- recovery
+  adds no allocation assertion of its own and widens no budget.
+- `ABI_VERSION` 18 -> 19 (`sim_reattach`, the only new export this step adds).
+
+**Context artifacts:** `packages/engine/src/host/CLAUDE.md`'s existing "Panic recovery" bullet
+(steps 1-3's own placeholder) rewritten with the real shapes, trimmed to keep the file at the 60-line
+cap (`context-artifacts.test.mjs`); `packages/engine/crates/engine/CLAUDE.md`'s `ABI_VERSION` line
+updated (18 -> 19, `sim_reattach` named, `GameInstance<G>` forwarding called out).
+
 ADR note: 0009 `HostServices` had no member through which a *server* host learns of `onFatal` (0005 Panic recovery 4). 0024 §5 adds `HostServices.onFatal?`; this brief exposes `SimHost.onFatal` and M27 maps it.

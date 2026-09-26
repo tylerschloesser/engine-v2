@@ -56,5 +56,5 @@ write side of 0005 Persistence. One instance per world.
   periodic cadence itself ("kept until the new one verifies").
 - `SimHost.pause()`/`stop()` are `async` (step 3): disarm the pacing timer synchronously, then (when
   a `Persistence` is wired in) `snapshotIfDirty()`, `pruneSnapshots()`, `flush()`, in that order.
-- Panic recovery (docs/plan/24-recovery-and-migration.md): every export call goes through
-  `call0`/`call1`/`call2`; a dead instance is only ever *read*; recovery constants live in `recovery.ts`.
+- Panic recovery (docs/plan/24-recovery-and-migration.md): a dead instance is only ever *read*.
+  `recovery.ts`'s `runPanicRecovery` is the Skip retry loop; `SimHost.recover()` owns the guard and re-attach.
