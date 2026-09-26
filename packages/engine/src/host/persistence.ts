@@ -14,7 +14,7 @@ import type { Storage, WorldKeys } from '../storage/types.js'
 import { worldKeys } from '../storage/types.js'
 import type { IncompatReasonName } from './upgrade.js'
 import {
-  compareIdentity,
+  compareStoredIdentity,
   openNewSegmentAfterUpgrade,
   replayDroppedCount,
   runUpgradeCandidate,
@@ -592,33 +592,32 @@ export class Persistence {
 
       // Gate fix (docs/plan/24b-upgrade-and-migration.md: "known gap" in this milestone's own
       // Deviations): no snapshot candidate ever verified, but segment 0's own stored header still
-      // carries a real identity -- check it, the same way a snapshot candidate's own identity is
-      // checked, before replaying its log under a possibly different build. `decodeIdentity` reads
-      // straight off the log's own leading bytes (`SegmentHeader::write` writes `Identity::write`
-      // first, with no envelope in front, exactly like `Persistence.create`'s own `headerBytes`
-      // decode); `compareIdentity` mirrors `Identity::compare` (see its own doc comment for why this
-      // one path cannot reach that Rust function through `sim_upgrade_*` at all).
-      // A crash can destroy segment 0's own log down to nothing, header included
-      // (`Storage.crashClone`'s own `dropTailBytes`, `persist-open.test.ts`'s
-      // `crash_snapshot_without_log_tail_is_skipped`) -- no identity survives to check in that case,
-      // so an absent or too-short-to-decode header falls back to `runningIdentity` (a `Same`
-      // verdict, i.e. "nothing here contradicts the running build"), exactly the pre-existing
-      // recovery behaviour this milestone does not change.
+      // carries a real identity -- check it, through the real `persist::Identity::compare`
+      // (`compareStoredIdentity`, gate fix round 2: `sim_identity_compare`, since a TS-side copy of
+      // that decision matrix drifted silently under a mutation test -- "every fact lives in one
+      // file"), before replaying its log under a possibly different build. An absent/zero-length
+      // segment 0 (a crash that destroys even the header, `Storage.crashClone`'s own
+      // `dropTailBytes`, `persist-open.test.ts`'s `crash_snapshot_without_log_tail_is_skipped`) has
+      // nothing to compare and is treated as `Same`, exactly the pre-existing recovery behaviour
+      // this milestone does not change; a *non-empty* but undecodable header is `WorldLoadError`
+      // `'corrupt'` (that kind's own doc comment already names exactly this case), never silently
+      // folded into the same fallback.
       const seg0Bytes = await storage.read(keys.log(0))
-      let storedIdentity = runningIdentity
+      let cmp: { kind: 'same' | 'direct' } | { kind: 'needsMigrate'; reason: IncompatReasonName } =
+        { kind: 'same' }
       if (seg0Bytes && seg0Bytes.length > 0) {
-        try {
-          storedIdentity = decodeIdentity(seg0Bytes)
-        } catch {
-          storedIdentity = runningIdentity
+        const verdict = compareStoredIdentity(inst, seg0Bytes)
+        if (verdict.kind === 'corrupt') {
+          throw new WorldLoadError('corrupt', runningIdentity)
         }
+        cmp = verdict
       }
-      const cmp = compareIdentity(storedIdentity, runningIdentity)
       if (cmp.kind === 'needsMigrate') {
         // A world this young (no snapshot has ever been written) has no old snapshot to decode an
         // `OldStore` from, so it cannot take the `migrate` path at all -- only `Same`/`Direct`.
         // Planning decisions 7: no write of any kind, and no fallback (segment 0's own header is the
         // only stored identity there is to compare against).
+        const storedIdentity = seg0Bytes ? decodeIdentity(seg0Bytes) : runningIdentity
         throw new WorldLoadError('incompatible', runningIdentity, storedIdentity, cmp.reason)
       }
 

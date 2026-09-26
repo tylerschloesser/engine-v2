@@ -481,6 +481,14 @@ where
         }
     }
 
+    /// docs/plan/24b-upgrade-and-migration.md gate fix round 2.
+    fn sim_identity_compare(&mut self, stored: &[u8], result: &mut [u8]) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_identity_compare(stored, result),
+            _ => Status::WrongRole,
+        }
+    }
+
     /// docs/plan/24-recovery-and-migration.md.
     fn sim_replay_scan_begin(&mut self, segment: u32) -> Status {
         match self {

@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 22
+export const ABI_VERSION = 23
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -250,6 +250,15 @@ export const ABI_EXPORTS = {
   // regardless of outcome; `Status.SaveIncompatible` writes an `IncompatReason` byte at `Result[0]`
   // and leaves every stored byte untouched (Planning decisions 7).
   sim_upgrade_end: { role: 'sim', params: 0, result: 'status' },
+  // docs/plan/24b-upgrade-and-migration.md gate fix round 2 (`ABI_VERSION` 22 -> 23), sim role:
+  // `persist::Identity::compare` for the genesis-replay fallback, which has no snapshot container
+  // to feed `sim_upgrade_begin`/`push`/`end` at all (no snapshot has ever been written yet).
+  // Reads `len` bytes of `RegionId.Persist` (reused as a receive region, same shape as
+  // `sim_restore_push`) -- exactly `Identity::write`'s own wire shape, no envelope -- and writes
+  // the verdict to `RegionId.Result`: `[0]` `0` = Same, `1` = Direct, `2` = NeedsMigrate (`[1]`
+  // then `MismatchReason as u8`: Schema=0/TickRate=1/Worldgen=2). `Status.Decode` if `stored`
+  // fails to parse as an `Identity` at all.
+  sim_identity_compare: { role: 'sim', params: 1, result: 'status' },
   // docs/plan/22b-persistence-load-and-fs.md: begins replaying a segment's log tail from byte
   // `offset` (a `Sim` must already exist, from `sim_restore_end` or `sim_genesis`).
   sim_replay_begin: { role: 'sim', params: 2, result: 'status' },

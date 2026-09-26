@@ -565,6 +565,87 @@ describe('0005 Upgrades over the real fx-migrate-* pipeline', () => {
     await expectStorageUnchanged(storage, before)
   })
 
+  /** Gate fix round 2: `Comparison::NeedsMigrate(TickRate)` reaching the genesis-path fallback --
+   * v2 -> v2-hz30 (same schema, different tick rate), no snapshot yet. Proves the `TickRate` branch
+   * of `sim_identity_compare`'s own reason byte reaches the TS caller, not just `Schema`. */
+  test('genesis_only_world_tick_rate_change_is_incompatible_files_untouched', async () => {
+    const worldId = 'w-genesis-tickrate'
+    const c1 = cfg(worldId, 'aa'.repeat(32))
+    const storage = memoryStorage()
+    const inst = instantiate(v2, Role.Sim, buildSimInstanceConfig(c1))
+    Persistence.create(storage, c1, inst)
+    expect(inst.call0(inst.x.sim_genesis)).toBe(Status.Ok)
+    expect(await storage.list(`worlds/${worldId}/snap/`)).toHaveLength(0)
+    const before = await snapshotStorage(storage)
+
+    const c2 = cfg(worldId, 'bb'.repeat(32))
+    const ni = () => instantiate(v2hz30, Role.Sim, buildSimInstanceConfig(c2))
+    await expectIncompatible(Persistence.open(storage, c2, ni), 'TickRate')
+    await expectStorageUnchanged(storage, before)
+  })
+
+  /** Gate fix round 2: `Comparison::Same` (identical build hash) reaching the genesis-path fallback
+   * -- `outcome` must be `'loaded'`, never `'upgraded'` (no new segment, no `tailReexecuted`), proving
+   * the `Same` branch of `sim_identity_compare` reaches the TS caller distinctly from `Direct`. */
+  test('genesis_only_world_same_build_loads_normally', async () => {
+    const worldId = 'w-genesis-same'
+    const c1 = cfg(worldId, 'aa'.repeat(32))
+    const storage = memoryStorage()
+    const inst = instantiate(v2, Role.Sim, buildSimInstanceConfig(c1))
+    const persistence = Persistence.create(storage, c1, inst)
+    const host = hostOver(inst, persistence)
+    expect(inst.call1(inst.x.sim_connect, 0)).toBe(Status.Ok)
+    host.stepTick(1)
+    const wantHash = host.hash()
+    expect(await storage.list(`worlds/${worldId}/snap/`)).toHaveLength(0)
+
+    const ni = () => instantiate(v2, Role.Sim, buildSimInstanceConfig(c1)) // same buildHash
+    const opened = await Persistence.open(storage, c1, ni)
+    expect(opened.outcome).toBe('loaded')
+    expect(opened.upgrade).toBeUndefined()
+    expect(opened.sim.call0(opened.sim.x.sim_hash)).toBe(Status.Ok)
+    expect(opened.sim.readU64Hex(RegionId.Result, 0)).toBe(wantHash)
+  })
+
+  /** Gate fix round 2 (review finding): a *non-empty* but undecodable segment-0 header must reject
+   * as `WorldLoadError('corrupt', ...)`, never silently fall back to `Same` the way an
+   * absent/zero-length header does (`crash_snapshot_without_log_tail_is_skipped`'s own case). Three
+   * bytes right after the fixed 16-byte `build_hash` are overwritten with an unterminated varint
+   * continuation (`0xff` x3): `engine_version`'s own length prefix then reads as an enormous value,
+   * so `Identity::read` fails deterministically regardless of what follows. */
+  test('genesis_corrupt_header_rejects_corrupt_files_untouched', async () => {
+    const worldId = 'w-genesis-corrupt'
+    const c1 = cfg(worldId, 'aa'.repeat(32))
+    const storage = memoryStorage()
+    const inst = instantiate(v1, Role.Sim, buildSimInstanceConfig(c1))
+    Persistence.create(storage, c1, inst)
+    expect(inst.call0(inst.x.sim_genesis)).toBe(Status.Ok)
+    expect(await storage.list(`worlds/${worldId}/snap/`)).toHaveLength(0)
+
+    const keys = worldKeys(worldId)
+    const logBytes = await storage.read(keys.log(0))
+    if (!logBytes) throw new Error('expected segment 0 to exist')
+    const corrupted = logBytes.slice()
+    corrupted[16] = 0xff
+    corrupted[17] = 0xff
+    corrupted[18] = 0xff
+    await storage.write(keys.log(0), corrupted)
+    const before = await snapshotStorage(storage)
+
+    const c2 = cfg(worldId, 'bb'.repeat(32))
+    const ni = () => instantiate(v1, Role.Sim, buildSimInstanceConfig(c2))
+    const outcome = await Persistence.open(storage, c2, ni).then(
+      () => ({ resolved: true as const }),
+      (error: unknown) => ({ resolved: false as const, error }),
+    )
+    if (outcome.resolved) {
+      throw new Error('expected Persistence.open to reject (corrupt header), but it resolved')
+    }
+    expect(outcome.error).toBeInstanceOf(WorldLoadError)
+    expect((outcome.error as WorldLoadError).kind).toBe('corrupt')
+    await expectStorageUnchanged(storage, before)
+  })
+
   /** Planning decisions 7's own write order (snapshot write -> flush -> manifest write -> new
    * segment header) makes the upgrade restartable: a crash after the snapshot lands but before the
    * manifest is rewritten leaves the *old* world fully intact (the manifest still names the old,

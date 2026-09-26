@@ -618,6 +618,33 @@ pub fn sim_upgrade_end<T: Instance>(slot: &Slot<T>) -> Status {
     rt.inst.sim_upgrade_end(result)
 }
 
+/// `sim_identity_compare(len)`: gate fix round 2 (docs/plan/24b-upgrade-and-migration.md) -- `len`
+/// bytes of `Persist`, reused as a receive buffer (same "in vs out, same region" convention as
+/// `sim_restore_push`'s own doc comment), decoded as an `Identity` and compared against this
+/// build's own via `persist::Identity::compare`. Needs both an input view of `Persist` and an
+/// output view of `Result` at once: builds the input slice from the region's raw pointer/length
+/// (never `rt.layout.bytes(..)`, which would borrow `rt.layout` immutably for as long as the
+/// mutable `bytes_mut(Result)` borrow below needs it) -- the same two-region-at-once shape
+/// `frame`'s own `camera_ptr` unsafe block already uses.
+pub fn sim_identity_compare<T: Instance>(slot: &Slot<T>, len: u32) -> Status {
+    let rt = match slot.sim() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let persist_len = rt.layout.len(RegionId::Persist);
+    if len > persist_len {
+        return Status::BadLength;
+    }
+    let persist_ptr = rt.layout.ptr(RegionId::Persist);
+    // SAFETY: `persist_ptr` addresses the `Persist` region, a separate heap allocation from
+    // `Result` (`RegionLayout::region`) that never moves or resizes after init (0014 §4); `len` was
+    // just checked against that region's own declared capacity; the instance is single-threaded and
+    // not re-entered, so nothing else touches it during this call.
+    let stored = unsafe { core::slice::from_raw_parts(persist_ptr, len as usize) };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.sim_identity_compare(stored, result)
+}
+
 /// `sim_replay_begin(segment, offset)`.
 pub fn sim_replay_begin<T: Instance>(slot: &Slot<T>, segment: u32, offset: u32) -> Status {
     match slot.sim() {

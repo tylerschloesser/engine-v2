@@ -16,12 +16,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::abi::config::HexU64;
 use crate::abi::{Instance, RegionId, RegionLayout, Role, Status};
 use crate::authority::Scope;
-use crate::bytes::{ByteSink, SliceSink};
+use crate::bytes::{ByteReader, ByteSink, SliceSink};
 use crate::codec::decode_canonical;
 use crate::delta::Delta;
 use crate::game::{Game, PlayerEvent, PlayerId, Presence as _, PresenceTable, WorldRead};
 use crate::persist::{
-    Comparison, MismatchReason, PROGRESS_BYTES, Phase, ProgressCursor, UpgradeProgress,
+    Comparison, Identity, MismatchReason, PROGRESS_BYTES, Phase, ProgressCursor, UpgradeProgress,
     UpgradeReader,
 };
 use crate::sim::{EngineReject, Outcome, Record, Rejected, Sim, WorldParams};
@@ -2223,6 +2223,36 @@ where
                 }
             }
         }
+    }
+
+    /// Gate fix round 2 (docs/plan/24b-upgrade-and-migration.md): `persist::Identity::compare` for
+    /// the genesis-replay fallback, which has no snapshot container to feed `sim_upgrade_begin`/
+    /// `push`/`end` at all. `stored` is `Identity::write`'s own wire shape, no envelope. A
+    /// non-empty `stored` that fails to decode is `Status::Decode` (never silently treated as
+    /// `Same`, unlike the caller's own separate "segment 0 is entirely absent/empty" fallback,
+    /// which never reaches this export at all -- see `persistence.ts`'s own doc comment).
+    fn sim_identity_compare(&mut self, stored: &[u8], result: &mut [u8]) -> Status {
+        let mut reader = ByteReader::new(stored);
+        let Ok(stored_identity) = Identity::read(&mut reader) else {
+            return Status::Decode;
+        };
+        let running = self.identity();
+        let Some(out) = result.get_mut(..2) else {
+            return Status::BadLength;
+        };
+        match stored_identity.compare(&running) {
+            Comparison::Same => out[0] = 0,
+            Comparison::Direct => out[0] = 1,
+            Comparison::NeedsMigrate(reason) => {
+                out[0] = 2;
+                out[1] = match reason {
+                    MismatchReason::Schema => 0,
+                    MismatchReason::TickRate => 1,
+                    MismatchReason::Worldgen => 2,
+                };
+            }
+        }
+        Status::Ok
     }
 
     /// docs/plan/24-recovery-and-migration.md: **scan pass** -- decodes `bytes` (fed the same way

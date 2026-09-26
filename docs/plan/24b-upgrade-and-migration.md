@@ -479,3 +479,49 @@ New tests (`tests/wasm/upgrade.test.ts`): `genesis_only_world_direct_load_reexec
 check removed (reason `Schema`/outcome `upgraded` unmet); reverted after confirming. `pnpm test
 wasm`: 142 -> 144. `rust`/`unit`/`browser` unchanged (551/251/201): no Rust or browser change was
 needed. `pnpm test && pnpm lint` green on `HEAD`.
+
+## Gate fix round 2: corrupt-header fallback and a duplicated decision matrix
+
+Review found two defects in round 1's fix.
+
+**1. A non-empty but undecodable segment-0 header silently passed as `Same`.** Round 1's
+`try { storedIdentity = decodeIdentity(...) } catch { storedIdentity = runningIdentity }` folded a
+genuinely corrupt header into the same fallback as an absent/zero-length one (the real
+`crash_snapshot_without_log_tail_is_skipped` case). Fixed: only an absent/zero-length segment 0 now
+falls back to `Same`; a non-empty header that fails to decode now throws `WorldLoadError('corrupt',
+running)` (that kind already existed and already documents exactly this case) with no write. New
+test `genesis_corrupt_header_rejects_corrupt_files_untouched` (three `0xff` bytes over the
+`engine_version` length varint, right after `build_hash`) proved to fail with the old catch-all
+(reverted after confirming: "expected ... to reject ..., but it resolved").
+
+**2. `compareIdentity` was a second copy of `Identity::compare`'s decision matrix.** Deleted it.
+The genesis path now asks Rust directly through a new export, `sim_identity_compare(len) -> status`
+(`ABI_VERSION` 22 -> 23): `len` bytes of `Persist` (reused as a receive buffer, same shape as
+`sim_restore_push`), decoded as an `Identity` and compared against `Host::identity()`; writes
+`result[0]` (0 Same / 1 Direct / 2 NeedsMigrate) and, on NeedsMigrate, `result[1]`
+(`MismatchReason as u8`, `Schema=0/TickRate=1/Worldgen=2`, matching `IncompatReason`'s own first
+three variants); `Status::Decode` on an undecodable `stored`. Added to `registry.rs` (`Instance`
+trait method + `export_instance!` extern), `abi/mod.rs` (two-region-at-once shape, following
+`frame`'s own `camera_ptr` unsafe-pointer pattern rather than borrowing `RegionLayout::bytes` and
+`bytes_mut` simultaneously), `Host<G>::sim_identity_compare` (`host/mod.rs`), and
+`GameInstance::sim_identity_compare` (`game_instance.rs` -- **the dispatcher enum has no blanket
+default forward**, an extra wiring point round 2 initially missed and caught immediately by every
+`Persistence.open` test returning `Status::Unsupported`/status 8). `host/upgrade.ts` gained
+`compareStoredIdentity(inst, stored)` (feeds `stored` through the export, decodes the verdict);
+`persistence.ts`'s genesis branch calls it instead of the deleted TS matrix. `abi.ts`/`ABI_VERSION`
+mirrored; `abi-registry.test.ts` covers the new export automatically (extern list, `ABI_EXPORTS`
+row, per-fixture signature check).
+
+New Vitest cases so every `sim_identity_compare` outcome reaches the TS caller from Rust, not a
+TS-side assumption: `genesis_only_world_tick_rate_change_is_incompatible_files_untouched` (v2 ->
+v2-hz30, reason `TickRate`), `genesis_only_world_same_build_loads_normally` (`outcome: 'loaded'`,
+no upgrade). Proved both real defects by injection, rebuilt, ran, reverted:
+- TS catch-all (defect 1): `genesis_corrupt_header_rejects_corrupt_files_untouched` failed
+  ("expected ... to reject ..., but it resolved").
+- Rust reason-byte mapping swapped (`TickRate <-> Worldgen`, defect 2's own kind):
+  `genesis_only_world_tick_rate_change_is_incompatible_files_untouched` failed (`reason: 'Worldgen'`
+  not `'TickRate'`).
+
+`pnpm test wasm`: 144 -> 147 (3 new: `TickRate`, `Same`, corrupt-header). `rust`/`unit` unchanged
+(551/251). `browser` 201 (one flaky Chromium context-crash rerun, unrelated to this change: green on
+rerun). `pnpm test && pnpm lint` green on `HEAD`. No golden moved.

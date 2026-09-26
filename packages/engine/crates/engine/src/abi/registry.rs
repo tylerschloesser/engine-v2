@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 22;
+pub const ABI_VERSION: u32 = 23;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -575,6 +575,23 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
+    /// Gate fix round 2 (docs/plan/24b-upgrade-and-migration.md): `persist::Identity::compare` for
+    /// the genesis-replay fallback, which has no snapshot container to feed
+    /// [`Instance::sim_upgrade_begin`]/`push`/`end` at all (no snapshot has ever been written yet,
+    /// so there is no 0005-Formats envelope to decode) -- the *only* way that path can reach the
+    /// real comparison rather than a second, TS-side copy of its decision matrix (round 1's own
+    /// mistake, per this milestone's Deviations). `stored` is exactly `Identity::write`'s own wire
+    /// shape (no envelope -- the same "raw bytes, no container" convention
+    /// [`Instance::sim_segment_header`] itself already writes out): decoded and compared against
+    /// this build's own identity. Writes the verdict to `result`: `[0]` `0` = `Same`, `1` =
+    /// `Direct`, `2` = `NeedsMigrate` (`[1]` then holds `MismatchReason as u8`: `Schema=0`/
+    /// `TickRate=1`/`Worldgen=2`, the same numbering `IncompatReason` already mirrors 1:1).
+    /// `Status::Decode` if `stored` fails to parse as an `Identity` at all (a non-empty but
+    /// corrupted header must reject, never silently fall back -- the caller's own contract).
+    fn sim_identity_compare(&mut self, _stored: &[u8], _result: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
+
     /// docs/plan/22b-persistence-load-and-fs.md, sim role: begins replaying a segment's log tail
     /// from byte `offset` (a `Sim` must already exist -- from [`Instance::sim_restore_end`] or
     /// [`Instance::sim_genesis`]). `segment` is accepted but unused by the default/`Host<G>`
@@ -802,6 +819,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_upgrade_end() -> u32 {
             $crate::abi::sim_upgrade_end(&__ENGINE_SLOT) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_identity_compare(len: u32) -> u32 {
+            $crate::abi::sim_identity_compare(&__ENGINE_SLOT, len) as u32
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_replay_scan_begin(segment: u32) -> u32 {
