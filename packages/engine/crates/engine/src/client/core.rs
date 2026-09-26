@@ -11,14 +11,16 @@
 //! around for decoding, and it means neither pass needs a staging buffer.
 
 use crate::game::Game;
+use crate::predict::{Overlay, Pending, PendingQueue};
 use crate::sim::{Applied, Rejected};
-use crate::time::Tick;
+use crate::time::{Tick, Ticks};
 use crate::wire::{
     ActionResultsReader, ChunkCoordListReader, SectionId, SnapshotReader, UplinkWriter, WireError,
     read_chunk_deltas, read_global, read_own_player,
 };
 use crate::wire::{CameraReport, FrameReader};
 use crate::world::Tile;
+use crate::world_access::WorldRead;
 use crate::{bytes::ByteReader, bytes::SliceSink, wire::EntityDeltaOp};
 
 use super::replica::Replica;
@@ -118,6 +120,16 @@ pub struct ClientCore<G: Game> {
     /// to decide "on change".
     last_sent_presence: Option<([u8; crate::presence::MAX_ENCODED_BYTES], usize)>,
     last_presence_sent_ms: Option<u32>,
+    /// M25 (docs/decisions/0012-prediction-and-reconciliation.md): the reset-and-replay overlay,
+    /// cleared and re-filled once per [`Self::on_frame`]; the pending queue mirroring it, and the
+    /// estimated round trip (ticks) [`Self::predicted_tick`] adds to the replica's own tick.
+    overlay: Overlay<G>,
+    pending: PendingQueue<G>,
+    lead: Ticks,
+    /// Diagnostic counter (docs/plan/25-prediction-core.md Budgets: "a new deterministic counter
+    /// `predict_replays_per_frame`"): how many pending actions the most recent [`Self::on_frame`]
+    /// re-predicted.
+    predict_replays_last_frame: u32,
 }
 
 impl<G: Game> ClientCore<G> {
@@ -148,6 +160,10 @@ impl<G: Game> ClientCore<G> {
             presence_len,
             last_sent_presence: None,
             last_presence_sent_ms: None,
+            overlay: Overlay::new(),
+            pending: PendingQueue::new(),
+            lead: Ticks(1),
+            predict_replays_last_frame: 0,
         }
     }
 
@@ -172,6 +188,27 @@ impl<G: Game> ClientCore<G> {
         let mut buf = [0u8; MAX_ACTION_ENCODED_BYTES];
         let n = crate::codec::encode(&action, &mut buf).map_err(|_| ActionError::Malformed)?;
         self.outbox.push((seq, buf[..n].to_vec()));
+
+        // 0012 Decision: "At dispatch the action is applied once, queued as pending with its
+        // `seq`, and sent" -- the sending half is the outbox above (unchanged, M16); this predicts
+        // it once against the current overlay and remembers the frozen predicted tick.
+        let predicted_tick = self.predicted_tick();
+        let auth_tick_at_dispatch = self.replica.tick();
+        let who = self.replica.own_player();
+        let ClientCore {
+            replica, overlay, ..
+        } = self;
+        let registry = replica.registry();
+        let base = &*replica as &dyn WorldRead<G>;
+        let status =
+            crate::predict::predict(base, registry, overlay, who, predicted_tick, seq, &action);
+        self.pending.push(Pending {
+            seq,
+            action,
+            predicted_tick,
+            status,
+            auth_tick_at_dispatch,
+        });
         Ok(())
     }
 
@@ -213,6 +250,42 @@ impl<G: Game> ClientCore<G> {
     pub fn view(&self) -> &Replica<G> {
         &self.replica
     }
+
+    /// M25: the current prediction overlay (`testkit::Loopback::overlay_len`; a read-only
+    /// `world_access::View::with_overlay` for `Loopback::visible`).
+    pub fn overlay(&self) -> &Overlay<G> {
+        &self.overlay
+    }
+
+    /// M25: every action still pending, oldest first (`testkit::Loopback::pending`).
+    pub fn pending(&self) -> impl Iterator<Item = &Pending<G>> {
+        self.pending.iter()
+    }
+
+    /// M25 (docs/decisions/0012-prediction-and-reconciliation.md "Two clocks"): the estimated round
+    /// trip, in ticks, `Self::predicted_tick` adds to the replica's own authoritative tick. Default
+    /// 1 (Non-scope: M26 owns real lead estimation; every test here sets it exactly as the spike
+    /// did).
+    pub fn set_lead(&mut self, lead: Ticks) {
+        self.lead = lead;
+    }
+
+    /// The clock a player's own predicted timers are written and rendered in (0012 "Two clocks":
+    /// "Predicted = authoritative + lead").
+    pub fn predicted_tick(&self) -> Tick {
+        self.replica.tick() + self.lead
+    }
+
+    /// How many pending actions the most recent [`Self::on_frame`] re-predicted (docs/plan/
+    /// 25-prediction-core.md Budgets).
+    pub fn predict_replays_last_frame(&self) -> u32 {
+        self.predict_replays_last_frame
+    }
+
+    /// M26's lead-estimator hook (docs/plan/25-prediction-core.md Provides): called once per
+    /// pending action the host has just acked, with the authoritative tick this client held at
+    /// dispatch time and the tick the ack itself landed on. A no-op until M26 fills it in.
+    fn on_ack_sample(&mut self, _auth_tick_at_dispatch: Tick, _ack_tick: Tick) {}
 
     pub fn drain_dirty(&mut self, f: impl FnMut(crate::world::ChunkCoord)) {
         self.replica.drain_dirty(f);
@@ -315,11 +388,54 @@ impl<G: Game> ClientCore<G> {
     }
 
     /// Validates then applies one frame (0011 "atomically"). `Err` leaves the replica untouched.
+    ///
+    /// M25 (0012 Decision, steps 2-4): once the frame's own deltas have landed on the replica,
+    /// drop every pending action the host has now acked (the game already saw `Confirmed`/
+    /// `Rejected` through `results`/`drain_results` above -- this only retires the pending queue's
+    /// own bookkeeping copy and samples the ack for M26's lead estimator), clear the overlay, then
+    /// re-predict every action still pending. `predict_alloc` proves this whole tail allocates
+    /// nothing in steady state.
     pub fn on_frame(&mut self, bytes: &[u8]) -> Result<FrameSummary, WireError> {
         Self::validate(bytes)?;
         let summary = self.apply(bytes);
         self.last_summary = summary;
         self.mutations = self.mutations.wrapping_add(1);
+
+        while let Some(p) = self.pending.pop_acked_through(summary.ack_seq) {
+            self.on_ack_sample(p.auth_tick_at_dispatch, summary.tick);
+        }
+
+        self.overlay.clear();
+        let ClientCore {
+            replica,
+            overlay,
+            pending,
+            ..
+        } = self;
+        let registry = replica.registry();
+        let who = replica.own_player();
+        let base = &*replica as &dyn WorldRead<G>;
+        // R0 (docs/plan/25-prediction-core.md Planning decisions "Taint rule": "every pending
+        // action is predicted on its own merits") is the only behaviour this milestone ships: no
+        // pending action's status here depends on any other's. A taint rule (M25 step 6) plugs in
+        // right here -- one place, before calling `predict`, deciding whether *this* `p` runs
+        // `predict` at all or is forced straight to `NotPredictable` because an earlier pending
+        // action in this same pass already declined.
+        let mut replays = 0u32;
+        for p in pending.iter_mut() {
+            p.status = crate::predict::predict(
+                base,
+                registry,
+                overlay,
+                who,
+                p.predicted_tick,
+                p.seq,
+                &p.action,
+            );
+            replays += 1;
+        }
+        self.predict_replays_last_frame = replays;
+
         Ok(summary)
     }
 

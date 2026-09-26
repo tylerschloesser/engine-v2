@@ -164,6 +164,18 @@ impl<G: Game> Replica<G> {
         self.store.terrain_mut()
     }
 
+    /// docs/plan/25-prediction-core.md testkit seam (`testing::testkit::Loopback::visible`): the
+    /// one `Store<G>` this replica's own `WorldRead` impl already reads through, exposed so a
+    /// read-only `world_access::View` can be built over it with a prediction overlay layered on
+    /// top. `pub(crate)`, mirroring [`Self::terrain`]'s own visibility: not part of the
+    /// game-facing surface. `#[cfg(...)]`-gated like [`Self::debug_version`] just above: its only
+    /// caller is `testing::testkit` (feature `testing`), so a build without that feature never
+    /// reaches it and `cargo clippy`'s default (no-features) pass would otherwise flag it dead.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn store(&self) -> &Store<G> {
+        &self.store
+    }
+
     /// docs/plan/17-drawlist-and-sprites.md Seams: the replica's own entity table, for
     /// `client::frame_view::EntityIter` (`FrameView::entities()`). `pub`, not `pub(crate)` like
     /// `terrain`/`terrain_mut` above: a fixture's own native test (`fixtures/drawables`, a

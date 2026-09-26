@@ -17,10 +17,12 @@ use crate::client::{ClientCore, Replica};
 use crate::delta::Delta;
 use crate::game::{EntityId, Game, PlayerId};
 use crate::host::{ConnId, Host};
+use crate::predict::{Pending, Prediction};
 use crate::sim::{Outcome, Record, Sim, WorldParams};
 use crate::time::Tick;
 use crate::wire::{CameraReport, UplinkWriter};
-use crate::world::{CacheCapacity, ChunkDims, PristineSource, Tile, TilePos};
+use crate::world::{CacheCapacity, ChunkDims, PristineSource, Tile, TilePos, TileRect};
+use crate::world_access::{View, WorldRead};
 
 /// Fills `sim`'s world directly, bypassing `Sim::step`'s per-action overhead, to exactly
 /// `entities` entities (ids `1..=entities`, each `G::Entity::default()`) and `tiles` modified
@@ -84,6 +86,45 @@ where
     sim.state_hash()
 }
 
+/// Everything a renderer could show for a region (ported from the spike's own `Visible`, docs/plan/
+/// 25-prediction-core.md Seams: "a `visible(client, rect)` equality helper"): tiles, occupants BY
+/// VALUE, and one player's own state. `PartialEq`/`Clone` need no extra bound (`Game::Entity`/
+/// `Game::Player` are already `Clone + PartialEq`, 0003); `Debug` is manual because neither is
+/// guaranteed `Debug` by the trait, so `#[derive(Debug)]`'s own blanket `G: Debug` bound (which no
+/// `Game` impl satisfies) would never apply.
+pub struct Visible<G: Game> {
+    pub cells: Vec<(TilePos, Option<Tile>, Option<G::Entity>)>,
+    pub me: Option<G::Player>,
+}
+
+impl<G: Game> Clone for Visible<G> {
+    fn clone(&self) -> Self {
+        Visible {
+            cells: self.cells.clone(),
+            me: self.me.clone(),
+        }
+    }
+}
+
+impl<G: Game> PartialEq for Visible<G> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cells == other.cells && self.me == other.me
+    }
+}
+
+impl<G: Game> std::fmt::Debug for Visible<G>
+where
+    G::Entity: std::fmt::Debug,
+    G::Player: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Visible")
+            .field("cells", &self.cells)
+            .field("me", &self.me)
+            .finish()
+    }
+}
+
 /// One [`Loopback`] client: a [`ClientCore`], its constant per-tick network delay, and the frames
 /// still in flight (docs/plan/15-connection-and-subscriptions.md Scope: "byte buffers, per-client
 /// delay in ticks"). `queue` holds one entry per `Loopback::step` so far this client hasn't drained
@@ -114,8 +155,13 @@ pub struct Loopback<G: Game> {
     /// `UplinkBatch` (docs/plan/16-action-round-trip.md): [`Loopback::action`]'s own real-wire
     /// path, not the direct `Host::queue_action_for_test` backdoor it used to call.
     action_buf: Vec<u8>,
-    /// Per-player action sequence counter, for [`Loopback::action`].
+    /// Per-player action sequence counter, for [`Loopback::action`]/[`Loopback::dispatch`].
     seqs: std::collections::BTreeMap<PlayerId, u32>,
+    /// M25: a monotonic clock fed to every client's `ClientCore::poll_uplink` each [`Self::step`],
+    /// so a [`Self::dispatch`]ed action's own encoded bytes (queued in `ClientCore`'s outbox, not
+    /// sent by [`Self::dispatch`] itself) actually reach the host. Advanced by 50 ms/step (0010's
+    /// own uplink floor), matching a 20 Hz tick's real-world duration.
+    uplink_ms: u32,
 }
 
 impl<G: Game> Loopback<G>
@@ -132,6 +178,7 @@ where
             uplink_buf: vec![0u8; 512],
             action_buf: vec![0u8; 512],
             seqs: std::collections::BTreeMap::new(),
+            uplink_ms: 0,
         }
     }
 
@@ -174,6 +221,92 @@ where
             .expect("uplink_buf is generously sized for this testkit's own scenarios");
         let bytes = self.uplink_buf[..n2].to_vec();
         let _ = self.host.on_uplink(conn, &bytes);
+    }
+
+    /// M25 (docs/decisions/0012-prediction-and-reconciliation.md; docs/plan/
+    /// 25-prediction-core.md Seams): dispatches through the real `ClientCore::on_action` path
+    /// (a Codec-encoded action re-wrapped as one action-ring record, `[seq u32 LE][len u32
+    /// LE][UTF-8 JSON]`, docs/plan/16-action-round-trip.md Scope) instead of [`Self::action`]'s own
+    /// direct-to-host uplink shortcut, so prediction actually runs. Still delivered to the host at
+    /// the next [`Self::step`] (`ClientCore::poll_uplink`/`Host::on_uplink`, unchanged).
+    pub fn dispatch(&mut self, i: usize, action: G::Action) -> (u32, Prediction<G::Reject>)
+    where
+        G::Reject: Clone,
+    {
+        let who = self.clients[i].core.view().own_player();
+        let seq = {
+            let s = self.seqs.entry(who).or_insert(0);
+            *s += 1;
+            *s
+        };
+        let json = serde_json::to_string(&action)
+            .expect("testkit::Loopback::dispatch: G::Action must JSON-encode");
+        let mut record = Vec::with_capacity(8 + json.len());
+        record.extend_from_slice(&seq.to_le_bytes());
+        record.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        record.extend_from_slice(json.as_bytes());
+        self.clients[i]
+            .core
+            .on_action(&record)
+            .expect("testkit::Loopback::dispatch: on_action must accept a well-formed record");
+        let status = self.clients[i]
+            .core
+            .pending()
+            .find(|p| p.seq == seq)
+            .map(|p| p.status.clone())
+            .expect("just pushed by on_action above");
+        (seq, status)
+    }
+
+    /// Every action client `i` still has pending, oldest first (docs/plan/25-prediction-core.md
+    /// Seams).
+    pub fn pending(&self, i: usize) -> impl Iterator<Item = &Pending<G>> {
+        self.clients[i].core.pending()
+    }
+
+    /// Client `i`'s current overlay size (docs/plan/25-prediction-core.md Seams).
+    pub fn overlay_len(&self, i: usize) -> usize {
+        self.clients[i].core.overlay().len()
+    }
+
+    /// The occupant at `pos` through client `i`'s prediction-merged view, preserving the id
+    /// itself (unlike [`Self::visible`], which compares occupants by value only) -- for a test
+    /// that needs to assert `EntityId::is_provisional()`.
+    pub fn entity_at(&self, i: usize, pos: TilePos) -> Option<EntityId> {
+        let core = &self.clients[i].core;
+        let replica = core.view();
+        let held = |c: crate::world::ChunkCoord| replica.is_held(c);
+        let view = View::<G>::new(replica.store(), replica.registry(), replica.tick(), &held)
+            .with_overlay(core.overlay());
+        view.entity_at(pos).ok().flatten()
+    }
+
+    /// Everything visible to client `i` over `rect`, reading through its prediction-merged view
+    /// (the spike's own `visible()`, docs/plan/25-prediction-core.md Seams): tiles, occupants BY
+    /// VALUE (entity ids are not part of the comparison), and the client's own player state. "No
+    /// visible change" means this value is equal.
+    pub fn visible(&self, i: usize, rect: TileRect) -> Visible<G> {
+        let core = &self.clients[i].core;
+        let replica = core.view();
+        let who = replica.own_player();
+        let held = |c: crate::world::ChunkCoord| replica.is_held(c);
+        let view = View::<G>::new(replica.store(), replica.registry(), replica.tick(), &held)
+            .with_overlay(core.overlay());
+        let mut cells = Vec::new();
+        for y in rect.min.y..=rect.max.y {
+            for x in rect.min.x..=rect.max.x {
+                let p = TilePos::new(x, y);
+                let tile = view.tile(p).ok();
+                let occ = view
+                    .entity_at(p)
+                    .ok()
+                    .flatten()
+                    .and_then(|id| view.entity(id).ok().flatten().cloned());
+                cells.push((p, tile, occ));
+            }
+        }
+        let me = view.player(who).ok().cloned();
+        Visible { cells, me }
     }
 
     pub fn last_built_frame(&self, i: usize) -> &[u8] {
@@ -255,9 +388,26 @@ where
         let _ = self.host.on_uplink(conn, &bytes);
     }
 
-    /// Runs one tick end to end: `Host::tick`, a `build_frame` per client (queued behind that
-    /// client's delay), delivers every client's now-due frame, then `Host::seal`.
+    /// Runs one tick end to end: drains every client's own uplink (`ClientCore::poll_uplink`,
+    /// M25 -- a no-op for a client that never `dispatch`ed/never set a camera/presence sample),
+    /// `Host::tick`, a `build_frame` per client (queued behind that client's delay), delivers every
+    /// client's now-due frame, then `Host::seal`.
     pub fn step(&mut self) {
+        self.uplink_ms = self.uplink_ms.wrapping_add(50);
+        let t_ms = self.uplink_ms;
+        let Loopback {
+            clients,
+            uplink_buf,
+            host,
+            ..
+        } = self;
+        for client in clients.iter_mut() {
+            let n = client.core.poll_uplink(t_ms, uplink_buf);
+            if n > 0 {
+                let _ = host.on_uplink(client.conn, &uplink_buf[..n]);
+            }
+        }
+
         self.host.tick();
         for idx in 0..self.clients.len() {
             let conn = self.clients[idx].conn;
