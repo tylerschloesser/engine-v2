@@ -43,6 +43,11 @@ export type TestFlags = {
    * reach -- deterministic (no dependency on whether a test's own OPFS stub reaches the worker's own
    * global scope), unlike stubbing `navigator.storage.getDirectory` from outside the page. */
   noOpfs?: boolean
+  /** `worker/sim.ts` only (docs/plan/23-persistence-opfs-and-lifecycle.md, coordinator fix round
+   * 1): overrides `PersistenceOptions.snapshotEveryTicks` (default 1,200, 0005 Cadence) so a real,
+   * continuously-paced behavioural test can observe several periodic OPFS snapshots inside a few
+   * seconds instead of 1,200 real ticks at 20 Hz. */
+  snapshotEveryTicks?: number
 }
 
 export type SetupMessage = {
@@ -122,6 +127,18 @@ export const SIM_COUNTERS_BYTES = 20
 export const NET_COUNTERS_CALL = '__net_counters'
 /** One little-endian `u32`: `RingConnection.downlinkRetries`. */
 export const NET_COUNTERS_BYTES = 4
+
+/** docs/plan/23-persistence-opfs-and-lifecycle.md, coordinator fix round 1: a minimal, page-local
+ * debug call for the periodic-OPFS-snapshot behavioural test (`world.spec.ts`'s own
+ * `paced_session_lands_periodic_snapshots`) -- `Persistence.counters` plus the OPFS adapter's own
+ * `snapshotDeferred` (`OpfsStorage`, Planning decision 2), neither reachable through an ABI export.
+ * Same naming convention as `SIM_COUNTERS_CALL`; scoped to this one test, not exported from
+ * `engine/test` -- step 6's own `persistenceCounters()` (Seams, for steps 5-7) is the real, public
+ * seam and may replace this call entirely. */
+export const PERSISTENCE_DEBUG_CALL = '__persistence_debug'
+/** Six little-endian `u32`s: `PersistenceCounters`'s own field order (`logBytes`, `frames`,
+ * `snapshots`, `lastSnapshotBytes`, `syncs`), then `snapshotDeferred`. */
+export const PERSISTENCE_DEBUG_BYTES = 24
 
 /** docs/plan/23-persistence-opfs-and-lifecycle.md Seams (Provides): `client.onStorage`'s own
  * argument shape, verbatim. Declared here (not in `client.ts`) so `SimLifecycleMessage` below can

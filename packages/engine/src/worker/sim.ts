@@ -29,7 +29,7 @@ import {
 } from '../sab/control.js'
 import { createSimHostFromInstance, type SimHostCounters, wrapEngineInstance } from '../server.js'
 import { memoryStorage } from '../storage/memory.js'
-import { OpfsUnavailable, opfsStorage } from '../storage/opfs.js'
+import { type OpfsStorage, OpfsUnavailable, opfsStorage } from '../storage/opfs.js'
 import type { Storage } from '../storage/types.js'
 import { createAtomicsTimer } from './atomics-timer.js'
 import { applyGcHook } from './gc-hook.js'
@@ -38,6 +38,8 @@ import type { SetupMessage, StorageStatus } from './protocol.js'
 import {
   NET_COUNTERS_BYTES,
   NET_COUNTERS_CALL,
+  PERSISTENCE_DEBUG_BYTES,
+  PERSISTENCE_DEBUG_CALL,
   SIM_COUNTERS_BYTES,
   SIM_COUNTERS_CALL,
 } from './protocol.js'
@@ -134,6 +136,11 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   let persistence: Persistence | undefined
   let initialTicksRun = 0
   let worldDurable = false
+  // Planning decision 2: the sim worker body runs the queued rename/reopen through `shell.runAsync`
+  // in the gap after the current tick pass -- only ever set when `openWorldStorage` actually opened
+  // OPFS (`durable === true`; a `memoryStorage()` fallback has no such queue, `pendingAsync()` is
+  // OPFS-only).
+  let opfsAdapter: OpfsStorage | undefined
 
   if (message.world) {
     const world = message.world
@@ -152,8 +159,13 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       message.test?.noOpfs === true,
     )
     worldDurable = durable
+    if (durable) opfsAdapter = storage as OpfsStorage
 
-    const opened = await Persistence.open(storage, world, newInstance)
+    const opened = await Persistence.open(storage, world, newInstance, {
+      ...(message.test?.snapshotEveryTicks !== undefined
+        ? { snapshotEveryTicks: message.test.snapshotEveryTicks }
+        : {}),
+    })
     persistence = opened.persistence
     inst = opened.sim
     initialTicksRun = opened.tick
@@ -255,6 +267,13 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     lastWokenBy = wokenBy
     Atomics.store(shell.control.words, CB_SIM_TICKS_RUN, simHost.counters.ticksRun)
     Atomics.store(shell.control.words, workerWord(shell.index, W_ACK), wokenBy)
+    // Planning decision 2, wired for real (M23 fix round 1: `shell.runAsync` now actually leaves
+    // this pass's own enclosing loop instead of starving `fn` -- see `worker/shell.ts`). Polled after
+    // every pass, cheap on the (overwhelmingly common) `null` read: `pendingAsync()` itself allocates
+    // nothing (`opfs.ts`'s own doc comment), and `fn` here is a closure `write()` already built, not
+    // one created by this call (`.claude/rules/hot-paths.md`).
+    const pending = opfsAdapter?.pendingAsync()
+    if (pending) shell.runAsync(pending)
   }
 
   // docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: `sim-pause`/`sim-resume`, present
@@ -301,6 +320,18 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
         // `netCounters`, same synthetic-name shape as `SIM_COUNTERS_CALL`, above).
         const result = new Uint8Array(NET_COUNTERS_BYTES)
         new DataView(result.buffer).setUint32(0, connection?.downlinkRetries ?? 0, true)
+        return { type: 'test-result', id: m.id, value: 0, result }
+      }
+      if (m.name === PERSISTENCE_DEBUG_CALL) {
+        const result = new Uint8Array(PERSISTENCE_DEBUG_BYTES)
+        const view = new DataView(result.buffer)
+        const c = persistence?.counters
+        view.setUint32(0, c?.logBytes ?? 0, true)
+        view.setUint32(4, c?.frames ?? 0, true)
+        view.setUint32(8, c?.snapshots ?? 0, true)
+        view.setUint32(12, c?.lastSnapshotBytes ?? 0, true)
+        view.setUint32(16, c?.syncs ?? 0, true)
+        view.setUint32(20, opfsAdapter?.snapshotDeferred ?? 0, true)
         return { type: 'test-result', id: m.id, value: 0, result }
       }
       return handleTestCall(inst, m)

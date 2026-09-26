@@ -59,7 +59,11 @@ export interface WorkerShell {
   /**
    * Leaves the blocking loop, awaits `fn`, then re-enters it: for a Promise-only host API (opening
    * an OPFS file, M23) a worker cannot otherwise reach while blocked in `Atomics.wait`. A rejection
-   * is reported through `fatal`.
+   * is reported through `fatal`. Callable from *inside* a `body()` pass (M23 fix round 1: the loop
+   * that called that pass leaves right after it returns, instead of re-entering `Atomics.wait` and
+   * starving `fn` forever) or from outside one (setup, a parked message handler) exactly as before.
+   * A second `runAsync` call while one is already in flight is queued, FIFO, run after the first
+   * settles -- never dropped or rejected.
    */
   runAsync(fn: () => Promise<void>): void
   /** docs/plan/23-persistence-opfs-and-lifecycle.md Seams: the sim worker's own lifecycle
@@ -79,6 +83,19 @@ export class Shell implements WorkerShell {
   readonly index: number
   #loop: LoopState | null = null
   #stopped = false
+  /** M23 fix round 1: set by `runAsync` when it is called *from inside* an active `body()` pass (a
+   * call within `runBlockingLoop`'s own loop -- as opposed to `resume()`'s or `worker.ts`'s own
+   * first entry, from which `runAsync` also works but there is no enclosing loop pass to leave).
+   * `runBlockingLoop` checks and clears this immediately after every `runBodyOnce` call: `true`
+   * means leave now, without repeating the yielded-exit's own `W_PARKED` store (`runAsync` already
+   * made it, before ever queuing `fn` -- see there). */
+  #leaveRequested = false
+  /** Whether a `runAsync` promise chain (one `fn`, or a FIFO queue of them) is currently running.
+   * `resume()` reads this to stay a no-op on `W_PARKED`/`runBlockingLoop` itself while true: the
+   * chain's own `.finally()` (below) is what re-enters the loop once every queued `fn` has settled,
+   * and starting a second, concurrent `runBlockingLoop` here would race it. */
+  #asyncInFlight = false
+  #asyncQueue: Array<() => Promise<void>> = []
 
   constructor(control: ControlBlock, index: number) {
     this.control = control
@@ -98,15 +115,49 @@ export class Shell implements WorkerShell {
   runAsync(fn: () => Promise<void>): void {
     const loop = this.#loop
     if (!loop || this.#stopped) return
+    if (this.#asyncInFlight) {
+      // A second `runAsync` while one is already in flight (Deviations): queued, FIFO, never
+      // dropped or rejected -- a caller's `fn` is always real, already-decided work (e.g. a second
+      // `OpfsStorage.pendingAsync()` closure queued behind the first).
+      this.#asyncQueue.push(fn)
+      return
+    }
+    this.#asyncInFlight = true
+    // Set *before* `runBodyOnce`'s own call frame (if any) returns to `runBlockingLoop`, so its own
+    // post-pass check (below) sees it; harmless, and required, when `runAsync` is instead called
+    // from outside any pass (setup, a parked handler) -- nothing reads it until a loop exists to
+    // leave, and `runBlockingLoop`'s very first pass checks it the same way.
+    this.#leaveRequested = true
     Atomics.store(this.control.words, workerWord(this.index, W_PARKED), 1)
+    this.#runQueued(fn)
+  }
+
+  #runQueued(fn: () => Promise<void>): void {
     fn()
       .catch((e: unknown) => this.fatal(e instanceof Error ? e.message : String(e)))
       .finally(() => {
         if (this.#stopped) return
+        const next = this.#asyncQueue.shift()
+        if (next) {
+          this.#runQueued(next)
+          return
+        }
+        this.#asyncInFlight = false
+        const loop = this.#loop
+        if (!loop) return
         const seen = this.observeWake()
         Atomics.store(this.control.words, workerWord(this.index, W_PARKED), 0)
         runBlockingLoop(this, loop.body, loop.timeoutMs, seen)
       })
+  }
+
+  /** `runBlockingLoop`'s own hook, checked right after every `runBodyOnce` call (including the very
+   * first, before the `for` loop): `true` (and cleared) exactly once, when that pass called
+   * `runAsync`. Not part of the public `WorkerShell` seam. */
+  consumeLeaveRequest(): boolean {
+    if (!this.#leaveRequested) return false
+    this.#leaveRequested = false
+    return true
   }
 
   /**
@@ -133,10 +184,20 @@ export class Shell implements WorkerShell {
 
   /** `{ type: 'resume' }` handler (docs/plan/06b-workers-and-spawn.md, Planning decisions): store
    * `W_YIELD = 0` and re-enter the loop this worker was parked from. A no-op for a worker with no
-   * loop yet (still in setup) or one that never left the event loop (a `net`-kind worker). */
+   * loop yet (still in setup) or one that never left the event loop (a `net`-kind worker).
+   *
+   * M23 fix round 1: also a no-op on `W_PARKED`/the loop itself while a `runAsync` chain is in
+   * flight (`#asyncInFlight`) -- that chain's own `.finally()` owns the next `runBlockingLoop` entry
+   * (`#runQueued`, above), and starting a second one here would run two concurrent passes over the
+   * same worker. Clearing `W_YIELD` is still correct and still happens: a park request that arrived
+   * while async work was running must not make the loop immediately re-yield the instant that work's
+   * own re-entry happens. Coherence for `parkWorkers`/`attachHostLifecycle`'s `sim-pause`: `W_PARKED
+   * = 1` means the same thing either way (this worker is not blocked in `Atomics.wait` and will
+   * accept a `postMessage`), whether it got there via the yielded exit below or via `runAsync`. */
   resume(): void {
     if (this.#stopped) return
     Atomics.store(this.control.words, workerWord(this.index, W_YIELD), 0)
+    if (this.#asyncInFlight) return
     const loop = this.#loop
     if (loop) {
       const seen = this.observeWake()
@@ -207,6 +268,12 @@ function runBodyOnce(shell: Shell, body: (wokenBy: number) => void, last: number
  * blocking. A body pass with nothing to do costs one allocation-free call and re-stores the same
  * `W_ACK` value a `sim`/`gen` body already stores on every real wake, so it never disturbs the ack
  * lockstep a test driver locksteps against.
+ *
+ * **Leaves right after any pass that called `runAsync`** (M23 fix round 1, `Shell.consumeLeaveRequest`
+ * doc comment): checked after the drain-on-entry pass and after every pass inside the `for` loop.
+ * `W_PARKED` is not stored again on this exit (`runAsync` itself already stored it, before this
+ * function's own caller -- `runBodyOnce`, still on the same call stack -- ever returns), so the two
+ * exits (yielded, and this one) store it exactly once between them either way.
  */
 export function runBlockingLoop(
   shell: Shell,
@@ -218,6 +285,7 @@ export function runBlockingLoop(
   const { control, index } = shell
   let last = lastSeen ?? Atomics.load(control.words, workerWord(index, W_WAKE))
   if (!runBodyOnce(shell, body, last)) return
+  if (shell.consumeLeaveRequest()) return
   for (;;) {
     if (Atomics.load(control.words, workerWord(index, W_YIELD))) break
     control.waitForWake(index, last, timeoutMs())
@@ -229,6 +297,7 @@ export function runBlockingLoop(
     // pass later rather than re-checked twice here.
     last = Atomics.load(control.words, workerWord(index, W_WAKE))
     if (!runBodyOnce(shell, body, last)) return
+    if (shell.consumeLeaveRequest()) return
   }
   Atomics.store(control.words, workerWord(index, W_PARKED), 1)
 }

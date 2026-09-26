@@ -30,6 +30,14 @@ declare global {
     __dispatchPaintAt?: (x: number, y: number) => number
     __hudText?: () => string
     __errors?: () => string[]
+    __persistenceDebug?: () => Promise<{
+      logBytes: number
+      frames: number
+      snapshots: number
+      lastSnapshotBytes: number
+      syncs: number
+      snapshotDeferred: number
+    }>
   }
 }
 
@@ -217,6 +225,52 @@ test('world_survives_reload', async ({ page }) => {
   const replayed = await replayWorld({ wasm, storage, worldId, checkpoints: [resumed.tick] })
   expect(replayed).toHaveLength(1)
   expect(replayed[0]?.hash).toBe(resumed.hash)
+
+  expect(await page.evaluate(() => window.__errors?.())).toEqual([])
+})
+
+/**
+ * Coordinator fix round 1: "correctness is unaffected" did not hold with `pendingAsync()` never
+ * polled from `body()` -- every periodic snapshot after the first deferred forever (the next
+ * scratch handle only reopens at `flush()`, i.e. pause/stop), silently breaking 0005 Cadence's 60 s
+ * loss window for any session that stays visible. This proves the fix: a continuously paced,
+ * visible (never hidden/paused) session with the cadence lowered (`?snapshotEveryTicks=2`, ~100 ms
+ * at 20 Hz) lands at least three real snapshots in OPFS with `snapshotDeferred === 0`.
+ */
+test('paced_session_lands_periodic_snapshots', async ({ page }) => {
+  const worldId = `cadence-${test.info().workerIndex}-${Date.now()}`
+  await openPage(page, `/world.html?world=${worldId}&snapshotEveryTicks=2`)
+
+  // Each iteration dirties the world (a distinct tile, never a WALK member -- see the comments
+  // above) and waits past one cadence window (2 ticks, ~100 ms at 20 Hz) so the periodic check
+  // finds it dirty and actually snapshots -- never a fixed sleep standing in for the real event
+  // (0020 §4): the final assertion is what proves each wait was long enough, not this loop's own
+  // timing.
+  for (let i = 0; i < 4; i++) {
+    await page.evaluate((n) => window.__dispatchPaintAt?.(60 + n, 60 + n), i)
+    await page.waitForTimeout(150)
+  }
+
+  // The real ground truth, checked *before* anything parks the sim worker (`__dumpWorldStorage`
+  // spawns a wholly separate worker and never touches `W_YIELD`/`W_PARKED` on the sim worker itself
+  // -- unlike `__persistenceDebug` below, whose own `parkWorkers` would force exactly the drain a
+  // starved `runAsync` chain is missing, masking the bug this test exists to catch). No pruning has
+  // run (never paused/stopped here, and a genesis-based segment's own snapshots are never a pruning
+  // "base" -- `host/CLAUDE.md`), so every real snapshot key survives to be counted.
+  const dump = await page.evaluate((id) => window.__dumpWorldStorage?.(id), worldId)
+  const snapKeys = Object.keys(dump ?? {}).filter((k) => k.includes('/snap/'))
+  expect(snapKeys.length).toBeGreaterThanOrEqual(3)
+
+  // `__persistenceDebug` parks the sim worker (`parkWorkers`), so it must run *after* the dump
+  // above, never before: `Persistence.counters.snapshots++` runs synchronously right after
+  // `storage.write(...)` is *called*, whether or not that write's own bytes ever actually land, so
+  // this counter alone cannot tell a completed snapshot from one stuck in an unresolved promise
+  // chain -- it is corroborating evidence here, not the load-bearing assertion.
+  const counters = await page.evaluate(() => window.__persistenceDebug?.())
+  if (!counters)
+    throw new Error('paced_session_lands_periodic_snapshots: __persistenceDebug missing')
+  expect(counters.snapshots).toBeGreaterThanOrEqual(3)
+  expect(counters.snapshotDeferred).toBe(0)
 
   expect(await page.evaluate(() => window.__errors?.())).toEqual([])
 })

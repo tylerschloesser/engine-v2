@@ -89,6 +89,174 @@ test('shell.checks_yield_before_its_own_first_wait', () => {
 })
 
 /**
+ * M23 fix round 1: `Shell.runAsync`, called *from inside* an active `body()` pass, used to leave
+ * `fn` starved -- `runBlockingLoop` stored `W_PARKED = 1` (via `runAsync` itself) but then went
+ * straight back to `Atomics.wait`, which blocks the whole thread, so `fn`'s own promise chain (a
+ * microtask) never got a turn to run until *something else* woke that wait or it timed out; even
+ * then, the loop's own next `runBodyOnce` call raced `fn`'s continuation rather than waiting for it.
+ * Fixed: `runAsync` sets a `#leaveRequested` flag `runBlockingLoop` checks right after the pass that
+ * called it, leaving immediately (no second `W_PARKED` store -- `runAsync` already made it) instead
+ * of re-entering `Atomics.wait`. Proven failable: reverting `runBlockingLoop`'s own two
+ * `consumeLeaveRequest()` checks (this test's own regression target) made this test hang until
+ * `WAIT_MS`, misreading the timeout as a second wake and reaching `bodyCalls === 2` with `asyncRan`
+ * still `false` -- confirmed by hand, reverted.
+ */
+test('shell.runAsync_from_inside_body_leaves_and_reenters', async () => {
+  const control = new ControlBlock(createControlBlock())
+  const shell = createShell(control, INDEX)
+  let bodyCalls = 0
+  let asyncRan = false
+  let resolveAsync: () => void = () => {}
+  const asyncGate = new Promise<void>((resolve) => {
+    resolveAsync = resolve
+  })
+  let resolveDone: () => void = () => {}
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve
+  })
+
+  const seen = shell.observeWake()
+  Atomics.store(control.words, workerWord(INDEX, W_PARKED), 0)
+
+  runBlockingLoop(
+    shell,
+    () => {
+      bodyCalls++
+      if (bodyCalls === 1) {
+        shell.runAsync(async () => {
+          await asyncGate
+          asyncRan = true
+        })
+      } else {
+        Atomics.store(control.words, workerWord(INDEX, W_YIELD), 1)
+        control.wake(INDEX)
+        resolveDone()
+      }
+    },
+    () => WAIT_MS,
+    seen,
+  )
+
+  // `runBlockingLoop` must already have returned, synchronously, right after the one pass that
+  // called `runAsync` -- not after a real or timed-out `Atomics.wait`.
+  expect(bodyCalls).toBe(1)
+  expect(asyncRan).toBe(false)
+  expect(Atomics.load(control.words, workerWord(INDEX, W_PARKED))).toBe(1)
+
+  resolveAsync()
+  await done
+
+  expect(asyncRan).toBe(true)
+  expect(bodyCalls).toBe(2) // the async chain's own `.finally()` re-entered and drained on entry
+  expect(Atomics.load(control.words, workerWord(INDEX, W_PARKED))).toBe(1) // yielded out cleanly
+})
+
+/**
+ * M23 fix round 1: coherence for `parkWorkers`/`attachHostLifecycle`'s `sim-pause` while a
+ * `runAsync` chain is in flight -- `W_PARKED = 1` already means "not blocked, will accept a
+ * `postMessage`" the same way it does after a yielded exit, so `resume()` (a park's own `{ type:
+ * 'resume' }` handler) must not also start a second, concurrent `runBlockingLoop`: the in-flight
+ * chain's own `.finally()` owns the next entry. `resume()` still clears `W_YIELD` (a park issued
+ * while async work runs must not make the loop immediately re-yield once that work's own re-entry
+ * happens).
+ */
+test('shell.resume_does_not_start_a_second_loop_while_async_is_in_flight', async () => {
+  const control = new ControlBlock(createControlBlock())
+  const shell = createShell(control, INDEX)
+  let bodyCalls = 0
+  let resolveAsync: () => void = () => {}
+  const asyncGate = new Promise<void>((resolve) => {
+    resolveAsync = resolve
+  })
+  let resolveDone: () => void = () => {}
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve
+  })
+
+  const seen = shell.observeWake()
+  Atomics.store(control.words, workerWord(INDEX, W_PARKED), 0)
+
+  runBlockingLoop(
+    shell,
+    () => {
+      bodyCalls++
+      if (bodyCalls === 1) {
+        shell.runAsync(async () => {
+          await asyncGate
+        })
+      } else {
+        Atomics.store(control.words, workerWord(INDEX, W_YIELD), 1)
+        control.wake(INDEX)
+        resolveDone()
+      }
+    },
+    () => WAIT_MS,
+    seen,
+  )
+
+  Atomics.store(control.words, workerWord(INDEX, W_YIELD), 1) // a park request lands mid-flight
+  shell.resume()
+  expect(bodyCalls).toBe(1) // resume() did not touch the loop itself
+  expect(Atomics.load(control.words, workerWord(INDEX, W_YIELD))).toBe(0) // still cleared
+
+  resolveAsync()
+  await done
+
+  expect(bodyCalls).toBe(2)
+})
+
+/**
+ * M23 fix round 1, Planning decision 2's own "at most one at a time" precedent extended to `Shell`
+ * itself: a second `runAsync` call while one is already in flight is queued, FIFO, never dropped.
+ */
+test('shell.runAsync_queues_a_second_call_while_one_is_in_flight', async () => {
+  const control = new ControlBlock(createControlBlock())
+  const shell = createShell(control, INDEX)
+  let bodyCalls = 0
+  const order: string[] = []
+  let resolveFirst: () => void = () => {}
+  const firstGate = new Promise<void>((resolve) => {
+    resolveFirst = resolve
+  })
+  let resolveDone: () => void = () => {}
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve
+  })
+
+  const seen = shell.observeWake()
+  Atomics.store(control.words, workerWord(INDEX, W_PARKED), 0)
+
+  runBlockingLoop(
+    shell,
+    () => {
+      bodyCalls++
+      if (bodyCalls === 1) {
+        shell.runAsync(async () => {
+          await firstGate
+          order.push('first')
+        })
+        shell.runAsync(async () => {
+          order.push('second')
+        })
+      } else {
+        Atomics.store(control.words, workerWord(INDEX, W_YIELD), 1)
+        control.wake(INDEX)
+        resolveDone()
+      }
+    },
+    () => WAIT_MS,
+    seen,
+  )
+
+  expect(order).toEqual([]) // the second call did not run ahead of the first
+  resolveFirst()
+  await done
+
+  expect(order).toEqual(['first', 'second'])
+  expect(bodyCalls).toBe(2) // the loop re-entered once, after both settled -- not after the first
+})
+
+/**
  * The entry-drain fix (docs/plan/08b-gen-workers-and-queue.md, orchestrator decision 2 at the
  * step-5 boundary): `runBlockingLoop` must call `body(lastSeen)` once before its first
  * `Atomics.wait`, so a ring-driven worker resumed from parked drains whatever arrived while it

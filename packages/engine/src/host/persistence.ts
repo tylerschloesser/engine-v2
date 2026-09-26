@@ -26,9 +26,13 @@ const SNAPSHOT_EVERY_TICKS = 1200
 const SEGMENT_ROLL_BYTES = 4 * 1024 * 1024
 
 /** docs/plan/22b-persistence-load-and-fs.md Seams: the segment-roll option a test lowers to
- * exercise rolling without writing `SEGMENT_ROLL_BYTES` of log. */
+ * exercise rolling without writing `SEGMENT_ROLL_BYTES` of log. `snapshotEveryTicks`
+ * (docs/plan/23-persistence-opfs-and-lifecycle.md, coordinator fix round 1): the same idea for the
+ * *snapshot* cadence -- a real, continuously-paced OPFS behavioural test needs several periodic
+ * snapshots inside a `@slow`-free few seconds, far short of 1,200 real ticks at 20 Hz. */
 export interface PersistenceOptions {
   segmentRollBytes?: number
+  snapshotEveryTicks?: number
 }
 
 const textEncoder = new TextEncoder()
@@ -214,6 +218,7 @@ export class Persistence {
   private readonly sim: EngineInstance
   private readonly ticksPerSecond: number
   private readonly segmentRollBytes: number
+  private readonly snapshotEveryTicks: number
   private readonly snapshotBuffer = new SnapshotBuffer()
   /** Host metadata (Planning decisions 3), kept in memory and rewritten on a roll or a self-heal
    * (`healManifest`) -- `pruneSnapshots`'s own "every segment's base" question reads this, not
@@ -264,6 +269,7 @@ export class Persistence {
     this.sim = sim
     this.ticksPerSecond = ticksPerSecond
     this.segmentRollBytes = opts.segmentRollBytes ?? SEGMENT_ROLL_BYTES
+    this.snapshotEveryTicks = opts.snapshotEveryTicks ?? SNAPSHOT_EVERY_TICKS
     this.manifest = manifest
     this.segment = initial.segment
     this.logOffset = initial.logOffset
@@ -589,7 +595,7 @@ export class Persistence {
     this.checkFatal()
     this.tick = tick
     this.ticksSinceSnapshotCheck++
-    if (this.ticksSinceSnapshotCheck >= SNAPSHOT_EVERY_TICKS) {
+    if (this.ticksSinceSnapshotCheck >= this.snapshotEveryTicks) {
       this.ticksSinceSnapshotCheck = 0
       if (this.isDirty()) this.snapshotNow()
     }

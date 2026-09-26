@@ -22,11 +22,13 @@ import {
 } from '../../../../src/client.ts'
 import { CB_SIM_TICKS_RUN } from '../../../../src/sab/control.ts'
 import {
+  callParked,
   parkWorkers,
   worldHash as readWorldHash,
   resumeWorkers,
   simCounters,
 } from '../../../../src/test/client.ts'
+import { PERSISTENCE_DEBUG_CALL } from '../../../../src/worker/protocol.ts'
 import { fixtureWasm } from './fixture-wasm.ts'
 
 declare global {
@@ -51,6 +53,17 @@ declare global {
     __dispatchPaintAt?: (x: number, y: number) => number
     __hudText?: () => string
     __errors?: () => string[]
+    /** Coordinator fix round 1: `PersistenceCounters` plus `OpfsStorage.snapshotDeferred`, for
+     * `paced_session_lands_periodic_snapshots` alone (`PERSISTENCE_DEBUG_CALL`'s own doc comment --
+     * step 6's `persistenceCounters()` is the real, public seam). Requires the sim worker parked. */
+    __persistenceDebug?: () => Promise<{
+      logBytes: number
+      frames: number
+      snapshots: number
+      lastSnapshotBytes: number
+      syncs: number
+      snapshotDeferred: number
+    }>
   }
 }
 
@@ -61,6 +74,10 @@ const worldId = params.get('world') ?? 'device'
 // stubbed via `page.addInitScript` on the page's own `navigator` does not reach the sim worker's
 // separate global scope's `navigator`, so `TestFlags.noOpfs` is the real mechanism instead).
 const noOpfs = params.get('noOpfs') === '1'
+// The snapshot-cadence override for the periodic-OPFS-snapshot behavioural test (coordinator fix
+// round 1): `?snapshotEveryTicks=N` in place of 0005 Cadence's own 1,200.
+const snapshotEveryTicksParam = params.get('snapshotEveryTicks')
+const snapshotEveryTicks = snapshotEveryTicksParam ? Number(snapshotEveryTicksParam) : undefined
 
 const hudEl = document.createElement('pre')
 hudEl.id = 'hud'
@@ -136,7 +153,13 @@ const clientOptions: ClientOptions = {
   // `testEnabled` gate reads `message.test`, not `options.test` itself) and real-time sim pacing
   // (`worker/sim.ts`'s `!message.test || message.test.pace === true` gate) -- `slice.ts`'s own
   // `connected-paced.ts` combination, verbatim.
-  test: { flags: { pace: true, ...(noOpfs ? { noOpfs: true } : {}) } },
+  test: {
+    flags: {
+      pace: true,
+      ...(noOpfs ? { noOpfs: true } : {}),
+      ...(snapshotEveryTicks !== undefined ? { snapshotEveryTicks } : {}),
+    },
+  },
 }
 
 const storageStatuses: StorageStatus[] = []
@@ -206,6 +229,22 @@ window.__worldHashAndTick = async () => {
 window.__simTicksRun = () => {
   if (worldBusy) return 0
   return Atomics.load(clientTestHandle(client).control.words, CB_SIM_TICKS_RUN)
+}
+window.__persistenceDebug = async () => {
+  if (worldBusy) throw new Error('world.ts: __persistenceDebug called on a busy world')
+  await parkWorkers(client)
+  const { result } = await callParked(client, 'sim', PERSISTENCE_DEBUG_CALL, [], 24)
+  const view = new DataView(result.buffer, result.byteOffset, result.byteLength)
+  const counters = {
+    logBytes: view.getUint32(0, true),
+    frames: view.getUint32(4, true),
+    snapshots: view.getUint32(8, true),
+    lastSnapshotBytes: view.getUint32(12, true),
+    syncs: view.getUint32(16, true),
+    snapshotDeferred: view.getUint32(20, true),
+  }
+  await resumeWorkers(client)
+  return counters
 }
 
 // `hash`/`tick` refresh on discrete events only (page load, a Paint dispatch), never a periodic
