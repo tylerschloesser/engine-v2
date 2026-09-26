@@ -444,6 +444,10 @@
     }
   },
   "counters": {
+    "simWorker": {
+      "snapshotEventBytes": 3200,
+      "formula": "docs/plan/23-persistence-opfs-and-lifecycle.md step 6, Planning decision 1, resolved outside the strict window: `gc-sim.html?forceSnapshot=1`'s own `sim` isolate reads a stable 7280-7292 B over a 600-frame window with one `forceSnapshot()` forced at frame 300 (5 repeated runs), against the isolate's own 8 B/frame strict allowance (600 * 8 = 4800 B) as the base -- 7292 - 4800 = 2492 B attributable to the snapshot event itself (`Persistence.snapshotNow()`'s `sim_snapshot_*` streaming plus the queued OPFS scratch rename/reopen, `storage/opfs.ts`), * 1.25 margin = 3115, rounded up to 3200 for run-to-run jitter -- comfortably under the 4 KB/snapshot ceiling this decision's own formula caps at. `zero_gc_singleplayer_with_snapshot` (`gc-sim.spec.ts`) asserts `sim`'s own measured window total <= gc.pages.sim.isolates.sim.bytesPerFrame * 600 + this number, plus zero `MajorGC`. Without a forced snapshot (this page's own default, no query param) the isolate stays inside the plain 8 B/frame strict budget (`sim clean`) -- persistence's own per-tick bookkeeping costs nothing measurable when it never actually snapshots. ADR 0039 supersedes 0016's own deferred sentence with this finding."
+    },
     "sab": {
       "totalBytes": 12582912,
       "formula": "docs/decisions/0015-threads-memory-and-topology.md \u00a75's ~12 MiB SAB budget line, in bytes (12 * 1024 * 1024). Measured sab/layout.ts sabBytesTotal() (two gen workers, the worst case): 8,277,684 B (~7.9 MiB) -- control 256 B + camera 80 B + clock seqlock 36 B + drawList triple 3*(1,024 + 2,097,152) B + six single rings + two gen-worker ring pairs (docs/plan/06-sab-primitives-and-workers.md, Ring capacities)."

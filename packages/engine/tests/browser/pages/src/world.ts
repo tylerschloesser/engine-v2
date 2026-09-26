@@ -29,13 +29,12 @@ import {
 } from '../../../../src/client.ts'
 import { CB_SIM_TICKS_RUN } from '../../../../src/sab/control.ts'
 import {
-  callParked,
   parkWorkers,
+  persistenceCounters,
   worldHash as readWorldHash,
   resumeWorkers,
   simCounters,
 } from '../../../../src/test/client.ts'
-import { PERSISTENCE_DEBUG_CALL } from '../../../../src/worker/protocol.ts'
 import { fixtureWasm } from './fixture-wasm.ts'
 
 declare global {
@@ -369,16 +368,7 @@ window.__simTicksRun = () => {
 window.__persistenceDebug = async () => {
   if (unusable) throw new Error('world.ts: __persistenceDebug called on a busy/load-failed world')
   await parkWorkers(client)
-  const { result } = await callParked(client, 'sim', PERSISTENCE_DEBUG_CALL, [], 24)
-  const view = new DataView(result.buffer, result.byteOffset, result.byteLength)
-  const counters = {
-    logBytes: view.getUint32(0, true),
-    frames: view.getUint32(4, true),
-    snapshots: view.getUint32(8, true),
-    lastSnapshotBytes: view.getUint32(12, true),
-    syncs: view.getUint32(16, true),
-    snapshotDeferred: view.getUint32(20, true),
-  }
+  const counters = await persistenceCounters(client)
   await resumeWorkers(client)
   return counters
 }

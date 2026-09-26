@@ -295,6 +295,45 @@ of the M03/M04 harness. Two differences from a harness page:
   unresolved finding (docs/plan/06b-workers-and-spawn.md, Deviations "fix round 2"), not something to
   paper over with a wider budget without saying so.
 
+## Forcing a one-shot event inside the measured window
+
+docs/plan/23-persistence-opfs-and-lifecycle.md step 6 (Planning decision 1): a page sometimes needs
+to prove what happens when a *rare* event -- a periodic snapshot write, a segment roll, anything that
+fires far less than once per frame -- lands inside a real 600-frame zero-GC window, deterministically,
+rather than waiting on its own real cadence (1,200 ticks, say) or hoping it happens to land during the
+window at all.
+
+- **Trigger it with a dedicated global control word, not `postMessage`.** A production worker has no
+  spare message type for this (0015 §2, "postMessage is setup/fatal/lifecycle only"); add a global
+  word to `sab/control.ts` (the same monotonic-counter shape as `CB_SIM_STEP_REQ`: a caller
+  `Atomics.add`s 1, wakes the target worker, the worker's `body()` diffs it against the value it last
+  saw), and a thin `engine/test` wrapper (`forceSnapshot`, `src/test/client.ts`) that wakes and spins
+  on `W_ACK` the same way `stepSimTickSync` does. This works even while the worker sits in a real
+  `Atomics.wait` between real wakes -- no parking, no `postMessage`, safe to call from inside a
+  page's own measured `drive()` loop.
+- **Fire it on every `drive()` pass, not only the perf-marked one.** [0028](../../../docs/decisions/0028-zero-gc-two-measured-windows.md)'s
+  own two-consecutive-windows scheme reports the *lower* per-isolate total, to drop a one-off V8
+  tier-up burst that (by construction) lands in at most one window. A one-shot event gated to fire in
+  only one of the two windows (e.g. only when `instrument.ts`'s own `run(n, marked)` passes
+  `marked: true`) is exactly the shape 0028 is designed to discard -- measured directly, on this
+  milestone: gating the trigger on `marked` let the reported total fall back to the event-free
+  baseline about half the time, silently excluding the event's own cost. Firing at the same fixed
+  local frame number of *every* `run()` call -- both measured windows, and every warm-up pass, all of
+  which finish before `HeapProfiler.startSampling` ever begins -- means both windows carry exactly
+  one real event each, so the minimum still reports "steady state + one event" instead of a coin
+  flip.
+- **Budget the event separately from the isolate's own per-frame rate, if it does not fit.** Measure
+  the isolate's own window total with the event forced, subtract `strictBudget * frames` (the
+  isolate's own existing per-frame ceiling, not the empirical baseline -- using the ceiling is more
+  conservative and is what the runtime assertion itself checks against), add a margin, and store the
+  result as a plain number under `budgets.json`'s `counters.<name>.<thing>Bytes` (`tests/support/
+  budgets.ts`'s `budget(path)`/`expectWithinBudget`, a dotted-path lookup outside the `gc.pages`
+  per-isolate table). A bespoke test (not `zeroGcSuite`, which only knows the generic per-isolate
+  strict/budgeted shape) then asserts `r.totalBytes.<isolate> <= strictBudget * r.frames +
+  budget('counters.<name>.<thing>Bytes')` plus zero `MajorGC` (`docs/decisions/0039-snapshot-write-is-a-budgeted-event.md`
+  is the worked example: `simWorker.snapshotEventBytes`, `gc-sim.spec.ts`'s
+  `zero_gc_singleplayer_with_snapshot`).
+
 ## Changing a budget
 
 Raising a number in `budgets.json` is a reviewed change (0020 §9): never do it to make a test pass

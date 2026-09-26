@@ -7,7 +7,7 @@
 export const CONTROL_BLOCK_INT32S = 64
 export const CONTROL_BLOCK_BYTES = CONTROL_BLOCK_INT32S * 4
 
-// Global words (indices 0-7; 7 reserved).
+// Global words (indices 0-7, all now used as of `CB_FORCE_SNAPSHOT_REQ` below).
 export const CB_VERSION = 0
 export const CB_LIFECYCLE = 1
 export const CB_FRAME_REQ = 2
@@ -36,6 +36,18 @@ export const CB_SIM_STEP_REQ = 5
  * step 1: a park/resume per sample would itself perturb the pacing under test). Read-only for
  * everyone but the sim worker. One global word, same reasoning as `CB_SIM_STEP_REQ`. */
 export const CB_SIM_TICKS_RUN = 6
+/**
+ * docs/plan/23-persistence-opfs-and-lifecycle.md step 6: the sim worker's own force-a-snapshot-now
+ * request word, the same monotonic-counter shape as `CB_SIM_STEP_REQ` (a caller `Atomics.add`s 1,
+ * then wakes `WORKER_HOST`; `worker/sim.ts`'s `body()` diffs it against what it last saw and calls
+ * `persistence.snapshotNow()` once, unconditionally -- bypassing `sim_dirty()`'s own cadence guard,
+ * the same "bypasses the real cadence" relationship `CB_SIM_STEP_REQ` has to real-time pacing).
+ * `engine/test.forceSnapshot(client)` is the only caller: a real, deterministic snapshot inside a
+ * zero-GC page's own measured window (`zero_gc_singleplayer_with_snapshot`, Planning decision 1),
+ * without waiting on 1,200 real ticks or racing the periodic cadence's own timing. This was the last
+ * free global word (`CONTROL_BLOCK_INT32S`'s own header comment: "seven 8-word per-worker blocks",
+ * i.e. indices 0-7 global, 7 previously reserved). */
+export const CB_FORCE_SNAPSHOT_REQ = 7
 
 export const Lifecycle = { Booting: 0, Running: 1, Stopping: 2, Fatal: 3 } as const
 export type Lifecycle = (typeof Lifecycle)[keyof typeof Lifecycle]

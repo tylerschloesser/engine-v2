@@ -21,6 +21,7 @@ import { systemClock } from '../clock.js'
 import { Persistence, WorldLoadError } from '../host/persistence.js'
 import { RingConnection } from '../ring-connection.js'
 import {
+  CB_FORCE_SNAPSHOT_REQ,
   CB_SIM_STEP_REQ,
   CB_SIM_TICKS_RUN,
   W_ACK,
@@ -94,6 +95,37 @@ async function openWorldStorage(
     return { storage: memoryStorage(), durable: false }
   }
 }
+
+/** docs/plan/23-persistence-opfs-and-lifecycle.md step 6, `neg_control_snapshot_allocates`:
+ * `globalThis` property write, not a bare local -- the same reasoning `worker/gc-hook.ts`'s own
+ * `sinkHolder` doc comment gives (a bundler tree-shakes an unread local all the way down to
+ * nothing; a write to a property it cannot prove has no outside reader survives). */
+type SinkHolder = { __engineSimLeakSink?: unknown }
+const leakSinkHolder = globalThis as unknown as SinkHolder
+
+/** Wraps `storage.append` so every call also allocates one throwaway object (`TestFlags.
+ * leakyStorageAppend`), test-only and never calling the real underlying `append` (Deviations: real
+ * OPFS `append`'s own fast path turned out to cost ~28 B/call on its own here, an unrelated,
+ * previously-unmeasured finding -- `sim clean`'s own idle world never exercises it at all, since
+ * `fx-puts` never dirties without a real action -- which would otherwise swamp this control's own
+ * signal; recorded, not chased further, since this milestone's own question is the *snapshot*
+ * event, not steady-state `append`). Reassigning an own property on the adapter instance, not
+ * touching its prototype: every other method (`OpfsStorage`'s own `pendingAsync`/`scratchReady`/
+ * `snapshotDeferred`, or `MemoryStorage.crashClone`) is unaffected, and this world's own
+ * `Persistence` (which never calls `append` here: `fx-puts` under `gc-sim.ts` logs nothing) is
+ * unaffected either way. */
+function applyLeakyAppendHook(storage: Storage): void {
+  storage.append = (key: string): void => {
+    leakSinkHolder.__engineSimLeakSink = { key }
+  }
+}
+
+/** `neg_control_snapshot_allocates`'s own per-tick trigger: a synthetic `append` call to a key
+ * `Persistence`/the game never touch, so the control trips every tick regardless of whether that
+ * tick's own gameplay produced a loggable frame (0029: it must actually fire, not merely be armed).
+ */
+const LEAK_PROBE_KEY = 'debug/leak-probe'
+const LEAK_PROBE_BYTES = new Uint8Array(1)
 
 /** `client.onStorage`'s own argument (Planning decision 5): `persisted`/`usage`/`quota` read fresh
  * from `navigator.storage` every call (off the tick path -- called only at load and at a
@@ -280,6 +312,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     if (durable) opfsAdapter = storage as OpfsStorage
     worldStorage = storage
     runningWorldId = world.worldId
+    if (message.test?.leakyStorageAppend === true) applyLeakyAppendHook(storage)
 
     try {
       const opened = await Persistence.open(storage, world, newInstance, {
@@ -363,6 +396,9 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   if (connection) simHost.accept(connection)
 
   let lastStepReq = Atomics.load(shell.control.words, CB_SIM_STEP_REQ)
+  // docs/plan/23-persistence-opfs-and-lifecycle.md step 6: `CB_FORCE_SNAPSHOT_REQ`'s own "last seen"
+  // counter, the same diff-against-last-value shape as `lastStepReq` above.
+  let lastForceSnapshotReq = Atomics.load(shell.control.words, CB_FORCE_SNAPSHOT_REQ)
   // ADR 0030's `AtomicsTimer.poll()` fix (Deviations, "the highest-risk item"; Orchestrator ruling
   // 3): `poll()` fires its registered callback unconditionally on every `body()` pass, which is
   // correct only while nothing but the pacing timeout itself wakes this worker. Steps 1-3 landed
@@ -395,8 +431,14 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // driving on the same page only because such a page asserts allocation, never a resulting hash.
   if (!message.test || message.test.pace === true) simHost.start()
 
+  const leakyAppendArmed = message.test?.leakyStorageAppend === true
+
   function body(wokenBy: number): void {
     if (gcHook) applyGcHook(shell.control, shell.index)
+    // `neg_control_snapshot_allocates`'s own per-tick trigger (above): unconditional, every real
+    // wake, so the wrapped `append`'s own throwaway allocation actually fires inside the measured
+    // window regardless of gameplay.
+    if (leakyAppendArmed) worldStorage?.append(LEAK_PROBE_KEY, LEAK_PROBE_BYTES)
     // Drains every pending uplink message unconditionally, every wake (Scope: "its Atomics.wait
     // loop also wakes on the uplink ring's wake word") -- cheap when there is nothing queued
     // (`RingConnection.drainUplink`'s own loop breaks on the first empty `popInto`), and this is
@@ -408,6 +450,16 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       const delta = (stepReq - lastStepReq) >>> 0
       lastStepReq = stepReq
       simHost.stepTick(delta)
+    }
+    // docs/plan/23-persistence-opfs-and-lifecycle.md step 6, Planning decision 1: `engine/test.
+    // forceSnapshot()`'s own request word -- a real, deterministic snapshot inside a zero-GC page's
+    // measured window, bypassing `sim_dirty()`'s own cadence guard the periodic path uses (this is a
+    // *test* forcing exactly one snapshot event, not the production cadence). A no-op when this
+    // world has no `persistence` (every page but a persisted one, `message.world`'s own gate).
+    const forceSnapshotReq = Atomics.load(shell.control.words, CB_FORCE_SNAPSHOT_REQ)
+    if (forceSnapshotReq !== lastForceSnapshotReq) {
+      lastForceSnapshotReq = forceSnapshotReq
+      persistence?.snapshotNow()
     }
     if (wokenBy === lastWokenBy) atomicsTimer.poll()
     else atomicsTimer.interrupt()

@@ -28,33 +28,30 @@ first two adapters. Full context: `../CLAUDE.md`'s own `storage/` bullet.
 Every adapter here copies `bytes` before returning (0005: "an engine-owned view valid only during
 the call"), never retains the argument itself.
 
-- `opfs.ts` (docs/plan/23-persistence-opfs-and-lifecycle.md steps 1-2): `opfsStorage(worldId)` --
-  the OPFS row of the 0005 Storage table, browser-only, sim worker only (0015). Rejects with
-  `OpfsUnavailable` when `getDirectory()`/the first `createSyncAccessHandle()` fails. Keys map onto
-  nested OPFS directories one-for-one on `/`. `append`/`sync`'s fast path is a plain (non-`async`)
-  method returning `undefined`, no options object (a reused `APPEND_SEEK`, `.at` overwritten, seeks
-  once at open; every later `append` is a bare `write(view)`, cursor auto-advancing) -- an `async`
-  function always allocates a Promise even doing nothing async, which would cost the sim worker's
-  zero-GC budget every tick (`.claude/rules/hot-paths.md`, Planning decision 4). `write` (snapshot/
-  manifest/sessions) writes synchronously into an already-open `.scratch` handle and returns
-  `undefined`; the promise-only half (close, `move()` onto the real key, reopen the next scratch)
-  is queued as one closure behind `pendingAsync()`, polled from `worker/sim.ts`'s `body()` after
-  every pass and handed to `shell.runAsync` (Planning decision 2, wired for real in the coordinator's
-  own fix round: `runAsync` used to be starved when called *from inside* a `body()` pass -- fixed in
-  `shell.ts` itself, `Shell.consumeLeaveRequest`). `append`'s own first-ever-open per key is
-  serialized through one `#appendChain` promise (fix, this milestone): two un-awaited `append()`
-  calls to a new key (0005 "never awaits") otherwise both raced `createSyncAccessHandle` on the same
-  file. `scratchReady()`/`snapshotDeferred` are read by that same caller (Planning decision 2); a
-  `write()` with no scratch ready falls back to a direct, still-correct, non-allocation-free write,
-  draining any queued continuation first so calls land in call order. `read`/`list` consult an
-  in-flight-write map first, so a caller sees its own write immediately regardless of path. Decision
-  3 (Deviations): rename, not slot files --
-  `FileSystemFileHandle.move()`'s 2-arg form (`move(directory, name)`) works in Chromium, WebKit and
-  Firefox (WebKit's own 1-arg form throws) and overwrites an existing destination. Ambient types
-  (`createSyncAccessHandle`/`move`/`FileSystemSyncAccessHandle`, missing from `lib.dom.d.ts`) live in
-  `opfs-types.d.ts`, listed directly in any tsconfig that doesn't transitively import `opfs.ts`
-  (`../virtual.d.ts`'s own pattern). Test-only: Playwright's WebKit needs a real, on-disk profile for
-  OPFS at all (`launchPersistentContext`, not the default ephemeral context) -- any spec touching
-  OPFS uses `tests/browser/support/opfs-context.ts`'s `test`/`expect`, not the default ones -- and
-  does not isolate OPFS per profile the way Chromium/Firefox do, so a page using non-namespaced keys
-  wipes the whole OPFS root once at the very start (never in `opfsStorage` itself).
+- `opfs.ts` (docs/plan/23-persistence-opfs-and-lifecycle.md): `opfsStorage(worldId)` -- the OPFS row
+  of the 0005 Storage table, browser-only, sim worker only (0015). Rejects with `OpfsUnavailable`
+  when `getDirectory()`/the first `createSyncAccessHandle()` fails. Keys map onto nested OPFS
+  directories one-for-one on `/`. **Rules**: `append`/`sync`'s fast path is a plain (non-`async`)
+  method, no options object (one reused seek object, `.at` overwritten, at open only) -- an `async`
+  function always allocates a Promise even doing nothing async (`.claude/rules/hot-paths.md`).
+  `write()`'s promise-only half (close scratch, `move()`, reopen) is one closure behind
+  `pendingAsync()`, polled and self-yielded through `shell.runAsync` from `worker/sim.ts`'s `body()`
+  after every pass -- never awaited on the tick path. `append`'s first-ever-open per key is
+  serialized through one `#appendChain` (two un-awaited `append()`s to a new key otherwise race
+  `createSyncAccessHandle`); `read`/`list` consult an in-flight-write map so a caller sees its own
+  write immediately regardless of path. Rename, not slot files: `FileSystemFileHandle.move()`'s
+  2-arg form works in Chromium, WebKit and Firefox (WebKit's 1-arg form throws) and overwrites an
+  existing destination. Ambient types live in `opfs-types.d.ts`. Test-only: Playwright's WebKit needs
+  `launchPersistentContext` for OPFS at all, and does not isolate it per profile, so a spec using
+  non-namespaced keys wipes the whole root once at the start (`tests/browser/support/opfs-
+  context.ts`), never inside `opfsStorage` itself.
+- `archive.ts` (docs/plan/23-persistence-opfs-and-lifecycle.md step 5): `exportWorld`/`importWorld`/
+  `deleteWorld`, plain functions over any `Storage` (re-exported unchanged from `server.ts`). Archive
+  = gzip of `magic | version u16 | worldIdLen u16 | worldId | count u32 | (keyLen u16 | key relative
+  | dataLen u32 | data)*`, keys relative to `worlds/<id>/` so import can re-root under a different
+  id. `importWorld` refuses an existing target id without `overwrite` (`WorldExistsError`). Every
+  OPFS adapter instance shares the same origin-wide root (`getDirectory()`), so the *running* world's
+  own already-open `storage` reaches any other world's keys too -- `worker/sim.ts`'s export/import/
+  delete request handler never opens a second `opfsStorage()` instance for a different id.
+  `zero_gc_singleplayer_with_snapshot`'s own `forceSnapshot()` (`engine/test`, `gc-test` skill) is the
+  deterministic way to land one real snapshot inside a measured zero-GC window.

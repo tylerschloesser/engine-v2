@@ -48,6 +48,14 @@ export type TestFlags = {
    * continuously-paced behavioural test can observe several periodic OPFS snapshots inside a few
    * seconds instead of 1,200 real ticks at 20 Hz. */
   snapshotEveryTicks?: number
+  /** `worker/sim.ts` only (docs/plan/23-persistence-opfs-and-lifecycle.md step 6,
+   * `neg_control_snapshot_allocates`): wraps the persisted world's own `Storage.append` so every
+   * call also allocates one throwaway object, and forces one synthetic `append` call per real tick
+   * (to a dummy debug key `Persistence`/the game never touch) so the control actually trips every
+   * tick regardless of whether that tick's own gameplay produced a loggable frame (0029: a control
+   * that never fires is a defect in the instrument, never something to fix by widening). Sim worker
+   * only, by construction (no other kind ever gets `message.world`). */
+  leakyStorageAppend?: boolean
 }
 
 export type SetupMessage = {

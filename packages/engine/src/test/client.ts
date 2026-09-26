@@ -9,6 +9,7 @@ import type { ActionOutcome, Client, ClientTestHandle, WorkerEntry } from '../cl
 import { clientTestHandle } from '../client.js'
 import { createResyncingClock, type ResyncingClock } from '../clock.js'
 import {
+  CB_FORCE_SNAPSHOT_REQ,
   CB_FRAME_REQ,
   CB_SIM_STEP_REQ,
   CB_TEST_CONTROL,
@@ -30,6 +31,8 @@ import type { FromWorker, ToWorker } from '../worker/protocol.js'
 import {
   isolateName,
   NET_COUNTERS_CALL,
+  PERSISTENCE_DEBUG_BYTES,
+  PERSISTENCE_DEBUG_CALL,
   SIM_COUNTERS_BYTES,
   SIM_COUNTERS_CALL,
 } from '../worker/protocol.js'
@@ -642,6 +645,71 @@ export async function simCounters(client: Client): Promise<SimHostCounters> {
     tickOverruns: view.getUint32(8, true),
     chunksWarmed: view.getUint32(12, true),
     genOnMiss: view.getUint32(16, true),
+  }
+}
+
+/**
+ * docs/plan/23-persistence-opfs-and-lifecycle.md step 6, Seams: forces exactly one real snapshot
+ * (`Persistence.snapshotNow()`, bypassing `sim_dirty()`'s own cadence guard) on the persisted sim
+ * worker, the same "bump a `CB_*` word, wake, spin on `W_ACK`" shape as `stepSimTickSync` -- safe to
+ * call from inside a zero-GC page's own measured `drive()` loop (`gc-sim.ts`), unlike a
+ * `parkWorkers` round trip. Throws synchronously if no `sim`-kind worker was spawned or it never
+ * acks. `zero_gc_singleplayer_with_snapshot` calls this once, inside the measured window (Planning
+ * decision 1).
+ */
+export function forceSnapshot(client: Client): void {
+  const h = clientTestHandle(client)
+  let hasSim = false
+  for (let i = 0; i < h.workers.length; i++) {
+    if ((h.workers[i] as WorkerEntry).kind === 'sim') {
+      hasSim = true
+      break
+    }
+  }
+  if (!hasSim) {
+    throw new Error('forceSnapshot: no sim-kind worker was spawned')
+  }
+  Atomics.add(h.control.words, CB_FORCE_SNAPSHOT_REQ, 1)
+  h.control.wake(WORKER_HOST)
+  const want = Atomics.load(h.control.words, workerWord(WORKER_HOST, W_WAKE))
+  let spins = 0
+  while (Atomics.load(h.control.words, workerWord(WORKER_HOST, W_ACK)) < want) {
+    if (++spins > SPIN_LIMIT) {
+      throw new Error(
+        spinTimeoutMessage(h, 'forceSnapshot: the sim worker did not ack the request', spins),
+      )
+    }
+  }
+}
+
+/** docs/plan/23-persistence-opfs-and-lifecycle.md step 6, Seams: `PersistenceCounters` (`host/
+ * persistence.ts`) plus the OPFS adapter's own `snapshotDeferred`, read through the synthetic
+ * `test-call` name `worker/sim.ts`'s `testCall` handles directly (`PERSISTENCE_DEBUG_CALL`) -- the
+ * "real, public seam" `PERSISTENCE_DEBUG_CALL`'s own doc comment named this range as owning.
+ * Requires the sim worker parked, same precondition as `worldHash`/`simCounters`. */
+export async function persistenceCounters(client: Client): Promise<{
+  logBytes: number
+  frames: number
+  snapshots: number
+  lastSnapshotBytes: number
+  syncs: number
+  snapshotDeferred: number
+}> {
+  const { result } = await callParked(
+    client,
+    'sim',
+    PERSISTENCE_DEBUG_CALL,
+    [],
+    PERSISTENCE_DEBUG_BYTES,
+  )
+  const view = new DataView(result.buffer, result.byteOffset, result.byteLength)
+  return {
+    logBytes: view.getUint32(0, true),
+    frames: view.getUint32(4, true),
+    snapshots: view.getUint32(8, true),
+    lastSnapshotBytes: view.getUint32(12, true),
+    syncs: view.getUint32(16, true),
+    snapshotDeferred: view.getUint32(20, true),
   }
 }
 
