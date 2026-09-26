@@ -1,6 +1,6 @@
 # M24b: Upgrade path: `SCHEMA_VERSION`, `migrate`, `OldStore`, `SaveIncompatible`, Tick rescale
 
-Status: not started · After: 24 (needs 22b, 23's `start-failed` carrier and 24's `onRecovered`) · Tyler-dependent: Q9, "what should a game do with a save it cannot load?" (unanswered; same question as M23; default assumed: `client.ready` rejects with `'save-incompatible'`, files untouched, `exportWorld` / `deleteWorld` still work)
+Status: done · After: 24 (needs 22b, 23's `start-failed` carrier and 24's `onRecovered`) · Tyler-dependent: Q9, "what should a game do with a save it cannot load?" (unanswered; same question as M23; default assumed: `client.ready` rejects with `'save-incompatible'`, files untouched, `exportWorld` / `deleteWorld` still work)
 
 Split from PLAN row 24 (see M24).
 
@@ -68,10 +68,10 @@ A `migrate` for the reference game (not planned; M32–M34 may add one only if T
 - Browser: `save_incompatible_rejects_ready_and_export_still_works`.
 
 ## Exit criteria
-- [ ] All tests above pass by name.
-- [ ] `OldStore`, `OldValue`, `Rescale`, `RescaleTicks`, `SaveIncompatible` are public in crate `engine` with rustdoc examples that compile (doc-tests run in the Rust suite).
-- [ ] Import allowlist and ABI export-list tests pass for the three new fixtures.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name.
+- [x] `OldStore`, `OldValue`, `Rescale`, `RescaleTicks`, `SaveIncompatible` are public in crate `engine` with rustdoc examples that compile (doc-tests run in the Rust suite).
+- [x] Import allowlist and ABI export-list tests pass for the three new fixtures.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t migrate` · `pnpm test rust -t rescale` · `pnpm test wasm -t upgrade` · `pnpm test wasm -t save_incompatible` · `pnpm test` · `pnpm lint`
@@ -525,3 +525,5 @@ no upgrade). Proved both real defects by injection, rebuilt, ran, reverted:
 `pnpm test wasm`: 144 -> 147 (3 new: `TickRate`, `Same`, corrupt-header). `rust`/`unit` unchanged
 (551/251). `browser` 201 (one flaky Chromium context-crash rerun, unrelated to this change: green on
 rerun). `pnpm test && pnpm lint` green on `HEAD`. No golden moved.
+
+**Gate (orchestrator).** Cut 1-3 / 4-5, two implementers, one fix round on the first, two gate fix rounds on a fresh third, one review agent. Rulings: a `SCHEMA_VERSION` difference in either direction goes to `migrate` (the first half had added an early `Incompatible` for a newer stored schema; downgrade support is the game's call); `OldValue::decode<T: Codec>` accepted; `IncompatReason` in the `Result` region rather than the boot region accepted; the M22b test `identity_mismatch_throws_world_load_error_and_writes_nothing` was renamed `rules_only_buildhash_change_now_upgrades_instead_of_throwing` with its expectation flipped, approved because M24b's Goal supersedes its premise and the write-nothing guarantee now lives in the dedicated incompatible tests. **The gate found `loadLatest`'s genesis-replay fallback never checked identity**, so a world younger than its first snapshot, opened by a different build, replayed its old log under new rules; gate fix 1 added the check, and **the review agent then found two defects in that fix**: a corrupt-but-present segment-0 header silently passed as `Same` (three garbage bytes plus a schema bump opened successfully), and the check used a TS mirror of `Identity::compare` whose `TickRate`/`Worldgen` branches could be swapped with all 144 wasm tests green. Gate fix 2 rejects a corrupt header with `WorldLoadError('corrupt')` (the first time that kind is thrown) and deletes the mirror in favour of `sim_identity_compare(len)`, so the decision matrix exists once, in Rust. A world with no snapshot yet cannot be migrated across a schema, tick-rate or worldgen change, only direct-loaded (documented). A research fork spawned by the steps-4-5 implementer edited the tree past two stop requests; its work was reviewed and completed by that implementer (Deviations). Final gate: `rust` 551, `unit` 251, `wasm` 147, `browser` 201 at 33 s of 48 s, lint clean, `ABI_VERSION` 23.
