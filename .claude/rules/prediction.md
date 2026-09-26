@@ -31,6 +31,16 @@ In a game's `apply`/`predict`/`admit` and in the fixtures under `predict/`:
   player as a rejection on its own -- the action is still sent, and only the host's own ack
   (`Confirmed`/`Rejected` through `ActionResults`) is authoritative. `NotPredictable` means "no
   ghost yet", not "rejected".
+- **Texel conversion always reads overlay-then-replica, and is triggered only through the dirty
+  set** (docs/plan/26-prediction-rendering-and-clocks.md): a chunk's `CHUNK` upload record
+  (`client/upload.rs`'s `Uploader::stage_predicted`) reads pristine, then the replica's own
+  overlay, then the prediction overlay's effective tiles (`Overlay::effective_tiles`) on top --
+  never the prediction overlay alone, and never outside a dirty-chunk re-stage
+  (`ClientCore::mark_dirty`/`OverlayDiff`, the one and only path that decides a chunk needs
+  re-staging; a per-frame unconditional re-scan would defeat "no upload while unchanged"). Key
+  cross-ack client state by tile, not by transient upload bookkeeping: the ghost-to-real swap at
+  an ack is a property of the *overlay* going empty for that tile (`OverlayDiff` sees it removed),
+  not of any upload-side identity a slot/record carries from one frame to the next.
 
 Verified by `fixtures/predict`'s own `loopback`/`alloc` suites (`pnpm test rust -t predict`); the
 replay loop's own zero-allocation property is `predict_alloc`, proven failable per file of
