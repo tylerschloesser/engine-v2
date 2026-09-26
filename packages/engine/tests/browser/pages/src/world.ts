@@ -239,6 +239,11 @@ let worldBusy = false
 // (`export_works_after_load_failure`), but nothing else here should touch a world that never loaded
 // (paint, hash reads, `attachHostLifecycle`'s pause/resume), so every gate below reads `unusable`.
 let loadFailed = false
+// docs/plan/24b-upgrade-and-migration.md: `'load-failed'`'s own sibling for an identity/schema/
+// tick-rate/worldgen/chunk-size mismatch that ends in `SaveIncompatible` (0005 Upgrades) -- the same
+// degraded-but-alive worker as `load-failed` (`exportWorld`/`deleteWorld` still work,
+// `save_incompatible_rejects_ready_and_export_still_works`), so it joins `unusable` the same way.
+let saveIncompatible = false
 let readyErrorCode: string | undefined
 
 const client: Client = createClient(clientOptions)
@@ -256,12 +261,15 @@ try {
   } else if (e instanceof EngineStartError && e.code === 'load-failed') {
     loadFailed = true
     setWorldOpStatus(`load-failed: ${e.message}`)
+  } else if (e instanceof EngineStartError && e.code === 'save-incompatible') {
+    saveIncompatible = true
+    setWorldOpStatus(`save-incompatible: ${e.message}`)
   } else {
     throw e
   }
 }
 
-const unusable = worldBusy || loadFailed
+const unusable = worldBusy || loadFailed || saveIncompatible
 window.__worldBusy = () => worldBusy
 window.__readyErrorCode = () => readyErrorCode
 
@@ -439,6 +447,7 @@ function hudText(): string {
     `world: ${worldId}`,
     `worldBusy: ${worldBusy}`,
     `loadFailed: ${loadFailed}`,
+    `saveIncompatible: ${saveIncompatible}`,
     `hash: ${lastHash}`,
     `tick: ${lastTick}`,
     `durable: ${status ? status.durable : '(pending)'}`,

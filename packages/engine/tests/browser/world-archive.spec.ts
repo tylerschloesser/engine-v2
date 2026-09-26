@@ -166,6 +166,52 @@ test('export_works_after_load_failure', async ({ page }) => {
   expect(await page.evaluate(() => window.__errors?.())).toEqual([])
 })
 
+/** docs/plan/24b-upgrade-and-migration.md step 5: `client.ready` rejects with `EngineStartError
+ * { code: 'save-incompatible' }` for a stored world whose manifest names a `chunkBits` the running
+ * build cannot satisfy (Scope: "`Persistence.open` compares [chunkBits] ... before any load") --
+ * still-valid JSON, unlike `export_works_after_load_failure`'s own garbage-manifest trigger, so this
+ * is a genuine `'incompatible'`/`ChunkSize` mismatch, not a generic parse failure. `exportWorld`/
+ * `deleteWorld` stay usable on the resulting degraded worker, exactly like `'load-failed'`. */
+test('save_incompatible_rejects_ready_and_export_still_works', async ({ page }) => {
+  const worldId = `saveincompat-${test.info().workerIndex}-${Date.now()}`
+  await openPage(page, `/world.html?world=${worldId}`)
+  await page.evaluate(() => window.__dispatchPaintAt?.(54, 54))
+  await page.evaluate(() => window.__worldSetHidden?.(true))
+  await waitForASnapshot(page, worldId)
+
+  const dump = await page.evaluate((id) => window.__dumpWorldStorage?.(id), worldId)
+  const manifestBytes = dump?.[`worlds/${worldId}/manifest`]
+  if (!manifestBytes) throw new Error('save_incompatible: expected a manifest')
+  const manifest = JSON.parse(new TextDecoder().decode(Uint8Array.from(manifestBytes))) as {
+    params: { chunkBits?: number }
+  }
+  const runningChunkBits = manifest.params.chunkBits ?? 5
+  manifest.params.chunkBits = runningChunkBits + 1
+  const corruptedBytes = Array.from(new TextEncoder().encode(JSON.stringify(manifest)))
+  await page.evaluate(({ id, bytes }) => window.__corruptWorldKey?.(id, 'manifest', bytes), {
+    id: worldId,
+    bytes: corruptedBytes,
+  })
+
+  await page.reload()
+  await page.waitForFunction(() => window.__pageReady === true)
+  expect(await page.evaluate(() => window.__worldBusy?.())).toBe(false)
+  expect(await page.evaluate(() => window.__readyErrorCode?.())).toBe('save-incompatible')
+
+  // Scope: `exportWorld`/`deleteWorld` still work on a world that failed to load.
+  const bytes = await page.evaluate(() => window.__exportWorld?.())
+  if (!bytes) throw new Error('save_incompatible: __exportWorld returned nothing')
+  expect(bytes.length).toBeGreaterThan(0)
+  const dumpAfterExport = await page.evaluate((id) => window.__dumpWorldStorage?.(id), worldId)
+  expect(Object.keys(dumpAfterExport ?? {})).toContain(`worlds/${worldId}/manifest`)
+
+  await page.evaluate((id) => window.__deleteWorld?.(id), worldId)
+  const afterDelete = await page.evaluate((id) => window.__dumpWorldStorage?.(id), worldId)
+  expect(afterDelete).toEqual({})
+
+  expect(await page.evaluate(() => window.__errors?.())).toEqual([])
+})
+
 /**
  * Rules and traps: "an export requested while a hidden-boundary pause is in flight (and vice versa)
  * must be well-defined" -- overlapping a `visibilitychange -> hidden` with an `exportWorld()` call
