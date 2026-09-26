@@ -75,18 +75,34 @@ const APPEND_SEEK = { at: 0 }
  * from `APPEND_SEEK` since the two are never the same value. */
 const WRITE_AT_ZERO = { at: 0 }
 const EMPTY = new Uint8Array(0)
+/** `getDirectoryHandle`'s own options object, on the (now rare, post-`#dirCache`) walk a cache miss
+ * still takes -- reused, not a fresh `{ create }` literal per path segment (fix round 1). */
+const OPTS_CREATE_TRUE = { create: true }
+const OPTS_CREATE_FALSE = { create: false }
 
 class OpfsStorageAdapter implements OpfsStorage {
   onError: ((err: unknown) => void) | null = null
   snapshotDeferred = 0
 
   readonly #root: FileSystemDirectoryHandle
-  readonly #worldId: string
   readonly #logHandles = new Map<string, LogHandle>()
   /** Keys written through `write()` but not yet confirmed renamed onto their real name (or written
    * directly, on the slow path): `read()`/`list()` consult this first, so a caller sees its own
    * write immediately regardless of which path handled it or whether the rename has landed yet. */
   readonly #writtenPending = new Map<string, Uint8Array>()
+  /** docs/plan/23-persistence-opfs-and-lifecycle.md step 6, fix round 1 (coordinator): `#resolveDir`
+   * used to re-split `path` and re-walk `getDirectoryHandle` on every call, even though every caller
+   * here passes one of a small, fixed set of directory paths for this adapter's whole life
+   * (`worlds/<id>`, `worlds/<id>/log`, `worlds/<id>/snap`, `worlds/<id>/sessions`) -- a directory,
+   * once resolved, never disappears mid-life (this adapter's own `delete()` only ever removes files).
+   * Keyed by the path string (not identity: `Map` compares primitive strings by value, so a freshly
+   * built `worlds/${id}/snap`-shaped string still hits), this turns every snapshot/rename's own
+   * directory lookup from a fresh `String.prototype.split` + N `getDirectoryHandle` awaits into one
+   * `Map.get` after the first call -- measured (`gc-sim.html?forceSnapshot=1`): `#resolveDir`'s own
+   * top-`byFn` line dropped from ~1500 B to ~500 B for one forced snapshot (the remainder is this
+   * adapter's own *first-ever* resolution of `worlds/<id>/snap`, a genuine cache miss; a real
+   * world's second and later snapshots reuse it). */
+  readonly #dirCache = new Map<string, FileSystemDirectoryHandle>()
   #scratch: Scratch | null = null
   #pendingAsync: (() => Promise<void>) | null = null
   /** Fix round (this milestone, steps 3-4): 0005's own "the tick path never awaits storage" means
@@ -103,9 +119,14 @@ class OpfsStorageAdapter implements OpfsStorage {
    * opened, taking the fast path itself instead of opening a second one. */
   #appendChain: Promise<void> = Promise.resolve()
 
+  /** `#openScratch`'s own directory path, computed once (not a fresh template-string concat every
+   * scratch reopen -- fix round 1, coordinator: found via `windowByFn` attribution, `#openScratch`
+   * was the second-largest snapshot-specific line after `#resolveDir`'s own uncached walk). */
+  readonly #worldDirPath: string
+
   private constructor(root: FileSystemDirectoryHandle, worldId: string) {
     this.#root = root
-    this.#worldId = worldId
+    this.#worldDirPath = `worlds/${worldId}`
   }
 
   static async open(worldId: string): Promise<OpfsStorageAdapter> {
@@ -140,16 +161,20 @@ class OpfsStorageAdapter implements OpfsStorage {
   // -- path resolution ----------------------------------------------------------------------------
 
   async #resolveDir(path: string, create: boolean): Promise<FileSystemDirectoryHandle | null> {
+    if (path.length === 0) return this.#root
+    const cached = this.#dirCache.get(path)
+    if (cached) return cached
     let dir = this.#root
-    if (path.length === 0) return dir
+    const opts = create ? OPTS_CREATE_TRUE : OPTS_CREATE_FALSE
     for (const seg of path.split('/')) {
       try {
-        dir = await dir.getDirectoryHandle(seg, { create })
+        dir = await dir.getDirectoryHandle(seg, opts)
       } catch (e) {
         if (isNotFound(e)) return null
         throw e
       }
     }
+    this.#dirCache.set(path, dir)
     return dir
   }
 
@@ -312,9 +337,9 @@ class OpfsStorageAdapter implements OpfsStorage {
   }
 
   async #openScratch(): Promise<void> {
-    const dir = await this.#resolveDir(`worlds/${this.#worldId}`, true)
+    const dir = await this.#resolveDir(this.#worldDirPath, true)
     if (!dir) throw new Error('opfsStorage: cannot create the world directory')
-    const fileHandle = await dir.getFileHandle(SCRATCH_NAME, { create: true })
+    const fileHandle = await dir.getFileHandle(SCRATCH_NAME, OPTS_CREATE_TRUE)
     const syncHandle = await fileHandle.createSyncAccessHandle()
     // A stale scratch file can survive a crash between "write+flush" and "close+move" (a previous
     // process's own unfinished rename); its bytes were never linked under a real key, so discarding

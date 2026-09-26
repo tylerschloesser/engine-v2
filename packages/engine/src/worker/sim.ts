@@ -85,10 +85,18 @@ function tryAcquireWorldLock(worldId: string): Promise<boolean> {
  * releasing this exact lock name against the *new* document's very first `tryAcquireWorldLock` call
  * -- `ifAvailable: true` never waits, so a transient overlap (measured: reproduced 2/3 runs under
  * full-suite contention, 0/12 in isolation) reported a spurious `world-busy` for a world nothing else
- * actually held. A real second tab's own lock does not clear between retries, so this changes nothing
- * about `second_tab_gets_world_busy`'s own outcome, only how fast a *reload* is told the lock is
- * free again. Five attempts, 50 ms apart (250 ms worst case) -- comfortably inside every reload
- * test's own timeout budget. */
+ * actually held.
+ *
+ * Not a mask for the real `WorldBusy` case (coordinator review): the Web Lock a genuinely concurrent
+ * second tab holds is held *forever* (`tryAcquireWorldLock`'s own callback never resolves its
+ * promise, by construction, for as long as that tab's own worker lives) -- every one of the 5
+ * attempts here sees it unavailable, identically, whether there are 1 or 5 attempts. A real second
+ * tab therefore still always ends up `world-busy`, just up to 200 ms slower to be told so (4 waits
+ * of 50 ms between 5 attempts) than a single `ifAvailable` check would report -- `second_tab_gets_
+ * world_busy` still exercises this exact path (its own `expect(...).toBe(true)` has no tight timing
+ * budget, and passed unchanged after this fix, `pnpm test browser` x2 plus a 5x repeat). What changes
+ * is only the *reload* case: there, the "holder" is a worker already mid-teardown with nothing left
+ * to hold the lock for, so it clears within the retry window instead of never. */
 async function requestWorldLock(worldId: string): Promise<boolean> {
   const attempts = 5
   const retryDelayMs = 50

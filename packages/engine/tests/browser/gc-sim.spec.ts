@@ -26,26 +26,34 @@ zeroGcSuite({
 })
 
 /**
- * Planning decision 1, resolved outside the strict window (`gc-sim.ts`'s own Deviations has the
- * full measurement): the forced snapshot's own marginal cost (~4.5 KB, one `write()` plus its queued
- * OPFS rename/reopen) does not fit the 8 B/frame strict budget, so it is asserted here as a budgeted
- * event instead -- `budgets.json`'s `counters.simWorker.snapshotEventBytes` (ADR 0039, superseding
- * 0016's own deferred sentence) -- on top of the isolate's own already-known strict per-frame rate.
- * Zero `MajorGC` is still required (Planning decision 1: "zero `MajorGC`").
+ * Planning decision 1, resolved outside the strict window (`budgets.json`'s own `counters.simWorker`
+ * formula has the full measurement, corrected in fix round 1): the forced snapshot's own marginal
+ * cost does not fit the 8 B/frame strict budget, so it is asserted here as a budgeted *event*
+ * instead -- `snapshotEventBytes` (ADR 0039, superseding 0016's own deferred sentence) -- but as a
+ * delta against `snapshotFreeBytesPerFrame` (the isolate's own tight *measured* snapshot-free rate),
+ * never against the isolate's own separate strict *allowance* (fix round 1, coordinator correction:
+ * subtracting the loose 8 B/frame ceiling instead of the ~4.6-4.8 B/frame this page's own idle world
+ * actually measures let ~2 KB of unused strict slack silently absorb real snapshot growth -- ADR
+ * 0029's failure mode, arrived at through arithmetic rather than a widened number). Zero `MajorGC` is
+ * still required (Planning decision 1: "zero `MajorGC`").
  */
 test('zero_gc_singleplayer_with_snapshot', async ({ page, browser }) => {
   await openPage(page, '/gc-sim.html?forceSnapshot=1')
   const r = await measure(page, browser, { pageId: 'sim', control: null })
   expect(r.errors, 'errors').toEqual([])
   expect(r.gc.sim?.MajorGC ?? 0, `MajorGC: ${JSON.stringify(r.gc.sim)}`).toBe(0)
-  const strictBudget = budget('gc.pages.sim.isolates.sim.bytesPerFrame')
+  const snapshotFreeBytesPerFrame = budget('counters.simWorker.snapshotFreeBytesPerFrame')
   const snapshotEventBudget = budget('counters.simWorker.snapshotEventBytes')
-  const allowed = strictBudget * r.frames + snapshotEventBudget
+  const totalBytesSim = r.totalBytes.sim ?? 0
+  const delta = totalBytesSim - snapshotFreeBytesPerFrame * r.frames
   expect(
-    r.totalBytes.sim,
-    `sim: ${r.totalBytes.sim} B over ${r.frames} frames (one forced snapshot) exceeds ` +
-      `${strictBudget} B/frame * ${r.frames} + ${snapshotEventBudget} B snapshot budget = ${allowed}`,
-  ).toBeLessThanOrEqual(allowed)
+    delta,
+    `sim: ${totalBytesSim} B over ${r.frames} frames (one forced snapshot) minus the measured ` +
+      `snapshot-free rate (${snapshotFreeBytesPerFrame} B/frame * ${r.frames} = ` +
+      `${snapshotFreeBytesPerFrame * r.frames} B) leaves a ${delta} B snapshot-attributable delta, ` +
+      `over the ${snapshotEventBudget} B snapshotEventBytes budget. windowByFn.sim: ` +
+      `${JSON.stringify(r.windowByFn.sim)}`,
+  ).toBeLessThanOrEqual(snapshotEventBudget)
 })
 
 /**
