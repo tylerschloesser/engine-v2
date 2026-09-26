@@ -94,3 +94,122 @@ none
 
 ## Deviations
 (filled in during Phase 3)
+
+**Steps 1-4 (this implementer).** Commits `8016845`..`3fca3bd`. All named seams landed under the
+brief's exact names except where noted below.
+
+- **`Predicting<'a, G>` is generic over `&dyn WorldRead<G>` + `&Registry`, not a concrete
+  `Replica<G>`.** `tests/main/module_layering.rs` forbids anything outside `client/`/`host/`/
+  `abi/`/`testing/` from naming `crate::client`/`crate::host` (a source-string scan, catches doc
+  comments too). Every read `Predicting`/`predict()` need -- including "is this chunk held" for a
+  blind-write check, done by probing `base.tile(p)`/`base.tile(dims.tile_at(chunk, 0))` rather than
+  a dedicated predicate -- is already exactly what `WorldRead` exposes, so `predict/` never needs
+  the client module at all. `client::core::ClientCore` is the one place that builds `&*replica as
+  &dyn WorldRead<G>` and passes it in.
+- **Provisional ids are a temporary placeholder, not `EntityId::provisional`.** `predicting.rs`'s
+  private `temp_provisional_id(seq, n)` sets bit 31 (so `is_provisional()` holds) but is not the
+  0022 §5 layout, is not named `EntityId::provisional`, and has no 513-spawn cap or `Deserialize`
+  guard -- all explicitly step 5's, assigned to the second implementer. Every ported test that
+  needs a provisional id (placement converging, the dependent-deposit test) only needs *some*
+  stable, distinct, bit-31-set id, which this satisfies; nothing in steps 1-4 depends on the exact
+  bit layout.
+- **`entity(id)`'s Unknown-vs-`None` distinction (0022 §7) is not implemented.** `Predicting::
+  entity`/`world_access::View::entity` still delegate to the base read for a miss, which for
+  `Replica` today is `Ok(None)` for any id it has never seen (a real id it does not hold, or a
+  provisional one) -- the fixture's own tests never distinguish the two cases; `entity_id_gone_vs_
+  unsubscribed` (step 5-8's own test) is what actually needs it.
+- **`entities_in`'s overlay merge is not implemented** (M25 step 8, the cut line): `Predicting`/
+  `View` both delegate to the base read unconditionally. `entities_in_merges_overlay`/`entities_in_
+  order_matches_authority` are not in this implementer's test list.
+- **The taint plug-in point is a comment, not a hook function.** `ClientCore::on_frame`'s replay
+  loop calls `predict()` once per pending action with nothing between them (R0, "every pending
+  action predicted on its own merits") -- a doc comment at that exact call site says where a taint
+  rule (step 6) inserts its own check before calling `predict`. No strategy trait or enum exists
+  yet; one small `if` at that line is enough for R1, so nothing was built in advance that step 6
+  might have to unbuild.
+- **`predict_replays_per_frame`'s `budgets.json` ceiling is not added.** `ClientCore::
+  predict_replays_last_frame()` exists and is exercised by every loopback test indirectly (it's
+  read by nothing yet), but the Budgets section's own frame-time integration (a browser-side
+  counter check) needs the renderer hand-off this milestone's Non-scope defers to M26; not gated by
+  any exit criterion in this brief's own checklist, and not in the required test list, so left
+  undone rather than guessed at.
+- **ADR 0037's two undo-journal gaps do not matter to client reconciliation.** (1) "a new player
+  slot" is restored/not by the *host's* rollback of `on_player`, which the client never predicts at
+  all (only `Game::apply` runs under `Predicting`). (2) "`SimRng` draws": `Predicting::rng()` always
+  returns `Err(Unknown)` before any draw happens, so there is no client-side RNG state for a
+  rollback to fail to restore in the first place -- the gap is specific to the host's own undo
+  journal, which the client never has an analogue of (Predicting's overlay mark/rollback is a
+  complete truncation, not a journal, and needs no equivalent gap).
+- **Test discoverability: `-t predict`/nextest's bare positional filter matches the test *name*
+  only, not the crate/binary id.** Confirmed empirically (`cargo nextest run ... predict` against
+  the base commit's fixture set matched only names containing the literal substring, not every
+  `fx-predict::*` test). The brief's own Tests-added list gives bare names
+  (`placement_is_immediate_and_converges`, ...); this implementer prefixed every ported test
+  function with `predict_` (matching the section's own "Rust suite (predict_*)" heading) and
+  renamed the alloc test's function to `predict_alloc` verbatim, so `pnpm test rust -t predict`/
+  `cargo nextest ... -E 'test(predict)'` actually selects all 7 new tests (verified: 7 run, 555+
+  skipped). `pnpm test rust -t predict`'s own summary line reports the suite's full test count
+  regardless of the filter (a pre-existing display characteristic of `scripts/test.mjs`, not
+  re-verified against the base commit); the underlying `cargo nextest` run is what was checked.
+- **`predict_alloc` measures `engine::abi::arena::live_bytes()`/`high_water_bytes()`, not a call-
+  counting allocator.** `fx_predict::export_game!` already installs `engine::abi::Arena` as this
+  binary's `#[global_allocator]` (needed for the crate's own `.wasm` target, reachable through the
+  `rlib`); a second one conflicts, exactly as `fx-machines/tests/journal_bench.rs` already
+  documents. `live_bytes()` (net allocated-minus-freed) alone cannot see a transient allocation
+  freed within the same call; `high_water_bytes()` catches that too, but only when compared against
+  the mark from *before the first replay call of any kind* (warm-up included) -- comparing it only
+  around the later 190-frame window is blind to a *uniform* per-call allocation, since the first
+  occurrence (in warm-up) already banks that peak and every identical later call never exceeds it.
+  Measured: `submit_growth` 31 B for 4 dispatches (human rate, JSON encode + `Vec` pushes,
+  unmeasured by design); 0 B live growth over 190 replay frames x 4 pending actions and over 10
+  more; 0 B peak growth across all 210 replay calls including warm-up.
+  Inject-fail-revert, one per file of `predict/` on the replay path (a `Vec::<u8>::with_capacity(1
+  << 20)` inside the function, reverted after confirming the failure): `Overlay::clear` -- peak
+  growth 73,287 B (fails: `left: 73287, right: 0`); `predict()` (`predicting.rs`, inserted just
+  after the `G::predict(action) == false` check) -- 73,138 B; `PendingQueue::iter_mut`
+  (`pending.rs`) -- 73,287 B. All three reverted; `predict_alloc` passes clean afterward (re-run,
+  0 B/0 B).
+- **`frozen_predicted_tick`'s own inject-fail-revert needed a second, unrelated client** sending
+  `SetGlobal` every tick throughout (not just during the measured window) so *some* non-empty frame
+  keeps arriving for the client under test -- an all-empty-frame window (the first attempt) made
+  `Predicting::tick`'s frozen-vs-live distinction unobservable by coincidence (both read as the same
+  stale value), passing even with the mutation applied. With the noise client: mutating
+  `Predicting::tick` (`predicting.rs`) from `self.tick` to `self.base.tick()` fails the test with
+  `left: Some(Collecting { ..., started_at: 1, ... }), right: Some(Collecting { ..., started_at: 0,
+  ... })` (drift while still pending); reverted, test passes clean.
+- **`Loopback::step` now also drains every client's `poll_uplink` into the host** before ticking
+  (previously nothing did, since `Loopback::action`/`set_camera`/`set_presence` all sent straight to
+  `host.on_uplink`, bypassing the outbox entirely) -- needed so `Loopback::dispatch` (which goes
+  through the real `ClientCore::on_action`, queuing the outbox rather than sending immediately)
+  actually reaches the host. A no-op for a client that never dispatches. Verified against every
+  other Loopback-based fixture suite (fx-machines, fx-puts, fx-presence, fx-persist, fx-panicky,
+  fx-worldgen, fx-drawables): all still pass.
+- **`Replica::store()`** (the testkit seam `Loopback::visible`/`entity_at` need to build a merged
+  `world_access::View`) **is gated `#[cfg(any(test, feature = "testing"))]`**, matching `debug_
+  version`'s own precedent -- its only caller is `testing::testkit`, so an unguarded `pub(crate) fn`
+  is flagged dead by `cargo clippy`'s default (no-`testing`-feature) pass, confirmed by building
+  `fx-predict` for `wasm32-unknown-unknown` with default features before and after the fix.
+- **Golden hashes:** none moved. `pnpm golden` was not run (nothing in scope writes a fixture with
+  its own golden). Verified by running the full workspace `cargo nextest run --workspace` (562
+  tests, including every existing `*_golden`/`scenario_matches_golden`/`replay_equals_live` test)
+  both before adding fx-predict's own tests and after -- all pass.
+- **Verification, this implementer's scope:** `cargo nextest run --workspace --features engine/
+  testing,testing` -- 562 passed, 2 skipped (pre-existing, unrelated). `cargo clippy -p engine -p
+  fx-predict --all-targets --features engine/testing -- -D warnings` -- clean. `cargo fmt --check`
+  -- clean. `cargo build --target wasm32-unknown-unknown -p fx-predict --release` -- succeeds, only
+  two pre-existing dead-code warnings unrelated to this milestone (reproduced identically building
+  `fx-machines` on the same commit). Did not run `pnpm test`/`pnpm lint` in full, per this brief's
+  own instruction.
+
+**Notes for the steps 5-8 implementer.**
+- The taint rule's plug-in point is the comment immediately above the `for p in pending.iter_mut()`
+  loop in `ClientCore::on_frame` (`client/core.rs`).
+- `temp_provisional_id` (`predict/predicting.rs`, module-private) is exactly where `EntityId::
+  provisional` and the `Deserialize` guard replace it; `Predicting::spawn` is its only caller.
+- `Predicting::entity_at`/`entities_in` and `world_access::View::entity_at`/`entities_in` are the
+  four call sites `entities_in`'s overlay merge (step 8) touches; the `covers()` free function in
+  `predict/overlay.rs` (footprint-contains-tile) is already shared by all of them.
+- `entity(id)`'s Unknown-vs-`None` split (0022 §7) needs a change to `Replica::entity` (currently a
+  plain lookup, `client/replica.rs`) as well as to `Predicting`/`View` -- check `Store::entity`'s own
+  callers before changing its signature, since `Authority` and `TickCx` share it and are host-side
+  total.
