@@ -71,7 +71,11 @@ export interface WorkerShell {
    * that called that pass leaves right after it returns, instead of re-entering `Atomics.wait` and
    * starving `fn` forever) or from outside one (setup, a parked message handler) exactly as before.
    * A second `runAsync` call while one is already in flight is queued, FIFO, run after the first
-   * settles -- never dropped or rejected.
+   * settles -- never dropped or rejected. **`fn` is never dropped even when called before this
+   * worker's first `runBlockingLoop` has run** (gate fix, docs/plan/
+   * 23-persistence-opfs-and-lifecycle.md, "Open gate failures" 4): with no loop recorded yet to leave,
+   * `fn` is queued and run the moment `setLoop` records the first one (see there) -- not thrown away,
+   * and not run outside the loop's own leave/re-enter discipline.
    */
   runAsync(fn: () => Promise<void>): void
   /** docs/plan/23-persistence-opfs-and-lifecycle.md Seams: the sim worker's own lifecycle
@@ -112,6 +116,13 @@ export class Shell implements WorkerShell {
    * and starting a second, concurrent `runBlockingLoop` here would race it. */
   #asyncInFlight = false
   #asyncQueue: Array<() => Promise<void>> = []
+  /** Gate fix (docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 4): `runAsync`
+   * calls made before this worker's first `runBlockingLoop` has ever recorded a loop (`#loop` still
+   * `null`) -- previously dropped silently, contradicting `runAsync`'s own "never dropped or
+   * rejected". Drained by `setLoop` the moment a loop is available, through the ordinary `runAsync`
+   * machinery (so the FIFO/`#asyncInFlight` bookkeeping above sees exactly the same calls it would
+   * have from inside a body pass). */
+  #preLoopQueue: Array<() => Promise<void>> = []
 
   constructor(control: ControlBlock, index: number) {
     this.control = control
@@ -129,8 +140,16 @@ export class Shell implements WorkerShell {
   }
 
   runAsync(fn: () => Promise<void>): void {
+    if (this.#stopped) return
     const loop = this.#loop
-    if (!loop || this.#stopped) return
+    if (!loop) {
+      // Gate fix 4: no loop recorded yet (called before this worker's first `runBlockingLoop`) --
+      // queued, not dropped. `setLoop` drains this the moment a loop exists (below), running it
+      // through this same method again so every other invariant here (FIFO ordering,
+      // `#asyncInFlight`, the `W_PARKED` store) applies identically.
+      this.#preLoopQueue.push(fn)
+      return
+    }
     if (this.#asyncInFlight) {
       // A second `runAsync` while one is already in flight (Deviations): queued, FIFO, never
       // dropped or rejected -- a caller's `fn` is always real, already-decided work (e.g. a second
@@ -189,9 +208,18 @@ export class Shell implements WorkerShell {
   }
 
   /** `runBlockingLoop` records its own arguments here so `runAsync` and `resume()` can re-enter
-   * with the same loop; not part of the public `WorkerShell` seam. */
+   * with the same loop; not part of the public `WorkerShell` seam. Gate fix 4: also the drain point
+   * for anything `runAsync` queued before this worker had a loop at all -- run through `runAsync`
+   * itself (now that `#loop` is set, its normal branches apply), which leaves `runBlockingLoop`'s own
+   * very first pass (the unconditional entry drain, still about to run in the caller) exactly the way
+   * a `runAsync` call from inside a body pass already does: one pass, then leave. */
   setLoop(state: LoopState): void {
     this.#loop = state
+    if (this.#preLoopQueue.length > 0) {
+      const queued = this.#preLoopQueue
+      this.#preLoopQueue = []
+      for (const fn of queued) this.runAsync(fn)
+    }
   }
 
   stopped(): boolean {

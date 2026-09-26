@@ -257,6 +257,104 @@ test('shell.runAsync_queues_a_second_call_while_one_is_in_flight', async () => {
 })
 
 /**
+ * Gate fix (docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 3): `stop()` while a
+ * `runAsync` chain is in flight must prevent `#runQueued`'s own `.finally()` from re-entering the
+ * loop at all, once that chain finally settles -- no further `body()` pass, ever. Proven failable: with
+ * the `if (this.#stopped) return` guard removed from `#runQueued`'s `.finally()`, `bodyCalls` reaches
+ * `2` here instead of staying at `1` (confirmed by hand, reverted).
+ */
+test('shell.stop_during_inflight_runAsync_prevents_reentry', async () => {
+  const control = new ControlBlock(createControlBlock())
+  const shell = createShell(control, INDEX)
+  let bodyCalls = 0
+  let resolveAsync: () => void = () => {}
+  const asyncGate = new Promise<void>((resolve) => {
+    resolveAsync = resolve
+  })
+
+  const seen = shell.observeWake()
+  Atomics.store(control.words, workerWord(INDEX, W_PARKED), 0)
+
+  runBlockingLoop(
+    shell,
+    () => {
+      bodyCalls++
+      if (bodyCalls === 1) {
+        shell.runAsync(async () => {
+          await asyncGate
+        })
+      }
+    },
+    () => WAIT_MS,
+    seen,
+  )
+
+  expect(bodyCalls).toBe(1)
+  shell.stop()
+  resolveAsync()
+  // Let every microtask the settled chain's own `.catch().finally()` schedules actually run.
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+
+  expect(bodyCalls).toBe(1) // no re-entry, no second pass, ever, once stopped
+  expect(shell.stopped()).toBe(true)
+})
+
+/**
+ * Gate fix (docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 4): `runAsync`
+ * called before this worker's first `runBlockingLoop` has ever recorded a loop (`#loop` still `null`,
+ * e.g. a hypothetical caller during `setup()`) must not drop `fn` -- queued instead, and run the
+ * moment `setLoop` gives it a loop to leave from, exactly like a `runAsync` call from inside a body
+ * pass (`shell.runAsync_from_inside_body_leaves_and_reenters`, above: one entry-drain pass, then
+ * leave; the chain's own `.finally()` re-enters once it settles).
+ */
+test('shell.runAsync_before_first_loop_is_queued_not_dropped', async () => {
+  const control = new ControlBlock(createControlBlock())
+  const shell = createShell(control, INDEX)
+  let ran = false
+  let bodyCalls = 0
+  let resolveDone: () => void = () => {}
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve
+  })
+
+  // No `runBlockingLoop` has ever run for this shell yet: `#loop` is still `null`.
+  shell.runAsync(async () => {
+    ran = true
+  })
+  expect(ran).toBe(false) // queued, not dropped -- nothing to leave from yet, so not runnable either
+
+  const seen = shell.observeWake()
+  Atomics.store(control.words, workerWord(INDEX, W_PARKED), 0)
+
+  runBlockingLoop(
+    shell,
+    () => {
+      bodyCalls++
+      if (bodyCalls > 1) {
+        Atomics.store(control.words, workerWord(INDEX, W_YIELD), 1)
+        control.wake(INDEX)
+        resolveDone()
+      }
+    },
+    () => WAIT_MS,
+    seen,
+  )
+
+  // `setLoop` (called at the very top of `runBlockingLoop`) drained the queued `fn` through the
+  // ordinary `runAsync` machinery: the entry-drain pass still ran once, then the loop left instead of
+  // waiting.
+  expect(bodyCalls).toBe(1)
+  expect(Atomics.load(control.words, workerWord(INDEX, W_PARKED))).toBe(1)
+
+  await done
+
+  expect(ran).toBe(true)
+  expect(bodyCalls).toBe(2) // the async chain's own `.finally()` re-entered and drained on entry
+})
+
+/**
  * The entry-drain fix (docs/plan/08b-gen-workers-and-queue.md, orchestrator decision 2 at the
  * step-5 boundary): `runBlockingLoop` must call `body(lastSeen)` once before its first
  * `Atomics.wait`, so a ring-driven worker resumed from parked drains whatever arrived while it
