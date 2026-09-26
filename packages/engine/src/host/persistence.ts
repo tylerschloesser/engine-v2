@@ -504,12 +504,26 @@ export class Persistence {
     const { logSegment, logOffset, baseTick } = picked
     const logBytes = (await storage.read(keys.log(logSegment))) ?? new Uint8Array(0)
     const tail = logBytes.subarray(logOffset)
+    const replayRegion = inst.region(RegionId.Persist)
+    if (!replayRegion) throw new Error('Persistence.loadLatest: the Persist region is absent')
+    // docs/plan/24-recovery-and-migration.md: the scan pass runs once, over the whole tail, before
+    // the real apply pass below -- a `Skip` record's own target can live in an earlier frame than
+    // the `Skip` record itself, so every frame must be seen before any of them is safely applied.
+    const beginScan = inst.call1(inst.x.sim_replay_scan_begin, logSegment)
+    if (beginScan !== Status.Ok) {
+      throw new Error(`Persistence.loadLatest: sim_replay_scan_begin failed: status ${beginScan}`)
+    }
+    for (let off = 0; off < tail.length; ) {
+      const n = Math.min(replayRegion.len, tail.length - off)
+      replayRegion.u8.set(tail.subarray(off, off + n), 0)
+      inst.call1(inst.x.sim_replay_scan_push, n)
+      off += n
+    }
+    inst.call0(inst.x.sim_replay_scan_end)
     const beginReplay = inst.call2(inst.x.sim_replay_begin, logSegment, logOffset)
     if (beginReplay !== Status.Ok) {
       throw new Error(`Persistence.loadLatest: sim_replay_begin failed: status ${beginReplay}`)
     }
-    const replayRegion = inst.region(RegionId.Persist)
-    if (!replayRegion) throw new Error('Persistence.loadLatest: the Persist region is absent')
     for (let off = 0; off < tail.length; ) {
       const n = Math.min(replayRegion.len, tail.length - off)
       replayRegion.u8.set(tail.subarray(off, off + n), 0)

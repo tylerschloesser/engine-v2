@@ -137,6 +137,29 @@ async function openSegmentStart(
   return { sim, offset }
 }
 
+/** docs/plan/24-recovery-and-migration.md: the scan pass, run once per instance over the whole
+ * segment tail (`log.subarray(from)`) *before* `driveCell` ever calls `sim_replay_begin`/`push` on
+ * it -- a `Skip` record's own target can live in an earlier frame than the `Skip` record itself,
+ * so every frame must be seen once before any of them is safely applied. */
+function scanSkipTargets(
+  sim: EngineInstance,
+  segmentIndex: number,
+  log: Uint8Array,
+  from: number,
+): void {
+  const beginStatus = sim.call1(sim.x.sim_replay_scan_begin, segmentIndex)
+  if (beginStatus !== Status.Ok) {
+    throw new Error(`replay: sim_replay_scan_begin failed: status ${beginStatus}`)
+  }
+  const region = sim.region(RegionId.Persist)
+  if (!region) throw new Error('replay: the Persist region is absent')
+  const pushStatus = feedBlocks(sim, sim.x.sim_replay_scan_push, region, log.subarray(from))
+  if (pushStatus !== Status.Ok) {
+    throw new Error(`replay: sim_replay_scan_push failed: status ${pushStatus}`)
+  }
+  sim.call0(sim.x.sim_replay_scan_end)
+}
+
 /** A mutable holder so a caller (`runHeavy`'s own B run) can swap in a freshly restored instance
  * mid-drive without this module needing to know why. */
 interface Cell {
@@ -264,6 +287,7 @@ export async function replayWorld(
     const segEnd = nextSeg && typeof nextSeg.base === 'number' ? nextSeg.base : maxTarget
     const untilTick = Math.min(segEnd, maxTarget)
     const logBytes = (await storage.read(keys.log(seg.index))) ?? new Uint8Array(0)
+    scanSkipTargets(sim, seg.index, logBytes, offset)
     const cell: Cell = { sim }
     driveCell(cell, logBytes, offset, refTick, untilTick, (tick) => {
       if (targets.has(tick)) results.set(tick, readHash(cell.sim))
@@ -359,6 +383,8 @@ export async function runHeavy(
     const { sim: simB } = await openSegmentStart(storage, keys, seg, newInstance)
     const logBytes = (await storage.read(keys.log(seg.index))) ?? new Uint8Array(0)
     const untilTick = lastFrameTick(logBytes, offset, refTick)
+    scanSkipTargets(simA, seg.index, logBytes, offset)
+    scanSkipTargets(simB, seg.index, logBytes, offset)
 
     const hashesA = new Map<number, string>()
     const cellA: Cell = { sim: simA }

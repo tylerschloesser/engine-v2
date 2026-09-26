@@ -73,6 +73,7 @@ export {
   replayWorld,
   runHeavy,
 } from './test/replay.js'
+export { trapSim } from './test/trap.js'
 export {
   attachViewportTestHooks,
   clearRebaseFlag,

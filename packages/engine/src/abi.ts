@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 17
+export const ABI_VERSION = 18
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -61,6 +61,11 @@ export const RegionId = {
   // role's input-record buffer, M11). The client's own outbound uplink batch reuses `Tx`,
   // unclaimed by the client role until now.
   Downlink: 10,
+  // docs/plan/24-recovery-and-migration.md: `ProgressCursor` (`phase u32 | tick u32 | record u32`,
+  // 12 B, sim role) -- written by Rust before each phase, readable from a *dead* instance with no
+  // export call at all (0014 §6: `inst.region(id).u8` / `inst.mem`). Not sim state (never hashed,
+  // snapshotted or logged).
+  Progress: 11,
 } as const
 export type RegionId = (typeof RegionId)[keyof typeof RegionId]
 
@@ -231,6 +236,26 @@ export const ABI_EXPORTS = {
   // (or a live `sim_genesis`) to learn the resume tick (0005 Loss windows). Same shape as
   // `sim_dirty`.
   sim_tick_now: { role: 'sim', params: 0, result: 'u32' },
+  // docs/plan/24-recovery-and-migration.md (`ABI_VERSION` 17 -> 18), sim role: begins the scan
+  // pass -- decodes a segment tail purely to collect `Skip { segment, offset }` targets, over the
+  // same bytes a caller then feeds again to `sim_replay_begin`/`push`/`end` (the real apply pass).
+  sim_replay_scan_begin: { role: 'sim', params: 1, result: 'status' },
+  // docs/plan/24-recovery-and-migration.md: feeds the next `len` bytes of `RegionId.Persist`
+  // (reused as a receive region, same shape as `sim_replay_push`) into the scan pass.
+  sim_replay_scan_push: { role: 'sim', params: 1, result: 'status' },
+  // docs/plan/24-recovery-and-migration.md: finishes the scan pass; its own targets stay collected
+  // for the `sim_replay_*` calls that follow.
+  sim_replay_scan_end: { role: 'sim', params: 0, result: 'status' },
+  // docs/plan/24-recovery-and-migration.md (`ABI_VERSION` 17 -> 18), sim role: encodes one frame
+  // holding a single `Skip { segment, offset }` record (`tick_delta = 0`, never a real elapsed
+  // tick) into `RegionId.Persist`, the same "bytes written, or `-(status)`" shape as
+  // `sim_seal_frame`/`sim_segment_header`. Needs no live `Sim`.
+  sim_log_skip: { role: 'sim', params: 2, result: 'len' },
+  // docs/plan/24-recovery-and-migration.md, `engine/test` only: panics in whatever `Phase` the
+  // previous, successfully-completed export left the `Progress` region in (`Phase.Idle` after any
+  // ordinary call, since this writes nothing of its own before panicking). Test-only by
+  // convention: reached only through `engine/test`'s `trapSim`.
+  sim_test_trap: { role: 'sim', params: 0, result: 'status' },
 } as const satisfies Record<string, ExportSpec>
 
 export function statusName(n: number): string {
