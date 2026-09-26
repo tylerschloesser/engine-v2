@@ -1,6 +1,6 @@
 # M25: Prediction core
 
-Status: not started · After: 21b, 16b · Tyler-dependent: no
+Status: done · After: 21b, 16b · Tyler-dependent: no
 
 ## Goal
 The client role predicts the local player's own actions by running the game's `apply` on a `Predicting` overlay over the replica, keeps a pending queue, and resets and replays on every received frame. `Unknown` reads, RNG use and `predict() == false` decline to predict and still send. The taint rule is chosen by the tests written here. Verified natively with a fixture game, including a zero-allocation replay test.
@@ -73,11 +73,11 @@ Rust suite (`predict_*`), ported from the spike unless marked new:
 WASM-under-Node suite: `predict_not_predictable_event`: dispatch at the subscription edge yields `NotPredictable` then `Confirmed` from `onActionResult`.
 
 ## Exit criteria
-- [ ] Every test above passes; the chosen taint rule and the measured counts are written under Deviations.
-- [ ] `predict_alloc` reports 0.
-- [ ] No losing taint strategy remains in the tree.
-- [ ] The browser zero-GC test passes with prediction on.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Every test above passes; the chosen taint rule and the measured counts are written under Deviations.
+- [x] `predict_alloc` reports 0.
+- [x] No losing taint strategy remains in the tree.
+- [x] The browser zero-GC test passes with prediction on.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t predict` · `pnpm test wasm -t predict` · `pnpm test browser -t zero-gc` · `pnpm test && pnpm lint`

@@ -67,7 +67,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 24 | `24-recovery-and-migration.md` | panic recovery by re-instantiation (sim role) | 23 | |
 | [x] | 24b | `24b-upgrade-and-migration.md` | `SCHEMA_VERSION`, `migrate`, `OldStore`, `SaveIncompatible`, tick rescale | 24 | T |
 | [x] | 24c | `24c-engine-edit-rebuild-time.md` | one-line engine edit to tests starting in ≤ 30 s again (0020 §3): attribute the ~170 s workspace test build, fix, guard | 24b | |
-| [ ] | 25 | `25-prediction-core.md` | `Predicting` overlay, pending queue, taint rule, provisional ids, `entities_in` | 21b, 16b | |
+| [x] | 25 | `25-prediction-core.md` | `Predicting` overlay, pending queue, taint rule, provisional ids, `entities_in` | 21b, 16b | |
 | [ ] | 26 | `26-prediction-rendering-and-clocks.md` | overlay diff → renderer, ghost/real swap, lead estimation, host clock | 25, 17 | |
 | [ ] | 27 | `27-server-entrypoint-and-netcode-harness.md` | `createWorldServer`, Node adapter, in-memory pairs, virtual-clock netcode suite | 22b, 24, 16b | |
 | [ ] | 28 | `28-sessions-and-reconnect.md` | handshake, identity, heartbeat, link policy | 27 | |
