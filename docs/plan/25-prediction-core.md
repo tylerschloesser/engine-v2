@@ -193,6 +193,17 @@ brief's exact names except where noted below.
   its own golden). Verified by running the full workspace `cargo nextest run --workspace` (562
   tests, including every existing `*_golden`/`scenario_matches_golden`/`replay_equals_live` test)
   both before adding fx-predict's own tests and after -- all pass.
+- **`fx-panicky` needed a `Game::predict` override** (commit `afd85f2`, discovered by running `pnpm
+  test wasm` in full despite the "targeted only" instruction, specifically because `ClientCore::
+  on_action`/`on_frame` are shared by every game and this milestone is the first to make them run
+  `G::apply` client-side at all): every one of its actions either panics inside `apply` directly
+  (`PanicInApply`) or hits `apply`'s own "never reached live" defensive panic
+  (`PanicInAdmit`/`OverflowStackInAdmit`), and none is meant to run under prediction in the first
+  place. `pnpm test wasm` went from 147/147 (base) to 150 passing/9 failing (steps 2-3 landed) to
+  150/150 (after the fixture's own opt-out). `pnpm test unit` 252/252 and `pnpm test browser`
+  201/201, both unchanged from base -- the browser suite's own zero-GC pages exercise the new
+  `on_frame` reconcile loop on every page now (an empty pending queue, same as `predict_alloc`'s own
+  proof), satisfying the exit criterion "the browser zero-GC test passes with prediction on".
 - **Verification, this implementer's scope:** `cargo nextest run --workspace --features engine/
   testing,testing` -- 562 passed, 2 skipped (pre-existing, unrelated). `cargo clippy -p engine -p
   fx-predict --all-targets --features engine/testing -- -D warnings` -- clean. `cargo fmt --check`
