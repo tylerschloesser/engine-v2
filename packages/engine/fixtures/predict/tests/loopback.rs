@@ -907,3 +907,30 @@ fn predict_taint_independence() {
         "literal count for the shipped rule (R1), this seed/delay/noise schedule; see Deviations"
     );
 }
+
+/// `ClientCore::overlay_diff_entries()` (docs/plan/26-prediction-rendering-and-clocks.md Budgets):
+/// non-zero right after a predicted `set_tile`, and within `counters.predictRender.
+/// overlayDiffEntries` -- asserted against that exact key, never a literal number (the same
+/// discipline as `predict_replays_per_frame_counter_is_live`, above).
+#[test]
+fn predict_overlay_diff_entries_counter_is_live() {
+    let mut lb = loopback(30);
+    let (idx, _who) = add_client(&mut lb, 3);
+    lb.set_camera(idx, camera(10, 10));
+    lb.run(4);
+
+    let (_seq, st) = lb.dispatch(
+        idx,
+        Action::Paint {
+            tile: Pos { x: 5, y: 5 },
+            base: 9,
+        },
+    );
+    assert_eq!(st, Prediction::Applied);
+    let entries = lb.client(idx).overlay_diff_entries();
+    assert_eq!(entries, 1, "one tile changed: the one this Paint wrote");
+    engine::testing::budgets::expect_within_budget(
+        "counters.predictRender.overlayDiffEntries",
+        u64::from(entries),
+    );
+}

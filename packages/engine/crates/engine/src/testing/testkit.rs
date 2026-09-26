@@ -13,7 +13,7 @@
 
 use std::collections::VecDeque;
 
-use crate::client::{ClientCore, Clocks, FrameView, Replica};
+use crate::client::{ClientCore, ClientSide, Clocks, FrameView, Replica, Uploader};
 use crate::delta::Delta;
 use crate::game::{EntityId, Game, PlayerId};
 use crate::host::{ConnId, Host};
@@ -380,6 +380,29 @@ where
             replica.remote_presences(),
         )
         .with_prediction(core.overlay(), core.pending_queue())
+    }
+
+    /// M26 step 3 (docs/plan/26-prediction-rendering-and-clocks.md): drains client `i`'s own
+    /// dirty queue into `uploader` (`ClientCore::drain_dirty`, coalesced to `ChunkCoord` -- a test
+    /// driving `Uploader` directly, not through `game_instance.rs`'s own `on_frame`, has no
+    /// `patch_tile` call site to route a finer `DirtyEvent::Tile` to anyway) then stages up to
+    /// `max_records` through the real, overlay-aware `Uploader::stage_predicted` -- the same
+    /// production call `game_instance.rs`'s `upload_stage` makes, not a reimplementation.
+    pub fn drain_and_stage<C: ClientSide<G>>(
+        &mut self,
+        i: usize,
+        uploader: &mut Uploader<C, G>,
+        max_records: u32,
+        region: &mut [u8],
+    ) -> u32 {
+        let core = &mut self.clients[i].core;
+        core.drain_dirty(|chunk| uploader.enqueue_chunk(chunk));
+        uploader.stage_predicted(
+            max_records,
+            core.replica().terrain(),
+            core.overlay(),
+            region,
+        )
     }
 
     pub fn last_built_frame(&self, i: usize) -> &[u8] {

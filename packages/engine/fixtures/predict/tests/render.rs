@@ -5,7 +5,7 @@
 //! ack, reading back the real `DrawList` bytes `sort_into` produces -- not a re-implementation of
 //! the merge.
 
-use engine::client::drawlist::{DRAW_BYTES, HEADER_BYTES, PREDICTED, REGION_BYTES};
+use engine::client::drawlist::{DRAW_BYTES, HEADER_BYTES, PREDICTED, REGION_BYTES, hash_region};
 use engine::client::{ClientSide, DrawList};
 use engine::game::{Game, PlayerId};
 use engine::predict::Prediction;
@@ -254,4 +254,35 @@ fn reject_is_one_render() {
         "expected to see the ghost, then see it rolled back: saw_ghost={saw_ghost} \
          saw_ghost_gone={saw_ghost_gone}"
     );
+}
+
+/// **Identical overlay content gives an identical DrawList hash on consecutive frames** (Tests
+/// added, verbatim): once a predicted `Place` has landed and nothing else changes (no new
+/// dispatch, no ack yet -- delay 3), re-running `extract`/`sort_into` every frame must not perturb
+/// `hash_region` (0018's own native-vs-`.wasm` parity hash, excluding `frame_seq`/`frame_time_ms`
+/// by construction -- see its own doc comment), even though the replay loop re-runs `G::apply`
+/// from scratch every single frame.
+#[test]
+fn drawlist_hash_stable_across_replays() {
+    let mut lb = loopback(3);
+    let (idx, _who) = add_client(&mut lb, 4);
+    lb.set_camera(idx, camera(10, 10));
+    lb.run(10);
+
+    let origin = Pos { x: 5, y: 5 };
+    let (_seq, st) = lb.dispatch(idx, Action::Place { origin });
+    assert_eq!(st, Prediction::Applied);
+
+    let (region0, n0, _) = render(&lb, idx);
+    let hash0 = hash_region(&region0, n0);
+
+    for step in 0..3 {
+        lb.step();
+        let (region, n, _) = render(&lb, idx);
+        let hash = hash_region(&region, n);
+        assert_eq!(
+            hash, hash0,
+            "step {step}: DrawList hash changed across an unchanged replay"
+        );
+    }
 }

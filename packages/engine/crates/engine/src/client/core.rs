@@ -11,7 +11,7 @@
 //! around for decoding, and it means neither pass needs a staging buffer.
 
 use crate::game::Game;
-use crate::predict::{Overlay, Pending, PendingQueue, Prediction};
+use crate::predict::{Overlay, OverlayDiff, Pending, PendingQueue, Prediction};
 use crate::sim::{Applied, Rejected};
 use crate::time::{Tick, Ticks};
 use crate::wire::{
@@ -19,8 +19,8 @@ use crate::wire::{
     read_chunk_deltas, read_global, read_own_player,
 };
 use crate::wire::{CameraReport, FrameReader};
-use crate::world::Tile;
-use crate::world_access::WorldRead;
+use crate::world::{ChunkCoord, Tile};
+use crate::world_access::{WorldRead, chunk_of};
 use crate::{bytes::ByteReader, bytes::SliceSink, wire::EntityDeltaOp};
 
 use super::replica::Replica;
@@ -130,6 +130,14 @@ pub struct ClientCore<G: Game> {
     /// `predict_replays_per_frame`"): how many pending actions the most recent [`Self::on_frame`]
     /// re-predicted.
     predict_replays_last_frame: u32,
+    /// M26 (docs/plan/26-prediction-rendering-and-clocks.md Provides): the per-replay overlay
+    /// change list, updated by [`Self::sync_overlay_dirty`] after every replay (dispatch's own
+    /// initial predict, and `on_frame`'s reconcile tail).
+    overlay_diff: OverlayDiff,
+    /// Diagnostic counter (Budgets: "a new deterministic counter `overlay_diff_entries` with a
+    /// `budgets.json` ceiling"): how many tiles the most recent [`Self::sync_overlay_dirty`] call
+    /// found changed.
+    overlay_diff_entries_last: u32,
 }
 
 impl<G: Game> ClientCore<G> {
@@ -164,6 +172,8 @@ impl<G: Game> ClientCore<G> {
             pending: PendingQueue::new(),
             lead: Ticks(1),
             predict_replays_last_frame: 0,
+            overlay_diff: OverlayDiff::new(),
+            overlay_diff_entries_last: 0,
         }
     }
 
@@ -209,6 +219,7 @@ impl<G: Game> ClientCore<G> {
             status,
             auth_tick_at_dispatch,
         });
+        self.sync_overlay_dirty();
         Ok(())
     }
 
@@ -295,6 +306,50 @@ impl<G: Game> ClientCore<G> {
     /// pending action the host has just acked, with the authoritative tick this client held at
     /// dispatch time and the tick the ack itself landed on. A no-op until M26 fills it in.
     fn on_ack_sample(&mut self, _auth_tick_at_dispatch: Tick, _ack_tick: Tick) {}
+
+    /// M26 (docs/plan/26-prediction-rendering-and-clocks.md Provides): marks `chunk` dirty for the
+    /// upload path directly, sharing the one dirty queue replica deltas already push into. Skips
+    /// the push if a delta already dirtied this exact chunk earlier in the same call (`Replica::
+    /// dirty_contains_chunk`'s own doc comment): the delta's own re-stage already reads the
+    /// reconciled overlay content fresh at stage time, so a second whole-chunk mark here would
+    /// only be a redundant upload -- "never two uploads of a chunk in one frame" (Tests added,
+    /// `texel_upload_only_on_change`).
+    pub fn mark_dirty(&mut self, chunk: ChunkCoord) {
+        if !self.replica.dirty_contains_chunk(chunk) {
+            self.replica.mark_dirty(chunk);
+        }
+    }
+
+    /// Recomputes [`Self::overlay_diff`] against the overlay's current effective tile content and
+    /// marks every changed tile's own chunk dirty (Planning decisions: "`OverlayDiff` keeps the
+    /// previous deduplicated overlay tile list ... and compares after each replay"). Called once
+    /// at the tail of [`Self::on_action`] (the dispatch-time predict is itself a replay, 0012: "At
+    /// dispatch the action is applied once") and once at the tail of [`Self::on_frame`]'s
+    /// reconcile loop.
+    fn sync_overlay_dirty(&mut self) {
+        self.overlay_diff.update(&self.overlay);
+        self.overlay_diff_entries_last = self.overlay_diff.tiles().len() as u32;
+        // Split borrow, not `self.mark_dirty(..)` in a loop over `self.overlay_diff.tiles()`
+        // (`.claude/rules/hot-paths.md`: no allocation per replay, so no intermediate `Vec` to
+        // let the two borrows not overlap either).
+        let ClientCore {
+            replica,
+            overlay_diff,
+            ..
+        } = self;
+        for &pos in overlay_diff.tiles() {
+            let chunk = chunk_of::<G>(pos);
+            if !replica.dirty_contains_chunk(chunk) {
+                replica.mark_dirty(chunk);
+            }
+        }
+    }
+
+    /// How many tiles the most recent replay's [`OverlayDiff`] found changed (docs/plan/
+    /// 26-prediction-rendering-and-clocks.md Budgets: `overlay_diff_entries`).
+    pub fn overlay_diff_entries(&self) -> u32 {
+        self.overlay_diff_entries_last
+    }
 
     pub fn drain_dirty(&mut self, f: impl FnMut(crate::world::ChunkCoord)) {
         self.replica.drain_dirty(f);
@@ -459,6 +514,7 @@ impl<G: Game> ClientCore<G> {
             replays += 1;
         }
         self.predict_replays_last_frame = replays;
+        self.sync_overlay_dirty();
 
         Ok(summary)
     }

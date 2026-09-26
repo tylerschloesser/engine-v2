@@ -483,6 +483,10 @@
     "predict": {
       "replaysPerFrame": 32,
       "formula": "docs/plan/25-prediction-core.md Budgets: \"a new deterministic counter `predict_replays_per_frame` with a `budgets.json` ceiling equal to the pending-queue capacity\" -- the ceiling is exact, not measured-plus-margin: `ClientCore::predict_replays_last_frame()` counts one replay per still-pending action every `on_frame` (`client/core.rs`), and the pending queue can never hold more than `client::core::OUTBOX_CAPACITY` (32, the same 0012 pending-queue figure the outbox itself already enforces, docs/decisions/0012-prediction-and-reconciliation.md: \"The pending queue has fixed capacity (initially 32)\") -- so 32 replays in one frame is the worst case by construction, not an observed maximum that could drift. `fixtures/predict/tests/loopback.rs`'s `predict_replays_per_frame_counter_is_live` asserts the counter is non-zero after a frame with pending actions, and asserts it against this exact key via `engine::testing::budgets::expect_within_budget` rather than a literal 32 in the test."
+    },
+    "predictRender": {
+      "overlayDiffEntries": 64,
+      "formula": "docs/plan/26-prediction-rendering-and-clocks.md Budgets: \"Frame time, client-worker share (0018 section 9): the diff is O(overlay entries); counter `overlay_diff_entries` with a ceiling.\" Not an exact architectural bound like `predict.replaysPerFrame` above (a single pending action's own `set_tile` calls are not capped anywhere): measured-plus-margin, matching this milestone's own scenarios (one `Paint` dispatch changes exactly 1 tile; `fixtures/predict/tests/loopback.rs`'s `predict_overlay_diff_entries_counter_is_live` measures 1-2 per replay across dispatch/replay/ack/reject) with headroom for a future fixture predicting several tile writes per action at once, well under the pending-queue capacity (32) times a handful of tiles each. `ClientCore::overlay_diff_entries()` (`client/core.rs`) is the counter; the test asserts it against this exact key via `engine::testing::budgets::expect_within_budget`, never a literal number."
     }
   },
   "worldgenMsPerChunkWarn": 0.25

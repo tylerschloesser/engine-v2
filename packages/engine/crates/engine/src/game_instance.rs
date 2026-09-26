@@ -837,12 +837,17 @@ where
         }
     }
 
+    /// docs/plan/26-prediction-rendering-and-clocks.md Planning decisions "One resolution point":
+    /// every `CHUNK` record now reads the prediction overlay too (`Uploader::stage_predicted`),
+    /// not just pristine + the replica overlay.
     fn upload_stage(&mut self, max_records: u32, out: &mut [u8]) -> u32 {
         match self {
-            GameInstance::Client(c) => {
-                c.uploader
-                    .stage(max_records, c.core.replica().terrain(), out)
-            }
+            GameInstance::Client(c) => c.uploader.stage_predicted(
+                max_records,
+                c.core.replica().terrain(),
+                c.core.overlay(),
+                out,
+            ),
             _ => 0,
         }
     }

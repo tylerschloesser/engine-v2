@@ -232,6 +232,29 @@ impl<G: Game> Replica<G> {
         }
     }
 
+    /// M26 (docs/plan/26-prediction-rendering-and-clocks.md Provides): marks `chunk` dirty for the
+    /// upload path directly, with no replica delta behind it -- a predicted tile's own effective
+    /// value changed (`OverlayDiff`). Shares the exact same queue [`Self::drain_dirty`]/
+    /// [`Self::drain_dirty_for_upload`] already drain (`DirtyEvent`'s own doc comment: "one queue,
+    /// one bound").
+    pub(crate) fn mark_dirty(&mut self, chunk: ChunkCoord) {
+        self.dirty.push(DirtyEvent::Whole(chunk));
+    }
+
+    /// Whether `self.dirty` already carries an event implying `chunk`, pushed earlier in the same
+    /// call (docs/plan/26-prediction-rendering-and-clocks.md Planning decisions "One resolution
+    /// point": a chunk a wire delta already dirtied this frame needs no second, whole-chunk mark
+    /// from `OverlayDiff` -- that delta's own re-stage already reads the reconciled overlay content
+    /// fresh at stage time, so a second mark would only be "never two uploads of a chunk in one
+    /// frame"'s own violation). A plain scan: `self.dirty` holds at most a handful of entries per
+    /// frame in practice (one per chunk enter/leave/tile-delta/`Self::mark_dirty` call).
+    pub(crate) fn dirty_contains_chunk(&self, chunk: ChunkCoord) -> bool {
+        self.dirty.iter().any(|e| match *e {
+            DirtyEvent::Whole(c) => c == chunk,
+            DirtyEvent::Tile(pos, _) => self.dims.chunk_of(pos) == chunk,
+        })
+    }
+
     pub(crate) fn set_tick(&mut self, tick: Tick) {
         self.tick = tick;
     }

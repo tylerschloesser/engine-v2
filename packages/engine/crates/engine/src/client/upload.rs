@@ -17,6 +17,7 @@ use std::collections::VecDeque;
 
 use super::CameraBlock;
 use super::texel::{ClientSide, TileTexel};
+use crate::predict::Overlay;
 use crate::view;
 use crate::world::CacheEvent;
 use crate::world::{ChunkCoord, ChunkDims, ChunkRect, TerrainStore, Tile, TilePos};
@@ -274,15 +275,45 @@ impl<C: ClientSide<G>, G: crate::game::Game> Uploader<C, G> {
     /// Stages up to `max_records` records into `region` (`RegionId::ChunkTexels`, sized for at
     /// least `max_records * RECORD_BYTES`), CHUNK work first, then INDIR, then PATCH -- the
     /// `upload_stage` ABI export's implementation forwards here with the fixture's own store.
-    /// Returns the number of records actually written.
+    /// Returns the number of records actually written. Every `CHUNK` record reads pristine + the
+    /// replica overlay only, the same as always: for the prediction overlay too, use
+    /// [`Self::stage_predicted`] (`game_instance.rs`'s own `upload_stage`, docs/plan/
+    /// 26-prediction-rendering-and-clocks.md).
     pub fn stage(&mut self, max_records: u32, store: &TerrainStore, region: &mut [u8]) -> u32 {
+        self.stage_impl(max_records, store, None, region)
+    }
+
+    /// Same as [`Self::stage`], but every `CHUNK` record's own tile pass additionally overwrites
+    /// with `overlay`'s effective value where one exists (docs/plan/
+    /// 26-prediction-rendering-and-clocks.md Planning decisions "One resolution point": "the slab
+    /// rebuild ... reads effective tiles (pristine, then replica overlay, then prediction
+    /// overlay)"). `PATCH`/`INDIR` records are unaffected -- a replica delta's own confirmed value
+    /// is always the correct one for a fine-grained patch; the prediction overlay only ever needs
+    /// a *whole*-chunk re-stage (`ClientCore::mark_dirty`'s own doc comment).
+    pub fn stage_predicted(
+        &mut self,
+        max_records: u32,
+        store: &TerrainStore,
+        overlay: &Overlay<G>,
+        region: &mut [u8],
+    ) -> u32 {
+        self.stage_impl(max_records, store, Some(overlay), region)
+    }
+
+    fn stage_impl(
+        &mut self,
+        max_records: u32,
+        store: &TerrainStore,
+        overlay: Option<&Overlay<G>>,
+        region: &mut [u8],
+    ) -> u32 {
         let mut written = 0u32;
         while written < max_records {
             let start = written as usize * RECORD_BYTES;
             let Some(out) = region.get_mut(start..start + RECORD_BYTES) else {
                 break;
             };
-            if !self.stage_one(store, out) {
+            if !self.stage_one(store, overlay, out) {
                 break;
             }
             written += 1;
@@ -290,7 +321,12 @@ impl<C: ClientSide<G>, G: crate::game::Game> Uploader<C, G> {
         written
     }
 
-    fn stage_one(&mut self, store: &TerrainStore, out: &mut [u8]) -> bool {
+    fn stage_one(
+        &mut self,
+        store: &TerrainStore,
+        overlay: Option<&Overlay<G>>,
+        out: &mut [u8],
+    ) -> bool {
         // Open gate failures item 4: peek, don't pop, so a chunk blocked on its target slot's own
         // pending eviction record stays queued (in nearest-first order) rather than being dropped
         // or reordered -- it is retried on a later call, once `stage_indir` below has had a chance
@@ -309,7 +345,7 @@ impl<C: ClientSide<G>, G: crate::game::Game> Uploader<C, G> {
                 break;
             }
             self.pending_chunks.pop_front();
-            self.stage_chunk(chunk, slot, store, out);
+            self.stage_chunk(chunk, slot, store, overlay, out);
             return true;
         }
         if self.stage_indir(out) {
@@ -318,8 +354,25 @@ impl<C: ClientSide<G>, G: crate::game::Game> Uploader<C, G> {
         self.stage_patch(store, out)
     }
 
-    fn stage_chunk(&mut self, chunk: ChunkCoord, slot: u32, store: &TerrainStore, out: &mut [u8]) {
+    fn stage_chunk(
+        &mut self,
+        chunk: ChunkCoord,
+        slot: u32,
+        store: &TerrainStore,
+        overlay: Option<&Overlay<G>>,
+        out: &mut [u8],
+    ) {
         store.copy_chunk(chunk, &mut self.scratch_tiles);
+        if let Some(overlay) = overlay {
+            let dims = self.dims;
+            let scratch_tiles = &mut self.scratch_tiles;
+            overlay.effective_tiles(&mut |pos, tile| {
+                if dims.chunk_of(pos) == chunk {
+                    let idx = dims.local_index(pos) as usize;
+                    scratch_tiles[idx] = tile;
+                }
+            });
+        }
         for (i, &tile) in self.scratch_tiles.iter().enumerate() {
             let texel = C::tile_visual(tile);
             let base = HEADER_BYTES + i * 4;

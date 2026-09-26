@@ -77,6 +77,12 @@ pub enum Action {
     Cascade,
     /// `w.put_global` (0003): the one action that writes the global scope directly.
     SetGlobal { value: i32 },
+    /// `w.set_tile` (docs/plan/26-prediction-rendering-and-clocks.md step 3: the texel tests need
+    /// a predicted tile write, which nothing above provides). Declines like `Place` if `tile` is
+    /// already occupied by a machine (the same conflict shape, so a rival's `Place` landing before
+    /// this action's own reject ack reproduces 0012's "conflicting delta arrives before the reject
+    /// ack" case for a *tile*, not an entity).
+    Paint { tile: Pos, base: u8 },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, TS)]
@@ -314,6 +320,15 @@ impl Game for Predict {
                 let mut g = *w.global();
                 g.value = value;
                 w.put_global(g);
+                Ok(())
+            }
+            Action::Paint { tile, base } => {
+                let t = tile.tile();
+                if w.entity_at(t)?.is_some() {
+                    return Err(Reject::NotBuildable);
+                }
+                let cur = w.tile(t)?;
+                w.set_tile(t, cur.with_base(base));
                 Ok(())
             }
         }

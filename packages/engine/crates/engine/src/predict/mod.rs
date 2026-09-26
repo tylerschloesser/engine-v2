@@ -8,10 +8,12 @@
 //! from its scan; this module itself never names either side directly (see `predicting.rs`'s own
 //! module doc comment) -- every type here is usable, and tested, without either.
 
+mod diff;
 mod overlay;
 mod pending;
 mod predicting;
 
+pub use diff::OverlayDiff;
 pub use overlay::Overlay;
 pub(crate) use overlay::{covers, footprint_of, merge_entities_in};
 pub use pending::{Pending, PendingQueue, Prediction};
