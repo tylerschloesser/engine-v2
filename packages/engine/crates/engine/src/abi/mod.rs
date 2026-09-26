@@ -280,6 +280,15 @@ pub fn tick_hz<T: Instance>(slot: &Slot<T>) -> u32 {
     }
 }
 
+/// `chunk_bits()`: `G::CHUNK_BITS`, same "any initialised role, cost nothing" shape as `tick_hz`
+/// (docs/plan/24b-upgrade-and-migration.md Scope).
+pub fn chunk_bits<T: Instance>(slot: &Slot<T>) -> u32 {
+    match slot.get().as_mut() {
+        Some(rt) => rt.inst.chunk_bits(),
+        None => 5,
+    }
+}
+
 /// The raw export argument is **unused** (hence `_raw_t_ms`), and the `t_ms` an `Instance::frame`
 /// receives is `camera.frame_time_ms`, read out of this role's own `Camera` region -- decision A of
 /// fix round 3 (docs/plan/06b-workers-and-spawn.md, Deviations). The JS side stopped computing the

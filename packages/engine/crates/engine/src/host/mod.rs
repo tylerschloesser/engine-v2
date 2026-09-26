@@ -2544,6 +2544,12 @@ where
         G::TICK_RATE.hz_value()
     }
 
+    /// docs/plan/24b-upgrade-and-migration.md Scope: `G`'s own real `CHUNK_BITS`, not the trait
+    /// default (mirrors `tick_hz` immediately above).
+    fn chunk_bits(&mut self) -> u32 {
+        G::CHUNK_BITS
+    }
+
     /// docs/plan/15b-ring-connection-and-replica-rendering.md: `Host::region_hash(conn)`, two LE
     /// `u32` into `result` (`sim_hash`'s own crossing shape). `engine/test`-only.
     fn sim_region_hash(&mut self, conn: u32, result: &mut [u8]) -> Status {

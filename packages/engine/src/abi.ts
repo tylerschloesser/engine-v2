@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 20
+export const ABI_VERSION = 22
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -42,6 +42,11 @@ export const Status = {
   // failed to decode as a whole, CRC-valid frame. Not an error for the last (currently open)
   // segment: that is how recovery finds the torn tail to truncate (`sim_replay_valid_end`).
   TornTail: 14,
+  // docs/plan/24b-upgrade-and-migration.md: `sim_upgrade_end` -- the load takes the `Game::migrate`
+  // path (identity/schema/tick-rate/worldgen mismatch) and either `Game::migrate` itself declined
+  // or the old-schema bytes failed to decode. A reason byte (`IncompatReason` in host/upgrade.ts)
+  // is written to `Result[0]`; every stored byte stays untouched on this path (0005 Upgrades).
+  SaveIncompatible: 15,
 } as const
 export type Status = (typeof Status)[keyof typeof Status]
 
@@ -127,6 +132,10 @@ export const ABI_EXPORTS = {
   // answer is role-independent (a game-level constant), and the client worker now also reads its
   // own instance's rate once, at setup, for the clock block's `ticks_per_second`.
   tick_hz: { role: 'all', params: 0, result: 'u32' },
+  // docs/plan/24b-upgrade-and-migration.md Scope: `G::CHUNK_BITS`, read once by `Persistence.
+  // create`/`Persistence.open` to stamp/compare `ManifestV1.params.chunkBits`. Same "any
+  // initialised role, cost nothing" shape as `tick_hz`.
+  chunk_bits: { role: 'all', params: 0, result: 'u32' },
   // `t_ms: f64` (0014 §4's client hot-export table; docs/plan/06b-workers-and-spawn.md): called
   // only when `CB_FRAME_REQ` has advanced since the last call (Planning decisions "Worker frame
   // clock"). `params: 1` here means "one number", whatever its wasm type (0014 §2).
@@ -229,6 +238,18 @@ export const ABI_EXPORTS = {
   // `logOffset` (two LE `u32`) into `RegionId.Result`; `Status.Corrupt` if the snapshot never
   // finished decoding or its CRC failed; `Status.IdentityMismatch` if its identity differs.
   sim_restore_end: { role: 'sim', params: 0, result: 'status' },
+  // docs/plan/24b-upgrade-and-migration.md, sim role: begins the 0005 Upgrades sequence -- same
+  // block protocol as `sim_restore_begin`, but never requires the decoded identity to match this
+  // build's own.
+  sim_upgrade_begin: { role: 'sim', params: 1, result: 'status' },
+  // Feeds the next `len` bytes of `RegionId.Persist` (reused as a receive region, same shape as
+  // `sim_restore_push`).
+  sim_upgrade_push: { role: 'sim', params: 1, result: 'status' },
+  // Finishes the upgrade: `Status.Ok` writes a direct(0)/migrated(1) tag byte plus `logSegment`/
+  // `logOffset` (two LE `u32` at `Result[1..9]`) -- the *old* segment's own position, present
+  // regardless of outcome; `Status.SaveIncompatible` writes an `IncompatReason` byte at `Result[0]`
+  // and leaves every stored byte untouched (Planning decisions 7).
+  sim_upgrade_end: { role: 'sim', params: 0, result: 'status' },
   // docs/plan/22b-persistence-load-and-fs.md: begins replaying a segment's log tail from byte
   // `offset` (a `Sim` must already exist, from `sim_restore_end` or `sim_genesis`).
   sim_replay_begin: { role: 'sim', params: 2, result: 'status' },

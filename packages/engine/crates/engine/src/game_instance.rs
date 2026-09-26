@@ -573,6 +573,12 @@ where
         G::TICK_RATE.hz_value()
     }
 
+    /// docs/plan/24b-upgrade-and-migration.md Scope: `G::CHUNK_BITS`, the same for every variant
+    /// (a game-level constant, not role-specific) -- see `tick_hz`'s own doc comment.
+    fn chunk_bits(&mut self) -> u32 {
+        G::CHUNK_BITS
+    }
+
     fn gen_chunk(&mut self, cx: i32, cy: i32, out: &mut [u8]) -> Status {
         match self {
             GameInstance::Gen(core) => core.gen_chunk(cx, cy, out),

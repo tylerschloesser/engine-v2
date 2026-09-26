@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 21;
+pub const ABI_VERSION: u32 = 22;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -280,6 +280,16 @@ pub trait Instance: Sized + 'static {
     /// cost nothing" shape as `sim_warm_one`/`gen_take`: no `Status` crosses.
     fn tick_hz(&mut self) -> u32 {
         20
+    }
+
+    /// docs/plan/24b-upgrade-and-migration.md Scope ("Chunk size recorded in the world params"):
+    /// `G::CHUNK_BITS`, read by `Persistence.create`/`Persistence.open` (TS) to stamp/compare
+    /// `ManifestV1.params.chunkBits` -- the running build's own value, never derived from stored
+    /// data. Same "always answer, cost nothing, role-independent" shape as `tick_hz`: the default
+    /// (`5`, `Game::CHUNK_BITS`'s own default) is what every game that never overrides it already
+    /// uses, so a low-level fixture with no `Sim` role at all still answers safely.
+    fn chunk_bits(&mut self) -> u32 {
+        5
     }
 
     /// Called only when the client worker saw `CB_FRAME_REQ` advance (docs/plan/06b-workers-and-
@@ -748,6 +758,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn tick_hz() -> u32 {
             $crate::abi::tick_hz(&__ENGINE_SLOT)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn chunk_bits() -> u32 {
+            $crate::abi::chunk_bits(&__ENGINE_SLOT)
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_segment_header(segment: u32, base_tick: u32) -> i32 {
