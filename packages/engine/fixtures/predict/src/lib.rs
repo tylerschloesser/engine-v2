@@ -56,6 +56,13 @@ pub const START_COAL: u16 = 5;
 pub enum Action {
     /// Spawns a `Machine` anchored at `origin` (its footprint is the registered 2x2).
     Place { origin: Pos },
+    /// Like [`Action::Place`], but writes the spent inventory *before* drawing from the sim RNG
+    /// (an audit roll the host discards): declines under prediction through `rng()` rather than
+    /// through the placement read, and only after already writing (docs/plan/
+    /// 25-prediction-core.md Tests added: `taint_rollback_visibility`, "A failing through rng()
+    /// after a read" -- proving the overlay rollback undoes a write, not just a read that never
+    /// happened).
+    PlaceChecked { origin: Pos },
     /// Addressed by tile, not by `EntityId` (0022 §6): a follow-up naming a machine the client has
     /// only predicted must still mean the same thing once the host resolves it.
     Deposit { at: Pos, count: u16 },
@@ -197,6 +204,21 @@ impl Game for Predict {
                 can_place(r, origin)?;
                 p.furnaces -= 1;
                 w.put_player(who, p);
+                w.spawn(Machine { origin, coal: 0 });
+                Ok(())
+            }
+            Action::PlaceChecked { origin } => {
+                let mut p = *w.player(who)?;
+                if p.furnaces == 0 {
+                    return Err(Reject::NoItem);
+                }
+                let r: &dyn WorldRead<Predict> = w;
+                can_place(r, origin)?;
+                p.furnaces -= 1;
+                w.put_player(who, p); // written before the decline below (validate first is
+                // still honoured: every read that could reject already ran)
+                let rng = w.rng()?; // Unknown under prediction; a real draw on the host
+                let _ = rng.below(6);
                 w.spawn(Machine { origin, coal: 0 });
                 Ok(())
             }

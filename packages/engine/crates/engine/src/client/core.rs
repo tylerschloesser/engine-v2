@@ -11,7 +11,7 @@
 //! around for decoding, and it means neither pass needs a staging buffer.
 
 use crate::game::Game;
-use crate::predict::{Overlay, Pending, PendingQueue};
+use crate::predict::{Overlay, Pending, PendingQueue, Prediction};
 use crate::sim::{Applied, Rejected};
 use crate::time::{Tick, Ticks};
 use crate::wire::{
@@ -415,23 +415,38 @@ impl<G: Game> ClientCore<G> {
         let registry = replica.registry();
         let who = replica.own_player();
         let base = &*replica as &dyn WorldRead<G>;
-        // R0 (docs/plan/25-prediction-core.md Planning decisions "Taint rule": "every pending
-        // action is predicted on its own merits") is the only behaviour this milestone ships: no
-        // pending action's status here depends on any other's. A taint rule (M25 step 6) plugs in
-        // right here -- one place, before calling `predict`, deciding whether *this* `p` runs
-        // `predict` at all or is forced straight to `NotPredictable` because an earlier pending
-        // action in this same pass already declined.
+        // Taint rule R1 (docs/plan/25-prediction-core.md Planning decisions "Taint rule":
+        // "taint-all-later: while any pending action is `NotPredictable`, every later pending
+        // action is `NotPredictable`; the taint ends when the tainting action is popped"). Chosen
+        // over R0 (never taint) and R2 (taint only on write-set overlap): both left contradicted
+        // verdicts in `predict_taint_dependency`/`predict_taint_rollback_visibility` (a declined
+        // action's own write set is unknowable once it stops at the first `Unknown`, so R2 cannot
+        // even see the overlap it would need), so R1 is the only admissible rule (measured counts,
+        // Deviations). `tainted` starts `false` every frame and is driven by each action's own
+        // *freshly recomputed* status in queue order (oldest first, matching `VecDeque::iter_mut`):
+        // once one comes back `NotPredictable` in this pass, every later one in this same pass is
+        // forced `NotPredictable` without even calling `predict` -- and a popped (acked) action
+        // simply is not in this loop at all next frame, which is how the taint "ends when the
+        // tainting action is popped".
         let mut replays = 0u32;
+        let mut tainted = false;
         for p in pending.iter_mut() {
-            p.status = crate::predict::predict(
-                base,
-                registry,
-                overlay,
-                who,
-                p.predicted_tick,
-                p.seq,
-                &p.action,
-            );
+            p.status = if tainted {
+                Prediction::NotPredictable
+            } else {
+                crate::predict::predict(
+                    base,
+                    registry,
+                    overlay,
+                    who,
+                    p.predicted_tick,
+                    p.seq,
+                    &p.action,
+                )
+            };
+            if matches!(p.status, Prediction::NotPredictable) {
+                tainted = true;
+            }
             replays += 1;
         }
         self.predict_replays_last_frame = replays;

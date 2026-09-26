@@ -510,3 +510,395 @@ fn predict_provisional_id_is_not_the_overflow_placeholder() {
         .expect("predicted occupant");
     assert_ne!(id, EntityId(EntityId::PROVISIONAL_BIT));
 }
+
+/// docs/plan/25-prediction-core.md Budgets: `predict_replays_per_frame` (`ClientCore::
+/// predict_replays_last_frame()`) is live -- non-zero on a frame that actually replays a pending
+/// action -- and stays within its own exact `budgets.json` ceiling (`counters.predict.
+/// replaysPerFrame`, equal to the pending-queue capacity).
+#[test]
+fn predict_replays_per_frame_counter_is_live() {
+    let mut lb = loopback(9);
+    let (idx, _who) = add_client(&mut lb, 4);
+    // A second, unrelated client keeps sending non-empty frames every tick (the same reason
+    // `predict_frozen_predicted_tick` needs one): without it, the only frame that ever arrives for
+    // `idx` while its own action is pending is the one that also carries its ack, and the replay
+    // loop never runs with anything left pending to count.
+    let (_noise, who_noise) = add_client(&mut lb, 0);
+    lb.set_camera(idx, camera(10, 10));
+    lb.run(4);
+
+    lb.dispatch(
+        idx,
+        Action::Place {
+            origin: Pos { x: 5, y: 5 },
+        },
+    );
+    let mut replays = 0;
+    for i in 0..8 {
+        lb.action(who_noise, Action::SetGlobal { value: i });
+        lb.step();
+        replays = lb.client(idx).predict_replays_last_frame();
+        if replays > 0 {
+            break;
+        }
+    }
+    assert!(replays > 0, "a pending action must have been replayed");
+    engine::testing::budgets::expect_within_budget(
+        "counters.predict.replaysPerFrame",
+        u64::from(replays),
+    );
+}
+
+/// `Roll` reads nothing before calling `w.rng()?` (0003: "`Unknown` under prediction"): declines
+/// immediately, with an empty overlay, and the host -- which really does have an RNG -- applies it
+/// for real.
+#[test]
+fn predict_rng_declines() {
+    let mut lb = loopback(20);
+    let (idx, _who) = add_client(&mut lb, 3);
+    lb.set_camera(idx, camera(10, 10));
+    lb.run(4);
+
+    let (seq, st) = lb.dispatch(idx, Action::Roll);
+    assert_eq!(st, Prediction::NotPredictable);
+    assert_eq!(lb.overlay_len(idx), 0, "rng() declines before any write");
+
+    let mut confirmed = false;
+    for _ in 0..8 {
+        lb.step();
+        lb.client_mut(idx).drain_results(|s, r| {
+            if s == seq && r.is_ok() {
+                confirmed = true;
+            }
+        });
+    }
+    assert!(confirmed, "the host really does have an rng and applies it");
+}
+
+/// `Cascade`'s own `Game::predict` override returns `false` (0012 Planning decisions: "`predict()
+/// == false` is `NotPredictable` without running `apply`"): no ghost, no overlay write, `Global`
+/// stays at its pre-dispatch value until the host's own ack lands.
+#[test]
+fn predict_opt_out_declines() {
+    let mut lb = loopback(21);
+    let (idx, _who) = add_client(&mut lb, 3);
+    lb.set_camera(idx, camera(10, 10));
+    lb.run(4);
+
+    let (seq, st) = lb.dispatch(idx, Action::Cascade);
+    assert_eq!(
+        st,
+        Prediction::NotPredictable,
+        "predict() == false declines without running apply"
+    );
+    assert_eq!(lb.overlay_len(idx), 0, "apply never ran at all");
+    assert_eq!(
+        lb.global(idx).value,
+        0,
+        "no ghost: unchanged until the host's own ack"
+    );
+
+    let mut confirmed = false;
+    for _ in 0..8 {
+        lb.step();
+        lb.client_mut(idx).drain_results(|s, r| {
+            if s == seq && r.is_ok() {
+                confirmed = true;
+            }
+        });
+    }
+    assert!(confirmed);
+    assert_eq!(
+        lb.global(idx).value,
+        1,
+        "the host really did bump it, for real, once"
+    );
+}
+
+/// `SetGlobal` predicts `Applied` immediately (`w.put_global`, 0003), visible through the
+/// overlay's own `Global` slot before any network round trip.
+#[test]
+fn predict_global_put_predicted() {
+    let mut lb = loopback(22);
+    let (idx, _who) = add_client(&mut lb, 3);
+    lb.set_camera(idx, camera(10, 10));
+    lb.run(4);
+
+    let (seq, st) = lb.dispatch(idx, Action::SetGlobal { value: 42 });
+    assert_eq!(st, Prediction::Applied);
+    assert_eq!(lb.overlay_len(idx), 1);
+    assert_eq!(lb.global(idx).value, 42, "predicted immediately");
+
+    let mut confirmed = false;
+    for _ in 0..8 {
+        lb.step();
+        lb.client_mut(idx).drain_results(|s, r| {
+            if s == seq && r.is_ok() {
+                confirmed = true;
+            }
+        });
+        if confirmed {
+            break;
+        }
+    }
+    assert!(confirmed);
+    assert_eq!(lb.global(idx).value, 42, "now authoritative too");
+}
+
+/// Shared by all three `taint_*` tests below: a second, unrelated client whose own `SetGlobal`
+/// every tick guarantees a non-empty frame every tick for `idx` too (`Global` is broadcast to
+/// everyone, 0011) -- otherwise the only frame that ever reaches `idx` while its own actions are
+/// pending is the one that also acks them, and the taint window these tests need to observe (both
+/// actions still pending, at least one replay past dispatch) never opens.
+fn add_noise(lb: &mut Loopback<Predict>) -> PlayerId {
+    let (_noise, who_noise) = add_client(lb, 0);
+    who_noise
+}
+
+/// Warms up `idx`'s subscription while keeping `who_noise` chattering *every* tick from the very
+/// first one, not just after dispatch: a plain `run(n)` warm-up leaves the per-client delay queue
+/// full of a backlog of otherwise-*empty* frames (nothing changes yet), so the first non-empty
+/// frame to reach `idx` after dispatch would be the very one that also carries the dispatched
+/// actions' own ack -- collapsing the "still pending, pre-ack" window the `taint_*` tests below
+/// need to sample from to nothing (confirmed empirically: without this, `on_frame` never ran at
+/// all while the backlog of empty frames drained, and every sampled status was the frozen
+/// dispatch-time value).
+fn warm_up_with_noise(lb: &mut Loopback<Predict>, who_noise: PlayerId, ticks: i32) {
+    for i in 0..ticks {
+        lb.action(who_noise, Action::SetGlobal { value: -1 - i });
+        lb.step();
+    }
+}
+
+/// Steps `lb` forward (keeping `who_noise` chattering) until the host has acked both `seq_first`
+/// and `seq_second`, or a hard cap is hit. Returns each one's own host verdict (`Ok` -> `true`)
+/// plus every status `seq_second` held on a frame where *both* were still pending -- the taint
+/// window `taint_dependency`/`taint_rollback_visibility`/`taint_independence` all sample from.
+fn run_to_ack_recording_second(
+    lb: &mut Loopback<Predict>,
+    idx: usize,
+    who_noise: PlayerId,
+    seq_first: u32,
+    seq_second: u32,
+) -> (bool, bool, Vec<Prediction<Reject>>) {
+    let mut host_first = None;
+    let mut host_second = None;
+    let mut second_while_both_pending = Vec::new();
+    for i in 0..20 {
+        lb.action(who_noise, Action::SetGlobal { value: i });
+        lb.step();
+        let both_pending = lb.pending(idx).any(|p| p.seq == seq_first)
+            && lb.pending(idx).any(|p| p.seq == seq_second);
+        if both_pending {
+            let status = lb
+                .pending(idx)
+                .find(|p| p.seq == seq_second)
+                .map(|p| p.status.clone())
+                .expect("just checked present");
+            second_while_both_pending.push(status);
+        }
+        lb.client_mut(idx).drain_results(|s, r| {
+            if s == seq_first {
+                host_first = Some(r.is_ok());
+            }
+            if s == seq_second {
+                host_second = Some(r.is_ok());
+            }
+        });
+        if host_first.is_some() && host_second.is_some() {
+            break;
+        }
+    }
+    (
+        host_first.expect("the first action must be acked within the step cap"),
+        host_second.expect("the second action must be acked within the step cap"),
+        second_while_both_pending,
+    )
+}
+
+/// A local `Rejected`/`Applied` verdict for the second action, sampled while both were pending,
+/// that disagrees with the host's own eventual verdict (`host_ok_second`) for that same action --
+/// `NotPredictable` is a hint, never counted (0012: "A local `Rejected` is likewise a hint, never a
+/// verdict").
+fn count_contradicted(statuses: &[Prediction<Reject>], host_ok_second: bool) -> u32 {
+    statuses
+        .iter()
+        .filter(|s| match s {
+            Prediction::NotPredictable => false,
+            Prediction::Applied => !host_ok_second,
+            Prediction::Rejected(_) => host_ok_second,
+        })
+        .count() as u32
+}
+
+/// **`taint_dependency`** (docs/plan/25-prediction-core.md Planning decisions "Taint rule",
+/// verbatim scenario): A (`Place`) declines via `Unknown` at the subscription edge, before any
+/// write; B (`Deposit`, addressed by tile, 0022 §6) depends on A's furnace; the host accepts both.
+/// Counts *contradicted verdicts* while both are pending. The shipped rule (R1) measures 0: B is
+/// tainted `NotPredictable` throughout, so it is never sampled as a `Rejected`/`Applied` verdict
+/// that the host could then contradict. Failability (R0, inject-fail-revert, pasted under
+/// Deviations): with the taint check removed, B predicts fresh every replay against a replica that
+/// has no furnace yet, coming back `Rejected(NoFurnace)` on every sample -- 1 contradiction, since
+/// the host applies it.
+#[test]
+fn predict_taint_dependency() {
+    let mut lb = loopback(30);
+    let (idx, _who) = add_client(&mut lb, 4);
+    let who_noise = add_noise(&mut lb);
+    lb.set_camera(idx, camera(10, 10));
+    warm_up_with_noise(&mut lb, who_noise, 8);
+
+    let (seq_a, st_a) = lb.dispatch(
+        idx,
+        Action::Place {
+            origin: BORDER_ORIGIN,
+        },
+    );
+    assert_eq!(
+        st_a,
+        Prediction::NotPredictable,
+        "A: Unknown at the subscription edge"
+    );
+    assert_eq!(lb.overlay_len(idx), 0, "A wrote nothing before declining");
+
+    let deposit_at = Pos { x: 63, y: 5 }; // A's own held tile: within subscription
+    let (seq_b, st_b_at_dispatch) = lb.dispatch(
+        idx,
+        Action::Deposit {
+            at: deposit_at,
+            count: 1,
+        },
+    );
+    assert_eq!(
+        st_b_at_dispatch,
+        Prediction::Rejected(Reject::NoFurnace),
+        "dispatch's own single predict is not taint-aware: only the next replay tapers it"
+    );
+
+    let (host_a, host_b, b_statuses) =
+        run_to_ack_recording_second(&mut lb, idx, who_noise, seq_a, seq_b);
+    assert!(host_a, "the host places A for real");
+    assert!(host_b, "the host deposits into it too");
+    assert!(
+        !b_statuses.is_empty(),
+        "at least one replay must see both actions still pending"
+    );
+    assert!(
+        b_statuses
+            .iter()
+            .all(|s| matches!(s, Prediction::NotPredictable)),
+        "R1: B is tainted for as long as A is pending: {b_statuses:?}"
+    );
+    assert_eq!(count_contradicted(&b_statuses, host_b), 0);
+}
+
+/// **`taint_rollback_visibility`** (Tests added, verbatim: "repeats it with A failing through
+/// `rng()` after a read"): `PlaceChecked` validates (a read), *writes* the spent inventory, then
+/// calls `w.rng()?` -- `Unknown` under prediction -- before ever spawning. A's own write (the
+/// `put_player` decrement) must be rolled back along with everything else; unlike
+/// `taint_dependency`, A's decline point is nowhere near a chunk edge, so this proves the taint
+/// plugs into the *same* `saw_unknown` signal regardless of which read or write triggered it.
+#[test]
+fn predict_taint_rollback_visibility() {
+    let mut lb = loopback(31);
+    let (idx, _who) = add_client(&mut lb, 4);
+    let who_noise = add_noise(&mut lb);
+    lb.set_camera(idx, camera(10, 10));
+    warm_up_with_noise(&mut lb, who_noise, 8);
+
+    let origin = Pos { x: 5, y: 5 }; // fully held: the only decline path here is rng()
+    let (seq_a, st_a) = lb.dispatch(idx, Action::PlaceChecked { origin });
+    assert_eq!(
+        st_a,
+        Prediction::NotPredictable,
+        "A: declines through rng() after a read and a write"
+    );
+    assert_eq!(
+        lb.overlay_len(idx),
+        0,
+        "the player-decrement write was rolled back"
+    );
+    assert_eq!(
+        my_state(&lb, idx).furnaces,
+        START_FURNACES,
+        "no partial spend survives the decline"
+    );
+
+    let (seq_b, st_b_at_dispatch) = lb.dispatch(
+        idx,
+        Action::Deposit {
+            at: origin,
+            count: 1,
+        },
+    );
+    assert_eq!(st_b_at_dispatch, Prediction::Rejected(Reject::NoFurnace));
+
+    let (host_a, host_b, b_statuses) =
+        run_to_ack_recording_second(&mut lb, idx, who_noise, seq_a, seq_b);
+    assert!(
+        host_a,
+        "the host places A for real (its own rng draw succeeds there)"
+    );
+    assert!(host_b, "the host deposits into it too");
+    assert!(!b_statuses.is_empty());
+    assert!(
+        b_statuses
+            .iter()
+            .all(|s| matches!(s, Prediction::NotPredictable))
+    );
+    assert_eq!(count_contradicted(&b_statuses, host_b), 0);
+}
+
+/// **`taint_independence`** (Tests added, verbatim: "A declines; C is unrelated"). Counts *lost
+/// predictions*: C would merit `Applied` on its own (proven by its own untainted dispatch-time
+/// status), but R1 taints it anyway for as long as A is undecided, purely because of queue order.
+/// The measured count below is literal, not derived from another rule's run (must-knows); the R0
+/// counter-proof (inject-fail-revert, pasted under Deviations) shows 0 lost predictions there --
+/// R0 never taints anything, so C always predicts on its own merits.
+#[test]
+fn predict_taint_independence() {
+    let mut lb = loopback(32);
+    let (idx, _who) = add_client(&mut lb, 4);
+    let who_noise = add_noise(&mut lb);
+    lb.set_camera(idx, camera(10, 10));
+    warm_up_with_noise(&mut lb, who_noise, 8);
+
+    let (seq_a, st_a) = lb.dispatch(
+        idx,
+        Action::Place {
+            origin: BORDER_ORIGIN,
+        },
+    );
+    assert_eq!(st_a, Prediction::NotPredictable);
+
+    let c_origin = Pos { x: 2, y: 2 }; // fully held, nothing to do with A at all
+    let (seq_c, st_c_at_dispatch) = lb.dispatch(idx, Action::Place { origin: c_origin });
+    assert_eq!(
+        st_c_at_dispatch,
+        Prediction::Applied,
+        "C's own dispatch-time predict (untainted) shows what it merits on its own"
+    );
+
+    let (host_a, host_c, c_statuses) =
+        run_to_ack_recording_second(&mut lb, idx, who_noise, seq_a, seq_c);
+    assert!(host_a);
+    assert!(
+        host_c,
+        "the host places C too: it was never actually invalid"
+    );
+    assert!(!c_statuses.is_empty());
+
+    let lost = c_statuses
+        .iter()
+        .filter(|s| matches!(s, Prediction::NotPredictable))
+        .count();
+    assert_eq!(
+        lost,
+        c_statuses.len(),
+        "every sample while A is undecided is a lost prediction under R1"
+    );
+    assert_eq!(
+        lost, 4,
+        "literal count for the shipped rule (R1), this seed/delay/noise schedule; see Deviations"
+    );
+}

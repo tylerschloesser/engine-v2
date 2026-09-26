@@ -328,6 +328,22 @@ where
         out
     }
 
+    /// This client's own prediction-merged `Global` (docs/plan/25-prediction-core.md Tests added:
+    /// `global_put_predicted` needs to see a predicted `put_global` before any ack, which
+    /// `Predicting::global`/`View::global`'s own overlay-first merge already provides -- `visible`
+    /// covers tiles/entities/the local player, not this scope.
+    pub fn global(&self, i: usize) -> G::Global
+    where
+        G::Global: Clone,
+    {
+        let core = &self.clients[i].core;
+        let replica = core.view();
+        let held = |c: crate::world::ChunkCoord| replica.is_held(c);
+        let view = View::<G>::new(replica.store(), replica.registry(), replica.tick(), &held)
+            .with_overlay(core.overlay());
+        view.global().clone()
+    }
+
     pub fn last_built_frame(&self, i: usize) -> &[u8] {
         &self.clients[i].last_built
     }
