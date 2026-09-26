@@ -85,6 +85,232 @@ Add to `packages/engine/src/host/CLAUDE.md` (create if absent, ≤ 15 lines): ev
 none
 
 ## Deviations
-(filled in during Phase 3)
+
+**Scope actually landed: steps 1-3 only**, per the delegation prompt. Base `f41a1a2`. Step 4
+(`recovery.ts`, sim worker wiring, browser test) is a second implementer's.
+
+### RegionId conflict: `Progress` is 9, not 11
+
+The brief's Seams said `RegionId` 9 for `Progress`, but `GenIn` already holds `9` (declared by
+M08b, before this brief was written) and `RegionId` numbers are append-only, never reused
+(`registry.rs`'s own rule; `REGION_COUNT` was already 11, ids 0-10 all taken). **Landed:
+`RegionId::Progress = 11`** (`REGION_COUNT` 11 -> 12), in both `registry.rs` and `abi.ts`. Flagged
+here rather than silently changing a stated seam number.
+
+### Architectural finding: a genuine two-pass scan is unavoidable, and needed its own ABI pass
+
+`Skip { segment, offset }`'s own target typically lives in an *earlier* frame than the `Skip`
+record itself (0005 step 3: the host discovers the poisoned record, then *appends* a new `Skip`
+frame naming it -- the original frame is untouched). Honouring it therefore requires seeing every
+frame in a segment before applying any of them (a true two-pass scan, not a per-frame decision).
+
+First attempt: fold the scan into `sim_replay_push` itself (buffer every decoded frame, defer all
+application to `sim_replay_end`). This works in isolation but **broke `engine/test`'s
+`replayWorld`/`runHeavy`** (`replay_world_checkpoints_node`, `heavy_wasm_n50`,
+`replay_world_checkpoints_two_segment_real_pipeline`, `replay_world_detects_a_segment_boundary_
+hash_mismatch`, the Bun leg -- caught immediately, `pnpm test wasm` red): `driveCell`
+(`src/test/replay.ts`) drives `sim_replay_begin`/`push` **tick-by-tick**, interjecting between
+calls (`runHeavy`'s own restore-mid-drive), and depends on each pushed frame being *applied
+immediately*, not buffered. A buffer-everything-then-apply `sim_replay_end` cannot support that
+without changing `replayWorld`/`runHeavy`'s own driving loop into multiple `begin`/`push`/`end`
+rounds per segment -- and a *per-round* scan would miss a `Skip` target in a later round.
+
+**Landed instead: a separate scan pass, its own three exports, run once over the whole segment
+tail *before* the pre-existing `sim_replay_begin`/`push`/`end` (which keep their exact original
+per-frame-immediate-apply contract, now consulting `self.replay_skip_targets`):**
+- `sim_replay_scan_begin(segment) -> status`, `sim_replay_scan_push(len) -> status`,
+  `sim_replay_scan_end() -> status` -- same in-region-as-receive-buffer shape as
+  `sim_replay_push`; decodes with its own `FrameReader` (`Host::scan_reader`), collects every
+  `Skip{segment,offset}` whose `segment` matches into `Host::replay_skip_targets`
+  (`BTreeSet<u32>`), touches `self.sim` not at all. `sim_replay_begin` no longer resets
+  `replay_skip_targets` (only `sim_replay_scan_begin` does).
+- Callers (`Persistence.loadLatest`, `test/replay.ts`'s `scanSkipTargets`, one call per segment
+  per instance) feed the **same** segment-tail bytes to the scan pass first, then proceed exactly
+  as before. `packages/engine/src/host/persistence.ts` and `packages/engine/src/test/replay.ts`
+  were touched for this (outside the brief's own Files list, unavoidable: the ABI's replay
+  contract changed shape). `ABI_VERSION` 17 -> 18 covers all of this milestone's additions in one
+  bump.
+- **Known gap, not fixed here**: `runHeavy`'s own `restoreFresh` mid-drive swap builds a brand
+  new instance via `sim_restore_*` that never goes through the scan pass, so `replay_skip_targets`
+  is empty on it. No existing `runHeavy` test combines a mid-drive restore with a `Skip` record
+  (heavy mode doesn't test recovery), so this is latent, not exercised -- flagged for whoever
+  first needs both together.
+- Per-record filtering needs each record's own byte offset, not just the frame's: `persist::
+  frame::DecodedFrame` gained `frame_offset: u64` and `record_offsets: Vec<u64>` (both relative to
+  the `FrameReader`'s own first-ever byte, the same basis `sim_replay_valid_end` already uses for
+  `replay_base_offset`); `FrameReader` gained a private running `total_consumed: u64`;
+  `bytes::ByteReader` gained `pos()`.
+- **A `Skip`-only frame is written with `tick_delta = 0`** (`Host::sim_log_skip`, reusing
+  `persist::FrameWriter` directly -- it carries no game-typed payload, so it doesn't need
+  `sim_seal_frame`'s own hand-rolled encoding, which exists only to avoid a `G::Action: Clone`
+  bound). `sim_replay_push`'s apply pass treats `tick_delta == 0` as "administrative, never a real
+  elapsed tick": it is decoded (so its own record reaches the scan pass) but never stepped, and
+  `self.last_logged_tick` is left untouched -- proven by
+  `replay_of_a_segment_whose_last_frame_is_skip_then_more_live_frames`
+  (`fixtures/panicky/tests/skip_replay.rs`), which appends a `Skip` frame as the *last* frame of a
+  segment, then continues logging and ticking for real past it, and checks both the resulting hash
+  and the exact tick count (3, not 4) against a from-scratch replay of the whole thing.
+
+### Seam for step 4 (as requested, verbatim)
+
+- **`Phase` numbering** (`persist::progress::Phase`, `u32`): `Idle=0, Admit=1, ApplyRecord=2,
+  OnPlayer=3, Tick=4, BuildFrame=5, Snapshot=6, Replay=7`. `ProgressCursor { phase, tick, record }`
+  is 12 raw LE bytes at `RegionId::Progress` offset 0 (`phase u32 | tick u32 | record u32`).
+- **When each is written**: `Host::mark_progress(phase, tick, record)` runs immediately *before*
+  the risky call it names, and every export that succeeds ends by calling `Host::mark_idle(tick)`
+  (writes `Phase::Idle`) -- so `sim_test_trap` (which writes nothing of its own before panicking)
+  is seen to have trapped in `Phase::Idle`, whatever the *previous* successful call left behind.
+  `Admit`: in `Host::on_uplink`, right before each carried action's own `G::admit` call (`record` =
+  that action's `seq`). `ApplyRecord`/`OnPlayer`/`Tick`: inside `Sim::step_with_progress` (new; the
+  hook `Sim::step` itself never used, since `sim/` has no region to write into -- only `Host`
+  does, via a small free function `progress_writer` the tick/replay paths pass a closure built
+  from), called once per record before `G::apply`/`G::on_player`, and once more, `(Phase::Tick,
+  0)`, right before `G::tick`. `BuildFrame`: in `sim_build_frame`, before `Host::build_frame`
+  (`record` = `conn`). `Snapshot`: in *both* `sim_snapshot_begin` (before `SnapshotWriter::begin`,
+  which does the real encoding work eagerly, M22's own Deviations) and `sim_snapshot_next` (before
+  `writer.next`). `Replay`: in `sim_replay_begin` (before creating the reader) and in
+  `sim_replay_push` (before each decode-and-apply pass over a pushed block) -- **not** written by
+  the scan pass (`sim_replay_scan_*`), which never calls game code and can't meaningfully trap.
+- **`ApplyRecord`'s `record` field**: while ticking live, the **0-based index** of the record
+  within whatever slice `Sim::step_with_progress` was called with (`Host::tick`'s own
+  `pending_records`) -- meaningless for `Skip` targeting, since a live trap always triggers a
+  plain "recover and replay the tail" first, and only a *second*, replay-time trap at the same
+  spot decides a `Skip` (Planning decisions 1). During replay (`sim_replay_push`'s own apply
+  pass), it is the record's **absolute byte offset within the segment**
+  (`replay_base_offset + DecodedFrame::record_offsets[i]`, truncated to `u32`) -- exactly what
+  `sim_log_skip(segment, offset)` expects as `offset`. The hook closure in `sim_replay_push`
+  remaps `(Phase, index)` to `(Phase, filtered_offsets[index])` for this reason; a live tick's own
+  hook passes the index straight through.
+- **`sim_log_skip`'s output**: writes into `RegionId::Persist` (same region `sim_seal_frame` uses),
+  returns the byte length or `-(status)` (same shape as `sim_seal_frame`/`sim_segment_header`).
+  The caller (TS) is responsible for `storage.append`-ing those bytes to the **currently open**
+  segment (Planning decisions 1: "always the record's own segment") and re-running recovery.
+  Needs no live `Sim` (`self.sim.is_none()` is fine) -- call it on whatever fresh instance is at
+  hand, including one about to be discarded.
+- **The `EngineFault` ack**: queued in a new `Host::pending_fault_acks: Vec<(PlayerId, u32)>`,
+  pushed by `sim_replay_push`'s apply pass for every record whose byte offset is a skip target
+  (only `FrameRecord::Action` records reach this -- `record_ack(who, seq)` first, which is what
+  advances `last_seq`, *then* the push). **Delivered by `Host::connect`**: on every (re)connect it
+  now drains every `pending_fault_acks` entry for that `PlayerId` into the fresh `ConnSlot`'s own
+  `pending_results` as `Outcome { seq, result: Err(Rejected::Engine(EngineReject::EngineFault)) }`
+  -- so it rides out on that connection's own next `sim_build_frame` call, satisfying "the
+  player's first frame after recovery" *as long as step 4's recovery flow calls `sim_connect`
+  again for every still-open connection right after a successful recovery* (replay never calls
+  `Host::connect` itself, M22b Deviations: a recovered/loaded `Sim` starts with an empty
+  connection table).
+- **A skipped record still advances `last_seq`**: via `Authority::record_ack(who, seq)`, called
+  directly (never through `apply`/`on_player`) for the skipped record before it's dropped from the
+  filtered slice handed to `Sim::step_with_progress`. This is real sim state (`Store::last_seq`),
+  so it round-trips through the hash and through `on_uplink`'s own pre-existing dedup floor
+  (`store.last_seq(player)`) with no changes needed there at all -- proven directly:
+  `replay_honours_skip_and_advances_seq` reconnects after replay and resends the skipped `seq`
+  with a real (additive) action, and confirms it is silently dropped.
+- **`panicky`'s phases**: `PanicInAdmit` and `OverflowStackInAdmit` both panic in `Phase::Admit`
+  (never reach `apply` in a real run: `admit` traps first). `PanicInApply` panics in
+  `Phase::ApplyRecord`, admitted and logged cleanly first. `ArmTickPanic{at}`/`ArmTickAlloc{at}`
+  are admitted and applied cleanly (they only arm a `Global` flag); the panic (or, for
+  `ArmTickAlloc`, the over-budget allocation -- see below) happens in `Phase::Tick`, once
+  `Sim`'s tick counter reaches `at`. **`cx.tick()` inside `Game::tick` is always one behind the
+  post-call counter** (`Sim::step`'s own `advance_tick()` runs last): arming `at: N` and reaching
+  it takes `N + 1` total `sim_tick()` calls from genesis.
+- **`OverflowStackInAdmit`'s real implementation is the raw `unreachable` WASM instruction**
+  (`core::arch::wasm32::unreachable()`, `fx_panicky::trap_no_panic`), **not genuine stack
+  overflow via unbounded recursion.** A first version used real non-tail recursion; under
+  Vitest/Node it reliably crashed the whole worker process with `SIGABRT`
+  ("`FATAL ERROR: Reached heap limit ... JavaScript heap out of memory`") rather than raising a
+  catchable `WebAssembly.RuntimeError` -- an uncatchable process crash, useless as a test fixture.
+  `unreachable` is 0014 §6's *other* named example of "a trap with no preceding `engine.panic`
+  call" and produces the exact same observable property (`EngineTrap` whose `panicMessage` is the
+  raw `RuntimeError`'s text, e.g. `"unreachable"`) with none of the risk. `ArmTickAlloc`
+  over-allocates 512 MiB (`Vec::with_capacity`) rather than calling `panic!`: `abi::arena::Arena`'s
+  own debug-build check (`grow_live`) reports that as a panic through `panic::fatal` *before* the
+  real allocation runs, once a real `arenaBytes` budget is reserved (`engine_init`) -- inert
+  natively (`RESERVED` stays 0 outside `engine_init`, so this milestone's own native tests never
+  trigger it; step 4's own WASM test is where it first becomes a real trap).
+- **`Global::apply_count: u32`** was added to `fx_panicky` beyond the brief's own action list: an
+  "additive action" field (bumped once per successful, non-panicking `apply`) needed to prove a
+  `Skip`-fenced or resent record was never (re-)applied -- neither `armed_tick_panic`/
+  `armed_tick_alloc` (both `Option<u32>`, idempotent when set twice) could show a double-apply on
+  their own.
+
+### A second, unrelated infrastructure finding: `expect(engineInstance).not.toBe(...)` can OOM the Vitest worker
+
+While writing `panicky-trap.test.ts`, `expect(a).not.toBe(b)` on two real `EngineInstance` values
+(never on a *failing* assertion -- this one always passed) reliably crashed the whole `wasm`
+Vitest worker (`SIGABRT`, heap trace showing `Reached heap limit ... JavaScript heap out of
+memory`, `V8` mid `Object.entries`/pretty-print machinery). Root-caused by bisection (removing
+every other difference from a passing minimal repro) to that one matcher call on that one value
+shape: an `EngineInstance` holds `mem` (live `Uint8Array`/`Uint32Array` views over the WASM linear
+memory) and `x` (every raw export function) -- Vitest's `toBe`/`not.toBe` appears to eagerly
+pretty-print both operands regardless of outcome, and doing that for a WASM-memory-backed object
+is pathological. **Fix: never hand an `EngineInstance` to `expect()`** -- every comparison in
+`panicky-trap.test.ts` uses a plain `===`/property read instead (`expect(a === b).toBe(false)`,
+`expect(a.dead).toBe(true)`, etc.), documented at the top of that file. Not otherwise reported or
+investigated further (no time budget for a Vitest issue report); flagged here so no later
+milestone's own WASM test rediscovers it the hard way.
+
+### Anti-vacuity (inject/fail/revert; fail lines pasted verbatim)
+
+- `call_path` test: injected `inst.x.sim_hash()` (a direct call) into `server.ts` ->
+  `Error: raw export call(s) bypassing call0/call1/call2: server.ts:184: const status =
+  inst.x.sim_hash()`. Reverted, `git diff` clean.
+- `progress_cursor_written_before_each_phase`: removed the `Admit`-phase `mark_progress` call ->
+  `Admit phase never written before the panic: []`. Removed *both* `Snapshot`-phase calls
+  (`sim_snapshot_begin`'s alone was vacuous -- `sim_snapshot_next`'s own call still covered it) ->
+  `Snapshot phase never written: [ProgressCursor { phase: Idle, ... }, ...]`. Removed the
+  `Phase::Tick` hook call in `Sim::step_with_progress` -> `Tick phase never written before the
+  panic: [ProgressCursor { phase: OnPlayer, ... }, ProgressCursor { phase: OnPlayer, ... },
+  ProgressCursor { phase: ApplyRecord, ... }]`. All three reverted, green. (`Admit`, `ApplyRecord`
+  and `Tick` are also independently proven by three real panics inside the same test, per phase;
+  `BuildFrame`/`Replay` were not separately injection-tested, for lack of time -- flagged, not a
+  gap in the writes themselves, which mirror the tested ones exactly.)
+- `replay_honours_skip_and_advances_seq`: disabled the skip-target check
+  (`if false && self.replay_skip_targets.contains(...)`) -> `assertion left == right failed: the
+  skipped record must never reach apply\n  left: 1\n right: 0`. Reverted, green.
+- `replay_with_skip_is_deterministic`: same injection -> `assertion left != right failed: a
+  Skip-bearing replay must diverge from the Skip-free one -- otherwise the Skip proved nothing\n
+  left: 9800360619973041494\n right: 9800360619973041494`. Reverted, green.
+- `replay_of_a_segment_whose_last_frame_is_skip_then_more_live_frames`: disabled the
+  `tick_delta == 0` administrative-frame guard -> `assertion left == right failed: the Skip-only
+  frame must not itself advance the tick counter\n  left: 4\n right: 3`. Reverted, green.
+- `skip_record_golden_bytes`: not independently injection-tested (a golden fails on any byte drift
+  by construction, same reasoning M22/M22b gave for their own golden tests).
+
+### Measured
+
+`pnpm test`: `rust pass 528 tests` (520 native workspace + 8 `fx-panicky`), `unit pass 251 tests`,
+`wasm pass 111 tests`, `browser` unchanged from base (no browser file touched). `pnpm lint`:
+biome/rustfmt/clippy/tsc all green. No existing golden moved (`persist_frame_golden_bytes`,
+`persist_snapshot_golden_bytes`, `persist_abi_log_parity.hex`, `puts_*`, `machines_*` all
+untouched); `skip_record_golden_bytes` is new, blessed once (`100001020005000000d2040000381e1a7d`
+-- a 17-byte frame: `len=16 | tick_delta=0 | count=1 | kind=Skip(2) | player_slot=0 | segment=5 |
+offset=1234 | crc32`).
+
+### Context artifacts
+
+- `packages/engine/src/host/CLAUDE.md`: one new bullet (panic recovery: call-path rule, dead-read
+  rule, recovery constants live in `recovery.ts`), kept at exactly the 60-line cap.
+- `packages/engine/crates/engine/src/persist/CLAUDE.md`: replaced the stale "replay is
+  single-pass" line with the real two-pass design and where each driver lives (31 lines, well
+  under the cap).
+- `packages/engine/crates/engine/CLAUDE.md`: patched the `ABI_VERSION`/export-list line (17 -> 18,
+  names this milestone's six new exports and `RegionId::Progress`), same drift class M22/M22b
+  already found and fixed for their own halves.
+
+### Notes for the second implementer (step 4)
+
+- `SimHost.recover(): Promise<'resumed' | 'skipped' | 'fatal'>`, `SimHost.onRecovered`/`onFatal`,
+  the loop guard, and `recovery.ts` itself are all still to build -- nothing here wires a `Storage`
+  failure or a real trap into any of that.
+- After a successful recovery/replay, call `sim_connect` again for every still-open connection
+  *before* the first real `sim_tick()`/`sim_build_frame()` -- this is what makes the queued
+  `EngineFault` ack (already implemented, see above) actually reach the client, and what M22b's
+  own Deviations already flagged as owed to M27/M28's "session resume after a load".
+- `runHeavy`'s mid-drive `restoreFresh` not re-running the scan pass (above) is latent; only
+  matters once something tests heavy mode against a `Skip`-bearing log, which nothing does yet.
+- `engine/test.trapSim(inst: EngineInstance): void` takes the raw instance, not `SimHost` --
+  `server.ts`'s own `SimInstance` seam is deliberately narrow (`wrapEngineInstance`'s doc comment),
+  and widening it would ripple into every hand-written fake `SimInstance` in this repo's existing
+  tests. Wire it into whatever `SimHost`-level call `M28b`'s `harness.panicServer()` needs.
 
 ADR note: 0009 `HostServices` had no member through which a *server* host learns of `onFatal` (0005 Panic recovery 4). 0024 §5 adds `HostServices.onFatal?`; this brief exposes `SimHost.onFatal` and M27 maps it.
