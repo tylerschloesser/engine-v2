@@ -12,6 +12,13 @@ import type { EngineInstance } from '../loader.js'
 import type { WorldConfig } from '../sim-config.js'
 import type { Storage, WorldKeys } from '../storage/types.js'
 import { worldKeys } from '../storage/types.js'
+import type { IncompatReasonName } from './upgrade.js'
+import {
+  openNewSegmentAfterUpgrade,
+  replayDroppedCount,
+  runUpgradeCandidate,
+  scanRecordCount,
+} from './upgrade.js'
 
 /** `sim_segment_header`'s own sentinel (`crates/engine/src/host/mod.rs`'s `GENESIS_BASE_TICK`):
  * `baseTick` equal to this means `SegmentBase::Genesis`. */
@@ -62,39 +69,52 @@ export interface ManifestSegment {
 }
 
 /** Planning decisions 3, verbatim shape: `{ v: 1, worldId, epoch: 0, params, created, segments }`.
- * `epoch` is reserved (M28b owns and increments it); `params` is `WorldConfig.params`, verbatim. */
+ * `epoch` is reserved (M28b owns and increments it); `params` is `WorldConfig.params`, plus one
+ * addition (docs/plan/24b-upgrade-and-migration.md Scope): `chunkBits`, the running build's own
+ * `G::CHUNK_BITS` (read through the `chunk_bits()` ABI export, never user-authored) at the moment
+ * the world was created -- `params` is no longer *quite* verbatim `cfg.params`, since this one field
+ * is engine-known, not caller-known (this milestone's own Deviations). */
 export interface ManifestV1 {
   v: 1
   worldId: string
   epoch: 0
-  params: WorldConfig['params']
+  params: WorldConfig['params'] & { chunkBits?: number }
   created: IdentityJson
   segments: ManifestSegment[]
 }
 
 /** docs/plan/22b-persistence-load-and-fs.md Seams: thrown by `Persistence.open`/`loadLatest` when
- * a stored world cannot simply be loaded. `identity`: the running build's own identity differs from
- * the stored one (0005 Upgrades; M24b turns this into the upgrade path -- here it is reported, not
- * handled, and nothing is written). `corrupt`: every candidate snapshot (and, if segment 0 is all
+ * a stored world cannot simply be loaded. `identity`: reserved (M22b/M23's own placeholder;
+ * superseded by `incompatible` below -- a build-hash difference alone no longer means this, since
+ * M24b's upgrade path handles it). `corrupt`: every candidate snapshot (and, if segment 0 is all
  * there ever was, the log itself) failed to decode. `container`: reserved for a future container-
  * version mismatch the engine cannot even attempt (nothing raises this yet: a version mismatch on a
  * single candidate snapshot is instead treated the same as `corrupt`, falling back to an older one,
- * since a *newer* running build can still read an *older* segment's own untouched history). */
+ * since a *newer* running build can still read an *older* segment's own untouched history).
+ * `incompatible` (docs/plan/24b-upgrade-and-migration.md): the upgrade path itself concluded
+ * `SaveIncompatible` (`reason` names why: `Schema`/`TickRate`/`Worldgen`/`MigrateDeclined`/
+ * `Container`/`Decode` from `sim_upgrade_end`, or `ChunkSize` raised here, before any ABI call, from
+ * the manifest) -- every stored byte is guaranteed untouched (Planning decisions 7), and no
+ * fallback to an older snapshot is attempted (every snapshot in the same segment shares the same
+ * identity, so an older one would fail identically). */
 export class WorldLoadError extends Error {
-  readonly kind: 'identity' | 'corrupt' | 'container'
+  readonly kind: 'identity' | 'corrupt' | 'container' | 'incompatible'
   readonly running: IdentityJson
   readonly stored?: IdentityJson
+  readonly reason?: IncompatReasonName
 
   constructor(
-    kind: 'identity' | 'corrupt' | 'container',
+    kind: 'identity' | 'corrupt' | 'container' | 'incompatible',
     running: IdentityJson,
     stored?: IdentityJson,
+    reason?: IncompatReasonName,
   ) {
-    super(`WorldLoadError: ${kind}`)
+    super(`WorldLoadError: ${kind}${reason ? ` (${reason})` : ''}`)
     this.name = 'WorldLoadError'
     this.kind = kind
     this.running = running
     if (stored !== undefined) this.stored = stored
+    if (reason !== undefined) this.reason = reason
   }
 }
 
@@ -150,6 +170,23 @@ function decodeIdentity(bytes: Uint8Array): IdentityJson {
     worldgen: { version: wgVersion, fingerprint },
   }
 }
+
+/** docs/plan/24b-upgrade-and-migration.md: decodes a *snapshot candidate's own* identity straight
+ * from its raw container bytes (0005 Formats: `magic(4) | container_version u16 | varint(total_len)
+ * | identity | ...`) -- the ground truth for "what build actually wrote this snapshot", since a
+ * segment's own `ManifestSegment.identity` only ever recorded `manifest.created` before this
+ * milestone (harmless when identity never changed across a segment's life, which was every world
+ * before M24b's own upgrade path). Never decodes further than `identity` itself. */
+function parseSnapshotIdentity(bytes: Uint8Array): IdentityJson {
+  const [, afterLen] = readVarint(bytes, 6) // skip magic(4) + container_version u16, land on the varint
+  return decodeIdentity(bytes.subarray(afterLen))
+}
+
+/** docs/plan/24b-upgrade-and-migration.md Scope: 0007 §3's own default ("CHUNK_BITS is 5 here"),
+ * used only as the *stored* side's fallback when reading a manifest written before this milestone
+ * (which never recorded `params.chunkBits` at all) -- the running side always reads the real value
+ * back from the build itself, through `chunk_bits()`. */
+const DEFAULT_CHUNK_BITS = 5
 
 /** Planning decisions 1: "the host copies blocks into one JS-side `SnapshotBuffer` (an
  * `ArrayBuffer` that doubles when too small, a rare discontinuity under 0016 §2)". Exposes its own
@@ -318,12 +355,13 @@ export class Persistence {
     // that touches it (`.claude/rules/hot-paths.md`'s own "whole region view" convention).
     const headerBytes = region.u8.slice(0, headerLen)
     const identity = decodeIdentity(headerBytes)
+    const chunkBits = sim.call0(sim.x.chunk_bits) || DEFAULT_CHUNK_BITS
 
     const manifest: ManifestV1 = {
       v: 1,
       worldId: cfg.worldId,
       epoch: 0,
-      params: cfg.params,
+      params: { ...cfg.params, chunkBits },
       created: identity,
       segments: [{ index: 0, identity, base: 'genesis', sealed: false, tailReexecuted: false }],
     }
@@ -353,9 +391,13 @@ export class Persistence {
   ): Promise<{
     persistence: Persistence
     sim: EngineInstance
-    outcome: 'created' | 'loaded' | 'recovered'
+    outcome: 'created' | 'loaded' | 'recovered' | 'upgraded'
     tick: number
     truncatedBytes: number
+    /** docs/plan/24b-upgrade-and-migration.md: present only when `outcome === 'upgraded'` -- a
+     * caller (`worker/sim.ts`, or a test) uses this to fire `SimHost.onRecovered` with
+     * `reason: 'upgrade'` once (Deviations of M24's own `onRecovered`: "widen it to 'upgrade'"). */
+    upgrade?: { reason: 'direct' | 'migrated'; droppedTailRecords: number }
   }> {
     const keys = worldKeys(cfg.worldId)
     const manifestBytes = await storage.read(keys.manifest)
@@ -366,8 +408,29 @@ export class Persistence {
     }
 
     const manifest: ManifestV1 = JSON.parse(textDecoder.decode(manifestBytes)) as ManifestV1
+
+    // Scope: "Persistence.open compares [chunkBits] with the running build before any load" -- a
+    // pure manifest/config comparison, no ABI call and no write, so a mismatch here can never leave
+    // storage touched.
+    {
+      const probe = newInstance()
+      const runningChunkBits = probe.call0(probe.x.chunk_bits) || DEFAULT_CHUNK_BITS
+      const storedChunkBits = manifest.params.chunkBits ?? DEFAULT_CHUNK_BITS
+      if (runningChunkBits !== storedChunkBits) {
+        const headerLen = probe.call2(probe.x.sim_segment_header, 0, GENESIS_BASE_TICK)
+        const region = probe.region(RegionId.Persist)
+        const runningIdentity =
+          headerLen >= 0 && region
+            ? decodeIdentity(region.u8.slice(0, headerLen))
+            : manifest.created
+        throw new WorldLoadError('incompatible', runningIdentity, manifest.created, 'ChunkSize')
+      }
+    }
+
     const loaded = await Persistence.loadLatest(storage, keys, manifest, newInstance)
-    const healedManifest = await Persistence.healManifest(storage, keys, manifest, loaded)
+    const healedManifest = loaded.upgrade
+      ? loaded.upgrade.manifest
+      : await Persistence.healManifest(storage, keys, manifest, loaded)
     const ticksPerSecond = loaded.sim.call0(loaded.sim.x.tick_hz) || 20
     const persistence = new Persistence(
       storage,
@@ -387,6 +450,14 @@ export class Persistence {
       outcome: loaded.outcome,
       tick: loaded.tick,
       truncatedBytes: loaded.truncatedBytes,
+      ...(loaded.upgrade
+        ? {
+            upgrade: {
+              reason: loaded.upgrade.reason,
+              droppedTailRecords: loaded.upgrade.droppedTailRecords,
+            },
+          }
+        : {}),
     }
   }
 
@@ -430,7 +501,12 @@ export class Persistence {
     baseTick: number
     tick: number
     truncatedBytes: number
-    outcome: 'loaded' | 'recovered'
+    outcome: 'loaded' | 'recovered' | 'upgraded'
+    /** docs/plan/24b-upgrade-and-migration.md: present only when `outcome === 'upgraded'`. `manifest`
+     * is already fully healed (0005 Consequences: a new segment was opened, Planning decisions 7) --
+     * the caller uses it directly instead of `healManifest` (which would otherwise rewrite it again
+     * from stale `manifest.created` identity). */
+    upgrade?: { manifest: ManifestV1; reason: 'direct' | 'migrated'; droppedTailRecords: number }
   }> {
     let inst = newInstance()
     const headerLen = inst.call2(inst.x.sim_segment_header, 0, GENESIS_BASE_TICK)
@@ -440,9 +516,6 @@ export class Persistence {
     const headerRegion = inst.region(RegionId.Persist)
     if (!headerRegion) throw new Error('Persistence.loadLatest: the Persist region is absent')
     const runningIdentity = decodeIdentity(headerRegion.u8.slice(0, headerLen))
-    if (runningIdentity.buildHash !== manifest.created.buildHash) {
-      throw new WorldLoadError('identity', runningIdentity, manifest.created)
-    }
 
     const snapPrefix = `worlds/${manifest.worldId}/snap/`
     // Zero-padded decimal ticks (`worldKeys`'s own convention): a lexicographic sort is a numeric
@@ -451,7 +524,13 @@ export class Persistence {
 
     let recovered = false
     let usedInstance = false
-    let picked: { logSegment: number; logOffset: number; baseTick: number } | null = null
+    let picked: {
+      logSegment: number
+      logOffset: number
+      baseTick: number
+      migrated: boolean
+      identityChanged: boolean
+    } | null = null
 
     for (const key of snapKeys) {
       const bytes = await storage.read(key)
@@ -459,36 +538,34 @@ export class Persistence {
       if (usedInstance) inst = newInstance()
       usedInstance = true
 
-      const beginStatus = inst.call1(inst.x.sim_restore_begin, bytes.length)
-      const region = inst.region(RegionId.Persist)
-      if (!region) throw new Error('Persistence.loadLatest: the Persist region is absent')
-      let pushesOk = beginStatus === Status.Ok
-      if (pushesOk) {
-        for (let off = 0; off < bytes.length; ) {
-          const n = Math.min(region.len, bytes.length - off)
-          region.u8.set(bytes.subarray(off, off + n), 0)
-          const pushStatus = inst.call1(inst.x.sim_restore_push, n)
-          if (pushStatus !== Status.Ok) {
-            pushesOk = false
-            break
-          }
-          off += n
-        }
+      // docs/plan/24b-upgrade-and-migration.md step 4: `sim_upgrade_*` replaces `sim_restore_*` --
+      // a candidate's own identity may legitimately differ from `runningIdentity` now; only
+      // `sim_upgrade_end` (which alone has `persist::Identity::compare`'s verdict) knows whether
+      // that is a direct load, a migration, or a genuine `SaveIncompatible`.
+      const candidate = runUpgradeCandidate(inst, bytes)
+      if (candidate.kind === 'incompatible') {
+        // Planning decisions 7: no fallback to an older snapshot -- every snapshot in this segment
+        // shares the same stored identity, so an older one would fail identically, and "no write of
+        // any kind" is the whole point of this status.
+        throw new WorldLoadError(
+          'incompatible',
+          runningIdentity,
+          parseSnapshotIdentity(bytes),
+          candidate.reason,
+        )
       }
-      const endStatus = inst.call0(inst.x.sim_restore_end)
-      if (endStatus === Status.IdentityMismatch) {
-        throw new WorldLoadError('identity', runningIdentity, manifest.created)
-      }
-      if (!pushesOk || endStatus !== Status.Ok) {
+      if (candidate.kind === 'unusable') {
         recovered = true
         continue
       }
-      const result = inst.region(RegionId.Result)
-      if (!result) throw new Error('Persistence.loadLatest: the Result region is absent')
-      const view = new DataView(result.u8.buffer, result.u8.byteOffset, 8)
-      const logSegment = view.getUint32(0, true)
-      const logOffset = view.getUint32(4, true)
+      const { logSegment, logOffset } = candidate
       const baseTick = inst.call0(inst.x.sim_tick_now)
+      if (candidate.outcome === 'migrated') {
+        // decision 6: the tail is dropped whole, never read for replay -- only `openNewSegment
+        // AfterUpgrade`'s own log-append cares that `logSegment`/`logOffset` name where it starts.
+        picked = { logSegment, logOffset, baseTick, migrated: true, identityChanged: true }
+        break
+      }
       const logBytes = await storage.read(keys.log(logSegment))
       if (!logBytes || logBytes.length < logOffset) {
         // Planning decisions 3: the snapshot itself verified, but names a log position its own
@@ -496,7 +573,14 @@ export class Persistence {
         recovered = true
         continue
       }
-      picked = { logSegment, logOffset, baseTick }
+      const storedIdentity = parseSnapshotIdentity(bytes)
+      picked = {
+        logSegment,
+        logOffset,
+        baseTick,
+        migrated: false,
+        identityChanged: storedIdentity.buildHash !== runningIdentity.buildHash,
+      }
       break
     }
 
@@ -508,53 +592,92 @@ export class Persistence {
       if (genStatus !== Status.Ok) {
         throw new Error(`Persistence.loadLatest: sim_genesis failed: status ${genStatus}`)
       }
-      picked = { logSegment: 0, logOffset: h, baseTick: 0 }
+      picked = { logSegment: 0, logOffset: h, baseTick: 0, migrated: false, identityChanged: false }
       if (snapKeys.length > 0) recovered = true // snapshots existed; none of them were usable
     }
 
-    const { logSegment, logOffset, baseTick } = picked
+    const { logSegment, logOffset, baseTick, migrated, identityChanged } = picked
     const logBytes = (await storage.read(keys.log(logSegment))) ?? new Uint8Array(0)
     const tail = logBytes.subarray(logOffset)
     const replayRegion = inst.region(RegionId.Persist)
     if (!replayRegion) throw new Error('Persistence.loadLatest: the Persist region is absent')
-    // docs/plan/24-recovery-and-migration.md: the scan pass runs once, over the whole tail, before
-    // the real apply pass below -- a `Skip` record's own target can live in an earlier frame than
-    // the `Skip` record itself, so every frame must be seen before any of them is safely applied.
-    const beginScan = inst.call1(inst.x.sim_replay_scan_begin, logSegment)
-    if (beginScan !== Status.Ok) {
-      throw new Error(`Persistence.loadLatest: sim_replay_scan_begin failed: status ${beginScan}`)
-    }
-    for (let off = 0; off < tail.length; ) {
-      const n = Math.min(replayRegion.len, tail.length - off)
-      replayRegion.u8.set(tail.subarray(off, off + n), 0)
-      inst.call1(inst.x.sim_replay_scan_push, n)
-      off += n
-    }
-    inst.call0(inst.x.sim_replay_scan_end)
-    onReplaySegment?.(logSegment)
-    const beginReplay = inst.call2(inst.x.sim_replay_begin, logSegment, logOffset)
-    if (beginReplay !== Status.Ok) {
-      throw new Error(`Persistence.loadLatest: sim_replay_begin failed: status ${beginReplay}`)
-    }
-    for (let off = 0; off < tail.length; ) {
-      const n = Math.min(replayRegion.len, tail.length - off)
-      replayRegion.u8.set(tail.subarray(off, off + n), 0)
-      inst.call1(inst.x.sim_replay_push, n)
-      off += n
-    }
-    const endReplay = inst.call0(inst.x.sim_replay_end)
-    const validEnd = inst.call0(inst.x.sim_replay_valid_end)
+
+    let validEnd = logOffset
     let truncatedBytes = 0
-    if (endReplay === Status.TornTail || validEnd < logBytes.length) {
-      truncatedBytes = logBytes.length - validEnd
-      if (truncatedBytes > 0) {
-        // Planning decisions 1: `Storage.write`, since `Storage` has no `truncate` -- adapters must
-        // accept `append` after `write` on the same key (the conformance helper asserts it).
-        await storage.write(keys.log(logSegment), logBytes.subarray(0, validEnd))
+    let droppedTailRecords = 0
+    if (migrated) {
+      // decision 6: never replayed -- only counted, for the report/log.
+      droppedTailRecords = scanRecordCount(inst, logSegment, tail)
+    } else {
+      // docs/plan/24-recovery-and-migration.md: the scan pass runs once, over the whole tail,
+      // before the real apply pass below -- a `Skip` record's own target can live in an earlier
+      // frame than the `Skip` record itself, so every frame must be seen before any of them is
+      // safely applied.
+      const beginScan = inst.call1(inst.x.sim_replay_scan_begin, logSegment)
+      if (beginScan !== Status.Ok) {
+        throw new Error(`Persistence.loadLatest: sim_replay_scan_begin failed: status ${beginScan}`)
       }
-      recovered = true
+      for (let off = 0; off < tail.length; ) {
+        const n = Math.min(replayRegion.len, tail.length - off)
+        replayRegion.u8.set(tail.subarray(off, off + n), 0)
+        inst.call1(inst.x.sim_replay_scan_push, n)
+        off += n
+      }
+      inst.call0(inst.x.sim_replay_scan_end)
+      onReplaySegment?.(logSegment)
+      const beginReplay = inst.call2(inst.x.sim_replay_begin, logSegment, logOffset)
+      if (beginReplay !== Status.Ok) {
+        throw new Error(`Persistence.loadLatest: sim_replay_begin failed: status ${beginReplay}`)
+      }
+      for (let off = 0; off < tail.length; ) {
+        const n = Math.min(replayRegion.len, tail.length - off)
+        replayRegion.u8.set(tail.subarray(off, off + n), 0)
+        inst.call1(inst.x.sim_replay_push, n)
+        off += n
+      }
+      const endReplay = inst.call0(inst.x.sim_replay_end)
+      droppedTailRecords = replayDroppedCount(inst)
+      validEnd = inst.call0(inst.x.sim_replay_valid_end)
+      if (endReplay === Status.TornTail || validEnd < logBytes.length) {
+        truncatedBytes = logBytes.length - validEnd
+        if (truncatedBytes > 0) {
+          // Planning decisions 1: `Storage.write`, since `Storage` has no `truncate` -- adapters
+          // must accept `append` after `write` on the same key (the conformance helper asserts it).
+          await storage.write(keys.log(logSegment), logBytes.subarray(0, validEnd))
+        }
+        recovered = true
+      }
     }
     const tick = inst.call0(inst.x.sim_tick_now)
+
+    if (migrated || identityChanged) {
+      // 0005 Consequences: "a changed .wasm always starts a new segment, even for a rules-only
+      // change" -- Planning decisions 7's own write order.
+      const opened = await openNewSegmentAfterUpgrade(
+        storage,
+        keys,
+        manifest,
+        runningIdentity,
+        inst,
+        logSegment,
+        /* tailReexecuted */ !migrated,
+      )
+      return {
+        sim: inst,
+        logSegment: opened.newSegment,
+        logOffset: opened.logOffset,
+        baseTick,
+        tick: opened.tick,
+        truncatedBytes,
+        outcome: 'upgraded',
+        upgrade: {
+          manifest: opened.manifest,
+          reason: migrated ? 'migrated' : 'direct',
+          droppedTailRecords,
+        },
+      }
+    }
+
     return {
       sim: inst,
       logSegment,
@@ -612,7 +735,12 @@ export class Persistence {
   async recover(
     newInstance: () => EngineInstance,
     onReplaySegment?: (segment: number) => void,
-  ): Promise<{ sim: EngineInstance; tick: number; outcome: 'loaded' | 'recovered' }> {
+  ): Promise<{
+    sim: EngineInstance
+    tick: number
+    outcome: 'loaded' | 'recovered' | 'upgraded'
+    upgrade?: { reason: 'direct' | 'migrated'; droppedTailRecords: number }
+  }> {
     this.checkFatal()
     const loaded = await Persistence.loadLatest(
       this.storage,
@@ -621,14 +749,32 @@ export class Persistence {
       newInstance,
       onReplaySegment,
     )
-    this.manifest = await Persistence.healManifest(this.storage, this.keys, this.manifest, loaded)
+    // docs/plan/24b-upgrade-and-migration.md: a panic recovery is the same running build throughout
+    // (never an upgrade scenario in practice, since `this.manifest` is this very build's own), but
+    // `loadLatest` is shared -- `loaded.upgrade` already carries a fully-healed manifest when it is
+    // ever present, exactly like `Persistence.open`'s own handling.
+    this.manifest = loaded.upgrade
+      ? loaded.upgrade.manifest
+      : await Persistence.healManifest(this.storage, this.keys, this.manifest, loaded)
     this.segment = loaded.logSegment
     this.logOffset = loaded.logOffset
     this.tick = loaded.tick
     // Rebind: every direct ABI call this class makes from here on (`isDirty`, `snapshotNow`, a
     // future roll) must go through the fresh instance, never the dead one this replaced.
     this.sim = loaded.sim
-    return { sim: loaded.sim, tick: loaded.tick, outcome: loaded.outcome }
+    return {
+      sim: loaded.sim,
+      tick: loaded.tick,
+      outcome: loaded.outcome,
+      ...(loaded.upgrade
+        ? {
+            upgrade: {
+              reason: loaded.upgrade.reason,
+              droppedTailRecords: loaded.upgrade.droppedTailRecords,
+            },
+          }
+        : {}),
+    }
   }
 
   /** docs/plan/24-recovery-and-migration.md Planning decisions 1: "the host appends a `Skip

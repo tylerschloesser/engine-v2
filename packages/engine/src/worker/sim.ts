@@ -328,6 +328,10 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   let inst = newInstance()
   let persistence: Persistence | undefined
   let initialTicksRun = 0
+  // docs/plan/24b-upgrade-and-migration.md: set only when `Persistence.open` itself took the
+  // upgrade path -- fires `simHost.onRecovered({reason: 'upgrade', ...})` once, right after
+  // `simHost` exists (M24's own `onRecovered` field is set by the caller, never before then).
+  let openedUpgrade: { reason: 'direct' | 'migrated'; droppedTailRecords: number } | undefined
   let worldDurable = false
   // Planning decision 2: the sim worker body runs the queued rename/reopen through `shell.runAsync`
   // in the gap after the current tick pass -- only ever set when `openWorldStorage` actually opened
@@ -371,6 +375,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       persistence = opened.persistence
       inst = opened.sim
       initialTicksRun = opened.tick
+      openedUpgrade = opened.upgrade
 
       shell.post({
         type: 'storage',
@@ -390,11 +395,26 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       // non-ticking loop instead of dying like `world-busy` does.
       const kind = e instanceof WorldLoadError ? e.kind : 'load-error'
       const message = e instanceof Error ? e.message : String(e)
-      shell.post({
-        type: 'start-failed',
-        code: 'load-failed',
-        detail: `Persistence.open: ${message} (kind ${kind})`,
-      })
+      // docs/plan/24b-upgrade-and-migration.md: `kind === 'incompatible'` is carved out of the
+      // broad `'load-failed'` bucket above into its own `'save-incompatible'` code (Traps: "other
+      // open failures stay 'load-failed'") -- both keep this same degraded-worker fallback
+      // (`exportWorld`/`deleteWorld` still reachable), only the reported code/detail differ.
+      if (e instanceof WorldLoadError && e.kind === 'incompatible' && e.reason !== undefined) {
+        shell.post({
+          type: 'start-failed',
+          code: 'save-incompatible',
+          detail: `Persistence.open: ${message}`,
+          reason: e.reason,
+          stored: e.stored ?? e.running,
+          running: e.running,
+        })
+      } else {
+        shell.post({
+          type: 'start-failed',
+          code: 'load-failed',
+          detail: `Persistence.open: ${message} (kind ${kind})`,
+        })
+      }
       const enqueue = makeOpQueue()
       const worldOp = makeWorldOpHandler(shell, world.worldId, storage, null)
       return {
@@ -427,6 +447,16 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // tick prefixed)").
   simHost.onFatal = (f) => {
     shell.fatal(`sim fatal at tick ${f.tick}: ${f.message}`)
+  }
+  // docs/plan/24b-upgrade-and-migration.md: fired once, for the upgrade `Persistence.open` itself
+  // just performed (never a post-panic recovery) -- `onRecovered` is otherwise `null` here (M28b
+  // owns wiring a real production handler; this call is a no-op until one is set).
+  if (openedUpgrade) {
+    simHost.onRecovered?.({
+      reason: 'upgrade',
+      tick: initialTicksRun,
+      skipped: openedUpgrade.droppedTailRecords,
+    })
   }
 
   // docs/plan/15b-ring-connection-and-replica-rendering.md Scope: "the sim worker creates one

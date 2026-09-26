@@ -4,7 +4,7 @@
 // brief's own instruction -- never a hand-built container.
 import { describe, expect, test } from 'vitest'
 import { RegionId, Role, Status } from '../../src/abi.js'
-import { Persistence, WorldLoadError } from '../../src/host/persistence.js'
+import { Persistence } from '../../src/host/persistence.js'
 import type { EngineInstance } from '../../src/loader.js'
 import { instantiate } from '../../src/loader.js'
 import {
@@ -374,31 +374,28 @@ describe('Persistence.open (fx-persist, real pipeline)', () => {
     expect(hashAfterResend).toBe(hashAfterFirst) // the resend must not apply a second time
   })
 
-  test('identity_mismatch_throws_world_load_error_and_writes_nothing', async () => {
+  /** docs/plan/24b-upgrade-and-migration.md superseded this test's own original premise (M22b/M23:
+   * any buildHash difference is unconditionally fatal, `WorldLoadError { kind: 'identity' }`). A
+   * plain buildHash-only change (schema/tick-rate/worldgen all unchanged) now takes the Direct load
+   * path and succeeds instead (0005 Upgrades) -- storage gains a new segment (Planning decisions
+   * 7), so it is deliberately *not* left untouched here. `fx-persist`'s own `FlatWorldgen::generate`
+   * ignores `seed` entirely, so a genuine `SaveIncompatible`/`'incompatible'` scenario cannot be
+   * manufactured on this fixture through config alone (a real schema/worldgen mismatch needs a
+   * genuinely different compiled `Game`, not just different config) -- that coverage is
+   * `no_migrate_hook_save_incompatible_files_untouched`/`worldgen_stamp_mismatch_requires_migrate`
+   * (upgrade.test.ts), over the dedicated `fx-migrate-*` fixtures. */
+  test('rules_only_buildhash_change_now_upgrades_instead_of_throwing', async () => {
     const storage = memoryStorage()
     const inst = instantiate(await wasm(), Role.Sim, buildSimInstanceConfig(CFG))
     const persistence = Persistence.create(storage, CFG, inst)
     expect(inst.call0(inst.x.sim_genesis)).toBe(Status.Ok)
     persistence.snapshotNow()
 
-    // Byte-compare the whole storage before/after (the brief's own instruction), every key.
-    const keysBefore = await storage.list('')
-    const before = new Map<string, Uint8Array | null>()
-    for (const k of keysBefore) before.set(k, await storage.read(k))
-
     const otherCfg = { ...CFG, buildHash: 'cd'.repeat(32) }
     const ni = await makeNewInstance(otherCfg)
-    await expect(Persistence.open(storage, otherCfg, ni)).rejects.toBeInstanceOf(WorldLoadError)
-    await expect(Persistence.open(storage, otherCfg, ni)).rejects.toMatchObject({
-      kind: 'identity',
-    })
-
-    const keysAfter = await storage.list('')
-    expect(keysAfter).toEqual(keysBefore)
-    for (const k of keysAfter) {
-      const b = before.get(k)
-      const a = await storage.read(k)
-      expect(a).toEqual(b)
-    }
+    const { outcome, sim, tick } = await Persistence.open(storage, otherCfg, ni)
+    expect(outcome).toBe('upgraded')
+    expect(tick).toBe(0)
+    expect(sim.call0(sim.x.sim_hash)).toBe(Status.Ok)
   })
 })

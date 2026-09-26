@@ -11,6 +11,8 @@ import { screenToWorld, worldToScreen } from './camera/transform.js'
 import type { Clock, Scheduler } from './clock.js'
 import { systemClock, systemScheduler } from './clock.js'
 import { CLOCK_FIELD, ClockBlockView, readClockBlockInto, SessionState } from './clock-block.js'
+import type { IdentityJson } from './host/persistence.js'
+import type { IncompatReasonName } from './host/upgrade.js'
 import { installBlurAndVisibilityReset } from './input/focus.js'
 import { installKeyListeners, KeyState } from './input/keys.js'
 import { createPicker, type Picker } from './input/pick.js'
@@ -346,10 +348,23 @@ export class EngineStartError extends Error {
      * same, already-open OPFS handles afterward. Distinct from `'world-busy'`, whose worker really
      * does die (another process owns the lock, no handles to offer). */
     | 'load-failed'
-  constructor(code: EngineStartError['code'], message: string) {
+    /** docs/plan/24b-upgrade-and-migration.md: carved out of `'load-failed'` -- an identity/schema/
+     * tick-rate/worldgen/chunk-size mismatch that ends in `SaveIncompatible` (0005 Upgrades: every
+     * stored byte stays untouched). `detail` carries `{ reason, stored, running }`;
+     * `exportWorld()`/`deleteWorld()` stay usable, same as `'load-failed'`. */
+    | 'save-incompatible'
+  /** docs/plan/24b-upgrade-and-migration.md: structured detail for `'save-incompatible'` only --
+   * every other code keeps using `.message` (a plain string) as before. */
+  readonly detail?: { reason: IncompatReasonName; stored: IdentityJson; running: IdentityJson }
+  constructor(
+    code: EngineStartError['code'],
+    message: string,
+    detail?: EngineStartError['detail'],
+  ) {
     super(message)
     this.name = 'EngineStartError'
     this.code = code
+    if (detail !== undefined) this.detail = detail
   }
 }
 
@@ -687,7 +702,17 @@ function setupWorker(
         // `client.ready` rejects with the real code/detail, and ignore the `fatal` that follows.
         if (settled) return
         settled = true
-        reject(new EngineStartError(m.code, m.detail))
+        if (m.code === 'save-incompatible') {
+          reject(
+            new EngineStartError(m.code, m.detail, {
+              reason: m.reason,
+              stored: m.stored,
+              running: m.running,
+            }),
+          )
+        } else {
+          reject(new EngineStartError(m.code, m.detail))
+        }
       } else if (m.type === 'storage') {
         onLifecycle(m)
       } else if (

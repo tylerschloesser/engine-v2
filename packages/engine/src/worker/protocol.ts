@@ -1,6 +1,8 @@
 // Messages between `client.ts` (main) and `worker.ts`'s `run()` (docs/plan/06b-workers-and-spawn.md,
 // Seams: "the only steady use of postMessage besides fatal and resume"). Types only, erased at
 // compile time.
+import type { IdentityJson } from '../host/persistence.js'
+import type { IncompatReasonName } from '../host/upgrade.js'
 import type { InstanceConfig } from '../loader.js'
 import { WORKER_GEN1 } from '../sab/control.js'
 import type { SabSet } from '../sab/layout.js'
@@ -197,6 +199,18 @@ export const POST_SETUP_MESSAGE_TYPES: readonly string[] = [
 export type SimLifecycleMessage =
   | { type: 'storage'; status: StorageStatus; created: boolean }
   | { type: 'start-failed'; code: 'world-busy' | 'load-failed'; detail: string }
+  /** docs/plan/24b-upgrade-and-migration.md: carved out of `'load-failed'` above -- an identity/
+   * schema/tick-rate/worldgen/chunk-size mismatch that ends in `SaveIncompatible` (`WorldLoadError
+   * { kind: 'incompatible' }`). Same degraded-worker fallback as `'load-failed'`
+   * (`exportWorld`/`deleteWorld` still work); only the reported code/detail differ. */
+  | {
+      type: 'start-failed'
+      code: 'save-incompatible'
+      detail: string
+      reason: IncompatReasonName
+      stored: IdentityJson
+      running: IdentityJson
+    }
 
 /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: main -> sim worker, parked-only (like
  * `TestCallMessage`, whose own doc comment gives the reason: a worker blocked in `Atomics.wait`

@@ -104,7 +104,9 @@ async function wrapFixtureLogStorage(): Promise<ReturnType<typeof memoryStorage>
     v: 1,
     worldId: CFG.worldId,
     epoch: 0,
-    params: CFG.params,
+    // docs/plan/24b-upgrade-and-migration.md: `ManifestV1.params` now carries `chunkBits` (`fx-
+    // persist` never overrides `Game::CHUNK_BITS`, so its trait default, 5, is exact here).
+    params: { ...CFG.params, chunkBits: 5 },
     created: dummyIdentity,
     segments: [
       { index: 0, identity: dummyIdentity, base: 'genesis', sealed: false, tailReexecuted: false },
