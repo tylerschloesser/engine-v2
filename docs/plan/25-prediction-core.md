@@ -224,3 +224,184 @@ brief's exact names except where noted below.
   plain lookup, `client/replica.rs`) as well as to `Predicting`/`View` -- check `Store::entity`'s own
   callers before changing its signature, since `Authority` and `TickCx` share it and are host-side
   total.
+
+**Steps 5-8 (this implementer).** Commits `744ee5d`..`f2fdbb6`. All named seams landed under the
+brief's exact names; every exit criterion below is measured, not asserted from memory.
+
+- **`EntityId::provisional(seq, index) -> Option<EntityId>`** (`game.rs`): bit 31, then the low 22
+  bits of `seq` (`seq & 0x003F_FFFF`), then a 9-bit index (`index & 0x1FF`); `None` iff
+  `index >= 512` (the 513th spawn in one action). `Predicting::spawn` falls back to
+  `EntityId(EntityId::PROVISIONAL_BIT)` on `None` and sets `saw_unknown`, so the dummy value is
+  always rolled back with the rest of that replay.
+- **`EntityId`'s `Deserialize` is hand-written**, not derived (`Serialize` still derives): refuses
+  any value with bit 31 set, `serde::de::Error::custom`. Verified for both encodings `Codec`
+  reaches (`predict_provisional_id_rejected_by_deserialize`): JSON via `serde_json::from_str`,
+  postcard via `engine::codec::decode`.
+- **`entity(id)`'s Unknown-vs-`None` split (0022 §7) landed on `Replica::entity` and
+  `Predicting::entity` only, not `View`.** `Replica::entity`: `Ok(Some)` if held, `Err(Unknown)` for
+  an unseen real id, `Ok(None)` for a provisional-shaped id regardless (a bare `Replica` never
+  allocates one). `Predicting::entity` adds its own `is_provisional` short-circuit *before* ever
+  asking `base` (0022 §5: "that namespace is the client's own" -- base, a real `Replica`, should
+  never even be asked about one), so it does not depend on `base`'s own provisional handling.
+  **`View::entity` is unchanged (still `Ok(self.store.entity(id))` unconditionally)**: `View` is
+  used both host-total (`View::total`, where a real despawned id must stay `Ok(None)` -- there is
+  no such thing as "Unknown" on an authoritative host) and client-subscription (the testkit's
+  `Loopback::visible`/`entity_at`/`entities_in`) through the *same* struct, distinguished only by
+  its `held` closure; 0022 §7's own text names "the replica", not the read-only render/testkit
+  helper, and widening `View` would break `View::total`'s host-total contract. Verified by
+  `predict_entity_id_gone_vs_unsubscribed` (`predict/predicting.rs`, white-box: a hand-rolled
+  `WorldRead` base, since `predict/` may never name the client module,
+  `tests/main/module_layering.rs`) proving all four 0022 §7 cases through `Predicting::entity`, and
+  `predict_replica_entity_seen_vs_unseen_vs_provisional` (`client/replica.rs`) pinning three of them
+  directly on `Replica`.
+  - **This changed three pre-existing tests' own assertions**, all from `Ok(None)` to
+    `Err(Unknown)` for a real id the replica no longer holds: `fx-machines::loopback`'s
+    `border_machine_gone_when_last_overlapped_chunk_leaves` and
+    `moved_entity_enters_and_leaves_subscription` (the latter's own comment already named this as
+    M25's future fix, in so many words), and `engine::main`'s `connection_and_subscriptions::
+    entity_move_between_subscribed_and_unsubscribed_delivered_once`. Not escalated: 0022 §7's own
+    Consequences line assigns "decision 7" to M25 by name, so these three assertions encoding the
+    pre-decision behaviour were always going to need this exact edit; the scenarios themselves are
+    untouched. Caught by `cargo nextest run --workspace` (three failures, `left: Err(Unknown), right:
+    Ok(None)`), not by anything `fixtures/predict` runs -- worth a broader-than-`fx-predict` sweep
+    on any future 0022/0007 change too.
+- **`entities_in`'s overlay merge (step 8)** is one shared function, `predict::merge_entities_in`
+  (`predict/overlay.rs`), used identically by `Predicting::entities_in` and
+  `world_access::View::entities_in` (the latter only when `with_overlay` attached one; unchanged,
+  unmerged behaviour otherwise). Candidate ids are gathered from the base pass and from every
+  overlay entry whose footprint intersects `rect`, via the same binary-search-insert
+  `Store::entities_in` already uses (so ascending order, and every provisional id sorting after
+  every real one, both fall out for free); the final pass consults `overlay.find_entity(id)` per
+  candidate (`Some(Some)` = override, emit; `Some(None)` = tombstone, skip; `None` = base-only,
+  looked up via a `base_entity` closure). `run_base`'s own callback type is deliberately *not*
+  pinned to the overlay's lifetime (elided/HRTB, matching `WorldRead::entities_in`'s own signature),
+  while `base_entity`/`f` are pinned to it (`'a`) -- getting this backwards is exactly what the
+  compiler caught (`E0308`/`lifetime may not live long enough`) on the first two attempts.
+  `run_base` returns `bool` (not `()`) so the caller can propagate `Err(Unknown)` *before* calling
+  `f` for anything, including a pure-overlay entry, matching `WorldRead::entities_in`'s own contract
+  -- the first draft (`FnMut(...) ` with no return) let a pure-overlay entry through even when the
+  base pass itself had declined. `Predicting`'s own scratch buffer for this lives on `Overlay`
+  itself (`entities_in_scratch: RefCell<Vec<EntityId>>`), not on `Predicting` (rebuilt fresh every
+  call, nowhere to keep one warm); `View` already had one scratch field for `Store::entities_in`'s
+  own internal use and gained a second, `merge_scratch`, for the merge's own candidate list (the two
+  are live at once when an overlay is attached). Verified: `predict_entities_in_merges_overlay`
+  (override, tombstone, provisional-last order, `Unknown` at the edge -- before any callback) and
+  `predict_entities_in_order_matches_authority` (both white-box, same `predicting.rs` test module).
+- **Taint selection (step 6): measured counts.**
+
+  | Scenario | R0 (never taint) | R1 (taint-all-later, **shipped**) | R2 (taint on overlap) |
+  |---|---|---|---|
+  | `taint_dependency` — contradicted verdicts | 4 | **0** | 4 (by construction, see below) |
+  | `taint_rollback_visibility` — contradicted verdicts | 4 | **0** | not built (moot, see below) |
+  | `taint_independence` — lost predictions | 0 | **4** | not built (moot, see below) |
+
+  R0's counts (contradicted=4 in both dependency scenarios, lost=0 in independence) were measured
+  by literally deleting the taint check (a temporary edit to `ClientCore::on_frame`, reverted, never
+  committed) and re-running the three permanent scenario tests, which are written to assert R1's own
+  literal numbers and so fail cleanly against R0: `predict_taint_dependency`/
+  `predict_taint_rollback_visibility` fail their own `all(NotPredictable)` assertion (`b_statuses`
+  printed as four `Rejected(NoFurnace)` entries; `count_contradicted` computed 4 against each, read
+  via a temporary `eprintln!` before the assertion, also reverted); `predict_taint_independence`
+  fails `assert_eq!(lost, c_statuses.len())` (`left: 0, right: 4`). R2 was **not built as running
+  code**: `taint_dependency` disqualifies it *by construction*, not by conjecture -- A's own overlay
+  is asserted empty (`overlay_len(idx) == 0`) at the exact moment it declines in that scenario (the
+  `Unknown` fires inside `can_place`'s very first `traits_at` read, before `spawn` ever runs), so any
+  overlap-based rule literally has nothing to compare B's reads against and must behave exactly like
+  R0 there (1 contradiction $\times$ 4 samples = 4, the same measured R0 figure copied into the table,
+  not a separate run). That alone fails the selection rule's own admissibility bar ("zero
+  contradicted verdicts in *both* dependency scenarios") regardless of what R2 would do in
+  `taint_rollback_visibility` -- where, for the record, a *literal* read/write-set-overlap R2 would
+  likely avoid the contradiction (A's `PlaceChecked` writes the player before declining via `rng()`,
+  and B's `Deposit` also reads the player first), but a disqualified rule's other scenario doesn't
+  change the outcome, so this was reasoned analytically rather than implemented. R1 is thus the sole
+  admissible rule, shipped as written in the brief (a plain `if tainted { NotPredictable } else {
+  predict(..) }` inside the existing `for p in pending.iter_mut()` loop, `client/core.rs`) -- matches
+  the brief's own "Expected: R1 ships."
+  - `taint_rollback_visibility`'s own scenario needed a new fixture action,
+    `Action::PlaceChecked { origin }` (`fixtures/predict/src/lib.rs`): validates like `Place`, then
+    writes the spent inventory (`put_player`), *then* calls `w.rng()?` (`Unknown` under prediction,
+    a real draw on the host) before ever spawning -- the brief's own "A failing through rng() after
+    a read" needed an action that also *writes* before declining, to prove the rollback undoes a
+    write, not merely a read that never happened; none of the existing actions call `rng()` with any
+    prior read or write.
+  - `predict_taint_dependency`/`predict_taint_rollback_visibility`/`predict_taint_independence` all
+    needed a *second*, unrelated noise client sending `SetGlobal` every tick starting *before*
+    warm-up, not just after dispatch (`warm_up_with_noise`, `fixtures/predict/tests/loopback.rs`) --
+    confirmed empirically the hard way: a plain `run(n)` warm-up leaves the per-client delay queue
+    full of a backlog of otherwise-empty frames, so the first non-empty frame to reach the client
+    after dispatch is the very one that also carries the dispatched actions' own ack, and every
+    sampled status was the frozen dispatch-time value (`on_frame`'s replay loop never ran at all
+    while that backlog drained). `predict_replays_per_frame_counter_is_live` hit the identical issue
+    and needed the same fix.
+- **Budgets: `counters.predict.replaysPerFrame` = 32**, edited into `budgets.json` as text (not
+  parsed and reserialized), exact (the pending-queue capacity, `client::core::OUTBOX_CAPACITY`), not
+  measured-plus-margin -- 32 replays in one frame is the worst case by construction, not an observed
+  maximum. `predict_replays_per_frame_counter_is_live` asserts the counter non-zero and within this
+  budget via `engine::testing::budgets::expect_within_budget`.
+- **Step 7 (NotPredictable through the UI ring): no `ABI_VERSION` bump.** `GameInstance::on_action`
+  now pushes a kind-2 UI-ring record (`push_not_predictable_record`, `game_instance.rs`, sharing
+  `push_result_record`'s exact `[kind u8=2][len u32 LE][json]` shape) when the action it just queued
+  predicted `NotPredictable`; no ABI export's signature changed, only the JSON value repertoire
+  `result` can hold, so the ABI registry itself (`registry.rs`, `abi.ts`) needed no edit and no
+  version bump. TS's `ActionOutcome<Reject>` (`client.ts`) widens to include `'NotPredictable'`;
+  `pollActionResults` already passed `parsed.result` through untyped, so no runtime change there.
+  - **`predict_not_predictable_event`** (`tests/wasm/predict.test.ts`) drives two raw
+    `EngineInstance`s (sim role, client role) by hand -- no `createClient()`, which needs real
+    `Worker`s and a canvas (browser only) -- mirroring `tests/support/scenario.ts`'s
+    `runScriptScenario` (sim + "encoder") but as a genuine two-way round trip (`on_frame`/
+    `client_poll_ui` too, which that encoder never calls) with a real camera report: a raw 80-byte
+    `CameraBlock` write into `RegionId.Camera` (`client/camera.rs`'s own byte layout, matched by
+    hand, offset for offset) followed by `frame(t_ms)` (which is what actually calls `ClientCore::
+    set_camera` on the Rust side) and `client_poll_uplink`. `sim_connect(0)` assigns `PlayerId(1)`;
+    `ClientInstance::init` hardcodes the same `PlayerId(1)` unconditionally (`game_instance.rs`'s own
+    comment), so the two line up with no handshake at all, the same convention
+    `runScriptScenario` already relies on. Delay is 0 throughout (this test drives both instances by
+    hand, one step at a time; there is no queue to model), so `NotPredictable` is observed
+    immediately after `on_action`, and `Confirmed` a handful of ticks later once the host's own ack
+    round-trips. `pnpm test wasm` (full): 151 pass, 0 fail (this test included).
+  - **Found and fixed a real regression this same change exposed**: `tests/browser/pages/src/
+    slice.ts`'s own `onActionResult` handler treated anything other than `'Confirmed'` as rejected;
+    once `'NotPredictable'` became a real value every game's dispatch can produce, `vertical_slice`'s
+    own Paint-at-the-edge dispatch sometimes predicts it, inflating the spec's asserted
+    `__sliceRejected` count from 1 (the genuine `OutOfRange` reject it actually tests) to 2.
+    Fixed by ignoring `'NotPredictable'` in that handler (0012: a hint, never a verdict) -- not a
+    weakened assertion, the spec's own expected count (1) is unchanged; the page's handler was
+    imprecise before this milestone made the imprecision observable. `puts-dispatch.ts` has the
+    identical pattern but is never opened by any spec (its own comment says so, confirmed by
+    `grep -rl puts-dispatch tests/browser/*.spec.ts` finding nothing), so left alone. Caught by
+    running the full `gc`/`chromium` Playwright projects directly (the wrapper's own `-t zero-gc`
+    ran the whole 201-test `browser` suite regardless of the filter, the same summary-line quirk
+    already on file for `nextest`/Rust); confirmed fixed, then re-verified `pnpm test browser` (fast
+    tier, both projects) at 201/201.
+
+**Exit criteria, evidence:**
+- Every test above passes; taint counts and failability are recorded above. **Met.**
+  `cargo nextest run --workspace --features engine/testing`: `577 tests run: 577 passed, 2 skipped`.
+- `predict_alloc` reports 0. **Met** (unchanged from steps 1-4; re-verified in this run:
+  `assert_eq!(during_190, 0)` / `during_10_more, 0` / `peak_growth_since_before_replay, 0` all pass).
+- No losing taint strategy remains in the tree. **Met**: `client/core.rs` contains only the R1
+  `if tainted { .. } else { predict(..) }` shape; no `TaintRule` enum, no R0/R2 code, anywhere.
+- The browser zero-GC test passes with prediction on. **Met**:
+  `pnpm exec playwright test --config packages/engine/playwright.config.ts --project gc` ->
+  `106 passed`.
+- `pnpm test` and `pnpm lint` are green. **Not run as the combined commands** (this brief's own
+  must-knows: "I am the gate"). Run separately instead, all green: `pnpm test rust` (577 pass),
+  `pnpm test unit` (252 pass), `pnpm test wasm` (151 pass), `pnpm test browser` (201 pass);
+  `cargo clippy --workspace --all-targets --features engine/testing -- -D warnings` (clean),
+  `cargo fmt --check` (clean via `pnpm format`), `pnpm --filter engine typecheck` (clean).
+  `pnpm lint` itself (the aggregate command) was not run, per instruction.
+
+**Seam shapes as landed** (vs. the brief's own naming, for the successor/orchestrator):
+- `EntityId::provisional(seq: u32, index: u32) -> Option<EntityId>` (`game.rs`), exactly as named.
+- `predict::merge_entities_in` (`predict/overlay.rs`, `pub(crate)`): not in the brief's Seams list by
+  name (an internal helper), but is the one seam both `Predicting::entities_in` and
+  `View::entities_in` share -- worth knowing before touching either independently.
+- `testing::testkit::Loopback` gained `entities_in(i, rect) -> Vec<(EntityId, G::Entity)>` and
+  `global(i) -> G::Global` beyond the brief's own listed `dispatch`/`pending`/`overlay_len`/
+  `visible` -- both follow the exact same "build a `View::with_overlay`" pattern those already use.
+- `ActionOutcome<Reject>` (`client.ts`) gained `'NotPredictable'`; no new export, no `ABI_VERSION`
+  bump (see above).
+
+**Decisions needed:** none. **Notes for later briefs:** the `View`/testkit-vs-`Replica` split on
+0022 §7 (above) is worth a sentence in whichever ADR or doc next touches `entity(id)` semantics, so
+a future reader doesn't assume `View` was simply missed.
