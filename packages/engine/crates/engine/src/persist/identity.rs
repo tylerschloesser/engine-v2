@@ -4,9 +4,12 @@
 //! (`WORLDGEN_VERSION` + fingerprint, 0007 §9). Embedded, not length-prefixed as a whole, inside
 //! [`crate::persist::SegmentHeader`] and a snapshot's own container.
 //!
-//! Comparing an `Identity` against the running build's own (the whole reason it exists: "a log
-//! replays only against the `.wasm` that produced it", 0002) is Non-scope here -- M22b/M24b own
-//! that check. This module is only the value and its wire shape.
+//! `Identity::compare` (M24b, docs/plan/24b-upgrade-and-migration.md Planning decisions 5): the
+//! whole reason `Identity` exists ("a log replays only against the `.wasm` that produced it",
+//! 0002) is this comparison. `container_version` is deliberately not a field of `Identity` (it
+//! lives in the snapshot envelope, 0005 Formats) and is never checked here: `SnapshotReader`
+//! already rejects a mismatched container before `Identity::read` ever runs, so by the time two
+//! `Identity` values reach [`Identity::compare`] the envelope has already agreed.
 
 use crate::bytes::{ByteReader, ByteSink};
 use crate::persist::PersistError;
@@ -24,6 +27,35 @@ pub struct Identity {
     pub schema_version: u32,
     pub tick_rate_hz: u32,
     pub worldgen: WorldgenStamp,
+}
+
+/// Which of the three "does the world need `Game::migrate`" fields (0006 point 2, 0007 §9) first
+/// differs, in the fixed priority order this milestone picks when more than one does: schema,
+/// then tick rate, then worldgen. `engine_version`/`game_version` never appear here (0005
+/// Upgrades: "informational only").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MismatchReason {
+    Schema,
+    TickRate,
+    Worldgen,
+}
+
+/// `Identity::compare`'s own outcome (docs/plan/24b-upgrade-and-migration.md Order of work 1;
+/// decision 5's matrix): `Same` (identical build hash, load the log tail as-is), `Direct` (a
+/// different build, but schema/tick-rate/worldgen all agree: load the snapshot then re-execute
+/// the tail), `NeedsMigrate` (`Game::migrate` must run first; `MismatchReason` says which field
+/// forced it), `Incompatible` (no path at all: this milestone's own addition for a stored
+/// `schema_version` newer than the running build's -- `Game::migrate` only ever brings an *older*
+/// schema forward, so a downgrade can never migrate; not spelled out verbatim in 0005/0006,
+/// flagged in this milestone's Deviations). Every other `Incompatible` case in the full pipeline
+/// (`Container`, `MigrateDeclined`, `Decode`, `ChunkSize`) is decided above this module, never by
+/// `compare` itself -- see `crate::migrate`'s own module doc comment.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Comparison {
+    Same,
+    Direct,
+    NeedsMigrate(MismatchReason),
+    Incompatible(MismatchReason),
 }
 
 fn write_str(s: &str, sink: &mut impl ByteSink) {
@@ -68,6 +100,63 @@ impl Identity {
                 fingerprint: wg_fingerprint,
             },
         })
+    }
+
+    /// `self` is the identity a save was written with; `running` is the executing build's own.
+    /// 0005 Upgrades: "if the running identity hash differs from the stored one" means the
+    /// 128-bit build hash specifically (0005 Formats "Sim identity") -- an equal build hash is
+    /// definitionally the same schema/tick-rate/worldgen too, since those are all compiled into
+    /// the one `.wasm` the hash names.
+    ///
+    /// ```
+    /// use engine::persist::{Comparison, Identity, MismatchReason};
+    /// use engine::worldgen::WorldgenStamp;
+    ///
+    /// fn id(build_hash: u8, schema: u32, hz: u32) -> Identity {
+    ///     Identity {
+    ///         build_hash: [build_hash; 16],
+    ///         engine_version: "0.1.0".into(),
+    ///         game_version: "0.1.0".into(),
+    ///         schema_version: schema,
+    ///         tick_rate_hz: hz,
+    ///         worldgen: WorldgenStamp { version: 1, fingerprint: 7 },
+    ///     }
+    /// }
+    ///
+    /// let running = id(1, 2, 20);
+    /// assert_eq!(id(1, 2, 20).compare(&running), Comparison::Same);
+    /// assert_eq!(id(2, 2, 20).compare(&running), Comparison::Direct);
+    /// assert_eq!(
+    ///     id(2, 1, 20).compare(&running),
+    ///     Comparison::NeedsMigrate(MismatchReason::Schema)
+    /// );
+    /// assert_eq!(
+    ///     id(2, 3, 20).compare(&running),
+    ///     Comparison::Incompatible(MismatchReason::Schema)
+    /// );
+    /// ```
+    pub fn compare(&self, running: &Identity) -> Comparison {
+        if self.build_hash == running.build_hash {
+            return Comparison::Same;
+        }
+        if self.schema_version > running.schema_version {
+            // Forward-only: `Game::migrate` brings an *older* schema forward, never a newer one
+            // back down.
+            return Comparison::Incompatible(MismatchReason::Schema);
+        }
+        if self.schema_version == running.schema_version
+            && self.tick_rate_hz == running.tick_rate_hz
+            && self.worldgen == running.worldgen
+        {
+            return Comparison::Direct;
+        }
+        if self.schema_version != running.schema_version {
+            return Comparison::NeedsMigrate(MismatchReason::Schema);
+        }
+        if self.tick_rate_hz != running.tick_rate_hz {
+            return Comparison::NeedsMigrate(MismatchReason::TickRate);
+        }
+        Comparison::NeedsMigrate(MismatchReason::Worldgen)
     }
 }
 
@@ -126,5 +215,80 @@ mod tests {
         sink.0.truncate(sink.0.len() - 1);
         let mut reader = ByteReader::new(&sink.0);
         assert_eq!(Identity::read(&mut reader), Err(PersistError::Malformed));
+    }
+
+    fn id_at(build_hash: u8, schema: u32, hz: u32, wg_version: u32, wg_fp: u64) -> Identity {
+        Identity {
+            build_hash: [build_hash; 16],
+            engine_version: "0.1.0".to_string(),
+            game_version: "0.1.0".to_string(),
+            schema_version: schema,
+            tick_rate_hz: hz,
+            worldgen: WorldgenStamp {
+                version: wg_version,
+                fingerprint: wg_fp,
+            },
+        }
+    }
+
+    fn running() -> Identity {
+        id_at(1, 2, 20, 1, 100)
+    }
+
+    /// 0005 Upgrades' whole matrix (decision 5), one case per row, plus this milestone's own
+    /// forward-only `Incompatible` addition and the "more than one field differs" priority order.
+    #[test]
+    fn identity_compare_matrix() {
+        let r = running();
+
+        // Same build hash: everything else is irrelevant.
+        assert_eq!(id_at(1, 2, 20, 1, 100).compare(&r), Comparison::Same);
+        assert_eq!(id_at(1, 99, 99, 9, 9).compare(&r), Comparison::Same);
+
+        // Different hash, everything else equal: direct load + tail re-execution.
+        assert_eq!(id_at(2, 2, 20, 1, 100).compare(&r), Comparison::Direct);
+
+        // engine_version/game_version alone never matter (0005: "informational only").
+        let mut differing_versions = id_at(2, 2, 20, 1, 100);
+        differing_versions.engine_version = "9.9.9".to_string();
+        differing_versions.game_version = "9.9.9".to_string();
+        assert_eq!(differing_versions.compare(&r), Comparison::Direct);
+
+        // Schema differs alone, stored older: migrate.
+        assert_eq!(
+            id_at(2, 1, 20, 1, 100).compare(&r),
+            Comparison::NeedsMigrate(MismatchReason::Schema)
+        );
+        // Schema differs alone, stored newer: no path at all.
+        assert_eq!(
+            id_at(2, 3, 20, 1, 100).compare(&r),
+            Comparison::Incompatible(MismatchReason::Schema)
+        );
+        // Tick rate differs alone: migrate, even with schema and worldgen equal (0006 point 2:
+        // "even if the author forgot to bump [SCHEMA_VERSION]").
+        assert_eq!(
+            id_at(2, 2, 30, 1, 100).compare(&r),
+            Comparison::NeedsMigrate(MismatchReason::TickRate)
+        );
+        // Worldgen version differs alone.
+        assert_eq!(
+            id_at(2, 2, 20, 2, 100).compare(&r),
+            Comparison::NeedsMigrate(MismatchReason::Worldgen)
+        );
+        // Worldgen fingerprint differs alone, same version (0007 §9).
+        assert_eq!(
+            id_at(2, 2, 20, 1, 101).compare(&r),
+            Comparison::NeedsMigrate(MismatchReason::Worldgen)
+        );
+        // More than one field differs: schema takes priority over tick rate and worldgen.
+        assert_eq!(
+            id_at(2, 1, 30, 2, 101).compare(&r),
+            Comparison::NeedsMigrate(MismatchReason::Schema)
+        );
+        // Tick rate takes priority over worldgen when schema agrees.
+        assert_eq!(
+            id_at(2, 2, 30, 2, 101).compare(&r),
+            Comparison::NeedsMigrate(MismatchReason::TickRate)
+        );
     }
 }
