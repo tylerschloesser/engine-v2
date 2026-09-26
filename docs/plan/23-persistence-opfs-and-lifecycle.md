@@ -239,3 +239,11 @@ stay under the 60-line cap `context-artifacts.test.mjs` enforces on every nested
 **Not done (later steps' own scope):** the `gc-test` skill's "forcing a snapshot inside the window"
 extension (step 6); wiring `pendingAsync()`/`scratchReady()` into `worker/sim.ts` and `Persistence`
 (step 3); `opfs-latency.html` (step 7).
+
+### Open gate failures (orchestrator, from the review agent at the M23 gate)
+
+1. **`flush()` can resolve while an OPFS rename is still in flight.** `OpfsStorageAdapter.pendingAsync()` (`storage/opfs.ts`) is a take; `worker/sim.ts`'s per-pass poll hands the taken fn to `shell.runAsync`, and `SimHost.pause()`/`stop()` → `persistence.flush()` → adapter `flush()` calls `pendingAsync()` again, gets `null` and returns while the rename runs elsewhere, so the `storage` ack after a hidden-boundary pause can precede the durable rename; `#queueRename`'s chaining can also be broken. `pauseHostWorker` (`client.ts`) has no guard for `W_PARKED = 1` set by an in-flight `runAsync`. Found by code trace, not reproduced.
+2. **No automated test enforces the sim worker's `postMessage` allowlist** (0015 §2). "M06b's grep criterion" was a one-time checklist line; `worker/protocol.ts` says M23's types are covered by it "in prose". M23 added ten post-setup message types.
+3. **`shell.test.ts` never exercises `stop()` during an in-flight `runAsync`**: removing `if (this.#stopped) return` from `#runQueued`'s `.finally()` passes 245/245.
+4. **`runAsync` before the first `runBlockingLoop` silently drops `fn`** (`#loop` is `null`), contradicting its own "never dropped".
+5. **No automated test that `window.__*` hooks are absent from production sources** (the exports-map test checks import reachability only).
