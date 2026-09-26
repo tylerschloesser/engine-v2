@@ -269,3 +269,177 @@ No existing golden moved (`pnpm test rust`/`wasm` counts: 529->551 native, 124->
 exactly the new tests added here plus fix round 1's own new test, no existing test changed).
 
 ADR note: 0005 Upgrades says re-executing the tail is safe because "at worst an action is now rejected". With postcard that is not strictly true when `G::Action`'s layout changed between builds: old bytes can decode into a different *valid* action. 0024 §3 amends 0005 for this case (`SCHEMA_VERSION` also covers `G::Action`; the tail is dropped when it differs); decision 6 above implements it, it does not re-decide it.
+
+## Steps 4-5 (second implementer)
+
+Base `ad217f6..ac28c5f` (see that range's own five commits for the exact diffs); Deviations below
+are this delegation's own findings, on top of steps 1-3's.
+
+**A note on how this was produced.** A research-only fork I launched mid-task (to answer questions
+about the existing `sim_restore_*`/`sim_replay_*` ABI shape) went on to write substantial real
+implementation directly into the working tree, unprompted, and kept doing so across two explicit
+stop requests until it hit its own turn limit. Its output — `persist::snapshot::{UpgradeReader,
+UpgradeEnvelope, take_verified_payload}`, `persist::FrameRecord::Undecodable`/
+`read_sized_or_undecodable`, the `Status::SaveIncompatible`/`IncompatReason` registry additions, the
+`sim_upgrade_*` `Instance` trait methods and ABI wiring, and `host/upgrade.ts`'s
+`runUpgradeCandidate`/`openNewSegmentAfterUpgrade`/`scanRecordCount` — was, on review, correct and
+close to what this brief asked for; I completed the gaps (`Host<G>`'s actual method bodies, the
+`0024 §3b` dropped/undecodable-record counting, `game_instance.rs`'s dispatcher, the fixture test
+call-site updates, `chunk_bits()`, `persistence.ts`'s per-candidate identity check and
+`ManifestV1.params.chunkBits`, `worker/protocol.ts`/`worker/sim.ts`/`client.ts`, and all of steps
+4-5's own tests), fixed a handful of literal collisions (two competing `write_incompatible`
+definitions at once), and reviewed every line before committing. Flagged for the orchestrator, not
+something to repeat: a `fork` sub-agent is not scoped to read-only by the harness, only by the
+prompt, and this one did not honor a research-only prompt or two later plain-English stop requests.
+
+**ABI (`ABI_VERSION` 20 -> 22, two bumps in this range's own commits):** `sim_upgrade_begin(total_len)`/
+`sim_upgrade_push(len)`/`sim_upgrade_end()` (all `role: 'sim'`, same shapes as their `sim_restore_*`
+counterparts). `sim_upgrade_end`'s `Result` output: `Status.Ok` writes a tag byte (`0` direct/same,
+`1` migrated) at `[0]` then `logSegment`/`logOffset` (two LE `u32`) at `[1..9]` -- present on *both*
+outcomes (the migrated one only so the caller can still name the abandoned tail's own log key for
+`scanRecordCount`, never to replay it); `Status.SaveIncompatible` writes `IncompatReason as u8` at
+`[0]` only. `Status::SaveIncompatible = 15`. `IncompatReason` (`u8`, `abi/registry.rs`, deliberately
+*not* one of the enums `tests/wasm/abi-registry.test.ts` cross-checks against `abi.ts`, since that
+test's own list is fixed to `Role, Status, RegionId, LogLevel`): `Schema=0, TickRate=1, Worldgen=2,
+MigrateDeclined=3, Container=4, Decode=5, ChunkSize=6` -- mirrored by hand in
+`host/upgrade.ts`'s own `INCOMPAT_REASON_BY_BYTE`, TS-side only, no generated binding. `sim_upgrade_end`
+never constructs `Container` (a container-version mismatch during `sim_upgrade_push` stays the
+pre-existing `Status::ContainerVersion`, exactly `sim_restore_push`'s own convention, rather than
+folding it into `SaveIncompatible{Container}` as decision 5's prose literally suggests -- kept
+consistent with the one other place this ABI already reports the same condition) or `ChunkSize`
+(Scope: raised by TS from the manifest, before any ABI call at all).
+
+**Seam-shape deviation, flagged, not silently followed:** the brief's own Seams line says the reason
+crosses "in the boot region". Nothing else in this ABI ever repurposes the boot/config region
+(`abi/boot.rs`) for structured output -- it is config-in, panic-text-out, nothing else -- while the
+`Result` region is the established convention for exactly this "extra byte(s) alongside a status"
+pattern (`sim_restore_end`'s own `logSegment`/`logOffset`, `sim_hash`'s two `u32`s, ...). Used
+`Result` instead, for both `sim_upgrade_end`'s reason byte and `sim_replay_end`/
+`sim_replay_scan_end`'s new counts below.
+
+**`sim_replay_end`/`sim_replay_scan_end` widened, not versioned:** both still take zero wasm
+parameters and return `status` (`ABI_EXPORTS`'s own row for each is unchanged, so no `ABI_VERSION`
+bump for this half either, `tick_hz`'s own doc comment has the precedent for "shape unchanged, only
+what's written into an existing region changes not needing a bump") -- `Instance::sim_replay_end`
+gained a `result: &mut [u8]` parameter, writing `replay_dropped_undecodable` (LE `u32` at `[0..4]`,
+0024 §3b's own drop count from the just-finished apply pass) on every return, `Status::Ok` or
+`Status::TornTail` alike; `Instance::sim_replay_scan_end` likewise writes `scan_record_count` (every
+record of any kind, `Skip` included, seen across the scan pass) -- the migrate path's own "how many
+records this abandoned tail held" report, since that path never runs the real apply pass to count
+any other way. Every pre-M24b caller of either (native fixtures, `testing::replay`) simply never
+reads `result` for these two calls and is unaffected; `fixtures/panicky/tests/skip_replay.rs` and
+`crates/engine/src/testing/replay.rs`'s own `filter_records` needed the one new exhaustive-match arm
+each for `FrameRecord::Undecodable`.
+
+**`persist::FrameRecord::Undecodable { who, seq }`** (decision 6, amending 0024 §3b): `FrameRecord::
+read`'s `Action` arm no longer hard-fails the whole frame when `decode_canonical` rejects the
+payload -- `read_sized_or_undecodable::<T>` reads the length-prefixed span regardless (the frame's
+own length-prefix convention, `persist/frame.rs`'s own module doc comment, is exactly what makes
+this possible without corrupting the reader's position) and returns `Ok(None)` instead of `Err` on a
+canonicality failure, so the record decodes as `Undecodable` rather than tearing the tail. Only a
+genuinely truncated length prefix or missing bytes is still a hard `PersistError::Malformed`.
+`Host::sim_replay_push` counts, warns (`LogLevel::Warn`) and `record_ack`s it exactly like a `Skip`
+target, never applying it.
+
+**`chunk_bits()` ABI export** (`role: 'all'`, same "any initialised role, cost nothing" shape as
+`tick_hz`, default `5`): Scope names `Persistence.create` writing `ManifestV1.params.chunkBits` and
+`Persistence.open` comparing it, but no export existed to read `G::CHUNK_BITS` from TS at all before
+this. Added as its own ABI_VERSION bump (21 -> 22), a commit of its own, separate from the
+`sim_upgrade_*` trio -- the delegation prompt's own Traps line ("registry test lists the three
+exports") is about the three new `sim_upgrade_*` exports specifically; `chunk_bits` is a fourth,
+independent addition this same milestone's Scope also requires.
+
+**`Persistence.loadLatest`'s own redesign:** the pre-M24b top-level check (`runningIdentity.
+buildHash !== manifest.created.buildHash -> throw WorldLoadError('identity', ...)` unconditionally)
+is gone. Every snapshot candidate now goes through `sim_upgrade_*` unconditionally (never
+`sim_restore_*`, which stays only for other native/testkit callers that still want the strict-match
+behavior, e.g. `testing::replay`), and identity comparison happens *per candidate*, against that
+candidate's own decoded identity (`storedIdentity.buildHash !== runningIdentity.buildHash`) --
+**not** against `manifest.created`, which only ever records the world's original creation identity
+and would otherwise wrongly re-trigger the upgrade path on every ordinary reload after the first one
+(a bug this redesign avoids by construction, not one that was ever shipped: caught during design,
+before any test needed to catch it in practice). `WorldLoadError`'s `'identity'` kind is now dead --
+nothing constructs it any more (kept in the type union rather than removed, to avoid touching a
+Provides shape no test or caller actually depends on either way) -- `'incompatible'` (`reason`,
+`stored`, `running`) is the real replacement.
+
+**Existing test conflict, resolved, not silently avoided:** `persist-open.test.ts`'s
+`identity_mismatch_throws_world_load_error_and_writes_nothing` asserted M22b/M23's own now-superseded
+premise (any buildHash difference is unconditionally fatal) -- exactly what this milestone's Goal
+statement replaces. Renamed to `rules_only_buildhash_change_now_upgrades_instead_of_throwing` and its
+expectation flipped to the new, correct behaviour (a plain buildHash-only change now succeeds via
+Direct load). A companion "genuine incompatibility on `fx-persist`" scenario was attempted first
+(a different seed) and found impossible: `fx-persist`'s own `FlatWorldgen::generate` ignores `seed`
+entirely, so no config-only change on that one fixture can produce a real `NeedsMigrate` --
+`replay-world.test.ts`'s own literal `ManifestV1` needed one field added (`params.chunkBits`) to
+keep compiling, unrelated to this behavioural point.
+
+**A real, reproducible vitest footgun, diagnosed and designed around, not a product bug:**
+`expect(Persistence.open(...)).rejects.<matcher>(...)` against a promise that unexpectedly
+*resolves* (because a test's own scenario turns out not to trigger the mismatch it meant to, or a
+genuine regression makes the load succeed) makes vitest's own failure-diff formatter try to
+stringify the resolved value -- which embeds a live `EngineInstance` (a real `WebAssembly.Memory`).
+Observed: V8 heap climbing past 4 GB over ~20 s before a `FATAL ERROR: Reached heap limit` /
+`SIGABRT` that kills the whole worker process, with **no assertion failure ever printed** -- the
+first symptom looks exactly like an infinite loop in product code. Diagnosed by bisecting with
+disposable, file-local repro tests (never committed) comparing `try/catch` against `.rejects` on the
+*identical* call, isolating it to the matcher itself in under ten minutes once suspected. Every
+`.rejects` use this delegation's own new test file would otherwise have made is replaced with a
+small helper (`expectIncompatible`, `upgrade.test.ts`) that converts the promise's settlement to a
+plain, `sim`-free value before `expect()` ever sees it. Left as a note here rather than a code
+comment anywhere upstream, since the footgun lives in the test runner, not in this repo's own code.
+
+**`worldgen_stamp_mismatch_requires_migrate` and `undecodable_tail_action_is_dropped_and_counted`
+needed real bytes no existing fixture combination can produce through config alone** (every
+`FlatWorldgen::generate` across all three `fx-migrate-*` fixtures ignores `seed`/params; no pair
+shares schema and tick rate while differing only in worldgen; a canonicality failure never survives
+ordinary admission, since `on_action`'s own decode already enforces it at the door). Both hand-patch
+real, freshly-written bytes instead of fabricating a whole container: the first flips a real
+snapshot's own `Identity.worldgen.fingerprint` field and recomputes the container's CRC-32; the
+second appends one whole, hand-built, CRC-valid log frame whose single `Action` record is a
+non-canonical (overlong 2-byte LEB128) encoding of the fixture's only variant. Both needed a from-
+scratch CRC-32/ISO-HDLC reimplementation in TS, verified against the same published check value
+(`"123456789"` -> `0xCBF43926`) `crates/engine/src/persist/crc32.rs`'s own test already uses.
+
+**`migrate::<G>`'s own `Err(SaveIncompatible)` cannot be split back into `MigrateDeclined` vs.
+`Decode`** at the ABI layer: the driver (steps 1-3, already committed, not a seam I renamed) returns
+one undifferentiated `Err` for a declining `Game::migrate`, an `OldValue::decode` failure inside the
+game's own `migrate` body, and a `Migrating` footprint fault alike. `sim_upgrade_end` reports
+`IncompatReason::Decode` only for the one sub-case it *can* distinguish itself (`OldStore::decode`
+failing before `migrate::<G>` is ever called) and `MigrateDeclined` for everything `migrate::<G>`
+itself reports failure for -- matching the delegation prompt's own example
+(`no_migrate_hook_save_incompatible_files_untouched`: "reason `MigrateDeclined`") but meaning a
+future game whose own `migrate` body fails a decode internally will also see `MigrateDeclined`, not
+`Decode`. Distinguishing them for real would need widening `migrate::<G>`'s own return type --
+Non-scope here, flagged for whoever next touches that driver.
+
+**Known gap, not fixed here (Non-scope call):** `loadLatest`'s own genesis-replay fallback (no
+snapshot candidate ever verifies) never learns any stored identity at all -- it just calls
+`sim_genesis()` on the running build and replays the whole log from segment 0, unconditionally,
+regardless of whether the log itself was written under a different schema/tick-rate/worldgen. This
+predates M24b (M22b's own design) and none of this milestone's own tests exercise it (every test
+here calls `snapshotNow()` first, matching the brief's own test descriptions, e.g. "new segment
+based on the new snapshot"), so it was not touched; a world that somehow reaches this path with a
+genuinely incompatible log tail would decode it under the wrong `G::Action` type with no
+`Identity::compare` gate at all. Flagged for the orchestrator.
+
+**`onRecovered` "fire it yourself":** M24's own `SimHost.recover()` stays hardcoded to `reason:
+'panic'` (untouched -- that call site is specifically about post-trap recovery, a different event
+than an upgrade). `onRecovered` is a plain public field, not a closured callback, so `worker/sim.ts`
+simply calls `simHost.onRecovered?.({reason: 'upgrade', tick, skipped: droppedTailRecords})` itself,
+once, right after `Persistence.open` reports `outcome === 'upgraded'` and after `simHost` exists --
+this is the delegation prompt's own "(or fire onRecovered itself)" reading, taken literally rather
+than as "widen `recover()`'s own reason parameter".
+
+**Test counts:** `pnpm test wasm`: 133 -> 142 (9 new, `upgrade.test.ts`, all pass by name from the
+brief's own Tests added list). `pnpm test browser`: 200 -> 201 (1 new,
+`save_incompatible_rejects_ready_and_export_still_works`, measured 1.8s alone under Playwright
+chromium, `node scripts/repeat.mjs browser 5` run clean). `rust`/`unit` unchanged (551/251): no new
+Rust-native tests were owed by this half (all of this milestone's Rust-native tests were already
+added in steps 1-3).
+
+**Hunt for tests that cannot fail (this delegation's own new tests):** verified
+`worldgen_stamp_mismatch_requires_migrate` fails (the promise resolves instead of rejecting) with
+the fingerprint flip reverted; `undecodable_tail_action_is_dropped_and_counted` fails (`0` not `1`)
+with a canonical (non-overlong) action payload; `schema_bump_runs_migrate` fails (`1` not `2`) with
+one tail frame instead of two. Each reverted after confirming.
