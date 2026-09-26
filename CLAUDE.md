@@ -35,6 +35,7 @@ Each has a path-scoped rule file that loads when you read a matching file; read 
 
 - **Determinism:** sim, worldgen and `apply` code must produce the same bits natively and as `.wasm` in every runtime: `.claude/rules/determinism.md`.
 - **Hot paths:** no allocation per frame or per tick in the JS around a WASM instance: `.claude/rules/hot-paths.md`.
+- **Prediction:** validate first and write after, `?` on every read, a provisional id is never encoded, and a predicted status is a hint until the host acks it: `.claude/rules/prediction.md`.
 
 ## Rules
 

@@ -68,6 +68,19 @@ carry the bit in `Game::register` -- a handler that instead matches on `tile.bas
 WATER_ID` only ever catches the tile source, silently missing an occupant that carries the same
 bit.
 
+**Address by tile, not by `EntityId`, for anything a client might only have predicted**
+(docs/decisions/0022-entity-ids-and-provisional-ids.md §6): a follow-up action naming a building
+the player just placed (a deposit, a feed, a move's `at`) must carry a `TilePos`/`Pos`, resolved
+with `w.entity_at(pos)?`, never the id `w.spawn(..)` returned locally -- a predicted spawn's id has
+bit 31 set (0022 §5) and is client-local, so the *host* has no idea what it means, and the action
+would fail to even parse if that id somehow reached the wire (`EntityId`'s own `Deserialize` guard
+rejects one). `entity_at` resolves to the provisional id under prediction and to the real id on the
+host, so one handler (`fixtures/predict`'s own `Deposit`, `docs/plan/25-prediction-core.md`) serves
+both without knowing which side it is running on. An action that only ever runs after its target is
+already fully confirmed (nothing the *same* player could have just predicted) may still carry a
+real `EntityId` -- this rule is about a target the action's own sender might have predicted, not
+every id-shaped field.
+
 **Declare `growth`** (docs/decisions/0023-action-growth-declaration.md): if your action can spawn
 an entity or modify a tile, add or extend the override so the host's state-budget check (`crate::
 budget`, run before `apply`) knows the worst case without having to guess:
