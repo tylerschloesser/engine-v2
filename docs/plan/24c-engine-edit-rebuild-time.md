@@ -1,6 +1,6 @@
 # M24c: Engine-edit rebuild time back inside 0020 §3
 
-Status: not started · After: 24b · Tyler-dependent: no (Tyler approved the milestone, 2026-09-26)
+Status: done · After: 24b · Tyler-dependent: no (Tyler approved the milestone, 2026-09-26)
 
 Written by the orchestrator at M24b's gate (deferred ledger row "After any engine-crate change `pnpm test` spends ~170 s building"). Same shape as M17d: attribute first, fix what the attribution names, re-measure.
 
@@ -44,11 +44,11 @@ Cold builds and CI cache (0020 §3 budgets them separately). The `wasm32` fixtur
 The guard test (named in Deviations). `cargo nextest list` equality before/after, pasted as a count plus the diff (empty).
 
 ## Exit criteria
-- [ ] The attribution table (per step, per test binary, compile vs link) is in Deviations.
-- [ ] `touch packages/engine/crates/engine/src/lib.rs && pnpm test unit` reaches the suite in ≤ 30 s (three runs pasted), or the floor and its cause are recorded per Planning decision 2.
-- [ ] The test list is unchanged (sorted `cargo nextest list` diff empty); no test body changed.
-- [ ] The guard test exists and was shown to fail when its structural property is violated.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] The attribution table (per step, per test binary, compile vs link) is in Deviations.
+- [x] `touch packages/engine/crates/engine/src/lib.rs && pnpm test unit` reaches the suite in ≤ 30 s (three runs pasted), or the floor and its cause are recorded per Planning decision 2.
+- [x] The test list is unchanged (sorted `cargo nextest list` diff empty); no test body changed.
+- [x] The guard test exists and was shown to fail when its structural property is violated.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `touch packages/engine/crates/engine/src/lib.rs && pnpm test unit` (×3) · `cargo nextest list --workspace` before/after · `pnpm test` · `pnpm lint`
@@ -95,3 +95,5 @@ Runs 1-2 (146-147s, `fixtures` ~130s) are the reliable, back-to-back post-fix fi
 **30s is not reached (Planning decision 2).** The floor after this fix is **~146-150s quiet-machine, one-line-edit rebuild** (worse under the post-reboot indexing load above). Cause, precisely: the workspace still has **67 distinct test binaries** (80 before this fix, minus the 13 consolidated away), each paying macOS's ~1.2-3s one-time first-execution verification tax somewhere in the build pipeline (Step 1's attribution); compilation itself remains fast and well parallelized (~27-30s) and is not the constraint. Reaching 30s would require cutting the total binary count roughly another 5-6x (to ~12-15 workspace-wide), which means consolidating the fixture crates too (`reference-sim` 10 files, `fx-persist` 7, `fx-presence` 5, `fx-machines` 5, `fx-puts` 4, `fx-worldgen` 3, `fx-panicky` 2 -- 43 of the workspace's 80 binaries are fixtures, more than `crates/engine`'s own 25) -- named in Scope as conditional ("if they are part of the cost": they are, more than `crates/engine`'s own tests were) but not done in this milestone, both because 30s is unreachable even with full consolidation (an estimated ~37-binary floor still projects to roughly 100s, not 30s, by the same per-binary rate) and because of this session's own time budget after the reboot interruption and the extensive attribution work above. Recorded here per Planning decision 2 rather than chased further; a changed budget, if Tyler wants one, is the orchestrator's ADR to write, not this milestone's.
 
 **Verification.** `pnpm test` (warm, no source change), second of two consecutive runs, `9:14`: `rust pass 551 tests 1.1s/10s`, `unit pass 252 tests 2.2s/3s`, `wasm pass 147 tests 2.6s/7s`, `browser pass 201 tests 44s/48s`, exit 0 -- the same suite counts as the delegation's stated green baseline (rust 551, wasm 147, browser 201) plus one (unit 252 = 251 + the new guard test). `pnpm lint`: `biome pass`, `rustfmt pass`, `clippy pass 26s`, `tsc pass`, exit 0.
+
+**Gate (orchestrator).** One implementer, interrupted by a machine restart before it committed anything and resumed after the load settled. `pnpm gate e2a1854`: 19 files, 139/58 lines, no goldens, no markers; `rust` still 551 tests, the sorted `cargo nextest list` equal before and after. The orchestrator re-ran the guard: a stray `tests/zz_stray.rs` fails `engine-test-binary-layout` (`expected Set{ 'main.rs', …(12) } to deeply equal Set{ 'main.rs', …(11) }`). **The attribution overturned the brief's premise**: compile and link are 26.8 s; the rest is macOS's first-launch security check on every freshly linked executable (1.25 s first run vs 0.007 s second for one binary; 10 fresh binaries serially 29.4 s), paid once per test binary because `cargo test --workspace export_bindings` executes every workspace test binary even when the filter matches none. Consolidating `crates/engine`'s integration tests cut an engine edit from ~210-230 s to ~147 s; 30 s is not reachable in-repo while 67 binaries each pay the check, so the second criterion is met by its "floor and cause recorded" branch (Planning decision 2). The out-of-repo fix is macOS's Developer Tools exemption for the terminal that launches the builds (`sudo spctl developer-mode enable-terminal`, then System Settings → Privacy & Security → Developer Tools), which is Tyler's to enable; no budget ADR until it has been measured with the exemption on.
