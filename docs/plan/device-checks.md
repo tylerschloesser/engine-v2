@@ -131,14 +131,39 @@ When: M18 ticked. Closes the deferred item of `0019` Consequences, which combine
 
 When: M23 ticked. Closes the deferred OPFS latency item of `0005` Consequences; it tunes only the log `sync` interval.
 
-**Open** (served as above): `opfs-latency.html`, then `world.html` (fixture `puts` with persistence; HUD adds `hash`, `durable`, `persisted`; Export / Import / Delete buttons; `?world=<id>`).
+**Open** (served as above): `opfs-latency.html` (a worker runs 1,200 appends of 64 B with a `flush()`
+every 20th, then 20 scratch writes of 1 MiB and 10 of 8 MiB each with its own `flush()`, then prints a
+p50/p95/max table for `append`/`flush`/`scratch 1 MiB`/`scratch 8 MiB` plus `move()`/
+`navigator.locks` availability booleans); then `world.html` (fixture `puts` with persistence on;
+`?world=<id>`, default `device`; HUD shows `world`, `worldBusy`, `loadFailed`, `hash`, `tick`,
+`durable`, `persisted`, `usage`, `quota` -- `hash`/`tick` refresh only on a discrete event, page load
+or a Paint tap, never on a timer, so a step that needs a fresh reading taps Paint first; Export,
+Import (a file picker plus a new-id field) and Delete buttons over `client.exportWorld`/
+`importWorld`/`deleteWorld`; Export triggers a real file download named `<worldId>.world`).
 
-- [ ] **M23-opfs-latency** (`0005` Consequences). *Steps:* run the latency page; copy the whole table (p50 / p95 / max for `append`, `flush`, both snapshot writes; `move()` and `navigator.locks` availability). *Pass:* `flush` p95 ≤ 10 ms, the keep band of [M23's brief](23-persistence-opfs-and-lifecycle.md), Planning decision 7, which owns the bands. *If it fails:* apply that decision's retune rule; any change is a new ADR superseding the number in `0005`. `move()` missing → slot files, M23 Planning decision 3.
-- [ ] **M23-kill-resume** (`0005` loss windows). *Steps:* play 2 min, swipe-kill Safari, reopen. *Pass:* the world resumes; 0 admitted actions lost.
-- [ ] **M23-world-busy**. *Steps:* open the same world in a second tab. *Pass:* the second tab shows `WorldBusy`; the first keeps playing.
-- [ ] **M23-private**. *Steps:* open the page in Private Browsing. *Pass:* the page reports `durable: false` and still plays.
-- [ ] **M23-hidden-pause**. *Steps:* background 30 s, foreground. *Pass:* the HUD `tick` did not advance while hidden; no reload.
-- [ ] **M23-export-import**. *Steps:* export; confirm the file arrives in Files; import it under a new id. *Pass:* both worlds show the same hash.
+- [ ] **M23-opfs-latency** (`0005` Consequences). *Steps:* run the latency page; copy the whole
+  printed table. *Pass:* `flush` p95 ≤ 10 ms, the keep band of [M23's brief](23-persistence-opfs-and-lifecycle.md),
+  Planning decision 7, which owns the bands. *If it fails:* apply that decision's retune rule; any
+  change is a new ADR superseding the number in `0005`. `move()` missing → slot files, M23 Planning
+  decision 3.
+- [ ] **M23-kill-resume** (`0005` loss windows). *Steps:* play 2 min, swipe-kill Safari, reopen.
+  *Pass:* the world resumes; 0 admitted actions lost.
+- [ ] **M23-world-busy**. *Steps:* open the same world in a second tab. *Pass:* the second tab shows
+  the `WorldBusy` banner; the first keeps playing.
+- [ ] **M23-private**. *Steps:* open the page in Private Browsing. *Pass:* the HUD reports
+  `durable: false` and the world still plays.
+- [ ] **M23-hidden-pause**. *Steps:* tap Paint once (a fresh `tick` reading), background 30 s,
+  foreground, tap Paint again. *Pass:* the second `tick` reading is only a few ticks past the first
+  (not ~600, the 30 s-at-20-Hz a still-running world would rack up) and `durable` stays `true`; no
+  reload. *Why tap Paint, not just read the HUD:* `hash`/`tick` refresh only on that discrete event
+  (Deviations, steps 3-4 of [M23's brief](23-persistence-opfs-and-lifecycle.md)), never on a timer, so
+  the number sitting on screen while backgrounded proves nothing on its own about whether ticking
+  actually stopped.
+- [ ] **M23-export-import**. *Steps:* tap Export (a `<worldId>.world` file download; confirm it
+  arrives in Files); note the HUD `hash`. Reload the page (or open a second tab) with a fresh
+  `?world=<other-id>`, choose the downloaded file in the Import file picker, type the new id, tap
+  Import; then open `world.html?world=<other-id>` directly. *Pass:* the new world's own HUD `hash`
+  (after a Paint tap, to force a fresh reading) equals the exported world's `hash`.
 - [ ] **M23-android** *(Android. **Not run: no device** (Q5). Skipped; never tick.)*. All items in Chrome.
 
 **Run on:** <device, OS, date>; **result:** <latency table; per item>

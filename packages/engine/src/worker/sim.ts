@@ -17,7 +17,7 @@
 // wake-then-wait-for-ack lockstep (`test/client.ts`) needs it, the same way `gen`'s own body()
 // does.
 import { Role } from '../abi.js'
-import { systemClock } from '../clock.js'
+import { systemClock, systemScheduler } from '../clock.js'
 import { Persistence, WorldLoadError } from '../host/persistence.js'
 import { RingConnection } from '../ring-connection.js'
 import {
@@ -64,7 +64,7 @@ function worldLockName(worldId: string): string {
  * persisted world holds its lock for the sim worker's whole life (Planning decision 6), released
  * only by whatever later milestone tears the worker down cleanly (Non-scope here, same as M23's own
  * "clean boundaries" not covering worker respawn, M24/M37). */
-function requestWorldLock(worldId: string): Promise<boolean> {
+function tryAcquireWorldLock(worldId: string): Promise<boolean> {
   return new Promise((resolveGranted) => {
     navigator.locks.request(
       worldLockName(worldId),
@@ -77,6 +77,28 @@ function requestWorldLock(worldId: string): Promise<boolean> {
       },
     )
   })
+}
+
+/** docs/plan/23-persistence-opfs-and-lifecycle.md step 5 (Deviations, fix round): a page reload
+ * (`export_works_after_load_failure`'s own sequence -- hidden-pause, corrupt, `page.reload()`,
+ * immediately check `world-busy`) raced the *previous* document's own worker tearing down and
+ * releasing this exact lock name against the *new* document's very first `tryAcquireWorldLock` call
+ * -- `ifAvailable: true` never waits, so a transient overlap (measured: reproduced 2/3 runs under
+ * full-suite contention, 0/12 in isolation) reported a spurious `world-busy` for a world nothing else
+ * actually held. A real second tab's own lock does not clear between retries, so this changes nothing
+ * about `second_tab_gets_world_busy`'s own outcome, only how fast a *reload* is told the lock is
+ * free again. Five attempts, 50 ms apart (250 ms worst case) -- comfortably inside every reload
+ * test's own timeout budget. */
+async function requestWorldLock(worldId: string): Promise<boolean> {
+  const attempts = 5
+  const retryDelayMs = 50
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (await tryAcquireWorldLock(worldId)) return true
+    if (attempt < attempts - 1) {
+      await new Promise<void>((resolve) => systemScheduler.setTimer(resolve, retryDelayMs))
+    }
+  }
+  return false
 }
 
 /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 1-2 (Deviations): OPFS's own probe --

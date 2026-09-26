@@ -8,17 +8,18 @@
 // `client.onStorage`), and the `WorldBusy` banner when `client.ready` rejects with `'world-busy'`.
 //
 // Export/Import/Delete buttons (Scope, step 5): `#export-btn`, `#import-file`, `#import-worldid`,
-// `#import-btn`, `#delete-btn` over `client.exportWorld`/`importWorld`/`deleteWorld`. Export stashes
-// the archive's bytes on `window.__lastExportedBytes` (a plain number array: `page.evaluate`'s own
-// structured-clone boundary, `slice.ts`'s own `__probeTile` precedent) instead of triggering a real
-// browser download -- a download needs `page.waitForEvent('download')` ceremony this fixture page
-// has no reason to carry (the reference game, M32+, is where a real download UX belongs, Non-scope).
-// Import reads its file from `#import-file` via `Blob.arrayBuffer()` (a real `<input type=file>`,
-// driven in tests with Playwright's own `setInputFiles({ buffer })`, no on-disk file needed) and its
-// target id from `#import-worldid` (empty means "the archive's own id"). `#world-op-status` shows the
-// last op's outcome or error message, for both the device check and tests. `#world-canvas` is this
-// page's own canvas (required by `ClientOptions.canvas`, never fed to WebGPU); `#hud`, `#paint-btn`,
-// `#world-busy` already exist, matching `slice.html`'s own ids where they overlap.
+// `#import-btn`, `#delete-btn` over `client.exportWorld`/`importWorld`/`deleteWorld`. Export both
+// stashes the archive's bytes on `window.__lastExportedBytes` (a plain number array: `page.
+// evaluate`'s own structured-clone boundary, `slice.ts`'s own `__probeTile` precedent, for browser
+// tests) *and* triggers a real file download (`<a download>` + `URL.createObjectURL`, `M23-export-
+// import`'s own "confirm the file arrives in Files"). Import reads its file from `#import-file` via
+// `Blob.arrayBuffer()` (a real `<input type=file>`, driven in tests with Playwright's own
+// `setInputFiles({ buffer })`, no on-disk file needed, and by hand on-device by picking the
+// downloaded file) and its target id from `#import-worldid` (empty means "the archive's own id").
+// `#world-op-status` shows the last op's outcome or error message, for both the device check and
+// tests. `#world-canvas` is this page's own canvas (required by `ClientOptions.canvas`, never fed to
+// WebGPU); `#hud`, `#paint-btn`, `#world-busy` already exist, matching `slice.html`'s own ids where
+// they overlap.
 import type { Action } from '../../../../fixtures/puts/bindings/Action.ts'
 import type { Client, ClientOptions, StorageStatus } from '../../../../src/client.ts'
 import {
@@ -273,13 +274,28 @@ if (!unusable) {
 let lastExportedBytes: number[] | undefined
 window.__lastExportedBytes = () => lastExportedBytes
 
+let lastExportedBlob: Blob | undefined
+
 async function doExport(): Promise<number[]> {
   const blob = await client.exportWorld()
+  lastExportedBlob = blob
   const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()))
   lastExportedBytes = bytes
   return bytes
 }
 window.__exportWorld = doExport
+
+/** Device check `M23-export-import` ("confirm the file arrives in Files"): a real download, not
+ * just the test-hook stash above -- an anchor with `download` set, clicked once and discarded, the
+ * ordinary way to save a `Blob` without a File System Access API prompt (unsupported in Safari). */
+function triggerDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
 
 async function doImport(
   bytes: number[],
@@ -297,7 +313,10 @@ function setWorldOpStatus(text: string): void {
 
 exportBtn.addEventListener('click', () => {
   void doExport()
-    .then((bytes) => setWorldOpStatus(`exported ${bytes.length} bytes`))
+    .then((bytes) => {
+      setWorldOpStatus(`exported ${bytes.length} bytes`)
+      if (lastExportedBlob) triggerDownload(lastExportedBlob, `${worldId}.world`)
+    })
     .catch((e: unknown) => setWorldOpStatus(`export error: ${String(e)}`))
 })
 
