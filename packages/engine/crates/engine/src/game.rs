@@ -42,21 +42,28 @@ pub struct PlayerId(pub u32);
 
 /// An entity id (docs/decisions/0022-entity-ids-and-provisional-ids.md §1): allocated only by the
 /// host, starting at 1, monotonic, never reused; `0` is never allocated ("none"); bit 31 is never
-/// set on a real id (reserved for a client-local provisional id -- the constructor and the
-/// `Deserialize` guard that rejects one on the wire are M25's, 0022 §5).
-#[derive(
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Debug,
-    Default,
-    serde::Serialize,
-    serde::Deserialize,
-)]
+/// set on a real id (reserved for a client-local provisional id, 0022 §5). `Deserialize` is
+/// implemented by hand below (not derived): it refuses a value with bit 31 set, so action JSON or
+/// wire bytes carrying a provisional id fail to parse instead of decoding into a bogus real id
+/// (0022 §5: "`EntityId`'s `Deserialize` refuses a value with bit 31 set"). `Serialize` stays
+/// derived and accepts one, because `Ui` may show one.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default, serde::Serialize)]
 pub struct EntityId(pub u32);
+
+impl<'de> serde::Deserialize<'de> for EntityId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = u32::deserialize(deserializer)?;
+        if value & Self::PROVISIONAL_BIT != 0 {
+            return Err(serde::de::Error::custom(
+                "EntityId: bit 31 set (0022 §5: a provisional id is never encoded)",
+            ));
+        }
+        Ok(EntityId(value))
+    }
+}
 
 impl EntityId {
     /// Reserved for a client-local provisional id (0022 §5); never set on a real, host-allocated
@@ -66,6 +73,23 @@ impl EntityId {
     #[inline]
     pub const fn is_provisional(self) -> bool {
         self.0 & Self::PROVISIONAL_BIT != 0
+    }
+
+    /// A client-local id for the `index`th entity a pending action with sequence `seq` spawns
+    /// (0022 §5): bit 31, then the low 22 bits of `seq`, then a 9-bit spawn index -- unique among
+    /// the pending queue's own entries because `seq` is monotonic, and identical on every
+    /// reset-and-replay of the same action because both inputs are. `None` past the 512th spawn in
+    /// one action (`index >= 512`, the 9-bit field's own range): the caller (`predict::Predicting::
+    /// spawn`) sets `saw_unknown` when this happens, declining the whole action as `NotPredictable`
+    /// rather than handing back a colliding id.
+    pub const fn provisional(seq: u32, index: u32) -> Option<EntityId> {
+        if index >= (1 << 9) {
+            return None;
+        }
+        let seq_bits = seq & 0x003F_FFFF; // the low 22 bits
+        Some(EntityId(
+            Self::PROVISIONAL_BIT | (seq_bits << 9) | (index & 0x1FF),
+        ))
     }
 }
 
@@ -277,5 +301,60 @@ mod tests {
     fn entity_id_policy_ord_matches_u32() {
         assert!(EntityId(1) < EntityId(2));
         assert!(PlayerId(1) < PlayerId(2));
+    }
+
+    /// 0022 §5's own layout, and its cap: distinct per `(seq, index)`, bit 31 always set, and the
+    /// 513th spawn in one action (`index == 512`, past the 9-bit field) has no id left to hand
+    /// back.
+    #[test]
+    fn predict_provisional_id_layout_and_cap() {
+        let a = EntityId::provisional(7, 0).unwrap();
+        let b = EntityId::provisional(7, 1).unwrap();
+        let c = EntityId::provisional(8, 0).unwrap();
+        assert!(a.is_provisional() && b.is_provisional() && c.is_provisional());
+        assert_ne!(a, b, "distinct spawn index within the same seq");
+        assert_ne!(a, c, "distinct seq");
+        assert_eq!(
+            EntityId::provisional(7, 0),
+            EntityId::provisional(7, 0),
+            "stable"
+        );
+        assert!(
+            EntityId::provisional(1, 511).is_some(),
+            "the 512th spawn (index 511) still fits"
+        );
+        assert_eq!(
+            EntityId::provisional(1, 512),
+            None,
+            "the 513th spawn (index 512) has no bits left"
+        );
+    }
+
+    /// 0022 §5: `Serialize` accepts a provisional id (`Ui` may show one); `Deserialize` refuses one,
+    /// for both encodings `Codec` covers -- JSON (action dispatch, 0003) and postcard (the wire and
+    /// the log). `provisional_id_rejected_by_deserialize` in the Tests-added list, both formats.
+    #[test]
+    fn predict_provisional_id_rejected_by_deserialize() {
+        let id = EntityId::provisional(1, 0).unwrap();
+
+        let json = serde_json::to_string(&id).expect("Serialize accepts a provisional id");
+        assert!(
+            serde_json::from_str::<EntityId>(&json).is_err(),
+            "JSON: Deserialize must refuse bit 31 set"
+        );
+        assert!(
+            serde_json::from_str::<EntityId>("0").is_ok(),
+            "a real id still parses"
+        );
+
+        let mut buf = [0u8; 8];
+        let n = crate::codec::encode(&id, &mut buf).expect("Serialize accepts a provisional id");
+        assert!(
+            crate::codec::decode::<EntityId>(&buf[..n]).is_err(),
+            "postcard: Deserialize must refuse bit 31 set"
+        );
+        let mut real_buf = [0u8; 8];
+        let real_n = crate::codec::encode(&EntityId(5), &mut real_buf).unwrap();
+        assert!(crate::codec::decode::<EntityId>(&real_buf[..real_n]).is_ok());
     }
 }

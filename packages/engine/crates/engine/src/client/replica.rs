@@ -402,8 +402,17 @@ impl<G: Game> WorldRead<G> for Replica<G> {
         Ok(self.store.entity_at(p))
     }
 
+    /// 0022 §7: a real id the store does not hold is `Err(Unknown)` (this client cannot tell
+    /// "despawned" from "outside my subscription", and either way a predicting action must
+    /// decline) -- a provisional-shaped id the store does not hold is `Ok(None)` regardless (that
+    /// namespace is `Predicting`'s own; a bare `Replica` never allocates or stores one, so it has no
+    /// opinion about it either way).
     fn entity(&self, id: EntityId) -> Result<Option<&G::Entity>, Unknown> {
-        Ok(self.store.entity(id))
+        match self.store.entity(id) {
+            Some(e) => Ok(Some(e)),
+            None if id.is_provisional() => Ok(None),
+            None => Err(Unknown),
+        }
     }
 
     fn player(&self, who: PlayerId) -> Result<&G::Player, Unknown> {
@@ -524,5 +533,26 @@ mod tests {
             CacheCapacity::Chunks(128),
             PlayerId(1),
         );
+    }
+
+    /// 0022 §7, three of the four cases `predict_entity_id_gone_vs_unsubscribed` (`predict/
+    /// predicting.rs`) needs from `Predicting`'s own `base`: a real id the store holds is
+    /// `Ok(Some)`; a real id it has never seen is `Err(Unknown)` ("despawned" and "outside my
+    /// subscription" look identical from here, by design); a provisional-shaped id is `Ok(None)`
+    /// regardless (a bare `Replica` never allocates one, so it has no opinion either way). The
+    /// fourth case (an overlay tombstone) has no `Replica` counterpart at all -- `Predicting`'s own
+    /// overlay is what carries one.
+    #[test]
+    fn predict_replica_entity_seen_vs_unseen_vs_provisional() {
+        let mut r = Replica::<RGame>::new(
+            ChunkDims::new(5),
+            Box::new(ZeroSource),
+            CacheCapacity::Chunks(128),
+            PlayerId(1),
+        );
+        r.apply_entity_put(EntityId(5), REntity);
+        assert_eq!(r.entity(EntityId(5)), Ok(Some(&REntity)));
+        assert_eq!(r.entity(EntityId(6)), Err(Unknown));
+        assert_eq!(r.entity(EntityId(EntityId::PROVISIONAL_BIT | 3)), Ok(None));
     }
 }

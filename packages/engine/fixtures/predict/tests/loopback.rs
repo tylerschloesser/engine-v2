@@ -4,7 +4,7 @@
 //! simplified harness. What each test would still pass without (the repo's own recurring-defect
 //! guard, `.claude/rules/prediction.md`) is noted per test.
 
-use engine::game::{Game, PlayerId, WorldRead};
+use engine::game::{EntityId, Game, PlayerId, WorldRead};
 use engine::predict::Prediction;
 use engine::sim::WorldParams;
 use engine::testing::testkit::Loopback;
@@ -456,4 +456,57 @@ fn predict_frozen_predicted_tick() {
         saw_pending,
         "the action must still be pending for at least one replay to prove anything"
     );
+}
+
+/// **A provisional id is stable across replays** (0022 §5: "identical on every reset-and-replay").
+/// `EntityId::provisional(seq, index)` is a pure function of the two, and `spawned` (this
+/// `Predicting`'s own per-replay spawn counter) restarts at 0 every replay in the same handler
+/// order, so this would already hold with no extra bookkeeping -- the assertion is what actually
+/// pins it, not an inference from the implementation.
+#[test]
+fn predict_provisional_id_stable_across_replays() {
+    let mut lb = loopback(7);
+    let (idx, _who) = add_client(&mut lb, 3);
+    lb.set_camera(idx, camera(10, 10));
+    lb.run(4);
+
+    let origin = Pos { x: 5, y: 5 };
+    assert_eq!(
+        lb.dispatch(idx, Action::Place { origin }).1,
+        Prediction::Applied
+    );
+    let id0 = lb
+        .entity_at(idx, origin.tile())
+        .expect("predicted occupant");
+    assert!(id0.is_provisional());
+
+    for _ in 0..3 {
+        lb.step();
+        if lb.pending(idx).count() == 0 {
+            break; // acked already: no longer a replay to compare against
+        }
+        let id_n = lb
+            .entity_at(idx, origin.tile())
+            .expect("still predicted, still provisional");
+        assert_eq!(id_n, id0, "same provisional id every replay");
+    }
+}
+
+/// The 0022 §5 layout is exercised end to end here too: a real, ordinary dispatch's provisional id
+/// is never the placeholder value `EntityId(EntityId::PROVISIONAL_BIT)` a 513th-spawn overflow
+/// would fall back to (`predicting.rs`'s own `spawn`) -- a cheap sanity check that this fixture's
+/// single-spawn actions never trip that path by accident.
+#[test]
+fn predict_provisional_id_is_not_the_overflow_placeholder() {
+    let mut lb = loopback(8);
+    let (idx, _who) = add_client(&mut lb, 2);
+    lb.set_camera(idx, camera(10, 10));
+    lb.run(4);
+
+    let origin = Pos { x: 5, y: 5 };
+    lb.dispatch(idx, Action::Place { origin });
+    let id = lb
+        .entity_at(idx, origin.tile())
+        .expect("predicted occupant");
+    assert_ne!(id, EntityId(EntityId::PROVISIONAL_BIT));
 }
