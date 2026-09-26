@@ -9,6 +9,7 @@ import { openPage } from './support/page.js'
 interface StorageOpfsResult {
   conformance: string[] | { error: string }
   pendingAsyncHook: Record<string, boolean> | { error: string }
+  flushWaitsForInFlightRename: Record<string, boolean> | { error: string }
 }
 
 test('storage_conformance_opfs @engines', async ({ opfsPage }) => {
@@ -44,5 +45,16 @@ test('storage_conformance_opfs @engines', async ({ opfsPage }) => {
     pendingAsyncClearsOnRead: true,
     scratchReadyAfterDrain: true,
     readsSameValueAfterRename: true,
+  })
+
+  // Gate fix (docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 1): `flush()` must
+  // wait for a rename `pendingAsync()` already handed out and running elsewhere, not just one still
+  // sitting untaken in the slot.
+  expect(result.flushWaitsForInFlightRename).toEqual({
+    writeReturnsVoidWhileScratchOpen: true,
+    pendingAsyncNonNullAfterWrite: true,
+    flushNotResolvedWhileRenameHeld: true,
+    flushResolvedAfterRenameReleased: true,
+    snapshotKeyReadableAfterFlush: true,
   })
 })

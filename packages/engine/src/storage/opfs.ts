@@ -38,7 +38,12 @@ export interface OpfsStorage extends Storage {
    * is queued -- a worker body can poll this every wake, cheaply, with no allocation on a `null`
    * read. At most one continuation is ever queued at a time (0005 Cadence writes are already
    * serialized); a `write()` that arrives before the previous one drains chains behind it instead of
-   * replacing it (`#queueRename`'s own `previous` capture).
+   * replacing it (`#queueRename`'s own `previous` capture). Gate fix (docs/plan/
+   * 23-persistence-opfs-and-lifecycle.md, "Open gate failures" 1): once handed out and invoked by
+   * *any* caller (`shell.runAsync`, or `flush()` itself), the closure marks itself running
+   * (`#renameInFlight`) until its own work -- rename and scratch reopen both -- has fully finished, so
+   * `flush()` (below) can find and wait for it even after this method has already handed it off and
+   * gone back to returning `null` on a later poll.
    */
   pendingAsync(): (() => Promise<void>) | null
   /** Whether `write()`'s synchronous fast path (already-open scratch handle) is available right
@@ -105,6 +110,28 @@ class OpfsStorageAdapter implements OpfsStorage {
   readonly #dirCache = new Map<string, FileSystemDirectoryHandle>()
   #scratch: Scratch | null = null
   #pendingAsync: (() => Promise<void>) | null = null
+  /** Gate fix (docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 1): whether the
+   * one queued continuation (`#pendingAsync`'s own closure, built by `#queueRename`) is *currently
+   * running* -- from the moment it starts (set as its own first statement, by itself, not by
+   * `pendingAsync()`) until its own `finally` block has fully finished, scratch reopen included.
+   * `pendingAsync()` is a take -- once handed out to a caller (`worker/sim.ts`'s `shell.runAsync`, or
+   * `flush()` itself), `#pendingAsync` reads `null` even though the work is still running elsewhere;
+   * this is what lets `flush()` find that still-running work instead of missing it. A plain boolean,
+   * not a tracked `Promise` handed back through a wrapping closure: measured
+   * (`gc-sim.html?forceSnapshot=1`) that wrapping `pendingAsync()`'s own returned closure -- however
+   * it was built (a `.then()`/`.finally()` chain, or nothing at all beyond the wrapper itself) -- cost
+   * far more than the `snapshotEventBytes` budget has room for; a boolean set/cleared *inside* the one
+   * closure that already exists needs no new closure on that path at all. */
+  #renameInFlight = false
+  /** Gate fix 1: `flush()`'s own wait list, populated (and drained) only when it actually races an
+   * in-flight rename -- normally empty. **Not** a `queueMicrotask`/polling loop: that livelocked a
+   * real browser outright (`storage_conformance_opfs`, found live) -- a tight microtask-only wait
+   * loop never yields to the task queue, so the real native rename's own completion (posted as a
+   * task, not a microtask) never got a turn to run, and `#renameInFlight` never went `false`. A
+   * resolver list, drained by the closure's own `finally` the instant it actually finishes, needs no
+   * polling at all. The `Promise`/closure this allocates lives entirely in `flush()`, never on the
+   * measured tick path (flush() is 0005's own "clean boundaries only", never called per tick). */
+  #renameSettled: Array<() => void> = []
   /** Fix round (this milestone, steps 3-4): 0005's own "the tick path never awaits storage" means
    * two `append()` calls to the *same, not-yet-opened* key can legitimately arrive before the first
    * one's own `createSyncAccessHandle()` has resolved (a genesis frame logged the very tick after
@@ -297,9 +324,18 @@ class OpfsStorageAdapter implements OpfsStorage {
     // Planning decision 2: "at most one at a time" -- a single slot, not a queue. Any *other*
     // `write()` that arrives before this one drains (fast or slow path) chains behind it first
     // (`previous`, below and in `#writeViaFreshHandle`), so calls take effect in call order (0005
-    // Storage) regardless of which key each one targets.
+    // Storage) regardless of which key each one targets. `#queueRename` only ever runs once `#scratch`
+    // is available again, which only happens after the prior continuation's own `finally` has reopened
+    // it -- so by construction `this.#pendingAsync` is always `null` here (whatever was previously
+    // queued has already been taken *and* has already fully settled by the time that reopen ran).
     const previous = this.#pendingAsync
     this.#pendingAsync = async () => {
+      // Gate fix (docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 1): set as this
+      // closure's own first statement, by itself -- not by `pendingAsync()`, whichever caller ends up
+      // invoking it (`shell.runAsync`, or `flush()` directly). Cleared only after the `finally` below
+      // has fully finished (scratch reopen included), so `flush()`'s own poll (below) cannot observe
+      // "not in flight" until the rename really has landed and the reopened scratch is usable again.
+      this.#renameInFlight = true
       try {
         if (previous) await previous()
         const resolved = await this.#resolve(key, true)
@@ -311,6 +347,16 @@ class OpfsStorageAdapter implements OpfsStorage {
         this.onError?.(e)
       } finally {
         await this.#openScratch().catch((e: unknown) => this.onError?.(e))
+        this.#renameInFlight = false
+        // Gate fix 1: wake every `flush()` that started waiting while this was running -- normally
+        // empty (a plain `.length` check, no allocation), a real array only when `flush()` actually
+        // raced this. Cleared before resolving, not after: a resolver that itself calls back in here
+        // synchronously (it never does today, but nothing here relies on that) would see an empty list.
+        if (this.#renameSettled.length > 0) {
+          const waiters = this.#renameSettled
+          this.#renameSettled = []
+          for (let i = 0; i < waiters.length; i++) waiters[i]?.()
+        }
       }
     }
   }
@@ -369,6 +415,23 @@ class OpfsStorageAdapter implements OpfsStorage {
   // -- off the tick path only: flush/read/list -------------------------------------------------------
 
   async flush(): Promise<void> {
+    // Gate fix 1 (the real defect this milestone's gate found): `pendingAsync()` is a *take* --
+    // `worker/sim.ts`'s body() may already have taken today's queued rename and handed it to `shell.
+    // runAsync` before this `flush()` ever runs (a `sim-pause` racing the very next tick pass). The
+    // old code called `pendingAsync()` again here, saw `null` (already taken), and returned -- so the
+    // `storage` ack after `sim-pause` could fire, and this promise could resolve, before the rename
+    // was actually durable. `#renameInFlight` is what the queued closure now sets on itself (in
+    // `#queueRename`) for exactly this reason: checked here, unconditionally, before the ordinary
+    // drain loop below (which still runs afterward, since draining it can itself leave a *further*
+    // write's own continuation queued, or a fresh one racing this exact `flush()` call). Registers
+    // itself on `#renameSettled` and waits for that closure's own `finally` to wake it -- not a
+    // `queueMicrotask` poll (an earlier version of this fix livelocked a real browser: a tight
+    // microtask-only wait loop never yields to the task queue, so the real native rename's own
+    // completion, posted as a task, never got a turn to run). This `Promise`/closure allocates only
+    // here, never on the measured tick path (`flush()` is 0005's own "clean boundaries only").
+    if (this.#renameInFlight) {
+      await new Promise<void>((resolve) => this.#renameSettled.push(resolve))
+    }
     for (;;) {
       const fn = this.pendingAsync()
       if (!fn) break

@@ -9,6 +9,7 @@ import type { Storage } from '../../../../src/storage/types.ts'
 type Result = {
   conformance: string[] | { error: string }
   pendingAsyncHook: Record<string, boolean> | { error: string }
+  flushWaitsForInFlightRename: Record<string, boolean> | { error: string }
 }
 
 /** Playwright WebKit's OPFS is not isolated per `launchPersistentContext` profile directory --
@@ -97,7 +98,73 @@ async function runPendingAsyncHook(): Promise<Record<string, boolean>> {
   return out
 }
 
-const result: Result = { conformance: [], pendingAsyncHook: {} }
+/**
+ * Gate fix (docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 1, the real defect):
+ * `OpfsStorageAdapter.pendingAsync()` is a *take* -- `worker/sim.ts`'s body() hands the taken closure
+ * to `shell.runAsync` and moves on, without itself awaiting it. The old `flush()` called
+ * `pendingAsync()` a second time here, saw `null` (already taken), and resolved immediately while the
+ * rename it should have waited for was still running elsewhere -- so a `sim-pause`'s own `storage` ack
+ * (Planning decision 5, gated on `persistence.flush()` -> `storage.flush()`) could fire before the
+ * rename was durable. Reproduced directly at the adapter level: `move()` is held open by a gate this
+ * test controls, `pendingAsync()`'s own closure is taken and started *without being awaited here*
+ * (the exact "take and forget" shape `shell.runAsync` gives it), and `flush()` is raced against the
+ * still-open gate.
+ */
+async function runFlushWaitsForInFlightRename(): Promise<Record<string, boolean>> {
+  const out: Record<string, boolean> = {}
+  const s: OpfsStorage = await opfsStorage('flush-inflight-rename')
+  const enc = new TextEncoder()
+
+  const proto = FileSystemFileHandle.prototype
+  const originalMove = proto.move
+  let releaseMove: () => void = () => {}
+  const moveGate = new Promise<void>((resolve) => {
+    releaseMove = resolve
+  })
+  proto.move = async function (
+    this: FileSystemFileHandle,
+    dir: FileSystemDirectoryHandle,
+    name: string,
+  ): Promise<void> {
+    await moveGate
+    return originalMove.call(this, dir, name)
+  }
+
+  try {
+    const ret = s.write('k1', enc.encode('first'))
+    out.writeReturnsVoidWhileScratchOpen = ret === undefined
+
+    const fn = s.pendingAsync()
+    out.pendingAsyncNonNullAfterWrite = fn !== null
+    // Deliberately not awaited here -- `shell.runAsync` in production never awaits it either; the
+    // bug this proves against is exactly a caller (`flush()`) that also does not wait for *this*.
+    const inFlight = fn ? fn() : Promise.resolve()
+
+    let flushResolved = false
+    const flushPromise = s.flush().then(() => {
+      flushResolved = true
+    })
+
+    // Several microtask turns: with the old take-and-forget `flush()`, nothing keeps it open and it
+    // would already have resolved by now.
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+    out.flushNotResolvedWhileRenameHeld = !flushResolved
+
+    releaseMove()
+    await inFlight
+    await flushPromise
+    out.flushResolvedAfterRenameReleased = flushResolved
+
+    const read = await s.read('k1')
+    out.snapshotKeyReadableAfterFlush = read !== null && new TextDecoder().decode(read) === 'first'
+  } finally {
+    proto.move = originalMove
+  }
+
+  return out
+}
+
+const result: Result = { conformance: [], pendingAsyncHook: {}, flushWaitsForInFlightRename: {} }
 await wipeOpfsRoot()
 try {
   result.conformance = await runConformance()
@@ -108,5 +175,10 @@ try {
   result.pendingAsyncHook = await runPendingAsyncHook()
 } catch (e) {
   result.pendingAsyncHook = { error: String(e) }
+}
+try {
+  result.flushWaitsForInFlightRename = await runFlushWaitsForInFlightRename()
+} catch (e) {
+  result.flushWaitsForInFlightRename = { error: String(e) }
 }
 self.postMessage(result)

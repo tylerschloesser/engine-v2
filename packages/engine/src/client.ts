@@ -514,6 +514,19 @@ export function attachHostLifecycle(
     return h.workers.find((w) => w.index === WORKER_HOST)
   }
 
+  /** Gate fix (docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 1): `W_PARKED`
+   * reads `1` for two different reasons -- a worker that yielded from `W_YIELD` (a real park), *or*
+   * one that is mid-`shell.runAsync` (an OPFS rename still queued from `worker/sim.ts`'s own
+   * `pendingAsync()` poll, unrelated to this call). This poll cannot tell them apart, and does not
+   * need to: it can resolve the instant it sees `1`, even when that `1` predates the `W_YIELD` store
+   * `pauseHostWorker` just made (the worker is provably not blocked in `Atomics.wait` either way, so
+   * the `sim-pause` message below is always deliverable). What actually gates `pauseHostWorker()`'s
+   * own returned promise is *not* this poll -- it is the `storage` message the worker posts back once
+   * `SimHost.pause()` resolves, which does not happen until `Persistence.flush()` (`storage.flush()`)
+   * resolves, which now (gate fix 1, `storage/opfs.ts`'s `#renameInFlight`) itself waits out any rename
+   * `pendingAsync()` already handed to `shell.runAsync` before this call ever ran. So a pause that
+   * lands mid-rename is still correct end to end even though this poll alone cannot see the
+   * difference. */
   function pollHostParked(): Promise<void> {
     return new Promise((resolve) => {
       function poll(): void {
