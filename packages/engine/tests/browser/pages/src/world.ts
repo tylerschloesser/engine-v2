@@ -14,7 +14,13 @@
 // already exist, matching `slice.html`'s own ids where they overlap.
 import type { Action } from '../../../../fixtures/puts/bindings/Action.ts'
 import type { Client, ClientOptions, StorageStatus } from '../../../../src/client.ts'
-import { attachHostLifecycle, createClient, EngineStartError } from '../../../../src/client.ts'
+import {
+  attachHostLifecycle,
+  clientTestHandle,
+  createClient,
+  EngineStartError,
+} from '../../../../src/client.ts'
+import { CB_SIM_TICKS_RUN } from '../../../../src/sab/control.ts'
 import {
   parkWorkers,
   worldHash as readWorldHash,
@@ -36,6 +42,12 @@ declare global {
     __dumpWorldStorage?: (worldId: string) => Promise<Record<string, number[]>>
     __worldHash?: () => Promise<string>
     __worldHashAndTick?: () => Promise<{ hash: string; tick: number }>
+    /** A direct `Atomics.load` of `CB_SIM_TICKS_RUN` (no park/resume round trip): safe to call
+     * while the sim worker is deliberately left parked for a hidden-boundary pause, unlike
+     * `__worldHash`/`__worldHashAndTick` (`parkWorkers`/`resumeWorkers`, `test/client.ts`, would
+     * wrongly resume a worker this page itself parked for a reason other than a generic test park --
+     * `hidden_pauses_and_snapshots`'s own reason for using this hook instead while hidden). */
+    __simTicksRun?: () => number
     __dispatchPaintAt?: (x: number, y: number) => number
     __hudText?: () => string
     __errors?: () => string[]
@@ -44,6 +56,11 @@ declare global {
 
 const params = new URL(location.href).searchParams
 const worldId = params.get('world') ?? 'device'
+// `no_opfs_falls_back_durable_false`'s own deterministic switch (Deviations: not the brief's own
+// suggested "OPFS stubbed out by an init script" -- measured that `navigator.storage.getDirectory`
+// stubbed via `page.addInitScript` on the page's own `navigator` does not reach the sim worker's
+// separate global scope's `navigator`, so `TestFlags.noOpfs` is the real mechanism instead).
+const noOpfs = params.get('noOpfs') === '1'
 
 const hudEl = document.createElement('pre')
 hudEl.id = 'hud'
@@ -119,7 +136,7 @@ const clientOptions: ClientOptions = {
   // `testEnabled` gate reads `message.test`, not `options.test` itself) and real-time sim pacing
   // (`worker/sim.ts`'s `!message.test || message.test.pace === true` gate) -- `slice.ts`'s own
   // `connected-paced.ts` combination, verbatim.
-  test: { flags: { pace: true } },
+  test: { flags: { pace: true, ...(noOpfs ? { noOpfs: true } : {}) } },
 }
 
 const storageStatuses: StorageStatus[] = []
@@ -158,7 +175,10 @@ function paintAt(x: number, y: number): number {
 }
 window.__dispatchPaintAt = paintAt
 paintBtn.addEventListener('click', () => {
-  if (!worldBusy) paintAt(0, 0)
+  if (!worldBusy) {
+    paintAt(0, 0)
+    void refreshHash()
+  }
 })
 
 // `hash`/`tick`/`durable`/`persisted` (Scope): `worldHash`/`simCounters` need the sim worker
@@ -183,7 +203,21 @@ window.__worldHashAndTick = async () => {
   if (worldBusy) throw new Error('world.ts: __worldHashAndTick called on a busy world')
   return readHashAndTick()
 }
+window.__simTicksRun = () => {
+  if (worldBusy) return 0
+  return Atomics.load(clientTestHandle(client).control.words, CB_SIM_TICKS_RUN)
+}
 
+// `hash`/`tick` refresh on discrete events only (page load, a Paint dispatch), never a periodic
+// timer (Deviations): `parkWorkers`/`resumeWorkers` (`test/client.ts`) touch the sim worker through
+// the *generic* shell yield protocol (`{ type: 'resume' }`), the same underlying `W_YIELD`/
+// `W_PARKED` words `attachHostLifecycle`'s own `sim-pause`/`sim-resume` protocol uses -- a periodic
+// refresh racing a hidden-boundary pause could send a bare `{ type: 'resume' }` to a worker this
+// page just deliberately parked (found by `hidden_pauses_and_snapshots` failing with a genuine OPFS
+// access-handle conflict: two overlapping `Persistence`/`SimHost` operations on the same instance).
+// A discrete, human- or test-triggered refresh has no such steady-state overlap; `refreshHash` still
+// guards on `!controllableDoc.hidden` so a stray call during a pause is a no-op rather than a
+// conflicting resume.
 let lastHash = '(pending)'
 let lastTick = 0
 async function refreshHash(): Promise<void> {
@@ -193,13 +227,10 @@ async function refreshHash(): Promise<void> {
     lastHash = r.hash
     lastTick = r.tick
   } catch {
-    // A concurrent park/resume (a hidden boundary settling) can transiently fail this read; the
-    // next interval tick retries. Never surfaces as a console error (`openPage`'s own rule).
+    // Never surfaces as a console error (`openPage`'s own rule); the next trigger retries.
   }
 }
-setInterval(() => {
-  refreshHash().catch(() => {})
-}, 1000)
+void refreshHash()
 
 function latestStatus(): StorageStatus | undefined {
   return storageStatuses.at(-1)

@@ -89,6 +89,19 @@ class OpfsStorageAdapter implements OpfsStorage {
   readonly #writtenPending = new Map<string, Uint8Array>()
   #scratch: Scratch | null = null
   #pendingAsync: (() => Promise<void>) | null = null
+  /** Fix round (this milestone, steps 3-4): 0005's own "the tick path never awaits storage" means
+   * two `append()` calls to the *same, not-yet-opened* key can legitimately arrive before the first
+   * one's own `createSyncAccessHandle()` has resolved (a genesis frame logged the very tick after
+   * `Persistence.create`'s own segment-0 header append, both targeting `log(0)` -- found by
+   * `world_survives_reload`: two concurrent opens on the same file, the second one throwing
+   * `NoModificationAllowedError`). `append`'s own fast-path check (`#logHandles.get(key)`) only ever
+   * sees a handle *after* the open finishes, so a second call arriving mid-open also took the slow
+   * path and raced to open the same file a second time. Every slow-path append (any key, not just
+   * the racing one -- simplest correct fix, and this is already an off-the-common-path event: the
+   * first append ever made to each key) now chains through this one promise, so the second call's
+   * own `#appendSlow` re-checks `#logHandles` (below) and finds the handle the first call already
+   * opened, taking the fast path itself instead of opening a second one. */
+  #appendChain: Promise<void> = Promise.resolve()
 
   private constructor(root: FileSystemDirectoryHandle, worldId: string) {
     this.#root = root
@@ -166,14 +179,31 @@ class OpfsStorageAdapter implements OpfsStorage {
       state.handle.write(bytes)
       return
     }
-    return this.#appendSlow(key, bytes)
+    // `bytes` is copied *before* queueing, not inside `#appendSlow` (0005: "valid only during the
+    // call" -- a caller may reuse/overwrite `bytes` the instant this synchronous call returns, and a
+    // second `append()` to the same key could otherwise run before this one even starts, per the
+    // chain below). Every slow-path append, any key, is serialized through one chain (fix round, this
+    // milestone's own Deviations: two concurrent opens of the same not-yet-open file otherwise race).
+    const copy = bytes.slice()
+    const chained = this.#appendChain.then(() => this.#appendSlow(key, copy))
+    // A failed append must not wedge every later one behind a permanently-rejected chain; the
+    // failure itself still reaches this call's own returned promise (`chained`, not `this.
+    // #appendChain`) and `this.onError` via the normal rejection path (`#appendSlow` never catches).
+    this.#appendChain = chained.catch(() => {})
+    return chained
   }
 
   /** The slow path: either the very first `append` to this key, or one arriving while a `write()` to
-   * the same key is still pending (fix round 1). `bytes` is copied immediately, before the first
-   * `await`, per 0005 Storage ("valid only during the call"). */
+   * the same key is still pending (fix round 1) -- reached only from the serialized `#appendChain`
+   * above, so by the time this runs, every earlier queued append (to any key) has already finished,
+   * including one that may have already opened *this* key's own handle (the fast-path re-check
+   * below). `bytes` (`copy`) is already a private copy, taken by `append()` before queueing. */
   async #appendSlow(key: string, bytes: Uint8Array): Promise<void> {
-    const copy = bytes.slice()
+    const already = this.#logHandles.get(key)
+    if (already && !this.#writtenPending.has(key)) {
+      already.handle.write(bytes)
+      return
+    }
     if (this.#writtenPending.has(key)) {
       // Drain the whole pending chain (Planning decision 2: one slot, FIFO) so the real file
       // reflects `write()`'s own value before this `append` opens a handle on it -- otherwise this
@@ -200,7 +230,7 @@ class OpfsStorageAdapter implements OpfsStorage {
     APPEND_SEEK.at = size
     handle.write(EMPTY, APPEND_SEEK)
     this.#logHandles.set(key, { handle })
-    handle.write(copy)
+    handle.write(bytes)
   }
 
   sync(key: string): void | Promise<void> {

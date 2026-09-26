@@ -37,6 +37,12 @@ export type TestFlags = {
    * deterministically through `CB_SIM_STEP_REQ` (`gc-sim.ts`) must keep clear of (Deviations: why
    * arming both at once is safe for a page that never asserts a resulting hash). */
   pace?: boolean
+  /** `worker/sim.ts` only (docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4,
+   * `no_opfs_falls_back_durable_false`): skips the OPFS probe entirely and opens with
+   * `memoryStorage()`/`durable: false` directly, the same outcome a real OPFS-less browser would
+   * reach -- deterministic (no dependency on whether a test's own OPFS stub reaches the worker's own
+   * global scope), unlike stubbing `navigator.storage.getDirectory` from outside the page. */
+  noOpfs?: boolean
 }
 
 export type SetupMessage = {

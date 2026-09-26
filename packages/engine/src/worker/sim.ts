@@ -79,7 +79,11 @@ function requestWorldLock(worldId: string): Promise<boolean> {
  * `opfsStorage` rejects with `OpfsUnavailable` on a browser with no working OPFS (0005 "Browser":
  * "No OPFS (Safari private mode): an in-memory adapter and `durable: false`"). Returns the adapter
  * plus whether it is durable, never throwing for that one, expected failure mode. */
-async function openWorldStorage(worldId: string): Promise<{ storage: Storage; durable: boolean }> {
+async function openWorldStorage(
+  worldId: string,
+  noOpfs: boolean,
+): Promise<{ storage: Storage; durable: boolean }> {
+  if (noOpfs) return { storage: memoryStorage(), durable: false }
   try {
     return { storage: await opfsStorage(worldId), durable: true }
   } catch (e) {
@@ -143,7 +147,10 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       throw new Error(`worker/sim: world ${world.worldId} is busy`)
     }
 
-    const { storage, durable } = await openWorldStorage(world.worldId)
+    const { storage, durable } = await openWorldStorage(
+      world.worldId,
+      message.test?.noOpfs === true,
+    )
     worldDurable = durable
 
     const opened = await Persistence.open(storage, world, newInstance)

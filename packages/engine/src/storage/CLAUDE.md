@@ -38,8 +38,13 @@ the call"), never retains the argument itself.
   zero-GC budget every tick (`.claude/rules/hot-paths.md`, Planning decision 4). `write` (snapshot/
   manifest/sessions) writes synchronously into an already-open `.scratch` handle and returns
   `undefined`; the promise-only half (close, `move()` onto the real key, reopen the next scratch)
-  is queued as one closure behind `pendingAsync()` -- the sim worker's own future hook, not wired in
-  yet, built and tested here (`storage-opfs.spec.ts`). `scratchReady()`/`snapshotDeferred` are for
+  is queued as one closure behind `pendingAsync()`. Steps 3-4: still not polled from `worker/sim.ts`'s
+  `body()` -- `shell.runAsync(fn)`, called *from inside* an active `body()` pass, does not stop that
+  same `runBlockingLoop` call from re-entering `Atomics.wait`, so `fn` starves until the loop exits
+  some other way (a `shell.ts` gap, flagged for whoever wires this in for real). `append`'s own
+  first-ever-open per key is serialized through one `#appendChain` promise (fix, this milestone): two
+  un-awaited `append()` calls to a new key (0005 "never awaits") otherwise both raced
+  `createSyncAccessHandle` on the same file. `scratchReady()`/`snapshotDeferred` are for
   that same future caller (Planning decision 2); a `write()` with no scratch ready falls back to a
   direct, still-correct, non-allocation-free write, draining any queued continuation first so calls
   land in call order. `read`/`list` consult an in-flight-write map first, so a caller sees its own
