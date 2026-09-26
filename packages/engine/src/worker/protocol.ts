@@ -155,9 +155,36 @@ export const PERSISTENCE_DEBUG_BYTES = 24
  * `sim-config.ts`'s/`storage/types.ts`'s own types already follow. */
 export type StorageStatus = { durable: boolean; persisted: boolean; usage: number; quota: number }
 
+/** Gate fix (docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 2): the one
+ * `FromWorker` type posted before this worker's blocking loop ever starts (`worker.ts`'s own
+ * `post({ type: 'ready' })`, right after `setup()` resolves) -- the worker -> main half of 0015 §2's
+ * "setup" phase (the `Module`/SABs/config are the main -> worker half). Checked by
+ * `protocol.test.ts`'s `postmessage_type_literals_are_allowlisted` against every `type: '...'` literal
+ * found in `src/worker/**` and `worker.ts` (excluding this file's own type *declarations*, which name
+ * both directions): this is what replaces the "M06b's grep criterion" this file used to just assert
+ * "in prose", below. */
+export const SETUP_PHASE_MESSAGE_TYPES: readonly string[] = ['ready']
+
+/** Every `FromWorker` type a worker may post once its blocking loop has started (0015 §2: "fatal
+ * errors and lifecycle", plus this milestone's own world-op results and every `test-call` reply) --
+ * the other half of the allowlist `postmessage_type_literals_are_allowlisted` checks. */
+export const POST_SETUP_MESSAGE_TYPES: readonly string[] = [
+  'fatal',
+  'test-result',
+  'test-error',
+  'storage',
+  'start-failed',
+  'export-world-result',
+  'import-world-result',
+  'delete-world-result',
+  'world-op-error',
+]
+
 /** docs/plan/23-persistence-opfs-and-lifecycle.md Seams (Provides): the sim worker's own lifecycle
  * notifications beyond `ready`/`fatal` (0015 §2: `postMessage` after setup carries lifecycle only --
- * this milestone's own two new types, `M06b`'s grep criterion extended to name them). `storage`
+ * this milestone's own two new types, checked by name against `POST_SETUP_MESSAGE_TYPES` above, an
+ * automated allowlist -- not, as an earlier draft of this comment put it, "M06b's grep criterion"
+ * extended "in prose"; gate fix 2 replaced that one-time checklist line with a real test). `storage`
  * fires at load (Planning decision 5: "`client.onStorage` fires at load, after the `persist()`
  * answer, and after each hidden-boundary snapshot") -- `created` is not part of the pinned
  * `StorageStatus` shape itself (Seams gives that verbatim) but is carried alongside it so main knows
