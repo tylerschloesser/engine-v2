@@ -6,10 +6,12 @@
 // lifecycle wiring on top of it, which needs no second engine.
 //
 // `world_survives_reload` compares the resumed world's own hash against `replayWorld` run, in this
-// spec file's own Node process, over a *copy* of the stored bytes pulled out of the browser's OPFS
-// through `world-dump-worker.ts` (a test-only debug worker, `world.ts`'s own `__dumpWorldStorage`) --
-// `exportWorld` is step 5's; this is a deliberate, documented stand-in (Deviations).
+// spec file's own Node process, over `client.exportWorld()`'s own real archive (step 5's
+// `__exportWorld` test hook, `world.ts`) -- steps 3-4 used `world-dump-worker.ts`'s raw OPFS walk as
+// a stand-in until this seam existed; `__dumpWorldStorage` itself is kept (`world-dump-worker.ts`'s
+// own doc comment), still needed by `paced_session_lands_periodic_snapshots`.
 import { expect, test } from '@playwright/test'
+import { importWorld } from '../../src/storage/archive.js'
 import { memoryStorage } from '../../src/storage/memory.js'
 import { replayWorld } from '../../src/test.js'
 import { loadFixture } from '../support/fixtures.js'
@@ -24,6 +26,7 @@ declare global {
     __storageStatuses?: () => StorageStatus[]
     __worldSetHidden?: (hidden: boolean | undefined) => void
     __dumpWorldStorage?: (worldId: string) => Promise<Record<string, number[]>>
+    __exportWorld?: () => Promise<number[]>
     __worldHash?: () => Promise<string>
     __worldHashAndTick?: () => Promise<{ hash: string; tick: number }>
     __simTicksRun?: () => number
@@ -214,13 +217,16 @@ test('world_survives_reload', async ({ page }) => {
   // hash at a small, shared tick count, measured while developing this test.)
   expect(resumed.tick).toBeGreaterThanOrEqual(beforeReload.tick)
 
-  const dump = await page.evaluate((id) => window.__dumpWorldStorage?.(id), worldId)
-  if (!dump) throw new Error('world_survives_reload: __dumpWorldStorage returned nothing')
+  // docs/plan/23-persistence-opfs-and-lifecycle.md step 5: `exportWorld` + `replayWorld`, not
+  // `world-dump-worker.ts`'s own raw OPFS walk (step 3-4's stand-in, its own doc comment: "Step 5
+  // should delete this file once `exportWorld` covers the same need" -- kept, not deleted, since
+  // `paced_session_lands_periodic_snapshots` still needs `__dumpWorldStorage` for a real,
+  // non-parking ground truth; only this test's own use of it moves to the real seam).
+  const bytes = await page.evaluate(() => window.__exportWorld?.())
+  if (!bytes) throw new Error('world_survives_reload: __exportWorld returned nothing')
 
   const storage = memoryStorage()
-  for (const [key, bytes] of Object.entries(dump)) {
-    await storage.write(key, new Uint8Array(bytes))
-  }
+  await importWorld(storage, new Uint8Array(bytes), { worldId })
   const { wasm } = await loadFixture('puts')
   const replayed = await replayWorld({ wasm, storage, worldId, checkpoints: [resumed.tick] })
   expect(replayed).toHaveLength(1)

@@ -75,6 +75,17 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
     onStorage(): () => void {
       return () => {}
     },
+    // docs/plan/23-persistence-opfs-and-lifecycle.md step 5: unused by anything `frame-loop.ts`
+    // itself exercises, same precedent as `dispatch`/`clock` above.
+    exportWorld(): Promise<Blob> {
+      throw new Error('fakeClient: exportWorld not implemented')
+    },
+    importWorld(): Promise<{ worldId: string }> {
+      throw new Error('fakeClient: importWorld not implemented')
+    },
+    deleteWorld(): Promise<void> {
+      throw new Error('fakeClient: deleteWorld not implemented')
+    },
     clock(): { authoritative: number; predicted: number; ticksPerSecond: number } {
       throw new Error('fakeClient: clock not implemented')
     },

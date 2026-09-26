@@ -45,6 +45,7 @@ import {
 import type {
   FromWorker,
   SimLifecycleMessage,
+  SimWorldOpResult,
   StorageStatus,
   TestFlags,
   ToWorker,
@@ -227,6 +228,28 @@ export interface Client {
    * hidden-boundary snapshot -- `host: { kind: 'local', persist: true }` only; never fires otherwise.
    * Returns an unsubscribe function, the same convention as `onActionResult`/`onUi`. */
   onStorage(cb: (status: StorageStatus) => void): () => void
+  /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Seams: packs the running world's own
+   * key set (0005 Storage) into a gzip archive (`storage/archive.ts`) and resolves with it as a
+   * `Blob`. Parks the sim worker, pauses it (snapshot-if-dirty, flush) only if it was not already
+   * paused, packs, resumes it back to exactly the state it was in before (Planning decision 6;
+   * Deviations "well-defined under an overlapping hidden-boundary pause"). Rejects with
+   * `NotSinglePlayer` when there is no sim worker (`host.kind !== 'local'`). */
+  exportWorld(): Promise<Blob>
+  /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Seams: writes `bytes` (a previously
+   * exported archive) under `opts.worldId` or the archive's own id. Refuses the running world's own
+   * id and refuses an existing id without `opts.overwrite` (`WorldExistsError`, `storage/
+   * archive.ts`). Never loads the imported world itself (Planning decision 6): the caller starts it
+   * with a new `createClient`. Rejects with `NotSinglePlayer` when there is no sim worker. */
+  importWorld(
+    bytes: Blob | Uint8Array,
+    opts?: { worldId?: string; overwrite?: boolean },
+  ): Promise<{ worldId: string }>
+  /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Seams: deletes every key of `worldId`
+   * (`storage/archive.ts`'s `deleteWorld`). Refuses the running world's own id (Deviations: the same
+   * safety rule Planning decision 6 gives `importWorld`, extended here since deleting a world's
+   * storage out from under its own live `Persistence` is undefined). Rejects with `NotSinglePlayer`
+   * when there is no sim worker. */
+  deleteWorld(worldId: string): Promise<void>
   /** docs/plan/16b-ui-observation-and-clock.md Scope: `client.clock()` exposes the clock block --
    * `authoritative`/`predicted` tick counts (`predicted` equals `authoritative` until M26 gives
    * prediction a real lead, 0012) and the game's own `ticksPerSecond` -- refreshed from the clock
@@ -315,6 +338,14 @@ export class EngineStartError extends Error {
      * process) already holds the persisted world's own Web Lock (`world:<worldId>`) -- a start
      * failure, not a trap (`SimLifecycleMessage`'s `start-failed` variant carries it). */
     | 'world-busy'
+    /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5 (Deviations: an addition beyond the
+     * brief's own pinned Seams, needed for `export_works_after_load_failure`): `Persistence.open`
+     * threw a `WorldLoadError` this milestone does not attempt to handle (Non-scope: the upgrade/
+     * `SaveIncompatible` path is M24b's) -- the world cannot be played, but its sim worker stays
+     * alive (never calls `shell.fatal`) so `client.exportWorld()`/`deleteWorld()` still reach the
+     * same, already-open OPFS handles afterward. Distinct from `'world-busy'`, whose worker really
+     * does die (another process owns the lock, no handles to offer). */
+    | 'load-failed'
   constructor(code: EngineStartError['code'], message: string) {
     super(message)
     this.name = 'EngineStartError'
@@ -362,6 +393,16 @@ export function checkArenaBudget(
       `arenas sum to ${total} bytes, over the ${budget} byte budget left by the whole-tab ` +
         `target minus SABs and GPU (0015 §5)`,
     )
+  }
+}
+
+/** docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Seams: `client.exportWorld`/`importWorld`/
+ * `deleteWorld`'s own shared rejection for "no sim worker" (`options.host.kind !== 'local'`, or a
+ * local host whose sim worker never came up at all). */
+export class NotSinglePlayer extends Error {
+  constructor(method: string) {
+    super(`engine: ${method}: not a single-player world (no sim worker)`)
+    this.name = 'NotSinglePlayer'
   }
 }
 
@@ -414,6 +455,12 @@ export interface ClientTestHandle {
    * a test reads it once, after its own measured window, and compares against whatever it read
    * before that window. */
   uiDrainStats(): { recordsSeen: number; onUi: number }
+  /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5 (Rules and traps, "serialize them"): one
+   * FIFO lock shared by `attachHostLifecycle`'s own hidden/visible park+message calls and
+   * `exportWorld`/`importWorld`/`deleteWorld`'s -- whichever acquires it first fully completes
+   * (including whatever park/unpark it does around the host worker) before the other runs, so the
+   * two families are never interleaved on the same worker. */
+  hostWorkerLock<T>(fn: () => Promise<T>): Promise<T>
 }
 
 const handles = new WeakMap<Client, ClientTestHandle>()
@@ -514,10 +561,14 @@ export function attachHostLifecycle(
         for (;;) {
           if (desiredHidden && state === 'running') {
             state = 'pausing'
-            await pauseHostWorker()
+            // docs/plan/23-persistence-opfs-and-lifecycle.md step 5 (Rules and traps, "serialize
+            // them"): the same lock `exportWorld`/`importWorld`/`deleteWorld` use, so a request
+            // racing this pause is always well-defined -- whichever gets here first (this pause, or
+            // a world-op already queued ahead of it) finishes before the other starts.
+            await h.hostWorkerLock(() => pauseHostWorker())
             state = 'paused'
           } else if (!desiredHidden && state === 'paused') {
-            resumeHostWorker()
+            await h.hostWorkerLock(async () => resumeHostWorker())
             state = 'running'
           } else {
             break
@@ -589,6 +640,11 @@ function setupWorker(
    * long after `ready`/`reject` have already settled this function's own promise). Only the `sim`
    * worker ever posts one; harmless to wire for every kind. */
   onLifecycle: (m: SimLifecycleMessage) => void,
+  /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5: forwards every `SimWorldOpResult` this
+   * worker ever posts, the same "not only during this handshake window" convention `onLifecycle`
+   * already uses -- an export/import/delete request can arrive long after `ready`/`reject` settled
+   * this function's own promise. Only the `sim` worker ever posts one. */
+  onWorldOp: (m: SimWorldOpResult) => void,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false
@@ -621,6 +677,13 @@ function setupWorker(
         reject(new EngineStartError(m.code, m.detail))
       } else if (m.type === 'storage') {
         onLifecycle(m)
+      } else if (
+        m.type === 'export-world-result' ||
+        m.type === 'import-world-result' ||
+        m.type === 'delete-world-result' ||
+        m.type === 'world-op-error'
+      ) {
+        onWorldOp(m)
       }
     }
     const setup: ToWorker = {
@@ -674,6 +737,15 @@ export function createClient(options: ClientOptions): Client {
         throw err
       },
       onStorage(): () => void {
+        throw err
+      },
+      exportWorld(): Promise<Blob> {
+        throw err
+      },
+      importWorld(): Promise<{ worldId: string }> {
+        throw err
+      },
+      deleteWorld(): Promise<void> {
         throw err
       },
       clock(): ClockSnapshot {
@@ -1067,6 +1139,115 @@ export function createClient(options: ClientOptions): Client {
       for (const l of storageListeners) l(m.status)
     }
   }
+
+  // docs/plan/23-persistence-opfs-and-lifecycle.md step 5: `exportWorld`/`importWorld`/`deleteWorld`
+  // (Seams), plus the shared lock `attachHostLifecycle` also uses (Rules and traps, "serialize
+  // them"). `hostOpChain` is the lock's own FIFO promise chain; `.catch(() => {})` on the *stored*
+  // chain keeps it alive after a rejected job without ever swallowing that job's own caller-visible
+  // rejection (`job` itself, returned to the caller, is a separate promise).
+  let hostOpChain: Promise<unknown> = Promise.resolve()
+  function hostWorkerLock<T>(fn: () => Promise<T>): Promise<T> {
+    const job = hostOpChain.then(fn, fn)
+    hostOpChain = job.catch(() => {})
+    return job
+  }
+
+  function hostWorkerEntry(): WorkerEntry | undefined {
+    return workers.find((w) => w.index === WORKER_HOST)
+  }
+
+  function pollHostParked(): Promise<void> {
+    return new Promise((resolve) => {
+      function poll(): void {
+        if (Atomics.load(control.words, workerWord(WORKER_HOST, W_PARKED)) === 1) {
+          resolve()
+          return
+        }
+        scheduler.setTimer(poll, 0)
+      }
+      poll()
+    })
+  }
+
+  // At most one world-op request is ever in flight from this `Client` (`hostWorkerLock` above
+  // serializes every caller), so a single pending-resolver slot is enough -- no correlation id.
+  let pendingWorldOp: { resolve(m: SimWorldOpResult): void } | null = null
+  function onWorldOp(m: SimWorldOpResult): void {
+    const p = pendingWorldOp
+    pendingWorldOp = null
+    p?.resolve(m)
+  }
+
+  /**
+   * Planning decision 6 ("Main parks the sim worker ... posts the request"), made well-defined
+   * under an overlapping hidden-boundary pause (Rules and traps): parks the host worker only if it
+   * is not *already* parked (a settled or in-flight `attachHostLifecycle` pause, serialized ahead of
+   * this call by `hostWorkerLock`), sends `msg`, awaits the one matching `SimWorldOpResult`, then
+   * restores the park bit to exactly what it was before this call -- never touching it at all when
+   * it was already parked, so a hidden-boundary pause already in effect (or about to run next, still
+   * queued behind this very call) is left exactly as it wants to be either way.
+   */
+  function withHostParked(
+    method: string,
+    msg: ToWorker,
+    transfer?: Transferable[],
+  ): Promise<SimWorldOpResult> {
+    return hostWorkerLock(async () => {
+      const w = hostWorkerEntry()
+      if (!w || options.host.kind !== 'local') throw new NotSinglePlayer(method)
+      const alreadyParked = Atomics.load(control.words, workerWord(WORKER_HOST, W_PARKED)) === 1
+      if (!alreadyParked) {
+        Atomics.store(control.words, workerWord(WORKER_HOST, W_YIELD), 1)
+        control.wake(WORKER_HOST)
+        await pollHostParked()
+      }
+      try {
+        const result = await new Promise<SimWorldOpResult>((resolve) => {
+          pendingWorldOp = { resolve }
+          if (transfer) w.worker.postMessage(msg, transfer)
+          else w.worker.postMessage(msg)
+        })
+        if (result.type === 'world-op-error')
+          throw new Error(`engine: ${method}: ${result.message}`)
+        return result
+      } finally {
+        if (!alreadyParked) w.worker.postMessage({ type: 'resume' } satisfies ToWorker)
+      }
+    })
+  }
+
+  async function exportWorld(): Promise<Blob> {
+    const result = await withHostParked('exportWorld', { type: 'export-world' })
+    if (result.type !== 'export-world-result') {
+      throw new Error(`engine: exportWorld: unexpected reply ${result.type}`)
+    }
+    return new Blob([result.bytes as BlobPart])
+  }
+
+  async function importWorld(
+    bytes: Blob | Uint8Array,
+    opts: { worldId?: string; overwrite?: boolean } = {},
+  ): Promise<{ worldId: string }> {
+    const view = bytes instanceof Blob ? new Uint8Array(await bytes.arrayBuffer()) : bytes
+    const msg: ToWorker = {
+      type: 'import-world',
+      bytes: view,
+      ...(opts.worldId !== undefined ? { worldId: opts.worldId } : {}),
+      ...(opts.overwrite !== undefined ? { overwrite: opts.overwrite } : {}),
+    }
+    const result = await withHostParked('importWorld', msg, [view.buffer as ArrayBuffer])
+    if (result.type !== 'import-world-result') {
+      throw new Error(`engine: importWorld: unexpected reply ${result.type}`)
+    }
+    return { worldId: result.worldId }
+  }
+
+  async function deleteWorld(worldId: string): Promise<void> {
+    const result = await withHostParked('deleteWorld', { type: 'delete-world', worldId })
+    if (result.type !== 'delete-world-result') {
+      throw new Error(`engine: deleteWorld: unexpected reply ${result.type}`)
+    }
+  }
   const persistGestureDisposers: Array<() => void> = []
   if (
     options.host.kind === 'local' &&
@@ -1276,6 +1457,7 @@ export function createClient(options: ClientOptions): Client {
         link,
         world,
         onLifecycle,
+        onWorldOp,
       )
     })
     await Promise.all(waits)
@@ -1303,6 +1485,9 @@ export function createClient(options: ClientOptions): Client {
     onActionResult,
     onUi,
     onStorage,
+    exportWorld,
+    importWorld,
+    deleteWorld,
     clock: readClockSnapshot,
     writeCameraAndWake,
     setFlags,
@@ -1328,6 +1513,7 @@ export function createClient(options: ClientOptions): Client {
     writeActionRecord,
     workersReady: workersUp,
     uiDrainStats: () => ({ recordsSeen: uiRecordsSeenTotal, onUi: onUiFiredTotal }),
+    hostWorkerLock,
   })
   return client
 }

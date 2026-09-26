@@ -16,6 +16,8 @@ import type {
   FromWorker,
   SimControlMessage,
   SimLifecycleMessage,
+  SimWorldOpMessage,
+  SimWorldOpResult,
   TestCallMessage,
 } from './protocol.js'
 
@@ -32,6 +34,12 @@ export type LoopState = {
    * `SimControlMessage` (`sim-pause`/`sim-resume`), parked-only like `testCall` above -- `worker.ts`
    * routes both message types here directly, never generically. Absent for every kind but `sim`. */
   simControl?: (m: SimControlMessage) => void
+  /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5: `worker/sim.ts`'s own handler for
+   * `SimWorldOpMessage` (export/import/delete), parked-only like `simControl` above and routed the
+   * same way by `worker.ts`. Present only for a `sim`-kind worker that opened real world storage
+   * (`message.world`) -- including a world whose `Persistence.open` itself failed (Deviations,
+   * `'load-failed'`), which still has live OPFS handles to offer. */
+  worldOp?: (m: SimWorldOpMessage) => void
 }
 
 /** Every kind's `timeoutMs` until M13 gives `sim` a real tick deadline: a module-level constant
@@ -68,14 +76,22 @@ export interface WorkerShell {
   runAsync(fn: () => Promise<void>): void
   /** docs/plan/23-persistence-opfs-and-lifecycle.md Seams: the sim worker's own lifecycle
    * notifications beyond `ready`/`fatal` (`SimLifecycleMessage`) -- `postMessage` after setup still
-   * carries lifecycle only (0015 §2). */
-  post(m: SimLifecycleMessage): void
+   * carries lifecycle only (0015 §2). Step 5 adds `SimWorldOpResult` to the same channel (still not a
+   * per-frame/per-tick path: one message per explicit export/import/delete request). */
+  post(m: SimLifecycleMessage | SimWorldOpResult): void
 }
 
 /** `postMessage` is the worker's only channel to main outside setup (0015 §2): shared by every
- * kind body through the shell, so no kind imports `self.postMessage` directly. */
+ * kind body through the shell, so no kind imports `self.postMessage` directly. Planning decision 6
+ * ("transfers the buffer back"): `export-world-result`'s own `bytes` is handed over by transfer, not
+ * structured-cloned, since it can be several MB for a long-lived world. */
 function post(m: FromWorker): void {
-  ;(self as unknown as { postMessage(m: FromWorker): void }).postMessage(m)
+  const scope = self as unknown as { postMessage(m: FromWorker, transfer?: Transferable[]): void }
+  if (m.type === 'export-world-result') {
+    scope.postMessage(m, [m.bytes.buffer])
+  } else {
+    scope.postMessage(m)
+  }
 }
 
 export class Shell implements WorkerShell {
@@ -108,7 +124,7 @@ export class Shell implements WorkerShell {
     post({ type: 'fatal', message })
   }
 
-  post(m: SimLifecycleMessage): void {
+  post(m: SimLifecycleMessage | SimWorldOpResult): void {
     post(m)
   }
 

@@ -18,7 +18,7 @@
 // does.
 import { Role } from '../abi.js'
 import { systemClock } from '../clock.js'
-import { Persistence } from '../host/persistence.js'
+import { Persistence, WorldLoadError } from '../host/persistence.js'
 import { RingConnection } from '../ring-connection.js'
 import {
   CB_SIM_STEP_REQ,
@@ -28,13 +28,14 @@ import {
   workerWord,
 } from '../sab/control.js'
 import { createSimHostFromInstance, type SimHostCounters, wrapEngineInstance } from '../server.js'
+import { deleteWorld, exportWorld, importWorld, unpackArchive } from '../storage/archive.js'
 import { memoryStorage } from '../storage/memory.js'
 import { type OpfsStorage, OpfsUnavailable, opfsStorage } from '../storage/opfs.js'
 import type { Storage } from '../storage/types.js'
 import { createAtomicsTimer } from './atomics-timer.js'
 import { applyGcHook } from './gc-hook.js'
 import { instantiateFactoryForSetup } from './instantiate.js'
-import type { SetupMessage, StorageStatus } from './protocol.js'
+import type { SetupMessage, SimWorldOpMessage, StorageStatus } from './protocol.js'
 import {
   NET_COUNTERS_BYTES,
   NET_COUNTERS_CALL,
@@ -112,6 +113,118 @@ async function readStorageStatus(durable: boolean): Promise<StorageStatus> {
   return { durable, persisted, usage, quota }
 }
 
+/**
+ * docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Rules and traps ("serialize them"): one
+ * FIFO promise chain per sim worker, shared by `sim-pause`/`sim-resume` and every export/import/
+ * delete request, so the two families never interleave their own `SimHost`/`Storage` calls -- an
+ * export requested while a hidden-boundary pause is mid-flight (or the reverse) always runs one to
+ * completion before the other starts. A failure inside one queued `fn` is swallowed here (each `fn`
+ * already reports its own outcome, `shell.post`/`shell.fatal`); this catch only keeps the chain alive
+ * for whatever is queued behind it.
+ */
+function makeOpQueue(): (fn: () => Promise<void>) => void {
+  let chain: Promise<void> = Promise.resolve()
+  return (fn) => {
+    chain = chain.then(fn, fn).catch(() => {})
+  }
+}
+
+/**
+ * docs/plan/23-persistence-opfs-and-lifecycle.md step 5: the export/import/delete handler, shared
+ * between a normally-loaded world and one whose `Persistence.open` itself failed (Deviations,
+ * `'load-failed'` -- `persistence`/`simHost` are both `null` there, so this closes only over
+ * `storage`/`runningWorldId`, never touching either). `storage`'s own OPFS root is shared by every
+ * adapter instance opened against it (`storage/archive.ts`'s own doc comment), so `import`/`delete`
+ * reach an arbitrary *other* world's keys through this same, already-open handle -- no second
+ * `opfsStorage()` call is ever made here.
+ */
+function makeWorldOpHandler(
+  shell: Shell,
+  runningWorldId: string,
+  storage: Storage,
+  simHost: { pause(): Promise<void>; resume(): void; readonly running: boolean } | null,
+): (m: SimWorldOpMessage) => Promise<void> {
+  return async (m) => {
+    try {
+      if (m.type === 'export-world') {
+        // Planning decision 6: "the worker pauses, takes a snapshot if dirty, awaits `flush()`,
+        // packs, and transfers the buffer back" -- but only when it is not *already* paused (a
+        // settled or in-flight hidden-boundary pause, `sim-pause`'s own handler on this same queue):
+        // `SimHost.pause()` is itself a no-op when not running, so calling it unconditionally would
+        // be harmless for correctness, but calling `resume()` afterward regardless would wrongly
+        // wake a world the hidden boundary meant to keep paused. `wasRunning` is read once, before
+        // either call, and gates both symmetrically.
+        const wasRunning = simHost?.running ?? false
+        if (wasRunning) await simHost?.pause()
+        try {
+          const bytes = await exportWorld(storage, runningWorldId)
+          shell.post({ type: 'export-world-result', bytes })
+        } finally {
+          if (wasRunning) simHost?.resume()
+        }
+      } else if (m.type === 'import-world') {
+        // Planning decision 6: "takes lock `world:<id>` for the duration" -- `<id>` is the *target*
+        // id, which for an omitted `opts.worldId` is only known once the archive itself is unpacked
+        // (`unpackArchive`, no storage touched). Peeking it here, before the lock, then calling
+        // `importWorld` again under the lock costs one extra decompress of a human-rate, off-the-
+        // tick-path payload -- simpler and just as correct as splitting `importWorld` into a
+        // peek-then-write pair for one caller.
+        const peeked = await unpackArchive(m.bytes)
+        const targetId = m.worldId ?? peeked.worldId
+        if (targetId === runningWorldId) {
+          throw new Error(
+            `importWorld: refuses the running world's own id (${runningWorldId}, Planning decision 6)`,
+          )
+        }
+        const opts: { worldId?: string; overwrite?: boolean } = { worldId: targetId }
+        if (m.overwrite !== undefined) opts.overwrite = m.overwrite
+        const result = await new Promise<{ worldId: string }>((resolve, reject) => {
+          navigator.locks.request(`world:${targetId}`, { mode: 'exclusive' }, async () => {
+            try {
+              resolve(await importWorld(storage, m.bytes, opts))
+            } catch (e) {
+              reject(e)
+            }
+          })
+        })
+        shell.post({ type: 'import-world-result', worldId: result.worldId })
+      } else if (m.type === 'delete-world') {
+        // Deviations: refuses the running world's own id, but only when a live `SimHost` is
+        // actually ticking it -- a load-failed world (`simHost === null`, this handler's own
+        // degraded-path caller) has nothing to protect: `export_works_after_load_failure` deletes
+        // exactly this id, on purpose, once its own `client.ready` has already rejected.
+        if (simHost !== null && m.worldId === runningWorldId) {
+          throw new Error(
+            `deleteWorld: refuses the running world's own id (${runningWorldId}) -- it is open`,
+          )
+        }
+        if (m.worldId === runningWorldId) {
+          // Reachable only from the degraded/load-failed path (`simHost === null` above): this
+          // worker already holds `world:<runningWorldId>` for its whole life (`requestWorldLock`'s
+          // own doc comment, a promise that never resolves) -- requesting it again here would
+          // deadlock forever waiting on a lock this same worker itself holds. Already effectively
+          // exclusive by virtue of that Web Lock; no second one needed.
+          await deleteWorld(storage, m.worldId)
+        } else {
+          await new Promise<void>((resolve, reject) => {
+            navigator.locks.request(`world:${m.worldId}`, { mode: 'exclusive' }, async () => {
+              try {
+                await deleteWorld(storage, m.worldId)
+                resolve()
+              } catch (e) {
+                reject(e)
+              }
+            })
+          })
+        }
+        shell.post({ type: 'delete-world-result' })
+      }
+    } catch (e) {
+      shell.post({ type: 'world-op-error', message: e instanceof Error ? e.message : String(e) })
+    }
+  }
+}
+
 function encodeCounters(c: SimHostCounters, out: Uint8Array): void {
   const view = new DataView(out.buffer, out.byteOffset, out.byteLength)
   view.setUint32(0, c.ticksRun >>> 0, true)
@@ -141,6 +254,11 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // OPFS (`durable === true`; a `memoryStorage()` fallback has no such queue, `pendingAsync()` is
   // OPFS-only).
   let opfsAdapter: OpfsStorage | undefined
+  // docs/plan/23-persistence-opfs-and-lifecycle.md step 5: kept for the export/import/delete
+  // handler below (built once persistence has actually opened) -- distinct from `opfsAdapter`
+  // (`undefined` on the `noOpfs`/memory-storage fallback, where export/import/delete still work).
+  let worldStorage: Storage | undefined
+  let runningWorldId: string | undefined
 
   if (message.world) {
     const world = message.world
@@ -160,21 +278,50 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     )
     worldDurable = durable
     if (durable) opfsAdapter = storage as OpfsStorage
+    worldStorage = storage
+    runningWorldId = world.worldId
 
-    const opened = await Persistence.open(storage, world, newInstance, {
-      ...(message.test?.snapshotEveryTicks !== undefined
-        ? { snapshotEveryTicks: message.test.snapshotEveryTicks }
-        : {}),
-    })
-    persistence = opened.persistence
-    inst = opened.sim
-    initialTicksRun = opened.tick
+    try {
+      const opened = await Persistence.open(storage, world, newInstance, {
+        ...(message.test?.snapshotEveryTicks !== undefined
+          ? { snapshotEveryTicks: message.test.snapshotEveryTicks }
+          : {}),
+      })
+      persistence = opened.persistence
+      inst = opened.sim
+      initialTicksRun = opened.tick
 
-    shell.post({
-      type: 'storage',
-      status: await readStorageStatus(durable),
-      created: opened.outcome === 'created',
-    })
+      shell.post({
+        type: 'storage',
+        status: await readStorageStatus(durable),
+        created: opened.outcome === 'created',
+      })
+    } catch (e) {
+      // docs/plan/23-persistence-opfs-and-lifecycle.md step 5 (Deviations, `'load-failed'`): unlike
+      // `world-busy` above, this worker's own OPFS/Web-Lock handles are real and undamaged -- only
+      // the *load* failed. Deliberately broad (any error from `Persistence.open`, not only
+      // `WorldLoadError`'s own identity mismatch): a corrupt manifest (`JSON.parse` itself throwing
+      // a plain `SyntaxError`, `export_works_after_load_failure`'s own scenario) is just as much "a
+      // save the game cannot load" as an identity mismatch, and Q9's answer (this milestone's own
+      // default, PLAN.md header) draws no distinction -- `exportWorld`/`deleteWorld` must still work
+      // either way (Scope). Non-scope this milestone (M24b owns the upgrade/`SaveIncompatible` path):
+      // reported, not handled, and nothing is written; the worker stays alive with a degraded,
+      // non-ticking loop instead of dying like `world-busy` does.
+      const kind = e instanceof WorldLoadError ? e.kind : 'load-error'
+      const message = e instanceof Error ? e.message : String(e)
+      shell.post({
+        type: 'start-failed',
+        code: 'load-failed',
+        detail: `Persistence.open: ${message} (kind ${kind})`,
+      })
+      const enqueue = makeOpQueue()
+      const worldOp = makeWorldOpHandler(shell, world.worldId, storage, null)
+      return {
+        body: () => {},
+        timeoutMs: () => Number.POSITIVE_INFINITY,
+        worldOp: (m) => enqueue(() => worldOp(m)),
+      }
+    }
   }
 
   // docs/decisions/0032-atomics-timer-bounds-external-wakes.md (M16d): the timer takes a clock
@@ -284,30 +431,48 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // main parks it (`W_YIELD` + wake, polling `W_PARKED`) before sending `sim-pause`; `sim-resume`
   // needs no separate park step, since `sim-pause`'s own handler never calls `shell.resume()` itself
   // -- the worker stays parked until `sim-resume` arrives.
-  const simControl = message.world
-    ? (m: Parameters<NonNullable<LoopState['simControl']>>[0]): void => {
-        if (m.type === 'sim-pause') {
-          void (async () => {
-            await simHost.pause()
-            // Planning decision 5: "`client.onStorage` fires ... after each hidden-boundary
-            // snapshot" -- this ack is also what `client.ts`'s own `pauseHostWorker` awaits to know
-            // the pause has genuinely settled (never before `flush()` resolves).
-            shell.post({
-              type: 'storage',
-              status: await readStorageStatus(worldDurable),
-              created: false,
-            })
-          })()
-        } else if (m.type === 'sim-resume') {
-          simHost.resume()
-          shell.resume()
+  //
+  // Step 5 (Rules and traps, "serialize them"): both `sim-pause`/`sim-resume` and every export/
+  // import/delete request now run through the *same* `enqueueOp` FIFO chain, so the two families
+  // never interleave their own `SimHost`/`Storage` calls.
+  const enqueueOp = message.world ? makeOpQueue() : undefined
+  const worldOpHandler =
+    message.world && worldStorage && runningWorldId
+      ? makeWorldOpHandler(shell, runningWorldId, worldStorage, simHost)
+      : undefined
+  const simControl =
+    message.world && enqueueOp
+      ? (m: Parameters<NonNullable<LoopState['simControl']>>[0]): void => {
+          enqueueOp(async () => {
+            if (m.type === 'sim-pause') {
+              await simHost.pause()
+              // Planning decision 5: "`client.onStorage` fires ... after each hidden-boundary
+              // snapshot" -- this ack is also what `client.ts`'s own `pauseHostWorker` awaits to know
+              // the pause has genuinely settled (never before `flush()` resolves).
+              shell.post({
+                type: 'storage',
+                status: await readStorageStatus(worldDurable),
+                created: false,
+              })
+            } else if (m.type === 'sim-resume') {
+              simHost.resume()
+              shell.resume()
+            }
+          })
         }
-      }
-    : undefined
+      : undefined
+  const worldOp =
+    enqueueOp && worldOpHandler
+      ? (m: SimWorldOpMessage): void => {
+          enqueueOp(() => worldOpHandler(m))
+        }
+      : undefined
 
   return {
     body,
     timeoutMs: atomicsTimer.timeoutMs,
+    ...(simControl ? { simControl } : {}),
+    ...(worldOp ? { worldOp } : {}),
     testCall: (m) => {
       if (m.name === SIM_COUNTERS_CALL) {
         const result = new Uint8Array(SIM_COUNTERS_BYTES)
@@ -336,6 +501,5 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       }
       return handleTestCall(inst, m)
     },
-    ...(simControl ? { simControl } : {}),
   }
 }

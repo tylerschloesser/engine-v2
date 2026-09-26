@@ -11,6 +11,7 @@ import type {
   FromWorker,
   SetupMessage,
   SimControlMessage,
+  SimWorldOpMessage,
   TestCallMessage,
   ToWorker,
 } from './worker/protocol.js'
@@ -58,6 +59,9 @@ export function run(): void {
   // docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: `sim-pause`/`sim-resume`, `sim`-kind
   // only (`worker/sim.ts`'s own `LoopState.simControl`), routed the same way `testCall` already is.
   let simControl: ((m: SimControlMessage) => void) | null = null
+  // docs/plan/23-persistence-opfs-and-lifecycle.md step 5: export/import/delete requests, routed the
+  // same way `simControl` already is (`worker/sim.ts`'s own `LoopState.worldOp`).
+  let worldOp: ((m: SimWorldOpMessage) => void) | null = null
 
   scope.onmessage = (ev) => {
     const m = ev.data
@@ -81,6 +85,7 @@ export function run(): void {
         (loop) => {
           testCall = loop?.testCall ?? null
           simControl = loop?.simControl ?? null
+          worldOp = loop?.worldOp ?? null
           // The wake word is read before `ready` goes out, not after: main can wake this worker the
           // instant it sees `ready`, and a wake between the post and the loop's own first read
           // would be lost (`Shell.observeWake`; fix round 3, docs/plan/06b-workers-and-spawn.md).
@@ -104,6 +109,12 @@ export function run(): void {
       }
     } else if (m.type === 'sim-pause' || m.type === 'sim-resume') {
       simControl?.(m)
+    } else if (
+      m.type === 'export-world' ||
+      m.type === 'import-world' ||
+      m.type === 'delete-world'
+    ) {
+      worldOp?.(m)
     }
   }
 }

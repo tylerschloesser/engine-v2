@@ -19,6 +19,15 @@ import type { Storage } from './storage/types.js'
 // surface, just built elsewhere so `client.ts` can import them without also importing `loader.ts`,
 // `main.no_wasm_instantiate`'s own rule).
 export { buildSimInstanceConfig, seedToHexU64, type WorldConfig } from './sim-config.js'
+// `storage/archive.ts` (docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Seams: "TS functions
+// from `engine/server`"): re-exported unchanged, same "no renamed Provides" convention.
+export {
+  ArchiveFormatError,
+  deleteWorld,
+  exportWorld,
+  importWorld,
+  WorldExistsError,
+} from './storage/archive.js'
 // `storage/types.ts`'s own home for `Storage`/`worldKeys` (docs/plan/
 // 22-persistence-log-and-snapshots.md steps 4-6): re-exported unchanged, same "no renamed Provides"
 // convention as the `sim-config.ts` re-exports above.
@@ -253,6 +262,11 @@ export interface SimHost {
    * pacing timer entirely (a manual driver for tests and `engine/test`'s `stepTick`). */
   stepTick(n?: number): void
   hash(): string
+  /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5: whether the pacing timer is currently
+   * armed -- `worker/sim.ts`'s own export-request handler reads this to decide whether it needs to
+   * `pause()`/`resume()` around a snapshot-for-export itself, or whether the world is already paused
+   * (a hidden-boundary pause in flight or settled) and must be left exactly as it is. */
+  readonly running: boolean
   readonly counters: SimHostCounters
   logSink: ((bytes: Uint8Array) => void) | null
   /**
@@ -533,6 +547,9 @@ export function createSimHostFromInstance(
     },
     hash() {
       return sim.simHash()
+    },
+    get running() {
+      return running
     },
     counters,
     logSink: null,

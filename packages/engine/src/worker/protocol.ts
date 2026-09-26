@@ -161,7 +161,7 @@ export type StorageStatus = { durable: boolean; persisted: boolean; usage: numbe
  * `fatal` that follows once already settled. */
 export type SimLifecycleMessage =
   | { type: 'storage'; status: StorageStatus; created: boolean }
-  | { type: 'start-failed'; code: 'world-busy'; detail: string }
+  | { type: 'start-failed'; code: 'world-busy' | 'load-failed'; detail: string }
 
 /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: main -> sim worker, parked-only (like
  * `TestCallMessage`, whose own doc comment gives the reason: a worker blocked in `Atomics.wait`
@@ -174,12 +174,42 @@ export type SimLifecycleMessage =
  * either way. */
 export type SimControlMessage = { type: 'sim-pause' } | { type: 'sim-resume' }
 
+/**
+ * docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Rules and traps: main -> sim worker,
+ * parked-only like `SimControlMessage` (same reason: a blocked worker receives no events, 0015 §2).
+ * A *separate* family from `SimControlMessage`, not a third variant of it (Deviations: named here so
+ * the choice is on the record) -- `client.ts` funnels *both* families through one FIFO queue on the
+ * sim worker itself (`worker/sim.ts`'s own `enqueueWorldOp`) before either one ever touches
+ * `SimHost`/`Storage`, so an export requested while a hidden-boundary pause is mid-flight (or the
+ * reverse) is always well-defined: whichever request the worker's event loop saw first runs to
+ * completion before the other starts, never interleaved. `export-world` always targets the running
+ * world (no id: `client.exportWorld()` takes none, Seams); `import-world`/`delete-world` name an
+ * arbitrary id via `worldId`, since OPFS's root is shared by every open adapter instance (`storage/
+ * archive.ts`'s own doc comment) -- the running world's already-open handles are enough to reach any
+ * other world's keys too, so no second `opfsStorage()` instance is ever opened for these.
+ */
+export type SimWorldOpMessage =
+  | { type: 'export-world' }
+  | { type: 'import-world'; bytes: Uint8Array; worldId?: string; overwrite?: boolean }
+  | { type: 'delete-world'; worldId: string }
+
+/** Sim worker -> main, one per `SimWorldOpMessage` (Seams: `client.exportWorld`/`importWorld`/
+ * `deleteWorld`'s own promises settle from these). `bytes` on `export-world-result` is a fresh
+ * `Uint8Array` (the packed archive), transferred back (`postMessage`'s transfer list) rather than
+ * structured-cloned, matching Planning decision 6's "transfers the buffer back". */
+export type SimWorldOpResult =
+  | { type: 'export-world-result'; bytes: Uint8Array }
+  | { type: 'import-world-result'; worldId: string }
+  | { type: 'delete-world-result' }
+  | { type: 'world-op-error'; message: string }
+
 export type ToWorker =
   | SetupMessage
   | { type: 'resume' }
   | { type: 'stop' }
   | TestCallMessage
   | SimControlMessage
+  | SimWorldOpMessage
 
 export type FromWorker =
   | { type: 'ready' }
@@ -191,3 +221,4 @@ export type FromWorker =
    * trap. */
   | { type: 'test-error'; id: number; message: string }
   | SimLifecycleMessage
+  | SimWorldOpResult
