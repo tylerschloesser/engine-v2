@@ -11,6 +11,7 @@
 use std::cell::RefCell;
 
 use crate::game::{EntityId, Game, PlayerId, Unknown};
+use crate::predict::Overlay;
 use crate::rng::SimRng;
 use crate::store::Store;
 use crate::time::Tick;
@@ -84,6 +85,12 @@ pub struct View<'a, G: Game> {
     registry: &'a Registry,
     tick: Tick,
     held: &'a dyn Fn(ChunkCoord) -> bool,
+    /// `None` until [`View::with_overlay`] attaches one (docs/plan/25-prediction-core.md Scope:
+    /// "`View<'_, G>` reads overlay-then-replica (it read the replica only until now)"). Kept as a
+    /// separate builder step, not a `new`/`total` parameter, so every existing caller of either
+    /// constructor keeps its exact prior behaviour and hashes (docs/plan/25-prediction-core.md:
+    /// "must not change any existing hash").
+    overlay: Option<&'a Overlay<G>>,
     /// Reused across `entities_in` calls (`.claude/rules/hot-paths.md`): a `RefCell` since
     /// `WorldRead::entities_in` takes `&self`, matching `Authority`/`Replica`'s own scratch field.
     entities_in_scratch: RefCell<Vec<EntityId>>,
@@ -101,6 +108,7 @@ impl<'a, G: Game> View<'a, G> {
             registry,
             tick,
             held,
+            overlay: None,
             entities_in_scratch: RefCell::new(Vec::new()),
         }
     }
@@ -113,8 +121,17 @@ impl<'a, G: Game> View<'a, G> {
             registry,
             tick,
             held: &|_| true,
+            overlay: None,
             entities_in_scratch: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Attaches a prediction overlay: every read below now checks it before falling back to
+    /// `store` (docs/plan/25-prediction-core.md Scope). `entities_in` is unaffected (M25 step 8's
+    /// own cut line, the overlay merge for range reads).
+    pub fn with_overlay(mut self, overlay: &'a Overlay<G>) -> Self {
+        self.overlay = Some(overlay);
+        self
     }
 }
 
@@ -127,13 +144,17 @@ impl<G: Game> WorldRead<G> for View<'_, G> {
         if !(self.held)(chunk_of::<G>(p)) {
             return Err(Unknown);
         }
-        Ok(self.store.terrain().tile(p))
+        let base = self.store.terrain().tile(p);
+        Ok(self.overlay.and_then(|o| o.find_tile(p)).unwrap_or(base))
     }
 
     /// OR of the tile's traits and the occupant's traits (0007 §6): real as of M21.
     fn traits_at(&self, p: TilePos) -> Result<TraitSet, Unknown> {
         let tile_traits = self.registry.tile_traits(self.tile(p)?);
-        let occupant_traits = match self.entity_at(p)?.and_then(|id| self.store.entity(id)) {
+        let occupant_traits = match self
+            .entity_at(p)?
+            .and_then(|id| self.entity(id).ok().flatten())
+        {
             Some(e) => self.registry.prototype_traits(G::prototype(e)),
             None => TraitSet::EMPTY,
         };
@@ -144,19 +165,41 @@ impl<G: Game> WorldRead<G> for View<'_, G> {
         if !(self.held)(chunk_of::<G>(p)) {
             return Err(Unknown);
         }
-        Ok(self.store.entity_at(p))
+        if let Some(o) = self.overlay
+            && let Some(found) =
+                o.find_entity_at(|e| crate::predict::covers::<G>(self.registry, e, p))
+        {
+            return Ok(found);
+        }
+        let base = self.store.entity_at(p);
+        match (base, self.overlay) {
+            (Some(id), Some(o)) if o.overlays_id(id) => Ok(None),
+            (other, _) => Ok(other),
+        }
     }
 
     fn entity(&self, id: EntityId) -> Result<Option<&G::Entity>, Unknown> {
+        if let Some(o) = self.overlay
+            && let Some(found) = o.find_entity(id)
+        {
+            return Ok(found);
+        }
         Ok(self.store.entity(id))
     }
 
     fn player(&self, who: PlayerId) -> Result<&G::Player, Unknown> {
+        if let Some(o) = self.overlay
+            && let Some(p) = o.find_player(who)
+        {
+            return Ok(p);
+        }
         self.store.player(who)
     }
 
     fn global(&self) -> &G::Global {
-        self.store.global()
+        self.overlay
+            .and_then(|o| o.global())
+            .unwrap_or_else(|| self.store.global())
     }
 
     fn entities_in(

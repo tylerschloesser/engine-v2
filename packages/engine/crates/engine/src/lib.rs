@@ -18,6 +18,7 @@ pub mod host;
 pub mod migrate;
 pub mod noise;
 pub mod persist;
+pub mod predict;
 pub mod presence;
 pub mod rng;
 pub mod sim;
