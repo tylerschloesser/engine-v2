@@ -92,24 +92,38 @@ Commits: `3b87725` (step 1), `e47c820` (step 2+3 core), `b97ee78` (step 3 fixtur
 
 **Step 1 -- `Identity::compare`.** `impl Identity { pub fn compare(&self, running: &Identity) ->
 Comparison }` in `persist/identity.rs`, `self` = the identity stored in a save. `Comparison { Same,
-Direct, NeedsMigrate(MismatchReason), Incompatible(MismatchReason) }`, `MismatchReason { Schema,
-TickRate, Worldgen }` (both `pub`, re-exported at `persist::{Comparison, MismatchReason}`) --
-**not** the ABI's own 7-variant `IncompatReason` (`Schema, TickRate, Worldgen, MigrateDeclined,
-Container, Decode, ChunkSize`) named in this brief's own Seams section. That wire enum is a step-4
-superset: map `MismatchReason::{Schema,TickRate,Worldgen}` 1:1 into it and construct the other four
-downstream of `compare` (`MigrateDeclined` when `Game::migrate` itself returns `Err`; `Decode` when
+Direct, NeedsMigrate(MismatchReason) }`, `MismatchReason { Schema, TickRate, Worldgen }` (both
+`pub`, re-exported at `persist::{Comparison, MismatchReason}`) -- **not** the ABI's own 7-variant
+`IncompatReason` (`Schema, TickRate, Worldgen, MigrateDeclined, Container, Decode, ChunkSize`)
+named in this brief's own Seams section. That wire enum is a step-4 superset: map
+`MismatchReason::{Schema,TickRate,Worldgen}` 1:1 into it and construct the other four downstream of
+`compare` (`MigrateDeclined` when `Game::migrate` itself returns `Err`; `Decode` when
 `OldStore::decode` or an `OldValue::decode` fails, or `Migrating` faults on a footprint collision;
 `Container` from the pre-existing `SnapshotReader`/`PersistError::ContainerVersion` envelope check,
 never from `compare`; `ChunkSize` from the TS host's manifest comparison, per Scope, never from
-Rust at all). `compare` never itself returns `Incompatible` for a Container/ChunkSize/Decode/
-MigrateDeclined reason -- those are structurally impossible to know from two `Identity` values
-alone.
+Rust at all). `compare` never returns `Incompatible` at all -- there is no such variant on
+`Comparison` (fix round 1, below).
 
-**Own addition, not in 0005/0006 literally:** `Incompatible(MismatchReason::Schema)` when the
-*stored* `schema_version` is newer than the running build's -- `Game::migrate` only ever brings an
-*older* schema forward (its own signature has no way to go the other direction), so a downgrade can
-never take the `NeedsMigrate` path. Flagged for the orchestrator; not tested beyond
-`identity_compare_matrix`'s own coverage of it.
+**Fix round 1 (orchestrator ruling).** An earlier revision of this brief's own `Identity::compare`
+added `Comparison::Incompatible(MismatchReason::Schema)` for a stored `schema_version` newer than
+the running build's, reasoning that `Game::migrate` only ever brings an *older* schema forward. The
+orchestrator's ruling: follow decision 5 literally -- a `SCHEMA_VERSION` difference is
+`NeedsMigrate` **in either direction**, and `Game::migrate` decides (its default `Err
+(SaveIncompatible)` is reason `MigrateDeclined`, not a `compare`-level verdict); a game may choose
+to accept an older build's save written by a newer one, which is exactly
+`no_migrate_hook_save_incompatible_files_untouched`'s own mirror image (that fixture scenario has no
+hook at all, so it *is* `SaveIncompatible`; a game that supplies one is not). Applied: the
+`Incompatible` variant is removed from `Comparison` entirely (nothing else ever produced it, so
+there was nothing left to keep it for); `identity_compare_matrix` now asserts `NeedsMigrate(Schema)`
+for a stored schema in both directions; a new native test,
+`migrate::tests::accepts_newer_schema::migrate_accepts_a_newer_stored_schema_when_the_game_chooses_
+to` (`migrate.rs`), builds a stored `Identity` with `schema_version: 2` against a running build's
+`schema_version: 1`, asserts `compare` returns `NeedsMigrate(Schema)`, then runs `migrate()` against
+a small local `Game` (`SCHEMA_VERSION = 1`) whose own `migrate` explicitly accepts `from_schema ==
+2` and downcasts the newer `Global` shape, and asserts it succeeds. Proved both the reverted
+`compare` branch and the reverted `identity_compare_matrix` assertion actually catch the regression
+(re-introduced each temporarily, watched the exact tests fail, reverted) -- see "Test-injected-
+defect verifications" below.
 
 **Step 2 -- `Rescale`/`RescaleTicks`, `crates/engine/src/migrate.rs`.** `Rescale::new(old_hz,
 new_hz, snapshot_tick)`; `ticks(Ticks) -> Ticks` is 0006's own rounding rule generalised from a
@@ -236,7 +250,10 @@ scope. Flagged for the orchestrator, not fixed here.
 
 **Test-injected-defect verifications (per-test "hunt for tests that cannot fail"):**
 - `identity_compare_matrix`: manually swapped an expected `NeedsMigrate(Schema)` case's expected
-  value to `Direct` -- failed with a clear mismatch, reverted.
+  value to `Direct` -- failed with a clear mismatch, reverted. Fix round 1: also re-introduced the
+  reverted early `if self.schema_version > running.schema_version { return Incompatible(...) }`
+  branch (plus the `Incompatible` variant) and re-ran -- failed exactly at the newer-stored-schema
+  case (`left: Incompatible(Schema), right: NeedsMigrate(Schema)`); reverted both.
 - `rescale_matches_0006_rounding`: temporarily changed `Rescale::ticks`'s rounding to plain
   truncation (dropped the `2*`/ties-up doubling) -- `20->30` at `d=25` (12.5 exact) then rounded
   down to 12 instead of 13, test failed; reverted.
@@ -248,9 +265,7 @@ scope. Flagged for the orchestrator, not fixed here.
   the same tile) instead of `Err(SaveIncompatible)`; test failed; reverted.
 - Arena peak-use: see the `drain_entities`-clone experiment above.
 
-No existing golden moved (`pnpm test rust`/`wasm` counts: 529->550 native, 124->133 wasm, both
-exactly the new tests added here, no existing test changed).
-
-ADR note: 0005 Upgrades says re-executing the tail is safe because "at worst an action is now rejected". With postcard that is not strictly true when `G::Action`'s layout changed between builds: old bytes can decode into a different *valid* action. 0024 §3 amends 0005 for this case (`SCHEMA_VERSION` also covers `G::Action`; the tail is dropped when it differs); decision 6 above implements it, it does not re-decide it.
+No existing golden moved (`pnpm test rust`/`wasm` counts: 529->551 native, 124->133 wasm, both
+exactly the new tests added here plus fix round 1's own new test, no existing test changed).
 
 ADR note: 0005 Upgrades says re-executing the tail is safe because "at worst an action is now rejected". With postcard that is not strictly true when `G::Action`'s layout changed between builds: old bytes can decode into a different *valid* action. 0024 §3 amends 0005 for this case (`SCHEMA_VERSION` also covers `G::Action`; the tail is dropped when it differs); decision 6 above implements it, it does not re-decide it.

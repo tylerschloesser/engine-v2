@@ -41,21 +41,23 @@ pub enum MismatchReason {
 }
 
 /// `Identity::compare`'s own outcome (docs/plan/24b-upgrade-and-migration.md Order of work 1;
-/// decision 5's matrix): `Same` (identical build hash, load the log tail as-is), `Direct` (a
-/// different build, but schema/tick-rate/worldgen all agree: load the snapshot then re-execute
-/// the tail), `NeedsMigrate` (`Game::migrate` must run first; `MismatchReason` says which field
-/// forced it), `Incompatible` (no path at all: this milestone's own addition for a stored
-/// `schema_version` newer than the running build's -- `Game::migrate` only ever brings an *older*
-/// schema forward, so a downgrade can never migrate; not spelled out verbatim in 0005/0006,
-/// flagged in this milestone's Deviations). Every other `Incompatible` case in the full pipeline
-/// (`Container`, `MigrateDeclined`, `Decode`, `ChunkSize`) is decided above this module, never by
+/// decision 5's matrix, followed literally): `Same` (identical build hash, load the log tail
+/// as-is), `Direct` (a different build, but schema/tick-rate/worldgen all agree: load the
+/// snapshot then re-execute the tail), `NeedsMigrate` (`Game::migrate` must run first;
+/// `MismatchReason` says which field forced it). A `SCHEMA_VERSION` difference is `NeedsMigrate`
+/// **in either direction**: decision 5 never singles out a stored schema newer than the running
+/// build's as its own case, and `Game::migrate` deciding is exactly the seam 0005 gives a game to
+/// accept an older build's save written by a newer one, if it chooses to (fix round 1: an earlier
+/// revision of this module added its own `Incompatible(Schema)` branch for that case instead --
+/// reverted per the orchestrator's ruling, this milestone's own Deviations). Every `Incompatible`
+/// outcome in the full pipeline (`Container`, `MigrateDeclined` -- `Game::migrate`'s own default
+/// `Err(SaveIncompatible)`, `Decode`, `ChunkSize`) is decided above this module, never by
 /// `compare` itself -- see `crate::migrate`'s own module doc comment.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Comparison {
     Same,
     Direct,
     NeedsMigrate(MismatchReason),
-    Incompatible(MismatchReason),
 }
 
 fn write_str(s: &str, sink: &mut impl ByteSink) {
@@ -126,23 +128,20 @@ impl Identity {
     /// let running = id(1, 2, 20);
     /// assert_eq!(id(1, 2, 20).compare(&running), Comparison::Same);
     /// assert_eq!(id(2, 2, 20).compare(&running), Comparison::Direct);
+    /// // Either direction is `NeedsMigrate`; `Game::migrate` decides whether it can bring an
+    /// // older schema forward, or (the game's own choice) an older build accepting a newer one.
     /// assert_eq!(
     ///     id(2, 1, 20).compare(&running),
     ///     Comparison::NeedsMigrate(MismatchReason::Schema)
     /// );
     /// assert_eq!(
     ///     id(2, 3, 20).compare(&running),
-    ///     Comparison::Incompatible(MismatchReason::Schema)
+    ///     Comparison::NeedsMigrate(MismatchReason::Schema)
     /// );
     /// ```
     pub fn compare(&self, running: &Identity) -> Comparison {
         if self.build_hash == running.build_hash {
             return Comparison::Same;
-        }
-        if self.schema_version > running.schema_version {
-            // Forward-only: `Game::migrate` brings an *older* schema forward, never a newer one
-            // back down.
-            return Comparison::Incompatible(MismatchReason::Schema);
         }
         if self.schema_version == running.schema_version
             && self.tick_rate_hz == running.tick_rate_hz
@@ -235,8 +234,10 @@ mod tests {
         id_at(1, 2, 20, 1, 100)
     }
 
-    /// 0005 Upgrades' whole matrix (decision 5), one case per row, plus this milestone's own
-    /// forward-only `Incompatible` addition and the "more than one field differs" priority order.
+    /// 0005 Upgrades' whole matrix (decision 5), one case per row, followed literally (fix round
+    /// 1: a schema mismatch is `NeedsMigrate` in *either* direction, never `Incompatible` -- an
+    /// earlier revision of this test asserted the opposite for a newer stored schema; reverted per
+    /// the orchestrator's ruling), plus the "more than one field differs" priority order.
     #[test]
     fn identity_compare_matrix() {
         let r = running();
@@ -259,10 +260,12 @@ mod tests {
             id_at(2, 1, 20, 1, 100).compare(&r),
             Comparison::NeedsMigrate(MismatchReason::Schema)
         );
-        // Schema differs alone, stored newer: no path at all.
+        // Schema differs alone, stored *newer*: still migrate -- `Game::migrate` decides (its
+        // default `Err(SaveIncompatible)` is `MigrateDeclined`, not a `compare`-level verdict); a
+        // game may choose to accept an older build's save written by a newer one.
         assert_eq!(
             id_at(2, 3, 20, 1, 100).compare(&r),
-            Comparison::Incompatible(MismatchReason::Schema)
+            Comparison::NeedsMigrate(MismatchReason::Schema)
         );
         // Tick rate differs alone: migrate, even with schema and worldgen equal (0006 point 2:
         // "even if the author forgot to bump [SCHEMA_VERSION]").

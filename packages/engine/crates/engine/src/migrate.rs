@@ -899,4 +899,179 @@ mod tests {
             assert!(matches!(result, Err(SaveIncompatible)));
         }
     }
+
+    // -- Fix round 1 (orchestrator ruling): decision 5 makes a SCHEMA_VERSION mismatch
+    // `NeedsMigrate` in *either* direction; `Game::migrate` decides, and a game may choose to
+    // accept an older build's save written by a newer one (this is the
+    // `no_migrate_hook_save_incompatible_files_untouched` fixture scenario's own mirror image:
+    // there, no hook exists at all and the whole thing is `SaveIncompatible`; here, one does, and
+    // it succeeds). This game's own `SCHEMA_VERSION` is 1 (older than the incoming save's 2) and
+    // its `migrate` explicitly accepts `from_schema == 2`, bringing the newer shape's data down
+    // into its own, simpler one.
+    mod accepts_newer_schema {
+        use super::*;
+        use crate::game::{Game, PlayerEvent, PlayerId, TickCx, Unknown};
+        use crate::world::{
+            CacheCapacity, ChunkDims, PristineSource, PrototypeId, Registry, TerrainStore, Tile,
+        };
+        use crate::worldgen::Worldgen;
+
+        #[derive(
+            Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize,
+        )]
+        struct NEntity;
+        #[derive(
+            Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize,
+        )]
+        struct NPlayer;
+        #[derive(
+            Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize,
+        )]
+        struct NGlobal {
+            rolls: u32,
+        }
+        #[derive(
+            Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, ts_rs::TS,
+        )]
+        struct NReject;
+        impl From<Unknown> for NReject {
+            fn from(_: Unknown) -> Self {
+                NReject
+            }
+        }
+        struct NGen;
+        impl Worldgen for NGen {
+            type Params = ();
+            const WORLDGEN_VERSION: u32 = 0;
+            fn generate(_seed: u64, _params: &(), _chunk: ChunkCoord, out: &mut [Tile]) {
+                out.fill(Tile::VOID);
+            }
+        }
+        struct ZeroSource;
+        impl PristineSource for ZeroSource {
+            fn generate(&self, _chunk: ChunkCoord, out: &mut [Tile]) {
+                out.fill(Tile::VOID);
+            }
+        }
+
+        /// The *newer* schema's own `Global` shape (schema 2): an extra field this older build's
+        /// `migrate` simply discards on the way down. A private copy, like every other game's own
+        /// `mod old` (Planning decisions 1) -- this is just the mirror case, an old*er* type this
+        /// game happens to be newer than.
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct NewerGlobal {
+            rolls: u32,
+            extra_field_this_build_does_not_know_about: u32,
+        }
+
+        struct NGame;
+        impl Game for NGame {
+            const SCHEMA_VERSION: u32 = 1; // older than the incoming save's schema (2)
+            type Worldgen = NGen;
+            type Action = ();
+            type Reject = NReject;
+            type Entity = NEntity;
+            type Player = NPlayer;
+            type Global = NGlobal;
+            type Presence = ();
+            type Ui = ();
+            type Client = ();
+            fn register(_r: &mut Registry) {}
+            fn prototype(_e: &NEntity) -> PrototypeId {
+                PrototypeId(0)
+            }
+            fn anchor(_e: &NEntity) -> TilePos {
+                TilePos::new(0, 0)
+            }
+            fn genesis(_w: &mut dyn WorldWrite<Self>) {}
+            fn on_player(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _ev: PlayerEvent) {}
+            fn apply(
+                _w: &mut dyn WorldWrite<Self>,
+                _who: PlayerId,
+                _a: &(),
+            ) -> Result<(), NReject> {
+                Ok(())
+            }
+            fn tick(_cx: &mut TickCx<'_, Self>) {}
+            fn migrate(
+                from_schema: u32,
+                old: &mut OldStore,
+                w: &mut dyn WorldWrite<Self>,
+            ) -> Result<(), SaveIncompatible> {
+                if from_schema != 2 {
+                    return Err(SaveIncompatible);
+                }
+                let newer: NewerGlobal = old.global()?;
+                w.put_global(NGlobal { rolls: newer.rolls });
+                Ok(())
+            }
+        }
+
+        #[test]
+        fn migrate_accepts_a_newer_stored_schema_when_the_game_chooses_to() {
+            use crate::codec::encode;
+            use crate::persist::{Comparison, Identity, MismatchReason};
+            use crate::worldgen::WorldgenStamp;
+
+            // The identity-level routing decision first: a stored schema newer than the running
+            // build's is `NeedsMigrate`, not `Incompatible` (fix round 1) -- `NGame::migrate` is
+            // exactly the seam that then decides.
+            let stamp = WorldgenStamp {
+                version: 0,
+                fingerprint: 0,
+            };
+            let stored = Identity {
+                build_hash: [2; 16],
+                engine_version: "0.1.0".to_string(),
+                game_version: "0.1.0".to_string(),
+                schema_version: 2,
+                tick_rate_hz: 20,
+                worldgen: stamp,
+            };
+            let running = Identity {
+                build_hash: [1; 16],
+                engine_version: "0.1.0".to_string(),
+                game_version: "0.1.0".to_string(),
+                schema_version: 1,
+                tick_rate_hz: 20,
+                worldgen: stamp,
+            };
+            assert_eq!(
+                stored.compare(&running),
+                Comparison::NeedsMigrate(MismatchReason::Schema)
+            );
+
+            let mut global_bytes = [0u8; 32];
+            let n = encode(
+                &NewerGlobal {
+                    rolls: 7,
+                    extra_field_this_build_does_not_know_about: 99,
+                },
+                &mut global_bytes,
+            )
+            .expect("encodes");
+            let old = OldStore {
+                schema: 2,
+                old_hz: 20,
+                new_hz: 20,
+                tick: Tick(0),
+                rescale_observed: Cell::new(false),
+                global: global_bytes[..n].to_vec(),
+                player_bytes: VecDeque::new(),
+                player_meta: Vec::new(),
+                next_entity_id: 1,
+                entity_bytes: VecDeque::new(),
+                tiles: VecDeque::new(),
+                timers: Vec::new(),
+                wake_next: Vec::new(),
+                active: (0..SystemId::MAX).map(|_| Vec::new()).collect(),
+            };
+            let dims = ChunkDims::new(4);
+            let terrain = TerrainStore::new(dims, Box::new(ZeroSource), CacheCapacity::Chunks(8));
+            let (authority, _outcome) =
+                super::super::migrate::<NGame>(old, terrain, Tick(0), SimRng::new(0))
+                    .expect("an older build may choose to accept a newer schema's save");
+            assert_eq!(authority.store().global().rolls, 7);
+        }
+    }
 }
