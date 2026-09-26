@@ -11,9 +11,11 @@
 import { RegionId, Role, Status } from './abi.js'
 import { Persistence } from './host/persistence.js'
 import {
+  Phase,
   RECOVERY_GOOD_TICKS_RESET,
   RECOVERY_LOOP_LIMIT,
   type RecoveryDeps,
+  readProgressCursor,
   runPanicRecovery,
 } from './host/recovery.js'
 import type { EngineInstance } from './loader.js'
@@ -139,6 +141,11 @@ export interface SimInstance {
    * and touches no game state -- recovery's own call, distinct from `simConnect`. `Status`
    * (numeric). */
   simReattach(conn: number): number
+  /** docs/plan/24-recovery-and-migration.md fix round 1 (Planning decisions 2): queues
+   * `Rejected(Engine(EngineFault))` for `seq` directly onto `conn`'s own (already-reattached)
+   * connection and raises its dedup floor to at least `seq` (`sim_fault_ack`, forwarding to
+   * `host::Host::fault_ack`). `Status` (numeric); tolerates an unknown `conn`. */
+  simFaultAck(conn: number, seq: number): number
   /** docs/plan/15b-ring-connection-and-replica-rendering.md: frees `conn`'s slot (`sim_disconnect`,
    * `host::Host::disconnect`). `Status` (numeric); tolerates an unknown/already-freed `conn`. */
   simDisconnect(conn: number): number
@@ -204,6 +211,7 @@ export function wrapEngineInstance(inst: EngineInstance): SimInstance {
     tickHz: () => inst.call0(inst.x.tick_hz),
     simConnect: (conn) => inst.call1(inst.x.sim_connect, conn),
     simReattach: (conn) => inst.call1(inst.x.sim_reattach, conn),
+    simFaultAck: (conn, seq) => inst.call2(inst.x.sim_fault_ack, conn, seq),
     simDisconnect: (conn) => inst.call1(inst.x.sim_disconnect, conn),
     simAdmit: (conn, bytes, len) => {
       const region = inst.region(RegionId.Rx)
@@ -372,6 +380,14 @@ export function createSimHostFromInstance(
   // `RECOVERY_GOOD_TICKS_RESET`; `runOneTick` (below) is the only place that increments the latter.
   let recoveryCount = 0
   let goodTicksSinceRecovery = 0
+  // docs/plan/24-recovery-and-migration.md fix round 1 (Planning decisions 2): the `conn` whose own
+  // `sim.simAdmit()` call is currently in flight, set right before the call and cleared right after
+  // it returns normally -- so if it throws instead (an `Admit`-phase trap), this is left holding the
+  // one piece of information only the *live* caller has (the Progress cursor's own `record` is the
+  // `seq`, but never the `conn`): which connection was mid-admit when the instance died. `recover()`
+  // reads and clears it every time, regardless of whether the trap actually turns out to be
+  // `Admit`-phase (a trap during, say, `sim_tick()` never touches this in the first place).
+  let inFlightAdmitConn: number | null = null
 
   // docs/plan/15b-ring-connection-and-replica-rendering.md: one slot per `ConnId`, `null` when
   // free. Reused array, sized once at construction (`.claude/rules/hot-paths.md`), never
@@ -608,6 +624,15 @@ export function createSimHostFromInstance(
       disarm()
       running = false
       const trapTick = counters.ticksRun
+      // Planning decisions 2: read (and consume) the *original* dead instance's own Progress
+      // cursor and in-flight admit conn *before* anything below reassigns `recoveryDeps.instance`
+      // to the fresh one -- this is the only place either is still readable. Consumed regardless of
+      // what `phase` turns out to be (a trap unrelated to `Admit` leaves `admitConnAtTrap` at
+      // whatever it already was -- always `null` in that case, since a live tick never runs inside
+      // an `onMessage` call).
+      const originalCursor = recoveryDeps ? readProgressCursor(recoveryDeps.instance) : null
+      const admitConnAtTrap = inFlightAdmitConn
+      inFlightAdmitConn = null
       if (!recoveryDeps || !persistence) {
         host.onFatal?.({
           tick: trapTick,
@@ -643,6 +668,16 @@ export function createSimHostFromInstance(
       // next `simBuildFrame` call, from the very next `runOneTick`.
       for (let conn = 0; conn < MAX_CONNS; conn++) {
         if (conns[conn]) sim.simReattach(conn)
+      }
+      // Planning decisions 2: an `Admit`-phase trap is never logged (0004: an admission rejection
+      // is not a record at all), so replay never revisits it and `pending_fault_acks` (the
+      // `ApplyRecord`/`Skip` case's own delivery mechanism) never sees it either -- this is the one
+      // case recovery itself must queue the ack for, using what only the live caller ever knew
+      // (`admitConnAtTrap`) plus what the dead instance's own Progress cursor recorded (`record` =
+      // the `seq` being admitted, Seams). Runs *after* re-attach, since `sim_fault_ack` needs the
+      // connection's own `ConnSlot` to already exist.
+      if (originalCursor?.phase === Phase.Admit && admitConnAtTrap !== null) {
+        sim.simFaultAck(admitConnAtTrap, originalCursor.record)
       }
       if (wasRunning) {
         running = true
@@ -684,7 +719,12 @@ export function createSimHostFromInstance(
         // message length, as the interface itself implies.
         const withLen = connection as Connection & { lastMessageLength?: number }
         const len = withLen.lastMessageLength ?? bytes.length
+        // Planning decisions 2: `recover()`'s own only way to learn which connection an `Admit`-
+        // phase trap happened on -- set immediately before the one call that can trap, cleared
+        // immediately after it returns normally (never reached if it throws).
+        inFlightAdmitConn = conn
         sim.simAdmit(conn, bytes, len)
+        inFlightAdmitConn = null
       }
       connection.onClose = (_code) => {
         sim.simDisconnect(conn)

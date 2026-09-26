@@ -829,6 +829,31 @@ impl<G: Game> Host<G> {
         player
     }
 
+    /// M24 fix round 1 (Planning decisions 2: "A trap in `Admit` recovers and answers that action
+    /// `Rejected(Engine(EngineFault))` (unlogged, like every admission failure, 0004)"): queues that
+    /// ack directly onto `conn`'s own (already-reattached) `ConnSlot` -- unlike the `ApplyRecord`
+    /// case (`pending_fault_acks`, drained by `connect`/`reattach` because replay has no live
+    /// `ConnSlot` yet to push into), an `Admit`-phase trap is discovered by the *live* caller
+    /// (`SimHost`, TS) after `reattach` has already run, so the slot already exists and this can
+    /// write straight into it. Also raises `highest_admitted_seq` to at least `seq`, so a resend of
+    /// this exact `seq` is dropped at the `on_uplink` dedup floor rather than re-admitted (and,
+    /// since `PanicInAdmit`-style actions panic deterministically, re-trapped). A `conn` with no
+    /// slot (never reattached, or already disconnected again) is a tolerated no-op -- the ack simply
+    /// has nowhere left to ride.
+    pub fn fault_ack(&mut self, conn: ConnId, seq: u32) {
+        let idx = conn as usize;
+        let Some(Some(slot)) = self.conns.get_mut(idx) else {
+            return;
+        };
+        slot.pending_results.push(Outcome {
+            seq,
+            result: Err(Rejected::Engine(EngineReject::EngineFault)),
+        });
+        if seq > slot.highest_admitted_seq {
+            slot.highest_admitted_seq = seq;
+        }
+    }
+
     /// Queues `Record::Player { Disconnected }` (grace: M28) and frees the slot immediately: no
     /// more `build_frame`/`on_uplink` traffic for `conn` until a fresh `connect`. docs/plan/
     /// 19-presence-channel.md steps 4-6 (0001: "on disconnect the host tells clients at once and
@@ -1667,6 +1692,13 @@ where
     /// contract as `sim_connect` above (a TS-side bug, not untrusted wire input).
     fn sim_reattach(&mut self, conn: u32) -> Status {
         self.reattach(conn);
+        Status::Ok
+    }
+
+    /// M24 fix round 1: `host::Host::fault_ack` -- tolerates an unknown `conn` (see its own doc
+    /// comment).
+    fn sim_fault_ack(&mut self, conn: u32, seq: u32) -> Status {
+        self.fault_ack(conn, seq);
         Status::Ok
     }
 

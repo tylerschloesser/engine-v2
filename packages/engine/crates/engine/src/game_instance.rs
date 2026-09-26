@@ -354,6 +354,13 @@ where
         }
     }
 
+    fn sim_fault_ack(&mut self, conn: u32, seq: u32) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_fault_ack(conn, seq),
+            _ => Status::WrongRole,
+        }
+    }
+
     fn sim_disconnect(&mut self, conn: u32) -> Status {
         match self {
             GameInstance::Sim(h) => h.sim_disconnect(conn),

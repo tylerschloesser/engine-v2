@@ -468,4 +468,90 @@ which this milestone touches).
 cap (`context-artifacts.test.mjs`); `packages/engine/crates/engine/CLAUDE.md`'s `ABI_VERSION` line
 updated (18 -> 19, `sim_reattach` named, `GameInstance<G>` forwarding called out).
 
+### M24 fix round 1
+
+**1. Admit-phase `Rejected(Engine(EngineFault))` (Planning decisions 2), built.** New export
+`sim_fault_ack(conn, seq) -> status` (`ABI_VERSION` 19 -> 20; `host::Host::fault_ack`, forwarded
+through `GameInstance<G>` -- checked this time, see the anti-vacuity line below). `Host::fault_ack`
+pushes `Outcome { seq, Err(Rejected::Engine(EngineReject::EngineFault)) }` straight onto `conn`'s own
+(already-reattached) `ConnSlot::pending_results` and raises `ConnSlot::highest_admitted_seq` to at
+least `seq`, so a resend of that exact `seq` is dropped at the `on_uplink` dedup floor rather than
+re-admitted (and, for a deterministically-panicking action, re-trapped). Unlike the `ApplyRecord`
+case (`pending_fault_acks`, drained by `connect`/`reattach` because replay has no live `ConnSlot` to
+push into yet), an `Admit`-phase trap is discovered by the *live* caller *after* `reattach` has
+already run, so this writes straight into the slot instead.
+
+`server.ts`'s `SimHost` tracks `inFlightAdmitConn: number | null`, set immediately before and cleared
+immediately after each `sim.simAdmit()` call inside `accept()`'s own `connection.onMessage` --
+the one place that knows *which connection* an admit was for (`ProgressCursor.record` is the `seq`,
+already correct since steps 1-3; the cursor never carried `conn`, exactly the gap the orchestrator's
+ruling asked me to close on the TS side instead of widening the region). `recover()` reads (and
+unconditionally clears) both this and the *original* dead instance's own `Progress` cursor before
+`recoveryDeps.instance` is ever reassigned to the fresh instance -- the only point either is still
+readable -- and, only when `phase === Admit`, calls `sim_fault_ack` once re-attach has finished.
+
+**Loss window check (the orchestrator's own question):** actions admitted earlier in the same
+`on_uplink` batch, or from an earlier batch in the same tick window, before the trap -- are they
+lost? Yes: `Host::on_uplink` pushes each successfully-admitted action into `self.pending_records`
+(in-memory only) and `sim_seal_frame` (which turns it into logged bytes) runs once per tick, at the
+*start* of `SimHost.runOneTick`, not per `on_uplink` call -- so anything admitted since the last
+`sim_seal_frame` dies with the instance, unlogged. This is exactly 0005's own stated loss window
+("Tab close, worker or renderer crash, WASM panic | Admitted actions lost: 0 (at most the one
+in-flight frame)") -- not a new gap, and not something this milestone builds resend for (0004/0013's
+own reconnect-resend contract already covers "the client resends whatever it never got acked for
+after a resync"; wiring that resync is M28b's, Non-scope here per the brief itself).
+
+**Tests:** `panic_in_admit_recovers_and_rejects_engine_fault` now decodes the real downlink frame
+(`decodeActionResults`: a fresh client-role instance's own `on_frame`/`client_poll_ui`, the same wire
+path `client.ts`'s `pollActionResults` uses, not a hand-rolled JSON assertion) and asserts `{ seq: 1,
+result: { Rejected: { Engine: 'EngineFault' } } }` is present -- confirmed against a real fork's own
+read of `client.ts`'s `ActionOutcome` type, since no existing test decoded this shape before. New
+`admit_fault_ack_resend_is_dropped_not_retrapped`: resends the same `PanicInAdmit` `seq` after
+recovery and asserts no second trap and `onRecovered` never fires again. Both now go through
+`admitViaConnection` (a real `connection.onMessage` call, not a raw `sim.call2`), since
+`inFlightAdmitConn` tracking depends on the admit actually flowing through `SimHost.accept()`'s own
+wiring.
+
+**Anti-vacuity:**
+- Disabled the whole `sim_fault_ack` call in `SimHost.recover()`: `panic_in_admit_recovers_and_
+  rejects_engine_fault` -> `AssertionError: expected [] to deeply equally contain { seq: 1, ... }`;
+  `admit_fault_ack_resend_is_dropped_not_retrapped` -> `AssertionError: expected true to be false`
+  (the resend re-trapped). Reverted, green.
+- Disabled only the `highest_admitted_seq` bump inside `Host::fault_ack` (kept the ack push):
+  `admit_fault_ack_resend_is_dropped_not_retrapped` -> the same `expected true to be false` (the
+  resend re-trapped even though the ack itself still arrived) -- isolates the dedup-floor half from
+  the ack-delivery half. Reverted, green.
+- The `GameInstance<G>` forward for `sim_fault_ack` was written correctly the first time (the
+  earlier miss for `sim_reattach` was a live bug, not a rehearsed injection) -- checked by temporarily
+  deleting it and confirming `sim_fault_ack` fell back to `Status::Unsupported` the same way
+  `sim_reattach` originally did (`admit_fault_ack_resend_is_dropped_not_retrapped` failed the same
+  way as the "no bump" injection above, since a no-op `fault_ack` never raises the dedup floor
+  either). Reverted, green.
+
+**2. Native `testing::replay`/`testing::heavy` now honour `Skip`, built.** `scan_skip_targets`
+(collects every `Skip` record's own `offset` field over the whole log, mirroring `Host::sim_replay_
+scan_push`'s reasoning exactly) and `filter_records` (the real apply pass: an `Action` record whose
+own absolute `record_offsets[i]` -- already reader-relative-from-byte-0 for these functions, unlike
+`Host`'s own `replay_base_offset`-adjusted version -- is a scan target is never applied, but still
+returned so the caller can `record_ack` it) replace the old single-pass `to_record`. `replay` calls
+`record_ack` on its one `Sim`; `heavy` calls it on *both* `sim_a`/`sim_b`, or their own A-vs-B
+divergence check would trip for a reason having nothing to do with what it exists to detect.
+`replay_rebuilds_last_seq`'s own hand-rolled replay loop updated the same way (it used `to_record`
+too). New `fx-panicky` test `replay_with_skip_matches_generic_testing_replay`: builds one
+`Skip`-bearing log (the same shape every other `skip_replay.rs` test uses), replays it through
+`Host<Panicky>`'s own two-pass ABI drivers (the "recovering host") and through the generic
+`engine::testing::replay`, and asserts the two independent implementations reach the identical hash.
+Anti-vacuity: with `scan_skip_targets` forced to return an empty set, the new test failed with
+`left: [(Tick(2), 9800360619973041494)] right: [(Tick(2), 8842685379741079622)]` (the generic path
+applied the poisoned record for real). Reverted, green. No existing golden moved (`replay`/`heavy`
+are test-only functions with no golden of their own; every fixture's own `golden.json`/`.hash` files
+are untouched, confirmed by re-running `pnpm test rust`/`pnpm test wasm` with no `pnpm golden`/
+`pnpm golden:bytes` call anywhere in this fix round).
+
+**Measured (fix round 1):** `ABI_VERSION` 19 -> 20. `pnpm test`: `rust pass 529` (528 + the new
+`fx-panicky` test), `unit pass 251`, `wasm pass 123` (122 + the new resend test;
+`panic_in_admit_recovers_and_rejects_engine_fault` was strengthened in place, not added),
+`browser pass 200`. `pnpm lint`: all green. `node scripts/repeat.mjs browser 5`: `pass=5 fail=0
+hang=0`.
+
 ADR note: 0009 `HostServices` had no member through which a *server* host learns of `onFatal` (0005 Panic recovery 4). 0024 §5 adds `HostServices.onFatal?`; this brief exposes `SimHost.onFatal` and M27 maps it.

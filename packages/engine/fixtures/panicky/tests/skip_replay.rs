@@ -208,6 +208,43 @@ fn replay_with_skip_is_deterministic() {
     );
 }
 
+/// M24 fix round 1: the *generic* `engine::testing::replay` (used by every game's own goldens, not
+/// only `Host<G>`'s own two-pass ABI drivers) must honour `Skip` too -- it is another replay path
+/// 0005 Consequences names ("recovery, skip records ... each need a scripted test"), and until this
+/// fix it silently applied a poisoned record for real (`to_record`'s own `FrameRecord::Skip { .. }
+/// => None` arm only ever no-op'd the `Skip` record's own frame, never the record it targets).
+/// Builds one Skip-bearing log (the same shape every other test here uses) and checks that the
+/// *recovering host* (`Host<Panicky>`'s own two-pass `sim_replay_scan_*`/`sim_replay_*`, exactly
+/// `replay()` above) and the *generic* `engine::testing::replay` reach the identical hash at the
+/// final tick -- proving the two independent replay implementations agree on what `Skip` means.
+#[test]
+fn replay_with_skip_matches_generic_testing_replay() {
+    let (mut log, offset, _player) = build_log_with_one_action();
+    let mut scratch = engine::host::Host::<Panicky>::genesis_for_test(params());
+    let mut skip_buf = vec![0u8; 64];
+    let skip_len = scratch
+        .sim_log_skip(0, offset as u32, &mut skip_buf)
+        .expect("sim_log_skip must succeed");
+    log.extend_from_slice(&skip_buf[..skip_len as usize]);
+
+    let mut recovered = engine::host::Host::<Panicky>::genesis_for_test(params());
+    replay(&mut recovered, &log);
+    let recovered_sim = recovered.sim().expect("replay must leave a live Sim");
+    let recovered_tick = recovered_sim.tick();
+    let recovered_hash = recovered_sim.state_hash();
+
+    let generic = engine::testing::replay::<Panicky>(
+        engine::testing::Base::Genesis(params()),
+        &log,
+        &[recovered_tick],
+    );
+    assert_eq!(
+        generic,
+        vec![(recovered_tick, recovered_hash)],
+        "engine::testing::replay must honour the Skip record the same way Host::sim_replay_* does"
+    );
+}
+
 #[test]
 fn replay_of_a_segment_whose_last_frame_is_skip_then_more_live_frames() {
     // Skip frame appended at the *end* of the segment (as it would be right after recovery),

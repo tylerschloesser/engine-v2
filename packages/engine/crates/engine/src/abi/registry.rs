@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 19;
+pub const ABI_VERSION: u32 = 20;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -184,6 +184,16 @@ pub trait Instance: Sized + 'static {
     /// `sim_connect` so recovery's own re-attach call site can never be confused with a real,
     /// logged (re)connect.
     fn sim_reattach(&mut self, _conn: u32) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/24-recovery-and-migration.md fix round 1 (Planning decisions 2: an `Admit`-phase
+    /// trap "recovers and answers that action `Rejected(Engine(EngineFault))`"): queues that ack
+    /// directly on `conn`'s own (already-reattached) `ConnSlot` and raises its `highest_admitted_seq`
+    /// floor to at least `seq`, so a resend of the exact `seq` that trapped is dropped at admission
+    /// instead of re-admitted (and, for a deterministically-panicking action, re-trapped).
+    /// `host::Host::fault_ack`'s own doc comment has the full reasoning; tolerates an unknown `conn`.
+    fn sim_fault_ack(&mut self, _conn: u32, _seq: u32) -> Status {
         Status::Unsupported
     }
 
@@ -631,6 +641,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_reattach(conn: u32) -> u32 {
             $crate::abi::sim_reattach(&__ENGINE_SLOT, conn) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_fault_ack(conn: u32, seq: u32) -> u32 {
+            $crate::abi::sim_fault_ack(&__ENGINE_SLOT, conn, seq) as u32
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_disconnect(conn: u32) -> u32 {

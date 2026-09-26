@@ -3,8 +3,10 @@
 //! Order of work step 3). Both are driven entirely off [`crate::persist::FrameReader`] and
 //! [`crate::sim::Sim`] -- no `Storage`, manifest or ABI involved (that is M22b's half).
 
+use std::collections::BTreeSet;
+
 use crate::authority::Authority;
-use crate::game::Game;
+use crate::game::{Game, PlayerId};
 use crate::persist::{
     DecodedFrame, FrameProgress, FrameReader, FrameRecord, Identity, SnapshotProgress,
     SnapshotReader, SnapshotWriter,
@@ -40,20 +42,75 @@ pub struct SnapshotBase<G: Game> {
     pub log_ref_tick: u32,
 }
 
-fn to_record<G: Game>(r: &FrameRecord<G>) -> Option<Record<G>>
+/// docs/plan/24-recovery-and-migration.md fix round 1: scans the *whole* log once, collecting
+/// every `Skip { offset, .. }` record's own `offset` field (the payload, not a byte position --
+/// mirrors `Host::sim_replay_scan_push`'s exact reasoning). Native `replay`/`heavy` take one flat
+/// `log: &[u8]` with no segment concept at all, so `segment` is not checked here (there is only
+/// ever "this log" to a native caller); a real multi-segment ambiguity cannot arise since these
+/// functions are never handed more than one segment's own bytes.
+fn scan_skip_targets<G: Game>(log: &[u8]) -> BTreeSet<u32> {
+    let mut targets = BTreeSet::new();
+    let mut reader: FrameReader<G> = FrameReader::new();
+    let mut remaining = log;
+    loop {
+        let progress = match reader.push(remaining) {
+            Ok(p) => p,
+            Err(_) => break,
+        };
+        remaining = &[];
+        let frame: DecodedFrame<G> = match progress {
+            FrameProgress::NeedMore => break,
+            FrameProgress::Frame(f) => f,
+        };
+        for record in &frame.records {
+            if let FrameRecord::Skip { offset, .. } = record {
+                targets.insert(*offset);
+            }
+        }
+    }
+    targets
+}
+
+/// docs/plan/24-recovery-and-migration.md fix round 1: the real apply pass, run *after*
+/// `scan_skip_targets` over the same log. `frame.record_offsets[i]` is already absolute from the
+/// `FrameReader`'s own first-ever byte (`persist::frame::DecodedFrame`'s own doc comment) -- byte 0
+/// of `log`, for every caller here (unlike `Host::sim_replay_push`, which resumes mid-segment and
+/// needs its own `replay_base_offset` added). A matched `Action` record is never applied but must
+/// still advance `last_seq` (Planning decisions 4) -- returned as `acked` so the caller can apply it
+/// to whichever `Sim`(s) it is driving (one for `replay`, two for `heavy`, which must call
+/// `record_ack` on *both* or their own A-vs-B hashes would diverge for a reason having nothing to do
+/// with the divergence check itself).
+fn filter_records<G: Game>(
+    frame: &DecodedFrame<G>,
+    targets: &BTreeSet<u32>,
+) -> (Vec<Record<G>>, Vec<(PlayerId, u32)>)
 where
     G::Action: Clone,
 {
-    match r {
-        FrameRecord::Action { who, seq, action } => Some(Record::Action {
-            who: *who,
-            seq: *seq,
-            action: action.clone(),
-        }),
-        FrameRecord::Connection { who, ev } => Some(Record::Player { who: *who, ev: *ev }),
-        // 0005 "Panic recovery" / this milestone's Non-scope: decodes as a no-op.
-        FrameRecord::Skip { .. } => None,
+    let mut records = Vec::new();
+    let mut acked = Vec::new();
+    for (record, &offset) in frame.records.iter().zip(frame.record_offsets.iter()) {
+        match record {
+            FrameRecord::Action { who, seq, action } => {
+                if targets.contains(&(offset as u32)) {
+                    acked.push((*who, *seq));
+                } else {
+                    records.push(Record::Action {
+                        who: *who,
+                        seq: *seq,
+                        action: action.clone(),
+                    });
+                }
+            }
+            FrameRecord::Connection { who, ev } => {
+                records.push(Record::Player { who: *who, ev: *ev })
+            }
+            // Its own target was already collected by `scan_skip_targets`; the `Skip` record
+            // itself is always a no-op (0005 "Panic recovery").
+            FrameRecord::Skip { .. } => {}
+        }
     }
+    (records, acked)
 }
 
 fn record_checkpoints<G: Game>(
@@ -96,6 +153,10 @@ where
             b.log_ref_tick,
         ),
     };
+    // Fix round 1 (docs/plan/24-recovery-and-migration.md): a whole-log scan pass before any frame
+    // is applied -- a `Skip`'s own target typically lives in an *earlier* frame than the `Skip`
+    // record itself (`Host::sim_replay_scan_*`'s own reasoning, mirrored here).
+    let skip_targets = scan_skip_targets::<G>(log);
     let mut out: Vec<Outcome<G>> = Vec::new();
     let mut reader: FrameReader<G> = FrameReader::new();
     let mut result = Vec::new();
@@ -117,7 +178,10 @@ where
             sim.step(&[], &mut out);
             record_checkpoints(&sim, checkpoints, &mut ci, &mut result);
         }
-        let records: Vec<Record<G>> = frame.records.iter().filter_map(to_record).collect();
+        let (records, acked) = filter_records(&frame, &skip_targets);
+        for (who, seq) in acked {
+            sim.authority_mut().record_ack(who, seq);
+        }
         sim.step(&records, &mut out);
         record_checkpoints(&sim, checkpoints, &mut ci, &mut result);
         reference_tick = frame_tick;
@@ -226,6 +290,8 @@ where
     let mut sim_a = Sim::genesis(base.clone());
     let mut sim_b = Sim::genesis(base.clone());
     let shell_params = base;
+    // Fix round 1 (docs/plan/24-recovery-and-migration.md): see `replay`'s own doc comment.
+    let skip_targets = scan_skip_targets::<G>(log);
     let mut out: Vec<Outcome<G>> = Vec::new();
     let mut reader: FrameReader<G> = FrameReader::new();
     let mut since_snapshot = 0u32;
@@ -244,7 +310,13 @@ where
             step_pair(&mut sim_a, &mut sim_b, &[], &mut out)?;
             maybe_snapshot(&mut sim_b, &shell_params, &mut since_snapshot, every_n);
         }
-        let records: Vec<Record<G>> = frame.records.iter().filter_map(to_record).collect();
+        let (records, acked) = filter_records(&frame, &skip_targets);
+        // Both runs must record the same ack, or their own hashes diverge for a reason unrelated
+        // to what this function exists to detect.
+        for (who, seq) in acked {
+            sim_a.authority_mut().record_ack(who, seq);
+            sim_b.authority_mut().record_ack(who, seq);
+        }
         step_pair(&mut sim_a, &mut sim_b, &records, &mut out)?;
         maybe_snapshot(&mut sim_b, &shell_params, &mut since_snapshot, every_n);
     }
@@ -539,6 +611,7 @@ mod tests {
         // replay rebuild each player's last processed seq").
         let mut sim = Sim::<TGame>::genesis(params());
         let mut out = Vec::new();
+        let skip_targets = scan_skip_targets::<TGame>(&log);
         let mut reader: FrameReader<TGame> = FrameReader::new();
         let mut remaining: &[u8] = &log;
         loop {
@@ -551,7 +624,10 @@ mod tests {
             for _ in 0..frame.tick_delta.saturating_sub(1) {
                 sim.step(&[], &mut out);
             }
-            let records: Vec<Record<TGame>> = frame.records.iter().filter_map(to_record).collect();
+            let (records, acked) = filter_records(&frame, &skip_targets);
+            for (who, seq) in acked {
+                sim.authority_mut().record_ack(who, seq);
+            }
             sim.step(&records, &mut out);
         }
         assert_eq!(sim.authority().store().last_seq(PlayerId(1)), Ok(3));

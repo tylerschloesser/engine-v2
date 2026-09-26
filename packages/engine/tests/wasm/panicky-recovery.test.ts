@@ -87,30 +87,95 @@ function admitAction(sim: EngineInstance, seq: number, action: unknown): number 
   return sim.call2(sim.x.sim_admit, 0, uplinkLen)
 }
 
-/** A minimal 0009 `Connection` double: records every `send` call (never encodes/decodes the real
- * frame bytes -- this file only needs to prove `send` is called again after recovery, and that the
- * same object identity is what `SimHost` keeps calling). */
+/** A minimal 0009 `Connection` double: records every `send` call (proving `SimHost` keeps calling
+ * the same object identity across a recovery) and keeps a copy of the most recently sent frame's
+ * *real* bytes (`len`, not `bytes.length` -- `frame.bytes` is the whole persistent `Tx` region view,
+ * `server.ts`'s own "Orchestrator ruling 2" convention) so a test can decode it for real through a
+ * client-role instance (`decodeActionResults`, below). */
 function fakeConnection(): {
   connection: {
-    send(cls: number, bytes: Uint8Array): void
+    send(cls: number, bytes: Uint8Array, len?: number): void
     close(code: number): void
     onMessage: ((bytes: Uint8Array) => void) | null
     onClose: ((code: number) => void) | null
     readonly datagrams: boolean
   }
   sendCount: () => number
+  lastSent: () => Uint8Array | undefined
 } {
   let sendCount = 0
+  let lastSent: Uint8Array | undefined
   const connection = {
-    send(_cls: number, _bytes: Uint8Array) {
+    send(_cls: number, bytes: Uint8Array, len?: number) {
       sendCount++
+      lastSent = bytes.slice(0, len ?? bytes.length)
     },
     close(_code: number) {},
     onMessage: null as ((bytes: Uint8Array) => void) | null,
     onClose: null as ((code: number) => void) | null,
     datagrams: false,
   }
-  return { connection, sendCount: () => sendCount }
+  return { connection, sendCount: () => sendCount, lastSent: () => lastSent }
+}
+
+/** `admitAction`'s own encoding, but delivered through the real `SimHost.accept()`-wired
+ * `connection.onMessage` (not a raw `sim.call2`) so `SimHost`'s own `inFlightAdmitConn` tracking
+ * (`server.ts`, Planning decisions 2) actually sees this admit in flight -- required for the
+ * `Admit`-phase fault-ack tests, which depend on that tracking to know which `conn` trapped. */
+function admitViaConnection(
+  connection: { onMessage: ((bytes: Uint8Array) => void) | null },
+  seq: number,
+  action: unknown,
+): void {
+  const encoder = instantiate(wasmModule, Role.Client, buildSimInstanceConfig(CFG))
+  const encoderRx = encoder.region(RegionId.Rx)
+  const encoderTx = encoder.region(RegionId.Tx)
+  if (!encoderRx || !encoderTx) throw new Error('a required region is missing')
+  const json = new TextEncoder().encode(JSON.stringify(action))
+  const record = new Uint8Array(8 + json.length)
+  const view = new DataView(record.buffer)
+  view.setUint32(0, seq, true)
+  view.setUint32(4, json.length, true)
+  record.set(json, 8)
+  encoderRx.u8.set(record)
+  const onActionStatus = encoder.call1(encoder.x.on_action, record.length)
+  if (onActionStatus !== Status.Ok) throw new Error(`on_action failed: status ${onActionStatus}`)
+  const uplinkLen = encoder.call1(encoder.x.client_poll_uplink, 0)
+  if (uplinkLen <= 0) throw new Error('client_poll_uplink produced no uplink batch')
+  if (!connection.onMessage)
+    throw new Error('connection.onMessage is not wired (call host.accept first)')
+  connection.onMessage(encoderTx.u8.subarray(0, uplinkLen))
+}
+
+/** Decodes a real sim-built frame's `ActionResults` section (kind `2` of the `client_poll_ui` ring,
+ * `[kind u8][len u32 LE][JSON]`, `src/CLAUDE.md`'s own "Ring records" bullet) through a fresh
+ * client-role instance -- `on_frame` then `client_poll_ui`, the real production decode path
+ * (`client.ts`'s `pollActionResults`), never a hand-rolled wire parser. */
+function decodeActionResults(frameBytes: Uint8Array): Array<{ seq: number; result: unknown }> {
+  const decoder = instantiate(wasmModule, Role.Client, buildSimInstanceConfig(CFG))
+  const downlink = decoder.region(RegionId.Downlink)
+  const ui = decoder.region(RegionId.Ui)
+  if (!downlink || !ui) throw new Error('a required region is missing')
+  downlink.u8.set(frameBytes)
+  const onFrameStatus = decoder.call1(decoder.x.on_frame, frameBytes.length)
+  if (onFrameStatus !== Status.Ok) throw new Error(`on_frame failed: status ${onFrameStatus}`)
+  const uiLen = decoder.call0(decoder.x.client_poll_ui)
+  const bytes = ui.u8.slice(0, uiLen)
+  const results: Array<{ seq: number; result: unknown }> = []
+  let pos = 0
+  while (pos < bytes.length) {
+    const kind = bytes[pos]
+    pos += 1
+    const view = new DataView(bytes.buffer, bytes.byteOffset + pos, 4)
+    const len = view.getUint32(0, true)
+    pos += 4
+    if (kind === 2) {
+      const json = new TextDecoder().decode(bytes.subarray(pos, pos + len))
+      results.push(JSON.parse(json) as { seq: number; result: unknown })
+    }
+    pos += len
+  }
+  return results
 }
 
 /** Builds one `SimHost` wired for recovery: a real `Persistence` over `storage`, `recoveryDeps`
@@ -156,11 +221,12 @@ test('panic_in_admit_recovers_and_rejects_engine_fault', async () => {
   // same, already-durable state as before the doomed admit attempt.
   const storage = memoryStorage()
   const { host, deps } = makeHost(storage)
-  host.accept(fakeConnection().connection)
+  const { connection, lastSent } = fakeConnection()
+  const conn = host.accept(connection)
   host.stepTick(1) // logs+applies Joined/Connected
 
   const before = await snapshotStorage(storage)
-  const result = catchThrown(() => admitAction(deps.instance, 1, 'PanicInAdmit'))
+  const result = catchThrown(() => admitViaConnection(connection, 1, 'PanicInAdmit'))
   expect(result.threw).toBe(true)
   expect(deps.instance.dead).toBe(true)
 
@@ -169,11 +235,53 @@ test('panic_in_admit_recovers_and_rejects_engine_fault', async () => {
   expect(deps.instance.dead).toBe(false)
   await expectStorageUnchanged(storage, before)
 
+  // Planning decisions 2: the client-facing `Ack { seq: 1, Rejected(Engine(EngineFault)) }` rides
+  // this connection's very next frame -- decoded through a real client-role instance, the same
+  // wire path `client.ts`'s own `pollActionResults` uses, not a hand-rolled assertion on JS state.
+  host.stepTick(1)
+  const frameBytes = lastSent()
+  if (!frameBytes) throw new Error('expected a frame to have been sent after recovery')
+  const results = decodeActionResults(frameBytes)
+  expect(results).toContainEqual({ seq: 1, result: { Rejected: { Engine: 'EngineFault' } } })
+
   // The connection is usable again: a real, distinct action from the same player admits and
   // applies normally (recovery did not wedge the connection or the admit pipeline).
-  expect(admitAction(deps.instance, 2, { ArmTickPanic: { at: 999 } })).toBe(Status.Ok)
+  expect(conn).toBe(0)
+  admitViaConnection(connection, 2, { ArmTickPanic: { at: 999 } })
   host.stepTick(1)
   expect(deps.instance.dead).toBe(false)
+})
+
+test('admit_fault_ack_resend_is_dropped_not_retrapped', async () => {
+  // The other half of Planning decisions 2's own "answers ... Rejected(Engine(EngineFault))":
+  // once the client resends the unacked `seq` (0004's own resend contract after a resync), it must
+  // be dropped at the `on_uplink` dedup floor, never re-admitted -- `PanicInAdmit` panics
+  // deterministically, so re-admitting it would re-trap and, after three such episodes, trip the
+  // loop guard (Planning decisions 3) over a single bad action, exactly what decision 2 exists to
+  // prevent.
+  const storage = memoryStorage()
+  const { host, deps } = makeHost(storage)
+  const { connection } = fakeConnection()
+  host.accept(connection)
+  host.stepTick(1)
+
+  catchThrown(() => admitViaConnection(connection, 1, 'PanicInAdmit'))
+  expect(deps.instance.dead).toBe(true)
+  expect(await host.recover()).toBe('resumed')
+
+  let recoveredCalls = 0
+  host.onRecovered = () => {
+    recoveredCalls++
+  }
+  // The exact same seq, resent (still `PanicInAdmit`: if it were re-admitted it would trap again,
+  // deterministically).
+  const resend = catchThrown(() => admitViaConnection(connection, 1, 'PanicInAdmit'))
+  expect(resend.threw).toBe(false)
+  expect(deps.instance.dead).toBe(false)
+  host.stepTick(1)
+  expect(deps.instance.dead).toBe(false)
+  // No second trap means `recover()` was never called again for it -- `onRecovered` never fired.
+  expect(recoveredCalls).toBe(0)
 })
 
 test('panic_in_apply_writes_skip_then_resumes', async () => {
