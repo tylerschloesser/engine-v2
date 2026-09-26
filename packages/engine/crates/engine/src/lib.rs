@@ -15,6 +15,7 @@ pub mod game_instance;
 pub mod gen_queue;
 pub mod hash;
 pub mod host;
+pub mod migrate;
 pub mod noise;
 pub mod persist;
 pub mod presence;

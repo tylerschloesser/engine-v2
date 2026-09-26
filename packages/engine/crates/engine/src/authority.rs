@@ -338,11 +338,14 @@ impl<G: Game> Authority<G> {
         }
     }
 
-    /// Mutable store access (M21, testkit-only in practice): `testkit::fill_world`/`set_next_
-    /// entity_id` need to reach `Store` directly to build a large world without hundreds of
-    /// thousands of individual `Sim::step` calls.
-    #[cfg(any(test, feature = "testing"))]
-    pub fn store_mut(&mut self) -> &mut Store<G> {
+    /// Mutable store access: `testkit::fill_world`/`set_next_entity_id` (feature `testing`) need
+    /// to reach `Store` directly to build a large world without hundreds of thousands of
+    /// individual `Sim::step` calls; `crate::migrate`'s own driver (M24b) is now a second,
+    /// production caller, for the engine-owned carry-over (timer wheel, wake queue, active lists,
+    /// id counter, player `last_seq`/`online`) that bypasses `Game::migrate` entirely (Planning
+    /// decisions 3 of docs/plan/24b-upgrade-and-migration.md). `pub(crate)`, not `pub`: still not
+    /// part of the game-facing surface.
+    pub(crate) fn store_mut(&mut self) -> &mut Store<G> {
         &mut self.store
     }
 

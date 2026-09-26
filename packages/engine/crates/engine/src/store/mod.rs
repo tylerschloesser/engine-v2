@@ -543,6 +543,27 @@ impl<G: Game> Store<G> {
         self.active.compact_all();
     }
 
+    /// `crate::migrate`'s own driver (M24b, Planning decisions 3): raises `next_entity_id` to at
+    /// least `at_least` -- the carried old counter -- without ever lowering it (mirrors this
+    /// field's own invariant, doc comment above: "always `max(current, id + 1)`"). Needed because
+    /// a migrated world may not re-`put_entity` every id the old counter had already passed (an
+    /// entity `migrate` chooses not to carry forward still must never have its old id reused).
+    pub(crate) fn carry_next_entity_id(&mut self, at_least: u32) {
+        self.next_entity_id = self.next_entity_id.max(at_least);
+    }
+
+    /// `crate::migrate`'s own driver (M24b, Planning decisions 3): the engine carries a player's
+    /// `last_seq`/`online` on its own, whether or not `Game::migrate` calls `put_player` for that
+    /// id -- but only onto a slot that already exists (a player `migrate` never re-`put_player`s
+    /// gets no slot at all, like a dropped entity). A no-op on a missing slot, the same tolerant
+    /// convention as `Store::apply`'s `Roster`/`Ack` arms.
+    pub(crate) fn carry_player_meta(&mut self, who: PlayerId, last_seq: u32, online: bool) {
+        if let Some(slot) = self.players.get_mut(&who) {
+            slot.last_seq = last_seq;
+            slot.online = online;
+        }
+    }
+
     /// The undo journal's own pre-image capture / rollback (docs/plan/
     /// 21b-timers-wakeups-and-tickcx.md fix round 1): which systems `id` is truly active in right
     /// now, and restoring it to exactly that set.

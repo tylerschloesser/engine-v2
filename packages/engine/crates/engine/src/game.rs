@@ -112,12 +112,23 @@ pub use crate::client::drawlist::DrawList;
 /// names it at this path.
 pub use crate::presence::{PresenceEntry, PresenceTable};
 
-/// Shell (M24b gives it fields, 0005): the old-schema store `Game::migrate` reads from.
-pub struct OldStore {
-    _private: (),
-}
+/// Real now (M24b, 0005): the old-schema, byte-level store `Game::migrate` reads from. Built by
+/// `crate::migrate` (mirrors the `TickCx`/`FrameView`/`Presence` pattern above: declared once,
+/// here, because `Game::migrate`'s own signature names it at this path); re-exported for the same
+/// reason.
+pub use crate::migrate::OldStore;
 
 /// A `Game::migrate` failure: the old schema cannot be brought forward (0005).
+///
+/// ```
+/// use engine::game::SaveIncompatible;
+///
+/// fn declines() -> Result<(), SaveIncompatible> {
+///     Err(SaveIncompatible)
+/// }
+/// assert_eq!(declines(), Err(SaveIncompatible));
+/// assert_eq!(SaveIncompatible, SaveIncompatible::default());
+/// ```
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct SaveIncompatible;
 
