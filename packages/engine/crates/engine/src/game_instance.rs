@@ -18,6 +18,7 @@ use crate::client::{
 };
 use crate::game::{Clocks, FrameView, Game, PlayerId};
 use crate::host::Host;
+use crate::predict::Prediction;
 use crate::sim::{Applied, Rejected};
 use crate::view;
 use crate::world::{CacheCapacity, ChunkCoord, ChunkDims, TILE_MAX, TILE_MIN, TilePos};
@@ -90,6 +91,20 @@ fn push_result_record<G: Game>(buf: &mut Vec<u8>, seq: u32, result: &Result<Appl
             format!("{{\"seq\":{seq},\"result\":{{\"Rejected\":{{\"Engine\":{reason}}}}}}}")
         }
     };
+    buf.push(UI_RECORD_KIND_ACTION_RESULT);
+    buf.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    buf.extend_from_slice(json.as_bytes());
+}
+
+/// M25 step 7 (docs/plan/25-prediction-core.md; 0003 "How the UI observes state": "a declined
+/// prediction is reported as `NotPredictable` at dispatch"; 0012 Planning decisions: "Statuses are
+/// re-evaluated on every replay ... TypeScript is told once: `NotPredictable` at dispatch"). Same
+/// kind byte and `[kind][len][json]` shape as [`push_result_record`] -- the TS side's
+/// `onActionResult` treats every kind-2 record identically regardless of which side of the round
+/// trip produced it, so no wire/ABI change is needed, only one more value in the JSON's own
+/// `result` repertoire.
+fn push_not_predictable_record(buf: &mut Vec<u8>, seq: u32) {
+    let json = format!("{{\"seq\":{seq},\"result\":\"NotPredictable\"}}");
     buf.push(UI_RECORD_KIND_ACTION_RESULT);
     buf.extend_from_slice(&(json.len() as u32).to_le_bytes());
     buf.extend_from_slice(json.as_bytes());
@@ -945,13 +960,30 @@ where
     /// malformed ring record; `Status::OutOfMemory` when the outbox is already at capacity
     /// (`client::ActionError`'s two variants -- untrusted/backstop cases only, since the ring
     /// producer on main is expected to enforce both before ever writing a record here).
+    ///
+    /// M25 step 7: if the action `ClientCore::on_action` just queued predicted `NotPredictable`
+    /// (this action's own newest, and only just-pushed, pending entry -- `PendingQueue::push` is
+    /// the only thing that can have added one between the call above and here), push one
+    /// `NotPredictable` UI-ring record for it immediately (0003: "surfaced once at dispatch"). A
+    /// local `Rejected`/`Applied` verdict is never surfaced this way (0012: a `Rejected` is a hint,
+    /// never a verdict; an `Applied` ghost is shown by the overlay itself, not a result record).
     fn on_action(&mut self, rx: &[u8]) -> Status {
         match self {
-            GameInstance::Client(c) => match c.core.on_action(rx) {
-                Ok(()) => Status::Ok,
-                Err(ActionError::Malformed) => Status::Decode,
-                Err(ActionError::Full) => Status::OutOfMemory,
-            },
+            GameInstance::Client(c) => {
+                let ClientInstance { core, ui_buf, .. } = c.as_mut();
+                match core.on_action(rx) {
+                    Ok(()) => {
+                        if let Some(p) = core.pending().last()
+                            && matches!(p.status, Prediction::NotPredictable)
+                        {
+                            push_not_predictable_record(ui_buf, p.seq);
+                        }
+                        Status::Ok
+                    }
+                    Err(ActionError::Malformed) => Status::Decode,
+                    Err(ActionError::Full) => Status::OutOfMemory,
+                }
+            }
             _ => Status::Unsupported,
         }
     }

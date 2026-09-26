@@ -92,9 +92,12 @@ export type EngineRejectReason = 'RateLimited' | 'StateBudgetFull' | 'EngineFaul
  * Deviations, "The exact JSON"): `Rejected<G>`'s `Game`/`Engine` tag is preserved, not flattened.
  * `Reject` is the game's own `G::Reject` TS type (`fixtures/puts/bindings/Reject.ts`, or a later
  * game's own); `onActionResult`'s caller supplies it as a type parameter for full typing on both
- * halves. */
+ * halves. `'NotPredictable'` (docs/plan/25-prediction-core.md, `game_instance::
+ * push_not_predictable_record`): a declined prediction, surfaced once at dispatch (0003, 0012) --
+ * never a local `Rejected`, which is a hint and is not surfaced this way at all. */
 export type ActionOutcome<Reject = unknown> =
   | 'Confirmed'
+  | 'NotPredictable'
   | { Rejected: { Game: Reject } }
   | { Rejected: { Engine: EngineRejectReason } }
 
