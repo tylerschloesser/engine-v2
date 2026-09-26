@@ -69,7 +69,8 @@ window.__rejected = 0
 // is fully typed on both halves") -- `result` here is `ActionOutcome<Reject>`, not `unknown`.
 client.onActionResult<Reject>((_seq, result) => {
   if (result === 'Confirmed') window.__confirmed = (window.__confirmed ?? 0) + 1
-  else window.__rejected = (window.__rejected ?? 0) + 1
+  // `NotPredictable` is a hint, not a verdict (0012); the host's verdict for the seq still arrives.
+  else if (result !== 'NotPredictable') window.__rejected = (window.__rejected ?? 0) + 1
 })
 
 window.__dispatchPaint = (x, y) => {

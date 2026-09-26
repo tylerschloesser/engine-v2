@@ -542,7 +542,12 @@ fn predict_replays_per_frame_counter_is_live() {
             break;
         }
     }
-    assert!(replays > 0, "a pending action must have been replayed");
+    // Exactly one action is pending, so exactly one replay: a counter reporting the queue's
+    // capacity or length-plus-one would still be `> 0` and within the ceiling.
+    assert_eq!(
+        replays, 1,
+        "one pending action must be replayed exactly once per frame"
+    );
     engine::testing::budgets::expect_within_budget(
         "counters.predict.replaysPerFrame",
         u64::from(replays),

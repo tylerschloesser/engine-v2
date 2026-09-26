@@ -70,7 +70,11 @@ beforeAll(async () => {
   const port = (server.httpServer?.address() as AddressInfo | null)?.port
   if (port === undefined) throw new Error('plugin-rebuild-error: dev server has no address')
   base = `http://localhost:${port}`
-}, 60_000)
+  // The first build is a cold compile of the whole engine crate in the temp crate's own target
+  // dir, so it grows with the engine (57-68 s on ubuntu-latest by M24c; run 36259062301 hit the
+  // old 60 s). Nothing here measures compile speed; the rebuild-error assertions below are timed
+  // separately.
+}, 180_000)
 
 afterAll(async () => {
   await server?.close()

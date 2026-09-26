@@ -196,6 +196,9 @@ export function createCollectUi(client: Client, doc: Document = document): Colle
   }
 
   function onActionResult(seq: number, result: ActionOutcome<RefReject>): void {
+    // `NotPredictable` is a hint at dispatch (0012); the host's verdict for the same seq follows,
+    // so the seq must stay pending until then.
+    if (result === 'NotPredictable') return
     const key = pendingSeq.get(seq)
     if (key === undefined) return
     pendingSeq.delete(seq)
