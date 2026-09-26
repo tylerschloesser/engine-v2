@@ -235,7 +235,19 @@ function makeWorldOpHandler(
         const result = await new Promise<{ worldId: string }>((resolve, reject) => {
           navigator.locks.request(`world:${targetId}`, { mode: 'exclusive' }, async () => {
             try {
-              resolve(await importWorld(storage, m.bytes, opts))
+              const imported = await importWorld(storage, m.bytes, opts)
+              // Deviations, fix round: `Storage.write`'s own fast path (an already-open scratch
+              // handle) returns before its queued rename/reopen lands (Planning decision 2) --
+              // `importWorld`'s own write loop only drains *that* queue when a later write's own
+              // slow path happens to run first (`#writeViaFreshHandle`'s "drain the previous pending
+              // chain" step). A one-key archive, or one whose last key lands on the fast path, can
+              // otherwise report success before the rename is durable -- invisible to this same
+              // adapter's own `read`/`list` (both consult `#writtenPending` first) but a real race
+              // against any *other* reader of the raw OPFS tree (`world-dump-worker.ts`, a real
+              // world's own next sim worker). `flush()` (0005: "resolves when everything handed over
+              // so far is durable") drains it for real before this responds.
+              await storage.flush()
+              resolve(imported)
             } catch (e) {
               reject(e)
             }

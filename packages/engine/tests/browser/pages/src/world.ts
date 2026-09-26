@@ -363,14 +363,24 @@ paintBtn.addEventListener('click', () => {
 // `resumeWorkers` (`slice.ts`'s own `__worldHash` precedent) -- gated on `!worldBusy` (no sim
 // worker ever came up) and, for the periodic refresh only, on `!controllableDoc.hidden` (a world
 // this page itself paused for the hidden boundary must not be woken back up by an unrelated HUD
-// poll; Deviations records this as a known, deliberately narrow race window rather than a fully
-// serialized guarantee).
+// poll). Step 5 fix round: `parkWorkers`/`resumeWorkers` touch the exact same `W_YIELD`/`W_PARKED`
+// words `client.ts`'s own `hostWorkerLock` (`attachHostLifecycle`, `exportWorld`/`importWorld`/
+// `deleteWorld`) already serializes against each other -- this function was the one caller left
+// outside that lock (steps 3-4's own "known, deliberately narrow race window" note, before step 5
+// added a second, real, non-test caller of the same words). Found live: `resumeWorkers`'s own
+// `{type:'resume'}` re-entering `runBlockingLoop` synchronously, immediately followed by an
+// unguarded `exportWorld()` that (wrongly) believed the worker was still parked and never set
+// `W_YIELD` itself, leaves the worker ticking forever with the queued `export-world` message
+// undelivered -- a true hang, not a timing flake (`export_import_roundtrip_browser`, ~15-20% of
+// runs). Wrapping this function's own body in the same lock closes it for every caller here too.
 async function readHashAndTick(): Promise<{ hash: string; tick: number }> {
-  await parkWorkers(client)
-  const h = await readWorldHash(client)
-  const counters = await simCounters(client)
-  await resumeWorkers(client)
-  return { hash: h, tick: counters.ticksRun }
+  return clientTestHandle(client).hostWorkerLock(async () => {
+    await parkWorkers(client)
+    const h = await readWorldHash(client)
+    const counters = await simCounters(client)
+    await resumeWorkers(client)
+    return { hash: h, tick: counters.ticksRun }
+  })
 }
 window.__worldHash = async () => {
   if (unusable) throw new Error('world.ts: __worldHash called on a busy/load-failed world')
@@ -386,10 +396,12 @@ window.__simTicksRun = () => {
 }
 window.__persistenceDebug = async () => {
   if (unusable) throw new Error('world.ts: __persistenceDebug called on a busy/load-failed world')
-  await parkWorkers(client)
-  const counters = await persistenceCounters(client)
-  await resumeWorkers(client)
-  return counters
+  return clientTestHandle(client).hostWorkerLock(async () => {
+    await parkWorkers(client)
+    const counters = await persistenceCounters(client)
+    await resumeWorkers(client)
+    return counters
+  })
 }
 
 // `hash`/`tick` refresh on discrete events only (page load, a Paint dispatch), never a periodic
