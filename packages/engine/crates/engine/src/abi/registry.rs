@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 24;
+pub const ABI_VERSION: u32 = 25;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -467,6 +467,16 @@ pub trait Instance: Sized + 'static {
     /// (`records == 0`) as an assertion, not only a claim in a `budgets.json` `formula` string.
     /// Same crossing shape as `sim_region_hash`/`client_region_hash`/`client_clock_stats`.
     fn client_ui_stats(&mut self, _result: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/26-prediction-rendering-and-clocks.md, Open gate failures item 3, gate round 1
+    /// (`ABI_VERSION` 24 -> 25), `engine/test` only: `ClientCore::predict_applied_ever` as one LE
+    /// `u32` into `result` (the whole `Result` region) -- proves "a dispatched action was actually
+    /// predicted `Applied`" as a real assertion, the same "coordinator gate" shape `client_ui_
+    /// stats` already set for "ui ran". Same crossing shape as `sim_region_hash`/`client_region_
+    /// hash`/`client_clock_stats`/`client_ui_stats`.
+    fn client_predict_stats(&mut self, _result: &mut [u8]) -> Status {
         Status::Unsupported
     }
 
@@ -940,6 +950,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn client_ui_stats() -> u32 {
             $crate::abi::client_ui_stats(&__ENGINE_SLOT) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_predict_stats() -> u32 {
+            $crate::abi::client_predict_stats(&__ENGINE_SLOT) as u32
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn drawlist_len() -> u32 {

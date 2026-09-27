@@ -131,6 +131,13 @@ export function zeroGcSuite(opts: {
    * fix round 2, docs/plan/09-renderer-terrain.md Deviations. Default 0, every other page
    * unaffected. */
   extraSettleFrames?: number
+  /** Opt-in, page-specific check run once, after the `${pageId} clean` test's own environment/
+   * verdict assertions (never inside a negative-control test, and never inside the measured
+   * window itself: `run()` above has already finished by the time this fires) -- `gc-slice.ts`'s
+   * own `predictStats` check (docs/plan/26-prediction-rendering-and-clocks.md, Open gate failures
+   * item 3, gate round 1) is the first caller. Every other page passes nothing, so this is a no-op
+   * for them. */
+  afterClean?: (page: Page) => Promise<void>
 }): void {
   const budgets = gcPage(opts.pageId)
   const isolates = Object.keys(budgets.isolates)
@@ -153,6 +160,7 @@ export function zeroGcSuite(opts: {
     }
     const expected = expectedVerdict(isolates, null, isolateClasses)
     expect(r.verdict, detail(r)).toEqual({ pass: true, ...expected })
+    await opts.afterClean?.(page)
   })
 
   if (controlKinds.includes('object') || controlKinds.includes('burst')) {

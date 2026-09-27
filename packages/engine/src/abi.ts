@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 24
+export const ABI_VERSION = 25
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -297,6 +297,11 @@ export const ABI_EXPORTS = {
   // ordinary call, since this writes nothing of its own before panicking). Test-only by
   // convention: reached only through `engine/test`'s `trapSim`.
   sim_test_trap: { role: 'sim', params: 0, result: 'status' },
+  // docs/plan/26-prediction-rendering-and-clocks.md, Open gate failures item 3, gate round 1
+  // (`ABI_VERSION` 24 -> 25), `engine/test` only: `ClientCore::predict_applied_ever` as one LE
+  // `u32` into `Result` -- proves "a dispatched action was actually predicted `Applied`" as a
+  // real assertion, the same shape `client_ui_stats` already set for "ui ran".
+  client_predict_stats: { role: 'client', params: 0, result: 'status' },
 } as const satisfies Record<string, ExportSpec>
 
 export function statusName(n: number): string {

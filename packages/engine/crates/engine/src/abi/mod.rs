@@ -534,6 +534,19 @@ pub fn client_ui_stats<T: Instance>(slot: &Slot<T>) -> Status {
     rt.inst.client_ui_stats(result)
 }
 
+/// `client_predict_stats() -> status`: `ClientCore::predict_applied_ever` as one LE `u32` into
+/// `Result` (docs/plan/26-prediction-rendering-and-clocks.md, Open gate failures item 3, gate
+/// round 1; `Instance::client_predict_stats`'s own doc comment). `engine/test`-only
+/// (`predictStats`).
+pub fn client_predict_stats<T: Instance>(slot: &Slot<T>) -> Status {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.client_predict_stats(result)
+}
+
 /// `sim_conn_counters(conn) -> status`: `host::ConnCounters` for `conn`, little-endian into
 /// `Result` (`Instance::sim_conn_counters`'s own doc comment names the field order and byte
 /// count). `engine/test`-only (`netCounters`).

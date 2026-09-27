@@ -162,6 +162,12 @@ pub struct ClientCore<G: Game> {
     /// `CachedCameraView`'s own doc comment (`game_instance.rs`) already accepts for
     /// `on_frame`'s own reuse of the last real `frame()` call's camera-derived fields.
     last_tick_fraction: f32,
+    /// Open gate failures item 3, gate round 1: how many dispatch-time predictions ([`Self::
+    /// on_action`]'s own one-shot `predict` call, 0012 "at dispatch the action is applied once")
+    /// have ever come back [`Prediction::Applied`], over this instance's whole lifetime -- proves
+    /// "a dispatched action was actually predicted" as a real assertion (`client_predict_stats`,
+    /// test-only) rather than a claim resting on the shape of the fixture alone. Never decremented.
+    predict_applied_ever: u32,
 }
 
 impl<G: Game> ClientCore<G> {
@@ -203,6 +209,7 @@ impl<G: Game> ClientCore<G> {
             correction: 0.0,
             correction_set_at: Tick(0),
             last_tick_fraction: 0.0,
+            predict_applied_ever: 0,
         }
     }
 
@@ -241,6 +248,9 @@ impl<G: Game> ClientCore<G> {
         let base = &*replica as &dyn WorldRead<G>;
         let status =
             crate::predict::predict(base, registry, overlay, who, predicted_tick, seq, &action);
+        if matches!(status, Prediction::Applied) {
+            self.predict_applied_ever = self.predict_applied_ever.saturating_add(1);
+        }
         self.pending.push(Pending {
             seq,
             action,
@@ -443,6 +453,12 @@ impl<G: Game> ClientCore<G> {
     /// 26-prediction-rendering-and-clocks.md Budgets: `overlay_diff_entries`).
     pub fn overlay_diff_entries(&self) -> u32 {
         self.overlay_diff_entries_last
+    }
+
+    /// Cumulative count of dispatch-time predictions that came back [`Prediction::Applied`], ever
+    /// (`client_predict_stats`, test-only; Open gate failures item 3, gate round 1).
+    pub fn predict_applied_ever(&self) -> u32 {
+        self.predict_applied_ever
     }
 
     pub fn drain_dirty(&mut self, f: impl FnMut(crate::world::ChunkCoord)) {

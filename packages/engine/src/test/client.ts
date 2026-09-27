@@ -738,6 +738,18 @@ export async function uiObserverStats(client: Client): Promise<{ calls: number; 
   return { calls: view.getUint32(0, true), records: view.getUint32(4, true) }
 }
 
+/** docs/plan/26-prediction-rendering-and-clocks.md, Open gate failures item 3, gate round 1:
+ * `ClientCore::predict_applied_ever` (`client_predict_stats`) -- cumulative count of dispatch-time
+ * predictions that came back `Applied`, ever. Requires the client worker parked. */
+export async function predictStats(client: Client): Promise<{ appliedEver: number }> {
+  const { value, result } = await callParked(client, 'client', 'client_predict_stats', [], 4)
+  if (value !== Status.Ok) {
+    throw new Error(`predictStats: client_predict_stats failed: status ${value}`)
+  }
+  const view = new DataView(result.buffer, result.byteOffset, result.byteLength)
+  return { appliedEver: view.getUint32(0, true) }
+}
+
 /** docs/plan/16b-ui-observation-and-clock.md, `engine/test`: forces `UiObserver::mark_dirty()`
  * (`client_ui_mark_dirty`, a test-only ABI export -- see that milestone's Deviations, "the dirty
  * flag has no browser-reachable setter yet"), the same "reached directly by name through

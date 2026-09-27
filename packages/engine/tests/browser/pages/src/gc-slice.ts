@@ -32,6 +32,7 @@ import {
   type NetCounters,
   netCounters,
   parkWorkers,
+  predictStats,
   pumpUntilLive,
   stepSimTickSync,
 } from '../../../../src/test/client.ts'
@@ -43,6 +44,11 @@ declare global {
   interface Window {
     __pageReady?: true
     __netCounters?: (conn?: number) => Promise<NetCounters>
+    /** docs/plan/26-prediction-rendering-and-clocks.md, Open gate failures item 3, gate round 1:
+     * `ClientCore::predict_applied_ever`, read outside the measured zero-GC window (parks the
+     * client worker itself -- `predictStats`'s own precondition -- so this is never called from
+     * inside `drive()`). */
+    __predictStats?: () => Promise<{ appliedEver: number }>
   }
 }
 
@@ -102,12 +108,23 @@ const target = device.device.createTexture({
     GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC | GPUTextureUsage.TEXTURE_BINDING,
 })
 
-// Built once (`.claude/rules/hot-paths.md`): one `Paint` action's JSON, at a tile far from the
-// panned view (`fx-puts`'s own `Puts::admit` never rejects a Paint this close to the origin --
-// `PAINT_BOUND` is 1,000,000 -- so every dispatch here is `Confirmed`, matching `gc-connected-
-// terrain.ts`'s own "no controls beyond object/burst" shape: nothing here needs a `Rejected` path).
+// Built once (`.claude/rules/hot-paths.md`): one `Paint` action's JSON, at the camera's own
+// starting centre tile (docs/plan/26-prediction-rendering-and-clocks.md, Open gate failures item
+// 3, gate round 1) -- a tile the replica actually holds (subscribed, since it is inside the panned
+// view from frame 0) rather than the original `(500, 500)`, "far from the panned view": a blind
+// write to an unheld chunk always predicts `NotPredictable` (`.claude/rules/prediction.md`,
+// `Predicting::set_tile`'s own doc comment: "A blind write outside the subscription sets
+// `saw_unknown` too"), so the original position never actually exercised the predict path this
+// milestone's own code added -- found live, not merely suspected (`predictStats`'s own assertion
+// below fails at `(500, 500)`, reverted). The camera drifts at most `PAN_TILES_PER_SECOND *
+// (FRAMES / 60)` tiles away from this tile over the whole run (600 frames, 0016's own `instrument.
+// ts` -- 80 tiles at 8 tiles/s), comfortably inside the 0010 subscription hold radius (ring 3, ~96
+// tiles beyond the visible rect), so this chunk stays held and predictable for the entire window,
+// not just the first dispatch. `fx-puts`'s own `Puts::admit` never rejects a Paint this close to
+// the origin either (`PAINT_BOUND` is 1,000,000), so every dispatch here is still `Confirmed`,
+// matching `gc-connected-terrain.ts`'s own "no controls beyond object/burst" shape.
 const PAINT_JSON_BYTES = new TextEncoder().encode(
-  JSON.stringify({ Paint: { pos: { x: 500, y: 500 }, base: 1, resource: 2 } }),
+  JSON.stringify({ Paint: { pos: { x: 0, y: 8 }, base: 1, resource: 2 } }),
 )
 // Every 30 frames (0.5 s at 60 Hz): frequent enough that several results land inside a 600-frame
 // measured window (proving the result path's own cost is real, not accidentally never exercised --
@@ -136,5 +153,9 @@ installGcPage(harness, {
 })
 
 window.__netCounters = () => netCounters(client)
+window.__predictStats = async () => {
+  await parkWorkers(client)
+  return predictStats(client)
+}
 
 window.__pageReady = true

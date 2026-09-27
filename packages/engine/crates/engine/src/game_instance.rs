@@ -1168,6 +1168,19 @@ where
             _ => Status::Unsupported,
         }
     }
+
+    fn client_predict_stats(&mut self, result: &mut [u8]) -> Status {
+        match self {
+            GameInstance::Client(c) => {
+                let Some(out) = result.get_mut(..4) else {
+                    return Status::BadLength;
+                };
+                out[0..4].copy_from_slice(&c.core.predict_applied_ever().to_le_bytes());
+                Status::Ok
+            }
+            _ => Status::Unsupported,
+        }
+    }
 }
 
 #[cfg(test)]
