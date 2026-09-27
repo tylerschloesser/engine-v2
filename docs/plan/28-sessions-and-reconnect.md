@@ -480,3 +480,47 @@ none (the device check for reconnect timing is attached to M29)
   (whole, once): 202/204 green -- the two red tests above, both pre-existing, both reported rather
   than fixed. `pnpm test netcode -t handshake` 9/9, `-t liveness` 5/5, `pnpm test rust -t session`
   12/12, `pnpm test browser -t secret` 1/1 (all four of this brief's own named Verification commands).
+
+**Gate round 2 (orchestrator): both remaining reds traced to one root cause, fixed; no test
+changed.** `reference_collect_flow` was M28's own regression (bisect `d6711b5..HEAD`, per-step
+timeout raised to 580 s to avoid the first bisect's own false-timeout result): first bad commit
+`3d2089c` (step 2), exactly where `Host::attach` was introduced -- the same commit, independently,
+as the earlier `replica_hash_equals_host_in_browser` bisect, but a *different* line of it.
+
+**Mechanism (one bug, both symptoms):** `Host::attach` (`host/mod.rs`) parsed the Hello tail's
+`CameraReport` and fed it straight into `ConnSlot.camera` (`camera` field-shorthand in the
+`ConnSlot` struct literal) -- but `client_hello()` always sends a *well-formed*, merely zeroed
+report (0013: "no real camera exists yet" at Hello-time), so `CameraReport::read` always succeeds,
+making `camera` `Some(zeroed)`, never `None`. This directly contradicts this brief's own Scope
+("Hello tail = camera report + optional resume, which M28 ignores") and diverges from `Host::
+connect`'s own precedent (`camera: None`, unconditionally). `Sim::step`'s own per-connection
+`if let Some(camera) = slot.camera { slot.subs.update(camera, completed) }` (the *only* gate on
+forming a subscription at all) therefore ran on the very tick `attach` resolved -- during a
+browser page's own `pumpUntilLive` bootstrap, before any test ever sets a real camera -- and a
+zeroed report clamps up to `MIN_HALF_TILES` (`host/subs.rs`), subscribing a real rectangle around
+world (0, 0) immediately. Two independent, previously-unexplained symptoms both trace to this:
+`overlay_tile_reaches_screen`'s step 1 (`GRASS` expected) read back `WATER` because chunk (0, 0)'s
+overlay (painted, unavoidably, on the very first real tick `fx-puts`'s own `tick % 20 == 0` rule
+fires on) was already snapshotted to this connection by the time the test's own "zero host ticks"
+assertion ran; `reference_collect_flow`'s `client_poll_ui()` fired exactly once (an early,
+attach-triggered "replica changed" `ui()` call, spring still at its uninitialised default) and
+never again, because the connection's subscription had already mostly formed before the test's own
+`panTo` ever ran, leaving nothing new to downlink.
+
+**Fix** (`host/mod.rs`, `Host::attach`): stop feeding the parsed camera into `ConnSlot.camera` --
+it now starts `None` there too, exactly like `connect()`. The tail is still read (so a future M28b
+resume-hint parse extends the same call site unmodified), the result just discarded. No ABI change,
+no wire change, no test change: this restores the exact pre-M28 behaviour (no subscription forms
+until this connection's own first real uplink camera report arrives, `on_uplink`'s own `if let
+Some(camera) = batch.camera` path, unaffected). `overlay_tile_reaches_screen`'s own tick-0
+assumption (module comment: "provable only strictly before any host tick runs at all") is true
+again, unconditionally -- no "read the tick, step to a boundary" workaround needed or added.
+
+Verified: `overlay_tile_reaches_screen`, `reference_collect_flow`, `reference_several_buttons`,
+`reference_pan_out_cancels`, `reference_ui_smoke_collect_and_inventory` all pass together
+(`pnpm test browser -t` matching all five, one run). `pnpm test rust` 612/612 (unaffected). `pnpm
+test browser` (whole): 204/204 -- two runs back-to-back under heavy same-day machine load (average
+~5.5) hit an unrelated 30 s Playwright timeout on `reference_ui_smoke_collect_and_inventory` (a
+static button-overlap-intercepts-click wait, not a session/handshake failure; passes alone every
+time, and passed in the whole suite once load settled, 34 s well under the 48 s budget) -- reported
+as a load-dependent flake, not chased further. `pnpm lint` green.
