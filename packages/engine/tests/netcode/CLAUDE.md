@@ -50,7 +50,13 @@ scenario that cares about identity, else `deterministicSecret(seed, i)` (reprodu
 `crypto.getRandomValues`). `harness.advanceTicks`/`settle` await `serverInternals(server).
 handshakesSettled()` (a real `crypto.subtle.digest` needs a genuine `await`, not an incidental
 microtask yield). `harness.connectRaw(): Connection` is a raw, `HeadlessClient`-free end for a
-scenario that hand-writes its own handshake bytes (`Reject`/timeout paths, M28's step 3).
+scenario that hand-writes its own handshake bytes (`Reject`/`Superseded`/timeout paths,
+`handshake.test.ts`, M28 step 3) -- `support.ts`'s `buildHelloBytes(wasm, { secret, joinKey,
+buildHash })` builds real `client_hello()` bytes off a throwaway `Role.Client` instance for it.
+`harness.addClient(secret?)` reuses a *specific* secret (a returning or superseding identity)
+instead of the default `deterministicSecret(seed, i)`. `liveness.test.ts` tests `src/net/link.ts`'s
+`createLink` (dead timer/probe/backoff) directly, over `createManualClock()`, with no harness or
+transport at all -- it never parses a frame, so it needs neither.
 
 ## Fixtures
 
