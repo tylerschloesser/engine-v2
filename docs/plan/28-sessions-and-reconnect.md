@@ -321,3 +321,5 @@ none (the device check for reconnect timing is attached to M29)
   Proven to fail with heartbeat forced off (not committed): zero such ticks.
 - `pnpm lint`: green throughout (biome, rustfmt, clippy, tsc). Final `node scripts/repeat.mjs
   netcode 20`: 20/20. `pnpm test wasm`: 156/156. `pnpm test rust -t host`: 23/23.
+
+**Open gate failures (orchestrator, after steps 1-4, on `cd33857`):** full `pnpm test`: rust 612, unit 286, wasm 156, netcode 24 green; **`browser` red on 6**: `[chromium] replica_hash_equals_host_in_browser`, `[chromium] progress_from_done_at_and_clock`, `[reference] reference_collect_flow`, `reference_several_buttons`, `reference_pan_out_cancels`, `reference_ui_smoke_collect_and_inventory` (a collect button never disables). The browser path still takes `sim_connect` until step 5, so a step 1-4 change broke it; bisect `d6711b5..cd33857` before fixing.
