@@ -8,7 +8,10 @@
 const STORAGE_KEY = 'engine.playerSecret'
 const SECRET_LEN = 16
 
-function hexEncode(bytes: Uint8Array): string {
+/** Lowercase hex, `TerrainConfig.secret`'s own shape (`game_instance.rs`): `src/client.ts`'s
+ * step-5 call site needs this to build the linked client worker's own `game` config, and this
+ * module is the one place that already owns the encode/decode pair for `STORAGE_KEY`. */
+export function hexEncode(bytes: Uint8Array): string {
   let out = ''
   for (let i = 0; i < bytes.length; i++) {
     const b = bytes[i] as number

@@ -8,6 +8,7 @@ import { cameraStorageKey, restoreCameraState, saveCameraState } from './camera/
 import { CameraState, copyCameraState } from './camera/state.js'
 import type { CameraViewport, ScreenPoint } from './camera/transform.js'
 import { screenToWorld, worldToScreen } from './camera/transform.js'
+import { hexEncode, loadOrMintSecret } from './client/secret.js'
 import type { Clock, Scheduler } from './clock.js'
 import { systemClock, systemScheduler } from './clock.js'
 import { CLOCK_FIELD, ClockBlockView, readClockBlockInto, SessionState } from './clock-block.js'
@@ -45,6 +46,7 @@ import {
   seedToHexU64,
 } from './sim-config.js'
 import type {
+  ClientLifecycleMessage,
   FromWorker,
   SimLifecycleMessage,
   SimWorldOpResult,
@@ -681,6 +683,13 @@ function setupWorker(
    * already uses -- an export/import/delete request can arrive long after `ready`/`reject` settled
    * this function's own promise. Only the `sim` worker ever posts one. */
   onWorldOp: (m: SimWorldOpResult) => void,
+  /** docs/plan/28-sessions-and-reconnect.md step 5: forwards the one `client-welcome` message a
+   * linked `client`-kind worker ever posts (`ClientLifecycleMessage`), same "not only during this
+   * handshake window" convention as `onLifecycle`/`onWorldOp` -- `Welcome` can apply well after
+   * `ready` settled (`ready` itself waits for it, for a linked topology, but this callback exists
+   * so a redundant `if (settled) return` isn't needed here either). Only the `client` worker ever
+   * posts one. */
+  onWelcome: (m: ClientLifecycleMessage) => void,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false
@@ -730,6 +739,8 @@ function setupWorker(
         m.type === 'world-op-error'
       ) {
         onWorldOp(m)
+      } else if (m.type === 'client-welcome') {
+        onWelcome(m)
       }
     }
     const setup: ToWorker = {
@@ -1190,6 +1201,14 @@ export function createClient(options: ClientOptions): Client {
     }
   }
 
+  // docs/plan/28-sessions-and-reconnect.md step 5: the linked client worker's own one-off
+  // `client-welcome` message (`worker/client-net.ts`'s `NetPumpHandshake.onAttached`) -- only main
+  // can call `cameraIntegrator.setViewClamp` (0019 §1), so this is the one place `Welcome`'s own
+  // view clamps actually reach the camera.
+  function onWelcome(m: ClientLifecycleMessage): void {
+    cameraIntegrator.setViewClamp(m.viewMaxTilesPerAxis)
+  }
+
   // docs/plan/23-persistence-opfs-and-lifecycle.md step 5: `exportWorld`/`importWorld`/`deleteWorld`
   // (Seams), plus the shared lock `attachHostLifecycle` also uses (Rules and traps, "serialize
   // them"). `hostOpChain` is the lock's own FIFO promise chain; `.catch(() => {})` on the *stored*
@@ -1468,6 +1487,23 @@ export function createClient(options: ClientOptions): Client {
       (worldConfig
         ? { seed: seedToHexU64(worldConfig.params.seed), params: worldConfig.params.worldgen }
         : null)
+    // docs/plan/28-sessions-and-reconnect.md step 5 (Scope: "single-player takes the same path ...
+    // the client worker config carries `{ secret, joinKey: \"\", buildHash }`"): only when linked
+    // (a real Hello/Welcome round trip happens) and only when `options.test.game` did not already
+    // win outright (the same escape hatch `simGame`/`game` above defer to). `loadOrMintSecret` is
+    // browser-only (`localStorage`), called exactly once per `createClient()`, here -- not inside
+    // the worker, which has no `localStorage` of its own to be the one accessor of (Planning
+    // decisions "the secret has one accessor").
+    const clientGame =
+      options.test?.game ??
+      (linked && game
+        ? {
+            ...game,
+            secret: hexEncode(loadOrMintSecret()),
+            joinKey: worldConfig?.joinKey ?? '',
+            buildHash: options.wasm.buildHash,
+          }
+        : game)
 
     type Spawn = { kind: WorkerKind; index: number; arenaBytes: number }
     const spawns: Spawn[] = [{ kind: 'client', index: WORKER_CLIENT, arenaBytes: arenas.client }]
@@ -1487,7 +1523,10 @@ export function createClient(options: ClientOptions): Client {
     const waits = spawns.map(({ kind, index, arenaBytes }) => {
       const worker = spawnWorker(options)
       workers.push({ kind, index, worker })
-      const config: InstanceConfig = { arenaBytes, game: kind === 'sim' ? simGame : game }
+      const config: InstanceConfig = {
+        arenaBytes,
+        game: kind === 'sim' ? simGame : kind === 'client' ? clientGame : game,
+      }
       const wasm: { module?: WebAssembly.Module; url?: string } = {}
       if (kind !== 'net') {
         if (module) wasm.module = module
@@ -1517,6 +1556,7 @@ export function createClient(options: ClientOptions): Client {
         world,
         onLifecycle,
         onWorldOp,
+        onWelcome,
       )
     })
     await Promise.all(waits)

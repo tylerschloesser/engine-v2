@@ -16,6 +16,7 @@ import {
   buildReject,
   CloseCode,
   ProtocolError,
+  parseBuildHash32,
   parseHello,
   RejectReason,
   rejectReasonCloseCode,
@@ -385,6 +386,19 @@ export interface SimHost {
    * tick boundary (`pumpHandshakes`) -- a caller wants a tick of its own after this resolves, not
    * instead of it. Resolves immediately when `handshake` was never given. */
   handshakesSettled(): Promise<void>
+  /** docs/plan/28-sessions-and-reconnect.md step 5: whether any secret digest/allocate is
+   * currently in flight -- a plain sync read (`inFlightHandshakes.size > 0`), `worker/sim.ts`'s own
+   * signal to call `shell.runAsync(() => simHost.handshakesSettled())`, the exact same "leave the
+   * `Atomics.wait`-blocked loop while `fn` resolves" pattern that worker's own `opfsAdapter.
+   * pendingAsync()` already uses (M23 fix round 1). Without this, a fire-and-forget `crypto.subtle.
+   * digest()` started from inside a body() pass never gets a chance to resolve: `Atomics.wait`
+   * blocks this thread's own microtask queue too, so nothing schedules the digest's completion
+   * until the loop actually leaves and returns control to the real event loop (found live: a real
+   * browser single-player page hung indefinitely -- `pnpm test browser -t
+   * replica_hash_equals_host_in_browser` -- the very first time this milestone wired a real
+   * handshake into a linked sim worker; `createWorldServer`, which never runs inside this loop, was
+   * never affected). Always `false` when `handshake` was never given. */
+  readonly hasInFlightHandshakes: boolean
   /**
    * docs/plan/24-recovery-and-migration.md (0005 Panic recovery 2-4): call this once the caller has
    * observed the current instance trap (an `EngineTrap` from any `SimInstance` call). Disarms
@@ -539,6 +553,21 @@ export function createSimHostFromInstance(
   // Per-connection handshake bookkeeping, only ever populated when `handshake` is given (Deviations
   // above: `worker/sim.ts`'s single-player topology never reaches any of this).
   const handshakeState = new Map<ConnId, HandshakeConnState>()
+  // docs/plan/28-sessions-and-reconnect.md step 5 (real bug, found live: a browser `gc` page's own
+  // steady-state bytesPerFrame, not the server, which `pumpHandshakes`'s own doc comment below
+  // assumed covered this -- `worker/sim.ts`'s linked topology *is* a zero-GC-constrained caller):
+  // how many entries in `handshakeState` are still `'garbage'` -- incremented at `accept()`,
+  // decremented wherever a connection leaves that status (a valid `Hello` moves it to
+  // `'awaiting-attach'`, or it closes). `handshakeState` itself never shrinks back to empty for the
+  // life of a settled connection (its entry is needed for later `onMessage` lookups), so a bare
+  // `for (const [conn, state] of handshakeState)` below ran every tick for as long as any
+  // connection lived, each pass allocating a fresh `MapIterator` (the same class of defect
+  // `manual-clock.ts`'s own `fireDue` doc comment already names for `timers`) -- measured at 38,400
+  // + 43,200 + 12,000 B/frame on `sim` (`pumpHandshakes`/`next`/`entries` in a gc page's own
+  // `byFn`), the sole cause of `connected-terrain`/`drawables`/`zero_gc_action`'s gc failures this
+  // range. Guards that whole scan: once nothing is left in `'garbage'` (the common case, one tick
+  // after Hello arrives), `pumpHandshakes` never touches `handshakeState`'s own iterator at all.
+  let garbagePending = 0
   // Hello-arrival order (Planning decisions "Async digest, deterministic order"): pushed (as
   // `null`) the instant a valid `Hello` clears the join-key/build-hash/capacity checks, resolved
   // in place once the secret's digest (and, for a brand-new secret, the session-table write) has
@@ -569,20 +598,33 @@ export function createSimHostFromInstance(
   function closeHandshake(conn: ConnId, connection: Connection, code: number): void {
     connection.close(code)
     conns[conn] = null
+    if (handshakeState.get(conn)?.status === 'garbage') garbagePending--
     handshakeState.delete(conn)
   }
 
-  /** Runs once per `runOneTick()` (Deviations: cheap even every tick -- the server is outside
-   * 0016's zero-GC rule, `.claude/rules/hot-paths.md`, and this map is at most `MAX_CONNS` entries):
-   * closes any connection that has gone 5 s (0013 Client policy's own handshake analogue, Scope:
-   * "no `Hello` within 5 s") without ever producing a valid `Hello`, then drains `attachQueue` from
-   * the front while resolved, calling `sim.simAttach` and sending `Welcome` for each in
-   * Hello-arrival order. */
-  function pumpHandshakes(nowMs: number): void {
-    for (const [conn, state] of handshakeState) {
-      if (state.status === 'garbage' && nowMs - state.connectedAtMs >= HELLO_TIMEOUT_MS) {
-        const connection = conns[conn]
-        if (connection) closeHandshake(conn, connection, CloseCode.ProtocolError)
+  /** Runs once per `runOneTick()`. Closes any connection that has gone 5 s (0013 Client policy's
+   * own handshake analogue, Scope: "no `Hello` within 5 s") without ever producing a valid `Hello`,
+   * then drains `attachQueue` from the front while resolved, calling `sim.simAttach` and sending
+   * `Welcome` for each in Hello-arrival order.
+   *
+   * `services.clock.now()` is read *only* inside the `garbagePending > 0` branch (real bug, found
+   * live in a `gc` page: `runOneTick`'s own doc comment already explains why the tick path reads
+   * the real clock at most once every `RESYNC_TICKS`, via `resync()`, and never otherwise -- a
+   * `clock.now()` call reads a fractional double every time, boxing a fresh `HeapNumber`
+   * regardless of tier, docs/plan/13b-tick-timing-allocation.md's own measurement. Calling it
+   * unconditionally from here, once per tick for the connection's *entire life* once settled,
+   * would reintroduce exactly the per-tick clock read that ADR amendment was written to eliminate
+   * -- `garbagePending`'s own doc comment fixed the `handshakeState` iteration; this fixes the
+   * clock read the same way, both gated on the same "any connection still `'garbage'`" condition,
+   * since neither is needed once every connection has said `Hello`. */
+  function pumpHandshakes(): void {
+    if (garbagePending > 0) {
+      const nowMs = services.clock.now()
+      for (const [conn, state] of handshakeState) {
+        if (state.status === 'garbage' && nowMs - state.connectedAtMs >= HELLO_TIMEOUT_MS) {
+          const connection = conns[conn]
+          if (connection) closeHandshake(conn, connection, CloseCode.ProtocolError)
+        }
       }
     }
     while (attachQueue.length > 0) {
@@ -682,7 +724,7 @@ export function createSimHostFromInstance(
     // below, the same "queued ... into the frame for T+1" contract every other connection event
     // already has (host/mod.rs `connect`/`disconnect`). Zero cost when `handshake` was never given
     // (`worker/sim.ts`'s single-player topology): `handshakeState` stays empty forever.
-    if (handshake) pumpHandshakes(services.clock.now())
+    if (handshake) pumpHandshakes()
     const seal = sim.simSealFrame()
     // `seal.bytes` is the whole persistent `Persist` region view (Orchestrator ruling 2), but
     // `logSink`'s own contract (`SimHost.logSink`'s doc comment: "exactly `len` bytes") is fixed at
@@ -879,6 +921,9 @@ export function createSimHostFromInstance(
         await Promise.all(inFlightHandshakes)
       }
     },
+    get hasInFlightHandshakes() {
+      return inFlightHandshakes.size > 0
+    },
     async recover() {
       const wasRunning = running
       disarm()
@@ -996,11 +1041,13 @@ export function createSimHostFromInstance(
         connectedAtMs: services.clock.now(),
       }
       handshakeState.set(conn, connectState)
+      garbagePending++
       let garbageCount = 0
 
       connection.onClose = (_code) => {
         const state = handshakeState.get(conn)
         if (state?.status === 'settled') sim.simDetach(conn)
+        if (state?.status === 'garbage') garbagePending--
         conns[conn] = null
         handshakeState.delete(conn)
       }
@@ -1065,6 +1112,7 @@ export function createSimHostFromInstance(
         }
 
         state.status = 'awaiting-attach'
+        garbagePending--
         const slotIndex = attachQueue.length
         attachQueue.push(null)
         // This arrival's own turn on `sessionMutationChain` (Deviations above): captured now, in
@@ -1207,7 +1255,7 @@ export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldSe
         {
           joinKey: cfg.joinKey ?? '',
           maxPlayers: cfg.maxPlayers ?? 8,
-          buildHash: hexDecode(cfg.buildHash),
+          buildHash: parseBuildHash32(cfg.buildHash),
           sessions,
         },
       )

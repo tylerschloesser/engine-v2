@@ -514,7 +514,8 @@ pub fn client_hello<T: Instance>(slot: &Slot<T>) -> i32 {
 /// `client_on_welcome(len, rtt_ms) -> status`: `len` bytes of `Downlink` are one whole `Welcome`
 /// message (same region `on_frame` reads -- both are host-to-client messages, and `Welcome` is
 /// always the first one, before any real `Frame` traffic). On success, `player_id`/
-/// `last_processed_action_seq` (two LE `u32`) land in `Result` (`Instance::client_on_welcome`'s
+/// `last_processed_action_seq`/`view_max_tiles_per_axis`/`view_max_chunks` (four LE `u32`, docs/
+/// plan/28-sessions-and-reconnect.md step 5) land in `Result` (`Instance::client_on_welcome`'s
 /// own doc comment) -- read into an owned copy first, same double-borrow reasoning as `sim_attach`,
 /// since `Downlink` (read) and `Result` (written) cannot both be reached from `rt.layout` in one
 /// call otherwise.

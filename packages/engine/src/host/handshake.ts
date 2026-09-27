@@ -31,6 +31,27 @@ export const MAGIC = 0x474e_4580
 
 export const BUILD_HASH_LEN = 32
 export const SECRET_LEN = 16
+
+/** Hex text -> exactly `BUILD_HASH_LEN` bytes, zero-filled past whatever `hex` actually supplies
+ * (never a length error) -- mirrors `game_instance.rs`'s own `parse_hex_bytes::<32>` exactly
+ * (`TerrainConfig.build_hash`'s own parse, what a client's real `Hello` always carries), so a
+ * missing/short/empty `buildHash` decodes to the *same* all-zero 32 bytes on both sides instead of
+ * a variable-length one here mismatching the client's always-32-byte one (found live: `worker/
+ * sim.ts`'s own handshake wiring, step 5 -- a `test.game` escape-hatch config with no `buildHash`
+ * field produced a 0-byte array here against the client's real 32 zero bytes, so `bytesEqual`
+ * always failed length-first and every such connection got `Reject{VersionMismatch}`, hanging
+ * `pumpUntilLive`/`stepSimTickSync` forever). `host/sessions.ts`'s own `hexDecode` stays general
+ * (any length, used for secrets/presence where a short/odd result is meaningful); this one exists
+ * only for the one field that must always cross as a fixed 32 bytes. */
+export function parseBuildHash32(hex: string): Uint8Array {
+  const out = new Uint8Array(BUILD_HASH_LEN)
+  for (let i = 0; i < BUILD_HASH_LEN; i++) {
+    const byte = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16)
+    out[i] = Number.isNaN(byte) ? 0 : byte
+  }
+  return out
+}
+
 /** `wire::CameraReport::LEN` (Rust), mirrored: the minimum a well-formed `helloTail` must carry --
  * `sim_attach`'s own Rust-side parse always reads a `CameraReport` (16 B) off the front of the
  * tail before anything else, so a tail shorter than this can never be a real `Hello`, only a

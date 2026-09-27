@@ -78,6 +78,15 @@ export function buildSimInstanceConfig(cfg: WorldConfig): InstanceConfig {
       // shape), parsed by `SimConfig::build_hash` (`host/mod.rs`) into `Identity.build_hash`'s
       // first 128 bits.
       buildHash: cfg.buildHash,
+      // docs/plan/28-sessions-and-reconnect.md step 5: `WorldConfig.view` reaches `host::SimConfig`
+      // (`viewMaxTilesPerAxis`/`viewMaxChunks`, `#[serde(default)]` 256/128, 0010) -- previously
+      // parsed by nothing (M15's own "Non-scope: Connections, subscriptions" carve-out, before a
+      // real `Welcome` ever echoed these), so every world silently welcomed clients at the serde
+      // default regardless of what `WorldConfig.view` said. `undefined` (never set) still hits that
+      // same default: `JSON.stringify` drops an `undefined` property entirely, and Rust's own
+      // `#[serde(default)]` fills the gap exactly as before.
+      viewMaxTilesPerAxis: cfg.view?.maxTilesPerAxis,
+      viewMaxChunks: cfg.view?.maxChunks,
     },
   }
 }

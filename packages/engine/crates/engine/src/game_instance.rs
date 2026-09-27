@@ -1121,6 +1121,13 @@ where
     /// and the lead estimator (`ClientCore::seed_lead_rtt_ms`) from the caller's own measured round
     /// trip. `player_id`/`last_processed_action_seq` are echoed into `result` for the caller's own
     /// `session_state`/`seq_seed` bookkeeping (`Instance::client_on_welcome`'s own doc comment).
+    /// docs/plan/28-sessions-and-reconnect.md step 5 (`ABI_VERSION` 28 -> 29): `result` widened
+    /// from 8 to 16 bytes -- `view_max_tiles_per_axis`/`view_max_chunks` (each zero-extended into
+    /// an LE `u32`, matching every other crossing here) so the caller (`worker/client.ts`) can
+    /// forward Welcome's own view clamps to the main thread's `setViewClamp` (0019 §1) without a
+    /// second export. `player_id`/`last_processed_action_seq` keep their original offsets (0..8);
+    /// an old caller reading only the first 8 bytes is unaffected, same reasoning as
+    /// `client_clock_stats`'s own widening.
     fn client_on_welcome(&mut self, bytes: &[u8], rtt_ms: f64, result: &mut [u8]) -> Status {
         match self {
             GameInstance::Client(c) => {
@@ -1134,11 +1141,14 @@ where
                     c.presence = *sample;
                 }
                 c.core.seed_lead_rtt_ms(rtt_ms);
-                let Some(out) = result.get_mut(..8) else {
+                let Some(out) = result.get_mut(..16) else {
                     return Status::BadLength;
                 };
                 out[0..4].copy_from_slice(&welcome.player_id.0.to_le_bytes());
                 out[4..8].copy_from_slice(&welcome.last_processed_action_seq.to_le_bytes());
+                out[8..12]
+                    .copy_from_slice(&u32::from(welcome.view_max_tiles_per_axis).to_le_bytes());
+                out[12..16].copy_from_slice(&u32::from(welcome.view_max_chunks).to_le_bytes());
                 Status::Ok
             }
             _ => Status::Unsupported,

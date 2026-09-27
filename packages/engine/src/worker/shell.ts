@@ -13,6 +13,7 @@ import {
   workerWord,
 } from '../sab/control.js'
 import type {
+  ClientLifecycleMessage,
   FromWorker,
   SimControlMessage,
   SimLifecycleMessage,
@@ -82,7 +83,7 @@ export interface WorkerShell {
    * notifications beyond `ready`/`fatal` (`SimLifecycleMessage`) -- `postMessage` after setup still
    * carries lifecycle only (0015 §2). Step 5 adds `SimWorldOpResult` to the same channel (still not a
    * per-frame/per-tick path: one message per explicit export/import/delete request). */
-  post(m: SimLifecycleMessage | SimWorldOpResult): void
+  post(m: SimLifecycleMessage | SimWorldOpResult | ClientLifecycleMessage): void
 }
 
 /** `postMessage` is the worker's only channel to main outside setup (0015 §2): shared by every
@@ -135,7 +136,7 @@ export class Shell implements WorkerShell {
     post({ type: 'fatal', message })
   }
 
-  post(m: SimLifecycleMessage | SimWorldOpResult): void {
+  post(m: SimLifecycleMessage | SimWorldOpResult | ClientLifecycleMessage): void {
     post(m)
   }
 

@@ -43,8 +43,31 @@ export type NetPump = {
    * a successful attach and before this pump's own `pump()` ever runs for the first time. Writes
    * the clock block immediately (so a `dispatch()` right after `Welcome`, before any real frame has
    * arrived, already sees a live session and the right `seq` baseline) and marks this pump "already
-   * seeded", so `pump()`'s own first-frame bootstrap (below) never re-seeds it from `ack_seq`. */
+   * seeded", so `pump()`'s own first-frame bootstrap (below) never re-seeds it from `ack_seq`. Not
+   * used when `handshake` (below) is given -- that caller's `pump()` seeds itself once it applies
+   * `Welcome` internally. */
   seedFromWelcome(seqSeed: number): void
+}
+
+/** docs/plan/28-sessions-and-reconnect.md step 5: opt-in argument to `createNetPump` -- when
+ * given, `pump()` itself sends `client_hello()` on its first call and applies `Welcome` off the
+ * downlink ring before ever touching `on_frame`/`client_poll_uplink` (Scope: "the client instance
+ * emits `Hello` first ... `ready` means `Welcome` applied"). Omitted, `pump()` behaves exactly as
+ * it always has (M16's bootstrap-from-first-frame path, still what `HeadlessClient` and every
+ * pre-M28 caller rely on: those callers speak `Hello`/apply `Welcome` through their own separate
+ * path, `seedFromWelcome` above, never through this one). */
+export type NetPumpHandshake = {
+  /** Feeds `client_on_welcome`'s own `rtt_ms` argument (M26's `LeadEstimator.seed_rtt_ms`): real
+   * elapsed time between this pump's own `client_hello()` send and the `Welcome` that answers it. */
+  clock: { now(): number }
+  /** Called once, synchronously, the instant `Welcome` is successfully applied -- the caller's own
+   * hook for forwarding `view_max_tiles_per_axis`/`view_max_chunks` to the main thread (0019 §1's
+   * `setViewClamp`), since this pump has no camera and no `postMessage` access of its own. */
+  onAttached?: (info: {
+    playerId: number
+    viewMaxTilesPerAxis: number
+    viewMaxChunks: number
+  }) => void
 }
 
 /**
@@ -69,6 +92,7 @@ export function createNetPump(
   clockBlockSab: SharedArrayBuffer,
   result: RegionView | null,
   ticksPerSecond: number,
+  handshake?: NetPumpHandshake,
 ): NetPump {
   const downlinkConsumer = new RingConsumer(downlinkSab)
   const uplinkProducer = new RingProducer(uplinkSab, {
@@ -90,8 +114,57 @@ export function createNetPump(
     revealed: 0,
   }
   let live = false
+  // docs/plan/28-sessions-and-reconnect.md step 5: `attached` starts `true` (the whole handshake
+  // block below never runs) when no `handshake` was given -- every existing caller (`HeadlessClient`,
+  // any hand-rolled fixture) keeps exactly today's behaviour (Deviations: this is an additive,
+  // opt-in parameter, not a renamed seam).
+  let attached = handshake === undefined
+  let helloSent = false
+  let helloSentAtMs = 0
+
+  /** Sends `client_hello()` (once) and applies the first `Welcome` the downlink ring carries.
+   * Every message before a successful `Welcome` that fails to decode as one (`Status` other than
+   * `Ok`) is dropped and the loop keeps draining -- there is nothing else this pump could usefully
+   * do with it before a session exists (mirrors `HeadlessClient.pumpPreWelcome`'s own "swallow and
+   * continue" contract). */
+  function pumpHandshake(): void {
+    const hs = handshake as NetPumpHandshake
+    if (!helloSent) {
+      helloSent = true
+      if (tx) {
+        const len = inst.call0(inst.x.client_hello)
+        if (len > 0) {
+          if (!uplinkProducer.tryPush(tx.u8, len)) uplinkProducer.recordDrop()
+          helloSentAtMs = hs.clock.now()
+        }
+      }
+    }
+    if (!downlink || !result) return
+    for (;;) {
+      const len = downlinkConsumer.popInto(downlink.u8, 0)
+      if (len < 0) return
+      const rttMs = Math.max(0, hs.clock.now() - helloSentAtMs)
+      const status = inst.call2(inst.x.client_on_welcome, len, rttMs)
+      if (status !== Status.Ok) continue // garbage/malformed before Welcome: drop, keep draining
+      attached = true
+      const playerId = readU32LE(result.u8, 0)
+      const seqSeed = readU32LE(result.u8, 4)
+      const viewMaxTilesPerAxis = readU32LE(result.u8, 8)
+      const viewMaxChunks = readU32LE(result.u8, 12)
+      live = true
+      clockFields.seqSeed = seqSeed
+      clockFields.sessionState = SessionState.Online
+      writeClockBlock(clockView, clockFields)
+      hs.onAttached?.({ playerId, viewMaxTilesPerAxis, viewMaxChunks })
+      return
+    }
+  }
 
   function pump(): void {
+    if (!attached) {
+      pumpHandshake()
+      if (!attached) return // still waiting on Welcome; on_frame/client_poll_uplink wait too
+    }
     let sawFrame = false
     if (downlink) {
       for (;;) {

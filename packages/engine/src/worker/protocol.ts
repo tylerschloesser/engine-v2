@@ -180,6 +180,7 @@ export const POST_SETUP_MESSAGE_TYPES: readonly string[] = [
   'import-world-result',
   'delete-world-result',
   'world-op-error',
+  'client-welcome',
 ]
 
 /** docs/plan/23-persistence-opfs-and-lifecycle.md Seams (Provides): the sim worker's own lifecycle
@@ -211,6 +212,20 @@ export type SimLifecycleMessage =
       stored: IdentityJson
       running: IdentityJson
     }
+
+/** docs/plan/28-sessions-and-reconnect.md step 5: the client worker's own one-off lifecycle
+ * notification (0015 §2: "postMessage after setup carries lifecycle only") -- posted exactly once,
+ * the instant a linked client worker applies its first `Welcome` (`worker/client-net.ts`'s
+ * `NetPumpHandshake.onAttached`), so the main thread can forward the view clamps `Client.camera`
+ * needs (0019 §1's `setViewClamp`, which only main can call) without polling for them. A distinct
+ * type from `SimLifecycleMessage` (that one is the sim worker's own, by its own doc comment) --
+ * `client.ts`'s `setupWorker` forwards this through its own dedicated `onWelcome` callback. */
+export type ClientLifecycleMessage = {
+  type: 'client-welcome'
+  playerId: number
+  viewMaxTilesPerAxis: number
+  viewMaxChunks: number
+}
 
 /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: main -> sim worker, parked-only (like
  * `TestCallMessage`, whose own doc comment gives the reason: a worker blocked in `Atomics.wait`
@@ -271,3 +286,4 @@ export type FromWorker =
   | { type: 'test-error'; id: number; message: string }
   | SimLifecycleMessage
   | SimWorldOpResult
+  | ClientLifecycleMessage

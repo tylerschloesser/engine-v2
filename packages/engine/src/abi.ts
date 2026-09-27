@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 28
+export const ABI_VERSION = 29
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -195,8 +195,10 @@ export const ABI_EXPORTS = {
   // docs/plan/28-sessions-and-reconnect.md: applies one `Welcome` message (`len` bytes of
   // `RegionId.Downlink`, same region `on_frame` reads) into the client role's own state
   // (`own_player`, `seed_presence`, `seed_lead_rtt_ms` from `rttMs`). On success, `player_id`/
-  // `last_processed_action_seq` (two LE `u32`) land in `Result` for the caller's own
-  // `session_state`/`seq_seed` bookkeeping. `Status.Decode` on a malformed message.
+  // `last_processed_action_seq`/`view_max_tiles_per_axis`/`view_max_chunks` (`ABI_VERSION` 28 ->
+  // 29: widened from 8 to 16 bytes, step 5) land in `Result` for the caller's own
+  // `session_state`/`seq_seed` bookkeeping and `setViewClamp` forwarding. `Status.Decode` on a
+  // malformed message.
   client_on_welcome: { role: 'client', params: 2, result: 'status' },
   // docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test` only: `host::Host::
   // region_hash(conn)`, two LE `u32` into `Result` (`sim_hash`'s own crossing shape).

@@ -18,7 +18,9 @@
 // does.
 import { Role } from '../abi.js'
 import { systemClock, systemScheduler } from '../clock.js'
+import { parseBuildHash32 } from '../host/handshake.js'
 import { Persistence, WorldLoadError } from '../host/persistence.js'
+import { loadSessionTable } from '../host/sessions.js'
 import { EngineTrap } from '../loader.js'
 import { RingConnection } from '../ring-connection.js'
 import {
@@ -31,6 +33,7 @@ import {
 } from '../sab/control.js'
 import {
   createSimHostFromInstance,
+  type HandshakeDeps,
   type RecoveryDeps,
   type SimHostCounters,
   wrapEngineInstance,
@@ -39,6 +42,7 @@ import { deleteWorld, exportWorld, importWorld, unpackArchive } from '../storage
 import { memoryStorage } from '../storage/memory.js'
 import { type OpfsStorage, OpfsUnavailable, opfsStorage } from '../storage/opfs.js'
 import type { Storage } from '../storage/types.js'
+import { worldKeys } from '../storage/types.js'
 import { createAtomicsTimer } from './atomics-timer.js'
 import { applyGcHook } from './gc-hook.js'
 import { instantiateFactoryForSetup } from './instantiate.js'
@@ -435,12 +439,46 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // fallback (`handleTestCall`, below) always reaches the *current* raw instance instead of a stale,
   // dead one after a recovery.
   const recoveryDeps: RecoveryDeps = { instance: inst, newInstance }
+  // docs/plan/28-sessions-and-reconnect.md step 5: the real handshake, wired for this worker's own
+  // linked (single-player) topology too -- Scope: "single-player takes the same path", exit
+  // criterion 1: "no provisional-join code path remains in the sim host" (of the two production
+  // call sites, `createWorldServer` already wired this in steps 1-2; this was the one left over,
+  // and the Open gate failures item this milestone's own bisect traced to it: a client instance
+  // that never gets a real `Welcome` never has its `own_player` corrected off its `PlayerId(0)`
+  // placeholder, so `Replica::region_hash`'s own `self.store.player(self.own_player)` term
+  // diverges from the host's). Gated on `message.link` (the same "no flag to turn off" convention
+  // every other linked-only piece of this file already follows): every non-linked `sim`-kind test
+  // page (`sim-worker.ts`, `gc-sim.ts`, `gc-topology.ts`, `gc-echo.ts`, `topology.ts`) never calls
+  // `accept()` at all, so building this costs them nothing and changes nothing. A persisted world
+  // (`message.world`) reuses its own already-open `storage`; an unpersisted single-player session
+  // (the common case: no `host.persist`) gets an ephemeral, throwaway table over `memoryStorage()`
+  // -- correct either way, since 0013's session table only ever needs to survive one connection's
+  // own reconnects within this worker's life, and a fresh `memoryStorage()` per boot is exactly
+  // what "no cross-device recovery, single-player included" already implies.
+  let handshake: HandshakeDeps | undefined
+  if (message.link === true) {
+    const sessionStorage = worldStorage ?? memoryStorage()
+    const sessionWorldId = runningWorldId ?? 'local'
+    const sessions = await loadSessionTable(sessionStorage, worldKeys(sessionWorldId))
+    const gameCfg = message.config.game as { buildHash?: string } | null
+    handshake = {
+      // 0013: "single-player uses the same path with an empty key" -- `WorldConfig.joinKey` is not
+      // threaded into a linked-but-unpersisted sim worker's own config this milestone (Non-scope:
+      // remote/multi-player join keys are M29's), so this mirrors the client's own always-empty
+      // `joinKey: ''` for this topology (`client.ts`'s `clientGame`, Scope).
+      joinKey: '',
+      maxPlayers: 8,
+      buildHash: parseBuildHash32(gameCfg?.buildHash ?? ''),
+      sessions,
+    }
+  }
   const simHost = createSimHostFromInstance(
     simInstance,
     { clock: systemClock, timer: atomicsTimer.timer },
     persistence,
     initialTicksRun,
     recoveryDeps,
+    handshake,
   )
   // docs/plan/24-recovery-and-migration.md: the fatal report, through M06b's `shell.fatal`, with the
   // tick prefixed (Scope: "wiring into ... the sim worker (fatal report via `shell.fatal` with the
@@ -564,6 +602,13 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       // one created by this call (`.claude/rules/hot-paths.md`).
       const pending = opfsAdapter?.pendingAsync()
       if (pending) shell.runAsync(pending)
+      // docs/plan/28-sessions-and-reconnect.md step 5 (`SimHost.hasInFlightHandshakes`'s own doc
+      // comment has the mechanism): the exact same "leave the Atomics.wait-blocked loop, await,
+      // re-enter" pattern as `pendingAsync()` above, for a secret digest/session-table write a
+      // valid `Hello` just started off this same pass (`connection.drainUplink()`, above).
+      if (simHost.hasInFlightHandshakes) {
+        shell.runAsync(() => simHost.handshakesSettled())
+      }
     } catch (e) {
       // docs/plan/24-recovery-and-migration.md (0005 Panic recovery 2): a trap anywhere in this
       // pass (an admit, a tick, a snapshot -- any `SimInstance`/`Persistence` call whose underlying

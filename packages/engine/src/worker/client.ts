@@ -6,6 +6,7 @@
 // that never sets the flag.
 import { RegionId, Role } from '../abi.js'
 import { CameraBlockView, readCameraBlockInto } from '../camera/block.js'
+import { systemClock } from '../clock.js'
 import type { EngineInstance, RegionView } from '../loader.js'
 import { CB_FRAME_REQ, W_ACK, workerWord } from '../sab/control.js'
 import { RingConsumer, RingProducer } from '../sab/ring.js'
@@ -125,6 +126,12 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // draining the downlink and polling the uplink both have their own internal pacing/emptiness
   // checks, so running them on every wake, not only a real render frame's, is what keeps a linked
   // client caught up between renders too).
+  // docs/plan/28-sessions-and-reconnect.md step 5: a linked client worker now always speaks the
+  // real handshake (`Hello` first, `ready` means `Welcome` applied) -- single-player takes the
+  // same path as a real connection would (Scope). `onAttached` forwards Welcome's own view
+  // clamps to the main thread (0019 §1's `setViewClamp`, which only main can call, `Client.camera`
+  // being main-thread-only): `client-welcome` is a one-off lifecycle notification, the same
+  // "setup, fatal errors and lifecycle only" carve-out `ready`/`fatal` already use (0015 §2).
   const netPump = message.link
     ? createNetPump(
         inst,
@@ -136,6 +143,17 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
         message.sabs.clockBlock,
         resultRegion,
         ticksPerSecond,
+        {
+          clock: systemClock,
+          onAttached: (info) => {
+            shell.post({
+              type: 'client-welcome',
+              playerId: info.playerId,
+              viewMaxTilesPerAxis: info.viewMaxTilesPerAxis,
+              viewMaxChunks: info.viewMaxChunks,
+            })
+          },
+        },
       )
     : null
 
