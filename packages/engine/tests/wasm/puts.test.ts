@@ -23,6 +23,7 @@
 import { expect, test } from 'vitest'
 import { RegionId, Role } from '../../src/abi.js'
 import { Persistence } from '../../src/host/persistence.js'
+import { hexDecode } from '../../src/host/sessions.js'
 import { instantiate } from '../../src/loader.js'
 import { RingConnection } from '../../src/ring-connection.js'
 import { createRing, RingConsumer } from '../../src/sab/ring.js'
@@ -34,12 +35,58 @@ import {
   MAX_CATCHUP_TICKS,
   type MsgClass,
   RESYNC_TICKS,
+  seedToHexU64,
+  serverInternals,
   type WorldConfig,
   wrapEngineInstance,
 } from '../../src/server.js'
 import { memoryStorage } from '../../src/storage/memory.js'
 import { loadFixture, readGolden } from '../support/fixtures.js'
 import type { Golden, HashScenario, ScriptScenario } from '../support/scenario.js'
+
+function hexEncode(bytes: Uint8Array): string {
+  let out = ''
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i] as number
+    out += b < 16 ? `0${b.toString(16)}` : b.toString(16)
+  }
+  return out
+}
+
+/** 16 bytes, arbitrary but fixed: these tests never care about identity beyond "some player
+ * joins" (docs/plan/28-sessions-and-reconnect.md gate item). */
+const TEST_SECRET = new Uint8Array(16).fill(0x42)
+
+/** `client_hello()` off a throwaway `Role.Client` instance (mirrors `src/test/headless-client.ts`'s
+ * own `sendHello`, standalone: these tests drive a bare `Connection`, not a full `HeadlessClient`).
+ * Off the tick path (once per test), so a fresh instance per call is fine. */
+function buildHelloBytes(
+  wasm: WebAssembly.Module,
+  opts: {
+    seedHex: string
+    worldgen: unknown
+    secret: Uint8Array
+    joinKey: string
+    buildHash: Uint8Array
+  },
+): Uint8Array {
+  const clientConfig = {
+    arenaBytes: 48 * 1024 * 1024,
+    game: {
+      seed: opts.seedHex,
+      params: opts.worldgen,
+      secret: hexEncode(opts.secret),
+      joinKey: opts.joinKey,
+      buildHash: hexEncode(opts.buildHash),
+    },
+  }
+  const inst = instantiate(wasm, Role.Client, clientConfig)
+  const len = inst.call0(inst.x.client_hello)
+  if (len <= 0) throw new Error(`client_hello failed: status ${-len}`)
+  const tx = inst.region(RegionId.Tx)
+  if (!tx) throw new Error('client_hello: Tx region absent')
+  return tx.u8.slice(0, len)
+}
 
 /** `fixtures/puts/golden/scenario*.json`'s own `config`, reconstructed as a `WorldConfig`
  * (`buildSimInstanceConfig`'s inverse): `seed: "0x1"` decimal is `"1"`, and every other field is
@@ -85,7 +132,24 @@ async function tickPutsThroughServer(
     timer: timer.services,
   })
   await server.ready
-  if (connectAtStart) server.accept(fakeConnection())
+  if (connectAtStart) {
+    // docs/plan/28-sessions-and-reconnect.md gate item: `createWorldServer` always wires the real
+    // handshake now (Deviations, step 1-2), so a connection that never speaks `Hello` simply never
+    // attaches. Speak it, the same way `HeadlessClient.sendHello` does, then await the digest
+    // before ticking -- `crypto.subtle.digest` resolves through a real threadpool callback in
+    // Node, not an incidental microtask (`net-harness.ts`'s own Deviations, same root cause).
+    const conn = fakeConnection()
+    server.accept(conn)
+    const hello = buildHelloBytes(wasm, {
+      seedHex: seedToHexU64(worldCfg.params.seed),
+      worldgen: worldCfg.params.worldgen,
+      secret: TEST_SECRET,
+      joinKey: worldCfg.joinKey ?? '',
+      buildHash: hexDecode(worldCfg.buildHash),
+    })
+    conn.onMessage?.(hello)
+    await serverInternals(server).handshakesSettled()
+  }
   for (let i = 0; i < ticks; i++) timer.fire()
   await server.stop()
 
@@ -156,32 +220,56 @@ test('wasm_script_a_matches_native', async () => {
   await server.ready
   const conn = fakeConnection()
 
+  // Delivered through the accepted connection's own wired `onMessage` (Seams: `SimHost.accept`
+  // sets it), exactly like a real transport handing this connection a message -- not a direct
+  // `sim.simAdmit` call.
+  function sendAction(seq: number, action: unknown): void {
+    const json = scriptEncoder.encode(JSON.stringify(action))
+    const record = new Uint8Array(8 + json.length)
+    const view = new DataView(record.buffer)
+    view.setUint32(0, seq, true)
+    view.setUint32(4, json.length, true)
+    record.set(json, 8)
+    const encoderRx = encoder.region(RegionId.Rx)
+    if (!encoderRx) throw new Error('encoder Rx region is missing')
+    encoderRx.u8.set(record)
+    encoder.call1(encoder.x.on_action, record.length)
+    const len = encoder.call1(encoder.x.client_poll_uplink, 0)
+    const encoderTx = encoder.region(RegionId.Tx)
+    if (!encoderTx) throw new Error('encoder Tx region is missing')
+    conn.onMessage?.(encoderTx.u8.slice(0, len))
+  }
+
   let tick = 0
   for (const entry of scenario.script) {
     while (tick + 1 < entry.tick) {
       timer.fire()
       tick += 1
     }
-    if (entry.connect) server.accept(conn)
-    for (const { seq, action } of entry.actions ?? []) {
-      const json = scriptEncoder.encode(JSON.stringify(action))
-      const record = new Uint8Array(8 + json.length)
-      const view = new DataView(record.buffer)
-      view.setUint32(0, seq, true)
-      view.setUint32(4, json.length, true)
-      record.set(json, 8)
-      const encoderRx = encoder.region(RegionId.Rx)
-      if (!encoderRx) throw new Error('encoder Rx region is missing')
-      encoderRx.u8.set(record)
-      encoder.call1(encoder.x.on_action, record.length)
-      const len = encoder.call1(encoder.x.client_poll_uplink, 0)
-      const encoderTx = encoder.region(RegionId.Tx)
-      if (!encoderTx) throw new Error('encoder Tx region is missing')
-      // Delivered through the accepted connection's own wired `onMessage` (Seams: `SimHost.accept`
-      // sets it), exactly like a real transport handing this connection a message -- not a direct
-      // `sim.simAdmit` call.
-      conn.onMessage?.(encoderTx.u8.slice(0, len))
+    if (entry.connect) {
+      // docs/plan/28-sessions-and-reconnect.md gate item: a real `Hello`/`Welcome` handshake, not
+      // `server.accept(conn)` alone. `state.status` only reaches `'settled'` (and `onMessage` only
+      // routes to `sim_admit`) once `pumpHandshakes` drains the attach at a *tick boundary*
+      // (`server.ts`), so this entry's own action(s) below cannot land on `entry.tick` the way the
+      // old implicit-accept fixture did (both `sim_connect` and the action were admitted
+      // synchronously, before the very first tick ever fired) -- see this milestone's own
+      // Deviations for the resulting, measured difference against the checked-in golden.
+      server.accept(conn)
+      const hello = buildHelloBytes(wasm, {
+        seedHex: seedToHexU64(WORLD_CFG.params.seed),
+        worldgen: WORLD_CFG.params.worldgen,
+        secret: TEST_SECRET,
+        joinKey: WORLD_CFG.joinKey ?? '',
+        buildHash: hexDecode(WORLD_CFG.buildHash),
+      })
+      conn.onMessage?.(hello)
+      await serverInternals(server).handshakesSettled()
+      timer.fire() // the attach tick: Joined/Connected apply here, nothing else queued yet
+      tick += 1
+      for (const { seq, action } of entry.actions ?? []) sendAction(seq, action)
+      continue // this entry's own action(s) ride out on the *next* entry's trailing fire below
     }
+    for (const { seq, action } of entry.actions ?? []) sendAction(seq, action)
     timer.fire()
     tick = entry.tick
   }
