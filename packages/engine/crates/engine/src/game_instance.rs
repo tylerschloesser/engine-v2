@@ -154,6 +154,15 @@ fn default_gen_workers() -> u32 {
 fn default_cache_chunks() -> u32 {
     DEFAULT_CACHE_CHUNKS
 }
+/// docs/plan/27-server-entrypoint-and-netcode-harness.md, M27 gate round 1: the pre-handshake
+/// source of "who am I" for a client instance -- default `1`, so a single browser client (still
+/// always `conn == 0`, `PlayerId = conn + 1`, M15b's own convention) is unaffected. M28's real
+/// handshake (`Welcome`, built in Rust by `sim_attach`) replaces this config field as the source of
+/// truth once it lands; this field stays for a client that connects before a `Welcome` ever
+/// arrives, if any such path still exists then.
+fn default_my_player_id() -> u32 {
+    1
+}
 
 /// The `game` config shared by the `gen` and `client` roles of `GameInstance<G>` (0009's `seed`/
 /// `worldgen` params, used unchanged by every role that touches terrain, 0008 §2's three-places
@@ -172,6 +181,11 @@ struct TerrainConfig<P> {
     /// Client role only: host dense-chunk cache size (0009 `WorldConfig.cacheChunks`).
     #[serde(default = "default_cache_chunks")]
     cache_chunks: u32,
+    /// Client role only: this connection's own `PlayerId` (M27 gate round 1, `default_my_player_id`'s
+    /// own doc comment: pre-handshake, `conn + 1` under M15's implicit accept). Ignored by the
+    /// `gen` role.
+    #[serde(default = "default_my_player_id")]
+    my_player_id: u32,
 }
 
 /// The client-role instance (docs/plan/13-sim-host-tick-loop.md Scope, extended by docs/plan/
@@ -267,17 +281,20 @@ impl<G: Game> ClientInstance<G> {
         let mut client = G::Client::default();
         client.on_init(cfg.seed.0, &cfg.params);
         let source = Pristine::<G::Worldgen>::new(cfg.seed.0, cfg.params);
-        // Single-connection assumption (docs/plan/15b-ring-connection-and-replica-rendering.md,
-        // Planning decisions "PlayerId = conn + 1, not conn"): this milestone's own topology never
-        // gives one client instance more than one host link, and it is always `conn == 0`, so
-        // `own_player` is `PlayerId(1)` unconditionally rather than learned out of band (`Replica`'s
-        // own doc comment on `own_player` names this as a real connection's usual path; a real
-        // multi-connection handshake is M28's, Non-scope here).
+        // docs/plan/15b-ring-connection-and-replica-rendering.md (Planning decisions "PlayerId =
+        // conn + 1, not conn"), amended M27 gate round 1: `own_player` used to be `PlayerId(1)`
+        // unconditionally, correct only for a single-connection topology where `conn` is always
+        // `0` -- `cfg.my_player_id` (`default_my_player_id`'s own doc comment) is this milestone's
+        // own pre-handshake source for it, so a real netcode harness with several real connections
+        // gives each client instance its own real id. Still `PlayerId(1)` by default (a single
+        // browser client's own config never sets this field), so `Replica`'s own doc comment on
+        // `own_player` ("a real connection's usual path") is unaffected there. A real
+        // multi-connection handshake (M28) replaces this source entirely, once it exists.
         let mut replica = crate::client::Replica::<G>::new(
             dims,
             Box::new(source),
             CacheCapacity::Chunks(cfg.cache_chunks),
-            PlayerId(1),
+            PlayerId(cfg.my_player_id),
         );
         // The silent trap (docs/plan/15b-ring-connection-and-replica-rendering.md, Planning
         // decisions): a store paired with an `Uploader` -- the one consumer of cache events,

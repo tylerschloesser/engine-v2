@@ -19,7 +19,7 @@ test('harness-accepts-build-dir: fixture as a raw buildGame() output directory p
     harness.clients[0]?.dispatch({ SetMotd: { n: 11 } })
     await harness.settle()
     expect((harness.clients[0]?.ui() as { motd: number } | null)?.motd).toBe(11)
-    harness.assertConverged({ only: [0] })
+    harness.assertConverged()
   } finally {
     await harness.dispose()
   }

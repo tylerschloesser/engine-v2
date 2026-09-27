@@ -13,9 +13,7 @@ export async function putsFixture(): Promise<{ wasm: WebAssembly.Module; buildHa
 export const DEFAULT_SEED = 1
 
 export function square(i: number): { x: number; y: number; tilesAcross: number } {
-  // Spread clients apart (Deviations, `net-harness.ts`'s own `assertConverged` doc comment): two
-  // clients at the identical position/velocity would otherwise look identical to every *other*
-  // client's presence view -- not the cause of the `own_player` finding, but irrelevant noise
-  // worth avoiding while investigating a mismatch.
+  // Spread clients apart: two clients at the identical position/velocity would otherwise look
+  // identical to every *other* client's presence view -- irrelevant noise worth avoiding.
   return { x: i * 40, y: 0, tilesAcross: 20 }
 }

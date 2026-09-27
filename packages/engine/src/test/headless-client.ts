@@ -116,6 +116,14 @@ export interface HeadlessClientOptions {
   /** The end this client talks to the host through -- raw (`memoryConnectionPair`) or conditioned
    * (`conditionLink`'s own `ends[i]`); `createNetHarness` decides which. */
   connection: Connection
+  /**
+   * M27 gate round 1: this client's own real `PlayerId`, under M15's implicit accept `connId + 1`
+   * -- `createNetHarness` passes `SimHost.accept`'s own return value plus one. Defaults to `1`
+   * (`game_instance.rs`'s own `default_my_player_id`), matching a single real connection's usual
+   * id, so a caller with exactly one client (`connId` always `0`) can omit this. M28's real
+   * handshake replaces this pre-handshake source once it lands.
+   */
+  myPlayerId?: number
 }
 
 function requireRegion(inst: EngineInstance, id: RegionId, what: string) {
@@ -129,7 +137,11 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
   const hexSeed = seedToHexU64(opts.game.seed)
   const clientConfig = {
     arenaBytes: CLIENT_ARENA_BYTES,
-    game: { seed: hexSeed, params: opts.game.worldgen },
+    game: {
+      seed: hexSeed,
+      params: opts.game.worldgen,
+      ...(opts.myPlayerId !== undefined ? { myPlayerId: opts.myPlayerId } : {}),
+    },
   }
   const genConfig = {
     arenaBytes: GEN_ARENA_BYTES,

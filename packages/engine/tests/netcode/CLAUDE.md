@@ -15,7 +15,7 @@ try {
   await harness.advanceTicks(10)
   harness.clients[0]?.dispatch({ SetMotd: { n: 7 } })
   await harness.settle()
-  harness.assertConverged({ only: [0] }) // see "own_player" below
+  harness.assertConverged()
 } finally {
   await harness.dispose()
 }
@@ -37,16 +37,16 @@ try {
   whole run's released-message log as one `Uint8Array` -- compare two same-seed runs with
   `expect(Array.from(a)).toEqual(Array.from(b))`.
 
-## `assertConverged`'s `only` option
+## Each client's own identity (`myPlayerId`)
 
-`assertConverged()` compares `replicaHash()` to the host's `sim_region_hash(conn)` per client. This
-only agrees for `connId 0` at M27: `ClientInstance::init` (`game_instance.rs`) hardcodes
-`own_player = PlayerId(1)` for every client regardless of its real connection (a real handshake is
-M28's job); `PlayerId = conn + 1` only lines up for `connId 0`. Every other connection's replica is
-missing its own private `Player` record while the host's hash always has one -- a structural
-mismatch present even with no player-scoped action dispatched. Until M28, write a multi-client
-convergence check as `assertConverged({ only: [0] })` and assert the rest directly (global `ui()`
-equality, byte traffic, no crash). Do not fix this from here: it is Non-scope for M27.
+`assertConverged()` compares `replicaHash()` to the host's `sim_region_hash(conn)` per client, for
+every client. `createNetHarness` passes each `HeadlessClient` its real `PlayerId` (M15's implicit
+accept: `connId + 1`, `SimHost.accept`'s own return value) as `myPlayerId`, which
+`ClientInstance::init` (`game_instance.rs`) uses for `Replica`'s `own_player` instead of a hardcoded
+`PlayerId(1)` -- this is a pre-handshake stand-in (M28's real handshake, `Welcome`, replaces it as
+the source of truth once it lands), not something a scenario needs to think about. A `HeadlessClient`
+built outside `createNetHarness` (rare) defaults to `myPlayerId: 1`, correct only for a single real
+connection.
 
 ## Fixtures
 

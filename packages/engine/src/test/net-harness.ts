@@ -7,16 +7,28 @@
 // `Persistence.open` + `createSimHostFromInstance` + `wrapEngineInstance` pieces -- the *same*
 // pieces `createWorldServer` itself composes (`server.ts`'s own doc comment on `createWorldServer`:
 // "Built the same way createSimHost is ... but over Persistence.open") -- rather than through the
-// opaque public `createWorldServer(cfg, host)` wrapper. `WorldServer`'s fixed 0024 §5 shape
-// (`{ ready, accept, stop }`) has no seam for `sim_region_hash(conn)`, which `assertConverged` needs
-// live, at an arbitrary tick, exactly what 0020 §8 requires the test entrypoint to expose ("per-
-// region state hashes at any tick"); `createWorldServer`'s own lifecycle (load/recover/create,
-// `ready` rejecting, `onFatal`) is already proven by `tests/wasm/server.test.ts` (steps 1-2) and is
-// not re-proven here. Ticking is driven by `SimHost.stepTick(n)` (the manual driver, bypassing the
-// pacing timer entirely -- `host.timer` below is a no-op `every()` that never fires), interleaved
-// tick-by-tick with `VirtualClock.advanceBy(tickMs)` so a conditioner's own `send`-time draws see
-// the correct virtual "now" (`conditioner.ts`'s own Deviations: "the underlying ManualClock's own
-// now() is advanced to each entry's deliverAt before calling its run()").
+// opaque public `createWorldServer(cfg, host)` wrapper.
+//
+// M27 gate round 1 re-confirms this is necessary, not just convenient: `region_hash(conn)`
+// (`host/mod.rs`) reads `self.conns[conn]` -- the *live* connection table (subscriptions, `slot.
+// player`) -- and `Persistence.open`'s own replay never reconstructs it (M22b Deviations: "replay
+// applies logged Connected records to game state but never calls Host::connect"). A gate-round-1
+// attempt routed `server` through `createWorldServer` with a manual timer double for ticking and a
+// *second*, independently reopened reader instance for `hostRegionHash` (mirroring `tests/wasm/
+// puts.test.ts`'s own "reopen to read a hash" pattern); every scenario failed with `host=
+// 0000000000000000` (`region_hash`'s own documented `0` return for "conn is not connected") because
+// that reopened reader's own connection table is empty, exactly the M22b gap above -- not a
+// durability race `memoryStorage`'s synchronous writes could paper over, since there was never
+// going to be a live connection there regardless of timing. `WorldServer`'s fixed 0024 §5 shape
+// (`{ ready, accept, stop }`) has no seam that exposes a *live, connected* instance at all, so there
+// is no way to read this specific hash through it without adding one -- confirmed empirically here,
+// reverted. `createWorldServer`'s own lifecycle (load/recover/create, `ready` rejecting, `onFatal`)
+// is already proven by `tests/wasm/server.test.ts` (steps 1-2) and is not re-proven here. Ticking
+// is driven by `SimHost.stepTick(n)` (the manual driver, bypassing the pacing timer entirely --
+// `host.timer` below is a no-op `every()` that never fires), interleaved tick-by-tick with
+// `VirtualClock.advanceBy(tickMs)` so a conditioner's own `send`-time draws see the correct virtual
+// "now" (`conditioner.ts`'s own Deviations: "the underlying ManualClock's own now() is advanced to
+// each entry's deliverAt before calling its run()").
 import { RegionId, Role, Status } from '../abi.js'
 import { Persistence } from '../host/persistence.js'
 import type { EngineInstance } from '../loader.js'
@@ -81,24 +93,15 @@ export interface NetHarness {
   advanceTicks(n: number): Promise<void>
   settle(): Promise<void>
   /**
-   * `replicaHash() === hostRegionHash(conn)` per client (Seams). `opts.only` (an addition beyond
-   * the brief's own no-argument signature, backward compatible: every existing zero-arg caller is
-   * unaffected) restricts the check to the given `linkIdx`es -- needed because `region_hash`
-   * (`host/mod.rs`) hashes each connection's own `OwnPlayer` section, and `ClientInstance::init`
-   * (`game_instance.rs`) hardcodes `own_player = PlayerId(1)` for *every* client instance
-   * regardless of which real connection it ends up wired to ("this milestone's own topology never
-   * gives one client instance more than one host link, and it is always conn == 0 ... a real
-   * multi-connection handshake is M28's, Non-scope here" -- that comment's own "this milestone" is
-   * M15b, written before a second real connection ever existed to violate it). `PlayerId = conn +
-   * 1` (same comment) means this only lines up for `connId === 0`; every other connection's client
-   * replica can never see its own private `Player` record (only ever replicated under its *real*
-   * id) while the host's own hash always finds one (`on_player(Joined)` puts a default
-   * unconditionally) -- a structural mismatch, present even with no player-scoped action ever
-   * dispatched, that no test design can route around before M28. Reported to the orchestrator
-   * (Deviations); this milestone's own scenarios use `only` to state exactly what the current
-   * engine can support rather than asserting something structurally false.
+   * `replicaHash() === hostRegionHash(conn)` per client (Seams), for every client. M27 gate round
+   * 1: this used to need an `only` escape hatch, because `ClientInstance::init` hardcoded
+   * `own_player = PlayerId(1)` for every client regardless of its real connection -- fixed by
+   * threading each connection's real `PlayerId` through the client config
+   * (`HeadlessClientOptions.myPlayerId`, `game_instance.rs`'s own `my_player_id` field, `connId +
+   * 1` under M15's implicit accept), so this is now the brief's own plain no-argument check for
+   * every scenario.
    */
-  assertConverged(opts?: { only?: number[] }): void
+  assertConverged(): void
   counters(i: number): NetHarnessCounters
   trace(): Uint8Array
   dispose(): Promise<void>
@@ -219,10 +222,14 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     const hostSide = traced(link.ends[0] as Connection, linkIdx, 1)
     const clientSide = traced(link.ends[1] as Connection, linkIdx, 0)
     const connId = server.accept(hostSide)
+    // M27 gate round 1: `connId + 1`, M15's own implicit-accept convention (`PlayerId = conn + 1`)
+    // -- the pre-handshake source `game_instance.rs`'s own `default_my_player_id` doc comment
+    // names; M28's real handshake replaces this once it lands.
     const client = createHeadlessClient({
       wasm,
       game: { seed: worldCfg.params.seed, worldgen: gameWorldgen },
       connection: clientSide,
+      myPlayerId: connId + 1,
     })
     entries.push({ client, connId, link, linkIdx })
     return client
@@ -255,11 +262,9 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     return simInstance.readU64Hex(RegionId.Result, 0)
   }
 
-  function assertConverged(convergedOpts?: { only?: number[] }): void {
-    const only = convergedOpts?.only
+  function assertConverged(): void {
     const mismatches: string[] = []
     for (const e of entries) {
-      if (only !== undefined && !only.includes(e.linkIdx)) continue
       const host = hostRegionHash(e.connId)
       const replica = e.client.replicaHash()
       if (host !== replica) {

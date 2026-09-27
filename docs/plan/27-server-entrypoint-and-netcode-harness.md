@@ -363,3 +363,34 @@ the step-4 commits below.
   round trip). `pnpm test unit`: 277 tests (was 275; +2, `pump.test.ts`). `pnpm lint`: green.
 - Context artifacts written: `packages/engine/tests/netcode/CLAUDE.md` (55 lines, under the 60-line
   cap `context-artifacts.test.mjs` enforces); `run-tests` skill gained the `netcode` suite line.
+
+**Gate round 1: the `own_player` finding fixed, not escalated (narrow "no Rust change" exception
+granted).** `game_instance.rs`'s `TerrainConfig` gained an optional `my_player_id: u32` field
+(`#[serde(default = "default_my_player_id")]`, default `1` -- a single browser client's own config
+never sets it, so `own_player` there is unchanged); `ClientInstance::init` uses `PlayerId(cfg.
+my_player_id)` in place of the hardcoded `PlayerId(1)`. `createHeadlessClient` gained
+`HeadlessClientOptions.myPlayerId?`; `net-harness.ts`'s `makeClient()` passes `connId + 1` (M15's
+own implicit-accept convention). No `ABI_VERSION` bump: this is a config JSON field, not an
+`ABI_EXPORTS` row or `export_instance!` extern (confirmed: `pnpm test wasm -t "abi registry"`
+unaffected, 17 tests). `assertConverged`'s `only` option is gone; every scenario now calls the
+brief's own plain `assertConverged()` and passes for every client, `join-converges` (K=4) included.
+Failability: reverting `PlayerId(cfg.my_player_id)` to a hardcoded `PlayerId(1)` and rebuilding,
+`join-converges` fails for clients 1-3 (`host=71a7560c... replica=c9f2e7b7...`, etc., `tick=70`);
+reverting the revert restores 10/10 green. `pnpm test rust -t game_instance` (9 tests), `pnpm test
+browser -t connected` (13 tests, a single un-configured client) and `node scripts/repeat.mjs
+netcode 20` (`pass=20 fail=0 hang=0`) all pass with the fix in.
+
+`createNetHarness`'s own `server` field stays a directly-built `SimHost`, **not** routed through
+`createWorldServer` -- attempted and reverted, root cause confirmed empirically, not merely
+theorised: `region_hash(conn)` (`host/mod.rs`) reads `self.conns[conn]`, the *live* connection
+table (subscriptions, `slot.player`), which `Persistence.open`'s own replay never reconstructs
+(M22b Deviations: "replay ... never calls `Host::connect`"). Routing `server` through
+`createWorldServer` (ticking via a manual `host.timer` double, `hostRegionHash` reading a second,
+freshly reopened instance over the same `storage` per call -- `tests/wasm/puts.test.ts`'s own
+"reopen to read a hash" pattern) made every scenario fail with `host=0000000000000000`
+(`region_hash`'s own documented return for "conn is not connected"): the reopened reader's
+connection table is always empty, by construction, regardless of durability or timing. `WorldServer`
+(0024 §5, `{ ready, accept, stop }`) has no seam exposing a live, connected instance, so there is no
+way to read this specific hash through it without adding one. `createWorldServer`'s own lifecycle
+is exercised and proven separately (`tests/wasm/server.test.ts`, steps 1-2); `net-harness.ts`'s own
+module doc comment records this attempt so a future implementer does not repeat it.

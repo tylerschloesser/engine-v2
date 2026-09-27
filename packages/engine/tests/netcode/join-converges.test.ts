@@ -1,11 +1,9 @@
 // `join-converges` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Tests added): K=4, a mix
 // of actions, `assertConverged`. Every client's `ui()`-observable state (global scope: `motd`,
-// `global_ticks`) is asserted identical across all four, and `assertConverged`'s own per-connection
-// `region_hash` parity is checked for `connId 0` -- the harness's own doc comment on
-// `assertConverged`'s `only` option explains why every other connection cannot currently reach
-// parity (`ClientInstance::init`'s hardcoded `own_player = PlayerId(1)`, a real multi-connection
-// identity being M28's own job, Non-scope here): this test still drives four real, independent
-// `HeadlessClient`s and asserts everything the current engine can support about them.
+// `global_ticks`) is asserted identical across all four, and `assertConverged()` (M27 gate round 1:
+// every connection, not just `connId 0` -- `HeadlessClient`'s own `myPlayerId` now threads each
+// connection's real `PlayerId` into its client config, `net-harness.ts`'s own doc comment) checks
+// full `region_hash` parity for all four.
 import { expect, test } from 'vitest'
 import { createNetHarness } from '../../src/test/net-harness.js'
 import { putsFixture, square } from './support.js'
@@ -34,7 +32,7 @@ test('join-converges', async () => {
     }
     expect((harness.clients[0]?.ui() as { motd: number } | null)?.motd).toBe(99)
 
-    harness.assertConverged({ only: [0] })
+    harness.assertConverged()
   } finally {
     await harness.dispose()
   }
