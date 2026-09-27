@@ -17,7 +17,13 @@
 // frame at `tick == 0, ack_seq == 0`) -- so `session_state`/`seq_seed` bookkeeping lives here, not
 // in a separate always-on pump.
 import { Status } from '../abi.js'
-import { ClockBlockView, type ClockFields, SessionState, writeClockBlock } from '../clock-block.js'
+import {
+  ClockBlockView,
+  type ClockFields,
+  F32Reader,
+  SessionState,
+  writeClockBlock,
+} from '../clock-block.js'
 import type { EngineInstance, RegionView } from '../loader.js'
 import { readU32LE } from '../sab/bytes.js'
 import { WORKER_HOST } from '../sab/control.js'
@@ -60,6 +66,7 @@ export function createNetPump(
     index: WORKER_HOST,
   })
   const clockView = new ClockBlockView(clockBlockSab)
+  const tickFractionReader = new F32Reader()
   // Preallocated once (`.claude/rules/hot-paths.md`): mutated in place on every clock-block write
   // instead of a fresh object literal per wake.
   const clockFields: ClockFields = {
@@ -69,6 +76,7 @@ export function createNetPump(
     sessionState: SessionState.Connecting,
     seqSeed: 0,
     ackSeq: 0,
+    tickFraction: 0,
   }
   let live = false
 
@@ -94,6 +102,11 @@ export function createNetPump(
     if (sawFrame && result && inst.call0(inst.x.client_clock_stats) === Status.Ok) {
       const tick = readU32LE(result.u8, 0)
       const ackSeq = readU32LE(result.u8, 4)
+      // docs/plan/26-prediction-rendering-and-clocks.md steps 4-6 (`ABI_VERSION` 23 -> 24):
+      // `client_clock_stats`'s own widened result -- `predicted_tick` (real from this milestone,
+      // 0012 "Two clocks") and `tick_fraction` (`ClientCore::last_tick_fraction`'s bits).
+      const predictedTick = readU32LE(result.u8, 8)
+      const tickFraction = tickFractionReader.read(result.u8, 12)
       if (!live) {
         // PRE-PLAN §10 / Planning decisions "How main learns the `seq` seed": the first frame's
         // own `ack_seq` (the host's `last_seq` for this player) until M28 switches the source to
@@ -103,8 +116,9 @@ export function createNetPump(
         clockFields.sessionState = SessionState.Live
       }
       clockFields.authoritativeTick = tick
-      clockFields.predictedTick = tick // = authoritative until M26
+      clockFields.predictedTick = predictedTick
       clockFields.ackSeq = ackSeq
+      clockFields.tickFraction = tickFraction
       writeClockBlock(clockView, clockFields)
     }
   }

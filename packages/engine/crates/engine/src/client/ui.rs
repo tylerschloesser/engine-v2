@@ -237,6 +237,8 @@ mod tests {
                 predicted: r.tick(),
                 tick_fraction: 0.0,
                 ticks_per_second: 20,
+                lead: crate::time::Ticks(0),
+                correction: 0.0,
             },
             r.own_player(),
             r.entities_map(),

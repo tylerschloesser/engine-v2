@@ -687,12 +687,23 @@ where
                     ..
                 } = c.as_mut();
                 let mutations = core.mutations();
+                // docs/plan/26-prediction-rendering-and-clocks.md steps 4-6: `core.predicted_tick
+                // ()`/`core.lead()`/`core.tick_fraction(..)` all take `&mut self` (`tick_fraction`
+                // feeds `HostClock` from this wake's own real local wall time, `camera.
+                // frame_time_ms`) -- read before `core.view()`'s own immutable borrow below, which
+                // every field of `clocks` after this point is built from instead.
+                let predicted = core.predicted_tick();
+                let lead = core.lead();
+                let tick_fraction = core.tick_fraction(camera.frame_time_ms);
+                let correction = core.own_correction();
                 let replica = core.view();
                 let clocks = Clocks {
                     authoritative: replica.tick(),
-                    predicted: replica.tick(), // = authoritative until M26
-                    tick_fraction: 0.0,        // a real lead is M26's
+                    predicted,
+                    tick_fraction,
                     ticks_per_second: G::TICK_RATE.hz_value(),
+                    lead,
+                    correction,
                 };
                 let me = replica.own_player();
                 // docs/plan/19-presence-channel.md steps 4-6: copied out *before* `client.frame`
@@ -911,12 +922,23 @@ where
                         // (client-side state changed with no new host frame, M18); it is a no-op
                         // here since `mutations` already matches what this call just recorded.
                         let mutations = core.mutations();
+                        // Steps 4-6: same ordering reason as `frame(t_ms)`'s own call site above
+                        // -- `core`'s own `&mut self` reads happen before `core.view()`'s immutable
+                        // borrow. No `CameraBlock` here (`Instance::on_frame`'s own signature is
+                        // `bytes` only), so `tick_fraction` reuses `camera_view.time_ms`, the same
+                        // one-wake-stale reuse `FrameView`'s own fields below already rely on.
+                        let predicted = core.predicted_tick();
+                        let lead = core.lead();
+                        let tick_fraction = core.tick_fraction(camera_view.time_ms);
+                        let correction = core.own_correction();
                         let replica = core.view();
                         let clocks = Clocks {
                             authoritative: replica.tick(),
-                            predicted: replica.tick(), // = authoritative until M26
-                            tick_fraction: 0.0,        // a real lead is M26's
+                            predicted,
+                            tick_fraction,
                             ticks_per_second: G::TICK_RATE.hz_value(),
+                            lead,
+                            correction,
                         };
                         let me = replica.own_player();
                         // docs/plan/17-drawlist-and-sprites.md: no `CameraBlock` is in scope here
@@ -1077,17 +1099,22 @@ where
 
     /// docs/plan/16-action-round-trip.md: `ClientCore::last_summary()`'s `tick`/`ack_seq`, two LE
     /// `u32` into `result` -- the client worker's own source for the clock block's
-    /// `authoritative_tick`/`ack_seq` fields (`predicted_tick`, `ticks_per_second`, `session_state`
-    /// and `seq_seed` are derived entirely in TS).
+    /// `authoritative_tick`/`ack_seq` fields (`ticks_per_second`, `session_state` and `seq_seed`
+    /// are derived entirely in TS). docs/plan/26-prediction-rendering-and-clocks.md steps 4-6:
+    /// widened with `predicted_tick` (`ClientCore::predicted_tick`, real from this milestone) and
+    /// `ClientCore::last_tick_fraction`'s `f32` bits (`Instance::client_clock_stats`'s own doc
+    /// comment explains why this call has no `t_ms` of its own to feed `HostClock` fresh).
     fn client_clock_stats(&mut self, result: &mut [u8]) -> Status {
         match self {
             GameInstance::Client(c) => {
-                let Some(out) = result.get_mut(..8) else {
+                let Some(out) = result.get_mut(..16) else {
                     return Status::BadLength;
                 };
                 let s = c.core.last_summary();
                 out[0..4].copy_from_slice(&s.tick.0.to_le_bytes());
                 out[4..8].copy_from_slice(&s.ack_seq.to_le_bytes());
+                out[8..12].copy_from_slice(&c.core.predicted_tick().0.to_le_bytes());
+                out[12..16].copy_from_slice(&c.core.last_tick_fraction().to_le_bytes());
                 Status::Ok
             }
             _ => Status::Unsupported,
@@ -1230,10 +1257,17 @@ mod tests {
     #[test]
     fn client_clock_stats_reports_last_applied_tick_and_ack_seq() {
         let mut inst = client_instance();
-        let mut out = [0u8; 8];
+        // Steps 4-6: widened to 16 bytes (`predicted_tick`, `tick_fraction`'s own `f32` bits).
+        let mut out = [0u8; 16];
         assert_eq!(inst.client_clock_stats(&mut out), Status::Ok);
         assert_eq!(u32::from_le_bytes(out[0..4].try_into().unwrap()), 0);
         assert_eq!(u32::from_le_bytes(out[4..8].try_into().unwrap()), 0);
+        // Default lead is 1 before any ack sample (`LeadEstimator`'s own doc comment): predicted
+        // = authoritative(0) + lead(1).
+        assert_eq!(u32::from_le_bytes(out[8..12].try_into().unwrap()), 1);
+        // `tick_fraction` is cached from `frame(t_ms)`'s own call (`ClientCore::tick_fraction`'s
+        // doc comment); this raw test never calls `frame`, so it stays at its init value.
+        assert_eq!(f32::from_le_bytes(out[12..16].try_into().unwrap()), 0.0);
 
         let mut buf = [0u8; 512];
         let mut sink = crate::bytes::SliceSink::new(&mut buf);
@@ -1253,6 +1287,9 @@ mod tests {
         assert_eq!(inst.client_clock_stats(&mut out), Status::Ok);
         assert_eq!(u32::from_le_bytes(out[0..4].try_into().unwrap()), 7);
         assert_eq!(u32::from_le_bytes(out[4..8].try_into().unwrap()), 3);
+        // No pending action was ever dispatched, so no ack sample ever fed `LeadEstimator`: lead
+        // is still the default 1, predicted = authoritative(7) + lead(1) = 8.
+        assert_eq!(u32::from_le_bytes(out[8..12].try_into().unwrap()), 8);
     }
 
     /// `Rejected` outcome, byte for byte -- `[kind u8 = 2][len u32 LE][JSON]`.

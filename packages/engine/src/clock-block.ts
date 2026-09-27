@@ -7,11 +7,14 @@
 // blob copied through a scratch buffer per read.
 //
 // `sab/layout.ts`'s `createSeqlock(CLOCK_BLOCK_DATA_BYTES)` backs `SabSet.clockBlock` with 32
-// data bytes (8 `u32` slots: M06's own sizing, "M16 owns the field layout"). This milestone uses
-// the first six: `authoritativeTick, predictedTick, ticksPerSecond, sessionState, seqSeed,
-// ackSeq`. The remaining 8 bytes are reserved for `revealed` (M28) and `tick_fraction` (M26) and
-// are never read or written here, so this file's own read/write window only ever needs to cover
-// the 24 bytes it actually uses.
+// data bytes (8 `u32` slots: M06's own sizing, "M16 owns the field layout"). M16/M16b used the
+// first six: `authoritativeTick, predictedTick, ticksPerSecond, sessionState, seqSeed, ackSeq`.
+// docs/plan/26-prediction-rendering-and-clocks.md steps 4-6 claims the seventh, `tickFraction`
+// (an `f32`, not a tick count -- `ClientCore::tick_fraction`'s own `HostClock`-derived value,
+// `client_clock_stats`'s newly widened result). The eighth (offset 28) stays reserved for
+// `revealed` (M28).
+
+import { at } from './sab/bytes.js'
 
 export const CLOCK_SEQ_BYTES = 4
 export const CLOCK_OFF_AUTHORITATIVE_TICK = 0
@@ -20,8 +23,11 @@ export const CLOCK_OFF_TICKS_PER_SECOND = 8
 export const CLOCK_OFF_SESSION_STATE = 12
 export const CLOCK_OFF_SEQ_SEED = 16
 export const CLOCK_OFF_ACK_SEQ = 20
-/** Bytes of the six fields this milestone owns (not the whole 32-byte data region). */
-export const CLOCK_FIELDS_BYTES = 24
+/** M26 steps 4-6: an `f32`, read/written through a `Float32Array` view over the same bytes (every
+ * other field here is a `u32`). */
+export const CLOCK_OFF_TICK_FRACTION = 24
+/** Bytes of the seven fields this milestone owns (not the whole 32-byte data region). */
+export const CLOCK_FIELDS_BYTES = 28
 
 /** `session_state` (Scope: "0 connecting, 1 live"). */
 export const SessionState = { Connecting: 0, Live: 1 } as const
@@ -34,6 +40,8 @@ export type ClockFields = {
   sessionState: number
   seqSeed: number
   ackSeq: number
+  /** M26 steps 4-6: real from this milestone on (`ClientCore::last_tick_fraction`). */
+  tickFraction: number
 }
 
 const MAX_RETRIES = 8
@@ -46,11 +54,18 @@ export class ClockBlockView {
   private readonly sessionState: Uint32Array
   private readonly seqSeed: Uint32Array
   private readonly ackSeq: Uint32Array
+  /** M26 steps 4-6: the one non-`u32` field here -- a plain `Float32Array` view over the same SAB
+   * bytes, same construction shape as every other field. */
+  private readonly tickFraction: Float32Array
   private readonly bytes: Uint8Array
   private readonly scratch: Uint8Array
   /** A view over `scratch`'s own (non-shared) buffer, built once here so a read never allocates a
-   * fresh typed-array view (`.claude/rules/hot-paths.md`). */
+   * fresh typed-array view (`.claude/rules/hot-paths.md`). `tickFraction`'s own bits ride along in
+   * slot 6 as a `u32`-typed copy of the same bytes (a bitwise-exact copy at this granularity, not
+   * a numeric conversion) -- `scratchFieldsFloatView` is the reinterpreting view a reader uses to
+   * read that one slot back out as the `f32` it actually is. */
   private readonly scratchFields: Uint32Array
+  private readonly scratchFieldsFloat: Float32Array
 
   constructor(sab: SharedArrayBuffer) {
     const base = CLOCK_SEQ_BYTES
@@ -61,9 +76,15 @@ export class ClockBlockView {
     this.sessionState = new Uint32Array(sab, base + CLOCK_OFF_SESSION_STATE, 1)
     this.seqSeed = new Uint32Array(sab, base + CLOCK_OFF_SEQ_SEED, 1)
     this.ackSeq = new Uint32Array(sab, base + CLOCK_OFF_ACK_SEQ, 1)
+    this.tickFraction = new Float32Array(sab, base + CLOCK_OFF_TICK_FRACTION, 1)
     this.bytes = new Uint8Array(sab, 0, base + CLOCK_FIELDS_BYTES)
     this.scratch = new Uint8Array(base + CLOCK_FIELDS_BYTES)
-    this.scratchFields = new Uint32Array(this.scratch.buffer, base, 6)
+    this.scratchFields = new Uint32Array(this.scratch.buffer, base, 7)
+    this.scratchFieldsFloat = new Float32Array(
+      this.scratch.buffer,
+      base + CLOCK_OFF_TICK_FRACTION,
+      1,
+    )
   }
 
   seqWord(): Int32Array {
@@ -96,6 +117,15 @@ export class ClockBlockView {
   scratchFieldsView(): Uint32Array {
     return this.scratchFields
   }
+  /** M26 steps 4-6: reads `scratchFields`'s own slot 6 back out as the `f32` it actually is (the
+   * same underlying bytes `readClockBlockInto` already copied there this call, reinterpreted, not
+   * converted) -- call *after* a successful `readClockBlockInto`, never on its own. */
+  tickFractionView(): Float32Array {
+    return this.tickFraction
+  }
+  scratchFieldsFloatView(): Float32Array {
+    return this.scratchFieldsFloat
+  }
 }
 
 /** Writer: the client worker, after each `on_frame` that actually produced a fresh summary (not
@@ -109,12 +139,16 @@ export function writeClockBlock(block: ClockBlockView, f: ClockFields): void {
   block.sessionStateView()[0] = f.sessionState
   block.seqSeedView()[0] = f.seqSeed
   block.ackSeqView()[0] = f.ackSeq
+  block.tickFractionView()[0] = f.tickFraction
   Atomics.add(block.seqWord(), 0, 1) // end: even, published
 }
 
-/** Reader: copy-with-retry into `out` (caller-owned, built once -- a `Uint32Array(6)` in the same
- * field order as `ClockFields`'s own keys). Returns `false`, leaving `out` untouched, only if
- * every retry raced the writer (same shape as `camera/block.ts`'s `readCameraBlockInto`). */
+/** Reader: copy-with-retry into `out` (caller-owned, built once -- a `Uint32Array(7)`: the first
+ * six in `CLOCK_FIELD`'s own order, the seventh the raw bits of `tickFraction`, read back out as
+ * a float through `block.scratchFieldsFloatView()` after this call, never through `out` itself --
+ * `CLOCK_FIELD` deliberately has no entry for it, so `at(out, ...)` can never return the bits as
+ * if they were a plain `u32`). Returns `false`, leaving `out` untouched, only if every retry raced
+ * the writer (same shape as `camera/block.ts`'s `readCameraBlockInto`). */
 export function readClockBlockInto(block: ClockBlockView, out: Uint32Array): boolean {
   const seq = block.seqWord()
   const bytes = block.bytesView()
@@ -134,6 +168,27 @@ export function readClockBlockInto(block: ClockBlockView, out: Uint32Array): boo
 
 /** Field indices into `readClockBlockInto`'s own `out` (same order `ClockFields` declares them,
  * and the same order `writeClockBlock` writes them). */
+/** A little-endian `f32` read from `u8[off..off+4)`, bit-reinterpreted, no `DataView`
+ * (`.claude/rules/hot-paths.md`): `client-net.ts`'s own reader for `client_clock_stats`'s widened
+ * result (docs/plan/26-prediction-rendering-and-clocks.md steps 4-6, `tick_fraction`). Built once
+ * per owner (its own constructor, the same "created at setup" shape every SAB view in this file
+ * already uses) and reused on every call; not in `sab/bytes.ts` alongside `readU32LE` because
+ * `sab.no_alloc_syntax` (docs/plan/06-sab-primitives-and-workers.md) bans a bare top-level `new`
+ * anywhere under `src/sab/**` outside a constructor/`create*` factory, and a scratch `Float32Array`
+ * view has nowhere to live there except as exactly that -- this file is outside that scan. */
+export class F32Reader {
+  private readonly scratch = new Uint8Array(4)
+  private readonly view = new Float32Array(this.scratch.buffer)
+
+  read(u8: Uint8Array, off: number): number {
+    this.scratch[0] = at(u8, off)
+    this.scratch[1] = at(u8, off + 1)
+    this.scratch[2] = at(u8, off + 2)
+    this.scratch[3] = at(u8, off + 3)
+    return at(this.view, 0)
+  }
+}
+
 export const CLOCK_FIELD = {
   AuthoritativeTick: 0,
   PredictedTick: 1,

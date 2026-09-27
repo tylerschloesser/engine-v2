@@ -348,8 +348,17 @@ where
     /// own prediction-merged state -- `entities()`/`predicted_player`/`is_predicted`/... all real,
     /// not reimplemented -- so a test can drive the game's own `ClientSide::extract`/`ui` exactly
     /// as `game_instance.rs`'s `frame()`/`on_frame()` do. `visible`/`window_origin` are the
-    /// caller's own choice (a test's own camera); the clock block's `predicted` term is still
-    /// `authoritative` (Non-scope here: M26 steps 4-6 own the real lead estimator).
+    /// caller's own choice (a test's own camera).
+    ///
+    /// Steps 4-6 Deviations: `predicted`/`lead`/`correction` are real (`ClientCore::predicted_tick`/
+    /// `lead`/`own_correction`, all `&self` -- no borrow-ordering issue the way `game_instance.rs`'s
+    /// two production call sites have). `tick_fraction` stays `0.0` deliberately: it is
+    /// `ClientCore::tick_fraction`'s own `HostClock` fed from a *wall-clock* `local_ms`
+    /// (`game_instance.rs`'s `frame(t_ms)`, real `camera.frame_time_ms`), and `Loopback` drives
+    /// clients by tick alone (`Self::step`) with no wall clock of its own to feed it -- widening
+    /// this method to `&mut self` and a `local_ms` parameter is a real API change with no caller
+    /// needing it yet (every `frame_view`-based test in this milestone's own `render.rs`/`texel.rs`
+    /// only reads tile/entity/player state, never `tick_fraction`).
     pub fn frame_view(
         &self,
         i: usize,
@@ -360,9 +369,11 @@ where
         let replica = core.view();
         let clocks = Clocks {
             authoritative: replica.tick(),
-            predicted: replica.tick(),
+            predicted: core.predicted_tick(),
             tick_fraction: 0.0,
             ticks_per_second: G::TICK_RATE.hz_value(),
+            lead: core.lead(),
+            correction: core.own_correction(),
         };
         FrameView::new(
             replica as &dyn WorldRead<G>,

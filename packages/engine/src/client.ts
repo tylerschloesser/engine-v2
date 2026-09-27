@@ -104,11 +104,16 @@ export type ActionOutcome<Reject = unknown> =
 /** `Client.clock()`'s own return shape (docs/plan/16b-ui-observation-and-clock.md Scope): tick
  * counts, not seconds (0006 "On the client": "the UI never counts ticks itself" -- a page derives
  * remaining seconds from a replicated `done_at` tick and this pair). Returned as the same reused
- * object on every call (Planning decisions: "`clock()` returns a reused object"). */
+ * object on every call (Planning decisions: "`clock()` returns a reused object"). `predicted`
+ * differs from `authoritative` from docs/plan/26-prediction-rendering-and-clocks.md on (0012 "Two
+ * clocks": `predicted = authoritative + lead`). `tickFraction` (that milestone's own addition,
+ * Seams: "a `tickFraction` field if M16b's object lacks one"): progress into the current tick,
+ * `0..1`, for a smooth animation between two ticks. */
 export type ClockSnapshot = {
   authoritative: number
   predicted: number
   ticksPerSecond: number
+  tickFraction: number
 }
 
 /** `client::core::OUTBOX_CAPACITY` (docs/plan/16-action-round-trip.md Deviations): the 0012
@@ -1001,10 +1006,14 @@ export function createClient(options: ClientOptions): Client {
 
   const clockView = new ClockBlockView(sabs.clockBlock)
   // Built once (`.claude/rules/hot-paths.md`): every clock-block read copies into this same
-  // six-field scratch array, in `CLOCK_FIELD`'s own order. A torn read (every retry raced the
-  // writer) leaves it holding whatever the previous successful read saw -- stale, never garbage,
-  // and always a real snapshot the writer actually published at some point.
-  const clockScratch = new Uint32Array(6)
+  // seven-slot scratch array, the first six in `CLOCK_FIELD`'s own order (a torn read -- every
+  // retry raced the writer -- leaves it holding whatever the previous successful read saw: stale,
+  // never garbage, always a real snapshot the writer actually published at some point). The
+  // seventh (docs/plan/26-prediction-rendering-and-clocks.md steps 4-6) is `tickFraction`'s own
+  // raw bits, sized only so `readClockBlockInto`'s own `.set()` has room -- `CLOCK_FIELD` has no
+  // entry for it on purpose (`clock-block.ts`'s own doc comment): read it back through
+  // `clockView.scratchFieldsFloatView()` after the same call, never through `clockScratch` itself.
+  const clockScratch = new Uint32Array(7)
 
   // `dispatch`'s own producer, wake target `WORKER_CLIENT` (Scope: "then Atomics.notify of the
   // client worker" -- `RingProducer`'s own `wake` option does this on every successful push, the
@@ -1362,7 +1371,12 @@ export function createClient(options: ClientOptions): Client {
   // `{ authoritative, predicted, ticksPerSecond }` refreshed from the clock block on call (no
   // allocation per call)". Reuses `clockScratch` (above): `dispatch`/`waitForLive`'s own reads and
   // this one never run inside the same call, so sharing the one scratch array costs nothing.
-  const clockSnapshot: ClockSnapshot = { authoritative: 0, predicted: 0, ticksPerSecond: 0 }
+  const clockSnapshot: ClockSnapshot = {
+    authoritative: 0,
+    predicted: 0,
+    ticksPerSecond: 0,
+    tickFraction: 0,
+  }
 
   // Named `readClockSnapshot`, not `clock`: `clock` (above) already names the injected `Clock`
   // (`options.test?.clock ?? systemClock`) this whole function scope closes over. Exposed on the
@@ -1372,6 +1386,10 @@ export function createClient(options: ClientOptions): Client {
     clockSnapshot.authoritative = at(clockScratch, CLOCK_FIELD.AuthoritativeTick)
     clockSnapshot.predicted = at(clockScratch, CLOCK_FIELD.PredictedTick)
     clockSnapshot.ticksPerSecond = at(clockScratch, CLOCK_FIELD.TicksPerSecond)
+    // docs/plan/26-prediction-rendering-and-clocks.md steps 4-6: the one field `CLOCK_FIELD` has
+    // no plain-`u32` entry for (`clock-block.ts`'s own doc comment) -- read back through the same
+    // reinterpreting view `readClockBlockInto` just refreshed, not through `clockScratch`.
+    clockSnapshot.tickFraction = at(clockView.scratchFieldsFloatView(), 0)
     return clockSnapshot
   }
 

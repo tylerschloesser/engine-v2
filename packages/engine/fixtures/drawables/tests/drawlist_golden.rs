@@ -65,6 +65,8 @@ fn extract_and_sort(lb: &Loopback<Drawables>, zoom: f32) -> (u32, Vec<u8>) {
         predicted: replica.tick(),
         tick_fraction: 0.0,
         ticks_per_second: 20,
+        lead: engine::time::Ticks(0),
+        correction: 0.0,
     };
     let view = FrameView::new(
         replica as &dyn engine::game::WorldRead<Drawables>,

@@ -10,6 +10,7 @@
 //! same "measure, then write" shape `wire::SectionWriter` already uses on the encode side, turned
 //! around for decoding, and it means neither pass needs a staging buffer.
 
+use crate::clock::{HostClock, LeadEstimator};
 use crate::game::Game;
 use crate::predict::{Overlay, OverlayDiff, Pending, PendingQueue, Prediction};
 use crate::sim::{Applied, Rejected};
@@ -138,6 +139,29 @@ pub struct ClientCore<G: Game> {
     /// `budgets.json` ceiling"): how many tiles the most recent [`Self::sync_overlay_dirty`] call
     /// found changed.
     overlay_diff_entries_last: u32,
+    /// docs/plan/26-prediction-rendering-and-clocks.md steps 4-6: this client's own wall-clock
+    /// estimate (Planning decisions "`HostClock` lives here, not in M30"), fed once per
+    /// `game_instance.rs` wake (`frame(t_ms)`, real local wall time via `CameraBlock::
+    /// frame_time_ms`) through [`Self::tick_fraction`], not only when a new host frame lands.
+    host_clock: HostClock,
+    /// M26's lead estimator (Planning decisions "Lead estimation"), driving [`Self::set_lead`]
+    /// from [`Self::on_ack_sample`].
+    lead_estimator: LeadEstimator,
+    /// The eased "Correction without snapping" scalar (0012 Decision), read by
+    /// [`Self::own_correction`]: set at each own ack ([`Self::on_ack_sample`]) and decayed to zero
+    /// over [`EASE_TICKS`] ticks of elapsed authoritative time -- ticks, not wall-clock ms, since
+    /// every other piece of this client's own prediction state (the pending queue, the overlay) is
+    /// already tick-native and this avoids threading a wall-clock argument into `on_frame` (module
+    /// doc comment: `on_frame`'s own signature is unchanged by this milestone).
+    correction: f32,
+    correction_set_at: Tick,
+    /// The last value [`Self::tick_fraction`] computed, cached so `client_clock_stats`
+    /// (`game_instance.rs`, `abi::client_clock_stats`'s own "only what Rust alone has" crossing)
+    /// can hand it to the clock block with no `t_ms` argument of its own -- one wake stale on a
+    /// wake where `frame(t_ms)` did not itself run, the same "harmless" one-wake staleness
+    /// `CachedCameraView`'s own doc comment (`game_instance.rs`) already accepts for
+    /// `on_frame`'s own reuse of the last real `frame()` call's camera-derived fields.
+    last_tick_fraction: f32,
 }
 
 impl<G: Game> ClientCore<G> {
@@ -174,6 +198,11 @@ impl<G: Game> ClientCore<G> {
             predict_replays_last_frame: 0,
             overlay_diff: OverlayDiff::new(),
             overlay_diff_entries_last: 0,
+            host_clock: HostClock::new(G::TICK_RATE),
+            lead_estimator: LeadEstimator::new(G::TICK_RATE),
+            correction: 0.0,
+            correction_set_at: Tick(0),
+            last_tick_fraction: 0.0,
         }
     }
 
@@ -284,16 +313,68 @@ impl<G: Game> ClientCore<G> {
 
     /// M25 (docs/decisions/0012-prediction-and-reconciliation.md "Two clocks"): the estimated round
     /// trip, in ticks, `Self::predicted_tick` adds to the replica's own authoritative tick. Default
-    /// 1 (Non-scope: M26 owns real lead estimation; every test here sets it exactly as the spike
-    /// did).
+    /// 1 until the first real ack sample (`Self::on_ack_sample`, driven by `LeadEstimator`) --
+    /// every existing test that called this directly (M25) still can, since a test-set lead is
+    /// simply overwritten by the next real ack sample, exactly like production.
     pub fn set_lead(&mut self, lead: Ticks) {
         self.lead = lead;
+    }
+
+    /// The current lead estimate (docs/plan/26-prediction-rendering-and-clocks.md: `Clocks::lead`'s
+    /// own source, and `client.clock()`'s `predicted - authoritative`).
+    pub fn lead(&self) -> Ticks {
+        self.lead
+    }
+
+    /// M26's own lead-estimator seam (Provides: "`seed_rtt_ms(f64)` (M28/M29 call it)"), forwarded
+    /// here rather than exposing `LeadEstimator` itself (the same "one integration surface" shape
+    /// `Self::set_lead` already gives every other lead-affecting call): a no-op on the lead
+    /// actually in effect once a real ack sample exists (`LeadEstimator::seed_rtt_ms`'s own doc
+    /// comment), so calling this after prediction is already running is harmless.
+    pub fn seed_lead_rtt_ms(&mut self, rtt_ms: f64) {
+        self.lead_estimator.seed_rtt_ms(rtt_ms);
+        self.lead = self.lead_estimator.lead();
     }
 
     /// The clock a player's own predicted timers are written and rendered in (0012 "Two clocks":
     /// "Predicted = authoritative + lead").
     pub fn predicted_tick(&self) -> Tick {
         self.replica.tick() + self.lead
+    }
+
+    /// M26: this client's own wall-clock estimate of progress into the *current* tick (`Clocks::
+    /// tick_fraction`'s own source), fed from `HostClock` with the replica's own current tick and
+    /// `local_ms` (`game_instance.rs`'s `frame(t_ms)`'s real `camera.frame_time_ms`, called once per
+    /// client-worker wake -- module doc comment: "not only when a new host frame lands", which is
+    /// exactly what keeps this from freezing between heartbeats, 0010).
+    pub fn tick_fraction(&mut self, local_ms: f64) -> f32 {
+        self.host_clock.on_frame(self.replica.tick(), local_ms);
+        let f = self.host_clock.now(local_ms).1;
+        self.last_tick_fraction = f;
+        f
+    }
+
+    /// The last value [`Self::tick_fraction`] computed (this struct's own doc comment on
+    /// `last_tick_fraction`): `client_clock_stats`'s own source, with no `t_ms` of its own to pass.
+    pub fn last_tick_fraction(&self) -> f32 {
+        self.last_tick_fraction
+    }
+
+    /// The "Correction without snapping" scalar (0012 Decision), eased to zero over ~200 ms of
+    /// elapsed authoritative time (`G::TICK_RATE.millis(200)`, 0006) since it was last set
+    /// (`Self::on_ack_sample`): `Clocks::correction`'s own source.
+    pub fn own_correction(&self) -> f32 {
+        let ease_ticks = G::TICK_RATE.millis(200).0 as f32; // 0012: "eases to zero over ~200 ms"
+        if ease_ticks <= 0.0 {
+            return 0.0;
+        }
+        let elapsed = self
+            .replica
+            .tick()
+            .0
+            .saturating_sub(self.correction_set_at.0) as f32;
+        let frac = (1.0 - elapsed / ease_ticks).max(0.0);
+        self.correction * frac
     }
 
     /// How many pending actions the most recent [`Self::on_frame`] re-predicted (docs/plan/
@@ -304,8 +385,21 @@ impl<G: Game> ClientCore<G> {
 
     /// M26's lead-estimator hook (docs/plan/25-prediction-core.md Provides): called once per
     /// pending action the host has just acked, with the authoritative tick this client held at
-    /// dispatch time and the tick the ack itself landed on. A no-op until M26 fills it in.
-    fn on_ack_sample(&mut self, _auth_tick_at_dispatch: Tick, _ack_tick: Tick) {}
+    /// dispatch time, that same action's own frozen `predicted_tick`, and the tick the ack itself
+    /// landed on. Feeds `LeadEstimator` (driving `Self::set_lead`, per its own Provides: "It drives
+    /// M25's `ClientCore::set_lead`") and sets the eased correction (0012 "Correction without
+    /// snapping": "the ack causes exactly one k-tick correction ... eases to zero over ~200 ms",
+    /// Planning decisions "Eased correction" -- `k = ack_tick - predicted_tick`, one scalar,
+    /// overwritten by each new ack rather than accumulated, since a player has at most one or two
+    /// own timers in flight and this is not per-timer state).
+    fn on_ack_sample(&mut self, auth_tick_at_dispatch: Tick, predicted_tick: Tick, ack_tick: Tick) {
+        self.lead_estimator
+            .on_ack_sample(auth_tick_at_dispatch, ack_tick);
+        self.lead = self.lead_estimator.lead();
+        let k = ack_tick.0 as i64 - predicted_tick.0 as i64;
+        self.correction = k as f32;
+        self.correction_set_at = ack_tick;
+    }
 
     /// M26 (docs/plan/26-prediction-rendering-and-clocks.md Provides): marks `chunk` dirty for the
     /// upload path directly, sharing the one dirty queue replica deltas already push into. Skips
@@ -466,7 +560,7 @@ impl<G: Game> ClientCore<G> {
         self.mutations = self.mutations.wrapping_add(1);
 
         while let Some(p) = self.pending.pop_acked_through(summary.ack_seq) {
-            self.on_ack_sample(p.auth_tick_at_dispatch, summary.tick);
+            self.on_ack_sample(p.auth_tick_at_dispatch, p.predicted_tick, summary.tick);
         }
 
         self.overlay.clear();

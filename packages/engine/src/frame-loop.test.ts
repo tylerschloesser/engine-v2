@@ -86,7 +86,12 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
     deleteWorld(): Promise<void> {
       throw new Error('fakeClient: deleteWorld not implemented')
     },
-    clock(): { authoritative: number; predicted: number; ticksPerSecond: number } {
+    clock(): {
+      authoritative: number
+      predicted: number
+      ticksPerSecond: number
+      tickFraction: number
+    } {
       throw new Error('fakeClient: clock not implemented')
     },
     writeCameraAndWake(): number {

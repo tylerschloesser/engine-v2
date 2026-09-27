@@ -131,6 +131,7 @@ test('dispatch_returns_monotonic_seq_from_seed', async () => {
     sessionState: SessionState.Live,
     seqSeed: 5,
     ackSeq: 5,
+    tickFraction: 0,
   })
   await client.ready
   expect(client.dispatch({ Paint: {} })).toBe(6)
@@ -151,6 +152,7 @@ test('dispatch_when_queue_full_fails_locally', async () => {
     sessionState: SessionState.Live,
     seqSeed: 0,
     ackSeq: 0,
+    tickFraction: 0,
   })
   await client.ready
 
@@ -175,6 +177,7 @@ test('dispatch_when_queue_full_fails_locally', async () => {
     sessionState: SessionState.Live,
     seqSeed: 0,
     ackSeq: 1,
+    tickFraction: 0,
   })
   expect(client.dispatch({ Paint: {} })).toBe(33)
   new RingConsumer(h.sabs.actionRing).stats(ringStats)
@@ -336,11 +339,12 @@ test('clock_returns_same_object', async () => {
     sessionState: SessionState.Live,
     seqSeed: 0,
     ackSeq: 0,
+    tickFraction: 0,
   })
   await client.ready
 
   const a = client.clock()
-  expect(a).toEqual({ authoritative: 42, predicted: 42, ticksPerSecond: 20 })
+  expect(a).toEqual({ authoritative: 42, predicted: 42, ticksPerSecond: 20, tickFraction: 0 })
   const b = client.clock()
   expect(b).toBe(a) // the same reused object (Planning decisions: "clock() returns a reused object")
 
@@ -352,10 +356,11 @@ test('clock_returns_same_object', async () => {
     sessionState: SessionState.Live,
     seqSeed: 0,
     ackSeq: 0,
+    tickFraction: 0,
   })
   const c = client.clock()
   expect(c).toBe(a)
-  expect(c).toEqual({ authoritative: 43, predicted: 43, ticksPerSecond: 20 })
+  expect(c).toEqual({ authoritative: 43, predicted: 43, ticksPerSecond: 20, tickFraction: 0 })
 
   client.destroy()
 })

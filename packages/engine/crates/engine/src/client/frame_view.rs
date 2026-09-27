@@ -10,24 +10,75 @@ use std::collections::BTreeMap;
 use crate::game::{EntityId, Game, PlayerId, Unknown};
 use crate::predict::{Overlay, PendingQueue, Prediction, footprint_of};
 use crate::presence::Presence as _;
-use crate::time::Tick;
+use crate::time::{Tick, Ticks};
 use crate::world::{Registry, Tile, TilePos, TileRect, WorldPos};
 use crate::world_access::WorldRead;
 
 use super::remote_presence::RemotePresences;
 
 /// The authoritative and predicted tick a client observes (0003; 0006 "On the client" -- `client.
-/// clock()` exposes the same pair to TypeScript). `predicted` equals `authoritative` until M26
-/// gives prediction a real lead ([`docs/decisions/0012-prediction-and-reconciliation.md`]).
-/// `tick_fraction`/`ticks_per_second` are M17's own addition (Seams: "progress into the current
-/// tick, for smooth progress drawables"), read from the client worker's own clock block the same
-/// wake `frame()` runs (`game_instance.rs`).
+/// clock()` exposes the same pair to TypeScript). `predicted` differs from `authoritative` from
+/// M26 on: `predicted = authoritative + lead` ([`docs/decisions/0012-prediction-and-
+/// reconciliation.md`] "Two clocks"). `tick_fraction`/`ticks_per_second` are M17's own addition
+/// (Seams: "progress into the current tick, for smooth progress drawables"), read from the client
+/// worker's own clock block the same wake `frame()` runs (`game_instance.rs`); `tick_fraction` is
+/// real from M26 on too (`ClientCore::tick_fraction`, `clock::HostClock`).
+///
+/// `lead` (M26 Seams, verbatim) is `predicted - authoritative`, carried as its own field rather
+/// than derived, since [`Self::own_progress`]'s formula (Planning decisions "Own-timer completion
+/// gap", verbatim) names it directly. `correction` (M26 Deviations: a seam beyond the brief's own
+/// Seams list, the same "add what a formula genuinely needs" precedent `predicted_player` set in
+/// this same file for M26 steps 1-3) is the currently-eased "Correction without snapping" scalar
+/// (0012 Decision) [`Self::own_progress`] subtracts from `done_at` -- ticks, signed, decaying to
+/// `0.0` over `ClientCore`'s own ease window. Neither field is meaningful outside `own_progress`;
+/// every other reader of `Clocks` (a game's own `extract`/`ui`, `client.clock()`) only ever reads
+/// `authoritative`/`predicted`/`tick_fraction`/`ticks_per_second`.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Clocks {
     pub authoritative: Tick,
     pub predicted: Tick,
     pub tick_fraction: f32,
     pub ticks_per_second: u32,
+    pub lead: Ticks,
+    pub correction: f32,
+}
+
+impl Clocks {
+    /// A timer *not* owned by the local player (Planning decisions, verbatim: "for timers the
+    /// player does not own"): no lead term, no correction -- rendered on the authoritative clock,
+    /// like every other replicated, non-predicted quantity (0012 "Two clocks": "Everything not
+    /// predicted renders against the authoritative clock"). Clamped `0.0..=1.0`; a non-positive
+    /// duration (`done_at <= started_at`, a malformed or already-elapsed timer) reads `1.0` rather
+    /// than dividing by a non-positive denominator.
+    pub fn progress(&self, started_at: Tick, done_at: Tick) -> f32 {
+        let auth = self.authoritative.0 as f32;
+        let start = started_at.0 as f32;
+        let done = done_at.0 as f32;
+        let denom = done - start;
+        if denom <= 0.0 {
+            return 1.0;
+        }
+        ((auth - start) / denom).clamp(0.0, 1.0)
+    }
+
+    /// A timer the local player *owns* (Planning decisions "Own-timer completion gap", verbatim
+    /// formula): `(authoritative - (started_at - lead)) / (done_at - started_at + lead)`, with
+    /// [`Self::correction`] subtracted from `done_at` first ("own_progress subtracts it from
+    /// done_at"). The bar starts advancing at the tap (`started_at - lead` is in the past relative
+    /// to `authoritative` from the very first frame) and reaches `1.0` exactly when the host's own
+    /// completion tick can first have arrived, running `lead` ticks slower than a bare `progress`
+    /// over the same nominal duration (Planning decisions: "running lead / duration slower").
+    pub fn own_progress(&self, started_at: Tick, done_at: Tick) -> f32 {
+        let lead = self.lead.0 as f32;
+        let auth = self.authoritative.0 as f32;
+        let start = started_at.0 as f32;
+        let done = done_at.0 as f32 - self.correction;
+        let denom = done - start + lead;
+        if denom <= 0.0 {
+            return 1.0;
+        }
+        ((auth - (start - lead)) / denom).clamp(0.0, 1.0)
+    }
 }
 
 /// Every replica entity whose footprint (`G::prototype`'s own `Footprint`, anchored at `G::anchor`)

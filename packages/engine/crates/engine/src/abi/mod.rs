@@ -498,9 +498,10 @@ pub fn client_poll_ui<T: Instance>(slot: &Slot<T>) -> u32 {
     rt.inst.client_poll_ui(out) as u32
 }
 
-/// `client_clock_stats() -> status`: `authoritative_tick`, `ack_seq` as two LE `u32` into
-/// `Result` (docs/plan/16-action-round-trip.md; `Instance::client_clock_stats`'s own doc comment
-/// has the exact shape and why only these two values cross here).
+/// `client_clock_stats() -> status`: `authoritative_tick`, `ack_seq`, `predicted_tick`,
+/// `tick_fraction` (as `f32` bits) into `Result` (docs/plan/16-action-round-trip.md; docs/plan/
+/// 26-prediction-rendering-and-clocks.md steps 4-6 widened this from two fields to four,
+/// `ABI_VERSION` 23 -> 24; `Instance::client_clock_stats`'s own doc comment has the exact shape).
 pub fn client_clock_stats<T: Instance>(slot: &Slot<T>) -> Status {
     let rt = match slot.client() {
         Ok(rt) => rt,

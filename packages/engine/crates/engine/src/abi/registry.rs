@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 23;
+pub const ABI_VERSION: u32 = 24;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -429,15 +429,22 @@ pub trait Instance: Sized + 'static {
         0
     }
 
-    /// docs/plan/16-action-round-trip.md (`ABI_VERSION` 11 -> 12): the two values only Rust knows
-    /// for the client-role clock block the client worker mirrors into `SabSet.clockBlock` after
-    /// each `on_frame` (0015 §2 "clocks") -- `authoritative_tick` and `ack_seq` from
-    /// `ClientCore::last_summary()`, two LE `u32` into `result` (the whole `Result` region), the
-    /// same crossing shape as `sim_region_hash`/`client_region_hash`. `predicted_tick` (=
-    /// `authoritative_tick` until M26), `ticks_per_second` (already `tick_hz()`, read once at
-    /// worker setup, not re-plumbed per frame) and `session_state`/`seq_seed` (learned from the
-    /// first frame's own `ack_seq`, PRE-PLAN §10) are derived entirely on the TS side -- this
-    /// export carries only what Rust alone has.
+    /// docs/plan/16-action-round-trip.md (`ABI_VERSION` 11 -> 12): the values only Rust knows for
+    /// the client-role clock block the client worker mirrors into `SabSet.clockBlock` after each
+    /// `on_frame` (0015 §2 "clocks") -- `authoritative_tick` and `ack_seq` from `ClientCore::
+    /// last_summary()`, two LE `u32` into `result` (the whole `Result` region), the same crossing
+    /// shape as `sim_region_hash`/`client_region_hash`. `ticks_per_second` (already `tick_hz()`,
+    /// read once at worker setup, not re-plumbed per frame) and `session_state`/`seq_seed`
+    /// (learned from the first frame's own `ack_seq`, PRE-PLAN §10) are derived entirely on the TS
+    /// side.
+    ///
+    /// docs/plan/26-prediction-rendering-and-clocks.md steps 4-6 (`ABI_VERSION` 23 -> 24): widened
+    /// from 8 to 16 bytes, same call signature (`params: 0`, no new argument): `predicted_tick`
+    /// (`ClientCore::predicted_tick`, real from this milestone on -- 0012 "Two clocks") as a third
+    /// LE `u32`, then `ClientCore::last_tick_fraction`'s `f32` bits (its own doc comment: cached
+    /// from the same wake's own `frame(t_ms)` call, since this export has no `t_ms` of its own to
+    /// feed `HostClock` directly) as a fourth. An old caller reading only the first 8 bytes is
+    /// unaffected; there is no old caller in this monorepo (the TS and WASM halves ship together).
     fn client_clock_stats(&mut self, _result: &mut [u8]) -> Status {
         Status::Unsupported
     }
