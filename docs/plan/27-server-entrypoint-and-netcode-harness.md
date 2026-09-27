@@ -134,12 +134,29 @@ none
   scenario's own default). `buildSimInstanceConfig` adds one field the scenario JSON lacks
   (`game.buildHash`, a fixed dummy `'ab'.repeat(32)` here): harmless, since `sim_hash()` never
   reads it, only `Persistence`'s own identity bookkeeping does.
-- One observed, unreproduced flake: `server/load-or-create` failed once (`expectedHash` read back
-  as `'0000000000000000'`, i.e. the post-stop reload found no manifest) across roughly 15 repeated
-  runs, isolated or grouped with its sibling tests. Not reproduced again in 11 further consecutive
-  runs after the failure. Plausibly a pre-existing `fsStorage` timing edge under machine load
-  (`fsStorage`/`Persistence` are M22b's, unmodified here), not something this milestone's own code
-  introduced -- flagged for whoever next touches `fsStorage` under contention, not chased further.
+- **Gate round 1 fix: `fsStorage` durability defect, root-caused and fixed (`a471a41`).** The
+  `server/load-or-create` flake (first noted below as "one observed, unreproduced flake" -- wrong;
+  it reproduced 2/30 under `node scripts/repeat.mjs wasm 30`) was a real bug in `fsStorage`
+  (`src/storage/fs.ts`, M22b's), not a timing edge to leave. Traced with temporary logging
+  (`console.error` in `fsStorage.write`/`.flush`, `Persistence.create`, `SimHost.stop`, reverted
+  before committing): `Persistence.create`'s own manifest write and `snapshotNow`'s own snapshot
+  write are both fire-and-forget (0005: "the tick path never awaits storage"), but `fsStorage`'s
+  `flush()` (and `read()`/`list()`) only ever awaited `LogAppender`'s own `sync()` chain (the
+  append-only log path) -- the separate temp-file + `datasync` + `rename` path behind `write()`/
+  `delete()` was never tracked anywhere `flush()` could reach. Measured in the trace: `SimHost.stop`
+  resolved `flush()` 9 ms before the world's own manifest `rename()` had actually landed, so a
+  reopen on the same directory sometimes raced it, read back `null`, and silently created a second,
+  empty world (`sim_hash()` `'0000000000000000'`) instead of loading the first. Fix: `fsStorage`
+  now tracks every `write()`/`delete()` promise (`pendingWrites`, awaited by `flush()`/`list()`;
+  `latestWriteByKey`, awaited by `read()` for that key) alongside the existing appender sync --
+  `write()`/`delete()`'s own caller still sees a real rejection; the tracked copies swallow it, the
+  same way `LogAppender.sync()`'s own chain already routes a write failure to `onError` rather than
+  rejecting. `node scripts/repeat.mjs wasm 30 --timeout 60`: `pass=30 fail=0 hang=0`.
+- **Gate round 1 fix: a real inject-fail-revert for `server/ready-rejects-on-corrupt-world`.**
+  Swallowed `Persistence.open`'s rejection inside `createWorldServer` (`.then(fn, () => {})` in
+  place of `.then(fn)`) so `ready` resolved instead of rejecting on the same corrupt-world storage
+  the test builds; the test failed (`Error: promise resolved "undefined" instead of rejecting`) as
+  expected, then reverted.
 - `src/net/memory-connection.ts`: `memoryConnectionPair(opts?: { datagrams?: boolean }):
   [Connection, Connection]` exactly as named in Seams. `send` copies (`.slice()`) and defers
   delivery to the peer via `queueMicrotask`, so it can never call the peer's `onMessage` inside its
