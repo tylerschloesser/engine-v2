@@ -411,3 +411,8 @@ names, with the deviations below.
    `LeadEstimator`'s own convergence property with a synthetic `2*d+1` round trip instead, which
    passes on its own terms but does not exercise `Loopback`. Orchestrator's call whether a
    `Loopback`-backed version (at the corrected `delay + 1` figure) is still wanted as a named test.
+
+**Open gate failures (orchestrator, M26 gate round 1, on `f8cad84`):**
+1. **Predicted texel is not on screen in the render that applies the dispatch.** Stepped-frame probe at the anchor tile reads pristine `[0,0,0,255]` for one frame, then `[32,32,32,255]` (the non-resident `NEUTRAL`) for one, then the painted colour. The grey frame is a visible flash between two correct colours: the flicker this milestone exists to remove, so it is a defect, not an accepted latency. `prediction-no-flicker` must assert the brief's wording (never the terrain colour from dispatch until after the ack, and never `NEUTRAL`), not "never flickers back". Quantify before hypothesising: per stepped frame from dispatch, the upload-ring records produced and consumed (kind, chunk, slot) and the chunk's indirection entry.
+2. **`lead_converges_to_exact` must exist as named**, against `Loopback`, pinning the measured exact figure `delay + 1` as a literal (after the cold first cycle) for delays 0, 1 and 3. `Loopback` delays the downlink only, so `delay + 1` is correct for it; `lead.rs`'s synthetic `2*d+1` test stays.
+3. **Show that the zero-GC criterion runs prediction:** `gc-slice`'s `Paint` via `dispatchRaw` must be predicted as `Applied`, not `NotPredictable`, inside the measured window (a counter or assertion that fails if prediction never ran).
