@@ -132,6 +132,12 @@ struct ConnSlot<G: Game> {
     /// reads this map; also a bounded per-connection set (at most `MAX_CONNS` players ever relayed
     /// to one connection), never per-tick growth.
     presence_relayed: BTreeMap<PlayerId, Tick>,
+    /// docs/plan/28-sessions-and-reconnect.md step 4: the tick `build_frame` last actually sent
+    /// this connection *anything* (a real frame or a heartbeat) -- `build_frame`'s own doc comment
+    /// has the mechanism. Initialized to the connecting tick, so a fresh connection's own countdown
+    /// starts clean (moot in practice: the very next `build_frame` call always sends a real first
+    /// frame, `first_frame_pending`).
+    last_sent_tick: Tick,
 }
 
 fn default_max_entities() -> u32 {
@@ -196,6 +202,11 @@ const PERSIST_BYTES: u32 = 256 * 1024;
 /// `base_tick` equal to this means `SegmentBase::Genesis`; any other value is
 /// `SegmentBase::Snapshot(Tick(base_tick))`.
 const GENESIS_BASE_TICK: u32 = 0xFFFF_FFFF;
+
+/// docs/plan/28-sessions-and-reconnect.md step 4 (0010 Rates: "a heartbeat frame at least every
+/// 500 ms"). Tick-based, not a wall-clock timer (Constraints: "deterministic and replayable") --
+/// `build_frame`'s own doc comment has the mechanism.
+const HEARTBEAT_MS: u32 = 500;
 
 /// The `game` value of `InstanceConfig` (0009 `WorldConfig.params` plus the host-only
 /// `cacheChunks` knob), read once by `Host::init` and held until `sim_genesis` consumes the
@@ -883,6 +894,7 @@ impl<G: Game> Host<G> {
             pending_results,
             highest_admitted_seq: 0,
             presence_relayed: BTreeMap::new(),
+            last_sent_tick: self.last_tick,
         });
         player
     }
@@ -932,6 +944,7 @@ impl<G: Game> Host<G> {
             pending_results,
             highest_admitted_seq: 0,
             presence_relayed: BTreeMap::new(),
+            last_sent_tick: self.last_tick,
         });
         player
     }
@@ -1095,6 +1108,7 @@ impl<G: Game> Host<G> {
             pending_results,
             highest_admitted_seq: 0,
             presence_relayed: BTreeMap::new(),
+            last_sent_tick: self.last_tick,
         });
 
         // -- Welcome --------------------------------------------------------------------------
@@ -1578,6 +1592,16 @@ impl<G: Game> Host<G> {
         let want_action_results = !slot.pending_results.is_empty();
 
         // -- Nothing to say? ---------------------------------------------------------------------
+        // docs/plan/28-sessions-and-reconnect.md step 4 (0010 Rates: "a heartbeat frame at least
+        // every 500 ms"), tick-based, not a wall-clock timer, so it stays deterministic and
+        // replayable exactly like every other tick-path decision here: when every `want_*`/
+        // `scratch_*` collection above is empty, this connection has nothing real to say, but if
+        // `HEARTBEAT_MS` worth of ticks have passed since the last time it was actually sent
+        // *anything*, fall through instead of returning early -- every section-writing `if` below
+        // is skipped (nothing to write), so the frame built is exactly the 10-byte header with no
+        // sections, which is already the wire format's own heartbeat convention (`wire/CLAUDE.md`:
+        // "no sections = heartbeat"). No new wire shape, no new `Instance` method: `sim_build_frame`
+        // simply returns a real (if minimal) length instead of `0` on a tick where one is due.
         if !first
             && !want_roster
             && !want_global_value
@@ -1590,7 +1614,11 @@ impl<G: Game> Host<G> {
             && self.scratch_entity_ops.is_empty()
             && self.scratch_presence.is_empty()
         {
-            return 0;
+            let heartbeat_ticks = G::TICK_RATE.millis(HEARTBEAT_MS).0;
+            let since_last_send = self.last_tick.0.wrapping_sub(slot.last_sent_tick.0);
+            if since_last_send < heartbeat_ticks {
+                return 0;
+            }
         }
 
         let header = FrameHeader {
@@ -1681,6 +1709,9 @@ impl<G: Game> Host<G> {
         slot.counters.chunk_snapshots += self.scratch_snapshot.len() as u64;
         slot.counters.chunk_leaves += self.scratch_left.len() as u64;
         slot.first_frame_pending = false;
+        // docs/plan/28-sessions-and-reconnect.md step 4: this tick counts as "sent something" --
+        // a real frame or a heartbeat, both reset the same countdown.
+        slot.last_sent_tick = self.last_tick;
         // This connection's own results have now had their one chance to ride a frame (Scope:
         // "outcomes go to the sender's next build_frame"); clear so `pending_results` never grows
         // past what a single tick's worth of admissions/applies can add (host/mod Deviations).

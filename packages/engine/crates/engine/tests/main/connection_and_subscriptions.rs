@@ -464,22 +464,43 @@ fn view_unknown_outside_subscription() {
     );
 }
 
+/// docs/plan/28-sessions-and-reconnect.md step 4 (0010 Rates: "a heartbeat frame at least every
+/// 500 ms"): an idle tick builds nothing *until* the heartbeat interval elapses, at which point it
+/// builds the wire format's own header-only heartbeat frame (`wire/CLAUDE.md`: "no sections =
+/// heartbeat", 10 bytes: `type · flags · tick · ack_seq`) -- tick-based (`G::TICK_RATE.millis
+/// (HEARTBEAT_MS)`, 10 ticks at this fixture's 20 Hz), not a wall-clock timer, so it is exactly as
+/// deterministic and replayable as every other tick-path decision (`build_frame`'s own doc
+/// comment). Was `idle_tick_builds_no_frame`, asserting silence held indefinitely -- that premise
+/// is what this milestone's own heartbeat feature deliberately changes; this test now pins the
+/// exact tick the silence breaks instead of asserting it never does.
 #[test]
-fn idle_tick_builds_no_frame() {
+fn idle_tick_heartbeats_after_ten_silent_ticks() {
     let mut lb = loopback(8);
     let (idx, _who) = add_client(&mut lb, 0);
     lb.set_camera(idx, small_camera(0, 0));
     lb.step(); // first frame: non-empty
     // Nothing changes: camera unchanged, no actions, no game-tick mutation (`LGame::tick` is a
-    // no-op).
-    for _ in 0..10 {
+    // no-op). Ticks 1-9 of silence build nothing; tick 10 is the heartbeat.
+    for i in 1..=10 {
         lb.step();
-        assert_eq!(
-            lb.last_build_frame_len(idx),
-            0,
-            "an idle tick must build nothing"
-        );
+        let len = lb.last_build_frame_len(idx);
+        if i < 10 {
+            assert_eq!(len, 0, "idle tick {i}/10 must build nothing yet");
+        } else {
+            assert_eq!(
+                len, 10,
+                "tick 10 must build the header-only heartbeat frame"
+            );
+        }
     }
+    // Immediately after a heartbeat, the countdown restarts: the very next idle tick is silent
+    // again, not another heartbeat.
+    lb.step();
+    assert_eq!(
+        lb.last_build_frame_len(idx),
+        0,
+        "the tick right after a heartbeat must build nothing"
+    );
 }
 
 #[test]
