@@ -12,6 +12,7 @@ export {
 } from './net/conditioner.js'
 export { memoryConnectionPair } from './net/memory-connection.js'
 export { type BytePump, createBytePump } from './net/pump.js'
+export { worldServerTestHandle } from './server.js'
 export {
   actionResults,
   asHarness,

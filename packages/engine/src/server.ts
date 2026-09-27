@@ -142,6 +142,11 @@ export interface SimInstance {
   simSealFrame(): { len: number; bytes?: Uint8Array }
   /** 16-digit lowercase hex, `EngineInstance.readU64Hex`'s own format. */
   simHash(): string
+  /** docs/plan/27-server-entrypoint-and-netcode-harness.md, M27 gate round 2: `Host::region_hash
+   * (conn)` (`sim_region_hash`, `host/mod.rs`) -- the chunks `conn` is subscribed to plus its own
+   * `Global`/`Player`, 16-digit lowercase hex; `0000000000000000` if `conn` is not connected or
+   * the sim has not been genesis'd (`region_hash`'s own doc comment). */
+  simRegionHash(conn: number): string
   /** `1` if a chunk was generated, `0` if nothing was cold. */
   simWarmOne(): number
   /** `Instance::tick_hz`'s own value ("20 Hz is hardcoded" gap): `G::TICK_RATE.hz_value()` for a
@@ -223,6 +228,11 @@ export function wrapEngineInstance(inst: EngineInstance): SimInstance {
       if (status !== Status.Ok) throw new Error(`sim_hash failed: status ${status}`)
       return inst.readU64Hex(RegionId.Result, 0)
     },
+    simRegionHash: (conn) => {
+      const status = inst.call1(inst.x.sim_region_hash, conn)
+      if (status !== Status.Ok) throw new Error(`sim_region_hash failed: status ${status}`)
+      return inst.readU64Hex(RegionId.Result, 0)
+    },
     simWarmOne: () => inst.call0(inst.x.sim_warm_one),
     tickHz: () => inst.call0(inst.x.tick_hz),
     simConnect: (conn) => inst.call1(inst.x.sim_connect, conn),
@@ -302,6 +312,10 @@ export interface SimHost {
    * pacing timer entirely (a manual driver for tests and `engine/test`'s `stepTick`). */
   stepTick(n?: number): void
   hash(): string
+  /** docs/plan/27-server-entrypoint-and-netcode-harness.md, M27 gate round 2: `SimInstance.
+   * simRegionHash(conn)`, unwrapped -- the live per-connection region hash `worldServerTestHandle`
+   * exists to reach (0020 §8: "per-region state hashes at any tick"). */
+  regionHash(conn: number): string
   /**
    * docs/plan/24-recovery-and-migration.md (0005 Panic recovery 2-4): call this once the caller has
    * observed the current instance trap (an `EngineTrap` from any `SimInstance` call). Disarms
@@ -635,6 +649,9 @@ export function createSimHostFromInstance(
     hash() {
       return sim.simHash()
     },
+    regionHash(conn) {
+      return sim.simRegionHash(conn)
+    },
     async recover() {
       const wasRunning = running
       disarm()
@@ -782,6 +799,26 @@ export function createSimHost(cfg: WorldConfig, services: HostServices): SimHost
  * raise (`WorldLoadError`, or any other error `Persistence.open`/`instantiate` throw) surfaces only
  * through `ready` rejecting, never synchronously from this call.
  */
+// `worldServerTestHandle` (docs/plan/27-server-entrypoint-and-netcode-harness.md, M27 gate round
+// 2): the same module-private-`WeakMap`-keyed-by-the-public-object pattern `client.ts`'s
+// `clientTestHandle`/`handles` already uses, so `createNetHarness`/`assertConverged` can read a
+// live `sim_region_hash(conn)` from the *real* `SimHost` a real `createWorldServer` owns, without
+// widening `WorldServer`'s own fixed 0024 §5 shape (`{ ready, accept, stop }`, unchanged -- the
+// type-assert test in `server.test.ts` still holds). Registered once `ready` resolves; a caller
+// that reaches for this before then (or after `stop()` on a world whose `ready` rejected) gets a
+// clear error, the same way `clientTestHandle` throws for "not a `createClient()` result".
+const worldServerHandles = new WeakMap<WorldServer, SimHost>()
+
+/** The live `SimHost` behind a `WorldServer` returned by `createWorldServer` (Seams). Test-only,
+ * `engine/test`'s own re-export: never imported by production code. */
+export function worldServerTestHandle(server: WorldServer): SimHost {
+  const h = worldServerHandles.get(server)
+  if (!h) {
+    throw new Error('worldServerTestHandle: no live SimHost (await server.ready first)')
+  }
+  return h
+}
+
 export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldServer {
   const newInstance = (): EngineInstance =>
     instantiate(host.wasm, Role.Sim, buildSimInstanceConfig(cfg))
@@ -797,6 +834,11 @@ export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldSe
   // file: `createWorldServer` runs once per world, not per frame or per tick).
   const acceptedConnections: Connection[] = []
   let simHost: SimHost | null = null
+
+  // Declared before `ready`'s own `.then()` closure captures it, assigned only after the object
+  // literal below exists: the closure runs on a microtask strictly after `createWorldServer`
+  // itself has returned, so `worldServer` is always assigned by the time it actually reads it.
+  let worldServer!: WorldServer
 
   const ready: Promise<void> = Persistence.open(host.storage, cfg, newInstance).then((opened) => {
     const h = createSimHostFromInstance(
@@ -816,6 +858,7 @@ export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldSe
       host.onFatal?.(f)
     }
     simHost = h
+    worldServerHandles.set(worldServer, h)
     h.start()
     for (const c of pendingConnections) {
       acceptedConnections.push(c)
@@ -824,7 +867,7 @@ export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldSe
     pendingConnections.length = 0
   })
 
-  return {
+  worldServer = {
     ready,
     accept(c) {
       if (simHost) {
@@ -844,4 +887,5 @@ export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldSe
       if (simHost) await simHost.stop()
     },
   }
+  return worldServer
 }

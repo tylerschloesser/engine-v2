@@ -60,6 +60,7 @@ function fakeSim(overrides: Partial<SimInstance> = {}): SimInstance {
     simTick: () => Status.Ok,
     simSealFrame: () => ({ len: 0 }),
     simHash: () => '0000000000000000',
+    simRegionHash: () => '0000000000000000',
     simWarmOne: () => 0,
     tickHz: () => 20,
     simConnect: () => Status.Ok,
@@ -168,6 +169,7 @@ test('simhost_seal_precedes_tick', () => {
       return Status.Ok
     },
     simHash: () => '0000000000000000',
+    simRegionHash: () => '0000000000000000',
     simWarmOne: () => 0,
     tickHz: () => 20,
     simConnect: () => Status.Ok,

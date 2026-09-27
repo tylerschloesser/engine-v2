@@ -394,3 +394,34 @@ connection table is always empty, by construction, regardless of durability or t
 way to read this specific hash through it without adding one. `createWorldServer`'s own lifecycle
 is exercised and proven separately (`tests/wasm/server.test.ts`, steps 1-2); `net-harness.ts`'s own
 module doc comment records this attempt so a future implementer does not repeat it.
+
+**Gate round 2: `createNetHarness` now builds `server` through the real `createWorldServer`.**
+`server.ts` gained `worldServerTestHandle(server: WorldServer): SimHost` -- a module-private
+`WeakMap<WorldServer, SimHost>`, the same pattern `client.ts`'s `clientTestHandle`/`handles`
+already uses, registered inside `createWorldServer`'s own `ready` handler right after `simHost = h`.
+`WorldServer`'s public shape is unchanged (`{ ready, accept, stop }`, 0024 §5's own type-assert test
+untouched). `SimHost` itself gained one small additive method, `regionHash(conn: number): string`
+(wrapping the new `SimInstance.simRegionHash(conn)`, `wrapEngineInstance`'s own `sim_region_hash`
+call -- the same shape `simHash()`/`sim_hash` already has): nothing on `SimHost` previously exposed
+a per-connection hash at all, and gate round 1's reopened-reader attempt existed only because
+nothing else could reach one. `net-harness.ts` now: builds `server = createWorldServer(worldCfg,
+{wasm, storage, clock, timer})` (`timer.every` a no-op -- ticking is `simHost.stepTick(1)`, driven
+from `advanceTicks`, not a real wall clock), awaits `ready`, holds `simHost =
+worldServerTestHandle(server)` for `regionHash`/`stepTick`/`counters`, and accepts every client
+through the real `server.accept(c)`. `harness.server` is the `WorldServer`; no separate `SimHost`
+field is exposed (no scenario needs one). `connId` is still assumed equal to join order (`accept`
+returns `void`, 0024 §5's own fixed shape) -- unrelated to which entrypoint variant is used, same
+assumption gate round 1 already documented.
+
+Failability: temporarily made `WorldServer.accept`'s live branch a no-op (queue-before-ready still
+pushes; a connection arriving after `ready` is pushed onto `acceptedConnections` but never wired
+into the real `SimHost`) and reran `join-converges`: `Error: engine: dispatch before ready` (the
+client's own clock block never goes `Live`, since the host never receives or answers anything).
+Reverting restores 10/10. (Every scenario here accepts after `ready` already resolved, so this
+proves the "connections arriving after ready" branch, not the "queued before ready" branch
+specifically; `WorldServer`'s own `server/accept-before-ready-waits` test, `tests/wasm/
+server.test.ts`, steps 1-2, already covers that one.)
+
+Verification: `pnpm test netcode` 10 tests; `node scripts/repeat.mjs netcode 20`: `pass=20 fail=0
+hang=0`; `pnpm test wasm` 155 tests, `pnpm test unit` 277 tests (both unaffected); `pnpm lint`
+green. `tests/netcode/CLAUDE.md` updated (59 lines, under the 60-line cap).

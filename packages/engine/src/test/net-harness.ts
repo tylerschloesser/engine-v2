@@ -3,35 +3,22 @@
 // `.wasm`, K `HeadlessClient`s, joined by in-memory `Connection` pairs behind a seeded `conditionLink`
 // on a `VirtualClock`.
 //
-// `server` (this harness's own field, Deviations): a `SimHost` built directly from the exported
-// `Persistence.open` + `createSimHostFromInstance` + `wrapEngineInstance` pieces -- the *same*
-// pieces `createWorldServer` itself composes (`server.ts`'s own doc comment on `createWorldServer`:
-// "Built the same way createSimHost is ... but over Persistence.open") -- rather than through the
-// opaque public `createWorldServer(cfg, host)` wrapper.
-//
-// M27 gate round 1 re-confirms this is necessary, not just convenient: `region_hash(conn)`
-// (`host/mod.rs`) reads `self.conns[conn]` -- the *live* connection table (subscriptions, `slot.
-// player`) -- and `Persistence.open`'s own replay never reconstructs it (M22b Deviations: "replay
-// applies logged Connected records to game state but never calls Host::connect"). A gate-round-1
-// attempt routed `server` through `createWorldServer` with a manual timer double for ticking and a
-// *second*, independently reopened reader instance for `hostRegionHash` (mirroring `tests/wasm/
-// puts.test.ts`'s own "reopen to read a hash" pattern); every scenario failed with `host=
-// 0000000000000000` (`region_hash`'s own documented `0` return for "conn is not connected") because
-// that reopened reader's own connection table is empty, exactly the M22b gap above -- not a
-// durability race `memoryStorage`'s synchronous writes could paper over, since there was never
-// going to be a live connection there regardless of timing. `WorldServer`'s fixed 0024 §5 shape
-// (`{ ready, accept, stop }`) has no seam that exposes a *live, connected* instance at all, so there
-// is no way to read this specific hash through it without adding one -- confirmed empirically here,
-// reverted. `createWorldServer`'s own lifecycle (load/recover/create, `ready` rejecting, `onFatal`)
-// is already proven by `tests/wasm/server.test.ts` (steps 1-2) and is not re-proven here. Ticking
-// is driven by `SimHost.stepTick(n)` (the manual driver, bypassing the pacing timer entirely --
-// `host.timer` below is a no-op `every()` that never fires), interleaved tick-by-tick with
-// `VirtualClock.advanceBy(tickMs)` so a conditioner's own `send`-time draws see the correct virtual
-// "now" (`conditioner.ts`'s own Deviations: "the underlying ManualClock's own now() is advanced to
-// each entry's deliverAt before calling its run()").
-import { RegionId, Role, Status } from '../abi.js'
-import { Persistence } from '../host/persistence.js'
-import type { EngineInstance } from '../loader.js'
+// `server: WorldServer` (M27 gate round 2): built through the real, public `createWorldServer(cfg,
+// host)` entrypoint -- the brief's own Goal, "runs that real server". Gate round 1 found that
+// `assertConverged`/`hostRegionHash` need a *live, connected* `SimHost` (`region_hash(conn)`,
+// `host/mod.rs`, reads the live connection table -- subscriptions, `slot.player` -- which
+// `Persistence.open`'s own replay never reconstructs, M22b Deviations), and `WorldServer`'s fixed
+// 0024 §5 shape (`{ ready, accept, stop }`) has no seam for one. Gate round 2's fix:
+// `worldServerTestHandle(server): SimHost` (`server.ts`, the same module-private-`WeakMap`-keyed-
+// by-the-public-object pattern `client.ts`'s `clientTestHandle` already uses) reaches the real
+// `SimHost` `createWorldServer` builds internally, without widening `WorldServer`'s own type --
+// `SimHost` itself gained one small additive method, `regionHash(conn)` (wrapping `Host::
+// region_hash` the same way `hash()` already wraps `Host::state_hash`), since nothing on `SimHost`
+// previously exposed a per-connection hash at all. Ticking still goes through `SimHost.stepTick(n)`
+// (`worldServerTestHandle(server).stepTick(1)`, the manual driver `stepTick`/`onFire` both call),
+// interleaved tick-by-tick with `VirtualClock.advanceBy(tickMs)` so a conditioner's own `send`-time
+// draws see the correct virtual "now" (`conditioner.ts`'s own Deviations).
+import { Role } from '../abi.js'
 import { instantiate } from '../loader.js'
 import {
   type ConditionedLink,
@@ -42,11 +29,11 @@ import { memoryConnectionPair } from '../net/memory-connection.js'
 import {
   buildSimInstanceConfig,
   type Connection,
-  createSimHostFromInstance,
+  createWorldServer,
   type MsgClass,
-  type SimHost,
   type WorldConfig,
-  wrapEngineInstance,
+  type WorldServer,
+  worldServerTestHandle,
 } from '../server.js'
 import { loadGame } from '../server-node.js'
 import { memoryStorage } from '../storage/memory.js'
@@ -84,7 +71,7 @@ export interface NetHarnessOptions {
 
 export interface NetHarness {
   clock: VirtualClock
-  server: SimHost
+  server: WorldServer
   storage: Storage
   clients: HeadlessClient[]
   link(i: number): ConditionedLink
@@ -149,21 +136,27 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
   }
   const gameWorldgen = worldCfg.params.worldgen
 
-  const storage = memoryStorage()
-  const newInstance = (): EngineInstance =>
-    instantiate(wasm, Role.Sim, buildSimInstanceConfig(worldCfg))
-  const opened = await Persistence.open(storage, worldCfg, newInstance)
-  const simInstance = opened.sim
-  const tickMs = Math.round(1000 / (simInstance.call0(simInstance.x.tick_hz) || 20))
-  const server = createSimHostFromInstance(
-    wrapEngineInstance(simInstance),
-    { clock: { now: () => clock.now() }, timer: { every: () => () => {} } },
-    opened.persistence,
-    opened.tick,
-  )
-  server.start()
-
   const clock = createVirtualClock()
+  const storage = memoryStorage()
+
+  // A throwaway instance, read once and discarded, only to learn the real tick rate before ticking
+  // (Deviations: `SimHost` itself exposes no `tickHz()` -- only the pacing arithmetic already
+  // derived from it -- so `advanceTicks`'s own `clock.advanceBy` needs its own reading to stay in
+  // lockstep with `stepTick`'s own ticks).
+  const tickHzProbe = instantiate(wasm, Role.Sim, buildSimInstanceConfig(worldCfg))
+  const tickMs = Math.round(1000 / (tickHzProbe.call0(tickHzProbe.x.tick_hz) || 20))
+
+  const server = createWorldServer(worldCfg, {
+    wasm,
+    storage,
+    clock: { now: () => clock.now() },
+    timer: { every: () => () => {} }, // ticking is `simHost.stepTick`, driven from `advanceTicks`
+  })
+  await server.ready
+  // The live `SimHost` `createWorldServer` owns (module doc comment above): `regionHash`/
+  // `stepTick`/`counters` all read live, connected state no reopened reader can reach.
+  const simHost = worldServerTestHandle(server)
+
   const trace: TraceEntry[] = []
   const nextLink = { i: 0 }
 
@@ -194,7 +187,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
         t: clock.now(),
         link: linkIdx,
         dir,
-        tick: server.counters.ticksRun,
+        tick: simHost.counters.ticksRun,
         bytes: bytes.slice(),
       })
       wrapper.onMessage?.(bytes)
@@ -221,10 +214,14 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     )
     const hostSide = traced(link.ends[0] as Connection, linkIdx, 1)
     const clientSide = traced(link.ends[1] as Connection, linkIdx, 0)
-    const connId = server.accept(hostSide)
-    // M27 gate round 1: `connId + 1`, M15's own implicit-accept convention (`PlayerId = conn + 1`)
-    // -- the pre-handshake source `game_instance.rs`'s own `default_my_player_id` doc comment
-    // names; M28's real handshake replaces this once it lands.
+    server.accept(hostSide)
+    // `WorldServer.accept` returns `void` (0024 §5's fixed shape, unchanged by gate round 2) --
+    // `connId` is assumed equal to join order (`linkIdx`), true as long as a scenario never
+    // disconnects a client before checking it (M27's own scenarios never do). `connId + 1`: M15's
+    // own implicit-accept convention (`PlayerId = conn + 1`), the pre-handshake source
+    // `game_instance.rs`'s own `default_my_player_id` doc comment names; M28's real handshake
+    // replaces this once it lands.
+    const connId = linkIdx
     const client = createHeadlessClient({
       wasm,
       game: { seed: worldCfg.params.seed, worldgen: gameWorldgen },
@@ -240,7 +237,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
 
   async function advanceTicks(n: number): Promise<void> {
     for (let i = 0; i < n; i++) {
-      server.stepTick(1)
+      simHost.stepTick(1)
       await clock.advanceBy(tickMs)
       for (const e of entries) e.client.stepFrame(tickMs)
     }
@@ -254,18 +251,10 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     await advanceTicks(SETTLE_EXTRA_TICKS)
   }
 
-  function hostRegionHash(connId: number): string {
-    const status = simInstance.call1(simInstance.x.sim_region_hash, connId)
-    if (status !== Status.Ok) {
-      throw new Error(`assertConverged: sim_region_hash(${connId}) failed: status ${status}`)
-    }
-    return simInstance.readU64Hex(RegionId.Result, 0)
-  }
-
   function assertConverged(): void {
     const mismatches: string[] = []
     for (const e of entries) {
-      const host = hostRegionHash(e.connId)
+      const host = simHost.regionHash(e.connId)
       const replica = e.client.replicaHash()
       if (host !== replica) {
         mismatches.push(`client ${e.linkIdx} (conn ${e.connId}): host=${host} replica=${replica}`)
@@ -273,7 +262,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     }
     if (mismatches.length > 0) {
       throw new Error(
-        `assertConverged: seed=${opts.seed} tick=${server.counters.ticksRun} mismatches:\n` +
+        `assertConverged: seed=${opts.seed} tick=${simHost.counters.ticksRun} mismatches:\n` +
           mismatches.join('\n'),
       )
     }

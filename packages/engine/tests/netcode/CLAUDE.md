@@ -1,10 +1,14 @@
 # packages/engine/tests/netcode
 
 The `netcode` suite (docs/decisions/0020-testing-strategy.md §7; docs/plan/
-27-server-entrypoint-and-netcode-harness.md). One Node process: the real server entrypoint driving
-the real `fx-puts` `.wasm`, joined to K real `HeadlessClient`s by in-memory `Connection` pairs
-behind a seeded `conditionLink` on a `VirtualClock`. Nothing here is mocked: only the transport
-(memory, not a socket) and the clock (virtual, not wall) are test doubles.
+27-server-entrypoint-and-netcode-harness.md). One Node process: `harness.server` is a real
+`createWorldServer(cfg, host)` (`WorldServer`, `{ready, accept, stop}`) driving the real `fx-puts`
+`.wasm`, joined to K real `HeadlessClient`s by in-memory `Connection` pairs behind a seeded
+`conditionLink` on a `VirtualClock`. `assertConverged`/ticking reach the live `SimHost` through
+`worldServerTestHandle(server)` (`server.ts`, the same `WeakMap`-keyed-by-the-public-object pattern
+`client.ts`'s `clientTestHandle` uses) -- `WorldServer` itself stays exactly `{ready, accept,
+stop}`. Nothing here is mocked: only the transport (memory, not a socket) and the clock (virtual,
+not wall) are test doubles.
 
 ## Writing a scenario
 
