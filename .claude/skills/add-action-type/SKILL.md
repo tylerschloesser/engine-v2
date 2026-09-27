@@ -249,6 +249,63 @@ scenarios that never dispatch it (`cargo nextest run -p fx-<game>` fails the gol
 once). That is a changed sim: re-bless with `pnpm golden <game>` only as a deliberate, reviewed
 decision, never to make the new variant pass.
 
+## 8. If the action starts a timer
+
+An action that schedules something to finish later (`fixtures/predict`'s own `Collect`) stores
+`started_at`/`done_at` as `Tick`s, from `w.tick()` at dispatch time -- **never a wall-clock
+value**, and never re-read on a later call:
+
+```rust
+Action::Collect { tile } => {
+    let mut p = *w.player(who)?;
+    let now = w.tick();
+    p.collecting = Some(Collecting { tile, started_at: now.0, done_at: (now + COLLECT_TICKS).0 });
+    w.put_player(who, p);
+    Ok(())
+}
+```
+
+`w.tick()` is `Predicting`'s own frozen tick under prediction (0012 "Frozen predicted tick"), not
+the live replica tick -- a handler that instead reads `FrameView`'s own clock inside `apply` would
+have its timer rewritten on every replay and its bar would crawl backwards. `Game::TICK_RATE.secs
+(n)`/`.millis(n)` (0006) is how `COLLECT_TICKS`-style constants are authored, never a raw tick
+count.
+
+**Rendering the bar** reads `FrameView::clocks()` (a `Clocks`, docs/plan/
+26-prediction-rendering-and-clocks.md) and picks one of two methods, never the raw tick
+subtraction:
+
+```rust
+fn ui(&self, view: &FrameView<'_, Predict>, out: &mut Ui) {
+    if let Ok(p) = view.predicted_player(view.me())
+        && let Some(c) = p.collecting
+    {
+        // This player's own timer: the predicted clock, lead, and the eased ack correction all
+        // apply (0012 "Two clocks", "Correction without snapping").
+        out.collect_progress = view.clocks().own_progress(Tick(c.started_at), Tick(c.done_at));
+    }
+    // A *remote* player's own timer (or any replicated progress this player does not own) uses
+    // `progress` instead -- the authoritative clock only, no lead, no correction (0012: "Everything
+    // not predicted renders against the authoritative clock").
+}
+```
+
+`own_progress` is *not* `(authoritative - started_at) / (done_at - started_at)`: it starts
+advancing at the moment of the tap (`started_at - lead` is already in the past relative to
+`authoritative`) and reaches `1.0` only once the host's own completion could realistically have
+arrived back at this client -- "stretch", the decided answer to 0012's own deferred completion-gap
+question, running about `lead / duration` slower than a bare `progress` over the same nominal
+span. `progress` reaching `1.0` does not mean the completion has actually landed (0012's own
+completion-gap measurement, `completion_gap_measured`); a page that must know for certain still
+waits for the real state change (`p.collecting` going `None`) or the matching `onActionResult`,
+the same as any other action.
+
+Do not compute an own-timer's remaining time by hand (`done_at - clock().authoritative` on the TS
+side, or any bespoke tick arithmetic on the Rust side) -- both `progress`/`own_progress` already
+clamp to `0.0..=1.0` and handle a same-tick or malformed `done_at <= started_at` span; a caller
+that duplicates the formula loses that guard and the "no snapping" property `own_progress`'s own
+eased correction provides across an ack.
+
 ## What you do not need to touch
 
 The wire format, the action ring, `on_action`, the outbox, `poll_uplink`, `Host::on_uplink`'s
