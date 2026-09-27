@@ -7,12 +7,17 @@ import { expect, test, vi } from 'vitest'
 import { Status } from './abi.js'
 import {
   buildSimInstanceConfig,
+  type Connection,
   createSimHostFromInstance,
+  createWorldServer,
+  type HostServices,
   MAX_CATCHUP_TICKS,
   RESYNC_TICKS,
   type SimInstance,
   seedToHexU64,
   WARM_BUDGET_MS,
+  type WorldConfig,
+  type WorldServer,
 } from './server.js'
 
 /** `Game::TICK_RATE`'s own default (`TickRate::HZ_20`) and `server.ts`'s own hardcoded rate
@@ -298,4 +303,38 @@ test('simhost_seed_decimal_to_hex_u64', () => {
   expect(() =>
     buildSimInstanceConfig({ worldId: 'w', buildHash: 'h', params: { seed: '-1', worldgen: {} } }),
   ).toThrow()
+})
+
+/**
+ * docs/plan/27-server-entrypoint-and-netcode-harness.md, Exit criterion 4: `createWorldServer`'s
+ * return type and `HostServices.onFatal?` match 0024 §5 (docs/decisions/0024-planning-amendments.md
+ * §5) exactly: `createWorldServer(cfg, host): { ready: Promise<void>; accept(c: Connection): void;
+ * stop(): Promise<void> }`, `HostServices.onFatal?: (f: { tick: number; message: string }) => void`.
+ * Type-level: every assignment below is checked by `tsc` (`pnpm lint`), not by a runtime assertion
+ * -- a shape drift here fails the *typecheck*, which is the point (Seams: "a renamed seam under
+ * Provides" is an escalation, not a silent adaptation).
+ */
+test('createWorldServer / HostServices.onFatal? match 0024 §5', () => {
+  const fn: (cfg: WorldConfig, host: HostServices) => WorldServer = createWorldServer
+  expect(typeof fn).toBe('function')
+
+  // `WorldServer`'s exact three fields, no more, no fewer (0024 §5 verbatim).
+  const worldServerShape: {
+    ready: Promise<void>
+    accept: (c: Connection) => void
+    stop: () => Promise<void>
+  } = {} as WorldServer
+  void worldServerShape
+  const _onlyThoseThree: WorldServer = {} as {
+    ready: Promise<void>
+    accept: (c: Connection) => void
+    stop: () => Promise<void>
+  }
+  void _onlyThoseThree
+
+  // `onFatal?` is optional and exactly this shape; every other `HostServices` field (`wasm`,
+  // `storage`, `clock`, `timer`, `onIdle?`) is 0009's own, untouched by 0024 §5.
+  const onFatalShape: ((f: { tick: number; message: string }) => void) | undefined =
+    {} as HostServices['onFatal']
+  void onFatalShape
 })

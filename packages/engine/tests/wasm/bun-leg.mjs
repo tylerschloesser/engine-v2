@@ -3,7 +3,9 @@
 // `script` adapter of `pnpm test wasm`, which reads the one JSON line printed last:
 // `{ tests: [{ name, ok, message? }], ... }`. By hand: `bun packages/engine/tests/wasm/bun-leg.mjs`.
 import { RegionId, Role } from '../../dist/abi.js'
+import { Persistence } from '../../dist/host/persistence.js'
 import { instantiate } from '../../dist/loader.js'
+import { createWorldServer, wrapEngineInstance } from '../../dist/server.js'
 import { loadGame } from '../../dist/server-node.js'
 import { buildSimInstanceConfig } from '../../dist/sim-config.js'
 import { memoryStorage } from '../../dist/storage/memory.js'
@@ -67,16 +69,68 @@ async function runWorldgenLeg() {
   return { name: WORLDGEN_NAME, ok: message === null, message }
 }
 
-/** `fx-puts`'s own idle-100 golden (docs/plan/13-sim-host-tick-loop.md step 3), driven through
- * `runHashScenario`'s `sim` branch with `genesis: true`. */
+/** A `HostServices.timer` double: `every()` records the one callback `SimHost.start()` registers,
+ * `fire()` invokes it -- the same shape `tests/wasm/puts.test.ts`'s own `manualTimer()` uses under
+ * Node. */
+function manualTimer() {
+  let fn = null
+  return {
+    services: {
+      every: (_ms, cb) => {
+        fn = cb
+        return () => {
+          fn = null
+        }
+      },
+    },
+    fire() {
+      if (fn) fn()
+    },
+  }
+}
+
+/** `fx-puts`'s own idle-100 golden (docs/plan/13-sim-host-tick-loop.md step 3). docs/plan/
+ * 27-server-entrypoint-and-netcode-harness.md, Order of work 1 ("Bun: M02's plain script,
+ * extended"): ticked through a real `createWorldServer` with `memoryStorage()`, the Bun leg's own
+ * counterpart of `puts.test.ts`'s `wasm_idle_100_matches_native` -- the checkpoint hash is read
+ * back by reopening the same storage through `Persistence.open`, since `WorldServer`'s own
+ * `{ ready, accept, stop }` exposes no hash directly. */
 async function runPutsLeg() {
   const putsFixture = new URL('../../fixtures/puts/', import.meta.url)
   const scenario = await json('golden/scenario.json', putsFixture)
   const golden = await json('golden/golden.json', putsFixture)
   const { wasm } = await loadGame(new URL('target/engine/dev', putsFixture).pathname)
-  const inst = instantiate(wasm, roleOf(scenario), scenario.config, { onLog() {} })
-  const checkpoints = runHashScenario(inst, scenario)
-  const message = diffCheckpoints(checkpoints, golden.checkpoints)
+
+  const worldCfg = {
+    worldId: 'w-puts-golden-bun',
+    buildHash: 'ab'.repeat(32),
+    params: {
+      seed: '1',
+      worldgen: scenario.config.game.params ?? null,
+      maxEntities: scenario.config.game.maxEntities,
+      maxModifiedTiles: scenario.config.game.maxModifiedTiles,
+      maxActionGrowth: scenario.config.game.maxActionGrowth,
+    },
+    cacheChunks: scenario.config.game.cacheChunks,
+    arenaBytes: scenario.config.arenaBytes,
+  }
+  const storage = memoryStorage()
+  const timer = manualTimer()
+  const server = createWorldServer(worldCfg, {
+    wasm,
+    storage,
+    clock: { now: () => 0 },
+    timer: timer.services,
+  })
+  await server.ready
+  for (let i = 0; i < scenario.ticks; i++) timer.fire()
+  await server.stop()
+
+  const newInstance = () => instantiate(wasm, Role.Sim, buildSimInstanceConfig(worldCfg))
+  const reopened = await Persistence.open(storage, worldCfg, newInstance)
+  const hash = wrapEngineInstance(reopened.sim).simHash()
+
+  const message = diffCheckpoints([hash], golden.checkpoints)
   return { name: PUTS_NAME, ok: message === null, message }
 }
 

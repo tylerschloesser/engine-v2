@@ -67,6 +67,22 @@ export interface HostServices {
   clock: { now(): number }
   timer: { every(ms: number, fn: () => void): () => void }
   onIdle?: () => void
+  /** 0024 §5 (amends 0009): fed from `SimHost.onFatal` (M24) once `createWorldServer` has a live
+   * `SimHost` -- a load failure surfaces through `ready` rejecting instead (below), since it never
+   * reaches a `SimHost` at all. */
+  onFatal?: (f: { tick: number; message: string }) => void
+}
+
+/**
+ * `createWorldServer`'s own return type (0024 §5, verbatim; amends 0009's synchronous `{ accept,
+ * stop }`). `ready` rejects with `WorldLoadError` (`./host/persistence.js`) or any other error
+ * `Persistence.open`/`instantiate` raised while loading -- loading is asynchronous, so
+ * `createWorldServer` itself never throws synchronously.
+ */
+export interface WorldServer {
+  ready: Promise<void>
+  accept(c: Connection): void
+  stop(): Promise<void>
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -749,4 +765,83 @@ export function createSimHost(cfg: WorldConfig, services: HostServices): SimHost
   const inst = instantiate(services.wasm, Role.Sim, buildSimInstanceConfig(cfg))
   const persistence = Persistence.create(services.storage, cfg, inst)
   return createSimHostFromInstance(wrapEngineInstance(inst), services, persistence)
+}
+
+// ---------------------------------------------------------------------------------------------
+// `createWorldServer` (docs/plan/27-server-entrypoint-and-netcode-harness.md; 0024 §5, which
+// amends 0009 and is implemented here, not re-decided).
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * `createWorldServer(cfg, host): WorldServer` (0024 §5, verbatim): `{ ready, accept, stop }`.
+ * Built the same way `createSimHost` is (a fresh `role=sim` instance from `host.wasm`, driven
+ * through `createSimHostFromInstance`) but over `Persistence.open` (load, recover or create)
+ * instead of `Persistence.create` (always fresh) -- "no second host loop: `createWorldServer` and
+ * the sim worker construct the same module with different `HostServices`" (Planning decisions).
+ * Loading is asynchronous (0005), so construction itself never throws: every failure the load can
+ * raise (`WorldLoadError`, or any other error `Persistence.open`/`instantiate` throw) surfaces only
+ * through `ready` rejecting, never synchronously from this call.
+ */
+export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldServer {
+  const newInstance = (): EngineInstance =>
+    instantiate(host.wasm, Role.Sim, buildSimInstanceConfig(cfg))
+
+  // `accept`'s own doc comment (Seams: "connections arriving before ready wait"): queued here until
+  // `ready` settles, then handed to the real `SimHost.accept` in the order they arrived. Never
+  // flushed on a rejection -- there is no host to accept them into, and 0024 §5 defines no protocol
+  // for reporting that back over a `Connection` this milestone's own accept-before-ready caller
+  // holds no other handle on.
+  const pendingConnections: Connection[] = []
+  // Every connection this world has ever accepted (Traps below: `onFatal`'s own "closes sockets").
+  // Sized on demand, not `MAX_CONNS`-preallocated (`.claude/rules/hot-paths.md` does not reach this
+  // file: `createWorldServer` runs once per world, not per frame or per tick).
+  const acceptedConnections: Connection[] = []
+  let simHost: SimHost | null = null
+
+  const ready: Promise<void> = Persistence.open(host.storage, cfg, newInstance).then((opened) => {
+    const h = createSimHostFromInstance(
+      wrapEngineInstance(opened.sim),
+      host,
+      opened.persistence,
+      opened.tick,
+    )
+    // 0024 §5: "`HostServices` gains `onFatal?`, fed from `SimHost.onFatal`; after it fires the
+    // server stops ticking, closes sockets, touches no file, and adds no protocol." `SimHost.stop()`
+    // is not called here: `recover()` (the only caller of `onFatal`) has already disarmed pacing
+    // itself before reporting fatal (`server.ts`'s own `recover()`, above) -- calling `stop()` again
+    // would re-run its snapshot/flush sequence against a world `onFatal`'s own doc comment says
+    // "touches no file" for.
+    h.onFatal = (f) => {
+      for (const c of acceptedConnections) c.close(0)
+      host.onFatal?.(f)
+    }
+    simHost = h
+    h.start()
+    for (const c of pendingConnections) {
+      acceptedConnections.push(c)
+      h.accept(c)
+    }
+    pendingConnections.length = 0
+  })
+
+  return {
+    ready,
+    accept(c) {
+      if (simHost) {
+        acceptedConnections.push(c)
+        simHost.accept(c)
+      } else {
+        pendingConnections.push(c)
+      }
+    },
+    async stop() {
+      // Settle `ready` first, one way or the other, before deciding whether there is a `SimHost` to
+      // stop -- awaiting the same promise `ready` already is, not a fresh derived one, so a handler
+      // is attached to it here regardless of whether the caller ever awaits `ready` itself
+      // (`Promise.prototype.catch` registers on the original promise, avoiding an "unhandled
+      // rejection" report for a caller that only ever calls `stop()`).
+      await ready.catch(() => {})
+      if (simHost) await simHost.stop()
+    },
+  }
 }
