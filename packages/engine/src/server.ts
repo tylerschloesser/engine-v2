@@ -547,6 +547,18 @@ export function createSimHostFromInstance(
   // `serverInternals(...).handshakesSettled()`'s own source: every in-flight digest/allocate
   // promise, removed as each settles (Seams).
   const inFlightHandshakes = new Set<Promise<void>>()
+  // Deviations (real bug found and fixed): `crypto.subtle.digest` resolves through Node's own
+  // libuv thread pool, so *two* concurrently-hashing new secrets' own digests do not necessarily
+  // settle in `Hello`-arrival order even though `pumpHandshakes`'s own drain loop below only ever
+  // *consumes* `attachQueue` in that order -- the session-table mutation (`sessions.create`'s own
+  // "next id" pick) used to run the instant each digest resolved, so whichever secret's digest
+  // happened to finish first (real thread-pool timing, not the seed) could claim the lower
+  // `PlayerId`, silently swapping two simultaneous new joiners' identities between runs of the
+  // identical seed. `sessionMutationChain` re-serializes just that part, in the same arrival order
+  // `slotIndex` already fixes: each handshake's own session-table decision `await`s the *previous*
+  // arrival's own chain link before touching `sessions` at all, so which promise the real
+  // threadpool happens to settle first no longer matters.
+  let sessionMutationChain: Promise<void> = Promise.resolve()
 
   function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
     if (a.length !== b.length) return false
@@ -1055,12 +1067,22 @@ export function createSimHostFromInstance(
         state.status = 'awaiting-attach'
         const slotIndex = attachQueue.length
         attachQueue.push(null)
+        // This arrival's own turn on `sessionMutationChain` (Deviations above): captured now, in
+        // `Hello`-arrival order, *before* the chain is extended for the next arrival below -- the
+        // digest itself (line after) is free to resolve in whatever order the real threadpool
+        // picks, but nothing here touches `sessions` until its own predecessor's turn is done.
+        const myTurn = sessionMutationChain
+        let resolveMyTurn = (): void => {}
+        sessionMutationChain = new Promise((resolve) => {
+          resolveMyTurn = resolve
+        })
         const settle = (async () => {
           const hashHex = await hashSecretHex(parsed.playerSecret)
-          // Synchronous from here to `sessions.create` (Deviations: no `await` in between), so two
-          // concurrently-resolving never-before-seen secrets can never race the same candidate id
-          // -- the first one's `create` is already visible to `highestPlayerId()` before the
-          // second's own lookup runs (JS's single-threaded execution between awaits).
+          await myTurn
+          // Synchronous from here to `sessions.create` (Deviations: no `await` in between, and now
+          // serialized in arrival order by `myTurn` above), so two never-before-seen secrets can
+          // never race the same candidate id -- the first one's `create` is already visible to
+          // `highestPlayerId()` before the second's own lookup runs.
           let entry = deps.sessions.lookup(hashHex)
           if (!entry) {
             let candidate = deps.sessions.highestPlayerId() + 1
@@ -1069,6 +1091,7 @@ export function createSimHostFromInstance(
             // Crash safety (Planning decisions): durable before the log ever records the join.
             await deps.sessions.save()
           }
+          resolveMyTurn() // the next arrival's own turn may now touch `sessions`
           const joined = sim.simHasPlayer(entry.playerId) === 0
           const presence = entry.lastPresenceHex ? hexDecode(entry.lastPresenceHex) : null
           attachQueue[slotIndex] = {
