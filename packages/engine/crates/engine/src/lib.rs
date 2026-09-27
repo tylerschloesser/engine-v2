@@ -22,6 +22,7 @@ pub mod persist;
 pub mod predict;
 pub mod presence;
 pub mod rng;
+pub mod session;
 pub mod sim;
 pub mod store;
 #[cfg(feature = "testing")]
