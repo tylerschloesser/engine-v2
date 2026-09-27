@@ -78,3 +78,126 @@ PRE-PLAN §7 "Test suite" (`netcode` and `wasm` rows of 0020 §3), measured by t
 none
 
 ## Deviations
+
+**Steps 1-2 (this range).** Base `8dccaa9`. Commits `86ef8be` (step 1), `33fec51` (step 2).
+
+- `createWorldServer(cfg: WorldConfig, host: HostServices): WorldServer` lands in `server.ts`,
+  exactly the 0024 §5 shape: `WorldServer = { ready: Promise<void>; accept(c: Connection): void;
+  stop(): Promise<void> }`. Built like `createSimHost` (a fresh `role=sim` instance from
+  `host.wasm`, driven through `createSimHostFromInstance`) but over `Persistence.open` instead of
+  `Persistence.create` -- `createSimHost` itself is untouched (still always-create; it stays a
+  test-only convenience, `src/server.test.ts`/`tests/wasm/persistence.test.ts`'s own caller, not
+  used by `createWorldServer`). `HostServices.onFatal?: (f: { tick: number; message: string }) =>
+  void` added verbatim; wired only after a live `SimHost` exists (a load failure surfaces through
+  `ready` rejecting instead, never reaching `onFatal`). `accept(c)` before `ready` settles queues
+  `c` (flushed in arrival order once ready resolves; never flushed on a rejection, since 0024 §5
+  defines no protocol for reporting that back). `onFatal`'s own handler closes every connection
+  this world ever accepted (`c.close(0)`), then calls `host.onFatal`.
+- `pnpm test wasm -t server` (`tests/wasm/server.test.ts`, new): `server/load-or-create` (fs
+  storage, stop, reopen, same `sim_hash()` via a fresh `Persistence.open` read on each side),
+  `server/ready-rejects-on-corrupt-world` (a manifest that parses but names a segment 0 whose log
+  bytes are undecodable -- `ready` rejects `instanceof WorldLoadError` with `kind: 'corrupt'`),
+  `server/accept-before-ready-waits` (a `Storage.read` that never resolves until the test releases
+  it; `conn.onMessage` stays `null` until `ready` settles). All three green; failability proven for
+  `ready-rejects-on-corrupt-world` by temporarily swallowing `Persistence.open`'s rejection inside
+  `createWorldServer` and observing the test fail, then reverting.
+- `src/server.test.ts` gained one unit test type-asserting `createWorldServer`'s signature and
+  `HostServices.onFatal?` against 0024 §5 (Exit criterion 4) -- compile-time (`tsc`), not runtime.
+- `src/no-node-import.test.ts` (new, `unit`): the `node:` import grep (Exit criterion 3), scanning
+  every non-test `.ts` under `src/`. Allowlist: `server-node.ts`, `storage/fs.ts` (the brief's own
+  two), plus `vite.ts` and `build-game.ts` -- pre-existing dev-only build tooling (0017 §5), not the
+  "server core" 0017's own Alternatives-rejected line means by "adapters". Neither is new to this
+  milestone; both already imported `node:` before it.
+- **The wasm suite's scenarios, moved onto `createWorldServer`, narrowed to `fx-puts` only.**
+  `determinism.test.ts` (`fx-hash`) and `worldgen.test.ts` (`fx-worldgen`) stay on the raw
+  `instantiate` + direct `sim_tick`/`gen_chunk` path: both are low-level `export_instance!` fixtures
+  with no `Host<G>` wrapper, so `sim_seal_frame` is unimplemented (`Status::Unsupported`, the M13
+  trait default) and `wrapEngineInstance.simSealFrame` throws on the very first tick if driven
+  through `createSimHostFromInstance`/`createWorldServer`. Only `puts.test.ts` (`fx-puts`, a real
+  `Host<G>`-based game, the one fixture 0020 §3's "the built game+engine `.wasm` through the server
+  entrypoint" line actually describes) moved: `wasm_idle_100_matches_native`,
+  `wasm_connected_100_matches_its_own_golden`, `wasm_script_a_matches_native` now tick through
+  `createWorldServer` + `memoryStorage()` with a manual clock/timer double (`manualTimer()`,
+  already in the file), then read the checkpoint hash back by reopening the same storage through
+  `Persistence.open` and calling `wrapEngineInstance(...).simHash()` -- `WorldServer` exposes no
+  hash directly. `wasm_script_a_matches_native` delivers each scripted action's pre-encoded wire
+  bytes through the accepted connection's own `onMessage` (wired by `SimHost.accept`), not a direct
+  `sim_admit` call. `bun-leg.mjs`'s `runPutsLeg` (the Bun leg's idle-100 counterpart,
+  `wasm_idle_100_matches_native (bun)`) moved the same way, against `dist/server.js`. No golden
+  value changed (`0a7cc2623a83a03e` for script-a, unchanged; every other checkpoint verified equal
+  to the checked-in golden): `sim_seal_frame`/`sim_dirty` never touch `Sim::state_hash()`
+  (confirmed by reading `crates/engine/src/host/mod.rs`'s `sim_hash`/`sim_tick`), and replay
+  reconstructs identical state by construction (0005). Measured: `pnpm test wasm` 154 tests (was
+  151; +3 from `server.test.ts`), `pnpm test unit` 275 tests (was 252; +23).
+- `WORLD_CFG`/the Bun leg's `worldCfg` reconstruct a `WorldConfig` from each scenario's checked-in
+  `InstanceConfig` (`config.game.seed: "0x1"` decimal is `"1"`; every other field is already the
+  scenario's own default). `buildSimInstanceConfig` adds one field the scenario JSON lacks
+  (`game.buildHash`, a fixed dummy `'ab'.repeat(32)` here): harmless, since `sim_hash()` never
+  reads it, only `Persistence`'s own identity bookkeeping does.
+- One observed, unreproduced flake: `server/load-or-create` failed once (`expectedHash` read back
+  as `'0000000000000000'`, i.e. the post-stop reload found no manifest) across roughly 15 repeated
+  runs, isolated or grouped with its sibling tests. Not reproduced again in 11 further consecutive
+  runs after the failure. Plausibly a pre-existing `fsStorage` timing edge under machine load
+  (`fsStorage`/`Persistence` are M22b's, unmodified here), not something this milestone's own code
+  introduced -- flagged for whoever next touches `fsStorage` under contention, not chased further.
+- `src/net/memory-connection.ts`: `memoryConnectionPair(opts?: { datagrams?: boolean }):
+  [Connection, Connection]` exactly as named in Seams. `send` copies (`.slice()`) and defers
+  delivery to the peer via `queueMicrotask`, so it can never call the peer's `onMessage` inside its
+  own call frame (proven: temporarily made delivery synchronous, both the copy-timing and the
+  reentrancy test failed as expected, then reverted). `close(code)` on one end closes the pair:
+  the peer's own queue is dropped and its `onClose` fires (async, one microtask) with the same
+  code.
+- `src/test/virtual-clock.ts`: `createVirtualClock(startMs?): VirtualClock` (`ManualClock` plus
+  `advanceTo`/`advanceBy`, as named). Beyond the brief's own two named additions, `VirtualClock`
+  also exposes `scheduleDelivery(entry: PendingDelivery)` and `nextLinkId(): number` -- not called
+  out in the brief's Seams line for `VirtualClock`, but needed so `conditionLink` (below) can
+  register pending releases on a *shared* clock and have several links' releases interleave in one
+  global `(deliverAt, link, seq)` order under one `advanceTo` caller. `advanceTo(t)` throws if `t`
+  is before `now()`. While releasing, the underlying `ManualClock`'s own `now()` is advanced to
+  each entry's `deliverAt` *before* calling its `run()` (not deferred to the end): a conditioner's
+  own `send` inside `run()` computes its next draw relative to "now", which must be the virtual
+  instant the message is actually arriving at. Proven failable: dropping the `seq` term from the
+  sort comparator, with entries deliberately registered out of `seq` order via `scheduleDelivery`,
+  produced the wrong release order (`['first','c','a','b']` instead of `['first','a','b','c']`);
+  reverted.
+- `src/net/conditioner.ts`: `conditionLink(a, b, opts: { seed, latencyMs, jitterMs, stall?: { p,
+  rtoMs } }, clock): ConditionedLink` with `ends: [Connection, Connection]`, `set(conditions)`,
+  `stall(ms)`, `disconnect(code?)`, exactly as named. Conditioning happens on the *send* side (the
+  public `ends[i].send` draws `deliverAt` and schedules the underlying `a`/`b`'s own `send` as the
+  release); the underlying pair's own `onMessage` is a straight, immediate passthrough to the
+  public end's callback. Two independent seeded PRNG streams per link (`seed` and `seed + 1`, one
+  per direction) -- xorshift32, hand-written (no ambient randomness in `src/net/`, which is outside
+  `src/test/`: `no-ambient-random.test.ts` greps literally, including comments, which cost one
+  wording fix). "Order preserved" per direction: each direction's own draw is floored at its own
+  previous message's `deliverAt`, proven by an 8-message burst under wide jitter arriving in send
+  order with monotonic `deliverAt`. A stall draw (`stall.p`) on `latest-wins` traffic over a
+  `datagrams: true` link drops the message outright instead of stalling (0020 §7: "message drops
+  apply only to `latest-wins` traffic on a datagram adapter"); every other combination stalls.
+  `conditionLink`'s own `run()` wraps the underlying `send` in a `Promise` resolved by a second
+  `queueMicrotask` (queued strictly after the underlying pair's own delivery microtask), so
+  `VirtualClock.advanceTo`'s `await` genuinely observes the message having arrived at the far end's
+  `onMessage` before moving to the next release -- the "awaits physical arrival" language of 0020
+  §7, applied to an in-memory pair rather than a real socket.
+- Not built here (steps 3-4's own): `src/net/pump.ts` (`createBytePump`), `HeadlessClient`,
+  `createNetHarness`, the `netcode` suite's `tests/netcode/` directory and its `CLAUDE.md`,
+  `nodeHostServices`, the `run-tests` skill update.
+
+Notes for the steps 3-4 implementer:
+
+- `createWorldServer`, `WorldServer`, `HostServices.onFatal?` are in `src/server.ts`, re-exported
+  nowhere new (same file as `createSimHost`/`SimHost`).
+- `memoryConnectionPair`, `conditionLink`, `ConditionedLink`, `ConditionerOptions`,
+  `ConditionerConditions`, `StallOptions` are in `src/net/{memory-connection,conditioner}.ts`, also
+  re-exported from `engine/test` (`src/test.ts`). `createVirtualClock`, `VirtualClock`,
+  `PendingDelivery` are in `src/test/virtual-clock.ts`, same re-export.
+- `HeadlessClient`'s own byte pump should reuse `VirtualClock.scheduleDelivery`/`nextLinkId` only
+  if it needs to interleave with conditioned links on the same clock; otherwise a plain `setTimer`
+  suffices, since `ManualClock.advance`/`frame` are still there unchanged.
+- `conditionLink` takes over `a.onMessage`/`a.onClose`/`b.onMessage`/`b.onClose` completely --
+  `createNetHarness`/`HeadlessClient` must always talk to `link.ends[i]`, never to the raw pair
+  passed into `conditionLink`.
+- `manualTimer()` (a `HostServices.timer` double: `every()` records the callback, `fire()` invokes
+  it) is duplicated across `src/server.test.ts`, `tests/wasm/puts.test.ts` and `tests/wasm/
+  server.test.ts` (as `timerDouble()` in the last); `nodeHostServices`'s own real timer is
+  `systemScheduler`-backed and unrelated, but a future shared test double belongs in `engine/test`
+  if a fourth copy would otherwise appear in the netcode harness.
