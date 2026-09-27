@@ -266,11 +266,19 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     const client = createHeadlessClient({
       wasm,
       game: { seed: worldCfg.params.seed, worldgen: gameWorldgen },
-      connection: clientSide,
+      // docs/plan/28-sessions-and-reconnect.md step 4: `createLink`'s own `dial` -- this harness
+      // does not yet build a *fresh* conditioned end per redial attempt (Deviations: real
+      // per-attempt redial is a transport concern, M29's own), so every dial before `stop()`
+      // returns the one fixed `clientSide` this client was constructed with.
+      dial: () => clientSide,
       secret,
       ...(worldCfg.joinKey !== undefined ? { joinKey: worldCfg.joinKey } : {}),
       buildHash: hexDecode(worldCfg.buildHash),
-      clock: { now: () => clock.now() },
+      // The real `VirtualClock`, not just a `{ now }` shim: it is also a `Scheduler`
+      // (`ManualClock`'s own shape), which `createLink`'s dead timer/backoff/probe need.
+      clock,
+      scheduler: clock,
+      linkSeed: opts.seed + linkIdx * 2 + 1_000_000, // distinct offset from the conditioner's own
     })
     entries.push({ client, connId, link, linkIdx })
     return client

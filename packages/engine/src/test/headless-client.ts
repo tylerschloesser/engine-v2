@@ -25,10 +25,12 @@ import { CameraBlockView, readCameraBlockInto, writeCameraBlock } from '../camer
 import { CameraState } from '../camera/state.js'
 import { type CameraViewport, halfExtentTiles } from '../camera/transform.js'
 import type { ActionOutcome } from '../client.js'
+import type { Clock, Scheduler } from '../clock.js'
 import { CLOCK_FIELD, ClockBlockView, readClockBlockInto, SessionState } from '../clock-block.js'
 import { ByeReason, buildBye } from '../host/handshake.js'
 import type { EngineInstance } from '../loader.js'
 import { instantiate } from '../loader.js'
+import { createLink } from '../net/link.js'
 import { createBytePump } from '../net/pump.js'
 import { readU32LE, writeU32LE } from '../sab/bytes.js'
 import { ControlBlock, WORKER_CLIENT } from '../sab/control.js'
@@ -90,6 +92,11 @@ export interface HeadlessClientStatus {
    * the clock block's `revealed` word -- true once every chunk of the visible rectangle is both
    * held by the replica and locally generated. */
   revealed: boolean
+  /** docs/plan/28-sessions-and-reconnect.md step 4: how many times `createLink`'s own `onUp` has
+   * fired for this client -- `1` for a connection that has never gone down and redialed. A
+   * scenario proving a link *stayed* up (`liveness/heartbeat-idle-world`) watches this stay `1`
+   * over a long idle stretch; one that forces a redial watches it increment. */
+  linkUpCount: number
 }
 
 export interface HeadlessClient {
@@ -137,12 +144,29 @@ export interface HeadlessClient {
   leave(): void
 }
 
+/** A `Scheduler` that never fires anything (`HeadlessClientOptions.scheduler`'s own default):
+ * `createLink`'s dead timer/backoff/probe simply never trigger for a caller that does not supply
+ * a real one -- every existing single-dial scenario (no reconnect, no liveness assertions) is
+ * unaffected either way. */
+function noopScheduler(): Scheduler {
+  return {
+    setTimer: () => -1,
+    clearTimer: () => {},
+    requestFrame: () => -1,
+    cancelFrame: () => {},
+  }
+}
+
 export interface HeadlessClientOptions {
   wasm: WebAssembly.Module
   game: { seed: string; worldgen: unknown }
-  /** The end this client talks to the host through -- raw (`memoryConnectionPair`) or conditioned
-   * (`conditionLink`'s own `ends[i]`); `createNetHarness` decides which. */
-  connection: Connection
+  /** docs/plan/28-sessions-and-reconnect.md step 4: dials this client's own `Connection` --
+   * `createLink`'s own `dial` (Seams). Called once immediately (the first join) and again on
+   * every redial `createLink` itself decides to make (dead timer, probe, `HeadlessClient` never
+   * drives this directly). `createNetHarness` hands back the one fixed conditioned end it already
+   * built (no fresh dial per attempt yet -- Deviations: a real per-attempt redial is M29's own
+   * transport concern, not this milestone's). */
+  dial: () => Connection
   /** docs/plan/28-sessions-and-reconnect.md: this device's own identity secret (16 bytes,
    * `loadOrMintSecret`'s own shape) -- `client_hello`'s own source, via `TerrainConfig`'s `secret`
    * config field (hex). Replaces M27's pre-handshake `myPlayerId` stopgap: the client's own
@@ -154,10 +178,21 @@ export interface HeadlessClientOptions {
   /** The world's own build hash (32 bytes, full SHA-256) -- `WorldConfig.buildHash`, hex-decoded. */
   buildHash: Uint8Array
   /** docs/plan/28-sessions-and-reconnect.md: a virtual clock for the Hello -> Welcome round trip
-   * fed to `LeadEstimator.seed_rtt_ms` (M26, if ticked) -- `createNetHarness` passes its own
-   * `VirtualClock`. Omitted (`rttMs` always `0`) for a caller that does not care, e.g. a
-   * `connectRaw()`-driven scenario that never applies `Welcome` through this type at all. */
-  clock?: { now(): number }
+   * fed to `LeadEstimator.seed_rtt_ms` (M26, if ticked), *and* `createLink`'s own dead-timer/
+   * backoff/probe clock (step 4) -- `createNetHarness` passes its own `VirtualClock` (a `Clock`
+   * and a `Scheduler` both). Omitted (`rttMs` always `0`, liveness management inert) for a caller
+   * that does not care, e.g. a `connectRaw()`-driven scenario that never applies `Welcome`
+   * through this type at all. */
+  clock?: Clock
+  /** docs/plan/28-sessions-and-reconnect.md step 4: `createLink`'s own `scheduler` -- defaults to
+   * one that never fires (`noopScheduler`, above) when `clock` is given but this is not, so a
+   * caller that only wants the `Hello`/`Welcome` RTT reading is unaffected. */
+  scheduler?: Scheduler
+  /** docs/plan/28-sessions-and-reconnect.md step 4: seeds `createLink`'s own backoff jitter --
+   * distinct from any network-conditioning seed (`createNetHarness`'s own `seed`), since this is
+   * unrelated randomness. Defaults to `1` (every existing caller that never reconnects never
+   * observes it). */
+  linkSeed?: number
 }
 
 function requireRegion(inst: EngineInstance, id: RegionId, what: string) {
@@ -215,7 +250,6 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
     ticksPerSecond,
   )
   const bytePump = createBytePump({ uplink: sabs.uplink, downlink: sabs.downlink })
-  bytePump.attach(opts.connection)
 
   // docs/plan/28-sessions-and-reconnect.md: a second `RingConsumer` over the same `downlink` SAB,
   // used only before `Welcome` lands -- safe (`sab/ring.ts`'s own module doc comment: head/tail
@@ -228,18 +262,20 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
   let attached = false
   let ownPlayerId = 0
   let helloSentAtMs = 0
+  let currentConn: Connection | null = null
+  let linkUpCount = 0
 
-  /** Builds `Hello` (`client_hello`) and sends it directly over `opts.connection`, bypassing the
-   * uplink ring entirely (0009: `Hello` precedes any `UplinkBatch`, and `client_poll_uplink` has
-   * nothing to flush yet regardless). One-off, not a per-frame path (`.claude/rules/hot-paths.md`'s
-   * exemption for "one-time setup"). */
+  /** Builds `Hello` (`client_hello`) and sends it directly over the current connection, bypassing
+   * the uplink ring entirely (0009: `Hello` precedes any `UplinkBatch`, and `client_poll_uplink`
+   * has nothing to flush yet regardless). One-off per dial, not a per-frame path (`.claude/rules/
+   * hot-paths.md`'s exemption for "one-time setup"). */
   function sendHello(): void {
     const len = inst.call0(inst.x.client_hello)
     if (len <= 0) {
       throw new Error(`HeadlessClient: client_hello failed: status ${-len}`)
     }
     helloSentAtMs = opts.clock?.now() ?? 0
-    opts.connection.send(MsgClass.ReliableOrdered, txRegion.u8.slice(0, len))
+    currentConn?.send(MsgClass.ReliableOrdered, txRegion.u8.slice(0, len))
   }
 
   /** Pops at most one message off the downlink ring and applies it as `Welcome`
@@ -263,7 +299,34 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
     }
   }
 
-  sendHello()
+  // docs/plan/28-sessions-and-reconnect.md step 4: `createLink` owns dialing (the first join and
+  // every later redial its own dead timer/probe/backoff decide on) -- this client never calls
+  // `opts.dial()` itself. `onUp` fires synchronously, once immediately (during this very
+  // constructor call) and again on every future redial: `bytePump.attach(conn)` re-points the
+  // ring<->wire bridge at the new `Connection` (`pump.ts`'s own "detaches any previously attached
+  // connection first"), `attached` resets so `pumpPreWelcome` runs the handshake again, and a
+  // fresh `Hello` goes out. `onDown` is deliberately inert here beyond bookkeeping: a reattach
+  // that also needs to reconcile already-applied replica state against a new epoch is M28b's own
+  // scope (Non-scope, Consumes), not this milestone's.
+  const link = createLink({
+    dial: opts.dial,
+    clock: opts.clock ?? { now: () => 0 },
+    scheduler: opts.scheduler ?? noopScheduler(),
+    seed: opts.linkSeed ?? 1,
+    onUp: (conn) => {
+      currentConn = conn
+      attached = false
+      linkUpCount++
+      bytePump.attach(conn)
+      sendHello()
+    },
+    onDown: () => {
+      // Bookkeeping only (Deviations above): `createLink` itself keeps retrying (backoff) unless
+      // the reason is terminal, in which case no further `onUp` ever fires and this client simply
+      // stays not-live (`status().live` reads the clock block's own `SessionState`, untouched by
+      // this callback).
+    },
+  })
 
   const clockView = new ClockBlockView(sabs.clockBlock)
   // Sized 7, matching `readClockBlockInto`'s own `scratchFieldsView()` (the seventh slot is
@@ -420,6 +483,7 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
         ackSeq: clockScratch[CLOCK_FIELD.AckSeq] as number,
         ownPlayerId,
         revealed: clockScratch[CLOCK_FIELD.Revealed] === 1,
+        linkUpCount,
       }
     },
     pump,
@@ -431,8 +495,12 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
       pump()
     },
     leave() {
-      opts.connection.send(MsgClass.ReliableOrdered, buildBye(ByeReason.Leave))
-      opts.connection.close(0)
+      // Sent before `link.stop()` closes the connection (Deviations, `conditionLink`'s own
+      // close-ordering fix): a `Bye` queued immediately before a close is delivered first, not
+      // dropped. `link.stop()`, not a direct `currentConn.close()`: disarms every `createLink`
+      // timer too, so a leave never races a pending redial.
+      currentConn?.send(MsgClass.ReliableOrdered, buildBye(ByeReason.Leave))
+      link.stop()
     },
   }
 }

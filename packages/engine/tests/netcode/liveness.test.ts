@@ -1,10 +1,13 @@
 // `liveness` (docs/plan/28-sessions-and-reconnect.md, Tests added): `src/net/link.ts`'s own
-// dead-timer/probe/backoff state machine, driven entirely by a virtual `ManualClock` (`engine/
-// test`'s own `Clock` + `Scheduler`, docs/decisions/0020 §8) -- no real time, no real transport
-// (`Connection` is a plain hand-written double here; `link.ts` never parses its bytes). `heartbeat-
-// idle-world` (the host actually sending an empty frame every 500 ms with nothing else to say) is
-// not covered here: it needs a host-side heartbeat feature this milestone's own step 4 has not
-// built yet (see this milestone's Deviations).
+// dead-timer/probe/backoff state machine. `dead-after-silence`/`stale-socket-ignored`/`probe-on-
+// visible`/`backoff-schedule` drive `createLink` directly, over a virtual `ManualClock` (`engine/
+// test`'s own `Clock` + `Scheduler`, docs/decisions/0020 §8) with a plain hand-written `Connection`
+// double -- no real transport, no real heartbeat, exactly "heartbeats disabled" (Constraints):
+// `dead-after-silence` is that scenario, proving the dead timer alone, unaided, does fire.
+// `heartbeat-idle-world` is the real end-to-end counterpart: a real `createNetHarness` world with
+// nothing happening in it, a real `HeadlessClient` wired onto a real `createLink` (step 4), proving
+// the host's own tick-based heartbeat (`Host::build_frame`, `host/mod.rs`) keeps that dead timer
+// from ever firing.
 import { describe, expect, test } from 'vitest'
 import { CloseCode } from '../../src/host/handshake.js'
 import {
@@ -18,6 +21,8 @@ import {
   PROBE_DEADLINE_MS,
 } from '../../src/net/link.js'
 import { createManualClock } from '../../src/test/manual-clock.js'
+import { createNetHarness } from '../../src/test/net-harness.js'
+import { putsFixture, square } from './support.js'
 
 /** A hand-written `Connection` double (0009): `link.ts` only ever sets `onMessage`/`onClose` and
  * reads nothing else off it. `send`/`close` are recorded, never acted on -- this file tests the
@@ -44,7 +49,7 @@ interface Harness {
   downs: { why: DownReason; atMs: number }[]
 }
 
-function makeHarness(seed: number, onUp?: (conn: Connection) => void): Harness {
+function makeHarness(seed: number, onUp?: (raw: Connection) => void): Harness {
   const clock = createManualClock()
   const dials: (Connection & { closeCalls: number[] })[] = []
   const ups: { conn: Connection; gen: number; atMs: number }[] = []
@@ -61,7 +66,12 @@ function makeHarness(seed: number, onUp?: (conn: Connection) => void): Harness {
     seed,
     onUp: (conn, gen) => {
       ups.push({ conn, gen, atMs: clock.now() })
-      onUp?.(conn)
+      // `conn` (Deviations, `link.ts`) is a *wrapper*: `link.ts` itself owns `onMessage`/
+      // `onClose` on the raw dial (its own dead-timer bookkeeping), so a test simulating "the
+      // remote side sent/closed" must fire them on the raw connection this same harness's own
+      // `dials` just pushed, not on the wrapper (whose slots are null until a real caller like
+      // `HeadlessClient` sets them).
+      onUp?.(dials[dials.length - 1] as Connection)
     },
     onDown: (why) => {
       downs.push({ why, atMs: clock.now() })
@@ -168,5 +178,36 @@ describe('liveness', () => {
     // Real virtual times, seed 4242 (measured, not computed by the test itself): `advance(1)`'s
     // own granularity is why the 0 ms schedule entry reads back as 1, not 0 (Deviations).
     expect(upTimes).toEqual([0, 1, 438, 1588, 3869, 8398])
+  })
+
+  test('heartbeat-idle-world', async () => {
+    const harness = await createNetHarness({ fixture: await putsFixture(), seed: 7001, clients: 1 })
+    try {
+      const client = harness.clients[0]
+      if (!client) throw new Error('heartbeat-idle-world: no client 0')
+      client.setCamera(square(0))
+      await harness.settle()
+      expect(client.status().live).toBe(true)
+      expect(client.status().linkUpCount).toBe(1)
+
+      // Deviations: `fx-puts`'s own `tick()` has a once-a-second "walk/day bump" (`puts_
+      // scenarios.rs`'s own doc comment) that writes real `Global` state every 20 ticks (1 s at
+      // 20 Hz) with *no* client action involved -- well under the 3 s dead timer on its own, so
+      // this world is not actually silent enough for `createLink`'s own dead timer to distinguish
+      // "heartbeat kept it alive" from "the game's own ambient ticking kept it alive". The precise,
+      // walk-bump-independent signature instead: a heartbeat is *exactly* the 10-byte header with
+      // no sections (`wire/CLAUDE.md`), strictly smaller than any real section-carrying frame (the
+      // walk bump's own `Global` section alone is several bytes on top of that same header) and
+      // only ever built when nothing else was due (`Host::build_frame`'s own "nothing to say"
+      // gate) -- so a `bytesDown === 10` tick can only be a heartbeat, and one must appear inside
+      // any 10-tick (500 ms) idle window this world ever has between real sends.
+      await harness.advanceTicks(100)
+
+      expect(client.status().live).toBe(true)
+      const heartbeatTicks = harness.counters(0).perTick.filter((row) => row.bytesDown === 10)
+      expect(heartbeatTicks.length).toBeGreaterThan(0)
+    } finally {
+      await harness.dispose()
+    }
   })
 })

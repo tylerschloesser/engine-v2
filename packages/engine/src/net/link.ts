@@ -198,10 +198,33 @@ export function createLink(opts: CreateLinkOptions): Link {
     if (stopped) return
     gen++
     const myGen = gen
-    const conn = opts.dial()
-    currentConn = conn
+    const raw = opts.dial()
     lastActivityAtMs = opts.clock.now()
-    conn.onMessage = () => {
+    // A wrapper, not `raw` itself, is what `onUp` hands the caller (Deviations: `raw.onMessage`/
+    // `raw.onClose` are this file's own dead-timer/close-reason bookkeeping -- a 0009 `Connection`
+    // has only one `onMessage`/`onClose` slot each, so a caller that also wired its own protocol
+    // directly onto `raw` (`HeadlessClient`'s own `bytePump.attach`, which sets `onMessage` too)
+    // would silently steal traffic away from the dead timer otherwise). `send`/`close` pass
+    // straight through; only the two callbacks are intercepted and re-dispatched.
+    const wrapper: Connection = {
+      datagrams: raw.datagrams,
+      onMessage: null,
+      onClose: null,
+      // `len`: the same optional third parameter beyond 0009's own fixed `(cls, bytes)` shape
+      // every real `Connection` implementation in this codebase carries (`server.ts`'s own
+      // `withLen` cast, `conditioner.ts`'s `makeSend`) -- passed through verbatim, not just
+      // `bytes.length`, so a caller handing a whole persistent region view (a real `RingConnection`
+      // frame) still sends only the real bytes.
+      send: (cls, bytes, len?: number) => {
+        const withLen = raw as Connection & {
+          send: (cls: MsgClass, bytes: Uint8Array, len?: number) => void
+        }
+        withLen.send(cls, bytes, len)
+      },
+      close: (code) => raw.close(code),
+    }
+    currentConn = wrapper
+    raw.onMessage = (bytes) => {
       if (myGen !== gen || stopped) return // Seams: a superseded socket's traffic is harmless
       lastActivityAtMs = opts.clock.now()
       probeDeadlineTimer = clearTimerIfSet(probeDeadlineTimer)
@@ -211,14 +234,16 @@ export function createLink(opts: CreateLinkOptions): Link {
       // that true; `backoff-schedule`'s own literals depend on it).
       backoffIndex = 0
       armDeadTimer()
+      wrapper.onMessage?.(bytes)
     }
-    conn.onClose = (code) => {
+    raw.onClose = (code) => {
       if (myGen !== gen || stopped) return
       goDown(closeCodeReason(code))
+      wrapper.onClose?.(code)
     }
     state = LinkState.Up
     armDeadTimer()
-    opts.onUp(conn, myGen)
+    opts.onUp(wrapper, myGen)
   }
 
   dial()
