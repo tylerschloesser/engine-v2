@@ -4,6 +4,14 @@
 // `dist/`, an exit criterion of docs/plan/03-browser-harness.md).
 export type { Clock, Scheduler } from './clock.js'
 export {
+  type ConditionedLink,
+  type ConditionerConditions,
+  type ConditionerOptions,
+  conditionLink,
+  type StallOptions,
+} from './net/conditioner.js'
+export { memoryConnectionPair } from './net/memory-connection.js'
+export {
   actionResults,
   asHarness,
   callParked,
@@ -81,3 +89,8 @@ export {
   setViewport,
   setVisibility,
 } from './test/viewport.js'
+export {
+  createVirtualClock,
+  type PendingDelivery,
+  type VirtualClock,
+} from './test/virtual-clock.js'
