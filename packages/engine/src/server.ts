@@ -10,7 +10,9 @@
 
 import { RegionId, Role, Status } from './abi.js'
 import {
+  ByeReason,
   buildAttachInput,
+  buildBye,
   buildReject,
   CloseCode,
   ProtocolError,
@@ -30,6 +32,7 @@ import {
 import { hashSecretHex, hexDecode, loadSessionTable, type SessionTable } from './host/sessions.js'
 import type { EngineInstance } from './loader.js'
 import { instantiate } from './loader.js'
+import { readU32LE } from './sab/bytes.js'
 import { buildSimInstanceConfig, type WorldConfig } from './sim-config.js'
 import type { Storage } from './storage/types.js'
 import { worldKeys } from './storage/types.js'
@@ -112,6 +115,10 @@ export interface WorldServer {
  * bound itself with a native `assert!`) -- mirrored here as a plain constant, the same relationship
  * `DEFAULT_TICK_HZ` already has to `TickRate::HZ_20`. */
 export const MAX_CONNS = 8
+
+/** `Instance::sim_last_superseded()`'s own sentinel (Rust `u32::MAX`), mirrored: `sim_attach`'s
+ * `Result`-region word when this attach superseded no other connection. */
+const NO_SUPERSEDED_CONN = 0xffff_ffff
 
 /** 0005 "Idle pause is replay-safe": "the host runs at most 5 catch-up ticks per wakeup". */
 export const MAX_CATCHUP_TICKS = 5
@@ -206,8 +213,14 @@ export interface SimInstance {
   /** docs/plan/28-sessions-and-reconnect.md: `sim_attach(conn, len)` -- `input` is the whole
    * handshake input (`host/handshake.ts`'s `buildAttachInput`), copied into the sim role's own
    * `Rx` region; returns `Welcome` bytes (a view over `Tx`, valid only until the next call that
-   * touches it) or throws on a negative/malformed status. */
-  simAttach(conn: number, input: Uint8Array): { len: number; bytes?: Uint8Array }
+   * touches it) or throws on a negative/malformed status. docs/plan/28-sessions-and-reconnect.md
+   * steps 3-5: `supersededConn` is the other, already-attached `ConnId` this call silently freed
+   * because it shares this connection's own `PlayerId` (0013 "the old connection gets
+   * `Bye{Superseded}`"), `undefined` when nothing was freed. */
+  simAttach(
+    conn: number,
+    input: Uint8Array,
+  ): { len: number; bytes?: Uint8Array; supersededConn?: number }
   /** docs/plan/28-sessions-and-reconnect.md: frees `conn`'s slot (`sim_detach`, same effect as
    * `sim_disconnect`). `Status` (numeric); tolerates an unknown/already-freed `conn`. */
   simDetach(conn: number): number
@@ -309,7 +322,14 @@ export function wrapEngineInstance(inst: EngineInstance): SimInstance {
       if (raw === 0) return { len: 0 }
       const txRegion = inst.region(RegionId.Tx)
       if (!txRegion) throw new Error('sim_attach: len > 0 but the Tx region is absent')
-      return { len: raw, bytes: txRegion.u8 }
+      // docs/plan/28-sessions-and-reconnect.md steps 3-5: `sim_attach`'s own contract widened
+      // (`ABI_VERSION` 27 -> 28) -- one LE `u32` at `Result` offset 0, `0xFFFFFFFF` = "nothing
+      // superseded", read right after a successful call (`abi/mod.rs`'s own doc comment: "a
+      // second, sequential borrow ... after the `Tx` borrow above has ended").
+      const resultRegion = inst.region(RegionId.Result)
+      const superseded = resultRegion ? readU32LE(resultRegion.u8, 0) : NO_SUPERSEDED_CONN
+      if (superseded === NO_SUPERSEDED_CONN) return { len: raw, bytes: txRegion.u8 }
+      return { len: raw, bytes: txRegion.u8, supersededConn: superseded }
     },
     simDetach: (conn) => inst.call1(inst.x.sim_detach, conn),
     simHasPlayer: (player) => inst.call1(inst.x.sim_has_player, player),
@@ -567,7 +587,7 @@ export function createSimHostFromInstance(
         presence: entry.presence,
         helloTail: entry.helloTail,
       })
-      let built: { len: number; bytes?: Uint8Array }
+      let built: { len: number; bytes?: Uint8Array; supersededConn?: number }
       try {
         built = sim.simAttach(entry.conn, input)
       } catch {
@@ -577,6 +597,19 @@ export function createSimHostFromInstance(
       if (built.len <= 0 || !built.bytes) {
         closeHandshake(entry.conn, entry.connection, CloseCode.ProtocolError)
         continue
+      }
+      // 0013 "the same secret in a second tab: newest wins; the old socket gets
+      // `Bye{Superseded}` and must not auto-reconnect" -- `sim.simAttach` (Rust `Host::attach`)
+      // already freed the old `ConnSlot` silently (no log record, Constraints); this is only
+      // telling that connection's own live TS `Connection` to leave. A `superseded` conn that is
+      // no longer in `conns[]` (already closed some other way) is a no-op `closeHandshake` guard.
+      if (built.supersededConn !== undefined) {
+        const oldConn = built.supersededConn
+        const oldConnection = conns[oldConn]
+        if (oldConnection) {
+          oldConnection.send(MsgClass.ReliableOrdered, buildBye(ByeReason.Superseded))
+          closeHandshake(oldConn, oldConnection, CloseCode.Superseded)
+        }
       }
       const withLen = entry.connection as Connection & {
         send: (cls: MsgClass, bytes: Uint8Array, len?: number) => void

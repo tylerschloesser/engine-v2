@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 27
+export const ABI_VERSION = 28
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -117,6 +117,10 @@ export const ABI_EXPORTS = {
   // (`player_id varint · epoch u32 · joined u8 · presence (has u8 + len varint + bytes)? ·
   // hello_tail`); on success `Welcome` bytes land in `Tx` and their length is returned (same
   // `len`/`-(status)` shape as `sim_build_frame`).
+  // docs/plan/28-sessions-and-reconnect.md steps 3-5 (`ABI_VERSION` 27 -> 28): on success
+  // also writes one LE `u32` into `Result` offset 0 -- the `ConnId` this call silently
+  // superseded (0013 "the old connection gets `Bye{Superseded}`"), `0xFFFFFFFF` for "none"
+  // -- the same in-place widening `client_clock_stats` used.
   sim_attach: { role: 'sim', params: 2, result: 'len' },
   // docs/plan/28-sessions-and-reconnect.md: frees `conn`'s slot, same as `sim_disconnect` -- a
   // distinct export name so the handshake path (`sim_attach`) and its own teardown pair cleanly,

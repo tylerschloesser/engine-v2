@@ -452,6 +452,14 @@ where
         }
     }
 
+    /// docs/plan/28-sessions-and-reconnect.md steps 3-5.
+    fn sim_last_superseded(&self) -> u32 {
+        match self {
+            GameInstance::Sim(h) => h.sim_last_superseded(),
+            _ => u32::MAX,
+        }
+    }
+
     fn sim_tick(&mut self) -> Status {
         match self {
             GameInstance::Sim(h) => h.sim_tick(),

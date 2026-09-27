@@ -61,6 +61,27 @@ export function rejectReasonCloseCode(reason: RejectReason): CloseCode {
 
 export const REJECT_LEN = 4 + 2 + 1 + BUILD_HASH_LEN // magic · protocol_version · reason · build_hash
 
+/** `wire::MsgType::Bye` (Rust, `crates/engine/src/wire/mod.rs`), mirrored: the one `MsgType` byte
+ * this file needs (`Welcome = 0x03` is built in Rust, `sim_attach`'s own output). */
+const MSG_TYPE_BYE = 0x05
+
+/** `session::ByeReason` (Rust), mirrored: `0 Leave, 1 Superseded` (Scope: `Bye { reason: Leave |
+ * Superseded }`). */
+export const ByeReason = {
+  Leave: 0,
+  Superseded: 1,
+} as const
+export type ByeReason = (typeof ByeReason)[keyof typeof ByeReason]
+
+/** `Bye = MsgType::Bye · reason u8` (`session::write_bye`'s own layout, `session/mod.rs`): 2
+ * bytes, ordinary post-handshake framing (no frozen magic/version prefix, unlike `Hello`/
+ * `Reject`) -- pure, like `buildReject` (Scope: it must not depend on a live instance either,
+ * since the host sends it from the handshake path, before or without ever calling `sim_attach`
+ * for the connection being told goodbye). */
+export function buildBye(reason: ByeReason): Uint8Array {
+  return new Uint8Array([MSG_TYPE_BYE, reason])
+}
+
 /**
  * Builds `Reject` bytes (0013, frozen layout): `[magic u32][protocol_version u16][reason
  * u8][build_hash [u8; 32]]`. Pure: takes the server's own `buildHash` as a parameter rather than

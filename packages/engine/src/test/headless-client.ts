@@ -26,6 +26,7 @@ import { CameraState } from '../camera/state.js'
 import { type CameraViewport, halfExtentTiles } from '../camera/transform.js'
 import type { ActionOutcome } from '../client.js'
 import { CLOCK_FIELD, ClockBlockView, readClockBlockInto, SessionState } from '../clock-block.js'
+import { ByeReason, buildBye } from '../host/handshake.js'
 import type { EngineInstance } from '../loader.js'
 import { instantiate } from '../loader.js'
 import { createBytePump } from '../net/pump.js'
@@ -85,6 +86,10 @@ export interface HeadlessClientStatus {
   /** docs/plan/28-sessions-and-reconnect.md: this connection's own `PlayerId`, learned from
    * `Welcome` (`0`, "none", before it arrives). */
   ownPlayerId: number
+  /** docs/plan/28-sessions-and-reconnect.md: `ClientCore::revealed()`'s own value, mirrored in
+   * the clock block's `revealed` word -- true once every chunk of the visible rectangle is both
+   * held by the replica and locally generated. */
+  revealed: boolean
 }
 
 export interface HeadlessClient {
@@ -124,6 +129,12 @@ export interface HeadlessClient {
    * calls `frame(t_ms)` (so `ClientSide::frame`/`TerrainFeed::on_frame` produce presence and gen
    * requests, once M18/M19 land), then `pump()`. */
   stepFrame(dtMs: number): void
+  /** docs/plan/28-sessions-and-reconnect.md Scope: "Client `Bye{Leave}` on `client.leave()` /
+   * `HeadlessClient.leave()`" -- sends `Bye{Leave}` over the attached `Connection` then closes
+   * it (0009: an ordinary, self-initiated close, not one of 0013's host-driven `CloseCode`s).
+   * Idempotent: closing an already-closed `Connection` is every real `Connection`'s own no-op
+   * (`memory-connection.ts`'s own `if (end.closed) return`). */
+  leave(): void
 }
 
 export interface HeadlessClientOptions {
@@ -408,6 +419,7 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
         predictedTick: clockScratch[CLOCK_FIELD.PredictedTick] as number,
         ackSeq: clockScratch[CLOCK_FIELD.AckSeq] as number,
         ownPlayerId,
+        revealed: clockScratch[CLOCK_FIELD.Revealed] === 1,
       }
     },
     pump,
@@ -417,6 +429,10 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
       readCameraBlockInto(cameraWriter, cameraRegion.u8, 0)
       inst.call1(inst.x.frame, 0)
       pump()
+    },
+    leave() {
+      opts.connection.send(MsgClass.ReliableOrdered, buildBye(ByeReason.Leave))
+      opts.connection.close(0)
     },
   }
 }

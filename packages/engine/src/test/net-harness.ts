@@ -101,7 +101,10 @@ export interface NetHarness {
   storage: Storage
   clients: HeadlessClient[]
   link(i: number): ConditionedLink
-  addClient(): HeadlessClient
+  /** docs/plan/28-sessions-and-reconnect.md steps 3-5: `secret` (real, not `deterministicSecret`
+   * derived) lets a scenario add a client that returns as, or supersedes, a *specific* earlier
+   * identity -- omitted, this is exactly the pre-M28 behaviour. */
+  addClient(secret?: Uint8Array): HeadlessClient
   /** docs/plan/28-sessions-and-reconnect.md Seams: a raw `Connection` end, joined to the real
    * server through the same `conditionLink`/`server.accept` path every `HeadlessClient` uses, but
    * with no `HeadlessClient` (and so no automatic `Hello`) attached -- a scenario writes its own
@@ -234,7 +237,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     throw new Error(`createNetHarness: unsupported transport '${opts.transport}' (M29, Non-scope)`)
   }
 
-  function makeClient(): HeadlessClient {
+  function makeClient(secretOverride?: Uint8Array): HeadlessClient {
     const linkIdx = nextLink.i++
     const [rawHost, rawClient] = memoryConnectionPair()
     const conditions = { ...DEFAULT_CONDITIONS, ...opts.conditions }
@@ -254,8 +257,12 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     // docs/plan/28-sessions-and-reconnect.md: real secrets, not `connId + 1` -- `opts.secrets[
     // linkIdx]` when the scenario cares, else a value deterministic in `(seed, linkIdx)` (Seams:
     // "createNetHarness({ secrets?, joinKey? })"; `joinKey` itself is `opts.world.joinKey`,
-    // already a harness option since M13).
-    const secret = opts.secrets?.[linkIdx] ?? deterministicSecret(opts.seed, linkIdx)
+    // already a harness option since M13). `secretOverride` (steps 3-5: `addClient(secret?)`)
+    // takes priority over both -- a scenario that wants a *specific* returning/superseding
+    // identity (not merely "some real one") passes it explicitly, e.g. the same secret an earlier,
+    // now-closed client used.
+    const secret =
+      secretOverride ?? opts.secrets?.[linkIdx] ?? deterministicSecret(opts.seed, linkIdx)
     const client = createHeadlessClient({
       wasm,
       game: { seed: worldCfg.params.seed, worldgen: gameWorldgen },
@@ -371,8 +378,8 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       if (!e) throw new Error(`link: no client ${i}`)
       return e.link
     },
-    addClient() {
-      const client = makeClient()
+    addClient(secret) {
+      const client = makeClient(secret)
       clients.push(client)
       return client
     },

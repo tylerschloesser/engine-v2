@@ -407,6 +407,13 @@ pub struct Host<G: Game> {
     /// Engine connection events queued by `connect`/`disconnect`, delivered to the next `tick()`
     /// call and cleared there (Scope: "queued ... into the frame for T+1").
     pending_records: Vec<Record<G>>,
+    /// docs/plan/28-sessions-and-reconnect.md steps 3-5: the `ConnId` `attach`'s *most recent*
+    /// call silently freed because the same `PlayerId` was already attached elsewhere (0013: "the
+    /// old connection gets `Bye{Superseded}`... nothing is logged"), `None` when nothing was.
+    /// `sim_last_superseded` (the ABI export) reads and reports this; it is not cleared between
+    /// calls to it, only overwritten by the next `attach()`, since `sim_attach` -> `sim_last_
+    /// superseded` is always the caller's own immediate next call (`server.ts`'s `pumpHandshakes`).
+    last_superseded: Option<ConnId>,
     /// Tick of each chunk's last replicated change (Scope: "Per-chunk version ... stored with the
     /// chunk on both sides"), global (not per connection): a chunk's version is a property of
     /// world state. Absent = never modified = version 0 (the same default a client replica uses
@@ -726,6 +733,7 @@ impl<G: Game> Host<G> {
             conns: (0..MAX_CONNS).map(|_| None).collect(),
             ever_joined: vec![false; MAX_CONNS],
             pending_records: Vec::new(),
+            last_superseded: None,
             chunk_versions: BTreeMap::new(),
             last_tick: Tick(0),
             scratch_roster: Vec::new(),
@@ -1032,6 +1040,23 @@ impl<G: Game> Host<G> {
         let camera = CameraReport::read(&mut tail_reader).ok();
 
         let idx = conn as usize;
+        // docs/plan/28-sessions-and-reconnect.md steps 3-5, 0013 "the same secret in a second
+        // tab: newest wins; the old socket gets `Bye{Superseded}`": free any *other* `ConnSlot`
+        // already attached to this `player` silently -- no `Disconnected` record, no `presence.
+        // remove` (the player is not leaving, only moving connections). `last_superseded` is the
+        // caller's (TS handshake's) own signal for which live `Connection` to close with
+        // `Bye{Superseded}`/`CloseCode.Superseded`; the sim itself never touches a `Connection`.
+        self.last_superseded = None;
+        for (i, slot) in self.conns.iter_mut().enumerate() {
+            if i == idx {
+                continue;
+            }
+            if slot.as_ref().is_some_and(|s| s.player == player) {
+                *slot = None;
+                self.last_superseded = Some(i as ConnId);
+                break;
+            }
+        }
         if joined {
             self.pending_records.push(Record::Player {
                 who: player,
@@ -1881,6 +1906,7 @@ where
             conns: (0..MAX_CONNS).map(|_| None).collect(),
             ever_joined: vec![false; MAX_CONNS],
             pending_records: Vec::new(),
+            last_superseded: None,
             chunk_versions: BTreeMap::new(),
             last_tick: Tick(0),
             scratch_roster: Vec::new(),
@@ -1983,6 +2009,12 @@ where
     fn sim_detach(&mut self, conn: u32) -> Status {
         self.disconnect(conn);
         Status::Ok
+    }
+
+    /// docs/plan/28-sessions-and-reconnect.md steps 3-5: `self.last_superseded`, `u32::MAX` for
+    /// "nothing" (the sentinel `abi::mod::sim_attach` writes into `Result` when this is `None`).
+    fn sim_last_superseded(&self) -> u32 {
+        self.last_superseded.unwrap_or(u32::MAX)
     }
 
     fn sim_has_player(&mut self, player: u32) -> u32 {

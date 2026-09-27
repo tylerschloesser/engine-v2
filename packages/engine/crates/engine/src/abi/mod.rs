@@ -165,14 +165,25 @@ pub fn sim_disconnect<T: Instance>(slot: &Slot<T>, conn: u32) -> Status {
 /// from `rt.layout` in the same call without a double-borrow (`RegionLayout::bytes`/`bytes_mut`
 /// each take the whole `&(mut) self`) -- fine off the tick path (`sim_attach` runs once per
 /// connection), unlike every per-tick region access elsewhere in this file.
+///
+/// docs/plan/28-sessions-and-reconnect.md steps 3-5 (`ABI_VERSION` 27 -> 28): on success, also
+/// writes `Instance::sim_last_superseded()` (one LE `u32`, `u32::MAX` = "nothing") into `Result`
+/// offset 0 -- a second, sequential borrow of `rt.layout` *after* the `Tx` borrow above has ended,
+/// not a simultaneous one, so no region-slicing helper is needed. `sim_attach`'s own contract
+/// widened in place, the same way `client_clock_stats` widened from 16 to 20 bytes.
 pub fn sim_attach<T: Instance>(slot: &Slot<T>, conn: u32, len: u32) -> i32 {
     let built = slot.sim().and_then(|rt| {
         let input: Vec<u8> = match rt.layout.bytes(RegionId::Rx).get(..len as usize) {
             Some(b) => b.to_vec(),
             None => return Err(Status::BadLength),
         };
-        rt.inst
-            .sim_attach(conn, &input, rt.layout.bytes_mut(RegionId::Tx))
+        let welcome_len = rt
+            .inst
+            .sim_attach(conn, &input, rt.layout.bytes_mut(RegionId::Tx))?;
+        let superseded = rt.inst.sim_last_superseded();
+        let result = rt.layout.bytes_mut(RegionId::Result);
+        result[0..4].copy_from_slice(&superseded.to_le_bytes());
+        Ok(welcome_len)
     });
     match built {
         Ok(len) => len as i32,

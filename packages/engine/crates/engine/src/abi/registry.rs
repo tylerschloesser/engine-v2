@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 27;
+pub const ABI_VERSION: u32 = 28;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -260,6 +260,16 @@ pub trait Instance: Sized + 'static {
     /// returns `0`).
     fn sim_has_player(&mut self, _player: u32) -> u32 {
         0
+    }
+
+    /// docs/plan/28-sessions-and-reconnect.md steps 3-5 (`ABI_VERSION` 27 -> 28): the `ConnId` the
+    /// most recent successful `sim_attach` call silently freed because the same `PlayerId` was
+    /// already attached elsewhere (0013 "the old connection gets `Bye{Superseded}`"), `u32::MAX`
+    /// for "nothing was freed". `abi::mod::sim_attach` reads this right after a successful call
+    /// and writes it into `Result` (one LE `u32` at offset 0) -- `sim_attach`'s own contract
+    /// widened, not a new wire shape, the same way `client_clock_stats` widened in place.
+    fn sim_last_superseded(&self) -> u32 {
+        u32::MAX
     }
 
     fn sim_tick(&mut self) -> Status {
