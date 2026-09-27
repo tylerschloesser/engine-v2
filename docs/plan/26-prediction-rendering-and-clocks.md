@@ -584,3 +584,79 @@ names, with the deviations below.
   last round): **`rust pass 597 tests 0.8s/10s`**, green -- both updated tests count among them;
   neither round changed the total test count (both edits changed assertions on an existing test,
   no test added or removed). `pnpm lint`: `biome pass`, `rustfmt pass`, `clippy pass`, `tsc pass`.
+
+**Post-`done` fix: frame-bench hang.**
+
+- **Diagnosis, confirmed by reading the code (bisection to `d21bead`, M26 step 1, was already the
+  orchestrator's own).** `FrameView::entities()`'s `Merged` path called `Overlay::find_entity`
+  (`predict/overlay.rs`) once per candidate id -- a reverse linear scan over the whole overlay --
+  from inside `EntityIter::Merged::next()`. With `bench.frame_worstcase`'s own setup loop (65,536
+  base entities in `visible`, thousands of predicted `SpawnMany` entries pending in the overlay at
+  once), that is O(visible base entities x overlay entries) *per frame*, growing as the overlay
+  grows over the setup loop's own ~512 dispatches -- `pnpm bench:frame` never finished a frame
+  inside the 120 s Playwright timeout. The orchestrator's own uncommitted partial fix (kept: append
+  + one `sort_unstable` + `dedup` in `merge_render_ids`, plus taking the `Base` path when the
+  overlay is empty) removed one O(n) `binary_search`/`insert`-per-overlay-entity cost but left the
+  per-id `find_entity` scan in `next()` untouched -- the actual hang.
+- **Fix: `merge_render_ids` now resolves the overlay lookup once per *overlay entry*, not once per
+  candidate id.** `Overlay::render_entities_scratch`'s own element type changed from `Vec<EntityId>`
+  to `Vec<(EntityId, u32)>` (`NO_OVERLAY_ENTRY = u32::MAX` sentinel, re-exported `pub(crate)` from
+  `predict::mod`): every base id intersecting `visible` is pushed paired with the sentinel; every
+  overlay entry (`Overlay::entity_ids_raw`, new, unfiltered by footprint or tombstone -- a later
+  entry must be able to suppress an earlier one, or a base entry, for the same id even when that
+  later entry alone would never intersect `visible`) is pushed paired with its own index into
+  `Overlay`'s entity vector. One `sort_unstable_by_key(|&(id, _)| id)` plus an in-place, one-pass
+  collapse (`w`/`i` two-pointer, never reallocating) reduces each id's run to the *largest* real
+  index present (the latest write; overlay entries are pushed in temporal order) or the sentinel.
+  `EntityIter::Merged::next()` then reads `Overlay::entity_value_at(idx)` -- a direct O(1) index,
+  new, replacing `find_entity`'s scan -- and applies the same `visible`/tombstone resolution as
+  before. Net cost: O((base + overlay) log(base + overlay)) once per frame, zero allocation after
+  warm-up (the scratch `Vec` is reused, never shrunk). `Overlay::find_entity_at`'s own "superseded"
+  scan (also O(overlay) per call) was left untouched: it is never called from this bench's own
+  fixture (`fx-drawables`'s `extract` only calls `view.entities()`), confirmed by reading `fx-
+  drawables/src/lib.rs` and grepping `find_entity_at`'s only two production call sites
+  (`world_access.rs`, `predict/predicting.rs`, both occupancy-pick paths this bench never
+  exercises) -- not touched, per the brief's own "fix only if the bench shows it matters".
+- **New test, `frameview_merged_entities_match_naive_overlay_reference`** (`client/frame_view.rs`):
+  a seeded mix of an override, a tombstone, an override moving a visible entity out of view, one
+  moving an out-of-view entity into view, a provisional spawn (in view and out of it), and two
+  discriminating repeated-write cases (`EntityId(6)`: two in-view writes at different positions --
+  only the later position is correct; `EntityId(7)`: an in-view put then a tombstone -- only the
+  tombstone is correct), checked against a naive reference (the base map with the overlay's own
+  entries applied in push order, then filtered by `visible`). Inject-fail-revert: changing the
+  collapse's `ov > resolved` to `ov < resolved` (keeps the *earliest* overlay entry per id instead
+  of the latest) fails exactly on those two discriminating ids (`EntityId(6)` at the wrong position,
+  `EntityId(7)` wrongly still visible) -- confirmed live, then reverted; `pnpm test rust -t predict`
+  green again after reverting.
+- **`pnpm bench:frame`: the hang is fixed (the setup loop, previously never finishing inside 120 s,
+  now completes and the test reaches its own assertions); the bench itself still fails, on a
+  different, pre-existing assertion, not touched by this fix.** `afterWarmup.recordCount` is
+  exactly `65536` (met), but `afterWarmup.dropped` is `65536`, not `0`. Diagnosed with temporary
+  instrumentation (a gated `panic::log` in `game_instance.rs`'s `frame()`, reverted before commit;
+  `git diff` on `game_instance.rs` and `frame-bench.spec.ts` is empty): `ClientCore`'s own
+  `pending_queue().len()` and `overlay().len()` grow in lockstep with the replica's own confirmed
+  entity count throughout the whole setup loop and never shrink -- at the last sampled setup frame,
+  `pending=510` against `510` batches dispatched, `overlay=65280` against `base=65152` -- i.e. every
+  dispatched `SpawnMany` in this bench stays predicted-and-unacknowledged for the bench's entire
+  duration, so the overlay permanently holds a full second, provisional copy of (almost) every
+  entity already confirmed in the base replica. `extract()` then genuinely has ~131,072 real draws
+  to attempt (not a rendering bug: two distinct ids, one provisional and one real, both legitimately
+  present per `FrameView`'s own contract), exactly double `DrawList`'s 65,536-record capacity, so
+  exactly half are dropped -- the doubling is exact, matching the measured numbers precisely. Root
+  cause not chased further inside this brief's own scope: it is a `host`/net pacing question (why
+  `ActionResults` never drain for this connection under this bench's own sustained dispatch load --
+  `host::mod::SIM_TX_BYTES`'s own per-tick budget and whatever encodes into it ahead of acks are the
+  likely place, per `crates/engine/CLAUDE.md`'s own `host/`-vs-`client/` split), not `client/
+  frame_view.rs` or `predict/overlay.rs`, and pre-dates this fix (the render-side hang simply made
+  it impossible for the bench to ever run far enough to hit it before now). Frame-time numbers
+  against `baselines/frame.json` could not be measured or compared: the test throws at the `dropped`
+  assertion before reaching its own timed-window/trace-event section.
+- **Decision needed (orchestrator/Tyler):** `pnpm bench:frame` does not pass end to end. Options,
+  not chosen here: (a) find and fix why this bench's own `ActionResults` never drain (a `host`/net
+  investigation, likely a new brief); (b) change `frame-bench.ts`'s own setup to wait for acks
+  (or avoid `SpawnMany`-as-predicted at this scale) before warm-up, so the measured window never
+  carries a permanent doubled overlay; (c) treat "every entity double-drawn while pending" as an
+  accepted worst case and widen `DrawList::CAPACITY`/the bench's own expectations to match, with a
+  budget note. This implementer's own fix (the O(n log n) render path) is unaffected by which
+  option is chosen -- it is correct and covered by the new test regardless of how many entities the
+  overlay ends up holding.

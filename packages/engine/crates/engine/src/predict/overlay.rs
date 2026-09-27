@@ -46,8 +46,19 @@ pub struct Overlay<G: Game> {
     /// [`Self::entities_in_scratch`], not a shared one, so a game's `extract()` calling both
     /// `view.entities()` (this) and `view.world().entities_in(..)` (that) in the same frame never
     /// double-borrows one `RefCell`.
-    render_entities_scratch: RefCell<Vec<EntityId>>,
+    ///
+    /// **Post-`done` fix (frame-bench hang):** each pair's `u32` is the index into [`Self::
+    /// entities`] of that id's *latest* overlay entry, or [`NO_OVERLAY_ENTRY`] when the id has
+    /// none -- `merge_render_ids` (`frame_view.rs`) collapses a sorted id list into this shape once
+    /// per frame so `EntityIter::Merged::next` can resolve each id with one `entity_value_at`
+    /// index, never a `find_entity` scan repeated per id.
+    render_entities_scratch: RefCell<Vec<(EntityId, u32)>>,
 }
+
+/// [`Overlay::render_entities_scratch`]'s own sentinel: an id in that scratch list with no
+/// overlay opinion at all (a base-only candidate). Never a real index -- overlay entries are in
+/// the thousands (0012), not `u32::MAX`.
+pub(crate) const NO_OVERLAY_ENTRY: u32 = u32::MAX;
 
 impl<G: Game> Overlay<G> {
     pub fn new() -> Self {
@@ -226,8 +237,25 @@ impl<G: Game> Overlay<G> {
 
     /// M26's own scratch for `FrameView::entities()`'s overlay merge, kept separate from
     /// [`Self::entities_in_scratch`] (its own doc comment).
-    pub(crate) fn render_entities_scratch(&self) -> std::cell::RefMut<'_, Vec<EntityId>> {
+    pub(crate) fn render_entities_scratch(&self) -> std::cell::RefMut<'_, Vec<(EntityId, u32)>> {
         self.render_entities_scratch.borrow_mut()
+    }
+
+    /// Every overlay entity entry's id, in push order (index `i` here is exactly the index
+    /// [`Self::entity_value_at`] takes) -- `merge_render_ids`'s own raw source, deliberately not
+    /// filtered by footprint or tombstone: a later entry for the same id must be able to suppress
+    /// an earlier one (or a base entry) regardless of whether *this* particular entry itself
+    /// covers `visible`.
+    pub(crate) fn entity_ids_raw(&self) -> impl Iterator<Item = EntityId> + '_ {
+        self.entities.iter().map(|(id, _)| *id)
+    }
+
+    /// The value at overlay entry `idx` (`Self::entity_ids_raw`'s own index space): `None` is a
+    /// tombstone, `Some(e)` a put. One O(1) index, not `find_entity`'s O(overlay) reverse scan --
+    /// the fix for `bench.frame_worstcase`'s hang (a per-id `find_entity` call from
+    /// `EntityIter::Merged::next`, O(visible base entities x overlay entries) per frame).
+    pub(crate) fn entity_value_at(&self, idx: u32) -> Option<&G::Entity> {
+        self.entities[idx as usize].1.as_ref()
     }
 
     /// Every *effective* (non-superseded) tile put, in overlay order: the position and its

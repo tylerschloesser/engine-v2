@@ -15,7 +15,7 @@ mod predicting;
 
 pub use diff::OverlayDiff;
 pub use overlay::Overlay;
-pub(crate) use overlay::{covers, footprint_of, merge_entities_in};
+pub(crate) use overlay::{NO_OVERLAY_ENTRY, covers, footprint_of, merge_entities_in};
 pub use pending::{Pending, PendingQueue, Prediction};
 pub use predicting::Predicting;
 pub(crate) use predicting::predict;

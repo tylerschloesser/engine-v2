@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use crate::game::{EntityId, Game, PlayerId, Unknown};
-use crate::predict::{Overlay, PendingQueue, Prediction, footprint_of};
+use crate::predict::{NO_OVERLAY_ENTRY, Overlay, PendingQueue, Prediction, footprint_of};
 use crate::presence::Presence as _;
 use crate::time::{Tick, Ticks};
 use crate::world::{Registry, Tile, TilePos, TileRect, WorldPos};
@@ -120,7 +120,11 @@ pub enum EntityIter<'a, G: Game> {
         visible: TileRect,
     },
     Merged {
-        ids: std::cell::RefMut<'a, Vec<EntityId>>,
+        /// `(id, overlay_index)` pairs, ascending by id, one per candidate id -- `overlay_index`
+        /// is [`crate::predict::NO_OVERLAY_ENTRY`] for a base-only id, else the index
+        /// `Overlay::entity_value_at` reads directly (`merge_render_ids`'s own doc comment: no
+        /// per-id `find_entity` scan).
+        ids: std::cell::RefMut<'a, Vec<(EntityId, u32)>>,
         idx: usize,
         entities: &'a BTreeMap<EntityId, G::Entity>,
         overlay: &'a Overlay<G>,
@@ -164,18 +168,16 @@ impl<'a, G: Game> Iterator for EntityIter<'a, G> {
                 visible,
             } => {
                 while *idx < ids.len() {
-                    let id = ids[*idx];
+                    let (id, ov_idx) = ids[*idx];
                     *idx += 1;
-                    let resolved = match overlay.find_entity(id) {
-                        Some(Some(e)) => {
-                            if footprint_of::<G>(registry, e).intersects(visible) {
-                                Some(e)
-                            } else {
-                                None
-                            }
-                        }
-                        Some(None) => None, // tombstone
-                        None => entities.get(&id),
+                    let resolved = if ov_idx == NO_OVERLAY_ENTRY {
+                        entities.get(&id)
+                    } else {
+                        // `None` here is a tombstone, filtered out the same as an override that
+                        // has moved out of `visible`.
+                        overlay
+                            .entity_value_at(ov_idx)
+                            .filter(|&e| footprint_of::<G>(registry, e).intersects(visible))
                     };
                     if let Some(e) = resolved {
                         return Some((id, e, G::anchor(e)));
@@ -187,30 +189,66 @@ impl<'a, G: Game> Iterator for EntityIter<'a, G> {
     }
 }
 
-/// Builds the sorted, deduplicated id list [`EntityIter::Merged`] walks (base ids intersecting
-/// `visible`, plus overlay ids that cover it) into `scratch` -- reused, never reallocated once
-/// warm (`.claude/rules/hot-paths.md`; `Overlay::render_entities_scratch`'s own doc comment).
+/// Builds the sorted, collapsed `(id, overlay_index)` list [`EntityIter::Merged`] walks -- base
+/// ids intersecting `visible`, paired with [`crate::predict::NO_OVERLAY_ENTRY`], merged with
+/// *every* overlay entry (unfiltered, tombstones and out-of-view overrides included), collapsed
+/// so each id keeps only its latest overlay index -- into `scratch`: reused, never reallocated
+/// once warm (`.claude/rules/hot-paths.md`; `Overlay::render_entities_scratch`'s own doc comment).
+///
+/// **Post-`done` fix (frame-bench hang):** the original shape called `Overlay::find_entity` (an
+/// O(overlay) reverse scan) once per candidate id from `EntityIter::Merged::next`, i.e.
+/// O(visible base entities x overlay entries) per frame -- `bench.frame_worstcase`'s setup loop
+/// (65,536 base entities, thousands of predicted `SpawnMany` entries pending) never finished a
+/// frame that way. This version does the overlay lookup once per *overlay entry*, here, and
+/// leaves `EntityIter::Merged::next` a single O(1) index read: O((base + overlay) log(base +
+/// overlay)) per frame, no repeated scan.
+///
+/// Every overlay entry, not just ones whose own footprint covers `visible`, has to enter the
+/// merge (unlike the base pass): a later entry for the same id -- a tombstone, or an override
+/// that has since moved out of view -- must be able to suppress an *earlier* one (or a base
+/// entry) for that id even though that later entry, on its own, would never intersect `visible`.
+/// `EntityIter::Merged::next` re-applies the `visible` check to an override's own value at
+/// resolve time, exactly as it did before.
 fn merge_render_ids<G: Game>(
     entities: &BTreeMap<EntityId, G::Entity>,
     overlay: &Overlay<G>,
     registry: &Registry,
     visible: TileRect,
-    scratch: &mut Vec<EntityId>,
+    scratch: &mut Vec<(EntityId, u32)>,
 ) {
     scratch.clear();
     for (&id, e) in entities.iter() {
         if footprint_of::<G>(registry, e).intersects(&visible) {
-            scratch.push(id); // `entities.iter()` is already ascending: stays sorted.
+            scratch.push((id, NO_OVERLAY_ENTRY));
         }
     }
-    for (id, e) in overlay.entities() {
-        if let Some(e) = e
-            && footprint_of::<G>(registry, e).intersects(&visible)
-            && let Err(pos) = scratch.binary_search(&id)
-        {
-            scratch.insert(pos, id);
-        }
+    for (idx, id) in overlay.entity_ids_raw().enumerate() {
+        // `overlay.entities` is bounded (0012: single-digit per action, thousands total in the
+        // worst case this fix targets) -- nowhere near `u32::MAX`.
+        scratch.push((id, idx as u32));
     }
+    scratch.sort_unstable_by_key(|&(id, _)| id);
+    // Collapse each id's run to one entry: `NO_OVERLAY_ENTRY` unless a real overlay index is
+    // present in the run, in which case the *largest* one -- overlay entries are pushed in
+    // temporal order (`Overlay::push_entity`), so the largest index for an id is its latest
+    // write, matching `find_entity`'s own "lookups scan backwards" semantics. In place, one pass,
+    // no allocation: `w` never runs ahead of `i`.
+    let mut w = 0;
+    let mut i = 0;
+    while i < scratch.len() {
+        let id = scratch[i].0;
+        let mut resolved = NO_OVERLAY_ENTRY;
+        while i < scratch.len() && scratch[i].0 == id {
+            let ov = scratch[i].1;
+            if ov != NO_OVERLAY_ENTRY && (resolved == NO_OVERLAY_ENTRY || ov > resolved) {
+                resolved = ov;
+            }
+            i += 1;
+        }
+        scratch[w] = (id, resolved);
+        w += 1;
+    }
+    scratch.truncate(w);
 }
 
 /// The read-only view `ClientSide::extract`/`ui` receive (0003 "Contexts": the `View` role).
@@ -350,7 +388,7 @@ impl<'a, G: Game> FrameView<'a, G> {
     /// comment): overlay values override by id, tombstones are skipped, provisional ids sort
     /// last (`EntityId`'s own `Ord`, 0022 §5).
     pub fn entities(&self) -> EntityIter<'a, G> {
-        match self.overlay {
+        match self.overlay.filter(|o| !o.is_empty()) {
             None => EntityIter::Base {
                 inner: self.entities.iter(),
                 registry: self.registry,
@@ -817,6 +855,159 @@ mod tests {
             vec![(PlayerId(1), 10, 1.0), (PlayerId(3), 30, 1.0)],
             "ascending PlayerId, pos derived from Presence::pos()"
         );
+    }
+
+    /// `EntityIter::Merged` against a naive reference (the base map with the overlay's own
+    /// entries applied in push order, then filtered by `visible`) over a seeded mix of overrides,
+    /// tombstones, an override moving a visible entity out of view, one moving an out-of-view
+    /// entity into view, a provisional spawn (in view and out of it), and repeated writes to one
+    /// id -- the property `merge_render_ids`'s sorted-collapse (this file's own Post-`done` fix,
+    /// "frame-bench hang") must preserve exactly, now that resolution is a direct index into the
+    /// overlay rather than a per-id `find_entity` scan. Inject-fail-revert: in `merge_render_ids`'s
+    /// collapse, change `ov > resolved` to `ov < resolved` (keeps the *earliest* overlay entry for
+    /// an id instead of the latest) -- `EntityId(6)`'s repeated writes then resolve to its first,
+    /// stale position `(1, 1)` instead of `(2, 2)`, and `EntityId(7)` resolves to its first (put)
+    /// entry instead of its later tombstone, so it wrongly stays visible; this assertion fails on
+    /// both (`left`/`right` mismatch on `EntityId(6)`'s origin and on `EntityId(7)`'s presence);
+    /// reverted.
+    #[test]
+    fn frameview_merged_entities_match_naive_overlay_reference() {
+        let world = FWorld;
+        let registry = registry_1x1();
+        let visible = TileRect::new(TilePos::new(0, 0), TilePos::new(9, 9));
+        let mut entities = BTreeMap::new();
+
+        // Base entities: some inside `visible`, some outside.
+        for i in 0..12u32 {
+            entities.insert(
+                EntityId(i + 1),
+                FEntity {
+                    pos: TilePos::new((i % 5) as i32, (i % 5) as i32).into(),
+                },
+            );
+        }
+        for i in 12..16u32 {
+            entities.insert(
+                EntityId(i + 1),
+                FEntity {
+                    pos: TilePos::new(1000 + i as i32, 1000).into(),
+                },
+            );
+        }
+
+        let mut overlay = Overlay::<FGame>::new();
+        // Plain override, still in view.
+        overlay.push_entity(
+            EntityId(2),
+            Some(FEntity {
+                pos: TilePos::new(6, 6).into(),
+            }),
+        );
+        // Tombstone a base entity that would otherwise be visible.
+        overlay.push_entity(EntityId(3), None);
+        // Override moving a base entity that was in view OUT of view.
+        overlay.push_entity(
+            EntityId(4),
+            Some(FEntity {
+                pos: TilePos::new(2000, 2000).into(),
+            }),
+        );
+        // Override moving a base entity that was OUT of view INTO view.
+        overlay.push_entity(
+            EntityId(13),
+            Some(FEntity {
+                pos: TilePos::new(7, 7).into(),
+            }),
+        );
+        // Repeated writes to one id: an out-of-view write, then back in, then tombstoned for
+        // real -- only "latest wins" (not "first wins" or "any wins") gets this right.
+        overlay.push_entity(
+            EntityId(5),
+            Some(FEntity {
+                pos: TilePos::new(3000, 3000).into(),
+            }),
+        );
+        overlay.push_entity(
+            EntityId(5),
+            Some(FEntity {
+                pos: TilePos::new(8, 8).into(),
+            }),
+        );
+        overlay.push_entity(EntityId(5), None);
+        // Repeated writes to an id the base map never held, both in view, at different positions
+        // -- the discriminator for "latest wins" vs. "earliest wins": both orders leave the id
+        // visible, but only the later write's position is correct.
+        overlay.push_entity(
+            EntityId(6),
+            Some(FEntity {
+                pos: TilePos::new(1, 1).into(),
+            }),
+        );
+        overlay.push_entity(
+            EntityId(6),
+            Some(FEntity {
+                pos: TilePos::new(2, 2).into(),
+            }),
+        );
+        // An id the base map never held, put in view then tombstoned -- the discriminator for
+        // "latest wins" vs. "any wins": only the latest entry (the tombstone) is correct.
+        overlay.push_entity(
+            EntityId(7),
+            Some(FEntity {
+                pos: TilePos::new(1, 2).into(),
+            }),
+        );
+        overlay.push_entity(EntityId(7), None);
+        // A provisional spawn, in view.
+        let prov_in = EntityId::provisional(1, 0).unwrap();
+        overlay.push_entity(
+            prov_in,
+            Some(FEntity {
+                pos: TilePos::new(4, 4).into(),
+            }),
+        );
+        // A provisional spawn, out of view.
+        let prov_out = EntityId::provisional(1, 1).unwrap();
+        overlay.push_entity(
+            prov_out,
+            Some(FEntity {
+                pos: TilePos::new(4000, 4000).into(),
+            }),
+        );
+
+        // Naive reference: the base map with every overlay entry applied in push order (`Some` =
+        // put/override, `None` = despawn), then filtered by `visible` -- `EntityIter::Merged`'s
+        // own contract, computed the slow, obviously-correct way.
+        let mut reference = entities.clone();
+        for (id, e) in overlay.entities() {
+            match e {
+                Some(e) => {
+                    reference.insert(id, *e);
+                }
+                None => {
+                    reference.remove(&id);
+                }
+            }
+        }
+        let mut expected: Vec<(EntityId, TilePos)> = reference
+            .iter()
+            .filter_map(|(&id, e)| {
+                let origin = FGame::anchor(e);
+                footprint_of::<FGame>(&registry, e)
+                    .intersects(&visible)
+                    .then_some((id, origin))
+            })
+            .collect();
+        expected.sort_by_key(|&(id, _)| id);
+
+        let remote = RemotePresences::<FGame>::new();
+        let pending = PendingQueue::<FGame>::new();
+        let fv = view(&world, &entities, &registry, visible, 20.0, &remote)
+            .with_prediction(&overlay, &pending);
+
+        let got: Vec<(EntityId, TilePos)> =
+            fv.entities().map(|(id, _, origin)| (id, origin)).collect();
+        assert_eq!(got, expected);
     }
 
     // `frameview_zoom_matches_camera_block` used to live here, built by hand through `view()`
