@@ -238,8 +238,16 @@ impl TerrainStore {
         self.overlays.load_chunk(chunk, entries);
         let after = entries.len();
         self.modified_tiles = (self.modified_tiles as i64 + after as i64 - before as i64) as u32;
-        self.cache.borrow_mut().evict_if_present(chunk.key());
-        self.materialize(chunk);
+        // Only a chunk that was resident is re-materialized: a snapshot for a chunk the client does
+        // not hold must not run worldgen here (the gen queue brings it in when it is in view).
+        let was_cached = self
+            .cache
+            .borrow_mut()
+            .evict_if_present(chunk.key())
+            .is_some();
+        if was_cached {
+            self.materialize(chunk);
+        }
     }
 
     /// Drops `chunk`'s overlay entirely. If the chunk is cached and every entry's pristine value is
