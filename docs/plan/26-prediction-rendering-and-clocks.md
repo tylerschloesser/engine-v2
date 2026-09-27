@@ -1,6 +1,6 @@
 # M26: Prediction rendering and clocks
 
-Status: not started · After: 25, 17 · Tyler-dependent: no (Q10 answered: stretch over `duration + lead`)
+Status: done · After: 25, 17 · Tyler-dependent: no (Q10 answered: stretch over `duration + lead`)
 
 ## Goal
 Predicted state reaches the screen correctly: `extract` sees replica plus overlay with a `predicted` query, predicted tiles reach terrain texels without a per-frame re-upload, and a ghost and its real result swap inside one DrawList (tested: never zero, never two). The client has a free-running authoritative clock, a predicted clock with an estimated lead, and a default rule for own-timer bars whose completion gap is measured.
@@ -68,10 +68,10 @@ Rust suite:
 Browser suite: `prediction-no-flicker`: stepped frames, semantic pixel probe at the anchor tile centre is never the terrain colour from dispatch until after the ack; `client.clock().predicted − authoritative` equals the lead.
 
 ## Exit criteria
-- [ ] Every test above passes; the measured gaps are recorded under Deviations.
-- [ ] The browser zero-GC test passes with predicted actions in its script.
-- [ ] Item M34-own-timer-bar in `docs/plan/device-checks.md` matches what was built.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Every test above passes; the measured gaps are recorded under Deviations.
+- [x] The browser zero-GC test passes with predicted actions in its script.
+- [x] Item M34-own-timer-bar in `docs/plan/device-checks.md` matches what was built.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t one_render` · `pnpm test rust -t texel_upload` · `pnpm test rust -t clock` · `pnpm test browser -t prediction-no-flicker` · `pnpm test && pnpm lint`
