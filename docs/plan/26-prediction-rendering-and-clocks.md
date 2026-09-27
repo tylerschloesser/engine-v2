@@ -660,3 +660,70 @@ names, with the deviations below.
   budget note. This implementer's own fix (the O(n log n) render path) is unaffected by which
   option is chosen -- it is correct and covered by the new test regardless of how many entities the
   overlay ends up holding.
+
+**Post-`done` fix: PendingQueue never drains under `bench.frame_worstcase` (follow-up, same
+session, orchestrator-directed).** Root cause had two independent parts, both fixed in the engine
+(not `frame-bench.ts`/`.html`), per instruction.
+
+- **(a) `PendingQueue` had no real capacity of its own.** `ClientCore::on_action`'s guard checked
+  `self.outbox.len() >= OUTBOX_CAPACITY`, but `poll_uplink` clears `outbox` (the *send* buffer)
+  unconditionally on every flush, whether or not anything has been acked (`Self::poll_uplink`'s own
+  body: `if has_actions { self.outbox.clear(); }`, no ack wait). Under any sustained dispatch rate
+  `outbox.len()` sits near 0 almost every call, so the guard almost never fires -- `pending` (the
+  queue 0012/`OUTBOX_CAPACITY`'s own doc comment actually mean by this cap, "M25 turns it into the
+  pending queue") had no enforced limit at all. `predict::pending::PendingQueue`'s own doc comment
+  used to assert the opposite ("the outbox already refuses `on_action` once it is full, so nothing
+  here enforces a second cap") -- true only when `outbox` and `pending` happen to drain in lockstep,
+  which nothing guaranteed. **Fix:** the guard now reads `self.pending.len() >= OUTBOX_CAPACITY`
+  directly (`client/core.rs`); doc comments on `OUTBOX_CAPACITY`'s own `ActionError::Full` and on
+  `PendingQueue` updated to state the real invariant. New test,
+  `on_action_rejects_once_pending_is_full_even_though_outbox_drains_every_time` (`client/core.rs`):
+  dispatches `OUTBOX_CAPACITY + 8` actions, calling `poll_uplink` after every one (draining `outbox`
+  every time, nothing ever acked) and asserts `pending` never exceeds `OUTBOX_CAPACITY` and the
+  dispatch that would exceed it is refused. Inject-fail-revert: reverting the guard to
+  `self.outbox.len() >= OUTBOX_CAPACITY` fails it at `seq=32` (`left: Ok(()), right: Err(Full)`,
+  the dispatch that should have been refused instead succeeds) and at the final `pending().count()`
+  assertion (`left: 40, right: 32`); reverted. The pre-existing `on_action_rejects_once_outbox_is_full`
+  (renamed `..._once_pending_is_full`, assertions unchanged) never calls `poll_uplink` between
+  dispatches, so `outbox` and `pending` grow in lockstep there and cannot distinguish the two guards
+  -- it is why a second test was needed, not a replacement for the first.
+- **(b) `fx-drawables::on_player` never created a player slot, so `ack_seq` could never advance for
+  it.** Quantified live with temporary logging (`panic::log` calls in `ClientCore::on_action`/
+  `on_frame` and `Host::on_uplink`/`tick`, all reverted before commit -- `git diff` on
+  `game_instance.rs`/`host/mod.rs`/`client/core.rs` outside this fix's own diff is empty): per
+  dispatch, `dispatchRaw`'s seq and the client's own `PendingQueue`-recorded seq always matched
+  (no numbering mismatch -- answers the "does `dispatchRaw` bypass the capacity check" question:
+  no, it goes through the same `on_action`); `Host::on_uplink` admitted every action with a
+  correctly-advancing `highest_admitted_seq` (0, 1, 2, ... never deduped) and `Host::tick` ran with
+  a non-empty `pending_records` almost every call, so `Sim::step_with_progress`'s own
+  `Authority::record_ack(who, seq)` genuinely ran for each one -- but `store.last_seq(player)` read
+  back `0` at every single one of 500+ samples. `Store::apply`'s `Delta::Ack` arm is a documented
+  no-op when `self.players.get_mut(who)` finds no slot (docs/plan/12-store-and-game-trait.md
+  Planning decisions: "`on_player(.., Joined)` always `put_player`s first") -- `fx-drawables`'s own
+  `on_player` was empty (`type Player = ()` made "there is nothing to initialize" look true; there
+  is still a slot to create), unlike every other fixture with a `Player` type (`fx-puts`,
+  `fx-presence`, `fx-machines`, `fx-panicky`, `fx-migrate-v1`, `fx-predict` all call `put_player` on
+  `Joined`). No slot ever existed for this connection's player, so `Host::build_frame`'s `ack_seq =
+  store.last_seq(slot.player).unwrap_or(0)` could only ever read the `unwrap_or(0)` fallback, and
+  `ClientCore::on_frame`'s `pending.pop_acked_through(summary.ack_seq)` never had anything at or
+  below `0` to pop once `seq` passed `1`. Base entities still grew normally (spawning goes through
+  `WorldWrite` regardless of a player slot), which is why `recordCount` reaching `65536` never by
+  itself signalled anything was wrong. **Fix:** `fx-drawables::on_player` now calls `w.put_player
+  (who, ())` on `Joined`, matching every other fixture. `fx-overlay` has the identical empty
+  `on_player` (also `Player = ()`) but is never driven through a real connected client at scale, so
+  it never surfaced there -- flagged, not fixed (out of this bench's own scope).
+- **`fx-drawables`'s own DrawList golden did not move**: `drawlist_fixture_hash_golden` (native)
+  passes unchanged -- its own scenario apparently never reaches a state where the new player slot's
+  presence changes the hashed `Store` bytes it checks (not investigated further; the golden is the
+  proof, per this repo's own review discipline).
+- **`pnpm bench:frame`, green, with both fixes in place:** `records=65536 frames=304/23 warmup=120
+  timed=300 swiftshader=false`; `main p50=0.635ms p95=0.694ms budget<=1.3ms baseline.p50=0.637ms
+  (+/-25%)`; `worker p50=1.948ms p95=1.985ms budget<=2.7ms baseline.p50=2.152ms (+/-25%)` -- both
+  comfortably within budget and within 25% of `baselines/frame.json` (main baseline 0.637ms, worker
+  baseline 2.152ms); no rewrite of the baseline needed.
+- **Verification, foreground, one command at a time:** `pnpm test rust -t predict` (`rust pass 25
+  tests`), `-t one_render` (`rust pass 2 tests`), `-t texel_upload` (`rust pass 2 tests`), full
+  `pnpm test rust` (`rust pass 599 tests`, up from 597: this fix's own new test plus the frame-bench
+  hang fix's own `frameview_merged_entities_match_naive_overlay_reference`), `pnpm test browser -t
+  prediction-no-flicker` (`browser pass 1 tests`), `pnpm lint` (`biome pass`, `rustfmt pass`,
+  `clippy pass`, `tsc pass`), `pnpm bench:frame` (above). No golden or DrawList hash moved.

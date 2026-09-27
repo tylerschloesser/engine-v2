@@ -42,8 +42,15 @@ pub struct Pending<G: Game> {
 /// The client's own pending queue (0012 Decision): every action dispatched but not yet acked,
 /// oldest first. Capacity is a convention shared with `client::core::OUTBOX_CAPACITY` (docs/plan/
 /// 25-prediction-core.md Planning decisions: "Queue full stays M16's behaviour ... prediction adds
-/// no second limit") -- the outbox already refuses `on_action` once it is full, so nothing here
-/// enforces a second cap.
+/// no second limit") -- `ClientCore::on_action` refuses a further dispatch once *this* queue
+/// itself reaches `OUTBOX_CAPACITY`, so nothing here needs to enforce a second cap of its own.
+///
+/// **Post-`done` fix (docs/plan/26-prediction-rendering-and-clocks.md, "PendingQueue never drains
+/// under bench.frame_worstcase"):** `on_action`'s guard used to check `outbox.len()`, the
+/// transient *send* buffer `poll_uplink` clears on every flush regardless of whether anything has
+/// been acked -- so this queue had no real cap at all in practice, and grew one entry per
+/// dispatch for as long as acks kept not arriving (`pending=510` against 510 dispatches, measured
+/// live). The guard now reads `pending.len()` directly.
 pub struct PendingQueue<G: Game> {
     entries: VecDeque<Pending<G>>,
 }

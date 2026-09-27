@@ -45,10 +45,14 @@ pub enum ActionError {
     /// reaches past the record's own end, the JSON is not valid UTF-8, or it does not parse as
     /// `G::Action`.
     Malformed,
-    /// The outbox already holds [`OUTBOX_CAPACITY`] actions (0012: "when full, dispatch fails
-    /// locally"). Main-thread `dispatch` is expected to prevent this by construction (counting
-    /// `seq - ack_seq` against the same capacity before ever calling this), so reaching it here
-    /// is a defence-in-depth backstop, not the primary enforcement point.
+    /// The pending queue already holds [`OUTBOX_CAPACITY`] unacked actions (0012: "when full,
+    /// dispatch fails locally"). Main-thread `dispatch` is expected to prevent this by
+    /// construction (counting `seq - ack_seq` against the same capacity before ever calling
+    /// this), so reaching it here is a defence-in-depth backstop, not the primary enforcement
+    /// point -- the one `engine/test.dispatchRaw` bypasses (docs/plan/
+    /// 26-prediction-rendering-and-clocks.md Post-`done` fix: "PendingQueue never drains under
+    /// bench.frame_worstcase"), which is exactly why this backstop being checked against the
+    /// right queue (`pending`, not the transient `outbox`) matters.
     Full,
 }
 
@@ -219,7 +223,18 @@ impl<G: Game> ClientCore<G> {
     /// next [`Self::poll_uplink`]. Human-rate, UI-driven: allocation here is exempt from the
     /// zero-allocation rule that governs every method below it.
     pub fn on_action(&mut self, bytes: &[u8]) -> Result<(), ActionError> {
-        if self.outbox.len() >= OUTBOX_CAPACITY {
+        // **Post-`done` fix (M26 fix: "PendingQueue never drains under bench.frame_worstcase"):**
+        // checked against `pending`, not `outbox`. `outbox` only ever holds actions not yet
+        // *sent* -- `poll_uplink` clears it on every flush, unconditionally, whether or not the
+        // host has acked anything yet (`Self::poll_uplink`'s own body) -- so under any sustained
+        // dispatch rate `outbox.len()` stays near zero almost every call, and this guard almost
+        // never fires, regardless of how many actions are genuinely still unacked. `pending` is
+        // the queue 0012 actually means by "the outbox" here (`OUTBOX_CAPACITY`'s own doc comment:
+        // "M25 turns it into the pending queue") -- every action dispatched but not yet popped by
+        // [`Self::on_frame`]'s `pop_acked_through`, which is exactly what must never exceed
+        // `OUTBOX_CAPACITY` (`predict::PendingQueue`'s own doc comment used to claim this was
+        // already true by construction; it was not -- nothing checked `pending.len()` at all).
+        if self.pending.len() >= OUTBOX_CAPACITY {
             return Err(ActionError::Full);
         }
         if bytes.len() < 8 {
@@ -941,7 +956,7 @@ mod tests {
     }
 
     #[test]
-    fn on_action_rejects_once_outbox_is_full() {
+    fn on_action_rejects_once_pending_is_full() {
         let mut c = client();
         for seq in 0..OUTBOX_CAPACITY as u32 {
             c.on_action(&action_record(seq, r#"{"n":1}"#)).unwrap();
@@ -949,6 +964,47 @@ mod tests {
         assert_eq!(
             c.on_action(&action_record(999, r#"{"n":1}"#)),
             Err(ActionError::Full)
+        );
+    }
+
+    /// **Post-`done` fix (docs/plan/26-prediction-rendering-and-clocks.md, "PendingQueue never
+    /// drains under bench.frame_worstcase"):** the property the test above cannot distinguish
+    /// from the base (broken) behaviour, since it never calls `poll_uplink` -- there, `outbox`
+    /// and `pending` grow in lockstep, so checking either happens to reject at the same point.
+    /// Here, `poll_uplink` drains `outbox` after every dispatch (a real client's own cadence,
+    /// `on_action_queues_and_poll_uplink_flushes_it_immediately`'s own precedent) and nothing ever
+    /// acks -- `outbox.len()` is back to `0` before every `on_action` call, so a guard checking
+    /// `outbox` (the base behaviour this test is written to fail against) never rejects at all,
+    /// and `pending` grows past `OUTBOX_CAPACITY` with no limit. Inject-fail-revert: swapping the
+    /// guard back to `self.outbox.len() >= OUTBOX_CAPACITY` makes this fail at `pending().count()
+    /// == OUTBOX_CAPACITY` (`left: 40, right: 32`, for 40 unacked dispatches with nothing ever
+    /// popping any of them) and the final dispatch that should have been refused instead succeeds
+    /// (`left: Ok(()), right: Err(Full)`); reverted.
+    #[test]
+    fn on_action_rejects_once_pending_is_full_even_though_outbox_drains_every_time() {
+        let mut c = client();
+        let mut out = [0u8; 512];
+        // One more than `OUTBOX_CAPACITY`: the base (broken) behaviour accepts every one of these
+        // (outbox is empty again by the time the next dispatch arrives, nothing ever acks), so a
+        // guard that used to check `outbox` would let this loop finish with no `Err` at all.
+        for seq in 0..OUTBOX_CAPACITY as u32 + 8 {
+            if c.pending().count() < OUTBOX_CAPACITY {
+                c.on_action(&action_record(seq, r#"{"n":1}"#)).unwrap();
+            } else {
+                assert_eq!(
+                    c.on_action(&action_record(seq, r#"{"n":1}"#)),
+                    Err(ActionError::Full),
+                    "seq={seq}: pending is already at capacity with nothing ever acked"
+                );
+            }
+            // A real client's own cadence: flush whatever the outbox holds right after dispatch,
+            // every time -- never given a chance to reach `OUTBOX_CAPACITY` itself.
+            c.poll_uplink(seq * 100, &mut out);
+        }
+        assert_eq!(
+            c.pending().count(),
+            OUTBOX_CAPACITY,
+            "pending must never exceed OUTBOX_CAPACITY, acked or not"
         );
     }
 

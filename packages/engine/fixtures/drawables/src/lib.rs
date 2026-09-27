@@ -220,7 +220,27 @@ impl Game for Drawables {
         });
     }
 
-    fn on_player(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _ev: PlayerEvent) {}
+    /// **Post-`done` fix (M26 fix: "PendingQueue never drains under bench.frame_worstcase"):**
+    /// this used to be a no-op, unlike every other fixture with a real `Player` type (`fx-puts`,
+    /// `fx-presence`, `fx-machines`, `fx-panicky`, `fx-migrate-v1`, `fx-predict`). `Player = ()`
+    /// made that look harmless -- there is no per-player state to initialize -- but
+    /// `Store::apply`'s `Delta::Ack` arm (`store/mod.rs`) is a no-op when `self.players.get_mut
+    /// (who)` finds no slot (docs/plan/12-store-and-game-trait.md Planning decisions: "`on_player
+    /// (.., Joined)` always `put_player`s first"), so skipping `put_player` here silently broke
+    /// `Store::last_seq`/`ack_seq` for every connection this fixture ever serves: `host::Host::
+    /// build_frame`'s `ack_seq = store.last_seq(slot.player).unwrap_or(0)` read `unwrap_or(0)`
+    /// forever, so the client's own `PendingQueue::pop_acked_through` never popped a single entry
+    /// no matter how many actions the host actually admitted and applied (confirmed live with
+    /// temporary logging, reverted before commit: `store_last_seq=0` at every `on_uplink` call
+    /// through 500+ admitted, ticked `SpawnMany` actions) -- exactly `bench.frame_worstcase`'s own
+    /// "pending=510 against 510 dispatched" finding. `fx-overlay` has the same empty `on_player`
+    /// (`type Player = ()` there too) but is never driven through a real connected client at this
+    /// fixture's own scale, so it never surfaced there.
+    fn on_player(w: &mut dyn WorldWrite<Self>, who: PlayerId, ev: PlayerEvent) {
+        if let PlayerEvent::Joined = ev {
+            w.put_player(who, ());
+        }
+    }
 
     fn apply(w: &mut dyn WorldWrite<Self>, _who: PlayerId, a: &Action) -> Result<(), Reject> {
         match *a {
