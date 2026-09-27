@@ -19,6 +19,7 @@
 // interleaved tick-by-tick with `VirtualClock.advanceBy(tickMs)` so a conditioner's own `send`-time
 // draws see the correct virtual "now" (`conditioner.ts`'s own Deviations).
 import { Role } from '../abi.js'
+import { hexDecode } from '../host/sessions.js'
 import { instantiate } from '../loader.js'
 import {
   type ConditionedLink,
@@ -31,6 +32,7 @@ import {
   type Connection,
   createWorldServer,
   type MsgClass,
+  serverInternals,
   type WorldConfig,
   type WorldServer,
   worldServerTestHandle,
@@ -40,6 +42,26 @@ import { memoryStorage } from '../storage/memory.js'
 import type { Storage } from '../storage/types.js'
 import { createHeadlessClient, type HeadlessClient } from './headless-client.js'
 import { createVirtualClock, type VirtualClock } from './virtual-clock.js'
+
+/** docs/plan/28-sessions-and-reconnect.md Seams: a deterministic per-(seed, index) 128-bit secret
+ * -- `createNetHarness`'s own default when `opts.secrets` names none for a given client, so a
+ * scenario that never cares about identity still gets a real, reproducible one (0020 §7: "the seed
+ * ... alone reproduces a run"). A trivial splitmix64-style mix, not `crypto.getRandomValues`
+ * (banned outside `src/client/secret.ts`, `no-ambient-random.test.ts`'s own allowlist) -- this is
+ * determinism, not identity security, the same standing `conditionLink`'s own seeded jitter has. */
+function deterministicSecret(seed: number, index: number): Uint8Array {
+  let state = (BigInt(seed) ^ (BigInt(index) * 0x9e3779b97f4a7c15n)) & 0xffff_ffff_ffff_ffffn
+  const out = new Uint8Array(16)
+  for (let i = 0; i < out.length; i++) {
+    state = (state + 0x9e3779b97f4a7c15n) & 0xffff_ffff_ffff_ffffn
+    let z = state
+    z = ((z ^ (z >> 30n)) * 0xbf58476d1ce4e5b9n) & 0xffff_ffff_ffff_ffffn
+    z = ((z ^ (z >> 27n)) * 0x94d049bb133111ebn) & 0xffff_ffff_ffff_ffffn
+    z = z ^ (z >> 31n)
+    out[i] = Number(z & 0xffn)
+  }
+  return out
+}
 
 export interface NetHarnessCounters {
   bytesDown: number
@@ -67,6 +89,10 @@ export interface NetHarnessOptions {
   }
   transport?: 'memory'
   conditions?: Partial<ConditionerConditions>
+  /** docs/plan/28-sessions-and-reconnect.md Seams: `createNetHarness({ secrets?, joinKey? })` --
+   * explicit per-client identity secrets, in join order. A client past the end of this array (or
+   * every client, if omitted) gets `deterministicSecret(seed, index)`. */
+  secrets?: Uint8Array[]
 }
 
 export interface NetHarness {
@@ -76,6 +102,12 @@ export interface NetHarness {
   clients: HeadlessClient[]
   link(i: number): ConditionedLink
   addClient(): HeadlessClient
+  /** docs/plan/28-sessions-and-reconnect.md Seams: a raw `Connection` end, joined to the real
+   * server through the same `conditionLink`/`server.accept` path every `HeadlessClient` uses, but
+   * with no `HeadlessClient` (and so no automatic `Hello`) attached -- a scenario writes its own
+   * hand-rolled bytes to it directly (`connection.send(...)`) and reads the server's replies off
+   * `connection.onMessage`, to test the handshake parser/`Reject`/timeout paths byte for byte. */
+  connectRaw(): Connection
   advanceTo(t: number): Promise<void>
   advanceTicks(n: number): Promise<void>
   settle(): Promise<void>
@@ -217,16 +249,21 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     server.accept(hostSide)
     // `WorldServer.accept` returns `void` (0024 §5's fixed shape, unchanged by gate round 2) --
     // `connId` is assumed equal to join order (`linkIdx`), true as long as a scenario never
-    // disconnects a client before checking it (M27's own scenarios never do). `connId + 1`: M15's
-    // own implicit-accept convention (`PlayerId = conn + 1`), the pre-handshake source
-    // `game_instance.rs`'s own `default_my_player_id` doc comment names; M28's real handshake
-    // replaces this once it lands.
+    // disconnects a client before checking it (M27's own scenarios never do).
     const connId = linkIdx
+    // docs/plan/28-sessions-and-reconnect.md: real secrets, not `connId + 1` -- `opts.secrets[
+    // linkIdx]` when the scenario cares, else a value deterministic in `(seed, linkIdx)` (Seams:
+    // "createNetHarness({ secrets?, joinKey? })"; `joinKey` itself is `opts.world.joinKey`,
+    // already a harness option since M13).
+    const secret = opts.secrets?.[linkIdx] ?? deterministicSecret(opts.seed, linkIdx)
     const client = createHeadlessClient({
       wasm,
       game: { seed: worldCfg.params.seed, worldgen: gameWorldgen },
       connection: clientSide,
-      myPlayerId: connId + 1,
+      secret,
+      ...(worldCfg.joinKey !== undefined ? { joinKey: worldCfg.joinKey } : {}),
+      buildHash: hexDecode(worldCfg.buildHash),
+      clock: { now: () => clock.now() },
     })
     entries.push({ client, connId, link, linkIdx })
     return client
@@ -237,6 +274,12 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
 
   async function advanceTicks(n: number): Promise<void> {
     for (let i = 0; i < n; i++) {
+      // docs/plan/28-sessions-and-reconnect.md: a real `await` on the actual in-flight digest
+      // promise (not merely hoping the virtual clock's own microtask yields are enough) --
+      // `crypto.subtle.digest` resolves through a real libuv threadpool callback in Node, which a
+      // plain `await` on an already-settled/trivial promise does not reliably give a turn to.
+      // Cheap when nothing is in flight (`handshakesSettled` returns at once).
+      await simHost.handshakesSettled()
       simHost.stepTick(1)
       await clock.advanceBy(tickMs)
       for (const e of entries) e.client.stepFrame(tickMs)
@@ -248,6 +291,11 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
   }
 
   async function settle(): Promise<void> {
+    // docs/plan/28-sessions-and-reconnect.md Seams: `serverInternals(server).handshakesSettled()`
+    // first -- every secret hashed/allocated so far, then one real tick boundary to consume them
+    // into `sim_attach` (`pumpHandshakes`'s own doc comment: a caller wants a tick *after* this
+    // resolves, not instead of it), before the ordinary settle sweep.
+    await serverInternals(server).handshakesSettled()
     await advanceTicks(SETTLE_EXTRA_TICKS)
   }
 
@@ -327,6 +375,21 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       const client = makeClient()
       clients.push(client)
       return client
+    },
+    connectRaw() {
+      const linkIdx = nextLink.i++
+      const [rawHost, rawClient] = memoryConnectionPair()
+      const conditions = { ...DEFAULT_CONDITIONS, ...opts.conditions }
+      const link = conditionLink(
+        rawHost,
+        rawClient,
+        { ...conditions, seed: opts.seed + linkIdx * 2 },
+        clock,
+      )
+      const hostSide = traced(link.ends[0] as Connection, linkIdx, 1)
+      const clientSide = traced(link.ends[1] as Connection, linkIdx, 0)
+      server.accept(hostSide)
+      return clientSide
     },
     advanceTo,
     advanceTicks,

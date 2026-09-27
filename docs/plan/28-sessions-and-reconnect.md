@@ -85,3 +85,121 @@ Netcode `CLAUDE.md`: secrets and `connectRaw`. `packages/engine/CLAUDE.md`: one 
 none (the device check for reconnect timing is attached to M29)
 
 ## Deviations
+
+**Steps 1-2 (this range).** Base `d6711b5`.
+
+- **Concurrent-write incident.** Two of this implementer's own research forks (launched read-only,
+  `subagent_type: "fork"`) independently began *implementing* this same milestone in the shared,
+  non-worktree checkout while the foreground session was also working -- a real hazard, not a
+  hypothetical one (see the orchestrator's own note for future delegations: prefer `isolation:
+  "worktree"` for anything that could plausibly start writing). The resulting Rust work (session
+  codecs, `sim_attach`/`sim_detach`/`sim_has_player`, `client_hello`/`client_on_welcome`, `Replica::
+  set_own_player`) converged on essentially the design this brief already called for and was
+  verified (`pnpm test rust`, `pnpm test wasm -t "abi registry"`) rather than discarded; a stray
+  duplicate `session.rs` (an earlier, incompatible draft, different `MAGIC`, no resume support) was
+  deleted in favour of the richer `session/mod.rs` that had already passed its own tests and blessed
+  goldens. No data was silently trusted: every inherited file was read, diffed and test-verified
+  before this implementer built on top of it or committed.
+- **Session codecs** (`crates/engine/src/session/mod.rs`): `Hello`/`Welcome`/`Reject`/`Bye`, golden
+  bytes at `session_hello`/`session_welcome`/`session_reject`/`session_bye`. `MAGIC = 0x474E_4580`
+  (`\x80ENG` little-endian, low byte `0x80`). `Welcome`'s `params` field is `Codec`-encoded (binary,
+  postcard), not JSON: `Worldgen::Params: Serialize + DeserializeOwned` is exactly `Codec`'s own
+  blanket bound, so this needed no new trait bound anywhere. `Reject` is the one codec proven
+  byte-identical across languages (Constraints): `src/host/handshake.ts`'s `buildReject` vs. the
+  Rust golden, both checked against `crates/engine/tests/golden/session_reject.hex` in
+  `src/host/handshake.test.ts`.
+- **`sim_attach`'s exact input-region layout** (`ABI_VERSION` 25->27 across two additive widenings):
+  `player_id varint · epoch u32 · joined u8 · presence: has_presence u8 + (len varint + bytes)? ·
+  hello_tail` (`host::Host::attach`'s doc comment; `src/host/handshake.ts`'s `buildAttachInput`
+  builds it). `epoch` is always `0` from this brief's own callers (M28b owns real epoch bumping).
+  `sim_has_player(player) -> u32` and `sim_detach(conn) -> status` are new, additive exports;
+  `sim_connect`/`sim_disconnect`/`Host::connect` are untouched (still real: native tests,
+  `testkit::Loopback`, recovery's own re-attach path) -- "no provisional-join code path remains in
+  the sim host" is true of the production `SimHost.accept` path only, since `worker/sim.ts`'s own
+  single-player call site still passes no `handshake` deps (Non-scope here: the browser
+  single-player path through `Hello`/`Welcome` is step 5's).
+- **`ClientCore::revealed(visible: TileRect) -> bool`** (`ABI_VERSION` 26->27, `client_clock_stats`
+  widened 16->20 bytes, a 5th LE `u32`): every chunk of `visible` both `Replica::is_held` and
+  `TerrainStore::is_cached`. Takes the rect as a parameter rather than storing one, since `game_
+  instance.rs`'s own `CachedCameraView::visible` already has it. Clock-block `revealed` word lands
+  at offset 28 (the block's own reserved 8th slot); `SessionState` is renamed in place (`Connecting`
+  ->`Handshaking`=0, `Live`->`Online`=1, same numeric values) plus two new values, `Rejected`=2,
+  `Superseded`=3 (unused by any caller until step 3).
+- **Session table** (`src/host/sessions.ts`): `SHA-256(secret) hex -> { playerId, lastPresenceHex }`,
+  JSON at `Storage` key `sessions` (0005's existing key, `worldKeys().sessions`). **Not implemented
+  this range: writing `lastPresenceHex`.** No production ABI export currently hands TS a player's
+  *live* presence sample (`Host::debug_presence` is `#[cfg(test/feature=testing)]`-only) -- the
+  natural write site is disconnect (0001: "so a returning player's camera can start where they
+  were"), which is step 3's own territory (`Bye`/grace) to build alongside a real export for it.
+  `Welcome`'s own `presence` field is real and wired (echoes whatever `lastPresenceHex` already
+  holds, i.e. always empty in this range) so step 3 only has to add the write side.
+- **PlayerId allocation ("next id is `max(table, sim) + 1`").** Race-free by construction, not by
+  locking: the synchronous span from `sessions.lookup` to `sessions.create` (no `await` in between)
+  means a second secret's digest, however it interleaves, always sees the first's reservation
+  already in the in-memory table before picking its own candidate; only `sessions.save()` (the
+  durable write) is awaited afterward.
+- **Async digest timing (real bug, found and fixed).** `crypto.subtle.digest` resolves through
+  Node's own libuv thread pool, not a plain microtask -- awaiting `VirtualClock.advanceBy` alone
+  (itself just a synchronous body wrapped `async`) never reliably gives its completion callback a
+  turn, so the very first cut of this milestone's own `advanceTicks` loop left every handshake
+  stuck "Handshaking" forever (every M27 netcode scenario failed with "dispatch before ready").
+  Fixed by making `net-harness.ts`'s `advanceTicks` `await simHost.handshakesSettled()` at the top
+  of every iteration (a real `await` on the actual in-flight promise, not an incidental yield);
+  `settle()` does the same once up front. Root-caused with temporary `console.error` tracing (routed
+  through `test-results/netcode/output.log`, since the suite's own JSON reporter swallows stdout on
+  a passing run) -- removed before committing.
+- **`createWorldServer` always wires the real handshake** (never optional there; only `worker/
+  sim.ts`'s 2-6-argument calls to `createSimHostFromInstance` fall back to implicit accept, per its
+  own `handshake?` parameter). **Consequence, found late, not fixed in this range:** two existing
+  `tests/wasm/puts.test.ts` tests -- `wasm_connected_100_matches_its_own_golden` and
+  `wasm_script_a_matches_native` -- call `createWorldServer(...)` + `server.accept(fakeConnection())`
+  directly with no `Hello` ever sent, so the connection now simply never attaches (silently tolerated
+  as untimed-out "garbage" within the test's own short run) and the resulting `sim_hash()` no longer
+  matches `golden-connected.json`/`golden-script-a.json`. **Stopped and reported per Constraints**
+  ("do not move any existing golden ... stop and report before re-blessing"): these two tests are
+  left red. Fixing them means teaching each to speak a real `Hello`/`Welcome` (mechanically similar
+  to `net-harness.ts`'s own `makeClient`) and re-blessing both goldens to the new, legitimately
+  different hash -- a real decision (which hash is "correct" now, and whether the doc comments
+  citing the old literal hex need updating) the orchestrator should make, not this implementer.
+  Every other suite is green: `rust` 612, `unit` 286, `wasm` 154/156 (these 2 failing), `netcode`
+  10/10, `pnpm test wasm -t "abi registry"` 17/17. `node scripts/repeat.mjs netcode 20`: 20/20 once
+  a stale `vite preview` process left over from earlier in this same session (holding a lock under
+  `tests/browser/pages/dist/`, unrelated to `netcode`) was killed -- the first attempt, before that
+  cleanup, measured `pass=16 fail=4 hang=3`, entirely attributable to that lock contention (empty
+  stdout on every failing/hung run, one of them a literal `ENOTEMPTY: rmdir .../dist/fixtures`).
+- **`counters-exact.test.ts` literals re-measured**, not loosened: opening every connection with
+  `Hello`/`Welcome` legitimately changes the exact bytes a fixed-seed run sends (72 B `Hello` up,
+  102 B `Welcome` + this connection's own first `Frame` down, both landing in the same tick bucket
+  since `sim_attach` and the per-connection frame pass both run inside `pumpHandshakes`'s own tick
+  boundary). New literals measured once, pasted from the real run, not computed by the test itself.
+- **`Reject`/`ProtocolError` two-tier failure model, exactly as Planning decisions implies but this
+  brief's Scope line reads ambiguously:** a message that fails to parse as `Hello` at all (bad
+  magic/version/truncated) is treated as *garbage* -- silently dropped and counted (cap 8, then
+  `ProtocolError`) -- not an instant close on its own. A `Reject` (`VersionMismatch`/`BadKey`/
+  `Full`) only ever follows a *successfully parsed* `Hello` whose content disagrees (build hash,
+  join key, capacity). `ProtocolError` therefore fires from exactly two places: garbage exceeding
+  the cap, or no valid `Hello` within `HELLO_TIMEOUT_MS` (5000).
+- **`Full`'s exact counting rule** ("concurrent sessions" against `maxPlayers`, default 8, 0009):
+  implemented as every connection currently `awaiting-attach` or `settled`, not yet distinguishing a
+  *known* secret reconnecting from a brand-new one (0013: "a known secret is refused too when no
+  seat is free" -- true here since nothing in this range special-cases it, but untested: no `Full`
+  scenario exists until step 3).
+- **`HeadlessClient`**: `myPlayerId?`/`game_instance.rs`'s `TerrainConfig.my_player_id` deleted;
+  replaced by `secret: Uint8Array` (16 B), `joinKey?: string`, `buildHash: Uint8Array` (32 B),
+  `clock?: { now(): number }` (feeds `seed_lead_rtt_ms`'s own measured Hello->Welcome round trip).
+  `client_hello()`'s own `Hello.camera` is always a zeroed `CameraReport` (no real camera exists
+  that early in a connection's life); the real one a scenario's own `setCamera` queued only reaches
+  the host afterward, over the ordinary `client_poll_uplink` path -- one real behavioural
+  consequence, not a bug (see `counters-exact.test.ts`'s own updated doc comment).
+- **`net-harness.ts`**: `createNetHarness({ secrets?, ... })` (`joinKey?` is the pre-existing
+  `world.joinKey`, not a new duplicate top-level field); `deterministicSecret(seed, index)` (a
+  splitmix64-style mix, not `crypto.getRandomValues` -- determinism, not identity security, same
+  standing `conditionLink`'s own seeded jitter already has). `harness.connectRaw(): Connection`
+  lands as specified (Seams) but is not yet exercised by any test in this range (step 3's own job).
+- **Not built this range** (left for steps 3-5, as scoped): `Bye`/`client.leave()`/
+  `HeadlessClient.leave()`; `Superseded` detection (a second connection on the same secret currently
+  just gets its own independent session-table lookup and a second `ConnSlot` -- nothing yet frees
+  the first); heartbeat; `createLink`; the browser single-player path (`loadOrMintSecret()` exists,
+  `src/client/secret.ts`, but nothing calls it yet); view-clamp wiring to `setViewClamp` (Welcome's
+  `view_max_tiles_per_axis`/`view_max_chunks` fields are real and echoed, but nothing on the client
+  side consumes them into the camera yet -- also browser wiring, step 5).

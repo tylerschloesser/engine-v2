@@ -452,14 +452,14 @@ const clockView = new ClockBlockView(sabs.clockBlock)
 // docs/plan/26-prediction-rendering-and-clocks.md steps 4-6: `readClockBlockInto`'s own `out` now
 // needs room for the seventh (`tickFraction`) slot too, even though this page only ever reads the
 // first two (`clock-block.ts`'s own doc comment: `CLOCK_FIELD` has no entry for slot 6 on purpose).
-const clockScratch = new Uint32Array(7)
+const clockScratch = new Uint32Array(8)
 function authoritativeTick(): number {
   readClockBlockInto(clockView, clockScratch)
   return clockScratch[CLOCK_FIELD.AuthoritativeTick] as number
 }
 function sessionLive(): boolean {
   readClockBlockInto(clockView, clockScratch)
-  return clockScratch[CLOCK_FIELD.SessionState] === SessionState.Live
+  return clockScratch[CLOCK_FIELD.SessionState] === SessionState.Online
 }
 window.__tick = authoritativeTick
 

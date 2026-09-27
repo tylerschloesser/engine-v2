@@ -17,24 +17,37 @@ use crate::abi::config::HexU64;
 use crate::abi::{Instance, RegionId, RegionLayout, Role, Status};
 use crate::authority::Scope;
 use crate::bytes::{ByteReader, ByteSink, SliceSink};
-use crate::codec::decode_canonical;
+use crate::codec::{decode, decode_canonical, encode_to};
 use crate::delta::Delta;
 use crate::game::{Game, PlayerEvent, PlayerId, Presence as _, PresenceTable, WorldRead};
 use crate::persist::{
     Comparison, Identity, MismatchReason, PROGRESS_BYTES, Phase, ProgressCursor, UpgradeProgress,
     UpgradeReader,
 };
+use crate::session::{self, Welcome};
 use crate::sim::{EngineReject, Outcome, Record, Rejected, Sim, WorldParams};
 use crate::time::Tick;
 use crate::wire::{
     ActionResultsWriter, CameraReport, ChunkCoordListWriter, FrameHeader, FrameWriter, SectionId,
-    SnapshotWriter, UplinkReader, encode_chunk_snapshot, write_global, write_own_player,
+    SnapshotWriter, UplinkReader, WireError, encode_chunk_snapshot, write_global, write_own_player,
 };
 use crate::world::ChunkCoord;
 use crate::world_access::chunk_of;
 use crate::worldgen::Worldgen;
 use subs::SubscriptionSet;
 use warm::Warm;
+
+/// [`Host::attach`]'s own local `Vec<u8>` sink (mirrors every other module's own `VecSink`
+/// precedent, `persist::snapshot`'s own doc comment): `attach` runs once per connection, off the
+/// tick path, so building `Welcome` into an owned buffer first (then copying it into the ABI
+/// `Tx` region, `abi::mod`'s own `sim_attach` free function) costs nothing `.claude/rules/
+/// hot-paths.md` binds.
+struct VecSink<'a>(&'a mut Vec<u8>);
+impl ByteSink for VecSink<'_> {
+    fn put(&mut self, b: &[u8]) {
+        self.0.extend_from_slice(b);
+    }
+}
 
 /// A connection slot index (Scope: "`ConnId = u32 < maxPlayers`"). 0009's `WorldConfig.maxPlayers`
 /// default is 8, matching `warm::MAX_VIEWS`, which this milestone's connection table reuses
@@ -223,6 +236,22 @@ struct SimConfig<P> {
     /// M24b's, so nothing validates this value yet.
     #[serde(default)]
     build_hash: String,
+    /// docs/plan/28-sessions-and-reconnect.md (Welcome's own "view clamps (0010)" field): 0009's
+    /// `WorldConfig.view.maxTilesPerAxis`, the untrusted-view clamp -- default `256` (0010,
+    /// mirrored by `camera/camera.ts`'s own `DEFAULT_MAX_TILES`). `#[serde(default)]` so every
+    /// config built before this milestone (native tests, `testkit`) keeps working.
+    #[serde(default = "default_view_max_tiles")]
+    view_max_tiles_per_axis: u16,
+    /// 0009's `WorldConfig.view.maxChunks`, the subscription cap -- default `128` (0010).
+    #[serde(default = "default_view_max_chunks")]
+    view_max_chunks: u16,
+}
+
+fn default_view_max_tiles() -> u16 {
+    256
+}
+fn default_view_max_chunks() -> u16 {
+    128
 }
 
 /// [`SimConfig::build_hash`]'s hex decode: the first 32 hex digits (128 bits), or all-zero on
@@ -450,6 +479,23 @@ pub struct Host<G: Game> {
     /// finishes draining).
     snapshot_writer: Option<crate::persist::SnapshotWriter>,
 
+    // -- M28: session handshake (docs/plan/28-sessions-and-reconnect.md) -----------------------
+    /// `WorldParams::seed`, retained past `sim_genesis` (which moves the whole `WorldParams` out
+    /// of `pending`) for [`Host::attach`]'s own `Welcome.seed` field.
+    seed: u64,
+    /// The game's own `Worldgen::Params`, `Codec`-encoded once at [`Host::init`]/[`Host::
+    /// genesis_for_test`] (before the live value moves into `pending`/`Sim::genesis`) and kept as
+    /// bytes rather than the typed value itself: `Worldgen::Params` carries no `Clone` bound (the
+    /// same reason `compute_worldgen_fingerprint` borrows rather than clones), but `Codec`'s own
+    /// blanket impl over every `Serialize + DeserializeOwned` type (`codec::Codec`'s own doc
+    /// comment) needs no such bound to encode a `&` reference *before* the move, or to decode a
+    /// fresh owned copy back out of these bytes on demand, in [`Host::attach`].
+    worldgen_params_bytes: Vec<u8>,
+    /// 0009's `WorldConfig.view.maxTilesPerAxis`/`maxChunks` (`SimConfig`'s own doc comment),
+    /// parsed once and retained for every `Welcome` this host ever builds.
+    view_max_tiles_per_axis: u16,
+    view_max_chunks: u16,
+
     // -- M22b: restore (load a snapshot) and replay (apply a log tail) drivers ------------------
     /// The in-progress snapshot decode [`Host::sim_restore_begin`] started, fed by
     /// [`Host::sim_restore_push`]; `None` when no restore is in flight.
@@ -667,6 +713,10 @@ impl<G: Game> Host<G> {
         G::Global: Default,
     {
         let worldgen_fingerprint = compute_worldgen_fingerprint::<G>(params.seed, &params.worldgen);
+        let seed = params.seed;
+        let mut worldgen_params_bytes = Vec::new();
+        encode_to(&params.worldgen, &mut VecSink(&mut worldgen_params_bytes))
+            .expect("encoding this world's own worldgen params cannot fail");
         Host {
             pending: None,
             cache_chunks: default_cache_chunks(),
@@ -692,6 +742,10 @@ impl<G: Game> Host<G> {
             worldgen_fingerprint,
             last_logged_tick: Tick(0),
             snapshot_writer: None,
+            seed,
+            worldgen_params_bytes,
+            view_max_tiles_per_axis: default_view_max_tiles(),
+            view_max_chunks: default_view_max_chunks(),
             restore_reader: None,
             restore_done: None,
             restore_budget: None,
@@ -923,6 +977,137 @@ impl<G: Game> Host<G> {
         if let Some(slot) = self.conns.get_mut(idx) {
             *slot = None;
         }
+    }
+
+    /// docs/plan/28-sessions-and-reconnect.md: the real join/reconnect path `sim_attach` (ABI)
+    /// dispatches into, replacing M15's implicit `connect` (`PlayerId = conn + 1`) for every real
+    /// connection from this milestone on -- `connect`/`reattach` above are untouched (still used
+    /// by native tests, `testkit::Loopback`, and recovery's own re-attach path).
+    ///
+    /// `input` is `sim_attach`'s whole input region (Seams): `player_id varint · epoch u32 ·
+    /// joined u8 · presence: has_presence u8 + (len varint + bytes)? · hello_tail`. `player`/
+    /// `joined` are the caller's own answers, both already asked of *this* sim (`sim_has_player`,
+    /// called by the TS handshake just before this): 0013 Planning decisions "Joined vs Connected
+    /// is decided by the sim, not the table" means asking `sim_has_player`, not consulting the
+    /// session table's own first-sight bookkeeping -- not that this method re-derives the answer a
+    /// second time. `hello_tail` is the raw bytes the TS handshake (`host/handshake.ts`) forwards
+    /// verbatim from right after `Hello`'s `player_secret`: a `CameraReport` (16 B) then an
+    /// ignored, this-milestone resume block (Seams: "which M28 ignores") -- a short or malformed
+    /// tail simply means no initial camera report yet (`ConnSlot::camera` stays `None`, the same
+    /// state a fresh `connect()`'d slot already starts in), not a protocol error: the handshake
+    /// itself already validated the frozen prefix before this ever runs.
+    ///
+    /// Writes `Welcome` into `welcome_sink`; the caller (`sim_attach`'s ABI free function,
+    /// `abi::mod`) reads back the sink's own byte count.
+    pub fn attach(
+        &mut self,
+        conn: ConnId,
+        input: &[u8],
+        welcome_sink: &mut impl ByteSink,
+    ) -> Result<(), WireError> {
+        let mut r = ByteReader::new(input);
+        let player = PlayerId(
+            u32::try_from(r.varint().map_err(WireError::from)?)
+                .map_err(|_| WireError::Malformed)?,
+        );
+        let epoch = r.u32().map_err(WireError::from)?;
+        let joined = r.u8().map_err(WireError::from)? != 0;
+        let has_presence = r.u8().map_err(WireError::from)?;
+        let presence: Option<G::Presence> = match has_presence {
+            0 => None,
+            1 => {
+                let len = r.varint().map_err(WireError::from)? as usize;
+                let bytes = r.bytes(len).map_err(WireError::from)?;
+                // Mirrors `on_uplink`'s own presence handling: a malformed/stale sample is
+                // dropped, not a protocol error -- the session table's own `lastPresence` is
+                // TS-owned storage, already durable by the time this runs, and a decode failure
+                // here can only ever make the initial `Welcome`'s own echo more conservative
+                // (no sample), never wrong.
+                decode_canonical::<G::Presence>(bytes).ok()
+            }
+            _ => return Err(WireError::Malformed),
+        };
+        let tail = r.rest();
+        let mut tail_reader = ByteReader::new(tail);
+        let camera = CameraReport::read(&mut tail_reader).ok();
+
+        let idx = conn as usize;
+        if joined {
+            self.pending_records.push(Record::Player {
+                who: player,
+                ev: PlayerEvent::Joined,
+            });
+        }
+        self.pending_records.push(Record::Player {
+            who: player,
+            ev: PlayerEvent::Connected,
+        });
+        if let Some(sample) = presence {
+            self.presence.restore(player, sample);
+        }
+        let mut fault_acks = Vec::new();
+        self.pending_fault_acks.retain(|&(who, seq)| {
+            if who == player {
+                fault_acks.push(seq);
+                false
+            } else {
+                true
+            }
+        });
+        let pending_results = fault_acks
+            .into_iter()
+            .map(|seq| Outcome {
+                seq,
+                result: Err(Rejected::Engine(EngineReject::EngineFault)),
+            })
+            .collect();
+        self.conns[idx] = Some(ConnSlot {
+            player,
+            camera,
+            subs: SubscriptionSet::new(crate::world::ChunkDims::new(G::CHUNK_BITS), G::TICK_RATE),
+            first_frame_pending: true,
+            counters: ConnCounters::default(),
+            pending_results,
+            highest_admitted_seq: 0,
+            presence_relayed: BTreeMap::new(),
+        });
+
+        // -- Welcome --------------------------------------------------------------------------
+        let tick = self.sim.as_ref().map_or(0, |s| s.tick().0);
+        let last_processed_action_seq = self
+            .sim
+            .as_ref()
+            .map_or(0, |s| s.authority().store().last_seq(player).unwrap_or(0));
+        let echoed_presence = self.presence.get(player).map(|e| e.sample);
+        let params = decode::<<G::Worldgen as Worldgen>::Params>(&self.worldgen_params_bytes)
+            .expect("decoding this world's own worldgen params cannot fail")
+            .0;
+        session::write_welcome::<G>(
+            welcome_sink,
+            &Welcome {
+                player_id: player,
+                epoch,
+                tick,
+                tick_rate_hz: G::TICK_RATE.hz_value(),
+                seed: self.seed,
+                params: &params,
+                view_max_tiles_per_axis: self.view_max_tiles_per_axis,
+                view_max_chunks: self.view_max_chunks,
+                last_processed_action_seq,
+                presence: echoed_presence.as_ref(),
+            },
+        );
+        Ok(())
+    }
+
+    /// `sim_has_player(player_id)`: whether this world's own `Store` already has a player slot for
+    /// `player` -- 0013 Planning decisions' own source of truth for "has this identity joined
+    /// before" (the *game's* persisted, replayable state, not `Host`'s own ephemeral connection
+    /// bookkeeping, which does not survive a restart the way `Store` does). `false` before genesis.
+    pub fn has_player(&self, player: PlayerId) -> bool {
+        self.sim
+            .as_ref()
+            .is_some_and(|s| s.authority().store().player(player).is_ok())
     }
 
     /// Decodes an `UplinkBatch` (0011): records the latest camera report and `bytes_up`, and runs
@@ -1670,6 +1855,11 @@ where
 
         let worldgen_fingerprint = compute_worldgen_fingerprint::<G>(cfg.seed.0, &cfg.params);
         let build_hash = parse_build_hash(&cfg.build_hash);
+        // docs/plan/28-sessions-and-reconnect.md: encoded *before* `cfg.params` moves into
+        // `pending` below (see the `worldgen_params_bytes` field's own doc comment).
+        let mut worldgen_params_bytes = Vec::new();
+        encode_to(&cfg.params, &mut VecSink(&mut worldgen_params_bytes))
+            .expect("encoding this world's own worldgen params cannot fail");
 
         layout.region(RegionId::Rx, SIM_RX_BYTES);
         layout.region(RegionId::Tx, SIM_TX_BYTES);
@@ -1707,6 +1897,10 @@ where
             worldgen_fingerprint,
             last_logged_tick: Tick(0),
             snapshot_writer: None,
+            seed: cfg.seed.0,
+            worldgen_params_bytes,
+            view_max_tiles_per_axis: cfg.view_max_tiles_per_axis,
+            view_max_chunks: cfg.view_max_chunks,
             restore_reader: None,
             restore_done: None,
             restore_budget: None,
@@ -1769,6 +1963,30 @@ where
     fn sim_disconnect(&mut self, conn: u32) -> Status {
         self.disconnect(conn);
         Status::Ok
+    }
+
+    /// docs/plan/28-sessions-and-reconnect.md: `host::Host::attach`. `WireError::Malformed` (a bad
+    /// `input`) becomes `Status::Decode`; `SliceSink::finish`'s own overflow (a `Welcome` too large
+    /// for `tx`, never expected in practice: `SIM_TX_BYTES` is 64 KiB, `Welcome` at most a few
+    /// hundred bytes) becomes `Status::OutOfMemory`, not a silent truncation.
+    fn sim_attach(&mut self, conn: u32, input: &[u8], tx: &mut [u8]) -> Result<u32, Status> {
+        let mut sink = SliceSink::new(tx);
+        match self.attach(conn, input, &mut sink) {
+            Ok(()) => sink
+                .finish()
+                .map(|n| n as u32)
+                .map_err(|_| Status::OutOfMemory),
+            Err(_) => Err(Status::Decode),
+        }
+    }
+
+    fn sim_detach(&mut self, conn: u32) -> Status {
+        self.disconnect(conn);
+        Status::Ok
+    }
+
+    fn sim_has_player(&mut self, player: u32) -> u32 {
+        u32::from(self.has_player(PlayerId(player)))
     }
 
     /// docs/plan/15b-ring-connection-and-replica-rendering.md: `sim_admit(conn, len)` -- `rx` (the

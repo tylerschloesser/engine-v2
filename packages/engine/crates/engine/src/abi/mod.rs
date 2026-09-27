@@ -159,6 +159,45 @@ pub fn sim_disconnect<T: Instance>(slot: &Slot<T>, conn: u32) -> Status {
     }
 }
 
+/// `sim_attach(conn, len) -> len`, or `-(status)` -- the same shape as `sim_build_frame`. `len`
+/// bytes of `Rx` are the whole handshake input (`Instance::sim_attach`'s own doc comment); copied
+/// into an owned buffer first so `Rx` (read) and `Tx` (written, for `Welcome`) can both be reached
+/// from `rt.layout` in the same call without a double-borrow (`RegionLayout::bytes`/`bytes_mut`
+/// each take the whole `&(mut) self`) -- fine off the tick path (`sim_attach` runs once per
+/// connection), unlike every per-tick region access elsewhere in this file.
+pub fn sim_attach<T: Instance>(slot: &Slot<T>, conn: u32, len: u32) -> i32 {
+    let built = slot.sim().and_then(|rt| {
+        let input: Vec<u8> = match rt.layout.bytes(RegionId::Rx).get(..len as usize) {
+            Some(b) => b.to_vec(),
+            None => return Err(Status::BadLength),
+        };
+        rt.inst
+            .sim_attach(conn, &input, rt.layout.bytes_mut(RegionId::Tx))
+    });
+    match built {
+        Ok(len) => len as i32,
+        Err(status) => -(status as i32),
+    }
+}
+
+pub fn sim_detach<T: Instance>(slot: &Slot<T>, conn: u32) -> Status {
+    match slot.sim() {
+        Ok(rt) => rt.inst.sim_detach(conn),
+        Err(status) => status,
+    }
+}
+
+/// `sim_has_player(player) -> 1|0`. No role gate beyond what `Instance::sim_has_player`'s own
+/// default already gives (`0`, "wrong role or no `Sim` yet") -- unlike every other `sim_*` export,
+/// this one costs nothing on the wrong role rather than returning a `Status`, matching `gen_take`'s
+/// own "never a `Status`, costs nothing on the wrong role" shape (no failure mode to report).
+pub fn sim_has_player<T: Instance>(slot: &Slot<T>, player: u32) -> u32 {
+    match slot.sim() {
+        Ok(rt) => rt.inst.sim_has_player(player),
+        Err(_) => 0,
+    }
+}
+
 pub fn sim_tick<T: Instance>(slot: &Slot<T>) -> Status {
     match slot.sim() {
         Ok(rt) => rt.inst.sim_tick(),
@@ -447,6 +486,38 @@ pub fn client_poll_uplink<T: Instance>(slot: &Slot<T>, _raw_t_ms: f64) -> i32 {
     let t_ms = camera.frame_time_ms as u32;
     let out = rt.layout.bytes_mut(RegionId::Tx);
     rt.inst.client_poll_uplink(t_ms, out) as i32
+}
+
+/// `client_hello() -> len`, or `-(status)` -- the same shape as `client_poll_uplink`/
+/// `sim_build_frame`. Writes `Hello` into `Tx` (the client role's own transmit region, unclaimed
+/// before the connection's normal uplink pump ever runs).
+pub fn client_hello<T: Instance>(slot: &Slot<T>) -> i32 {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return -(status as i32),
+    };
+    let out = rt.layout.bytes_mut(RegionId::Tx);
+    rt.inst.client_hello(out) as i32
+}
+
+/// `client_on_welcome(len, rtt_ms) -> status`: `len` bytes of `Downlink` are one whole `Welcome`
+/// message (same region `on_frame` reads -- both are host-to-client messages, and `Welcome` is
+/// always the first one, before any real `Frame` traffic). On success, `player_id`/
+/// `last_processed_action_seq` (two LE `u32`) land in `Result` (`Instance::client_on_welcome`'s
+/// own doc comment) -- read into an owned copy first, same double-borrow reasoning as `sim_attach`,
+/// since `Downlink` (read) and `Result` (written) cannot both be reached from `rt.layout` in one
+/// call otherwise.
+pub fn client_on_welcome<T: Instance>(slot: &Slot<T>, len: u32, rtt_ms: f64) -> Status {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let bytes: Vec<u8> = match rt.layout.bytes(RegionId::Downlink).get(..len as usize) {
+        Some(b) => b.to_vec(),
+        None => return Status::BadLength,
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.client_on_welcome(&bytes, rtt_ms, result)
 }
 
 /// `sim_region_hash(conn) -> status`: `host::Host::region_hash(conn)`, two LE `u32` into `Result`

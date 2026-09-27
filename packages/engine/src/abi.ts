@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 25
+export const ABI_VERSION = 27
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -111,6 +111,22 @@ export const ABI_EXPORTS = {
   // docs/plan/15b-ring-connection-and-replica-rendering.md: frees `conn`'s slot (`host::Host::
   // disconnect`). An unknown/already-disconnected `conn` is a tolerated no-op, not an error.
   sim_disconnect: { role: 'sim', params: 1, result: 'status' },
+  // docs/plan/28-sessions-and-reconnect.md (`ABI_VERSION` 25 -> 26): the real handshake join/
+  // reconnect path, replacing `sim_connect`'s implicit accept for every connection the host's own
+  // TS handshake (`host/handshake.ts`) drives. `len` bytes of `Rx` are the whole handshake input
+  // (`player_id varint · epoch u32 · joined u8 · presence (has u8 + len varint + bytes)? ·
+  // hello_tail`); on success `Welcome` bytes land in `Tx` and their length is returned (same
+  // `len`/`-(status)` shape as `sim_build_frame`).
+  sim_attach: { role: 'sim', params: 2, result: 'len' },
+  // docs/plan/28-sessions-and-reconnect.md: frees `conn`'s slot, same as `sim_disconnect` -- a
+  // distinct export name so the handshake path (`sim_attach`) and its own teardown pair cleanly,
+  // without retiring `sim_disconnect` (still real: native tests, `testkit::Loopback`, recovery).
+  sim_detach: { role: 'sim', params: 1, result: 'status' },
+  // docs/plan/28-sessions-and-reconnect.md: `1`/`0`, whether this world's own `Store` already has
+  // a player slot for `player` (not a `Status`: costs nothing, always answers, same shape as
+  // `sim_warm_one`). The TS handshake asks this before `sim_attach`, both to fill that call's own
+  // `joined` byte and to find the next free `PlayerId` for an unknown secret.
+  sim_has_player: { role: 'sim', params: 1, result: 'u32' },
   sim_tick: { role: 'sim', params: 0, result: 'status' },
   sim_build_frame: { role: 'sim', params: 1, result: 'len' },
   sim_hash: { role: 'sim', params: 0, result: 'status' },
@@ -168,6 +184,16 @@ export const ABI_EXPORTS = {
   // ignored (same shape as `frame`'s own raw argument): the real value is read from the
   // just-copied `CameraBlock.frame_time_ms`.
   client_poll_uplink: { role: 'client', params: 1, result: 'len' },
+  // docs/plan/28-sessions-and-reconnect.md (`ABI_VERSION` 25 -> 26): builds `Hello` from the
+  // client role's own config (`secret`/`joinKey`/`buildHash`) into `Tx`, returning its length --
+  // same shape as `client_poll_uplink`/`sim_build_frame`. Takes no other input; idempotent.
+  client_hello: { role: 'client', params: 0, result: 'len' },
+  // docs/plan/28-sessions-and-reconnect.md: applies one `Welcome` message (`len` bytes of
+  // `RegionId.Downlink`, same region `on_frame` reads) into the client role's own state
+  // (`own_player`, `seed_presence`, `seed_lead_rtt_ms` from `rttMs`). On success, `player_id`/
+  // `last_processed_action_seq` (two LE `u32`) land in `Result` for the caller's own
+  // `session_state`/`seq_seed` bookkeeping. `Status.Decode` on a malformed message.
+  client_on_welcome: { role: 'client', params: 2, result: 'status' },
   // docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test` only: `host::Host::
   // region_hash(conn)`, two LE `u32` into `Result` (`sim_hash`'s own crossing shape).
   sim_region_hash: { role: 'sim', params: 1, result: 'status' },
@@ -192,6 +218,9 @@ export const ABI_EXPORTS = {
   // (`ClientCore::last_summary()`) as two LE `u32` into `Result` -- the client worker's own source
   // for the clock block's `authoritative_tick`/`ack_seq` fields, same crossing shape as
   // `sim_region_hash`/`client_region_hash`.
+  // docs/plan/28-sessions-and-reconnect.md (`ABI_VERSION` 26 -> 27): widened from 16 to 20 bytes,
+  // same call signature -- a fifth LE `u32`, `ClientCore::revealed(camera_view.visible)` (`0`/`1`;
+  // steps 3-5 are the first consumer, this milestone only lands the field).
   client_clock_stats: { role: 'client', params: 0, result: 'status' },
   // docs/plan/16b-ui-observation-and-clock.md (`ABI_VERSION` 12 -> 13), `engine/test` only: forces
   // `UiObserver::mark_dirty()` (0024 §7d's dirty flag). No production caller exists yet (M18's

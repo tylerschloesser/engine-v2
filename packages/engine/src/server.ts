@@ -9,6 +9,15 @@
 // make it real (`createSimHost` below builds a `Persistence` from it).
 
 import { RegionId, Role, Status } from './abi.js'
+import {
+  buildAttachInput,
+  buildReject,
+  CloseCode,
+  ProtocolError,
+  parseHello,
+  RejectReason,
+  rejectReasonCloseCode,
+} from './host/handshake.js'
 import { Persistence } from './host/persistence.js'
 import {
   Phase,
@@ -18,10 +27,12 @@ import {
   readProgressCursor,
   runPanicRecovery,
 } from './host/recovery.js'
+import { hashSecretHex, hexDecode, loadSessionTable, type SessionTable } from './host/sessions.js'
 import type { EngineInstance } from './loader.js'
 import { instantiate } from './loader.js'
 import { buildSimInstanceConfig, type WorldConfig } from './sim-config.js'
 import type { Storage } from './storage/types.js'
+import { worldKeys } from './storage/types.js'
 
 // `host/recovery.ts` (docs/plan/24-recovery-and-migration.md): re-exported unchanged, same
 // "no renamed Provides" convention as the re-exports above.
@@ -50,6 +61,11 @@ export type { Storage } from './storage/types.js'
 
 export const MsgClass = { ReliableOrdered: 0, LatestWins: 1 } as const
 export type MsgClass = (typeof MsgClass)[keyof typeof MsgClass]
+
+/** A connection slot index (`host::ConnId`, Rust). Plain `number` here (0014 §2's own "numbers
+ * only" convention has no room for a branded type across the boundary), named only so this file's
+ * own handshake bookkeeping reads clearly. */
+type ConnId = number
 
 export interface Connection {
   /** Engine-owned buffer, valid only during the call. */
@@ -187,6 +203,17 @@ export interface SimInstance {
    * absent (a role/instance with no such region, e.g. a hand-rolled fixture `SimInstance`). */
   rxBytes(): number
   txBytes(): number
+  /** docs/plan/28-sessions-and-reconnect.md: `sim_attach(conn, len)` -- `input` is the whole
+   * handshake input (`host/handshake.ts`'s `buildAttachInput`), copied into the sim role's own
+   * `Rx` region; returns `Welcome` bytes (a view over `Tx`, valid only until the next call that
+   * touches it) or throws on a negative/malformed status. */
+  simAttach(conn: number, input: Uint8Array): { len: number; bytes?: Uint8Array }
+  /** docs/plan/28-sessions-and-reconnect.md: frees `conn`'s slot (`sim_detach`, same effect as
+   * `sim_disconnect`). `Status` (numeric); tolerates an unknown/already-freed `conn`. */
+  simDetach(conn: number): number
+  /** docs/plan/28-sessions-and-reconnect.md: `1`/`0`, whether this world's own `Store` already has
+   * a player slot for `player` (`sim_has_player`). */
+  simHasPlayer(player: number): number
 }
 
 /** The real adapter: `SimInstance` over a real `EngineInstance` (role `Sim`). */
@@ -270,6 +297,22 @@ export function wrapEngineInstance(inst: EngineInstance): SimInstance {
     },
     rxBytes: () => inst.region(RegionId.Rx)?.len ?? 0,
     txBytes: () => inst.region(RegionId.Tx)?.len ?? 0,
+    simAttach: (conn, input) => {
+      const region = inst.region(RegionId.Rx)
+      if (!region) throw new Error('sim_attach: the Rx region is absent')
+      // Whole-buffer `.set()`, not a fresh-length allocation (`.claude/rules/hot-paths.md`'s
+      // convention elsewhere in this file) -- harmless here even though `sim_attach` runs once per
+      // connection, off the tick path, not the steady-state loop that rule targets.
+      region.u8.set(input)
+      const raw = inst.call2(inst.x.sim_attach, conn, input.length)
+      if (raw < 0) throw new Error(`sim_attach failed: status ${-raw}`)
+      if (raw === 0) return { len: 0 }
+      const txRegion = inst.region(RegionId.Tx)
+      if (!txRegion) throw new Error('sim_attach: len > 0 but the Tx region is absent')
+      return { len: raw, bytes: txRegion.u8 }
+    },
+    simDetach: (conn) => inst.call1(inst.x.sim_detach, conn),
+    simHasPlayer: (player) => inst.call1(inst.x.sim_has_player, player),
   }
 }
 
@@ -316,6 +359,12 @@ export interface SimHost {
    * simRegionHash(conn)`, unwrapped -- the live per-connection region hash `worldServerTestHandle`
    * exists to reach (0020 §8: "per-region state hashes at any tick"). */
   regionHash(conn: number): string
+  /** docs/plan/28-sessions-and-reconnect.md Seams (`serverInternals(server).handshakesSettled()`
+   * is a thin wrapper over this): resolves once every currently in-flight secret digest/allocate
+   * has settled. Consuming those into a real `sim_attach` + `Welcome` still waits for the next
+   * tick boundary (`pumpHandshakes`) -- a caller wants a tick of its own after this resolves, not
+   * instead of it. Resolves immediately when `handshake` was never given. */
+  handshakesSettled(): Promise<void>
   /**
    * docs/plan/24-recovery-and-migration.md (0005 Panic recovery 2-4): call this once the caller has
    * observed the current instance trap (an `EngineTrap` from any `SimInstance` call). Disarms
@@ -363,6 +412,42 @@ export interface SimHost {
   accept(connection: Connection): number
 }
 
+/** docs/plan/28-sessions-and-reconnect.md Provides: what `SimHost.accept`'s real handshake needs
+ * beyond `HostServices`/`SimInstance` -- the parts of `WorldConfig` a handshake decision reads
+ * (`joinKey`/`maxPlayers`/`buildHash`) plus the already-loaded session table. `createWorldServer`
+ * builds this once, after `loadSessionTable` resolves, inside its own `ready` chain. */
+export interface HandshakeDeps {
+  joinKey: string
+  maxPlayers: number
+  /** Full 32-byte SHA-256 (0013 "Build-hash handshake"), hex-decoded from `WorldConfig.buildHash`. */
+  buildHash: Uint8Array
+  sessions: SessionTable
+}
+
+/** `SimHost.accept`'s own per-connection handshake bookkeeping (Deviations: kept out of
+ * `ConnSlot`-equivalent state since it only exists while `handshake` is given). */
+interface HandshakeConnState {
+  status: 'garbage' | 'awaiting-attach' | 'settled'
+  connectedAtMs: number
+}
+
+/** One resolved (secret hashed, `PlayerId` allocated or looked up) `Hello`, queued for `sim_attach`
+ * at the next tick boundary in arrival order (`pumpHandshakes`'s own doc comment). */
+interface QueuedAttach {
+  conn: ConnId
+  connection: Connection
+  playerId: number
+  joined: boolean
+  presence: Uint8Array | null
+  helloTail: Uint8Array
+}
+
+/** 0013 Client policy's own handshake analogue (Scope: "no `Hello` within 5 s, closes with
+ * `ProtocolError`"). */
+const HELLO_TIMEOUT_MS = 5000
+/** Scope: "Non-`Hello` messages before `Hello` are dropped silently (at most 8, then close)". */
+const MAX_GARBAGE_MESSAGES = 8
+
 type TimerServices = Pick<HostServices, 'clock' | 'timer'>
 
 /** The shared implementation, over an already-built [`SimInstance`] -- real or fake.
@@ -386,6 +471,12 @@ export function createSimHostFromInstance(
    * 5th argument, every existing 2-4-argument caller unaffected) -- without it (or without
    * `persistence`), `recover()` always reports `onFatal` immediately (nothing to recover from). */
   recoveryDeps?: RecoveryDeps,
+  /** docs/plan/28-sessions-and-reconnect.md: enables the real `Hello`/`Welcome` handshake in
+   * `accept()`. Optional, additive (a 7th argument, every existing 2-6-argument caller unaffected:
+   * `worker/sim.ts`'s own single-player topology keeps M15's implicit accept until a later
+   * milestone wires this there too) -- without it, `accept()` falls back to `sim.simConnect`
+   * exactly as before this milestone. */
+  handshake?: HandshakeDeps,
 ): SimHost {
   // Read once, here, not per tick (`SimInstance.tickHz`'s own doc comment): "the pacing arithmetic
   // stays in integer milliseconds" -- `Math.round`, not the raw division, so an odd rate (e.g. 30
@@ -423,6 +514,82 @@ export function createSimHostFromInstance(
   // free. Reused array, sized once at construction (`.claude/rules/hot-paths.md`), never
   // reallocated: `accept`/a future disconnect only ever write existing slots.
   const conns: (Connection | null)[] = new Array(MAX_CONNS).fill(null)
+
+  // -- M28: the real handshake (docs/plan/28-sessions-and-reconnect.md) -----------------------
+  // Per-connection handshake bookkeeping, only ever populated when `handshake` is given (Deviations
+  // above: `worker/sim.ts`'s single-player topology never reaches any of this).
+  const handshakeState = new Map<ConnId, HandshakeConnState>()
+  // Hello-arrival order (Planning decisions "Async digest, deterministic order"): pushed (as
+  // `null`) the instant a valid `Hello` clears the join-key/build-hash/capacity checks, resolved
+  // in place once the secret's digest (and, for a brand-new secret, the session-table write) has
+  // finished -- consumed from the front, in order, only once resolved, at the next tick boundary.
+  const attachQueue: (QueuedAttach | null)[] = []
+  // `serverInternals(...).handshakesSettled()`'s own source: every in-flight digest/allocate
+  // promise, removed as each settles (Seams).
+  const inFlightHandshakes = new Set<Promise<void>>()
+
+  function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+    if (a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+    return true
+  }
+
+  function closeHandshake(conn: ConnId, connection: Connection, code: number): void {
+    connection.close(code)
+    conns[conn] = null
+    handshakeState.delete(conn)
+  }
+
+  /** Runs once per `runOneTick()` (Deviations: cheap even every tick -- the server is outside
+   * 0016's zero-GC rule, `.claude/rules/hot-paths.md`, and this map is at most `MAX_CONNS` entries):
+   * closes any connection that has gone 5 s (0013 Client policy's own handshake analogue, Scope:
+   * "no `Hello` within 5 s") without ever producing a valid `Hello`, then drains `attachQueue` from
+   * the front while resolved, calling `sim.simAttach` and sending `Welcome` for each in
+   * Hello-arrival order. */
+  function pumpHandshakes(nowMs: number): void {
+    for (const [conn, state] of handshakeState) {
+      if (state.status === 'garbage' && nowMs - state.connectedAtMs >= HELLO_TIMEOUT_MS) {
+        const connection = conns[conn]
+        if (connection) closeHandshake(conn, connection, CloseCode.ProtocolError)
+      }
+    }
+    while (attachQueue.length > 0) {
+      const front = attachQueue[0]
+      if (!front) break
+      attachQueue.shift()
+      const entry = front
+      const state = handshakeState.get(entry.conn)
+      if (state?.status !== 'awaiting-attach') continue // superseded/closed meanwhile
+      const input = buildAttachInput({
+        playerId: entry.playerId,
+        epoch: 0,
+        joined: entry.joined,
+        presence: entry.presence,
+        helloTail: entry.helloTail,
+      })
+      let built: { len: number; bytes?: Uint8Array }
+      try {
+        built = sim.simAttach(entry.conn, input)
+      } catch {
+        closeHandshake(entry.conn, entry.connection, CloseCode.ProtocolError)
+        continue
+      }
+      if (built.len <= 0 || !built.bytes) {
+        closeHandshake(entry.conn, entry.connection, CloseCode.ProtocolError)
+        continue
+      }
+      const withLen = entry.connection as Connection & {
+        send: (cls: MsgClass, bytes: Uint8Array, len?: number) => void
+      }
+      withLen.send(MsgClass.ReliableOrdered, built.bytes, built.len)
+      state.status = 'settled'
+      entry.connection.onMessage = (bytes) => {
+        const withLenIn = entry.connection as Connection & { lastMessageLength?: number }
+        const len = withLenIn.lastMessageLength ?? bytes.length
+        sim.simAdmit(entry.conn, bytes, len)
+      }
+    }
+  }
 
   // docs/plan/13b-tick-timing-allocation.md (Deviations; ADR amending M13's per-tick decision):
   // `runOneTickTimed`'s own two `services.clock.now()` reads and `onFire`'s own one (below) each
@@ -464,6 +631,13 @@ export function createSimHostFromInstance(
    * connection, in `ConnId` order. No clock read here any more (Deviations): a tick's own overrun
    * is no longer measured individually. */
   function runOneTick(): void {
+    // docs/plan/28-sessions-and-reconnect.md Planning decisions "Async digest, deterministic
+    // order": consumed at *this* tick boundary, before anything else -- an attach's own
+    // `Joined`/`Connected` records must reach `pending_records` before `sim.simTick()` drains it
+    // below, the same "queued ... into the frame for T+1" contract every other connection event
+    // already has (host/mod.rs `connect`/`disconnect`). Zero cost when `handshake` was never given
+    // (`worker/sim.ts`'s single-player topology): `handshakeState` stays empty forever.
+    if (handshake) pumpHandshakes(services.clock.now())
     const seal = sim.simSealFrame()
     // `seal.bytes` is the whole persistent `Persist` region view (Orchestrator ruling 2), but
     // `logSink`'s own contract (`SimHost.logSink`'s doc comment: "exactly `len` bytes") is fixed at
@@ -652,6 +826,14 @@ export function createSimHostFromInstance(
     regionHash(conn) {
       return sim.simRegionHash(conn)
     },
+    async handshakesSettled() {
+      // A `while` (not one `Promise.all` snapshot): a settling digest can itself be replaced by a
+      // fresh one added meanwhile (a burst of connections landing back to back) -- loop until the
+      // set is genuinely empty, not just empty at the instant this was called.
+      while (inFlightHandshakes.size > 0) {
+        await Promise.all(inFlightHandshakes)
+      }
+    },
     async recover() {
       const wasRunning = running
       disarm()
@@ -737,31 +919,136 @@ export function createSimHostFromInstance(
       if (conn < 0) {
         throw new Error(`SimHost.accept: no free connection slot (MAX_CONNS = ${MAX_CONNS})`)
       }
-      const status = sim.simConnect(conn)
-      if (status !== Status.Ok) {
-        throw new Error(`sim_connect failed: status ${status}`)
-      }
       conns[conn] = connection
+
+      if (!handshake) {
+        // M15's implicit accept, unchanged (Deviations: `worker/sim.ts`'s single-player topology
+        // only, until a later milestone wires the real handshake there too).
+        const status = sim.simConnect(conn)
+        if (status !== Status.Ok) {
+          throw new Error(`sim_connect failed: status ${status}`)
+        }
+        connection.onMessage = (bytes) => {
+          const withLen = connection as Connection & { lastMessageLength?: number }
+          const len = withLen.lastMessageLength ?? bytes.length
+          inFlightAdmitConn = conn
+          sim.simAdmit(conn, bytes, len)
+          inFlightAdmitConn = null
+        }
+        connection.onClose = (_code) => {
+          sim.simDisconnect(conn)
+          conns[conn] = null
+        }
+        return conn
+      }
+
+      // docs/plan/28-sessions-and-reconnect.md: the real handshake. No `sim_connect`/`sim_attach`
+      // yet -- this connection has said nothing; `state.status` starts `'garbage'` (Scope: "no
+      // Hello within 5s" starts counting from acceptance, 0013 Client policy's own analogue).
+      const deps = handshake
+      const connectState: HandshakeConnState = {
+        status: 'garbage',
+        connectedAtMs: services.clock.now(),
+      }
+      handshakeState.set(conn, connectState)
+      let garbageCount = 0
+
+      connection.onClose = (_code) => {
+        const state = handshakeState.get(conn)
+        if (state?.status === 'settled') sim.simDetach(conn)
+        conns[conn] = null
+        handshakeState.delete(conn)
+      }
+
       connection.onMessage = (bytes) => {
-        // A `RingConnection` hands the same preallocated receive buffer every call and carries the
-        // real length on *its own* `lastMessageLength` (a side channel avoiding a per-message
-        // `subarray()`, docs/plan/15b-ring-connection-and-replica-rendering.md Deviations), read
-        // here synchronously (this callback runs inside `RingConnection.drainUplink`'s own loop,
-        // before the next iteration overwrites it). A generic 0009 `Connection` (a future
-        // socket-backed one, say) carries no such property, and `bytes.length` is then exactly the
-        // message length, as the interface itself implies.
         const withLen = connection as Connection & { lastMessageLength?: number }
         const len = withLen.lastMessageLength ?? bytes.length
-        // Planning decisions 2: `recover()`'s own only way to learn which connection an `Admit`-
-        // phase trap happened on -- set immediately before the one call that can trap, cleared
-        // immediately after it returns normally (never reached if it throws).
-        inFlightAdmitConn = conn
-        sim.simAdmit(conn, bytes, len)
-        inFlightAdmitConn = null
-      }
-      connection.onClose = (_code) => {
-        sim.simDisconnect(conn)
-        conns[conn] = null
+        const raw = len === bytes.length ? bytes : bytes.subarray(0, len)
+
+        const state = handshakeState.get(conn)
+        if (!state) return // closed already
+
+        if (state.status === 'settled') {
+          inFlightAdmitConn = conn
+          sim.simAdmit(conn, bytes, len)
+          inFlightAdmitConn = null
+          return
+        }
+        if (state.status === 'awaiting-attach') return // Welcome pending; nothing to do with more
+
+        // `state.status === 'garbage'`: the only message this connection has ever sent that
+        // matters is its first well-formed `Hello`.
+        let parsed: ReturnType<typeof parseHello>
+        try {
+          parsed = parseHello(raw)
+        } catch (e) {
+          if (!(e instanceof ProtocolError)) throw e
+          garbageCount++
+          if (garbageCount > MAX_GARBAGE_MESSAGES) {
+            closeHandshake(conn, connection, CloseCode.ProtocolError)
+          }
+          return
+        }
+
+        if (!bytesEqual(parsed.buildHash, deps.buildHash)) {
+          connection.send(
+            MsgClass.ReliableOrdered,
+            buildReject(RejectReason.VersionMismatch, deps.buildHash),
+          )
+          closeHandshake(conn, connection, rejectReasonCloseCode(RejectReason.VersionMismatch))
+          return
+        }
+        const joinKeyText = new TextDecoder().decode(parsed.joinKey)
+        if (joinKeyText !== deps.joinKey) {
+          connection.send(
+            MsgClass.ReliableOrdered,
+            buildReject(RejectReason.BadKey, deps.buildHash),
+          )
+          closeHandshake(conn, connection, rejectReasonCloseCode(RejectReason.BadKey))
+          return
+        }
+        // 0013 Planning decisions "Full counts concurrent sessions": every connection already past
+        // this point (awaiting-attach or settled) counts, this one not yet included.
+        let concurrent = 0
+        for (const s of handshakeState.values()) {
+          if (s.status === 'awaiting-attach' || s.status === 'settled') concurrent++
+        }
+        if (concurrent >= deps.maxPlayers) {
+          connection.send(MsgClass.ReliableOrdered, buildReject(RejectReason.Full, deps.buildHash))
+          closeHandshake(conn, connection, rejectReasonCloseCode(RejectReason.Full))
+          return
+        }
+
+        state.status = 'awaiting-attach'
+        const slotIndex = attachQueue.length
+        attachQueue.push(null)
+        const settle = (async () => {
+          const hashHex = await hashSecretHex(parsed.playerSecret)
+          // Synchronous from here to `sessions.create` (Deviations: no `await` in between), so two
+          // concurrently-resolving never-before-seen secrets can never race the same candidate id
+          // -- the first one's `create` is already visible to `highestPlayerId()` before the
+          // second's own lookup runs (JS's single-threaded execution between awaits).
+          let entry = deps.sessions.lookup(hashHex)
+          if (!entry) {
+            let candidate = deps.sessions.highestPlayerId() + 1
+            while (sim.simHasPlayer(candidate) === 1) candidate++
+            entry = deps.sessions.create(hashHex, candidate)
+            // Crash safety (Planning decisions): durable before the log ever records the join.
+            await deps.sessions.save()
+          }
+          const joined = sim.simHasPlayer(entry.playerId) === 0
+          const presence = entry.lastPresenceHex ? hexDecode(entry.lastPresenceHex) : null
+          attachQueue[slotIndex] = {
+            conn,
+            connection,
+            playerId: entry.playerId,
+            joined,
+            presence,
+            helloTail: parsed.helloTail,
+          }
+        })()
+        inFlightHandshakes.add(settle)
+        settle.finally(() => inFlightHandshakes.delete(settle))
       }
       return conn
     },
@@ -819,6 +1106,16 @@ export function worldServerTestHandle(server: WorldServer): SimHost {
   return h
 }
 
+/** docs/plan/28-sessions-and-reconnect.md Seams: `serverInternals(server).handshakesSettled()`,
+ * used by `createNetHarness`'s own `settle()`. A thin wrapper over `worldServerTestHandle`, kept
+ * as its own named function (rather than widening that one's return type) so a reader sees
+ * exactly which test-only surface a given call site needs. Test-only, `engine/test`'s own
+ * re-export: never imported by production code. */
+export function serverInternals(server: WorldServer): { handshakesSettled(): Promise<void> } {
+  const h = worldServerTestHandle(server)
+  return { handshakesSettled: () => h.handshakesSettled() }
+}
+
 export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldServer {
   const newInstance = (): EngineInstance =>
     instantiate(host.wasm, Role.Sim, buildSimInstanceConfig(cfg))
@@ -840,32 +1137,44 @@ export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldSe
   // itself has returned, so `worldServer` is always assigned by the time it actually reads it.
   let worldServer!: WorldServer
 
-  const ready: Promise<void> = Persistence.open(host.storage, cfg, newInstance).then((opened) => {
-    const h = createSimHostFromInstance(
-      wrapEngineInstance(opened.sim),
-      host,
-      opened.persistence,
-      opened.tick,
-    )
-    // 0024 §5: "`HostServices` gains `onFatal?`, fed from `SimHost.onFatal`; after it fires the
-    // server stops ticking, closes sockets, touches no file, and adds no protocol." `SimHost.stop()`
-    // is not called here: `recover()` (the only caller of `onFatal`) has already disarmed pacing
-    // itself before reporting fatal (`server.ts`'s own `recover()`, above) -- calling `stop()` again
-    // would re-run its snapshot/flush sequence against a world `onFatal`'s own doc comment says
-    // "touches no file" for.
-    h.onFatal = (f) => {
-      for (const c of acceptedConnections) c.close(0)
-      host.onFatal?.(f)
-    }
-    simHost = h
-    worldServerHandles.set(worldServer, h)
-    h.start()
-    for (const c of pendingConnections) {
-      acceptedConnections.push(c)
-      h.accept(c)
-    }
-    pendingConnections.length = 0
-  })
+  const ready: Promise<void> = Persistence.open(host.storage, cfg, newInstance).then(
+    async (opened) => {
+      // docs/plan/28-sessions-and-reconnect.md: loaded once per world, here (not per connection) --
+      // `SimHost.accept`'s own handshake reads/writes it through the same live `SessionTable`.
+      const sessions = await loadSessionTable(host.storage, worldKeys(cfg.worldId))
+      const h = createSimHostFromInstance(
+        wrapEngineInstance(opened.sim),
+        host,
+        opened.persistence,
+        opened.tick,
+        undefined,
+        {
+          joinKey: cfg.joinKey ?? '',
+          maxPlayers: cfg.maxPlayers ?? 8,
+          buildHash: hexDecode(cfg.buildHash),
+          sessions,
+        },
+      )
+      // 0024 §5: "`HostServices` gains `onFatal?`, fed from `SimHost.onFatal`; after it fires the
+      // server stops ticking, closes sockets, touches no file, and adds no protocol." `SimHost.stop()`
+      // is not called here: `recover()` (the only caller of `onFatal`) has already disarmed pacing
+      // itself before reporting fatal (`server.ts`'s own `recover()`, above) -- calling `stop()` again
+      // would re-run its snapshot/flush sequence against a world `onFatal`'s own doc comment says
+      // "touches no file" for.
+      h.onFatal = (f) => {
+        for (const c of acceptedConnections) c.close(0)
+        host.onFatal?.(f)
+      }
+      simHost = h
+      worldServerHandles.set(worldServer, h)
+      h.start()
+      for (const c of pendingConnections) {
+        acceptedConnections.push(c)
+        h.accept(c)
+      }
+      pendingConnections.length = 0
+    },
+  )
 
   worldServer = {
     ready,

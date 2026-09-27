@@ -19,8 +19,10 @@ use crate::client::{
 use crate::game::{Clocks, FrameView, Game, PlayerId};
 use crate::host::Host;
 use crate::predict::Prediction;
+use crate::session::{self, Hello};
 use crate::sim::{Applied, Rejected};
 use crate::view;
+use crate::wire::CameraReport;
 use crate::world::{CacheCapacity, ChunkCoord, ChunkDims, TILE_MAX, TILE_MIN, TilePos};
 use crate::world_access::WorldRead;
 use crate::worldgen::{GenCore, Pristine, Worldgen};
@@ -154,14 +156,23 @@ fn default_gen_workers() -> u32 {
 fn default_cache_chunks() -> u32 {
     DEFAULT_CACHE_CHUNKS
 }
-/// docs/plan/27-server-entrypoint-and-netcode-harness.md, M27 gate round 1: the pre-handshake
-/// source of "who am I" for a client instance -- default `1`, so a single browser client (still
-/// always `conn == 0`, `PlayerId = conn + 1`, M15b's own convention) is unaffected. M28's real
-/// handshake (`Welcome`, built in Rust by `sim_attach`) replaces this config field as the source of
-/// truth once it lands; this field stays for a client that connects before a `Welcome` ever
-/// arrives, if any such path still exists then.
-fn default_my_player_id() -> u32 {
-    1
+/// Parses a lowercase-hex string into exactly `N` bytes, all-zero on anything too short or
+/// non-hex (mirrors `host::mod`'s own `parse_build_hash`, generalised over the byte count: `secret`
+/// is 16 bytes, `build_hash` is 32) -- never a parse error, since a config this milestone builds
+/// before any real secret exists (a hand-rolled native/testkit config, say) still boots.
+fn parse_hex_bytes<const N: usize>(hex: &str) -> [u8; N] {
+    let bytes = hex.as_bytes();
+    let mut out = [0u8; N];
+    for (i, slot) in out.iter_mut().enumerate() {
+        let (Some(hi), Some(lo)) = (
+            bytes.get(i * 2).and_then(|b| (*b as char).to_digit(16)),
+            bytes.get(i * 2 + 1).and_then(|b| (*b as char).to_digit(16)),
+        ) else {
+            return [0u8; N];
+        };
+        *slot = ((hi << 4) | lo) as u8;
+    }
+    out
 }
 
 /// The `game` config shared by the `gen` and `client` roles of `GameInstance<G>` (0009's `seed`/
@@ -181,11 +192,21 @@ struct TerrainConfig<P> {
     /// Client role only: host dense-chunk cache size (0009 `WorldConfig.cacheChunks`).
     #[serde(default = "default_cache_chunks")]
     cache_chunks: u32,
-    /// Client role only: this connection's own `PlayerId` (M27 gate round 1, `default_my_player_id`'s
-    /// own doc comment: pre-handshake, `conn + 1` under M15's implicit accept). Ignored by the
-    /// `gen` role.
-    #[serde(default = "default_my_player_id")]
-    my_player_id: u32,
+    /// Client role only, docs/plan/28-sessions-and-reconnect.md (Scope: "the client worker config
+    /// carries `{ secret, joinKey: \"\", buildHash }`"): this device's own 128-bit identity secret,
+    /// lowercase hex (32 hex digits), `#[serde(default)]` all-zero so every config built before
+    /// this milestone (native tests, a hand-rolled fixture) still boots. Ignored by the `gen` role.
+    #[serde(default)]
+    secret: String,
+    /// Client role only: the invite link's own join key, plain UTF-8 text (`""` for single-player
+    /// and open servers, 0013). Ignored by the `gen` role.
+    #[serde(default)]
+    join_key: String,
+    /// Client role only: this build's own content hash, lowercase hex (64 hex digits, the full
+    /// SHA-256 0013's `Hello` carries -- twice `host::SimConfig::build_hash`'s own 128-bit prefix).
+    /// Ignored by the `gen` role.
+    #[serde(default)]
+    build_hash: String,
 }
 
 /// The client-role instance (docs/plan/13-sim-host-tick-loop.md Scope, extended by docs/plan/
@@ -255,6 +276,12 @@ pub struct ClientInstance<G: Game> {
     /// here instead means a game that only writes on change (the common case, e.g. a spring at
     /// rest) does not lose its last value between frames.
     presence: G::Presence,
+    /// docs/plan/28-sessions-and-reconnect.md: this device's own identity secret, join key and the
+    /// running build's own hash -- `TerrainConfig`'s own fields, retained so `client_hello` can
+    /// build a real `Hello` on demand (it takes no other input; Seams: "config -> Hello").
+    secret: [u8; 16],
+    join_key: String,
+    build_hash: [u8; 32],
 }
 
 impl<G: Game> ClientInstance<G> {
@@ -280,21 +307,21 @@ impl<G: Game> ClientInstance<G> {
         // with, since `Default::default()` itself takes no arguments.
         let mut client = G::Client::default();
         client.on_init(cfg.seed.0, &cfg.params);
+        let secret: [u8; 16] = parse_hex_bytes(&cfg.secret);
+        let join_key = cfg.join_key.clone();
+        let build_hash: [u8; 32] = parse_hex_bytes(&cfg.build_hash);
         let source = Pristine::<G::Worldgen>::new(cfg.seed.0, cfg.params);
-        // docs/plan/15b-ring-connection-and-replica-rendering.md (Planning decisions "PlayerId =
-        // conn + 1, not conn"), amended M27 gate round 1: `own_player` used to be `PlayerId(1)`
-        // unconditionally, correct only for a single-connection topology where `conn` is always
-        // `0` -- `cfg.my_player_id` (`default_my_player_id`'s own doc comment) is this milestone's
-        // own pre-handshake source for it, so a real netcode harness with several real connections
-        // gives each client instance its own real id. Still `PlayerId(1)` by default (a single
-        // browser client's own config never sets this field), so `Replica`'s own doc comment on
-        // `own_player` ("a real connection's usual path") is unaffected there. A real
-        // multi-connection handshake (M28) replaces this source entirely, once it exists.
+        // docs/plan/28-sessions-and-reconnect.md: `own_player` is `PlayerId(0)` ("none", `game::
+        // PlayerId`'s own doc comment) until `Welcome` arrives -- M15's implicit accept (`PlayerId
+        // = conn + 1`) and M27's own pre-handshake `my_player_id` config field are both deleted;
+        // `client_on_welcome` (below) is the one production caller of `Replica::set_own_player`
+        // now. `dispatch`/`on_action` already refuse to run before a session is live (M16's own
+        // rule, unaffected), so no caller ever observes this placeholder as if it meant something.
         let mut replica = crate::client::Replica::<G>::new(
             dims,
             Box::new(source),
             CacheCapacity::Chunks(cfg.cache_chunks),
-            PlayerId(cfg.my_player_id),
+            PlayerId(0),
         );
         // The silent trap (docs/plan/15b-ring-connection-and-replica-rendering.md, Planning
         // decisions): a store paired with an `Uploader` -- the one consumer of cache events,
@@ -318,6 +345,9 @@ impl<G: Game> ClientInstance<G> {
             camera_view: CachedCameraView::default(),
             last_frame_time_ms: 0.0,
             presence: G::Presence::default(),
+            secret,
+            join_key,
+            build_hash,
         })
     }
 }
@@ -397,6 +427,28 @@ where
         match self {
             GameInstance::Sim(h) => h.sim_disconnect(conn),
             _ => Status::WrongRole,
+        }
+    }
+
+    /// docs/plan/28-sessions-and-reconnect.md.
+    fn sim_attach(&mut self, conn: u32, input: &[u8], tx: &mut [u8]) -> Result<u32, Status> {
+        match self {
+            GameInstance::Sim(h) => h.sim_attach(conn, input, tx),
+            _ => Err(Status::WrongRole),
+        }
+    }
+
+    fn sim_detach(&mut self, conn: u32) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_detach(conn),
+            _ => Status::WrongRole,
+        }
+    }
+
+    fn sim_has_player(&mut self, player: u32) -> u32 {
+        match self {
+            GameInstance::Sim(h) => h.sim_has_player(player),
+            _ => 0,
         }
     }
 
@@ -1022,6 +1074,69 @@ where
         }
     }
 
+    /// docs/plan/28-sessions-and-reconnect.md: `session::Hello` built straight from this instance's
+    /// own retained config (`secret`/`join_key`/`build_hash`, `ClientInstance`'s own doc comment) --
+    /// no camera report exists yet at this point in a real connection's life (`client_hello` is
+    /// always the very first thing a client instance ever sends), so `Hello.camera` is a zeroed
+    /// `CameraReport`: harmless, since `sim_attach`'s own doc comment already treats a short/absent
+    /// camera in the "Hello tail" as "no initial camera yet", the same state a fresh `connect()`'d
+    /// `ConnSlot` already starts in.
+    fn client_hello(&mut self, tx: &mut [u8]) -> usize {
+        match self {
+            GameInstance::Client(c) => {
+                let hello = Hello {
+                    protocol_version: session::PROTOCOL_VERSION,
+                    build_hash: c.build_hash,
+                    join_key: c.join_key.as_bytes(),
+                    player_secret: c.secret,
+                    camera: CameraReport {
+                        center_x: 0,
+                        center_y: 0,
+                        half_w: 0,
+                        half_h: 0,
+                        vel_x: 0,
+                        vel_y: 0,
+                    },
+                    resume: None,
+                };
+                let mut sink = crate::bytes::SliceSink::new(tx);
+                session::write_hello(&mut sink, &hello);
+                sink.finish().unwrap_or(0)
+            }
+            _ => 0,
+        }
+    }
+
+    /// docs/plan/28-sessions-and-reconnect.md: decodes `Welcome` (`session::read_welcome`) and
+    /// applies it: `own_player` (`Replica::set_own_player`), the game's own per-frame presence
+    /// value plus the uplink sampler (`ClientCore::seed_presence`) when `Welcome` carried a sample,
+    /// and the lead estimator (`ClientCore::seed_lead_rtt_ms`) from the caller's own measured round
+    /// trip. `player_id`/`last_processed_action_seq` are echoed into `result` for the caller's own
+    /// `session_state`/`seq_seed` bookkeeping (`Instance::client_on_welcome`'s own doc comment).
+    fn client_on_welcome(&mut self, bytes: &[u8], rtt_ms: f64, result: &mut [u8]) -> Status {
+        match self {
+            GameInstance::Client(c) => {
+                let welcome = match session::read_welcome::<G>(bytes) {
+                    Ok(w) => w,
+                    Err(_) => return Status::Decode,
+                };
+                c.core.replica_mut().set_own_player(welcome.player_id);
+                if let Some(sample) = &welcome.presence {
+                    c.core.seed_presence(sample);
+                    c.presence = *sample;
+                }
+                c.core.seed_lead_rtt_ms(rtt_ms);
+                let Some(out) = result.get_mut(..8) else {
+                    return Status::BadLength;
+                };
+                out[0..4].copy_from_slice(&welcome.player_id.0.to_le_bytes());
+                out[4..8].copy_from_slice(&welcome.last_processed_action_seq.to_le_bytes());
+                Status::Ok
+            }
+            _ => Status::Unsupported,
+        }
+    }
+
     /// docs/plan/16-action-round-trip.md: `ClientCore::on_action`. `Status::Decode` on a
     /// malformed ring record; `Status::OutOfMemory` when the outbox is already at capacity
     /// (`client::ActionError`'s two variants -- untrusted/backstop cases only, since the ring
@@ -1141,10 +1256,15 @@ where
     /// widened with `predicted_tick` (`ClientCore::predicted_tick`, real from this milestone) and
     /// `ClientCore::last_tick_fraction`'s `f32` bits (`Instance::client_clock_stats`'s own doc
     /// comment explains why this call has no `t_ms` of its own to feed `HostClock` fresh).
+    /// docs/plan/28-sessions-and-reconnect.md (`ABI_VERSION` 26 -> 27): widened from 16 to 20
+    /// bytes, same call signature (`params: 0`) -- a fifth LE `u32`, `ClientCore::revealed
+    /// (camera_view.visible)` as `0`/`1` (`revealed`'s own doc comment: steps 3-5 consume it, this
+    /// milestone only lands the field). An old caller reading only the first 16 bytes is
+    /// unaffected; there is no old caller in this monorepo (TS and WASM ship together).
     fn client_clock_stats(&mut self, result: &mut [u8]) -> Status {
         match self {
             GameInstance::Client(c) => {
-                let Some(out) = result.get_mut(..16) else {
+                let Some(out) = result.get_mut(..20) else {
                     return Status::BadLength;
                 };
                 let s = c.core.last_summary();
@@ -1152,6 +1272,8 @@ where
                 out[4..8].copy_from_slice(&s.ack_seq.to_le_bytes());
                 out[8..12].copy_from_slice(&c.core.predicted_tick().0.to_le_bytes());
                 out[12..16].copy_from_slice(&c.core.last_tick_fraction().to_le_bytes());
+                let revealed = c.core.revealed(c.camera_view.visible);
+                out[16..20].copy_from_slice(&(revealed as u32).to_le_bytes());
                 Status::Ok
             }
             _ => Status::Unsupported,
@@ -1307,8 +1429,9 @@ mod tests {
     #[test]
     fn client_clock_stats_reports_last_applied_tick_and_ack_seq() {
         let mut inst = client_instance();
-        // Steps 4-6: widened to 16 bytes (`predicted_tick`, `tick_fraction`'s own `f32` bits).
-        let mut out = [0u8; 16];
+        // docs/plan/28-sessions-and-reconnect.md: widened to 20 bytes (a fifth LE `u32`,
+        // `revealed`).
+        let mut out = [0u8; 20];
         assert_eq!(inst.client_clock_stats(&mut out), Status::Ok);
         assert_eq!(u32::from_le_bytes(out[0..4].try_into().unwrap()), 0);
         assert_eq!(u32::from_le_bytes(out[4..8].try_into().unwrap()), 0);
@@ -1318,6 +1441,9 @@ mod tests {
         // `tick_fraction` is cached from `frame(t_ms)`'s own call (`ClientCore::tick_fraction`'s
         // doc comment); this raw test never calls `frame`, so it stays at its init value.
         assert_eq!(f32::from_le_bytes(out[12..16].try_into().unwrap()), 0.0);
+        // A fresh instance holds no chunks at all, so its default (single-point, origin) visible
+        // rectangle is never revealed.
+        assert_eq!(u32::from_le_bytes(out[16..20].try_into().unwrap()), 0);
 
         let mut buf = [0u8; 512];
         let mut sink = crate::bytes::SliceSink::new(&mut buf);

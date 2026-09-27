@@ -117,6 +117,14 @@ impl<G: Game> Replica<G> {
         self.own_player
     }
 
+    /// docs/plan/28-sessions-and-reconnect.md: `own_player` is learned for real from `Welcome`,
+    /// not fixed at construction any more (`ClientInstance::init`'s own doc comment on why `Replica
+    /// ::new` is still called with a placeholder `PlayerId` before any handshake has happened) --
+    /// `ClientCore::apply_welcome` is the one production caller.
+    pub(crate) fn set_own_player(&mut self, who: PlayerId) {
+        self.own_player = who;
+    }
+
     pub fn tick(&self) -> Tick {
         self.tick
     }

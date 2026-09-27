@@ -32,11 +32,21 @@ import { createBytePump } from '../net/pump.js'
 import { readU32LE, writeU32LE } from '../sab/bytes.js'
 import { ControlBlock, WORKER_CLIENT } from '../sab/control.js'
 import { createSabSet } from '../sab/layout.js'
-import type { Connection } from '../server.js'
+import { RingConsumer } from '../sab/ring.js'
+import { type Connection, MsgClass } from '../server.js'
 import { seedToHexU64 } from '../sim-config.js'
 import { createNetPump } from '../worker/client-net.js'
 import { GEN_RECORD_HEADER_BYTES, readI32LE, writeGenHeader } from '../worker/gen-record.js'
 import { createShell } from '../worker/shell.js'
+
+function hexEncode(bytes: Uint8Array): string {
+  let out = ''
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i] as number
+    out += b < 16 ? `0${b.toString(16)}` : b.toString(16)
+  }
+  return out
+}
 
 /** 0015 §5's own default per-role arenas (`src/client.ts`'s `DEFAULT_ARENA_BYTES`, not exported):
  * a headless client is its own topology, not a `createClient()` spawn, so it picks the same
@@ -72,6 +82,9 @@ export interface HeadlessClientStatus {
   tick: number
   predictedTick: number
   ackSeq: number
+  /** docs/plan/28-sessions-and-reconnect.md: this connection's own `PlayerId`, learned from
+   * `Welcome` (`0`, "none", before it arrives). */
+  ownPlayerId: number
 }
 
 export interface HeadlessClient {
@@ -102,7 +115,10 @@ export interface HeadlessClient {
   /** Drains the downlink ring into `on_frame`, generates synchronously on any gen miss, drains
    * `client_poll_ui()`, then flushes the uplink ring (`client_poll_uplink`'s own output) to the
    * attached `Connection` -- everything `stepFrame` does except writing the camera block and
-   * calling `frame()` itself. Useful right after construction/join, before any camera has been set. */
+   * calling `frame()` itself. Useful right after construction/join, before any camera has been set.
+   * docs/plan/28-sessions-and-reconnect.md: before the session has attached (`Welcome` applied),
+   * this instead looks for `Welcome` on the downlink and applies it (`client_on_welcome`) -- the
+   * normal `on_frame`/`client_poll_uplink` pump only starts once that succeeds. */
   pump(): void
   /** `pump()` plus a real client frame: writes the pending camera state into the camera block,
    * calls `frame(t_ms)` (so `ClientSide::frame`/`TerrainFeed::on_frame` produce presence and gen
@@ -116,14 +132,21 @@ export interface HeadlessClientOptions {
   /** The end this client talks to the host through -- raw (`memoryConnectionPair`) or conditioned
    * (`conditionLink`'s own `ends[i]`); `createNetHarness` decides which. */
   connection: Connection
-  /**
-   * M27 gate round 1: this client's own real `PlayerId`, under M15's implicit accept `connId + 1`
-   * -- `createNetHarness` passes `SimHost.accept`'s own return value plus one. Defaults to `1`
-   * (`game_instance.rs`'s own `default_my_player_id`), matching a single real connection's usual
-   * id, so a caller with exactly one client (`connId` always `0`) can omit this. M28's real
-   * handshake replaces this pre-handshake source once it lands.
-   */
-  myPlayerId?: number
+  /** docs/plan/28-sessions-and-reconnect.md: this device's own identity secret (16 bytes,
+   * `loadOrMintSecret`'s own shape) -- `client_hello`'s own source, via `TerrainConfig`'s `secret`
+   * config field (hex). Replaces M27's pre-handshake `myPlayerId` stopgap: the client's own
+   * `PlayerId` now comes from `Welcome` (`status().ownPlayerId`), not a config value. */
+  secret: Uint8Array
+  /** `""` for single-player and open servers (0013); `createNetHarness` mirrors `WorldConfig.
+   * joinKey`. */
+  joinKey?: string
+  /** The world's own build hash (32 bytes, full SHA-256) -- `WorldConfig.buildHash`, hex-decoded. */
+  buildHash: Uint8Array
+  /** docs/plan/28-sessions-and-reconnect.md: a virtual clock for the Hello -> Welcome round trip
+   * fed to `LeadEstimator.seed_rtt_ms` (M26, if ticked) -- `createNetHarness` passes its own
+   * `VirtualClock`. Omitted (`rttMs` always `0`) for a caller that does not care, e.g. a
+   * `connectRaw()`-driven scenario that never applies `Welcome` through this type at all. */
+  clock?: { now(): number }
 }
 
 function requireRegion(inst: EngineInstance, id: RegionId, what: string) {
@@ -140,7 +163,9 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
     game: {
       seed: hexSeed,
       params: opts.game.worldgen,
-      ...(opts.myPlayerId !== undefined ? { myPlayerId: opts.myPlayerId } : {}),
+      secret: hexEncode(opts.secret),
+      joinKey: opts.joinKey ?? '',
+      buildHash: hexEncode(opts.buildHash),
     },
   }
   const genConfig = {
@@ -153,9 +178,9 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
 
   const rx = requireRegion(inst, RegionId.Rx, 'Rx')
   const uiRegion = inst.region(RegionId.Ui)
-  const resultRegion = inst.region(RegionId.Result)
-  const downlinkRegion = inst.region(RegionId.Downlink)
-  const txRegion = inst.region(RegionId.Tx)
+  const resultRegion = requireRegion(inst, RegionId.Result, 'Result')
+  const downlinkRegion = requireRegion(inst, RegionId.Downlink, 'Downlink')
+  const txRegion = requireRegion(inst, RegionId.Tx, 'Tx')
   const genInRegion = inst.region(RegionId.GenIn)
   const genOutRegion = genInst.region(RegionId.GenOut)
   const cameraRegion = requireRegion(inst, RegionId.Camera, 'Camera')
@@ -181,11 +206,59 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
   const bytePump = createBytePump({ uplink: sabs.uplink, downlink: sabs.downlink })
   bytePump.attach(opts.connection)
 
+  // docs/plan/28-sessions-and-reconnect.md: a second `RingConsumer` over the same `downlink` SAB,
+  // used only before `Welcome` lands -- safe (`sab/ring.ts`'s own module doc comment: head/tail
+  // live in the ring's own control block, not per-instance state), since only one of this consumer
+  // and `netPump`'s own internal one is ever popped from at a time (this one stops being used the
+  // instant `attached` flips true, `pumpPreWelcome`'s own doc comment). `downlinkRegion` is also
+  // `on_frame`'s own destination (`Instance::client_on_welcome`'s doc comment: "same region
+  // `on_frame` reads"), so popping `Welcome` into it before any `Frame` traffic exists is safe.
+  const preWelcomeConsumer = new RingConsumer(sabs.downlink)
+  let attached = false
+  let ownPlayerId = 0
+  let helloSentAtMs = 0
+
+  /** Builds `Hello` (`client_hello`) and sends it directly over `opts.connection`, bypassing the
+   * uplink ring entirely (0009: `Hello` precedes any `UplinkBatch`, and `client_poll_uplink` has
+   * nothing to flush yet regardless). One-off, not a per-frame path (`.claude/rules/hot-paths.md`'s
+   * exemption for "one-time setup"). */
+  function sendHello(): void {
+    const len = inst.call0(inst.x.client_hello)
+    if (len <= 0) {
+      throw new Error(`HeadlessClient: client_hello failed: status ${-len}`)
+    }
+    helloSentAtMs = opts.clock?.now() ?? 0
+    opts.connection.send(MsgClass.ReliableOrdered, txRegion.u8.slice(0, len))
+  }
+
+  /** Pops at most one message off the downlink ring and applies it as `Welcome`
+   * (`client_on_welcome`); does nothing once `attached`. `Status.Decode` (a non-`Welcome` message,
+   * or a malformed one) is swallowed here -- the same "leaves state untouched" contract `on_frame`
+   * has, and there is nothing else this pump could usefully do with it before a session exists. */
+  function pumpPreWelcome(): void {
+    if (attached) return
+    for (;;) {
+      const len = preWelcomeConsumer.popInto(downlinkRegion.u8, 0)
+      if (len < 0) return
+      const rttMs = Math.max(0, (opts.clock?.now() ?? 0) - helloSentAtMs)
+      const status = inst.call2(inst.x.client_on_welcome, len, rttMs)
+      if (status === Status.Ok) {
+        attached = true
+        ownPlayerId = readU32LE(resultRegion.u8, 0)
+        const seqSeed = readU32LE(resultRegion.u8, 4)
+        netPump.seedFromWelcome(seqSeed)
+        return
+      }
+    }
+  }
+
+  sendHello()
+
   const clockView = new ClockBlockView(sabs.clockBlock)
   // Sized 7, matching `readClockBlockInto`'s own `scratchFieldsView()` (the seventh slot is
   // `tickFraction`'s raw bits, unused here -- `CLOCK_FIELD` has no entry for it, `clock-block.ts`'s
   // own doc comment).
-  const clockScratch = new Uint32Array(7)
+  const clockScratch = new Uint32Array(8)
 
   const cameraState = new CameraState()
   const cameraWriter = new CameraBlockView(
@@ -245,14 +318,18 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
 
   function readClock(): void {
     readClockBlockInto(clockView, clockScratch)
-    if (!seeded && clockScratch[CLOCK_FIELD.SessionState] === SessionState.Live) {
+    if (!seeded && clockScratch[CLOCK_FIELD.SessionState] === SessionState.Online) {
       seeded = true
       nextSeq = (clockScratch[CLOCK_FIELD.SeqSeed] as number) + 1
     }
   }
 
   function pump(): void {
-    bytePump.drain() // retry any downlink backpressure before this wake's own on_frame drain
+    bytePump.drain() // retry any downlink backpressure before this wake's own drain
+    if (!attached) {
+      pumpPreWelcome()
+      if (!attached) return // still waiting on Welcome; nothing else to pump yet
+    }
     netPump.pump()
     pumpGenSync()
     pollUi()
@@ -262,7 +339,7 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
 
   function dispatch(action: unknown): number {
     readClock()
-    if (clockScratch[CLOCK_FIELD.SessionState] !== SessionState.Live) {
+    if (clockScratch[CLOCK_FIELD.SessionState] !== SessionState.Online) {
       throw new Error('engine: dispatch before ready')
     }
     const candidateSeq = nextSeq
@@ -326,10 +403,11 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
     status() {
       readClock()
       return {
-        live: clockScratch[CLOCK_FIELD.SessionState] === SessionState.Live,
+        live: clockScratch[CLOCK_FIELD.SessionState] === SessionState.Online,
         tick: clockScratch[CLOCK_FIELD.AuthoritativeTick] as number,
         predictedTick: clockScratch[CLOCK_FIELD.PredictedTick] as number,
         ackSeq: clockScratch[CLOCK_FIELD.AckSeq] as number,
+        ownPlayerId,
       }
     },
     pump,

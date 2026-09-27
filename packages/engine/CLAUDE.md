@@ -22,7 +22,7 @@ The one publishable package (working name `engine`, private for now). Layout and
 
 ## The ABI
 
-`crates/engine/src/abi/registry.rs` is the single owner and states the rule. Adding to the ABI is one commit: the extern in `export_instance!` plus a defaulted `Instance` method there, the row in `ABI_EXPORTS` (or the constant) in `src/abi.ts`, and `ABI_VERSION` bumped in both. Numbers are appended, never reused. `pnpm test wasm -t "abi registry"` compares the two files and every built fixture; a new *import* is an ADR amendment (0014 §3).
+`crates/engine/src/abi/registry.rs` is the single owner and states the rule. Adding to the ABI is one commit: the extern in `export_instance!` plus a defaulted `Instance` method there, the row in `ABI_EXPORTS` (or the constant) in `src/abi.ts`, and `ABI_VERSION` bumped in both. Numbers are appended, never reused. `pnpm test wasm -t "abi registry"` compares the two files and every built fixture; a new *import* is an ADR amendment (0014 §3). Sessions (docs/plan/28-sessions-and-reconnect.md): `src/host/handshake.ts`'s `CloseCode` is the only signal a non-parsing net worker acts on; `src/host/sessions.ts` is the session table, `src/client/secret.ts` is `loadOrMintSecret()`.
 
 ## Commands
 

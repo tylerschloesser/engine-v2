@@ -25,8 +25,9 @@ test('clock_block: write then read round-trips every field', () => {
     seqSeed: 3,
     ackSeq: 3,
     tickFraction: 0.25,
+    revealed: 0,
   })
-  const out = new Uint32Array(7)
+  const out = new Uint32Array(8)
   expect(readClockBlockInto(reader, out)).toBe(true)
   expect(out[CLOCK_FIELD.AuthoritativeTick]).toBe(7)
   expect(out[CLOCK_FIELD.PredictedTick]).toBe(7)
@@ -34,6 +35,7 @@ test('clock_block: write then read round-trips every field', () => {
   expect(out[CLOCK_FIELD.SessionState]).toBe(1)
   expect(out[CLOCK_FIELD.SeqSeed]).toBe(3)
   expect(out[CLOCK_FIELD.AckSeq]).toBe(3)
+  expect(out[CLOCK_FIELD.Revealed]).toBe(0)
   // docs/plan/26-prediction-rendering-and-clocks.md steps 4-6: the one field with no `CLOCK_FIELD`
   // entry (`clock-block.ts`'s own doc comment) -- read back through the reinterpreting view.
   expect(reader.scratchFieldsFloatView()[0]).toBeCloseTo(0.25)
@@ -60,14 +62,15 @@ test('clock_block: a read that never sees an even seq word exhausts its retries 
     seqSeed: 0,
     ackSeq: 0,
     tickFraction: 0,
+    revealed: 0,
   })
   // Force the seq word odd, simulating a writer paused between its own `begin`/`end` (a real
   // cross-thread race would see this transiently; here it is held, the worst case).
   Atomics.store(writer.seqWord(), 0, 1)
 
-  const out = new Uint32Array([9, 9, 9, 9, 9, 9, 9]) // sentinel: must survive a failed read untouched
+  const out = new Uint32Array([9, 9, 9, 9, 9, 9, 9, 9]) // sentinel: must survive a failed read untouched
   expect(readClockBlockInto(reader, out)).toBe(false)
-  expect(Array.from(out)).toEqual([9, 9, 9, 9, 9, 9, 9])
+  expect(Array.from(out)).toEqual([9, 9, 9, 9, 9, 9, 9, 9])
 })
 
 test('clock_block: a second write is what a second read sees', () => {
@@ -82,6 +85,7 @@ test('clock_block: a second write is what a second read sees', () => {
     seqSeed: 0,
     ackSeq: 0,
     tickFraction: 0,
+    revealed: 0,
   })
   writeClockBlock(writer, {
     authoritativeTick: 9,
@@ -91,8 +95,9 @@ test('clock_block: a second write is what a second read sees', () => {
     seqSeed: 5,
     ackSeq: 8,
     tickFraction: 0,
+    revealed: 0,
   })
-  const out = new Uint32Array(7)
+  const out = new Uint32Array(8)
   expect(readClockBlockInto(reader, out)).toBe(true)
   expect(out[CLOCK_FIELD.AuthoritativeTick]).toBe(9)
   expect(out[CLOCK_FIELD.AckSeq]).toBe(8)

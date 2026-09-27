@@ -1013,7 +1013,7 @@ export function createClient(options: ClientOptions): Client {
   // raw bits, sized only so `readClockBlockInto`'s own `.set()` has room -- `CLOCK_FIELD` has no
   // entry for it on purpose (`clock-block.ts`'s own doc comment): read it back through
   // `clockView.scratchFieldsFloatView()` after the same call, never through `clockScratch` itself.
-  const clockScratch = new Uint32Array(7)
+  const clockScratch = new Uint32Array(8)
 
   // `dispatch`'s own producer, wake target `WORKER_CLIENT` (Scope: "then Atomics.notify of the
   // client worker" -- `RingProducer`'s own `wake` option does this on every successful push, the
@@ -1059,7 +1059,7 @@ export function createClient(options: ClientOptions): Client {
     persistGestureSeen = true
     tryPersist()
     readClockBlockInto(clockView, clockScratch)
-    if (at(clockScratch, CLOCK_FIELD.SessionState) !== SessionState.Live) {
+    if (at(clockScratch, CLOCK_FIELD.SessionState) !== SessionState.Online) {
       throw new Error('engine: dispatch before ready')
     }
     const candidateSeq = nextSeq
@@ -1084,7 +1084,7 @@ export function createClient(options: ClientOptions): Client {
     return new Promise((resolve) => {
       function poll(): void {
         readClockBlockInto(clockView, clockScratch)
-        if (at(clockScratch, CLOCK_FIELD.SessionState) === SessionState.Live) {
+        if (at(clockScratch, CLOCK_FIELD.SessionState) === SessionState.Online) {
           nextSeq = at(clockScratch, CLOCK_FIELD.SeqSeed) + 1
           resolve()
           return

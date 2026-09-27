@@ -35,7 +35,17 @@ import type { Shell } from './shell.js'
  * same shape `worker/client.ts`'s own `FRAME_ARG` already uses for `frame(t_ms)`. */
 const POLL_UPLINK_ARG = 0
 
-export type NetPump = { pump(): void }
+export type NetPump = {
+  pump(): void
+  /** docs/plan/28-sessions-and-reconnect.md (Scope: "seq_seed/session_state in the clock block are
+   * set from `Welcome` instead of the first frame's `ack_seq`, M16's interim rule"): the caller
+   * (whoever just applied `client_on_welcome`, e.g. `HeadlessClient`) calls this once, right after
+   * a successful attach and before this pump's own `pump()` ever runs for the first time. Writes
+   * the clock block immediately (so a `dispatch()` right after `Welcome`, before any real frame has
+   * arrived, already sees a live session and the right `seq` baseline) and marks this pump "already
+   * seeded", so `pump()`'s own first-frame bootstrap (below) never re-seeds it from `ack_seq`. */
+  seedFromWelcome(seqSeed: number): void
+}
 
 /**
  * Built once at setup; `pump()` itself allocates nothing. `downlink`/`tx` are `null` only for a
@@ -73,10 +83,11 @@ export function createNetPump(
     authoritativeTick: 0,
     predictedTick: 0,
     ticksPerSecond,
-    sessionState: SessionState.Connecting,
+    sessionState: SessionState.Handshaking,
     seqSeed: 0,
     ackSeq: 0,
     tickFraction: 0,
+    revealed: 0,
   }
   let live = false
 
@@ -107,21 +118,34 @@ export function createNetPump(
       // 0012 "Two clocks") and `tick_fraction` (`ClientCore::last_tick_fraction`'s bits).
       const predictedTick = readU32LE(result.u8, 8)
       const tickFraction = tickFractionReader.read(result.u8, 12)
+      const revealed = readU32LE(result.u8, 16)
+      // docs/plan/28-sessions-and-reconnect.md: `live`/`seqSeed`/`sessionState` are now seeded by
+      // `seedFromWelcome` (below), called once by the caller right after a successful `Welcome`,
+      // *before* this pump's own first `pump()` call -- this bootstrap-from-the-first-frame path
+      // (M16's interim rule) is unreachable in production from this milestone on, and kept only so
+      // a caller that never calls `seedFromWelcome` (a hand-rolled fixture, an old test) still goes
+      // live eventually rather than dispatch()ing forever.
       if (!live) {
-        // PRE-PLAN §10 / Planning decisions "How main learns the `seq` seed": the first frame's
-        // own `ack_seq` (the host's `last_seq` for this player) until M28 switches the source to
-        // `Welcome`. Read exactly once, the instant a session goes live.
         live = true
         clockFields.seqSeed = ackSeq
-        clockFields.sessionState = SessionState.Live
+        clockFields.sessionState = SessionState.Online
       }
       clockFields.authoritativeTick = tick
       clockFields.predictedTick = predictedTick
       clockFields.ackSeq = ackSeq
       clockFields.tickFraction = tickFraction
+      clockFields.revealed = revealed
       writeClockBlock(clockView, clockFields)
     }
   }
 
-  return { pump }
+  return {
+    pump,
+    seedFromWelcome(seqSeed) {
+      live = true
+      clockFields.seqSeed = seqSeed
+      clockFields.sessionState = SessionState.Online
+      writeClockBlock(clockView, clockFields)
+    },
+  }
 }

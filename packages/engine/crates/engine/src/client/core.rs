@@ -20,7 +20,7 @@ use crate::wire::{
     read_chunk_deltas, read_global, read_own_player,
 };
 use crate::wire::{CameraReport, FrameReader};
-use crate::world::{ChunkCoord, Tile};
+use crate::world::{ChunkCoord, ChunkRect, Tile, TileRect};
 use crate::world_access::{WorldRead, chunk_of};
 use crate::{bytes::ByteReader, bytes::SliceSink, wire::EntityDeltaOp};
 
@@ -511,6 +511,44 @@ impl<G: Game> ClientCore<G> {
         }
     }
 
+    /// docs/plan/28-sessions-and-reconnect.md: M19's own Provides named this method ("M28 calls it
+    /// from `Welcome`"), left unbuilt by M19 itself (no caller existed in that cut) -- this is that
+    /// caller. Primes the uplink sampler with the session table's own last-known sample (`Welcome`'s
+    /// `presence` field, echoed back from `PresenceTable::restore` host-side) exactly like
+    /// [`Self::set_presence`] does for a fresh one: since the "last actually sent" bookkeeping is
+    /// still unset at this point (a brand-new `ClientCore`, this milestone's own "Welcome, then
+    /// attach the byte pump" ordering), [`Self::presence_due`] reads the restored sample as "changed",
+    /// which is correct -- the host's own copy is this same value already (it is where the sample
+    /// came from), but re-sending it once on the first real uplink is harmless and keeps this
+    /// sampler's own invariant ("current == last sent, once caught up") simple rather than adding a
+    /// third state. The game's own per-frame `G::Presence` value (`game_instance::ClientInstance
+    /// ::presence`, outside `ClientCore`) is seeded separately, by the same caller.
+    pub fn seed_presence(&mut self, sample: &G::Presence) {
+        self.set_presence(sample);
+    }
+
+    /// docs/plan/28-sessions-and-reconnect.md (0013 "Join is late join", last sentence): true once
+    /// every chunk of `visible` is both held by the replica (entered via `ChunkEnterPristine` or
+    /// `ChunkSnapshots`) and locally generated (`TerrainStore::is_cached`, the same "resident in
+    /// the client's cache" predicate `client_chunk_hash`'s own `Status::NotCached` reads) -- a
+    /// pristine-entered chunk is held immediately but not necessarily generated yet (`TerrainFeed`
+    /// materializes it asynchronously), so both checks are needed. `visible` is the caller's own
+    /// tile-space rectangle (`game_instance.rs`'s `CachedCameraView::visible`, `FrameView::
+    /// visible()`'s own "visible rectangle plus a 2-tile margin"): this method takes no camera
+    /// state of its own. Steps 3-5 are the first consumer (M29 gates the first terrain draw on
+    /// it); this milestone only lands the method and its clock-block word.
+    pub fn revealed(&self, visible: TileRect) -> bool {
+        let min_chunk = chunk_of::<G>(visible.min);
+        let max_chunk = chunk_of::<G>(visible.max);
+        let rect = ChunkRect::new(min_chunk, max_chunk);
+        for chunk in rect.iter() {
+            if !self.replica.is_held(chunk) || !self.replica.terrain().is_cached(chunk) {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Whether [`Self::poll_uplink`] should attach the current presence sample to the next batch
     /// (0010 "Rates": "presence sample at <= 10 Hz, on change"; Planning decisions: "'on change'
     /// means the encoded bytes differ from the last sent sample" and "the final at-rest sample ...
@@ -829,6 +867,7 @@ mod tests {
     use crate::wire::{ActionResultsWriter, FrameHeader, FrameWriter, SectionId};
     use crate::world::{
         CacheCapacity, ChunkCoord, ChunkDims, PristineSource, PrototypeId, Registry, Tile, TilePos,
+        TileRect,
     };
     use crate::worldgen::Worldgen;
 
@@ -1061,5 +1100,31 @@ mod tests {
         let mut got2 = Vec::new();
         c.drain_results(|seq, _| got2.push(seq));
         assert!(got2.is_empty());
+    }
+
+    /// `revealed()`: `false` on a fresh instance (nothing held), `false` once the chunk is held
+    /// but not yet generated (`apply_enter_pristine` alone), `true` only once it is also cached
+    /// (a `tile()` read materializes it). Inject-fail-revert: swapping the final assertion's own
+    /// `assert!` for `assert!(!...)` makes this fail with `left: true` (the chunk really is both
+    /// held and cached by then); reverted.
+    #[test]
+    fn revealed_requires_held_and_cached() {
+        let mut c = client();
+        let one_tile = TileRect::new(TilePos::new(0, 0), TilePos::new(0, 0));
+        assert!(!c.revealed(one_tile), "nothing held yet");
+
+        c.replica_mut().apply_enter_pristine(ChunkCoord::new(0, 0));
+        assert!(
+            !c.revealed(one_tile),
+            "held but not yet generated (cache empty)"
+        );
+
+        let _ = c.replica().terrain().tile(TilePos::new(0, 0));
+        assert!(c.revealed(one_tile), "held and now cached");
+
+        // A rectangle spanning a second, never-entered chunk is not revealed even though the
+        // first one now is.
+        let two_chunks = TileRect::new(TilePos::new(0, 0), TilePos::new(1000, 0));
+        assert!(!c.revealed(two_chunks));
     }
 }

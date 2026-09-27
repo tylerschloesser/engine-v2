@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 25;
+pub const ABI_VERSION: u32 = 27;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -233,6 +233,35 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
+    /// docs/plan/28-sessions-and-reconnect.md (`ABI_VERSION` 25 -> 26): the real handshake join/
+    /// reconnect path, replacing `sim_connect`'s implicit accept for every connection the host's
+    /// own TS handshake (`host/handshake.ts`) drives. `input` is the whole `Rx` region view, first
+    /// `len` bytes meaningful (mirrors `sim_admit`): `player_id varint · epoch u32 · joined u8 ·
+    /// presence (has u8 + len varint + bytes)? · hello_tail` (`host::Host::attach`'s own doc
+    /// comment has the exact layout). `tx` is the whole `Tx` region (same crossing shape as
+    /// `sim_build_frame`): on success, `Welcome` bytes are written there and their length returned.
+    fn sim_attach(&mut self, _conn: u32, _input: &[u8], _tx: &mut [u8]) -> Result<u32, Status> {
+        Err(Status::Unsupported)
+    }
+
+    /// docs/plan/28-sessions-and-reconnect.md: frees `conn`'s slot, the same as `sim_disconnect`
+    /// (`host::Host::disconnect`) -- a distinct export name so the handshake path (`sim_attach`)
+    /// and its own teardown pair cleanly, without retiring `sim_disconnect` (still real, still used
+    /// by every existing `sim_connect`-based caller: native tests, `testkit::Loopback`, recovery).
+    fn sim_detach(&mut self, _conn: u32) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/28-sessions-and-reconnect.md: `host::Host::has_player` -- `1`/`0`, whether this
+    /// world's own `Store` already has a player slot for `player` (0013 Planning decisions: "Joined
+    /// vs Connected is decided by the sim, not the table"). The caller (TS handshake) asks this
+    /// before `sim_attach`, both to fill that call's own `joined` byte and to find the next free
+    /// `PlayerId` for an unknown secret (probing upward from the session table's own max until this
+    /// returns `0`).
+    fn sim_has_player(&mut self, _player: u32) -> u32 {
+        0
+    }
+
     fn sim_tick(&mut self) -> Status {
         Status::Unsupported
     }
@@ -377,6 +406,34 @@ pub trait Instance: Sized + 'static {
     /// the same shape `frame`'s own `t_ms` already uses).
     fn client_poll_uplink(&mut self, _t_ms: u32, _out: &mut [u8]) -> usize {
         0
+    }
+
+    /// docs/plan/28-sessions-and-reconnect.md (`ABI_VERSION` 25 -> 26): builds `Hello` from the
+    /// client role's own config (`secret`/`joinKey`/`buildHash`, `TerrainConfig`'s own doc
+    /// comment) into `tx` (the whole `Tx` region, same crossing shape as `client_poll_uplink`),
+    /// returning its length. Config -> `Hello`, not a wire decode of anything: this export takes
+    /// no other input, and a caller may call it more than once (idempotent; every real caller
+    /// calls it exactly once, before attaching the connection's normal byte pump).
+    fn client_hello(&mut self, _tx: &mut [u8]) -> usize {
+        0
+    }
+
+    /// docs/plan/28-sessions-and-reconnect.md: applies one `Welcome` message (`bytes`, the first
+    /// `len` bytes of `RegionId::Downlink` -- same region `on_frame` reads, since both are
+    /// host-to-client messages) into the client role's own state: `Replica::set_own_player`,
+    /// `ClientCore::seed_presence` when `Welcome` carried a sample, and `ClientCore::
+    /// seed_lead_rtt_ms` (M26) from `rtt_ms` -- the caller's own measured `Hello` -> `Welcome`
+    /// elapsed time (a plain `f64` argument, not read from any region: this call has no `CameraBlock`
+    /// in scope the way `client_poll_uplink`'s own `t_ms` trick relies on, and the measurement is a
+    /// one-off, not a per-frame value). `session_state`/`seq_seed` stay TS-derived (`worker/
+    /// client-net.ts`'s own doc comment: "session_state/seq_seed bookkeeping lives here"), seeded
+    /// from this call's own `result` output -- `player_id`/`last_processed_action_seq`, two LE
+    /// `u32` (the only two `Welcome` fields a caller cannot otherwise recover: everything else in
+    /// `Welcome` is either opaque to TS, `Codec`-encoded worldgen params, or not yet consumed this
+    /// milestone). `Status::Decode` on a malformed message, leaving the client's session state
+    /// untouched (mirrors `on_frame`'s own "validate first" contract).
+    fn client_on_welcome(&mut self, _bytes: &[u8], _rtt_ms: f64, _result: &mut [u8]) -> Status {
+        Status::Unsupported
     }
 
     /// docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test`'s `hostRegionHash`:
@@ -766,6 +823,18 @@ macro_rules! export_instance {
             $crate::abi::sim_disconnect(&__ENGINE_SLOT, conn) as u32
         }
         #[unsafe(no_mangle)]
+        pub extern "C" fn sim_attach(conn: u32, len: u32) -> i32 {
+            $crate::abi::sim_attach(&__ENGINE_SLOT, conn, len)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_detach(conn: u32) -> u32 {
+            $crate::abi::sim_detach(&__ENGINE_SLOT, conn) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_has_player(player: u32) -> u32 {
+            $crate::abi::sim_has_player(&__ENGINE_SLOT, player)
+        }
+        #[unsafe(no_mangle)]
         pub extern "C" fn sim_tick() -> u32 {
             $crate::abi::sim_tick(&__ENGINE_SLOT) as u32
         }
@@ -918,6 +987,14 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn client_poll_uplink(t_ms: f64) -> i32 {
             $crate::abi::client_poll_uplink(&__ENGINE_SLOT, t_ms)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_hello() -> i32 {
+            $crate::abi::client_hello(&__ENGINE_SLOT)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_on_welcome(len: u32, rtt_ms: f64) -> u32 {
+            $crate::abi::client_on_welcome(&__ENGINE_SLOT, len, rtt_ms) as u32
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_region_hash(conn: u32) -> u32 {

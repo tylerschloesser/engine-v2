@@ -195,3 +195,63 @@ export function parseHello(bytes: Uint8Array): ParsedHello {
     helloTail,
   }
 }
+
+/** Unsigned LEB128 (`crate::bytes::ByteSink::put_varint`'s own shape), used only for `sim_attach`'s
+ * input below -- off the tick path (once per connection), so a small heap array here is fine. */
+function encodeVarint(value: number): Uint8Array {
+  const bytes: number[] = []
+  let v = value >>> 0
+  for (;;) {
+    const b = v & 0x7f
+    v >>>= 7
+    if (v === 0) {
+      bytes.push(b)
+      break
+    }
+    bytes.push(b | 0x80)
+  }
+  return new Uint8Array(bytes)
+}
+
+/** `sim_attach`'s own input-region layout (Provides: "`player_id, epoch, joined, last presence,
+ * Hello tail`"; `host::Host::attach`'s own doc comment, Rust): `player_id varint · epoch u32 ·
+ * joined u8 · presence: has_presence u8 + (len varint + bytes)? · hello_tail`. Pure: the caller
+ * (`SimHost.accept`'s own handshake driver) already resolved `playerId`/`joined`/`presence` from
+ * the session table and `sim_has_player` before calling this. */
+export function buildAttachInput(opts: {
+  playerId: number
+  epoch: number
+  joined: boolean
+  presence: Uint8Array | null
+  helloTail: Uint8Array
+}): Uint8Array {
+  const playerIdBytes = encodeVarint(opts.playerId)
+  const epochBytes = new Uint8Array(4)
+  new DataView(epochBytes.buffer).setUint32(0, opts.epoch, true)
+  const presenceLenBytes = opts.presence ? encodeVarint(opts.presence.length) : new Uint8Array(0)
+  const presenceBytes = opts.presence ?? new Uint8Array(0)
+  const total =
+    playerIdBytes.length +
+    epochBytes.length +
+    1 + // joined
+    1 + // has_presence
+    presenceLenBytes.length +
+    presenceBytes.length +
+    opts.helloTail.length
+  const out = new Uint8Array(total)
+  let off = 0
+  out.set(playerIdBytes, off)
+  off += playerIdBytes.length
+  out.set(epochBytes, off)
+  off += epochBytes.length
+  out[off] = opts.joined ? 1 : 0
+  off += 1
+  out[off] = opts.presence ? 1 : 0
+  off += 1
+  out.set(presenceLenBytes, off)
+  off += presenceLenBytes.length
+  out.set(presenceBytes, off)
+  off += presenceBytes.length
+  out.set(opts.helloTail, off)
+  return out
+}

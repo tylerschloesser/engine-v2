@@ -26,11 +26,26 @@ export const CLOCK_OFF_ACK_SEQ = 20
 /** M26 steps 4-6: an `f32`, read/written through a `Float32Array` view over the same bytes (every
  * other field here is a `u32`). */
 export const CLOCK_OFF_TICK_FRACTION = 24
-/** Bytes of the seven fields this milestone owns (not the whole 32-byte data region). */
-export const CLOCK_FIELDS_BYTES = 28
+/** docs/plan/28-sessions-and-reconnect.md Seams: "the `revealed` clock-block word" -- the eighth
+ * and last slot the 32-byte data region has room for (this file's own module doc comment: "stays
+ * reserved for `revealed`"). `0`/`1` as a `u32` (`ClientCore::revealed()`'s own boolean, crossed
+ * the same "numbers only" way every other field here is): true once every chunk of the visible
+ * rectangle is both held by the replica and locally generated (M29 gates the first terrain draw on
+ * it; steps 3-5 are the first consumer, this milestone only lands the field). */
+export const CLOCK_OFF_REVEALED = 28
+/** Bytes of all eight fields this file owns -- the whole 32-byte data region. */
+export const CLOCK_FIELDS_BYTES = 32
 
-/** `session_state` (Scope: "0 connecting, 1 live"). */
-export const SessionState = { Connecting: 0, Live: 1 } as const
+/** `session_state` (docs/plan/28-sessions-and-reconnect.md Seams, extending M16's `0 Connecting, 1
+ * Live`): `0 Handshaking | 1 Online | 2 Rejected(reason) | 3 Superseded` (M28b adds `Resyncing`).
+ * `Handshaking`/`Online` keep M16's own `0`/`1` values (`Connecting`/`Live` renamed, not
+ * renumbered) so a reader that only ever compared against `1` for "live" is unaffected. */
+export const SessionState = {
+  Handshaking: 0,
+  Online: 1,
+  Rejected: 2,
+  Superseded: 3,
+} as const
 export type SessionState = (typeof SessionState)[keyof typeof SessionState]
 
 export type ClockFields = {
@@ -42,6 +57,8 @@ export type ClockFields = {
   ackSeq: number
   /** M26 steps 4-6: real from this milestone on (`ClientCore::last_tick_fraction`). */
   tickFraction: number
+  /** docs/plan/28-sessions-and-reconnect.md: `0`/`1`, `ClientCore::revealed()`'s own value. */
+  revealed: number
 }
 
 const MAX_RETRIES = 8
@@ -57,6 +74,8 @@ export class ClockBlockView {
   /** M26 steps 4-6: the one non-`u32` field here -- a plain `Float32Array` view over the same SAB
    * bytes, same construction shape as every other field. */
   private readonly tickFraction: Float32Array
+  /** docs/plan/28-sessions-and-reconnect.md: `ClientCore::revealed()`'s own `u32` (`0`/`1`). */
+  private readonly revealed: Uint32Array
   private readonly bytes: Uint8Array
   private readonly scratch: Uint8Array
   /** A view over `scratch`'s own (non-shared) buffer, built once here so a read never allocates a
@@ -77,9 +96,10 @@ export class ClockBlockView {
     this.seqSeed = new Uint32Array(sab, base + CLOCK_OFF_SEQ_SEED, 1)
     this.ackSeq = new Uint32Array(sab, base + CLOCK_OFF_ACK_SEQ, 1)
     this.tickFraction = new Float32Array(sab, base + CLOCK_OFF_TICK_FRACTION, 1)
+    this.revealed = new Uint32Array(sab, base + CLOCK_OFF_REVEALED, 1)
     this.bytes = new Uint8Array(sab, 0, base + CLOCK_FIELDS_BYTES)
     this.scratch = new Uint8Array(base + CLOCK_FIELDS_BYTES)
-    this.scratchFields = new Uint32Array(this.scratch.buffer, base, 7)
+    this.scratchFields = new Uint32Array(this.scratch.buffer, base, 8)
     this.scratchFieldsFloat = new Float32Array(
       this.scratch.buffer,
       base + CLOCK_OFF_TICK_FRACTION,
@@ -126,6 +146,9 @@ export class ClockBlockView {
   scratchFieldsFloatView(): Float32Array {
     return this.scratchFieldsFloat
   }
+  revealedView(): Uint32Array {
+    return this.revealed
+  }
 }
 
 /** Writer: the client worker, after each `on_frame` that actually produced a fresh summary (not
@@ -140,6 +163,7 @@ export function writeClockBlock(block: ClockBlockView, f: ClockFields): void {
   block.seqSeedView()[0] = f.seqSeed
   block.ackSeqView()[0] = f.ackSeq
   block.tickFractionView()[0] = f.tickFraction
+  block.revealedView()[0] = f.revealed
   Atomics.add(block.seqWord(), 0, 1) // end: even, published
 }
 
@@ -196,4 +220,8 @@ export const CLOCK_FIELD = {
   SessionState: 3,
   SeqSeed: 4,
   AckSeq: 5,
+  // Slot 6 is `tickFraction`'s raw bits (an `f32`, read back through `scratchFieldsFloatView()`,
+  // never through `out` as if it were a plain `u32` -- this map deliberately has no entry for it).
+  /** docs/plan/28-sessions-and-reconnect.md: `ClientCore::revealed()`, `0`/`1`. */
+  Revealed: 7,
 } as const

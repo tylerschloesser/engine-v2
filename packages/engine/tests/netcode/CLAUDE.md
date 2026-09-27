@@ -41,16 +41,16 @@ try {
   whole run's released-message log as one `Uint8Array` -- compare two same-seed runs with
   `expect(Array.from(a)).toEqual(Array.from(b))`.
 
-## Each client's own identity (`myPlayerId`)
+## Each client's own identity (secrets, not `myPlayerId`)
 
-`assertConverged()` compares `replicaHash()` to the host's `sim_region_hash(conn)` per client, for
-every client. `createNetHarness` passes each `HeadlessClient` its real `PlayerId` (M15's implicit
-accept: `connId + 1`, `SimHost.accept`'s own return value) as `myPlayerId`, which
-`ClientInstance::init` (`game_instance.rs`) uses for `Replica`'s `own_player` instead of a hardcoded
-`PlayerId(1)` -- this is a pre-handshake stand-in (M28's real handshake, `Welcome`, replaces it as
-the source of truth once it lands), not something a scenario needs to think about. A `HeadlessClient`
-built outside `createNetHarness` (rare) defaults to `myPlayerId: 1`, correct only for a single real
-connection.
+docs/plan/28-sessions-and-reconnect.md deleted M15's implicit accept: every connection opens with a
+real `Hello`/`Welcome`, and a `HeadlessClient`'s own `PlayerId` comes from `Welcome`
+(`status().ownPlayerId`). `createNetHarness({ secrets?, joinKey? })`: `opts.secrets[i]` for a
+scenario that cares about identity, else `deterministicSecret(seed, i)` (reproducible, never
+`crypto.getRandomValues`). `harness.advanceTicks`/`settle` await `serverInternals(server).
+handshakesSettled()` (a real `crypto.subtle.digest` needs a genuine `await`, not an incidental
+microtask yield). `harness.connectRaw(): Connection` is a raw, `HeadlessClient`-free end for a
+scenario that hand-writes its own handshake bytes (`Reject`/timeout paths, M28's step 3).
 
 ## Fixtures
 
