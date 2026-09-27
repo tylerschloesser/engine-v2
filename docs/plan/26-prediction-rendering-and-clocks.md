@@ -416,3 +416,105 @@ names, with the deviations below.
 1. **Predicted texel is not on screen in the render that applies the dispatch.** Stepped-frame probe at the anchor tile reads pristine `[0,0,0,255]` for one frame, then `[32,32,32,255]` (the non-resident `NEUTRAL`) for one, then the painted colour. The grey frame is a visible flash between two correct colours: the flicker this milestone exists to remove, so it is a defect, not an accepted latency. `prediction-no-flicker` must assert the brief's wording (never the terrain colour from dispatch until after the ack, and never `NEUTRAL`), not "never flickers back". Quantify before hypothesising: per stepped frame from dispatch, the upload-ring records produced and consumed (kind, chunk, slot) and the chunk's indirection entry.
 2. **`lead_converges_to_exact` must exist as named**, against `Loopback`, pinning the measured exact figure `delay + 1` as a literal (after the cold first cycle) for delays 0, 1 and 3. `Loopback` delays the downlink only, so `delay + 1` is correct for it; `lead.rs`'s synthetic `2*d+1` test stays.
 3. **Show that the zero-GC criterion runs prediction:** `gc-slice`'s `Paint` via `dispatchRaw` must be predicted as `Applied`, not `NotPredictable`, inside the measured window (a counter or assertion that fails if prediction never ran).
+
+**Gate fix round 1 (this session).**
+
+- **Item 1, root cause: not a prediction/mark_dirty bug at all -- a subscription-entry race between
+  the client's own local worldgen and the host's own subscription bookkeeping.** Quantified live
+  (temporary `panic::log` prints at every `Cache::acquire`/`evict_if_present` call and at
+  `Uploader::on_frame`'s own cache-event drain, correlated against a same-worker marker
+  (`client_ui_mark_dirty`, reused only as a reliable ordering ping -- cross-thread `console`
+  delivery order between the client worker and the Playwright/Node side is *not* reliable, found
+  live: a first pass of reasoning from raw console timestamps alone pointed at the wrong mechanism
+  twice before this marker pinned it): the client's own local worldgen (deterministic, no wire
+  round trip needed) renders the anchor chunk correctly (`PRISTINE`) during warm-up, *before* the
+  host's own `SubscriptionSet` has finished entering that same chunk for this connection (a real,
+  one-time race, not every chunk, every time -- the connection's own first real camera report has
+  to travel uplink and be processed before the host's subscription set includes it, while the
+  client's own gen queue needs no such round trip at all). When the host's own entry lands, it
+  arrives as a `ChunkSnapshots` section (0011: an entering chunk with a real overlay/entity gets a
+  snapshot, not a plain pristine-enter) *for a chunk the replica already holds and is already
+  rendering correctly*. `Replica::apply_snapshot_overlay` -> `TerrainStore::replace_overlay`
+  unconditionally evicted the cached slab on every such snapshot (`Cache::evict_if_present`, its
+  own doc comment: "the next read regenerates it, which is always correct" -- correct for *content*,
+  not for the render side's own idea of "resident"), and `Uploader::on_frame`'s own `CacheEvent::
+  Evicted` handling unconditionally staged an `INDIR_NONE` for it, which the render side reads as
+  non-resident (`NEUTRAL`) for exactly the one frame between that stage and the chunk's own async
+  gen-queue reload landing. Confirmed directly: `replace_overlay chunk=(0,0) entries=1` and
+  `evict_if_present key=0` (temporary prints) fire inside the very same client wake the marker
+  bracketed as "during step 0"; `netCounters` across the whole run shows `frames`/`chunkSnapshots`/
+  `chunkLeaves` all frozen from warm-up on, ruling out a *second* wire message (the snapshot that
+  causes this is the connection's own first one, not anything triggered by dispatching `Paint`) --
+  the dispatched action's own prediction (`mark_dirty`, confirmed staged and applied within the
+  very first stepped frame, `seq=1` in the upload log) was never broken; it was racing this
+  unrelated eviction and losing the render for one frame, is all.
+- **Fix, at the two points 0012/0018 §3 actually names.** (1) `TerrainStore::replace_overlay`
+  (`world/terrain.rs`) now calls `self.materialize(chunk)` immediately after evicting: the client's
+  own worldgen is deterministic and already ran once to render this chunk in the first place, so
+  regenerating right here is one synchronous call, not a round trip through the async gen queue --
+  this alone removes the *latency* (no more waiting on a gen-worker message) but not yet the
+  *visible* non-resident frame, since `Uploader::on_frame`'s own INDIR-none/slot-block dance
+  (Open gate failures item 4, gate round 1's own fix) still runs first. (2) `Uploader::on_frame`
+  (`client/upload.rs`) now recognises a same-chunk, same-slot `Evicted`-then-`Loaded` pair inside
+  one drain (`Cache`'s free list is LIFO, so a synchronous evict-then-reload from fix (1) always
+  lands back on the exact slot it just left) and cancels the pending `Evicted` instead of staging
+  its `INDIR_NONE`, going straight to a plain content restage (`enqueue_chunk`) -- the render-side
+  half of "a re-stage of a resident chunk must never pass through non-resident", read literally.
+  Together the two fixes mean the chunk's own indirection cell is *never* touched at all across the
+  whole eviction-reload cycle: only `stage_chunk`'s own texel content changes, which is the pixel
+  the `Loaded` cache event actually reports. A slot genuinely handed to a *different* chunk (item
+  4's own scenario) is unaffected: its own `Loaded` names a different chunk, so the pending
+  `Evicted` flushes exactly as before, `INDIR_NONE` included.
+- **`prediction-no-flicker` now asserts the brief's own wording verbatim**: never the terrain
+  (pristine) colour and never `NEUTRAL` at any stepped frame from dispatch on, and the predicted
+  colour on the very first stepped frame after dispatch (no `firstChanged` search, no widened
+  window). Passes as written; measured with the fix in place across a foreground run: `pixel=
+  [[30,80,200,255], [30,80,200,255], [30,80,200,255], [30,80,200,255], [30,80,200,255],
+  [30,80,200,255], [30,80,200,255], [30,80,200,255]]` -- painted from step 0 through step 7,
+  nothing else ever appears. `client.clock().predicted - authoritative` still asserted as the real
+  lead (unchanged from steps 4-6).
+- **Failability, inject-fail-revert (reverted before commit).** Reverting both `world/terrain.rs`'s
+  `replace_overlay` and `client/upload.rs`'s `on_frame` to their pre-fix bodies (the committed
+  diff's own prior content, via `git show HEAD:...`) reproduces the *exact* originally-reported
+  sequence against the tightened assertion: `pixel=[[0,0,0,255], [32,32,32,255], [30,80,200,255],
+  [30,80,200,255], [30,80,200,255], [30,80,200,255], [30,80,200,255], [30,80,200,255]]`, failing at
+  `terrain (pristine) colour at step 0` (the new assertion's own first check) -- confirms both that
+  the bug was real and reproducible outside any instrumentation artefact, and that the new
+  assertion actually catches it. Restored before commit.
+- **Item 2: `lead_converges_to_exact` added**, `fixtures/predict/tests/clock.rs`, against a real
+  `Loopback` round trip for delays 0, 1 and 3, pinning `round_trip(delay)` (`delay + 1`, the
+  existing helper's own measured figure) as the exact value `ClientCore::lead()` converges to after
+  `warm_up_round_trip`. `crate::clock::lead`'s own `lead_converges_when_every_sample_agrees` is
+  untouched (a synthetic `2*d+1` round trip, never touches `Loopback`, unaffected by this harness's
+  own asymmetric uplink). Inject-fail-revert: swapping the assertion's own expected value to the
+  brief's literal `2 * delay + 1` fails at delay=1 (`left: Ticks(2), right: Ticks(3)`); reverted.
+- **Item 3: root cause was real -- `gc-slice`'s own dispatched `Paint` was never predicted.**
+  `PAINT_JSON_BYTES` targeted `(500, 500)`, deliberately "far from the panned view" (the fixture's
+  own pre-M25 comment) -- a chunk the replica never holds. `Predicting::set_tile`'s own doc comment
+  states the rule plainly: "a blind write outside the subscription sets `saw_unknown` too", so
+  every dispatch there predicted `NotPredictable`, never `Applied`, the whole time -- the M26
+  steps-4-6 Deviations claim that this "now flows through this milestone's own new predict/
+  overlay/... code" was true of the *code path* reached, not of the *outcome* it produced.
+  **Fix:** moved the target tile to `(0, 8)`, the camera's own starting centre (inside the held view
+  from frame 0, and inside it for the whole 600-frame measured window: the camera pans at most 80
+  tiles over that window, comfortably under the ~96-tile ring-3 subscription hold radius, 0010).
+  **New counter, not just a fixed position:** `ClientCore::predict_applied_ever` (incremented in
+  `on_action` whenever the dispatch-time `predict()` call -- 0012, "at dispatch the action is
+  applied once" -- comes back `Applied`), exposed test-only as `client_predict_stats` (`ABI_VERSION`
+  24 -> 25, mirroring `client_ui_stats`'s own "coordinator gate" shape exactly) and read from
+  `gc-slice.spec.ts` via a new `zeroGcSuite({ afterClean })` hook (opt-in, a no-op for every other
+  page using that suite) -- outside the measured window, since reading it needs the client worker
+  parked (a `postMessage` round trip 0016 §2 forbids in steady state), never inside `drive()`.
+  Asserts `appliedEver > 0` after the clean run. Inject-fail-revert: reverting the target tile alone
+  back to `(500, 500)` (counter and assertion left in place) fails exactly as expected: `gc-slice:
+  predicted Applied at least once, Expected: > 0, Received: 0`; reverted. `browser pass 5 tests`
+  with the fix in place (unchanged from steps 4-6's own count).
+- **Verification, foreground, one command at a time** (machine load ~3-9 through this session,
+  `uptime` checked beside every run): `pnpm test rust -t lead_converges_to_exact` (pass), `pnpm test
+  rust -t clock` (`rust pass 8 tests`), `pnpm test rust -t predict` (`rust pass 25 tests`), `pnpm
+  test rust -t one_render` (`rust pass 2 tests`), `pnpm test rust -t texel_upload` (`rust pass 2
+  tests`), `pnpm test wasm -t "abi registry"` (`wasm pass 17 tests`, confirming `abi.ts`/
+  `registry.rs` still agree after the new export), `pnpm test browser -t prediction-no-flicker`
+  (`browser pass 1 tests`), `pnpm test browser -t zero_gc_action` (`browser pass 5 tests`), `pnpm
+  lint` (`biome pass`, `rustfmt pass`, `clippy pass`, `tsc pass`). `pnpm test` itself not run (the
+  gate is the orchestrator's own job, per this round's own must-knows).
