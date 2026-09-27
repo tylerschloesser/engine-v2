@@ -28,6 +28,13 @@ export default defineConfig({
           include: ['packages/engine/tests/wasm/**/*.test.ts'],
         },
       },
+      {
+        test: {
+          name: 'netcode',
+          environment: 'node',
+          include: ['packages/engine/tests/netcode/**/*.test.ts'],
+        },
+      },
     ],
   },
 })

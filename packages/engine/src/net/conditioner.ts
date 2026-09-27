@@ -107,11 +107,15 @@ function makeSend(
   getConditions: () => ConditionerConditions,
   disconnected: { value: boolean },
 ): ConnectionSend {
-  return (cls, bytes) => {
+  return (cls, bytes, len?: number) => {
     if (disconnected.value) return
     // "engine-owned buffer, valid only during the call" (0009): copy now, released later from
-    // `advanceTo`'s own deferred pass.
-    const copy = bytes.slice()
+    // `advanceTo`'s own deferred pass. `len` (Deviations, M27 steps 3-4, the same gap found and
+    // fixed in `memory-connection.ts`'s own `send`): the optional third parameter `RingConnection.
+    // send`/`server.ts`'s `runOneTick` pass -- `frame.bytes` there is the *whole* persistent `Tx`/
+    // `Persist` region view, the real length riding along separately. Ignoring it here would copy
+    // (and eventually deliver) the whole region, garbage tail included.
+    const copy = len === undefined ? bytes.slice() : bytes.slice(0, len)
     const cond = getConditions()
     const isDatagramLatestWins = underlying.datagrams && cls === MsgClass.LatestWins
     const deliverAt = draw(dir, clock.now(), cond, isDatagramLatestWins)

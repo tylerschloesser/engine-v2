@@ -11,6 +11,7 @@ export {
   type StallOptions,
 } from './net/conditioner.js'
 export { memoryConnectionPair } from './net/memory-connection.js'
+export { type BytePump, createBytePump } from './net/pump.js'
 export {
   actionResults,
   asHarness,
@@ -52,6 +53,13 @@ export {
   type HarnessWorkerSpec,
 } from './test/harness.js'
 export {
+  createHeadlessClient,
+  type HeadlessClient,
+  type HeadlessClientOptions,
+  type HeadlessClientStatus,
+  type ViewReport,
+} from './test/headless-client.js'
+export {
   attachCameraInputTestHooks,
   type CameraInputBundle,
   injectKey,
@@ -60,6 +68,12 @@ export {
   type PointerPhase,
 } from './test/input.js'
 export { createManualClock, type ManualClock } from './test/manual-clock.js'
+export {
+  createNetHarness,
+  type NetHarness,
+  type NetHarnessCounters,
+  type NetHarnessOptions,
+} from './test/net-harness.js'
 export {
   drawCalls,
   drawListDropped,

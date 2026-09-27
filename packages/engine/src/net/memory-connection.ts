@@ -50,7 +50,7 @@ function makeEnd(datagrams: boolean): EndState {
     datagrams,
     onMessage: null,
     onClose: null,
-    send(cls, bytes) {
+    send(cls, bytes, len?: number) {
       if (end.closed) return
       const peer = end.peer
       if (peer.closed) return
@@ -58,7 +58,16 @@ function makeEnd(datagrams: boolean): EndState {
       // is test/support code, not a hot path -- `.claude/rules/hot-paths.md` scopes to `src/**`
       // production paths, and this module is exempt the same way `src/test/**` is, but the 0009
       // contract itself still requires a real copy since the caller may reuse `bytes` right after).
-      peer.queue.push({ cls, bytes: bytes.slice() })
+      //
+      // `len` (Deviations, found by `HeadlessClient`'s own smoke test, M27 steps 3-4): the same
+      // optional third parameter `RingConnection.send`/`server.ts`'s `runOneTick` already carry
+      // (Orchestrator ruling 2, this file's own header comment: "a real Connection implementation
+      // drives" -- `frame.bytes` there is the *whole* persistent `Tx`/`Persist` region view, with
+      // the real message length riding along separately). A generic `Connection` that ignores it
+      // and copies `bytes.length` sends the whole region, garbage tail included, and every real
+      // caller of `SimHost.accept` -- not only `RingConnection` -- relies on this being honoured:
+      // `bytes.slice(0, len)`, not `bytes.slice()`, whenever `len` is given.
+      peer.queue.push({ cls, bytes: len === undefined ? bytes.slice() : bytes.slice(0, len) })
       scheduleDrain(peer)
     },
     close(code) {
