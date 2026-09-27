@@ -1049,8 +1049,28 @@ impl<G: Game> Host<G> {
             _ => return Err(WireError::Malformed),
         };
         let tail = r.rest();
+        // docs/plan/28-sessions-and-reconnect.md Scope: "Hello tail = camera report + optional
+        // resume, which M28 ignores" -- parsed (so the reader is exercised the same way a future
+        // M28b resume-hint parse would extend it) but never fed into `ConnSlot.camera`. Real bug,
+        // found and fixed live (the bisect for `reference_collect_flow`, and separately
+        // `overlay_tile_reaches_screen`'s own tick-0 pristine check): `client_hello()` always
+        // sends a *well-formed*, merely zeroed `CameraReport` (0013: "no real camera exists yet");
+        // `CameraReport::read` decodes that successfully, so feeding it straight into `ConnSlot.
+        // camera` (as an earlier cut of this function did) made `camera` `Some(zeroed)`, not
+        // `None`, from the moment `attach` ran -- unlike `Host::connect`'s own `camera: None`
+        // (below, `build_frame`'s "if let Some(camera) = slot.camera { subs.update(...) }" gate
+        // only runs the subscription update when this is `Some`). A `Some(zeroed)` camera clamps
+        // up to `MIN_HALF_TILES` (`host/subs.rs`) and immediately subscribes a real rectangle
+        // around world (0, 0) on the very next tick boundary -- during a browser page's own
+        // `pumpUntilLive` bootstrap, well before any test ever sets a real camera, and on (or
+        // after) the same real tick `fx-puts`'s own once-a-second paint rule unconditionally fires
+        // on (`tick % secs_1 == 0` is true at tick 0). `ConnSlot.camera` now starts `None` here
+        // too, exactly like a fresh `connect()`'d slot: no subscription forms, and nothing
+        // downlinks, until this connection's own first real uplink camera report arrives
+        // (`on_uplink`'s own `if let Some(camera) = batch.camera { slot.camera = Some(camera) }`,
+        // unaffected).
         let mut tail_reader = ByteReader::new(tail);
-        let camera = CameraReport::read(&mut tail_reader).ok();
+        let _ = CameraReport::read(&mut tail_reader);
 
         let idx = conn as usize;
         // docs/plan/28-sessions-and-reconnect.md steps 3-5, 0013 "the same secret in a second
@@ -1101,7 +1121,7 @@ impl<G: Game> Host<G> {
             .collect();
         self.conns[idx] = Some(ConnSlot {
             player,
-            camera,
+            camera: None,
             subs: SubscriptionSet::new(crate::world::ChunkDims::new(G::CHUNK_BITS), G::TICK_RATE),
             first_frame_pending: true,
             counters: ConnCounters::default(),
