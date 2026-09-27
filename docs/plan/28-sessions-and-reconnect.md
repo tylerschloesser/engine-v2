@@ -1,6 +1,6 @@
 # M28: Sessions: handshake, identity, liveness
 
-Status: not started · After: 27 · Tyler-dependent: no
+Status: in flight (gate: every criterion met; repeat loops pending on a quiet machine) · After: 27 · Tyler-dependent: no
 
 **Split.** The PLAN.md row "sessions and reconnect" is about 2,700 lines, so it is two briefs. This one: `Hello`/`Welcome`/`Reject`, build-hash equality, secret + join key, `Bye`/`Superseded`, heartbeat, the client link policy. `28b-reconnect-and-lifecycle.md`: resume hint, epochs, grace, idle, pending-action resend.
 
@@ -68,7 +68,7 @@ Resume hint, epochs, grace, idle, pending resend (M28b). WebSocket, net worker, 
 Rust: `session/golden-hello`, `golden-welcome`, `golden-reject` (frozen prefix bytes), `golden-bye`. Netcode: `handshake/reveal-after-visible-chunks` (false after `Welcome`, true only when the last visible chunk is both received and generated), `handshake/join-then-return-same-player` (same secret → same `PlayerId`, `Connected` not `Joined`), `handshake/version-mismatch`, `handshake/bad-key`, `handshake/full`, `handshake/superseded` (old end gets `4001`, no log record), `handshake/garbage-before-hello`, `handshake/no-hello-timeout`, `handshake/crash-between-table-and-log` (storage fault injection), `liveness/heartbeat-idle-world`, `liveness/dead-after-silence`, `liveness/backoff-schedule` (exact virtual times for one seed), `liveness/stale-socket-ignored`, `liveness/probe-on-visible` (virtual clock: `probe()` on a silently dead link redials within the 0013 Client policy probe deadline instead of waiting out the dead timer; on a live link it changes nothing). Browser: existing single-player tests, plus `secret/persists-across-reload` and `handshake/welcome-view-clamp-limits-zoom` (single-player page whose host view clamp, 0010, is 128 tiles per axis: injected wheel zoom-out stops at 128 in `client.camera.read`; the `Welcome` → `setViewClamp` wiring of 0019 §1).
 
 ## Exit criteria
-- [ ] Every netcode scenario opens with `Hello`; no provisional-join code path remains in the sim host.
+- [ ] Every netcode scenario opens with `Hello`; no provisional-join code path remains in the sim host. *(Amended at the gate: every production path handshakes (`createWorldServer`, `worker/sim.ts`); `SimHost.accept` still falls back to `sim_connect` when `handshake` is omitted, which only fake-instance unit tests in `server.test.ts` do. Removing that fallback, making `handshake` required, moved to M28b.)*
 - [ ] Named tests above pass; `Reject` golden bytes are identical from the TS builder and the Rust parser.
 - [ ] `pnpm test` and `pnpm lint` are green.
 

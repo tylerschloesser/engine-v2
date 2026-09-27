@@ -78,3 +78,5 @@ Netcode `CLAUDE.md`: `restartServer`, `panicServer`, link `disconnect`/`reconnec
 none (see M29)
 
 ## Deviations
+
+**Note from M28's gate (orchestrator):** (1) `SimHost.accept` still falls back to `sim_connect` (M15's implicit accept) when `createSimHost` gets no `handshake` deps; only `server.test.ts`'s fake-instance unit tests rely on it. Make `handshake` required and delete the fallback and `sim_connect` here (M28's exit criterion 1 was amended to hand this over). (2) Ledger row "acks depend on the game's player slot" names this milestone's session work as its candidate owner: decide it here (engine-tracked acked seq per connection, or the engine creating the slot on `Joined`).
