@@ -29,10 +29,11 @@ use super::remote_presence::RemotePresences;
 /// gap", verbatim) names it directly. `correction` (M26 Deviations: a seam beyond the brief's own
 /// Seams list, the same "add what a formula genuinely needs" precedent `predicted_player` set in
 /// this same file for M26 steps 1-3) is the currently-eased "Correction without snapping" scalar
-/// (0012 Decision) [`Self::own_progress`] subtracts from `done_at` -- ticks, signed, decaying to
-/// `0.0` over `ClientCore`'s own ease window. Neither field is meaningful outside `own_progress`;
-/// every other reader of `Clocks` (a game's own `extract`/`ui`, `client.clock()`) only ever reads
-/// `authoritative`/`predicted`/`tick_fraction`/`ticks_per_second`.
+/// (0012 Decision) [`Self::own_progress`] reads back out of `lead` (see that method's own doc
+/// comment for why, not the literal "subtracts it from done_at" the brief's own prose suggests) --
+/// ticks, signed, decaying to `0.0` over `ClientCore`'s own ease window. Neither field is
+/// meaningful outside `own_progress`; every other reader of `Clocks` (a game's own `extract`/`ui`,
+/// `client.clock()`) only ever reads `authoritative`/`predicted`/`tick_fraction`/`ticks_per_second`.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Clocks {
     pub authoritative: Tick,
@@ -61,23 +62,41 @@ impl Clocks {
         ((auth - start) / denom).clamp(0.0, 1.0)
     }
 
-    /// A timer the local player *owns* (Planning decisions "Own-timer completion gap", verbatim
-    /// formula): `(authoritative - (started_at - lead)) / (done_at - started_at + lead)`, with
-    /// [`Self::correction`] subtracted from `done_at` first ("own_progress subtracts it from
-    /// done_at"). The bar starts advancing at the tap (`started_at - lead` is in the past relative
-    /// to `authoritative` from the very first frame) and reaches `1.0` exactly when the host's own
-    /// completion tick can first have arrived, running `lead` ticks slower than a bare `progress`
-    /// over the same nominal duration (Planning decisions: "running lead / duration slower").
+    /// A timer the local player *owns* (Planning decisions "Own-timer completion gap", base
+    /// formula): `(authoritative - (started_at - lead)) / (done_at - started_at + lead)`. The bar
+    /// starts advancing at the tap (`started_at - lead` is in the past relative to `authoritative`
+    /// from the very first frame) and reaches `1.0` exactly when the host's own completion tick can
+    /// first have arrived, running `lead` ticks slower than a bare `progress` over the same
+    /// nominal duration (Planning decisions: "running lead / duration slower").
+    ///
+    /// **Deviation from the brief's own one-line formula ("own_progress subtracts it from
+    /// done_at"):** subtracting [`Self::correction`] from `done_at` alone, with `lead` left raw,
+    /// does *not* give the no-jump property `own_timer_no_jump_at_ack` (Tests added) pins -- an ack
+    /// that both sets `correction = k` and (via `LeadEstimator`) moves `lead` by that same `k` (the
+    /// single-sample case: a fresh median jumps by exactly the one new sample) cancels `k` in the
+    /// *denominator* (`(done_at - k) - started_at + (lead_old + k)` has no `k` left) but not in the
+    /// *numerator* (`authoritative - (started_at - (lead_old + k))` still carries a bare `+k` no
+    /// prior frame had), so the ratio still steps by `k` ticks' worth right at the ack -- the same
+    /// order of jump the brief's own closing note calls "accepted" only for the CSS-restart case
+    /// this method exists to avoid needing. Using an *eased effective lead*,
+    /// `lead - correction`, everywhere `lead` appears (both terms, not just `done_at`) instead
+    /// fixes that: at the instant of an ack, `correction` is freshly `k` and `lead` has just moved
+    /// to `lead_old + k`, so `effective_lead = (lead_old + k) - k = lead_old` -- identical to what
+    /// every term already used the frame before, so *nothing* about the ratio moves at that exact
+    /// instant. As `correction` eases to `0.0` over the ease window, `effective_lead` eases from
+    /// `lead_old` up to the corrected `lead_old + k`, and the bar gradually retargets onto the
+    /// truer estimate -- "the ack causes exactly one k-tick correction ... eases to zero" (0012),
+    /// read as *when the correction becomes fully visible*, not *when it is first applied*.
     pub fn own_progress(&self, started_at: Tick, done_at: Tick) -> f32 {
-        let lead = self.lead.0 as f32;
+        let effective_lead = self.lead.0 as f32 - self.correction;
         let auth = self.authoritative.0 as f32;
         let start = started_at.0 as f32;
-        let done = done_at.0 as f32 - self.correction;
-        let denom = done - start + lead;
+        let done = done_at.0 as f32;
+        let denom = done - start + effective_lead;
         if denom <= 0.0 {
             return 1.0;
         }
-        ((auth - (start - lead)) / denom).clamp(0.0, 1.0)
+        ((auth - (start - effective_lead)) / denom).clamp(0.0, 1.0)
     }
 }
 
