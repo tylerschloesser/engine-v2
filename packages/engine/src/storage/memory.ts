@@ -25,8 +25,18 @@ function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
   return out
 }
 
-export function memoryStorage(): MemoryStorage {
-  const data = new Map<string, Uint8Array>()
+/**
+ * `backing` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Deviations: the fsStorage
+ * durability conformance check needs "a fresh instance over the same backing store" for *every*
+ * adapter, memory included) -- optional, additive: every existing no-argument call keeps its own
+ * fresh, empty `Map` (`durable: false`'s own "never" row is otherwise unaffected). Given the same
+ * `Map`, two `memoryStorage(backing)` calls behave the way two `fsStorage(dir)` calls already do:
+ * independent wrapper objects sharing one real store, `write`/`append`/`delete` from either
+ * visible to a `read`/`list` on the other immediately (this adapter's own `flush()` is already a
+ * no-op precisely because a synchronous `write`/`append` has nothing left in flight to lose).
+ */
+export function memoryStorage(backing?: Map<string, Uint8Array>): MemoryStorage {
+  const data = backing ?? new Map<string, Uint8Array>()
 
   const storage: MemoryStorage = {
     onError: null,

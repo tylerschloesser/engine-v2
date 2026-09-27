@@ -15,7 +15,7 @@ import {
   type WorldConfig,
   wrapEngineInstance,
 } from '../../src/server.js'
-import { fsStorage } from '../../src/server-node.js'
+import { fsStorage, nodeHostServices } from '../../src/server-node.js'
 import { buildSimInstanceConfig } from '../../src/sim-config.js'
 import { memoryStorage } from '../../src/storage/memory.js'
 import { worldKeys } from '../../src/storage/types.js'
@@ -202,4 +202,40 @@ test('server/accept-before-ready-waits', async () => {
   expect(conn.onMessage).not.toBeNull()
 
   await server.stop()
+})
+
+// `nodeHostServices` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Scope): the real,
+// wall-clock-paced counterpart to every other test in this file's own `timerDouble()` -- `clock`/
+// `timer` from `systemClock`/`systemScheduler`, ticking for real over a real `setTimeout` chain
+// against real `fsStorage`. `fx-puts` ticks at 20 Hz (50 ms/tick); waiting a few real ticks and
+// stopping keeps this fast-tier test well under a second.
+test('nodeHostServices: a real server ticks over real fs storage and reopens to the same hash', async () => {
+  const { wasm } = await loadFixture('puts')
+  const dir = await mkdtemp(join(tmpdir(), 'm27-node-host-'))
+  tmpDirs.push(dir)
+
+  const server1 = createWorldServer(CFG, nodeHostServices({ wasm, storage: fsStorage(dir) }))
+  await server1.ready
+  // A few real ticks (fx-puts's own `tick` rule paints one tile per simulated second, `crates/
+  // engine/fixtures/puts/src/lib.rs`'s own module doc comment) -- enough for `sim_hash()` to move
+  // off the pristine genesis value without this test waiting a full second.
+  await new Promise((resolve) => setTimeout(resolve, 120))
+  await server1.stop()
+
+  const newInstance = () => instantiate(wasm, Role.Sim, buildSimInstanceConfig(CFG))
+  const expectedHash = wrapEngineInstance(
+    (await Persistence.open(fsStorage(dir), CFG, newInstance)).sim,
+  ).simHash()
+  expect(expectedHash).not.toBe('0000000000000000')
+
+  // Reopen on the same directory through a second, independent `nodeHostServices` -- real load,
+  // not create (`server/load-or-create`'s own assertion, this time over the real timer/clock).
+  const server2 = createWorldServer(CFG, nodeHostServices({ wasm, storage: fsStorage(dir) }))
+  await server2.ready
+  await server2.stop()
+
+  const actualHash = wrapEngineInstance(
+    (await Persistence.open(fsStorage(dir), CFG, newInstance)).sim,
+  ).simHash()
+  expect(actualHash).toBe(expectedHash)
 })

@@ -199,22 +199,167 @@ none
   `createNetHarness`, the `netcode` suite's `tests/netcode/` directory and its `CLAUDE.md`,
   `nodeHostServices`, the `run-tests` skill update.
 
-Notes for the steps 3-4 implementer:
+**Steps 3-4.** Base `1668d24`'s own predecessor (`bfb0331`). Commits `1668d24` (byte pump) through
+the step-4 commits below.
 
-- `createWorldServer`, `WorldServer`, `HostServices.onFatal?` are in `src/server.ts`, re-exported
-  nowhere new (same file as `createSimHost`/`SimHost`).
-- `memoryConnectionPair`, `conditionLink`, `ConditionedLink`, `ConditionerOptions`,
-  `ConditionerConditions`, `StallOptions` are in `src/net/{memory-connection,conditioner}.ts`, also
-  re-exported from `engine/test` (`src/test.ts`). `createVirtualClock`, `VirtualClock`,
-  `PendingDelivery` are in `src/test/virtual-clock.ts`, same re-export.
-- `HeadlessClient`'s own byte pump should reuse `VirtualClock.scheduleDelivery`/`nextLinkId` only
-  if it needs to interleave with conditioned links on the same clock; otherwise a plain `setTimer`
-  suffices, since `ManualClock.advance`/`frame` are still there unchanged.
-- `conditionLink` takes over `a.onMessage`/`a.onClose`/`b.onMessage`/`b.onClose` completely --
-  `createNetHarness`/`HeadlessClient` must always talk to `link.ends[i]`, never to the raw pair
-  passed into `conditionLink`.
-- `manualTimer()` (a `HostServices.timer` double: `every()` records the callback, `fire()` invokes
-  it) is duplicated across `src/server.test.ts`, `tests/wasm/puts.test.ts` and `tests/wasm/
-  server.test.ts` (as `timerDouble()` in the last); `nodeHostServices`'s own real timer is
-  `systemScheduler`-backed and unrelated, but a future shared test double belongs in `engine/test`
-  if a fourth copy would otherwise appear in the netcode harness.
+- `src/net/pump.ts`: `createBytePump({ uplink, downlink })` -> `{ attach(conn), detach(), drain() }`,
+  exactly the Seams shape. `attach`'s `onMessage` handler never drops a downlink byte on a full
+  ring (a JS-side FIFO retried by every `drain()` call, unlike `client-net.ts`'s own drop-and-count
+  uplink policy): proven failable by shrinking a test's downlink ring to 2 slots for 5 queued
+  messages and asserting `drops === 0` after repeated `drain()` calls (`pump.test.ts`). Uplink
+  forwarding always tags `MsgClass.ReliableOrdered` (Deviations: no production code sends
+  `LatestWins` yet -- confirmed by grep, only test files and `conditioner.ts` itself name it).
+  `byte-pump-backpressure` (Tests added) is this file's own `pump.test.ts`, two cases.
+- **Fix, found by this milestone's own first real multi-message round trip through a real
+  `SimHost`:** `memoryConnectionPair.send`/`conditionLink`'s own `makeSend` ignored a 3rd `len`
+  argument (`RingConnection.send`'s own optional parameter, Orchestrator ruling 2: "the whole
+  persistent region view, real length as a separate number"), so a real `SimHost.runOneTick`
+  frame -- always `frame.bytes` (the whole `Tx` region) + `frame.len` -- copied and delivered the
+  *whole region*, not the real message, once driven through either. Both now accept and honour an
+  optional 3rd `len` (`bytes.slice(0, len)` in place of `bytes.slice()`); proven by the
+  `HeadlessClient` smoke run that found it (a live client never reaching `session_state: Live`
+  because `on_frame` decoded garbage), fixed, then re-run clean.
+- `src/test/headless-client.ts`: `createHeadlessClient({ wasm, game: { seed, worldgen },
+  connection })` -> `HeadlessClient`. A real `Role.Client` instance plus a real `Role.Gen` instance
+  (both via plain `instantiate`, no `Shell`/worker), driven by `pump()`/`stepFrame(dtMs)` in this
+  thread. Reuses the shipped decode path for the one real cross-thread-shaped boundary this
+  topology still has (`worker/client-net.ts`'s own `createNetPump`, unmodified, over a real
+  `uplink`/`downlink` SAB ring pair from `createSabSet('net', 0)` and a `createShell`/`ControlBlock`
+  built only to satisfy `createNetPump`'s wake-target parameter -- never woken by anything real).
+  Skips `actionRing`/`uiRing` entirely (Deviations: those rings exist only to cross a *page's*
+  main-thread/worker boundary, which does not exist here): `dispatch()` writes the `[seq][len][json]`
+  record straight into `Rx` and calls `on_action` synchronously; `pump()` drains `client_poll_ui()`
+  directly, decoding kind-1/kind-2 records the same way `client.ts`'s own `pollActionResults` does.
+  Terrain generation on miss is synchronous and ring-free (docs/plan/08b's own "headless clients ...
+  generate synchronously on miss"): `gen_take(0)` (the client's own `gen_workers` config defaults to
+  1) -> read `cx`/`cy` straight off `Result` -> `gen_chunk` on the `Role.Gen` instance -> copy
+  `GenOut` + a `writeGenHeader` into the client's own `GenIn` -> `gen_deliver(0, len)`, looped until
+  `gen_take` says there is no more work.
+  - **`setView(report)` vs `setCamera({x,y,tilesAcross})` (a genuine seam gap in the brief's own
+    Seams line, resolved here, not escalated: both are named with no further shape given).**
+    `setCamera` is `test/client.ts`'s own convenience, reused verbatim: only `centreX`/`centreY`/
+    `tilesAcross` change, leaving `halfExtentTilesX/Y` wherever they were -- which is `0` by
+    `CameraState`'s own default, and a `0` half-extent subscribes no chunks at all (0010's
+    subscription target reads `half_w`/`half_h`, `client/camera.rs`'s `to_report()`). Reusing that
+    convenience unchanged would make every headless scenario subscribe nothing. Fix (in scope,
+    JS-only): `setCamera` here additionally derives a symmetric `halfExtentTiles{X,Y}` via the
+    existing pure `camera/transform.ts` formula against a synthetic square viewport (any equal
+    `widthPx`/`heightPx` pair; the ratio to `tilesAcross` is what matters), so a real subscription
+    forms. `setView(report: { x, y, halfW, halfH, velX?, velY? })` is the lower-level, 1:1
+    `CameraReport`-shaped primitive (`wire/uplink.rs`'s own six fields) for a test needing exact,
+    asymmetric or non-derived control (`counters-exact`'s literal byte pinning). Both take effect on
+    the next `stepFrame`, matching `setCamera`'s own existing doc comment.
+- **Real finding, escalated, not fixed here (Rust change; "No crate" / "Non-scope: Any Rust
+  change" is this milestone's own fixed boundary): `own_player`/per-connection region-hash parity
+  is broken for every connection but `connId 0`.** Found empirically: a 2-3 real `HeadlessClient`
+  join with `assertConverged()` (no arguments) always mismatched for every `connId != 0`, byte-
+  identical mismatch pair regardless of camera position, with or without any action ever
+  dispatched; `SetNote`-per-client dispatch showed each non-zero client's `ui().note` staying `0`
+  (never its own dispatched value) and an unsolicited `NotPredictable` verdict for that same
+  dispatch (client0 never got one for the identical action). Root cause, read directly:
+  `ClientInstance::init` (`crates/engine/src/game_instance.rs`, ~line 273) hardcodes
+  `Replica::new(..., PlayerId(1))` unconditionally -- "Single-connection assumption ... this
+  milestone's own topology never gives one client instance more than one host link, and it is
+  always `conn == 0` ... `PlayerId = conn + 1`, not `conn` ... a real multi-connection handshake is
+  M28's, Non-scope here" (that comment's own "this milestone" is M15b, predating any second real
+  connection ever existing to violate it). `apply_own_player(who, state)` (`client/replica.rs`)
+  stores the incoming `OwnPlayer` wire record under the *real* `who` the host sent, but never
+  updates `self.own_player` itself -- so `region_hash()`/`ui()`'s own `store.player(own_player)`
+  read is permanently pinned to slot 1 for every client, matching only `connId 0` (whose real
+  `PlayerId` is `0 + 1 = 1` by the same convention). `host::region_hash(conn)` always finds a value
+  (`on_player(Joined)` puts a default unconditionally), so the mismatch is structural -- present
+  with no player-scoped action ever dispatched, unfixable by scenario design. `net-harness.ts`'s
+  `assertConverged(opts?: { only?: number[] })` (an additive, backward-compatible option beyond the
+  brief's own no-argument signature) documents this at the call site and lets a scenario state
+  exactly what the current engine supports; `join-converges`/`late-join`/`harness-accepts-build-dir`
+  use `{ only: [0] }` and assert the rest directly (global-scope `ui()` equality, byte traffic, no
+  crash). `packages/engine/tests/netcode/CLAUDE.md` carries the same note for whoever writes the
+  next scenario. **Recommend:** either accept this as a correct, documented M27/M28 boundary, or
+  spin a narrow "b" brief giving `TerrainConfig` an optional `myPlayerId`/`conn` override (default
+  `1`, current behaviour unchanged) if K>1 convergence testing is needed before M28's real
+  handshake lands.
+- `src/test/net-harness.ts`: `createNetHarness(opts): Promise<NetHarness>`. `server` builds the
+  sim host directly from the already-exported `Persistence.open` + `createSimHostFromInstance` +
+  `wrapEngineInstance` (the same pieces `createWorldServer` itself composes, per that function's
+  own doc comment) rather than through the opaque `createWorldServer(cfg, host)` wrapper --
+  `WorldServer`'s fixed `{ ready, accept, stop }` shape has no seam for live `sim_region_hash(conn)`
+  access, which `assertConverged`/`hostRegionHash` need at an arbitrary tick (0020 §8: "per-region
+  state hashes at any tick" is exactly what a test entrypoint must expose) and `SimHost.accept`'s
+  own `number` return (the real `connId`) that the wrapper's `void`-returning `accept` throws away.
+  `createWorldServer`'s own `{ ready, accept, stop }` lifecycle is proven separately by
+  `tests/wasm/server.test.ts` (steps 1-2) and not re-proven here. Ticking is `SimHost.stepTick(1)`
+  per loop iteration (bypassing the pacing timer entirely -- `host.timer` is a no-op `every()` that
+  never fires), interleaved with `clock.advanceBy(tickMs)` so a conditioner's own send-time draws
+  see the correct virtual "now" before the next tick runs; `tickMs` is read from the real instance's
+  own `tick_hz()`, not hardcoded. `fixture` accepts either an already-resolved `{ wasm, buildHash }`
+  (what `tests/support/fixtures.ts`'s `loadFixture(name)` returns) or a raw directory path (through
+  `engine/server/node`'s `loadGame`) -- never a bare "fixture name" resolved internally: `src/test/
+  **` ships in `dist/` (0017 §2's `./test` subpath), and `packages/engine/fixtures/` is outside
+  `files`, so baking in that directory would break for every external consumer. `NetCounters` is
+  named `NetHarnessCounters` here (Deviations: a real name collision with `test/client.ts`'s own,
+  differently-shaped `NetCounters` -- ring stats and `sim_conn_counters` fields that do not exist
+  for this transport at all; "no renamed Provides" protects the *existing* one, not a same-named but
+  incompatible new one) and is tracked by wrapping each conditioned link's own two ends in a tracing
+  decorator (`traced()`) that records `(t, link, dir, tick, bytes)` on delivery -- one shared
+  mechanism backing `counters(i)` (aggregated by tick) and `trace()` (the whole log, encoded as one
+  flat `Uint8Array`: `[t u32][link u32][dir u8][len u32][bytes]*`). `transport?: 'memory'` is the
+  only accepted value (throws otherwise); real `ws`/loopback is M29's, Non-scope.
+- `src/server-node.ts`: `nodeHostServices({ wasm, storage, onIdle?, onFatal? }): HostServices`,
+  `clock`/`timer` from `systemClock`/a `setTimeout`-chain wrapper around `systemScheduler.setTimer`/
+  `clearTimer` only (never `requestFrame`/`cancelFrame`, which call `requestAnimationFrame` --
+  absent under Node). Proven with a real wall-clock round trip: `tests/wasm/server.test.ts`'s
+  `nodeHostServices: a real server ticks over real fs storage and reopens to the same hash` (120 ms
+  real wait, two independent `createWorldServer`+`nodeHostServices` instances over the same
+  directory, same `sim_hash()`).
+- **Storage conformance addition (M22's own `runStorageConformance`), with a real inject-fail-
+  revert.** `flush_then_reopen_sees_the_write`: `write()` *not* awaited (0005's own "the tick path
+  never awaits storage" shape -- `Persistence.create`'s manifest write and `snapshotNow`'s snapshot
+  write are exactly this), then `flush()` awaited, then a *fresh* `make()` instance reads the same
+  key. `memoryStorage(backing?: Map)` gained an optional, additive backing-map parameter (every
+  existing no-arg call unaffected) so `conformance.test.ts`'s own memory leg can share one across
+  `make()` calls the same way `fsStorage(dir)`'s repeated calls already do (`durable: false`'s own
+  `flush()` is already a no-op, so this leg cannot fail the check by construction -- it exists to
+  prove the check itself is not vacuous). Reverting `a471a41` (`git show a471a41 -- .../fs.ts | git
+  apply -R -`) and rebuilding: `storage_conformance_fs` fails 15/15 direct runs
+  (`Error: flush_then_reopen_sees_the_write: expected 'durable', got null`, plus an unhandled
+  `ENOENT` rename racing the same reopen); re-applying the fix (`git checkout -- .../fs.ts`) and
+  rebuilding: passes 10/10. OPFS (browser conformance, `tests/browser/pages/src/storage-opfs-
+  worker.ts`): runs it, but not as a true reopen -- that harness prebuilds one isolated `opfsStorage`
+  instance per `make()` call specifically to avoid a real deadlock risk (an OPFS sync access handle
+  is exclusive; a second live instance over the same worldId while the first's is still open is
+  exactly the "second instance" this check would need). Fixed the minimum to keep it green without
+  touching that constraint: the 10th prebuilt slot reuses the 9th's own instance (the same JS
+  object) rather than opening an unrelated one, so the check exercises write-then-flush-then-read
+  without a real reopen and without new deadlock risk; `storage_conformance_opfs`
+  (`storage-opfs.spec.ts`) passes with the new name added to its expected list. A true OPFS reopen
+  proof would need this prebuilding scheme restructured -- not attempted here, time-boxed out.
+- `src/test.ts`: `createBytePump`/`BytePump` (`./net/pump.js`), `createHeadlessClient`/
+  `HeadlessClient`/`HeadlessClientOptions`/`HeadlessClientStatus`/`ViewReport`
+  (`./test/headless-client.js`), `createNetHarness`/`NetHarness`/`NetHarnessCounters`/
+  `NetHarnessOptions` (`./test/net-harness.js`) added to the existing re-export list, no renamed
+  Provides.
+- `vitest.config.ts` gained the `netcode` project (`packages/engine/tests/netcode/**/*.test.ts`);
+  `scripts/suites.mjs` gained the `netcode` suite row (10,000 ms budget, 0020 §3).
+- Netcode scenarios (`tests/netcode/`): `join-converges` (K=4, a mix of `Paint`/`Spawn`/`SetMotd`/
+  `Roll`, `assertConverged({ only: [0] })` plus global-scope `ui()` equality across all four),
+  `late-join` (a client added mid-session after real state exists, plus an unsubscribed joiner
+  seeing global scope only -- proven failable: asserting the joiner's `motd` *before* it is ever
+  set fails as expected), `conditioned-link` (latency/jitter/stall; the same seed's `trace()` byte-
+  identical across two independent runs; a stall scenario proving delivery is delayed, not lost --
+  failable by disabling `stall` and observing the delayed-then-arrives assertion invert), `latest-
+  wins-datagrams` (a `datagrams: true` memory pair, `stall.p = 1`: dropped outright for
+  `MsgClass.LatestWins`, merely delayed for `ReliableOrdered` -- failable by setting `stall.p = 0`
+  and observing `received` become 1 either way), `counters-exact` (K=1, literal per-tick
+  `bytesDown`/`bytesUp` for seed 4001, read once from a real run and pinned as literals, never
+  computed from source -- failable by dispatching one extra action and observing the literals no
+  longer match), `headless-ui-and-camera` (`ui()` null before the first record, then the fixture's
+  JSON; `setCamera` moving 100,000 tiles away produces strictly more `bytesDown` than staying put --
+  failable by asserting `>=` in place of `>` against a camera that never actually moves), `harness-
+  accepts-build-dir` (`fixture: fixtureBuildDir('puts')`, a raw path string, behaving identically to
+  every other scenario's already-resolved `{ wasm, buildHash }`). `tests/netcode/support.ts`:
+  `putsFixture()`, `square(i)` (spread camera positions), `DEFAULT_SEED`.
+- Measured: `pnpm test netcode` 10 tests, `0.7s/10s` budget; `node scripts/repeat.mjs netcode 20`:
+  `pass=20 fail=0 hang=0`. `pnpm test wasm`: 155 tests (was 154; +1, `nodeHostServices`'s own real
+  round trip). `pnpm test unit`: 277 tests (was 275; +2, `pump.test.ts`). `pnpm lint`: green.
+- Context artifacts written: `packages/engine/tests/netcode/CLAUDE.md` (55 lines, under the 60-line
+  cap `context-artifacts.test.mjs` enforces); `run-tests` skill gained the `netcode` suite line.

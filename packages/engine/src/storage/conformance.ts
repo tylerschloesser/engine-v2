@@ -123,5 +123,32 @@ export async function runStorageConformance(make: () => Storage): Promise<string
     passed.push('flush_resolves')
   }
 
+  {
+    // docs/plan/27-server-entrypoint-and-netcode-harness.md, Deviations: the fsStorage durability
+    // defect (`a471a41`) this check is written to catch -- `flush()` resolving before a `write()`/
+    // `delete()` it should have waited on has actually landed, so a fresh instance opened over the
+    // same backing store right after `flush()` reads stale (missing) data. `make()` must return a
+    // fresh instance sharing the same backing store every call (true for `fsStorage(dir)`/
+    // `opfsStorage(worldId)`'s own real filesystem; `memoryStorage(backing)` given a shared `Map`,
+    // Deviations); a `make` closure that returns an unrelated fresh store every call (e.g. the bare
+    // `() => memoryStorage()` some existing callers still use for the checks above, which rely on
+    // exactly that isolation) would make this check meaningless, not merely fail it differently --
+    // every call site running this check passes a backing-sharing `make`.
+    const s1 = make()
+    // Fire-and-forget, deliberately not awaited (0005: "the tick path never awaits storage" --
+    // `Persistence.create`'s own manifest write and `snapshotNow`'s snapshot write are exactly this
+    // shape): `flush()` alone must be what a caller can await to know it is durable.
+    void s1.write('durability-check', enc.encode('durable'))
+    await s1.flush()
+    const s2 = make()
+    const back = await s2.read('durability-check')
+    if (!bytesEqual(back, enc.encode('durable'))) {
+      throw new Error(
+        `flush_then_reopen_sees_the_write: expected 'durable', got ${back ? [...back] : back}`,
+      )
+    }
+    passed.push('flush_then_reopen_sees_the_write')
+  }
+
   return passed
 }

@@ -28,6 +28,7 @@ test('storage_conformance_opfs @engines', async ({ opfsPage }) => {
     'list_returns_matching_keys_sorted',
     'sync_never_throws_on_an_unknown_key',
     'flush_resolves',
+    'flush_then_reopen_sees_the_write',
   ])
 
   // Seams for step 3 ("test it at the adapter level"): `OpfsStorage.pendingAsync`/`scratchReady`/

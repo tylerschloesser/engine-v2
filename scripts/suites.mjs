@@ -55,7 +55,7 @@ export const buildSteps = [
  * adapter in scripts/lib/adapters.mjs. `legs` are extra runs reported on the suite's line, each
  * `{ name, kind, ... }` with what its adapter needs, run concurrently with the suite's own main leg
  * (`runSuite`'s `Promise.all`). Ids follow the rows of the 0020 §3 table: `rust`, `unit`, `wasm`,
- * `browser`, and reserved for a later milestone `netcode`; `frame-bench` (docs/plan/
+ * `netcode`, `browser`; `frame-bench` (docs/plan/
  * 17b-sprites-and-frame-budget.md, Fix round 2) is this repo's one addition outside that table, for
  * the reason its own entry below explains. `budgetMs` is the fast-tier budget; owner of the numbers:
  * docs/decisions/0020 §3. Slow-tier lines carry no budget. `solo: true` (`scripts/test.mjs`'s own
@@ -86,6 +86,10 @@ export const suites = [
       },
     ],
   },
+  // docs/plan/27-server-entrypoint-and-netcode-harness.md: the real server entrypoint + real
+  // `.wasm` + K `HeadlessClient`s over in-memory `Connection`s behind a seeded conditioner (0020
+  // §7). `budgetMs` 10,000, this table's own row.
+  { name: 'netcode', kind: 'vitest', tiers: ['fast', 'slow'], budgetMs: 10_000 },
   {
     name: 'browser',
     kind: 'playwright',

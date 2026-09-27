@@ -7,7 +7,12 @@ import { runStorageConformance } from './conformance.js'
 import { memoryStorage } from './memory.js'
 
 test('storage_conformance_memory', async () => {
-  const passed = await runStorageConformance(() => memoryStorage())
+  // A shared backing `Map` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Deviations):
+  // every existing check above still gets an object it alone writes to (each uses its own key
+  // namespace), but `flush_then_reopen_sees_the_write` needs `make()` to return a fresh instance
+  // over the *same* backing store, the way `fsStorage(dir)`'s own conformance call already does.
+  const backing = new Map<string, Uint8Array>()
+  const passed = await runStorageConformance(() => memoryStorage(backing))
   expect(passed).toEqual([
     'write_then_read',
     'read_missing_key_is_null',
@@ -18,5 +23,6 @@ test('storage_conformance_memory', async () => {
     'list_returns_matching_keys_sorted',
     'sync_never_throws_on_an_unknown_key',
     'flush_resolves',
+    'flush_then_reopen_sees_the_write',
   ])
 })

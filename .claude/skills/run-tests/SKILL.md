@@ -14,8 +14,11 @@ test name, message, seed (if any) and artefact paths, then nothing else. Non-zer
 ## Suites
 
 `rust` (nextest) · `unit` (Vitest, pure TS) · `wasm` (Vitest against the built fixtures, plus a Bun
-leg) · `browser` (Playwright Test: `packages/engine/playwright.config.ts`). Ids come from
-`scripts/suites.mjs`; that file is the registration point for a new suite, nowhere else.
+leg) · `netcode` (Vitest: the real server entrypoint + real `.wasm` + K `HeadlessClient`s over
+in-memory `Connection`s behind a seeded conditioner, docs/decisions/0020 §7; `packages/engine/tests/
+netcode/CLAUDE.md` for how to write a scenario) · `browser` (Playwright Test: `packages/engine/
+playwright.config.ts`). Ids come from `scripts/suites.mjs`; that file is the registration point for
+a new suite, nowhere else.
 
 Run one test by name: `pnpm test <suite> -t "<substring>"`, e.g. `pnpm test wasm -t "import
 allowlist"`, `pnpm test browser -t determinism`, `pnpm test unit -t "manual clock"`. `-t` is a plain
