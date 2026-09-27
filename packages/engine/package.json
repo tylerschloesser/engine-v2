@@ -16,6 +16,10 @@
       "types": "./dist/worker.d.ts",
       "default": "./dist/worker.js"
     },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "default": "./dist/server.js"
+    },
     "./server/node": {
       "types": "./dist/server-node.d.ts",
       "default": "./dist/server-node.js"

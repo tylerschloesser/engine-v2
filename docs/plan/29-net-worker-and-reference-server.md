@@ -81,3 +81,5 @@ PRE-PLAN §7 "Allocation per isolate" (net worker row and the unchanged main/cli
 This milestone builds `mp.html` with `?linklog=1` (an on-page view of `client.debug.linkLog()`), and `pnpm device:serve --tunnel --ws puts`, which proxies `/ws` on the tunnel's HTTPS origin to a real-time `games/reference-server` (Scope).
 
 ## Deviations
+
+**Note from M27's gate (orchestrator):** `createBytePump` (`src/net/pump.ts`, M27) allocates per message (review finding, `/private` scratch report, not kept). It ran only in Node tests, outside `hot-paths.md`'s zero-allocation rule; wrapping it in the net worker here makes it a hot path, so make it allocation-free (reused buffers) and cover the net worker with a zero-GC page before relying on it.

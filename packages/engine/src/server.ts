@@ -885,6 +885,11 @@ export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldSe
       // rejection" report for a caller that only ever calls `stop()`).
       await ready.catch(() => {})
       if (simHost) await simHost.stop()
+      // Brief Scope: "`stop()` = `SimHost.stop()` then close connections" -- queued ones included.
+      for (const c of acceptedConnections) c.close(0)
+      for (const c of pendingConnections) c.close(0)
+      acceptedConnections.length = 0
+      pendingConnections.length = 0
     },
   }
   return worldServer

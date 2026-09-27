@@ -1,6 +1,6 @@
 # M27: Server entrypoint and netcode harness
 
-Status: not started · After: 22b, 24, 16b · Tyler-dependent: no
+Status: done · After: 22b, 24, 16b · Tyler-dependent: no
 
 ## Goal
 `engine/server` exports `createWorldServer(cfg, host).accept(connection)`, built on the TS sim host of M13/M15b and the persistence of M22/M22b, and `engine/server/node` runs a built game under Node. A `netcode` suite in `pnpm test` runs that real server with the real `.wasm` and K headless role=client instances in one Node process, joined by in-memory `Connection` pairs behind a seeded conditioner on a virtual clock, and asserts replica/host hash convergence. Every later network milestone adds scenarios to this harness.
@@ -59,11 +59,11 @@ Handshake, identity, reconnect (M28, M28b). Net worker, `ws`, loopback subset (M
 Netcode: `join-converges` (K=4, action mix, `assertConverged`), `late-join`, `conditioned-link` (latency, jitter, stall; the same seed gives an identical `trace()` twice), `latest-wins-datagrams`, `counters-exact` (bytes per client per tick exact for a fixed seed), `headless-ui-and-camera` (`ui()` returns the fixture's last `Ui` JSON, M16b's kind-1 record; `setCamera` moves the subscription), `harness-accepts-build-dir` (`fixture` given as a `buildGame` output directory). `wasm`: `server/load-or-create` (stop, reopen on fs storage, same hash), `server/ready-rejects-on-corrupt-world`, `server/accept-before-ready-waits`. TS unit: `virtual-clock`, `conditioner`, `memory-connection`, `byte-pump-backpressure` (full ring retries, `drops` stays 0).
 
 ## Exit criteria
-- [ ] `pnpm test netcode` passes within the 0020 §3 budget; two runs of one seed produce identical traces.
-- [ ] `pnpm test wasm` runs its logs through `createWorldServer` under Node and Bun with the existing golden hashes.
-- [ ] No `node:` import outside `src/server-node.ts` and M22b's fs storage (grep test); Biome's restricted-globals rule (M03) passes with no new override.
-- [ ] `createWorldServer`'s return type and `HostServices.onFatal?` match 0024 §5 (type-asserted in a `unit` test).
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `pnpm test netcode` passes within the 0020 §3 budget; two runs of one seed produce identical traces.
+- [x] `pnpm test wasm` runs its logs through `createWorldServer` under Node and Bun with the existing golden hashes.
+- [x] No `node:` import outside `src/server-node.ts` and M22b's fs storage (grep test); Biome's restricted-globals rule (M03) passes with no new override.
+- [x] `createWorldServer`'s return type and `HostServices.onFatal?` match 0024 §5 (type-asserted in a `unit` test).
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test netcode` · `pnpm test wasm` · `pnpm test netcode -t late-join` · `pnpm lint`

@@ -239,3 +239,31 @@ test('nodeHostServices: a real server ticks over real fs storage and reopens to 
   ).simHash()
   expect(actualHash).toBe(expectedHash)
 })
+
+test('server/stop-closes-connections', async () => {
+  // Through the package's own exports map (`engine/server`), not the source path: ADR 0017 §2.
+  const { createWorldServer: fromPackage } = await import('engine/server')
+  const { wasm } = await loadFixture('puts')
+  const server = fromPackage(CFG, {
+    wasm,
+    storage: memoryStorage(),
+    clock: { now: () => 0 },
+    timer: timerDouble(),
+  })
+  const closed: string[] = []
+  const conn = (name: string): Connection => ({
+    datagrams: false,
+    onMessage: null,
+    onClose: null,
+    send: () => {},
+    close: () => {
+      closed.push(name)
+    },
+  })
+  server.accept(conn('before-ready'))
+  await server.ready
+  server.accept(conn('after-ready'))
+  expect(closed).toEqual([])
+  await server.stop()
+  expect(closed.sort()).toEqual(['after-ready', 'before-ready'])
+})
