@@ -1,7 +1,7 @@
 // `createWorldServer` (docs/plan/27-server-entrypoint-and-netcode-harness.md): the three
 // `server/*` tests named in its own Tests added list, driven against the real `fx-puts` `.wasm`
 // under Node.
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, test } from 'vitest'
@@ -241,10 +241,17 @@ test('nodeHostServices: a real server ticks over real fs storage and reopens to 
 })
 
 test('server/stop-closes-connections', async () => {
-  // Through the package's own exports map (`engine/server`), not the source path: ADR 0017 §2.
-  const { createWorldServer: fromPackage } = await import('engine/server')
+  // ADR 0017 §2: `engine/server` is a public subpath (it was missing from the exports map until
+  // M27's gate). Asserted on `package.json` itself: CI typechecks before `dist/` is built.
+  const pkg = JSON.parse(
+    await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
+  ) as { exports: Record<string, unknown> }
+  expect(pkg.exports['./server']).toEqual({
+    types: './dist/server.d.ts',
+    default: './dist/server.js',
+  })
   const { wasm } = await loadFixture('puts')
-  const server = fromPackage(CFG, {
+  const server = createWorldServer(CFG, {
     wasm,
     storage: memoryStorage(),
     clock: { now: () => 0 },
