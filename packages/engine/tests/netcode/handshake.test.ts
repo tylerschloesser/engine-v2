@@ -5,7 +5,7 @@
 // scenario drives `harness.connectRaw()` byte for byte (Seams); nothing here mocks the transport
 // or the clock (0020 §7).
 import { describe, expect, test } from 'vitest'
-import { CloseCode } from '../../src/host/handshake.js'
+import { ByeReason, CloseCode } from '../../src/host/handshake.js'
 import { hashSecretHex, hexDecode, type SessionEntry } from '../../src/host/sessions.js'
 import {
   type Connection,
@@ -161,9 +161,17 @@ describe('handshake', () => {
       const conn1 = harness.connectRaw()
       const conn1Messages: Uint8Array[] = []
       let conn1CloseCode: number | undefined
-      conn1.onMessage = (bytes) => conn1Messages.push(bytes.slice())
+      // `events` orders message/close arrivals against each other (Constraints: the orchestrator's
+      // own conditionLink fix -- a message queued before `close()` must still be delivered first,
+      // same as a real reliable-ordered connection/WebSocket).
+      const events: ('message' | 'close')[] = []
+      conn1.onMessage = (bytes) => {
+        conn1Messages.push(bytes.slice())
+        events.push('message')
+      }
       conn1.onClose = (code) => {
         conn1CloseCode = code
+        events.push('close')
       }
       conn1.send(MsgClass.ReliableOrdered, hello)
       await harness.advanceTicks(1) // deliver Hello to the host
@@ -185,13 +193,15 @@ describe('handshake', () => {
       await harness.advanceTicks(1) // pumpHandshakes: supersedes conn1, Welcome to conn2
 
       // 0013: "the old socket gets `Bye{Superseded}` and must not auto-reconnect" -- Constraints:
-      // asserts `4001` on the old end (the close code, not the message body, is what a
-      // non-parsing net worker acts on, Provides). The host sends `Bye` then closes in the same
-      // synchronous step (`server.ts`), so under this harness's own conditioner a `Bye` queued
-      // immediately before a `close()` is dropped, never delivered (`conditioner.ts`'s own `run`:
-      // `if (disconnected.value) { resolve(); return }`) -- realistic (a close can race queued
-      // data on a real socket too), and exactly why the close code, not the body, is the contract.
+      // asserts `4001` on the old end. `conditioner.ts`'s `scheduleClose` orders the close after
+      // every already-scheduled send on the same direction (0009: a reliable-ordered connection,
+      // and a real WebSocket, deliver queued application data ahead of their own close), so the
+      // `Bye` the host sent immediately before closing must still arrive first.
       expect(conn1CloseCode).toBe(CloseCode.Superseded)
+      const byeMessage = conn1Messages[conn1Messages.length - 1] as Uint8Array
+      expect(Array.from(byeMessage)).toEqual([0x05, ByeReason.Superseded])
+      expect(events[events.length - 1]).toBe('close')
+      expect(events[events.length - 2]).toBe('message') // the Bye, right before the close
 
       expect(conn2Messages.length).toBeGreaterThanOrEqual(1)
       const player2 = parseWelcomePlayerId(conn2Messages[0] as Uint8Array)

@@ -106,9 +106,10 @@ function makeSend(
   clock: VirtualClock,
   getConditions: () => ConditionerConditions,
   disconnected: { value: boolean },
+  closing: { value: boolean },
 ): ConnectionSend {
   return (cls, bytes, len?: number) => {
-    if (disconnected.value) return
+    if (disconnected.value || closing.value) return
     // "engine-owned buffer, valid only during the call" (0009): copy now, released later from
     // `advanceTo`'s own deferred pass. `len` (Deviations, M27 steps 3-4, the same gap found and
     // fixed in `memory-connection.ts`'s own `send`): the optional third parameter `RingConnection.
@@ -142,6 +143,48 @@ function makeSend(
         }),
     })
   }
+}
+
+/**
+ * Orders `underlying.close(code)` after every already-scheduled send on `dir` (0009: a
+ * reliable-ordered connection -- and a real WebSocket -- delivers queued application data ahead
+ * of its own close, so a message sent immediately before `close()` must still arrive; ADR
+ * amendment candidate for a future milestone if a datagram-only adapter ever needs a different
+ * rule). `dir.floorAt` is already this direction's own "no earlier than" marker (`draw`'s own doc
+ * comment); a close is scheduled the same way a send's own draw would be, just with no latency/
+ * jitter of its own (0009's `Connection.close` has no wire cost to model).
+ *
+ * `disconnected` (shared, `ConditionedLink.disconnect`'s own abrupt flag) is checked at delivery
+ * time, same as `makeSend`'s own `run()`: an abrupt `disconnect()` in the meantime has already
+ * closed the underlying pair directly, so this call would be a harmless but redundant no-op.
+ * `closing` (per end) is checked at *call* time, synchronously, both here (idempotency: a second
+ * `close()` on the same end is a no-op, matching the pre-fix behaviour) and in `makeSend` (no new
+ * send is drawn after this end has asked to close, even though the actual close has not happened
+ * yet).
+ */
+function scheduleClose(
+  underlying: Connection,
+  dir: DirectionState,
+  link: number,
+  clock: VirtualClock,
+  disconnected: { value: boolean },
+  closing: { value: boolean },
+  code: number,
+): void {
+  if (disconnected.value || closing.value) return
+  closing.value = true
+  const deliverAt = Math.max(dir.floorAt, clock.now())
+  dir.floorAt = deliverAt
+  const seq = dir.seq++
+  clock.scheduleDelivery({
+    deliverAt,
+    link,
+    seq,
+    run: () => {
+      if (disconnected.value) return
+      underlying.close(code)
+    },
+  })
 }
 
 /**
@@ -179,26 +222,29 @@ export function conditionLink(
     stalledUntil: 0,
   }
 
+  // Per-end idempotency/no-new-sends-after-close flags (Deviations: distinct from `disconnected`,
+  // which stays `ConditionedLink.disconnect`'s own shared, abrupt "drop everything" flag) -- a
+  // graceful `close()` only ever stops *that* end's own future sends, never the peer's, and never
+  // drops what is already queued.
+  const aClosing = { value: false }
+  const bClosing = { value: false }
+
   const endA: Connection = {
     datagrams: a.datagrams,
     onMessage: null,
     onClose: null,
-    send: makeSend(a, dirAtoB, link, clock, () => cond, disconnected),
+    send: makeSend(a, dirAtoB, link, clock, () => cond, disconnected, aClosing),
     close(code) {
-      if (disconnected.value) return
-      disconnected.value = true
-      a.close(code)
+      scheduleClose(a, dirAtoB, link, clock, disconnected, aClosing, code)
     },
   }
   const endB: Connection = {
     datagrams: b.datagrams,
     onMessage: null,
     onClose: null,
-    send: makeSend(b, dirBtoA, link, clock, () => cond, disconnected),
+    send: makeSend(b, dirBtoA, link, clock, () => cond, disconnected, bClosing),
     close(code) {
-      if (disconnected.value) return
-      disconnected.value = true
-      b.close(code)
+      scheduleClose(b, dirBtoA, link, clock, disconnected, bClosing, code)
     },
   }
   // The underlying pair's own delivery is already the conditioned message (conditioning happens on
