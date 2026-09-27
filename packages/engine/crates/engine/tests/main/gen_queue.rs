@@ -272,12 +272,25 @@ fn set_view_reaches_quiescence_under_lru_capacity_churn() {
 /// the client has already pristine-generated (here, `TerrainStore::materialize`, the same effect
 /// `TerrainFeed::deliver` -> `insert_pristine` has once a gen worker's result lands), then
 /// receives a host snapshot for (`Replica::apply_snapshot_overlay` -> `TerrainStore::
-/// replace_overlay`), is evicted from the cache -- and with the camera held perfectly still
-/// (`view.visible` identical across both `set_view` calls), `GenQueue::set_view` used to return
-/// early on `last_visible` alone and never re-request it, so `client_chunk_hash` would read
-/// `NotCached` forever. Before the `cache_invalidation_seq` consultation this fails at the
-/// `resorted` assert (`set_view` returns `false`, and the chunk is never in `dispatched`); after,
-/// it passes.
+/// replace_overlay`) -- and with the camera held perfectly still (`view.visible` identical across
+/// both `set_view` calls), `GenQueue::set_view` used to return early on `last_visible` alone and
+/// never re-request it, so `client_chunk_hash` would read `NotCached` forever.
+///
+/// **M26 gate round 2** (docs/plan/26-prediction-rendering-and-clocks.md Deviations, "Gate fix
+/// round 2"): gate fix round 1 changed what `replace_overlay` does to a chunk that *was* resident
+/// -- it now re-materializes immediately (0012/0018 §3: "a re-stage of a resident chunk must never
+/// pass through non-resident"), so the chunk this test evicts never actually goes `NotCached`
+/// anymore; the original bug this guards is now structurally impossible for `replace_overlay`
+/// specifically. What is *not* new: `Cache::evict_if_present` still runs inside `replace_overlay`
+/// and still bumps `cache_invalidation_seq` unconditionally, whether or not a re-materialize
+/// follows in the same call -- so `set_view`'s own consultation of that counter must still force a
+/// rescan on this exact sequence, even though `is_cached` never flips this time. Investigated and
+/// found unreachable through the public API as an alternative: `TerrainStore::clear_overlay`'s own
+/// `None => evict` branch needs "cached, but this chunk's overlay pristine is still unknown" --
+/// every path that makes a chunk cached (`materialize`, `insert_pristine`) unconditionally calls
+/// `ChunkOverlay::apply_onto`, which learns every current entry's pristine value in the same call,
+/// so that combination can no longer arise for an overlay ever exposed to gate round 1's own
+/// re-materialize. `replace_overlay` remains the one live "still evicts" path this test can pin.
 #[test]
 fn overlay_replace_evicts_and_regenerates_with_view_unchanged() {
     let mut s = store(CacheCapacity::Chunks(16));
@@ -291,22 +304,35 @@ fn overlay_replace_evicts_and_regenerates_with_view_unchanged() {
     let view = view_at(single(chunk));
     q.set_view(&view, &s); // establishes last_visible; the chunk is already cached, so nothing to queue
 
-    // A host snapshot arrives for this chunk and evicts it -- 0007 §1's own doc comment: "the next
-    // read regenerates and re-applies, which is always correct". Nothing about the camera changed.
+    // A host snapshot arrives for this chunk. Gate round 1: since it was resident, `replace_overlay`
+    // evicts *and immediately re-materializes* it (0007 §1's own doc comment: "the next read
+    // regenerates and re-applies, which is always correct" -- now paid synchronously, in this same
+    // call, rather than lazily on the next read). Nothing about the camera changed.
     s.replace_overlay(chunk, &[(0, Tile::new(9, 0, 0))]);
-    assert!(!s.is_cached(chunk));
+    assert!(
+        s.is_cached(chunk),
+        "M26 gate round 2: replace_overlay re-materializes a chunk that was resident immediately, \
+         so it must not read as evicted afterward"
+    );
 
     // The camera never moved: `view.visible` is byte-identical to the call above.
     let resorted = q.set_view(&view, &s);
     assert!(
         resorted,
-        "set_view must not skip its rescan: the chunk was evicted since the last call, even \
-         though the view is unchanged"
+        "set_view must not skip its rescan: cache_invalidation_seq moved (evict_if_present still \
+         runs, unconditionally, inside replace_overlay) even though is_cached never changed and \
+         the view is unchanged"
     );
 
+    // M26 gate round 2: the chunk is already correctly resident (with the new overlay content
+    // applied), so the rescan this test just proved happened must not waste a regeneration request
+    // on *it* specifically -- `maybe_enqueue`'s own `is_cached` check is what skips it. (Neighbours
+    // of `chunk` inside `view_at`'s own ring, never materialized in this test, are expected in
+    // `dispatched` regardless -- this asserts `chunk` itself is not among them, not that the set
+    // is empty.)
     let dispatched = drain_all(&mut q, 0);
     assert!(
-        dispatched.contains(&chunk),
-        "the evicted chunk must be re-queued for generation even though the view never changed"
+        !dispatched.contains(&chunk),
+        "a chunk the render side never actually lost residency for must not be re-requested"
     );
 }

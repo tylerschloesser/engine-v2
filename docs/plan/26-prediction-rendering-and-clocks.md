@@ -520,3 +520,67 @@ names, with the deviations below.
   gate is the orchestrator's own job, per this round's own must-knows).
 
 **Open gate failures (orchestrator, M26 gate round 2, on the commit after `95e48b9`):** round 1's `replace_overlay` re-materialize (now guarded by the orchestrator to chunks that were resident) breaks two existing tests that assert the old evict-then-regenerate behaviour: `world::terrain::tests::replace_overlay_evicts_and_reports_cache_event` and `gen_queue::overlay_replace_evicts_and_regenerates_with_view_unchanged` (M15c's regression test for `GenQueue::set_view`'s `cache_invalidation_seq` rescan). The new behaviour is accepted. (1) Update both tests to it; the M15c test must keep guarding the rescan through a path that still evicts (e.g. `clear_overlay`, or whatever evict path remains), shown failable by reverting M15c's `cache_invalidation_seq` consultation. (2) Measure the synchronous re-materialize cost on the client worker: ms per chunk natively for the `terrain`/`predict` worldgen, and the worst join burst (every visible chunk resident before its snapshot lands), recorded in Deviations.
+
+**Gate fix round 2 (this session).**
+
+- **(1a) `world::terrain::tests::replace_overlay_evicts_and_reports_cache_event` updated.** The
+  chunk now stays cached after `replace_overlay` (`963023c`'s own guard re-materializes it
+  immediately); `cache_invalidation_seq` still bumps by exactly 1 (`evict_if_present` runs
+  unconditionally either way); the event stream now carries two events, `Evicted` then `Loaded`
+  for the same chunk, in that order, instead of one.
+- **(1b) `gen_queue::overlay_replace_evicts_and_regenerates_with_view_unchanged` updated, using
+  `replace_overlay` itself as "a path that still evicts".** Investigated `clear_overlay` first, per
+  the round's own suggestion, and found its `None => evict` branch (needs "cached, but this
+  chunk's own overlay pristine is still unknown") now **unreachable through the public API**:
+  every path that makes a chunk cached (`TerrainStore::materialize`, `insert_pristine`)
+  unconditionally calls `ChunkOverlay::apply_onto`, which learns every current entry's pristine
+  value in the same call -- so a chunk can no longer be simultaneously "resident" and "pristine
+  unknown" once its overlay has ever been exposed to a materialize, which round 1's own
+  re-materialize now guarantees happens in the very same `replace_overlay` call that loaded it.
+  `replace_overlay` itself is the one remaining live path: `Cache::evict_if_present` still runs,
+  and still bumps `cache_invalidation_seq` unconditionally, whether or not a re-materialize follows
+  in the same call -- so this is what the updated test now pins. New assertions: `is_cached(chunk)`
+  stays `true` after `replace_overlay` (round 1's own guard); `set_view` still returns `resorted =
+  true` on the unchanged-view rescan (the actual property under test: the counter moved, so the
+  rescan still had to happen, even though residency itself never flipped this time); the rescan
+  does not re-request `chunk` itself (`!dispatched.contains(&chunk)` -- `maybe_enqueue`'s own
+  `is_cached` check correctly skips a chunk that was never actually lost; neighbouring, never-
+  materialized chunks inside `view_at`'s own ring are expected in `dispatched` regardless, so this
+  checks membership, not emptiness -- found live: an earlier draft asserted `dispatched.is_empty()`
+  and failed on exactly those neighbours). The original bug this test guards (`client_chunk_hash`
+  reading `NotCached` forever with the camera held still) is now structurally impossible for
+  `replace_overlay` specifically -- residency itself never lapses any more -- but the counter's own
+  consultation is still real and still load-bearing for any other case that might yet reach it, and
+  removing it would still be a silent regression by this test's own `resorted` assertion alone.
+- **Failability, inject-fail-revert (both, reverted before commit).** `replace_overlay_evicts_and_
+  reports_cache_event`: already covered by round 1's own inject-fail-revert on `replace_overlay`
+  itself (fails identically under the reverted body). `overlay_replace_evicts_and_regenerates_with_
+  view_unchanged`: temporarily dropped `gen_queue.rs`'s own `&& self.last_invalidation_seq ==
+  invalidation_seq` clause from `set_view` (the M15c consultation) -- fails exactly as expected, at
+  the `resorted` assertion: `set_view must not skip its rescan: cache_invalidation_seq moved ...`.
+  Restored; `git diff` on `gen_queue.rs` is empty.
+- **(2) Synchronous re-materialize cost, measured natively** (temporary `#[test]` fns with
+  `std::time::Instant`, `cargo test -p <fixture> -- --nocapture`, both reverted before commit --
+  `git diff` on `fixtures/terrain/src/lib.rs` and `fixtures/predict/tests/clock.rs` is empty).
+  Dev-profile build (the same profile every fixture's `.wasm`/native test runs under in this repo):
+  - `fx-terrain`'s own `FixtureTerrain::generate` (hand-picked deterministic tiles, no real
+    worldgen): **198 ns/chunk** (100,000 chunks, 19.82 ms total).
+  - `fx-predict`'s own `PredictWorldgen::generate` (a bounds check per tile, no noise): **781
+    ns/chunk** (100,000 chunks, 78.12 ms total).
+  - **Worst join burst**: 128 chunks (0010's own subscription cap, `host::subs::CAP_CHUNKS`) all
+    already resident (`TerrainStore::materialize`, simulating the client's own local worldgen
+    winning the race gate round 1 found), then `replace_overlay` called on all 128 back to back
+    (simulating every one of them landing in the connection's own first `ChunkSnapshots` burst at
+    once, the worst case this fix's own synchronous cost can hit): **99.08 µs total, 774 ns/chunk**
+    -- indistinguishable from raw `generate()` cost alone (781 ns/chunk above), so the cache/overlay
+    bookkeeping `replace_overlay`/`materialize` add on top of worldgen itself is negligible. At
+    roughly a tenth of a millisecond for the documented worst case, against a 16 ms/frame budget
+    (60 Hz) or the 0018 §3 upload-budget's own per-frame window, this is not a measurable frame-time
+    risk even at the theoretical maximum burst size -- no budget in `budgets.json` needs touching.
+- **Verification, foreground, one command at a time, `uptime` checked beside every run** (load 2-6
+  throughout): targeted runs first (`rust -t replace_overlay_evicts_and_reports_cache_event`, `rust
+  -t overlay_replace_evicts_and_regenerates_with_view_unchanged`, each `rust pass 1 tests`), then
+  the **whole** `pnpm test rust` once, foreground (a subset run is exactly what missed these two
+  last round): **`rust pass 597 tests 0.8s/10s`**, green -- both updated tests count among them;
+  neither round changed the total test count (both edits changed assertions on an existing test,
+  no test added or removed). `pnpm lint`: `biome pass`, `rustfmt pass`, `clippy pass`, `tsc pass`.

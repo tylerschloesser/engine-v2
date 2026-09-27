@@ -481,8 +481,14 @@ mod tests {
     }
 
     /// M15c step 2: `replace_overlay`'s eviction (a host snapshot landing on an already-resident,
-    /// pristine-generated chunk -- the exact race in "The bug, confirmed at M15b's gate") must now
-    /// be observable the same way `materialize`'s own LRU eviction already is.
+    /// pristine-generated chunk -- the exact race in "The bug, confirmed at M15b's gate") must
+    /// still be observable through `cache_invalidation_seq` the same way `materialize`'s own LRU
+    /// eviction already is, even though M26's gate fix round 1 (docs/plan/
+    /// 26-prediction-rendering-and-clocks.md Deviations) now immediately re-materializes a chunk
+    /// that was resident, so the slab itself never actually goes missing (0012/0018 §3: "a
+    /// re-stage of a resident chunk must never pass through non-resident") -- `evict_if_present`
+    /// still runs, still bumps the seq and still pushes its own `Evicted` event, exactly as before;
+    /// only what happens *after* changed (M26 gate round 2).
     #[test]
     fn replace_overlay_evicts_and_reports_cache_event() {
         let mut s = store(CacheCapacity::Chunks(4));
@@ -495,19 +501,26 @@ mod tests {
         let seq_before = s.cache_invalidation_seq();
         s.replace_overlay(chunk, &[(0, Tile::new(1, 0, 0))]);
         assert!(
-            !s.is_cached(chunk),
-            "replace_overlay must still evict (0007 §1)"
+            s.is_cached(chunk),
+            "M26 gate round 2: a chunk that was resident is re-materialized immediately, not \
+             left evicted"
         );
         assert_eq!(
             s.cache_invalidation_seq(),
             seq_before + 1,
-            "cache_invalidation_seq must bump even before anything drains the event queue"
+            "cache_invalidation_seq must still bump even before anything drains the event queue"
         );
 
         let mut events = Vec::new();
         s.drain_cache_events(|e| events.push(e));
-        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events.len(),
+            2,
+            "M26 gate round 2: the evict is still reported, immediately followed by the \
+             re-materialize's own Loaded"
+        );
         assert!(matches!(events[0], CacheEvent::Evicted { chunk: c, .. } if c == chunk));
+        assert!(matches!(events[1], CacheEvent::Loaded { chunk: c, .. } if c == chunk));
     }
 
     #[test]
