@@ -203,3 +203,85 @@ none (the device check for reconnect timing is attached to M29)
   `src/client/secret.ts`, but nothing calls it yet); view-clamp wiring to `setViewClamp` (Welcome's
   `view_max_tiles_per_axis`/`view_max_chunks` fields are real and echoed, but nothing on the client
   side consumes them into the camera yet -- also browser wiring, step 5).
+
+**Gate item + steps 3-4 (this range).** Base `3d2089c` (step 2). Commits: `ab5815d` (gate),
+`31cf661` (step 3), `21235c5` (step 4, partial).
+
+- **Gate item.** `tests/wasm/puts.test.ts`'s `wasm_connected_100_matches_its_own_golden` and
+  `wasm_script_a_matches_native` now speak a real `Hello` (a throwaway `Role.Client` instance's
+  own `client_hello()` bytes, fed to `conn.onMessage` directly, `serverInternals(server).
+  handshakesSettled()` awaited before ticking) instead of relying on the old implicit accept.
+  Both checked-in goldens (`golden-connected.json`, `golden-script-a.json`, including the literal
+  `0a7cc2623a83a03e`) come out **unchanged**, exactly as predicted: `wasm_connected_100` has no
+  actions to interleave with the handshake at all, and `wasm_script_a`'s own first entry (`tick:
+  1`, `connect: true` plus action `seq: 1` in the same script entry) turns out not to need the
+  connect record and the action on the identical tick after all -- a real handshake cannot admit
+  an action before its own attach has been processed at a tick boundary (Welcome must round-trip
+  first, 0013), so `seq: 1` ends up admitted for tick 2 instead of tick 1, landing in the *same*
+  frame as `seq: 2` (which was already scheduled for tick 2) rather than its own. This reshuffles
+  only ticks 1-2 (`Joined`/`Connected` alone on tick 1; `Paint` then `Spawn` together on tick 2,
+  in arrival order) and touches disjoint tile positions with no tick-count-dependent effect in
+  between, so the final `Store` state -- and therefore the hash -- is bit-identical either way.
+  Never re-blessed. `pnpm test wasm`: 156/156.
+- **Superseded** (0013 "the same secret in a second tab: newest wins"): `Host::attach`
+  (`host/mod.rs`) scans `self.conns` for another `ConnSlot` already carrying the same `PlayerId`
+  and frees it silently on every attach -- no `Disconnected` record, no `presence.remove` (the
+  player is only moving connections, not leaving). `last_superseded: Option<ConnId>` records
+  which one; `Instance::sim_last_superseded(&self) -> u32` (`u32::MAX` = none) is a **new instance
+  method, not a new ABI export symbol** -- `sim_attach`'s own `Result`-region contract widened in
+  place (one LE `u32` at offset 0, written by `abi::mod::sim_attach` right after a successful
+  attach, a second sequential borrow of `rt.layout` after the `Tx` borrow has already ended) the
+  same way `client_clock_stats` widened from 16 to 20 bytes at M28 step 2. `ABI_VERSION` 27 -> 28.
+  `server.ts`'s `pumpHandshakes` reads `built.supersededConn` off the widened
+  `SimInstance.simAttach` and sends the freed connection `Bye{Superseded}`
+  (`host/handshake.ts`'s new `buildBye`/`ByeReason`, pure, golden-matched: `[0x05, reason]`
+  against `session_bye.hex`) then `closeHandshake(..., CloseCode.Superseded)`. **Measured, not
+  assumed:** under this harness's own `conditionLink`, a `Bye` queued immediately before a
+  `close()` call is *silently dropped*, never delivered -- `conditioner.ts`'s own `run()` checks
+  `disconnected.value` at release time, which is already `true` by then (`net/conditioner.ts`
+  Deviations candidate for a future milestone, not touched here). The `superseded` test asserts
+  only the close code (`4001`) for this reason, matching Constraints and the Provides line's own
+  "the close code, not the message body, is what a non-parsing net worker acts on".
+- **`HeadlessClient.leave()`** sends `Bye{Leave}` then calls `connection.close(0)`; `status()`
+  now also exposes `revealed` (`ClientCore::revealed()` was already wired end to end by step 2 --
+  `worker/client-net.ts`'s `createNetPump` already read it off `client_clock_stats` into the clock
+  block -- nothing had read it back out on the headless side until now).
+- **`net-harness.ts`: `addClient(secret?)`/`makeClient(secretOverride?)`.** Additive, not a
+  renamed seam: a scenario that wants a *specific* returning or superseding identity (not merely
+  "some real one") passes it; omitted, behaviour is exactly pre-existing.
+- **`crash-between-table-and-log`'s own storage-fault-injection shape** (not a reusable helper --
+  local to the one test): `storage.append` is monkey-patched to throw exactly once, right after
+  `serverInternals(server).handshakesSettled()` has durably written the session table but before
+  the next tick's own `sim_seal_frame` -> `logSink` -> `Persistence.appendFrame` -> `storage.
+  append` call, proven to matter (the tick throws only while armed, inject-fail-revert). The
+  "crash" itself is simulated by never trusting or ticking that in-memory `WorldServer` again and
+  building a fresh one over the same backing `Map` (`memoryStorage(backing)` twice) -- `stop()` is
+  never called on the "crashed" instance, since it would run its own snapshot/flush sequence
+  against a world 0005 says a failed write already made unrecoverable-from-here. No TS `Welcome`
+  decoder exists yet: `parseWelcomePlayerId` (local to `handshake.test.ts`) reads just the one
+  leading varint field these scenarios need, a tiny LEB128 reader mirroring `host/handshake.ts`'s
+  own private `readVarint`, not a general decoder.
+- **`heartbeat` and `HeadlessClient` wired onto `createLink`: not done.** `src/net/link.ts`'s
+  `createLink` (Provides, verbatim shape) is real, tested (`dead-after-silence`,
+  `stale-socket-ignored`, `probe-on-visible`, `backoff-schedule` all green over
+  `createManualClock()`) and needs no ABI/Rust change -- Scope's own "Pure TS on `Clock`/
+  `Scheduler`" made it cleanly separable from the rest of step 4. Heartbeat does not: `sim_
+  build_frame`'s own "0 = nothing to say" convention means a truly idle world currently sends
+  nothing at all, and making it emit an empty `Frame` on a schedule needs either a new host-side
+  timer independent of the tick pacing (heartbeats are wall/virtual-clock-paced at 500 ms, not
+  tick-paced) or a forced minimal-header `sim_build_frame` call -- a real design decision (which
+  regions/state it reads, whether it goes through the tick path or beside it) this implementer did
+  not have budget left to make responsibly. Wiring `HeadlessClient` onto `createLink` is a
+  structural change to `createHeadlessClient` (replacing its fixed `connection` with a `dial`
+  and reacting to `onUp`/`onDown` to redrive `sendHello`/the net pump) that risks every existing
+  netcode scenario if rushed. **Recommendation for the next implementer:** heartbeat first (it is
+  what makes `dead-after-silence`'s real-world counterpart, `heartbeat-idle-world`, meaningful),
+  as a `SimHost`-level timer (`services.timer`, already injected) that calls a new, additive
+  `sim_build_frame_heartbeat(conn)`-shaped export only when `simBuildFrame` returned `0` and 500 ms
+  have passed since that connection's last non-empty send; then `HeadlessClient`-on-`createLink`,
+  since heartbeat is what proves the dead timer's own 3 s budget has real headroom (500 ms x 6).
+  `pnpm lint` green; `node scripts/repeat.mjs netcode 20` surfaced one **pre-existing, unrelated**
+  flake (`conditioned-link.test.ts`'s "same seed gives an identical trace twice", ~1/20 runs) that
+  reproduces identically with `link.ts`/`liveness.test.ts` removed, on step 3's own commit --
+  not introduced in this range, not investigated further (Non-scope: `conditioner.ts` is
+  untouched here).
