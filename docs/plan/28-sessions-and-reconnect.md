@@ -235,13 +235,18 @@ none (the device check for reconnect timing is attached to M29)
   `server.ts`'s `pumpHandshakes` reads `built.supersededConn` off the widened
   `SimInstance.simAttach` and sends the freed connection `Bye{Superseded}`
   (`host/handshake.ts`'s new `buildBye`/`ByeReason`, pure, golden-matched: `[0x05, reason]`
-  against `session_bye.hex`) then `closeHandshake(..., CloseCode.Superseded)`. **Measured, not
-  assumed:** under this harness's own `conditionLink`, a `Bye` queued immediately before a
-  `close()` call is *silently dropped*, never delivered -- `conditioner.ts`'s own `run()` checks
-  `disconnected.value` at release time, which is already `true` by then (`net/conditioner.ts`
-  Deviations candidate for a future milestone, not touched here). The `superseded` test asserts
-  only the close code (`4001`) for this reason, matching Constraints and the Provides line's own
-  "the close code, not the message body, is what a non-parsing net worker acts on".
+  against `session_bye.hex`) then `closeHandshake(..., CloseCode.Superseded)`. **Orchestrator
+  ruling, fixed in this range (commit `a02b683`):** `conditionLink` used to close synchronously
+  and set one flag (`disconnected`) that every not-yet-released delivery on either direction
+  checked at release time -- including ones already scheduled *before* `close()` was ever called
+  -- so a `Bye` sent immediately before close was always dropped, unlike a real reliable-ordered
+  connection (or a WebSocket), which delivers queued data ahead of its own close. Fixed by
+  scheduling `close(code)` itself through the same per-direction `seq`/`floorAt` ordering
+  `makeSend` already uses (`scheduleClose`), with new per-end `aClosing`/`bClosing` idempotency
+  flags distinct from `disconnected` (which stays `disconnect()`'s own abrupt "drop everything"
+  flag, untouched). `superseded` now asserts the `Bye` bytes arrive (last message, `[0x05, 1]`)
+  immediately before the `4001` close, ordered (`events` array); reverting the fix fails exactly
+  that assertion.
 - **`HeadlessClient.leave()`** sends `Bye{Leave}` then calls `connection.close(0)`; `status()`
   now also exposes `revealed` (`ClientCore::revealed()` was already wired end to end by step 2 --
   `worker/client-net.ts`'s `createNetPump` already read it off `client_clock_stats` into the clock
@@ -261,27 +266,58 @@ none (the device check for reconnect timing is attached to M29)
   decoder exists yet: `parseWelcomePlayerId` (local to `handshake.test.ts`) reads just the one
   leading varint field these scenarios need, a tiny LEB128 reader mirroring `host/handshake.ts`'s
   own private `readVarint`, not a general decoder.
-- **`heartbeat` and `HeadlessClient` wired onto `createLink`: not done.** `src/net/link.ts`'s
-  `createLink` (Provides, verbatim shape) is real, tested (`dead-after-silence`,
-  `stale-socket-ignored`, `probe-on-visible`, `backoff-schedule` all green over
-  `createManualClock()`) and needs no ABI/Rust change -- Scope's own "Pure TS on `Clock`/
-  `Scheduler`" made it cleanly separable from the rest of step 4. Heartbeat does not: `sim_
-  build_frame`'s own "0 = nothing to say" convention means a truly idle world currently sends
-  nothing at all, and making it emit an empty `Frame` on a schedule needs either a new host-side
-  timer independent of the tick pacing (heartbeats are wall/virtual-clock-paced at 500 ms, not
-  tick-paced) or a forced minimal-header `sim_build_frame` call -- a real design decision (which
-  regions/state it reads, whether it goes through the tick path or beside it) this implementer did
-  not have budget left to make responsibly. Wiring `HeadlessClient` onto `createLink` is a
-  structural change to `createHeadlessClient` (replacing its fixed `connection` with a `dial`
-  and reacting to `onUp`/`onDown` to redrive `sendHello`/the net pump) that risks every existing
-  netcode scenario if rushed. **Recommendation for the next implementer:** heartbeat first (it is
-  what makes `dead-after-silence`'s real-world counterpart, `heartbeat-idle-world`, meaningful),
-  as a `SimHost`-level timer (`services.timer`, already injected) that calls a new, additive
-  `sim_build_frame_heartbeat(conn)`-shaped export only when `simBuildFrame` returned `0` and 500 ms
-  have passed since that connection's last non-empty send; then `HeadlessClient`-on-`createLink`,
-  since heartbeat is what proves the dead timer's own 3 s budget has real headroom (500 ms x 6).
-  `pnpm lint` green; `node scripts/repeat.mjs netcode 20` surfaced one **pre-existing, unrelated**
-  flake (`conditioned-link.test.ts`'s "same seed gives an identical trace twice", ~1/20 runs) that
-  reproduces identically with `link.ts`/`liveness.test.ts` removed, on step 3's own commit --
-  not introduced in this range, not investigated further (Non-scope: `conditioner.ts` is
-  untouched here).
+- **`superseded`'s "no log record" claim, proven black-box (commit `f0bc520`, orchestrator
+  ruling):** wraps `SimHost.logSink` (`worldServerTestHandle`) and decodes each frame's own
+  `count` field (0005 Formats: `len varint | tick_delta varint | count varint | records |
+  crc32`), asserting the record-count delta across the supersede-processing tick is exactly `1`
+  (the surviving connection's own ordinary `Connected`) -- proven to matter by temporarily
+  pushing a `Disconnected` record in `Host::attach`'s own eviction branch (not committed): the
+  delta becomes `2`, failing.
+- **Real `PlayerId`-swap race, found and fixed (commit `5a2d4ba`), the actual root cause of the
+  `conditioned-link` flake the orchestrator flagged as in-scope:** `server.ts`'s handshake
+  `settle()` picked each never-before-seen secret's `PlayerId` (`sessions.create`) the instant its
+  own `crypto.subtle.digest` resolved; `pumpHandshakes` only ever *consumes* `attachQueue` in
+  `Hello`-arrival order, but the digest itself resolves through Node's real libuv thread pool,
+  whose completion order across two concurrent hashes is not seeded. Two simultaneously-joining
+  clients' own `PlayerId`s could therefore swap between runs of the identical seed -- not
+  wall-clock leakage, an unseeded `Math.random`, or `Map` ordering, but a genuine cross-closure
+  race on *when* each `settle()` is allowed to touch the session table (the orchestrator's four
+  named candidates were all ruled out; the cause is unrelated to `advanceTo`/`conditioner.ts`
+  themselves). Fixed with `sessionMutationChain`, a promise chain extended in the same arrival
+  order `attachQueue`'s own `slotIndex` already fixes: each handshake awaits its predecessor's own
+  turn before touching `sessions`, regardless of real digest completion order. Found via a scratch
+  loop harness (400+ sequential same-seed trace comparisons, not committed) that reproduced the
+  mismatch at iteration 37 before the fix and ran clean after it; `node scripts/repeat.mjs netcode
+  20`: 20/20 (was ~1/20-30 failing before).
+- **Heartbeat (commit `5121986`), tick-based, in Rust (orchestrator ruling):** `ConnSlot` gains
+  `last_sent_tick: Tick`; `Host::build_frame`'s own "nothing to say" branch falls through to build
+  the wire format's own already-defined heartbeat shape (`wire/CLAUDE.md`: "no sections =
+  heartbeat", the 10-byte header alone) once `G::TICK_RATE.millis(500)` ticks (10 at 20 Hz) have
+  passed since that connection was last actually sent anything -- no new ABI export, no wall-clock
+  timer: `sim_build_frame` simply returns a real length instead of `0` on a due tick.
+  `connection_and_subscriptions.rs`'s `idle_tick_builds_no_frame` (asserted silence held
+  indefinitely) is renamed `idle_tick_heartbeats_after_ten_silent_ticks` and now pins the exact
+  tick it doesn't.
+- **`HeadlessClient` wired onto `createLink` (commit `7ce2691`).** `HeadlessClientOptions.dial: ()
+  => Connection` replaces `connection`; `onUp` re-attaches `bytePump`, resets the pre-`Welcome`
+  state and resends `Hello`; `leave()` sends `Bye{Leave}` then `link.stop()` (the close-ordering
+  fix above means the `Bye` is actually delivered now). **Real bug found while wiring this:**
+  `createLink`'s own `dial()` set `onMessage`/`onClose` directly on the raw dialed `Connection`
+  and handed *that same object* to `onUp` -- but a 0009 `Connection` has only one `onMessage`/
+  `onClose` slot each, so `HeadlessClient`'s own `bytePump.attach(conn)` (which also sets
+  `onMessage`) silently stole every message away from the dead timer, which then never reset.
+  Fixed in `link.ts` itself: `onUp` now receives a thin wrapper (send/close pass through; `onUp`'s
+  own raw-connection callbacks re-dispatch to whatever the caller sets on the wrapper afterward),
+  so `link.ts`'s own bookkeeping and a caller's own protocol no longer fight over one slot.
+  `liveness/{dead-after-silence, stale-socket-ignored, probe-on-visible, backoff-schedule}` needed
+  the same fix (poked `onMessage`/`onClose` on the `onUp` result directly) -- now target the
+  harness's own raw `dials[]`, same literals. Every existing netcode scenario passed through the
+  new wiring unmodified, `assertConverged()` included -- the wrapper bug above was the only thing
+  that needed fixing, never a scenario. `liveness/heartbeat-idle-world` added: `fx-puts` has its
+  own once-a-second "walk/day bump" (real `Global` writes, no client action) that keeps a plain
+  dead-timer check from distinguishing "heartbeat" from "the game's own ambient ticking" on its
+  own, so the assertion instead looks for the heartbeat's own precise signature -- a `bytesDown
+  === 10` tick in `harness.counters(0).perTick`, which only a header-only frame can ever produce.
+  Proven to fail with heartbeat forced off (not committed): zero such ticks.
+- `pnpm lint`: green throughout (biome, rustfmt, clippy, tsc). Final `node scripts/repeat.mjs
+  netcode 20`: 20/20. `pnpm test wasm`: 156/156. `pnpm test rust -t host`: 23/23.
