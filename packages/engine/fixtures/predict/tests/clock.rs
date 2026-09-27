@@ -1,5 +1,9 @@
 //! docs/plan/26-prediction-rendering-and-clocks.md steps 4-6, Tests added: `own_timer_no_jump_at_
 //! ack`, `own_timer_correction_eases` (k = 2 of 20, as the spike), `completion_gap_measured`.
+//! `lead_converges_to_exact` (Open gate failures item 2, gate round 1) joins them: the same real
+//! `Loopback` round trip, pinning the measured exact figure (`delay + 1`) rather than the brief's
+//! own must-knows figure (`2 * delay + 1`, which `Loopback`'s asymmetric uplink never produces --
+//! `Self::round_trip`'s own doc comment).
 //!
 //! All three drive a real `ClientCore<Predict>` through `Loopback`'s real dispatch/ack round trip
 //! (`LeadEstimator`/`ClientCore::on_ack_sample` are exercised for real, not reimplemented), but
@@ -138,6 +142,32 @@ fn warm_up_round_trip(lb: &mut Loopback<Predict>, i: usize, delay: u32) {
         Ticks(round_trip(delay)),
         "warm_up_round_trip: LeadEstimator's own window did not settle on the clean steady value"
     );
+}
+
+/// `lead_converges_to_exact` (Open gate failures item 2, gate round 1): named as the brief's own
+/// must-knows asked for, against a real `Loopback` round trip, pinning the *measured* exact figure
+/// -- `delay + 1` (`Self::round_trip`'s own doc comment has the measurement and the reason: this
+/// harness's uplink half models no delay, so the queueing cost is paid once, not twice) -- as a
+/// literal, for delays 0, 1 and 3. Not `2 * delay + 1`: that was the brief's own must-knows'
+/// expectation, written before this harness existed to measure against; `crate::clock::lead`'s own
+/// `lead_converges_when_every_sample_agrees` still pins `2 * d + 1` as a literal, against synthetic
+/// samples fed directly to `LeadEstimator` with no `Loopback` involved, so it is unaffected by this
+/// harness's own asymmetric uplink and stays exactly as it was.
+#[test]
+fn lead_converges_to_exact() {
+    for delay in [0u32, 1, 3] {
+        let mut lb = loopback(200 + delay as u64);
+        let (i, _who) = add_client(&mut lb, delay);
+        lb.set_camera(i, camera(10, 10));
+        lb.run(2 * delay + 4);
+        warm_up_round_trip(&mut lb, i, delay);
+
+        assert_eq!(
+            lb.client(i).lead(),
+            Ticks(round_trip(delay)),
+            "lead did not converge to the measured exact round trip (delay + 1) for delay={delay}"
+        );
+    }
 }
 
 /// `own_timer_no_jump_at_ack`: a real ack that both sets `ClientCore::own_correction()` to `k` and
