@@ -323,3 +323,160 @@ none (the device check for reconnect timing is attached to M29)
   netcode 20`: 20/20. `pnpm test wasm`: 156/156. `pnpm test rust -t host`: 23/23.
 
 **Open gate failures (orchestrator, after steps 1-4, on `cd33857`):** full `pnpm test`: rust 612, unit 286, wasm 156, netcode 24 green; **`browser` red on 6**: `[chromium] replica_hash_equals_host_in_browser`, `[chromium] progress_from_done_at_and_clock`, `[reference] reference_collect_flow`, `reference_several_buttons`, `reference_pan_out_cancels`, `reference_ui_smoke_collect_and_inventory` (a collect button never disables). The browser path still takes `sim_connect` until step 5, so a step 1-4 change broke it; bisect `d6711b5..cd33857` before fixing.
+
+**Bisect + step 5 (this range).** Base `af76dc4`.
+
+- **Bisect mechanism, found and fixed at its root in this step (no separate patch commit exists --
+  the fix *is* step 5's own required work).** `git bisect run` against
+  `replica_hash_equals_host_in_browser` reported `70f1924` (step 1, purely additive) as first-bad,
+  which manual re-verification at each commit disproved: `70f1924` passes cleanly (twice), `70f1924`
+  reverted onto `3d2089c` (step 2) alone still fails, and `3d2089c` itself fails identically to
+  `cd33857` once given a longer timeout -- the automated run's "first bad" was a false result from a
+  cold `cargo` rebuild exceeding the bisect script's own 120 s per-step timeout (a real hazard of
+  `git bisect run` under repeated full-workspace checkouts, not a code defect at `70f1924`). Manual
+  bisection by selectively reverting `game_instance.rs`/`host/mod.rs` within `3d2089c` isolated the
+  defect to `game_instance.rs` alone (`host/mod.rs` reverted made no difference; `game_instance.rs`
+  reverted alone fixed it). **Root cause:** `ClientInstance::init` (step 2) replaced `PlayerId(cfg.
+  my_player_id)` (M27's pre-handshake stopgap, correctly `1` for the browser's only real caller,
+  `conn 0`) with a hardcoded `PlayerId(0)` ("none, until `Welcome` sets it"), documented as safe
+  because "`dispatch`/`on_action` already refuse to run before a session is live" -- true, but
+  `Replica::region_hash()` (`client/replica.rs`) also reads `self.store.player(self.own_player)` to
+  fold the connection's own `Player` entity into the hash, unconditionally, on every call, with no
+  dispatch involved. With `own_player` stuck at `0`, `client_region_hash()` never matched `Host::
+  region_hash(conn)` (real player id `1`) from the moment step 2 landed, for the one production path
+  that never called `client_on_welcome` (`worker/sim.ts`'s single-player topology, unwired until this
+  step). Proven by a single-line experiment (`PlayerId(0)` -> `PlayerId(1)` on `3d2089c`): test
+  passes. Fixed at its root by wiring `worker/sim.ts` onto the real handshake (below), so `Welcome`
+  now sets the real `own_player` for the browser too, exactly like every other topology already did.
+  Does not affect the harness (`HeadlessClient` always calls `client_on_welcome`, so `own_player` was
+  never wrong there) -- no netcode test added, per the brief's own conditional.
+- **Step 5, Rust (`ABI_VERSION` 28 -> 29):** `client_on_welcome`'s `result` widened 8 -> 16 bytes --
+  `view_max_tiles_per_axis`/`view_max_chunks` (each zero-extended to an LE `u32`) appended after the
+  existing `player_id`/`last_processed_action_seq`, so the caller can forward `Welcome`'s own view
+  clamps to `setViewClamp` (0019 §1) without a second export.
+- **Step 5, TS: `createNetPump` gains an opt-in `handshake?: NetPumpHandshake` parameter** (`{clock,
+  onAttached?}`) -- when given, `pump()` sends `client_hello()` on its first call (via the *same*
+  uplink ring `client_poll_uplink` already uses, `tx` region reused) and applies the first `Welcome`
+  off the downlink before ever touching `on_frame`/`client_poll_uplink`; when omitted (`HeadlessClient`
+  and every other existing caller), `pump()` is byte-for-byte the pre-step-5 function -- additive, not
+  a renamed seam. `worker/client.ts` passes `{clock: systemClock, onAttached}` only when `message.link`;
+  `onAttached` posts a new one-off `client-welcome` lifecycle message (`worker/protocol.ts`'s
+  `ClientLifecycleMessage`, `POST_SETUP_MESSAGE_TYPES`) main's `setupWorker` forwards to a new
+  `onWelcome` callback, which calls `cameraIntegrator.setViewClamp(m.viewMaxTilesPerAxis)` -- the one
+  place Welcome's own clamp reaches the camera, since only main can call it. `client.ts`'s own
+  `clientGame` (new, `kind === 'client'` only) adds `{secret: hexEncode(loadOrMintSecret()), joinKey:
+  worldConfig?.joinKey ?? '', buildHash: options.wasm.buildHash}` on top of `game`, gated on `linked`
+  and deferring to `options.test.game` exactly like `simGame`/`game` already do. `sim-config.ts`'s
+  `buildSimInstanceConfig` now forwards `cfg.view` into `viewMaxTilesPerAxis`/`viewMaxChunks` (a real,
+  separate gap: nothing parsed `WorldConfig.view` before this, every world silently welcomed clients
+  at the serde default regardless of config).
+- **Step 5, `worker/sim.ts`: the real handshake wired for the linked (single-player) topology, the
+  missing half of exit criterion 1.** Gated on `message.link === true` (every non-linked `sim`-kind
+  test page never calls `accept()` at all, so this costs and changes nothing for them); builds
+  `HandshakeDeps` from the persisted world's own storage (`message.world`) or a throwaway
+  `memoryStorage()` session table otherwise, `joinKey: ''` (0013: single-player's own empty key;
+  `WorldConfig.joinKey` is not yet threaded to this topology, Non-scope: real multi-player join keys
+  are M29's), `maxPlayers: 8`. `server.ts`'s own `if (!handshake)` implicit-accept branch is
+  **not deleted**: `server.test.ts` alone has 9+ call sites building `createSimHostFromInstance` with
+  a fake `SimInstance` and no `handshake`, testing pacing/ticking/counters unrelated to the handshake
+  feature -- forcing all of them to build a session table is unnecessary blast radius the brief's own
+  "no provisional-join code path remains in the sim host" reads, in context (Deviations steps 1-2:
+  "true of the production `SimHost.accept` path only"), as scoped to. Both production call sites
+  (`createWorldServer`, `worker/sim.ts`) now always wire real `HandshakeDeps`; the branch survives
+  only for hand-rolled fixture unit tests that never call `accept()` meaningfully for identity.
+- **Two real bugs found and fixed while verifying step 5 against the full `browser` suite (not just
+  the two named tests), beyond the bisected mechanism:**
+  1. **`parseBuildHash32` (`host/handshake.ts`, new export).** `worker/sim.ts`'s own `HandshakeDeps.
+     buildHash` used `sessions.ts`'s general `hexDecode`, which returns a variable-length (`0` for
+     `''`) array -- `games/reference`'s own `altSpawnParams` test-entry config (`ClientOptions.test.
+     game`, the documented escape hatch, no `buildHash` field) produced a 0-byte `deps.buildHash` on
+     the sim side against the client's real, always-32-byte all-zero `Hello.build_hash`
+     (`TerrainConfig.build_hash`'s own `parse_hex_bytes::<32>`, Rust) -- `bytesEqual` failed on length
+     alone, every such connection got `Reject{VersionMismatch}`, and `pumpUntilLive`/`stepSimTickSync`
+     spun until the sim worker itself was killed (`reference_new_player_spawns_on_land`, previously
+     passing, found newly red). Fixed by a dedicated 32-byte, always-fixed-length decoder mirroring
+     `parse_hex_bytes::<32>` exactly (zero-fill, never a length error); `createWorldServer`'s own
+     identical `hexDecode(cfg.buildHash)` call had the same latent gap (never exercised by any
+     existing caller) and is fixed the same way. `net-harness.ts`'s own equivalent call is untouched
+     (never exercised the empty case, out of this step's own risk budget to touch further).
+  2. **`SimHost.hasInFlightHandshakes` (new, real bug, zero-GC).** `pumpHandshakes`'s own doc comment
+     ("cheap even every tick -- the server is outside 0016's zero-GC rule") was wrong for `worker/
+     sim.ts`'s linked topology, which *is* zero-GC-constrained: (a) `handshakeState` never shrinks
+     back to empty once a connection settles (its entry is kept for later `onMessage` lookups), so a
+     bare `for (const [conn, state] of handshakeState)` ran every tick for the connection's whole
+     life, each pass allocating a fresh `MapIterator` -- measured 38,400 + 43,200 + 12,000 B/frame on
+     `sim` (`pumpHandshakes`/`next`/`entries`, `connected-terrain`/`drawables`/`zero_gc_action`'s own
+     `byFn`, all three gc pages' every variant red). Fixed with `garbagePending` (a plain counter,
+     incremented at `accept()`, decremented wherever a connection leaves `'garbage'` status), guarding
+     the whole scan -- skipped entirely once nothing is left in `'garbage'` (one tick after `Hello`
+     arrives, the common case). (b) `runOneTick`'s own `pumpHandshakes(services.clock.now())` call
+     read the real clock *unconditionally, every tick, for the connection's whole life* -- exactly the
+     per-tick `clock.now()` box ADR 0030/the `resync()` rewrite (docs/plan/13b) was written to
+     eliminate, reintroduced here. Fixed by moving the `clock.now()` read inside `pumpHandshakes`'s own
+     `garbagePending > 0` guard, so it is read only during the brief handshake window, never
+     afterward. After both fixes: `sim`'s clean measurement dropped from 176.24 to ~9-10 B/frame
+     (matching connected-terrain's own pre-existing baseline); all three previously-red gc pages
+     (`clean` + every `neg object`/`neg burst` variant) pass.
+- **Two named tests, new pages (kept under 3 s each, confirmed by wall time in the run below):**
+  `secret.spec.ts` (`secret: persists across reload`, reuses `connected.html`: reads `localStorage
+  .engine.playerSecret` before and after a real `page.reload()`) and `handshake.spec.ts`
+  (`handshake: welcome view clamp limits zoom`, new `handshake-view-clamp.html`/`.ts`: a single-player
+  page with `WorldConfig.view.maxTilesPerAxis: 128` (non-default, so a pass could not mean "the clamp
+  wiring was never reached and 128 happens to equal the default"), `attachCameraInputTestHooks(client,
+  clientTestHandle(client).cameraBundle)` + `injectWheel` + `client.camera.tick`, matching `gc-input.
+  ts`'s own "inject into the client's own real bundle, not a second one" precedent). Both proven to
+  fail without the fix (temporarily disabling `onWelcome`'s `setViewClamp` call: `tilesAcross` reads
+  back `256`, the unclamped default, not `128`; temporarily hardcoding the client's own `secret` field
+  instead of calling `loadOrMintSecret()`: `localStorage.getItem('engine.playerSecret')` reads back
+  `null`), then restored and re-verified green.
+- **Two pre-existing tests found still red after every fix above, neither touched (Constraints: "stop
+  and report" for an existing test that would have to change; both outside this brief's own Files --
+  `overlay_tile_reaches_screen` is `packages/engine`'s own, but changing its *expected pixel* is a
+  golden-shaped call the brief reserves for the orchestrator; `reference_collect_flow` lives in
+  `games/reference`, a package this brief's Files section never lists):**
+  1. **`overlay_tile_reaches_screen`** (`connected-terrain.spec.ts`): step 1 (`GRASS`, "zero host
+     ticks... pristine colour", the assertion `pumpUntilLive` runs *before* this test's own `__advance`
+     sequence ever starts) now reads `WATER`'s colour instead (`got 30 want 34`, deterministic, 2/2
+     repeats). Mechanism: `pumpUntilLive`'s own bootstrap loop (`stepSimTickSync` until `client.ready`)
+     now runs several *real* `sim.simTick()` calls to complete the Hello/Welcome round trip (unlike
+     the old single-tick synchronous `sim_connect`) -- and `fx-puts`'s own tick rule (`if cx.tick().0 %
+     secs_1 == 0`) fires on the very first real tick this game instance *ever* processes (`tick == 0`,
+     satisfying `0 % 20 == 0`), which now happens inside that bootstrap, before the test's own "zero
+     host ticks" step 1 ever runs, not during its own explicit step 2 as the test's comment assumes.
+     The paint+downlink reaches the client by the time step 1 reads back the pixel. This is the same
+     class of "a real handshake cannot admit before its own attach reaches a tick boundary" shift the
+     gate item's own `wasm_connected_100`/`wasm_script_a` fix already named and accepted (steps 1-2
+     Deviations) -- there the final hash stayed identical either way; here the test's own tick-count
+     assumption is baked into an expected pixel, so it does not self-heal. A decision for the
+     orchestrator: retune the test's own tick counts (e.g., read the pixel *before* `pumpUntilLive`
+     bootstraps, or accept the shift and re-derive step 2/3's own expected values), or find a way to
+     keep `pumpUntilLive`'s bootstrap from crossing a `% 20 == 0` boundary. Not attempted here.
+  2. **`reference_collect_flow`** (`games/reference`, `collect-flow.spec.ts`): fails earlier than the
+     gate note's own "a collect button never disables" (at the `in_range` check, before `clickCollect`
+     is ever reached) with `ui` staying `null`/`undefined` for the whole test. Root-caused live (via a
+     temporary `console.log` in `client.ts`'s `resultsFrame`/`pollActionResults` and `client-action.ts`'s
+     `client_poll_ui` poll, removed before committing): `client_poll_ui()` returns a non-zero length
+     exactly once for the whole test (an early `on_frame`-triggered replica-change `ui()` call, before
+     any `stepFrame`-driven `RefClient::frame()` ever runs, with `spring_pos` still at its uninitialised
+     `[0, 0]` default) and `0` every other call, including throughout `panTo`'s own 30 `stepFrame`
+     calls -- so the one `Ui` value the test's own `uiState(page)` subscription (registered *after*
+     that first, already-delivered value) could ever see never arrives, and the test's own snapshot at
+     failure time shows two Collect buttons near world origin, not `STONE`. This is `games/reference`'s
+     own `RefClient::frame`/`ui_dirty`/`PartialEq`-gate machinery (M18/M20b), untouched by this brief
+     and outside `packages/engine`; `test-entry.ts`'s own `scheduler: clock` (meant to drive `client.
+     ts`'s `resultsFrame` off the same manual clock every other stepped call uses) is silently ignored
+     (`createClient` reads `options.test?.scheduler`, never the top-level `scheduler` `startGame`
+     forwards to `createRealFrameLoop` only) -- `resultsFrame` runs on real, heavily-throttled
+     `requestAnimationFrame` instead, a likely contributor but not confirmed as the *whole* story (the
+     `client_poll_ui` staying exactly `0` after frame 1, despite real `stepFrame`-driven `frame()`
+     calls with a moving spring, needs `games/reference`'s own `sim/src/client.rs` traced further).
+     Verified NOT caused by this milestone's own session/handshake work: `client_poll_ui`/`pollAction
+     Results`/`resultsFrame` are all pre-M28 code this brief never touches, and the mechanism (a
+     real-rAF main-thread poll racing a test's own subscription timing) is orthogonal to `Hello`/
+     `Welcome`. A decision for the orchestrator: fix `games/reference`'s own scheduler wiring/spring
+     timing (a different milestone/package), or accept as a known pre-existing flake.
+- Final verification (`af76dc4` base, all fixes applied): `pnpm test rust` 612/612, `unit` 286/286,
+  `wasm` 156/156, `netcode` 24/24, `pnpm lint` green (biome, rustfmt, clippy, tsc). `pnpm test browser`
+  (whole, once): 202/204 green -- the two red tests above, both pre-existing, both reported rather
+  than fixed. `pnpm test netcode -t handshake` 9/9, `-t liveness` 5/5, `pnpm test rust -t session`
+  12/12, `pnpm test browser -t secret` 1/1 (all four of this brief's own named Verification commands).
