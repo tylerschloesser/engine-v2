@@ -13,6 +13,7 @@ import {
   MsgClass,
   serverInternals,
   type WorldConfig,
+  worldServerTestHandle,
 } from '../../src/server.js'
 import { memoryStorage } from '../../src/storage/memory.js'
 import { worldKeys } from '../../src/storage/types.js'
@@ -40,6 +41,33 @@ function parseWelcomePlayerId(bytes: Uint8Array): number {
     if ((b & 0x80) === 0) return value >>> 0
     shift += 7
   }
+}
+
+/** LEB128, general (unlike `parseWelcomePlayerId`'s fixed-offset reader, this one needs to keep
+ * reading after the first field). */
+function readVarint(bytes: Uint8Array, offset: number): { value: number; next: number } {
+  let value = 0
+  let shift = 0
+  let pos = offset
+  for (;;) {
+    const b = bytes[pos]
+    if (b === undefined) throw new Error('readVarint: truncated')
+    pos++
+    value |= (b & 0x7f) << shift
+    if ((b & 0x80) === 0) return { value: value >>> 0, next: pos }
+    shift += 7
+  }
+}
+
+/** A write-ahead log frame's own `count` field (0005 Formats: "`len varint | tick_delta varint |
+ * count varint | records | crc32`") -- exactly the number of `Record`s the frame carries, decoded
+ * straight off the bytes `SimHost.logSink` receives (the same bytes `Persistence.appendFrame`
+ * hands `storage.append`, `host/persistence.ts`), no `Persistence`/`Storage` involvement needed. */
+function frameRecordCount(frame: Uint8Array): number {
+  const { next: afterLen } = readVarint(frame, 0)
+  const { next: afterTickDelta } = readVarint(frame, afterLen)
+  const { value: count } = readVarint(frame, afterTickDelta)
+  return count
 }
 
 describe('handshake', () => {
@@ -155,6 +183,17 @@ describe('handshake', () => {
     const { wasm, buildHash } = await putsFixture()
     const harness = await createNetHarness({ fixture: { wasm, buildHash }, seed: 9004, clients: 0 })
     try {
+      // Constraints: "no log record" proven black-box -- every frame `SimHost.logSink` actually
+      // receives (the same bytes `Persistence.appendFrame` hands `storage.append`), counted by its
+      // own `count` field (0005 Formats), from before this harness's first tick ever runs.
+      const simHost = worldServerTestHandle(harness.server)
+      const originalLogSink = simHost.logSink
+      let totalRecords = 0
+      simHost.logSink = (bytes) => {
+        totalRecords += frameRecordCount(bytes)
+        originalLogSink?.(bytes)
+      }
+
       const secret = fixedSecret(0x25)
       const hello = buildHelloBytes(wasm, { secret, joinKey: '', buildHash: hexDecode(buildHash) })
 
@@ -190,7 +229,16 @@ describe('handshake', () => {
       conn2.send(MsgClass.ReliableOrdered, hello) // the *same* secret
       await harness.advanceTicks(1) // deliver
       await serverInternals(harness.server).handshakesSettled()
+      const recordsBeforeSupersede = totalRecords
       await harness.advanceTicks(1) // pumpHandshakes: supersedes conn1, Welcome to conn2
+
+      // Black-box proof of "no log record" (Constraints): this tick's own frame(s) carry exactly
+      // the one `Connected` record conn2's own ordinary reconnect (already-joined secret) would
+      // log regardless -- `sim_has_player(player1)` is true by now, so `joined` is false and only
+      // `Connected` is pushed (`Host::attach`'s own doc comment) -- not a second record for
+      // conn1's silent eviction. A naive eviction that also pushed `Disconnected` would make this
+      // `2`, not `1`.
+      expect(totalRecords - recordsBeforeSupersede).toBe(1)
 
       // 0013: "the old socket gets `Bye{Superseded}` and must not auto-reconnect" -- Constraints:
       // asserts `4001` on the old end. `conditioner.ts`'s `scheduleClose` orders the close after
