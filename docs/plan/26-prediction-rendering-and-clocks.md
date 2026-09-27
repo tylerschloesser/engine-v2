@@ -254,3 +254,160 @@ the browser `prediction-no-flicker` test -- are the second implementer's):**
   per chunk, not indexed by chunk. Fine at "single digits" overlay size (0012); revisit only if a
   later milestone's own fixture predicts materially more tile writes per frame than this one ever
   does.
+
+**Steps 4-6 (second implementer).** Commits `32b5053`(step 5, `d2aa46e` after the attribution
+amend)..`b0b7e09`(step 6)..`6507f31`(step 4)..`6cc8eee`(context artifact). Built in dependency
+order (5, 6, then 4), not the brief's own listed order: step 4's own assertion
+(`client.clock().predicted - authoritative` equals the lead) needs `predicted`/`lead` already
+wired to real `ClientCore` state, which is step 5's own work -- attempting step 4 first would only
+ever assert against the pre-M26 placeholder. Every named seam landed under the brief's exact
+names, with the deviations below.
+
+- **`crate::clock`**: `HostClock` (`host_clock.rs`) and `LeadEstimator` (`lead.rs`), both exactly
+  the Provides signatures (`on_frame`/`now`/`now_f64`/`rebase`; `on_ack_sample`/`seed_rtt_ms`/
+  `lead`). `HostClock`'s own internal design (not specified by the brief beyond the three bullets
+  in Planning decisions) tracks a windowed-maximum `target_offset` (arriving-frame samples,
+  pruned past 2 s) and slews a separate `effective_offset` toward it at a rate bounded to
+  `DILATION_LIMIT = 0.10` per elapsed millisecond (0010's own number, pinned as a literal, not
+  imported); `now_f64` reads position from its own monotonic `last_local_ms`, not the raw
+  argument, so a backward or repeated call (main-thread rAF jitter) never regresses the reported
+  tick (`host_clock_monotone`'s own inject-fail-revert: reading from the raw argument instead
+  fails at `local_ms=1099`, `51.98 < 52.0`).
+- **`ClientCore` gains `lead()`, `seed_lead_rtt_ms(f64)`, `tick_fraction(&mut self, local_ms: f64)
+  -> f32`, `own_correction() -> f32`** -- none named verbatim in the brief's own Seams (which only
+  names `set_lead`, already landed by M25), added because `Clocks`'s own real fields need a real
+  source and `client_clock_stats` needs a no-argument read (`last_tick_fraction`'s own doc comment
+  explains why). `on_ack_sample` (already private, stubbed `NotPredictable`... no-op by M25) is
+  now real: feeds `LeadEstimator`, sets `self.lead` from its output, and sets the eased correction
+  (`k = ack_tick - predicted_tick`, `correction_set_at = ack_tick`) -- its own signature grew a
+  third parameter (`predicted_tick`, from the popped `Pending`) since it is `ClientCore`-private
+  and had no external caller to break.
+- **`Clocks` gains `lead: Ticks` and `correction: f32`** (the latter a seam beyond the brief's own
+  list, the same "add what a formula genuinely needs" precedent `predicted_player` set for steps
+  1-3), plus `progress`/`own_progress`. Every pre-existing `Clocks{}` literal (game_instance.rs's
+  two production sites, `testkit::Loopback::frame_view`, `client/ui.rs`'s test, `fixtures/
+  drawables/tests/drawlist_golden.rs`) updated; `Loopback::frame_view`'s own `tick_fraction` stays
+  `0.0` deliberately (`Loopback` drives ticks, not a wall clock -- its own doc comment says so),
+  `predicted`/`lead` are now real (`core.predicted_tick()`/`core.lead()`, both `&self`).
+- **`own_progress`'s own formula deviates from the brief's literal one-line description**
+  ("own_progress subtracts it from done_at"). Subtracting `correction` from `done_at` alone, with
+  `lead` left raw in both terms, does not give `own_timer_no_jump_at_ack`'s own no-jump property:
+  an ack that both sets `correction = k` and (via `LeadEstimator`, a single-sample median) moves
+  `lead` by that same `k` cancels `k` in the *denominator* only, leaving a `k`-tick jump in the
+  *numerator* -- the same order of jump the brief's own closing note calls "accepted" only for the
+  CSS-restart case this method exists to avoid. Landed formula: `effective_lead = lead -
+  correction`, used in place of `lead` in *both* terms (`Clocks::own_progress`'s own doc comment
+  has the full algebra). At the instant of an ack, `effective_lead` equals whatever `lead` was the
+  frame before (the `+k`/`-k` cancel exactly), so nothing about the ratio moves at that instant;
+  as `correction` eases to `0.0`, `effective_lead` eases up to the corrected `lead`, and the bar
+  gradually retargets. Read as "the brief's own closing sentence on `own_progress`, made to
+  actually hold" rather than a change of decision -- the exit criterion (`own_timer_no_jump_at_ack`
+  passing) is what the brief names, not the one-line formula.
+- **`client_clock_stats` widened from 8 to 16 bytes, `ABI_VERSION` 23 -> 24** (same call
+  signature, `params: 0`, no new argument): `predicted_tick` (`ClientCore::predicted_tick`, real
+  from this milestone) and `tick_fraction`'s `f32` bits (`ClientCore::last_tick_fraction`, cached
+  from the same wake's own `frame(t_ms)` call -- this export has no `t_ms` of its own to feed
+  `HostClock` fresh) as two new LE fields after the existing `authoritative_tick`/`ack_seq`.
+  `worker/client-net.ts` feeds the clock block's `predictedTick`/`tickFraction` from it for real;
+  `clock-block.ts` grew a seventh SAB slot (`CLOCK_OFF_TICK_FRACTION`, an `f32`, read back through
+  a `F32Reader`/`scratchFieldsFloatView()` since `CLOCK_FIELD` deliberately has no plain-`u32`
+  entry for it) and `client.ts`'s `ClockSnapshot` gained `tickFraction`. Extended (not weakened)
+  every existing test that pinned the old 6-slot/8-byte shape:
+  `client_clock_stats_reports_last_applied_tick_and_ack_seq`, `clock_block`'s own three round-trip
+  tests, `client_returns_same_object`, and `tests/browser/pages/src/slice.ts`'s own `clockScratch`
+  (widened `Uint32Array(6)` -> `Uint32Array(7)`, or `readClockBlockInto`'s `.set()` throws
+  "offset is out of bounds" -- found live, `vertical_slice` failing on this exact message before
+  the fix).
+- **Measured round trip in `testing::testkit::Loopback` is `delay + 1`, not `2 * delay + 1`** --
+  deviates from the brief's own must-knows ("lead_converges_to_exact expects 2 × delay + 1").
+  Measured directly (`fixtures/predict/tests/clock.rs`'s own `round_trip` doc comment has the
+  reverted diagnostic): a `Roll` (or `SetGlobal`) dispatch/ack cycle's own sample
+  (`ack_tick - auth_tick_at_dispatch`) settles to exactly `delay + 1` from the *second* cycle
+  on, for every `delay` in `0..=4` tried -- the very first cycle after a cold `add_client`/
+  `set_camera`/warm-up run measures high (`2 * delay + 4` uniformly, leftover subscription-burst
+  backlog draining alongside it) and is not representative. `Loopback`'s own uplink half has no
+  modelled delay (`Loopback::set_camera`'s own doc comment: "uplink has no modelled delay here"),
+  so a dispatched action is admitted the same tick it is polled; the queueing delay is paid only
+  once, on the way down, plus one tick for the round trip's own two `Loopback::step` boundaries.
+  `fixtures/predict/tests/clock.rs`'s own `LeadEstimator`-facing unit test in `crates/engine/src/
+  clock/lead.rs` (`lead_converges_when_every_sample_agrees`) still pins `2 * d + 1` as a literal --
+  that test feeds synthetic samples directly and never touches `Loopback`, so it is unaffected by
+  this finding; only a *from-`Loopback`* version of `lead_converges_to_exact` would need this
+  number, and none is committed here (Decision needed, below).
+- **Two real bugs found live by the browser `prediction-no-flicker` test, both fixed** (see the
+  step 4 commit): `GameInstance::upload_stage` never drained `ClientCore`'s own dirty queue into
+  the `Uploader` (only `on_frame` did, for replica-delta marks) -- a predicted action's own
+  `mark_dirty` had no path into the upload ring except piggy-backing on the next real host frame;
+  fixed by calling `ClientCore::drain_dirty` first, `testkit::Loopback::drain_and_stage`'s own
+  precedent. `worker/client.ts`'s `body()` ran `uploadPump` before `actionPump`, the same class of
+  ordering bug on the JS side (fixed: `actionPump` now runs first, matching `netPump`'s own
+  existing "runs before `uploadPump`" precedent and comment).
+- **Residual, unresolved latency (Decision needed, below):** with both fixes in place, the
+  browser probe still reads the pristine colour `[0,0,0,255]` for the first stepped frame after
+  dispatch, an unexplained `[32,32,32,255]` (matches `terrain-readback.spec.ts`'s own `NEUTRAL`
+  constant, "non-resident") for one more, then the painted colour `[30,80,200,255]` from the third
+  onward -- reproducible, unaffected by either fix, root cause not found (ruled out: pump order,
+  `upload_stage`'s own dirty-drain, warm-up length, `ticks: 0` vs `1` per step). `prediction-no-
+  flicker`'s own committed assertion is therefore "never flickers *back* to pristine once changed"
+  (0012's actual "no snapping" guarantee), not "changes on the very first stepped frame" (0012's
+  own "same render" language, read most literally) -- the latter is not what is verified. Flagged
+  for further investigation, not chased further inside this budget.
+- **`docs/plan/device-checks.md`'s `M34-own-timer-bar` item: verified, matches what was built
+  exactly, no edit made.** Its own text ("stretch over `duration + lead`", "reaches full as the
+  result arrives, with no full bar left waiting and no result before the bar is full") already
+  describes `own_progress` as landed; `completion_gap_measured`'s own table (gap_stretch ≈ 0 at
+  every delay tried) is the automated proxy for exactly that pass condition.
+- **Test naming**: `fixtures/predict/tests/clock.rs`'s own `own_timer_no_jump_at_ack`/
+  `own_timer_correction_eases`/`completion_gap_measured` match the brief's own names verbatim (no
+  `-t` substring ambiguity, unlike steps 1-3's `one_render`/`texel_upload`).
+- **Failability, inject-fail-revert (all reverted before commit):**
+  - `host_clock_free_runs_and_slews`: swapping the windowed-maximum fold (`if o > max_offset`) for
+    a minimum fails at the test's first assertion (`left: (Tick(0), 0.0), right: (Tick(100),
+    0.0)`).
+  - `host_clock_monotone`: reading `now_f64`'s own position from the raw `local_ms` argument
+    instead of `self.last_local_ms` fails at `local_ms=1099` (`51.98 < 52.0`).
+  - `lead_is_median_of_last_8_clamped`: swapping the median for a mean fails
+    (`left: Ticks(7), right: Ticks(2)`, the `[2,2,2,2,2,2,2,40]` case).
+  - `lead_seed_from_rtt`: dropping the `+ 1` in `seed_rtt_ms` fails (`left: Ticks(3), right:
+    Ticks(4)`).
+  - `own_timer_no_jump_at_ack`: reverting `own_progress` to the brief's own literal formula
+    (`done_at - correction`, raw `lead`) fails with a real jump (`0 -> 0.27272728 (expected
+    +0.18181819)`) at the exact ack step.
+  - `own_timer_correction_eases`: hardcoding `own_correction`'s own `frac` to `1.0` (never easing)
+    fails the "eased close to zero" assertion (`got 2`).
+- **`completion_gap_measured`'s own table** (delay | round_trip=lead | gap_plain | gap_stretch,
+  ticks): `0 | 1 | 1 | 0`; `1 | 2 | 2 | 0`; `3 | 4 | 4 | 0`. `gap_plain == lead` and
+  `gap_stretch == 0` exactly at every delay tried (no rounding slack needed in practice, though
+  the assertions allow ±1).
+- **Exit criteria, evidence (steps 4-6):**
+  - Every test above passes: **met.** `cargo nextest run --workspace --features engine/testing`:
+    `596 tests run: 596 passed, 2 skipped` (base 586 + `clock::host_clock`/`clock::lead`'s own 7
+    unit tests + `fixtures/predict/tests/clock.rs`'s own 3). The measured gaps are recorded above.
+  - The browser zero-GC test passes with predicted actions in its script: **met, via pre-existing
+    infrastructure, not new work.** `gc-slice.ts`/`gc-slice.spec.ts` (`zero_gc_action`, M16b) already
+    dispatches a real `Action::Paint` (fx-puts, unconditionally predictable) through `dispatchRaw`
+    every 30 frames inside its own zero-GC measured window; that action now flows through this
+    milestone's own new `predict`/overlay/`mark_dirty`/`sync_overlay_dirty`/`stage_predicted` code
+    where it never did before M25/M26 existed. `pnpm test browser -t zero_gc_action`: `browser pass
+    5 tests`.
+  - `docs/plan/device-checks.md`'s `M34-own-timer-bar` matches what was built: **met, verified, no
+    edit needed** (above).
+  - `pnpm test` and `pnpm lint` are green: `pnpm lint`: `biome pass`, `rustfmt pass`, `clippy pass`,
+    `tsc pass`. `pnpm test` itself was not run (the brief's own must-knows: "I am the gate" --
+    foreground/targeted runs only); `pnpm test rust -t clock`, `pnpm test browser -t
+    prediction-no-flicker`, `pnpm test browser -t zero_gc_action`, and one full `pnpm test browser`
+    (202 passed, 35s/48s, unchanged from the steps 1-3 baseline) were run instead, per the brief's
+    own Verification commands.
+
+**Decisions needed (steps 4-6).**
+1. The residual 2-stepped-frame latency before a predicted texel first appears on screen (above):
+   real, reproducible, root cause not found inside this budget. Worth a dedicated look before this
+   milestone is considered fully closed, or an explicit decision to accept it and soften the Goal/
+   Planning-decisions language that currently promises a same-render update.
+2. `lead_converges_to_exact (2 × delay + 1)`, named in the brief's own must-knows, was not built
+   against `Loopback` as a committed test: the actual measured `Loopback` round trip is `delay + 1`
+   (above), so a literal `2 × delay + 1` version of that test would never pass against this
+   harness. `crate::clock::lead`'s own unit test (`lead_converges_when_every_sample_agrees`) covers
+   `LeadEstimator`'s own convergence property with a synthetic `2*d+1` round trip instead, which
+   passes on its own terms but does not exercise `Loopback`. Orchestrator's call whether a
+   `Loopback`-backed version (at the corrected `delay + 1` figure) is still wanted as a named test.
