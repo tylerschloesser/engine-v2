@@ -204,6 +204,32 @@ export function createFsStorageDebug(): FsStorageDebug {
  * is filled with a live counter reader (test-only; production callers never pass it). */
 export function fsStorage(dir: string, debug?: FsStorageDebug): Storage {
   const appenders = new Map<string, LogAppender>()
+  // `write`/`delete` (the "atomic replace" path: temp file, `datasync`, `rename`) are, like
+  // `append`, allowed to be fire-and-forget from the tick path (0005 Storage: "the tick path never
+  // awaits storage") -- but unlike `append`, their own promise was never tracked anywhere, so
+  // nothing here could make good on `flush()`'s own contract ("resolves when everything handed over
+  // so far is durable") or on `read`/`list`'s existing "a key just appended to reads back correctly"
+  // guarantee for this second write path. `pendingWrites` (every write/delete currently in flight,
+  // for `flush`/`list`) and `latestWriteByKey` (the most recent one per key, for `read`) close that
+  // gap: found by tracing a real failure (`server/load-or-create`'s flake, M27 gate round 1) --
+  // `Persistence.create`'s own manifest write and `snapshotNow`'s own snapshot write are both
+  // fire-and-forget, and `await simHost.stop()` (`persistence.flush()` -> `storage.flush()`) resolved
+  // before either one's own `rename()` had landed on disk, so a reopen on the same directory
+  // sometimes raced the manifest's own rename and read back `null`, silently creating a second,
+  // empty world instead of loading the first.
+  const pendingWrites = new Set<Promise<void>>()
+  const latestWriteByKey = new Map<string, Promise<void>>()
+  function trackWrite(key: string, run: () => Promise<void>): Promise<void> {
+    const p = run()
+    pendingWrites.add(p)
+    latestWriteByKey.set(key, p)
+    const cleanup = (): void => {
+      pendingWrites.delete(p)
+      if (latestWriteByKey.get(key) === p) latestWriteByKey.delete(key)
+    }
+    p.then(cleanup, cleanup)
+    return p
+  }
   if (debug) {
     debug.fsBufferGrows = () => {
       let total = 0
@@ -249,26 +275,37 @@ export function fsStorage(dir: string, debug?: FsStorageDebug): Storage {
       const a = appenders.get(key)
       return a ? a.sync() : undefined
     },
-    async write(key, bytes) {
-      await dropAppender(key)
-      const path = keyPath(key)
-      await mkdir(dirname(path), { recursive: true })
-      const tmp = `${path}.tmp-${process.pid}-${tmpCounter++}`
-      const handle = await open(tmp, 'w')
-      try {
-        await handle.write(bytes, 0, bytes.length)
-        await handle.datasync()
-      } finally {
-        await handle.close()
-      }
-      await rename(tmp, path)
+    write(key, bytes) {
+      return trackWrite(key, async () => {
+        await dropAppender(key)
+        const path = keyPath(key)
+        await mkdir(dirname(path), { recursive: true })
+        const tmp = `${path}.tmp-${process.pid}-${tmpCounter++}`
+        const handle = await open(tmp, 'w')
+        try {
+          await handle.write(bytes, 0, bytes.length)
+          await handle.datasync()
+        } finally {
+          await handle.close()
+        }
+        await rename(tmp, path)
+      })
     },
-    async delete(key) {
-      await dropAppender(key)
-      await rm(keyPath(key), { force: true })
+    delete(key) {
+      return trackWrite(key, async () => {
+        await dropAppender(key)
+        await rm(keyPath(key), { force: true })
+      })
     },
     async flush() {
-      await Promise.all([...appenders.values()].map((a) => a.sync()))
+      // Swallowed the same way `LogAppender.sync()`'s own chain already is (`rotate()`'s catch
+      // routes to `onErr`, never rethrows): a write/delete failure is reported through `onError`,
+      // not by making `flush()` itself reject and taking down an unrelated caller (`SimHost.stop()`)
+      // with it.
+      await Promise.all([
+        ...[...appenders.values()].map((a) => a.sync()),
+        ...[...pendingWrites].map((p) => p.catch(() => {})),
+      ])
     },
     async read(key) {
       // `read` is off the tick path only (0005 Storage: grouped with `flush`/`list`), so it may
@@ -276,14 +313,23 @@ export function fsStorage(dir: string, debug?: FsStorageDebug): Storage {
       // (never yet synced) would read back `null`/stale bytes purely because nothing forced the
       // buffered-but-undurable copy to disk yet (`append_accumulates_in_call_order`'s own read-
       // right-after-append shape, and `Persistence.loadLatest`'s real load path, both rely on this).
+      // Same reasoning for a pending `write`/`delete` on this exact key (above): its own rejection is
+      // swallowed here (a caller reading back "whatever is on disk" after a failed replace, not the
+      // replace's own error -- `write`/`delete`'s returned promise still carries that to whoever
+      // called them).
       const appender = appenders.get(key)
       if (appender) await appender.sync()
+      const pendingForKey = latestWriteByKey.get(key)
+      if (pendingForKey) await pendingForKey.catch(() => {})
       return readIfExists(keyPath(key))
     },
     async list(prefix) {
-      // Same reasoning as `read` above: a key `append`ed to but never yet `sync`ed must still show
-      // up (`list` is off the tick path only, 0005 Storage).
-      await Promise.all([...appenders.values()].map((a) => a.sync()))
+      // Same reasoning as `read` above: a key `append`ed to, or `write`/`delete`d, but not yet
+      // settled must still show up correctly (`list` is off the tick path only, 0005 Storage).
+      await Promise.all([
+        ...[...appenders.values()].map((a) => a.sync()),
+        ...[...pendingWrites].map((p) => p.catch(() => {})),
+      ])
       return listKeys(dir, prefix)
     },
   }
