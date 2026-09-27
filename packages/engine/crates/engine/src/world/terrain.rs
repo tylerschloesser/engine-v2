@@ -220,14 +220,26 @@ impl TerrainStore {
     }
 
     /// Replaces `chunk`'s overlay wholesale (a replica applying a full resync, M12b/M22). Any
-    /// cached slab for `chunk` is evicted -- its pristine values are unknown for the new entries, so
-    /// the next read regenerates and re-applies, which is always correct (0007 §1).
+    /// cached slab for `chunk` is evicted -- its pristine values are unknown for the new entries --
+    /// then immediately re-materialized (docs/plan/26-prediction-rendering-and-clocks.md Deviations,
+    /// "Gate fix round 1", item 1): `self.source` is the same deterministic worldgen the client
+    /// already ran to render this chunk in the first place, so regenerating right here costs one
+    /// synchronous call, not a round trip through the async gen queue -- and it closes the window
+    /// a resident, already-subscribed chunk would otherwise spend reading as evicted (`Uploader::
+    /// on_frame`'s own `CacheEvent::Evicted` handling stages an `INDIR_NONE` the render side reads
+    /// as non-resident) purely because a snapshot happened to name a chunk the client already held
+    /// correctly. `materialize` re-generates pristine and reapplies `entries` (just loaded above) on
+    /// top, so the resulting slab is identical to before -- this is a genuine no-op for content,
+    /// only for cache timing, and 0007 §1 ("always correct and invisible") still holds regardless of
+    /// whether the client's own worldgen result is bit-identical to the host's, since a client-role
+    /// game's own generation is deterministic from the same seed by construction.
     pub fn replace_overlay(&mut self, chunk: ChunkCoord, entries: &[(u16, Tile)]) {
         let before = self.overlays.get(chunk).map_or(0, |o| o.len());
         self.overlays.load_chunk(chunk, entries);
         let after = entries.len();
         self.modified_tiles = (self.modified_tiles as i64 + after as i64 - before as i64) as u32;
         self.cache.borrow_mut().evict_if_present(chunk.key());
+        self.materialize(chunk);
     }
 
     /// Drops `chunk`'s overlay entirely. If the chunk is cached and every entry's pristine value is

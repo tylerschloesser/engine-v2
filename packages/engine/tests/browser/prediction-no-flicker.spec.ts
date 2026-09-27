@@ -1,12 +1,15 @@
 // `prediction-no-flicker` (docs/plan/26-prediction-rendering-and-clocks.md, Tests added): a real,
 // connected `fx-predict` client (`predict.html`, `predict.ts`) dispatches `Paint` at a plain tile
 // well outside the world's water/resource patches. Stepped frames (`__predictAdvance`, `stepTick`
-// under the hood), never a wall-clock wait (must-knows). The property this pins is 0012's own "no
-// snapping": once the semantic pixel probe at the anchor tile's centre leaves the pristine colour
-// it held at dispatch, it must never read that colour again, all the way past the host's own ack
-// (`Deviations` below records the measured number of stepped frames before the probe first
-// changes, and the transient value it reads on the way -- not itself a regression, since it never
-// goes back to pristine, but recorded so a later milestone can decide whether to tighten it).
+// under the hood), never a wall-clock wait (must-knows). The property this pins is the brief's own
+// wording verbatim: from dispatch until after the host's own ack, the semantic pixel probe at the
+// anchor tile's centre is never the terrain (pristine) colour and never `NEUTRAL` (the non-resident
+// sentinel), and the predicted colour appears on the *first* render after the dispatch is applied
+// (Deviations, "Gate fix round 1": the real bug this used to paper over -- a re-stage of a chunk
+// that was already resident and correctly rendered locally momentarily read as evicted, because a
+// wire `ChunkSnapshots` for that same chunk raced the client's own local pristine generation --
+// fixed at the source, `TerrainStore::replace_overlay` and `Uploader::on_frame`, not by loosening
+// this assertion).
 import { expect, test } from '@playwright/test'
 import type { FrameUniformValues } from '../../src/render/terrain.ts'
 import type { PixelBuffer } from '../../src/test/render.ts'
@@ -49,6 +52,9 @@ declare global {
 // base-1 pristine tiles get (`connected-terrain.spec.ts`).
 const PRISTINE: readonly [number, number, number, number] = [0, 0, 0, 255] // visual 0
 const PAINTED: readonly [number, number, number, number] = [30, 80, 200, 255] // visual 2
+// `render/terrain.ts`'s own `INDIR_NONE` sentinel colour (`terrain-readback.spec.ts`'s own
+// `NEUTRAL`): what a non-resident chunk's indirection cell reads as.
+const NEUTRAL: readonly [number, number, number, number] = [32, 32, 32, 255]
 const TOL = 2 // 0020 §6: "≤ 2/255 per channel"
 
 // Well outside `PredictWorldgen`'s water (`x <= -3`) and resource patch (`8..12 x 8..12`): plain
@@ -138,24 +144,25 @@ test('prediction-no-flicker', async ({ page }, testInfo) => {
     seen.push(anchorTexel(await readAnchorPixel(page)))
   }
 
-  const firstChanged = seen.findIndex((px) => !matches(px, PRISTINE))
-  expect(
-    firstChanged,
-    `never left the pristine colour across ${seen.length} steps: ${JSON.stringify(seen)}`,
-  ).toBeGreaterThanOrEqual(0)
-  // The property 0012 "Correction without snapping" actually promises: once the probe has left
-  // the colour it held at dispatch, it never reads that colour again -- no flicker back, all the
-  // way past the ack.
-  for (let step = firstChanged; step < seen.length; step++) {
+  // The brief's own wording (Tests added), verbatim: from dispatch until after the ack the probe
+  // is never the terrain colour and never `NEUTRAL`, on every stepped frame -- not just "never
+  // flickers back" once it happens to leave pristine.
+  for (let step = 0; step < seen.length; step++) {
+    const px = seen[step] as [number, number, number, number]
     expect(
-      matches(seen[step] as [number, number, number, number], PRISTINE),
-      `flickered back to pristine at step ${step}: ${JSON.stringify(seen)}`,
+      matches(px, PRISTINE),
+      `terrain (pristine) colour at step ${step}: ${JSON.stringify(seen)}`,
+    ).toBe(false)
+    expect(
+      matches(px, NEUTRAL),
+      `non-resident NEUTRAL at step ${step}: ${JSON.stringify(seen)}`,
     ).toBe(false)
   }
-  // And it actually converges on the painted colour (not stuck on some other transient forever).
+  // The predicted colour appears on the first render after the dispatch is applied (0012's own
+  // "same render" language, read literally): no separate "first changed" search, no extra frame.
   expect(
-    matches(seen[seen.length - 1] as [number, number, number, number], PAINTED),
-    `never converged on the painted colour: ${JSON.stringify(seen)}`,
+    matches(seen[0] as [number, number, number, number], PAINTED),
+    `predicted colour did not appear on the first render after dispatch: ${JSON.stringify(seen)}`,
   ).toBe(true)
 
   // `client.clock().predicted - authoritative` is a real, positive, stable lead (Provides:

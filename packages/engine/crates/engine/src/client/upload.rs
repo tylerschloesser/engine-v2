@@ -168,25 +168,54 @@ impl<C: ClientSide<G>, G: crate::game::Game> Uploader<C, G> {
     /// `store`'s cache events (an `Evicted` clears the slot's bit and queues its indirection
     /// removal), then -- only when something changed -- rescans ring 1 + look-ahead for cached,
     /// not-yet-uploaded chunks, nearest first.
+    ///
+    /// **A same-chunk, same-slot `Evicted`-then-`Loaded` pair inside one drain never stages an
+    /// `INDIR_NONE` at all** (docs/plan/26-prediction-rendering-and-clocks.md Deviations, "Gate fix
+    /// round 1", item 1): `TerrainStore::replace_overlay` (a wire `ChunkSnapshots` for a chunk this
+    /// client already held -- found live, a real host/client subscription-entry race, not a
+    /// prediction bug) now evicts *and immediately re-materializes* the same chunk, synchronously,
+    /// before this drain ever sees it -- `Cache::acquire`'s free list is LIFO, so the reload lands
+    /// back on the exact slot it just left. The two events land in the same `events` queue in that
+    /// order every time; recognising the pair here (rather than in `Cache`, which has no picture of
+    /// "still wanted") is what lets the render side skip the `INDIR_NONE` -> `CHUNK` -> `INDIR`
+    /// round trip entirely and go straight to a plain content restage (0012/0018 §3: "a re-stage of
+    /// a resident chunk must never pass through non-resident"). A slot genuinely handed to a
+    /// *different* chunk (the item-4 "evicted slot reuse" case, gate round 1) is unaffected: its own
+    /// `Loaded` names a different chunk, so the pending `Evicted` flushes exactly as before.
     pub fn on_frame(&mut self, camera: &CameraBlock, store: &TerrainStore) {
         let mut changed = false;
+        // Holds one `Evicted` event until either a matching same-chunk `Loaded` cancels it (see
+        // doc comment above) or the drain moves past it -- at most one at a time, since `Cache`
+        // only ever reports one eviction between two `Loaded`s for the slot it freed.
+        let mut pending_evict: Option<(ChunkCoord, u32)> = None;
         store.drain_cache_events(|event| {
             changed = true;
-            if let CacheEvent::Evicted { chunk, slot } = event {
-                self.uploaded[slot as usize] = false;
-                self.indir_none_pending[slot as usize] = true;
-                let (x, y) = indir_coords(chunk);
-                push_bounded(
-                    &mut self.pending_indir,
-                    IndirEntry {
-                        x,
-                        y,
-                        value: INDIR_NONE,
-                        evicted_slot: Some(slot as u16),
-                    },
-                );
+            match event {
+                CacheEvent::Evicted { chunk, slot } => {
+                    if let Some((c, s)) = pending_evict.take() {
+                        Self::flush_evicted(
+                            &mut self.indir_none_pending,
+                            &mut self.pending_indir,
+                            c,
+                            s,
+                        );
+                    }
+                    self.uploaded[slot as usize] = false;
+                    pending_evict = Some((chunk, slot));
+                }
+                CacheEvent::Loaded { chunk, slot } => {
+                    if pending_evict == Some((chunk, slot)) {
+                        // The cancelling case: never touches INDIR at all, just restages content.
+                        pending_evict = None;
+                        self.uploaded[slot as usize] = true;
+                        push_bounded(&mut self.pending_chunks, chunk);
+                    }
+                }
             }
         });
+        if let Some((c, s)) = pending_evict.take() {
+            Self::flush_evicted(&mut self.indir_none_pending, &mut self.pending_indir, c, s);
+        }
 
         let centre = (camera.centre[0], camera.centre[1]);
         let half_extent = (camera.half_extent_tiles[0], camera.half_extent_tiles[1]);
@@ -240,6 +269,33 @@ impl<C: ClientSide<G>, G: crate::game::Game> Uploader<C, G> {
     /// M37b's `requeue_all` below) -- re-converted from `TerrainStore::copy_chunk` at stage time.
     pub fn enqueue_chunk(&mut self, chunk: ChunkCoord) {
         push_bounded(&mut self.pending_chunks, chunk);
+    }
+
+    /// The genuine-eviction path `on_frame`'s own drain defers a pending `Evicted` into (Gate fix
+    /// round 1, item 1's own doc comment on `on_frame`): unchanged from before that fix, just
+    /// pulled out so both the cancelled-pair case (which never calls this) and the flush-at-drain-
+    /// end case (a real, lasting eviction) share one body. `&mut [bool; PAGE_SLOTS]`/`&mut
+    /// VecDeque<IndirEntry>` rather than `&mut self`: the caller already has `self.uploaded[slot]`
+    /// borrowed mutably in the same match arm on the stable-Rust-friendly path (an associated
+    /// function avoids a second `&mut self` the borrow checker would otherwise have to reconcile
+    /// with the closure's own captures).
+    fn flush_evicted(
+        indir_none_pending: &mut [bool; PAGE_SLOTS as usize],
+        pending_indir: &mut VecDeque<IndirEntry>,
+        chunk: ChunkCoord,
+        slot: u32,
+    ) {
+        indir_none_pending[slot as usize] = true;
+        let (x, y) = indir_coords(chunk);
+        push_bounded(
+            pending_indir,
+            IndirEntry {
+                x,
+                y,
+                value: INDIR_NONE,
+                evicted_slot: Some(slot as u16),
+            },
+        );
     }
 
     /// A single tile changed on an already-resident chunk: queues one `PATCH` entry, converted
