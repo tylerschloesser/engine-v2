@@ -178,10 +178,23 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     // the upload ring the very same wake, not one wake later -- `untilQuiescent`'s own "every ring
     // drained" check would otherwise see the upload ring trivially drained (nothing pushed *yet*)
     // before `uploadPump` ever got a chance to try.
+    //
+    // `actionPump` also runs before `uploadPump` now, for the identical reason, one milestone
+    // later (docs/plan/26-prediction-rendering-and-clocks.md steps 4-6, found live by the browser
+    // `prediction-no-flicker` test: a semantic pixel probe read the *pristine* colour for one
+    // extra wake after dispatch, every time). `ClientCore::on_action` (inside `actionPump.pump()`)
+    // calls `sync_overlay_dirty`/`mark_dirty` synchronously as part of predicting the just-
+    // dispatched action -- with `actionPump` running *after* `uploadPump` (the order before this
+    // fix), that mark landed one wake too late for `uploadPump.pump()` to have staged it yet,
+    // exactly the "the browser prediction-no-flicker test ... should see a chunk re-upload
+    // immediately on dispatch ... worth asserting explicitly if the semantic pixel probe ever
+    // seems to lag one frame behind a tap" risk `.claude/rules/prediction.md` (steps 1-3's own
+    // Deviations note for this implementer) already named. `genPump`'s own position is unrelated
+    // to either ordering constraint and is left where it was.
     netPump?.pump()
     genPump.pump()
-    uploadPump.pump()
     actionPump?.pump()
+    uploadPump.pump()
     // `W_ACK` is stored last, after every pump (not right after the `frame()` block, M09b's own
     // original spot): `stepFrame`'s own spin and `untilQuiescent`'s `W_ACK === CB_FRAME_REQ` check
     // both use this as "this wake's work is done" -- if it fires as soon as `frame()` returns, a

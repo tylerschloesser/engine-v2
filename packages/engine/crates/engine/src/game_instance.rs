@@ -851,14 +851,34 @@ where
     /// docs/plan/26-prediction-rendering-and-clocks.md Planning decisions "One resolution point":
     /// every `CHUNK` record now reads the prediction overlay too (`Uploader::stage_predicted`),
     /// not just pristine + the replica overlay.
+    ///
+    /// **Drains `core`'s own dirty queue into `uploader` first** (`ClientCore::drain_dirty`, the
+    /// same call `testing::testkit::Loopback::drain_and_stage` already made for steps 1-3's own
+    /// tests) -- found live by the browser `prediction-no-flicker` test (steps 4-6): a dispatched
+    /// action's own `mark_dirty`/`sync_overlay_dirty` call (inside `ClientCore::on_action`, run
+    /// from `worker/client-action.ts`'s pump) has no other path into `Uploader`'s own enqueued-
+    /// chunks list -- `GameInstance::on_frame`'s ABI handler drains the *replica-delta* half of
+    /// the same dirty queue (`drain_dirty_for_upload`) only when a new host frame actually applies,
+    /// so without this call a *predicted* dirty mark sat unstaged until the next real downlink
+    /// frame happened to arrive (a heartbeat, at worst 500 ms later, 0010) -- exactly the one-wake
+    /// lag `.claude/rules/prediction.md`'s own steps 1-3 Deviations note flagged as a risk to watch
+    /// for ("the semantic pixel probe ever seems to lag one frame behind a tap"). Draining twice in
+    /// one wake (once here, once inside `on_frame` if a frame also applied this same wake) is safe:
+    /// `ClientCore::mark_dirty`'s own dedup (`Replica::dirty_contains_chunk`) already has to
+    /// tolerate a wire delta and a prediction dirtying the same chunk in the same frame (Deviations,
+    /// steps 1-3), and a queue this call already emptied simply drains to nothing the second time.
     fn upload_stage(&mut self, max_records: u32, out: &mut [u8]) -> u32 {
         match self {
-            GameInstance::Client(c) => c.uploader.stage_predicted(
-                max_records,
-                c.core.replica().terrain(),
-                c.core.overlay(),
-                out,
-            ),
+            GameInstance::Client(c) => {
+                let uploader = &mut c.uploader;
+                c.core.drain_dirty(|chunk| uploader.enqueue_chunk(chunk));
+                c.uploader.stage_predicted(
+                    max_records,
+                    c.core.replica().terrain(),
+                    c.core.overlay(),
+                    out,
+                )
+            }
             _ => 0,
         }
     }
