@@ -341,6 +341,36 @@ impl<G: Game> ClientCore<G> {
         self.overlay.clear();
     }
 
+    /// docs/plan/28b-reconnect-and-lifecycle.md step 3 ("Pending-action resend"): called once from
+    /// `client_on_welcome`, on every `Welcome` (a plain join's own included -- `pending` is empty
+    /// then, so both loops below are no-ops). `ack_seq` is `Welcome.last_processed_action_seq`
+    /// (0013 Reconnect: "the client then resends pending actions with `seq >
+    /// last_processed_action_seq`"). Every pending action with `seq > ack_seq` (M25's
+    /// `PendingQueue::unacked_after`) is re-encoded into the outbox for the very next
+    /// `poll_uplink` flush -- its own `Pending` entry (status/predicted_tick) is untouched, so the
+    /// normal `on_frame` reconcile pass re-predicts it exactly like any other still-pending action.
+    /// Every pending action with `seq <= ack_seq` is popped (`pop_acked_through`, the same helper
+    /// `on_frame`'s own ack handling uses) and handed to `on_lost`: the host already processed it
+    /// (applied or rejected) on the *old* connection, but that connection died before its own ack
+    /// ever arrived, and 0013's host keeps no per-session state to replay one from -- neither
+    /// `Confirmed` nor `Rejected` is knowable here, so the caller reports `Lost` (0004, 0013;
+    /// `game_instance::push_lost_record`).
+    pub fn resend_after_welcome(&mut self, ack_seq: u32, mut on_lost: impl FnMut(u32)) {
+        self.outbox.clear();
+        let mut buf = [0u8; MAX_ACTION_ENCODED_BYTES];
+        let ClientCore {
+            pending, outbox, ..
+        } = self;
+        for (seq, action) in pending.unacked_after(ack_seq) {
+            if let Ok(n) = crate::codec::encode(action, &mut buf) {
+                outbox.push((seq, buf[..n].to_vec()));
+            }
+        }
+        while let Some(p) = self.pending.pop_acked_through(ack_seq) {
+            on_lost(p.seq);
+        }
+    }
+
     /// M25: every action still pending, oldest first (`testkit::Loopback::pending`).
     pub fn pending(&self) -> impl Iterator<Item = &Pending<G>> {
         self.pending.iter()

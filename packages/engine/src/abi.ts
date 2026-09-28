@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 30
+export const ABI_VERSION = 31
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -111,6 +111,10 @@ export const ABI_EXPORTS = {
   // docs/plan/15b-ring-connection-and-replica-rendering.md: frees `conn`'s slot (`host::Host::
   // disconnect`). An unknown/already-disconnected `conn` is a tolerated no-op, not an error.
   sim_disconnect: { role: 'sim', params: 1, result: 'status' },
+  // docs/plan/28b-reconnect-and-lifecycle.md step 4 (`ABI_VERSION` 30 -> 31): `host::Host::
+  // log_disconnected` -- queues `Record::Player { Disconnected }` for `player`, delivered at the
+  // next `tick()`, independent of any live connection. The host-side grace timer's own signal.
+  sim_log_disconnected: { role: 'sim', params: 1, result: 'status' },
   // docs/plan/28-sessions-and-reconnect.md (`ABI_VERSION` 25 -> 26): the real handshake join/
   // reconnect path, replacing `sim_connect`'s implicit accept for every connection the host's own
   // TS handshake (`host/handshake.ts`) drives. `len` bytes of `Rx` are the whole handshake input

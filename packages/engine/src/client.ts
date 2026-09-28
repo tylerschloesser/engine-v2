@@ -96,10 +96,16 @@ export type EngineRejectReason = 'RateLimited' | 'StateBudgetFull' | 'EngineFaul
  * game's own); `onActionResult`'s caller supplies it as a type parameter for full typing on both
  * halves. `'NotPredictable'` (docs/plan/25-prediction-core.md, `game_instance::
  * push_not_predictable_record`): a declined prediction, surfaced once at dispatch (0003, 0012) --
- * never a local `Rejected`, which is a hint and is not surfaced this way at all. */
+ * never a local `Rejected`, which is a hint and is not surfaced this way at all. `'Lost'`
+ * (docs/plan/28b-reconnect-and-lifecycle.md step 3, `game_instance::push_lost_record`): a pending
+ * action `Welcome.last_processed_action_seq` proves the host already processed, but whose own ack
+ * died with the old connection before it arrived -- the host keeps no per-session state to replay
+ * one from (0013), so neither `Confirmed` nor `Rejected` is knowable; the resync already shows the
+ * true outcome in replicated state. */
 export type ActionOutcome<Reject = unknown> =
   | 'Confirmed'
   | 'NotPredictable'
+  | 'Lost'
   | { Rejected: { Game: Reject } }
   | { Rejected: { Engine: EngineRejectReason } }
 

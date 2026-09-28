@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 30;
+pub const ABI_VERSION: u32 = 31;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -230,6 +230,15 @@ pub trait Instance: Sized + 'static {
     /// error (untrusted host input never panics, matching `sim_admit`'s own tolerance of a bad
     /// connection id).
     fn sim_disconnect(&mut self, _conn: u32) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/28b-reconnect-and-lifecycle.md step 4 (`ABI_VERSION` 30 -> 31): `host::Host::
+    /// log_disconnected` -- queues `Record::Player { Disconnected }` for `player`, delivered at the
+    /// next `tick()`. The host-side grace timer's own signal (`host/lifecycle.ts`), independent of
+    /// any live `ConnSlot`: by the time this fires the connection is already gone (either the 10 s
+    /// grace expired, or an explicit `Bye{Leave}` skipped it).
+    fn sim_log_disconnected(&mut self, _player: u32) -> Status {
         Status::Unsupported
     }
 
@@ -841,6 +850,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_disconnect(conn: u32) -> u32 {
             $crate::abi::sim_disconnect(&__ENGINE_SLOT, conn) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_log_disconnected(player: u32) -> u32 {
+            $crate::abi::sim_log_disconnected(&__ENGINE_SLOT, player) as u32
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_attach(conn: u32, len: u32) -> i32 {

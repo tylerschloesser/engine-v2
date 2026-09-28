@@ -34,6 +34,16 @@ function manualClock(startMs = 0) {
   }
 }
 
+/** docs/plan/28b-reconnect-and-lifecycle.md step 4: `HostServices.scheduler`'s own test double for
+ * every test here that doesn't itself exercise grace/idle timers -- never fires anything, the same
+ * shape `test/headless-client.ts`'s own `noopScheduler` already uses. */
+const noopScheduler: HostServices['scheduler'] = {
+  setTimer: () => -1,
+  clearTimer: () => {},
+  requestFrame: () => -1,
+  cancelFrame: () => {},
+}
+
 /** A `HostServices.timer` double: `every()` records the one callback `SimHost.start()`/`resume()`
  * registers (a real `SimHost` only ever has one live timer), `fire()` invokes it unless the
  * returned stop function was called since. */
@@ -67,6 +77,7 @@ function fakeSim(overrides: Partial<SimInstance> = {}): SimInstance {
     simReattach: () => Status.Ok,
     simFaultAck: () => Status.Ok,
     simDisconnect: () => Status.Ok,
+    simLogDisconnected: () => Status.Ok,
     simAdmit: () => Status.Ok,
     simBuildFrame: () => ({ len: 0 }),
     rxBytes: () => 0,
@@ -86,7 +97,11 @@ test('simhost_paces_one_tick_per_fire', () => {
   // this test is the "fires unconditionally" half on its own, well under one resync window.
   const clock = manualClock()
   const timer = manualTimer()
-  const host = createSimHostFromInstance(fakeSim(), { clock, timer: timer.services })
+  const host = createSimHostFromInstance(fakeSim(), {
+    clock,
+    timer: timer.services,
+    scheduler: noopScheduler,
+  })
   host.start()
 
   timer.fire()
@@ -112,6 +127,7 @@ test('simhost_resync_reads_the_configured_tick_rate', () => {
   const host = createSimHostFromInstance(fakeSim({ tickHz: () => HZ }), {
     clock,
     timer: timer.services,
+    scheduler: noopScheduler,
   })
   host.start()
 
@@ -131,7 +147,11 @@ test('simhost_resync_reads_the_configured_tick_rate', () => {
 test('simhost_resync_catches_up_and_drops_within_cap', () => {
   const clock = manualClock()
   const timer = manualTimer()
-  const host = createSimHostFromInstance(fakeSim(), { clock, timer: timer.services })
+  const host = createSimHostFromInstance(fakeSim(), {
+    clock,
+    timer: timer.services,
+    scheduler: noopScheduler,
+  })
   host.start()
 
   // RESYNC_TICKS fires, each assumed to cost TICK_MS with no clock read -- but wall time actually
@@ -180,6 +200,7 @@ test('simhost_seal_precedes_tick', () => {
     simReattach: () => Status.Ok,
     simFaultAck: () => Status.Ok,
     simDisconnect: () => Status.Ok,
+    simLogDisconnected: () => Status.Ok,
     simAdmit: () => Status.Ok,
     simBuildFrame: () => ({ len: 0 }),
     rxBytes: () => 0,
@@ -190,7 +211,11 @@ test('simhost_seal_precedes_tick', () => {
     simHasPlayer: () => 0,
   }
   const logSpy = vi.fn((bytes: Uint8Array) => order.push(`log:${bytes.length}`))
-  const host = createSimHostFromInstance(sim, { clock, timer: timer.services })
+  const host = createSimHostFromInstance(sim, {
+    clock,
+    timer: timer.services,
+    scheduler: noopScheduler,
+  })
   host.logSink = logSpy
 
   host.stepTick(1)
@@ -204,7 +229,11 @@ test('simhost_seal_precedes_tick: logSink is not called when len is 0', () => {
   const clock = manualClock()
   const timer = manualTimer()
   const logSpy = vi.fn()
-  const host = createSimHostFromInstance(fakeSim(), { clock, timer: timer.services })
+  const host = createSimHostFromInstance(fakeSim(), {
+    clock,
+    timer: timer.services,
+    scheduler: noopScheduler,
+  })
   host.logSink = logSpy
   host.stepTick(3)
   expect(logSpy).not.toHaveBeenCalled()
@@ -214,7 +243,11 @@ test('simhost_seal_precedes_tick: logSink is not called when len is 0', () => {
 test('simhost_pause_stops_ticks', () => {
   const clock = manualClock()
   const timer = manualTimer()
-  const host = createSimHostFromInstance(fakeSim(), { clock, timer: timer.services })
+  const host = createSimHostFromInstance(fakeSim(), {
+    clock,
+    timer: timer.services,
+    scheduler: noopScheduler,
+  })
   host.start()
 
   timer.fire()
@@ -247,7 +280,11 @@ test('simhost_warmer_respects_budget', () => {
       return 1 // always more to warm: the budget, not "nothing cold", must stop the loop
     },
   })
-  const host = createSimHostFromInstance(sim, { clock, timer: timer.services })
+  const host = createSimHostFromInstance(sim, {
+    clock,
+    timer: timer.services,
+    scheduler: noopScheduler,
+  })
   host.start()
 
   // The warmer now runs only at a resync (Deviations: amortised the same way the clock read is),
@@ -274,7 +311,11 @@ test('simhost_counts_tick_overrun', () => {
       return Status.Ok
     },
   })
-  const host = createSimHostFromInstance(sim, { clock, timer: timer.services })
+  const host = createSimHostFromInstance(sim, {
+    clock,
+    timer: timer.services,
+    scheduler: noopScheduler,
+  })
   host.start()
 
   // No advance before the first fire: it sets the resync anchor at wall time 0. Each of the other

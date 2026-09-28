@@ -474,7 +474,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   }
   const simHost = createSimHostFromInstance(
     simInstance,
-    { clock: systemClock, timer: atomicsTimer.timer },
+    { clock: systemClock, timer: atomicsTimer.timer, scheduler: systemScheduler },
     persistence,
     initialTicksRun,
     recoveryDeps,

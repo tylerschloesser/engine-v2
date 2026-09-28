@@ -41,6 +41,7 @@ import { loadGame } from '../server-node.js'
 import { type MemoryStorage, memoryStorage } from '../storage/memory.js'
 import type { Storage } from '../storage/types.js'
 import { createHeadlessClient, type HeadlessClient } from './headless-client.js'
+import { trapSim } from './trap.js'
 import { createVirtualClock, type VirtualClock } from './virtual-clock.js'
 
 /** docs/plan/28-sessions-and-reconnect.md Seams: a deterministic per-(seed, index) 128-bit secret
@@ -95,12 +96,26 @@ export interface NetHarnessOptions {
   secrets?: Uint8Array[]
 }
 
+/** docs/plan/28b-reconnect-and-lifecycle.md step 3: `ConditionedLink` plus one harness-only
+ * addition. */
+export interface HarnessLink extends ConditionedLink {
+  /** Builds a *fresh* `conditionLink` pair, `server.accept()`s its host-side end, and points this
+   * same client's own `createLink`-driven redial (`HeadlessClient`'s `dial`) at the new
+   * client-side end -- unlike `disconnect()` alone (whose own conditioner is left permanently
+   * severed), this is what lets the *same* `HeadlessClient` (its own pending queue, secret, and
+   * every other bit of client-side state intact) actually reconnect. Call once, synchronously,
+   * right after `disconnect()` and before the next `advanceTicks`/`advanceTo`: `createLink`'s own
+   * backoff schedule (`net/link.ts`) starts its first redial attempt at a 0 ms delay, so the very
+   * next clock advance already dials the fresh connection this call installs. */
+  reconnect(): void
+}
+
 export interface NetHarness {
   clock: VirtualClock
   server: WorldServer
   storage: Storage
   clients: HeadlessClient[]
-  link(i: number): ConditionedLink
+  link(i: number): HarnessLink
   /** docs/plan/28-sessions-and-reconnect.md steps 3-5: `secret` (real, not `deterministicSecret`
    * derived) lets a scenario add a client that returns as, or supersedes, a *specific* earlier
    * identity -- omitted, this is exactly the pre-M28 behaviour. */
@@ -125,6 +140,14 @@ export interface NetHarness {
    * them onto the new server is `link(i).reconnect()`'s job, step 3/4). Existing `clients`/`link(i)`
    * entries are untouched; `addClient()` after this call accepts into the new server. */
   restartServer(opts?: { crash?: boolean }): Promise<void>
+  /** docs/plan/28b-reconnect-and-lifecycle.md step 3 (from M24's own Deviations): forces a
+   * deterministic trap on the *live* sim instance (`engine/test`'s `trapSim`, the M24 test trap
+   * hook) and awaits `simHost.recover()` -- the trap alone only kills the instance; `recover()` is
+   * what actually re-derives a fresh one from storage, bumps the epoch (`SimHost.onRecovered`,
+   * wired in `createWorldServer`) and resyncs every open connection. Requires a world created with
+   * persistence (every `createNetHarness` world is); throws if `serverInternals(server).
+   * rawInstance` is unavailable (no `recoveryDeps`, never expected here). */
+  panicServer(): Promise<void>
   advanceTo(t: number): Promise<void>
   advanceTicks(n: number): Promise<void>
   settle(): Promise<void>
@@ -182,6 +205,12 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     ...(opts.world?.maxPlayers !== undefined ? { maxPlayers: opts.world.maxPlayers } : {}),
     ...(opts.world?.cacheChunks !== undefined ? { cacheChunks: opts.world.cacheChunks } : {}),
     ...(opts.world?.arenaBytes !== undefined ? { arenaBytes: opts.world.arenaBytes } : {}),
+    // docs/plan/28b-reconnect-and-lifecycle.md step 4: real bug found here -- never forwarded
+    // before this milestone (0013 "World lifecycle": "unless `keepTickingWhenEmpty` is set"),
+    // silently dropped by every scenario that passed it (none did, before `lifecycle.test.ts`).
+    ...(opts.world?.keepTickingWhenEmpty !== undefined
+      ? { keepTickingWhenEmpty: opts.world.keepTickingWhenEmpty }
+      : {}),
   }
   const gameWorldgen = worldCfg.params.worldgen
 
@@ -206,6 +235,11 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       storage: onStorage,
       clock: { now: () => clock.now() },
       timer: { every: () => () => {} }, // ticking is `simHost.stepTick`, driven from `advanceTicks`
+      // docs/plan/28b-reconnect-and-lifecycle.md step 4: the real `VirtualClock` (also a real
+      // `Scheduler`) -- grace/idle timers (`host/lifecycle.ts`) must fire deterministically as
+      // `advanceTicks`/`advanceTo` advance virtual time, unlike `timer.every` above (stubbed: this
+      // harness paces ticks manually).
+      scheduler: clock,
     })
   }
 
@@ -218,7 +252,19 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
   const trace: TraceEntry[] = []
   const nextLink = { i: 0 }
 
-  type Entry = { client: HeadlessClient; connId: number; link: ConditionedLink; linkIdx: number }
+  type Entry = {
+    client: HeadlessClient
+    connId: number
+    link: ConditionedLink
+    linkIdx: number
+    /** docs/plan/28b-reconnect-and-lifecycle.md step 3: reassigned by `reconnect()` -- the
+     * `dial` closure below always reads this current value, never the one captured at
+     * `makeClient` time. */
+    setClientSide: (c: Connection) => void
+    /** Distinct conditioner-seed offset per `reconnect()` call, so a second (or third) fresh pair
+     * for the same client never draws the identical seeded sequence as the first. */
+    reconnectCount: number
+  }
   const entries: Entry[] = []
 
   function traced(conn: Connection, linkIdx: number, dir: 0 | 1): Connection {
@@ -271,7 +317,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       clock,
     )
     const hostSide = traced(link.ends[0] as Connection, linkIdx, 1)
-    const clientSide = traced(link.ends[1] as Connection, linkIdx, 0)
+    let clientSide = traced(link.ends[1] as Connection, linkIdx, 0)
     server.accept(hostSide)
     // `WorldServer.accept` returns `void` (0024 §5's fixed shape, unchanged by gate round 2) --
     // `connId` is assumed equal to join order (`linkIdx`), true as long as a scenario never
@@ -289,10 +335,9 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     const client = createHeadlessClient({
       wasm,
       game: { seed: worldCfg.params.seed, worldgen: gameWorldgen },
-      // docs/plan/28-sessions-and-reconnect.md step 4: `createLink`'s own `dial` -- this harness
-      // does not yet build a *fresh* conditioned end per redial attempt (Deviations: real
-      // per-attempt redial is a transport concern, M29's own), so every dial before `stop()`
-      // returns the one fixed `clientSide` this client was constructed with.
+      // docs/plan/28b-reconnect-and-lifecycle.md step 3: `createLink`'s own `dial` -- reads the
+      // current `clientSide` binding, which `HarnessLink.reconnect()` (below) reassigns to a
+      // fresh conditioned end before `createLink`'s own next (0 ms-delayed) backoff attempt.
       dial: () => clientSide,
       secret,
       ...(worldCfg.joinKey !== undefined ? { joinKey: worldCfg.joinKey } : {}),
@@ -303,8 +348,35 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       scheduler: clock,
       linkSeed: opts.seed + linkIdx * 2 + 1_000_000, // distinct offset from the conditioner's own
     })
-    entries.push({ client, connId, link, linkIdx })
+    entries.push({
+      client,
+      connId,
+      link,
+      linkIdx,
+      setClientSide: (c) => {
+        clientSide = c
+      },
+      reconnectCount: 0,
+    })
     return client
+  }
+
+  /** `HarnessLink.reconnect()`'s own implementation (module doc comment on that interface). */
+  function reconnectEntry(i: number): void {
+    const e = entries[i]
+    if (!e) throw new Error(`reconnect: no client ${i}`)
+    e.reconnectCount++
+    const conditions = { ...DEFAULT_CONDITIONS, ...opts.conditions }
+    const newLink = conditionLink(
+      ...memoryConnectionPair(),
+      { ...conditions, seed: opts.seed + e.linkIdx * 2 + 3_000_000 * e.reconnectCount },
+      clock,
+    )
+    const hostSide = traced(newLink.ends[0] as Connection, e.linkIdx, 1)
+    const newClientSide = traced(newLink.ends[1] as Connection, e.linkIdx, 0)
+    server.accept(hostSide)
+    e.link = newLink
+    e.setClientSide(newClientSide)
   }
 
   const clients: HeadlessClient[] = []
@@ -318,7 +390,13 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       // plain `await` on an already-settled/trivial promise does not reliably give a turn to.
       // Cheap when nothing is in flight (`handshakesSettled` returns at once).
       await simHost.handshakesSettled()
-      simHost.stepTick(1)
+      // docs/plan/28b-reconnect-and-lifecycle.md step 4: `SimHost.stepTick` itself is
+      // unconditional (its own doc comment) -- this harness is what has to honour "the tick
+      // counter frozen" while the world is genuinely idle-paused, by simply not calling it.
+      // `clock.advanceBy` still runs regardless, so a grace/idle `scheduler.setTimer` (`host/
+      // lifecycle.ts`) armed on this same `VirtualClock` still fires on schedule, and a `Hello`
+      // arriving mid-idle (`addClient`/a reconnect) still resumes ticking on its own next call.
+      if (simHost.running) simHost.stepTick(1)
       await clock.advanceBy(tickMs)
       for (const e of entries) e.client.stepFrame(tickMs)
     }
@@ -415,7 +493,13 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     link(i) {
       const e = entries[i]
       if (!e) throw new Error(`link: no client ${i}`)
-      return e.link
+      return {
+        ends: e.link.ends,
+        set: (c) => e.link.set(c),
+        stall: (ms) => e.link.stall(ms),
+        disconnect: (code) => e.link.disconnect(code),
+        reconnect: () => reconnectEntry(i),
+      }
     },
     addClient(secret) {
       const client = makeClient(secret)
@@ -429,6 +513,20 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       server = buildServer(storage)
       await server.ready
       simHost = worldServerTestHandle(server)
+    },
+    async panicServer() {
+      const inst = serverInternals(server).rawInstance
+      if (!inst) {
+        throw new Error('panicServer: no recoverable instance (no recoveryDeps configured)')
+      }
+      try {
+        trapSim(inst)
+      } catch {
+        // `trapSim`'s own doc comment: "the call never returns normally" -- the trap itself is
+        // the point, not this exception; `recover()` below is what actually derives a fresh
+        // instance and resyncs every open connection.
+      }
+      await simHost.recover()
     },
     connectRaw() {
       const linkIdx = nextLink.i++

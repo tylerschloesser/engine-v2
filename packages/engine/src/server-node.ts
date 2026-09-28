@@ -60,6 +60,7 @@ export function nodeHostServices(opts: {
     storage: opts.storage,
     clock: systemClock,
     timer: { every: everyViaSetTimer },
+    scheduler: systemScheduler,
     ...(opts.onIdle !== undefined ? { onIdle: opts.onIdle } : {}),
     ...(opts.onFatal !== undefined ? { onFatal: opts.onFatal } : {}),
   }

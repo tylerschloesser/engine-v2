@@ -202,7 +202,11 @@ export function createCollectUi(client: Client, doc: Document = document): Colle
     const key = pendingSeq.get(seq)
     if (key === undefined) return
     pendingSeq.delete(seq)
-    if (result === 'Confirmed') return
+    // docs/plan/28b-reconnect-and-lifecycle.md step 3: `Lost` (a reconnect popped this seq because
+    // the host's own `Welcome` already covers it, its real ack lost with the old connection) has
+    // no `Rejected` reason to show -- the resync itself already reflects the true outcome, so this
+    // UI treats it exactly like `Confirmed`: nothing to animate.
+    if (result === 'Confirmed' || result === 'Lost') return
     const entry = buttons.get(key)
     if (entry === undefined) return
     const reason = 'Game' in result.Rejected ? result.Rejected.Game : result.Rejected.Engine

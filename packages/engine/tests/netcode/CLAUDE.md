@@ -36,22 +36,22 @@ try {
   `harness.counters(i)`: bytes/messages up/down, per-tick. `harness.trace()`: the whole run's
   released-message log as one `Uint8Array` -- compare same-seed runs with `Array.from`.
 - **`harness.restartServer(opts?: { crash?: boolean })`** (docs/plan/28b-reconnect-and-lifecycle.md
-  step 2): swaps in a fresh `WorldServer` over the same world. Default: clean `server.stop()` first;
-  `crash: true`: `storage.crashClone()`, no `stop()`. New `epoch` (`worldServerTestHandle(harness
-  .server).epoch`) is one higher; `serverInternals(...).isTicking` is `true` once `ready` resolves.
-  `resyncAll()` sends every open connection a fresh `Welcome` and resnapshots; `sessionState` cycles
-  `Resyncing` (4) -> `Online` (1). `link(i).reconnect()`/`panicServer()` aren't built yet (steps 3-4).
+  step 2): swaps in a fresh `WorldServer` over the same world (`crash: true`: `storage.crashClone()`,
+  no clean `stop()` first). New `epoch` is one higher; `resyncAll()` sends every open connection a
+  fresh `Welcome`. **`link(i).reconnect()`** (step 3): a fresh conditioned pair, `server.accept()`ed,
+  redialed by the *same* `HeadlessClient` (pending queue intact) -- call right after `disconnect()`,
+  before the next `advanceTicks`/`advanceTo`. **`panicServer()`**: `trapSim` + `simHost.recover()`.
+  **`serverInternals(server)`**: `isTicking`, `idleCalls`, `rawInstance`, `handshakesSettled()`.
 
 ## Each client's own identity (secrets, not `myPlayerId`)
 
 docs/plan/28-sessions-and-reconnect.md deleted M15's implicit accept: every connection opens with a
 real `Hello`/`Welcome`, and a `HeadlessClient`'s `PlayerId` comes from `Welcome`
 (`status().ownPlayerId`). `createNetHarness({ secrets?, joinKey? })`: `opts.secrets[i]` for a
-scenario that cares about identity, else `deterministicSecret(seed, i)`. `harness.advanceTicks`/
-`settle` await `serverInternals(server).handshakesSettled()` (needs a real `await`).
-`harness.connectRaw(): Connection` is raw, `HeadlessClient`-free (`handshake.test.ts`); `support.ts`'s
-`buildHelloBytes(wasm, { secret, joinKey, buildHash })` builds real `client_hello()` bytes for it.
-`harness.addClient(secret?)` reuses a secret; `liveness.test.ts` tests `createLink` directly.
+scenario that cares about identity, else `deterministicSecret(seed, i)`; `addClient(secret?)` reuses
+one. `harness.advanceTicks`/`settle` await `handshakesSettled()` (needs a real `await`).
+`harness.connectRaw(): Connection` is raw, `HeadlessClient`-free; `support.ts`'s `buildHelloBytes(wasm,
+{ secret, joinKey, buildHash })` builds real `client_hello()` bytes for it.
 
 ## Fixtures
 

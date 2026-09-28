@@ -112,6 +112,19 @@ fn push_not_predictable_record(buf: &mut Vec<u8>, seq: u32) {
     buf.extend_from_slice(json.as_bytes());
 }
 
+/// docs/plan/28b-reconnect-and-lifecycle.md step 3 ("Pending-action resend"; 0013 Reconnect, 0004):
+/// one pending action `ClientCore::resend_after_welcome` popped because the host's own
+/// `Welcome.last_processed_action_seq` already covers it -- processed (applied or rejected) on the
+/// dead connection, its own ack never delivered, and 0013's host keeps no per-session state to
+/// replay one from. Same kind byte and `[kind][len][json]` shape as `push_result_record`/
+/// `push_not_predictable_record`.
+fn push_lost_record(buf: &mut Vec<u8>, seq: u32) {
+    let json = format!("{{\"seq\":{seq},\"result\":\"Lost\"}}");
+    buf.push(UI_RECORD_KIND_ACTION_RESULT);
+    buf.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    buf.extend_from_slice(json.as_bytes());
+}
+
 /// `TILE_MIN as f64`/`TILE_MAX as f64`'s own floor/clamp, shared by `frame()`'s window-origin and
 /// visible-rect maths below (`view::visible_rect`'s own private `clamp_tile_axis` is not `pub`, and
 /// duplicating a two-line floor+clamp is cheaper than exporting it, docs/plan/
@@ -419,6 +432,13 @@ where
     fn sim_fault_ack(&mut self, conn: u32, seq: u32) -> Status {
         match self {
             GameInstance::Sim(h) => h.sim_fault_ack(conn, seq),
+            _ => Status::WrongRole,
+        }
+    }
+
+    fn sim_log_disconnected(&mut self, player: u32) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_log_disconnected(player),
             _ => Status::WrongRole,
         }
     }
@@ -1154,6 +1174,13 @@ where
                     c.presence = *sample;
                 }
                 c.core.seed_lead_rtt_ms(rtt_ms);
+                // docs/plan/28b-reconnect-and-lifecycle.md step 3: every pending action `Welcome`
+                // proves already processed is popped and reported `Lost`; everything still
+                // outstanding is re-queued for the very next `poll_uplink` flush.
+                let ClientInstance { core, ui_buf, .. } = c.as_mut();
+                core.resend_after_welcome(welcome.last_processed_action_seq, |seq| {
+                    push_lost_record(ui_buf, seq);
+                });
                 let Some(out) = result.get_mut(..16) else {
                     return Status::BadLength;
                 };

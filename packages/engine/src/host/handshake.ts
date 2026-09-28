@@ -103,6 +103,27 @@ export function buildBye(reason: ByeReason): Uint8Array {
   return new Uint8Array([MSG_TYPE_BYE, reason])
 }
 
+/** docs/plan/28b-reconnect-and-lifecycle.md step 4: the host-side counterpart of `buildBye` --
+ * peeks a settled connection's own inbound message for `MsgType::Bye` (the one byte every message
+ * opens with, same "close code, not the message body" spirit `CloseCode`'s own doc comment names)
+ * before falling back to `sim_admit`. `null` for anything that is not a well-formed `Bye`: an
+ * ordinary uplink batch never starts with this byte (`wire::MsgType`'s own numbering has no
+ * overlap), so this never misclassifies real action/camera/presence traffic.
+ *
+ * `len` (the real message length) is a separate argument, never `bytes.length` (`.claude/rules/
+ * hot-paths.md`): the caller's own `bytes` is the connection's fixed, preallocated receive buffer
+ * (`RingConnection`'s own "same buffer every call, real length on the side" convention,
+ * `ring-connection.ts`) -- reading `bytes[0]`/`bytes[1]` directly off it needs no `subarray()`,
+ * unlike a first draft that sliced `bytes` down to `len` before calling this (found live: the
+ * `gc` page's own `sim` isolate went from 0 to ~27 B/frame, one `subarray()` per uplink message).
+ */
+export function parseBye(bytes: Uint8Array, len: number): ByeReason | null {
+  if (len < 2 || bytes[0] !== MSG_TYPE_BYE) return null
+  const reason = bytes[1]
+  if (reason !== ByeReason.Leave && reason !== ByeReason.Superseded) return null
+  return reason
+}
+
 /**
  * Builds `Reject` bytes (0013, frozen layout): `[magic u32][protocol_version u16][reason
  * u8][build_hash [u8; 32]]`. Pure: takes the server's own `buildHash` as a parameter rather than
@@ -257,13 +278,22 @@ function encodeVarint(value: number): Uint8Array {
 
 /** `sim_attach`'s own input-region layout (Provides: "`player_id, epoch, joined, last presence,
  * Hello tail`"; `host::Host::attach`'s own doc comment, Rust): `player_id varint · epoch u32 ·
- * joined u8 · presence: has_presence u8 + (len varint + bytes)? · hello_tail`. Pure: the caller
- * (`SimHost.accept`'s own handshake driver) already resolved `playerId`/`joined`/`presence` from
- * the session table and `sim_has_player` before calling this. */
+ * joined u8 · suppress_connected u8 · presence: has_presence u8 + (len varint + bytes)? ·
+ * hello_tail`. Pure: the caller (`SimHost.accept`'s own handshake driver) already resolved
+ * `playerId`/`joined`/`presence` from the session table and `sim_has_player` before calling this.
+ *
+ * `suppressConnected` (docs/plan/28b-reconnect-and-lifecycle.md step 4): `true` when this attach
+ * is a reconnect for a player whose own grace timer is still pending (`host/lifecycle.ts`'s
+ * `isWithinGrace`) -- 0013 "a Hello with the same secret inside the grace logs nothing" (the log's
+ * own bytes converge with a run that never dropped at all): `Host::attach` skips its own
+ * `Record::Player { Connected }` push when this is set. Always `false` for a first join
+ * (`joined: true`; there is no prior grace to be inside of) and for an ordinary reconnect after
+ * the grace already expired or a `Bye{Leave}` already logged `Disconnected`. */
 export function buildAttachInput(opts: {
   playerId: number
   epoch: number
   joined: boolean
+  suppressConnected: boolean
   presence: Uint8Array | null
   helloTail: Uint8Array
 }): Uint8Array {
@@ -276,6 +306,7 @@ export function buildAttachInput(opts: {
     playerIdBytes.length +
     epochBytes.length +
     1 + // joined
+    1 + // suppress_connected
     1 + // has_presence
     presenceLenBytes.length +
     presenceBytes.length +
@@ -287,6 +318,8 @@ export function buildAttachInput(opts: {
   out.set(epochBytes, off)
   off += epochBytes.length
   out[off] = opts.joined ? 1 : 0
+  off += 1
+  out[off] = opts.suppressConnected ? 1 : 0
   off += 1
   out[off] = opts.presence ? 1 : 0
   off += 1

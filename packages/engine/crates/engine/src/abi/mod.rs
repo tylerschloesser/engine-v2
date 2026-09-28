@@ -159,6 +159,14 @@ pub fn sim_disconnect<T: Instance>(slot: &Slot<T>, conn: u32) -> Status {
     }
 }
 
+/// docs/plan/28b-reconnect-and-lifecycle.md step 4: `Instance::sim_log_disconnected`.
+pub fn sim_log_disconnected<T: Instance>(slot: &Slot<T>, player: u32) -> Status {
+    match slot.sim() {
+        Ok(rt) => rt.inst.sim_log_disconnected(player),
+        Err(status) => status,
+    }
+}
+
 /// `sim_attach(conn, len) -> len`, or `-(status)` -- the same shape as `sim_build_frame`. `len`
 /// bytes of `Rx` are the whole handshake input (`Instance::sim_attach`'s own doc comment); copied
 /// into an owned buffer first so `Rx` (read) and `Tx` (written, for `Welcome`) can both be reached

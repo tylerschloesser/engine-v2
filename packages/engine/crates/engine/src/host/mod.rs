@@ -974,14 +974,23 @@ impl<G: Game> Host<G> {
         }
     }
 
-    /// Queues `Record::Player { Disconnected }` (grace: M28) and frees the slot immediately: no
-    /// more `build_frame`/`on_uplink` traffic for `conn` until a fresh `connect`. docs/plan/
-    /// 19-presence-channel.md steps 4-6 (0001: "on disconnect the host tells clients at once and
-    /// drops the sample from relay"): the player's held sample is dropped from [`Self::presence`]
-    /// right here, immediately -- not deferred to the next `tick()`. `Host::build_frame`'s own
-    /// `Gone` detection (a connection's `ConnSlot::presence_relayed` entry with no matching
-    /// `PresenceTable` entry) is what turns this into a wire `Gone` for every *other* connection's
-    /// very next `build_frame`, satisfying "at once" without a separate queued-event mechanism.
+    /// Frees the slot and drops presence immediately: no more `build_frame`/`on_uplink` traffic
+    /// for `conn` until a fresh `connect`/`attach`. docs/plan/19-presence-channel.md steps 4-6
+    /// (0001: "on disconnect the host tells clients at once and drops the sample from relay"): the
+    /// player's held sample is dropped from [`Self::presence`] right here, immediately -- not
+    /// deferred to the next `tick()`. `Host::build_frame`'s own `Gone` detection (a connection's
+    /// `ConnSlot::presence_relayed` entry with no matching `PresenceTable` entry) is what turns
+    /// this into a wire `Gone` for every *other* connection's very next `build_frame`, satisfying
+    /// "at once" without a separate queued-event mechanism.
+    ///
+    /// **Does not queue `Record::Player { Disconnected }`** (docs/plan/
+    /// 28b-reconnect-and-lifecycle.md step 4, 0013 "the logged `Disconnected` event is injected
+    /// only after a 10 s grace"): that decision -- and its timing -- belongs to the host-side
+    /// grace timer (`host/lifecycle.ts`), which calls [`Self::log_disconnected`] once the grace
+    /// expires (or at once, on an explicit `Bye{Leave}`). This method only ever runs the *at-once*
+    /// half (presence, the connection slot); native callers that still want the pre-M28b
+    /// immediate-log behaviour (`connect`/`reattach`'s own test fixtures, `testkit::Loopback`) call
+    /// [`Self::log_disconnected`] themselves right after this, same as production TS now does.
     pub fn disconnect(&mut self, conn: ConnId) {
         let idx = conn as usize;
         let player = match self.conns.get(idx) {
@@ -989,15 +998,26 @@ impl<G: Game> Host<G> {
             _ => None,
         };
         if let Some(player) = player {
-            self.pending_records.push(Record::Player {
-                who: player,
-                ev: PlayerEvent::Disconnected,
-            });
             self.presence.remove(player);
         }
         if let Some(slot) = self.conns.get_mut(idx) {
             *slot = None;
         }
+    }
+
+    /// docs/plan/28b-reconnect-and-lifecycle.md step 4: queues `Record::Player { Disconnected }`,
+    /// delivered at the next `tick()` -- independent of any live `ConnSlot` (the connection is
+    /// already gone by the time this runs, whether from the grace timer expiring or an explicit
+    /// `Bye{Leave}`). No tolerance check of its own: the caller (`host/lifecycle.ts`) never calls
+    /// this for a player who has since reconnected (a grace timer is cancelled the moment `attach`
+    /// sees that secret again), so a stray call logging a spurious `Disconnected` for an online
+    /// player is not expected in production; untrusted-input tolerance is not this method's job
+    /// (`who` is never attacker-controlled -- it comes from the host's own session table).
+    pub fn log_disconnected(&mut self, who: PlayerId) {
+        self.pending_records.push(Record::Player {
+            who,
+            ev: PlayerEvent::Disconnected,
+        });
     }
 
     /// docs/plan/28-sessions-and-reconnect.md: the real join/reconnect path `sim_attach` (ABI)
@@ -1033,6 +1053,13 @@ impl<G: Game> Host<G> {
         );
         let epoch = r.u32().map_err(WireError::from)?;
         let joined = r.u8().map_err(WireError::from)? != 0;
+        // docs/plan/28b-reconnect-and-lifecycle.md step 4 (0013 "a Hello with the same secret
+        // inside the grace logs nothing"): the TS handshake's own `host/lifecycle.ts` sets this
+        // when `player` still has a live grace timer pending -- this attach is not a real
+        // reconnect from the log's own perspective (nothing was ever logged `Disconnected`), so
+        // no `Connected` record is pushed for it either, and the log converges with a run that
+        // never dropped at all.
+        let suppress_connected = r.u8().map_err(WireError::from)? != 0;
         let has_presence = r.u8().map_err(WireError::from)?;
         let presence: Option<G::Presence> = match has_presence {
             0 => None,
@@ -1096,10 +1123,12 @@ impl<G: Game> Host<G> {
                 ev: PlayerEvent::Joined,
             });
         }
-        self.pending_records.push(Record::Player {
-            who: player,
-            ev: PlayerEvent::Connected,
-        });
+        if !suppress_connected {
+            self.pending_records.push(Record::Player {
+                who: player,
+                ev: PlayerEvent::Connected,
+            });
+        }
         if let Some(sample) = presence {
             self.presence.restore(player, sample);
         }
@@ -2076,6 +2105,12 @@ where
     /// unchanged since M15) already tolerates an unknown/out-of-range `conn` as a no-op.
     fn sim_disconnect(&mut self, conn: u32) -> Status {
         self.disconnect(conn);
+        Status::Ok
+    }
+
+    /// docs/plan/28b-reconnect-and-lifecycle.md step 4: `host::Host::log_disconnected`.
+    fn sim_log_disconnected(&mut self, player: u32) -> Status {
+        self.log_disconnected(PlayerId(player));
         Status::Ok
     }
 
