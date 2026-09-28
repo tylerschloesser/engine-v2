@@ -27,6 +27,9 @@ use crate::game::{Game, PlayerId};
 use crate::wire::{CameraReport, MsgType, WireError};
 use crate::worldgen::Worldgen;
 
+mod resume;
+pub use resume::{HintDiff, build_resume_hint, diff_resume_hint};
+
 /// `PROTOCOL_VERSION = 1` (Scope): covers only the frozen prefixes (0013 "Build-hash handshake").
 pub const PROTOCOL_VERSION: u16 = 1;
 
