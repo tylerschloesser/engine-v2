@@ -10,7 +10,13 @@
 // per call" contract) -- arming real-time pacing there too would let `onFire`'s own catch-up loop
 // race a deterministic step request the instant a `body()` pass crossed a real 50 ms tick boundary
 // (a slow CI machine, say), corrupting a hash comparison that must match a golden bit-for-bit
-// (Deviations).
+// (Deviations). The same `pacingEnabled` decision also picks *which timer service* `SimHost` is
+// built with (a no-op `every()` for a test/dev page): `SimHost.resume()` (docs/plan/
+// 28b-reconnect-and-lifecycle.md step 4, "a `Hello` while paused resumes the timer") calls the
+// exact same `arm()` `start()` does, reachable from a fresh, never-`start()`ed `SimHost`'s own
+// first real `Hello` regardless of topology -- a real timer there would arm the race above through
+// a path this gate alone cannot see (found live, a real CI-only regression: docs/plan/
+// 28b-reconnect-and-lifecycle.md, Deviations).
 //
 // `W_ACK` is still stored on every real wake regardless of `gcHook` (a plain `Atomics.store`,
 // allocation-free, kept from the M06b stub this replaces): `asHarness.stepTick()`'s own generic
@@ -472,9 +478,35 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       sessions,
     }
   }
+  // docs/plan/28b-reconnect-and-lifecycle.md step 4 gate fix (real CI regression, found live):
+  // "a test/dev page normally never calls [`start()`]" (this file's own module doc comment, and
+  // the `simHost.start()` gate below) used to be the *only* thing standing between a test/dev page
+  // and real-time `AtomicsTimer` pacing -- true right up until step 4 added `host.resume()`'s own
+  // "a Hello while paused resumes the timer" call (`server.ts`'s `pumpHandshakes`, 0013 "A new
+  // connection resumes the timer"), reached through this file's own real handshake (wired since
+  // M28's own step 5, above) on every connection's first `Hello`, on a *fresh* `SimHost` that has
+  // never called `start()` at all (`running` starts `false` regardless of `message.test`) --
+  // bypassing the gate below entirely and arming the real timer for every real-handshake test page,
+  // racing `onFire`'s own catch-up loop against `CB_SIM_STEP_REQ`-driven ticks (`connected-terrain.
+  // spec.ts`'s `overlay_tile_reaches_screen`, CI-only under `GC_MODE=software`: extra, real-time
+  // ticks landed between the test's own explicit `stepTick(0)` calls, painting tile (0, 0) before
+  // its own "strictly before any host tick" checkpoint; several `gc`-suite `neg object` controls
+  // failed the same way, an unexpected tick inside their own measured window). `SimHost.resume()`
+  // and `.start()` both call the same `arm()` (`server.ts`), which just calls whatever `timer.
+  // every()` it was given -- so the fix is the same decision `simHost.start()`'s own gate already
+  // makes, reused for *which timer service* this `SimHost` is even built with, not only for whether
+  // `start()` happens to be called: a test/dev page that never opts into `test.pace` gets a no-op
+  // `timer.every()` (`net-harness.ts`'s own stub precedent), so `resume()`/`start()`/`arm()` still
+  // run and flip `running`/`paused` correctly (`CB_SIM_STEP_REQ`-driven ticking, and every other
+  // pure-bookkeeping reader of `running`, is unaffected), but never register a real callback with
+  // `atomicsTimer` -- exactly the pre-existing invariant every test/dev page already relied on
+  // before step 4, restored for the one path (`resume()` from a fresh, never-`start()`ed `SimHost`)
+  // step 4 did not know it needed to preserve.
+  const pacingEnabled = !message.test || message.test.pace === true
+  const timer = pacingEnabled ? atomicsTimer.timer : { every: () => () => {} }
   const simHost = createSimHostFromInstance(
     simInstance,
-    { clock: systemClock, timer: atomicsTimer.timer, scheduler: systemScheduler },
+    { clock: systemClock, timer, scheduler: systemScheduler },
     persistence,
     initialTicksRun,
     recoveryDeps,
@@ -566,7 +598,9 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // arm real-time pacing (`onFire` via `AtomicsTimer`) while `test` stays present (`gcHook`/the
   // parked test-call channel still need it) -- safe to combine with manual `CB_SIM_STEP_REQ`
   // driving on the same page only because such a page asserts allocation, never a resulting hash.
-  if (!message.test || message.test.pace === true) simHost.start()
+  // Same `pacingEnabled` decision the `timer` passed to `createSimHostFromInstance` above already
+  // made (kept as one flag, not two independent conditions that could drift).
+  if (pacingEnabled) simHost.start()
 
   const leakyAppendArmed = message.test?.leakyStorageAppend === true
 
