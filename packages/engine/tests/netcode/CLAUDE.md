@@ -40,6 +40,21 @@ try {
   `harness.counters(i)`: bytes/messages up/down, totals, per-tick breakdown. `harness.trace()`: the
   whole run's released-message log as one `Uint8Array` -- compare two same-seed runs with
   `expect(Array.from(a)).toEqual(Array.from(b))`.
+- **`harness.restartServer(opts?: { crash?: boolean })`** (docs/plan/28b-reconnect-and-lifecycle.md
+  step 2): replaces `harness.server`/`harness.storage` in place with a fresh `WorldServer` loaded
+  over the same world. Omitted/`false`: `server.stop()` (clean: snapshot-if-dirty, flush) first.
+  `crash: true`: no `stop()`, a `storage.crashClone()` instead (0005 "Tab close, worker or renderer
+  crash, WASM panic: no clean boundary"). Either way the new server's own `epoch` (`worldServerTestHandle
+  (harness.server).epoch`) is one higher than before (0013 "epoch increments at every host start"),
+  and `serverInternals(harness.server).isTicking` reads `true` once `ready` resolves. Existing
+  `clients`/`link(i)` entries are untouched (their connections die with the old server; reconnecting
+  them is `link(i).reconnect()`'s own job, not yet built); `addClient()`/`connectRaw()` after this
+  call join the new server. `worldServerTestHandle(server).resyncAll()` (called automatically by a
+  successful `recover()`, and directly by a scenario) sends every open connection a fresh `Welcome`
+  and drops its own held-chunk bookkeeping so the next tick resnapshots everything -- a
+  `HeadlessClient`'s own `status().sessionState` (`SessionState`, `../../src/clock-block.js`) cycles
+  through `Resyncing` (`4`) to `Online` (`1`) the same call that applies it. `panicServer()` and
+  `link(i).disconnect()`/`.reconnect()` are not built yet (steps 3-4).
 
 ## Each client's own identity (secrets, not `myPlayerId`)
 
