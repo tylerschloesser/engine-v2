@@ -468,7 +468,15 @@
             "attributionRoots": ["linkControl"]
           }
         },
-        "software": null
+        "software": {
+          "frames": 600,
+          "isolates": {
+            "main": {
+              "attributedBytesPerFrame": 105,
+              "formula": "M29b (CI red under GC_MODE=software: `\"software\": null` is not a skip mechanism, `gc/instrument.ts:177` throws on it -- the same fix class M15c's gate already found on `connected-terrain`). ADR 0029: software mode attributes only `main` via `attributionRoots` (`[\"drive\"]`), every other isolate (`client`/`gen0`/`net`) uses raw `bytesPerFrame` in both modes and gets no software row here, same shape as `connected-terrain`/`zero_gc_action`/`no_ui_change`. Measured (`CI=true ENGINE_GPU=swiftshader GC_MODE=software playwright test --project gc --grep \"multiplayer-topology clean\" --repeat-each 8 --workers 1`, this machine, budget forced to 1 to read the failing detail's own `attributedBytesPerFrame` first): a tight 96.4-96.62 B/frame attributed across 8 clean runs, `A` all true (zero `MinorGC`/`MajorGC` on every isolate) and only `B.main` false, as expected with the budget forced low -- `client`/`gen0`/`net`'s own `B` stayed `true` throughout, confirming their existing hardware `bytesPerFrame` rows (8/8/226) already cover software mode too, per ADR 0029. `ceil(96.62) = 97, + 8 B margin (0016 §1's ordinary convention) = 105`. Verified tripping at 105: `neg object main` (8/8 repeats, same command) and `neg burst main` (`@slow`, 3/3 repeats) both fail `B.main` as required; every sibling isolate's own `object`/`burst` control leaves `main` comfortably under 105 (no collateral effect to tolerate). Reproduced CI's exact failure (`gc verdict: no software budget for multiplayer-topology`, `gc/instrument.ts:177`) with `software: null` restored, before landing this fix, matching M15c's own verification discipline (`docs/plan/15c-terrain-visibility-and-cache-invalidation.md`, Fix round 2)."
+            }
+          }
+        }
       }
     }
   },

@@ -540,3 +540,54 @@ page), `9bc5269` (Part A), `55371ad` (step 5).
   scope for this cut (not a file this milestone's own Files list touches, and the underlying "remote
   now dials for real" change is steps 1-2's, already landed); flagged for whoever next sees a
   webkit-only browser-suite flake naming a `ws://unused.invalid` console error.
+
+## Fix round 1 (CI gate: no software budget for multiplayer-topology)
+
+**`gc.pages['multiplayer-topology'].software` was left `null` at step 5 landing (this milestone's
+own Deviations, above: "not measured under `GC_MODE=software` ... no `GC_MODE=software` leg named"
+by the delegation's own Verification commands). `"software": null` is not a skip mechanism -- it is
+an error the local gate cannot see** (0016 caveat b's own text notwithstanding): the local default
+is hardware mode only. CI (`ubuntu-latest`, `ENGINE_GPU=swiftshader GC_MODE=software`, full `browser`
+suite) failed every `gc/multiplayer-topology` test and `gc/net-negative-control` with `Error: gc
+verdict: no software budget for multiplayer-topology` (`gc/instrument.ts:177`) on the `M29 done`
+push -- the identical failure mode, and the identical mistaken belief about `null`, M15c's own gate
+already found and fixed once on `connected-terrain` (`docs/plan/15c-terrain-visibility-and-cache-
+invalidation.md`, "Fix round 2").
+
+**Reproduced CI's exact error first** (`CI=true ENGINE_GPU=swiftshader GC_MODE=software pnpm test
+browser -t "multiplayer-topology clean"`, this machine): identical `Error: gc verdict: no software
+budget for multiplayer-topology` at `gc/instrument.ts:177`. Swiftshader emulation was reliable
+locally for this page (no hang, ~2-3 s per run, isolated to this one test).
+
+**Measured** (`CI=true ENGINE_GPU=swiftshader GC_MODE=software playwright test --project gc --grep
+"multiplayer-topology clean" --repeat-each 8 --workers 1`, budget forced to 1 first to read the
+failing detail's own `attributedBytesPerFrame`): a tight **96.4-96.62 B/frame** attributed to `main`
+across 8 clean runs, `A` all true (zero `MinorGC`/`MajorGC` on every isolate) and only `B.main`
+false as expected. ADR 0029: software mode attributes only `main`; `client`/`gen0`/`net` use raw
+bytes in both modes and get no software row (`analyse.ts`'s own `verdict()`: `mode === 'software' &&
+name === 'main'` is the only branch that reads `page.software`), same shape as `connected-terrain`/
+`zero_gc_action`/`no_ui_change` -- confirmed live: with the budget forced to 1, `client`/`gen0`/
+`net`'s own `B` stayed `true` throughout, i.e. their existing hardware `bytesPerFrame` rows (8/8/226)
+already cover software mode. `ceil(96.62) = 97, + 8 B margin (0016 §1's ordinary convention) = 105`.
+
+**Checked the failure mode this convention exists to avoid (ADR 0029): did the ordinary `+8` margin
+swallow the negative controls' own separation?** No -- verified tripping at 105: `neg object main`
+(8/8 repeats, same command) and `neg burst main` (`@slow`, 3/3 repeats) both fail `B.main` as
+required; every sibling isolate's own `object`/`burst` control (`client`/`gen0`/`net`) leaves `main`
+comfortably under 105, no collateral effect to tolerate. Full `multiplayer-topology` +
+`gc/net-negative-control` fast-tier set (10 tests) and the 4 `@slow` `burst` tests all pass under
+`GC_MODE=software`.
+
+**Verified the fix is real, not a fluke**: re-set `software` back to `null`, re-ran the identical
+`CI=true ENGINE_GPU=swiftshader GC_MODE=software pnpm test browser -t "multiplayer-topology clean"`
+command -- reproduced the identical `gc verdict: no software budget` error a second time -- then
+restored the real 105 fix and re-ran: `browser pass 1 tests`. `git diff` on `budgets.json`: a
+9-line insertion, one deletion (`"software": null` -> the `main`-only software block), nothing else
+touched -- the four hardware rows (`main: 132`, `client: 8`, `gen0: 8`, `net: 226`) are byte-for-byte
+unchanged.
+
+**Verified, this range**: `pnpm test` (hardware mode, this machine's default): `rust` 621, `unit`
+288, `wasm` 156, `netcode` 43, `browser` 216, all green, `14s/10s` build, `37s/48s` browser. `pnpm
+lint`: biome, rustfmt, clippy, tsc all green. `pgrep -fl "vitest|playwright|vite preview|chrome for
+testing"` empty before finishing. Hardware mode was not re-derived or changed by this range (this
+range touched only the `software` block).
