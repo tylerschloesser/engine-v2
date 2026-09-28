@@ -363,3 +363,180 @@ This milestone builds `mp.html` with `?linklog=1` (an on-page view of `client.de
   coverage. `mp/*` alone run 5 times back to back (both `--workers=1` and the suite's own default
   parallelism): 6/6 clean every time. `pgrep -fl "vitest|playwright|vite preview|chrome for testing"`
   empty before finishing.
+
+**This final cut (Part A: `device:serve` growth; step 5: zero-GC multiplayer topology test +
+negative control).** Base `9bc5269` for Part A, `55371ad` for step 5. Commits: `3c008fe`
+(`createBytePump` downlink zero-alloc fast path, filed as its own checkpoint ahead of step 5's own
+page), `9bc5269` (Part A), `55371ad` (step 5).
+
+### Part A: `pnpm device:serve --ws`/`--app reference`
+
+- **`device-serve.mjs`**: `--ws [<fixture>]` spawns `node games/reference-server` directly
+  (`process.execPath`, not through `pnpm`) on `127.0.0.1:<ENGINE_WS_PORT ?? 4174>`, `--game` the
+  named fixture's dev-profile build dir (default: the reference game's own
+  `sim/target/engine/release`, matching `games/reference-server/index.mjs`'s own default -- neither
+  is built by this script; both must already exist, same assumption that entrypoint's own CLI
+  already makes) and `--data` a fresh `mkdtemp` dir, removed on shutdown. `--app reference` builds
+  (`pnpm --filter reference build`) and previews `games/reference` instead of the fixture app, on
+  the same `ENGINE_TEST_PORT ?? 4173`. Both apps' own `vite.config.ts` gained a
+  `preview.proxy['/ws']` block, gated on a new `ENGINE_WS_PROXY_PORT` env var the script sets only
+  when `--ws` is present (a no-op, unset, for every other run) -- `games/reference/vite.config.ts`
+  had no `preview`/`server` block at all before this cut; added one (port from `ENGINE_TEST_PORT`,
+  default unchanged from Vite's own) mirroring the fixture app's own shape exactly. Both apps' own
+  `*.html` pages under their root are printed as full URLs (`htmlPages()`, a plain `readdirSync`
+  filter) instead of the single hardcoded `determinism.html` link the pre-M29 script printed --
+  satisfies "`pnpm device:serve --ws puts` lists `mp.html`" directly from what actually got built,
+  not a name this script would otherwise have to hand-maintain.
+- **`games/reference-server --game <default>` (no `--ws <fixture>` given) does not currently work**:
+  `reference-sim`'s own `engine_init` rejects the reference game's default `worldCfg.params`
+  (`{ seed: '1', worldgen: null }`, `index.mjs`'s own hard-coded default) with `BadConfig` -- found
+  live testing `--app reference --ws` with no fixture named. This is the exact, already-flagged gap
+  steps 3-4's own Deviations named for the client side (`client_on_welcome` never applies
+  `Welcome.seed`/`params` to the client's own local `Worldgen` state) mirrored on the server's
+  default config; the reference game is not multiplayer before M34 either way (Scope), so this was
+  never going to be exercised for real until then. `device-serve/proxy-and-apps` (the Node test)
+  and the manual device-check recipe both therefore use `--ws puts` explicitly for the `--app
+  reference` combination too (`--ws [<fixture>]`'s own grammar is independent of `--app`) --
+  verified working end to end (`curl`'d headers, a real `WebSocket` upgrade) by hand before writing
+  the test. Flagged for whoever picks up M34: the bare `pnpm device:serve --app reference --ws`
+  invocation named in this brief's own exit criterion text will need either a real worldgen config
+  for the reference game's own server default, or a documented requirement to pass a fixture.
+- **`device-serve/proxy-and-apps`** (`packages/engine/tests/netcode/device-serve-proxy-and-apps.
+  test.ts`, `@slow`: two real `vite build`+`preview` cycles): spawns `device-serve.mjs` as a child
+  process twice (`--ws puts`, then `--app reference --ws puts`), each on its own
+  `ENGINE_TEST_PORT`/`ENGINE_WS_PORT` pair (`14273`/`14274`, distinct from the real `pnpm
+  device:serve` defaults so this never collides with an interactive session on Tyler's own
+  machine), waits for the script's own `pages: ...` readiness line, `fetch()`s `/` and checks the
+  COOP/COEP headers, then opens a real Node `WebSocket` to `/ws` and asserts `onopen` fires (proof
+  the HTTP Upgrade reached the spawned `reference-server` child through Vite's own proxy) before
+  `SIGTERM`-ing the child and awaiting its real exit.
+- **Verified manually** (the two device-check-adjacent exit criteria this part closes):
+  `ENGINE_TEST_PORT=14173 ENGINE_WS_PORT=14174 node packages/engine/scripts/device-serve.mjs --ws
+  puts`, then `curl -sD - http://127.0.0.1:14173/` (COOP/COEP present) and a raw `WebSocket` to
+  `ws://127.0.0.1:14173/ws` (`onopen` fires, `onclose` code `1005` on a clean client-side close --
+  the server's own `Welcome`/`Hello` handshake was not driven by hand here, only the proxy/upgrade
+  path this exit criterion's own automated proof also covers). Killed and confirmed dead
+  (`pgrep -fl "device-serve|reference-server|vite preview|vite build"` empty) after every manual
+  run. The remaining half of this exit criterion -- desktop Chrome reaching `mp.html?linklog=1`
+  through a *tunnelled* proxy, and killing/restarting the child server live -- is the Tyler-run
+  device check (`docs/plan/device-checks.md`, M29), not something this session can do; not
+  attempted here.
+
+### Step 5: zero-GC multiplayer topology test + negative control
+
+- **`createBytePump` (`src/net/pump.ts`) downlink direction is now allocation-free in the common
+  case**: `onMessage` tries `RingProducer.tryPush(bytes, bytes.length)` directly on the bytes a
+  `Connection` hands it (synchronous copy into the ring's own SAB storage, no retention needed) and
+  only copies into a preallocated retry-queue slot (mirroring `ring-connection.ts`'s own
+  `send()`/`flushRetries`/`enqueueRetry` shape, `.set()` not `slice()`, coalescing past
+  `retryDepth`) on genuine backpressure. **Uplink direction still allocates one `.slice(0, len)`
+  per message** -- a resizable-`ArrayBuffer` zero-copy attempt (reserve `SCRATCH_BYTES` up front,
+  `.resize()` the same view down to the real message length in place before `conn.send()`) was
+  tried and reverted: Node's own global `WebSocket.send()` throws `TypeError: ArrayBuffer: Received
+  a resizable ArrayBuffer`, confirmed red against `pnpm test:slow netcode -t "ws/|reference-server"`.
+  Since `Connection.send(cls, bytes)` is a generic 2-arg contract no caller can assume a `len` hint
+  past (`ring-connection.ts`'s own doc comment on that optional third parameter), and this file's
+  own unit test's mock `Connection` is exactly such a caller, the one remaining per-message copy
+  is real, measured, and left as such (`net`'s own `budgets.json` row prices it in).
+- **`worker/net.ts` gains `injectParseConnection`** (`gc/net-negative-control`'s own control,
+  gated by a new `TestFlags.netInjectParse`, `worker/protocol.ts`): wraps the dialed `Connection`
+  so every downlink message also runs a throwaway `JSON.parse(new TextDecoder().decode(bytes))`
+  before forwarding it unchanged. Never wired outside `test.flags`; the grep exit criterion ("no
+  `DataView`, no import from the wire codec") still holds by hand (checked: no `DataView`
+  construction, no codec import, anywhere in the file -- the one textual "DataView" hit is the
+  file's own pre-existing header comment stating the rule, not code).
+- **`worker/net.ts` `linkControl` also calls `applyGcHook`** (previously only the drain timer did):
+  real bug, found live building the clean/negative-control tests themselves -- the drain timer's
+  10 ms real-wall-clock cadence fires only a handful of times across a whole measured window (the
+  whole run completes in well under a second of real time, since this page's own `drive()`, like
+  every other zero-GC page's, is pure synchronous SAB spin-waiting), nowhere near the 600 times
+  `client`/`gen0`'s own `body()` gets from main's explicit, synchronous stepping -- `neg burst net`
+  measured only ~98 B/frame with the drain timer alone, not the ~40,000 B/frame every
+  synchronously-stepped isolate's own `burst` control shows elsewhere in this same page. `net`'s
+  only other reachable-on-every-`drive()`-call entry point is `linkControl`, since `client.ts`'s
+  own real `online`-window-event listener already posts a message there on every real DOM event
+  (Scope's own "main -> net `{ type: 'probe' }` on ... `online`" wiring, unchanged); the page's own
+  `drive()` now calls `window.dispatchEvent(onlineEvent)` (one preallocated `Event`, reused) once
+  per frame for exactly this reason. No change to `Link.probe()`'s own real reconnect behaviour (a
+  no-op on an already-healthy connection).
+- **Real bug, found live: a remote host's own first wake can be lost.** `worker/net.ts`'s `onUp`
+  wakes `WORKER_CLIENT` exactly once when `CB_LINK_STATE` flips to `Up`; if the client worker has
+  not yet reached its own first `Atomics.wait` at that instant, `Atomics.notify` wakes nothing (only
+  an already-waiting thread), and with no further wake ever arriving, `pumpHandshake()` never gets a
+  second chance to observe `CB_LINK_STATE === Up` -- the page hung forever (confirmed live via
+  `client.debug.linkLog()` stuck at a lone `'open'` entry). Every existing production page
+  (`mp.ts`) is protected for free by its own real `requestAnimationFrame` loop's continuous wakes
+  (`writeCameraAndWake()` every ~16 ms); a page with no frame loop at all (this one) has nothing
+  playing that role. Fixed in the page itself, not in `client.ts`/`net.ts` (a real production
+  `createClient()` call already gets a real wake source from *something* -- a frame loop, or
+  another `stepFrame` caller -- in every existing topology; this is the first page with neither):
+  `harness.stepFrame()` is called in a short real-time poll loop until `client.onLink` reaches
+  `'online'`, each call a fresh wake that recovers even a lost first notify. Not escalated as a
+  `client.ts`/`net.ts` defect: every real page this milestone ships (`mp.ts`) already has a
+  continuous wake source, so this is specific to a page built with none, worth flagging for M34 (the
+  reference game will need to know it needs *a* periodic wake source, whatever form its own frame
+  loop takes, before a remote host's handshake is guaranteed to complete) but not a fix that belongs
+  in production `client.ts` on its own initiative.
+- **Background test-server traffic decoupled from measurement, found live.** A first cut ticked the
+  shared `startTestServer` fast and continuously for the whole spec file (reading this brief's own
+  "the test steps the server one tick ... for the 0016 window" as literal, continuous pacing); this
+  let `net`'s own reading scale with however much real wall-clock time a given run happened to take,
+  and a sibling isolate's own `burst` control (real GC work, real time) measurably slowed the page
+  down, letting more real ticks land inside the very same measured window and inflating `net`'s
+  reading by collateral, non-`net` causes -- `neg burst {main,client,gen0}` each pushed `net`'s own
+  clean ~217 B/frame reading up by 20-30 B, into the same range as `net`'s own `object` control's
+  real ~24 B/frame delta, an unresolvable conflict for any single budget line (ADR 0029's own
+  failure mode: a margin wide enough to tolerate the sibling noise also swallows the isolate's own
+  real signal). Fixed by splitting the two concerns `HEARTBEAT_MS` (a slow, 400 ms keep-alive,
+  shared by the whole file) and `gc/net-negative-control`'s own dedicated, much faster ticker
+  (started after `openPage`, stopped in `finally`, scoped to that one test) -- interpreted as this
+  cut's own resolution of the brief's own pacing note, given `measure()`'s single-CDP-round-trip
+  batching structurally rules out literal per-page-frame Node/page interleaving without rebuilding
+  shared infra every other `gc` page also depends on (judged too invasive for this cut; recorded as
+  a deliberate interpretation, not a literal implementation of "steps the server one tick ... steps
+  a frame" as a 1:1 pairing).
+- **`gc.pages.multiplayer-topology` budget rows, measured** (`playwright test --project gc --grep
+  "multiplayer-topology clean" --repeat-each 5..10 --workers 1`, this machine): `main` 118.19-123.15
+  B/frame (`ceil` + 8 B margin = 132, `class: "strict"`, `attributionRoots: ["drive"]` --
+  `client.ts`'s own `sendProbe`/`pushLinkLog('probe')` real per-frame cost, once the `online`
+  dispatch above was added); `client` 0.83-2.68 B/frame (shared "8 B" `"strict"` worker figure,
+  unchanged); `gen0` a constant 0.6267 B/frame (same, this page never pans so `gen0` sees no real
+  traffic); `net` a tight 214.57-217.68 B/frame (`ceil` + 8 B rounded up to 226, `class:
+  "budgeted"` not `"strict"` -- `net`'s own `burst` control never forced an actual `MinorGC` event
+  within the window, ~692 KB total apparently under this isolate's own scavenge threshold, the same
+  reasoning `zero_gc_action`'s `sim` row documents; assertion A therefore checks `MajorGC` only,
+  matching measured reality). `attributionRoots: ["linkControl"]` for `net` (not itself load-bearing
+  while `software: null`, but names the real enclosing function `byFn` shows). Used `bytesPerFrame`
+  uniformly rather than the `bytesPerMessage` field name this brief's own Consumes note mentions --
+  read the two as mechanically identical in `gc/analyse.ts`'s own `verdict()` (`budget.bytesPerFrame
+  ?? budget.bytesPerMessage`, both divided by the same `frames` count), so this is a labelling
+  choice, not a behavioural one; `bytesPerFrame` matches every other row in this file.
+- **`software: null`** for this page (0016 caveat b's own documented allowance): not measured under
+  `GC_MODE=software`, per this delegation's own Verification commands (`pnpm test browser -t gc/`
+  only, no `GC_MODE=software` leg named).
+- **Named tests, exactly as listed**: `gc/multiplayer-topology` (`multiplayer-topology clean` +
+  generated `object`/`burst` negatives per isolate, `zeroGcSuite({ pageId: 'multiplayer-topology',
+  controlKinds: ['object', 'burst'] })`, no `post-message` -- same reasoning as `topology`/`gen`/
+  `echo`) and `gc/net-negative-control` (hand-built, fast tier -- ADR 0026's auto-tagging rule does
+  not apply to it, ordered-of-magnitude reasoning against the `object` control's own fast-tier cost,
+  not the `burst` tier's; recorded in the spec file's own comment).
+- **Measured, this range**: `pnpm test`: 621/288/156/43/216 (rust/unit/wasm/netcode/browser), all
+  green, one unrelated flake observed and not reproduced on retry (`games/reference`'s own
+  `ui-smoke: collect and inventory`, a button-click-interception timing issue, a file this range
+  never touched). `pnpm test:slow browser -t multiplayer-topology`: 4/4 (`neg burst`
+  main/client/gen0/net). Full `multiplayer-topology`+`gc/net-negative-control` set (10 tests) run 4
+  times back to back: 10/10 clean every time. `pnpm lint`: biome, rustfmt, clippy, tsc all green.
+  `pgrep -fl "vitest|playwright|vite preview|reference-server|chrome for testing"` empty before
+  finishing.
+- **A pre-existing, unrelated `@webkit-gpu @slow` flake, found and not fixed**: `pnpm test:slow`
+  (full suite) intermittently fails `[webkit] terrain: probe tile colours webkit` on `terrain-
+  client.html` (a file last touched in M17b, never touched by any range of this milestone) --
+  `console.error: "WebSocket connection to 'ws://unused.invalid/' failed..."`. Root cause: M29 steps
+  1-2 made `{ kind: 'remote' }` dial for real; `terrain-client.ts` (and roughly a dozen other
+  pre-existing fixture pages, per steps 1-2's own Deviations) uses the inert placeholder `url:
+  'ws://unused.invalid'`, which now attempts a real (failing) DNS lookup WebKit logs as a console
+  error on some but not all runs (load-sensitive: passed 2/2 running `pnpm test:slow browser` alone,
+  failed both times running the full `pnpm test:slow`, i.e. under concurrent suite load). Out of
+  scope for this cut (not a file this milestone's own Files list touches, and the underlying "remote
+  now dials for real" change is steps 1-2's, already landed); flagged for whoever next sees a
+  webkit-only browser-suite flake naming a `ws://unused.invalid` console error.
