@@ -71,7 +71,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 26 | `26-prediction-rendering-and-clocks.md` | overlay diff → renderer, ghost/real swap, lead estimation, host clock | 25, 17 | |
 | [x] | 27 | `27-server-entrypoint-and-netcode-harness.md` | `createWorldServer`, Node adapter, in-memory pairs, virtual-clock netcode suite | 22b, 24, 16b | |
 | [x] | 28 | `28-sessions-and-reconnect.md` | handshake, identity, heartbeat, link policy | 27 | |
-| [ ] | 28b | `28b-reconnect-and-lifecycle.md` | resume hint, epochs, grace, idle, resend | 28, 19, 24 | |
+| [x] | 28b | `28b-reconnect-and-lifecycle.md` | resume hint, epochs, grace, idle, resend | 28, 19, 24 | |
 | [ ] | 29 | `29-net-worker-and-reference-server.md` | net worker, loopback `ws`, `games/reference-server`, multiplayer in a browser. **Multiplayer in browser.** | 28b | D |
 | [ ] | 30 | `30-interpolation.md` | remote presence interpolation, adaptive delay | 29, 19, 26 | |
 | [ ] | 31 | `31-rates-and-integrity.md` | chunk token bucket, soft cap, rate limits, byte budgets, zoom-out churn measurement | 29 | |

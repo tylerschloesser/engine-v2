@@ -1,6 +1,6 @@
 # M28b: Reconnect and world lifecycle
 
-Status: not started · After: 28, 19, 24 · Tyler-dependent: no
+Status: done · After: 28, 19, 24 · Tyler-dependent: no
 
 Second half of the PLAN.md row "sessions and reconnect" (split explained in M28). M29 follows 28b.
 
@@ -61,9 +61,9 @@ Net worker and browser reconnect (M29). Desync `ResyncChunk` (M31b). Log-tail lo
 Rust: `session/golden-keep-entry`, `session/hint-diff` (equal → keep, stale → snapshot, unwanted → leave, foreign epoch → all snapshots). Netcode: `reconnect/resume-keeps-unchanged-chunks` (also: the first frame after the resume carries the `Global` and `OwnPlayer` sections although every chunk is kept), `reconnect/changed-while-away`, `reconnect/pending-resent-once` (action in flight at the drop applies exactly once, hash converges), `reconnect/host-restart-epoch` (`restartServer`, hint ignored, converges, `seq` continues), `reconnect/panic-recovery-resync` (fixture `panicky`, `PanicInApply`: open links get a second `Welcome`, status passes through `Resyncing`, the faulting sender gets `EngineFault`), `reconnect/lost-ack-reports-lost`, `reconnect/within-grace-logs-nothing` (log byte-identical to a run without the drop), `reconnect/after-grace-logs-disconnected`, `reconnect/bye-skips-grace`, `reconnect/presence-vanishes-at-once`, `lifecycle/idle-stops-ticks-then-onidle` (tick counter frozen, timer fixture unchanged, one snapshot, one `onIdle`), `lifecycle/hello-resumes`, `lifecycle/keep-ticking-when-empty`, `reconnect/cost` (wilderness reconnect within the budgets file ceiling).
 
 ## Exit criteria
-- [ ] Named tests pass, each reproducible from its printed seed.
-- [ ] `reconnect/cost` asserts `reconnectBytesUp/Down` against new `budgets.json` rows derived from 0013 (Reconnect: cost) and 0010 (resume hint).
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Named tests pass, each reproducible from its printed seed.
+- [x] `reconnect/cost` asserts `reconnectBytesUp/Down` against new `budgets.json` rows derived from 0013 (Reconnect: cost) and 0010 (resume hint).
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test netcode -t reconnect` · `pnpm test netcode -t lifecycle` · `pnpm test rust -t session` · `pnpm lint`
