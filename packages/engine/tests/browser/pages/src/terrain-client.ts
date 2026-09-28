@@ -72,7 +72,7 @@ window.__terrainClient = {
       // every other test here passes no `clientCacheChunks` and keeps the fixture's own default.
       test: {
         clock,
-        flags: {},
+        flags: { netNoDial: true },
         game:
           opts?.clientCacheChunks !== undefined
             ? { clientCacheChunks: opts.clientCacheChunks }

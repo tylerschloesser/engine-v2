@@ -115,6 +115,7 @@ window.__rcCreate = (opts = {}) => {
     wasm,
     host: { kind: 'remote', url: 'ws://unused.invalid' },
     genWorkers: 1,
+    test: { flags: { netNoDial: true } },
     ...(opts.cameraKey !== undefined ? { cameraKey: opts.cameraKey } : {}),
     // docs/plan/18-picking-and-overlay.md step 8: `overlay.translate_mode_equivalent` opts into
     // `mode: 'translate'` here rather than a new page -- every other overlay hook below already

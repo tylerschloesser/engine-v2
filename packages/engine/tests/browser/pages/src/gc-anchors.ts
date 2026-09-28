@@ -68,7 +68,7 @@ const client = createClient({
   host: { kind: 'remote', url: 'ws://unused.invalid' },
   genWorkers: 1,
   assets,
-  test: { clock, flags: { gcHook: true }, game: { seed: '0x1', params: null } },
+  test: { clock, flags: { gcHook: true, netNoDial: true }, game: { seed: '0x1', params: null } },
 })
 await client.ready
 const harness = asHarness(client)

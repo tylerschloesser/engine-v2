@@ -66,6 +66,17 @@ export type TestFlags = {
    * starts parsing a message the way the production `grep` exit criterion forbids it from doing.
    * Never true in production. */
   netInjectParse?: boolean
+  /** `worker/net.ts` only (docs/plan/29-net-worker-and-reference-server.md, M29b fix round 1: CI's
+   * slow tier found `terrain-client.html`'s own `@webkit-gpu @slow` test failing deterministically
+   * on a genuine `WebSocket` DNS-failure console error). Steps 1-2 made every `{ kind: 'remote' }`
+   * host dial for real, but a dozen-plus pre-existing test/device pages use a placeholder
+   * `{ kind: 'remote', url: 'ws://unused.invalid' }` host purely to get a "client + gen, no sim
+   * worker" topology shape, with no real networking intent at all (M06b's own reserved-but-inert
+   * shape) -- Chromium never surfaces a `console.error` for the resulting failed dial, WebKit does.
+   * `true` swaps the dialed `Connection` for one that never opens a real socket at all (`net.ts`'s
+   * own `noDialConnection`), so these pages get exactly the pre-M29 behaviour back: never up, never
+   * down, no bytes, no timers, no real network attempt. Never true in production. */
+  netNoDial?: boolean
 }
 
 export type SetupMessage = {

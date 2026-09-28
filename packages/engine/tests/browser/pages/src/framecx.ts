@@ -60,7 +60,7 @@ const client: Client = createClient({
   // `{seed, params}`) needs `options.test.game` here -- unlike `real-camera.ts`'s own fixture
   // (`terrain`), whose hand-written pre-`GameInstance` `Instance` impl tolerates no config at all,
   // `fx-overlay` goes through `engine::export_game!`'s real `TerrainConfig::deserialize`.
-  test: { clock, flags: {}, game: { seed: '0x1', params: null } },
+  test: { clock, flags: { netNoDial: true }, game: { seed: '0x1', params: null } },
 } satisfies ClientOptions)
 client.ready.catch(() => {})
 

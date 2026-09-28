@@ -111,7 +111,7 @@ window.__genCreateClient = (opts = {}) => {
   const test: ClientOptions['test'] = {
     game,
     ...opts.test,
-    flags: opts.test?.flags ?? {},
+    flags: { netNoDial: true, ...opts.test?.flags },
   }
   const options: ClientOptions = {
     canvas,

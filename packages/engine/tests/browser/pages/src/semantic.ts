@@ -63,7 +63,7 @@ window.__semCreateClient = () => {
     genWorkers: 1,
     // `flags: {}` (truthy): enables the `test-call` channel (`worker/test-call.ts`) `callParked`
     // needs (same reasoning `terrain-client.ts`/`gen.ts` already give their own clients).
-    test: { flags: {} },
+    test: { flags: { netNoDial: true } },
   }
   client = createClient(options)
   client.ready.catch(() => {})

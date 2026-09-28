@@ -75,6 +75,26 @@ function injectParseConnection(real: Connection): Connection {
   }
 }
 
+/** `TestFlags.netNoDial` (docs/plan/29-net-worker-and-reference-server.md, M29b fix round 1): a
+ * `Connection` that never actually opens a socket, for a page whose `{ kind: 'remote' }` host is a
+ * placeholder topology shape (`url: 'ws://unused.invalid'`, a dozen-plus pre-existing test/device
+ * pages) with no real networking intent -- `net/link.ts`'s own dial contract ("already open, or
+ * open-enough, the instant it is returned") is satisfied trivially: no timers armed, no bytes ever
+ * sent or received, `close()` a no-op. This is exactly the pre-M29 behaviour these pages already
+ * assumed (a `{ kind: 'remote' }` host that never dials for real); steps 1-2 made every remote host
+ * dial for real, which for `ws://unused.invalid` means a genuine failing DNS lookup on every page
+ * load -- silent in Chromium, but a deterministic WebKit `console.error` (found on CI's slow tier,
+ * `terrain-readback.spec.ts`'s `probe tile colours webkit`). Never wired outside `test.flags`. */
+function noDialConnection(): Connection {
+  return {
+    datagrams: false,
+    onMessage: null,
+    onClose: null,
+    send: () => {},
+    close: () => {},
+  }
+}
+
 /** 0015 §2: "drains the uplink ring on a `setInterval`"; docs/decisions/0015-threads-memory-and-
  * topology.md, Planning decisions "Uplink poll period: 10 ms" (M06's own figure, reused here
  * verbatim -- Scope: "The uplink drain uses M06's poll period"). */
@@ -127,6 +147,7 @@ export function setup(shell: Shell, message: SetupMessage): Promise<LoopState | 
   // that is where the hook is applied instead.
   const gcHook = message.test?.gcHook === true
   const injectParse = message.test?.netInjectParse === true
+  const noDial = message.test?.netNoDial === true
 
   // A fresh `Link` (`net/link.ts`), (re)built on demand: `createLink` stops *for good* on a
   // terminal `DownReason` (`Superseded`/`BadKey`/`Full`/`VersionMismatch`, its own doc comment),
@@ -139,6 +160,7 @@ export function setup(shell: Shell, message: SetupMessage): Promise<LoopState | 
   function buildLink(): Link {
     return createLink({
       dial: () => {
+        if (noDial) return noDialConnection()
         const conn = wsConnection(dialUrl)
         return injectParse ? injectParseConnection(conn) : conn
       },

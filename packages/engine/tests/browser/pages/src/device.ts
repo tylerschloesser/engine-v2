@@ -185,8 +185,8 @@ async function runFillRateHud(): Promise<void> {
     host: { kind: 'remote', url: 'ws://unused.invalid' },
     assets: { tiles: '/terrain/tiles.json' },
     render: renderOptions,
+    test: { flags: { netNoDial: true, ...(postModule ? {} : { postModule: false }) } },
   }
-  if (!postModule) clientOptions.test = { flags: { postModule: false } }
   const client: Client = createClient(clientOptions)
   let workersReady = false
   await client.ready
@@ -387,6 +387,7 @@ async function runMemoryProbe(): Promise<void> {
       wasm,
       host: { kind: 'remote', url: 'ws://unused.invalid' },
       assets: { tiles: '/terrain/tiles.json' },
+      test: { flags: { netNoDial: true } },
       ...(Object.keys(arenas).length > 0 ? { arenas } : {}),
     }
     const client = createClient(options)
@@ -689,7 +690,7 @@ async function runAnchorsCheck(count: number, mode: 'properties' | 'translate'):
     host: { kind: 'remote', url: 'ws://unused.invalid' },
     genWorkers: 1,
     assets,
-    test: { flags: {}, game: { seed: '0x1', params: null } },
+    test: { flags: { netNoDial: true }, game: { seed: '0x1', params: null } },
     overlay: { mode },
   }
   const client: Client = createClient(clientOptions)

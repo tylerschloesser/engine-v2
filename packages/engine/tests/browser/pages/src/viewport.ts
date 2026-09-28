@@ -65,7 +65,7 @@ window.__viewport = {
       wasm,
       host: { kind: 'remote', url: 'ws://unused.invalid' },
       genWorkers: 1,
-      test: { clock, flags: {} },
+      test: { clock, flags: { netNoDial: true } },
     }
     if (opts?.render !== undefined) clientOpts.render = opts.render
     client = createClient(clientOpts)

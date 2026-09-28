@@ -64,7 +64,11 @@ const client = createClient({
   host: { kind: 'remote', url: 'ws://unused.invalid' },
   genWorkers: 1,
   assets: { tiles: '/terrain/tiles.json' },
-  test: { clock, flags: { gcHook: true }, game: { clientCacheChunks: CLIENT_CACHE_CHUNKS } },
+  test: {
+    clock,
+    flags: { gcHook: true, netNoDial: true },
+    game: { clientCacheChunks: CLIENT_CACHE_CHUNKS },
+  },
 })
 await client.ready
 // A production worker enters its blocking loop right after `ready`: park before `__pageReady`

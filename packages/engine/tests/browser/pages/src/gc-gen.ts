@@ -28,7 +28,7 @@ const client = createClient({
   wasm,
   host: { kind: 'remote', url: 'ws://unused.invalid' },
   genWorkers: 1,
-  test: { clock, game: GAME, flags: { gcHook: true } },
+  test: { clock, game: GAME, flags: { gcHook: true, netNoDial: true } },
 })
 await client.ready
 // A production worker enters its blocking loop right after `ready` (unlike the M03/M04 harness,
