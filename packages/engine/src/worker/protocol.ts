@@ -59,6 +59,13 @@ export type TestFlags = {
    * that never fires is a defect in the instrument, never something to fix by widening). Sim worker
    * only, by construction (no other kind ever gets `message.world`). */
   leakyStorageAppend?: boolean
+  /** `worker/net.ts` only (docs/plan/29-net-worker-and-reference-server.md, this cut's own step 5,
+   * `gc/net-negative-control`): wraps the dialed `Connection` so every downlink message also runs a
+   * throwaway `JSON.parse(new TextDecoder().decode(bytes))`, discarded immediately -- a hand-built
+   * negative control proving `net`'s own isolate (and no sibling isolate) fails the moment this file
+   * starts parsing a message the way the production `grep` exit criterion forbids it from doing.
+   * Never true in production. */
+  netInjectParse?: boolean
 }
 
 export type SetupMessage = {

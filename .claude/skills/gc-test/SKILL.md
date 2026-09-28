@@ -295,6 +295,58 @@ of the M03/M04 harness. Two differences from a harness page:
   unresolved finding (docs/plan/06b-workers-and-spawn.md, Deviations "fix round 2"), not something to
   paper over with a wider budget without saying so.
 
+### A real-time-timer-driven isolate (`net`, M29 step 5)
+
+`gc-multiplayer-topology.ts` is the model for a production-topology page whose own worker kind has
+no `body()` at all -- `net` is event-driven (0015 §2: "must receive socket events"), reachable only
+through real socket events and its own `setTimer`-based drain loop, never through main's explicit
+`stepFrame`/`stepTick` the way `client`/`sim`/`gen0` are.
+
+- **A worker whose own trigger is a real wall-clock timer gets far fewer chances than 600.** The
+  whole measured window (warmup plus both 600-"frame" windows) for a page whose `drive()` is pure
+  synchronous SAB spin-waits completes in well under a second of real wall time; a real 10 ms
+  `setTimeout`-chain timer inside that same window fires only a handful of times. A negative control
+  gated on that timer (`applyGcHook` called from `worker/net.ts`'s own drain-timer callback alone)
+  measured ~98 B/frame under `burst`, not the ~40,000 B/frame every synchronously-stepped isolate's
+  own `burst` control shows -- the control was almost never actually firing. Fix: give the isolate a
+  second, *deterministic* trigger that fires once per `drive()` call regardless of real time.
+  `net`'s own: `client.ts`'s existing, production `online`-window-event listener already posts a
+  message to the net worker on every real DOM event (Scope: "main -> net `{ type: 'probe' }` on ...
+  `online`") -- the page's own `drive()` now calls `window.dispatchEvent(onlineEvent)` (one
+  preallocated `Event`, reused, `.claude/rules/hot-paths.md`) every frame, and `worker/net.ts`'s
+  `linkControl` handler (which that message reaches) now also calls `applyGcHook` there, not only in
+  the drain timer. No change to the real reconnect-probe *behaviour* (`Link.probe()` is a no-op on
+  an already-healthy connection). The general lesson: before trusting a negative control's own
+  reading on a worker kind with no `body()`, check it actually measures ~40,000 B/frame under
+  `burst` the way every synchronously-stepped isolate's own row does -- a suspiciously small number
+  there is a missing/rare trigger, not a small real cost.
+- **Real traffic volume that scales with wall-clock time creates its own cross-isolate collateral.**
+  A background `setInterval` feeding a real, `manualTimer: true` test server (`startTestServer`) is
+  a reasonable way to give a socket-driven isolate real messages to receive -- but if that isolate's
+  own reading is dominated by real message *count*, and a sibling isolate's own `burst`/`object`
+  control measurably slows the whole page down (real GC work costs real time), more of those real
+  ticks land inside the very same measured window purely because it now takes longer in wall-clock
+  terms -- inflating the socket-driven isolate's reading for a reason that has nothing to do with
+  its own code. Found live: every sibling's own `burst` control pushed `net`'s own clean ~217
+  B/frame reading up by 20-30 B, into the same range as `net`'s own `object` control's real ~24
+  B/frame delta -- no single budget line could both tolerate the sibling noise and still let the
+  isolate's own `object` control trip (ADR 0029's own failure mode: a margin wide enough for one
+  swallows the other). Fix: decouple *keep-alive* traffic (a slow, fixed-rate heartbeat, just enough
+  that a genuinely dead connection would show up) from any test's own need for message *volume*
+  (`gc/net-negative-control`'s own dedicated, much faster ticker, started after `openPage` and
+  stopped in a `finally`, scoped to that one test alone) -- never let real traffic volume for every
+  test in a file scale with how long any one of them happens to take.
+- **`class: "budgeted"`, not the shared "8 B" strict figure, once a worker isolate has a real,
+  measured baseline cost.** `net`'s own `Link.probe()` call (even on its no-op, already-healthy-
+  connection path) is not itself zero-allocation -- a real, load-bearing finding for a production
+  code path 0013 exercises on every real `visibilitychange`/`online` event, not only this test.
+  `ceil(measured clean) + 8 B` (`connected-terrain`'s own `sim` row shape), not the flat `8`
+  every idle/near-idle worker row in this file otherwise shares. Its own `burst` control did not
+  force an actual `MinorGC` event within the window (~692 KB total, apparently under this isolate's
+  own scavenge threshold) -- `"budgeted"` (assertion A checks `MajorGC` only) matches that measured
+  reality; do not assume `"strict"` for a worker isolate that has never been measured before, try it
+  and check `A` under its own `burst` control before committing to it.
+
 ## Forcing a one-shot event inside the measured window
 
 docs/plan/23-persistence-opfs-and-lifecycle.md step 6 (Planning decision 1): a page sometimes needs

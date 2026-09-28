@@ -21,8 +21,59 @@ import { createLink, type DownReason, type Link } from '../net/link.js'
 import { createBytePump } from '../net/pump.js'
 import { wsConnection } from '../net/ws-connection.js'
 import { CB_LINK_GEN, CB_LINK_STATE, W_PARKED, WORKER_CLIENT, workerWord } from '../sab/control.js'
+import type { Connection } from '../server.js'
+import { applyGcHook } from './gc-hook.js'
 import type { NetControlMessage, SetupMessage } from './protocol.js'
 import type { LoopState, Shell } from './shell.js'
+
+/** `gc/net-negative-control`'s own hand-built control (docs/plan/29-net-worker-and-reference-
+ * server.md, this cut's own step 5; `TestFlags.netInjectParse`, `worker/protocol.ts`): wraps a real
+ * `Connection` so every downlink message also runs one throwaway `JSON.parse(new TextDecoder()
+ * .decode(bytes))` before handing the message on unchanged -- proving `net`'s own isolate (and no
+ * sibling) fails the instant this file starts parsing a message the way the production `grep` exit
+ * criterion forbids. `send`/`close`/`datagrams` pass straight through; only `onMessage` is
+ * intercepted, the one direction a message this control cares about ever flows. Never wired in
+ * production (`netInjectParse` is `TestFlags`-only, absent from every real `ClientOptions.host`). */
+function injectParseConnection(real: Connection): Connection {
+  let userOnMessage: ((bytes: Uint8Array) => void) | null = null
+  real.onMessage = (bytes) => {
+    try {
+      JSON.parse(new TextDecoder().decode(bytes))
+    } catch {
+      // The wire format is not JSON; the parse *attempt* is what allocates, not a successful one.
+    }
+    userOnMessage?.(bytes)
+  }
+  return {
+    get datagrams() {
+      return real.datagrams
+    },
+    get onMessage() {
+      return userOnMessage
+    },
+    set onMessage(fn) {
+      userOnMessage = fn
+    },
+    get onClose() {
+      return real.onClose
+    },
+    set onClose(fn) {
+      real.onClose = fn
+    },
+    send(cls: number, bytes: Uint8Array, len?: number) {
+      // `wsConnection.send`'s own optional third `len` parameter (`ring-connection.ts`'s own
+      // precedent, `net/pump.ts`'s header comment): forwarded through, not dropped, so this wrapper
+      // costs the underlying connection nothing extra on the uplink send path either.
+      const withLen = real as Connection & {
+        send(cls: number, bytes: Uint8Array, len?: number): void
+      }
+      withLen.send(cls, bytes, len)
+    },
+    close(code) {
+      real.close(code)
+    },
+  }
+}
 
 /** 0015 §2: "drains the uplink ring on a `setInterval`"; docs/decisions/0015-threads-memory-and-
  * topology.md, Planning decisions "Uplink poll period: 10 ms" (M06's own figure, reused here
@@ -67,6 +118,15 @@ export function setup(shell: Shell, message: SetupMessage): Promise<LoopState | 
   // into a function *declaration*'s body (unlike an immediately-evaluated expression), since that
   // body could in principle run at any later point.
   const dialUrl = net.url
+  // docs/plan/29-net-worker-and-reference-server.md, this cut's own step 5 (Scope: "gc/multiplayer-
+  // topology ... asserting 0016 budgets for the main, client, gen and net isolates"): every other
+  // production worker kind's own `body()` calls `applyGcHook` once per real wake, gated on `test.
+  // gcHook` (`worker/{client,gen,sim}.ts`'s own precedent, `gc-hook.ts`). A `net`-kind worker has no
+  // `body()` (event-driven, no blocking loop) -- its own closest analogue to "once per real wake" is
+  // the uplink drain timer (below), which fires on a fixed cadence regardless of real traffic, so
+  // that is where the hook is applied instead.
+  const gcHook = message.test?.gcHook === true
+  const injectParse = message.test?.netInjectParse === true
 
   // A fresh `Link` (`net/link.ts`), (re)built on demand: `createLink` stops *for good* on a
   // terminal `DownReason` (`Superseded`/`BadKey`/`Full`/`VersionMismatch`, its own doc comment),
@@ -78,7 +138,10 @@ export function setup(shell: Shell, message: SetupMessage): Promise<LoopState | 
   // thing this milestone's own Scope actually pins).
   function buildLink(): Link {
     return createLink({
-      dial: () => wsConnection(dialUrl),
+      dial: () => {
+        const conn = wsConnection(dialUrl)
+        return injectParse ? injectParseConnection(conn) : conn
+      },
       clock: systemClock,
       scheduler: systemScheduler,
       seed: LINK_JITTER_SEED,
@@ -121,6 +184,7 @@ export function setup(shell: Shell, message: SetupMessage): Promise<LoopState | 
   let drainTimerId: number | null = null
   function armDrainTimer(): void {
     drainTimerId = systemScheduler.setTimer(() => {
+      if (gcHook) applyGcHook(shell.control, shell.index)
       pump.drain()
       armDrainTimer()
     }, UPLINK_DRAIN_MS)
@@ -131,6 +195,18 @@ export function setup(shell: Shell, message: SetupMessage): Promise<LoopState | 
     // No `body`/`timeoutMs`: this kind never enters `runBlockingLoop` (`worker.ts`'s own doc
     // comment on the `loop?.body` check).
     linkControl(m: NetControlMessage) {
+      // docs/plan/29-net-worker-and-reference-server.md, this cut's own step 5 (real bug, found
+      // live building `gc/multiplayer-topology`): the drain timer's own 10 ms real-wall-clock
+      // cadence (above) fires far too few times inside a measured 600-"frame" window to trip a
+      // negative control the way `client`/`gen`/`sim`'s own `body()` reliably does -- those kinds
+      // run `body()` once per *explicit, synchronous* step from main (600 times, guaranteed,
+      // whatever real time that takes), never on a real timer; `net`'s only other reachable-on-
+      // every-drive()-call entry point is this one, since `client.ts`'s own real `online`/
+      // `visibilitychange` probe wiring already reaches it once per real DOM event, and
+      // `gc-multiplayer-topology.ts`'s own `drive()` dispatches a real `online` event once per
+      // frame for exactly this reason. Applied here (not only in the drain timer) so the isolate
+      // gets a deterministic, once-per-measured-frame chance regardless of real-time timer jitter.
+      if (gcHook) applyGcHook(shell.control, shell.index)
       // Scope: "main -> net `{ type: 'probe' }` on `visibilitychange -> visible` and `online`, and
       // `{ type: 'retry' }`". `probe` is `Link.probe()` verbatim (`net/link.ts`'s own doc comment:
       // "a no-op on a link that has heard from its current connection ... otherwise redials

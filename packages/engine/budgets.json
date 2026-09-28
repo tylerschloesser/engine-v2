@@ -440,6 +440,35 @@
             }
           }
         }
+      },
+      "multiplayer-topology": {
+        "isolates": {
+          "main": {
+            "class": "strict",
+            "bytesPerFrame": 132,
+            "formula": "0016 §1's formula, no WebGPU adapter on this page (the 110 B floor does not apply), same shape as `topology`/`gen`'s own `main` row: `ceil(measured clean) + 8 B` margin, no attribution. First measured at 33.98-35.46 B/frame (`stepFrame` + `stepTick(gen0)` + one `dispatchRaw` every 30 frames alone) before `net`'s own negative controls were found unreliable (Deviations: the drain timer's real 10 ms cadence fires only a handful of times across a whole clean run, nowhere near 600 times) and fixed by dispatching a real `online` window event once per `drive()` call, reusing one preallocated `Event` object (`.claude/rules/hot-paths.md`) -- `client.ts`'s own production `online` listener (`sendProbe`) both posts `{ type: 'probe' }` to the net worker *and* calls `pushLinkLog('probe')` (a real `LinkLogEntry` object plus an array unshift/truncate, `client.debug.linkLog()`'s own capped-200 ring), so this is genuine, unavoidable production allocation on `main`, not a test-only cost. Re-measured with that in place (`playwright test --project gc --grep \"multiplayer-topology clean\" --repeat-each 5 --workers 1`, this machine): 118.24-123.15 B/frame across 5 clean runs. ceil(123.15) = 124, + 8 B margin = 132.",
+            "attributionRoots": ["drive"]
+          },
+          "client": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the shared \"8 B\" worker figure every other page's client/gen0/sim row uses. Re-measured with the `online`-dispatch fix in place (see `main`'s own row): 1.57-2.68 B/frame across 5 clean runs, still well under 8 -- a `{ kind: 'remote' }` host's own client-side handshake/pump path (`worker/client-net.ts`) costs nothing extra here beyond what every local-topology page's own client row already measures.",
+            "attributionRoots": ["body"]
+          },
+          "gen0": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the shared \"8 B\" worker figure every other page's client/gen0/sim row uses. Measured: a constant 0.6267 B/frame across 5 clean runs, well under 8 -- this page never pans (no camera), so `gen0` sees no real generation traffic at all, the same shape `gen`'s own `gen0` row documents for a page with none either.",
+            "attributionRoots": ["body"]
+          },
+          "net": {
+            "class": "budgeted",
+            "bytesPerFrame": 226,
+            "formula": "`class: \"budgeted\"`, not the shared \"8 B\" strict worker figure: `ceil(measured clean) + 8 B` margin, `connected-terrain`'s own `sim` row shape (a real, active worker role, not an idle wake). First measured at 2.37-6.40 B/frame with only the drain timer's own `applyGcHook` call (Deviations: found unreliable -- the timer's real 10 ms cadence fires only a handful of times inside a whole clean run, which itself completes in well under a second of real wall time, nowhere near the 600 times `client`/`gen0`'s own `body()` gets from main's explicit synchronous stepping; `neg burst net` measured only ~98 B/frame there, not the ~40,000 B/frame every sibling isolate's own burst control shows). Fixed: `worker/net.ts`'s `linkControl` now also calls `applyGcHook`, and this page's own `drive()` dispatches one real `online` window event per frame (`client.ts`'s existing, production `online` -> `{ type: 'probe' }` wiring, Scope), giving `net` the same deterministic once-per-frame trigger every other isolate already has. **Second finding**: a first cut of the background test-server ticker (`gc-multiplayer-topology.spec.ts`) ticked fast and continuously for the whole file, which let `net`'s own reading scale with however much real wall-clock time a given run happened to take -- a sibling isolate's own `burst` control (real GC work) measurably slowed the page down, letting more of those real ticks land inside the same measured window and inflating `net`'s reading by collateral, non-`net` causes (`neg burst main` 238.6, `neg burst client` 245.11, `neg burst gen0` 233.23 against a clean baseline of 216-218) -- into the same range as `net`'s own `object` control's real ~24 B/frame delta, an unresolvable conflict for any single ceiling (ADR 0029's own failure mode: a margin wide enough to tolerate the sibling noise also swallowed the real signal). Fixed by decoupling the two: the shared ticker is now a slow keep-alive heartbeat only (`HEARTBEAT_MS`), and `gc/net-negative-control` gets its own dedicated, much faster ticker for the duration of that one test alone (`runNetInjectParse`) -- `net`'s own activity is now wall-clock-independent for every `zeroGcSuite`-generated test. Re-measured (`playwright test --project gc --grep \"multiplayer-topology clean\" --repeat-each 5 --workers 1`, this machine): a tight 214.57-215.55 B/frame across 5 clean runs -- `Link.probe()`'s own no-op path on an already-healthy connection (`net/link.ts`) is not itself zero-allocation, a real, now load-bearing finding for a code path 0013 exercises on every real `visibilitychange`/`online` event, not only this test. ceil(215.55) = 216, + 8 B margin = 224, rounded up to 226 for a little extra headroom; `object`/`burst` on `net` itself both verified tripping, and every sibling `object`/`burst` control leaves `net` comfortably under 226 (no collateral effect left to tolerate). `A` never trips under `net`'s own `burst` (measured ~1,154 B/frame, ~692 KB total -- real, but not enough to force an actual GC pass in this isolate within the window): `\"budgeted\"` (assertion A = `MajorGC === 0` only) matches this measured reality, the same reasoning `zero_gc_action`'s own `sim` row documents.",
+            "attributionRoots": ["linkControl"]
+          }
+        },
+        "software": null
       }
     }
   },

@@ -47,6 +47,13 @@ export interface StartTestServerOptions {
   manualTimer: boolean
   worldId?: string
   joinKey?: string
+  /** A fixed port instead of the default OS-assigned one (docs/plan/
+   * 29-net-worker-and-reference-server.md, this cut's own step 5): `gc/multiplayer-topology`'s own
+   * spec needs a URL it can bake into `zeroGcSuite`'s `path` *before* `test.beforeAll` ever runs
+   * (test registration happens synchronously, at file-load time -- there is no way to thread an
+   * async-discovered OS-assigned port into a `path` string chosen before any hook runs). Every
+   * `mp/*` spec keeps the default (`undefined` -> `port: 0`), unaffected. */
+  port?: number
 }
 
 async function resolveFixture(
@@ -76,7 +83,11 @@ export async function startTestServer(opts: StartTestServerOptions): Promise<Tes
   await server.ready
 
   const { WebSocketServer } = await import('ws')
-  const wss = new WebSocketServer({ host: '127.0.0.1', port: 0, perMessageDeflate: false })
+  const wss = new WebSocketServer({
+    host: '127.0.0.1',
+    port: opts.port ?? 0,
+    perMessageDeflate: false,
+  })
   attachWebSocketServer(wss, server)
   await new Promise<void>((resolve, reject) => {
     wss.once('listening', resolve)
