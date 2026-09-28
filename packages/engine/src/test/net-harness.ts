@@ -571,6 +571,15 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
         // browser suite's own headless Chromium instances -- 5 ms measured clean in isolation but
         // flaked under that real full-suite load (a fixed tick budget racing ahead of a
         // not-yet-open socket, the same failure this yield exists to prevent in the first place).
+        // **Tried 40 ms (M29b fix round 1) and reverted it**: this same constant is shared by every
+        // `ws/*` test, several of which (`ws/reconnect-resume`, `ws/trace-identical`) have no
+        // explicit Vitest `testTimeout` override and call `advanceTicks` enough times that 40 ms
+        // pushed their own total real wall time past Vitest's 5 s default -- measured locally,
+        // reproduced by running the full slow tier once (`ws/reconnect-resume`/`ws/trace-identical`
+        // both failed "Test timed out in 5000ms" at 40 ms, clean again at 20 ms). The actual fix for
+        // CI's own `ws/spike-c` race is `netcode`'s new `soloTiers: ['slow']` (`scripts/suites.mjs`)
+        // below, not this constant -- widening it further without a passing CI run to confirm
+        // against would be exactly the blind-widening this repo's own testing discipline forbids.
         await new Promise<void>((resolve) => setTimeout(resolve, 20))
       }
       // docs/plan/28b-reconnect-and-lifecycle.md step 4: `SimHost.stepTick` itself is

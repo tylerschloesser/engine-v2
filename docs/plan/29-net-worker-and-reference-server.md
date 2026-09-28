@@ -591,3 +591,102 @@ unchanged.
 lint`: biome, rustfmt, clippy, tsc all green. `pgrep -fl "vitest|playwright|vite preview|chrome for
 testing"` empty before finishing. Hardware mode was not re-derived or changed by this range (this
 range touched only the `software` block).
+
+## Fix round 2 (`pnpm test:slow` findings, two more real problems)
+
+`pnpm test:slow` had never been run for this milestone before fix round 1's own gate (it targets a
+budget-only failure, not the slow tier). Running it surfaced two more real problems, neither related
+to `budgets.json`.
+
+### 1. `terrain-client.html`'s own `@webkit-gpu @slow` test, a real deterministic regression
+
+**Reproduced twice on a quiet local machine (hardware mode), 2/2, not intermittent**:
+`terrain: probe tile colours webkit` failed `console.error: "WebSocket connection to
+'ws://unused.invalid/' failed..."`. Steps 1-2 (this brief) made every `{ kind: 'remote' }` host dial
+for real (Scope); a dozen-plus pre-existing test/device pages (`gc-anchors.ts`, `gc-input.ts`,
+`device.ts` x3, `gc-gen.ts`, `framecx.ts`, `gen.ts`, `gc-terrain.ts`, `real-camera.ts`, `semantic.ts`,
+`terrain-client.ts`, `viewport.ts`) use a placeholder `{ kind: 'remote', url: 'ws://unused.invalid' }`
+host purely to get a "client + gen, no sim worker" topology shape, with no real networking intent at
+all (M06b's own reserved-but-inert shape, predating this milestone). The `linked`/`awaitLive` split
+(steps 1-2's own Deviations) stopped `client.ready` from hanging on this, but never stopped the net
+worker from actually *attempting* the dial -- a genuine failing DNS lookup on every one of these
+pages' loads. Chromium never surfaces a `console.error` for it (confirmed: the fast-tier `chromium`
+suite, which exercises most of these same pages, has been green all along); WebKit does, and
+`terrain-readback.spec.ts`'s own strict `openPage` console-error assertion (`support/page.ts`, every
+browser test's own contract) catches it -- `@webkit-gpu @slow`-only, so this was the first time
+`pnpm test:slow` ever ran it since M29 landed.
+
+**Fix: a test-only opt-out, not a page-by-page allowlist or a new host kind.** `TestFlags.netNoDial`
+(`worker/protocol.ts`) -- `worker/net.ts`'s `buildLink().dial()` returns a `noDialConnection()` stub
+(never opens, never closes, no timers, `send`/`close` no-ops) instead of calling `wsConnection(url)`
+when set. `net/link.ts`'s own dial contract ("already open, or open-enough, the instant it is
+returned") is satisfied trivially, so `CB_LINK_STATE` still reports `Up` immediately the same way a
+real-but-never-checked dial did pre-M29 -- exactly the behaviour these dozen pages already assumed.
+Not a new `ClientOptions.host` kind (would be a renamed/widened Provides seam) and not a per-test
+`allowConsoleError` allowlist (the coordinator's own instruction: fix the real cause). All thirteen
+call sites (thirteen, not twelve -- `device.ts` has three) now pass `test.flags.netNoDial: true`
+(`gen.ts`'s own caller-supplied `opts.test.flags` merges it as a default, not an override).
+`mp.ts` (the one page with a *real* remote host) is untouched -- `netNoDial` is opt-in per page, not
+a default.
+
+Verified: `pnpm test:slow browser -t "probe tile colours webkit"` 3/3 clean (this machine, hardware
+mode); `pnpm --filter engine typecheck` clean; full fast-tier `pnpm test browser` unaffected (216
+tests, same as before this fix). No other page hits the same class of problem: grepped every
+`ws://unused.invalid` site in `tests/browser/pages/src/*.ts` and `games/*/` (none in `games/*/`) and
+confirmed none of the twelve pages read `client.onLink`/`CB_LINK_STATE` at all -- they only ever
+wanted the topology shape.
+
+### 2. CI's slow tier (software mode), contention -- confirmed by mechanism, not assumed
+
+CI's first-ever `pnpm test:slow` run failed `ws/spike-c` ("engine: dispatch before ready"),
+`device-serve/proxy-and-apps` (60 s timeout), and three `browser` `gc` `neg burst` tests --
+including `connected-terrain neg burst sim`, a **pre-existing page this milestone never touched**.
+That last failure is the strongest single signal this is contention, not a defect in any one test's
+own logic (docs/plan/17b-sprites-and-frame-budget.md's own `frame-bench` precedent: "a frame-time
+gate cannot share the machine with a parallel Playwright worker pool").
+
+**Checked the mechanism before assuming load, per instruction.** `ws/spike-c` and
+`ws/join-converges` (fast tier) share the identical `advanceTicks(20)`-then-`dispatch` shape and the
+identical `net-harness.ts` real-wall-clock yield (`20 ms` per tick, already tuned up once from 5 ms
+for exactly this class of failure, steps 1-2's own Deviations) -- `join-converges` never fails, so
+the difference is environmental, not structural: CI's slow tier runs `netcode` concurrently with the
+full `browser` suite (chromium + gc + the `engines` leg, webkit/firefox, *and* this milestone's own
+four new `burst` GC negative controls, deliberately CPU-heavy), on `ubuntu-latest`'s own far smaller
+core count than this dev machine (14 cores; this whole slow tier completes in ~32 s here with
+everything running at once). `device-serve/proxy-and-apps` spawns two real `vite build`+`preview`
+cycles -- real CPU-bound work with the same exposure.
+
+**Fix: `netcode` is now `soloTiers: ['slow']`** (`scripts/test.mjs` gained tier-scoped `solo`
+alongside the existing `solo: true`; `scripts/suites.mjs`'s `netcode` row sets it) -- its slow tier
+now runs after `browser`'s slow tier finishes, removing exactly the external contention the
+mechanism above names, the same reasoning `frame-bench` already established for real-time
+*measurement*, applied here to real-time *correctness*. The fast tier (4 s, no real spawns racing
+anything) stays concurrent -- untouched, no reason to slow down every interactive `pnpm test` run.
+Also bumped `device-serve/proxy-and-apps`'s own explicit Vitest timeout 60,000 -> 120,000 ms, with
+the mechanism stated in the test file itself: real work (two build+preview cycles) that scales with
+CPU count, as a stated margin against `netcode`'s own remaining internal concurrency (several test
+files in the same suite still run at once), not a blind bump.
+
+**Tried, measured, and reverted a second change**: bumping `net-harness.ts`'s own `20 ms` per-tick
+yield to `40 ms` (reasoning: give `ws/spike-c` more margin against `netcode`'s own internal
+concurrency even once `browser`'s external contention is removed). **This broke `ws/reconnect-resume`
+and `ws/trace-identical`, reproduced by running the full local slow tier**: both time out at Vitest's
+5 s default (`"Test timed out in 5000ms"`) because they have no explicit `testTimeout` override and
+call `advanceTicks` enough times that `40 ms/tick` pushes their own total real wall time past 5 s --
+clean again at `20 ms`. Reverted; the comment at the call site now records this so nobody retries the
+same bump blind. **This constant is not touched by this fix round.**
+
+**Not verified against real CI hardware** (standing instruction: no pushing from this session; the
+coordinator confirms on the next CI run). Locally verified instead: `pnpm test:slow` twice in a row,
+clean both times (`netcode pass 5 tests ~31s`, now running after `browser`'s `pass 58 tests ~31s`
+finishes; `frame-bench pass 1 tests ~6.5s` last, unaffected -- solo suites still run strictly
+sequentially, never racing each other, the pre-existing guarantee this fix relies on). `pnpm test`
+(fast tier) unaffected: `netcode pass 43 tests` stayed concurrent, `6.4s` and `4.1s` across two runs,
+both comfortably under the 10 s budget. One unrelated flake observed on one `pnpm test` run
+(`reference ui-smoke: collect and inventory`) -- the same pre-existing, load-sensitive click-
+interception flake this brief's own step-5 Deviations already named as unrelated to any file this
+milestone touches; passed clean on immediate retry.
+
+**If CI's slow tier is still tight after this fix**, that is `browser`'s own internal concurrency (5
+workers, plus the concurrently-running `engines` leg) to revisit next, with real CI numbers in hand
+-- not something to guess at from this machine, whose 14 cores do not represent CI's own hardware.

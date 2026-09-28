@@ -89,7 +89,33 @@ export const suites = [
   // docs/plan/27-server-entrypoint-and-netcode-harness.md: the real server entrypoint + real
   // `.wasm` + K `HeadlessClient`s over in-memory `Connection`s behind a seeded conditioner (0020
   // §7). `budgetMs` 10,000, this table's own row.
-  { name: 'netcode', kind: 'vitest', tiers: ['fast', 'slow'], budgetMs: 10_000 },
+  //
+  // `soloTiers: ['slow']` (M29b fix round 1: CI's slow tier, first run, found `ws/spike-c` failing
+  // "engine: dispatch before ready" and `device-serve/proxy-and-apps` timing out at 60 s, alongside
+  // *unrelated* `browser` slow-tier tests -- including a pre-existing page this milestone never
+  // touched -- also newly timing out). The slow tier's own `ws/*` tests race a real loopback socket
+  // handshake against a fixed real-wall-clock budget (`net-harness.ts`'s own `advanceTicks`, already
+  // tuned upward once for exactly this reason: docs/plan/29-net-worker-and-reference-server.md
+  // Deviations, "flaked under `pnpm test`'s own real concurrent-suite load"), and
+  // `device-serve/proxy-and-apps` spawns two real `vite build`+`preview` cycles -- both are real
+  // wall-clock-sensitive work that a concurrently-running `browser` suite's own Chromium/WebKit/
+  // Firefox instances (plus M29's own new `burst` GC negative controls, deliberately CPU-heavy) can
+  // starve of real CPU time, especially on CI's own weaker hardware (measured locally: this whole
+  // suite's slow tier completes in 32 s alongside `browser`'s full slow tier on a 14-core machine,
+  // comfortably under every timeout; a CI runner's own core count is far smaller). The fast tier
+  // (4 s, no real spawns racing anything) stays concurrent -- only the slow tier needs the machine
+  // to itself, the same reasoning `frame-bench` below already established for real-time measurement,
+  // applied here to real-time *correctness* instead. This does not touch `browser`'s own internal
+  // concurrency (5 workers, its own `engines` leg): removing `netcode`'s own contribution is what
+  // this fix addresses; if CI's slow tier is still tight after this, that is `browser`'s own budget
+  // to revisit, not `netcode`'s.
+  {
+    name: 'netcode',
+    kind: 'vitest',
+    tiers: ['fast', 'slow'],
+    budgetMs: 10_000,
+    soloTiers: ['slow'],
+  },
   {
     name: 'browser',
     kind: 'playwright',

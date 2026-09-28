@@ -89,9 +89,15 @@ async function main() {
   // parallel Playwright worker pool) -- those run one at a time, afterward, each with every other
   // suite's own process already finished. `selected`'s own registration order is preserved either
   // way (`suites.mjs` lists every `solo` suite after the ones it must not race), so this changes
-  // scheduling, not the reported order.
-  const concurrent = selected.filter((s) => !s.solo)
-  const solo = selected.filter((s) => s.solo)
+  // scheduling, not the reported order. `soloTiers: [<tier>, ...]` (M29b fix round 1,
+  // docs/plan/29-net-worker-and-reference-server.md's own gate) is the same mechanism, scoped to
+  // only the named tier(s) -- `netcode`'s own fast tier is small and fine concurrent; only its slow
+  // tier (real child-process spawns, real loopback-socket handshakes racing a real-wall-clock yield)
+  // needs the machine to itself, the same reasoning `frame-bench` already established for real-time
+  // measurement, applied here to real-time *correctness* instead.
+  const isSolo = (s) => s.solo === true || (s.soloTiers?.includes(opts.tier) ?? false)
+  const concurrent = selected.filter((s) => !isSolo(s))
+  const solo = selected.filter((s) => isSolo(s))
   const outcomes = await Promise.all(concurrent.map((suite) => runSuite(suite, opts)))
   for (const suite of solo) {
     outcomes.push(await runSuite(suite, opts))

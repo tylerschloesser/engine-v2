@@ -94,7 +94,16 @@ async function checkMode(args: string[]): Promise<void> {
   child = undefined
 }
 
+// 120_000, not 60_000 (M29b fix round 1): two real `vite build`+`preview` cycles (`--app reference`
+// builds `games/reference` fresh) plus two real child-process spawns, measured locally at ~3-18 s
+// total on a 14-core machine -- CI's own slow tier found this timing out at 60 s on its first run,
+// alongside *other*, unrelated slow-tier tests also newly timing out (`docs/plan/
+// 29-net-worker-and-reference-server.md`'s own Deviations), the signature of a CPU-starved CI
+// runner rather than a defect in this test's own logic. `netcode` is now `soloTiers: ['slow']`
+// (`scripts/suites.mjs`), which removes contention from the concurrently-running `browser` suite;
+// this margin is the remaining defense for `netcode`'s own internal concurrency (several test files
+// in this same suite run at once) on CI's weaker-than-this-dev-machine hardware.
 test('device-serve/proxy-and-apps @slow', async () => {
   await checkMode(['--ws', 'puts'])
   await checkMode(['--app', 'reference', '--ws', 'puts'])
-}, 60_000)
+}, 120_000)
