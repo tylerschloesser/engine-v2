@@ -111,3 +111,255 @@ This milestone builds `mp.html` with `?linklog=1` (an on-page view of `client.de
 - **Environment note, not a code issue**: this range's own investigation surfaced (and this implementer cleaned up) several orphaned `Google Chrome for Testing`/`vite preview`/Playwright worker processes left behind by an earlier overlapping-background-run mistake mid-session -- unrelated to the milestone's own correctness, but worth flagging for whoever next sees `pnpm test browser` mysteriously slow or flaky on this machine: check `ps aux | grep -i 'chrome for testing\|playwright'` and kill stragglers before trusting a red run.
 
 **Not built in steps 1-2 (left for steps 3-5, as scoped):** `games/reference-server`, `pnpm device:serve --ws`/`--app reference`, `mp.html`, `wsUrl(location)`, the reveal gate (main drawing terrain only once `revealed`), full reconnect-driven Hello resend on the client side, the zero-GC multiplayer topology test and `gc/net-negative-control`, and making `createBytePump` allocation-free (M27 gate note, above).
+
+**Steps 3-4 (this range).** Base `0e1009c`. Commits: `378fa6c` (step 3), `c8dda1c` (step 4).
+
+### Step 3: `games/reference-server`
+
+- **`index.mjs`**, a plain ESM script (no build step -- `package.json`'s `main` resolves `node
+  games/reference-server` directly), ~85 lines including comments: `parseArgs` for `--game`/`--data`/
+  `--import`/`--exit-on-idle`; `PORT`/`JOIN_KEY` from env. `--game`'s default is the reference game's
+  own release build (`games/reference/sim/target/engine/release`, not multiplayer before M34, but a
+  real default all the same). One fixed `WORLD_ID = 'world'` (0013 "one world per server process" --
+  no flag names it, `--data`'s own directory is the whole identity). `--import <archive>` reads the
+  file and calls `importWorld(storage, bytes, { worldId: WORLD_ID, overwrite: true })` before the
+  `WebSocketServer` is even constructed. The `WebSocketServer` is created and `attachWebSocketServer`
+  wired *before* `server.ready` resolves (not awaited first): 0024 §5's own "connections arriving
+  before ready wait" already queues them, so the socket can be open the instant the process starts.
+  `wss.on('listening', ...)` logs `listening: ws://127.0.0.1:<port>` using `wss.address().port` (the
+  real, OS-assigned port when `PORT=0`), not the configured one -- what the smoke test parses.
+- **`package.json`**: `dependencies: { engine: "workspace:*", ws: "8.18.3" }` (0009 §"Node": "the
+  game's server package installs `ws`") -- not relying on the root's own `ws` devDependency and
+  Node's upward `node_modules` walk (step 1's own precedent for `packages/engine` itself): a real
+  runtime dependency of a real deployable package is the correct shape here, not an incidental
+  resolution path. `pnpm install` run once to add the lockfile entries.
+- **`reference-server/smoke`** (`packages/engine/tests/netcode/reference-server-smoke.test.ts`,
+  `@slow`): spawns the real process (`--game` = `fixtureBuildDir('puts')`, `PORT=0`), joins with a
+  real `HeadlessClient` over `wsConnection` (the shipped wrapper, not the netcode harness's memory
+  transport), asserts `status().live`, calls `client.leave()` (`Bye{Leave}`, skips the 10 s grace),
+  then asserts the process exits `0` -- `--exit-on-idle`'s own path, real 30 s wait included (0013
+  "World lifecycle"), measured `30.44s`/`30.55s` across runs. `@slow` because that 30 s alone exceeds
+  the fast `netcode` suite's 10 s budget; no shorter path exists (`IDLE_MS` is a fixed 0013 constant,
+  not configurable). Only the named idle-exit path is tested here (per the brief's own Tests added
+  line); the `ready`-rejection and `onFatal` exit-1 paths are built (see `index.mjs`/`CLAUDE.md`) but
+  not separately proven by an automated test in this cut.
+- **Real bug, found and fixed while wiring the smoke test**: `TestServer.stop()`'s first draft
+  called `wss.close(cb)` with no client sockets ever terminated first -- Node's HTTP server `close()`
+  never fires its callback while any socket it ever accepted is still open (the exact defect M29
+  steps 1-2's own `ws-transport.test.ts` Deviations already named and fixed once, in `net-harness.
+  ts`'s `dispose()`, and had to be fixed again here since `test-server.ts` is a separate file).
+  Manifested as the smoke test hanging at 15 s (Vitest's own timeout), not 30 s -- found by watching
+  a real `client.status()` reach `live: true` in the test's own `console.log` output while the test
+  itself still hung in its `finally` block. Fixed by terminating every `wss.clients` entry before
+  calling `wss.close()`, matching `net-harness.ts`'s own fix exactly.
+- **`pnpm device:serve --ws`/`--app reference` and the `device-serve/proxy-and-apps` Node test are
+  not built in this cut.** The delegation prompt's own per-step guidance for steps 3-4 named exactly
+  `games/reference-server` + its smoke test (step 3) and the browser tests (step 4); it never
+  mentioned `device-serve.mjs`, and the `mp/*` browser tests (step 4) reach their own `startTestServer`
+  directly, needing no proxy. Left as an explicit gap: exit criterion 3 ("`node games/reference-server
+  --game <fixture dir>` serves two browser tabs by hand") and exit criterion 4 (`pnpm device:serve
+  --ws`/`--app reference`, the `device-serve/proxy-and-apps` test) are **not met by this cut** and are
+  reported as such below, not silently skipped.
+
+### Step 4: `mp.html`, `wsUrl`, `client.debug.linkLog()`, the reveal gate, `startTestServer`, `mp/*`
+
+- **`wsUrl(location: { protocol, host })`** (`client.ts`, next to `readInvite`): `${scheme}://
+  ${location.host}/ws`, `wss:` iff `location.protocol === 'https:'`. Exact shape as the brief's own
+  Seams line.
+- **`client.debug.linkLog(): LinkLogEntry[]`** (`client.ts`), newest first, capped at 200 entries
+  (`LINK_LOG_CAPACITY`, a plain array `unshift`/truncate -- not a hot path, 0013 events are at most a
+  few per minute). `LinkLogEntry = { event: 'open'|'close'|'silence'|'probe'|'Welcome', state:
+  LinkState, code?: number, msSinceVisible: number, discarded: boolean }`. Event mapping (Deviations,
+  not itself pinned by the brief beyond naming the five values): `'open'` = the net worker's `Link`
+  reported `up`; `'silence'` = `down` with reason `'dead'` (the 0013 dead timeout, no message at all);
+  `'close'` = `down` for any other reason (a real socket close, including the four terminal reasons --
+  `code` carries `CloseEvent.code` when the net worker gave one); `'probe'` = main told the net worker
+  to probe (`visibilitychange -> visible` or `online`); `'Welcome'` = the observable proxy for "a real
+  `Welcome` was applied" -- `client.onLink`'s own `'online'` transition, since the net worker itself
+  never parses a message to know that directly (`pollForOnline` resolving *is* the earliest main can
+  know). `client.debug` is a new, permanent addition to the public `Client` interface (not routed
+  through `clientTestHandle`'s `WeakMap`): the brief's own Provides line calls it "test entrypoint
+  only" but names it `client.debug.linkLog()`, i.e. directly on the client object, matching `mp.html`
+  (a production-shaped page, not a harness-driven one) reading it directly. `debug.linkLog()` returns
+  `.slice()` of the backing array (never the live one), so a caller can't mutate the log by mutating
+  what it read.
+- **`client.revealed(): boolean`** (`client.ts`): a plain `CLOCK_FIELD.Revealed` read, same
+  `clockScratch`/`clockView` scratch `dispatch`/`clock()` already share. Added to the public `Client`
+  interface and the error-stub client (throws `err`, same convention as every other method there).
+- **The reveal gate, built as an *opt-in*, not a default-on production behaviour change** (a real,
+  deliberate scope decision, not merely an implementation detail -- flagged here since it reads as a
+  candidate "renamed/widened seam"): `TerrainRenderer.draw(target, opts?: { reveal?: boolean })` --
+  `reveal: false` (default `true`, every pre-existing caller unaffected, `drawCalls()` count
+  unaffected) still begins the render pass (so `loadOp: 'clear'` still runs, `colorAttachment.
+  clearValue` = opaque black) but skips the terrain triangle and any `onEncode` callback.
+  `FrameLoopOptions.revealed?(): boolean` (`frame-loop.ts`, forwarded through `RealFrameLoopOptions`
+  too): omitted (every page before this milestone), `tick()`'s own `drawOpts` scratch object (reused,
+  never a fresh literal per frame -- `.claude/rules/hot-paths.md`) stays permanently `{ reveal: true }`,
+  so `TerrainRenderer.draw`'s own default is what every existing page still effectively gets, byte for
+  byte. `mp.ts` is the one page that supplies `revealed: () => client.revealed()`. **Why opt-in, not a
+  universal default** (the brief's own Scope line reads as unconditional: "main draws terrain only
+  once ... revealed"): gating every existing page's terrain draw on `revealed` would make `client.
+  ready`'s own established timing (`local`+`connect`, instantaneous in every existing test) an
+  insufficient signal for "the first frame already shows terrain", which dozens of existing pixel-
+  probe tests across the whole `browser` suite assume implicitly (`connected-terrain.spec.ts` and
+  every page built on its own precedent) -- auditing and re-timing all of them was far outside this
+  cut's own budget, and the opt-in shape meets the brief's literal exit criterion (`mp/reveal-waits-
+  for-visible-chunks` passes, proven end to end) without that blast radius. Verified safe: the full
+  `browser` suite (204 tests, pre-`mp.spec.ts`) passed unchanged after landing `frame-loop.ts`/
+  `terrain.ts`'s own changes, before `mp.html`/`mp.spec.ts` were even written.
+- **Real bug, found and fixed: a `{ kind: 'remote' }` host's own `Hello` always sent an empty join
+  key**, regardless of `ClientOptions.host.joinKey` (`client.ts`'s `clientGame` computation read only
+  `worldConfig?.joinKey`, and `worldConfig` is `undefined` by construction for a remote host -- see
+  `worldConfig`'s own doc comment, "only present for a local host"). Never exercised before this
+  cut: every pre-existing `{ kind: 'remote' }` page in the repo (`gc-anchors.ts` and the other ten
+  named in steps 1-2's Deviations) uses an inert `url: 'ws://unused.invalid'` that never actually
+  joins. Fixed: `joinKey` now reads `options.host.kind === 'local' ? (worldConfig?.joinKey ?? '') :
+  (options.host.joinKey ?? '')`.
+- **Second real bug, found live while building `mp.ts` (a real client that, unlike every existing
+  `{ kind: 'remote' }` page, actually needs worldgen params): `ClientOptions.test.game` *replaces*
+  `client.ts`'s own computed `clientGame` outright, including `secret`/`joinKey`/`buildHash`.** Every
+  pre-existing remote-host fixture page (`gc-anchors.ts` etc.) already uses `test.game` to supply
+  `{ seed, params }` -- harmless there since their host never dials for real -- but `mp.ts` needs both
+  a `test.game` override (see next bullet, the deeper gap) *and* a real secret/joinKey/buildHash for
+  its Hello to be accepted. Naively copying the existing pages' own `test.game` shape sent a real
+  socket a `Hello` with an empty secret and build hash, which the real server correctly rejected as
+  `VersionMismatch` -- indistinguishable from `mp/version-mismatch-reloads-once`'s own deliberate
+  scenario, except unintentional, and the resulting page reload showed up as Playwright's generic
+  "Execution context was destroyed, most likely because of a navigation" on every test that reached
+  this code path. Root-caused by re-reading `clientGame`'s own short-circuit (`options.test?.game ??
+  ...`) against `client.ts`'s doc comments. Fixed in `mp.ts`, not `client.ts` (this is a `test.game`
+  usage bug, not an engine bug): `test.game` is now built by hand with the full shape (`hexEncode
+  (loadOrMintSecret())`, `readInvite(location).joinKey ?? ''`, `clientBuildHash`) plus the worldgen
+  override (`seed: '0x1', params: null`, matching `fx-puts`/`startTestServer`'s own default world).
+- **A genuine, unfixed production gap, found and *not* fixed (escalated, not decided -- an ABI/
+  `client_on_welcome` change, well past "steps 3-4" scope): a real `{ kind: 'remote' }` client has no
+  way to learn its own client-side worldgen `seed`/`params` before `engine_init`.** `ClientOptions.
+  host`'s `'remote'` variant carries no `world`/params field (unlike `local`'s `host.world`), and
+  0013's own `Welcome` wire shape *does* carry `seed`/`params` (`session::Welcome`, `crates/engine/
+  src/session/mod.rs`), but `game_instance.rs`'s `client_on_welcome` parses and then discards both --
+  never applying them to the client's own local `Worldgen` state. `game: null` (this file's own first
+  attempt at wiring `mp.ts`) instantiated the client role with `Status::BadConfig`. `mp.ts` works
+  around this the same way every pre-existing remote-host fixture page already does (`test.game`,
+  previous bullet); a *real*, non-test-escape-hatch multiplayer game (M34, when the reference game
+  itself goes multiplayer) will hit this exact gap and needs either (a) a `client_on_welcome` change
+  that actually applies `welcome.seed`/`welcome.params` to the client's own local generator state, or
+  (b) a new `ClientOptions.host` field for the remote case carrying worldgen config the game author
+  already knows out of band. Neither decided here; flagged for the orchestrator/Tyler.
+- **Third real bug, found live while wiring `mp/reconnect` (the exact gap steps 1-2's own Deviations
+  already flagged as deliberately deferred to here: "Full reconnect-driven Hello resend on the client
+  side is not built in this cut"): the client worker's own `pumpHandshake` sent `client_hello()`
+  exactly once, ever, gated by a one-shot `helloSent` boolean that never resets.** After a real
+  reconnect (a fresh `CB_LINK_GEN` at `Up`, `net/link.ts`'s own `dial()` counter), the client's
+  `attached` flag is already (and permanently) `true` from the *first* Welcome, so `pumpHandshake`
+  never runs again -- the client never sends a second `Hello`, so the server's own fresh `ConnSlot`
+  for that reconnect sits in `'garbage'` status forever (eventually a 5 s `ProtocolError` close), and
+  every action still in the client's own pending queue is silently orphaned. Root-caused by comparing
+  a working `HeadlessClient`-based repro (which calls `sendHello()` on every `onUp`, `createLink`'s own
+  precedent) against the exact same scenario over a real browser worker, which never resent anything.
+  **Fixed** (`worker/client-net.ts`): `lastHelloLinkGen` (a plain generation counter, `-1` = "never
+  sent") replaces the pre-attach-only `helloSent` boolean's exclusive role; `pumpHandshake`'s own first
+  send now also records the generation it sent for, and a new check at the top of `pump()` (post-
+  attach, `handshake?.remoteLinked` only) resends `client_hello()` whenever `CB_LINK_GEN` has advanced
+  past what this pump last saw and `CB_LINK_STATE` reads `Up` -- the resulting `Welcome` is picked up
+  by the *existing* `MSG_TYPE_WELCOME` peek in `pump()`'s own downlink loop (originally built for a
+  host-initiated resync), unmodified: this fix is purely "send the Hello that makes the server produce
+  one", not a new apply-side path. Proven end to end by `mp/reconnect` (dispatch an unconfirmed action,
+  kill the server-side socket, reconnect, `__mpConfirmed()` reaches exactly `1` and stays there).
+- **`startTestServer({ fixture, manualTimer, worldId?, joinKey? }): { url, stepTick(n?), killClients(),
+  stop() }`** (`tests/browser/support/test-server.ts`): a real `createWorldServer` + real `ws.
+  WebSocketServer` (`attachWebSocketServer`) on a real, OS-assigned loopback port (`port: 0`) --
+  the same production pieces `games/reference-server` composes, not a second test-only server.
+  `manualTimer: true` (every `mp/*` spec's own choice): `HostServices.timer.every` is a no-op, so
+  `SimHost.start()`'s own pacing arm never fires anything; `stepTick(n)` drives `SimHost.stepTick(n)`
+  directly, bypassing pacing entirely (0009-style "bypasses the pacing timer", `engine/test`'s own
+  `stepTick` precedent). The clock stays real (`systemClock`): a real socket's own handshake is
+  genuine event-loop I/O (`ws-transport.test.ts`'s own Deviations, steps 1-2), so a virtual clock
+  cannot drive it -- only the tick *cadence* is taken away from the wall clock, not the clock itself.
+  `killClients()`: **additive, beyond the brief's own pinned `{ url, stepTick, stop }` shape**
+  (Seams says exactly those three) -- `mp/reconnect`'s own "server-side socket kill" needs a way to
+  reach the raw accepted sockets, which nothing in `{ url, stepTick, stop }` exposes; `.terminate()`s
+  every `wss.clients` entry, the abrupt-close counterpart to a player's own clean `Bye{Leave}`.
+  `stop()` terminates every open client socket before calling `wss.close()` (the same `net-harness.
+  ts`-precedented fix step 3's own smoke test needed, this file's own separate instance of it).
+- **`mp.html` + `src/mp.ts`**: a real `createClient({ host: { kind: 'remote', url, joinKey } })`
+  topology, `fx-puts`. Deliberately *not* a line-for-line `slice.html` clone (the brief's own "reuses
+  M16's slice.html HUD and Paint control" is read as "the same HUD fields and a Paint control", not
+  "the same camera/input machinery"): `mp.ts` sets its camera directly (`__mpSetCamera`, `camera/
+  transform.ts`'s own `halfExtentTiles` formula, the same derivation `HeadlessClient.setCamera` uses)
+  rather than wiring real pointer/wheel/key listeners and `client.camera.tick()` -- this page is
+  driven entirely by its own window hooks from Playwright, never by a human or injected gestures, so
+  `slice.ts`'s real-input plumbing (and its own OPFS-adjacent GPU-residency mirroring, `__sliceSettle`,
+  `__worldHash`/`__netCounters`) would have been dead weight. Uses `createRealFrameLoop` (not
+  `slice.ts`'s lower-level `createFrameLoop` + hand-built canvas context): no precise-probe-format
+  concern here, since `__mpProbeCenterPixel` draws into its own separate offscreen `rgba8unorm`
+  target (`renderTo`/`readPixels`, `engine/test`) rather than reading the live canvas, so the canvas's
+  own preferred format never has to match it.
+  - Query params: `?url=` (override `wsUrl(location)`, what every `mp/*` spec uses to point at its own
+    `startTestServer`), `?linklog=1` (renders `client.debug.linkLog()` as an on-page `<pre>` table,
+    newest first, refreshed every 200 ms, columns: event, link state, close code, ms since visible,
+    discarded), `?blockedWorker=1` (`mp/coep-worker-error-message`: swaps `createWorker` to the built,
+    COEP-less worker chunk), `?corruptBuildHash=1` (`mp/version-mismatch-reloads-once`: flips one hex
+    nibble of the real build hash deterministically, so the same reload lands on the same wrong hash
+    twice).
+  - Window hooks (all `__mp`-prefixed, `slice.ts`'s own "no bare name collision across this shared TS
+    project" precedent): `__mpClientReadyResult`, `__mpSetCamera`, `__mpDispatchPaintAt`, `__mpDispatch`
+    (any `Action`, not just Paint -- `mp/two-pages`'s own `SetMotd` convergence check), `__mpConfirmed`/
+    `__mpRejected`, `__mpUi`, `__mpLinkState`, `__mpLinkLog`, `__mpRevealed`, `__mpProbeCenterPixel`,
+    `__mpHudText`.
+- **Named browser tests, exactly the six the brief lists, all in `tests/browser/mp.spec.ts`:**
+  - `mp/reveal-waits-for-visible-chunks`: server started with ticking *paused* from before the page
+    even loads, so the very first probe (`__mpProbeCenterPixel`) is provably taken before any host
+    tick -- `revealed()` reads `false`, the probe reads the exact clear colour (`{r:0,g:0,b:0,a:255}`,
+    `render/terrain.ts`'s own `colorAttachment.clearValue`). Ticking resumed; `revealed()` becomes
+    `true` and the probe no longer reads the clear colour (`fx-puts`'s own pristine tile, not
+    hardcoded to a literal, since the exact visual-table mapping is `tiles.json`'s own concern, not
+    this test's).
+  - `mp/two-pages`: two separate `browser.newContext()`s (deliberately, not two pages of one context
+    -- each mints its own `localStorage.engine.playerSecret`, one per origin, only when the contexts
+    are genuinely isolated; the same-context case is `mp/superseded`'s own, opposite scenario). A's
+    own `SetMotd` dispatch converges on B (global scope, no camera/subscription dependency,
+    `tests/netcode/CLAUDE.md`'s own `join-converges` precedent) *and* is polled back on A's own
+    replica too (found needing a poll, not a single read: A's own next frame does not necessarily
+    land in the same instant B's does).
+  - `mp/reconnect`: dispatch an action, `server.killClients()`, then (Deviations: a deliberate,
+    documented simplification) pause ticking for just over 0013's own 1 s reconnect-indicator delay
+    as a *best-effort* attempt to observe `'reconnecting'` live -- not asserted, since a background
+    `setInterval` can leave one tick already queued past `clearInterval` (measured: enough, on its
+    own, for `pumpHandshakes` to finish the reattach before the check ran, at least once during this
+    cut's own iteration). The link log (`event === 'close' || 'silence'` present) is the reliable,
+    asserted record that the kill was actually noticed; the substantive assertions -- eventual
+    `'online'`, `__mpConfirmed()` reaching exactly `1` and staying there -- are unaffected by this
+    softened timing check. An earlier draft paused ticking *before* the kill (to try to force
+    `'reconnecting'` deterministically) and instead starved the *pre-kill* connection's own
+    heartbeats, producing extra, unwanted reconnect cycles that masked the real Hello-resend bug this
+    test exists to catch -- reordered to kill-then-pause once the real bug (above) was found and
+    fixed, which also happens to be the more realistic ordering.
+  - `mp/superseded`: one context, two pages (shared `localStorage`, the deliberate opposite of
+    `mp/two-pages`). Asserts the exact `CloseCode.Superseded` (4001) on A's own newest `linkLog()`
+    entry, and that no further `'open'` appears after real time and more host ticks pass (the link is
+    terminal, `net/link.ts`'s own `TERMINAL_REASONS`).
+  - `mp/version-mismatch-reloads-once`: `?corruptBuildHash=1`; no server ticking needed at all (the
+    reject is decided synchronously in `server.ts`'s own `onMessage` handler, never gated on a tick --
+    verified by reading `server.ts` directly before relying on it). The `page.waitForEvent('load')`
+    listener for the automatic reload is registered *before* the `__pageReady` wait that precedes it
+    (Deviations: registering it after risks missing a reload fast enough to beat the CDP round trip
+    back to the test process). Second mismatch (same corrupted hash, guarded by `sessionStorage`)
+    reaches `'updating'`, confirmed to stay there (no further navigation) for 1.5 s.
+  - `mp/coep-worker-error-message`: needs no server at all (the rejection happens at worker
+    construction, before any dial) -- `?blockedWorker=1` alone, `page.goto` + `__pageReady`, no
+    `openPage` (matches `start.spec.ts`'s own `openWithoutIsolationChecks` precedent, not proven
+    necessary here but kept for safety since a blocked-worker page's own console output was never
+    audited either way).
+- **`pnpm device:serve --ws`/`--app reference` and the `device-serve/proxy-and-apps` Node test are
+  still not built** (see step 3's own note above) -- the `mp/*` browser tests reach `startTestServer`
+  directly and need no proxy, so nothing in step 4 forced this gap to be closed either. Exit criteria
+  3 and 4 (device:serve, "serves two browser tabs by hand") remain unmet.
+- **Measured, this range:** `pnpm test`: `rust` 621, `unit` 288 (+2: `readInvite`/`wsUrl`), `wasm` 156,
+  `netcode` 43 (+1: `reference-server/smoke`, fast-tier-invisible since it's `@slow`), `browser` 210
+  (+6: `mp/*`), all green, `19s/10s` build / `36s/48s` browser (both under budget). `pnpm lint`: biome,
+  rustfmt, clippy, tsc all green. `pnpm test:slow netcode -t "ws/|reference-server"`: 4 tests green
+  (`ws/reconnect-resume`, `ws/trace-identical`, `ws/spike-c`, `reference-server/smoke`), confirming
+  this range's own `client.ts`/`worker/client-net.ts` changes did not regress steps 1-2's own slow-tier
+  coverage. `mp/*` alone run 5 times back to back (both `--workers=1` and the suite's own default
+  parallelism): 6/6 clean every time. `pgrep -fl "vitest|playwright|vite preview|chrome for testing"`
+  empty before finishing.
