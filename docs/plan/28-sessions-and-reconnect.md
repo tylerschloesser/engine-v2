@@ -1,6 +1,6 @@
 # M28: Sessions: handshake, identity, liveness
 
-Status: in flight (gate: every criterion met; repeat loops pending on a quiet machine) · After: 27 · Tyler-dependent: no
+Status: done · After: 27 · Tyler-dependent: no
 
 **Split.** The PLAN.md row "sessions and reconnect" is about 2,700 lines, so it is two briefs. This one: `Hello`/`Welcome`/`Reject`, build-hash equality, secret + join key, `Bye`/`Superseded`, heartbeat, the client link policy. `28b-reconnect-and-lifecycle.md`: resume hint, epochs, grace, idle, pending-action resend.
 
@@ -68,9 +68,9 @@ Resume hint, epochs, grace, idle, pending resend (M28b). WebSocket, net worker, 
 Rust: `session/golden-hello`, `golden-welcome`, `golden-reject` (frozen prefix bytes), `golden-bye`. Netcode: `handshake/reveal-after-visible-chunks` (false after `Welcome`, true only when the last visible chunk is both received and generated), `handshake/join-then-return-same-player` (same secret → same `PlayerId`, `Connected` not `Joined`), `handshake/version-mismatch`, `handshake/bad-key`, `handshake/full`, `handshake/superseded` (old end gets `4001`, no log record), `handshake/garbage-before-hello`, `handshake/no-hello-timeout`, `handshake/crash-between-table-and-log` (storage fault injection), `liveness/heartbeat-idle-world`, `liveness/dead-after-silence`, `liveness/backoff-schedule` (exact virtual times for one seed), `liveness/stale-socket-ignored`, `liveness/probe-on-visible` (virtual clock: `probe()` on a silently dead link redials within the 0013 Client policy probe deadline instead of waiting out the dead timer; on a live link it changes nothing). Browser: existing single-player tests, plus `secret/persists-across-reload` and `handshake/welcome-view-clamp-limits-zoom` (single-player page whose host view clamp, 0010, is 128 tiles per axis: injected wheel zoom-out stops at 128 in `client.camera.read`; the `Welcome` → `setViewClamp` wiring of 0019 §1).
 
 ## Exit criteria
-- [ ] Every netcode scenario opens with `Hello`; no provisional-join code path remains in the sim host. *(Amended at the gate: every production path handshakes (`createWorldServer`, `worker/sim.ts`); `SimHost.accept` still falls back to `sim_connect` when `handshake` is omitted, which only fake-instance unit tests in `server.test.ts` do. Removing that fallback, making `handshake` required, moved to M28b.)*
-- [ ] Named tests above pass; `Reject` golden bytes are identical from the TS builder and the Rust parser.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Every netcode scenario opens with `Hello`; no provisional-join code path remains in the sim host. *(Amended at the gate: every production path handshakes (`createWorldServer`, `worker/sim.ts`); `SimHost.accept` still falls back to `sim_connect` when `handshake` is omitted, which only fake-instance unit tests in `server.test.ts` do. Removing that fallback, making `handshake` required, moved to M28b.)*
+- [x] Named tests above pass; `Reject` golden bytes are identical from the TS builder and the Rust parser.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test netcode -t handshake` · `pnpm test netcode -t liveness` · `pnpm test rust -t session` · `pnpm test browser -t secret` · `pnpm lint`
@@ -524,3 +524,25 @@ test browser` (whole): 204/204 -- two runs back-to-back under heavy same-day mac
 static button-overlap-intercepts-click wait, not a session/handshake failure; passes alone every
 time, and passed in the whole suite once load settled, 34 s well under the 48 s budget) -- reported
 as a load-dependent flake, not chased further. `pnpm lint` green.
+
+**Gate closed (next session): repeat loops, on a genuinely quiet machine, and the bisection the
+standing instruction asked for.** Pre-loop hygiene: `uptime` near 2-4, no foreign `playwright`/
+`vite`/Chrome (`pgrep`). 15 quiet `browser` repeats: 14/15, one `reference_several_buttons`
+(element not found). 15 under `--load 10`: 14/15, one `reference_new_player_spawns_on_land` (deep
+equality). Both are the same two names the prior session's *contaminated* loops saw, and both
+match the family gate round 2 above already named as a load-dependent flake
+(`reference_ui_smoke_collect_and_inventory`). Mid-run, `uptime`'s 1-minute figure spiked to 10-18
+with no foreign `playwright`/`vite`/Chrome process present -- traced to the suite's own ~200
+parallel Playwright workers, not outside contamination; a `corespotlightd` burst also
+independently pinned one CPU near 100% for over a day and was allowed to finish before the loops
+were accepted as measuring anything.
+
+**Bisected against base `32d34b9` before ruling, per this brief's own standing instruction.**
+(1) Both named tests, run in isolation (`pnpm test browser -t "reference_several_buttons|
+reference_new_player_spawns_on_land"`), passed 15/15 on `32d34b9` and 15/15 on `main` --
+no defect in the tests themselves traceable to M28's code. (2) The full 204-test suite re-run on
+`32d34b9` (quiet loop, same conditions), hit by a load spike mid-run, came back **worse** than
+`main`'s own runs: pass=11 fail=4 hang=4, against `main`'s 14/15 both passes -- on a commit with
+none of M28's handshake changes. **Ruling: pre-existing `browser`-suite concurrency flakiness on
+this machine's hardware, not an M28 regression.** Accepted; recorded as a new Blockers watch item
+in `PROMPT.md` rather than chased further inside this brief.
