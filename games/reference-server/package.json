@@ -1,0 +1,10 @@
+{
+  "name": "reference-server",
+  "private": true,
+  "type": "module",
+  "main": "index.mjs",
+  "dependencies": {
+    "engine": "workspace:*",
+    "ws": "8.18.3"
+  }
+}
