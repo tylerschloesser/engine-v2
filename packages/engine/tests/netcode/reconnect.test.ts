@@ -18,6 +18,7 @@ const SECTION = {
   OwnPlayer: 3,
   ChunkEnterPristine: 4,
   ChunkSnapshots: 5,
+  Presence: 8,
   ChunkKeeps: 11,
 } as const
 
@@ -55,6 +56,34 @@ function frameSectionIds(bytes: Uint8Array): Set<number> {
     off = next + len
   }
   return ids
+}
+
+/** A `Frame`'s own section body for `id`, or `null` if absent (`frameSectionIds`'s own loop,
+ * generalised to hand back the bytes instead of just the id). */
+function sectionBody(bytes: Uint8Array, id: number): Uint8Array | null {
+  let off = 10
+  while (off < bytes.length) {
+    const sid = bytes[off] as number
+    off += 1
+    const [len, next] = readVarint(bytes, off)
+    if (sid === id) return bytes.subarray(next, next + len)
+    off = next + len
+  }
+  return null
+}
+
+/** `wire/presence.rs`'s own `Presence` section body (id 8): a flat list of `who varint · tag u8`
+ * entries (tag `0` = `Sample`, continuing with `age_ticks varint` + a `Codec` payload this helper
+ * never needs to skip past -- `reconnect/presence-vanishes-at-once`'s own two-player scenario means
+ * `witness`'s Presence section never names anyone but `departing`, so reading the first entry's
+ * `who`/`tag` pair is reading the whole section). `false` when the section is absent, empty, or
+ * names a different player, or is a `Sample` (still present), not a `Gone`. */
+function presenceGoneFor(frame: Uint8Array, who: number): boolean {
+  const body = sectionBody(frame, SECTION.Presence)
+  if (!body || body.length === 0) return false
+  const [entryWho, next] = readVarint(body, 0)
+  if (entryWho !== who) return false
+  return body[next] === 1
 }
 
 /** `harness.trace()`'s own encoding (`net-harness.ts`'s `encodeTrace`): `[t u32][link u32][dir
@@ -254,6 +283,49 @@ test('reconnect/within-grace-logs-nothing', async () => {
     harness.assertConverged()
 
     expect(records).toBe(0)
+  } finally {
+    await harness.dispose()
+  }
+})
+
+test('reconnect/presence-vanishes-at-once', async () => {
+  const seed = 3007
+  const harness = await createNetHarness({ fixture: await putsFixture(), seed, clients: 2 })
+  try {
+    const departing = harness.clients[0]
+    const witness = harness.clients[1]
+    if (!departing || !witness) throw new Error('need 2 clients')
+    // The same camera for both, not `square()`'s own per-index spread: a departing presence
+    // sample's relay chunk is derived from its own camera centre (`PutsClient::frame`), so an
+    // identical centre guarantees `witness`'s connection is subscribed to it and therefore already
+    // holds a `presence_relayed` entry for `departing` before the drop -- `host/mod.rs`'s own
+    // `Gone` loop (steps 4-6) only ever fires for a player a connection has *already* been relayed
+    // a sample for.
+    departing.setCamera(square(0))
+    witness.setCamera(square(0))
+    await harness.settle()
+    harness.assertConverged()
+
+    const departingId = departing.status().ownPlayerId
+
+    // Only this episode's own frames: everything already in the trace is join traffic.
+    const beforeLen = harness.trace().length
+
+    // An ungraceful close (no `Bye`): `host/mod.rs`'s own `Host::disconnect` removes the presence
+    // sample immediately, synchronously with this call (`server.ts`'s `connection.onClose` calls
+    // `sim.simDetach` straight away, before any tick) -- 0013 "A disconnected player's state:
+    // Presence vanishes from other clients at once", distinct from the logged `Disconnected`
+    // record, which waits out the 10 s/200-tick grace (`reconnect/after-grace-logs-disconnected`).
+    // A handful of ticks, nowhere near that grace, is ample for the very next `build_frame` for
+    // `witness`'s own connection to relay the `Gone`.
+    harness.link(0).disconnect()
+    await harness.advanceTicks(5)
+
+    const episode = decodeTrace(harness.trace().subarray(beforeLen))
+    const gone = episode.some(
+      (e) => e.link === 1 && e.dir === 0 && presenceGoneFor(e.bytes, departingId),
+    )
+    expect(gone).toBe(true)
   } finally {
     await harness.dispose()
   }
