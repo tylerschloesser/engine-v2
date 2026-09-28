@@ -37,14 +37,19 @@ export const CLOCK_OFF_REVEALED = 28
 export const CLOCK_FIELDS_BYTES = 32
 
 /** `session_state` (docs/plan/28-sessions-and-reconnect.md Seams, extending M16's `0 Connecting, 1
- * Live`): `0 Handshaking | 1 Online | 2 Rejected(reason) | 3 Superseded` (M28b adds `Resyncing`).
- * `Handshaking`/`Online` keep M16's own `0`/`1` values (`Connecting`/`Live` renamed, not
- * renumbered) so a reader that only ever compared against `1` for "live" is unaffected. */
+ * Live`): `0 Handshaking | 1 Online | 2 Rejected(reason) | 3 Superseded | 4 Resyncing`
+ * (docs/plan/28b-reconnect-and-lifecycle.md step 2). `Handshaking`/`Online` keep M16's own `0`/`1`
+ * values (`Connecting`/`Live` renamed, not renumbered) so a reader that only ever compared against
+ * `1` for "live" is unaffected. `Resyncing` is set the instant a second `Welcome` is detected on an
+ * already-`Online` connection (0005 "clients see `Resyncing`, then the reconnect-style full
+ * resync") and cleared back to `Online` once that `Welcome` is applied -- the same transition a
+ * plain join makes from `Handshaking`, so "proceeds as after a join" (Scope) holds for both. */
 export const SessionState = {
   Handshaking: 0,
   Online: 1,
   Rejected: 2,
   Superseded: 3,
+  Resyncing: 4,
 } as const
 export type SessionState = (typeof SessionState)[keyof typeof SessionState]
 

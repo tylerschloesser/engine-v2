@@ -191,6 +191,20 @@ pub fn sim_attach<T: Instance>(slot: &Slot<T>, conn: u32, len: u32) -> i32 {
     }
 }
 
+/// docs/plan/28b-reconnect-and-lifecycle.md step 2: `sim_resync(conn, epoch) -> len`, or
+/// `-(status)` -- the same shape as `sim_attach` minus the `Rx` input (there is nothing to parse,
+/// only a fresh `Welcome` to build and send). `tx` is the whole `Tx` region.
+pub fn sim_resync<T: Instance>(slot: &Slot<T>, conn: u32, epoch: u32) -> i32 {
+    let built = slot.sim().and_then(|rt| {
+        rt.inst
+            .sim_resync(conn, epoch, rt.layout.bytes_mut(RegionId::Tx))
+    });
+    match built {
+        Ok(len) => len as i32,
+        Err(status) => -(status as i32),
+    }
+}
+
 pub fn sim_detach<T: Instance>(slot: &Slot<T>, conn: u32) -> Status {
     match slot.sim() {
         Ok(rt) => rt.inst.sim_detach(conn),

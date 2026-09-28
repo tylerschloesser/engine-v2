@@ -240,6 +240,15 @@ export interface Client {
    * hidden-boundary snapshot -- `host: { kind: 'local', persist: true }` only; never fires otherwise.
    * Returns an unsubscribe function, the same convention as `onActionResult`/`onUi`. */
   onStorage(cb: (status: StorageStatus) => void): () => void
+  /** docs/plan/28b-reconnect-and-lifecycle.md step 2 (Seams: "a per-event subscription in the
+   * style of `client.onUi`; there is no `EngineEvent` union"): fires once, with no payload, the
+   * instant this client's own linked connection detects a *second* `Welcome` on an already-`Online`
+   * session (0013 Reconnect / 0005 Panic recovery: after a host restart, panic recovery, or an
+   * upgrade bump) -- `session_state` reads `Resyncing` at the moment this fires and `Online` again
+   * immediately after (the same terminal state a plain join's own `Welcome` reaches). Never fires
+   * for a topology with no linked client worker (`host.kind !== 'local'`, or M29's net worker,
+   * Non-scope here). Returns an unsubscribe function. */
+  onResyncing(cb: () => void): () => void
   /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Seams: packs the running world's own
    * key set (0005 Storage) into a gzip archive (`storage/archive.ts`) and resolves with it as a
    * `Blob`. Parks the sim worker, pauses it (snapshot-if-dirty, flush) only if it was not already
@@ -796,6 +805,9 @@ export function createClient(options: ClientOptions): Client {
       onStorage(): () => void {
         throw err
       },
+      onResyncing(): () => void {
+        throw err
+      },
       exportWorld(): Promise<Blob> {
         throw err
       },
@@ -1179,6 +1191,23 @@ export function createClient(options: ClientOptions): Client {
     }
   }
 
+  // docs/plan/28b-reconnect-and-lifecycle.md step 2: `client.onResyncing` (Seams: "a per-event
+  // subscription in the style of `client.onUi`") -- fired by `onWelcome` below whenever the linked
+  // client worker posts `client-resyncing` (a second `Welcome` on an already-`Online` connection).
+  // There is no `EngineEvent` union (Scope): this is its own dedicated subscription, the same
+  // shape `onStorage`/`onUi` already are.
+  type ResyncingListener = () => void
+  const resyncingListeners: ResyncingListener[] = []
+
+  function onResyncing(cb: () => void): () => void {
+    const listener = cb as ResyncingListener
+    resyncingListeners.push(listener)
+    return () => {
+      const i = resyncingListeners.indexOf(listener)
+      if (i >= 0) resyncingListeners.splice(i, 1)
+    }
+  }
+
   // docs/plan/23-persistence-opfs-and-lifecycle.md Planning decision 5: `navigator.storage.persist()`
   // called exactly once, from the first engine-observed `pointerdown`/`keydown` or the first
   // `client.dispatch`, whichever comes first -- and only when `Persistence.open` reported `created`
@@ -1204,8 +1233,14 @@ export function createClient(options: ClientOptions): Client {
   // docs/plan/28-sessions-and-reconnect.md step 5: the linked client worker's own one-off
   // `client-welcome` message (`worker/client-net.ts`'s `NetPumpHandshake.onAttached`) -- only main
   // can call `cameraIntegrator.setViewClamp` (0019 §1), so this is the one place `Welcome`'s own
-  // view clamps actually reach the camera.
+  // view clamps actually reach the camera. docs/plan/28b-reconnect-and-lifecycle.md step 2:
+  // `client-resyncing` (a *second* `Welcome`, posted instead of `client-welcome`) has no view
+  // clamps to forward -- it fans out to `onResyncing`'s own listeners instead.
   function onWelcome(m: ClientLifecycleMessage): void {
+    if (m.type === 'client-resyncing') {
+      for (const l of resyncingListeners) l()
+      return
+    }
     cameraIntegrator.setViewClamp(m.viewMaxTilesPerAxis)
   }
 
@@ -1584,6 +1619,7 @@ export function createClient(options: ClientOptions): Client {
     onActionResult,
     onUi,
     onStorage,
+    onResyncing,
     exportWorld,
     importWorld,
     deleteWorld,

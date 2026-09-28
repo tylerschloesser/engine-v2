@@ -97,6 +97,11 @@ export interface HeadlessClientStatus {
    * scenario proving a link *stayed* up (`liveness/heartbeat-idle-world`) watches this stay `1`
    * over a long idle stretch; one that forces a redial watches it increment. */
   linkUpCount: number
+  /** docs/plan/28b-reconnect-and-lifecycle.md step 2: the clock block's own raw `session_state`
+   * (`SessionState`, `clock-block.ts`) -- `live` above collapses everything to a boolean, so a
+   * resync scenario reads this instead to see `Resyncing` (`4`) on the way through, distinct from
+   * `Online` (`1`) before and after. */
+  sessionState: number
 }
 
 export interface HeadlessClient {
@@ -484,6 +489,7 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
         ownPlayerId,
         revealed: clockScratch[CLOCK_FIELD.Revealed] === 1,
         linkUpCount,
+        sessionState: clockScratch[CLOCK_FIELD.SessionState] as number,
       }
     },
     pump,

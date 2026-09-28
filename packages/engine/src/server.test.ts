@@ -72,6 +72,7 @@ function fakeSim(overrides: Partial<SimInstance> = {}): SimInstance {
     rxBytes: () => 0,
     txBytes: () => 0,
     simAttach: () => ({ len: 0 }),
+    simResync: () => ({ len: 0 }),
     simDetach: () => Status.Ok,
     simHasPlayer: () => 0,
     ...overrides,
@@ -184,6 +185,7 @@ test('simhost_seal_precedes_tick', () => {
     rxBytes: () => 0,
     txBytes: () => 0,
     simAttach: () => ({ len: 0 }),
+    simResync: () => ({ len: 0 }),
     simDetach: () => Status.Ok,
     simHasPlayer: () => 0,
   }

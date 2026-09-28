@@ -222,6 +222,12 @@ export interface SimInstance {
     conn: number,
     input: Uint8Array,
   ): { len: number; bytes?: Uint8Array; supersededConn?: number }
+  /** docs/plan/28b-reconnect-and-lifecycle.md step 2: `sim_resync(conn, epoch)` -- sends a fresh
+   * `Welcome` on an already-open connection, carrying the host's new `epoch`. Returns `Welcome`
+   * bytes (a view over `Tx`, valid only until the next call that touches it) or throws on a
+   * negative/malformed status (an unknown `conn`, which `SimHost.resyncAll()` never passes: it
+   * only ever iterates its own open connection table). */
+  simResync(conn: number, epoch: number): { len: number; bytes?: Uint8Array }
   /** docs/plan/28-sessions-and-reconnect.md: frees `conn`'s slot (`sim_detach`, same effect as
    * `sim_disconnect`). `Status` (numeric); tolerates an unknown/already-freed `conn`. */
   simDetach(conn: number): number
@@ -331,6 +337,14 @@ export function wrapEngineInstance(inst: EngineInstance): SimInstance {
       const superseded = resultRegion ? readU32LE(resultRegion.u8, 0) : NO_SUPERSEDED_CONN
       if (superseded === NO_SUPERSEDED_CONN) return { len: raw, bytes: txRegion.u8 }
       return { len: raw, bytes: txRegion.u8, supersededConn: superseded }
+    },
+    simResync: (conn, epoch) => {
+      const raw = inst.call2(inst.x.sim_resync, conn, epoch)
+      if (raw < 0) throw new Error(`sim_resync failed: status ${-raw}`)
+      if (raw === 0) return { len: 0 }
+      const txRegion = inst.region(RegionId.Tx)
+      if (!txRegion) throw new Error('sim_resync: len > 0 but the Tx region is absent')
+      return { len: raw, bytes: txRegion.u8 }
     },
     simDetach: (conn) => inst.call1(inst.x.sim_detach, conn),
     simHasPlayer: (player) => inst.call1(inst.x.sim_has_player, player),
@@ -444,6 +458,26 @@ export interface SimHost {
    * to call per connection once `accept` has returned.
    */
   accept(connection: Connection): number
+  /** docs/plan/28b-reconnect-and-lifecycle.md step 2: the current session epoch (0013/0005) --
+   * `0` for a brand-new world, loaded from `ManifestV1.epoch` on a reload, bumped by
+   * `bumpEpoch()`. Carried in every `Welcome` (`attach`'s own `Welcome.epoch` field). */
+  readonly epoch: number
+  /** docs/plan/28b-reconnect-and-lifecycle.md step 2: increments `epoch` and, when a `Persistence`
+   * is wired in, writes the bump back to the manifest (`Storage.write`, the same fire-and-forget
+   * convention `Persistence`'s own manifest rewrites already use) before returning -- so the new
+   * value is already visible to the very next `accept()`/`Welcome` in the same synchronous turn,
+   * durability aside. Returns the new epoch. Callers wire this to `SimHost.onRecovered`
+   * (`createSimHostFromInstance`'s own default, below) rather than calling it directly in
+   * production; a test may still call it to force a foreign-epoch resume hint. */
+  bumpEpoch(): number
+  /** docs/plan/28b-reconnect-and-lifecycle.md step 2: sends a fresh `Welcome` (carrying the
+   * current `epoch`) on every currently open connection and resets each one's own subscription
+   * bookkeeping so the next tick treats every chunk it holds as unsent (`Host::resync`'s own doc
+   * comment) -- the resync signal for a live connection after panic recovery or an upgrade bump
+   * (Planning decisions "A second `Welcome` is the resync signal"). A connection whose `Welcome`
+   * fails to build (an unknown `conn` on the Rust side, never expected: this only ever iterates
+   * `SimHost`'s own open connection table) is skipped, not thrown. */
+  resyncAll(): void
 }
 
 /** docs/plan/28-sessions-and-reconnect.md Provides: what `SimHost.accept`'s real handshake needs
@@ -528,6 +562,13 @@ export function createSimHostFromInstance(
   let genesisDone = false
   let running = false
   let stopTimer: (() => void) | null = null
+
+  // docs/plan/28b-reconnect-and-lifecycle.md step 2: the session epoch (0013/0005), loaded from
+  // `persistence.epoch` when a `Persistence` is wired in (`ManifestV1.epoch`, reserved by M22),
+  // else `0` for a topology with no persistence (still real: `bumpEpoch()` and `resyncAll()` work
+  // either way, just without a durable write-back). Read by `pumpHandshakes` for every `Welcome`
+  // an accept produces, and by `resyncAll()` for the second `Welcome` an epoch bump sends.
+  let epoch = persistence?.epoch ?? 0
 
   // docs/plan/24-recovery-and-migration.md, Planning decisions 3 (the loop guard): "more than 3
   // recoveries without 1,200 successfully ticked ticks in between is fatal". `recoveryCount` is how
@@ -636,7 +677,7 @@ export function createSimHostFromInstance(
       if (state?.status !== 'awaiting-attach') continue // superseded/closed meanwhile
       const input = buildAttachInput({
         playerId: entry.playerId,
-        epoch: 0,
+        epoch,
         joined: entry.joined,
         presence: entry.presence,
         helloTail: entry.helloTail,
@@ -998,6 +1039,30 @@ export function createSimHostFromInstance(
     },
     counters,
     logSink: null,
+    get epoch() {
+      return epoch
+    },
+    bumpEpoch() {
+      epoch = persistence ? persistence.bumpEpoch() : epoch + 1
+      return epoch
+    },
+    resyncAll() {
+      for (let conn = 0; conn < MAX_CONNS; conn++) {
+        const connection = conns[conn]
+        if (!connection) continue
+        let built: { len: number; bytes?: Uint8Array }
+        try {
+          built = sim.simResync(conn, epoch)
+        } catch {
+          continue
+        }
+        if (built.len <= 0 || !built.bytes) continue
+        const withLen = connection as Connection & {
+          send: (cls: MsgClass, bytes: Uint8Array, len?: number) => void
+        }
+        withLen.send(MsgClass.ReliableOrdered, built.bytes, built.len)
+      }
+    },
     accept(connection: Connection): number {
       let conn = -1
       for (let i = 0; i < MAX_CONNS; i++) {
@@ -1215,9 +1280,21 @@ export function worldServerTestHandle(server: WorldServer): SimHost {
  * as its own named function (rather than widening that one's return type) so a reader sees
  * exactly which test-only surface a given call site needs. Test-only, `engine/test`'s own
  * re-export: never imported by production code. */
-export function serverInternals(server: WorldServer): { handshakesSettled(): Promise<void> } {
+export function serverInternals(server: WorldServer): {
+  handshakesSettled(): Promise<void>
+  readonly isTicking: boolean
+} {
   const h = worldServerTestHandle(server)
-  return { handshakesSettled: () => h.handshakesSettled() }
+  return {
+    handshakesSettled: () => h.handshakesSettled(),
+    // docs/plan/28b-reconnect-and-lifecycle.md Seams: `serverInternals(server).isTicking` -- a thin
+    // wrapper over `SimHost.running` (already "whether the pacing timer is currently armed"), the
+    // same named seam step 4's idle-world tests need ("the tick counter frozen" is `counters.
+    // ticksRun` not advancing; "isTicking" is this: whether the pacing timer would even try).
+    get isTicking() {
+      return h.running
+    },
+  }
 }
 
 export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldServer {
@@ -1269,6 +1346,25 @@ export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldSe
         for (const c of acceptedConnections) c.close(0)
         host.onFatal?.(f)
       }
+      // docs/plan/28b-reconnect-and-lifecycle.md step 2 (0005 Panic recovery 2: "the host bumps
+      // the session epoch; clients see Resyncing ... and take a full resync"): every successful
+      // `recover()` bumps the epoch and resyncs every still-open connection with it -- the same
+      // per-call-site wiring `onFatal` just above already uses (`createSimHostFromInstance`
+      // itself leaves `onRecovered` `null`, like `onFatal`; a raw caller that builds its own host
+      // directly, e.g. a native test, opts in the same explicit way).
+      h.onRecovered = () => {
+        h.bumpEpoch()
+        h.resyncAll()
+      }
+      // docs/plan/28b-reconnect-and-lifecycle.md step 2 (0013: "`epoch` increments at every host
+      // start"): a brand-new world (`outcome === 'created'`) starts at the manifest's own initial
+      // `0` -- every other outcome (`'loaded'`, `'recovered'`, `'upgraded'`) is *this* process
+      // finding an *existing* world on disk, i.e. a real restart, so it bumps once here, before
+      // `h.start()`/the first `accept()` can ever build a `Welcome` off the stale value. A live
+      // panic `recover()` call later in this same process bumps again on its own (`onRecovered`'s
+      // own default wiring, `createSimHostFromInstance`) -- the two never double up, since this one
+      // runs at most once, here, before any tick has run.
+      if (opened.outcome !== 'created') h.bumpEpoch()
       simHost = h
       worldServerHandles.set(worldServer, h)
       h.start()

@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 29;
+pub const ABI_VERSION: u32 = 30;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -241,6 +241,16 @@ pub trait Instance: Sized + 'static {
     /// comment has the exact layout). `tx` is the whole `Tx` region (same crossing shape as
     /// `sim_build_frame`): on success, `Welcome` bytes are written there and their length returned.
     fn sim_attach(&mut self, _conn: u32, _input: &[u8], _tx: &mut [u8]) -> Result<u32, Status> {
+        Err(Status::Unsupported)
+    }
+
+    /// docs/plan/28b-reconnect-and-lifecycle.md step 2 (`ABI_VERSION` 29 -> 30): sends a fresh
+    /// `Welcome` on an already-open connection (`host::Host::resync`), carrying `epoch` (the
+    /// host's own new epoch after `SimHost.bumpEpoch()`) -- the resync signal for a live
+    /// connection after panic recovery or an upgrade bump (Planning decisions "A second `Welcome`
+    /// is the resync signal"). `tx` is the whole `Tx` region, same crossing shape as `sim_attach`;
+    /// on success `Welcome` bytes are written there and their length returned.
+    fn sim_resync(&mut self, _conn: u32, _epoch: u32, _tx: &mut [u8]) -> Result<u32, Status> {
         Err(Status::Unsupported)
     }
 
@@ -835,6 +845,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_attach(conn: u32, len: u32) -> i32 {
             $crate::abi::sim_attach(&__ENGINE_SLOT, conn, len)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_resync(conn: u32, epoch: u32) -> i32 {
+            $crate::abi::sim_resync(&__ENGINE_SLOT, conn, epoch)
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_detach(conn: u32) -> u32 {

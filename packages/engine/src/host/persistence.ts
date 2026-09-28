@@ -70,7 +70,9 @@ export interface ManifestSegment {
 }
 
 /** Planning decisions 3, verbatim shape: `{ v: 1, worldId, epoch: 0, params, created, segments }`.
- * `epoch` is reserved (M28b owns and increments it); `params` is `WorldConfig.params`, plus one
+ * `epoch` starts at `0` for a brand-new world and is owned and incremented by M28b
+ * (`Persistence.epoch`/`bumpEpoch()`, below: docs/plan/28b-reconnect-and-lifecycle.md step 2 --
+ * "the epoch lives in the manifest, not the log"); `params` is `WorldConfig.params`, plus one
  * addition (docs/plan/24b-upgrade-and-migration.md Scope): `chunkBits`, the running build's own
  * `G::CHUNK_BITS` (read through the `chunk_bits()` ABI export, never user-authored) at the moment
  * the world was created -- `params` is no longer *quite* verbatim `cfg.params`, since this one field
@@ -78,7 +80,7 @@ export interface ManifestSegment {
 export interface ManifestV1 {
   v: 1
   worldId: string
-  epoch: 0
+  epoch: number
   params: WorldConfig['params'] & { chunkBits?: number }
   created: IdentityJson
   segments: ManifestSegment[]
@@ -876,6 +878,25 @@ export class Persistence {
   snapshotIfDirty(): void {
     this.checkFatal()
     if (this.isDirty()) this.snapshotNow()
+  }
+
+  /** docs/plan/28b-reconnect-and-lifecycle.md step 2: the current session epoch (`ManifestV1.
+   * epoch`), loaded once at `create`/`open` and bumped only by `bumpEpoch()`. */
+  get epoch(): number {
+    return this.manifest.epoch
+  }
+
+  /** docs/plan/28b-reconnect-and-lifecycle.md step 2: increments `epoch` and rewrites the manifest
+   * (`Storage.write`, the same fire-and-forget convention `snapshotNow`'s own manifest rewrite
+   * uses above -- "the epoch is durable ... every bump is written back with `Storage.write` before
+   * the next `accept` or `Welcome`": synchronous here, so the write is issued before this call
+   * returns, and `this.manifest.epoch` is already the new value for whatever `SimHost.accept`/
+   * `resyncAll` call happens next in the same synchronous turn -- durability of the write itself
+   * follows `Storage`'s own contract (0005), not this call's). Returns the new epoch. */
+  bumpEpoch(): number {
+    this.manifest = { ...this.manifest, epoch: this.manifest.epoch + 1 }
+    this.storage.write(this.keys.manifest, textEncoder.encode(JSON.stringify(this.manifest)))
+    return this.manifest.epoch
   }
 
   private sync(): void {

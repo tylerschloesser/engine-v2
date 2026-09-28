@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 29
+export const ABI_VERSION = 30
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -122,6 +122,11 @@ export const ABI_EXPORTS = {
   // superseded (0013 "the old connection gets `Bye{Superseded}`"), `0xFFFFFFFF` for "none"
   // -- the same in-place widening `client_clock_stats` used.
   sim_attach: { role: 'sim', params: 2, result: 'len' },
+  // docs/plan/28b-reconnect-and-lifecycle.md step 2 (`ABI_VERSION` 29 -> 30): sends a fresh
+  // `Welcome` (new `epoch`) on an already-open connection -- the resync signal after panic
+  // recovery or an upgrade bump, or a host restart (`SimHost.resyncAll()`). Same `len`/`-(status)`
+  // shape as `sim_attach`, minus the `Rx` input (nothing to parse).
+  sim_resync: { role: 'sim', params: 2, result: 'len' },
   // docs/plan/28-sessions-and-reconnect.md: frees `conn`'s slot, same as `sim_disconnect` -- a
   // distinct export name so the handshake path (`sim_attach`) and its own teardown pair cleanly,
   // without retiring `sim_disconnect` (still real: native tests, `testkit::Loopback`, recovery).

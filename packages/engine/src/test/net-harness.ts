@@ -38,7 +38,7 @@ import {
   worldServerTestHandle,
 } from '../server.js'
 import { loadGame } from '../server-node.js'
-import { memoryStorage } from '../storage/memory.js'
+import { type MemoryStorage, memoryStorage } from '../storage/memory.js'
 import type { Storage } from '../storage/types.js'
 import { createHeadlessClient, type HeadlessClient } from './headless-client.js'
 import { createVirtualClock, type VirtualClock } from './virtual-clock.js'
@@ -111,6 +111,20 @@ export interface NetHarness {
    * hand-rolled bytes to it directly (`connection.send(...)`) and reads the server's replies off
    * `connection.onMessage`, to test the handshake parser/`Reject`/timeout paths byte for byte. */
   connectRaw(): Connection
+  /** docs/plan/28b-reconnect-and-lifecycle.md Seams: `restartServer(opts?: { crash?: boolean })` --
+   * `opts.crash` false/omitted: `server.stop()` (a clean shutdown: snapshot-if-dirty, flush) then a
+   * fresh `createWorldServer` over the *same* storage. `opts.crash: true`: skips `stop()` entirely
+   * (0005 "Tab close, worker or renderer crash, WASM panic": no clean boundary at all) and builds
+   * the fresh server over `storage.crashClone()` instead -- an independent copy, so nothing this
+   * call does can affect a reference to the pre-crash storage a scenario kept. Either way the new
+   * server's own epoch is the stored one plus one: `createWorldServer` itself bumps the epoch once
+   * whenever `Persistence.open` finds an *existing* world (0013: "`epoch` increments at every host
+   * start"; `server.ts`'s own doc comment on that call site), before its first `accept()`/`Welcome`
+   * can ever read the stale value -- nothing extra to do here. Every open connection from the *old*
+   * server is left exactly as `stop()`/a crash leaves it (this milestone's own scope: reconnecting
+   * them onto the new server is `link(i).reconnect()`'s job, step 3/4). Existing `clients`/`link(i)`
+   * entries are untouched; `addClient()` after this call accepts into the new server. */
+  restartServer(opts?: { crash?: boolean }): Promise<void>
   advanceTo(t: number): Promise<void>
   advanceTicks(n: number): Promise<void>
   settle(): Promise<void>
@@ -172,7 +186,12 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
   const gameWorldgen = worldCfg.params.worldgen
 
   const clock = createVirtualClock()
-  const storage = memoryStorage()
+  // docs/plan/28b-reconnect-and-lifecycle.md step 2: `let`, not `const` -- `restartServer` (Seams)
+  // replaces both with a fresh pair on the same (or a `crashClone`d) storage. Every closure below
+  // that reads `storage`/`server`/`simHost` (a `function` declaration, not a value captured at
+  // definition time) sees the post-restart value on its very next call, including `makeClient`'s
+  // own `server.accept(hostSide)` for a client added after a restart.
+  let storage = memoryStorage()
 
   // A throwaway instance, read once and discarded, only to learn the real tick rate before ticking
   // (Deviations: `SimHost` itself exposes no `tickHz()` -- only the pacing arithmetic already
@@ -181,16 +200,20 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
   const tickHzProbe = instantiate(wasm, Role.Sim, buildSimInstanceConfig(worldCfg))
   const tickMs = Math.round(1000 / (tickHzProbe.call0(tickHzProbe.x.tick_hz) || 20))
 
-  const server = createWorldServer(worldCfg, {
-    wasm,
-    storage,
-    clock: { now: () => clock.now() },
-    timer: { every: () => () => {} }, // ticking is `simHost.stepTick`, driven from `advanceTicks`
-  })
+  function buildServer(onStorage: MemoryStorage): WorldServer {
+    return createWorldServer(worldCfg, {
+      wasm,
+      storage: onStorage,
+      clock: { now: () => clock.now() },
+      timer: { every: () => () => {} }, // ticking is `simHost.stepTick`, driven from `advanceTicks`
+    })
+  }
+
+  let server = buildServer(storage)
   await server.ready
   // The live `SimHost` `createWorldServer` owns (module doc comment above): `regionHash`/
   // `stepTick`/`counters` all read live, connected state no reopened reader can reach.
-  const simHost = worldServerTestHandle(server)
+  let simHost = worldServerTestHandle(server)
 
   const trace: TraceEntry[] = []
   const nextLink = { i: 0 }
@@ -378,8 +401,16 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
 
   return {
     clock,
-    server,
-    storage,
+    // docs/plan/28b-reconnect-and-lifecycle.md step 2: getters, not plain fields -- `restartServer`
+    // (below) reassigns the closure-scoped `server`/`storage` `let` bindings, and every caller that
+    // reads `harness.server`/`harness.storage` after a restart must see the new pair, not the one
+    // this object literal happened to close over when it was built.
+    get server() {
+      return server
+    },
+    get storage() {
+      return storage
+    },
     clients,
     link(i) {
       const e = entries[i]
@@ -390,6 +421,14 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       const client = makeClient(secret)
       clients.push(client)
       return client
+    },
+    async restartServer(opts) {
+      const nextStorage = opts?.crash ? storage.crashClone() : storage
+      if (!opts?.crash) await server.stop()
+      storage = nextStorage
+      server = buildServer(storage)
+      await server.ready
+      simHost = worldServerTestHandle(server)
     },
     connectRaw() {
       const linkIdx = nextLink.i++

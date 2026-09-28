@@ -486,9 +486,18 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   simHost.onFatal = (f) => {
     shell.fatal(`sim fatal at tick ${f.tick}: ${f.message}`)
   }
+  // docs/plan/28b-reconnect-and-lifecycle.md step 2 (0005 Panic recovery 2): the same per-call-site
+  // wiring `server.ts`'s own `createWorldServer` uses -- every successful `recover()` (a live panic,
+  // during single-player play) bumps the epoch and resyncs the one linked connection with it.
+  simHost.onRecovered = () => {
+    simHost.bumpEpoch()
+    simHost.resyncAll()
+  }
   // docs/plan/24b-upgrade-and-migration.md: fired once, for the upgrade `Persistence.open` itself
-  // just performed (never a post-panic recovery) -- `onRecovered` is otherwise `null` here (M28b
-  // owns wiring a real production handler; this call is a no-op until one is set).
+  // just performed (never a post-panic recovery) -- the real production handler just wired above
+  // is already live by the time this runs, so this is not a no-op (only relevant here since
+  // load-time `Persistence.open` decides the upgrade path before any connection exists to resync --
+  // `resyncAll()` itself is a no-op with none open yet).
   if (openedUpgrade) {
     simHost.onRecovered?.({
       reason: 'upgrade',

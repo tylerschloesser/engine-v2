@@ -251,6 +251,41 @@ fn pristine_chunk_enters_as_coord_only() {
     );
 }
 
+/// docs/plan/28b-reconnect-and-lifecycle.md step 2: `Host::resync` sends a fresh `Welcome`
+/// (carrying the given epoch) and resets the connection's own subscription bookkeeping to empty,
+/// so the very next tick's own `subs.update` re-enters every chunk the connection's last-known
+/// camera still wants (Seams: "treats every chunk as unsent").
+#[test]
+fn resync_sends_welcome_and_marks_every_chunk_unsent() {
+    let mut lb = loopback(4);
+    let (idx, _who) = add_client(&mut lb, 0);
+    lb.set_camera(idx, small_camera(0, 0));
+    lb.step();
+    let conn = lb.conn(idx);
+    let held_before = lb.host.debug_subscribed(conn);
+    assert!(
+        !held_before.is_empty(),
+        "the client must hold at least one chunk before resyncing"
+    );
+
+    let mut buf = vec![0u8; 4096];
+    let mut sink = engine::bytes::SliceSink::new(&mut buf);
+    lb.host.resync(conn, 7, &mut sink).unwrap();
+    let n = sink.finish().unwrap();
+    let welcome = engine::session::read_welcome::<LGame>(&buf[..n]).unwrap();
+    assert_eq!(welcome.epoch, 7);
+
+    // The connection's own subscription bookkeeping is empty right after `resync` -- nothing has
+    // "entered" again yet, that is the next tick's own job.
+    assert!(lb.host.debug_subscribed(conn).is_empty());
+
+    // One more tick, same camera as before: every previously-held chunk re-enters, proving the
+    // reset was real (not merely a no-op that happened to leave the set already empty).
+    lb.step();
+    let held_after = lb.host.debug_subscribed(conn);
+    assert_eq!(held_after.len(), held_before.len());
+}
+
 #[test]
 fn modified_chunk_enters_as_snapshot_then_deltas_from_next_tick() {
     let mut lb = loopback(3);

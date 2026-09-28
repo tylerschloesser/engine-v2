@@ -154,6 +154,13 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
             })
           },
         },
+        // docs/plan/28b-reconnect-and-lifecycle.md step 2: a second `Welcome` on this same linked
+        // connection (a panic recovery or an upgrade bump, this milestone's own `resyncAll()`) --
+        // `client-resyncing` is the same one-off "setup, fatal errors and lifecycle only"
+        // notification `client-welcome` already is, forwarded to `Client.onResyncing` listeners.
+        () => {
+          shell.post({ type: 'client-resyncing' })
+        },
       )
     : null
 

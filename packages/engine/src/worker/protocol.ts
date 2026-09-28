@@ -181,6 +181,7 @@ export const POST_SETUP_MESSAGE_TYPES: readonly string[] = [
   'delete-world-result',
   'world-op-error',
   'client-welcome',
+  'client-resyncing',
 ]
 
 /** docs/plan/23-persistence-opfs-and-lifecycle.md Seams (Provides): the sim worker's own lifecycle
@@ -220,12 +221,19 @@ export type SimLifecycleMessage =
  * needs (0019 §1's `setViewClamp`, which only main can call) without polling for them. A distinct
  * type from `SimLifecycleMessage` (that one is the sim worker's own, by its own doc comment) --
  * `client.ts`'s `setupWorker` forwards this through its own dedicated `onWelcome` callback. */
-export type ClientLifecycleMessage = {
-  type: 'client-welcome'
-  playerId: number
-  viewMaxTilesPerAxis: number
-  viewMaxChunks: number
-}
+export type ClientLifecycleMessage =
+  | {
+      type: 'client-welcome'
+      playerId: number
+      viewMaxTilesPerAxis: number
+      viewMaxChunks: number
+    }
+  /** docs/plan/28b-reconnect-and-lifecycle.md step 2: the same one-off shape as `client-welcome`
+   * above, posted instead when the `Welcome` a linked client worker just applied was a *second*
+   * one (a resync, `worker/client-net.ts`'s own `onResyncing` callback) -- `client.ts`'s
+   * `onWelcome` dispatches this to `Client.onResyncing`'s own listener list rather than the camera
+   * (there is no view-clamp change to forward: the world's own clamps do not move on a resync). */
+  | { type: 'client-resyncing' }
 
 /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: main -> sim worker, parked-only (like
  * `TestCallMessage`, whose own doc comment gives the reason: a worker blocked in `Atomics.wait`

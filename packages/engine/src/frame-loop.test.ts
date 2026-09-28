@@ -75,6 +75,9 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
     onStorage(): () => void {
       return () => {}
     },
+    onResyncing(): () => void {
+      return () => {}
+    },
     // docs/plan/23-persistence-opfs-and-lifecycle.md step 5: unused by anything `frame-loop.ts`
     // itself exercises, same precedent as `dispatch`/`clock` above.
     exportWorld(): Promise<Blob> {

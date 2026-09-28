@@ -322,6 +322,25 @@ impl<G: Game> ClientCore<G> {
         &self.overlay
     }
 
+    /// docs/plan/28b-reconnect-and-lifecycle.md step 2: called on every `Welcome` (`game_instance
+    /// .rs`'s `client_on_welcome`, both a plain join's first one and a resync's second one --
+    /// idempotent on an already-empty replica, so the caller need not distinguish the two). Drops
+    /// every currently held chunk exactly as an ordinary `ChunkLeaves` entry would (`Replica::
+    /// apply_leave`'s own per-chunk teardown: frees the overlay, drops entities no longer
+    /// overlapping any held chunk) and clears the prediction overlay (`Overlay::clear`) -- 0005
+    /// "clients ... take a full resync": nothing stale renders before the resync's own
+    /// `ChunkEnterPristine`/`ChunkSnapshots` entries repopulate them. The pending queue itself is
+    /// untouched (Non-scope: resending it is step 3's own "Pending-action resend"; the overlay it
+    /// would otherwise still reference is already gone, so the next reconcile pass rebuilds it from
+    /// scratch against the fresh replica).
+    pub fn reset_for_resync(&mut self) {
+        let chunks: Vec<ChunkCoord> = self.replica.held_chunks().collect();
+        for chunk in chunks {
+            self.replica.apply_leave(chunk);
+        }
+        self.overlay.clear();
+    }
+
     /// M25: every action still pending, oldest first (`testkit::Loopback::pending`).
     pub fn pending(&self) -> impl Iterator<Item = &Pending<G>> {
         self.pending.iter()

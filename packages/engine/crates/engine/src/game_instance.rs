@@ -438,6 +438,14 @@ where
         }
     }
 
+    /// docs/plan/28b-reconnect-and-lifecycle.md step 2.
+    fn sim_resync(&mut self, conn: u32, epoch: u32, tx: &mut [u8]) -> Result<u32, Status> {
+        match self {
+            GameInstance::Sim(h) => h.sim_resync(conn, epoch, tx),
+            _ => Err(Status::WrongRole),
+        }
+    }
+
     fn sim_detach(&mut self, conn: u32) -> Status {
         match self {
             GameInstance::Sim(h) => h.sim_detach(conn),
@@ -1135,6 +1143,11 @@ where
                     Ok(w) => w,
                     Err(_) => return Status::Decode,
                 };
+                // docs/plan/28b-reconnect-and-lifecycle.md step 2: idempotent on a plain join's
+                // first `Welcome` (the replica is already empty then) -- a resync's own second
+                // `Welcome` is what makes this real (`ClientCore::reset_for_resync`'s own doc
+                // comment).
+                c.core.reset_for_resync();
                 c.core.replica_mut().set_own_player(welcome.player_id);
                 if let Some(sample) = &welcome.presence {
                     c.core.seed_presence(sample);

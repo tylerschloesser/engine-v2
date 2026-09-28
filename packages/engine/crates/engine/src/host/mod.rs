@@ -1131,7 +1131,15 @@ impl<G: Game> Host<G> {
             last_sent_tick: self.last_tick,
         });
 
-        // -- Welcome --------------------------------------------------------------------------
+        self.write_welcome_for(player, epoch, welcome_sink);
+        Ok(())
+    }
+
+    /// The `Welcome` tail both [`Host::attach`] and [`Host::resync`] (docs/plan/
+    /// 28b-reconnect-and-lifecycle.md step 2) share: everything after a connection's own `player`/
+    /// `epoch` are decided is read straight off live sim/presence state, identically whether this
+    /// is a first join, a reconnect, or a resync on an already-open connection.
+    fn write_welcome_for(&self, player: PlayerId, epoch: u32, welcome_sink: &mut impl ByteSink) {
         let tick = self.sim.as_ref().map_or(0, |s| s.tick().0);
         let last_processed_action_seq = self
             .sim
@@ -1156,6 +1164,35 @@ impl<G: Game> Host<G> {
                 presence: echoed_presence.as_ref(),
             },
         );
+    }
+
+    /// docs/plan/28b-reconnect-and-lifecycle.md step 2: sends a fresh `Welcome` on an already-open
+    /// connection, carrying `epoch` (the host's own new epoch after `SimHost.bumpEpoch()`) -- 0005
+    /// "clients see `Resyncing`, then the reconnect-style full resync"; Planning decisions "A
+    /// second `Welcome` is the resync signal". Resets `conn`'s own subscription bookkeeping to a
+    /// fresh, empty [`SubscriptionSet`] and `first_frame_pending` (Seams: "treats every chunk as
+    /// unsent") -- the very next `tick()`'s own `subs.update` call then reports every chunk the
+    /// connection's last-known camera still wants as freshly entered, and the ordinary
+    /// enter/snapshot path in [`Host::build_frame`] does the rest; no separate resync-specific
+    /// frame logic is needed. An unknown `conn` is `Err` (Malformed): a live connection only ever
+    /// calls this on a `conn` it already holds, unlike `attach`, which creates the slot.
+    pub fn resync(
+        &mut self,
+        conn: ConnId,
+        epoch: u32,
+        welcome_sink: &mut impl ByteSink,
+    ) -> Result<(), WireError> {
+        let idx = conn as usize;
+        let player = match self.conns.get_mut(idx) {
+            Some(Some(slot)) => {
+                slot.subs =
+                    SubscriptionSet::new(crate::world::ChunkDims::new(G::CHUNK_BITS), G::TICK_RATE);
+                slot.first_frame_pending = true;
+                slot.player
+            }
+            _ => return Err(WireError::Malformed),
+        };
+        self.write_welcome_for(player, epoch, welcome_sink);
         Ok(())
     }
 
@@ -2049,6 +2086,20 @@ where
     fn sim_attach(&mut self, conn: u32, input: &[u8], tx: &mut [u8]) -> Result<u32, Status> {
         let mut sink = SliceSink::new(tx);
         match self.attach(conn, input, &mut sink) {
+            Ok(()) => sink
+                .finish()
+                .map(|n| n as u32)
+                .map_err(|_| Status::OutOfMemory),
+            Err(_) => Err(Status::Decode),
+        }
+    }
+
+    /// docs/plan/28b-reconnect-and-lifecycle.md step 2: `host::Host::resync`. Same status mapping
+    /// as `sim_attach` above (`WireError::Malformed` -> `Status::Decode`; a `Welcome` too large for
+    /// `tx` -> `Status::OutOfMemory`).
+    fn sim_resync(&mut self, conn: u32, epoch: u32, tx: &mut [u8]) -> Result<u32, Status> {
+        let mut sink = SliceSink::new(tx);
+        match self.resync(conn, epoch, &mut sink) {
             Ok(()) => sink
                 .finish()
                 .map(|n| n as u32)
