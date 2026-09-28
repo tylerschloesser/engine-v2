@@ -34,5 +34,17 @@ export default defineConfig({
     // "Determinism on a physical phone"): the Cloudflare quick tunnel's `Host` header is a random
     // `*.trycloudflare.com` subdomain, which Vite's own host check would otherwise refuse.
     ...(process.env.ENGINE_DEVICE === '1' ? { allowedHosts: ['.trycloudflare.com'] } : {}),
+    // docs/plan/29-net-worker-and-reference-server.md Scope: `pnpm device:serve --ws` sets this so
+    // the tunnel (or a plain LAN origin) carries the socket too -- an `https` page cannot open a
+    // plain `ws://`, so `wsUrl(location)` always dials this same origin's `/ws`, proxied by Vite's
+    // own dev-server WebSocket proxy to the real `games/reference-server` child `device-serve.mjs`
+    // spawns. Unset (every other `pnpm test`/`pnpm device:serve` run), this is a no-op.
+    ...(process.env.ENGINE_WS_PROXY_PORT
+      ? {
+          proxy: {
+            '/ws': { target: `ws://127.0.0.1:${process.env.ENGINE_WS_PROXY_PORT}`, ws: true },
+          },
+        }
+      : {}),
   },
 })

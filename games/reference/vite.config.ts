@@ -4,6 +4,15 @@ import { fileURLToPath } from 'node:url'
 import { engine } from 'engine/vite'
 import { defineConfig } from 'vite'
 
+// docs/plan/29-net-worker-and-reference-server.md Scope: `pnpm device:serve --app reference`
+// serves this app (instead of the fixture app) on the same port/tunnel/proxy shape `packages/
+// engine/tests/browser/pages/vite.config.ts` already has -- mirrored here rather than shared,
+// since the two are separate Vite apps in separate packages. `ENGINE_TEST_PORT` unset (every
+// `pnpm --filter reference dev`/`preview`/the `reference`/`gc-reference` Playwright projects, which
+// always pass an explicit `--port`/`--strictPort` CLI flag that overrides this) keeps Vite's own
+// default preview port, so this is additive.
+const port = Number(process.env.ENGINE_TEST_PORT ?? 4173)
+
 // `publicDir: 'assets'` (Deviations): the script-generated art this brief's own Scope commits at
 // `games/reference/assets/` (the exit criterion's own `git diff --exit-code ... games/reference/
 // assets` path) is served at the URL root by Vite's ordinary static-file convention -- so
@@ -37,5 +46,23 @@ export default defineConfig({
         gc: fileURLToPath(new URL('./gc.html', import.meta.url)),
       },
     },
+  },
+  preview: {
+    port,
+    strictPort: true,
+    // `pnpm device:serve --tunnel --app reference` (docs/plan/03-browser-harness.md; docs/plan/
+    // 29-net-worker-and-reference-server.md): same "the tunnel's `Host` header is a random
+    // `*.trycloudflare.com` subdomain" reasoning as the fixture app's own config.
+    ...(process.env.ENGINE_DEVICE === '1' ? { allowedHosts: ['.trycloudflare.com'] } : {}),
+    // `pnpm device:serve --app reference --ws`: same `/ws` proxy shape as the fixture app's own
+    // config, so a real multiplayer reference game (M34) reaches the socket cross-origin-isolated
+    // on this same port. A no-op until then (the reference game itself ignores the socket, Scope).
+    ...(process.env.ENGINE_WS_PROXY_PORT
+      ? {
+          proxy: {
+            '/ws': { target: `ws://127.0.0.1:${process.env.ENGINE_WS_PROXY_PORT}`, ws: true },
+          },
+        }
+      : {}),
   },
 })
