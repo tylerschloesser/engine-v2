@@ -98,8 +98,13 @@ export interface TerrainRenderer {
   setTileArray(texture: GPUTexture, gpuBytes: number): void
   /** Encodes and submits one frame: the reused colour-attachment/pass-descriptor objects, one
    * `draw(3, 1, 0, 0)`. `target` may be a `GPUTexture` (skips `createView()` when `viewProbePasses`)
-   * or an explicit `GPUTextureView`. */
-  draw(target: GPUTexture | GPUTextureView): void
+   * or an explicit `GPUTextureView`. docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal
+   * gate"): `opts.reveal` (default `true`) -- `false` still begins the render pass (so the target
+   * is cleared to `colorAttachment.clearValue`) but skips the terrain triangle and any `onEncode`
+   * callback, so a page gating on `Client.revealed()` shows the clear colour, not a half-populated
+   * view, while a join is still in flight. Every pre-existing caller passes no second argument
+   * (unchanged behaviour, unchanged `drawCalls()` count). */
+  draw(target: GPUTexture | GPUTextureView, opts?: { reveal?: boolean }): void
   /** Count of GPU `draw()` calls issued since creation (`engine/test`'s `drawCalls` counter, Seams):
    * one per `TerrainRenderer.draw()` call for the terrain triangle, plus whatever `onEncode`'s
    * callback (M17, `render/drawables.ts`) reports issuing in the same pass. Was "count of `draw()`
@@ -447,7 +452,7 @@ export async function createTerrainRenderer(
       bindGroup = buildBindGroup()
     },
 
-    draw(target) {
+    draw(target, drawOpts) {
       if (isTextureView(target)) {
         colorAttachment.view = target
       } else {
@@ -460,11 +465,17 @@ export async function createTerrainRenderer(
       }
       const encoder = device.createCommandEncoder()
       const pass = encoder.beginRenderPass(passDescriptor)
-      pass.setPipeline(pipeline)
-      pass.setBindGroup(0, bindGroup)
-      pass.draw(3)
-      let calls = 1
-      if (encodeCallback) calls += encodeCallback(pass)
+      let calls = 0
+      // docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal gate"): the pass above still
+      // begins (so `loadOp: 'clear'` still runs), only the terrain triangle and `onEncode` are
+      // skipped -- `reveal: false` is "show the clear colour", not "skip the frame".
+      if (drawOpts?.reveal !== false) {
+        pass.setPipeline(pipeline)
+        pass.setBindGroup(0, bindGroup)
+        pass.draw(3)
+        calls = 1
+        if (encodeCallback) calls += encodeCallback(pass)
+      }
       pass.end()
       submitList[0] = encoder.finish()
       device.queue.submit(submitList)

@@ -87,6 +87,18 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
     onVersionMismatch(): () => void {
       return () => {}
     },
+    // docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal gate"): unused by anything
+    // `frame-loop.ts` itself exercises here (this file's own `revealed` coverage is a plain
+    // fixed/thunk predicate passed straight to `FrameLoopOptions.revealed`, never this method),
+    // same precedent as `onLink` above.
+    debug: {
+      linkLog() {
+        return []
+      },
+    },
+    revealed(): boolean {
+      return true
+    },
     // docs/plan/23-persistence-opfs-and-lifecycle.md step 5: unused by anything `frame-loop.ts`
     // itself exercises, same precedent as `dispatch`/`clock` above.
     exportWorld(): Promise<Blob> {

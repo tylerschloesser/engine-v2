@@ -26,7 +26,7 @@ import {
 } from '../clock-block.js'
 import type { EngineInstance, RegionView } from '../loader.js'
 import { readU32LE } from '../sab/bytes.js'
-import { CB_LINK_STATE, WORKER_HOST } from '../sab/control.js'
+import { CB_LINK_GEN, CB_LINK_STATE, WORKER_HOST } from '../sab/control.js'
 import { RingConsumer, RingProducer } from '../sab/ring.js'
 import type { Shell } from './shell.js'
 
@@ -153,6 +153,27 @@ export function createNetPump(
   let attached = handshake === undefined
   let helloSent = false
   let helloSentAtMs = 0
+  // docs/plan/29-net-worker-and-reference-server.md step 4 (real bug, found live by `mp/reconnect`:
+  // steps 1-2's own Deviations already flagged this as deliberately deferred here): the net
+  // worker's own `CB_LINK_GEN` (`net/link.ts`'s `dial()` counter) advances on *every* dial, the
+  // very first one and every later reconnect alike -- `lastHelloLinkGen` is the last generation
+  // this pump has sent a `client_hello()` for, so a reconnect (a fresh `Up` at a *new* generation)
+  // is told apart from an ordinary wake with nothing new to do. `-1`: no generation sent yet (`net/
+  // link.ts`'s own `gen` starts at `1` on the first real dial, so this sentinel never collides).
+  let lastHelloLinkGen = -1
+
+  /** `client_hello()` + push onto the uplink ring, `helloSentAtMs` for the RTT `client_on_welcome`
+   * will want. Shared by the pre-attach path (`pumpHandshake`) and the reconnect-resend path
+   * (`pump`, below) -- the wire bytes and the send mechanics are identical either way; only *when*
+   * to call this differs. */
+  function sendHelloNow(hs: NetPumpHandshake): void {
+    if (!tx) return
+    const len = inst.call0(inst.x.client_hello)
+    if (len > 0) {
+      if (!uplinkProducer.tryPush(tx.u8, len)) uplinkProducer.recordDrop()
+      helloSentAtMs = hs.clock.now()
+    }
+  }
 
   /** Sends `client_hello()` (once) and applies the first `Welcome` the downlink ring carries.
    * Every message before a successful `Welcome` that fails to decode as one (`Status` other than
@@ -170,13 +191,8 @@ export function createNetPump(
         !hs.remoteLinked || Atomics.load(shell.control.words, CB_LINK_STATE) === LINK_STATE_UP
       if (linkReady) {
         helloSent = true
-        if (tx) {
-          const len = inst.call0(inst.x.client_hello)
-          if (len > 0) {
-            if (!uplinkProducer.tryPush(tx.u8, len)) uplinkProducer.recordDrop()
-            helloSentAtMs = hs.clock.now()
-          }
-        }
+        if (hs.remoteLinked) lastHelloLinkGen = Atomics.load(shell.control.words, CB_LINK_GEN)
+        sendHelloNow(hs)
       }
     }
     if (!downlink || !result) return
@@ -204,6 +220,23 @@ export function createNetPump(
     if (!attached) {
       pumpHandshake()
       if (!attached) return // still waiting on Welcome; on_frame/client_poll_uplink wait too
+    } else if (handshake?.remoteLinked) {
+      // docs/plan/29-net-worker-and-reference-server.md step 4: the reconnect-resend path
+      // `pumpHandshake` alone can never reach (`attached` is already `true` by now, permanently --
+      // it is set once, at the first `Welcome`, and this pump has no reason to ever clear it: the
+      // *replica* survives a reconnect, only the *socket* is new). A new `CB_LINK_GEN` at `Up`
+      // means the net worker just redialed; the server's own fresh `ConnSlot` for it is `'garbage'`
+      // until this client sends a `Hello` again (0013 Reconnect: "the same path plus the resume
+      // hint") -- without this, a real reconnect never re-attaches at all, silently orphaning every
+      // action still in the pending queue (`mp/reconnect`'s own failure mode, found live).
+      const gen = Atomics.load(shell.control.words, CB_LINK_GEN)
+      if (
+        gen !== lastHelloLinkGen &&
+        Atomics.load(shell.control.words, CB_LINK_STATE) === LINK_STATE_UP
+      ) {
+        lastHelloLinkGen = gen
+        sendHelloNow(handshake)
+      }
     }
     let sawFrame = false
     if (downlink) {

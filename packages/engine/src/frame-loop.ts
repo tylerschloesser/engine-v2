@@ -69,6 +69,14 @@ export type FrameLoopOptions = {
    * update()` the same way `onCamera` wires `client.camera.tick(dtMs)` -- `frame-loop.ts` itself
    * only guarantees the phase ordering (`overlay` after `camera`/`render`), not the call. */
   onOverlay?(): void
+  /** docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal gate"): default omitted, which
+   * always draws (the pre-existing behaviour of every page before this milestone, unchanged) -- a
+   * page wires this to `client.revealed` (or any other predicate) to gate the `render` phase's
+   * terrain draw on it (`TerrainRenderer.draw`'s own `{ reveal }` option), so a join over a slow
+   * link shows the clear colour instead of a half-populated view (0013) until every visible chunk
+   * has arrived. Called once per frame, the same already-bound-function-reference cost `onCamera`/
+   * `onOverlay`/`onUi` already pay (`.claude/rules/hot-paths.md`: no allocation). */
+  revealed?(): boolean
   /** M16 (Non-scope): default no-op. */
   onUi?(): void
   /** M09b step 6 (docs/plan/09b-terrain-art-and-lifecycle.md, Tests added:
@@ -139,6 +147,12 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoop {
   let handle = -1
   let running = false
   let everResumed = false
+  // docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal gate"): one reused object,
+  // mutated in place every frame (`.claude/rules/hot-paths.md`: no per-frame literal) -- `opts.
+  // revealed` omitted keeps `reveal` permanently `true`, so `TerrainRenderer.draw`'s own default
+  // ("no second argument" for every pre-existing caller) is what every page without this hook
+  // still effectively gets.
+  const drawOpts = { reveal: true }
 
   function currentTarget(): GPUTexture | GPUTextureView {
     return typeof opts.target === 'function' ? opts.target() : opts.target
@@ -163,7 +177,8 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoop {
     const stats = drain.drain(budget) // upload
     onPhase('render')
     opts.renderer.writeFrameUniform(opts.renderer.frameUniform)
-    opts.renderer.draw(currentTarget()) // render
+    drawOpts.reveal = opts.revealed ? opts.revealed() : true
+    opts.renderer.draw(currentTarget(), drawOpts) // render
     onPhase('overlay')
     onOverlay()
     onPhase('ui')
@@ -219,6 +234,9 @@ export type RealFrameLoopOptions = {
    * `createFrameLoop`, the first real page to need it (`FrameLoopOptions.onOverlay`'s own doc
    * comment: "a page's own concern", default no-op). */
   onOverlay?(): void
+  /** docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal gate"): forwarded straight to
+   * `createFrameLoop` (see its own doc comment). */
+  revealed?(): boolean
   /** M09b step 6: forwarded straight to `createFrameLoop` (see its own doc comment). */
   onPhase?(phase: FramePhase): void
   /** Fix round 1 (docs/plan/09b-terrain-art-and-lifecycle.md Deviations): forwarded straight to
@@ -265,6 +283,7 @@ export function createRealFrameLoop(opts: RealFrameLoopOptions): RealFrameLoop {
   }
   if (opts.onCamera !== undefined) frameLoopOpts.onCamera = opts.onCamera
   if (opts.onOverlay !== undefined) frameLoopOpts.onOverlay = opts.onOverlay
+  if (opts.revealed !== undefined) frameLoopOpts.revealed = opts.revealed
   if (opts.onPhase !== undefined) frameLoopOpts.onPhase = opts.onPhase
   const loop = createFrameLoop(frameLoopOpts)
   return {

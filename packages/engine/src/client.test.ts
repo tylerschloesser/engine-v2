@@ -8,7 +8,7 @@
 // exposes, the same way a real client worker would after `on_frame`/`client_clock_stats`.
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { ActionOutcome } from './client.js'
-import { clientTestHandle, createClient } from './client.js'
+import { clientTestHandle, createClient, readInvite, wsUrl } from './client.js'
 import type { Scheduler } from './clock.js'
 import { ClockBlockView, SessionState, writeClockBlock } from './clock-block.js'
 import { RingConsumer, RingProducer } from './sab/ring.js'
@@ -106,6 +106,26 @@ beforeEach(() => {
 })
 afterEach(() => {
   vi.unstubAllGlobals()
+})
+
+// docs/plan/29-net-worker-and-reference-server.md Tests added: "readInvite: parses #k= and ignores
+// unknown parameters" -- claimed built in steps 1-2's own Deviations but never actually landed in
+// this file (found while adding `wsUrl`'s own test below, next to it); added now.
+test('readInvite: parses #k= and ignores unknown parameters', () => {
+  expect(readInvite({ hash: '#k=abc123' })).toEqual({ joinKey: 'abc123' })
+  // No leading `#` also accepted (`location.hash`'s own convention: present or absent).
+  expect(readInvite({ hash: 'k=abc123' })).toEqual({ joinKey: 'abc123' })
+  // Unknown parameters ignored; `k` still found regardless of position.
+  expect(readInvite({ hash: '#p=secret&k=abc123&z=9' })).toEqual({ joinKey: 'abc123' })
+  // No `k` at all: an empty object, not `{ joinKey: undefined }`.
+  expect(readInvite({ hash: '#p=secret' })).toEqual({})
+  expect(readInvite({ hash: '' })).toEqual({})
+})
+
+test('wsUrl: ws(s) scheme from location.protocol, host verbatim', () => {
+  expect(wsUrl({ protocol: 'https:', host: 'example.com' })).toBe('wss://example.com/ws')
+  expect(wsUrl({ protocol: 'http:', host: '127.0.0.1:4173' })).toBe('ws://127.0.0.1:4173/ws')
+  expect(wsUrl({ protocol: 'http:', host: 'localhost:5173' })).toBe('ws://localhost:5173/ws')
 })
 
 test('dispatch_before_ready_throws', () => {

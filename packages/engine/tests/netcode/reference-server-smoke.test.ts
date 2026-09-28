@@ -6,10 +6,12 @@
 // once the world goes idle (0013 "World lifecycle": 30 s after the last player leaves) -- the one
 // exit path this milestone's own Tests added line names. `@slow`: the real 30 s idle wait alone
 // exceeds the fast `netcode` suite's 10 s budget.
-import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
+import type { ChildProcessByStdio } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { afterEach, expect, test } from 'vitest'
 import { systemClock, systemScheduler } from '../../src/clock.js'
@@ -22,7 +24,11 @@ const referenceServerDir = fileURLToPath(
   new URL('../../../../games/reference-server', import.meta.url),
 )
 
-let child: ChildProcessWithoutNullStreams | undefined
+/** `spawn(..., { stdio: ['ignore', 'pipe', 'pipe'] })`'s own real return type -- `stdin: null`, not
+ * `ChildProcessWithoutNullStreams`'s writable one (this test never writes to the child). */
+type ServerProcess = ChildProcessByStdio<null, Readable, Readable>
+
+let child: ServerProcess | undefined
 let dataDir: string | undefined
 
 afterEach(async () => {
@@ -35,7 +41,7 @@ afterEach(async () => {
 /** Waits for `index.mjs`'s own one `listening: ws://127.0.0.1:<port>` stdout line and returns the
  * real, OS-assigned port (`PORT=0` below, so two suites' parallel runs of this test never
  * collide). */
-function waitListening(proc: ChildProcessWithoutNullStreams): Promise<number> {
+function waitListening(proc: ServerProcess): Promise<number> {
   return new Promise((resolve, reject) => {
     let buf = ''
     proc.stdout.on('data', (d: Buffer) => {
@@ -50,7 +56,7 @@ function waitListening(proc: ChildProcessWithoutNullStreams): Promise<number> {
   })
 }
 
-function waitExit(proc: ChildProcessWithoutNullStreams): Promise<number> {
+function waitExit(proc: ServerProcess): Promise<number> {
   return new Promise((resolve) => {
     proc.on('exit', (code) => resolve(code ?? -1))
   })

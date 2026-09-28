@@ -123,6 +123,27 @@ export type LinkState =
 /** `Client.onLink`'s own `reason`, set only for `state: 'rejected'`. */
 export type LinkReason = 'BadKey' | 'Full'
 
+/** `Client.debug.linkLog()`'s own entry shape (docs/plan/29-net-worker-and-reference-server.md
+ * Scope, `mp.html?linklog=1`'s own on-page log columns, reused by M38's hosted log): `event` --
+ * `'open'` (the net worker's `Link` reported `up`), `'silence'` (`down`, reason `'dead'`: no
+ * message for the 0013 dead timeout), `'close'` (`down`, any other reason -- a real socket close,
+ * `code` carries `CloseEvent.code` when the net worker gave one), `'probe'` (main told the net
+ * worker to probe: `visibilitychange -> visible` or `online`), `'Welcome'` (the session actually
+ * went live, `client.onLink`'s own `'online'` transition -- the observable proxy for "a `Welcome`
+ * was applied", since the net worker itself never parses a message to know that directly). `state`
+ * is this client's own public `LinkState` at the moment of the entry. `msSinceVisible`: real
+ * milliseconds since the last `visibilitychange -> visible` (or since page load, if none yet).
+ * `discarded`: `document.wasDiscarded` (a page reloaded after the browser discarded it under
+ * memory pressure, iOS included) at the moment of the entry. Newest first (Scope: "shows ... newest
+ * first"). */
+export type LinkLogEntry = {
+  event: 'open' | 'close' | 'silence' | 'probe' | 'Welcome'
+  state: LinkState
+  code?: number
+  msSinceVisible: number
+  discarded: boolean
+}
+
 /** `Client.clock()`'s own return shape (docs/plan/16b-ui-observation-and-clock.md Scope): tick
  * counts, not seconds (0006 "On the client": "the UI never counts ticks itself" -- a page derives
  * remaining seconds from a replicated `done_at` tick and this pair). Returned as the same reused
@@ -292,6 +313,16 @@ export interface Client {
    * restores the default handler when called (a no-op if a later `onVersionMismatch` call already
    * replaced this one). Never fires for a `{ kind: 'local' }` host. */
   onVersionMismatch(cb: () => void): () => void
+  /** docs/plan/29-net-worker-and-reference-server.md Scope (`mp.html?linklog=1`): test/diagnostic
+   * entrypoints, outside the zero-GC rule, kept directly on the public shape (like `ClientOptions.
+   * test`) rather than the `clientTestHandle` `WeakMap` since a production-shaped page (not a
+   * harness-driven one) is meant to read them. */
+  readonly debug: {
+    /** `LinkLogEntry[]`, newest first, capped (`LINK_LOG_CAPACITY`): every `'open'`/`'close'`/
+     * `'silence'`/`'probe'`/`'Welcome'` event this client's own net link has ever seen. Always `[]`
+     * for a `{ kind: 'local' }` host (no net worker, `onLink`'s own doc comment). */
+    linkLog(): LinkLogEntry[]
+  }
   /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Seams: packs the running world's own
    * key set (0005 Storage) into a gzip archive (`storage/archive.ts`) and resolves with it as a
    * `Blob`. Parks the sim worker, pauses it (snapshot-if-dirty, flush) only if it was not already
@@ -321,6 +352,13 @@ export interface Client {
    * object per call would put game-UI polling on the main isolate's budget"): read the fields, do
    * not keep the object past the next call. */
   clock(): ClockSnapshot
+  /** docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal gate"): `ClientCore::
+   * revealed()`'s own value off the clock block (`CLOCK_FIELD.Revealed`, M28) -- true once every
+   * chunk of the visible rectangle is both held by the replica and locally generated. A page's own
+   * frame loop reads this to gate terrain drawing (`FrameLoopOptions.revealed`, `frame-loop.ts`)
+   * so a join over a slow link never shows a half-populated view (0013); `client.ready` itself is
+   * unchanged (Deviations, steps 1-2: `ready` never waits for a remote session to go live). */
+  revealed(): boolean
   /** docs/plan/09-renderer-terrain.md, Non-scope ("here the camera is set by `engine/test.
    * setCamera` or a fixed `CameraState`"): a plain mutable object, later milestones add members to
    * the public `Client` shape (this comment's own precedent) as production features need direct
@@ -851,6 +889,21 @@ export function readInvite(location: { hash: string }): { joinKey?: string } {
   return joinKey !== null ? { joinKey } : {}
 }
 
+/**
+ * `wsUrl(location)` (docs/plan/29-net-worker-and-reference-server.md Scope): `ws(s)://<host>/ws`
+ * -- `wss:` when the page itself is `https:` (a mixed-content browser refuses a plain `ws:` socket
+ * dialled from an `https:` page), `ws:` otherwise; `<host>` is `location.host` verbatim (hostname
+ * plus port, if any), so a page proxied onto its own origin (`pnpm device:serve --ws`, `preview.
+ * proxy['/ws']`) dials that same origin's own `/ws` path -- no cross-origin request, no separate
+ * COOP/COEP concern. The default `url` of the fixture multiplayer page (`mp.html`) and of the
+ * reference game (M34). Takes `{ protocol, host }`, not the full `Location` (Deviations,
+ * `readInvite`'s own precedent above: a test can hand this a plain object with no `window`).
+ */
+export function wsUrl(location: { protocol: string; host: string }): string {
+  const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
+  return `${scheme}://${location.host}/ws`
+}
+
 /** `createClient` is synchronous (PRE-PLAN §4); spawn itself is asynchronous, tracked by
  * `client.ready`. */
 export function createClient(options: ClientOptions): Client {
@@ -897,6 +950,11 @@ export function createClient(options: ClientOptions): Client {
       onVersionMismatch(): () => void {
         throw err
       },
+      debug: {
+        linkLog(): LinkLogEntry[] {
+          throw err
+        },
+      },
       exportWorld(): Promise<Blob> {
         throw err
       },
@@ -907,6 +965,9 @@ export function createClient(options: ClientOptions): Client {
         throw err
       },
       clock(): ClockSnapshot {
+        throw err
+      },
+      revealed(): boolean {
         throw err
       },
       writeCameraAndWake(): number {
@@ -1336,8 +1397,39 @@ export function createClient(options: ClientOptions): Client {
       if (i >= 0) linkListeners.splice(i, 1)
     }
   }
+  // `client.debug.linkLog()`'s own "link state" column (`LinkLogEntry.state`): the public state as
+  // of the *last* `emitLink` call, tracked here rather than re-derived, since `onLink`'s own six
+  // values are not a pure function of the raw `NetLinkMessage` alone (`'connecting'` only on the
+  // first `up`; `'online'` only once `session_state` itself is polled live).
+  let currentLinkState: LinkState = 'connecting'
   function emitLink(e: LinkEvent): void {
+    currentLinkState = e.state
     for (const l of linkListeners) l(e)
+  }
+
+  // docs/plan/29-net-worker-and-reference-server.md Scope (`mp.html?linklog=1`): `client.debug.
+  // linkLog()`'s own backing store, newest first, capped (`LINK_LOG_CAPACITY`) so a long-running
+  // dev session or a flapping connection during a device check never grows this unboundedly. Not a
+  // hot path (0013 events are human-timescale, at most a few per minute even on a bad connection):
+  // `linkLog()` (below, on the returned `Client`) hands back this same array's own `.slice()`
+  // (Provides: not part of the zero-GC surface, matching `client.dispatch`'s own JSON-encode
+  // exemption), so a caller can never mutate the log by mutating what it read.
+  const LINK_LOG_CAPACITY = 200
+  const linkLogEntries: LinkLogEntry[] = []
+  let lastVisibleAtMs = clock.now()
+  function pushLinkLog(event: LinkLogEntry['event'], code?: number): void {
+    const entry: LinkLogEntry = {
+      event,
+      state: currentLinkState,
+      msSinceVisible: clock.now() - lastVisibleAtMs,
+      discarded:
+        typeof document !== 'undefined'
+          ? ((document as Document & { wasDiscarded?: boolean }).wasDiscarded ?? false)
+          : false,
+    }
+    if (code !== undefined) entry.code = code
+    linkLogEntries.unshift(entry)
+    if (linkLogEntries.length > LINK_LOG_CAPACITY) linkLogEntries.length = LINK_LOG_CAPACITY
   }
 
   // docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "the default handler reloads
@@ -1412,6 +1504,10 @@ export function createClient(options: ClientOptions): Client {
     if (at(clockScratch, CLOCK_FIELD.SessionState) === SessionState.Online) {
       onlinePolling = false
       emitLink({ state: 'online' })
+      // `'Welcome'` (`LinkLogEntry.event`'s own doc comment): the observable proxy for "a real
+      // `Welcome` was applied" -- the net worker itself never parses a message to know that
+      // directly, so this poll resolving *is* the earliest main can know.
+      pushLinkLog('Welcome')
       return
     }
     scheduler.setTimer(pollForOnline, 0)
@@ -1431,11 +1527,16 @@ export function createClient(options: ClientOptions): Client {
         everLinkedUp = true
         emitLink({ state: 'connecting' })
       }
+      pushLinkLog('open')
       onlinePolling = true
       pollForOnline()
       return
     }
     onlinePolling = false
+    // `'silence'` (the 0013 dead timeout: no message at all) vs `'close'` (every other reason, a
+    // real socket close -- `m.code` carries `CloseEvent.code` when the net worker gave one, absent
+    // only for `'dead'`, `net/link.ts`'s own `onDown` doc comment).
+    pushLinkLog(m.reason === 'dead' ? 'silence' : 'close', m.code)
     if (m.reason === 'superseded') {
       emitLink({ state: 'superseded' })
       return
@@ -1620,6 +1721,32 @@ export function createClient(options: ClientOptions): Client {
     persistGestureDisposers.push(() => window.removeEventListener('keydown', onGesture))
   }
 
+  // docs/plan/29-net-worker-and-reference-server.md Scope: "main -> net `{ type: 'probe' }` on
+  // `visibilitychange -> visible` and `online`". Installed unconditionally for a remote host
+  // (unlike `attachHostLifecycle`'s own opt-in persistence wiring, this is core 0013 reconnect
+  // behaviour, not a feature a page chooses to wire in) -- `document`'s own `visibilitychange`
+  // (not `window`'s), matching `attachHostLifecycle`/`installBlurAndVisibilityReset`'s convention.
+  const netProbeDisposers: Array<() => void> = []
+  if (linked && options.host.kind === 'remote' && typeof window !== 'undefined') {
+    const sendProbe = (): void => {
+      const w = hostWorkerEntry()
+      w?.worker.postMessage({ type: 'probe' } satisfies ToWorker)
+      pushLinkLog('probe')
+    }
+    const onVisibilityChange = (): void => {
+      if (document.hidden) return
+      lastVisibleAtMs = clock.now()
+      sendProbe()
+    }
+    const onOnline = (): void => sendProbe()
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('online', onOnline)
+    netProbeDisposers.push(() =>
+      document.removeEventListener('visibilitychange', onVisibilityChange),
+    )
+    netProbeDisposers.push(() => window.removeEventListener('online', onOnline))
+  }
+
   /** "Main rAF: drain the UI ring once" (Scope). Kind 1 (`Ui`, M16b) and kind 2 (`ActionResults`,
    * M16): an unknown kind is skipped by its own length field, never crashing. JSON parsing is a
    * human-rate path (0003, 0016 §2), not yet zero-GC (Deviations: a later milestone's own budget,
@@ -1699,6 +1826,16 @@ export function createClient(options: ClientOptions): Client {
     return clockSnapshot
   }
 
+  // docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal gate"): a plain boolean read,
+  // no reused-object concern (`ClockSnapshot`'s own doc comment) since there is nothing to keep
+  // past the call either way. Shares `clockScratch`/`clockView` with `dispatch`/`waitForLive`/
+  // `readClockSnapshot` above -- none of these ever run inside the same call, so one scratch array
+  // costs nothing shared.
+  function readRevealed(): boolean {
+    readClockBlockInto(clockView, clockScratch)
+    return at(clockScratch, CLOCK_FIELD.Revealed) === 1
+  }
+
   let resultsFrameHandle = -1
   function resultsFrame(): void {
     pollActionResults()
@@ -1714,6 +1851,7 @@ export function createClient(options: ClientOptions): Client {
     for (const w of workers) w.worker.terminate()
     for (const dispose of cameraInputDisposers) dispose()
     for (const dispose of persistGestureDisposers) dispose()
+    for (const dispose of netProbeDisposers) dispose()
     cameraResizeObserver?.disconnect()
     overlay.dispose()
     scheduler.cancelFrame(resultsFrameHandle)
@@ -1781,13 +1919,23 @@ export function createClient(options: ClientOptions): Client {
     // browser-only (`localStorage`), called exactly once per `createClient()`, here -- not inside
     // the worker, which has no `localStorage` of its own to be the one accessor of (Planning
     // decisions "the secret has one accessor").
+    // docs/plan/29-net-worker-and-reference-server.md steps 3-4 (real bug, found and fixed here):
+    // `joinKey` used to read only `worldConfig?.joinKey` -- but `worldConfig` (above) is `undefined`
+    // for a `{ kind: 'remote' }` host by construction, so a remote client's own `Hello` always sent
+    // `''` regardless of `ClientOptions.host.joinKey`, silently failing every non-empty-join-key
+    // server with `BadKey` (never exercised until this milestone's own `mp/*` browser tests: M28b's
+    // browser specs only ever drove a `{ kind: 'local' }` host). `options.host.joinKey` is the real
+    // source for a remote host; `worldConfig?.joinKey` stays the source for local.
     const clientGame =
       options.test?.game ??
       (linked && game
         ? {
             ...game,
             secret: hexEncode(loadOrMintSecret()),
-            joinKey: worldConfig?.joinKey ?? '',
+            joinKey:
+              options.host.kind === 'local'
+                ? (worldConfig?.joinKey ?? '')
+                : (options.host.joinKey ?? ''),
             buildHash: options.wasm.buildHash,
           }
         : game)
@@ -1894,10 +2042,12 @@ export function createClient(options: ClientOptions): Client {
     onResyncing,
     onLink,
     onVersionMismatch,
+    debug: { linkLog: () => linkLogEntries.slice() },
     exportWorld,
     importWorld,
     deleteWorld,
     clock: readClockSnapshot,
+    revealed: readRevealed,
     writeCameraAndWake,
     setFlags,
     input,
