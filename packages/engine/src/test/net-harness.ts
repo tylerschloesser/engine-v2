@@ -27,6 +27,7 @@ import {
   conditionLink,
 } from '../net/conditioner.js'
 import { memoryConnectionPair } from '../net/memory-connection.js'
+import { wsConnection } from '../net/ws-connection.js'
 import {
   buildSimInstanceConfig,
   type Connection,
@@ -37,12 +38,60 @@ import {
   type WorldServer,
   worldServerTestHandle,
 } from '../server.js'
-import { loadGame } from '../server-node.js'
+import { loadGame, type WsSocketLike, wsSocketConnection } from '../server-node.js'
 import { type MemoryStorage, memoryStorage } from '../storage/memory.js'
 import type { Storage } from '../storage/types.js'
 import { createHeadlessClient, type HeadlessClient } from './headless-client.js'
 import { trapSim } from './trap.js'
 import { createVirtualClock, type VirtualClock } from './virtual-clock.js'
+
+/**
+ * docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "`createNetHarness({ transport:
+ * 'ws' })` puts `conditionLink` around real sockets on `127.0.0.1:0`"): a synchronous `Connection`
+ * proxy over a `Connection` that only exists once `promise` settles (Deviations: not one of this
+ * milestone's pinned Seam names -- `makeClient`/`reconnectEntry`/`connectRaw` below all build their
+ * two raw ends, then `conditionLink` them, *synchronously*, the same shape the `memory` transport's
+ * own `memoryConnectionPair()` already gives them; a real `ws` server's own `'connection'` event
+ * only fires once the underlying accept actually completes, asynchronously, so this is what lets
+ * the `ws` transport keep that exact same synchronous shape). `send()`/`close()` before `promise`
+ * settles queue (a copy: 0009's "valid only during the call"); `onMessage`/`onClose` set on this
+ * proxy by `conditionLink` are re-dispatched from the real connection once it exists.
+ */
+function deferredConnection(promise: Promise<Connection>): Connection {
+  let real: Connection | null = null
+  let closed = false
+  let pendingCloseCode: number | null = null
+  const pendingSends: { cls: MsgClass; bytes: Uint8Array }[] = []
+  const proxy: Connection = {
+    datagrams: false,
+    onMessage: null,
+    onClose: null,
+    send(cls, bytes, len?: number) {
+      if (closed) return
+      const copy = (len === undefined ? bytes : bytes.subarray(0, len)).slice()
+      if (real) real.send(cls, copy)
+      else pendingSends.push({ cls, bytes: copy })
+    },
+    close(code) {
+      if (closed) return
+      closed = true
+      if (real) real.close(code)
+      else pendingCloseCode = code
+    },
+  }
+  promise.then((r) => {
+    if (pendingCloseCode !== null) {
+      r.close(pendingCloseCode)
+      return
+    }
+    real = r
+    real.onMessage = (bytes) => proxy.onMessage?.(bytes)
+    real.onClose = (code) => proxy.onClose?.(code)
+    for (const m of pendingSends) real.send(m.cls, m.bytes)
+    pendingSends.length = 0
+  })
+  return proxy
+}
 
 /** docs/plan/28-sessions-and-reconnect.md Seams: a deterministic per-(seed, index) 128-bit secret
  * -- `createNetHarness`'s own default when `opts.secrets` names none for a given client, so a
@@ -139,7 +188,13 @@ export interface NetHarnessOptions {
   world?: Partial<Omit<WorldConfig, 'params'>> & {
     params?: Partial<Omit<WorldConfig['params'], 'seed'>>
   }
-  transport?: 'memory'
+  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope): `'ws'` puts `conditionLink`
+   * around real loopback sockets (`wsConnection`/`wsSocketConnection`, `127.0.0.1:0`) instead of
+   * `memoryConnectionPair()` -- everything else about the harness (ticking, `settle()`,
+   * `assertConverged()`, `trace()`) is unchanged; only the bytes' own transport differs. Requires
+   * the `ws` package (a devDependency of this repo, dynamically imported only when this transport
+   * is actually requested -- `engine/test` itself declares no runtime dependency on it). */
+  transport?: 'memory' | 'ws'
   conditions?: Partial<ConditionerConditions>
   /** docs/plan/28-sessions-and-reconnect.md Seams: `createNetHarness({ secrets?, joinKey? })` --
    * explicit per-client identity secrets, in join order. A client past the end of this array (or
@@ -353,13 +408,72 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     return wrapper
   }
 
-  if (opts.transport !== undefined && opts.transport !== 'memory') {
+  if (opts.transport !== undefined && opts.transport !== 'memory' && opts.transport !== 'ws') {
     throw new Error(`createNetHarness: unsupported transport '${opts.transport}' (M29, Non-scope)`)
+  }
+
+  // docs/plan/29-net-worker-and-reference-server.md steps 1-2: the `ws` transport's own real
+  // loopback server, built once, lazily -- a `WebSocketServer` on `127.0.0.1:0` (an OS-assigned
+  // port, so parallel test workers never collide), `perMessageDeflate` off (0009: "no
+  // `permessage-deflate`", the same requirement `attachWebSocketServer` enforces for production).
+  // Each new socket is correlated back to the `makeClient`/`reconnectEntry` call that is waiting for
+  // it by a `?k=<linkIdx>:<reconnectCount>` query parameter on the dial URL -- the one piece of
+  // information a real accept cannot otherwise recover (unlike `memoryConnectionPair()`, a real
+  // `'connection'` event carries no caller-supplied correlation of its own).
+  let wsPort = 0
+  const pendingHostAccepts = new Map<string, (c: Connection) => void>()
+  let wsServerClose: (() => Promise<void>) | null = null
+  if (opts.transport === 'ws') {
+    const { WebSocketServer } = await import('ws')
+    const wss = new WebSocketServer({ host: '127.0.0.1', port: 0, perMessageDeflate: false })
+    await new Promise<void>((resolve, reject) => {
+      wss.once('listening', resolve)
+      wss.once('error', reject)
+    })
+    const address = wss.address()
+    if (typeof address === 'string' || address === null) {
+      throw new Error('createNetHarness: ws transport: unexpected server address')
+    }
+    wsPort = address.port
+    wss.on('connection', (socket, req) => {
+      const key = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('k') ?? ''
+      const resolve = pendingHostAccepts.get(key)
+      pendingHostAccepts.delete(key)
+      const conn = wsSocketConnection(socket as unknown as WsSocketLike)
+      if (resolve) resolve(conn)
+      else conn.close(0) // no scenario waiting on this key: stale/unexpected, refuse cleanly
+    })
+    wsServerClose = () =>
+      new Promise<void>((resolve) => {
+        // `WebSocketServer.close()`'s own callback fires only once the underlying `net.Server` has
+        // closed, which Node's HTTP server machinery does not do while any socket it ever accepted
+        // is still open -- a scenario here never explicitly closes its own sockets (that is
+        // `HeadlessClient`/`SimHost`'s job over the *conditioned* connection, not this raw one), so
+        // every client of this harness is still connected at `dispose()` time. `terminate()` (not
+        // the graceful `close()`) on each tracked client first, same as a scenario abandoning its
+        // sockets outright: nothing here needs a clean close handshake, only for the process to be
+        // able to exit.
+        for (const client of wss.clients) client.terminate()
+        wss.close(() => resolve())
+      })
+  }
+
+  /** The two raw ends `conditionLink` wraps, before any conditioning -- `memoryConnectionPair()`
+   * (both ends exist synchronously) for the default transport, or a real dial against the harness's
+   * own loopback `WebSocketServer` for `'ws'` (Deviations: the host side is a `deferredConnection`,
+   * since a real accept is asynchronous; the client side, `wsConnection`, is synchronous by
+   * construction -- see that module's own doc comment). */
+  function rawPair(linkIdx: number, reconnectCount: number): [Connection, Connection] {
+    if (opts.transport !== 'ws') return memoryConnectionPair()
+    const key = `${linkIdx}:${reconnectCount}`
+    const hostPromise = new Promise<Connection>((resolve) => pendingHostAccepts.set(key, resolve))
+    const clientRaw = wsConnection(`ws://127.0.0.1:${wsPort}/?k=${key}`)
+    return [deferredConnection(hostPromise), clientRaw]
   }
 
   function makeClient(secretOverride?: Uint8Array): HeadlessClient {
     const linkIdx = nextLink.i++
-    const [rawHost, rawClient] = memoryConnectionPair()
+    const [rawHost, rawClient] = rawPair(linkIdx, 0)
     const conditions = { ...DEFAULT_CONDITIONS, ...opts.conditions }
     const link = conditionLink(
       rawHost,
@@ -419,7 +533,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     e.reconnectCount++
     const conditions = { ...DEFAULT_CONDITIONS, ...opts.conditions }
     const newLink = conditionLink(
-      ...memoryConnectionPair(),
+      ...rawPair(e.linkIdx, e.reconnectCount),
       { ...conditions, seed: opts.seed + e.linkIdx * 2 + 3_000_000 * e.reconnectCount },
       clock,
     )
@@ -441,6 +555,18 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       // plain `await` on an already-settled/trivial promise does not reliably give a turn to.
       // Cheap when nothing is in flight (`handshakesSettled` returns at once).
       await simHost.handshakesSettled()
+      // docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Deviations, `ws` transport): a
+      // real socket's own handshake and byte delivery are genuine OS/event-loop I/O, not a
+      // microtask a plain `await` is guaranteed to wait out -- unlike every other await in this
+      // loop, which only ever waits on virtual-clock/digest bookkeeping. One real event-loop turn
+      // per tick (`setImmediate`, the "check" phase, after every I/O callback already queued this
+      // turn) is what lets a socket that finished connecting *this* tick actually deliver its first
+      // bytes before the *next* `stepTick` runs, instead of every one of `n` ticks racing ahead of
+      // a still-connecting socket the way a fixed `advanceTicks(10)` measured clean over `memory`.
+      // A no-op cost for every other transport (`opts.transport !== 'ws'`): skipped entirely.
+      if (opts.transport === 'ws') {
+        await new Promise<void>((resolve) => setTimeout(resolve, 5))
+      }
       // docs/plan/28b-reconnect-and-lifecycle.md step 4: `SimHost.stepTick` itself is
       // unconditional (its own doc comment) -- this harness is what has to honour "the tick
       // counter frozen" while the world is genuinely idle-paused, by simply not calling it.
@@ -590,7 +716,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     },
     connectRaw() {
       const linkIdx = nextLink.i++
-      const [rawHost, rawClient] = memoryConnectionPair()
+      const [rawHost, rawClient] = rawPair(linkIdx, 0)
       const conditions = { ...DEFAULT_CONDITIONS, ...opts.conditions }
       const link = conditionLink(
         rawHost,
@@ -611,6 +737,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     trace: encodeTrace,
     async dispose() {
       await server.stop()
+      if (wsServerClose) await wsServerClose()
     },
   }
 }

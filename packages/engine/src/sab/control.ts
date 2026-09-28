@@ -4,7 +4,17 @@
 // per-worker blocks (four used). The wake word is per *consumer thread*, not per ring (0024 §10):
 // a worker with several input rings still blocks on one address.
 
-export const CONTROL_BLOCK_INT32S = 64
+// docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Deviations): `CB_LINK_STATE`/
+// `CB_LINK_GEN` below were planned as "global words 4-5" (M06's own original layout: "4-7
+// reserved"), but every one of those four words was claimed by an intervening milestone
+// (`CB_TEST_CONTROL` 4, `CB_SIM_STEP_REQ` 5, `CB_SIM_TICKS_RUN` 6, `CB_FORCE_SNAPSHOT_REQ` 7) long
+// before this one landed -- there is no free global word left inside the original `Int32Array[64]`.
+// Rather than renumber anything already in use (this brief's own explicit instruction) or repurpose
+// a per-worker field with an unrelated meaning for one specific worker kind, this appends two new
+// global words *after* the existing per-worker region: `WORKER_BASE`/`WORKER_STRIDE`/`MAX_WORKERS`
+// are unchanged, so every existing `workerWord(...)` address (and `control.workerWord addressing`'s
+// own pinned literals, `control.test.ts`) is untouched -- only the block's own total size grows.
+export const CONTROL_BLOCK_INT32S = 66
 export const CONTROL_BLOCK_BYTES = CONTROL_BLOCK_INT32S * 4
 
 // Global words (indices 0-7, all now used as of `CB_FORCE_SNAPSHOT_REQ` below).
@@ -71,6 +81,25 @@ export const W_STATUS = 7
 
 export const Ready = { No: 0, Yes: 1, Dead: 2 } as const
 export type Ready = (typeof Ready)[keyof typeof Ready]
+
+/**
+ * docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Seams): appended after the per-worker
+ * region (this file's own header comment above `CONTROL_BLOCK_INT32S`), indices 64-65. Written only
+ * by the `net`-kind worker (`worker/net.ts`), mirroring its own `createLink`'s `LinkState`/`gen`
+ * exactly (`net/link.ts`): `CB_LINK_STATE` holds the same numeric values as that module's own
+ * `LinkState` (`Down = 0, Up = 1, Stopped = 2`) -- not imported here (`sab/` stays below `net/` in
+ * the dependency order), just numerically identical by construction, so `worker/net.ts` can write
+ * `link.state` straight into this word with no translation. `CB_LINK_GEN` is that same
+ * `createLink`'s own per-dial generation counter. Read by the
+ * `client`-kind worker (`worker/client-net.ts`, only when `SetupMessage.remoteLinked` is set) to
+ * decide when it is safe to send `client_hello()` for the first time over a multiplayer topology --
+ * before this word ever reads `Up` there is no net worker `Connection` yet for the uplink ring's
+ * bytes to reach. Both `0` (`LinkState.Down`) until the net worker's very first `dial()`. Never
+ * written or read for a `local`-host (single-player, sim-linked) topology, which has no net worker
+ * at all -- these two words simply stay `0` there, and nothing consults them.
+ */
+export const CB_LINK_STATE = 64
+export const CB_LINK_GEN = 65
 
 // Worker indexes (docs/plan/06-sab-primitives-and-workers.md, Seams).
 export const WORKER_CLIENT = 0
