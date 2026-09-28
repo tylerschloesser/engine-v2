@@ -155,6 +155,16 @@ impl<G: Game> Replica<G> {
         self.held.keys().copied()
     }
 
+    /// docs/plan/28b-reconnect-and-lifecycle.md step 5: [`Self::held_chunks`] paired with each
+    /// chunk's own version (0011 "Versions instead of acks") -- `client_hello`'s own source for
+    /// `session::build_resume_hint`'s `held` parameter. A production counterpart of
+    /// [`Self::debug_version`] (that one stays test-only): human-rate/one-off, not a per-frame
+    /// path (`client_hello` is sent once per connection, `.claude/rules/hot-paths.md`'s own
+    /// "one-time setup" exemption), so the borrowed-iterator shape costs nothing worth avoiding.
+    pub fn held_chunks_with_versions(&self) -> impl Iterator<Item = (ChunkCoord, u32)> + '_ {
+        self.held.iter().map(|(&c, &v)| (c, v))
+    }
+
     /// docs/plan/15b-ring-connection-and-replica-rendering.md: the one `TerrainStore` this
     /// replica's `Store<G>` owns, shared with `client::TerrainFeed`/`client::Uploader` (both take
     /// `&TerrainStore`/build off `TerrainStore::copy_chunk`) so a client-role instance needs only

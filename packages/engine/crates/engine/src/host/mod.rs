@@ -24,14 +24,14 @@ use crate::persist::{
     Comparison, Identity, MismatchReason, PROGRESS_BYTES, Phase, ProgressCursor, UpgradeProgress,
     UpgradeReader,
 };
-use crate::session::{self, Welcome};
+use crate::session::{self, ResumeHint, Welcome, diff_resume_hint};
 use crate::sim::{EngineReject, Outcome, Record, Rejected, Sim, WorldParams};
 use crate::time::Tick;
 use crate::wire::{
     ActionResultsWriter, CameraReport, ChunkCoordListWriter, FrameHeader, FrameWriter, SectionId,
     SnapshotWriter, UplinkReader, WireError, encode_chunk_snapshot, write_global, write_own_player,
 };
-use crate::world::ChunkCoord;
+use crate::world::{ChunkCoord, TilePos};
 use crate::world_access::chunk_of;
 use crate::worldgen::Worldgen;
 use subs::SubscriptionSet;
@@ -138,6 +138,15 @@ struct ConnSlot<G: Game> {
     /// starts clean (moot in practice: the very next `build_frame` call always sends a real first
     /// frame, `first_frame_pending`).
     last_sent_tick: Tick,
+    /// docs/plan/28b-reconnect-and-lifecycle.md step 5: the resume hint `attach` parsed off this
+    /// connection's own `Hello` (already epoch-checked there: `None` here means either no hint was
+    /// sent, or it named a foreign epoch -- both collapse to the same "nothing to keep" outcome),
+    /// paired with the chunk-coord centre its own `dx`/`dy` offsets are relative to (0013: "Hint
+    /// coordinates are relative to the Hello camera report's centre"). Consumed exactly once, by
+    /// `build_frame`'s own first `scratch_entered` classification for this connection (`Option::
+    /// take`) -- a resume hint is only ever meaningful for the very first subscription a fresh
+    /// `ConnSlot` ever forms; every later tick's enters are ordinary camera-driven ones.
+    resume_pending: Option<(ResumeHint, ChunkCoord)>,
 }
 
 fn default_max_entities() -> u32 {
@@ -441,6 +450,10 @@ pub struct Host<G: Game> {
     scratch_left: Vec<ChunkCoord>,
     scratch_pristine: Vec<ChunkCoord>,
     scratch_snapshot: Vec<ChunkCoord>,
+    /// docs/plan/28b-reconnect-and-lifecycle.md step 5: this tick's `ChunkKeeps` entries -- chunks
+    /// `scratch_entered` would otherwise have classified `scratch_pristine`/`scratch_snapshot`,
+    /// pulled out by the connection's own `resume_pending` diff before that classification runs.
+    scratch_keep: Vec<ChunkCoord>,
     /// This tick's tile deltas for the connection being built, flat and deduplicated by
     /// `(chunk, index)` (last write wins) as they're gathered, sorted by `(cy, cx, index)` right
     /// before writing (host/mod Deviations: a flat, insertion-sorted `Vec` instead of a `Vec<(_,
@@ -752,6 +765,7 @@ impl<G: Game> Host<G> {
             scratch_left: Vec::new(),
             scratch_pristine: Vec::new(),
             scratch_snapshot: Vec::new(),
+            scratch_keep: Vec::new(),
             scratch_tile_flat: Vec::new(),
             scratch_entity_ops: Vec::new(),
             scratch_action_players: Vec::new(),
@@ -895,6 +909,7 @@ impl<G: Game> Host<G> {
             highest_admitted_seq: 0,
             presence_relayed: BTreeMap::new(),
             last_sent_tick: self.last_tick,
+            resume_pending: None,
         });
         player
     }
@@ -945,6 +960,7 @@ impl<G: Game> Host<G> {
             highest_admitted_seq: 0,
             presence_relayed: BTreeMap::new(),
             last_sent_tick: self.last_tick,
+            resume_pending: None,
         });
         player
     }
@@ -1077,27 +1093,47 @@ impl<G: Game> Host<G> {
         };
         let tail = r.rest();
         // docs/plan/28-sessions-and-reconnect.md Scope: "Hello tail = camera report + optional
-        // resume, which M28 ignores" -- parsed (so the reader is exercised the same way a future
-        // M28b resume-hint parse would extend it) but never fed into `ConnSlot.camera`. Real bug,
-        // found and fixed live (the bisect for `reference_collect_flow`, and separately
-        // `overlay_tile_reaches_screen`'s own tick-0 pristine check): `client_hello()` always
-        // sends a *well-formed*, merely zeroed `CameraReport` (0013: "no real camera exists yet");
-        // `CameraReport::read` decodes that successfully, so feeding it straight into `ConnSlot.
-        // camera` (as an earlier cut of this function did) made `camera` `Some(zeroed)`, not
-        // `None`, from the moment `attach` ran -- unlike `Host::connect`'s own `camera: None`
-        // (below, `build_frame`'s "if let Some(camera) = slot.camera { subs.update(...) }" gate
-        // only runs the subscription update when this is `Some`). A `Some(zeroed)` camera clamps
-        // up to `MIN_HALF_TILES` (`host/subs.rs`) and immediately subscribes a real rectangle
-        // around world (0, 0) on the very next tick boundary -- during a browser page's own
-        // `pumpUntilLive` bootstrap, well before any test ever sets a real camera, and on (or
-        // after) the same real tick `fx-puts`'s own once-a-second paint rule unconditionally fires
-        // on (`tick % secs_1 == 0` is true at tick 0). `ConnSlot.camera` now starts `None` here
-        // too, exactly like a fresh `connect()`'d slot: no subscription forms, and nothing
-        // downlinks, until this connection's own first real uplink camera report arrives
-        // (`on_uplink`'s own `if let Some(camera) = batch.camera { slot.camera = Some(camera) }`,
-        // unaffected).
+        // resume". Real bug, found and fixed live (the bisect for `reference_collect_flow`, and
+        // separately `overlay_tile_reaches_screen`'s own tick-0 pristine check): `client_hello()`
+        // used to always send a *well-formed*, merely zeroed `CameraReport` for a plain join (0013:
+        // "no real camera exists yet"), and `CameraReport::read` decodes that successfully -- so
+        // feeding it straight into `ConnSlot.camera` (as an earlier cut of this function did) made
+        // `camera` `Some(zeroed)`, not `None`, from the moment `attach` ran -- unlike `Host::
+        // connect`'s own `camera: None` (below, `build_frame`'s "if let Some(camera) = slot.camera
+        // { subs.update(...) }" gate only runs the subscription update when this is `Some`). A
+        // `Some(zeroed)` camera clamps up to `MIN_HALF_TILES` (`host/subs.rs`) and immediately
+        // subscribes a real rectangle around world (0, 0) on the very next tick boundary.
+        //
+        // docs/plan/28b-reconnect-and-lifecycle.md step 5: this cut's own real signal -- a plain
+        // join still sends no `resume` block at all (`client_hello`'s own doc comment: `self.
+        // camera` is `None` before the first `Welcome` ever lands), so "a resume block is present"
+        // is the trustworthy proof that `client_hello` had a *real* camera to report (never a
+        // coincidental zero), and only then is it safe to seed `ConnSlot.camera` here rather than
+        // waiting on this connection's own first real uplink camera report (`on_uplink`'s own `if
+        // let Some(camera) = batch.camera { slot.camera = Some(camera) }`, unaffected either way).
+        // A hint naming a foreign epoch (0013: "a hint from another epoch is ignored") still proves
+        // a real camera, so it is kept for `ConnSlot.camera`; only `resume_pending` (the keep/leave
+        // basis) is dropped for it, which is exactly `diff_resume_hint`'s own foreign-epoch outcome
+        // (every wanted chunk becomes `snapshot`) reached without paying for the call.
         let mut tail_reader = ByteReader::new(tail);
-        let _ = CameraReport::read(&mut tail_reader);
+        let camera_and_resume = CameraReport::read(&mut tail_reader).ok().map(|cam| {
+            let resume = session::read_resume_tail(&mut tail_reader).ok().flatten();
+            (cam, resume)
+        });
+        let (initial_camera, resume_pending): (
+            Option<CameraReport>,
+            Option<(ResumeHint, ChunkCoord)>,
+        ) = match camera_and_resume {
+            Some((cam, Some(hint))) if hint.epoch == epoch => {
+                let center = chunk_of::<G>(TilePos::new(cam.center_x, cam.center_y));
+                (Some(cam), Some((hint, center)))
+            }
+            Some((cam, Some(_foreign_epoch_hint))) => (Some(cam), None),
+            // No `resume` block at all: the pre-existing "no real camera yet" case (a plain
+            // join's own zeroed `CameraReport`) -- `ConnSlot.camera` stays `None`, unchanged
+            // from before this milestone.
+            Some((_, None)) | None => (None, None),
+        };
 
         let idx = conn as usize;
         // docs/plan/28-sessions-and-reconnect.md steps 3-5, 0013 "the same secret in a second
@@ -1150,7 +1186,7 @@ impl<G: Game> Host<G> {
             .collect();
         self.conns[idx] = Some(ConnSlot {
             player,
-            camera: None,
+            camera: initial_camera,
             subs: SubscriptionSet::new(crate::world::ChunkDims::new(G::CHUNK_BITS), G::TICK_RATE),
             first_frame_pending: true,
             counters: ConnCounters::default(),
@@ -1158,6 +1194,7 @@ impl<G: Game> Host<G> {
             highest_admitted_seq: 0,
             presence_relayed: BTreeMap::new(),
             last_sent_tick: self.last_tick,
+            resume_pending,
         });
 
         self.write_welcome_for(player, epoch, welcome_sink);
@@ -1217,6 +1254,12 @@ impl<G: Game> Host<G> {
                 slot.subs =
                     SubscriptionSet::new(crate::world::ChunkDims::new(G::CHUNK_BITS), G::TICK_RATE);
                 slot.first_frame_pending = true;
+                // docs/plan/28b-reconnect-and-lifecycle.md step 5: a resync is host-initiated (no
+                // fresh `Hello`, no resume hint) and always a full rebuild (0013: "clients ...
+                // take a full resync") -- never keep a stale hint across it, even one this
+                // connection's own prior `attach` had not yet consumed (a resync this soon is not
+                // expected in practice, but a defensive `None` costs nothing).
+                slot.resume_pending = None;
                 slot.player
             }
             _ => return Err(WireError::Malformed),
@@ -1520,6 +1563,37 @@ impl<G: Game> Host<G> {
         self.scratch_left.extend_from_slice(slot.subs.left());
         insertion_sort_by_key(&mut self.scratch_left, |c| (c.y, c.x));
 
+        // docs/plan/28b-reconnect-and-lifecycle.md step 5: the resume hint's own diff, consumed
+        // exactly once (`Option::take`) against *this* tick's `scratch_entered` -- the very first
+        // subscription a fresh `ConnSlot` ever forms (`resume_pending` is only ever `Some` right
+        // after `attach`, and `ConnSlot::camera` is only seeded eagerly, ahead of the connection's
+        // own first real uplink camera report, when a resume hint proved a real camera -- Host::
+        // attach's own doc comment). `keep` chunks are pulled out of `scratch_entered` before the
+        // pristine/snapshot classification below ever sees them (0013 "3-byte keep": no bytes
+        // beyond the coordinate); `leave` chunks (held per the hint, unwanted by the new
+        // subscription) are folded into `scratch_left` directly, since `subs.left()` above can
+        // never itself report them -- this brand-new `SubscriptionSet` has never held anything to
+        // leave.
+        self.scratch_keep.clear();
+        if let Some((hint, center)) = slot.resume_pending.take() {
+            let chunk_versions = &self.chunk_versions;
+            let diff = diff_resume_hint(
+                Some(&hint),
+                hint.epoch,
+                center,
+                &self.scratch_entered,
+                |c| chunk_versions.get(&c).copied().unwrap_or(0),
+            );
+            self.scratch_entered.retain(|c| !diff.keep.contains(c));
+            self.scratch_keep.extend_from_slice(&diff.keep);
+            insertion_sort_by_key(&mut self.scratch_keep, |c| (c.y, c.x));
+            for c in diff.leave {
+                if !self.scratch_left.contains(&c) {
+                    self.scratch_left.push(c);
+                }
+            }
+        }
+
         self.scratch_pristine.clear();
         self.scratch_snapshot.clear();
         for &c in &self.scratch_entered {
@@ -1696,6 +1770,7 @@ impl<G: Game> Host<G> {
             && self.scratch_pristine.is_empty()
             && self.scratch_snapshot.is_empty()
             && self.scratch_left.is_empty()
+            && self.scratch_keep.is_empty()
             && self.scratch_tile_flat.is_empty()
             && self.scratch_entity_ops.is_empty()
             && self.scratch_presence.is_empty()
@@ -1778,6 +1853,19 @@ impl<G: Game> Host<G> {
             let presence_ops = &self.scratch_presence;
             fw.section(SectionId::Presence, |s| {
                 write_presence_flat::<G>(s, presence_ops);
+            });
+        }
+        // docs/plan/28b-reconnect-and-lifecycle.md step 5: `SectionId::ChunkKeeps` = 11, the
+        // highest id (`FrameWriter::section`'s own strictly-ascending requirement) -- written last,
+        // after `Presence` (8). Same coordinate-list shape `ChunkEnterPristine`/`ChunkLeaves`
+        // already use (`session::resume`'s own `golden_keep_entries` pins the exact bytes).
+        if !self.scratch_keep.is_empty() {
+            let keep = &self.scratch_keep;
+            fw.section(SectionId::ChunkKeeps, |s| {
+                let mut w = ChunkCoordListWriter::new();
+                for &c in keep {
+                    w.write(s, c);
+                }
             });
         }
 
@@ -2031,6 +2119,7 @@ where
             scratch_left: Vec::new(),
             scratch_pristine: Vec::new(),
             scratch_snapshot: Vec::new(),
+            scratch_keep: Vec::new(),
             scratch_tile_flat: Vec::new(),
             scratch_entity_ops: Vec::new(),
             scratch_action_players: Vec::new(),

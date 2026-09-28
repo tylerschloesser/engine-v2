@@ -141,6 +141,50 @@ fn read_varint_len(r: &mut ByteReader<'_>) -> Result<usize, WireError> {
     usize::try_from(v).map_err(|_| WireError::Malformed)
 }
 
+/// Reads a 0013 `resume?` block (`resume_present u8 · resume?{epoch u32 · last_tick u32 · n
+/// varint x (dx i16, dy i16, version u32)}`) directly off `r`, the exact layout [`write_hello`]
+/// writes right after `Hello`'s own `CameraReport` -- factored out of [`read_hello`] so
+/// `host::Host::attach` (docs/plan/28b-reconnect-and-lifecycle.md step 5) can decode the same
+/// bytes out of `sim_attach`'s own `hello_tail` (`CameraReport` bytes then this, forwarded
+/// verbatim by the TS handshake), without re-deriving the byte layout a second time.
+pub fn read_resume_tail(r: &mut ByteReader<'_>) -> Result<Option<ResumeHint>, WireError> {
+    let resume_present = r.u8().map_err(WireError::from)?;
+    match resume_present {
+        0 => Ok(None),
+        1 => {
+            let epoch = r.u32().map_err(WireError::from)?;
+            let last_tick = r.u32().map_err(WireError::from)?;
+            let n = read_varint_len(r)?;
+            if n > MAX_RESUME_CHUNKS {
+                return Err(WireError::Malformed);
+            }
+            let mut chunks = Vec::with_capacity(n);
+            for _ in 0..n {
+                let dx = i16::from_le_bytes(
+                    r.bytes(2)
+                        .map_err(WireError::from)?
+                        .try_into()
+                        .map_err(|_| WireError::Malformed)?,
+                );
+                let dy = i16::from_le_bytes(
+                    r.bytes(2)
+                        .map_err(WireError::from)?
+                        .try_into()
+                        .map_err(|_| WireError::Malformed)?,
+                );
+                let version = r.u32().map_err(WireError::from)?;
+                chunks.push(ResumeChunkHint { dx, dy, version });
+            }
+            Ok(Some(ResumeHint {
+                epoch,
+                last_tick,
+                chunks,
+            }))
+        }
+        _ => Err(WireError::Malformed),
+    }
+}
+
 pub fn write_hello(sink: &mut (impl ByteSink + ?Sized), hello: &Hello<'_>) {
     sink.put_u32(MAGIC);
     sink.put_u16(hello.protocol_version);
@@ -185,41 +229,7 @@ pub fn read_hello(buf: &[u8]) -> Result<HelloOwned, WireError> {
         .try_into()
         .map_err(|_| WireError::Malformed)?;
     let camera = CameraReport::read(&mut r)?;
-    let resume_present = r.u8().map_err(WireError::from)?;
-    let resume = match resume_present {
-        0 => None,
-        1 => {
-            let epoch = r.u32().map_err(WireError::from)?;
-            let last_tick = r.u32().map_err(WireError::from)?;
-            let n = read_varint_len(&mut r)?;
-            if n > MAX_RESUME_CHUNKS {
-                return Err(WireError::Malformed);
-            }
-            let mut chunks = Vec::with_capacity(n);
-            for _ in 0..n {
-                let dx = i16::from_le_bytes(
-                    r.bytes(2)
-                        .map_err(WireError::from)?
-                        .try_into()
-                        .map_err(|_| WireError::Malformed)?,
-                );
-                let dy = i16::from_le_bytes(
-                    r.bytes(2)
-                        .map_err(WireError::from)?
-                        .try_into()
-                        .map_err(|_| WireError::Malformed)?,
-                );
-                let version = r.u32().map_err(WireError::from)?;
-                chunks.push(ResumeChunkHint { dx, dy, version });
-            }
-            Some(ResumeHint {
-                epoch,
-                last_tick,
-                chunks,
-            })
-        }
-        _ => return Err(WireError::Malformed),
-    };
+    let resume = read_resume_tail(&mut r)?;
     Ok(HelloOwned {
         protocol_version,
         build_hash,

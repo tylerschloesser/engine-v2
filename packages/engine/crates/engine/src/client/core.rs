@@ -172,6 +172,14 @@ pub struct ClientCore<G: Game> {
     /// "a dispatched action was actually predicted" as a real assertion (`client_predict_stats`,
     /// test-only) rather than a claim resting on the shape of the fixture alone. Never decremented.
     predict_applied_ever: u32,
+    /// docs/plan/28b-reconnect-and-lifecycle.md step 5: the last `Welcome.epoch` this client has
+    /// seen, `0` before the first one (matching a brand-new world's own manifest default, `host/
+    /// mod.rs` Deviations) -- `client_hello`'s own source for the resume hint's `epoch` field, and
+    /// `client_on_welcome`'s own signal for "is this Welcome a real resync" (Scope: "A client that
+    /// receives Welcome while Online drops replica ... state" -- true only when the epoch actually
+    /// changed; a same-epoch Welcome on a *fresh* connection, this milestone's own resume-hint
+    /// round trip, must not wipe what the resume hint just told the host it could keep).
+    epoch: u32,
 }
 
 impl<G: Game> ClientCore<G> {
@@ -214,6 +222,7 @@ impl<G: Game> ClientCore<G> {
             correction_set_at: Tick(0),
             last_tick_fraction: 0.0,
             predict_applied_ever: 0,
+            epoch: 0,
         }
     }
 
@@ -320,6 +329,28 @@ impl<G: Game> ClientCore<G> {
     /// `world_access::View::with_overlay` for `Loopback::visible`).
     pub fn overlay(&self) -> &Overlay<G> {
         &self.overlay
+    }
+
+    /// docs/plan/28b-reconnect-and-lifecycle.md step 5: the last real camera [`Self::set_camera`]
+    /// recorded, or `None` before the first one this client instance's whole lifetime has ever had
+    /// (survives a reconnect: unlike [`Self::reset_for_resync`], nothing here ever clears it) --
+    /// `client_hello`'s own source for both `Hello.camera` (when `Some`) and the resume hint's own
+    /// coordinate basis (0013: "relative to the Hello camera report's centre").
+    pub fn camera(&self) -> Option<CameraReport> {
+        self.camera
+    }
+
+    /// The last `Welcome.epoch` this client has seen (`0` before the first one) -- `client_hello`'s
+    /// own source for the resume hint's `epoch` field.
+    pub fn epoch(&self) -> u32 {
+        self.epoch
+    }
+
+    /// docs/plan/28b-reconnect-and-lifecycle.md step 5: records `Welcome.epoch`, called once per
+    /// `client_on_welcome` alongside (never instead of) [`Self::reset_for_resync`]'s own,
+    /// epoch-gated call -- see that method's doc comment for the ordering this depends on.
+    pub(crate) fn set_epoch(&mut self, epoch: u32) {
+        self.epoch = epoch;
     }
 
     /// docs/plan/28b-reconnect-and-lifecycle.md step 2: called on every `Welcome` (`game_instance

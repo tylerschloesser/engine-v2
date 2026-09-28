@@ -70,6 +70,57 @@ export interface NetHarnessCounters {
   messagesDown: number
   messagesUp: number
   perTick: { tick: number; bytesDown: number; bytesUp: number }[]
+  /** docs/plan/28b-reconnect-and-lifecycle.md step 5 (Seams: "`NetCounters.reconnectBytesUp/Down`
+   * (bytes between a `Hello` and the first frame after its `Welcome`)"): this link's own *most
+   * recent* handshake round trip -- the reconnect that just happened, or (if this link never
+   * dropped) its original join. `reconnectBytesUp` is that `Hello`'s own byte length;
+   * `reconnectBytesDown` is `Welcome`'s plus the very next downlink message's (`reconnect/cost`'s
+   * own budget assertion). Both `0` before this link has ever sent a `Hello` (`counters(i)` called
+   * before the very first `settle()`). */
+  reconnectBytesUp: number
+  reconnectBytesDown: number
+}
+
+/** A downlink message's own leading byte for `MsgType::Welcome` (`wire/mod.rs`) -- a private local
+ * mirror, the same convention `worker/client-net.ts`'s own `MSG_TYPE_WELCOME` already uses (step 2
+ * Deviations), since `Connection`'s wire bytes carry no exported "what kind of message is this"
+ * accessor for a test-only trace to call. */
+const MSG_TYPE_WELCOME = 0x03
+
+/** `NetHarnessCounters.reconnectBytesUp/Down`'s own implementation: scans `trace` (chronological,
+ * every message this whole harness has ever carried) for `linkIdx`'s own *last* `Hello` -- a
+ * `Hello`/`Reject`'s frozen prefix opens with `session::MAGIC`'s low byte (`0x80`, 0024 §8:
+ * "the first wire byte is `>= 0x80`"), which no ordinary post-handshake `MsgType` (`0x01..=0x05`)
+ * can ever collide with -- then sums that `Hello`'s own bytes plus every downlink message up to and
+ * including the first one *after* a `Welcome` (`MSG_TYPE_WELCOME`). A downlink message that is not
+ * a `Welcome` (a `Reject`) closes the window immediately: there is no frame to wait for.
+ */
+function reconnectCost(trace: TraceEntry[], linkIdx: number): { up: number; down: number } {
+  let up = 0
+  let down = 0
+  let sawWelcome = false
+  let done = false
+  for (const entry of trace) {
+    if (entry.link !== linkIdx) continue
+    const first = entry.bytes[0] ?? 0
+    if (entry.dir === 1 && first >= 0x80) {
+      // A fresh `Hello`: (re)start the window -- the *last* one in the trace wins.
+      up = entry.bytes.length
+      down = 0
+      sawWelcome = false
+      done = false
+      continue
+    }
+    if (done || up === 0 || entry.dir !== 0) continue
+    down += entry.bytes.length
+    if (!sawWelcome) {
+      sawWelcome = first === MSG_TYPE_WELCOME
+      if (!sawWelcome) done = true // a `Reject`, or anything else: nothing to wait for
+    } else {
+      done = true // this is "the first frame after Welcome"
+    }
+  }
+  return { up, down }
 }
 
 export interface NetHarnessOptions {
@@ -458,7 +509,16 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       }
     }
     const perTick = Array.from(perTickMap.values()).sort((a, b) => a.tick - b.tick)
-    return { bytesDown, bytesUp, messagesDown, messagesUp, perTick }
+    const { up: reconnectBytesUp, down: reconnectBytesDown } = reconnectCost(trace, e.linkIdx)
+    return {
+      bytesDown,
+      bytesUp,
+      messagesDown,
+      messagesUp,
+      perTick,
+      reconnectBytesUp,
+      reconnectBytesDown,
+    }
   }
 
   function encodeTrace(): Uint8Array {

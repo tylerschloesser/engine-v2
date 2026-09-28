@@ -24,7 +24,7 @@ use crate::sim::{Applied, Rejected};
 use crate::view;
 use crate::wire::CameraReport;
 use crate::world::{CacheCapacity, ChunkCoord, ChunkDims, TILE_MAX, TILE_MIN, TilePos};
-use crate::world_access::WorldRead;
+use crate::world_access::{WorldRead, chunk_of};
 use crate::worldgen::{GenCore, Pristine, Worldgen};
 
 /// `RegionId::Rx`'s size for input on the client role (mirrors `fixtures/terrain`'s own constant,
@@ -1111,29 +1111,58 @@ where
     }
 
     /// docs/plan/28-sessions-and-reconnect.md: `session::Hello` built straight from this instance's
-    /// own retained config (`secret`/`join_key`/`build_hash`, `ClientInstance`'s own doc comment) --
-    /// no camera report exists yet at this point in a real connection's life (`client_hello` is
-    /// always the very first thing a client instance ever sends), so `Hello.camera` is a zeroed
-    /// `CameraReport`: harmless, since `sim_attach`'s own doc comment already treats a short/absent
-    /// camera in the "Hello tail" as "no initial camera yet", the same state a fresh `connect()`'d
-    /// `ConnSlot` already starts in.
+    /// own retained config (`secret`/`join_key`/`build_hash`, `ClientInstance`'s own doc comment).
+    /// `client_hello` is always the very first thing a client instance sends on a connection --
+    /// for the very first one this whole instance's lifetime ever makes, `ClientCore::camera()` is
+    /// still `None` (no camera has ever been set), so `Hello.camera` is a zeroed `CameraReport` and
+    /// `resume` is `None`: harmless, since `sim_attach`'s own doc comment already treats a
+    /// short/absent camera in the "Hello tail" as "no initial camera yet", the same state a fresh
+    /// `connect()`'d `ConnSlot` already starts in.
+    ///
+    /// docs/plan/28b-reconnect-and-lifecycle.md step 5: on a **re**connect (this same `ClientCore`
+    /// redialing after a drop, `.camera()` already `Some` from before), `Hello.camera` carries that
+    /// real, last-known camera instead -- `Host::attach`'s own doc comment explains why a *real*
+    /// camera here (never a coincidental zero) is exactly what lets the host seed `ConnSlot.camera`
+    /// immediately rather than waiting a tick. `resume` is built from the replica's own held chunks
+    /// and their versions (`Replica::held_chunks_with_versions`, 0013 "the resume hint"), relative
+    /// to that same camera's chunk-coord centre (0013: "relative to the Hello camera report's
+    /// centre") -- this must run *before* any `Welcome` for this connection is ever applied
+    /// (`client_on_welcome` only wipes the replica on a real epoch change, Deviations), so the held
+    /// set this reads is still exactly what the *previous* connection last saw.
     fn client_hello(&mut self, tx: &mut [u8]) -> usize {
         match self {
             GameInstance::Client(c) => {
+                let (camera, resume) = match c.core.camera() {
+                    Some(cam) => {
+                        let center = chunk_of::<G>(TilePos::new(cam.center_x, cam.center_y));
+                        let held = c.core.replica().held_chunks_with_versions();
+                        let hint = session::build_resume_hint(
+                            held,
+                            center,
+                            c.core.epoch(),
+                            c.core.replica().tick().0,
+                        );
+                        (cam, Some(hint))
+                    }
+                    None => (
+                        CameraReport {
+                            center_x: 0,
+                            center_y: 0,
+                            half_w: 0,
+                            half_h: 0,
+                            vel_x: 0,
+                            vel_y: 0,
+                        },
+                        None,
+                    ),
+                };
                 let hello = Hello {
                     protocol_version: session::PROTOCOL_VERSION,
                     build_hash: c.build_hash,
                     join_key: c.join_key.as_bytes(),
                     player_secret: c.secret,
-                    camera: CameraReport {
-                        center_x: 0,
-                        center_y: 0,
-                        half_w: 0,
-                        half_h: 0,
-                        vel_x: 0,
-                        vel_y: 0,
-                    },
-                    resume: None,
+                    camera,
+                    resume: resume.as_ref(),
                 };
                 let mut sink = crate::bytes::SliceSink::new(tx);
                 session::write_hello(&mut sink, &hello);
@@ -1163,11 +1192,18 @@ where
                     Ok(w) => w,
                     Err(_) => return Status::Decode,
                 };
-                // docs/plan/28b-reconnect-and-lifecycle.md step 2: idempotent on a plain join's
-                // first `Welcome` (the replica is already empty then) -- a resync's own second
-                // `Welcome` is what makes this real (`ClientCore::reset_for_resync`'s own doc
-                // comment).
-                c.core.reset_for_resync();
+                // docs/plan/28b-reconnect-and-lifecycle.md step 5: only a real resync (the epoch
+                // actually changed -- a host restart or panic recovery, `Host::resync`'s own
+                // doc comment) drops the replica. A same-epoch `Welcome` -- a plain join's first
+                // one (replica already empty: idempotent either way) or an ordinary reconnect's
+                // first one on a fresh connection -- must *not* wipe it: that is exactly the state
+                // this milestone's resume hint told the host it could `keep`, and `build_frame`'s
+                // own `ChunkKeeps` entries carry no data to rebuild it from (`client/core.rs`'s own
+                // `SectionId::ChunkKeeps => {}` no-op arm in `apply`).
+                if welcome.epoch != c.core.epoch() {
+                    c.core.reset_for_resync();
+                }
+                c.core.set_epoch(welcome.epoch);
                 c.core.replica_mut().set_own_player(welcome.player_id);
                 if let Some(sample) = &welcome.presence {
                     c.core.seed_presence(sample);
