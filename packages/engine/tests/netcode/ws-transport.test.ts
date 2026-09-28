@@ -6,6 +6,18 @@
 // (`ws/deflate-refused`) is exercised directly, not through the harness (Deviations, `net-harness.ts`'s
 // own doc comment: the harness needs to condition a socket before `WorldServer.accept`, so it builds
 // on the lower-level `wsSocketConnection` instead of this function).
+//
+// `ws/reconnect-resume` and `ws/trace-identical` are `@slow` (Deviations: `docs/decisions/
+// 0020-testing-strategy.md` §4's demotion rule, named explicitly by this milestone's own "Budgets"
+// section -- "apply the demotion rule ... to `ws` repeats first" -- for exactly this case: a
+// real-socket repeat of an in-memory netcode scenario). Measured: this file alone added ~10 s to
+// the fast `netcode` suite (real per-tick `setTimeout` yields, `docs/plan/29...md` Deviations on
+// `net-harness.ts`'s own `advanceTicks`), pushing the whole suite over its 10 s budget; demoting
+// these two (the most expensive, and the ones whose own ground -- reconnect, determinism across
+// runs -- `ws/join-converges` and the slow-tier `ws/spike-c` already also cover, `spike-c` at a
+// larger scale) brought it back under. `ws/join-converges`, `ws/deflate-refused` and `ws/
+// version-mismatch` stay fast tier: each is the only fast-tier test covering its own feature
+// (convergence, the deflate refusal, the close-code mapping).
 import { expect, test } from 'vitest'
 import { CloseCode } from '../../src/host/handshake.js'
 import { MsgClass, type WorldServer } from '../../src/server.js'
@@ -25,7 +37,11 @@ test('ws/join-converges', async () => {
     harness.clients.forEach((c, i) => {
       c.setCamera(square(i))
     })
-    await harness.advanceTicks(10)
+    // 20, not 10 (Deviations, measured): a real loopback socket handshake competes for the event
+    // loop with `pnpm test`'s own concurrently-running suites (`scripts/test.mjs`'s "run every
+    // selected suite in parallel"), and 10 ticks' worth of real-time headroom flaked under that
+    // load in a way 20 did not.
+    await harness.advanceTicks(20)
 
     harness.clients[0]?.dispatch({ Paint: { pos: { x: 2, y: 2 }, base: 1, resource: 0 } })
     harness.clients[1]?.dispatch({ Spawn: { at: { x: -3, y: 8 }, kind: 1 } })
@@ -93,7 +109,7 @@ test('ws/deflate-refused', async () => {
   expect(() => attachWebSocketServer(wss, fakeServer)).toThrow(/perMessageDeflate/)
 })
 
-test('ws/reconnect-resume', async () => {
+test('ws/reconnect-resume @slow', async () => {
   const harness = await createNetHarness({
     fixture: await putsFixture(),
     seed: 20002,
@@ -102,7 +118,7 @@ test('ws/reconnect-resume', async () => {
   })
   try {
     harness.clients[0]?.setCamera(square(0))
-    await harness.advanceTicks(5)
+    await harness.advanceTicks(15) // headroom under `pnpm test`'s own concurrent suites, see above
     harness.clients[0]?.dispatch({ SetMotd: { n: 7 } })
     await harness.settle()
 
@@ -138,7 +154,7 @@ test('ws/version-mismatch', async () => {
       buildHash: new Uint8Array(32).fill(0xaa), // deliberately wrong
     })
     conn.send(MsgClass.ReliableOrdered, hello)
-    await harness.advanceTicks(3)
+    await harness.advanceTicks(12) // headroom under `pnpm test`'s own concurrent suites, see above
     expect(closeCode).toBe(CloseCode.VersionMismatch)
   } finally {
     await harness.dispose()
@@ -150,7 +166,7 @@ test('ws/version-mismatch', async () => {
 // scripted (seed, script) run twice over real loopback sockets must produce byte-identical
 // `trace()` output, proving the harness's own `VirtualClock`-paced determinism survives a real
 // transport underneath (the only place wall-clock reality could leak in).
-test('ws/trace-identical', async () => {
+test('ws/trace-identical @slow', async () => {
   async function run(): Promise<Uint8Array> {
     const harness = await createNetHarness({
       fixture: await putsFixture(),
@@ -162,7 +178,7 @@ test('ws/trace-identical', async () => {
       harness.clients.forEach((c, i) => {
         c.setCamera(square(i))
       })
-      await harness.advanceTicks(5)
+      await harness.advanceTicks(15) // headroom under `pnpm test`'s own concurrent suites, see above
       harness.clients[0]?.dispatch({ Paint: { pos: { x: 1, y: 1 }, base: 1, resource: 0 } })
       harness.clients[1]?.dispatch('Roll')
       await harness.advanceTicks(20)
@@ -223,4 +239,7 @@ test('ws/spike-c @slow', async () => {
   for (let i = 1; i < traces.length; i++) {
     expect(Array.from(traces[i] as Uint8Array)).toEqual(first)
   }
-})
+  // 3 runs x ~720 ticks x the `ws` transport's own real per-tick yield (`net-harness.ts`'s
+  // `advanceTicks`) comfortably exceeds Vitest's 5 s default -- well inside this suite's own
+  // `pnpm test:slow` budget regardless (0020 §4's slow tier has no fast-tier time limit).
+}, 60_000)

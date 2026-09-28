@@ -26,7 +26,7 @@ import {
 } from '../clock-block.js'
 import type { EngineInstance, RegionView } from '../loader.js'
 import { readU32LE } from '../sab/bytes.js'
-import { WORKER_HOST } from '../sab/control.js'
+import { CB_LINK_STATE, WORKER_HOST } from '../sab/control.js'
 import { RingConsumer, RingProducer } from '../sab/ring.js'
 import type { Shell } from './shell.js'
 
@@ -78,7 +78,20 @@ export type NetPumpHandshake = {
     viewMaxTilesPerAxis: number
     viewMaxChunks: number
   }) => void
+  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2 (`SetupMessage.remoteLinked`,
+   * `worker/client.ts`'s own doc comment): `true` only for a `{ kind: 'remote' }` topology --
+   * `pumpHandshake` then waits for `CB_LINK_STATE` (`sab/control.ts`, written by the `net`-kind
+   * worker) to read `Up` at least once before ever sending `client_hello()`, instead of sending it
+   * unconditionally on this pump's very first call. Omitted (or `false`) for a `local` host's own
+   * `RingConnection` link, which has no net worker and so never writes that word at all -- gating
+   * on it there would block `Hello` forever. */
+  remoteLinked?: boolean
 }
+
+/** `net/link.ts`'s own `LinkState.Up = 1`, mirrored the same numeric-parity way `sab/control.ts`'s
+ * own `CB_LINK_STATE` doc comment already documents (not imported: `worker/client-net.ts` has no
+ * reason to depend on `net/link.ts` otherwise). */
+const LINK_STATE_UP = 1
 
 /**
  * Built once at setup; `pump()` itself allocates nothing. `downlink`/`tx` are `null` only for a
@@ -149,12 +162,20 @@ export function createNetPump(
   function pumpHandshake(): void {
     const hs = handshake as NetPumpHandshake
     if (!helloSent) {
-      helloSent = true
-      if (tx) {
-        const len = inst.call0(inst.x.client_hello)
-        if (len > 0) {
-          if (!uplinkProducer.tryPush(tx.u8, len)) uplinkProducer.recordDrop()
-          helloSentAtMs = hs.clock.now()
+      // docs/plan/29-net-worker-and-reference-server.md steps 1-2: for a remote topology, wait for
+      // the net worker's own `CB_LINK_STATE` to read `Up` at least once before ever sending -- a
+      // wake with no link yet just re-checks next time (`helloSent` stays `false`), unlike the
+      // unconditional local-host path this branch replaces.
+      const linkReady =
+        !hs.remoteLinked || Atomics.load(shell.control.words, CB_LINK_STATE) === LINK_STATE_UP
+      if (linkReady) {
+        helloSent = true
+        if (tx) {
+          const len = inst.call0(inst.x.client_hello)
+          if (len > 0) {
+            if (!uplinkProducer.tryPush(tx.u8, len)) uplinkProducer.recordDrop()
+            helloSentAtMs = hs.clock.now()
+          }
         }
       }
     }

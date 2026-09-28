@@ -4,6 +4,7 @@
 import type { IdentityJson } from '../host/persistence.js'
 import type { IncompatReasonName } from '../host/upgrade.js'
 import type { InstanceConfig } from '../loader.js'
+import type { DownReason } from '../net/link.js'
 import { WORKER_GEN1 } from '../sab/control.js'
 import type { SabSet } from '../sab/layout.js'
 import type { WorldConfig } from '../sim-config.js'
@@ -96,6 +97,20 @@ export type SetupMessage = {
    * poll) only then either. Ignored by `gen`/`net`.
    */
   link?: boolean
+  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2: present only on the `net`-kind
+   * spawn (`ClientOptions.host = { kind: 'remote', url, joinKey? }`) -- the real `wsConnection`
+   * endpoint this net worker dials, and the join key (if any) a caller must still carry through
+   * `Hello`'s own `join_key` field on the client side (`clientGame.joinKey`, `client.ts`'s
+   * `start()`, unchanged by this milestone -- `net` itself never touches `Hello`'s bytes). Absent
+   * for every other kind. */
+  net?: { url: string; joinKey?: string }
+  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2: `true` only on the `client`-kind
+   * spawn of a `{ kind: 'remote' }` topology (never set for a `local` host, where `link` alone
+   * already means "linked to the sim worker's own `RingConnection`, always up"). Gates `worker/
+   * client-net.ts`'s handshake pump on `CB_LINK_STATE`/`CB_LINK_GEN` (`sab/control.ts`, written by
+   * the `net`-kind worker) instead of sending `client_hello()` on this worker's very first wake
+   * regardless of whether a real net-worker `Connection` exists yet. */
+  remoteLinked?: boolean
 }
 
 /**
@@ -182,6 +197,7 @@ export const POST_SETUP_MESSAGE_TYPES: readonly string[] = [
   'world-op-error',
   'client-welcome',
   'client-resyncing',
+  'link',
 ]
 
 /** docs/plan/23-persistence-opfs-and-lifecycle.md Seams (Provides): the sim worker's own lifecycle
@@ -275,6 +291,35 @@ export type SimWorldOpResult =
   | { type: 'delete-world-result' }
   | { type: 'world-op-error'; message: string }
 
+/**
+ * docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "main -> net `{ type: 'probe'
+ * }` on `visibilitychange -> visible` and `online`, and `{ type: 'retry' }`"): parked-only in
+ * spirit but not in mechanism -- a `net`-kind worker is event-driven, never blocked in `Atomics.
+ * wait` (0015 §2), so unlike `SimControlMessage`/`TestCallMessage` this is deliverable at any
+ * time, not gated on `W_PARKED`. `probe` forwards to this worker's own `Link.probe()` (`net/
+ * link.ts`); `retry` is the same call under a different name, for the one caller (`client.ts`'s
+ * own `updating`-state backoff retry after a version-mismatch reload attempt) for which "probe"
+ * would misdescribe *why* -- both are the identical `Link.probe()` call underneath (Deviations:
+ * one function, two names, so a net-worker log line can tell a UI-driven probe from a
+ * version-mismatch retry without a third field). */
+export type NetControlMessage = { type: 'probe' } | { type: 'retry' }
+
+/**
+ * docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "net -> main `{ type: 'link',
+ * state, code? }` on transitions"): the net worker's own `createLink`-level view, in `net/link.ts`'s
+ * own vocabulary (`DownReason`) -- not yet the richer, main-owned `client.onLink` six-value state
+ * (`connecting | online | reconnecting | updating | superseded | rejected`), since the net worker
+ * never parses a message and so cannot know whether a session is actually live (`online`) or
+ * whether a `down` is worth an indicator yet (`reconnecting`'s own 1 s delay, 0013 Client policy) --
+ * both are main's own policy, built from this lower-level stream in `client.ts` (Deviations: "M29
+ * owns the reload policy", M28's own Seams line for `createLink`, extended here to the whole
+ * `onLink` translation). `code` is the raw `CloseEvent.code` on a `down` transition only (absent on
+ * `up`, and on a `down` caused by the dead-timer or a `probe()` that never panned out, both of
+ * which have no close code at all -- `reason` alone covers those: `'dead'`). */
+export type NetLinkMessage =
+  | { type: 'link'; state: 'up' }
+  | { type: 'link'; state: 'down'; reason: DownReason; code?: number }
+
 export type ToWorker =
   | SetupMessage
   | { type: 'resume' }
@@ -282,6 +327,7 @@ export type ToWorker =
   | TestCallMessage
   | SimControlMessage
   | SimWorldOpMessage
+  | NetControlMessage
 
 export type FromWorker =
   | { type: 'ready' }
@@ -295,3 +341,4 @@ export type FromWorker =
   | SimLifecycleMessage
   | SimWorldOpResult
   | ClientLifecycleMessage
+  | NetLinkMessage

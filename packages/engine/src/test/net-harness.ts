@@ -565,7 +565,13 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       // a still-connecting socket the way a fixed `advanceTicks(10)` measured clean over `memory`.
       // A no-op cost for every other transport (`opts.transport !== 'ws'`): skipped entirely.
       if (opts.transport === 'ws') {
-        await new Promise<void>((resolve) => setTimeout(resolve, 5))
+        // 20 ms, not a smaller value (Deviations, measured): `pnpm test`'s own suites run
+        // concurrently (`scripts/test.mjs`'s own "run every selected suite in parallel"), and a
+        // real loopback socket handshake competes for the event loop with a concurrently-running
+        // browser suite's own headless Chromium instances -- 5 ms measured clean in isolation but
+        // flaked under that real full-suite load (a fixed tick budget racing ahead of a
+        // not-yet-open socket, the same failure this yield exists to prevent in the first place).
+        await new Promise<void>((resolve) => setTimeout(resolve, 20))
       }
       // docs/plan/28b-reconnect-and-lifecycle.md step 4: `SimHost.stepTick` itself is
       // unconditional (its own doc comment) -- this harness is what has to honour "the tick

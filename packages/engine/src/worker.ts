@@ -9,6 +9,7 @@ import * as genKind from './worker/gen.js'
 import * as netKind from './worker/net.js'
 import type {
   FromWorker,
+  NetControlMessage,
   SetupMessage,
   SimControlMessage,
   SimWorldOpMessage,
@@ -16,7 +17,13 @@ import type {
   ToWorker,
 } from './worker/protocol.js'
 import { isolateName } from './worker/protocol.js'
-import { createShell, type LoopState, runBlockingLoop, type Shell } from './worker/shell.js'
+import {
+  createShell,
+  type LoopState,
+  noTimeout,
+  runBlockingLoop,
+  type Shell,
+} from './worker/shell.js'
 import * as simKind from './worker/sim.js'
 
 export interface WorkerKindModule {
@@ -62,6 +69,14 @@ export function run(): void {
   // docs/plan/23-persistence-opfs-and-lifecycle.md step 5: export/import/delete requests, routed the
   // same way `simControl` already is (`worker/sim.ts`'s own `LoopState.worldOp`).
   let worldOp: ((m: SimWorldOpMessage) => void) | null = null
+  // docs/plan/29-net-worker-and-reference-server.md steps 1-2: `probe`/`retry`, routed to `worker/
+  // net.ts`'s own `LoopState.linkControl` -- deliverable at any time (this kind is never blocked in
+  // `Atomics.wait`, unlike `simControl`/`worldOp`'s parked-only messages), so no `W_PARKED` gate.
+  let linkControl: ((m: NetControlMessage) => void) | null = null
+  // docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "M06b's `stop` sends
+  // `Bye{Leave}` first"): `worker/net.ts`'s own `{ type: 'stop' }` cleanup, called before
+  // `shell?.stop()` below. `null` for every kind but `net`.
+  let netStop: (() => void) | null = null
 
   scope.onmessage = (ev) => {
     const m = ev.data
@@ -86,19 +101,27 @@ export function run(): void {
           testCall = loop?.testCall ?? null
           simControl = loop?.simControl ?? null
           worldOp = loop?.worldOp ?? null
+          linkControl = loop?.linkControl ?? null
+          netStop = loop?.stop ?? null
           // The wake word is read before `ready` goes out, not after: main can wake this worker the
           // instant it sees `ready`, and a wake between the post and the loop's own first read
           // would be lost (`Shell.observeWake`; fix round 3, docs/plan/06b-workers-and-spawn.md).
           const seen = s.observeWake()
           post({ type: 'ready' })
-          if (loop) runBlockingLoop(s, loop.body, loop.timeoutMs, seen)
+          // docs/plan/29-net-worker-and-reference-server.md steps 1-2: `loop?.body`, not merely
+          // `loop` -- the `net` kind returns a real, non-null `LoopState` (to carry `linkControl`/
+          // `stop`) with no `body` at all (event-driven, never blocked in `Atomics.wait`, 0015 §2).
+          if (loop?.body) runBlockingLoop(s, loop.body, loop.timeoutMs ?? noTimeout, seen)
         },
         (e: unknown) => s.fatal(e instanceof Error ? e.message : String(e)),
       )
     } else if (m.type === 'resume') {
       shell?.resume()
     } else if (m.type === 'stop') {
+      netStop?.()
       shell?.stop()
+    } else if (m.type === 'probe' || m.type === 'retry') {
+      linkControl?.(m)
     } else if (m.type === 'test-call') {
       // Reachable only while this worker is parked (0015 §2: a blocked worker receives no events),
       // so this branch never runs from inside a kind's blocking loop.

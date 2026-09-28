@@ -106,8 +106,13 @@ export interface CreateLinkOptions {
    * caller that keeps its own state keyed by connection can tell an old callback from a current
    * one, the same role `net-harness.ts`'s own `linkIdx` plays for a test). */
   onUp(conn: Connection, gen: number): void
-  /** Fires once per down transition (never twice in a row without an intervening `onUp`). */
-  onDown(why: DownReason): void
+  /** Fires once per down transition (never twice in a row without an intervening `onUp`). `code`
+   * (docs/plan/29-net-worker-and-reference-server.md steps 1-2, Deviations: additive, so no
+   * existing caller has to change) is the raw `CloseEvent.code` when this transition came from a
+   * real close (`'close'` and every terminal reason); absent for `'dead'` (the timer, not a close)
+   * -- `net.ts`'s own `{ type: 'link', ... }` postMessage forwards it verbatim for a page's debug
+   * log (`?linklog=1`, M29 step 4) to show alongside `why`. */
+  onDown(why: DownReason, code?: number): void
 }
 
 export interface Link {
@@ -177,12 +182,12 @@ export function createLink(opts: CreateLinkOptions): Link {
     }, delay)
   }
 
-  function goDown(why: DownReason): void {
+  function goDown(why: DownReason, code?: number): void {
     if (stopped) return
     disarmAll()
     currentConn = null
     state = LinkState.Down
-    opts.onDown(why)
+    opts.onDown(why, code)
     if (TERMINAL_REASONS.has(why)) {
       // Seams: "stops for good on `Superseded`, `BadKey`, `Full`, and reports `VersionMismatch`
       // without retrying by itself" -- `stop()`-equivalent, minus the terminal `state` (a caller
@@ -238,7 +243,7 @@ export function createLink(opts: CreateLinkOptions): Link {
     }
     raw.onClose = (code) => {
       if (myGen !== gen || stopped) return
-      goDown(closeCodeReason(code))
+      goDown(closeCodeReason(code), code)
       wrapper.onClose?.(code)
     }
     state = LinkState.Up

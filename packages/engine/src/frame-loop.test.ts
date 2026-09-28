@@ -78,6 +78,15 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
     onResyncing(): () => void {
       return () => {}
     },
+    // docs/plan/29-net-worker-and-reference-server.md steps 1-2: unused by anything
+    // `frame-loop.ts` itself exercises (no `{ kind: 'remote' }` host here), same precedent as
+    // `onResyncing` above.
+    onLink(): () => void {
+      return () => {}
+    },
+    onVersionMismatch(): () => void {
+      return () => {}
+    },
     // docs/plan/23-persistence-opfs-and-lifecycle.md step 5: unused by anything `frame-loop.ts`
     // itself exercises, same precedent as `dispatch`/`clock` above.
     exportWorld(): Promise<Blob> {

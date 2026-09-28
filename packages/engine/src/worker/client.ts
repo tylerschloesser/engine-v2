@@ -145,6 +145,11 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
         ticksPerSecond,
         {
           clock: systemClock,
+          // docs/plan/29-net-worker-and-reference-server.md steps 1-2: gates the first
+          // `client_hello()` send on the net worker's own `CB_LINK_STATE` (`worker/client-net.ts`'s
+          // own doc comment) -- absent for a `local` host, unchanged from before this milestone
+          // (`exactOptionalPropertyTypes`: omitted, not `undefined`, when unset).
+          ...(message.remoteLinked ? { remoteLinked: true as const } : {}),
           onAttached: (info) => {
             shell.post({
               type: 'client-welcome',

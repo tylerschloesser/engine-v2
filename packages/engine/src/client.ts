@@ -48,6 +48,7 @@ import {
 import type {
   ClientLifecycleMessage,
   FromWorker,
+  NetLinkMessage,
   SimLifecycleMessage,
   SimWorldOpResult,
   StorageStatus,
@@ -108,6 +109,19 @@ export type ActionOutcome<Reject = unknown> =
   | 'Lost'
   | { Rejected: { Game: Reject } }
   | { Rejected: { Engine: EngineRejectReason } }
+
+/** `Client.onLink`'s own state (docs/plan/29-net-worker-and-reference-server.md steps 1-2, Scope):
+ * see `Client.onLink`'s own doc comment for what each value means. Module-scope (not declared
+ * inside `createClient`) so the exported `Client` interface can name it. */
+export type LinkState =
+  | 'connecting'
+  | 'online'
+  | 'reconnecting'
+  | 'updating'
+  | 'superseded'
+  | 'rejected'
+/** `Client.onLink`'s own `reason`, set only for `state: 'rejected'`. */
+export type LinkReason = 'BadKey' | 'Full'
 
 /** `Client.clock()`'s own return shape (docs/plan/16b-ui-observation-and-clock.md Scope): tick
  * counts, not seconds (0006 "On the client": "the UI never counts ticks itself" -- a page derives
@@ -206,12 +220,17 @@ export interface ClientOptions {
 
 export interface Client {
   /** docs/plan/16-action-round-trip.md Scope: "M06b's `Client.ready` now also waits for
-   * `session_state = 1`" -- but only for the topology that actually links a connection
-   * (`ClientOptions.host = { kind: 'local', connect: true }`; `'remote'` is not yet linked at all,
-   * Non-scope until M27/M28): every other topology (no `connect`, or none at all) never writes the
-   * clock block and keeps `ready`'s pre-M16 meaning, "the worker set is up" -- otherwise `ready`
-   * would hang forever on the many existing unconnected test pages/fixtures that have no host to
-   * ever go live against. See Deviations for the full reasoning. */
+   * `session_state = 1`" -- but only for `{ kind: 'local', connect: true }`. Every other topology
+   * (no `connect`, none at all, or `{ kind: 'remote' }`) keeps `ready`'s pre-M16 meaning, "the
+   * worker set is up": a `local` host's own "server" is the sim worker in the same tab (a
+   * `RingConnection`, effectively instantaneous), but a real network has no such guarantee (0013
+   * Client policy: "the game stays interactive on last known state ... no modal and no error for
+   * outages under ~10 s") -- blocking `ready` itself on a `Welcome` that may never arrive would
+   * contradict that policy and hang forever on a bad join key, no server yet, or a real outage
+   * (docs/plan/29-net-worker-and-reference-server.md steps 1-2, Deviations: found live -- every
+   * pre-existing test/device page built on a placeholder, never-dialing `{ kind: 'remote' }` host
+   * hung the instant `remote` started dialing for real). Use `client.onLink`'s own `'online'` event
+   * to know when a multiplayer session is actually live. */
   readonly ready: Promise<void>
   /** docs/plan/16-action-round-trip.md Scope: JSON-encodes `action` into the action ring and
    * returns its `seq`. Throws `Error("engine: dispatch before ready")` before the session is live
@@ -255,6 +274,24 @@ export interface Client {
    * for a topology with no linked client worker (`host.kind !== 'local'`, or M29's net worker,
    * Non-scope here). Returns an unsubscribe function. */
   onResyncing(cb: () => void): () => void
+  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "Link events"): a per-event
+   * subscription in the style of `onUi`/`onResyncing`, fired with this client's own multiplayer
+   * link state (`connecting | online | reconnecting | updating | superseded | rejected`) --
+   * `reason` is set only for `'rejected'` (`'BadKey' | 'Full'`; a version mismatch is handled by
+   * `onVersionMismatch`/the default reload flow instead, never surfaced here as `'rejected'`).
+   * `reconnecting` is emitted only after the indicator delay of 0013 (1 s); the game stays
+   * interactive on last-known state throughout. Never fires for a `{ kind: 'local' }` host (no net
+   * worker). Returns an unsubscribe function. */
+  onLink(cb: (e: { state: LinkState; reason?: LinkReason }) => void): () => void
+  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope): replaces the default
+   * build-hash-mismatch handler outright (0013 "Build-hash handshake": reload once, guarded by
+   * `sessionStorage['engine.reloadedFrom']`; a mismatch that survives a reload of the same hash
+   * goes `updating` and retries on 0013's own backoff schedule) -- one override, not a listener
+   * list, mirroring 0013's own "the engine raises an event whose default handler..." (a mismatch
+   * has exactly one reaction, never several independent ones). Returns an unsubscribe function that
+   * restores the default handler when called (a no-op if a later `onVersionMismatch` call already
+   * replaced this one). Never fires for a `{ kind: 'local' }` host. */
+  onVersionMismatch(cb: () => void): () => void
   /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Seams: packs the running world's own
    * key set (0005 Storage) into a gzip archive (`storage/archive.ts`) and resolves with it as a
    * `Blob`. Parks the sim worker, pauses it (snapshot-if-dirty, flush) only if it was not already
@@ -687,6 +724,12 @@ function setupWorker(
   test: TestFlags | undefined,
   link: boolean,
   world: { worldId: string; buildHash: string; params: ServerWorldConfig['params'] } | undefined,
+  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2: the `net`-kind spawn's own real
+   * `wsConnection` dial target, present only for a `{ kind: 'remote' }` host. */
+  net: { url: string; joinKey?: string } | undefined,
+  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2: `true` only for the `client`-kind
+   * spawn of a `{ kind: 'remote' }` host (`SetupMessage.remoteLinked`'s own doc comment). */
+  remoteLinked: true | undefined,
   /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: forwards every `SimLifecycleMessage`
    * this worker ever posts, for the life of the worker -- not only during this handshake window
    * (`storage` fires again after the `persist()` answer and after every hidden-boundary snapshot,
@@ -705,6 +748,12 @@ function setupWorker(
    * so a redundant `if (settled) return` isn't needed here either). Only the `client` worker ever
    * posts one. */
   onWelcome: (m: ClientLifecycleMessage) => void,
+  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2: forwards every `{ type: 'link',
+   * ... }` message a `net`-kind worker ever posts (`NetLinkMessage`, `worker/net.ts`'s own
+   * `createLink` transitions), same "not only during this handshake window" convention as
+   * `onLifecycle`/`onWorldOp`/`onWelcome` -- a real reconnect can happen years into a session, long
+   * after `ready` settled. Only the `net` worker ever posts one. */
+  onLink: (m: NetLinkMessage) => void,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false
@@ -754,8 +803,18 @@ function setupWorker(
         m.type === 'world-op-error'
       ) {
         onWorldOp(m)
-      } else if (m.type === 'client-welcome') {
+      } else if (m.type === 'client-welcome' || m.type === 'client-resyncing') {
+        // Real bug found (Deviations): this used to check only `'client-welcome'`, so a linked
+        // client worker's own `client-resyncing` message (M28b, `worker/client-net.ts`'s
+        // `onResyncing` callback) was posted but never dispatched anywhere -- `client.onResyncing`
+        // listeners could never actually fire in production (only netcode-level coverage ever
+        // exercised the resync path directly, not through a real `createClient()` worker
+        // topology). `onWelcome`'s own implementation already switches on `m.type` internally
+        // (`onWelcome`'s doc comment: "`client-resyncing` ... fans out to `onResyncing`'s own
+        // listener list instead of forwarding view clamps") -- it was simply never reached.
         onWelcome(m)
+      } else if (m.type === 'link') {
+        onLink(m)
       }
     }
     const setup: ToWorker = {
@@ -769,9 +828,27 @@ function setupWorker(
       ...(test ? { test } : {}),
       ...(link ? { link } : {}),
       ...(world ? { world } : {}),
+      ...(net ? { net } : {}),
+      ...(remoteLinked ? { remoteLinked } : {}),
     }
     worker.postMessage(setup)
   })
+}
+
+/**
+ * `readInvite(location)` (docs/plan/29-net-worker-and-reference-server.md Scope; M28's own Planning
+ * decisions "the invite fragment is parsed as `#k=<joinKey>` with unknown parameters ignored, so
+ * `&p=<secret>` can be added without breaking old links"): the URL fragment's own `k` parameter as
+ * `ClientOptions.host.joinKey` (`{ kind: 'remote', joinKey? }`), or `{}` when the fragment carries
+ * none -- `URLSearchParams` already ignores any parameter this function does not read by name, so
+ * "unknown parameters ignored" costs nothing extra here. Takes `{ hash }`, not the full `Location`
+ * (Deviations: a test can hand this a plain object with no `window`), matching `location.hash`'s
+ * own leading-`#` convention (present or absent, both accepted).
+ */
+export function readInvite(location: { hash: string }): { joinKey?: string } {
+  const hash = location.hash.startsWith('#') ? location.hash.slice(1) : location.hash
+  const joinKey = new URLSearchParams(hash).get('k')
+  return joinKey !== null ? { joinKey } : {}
 }
 
 /** `createClient` is synchronous (PRE-PLAN §4); spawn itself is asynchronous, tracked by
@@ -812,6 +889,12 @@ export function createClient(options: ClientOptions): Client {
         throw err
       },
       onResyncing(): () => void {
+        throw err
+      },
+      onLink(): () => void {
+        throw err
+      },
+      onVersionMismatch(): () => void {
         throw err
       },
       exportWorld(): Promise<Blob> {
@@ -1028,10 +1111,30 @@ export function createClient(options: ClientOptions): Client {
   }
 
   // docs/plan/16-action-round-trip.md, step 3: `dispatch`/`onActionResult`/the extended `ready`.
-  // `linked` decides whether `ready` waits for `session_state = 1` (Client's own doc comment has
-  // the reasoning); it is the exact predicate `start()` below also uses for its own `link` field,
-  // computed once here so the two cannot drift.
-  const linked = options.host.kind === 'local' && options.host.connect === true
+  // `linked` decides whether the client worker sets up its net pump at all (`start()` below's own
+  // `link` field, computed once here so the two cannot drift) -- true for `local` only when
+  // `connect: true`, and always true for `remote` (docs/plan/29-net-worker-and-reference-server.md
+  // steps 1-2, Scope: "the remote host option ... becomes real: multiplayer topology of 0015 §1, no
+  // sim worker" -- there is no `connect` flag to opt out of for that `kind`).
+  const linked =
+    (options.host.kind === 'local' && options.host.connect === true) ||
+    options.host.kind === 'remote'
+  // `awaitLive` is a *separate* predicate from `linked` (Deviations, real bug found and fixed): only
+  // `local` waits for `session_state = 1` inside `ready` itself. A `local` host's own "server" is
+  // the sim worker in the same tab over a `RingConnection` -- effectively instantaneous, and M16's
+  // own established behaviour ("`Client.ready` now also waits for `session_state = 1`"), unchanged
+  // here. A real network has no such guarantee (0013 Client policy: "the game stays interactive on
+  // last known state ... no modal and no error for outages under ~10 s") -- blocking `ready` itself
+  // on a `Welcome` that may never arrive (a bad join key, no server listening yet, a real outage)
+  // contradicts that policy, and broke it concretely: every pre-existing browser test/device page
+  // built on a `{ kind: 'remote', url: 'ws://unused.invalid' }` placeholder host (M06b's own
+  // reserved-but-inert shape, used by more than ten pages under `tests/browser/pages/src/` purely
+  // to get a "client + gen, no sim worker" topology with no real networking) hung forever the
+  // instant this milestone made `remote` dial for real. `ready` for a remote host therefore means
+  // what it always meant pre-M29 ("the worker set is up"); a caller that wants to know when a
+  // multiplayer session is actually live uses `client.onLink`'s own `'online'` event instead (this
+  // milestone's own new seam, built for exactly this).
+  const awaitLive = options.host.kind === 'local' && options.host.connect === true
 
   const clockView = new ClockBlockView(sabs.clockBlock)
   // Built once (`.claude/rules/hot-paths.md`): every clock-block read copies into this same
@@ -1212,6 +1315,149 @@ export function createClient(options: ClientOptions): Client {
       const i = resyncingListeners.indexOf(listener)
       if (i >= 0) resyncingListeners.splice(i, 1)
     }
+  }
+
+  // docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "Link events"): `client.
+  // onLink` -- a per-event subscription in the style of `onUi`/`onResyncing`, the public six-value
+  // state this milestone's own net worker traffic (`NetLinkMessage`, `net/link.ts`'s own
+  // `DownReason`) is translated into here on main, since only main knows the two things the net
+  // worker itself cannot (`Deviations`, `NetLinkMessage`'s own doc comment in `worker/protocol.ts`):
+  // whether a session is actually live (`session_state`, polled off the clock block the same way
+  // `waitForLive` already does) and how long a `down` has lasted before it is worth an indicator
+  // (0013 Client policy: "an indicator appears after 1 s").
+  type LinkEvent = { state: LinkState; reason?: LinkReason }
+  type LinkListener = (e: LinkEvent) => void
+  const linkListeners: LinkListener[] = []
+  function onLink(cb: (e: LinkEvent) => void): () => void {
+    const listener = cb as LinkListener
+    linkListeners.push(listener)
+    return () => {
+      const i = linkListeners.indexOf(listener)
+      if (i >= 0) linkListeners.splice(i, 1)
+    }
+  }
+  function emitLink(e: LinkEvent): void {
+    for (const l of linkListeners) l(e)
+  }
+
+  // docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "the default handler reloads
+  // once, guarded by `sessionStorage['engine.reloadedFrom'] = <own build hash>`; if the reloaded
+  // bundle has the same hash, state `updating` and `link.retry()` on the backoff schedule").
+  // `client.onVersionMismatch(cb)` replaces this default outright (Scope), the same "one override,
+  // not a listener list" shape 0013's own "the engine raises an event whose default handler..."
+  // implies -- there is exactly one reaction to a mismatch, never several independent ones.
+  let versionMismatchHandler: (() => void) | null = null
+  function onVersionMismatch(cb: () => void): () => void {
+    versionMismatchHandler = cb
+    return () => {
+      if (versionMismatchHandler === cb) versionMismatchHandler = null
+    }
+  }
+  const RELOADED_FROM_KEY = 'engine.reloadedFrom'
+  function defaultVersionMismatchHandler(): void {
+    if (typeof window === 'undefined' || typeof sessionStorage === 'undefined') return
+    let already: string | null = null
+    try {
+      already = sessionStorage.getItem(RELOADED_FROM_KEY)
+    } catch {
+      // Storage access can throw (private mode, quota) -- treated the same as "never reloaded":
+      // 0013's own guard degrades to "reload every time" rather than never reloading at all.
+    }
+    if (already !== options.wasm.buildHash) {
+      try {
+        sessionStorage.setItem(RELOADED_FROM_KEY, options.wasm.buildHash)
+      } catch {
+        // Same as above: a failed write still reloads once (this pass), just without the guard
+        // against a *further* reload on the next mismatch.
+      }
+      window.location.reload()
+      return
+    }
+    // Same build hash as the last reload: redeploying will not fix this reconnect. `updating`
+    // (Scope) and retry on the backoff schedule -- `net/link.ts`'s own `BACKOFF_SCHEDULE_MS`,
+    // mirrored here as a plain literal (Deviations: this file has no reason to import `net/link.ts`
+    // otherwise, and the schedule is 0013's own fixed constant, not a value the net worker computes
+    // per call) since main, not the net worker, owns this retry loop once a link has stopped for
+    // good (`worker/net.ts`'s own `buildLink` doc comment: `{ type: 'retry' }` is what rebuilds a
+    // terminally-stopped `Link` from scratch).
+    emitLink({ state: 'updating' })
+    scheduleVersionMismatchRetry(0)
+  }
+  const VERSION_MISMATCH_BACKOFF_MS = [0, 500, 1000, 2000, 5000]
+  function scheduleVersionMismatchRetry(step: number): void {
+    const delay = VERSION_MISMATCH_BACKOFF_MS[
+      Math.min(step, VERSION_MISMATCH_BACKOFF_MS.length - 1)
+    ] as number
+    scheduler.setTimer(() => {
+      const w = hostWorkerEntry()
+      w?.worker.postMessage({ type: 'retry' } satisfies ToWorker)
+      // No ack of "did that retry actually land": the net worker's own next `{ type: 'link' }`
+      // message (a fresh `up`, or another `down`) drives whatever happens after this, the same way
+      // a real reconnect always does -- this is only what keeps *asking* while nothing has.
+      scheduleVersionMismatchRetry(step + 1)
+    }, delay)
+  }
+
+  // docs/plan/29-net-worker-and-reference-server.md steps 1-2: `session_state` polling off the
+  // clock block (the same `readClockBlockInto`/`clockScratch` `dispatch`/`waitForLive` already use)
+  // -- the one thing that turns a net-level `up` into the public `online` state, since the net
+  // worker itself never parses a message and so cannot know whether a session actually went live.
+  // Runs only while a poll is in flight (`onlinePolling`), one per `up` transition; a `down` before
+  // it resolves stops it by construction (`onlinePolling` is set `false`, so the next queued
+  // `scheduler.setTimer` callback -- if one is already pending -- checks it and no-ops).
+  let onlinePolling = false
+  function pollForOnline(): void {
+    if (!onlinePolling) return
+    readClockBlockInto(clockView, clockScratch)
+    if (at(clockScratch, CLOCK_FIELD.SessionState) === SessionState.Online) {
+      onlinePolling = false
+      emitLink({ state: 'online' })
+      return
+    }
+    scheduler.setTimer(pollForOnline, 0)
+  }
+
+  let everLinkedUp = false
+  // 0013 Client policy: "an indicator appears after 1 s" -- a transient `down` (`'dead'`/`'close'`)
+  // is not itself worth a `reconnecting` event until a real socket has actually stayed down this
+  // long; `downGen` lets a `down` that resolves back to `up` before the delay elapses cancel the
+  // pending indicator (a stale timer's own check just no-ops instead).
+  const RECONNECT_INDICATOR_DELAY_MS = 1000
+  let downGen = 0
+  function handleNetLink(m: NetLinkMessage): void {
+    if (m.state === 'up') {
+      downGen++
+      if (!everLinkedUp) {
+        everLinkedUp = true
+        emitLink({ state: 'connecting' })
+      }
+      onlinePolling = true
+      pollForOnline()
+      return
+    }
+    onlinePolling = false
+    if (m.reason === 'superseded') {
+      emitLink({ state: 'superseded' })
+      return
+    }
+    if (m.reason === 'bad-key') {
+      emitLink({ state: 'rejected', reason: 'BadKey' })
+      return
+    }
+    if (m.reason === 'full') {
+      emitLink({ state: 'rejected', reason: 'Full' })
+      return
+    }
+    if (m.reason === 'version-mismatch') {
+      ;(versionMismatchHandler ?? defaultVersionMismatchHandler)()
+      return
+    }
+    // `'dead'` or `'close'`: a transient drop the net worker's own `Link` is already retrying on
+    // its own backoff schedule (`net/link.ts`) -- this is purely the UI-facing indicator delay.
+    const myGen = ++downGen
+    scheduler.setTimer(() => {
+      if (myGen === downGen) emitLink({ state: 'reconnecting' })
+    }, RECONNECT_INDICATOR_DELAY_MS)
   }
 
   // docs/plan/23-persistence-opfs-and-lifecycle.md Planning decision 5: `navigator.storage.persist()`
@@ -1585,6 +1831,17 @@ export function createClient(options: ClientOptions): Client {
               params: worldConfig.params,
             }
           : undefined
+      // docs/plan/29-net-worker-and-reference-server.md steps 1-2: the `net`-kind spawn's own real
+      // dial target, present only for a `{ kind: 'remote' }` host. `remoteLinked` (the `client`-kind
+      // spawn only) is what gates `worker/client-net.ts`'s handshake pump on `CB_LINK_STATE`.
+      const net =
+        kind === 'net' && options.host.kind === 'remote'
+          ? {
+              url: options.host.url,
+              ...(options.host.joinKey ? { joinKey: options.host.joinKey } : {}),
+            }
+          : undefined
+      const remoteLinked = kind === 'client' && options.host.kind === 'remote' ? true : undefined
       return setupWorker(
         worker,
         kind,
@@ -1595,9 +1852,12 @@ export function createClient(options: ClientOptions): Client {
         options.test?.flags,
         link,
         world,
+        net,
+        remoteLinked,
         onLifecycle,
         onWorldOp,
         onWelcome,
+        handleNetLink,
       )
     })
     await Promise.all(waits)
@@ -1615,7 +1875,13 @@ export function createClient(options: ClientOptions): Client {
   const workersUp = start()
   const ready = workersUp.then(() => {
     resultsFrameHandle = scheduler.requestFrame(resultsFrame)
-    return linked ? waitForLive() : undefined
+    // `waitForLive()` is started whenever `linked` (both `local` + `connect` and every `remote`
+    // host), so `nextSeq` still gets seeded from the real session's own `seqSeed` the moment a
+    // remote session actually goes live -- `ready` itself only *awaits* it when `awaitLive` is
+    // also true (`local`): a remote host's own poll keeps running in the background regardless,
+    // deliberately not chained into anything (it never rejects; nothing needs its resolution here).
+    const live = linked ? waitForLive() : undefined
+    return awaitLive ? live : undefined
   })
   const client: Client = {
     ready,
@@ -1626,6 +1892,8 @@ export function createClient(options: ClientOptions): Client {
     onUi,
     onStorage,
     onResyncing,
+    onLink,
+    onVersionMismatch,
     exportWorld,
     importWorld,
     deleteWorld,

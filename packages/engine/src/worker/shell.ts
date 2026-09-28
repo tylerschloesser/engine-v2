@@ -15,6 +15,8 @@ import {
 import type {
   ClientLifecycleMessage,
   FromWorker,
+  NetControlMessage,
+  NetLinkMessage,
   SimControlMessage,
   SimLifecycleMessage,
   SimWorldOpMessage,
@@ -23,8 +25,14 @@ import type {
 } from './protocol.js'
 
 export type LoopState = {
-  body: (wokenBy: number) => void
-  timeoutMs: () => number
+  /** Absent only for the `net` kind (docs/plan/29-net-worker-and-reference-server.md steps 1-2):
+   * event-driven, never blocked in `Atomics.wait` (0015 §2 "the net worker is event-driven"), so it
+   * has no loop for `runBlockingLoop` to run at all -- `worker.ts` checks `loop?.body` before ever
+   * calling it, not merely `loop` itself (a `net`-kind `setup()` still returns a non-null
+   * `LoopState` when it wants to register `linkControl`/`stop` below, exactly the way `sim`
+   * registers `simControl` alongside a real `body`). */
+  body?: (wokenBy: number) => void
+  timeoutMs?: () => number
   /** Optional: a kind with a WASM instance answers a parked-only `test-call` message through this
    * (`worker/test-call.ts`'s `handleTestCall`, closed over its own instance). Absent for a kind
    * with no instance (`net`). Not part of the loop `runBlockingLoop` re-enters with -- `worker.ts`
@@ -41,6 +49,23 @@ export type LoopState = {
    * (`message.world`) -- including a world whose `Persistence.open` itself failed (Deviations,
    * `'load-failed'`), which still has live OPFS handles to offer. */
   worldOp?: (m: SimWorldOpMessage) => void
+  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2: `worker/net.ts`'s own handler for
+   * `NetControlMessage` (`probe`/`retry`) -- deliverable at any time (this kind is never blocked in
+   * `Atomics.wait`, so `worker.ts` routes it here directly, with no `W_PARKED` gate at all, unlike
+   * `simControl`/`worldOp`). Present only for the `net` kind. */
+  linkControl?: (m: NetControlMessage) => void
+  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "M06b's `stop` sends
+   * `Bye{Leave}` first"): `worker/net.ts`'s own cleanup for `{ type: 'stop' }`, called by
+   * `worker.ts` *before* `shell.stop()` -- stops the uplink-drain timer and calls `Link.stop()`
+   * (`net/link.ts`), closing the current connection without a further reconnect. This is only the
+   * transport-teardown half: `Bye{Leave}` itself is a client-worker WASM message this net-kind
+   * worker cannot build (it never parses or constructs frames) -- a real `Bye` send, if a caller
+   * wants one, has to reach the uplink ring *before* `{ type: 'stop' }` is posted here at all
+   * (`client.leave()`, Non-scope this cut: no production caller posts `{ type: 'stop' }` to a
+   * `net`-kind worker yet, `client.ts`'s own `destroy()` still only `terminate()`s every worker
+   * directly). Present only for the `net` kind; every other kind still relies on `Shell.stop()`
+   * alone. */
+  stop?: () => void
 }
 
 /** Every kind's `timeoutMs` until M13 gives `sim` a real tick deadline: a module-level constant
@@ -83,7 +108,7 @@ export interface WorkerShell {
    * notifications beyond `ready`/`fatal` (`SimLifecycleMessage`) -- `postMessage` after setup still
    * carries lifecycle only (0015 §2). Step 5 adds `SimWorldOpResult` to the same channel (still not a
    * per-frame/per-tick path: one message per explicit export/import/delete request). */
-  post(m: SimLifecycleMessage | SimWorldOpResult | ClientLifecycleMessage): void
+  post(m: SimLifecycleMessage | SimWorldOpResult | ClientLifecycleMessage | NetLinkMessage): void
 }
 
 /** `postMessage` is the worker's only channel to main outside setup (0015 §2): shared by every
@@ -136,7 +161,7 @@ export class Shell implements WorkerShell {
     post({ type: 'fatal', message })
   }
 
-  post(m: SimLifecycleMessage | SimWorldOpResult | ClientLifecycleMessage): void {
+  post(m: SimLifecycleMessage | SimWorldOpResult | ClientLifecycleMessage | NetLinkMessage): void {
     post(m)
   }
 
@@ -180,10 +205,15 @@ export class Shell implements WorkerShell {
         }
         this.#asyncInFlight = false
         const loop = this.#loop
-        if (!loop) return
+        // `net`-kind Deviations (docs/plan/29-net-worker-and-reference-server.md steps 1-2): a
+        // `LoopState` with no `body` (`worker.ts`'s own `loop?.body` gate) never reaches `setLoop`
+        // in the first place (`runBlockingLoop` is what calls it), so `this.#loop` is null for that
+        // kind for its whole life -- this guard is never actually reached with a bodyless loop, but
+        // the type is honest about it regardless.
+        if (!loop?.body) return
         const seen = this.observeWake()
         Atomics.store(this.control.words, workerWord(this.index, W_PARKED), 0)
-        runBlockingLoop(this, loop.body, loop.timeoutMs, seen)
+        runBlockingLoop(this, loop.body, loop.timeoutMs ?? noTimeout, seen)
       })
   }
 
@@ -244,10 +274,10 @@ export class Shell implements WorkerShell {
     Atomics.store(this.control.words, workerWord(this.index, W_YIELD), 0)
     if (this.#asyncInFlight) return
     const loop = this.#loop
-    if (loop) {
+    if (loop?.body) {
       const seen = this.observeWake()
       Atomics.store(this.control.words, workerWord(this.index, W_PARKED), 0)
-      runBlockingLoop(this, loop.body, loop.timeoutMs, seen)
+      runBlockingLoop(this, loop.body, loop.timeoutMs ?? noTimeout, seen)
     }
   }
 
