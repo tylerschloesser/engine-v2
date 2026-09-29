@@ -953,3 +953,73 @@ slower timing apparently allows) -- the fix is verified by mechanism and by the 
 deterministic regression test above, not by reproducing CI's exact race locally. `pnpm test`/`pnpm
 lint` green; `pnpm test:slow` clean twice in a row (`netcode pass 5 tests ~59s`, `browser pass 58
 tests ~32-34s`, `frame-bench pass 1 tests ~6.6s`). `pgrep` empty after every run.
+
+## Fix round 6 (`device-serve/proxy-and-apps` still times out at the full 600 s -- structural split)
+
+CI's fast tier is now fully clean (confirmed by the coordinator: rust/unit/wasm/netcode/browser all
+passing, and the `no_alloc_ui`/`gc/net-negative-control` failures seen on two earlier runs never
+recurred on the identical commit -- genuine CI-runner noise, not chased, per instruction). One thing
+left: `device-serve/proxy-and-apps` now times out at the *full* fix-round-4 ceiling (600,000 ms),
+not a partial one -- the coordinator's own read is right: this is not a number problem, it is a
+structure problem. Two sequential real builds (a small fixture-app build, then `games/reference`'s
+own full production build) were sharing one timeout window; splitting into two independent tests
+gives each its own full budget instead.
+
+**Structural fix, as directed**: `device-serve-proxy-and-apps.test.ts`'s single `test()` (two
+sequential `checkMode` calls) is now two independent tests, `device-serve/proxy-and-apps: fixture
+app` and `device-serve/proxy-and-apps: reference app`, each its own `600_000` ms budget. Shared
+helpers (`checkMode`, `waitReady`, `wsUpgradeSucceeds`, the progress-logging `log()`) are unchanged;
+`log()`'s own `t0` is now reset at the start of each test (was a single module-level constant) so
+the second test's own elapsed-ms trail does not silently include the first test's already-elapsed
+time. Both tests keep their own distinct port pairs (fix round 2's own reasoning, now with even less
+need for it -- Vitest's own default sequential-within-a-file test ordering means the second test
+never starts until the first, `afterEach` included, has fully finished -- kept anyway as cheap
+insurance). Progress logging (forwarding `device-serve.mjs`'s own child stdout/stderr, fix round 4)
+is unchanged and stays valuable regardless, per the coordinator's own instruction.
+
+**Checked the coordinator's own "better structural idea" (reusing `scripts/suites.mjs`'s earlier
+`reference` build step instead of `device-serve.mjs`'s own separate build) and judged it not a
+small, clean change worth making, for two real reasons, not a shrug**: (1) the two build
+invocations are not equivalent -- `suites.mjs`'s own `reference` build step passes `--minify false`
+(real, unminified function names, needed by a *different* consumer, the software-mode zero-GC
+attribution test), where `device-serve.mjs`'s own call uses the plain `vite build` script with real
+production minification; only the JS-bundling half differs, but that is still a real difference; (2)
+more fundamentally, `device-serve.mjs --app reference` is *itself* the thing this test proves works
+end to end -- a real device-check tool Tyler runs interactively (`pnpm device:serve --tunnel --app
+reference`) -- skipping its own build step to reuse someone else's artifact would narrow what the
+test actually proves, for a win that would not even address the dominant cost: `buildGame()`'s own
+bindings step (`cargo test --workspace ... export_bindings`) is a whole-workspace test-binary
+*execution*, not merely a compile (this repo's workspace has `packages/engine/crates/*` + 14
+`packages/engine/fixtures/*` crates + `games/reference/sim` -- confirmed by counting: `ls packages/
+engine/fixtures/ | wc -l` = 15, `Cargo.toml`'s own `[lints] workspace = true` convention makes each
+one a real member) -- `cargo test` always actually runs the binaries it names regardless of whether
+anything needed recompiling, so a warm compile cache does not remove this cost. The change that
+would actually address it -- scoping `buildGame()`'s own bindings step narrower than `--workspace`
+-- is a real, `build-game.ts`-documented, deliberate design choice (catching a stale/uncommitted
+binding *anywhere* in the workspace, not just the one game being built) and a materially bigger edit
+than this range's own scope. Full reasoning, in this exact form, is in the file's own comment next
+to both `test()` calls.
+
+**Verified, this range.** Both split tests pass locally, including a real, unforced ~110 s
+`--app reference` build this session happened to hit organically (not deliberately cache-cleared --
+real contention from this session's own many other builds, the same "contention, not raw compute"
+mechanism fix round 4 already found) -- confirms the whole-workspace bindings-execution cost is
+real and noticeable even under generally-warm local conditions, corroborating the reasoning above.
+`pnpm test`/`pnpm lint` green (this machine was under severe, unrelated load for stretches of this
+range -- `uptime` load averages up to 74 at one point, `ps aux` showing macOS Spotlight indexing
+(`mds`/`mds_stores`) and other concurrent sessions as the source, not this range's own processes;
+every resulting flake -- `gc-reference` CDP-session errors, `netcode`'s own unrelated `conditioned-
+link`/`join-converges` 5 s Vitest-default timeouts, `games/reference`'s own `collect-flow.spec.ts`
+-- reproduced in files this range never touched and passed clean once retried after load settled,
+consistent with every other load-sensitive flake this whole session already found and set aside).
+`pnpm test:slow` clean twice in a row (`netcode pass 6 tests ~58-59s`, +1 test count from the split,
+confirming both halves register and run; `browser pass 58 tests ~32-33s`; `frame-bench pass 1 tests
+~6.5-6.6s`). `pgrep` empty after every run.
+
+**If CI is still not reliably green on this test after the split**, per the coordinator's own
+explicit instruction this is where the range stops: `device-serve/proxy-and-apps`'s CI-only
+slow-tier cost becomes a recorded, known limitation rather than another round -- its functional
+correctness is already independently proven (the raw `curl`/`WebSocket` checks from the Part A
+range, plus every local run across every fix round this session, including the two above). Not
+deciding that here; reporting it as the honest, plainly-stated fallback the coordinator already
+named.

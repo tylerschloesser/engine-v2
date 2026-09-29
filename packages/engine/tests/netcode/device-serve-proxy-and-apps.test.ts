@@ -1,16 +1,23 @@
 // `device-serve/proxy-and-apps` (docs/plan/29-net-worker-and-reference-server.md Scope/Tests
-// added, Part A of the final cut): spawns `pnpm device:serve`'s own script twice -- default app
-// (the fixture app) with `--ws puts`, then `--app reference` with `--ws puts` too (Deviations: the
-// exit criterion's own literal `--app reference --ws`, with no fixture named, points the child
-// `games/reference-server` at the reference game's own build, which is not yet multiplayer before
-// M34 and fails `engine_init: BadConfig` there -- the same pre-existing, out-of-scope gap steps 3-4
-// already flagged for `client_on_welcome`'s own seed/params handling. `--ws puts` is well inside
-// `--ws [<fixture>]`'s own grammar, independent of `--app`, and is what this test uses for both
-// modes so it proves the real thing this exit criterion cares about -- the proxy and both apps --
-// without also re-proving a gap this milestone does not own fixing) -- for each mode: fetches `/`
-// and checks the COOP/COEP headers every page of this repo's apps carries (0015 §3), then opens a
-// real `WebSocket` to `/ws` and confirms the upgrade succeeds through Vite's own `preview.proxy`
-// reaching the real `games/reference-server` child on its own port.
+// added, Part A of the final cut): spawns `pnpm device:serve`'s own script -- default app (the
+// fixture app) with `--ws puts`, and `--app reference` with `--ws puts` too (Deviations: the exit
+// criterion's own literal `--app reference --ws`, with no fixture named, points the child `games/
+// reference-server` at the reference game's own build, which is not yet multiplayer before M34 and
+// fails `engine_init: BadConfig` there -- the same pre-existing, out-of-scope gap steps 3-4 already
+// flagged for `client_on_welcome`'s own seed/params handling. `--ws puts` is well inside `--ws
+// [<fixture>]`'s own grammar, independent of `--app`, and is what this test uses for both modes so
+// it proves the real thing this exit criterion cares about -- the proxy and both apps -- without
+// also re-proving a gap this milestone does not own fixing) -- for each mode: fetches `/` and checks
+// the COOP/COEP headers every page of this repo's apps carries (0015 §3), then opens a real
+// `WebSocket` to `/ws` and confirms the upgrade succeeds through Vite's own `preview.proxy` reaching
+// the real `games/reference-server` child on its own port.
+//
+// **Two independent tests, not one test calling `checkMode` twice** (M29b fix round 6): the
+// original single-test shape shared one timeout window across two sequential real builds; CI kept
+// timing out on the combined total even after a generously-derived ceiling (below, on each test's
+// own `600_000`). Splitting gives each mode its own full budget instead of splitting one shared
+// window across two builds -- see the reasoning at the bottom of this file, next to both `test()`
+// calls.
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { afterEach, expect, test } from 'vitest'
@@ -37,7 +44,10 @@ let child: ReturnType<typeof spawn> | undefined
 // passes through logs with an elapsed-ms prefix, `console.log` (not Vitest's own reporter, which
 // only ever prints a *passing* test's output on failure -- but `console.log` still lands in the
 // suite's own captured stdout either way, exactly what the coordinator's own artifact was missing).
-const t0 = Date.now()
+// `t0` is reset at the start of each of the two tests below (M29b fix round 6, the split), not a
+// single module-level constant, so each test's own elapsed-ms trail starts at 0 rather than the
+// second test's own timestamps silently including the first test's already-elapsed time.
+let t0 = Date.now()
 function log(msg: string): void {
   console.log(`device-serve/proxy-and-apps +${Date.now() - t0}ms: ${msg}`)
 }
@@ -121,42 +131,48 @@ async function checkMode(args: string[], port: number, wsPort: number): Promise<
   child = undefined
 }
 
-// 600_000 (10 minutes), not 120_000 (M29b fix round 4) -- CI still timed out at exactly 120 s with
-// *zero* captured stdout even after `soloTiers`/`--no-file-parallelism` (fix round 2) removed every
-// contention source this session had previously found and fixed. Progress logging (`log()`, above)
-// is the fix for the visibility half of that; this is the fix for the number itself, derived from a
-// real local measurement, not another guess.
+// 600_000 (10 minutes) each, not one shared 600_000 across both modes (M29b fix round 6): CI still
+// timed out at exactly the *full* 600 s even after fix round 4's own generously-derived ceiling --
+// the two sequential `checkMode` calls (a small fixture-app build, then `games/reference`'s own
+// full production build -- `buildGame()`'s bindings step, `cargo test --workspace ...
+// export_bindings`, a whole-workspace test-binary *execution*, not merely a compile: this repo's
+// own workspace has `packages/engine/crates/*` + 14 `packages/engine/fixtures/*` crates + `games/
+// reference/sim`, each contributing real process-spawn/test-harness-startup overhead even once
+// every artifact is fully compiled and cached) don't reliably fit in one shared window, run at the
+// tail end of an already-long slow-tier job. Splitting into two independent tests, each its own
+// full budget, is a structural fix (roughly doubling total available time without inflating any
+// single number further), not another blind bump -- the coordinator's own explicit call.
 //
-// **The real mechanism, found by reading `build-game.ts` (not assumed): `--app reference`'s own
-// build calls `buildGame()`, whose bindings step runs `cargo test --workspace ... export_bindings`
-// (`BINDINGS_CARGO_ARGS`, `build-game.ts`) -- a *whole-workspace* test compile (every crate under
-// `packages/engine/crates/*`, `packages/engine/fixtures/*`, plus `games/reference/sim` itself), not
-// merely "bundle some JS".** A *warm*-cache run of this test's own two `checkMode` calls together
-// measures ~2.7-3.1 s total on this machine (`pnpm exec vitest run --project netcode -t
-// "device-serve/proxy-and-apps"`, 3 repeats) -- but that number is a poor predictor of CI's own
-// worst case: CI has no guarantee of a warm target directory for this specific, relatively new
-// build path (`--app reference`'s own release-profile compile), and `Swatinem/rust-cache`'s own
-// cache may not cover it on a cache-miss run. Measured directly instead, this machine, with
-// `reference-sim`'s own release artifacts freshly cleared (`cargo clean --release --target
-// wasm32-unknown-unknown -p reference-sim`, simulating a cold/cache-miss build): `pnpm --filter
-// reference build` alone took **4 m 11 s** (251 s inside the `engine:vite buildStart` plugin hook,
-// i.e. the `buildGame()`/bindings step above) -- on a 14-core machine, with dependencies (`engine`,
-// `serde`, `ts-rs`) themselves still warm from this session's own many other builds. Real CPU time
-// for that run was only ~6 s (`user`+`sys`) against 251 s of wall clock -- most of it was contention
-// (this machine ran many overlapping cargo/vitest/playwright invocations this session), not raw
-// compute, which is itself informative: a whole-workspace `cargo test` compile is exactly the kind
-// of operation that stalls hard, for reasons other than pure CPU speed, under real contention --
-// and CI's own runner is both weaker *and* shares resources with the rest of its own job.
-//
-// Ceiling: even taking only the measured 251 s figure (ignoring `checkMode`'s own first, cheap
-// `--ws puts` call and every other phase) and applying a real, stated ~2.4x margin for CI's own
-// smaller/shared hardware and cold dependency cache (harsher than the 251 s figure already reflects,
-// since that number's own dependencies were warm) lands at ~600 s. Rounded to a clean **600,000 ms
-// (10 minutes)**. `--budget-scale 1000` (`ci.yml`) already establishes that CI's own slow tier is
-// never gated on wall-clock time; a bounded, generously-justified per-test timeout that actually
-// clears real, evidenced CI-class work is not corner-cutting (this repo's own Rules: "when the fix
-// really is a time limit, say why it is not a mask" -- said above, in full, with real numbers).
-test('device-serve/proxy-and-apps @slow', async () => {
+// **Checked whether the `--app reference` build could reuse `scripts/suites.mjs`'s own earlier
+// `reference` build step (`pnpm test`'s own Phase 1, which already builds `games/reference` once,
+// before any suite -- including this one -- ever runs) instead of `device-serve.mjs`'s own second,
+// separate `pnpm --filter reference build` call, and judged it not a small, clean change worth
+// making here.** Two real obstacles, not a shrug: (1) the two invocations are not equivalent --
+// `suites.mjs`'s own `reference` build step passes `--minify false` (real, unminified function
+// names, needed for a *different* consumer, the software-mode zero-GC attribution test) where
+// `device-serve.mjs`'s own call uses the plain `vite build` script, real production minification
+// included -- the JS-bundling half genuinely differs, even though the underlying `engine`-plugin
+// WASM/bindings compile (the actually-expensive half) does not; (2) more fundamentally,
+// `device-serve.mjs --app reference` is *itself* the thing this test proves works end to end (a
+// real device-check tool Tyler runs interactively, `pnpm device:serve --tunnel --app reference`) --
+// skipping its own build step to reuse someone else's artifact would narrow what this test actually
+// proves (the tool's own build path, not just the served app's headers) for a win that would not
+// even address the dominant cost anyway: `cargo test --workspace`'s own per-crate test-binary
+// *execution* overhead does not go away with a warm compile cache, since `cargo test` always
+// actually runs the binaries it names, regardless of whether anything needed recompiling.
+// Restructuring `buildGame()`'s own bindings step to scope narrower than `--workspace` would be the
+// change that actually addresses that cost -- a real, `build-game.ts`-documented, deliberate design
+// choice ("`--workspace` also runs *every* workspace member's own `export_bindings_*` tests", so a
+// stale/uncommitted binding anywhere is caught), and a materially bigger edit than this range's own
+// scope. The split above is the proportionate stopping point.
+async function checkFixtureApp(): Promise<void> {
+  t0 = Date.now()
   await checkMode(['--ws', 'puts'], PORT_A, WS_PORT_A)
+}
+async function checkReferenceApp(): Promise<void> {
+  t0 = Date.now()
   await checkMode(['--app', 'reference', '--ws', 'puts'], PORT_B, WS_PORT_B)
-}, 600_000)
+}
+
+test('device-serve/proxy-and-apps: fixture app @slow', checkFixtureApp, 600_000)
+test('device-serve/proxy-and-apps: reference app @slow', checkReferenceApp, 600_000)
