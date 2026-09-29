@@ -109,6 +109,74 @@ test('ws/deflate-refused', async () => {
   expect(() => attachWebSocketServer(wss, fakeServer)).toThrow(/perMessageDeflate/)
 })
 
+// M29b fix round 5 (`mp/version-mismatch-reloads-once` failing live on CI, twice across several
+// reruns, with `SimHost.accept: no free connection slot`): `attachWebSocketServer`'s own
+// `'connection'` listener now catches that throw and closes the overflow socket with `CloseCode.
+// Full` instead of letting an uncaught exception propagate (`server-node.ts`'s own Deviations has
+// the full mechanism this proves). A fake `WorldServer.accept` (not the real `SimHost`) keeps this
+// deterministic and fast: real `MAX_CONNS` capacity (8) would need eight real sockets just to reach
+// the interesting case, and the real cap is already exercised elsewhere -- this test's own job is
+// narrower, proving `attachWebSocketServer`'s own catch-and-close behaviour, not `SimHost`'s own
+// counting.
+test('ws/accept-overflow-closes-gracefully', async () => {
+  const { WebSocketServer } = await import('ws')
+  const wss = new WebSocketServer({ host: '127.0.0.1', port: 0, perMessageDeflate: false })
+  await new Promise<void>((resolve, reject) => {
+    wss.once('listening', resolve)
+    wss.once('error', reject)
+  })
+  const CAPACITY = 2
+  let accepted = 0
+  const fakeServer: WorldServer = {
+    ready: Promise.resolve(),
+    accept: () => {
+      if (accepted >= CAPACITY) {
+        throw new Error(`SimHost.accept: no free connection slot (MAX_CONNS = ${CAPACITY})`)
+      }
+      accepted++
+    },
+    stop: async () => {},
+  }
+  attachWebSocketServer(wss, fakeServer)
+  const address = wss.address()
+  if (typeof address === 'string' || address === null) throw new Error('unexpected address')
+  const url = `ws://127.0.0.1:${address.port}`
+
+  function dialAndAwaitOpen(): Promise<WebSocket> {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(url)
+      ws.onopen = () => resolve(ws)
+      ws.onerror = () => reject(new Error(`${url}: failed to open`))
+    })
+  }
+  function dialAndAwaitClose(): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(url)
+      ws.onclose = (ev) => resolve(ev.code)
+      ws.onerror = () => reject(new Error(`${url}: failed before closing`))
+    })
+  }
+
+  // Sequential, not `Promise.all` (Deviations, `ws/trace-identical`'s own precedent): each dial is
+  // awaited to a definite outcome before the next starts, so this proves overflow handling
+  // deterministically rather than racing real connection-establishment order.
+  const within = [await dialAndAwaitOpen(), await dialAndAwaitOpen()]
+  expect(accepted).toBe(CAPACITY)
+
+  // The overflow socket: `accept()` throws inside the real `'connection'` listener; the fix is that
+  // this closes gracefully (not an uncaught exception that would otherwise crash this whole test
+  // process) with the same `CloseCode.Full` a genuine player-capacity rejection already uses.
+  const overflowCode = await dialAndAwaitClose()
+  expect(overflowCode).toBe(CloseCode.Full)
+  expect(accepted).toBe(CAPACITY) // the overflow attempt never incremented it
+
+  // The two within-capacity sockets are wholly unaffected by the overflow attempt.
+  for (const ws of within) expect(ws.readyState).toBe(WebSocket.OPEN)
+
+  for (const ws of within) ws.close(1000)
+  await new Promise<void>((resolve) => wss.close(() => resolve()))
+})
+
 test('ws/reconnect-resume @slow', async () => {
   const harness = await createNetHarness({
     fixture: await putsFixture(),

@@ -884,3 +884,72 @@ row (`netcode pass 5 tests ~59s`, unchanged from fix round 3 -- this machine's o
 throughout, so the new 600 s ceiling was never exercised locally, only reasoned from the cold-cache
 measurement above). `pgrep` empty after every run. Not verified against real CI hardware -- no push
 from this session; the coordinator confirms on the next CI run.
+
+## Fix round 5 (a new, distinct, recurring CI failure: `SimHost.accept: no free connection slot`)
+
+`mp/version-mismatch-reloads-once` failed on CI with `SimHost.accept: no free connection slot
+(MAX_CONNS = 8)` -- twice across the coordinator's own CI reruns, recurring with the identical
+symptom both times (unlike the other one-off flakes this session's earlier fixes surfaced). Not
+related to either of the two fixes already verified this range (`net`'s software row, `device-
+serve`'s timeout) -- a genuinely new, distinct problem, found in the fast tier.
+
+**Traced the actual mechanism, not the coordinator's own working hypothesis.** The hypothesis was
+"a rejected connection's server-side slot isn't freed promptly." Read `server.ts`'s own
+`closeHandshake` (the function every `Reject` path, including `VersionMismatch`, calls): it sets
+`conns[conn] = null` *synchronously*, in the same call that sends the reject and initiates the
+close -- release is already prompt, not deferred to an async close round trip. **The hypothesis was
+wrong; the real mechanism is different and, once found, more concerning.**
+
+The real chain: `client.ts`'s `scheduleVersionMismatchRetry(step)` reschedules itself
+*unconditionally* inside its own `setTimer` callback (its own comment already says so: "no ack of
+'did that retry actually land'... this is only what keeps *asking*") -- it has zero backpressure
+against whether the *previous* retry's own connection has resolved yet. Each `{ type: 'retry' }`
+message makes `worker/net.ts` build a brand-new `Link`, which (`net/link.ts`'s own `dial()`, called
+synchronously at construction) opens a brand-new real `WebSocket` immediately. Critically, a
+server-side slot is allocated the *instant* a socket's own TCP/WS handshake completes
+(`SimHost.accept`, called from `attachWebSocketServer`'s `'connection'` listener) -- *before* any
+`Hello` is ever sent or processed, not when the reject happens. Under CI's own slower, more variable
+real-socket timing, if retries fire faster than a full open-Hello-reject-close round trip can
+complete, multiple real sockets can simultaneously be "accepted, not yet Hello'd," each holding one
+of the fixed 8 slots, until enough pile up to exceed `MAX_CONNS`.
+
+**The crash, not just the exhaustion, was the other real half of this**: `attachWebSocketServer`'s
+own `'connection'` listener called `server.accept(...)` with no `try`/`catch` at all --
+`SimHost.accept`'s own doc comment already documented its throw-on-full behaviour, but qualified it
+"single-player never exceeds one connection; a real capacity limit for multiplayer is M27+,
+Non-scope here" -- a comment written before M27+ ever landed, never revisited once it did. An
+uncaught throw inside a `'connection'` event listener is not a graceful per-socket rejection; it
+propagates as an unhandled exception that can take down the whole server process (every other
+connected player's own session included) -- confirmed live: with the fix reverted, a new regression
+test (below) hangs for the full 5 s Vitest default rather than resolving, because the exception
+means the overflow socket's own `close()` call is never reached.
+
+**Fixed at the root, not papered over, and without touching the pinned `SimHost.accept` Seam's own
+signature or throw contract.** `attachWebSocketServer` (`server-node.ts`) now wraps `server.
+accept(...)` in a `try`/`catch`; on the documented throw, it closes the new socket with `CloseCode.
+Full` (4004, the same code a genuine player-capacity rejection already uses -- "no room for you
+right now" is accurate either way) instead of letting the exception escape. `SimHost.accept`'s own
+doc comment updated to state this is now a real, expected condition every real caller must handle,
+not "Non-scope." The client-side retry loop's own lack of backpressure is a real, separate finding
+(recorded here, not fixed this range -- a behavioural change to `client.ts`'s own retry timing is a
+bigger, more invasive edit than this range's own scope, and the server-side fix already closes the
+actual crash/hang risk regardless of how aggressively a client ever retries).
+
+**New regression test, proven red-then-green.** `ws/accept-overflow-closes-gracefully`
+(`ws-transport.test.ts`): a real `ws.WebSocketServer` + real `WebSocket` clients against a
+deliberately small fake `WorldServer.accept` (capacity 2, not the real `MAX_CONNS` 8 -- proving
+`attachWebSocketServer`'s own catch-and-close behaviour is the target, not re-proving `SimHost`'s
+own counting, which is exercised elsewhere) -- two sockets dial and stay open, a third dials and is
+closed with `CloseCode.Full`, the first two are unaffected. Verified red: reverting only `server-
+node.ts`'s own fix (`git stash` on that one file) makes this same test hang and fail with `Test
+timed out in 5000ms` -- the overflow socket's own `close()` is never reached, exactly the mechanism
+above. Restored, green again.
+
+**Verified, this range**: `mp/version-mismatch-reloads-once` 3/3 clean locally; full `mp/*` (6
+tests) and full `netcode` (44 tests, +1 new) both green. This machine's own local timing is too fast
+to reproduce the exact 8-slot exhaustion race (`mp/version-mismatch-reloads-once` finishes in ~4 s
+here, nowhere near enough real time for the retry schedule to fire the many attempts CI's own
+slower timing apparently allows) -- the fix is verified by mechanism and by the isolated,
+deterministic regression test above, not by reproducing CI's exact race locally. `pnpm test`/`pnpm
+lint` green; `pnpm test:slow` clean twice in a row (`netcode pass 5 tests ~59s`, `browser pass 58
+tests ~32-34s`, `frame-bench pass 1 tests ~6.6s`). `pgrep` empty after every run.

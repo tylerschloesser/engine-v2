@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { GameJson } from './build-game.js'
 import { systemClock, systemScheduler } from './clock.js'
+import { CloseCode } from './host/handshake.js'
 import type { Connection, HostServices, MsgClass, WorldServer } from './server.js'
 import type { Storage } from './storage/types.js'
 
@@ -189,6 +190,27 @@ export function attachWebSocketServer(wss: WsServerLike, server: WorldServer): v
     )
   }
   wss.on('connection', (socket) => {
-    server.accept(wsSocketConnection(socket))
+    // M29b fix round 5: `SimHost.accept`'s own doc comment documents its throw-on-full behaviour
+    // as "single-player never exceeds one connection; a real capacity limit for multiplayer is
+    // M27+, Non-scope here" -- M27+ (this milestone) is exactly what now exercises it for real, and
+    // an uncaught throw inside a `'connection'` listener is not a graceful rejection, it is an
+    // unhandled exception that can crash this whole process (every other connected player's own
+    // session included), found live: `mp/version-mismatch-reloads-once`'s own client-side retry
+    // loop (`client.ts`'s `scheduleVersionMismatchRetry`) reschedules itself unconditionally, with
+    // no backpressure against whether the previous retry's own connection has resolved yet -- and a
+    // slot is occupied from the instant a socket's own TCP/WS handshake completes (`accept()`,
+    // called here), not from when its `Hello` is later processed, so under real, variable CI timing
+    // enough of these can be simultaneously "accepted, not yet Hello'd" to exceed `MAX_CONNS` (8)
+    // before any of them individually resolves. `SimHost.accept` itself is unchanged (a pinned
+    // Provides seam; still throws on the same documented condition) -- this is the one caller in
+    // this repo that turns that throw into what a real production server should do instead: close
+    // the new socket (the same `CloseCode.Full` a genuine player-capacity rejection already uses --
+    // "no room for you right now" is accurate either way) and let the client's own backoff retry
+    // later, rather than taking the whole process down.
+    try {
+      server.accept(wsSocketConnection(socket))
+    } catch {
+      socket.close(CloseCode.Full)
+    }
   })
 }

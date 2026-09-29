@@ -471,8 +471,13 @@ export interface SimHost {
    * same fixed cap `host::Host::connect` itself enforces), calls `sim_connect`, and wires
    * `connection.onMessage`/`onClose` so every uplink message this connection ever delivers reaches
    * `sim_admit` and a close reaches `sim_disconnect` automatically. Returns the `ConnId`. Throws if
-   * every slot is already taken (single-player never exceeds one connection; a real capacity limit
-   * for multiplayer is M27+, Non-scope here).
+   * every slot is already taken -- a real, expected condition once multiplayer is real (M27+, past
+   * this doc comment's own original "Non-scope here": a genuine retry storm can accept more sockets
+   * than `MAX_CONNS` before any of them individually resolves its own `Hello`, `server-node.ts`'s
+   * own `attachWebSocketServer` Deviations has the live-found mechanism). This function's own
+   * contract stays "throw, do not silently drop a caller's own accepted connection" -- a caller that
+   * cannot tolerate a synchronous throw (every real socket-accepting caller) wraps this call and
+   * closes the raw connection instead, the way `attachWebSocketServer` now does.
    *
    * The per-connection frame pass ("after each tick `sim_build_frame(conn)` -> `connection.send
    * (MsgClass.ReliableOrdered, view)` when `len > 0`", Scope) happens automatically, every tick,
