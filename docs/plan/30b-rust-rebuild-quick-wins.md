@@ -1,6 +1,6 @@
 # M30b: Rust rebuild time, simple options only
 
-Status: not started · After: 30 · Tyler-dependent: partly (a macOS setting only Tyler can change; everything else runs without him)
+Status: done · After: 30 · Tyler-dependent: partly (a macOS setting only Tyler can change; everything else runs without him)
 
 Written by the orchestrator at M30's gate, at Tyler's request (2026-09-29): "investigate speeding up the rust build. I only want to consider simple options and/or quick wins. I'd prefer a long build over complexity." **That sentence is this brief's governing rule.** A change that makes the build faster but the repo harder to understand is out of scope, however large its payoff.
 
@@ -45,10 +45,10 @@ Root `Cargo.toml` (profiles), fixture crates' `tests/` only under candidate 3, `
 None, unless candidate 3 is taken; then extend the binary-layout guard and show it failing on a stray file.
 
 ## Exit criteria
-- [ ] Deviations hold the baseline, the regression's cause (or what was ruled out) and a before/after table per candidate, each with `uptime`.
-- [ ] Every candidate is applied or rejected, each with a one-line reason; any macOS step for Tyler is written out exactly.
-- [ ] The sorted `cargo nextest list --workspace` count is unchanged.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Deviations hold the baseline, the regression's cause (or what was ruled out) and a before/after table per candidate, each with `uptime`.
+- [x] Every candidate is applied or rejected, each with a one-line reason; any macOS step for Tyler is written out exactly.
+- [x] The sorted `cargo nextest list --workspace` count is unchanged.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `touch packages/engine/crates/engine/src/lib.rs && pnpm test unit` (×3, before and after) · `cargo nextest list --workspace | sort | wc -l` · `pnpm test` · `pnpm lint`
