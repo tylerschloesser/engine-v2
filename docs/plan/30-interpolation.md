@@ -167,3 +167,12 @@ Notes: the fixtures build (`pnpm test` step) takes about 9 minutes after any eng
 - Not re-run: the CI-only software `neg burst` set, and the other topology pages (no change to them; the worker's only added cost is one atomic load per frame).
 
 Notes: `pnpm test` full run green on the second attempt; the first failed on `reference_ui_smoke_collect_and_inventory`, the known flaky pointer-interception test recorded in M28/M28b Deviations (it fails about half its isolated runs here with or without this milestone's worker change). Rust fixtures rebuilt once (513 s).
+
+### Gate round 1 (`reference_ui_smoke_collect_and_inventory`)
+
+Isolated runs of `pnpm test browser -t reference_ui_smoke_collect_and_inventory`, sequential, load average 4-9 throughout (base runs happened at the higher end), base and bisect points in a separate worktree:
+- base `485fd71`: 9/10. `9af4fbe` (steps 1-2): 8/10. **`2725906` (step 3): 4/10.** HEAD `4c8cd9e`: 3/10, 4/10 (two loops).
+- Inside step 3: without the `step_interp` call, 24/30; with `step_interp` present but without its `now_f64`/`render_t`/`count_modes` tail, 11/20. The tail does no work for a game with no remote players, so this is not a CPU cost; the effect is a shift in when things land, not an identified defect in the interpolation code. Noise between loops is large; I did not find which line of step 3 moves the timing.
+- **Cause of the failure itself (test race, found by dumping button rectangles):** in passing runs the page has two buttons, `0,0` at (644,369) and `-1,2` at (580,497), far apart. In failing runs no button exists yet at the first look, then both appear at the same default spot: a collect button is created when the `Ui` reaches the main thread, but the anchor layer only positions it on the next *stepped* frame, and the test steps none while it waits. So `button.click()` hits the unpositioned `-1,2` button on top. The old test passed only when the `Ui` happened to land before its last stepped frame.
+- **Fix (test code, no retry, timeout or forced click):** `games/reference/tests/browser/ui-smoke.spec.ts` now polls while stepping a frame per poll until at least one collect button exists and no two overlap, then clicks. 20/20 at HEAD. No production change.
+- Worktree `/Users/tyler/wt-base` removed.
