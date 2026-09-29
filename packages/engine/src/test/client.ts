@@ -38,6 +38,13 @@ import {
 } from '../worker/protocol.js'
 import type { Harness } from './harness.js'
 import type { ManualClock } from './manual-clock.js'
+import {
+  decodeCounters,
+  type InterpCounters,
+  PRESENCE_SAMPLE_BYTES,
+  type PresenceSampleRow,
+  readPresenceRows,
+} from './presence-samples.js'
 import { StepControl } from './step-block.js'
 
 /** The spike's ack-timeout guard (`spikes/zero-gc-webgpu/public/main.js`), reused by `stepFrame`
@@ -748,6 +755,41 @@ export async function predictStats(client: Client): Promise<{ appliedEver: numbe
   }
   const view = new DataView(result.buffer, result.byteOffset, result.byteLength)
   return { appliedEver: view.getUint32(0, true) }
+}
+
+/** docs/plan/30-interpolation.md, `engine/test`: every visible remote player as the client's last
+ * `frame()` interpolated it (`client_presence_sample_at`), ascending `PlayerId`. Requires the
+ * client worker parked. */
+export async function samplePresences(client: Client): Promise<PresenceSampleRow[]> {
+  return readPresenceRows(async (i) => {
+    const { value, result } = await callParked(
+      client,
+      'client',
+      'client_presence_sample_at',
+      [i],
+      PRESENCE_SAMPLE_BYTES,
+    )
+    if (value !== Status.Ok) {
+      throw new Error(`samplePresences: client_presence_sample_at failed: status ${value}`)
+    }
+    return result
+  })
+}
+
+/** docs/plan/30-interpolation.md, `engine/test`: `interpRenderedFrames`, `interpExtrapolatedFrames`
+ * and `interpDelayMs` (same export). Requires the client worker parked. */
+export async function interpCounters(client: Client): Promise<InterpCounters> {
+  const { value, result } = await callParked(
+    client,
+    'client',
+    'client_presence_sample_at',
+    [0],
+    PRESENCE_SAMPLE_BYTES,
+  )
+  if (value !== Status.Ok) {
+    throw new Error(`interpCounters: client_presence_sample_at failed: status ${value}`)
+  }
+  return decodeCounters(result)
 }
 
 /** docs/plan/16b-ui-observation-and-clock.md, `engine/test`: forces `UiObserver::mark_dirty()`

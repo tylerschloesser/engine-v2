@@ -12,6 +12,7 @@
 
 use crate::clock::{HostClock, LeadEstimator};
 use crate::game::Game;
+use crate::interp::InterpDelay;
 use crate::predict::{Overlay, OverlayDiff, Pending, PendingQueue, Prediction};
 use crate::sim::{Applied, Rejected};
 use crate::time::{Tick, Ticks};
@@ -72,6 +73,8 @@ pub struct FrameSummary {
     pub entity_ops: u32,
 }
 
+/// Capacity of the per-frame arrival list (`ClientCore::arrivals`).
+const ARRIVALS_CAP: usize = 16;
 const MIN_UPLINK_INTERVAL_MS: u32 = 50; // 0010: at most one batch per 50ms
 const KEEPALIVE_INTERVAL_MS: u32 = 1000; // 0010: at least one batch per 1s
 /// 0010 "Rates": "the latest camera report and presence sample at <= 10 Hz, on change" -- unlike
@@ -148,6 +151,22 @@ pub struct ClientCore<G: Game> {
     /// `game_instance.rs` wake (`frame(t_ms)`, real local wall time via `CameraBlock::
     /// frame_time_ms`) through [`Self::tick_fraction`], not only when a new host frame lands.
     host_clock: HostClock,
+    /// docs/plan/30-interpolation.md: the adaptive interpolation delay (0010 Rates), fed the tick of
+    /// every applied frame ([`Self::arrivals`]) stamped with the client clock at the next
+    /// [`Self::tick_fraction`] call, and slewed by that call's elapsed time.
+    interp_delay: InterpDelay,
+    /// Host ticks of frames applied by [`Self::on_frame`] since the last [`Self::tick_fraction`]
+    /// (fixed capacity; on overflow the oldest is dropped: only a stall's backlog can overflow it,
+    /// and its arrival times would all be the same clock reading anyway).
+    arrivals: [u32; ARRIVALS_CAP],
+    arrivals_len: usize,
+    /// The client clock of the previous [`Self::tick_fraction`] call (`None` before the first).
+    last_interp_ms: Option<f64>,
+    /// The interpolation render time, host ticks, as of the last [`Self::tick_fraction`].
+    render_t: f64,
+    /// Remote-player samples rendered / of those extrapolating, summed over frames.
+    interp_rendered: u32,
+    interp_extrapolated: u32,
     /// M26's lead estimator (Planning decisions "Lead estimation"), driving [`Self::set_lead`]
     /// from [`Self::on_ack_sample`].
     lead_estimator: LeadEstimator,
@@ -217,6 +236,13 @@ impl<G: Game> ClientCore<G> {
             overlay_diff: OverlayDiff::new(),
             overlay_diff_entries_last: 0,
             host_clock: HostClock::new(G::TICK_RATE),
+            interp_delay: InterpDelay::new(G::TICK_RATE),
+            arrivals: [0; ARRIVALS_CAP],
+            arrivals_len: 0,
+            last_interp_ms: None,
+            render_t: 0.0,
+            interp_rendered: 0,
+            interp_extrapolated: 0,
             lead_estimator: LeadEstimator::new(G::TICK_RATE),
             correction: 0.0,
             correction_set_at: Tick(0),
@@ -456,7 +482,45 @@ impl<G: Game> ClientCore<G> {
         self.host_clock.on_frame(self.replica.tick(), local_ms);
         let f = self.host_clock.now(local_ms).1;
         self.last_tick_fraction = f;
+        self.step_interp(local_ms);
         f
+    }
+
+    /// docs/plan/30-interpolation.md: once per client frame, at the client clock `local_ms`: stamps
+    /// the frames and presence samples decoded since the last call with `local_ms` (the real
+    /// arrival time `on_frame`'s signature cannot carry), slews the delay, and computes the render
+    /// time and the per-frame interpolation counters.
+    fn step_interp(&mut self, local_ms: f64) {
+        for i in 0..self.arrivals_len {
+            self.interp_delay
+                .on_arrival(Tick(self.arrivals[i]), local_ms);
+        }
+        self.arrivals_len = 0;
+        self.replica.remote_presences_mut().stamp_arrivals(local_ms);
+        if let Some(prev) = self.last_interp_ms {
+            self.interp_delay.advance(local_ms - prev);
+        }
+        self.last_interp_ms = Some(local_ms);
+        let now = self.host_clock.now_f64(local_ms);
+        self.render_t = self.interp_delay.render_time(now);
+        let (rendered, extrap) = self.replica.remote_presences().count_modes(self.render_t);
+        self.interp_rendered = self.interp_rendered.wrapping_add(rendered);
+        self.interp_extrapolated = self.interp_extrapolated.wrapping_add(extrap);
+    }
+
+    /// The interpolation render time (host ticks) as of the last [`Self::tick_fraction`].
+    pub fn render_time(&self) -> f64 {
+        self.render_t
+    }
+
+    /// The current interpolation delay, ms.
+    pub fn interp_delay_ms(&self) -> f32 {
+        self.interp_delay.delay_ms()
+    }
+
+    /// `(rendered, extrapolated)` remote-sample counts summed over every frame so far.
+    pub fn interp_counters(&self) -> (u32, u32) {
+        (self.interp_rendered, self.interp_extrapolated)
     }
 
     /// The last value [`Self::tick_fraction`] computed (this struct's own doc comment on
@@ -705,6 +769,12 @@ impl<G: Game> ClientCore<G> {
     pub fn on_frame(&mut self, bytes: &[u8]) -> Result<FrameSummary, WireError> {
         Self::validate(bytes)?;
         let summary = self.apply(bytes);
+        if self.arrivals_len == ARRIVALS_CAP {
+            self.arrivals.copy_within(1.., 0);
+            self.arrivals_len -= 1;
+        }
+        self.arrivals[self.arrivals_len] = summary.tick.0;
+        self.arrivals_len += 1;
         self.last_summary = summary;
         self.mutations = self.mutations.wrapping_add(1);
 
@@ -925,6 +995,7 @@ impl<G: Game> ClientCore<G> {
                                 sample,
                                 Tick(header.tick.wrapping_sub(age_ticks)),
                             );
+                            replica.refresh_presence(who, Tick(header.tick));
                         }
                         crate::wire::PresenceDeltaOp::Gone { who } => {
                             replica.apply_presence_gone(who);

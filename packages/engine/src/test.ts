@@ -24,6 +24,7 @@ export {
   forceSnapshot,
   hashDrawListFields,
   hostRegionHash,
+  interpCounters,
   lastUi,
   type NetCounters,
   netCounters,
@@ -34,6 +35,7 @@ export {
   pumpUntilLive,
   replicaHash,
   resumeWorkers,
+  samplePresences,
   setCamera,
   simCounters,
   stepFrame,
@@ -75,6 +77,11 @@ export {
   type NetHarnessCounters,
   type NetHarnessOptions,
 } from './test/net-harness.js'
+export type {
+  InterpCounters,
+  InterpModeName,
+  PresenceSampleRow,
+} from './test/presence-samples.js'
 export {
   drawCalls,
   drawListDropped,

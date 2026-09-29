@@ -164,7 +164,24 @@ pub struct PresenceClient {
 }
 
 impl ClientSide<Presence> for PresenceClient {
-    fn frame(&mut self, _cx: &mut FrameCx<'_, Presence>, presence: &mut PlayerPresence) {
+    fn frame(&mut self, cx: &mut FrameCx<'_, Presence>, presence: &mut PlayerPresence) {
+        // docs/plan/30-interpolation.md step 4, scripted path producer: once the camera has left
+        // its all-zero default (centre and velocity), the sample is the camera's centre and
+        // velocity (tiles and tiles/s to Q24.8), so a netcode scenario drives any curve through
+        // `HeadlessClient::setView`. A camera still at its default keeps the counter walk below
+        // (every earlier test relies on "changes every frame").
+        let cam = cx.camera();
+        if cam.centre != [0.0, 0.0] || cam.velocity != [0.0, 0.0] {
+            presence.pos = [
+                (cam.centre[0] * 256.0).round() as i32,
+                (cam.centre[1] * 256.0).round() as i32,
+            ];
+            presence.vel = [
+                (cam.velocity[0] * 256.0).round() as i16,
+                (cam.velocity[1] * 256.0).round() as i16,
+            ];
+            return;
+        }
         self.t = self.t.wrapping_add(1);
         presence.pos = [self.t, 0];
         presence.vel = [1, 0];

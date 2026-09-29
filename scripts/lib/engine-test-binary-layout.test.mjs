@@ -31,6 +31,7 @@ const ALLOWED_TOP_LEVEL_RS_FILES = new Set([
   'no_alloc_connection.rs',
   'no_alloc_drawlist.rs',
   'no_alloc_gen_queue.rs',
+  'no_alloc_interp.rs',
   'no_alloc_store.rs',
   'no_alloc_terrain.rs',
   'no_alloc_tick_state.rs',

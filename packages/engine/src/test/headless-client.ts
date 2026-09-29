@@ -41,6 +41,14 @@ import { seedToHexU64 } from '../sim-config.js'
 import { createNetPump } from '../worker/client-net.js'
 import { GEN_RECORD_HEADER_BYTES, readI32LE, writeGenHeader } from '../worker/gen-record.js'
 import { createShell } from '../worker/shell.js'
+import {
+  decodeCounters,
+  type InterpCounters,
+  PRESENCE_SAMPLE_BYTES,
+  type PresenceSampleRow,
+  rowFrom,
+  visibleCount,
+} from './presence-samples.js'
 
 function hexEncode(bytes: Uint8Array): string {
   let out = ''
@@ -147,6 +155,11 @@ export interface HeadlessClient {
    * Idempotent: closing an already-closed `Connection` is every real `Connection`'s own no-op
    * (`memory-connection.ts`'s own `if (end.closed) return`). */
   leave(): void
+  /** docs/plan/30-interpolation.md: every visible remote player as the last `stepFrame`
+   * interpolated it (`client_presence_sample_at`), ascending `PlayerId`. */
+  samplePresences(): PresenceSampleRow[]
+  /** `interpRenderedFrames`, `interpExtrapolatedFrames`, `interpDelayMs` (same export). */
+  interpCounters(): InterpCounters
 }
 
 /** A `Scheduler` that never fires anything (`HeadlessClientOptions.scheduler`'s own default):
@@ -395,6 +408,15 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
     }
   }
 
+  /** `client_presence_sample_at(i)`'s `Result` bytes (a copy; test-only, allocation is fine). */
+  function sampleAt(i: number): Uint8Array {
+    const status = inst.call1(inst.x.client_presence_sample_at, i)
+    if (status !== Status.Ok) {
+      throw new Error(`HeadlessClient: client_presence_sample_at failed: status ${status}`)
+    }
+    return resultRegion.u8.slice(0, PRESENCE_SAMPLE_BYTES)
+  }
+
   function readClock(): void {
     readClockBlockInto(clockView, clockScratch)
     if (!seeded && clockScratch[CLOCK_FIELD.SessionState] === SessionState.Online) {
@@ -499,6 +521,17 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
       readCameraBlockInto(cameraWriter, cameraRegion.u8, 0)
       inst.call1(inst.x.frame, 0)
       pump()
+    },
+    samplePresences() {
+      const rows: PresenceSampleRow[] = []
+      for (let i = 0; ; i++) {
+        const r = sampleAt(i)
+        if (i >= visibleCount(r)) return rows
+        rows.push(rowFrom(r))
+      }
+    },
+    interpCounters() {
+      return decodeCounters(sampleAt(0))
     },
     leave() {
       // Sent before `link.stop()` closes the connection (Deviations, `conditionLink`'s own

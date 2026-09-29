@@ -830,7 +830,8 @@ where
                     own_presence,
                     replica.remote_presences(),
                 )
-                .with_prediction(core.overlay(), core.pending_queue());
+                .with_prediction(core.overlay(), core.pending_queue())
+                .with_render_time(core.render_time());
 
                 // docs/plan/18-picking-and-overlay.md Scope, steps 4-6: "frame(t_ms) order becomes
                 // build FrameView -> ClientSide::frame -> extract -> header (follow, anchors) ->
@@ -1397,6 +1398,44 @@ where
                 out[0..4].copy_from_slice(&c.ui.calls().to_le_bytes());
                 out[4..8].copy_from_slice(&c.ui.records().to_le_bytes());
                 Status::Ok
+            }
+            _ => Status::Unsupported,
+        }
+    }
+
+    fn client_presence_sample_at(&mut self, index: u32, result: &mut [u8]) -> Status {
+        match self {
+            GameInstance::Client(c) => {
+                let Some(out) = result.get_mut(..36) else {
+                    return Status::BadLength;
+                };
+                let render_t = c.core.render_time();
+                let remotes = c.core.view().remote_presences();
+                let (visible, _) = remotes.count_modes(render_t);
+                let (rendered, extrap) = c.core.interp_counters();
+                out[0..4].copy_from_slice(&visible.to_le_bytes());
+                out[4..8].copy_from_slice(&rendered.to_le_bytes());
+                out[8..12].copy_from_slice(&extrap.to_le_bytes());
+                out[12..16].copy_from_slice(&c.core.interp_delay_ms().to_le_bytes());
+                match remotes.nth_visible(render_t, index as usize) {
+                    Some((who, s)) => {
+                        out[16..20].copy_from_slice(&who.0.to_le_bytes());
+                        out[20..24].copy_from_slice(&s.pos.x.to_le_bytes());
+                        out[24..28].copy_from_slice(&s.pos.y.to_le_bytes());
+                        out[28..32].copy_from_slice(&s.alpha.to_le_bytes());
+                        let mode = match s.mode {
+                            crate::interp::InterpMode::Interp => 0u32,
+                            crate::interp::InterpMode::Extrap => 1,
+                            crate::interp::InterpMode::Hold => 2,
+                        };
+                        out[32..36].copy_from_slice(&mode.to_le_bytes());
+                        Status::Ok
+                    }
+                    None => {
+                        out[16..36].fill(0);
+                        Status::Ok
+                    }
+                }
             }
             _ => Status::Unsupported,
         }

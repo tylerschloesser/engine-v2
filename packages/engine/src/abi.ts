@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 31
+export const ABI_VERSION = 32
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -346,6 +346,9 @@ export const ABI_EXPORTS = {
   // `u32` into `Result` -- proves "a dispatched action was actually predicted `Applied`" as a
   // real assertion, the same shape `client_ui_stats` already set for "ui ran".
   client_predict_stats: { role: 'client', params: 0, result: 'status' },
+  // docs/plan/30-interpolation.md (`ABI_VERSION` 31 -> 32), `engine/test` only: the interpolation view
+  // of remote players (36 LE bytes into `Result`; `Instance::client_presence_sample_at`'s doc).
+  client_presence_sample_at: { role: 'client', params: 1, result: 'status' },
 } as const satisfies Record<string, ExportSpec>
 
 export function statusName(n: number): string {

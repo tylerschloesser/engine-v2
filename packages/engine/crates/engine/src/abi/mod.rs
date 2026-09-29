@@ -616,6 +616,17 @@ pub fn client_clock_stats<T: Instance>(slot: &Slot<T>) -> Status {
     rt.inst.client_clock_stats(result)
 }
 
+/// `client_presence_sample_at(index) -> status`: `Instance::client_presence_sample_at`'s own doc
+/// comment has the 36-byte `Result` shape. `engine/test`-only (`samplePresences`).
+pub fn client_presence_sample_at<T: Instance>(slot: &Slot<T>, index: u32) -> Status {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.client_presence_sample_at(index, result)
+}
+
 /// `client_ui_mark_dirty() -> status`: forces `UiObserver::mark_dirty()` (docs/plan/
 /// 16b-ui-observation-and-clock.md; `Instance::client_ui_mark_dirty`'s own doc comment). No
 /// region crosses. `engine/test`-only (`markUiDirty`).

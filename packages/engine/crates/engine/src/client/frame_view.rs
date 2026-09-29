@@ -272,6 +272,10 @@ pub struct FrameView<'a, G: Game> {
     time_ms: f64,
     own_presence: G::Presence,
     remote_presences: &'a RemotePresences<G>,
+    /// docs/plan/30-interpolation.md: the render time (host ticks) [`Self::presences`] evaluates
+    /// the interpolation buffer at; `None` (every caller that never calls
+    /// [`Self::with_render_time`]) yields each remote's raw newest sample, as M19 did.
+    render_t: Option<f64>,
     /// `None` until [`Self::with_prediction`] attaches one (docs/plan/
     /// 26-prediction-rendering-and-clocks.md Scope), mirroring `world_access::View::with_overlay`'s
     /// own builder-step pattern: every existing caller (drawlist goldens, this file's own tests)
@@ -331,6 +335,7 @@ impl<'a, G: Game> FrameView<'a, G> {
             time_ms,
             own_presence,
             remote_presences,
+            render_t: None,
             overlay: None,
             pending: None,
         }
@@ -359,16 +364,39 @@ impl<'a, G: Game> FrameView<'a, G> {
     }
 
     /// Every remote player's newest known presence sample, ascending `PlayerId` (Provides).
+    ///
+    /// With a render time attached ([`Self::with_render_time`]; always so in the client worker)
+    /// `pos`, `vel` and `alpha` are interpolated (docs/plan/30-interpolation.md, 0012 "Remote
+    /// motion") and a remote that has faded out entirely is skipped; `sample` stays the newest raw
+    /// sample.
     pub fn presences(&self, f: &mut dyn FnMut(RemotePresence<'_, G>)) {
         for (who, entry) in self.remote_presences.iter() {
-            f(RemotePresence {
-                who,
-                pos: entry.sample.pos(),
-                vel: entry.sample.vel(),
-                sample: &entry.sample,
-                alpha: 1.0,
-            });
+            let Some(render_t) = self.render_t else {
+                f(RemotePresence {
+                    who,
+                    pos: entry.sample.pos(),
+                    vel: entry.sample.vel(),
+                    sample: &entry.sample,
+                    alpha: 1.0,
+                });
+                continue;
+            };
+            if let Some(s) = self.remote_presences.sample(who, render_t) {
+                f(RemotePresence {
+                    who,
+                    pos: s.pos,
+                    vel: s.vel,
+                    sample: &entry.sample,
+                    alpha: s.alpha,
+                });
+            }
         }
+    }
+
+    /// Attaches the interpolation render time (host ticks) `presences()` samples at.
+    pub fn with_render_time(mut self, render_t: f64) -> Self {
+        self.render_t = Some(render_t);
+        self
     }
 
     pub fn world(&self) -> &dyn WorldRead<G> {

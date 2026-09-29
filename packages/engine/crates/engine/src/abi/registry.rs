@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 31;
+pub const ABI_VERSION: u32 = 32;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -566,6 +566,17 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
+    /// docs/plan/30-interpolation.md (`ABI_VERSION` 31 -> 32), `engine/test` only
+    /// (`samplePresences`, `interpCounters`): the interpolation view of remote players as of the
+    /// last `frame()`. Writes into `Result`, 36 LE bytes: `visible: u32` (remotes visible),
+    /// `rendered: u32` and `extrapolated: u32` (cumulative per-frame counters), `delay_ms: f32`,
+    /// then the `index`th visible remote (ascending `PlayerId`): `who: u32`, `x: i32`, `y: i32`
+    /// (`WorldPos`), `alpha: f32`, `mode: u32` (0 interp, 1 extrap, 2 hold). When `index >= visible` the
+    /// sample fields are zero (`who == 0`, never a real `PlayerId`).
+    fn client_presence_sample_at(&mut self, _index: u32, _result: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
+
     /// docs/plan/17-drawlist-and-sprites.md (`ABI_VERSION` 14 -> 15): how many `Draw` records the
     /// last `frame()` call's own counting sort wrote into `RegionId::DrawList` (`DrawList::
     /// record_count`) -- `0` on a wrong role or before the first `frame()` call, same "always
@@ -1068,6 +1079,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn client_predict_stats() -> u32 {
             $crate::abi::client_predict_stats(&__ENGINE_SLOT) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_presence_sample_at(index: u32) -> u32 {
+            $crate::abi::client_presence_sample_at(&__ENGINE_SLOT, index) as u32
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn drawlist_len() -> u32 {

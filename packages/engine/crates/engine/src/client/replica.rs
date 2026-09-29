@@ -301,6 +301,15 @@ impl<G: Game> Replica<G> {
         self.remote_presences.apply_sample(who, sample, sample_tick);
     }
 
+    /// docs/plan/30-interpolation.md: the frame at `frame_tick` carried `who`'s sample.
+    pub(crate) fn refresh_presence(&mut self, who: PlayerId, frame_tick: Tick) {
+        self.remote_presences.refresh(who, frame_tick);
+    }
+
+    pub(crate) fn remote_presences_mut(&mut self) -> &mut RemotePresences<G> {
+        &mut self.remote_presences
+    }
+
     /// docs/plan/19-presence-channel.md steps 4-6: a decoded `Presence` section `Gone` entry.
     pub(crate) fn apply_presence_gone(&mut self, who: PlayerId) {
         self.remote_presences.apply_gone(who);
