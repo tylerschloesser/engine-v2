@@ -43,10 +43,21 @@ test('reference_new_player_spawns_on_land', async ({ page }) => {
   // fire (`RefClient::frame` marks `ui_dirty` unconditionally every call) and run its `moveTo` --
   // `Ui.spawn` needs no world read at all (`RefClient`'s own cached field, set by `on_init` before
   // this page's very first frame), so no `__stepTick` is needed either.
-  for (let i = 0; i < 5; i++) {
-    await page.evaluate(() => window.__stepFrame?.(16))
-  }
-
-  const state = await page.evaluate(() => window.__cameraState?.())
-  expect(state).toEqual({ x: ALT_SPAWN_TILE.x + 0.5, y: ALT_SPAWN_TILE.y + 0.5, tilesAcross: 12 })
+  //
+  // **M30 gate round 3.** The `Ui` reaches the main thread asynchronously, so a fixed five stepped
+  // frames raced it: under the full suite it sometimes landed after the last one and the camera
+  // still read its own default `(0, 0)` (3 of about 57 full-suite runs at M30). Step one frame per
+  // poll until the camera reads the spawn tile instead, bounded by the poll timeout. A missing
+  // `moveTo` or a broken spawn search still fails: the camera never reaches `(-0.5, -0.5)`.
+  const expected = { x: ALT_SPAWN_TILE.x + 0.5, y: ALT_SPAWN_TILE.y + 0.5, tilesAcross: 12 }
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async () => {
+          await window.__stepFrame?.(16)
+          return window.__cameraState?.()
+        }),
+      { timeout: 5_000 },
+    )
+    .toEqual(expected)
 })
