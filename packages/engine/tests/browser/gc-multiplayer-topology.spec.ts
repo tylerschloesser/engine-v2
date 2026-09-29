@@ -25,6 +25,14 @@ import { type MovingRemote, startMovingRemote } from './support/moving-remote.js
 import { openPage } from './support/page.js'
 import { startTestServer, type TestServer } from './support/test-server.js'
 
+declare global {
+  interface Window {
+    __step?: (dtMs: number) => Promise<void>
+    __setRebase?: () => void
+    __probe?: () => Promise<{ rows: { mode: string }[]; delayMs: number; renderTime: number }>
+  }
+}
+
 const PRESENCE_DIR = fixtureBuildDir('presence')
 // A fixed port, not `startTestServer`'s own default OS-assigned one (Deviations): `zeroGcSuite`'s
 // `path` is a plain string, registered synchronously at file-load time, well before `test.beforeAll`
