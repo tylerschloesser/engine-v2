@@ -91,4 +91,25 @@ Engine crate `CLAUDE.md`: one line that `interp` and `clock` are float, client-o
 Owns item M34-remote-motion, run in [M34's section of device-checks.md](device-checks.md#m34-reference-multiplayer-on-real-devices) and again on cellular in M38's; nothing to check before M34 draws remote players.
 
 ## Deviations
-(filled in during Phase 3)
+### Steps 1-2 (InterpBuffer, JitterStats, InterpDelay; `crates/engine/src/interp/`)
+
+Limits cited (each a `pub const`):
+- Extrapolation cap 250 ms, then hold: 0012 "Remote motion" (`buffer::EXTRAPOLATION_CAP_MS`).
+- Silence limit 2 s before fade: 0012 "Remote motion" (`buffer::SILENCE_LIMIT_MS`).
+- Delay initial 150 ms, floor 100 ms, cap 400 ms; formula `max(2 x fi, fi + p95)`, `fi` = tick interval; dilation limit 10%: 0010 Rates table, row "Interpolation delay" (`delay::{INITIAL_MS, FLOOR_MS, CAP_MS, DILATION_LIMIT}`).
+- Ring depth 8, histogram 32 bins over the last 128 samples: this brief's Planning decisions.
+
+This milestone's own choices (no ADR text fixes them):
+- `buffer::FADE_MS` = 500: alpha is 1 until 2 s of silence, then a linear ramp to 0 over 500 ms; `sample` returns `None` once alpha reaches 0 (a later push revives the key). The brief's "ramps to 0 across the silence limit" is ambiguous; 0012 says "fade after 2 s".
+- `delay::MIN_SAMPLES` = 8: target stays at the initial 150 ms until 8 jitter samples exist.
+- `jitter::BIN_MS` = 16: histogram covers 0..512 ms, last bin saturates; `p95_ms` reports the bin's upper edge (over-reads by under 16 ms).
+
+Seams as landed (all `engine::interp`):
+- `InterpKey::{Player(PlayerId), Entity(EntityId)}` (`Ord`, `Copy`); `InterpMode::{Interp, Extrap, Hold}`; `Interp { pos: WorldPos, vel: [i32; 2], alpha: f32, mode }`; `PushResult::{Added, Duplicate, OutOfOrder}`.
+- `InterpBuffer<K: Ord + Copy>::new(tick_hz: u32)`; `push(key, t: f64, pos: WorldPos, vel: [i32; 2]) -> PushResult` (returns a result, unlike the brief's unit); **added** `refresh(key, now: f64)` (the caller invokes it on `Duplicate`, and for any re-relay, with the arrival host tick: silence is measured from `max(newest t, refresh)`); `sample(&self, key, render_t: f64) -> Option<Interp>`; `remove(key)`; `clear()`; also `reserve_keys(n)`, `len()`, `is_empty()`, `key_at(i)`. `vel` is Q24.8 tiles per second (0001), `t` host ticks, so the buffer takes the tick rate. Hold reports `vel = [0, 0]`. Before the oldest sample the buffer clamps to it (mode `Interp`). A first push of a new key may allocate the key table (sorted `Vec`); steady-state push/sample do not.
+- `JitterStats::{new, record(ms: f32), p95_ms() -> f32, len, is_empty, clear}`.
+- `InterpDelay::new(rate: TickRate)`, `on_arrival(tick: Tick, arrived_ms: f64)`, `advance(dt_ms: f64)`, `render_time(host_now: f64) -> f64` (host ticks), `delay_ms() -> f32`; **added** `target_ms() -> f32`, `rebase()` (the only snap: delay back to 150 ms, history cleared). A repeated tick is ignored; a tick that goes back only reseats the reference.
+- `interp_alloc` landed now, as `tests/no_alloc_interp.rs` (own binary for its `#[global_allocator]`); 0 bytes over 600 frames, 7 keys, buffer plus delay.
+- Test names: unit tests `interp_*` in `interp/{buffer,delay}.rs` (18 with `jitter` and `interp_alloc` under `-t interp`); the brief's `delay_*` tests are `interp_delay_*`, `rebase_snaps_and_clears` is `interp_rebase_snaps_and_clears`.
+- Engine crate `CLAUDE.md` line for `interp`/`clock` written.
+- Commit slip: the step 1 commit (`3cc3223`) carries the full `interp/mod.rs`, which names `delay`/`jitter` that step 2 (`f1d7c5e`) adds; only the two-commit range compiles.
