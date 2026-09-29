@@ -18,7 +18,7 @@ Runs: 36636714669 (`M30 done`), 36639392014 (`5ad3301`), 36642513660 (`M30b done
 1. `docs/spec/overview.md`
 2. `docs/plan/19c-ci-reds-frame-bench-and-admit-path.md` (the 900 B diagnostic already committed, and how it reads)
 3. `docs/plan/29-net-worker-and-reference-server.md` (Deviations: the ws transport, `mp.html`, CI rounds 1-8)
-4. `docs/decisions/0016-zero-allocation-assertion.md` (what the no-alloc instrument claims)
+4. `docs/decisions/0016-zero-gc-definition.md` (what the no-alloc instrument claims)
 
 ## Scope
 - For each red, attribute from CI artifacts: `gh run download <id>` has `test-results/`, and `gh run view <id> --log-failed` has the rest. Where the cause isn't visible, commit a **failure-only** diagnostic, then stop so the orchestrator can push and rerun (below).
