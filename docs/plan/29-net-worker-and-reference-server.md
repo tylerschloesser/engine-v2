@@ -790,3 +790,97 @@ file-parallelism`); `pnpm test` (fast tier) unaffected, `netcode` stays concurre
 itself (not contention) is the bottleneck on CI's own hardware, and the next step is a real,
 CI-measured number for `--app reference`'s own `pnpm --filter reference build` step specifically --
 not available from this machine.
+
+## Fix round 4 (5 CI reruns: both remaining problems confirmed real, both fixed)
+
+The coordinator ran 5 CI reruns of fix round 3 (`095d3a9`, `027edfd`). Two different fast-tier flakes
+appeared once each and never recurred (`ws/join-converges` dispatch-before-ready,
+`multiplayer-topology neg object gen0` timeout) -- genuine CI-runner noise, not chased here, per the
+coordinator's own instruction. The two real problems remained, unchanged in shape, on every slow-tier
+rerun.
+
+### 1. `net`'s collateral fix (fix round 3) didn't hold on real CI -- gave `net` its own software row
+
+CI's own downloaded `report.json` (`neg burst main`): `net`'s raw `bytesPerFrame` was **243.47** --
+*worse* than the 235.59 fix round 3 was fixing, despite `HEARTBEAT_MS` 400 -> 2000. This machine's
+own forced-software-mode measurement (216-218) never reproduced CI's own number; the coordinator's
+own read (CI's runner evidently lands more real ticks inside the measured window than local
+measurement predicts, plausibly because `main`'s own burst visibly slows the whole page's real-time
+frame-stepping more on CI's weaker hardware, stretching the window and giving more real time for
+anything periodic to land inside it) is the working theory -- not re-derived further, per the
+coordinator's own explicit instruction to stop chasing the heartbeat mechanism.
+
+**Gave `net` its own dedicated `software.isolates.net.bytesPerFrame` row** (`budgets.json`), the same
+"give software mode its own number" shape `main`'s own row already established -- `gc/analyse.ts`'s
+`verdict()` extended (a new, backward-compatible branch: a non-`main` isolate's own software row is a
+raw `bytesPerFrame` ceiling, not attribution) so `net` no longer borrows the tight, hardware-derived
+226 ceiling in software mode.
+
+**A real regression found and fixed while deriving the number, before landing it**: a first cut set
+`net`'s software ceiling to 660 (measured local worst-case collateral across `neg burst
+{main,client,gen0}`, 218.07, times a stated 3x safety margin) with no further guard -- this silently
+broke `neg object net`, `neg burst net` and `gc/net-negative-control` (all measured 5/5 failing under
+forced `CI=true ENGINE_GPU=swiftshader GC_MODE=software`): `net`'s own real `object`-control delta
+measures only ~238 B/frame under software mode, *smaller* than CI's own observed sibling-burst
+collateral (243.47) -- no single raw ceiling can tolerate that collateral and still catch a ~238
+B/frame defect, the exact ADR 0029 failure mode ("a margin wide enough to swallow the control's own
+separation"). Fixed architecturally, not by picking a different number: `verdict()` gained a fourth
+parameter, `verdictIsolate` (threaded from `measure()`'s own `opts.control?.isolate` /
+new `opts.verdictIsolate`) -- the wide software ceiling now applies only when `net` is *not* the
+isolate a control is actually targeting (a sibling's control, or a clean run); `net`'s own control
+scenarios fall back to the tight 226 hardware ceiling regardless of mode, unaffected by the new row.
+`gc/net-negative-control` (a hand-built control outside `zeroGcSuite`'s own mechanism -- applies no
+`opts.control` at all) now passes `verdictIsolate: 'net'` explicitly for the same reason.
+
+With that guard, `net`'s software ceiling was re-derived at 660 (218.07 local worst-case x 3, the
+upper end of a stated 2-3x range, deliberately generous since local already undershot CI's own
+observed number once) and re-verified: `neg object net` 5/5, `neg burst net` 5/5,
+`gc/net-negative-control` 5/5, all correctly tripping `B.net` again; the full fast-tier set (10
+tests) and `neg burst {main,client,gen0}` (12 repeats) all pass with the row in place. Two new unit
+tests pin both the wide-ceiling-for-collateral shape and the exact regression found
+(`gc/analyse.test.ts`).
+
+### 2. `device-serve/proxy-and-apps` still times out at exactly 120,000 ms, zero captured stdout
+
+`--no-file-parallelism` (fix round 3) removed `netcode`'s own internal file-level contention too, so
+the coordinator's own read was right: this is genuinely slow work, not a hang from contention. Two
+things done, per the coordinator's own ask:
+
+**(a) Progress logging.** `checkMode` now logs every phase with an elapsed-ms prefix (`log()`,
+`device-serve-proxy-and-apps.test.ts`) and, critically, now *forwards* `device-serve.mjs`'s own child
+`stdout`/`stderr` into the test's own captured output -- previously spawned with `stdio: 'pipe'` and
+never read past `waitReady`'s own buffer scan, so every one of `device-serve.mjs`'s *own* existing
+progress lines ("building the fixture app…", "building games/reference…", "pages: …") was silently
+discarded. This alone is very likely why the coordinator's artifact showed nothing: the lines were
+never being captured, not merely not printed on a pass.
+
+**(b) A real, measured 600,000 ms (10 min) timeout, not another guess.** Read `build-game.ts` to find
+the actual mechanism (not assumed): `--app reference`'s own build calls `buildGame()`, whose bindings
+step runs `cargo test --workspace ... export_bindings` (`BINDINGS_CARGO_ARGS`) -- a *whole-workspace*
+test compile (every crate under `packages/engine/crates/*`, `packages/engine/fixtures/*`, plus
+`games/reference/sim` itself), not merely bundling some JS. A warm-cache run of this test's own two
+`checkMode` calls together measures ~2.7-3.1 s total on this machine (3 repeats) -- a poor predictor
+of CI's own worst case, since CI has no guarantee of a warm target directory for this specific,
+relatively new build path, and a repeatedly-failing job may never even reach a cache-save step.
+Measured directly instead with `reference-sim`'s own release artifacts freshly cleared (`cargo clean
+--release --target wasm32-unknown-unknown -p reference-sim`, simulating a cache-miss): `pnpm --filter
+reference build` alone took **4 m 11 s** (251 s inside the `engine:vite buildStart` hook, i.e. the
+bindings step above) -- on a 14-core machine, with `engine`/`serde`/`ts-rs` dependencies themselves
+still warm from this session's own many other builds; real CPU time for that run was only ~6 s
+against 251 s wall clock, meaning most of it was contention, not raw compute -- itself informative,
+since a whole-workspace `cargo test` compile is exactly the kind of operation that stalls hard under
+real contention, and CI's own runner is both weaker and shares resources with the rest of its job.
+Ceiling: 251 s x a real, stated ~2.4x margin for CI's own smaller/shared hardware and cold dependency
+cache (harsher than 251 s already reflects, since that figure's own dependencies were warm) = ~600 s,
+rounded to 600,000 ms. Full reasoning, in this exact form, is in the timeout's own comment
+(`device-serve-proxy-and-apps.test.ts`) per this repo's own Rules ("when the fix really is a time
+limit, say why it is not a mask").
+
+**Verified, this range**: `pnpm test` and `pnpm lint` green (two unrelated, load-sensitive browser
+flakes observed on a contended shared machine mid-session -- `gc-ui.spec.ts`'s own `no_ui_change`
+test, `games/reference`'s own `spawn.spec.ts`/`player.spec.ts` -- all in files this range never
+touched, all passed clean in isolation and on a full-suite retry). `pnpm test:slow` clean twice in a
+row (`netcode pass 5 tests ~59s`, unchanged from fix round 3 -- this machine's own cache stayed warm
+throughout, so the new 600 s ceiling was never exercised locally, only reasoned from the cold-cache
+measurement above). `pgrep` empty after every run. Not verified against real CI hardware -- no push
+from this session; the coordinator confirms on the next CI run.

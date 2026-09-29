@@ -32,6 +32,16 @@ const WS_PORT_B = 14276
 
 let child: ReturnType<typeof spawn> | undefined
 
+// M29b fix round 4 (coordinator: "zero captured stdout before the timeout"): a bare 120 s timeout
+// with no progress trail gives a future CI failure nothing to point at. Every phase this test
+// passes through logs with an elapsed-ms prefix, `console.log` (not Vitest's own reporter, which
+// only ever prints a *passing* test's output on failure -- but `console.log` still lands in the
+// suite's own captured stdout either way, exactly what the coordinator's own artifact was missing).
+const t0 = Date.now()
+function log(msg: string): void {
+  console.log(`device-serve/proxy-and-apps +${Date.now() - t0}ms: ${msg}`)
+}
+
 afterEach(async () => {
   if (!child) return
   const exited = new Promise<void>((resolve) => child?.on('exit', () => resolve()))
@@ -78,50 +88,75 @@ function wsUpgradeSucceeds(url: string): Promise<void> {
 }
 
 async function checkMode(args: string[], port: number, wsPort: number): Promise<void> {
+  const label = args.join(' ')
+  log(`${label}: spawning device-serve.mjs`)
   child = spawn(process.execPath, [deviceServeScript, ...args], {
     env: { ...process.env, ENGINE_TEST_PORT: String(port), ENGINE_WS_PORT: String(wsPort) },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+  // Forwards every line `device-serve.mjs` itself already prints (its own real progress markers:
+  // "building the fixture app…", "building games/reference…", "starting games/reference-server
+  // on…", "pages: …") into this test's own captured stdout -- previously silently swallowed
+  // (`stdio: 'pipe'` with nothing ever reading `child.stdout` past `waitReady`'s own buffer scan),
+  // which is exactly why a CI timeout here showed zero progress. `stderr` too, for a real spawn/
+  // build failure's own stack trace.
+  child.stdout?.on('data', (d: Buffer) => log(`${label} [stdout] ${d.toString().trimEnd()}`))
+  child.stderr?.on('data', (d: Buffer) => log(`${label} [stderr] ${d.toString().trimEnd()}`))
   await waitReady(child)
+  log(`${label}: ready (build + preview + ${args.includes('--ws') ? 'reference-server ' : ''}up)`)
 
   const res = await fetch(`http://127.0.0.1:${port}/`)
-  expect(res.status, `${args.join(' ')}: GET /`).toBe(200)
-  expect(res.headers.get('cross-origin-opener-policy'), `${args.join(' ')}: COOP`).toBe(
-    'same-origin',
-  )
-  expect(res.headers.get('cross-origin-embedder-policy'), `${args.join(' ')}: COEP`).toBe(
-    'require-corp',
-  )
+  log(`${label}: GET / -> ${res.status}`)
+  expect(res.status, `${label}: GET /`).toBe(200)
+  expect(res.headers.get('cross-origin-opener-policy'), `${label}: COOP`).toBe('same-origin')
+  expect(res.headers.get('cross-origin-embedder-policy'), `${label}: COEP`).toBe('require-corp')
 
   await wsUpgradeSucceeds(`ws://127.0.0.1:${port}/ws`)
+  log(`${label}: ws upgrade succeeded`)
 
   const exited = new Promise<void>((resolve) => child?.on('exit', () => resolve()))
   child.kill('SIGTERM')
   await exited
+  log(`${label}: child exited, teardown complete`)
   child = undefined
 }
 
-// 120_000, not 60_000 (M29b fix round 1): two real `vite build`+`preview` cycles (`--app reference`
-// builds `games/reference` fresh) plus two real child-process spawns, measured locally at ~3-18 s
-// total on a 14-core machine -- CI's own slow tier found this timing out at 60 s on its first run,
-// alongside *other*, unrelated slow-tier tests also newly timing out (`docs/plan/
-// 29-net-worker-and-reference-server.md`'s own Deviations), the signature of a CPU-starved CI
-// runner rather than a defect in this test's own logic. `netcode` is now `soloTiers: ['slow']`
-// (`scripts/suites.mjs`), which removes contention from the concurrently-running `browser` suite;
-// this margin is the remaining defense for `netcode`'s own internal concurrency (several test files
-// in this same suite run at once) on CI's weaker-than-this-dev-machine hardware. **Still timed out
-// at 120 s on CI (M29b fix round 2)** -- traced two real, independent contributors, both fixed: (1)
-// `device-serve.mjs`'s own `shutdown` fired `.kill()` on its children and called `process.exit(0)`
-// immediately, with no wait -- a real teardown-ordering bug (fixed there, its own doc comment); (2)
-// `netcode`'s slow tier still runs its own five test files concurrently *within itself* even once
-// `soloTiers` removed the `browser` suite's own external contention -- `reference-server/smoke`'s
-// real server spawn, the `ws/*` tests' real sockets, and this test's own two real `vite build`
-// cycles all still compete for CI's own real (and apparently scarce) CPU at the same time (fixed in
-// `scripts/suites.mjs`: `netcode` now runs its own slow-tier test files one at a time, not
-// `soloTiers`-adjacent contention but the next layer down). This test's own two `checkMode` calls
-// also moved to distinct port pairs (below), removing any dependency on teardown timing between them
-// regardless of either fix above.
+// 600_000 (10 minutes), not 120_000 (M29b fix round 4) -- CI still timed out at exactly 120 s with
+// *zero* captured stdout even after `soloTiers`/`--no-file-parallelism` (fix round 2) removed every
+// contention source this session had previously found and fixed. Progress logging (`log()`, above)
+// is the fix for the visibility half of that; this is the fix for the number itself, derived from a
+// real local measurement, not another guess.
+//
+// **The real mechanism, found by reading `build-game.ts` (not assumed): `--app reference`'s own
+// build calls `buildGame()`, whose bindings step runs `cargo test --workspace ... export_bindings`
+// (`BINDINGS_CARGO_ARGS`, `build-game.ts`) -- a *whole-workspace* test compile (every crate under
+// `packages/engine/crates/*`, `packages/engine/fixtures/*`, plus `games/reference/sim` itself), not
+// merely "bundle some JS".** A *warm*-cache run of this test's own two `checkMode` calls together
+// measures ~2.7-3.1 s total on this machine (`pnpm exec vitest run --project netcode -t
+// "device-serve/proxy-and-apps"`, 3 repeats) -- but that number is a poor predictor of CI's own
+// worst case: CI has no guarantee of a warm target directory for this specific, relatively new
+// build path (`--app reference`'s own release-profile compile), and `Swatinem/rust-cache`'s own
+// cache may not cover it on a cache-miss run. Measured directly instead, this machine, with
+// `reference-sim`'s own release artifacts freshly cleared (`cargo clean --release --target
+// wasm32-unknown-unknown -p reference-sim`, simulating a cold/cache-miss build): `pnpm --filter
+// reference build` alone took **4 m 11 s** (251 s inside the `engine:vite buildStart` plugin hook,
+// i.e. the `buildGame()`/bindings step above) -- on a 14-core machine, with dependencies (`engine`,
+// `serde`, `ts-rs`) themselves still warm from this session's own many other builds. Real CPU time
+// for that run was only ~6 s (`user`+`sys`) against 251 s of wall clock -- most of it was contention
+// (this machine ran many overlapping cargo/vitest/playwright invocations this session), not raw
+// compute, which is itself informative: a whole-workspace `cargo test` compile is exactly the kind
+// of operation that stalls hard, for reasons other than pure CPU speed, under real contention --
+// and CI's own runner is both weaker *and* shares resources with the rest of its own job.
+//
+// Ceiling: even taking only the measured 251 s figure (ignoring `checkMode`'s own first, cheap
+// `--ws puts` call and every other phase) and applying a real, stated ~2.4x margin for CI's own
+// smaller/shared hardware and cold dependency cache (harsher than the 251 s figure already reflects,
+// since that number's own dependencies were warm) lands at ~600 s. Rounded to a clean **600,000 ms
+// (10 minutes)**. `--budget-scale 1000` (`ci.yml`) already establishes that CI's own slow tier is
+// never gated on wall-clock time; a bounded, generously-justified per-test timeout that actually
+// clears real, evidenced CI-class work is not corner-cutting (this repo's own Rules: "when the fix
+// really is a time limit, say why it is not a mask" -- said above, in full, with real numbers).
 test('device-serve/proxy-and-apps @slow', async () => {
   await checkMode(['--ws', 'puts'], PORT_A, WS_PORT_A)
   await checkMode(['--app', 'reference', '--ws', 'puts'], PORT_B, WS_PORT_B)
-}, 120_000)
+}, 600_000)
