@@ -22,10 +22,10 @@ fn worldgen_contract_fixture() {
     // exercised every code path), then measure one more call in isolation.
     let mut out = vec![Tile::VOID; dims.area() as usize];
     FixtureGen::generate(seed, &params, ChunkCoord::new(3, -3), &mut out);
-    let before = engine::abi::arena::live_bytes();
+    let before = engine::abi::arena::thread_live_bytes();
     FixtureGen::generate(seed, &params, ChunkCoord::new(7, -7), &mut out);
     assert_eq!(
-        engine::abi::arena::live_bytes(),
+        engine::abi::arena::thread_live_bytes(),
         before,
         "FixtureGen::generate allocated"
     );

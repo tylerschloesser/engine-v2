@@ -5,7 +5,7 @@
 //! own `no_alloc_*` binaries in `crates/engine/tests/`): `fx_predict::export_game!` already installs
 //! `engine::abi::Arena` (needed for the crate's own `cdylib`/`.wasm` target), and that declaration
 //! reaches this native test binary through the crate's `rlib` -- a second one conflicts (fx-machines'
-//! own `journal_bench.rs` documents the identical constraint). `engine::abi::arena::live_bytes()`
+//! own `journal_bench.rs` documents the identical constraint). `engine::abi::arena::thread_live_bytes()`
 //! (bytes allocated minus freed) is this crate's own zero-allocation instrument instead; a genuinely
 //! allocation-free window leaves it completely unmoved, not merely net-zero from cancelling
 //! alloc/free pairs.
@@ -25,8 +25,8 @@ use engine::world::{CacheCapacity, ChunkCoord, ChunkDims, PristineSource, Tile};
 use engine::worldgen::Worldgen;
 use fx_predict::{Action, Pos, Predict, PredictWorldgen};
 
-fn live() -> usize {
-    engine::abi::arena::live_bytes()
+fn live() -> isize {
+    engine::abi::arena::thread_live_bytes()
 }
 
 /// `live_bytes()` alone (allocated minus freed) misses a transient allocation that gets freed
@@ -34,8 +34,8 @@ fn live() -> usize {
 /// ever been) catches that too, as long as the window's own transient peak exceeds whatever peak
 /// came before it -- which is why the measured window below is checked against the high-water mark
 /// taken *immediately before* it starts, not against zero.
-fn high_water() -> usize {
-    engine::abi::arena::high_water_bytes()
+fn high_water() -> isize {
+    engine::abi::arena::thread_high_water_bytes()
 }
 
 struct GenSource;
@@ -122,7 +122,7 @@ fn predict_alloc() {
         let (seq, _status) = lb.dispatch(idx, a);
         seqs.push(seq);
     }
-    let submit_growth = live().saturating_sub(live0);
+    let submit_growth = (live() - live0).max(0);
 
     // Frames built directly against the host (not `Loopback::step`, which itself allocates for
     // this testkit's own convenience -- `frame_buf[..n].to_vec()` and friends -- unrelated to the
@@ -180,7 +180,7 @@ fn predict_alloc() {
                 .expect("host-produced frames are well-formed");
         }
     }
-    let during_190 = live().saturating_sub(before_190);
+    let during_190 = (live() - before_190).max(0);
 
     let before_200 = live();
     for f in &frames[200..210] {
@@ -190,8 +190,8 @@ fn predict_alloc() {
                 .expect("host-produced frames are well-formed");
         }
     }
-    let during_10_more = live().saturating_sub(before_200);
-    let peak_growth_since_before_replay = high_water().saturating_sub(peak_before_replay);
+    let during_10_more = (live() - before_200).max(0);
+    let peak_growth_since_before_replay = (high_water() - peak_before_replay).max(0);
 
     assert_eq!(
         lb.pending(idx).count(),

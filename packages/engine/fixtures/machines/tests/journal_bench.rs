@@ -16,8 +16,8 @@ use fx_machines::{Action, Machines, Pos};
 // `engine::abi::Arena` (needed for the crate's own `cdylib`/`.wasm` target), and that same
 // declaration reaches this native test binary through the crate's `rlib` -- a second one would
 // conflict ("`#[global_allocator]` in this crate conflicts with global allocator in: fx_machines").
-fn live() -> usize {
-    engine::abi::arena::live_bytes()
+fn live() -> isize {
+    engine::abi::arena::thread_live_bytes()
 }
 
 const N: usize = 10_000;
@@ -145,6 +145,6 @@ fn slow_apply_journal_overhead() {
     println!(
         "apply_journal_overhead: arena growth over one more full script pass (with journal on): \
          {} B",
-        after.saturating_sub(before)
+        (after - before).max(0)
     );
 }

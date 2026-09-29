@@ -20,10 +20,10 @@ fn worldgen_contract() {
 
     let mut out = vec![Tile::VOID; dims.area() as usize];
     RefWorldgen::generate(TEST_SEED, &params, ChunkCoord::new(3, -3), &mut out); // warm up
-    let before = engine::abi::arena::live_bytes();
+    let before = engine::abi::arena::thread_live_bytes();
     RefWorldgen::generate(TEST_SEED, &params, ChunkCoord::new(7, -7), &mut out);
     assert_eq!(
-        engine::abi::arena::live_bytes(),
+        engine::abi::arena::thread_live_bytes(),
         before,
         "RefWorldgen::generate allocated"
     );

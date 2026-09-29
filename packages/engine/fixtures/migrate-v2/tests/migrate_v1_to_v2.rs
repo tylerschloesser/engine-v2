@@ -134,18 +134,18 @@ fn migrate_v1_to_v2_preserves_ids_and_occupancy() {
     let bytes = encode(&sim);
     assert_eq!(tick, Tick(4), "four steps from genesis");
 
-    let base = engine::abi::arena::live_bytes();
-    let before_decode = engine::abi::arena::live_bytes();
+    let base = engine::abi::arena::thread_live_bytes();
+    let before_decode = engine::abi::arena::thread_live_bytes();
     let old = decode_old(&bytes, tick);
-    let old_store_live = engine::abi::arena::live_bytes().saturating_sub(before_decode);
+    let old_store_live = (engine::abi::arena::thread_live_bytes() - before_decode).max(0);
 
     let terrain = new_v2_terrain(1);
-    let high_before_migrate = engine::abi::arena::high_water_bytes();
+    let high_before_migrate = engine::abi::arena::thread_high_water_bytes();
     let (authority, outcome) =
         engine::migrate::migrate::<V2Game>(old, terrain, tick, rng).expect("migrate succeeds");
-    let high_after_migrate = engine::abi::arena::high_water_bytes();
-    let peak_during_migrate = high_after_migrate.saturating_sub(high_before_migrate);
-    let new_store_live = engine::abi::arena::live_bytes().saturating_sub(base);
+    let high_after_migrate = engine::abi::arena::thread_high_water_bytes();
+    let peak_during_migrate = (high_after_migrate - high_before_migrate).max(0);
+    let new_store_live = (engine::abi::arena::thread_live_bytes() - base).max(0);
 
     // Budgets "Memory per instance": old and new stores coexist inside one fixed arena (0015);
     // the peak reached while `migrate` ran must not exceed each store's own measured live
