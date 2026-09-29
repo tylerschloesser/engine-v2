@@ -3,7 +3,7 @@
 // end to end (`mp.html`), stepped in lockstep with whatever the page under test just did, never a
 // real wall-clock pacing race. `CloseCode` is `host/handshake.ts`'s own numeric constants, imported
 // here only to assert the exact close code `mp/superseded` sees.
-import { expect, test } from '@playwright/test'
+import { expect, type Page, test } from '@playwright/test'
 import { CloseCode } from '../../src/host/handshake.js'
 import { fixtureBuildDir } from '../support/fixtures.js'
 import { openPage } from './support/page.js'
@@ -208,35 +208,119 @@ test('mp/superseded', async ({ browser }) => {
   }
 })
 
+/** docs/plan/30c-ci-reds-after-m30.md (red C): failure-only. Records, Node-side, when each step of
+ * a spec finished, every page `load`, and the page's link log (polled, so it survives the page
+ * becoming unusable after a timeout); `run` appends all of it to whatever error the steps throw. */
+function mpDiagnostics(page: Page) {
+  const t0 = Date.now()
+  const marks: string[] = []
+  let lastLog = '(never read)'
+  const since = () => `${Date.now() - t0} ms`
+  page.on('load', () => marks.push(`load @${since()}`))
+  let polling = true
+  const poll = (async () => {
+    while (polling) {
+      try {
+        lastLog = `@${since()} state=${await page.evaluate(() => window.__mpLinkState?.())} log(newest first)=${JSON.stringify(
+          await page.evaluate(() =>
+            (window.__mpLinkLog?.() ?? []).slice(0, 24).map((e) => `${e.event}:${e.code ?? '-'}`),
+          ),
+        )}`
+      } catch {
+        // mid-navigation, or the page is gone: keep the last good reading
+      }
+      await new Promise((r) => setTimeout(r, 250))
+    }
+  })()
+  return {
+    mark(step: string) {
+      marks.push(`${step} @${since()}`)
+    },
+    async run(steps: () => Promise<void>): Promise<void> {
+      try {
+        await steps()
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e)
+        throw new Error(`${message}\n[mp diagnostics] ${marks.join(', ')}; last link ${lastLog}`, {
+          cause: e,
+        })
+      } finally {
+        polling = false
+        await poll
+      }
+    },
+  }
+}
+
+test('mp/hello-resent-after-pre-welcome-drop', async ({ page }) => {
+  // docs/plan/30c-ci-reds-after-m30.md (red C): the first socket dies after its `Hello` went out
+  // and before any reply. Before the fix the client sent `Hello` once per page, not once per
+  // link, so every redial sat silent until its dead timer: never welcomed, never rejected.
+  test.setTimeout(45_000)
+  const server = await startTestServer({
+    fixture: PUTS_DIR,
+    manualTimer: true,
+    dropFirstHello: true,
+  })
+  const ticks = tickInBackground(server)
+  const diag = mpDiagnostics(page)
+  try {
+    await diag.run(async () => {
+      await openPage(page, mpUrl(server))
+      await page.waitForFunction(() => window.__mpLinkState?.() === 'online', { timeout: 20_000 })
+      const log = await page.evaluate(() => window.__mpLinkLog?.())
+      expect(log?.filter((e) => e.event === 'open').length).toBeGreaterThanOrEqual(2)
+    })
+  } finally {
+    ticks.stop()
+    await server.stop()
+  }
+})
+
 test('mp/version-mismatch-reloads-once', async ({ page }) => {
   test.setTimeout(45_000)
   const server = await startTestServer({ fixture: PUTS_DIR, manualTimer: true })
+  const diag = mpDiagnostics(page)
   try {
-    // No ticking needed at all (`server.ts`'s own `onMessage` handler): a build-hash mismatch is
-    // decided synchronously, the instant the `Hello` bytes arrive, never gated on a tick.
-    await page.goto(mpUrl(server, '&corruptBuildHash=1'))
-    // Registered before the `__pageReady` wait below (not after): the reload can only happen once
-    // the client has actually dialed and been rejected, strictly later, so this listener is always
-    // in place in time -- registering it after risks missing a reload fast enough to beat the CDP
-    // round trip back to this test.
-    const reload = page.waitForEvent('load', { timeout: 20_000 })
-    await page.waitForFunction(() => window.__pageReady === true)
+    await diag.run(async () => {
+      // No ticking needed at all (`server.ts`'s own `onMessage` handler): a build-hash mismatch is
+      // decided synchronously, the instant the `Hello` bytes arrive, never gated on a tick.
+      await page.goto(mpUrl(server, '&corruptBuildHash=1'))
+      // Registered before the `__pageReady` wait below (not after): the reload can only happen once
+      // the client has actually dialed and been rejected, strictly later, so this listener is always
+      // in place in time -- registering it after risks missing a reload fast enough to beat the CDP
+      // round trip back to this test.
+      const reload = page.waitForEvent('load', { timeout: 20_000 })
+      await page.waitForFunction(() => window.__pageReady === true)
+      diag.mark('ready')
 
-    // The default handler's own reload (0013 "Build-hash handshake"): a real navigation, to the
-    // exact same URL, guarded by `sessionStorage['engine.reloadedFrom']` so it happens only once.
-    await reload
-    await page.waitForFunction(() => window.__pageReady === true)
+      // The default handler's own reload (0013 "Build-hash handshake"): a real navigation, to the
+      // exact same URL, guarded by `sessionStorage['engine.reloadedFrom']` so it happens only once.
+      await reload
+      diag.mark('reloaded')
+      await page.waitForFunction(() => window.__pageReady === true)
+      diag.mark('ready again')
 
-    // The second mismatch (same corrupted hash): the guard already matches, so this time it is
-    // `updating`, not a second reload.
-    await page.waitForFunction(() => window.__mpLinkState?.() === 'updating', { timeout: 20_000 })
-    let navigatedAgain = false
-    page.once('load', () => {
-      navigatedAgain = true
+      // The second mismatch (same corrupted hash): the guard already matches, so this time it is
+      // `updating`, not a second reload.
+      await page.waitForFunction(() => window.__mpLinkState?.() === 'updating', { timeout: 20_000 })
+      diag.mark('updating')
+      let navigatedAgain = false
+      page.once('load', () => {
+        navigatedAgain = true
+      })
+      await new Promise((r) => setTimeout(r, 1500))
+      expect(navigatedAgain).toBe(false)
+      expect(await page.evaluate(() => window.__mpLinkState?.())).toBe('updating')
+      // docs/plan/30c-ci-reds-after-m30.md (red C): the retries really ask again (each one says
+      // `Hello` and is rejected), one at a time on the 0, 500, 1000 ms schedule -- at most four
+      // rejections in this window, never a pile of parallel retry chains.
+      const rejections = (await page.evaluate(() => window.__mpLinkLog?.()))?.filter(
+        (e) => e.event === 'close' && e.code === CloseCode.VersionMismatch,
+      ).length
+      expect(rejections).toBeGreaterThanOrEqual(2)
+      expect(rejections).toBeLessThanOrEqual(5)
     })
-    await new Promise((r) => setTimeout(r, 1500))
-    expect(navigatedAgain).toBe(false)
-    expect(await page.evaluate(() => window.__mpLinkState?.())).toBe('updating')
   } finally {
     await server.stop()
   }

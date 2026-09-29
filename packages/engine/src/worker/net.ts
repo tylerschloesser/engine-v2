@@ -157,6 +157,11 @@ export function setup(shell: Shell, message: SetupMessage): Promise<LoopState | 
   // is that one factory, called once at setup and again by `linkControl`'s own `retry` branch below
   // (Deviations: not itself a pinned Seam -- the two message names, `probe`/`retry`, are the only
   // thing this milestone's own Scope actually pins).
+  // docs/plan/30c-ci-reds-after-m30.md (red C): what `CB_LINK_GEN` carries -- every dial of every
+  // `Link` this worker ever builds, counted once. `createLink`'s own `gen` restarts at 1 in each
+  // new `Link`, so a `retry`'s first dial read the same generation the client worker had already
+  // sent its `Hello` for, and it never sent one on the new socket.
+  let dialSeq = 0
   function buildLink(): Link {
     return createLink({
       dial: () => {
@@ -167,10 +172,11 @@ export function setup(shell: Shell, message: SetupMessage): Promise<LoopState | 
       clock: systemClock,
       scheduler: systemScheduler,
       seed: LINK_JITTER_SEED,
-      onUp(conn, gen) {
+      onUp(conn) {
         pump.attach(conn)
+        dialSeq++
         Atomics.store(shell.control.words, CB_LINK_STATE, CB_LINK_STATE_UP)
-        Atomics.store(shell.control.words, CB_LINK_GEN, gen)
+        Atomics.store(shell.control.words, CB_LINK_GEN, dialSeq)
         // The client worker's own `worker/client-net.ts` reads these two words to decide when it
         // is safe to send `client_hello()` for the first time (`SetupMessage.remoteLinked`) -- it
         // must actually wake to notice the new value, since it may already be parked in

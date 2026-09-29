@@ -54,6 +54,11 @@ export interface StartTestServerOptions {
    * async-discovered OS-assigned port into a `path` string chosen before any hook runs). Every
    * `mp/*` spec keeps the default (`undefined` -> `port: 0`), unaffected. */
   port?: number
+  /** docs/plan/30c-ci-reds-after-m30.md (red C): kill the very first socket the instant its first
+   * message (the client's `Hello`) arrives, before any reply can leave -- a link that dies after
+   * its `Hello` went out but before a `Welcome` or a rejection came back. The client must say
+   * `Hello` again on its redial. */
+  dropFirstHello?: boolean
 }
 
 async function resolveFixture(
@@ -88,6 +93,17 @@ export async function startTestServer(opts: StartTestServerOptions): Promise<Tes
     port: opts.port ?? 0,
     perMessageDeflate: false,
   })
+  if (opts.dropFirstHello) {
+    // Registered before `attachWebSocketServer`'s own listener, and prepended on the socket, so
+    // the kill runs before the server reads the message (it still reads it, then finds a dead
+    // socket: nothing it sends back arrives).
+    let dropped = false
+    wss.on('connection', (socket) => {
+      if (dropped) return
+      dropped = true
+      socket.prependOnceListener('message', () => socket.terminate())
+    })
+  }
   attachWebSocketServer(wss, server)
   await new Promise<void>((resolve, reject) => {
     wss.once('listening', resolve)

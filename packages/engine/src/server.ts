@@ -759,7 +759,12 @@ export function createSimHostFromInstance(
       attachQueue.shift()
       const entry = front
       const state = handshakeState.get(entry.conn)
-      if (state?.status !== 'awaiting-attach') continue // superseded/closed meanwhile
+      // Superseded/closed meanwhile. The identity check too (docs/plan/30c-ci-reds-after-m30.md,
+      // `mp/hello-resent-after-pre-welcome-drop`): a connection that closed after its `Hello`
+      // leaves this entry queued, and its `ConnId` can already belong to a new connection whose
+      // own `Hello` is awaiting attach -- attaching the stale entry would send the `Welcome` to
+      // the dead socket and mark the new one settled, so it never gets one.
+      if (state?.status !== 'awaiting-attach' || conns[entry.conn] !== entry.connection) continue
       const input = buildAttachInput({
         playerId: entry.playerId,
         epoch,

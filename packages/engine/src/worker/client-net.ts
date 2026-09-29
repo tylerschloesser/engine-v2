@@ -182,18 +182,26 @@ export function createNetPump(
    * continue" contract). */
   function pumpHandshake(): void {
     const hs = handshake as NetPumpHandshake
-    if (!helloSent) {
+    if (hs.remoteLinked) {
       // docs/plan/29-net-worker-and-reference-server.md steps 1-2: for a remote topology, wait for
-      // the net worker's own `CB_LINK_STATE` to read `Up` at least once before ever sending -- a
-      // wake with no link yet just re-checks next time (`helloSent` stays `false`), unlike the
-      // unconditional local-host path this branch replaces.
-      const linkReady =
-        !hs.remoteLinked || Atomics.load(shell.control.words, CB_LINK_STATE) === LINK_STATE_UP
-      if (linkReady) {
-        helloSent = true
-        if (hs.remoteLinked) lastHelloLinkGen = Atomics.load(shell.control.words, CB_LINK_GEN)
+      // the net worker's own `CB_LINK_STATE` to read `Up` before sending -- a wake with no link yet
+      // just re-checks next time. docs/plan/30c-ci-reds-after-m30.md (red C): once per link
+      // generation, not once per pump. Every redial before the first `Welcome` is a fresh
+      // server-side slot that stays `'garbage'` until it hears a `Hello`: a link that died before
+      // its `Hello` landed (the dead timer runs from the dial, so a client worker slower than 3 s
+      // to boot loses it) or a version-mismatch `retry` (a brand-new `Link`) otherwise sits silent
+      // until its own dead timer and redials, forever, never rejected and never welcomed.
+      const gen = Atomics.load(shell.control.words, CB_LINK_GEN)
+      if (
+        gen !== lastHelloLinkGen &&
+        Atomics.load(shell.control.words, CB_LINK_STATE) === LINK_STATE_UP
+      ) {
+        lastHelloLinkGen = gen
         sendHelloNow(hs)
       }
+    } else if (!helloSent) {
+      helloSent = true
+      sendHelloNow(hs)
     }
     if (!downlink || !result) return
     for (;;) {

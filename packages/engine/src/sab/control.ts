@@ -89,8 +89,9 @@ export type Ready = (typeof Ready)[keyof typeof Ready]
  * exactly (`net/link.ts`): `CB_LINK_STATE` holds the same numeric values as that module's own
  * `LinkState` (`Down = 0, Up = 1, Stopped = 2`) -- not imported here (`sab/` stays below `net/` in
  * the dependency order), just numerically identical by construction, so `worker/net.ts` can write
- * `link.state` straight into this word with no translation. `CB_LINK_GEN` is that same
- * `createLink`'s own per-dial generation counter. Read by the
+ * `link.state` straight into this word with no translation. `CB_LINK_GEN` counts every dial of
+ * every `Link` the net worker builds (docs/plan/30c-ci-reds-after-m30.md: not `createLink`'s own
+ * per-`Link` generation, which restarts at 1 on a version-mismatch `retry`). Read by the
  * `client`-kind worker (`worker/client-net.ts`, only when `SetupMessage.remoteLinked` is set) to
  * decide when it is safe to send `client_hello()` for the first time over a multiplayer topology --
  * before this word ever reads `Up` there is no net worker `Connection` yet for the uplink ring's

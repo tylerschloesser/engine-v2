@@ -1473,20 +1473,28 @@ export function createClient(options: ClientOptions): Client {
     // good (`worker/net.ts`'s own `buildLink` doc comment: `{ type: 'retry' }` is what rebuilds a
     // terminally-stopped `Link` from scratch).
     emitLink({ state: 'updating' })
-    scheduleVersionMismatchRetry(0)
+    scheduleVersionMismatchRetry()
   }
   const VERSION_MISMATCH_BACKOFF_MS = [0, 500, 1000, 2000, 5000]
-  function scheduleVersionMismatchRetry(step: number): void {
+  // docs/plan/30c-ci-reds-after-m30.md (red C): one retry at a time, each scheduled by the
+  // rejection of the one before. The retry used to reschedule itself unconditionally, and every
+  // rejection started another such chain at step 0 -- harmless only while a retry never actually
+  // said `Hello` (it did not, `worker/client-net.ts`), and the missing backpressure M29's fix round
+  // 5 recorded. A retry that is never rejected needs nothing from here: the fresh `Link` redials
+  // on its own schedule for every non-terminal reason, and the next rejection lands back here.
+  let versionMismatchRetryStep = 0
+  let versionMismatchRetryPending = false
+  function scheduleVersionMismatchRetry(): void {
+    if (versionMismatchRetryPending) return
+    versionMismatchRetryPending = true
     const delay = VERSION_MISMATCH_BACKOFF_MS[
-      Math.min(step, VERSION_MISMATCH_BACKOFF_MS.length - 1)
+      Math.min(versionMismatchRetryStep, VERSION_MISMATCH_BACKOFF_MS.length - 1)
     ] as number
+    versionMismatchRetryStep++
     scheduler.setTimer(() => {
+      versionMismatchRetryPending = false
       const w = hostWorkerEntry()
       w?.worker.postMessage({ type: 'retry' } satisfies ToWorker)
-      // No ack of "did that retry actually land": the net worker's own next `{ type: 'link' }`
-      // message (a fresh `up`, or another `down`) drives whatever happens after this, the same way
-      // a real reconnect always does -- this is only what keeps *asking* while nothing has.
-      scheduleVersionMismatchRetry(step + 1)
     }, delay)
   }
 
