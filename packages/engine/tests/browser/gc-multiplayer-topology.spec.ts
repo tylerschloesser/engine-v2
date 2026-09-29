@@ -52,7 +52,27 @@ let tickTimer: ReturnType<typeof setInterval> | undefined
 // included -- a reliable, wall-clock-independent chance to fire; this interval only keeps the
 // session itself alive and gives `gc/net-negative-control`'s own *default* traffic (its own test
 // below adds much more on top, for the duration of that one test alone).
-const HEARTBEAT_MS = 400
+//
+// **2000, not 400 (M29b fix round 2): the same collateral mechanism, still leaking, under CI's own
+// `GC_MODE=software`+`ENGINE_GPU=swiftshader` specifically.** CI's own `report.json` (two
+// independent runs, the same three tests both times): `neg burst main` measured `net` at a raw
+// 235.59 B/frame against its 226 B/frame ceiling (`B.net = false` -- `gc/analyse.ts`'s own
+// `verdict()`, the `else`/`rawB` branch every isolate but `main` takes in *both* modes, ADR 0029) --
+// `neg burst client`/`neg burst gen0` failed the identical way. Every sibling isolate's own `burst`
+// control makes the *whole page* run measurably slower in real wall-clock time (real allocation,
+// real GC pressure) -- worse under software rendering (swiftshader) and CI's own weaker CPU than on
+// a fast dev machine, where the post-split hardware-mode check ("no collateral effect left to
+// tolerate") was verified but software mode never was. A slower real window lets more of this
+// file's own real, Node-side `setInterval(..., HEARTBEAT_MS)` ticks land inside it -- each one a
+// genuine downlink message `net`'s real `onMessage` callback has to process, adding real bytes
+// regardless of which isolate the negative control under test actually targets. Same fix shape as
+// the *volume* problem already solved for `gc/net-negative-control`'s own dedicated ticker (this
+// file's own history, above): fewer real ticks per real second means fewer land inside any one
+// window, however long that window takes to run. `2000` stays comfortably under `net/link.ts`'s own
+// `DEAD_MS` (3000, `docs/decisions/0013-sessions-and-integrity.md`), a 1000 ms safety margin against
+// scheduling jitter -- this interval's only real job (keeping the session from going `'dead'`
+// between/during tests), unlike `net`'s own reading, does not depend on ticking *often*.
+const HEARTBEAT_MS = 2000
 
 test.beforeAll(async () => {
   server = await startTestServer({ fixture: PUTS_DIR, manualTimer: true, port: PORT })
