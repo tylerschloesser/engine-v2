@@ -1,6 +1,6 @@
 # M30: Interpolation
 
-Status: not started · After: 29, 19, 26 · Tyler-dependent: no
+Status: done · After: 29, 19, 26 · Tyler-dependent: no
 
 ## Goal
 Remote players move smoothly: presence samples go through an interpolation buffer rendered at `host time − delay`, with Hermite interpolation, bounded extrapolation, hold, and fade, and the delay adapts to measured jitter without ever stepping. Verified by native unit tests on synthetic arrival times and by netcode-harness scenarios under the seeded conditioner, reproducible from `(seed, scenario)`.
@@ -70,10 +70,10 @@ Netcode suite (`interpolation.*`, seeded conditioner, virtual clock, two to eigh
 Browser suite: `rebase-on-visible`: hide, advance the injected clock 5 s, show; no fast-forward, first frame after return is `Interp` or `Hold`, never a sweep.
 
 ## Exit criteria
-- [ ] Every test above passes; `extrapolation_ratio` and its verdict are written under Deviations.
-- [ ] `interp_alloc` reports 0 and the browser zero-GC test passes in the multiplayer topology with one moving remote.
-- [ ] Netcode suite stays inside its 0020 time budget; the `ws` repeat is tagged slow if it does not.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Every test above passes; `extrapolation_ratio` and its verdict are written under Deviations.
+- [x] `interp_alloc` reports 0 and the browser zero-GC test passes in the multiplayer topology with one moving remote.
+- [x] Netcode suite stays inside its 0020 time budget; the `ws` repeat is tagged slow if it does not.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t interp` · `pnpm test netcode -t interpolation` · `pnpm test browser -t rebase-on-visible` · `pnpm test browser -t zero-gc` · `pnpm test && pnpm lint`
