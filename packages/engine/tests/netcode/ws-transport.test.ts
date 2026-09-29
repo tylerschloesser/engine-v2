@@ -19,6 +19,7 @@
 // version-mismatch` stay fast tier: each is the only fast-tier test covering its own feature
 // (convergence, the deflate refusal, the close-code mapping).
 import { expect, test } from 'vitest'
+import { SessionState } from '../../src/clock-block.js'
 import { CloseCode } from '../../src/host/handshake.js'
 import { MsgClass, type WorldServer } from '../../src/server.js'
 import { attachWebSocketServer } from '../../src/server-node.js'
@@ -37,11 +38,17 @@ test('ws/join-converges', async () => {
     harness.clients.forEach((c, i) => {
       c.setCamera(square(i))
     })
-    // 20, not 10 (Deviations, measured): a real loopback socket handshake competes for the event
-    // loop with `pnpm test`'s own concurrently-running suites (`scripts/test.mjs`'s "run every
-    // selected suite in parallel"), and 10 ticks' worth of real-time headroom flaked under that
-    // load in a way 20 did not.
+    // Wait for the condition, not a tick count: a real loopback socket handshake competes for the
+    // event loop with `pnpm test`'s concurrently-running suites, and a fixed 20 ticks (M29's
+    // measured fix for 10) still lost that race on CI at M30's `done` push. Bounded so a handshake
+    // that never completes fails here, with its states, not at `dispatch`.
     await harness.advanceTicks(20)
+    for (let i = 0; i < 400 && !harness.clients.every((c) => c.status().live); i++) {
+      await harness.advanceTicks(1)
+    }
+    expect(harness.clients.map((c) => c.status().sessionState)).toEqual(
+      harness.clients.map(() => SessionState.Online),
+    )
 
     harness.clients[0]?.dispatch({ Paint: { pos: { x: 2, y: 2 }, base: 1, resource: 0 } })
     harness.clients[1]?.dispatch({ Spawn: { at: { x: -3, y: 8 }, kind: 1 } })
