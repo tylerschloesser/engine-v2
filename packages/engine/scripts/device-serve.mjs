@@ -147,10 +147,18 @@ const previewArgs =
   app === 'reference'
     ? ['exec', 'vite', 'preview', '--host', '127.0.0.1']
     : ['exec', 'vite', 'preview', '--config', configPath, '--host', '127.0.0.1']
+// `detached: true` (M29b fix round 2): `preview` is `pnpm exec vite preview`, and the real HTTP
+// listener -- the port a subsequent run actually needs released -- lives in `vite`, a *grandchild*
+// of this process (pnpm's own child), not `preview` itself. A plain `preview.kill()` only signals
+// the `pnpm` wrapper; whether that forwards to `vite` is pnpm's own implementation detail, not a
+// contract this script can rely on. `detached` makes `preview` its own process-group leader, so
+// `shutdown` below can kill the *whole group* (`process.kill(-preview.pid, ...)`) -- `pnpm` and
+// `vite` both, regardless of whether pnpm forwards anything itself.
 const preview = spawn('pnpm', previewArgs, {
   cwd: previewCwd,
   stdio: ['ignore', 'pipe', 'inherit'],
   env: previewEnv,
+  detached: true,
 })
 preview.stdout.on('data', (d) => process.stdout.write(d))
 
@@ -192,14 +200,43 @@ if (tunnel) {
   for (const page of pages) console.log(`http://127.0.0.1:${port}/${page}`)
 }
 
-const shutdown = () => {
-  preview.kill()
-  cloudflared?.kill()
-  if (wsChild) {
-    wsChild.kill()
-    if (wsDataDir) void rm(wsDataDir, { recursive: true, force: true })
+// Waits for `proc` to actually exit (its own port genuinely released, not merely signalled) before
+// resolving -- a plain `.kill()` only requests the exit; `process.exit(0)` right after it, with no
+// wait, was a real bug (M29b fix round 2: found reading `checkMode`'s own teardown-ordering question
+// against this file, `device-serve-proxy-and-apps.test.ts`'s own two sequential `checkMode` calls
+// share one port pair, so the *next* mode's own `vite preview --strictPort`/`WebSocketServer` bind
+// races whatever's left of the *previous* mode's own child here). A dead process resolves
+// immediately (`proc.exitCode !== null`); `SIGKILL` after 5 s is the same bounded-wait-then-force
+// shape `net-harness.ts`/`test-server.ts` already use for a real HTTP/WS server's own accepted
+// sockets, applied here to a whole child *process* instead.
+function waitExit(proc) {
+  if (proc.exitCode !== null || proc.signalCode !== null) return Promise.resolve()
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => proc.kill('SIGKILL'), 5000)
+    proc.once('exit', () => {
+      clearTimeout(timer)
+      resolve()
+    })
+  })
+}
+
+const shutdown = async () => {
+  // `-preview.pid` (the process-group form of `kill(2)`): `preview` was spawned `detached: true`
+  // for exactly this (its own doc comment) -- signals `pnpm` and its own `vite` child together.
+  try {
+    process.kill(-preview.pid, 'SIGTERM')
+  } catch {
+    preview.kill() // the group is already gone (e.g. `pnpm` already exited on its own)
   }
+  cloudflared?.kill()
+  if (wsChild) wsChild.kill()
+  await Promise.all([
+    waitExit(preview),
+    cloudflared ? waitExit(cloudflared) : undefined,
+    wsChild ? waitExit(wsChild) : undefined,
+  ])
+  if (wsDataDir) await rm(wsDataDir, { recursive: true, force: true })
   process.exit(0)
 }
-process.on('SIGINT', shutdown)
-process.on('SIGTERM', shutdown)
+process.on('SIGINT', () => void shutdown())
+process.on('SIGTERM', () => void shutdown())

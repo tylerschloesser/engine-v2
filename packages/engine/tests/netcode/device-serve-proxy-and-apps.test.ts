@@ -19,9 +19,16 @@ const deviceServeScript = fileURLToPath(new URL('../../scripts/device-serve.mjs'
 
 // Distinct from the real `pnpm device:serve` defaults (4173/4174, `device-serve.mjs`'s own doc
 // comment): this test must never collide with a real interactive session on Tyler's machine
-// (`shared-machine-foreign-e2e` memory note) or with a concurrent `pnpm test` worker.
-const PORT = 14273
-const WS_PORT = 14274
+// (`shared-machine-foreign-e2e` memory note) or with a concurrent `pnpm test` worker. Two distinct
+// pairs, one per `checkMode` call (M29b fix round 2): `device-serve.mjs`'s own `shutdown` now
+// properly awaits its children's real exit before returning (the teardown-ordering bug this file's
+// own read surfaced), but reusing one port pair across two sequential real server spawns still made
+// the second mode's own bind depend on the first mode's own teardown finishing in time regardless --
+// distinct ports remove that dependency structurally, not just make it faster.
+const PORT_A = 14273
+const WS_PORT_A = 14274
+const PORT_B = 14275
+const WS_PORT_B = 14276
 
 let child: ReturnType<typeof spawn> | undefined
 
@@ -70,14 +77,14 @@ function wsUpgradeSucceeds(url: string): Promise<void> {
   })
 }
 
-async function checkMode(args: string[]): Promise<void> {
+async function checkMode(args: string[], port: number, wsPort: number): Promise<void> {
   child = spawn(process.execPath, [deviceServeScript, ...args], {
-    env: { ...process.env, ENGINE_TEST_PORT: String(PORT), ENGINE_WS_PORT: String(WS_PORT) },
+    env: { ...process.env, ENGINE_TEST_PORT: String(port), ENGINE_WS_PORT: String(wsPort) },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   await waitReady(child)
 
-  const res = await fetch(`http://127.0.0.1:${PORT}/`)
+  const res = await fetch(`http://127.0.0.1:${port}/`)
   expect(res.status, `${args.join(' ')}: GET /`).toBe(200)
   expect(res.headers.get('cross-origin-opener-policy'), `${args.join(' ')}: COOP`).toBe(
     'same-origin',
@@ -86,7 +93,7 @@ async function checkMode(args: string[]): Promise<void> {
     'require-corp',
   )
 
-  await wsUpgradeSucceeds(`ws://127.0.0.1:${PORT}/ws`)
+  await wsUpgradeSucceeds(`ws://127.0.0.1:${port}/ws`)
 
   const exited = new Promise<void>((resolve) => child?.on('exit', () => resolve()))
   child.kill('SIGTERM')
@@ -102,8 +109,19 @@ async function checkMode(args: string[]): Promise<void> {
 // runner rather than a defect in this test's own logic. `netcode` is now `soloTiers: ['slow']`
 // (`scripts/suites.mjs`), which removes contention from the concurrently-running `browser` suite;
 // this margin is the remaining defense for `netcode`'s own internal concurrency (several test files
-// in this same suite run at once) on CI's weaker-than-this-dev-machine hardware.
+// in this same suite run at once) on CI's weaker-than-this-dev-machine hardware. **Still timed out
+// at 120 s on CI (M29b fix round 2)** -- traced two real, independent contributors, both fixed: (1)
+// `device-serve.mjs`'s own `shutdown` fired `.kill()` on its children and called `process.exit(0)`
+// immediately, with no wait -- a real teardown-ordering bug (fixed there, its own doc comment); (2)
+// `netcode`'s slow tier still runs its own five test files concurrently *within itself* even once
+// `soloTiers` removed the `browser` suite's own external contention -- `reference-server/smoke`'s
+// real server spawn, the `ws/*` tests' real sockets, and this test's own two real `vite build`
+// cycles all still compete for CI's own real (and apparently scarce) CPU at the same time (fixed in
+// `scripts/suites.mjs`: `netcode` now runs its own slow-tier test files one at a time, not
+// `soloTiers`-adjacent contention but the next layer down). This test's own two `checkMode` calls
+// also moved to distinct port pairs (below), removing any dependency on teardown timing between them
+// regardless of either fix above.
 test('device-serve/proxy-and-apps @slow', async () => {
-  await checkMode(['--ws', 'puts'])
-  await checkMode(['--app', 'reference', '--ws', 'puts'])
+  await checkMode(['--ws', 'puts'], PORT_A, WS_PORT_A)
+  await checkMode(['--app', 'reference', '--ws', 'puts'], PORT_B, WS_PORT_B)
 }, 120_000)

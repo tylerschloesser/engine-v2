@@ -109,12 +109,31 @@ export const suites = [
   // concurrency (5 workers, its own `engines` leg): removing `netcode`'s own contribution is what
   // this fix addresses; if CI's slow tier is still tight after this, that is `browser`'s own budget
   // to revisit, not `netcode`'s.
+  //
+  // `slowArgs: ['--no-file-parallelism']` (M29b fix round 2): `soloTiers` above removes contention
+  // from *other* suites, but CI's slow tier still timed out `device-serve/proxy-and-apps` at 120 s
+  // afterward -- `netcode`'s own slow tier still runs its five test files concurrently *within
+  // itself* (Vitest's own default), so `reference-server/smoke`'s real server spawn, the `ws/*`
+  // tests' real sockets and `device-serve/proxy-and-apps`'s own two real `vite build`+`preview`
+  // cycles all still compete for CI's own real CPU at the same moment, one layer of contention
+  // `soloTiers` never touched. Traced (not assumed): the actual per-test symptoms (a `strictPort`
+  // Vite/`ws` bind conflict, or `device-serve.mjs`'s own teardown-ordering bug, both fixed
+  // separately -- `device-serve.mjs`'s own Deviations, `device-serve-proxy-and-apps.test.ts`) would
+  // fail *fast* with an explicit error, not hang for the full timeout; a genuine CPU-bound slowdown
+  // under real contention is the shape that actually produces a silent timeout, which is what CI
+  // reported. `--no-file-parallelism` (Vitest 5's own flag) makes this suite's own test files run
+  // one at a time instead: more real wall time for the slow tier overall (no budget gates it,
+  // `scripts/test.mjs`'s own `budgetMs = opts.tier === 'fast' ? ... : undefined`), far less peak
+  // concurrent CPU demand from `netcode`'s own tests at any one moment. Fast tier (small, no real
+  // spawns) is unaffected -- `suite.slowArgs` is tier-scoped the same way `soloTiers` is, appended
+  // only when `tier === 'slow'` (`scripts/lib/adapters.mjs`'s own `vitest` adapter).
   {
     name: 'netcode',
     kind: 'vitest',
     tiers: ['fast', 'slow'],
     budgetMs: 10_000,
     soloTiers: ['slow'],
+    slowArgs: ['--no-file-parallelism'],
   },
   {
     name: 'browser',

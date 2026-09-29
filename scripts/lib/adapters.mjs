@@ -90,6 +90,11 @@ export const adapters = {
           '-t',
           `${tag}.*${pattern ?? ''}`,
           ...(suite.args ?? []),
+          // `suite.slowArgs` (M29b fix round 2, `netcode`'s own row, `scripts/suites.mjs`):
+          // appended only in the slow tier, alongside `suite.args` (every tier) -- the same
+          // tier-scoping shape `scripts/test.mjs`'s own `soloTiers`/this adapter's own `leg.
+          // onlyTier` already use, for a vitest CLI flag rather than a scheduling decision.
+          ...(tier === 'slow' ? (suite.slowArgs ?? []) : []),
         ],
         reportPath,
       }

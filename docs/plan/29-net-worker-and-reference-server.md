@@ -690,3 +690,103 @@ milestone touches; passed clean on immediate retry.
 **If CI's slow tier is still tight after this fix**, that is `browser`'s own internal concurrency (5
 workers, plus the concurrently-running `engines` leg) to revisit next, with real CI numbers in hand
 -- not something to guess at from this machine, whose 14 cores do not represent CI's own hardware.
+
+## Fix round 3 (CI's own downloaded `test-results` artifact, two remaining real problems)
+
+The coordinator downloaded CI's raw `test-results` artifact (`gh run download`) after fix round 2 to
+get the untruncated `browser/report.json` the console log itself cuts off -- both numbers below are
+from that artifact, not a guess.
+
+### 1. `multiplayer-topology neg burst {main,client,gen0} @slow`: collateral on `net`, software mode only
+
+CI's own verdict for `neg burst main`: `bytesPerFrame: { main: 40133.41, client: 4.09, net: 235.59,
+gen0: 0.78 }`, `B: { main: false, client: true, gen0: true, net: false }`. `main`'s own `A`/`B` false
+is the control tripping as designed; `B.net = false` is the real failure -- `gc/analyse.ts`'s own
+`verdict()` reads `net`'s raw `totalBytes/frames` in *both* modes (`rawB`, the `else` branch every
+isolate but `main` takes; ADR 0029: only `main` gets a software-specific attributed row), so the
+existing 226 B/frame ceiling has to hold under `GC_MODE=software` too -- verified only in hardware
+mode when it was derived (step 5's own Deviations: "no collateral effect left to tolerate" was never
+checked under software mode).
+
+**Same collateral mechanism the step-5 fix already solved once for hardware mode, still leaking
+under software mode specifically.** A sibling isolate's own `burst` control (real allocation, real
+GC pressure) makes the whole page run measurably slower in real wall-clock time -- worse under
+`ENGINE_GPU=swiftshader`'s software rendering and CI's own weaker CPU than the hardware-mode check
+ever exercised. This file's own Node-side `HEARTBEAT_MS` `setInterval` (400 ms, real wall-clock, the
+only thing that ever ticks the `manualTimer: true` test server) does not know or care how long the
+measured window actually takes -- a slower window lets more of its real ticks land inside it, each
+one a genuine downlink message `net`'s real `onMessage` has to process, regardless of which isolate
+the negative control under test targets.
+
+**Fix: `HEARTBEAT_MS` raised `400 -> 2000`** (`gc-multiplayer-topology.spec.ts`), the same fix shape
+already applied to `gc/net-negative-control`'s own dedicated ticker for the identical class of
+problem (message *volume* scaling with real wall-clock time) -- fewer real ticks per real second
+means fewer land in any window regardless of how long it runs. Stays comfortably under `net/link.
+ts`'s own `DEAD_MS` (3000), a 1000 ms safety margin against scheduling jitter; this interval's only
+real job (keeping the session from going `'dead'`) never needed to tick often.
+
+**Verified (this machine).** Clean baseline unchanged: 214.79-215.53 B/frame across 8 repeats,
+hardware mode (confirms a normal, sub-second clean window was never where the collateral came from --
+only a *slow* window is). `neg burst {main,client,gen0}` under forced `CI=true ENGINE_GPU=swiftshader
+GC_MODE=software`: net's raw reading now 216.79-218.19 B/frame (was 235.59 on CI at the old rate) --
+real ~8 B margin restored under 226. Full `multiplayer-topology`+`gc/net-negative-control` fast-tier
+set (10 tests) and all 15 `neg burst {main,client,gen0}` repeats re-verified passing under the same
+forced env. **This machine could not reproduce CI's own exact 235.59 failure** (local software+
+swiftshader burst collateral measured well under 226 even before this fix, 14 cores vs. CI's own
+smaller runner) -- verified by mechanism and by a large, consistent reduction in the same measured
+quantity, not by reproducing the exact CI number locally. `budgets.json`'s own `net` row formula
+updated in place with this finding (the "third finding" paragraph, appended to the existing one).
+
+### 2. `device-serve/proxy-and-apps @slow`: still times out at 120 s -- traced, not re-guessed
+
+**Read `checkMode` and `device-serve.mjs` end to end for the coordinator's own question** ("does
+`checkMode` await full teardown ... including port release?"): no. `device-serve.mjs`'s own
+`shutdown()` fired `.kill()` on every spawned child and called `process.exit(0)` immediately, with
+*no wait* for any of them to actually exit -- a real, confirmed bug. A second, related gap: `preview`
+(`pnpm exec vite preview`) is a *wrapper* around the real HTTP listener (`vite`, a grandchild of this
+script); a plain `.kill()` on the wrapper does not guarantee the signal reaches `vite` at all, since
+that depends on `pnpm`'s own, unaudited forwarding behaviour.
+
+**But traced through to its actual consequence, this bug produces a fast, explicit failure, not a
+silent 120 s hang** -- both apps' own `vite.config.ts` already set `preview.strictPort: true` (no
+silent port-increment retry), and `games/reference-server`'s own `WebSocketServer` bind failure would
+throw an uncaught exception, which `device-serve.mjs`'s own child-readiness promises (`wsChild.
+on('close', ...)`, `preview.on('close', ...)`) already turn into an explicit rejection, which the
+test's own `waitReady`'s `proc.on('exit', ...)` already turns into `device-serve.mjs exited N before
+ready` -- fast, not a bare timeout. **Fixed anyway** (a real, load-bearing correctness bug regardless
+of whether it is *this* symptom's root cause -- `pnpm device:serve`'s own real interactive use has
+the identical risk on a plain Ctrl-C): `shutdown()` is now `async`, awaits every child's real exit
+(`waitExit`, a bounded 5 s wait then `SIGKILL`, the same bounded-wait-then-force shape `net-harness.
+ts`/`test-server.ts` already use for a server's own accepted sockets) before calling `process.exit
+(0)`; `preview` is now spawned `detached: true` so `shutdown` can kill its whole process group
+(`process.kill(-preview.pid, ...)`), reaching `vite` even if `pnpm` itself never forwards anything.
+Also gave the test's own two sequential `checkMode` calls **distinct port pairs** (14273/14274,
+14275/14276) -- removes any dependency on teardown timing between them structurally, not just makes
+it faster.
+
+**The actual mechanism, reasoned from the evidence in hand**: a fast, explicit failure is not what CI
+reported (a bare timeout), which points at genuine CPU-bound slowness rather than a hang. `netcode`'s
+own `soloTiers: ['slow']` (fix round 2) removed contention from the *other* concurrently-running
+suites, but never touched `netcode`'s own internal concurrency -- Vitest's own default runs every
+test *file* in a project in parallel, so `reference-server/smoke`'s real server spawn, three `ws/*`
+tests' real sockets, and `device-serve/proxy-and-apps`'s own two real `vite build`+`preview` cycles
+all still compete for CI's own real CPU at the same moment. **Fixed**: `netcode` gained `slowArgs:
+['--no-file-parallelism']` (`scripts/suites.mjs`; `scripts/lib/adapters.mjs`'s `vitest` adapter
+extended to append it only in the slow tier, the same tier-scoping shape `soloTiers`/`leg.onlyTier`
+already use) -- `netcode`'s own slow-tier test files now run one at a time, trading real wall time
+(no budget gates the slow tier) for far less peak concurrent CPU demand.
+
+**No exact CI wall-clock number for this specific test was available to derive a timeout from**
+(the coordinator's own artifact gave `reference-server/smoke`'s duration, 30 s -- itself almost
+entirely 0013's own fixed real-time idle wait, not CPU-bound work, so not informative about build
+speed -- and only "still times out at 120 s" for this one, no partial-progress figure). Left at
+120 s; not blindly widened further with no evidence to derive a new number from. Verified locally
+instead: `pnpm test:slow netcode -t "device-serve/proxy-and-apps"` (4.3 s, distinct ports, clean
+teardown -- `pgrep` empty after); full `pnpm test:slow` twice in a row, clean both times (`netcode
+pass 5 tests ~59s`, now serialized -- up from ~31s concurrent, the direct, expected cost of `--no-
+file-parallelism`); `pnpm test` (fast tier) unaffected, `netcode` stays concurrent there (`4.1-4.2s`).
+
+**If CI's slow tier still times out this test after both fixes**, that is real evidence the work
+itself (not contention) is the bottleneck on CI's own hardware, and the next step is a real,
+CI-measured number for `--app reference`'s own `pnpm --filter reference build` step specifically --
+not available from this machine.
