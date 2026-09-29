@@ -28,8 +28,8 @@ fn sample() -> Sample {
     }
 }
 
-fn live() -> usize {
-    engine::abi::arena::live_bytes()
+fn live() -> isize {
+    engine::abi::arena::thread_live_bytes()
 }
 
 #[test]
@@ -50,4 +50,63 @@ fn no_alloc_codec() {
     let h = hash::hash_value(&value);
     assert_eq!(live(), before, "hash::hash_value allocated");
     assert_ne!(h, 0);
+}
+
+/// The instrument itself (docs/plan/30c-ci-reds-after-m30.md, red A): every `no_alloc_*` binary
+/// measures `thread_live_bytes()`, which counts the calling thread only. Another thread's
+/// allocation landing inside the window (on CI: libtest's main thread, which keeps allocating
+/// right after it spawns the test thread and, starved, lands in the first window) moves the
+/// process-wide `live_bytes()` but not the measurement, while an allocation on the measuring
+/// thread still does.
+#[test]
+fn instrument_counts_the_measuring_thread_only() {
+    use engine::abi::arena::live_bytes;
+    use std::sync::atomic::{AtomicIsize, AtomicU8, Ordering::SeqCst};
+    static STAGE: AtomicU8 = AtomicU8::new(0);
+    static OTHER_DELTA: AtomicIsize = AtomicIsize::new(0);
+
+    let other = std::thread::spawn(|| {
+        STAGE.store(1, SeqCst); // past thread start-up, whose own frees would blur the check
+        while STAGE.load(SeqCst) != 2 {
+            std::thread::yield_now();
+        }
+        // Held past the measurement, like the harness's own bookkeeping.
+        let before = live();
+        std::mem::forget(Vec::<u8>::with_capacity(900));
+        OTHER_DELTA.store(live() - before, SeqCst);
+        STAGE.store(3, SeqCst);
+    });
+    while STAGE.load(SeqCst) != 1 {
+        std::thread::yield_now();
+    }
+
+    let (thread_before, process_before) = (live(), live_bytes());
+    STAGE.store(2, SeqCst);
+    while STAGE.load(SeqCst) != 3 {
+        std::thread::yield_now();
+    }
+    let (thread_after, process_after) = (live(), live_bytes());
+    assert_eq!(
+        OTHER_DELTA.load(SeqCst),
+        900,
+        "the other thread counts its own allocation"
+    );
+    assert!(
+        process_after > process_before,
+        "the other thread's allocation shows in the process-wide count"
+    );
+    assert_eq!(
+        thread_after, thread_before,
+        "another thread's allocation moved the measuring thread's count"
+    );
+
+    let before = live();
+    std::mem::forget(Vec::<u8>::with_capacity(9));
+    assert_eq!(
+        live() - before,
+        9,
+        "an allocation on this thread must count"
+    );
+
+    other.join().unwrap();
 }

@@ -51,7 +51,7 @@
 //! never claimed allocation-free).
 
 use engine::abi::Arena;
-use engine::abi::arena::high_water_bytes;
+use engine::abi::arena::thread_high_water_bytes as high_water_bytes;
 use engine::game::{EntityId, Game, PlayerEvent, PlayerId, TickCx, Unknown, WorldWrite};
 use engine::host::Host;
 use engine::sim::WorldParams;
@@ -64,8 +64,8 @@ use engine::worldgen::Worldgen;
 #[global_allocator]
 static ALLOCATOR: Arena = Arena;
 
-fn live() -> usize {
-    engine::abi::arena::live_bytes()
+fn live() -> isize {
+    engine::abi::arena::thread_live_bytes()
 }
 
 #[derive(
@@ -690,7 +690,7 @@ fn admit_run(window: u32) -> i64 {
 /// window (a real per-action leak grows the high-water mark right alongside the net; a one-off
 /// background allocation that later frees would not) plus each tick's own `live()` delta, so a
 /// future failure names *which* tick(s) inside the window actually grew, not just the total.
-fn admit_run_traced(window: u32) -> (usize, usize, Vec<i64>) {
+fn admit_run_traced(window: u32) -> (isize, isize, Vec<i64>) {
     let (mut host, mut seq, mut uplink_buf, mut frame_buf) = warmed_admit_host();
     // Allocated, and `hw_before`/`prev` both captured, *before* the loop starts: this `Vec`'s own
     // upfront allocation (`window * size_of::<i64>()` B -- 800 B at `window = 100`) must not be

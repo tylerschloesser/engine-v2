@@ -12,8 +12,8 @@ use engine::world::WorldPos;
 #[global_allocator]
 static ALLOCATOR: Arena = Arena;
 
-fn live() -> usize {
-    engine::abi::arena::live_bytes()
+fn live() -> isize {
+    engine::abi::arena::thread_live_bytes()
 }
 
 #[test]

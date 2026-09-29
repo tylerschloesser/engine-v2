@@ -23,8 +23,8 @@ use engine::worldgen::Worldgen;
 #[global_allocator]
 static ALLOCATOR: Arena = Arena;
 
-fn live() -> usize {
-    engine::abi::arena::live_bytes()
+fn live() -> isize {
+    engine::abi::arena::thread_live_bytes()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -196,14 +196,14 @@ fn tick_state_steady_no_alloc() {
     for _ in 0..500 {
         step(&mut sim);
     }
-    let short_growth = live().saturating_sub(before_short);
+    let short_growth = (live() - before_short).max(0);
 
     let before_long = live();
     for _ in 0..2_500 {
         // 5x the short window
         step(&mut sim);
     }
-    let long_growth = live().saturating_sub(before_long);
+    let long_growth = (live() - before_long).max(0);
 
     assert_eq!(
         short_growth, long_growth,

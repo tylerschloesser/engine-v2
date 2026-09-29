@@ -5,6 +5,8 @@
 
 use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::alloc::{GlobalAlloc, Layout, System};
+#[cfg(not(target_arch = "wasm32"))]
+use std::cell::Cell;
 
 /// Installed as the `#[global_allocator]` by `export_instance!`.
 pub struct Arena;
@@ -25,6 +27,67 @@ pub fn live_bytes() -> usize {
 pub fn high_water_bytes() -> usize {
     HIGH_WATER.load(Relaxed)
 }
+
+/// Bytes allocated minus bytes freed through [`Arena`] **by the calling thread only**: what a
+/// native `no_alloc_*` test measures (docs/plan/30c-ci-reds-after-m30.md). Signed, since a thread
+/// may free what another thread allocated (the test thread's first act is freeing the boxed
+/// closure libtest's main thread allocated for it). Only differences between two readings on the
+/// same thread mean anything.
+///
+/// Why not [`live_bytes`]: that counts the whole process, and libtest's main thread keeps
+/// allocating (~816 B measured on macOS; the 900 B CI read on Linux) right after it spawns the
+/// test thread. On a starved runner that work lands inside the test's first measured window.
+/// On wasm32 (one thread) this is [`live_bytes`].
+pub fn thread_live_bytes() -> isize {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        THREAD_LIVE.with(Cell::get)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        live_bytes() as isize
+    }
+}
+
+/// Largest value [`thread_live_bytes`] has had on the calling thread.
+pub fn thread_high_water_bytes() -> isize {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        THREAD_HIGH_WATER.with(Cell::get)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        high_water_bytes() as isize
+    }
+}
+
+// `const` initialisers and `Copy` contents: reading or writing these never allocates and never
+// registers a TLS destructor, so the allocator can touch them.
+#[cfg(not(target_arch = "wasm32"))]
+thread_local! {
+    static THREAD_LIVE: Cell<isize> = const { Cell::new(0) };
+    static THREAD_HIGH_WATER: Cell<isize> = const { Cell::new(0) };
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+fn thread_delta(delta: isize) {
+    // `try_with`: a thread past its TLS teardown still allocates (and frees) in std's own exit
+    // path; those bytes simply go uncounted per thread.
+    let _ = THREAD_LIVE.try_with(|live| {
+        let now = live.get() + delta;
+        live.set(now);
+        let _ = THREAD_HIGH_WATER.try_with(|high| {
+            if now > high.get() {
+                high.set(now);
+            }
+        });
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+#[inline]
+fn thread_delta(_delta: isize) {}
 
 /// WASM pages grown since `engine_init` reserved the arena. 0 in steady state (asserted by 0016).
 pub fn mem_grows() -> u32 {
@@ -82,6 +145,7 @@ fn grow_live(size: usize) {
     }
     let live = live + size;
     LIVE.store(live, Relaxed);
+    thread_delta(size as isize);
     if live > HIGH_WATER.load(Relaxed) {
         HIGH_WATER.store(live, Relaxed);
     }
@@ -90,6 +154,7 @@ fn grow_live(size: usize) {
 #[inline]
 fn shrink_live(size: usize) {
     LIVE.store(LIVE.load(Relaxed).saturating_sub(size), Relaxed);
+    thread_delta(-(size as isize));
 }
 
 // SAFETY: every call forwards to `System` with the caller's layout; the counters never touch the
