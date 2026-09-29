@@ -1,14 +1,16 @@
-//! [`InterpDelay`]: 0010 Rates, "Interpolation delay": adaptive
-//! `max(2 x frame interval, frame interval + p95 inter-arrival jitter)`; initial 150 ms, floor
-//! 100 ms, cap 400 ms; slewed with at most 10% time dilation, never stepped.
+//! [`InterpDelay`]: 0010 Rates, "Interpolation delay", as amended by 0040: adaptive
+//! `max(2 x pi, pi + p95 inter-arrival jitter)` with `pi` the presence sample interval; initial
+//! 250 ms, floor 200 ms, cap 400 ms; slewed with at most 10% time dilation, never stepped.
 
 use super::jitter::JitterStats;
 use crate::time::{Tick, TickRate};
 
-/// 0010 Rates, "Interpolation delay": initial.
-pub const INITIAL_MS: f32 = 150.0;
-/// 0010 Rates: floor.
-pub const FLOOR_MS: f32 = 100.0;
+/// 0040 section 1: the presence sample interval (10 Hz, 0010) that sizes the delay.
+pub const PRESENCE_INTERVAL_MS: f32 = 100.0;
+/// 0040 section 2: initial (floor plus one tick).
+pub const INITIAL_MS: f32 = 250.0;
+/// 0040 section 2: floor (`2 x` [`PRESENCE_INTERVAL_MS`]).
+pub const FLOOR_MS: f32 = 200.0;
 /// 0010 Rates: cap.
 pub const CAP_MS: f32 = 400.0;
 /// 0010 Rates: "at most 10% time dilation".
@@ -60,7 +62,7 @@ impl InterpDelay {
         if self.stats.len() < MIN_SAMPLES {
             return INITIAL_MS;
         }
-        let fi = self.tick_ms;
+        let fi = PRESENCE_INTERVAL_MS;
         (2.0 * fi)
             .max(fi + self.stats.p95_ms())
             .clamp(FLOOR_MS, CAP_MS)
@@ -128,11 +130,11 @@ mod tests {
     #[test]
     fn interp_delay_initial_floor_cap() {
         let mut d = InterpDelay::new(HZ20);
-        assert_eq!(d.delay_ms(), 150.0);
-        // Steady arrivals: p95 ~ 0 -> target = max(100, 50) = 100 = floor.
+        assert_eq!(d.delay_ms(), 250.0);
+        // Steady arrivals: p95 ~ 0 -> target = max(200, 100) = 200 = floor.
         feed(&mut d, 0, 0.0, 40, 0.0);
         settle(&mut d);
-        assert_eq!(d.delay_ms(), 100.0);
+        assert_eq!(d.delay_ms(), 200.0);
         // Huge jitter -> cap.
         let mut d = InterpDelay::new(HZ20);
         feed(&mut d, 0, 0.0, 60, 900.0);
@@ -154,14 +156,14 @@ mod tests {
         // Alternating gaps 50 +/- 40 -> every jitter sample is 40 ms -> bin [32,48), p95 = 48.
         let mut d = InterpDelay::new(HZ20);
         feed(&mut d, 0, 0.0, 200, 40.0);
-        // 50 + 48 = 98 -> floor 100.
-        assert_eq!(d.target_ms(), 100.0);
-        // Jitter 120 ms: bin [112,128), p95 = 128 -> 50 + 128 = 178.
+        // 100 + 48 = 148 -> floor 200.
+        assert_eq!(d.target_ms(), 200.0);
+        // Jitter 120 ms: bin [112,128), p95 = 128 -> 100 + 128 = 228.
         let mut d = InterpDelay::new(HZ20);
         feed(&mut d, 0, 0.0, 200, 120.0);
-        assert_eq!(d.target_ms(), 178.0);
+        assert_eq!(d.target_ms(), 228.0);
         settle(&mut d);
-        assert_eq!(d.delay_ms(), 178.0);
+        assert_eq!(d.delay_ms(), 228.0);
     }
 
     #[test]
