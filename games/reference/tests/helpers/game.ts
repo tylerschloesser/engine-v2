@@ -101,12 +101,51 @@ export async function pumpUntil(
 }
 
 /**
+ * A collect button is created when the `Ui` reaches the main thread, but the anchor layer only
+ * positions it on the next *stepped* frame; until then every new button sits at the same default
+ * spot and one intercepts the others' clicks, and a `Ui` that lands after the last stepped frame
+ * leaves nothing on the page at all (gate rounds 1-2). Steps one frame per poll until a button
+ * exists for every tile in `tiles` (at least one when `tiles` is empty) and no two collect buttons
+ * overlap. Bounded by the poll timeout; not a retry of a flaky step.
+ */
+export async function settleCollectButtons(
+  page: Page,
+  tiles: { x: number; y: number }[] = [],
+): Promise<void> {
+  const wanted = tiles.map((t) => `${t.x},${t.y}`)
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async (want) => {
+          await window.__stepFrame?.(50)
+          const buttons = [...document.querySelectorAll('.collect-button')]
+          const rects = buttons.map((b) => b.getBoundingClientRect())
+          const overlaps = rects.some((a, i) =>
+            rects.some(
+              (b, j) =>
+                i < j &&
+                a.left < b.right &&
+                b.left < a.right &&
+                a.top < b.bottom &&
+                b.top < a.bottom,
+            ),
+          )
+          const have = new Set(buttons.map((b) => b.getAttribute('data-collect-tile')))
+          return buttons.length > 0 && want.every((w) => have.has(w)) && !overlaps
+        }, wanted),
+      { timeout: 5_000 },
+    )
+    .toBe(true)
+}
+
+/**
  * `clickCollect(page, tile)` (Seams, Provides): clicks the one collect button anchored over `tile`
  * (`src/ui/collect.ts`'s own `data-collect-tile="x,y"` identity, Deviations) and flushes the
  * client's own action-ring uplink with one stepped frame (`depletion.spec.ts`/`ui-smoke.spec.ts`'s
  * own precedent: a dispatched action sits unflushed until `stepFrame` runs `client_poll_uplink`).
  */
 export async function clickCollect(page: Page, tile: { x: number; y: number }): Promise<void> {
+  await settleCollectButtons(page, [tile])
   await page.locator(`[data-collect-tile="${tile.x},${tile.y}"]`).click()
   await page.evaluate((dtMs) => window.__stepFrame?.(dtMs), 16)
 }

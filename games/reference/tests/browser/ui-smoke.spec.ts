@@ -15,7 +15,7 @@
 // precedent, e.g. `depletion.spec.ts`'s presence-sample loop) never trigger that. A handful of
 // `__stepTick` calls after the camera settles is enough.
 import { expect, test } from '@playwright/test'
-import { openGame } from '../helpers/game.js'
+import { openGame, settleCollectButtons } from '../helpers/game.js'
 
 declare global {
   interface Window {
@@ -44,34 +44,7 @@ test('reference_ui_smoke_collect_and_inventory', async ({ page }) => {
     await page.evaluate(() => window.__stepFrame?.(50))
   }
 
-  // A collect button is created when the `Ui` reaches the main thread, but the anchor layer only
-  // positions it on the next stepped frame; until then every button sits at the same default spot
-  // and one intercepts the other's clicks (found at gate round 1: the `Ui` lands after the last
-  // stepped frame in about half of the runs at M30's HEAD). So keep stepping frames until at least
-  // one button exists and no two buttons overlap, then click.
-  await expect
-    .poll(
-      () =>
-        page.evaluate(async () => {
-          await window.__stepFrame?.(50)
-          const rects = [...document.querySelectorAll('.collect-button')].map((b) =>
-            b.getBoundingClientRect(),
-          )
-          const overlaps = rects.some((a, i) =>
-            rects.some(
-              (b, j) =>
-                i < j &&
-                a.left < b.right &&
-                b.left < a.right &&
-                a.top < b.bottom &&
-                b.top < a.bottom,
-            ),
-          )
-          return rects.length > 0 && !overlaps
-        }),
-      { timeout: 5_000 },
-    )
-    .toBe(true)
+  await settleCollectButtons(page, [{ x: 0, y: 0 }])
   const button = page.locator('[data-collect-tile="0,0"]')
   await expect(button).toBeVisible({ timeout: 5_000 })
 

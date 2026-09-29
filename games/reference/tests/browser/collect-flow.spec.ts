@@ -7,7 +7,14 @@
 // (`ui-smoke.spec.ts`'s own precedent: settle the camera, `__stepTick` for the replica to see a
 // tile, `__stepFrame` to flush the uplink).
 import { expect, test } from '@playwright/test'
-import { clickCollect, openGame, panTo, pumpUntil, uiState } from '../helpers/game.js'
+import {
+  clickCollect,
+  openGame,
+  panTo,
+  pumpUntil,
+  settleCollectButtons,
+  uiState,
+} from '../helpers/game.js'
 
 declare global {
   interface Window {
@@ -48,12 +55,18 @@ test('reference_collect_flow', async ({ page }) => {
   await uiState(page)
   await panTo(page, STONE)
 
-  const ui = await uiState(page)
+  // The `Ui` reaches the main thread asynchronously, possibly after `panTo`'s last stepped frame:
+  // step until it names the tile instead of reading once (gate round 2).
+  const ui = await pumpUntil(
+    page,
+    (u) => u?.in_range.some((e) => e.tile.x === STONE.x && e.tile.y === STONE.y) === true,
+  )
   expect(
     ui?.in_range.some((e) => e.tile.x === STONE.x && e.tile.y === STONE.y),
     'the stone tile must be in range once the camera has settled on it',
   ).toBe(true)
 
+  await settleCollectButtons(page, [STONE])
   const button = page.locator(`[data-collect-tile="${STONE.x},${STONE.y}"]`)
   await expect(button).toBeVisible()
 
@@ -138,6 +151,7 @@ test('reference_several_buttons', async ({ page }) => {
   await uiState(page) // primes the `lastUi` subscription (see `reference_collect_flow`'s comment).
   await panTo(page, { x: 58, y: 56 })
 
+  await settleCollectButtons(page, [WOOD_A, WOOD_B])
   await expect(page.locator(`[data-collect-tile="${WOOD_A.x},${WOOD_A.y}"]`)).toBeVisible()
   await expect(page.locator(`[data-collect-tile="${WOOD_B.x},${WOOD_B.y}"]`)).toBeVisible()
   await expect(page.locator('[data-collect-tile]')).toHaveCount(2)
