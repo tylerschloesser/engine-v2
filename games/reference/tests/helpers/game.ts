@@ -107,6 +107,10 @@ export async function pumpUntil(
  * leaves nothing on the page at all (gate rounds 1-2). Steps one frame per poll until a button
  * exists for every tile in `tiles` (at least one when `tiles` is empty) and no two collect buttons
  * overlap. Bounded by the poll timeout; not a retry of a flaky step.
+ *
+ * Each poll also steps one sim tick (gate round 3): `panTo`'s fixed five ticks can all run before the
+ * camera's new interest reaches the host, and then no tile downlink for the new view is ever sent
+ * however many frames are stepped (a full-suite-only `reference_several_buttons` timeout).
  */
 export async function settleCollectButtons(
   page: Page,
@@ -117,6 +121,7 @@ export async function settleCollectButtons(
     .poll(
       () =>
         page.evaluate(async (want) => {
+          await window.__stepTick?.(1)
           await window.__stepFrame?.(50)
           const buttons = [...document.querySelectorAll('.collect-button')]
           const rects = buttons.map((b) => b.getBoundingClientRect())
