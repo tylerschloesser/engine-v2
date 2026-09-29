@@ -107,6 +107,14 @@ impl<G: Game> RemotePresences<G> {
         self.unstamped = false;
     }
 
+    /// Rebase or resync (0018 section 8, M28b): forgets every remote's samples. Each remote comes
+    /// back with the host's next relay of its sample (`Interp` or `Hold`, never a sweep).
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+        self.buffer.clear();
+        self.unstamped = false;
+    }
+
     pub(crate) fn apply_gone(&mut self, who: PlayerId) {
         self.entries.remove(&who);
         self.buffer.remove(InterpKey::Player(who));
@@ -282,6 +290,19 @@ mod tests {
         r.refresh(PlayerId(1), Tick(110));
         let s = r.sample(PlayerId(1), 110.0).unwrap();
         assert_eq!((s.alpha, s.pos.x), (1.0, 7));
+    }
+
+    #[test]
+    fn clear_drops_every_remote_and_the_next_relay_restores_it() {
+        let mut r = RemotePresences::<RGame>::new();
+        r.apply_sample(PlayerId(1), RPresence { x: 7 }, Tick(10));
+        r.apply_sample(PlayerId(2), RPresence { x: 9 }, Tick(10));
+        r.clear();
+        assert_eq!(r.iter().count(), 0);
+        assert!(r.sample(PlayerId(1), 10.0).is_none());
+        // The host's next relay of the held sample brings the remote back.
+        r.apply_sample(PlayerId(1), RPresence { x: 7 }, Tick(10));
+        assert_eq!(r.sample(PlayerId(1), 10.0).unwrap().pos.x, 7);
     }
 
     #[test]

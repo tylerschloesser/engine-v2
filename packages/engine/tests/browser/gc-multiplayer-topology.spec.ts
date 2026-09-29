@@ -21,10 +21,11 @@ import { type Browser, expect, type Page, test } from '@playwright/test'
 import { fixtureBuildDir } from '../support/fixtures.js'
 import { measure } from './gc/instrument.js'
 import { zeroGcSuite } from './gc/suite.js'
+import { type MovingRemote, startMovingRemote } from './support/moving-remote.js'
 import { openPage } from './support/page.js'
 import { startTestServer, type TestServer } from './support/test-server.js'
 
-const PUTS_DIR = fixtureBuildDir('puts')
+const PRESENCE_DIR = fixtureBuildDir('presence')
 // A fixed port, not `startTestServer`'s own default OS-assigned one (Deviations): `zeroGcSuite`'s
 // `path` is a plain string, registered synchronously at file-load time, well before `test.beforeAll`
 // ever runs -- there is no way to thread an async-discovered port into it. Worker-indexed (the same
@@ -35,6 +36,7 @@ const BASE_PATH = `/gc-multiplayer-topology.html?url=${encodeURIComponent(`ws://
 
 let server: TestServer | undefined
 let tickTimer: ReturnType<typeof setInterval> | undefined
+let remote: MovingRemote | undefined
 
 // A slow, steady heartbeat cadence for the whole file's lifetime -- just enough real server
 // traffic that a genuinely-dead connection would show up, not a throughput source for any test's
@@ -72,15 +74,27 @@ let tickTimer: ReturnType<typeof setInterval> | undefined
 // `DEAD_MS` (3000, `docs/decisions/0013-sessions-and-integrity.md`), a 1000 ms safety margin against
 // scheduling jitter -- this interval's only real job (keeping the session from going `'dead'`
 // between/during tests), unlike `net`'s own reading, does not depend on ticking *often*.
-const HEARTBEAT_MS = 2000
+//
+// **M30: `HEARTBEAT_MS` (2000, above) is replaced by `REMOTE_STEP_MS`.** The page holds a camera at
+// the origin and a second player (`support/moving-remote.ts`, a real loopback `ws` client on the
+// same `presence` fixture) walks a curve there: every step is a new presence sample the host relays
+// into the page's own interpolation path, so the background tick is now also the walker's step.
+// Real presence traffic is the point (exit criterion: zero-GC with one moving remote), so the
+// cadence is 10x faster than the keep-alive it replaces; the budget rows below were re-measured.
+const REMOTE_STEP_MS = 200
 
 test.beforeAll(async () => {
-  server = await startTestServer({ fixture: PUTS_DIR, manualTimer: true, port: PORT })
-  tickTimer = setInterval(() => server?.stepTick(), HEARTBEAT_MS)
+  server = await startTestServer({ fixture: PRESENCE_DIR, manualTimer: true, port: PORT })
+  remote = await startMovingRemote(server.url, 'presence', () => server?.stepTick())
+  tickTimer = setInterval(() => {
+    remote?.step()
+    server?.stepTick()
+  }, REMOTE_STEP_MS)
 })
 
 test.afterAll(async () => {
   if (tickTimer !== undefined) clearInterval(tickTimer)
+  remote?.leave()
   await server?.stop()
 })
 
@@ -151,5 +165,77 @@ test('gc/net-negative-control', async ({ page, browser }) => {
   for (const name of ['main', 'client', 'gen0']) {
     expect(r.verdict.A[name], `A.${name}: ${JSON.stringify(r.verdict)}`).toBe(true)
     expect(r.verdict.B[name], `B.${name}: ${JSON.stringify(r.verdict)}`).toBe(true)
+  }
+})
+
+// `rebase-on-visible` (docs/plan/30-interpolation.md Tests added, browser suite): the real
+// multiplayer topology with the moving remote above. Tab return is `frame-loop.ts`'s `resume()`
+// setting `CB_FLAGS.FLAG_REBASE` (proved by `viewport.spec.ts`'s `lifecycle: hidden stops visible
+// rebases`, which cannot run a client worker); this test sets that same bit, jumps the injected
+// clock 5 s as a hidden tab would have, and steps one frame: the client worker must consume the
+// flag, snap the interpolation delay back to its initial value and drop every remote, so the first
+// frame after the return is `interp` or `hold` (or the remote is simply not drawn yet), never a
+// sweep or an extrapolation.
+test('rebase-on-visible', async ({ page }) => {
+  await openPage(page, BASE_PATH)
+  // Frames until the remote is being drawn; the background interval steps the walker and the host.
+  let settled: { rows: { mode: string }[]; delayMs: number } | undefined
+  for (let i = 0; i < 300 && settled === undefined; i++) {
+    const p = await page.evaluate(async () => {
+      await window.__step?.(50)
+      return window.__probe?.()
+    })
+    if (p && p.rows.length === 1 && p.delayMs > 0) settled = p
+    else await page.waitForTimeout(20)
+  }
+  if (!settled) throw new Error('rebase-on-visible: the moving remote never became visible')
+  // Quiet the walker and the host for the critical section (any frame still in flight lands
+  // first), so no relayed sample can land in the frame that follows the return.
+  if (tickTimer !== undefined) clearInterval(tickTimer)
+  tickTimer = undefined
+  try {
+    await page.waitForTimeout(150)
+    const before = await page.evaluate(async () => {
+      await window.__step?.(50)
+      return window.__probe?.()
+    })
+    expect(before?.rows.length, 'the remote is drawn before the return').toBe(1)
+
+    // Return from the background: the flag, a 5 s jump of the injected clock, one frame.
+    const after = await page.evaluate(async () => {
+      window.__setRebase?.()
+      await window.__step?.(5000)
+      return window.__probe?.()
+    })
+    expect(after?.delayMs, 'the delay is back at its initial value').toBe(250)
+    // Every remote was dropped: nothing is drawn (and so nothing extrapolated) until the host
+    // relays its sample again.
+    expect(after?.rows.length, 'the remotes are dropped').toBe(0)
+
+    // The relay restores the remote.
+    tickTimer = setInterval(() => {
+      remote?.step()
+      server?.stepTick()
+    }, REMOTE_STEP_MS)
+    let back: { rows: { mode: string }[] } | undefined
+    for (let i = 0; i < 100 && back === undefined; i++) {
+      const p = await page.evaluate(async () => {
+        await window.__step?.(50)
+        return window.__probe?.()
+      })
+      if (p && p.rows.length > 0) back = p
+      else await page.waitForTimeout(20)
+    }
+    if (!back) throw new Error('rebase-on-visible: the remote never came back')
+    // (No mode assertion here: the injected clock runs at its own pace against the host's real
+    // one, so a relayed sample may legitimately be behind `render_t` by then.)
+    expect(back.rows.length, 'the relay restores the remote').toBe(1)
+  } finally {
+    if (tickTimer === undefined) {
+      tickTimer = setInterval(() => {
+        remote?.step()
+        server?.stepTick()
+      }, REMOTE_STEP_MS)
+    }
   }
 })

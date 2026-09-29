@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 32
+export const ABI_VERSION = 33
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -349,6 +349,9 @@ export const ABI_EXPORTS = {
   // docs/plan/30-interpolation.md (`ABI_VERSION` 31 -> 32), `engine/test` only: the interpolation view
   // of remote players (52 LE bytes into `Result`; `Instance::client_presence_sample_at`'s doc).
   client_presence_sample_at: { role: 'client', params: 1, result: 'status' },
+  // docs/plan/30-interpolation.md (`ABI_VERSION` 32 -> 33): tab return, the client worker's answer to
+  // `FLAG_REBASE` (`Instance::client_rebase`'s doc).
+  client_rebase: { role: 'client', params: 0, result: 'status' },
 } as const satisfies Record<string, ExportSpec>
 
 export function statusName(n: number): string {

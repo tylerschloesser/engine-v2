@@ -160,6 +160,8 @@ export interface HeadlessClient {
   samplePresences(): PresenceSampleRow[]
   /** `interpRenderedFrames`, `interpExtrapolatedFrames`, `interpDelayMs` (same export). */
   interpCounters(): InterpCounters
+  /** `client_rebase()`: what the client worker calls on `FLAG_REBASE` (0018 section 8). */
+  rebase(): void
 }
 
 /** A `Scheduler` that never fires anything (`HeadlessClientOptions.scheduler`'s own default):
@@ -532,6 +534,12 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
     },
     interpCounters() {
       return decodeCounters(sampleAt(0))
+    },
+    rebase() {
+      const status = inst.call0(inst.x.client_rebase)
+      if (status !== Status.Ok) {
+        throw new Error(`HeadlessClient: client_rebase failed: status ${status}`)
+      }
     },
     leave() {
       // Sent before `link.stop()` closes the connection (Deviations, `conditionLink`'s own

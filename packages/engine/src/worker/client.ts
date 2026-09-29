@@ -8,7 +8,7 @@ import { RegionId, Role } from '../abi.js'
 import { CameraBlockView, readCameraBlockInto } from '../camera/block.js'
 import { systemClock } from '../clock.js'
 import type { EngineInstance, RegionView } from '../loader.js'
-import { CB_FRAME_REQ, W_ACK, workerWord } from '../sab/control.js'
+import { CB_FLAGS, CB_FRAME_REQ, FLAG_REBASE, W_ACK, workerWord } from '../sab/control.js'
 import { RingConsumer, RingProducer } from '../sab/ring.js'
 import { createActionPump } from './client-action.js'
 import { createDrawlistPump } from './client-drawlist.js'
@@ -186,6 +186,13 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     const frameReq = Atomics.load(shell.control.words, CB_FRAME_REQ)
     if (frameReq !== lastFrameReq) {
       lastFrameReq = frameReq
+      // docs/plan/30-interpolation.md (0018 section 8): main set `FLAG_REBASE` on return from the
+      // background. Consume it before this frame so the first frame after the return renders from
+      // rebased clocks and empty interpolation buffers. One atomic load, no allocation.
+      if ((Atomics.load(shell.control.words, CB_FLAGS) & FLAG_REBASE) !== 0) {
+        Atomics.and(shell.control.words, CB_FLAGS, ~FLAG_REBASE)
+        inst.call0(inst.x.client_rebase)
+      }
       if (readCameraBlockInto(cameraReader, cameraRegion.u8, 0)) {
         inst.call1(inst.x.frame, FRAME_ARG)
         // docs/plan/17-drawlist-and-sprites.md Scope: "once per produced frame" (0018 §2) -- only

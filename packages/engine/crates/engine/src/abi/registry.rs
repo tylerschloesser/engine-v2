@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 32;
+pub const ABI_VERSION: u32 = 33;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -578,6 +578,13 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
+    /// docs/plan/30-interpolation.md (`ABI_VERSION` 32 -> 33): tab return (0018 section 8), called
+    /// by the client worker when main set `FLAG_REBASE`. Snaps the host clock and interpolation
+    /// delay to their initial state and drops every remote's samples (`ClientCore::rebase_interp`).
+    fn client_rebase(&mut self) -> Status {
+        Status::Unsupported
+    }
+
     /// docs/plan/17-drawlist-and-sprites.md (`ABI_VERSION` 14 -> 15): how many `Draw` records the
     /// last `frame()` call's own counting sort wrote into `RegionId::DrawList` (`DrawList::
     /// record_count`) -- `0` on a wrong role or before the first `frame()` call, same "always
@@ -1080,6 +1087,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn client_predict_stats() -> u32 {
             $crate::abi::client_predict_stats(&__ENGINE_SLOT) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_rebase() -> u32 {
+            $crate::abi::client_rebase(&__ENGINE_SLOT) as u32
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn client_presence_sample_at(index: u32) -> u32 {

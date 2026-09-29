@@ -160,6 +160,8 @@ pub struct ClientCore<G: Game> {
     /// and its arrival times would all be the same clock reading anyway).
     arrivals: [u32; ARRIVALS_CAP],
     arrivals_len: usize,
+    /// [`Self::rebase_interp`] ran: the host clock snaps at the next [`Self::tick_fraction`].
+    rebase_pending: bool,
     /// The client clock of the previous [`Self::tick_fraction`] call (`None` before the first).
     last_interp_ms: Option<f64>,
     /// The interpolation render time, host ticks, as of the last [`Self::tick_fraction`].
@@ -241,6 +243,7 @@ impl<G: Game> ClientCore<G> {
             interp_delay: InterpDelay::new(G::TICK_RATE),
             arrivals: [0; ARRIVALS_CAP],
             arrivals_len: 0,
+            rebase_pending: false,
             last_interp_ms: None,
             render_t: 0.0,
             host_now: 0.0,
@@ -399,6 +402,19 @@ impl<G: Game> ClientCore<G> {
             self.replica.apply_leave(chunk);
         }
         self.overlay.clear();
+        self.rebase_interp();
+    }
+
+    /// docs/plan/30-interpolation.md (0018 section 8): tab return or resync. The host clock and
+    /// the interpolation delay snap back to their initial state and every remote's samples are
+    /// dropped: the only place either snaps.
+    pub fn rebase_interp(&mut self) {
+        // The clock snaps in `tick_fraction`, after it has taken this frame's own sample.
+        self.rebase_pending = true;
+        self.interp_delay.rebase();
+        self.replica.remote_presences_mut().clear();
+        self.arrivals_len = 0;
+        self.last_interp_ms = None;
     }
 
     /// docs/plan/28b-reconnect-and-lifecycle.md step 3 ("Pending-action resend"): called once from
@@ -483,6 +499,10 @@ impl<G: Game> ClientCore<G> {
     /// exactly what keeps this from freezing between heartbeats, 0010).
     pub fn tick_fraction(&mut self, local_ms: f64) -> f32 {
         self.host_clock.on_frame(self.replica.tick(), local_ms);
+        if self.rebase_pending {
+            self.rebase_pending = false;
+            self.host_clock.rebase();
+        }
         let f = self.host_clock.now(local_ms).1;
         self.last_tick_fraction = f;
         self.step_interp(local_ms);

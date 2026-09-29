@@ -616,6 +616,14 @@ pub fn client_clock_stats<T: Instance>(slot: &Slot<T>) -> Status {
     rt.inst.client_clock_stats(result)
 }
 
+/// `client_rebase() -> status`: `Instance::client_rebase`'s own doc comment.
+pub fn client_rebase<T: Instance>(slot: &Slot<T>) -> Status {
+    match slot.client() {
+        Ok(rt) => rt.inst.client_rebase(),
+        Err(status) => status,
+    }
+}
+
 /// `client_presence_sample_at(index) -> status`: `Instance::client_presence_sample_at`'s own doc
 /// comment has the 52-byte `Result` shape. `engine/test`-only (`samplePresences`).
 pub fn client_presence_sample_at<T: Instance>(slot: &Slot<T>, index: u32) -> Status {

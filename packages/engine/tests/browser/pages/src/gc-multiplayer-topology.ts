@@ -9,7 +9,15 @@
 // params}` -- steps 3-4's own Deviations found the naive shape gets rejected as `VersionMismatch`).
 import { hexEncode, loadOrMintSecret } from '../../../../src/client/secret.ts'
 import { createClient } from '../../../../src/client.ts'
-import { asHarness, dispatchRaw, parkWorkers } from '../../../../src/test/client.ts'
+import { FLAG_REBASE } from '../../../../src/sab/control.ts'
+import {
+  asHarness,
+  dispatchRaw,
+  interpCounters,
+  parkWorkers,
+  resumeWorkers,
+  samplePresences,
+} from '../../../../src/test/client.ts'
 import { installGcPage } from '../../../../src/test/gc-page.ts'
 import { createManualClock } from '../../../../src/test/manual-clock.ts'
 import { fixtureWasm } from './fixture-wasm.ts'
@@ -17,6 +25,16 @@ import { fixtureWasm } from './fixture-wasm.ts'
 declare global {
   interface Window {
     __pageReady?: true
+    /** One client frame after `dtMs` of injected clock time (`rebase-on-visible`). */
+    __step?: (dtMs: number) => Promise<void>
+    /** `FLAG_REBASE`, exactly what `frame-loop.ts`'s `resume()` sets on a return from background. */
+    __setRebase?: () => void
+    /** The remote players as the last frame interpolated them, plus the interpolation counters. */
+    __probe?: () => Promise<{
+      rows: Awaited<ReturnType<typeof samplePresences>>
+      delayMs: number
+      renderTime: number
+    }>
   }
 }
 
@@ -27,7 +45,7 @@ if (!url) throw new Error('gc-multiplayer-topology: ?url= is required (the specâ
 // `worker/net.ts` -- never set by `zeroGcSuite`'s own generated clean/object/burst tests.
 const netInjectParse = params.get('netInjectParse') === '1'
 
-const wasm = await fixtureWasm('puts')
+const wasm = await fixtureWasm('presence')
 const canvas = document.createElement('canvas')
 const clock = createManualClock()
 
@@ -82,7 +100,29 @@ while (!online) {
 }
 unsubscribeOnline()
 
+// docs/plan/30-interpolation.md: the spec's own moving remote (a second client on the same server,
+// driven from Node) is only relayed to a client whose camera subscribes the chunk it stands in, so
+// this page holds a small camera around the origin, where that remote walks.
+const { cameraState } = client
+cameraState.centreX = 0
+cameraState.centreY = 0
+cameraState.tilesAcross = 16
+cameraState.halfExtentTilesX = 8
+cameraState.halfExtentTilesY = 8
+
 await parkWorkers(client)
+
+window.__step = async (dtMs) => {
+  await resumeWorkers(client)
+  harness.stepFrame(dtMs)
+}
+window.__setRebase = () => client.setFlags(FLAG_REBASE)
+window.__probe = async () => {
+  await parkWorkers(client)
+  const rows = await samplePresences(client)
+  const c = await interpCounters(client)
+  return { rows, delayMs: c.interpDelayMs, renderTime: c.renderTime }
+}
 
 // One lightweight action every `DISPATCH_EVERY_FRAMES` frames (`gc-slice.ts`'s own precedent):
 // exercises the net worker's *uplink* drain path (`createBytePump`'s own `drainUp`), not only its
@@ -90,7 +130,9 @@ await parkWorkers(client)
 // timer test server). `SetMotd` (not `Paint`): global scope, no chunk-subscription dependency, the
 // same action `mp/two-pages` already uses for its own convergence check -- this page never sets a
 // camera, so nothing is ever subscribed to any chunk.
-const SET_MOTD_JSON_BYTES = new TextEncoder().encode(JSON.stringify({ SetMotd: { n: 1 } }))
+const SET_MOTD_JSON_BYTES = new TextEncoder().encode(
+  JSON.stringify({ Poke: { tile: { x: 0, y: 0 }, from: { x: 0, y: 0 } } }),
+)
 const DISPATCH_EVERY_FRAMES = 30
 let frame = 0
 let seq = 1

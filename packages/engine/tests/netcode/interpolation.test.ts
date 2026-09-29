@@ -44,11 +44,16 @@ function observe(h: NetHarness, i: number): void {
   h.clients[i]?.setView({ x: 30, y: 0, halfW: 20, halfH: 20 })
 }
 
-async function make(seed: number, clients: number, extra: { frameMs?: number } = {}) {
+async function make(
+  seed: number,
+  clients: number,
+  extra: { frameMs?: number; transport?: 'memory' | 'ws' } = {},
+) {
   return createNetHarness({
     fixture: await loadFixture('presence'),
     seed,
     clients,
+    ...(extra.transport !== undefined ? { transport: extra.transport } : {}),
     ...(extra.frameMs !== undefined ? { clientFrameMs: extra.frameMs } : {}),
   })
 }
@@ -73,21 +78,26 @@ function only(rows: PresenceSampleRow[]): PresenceSampleRow | undefined {
   return rows.length === 1 ? rows[0] : undefined
 }
 
-test('interpolation/constant_latency_tracks_path', async () => {
-  const seed = 3001
-  const h = await make(seed, 2)
+/** The observer's worst distance from the curve evaluated at `render_t` minus the pipeline delay,
+ * over `ticks` ticks at a constant one-way latency. Returns `{ checked, worst }`. */
+async function trackPath(
+  seed: number,
+  ticks: number,
+  transport: 'memory' | 'ws',
+): Promise<{ checked: number; worst: number }> {
+  const h = await make(seed, 2, { transport })
   try {
     const LATENCY = 40
     h.link(0).set({ latencyMs: LATENCY, jitterMs: 0 })
     h.link(1).set({ latencyMs: LATENCY, jitterMs: 0 })
     observe(h, 1)
-    await h.advanceTicks(10)
+    await h.advanceTicks(transport === 'ws' ? 20 : 10)
     // A sample set at virtual time t0 rides the frame at t0 + 1 tick, arrives LATENCY later and is
     // stamped with the next whole host tick (up to 1 tick of alignment: 25 ms on average).
     const pipelineMs = TICK_MS + LATENCY + TICK_MS / 2
     let checked = 0
     let worst = 0
-    await run(h, 260, [{ i: 0, phase: 0 }], () => {
+    await run(h, ticks, [{ i: 0, phase: 0 }], () => {
       const obs = h.clients[1]
       if (!obs) return
       const row = only(obs.samplePresences())
@@ -98,14 +108,30 @@ test('interpolation/constant_latency_tracks_path', async () => {
       worst = Math.max(worst, err)
       checked++
     })
-    expect(checked).toBeGreaterThan(150)
-    // Stated bound: a half-tick alignment error at MAX_SPEED (0.14 tile) plus the 10 Hz presence
-    // sample spacing the Hermite fit absorbs, rounded up to half a tile.
-    expect(worst, `seed ${seed}`).toBeLessThan(0.5)
+    return { checked, worst }
   } finally {
     await h.dispose()
   }
+}
+
+test('interpolation/constant_latency_tracks_path', async () => {
+  const seed = 3001
+  const { checked, worst } = await trackPath(seed, 260, 'memory')
+  expect(checked).toBeGreaterThan(150)
+  // Stated bound: a half-tick alignment error at MAX_SPEED (0.14 tile) plus the 10 Hz presence
+  // sample spacing the Hermite fit absorbs, rounded up to half a tile.
+  expect(worst, `seed ${seed}`).toBeLessThan(0.5)
 })
+
+// Real loopback sockets under the same conditioner (0020 section 7: one `ws` repeat). `@slow`: a
+// real socket handshake and real per-tick event-loop yields cost seconds the fast `netcode` budget
+// (10 s) cannot spare (ws-transport.test.ts's own Deviations).
+test('interpolation/constant_latency_tracks_path ws @slow', async () => {
+  const seed = 3011
+  const { checked, worst } = await trackPath(seed, 160, 'ws')
+  expect(checked).toBeGreaterThan(50)
+  expect(worst, `seed ${seed}`).toBeLessThan(0.5)
+}, 60_000)
 
 test('interpolation/jitter_profile_adapts', async () => {
   const seed = 3002
@@ -122,23 +148,23 @@ test('interpolation/jitter_profile_adapts', async () => {
     const delays: number[] = []
     const sampleDelay = () => delays.push(obs.interpCounters().interpDelayMs)
     await run(h, 300, [{ i: 0, phase: 0 }], sampleDelay)
-    // 0010: max(2 x 50, 50 + p95 jitter) clamped to [100, 400] ms. A jitter sample is one gap
-    // error, so at most 2 x 30 = 60 ms; the histogram's bin edge adds under 16 ms: the target lies
-    // in [100, 50 + 60 + 16 = 126].
+    // 0040: max(2 x 100, 100 + p95 jitter) clamped to [200, 400] ms. A jitter sample is one gap
+    // error, so at most 2 x 30 = 60 ms; the histogram's bin edge adds under 16 ms: 100 + 76 is
+    // under the floor, so the delay settles on the floor.
     const settled = delays[delays.length - 1] as number
-    expect(settled, `seed ${seed}`).toBeGreaterThanOrEqual(100)
-    expect(settled, `seed ${seed}`).toBeLessThanOrEqual(126)
+    expect(settled, `seed ${seed}`).toBeGreaterThanOrEqual(200)
+    expect(settled, `seed ${seed}`).toBeLessThanOrEqual(200.001)
     // Never stepped: within one 50 ms tick the delay moves at most the 10% dilation limit (5 ms).
     for (let i = 1; i < delays.length; i++) {
       expect(Math.abs((delays[i] as number) - (delays[i - 1] as number))).toBeLessThanOrEqual(5.001)
     }
     // Worse jitter raises the delay, again without stepping: 150 ms of jitter gives a p95 gap error
-    // well over 100 ms, so the formula's value is over 150 ms.
+    // well over 100 ms, so the formula's value is over 200 ms.
     h.link(0).set({ jitterMs: 150 })
     h.link(1).set({ jitterMs: 150 })
     const raised: number[] = []
     await run(h, 400, [{ i: 0, phase: 0 }], () => raised.push(obs.interpCounters().interpDelayMs))
-    expect(raised[raised.length - 1] as number, `seed ${seed}`).toBeGreaterThan(150)
+    expect(raised[raised.length - 1] as number, `seed ${seed}`).toBeGreaterThan(210)
     expect(raised[raised.length - 1] as number).toBeLessThanOrEqual(400)
     for (let i = 1; i < raised.length; i++) {
       expect(Math.abs((raised[i] as number) - (raised[i - 1] as number))).toBeLessThanOrEqual(5.001)
@@ -286,10 +312,41 @@ async function extrapolationRatio(seed: number, jitterMs: number): Promise<numbe
 test('interpolation/extrapolation_ratio', async () => {
   // The median network profile of 0010: RTT 80 ms (in 60-100), jitter 20 ms (in 10-30).
   const ratio = await extrapolationRatio(3006, 20)
-  // Planning decisions: above 0.2 the 0010 formula's interval term is wrong for presence, which
-  // arrives at half the frame rate: record it, do not tune. The test reports the measured verdict.
+  // 0040: with the delay sized from the presence sample interval, at most one frame in five
+  // extrapolates (0.607 under 0010's frame-interval term; the brief's line is 0.2).
   expect(ratio).toBeGreaterThanOrEqual(0)
-  expect(ratio).toBeLessThanOrEqual(1)
+  expect(ratio).toBeLessThanOrEqual(0.2)
+})
+
+test('interpolation/rebase_drops_and_recovers', async () => {
+  const seed = 3012
+  const h = await make(seed, 2, { frameMs: 12.5 })
+  try {
+    h.link(0).set({ latencyMs: 40, jitterMs: 20 })
+    h.link(1).set({ latencyMs: 40, jitterMs: 20 })
+    observe(h, 1)
+    await h.advanceTicks(10)
+    const obs = h.clients[1]
+    if (!obs) throw new Error('no observer')
+    await run(h, 120, [{ i: 0, phase: 0 }])
+    expect(obs.samplePresences().length, `seed ${seed}`).toBe(1)
+    // Delay has settled to the floor; a rebase snaps it to the initial value and drops every remote.
+    expect(obs.interpCounters().interpDelayMs).toBe(200)
+    obs.rebase()
+    obs.stepFrame(TICK_MS / 4)
+    expect(obs.interpCounters().interpDelayMs).toBe(250)
+    expect(obs.samplePresences().length).toBe(0)
+    // The producer keeps moving: its next relayed sample brings it back, `interp` or `hold`, never
+    // an extrapolation sweep.
+    const modes = new Set<string>()
+    await run(h, 60, [{ i: 0, phase: 0 }], () => {
+      for (const r of obs.samplePresences()) modes.add(r.mode)
+    })
+    expect(modes.size).toBeGreaterThan(0)
+    expect(modes.has('extrap') && modes.size === 1).toBe(false)
+  } finally {
+    await h.dispose()
+  }
 })
 
 test('interpolation/seed_reproducible', async () => {
