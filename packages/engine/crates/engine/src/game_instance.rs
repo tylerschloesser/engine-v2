@@ -1406,7 +1406,7 @@ where
     fn client_presence_sample_at(&mut self, index: u32, result: &mut [u8]) -> Status {
         match self {
             GameInstance::Client(c) => {
-                let Some(out) = result.get_mut(..36) else {
+                let Some(out) = result.get_mut(..52) else {
                     return Status::BadLength;
                 };
                 let render_t = c.core.render_time();
@@ -1417,6 +1417,8 @@ where
                 out[4..8].copy_from_slice(&rendered.to_le_bytes());
                 out[8..12].copy_from_slice(&extrap.to_le_bytes());
                 out[12..16].copy_from_slice(&c.core.interp_delay_ms().to_le_bytes());
+                out[36..44].copy_from_slice(&render_t.to_le_bytes());
+                out[44..52].copy_from_slice(&c.core.host_now().to_le_bytes());
                 match remotes.nth_visible(render_t, index as usize) {
                     Some((who, s)) => {
                         out[16..20].copy_from_slice(&who.0.to_le_bytes());

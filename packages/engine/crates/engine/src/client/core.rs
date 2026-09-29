@@ -164,6 +164,8 @@ pub struct ClientCore<G: Game> {
     last_interp_ms: Option<f64>,
     /// The interpolation render time, host ticks, as of the last [`Self::tick_fraction`].
     render_t: f64,
+    /// `HostClock`'s estimate of the host tick (`f64`) at that same call, before the delay.
+    host_now: f64,
     /// Remote-player samples rendered / of those extrapolating, summed over frames.
     interp_rendered: u32,
     interp_extrapolated: u32,
@@ -241,6 +243,7 @@ impl<G: Game> ClientCore<G> {
             arrivals_len: 0,
             last_interp_ms: None,
             render_t: 0.0,
+            host_now: 0.0,
             interp_rendered: 0,
             interp_extrapolated: 0,
             lead_estimator: LeadEstimator::new(G::TICK_RATE),
@@ -502,6 +505,7 @@ impl<G: Game> ClientCore<G> {
         }
         self.last_interp_ms = Some(local_ms);
         let now = self.host_clock.now_f64(local_ms);
+        self.host_now = now;
         self.render_t = self.interp_delay.render_time(now);
         let (rendered, extrap) = self.replica.remote_presences().count_modes(self.render_t);
         self.interp_rendered = self.interp_rendered.wrapping_add(rendered);
@@ -511,6 +515,11 @@ impl<G: Game> ClientCore<G> {
     /// The interpolation render time (host ticks) as of the last [`Self::tick_fraction`].
     pub fn render_time(&self) -> f64 {
         self.render_t
+    }
+
+    /// The `HostClock` estimate of the host tick as of the last [`Self::tick_fraction`].
+    pub fn host_now(&self) -> f64 {
+        self.host_now
     }
 
     /// The current interpolation delay, ms.

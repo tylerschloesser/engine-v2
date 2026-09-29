@@ -347,7 +347,7 @@ export const ABI_EXPORTS = {
   // real assertion, the same shape `client_ui_stats` already set for "ui ran".
   client_predict_stats: { role: 'client', params: 0, result: 'status' },
   // docs/plan/30-interpolation.md (`ABI_VERSION` 31 -> 32), `engine/test` only: the interpolation view
-  // of remote players (36 LE bytes into `Result`; `Instance::client_presence_sample_at`'s doc).
+  // of remote players (52 LE bytes into `Result`; `Instance::client_presence_sample_at`'s doc).
   client_presence_sample_at: { role: 'client', params: 1, result: 'status' },
 } as const satisfies Record<string, ExportSpec>
 

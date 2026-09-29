@@ -196,6 +196,11 @@ export interface NetHarnessOptions {
    * is actually requested -- `engine/test` itself declares no runtime dependency on it). */
   transport?: 'memory' | 'ws'
   conditions?: Partial<ConditionerConditions>
+  /** docs/plan/30-interpolation.md step 4: how often every client steps a frame inside one host
+   * tick, in virtual ms. Default (omitted): once per tick, exactly as before. A smaller value
+   * (`12.5` = four frames per 50 ms tick) lets a client observe arrival times finer than a tick,
+   * which the interpolation delay's jitter measurement needs; it must divide the tick. */
+  clientFrameMs?: number
   /** docs/plan/28-sessions-and-reconnect.md Seams: `createNetHarness({ secrets?, joinKey? })` --
    * explicit per-client identity secrets, in join order. A client past the end of this array (or
    * every client, if omitted) gets `deterministicSecret(seed, index)`. */
@@ -254,6 +259,9 @@ export interface NetHarness {
    * persistence (every `createNetHarness` world is); throws if `serverInternals(server).
    * rawInstance` is unavailable (no `recoveryDeps`, never expected here). */
   panicServer(): Promise<void>
+  /** The host's own tick count so far (`SimHost` `ticksRun`), the ground truth a clock test
+   * compares a client's estimate against. */
+  hostTick(): number
   advanceTo(t: number): Promise<void>
   advanceTicks(n: number): Promise<void>
   settle(): Promise<void>
@@ -334,6 +342,9 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
   // lockstep with `stepTick`'s own ticks).
   const tickHzProbe = instantiate(wasm, Role.Sim, buildSimInstanceConfig(worldCfg))
   const tickMs = Math.round(1000 / (tickHzProbe.call0(tickHzProbe.x.tick_hz) || 20))
+
+  const framesPerTick = Math.max(1, Math.round(tickMs / (opts.clientFrameMs ?? tickMs)))
+  const frameMs = tickMs / framesPerTick
 
   function buildServer(onStorage: MemoryStorage): WorldServer {
     return createWorldServer(worldCfg, {
@@ -589,8 +600,10 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       // lifecycle.ts`) armed on this same `VirtualClock` still fires on schedule, and a `Hello`
       // arriving mid-idle (`addClient`/a reconnect) still resumes ticking on its own next call.
       if (simHost.running) simHost.stepTick(1)
-      await clock.advanceBy(tickMs)
-      for (const e of entries) e.client.stepFrame(tickMs)
+      for (let f = 0; f < framesPerTick; f++) {
+        await clock.advanceBy(frameMs)
+        for (const e of entries) e.client.stepFrame(frameMs)
+      }
     }
   }
 
@@ -744,6 +757,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       server.accept(hostSide)
       return clientSide
     },
+    hostTick: () => simHost.counters.ticksRun,
     advanceTo,
     advanceTicks,
     settle,

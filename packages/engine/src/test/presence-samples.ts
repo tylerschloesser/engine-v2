@@ -1,4 +1,4 @@
-// `samplePresences` / `interpCounters` decoding (docs/plan/30-interpolation.md Seams): the 36-byte
+// `samplePresences` / `interpCounters` decoding (docs/plan/30-interpolation.md Seams): the 52-byte
 // `Result` shape of `client_presence_sample_at` (`Instance::client_presence_sample_at`'s doc in
 // `crates/engine/src/abi/registry.rs`), shared by the browser `Client` hook (`test/client.ts`) and
 // `HeadlessClient` (`test/headless-client.ts`). Test-only: allocation is fine here.
@@ -20,10 +20,14 @@ export interface InterpCounters {
   /** Of those, how many were extrapolating. */
   interpExtrapolatedFrames: number
   interpDelayMs: number
+  /** The interpolation render time, host ticks, at the last frame. */
+  renderTime: number
+  /** `HostClock`'s estimate of the host tick (fractional) at the last frame. */
+  hostClockNow: number
 }
 
 const MODES: InterpModeName[] = ['interp', 'extrap', 'hold']
-export const PRESENCE_SAMPLE_BYTES = 36
+export const PRESENCE_SAMPLE_BYTES = 52
 
 export function decodeCounters(result: Uint8Array): InterpCounters {
   const v = new DataView(result.buffer, result.byteOffset, result.byteLength)
@@ -31,6 +35,8 @@ export function decodeCounters(result: Uint8Array): InterpCounters {
     interpRenderedFrames: v.getUint32(4, true),
     interpExtrapolatedFrames: v.getUint32(8, true),
     interpDelayMs: v.getFloat32(12, true),
+    renderTime: v.getFloat64(36, true),
+    hostClockNow: v.getFloat64(44, true),
   }
 }
 

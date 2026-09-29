@@ -617,7 +617,7 @@ pub fn client_clock_stats<T: Instance>(slot: &Slot<T>) -> Status {
 }
 
 /// `client_presence_sample_at(index) -> status`: `Instance::client_presence_sample_at`'s own doc
-/// comment has the 36-byte `Result` shape. `engine/test`-only (`samplePresences`).
+/// comment has the 52-byte `Result` shape. `engine/test`-only (`samplePresences`).
 pub fn client_presence_sample_at<T: Instance>(slot: &Slot<T>, index: u32) -> Status {
     let rt = match slot.client() {
         Ok(rt) => rt,

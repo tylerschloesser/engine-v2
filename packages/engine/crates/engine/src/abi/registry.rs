@@ -568,10 +568,11 @@ pub trait Instance: Sized + 'static {
 
     /// docs/plan/30-interpolation.md (`ABI_VERSION` 31 -> 32), `engine/test` only
     /// (`samplePresences`, `interpCounters`): the interpolation view of remote players as of the
-    /// last `frame()`. Writes into `Result`, 36 LE bytes: `visible: u32` (remotes visible),
+    /// last `frame()`. Writes into `Result`, 52 LE bytes: `visible: u32` (remotes visible),
     /// `rendered: u32` and `extrapolated: u32` (cumulative per-frame counters), `delay_ms: f32`,
     /// then the `index`th visible remote (ascending `PlayerId`): `who: u32`, `x: i32`, `y: i32`
-    /// (`WorldPos`), `alpha: f32`, `mode: u32` (0 interp, 1 extrap, 2 hold). When `index >= visible` the
+    /// (`WorldPos`), `alpha: f32`, `mode: u32` (0 interp, 1 extrap, 2 hold), then `render_t: f64` and `host_now: f64` (the render
+    /// time and the `HostClock` estimate, host ticks, at the last `frame()`). When `index >= visible` the
     /// sample fields are zero (`who == 0`, never a real `PlayerId`).
     fn client_presence_sample_at(&mut self, _index: u32, _result: &mut [u8]) -> Status {
         Status::Unsupported
