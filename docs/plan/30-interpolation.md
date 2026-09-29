@@ -190,3 +190,33 @@ Audit of `games/reference/tests/browser/` and the engine browser tests that touc
 ### Open gate failures (orchestrator, after gate round 2, on `c6a638a`)
 
 Full `pnpm test` and `pnpm lint` are green once, but the repeat rule fails. `node scripts/repeat.mjs browser 15` gave 13/15 at `c6a638a`: `[reference] reference_several_buttons` (run 10) and `[reference] reference_new_player_spawns_on_land` (run 14). `--load 10` ×15 gave 13/15: `[gc] no_ui_change_asserts_ui_ran_and_wrote_nothing` (run 5) and `reference_new_player_spawns_on_land` (run 7). No Chrome for Testing crash report falls in either batch. Before round 2 (on `64b1932`) there were 45 runs: one crash matched to the watch item (10:41), `reference_several_buttons` once under load, `paced_session_lands_periodic_snapshots` once (20/20 isolated), and two failures with no detail. Each fixed reference test passes 20/20 **in isolation**, so these are full-suite-only failures. No base (`485fd71`) repeat rate was measured this session; the M24b-era record is ~1/15 under load for the reference smoke test. Suspect (a guess, unmeasured): contention from M30's `gc-multiplayer-topology` page, whose Node `HeadlessClient` walker and 200 ms step loop run alongside the reference project.
+
+### Gate round 3 (full-suite repeat rate, base vs HEAD)
+
+Scratch copy of `scripts/repeat.mjs` keeping every failure's full output and `test-results/browser`; each failing minute checked against `~/Library/Logs/DiagnosticReports`. Batches were sequential, never concurrent, with the load average 8-25 throughout (the machine's baseline was about 30 % CPU busy before any run). The base worktree `/Users/tyler/wt-base` (at `485fd71`, with its own APFS-cloned `target/`) has been removed.
+
+**Rates** (`repeat browser 15`, quiet; "crash" = a `Google Chrome for Testing-*.ips` report in that run's minute):
+- **base `485fd71`**: `pass=13 fail=2` (run 1 `paced_session_lands_periodic_snapshots`, run 10 `reference_player_circle_lags_and_settles`); the cold warm-up run before it also failed `reference_player_circle_lags_and_settles`. 0 crashes. So 3 failing runs in 16, none from crashes.
+- HEAD `6d1760f`, batch 1: `pass=10 fail=5 hang=3`. Runs 1-3 were my 90 s kill during a rebuild (no test output), run 8 was a crash (13:10:45) and run 10 was `paced_session`. Batch 2: `pass=13 fail=2`, run 3 a crash (13:20:35) and run 7 **`reference_new_player_spawns_on_land`** (3rd full-suite failure at M30, 0 at base).
+- `5084c5a` (spawn fix): `pass=9 fail=6`, runs 4, 7 and 8 crashes (13:45:46, 13:48:23, 13:49:32), plus `paced_session` twice, `reference_several_buttons` once and `player_circle` once. `9578bde`: `pass=13 fail=2`, run 6 a crash (14:13:21), plus `reference_several_buttons` (the failure that exposed the cause below).
+- **Final, HEAD `c99aeb7`: `browser x15 load=0: pass=12 fail=3 hang=0 slowestSuiteSeconds=38`**. Run 3 was a crash (14:42:21), run 4 `player_circle` and run 13 `paced_session`. So 2 non-crash failing runs in 15, against base's 2 in 15 (3 in 16).
+- Crashes: 8 in about 72 HEAD runs, 0 in 16 base runs. Every EXC_GUARD report (including the 09-26 ones from before M30) faults on `CrBrowserMain` inside `_NSAccessibilityNotify` → `_AXUIElementPostNotificationWithInfo`, a macOS accessibility client on this machine (the watch item). 13:48:23 is a SIGTRAP in a Chrome thread pool instead. Base's zero is 16 runs taken earlier in the afternoon; the crash rate rose through the day at every SHA.
+
+**Cause and fix 1: `reference_new_player_spawns_on_land`** (`5084c5a`). The spec stepped a fixed 5 frames and then read the camera once. The `Ui`, which carries the spawn `moveTo`, reaches main asynchronously, so in the failures the camera still read its default `(0, 0)`. The spec now steps one frame per `expect.poll` until the camera reads `(-0.5, -0.5)`. Removing `game.ts`'s `moveTo` still fails it; 20/20 in isolation.
+
+**Cause and fix 2: `panTo` raced the spawn `moveTo`** (`c99aeb7`). A descriptive settle message showed the stuck state: only the spawn-view buttons (`0,0`, sometimes `-1,2`), `--z` 64, and a layer transform putting the camera at about (0.5, 0.5). If the first `Ui` reaches main after `panTo`'s `__setCamera`, `game.ts`'s one-shot `moveTo(spawn)` snaps the camera back, and the panned-to tiles never come into range. Round 1's `0,0` / `-1,2` pair was this same spawn view, and M30's step-3 timing shift (round 1) makes the late first `Ui` more likely. Fixes, in test code only:
+- `test-entry.ts` primes `lastUi` right after `startGame`, before `pumpUntilLive` steps any frame, so the first `Ui` is always captured.
+- `panTo` first `pumpUntil(ui !== null)`.
+- `settleCollectButtons` now returns `'ok'` or a JSON of tiles, rects, `--z` and layer transform, so a timeout names the failing clause.
+
+Evidence: `reference_several_buttons` isolated 20/20 with the wait, 15/20 without it (the control failures show exactly those spawn buttons).
+- `9578bde`'s tick-per-poll in `settleCollectButtons` was a wrong first guess. An injection (`panTo` with 0 ticks) showed that the helper could not recover without a tick, but the observed failure was the snap. It was reverted in `c99aeb7`.
+
+**Left, pre-existing (base rate equal): for the orchestrator to schedule**
+- `reference_player_circle_lags_and_settles`: base 2/16, final HEAD 1/15, and every occurrence received exactly `29.5`, so x = 0.5, the spawn tile. It is the same snap: the first `Ui` lands during its 128 settle frames. `panTo`'s wait does not transfer directly, because the spec's first assertion ("the spring's first `frame()` snaps exactly to the first `__setCamera`") assumes no frame ran before it. A fix needs a decision on that assertion, or a production change: skip the spawn `moveTo` once the camera has already been moved.
+- `paced_session_lands_periodic_snapshots`: base 1/16, HEAD 4 in about 57 non-crash runs, always `Expected >= 3, Received 2` snapshots. It is in the M30 range's untouched `world` page; not attributed.
+- **Production glitch** behind fix 2: a player who pans before the first `Ui` arrives is snapped back to spawn. The one-shot `moveTo` in `game.ts` does not check whether the camera has already moved.
+- `pnpm test` once failed `wasm plugin-dev: touch triggers rebuild and full-reload` (5 s test timeout, the suite took 6.9 s instead of 2.5 s). It passed 5/5 alone and on the next full run; M30 does not touch it.
+- The orchestrator's `--load 10` `[gc] no_ui_change_asserts_ui_ran_and_wrote_nothing` failure did not recur in these quiet batches; no detail survives, and `gc-ui` is untouched by M30.
+
+Full `pnpm test` (browser 217 pass, 39 s of 48 s) and `pnpm lint` green on `c99aeb7`.
