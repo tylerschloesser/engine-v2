@@ -74,6 +74,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 28b | `28b-reconnect-and-lifecycle.md` | resume hint, epochs, grace, idle, resend | 28, 19, 24 | |
 | [x] | 29 | `29-net-worker-and-reference-server.md` | net worker, loopback `ws`, `games/reference-server`, multiplayer in a browser. **Multiplayer in browser.** | 28b | D |
 | [ ] | 30 | `30-interpolation.md` | remote presence interpolation, adaptive delay | 29, 19, 26 | |
+| [ ] | 30b | `30b-rust-rebuild-quick-wins.md` | one-line Rust edit rebuild time: explain the regression since 2026-09-26, simple fixes only (Tyler: "I'd prefer a long build over complexity") | 30 | T |
 | [ ] | 31 | `31-rates-and-integrity.md` | chunk token bucket, soft cap, rate limits, byte budgets, zoom-out churn measurement | 29 | |
 | [ ] | 31b | `31b-desync-hashes.md` | per-chunk desync hashes, `ResyncChunk` | 31 | |
 | [ ] | 32 | `32-reference-crafting.md` | inventory, unlock, crafting | 20b, 21b | |
