@@ -220,3 +220,7 @@ Evidence: `reference_several_buttons` isolated 20/20 with the wait, 15/20 withou
 - The orchestrator's `--load 10` `[gc] no_ui_change_asserts_ui_ran_and_wrote_nothing` failure did not recur in these quiet batches; no detail survives, and `gc-ui` is untouched by M30.
 
 Full `pnpm test` (browser 217 pass, 39 s of 48 s) and `pnpm lint` green on `c99aeb7`.
+
+### CI round 1 (orchestrator)
+
+The `M30 done` push's run 36636714669 failed `netcode ws/join-converges` with "engine: dispatch before ready". A rerun of the same commit was green, so 1 in 2. The cause is M29's fixed `advanceTicks(20)` racing four real loopback handshakes. The orchestrator fixed it in `5ad3301` with a bounded wait until every client is `Online`. Netcode then passed 20/20 plain and 10/10 under `--load 10`.
