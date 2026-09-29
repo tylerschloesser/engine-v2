@@ -93,6 +93,76 @@ function deferredConnection(promise: Promise<Connection>): Connection {
   return proxy
 }
 
+/** docs/plan/30c-ci-reds-after-m30.md (red B): one loopback socket's message accounting. Both ends
+ * of every `ws` link live in this process, so the harness can know exactly how many whole messages
+ * each direction has sent but not yet delivered (a `WebSocket` keeps message boundaries). */
+interface WsPairStats {
+  key: string
+  c2hSent: number
+  c2hRecv: number
+  h2cSent: number
+  h2cRecv: number
+  /** Which end called `close()`, and which end is down (called it, or saw the other end's close
+   * arrive). A close frame is in flight until the other end is down; messages sent toward an end
+   * that is down never arrive and stop counting. */
+  hostCalledClose: boolean
+  clientCalledClose: boolean
+  hostDown: boolean
+  clientDown: boolean
+}
+
+function wsInFlight(p: WsPairStats): number {
+  let n = 0
+  if (!p.hostDown) n += p.c2hSent - p.c2hRecv + (p.clientCalledClose ? 1 : 0)
+  if (!p.clientDown) n += p.h2cSent - p.h2cRecv + (p.hostCalledClose ? 1 : 0)
+  return n
+}
+
+/** A raw `ws` end that counts into `stats`: `send` as sent in its own direction, each delivered
+ * message as received in the other. Sits under `conditionLink`, so it sees real socket traffic
+ * only, never the conditioner's virtual-time holds. */
+function countedEnd(raw: Connection, stats: WsPairStats, side: 'host' | 'client'): Connection {
+  const withLen = raw as Connection & {
+    send: (cls: MsgClass, bytes: Uint8Array, len?: number) => void
+  }
+  const end: Connection = {
+    datagrams: raw.datagrams,
+    onMessage: null,
+    onClose: null,
+    send(cls, bytes, len?: number) {
+      if (side === 'client') stats.c2hSent++
+      else stats.h2cSent++
+      withLen.send(cls, bytes, len)
+    },
+    close(code) {
+      if (side === 'client') {
+        stats.clientCalledClose = !stats.clientDown
+        stats.clientDown = true
+      } else {
+        stats.hostCalledClose = !stats.hostDown
+        stats.hostDown = true
+      }
+      raw.close(code)
+    },
+  }
+  raw.onMessage = (bytes) => {
+    if (side === 'client') stats.h2cRecv++
+    else stats.c2hRecv++
+    end.onMessage?.(bytes)
+  }
+  raw.onClose = (code) => {
+    if (side === 'client') stats.clientDown = true
+    else stats.hostDown = true
+    end.onClose?.(code)
+  }
+  return end
+}
+
+/** Real time `advanceTicks` waits for every open `ws` link to deliver what it has sent before it
+ * throws, naming the links still holding messages. Loopback delivery takes about a millisecond;
+ * this only bounds a socket that never delivers, well inside Vitest's 5 s default. */
+const WS_DELIVERY_DEADLINE_MS = 2_000
+
 /** docs/plan/28-sessions-and-reconnect.md Seams: a deterministic per-(seed, index) 128-bit secret
  * -- `createNetHarness`'s own default when `opts.secrets` names none for a given client, so a
  * scenario that never cares about identity still gets a real, reproducible one (0020 §7: "the seed
@@ -432,6 +502,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
   // information a real accept cannot otherwise recover (unlike `memoryConnectionPair()`, a real
   // `'connection'` event carries no caller-supplied correlation of its own).
   let wsPort = 0
+  const wsPairs: WsPairStats[] = []
   const pendingHostAccepts = new Map<string, (c: Connection) => void>()
   let wsServerClose: (() => Promise<void>) | null = null
   if (opts.transport === 'ws') {
@@ -479,7 +550,53 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     const key = `${linkIdx}:${reconnectCount}`
     const hostPromise = new Promise<Connection>((resolve) => pendingHostAccepts.set(key, resolve))
     const clientRaw = wsConnection(`ws://127.0.0.1:${wsPort}/?k=${key}`)
-    return [deferredConnection(hostPromise), clientRaw]
+    const stats: WsPairStats = {
+      key,
+      c2hSent: 0,
+      c2hRecv: 0,
+      h2cSent: 0,
+      h2cRecv: 0,
+      hostCalledClose: false,
+      clientCalledClose: false,
+      hostDown: false,
+      clientDown: false,
+    }
+    wsPairs.push(stats)
+    return [
+      countedEnd(deferredConnection(hostPromise), stats, 'host'),
+      countedEnd(clientRaw, stats, 'client'),
+    ]
+  }
+
+  /** docs/plan/30c-ci-reds-after-m30.md (red B): returns once every open `ws` link has delivered
+   * every message it has sent, polling one real event-loop turn (`setTimeout(1)`) at a time. What
+   * the fixed 20 ms per-tick sleep before it only hoped for: that sleep cost every tick 20 ms or
+   * more of real time whether or not anything was in flight (80-odd ticks, ~1.9 s of a 5 s test
+   * budget, locally), and still guessed short when a socket was slower than 20 ms. */
+  async function wsDelivered(): Promise<void> {
+    const start = performance.now()
+    for (;;) {
+      let inFlight = 0
+      for (const p of wsPairs) inFlight += wsInFlight(p)
+      if (inFlight === 0) return
+      const waited = performance.now() - start
+      if (waited > WS_DELIVERY_DEADLINE_MS) {
+        const stuck = wsPairs
+          .filter((p) => wsInFlight(p) > 0)
+          .map(
+            (p) =>
+              `link ${p.key}: c2h ${p.c2hRecv}/${p.c2hSent}, h2c ${p.h2cRecv}/${p.h2cSent}, ` +
+              `closed by host ${p.hostCalledClose}/client ${p.clientCalledClose}, ` +
+              `down host ${p.hostDown}/client ${p.clientDown}`,
+          )
+        throw new Error(
+          `createNetHarness(ws): ${inFlight} message(s) still undelivered after ${Math.round(waited)} ms ` +
+            `real time, before host tick ${simHost.counters.ticksRun + 1} ` +
+            `(received/sent per direction): ${stuck.join('; ')}`,
+        )
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 1))
+    }
   }
 
   function makeClient(secretOverride?: Uint8Array): HeadlessClient {
@@ -560,39 +677,18 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
 
   async function advanceTicks(n: number): Promise<void> {
     for (let i = 0; i < n; i++) {
+      // docs/plan/29-net-worker-and-reference-server.md steps 1-2, docs/plan/30c-ci-reds-after-m30.md
+      // (red B): a real socket's bytes are genuine OS/event-loop I/O, not a microtask a plain
+      // `await` waits out. Wait until every `ws` message already sent has actually arrived, so the
+      // next `stepTick` sees it -- the same "awaits physical arrival" `memoryConnectionPair` gets
+      // for free. First, so a `Hello` delivered here starts its digest before the wait below.
+      if (opts.transport === 'ws') await wsDelivered()
       // docs/plan/28-sessions-and-reconnect.md: a real `await` on the actual in-flight digest
       // promise (not merely hoping the virtual clock's own microtask yields are enough) --
       // `crypto.subtle.digest` resolves through a real libuv threadpool callback in Node, which a
       // plain `await` on an already-settled/trivial promise does not reliably give a turn to.
       // Cheap when nothing is in flight (`handshakesSettled` returns at once).
       await simHost.handshakesSettled()
-      // docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Deviations, `ws` transport): a
-      // real socket's own handshake and byte delivery are genuine OS/event-loop I/O, not a
-      // microtask a plain `await` is guaranteed to wait out -- unlike every other await in this
-      // loop, which only ever waits on virtual-clock/digest bookkeeping. One real event-loop turn
-      // per tick (`setImmediate`, the "check" phase, after every I/O callback already queued this
-      // turn) is what lets a socket that finished connecting *this* tick actually deliver its first
-      // bytes before the *next* `stepTick` runs, instead of every one of `n` ticks racing ahead of
-      // a still-connecting socket the way a fixed `advanceTicks(10)` measured clean over `memory`.
-      // A no-op cost for every other transport (`opts.transport !== 'ws'`): skipped entirely.
-      if (opts.transport === 'ws') {
-        // 20 ms, not a smaller value (Deviations, measured): `pnpm test`'s own suites run
-        // concurrently (`scripts/test.mjs`'s own "run every selected suite in parallel"), and a
-        // real loopback socket handshake competes for the event loop with a concurrently-running
-        // browser suite's own headless Chromium instances -- 5 ms measured clean in isolation but
-        // flaked under that real full-suite load (a fixed tick budget racing ahead of a
-        // not-yet-open socket, the same failure this yield exists to prevent in the first place).
-        // **Tried 40 ms (M29b fix round 1) and reverted it**: this same constant is shared by every
-        // `ws/*` test, several of which (`ws/reconnect-resume`, `ws/trace-identical`) have no
-        // explicit Vitest `testTimeout` override and call `advanceTicks` enough times that 40 ms
-        // pushed their own total real wall time past Vitest's 5 s default -- measured locally,
-        // reproduced by running the full slow tier once (`ws/reconnect-resume`/`ws/trace-identical`
-        // both failed "Test timed out in 5000ms" at 40 ms, clean again at 20 ms). The actual fix for
-        // CI's own `ws/spike-c` race is `netcode`'s new `soloTiers: ['slow']` (`scripts/suites.mjs`)
-        // below, not this constant -- widening it further without a passing CI run to confirm
-        // against would be exactly the blind-widening this repo's own testing discipline forbids.
-        await new Promise<void>((resolve) => setTimeout(resolve, 20))
-      }
       // docs/plan/28b-reconnect-and-lifecycle.md step 4: `SimHost.stepTick` itself is
       // unconditional (its own doc comment) -- this harness is what has to honour "the tick
       // counter frozen" while the world is genuinely idle-paused, by simply not calling it.
