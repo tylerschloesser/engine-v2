@@ -48,6 +48,12 @@ declare global {
  * tile into the client's own replica -- `Ui.in_range`/`world.tile()` need a real tick, not just
  * `stepFrame` (`games/reference/CLAUDE.md`, found live by `ui-smoke.spec.ts`). Stepped frames only
  * (`engine/test`'s own manual-clock contract): the caller's page must be `/test.html`.
+ *
+ * First waits for the page's first `Ui` (gate round 3): `game.ts` moves the camera to `Ui.spawn`
+ * once, on that first `Ui`, so a `Ui` landing after this function's `__setCamera` snapped the camera
+ * back to spawn and the panned-to tiles never came into range (found by `reference_several_buttons`
+ * under the full suite: one collect button, for the spawn tile). `test-entry.ts` primes `lastUi`
+ * before any frame, so a non-null `uiState` means that first `Ui` has been handled.
  */
 export async function panTo(
   page: Page,
@@ -55,6 +61,7 @@ export async function panTo(
   opts: { tilesAcross?: number } = {},
 ): Promise<void> {
   const tilesAcross = opts.tilesAcross ?? 20
+  await pumpUntil(page, (ui) => ui !== null)
   await page.evaluate(([x, y, t]) => window.__setCamera?.(x, y, t), [
     tile.x,
     tile.y,
@@ -107,10 +114,7 @@ export async function pumpUntil(
  * leaves nothing on the page at all (gate rounds 1-2). Steps one frame per poll until a button
  * exists for every tile in `tiles` (at least one when `tiles` is empty) and no two collect buttons
  * overlap. Bounded by the poll timeout; not a retry of a flaky step.
- *
- * Each poll also steps one sim tick (gate round 3): `panTo`'s fixed five ticks can all run before the
- * camera's new interest reaches the host, and then no tile downlink for the new view is ever sent
- * however many frames are stepped (a full-suite-only `reference_several_buttons` timeout).
+ * A timeout reports the page's button tiles, rects, `--z` and layer transform (gate round 3).
  */
 export async function settleCollectButtons(
   page: Page,
@@ -121,7 +125,6 @@ export async function settleCollectButtons(
     .poll(
       () =>
         page.evaluate(async (want) => {
-          await window.__stepTick?.(1)
           await window.__stepFrame?.(50)
           const buttons = [...document.querySelectorAll('.collect-button')]
           const rects = buttons.map((b) => b.getBoundingClientRect())
@@ -136,11 +139,20 @@ export async function settleCollectButtons(
             ),
           )
           const have = new Set(buttons.map((b) => b.getAttribute('data-collect-tile')))
-          return buttons.length > 0 && want.every((w) => have.has(w)) && !overlaps
+          const ok = buttons.length > 0 && want.every((w) => have.has(w)) && !overlaps
+          if (ok) return 'ok'
+          // Otherwise the state itself, so a timeout's message says which clause failed.
+          const layer = buttons[0]?.parentElement
+          return JSON.stringify({
+            tiles: [...have],
+            rects: rects.map((r) => [r.left, r.top, r.width, r.height].map(Math.round).join(' ')),
+            z: layer?.style.getPropertyValue('--z'),
+            layer: layer?.style.transform,
+          })
         }, wanted),
       { timeout: 5_000 },
     )
-    .toBe(true)
+    .toBe('ok')
 }
 
 /**

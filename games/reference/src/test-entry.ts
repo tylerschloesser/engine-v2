@@ -123,6 +123,13 @@ const { client, renderer, device, canvasFormat } = await startGame({
   scheduler: clock,
 })
 
+// M30 gate round 3: subscribe `lastUi` before anything steps a frame, so `__uiState()` is non-null
+// exactly once the first `Ui` has reached this thread -- and with it `startGame`'s own one-shot
+// spawn `moveTo` (subscribed earlier, inside `startGame`). `panTo` waits on that before moving the
+// camera; primed later (by a spec), the first `Ui` could already have gone by during
+// `pumpUntilLive` below, and `Ui` is re-sent only on change.
+lastUi<RefUi>(client)
+
 // `pumpUntilLive`, not a bare `await client.ready` (`engine/test`'s own doc comment): this page's
 // ticks are test-driven, so `client.ready` (which now also waits for a real host frame) only
 // resolves once something drives the sim -- `pumpUntilLive` does that itself.
