@@ -63,4 +63,28 @@ If a profile setting or consolidation lands: one line in `packages/engine/crates
 none
 
 ## Deviations
-(filled in during Phase 3)
+**Cause (no code change): the stale `target/` directory, not the code.** Measured with `touch packages/engine/crates/engine/src/lib.rs`; first-launch time is `<bin> --list` on a freshly linked binary.
+- Old `target/` (created 2026-09-26; its dirs carry the xattr `com.apple.provenance`): every freshly linked test binary costs a constant **5.5 s** on first launch (12 of 12 sampled; second launch 0.01-0.02 s). 168 binaries; `--no-run` build 83 s. Full `pnpm test unit`: **577 s** (fixtures 549 s), load 14.4 at start (`15:37`).
+- Same commands, any *fresh* target dir (`CARGO_TARGET_DIR` in the scratchpad or in the repo, opt-level 0/2/3 variants for unique content): first launch **0.14-0.29 s**, workspace `--no-run` 21-55 s. Identical binary content (same hashes) was slow in the old dir and fast in the new one, so it is not a per-content cache and not the path `target/`. Removing the xattr from `target/debug/deps` alone did not help.
+- Fix applied: `mv target target-old`, cold rebuild (41 s), `rm -rf target-old`. `xattr target` now lists only `com.apple.metadata:com_apple_backup_excludeItem`.
+- Ruled out: binary count (168 now; M24c had 67-80, the growth is only ~2x), machine load (fast runs happened at load 16-20), debuginfo size (binaries are 1-4 MB), Developer Tools being off (`DevToolsSecurity -status` says "Developer mode is currently disabled" in this session's shell, yet fresh dirs are fast, so the setting is not what separates the two cases).
+- Process tree of a Bash call here: `zsh <- claude <- zsh <- tmux (pid 1453, ppid 1)`; iTerm2 is running separately. The build processes' parent app is therefore the tmux server, not Terminal/iTerm, so `spctl developer-mode enable-terminal` (Terminal only) would not cover them. **Not needed now, but if the 5.5 s/binary tax returns on a fresh dir, Tyler's steps:** System Settings > Privacy & Security > Developer Tools > "+" > add `/opt/homebrew/bin/tmux` (the server process, `which tmux`) and iTerm.app, toggle on, then `tmux kill-server` and start a new session. **Recurrence check:** `xattr target` (a `com.apple.provenance` entry) or a sample `touch ...lib.rs && cargo test --workspace --no-run` then `time target/debug/deps/<fx_*> --list` (5.5 s = bad, 0.2 s = good); fix is `rm -rf target` (cold build ~40-90 s).
+
+**Result** (`pnpm test unit` after the touch; `uptime` 1-min load at start; the machine stayed loaded by other sessions, so every run is an upper bound):
+
+| state | load at start | wall | fixtures |
+|---|---|---|---|
+| before (old target) | 14.4 | 577 s | 549 s |
+| after, cold (first run) | 4.5 | 63 s | 44 s |
+| after | 10.0 | 36 s | 22 s |
+| after | 18.7 | 36 s | 23 s |
+| after (target-old removed) | 15.9 | 39 s | 25 s |
+| after | 20.3 | 39 s | 26 s |
+| after | 25.7 | 40 s | 27 s |
+
+Floor: `reference` 7.5 s + fixtures 22-27 s + doctests 1 s = 33-40 s, over 0020 §3's 30 s by ~3-10 s (compile+link of the workspace test build, ~20 s alone). Budget unchanged (orchestrator's).
+
+**Candidate 2 (profile settings): rejected.** Measured on `fx-puts` in a scratch target: `debug=0` 11.07 s -> 9.80 s (about 1 s), costs file:line in backtraces; not worth it.
+**Candidate 3 (fixture test-binary consolidation): rejected.** With the tax gone a binary costs 0.2 s to launch, so the 168 binaries cost roughly 30 s of parallel launches at worst versus 900 s before; the payoff (<= a few s) is not worth moving files.
+**Sorted `cargo nextest list --workspace | wc -l`:** 643 (equals the suite's 643 rust tests; no test or config changed). `pnpm test` and `pnpm lint` green (rust 643, unit 290, wasm 156, netcode 55, browser 217). No Cargo/profile change, so no `CLAUDE.md` line.
+**Note:** an untracked `target-*` copy in the repo root (not in `.gitignore`) makes `scripts/lib/context-artifacts.test.mjs` fail with `spawnSync git ENOBUFS`; keep scratch target dirs outside the repo.
