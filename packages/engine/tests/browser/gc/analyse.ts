@@ -206,14 +206,36 @@ export type Verdict = {
  * so they were moved off it once the mechanism was found to depend on where a V8 inlining heuristic
  * happened to land (`topology`'s own `client`, 0/5 on the nested control, `attributedBytesPerFrame`
  * reading 0.0267 against a raw `16.84` the same window).
+ *
+ * **A non-`main` isolate can still get its own, wider *raw* software-mode ceiling for *collateral*
+ * from a sibling's own control** (M29b fix round 4, `multiplayer-topology`'s own `net` row):
+ * `page.software.isolates[name].bytesPerFrame`, checked against the same raw `totalBytes/frames`
+ * metric hardware mode already uses -- not attribution (that stays `main`-only, per the reasoning
+ * above), just a second, wider number for an isolate whose own real collateral cost (not itself
+ * adapter-driven) was measured to differ between modes. **Never applied when `name` is the isolate
+ * a negative control is actually targeting** (`verdictIsolate`, below): a wide-enough ceiling to
+ * tolerate a sibling's own collateral swallowed this isolate's *own* `object`/`burst` control too
+ * (measured live: `net`'s own ~16-24 B/frame `object` delta is smaller than CI's own observed
+ * sibling-burst collateral on `net`, so one ceiling cannot both tolerate the collateral and still
+ * catch `net`'s own defect) -- `main`'s own `attributedBytesPerFrame` and a worker's own
+ * `bytesPerFrame` are mutually exclusive per isolate entry; an isolate with neither, or one that is
+ * itself under test, falls through to the shared hardware ceiling, same as every page before this
+ * one.
  */
 export function verdict(
   input: VerdictInput,
   page: {
     isolates: Record<string, IsolateBudget>
-    software: null | { isolates: Record<string, { attributedBytesPerFrame: number }> }
+    software: null | {
+      isolates: Record<string, { attributedBytesPerFrame?: number; bytesPerFrame?: number }>
+    }
   },
   mode: 'hardware' | 'software',
+  /** The isolate a negative control is actually applying to (`NegativeControl.isolate`), or `null`
+   * for a clean run -- `gc/net-negative-control`'s own hand-built control (Deviations, this
+   * function's own doc comment above) passes `'net'` explicitly even though it applies no
+   * `zeroGcSuite`-managed control at all, since its own injected defect *is* inside `net`. */
+  verdictIsolate: string | null = null,
 ): Verdict {
   const A: Record<string, boolean> = {}
   const B: Record<string, boolean> = {}
@@ -228,11 +250,17 @@ export function verdict(
     A[name] =
       budget.class === 'strict' ? counts.MinorGC + counts.MajorGC === 0 : counts.MajorGC === 0
 
+    const underTest = verdictIsolate === name
+    const softBudget = mode === 'software' ? page.software?.isolates[name] : undefined
     if (mode === 'software' && name === 'main') {
-      const softBudget = page.software?.isolates[name]
-      if (!softBudget) throw new Error(`gc verdict: no software budget for ${name}`)
+      if (softBudget?.attributedBytesPerFrame === undefined) {
+        throw new Error(`gc verdict: no software budget for ${name}`)
+      }
       const attributed = (input.attributedBytesTotal?.[name] ?? 0) / input.frames
       B[name] = attributed <= softBudget.attributedBytesPerFrame
+    } else if (!underTest && softBudget?.bytesPerFrame !== undefined) {
+      const actual = (input.totalBytes[name] ?? 0) / input.frames
+      B[name] = actual <= softBudget.bytesPerFrame
     } else {
       B[name] = rawB(name, budget)
     }

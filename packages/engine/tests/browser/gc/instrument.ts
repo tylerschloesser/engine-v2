@@ -166,10 +166,24 @@ export async function measure(
      * keeps its 500 because that page's own numbers were derived with it; the option is not one a
      * new page should reach for. */
     extraSettleFrames?: number
+    /** M29b fix round 4: which isolate `gc/analyse.ts`'s own `verdict()` should treat as "under
+     * test" for a non-`main` isolate's own software-mode raw ceiling (`page.software.isolates
+     * [name].bytesPerFrame`, `multiplayer-topology`'s own `net` row) -- that wider ceiling exists
+     * to tolerate a *sibling* isolate's own negative control leaking real collateral onto this one
+     * under `GC_MODE=software`, never to widen what the isolate's *own* control has to prove.
+     * Defaults to `opts.control?.isolate` (every `zeroGcSuite`-generated test: the applied control
+     * and the isolate under test are the same thing). `gc/net-negative-control` is the one caller
+     * that must set this explicitly to `'net'` even though it applies no `opts.control` at all (its
+     * own defect is injected page-side via `?netInjectParse=1`, entirely outside this mechanism) --
+     * without it, `net`'s own wide software ceiling would silently swallow this control's own real
+     * signal too (found live: `pnpm exec playwright test --grep net-negative-control` failed 5/5
+     * under forced software mode before this field existed). */
+    verdictIsolate?: string | null
   },
 ): Promise<GcResult> {
   const mode = gcModeFromEnv()
   const control = opts.control ?? null
+  const verdictIsolate = opts.verdictIsolate !== undefined ? opts.verdictIsolate : control?.isolate
   const budgets = gcPage(opts.pageId)
   // 0016 caveat b: "A page whose `software` is `null` fails in that mode with 'no software budget
   // for <pageId>'." Checked before the (costly) measurement itself.
@@ -387,6 +401,7 @@ export async function measure(
     { frames, gc: trace.gc, totalBytes, attributedBytesTotal },
     budgets,
     mode,
+    verdictIsolate ?? null,
   )
 
   closeSessions?.()

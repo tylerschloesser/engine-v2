@@ -112,7 +112,17 @@ async function runNetInjectParse(page: Page, browser: Browser) {
   // the coupling that made the shared ticker's own rate a bad place for it).
   const extraTicks = setInterval(() => server?.stepTick(30), 5)
   try {
-    return await measure(page, browser, { pageId: 'multiplayer-topology', control: null })
+    // `verdictIsolate: 'net'` (M29b fix round 4): this control applies no `zeroGcSuite`-managed
+    // `control` at all (its own defect is `?netInjectParse=1`, page-side), but it *is* testing
+    // `net`'s own defect -- without this, `net`'s own wide software-mode collateral ceiling
+    // (`budgets.json`'s `gc.pages['multiplayer-topology'].software.isolates.net`, meant only to
+    // tolerate a *sibling* isolate's own control) would silently swallow this control's own signal
+    // too under `GC_MODE=software` (`gc/analyse.ts`'s `verdict()` own doc comment has the finding).
+    return await measure(page, browser, {
+      pageId: 'multiplayer-topology',
+      control: null,
+      verdictIsolate: 'net',
+    })
   } finally {
     clearInterval(extraTicks)
   }

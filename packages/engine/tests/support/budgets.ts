@@ -18,8 +18,17 @@ export type SoftwarePage = {
   frames: number
   /** `formula` is optional (docs/plan/13b-tick-timing-allocation.md): most pages' `main` figure
    * here has been `0` since ADR 0029 and needed no derivation; `sim-paced` is the first with a
-   * real, measured, non-zero one and carries its own `formula` string per 0020 §9. */
-  isolates: Record<string, { attributedBytesPerFrame: number; formula?: string }>
+   * real, measured, non-zero one and carries its own `formula` string per 0020 §9.
+   *
+   * `attributedBytesPerFrame` (`main` only, `gc/analyse.ts`'s own `verdict()`) and `bytesPerFrame`
+   * (M29b fix round 4, `multiplayer-topology`'s own `net` row: a raw, software-specific ceiling for
+   * a *non*-`main` isolate whose real collateral cost genuinely differs between modes) are
+   * mutually exclusive per isolate entry, not both required -- `verdict()`'s own doc comment has
+   * the reasoning for why only `main` ever needed attribution in the first place. */
+  isolates: Record<
+    string,
+    { attributedBytesPerFrame?: number; bytesPerFrame?: number; formula?: string }
+  >
 }
 
 export type GcPageBudget = {

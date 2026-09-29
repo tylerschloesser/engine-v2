@@ -145,6 +145,99 @@ test('gc verdict: software mode uses raw bytes on every isolate but main (orches
   // proof the worker path never consults `page.software`.
 })
 
+test('gc verdict: a non-main isolate can get its own raw software-mode ceiling (M29b fix round 4)', () => {
+  const page = {
+    isolates: {
+      main: {
+        class: 'strict' as const,
+        bytesPerFrame: 200,
+        formula: 'measured',
+        attributionRoots: ['drive'],
+      },
+      net: {
+        class: 'budgeted' as const,
+        bytesPerFrame: 226,
+        formula: 'measured',
+        attributionRoots: ['linkControl'],
+      },
+    },
+    software: {
+      isolates: {
+        main: { attributedBytesPerFrame: 10 },
+        net: { bytesPerFrame: 400 },
+      },
+    },
+  }
+  // `net`'s raw total (243.47*100=24347/100=243.47) exceeds the shared hardware ceiling (226) but
+  // is within its own, wider software-mode row (400) -- the exact CI shape this test pins.
+  const passing = verdict(
+    {
+      frames: 100,
+      gc: {},
+      totalBytes: { main: 900, net: 24_347 },
+      attributedBytesTotal: { main: 900 },
+    },
+    page,
+    'software',
+  )
+  expect(passing.B).toEqual({ main: true, net: true })
+  expect(passing.pass).toBe(true)
+
+  // Still trips above its own software ceiling, not just above the hardware one.
+  const failing = verdict(
+    {
+      frames: 100,
+      gc: {},
+      totalBytes: { main: 900, net: 40_001 },
+      attributedBytesTotal: { main: 900 },
+    },
+    page,
+    'software',
+  )
+  expect(failing.B.net).toBe(false)
+
+  // Hardware mode is unaffected: `net`'s own software row is never consulted, the shared 226
+  // ceiling applies exactly as it always has.
+  const hardware = verdict(
+    { frames: 100, gc: {}, totalBytes: { main: 100, net: 24_347 } },
+    page,
+    'hardware',
+  )
+  expect(hardware.B.net).toBe(false) // 243.47 > 226, the hardware ceiling, unchanged
+})
+
+test('gc verdict: a wide software-mode ceiling never applies to the isolate a control is actually targeting (M29b fix round 4, regression)', () => {
+  // The exact bug found live: giving `net` a wide 660 B/frame software row with no `verdictIsolate`
+  // awareness made `gc/net-negative-control` (whose own real defect measures ~238 B/frame under
+  // forced software mode, comfortably above the 226 hardware ceiling but well under 660) silently
+  // stop tripping -- `pnpm exec playwright test --grep net-negative-control` failed 5/5 under forced
+  // `GC_MODE=software` before `verdictIsolate` existed.
+  const page = {
+    isolates: {
+      net: {
+        class: 'budgeted' as const,
+        bytesPerFrame: 226,
+        formula: 'measured',
+        attributionRoots: ['linkControl'],
+      },
+    },
+    software: { isolates: { net: { bytesPerFrame: 660 } } },
+  }
+  // 238 B/frame: over the hardware ceiling (226), comfortably under the wide software one (660).
+  const input = { frames: 100, gc: {}, totalBytes: { net: 23_800 } }
+
+  // No `verdictIsolate` (a sibling's own control, or a clean run): the wide ceiling applies, and
+  // this reading -- net's own *real* defect magnitude -- would incorrectly pass if it ever showed
+  // up here instead of under `net`'s own control.
+  const collateral = verdict(input, page, 'software', null)
+  expect(collateral.B.net).toBe(true)
+
+  // `verdictIsolate: 'net'` (net's own control, `gc/net-negative-control`'s own real shape): falls
+  // back to the tight hardware ceiling, and the same reading correctly trips.
+  const ownControl = verdict(input, page, 'software', 'net')
+  expect(ownControl.B.net).toBe(false)
+})
+
 test('gc verdict: tracing stall is a warning', () => {
   expect(tracingStallWarning(2500)).toBe('gc-tracing-start-stall 2500ms')
   expect(tracingStallWarning(1999)).toBeNull()
