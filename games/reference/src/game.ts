@@ -23,6 +23,7 @@ import {
 } from 'engine/render'
 import type { RefReject } from './bindings/RefReject.js'
 import type { RefUi } from './bindings/RefUi.js'
+import { createBuildUi } from './ui/build.js'
 import { createCollectUi } from './ui/collect.js'
 import { createCraftUi } from './ui/craft.js'
 import { createInventoryUi } from './ui/inventory.js'
@@ -98,6 +99,7 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
   const collectUi = createCollectUi(client)
   const inventoryUi = createInventoryUi(document.body)
   const craftUi = createCraftUi(client)
+  const buildUi = createBuildUi(client)
   // M20b step 5 (Scope: "`main.ts` calls `client.camera.moveTo(spawn, { durationMs: 0 })` only when
   // the engine restored no camera"): built here, in the shared `onUi` subscription, the same
   // reasoning as `collectUi`/`inventoryUi` above -- both `main.ts` and the stepped `test-entry.ts`
@@ -109,6 +111,7 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
     collectUi.onUi(ui)
     inventoryUi.onUi(ui)
     craftUi.onUi(ui)
+    buildUi.onUi(ui)
     if (!spawnDecided) {
       spawnDecided = true
       if (!client.camera.restored) {
@@ -119,6 +122,7 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
   client.onActionResult<RefReject>((seq, result) => {
     collectUi.onActionResult(seq, result)
     craftUi.onActionResult(seq, result)
+    buildUi.onActionResult(seq, result)
   })
 
   let lastCameraT: number | undefined
