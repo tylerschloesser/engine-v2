@@ -129,6 +129,17 @@ export function uiState(page: Page): Promise<RefUiState | null> {
 }
 
 /**
+ * `readUi(page)` (33e): the current `Ui`, waiting for the first one. `onUi` rides the real rAF, so
+ * `uiState` is `null` until it lands (`test-entry.ts`'s `?lateUi=n` makes that deterministic). Any
+ * helper or spec that reads a field of `Ui` before it has stepped anything reads through this.
+ */
+export async function readUi(page: Page): Promise<RefUiState> {
+  const ui = await pumpUntil(page, (u) => u !== null)
+  if (ui === null) throw new Error('readUi: no Ui')
+  return ui
+}
+
+/**
  * Steps one sim tick plus one 16ms frame at a time (Seams, Provides), checking `predicate` against
  * `uiState(page)` after each round, until it holds or `maxSteps` is exhausted (throws by name in
  * that case). A fixed tick/frame count is brittle against exactly how many ticks a given

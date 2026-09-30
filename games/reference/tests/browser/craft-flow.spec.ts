@@ -3,19 +3,19 @@
 // real CSS progress animation, step the duration, and the inventory shows one furnace and the stone
 // cost paid. Stepped ticks only, never real time (0020 §4).
 import { expect, test } from '@playwright/test'
-import { collectN, ITEM, openGame, pumpUntil, uiState } from '../helpers/game.js'
+import { collectN, ITEM, openGame, pumpUntil, readUi } from '../helpers/game.js'
 
 // `content::RECIPES[0]`: cost 5 stone, 5 s = 100 ticks at 20 Hz; unlock at 5 stone mined.
 const CRAFT_TICKS = 100 + 1 // + the host's tick T+1 queuing (0004)
 
 test('reference_craft_flow', async ({ page }) => {
-  await openGame(page, { path: '/test.html' })
-  await uiState(page) // primes the `lastUi` subscription
+  // `?lateUi=3`: the first three `uiState` reads answer null, as when the first `Ui` is late.
+  await openGame(page, { path: '/test.html?lateUi=3' })
   const menu = page.locator('.craft-menu')
   const button = page.locator('[data-craft-recipe="0"]')
 
   // Fresh world: no menu, no recipes.
-  expect((await uiState(page))?.recipes).toEqual([])
+  expect((await readUi(page)).recipes).toEqual([])
   await expect(menu).toHaveAttribute('hidden', '')
 
   // Four stone: still below the threshold.

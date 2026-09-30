@@ -246,7 +246,18 @@ const drawRecordsScratch: DrawRecord[] = []
 /** `engine::client::KIND_CIRCLE` (0018 §2): bits 12..16 of `kind_sprite`. */
 const KIND_CIRCLE = 1
 
-window.__uiState = () => lastUi<RefUi>(client) ?? null
+// 33e: `?lateUi=n` makes the first `n` reads answer `null` as if the first `Ui` had not reached this
+// thread yet (it rides the real rAF, so under load it may not have). A spec that reads `Ui` without
+// waiting for a non-null one fails on it every time, not one run in fifteen (`tests/helpers/game.ts`'s
+// `readUi`). It changes no page state: `lastUi` and the spawn move are untouched.
+let lateUiReads = Number(new URLSearchParams(location.search).get('lateUi') ?? 0)
+window.__uiState = () => {
+  if (lateUiReads > 0) {
+    lateUiReads--
+    return null
+  }
+  return lastUi<RefUi>(client) ?? null
+}
 
 window.__clock = () => {
   const c = client.clock()
