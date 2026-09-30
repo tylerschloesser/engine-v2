@@ -25,10 +25,11 @@ pub const FAIR_EVERY: u32 = 4;
 /// How much desync hashing a host does (`Host::set_hash_mode`; `SimConfig::hash_mode`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum HashMode {
-    /// No `Hashes` sections at all (native pinned-byte tests, and any run that opts out).
+    /// No `Hashes` sections at all: the default until step 4 turns hashing on for the harness and
+    /// the dev server (every pinned-byte test predates hashing).
+    #[default]
     Off,
     /// The 0013 schedule: one chunk per 4 ticks, `Global`/`OwnPlayer` every 5 s.
-    #[default]
     Production,
     /// Every eligible held chunk and both scopes on every frame (0013 "dev builds").
     All,

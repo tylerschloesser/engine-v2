@@ -41,6 +41,7 @@ import {
 import { loadGame, type WsSocketLike, wsSocketConnection } from '../server-node.js'
 import { type MemoryStorage, memoryStorage } from '../storage/memory.js'
 import type { Storage } from '../storage/types.js'
+import { type DesyncLog, type DesyncReport, readDesyncLog } from './desync.js'
 import { createHeadlessClient, type HeadlessClient } from './headless-client.js'
 import { addFrame, emptyTotals, parseMessage, worstWindowBytes } from './net-sections.js'
 import { trapSim } from './trap.js'
@@ -421,6 +422,17 @@ export interface NetHarness {
    * every scenario.
    */
   assertConverged(): void
+  /** docs/plan/31b-desync-hashes.md: every client's own desync reports, oldest first per client,
+   * each tagged with the client's index (`HeadlessClient.desyncs()` is the per-client form). */
+  desyncs(): (DesyncReport & { client: number })[]
+  /** The host's desync ring (`sim_desync`): one report per `ResyncChunk` it acted on. */
+  hostDesyncs(): DesyncLog
+  /** Fault injection (`sim_skip_delta`): the next frame for client `i` drops one delta of chunk
+   * `(cx, cy)` (both within i16, and not `(-32768, -32768)`). */
+  skipDelta(i: number, cx: number, cy: number): void
+  /** Fault injection (`sim_skip_delta` with the reserved coordinate): the next frame for client
+   * `i` drops every `Global` value update until one carries the `Global` hash (5 s cadence). */
+  skipGlobalDelta(i: number): void
   counters(i: number): NetHarnessCounters
   trace(): Uint8Array
   dispose(): Promise<void>
@@ -476,6 +488,8 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     ...(opts.world?.actionRate !== undefined ? { actionRate: opts.world.actionRate } : {}),
     ...(opts.world?.bandwidth !== undefined ? { bandwidth: opts.world.bandwidth } : {}),
     ...(opts.world?.view !== undefined ? { view: opts.world.view } : {}),
+    // docs/plan/31b-desync-hashes.md: a scenario opts into hashing (the default is off until step 4).
+    ...(opts.world?.debugHashMode !== undefined ? { debugHashMode: opts.world.debugHashMode } : {}),
   }
   const gameWorldgen = worldCfg.params.worldgen
 
@@ -873,6 +887,33 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     }
   }
 
+  function hostInst() {
+    const inst = serverInternals(server).rawInstance
+    if (!inst) throw new Error('harness: the live sim instance is unavailable')
+    return inst
+  }
+
+  function desyncs(): (DesyncReport & { client: number })[] {
+    return clients.flatMap((c, client) => c.desyncs().reports.map((r) => ({ ...r, client })))
+  }
+
+  function hostDesyncs(): DesyncLog {
+    const inst = hostInst()
+    return readDesyncLog(inst, (i) => inst.call1(inst.x.sim_desync, i), 'harness.hostDesyncs')
+  }
+
+  function packCoord(cx: number, cy: number): number {
+    return ((cx & 0xffff) | ((cy & 0xffff) << 16)) >>> 0
+  }
+
+  function skipDeltaPacked(i: number, packed: number): void {
+    const e = entries[i]
+    if (!e) throw new Error(`skipDelta: no client ${i}`)
+    const inst = hostInst()
+    const status = inst.call2(inst.x.sim_skip_delta, e.connId, packed)
+    if (status !== 0) throw new Error(`skipDelta: sim_skip_delta status ${status}`)
+  }
+
   function counters(i: number): NetHarnessCounters {
     const e = entries[i]
     if (!e) throw new Error(`counters: no client ${i}`)
@@ -1014,6 +1055,10 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     advanceTicks,
     settle,
     assertConverged,
+    desyncs,
+    hostDesyncs,
+    skipDelta: (i, cx, cy) => skipDeltaPacked(i, packCoord(cx, cy)),
+    skipGlobalDelta: (i) => skipDeltaPacked(i, 0x8000_8000),
     counters,
     trace: encodeTrace,
     async dispose() {

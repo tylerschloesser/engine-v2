@@ -517,7 +517,9 @@ pub trait Instance: Sized + 'static {
     /// docs/plan/31b-desync-hashes.md (`ABI_VERSION` 34 -> 35), `engine/test` only, fault
     /// injection: the next frame built for `conn` drops one delta of the chunk packed in `coord`
     /// (`(cx as i16 as u16) | ((cy as i16 as u16) << 16)`: two chunk coordinates in one `u32`,
-    /// because the loader has no three-argument call).
+    /// because the loader has no three-argument call); `0x8000_8000` names the reserved scope
+    /// coordinate instead: every `Global` value update is dropped until a frame carries the `Global`
+    /// hash.
     fn sim_skip_delta(&mut self, _conn: u32, _coord: u32) -> Status {
         Status::Unsupported
     }

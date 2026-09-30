@@ -235,7 +235,8 @@ export const ABI_EXPORTS = {
   client_desync: { role: 'client', params: 1, result: 'status' },
   // Fault injection, `engine/test` only: the next frame for `conn` drops one delta of the chunk
   // packed in the second argument, `(cx as i16 as u16) | ((cy as i16 as u16) << 16)` (the loader
-  // has no three-argument call).
+  // has no three-argument call); `0x80008000` instead drops every `Global` value update until a frame carries the
+  // `Global` hash.
   sim_skip_delta: { role: 'sim', params: 2, result: 'status' },
   // Fault injection, `engine/test` only: flips one replica byte of the held chunk (cx, cy);
   // `Status.NotCached` when it is not held.

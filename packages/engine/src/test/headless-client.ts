@@ -41,6 +41,7 @@ import { seedToHexU64 } from '../sim-config.js'
 import { createNetPump } from '../worker/client-net.js'
 import { GEN_RECORD_HEADER_BYTES, readI32LE, writeGenHeader } from '../worker/gen-record.js'
 import { createShell } from '../worker/shell.js'
+import { type DesyncLog, readDesyncLog } from './desync.js'
 import {
   decodeCounters,
   type InterpCounters,
@@ -137,6 +138,11 @@ export interface HeadlessClient {
   ui(): unknown
   /** `client_region_hash()`, 16-digit lowercase hex. */
   replicaHash(): string
+  /** This client's desync reports (docs/plan/31b-desync-hashes.md): `client_desync`. */
+  desyncs(): DesyncLog
+  /** Fault injection (`client_corrupt_chunk`): flips one replicated byte of a held chunk. Throws
+   * when the chunk is not held. */
+  corruptChunk(cx: number, cy: number): void
   /** Delivered in the order `client_poll_ui()` produced them, coalesced across every `pump()`/
    * `stepFrame()` call since the last drain. Returns an unsubscribe function. */
   onActionResult<Reject = unknown>(
@@ -526,6 +532,19 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
         throw new Error(`HeadlessClient: replicaHash: client_region_hash failed: status ${status}`)
       }
       return inst.readU64Hex(RegionId.Result, 0)
+    },
+    desyncs() {
+      return readDesyncLog(
+        inst,
+        (i) => inst.call1(inst.x.client_desync, i),
+        'HeadlessClient.desyncs',
+      )
+    },
+    corruptChunk(cx, cy) {
+      const status = inst.call2(inst.x.client_corrupt_chunk, cx, cy)
+      if (status !== Status.Ok) {
+        throw new Error(`HeadlessClient.corruptChunk(${cx}, ${cy}): status ${status}`)
+      }
     },
     onActionResult(cb) {
       const listener = cb as Listener

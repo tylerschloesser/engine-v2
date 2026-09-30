@@ -54,3 +54,8 @@ taken from a 0010 cell or worked number named in `source`. **Raising a number is
 player slot immediately (required for acks past the pending-queue cap, 32); its own `FlatWorldgen`
 fills every tile `Tile::new(1, 0, 0)` (a `Paint` writing that back is a no-op overlay-wise). `fixture`
 may also be a `buildGame()` directory path, resolved via `engine/server/node`'s `loadGame`.
+
+## Desync hashes (docs/plan/31b-desync-hashes.md)
+
+A `Hashes` section rides frames when the host's hash mode is on: `createNetHarness({ world: { debugHashMode: 'production' | 'all' } })` (default `'off'`; step 4 of M31b flips the harness default and adds the `Welcome` flag). The client checks each hash against its replica (never the prediction overlay) right after applying the frame; a mismatch is a **desync report** `{ tick, scope: 'chunk' | 'global' | 'ownPlayer', cx, cy, hostHash, clientHash }` on the client (`harness.desyncs()`, one entry per report, tagged with the client index; `HeadlessClient.desyncs()`), a `ResyncChunk` to the host, and a report on the host (`harness.hostDesyncs()`: `hostHash` is the host's hash when the request arrived, `clientHash` is `00..00` because the request carries only the coordinate). `global`/`ownPlayer` reports carry the reserved coord `(-2147483648, -2147483648)`. Each report also prints one `desync (client|host): ...` line to `engine.log`. A ring keeps the last 16; `count` is the total.
+Faults: `HeadlessClient.corruptChunk(cx, cy)` (flips one replica byte), `harness.skipDelta(i, cx, cy)` (the next frame for client `i` drops one delta of that chunk), `harness.skipGlobalDelta(i)` (drops `Global` updates until the 5 s hash). A scenario asserting exact bytes keeps hashing `'off'`. Dumps (`test-results/desync/`) are step 4.

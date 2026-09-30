@@ -27,6 +27,7 @@ section's end (no leading count, `wire/presence.rs`'s own module doc comment), a
 frame.tick − received_at`. A player's own sample is never relayed back to that player (0010 host
 drop rule); a held sample is re-relayed at >= 1 Hz with a growing `age_ticks`; `Gone` fires once,
 on disconnect, to every connection that had previously been relayed that player.
+**Hashes** (section 9, `wire/hashes.rs`, M31b): a flat entry list to the section's end, entry = `kind u8` then `0 Chunk`: `cx zigzag varint · cy zigzag varint · hash u64 LE` (absolute coord, never chained); `1 Global`: `hash u64`; `2 OwnPlayer`: `hash u64` (the receiver's own player). An unknown kind is malformed (entries carry no length). Production cadence: one `Chunk` entry per 4 ticks (recently modified first, then round-robin), `Global`+`OwnPlayer` every 5 s. **ResyncChunk** (uplink message `0x04`): `type · cx zigzag varint · cy zigzag varint`; the coord `(i32::MIN, i32::MIN)` asks for `Global` + `OwnPlayer` instead of a chunk.
 **Global**: `mask u8` (bit0 roster, bit1 value) · roster `n varint` x `(PlayerId varint, online
 u8)` · `Codec G::Global`. **OwnPlayer**: `PlayerId varint · Codec G::Player`. **Uplink**: `type ·
 flags u8 (bit0 camera, bit1 presence) · last_received_tick u32 · n varint x (seq varint, len

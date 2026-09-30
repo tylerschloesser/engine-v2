@@ -31,6 +31,10 @@ export interface WorldConfig<Params = unknown> {
   cacheChunks?: number
   arenaBytes?: number
   actionRate?: { perSecond?: number; burst?: number }
+  /** docs/plan/31b-desync-hashes.md, dev and test: how much desync hashing the host does
+   * (`host::SimConfig::hash_mode`): `'off'` (default), `'production'` (0013's schedule) or `'all'`
+   * (every eligible chunk every frame). Not part of 0009's shape. */
+  debugHashMode?: 'off' | 'production' | 'all'
   bandwidth?: {
     softCapBytesPerS?: number
     chunkRefillBytesPerS?: number
@@ -101,6 +105,7 @@ export function buildSimInstanceConfig(
       // 0009 `WorldConfig.actionRate` (0004 defaults, 20 per second / burst 40, when unset).
       actionPerS: cfg.actionRate?.perSecond,
       actionBurst: cfg.actionRate?.burst,
+      hashMode: cfg.debugHashMode,
     },
   }
 }

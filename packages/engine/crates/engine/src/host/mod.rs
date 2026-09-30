@@ -294,8 +294,9 @@ struct SimConfig<P> {
     action_per_s: Option<u32>,
     #[serde(default)]
     action_burst: Option<u32>,
-    /// docs/plan/31b-desync-hashes.md: `"off"`, `"production"` (the default when absent) or
-    /// `"all"` (0013 "dev builds": every eligible chunk every frame).
+    /// docs/plan/31b-desync-hashes.md: `"off"` (the default when absent, until step 4 flips the
+    /// harness and dev-server defaults), `"production"` (the 0013 schedule) or `"all"` (0013 "dev
+    /// builds": every eligible chunk every frame).
     #[serde(default)]
     hash_mode: Option<String>,
 }
@@ -956,9 +957,9 @@ impl<G: Game> Host<G> {
     }
 
     /// docs/plan/31b-desync-hashes.md: sets how much desync hashing the host does, for every
-    /// connection ([`hashes::HashMode`]). `genesis_for_test` starts `Off` (its pinned-byte tests
-    /// predate hashing); the ABI path starts `Production`. Step 4's `HASH_ALL` flag calls this
-    /// with `All`.
+    /// connection ([`hashes::HashMode`]). Both `genesis_for_test` and the ABI path start `Off`
+    /// unless `SimConfig::hash_mode` says otherwise (pinned-byte tests predate hashing). Step 4's
+    /// `HASH_ALL` flag calls this with `All`.
     pub fn set_hash_mode(&mut self, mode: hashes::HashMode) {
         self.hash_mode = mode;
     }
@@ -982,8 +983,9 @@ impl<G: Game> Host<G> {
     }
 
     /// Test fault injection (`sim_skip_delta`): the next frame built for `conn` drops one tile (or
-    /// entity `Put`) delta of `chunk`, or (for [`crate::integrity::RESERVED_SCOPE_COORD`]) one
-    /// `Global` value update; the flag stays armed until a frame had one to drop.
+    /// entity `Put`) delta of `chunk`, or (for [`crate::integrity::RESERVED_SCOPE_COORD`])
+    /// every `Global` value update until a frame carries the `Global` hash; the flag stays armed
+    /// until a frame had one to drop.
     pub fn skip_delta(&mut self, conn: ConnId, chunk: ChunkCoord) {
         if let Some(Some(slot)) = self.conns.get_mut(conn as usize) {
             slot.hashes.skip_delta = Some(chunk);
@@ -1796,8 +1798,10 @@ impl<G: Game> Host<G> {
                 .iter()
                 .any(|(_, d)| matches!(d, Delta::Global { .. }));
         let want_roster = !self.scratch_roster.is_empty();
-        // `sim_skip_delta(conn, RESERVED_SCOPE_COORD)`: drop one ordinary `Global` value update
-        // (never a first frame's or a resend's) so the client's `Global` goes stale.
+        // `sim_skip_delta(conn, RESERVED_SCOPE_COORD)`: drop every ordinary `Global` value update
+        // (never a first frame's or a resend's) until a frame carrying the `Global` hash goes out,
+        // so the client's `Global` is stale exactly when it is checked (a game that changes
+        // `Global` every second would otherwise overwrite one dropped update before the 5 s hash).
         let mut want_global_value = global_value_changed;
         if slot.hashes.skip_delta == Some(crate::integrity::RESERVED_SCOPE_COORD)
             && want_global_value
@@ -1805,7 +1809,6 @@ impl<G: Game> Host<G> {
             && !resend
         {
             want_global_value = false;
-            slot.hashes.skip_delta = None;
         }
 
         let player_changed = first
@@ -2432,6 +2435,9 @@ impl<G: Game> Host<G> {
             }
             if scope_due {
                 slot.hashes.commit_scopes(hash_tick, hash_hz);
+                if slot.hashes.skip_delta == Some(crate::integrity::RESERVED_SCOPE_COORD) {
+                    slot.hashes.skip_delta = None;
+                }
             }
             slot.hashes.resend_scopes = false;
             slot.pace.overflow_shift = 0;
@@ -2734,9 +2740,9 @@ where
             last_superseded: None,
             chunk_versions: BTreeMap::new(),
             hash_mode: match cfg.hash_mode.as_deref() {
-                Some("off") => hashes::HashMode::Off,
+                Some("production") => hashes::HashMode::Production,
                 Some("all") => hashes::HashMode::All,
-                _ => hashes::HashMode::Production,
+                _ => hashes::HashMode::Off,
             },
             desyncs: crate::integrity::DesyncLog::default(),
             scratch_hashes: Vec::new(),
@@ -3752,9 +3758,17 @@ where
     }
 
     fn sim_skip_delta(&mut self, conn: u32, coord: u32) -> Status {
-        let cx = (coord & 0xFFFF) as u16 as i16 as i32;
-        let cy = (coord >> 16) as u16 as i16 as i32;
-        self.skip_delta(conn, ChunkCoord::new(cx, cy));
+        // `0x8000_8000` (both halves `i16::MIN`) stands for the reserved coordinate: a `Global`
+        // value update rather than a chunk's delta.
+        let target = if coord == 0x8000_8000 {
+            crate::integrity::RESERVED_SCOPE_COORD
+        } else {
+            ChunkCoord::new(
+                (coord & 0xFFFF) as u16 as i16 as i32,
+                (coord >> 16) as u16 as i16 as i32,
+            )
+        };
+        self.skip_delta(conn, target);
         Status::Ok
     }
 

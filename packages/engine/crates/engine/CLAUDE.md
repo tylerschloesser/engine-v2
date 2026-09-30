@@ -28,6 +28,7 @@ One line per module; each module's `//!` doc comment has the detail and names it
 - `host/`: `Host<G>`, the sim-role instance and connection table; `subs.rs` (subscriptions, 0010), `warm.rs`, `pacing.rs`. `session/`: handshake codecs (0013).
 - `client/`, `client.rs`: `Replica<G>`, `ClientCore<G>`, drawlist, `FrameView`, `FrameCx`, input, upload, UI. `predict/` (0012; `.claude/rules/prediction.md`). `interp/`, `clock/`: float, client-only, never reachable from `apply`/`tick`.
 - `game_instance.rs`: `GameInstance<G>`, what `export_game!` points at; dispatches each role to `Host<G>`, `GenCore`, or `ClientInstance<G>`.
+- `integrity.rs` (0013, M31b): the one chunk/`Global`/player hash both `Host` and `Replica` call (snapshot `version` written as 0: bookkeeping, not state), `DesyncLog` (ring of 16 + counter). Schedule: `host/hashes.rs` (`HashMode` `Off | Production | All`, default `Off` until M31b step 4); wire: `wire/hashes.rs`.
 - `presence.rs` (0001/0019 presence channel), `persist/` (own `CLAUDE.md`), `wire/` (own `CLAUDE.md`), `migrate.rs` (0005 upgrades).
 - `testing/` (feature `testing`, dev-dependencies only): `golden_bytes`, `cache_matrix`, `testkit` (`run_script`, `Loopback<G>`), `budgets` (reads `packages/engine/budgets.json`), `replay`, `worldgen_contract`.
 
