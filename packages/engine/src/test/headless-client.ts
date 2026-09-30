@@ -34,13 +34,14 @@ import { createLink } from '../net/link.js'
 import { createBytePump } from '../net/pump.js'
 import { readU32LE, writeU32LE } from '../sab/bytes.js'
 import { ControlBlock, WORKER_CLIENT } from '../sab/control.js'
-import { createSabSet } from '../sab/layout.js'
+import { createSabSet, DRAWLIST_HEADER_BYTES } from '../sab/layout.js'
 import { RingConsumer } from '../sab/ring.js'
 import { type Connection, MsgClass } from '../server.js'
 import { seedToHexU64 } from '../sim-config.js'
 import { createNetPump } from '../worker/client-net.js'
 import { GEN_RECORD_HEADER_BYTES, readI32LE, writeGenHeader } from '../worker/gen-record.js'
 import { createShell } from '../worker/shell.js'
+import type { DrawRecord } from './client.js'
 import { type DesyncDump, type DesyncLog, readDesyncLog, takeDesyncDumps } from './desync.js'
 import {
   decodeCounters,
@@ -136,6 +137,10 @@ export interface HeadlessClient {
   /** The last kind-1 `Ui` record's decoded JSON (`src/CLAUDE.md`'s own `uiRing` framing, read here
    * directly off `client_poll_ui()` rather than through a ring), or `null` before the first one. */
   ui(): unknown
+  /** M34c: the `Draw` records of the last `frame()` (`drawlist_len` and `RegionId.DrawList`), decoded
+   * as `drawListRecords` does for a real client; empty before the first frame or for a game with no
+   * draw list. Test-only: allocates one object per record. */
+  draws(): DrawRecord[]
   /** `client_region_hash()`, 16-digit lowercase hex. */
   replicaHash(): string
   /** `client_chunk_hash(cx, cy)`: FNV hash (16 hex digits) of a resident chunk's effective slab
@@ -550,6 +555,29 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
     },
     ui() {
       return lastUi
+    },
+    draws() {
+      const region = inst.region(RegionId.DrawList)
+      if (!region) return []
+      const n = inst.call0(inst.x.drawlist_len)
+      const view = new DataView(region.u8.buffer, region.u8.byteOffset, region.u8.byteLength)
+      const out: DrawRecord[] = []
+      for (let i = 0; i < n; i++) {
+        const b = DRAWLIST_HEADER_BYTES + i * 32
+        const kindSprite = view.getUint16(b + 16, true)
+        out.push({
+          pos: [view.getFloat32(b, true), view.getFloat32(b + 4, true)],
+          size: [view.getFloat32(b + 8, true), view.getFloat32(b + 12, true)],
+          kind: kindSprite >>> 12,
+          spriteId: kindSprite & 0x0fff,
+          layer: view.getUint8(b + 18),
+          flags: view.getUint8(b + 19),
+          color: view.getUint32(b + 20, true),
+          param: view.getFloat32(b + 24, true),
+          pickId: view.getUint32(b + 28, true),
+        })
+      }
+      return out
     },
     replicaHash() {
       const status = inst.call0(inst.x.client_region_hash)

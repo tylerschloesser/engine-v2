@@ -32,7 +32,11 @@ export default defineConfig({
         test: {
           name: 'netcode',
           environment: 'node',
-          include: ['packages/engine/tests/netcode/**/*.test.ts'],
+          include: [
+            'packages/engine/tests/netcode/**/*.test.ts',
+            // docs/plan/34c-reference-scripted-multiplayer.md: the reference game's scripted multiplayer.
+            'games/reference/tests/netcode/**/*.test.ts',
+          ],
         },
       },
     ],
