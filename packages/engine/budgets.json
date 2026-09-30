@@ -619,6 +619,12 @@
         "ceiling": 178,
         "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing. No 0010 table cell or worked number exists for this scenario, so its ceiling is headroom, ceil(exact * 1.1); rows that have a 0010 source take that as the ceiling. Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Same scenario, the worst 1 s virtual-time span."
       },
+      "bytesPerHour": {
+        "counter": "bytesDownPerHour",
+        "exact": 324399,
+        "ceiling": 20000000,
+        "source": "PRE-PLAN.md section 7, Bandwidth per client burst row (owner 0010): 10-20 MB per hour of play; the ceiling is the top of that row, not measured plus margin. Measured by reference_bytes_and_mispredictions_in_budget (games/reference/tests/netcode/counters.test.ts): the busier of two clients' downlink bytes over the two-player full game at 60 ms latency, 20 ms jitter, production hash cadence, scaled from the host ticks the game took to one hour at 20 Hz (72,000 ticks). The scripted game is 813 ticks and includes each client's join, so the projection is the conservative direction."
+      },
       "idleHeartbeatBytes10s": {
         "counter": "bytesDown",
         "exact": 200,
