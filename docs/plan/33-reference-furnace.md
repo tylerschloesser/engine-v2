@@ -1,6 +1,6 @@
 # M33: Reference game: furnace entity and predicted placement
 
-Status: not started · After: 32, 26 · Tyler-dependent: R1 (may a furnace cover a resource tile? unanswered; default assumed: no), see `docs/plan/questions-for-tyler.md`
+Status: done · After: 32, 26 · Tyler-dependent: R1 (may a furnace cover a resource tile? unanswered; default assumed: no), see `docs/plan/questions-for-tyler.md`
 
 Split during planning: the PLAN.md row for M33 (entity, ghost, three actions, smelting, two UIs) was about 2,000 lines with five files to read. This brief is the entity and its placement; `33b-reference-furnace-operation.md` is deposit, take, smelting and the furnace panel.
 
@@ -55,10 +55,10 @@ Deposit, take, smelting, the furnace panel, picking a furnace (M33b). Removing a
 - Browser: `reference_place_mouse` (hover moves the ghost with the cursor tile; invalid tint over water; click places; inventory decrements), `reference_place_touch` (tap, Confirm anchored within 1 CSS px of the ghost, a drag still pans, Confirm places), `reference_ghost_swap_one_frame` (step frames across the ack; every published DrawList holds exactly one furnace record at that tile: never zero, never two).
 
 ## Exit criteria
-- [ ] All tests above pass by name.
-- [ ] By hand on desktop: the ghost tracks the pointer with no visible lag and changes tint crossing a shoreline.
-- [ ] Assets and bindings regenerated and committed (`git diff --exit-code` clean after build and asset script).
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name.
+- [ ] (carried to `33c-drawables-on-real-pages.md`) By hand on desktop: the ghost tracks the pointer with no visible lag and changes tint crossing a shoreline.
+- [x] Assets and bindings regenerated and committed (`git diff --exit-code` clean after build and asset script).
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t reference` · `pnpm test browser -t reference_place` · `pnpm test browser -t reference_ghost` · `pnpm --filter reference dev`.
@@ -123,3 +123,10 @@ Steps 1-3 done (commits `e9b9369`, `965dc42`, `b620fe7`; base `55e7f61`). Steps 
 **Timing findings worth keeping.** A click that emits or dispatches needs a stepped frame before `stepTick` (the rings drain in frames; `stepTick` waits on them and times out at 10 s otherwise), and the uplink is paced at 50 ms, so a dispatch needs one frame of >= 50 ms: the specs use `frame(page, 60)` (documented in `games/reference/CLAUDE.md`).
 
 **Machine notes.** The first full `pnpm test` of the range failed the engine's `ghost.touch_tap_then_confirm` with `page.waitForFunction: Target page, context or browser has been closed` (Chrome for Testing crash; `uptime` load 17.7); the immediate re-run passed: rust 712, unit 292 (3.2 s, WARN as before), wasm 159, netcode 92, browser 221 at 37 s. `pnpm lint` green after one clippy fix (`type_complexity` in `ghost.rs`).
+
+### Gate after steps 4-6 (orchestrator)
+- `pnpm gate a3ae5bc`: tree clean, 16 files, 1 golden added (`extract_hash_ghost_and_furnace.hash` = `013ed85fc4dd7355`), none changed, +967/-5. `pnpm test && pnpm lint` green, with exit codes checked: rust 712, unit 292 (3.1 s, WARN, the watch row; no tests added), wasm 159, netcode 92, browser 221 in 37 s of 48 s.
+- Test names: `reference_ghost_swap_one_frame` is a named `test.step` inside `reference_place_mouse` (R2), so `-t reference_place` runs it and `-t reference_ghost` matches nothing. Accepted.
+- **Drawables never reach a production page.** Verified by the orchestrator: `engine/render` (`src/render.ts`) exports no drawables renderer, atlas loader or attach call, and the only way to a client's `DrawListSlot` is `clientTestHandle`. So the reference game draws terrain only, and has since M20b: the player circle's criterion there was asserted on DrawList records. R1 (sprite wiring) could not be done inside `games/reference`. That fix is `33c-drawables-on-real-pages.md`, and the "by hand" criterion above is carried to it.
+- Instrument limits recorded, not defects: the zero-GC page catches a 256 KiB/frame leak in the ghost path but not 4 KiB (wasm arena headroom); `setMode('tool')` while placing is invisible to the drag test (the engine pans on a one-pointer drag in either mode).
+
