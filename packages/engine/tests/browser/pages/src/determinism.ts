@@ -6,6 +6,10 @@
 // `golden/golden.json` in Node and only trusts `window.__determinism`'s freshly-computed
 // checkpoints, never this page's own bundled copies of the goldens.
 import wasm from 'virtual:engine/wasm'
+import referenceGolden from '../../../../../../games/reference/tests/golden/full-game.json' with {
+  type: 'json',
+}
+import referenceLogUrl from '../../../../../../games/reference/tests/golden/full-game.log?url'
 import goldenHash from '../../../../fixtures/hash/golden/golden.json' with { type: 'json' }
 import scenarioHash from '../../../../fixtures/hash/golden/scenario.json' with { type: 'json' }
 import goldenWorldgen from '../../../../fixtures/worldgen/golden/golden.json' with { type: 'json' }
@@ -27,7 +31,15 @@ declare global {
 }
 
 type FromWorker = { type: 'result'; checkpoints: string[] } | { type: 'error'; message: string }
-type ToWorker = { type: 'run'; module: WebAssembly.Module; scenario: HashScenario }
+type ToWorker =
+  | { type: 'run'; module: WebAssembly.Module; scenario: HashScenario }
+  | {
+      type: 'replay'
+      module: WebAssembly.Module
+      params: { seed: string; worldgen: unknown }
+      frames: Uint8Array
+      ticks: number[]
+    }
 
 type Entry = {
   name: string
@@ -51,12 +63,16 @@ const entries: Entry[] = [
 
 const worker = new Worker(new URL('./determinism-worker.js', import.meta.url), { type: 'module' })
 
-function runOn(module: WebAssembly.Module, scenario: HashScenario): Promise<FromWorker> {
+function ask(message: ToWorker): Promise<FromWorker> {
   return new Promise((resolve, reject) => {
     worker.onmessage = (ev: MessageEvent<FromWorker>) => resolve(ev.data)
     worker.onerror = (e) => reject(new Error(`determinism worker error: ${e.message}`))
-    worker.postMessage({ type: 'run', module, scenario } satisfies ToWorker)
+    worker.postMessage(message)
   })
+}
+
+function runOn(module: WebAssembly.Module, scenario: HashScenario): Promise<FromWorker> {
+  return ask({ type: 'run', module, scenario })
 }
 
 const fixtures: Record<string, { checkpoints: string[]; pass: boolean }> = {}
@@ -80,6 +96,27 @@ for (const entry of entries) {
       return `  ${i}: ${c} ${c === g ? '==' : '!='} ${g}`
     }),
   )
+}
+
+// M34b: the reference game's full-game golden log, replayed from genesis in the same worker; one hash
+// per checkpoint tick of `full-game.json`, compared by `determinism.spec.ts` (Node reads the file).
+{
+  const ref = await fixtureWasm('reference')
+  const module = await WebAssembly.compileStreaming(await fetch(ref.url))
+  const frames = new Uint8Array(await (await fetch(referenceLogUrl)).arrayBuffer())
+  const want = referenceGolden.checkpoints.map((c) => c.hash)
+  const outcome = await ask({
+    type: 'replay',
+    module,
+    params: { seed: referenceGolden.seed, worldgen: referenceGolden.worldgen },
+    frames,
+    ticks: referenceGolden.checkpoints.map((c) => c.tick),
+  })
+  if (outcome.type === 'error') throw new Error(`reference: ${outcome.message}`)
+  const pass =
+    outcome.checkpoints.length === want.length && outcome.checkpoints.every((c, i) => c === want[i])
+  fixtures.reference = { checkpoints: outcome.checkpoints, pass }
+  lines.push(`reference (full-game.log): ${pass ? 'PASS' : 'FAIL'}`)
 }
 
 window.__determinism = {

@@ -4,9 +4,20 @@
 // machinery: `sim_admit` runs on every 7th tick throughout 10,000 ticks, for which the harness's
 // postMessage-only `admit` (park-required, setup-rate) would be far too slow.
 import { instantiate } from '../../../../src/loader.ts'
+import { replayLog } from '../../../../src/test/replay.ts'
 import { type HashScenario, roleOf, runHashScenario } from '../../../support/scenario.ts'
 
-type ToWorker = { type: 'run'; module: WebAssembly.Module; scenario: HashScenario }
+/** `replay`: a recorded log (M34b's reference full-game golden) replayed from genesis, one hash per
+ * checkpoint tick, through `replayLog` (the same driver the Node and Bun legs use). */
+type ToWorker =
+  | { type: 'run'; module: WebAssembly.Module; scenario: HashScenario }
+  | {
+      type: 'replay'
+      module: WebAssembly.Module
+      params: { seed: string; worldgen: unknown }
+      frames: Uint8Array
+      ticks: number[]
+    }
 type FromWorker = { type: 'result'; checkpoints: string[] } | { type: 'error'; message: string }
 
 const scope = self as unknown as {
@@ -16,6 +27,14 @@ const scope = self as unknown as {
 
 scope.onmessage = (ev) => {
   const m = ev.data
+  if (m.type === 'replay') {
+    replayLog({ wasm: m.module, params: m.params, frames: m.frames, checkpoints: m.ticks }).then(
+      (got) => scope.postMessage({ type: 'result', checkpoints: got.map((c) => c.hash) }),
+      (e) =>
+        scope.postMessage({ type: 'error', message: e instanceof Error ? e.message : String(e) }),
+    )
+    return
+  }
   if (m.type !== 'run') return
   try {
     const inst = instantiate(m.module, roleOf(m.scenario), m.scenario.config, { onLog() {} })

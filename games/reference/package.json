@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "pnpm --filter engine build && tsc --noEmit && tsc -p tests/tsconfig.json --noEmit"
+    "typecheck": "pnpm --filter engine build && tsc --noEmit && tsc -p tests/tsconfig.json --noEmit",
+    "golden:record": "pnpm --silent --filter engine build && node --disable-warning=ExperimentalWarning scripts/golden-record.mjs && pnpm exec biome check --write tests/golden"
   },
   "dependencies": {
     "engine": "workspace:*"

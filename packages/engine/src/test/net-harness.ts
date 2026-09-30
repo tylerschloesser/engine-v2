@@ -331,6 +331,10 @@ export interface NetHarnessOptions {
    * every source of randomness this harness touches, so `(seed, scenario)` alone reproduces a run
    * (0020 §7). */
   seed: number
+  /** The world's own seed as decimal text (`WorldConfig.params.seed`, a u64), when a game's world
+   * has one a JS number cannot hold (M34b: the reference game's `world.json`, above 2^53). Omitted:
+   * `String(seed)`. The conditioner seeds still come from `seed`. */
+  worldSeed?: string
   clients: number
   world?: Partial<Omit<WorldConfig, 'params'>> & {
     params?: Partial<Omit<WorldConfig['params'], 'seed'>>
@@ -478,7 +482,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     worldId: opts.world?.worldId ?? 'net-harness',
     buildHash: opts.world?.buildHash ?? buildHash,
     params: {
-      seed: String(opts.seed),
+      seed: opts.worldSeed ?? String(opts.seed),
       worldgen: opts.world?.params?.worldgen ?? null,
       ...(opts.world?.params?.maxEntities !== undefined
         ? { maxEntities: opts.world.params.maxEntities }

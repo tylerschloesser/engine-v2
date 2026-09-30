@@ -8,6 +8,11 @@ import { fileURLToPath } from 'node:url'
 import type { Connect, Plugin } from 'vite'
 
 const FIXTURES_DIR = fileURLToPath(new URL('../../../fixtures/', import.meta.url))
+// M34b: the reference game's own dev build (`pnpm test`'s `game-sims` step) is served the same way,
+// as `/fixtures/reference/`: `determinism.html` replays the full-game golden log against it.
+const REFERENCE_BUILD = fileURLToPath(
+  new URL('../../../../../games/reference/sim/target/engine/dev/', import.meta.url),
+)
 const PREFIX = '/fixtures/'
 
 // `start.not_isolated_error`/`start.worker_blocked_error` (docs/plan/06b-workers-and-spawn.md,
@@ -75,13 +80,17 @@ const COI_HEADERS = {
 type FixtureFile = 'game.wasm' | 'game.json'
 
 function fixtureOutputPath(name: string, file: FixtureFile): string {
+  if (name === 'reference') return `${REFERENCE_BUILD}${file}`
   return `${FIXTURES_DIR}${name}/target/engine/dev/${file}`
 }
 
 function fixtureNames(): string[] {
-  return readdirSync(FIXTURES_DIR, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
+  return [
+    ...readdirSync(FIXTURES_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name),
+    'reference',
+  ]
 }
 
 const serve: Connect.NextHandleFunction = (req, res, next) => {

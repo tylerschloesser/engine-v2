@@ -10,7 +10,8 @@ import { loadGame } from '../../dist/server-node.js'
 import { buildSimInstanceConfig } from '../../dist/sim-config.js'
 import { memoryStorage } from '../../dist/storage/memory.js'
 import { worldKeys } from '../../dist/storage/types.js'
-import { replayWorld } from '../../dist/test.js'
+import { replayLog, replayWorld } from '../../dist/test.js'
+import { divergenceMessage, firstDivergence, readFullGame } from '../support/reference-golden.ts'
 import { diffCheckpoints, roleOf, runHashScenario } from '../support/scenario.ts'
 
 const NAME = 'determinism: bun matches golden'
@@ -18,6 +19,7 @@ const WORLDGEN_NAME = 'determinism: worldgen bun matches golden'
 const GROWTH_NAME = 'loader: views survive memory growth (bun)'
 const PUTS_NAME = 'wasm_idle_100_matches_native (bun)'
 const REPLAY_NAME = 'replay_world_checkpoints_bun'
+const REFERENCE_NAME = 'reference_golden_replay (bun)'
 
 /**
  * The Bun half of decision B (fix round 3, docs/plan/06b-workers-and-spawn.md, Deviations): the
@@ -217,6 +219,23 @@ async function runReplayLeg() {
   return { name: REPLAY_NAME, ok: message === null, message }
 }
 
+/** The reference game's full-game golden (`games/reference/tests/golden/`, M34b), replayed as
+ * `.wasm` under JavaScriptCore: the mirror of `reference-golden.test.ts`'s `reference_golden_replay`. */
+async function runReferenceGoldenLeg() {
+  const { meta, frames } = readFullGame()
+  const { wasm } = await loadGame(
+    new URL('../../../../games/reference/sim/target/engine/dev', import.meta.url).pathname,
+  )
+  const got = await replayLog({
+    wasm,
+    params: { seed: meta.seed, worldgen: meta.worldgen },
+    frames,
+    checkpoints: meta.checkpoints.map((c) => c.tick),
+  })
+  const message = divergenceMessage(firstDivergence(got, meta.checkpoints))
+  return { name: REFERENCE_NAME, ok: message === null, message }
+}
+
 let result
 try {
   if (typeof Bun === 'undefined') throw new Error('not running under Bun')
@@ -232,6 +251,7 @@ try {
   const worldgen = await runWorldgenLeg()
   const puts = await runPutsLeg()
   const replay = await runReplayLeg()
+  const reference = await runReferenceGoldenLeg()
   result = {
     tests: [
       { name: NAME, ok: message === null, message },
@@ -239,6 +259,7 @@ try {
       worldgen,
       puts,
       replay,
+      reference,
     ],
     checkpoints,
   }

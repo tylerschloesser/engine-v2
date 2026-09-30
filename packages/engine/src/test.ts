@@ -101,10 +101,14 @@ export {
   uploadRecords,
 } from './test/render.js'
 export {
+  lastLoggedTick,
+  type ReplayLogOptions,
   type ReplayWorldOptions,
   type RunHeavyOptions,
+  replayLog,
   replayWorld,
   runHeavy,
+  segmentZeroFrames,
 } from './test/replay.js'
 export { trapSim } from './test/trap.js'
 export {

@@ -6,6 +6,7 @@
 // WebKit's JavaScriptCore both qualify (0020 §6).
 import { expect, test } from '@playwright/test'
 import { readGolden } from '../support/fixtures.js'
+import { readFullGame } from '../support/reference-golden.js'
 import { diffCheckpoints, type Golden } from '../support/scenario.js'
 import { openPage } from './support/page.js'
 
@@ -40,6 +41,18 @@ test('determinism: golden reproduced in the browser @engines', async ({ page }) 
     // The first divergent checkpoint, if any, is the whole point of the message on failure.
     expect(diffCheckpoints(fixture.checkpoints, golden.checkpoints), name).toBeNull()
   }
+  // M34b: the reference game's full-game log replayed from genesis in the page's worker.
+  const reference = result.fixtures.reference
+  if (!reference) throw new Error('window.__determinism.fixtures has no entry for reference')
+  const { meta } = readFullGame()
+  const want = meta.checkpoints.map((c) => c.hash)
+  const bad = want.findIndex((h, i) => reference.checkpoints[i] !== h)
+  expect(
+    reference.checkpoints.length === want.length && bad === -1
+      ? null
+      : `first divergent tick ${meta.checkpoints[Math.max(bad, 0)]?.tick}`,
+    'reference full-game golden',
+  ).toBeNull()
   expect(result.crossOriginIsolated).toBe(true)
   expect(result.userAgent.length).toBeGreaterThan(0)
 })

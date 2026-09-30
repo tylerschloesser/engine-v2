@@ -18,7 +18,8 @@ import { RegionId, Role, Status } from '../abi.js'
 import type { ManifestSegment, ManifestV1 } from '../host/persistence.js'
 import type { EngineInstance } from '../loader.js'
 import { instantiate } from '../loader.js'
-import { buildSimInstanceConfig } from '../sim-config.js'
+import { buildSimInstanceConfig, type WorldConfig } from '../sim-config.js'
+import { memoryStorage } from '../storage/memory.js'
 import type { Storage, WorldKeys } from '../storage/types.js'
 import { worldKeys } from '../storage/types.js'
 
@@ -322,6 +323,86 @@ export async function replayWorld(
     if (hash === undefined)
       throw new Error(`replayWorld: checkpoint tick ${tick} was never reached`)
     return { tick, hash }
+  })
+}
+
+/** The tick of the last frame of a bare segment-0 frame log (`replayLog`'s `frames`): where a
+ * native `engine::testing::replay::replay` stops, since a log has no representation of idle ticks
+ * after its last frame. */
+export function lastLoggedTick(frames: Uint8Array): number {
+  return lastFrameTick(frames, 0, 0)
+}
+
+export interface ReplayLogOptions {
+  wasm: WebAssembly.Module
+  /** `WorldConfig.params` of the world the frames were logged in (seed as decimal text, worldgen). */
+  params: WorldConfig['params']
+  /** Segment 0's frames, genesis onward, *without* the segment header (the bytes a native
+   * `engine::testing::replay::replay` takes). */
+  frames: Uint8Array
+  checkpoints: number[]
+}
+
+const LOG_WORLD_ID = 'golden-log'
+const LOG_BUILD_HASH = 'ab'.repeat(32)
+
+/** Segment 0's header bytes for a genesis-based world of `wasm` (`sim_segment_header`). */
+function segmentZeroHeader(wasm: WebAssembly.Module, params: WorldConfig['params']): Uint8Array {
+  const cfg = { worldId: LOG_WORLD_ID, buildHash: LOG_BUILD_HASH, params }
+  const inst = instantiate(wasm, Role.Sim, buildSimInstanceConfig(cfg))
+  const headerLen = inst.call2(inst.x.sim_segment_header, 0, GENESIS_BASE_TICK)
+  if (headerLen < 0) throw new Error(`replayLog: sim_segment_header failed: status ${-headerLen}`)
+  const region = inst.region(RegionId.Persist)
+  if (!region) throw new Error('replayLog: the Persist region is absent')
+  return region.u8.slice(0, headerLen)
+}
+
+/** A stored segment-0 log without its header: the frames a golden keeps (`replayLog`'s input). */
+export function segmentZeroFrames(
+  wasm: WebAssembly.Module,
+  params: WorldConfig['params'],
+  log: Uint8Array,
+): Uint8Array {
+  return log.slice(segmentZeroHeader(wasm, params).length)
+}
+
+/**
+ * M34b: `replayWorld` over a bare frame log (a checked-in golden), wrapped in a synthetic
+ * one-segment `MemoryStorage` -- a real segment-0 header prepended, since `replayWorld` expects
+ * every stored segment to begin with one. The same bytes and the same hashes as the native
+ * `engine::testing::replay::replay`; pure JS over `.wasm`, so it runs under Node, Bun and in a
+ * browser worker alike.
+ */
+export async function replayLog(opts: ReplayLogOptions): Promise<{ tick: number; hash: string }[]> {
+  const header = segmentZeroHeader(opts.wasm, opts.params)
+  const log = new Uint8Array(header.length + opts.frames.length)
+  log.set(header, 0)
+  log.set(opts.frames, header.length)
+  const identity = {
+    buildHash: LOG_BUILD_HASH,
+    engineVersion: '0.0.0',
+    gameVersion: '0.0.0',
+    schemaVersion: 0,
+    tickRateHz: 20,
+    worldgen: { version: 0, fingerprint: '0' },
+  }
+  const manifest: ManifestV1 = {
+    v: 1,
+    worldId: LOG_WORLD_ID,
+    epoch: 0,
+    params: opts.params,
+    created: identity,
+    segments: [{ index: 0, identity, base: 'genesis', sealed: false, tailReexecuted: false }],
+  }
+  const storage = memoryStorage()
+  const keys = worldKeys(LOG_WORLD_ID)
+  await storage.write(keys.manifest, new TextEncoder().encode(JSON.stringify(manifest)))
+  await storage.write(keys.log(0), log)
+  return replayWorld({
+    wasm: opts.wasm,
+    storage,
+    worldId: LOG_WORLD_ID,
+    checkpoints: opts.checkpoints,
   })
 }
 
