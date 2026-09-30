@@ -313,16 +313,16 @@ describe('handshake', () => {
       buildHash,
       params: { seed: '78', worldgen: null },
     }
-    let fire: (() => void) | null = null
+    const tick: { fire: (() => void) | null } = { fire: null }
     const server = createWorldServer(cfg, {
       wasm,
       storage: memoryStorage(),
       clock: { now: () => 0 },
       timer: {
         every: (_ms: number, cb: () => void) => {
-          fire = cb
+          tick.fire = cb
           return () => {
-            fire = null
+            tick.fire = null
           }
         },
       },
@@ -337,7 +337,9 @@ describe('handshake', () => {
       datagrams: false,
       onMessage: null,
       onClose: null,
-      send: (_cls, bytes, len) => into.push(bytes.slice(0, len)),
+      send: (_cls: MsgClass, bytes: Uint8Array, len?: number) => {
+        into.push(bytes.slice(0, len))
+      },
       close: () => {},
     })
 
@@ -351,9 +353,9 @@ describe('handshake', () => {
     const redial = fake(redialMessages)
     server.accept(redial) // reuses the first connection's `ConnId`
     redial.onMessage?.(hello) // hashing now
-    fire?.() // this tick shifts the stale entry off; the redial's entry is not resolved yet
+    tick.fire?.() // this tick shifts the stale entry off; the redial's entry is not resolved yet
     await serverInternals(server).handshakesSettled()
-    fire?.()
+    tick.fire?.()
 
     expect(redialMessages.length).toBeGreaterThanOrEqual(1)
     expect(parseWelcomePlayerId(redialMessages[0] as Uint8Array)).toBe(1)
