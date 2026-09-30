@@ -131,8 +131,12 @@ export function createBuildUi(client: Client, doc: Document = document): BuildUi
 
   function onUi(ui: RefUi): void {
     canBuild = ui.can_build
-    // Placed the last furnace: nothing left to place, leave construction mode.
-    if (placing && !canBuild) setPlacing(false)
+    // The last furnace was placed: `RefClient` has already ended construction mode itself, so
+    // follow it without emitting (an emit from a `Ui` callback lands between frames).
+    if (placing && !canBuild && !ui.placing) {
+      placing = false
+      hideConfirm()
+    }
     render()
   }
 

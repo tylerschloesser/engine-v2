@@ -7,7 +7,7 @@
 //! client frame, so neither allocates in steady state (`RefClient`'s own spring state is fixed-size
 //! fields, never a `Vec`).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use engine::client::input::kind as input_kind;
 use engine::client::{
@@ -236,7 +236,11 @@ pub struct RefClient {
     spawn: TileXY,
     /// M33: construction mode, switched by `content::local::PLACE_MODE` events (client-local: not
     /// sim state, not `input.setMode`, 0019 section 4). Read by `extract` (the ghost) and `ui`.
-    placing: bool,
+    ///
+    /// A `Cell`: `ui` (`&self`) also ends the mode when the last furnace item is gone, so the DOM
+    /// never has to emit an "off" from a `Ui` callback (that record is undrained until the next
+    /// frame, which a stepped test's `stepTick` waits on).
+    placing: Cell<bool>,
 }
 
 impl Default for RefClient {
@@ -247,7 +251,7 @@ impl Default for RefClient {
             initialized: false,
             tracked_range: RefCell::new(Vec::with_capacity(MAX_IN_RANGE)),
             spawn: TileXY::from_tile(nearest_land_tile(content::SEED, &RefParams::default())),
-            placing: false,
+            placing: Cell::new(false),
         }
     }
 }
@@ -264,20 +268,20 @@ impl RefClient {
             initialized: true,
             tracked_range: RefCell::new(Vec::with_capacity(MAX_IN_RANGE)),
             spawn: TileXY::from_tile(nearest_land_tile(content::SEED, &RefParams::default())),
-            placing: false,
+            placing: Cell::new(false),
         }
     }
 
     /// Whether construction mode is on (test-only accessor, like `spawn`).
     pub fn placing(&self) -> bool {
-        self.placing
+        self.placing.get()
     }
 
     /// Applies one client-local intent event (`FrameCx::input()`, kind `GAME`): `PLACE_MODE` sets
     /// construction mode from `a`. Split out of `frame` so a native test can drive it directly.
     pub fn apply_local(&mut self, ev: &engine::client::InputEvent) {
         if ev.kind == input_kind::GAME && ev.pick_id == content::local::PLACE_MODE {
-            self.placing = ev.tile[0] != 0;
+            self.placing.set(ev.tile[0] != 0);
         }
     }
 
@@ -399,7 +403,7 @@ impl ClientSide<RefGame> for RefClient {
         // tile (`ANCHOR_CURSOR_TILE`), so it tracks the pointer with no added latency; a quad's pos
         // is its centre, so a 2x2 footprint whose min corner is the cursor tile centres at (1, 1).
         // The colour is the same `can_place` the host runs, over the `View`.
-        if self.placing
+        if self.placing.get()
             && let Some(cursor) = view.cursor_tile()
         {
             let color = match crate::rules::place::can_place(view.world(), cursor) {
@@ -458,7 +462,6 @@ impl ClientSide<RefGame> for RefClient {
         out.crafting = None;
         out.recipes.clear();
         out.spawn = self.spawn;
-        out.placing = self.placing;
         out.can_build = false;
         if let Ok(player) = world.player(view.me()) {
             out.inventory = player.inventory;
@@ -468,6 +471,10 @@ impl ClientSide<RefGame> for RefClient {
             });
             out.unlocks = player.unlocks;
             out.can_build = player.inventory.get(content::ItemId::Furnace) > 0;
+            // Nothing left to place: construction mode ends here, in the client (see `placing`).
+            if !out.can_build {
+                self.placing.set(false);
+            }
             out.crafting = player.crafting.map(|c| UiCrafting {
                 recipe: c.recipe,
                 done_at: c.done_at.0,
@@ -488,6 +495,8 @@ impl ClientSide<RefGame> for RefClient {
                 });
             }
         }
+
+        out.placing = self.placing.get();
 
         let from = WorldPos {
             x: quantize_pos(self.spring_pos[0]),

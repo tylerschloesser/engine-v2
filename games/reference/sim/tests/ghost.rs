@@ -249,7 +249,7 @@ fn ui_reports_placing_and_can_build() {
     assert_eq!(ui_of(&c, 0), (false, false));
     assert_eq!(ui_of(&c, 2), (false, true));
     c.apply_local(&game_event(content::local::PLACE_MODE, 1));
-    assert_eq!(ui_of(&c, 0), (true, false));
+    assert_eq!(ui_of(&c, 1), (true, true));
 }
 
 /// One furnace sprite plus the ghost, hashed (a native byte-format golden, like
@@ -270,4 +270,56 @@ fn extract_hash_ghost_and_furnace() {
     assert_eq!(n, 4, "furnace sprite + ghost + player circle + ring");
     assert_eq!(found.len(), 1);
     assert_golden_hash!("extract_hash_ghost_and_furnace", hash);
+}
+
+fn cursor_view<'a>(
+    w: &'a World<'a>,
+    entities: &'a BTreeMap<EntityId, Furnace>,
+    registry: &'a Registry,
+    remote: &'a RemotePresences<RefGame>,
+) -> FrameView<'a, RefGame> {
+    FrameView::new(
+        w as &dyn WorldRead<RefGame>,
+        Default::default(),
+        PlayerId(1),
+        entities,
+        registry,
+        TileRect::new(TilePos::new(-10, -10), TilePos::new(10, 10)),
+        20.0,
+        40.0,
+        Some(TilePos::new(2, 2)),
+        TilePos::new(0, 0),
+        0.0,
+        reference_sim::PlayerPresence::default(),
+        remote,
+    )
+}
+
+/// Construction mode ends by itself once the inventory holds no furnace (no DOM "off" needed), and
+/// stays off for the next frame's ghost. Fails if `ui` leaves `placing` on with nothing to place.
+#[test]
+fn placing_ends_when_the_last_furnace_is_gone() {
+    let r = registry();
+    let none = BTreeMap::new();
+    let remote = RemotePresences::<RefGame>::new();
+    let c = placing_client();
+    let mut player = RefPlayer::default();
+    player.inventory.add(ItemId::Furnace, 1);
+    let mut w = World {
+        registry: &r,
+        tile: grass,
+        player,
+    };
+    let mut ui = RefUi::default();
+    c.ui(&cursor_view(&w, &none, &r, &remote), &mut ui);
+    assert!(ui.placing && c.placing(), "still has the item");
+    w.player = RefPlayer::default(); // the host took the item
+    c.ui(&cursor_view(&w, &none, &r, &remote), &mut ui);
+    assert!(!ui.placing && !c.placing(), "nothing left to place");
+    let mut out = DrawList::new();
+    out.begin_frame(TilePos::new(0, 0));
+    c.extract(&cursor_view(&w, &none, &r, &remote), &mut out);
+    let mut region = vec![0u8; REGION_BYTES];
+    let n = out.sort_into(&mut region, 0.0, None);
+    assert_eq!(n, 2, "circle + ring only, no ghost");
 }
