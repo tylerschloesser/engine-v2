@@ -40,6 +40,10 @@ pub trait WorldRead<G: Game> {
     fn entity(&self, id: EntityId) -> Result<Option<&G::Entity>, Unknown>;
     fn player(&self, who: PlayerId) -> Result<&G::Player, Unknown>;
     fn global(&self) -> &G::Global;
+    /// The engine roster (0024 §8): every known player and its online bit, ascending `PlayerId`.
+    /// A default that visits nothing; the replica and its views read their `Store`. Not predicted:
+    /// the bit changes only through `Delta::Roster`.
+    fn roster(&self, _f: &mut dyn FnMut(PlayerId, bool)) {}
     /// Every entity whose footprint intersects `rect`, ascending `EntityId`, visited once (0007
     /// §5, M21). A replica answers `Err(Unknown)` *before calling `f` at all* if `rect` touches a
     /// chunk it does not hold (docs/plan/21-entities-and-timers.md Scope); the host is always
@@ -148,6 +152,10 @@ impl<'a, G: Game> View<'a, G> {
 impl<G: Game> WorldRead<G> for View<'_, G> {
     fn tick(&self) -> Tick {
         self.tick
+    }
+
+    fn roster(&self, f: &mut dyn FnMut(PlayerId, bool)) {
+        self.store.roster(f);
     }
 
     fn tile(&self, p: TilePos) -> Result<Tile, Unknown> {

@@ -254,6 +254,27 @@ mod tests {
         )
     }
 
+    /// `FrameView::roster` lists every player the wire's roster names (not only this client's own
+    /// slot), ascending, and follows each `Delta::Roster` flip.
+    #[test]
+    fn frameview_roster_follows_delta() {
+        let mut r = replica();
+        let read = |r: &Replica<UGame>| {
+            let mut out = Vec::new();
+            view(r).roster(&mut |who, on| out.push((who.0, on)));
+            out
+        };
+        assert!(read(&r).is_empty());
+        r.apply_own_player(PlayerId(1), UPlayer);
+        r.apply_roster(PlayerId(3), true);
+        r.apply_roster(PlayerId(1), true);
+        assert_eq!(read(&r), vec![(1, true), (3, true)]);
+        r.apply_roster(PlayerId(3), false);
+        assert_eq!(read(&r), vec![(1, true), (3, false)]);
+        r.apply_roster(PlayerId(2), true);
+        assert_eq!(read(&r), vec![(1, true), (2, true), (3, false)]);
+    }
+
     #[test]
     fn ui_called_only_after_replica_change() {
         let r = replica();

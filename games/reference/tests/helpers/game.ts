@@ -49,6 +49,8 @@ export type RefUiState = {
     ingots_out: number
     smelt_done_at: number | null
   } | null
+  /** Every player in the engine roster (`Ui.roster`), ascending id. */
+  roster: Array<{ id: number; online: boolean; colour: [number, number, number]; me: boolean }>
 }
 
 /** A furnace sprite (`kind` 0) or the placement ghost (`kind` 6) from the newest DrawList. */

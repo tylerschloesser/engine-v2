@@ -31,6 +31,7 @@ import { createCollectUi } from './ui/collect.js'
 import { createCraftUi } from './ui/craft.js'
 import { createFurnaceUi } from './ui/furnace.js'
 import { createInventoryUi } from './ui/inventory.js'
+import { createRosterUi } from './ui/roster.js'
 
 export type StartGameOptions = {
   canvas: HTMLCanvasElement
@@ -109,6 +110,7 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
   // wiring beyond subscribing here.
   const collectUi = createCollectUi(client)
   const inventoryUi = createInventoryUi(document.body)
+  const rosterUi = createRosterUi(document.body)
   const craftUi = createCraftUi(client)
   const buildUi = createBuildUi(client)
   const furnaceUi = createFurnaceUi(client)
@@ -126,6 +128,7 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
   client.onUi<RefUi>((ui) => {
     collectUi.onUi(ui)
     inventoryUi.onUi(ui)
+    rosterUi.onUi(ui)
     craftUi.onUi(ui)
     buildUi.onUi(ui)
     furnaceUi.onUi(ui)

@@ -6,6 +6,7 @@ import type { UiCrafting } from "./UiCrafting.js";
 import type { UiFurnace } from "./UiFurnace.js";
 import type { UiInRange } from "./UiInRange.js";
 import type { UiRecipe } from "./UiRecipe.js";
+import type { UiRosterEntry } from "./UiRosterEntry.js";
 
 /**
  * `Ui { me, inventory, collecting, in_range, spawn }` (Scope, M20b steps 3 and 5). `me` is a raw
@@ -33,4 +34,8 @@ can_build: boolean,
 /**
  * M33b: the furnace whose panel is open (`RefClient::open`), `None` when none or it is gone.
  */
-furnace: UiFurnace | null, };
+furnace: UiFurnace | null, 
+/**
+ * M34: every player in the engine roster, ascending id, online or not.
+ */
+roster: Array<UiRosterEntry>, };

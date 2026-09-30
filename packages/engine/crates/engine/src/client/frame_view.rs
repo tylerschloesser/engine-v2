@@ -393,6 +393,12 @@ impl<'a, G: Game> FrameView<'a, G> {
         }
     }
 
+    /// The engine roster (0024 §8): every known player, online or not, with its online bit,
+    /// ascending `PlayerId`. Reads the replica's `Store`; follows `Delta::Roster` and `Delta::Player`.
+    pub fn roster(&self, f: &mut dyn FnMut(PlayerId, bool)) {
+        self.world.roster(f);
+    }
+
     /// Attaches the interpolation render time (host ticks) `presences()` samples at.
     pub fn with_render_time(mut self, render_t: f64) -> Self {
         self.render_t = Some(render_t);

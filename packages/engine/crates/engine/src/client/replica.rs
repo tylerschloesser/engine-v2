@@ -69,6 +69,10 @@ pub struct Replica<G: Game> {
     /// applied from the wire's `Presence` section (`apply_presence_sample`/`apply_presence_gone`),
     /// read by `FrameView::presences()`.
     remote_presences: RemotePresences<G>,
+    /// Every player's online bit from the wire's `Global` roster. The `Store` holds a slot only
+    /// for this client's own player (`Delta::Roster` for anyone else is a no-op there), so the
+    /// other players live here. Never encoded or hashed.
+    roster: BTreeMap<PlayerId, bool>,
     /// Reused across `entities_in` calls (`.claude/rules/hot-paths.md`): a `RefCell` since
     /// `WorldRead::entities_in` takes `&self`.
     entities_in_scratch: RefCell<Vec<EntityId>>,
@@ -127,6 +131,7 @@ impl<G: Game> Replica<G> {
             dirty: Vec::new(),
             tick: Tick(0),
             remote_presences: RemotePresences::new(),
+            roster: BTreeMap::new(),
             entities_in_scratch: RefCell::new(Vec::new()),
         }
     }
@@ -296,6 +301,7 @@ impl<G: Game> Replica<G> {
     }
 
     pub(crate) fn apply_roster(&mut self, who: PlayerId, online: bool) {
+        self.roster.insert(who, online);
         self.store.apply(&Delta::Roster { who, online });
     }
 
@@ -551,6 +557,12 @@ impl<G: Game> WorldRead<G> for Replica<G> {
 
     fn global(&self) -> &G::Global {
         self.store.global()
+    }
+
+    fn roster(&self, f: &mut dyn FnMut(PlayerId, bool)) {
+        for (who, online) in &self.roster {
+            f(*who, *online);
+        }
     }
 
     /// `Err(Unknown)` before calling `f` at all if `rect` touches a chunk this replica does not

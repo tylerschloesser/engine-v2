@@ -300,6 +300,13 @@ impl<G: Game> Store<G> {
         self.players.get(&who).ok_or(Unknown)
     }
 
+    /// Every player and its engine roster bit, ascending `PlayerId` (`FrameView::roster`).
+    pub fn roster(&self, f: &mut dyn FnMut(PlayerId, bool)) {
+        for (who, slot) in &self.players {
+            f(*who, slot.online);
+        }
+    }
+
     /// `TickCx::player_count` (M12b): the player table's size, for index-based iteration (Planning
     /// decisions of docs/plan/12b-world-access-and-sim-driver.md: "index-based so rules can write
     /// while iterating").

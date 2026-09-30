@@ -329,6 +329,18 @@ pub struct UiFurnace {
     pub smelt_done_at: Option<u32>,
 }
 
+/// One roster entry as `Ui.roster` shows it (M34): the engine roster joined with
+/// `RefGlobal::colours`. `colour` is the player's RGB (an unassigned player reads as
+/// `content::UNASSIGNED_COLOUR`), so the DOM needs no palette of its own.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, TS)]
+#[ts(export)]
+pub struct UiRosterEntry {
+    pub id: u32,
+    pub online: bool,
+    pub colour: [u8; 3],
+    pub me: bool,
+}
+
 /// `Ui { me, inventory, collecting, in_range, spawn }` (Scope, M20b steps 3 and 5). `me` is a raw
 /// `u32`, not `engine::game::PlayerId` (same reason as [`UiCollecting::done_at`]: `PlayerId` has no
 /// `TS` impl). `Default` reserves `in_range`'s capacity once ([`MAX_IN_RANGE`]); `RefClient::ui`
@@ -355,6 +367,8 @@ pub struct RefUi {
     pub can_build: bool,
     /// M33b: the furnace whose panel is open (`RefClient::open`), `None` when none or it is gone.
     pub furnace: Option<UiFurnace>,
+    /// M34: every player in the engine roster, ascending id, online or not.
+    pub roster: Vec<UiRosterEntry>,
 }
 
 impl Default for RefUi {
@@ -371,6 +385,7 @@ impl Default for RefUi {
             placing: false,
             can_build: false,
             furnace: None,
+            roster: Vec::with_capacity(content::MAX_PLAYERS),
         }
     }
 }

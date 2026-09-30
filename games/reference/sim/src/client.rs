@@ -21,7 +21,7 @@ use crate::rules::collect::in_range;
 use crate::worldgen::terrain_at;
 use crate::{
     Inventory, MAX_IN_RANGE, RefGame, RefParams, TileXY, UiCollecting, UiCrafting, UiFurnace,
-    UiInRange, UiRecipe, WorldXY, content,
+    UiInRange, UiRecipe, UiRosterEntry, WorldXY, content,
 };
 
 /// `Presence` sketch from `0001-camera-and-presence.md` (Decision, `Presence` code block),
@@ -618,6 +618,21 @@ impl ClientSide<RefGame> for RefClient {
         }
 
         out.placing = self.placing.get();
+
+        out.roster.clear();
+        let colours = world.global();
+        let me = view.me();
+        view.roster(&mut |who, online| {
+            if out.roster.len() < content::MAX_PLAYERS {
+                let c = content::colour_of(colours.colour(who));
+                out.roster.push(UiRosterEntry {
+                    id: who.0,
+                    online,
+                    colour: [c as u8, (c >> 8) as u8, (c >> 16) as u8],
+                    me: who == me,
+                });
+            }
+        });
 
         out.furnace = None;
         if let Some(open) = self.open {
