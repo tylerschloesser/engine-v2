@@ -86,12 +86,20 @@ async function edgeRun(seed: number, latencyMs: number, withEdge: boolean) {
     expect(spentStep, `${tag}: the item was spent`).toBeGreaterThan(0)
     expect(realStep - spentStep, `${tag}: draws() trails ui() by one step`).toBe(1)
     expect(probe.frames, tag).toBeGreaterThan(4)
-    // Declined at dispatch, once, and only that one; still sent, and the host confirms both.
+    // Declined at dispatch, each once: the edge placement (`Unknown`) and, by taint rule R1 (M25), the
+    // valid placement behind it; both still sent, and the host confirms both.
     const verdicts = seen.filter(([, res]) => res !== 'NotPredictable')
     expect(
       seen.filter(([, res]) => res === 'NotPredictable'),
       `${tag}: ${fmt(seen)}`,
-    ).toEqual(withEdge ? [[edge, 'NotPredictable']] : [])
+    ).toEqual(
+      withEdge
+        ? [
+            [edge, 'NotPredictable'],
+            [near, 'NotPredictable'],
+          ]
+        : [],
+    )
     expect(
       verdicts.sort((x, y) => x[0] - y[0]),
       tag,
@@ -119,16 +127,14 @@ test('reference_subscription_edge_not_predictable', async () => {
     expect(control.ghostSeries.every(Boolean), `${control.tag}: ${fmt(control.ghostSeries)}`).toBe(
       true,
     )
-    // With the declined action ahead of it, taint rule R1 (M25): the next frame's replay declines the
-    // later action too, so its ghost goes (and stays away until the verdict) although it is valid.
+    // With the declined action ahead of it, taint rule R1 (M25) declines the later action at dispatch:
+    // it is never predicted, so its ghost is never drawn although it is valid (no frame has to replay
+    // the queue first).
     expect(edge.framesWhilePending, edge.tag).toBeGreaterThan(0)
-    const gs = edge.ghostSeries
-    const firstOff = gs.indexOf(false)
-    expect(gs[0], `${edge.tag}: predicted at dispatch: ${fmt(gs)}`).toBe(true)
-    expect(firstOff, `${edge.tag}: tainted by the next replay: ${fmt(gs)}`).toBeGreaterThan(0)
+    expect(edge.ghostSeries.length, edge.tag).toBeGreaterThan(2)
     expect(
-      gs.slice(firstOff).every((g) => !g),
-      `${edge.tag}: ${fmt(gs)}`,
+      edge.ghostSeries.every((g) => !g),
+      `${edge.tag}: never ghosted: ${fmt(edge.ghostSeries)}`,
     ).toBe(true)
   }
 }, 60_000)

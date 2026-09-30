@@ -776,9 +776,11 @@ fn predict_taint_dependency() {
     );
     assert_eq!(
         st_b_at_dispatch,
-        Prediction::Rejected(Reject::NoFurnace),
-        "dispatch's own single predict is not taint-aware: only the next replay tapers it"
+        Prediction::NotPredictable,
+        "R1 at dispatch too (M34c step 7): B is declined at once, with no frame in between, instead of \
+         predicting a `Rejected(NoFurnace)` the host contradicts"
     );
+    assert_eq!(lb.overlay_len(idx), 0, "a tainted dispatch writes nothing");
 
     let (host_a, host_b, b_statuses) =
         run_to_ack_recording_second(&mut lb, idx, who_noise, seq_a, seq_b);
@@ -836,7 +838,11 @@ fn predict_taint_rollback_visibility() {
             count: 1,
         },
     );
-    assert_eq!(st_b_at_dispatch, Prediction::Rejected(Reject::NoFurnace));
+    assert_eq!(
+        st_b_at_dispatch,
+        Prediction::NotPredictable,
+        "R1 at dispatch too (M34c step 7): tainted behind A with no frame in between"
+    );
 
     let (host_a, host_b, b_statuses) =
         run_to_ack_recording_second(&mut lb, idx, who_noise, seq_a, seq_b);
@@ -880,10 +886,9 @@ fn predict_taint_independence() {
     let (seq_c, st_c_at_dispatch) = lb.dispatch(idx, Action::Place { origin: c_origin });
     assert_eq!(
         st_c_at_dispatch,
-        Prediction::Applied,
-        "C's own dispatch-time predict (untainted) shows what it merits on its own"
+        Prediction::NotPredictable,
+        "R1 at dispatch too (M34c step 7): C is a lost prediction from the first instant"
     );
-
     let (host_a, host_c, c_statuses) =
         run_to_ack_recording_second(&mut lb, idx, who_noise, seq_a, seq_c);
     assert!(host_a);
@@ -905,6 +910,24 @@ fn predict_taint_independence() {
     assert_eq!(
         lost, 4,
         "literal count for the shipped rule (R1), this seed/delay/noise schedule; see Deviations"
+    );
+
+    // What C merits on its own, provable without A ahead of it: a second client dispatching an
+    // equivalent placement (a free tile; the host has placed C's by now) predicts it.
+    let (idx2, _who2) = add_client(&mut lb, 4);
+    lb.set_camera(idx2, camera(10, 10));
+    lb.run(8);
+    let solo_origin = Pos { x: 8, y: 8 };
+    let (_seq_solo, st_solo) = lb.dispatch(
+        idx2,
+        Action::Place {
+            origin: solo_origin,
+        },
+    );
+    assert_eq!(
+        st_solo,
+        Prediction::Applied,
+        "a placement with nothing declined ahead of it is predicted"
     );
 }
 

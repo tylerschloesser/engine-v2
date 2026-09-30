@@ -369,13 +369,25 @@ impl<G: Game> ClientCore<G> {
         let predicted_tick = self.predicted_tick();
         let auth_tick_at_dispatch = self.replica.tick();
         let who = self.replica.own_player();
+        // Taint rule R1 (docs/plan/25-prediction-core.md; the replay loop in `on_frame` applies the
+        // same rule): while any pending action is `NotPredictable`, every later one is too, and it is
+        // still sent. Checked here as well, so a dispatch behind a declined action is declined at
+        // once (and reported once, by `GameInstance::on_action`) instead of being predicted until
+        // the next frame replays the queue (M34c step 7).
+        let tainted = self
+            .pending
+            .iter()
+            .any(|p| matches!(p.status, Prediction::NotPredictable));
         let ClientCore {
             replica, overlay, ..
         } = self;
         let registry = replica.registry();
         let base = &*replica as &dyn WorldRead<G>;
-        let status =
-            crate::predict::predict(base, registry, overlay, who, predicted_tick, seq, &action);
+        let status = if tainted {
+            Prediction::NotPredictable
+        } else {
+            crate::predict::predict(base, registry, overlay, who, predicted_tick, seq, &action)
+        };
         if matches!(status, Prediction::Applied) {
             self.predict_applied_ever = self.predict_applied_ever.saturating_add(1);
         }
@@ -1464,6 +1476,24 @@ mod tests {
         // Flushed and cleared: a third poll with nothing new due returns 0.
         let n3 = c.poll_uplink(15, &mut out);
         assert_eq!(n3, 0);
+    }
+
+    /// M34c step 7: taint rule R1 at dispatch. With a `NotPredictable` action pending, the next
+    /// dispatch is `NotPredictable` at once (no frame in between), is still queued and sent, and
+    /// writes nothing to the overlay.
+    #[test]
+    fn on_action_behind_a_declined_action_is_declined_at_dispatch() {
+        let mut c = client();
+        c.on_action(&action_record(1, r#"{"n":1}"#)).unwrap();
+        // `CGame` never declines, so mark the first pending action as declined the way a `predict`
+        // that stopped at an `Unknown` read leaves it.
+        c.pending.iter_mut().next().unwrap().status = Prediction::NotPredictable;
+        c.on_action(&action_record(2, r#"{"n":2}"#)).unwrap();
+        let second = c.pending().last().unwrap();
+        assert_eq!(second.seq, 2);
+        assert!(matches!(second.status, Prediction::NotPredictable));
+        let mut out = [0u8; 256];
+        assert!(c.poll_uplink(0, &mut out) > 0, "still sent");
     }
 
     #[test]
