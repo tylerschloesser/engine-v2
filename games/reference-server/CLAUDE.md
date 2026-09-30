@@ -3,7 +3,7 @@
 A deployable, game-agnostic multiplayer server (docs/plan/29-net-worker-and-reference-server.md):
 `ws` + `engine/server/node`'s Node adapter (`nodeHostServices`, `fsStorage`, `loadGame`,
 `attachWebSocketServer`), `createWorldServer`/`importWorld` (`engine/server`). Testable against any
-built game -- a fixture, or the reference game once it is multiplayer (M34) -- before either exists.
+built game: a fixture, or the reference game (multiplayer since M34).
 `index.mjs` is the whole entrypoint, plain Node (no build step): `node games/reference-server`
 resolves it via `package.json`'s `main`.
 
@@ -19,6 +19,8 @@ resolves it via `package.json`'s `main`.
   single-player-to-hosted path) -- always re-rooted under this process's own fixed world id.
 - `--exit-on-idle`: exits 0 once `HostServices.onIdle` fires (0013 "World lifecycle": 30 s after
   the last player leaves). Omitted, the process keeps running and re-ticks on the next join.
+
+`pnpm --filter reference-server start` = `node index.mjs --data .data` (gitignored), serving the reference game's release build (`pnpm --filter reference build` first). `--game` left at its default uses `games/reference/world.json` as the world (`null` params do not deserialize into `RefParams`); an explicit `--game` keeps seed `'1'`, `worldgen: null`.
 
 Env: `PORT` (default `4174`), `JOIN_KEY` (default `''`, 0013's join key).
 

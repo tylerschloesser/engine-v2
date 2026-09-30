@@ -6,7 +6,7 @@ contract.
 
 ## Quickstart
 
-Build a game bundle -- a fixture works before the reference game is multiplayer (M34):
+Build a game bundle -- a fixture works too:
 
 ```
 pnpm --filter engine build
@@ -23,11 +23,28 @@ Point a page's `createClient({ host: { kind: 'remote', url: 'ws://127.0.0.1:4174
 served through `pnpm device:serve --tunnel --ws`, `wsUrl(location)`); two tabs converge on the same
 world.
 
+## Play the reference game with a friend on the LAN
+
+Build the reference game (its release build is the server's default `--game`), start the server, and
+serve the page with the socket proxied onto its own origin:
+
+```
+pnpm --filter reference build
+pnpm --filter reference-server start          # ws://127.0.0.1:4174, world kept in games/reference-server/.data
+ENGINE_WS_PROXY_PORT=4174 pnpm --filter reference exec vite preview --host 0.0.0.0 --port 4173
+```
+
+Open `http://<your LAN address>:4173/#k=` on each device (the fragment is the invite: `k` is the join
+key, empty unless you start the server with `JOIN_KEY=...`, then `#k=<that key>`). Without a `#k=` the
+page plays a world of its own in that browser. To reach it from a phone over HTTPS, use
+[How to serve a page to the phone](../../docs/plan/device-checks.md#how-to-serve-a-page-to-the-phone)
+(`pnpm device:serve --tunnel --app reference --ws` starts the server and the proxy for you).
+
 ## Flags and environment
 
 | Flag/env | Meaning | Default |
 |---|---|---|
-| `--game <dir>` | `buildGame()` output directory | the reference game's release build |
+| `--game <dir>` | `buildGame()` output directory | the reference game's release build, with the world of `games/reference/world.json` (an explicit `--game` gets seed `'1'`, `null` params) |
 | `--data <dir>` | Where `fsStorage` persists the world | required |
 | `--import <archive>` | An exported world archive (`client.exportWorld()`) to import before start | none |
 | `--exit-on-idle` | Exit 0 once the world goes idle (0013: 30 s after the last player leaves) | off |

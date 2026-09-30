@@ -3,6 +3,9 @@
   "private": true,
   "type": "module",
   "main": "index.mjs",
+  "scripts": {
+    "start": "node index.mjs --data .data"
+  },
   "dependencies": {
     "engine": "workspace:*",
     "ws": "8.18.3"

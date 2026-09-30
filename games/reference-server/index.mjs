@@ -14,7 +14,8 @@ import { WebSocketServer } from 'ws'
 
 // The reference game's own release build (`games/reference/vite.config.ts`'s `engine()` plugin,
 // `profile: 'release'` by default under `vite build`) -- not yet multiplayer before M34, but a
-// real default all the same, so this stays game-agnostic without a required flag.
+// real default all the same, so this stays game-agnostic without a required flag. (Multiplayer since
+// M34.)
 const DEFAULT_GAME_DIR = fileURLToPath(
   new URL('../reference/sim/target/engine/release', import.meta.url),
 )
@@ -49,10 +50,19 @@ if (values.import) {
   await importWorld(storage, bytes, { worldId: WORLD_ID, overwrite: true })
 }
 
+// The reference game's one declared world (`games/reference/world.json`) when `--game` is left at
+// its default; an explicit `--game` (a fixture, `Params = ()`) keeps `{ seed: '1', worldgen: null }`:
+// `null` does not deserialize into the reference game's `RefParams` (a struct), which is why the
+// old default refused to start (`BadConfig`).
+const params =
+  values.game === DEFAULT_GAME_DIR
+    ? JSON.parse(await readFile(new URL('../reference/world.json', import.meta.url), 'utf8'))
+    : { seed: '1', worldgen: null }
+
 const worldCfg = {
   worldId: WORLD_ID,
   buildHash,
-  params: { seed: '1', worldgen: null },
+  params,
   joinKey,
 }
 
