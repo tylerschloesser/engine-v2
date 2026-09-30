@@ -1,6 +1,6 @@
 # M30d: Redials after a pre-`Welcome` drop hear nothing
 
-Status: not started · After: 31 · Tyler-dependent: no
+Status: done · After: 31 · Tyler-dependent: no
 
 Written by the orchestrator at the start of the session after M31 (2026-09-29). Same shape as M30c: an intermittent red on one test, so first find which side goes silent, then fix the function that does it. No test is weakened.
 
@@ -39,11 +39,11 @@ Other `mp/*` tests' timing, the ws harness (`net-harness.ts`), Chrome for Testin
 The test from Scope 3 (a new test or a tightened assertion in `mp.spec.ts`), each under 3 s: the `browser` suite has no headroom (38-39 s of 48 s quiet).
 
 ## Exit criteria
-- [ ] A failing run's diagnostic, pasted in Deviations, names the side and function that went silent.
-- [ ] The fix is in that function; reverting it makes a named test fail (both result lines pasted).
-- [ ] The single test passes 30/30 quiet and 30/30 under load, no hangs; one `repeat.mjs browser 15 --load 10` batch reported.
-- [ ] No timeout, retry count, deadline or budget was raised to get there.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] A failing run's diagnostic, pasted in Deviations, names the side and function that went silent.
+- [x] The fix is in that function; reverting it makes a named test fail (both result lines pasted).
+- [x] The single test passes 30/30 quiet and 30/30 under load, no hangs; one `repeat.mjs browser 15 --load 10` batch reported.
+- [x] No timeout, retry count, deadline or budget was raised to get there.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test browser -t hello-resent-after-pre-welcome-drop` · `pnpm test browser -t mp/` · the loops in Scope 1 and 4.
@@ -90,3 +90,12 @@ Base `791d009`; commits `91c3ef8` (step 1, diagnostic), `cc961b1` (step 2, fix +
 ### Process notes
 - I ran `git stash -- packages/engine/src/server.ts` once by reflex to show the revert, then `git stash pop` at once (stash list empty, tree identical); a rule breach, no lasting effect.
 - Two of my own loop scripts overlapped for a while (load reached ~190 with foreign load); killed, `pgrep -x yes` 0, port 4517 clear after each loop.
+
+### Gate (orchestrator)
+- `pnpm gate f29b743`: tree clean, 5 files, no goldens, no markers, +161/-13. No timeout, deadline, retry or budget in the diff; the new `handshakeTrace` is `null` in production and every call site is guarded.
+- Inject-fail-revert re-run by the orchestrator: restoring the index-captured write -> `netcode handshake hello-behind-a-shifted-entry-is-still-answered` fails `expected 0 to be greater than or equal to 1`; fixed -> `netcode pass 1 tests 0.8s/10s`.
+- The orchestrator's own repeat: `playwright test -g hello-resent-after-pre-welcome-drop --repeat-each 30`: 30 passed with `--workers 6` at load ~18, and 30 passed with `--workers 8` and 10 `yes` burners.
+- The `repeat.mjs browser` batch was 8 runs, not 15, because of the 10-minute Bash cap at load 100+. Its one failure (`storage_conformance_opfs @engines`) is not this test. Accepted as reported.
+- First full `pnpm test` at gate: `browser` red on `world/paced-session-lands-periodic-snapshots` (`snapKeys.length >= 3`), at 1-minute load 12 falling from a 15-minute load of 67 (the implementer's loops plus foreign load). The re-run a minute later passed: `browser pass 218 tests 34s/48s`. That test is not on the handshake path. First sighting, now in the ledger.
+- Residue for the ledger, predating this milestone: if `hashSecretHex` or `sessions.save()` rejects inside the `Hello` handler's `settle`, the slot is never filled and `resolveMyTurn` never runs. That blocks every later `Hello` the same way this defect did.
+
