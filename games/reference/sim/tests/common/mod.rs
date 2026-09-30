@@ -73,10 +73,45 @@ impl RefScenario {
         }
     }
 
+    /// Logs a `Disconnected` event for `who` (0004: connection events are logged records, so a
+    /// replay cancels the same collect at the same tick).
+    pub fn disconnect(&mut self, who: PlayerId) {
+        self.sim.step(
+            &[Record::Player {
+                who,
+                ev: PlayerEvent::Disconnected,
+            }],
+            &mut self.out,
+        );
+    }
+
+    /// Logs a `Connected` event for `who`.
+    pub fn connect(&mut self, who: PlayerId) {
+        self.sim.step(
+            &[Record::Player {
+                who,
+                ev: PlayerEvent::Connected,
+            }],
+            &mut self.out,
+        );
+    }
+
+    /// Grants `n` of `item` with a direct player put (native-test-only, like [`Self::set_tile`]:
+    /// not an action, not in the `.wasm`), so a test need not replay hundreds of collect ticks.
+    pub fn give(&mut self, who: PlayerId, item: reference_sim::content::ItemId, n: u32) {
+        let mut p = self.player(who);
+        p.inventory.add(item, n);
+        self.sim.authority_mut().put_player(who, p);
+    }
+
     pub fn step_ticks(&mut self, n: u32) {
         for _ in 0..n {
             self.sim.step(&[], &mut self.out);
         }
+    }
+
+    pub fn tick(&self) -> engine::time::Tick {
+        self.sim.authority().tick()
     }
 
     pub fn player(&self, who: PlayerId) -> RefPlayer {
