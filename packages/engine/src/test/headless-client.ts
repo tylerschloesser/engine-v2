@@ -138,6 +138,10 @@ export interface HeadlessClient {
   ui(): unknown
   /** `client_region_hash()`, 16-digit lowercase hex. */
   replicaHash(): string
+  /** `client_chunk_hash(cx, cy)`: FNV hash (16 hex digits) of a resident chunk's effective slab
+   * (pristine terrain plus replicated changes), or `null` when the chunk is not resident, which
+   * for a chunk in view means its pristine terrain has not been generated (docs/plan/33f). */
+  chunkHash(cx: number, cy: number): string | null
   /** This client's desync reports (docs/plan/31b-desync-hashes.md): `client_desync`. */
   desyncs(): DesyncLog
   /** Hash-all dumps completed since the last call (`client_desync_dump`): empty unless the host's
@@ -194,7 +198,9 @@ function noopScheduler(): Scheduler {
 
 export interface HeadlessClientOptions {
   wasm: WebAssembly.Module
-  game: { seed: string; worldgen: unknown }
+  /** Omitted for a remote-style client (the default of a real page, ADR 0042): the client and its
+   * generator take the world from `Welcome`. Given, they are configured at construction, as before. */
+  game?: { seed: string; worldgen: unknown }
   /** docs/plan/28-sessions-and-reconnect.md step 4: dials this client's own `Connection` --
    * `createLink`'s own `dial` (Seams). Called once immediately (the first join) and again on
    * every redial `createLink` itself decides to make (dead timer, probe, `HeadlessClient` never
@@ -238,24 +244,27 @@ function requireRegion(inst: EngineInstance, id: RegionId, what: string) {
 }
 
 export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClient {
-  const hexSeed = seedToHexU64(opts.game.seed)
+  const hexSeed = opts.game ? seedToHexU64(opts.game.seed) : undefined
   const clientConfig = {
     arenaBytes: CLIENT_ARENA_BYTES,
     game: {
-      seed: hexSeed,
-      params: opts.game.worldgen,
+      ...(opts.game ? { seed: hexSeed, params: opts.game.worldgen } : {}),
       secret: hexEncode(opts.secret),
       joinKey: opts.joinKey ?? '',
       buildHash: hexEncode(opts.buildHash),
     },
   }
-  const genConfig = {
-    arenaBytes: GEN_ARENA_BYTES,
-    game: { seed: hexSeed, params: opts.game.worldgen },
-  }
 
   const inst = instantiate(opts.wasm, Role.Client, clientConfig)
-  const genInst = instantiate(opts.wasm, Role.Gen, genConfig)
+  // The generator role is immutable after `engine_init`: built now when the world is known, else
+  // on the `Welcome` that configures the client (`ensureGen`, ADR 0042: the late spawn of a page).
+  let genInst: EngineInstance | null = null
+  let genOutRegion: ReturnType<EngineInstance['region']> = null
+  function buildGen(game: unknown): void {
+    genInst = instantiate(opts.wasm, Role.Gen, { arenaBytes: GEN_ARENA_BYTES, game })
+    genOutRegion = genInst.region(RegionId.GenOut)
+  }
+  if (opts.game) buildGen({ seed: hexSeed, params: opts.game.worldgen })
 
   const rx = requireRegion(inst, RegionId.Rx, 'Rx')
   const uiRegion = inst.region(RegionId.Ui)
@@ -263,7 +272,6 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
   const downlinkRegion = requireRegion(inst, RegionId.Downlink, 'Downlink')
   const txRegion = requireRegion(inst, RegionId.Tx, 'Tx')
   const genInRegion = inst.region(RegionId.GenIn)
-  const genOutRegion = genInst.region(RegionId.GenOut)
   const cameraRegion = requireRegion(inst, RegionId.Camera, 'Camera')
 
   // Only the two rings a real boundary crosses here (Deviations above): no `actionRing`/`uiRing`,
@@ -326,10 +334,19 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
       const status = inst.call2(inst.x.client_on_welcome, len, rttMs)
       if (status === Status.Ok) {
         attached = true
+        if (readU32LE(resultRegion.u8, 16) === 1) {
+          // This `Welcome` configured the client: build the generator from the world it took.
+          const len = inst.call0(inst.x.client_world_config)
+          if (len <= 0) throw new Error(`HeadlessClient: client_world_config failed: ${len}`)
+          buildGen(JSON.parse(decoder.decode(txRegion.u8.subarray(0, len))))
+        }
         ownPlayerId = readU32LE(resultRegion.u8, 0)
         const seqSeed = readU32LE(resultRegion.u8, 4)
         netPump.seedFromWelcome(seqSeed)
         return
+      }
+      if (status === Status.WorldMismatch) {
+        throw new Error('HeadlessClient: Welcome for a different world than this client joined')
       }
     }
   }
@@ -386,7 +403,7 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
   let seeded = false
 
   function pumpGenSync(): void {
-    if (!genOutRegion || !genInRegion || !resultRegion) return
+    if (!genInst || !genOutRegion || !genInRegion || !resultRegion) return
     for (;;) {
       const took = inst.call1(inst.x.gen_take, 0)
       if (took !== 1) break
@@ -545,6 +562,17 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
     },
     takeDesyncDumps() {
       return takeDesyncDumps(inst)
+    },
+    chunkHash(cx, cy) {
+      const status = inst.call2(inst.x.client_chunk_hash, cx, cy)
+      if (status === Status.NotCached) return null
+      if (status !== Status.Ok) {
+        throw new Error(`HeadlessClient.chunkHash(${cx}, ${cy}): status ${status}`)
+      }
+      let hex = ''
+      for (let i = 7; i >= 0; i--)
+        hex += (resultRegion.u8[i] as number).toString(16).padStart(2, '0')
+      return hex
     },
     corruptChunk(cx, cy) {
       const status = inst.call2(inst.x.client_corrupt_chunk, cx, cy)

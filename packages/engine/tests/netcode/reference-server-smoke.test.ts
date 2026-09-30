@@ -93,7 +93,6 @@ test('reference-server/smoke @slow', async () => {
 
   const client = createHeadlessClient({
     wasm,
-    game: { seed: '1', worldgen: null },
     dial: () => wsConnection(`ws://127.0.0.1:${port}`),
     secret: new Uint8Array(16).fill(0x11),
     buildHash: parseBuildHash32(buildHash),

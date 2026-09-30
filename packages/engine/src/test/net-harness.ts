@@ -348,6 +348,10 @@ export interface NetHarnessOptions {
    * (`12.5` = four frames per 50 ms tick) lets a client observe arrival times finer than a tick,
    * which the interpolation delay's jitter measurement needs; it must divide the tick. */
   clientFrameMs?: number
+  /** docs/plan/33f (ADR 0042): `true` configures every client at construction from the world's
+   * seed and params, the way a client with `test.game` was. Default `false`: a client takes them
+   * from `Welcome`, as a real page does. Only the test that compares the two paths sets it. */
+  clientsConfiguredAtInit?: boolean
   /** docs/plan/28-sessions-and-reconnect.md Seams: `createNetHarness({ secrets?, joinKey? })` --
    * explicit per-client identity secrets, in join order. A client past the end of this array (or
    * every client, if omitted) gets `deterministicSecret(seed, index)`. */
@@ -505,7 +509,6 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     // a reason) or names a mode itself.
     debugHashMode: opts.world?.debugHashMode ?? (opts.hashAll === false ? 'off' : 'all'),
   }
-  const gameWorldgen = worldCfg.params.worldgen
 
   const clock = createVirtualClock()
   // docs/plan/28b-reconnect-and-lifecycle.md step 2: `let`, not `const` -- `restartServer` (Seams)
@@ -749,7 +752,9 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       secretOverride ?? opts.secrets?.[linkIdx] ?? deterministicSecret(opts.seed, linkIdx)
     const client = createHeadlessClient({
       wasm,
-      game: { seed: worldCfg.params.seed, worldgen: gameWorldgen },
+      ...(opts.clientsConfiguredAtInit
+        ? { game: { seed: worldCfg.params.seed, worldgen: worldCfg.params.worldgen } }
+        : {}),
       // docs/plan/28b-reconnect-and-lifecycle.md step 3: `createLink`'s own `dial` -- reads the
       // current `clientSide` binding, which `HarnessLink.reconnect()` (below) reassigns to a
       // fresh conditioned end before `createLink`'s own next (0 ms-delayed) backoff attempt.

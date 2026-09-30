@@ -215,6 +215,7 @@ export const POST_SETUP_MESSAGE_TYPES: readonly string[] = [
   'world-op-error',
   'client-welcome',
   'client-resyncing',
+  'client-configured',
   'link',
 ]
 
@@ -268,6 +269,12 @@ export type ClientLifecycleMessage =
    * `onWelcome` dispatches this to `Client.onResyncing`'s own listener list rather than the camera
    * (there is no view-clamp change to forward: the world's own clamps do not move on a resync). */
   | { type: 'client-resyncing' }
+  /** docs/plan/33f (ADR 0042): posted once per client instance, on the `Welcome` that configured a
+   * remote client's world (`client_on_welcome`'s `configured` word is `1` exactly once). `config`
+   * is `client_world_config`'s JSON, `{"seed":"0x..","params":..}`: the `game` a gen worker's setup
+   * message carries. `client.ts` spawns the gen workers on it. Never sent for a client configured
+   * at `engine_init`'s own `game` (a local host, `test.game`). */
+  | { type: 'client-configured'; config: string }
 
 /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: main -> sim worker, parked-only (like
  * `TestCallMessage`, whose own doc comment gives the reason: a worker blocked in `Atomics.wait`

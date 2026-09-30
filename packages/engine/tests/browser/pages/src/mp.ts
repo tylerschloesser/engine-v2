@@ -8,7 +8,6 @@
 import type { Action } from '../../../../fixtures/puts/bindings/Action.ts'
 import type { Reject } from '../../../../fixtures/puts/bindings/Reject.ts'
 import { halfExtentTiles } from '../../../../src/camera/transform.ts'
-import { hexEncode, loadOrMintSecret } from '../../../../src/client/secret.ts'
 import type { Client, ClientOptions, LinkLogEntry, LinkState } from '../../../../src/client.ts'
 import { createClient, readInvite, wsUrl } from '../../../../src/client.ts'
 import { systemClock, systemScheduler } from '../../../../src/clock.ts'
@@ -114,38 +113,8 @@ const clientOptions: ClientOptions = {
   },
   genWorkers: 1,
   assets: { tiles: '/terrain/tiles.json' },
-  // Real bug found building this page, not fixed here (Deviations: out of this cut's own scope --
-  // an ABI/`client_on_welcome` change, not a `client.ts` wiring bug): a `{ kind: 'remote' }` host
-  // has no field carrying the client's own local-worldgen `seed`/`params` (unlike `local`'s own
-  // `host.world`), and `Welcome`'s own `seed`/`params` fields (0013's wire shape, `session::
-  // read_welcome`) are parsed but never actually applied to the client's local `Worldgen` state
-  // (`game_instance.rs`'s `client_on_welcome` reads only `player_id`/`epoch`/view clamps/etc from
-  // it) -- so a real remote client has no way to learn its own worldgen config at all today.
-  // `game: null` (this file's first cut) instantiated with `BadConfig`.
-  //
-  // Every pre-existing `{ kind: 'remote' }` fixture page in this repo (`gc-anchors.ts` and
-  // friends) works around the first gap with the `test.game` escape hatch -- but `options.test.
-  // game` *replaces* `client.ts`'s own computed `clientGame` outright (its own short-circuit,
-  // `options.test?.game ?? (linked && game ? {...} : game)`), which for a *linked* client also
-  // carries `secret`/`joinKey`/`buildHash` (`hexEncode(loadOrMintSecret())`, `options.host.
-  // joinKey`, `options.wasm.buildHash`) -- fields none of those existing pages ever needed, since
-  // their own `url: 'ws://unused.invalid'` never dials for real. **Second real bug, found live
-  // (`mp/reveal-waits-for-visible-chunks` navigating unexpectedly mid-test): naively reusing that
-  // same `test.game` shape here silently sent a real socket a `Hello` with an empty secret and
-  // build hash, which the real server correctly rejected as `VersionMismatch` -- indistinguishable
-  // from `mp/version-mismatch-reloads-once`'s own deliberate scenario, except unintentional.**
-  // Fixed by building the full shape by hand instead of only `{ seed, params }`, mirroring
-  // `client.ts`'s own computation exactly (`fx-puts`'s `FlatWorldgen` takes no params, so `null`
-  // is exact; the seed matches `startTestServer`'s own default world).
-  test: {
-    game: {
-      seed: '0x1',
-      params: null,
-      secret: hexEncode(loadOrMintSecret()),
-      joinKey: readInvite(location).joinKey ?? '',
-      buildHash: clientBuildHash,
-    },
-  },
+  // No `test.game`: the client and its gen workers take the world's seed and params from
+  // `Welcome` (ADR 0042, docs/plan/33f).
 }
 // `mp/coep-worker-error-message` (Scope: "unchanged from M06, just needs to still pass on the new
 // page"): pattern B (0017 §3) points every spawned worker at the built worker chunk served with

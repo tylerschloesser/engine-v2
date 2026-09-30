@@ -86,6 +86,14 @@ export type NetPumpHandshake = {
    * `RingConnection` link, which has no net worker and so never writes that word at all -- gating
    * on it there would block `Hello` forever. */
   remoteLinked?: boolean
+  /** docs/plan/33f: called once, synchronously, on the one `client_on_welcome` that configured
+   * this client's world (the `u32` at offset 16 of its `Result`, `1` exactly once per client
+   * instance), before `onAttached`. The caller reads `client_world_config` and tells main. */
+  onConfigured?: () => void
+  /** docs/plan/33f: `client_on_welcome` answered `Status.WorldMismatch` (a `Welcome` for another
+   * world than the one this client was configured from). Nothing was applied; the caller ends the
+   * worker with a fatal a page can tell from a trap. */
+  onWorldMismatch?: () => void
 }
 
 /** `net/link.ts`'s own `LinkState.Up = 1`, mirrored the same numeric-parity way `sab/control.ts`'s
@@ -209,8 +217,13 @@ export function createNetPump(
       if (len < 0) return
       const rttMs = Math.max(0, hs.clock.now() - helloSentAtMs)
       const status = inst.call2(inst.x.client_on_welcome, len, rttMs)
+      if (status === Status.WorldMismatch) {
+        hs.onWorldMismatch?.()
+        return
+      }
       if (status !== Status.Ok) continue // garbage/malformed before Welcome: drop, keep draining
       attached = true
+      if (readU32LE(result.u8, 16) === 1) hs.onConfigured?.()
       const playerId = readU32LE(result.u8, 0)
       const seqSeed = readU32LE(result.u8, 4)
       const viewMaxTilesPerAxis = readU32LE(result.u8, 8)
@@ -265,6 +278,7 @@ export function createNetPump(
             // trip to measure -- `0`, the same "no measurement available" value a caller with no
             // `handshake.clock` already gets from `seedFromWelcome`'s own call sites.
             const status = inst.call2(inst.x.client_on_welcome, len, 0)
+            if (status === Status.WorldMismatch) handshake?.onWorldMismatch?.()
             if (status === Status.Ok) {
               // "proceeds as after a join" (Scope): the same terminal state a plain join's own
               // `Welcome` lands in, `seqSeed` deliberately untouched (Scope: "Main's `seq` counter

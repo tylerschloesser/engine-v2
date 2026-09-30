@@ -150,6 +150,27 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
           // own doc comment) -- absent for a `local` host, unchanged from before this milestone
           // (`exactOptionalPropertyTypes`: omitted, not `undefined`, when unset).
           ...(message.remoteLinked ? { remoteLinked: true as const } : {}),
+          // docs/plan/33f (ADR 0042): the one `Welcome` that configured this client's world.
+          // Once per instance (the wasm side reports it once), so this is not a steady-state
+          // message: it carries the config main needs to spawn the gen workers late.
+          onConfigured: () => {
+            const len = inst.call0(inst.x.client_world_config)
+            const txRegion = inst.region(RegionId.Tx)
+            if (len <= 0 || !txRegion) {
+              shell.fatal(`client worker: client_world_config failed: ${len}`)
+              return
+            }
+            shell.post({
+              type: 'client-configured',
+              config: new TextDecoder().decode(txRegion.u8.subarray(0, len)),
+            })
+          },
+          // A `Welcome` for another world than the one this client took from its first one
+          // (0013: one world per server). Ends this worker; `client.ts` surfaces the prefix as
+          // `onLink` `rejected` / `WorldMismatch`. No reload policy (ADR 0042).
+          onWorldMismatch: () => {
+            shell.fatal('WorldMismatch: a Welcome for a different world than this client joined')
+          },
           onAttached: (info) => {
             shell.post({
               type: 'client-welcome',

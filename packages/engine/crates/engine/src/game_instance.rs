@@ -803,6 +803,11 @@ where
                 // uploader nor any `ClientSide` call runs: no gen job, no `Ui` record. A branch on
                 // a field, no allocation (`.claude/rules/hot-paths.md`).
                 if c.world.is_none() {
+                    // The camera report is the one thing that is not seed-dependent: keeping it
+                    // flowing means the first report goes out on the tick after `Welcome`, as it
+                    // did before this milestone, not a frame later (`counters-exact`).
+                    c.core
+                        .set_camera(camera.to_report(), camera.frame_time_ms as u32);
                     c.drawlist.begin_frame(TilePos::new(0, 0));
                     // SAFETY: see `ClientInstance::drawlist_region`'s doc comment.
                     let region = unsafe {

@@ -44,6 +44,7 @@ export {
   stepTick,
   styleWrites,
   type TestCallResult,
+  untilConfigured,
   untilQuiescent,
   worldHash,
 } from './test/client.js'

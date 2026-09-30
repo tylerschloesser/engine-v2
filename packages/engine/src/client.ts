@@ -121,7 +121,7 @@ export type LinkState =
   | 'superseded'
   | 'rejected'
 /** `Client.onLink`'s own `reason`, set only for `state: 'rejected'`. */
-export type LinkReason = 'BadKey' | 'Full'
+export type LinkReason = 'BadKey' | 'Full' | 'WorldMismatch'
 
 /** `Client.debug.linkLog()`'s own entry shape (docs/plan/29-net-worker-and-reference-server.md
  * Scope, `mp.html?linklog=1`'s own on-page log columns, reused by M38's hosted log): `event` --
@@ -580,6 +580,12 @@ export interface ClientTestHandle {
    * worker setup it is waiting for (measured: an 11.28 s spin ending exactly when every worker's
    * `engine_init ok` finally logged, immediately after the spin gave up and yielded the thread). */
   readonly workersReady: Promise<void>
+  /** docs/plan/33f (ADR 0042): resolves once the gen workers exist and have posted `ready`. For a
+   * client whose world is known at start (a local host, `test.game`) that is `workersReady`'s own
+   * moment; for a remote client without `test.game` it is after the first `Welcome` configured the
+   * client and main spawned them. Never resolves if no `Welcome` arrives or the client is
+   * destroyed first: `engine/test`'s `untilConfigured` bounds the wait. */
+  readonly genWorkersUp: Promise<void>
   /** Coordinator gate, M16b cut 2: `pollActionResults`'s own running totals -- `recordsSeen` is
    * how many kind-1 records this drain has ever popped off `uiRing` (before coalescing), `onUi` is
    * how many times any `onUi` listener has ever fired. Never reset for the life of this `Client`;
@@ -808,6 +814,9 @@ function setupWorker(
    * `onLifecycle`/`onWorldOp`/`onWelcome` -- a real reconnect can happen years into a session, long
    * after `ready` settled. Only the `net` worker ever posts one. */
   onLink: (m: NetLinkMessage) => void,
+  /** docs/plan/33f: a `fatal` posted after `ready` settled whose message names a world mismatch
+   * (`worker/client.ts`'s `onWorldMismatch`); every other late `fatal` stays ignored here. */
+  onWorldMismatch: () => void,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false
@@ -828,7 +837,10 @@ function setupWorker(
         settled = true
         resolve()
       } else if (m.type === 'fatal') {
-        if (settled) return
+        if (settled) {
+          if (m.message.startsWith('WorldMismatch')) onWorldMismatch()
+          return
+        }
         settled = true
         const code = m.message.includes('ABI mismatch') ? 'abi-mismatch' : 'worker-fatal'
         reject(new EngineStartError(code, m.message))
@@ -857,7 +869,11 @@ function setupWorker(
         m.type === 'world-op-error'
       ) {
         onWorldOp(m)
-      } else if (m.type === 'client-welcome' || m.type === 'client-resyncing') {
+      } else if (
+        m.type === 'client-welcome' ||
+        m.type === 'client-resyncing' ||
+        m.type === 'client-configured'
+      ) {
         // Real bug found (Deviations): this used to check only `'client-welcome'`, so a linked
         // client worker's own `client-resyncing` message (M28b, `worker/client-net.ts`'s
         // `onResyncing` callback) was posted but never dispatched anywhere -- `client.onResyncing`
@@ -1625,6 +1641,10 @@ export function createClient(options: ClientOptions): Client {
       for (const l of resyncingListeners) l()
       return
     }
+    if (m.type === 'client-configured') {
+      spawnGenLate(m.config)
+      return
+    }
     cameraIntegrator.setViewClamp(m.viewMaxTilesPerAxis)
   }
 
@@ -1874,6 +1894,7 @@ export function createClient(options: ClientOptions): Client {
   }
 
   function destroy(): void {
+    destroyed = true
     Atomics.store(control.words, CB_LIFECYCLE, Lifecycle.Stopping)
     for (const w of workers) {
       Atomics.store(control.words, workerWord(w.index, W_YIELD), 1)
@@ -1903,6 +1924,40 @@ export function createClient(options: ClientOptions): Client {
    * otherwise be clobbered. */
   function setFlags(mask: number): void {
     Atomics.or(control.words, CB_FLAGS, mask)
+  }
+
+  type Spawn = { kind: WorkerKind; index: number; arenaBytes: number }
+  let spawnOne: (sp: Spawn, game?: unknown) => Promise<void> = () => Promise.resolve()
+  let compiledModule: WebAssembly.Module | undefined
+  let lateGenSpawns: Spawn[] | null = null
+  let genSpawned = false
+  let destroyed = false
+  let resolveGenUp: () => void = () => {}
+  const genUp = new Promise<void>((resolve) => {
+    resolveGenUp = resolve
+  })
+
+  /** docs/plan/33f: spawns the gen workers of a remote client, once, from the JSON the client
+   * worker posted on the `Welcome` that configured it. A reconnect's `Welcome` never posts one
+   * (the configured word is 0), and `genSpawned` makes a duplicate harmless anyway. A `Welcome`
+   * that lands after `destroy()` spawns nothing. */
+  function spawnGenLate(config: string): void {
+    if (genSpawned || destroyed || lateGenSpawns === null) return
+    genSpawned = true
+    let game: unknown
+    try {
+      game = JSON.parse(config)
+    } catch {
+      return
+    }
+    void Promise.all(lateGenSpawns.map((sp) => spawnOne(sp, game))).then(resolveGenUp)
+  }
+
+  /** `Status.WorldMismatch` reached the page (`worker/client.ts`): `onLink` `rejected`, reason
+   * `WorldMismatch`. No reload policy (ADR 0042): the version-mismatch reload is keyed on the
+   * build hash, which says nothing about a changed world. */
+  function onWorldMismatch(): void {
+    emitLink({ state: 'rejected', reason: 'WorldMismatch' })
   }
 
   async function start(): Promise<void> {
@@ -1960,9 +2015,11 @@ export function createClient(options: ClientOptions): Client {
     // source for a remote host; `worldConfig?.joinKey` stays the source for local.
     const clientGame =
       options.test?.game ??
-      (linked && game
+      (linked
         ? {
-            ...game,
+            // A remote client with no `test.game` has no `game` here: its config carries neither
+            // `seed` nor `params` and it starts unconfigured until `Welcome` (docs/plan/33f).
+            ...(game ?? {}),
             secret: hexEncode(loadOrMintSecret()),
             joinKey:
               options.host.kind === 'local'
@@ -1972,31 +2029,45 @@ export function createClient(options: ClientOptions): Client {
           }
         : game)
 
-    type Spawn = { kind: WorkerKind; index: number; arenaBytes: number }
+    // docs/plan/33f (ADR 0042): a remote client with no `test.game` knows no world yet, so it
+    // spawns no gen workers here (they would fail `engine_init` with `BadConfig`); `spawnGenLate`
+    // spawns them, once, from the config the client worker reports after the first `Welcome`.
+    const lateGen = options.host.kind === 'remote' && options.test?.game === undefined
+    const genIndices = [WORKER_GEN0, WORKER_GEN1]
+    const genSpawns: Spawn[] = []
+    for (let i = 0; i < genWorkers; i++) {
+      genSpawns.push({ kind: 'gen', index: genIndices[i] as number, arenaBytes: arenas.gen })
+    }
     const spawns: Spawn[] = [{ kind: 'client', index: WORKER_CLIENT, arenaBytes: arenas.client }]
     spawns.push(
       options.host.kind === 'local'
         ? { kind: 'sim', index: WORKER_HOST, arenaBytes: arenas.sim }
         : { kind: 'net', index: WORKER_HOST, arenaBytes: 0 },
     )
-    const genIndices = [WORKER_GEN0, WORKER_GEN1]
-    for (let i = 0; i < genWorkers; i++) {
-      spawns.push({ kind: 'gen', index: genIndices[i] as number, arenaBytes: arenas.gen })
-    }
+    if (!lateGen) spawns.push(...genSpawns)
+    compiledModule = module
+    lateGenSpawns = lateGen ? genSpawns : null
 
     // Orchestrator ruling 1 (Planning decisions): a topology fact, carried identically to the
     // `sim` and `client` setup messages, never to `gen`/`net` (`linked` itself is computed once,
     // above `start()`, so this and `ready`'s own extended meaning cannot drift apart).
-    const waits = spawns.map(({ kind, index, arenaBytes }) => {
+    spawnOne = ({ kind, index, arenaBytes }, gameForKind) => {
       const worker = spawnWorker(options)
       workers.push({ kind, index, worker })
       const config: InstanceConfig = {
         arenaBytes,
-        game: kind === 'sim' ? simGame : kind === 'client' ? clientGame : game,
+        game:
+          gameForKind !== undefined
+            ? gameForKind
+            : kind === 'sim'
+              ? simGame
+              : kind === 'client'
+                ? clientGame
+                : game,
       }
       const wasm: { module?: WebAssembly.Module; url?: string } = {}
       if (kind !== 'net') {
-        if (module) wasm.module = module
+        if (compiledModule) wasm.module = compiledModule
         else wasm.url = options.wasm.url
       }
       const link = linked && (kind === 'sim' || kind === 'client')
@@ -2038,9 +2109,11 @@ export function createClient(options: ClientOptions): Client {
         onWorldOp,
         onWelcome,
         handleNetLink,
+        onWorldMismatch,
       )
-    })
-    await Promise.all(waits)
+    }
+    await Promise.all(spawns.map((sp) => spawnOne(sp)))
+    if (!lateGen) resolveGenUp()
   }
 
   // Captured separately from `ready` itself (below), and exposed on `ClientTestHandle` as
@@ -2106,6 +2179,7 @@ export function createClient(options: ClientOptions): Client {
     overlay,
     writeActionRecord,
     workersReady: workersUp,
+    genWorkersUp: genUp,
     uiDrainStats: () => ({ recordsSeen: uiRecordsSeenTotal, onUi: onUiFiredTotal }),
     hostWorkerLock,
   })

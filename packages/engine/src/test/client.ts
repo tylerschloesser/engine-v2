@@ -253,6 +253,36 @@ function allEqual(h: ClientTestHandle, field: number, want: number): boolean {
   return true
 }
 
+/**
+ * Resolves once a remote client is configured from its first `Welcome` and its gen workers exist
+ * and have posted `ready` (docs/plan/33f, ADR 0042; M34's two-page tests call this before parking
+ * or measuring). Awaits `workersReady` first, then `ClientTestHandle.genWorkersUp`, and rejects
+ * after `POLL_TIMEOUT_MS` when no `Welcome` ever arrives (a bad join key, no server): never hangs.
+ * For a client whose world is known at start it is `workersReady`. Call it *before* `parkWorkers`:
+ * a gen worker spawned while the others are parked is not parked.
+ */
+export async function untilConfigured(client: Client): Promise<void> {
+  const h = clientTestHandle(client)
+  await h.workersReady
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new Error(
+            `untilConfigured: no Welcome configured the client within ${POLL_TIMEOUT_MS} ms (gen workers not spawned)`,
+          ),
+        ),
+      POLL_TIMEOUT_MS,
+    )
+  })
+  try {
+    await Promise.race([h.genWorkersUp, timeout])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /** Parks every spawned worker: `W_YIELD = 1` then a wake, polling `W_PARKED` (main never blocks on
  * a `SharedArrayBuffer`, so this is a macrotask poll, not `Atomics.wait`). */
 export function parkWorkers(client: Client): Promise<void> {
