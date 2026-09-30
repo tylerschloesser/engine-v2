@@ -1,9 +1,6 @@
 # games/reference
 
-The reference game (`docs/spec/reference-game.md`): a private Vite app plus `sim/`, a game crate on
-the engine's `Game` trait (`docs/decisions/0003-game-facing-api.md`). World/terrain/collect rules:
-`docs/plan/20-reference-game-v0.md`; players, presence and the DOM overlay: `20b-reference-player-
-and-collect-ui.md`.
+The reference game (`docs/spec/reference-game.md`): a private Vite app plus `sim/`, a game crate on the engine's `Game` trait (`docs/decisions/0003-game-facing-api.md`). Rules: `docs/plan/20-reference-game-v0.md` (world, collect), `20b-reference-player-and-collect-ui.md` (players, overlay), `32-reference-crafting.md` (craft).
 
 ## Commands
 
@@ -50,17 +47,12 @@ safe on every topology, `gc-entry.ts`'s own connected one included -- `untilQuie
 waits on `uploadRing`, a page's own job to drain). `tests/helpers/game.ts`'s
 `panTo`/`uiState`/`clickCollect`/`pumpUntil` poll a real `uiState` condition, never a fixed count.
 
-## Adding an item or recipe (M32)
-
-- Item: add an `ItemId` variant and bump `ITEM_COUNT` (`content.rs`; the slot is `Inventory`'s array index), append its label to `ITEM_LABELS` (`src/ui/inventory.ts`) and `ITEM` (`tests/helpers/game.ts`), bump `SCHEMA_VERSION`.
-- Recipe: append a `Recipe` to `RECIPES` (cost, `secs`, `unlock_stone_mined`; its index is its id and its `unlocks` bit) and a name to `RECIPE_NAMES` (`src/ui/craft.ts`); `apply`/`tick`/`ui()` iterate the table, nothing else to wire.
-- Native tests reach a state with `RefScenario::give` (direct put, never an action); browser tests play with `collectN`.
-
 ## Conventions
 
 - `TEST_SEED` (`sim/tests/common/mod.rs`) aliases `content::SEED`, also `src/main.ts`'s own world
   seed (a string literal there); `RefScenario` is the shared native test harness.
 - A resource id doubles as its own "full" depletion-stage visual id; `tile_visual` adds a stage
   offset from `aux`. Three stage buckets only (10/10 -> 7/10 is still "full").
+- Adding an item (M32): `ItemId` variant + `ITEM_COUNT` (`content.rs`), `ITEM_LABELS` (`src/ui/inventory.ts`), `ITEM` (`tests/helpers/game.ts`), bump `SCHEMA_VERSION`. A recipe: append to `RECIPES` (index = id = `unlocks` bit) and `RECIPE_NAMES` (`src/ui/craft.ts`). Tests reach states with `RefScenario::give` (native, never an action) or `collectN` (browser).
 - Depends on `engine` alone (`reference_package_depends_only_on_engine`): never import across the
   package boundary from `packages/engine/tests/**`, even in `tests/`.

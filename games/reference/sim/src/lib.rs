@@ -303,8 +303,10 @@ impl Game for RefGame {
             // A disconnected player's collect is cancelled (position is presence and goes stale);
             // their craft keeps running (0013 "A disconnected player's state"). One put.
             PlayerEvent::Disconnected => {
-                if let Ok(&p) = w.player(who) {
-                    if p.collecting.is_some() {
+                if let Ok(&p) = w.player(who)
+                    && p.collecting.is_some()
+                {
+                    {
                         w.put_player(
                             who,
                             RefPlayer {

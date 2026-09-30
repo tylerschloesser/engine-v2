@@ -70,4 +70,14 @@ None new. The browser test steps about 300 ticks; it must stay under the 3 s p95
 None.
 
 ## Deviations
-(filled in during Phase 3)
+Steps 1-5 done. Base `3792287`.
+
+**Seams.** `content::{ItemId (Stone=0,Iron=1,Wood=2,Coal=3,Furnace=4,Ingot=5), ITEM_COUNT=6, Recipe{output,cost,secs,unlock_stone_mined}, RECIPES:[Recipe;1], RECIPE_FURNACE=0}`; `Recipe::ticks(rate)`. `Inventory(pub [u32;6])` (`get/add/add_resource`; TS `[number x6]`, replaces the named-field struct, so `ui.inventory.stone` became `inventory[ITEM.stone]`). `RefPlayer{.., unlocks:u32, crafting:Option<Crafting{recipe:u8,done_at:Tick}>}`. `RefAction::StartCraft{recipe:u8}`; `RefReject` gained `UnknownRecipe, Locked, Unaffordable` (already-crafting is `Busy`). `RefUi` gained `unlocks, crafting:Option<UiCrafting>, recipes:Vec<UiRecipe{recipe,cost:Inventory,secs,affordable}>`. `rules::craft::{start, affordable, update_unlocks, complete_due}`; `SCHEMA_VERSION` 2. `RefScenario::{give, disconnect, connect, tick}`; browser `collectN(page, 'stone'|'iron'|'wood', n)` (coal has no scouted tile), `ITEM`, `RESOURCE_TILE`. Collect and craft completion share one scan in `collect::tick` (one put per player per tick).
+
+**Differences.** Step 3 has no code of its own (on_player landed in step 1-2): empty commit. `replay_equals_live_hash` is extended as a new test `replay_equals_live_hash_with_craft` (craft.rs), the old one untouched. Extra test `craft_rejected_when_locked` also covers `UnknownRecipe`. Existing tests `collect.rs`/`ui.rs` only changed their inventory accessor (`.iron` -> `.get(ItemId::Iron)`), assertions unchanged. No golden moved: none regenerated. `rejected_craft_wrote_nothing` compares against a twin that dispatched a no-write `CancelCollect` (the hash covers per-action bookkeeping, so a bare tick twin differs). Craft completes exactly `secs*rate` ticks after the dispatch step (native); the browser test adds +1 for host T+1 queuing. games/reference/CLAUDE.md was at its 60-line cap: the item/recipe note is one Conventions bullet and the header paragraph was reflowed.
+
+**Measured.** `reference_craft_flow` 2.3s including page start (`browser pass 1 tests 2.3s/48s`); full browser 38s/48s. Repeated `-t reference`: 21 passed x3 (7.4s). Machine load average ~12 (foreign sessions): one full-suite run saw `reference_player_circle_lags_and_settles` fail and `unit` 3.1-3.2s/3s (no unit tests added); both pass alone (3x).
+
+**Mutation checks (inject, fail, revert by hand).** craft.rs writes before validating: `rejected_craft_wrote_nothing` FAIL (4 failed of 11); collect.rs unlock line removed: `unlock_on_threshold_stone_not_before` FAIL (+5 others); on_player also clears `crafting`: `disconnect_cancels_collect_keeps_craft` FAIL (1 of 11); reverted: 11 passed. Browser: `root.hidden = false` made `reference_craft_flow` FAIL (first attempt passed because an empty menu is 'hidden' to Playwright; fixed to assert the `hidden` attribute).
+
+**By hand.** playwright-cli on `pnpm --filter reference dev` (index.html, real time, one page, no reload): `.craft-menu` `{"hidden":true,"buttons":0}` before and after 1-4 stone, `{"hidden":false,"buttons":1}` after the 5th.
