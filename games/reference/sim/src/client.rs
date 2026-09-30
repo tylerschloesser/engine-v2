@@ -57,8 +57,6 @@ const SPRING_OMEGA: f64 = 6.0;
 /// number given, so a value that reads clearly at the default zoom is chosen here).
 const PLAYER_DIAMETER_TILES: f32 = 0.6;
 
-/// Opaque green-ish player colour (via `rgba`, arbitrary -- Requirements name no colour).
-const PLAYER_COLOR: u32 = rgba(0x40, 0xc0, 0x40, 0xff);
 /// A faint ring colour (translucent, low alpha) so the range indicator reads as a hint, not a
 /// second solid shape.
 const RANGE_RING_COLOR: u32 = rgba(0x40, 0xc0, 0x40, 0x60);
@@ -547,6 +545,19 @@ impl ClientSide<RefGame> for RefClient {
         if px_per_tile > 0.0 && PLAYER_DIAMETER_TILES * px_per_tile < MIN_VISIBLE_PX {
             return;
         }
+        // Remote players first (no range ring: the ring is the own player's collect range), each in
+        // its own colour at the interpolated position, faded by `alpha` (0012 "Remote motion").
+        let colours = view.world().global();
+        view.presences(&mut |p| {
+            let c = content::colour_of(colours.colour(p.who));
+            let a = (p.alpha.clamp(0.0, 1.0) * 255.0).round() as u32;
+            out.circle(
+                LAYER_PLAYER,
+                p.pos,
+                [PLAYER_DIAMETER_TILES, PLAYER_DIAMETER_TILES],
+                (c & 0x00ff_ffff) | (a << 24),
+            );
+        });
         let pos = WorldPos {
             x: quantize_pos(self.spring_pos[0]),
             y: quantize_pos(self.spring_pos[1]),
@@ -555,7 +566,7 @@ impl ClientSide<RefGame> for RefClient {
             LAYER_PLAYER,
             pos,
             [PLAYER_DIAMETER_TILES, PLAYER_DIAMETER_TILES],
-            PLAYER_COLOR,
+            content::colour_of(colours.colour(view.me())),
         );
         let range_diameter_tiles = 2.0 * content::RANGE_Q8 as f32 / 256.0;
         let ring = out.ring(
