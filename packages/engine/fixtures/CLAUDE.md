@@ -3,6 +3,17 @@
 One line per fixture: what feature it pins. Each directory's own `CLAUDE.md` (where present) has
 the detail; `hash` has none yet, described here instead.
 
+**Shape.** Every directory here is a crate and a cargo workspace member: package `fx-<name>`,
+`crate-type = ["cdylib", "rlib"]`, `publish = false`, `[lints] workspace = true`,
+`engine = { path = "../../crates/engine" }`. Low-level fixtures call `engine::export_instance!`.
+`buildGame()` output lands in `<name>/target/engine/dev/` (gitignored). The allowlist and registry
+tests iterate this directory, so a new fixture is covered by existing tests.
+
+**Goldens.** Optional `golden/scenario.json` + `golden/golden.json` is the checkpoint-hash kind:
+Rust, Node/Bun and browser suites read the same files; hashes are 16-digit lowercase hex; written
+only by `pnpm golden`. The other kind, byte-format goldens, is native-only and lives beside the
+crate that blesses it (`pnpm golden:bytes`, `../CLAUDE.md` Commands).
+
 - `hash` (`fx-hash`): determinism itself (docs/decisions/0002 §2) -- an f32 spring, the same sim in
   16.16 fixed point, and a SplitMix64 action stream, hashed and compared natively/Node/Bun/browser.
 - `terrain` (`fx-terrain`): the renderer data path (gen worker -> `TerrainFeed` -> `TerrainStore` ->
