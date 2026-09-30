@@ -9,6 +9,7 @@ import {
   PREDICTED,
   type RefHarness,
   refHarness,
+  startCollect,
   tornStateProbe,
   uiOf,
 } from '../helpers/net.js'
@@ -102,13 +103,6 @@ test('reference_race_same_spot', async () => {
 type Ui = ReturnType<typeof uiOf>
 const STONE = 0
 const INGOT = 5
-
-/** `StartCollect` on `tile` the way the UI sends it: from the `in_range` entry's own `from`. */
-function startCollect(r: RefHarness, i: number, tile: Tile): number {
-  const entry = uiOf(r.h, i).in_range.find((e) => e.tile.x === tile.x && e.tile.y === tile.y)
-  if (!entry) throw new Error(`client ${i}: tile ${tile.x},${tile.y} is not in range`)
-  return r.h.clients[i]!.dispatch({ StartCollect: { tile, from: entry.from } })
-}
 
 /** Every verdict client `i` is told, `'NotPredictable'` included, in order. */
 function recordResults(r: RefHarness, i: number): unknown[] {

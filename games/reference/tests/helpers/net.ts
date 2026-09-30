@@ -7,6 +7,7 @@ import {
   type HeadlessClient,
   type NetHarness,
   type NetHarnessOptions,
+  worldServerTestHandle,
 } from 'engine/test'
 import { gameCrateBuildDir } from '../../../../packages/engine/tests/support/fixtures.js'
 import { readWorldJson } from '../../../../packages/engine/tests/support/reference-golden.js'
@@ -24,6 +25,8 @@ export type RefHarnessOptions = {
   transport?: NetHarnessOptions['transport']
   hashAll?: boolean
   joinKey?: string
+  /** Identity secrets in join order (a returning player is a client with its old secret). */
+  secrets?: Uint8Array[]
   /** Each client's camera from its first frame (clients past the end keep the default, which holds
    * the 4 x 4 chunks around the origin): so a scenario's subscribed set is exactly ring 1 of this view. */
   cameras?: Array<{ x: number; y: number; tilesAcross: number }>
@@ -50,6 +53,7 @@ export async function refHarness(opts: RefHarnessOptions): Promise<RefHarness> {
     ...(opts.conditions ? { conditions: opts.conditions } : {}),
     ...(opts.transport ? { transport: opts.transport } : {}),
     ...(opts.hashAll !== undefined ? { hashAll: opts.hashAll } : {}),
+    ...(opts.secrets ? { secrets: opts.secrets } : {}),
     world: { params: { worldgen: world.worldgen }, ...opts.world },
   })
   try {
@@ -176,4 +180,44 @@ export async function advanceProbed(h: NetHarness, probes: TornProbe[], n: numbe
     await h.advanceTicks(1)
     for (const p of probes) p.check()
   }
+}
+
+/** A write-ahead log frame's `count` field (0005 Formats: `len varint`, `tick_delta varint`, `count
+ * varint`, then the records). */
+function frameRecordCount(frame: Uint8Array): number {
+  let pos = 0
+  for (let i = 0; i < 2; i++) {
+    while (frame[pos++]! & 0x80) {}
+  }
+  let value = 0
+  let shift = 0
+  for (;;) {
+    const b = frame[pos++]
+    if (b === undefined) throw new Error('frameRecordCount: truncated')
+    value |= (b & 0x7f) << shift
+    if ((b & 0x80) === 0) return value >>> 0
+    shift += 7
+  }
+}
+
+/** Counts the records the host appends to its log from now on (every `Connected`, `Disconnected`,
+ * `Joined` and action is one): `logRecords().n`. */
+export function logRecords(h: NetHarness): { readonly n: number } {
+  const host = worldServerTestHandle(h.server)
+  const original = host.logSink
+  const out = {
+    n: 0,
+  }
+  host.logSink = (bytes) => {
+    out.n += frameRecordCount(bytes)
+    original?.(bytes)
+  }
+  return out
+}
+
+/** `StartCollect` on `tile` the way the UI sends it: from the `in_range` entry's own `from`. */
+export function startCollect(r: RefHarness, i: number, tile: { x: number; y: number }): number {
+  const entry = uiOf(r.h, i).in_range.find((e) => e.tile.x === tile.x && e.tile.y === tile.y)
+  if (!entry) throw new Error(`client ${i}: tile ${tile.x},${tile.y} is not in range`)
+  return r.h.clients[i]!.dispatch({ StartCollect: { tile, from: entry.from } })
 }
