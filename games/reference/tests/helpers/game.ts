@@ -236,7 +236,7 @@ export const ITEM = { stone: 0, iron: 1, wood: 2, coal: 3, furnace: 4, ingot: 5 
 export const RESOURCE_TILE = {
   stone: { x: -1, y: 2 },
   iron: { x: 0, y: 0 },
-  wood: { x: 58, y: 55 },
+  wood: { x: -4, y: -2 },
 } as const
 
 /** `content::COLLECT` (40 ticks at 20 Hz) plus the host's tick T+1 queuing (0004). */
@@ -286,7 +286,7 @@ export const PLACE = {
 /** `ghost`/`sprite` colours and flags (`sim/src/client.rs`, `engine::client::drawlist`). */
 export const GHOST = { valid: 0x9040ff40, invalid: 0x904040ff, unknown: 0x90c0c0c0 } as const
 export const FLAG = { anchorCursorTile: 1 << 0, predicted: 1 << 2 } as const
-export const KIND = { sprite: 0, ghost: 6 } as const
+export const KIND = { sprite: 0, rect: 3, bar: 4, ghost: 6 } as const
 
 export async function draws(page: Page): Promise<DrawRec[]> {
   return page.evaluate(() => window.__draws?.() ?? [])
@@ -348,4 +348,45 @@ export async function placeFurnace(
   await page.evaluate((d) => window.__stepFrame?.(d), 16)
   await page.evaluate((k) => window.__stepTick?.(k), 3)
   return pumpUntil(page, (ui) => (ui?.inventory[ITEM.furnace] ?? before) < before)
+}
+
+/** `openFurnace(page, tile)` (docs/plan/33b-reference-furnace-operation.md Provides): a real mouse tap
+ * on the furnace anchored at `tile`, then steps until `Ui.furnace` names it. Returns that `Ui`. */
+export async function openFurnace(
+  page: Page,
+  tile: { x: number; y: number },
+): Promise<RefUiState | null> {
+  const p = await tileToScreen(page, tile.x + 1, tile.y + 1)
+  await page.mouse.move(p.x, p.y)
+  await frame(page)
+  await page.mouse.click(p.x, p.y)
+  await frame(page)
+  return pumpUntil(page, (ui) => ui?.furnace?.at.x === tile.x && ui?.furnace?.at.y === tile.y)
+}
+
+/** Presses one panel button, then flushes the uplink (paced at 50 ms) and steps three ticks. */
+async function press(page: Page, selector: string): Promise<void> {
+  await page.locator(selector).click()
+  await frame(page, 60)
+  await page.evaluate((k) => window.__stepTick?.(k), 3)
+  await frame(page)
+}
+
+/** `deposit(page, item, n)` (Provides): presses the panel's `+n` / `all` button for `item`. */
+export async function deposit(
+  page: Page,
+  item: 'iron' | 'coal' | 'wood',
+  n: 1 | 5 | 'all',
+): Promise<void> {
+  await press(page, `[data-deposit="${item}"][data-amount="${n}"]`)
+}
+
+/** `takeAll(page)` (Provides): presses Take all. */
+export async function takeAll(page: Page): Promise<void> {
+  await press(page, '[data-furnace-take]')
+}
+
+/** `pickUp(page)` (Provides): presses Pick up. */
+export async function pickUp(page: Page): Promise<void> {
+  await press(page, '[data-furnace-pickup]')
 }

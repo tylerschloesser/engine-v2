@@ -584,7 +584,7 @@ fn pickup_sends_entity_gone_and_closes_other_panel() {
     // B has the panel open on it.
     let mut client_b = RefClient::with_spring_state([0.0, 0.0], [0.0, 0.0]);
     client_b.apply_tap(
-        &tap(lb.entity_at(b, origin).unwrap().0),
+        &tap(TilePos::new(origin.x + 1, origin.y + 1)),
         &lb.frame_view(b, WIDE, TilePos::new(0, 0)),
     );
     assert_eq!(client_b.open(), Some(origin));
@@ -652,10 +652,11 @@ fn host_count(lb: &Loopback<RefGame>) -> usize {
     n
 }
 
-fn tap(pick_id: u32) -> engine::client::InputEvent {
+/// A tap on `tile` (the furnace is found by tile, `RefClient::apply_tap`).
+fn tap(tile: TilePos) -> engine::client::InputEvent {
     engine::client::InputEvent {
         kind: engine::client::input::kind::TAP,
-        pick_id,
+        tile: [tile.x, tile.y],
         ..Default::default()
     }
 }
@@ -691,7 +692,10 @@ fn panel_open_close_rules() {
     assert_eq!(st, Prediction::Applied);
     let ghost = lb.entity_at(idx, origin).unwrap();
     assert!(ghost.is_provisional());
-    client.apply_tap(&tap(ghost.0), &lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+    client.apply_tap(
+        &tap(TilePos::new(origin.x + 1, origin.y)),
+        &lb.frame_view(idx, WIDE, TilePos::new(0, 0)),
+    );
     assert_eq!(client.open(), Some(origin), "opened on the provisional id");
     assert_eq!(ui_of(&lb, idx, &client).furnace.map(|f| f.at), Some(at));
 
@@ -708,10 +712,15 @@ fn panel_open_close_rules() {
     );
 
     // Close by a tap on nothing, and by CLOSE_PANEL; reopen by a tap on the real id.
-    client.apply_tap(&tap(0), &lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+    client.apply_tap(
+        &tap(TilePos::new(origin.x + 5, origin.y)),
+        &lb.frame_view(idx, WIDE, TilePos::new(0, 0)),
+    );
     assert_eq!(client.open(), None);
-    let real = lb.entity_at(idx, origin).unwrap().0;
-    client.apply_tap(&tap(real), &lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+    client.apply_tap(
+        &tap(TilePos::new(origin.x, origin.y + 1)),
+        &lb.frame_view(idx, WIDE, TilePos::new(0, 0)),
+    );
     assert_eq!(client.open(), Some(origin));
     client.apply_local(&local(content::local::CLOSE_PANEL, 0));
     assert_eq!(client.open(), None);
@@ -719,10 +728,16 @@ fn panel_open_close_rules() {
 
     // Construction mode: taps belong to placement.
     client.apply_local(&local(content::local::PLACE_MODE, 1));
-    client.apply_tap(&tap(real), &lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+    client.apply_tap(
+        &tap(TilePos::new(origin.x, origin.y + 1)),
+        &lb.frame_view(idx, WIDE, TilePos::new(0, 0)),
+    );
     assert_eq!(client.open(), None, "ignored while placing");
     client.apply_local(&local(content::local::PLACE_MODE, 0));
-    client.apply_tap(&tap(real), &lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+    client.apply_tap(
+        &tap(TilePos::new(origin.x, origin.y + 1)),
+        &lb.frame_view(idx, WIDE, TilePos::new(0, 0)),
+    );
     assert_eq!(client.open(), Some(origin));
 
     // A predicted pick-up hides the furnace from the merged view, so the panel closes at once, before
@@ -774,8 +789,10 @@ fn furnace_smelts_while_unsubscribed() {
         .expect("deposit accepted");
     }
     let mut client = RefClient::with_spring_state([0.0, 0.0], [0.0, 0.0]);
-    let id = lb.entity_at(idx, origin).unwrap().0;
-    client.apply_tap(&tap(id), &lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+    client.apply_tap(
+        &tap(TilePos::new(origin.x + 1, origin.y + 1)),
+        &lb.frame_view(idx, WIDE, TilePos::new(0, 0)),
+    );
     assert_eq!(client.open(), Some(origin));
     let chunk = ChunkDims::new(RefGame::CHUNK_BITS).chunk_of(origin);
     assert!(lb.client(idx).view().is_held(chunk), "held to begin with");

@@ -92,8 +92,9 @@ const OPEN_OUTLINE_COLOR: u32 = rgba(0xff, 0xe0, 0x40, 0xff);
 /// Bar height and outline thickness, tiles.
 const BAR_HEIGHT_TILES: f32 = 0.22;
 const OUTLINE_TILES: f32 = 0.1;
-/// Bars are skipped below this many device px per tile: at that zoom the strip is under ~3 px.
-const BAR_MIN_PX_PER_TILE: f32 = 14.0;
+/// Bars are skipped when more than this many tiles fit across the long axis (`FrameView::zoom`):
+/// on a 1,280 px canvas that is under 11 px per tile, a strip of about 2 px.
+const BAR_MAX_TILES_ACROSS: f32 = 120.0;
 
 /// A drawable smaller than this many CSS px is skipped entirely (Scope: "both skipped when
 /// `FrameView.zoom` makes the circle smaller than 2 px" -- read via `px_per_tile()`, the accessor
@@ -322,18 +323,21 @@ impl RefClient {
     }
 
     /// A tap (outside construction mode): on a furnace opens its panel (keyed by its anchor tile),
-    /// on anything else closes it. `pick_id` is the entity id, real or provisional (0 = nothing).
+    /// on anything else closes it. The furnace is found by the tapped tile (`ev.tile`) in the
+    /// overlay-merged view, not by `pick_id`: the engine's picker tests a sprite against its
+    /// zero-size record box, so a furnace sprite is never picked (`input/pick.ts`).
     pub fn apply_tap(&mut self, ev: &engine::client::InputEvent, view: &FrameView<'_, RefGame>) {
         if ev.kind != input_kind::TAP || self.placing.get() {
             return;
         }
-        self.open = if ev.pick_id == 0 {
-            None
-        } else {
-            view.entities()
-                .find(|(id, _, _)| id.0 == ev.pick_id)
-                .map(|(_, _, origin)| origin)
-        };
+        let fp = content::FURNACE_FOOTPRINT;
+        let (tx, ty) = (ev.tile[0], ev.tile[1]);
+        self.open = view
+            .entities()
+            .find(|(_, _, o)| {
+                (o.x..o.x + fp.w as i32).contains(&tx) && (o.y..o.y + fp.h as i32).contains(&ty)
+            })
+            .map(|(_, _, origin)| origin);
     }
 
     /// Closes the panel when its furnace is gone. Reads through the prediction overlay
@@ -355,7 +359,7 @@ impl RefClient {
         }
     }
 
-    /// The smelt bar (skipped below [`BAR_MIN_PX_PER_TILE`]) and, for the open furnace, its outline.
+    /// The smelt bar (skipped when zoomed out past [`BAR_MAX_TILES_ACROSS`]) and, for the open furnace, its outline.
     /// The bar reads the authoritative clock: a furnace is nobody's own timer (0012 "Two clocks").
     fn extract_furnace_ui(
         &self,
@@ -365,7 +369,7 @@ impl RefClient {
         origin: TilePos,
     ) {
         if let Some(done) = furnace.smelt_done_at
-            && view.px_per_tile() >= BAR_MIN_PX_PER_TILE
+            && view.zoom() <= BAR_MAX_TILES_ACROSS
         {
             let started = engine::time::Tick(done.0.saturating_sub(content::SMELT.0));
             let progress = view.clocks().progress(started, done);

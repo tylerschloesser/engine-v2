@@ -258,11 +258,20 @@ window.__clock = () => {
 /** `engine::client::{KIND_SPRITE, KIND_GHOST}` (0018 §2). */
 const KIND_SPRITE = 0
 const KIND_GHOST = 6
+/** `KIND_RECT`/`KIND_BAR` (M33b: the open-furnace outline and the smelt bar). */
+const KIND_RECT = 3
+const KIND_BAR = 4
 
 window.__draws = () => {
   drawListRecords(client, drawRecordsScratch)
   return drawRecordsScratch
-    .filter((r) => r.kind === KIND_SPRITE || r.kind === KIND_GHOST)
+    .filter(
+      (r) =>
+        r.kind === KIND_SPRITE ||
+        r.kind === KIND_GHOST ||
+        r.kind === KIND_RECT ||
+        r.kind === KIND_BAR,
+    )
     .map((r) => ({
       kind: r.kind,
       x: r.pos[0],
