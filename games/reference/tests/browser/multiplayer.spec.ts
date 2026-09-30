@@ -11,6 +11,7 @@ import {
   PLACE,
   panTo,
   placeFurnace,
+  pumpUntil,
   RESOURCE_TILE,
   type RefUiState,
   readUi,
@@ -128,6 +129,10 @@ test('reference_shared_world', async ({ browser }) => {
   }
 })
 
+// The first `Ui` can be built before the host frame that carries the roster; wait for the own entry.
+const readOwnUi = (p: Page): Promise<RefUiState> =>
+  pumpUntil(p, (u) => u?.roster.some((r) => r.me && r.online) ?? false) as Promise<RefUiState>
+
 test('reference_returning_player_resumes', async ({ browser }) => {
   const server = await startReferenceServer({ manualTimer: true })
   const first = await browser.newContext()
@@ -136,7 +141,7 @@ test('reference_returning_player_resumes', async ({ browser }) => {
     const a1 = await first.newPage()
     await openGame(a1, { invite: { server } })
     await untilConfigured(server, [a1])
-    const ui1 = await readUi(a1)
+    const ui1 = await readOwnUi(a1)
 
     // Walk away from the spawn tile and let the presence reach the host.
     const far = { x: ui1.spawn.x + 25, y: ui1.spawn.y + 15 }
@@ -155,7 +160,7 @@ test('reference_returning_player_resumes', async ({ browser }) => {
     const a2 = await second.newPage()
     await openGame(a2, { invite: { server } })
     await untilConfigured(server, [a2])
-    const ui2 = await readUi(a2)
+    const ui2 = await readOwnUi(a2)
     expect(ui2.me, 'the same player returns').toBe(ui1.me)
     expect(ui2.roster.find((r) => r.me)?.colour, 'with the same colour').toEqual(
       ui1.roster.find((r) => r.me)?.colour,
