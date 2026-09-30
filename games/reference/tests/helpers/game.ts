@@ -79,6 +79,8 @@ declare global {
     __stepTick?: (n: number) => Promise<void>
     /** Remote pages: resolves once `Welcome` configured the client. */
     __untilConfigured?: () => Promise<void>
+    /** Local pages: the sim's state hash (16 hex digits); call after a `__stepTick`. */
+    __worldHash?: () => Promise<string>
     __linkState?: () => string
     /** Every circle of the newest DrawList, own and remote; `color` is packed `rgba` (byte 0 = r). */
     __circles?: () => Array<{ x: number; y: number; color: number }>
@@ -96,6 +98,7 @@ declare global {
       kind?: 'mouse' | 'touch',
     ) => void
     __dispatchPlaceFurnace?: (x: number, y: number) => number
+    __dispatchFurnacePickUp?: (x: number, y: number) => number
   }
 }
 

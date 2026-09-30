@@ -9,6 +9,7 @@ The reference game (`docs/spec/reference-game.md`): a private Vite app plus `sim
 - Bindings (`src/bindings/*.ts`) and the `.wasm` regenerate together on any `pnpm --filter reference build`/`dev`; review `git diff src/bindings` after touching `sim/`.
 - `cargo nextest run -E 'package(reference-sim)'` for this crate's Rust tests (`pnpm test rust -t reference` matches an unrelated engine test by substring).
 - `tests/fixtures/landmarks.json`: `landmarks_fixture_current` recomputes it from `RefWorldgen` at `TEST_SEED` and fails, naming this file, if it drifted.
+- Scripted play (M34b): `tests/helpers/script.ts` (`fullGame()`, `runScript`, `headlessDriver(client, advance)`, `domDriver(page)`): one script, two drivers; `reference_full_game_single` must end on the headless run's state hash. `pnpm --filter reference golden:record` rewrites `tests/golden/full-game.{log,json}` (a reviewed diff; `golden_replay` and `reference_golden_replay` replay them natively, in Node, Bun and the determinism page). A furnace footprint must not straddle a chunk boundary (replica hash, M34b Deviations).
 - `gc.html`/`src/gc-entry.ts`: the zero-GC page (spec `packages/engine/tests/browser/gc-reference.spec.ts`; budget `gc.pages.reference`). `minify: false` in `vite.config.ts` is load-bearing: software-mode attribution matches runtime function names.
 
 ## Module layout (`sim/src`)

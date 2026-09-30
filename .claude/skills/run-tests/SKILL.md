@@ -24,6 +24,10 @@ Run one test by name: `pnpm test <suite> -t "<substring>"`, e.g. `pnpm test wasm
 allowlist"`, `pnpm test browser -t determinism`, `pnpm test unit -t "manual clock"`. `-t` is a plain
 substring match, not a regex.
 
+Reference game (M34b): `pnpm test browser -t reference_` (its `reference` Playwright project), `pnpm test wasm -t reference_`
+(Node and Bun golden replay), `pnpm test rust -t golden_replay`; `pnpm --filter reference golden:record` regenerates the
+full-game golden (a reviewed diff, never to make a red test pass).
+
 ## First time / after a Playwright bump
 
 `pnpm setup:tools` installs everything `pnpm test` cannot install itself: `cargo-nextest`, `bun`, and

@@ -23,6 +23,7 @@ import {
   stepFrame,
   stepTick,
   untilConfigured,
+  worldHash,
 } from 'engine/test'
 import type { RefAction } from './bindings/RefAction.js'
 import type { RefUi } from './bindings/RefUi.js'
@@ -112,6 +113,9 @@ declare global {
     /** M33: dispatches `PlaceFurnace` straight through `client.dispatch` (the `placeFurnace`
      * helper; the UI flows are exercised by `reference_place_mouse`/`_touch` themselves). */
     __dispatchPlaceFurnace?: (x: number, y: number) => number
+    /** M34b: `FurnacePickUp` straight through `client.dispatch`: the panel disables its button while a
+     * furnace holds anything, so a refused pick-up (for the script's last step) cannot be clicked. */
+    __dispatchFurnacePickUp?: (x: number, y: number) => number
     /** M33c: the centre pixel of a 32x32 frame centred on world point (x, y), drawn with the
      * drawables pass on and with it off, from the same newest DrawList slot. RGBA, 0..255. */
     __pixelAt?: (
@@ -120,6 +124,9 @@ declare global {
     ) => Promise<{ on: [number, number, number, number]; off: [number, number, number, number] }>
     /** M34 (remote pages only): runs `n` ticks on the test's own server (`page.exposeFunction`). */
     __serverTick?: (n: number) => Promise<void>
+    /** M34b (local pages only): the sim instance's state hash (`engine/test.worldHash`; the workers
+     * are parked after a `__stepTick`, which is what it needs). */
+    __worldHash?: () => Promise<string>
     __untilConfigured?: () => Promise<void>
     __linkState?: () => string
     __circles?: () => Array<{ x: number; y: number; color: number }>
@@ -394,6 +401,13 @@ window.__cursorTile = () => ({
 
 window.__injectPointer = (phase, id, x, y, tMs, kind) => {
   injectPointer(client, phase, id, x, y, tMs, kind)
+}
+
+window.__worldHash = () => worldHash(client)
+
+window.__dispatchFurnacePickUp = (x, y) => {
+  const action: RefAction = { FurnacePickUp: { at: { x, y } } }
+  return client.dispatch(action)
 }
 
 window.__dispatchPlaceFurnace = (x, y) => {

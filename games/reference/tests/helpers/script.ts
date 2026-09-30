@@ -426,10 +426,20 @@ export async function domDriver(page: Page): Promise<ScriptDriver> {
     async openFurnace(at) {
       await g.openFurnace(page, at)
     },
-    async pickUp(_at, refused) {
+    async pickUp(at, refused) {
       if (refused) {
-        // The panel disables Pick up while anything is inside: the UI never sends the action.
+        // The panel disables Pick up while anything is inside, so the UI never sends it: the action
+        // goes through `client.dispatch` (as the headless driver's does) and the sim refuses it.
         await expect(page.locator('[data-furnace-pickup]')).toBeDisabled()
+        const before = (await g.uiState(page))?.inventory[SLOT.furnace] ?? 0
+        await page.evaluate(([x, y]) => window.__dispatchFurnacePickUp?.(x, y), [
+          at.x,
+          at.y,
+        ] as const)
+        await page.evaluate((d) => window.__stepFrame?.(d), 60) // the uplink is paced at 50 ms
+        await stepTicks(3)
+        await g.frame(page)
+        expect((await g.uiState(page))?.inventory[SLOT.furnace]).toBe(before)
         return
       }
       const before = (await g.uiState(page))?.inventory[SLOT.furnace] ?? 0
