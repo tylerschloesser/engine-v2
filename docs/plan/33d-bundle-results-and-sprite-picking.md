@@ -1,6 +1,6 @@
 # M33d: Action results across a frame bundle, sprite picking, a viewport on stepped pages
 
-Status: not started · After: 33b · Tyler-dependent: no
+Status: done · After: 33b · Tyler-dependent: no
 
 Written by the orchestrator at M33b's gate (2026-09-30). M33b's implementer worked around three engine behaviours without explaining them; a diagnosis agent then confirmed each and located it. Two are defects on the production path and one is a test-driver gap. All three are diagnosed to a named function, so this brief is fixes and the regressions that prove them, not investigation.
 
@@ -66,11 +66,11 @@ Cut line: if steps 3 and 4 do not fit after 1 and 2, stop at the step 2 boundary
 Each test is shown red on the unfixed code, with the red line pasted in the report: they are regressions for defects that green gates missed.
 
 ## Exit criteria
-- [ ] All tests above pass by name, and each was red before its fix.
-- [ ] `furnace_predict.rs` in `games/reference` still passes unchanged.
-- [ ] No existing golden changed.
-- [ ] The five slowest `unit` files are listed under Deviations.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name, and each was red before its fix.
+- [x] `furnace_predict.rs` in `games/reference` still passes unchanged.
+- [x] No existing golden changed.
+- [x] The five slowest `unit` files are listed under Deviations.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t bundle_keeps` · `pnpm test netcode -t results-survive` · `pnpm test unit -t pick.sprite` · `pnpm test browser -t pick.sprite_on_page` · `pnpm test browser -t stepped_page`.
@@ -121,3 +121,10 @@ Suite wall was 1.5 s and 1.3 s of the 3 s budget (69 files, summed test time 1.2
 - No engine browser page calls `attachClientDrawables`; the only one is `games/reference/src/game.ts`. So the assertion is folded into `reference_furnace_flow` (`games/reference/tests/browser/furnace.spec.ts`), the one exception to "not `games/reference`": after the furnace is placed, a pick inside its 2 x 2 art at (O.x + 1.5, O.y + 1.5), away from `pos` (pivot [0, 0]), returns the furnace sprite record's pick id, and a pick at (O.x + 2.5, O.y + 1.5) returns 0. A read hook `__pickAt(cssX, cssY)` (`client.pick.acquire()` then `client.pick.at`) was added to `src/test-entry.ts`. `RefClient::apply_tap` is unchanged.
 - Inject-fail-revert: removing `client.pick.setSpriteTable(atlas.pivotSize)` from `attachClientDrawables` gave `a tap inside the furnace art picks it  Expected: 1  Received: 0`; restored, `browser pass 1 tests 3.3s/48s`.
 - Orderings: `attachClientDrawables` awaits `loadSpriteAtlas` and installs the table before it returns, so there is no ordering in which the atlas finishes after it returns. Two orderings exist: a client with `assets.sprites` (table installed before `attachClientDrawables` resolves; covered by this test) and one without (no atlas, sprites stay point-only; covered by `pick.sprite_without_table_is_point_only`). A picker call before `attachClientDrawables` resolves is point-only, and `setSpriteTable` clears the picker's cache so the next `at()` rescans.
+
+**Gate (orchestrator, 2026-09-30).** `pnpm gate 7ba134f`: tree clean, 23 files, no golden changed, no marker added, no budget, timeout or retry touched. Every test name and seam name above exists. CI on the `M33b done` push was green before this milestone's first step.
+- **Round 1 (mine):** the `attachClientDrawables` → `setSpriteTable` call had no test, so sprite picking was proven only where a page installed the table by hand. Closed by the pick assertions folded into `reference_furnace_flow` (red with the call removed: `Expected: 1  Received: 0`). That is the one `games/reference` change, accepted.
+- **`unit` attribution is not settled.** The implementer measured 1.3-1.5 s with no dominant file; every gate run of mine read 3.4-3.7 s at 1-minute load 5-7. The budget is unchanged and the row stays a watch item: measure startup and transform time under `pnpm test`'s own concurrency (the other suites run beside it) before concluding it is load.
+- **Reds at this gate, none charged here:** `reference_player_circle_lags_and_settles` (`Received: 29.5`) in one full run and 1 of 15 targeted runs, and `reference_craft_flow` (`Received: undefined`) in 1 of 15: the first-`Ui` race, base rate 2 in 16 (M30 Deviations), now M33e. `pick.matches_interpolated_frame_on_screen` failed once with `Target page, context or browser has been closed`, matched to a Chrome for Testing crash report at 07:32 (ledger: machine watch item).
+- The implementer ran `git stash` once and popped it at once; `git stash list` is empty and the tree was intact.
+- **Lint red at the `done` gate, fixed by me:** `tsc` failed on `src/frame-loop.test.ts` (its fake `pick` lacked the new `setSpriteTable`); one line added. The two earlier gate rounds never reached lint because `pnpm test` was red first, so the implementer's range was never typechecked as a whole until then: run `pnpm lint` on its own at a gate when `pnpm test` is red for an unrelated reason.

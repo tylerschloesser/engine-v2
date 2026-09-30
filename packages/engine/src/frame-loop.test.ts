@@ -51,6 +51,7 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
       at() {
         return 0
       },
+      setSpriteTable() {},
     },
     overlay: {
       anchor() {
