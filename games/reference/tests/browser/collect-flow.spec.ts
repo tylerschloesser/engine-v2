@@ -9,6 +9,7 @@
 import { expect, test } from '@playwright/test'
 import {
   clickCollect,
+  ITEM,
   openGame,
   panTo,
   pumpUntil,
@@ -132,7 +133,7 @@ test('reference_collect_flow', async ({ page }) => {
   const finalUi = await pumpUntil(page, (ui) => ui?.collecting === null, {
     maxSteps: COLLECT_TICKS + 20,
   })
-  expect(finalUi?.inventory.stone).toBe(1)
+  expect(finalUi?.inventory[ITEM.stone]).toBe(1)
   expect(finalUi?.collecting).toBeNull()
   await expect(button).not.toBeDisabled()
   const animationsAfter = await button.evaluate((el) => el.getAnimations({ subtree: true }).length)
@@ -171,5 +172,5 @@ test('reference_pan_out_cancels', async ({ page }) => {
   await panTo(page, { x: STONE.x + 50, y: STONE.y + 50 })
   const afterPanOut = await pumpUntil(page, (ui) => ui?.collecting === null)
   expect(afterPanOut?.collecting, 'panning out of range cancels the collect').toBeNull()
-  expect(afterPanOut?.inventory.stone, 'no item lands from a cancelled collect').toBe(0)
+  expect(afterPanOut?.inventory[ITEM.stone], 'no item lands from a cancelled collect').toBe(0)
 })

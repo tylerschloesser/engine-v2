@@ -1,5 +1,5 @@
 // `createInventoryUi` (docs/plan/20b-reference-player-and-collect-ui.md Scope: "A plain inventory
-// readout (four counts)."). No anchoring: a fixed DOM element, not tied to any tile.
+// readout (six counts)."). No anchoring: a fixed DOM element, not tied to any tile.
 import type { RefUi } from '../bindings/RefUi.js'
 import { el } from './dom.js'
 
@@ -8,12 +8,8 @@ export type InventoryUi = {
   onUi(ui: RefUi): void
 }
 
-const LABELS = [
-  ['iron', 'Iron'],
-  ['wood', 'Wood'],
-  ['stone', 'Stone'],
-  ['coal', 'Coal'],
-] as const
+/** Display labels in `content::ItemId` slot order: `Ui.inventory[i]` is the count of item `i`. */
+export const ITEM_LABELS = ['Stone', 'Iron', 'Wood', 'Coal', 'Furnace', 'Ingot'] as const
 
 const STYLE_ID = 'reference-inventory-styles'
 
@@ -43,20 +39,20 @@ function installInventoryStyles(doc: Document): void {
 export function createInventoryUi(container: HTMLElement, doc: Document = document): InventoryUi {
   installInventoryStyles(doc)
   const root = el('div', 'inventory')
-  const rows = new Map<(typeof LABELS)[number][0], HTMLElement>()
-  for (const [key, label] of LABELS) {
+  const rows: HTMLElement[] = []
+  for (const label of ITEM_LABELS) {
     const row = el('div', 'inventory-row')
     row.textContent = `${label}: 0`
     root.appendChild(row)
-    rows.set(key, row)
+    rows.push(row)
   }
   container.appendChild(root)
 
   function onUi(ui: RefUi): void {
-    for (const [key, label] of LABELS) {
-      const row = rows.get(key)
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i]
       if (row === undefined) continue
-      row.textContent = `${label}: ${ui.inventory[key]}`
+      row.textContent = `${ITEM_LABELS[i]}: ${ui.inventory[i]}`
     }
   }
 

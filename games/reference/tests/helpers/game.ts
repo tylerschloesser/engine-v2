@@ -23,7 +23,8 @@ export type OpenGameOptions = {
  * with, and every field this helper's own callers need is listed below. */
 export type RefUiState = {
   me: number
-  inventory: { iron: number; wood: number; stone: number; coal: number }
+  /** Counts by item slot: stone, iron, wood, coal, furnace, ingot (`content::ItemId`). */
+  inventory: number[]
   collecting: { tile: { x: number; y: number }; done_at: number } | null
   in_range: Array<{
     tile: { x: number; y: number }
@@ -31,6 +32,9 @@ export type RefUiState = {
     from: { x: number; y: number }
   }>
   spawn: { x: number; y: number }
+  unlocks: number
+  crafting: { recipe: number; done_at: number } | null
+  recipes: Array<{ recipe: number; cost: number[]; secs: number; affordable: boolean }>
 }
 
 declare global {
@@ -182,4 +186,48 @@ export async function openGame(page: Page, opts: OpenGameOptions = {}): Promise<
   await page.waitForFunction(() => window.__pageReady === true)
   const isolated = await page.evaluate(() => window.crossOriginIsolated)
   expect(isolated, `${path}: crossOriginIsolated`).toBe(true)
+}
+
+/** `Ui.inventory` slot of each item (`content::ItemId`). */
+export const ITEM = { stone: 0, iron: 1, wood: 2, coal: 3, furnace: 4, ingot: 5 } as const
+
+/** A known tile per collectable resource under `TEST_SEED` (`sim/tests/landmarks_fixture.rs`'s
+ * fixture and the depletion/collect specs). Coal has no scouted tile yet. */
+export const RESOURCE_TILE = {
+  stone: { x: -1, y: 2 },
+  iron: { x: 0, y: 0 },
+  wood: { x: 58, y: 55 },
+} as const
+
+/** `content::COLLECT` (40 ticks at 20 Hz) plus the host's tick T+1 queuing (0004). */
+export const COLLECT_TICKS = 41
+
+/**
+ * `collectN(page, resource, n)` (docs/plan/32-reference-crafting.md Provides): pans to the
+ * resource's known tile, then `n` times clicks collect and steps ticks (never real time) until the
+ * collect lands. Returns the last `Ui`. The page must be `/test.html` with the `Ui` primed
+ * (`uiState` called once), as `panTo` needs.
+ */
+export async function collectN(
+  page: Page,
+  resource: keyof typeof RESOURCE_TILE,
+  n: number,
+): Promise<RefUiState | null> {
+  const tile = RESOURCE_TILE[resource]
+  await panTo(page, tile)
+  await pumpUntil(
+    page,
+    (ui) => ui?.in_range.some((e) => e.tile.x === tile.x && e.tile.y === tile.y) === true,
+  )
+  let ui: RefUiState | null = null
+  for (let i = 0; i < n; i++) {
+    const before = (await uiState(page))?.inventory[ITEM[resource]] ?? 0
+    await clickCollect(page, tile)
+    await page.evaluate((k) => window.__stepTick?.(k), COLLECT_TICKS)
+    ui = await pumpUntil(
+      page,
+      (u) => u?.collecting === null && (u?.inventory[ITEM[resource]] ?? 0) > before,
+    )
+  }
+  return ui
 }
