@@ -39,6 +39,16 @@ export type RefUiState = {
   placing: boolean
   /** The inventory holds a furnace item. */
   can_build: boolean
+  /** The open furnace's state (`Ui.furnace`), `null` when no panel is open. */
+  furnace: {
+    at: { x: number; y: number }
+    iron_in: number
+    coal: number
+    wood: number
+    burn_left: number
+    ingots_out: number
+    smelt_done_at: number | null
+  } | null
 }
 
 /** A furnace sprite (`kind` 0) or the placement ghost (`kind` 6) from the newest DrawList. */
