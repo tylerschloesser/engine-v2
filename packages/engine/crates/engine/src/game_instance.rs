@@ -188,16 +188,34 @@ fn parse_hex_bytes<const N: usize>(hex: &str) -> [u8; N] {
     out
 }
 
+/// A field that is `Some` whenever the key is present, `null` included (plain `Option<P>` reads
+/// `null` as absent, which would make a `()`-params game look unconfigured).
+fn present<'de, D, P>(d: D) -> Result<Option<P>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    P: serde::Deserialize<'de>,
+{
+    P::deserialize(d).map(Some)
+}
+
 /// The `game` config shared by the `gen` and `client` roles of `GameInstance<G>` (0009's `seed`/
 /// `worldgen` params, used unchanged by every role that touches terrain, 0008 §2's three-places
 /// table). `Role::Sim` has its own, larger config (`host::SimConfig`), since it alone reads 0009's
 /// state-budget fields; this type only ever parses the same JSON the sim role also sees, taking
 /// what it needs and defaulting the rest.
 #[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(
+    rename_all = "camelCase",
+    bound(deserialize = "P: serde::Deserialize<'de>")
+)]
 struct TerrainConfig<P> {
-    seed: HexU64,
-    params: P,
+    /// Both `seed` and `params` present, or both absent (a remote client that takes its world from
+    /// `Welcome`, docs/plan/33f-client-world-config-from-welcome.md; every other role needs
+    /// both). `params: null` is present (a game whose `Params` is `()`).
+    #[serde(default)]
+    seed: Option<HexU64>,
+    #[serde(default, deserialize_with = "present")]
+    params: Option<P>,
     /// Client role only: how many gen workers `TerrainFeed` sizes its in-flight bookkeeping for
     /// (docs/plan/08b-gen-workers-and-queue.md). Ignored by the `gen` role.
     #[serde(default = "default_gen_workers")]
@@ -220,6 +238,46 @@ struct TerrainConfig<P> {
     /// Ignored by the `gen` role.
     #[serde(default)]
     build_hash: String,
+}
+
+/// What a configured client knows about its world (docs/plan/33f-client-world-config-from-welcome.md),
+/// kept to compare a later `Welcome` against and to hand the gen workers.
+struct InstalledWorld {
+    seed: u64,
+    /// The `Codec` bytes of the params, the encoding `Welcome` carries: what "same world" compares.
+    params_codec: Vec<u8>,
+    /// `{"seed":"0x..","params":..}`, the shape `TerrainConfig` accepts, built once.
+    json: String,
+    /// Installed by a `Welcome` (a remote client). Only such a client fatals on a `Welcome` for
+    /// another world; one configured at `engine_init` keeps ignoring `Welcome`'s world as before.
+    from_welcome: bool,
+}
+
+#[derive(serde::Serialize)]
+struct WorldJson<'a, P> {
+    seed: HexU64,
+    params: &'a P,
+}
+
+fn installed_world<P: serde::Serialize + serde::de::DeserializeOwned>(
+    seed: u64,
+    params: &P,
+    from_welcome: bool,
+) -> InstalledWorld {
+    let mut params_codec = vec![0u8; crate::codec::encoded_len(params)];
+    crate::codec::encode(params, &mut params_codec)
+        .expect("params encode into their own encoded_len");
+    let json = serde_json::to_string(&WorldJson {
+        seed: HexU64(seed),
+        params,
+    })
+    .expect("params serialise to JSON (Worldgen::Params: Serialize)");
+    InstalledWorld {
+        seed,
+        params_codec,
+        json,
+        from_welcome,
+    }
 }
 
 /// The client-role instance (docs/plan/13-sim-host-tick-loop.md Scope, extended by docs/plan/
@@ -295,6 +353,11 @@ pub struct ClientInstance<G: Game> {
     secret: [u8; 16],
     join_key: String,
     build_hash: [u8; 32],
+    /// `None` until configured: from `engine_init`'s config when it carried seed and params, else
+    /// from the first `Welcome` (docs/plan/33f-client-world-config-from-welcome.md). While `None`,
+    /// `frame` publishes an empty draw list and calls nothing of the game's, so the feed enqueues
+    /// no gen job and `on_init`/`ui`/`extract` have not run.
+    world: Option<InstalledWorld>,
 }
 
 impl<G: Game> ClientInstance<G> {
@@ -319,20 +382,35 @@ impl<G: Game> ClientInstance<G> {
         // it) -- the one place a client can ever learn the seed/params its own world was created
         // with, since `Default::default()` itself takes no arguments.
         let mut client = G::Client::default();
-        client.on_init(cfg.seed.0, &cfg.params);
+        let configured = match (cfg.seed, cfg.params) {
+            (Some(seed), Some(params)) => Some((seed.0, params)),
+            (None, None) => None,
+            _ => return Err(Status::BadConfig),
+        };
+        if let Some((seed, params)) = &configured {
+            client.on_init(*seed, params);
+        }
         let secret: [u8; 16] = parse_hex_bytes(&cfg.secret);
         let join_key = cfg.join_key.clone();
         let build_hash: [u8; 32] = parse_hex_bytes(&cfg.build_hash);
-        let source = Pristine::<G::Worldgen>::new(cfg.seed.0, cfg.params);
+        let (source, world) = match configured {
+            Some((seed, params)) => {
+                let world = installed_world(seed, &params, false);
+                let source: Box<dyn crate::world::PristineSource> =
+                    Box::new(Pristine::<G::Worldgen>::new(seed, params));
+                (Some(source), Some(world))
+            }
+            None => (None, None),
+        };
         // docs/plan/28-sessions-and-reconnect.md: `own_player` is `PlayerId(0)` ("none", `game::
         // PlayerId`'s own doc comment) until `Welcome` arrives -- M15's implicit accept (`PlayerId
         // = conn + 1`) and M27's own pre-handshake `my_player_id` config field are both deleted;
         // `client_on_welcome` (below) is the one production caller of `Replica::set_own_player`
         // now. `dispatch`/`on_action` already refuse to run before a session is live (M16's own
         // rule, unaffected), so no caller ever observes this placeholder as if it meant something.
-        let mut replica = crate::client::Replica::<G>::new(
+        let mut replica = crate::client::Replica::<G>::with_source(
             dims,
-            Box::new(source),
+            source,
             CacheCapacity::Chunks(cfg.cache_chunks),
             PlayerId(0),
         );
@@ -361,6 +439,7 @@ impl<G: Game> ClientInstance<G> {
             secret,
             join_key,
             build_hash,
+            world,
         })
     }
 }
@@ -397,11 +476,12 @@ where
             Role::Gen => {
                 let cfg: TerrainConfig<<G::Worldgen as Worldgen>::Params> =
                     serde_json::from_str(game_cfg_json).map_err(|_| Status::BadConfig)?;
+                let (Some(seed), Some(params)) = (cfg.seed, cfg.params) else {
+                    return Err(Status::BadConfig);
+                };
                 let dims = ChunkDims::new(G::CHUNK_BITS);
                 layout.region(RegionId::GenOut, dims.slab_bytes() as u32);
-                Ok(GameInstance::Gen(GenCore::new(
-                    dims, cfg.seed.0, cfg.params,
-                )))
+                Ok(GameInstance::Gen(GenCore::new(dims, seed.0, params)))
             }
             Role::Client => ClientInstance::<G>::init(game_cfg_json, layout)
                 .map(|c| GameInstance::Client(Box::new(c))),
@@ -717,6 +797,21 @@ where
     fn frame(&mut self, _t_ms: f64, camera: &CameraBlock, _result: &mut [u8]) -> Status {
         match self {
             GameInstance::Client(c) => {
+                // docs/plan/33f-client-world-config-from-welcome.md: before the world is known
+                // there is nothing to show and nothing to generate. An empty draw list is
+                // published (the JS pump copies the region either way), and neither the feed, the
+                // uploader nor any `ClientSide` call runs: no gen job, no `Ui` record. A branch on
+                // a field, no allocation (`.claude/rules/hot-paths.md`).
+                if c.world.is_none() {
+                    c.drawlist.begin_frame(TilePos::new(0, 0));
+                    // SAFETY: see `ClientInstance::drawlist_region`'s doc comment.
+                    let region = unsafe {
+                        core::slice::from_raw_parts_mut(c.drawlist_region, drawlist::REGION_BYTES)
+                    };
+                    c.drawlist.sort_into(region, camera.frame_time_ms, None);
+                    c.input_queue.clear();
+                    return Status::Ok;
+                }
                 // docs/plan/15b-ring-connection-and-replica-rendering.md, Planning decisions "The
                 // camera report is built in Rust from the camera-block copy, not in TS": every
                 // real frame's camera state feeds `ClientCore::set_camera`, which queues an
@@ -1649,6 +1744,179 @@ mod tests {
         });
         let n = sink.finish().unwrap();
         buf[..n].to_vec()
+    }
+
+    // ---- docs/plan/33f-client-world-config-from-welcome.md ----
+
+    thread_local! {
+        /// Every `(seed, params)` a `CClient::on_init` saw on this thread (one test = one thread).
+        static ON_INIT: std::cell::RefCell<Vec<(u64, u16)>> = const { std::cell::RefCell::new(Vec::new()) };
+        /// How many times `CClient::frame` ran on this thread.
+        static CLIENT_FRAMES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    #[derive(Default)]
+    struct CClient;
+    impl crate::client::ClientSide<CGame> for CClient {
+        fn on_init(&mut self, seed: u64, params: &u16) {
+            ON_INIT.with(|v| v.borrow_mut().push((seed, *params)));
+        }
+        fn frame(&mut self, _cx: &mut crate::client::FrameCx<'_, CGame>, _presence: &mut ()) {
+            CLIENT_FRAMES.with(|n| n.set(n.get() + 1));
+        }
+    }
+
+    /// Seed- and params-dependent worldgen, so two worlds differ in every pristine tile.
+    struct CWorldgen;
+    impl Worldgen for CWorldgen {
+        type Params = u16;
+        const WORLDGEN_VERSION: u32 = 0;
+        fn generate(seed: u64, params: &u16, _chunk: ChunkCoord, out: &mut [Tile]) {
+            out.fill(Tile::new(1, 0, (seed as u16) ^ *params));
+        }
+    }
+
+    struct CGame;
+    impl Game for CGame {
+        const SCHEMA_VERSION: u32 = 1;
+        type Worldgen = CWorldgen;
+        type Action = GAction;
+        type Reject = GReject;
+        type Entity = GEntity;
+        type Player = GPlayer;
+        type Global = GGlobal;
+        type Presence = ();
+        type Ui = ();
+        type Client = CClient;
+        fn register(_r: &mut Registry) {}
+        fn prototype(_e: &GEntity) -> PrototypeId {
+            PrototypeId(0)
+        }
+        fn anchor(_e: &GEntity) -> TilePos {
+            TilePos::new(0, 0)
+        }
+        fn genesis(_w: &mut dyn WorldWrite<Self>) {}
+        fn on_player(_w: &mut dyn WorldWrite<Self>, _who: PlayerId, _ev: PlayerEvent) {}
+        fn apply(
+            _w: &mut dyn WorldWrite<Self>,
+            _who: PlayerId,
+            _a: &GAction,
+        ) -> Result<(), GReject> {
+            Ok(())
+        }
+        fn tick(_cx: &mut TickCx<'_, Self>) {}
+    }
+
+    fn cclient(cfg: &str) -> GameInstance<CGame> {
+        ON_INIT.with(|v| v.borrow_mut().clear());
+        CLIENT_FRAMES.with(|n| n.set(0));
+        let mut layout = RegionLayout::new();
+        GameInstance::<CGame>::init(Role::Client, cfg, &mut layout).unwrap()
+    }
+
+    const UNCONFIGURED: &str = r#"{"genWorkers":1,"cacheChunks":1024}"#;
+
+    fn on_init_calls() -> Vec<(u64, u16)> {
+        ON_INIT.with(|v| v.borrow().clone())
+    }
+
+    fn frames(inst: &mut GameInstance<CGame>, n: u32) {
+        let mut camera = crate::client::CameraBlock::for_test([0.0, 0.0], [0.0, 0.0], [40.0, 40.0]);
+        camera.tiles_across = 80.0;
+        camera.viewport_px = [800.0, 800.0];
+        let mut result = [0u8; 64];
+        for i in 0..n {
+            camera.frame_time_ms = 16.0 * f64::from(i + 1);
+            assert_eq!(inst.frame(0.0, &camera, &mut result), Status::Ok);
+        }
+    }
+
+    fn requested(inst: &mut GameInstance<CGame>) -> u32 {
+        let mut out = [0u8; 64];
+        assert_eq!(inst.client_gen_stats(&mut out), Status::Ok);
+        u32::from_le_bytes(out[0..4].try_into().unwrap())
+    }
+
+    fn client_frames() -> u32 {
+        CLIENT_FRAMES.with(|n| n.get())
+    }
+
+    fn ui_calls(inst: &mut GameInstance<CGame>) -> u32 {
+        let mut out = [0u8; 64];
+        assert_eq!(inst.client_ui_stats(&mut out), Status::Ok);
+        u32::from_le_bytes(out[0..4].try_into().unwrap())
+    }
+
+    fn pristine_at_origin(inst: &GameInstance<CGame>) -> Tile {
+        let GameInstance::Client(c) = inst else {
+            unreachable!()
+        };
+        c.core.replica().terrain().tile(TilePos::new(0, 0))
+    }
+
+    #[test]
+    fn unconfigured_client_reads_unknown_and_enqueues_nothing() {
+        let mut inst = cclient(UNCONFIGURED);
+        frames(&mut inst, 5);
+        assert_eq!(
+            requested(&mut inst),
+            0,
+            "no gen job before the world is known"
+        );
+        let mut job = [0u8; 16];
+        assert!(!inst.gen_take(0, &mut job));
+        assert!(on_init_calls().is_empty(), "on_init waits for the world");
+        assert_eq!(
+            client_frames(),
+            0,
+            "no ClientSide::frame before the world is known"
+        );
+        assert_eq!(ui_calls(&mut inst), 0, "no Ui before the world is known");
+        let mut ui = [0u8; 256];
+        assert_eq!(inst.client_poll_ui(&mut ui), 0);
+        assert_eq!(inst.drawlist_len(), 0, "an empty DrawList is published");
+        let GameInstance::Client(c) = &inst else {
+            unreachable!()
+        };
+        assert!(!c.core.replica().terrain().has_source());
+        assert_eq!(
+            c.core.replica().tile(TilePos::new(0, 0)),
+            Err(Unknown),
+            "a pristine read is Unknown, never a default tile"
+        );
+    }
+
+    #[test]
+    fn configured_client_unchanged() {
+        let mut inst = cclient(r#"{"seed":"0x2a","params":7,"genWorkers":1,"cacheChunks":1024}"#);
+        assert_eq!(
+            on_init_calls(),
+            vec![(0x2a, 7)],
+            "on_init at engine_init, once"
+        );
+        frames(&mut inst, 5);
+        assert!(requested(&mut inst) > 0, "the feed runs");
+        assert_eq!(client_frames(), 5, "ClientSide::frame runs every frame");
+        assert_eq!(pristine_at_origin(&inst), Tile::new(1, 0, 0x2a ^ 7));
+        assert_eq!(on_init_calls().len(), 1);
+    }
+
+    #[test]
+    fn config_with_only_one_of_seed_and_params_is_bad_config() {
+        for cfg in [r#"{"seed":"0x1"}"#, r#"{"params":1}"#] {
+            let mut layout = RegionLayout::new();
+            assert_eq!(
+                GameInstance::<CGame>::init(Role::Client, cfg, &mut layout).err(),
+                Some(Status::BadConfig),
+                "{cfg}"
+            );
+        }
+        let mut layout = RegionLayout::new();
+        assert_eq!(
+            GameInstance::<CGame>::init(Role::Gen, UNCONFIGURED, &mut layout).err(),
+            Some(Status::BadConfig),
+            "a gen role always needs its world"
+        );
     }
 
     /// docs/plan/16-action-round-trip.md: the exact `client_poll_ui` JSON for a `Confirmed` and a

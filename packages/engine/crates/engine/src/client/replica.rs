@@ -84,6 +84,21 @@ impl<G: Game> Replica<G> {
     where
         G::Global: Default,
     {
+        Self::with_source(dims, Some(source), cache, own_player)
+    }
+
+    /// [`Self::new`] with the pristine source optional: `None` is a remote client that has not seen
+    /// its `Welcome` yet (docs/plan/33f-client-world-config-from-welcome.md), whose terrain answers
+    /// `Unknown` for every read until [`TerrainStore::set_source`] installs one.
+    pub fn with_source(
+        dims: ChunkDims,
+        source: Option<Box<dyn PristineSource>>,
+        cache: CacheCapacity,
+        own_player: PlayerId,
+    ) -> Self
+    where
+        G::Global: Default,
+    {
         if let CacheCapacity::Chunks(n) = cache {
             assert!(
                 n as usize >= crate::host::subs::CAP_CHUNKS,
@@ -92,7 +107,10 @@ impl<G: Game> Replica<G> {
                  other out from under the subscription"
             );
         }
-        let terrain = TerrainStore::new(dims, source, cache);
+        let terrain = match source {
+            Some(source) => TerrainStore::new(dims, source, cache),
+            None => TerrainStore::new_unconfigured(dims, cache),
+        };
         assert!(
             terrain.memory_bytes() <= CLIENT_CACHE_BUDGET_BYTES,
             "Replica's terrain cache is {} B, over the 0015 \u{a7}5 client arena's {} B \
@@ -489,7 +507,9 @@ impl<G: Game> WorldRead<G> for Replica<G> {
     }
 
     fn tile(&self, p: TilePos) -> Result<Tile, Unknown> {
-        if !self.held.contains_key(&chunk_of::<G>(p)) {
+        // A field branch, no allocation: an unconfigured terrain has no pristine function to
+        // answer with, and a default tile would be a guess (`.claude/rules/prediction.md`).
+        if !self.store.terrain().has_source() || !self.held.contains_key(&chunk_of::<G>(p)) {
             return Err(Unknown);
         }
         Ok(self.store.terrain().tile(p))
