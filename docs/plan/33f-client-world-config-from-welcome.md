@@ -1,6 +1,6 @@
 # M33f: A remote client takes its world's seed and params from `Welcome`
 
-Status: not started · After: 33e · Tyler-dependent: no
+Status: done · After: 33e · Tyler-dependent: no
 
 Written by the orchestrator before M34 (2026-09-30), settling the ledger row M29 left "not decided, needs a call before M34". A read-only research pass traced the code; its findings are summarised under "The evidence" so this brief stands alone.
 
@@ -61,11 +61,11 @@ Cut line: steps 1-2 are one delegation and steps 3-4 another. The seam between t
 - Each new test is shown red once: before its step's fix, or by injection (for example `client_on_welcome` not installing the source) where the code is new.
 
 ## Exit criteria
-- [ ] All tests above pass by name, each with its red line in the report.
-- [ ] `grep -rn "test: *{ *game\|test\.game" packages/engine/tests packages/engine/src/test` shows no remote-host use left; the uses that remain are listed under Deviations with why.
-- [ ] No existing golden changed; zero-GC pages pass with no budget moved (`pnpm test browser -t gc`).
-- [ ] ADR 0042 written; `pnpm test wasm -t "abi registry"` passes at `ABI_VERSION` 37.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name, each with its red line in the report.
+- [x] `grep -rn "test: *{ *game\|test\.game" packages/engine/tests packages/engine/src/test` shows no remote-host use left; the uses that remain are listed under Deviations with why.
+- [x] No existing golden changed; zero-GC pages pass with no budget moved (`pnpm test browser -t gc`).
+- [x] ADR 0042 written; `pnpm test wasm -t "abi registry"` passes at `ABI_VERSION` 37.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t welcome` · `pnpm test netcode -t remote_client_without_game_config` · `pnpm test browser -t "mp/"` · `pnpm test browser -t gc` · `pnpm test wasm -t "abi registry"`.
@@ -106,3 +106,8 @@ Steps 3-4 (TypeScript), commits `0ea956b`, `42968c5`, `M33f step 4`-fix below.
 - **Measured** (`mp/remote_client_configures_from_welcome`, 546 ms): from `onLink` `online` to gen workers up about 4-5 ms; to first revealed view 21-35 ms (about 19 ms on the `test.game` arm, polled every 5 ms). `browser mp/` 7 existing tests 5.3-5.5 s wall; the pre-change figure was not taken (no way to build the old tree without a stash).
 - **ADR 0042** written; the index rows (`PRE-PLAN.md` §1, `PLAN.md`, root `CLAUDE.md` range) are the orchestrator's.
 
+**Gate (orchestrator, 2026-09-30).** `pnpm gate fb2ed2a`: tree clean, 26 files, no golden, marker or budget changed. `pnpm test && pnpm lint` green: `rust` 751, `unit` 298, `wasm` 159, `netcode` 94, `browser` 228 (42 s). ADR 0042 read and accepted.
+- **Rulings:** the different-world fatal applies only to a client configured by a `Welcome` (ADR 0042 §6); `set_camera` in an unconfigured frame accepted; `clientsConfiguredAtInit: true` on `rates/baseline-join-converges` rejected as a mask. The 335 → 368 rise was attributed per tick and section (R1 above) and removed at its cause, the baseline untouched.
+- **Repeats (mine), `browser` whole suite:** 15 as the machine was (1-minute load 9-15): 14 pass, 1 `Target page, context or browser has been closed` on `[gc] input clean` at 09:17 (the Chrome crash signature; no report with that minute survives, the reporter rewrote its files at 09:38 and 09:40). 15 with ten CPU burners (load 20-33): 13 pass, 2 reds matched to crash reports at 09:38 (`overlay.idle_writes_nothing`, `page` fixture setup timeout) and 09:40 (`sim-paced neg object sim`). No `mp/*`, `gc-multiplayer-topology` or terrain test failed in 30 runs. Suite time 40 s quiet, 49 s under that load.
+- **Earlier in this gate** (steps 1-2 round, load 11-18): `paced_session_lands_periodic_snapshots` and `[gc] no_ui_change_asserts_ui_ran_and_wrote_nothing` once each, both pre-existing load reds (ledger); the second passed 20 of 20 targeted.
+- `ClientOptions.test.genSpawnDelayMs` and `mp.html?testGame=1` / `?genDelay=` are new test-only hooks.
