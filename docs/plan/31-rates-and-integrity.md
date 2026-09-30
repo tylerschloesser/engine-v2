@@ -1,6 +1,6 @@
 # M31: Rates: chunk pacing, soft cap, rate limits, byte budgets
 
-Status: not started · After: 29 · Tyler-dependent: no (may raise PRE-PLAN §11 item 8; see Planning decisions)
+Status: done · After: 29 · Tyler-dependent: no (may raise PRE-PLAN §11 item 8; see Planning decisions)
 
 **Split.** The PLAN.md row "rates and integrity" is about 1,900 lines, so it is two briefs. This one is everything in 0010 that paces bytes, plus the counters that prove it. `31b-desync-hashes.md` is the integrity half of 0013 and needs this brief's chunk bucket.
 
@@ -63,10 +63,10 @@ Also cited: 0004 (admit step 2: `RateLimited`), `PRE-PLAN.md` §9 risks 3 and 10
 `rates/idle-sends-only-heartbeats`, `rates/steady-busy-field`, `rates/seven-remote-presences` (needs M19), `rates/uplink-panning`, `rates/join-wilderness`, `rates/join-dense-visible-first` (order of enters asserted; tick frames and acks keep flowing while the bucket is empty), `rates/bucket-refill-exact`, `rates/degrade-on-stall` (levels 2 then 4 during `stall`, recovery after, heartbeat interval held, hashes converge), `rates/deltas-collapse-to-snapshot`, `rates/action-rate-limited` (unlogged, `RateLimited` via `onActionResult`; run at the engine default and again with `WorldConfig.actionRate` overridden, and the limit moves with it: 0004 Consequences), `rates/camera-flood-dropped`, `rates/hard-ceiling`, `zoomout/pan-1vw`, `zoomout/pan-2vw`, `zoomout/oscillate-48-tiles`, `zoomout/baseline-256x144`.
 
 ## Exit criteria
-- [ ] Every `rates/*` test asserts through `assertBudget`; `budgets.json` has the `net.*` rows with a source comment per row (0010 table cell or worked number).
-- [ ] `zoomout/*` numbers and the rule's outcome are written in Deviations; if triggered, the question is filed.
-- [ ] Netcode suite still within its 0020 §3 budget (demote `zoomout/pan-2vw` first).
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Every `rates/*` test asserts through `assertBudget`; `budgets.json` has the `net.*` rows with a source comment per row (0010 table cell or worked number).
+- [x] `zoomout/*` numbers and the rule's outcome are written in Deviations; if triggered, the question is filed.
+- [x] Netcode suite still within its 0020 §3 budget (demote `zoomout/pan-2vw` first).
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test netcode -t rates/` · `pnpm test netcode -t zoomout/` · `pnpm lint`
@@ -156,3 +156,7 @@ Review: `m31-review.md` (`c8ca047..e9077f7`). Every finding was checked against 
 - **B4 declared, not changed**: `zoomoutPan1vwLateVisibleP95`, `zoomoutPan2vwLateVisibleP95`, `zoomoutPan1vwCap144LateVisibleP95` and `zoomoutOscillateReenterBytes` are measurement rows: their `source` now says so. Their ceilings (measured x 1.1) sit above the risk-3 rule's thresholds (p95 > 10 ticks, re-enter > 120,000 B) because the rule is triggered; the thresholds, not these rows, are the decision criteria (Q15 in `questions-for-tyler.md`). Together with the earlier declared headroom rows (five `baseline*`, `teleportWastedEnterBytes`) that is every row without a 0010 cell.
 - **A5 recorded, no fix**: degrade cannot bring a client under the soft cap. `window_sum` counts built-frame bytes, bundling saves only the 10 B header per frame, so a client over the cap stays at level 4 while its traffic is unchanged and never reads calm. Only collapse cuts bytes. Relief needs byte diffing (M36b).
 - **A6 recorded, no fix**: per-tick cost is not O(1) per client. The drain re-encodes the head chunk through `CountSink` every tick it is unaffordable (about 100 ticks per dense chunk), the collapse pass counts a snapshot for every chunk with a delta every tick, and `queue.remove(0)`, `queue_position` and the insertion sort are linear or quadratic in the queue (n about 113 to 275). Tick time is M36's; cache the head cost and per-chunk snapshot length there.
+
+### Gate (orchestrator)
+
+The build ran cut 1-2 / 3-4 / 5-6 with one implementer. Gate round 1 used a fresh implementer: the camera report went to ≤ 10 Hz sustained per 0010, and `uplink-panning` went back to the 0010 cell of 2,000, from the measured value the step-5 row had recorded. A read-only Sonnet review of the ~3,500-line diff found A1-A7 and B1-B5 (review file kept in the session scratchpad; each finding re-verified by the implementer). Gate round 2 fixed A1-A4, the A7 overflow and B5, strengthened B1-B3, declared B4, and recorded A5/A6. Each fix has a revert control. Final: `pnpm gate c8ca047`: no goldens changed (one added, `wire_frame_bundle.hex`), no markers; the only budget ceiling change is 2,997 → 2,000. `pnpm test` green (rust 670, unit 290 at 3.1 s of 3 s, a WARN under load 10; wasm 159; netcode 81 at 3.6 s; browser 218); lint green. The risk-3 rule triggered, filed as Q15 in `questions-for-tyler.md` (cap 144, recommended). ADR 0041 (`MsgType::FrameBundle`) amends 0011.
