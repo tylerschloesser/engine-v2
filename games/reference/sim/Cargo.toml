@@ -7,6 +7,11 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"] # cdylib -> the .wasm; rlib -> native tests and the bindings step
 
+[features]
+# M34b: never enabled by `vite build`. `SCHEMA_VERSION + 1` and a poison `StartCraft` (recipe 255
+# panics in `apply`), for the two `slow` tests built through `buildGame({ features })`.
+test-hooks = []
+
 [lints]
 workspace = true
 

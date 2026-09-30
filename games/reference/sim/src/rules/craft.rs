@@ -14,6 +14,10 @@ use crate::{Crafting, RefGame, RefPlayer, RefReject, content};
 /// unlocked, not already crafting, cost affordable; then one `put_player` deducting the cost and
 /// setting `crafting`. Every read precedes the one write (0003: validate first, write after).
 pub fn start(w: &mut dyn WorldWrite<RefGame>, who: PlayerId, recipe: u8) -> Result<(), RefReject> {
+    #[cfg(feature = "test-hooks")]
+    if recipe == 255 {
+        panic!("test-hooks: poison StartCraft");
+    }
     let Some(def) = content::RECIPES.get(recipe as usize) else {
         return Err(RefReject::UnknownRecipe);
     };

@@ -423,7 +423,9 @@ fn assign_colour(w: &mut dyn WorldWrite<RefGame>, who: PlayerId) {
 pub struct RefGame;
 
 impl Game for RefGame {
-    const SCHEMA_VERSION: u32 = 5;
+    // `test-hooks` (never shipped) reports one version higher: a save of the normal build is then
+    // `SaveIncompatible` (M34b).
+    const SCHEMA_VERSION: u32 = if cfg!(feature = "test-hooks") { 6 } else { 5 };
     //  3: `Furnace` entity, `PlaceFurnace`, resources `NOT_BUILDABLE` (M33).
     //  4: `FurnaceDeposit`, `FurnaceTake`, `FurnacePickUp` and their rejects (M33b).
     //  5: `RefGlobal { colours }`, written on `Joined` (M34).
@@ -500,6 +502,11 @@ impl Game for RefGame {
 
     /// `FurnaceTake` opts out (R2): its result depends on a counter tick rules change on the host.
     fn predict(a: &RefAction) -> bool {
+        // `test-hooks` (never shipped): the poison craft is the host's to panic on alone.
+        #[cfg(feature = "test-hooks")]
+        if matches!(a, RefAction::StartCraft { recipe: 255 }) {
+            return false;
+        }
         !matches!(a, RefAction::FurnaceTake { .. })
     }
 

@@ -12,6 +12,12 @@ export type BuildGameOptions = {
   crate: string
   /** Default `dev`. A dev client cannot join a release server, by design (0017 §4). */
   profile?: Profile
+  /**
+   * Cargo features of the game crate to enable (`--features a,b`). The output directory gains a
+   * `+<sorted features>` suffix and the `.wasm` differs, so its `buildHash` differs: a feature
+   * build never joins a normal server (M34b: the `test-hooks` build). Default none.
+   */
+  features?: string[]
   /** Accepted and ignored with a warning until M35 runs `wasm-opt`. */
   wasmOpt?: boolean
   /** Environment for the cargo spawns. Default `process.env`. */
@@ -45,7 +51,12 @@ export type BuildGameResult = {
 let writeSeq = 0
 
 /** What `game.json` holds. */
-export type GameJson = { buildHash: string; abiVersion: number; profile: Profile }
+export type GameJson = {
+  buildHash: string
+  abiVersion: number
+  profile: Profile
+  features?: string[]
+}
 
 export class CargoBuildError extends Error {
   /** Everything cargo wrote to stderr, rustc's messages included. */
@@ -123,8 +134,10 @@ export async function buildGame(opts: BuildGameOptions): Promise<BuildGameResult
   if (opts.wasmOpt) console.warn('buildGame: wasmOpt is ignored until the packaging milestone')
 
   const artifact = await artifactPath(crate, profile, env)
+  const features = [...new Set(opts.features ?? [])].sort()
   const args = ['build', '--target', 'wasm32-unknown-unknown', '--color', 'never']
   if (profile === 'release') args.push('--release')
+  if (features.length > 0) args.push('--features', features.join(','))
   const start = performance.now()
   const built = await cargo(args, crate, env)
   const cargoMs = performance.now() - start
@@ -134,10 +147,12 @@ export async function buildGame(opts: BuildGameOptions): Promise<BuildGameResult
   const buildHash = createHash('sha256').update(bytes).digest('hex')
   const abiVersion = readAbiVersion(bytes)
 
-  const dir = join(crate, 'target', 'engine', profile)
+  const suffix = features.length > 0 ? `+${features.join('+')}` : ''
+  const dir = join(crate, 'target', 'engine', `${profile}${suffix}`)
   const wasmPath = join(dir, 'game.wasm')
   const jsonPath = join(dir, 'game.json')
   const json: GameJson = { buildHash, abiVersion, profile }
+  if (features.length > 0) json.features = features
   await mkdir(dirname(wasmPath), { recursive: true })
   // Write beside the target, then rename: a reader (the dev server's wasm route, a concurrent
   // build of the same crate, a test comparing bytes) never sees a truncated 3.7 MB file.
