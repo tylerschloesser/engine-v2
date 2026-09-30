@@ -61,4 +61,7 @@ Delivering `onUi` inside `stepFrame` under a manual clock (an engine change; led
 None.
 
 ## Deviations
-(filled in during Phase 3)
+- Decision: `games/reference/src/spawn.ts` `shouldMoveToSpawn(restored, atCreation, now)`; `poseOf(cameraState)` is snapshotted in `startGame` before the `onUi` subscription. "Moved" = `centreX`, `centreY` or `tilesAcross` differ from the snapshot; viewport, velocity and frame time (written by `stepFrame`/resize) do not count.
+- Tests: `spawn_move_applies_to_untouched_camera`, `spawn_move_skipped_once_camera_moved` in `src/spawn.test.ts` (unit suite already covers `games/*/src`; no new browser test). Red with the old `!restored`-only rule: `expected true to be false` at spawn.test.ts:12.
+- Helper: `readUi(page)` in `tests/helpers/game.ts`; `test-entry.ts` `?lateUi=n` makes the first n `__uiState()` reads null. `reference_craft_flow` opens `/test.html?lateUi=3` and reads via `readUi` (assertions unchanged). Old read under `?lateUi=3`: `Expected: [] Received: undefined`, craft-flow.spec.ts:18.
+- Repeat: 30 runs of the pair, 0 failures; load 5.40/10.09/9.48 before, 8.68/9.31/9.30 after. `browser -t reference`: 27 pass, 9.6 s.
