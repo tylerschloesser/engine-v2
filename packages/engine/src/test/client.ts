@@ -360,6 +360,11 @@ export function stepFrame(client: Client, dtMs: number): void {
     frameClocks.set(client, rc)
   }
   h.cameraState.frameTimeMs = rc.next(dtMs)
+  // A stepped page has no `frame-loop.ts` writing the viewport each rAF: without this
+  // `FrameView::px_per_tile()` reads 0 and every `px_per_tile` cull is inert (M33d).
+  const vp = viewportOverrides.get(client)
+  h.cameraState.viewportPxW = vp ? vp.w : h.canvas.width
+  h.cameraState.viewportPxH = vp ? vp.h : h.canvas.height
   writeCameraBlock(h.cameraWriter, h.cameraState)
   const req = (Atomics.add(h.control.words, CB_FRAME_REQ, 1) + 1) >>> 0
   h.control.wake(WORKER_CLIENT)
@@ -371,6 +376,19 @@ export function stepFrame(client: Client, dtMs: number): void {
       )
     }
   }
+}
+
+/** Per-client override of the stepped viewport (`setViewport`); absent means the canvas's own size. */
+const viewportOverrides = new WeakMap<Client, { w: number; h: number }>()
+
+/** The stepped-viewport half of `engine/test`'s `setViewport(client, w, h)` (`test/viewport.ts`
+ * dispatches to it: that name already belongs to the real-loop `{ cssWidth, cssHeight, dpr }`
+ * form). Overrides the viewport (device px) `stepFrame` writes into the camera block, which is what
+ * the client worker's `FrameView::px_per_tile()` is computed from. Default: the client canvas's own
+ * `width` x `height`. Takes effect on the next `stepFrame`. */
+export function setSteppedViewport(client: Client, w: number, h: number): void {
+  clientTestHandle(client)
+  viewportOverrides.set(client, { w, h })
 }
 
 /** Sets the camera state `stepFrame` will next write to the camera block; takes effect on the next

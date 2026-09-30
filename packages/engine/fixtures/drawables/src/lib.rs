@@ -55,6 +55,12 @@ thread_local! {
 /// `extract` (Tests added: `frameview.zoom_matches_camera_block`'s own zoom-threshold coverage).
 pub const SMALL_ZOOM_THRESHOLD: f32 = 32.0;
 
+/// The layer whose entities `extract` skips while `FrameView::px_per_tile()` is known (`> 0`) and
+/// below [`DETAIL_MIN_PX_PER_TILE`] (M33d `stepped_page_has_px_per_tile`: a screen-space cull, the
+/// use `px_per_tile()`'s doc comment names). No other test spawns on this layer.
+pub const DETAIL_LAYER: u8 = 6;
+pub const DETAIL_MIN_PX_PER_TILE: f32 = 4.0;
+
 /// A plain tile position (`Action`/`Entity` must stay `Codec`; not `engine::world::TilePos`, which
 /// derives neither `Serialize` nor `TS` -- the same reason `fixtures/puts`'s own `Pos` exists).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize, TS)]
@@ -157,6 +163,10 @@ impl ClientSide<Drawables> for DrawablesClient {
         LAST_PX_PER_TILE.with(|c| c.set(view.px_per_tile()));
         for (id, e, origin) in view.entities() {
             if e.small && view.zoom() > SMALL_ZOOM_THRESHOLD {
+                continue;
+            }
+            let ppt = view.px_per_tile();
+            if e.layer == DETAIL_LAYER && ppt > 0.0 && ppt < DETAIL_MIN_PX_PER_TILE {
                 continue;
             }
             let pos = WorldPos::from_tile(origin);

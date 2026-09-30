@@ -92,3 +92,27 @@ None.
 - Testkit: `Loopback::action`, `set_camera`, `set_presence` send `core.last_summary().tick.0`; `action` finds the client by connection and falls back to 0 when no client matches it (host-only scenarios).
 - Results: `rust` 743, `netcode` 93, `reference-sim` 96 (`furnace_predict` unchanged and green).
 
+
+**Step 3: `unit` attribution (vitest JSON, `pnpm test unit`, two foreground runs; per-file wall time).**
+| run 1 | ms | run 2 | ms |
+|---|---|---|---|
+| `src/sab/seqlock.test.ts` | 377 | `src/sab/seqlock.test.ts` | 439 |
+| `scripts/lib/pre-commit-check.test.mjs` | 175 | `src/sab/ring.test.ts` | 202 |
+| `src/sab/ring.test.ts` | 157 | `games/reference/scripts/gen-assets.test.mjs` | 168 |
+| `games/reference/scripts/gen-assets.test.mjs` | 84 | `scripts/lib/pre-commit-check.test.mjs` | 159 |
+| `scripts/lib/crate-policy.test.mjs` | 81 | `src/sab/triple.test.ts` | 89 |
+Suite wall was 1.5 s and 1.3 s of the 3 s budget (69 files, summed test time 1.2-1.5 s, files run in parallel), not 3.4-3.7 s: the earlier readings came from a loaded shared machine (load average 8-11 while measured). No single file dominates and no one named cause exists; nothing fixed, budget unchanged. Startup/collection was not separated from test time (vitest's JSON has per-test durations only).
+
+**Step 3: sprite picking.**
+- Seams: `LoadedSpriteAtlas.pivotSize: Float32Array` (the existing `buildSpriteTables` pivot/size texels, stride 4, built once at load); `PickerOptions.spritePivotSize?: Float32Array`; `Picker.setSpriteTable(table | undefined)` and `Client.pick.setSpriteTable`, because the picker is created before the atlas loads (`attachClientDrawables` calls it after `loadSpriteAtlas`); `scanDrawListForPick(..., spriteTable?)` as a trailing optional argument.
+- The box is `[pos - pivot * size, pos + (1 - pivot) * size]`. `FLIP_X` mirrors only the sampled texture in `vs_main` (footprint unchanged), so the CPU test does not read it; `pick.sprite_by_atlas_box` pins that a flipped sprite picks the same box. `SCREEN_PX_STROKE` minimum radius is not applied to a table-backed sprite.
+- Red: `pick.sprite_by_atlas_box` on the old `pick.ts`: `AssertionError: expected +0 to be 9`. Green: `unit pass 2 tests` (`pick.sprite`). `pick.sprite_without_table_is_point_only` pins the table-less point behaviour.
+- `pick.sprite_on_page` is in `sprite-readback.spec.ts` on `drawables.html`, which renders the atlas's sprite 0 (pivot [0.25, 0.75], size [2, 1]) and runs `scanDrawListForPick` with the page's real loaded table: two points inside the drawn art and outside a centred box (renderer pixel asserted RED/GREEN), four points just outside the art (renderer pixel asserted transparent, pick 0). It does not go through `attachClientDrawables`, so `setSpriteTable`'s wiring is a one-line call covered only by types. Wall 2.6 s. `browser -t drawables`: 11 pass (includes the `gc-drawables` zero-GC pages).
+
+**Step 4: stepped viewport.**
+- `stepFrame` writes `viewportPxW/H` from the client canvas's `width`/`height` (`ClientTestHandle.canvas` added) unless overridden.
+- Name collision: `engine/test` already exported `setViewport(client, { cssWidth, cssHeight, dpr })` (`src/test/viewport.ts`, the real-loop forced size). `setViewport(client, w, h)` is an overload of it (a number second argument dispatches to `setSteppedViewport` in `src/test/client.ts`); the old form is unchanged.
+- Fixture addition (`fixtures/drawables/src/lib.rs`): `extract` skips entities on `DETAIL_LAYER` (6) while `px_per_tile() > 0 && < DETAIL_MIN_PX_PER_TILE` (4.0). No existing test spawns on layer 6 (`gc-drawables` populates 0, 3, 7), so nothing else can change.
+- `stepped_page_has_px_per_tile` is in `gc-drawables.spec.ts` (page hooks `spawnDetail(n)`, `setViewport(w, h)`): canvas 300 x 150 at `tilesAcross` 24 = 12.5 px/tile draws 3 detail entities; `setViewport(30, 15)` = 1.25 px/tile culls them; back to 300 x 150 draws them again. Red on the unfixed `stepFrame`: `Expected: 3  Received: 0` (`the 3 detail entities are culled`). Green: `browser pass 1 tests 2.6s/48s`.
+- Whole `browser` suite after the change: `pass 227 tests 40s/48s`. `browser -t reference` failed once (`reference_craft_flow`, and on an earlier run `player_circle_lags_and_settles`, both UI-state timing) with load average 11, then passed twice in a row (`pass 27 tests 9.5s`); not viewport-related (no cull fired) and the full suite passed. Reported as load flakiness, not verified further.
+- Context artifact: one line in `packages/engine/CLAUDE.md`.

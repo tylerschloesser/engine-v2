@@ -518,6 +518,8 @@ impl<'a, G: Game> FrameView<'a, G> {
     /// resolved in the vertex shader from its own uniform, not from this accessor (0018 Planning
     /// decisions) -- this accessor exists for a game's own `extract()` to make a screen-space
     /// decision (e.g. culling a drawable below one screen pixel), not for the renderer.
+    /// Set by `frame-loop.ts` each rAF and by `engine/test`'s `stepFrame` (the canvas size, or
+    /// `setViewport(client, w, h)`); `0.0` on any path that sets neither.
     pub fn px_per_tile(&self) -> f32 {
         self.px_per_tile
     }

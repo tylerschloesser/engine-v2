@@ -47,6 +47,7 @@ import {
   instanceBytes,
   pipelineSwitches,
 } from '../../../../src/test/render.ts'
+import { setViewport } from '../../../../src/test/viewport.ts'
 import { fixtureWasm } from './fixture-wasm.ts'
 
 declare global {
@@ -124,6 +125,11 @@ declare global {
        * page texture alone (terrain's own 4 MiB) already satisfies regardless of whether a sprite
        * atlas ever loaded. */
       terrainGpuBytes(): number
+      /** M33d: spawns `n` entities on the fixture's `DETAIL_LAYER` (6) next to the origin and lets
+       * them land in the replica (workers must be resumed). */
+      spawnDetail(n: number): void
+      /** `engine/test`'s `setViewport(client, w, h)`. */
+      setViewport(w: number, h: number): void
     }
   }
 }
@@ -403,6 +409,24 @@ window.__drawablesTest = {
   },
   terrainGpuBytes() {
     return renderer.gpuBytes()
+  },
+  spawnDetail(n) {
+    for (let i = 0; i < n; i++) {
+      const bytes = new TextEncoder().encode(
+        JSON.stringify({ Spawn: { at: { x: i, y: 1 }, small: false, layer: 6, sprite: false } }),
+      )
+      dispatchRaw(client, seq, bytes)
+      seq += 1
+      harness.stepFrame(1000 / 60)
+      stepSimTickSync(client, 1)
+    }
+    harness.stepFrame(1000 / 60)
+    stepSimTickSync(client, 1)
+    harness.stepTick()
+    harness.stepFrame(1000 / 60)
+  },
+  setViewport(w, h) {
+    setViewport(client, w, h)
   },
 }
 

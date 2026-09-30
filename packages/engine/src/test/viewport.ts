@@ -8,6 +8,7 @@ import { clientTestHandle } from '../client.js'
 import type { FrameLoop } from '../frame-loop.js'
 import type { ViewportController } from '../render/viewport.js'
 import { CB_FLAGS, FLAG_REBASE } from '../sab/control.js'
+import { setSteppedViewport } from './client.js'
 
 const controllers = new WeakMap<Client, ViewportController>()
 const loops = new WeakMap<Client, FrameLoop>()
@@ -42,8 +43,21 @@ function loopOf(client: Client): FrameLoop {
 export function setViewport(
   client: Client,
   opts: { cssWidth: number; cssHeight: number; dpr: number },
+): void
+/** M33d, stepped pages: `setViewport(client, w, h)` overrides the device-pixel viewport `stepFrame`
+ * writes into the camera block (default: the canvas's own size), which is what the client worker's
+ * `FrameView::px_per_tile()` reads. Takes effect on the next `stepFrame`. */
+export function setViewport(client: Client, w: number, h: number): void
+export function setViewport(
+  client: Client,
+  a: { cssWidth: number; cssHeight: number; dpr: number } | number,
+  h?: number,
 ): void {
-  controllerOf(client).forceSize(opts.cssWidth, opts.cssHeight, opts.dpr)
+  if (typeof a === 'number') {
+    setSteppedViewport(client, a, h as number)
+    return
+  }
+  controllerOf(client).forceSize(a.cssWidth, a.cssHeight, a.dpr)
 }
 
 /** `engine/test.setVisibility` (Seams, Provides): drives `FrameLoop.pause()`/`resume()` directly,

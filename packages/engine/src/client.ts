@@ -541,6 +541,9 @@ export type WorkerEntry = { kind: WorkerKind; index: number; worker: Worker }
  * milestones add members"); reached only through `clientTestHandle`. */
 export interface ClientTestHandle {
   readonly control: ControlBlock
+  /** The canvas `createClient` was given; `engine/test`'s `stepFrame` reads its `width`/`height` as
+   * the default stepped viewport (M33d). */
+  readonly canvas: HTMLCanvasElement
   readonly sabs: SabSet
   readonly cameraState: CameraState
   readonly cameraWriter: CameraBlockView
@@ -2090,6 +2093,7 @@ export function createClient(options: ClientOptions): Client {
   handles.set(client, {
     control,
     sabs,
+    canvas: options.canvas,
     cameraState,
     cameraWriter,
     clock,

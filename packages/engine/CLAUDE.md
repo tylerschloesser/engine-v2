@@ -56,4 +56,5 @@ Rules in force; the rest: briefs 09, 09b, 11, 17b, 18, `docs/plan/device-checks.
 
 - `tests/browser/*.spec.ts`: `test`/`expect` from `@playwright/test`, `openPage` from `./support/page.js` (fails on any page or console error). `@engines` in a title adds WebKit and Firefox, `pnpm test:slow` only (0020 §4); `@slow` moves a test there.
 - Drive `window.__harness` via `engine/test` (contract: `src/test/harness.ts`; real-client counterparts: `src/test/client.ts`). Call `parkWorkers` before any CDP call into a worker (a blocked worker receives none); a production-topology page parks right after `client.ready`, before `__pageReady`.
+- `stepFrame` writes a viewport into the camera block (the client canvas's `width` x `height`; override with `setViewport(client, w, h)`), so a stepped page's `FrameView::px_per_tile()` is real, not 0.
 - Zero-GC: `gc-test` skill; `burst` controls are `@slow` except on `gc-loop` ([0026](../../docs/decisions/0026-zero-gc-burst-controls-in-slow-tier.md)). `stepTick`/`untilQuiescent` never drain `client.uploadRing`: the page does (M20c).

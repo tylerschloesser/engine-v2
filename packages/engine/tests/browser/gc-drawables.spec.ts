@@ -35,6 +35,8 @@ declare global {
       populatedLayers(): number[]
       gpuBytes(): number
       terrainGpuBytes(): number
+      spawnDetail(n: number): void
+      setViewport(w: number, h: number): void
     }
   }
 }
@@ -238,4 +240,27 @@ test('counters.gpu_bytes_within_budget', async ({ page }, testInfo) => {
     EXPECTED_DRAWABLES_GPU_BYTES,
   )
   expectWithinBudget('counters.render.gpuBytes', gpuBytes ?? Number.POSITIVE_INFINITY)
+})
+
+// M33d: `stepFrame` writes a viewport, so a stepped page's `FrameView::px_per_tile()` is real and
+// the fixture's screen-space cull (layer 6 skipped below 4 px/tile) can fire. Canvas 300 x 150 at
+// `tilesAcross` 24 is 12.5 px/tile: drawn; `setViewport(30, 15)` is 1.25 px/tile: culled.
+test('stepped_page_has_px_per_tile', async ({ page }, testInfo) => {
+  await openPage(page, '/gc-drawables.html')
+  const ready = await page.evaluate(() => window.__gc?.ready)
+  expectAdapter(testInfo, (ready?.adapter as AdapterInfo | null) ?? null)
+  await page.evaluate(() => window.__drawablesTest?.resume())
+  await page.evaluate(() => window.__drawablesTest?.spawnDetail(3))
+  const count = async (): Promise<number> => {
+    await page.evaluate(() => window.__drawablesTest?.stepClientFrameOnly())
+    await page.evaluate(() => window.__drawablesTest?.acquire())
+    return (await page.evaluate(() => window.__drawablesTest?.recordCount())) as number
+  }
+  const drawn = await count()
+  await page.evaluate(() => window.__drawablesTest?.setViewport(30, 15))
+  const culled = await count()
+  expect(drawn - culled, 'the 3 detail entities are culled at 1.25 px/tile').toBe(3)
+  await page.evaluate(() => window.__drawablesTest?.setViewport(300, 150))
+  expect(await count(), 'and drawn again at 12.5 px/tile').toBe(drawn)
+  await page.evaluate(() => window.__drawablesTest?.park())
 })
