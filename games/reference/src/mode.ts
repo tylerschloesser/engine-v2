@@ -20,13 +20,20 @@ export const DEFAULT_WORLD = { seed: world.seed, worldgen: world.worldgen }
 export function selectHost(
   location: { hash: string; protocol: string; host: string },
   serverUrl?: string,
+  local: { persist?: boolean; worldId?: string; params?: { maxEntities?: number } } = {},
 ): Host {
   const { joinKey } = readInvite(location)
   if (joinKey === undefined) {
     return {
       kind: 'local',
-      world: { worldId: 'reference', params: DEFAULT_WORLD },
+      world: {
+        worldId: local.worldId ?? 'reference',
+        params: { ...DEFAULT_WORLD, ...local.params },
+      },
       connect: true,
+      // The world survives a reload (M23, `host.persist`): the production page turns it on, a test
+      // page only when it asks (`?persist`), so the specs that do not test storage start as before.
+      ...(local.persist ? { persist: true } : {}),
     }
   }
   return { kind: 'remote', url: serverUrl ?? wsUrl(location), joinKey }

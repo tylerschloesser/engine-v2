@@ -5,7 +5,7 @@
 // anything that would make the production bundle carry test-only surface.
 import wasm from 'virtual:engine/wasm'
 import type { Client, ClientOptions } from 'engine'
-import { createClient } from 'engine'
+import { createClient, EngineStartError } from 'engine'
 import {
   type AttachedDrawables,
   attachClientDrawables,
@@ -32,7 +32,7 @@ import { createCraftUi } from './ui/craft.js'
 import { createFurnaceUi } from './ui/furnace.js'
 import { createInventoryUi } from './ui/inventory.js'
 import { createRosterUi } from './ui/roster.js'
-import { createStatusUi } from './ui/status.js'
+import { createStatusUi, type StatusUi } from './ui/status.js'
 
 export type StartGameOptions = {
   canvas: HTMLCanvasElement
@@ -54,6 +54,10 @@ export type StartedGame = {
   canvasFormat: GPUTextureFormat
   drawables: AttachedDrawables
   real: RealFrameLoop
+  /** Link status and the refused-start screen (`status.showStartFailure`). */
+  status: StatusUi
+  /** The world id the client was started on (`host.world.worldId`; empty for a remote host). */
+  worldId: string
 }
 
 /**
@@ -193,5 +197,30 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
   attachVisibilityHandling(real.loop)
   real.loop.resume()
 
-  return { client, renderer, device, canvasFormat, drawables, real }
+  return {
+    client,
+    renderer,
+    device,
+    canvasFormat,
+    drawables,
+    real,
+    status: statusUi,
+    worldId: opts.host.kind === 'local' ? opts.host.world.worldId : '',
+  }
+}
+
+/**
+ * Shows the screen for a refused start (`EngineStartError` `'world-busy'` / `'save-incompatible'`,
+ * `ui/status.ts`) and returns true; any other failure returns false and the caller rethrows it.
+ */
+export function showStartFailure(game: StartedGame, e: unknown): boolean {
+  if (!(e instanceof EngineStartError)) return false
+  const { client } = game
+  const world = game.worldId
+  return game.status.showStartFailure(e, {
+    worldId: world,
+    exportWorld: () => client.exportWorld(),
+    deleteWorld: (id) => client.deleteWorld(id),
+    afterDelete: () => location.reload(),
+  })
 }

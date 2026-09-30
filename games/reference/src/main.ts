@@ -5,7 +5,8 @@
 // including `__setCamera`/`__cameraState` (moved here from this file) and the new `__tickCamera`
 // (drives real Playwright gestures through `client.camera.tick()` with no real rAF), lives on
 // `test-entry.ts`/`test.html` instead.
-import { startGame } from './game.js'
+import { attachHostLifecycle } from 'engine'
+import { showStartFailure, startGame } from './game.js'
 import { selectHost } from './mode.js'
 
 declare global {
@@ -19,7 +20,14 @@ const canvas = document.getElementById('game') as HTMLCanvasElement
 // `#k=<joinKey>` in the URL: play on the server this page came from (`/ws` on its own origin);
 // otherwise a world of this browser's own. The local world is `world.json` (the seed every native
 // test also uses, so the landmark tiles this package's tests probe are the ones a player sees).
-const { client } = await startGame({ canvas, host: selectHost(location) })
-await client.ready
+const game = await startGame({ canvas, host: selectHost(location, undefined, { persist: true }) })
+const { client } = game
+try {
+  await client.ready
+  attachHostLifecycle(client) // snapshot and flush when the tab is hidden (M23)
+} catch (e) {
+  // A second tab on this world, or a save this build cannot read: a screen, not a crash.
+  if (!showStartFailure(game, e)) throw e
+}
 
 window.__pageReady = true

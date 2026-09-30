@@ -81,7 +81,13 @@ declare global {
     __untilConfigured?: () => Promise<void>
     /** Local pages: the sim's state hash (16 hex digits); call after a `__stepTick`. */
     __worldHash?: () => Promise<string>
+    /** Local pages: ticks the sim has run; call after a `__stepTick` (workers parked). */
+    __simTick?: () => Promise<number>
     __linkState?: () => string
+    /** Persisted local pages (`/test.html?persist`): the code `client.ready` was refused with. */
+    __startError?: () => string | undefined
+    __exportWorld?: () => Promise<number[]>
+    __importWorld?: (bytes: number[], worldId: string) => Promise<string>
     /** Every circle of the newest DrawList, own and remote; `color` is packed `rgba` (byte 0 = r). */
     __circles?: () => Array<{ x: number; y: number; color: number }>
     __uiState?: () => RefUiState | null

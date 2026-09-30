@@ -1,6 +1,6 @@
 // `statusText` (docs/plan/34-reference-multiplayer.md Scope: link status): pure mapping, no DOM.
 import { expect, test } from 'vitest'
-import { statusText } from './status.js'
+import { startFailureText, statusText } from './status.js'
 
 test('statusText: nothing when online, a line for every other state and refusal', () => {
   expect(statusText('online')).toBeNull()
@@ -12,4 +12,10 @@ test('statusText: nothing when online, a line for every other state and refusal'
   )
   expect(new Set(refused).size).toBe(3)
   expect(refused.every((t) => typeof t === 'string')).toBe(true)
+})
+
+test('startFailureText: a line for the two refused starts, nothing for other codes', () => {
+  expect(startFailureText('world-busy')).toMatch(/another tab/)
+  expect(startFailureText('save-incompatible')).toMatch(/Export/)
+  expect(startFailureText('worker-fatal')).toBeNull()
 })

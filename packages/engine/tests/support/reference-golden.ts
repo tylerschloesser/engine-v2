@@ -68,3 +68,14 @@ export function divergenceMessage(d: ReturnType<typeof firstDivergence>): string
 export function logBytesPerPlayerHour(logBytes: number, players: number, ticks: number): number {
   return (logBytes / (players * ticks)) * TICKS_PER_HOUR
 }
+
+/** `games/reference/tests/fixtures/landmarks.json`: where each resource is under `world.json`'s seed. */
+export function readLandmarks(): {
+  land: { x: number; y: number }
+  resources: Record<'stone' | 'iron' | 'wood' | 'coal', { x: number; y: number }>
+} {
+  const file = fileURLToPath(
+    new URL('../../../../games/reference/tests/fixtures/landmarks.json', import.meta.url),
+  )
+  return JSON.parse(readFileSync(file, 'utf8'))
+}

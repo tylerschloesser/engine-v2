@@ -7,7 +7,7 @@
 // **Never imported by `main.ts`/`game.ts`.** Production must never carry this file's hooks or set
 // `ClientOptions.test` (engine `src/client.ts`'s own "never set by a game" -- true for
 // this game's *production* page; a *test* page is exactly what that field exists for).
-import { clientTestHandle } from 'engine'
+import { clientTestHandle, EngineStartError } from 'engine'
 import { createUploadDrain, RingConsumer, type UploadDrain } from 'engine/render'
 import {
   attachCameraInputTestHooks,
@@ -16,18 +16,19 @@ import {
   drawListRecords,
   injectPointer,
   lastUi,
-  pumpUntilLive,
   readPixels,
   resumeWorkers,
   setCamera,
+  simCounters,
   stepFrame,
+  stepSimTickSync,
   stepTick,
   untilConfigured,
   worldHash,
 } from 'engine/test'
 import type { RefAction } from './bindings/RefAction.js'
 import type { RefUi } from './bindings/RefUi.js'
-import { startGame } from './game.js'
+import { showStartFailure, startGame } from './game.js'
 import { selectHost } from './mode.js'
 
 declare global {
@@ -128,6 +129,16 @@ declare global {
      * are parked after a `__stepTick`, which is what it needs). */
     __worldHash?: () => Promise<string>
     __untilConfigured?: () => Promise<void>
+    /** M34b (local pages): ticks the sim has run (`SimHostCounters.ticksRun`; a resumed world
+     * continues from the tick it was saved at). Like `__worldHash`, needs the workers parked. */
+    __simTick?: () => Promise<number>
+    /** M34b (local pages): the `EngineStartError` code `client.ready` was refused with
+     * (`'world-busy'`, `'save-incompatible'`), or `undefined` when the game started. */
+    __startError?: () => string | undefined
+    /** M34b (persisted local pages, `?persist`): `client.exportWorld()` as bytes; it pauses the sim
+     * worker, snapshots if dirty and flushes, so it is also the clean boundary before a reload. */
+    __exportWorld?: () => Promise<number[]>
+    __importWorld?: (bytes: number[], worldId: string) => Promise<string>
     __linkState?: () => string
     __circles?: () => Array<{ x: number; y: number; color: number }>
     __clock?: () => { authoritative: number; predicted: number; ticksPerSecond: number }
@@ -158,11 +169,22 @@ const altSpawnParams = new URLSearchParams(location.search).has('altSpawnParams'
 // M34: `?server=<ws url>` plus an invite (`#k=<joinKey>`) makes this a remote page against a test
 // server on another port (`tests/helpers/server.ts`); without them it is the local page every
 // single-player spec drives. A remote page has no `test.game`: the world comes from `Welcome`.
-const serverUrl = new URLSearchParams(location.search).get('server') ?? undefined
-const host = selectHost(location, serverUrl)
+const query = new URLSearchParams(location.search)
+const serverUrl = query.get('server') ?? undefined
+// M34b: `?persist` (or `?persist=<worldId>`) keeps the local world in OPFS like the production page
+// (`main.ts`), so a spec can reload, open a second tab, export and import. `?maxEntities=<n>` caps the
+// world's entity budget (the state-budget spec). Without them the page is the in-memory one every
+// other spec was written against.
+const persistParam = query.get('persist')
+const maxEntities = query.get('maxEntities')
+const host = selectHost(location, serverUrl, {
+  ...(persistParam !== null ? { persist: true } : {}),
+  ...(persistParam ? { worldId: persistParam } : {}),
+  ...(maxEntities !== null ? { params: { maxEntities: Number(maxEntities) } } : {}),
+})
 const remote = host.kind === 'remote'
 
-const { client, renderer, device, canvasFormat, drawables } = await startGame({
+const game = await startGame({
   canvas,
   host,
   test: {
@@ -175,6 +197,7 @@ const { client, renderer, device, canvasFormat, drawables } = await startGame({
   clock,
   scheduler: clock,
 })
+const { client, renderer, device, canvasFormat, drawables } = game
 
 // M30 gate round 3: subscribe `lastUi` before anything steps a frame, so `__uiState()` is non-null
 // exactly once the first `Ui` has reached this thread -- and with it `startGame`'s own one-shot
@@ -188,8 +211,60 @@ lastUi<RefUi>(client)
 // resolves once something drives the sim -- `pumpUntilLive` does that itself.
 // A remote page has no sim worker to step: the test's own server ticks (`__serverTick`, below), and
 // its handshake completes across those ticks, so the page is "ready" once its workers are.
+let startError: string | undefined
 if (remote) await client.ready
-else await pumpUntilLive(client)
+else startError = await goLive()
+window.__startError = () => startError
+window.__exportWorld = async () => {
+  // A refused start has parked nothing to resume (and `'save-incompatible'` keeps its worker alive
+  // only to export and delete).
+  if (startError === undefined) await resumeWorkers(client)
+  return Array.from(new Uint8Array(await (await client.exportWorld()).arrayBuffer()))
+}
+window.__importWorld = async (bytes, worldId) => {
+  if (startError === undefined) await resumeWorkers(client)
+  return (await client.importWorld(new Uint8Array(bytes), { worldId })).worldId
+}
+if (startError !== undefined) {
+  // Nothing of the game runs behind the screen: report ready and stop wiring the page.
+  window.__pageReady = true
+  await new Promise<never>(() => {})
+}
+
+/**
+ * `pumpUntilLive` for a page whose start may be refused: a second tab on a persisted world
+ * (`'world-busy'`: the sim worker dies before it reports ready, so `workersReady` rejects) or a save
+ * this build cannot read (`'save-incompatible'`, rejected later by `client.ready`). The refusal shows
+ * the game's screen (`ui/status.ts`) and is returned as its code; anything else is thrown.
+ */
+async function goLive(): Promise<string | undefined> {
+  let shown: string | undefined // `workersReady` and `ready` both reject: one screen
+  const refused = (e: unknown): string | undefined => {
+    if (shown !== undefined) return shown
+    if (!(e instanceof EngineStartError) || !showStartFailure(game, e)) throw e
+    shown = e.code
+    return shown
+  }
+  // Observed before anything awaits it: a refusal must never be an unhandled rejection.
+  let settled = false
+  const outcome = client.ready.then(
+    () => undefined,
+    (e: unknown) => refused(e),
+  )
+  void outcome.then(() => {
+    settled = true
+  })
+  try {
+    await clientTestHandle(client).workersReady
+  } catch (e) {
+    return refused(e)
+  }
+  while (!settled) {
+    stepSimTickSync(client, 1)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  return outcome
+}
 
 attachCameraInputTestHooks(client, clientTestHandle(client).cameraBundle)
 
@@ -404,6 +479,7 @@ window.__injectPointer = (phase, id, x, y, tMs, kind) => {
 }
 
 window.__worldHash = () => worldHash(client)
+window.__simTick = async () => (await simCounters(client)).ticksRun
 
 window.__dispatchFurnacePickUp = (x, y) => {
   const action: RefAction = { FurnacePickUp: { at: { x, y } } }
