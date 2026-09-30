@@ -285,6 +285,11 @@ struct SimConfig<P> {
     /// [`BandwidthConfig::unpaced`].
     #[serde(default)]
     unpaced: bool,
+    /// 0009 `WorldConfig.actionRate` (0004 defaults, 20 per second / burst 40, when absent).
+    #[serde(default)]
+    action_per_s: Option<u32>,
+    #[serde(default)]
+    action_burst: Option<u32>,
 }
 
 fn default_view_max_tiles() -> u16 {
@@ -973,7 +978,11 @@ impl<G: Game> Host<G> {
         self.conns[idx] = Some(ConnSlot {
             player,
             camera: None,
-            subs: SubscriptionSet::new(crate::world::ChunkDims::new(G::CHUNK_BITS), G::TICK_RATE),
+            subs: SubscriptionSet::with_cap(
+                crate::world::ChunkDims::new(G::CHUNK_BITS),
+                G::TICK_RATE,
+                self.view_max_chunks as usize,
+            ),
             first_frame_pending: true,
             counters: ConnCounters::default(),
             pending_results,
@@ -1025,7 +1034,11 @@ impl<G: Game> Host<G> {
         self.conns[idx] = Some(ConnSlot {
             player,
             camera: None,
-            subs: SubscriptionSet::new(crate::world::ChunkDims::new(G::CHUNK_BITS), G::TICK_RATE),
+            subs: SubscriptionSet::with_cap(
+                crate::world::ChunkDims::new(G::CHUNK_BITS),
+                G::TICK_RATE,
+                self.view_max_chunks as usize,
+            ),
             first_frame_pending: true,
             counters: ConnCounters::default(),
             pending_results,
@@ -1260,7 +1273,11 @@ impl<G: Game> Host<G> {
         self.conns[idx] = Some(ConnSlot {
             player,
             camera: initial_camera,
-            subs: SubscriptionSet::new(crate::world::ChunkDims::new(G::CHUNK_BITS), G::TICK_RATE),
+            subs: SubscriptionSet::with_cap(
+                crate::world::ChunkDims::new(G::CHUNK_BITS),
+                G::TICK_RATE,
+                self.view_max_chunks as usize,
+            ),
             first_frame_pending: true,
             counters: ConnCounters::default(),
             pending_results,
@@ -1400,13 +1417,16 @@ impl<G: Game> Host<G> {
             Ok(batch) => batch,
             Err(_) => return Err(UplinkError),
         };
+        // docs/plan/31-rates-and-integrity.md step 5 (0010 "Host drop rule"): camera reports beyond
+        // 20 per second per client are discarded, unapplied.
+        let now = self.last_tick.0;
         if let Some(camera) = batch.camera
             && let Some(Some(slot)) = self.conns.get_mut(idx)
+            && slot.pace.take_camera(now)
         {
             slot.camera = Some(camera);
         }
-        // docs/plan/31-rates-and-integrity.md step 4: the one backpressure path on every host.
-        let now = self.last_tick.0;
+        // Step 4: the one backpressure path on every host.
         if let Some(Some(slot)) = self.conns.get_mut(idx) {
             slot.pace.on_uplink(now, batch.last_received_tick);
         }
@@ -1476,6 +1496,18 @@ impl<G: Game> Host<G> {
                     return Err(UplinkError);
                 }
             };
+            // 0004 admit step 2: the per-connection action rate limit, before `G::admit` runs.
+            // Unlogged like every admission rejection, and (like a game reject) not folded into
+            // `highest_seen`, so a resend of this `seq` is admitted afresh.
+            if let Some(Some(slot)) = self.conns.get_mut(idx)
+                && !slot.pace.take_action(now)
+            {
+                slot.pending_results.push(Outcome {
+                    seq,
+                    result: Err(Rejected::Engine(EngineReject::RateLimited)),
+                });
+                continue;
+            }
             let result = {
                 let sim = self.sim.as_ref().expect("checked above");
                 self.mark_progress(Phase::Admit, sim.tick().0, seq);
@@ -1641,7 +1673,7 @@ impl<G: Game> Host<G> {
         let tick_now = self.last_tick.0;
         self.scratch_left.clear();
         for &c in slot.subs.left() {
-            if slot.pace.drop_queued(c) {
+            if slot.pace.drop_queued(c, tick_now) {
                 continue;
             }
             if slot.pace.is_held(c) {
@@ -2442,6 +2474,8 @@ where
                         .hard_cap_bytes_per_s
                         .unwrap_or(d.hard_cap_bytes_per_s),
                     unpaced: cfg.unpaced,
+                    action_per_s: cfg.action_per_s.unwrap_or(d.action_per_s),
+                    action_burst: cfg.action_burst.unwrap_or(d.action_burst),
                 }
             },
             restore_reader: None,
@@ -3402,23 +3436,23 @@ where
     }
 
     /// docs/plan/31-rates-and-integrity.md (`ABI_VERSION` 34): `PacingCounters` for `conn` as
-    /// fourteen little-endian `u32`s, in order `reenters_within_5s`, `reenter_bytes`,
-    /// `cap_evictions`, `late_visible_max`, `late_visible_p95`, `degrade_level`, `degraded_ticks`,
+    /// sixteen little-endian `u32`s, in order `reenters_within_5s`, `reenter_bytes`,
+    /// `cap_evictions`, `late_visible_max`, `late_visible_p95`, `degrade_level`, `dropped_visible`,
     /// `queued_enters`, `bucket_tokens` (`i32`), `held_chunks`, `collapses`, `bundles`,
-    /// `max_emit_gap`, `order_violations` -- 56 bytes, all zero for an unknown conn.
+    /// `max_emit_gap`, `order_violations`, `rate_limited`, `camera_reports_dropped` -- 64 bytes, all zero for an unknown conn.
     fn sim_pacing_counters(&mut self, conn: u32, result: &mut [u8]) -> Status {
-        let Some(out) = result.get_mut(..56) else {
+        let Some(out) = result.get_mut(..64) else {
             return Status::BadLength;
         };
         let c = self.pacing_counters(conn).unwrap_or_default();
-        let fields: [u32; 14] = [
+        let fields: [u32; 16] = [
             c.reenters_within_5s as u32,
             c.reenter_bytes as u32,
             c.cap_evictions as u32,
             c.late_visible_max as u32,
             c.late_visible_p95 as u32,
             c.degrade_level as u32,
-            c.degraded_ticks as u32,
+            c.dropped_visible as u32,
             c.queued_enters as u32,
             c.bucket_tokens as i32 as u32,
             c.held_chunks as u32,
@@ -3426,6 +3460,8 @@ where
             c.bundles as u32,
             c.max_emit_gap as u32,
             c.order_violations as u32,
+            c.rate_limited as u32,
+            c.camera_reports_dropped as u32,
         ];
         for (i, f) in fields.iter().enumerate() {
             out[i * 4..i * 4 + 4].copy_from_slice(&f.to_le_bytes());

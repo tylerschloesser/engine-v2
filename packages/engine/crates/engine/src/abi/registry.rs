@@ -493,7 +493,7 @@ pub trait Instance: Sized + 'static {
     }
 
     /// docs/plan/31-rates-and-integrity.md (`ABI_VERSION` 33 -> 34), `engine/test` only: `host::
-    /// PacingCounters` for `conn`, fourteen little-endian `u32`s (56 bytes) into `Result`, in the
+    /// PacingCounters` for `conn`, sixteen little-endian `u32`s (64 bytes) into `Result`, in the
     /// order `Host::sim_pacing_counters` documents. An unknown `conn` writes zeros and returns `Ok`.
     fn sim_pacing_counters(&mut self, _conn: u32, _result: &mut [u8]) -> Status {
         Status::Unsupported

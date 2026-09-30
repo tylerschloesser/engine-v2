@@ -98,6 +98,9 @@ export function buildSimInstanceConfig(
       hardCapBytesPerS: cfg.bandwidth?.hardCapBytesPerS,
       // A local host has no network to pace (`BandwidthConfig::unpaced`, `host/pacing.rs`).
       unpaced: opts?.unpaced ? true : undefined,
+      // 0009 `WorldConfig.actionRate` (0004 defaults, 20 per second / burst 40, when unset).
+      actionPerS: cfg.actionRate?.perSecond,
+      actionBurst: cfg.actionRate?.burst,
     },
   }
 }

@@ -100,6 +100,8 @@ enum Class {
 pub struct SubscriptionSet {
     dims: ChunkDims,
     hold: Ticks,
+    /// The chunk cap (0010: 128 unless `WorldConfig.view.maxChunks` says otherwise).
+    cap: usize,
     entries: Vec<Entry>,
     target: Vec<ChunkCoord>,
     entered: Vec<ChunkCoord>,
@@ -113,14 +115,22 @@ pub struct SubscriptionSet {
 
 impl SubscriptionSet {
     pub fn new(dims: ChunkDims, tick_rate: TickRate) -> Self {
+        Self::with_cap(dims, tick_rate, CAP_CHUNKS)
+    }
+
+    /// As [`Self::new`] with a configured cap (0009 `view.maxChunks`); every buffer is reserved for
+    /// it once, here.
+    pub fn with_cap(dims: ChunkDims, tick_rate: TickRate, cap: usize) -> Self {
+        let cap = cap.max(1);
         let zero = ChunkRect::new(ChunkCoord::new(0, 0), ChunkCoord::new(0, 0));
         SubscriptionSet {
             dims,
             hold: tick_rate.secs(5),
-            entries: Vec::with_capacity(CAP_CHUNKS + 4),
-            target: Vec::with_capacity(CAP_CHUNKS),
-            entered: Vec::with_capacity(CAP_CHUNKS),
-            left: Vec::with_capacity(CAP_CHUNKS),
+            cap,
+            entries: Vec::with_capacity(cap + 4),
+            target: Vec::with_capacity(cap),
+            entered: Vec::with_capacity(cap),
+            left: Vec::with_capacity(cap),
             cap_evictions: 0,
             visible: zero,
             ring1: zero,
@@ -210,7 +220,7 @@ impl SubscriptionSet {
     /// `entered` instead of appearing in `left` (net: it never happened, from the client's view).
     fn evict_over_cap(&mut self) {
         let center = rect_center(self.visible);
-        while self.entries.len() > CAP_CHUNKS {
+        while self.entries.len() > self.cap {
             let mut worst_idx = 0;
             let mut worst_key = (self.class(self.entries[0].chunk), 0i64);
             worst_key.1 = dist_sq(self.entries[0].chunk, center);

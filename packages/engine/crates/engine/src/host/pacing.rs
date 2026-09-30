@@ -26,6 +26,10 @@ pub struct BandwidthConfig {
     /// chunk back and degrade never engages. A host that is stepped faster than its client renders
     /// (the stepped test entries) would otherwise read as a stalled peer.
     pub unpaced: bool,
+    /// 0009 `WorldConfig.actionRate`, defaults from 0004 (20 per second, burst 40): actions past it
+    /// are answered `Rejected(Engine(RateLimited))`, unlogged.
+    pub action_per_s: u32,
+    pub action_burst: u32,
 }
 
 impl Default for BandwidthConfig {
@@ -36,12 +40,16 @@ impl Default for BandwidthConfig {
             chunk_burst_bytes: 128_000,
             hard_cap_bytes_per_s: 64_000,
             unpaced: false,
+            action_per_s: 20,
+            action_burst: 40,
         }
     }
 }
 
 /// Cost of a pristine chunk enter (0010: "a pristine chunk enter is ~3 B").
 pub const PRISTINE_ENTER_COST: i64 = 3;
+/// 0010 "Host drop rule": camera reports beyond 20 per second per client are discarded.
+pub const CAMERA_REPORTS_PER_S: u32 = 20;
 /// Never collapse a chunk's deltas into a snapshot below this many queued delta bytes, however
 /// small the chunk's snapshot.
 pub const MIN_COLLAPSE_BYTES: u32 = 64;
@@ -95,6 +103,8 @@ pub struct PacingCounters {
     pub late_visible_p95: u64,
     pub degrade_level: u64,
     pub degraded_ticks: u64,
+    /// Visible chunks dropped unsent (subscription left or evicted while queued).
+    pub dropped_visible: u64,
     pub queued_enters: u64,
     pub bucket_tokens: i64,
     pub held_chunks: u64,
@@ -103,6 +113,9 @@ pub struct PacingCounters {
     /// The most ticks that ever passed between two messages sent to this connection (the heartbeat
     /// interval, held at every degrade level).
     pub max_emit_gap: u64,
+    /// Actions answered `RateLimited`, and camera reports discarded past 20 per second.
+    pub rate_limited: u64,
+    pub camera_reports_dropped: u64,
     /// Chunks sent while a visible chunk was still queued behind them: always 0 (visible first).
     pub order_violations: u64,
 }
@@ -148,10 +161,20 @@ pub struct Pacing {
     pub reenter_bytes: u64,
     pub cap_evictions: u64,
     pub degraded_ticks: u64,
+    pub dropped_visible: u64,
     pub collapses: u64,
     pub bundles: u64,
     max_emit_gap: u32,
     pub order_violations: u64,
+    // -- action and camera limits
+    action_tokens: i64,
+    action_rem: u32,
+    action_tick: u32,
+    cam_window: Vec<u8>,
+    cam_sum: u32,
+    cam_tick: u32,
+    pub rate_limited: u64,
+    pub camera_reports_dropped: u64,
 }
 
 impl Pacing {
@@ -189,11 +212,60 @@ impl Pacing {
             reenter_bytes: 0,
             cap_evictions: 0,
             degraded_ticks: 0,
+            dropped_visible: 0,
             collapses: 0,
             bundles: 0,
             max_emit_gap: 0,
             order_violations: 0,
+            action_tokens: cfg.action_burst as i64,
+            action_rem: 0,
+            action_tick: now,
+            cam_window: vec![0; hz as usize],
+            cam_sum: 0,
+            cam_tick: now,
+            rate_limited: 0,
+            camera_reports_dropped: 0,
         }
+    }
+
+    /// Takes one action token (refilled `action_per_s / hz` per elapsed tick, remainder carried,
+    /// capped at the burst); `false` means over the limit.
+    pub fn take_action(&mut self, tick: u32) -> bool {
+        let elapsed = tick.wrapping_sub(self.action_tick).min(self.hz * 60);
+        self.action_tick = tick;
+        let total = self.action_rem as u64 + self.cfg.action_per_s as u64 * elapsed as u64;
+        self.action_tokens += (total / self.hz as u64) as i64;
+        self.action_rem = (total % self.hz as u64) as u32;
+        if self.action_tokens >= self.cfg.action_burst as i64 {
+            self.action_tokens = self.cfg.action_burst as i64;
+            self.action_rem = 0;
+        }
+        if self.action_tokens >= 1 {
+            self.action_tokens -= 1;
+            true
+        } else {
+            self.rate_limited += 1;
+            false
+        }
+    }
+
+    /// Counts one camera report in the last second; `false` (and counted) past 20 (0010).
+    pub fn take_camera(&mut self, tick: u32) -> bool {
+        let steps = tick.wrapping_sub(self.cam_tick).min(self.hz);
+        for i in 1..=steps {
+            let slot = (self.cam_tick.wrapping_add(i) % self.hz) as usize;
+            self.cam_sum -= self.cam_window[slot] as u32;
+            self.cam_window[slot] = 0;
+        }
+        self.cam_tick = tick;
+        if self.cam_sum >= CAMERA_REPORTS_PER_S {
+            self.camera_reports_dropped += 1;
+            return false;
+        }
+        let slot = (tick % self.hz) as usize;
+        self.cam_window[slot] = self.cam_window[slot].saturating_add(1);
+        self.cam_sum += 1;
+        true
     }
 
     pub fn cfg(&self) -> BandwidthConfig {
@@ -266,10 +338,17 @@ impl Pacing {
         self.last_emit_tick = tick;
     }
 
-    pub fn drop_queued(&mut self, chunk: ChunkCoord) -> bool {
+    /// A queued enter whose chunk left the subscription: dropped unsent. One that had been visible
+    /// counts in `dropped_visible` and, as a wait cut short, in the late-visible histogram (else
+    /// `lateVisibleTicks` would only ever describe the chunks that did arrive).
+    pub fn drop_queued(&mut self, chunk: ChunkCoord, tick: u32) -> bool {
         match self.queue_position(chunk) {
             Some(i) => {
-                self.queue.remove(i);
+                let q = self.queue.remove(i);
+                if let Some(t) = q.visible_since {
+                    self.dropped_visible += 1;
+                    self.note_late_visible(tick.wrapping_sub(t));
+                }
                 true
             }
             None => false,
@@ -460,6 +539,7 @@ impl Pacing {
             late_visible_p95: self.late_p95(),
             degrade_level: self.level as u64,
             degraded_ticks: self.degraded_ticks,
+            dropped_visible: self.dropped_visible,
             queued_enters: self.queue.len() as u64,
             bucket_tokens: self.tokens,
             held_chunks: self.held.len() as u64,
@@ -467,6 +547,8 @@ impl Pacing {
             bundles: self.bundles,
             max_emit_gap: self.max_emit_gap as u64,
             order_violations: self.order_violations,
+            rate_limited: self.rate_limited,
+            camera_reports_dropped: self.camera_reports_dropped,
         }
     }
 }
@@ -548,5 +630,35 @@ mod tests {
         }
         assert_eq!(p.late_p95(), 30);
         assert_eq!(p.counters().late_visible_max, 30);
+    }
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::*;
+
+    #[test]
+    fn action_bucket_bursts_then_refills_per_tick() {
+        let mut p = Pacing::new(BandwidthConfig::default(), TickRate::HZ_20, 0);
+        assert_eq!(
+            (0..50).filter(|_| p.take_action(0)).count(),
+            40,
+            "the burst"
+        );
+        assert!(!p.take_action(0));
+        assert!(p.take_action(1), "20/s at 20 Hz is one action per tick");
+        assert!(!p.take_action(1));
+        assert_eq!(p.rate_limited, 12);
+    }
+
+    #[test]
+    fn camera_reports_are_capped_at_20_per_second() {
+        let mut p = Pacing::new(BandwidthConfig::default(), TickRate::HZ_20, 0);
+        assert_eq!((0..30).filter(|_| p.take_camera(5)).count(), 20);
+        assert_eq!(p.camera_reports_dropped, 10);
+        assert!(
+            p.take_camera(5 + 20),
+            "a second later the window has moved on"
+        );
     }
 }

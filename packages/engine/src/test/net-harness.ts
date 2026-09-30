@@ -251,8 +251,8 @@ export interface NetHarnessCounters {
    * `sim_pacing_counters`), current values at the time of the call: enters of a chunk that left
    * under 5 s before (`reentersWithin5s`, and their bucket bytes `reenterBytes`), subscription
    * evictions over the 128-chunk cap, ticks from a chunk becoming visible to its enter being sent
-   * (max and p95 over all sent), the degrade level (1, 2 or 4 ticks per message) and ticks spent
-   * degraded, enters still queued, the chunk bucket's tokens, chunks the client holds, deltas
+   * (max and p95 over all sent), the degrade level (1, 2 or 4 ticks per message) and visible chunks
+   * dropped unsent (left the subscription while queued), enters still queued, the chunk bucket's tokens, chunks the client holds, deltas
    * collapsed into a snapshot, and multi-frame messages sent. All zero if the host instance is not
    * reachable. */
   reentersWithin5s: number
@@ -261,7 +261,7 @@ export interface NetHarnessCounters {
   lateVisibleTicksMax: number
   lateVisibleTicksP95: number
   degradeLevel: number
-  degradedTicks: number
+  droppedVisible: number
   queuedEnters: number
   bucketTokens: number
   heldChunks: number
@@ -271,6 +271,9 @@ export interface NetHarnessCounters {
   maxEmitGap: number
   /** Chunks sent while a visible chunk still waited in the queue (0010: visible first): always 0. */
   orderViolations: number
+  /** Actions answered `RateLimited` (0004), and camera reports discarded past 20 per second (0010). */
+  rateLimited: number
+  cameraReportsDropped: number
 }
 
 /** A downlink message's own leading byte for `MsgType::Welcome` (`wire/mod.rs`) -- a private local
@@ -468,6 +471,11 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     ...(opts.world?.keepTickingWhenEmpty !== undefined
       ? { keepTickingWhenEmpty: opts.world.keepTickingWhenEmpty }
       : {}),
+    // docs/plan/31-rates-and-integrity.md: `actionRate`/`bandwidth`/`view` overrides reach the host
+    // (`rates/action-rate-limited` moves the limit; `WorldConfig.bandwidth` moves the bucket).
+    ...(opts.world?.actionRate !== undefined ? { actionRate: opts.world.actionRate } : {}),
+    ...(opts.world?.bandwidth !== undefined ? { bandwidth: opts.world.bandwidth } : {}),
+    ...(opts.world?.view !== undefined ? { view: opts.world.view } : {}),
   }
   const gameWorldgen = worldCfg.params.worldgen
 
@@ -819,7 +827,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     }
   }
 
-  /** `sim_pacing_counters`: fourteen LE `u32`s. */
+  /** `sim_pacing_counters`: sixteen LE `u32`s. */
   function readPacing(connId: number) {
     const zero = {
       reentersWithin5s: 0,
@@ -828,7 +836,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       lateVisibleTicksMax: 0,
       lateVisibleTicksP95: 0,
       degradeLevel: 0,
-      degradedTicks: 0,
+      droppedVisible: 0,
       queuedEnters: 0,
       bucketTokens: 0,
       heldChunks: 0,
@@ -836,13 +844,15 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       bundles: 0,
       maxEmitGap: 0,
       orderViolations: 0,
+      rateLimited: 0,
+      cameraReportsDropped: 0,
     }
     const inst = serverInternals(server).rawInstance
     const region = inst?.region(RegionId.Result)
     if (!inst || !region) return zero
     const status = inst.call1(inst.x.sim_pacing_counters, connId)
     if (status !== 0) return zero
-    const v = new DataView(region.u8.buffer, region.u8.byteOffset, 56)
+    const v = new DataView(region.u8.buffer, region.u8.byteOffset, 64)
     return {
       reentersWithin5s: v.getUint32(0, true),
       reenterBytes: v.getUint32(4, true),
@@ -850,7 +860,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       lateVisibleTicksMax: v.getUint32(12, true),
       lateVisibleTicksP95: v.getUint32(16, true),
       degradeLevel: v.getUint32(20, true),
-      degradedTicks: v.getUint32(24, true),
+      droppedVisible: v.getUint32(24, true),
       queuedEnters: v.getUint32(28, true),
       bucketTokens: v.getInt32(32, true),
       heldChunks: v.getUint32(36, true),
@@ -858,6 +868,8 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       bundles: v.getUint32(44, true),
       maxEmitGap: v.getUint32(48, true),
       orderViolations: v.getUint32(52, true),
+      rateLimited: v.getUint32(56, true),
+      cameraReportsDropped: v.getUint32(60, true),
     }
   }
 

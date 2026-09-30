@@ -3,46 +3,22 @@
 // names its 0010 cell or worked number). Everything runs on the virtual clock: byte counts and tick
 // counts are functions of `(seed, scenario)` alone.
 import { expect, test } from 'vitest'
+import { MsgClass } from '../../src/server.js'
 import { assertBudget } from '../../src/test/budget.js'
 import { createNetHarness, type NetHarness } from '../../src/test/net-harness.js'
 import { loadFixture } from '../support/fixtures.js'
-import { putsFixture } from './support.js'
+import { denseWorld, putsFixture, worstSecondAfter } from './support.js'
 
 const TICK_HZ = 20
 /** The dense region: chunks (C0..C0+10) on both axes, 0010's 121-chunk maximum view (ring 1 of a
  * 9 x 9 visible rectangle), far from `fx-busy-field`'s steady field at the origin. */
 const C0 = 40
 const DENSE_CENTRE = (C0 + 5) * 32 + 16
-const FAR = -3000
 /** A 256-tile view: half-extent 128, the clamp (0010). */
 const MAX_VIEW = { halfW: 128, halfH: 128 }
 
 function measure(name: string, counters: object) {
   if (process.env.MEASURE) console.log(`MEASURE ${name} ${JSON.stringify(counters)}`)
-}
-
-/** `clients` clients on `fx-busy-field`: client 0 fills the dense region with `Fill` actions and
- * every client then sits at `FAR` (nothing subscribed near the fill). */
-async function denseWorld(seed: number, clients: number): Promise<NetHarness> {
-  const h = await createNetHarness({
-    fixture: await loadFixture('busy-field'),
-    seed,
-    clients,
-    world: { params: { maxEntities: 40_000, maxActionGrowth: 65_536 } },
-  })
-  for (const c of h.clients) c.setView({ x: FAR, y: FAR, halfW: 1, halfH: 1 })
-  await h.advanceTicks(5)
-  const filler = h.clients[0]
-  if (!filler) throw new Error('no filler')
-  let n = 0
-  for (let cy = C0; cy <= C0 + 10; cy++) {
-    for (let cx = C0; cx <= C0 + 10; cx++) {
-      filler.dispatch({ Fill: { cx, cy } })
-      if (++n % 24 === 0) await h.advanceTicks(6)
-    }
-  }
-  await h.advanceTicks(30)
-  return h
 }
 
 /** Bytes a client's enters cost on the wire: pristine coordinates plus snapshot entries. */
@@ -148,13 +124,7 @@ test('rates/join-dense-visible-first', async () => {
       last = c
     }
     // The worst 1 s of downlink once the burst is spent: refill plus tick frames, never the ceiling.
-    const perTick = new Map(h.counters(1).perTick.map((r) => [r.tick, r.bytesDown]))
-    let worst = 0
-    for (let t = burstSpentAt + 1; t + TICK_HZ <= h.hostTick(); t++) {
-      let sum = 0
-      for (let k = 0; k < TICK_HZ; k++) sum += perTick.get(t + k) ?? 0
-      worst = Math.max(worst, sum)
-    }
+    const worst = worstSecondAfter(h, 1, burstSpentAt)
     const result = {
       enterBytes: enterBytes(last) - enterBytes(base),
       ticksToDrain: drainedAt,
@@ -348,3 +318,159 @@ test('rates/teleport-drops-queued-enters', async () => {
     await h.dispose()
   }
 }, 120_000)
+
+test('rates/uplink-panning', async () => {
+  const h = await createNetHarness({ fixture: await putsFixture(), seed: 3110, clients: 1 })
+  try {
+    const c0 = h.clients[0]
+    if (!c0) throw new Error('no client')
+    c0.setCamera({ x: 0, y: 0, tilesAcross: 60 })
+    await h.advanceTicks(40)
+    const before = h.counters(0)
+    c0.panTo(600, 0, 120) // 5 s at 120 tiles/s
+    await h.advanceTicks(5 * TICK_HZ)
+    const after = h.counters(0)
+    const window = {
+      bytesUp: after.bytesUp - before.bytesUp,
+      batches: after.messagesUp - before.messagesUp,
+    }
+    measure('uplinkPan', window)
+    assertBudget(window, 'net.uplinkPanningBytes5s')
+    await h.settle()
+    h.assertConverged()
+  } finally {
+    await h.dispose()
+  }
+})
+
+test('rates/seven-remote-presences', async () => {
+  const h = await createNetHarness({
+    fixture: await loadFixture('presence'),
+    seed: 3111,
+    clients: 8,
+  })
+  try {
+    const observer = 7
+    h.clients[observer]?.setView({ x: 30, y: 0, halfW: 20, halfH: 20 })
+    const drive = () => {
+      for (let i = 0; i < 7; i++) {
+        const s = h.clock.now() / 1000
+        const phase = i * 0.9
+        h.clients[i]?.setView({
+          x: 30 + 8 * Math.sin(0.5 * s + phase),
+          y: 4 * Math.sin(0.9 * s + 1 + phase),
+          halfW: 10,
+          halfH: 10,
+          velX: 4 * Math.cos(0.5 * s + phase),
+          velY: 3.6 * Math.cos(0.9 * s + 1 + phase),
+        })
+      }
+    }
+    for (let k = 0; k < 50; k++) {
+      drive()
+      await h.advanceTicks(1)
+    }
+    const before = h.counters(observer)
+    for (let k = 0; k < 10 * TICK_HZ; k++) {
+      drive()
+      await h.advanceTicks(1)
+    }
+    const after = h.counters(observer)
+    const window = { bytesDown: after.bytesDown - before.bytesDown }
+    measure('presence7', window)
+    expect(h.clients[observer]?.samplePresences().length).toBe(7)
+    assertBudget(window, 'net.sevenRemotePresencesBytes10s')
+  } finally {
+    await h.dispose()
+  }
+})
+
+async function actionRateRun(seed: number, actionRate?: { perSecond: number; burst: number }) {
+  const h = await createNetHarness({
+    fixture: await putsFixture(),
+    seed,
+    clients: 1,
+    ...(actionRate ? { world: { actionRate } } : {}),
+  })
+  try {
+    const c0 = h.clients[0]
+    if (!c0) throw new Error('no client')
+    c0.setCamera({ x: 0, y: 0, tilesAcross: 20 })
+    await h.advanceTicks(40)
+    let limited = 0
+    let confirmed = 0
+    c0.onActionResult((_seq, result) => {
+      if (typeof result === 'object' && 'Rejected' in result && 'Engine' in result.Rejected) {
+        if (result.Rejected.Engine === 'RateLimited') limited++
+      } else if (result === 'Confirmed') confirmed++
+    })
+    // Two bursts of 32 (the client's own pending cap), one tick apart once the first is acked.
+    // (An admission-time rejection is unlogged, so it does not move `ack_seq`: the client's pending
+    // queue keeps it until a later accepted action is acked, and `dispatch` refuses past 32.)
+    let sent = 0
+    for (let round = 0; round < 2; round++) {
+      for (let i = 0; i < 32; i++) {
+        try {
+          c0.dispatch({ SetMotd: { n: round * 100 + i } })
+          sent++
+        } catch {
+          break
+        }
+      }
+      await h.advanceTicks(3)
+    }
+    await h.settle()
+    const c = h.counters(0)
+    h.assertConverged()
+    return { rateLimited: c.rateLimited, seenByClient: limited, confirmed, sent }
+  } finally {
+    await h.dispose()
+  }
+}
+
+test('rates/action-rate-limited', async () => {
+  // The engine default (0004: 20/s, burst 40), then a smaller burst: the limit moves with the config.
+  const dflt = await actionRateRun(3112)
+  const tight = await actionRateRun(3113, { perSecond: 20, burst: 10 })
+  measure('actionRate', { dflt, tight })
+  expect(dflt.seenByClient, 'the client hears RateLimited through onActionResult').toBe(
+    dflt.rateLimited,
+  )
+  expect(tight.seenByClient).toBe(tight.rateLimited)
+  expect(tight.rateLimited).toBeGreaterThan(dflt.rateLimited)
+  expect(dflt.rateLimited + dflt.confirmed, 'every action is answered once').toBe(dflt.sent)
+  expect(tight.rateLimited + tight.confirmed).toBe(tight.sent)
+  assertBudget({ rateLimited: dflt.rateLimited }, 'net.actionRateLimitedDefault')
+  assertBudget({ rateLimited: tight.rateLimited }, 'net.actionRateLimitedBurst10')
+})
+
+test('rates/camera-flood-dropped', async () => {
+  const h = await createNetHarness({ fixture: await putsFixture(), seed: 3114, clients: 1 })
+  try {
+    h.clients[0]?.setCamera({ x: 0, y: 0, tilesAcross: 20 })
+    await h.advanceTicks(60) // the client's own reports are over and out of the 1 s window
+    const before = h.counters(0)
+    // 40 camera-only uplink batches in one tick, injected on the client's end of its link:
+    // `[Uplink][flags = camera][last_received_tick u32][0 actions][CameraReport 16 B]`.
+    const batch = new Uint8Array(1 + 1 + 4 + 1 + 16)
+    const dv = new DataView(batch.buffer)
+    batch[0] = 0x02
+    batch[1] = 0x01
+    dv.setUint32(2, h.hostTick(), true)
+    dv.setInt32(7, 5, true) // centre x
+    dv.setInt32(11, 5, true)
+    dv.setUint16(15, 10, true)
+    dv.setUint16(17, 10, true)
+    for (let i = 0; i < 40; i++) h.link(0).ends[1].send(MsgClass.ReliableOrdered, batch)
+    await h.advanceTicks(2)
+    const after = h.counters(0)
+    const window = {
+      sent: 40,
+      accepted: 40 - (after.cameraReportsDropped - before.cameraReportsDropped),
+    }
+    measure('cameraFlood', window)
+    assertBudget(window, 'net.cameraReportsAcceptedPerS')
+  } finally {
+    await h.dispose()
+  }
+})

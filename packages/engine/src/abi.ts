@@ -221,10 +221,10 @@ export const ABI_EXPORTS = {
   // presence_bytes_up` -- docs/plan/19-presence-channel.md steps 4-6 appended the 7th field).
   sim_conn_counters: { role: 'sim', params: 1, result: 'status' },
   // docs/plan/31-rates-and-integrity.md (`ABI_VERSION` 33 -> 34), `engine/test` only: `host::
-  // PacingCounters` for `conn`, fourteen LE `u32`s (56 bytes) into `Result`: `reenters_within_5s,
-  // reenter_bytes, cap_evictions, late_visible_max, late_visible_p95, degrade_level, degraded_ticks,
+  // PacingCounters` for `conn`, sixteen LE `u32`s (64 bytes) into `Result`: `reenters_within_5s,
+  // reenter_bytes, cap_evictions, late_visible_max, late_visible_p95, degrade_level, dropped_visible,
   // queued_enters, bucket_tokens (i32), held_chunks, collapses, bundles, max_emit_gap,
-  // order_violations`.
+  // order_violations, rate_limited, camera_reports_dropped`.
   sim_pacing_counters: { role: 'sim', params: 1, result: 'status' },
   // docs/plan/16-action-round-trip.md: parses one action-ring record (`[seq u32 LE][len u32
   // LE][UTF-8 JSON]`) out of `len` bytes of `RegionId.Rx` (shared with `on_input`'s own,
