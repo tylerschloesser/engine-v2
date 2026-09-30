@@ -79,14 +79,17 @@ fn registry() -> Registry {
     r
 }
 
-/// `(kind, flags, pos, size, color)` of every ghost record after one `extract`.
+/// `(flags, pos, size, color)` of a ghost record.
+type GhostRec = (u8, [f32; 2], [f32; 2], u32);
+
+/// Every ghost record after one `extract`, with the record count and region hash.
 fn ghosts(
     client: &RefClient,
     world: &World<'_>,
     registry: &Registry,
     entities: &BTreeMap<EntityId, Furnace>,
     cursor: Option<TilePos>,
-) -> (u32, Vec<(u8, [f32; 2], [f32; 2], u32)>, u64) {
+) -> (u32, Vec<GhostRec>, u64) {
     let remote = RemotePresences::<RefGame>::new();
     let view = FrameView::new(
         world as &dyn WorldRead<RefGame>,
