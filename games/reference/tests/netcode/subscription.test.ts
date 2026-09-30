@@ -3,7 +3,7 @@
 // under partial subscription. Chunks are 32x32 tiles and a client holds ring 1 around its view
 // (`0010` "Subscription set").
 import { expect, test } from 'vitest'
-import { PREDICTED, refHarness, uiOf } from '../helpers/net.js'
+import { advanceProbed, PREDICTED, refHarness, tornStateProbe, uiOf } from '../helpers/net.js'
 import { FURNACE_A, runScript, script } from '../helpers/script.js'
 
 const FURNACE = 4
@@ -60,17 +60,32 @@ async function edgeRun(seed: number, latencyMs: number, withEdge: boolean) {
     a.onActionResult((s, res) => seen.push([s, res]))
     const verdictOf = (seq: number) =>
       seen.find(([s, res]) => s === seq && res !== 'NotPredictable')
+    const probe = tornStateProbe(a)
     const edge = withEdge ? a.dispatch({ PlaceFurnace: { origin: EDGE_ORIGIN } }) : -1
+    if (withEdge) probe.trackPlace(edge)
     const near = a.dispatch({ PlaceFurnace: { origin: NEAR_ORIGIN } })
+    probe.trackPlace(near)
     const framesAtDispatch = h.counters(0).frames
     const ghostSeries: boolean[] = []
     let framesAtVerdict = framesAtDispatch
-    for (let i = 0; i < 60 && verdictOf(near) === undefined; i++) {
-      await h.advanceTicks(1)
-      if (verdictOf(near) !== undefined) break
-      ghostSeries.push(a.draws().some((d) => d.kind === 0 && (d.flags & PREDICTED) !== 0))
-      framesAtVerdict = h.counters(0).frames
+    // The step the `Ui` shows the item spent, and the step `draws()` first shows a real (not ghost)
+    // sprite: `draws()` trails `ui()` by one step (measured here at each latency).
+    let spentStep = -1
+    let realStep = -1
+    const itemBefore = uiOf(h, 0).inventory[FURNACE] ?? 0
+    for (let step = 1; step <= 80 && (spentStep < 0 || realStep < 0); step++) {
+      await advanceProbed(h, [probe], 1)
+      if (spentStep < 0 && (uiOf(h, 0).inventory[FURNACE] ?? 0) < itemBefore) spentStep = step
+      const sp = a.draws().filter((d) => d.kind === 0)
+      if (realStep < 0 && sp.some((d) => (d.flags & PREDICTED) === 0)) realStep = step
+      if (verdictOf(near) === undefined) {
+        ghostSeries.push(sp.some((d) => (d.flags & PREDICTED) !== 0))
+        framesAtVerdict = h.counters(0).frames
+      }
     }
+    expect(spentStep, `${tag}: the item was spent`).toBeGreaterThan(0)
+    expect(realStep - spentStep, `${tag}: draws() trails ui() by one step`).toBe(1)
+    expect(probe.frames, tag).toBeGreaterThan(4)
     // Declined at dispatch, once, and only that one; still sent, and the host confirms both.
     const verdicts = seen.filter(([, res]) => res !== 'NotPredictable')
     expect(

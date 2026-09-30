@@ -97,25 +97,31 @@ export type TornProbe = {
  * The per-frame torn-state check for one client's furnace placements (ADR 0012: "ghost XOR refunded
  * item ... no torn state on any frame"). In this game `Ui.inventory` reads the authoritative replica,
  * not the overlay, so the item is spent at the host's ack and the ghost (a `PREDICTED` furnace sprite
- * of the newest DrawList) covers the wait; a frame is torn when
- * - once a placement is tracked: the item count is 0 and no furnace sprite is drawn at all (the item
- *   vanished: "neither");
- * - a tracked placement has no verdict yet and the item count moved (spent before the host said so);
- * - a tracked placement was confirmed and, one frame later, the item is not spent or a ghost remains
- *   (the ghost and the spent item both shown: "both");
- * - a tracked placement was refused and, one frame later, the item is not back at its old count or a
- *   ghost remains. (A ghost may outlive its verdict by the one frame `extract` lags the `Ui`.)
+ * of the newest DrawList) covers the wait. One client step runs `frame()` (which draws) and then
+ * applies the downlink (which produces the `Ui`), so `draws()` trails `ui()` by one step: the item
+ * read at step k is checked against the sprites drawn at step k + 1. A frame is torn when
+ * - once a placement is tracked: last step's item count was 0 and no furnace sprite is drawn now (the
+ *   item vanished: "neither");
+ * - the item count is not the count at the first tracked placement less the confirmed ones (spent
+ *   before the host said so, not spent once it did, or not back after a refusal);
+ * - every tracked placement has a verdict, one step after the last verdict step a ghost is still
+ *   drawn (the ghost and the spent item both shown: "both");
+ * - a tracked placement was confirmed and the replica hash did not change on the ack step (the host
+ *   would have split the ack from the entity put: the probe's one-step allowance must not hide that).
  * `also(ui, draws)` adds a game-specific per-frame check for a scenario.
  */
 export function tornStateProbe(
   client: HeadlessClient,
   also?: (ui: RefUiState, draws: DrawRecord[]) => void,
 ): TornProbe {
-  type Tracked = { seq: number; before: number; verdictFrame: number | null; ok: boolean }
+  type Tracked = { seq: number; verdictFrame: number | null; ok: boolean }
+  let baseline = 0
   const tracked: Tracked[] = []
   const verdicts = new Map<number, unknown>()
   let frames = 0
   let ghostFrames = 0
+  let lastItem: number | null = null
+  let lastHash = client.replicaHash()
   client.onActionResult((seq, result) => {
     if (result === 'NotPredictable') return
     verdicts.set(seq, result)
@@ -132,7 +138,8 @@ export function tornStateProbe(
   }
   return {
     trackPlace(seq) {
-      tracked.push({ seq, before: item(), verdictFrame: null, ok: false })
+      if (tracked.length === 0) baseline = item()
+      tracked.push({ seq, verdictFrame: null, ok: false })
     },
     check() {
       frames++
@@ -148,18 +155,31 @@ export function tornStateProbe(
           )}, tracked ${JSON.stringify(tracked)})`,
         )
       }
-      if (tracked.length > 0 && now === 0 && sprites.length === 0) {
-        fail('the item is gone and no furnace is drawn')
+      if (tracked.length > 0 && lastItem === 0 && sprites.length === 0) {
+        fail('the item was gone on the last step and no furnace is drawn now')
       }
+      const hash = client.replicaHash()
       for (const t of tracked) {
-        if (t.verdictFrame === null) {
-          if (now !== t.before) fail(`seq ${t.seq} has no verdict yet but the item count moved`)
-          if (ghost) ghostFrames++
-        } else if (frames > t.verdictFrame + 1) {
-          if (ghost) fail(`seq ${t.seq} has a verdict but a ghost is still drawn`)
-          if (t.ok && now !== t.before - 1) fail(`seq ${t.seq} confirmed but the item is not spent`)
-          if (!t.ok && now !== t.before) fail(`seq ${t.seq} refused but the item is not back`)
+        if (t.ok && t.verdictFrame === frames - 1 && hash === lastHash) {
+          fail(`seq ${t.seq} was confirmed on this step but the replica did not change`)
         }
+      }
+      lastHash = hash
+      lastItem = now
+      // The item count is the baseline less one per confirmed placement whose verdict has arrived: a
+      // verdict and its `Ui` land in the same step, so it never moves before the host has spoken and
+      // never lags after (a refused placement leaves it where it was).
+      const confirmed = tracked.filter((t) => t.verdictFrame !== null && t.ok).length
+      if (tracked.length > 0 && now !== baseline - confirmed) {
+        fail(`the item count should be ${baseline - confirmed} (${confirmed} confirmed)`)
+      }
+      const pending = tracked.filter((t) => t.verdictFrame === null)
+      if (pending.length > 0 && ghost) ghostFrames++
+      const lastVerdict = Math.max(
+        ...tracked.map((t) => t.verdictFrame ?? Number.POSITIVE_INFINITY),
+      )
+      if (tracked.length > 0 && frames > lastVerdict + 1 && ghost) {
+        fail('every tracked placement has a verdict but a ghost is still drawn')
       }
       also?.(ui, draws)
     },
