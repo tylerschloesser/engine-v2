@@ -25,6 +25,7 @@ import {
 } from 'engine/render'
 import type { RefReject } from './bindings/RefReject.js'
 import type { RefUi } from './bindings/RefUi.js'
+import { poseOf, shouldMoveToSpawn } from './spawn.js'
 import { createBuildUi } from './ui/build.js'
 import { createCollectUi } from './ui/collect.js'
 import { createCraftUi } from './ui/craft.js'
@@ -117,6 +118,10 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
   // get a camera that starts on the spawn tile for a fresh session, and `test-entry.ts`'s own specs
   // can observe it through `__cameraState()` with no extra hook. `client.camera.restored` is a fixed
   // snapshot taken once at `createClient` (M11), so it never needs rechecking after the first `Ui`.
+  // 33e: only for an untouched camera. `onUi` rides the real rAF, so a player (or a test) may have
+  // panned or zoomed before the first `Ui`; `shouldMoveToSpawn` compares position and zoom only, so
+  // `stepFrame`'s viewport write or a resize never counts as the player moving it.
+  const poseAtCreation = poseOf(client.cameraState)
   let spawnDecided = false
   client.onUi<RefUi>((ui) => {
     collectUi.onUi(ui)
@@ -126,7 +131,7 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
     furnaceUi.onUi(ui)
     if (!spawnDecided) {
       spawnDecided = true
-      if (!client.camera.restored) {
+      if (shouldMoveToSpawn(client.camera.restored, poseAtCreation, client.cameraState)) {
         client.camera.moveTo(ui.spawn.x + 0.5, ui.spawn.y + 0.5, { durationMs: 0 })
       }
     }
