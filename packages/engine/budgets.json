@@ -646,9 +646,9 @@
       },
       "uplinkPanningBytes5s": {
         "counter": "bytesUp",
-        "exact": 2724,
-        "ceiling": 2997,
-        "source": "0010 Bandwidth table, 'Steady state up: ~0.4 KB/s while panning (10 batches/s x ~38 B)' would be 2,000 B over this 5 s pan, and the measurement EXCEEDS it: 99 batches of ~27.5 B (about 20 a second, 545 B/s) because the client only enforces the 50 ms batch floor and leaves the camera's 10 Hz ceiling to the host's 20/s drop rule (client/core.rs MIN_UPLINK_INTERVAL_MS comment). Ceiling here is headroom, ceil(exact x 1.1); the client sending the camera at 10 Hz would meet the cell (a decision for the orchestrator: existing tests pin the current cadence). rates/uplink-panning."
+        "exact": 1620,
+        "ceiling": 2000,
+        "source": "0010 Bandwidth table, 'Steady state up: ~0.4 KB/s while panning (10 batches/s x ~38 B)' = 2,000 B over this 5 s pan; the ceiling is that cell. The client rate-limits the camera report to 10 Hz inside the 50 ms batch cadence (client/core.rs camera_due). rates/uplink-panning."
       },
       "sevenRemotePresencesBytes10s": {
         "counter": "bytesDown",
@@ -676,7 +676,7 @@
       },
       "hardCeilingBytesPerSPan": {
         "counter": "worstSecondBytesDown",
-        "exact": 49052,
+        "exact": 49012,
         "ceiling": 64000,
         "source": "0010 Bandwidth table, 'Hard ceiling 64 KB/s' (structural: 16 KB/s soft cap + 48 KB/s chunk refill): the worst 20-tick window after the burst is spent, during a one-view-width-per-second pan at maximum zoom-out through dense chunks. rates/hard-ceiling."
       },
@@ -688,13 +688,13 @@
       },
       "zoomoutPan1vwEnterBytes": {
         "counter": "enterBytes",
-        "exact": 264949,
+        "exact": 264749,
         "ceiling": 272000,
         "source": "0010 Bandwidth table, chunk streaming 128 KB burst + 48 KB/s refill, over the 3 s pan: 128,000 + 48,000 x 3 = 272,000 B, the most chunk data the bucket can pay for; the pan saturates it (0010 'Worst pan: paced to 48 KB/s'). zoomout/pan-1vw."
       },
       "zoomoutPan2vwEnterBytes": {
         "counter": "enterBytes",
-        "exact": 192357,
+        "exact": 192354,
         "ceiling": 200000,
         "source": "As zoomoutPan1vwEnterBytes over the 1.5 s pan at two view-widths per second: 128,000 + 48,000 x 1.5 = 200,000 B. zoomout/pan-2vw."
       },
@@ -718,7 +718,7 @@
       },
       "zoomoutOscillateReenterBytes": {
         "counter": "reenterBytes",
-        "exact": 505565,
+        "exact": 501715,
         "ceiling": 556122,
         "source": "docs/plan/31-rates-and-integrity.md step 6 measurement (the brief: results recorded as ceilings); no 0010 number covers it, so the ceiling is headroom, ceil(exact x 1.1). Bucket bytes spent re-entering chunks that left less than 5 s earlier, over 10 s of a 48-tile oscillation at maximum zoom-out over dense chunks (132 re-entered, 159 cap evictions): 50 KB/s against the rule's threshold of 25% of the 48 KB/s refill = 12 KB/s (120,000 B over 10 s): TRIGGERED. zoomout/oscillate-48-tiles."
       },

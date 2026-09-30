@@ -82,11 +82,23 @@ const KEEPALIVE_INTERVAL_MS: u32 = 1000; // 0010: at least one batch per 1s
 /// 0010 "Host drop rule"), presence has no host-side drop rule, so the sampler enforces its own 10
 /// Hz ceiling here (docs/plan/19-presence-channel.md step 2).
 const PRESENCE_MIN_INTERVAL_MS: u32 = 100;
+/// 0010 "Rates" / "Camera report": the camera report goes out at <= 10 Hz, on change, inside the
+/// unchanged 50 ms batch cadence, with a leading-edge send when motion starts and a trailing send
+/// at rest. A credit bucket (in ms) does both: each report costs [`CAMERA_MIN_INTERVAL_MS`], credit
+/// refills at 1 ms per ms up to [`CAMERA_CREDIT_CAP_MS`] (two reports, so a report after rest and
+/// the trailing one are never delayed by the limiter), and the sustained rate is 10 Hz. A pending
+/// change that is not yet affordable stays pending and rides the first batch that can afford it.
+const CAMERA_MIN_INTERVAL_MS: u32 = 100;
+const CAMERA_CREDIT_CAP_MS: u32 = 2 * CAMERA_MIN_INTERVAL_MS;
 
 pub struct ClientCore<G: Game> {
     replica: Replica<G>,
     camera: Option<CameraReport>,
     camera_pending: bool,
+    /// Camera credit left right after the last camera send, and when that was (`None`: never sent,
+    /// full credit). See [`CAMERA_MIN_INTERVAL_MS`].
+    camera_credit_ms: u32,
+    last_camera_sent_ms: Option<u32>,
     last_batch_ms: Option<u32>,
     last_received_tick: u32,
     /// Reused scratch for a `ChunkSnapshots` entry's overlay tiles (cleared per chunk, never
@@ -223,6 +235,8 @@ impl<G: Game> ClientCore<G> {
             replica,
             camera: None,
             camera_pending: false,
+            camera_credit_ms: CAMERA_CREDIT_CAP_MS,
+            last_camera_sent_ms: None,
             last_batch_ms: None,
             last_received_tick: 0,
             scratch_tiles: Vec::new(),
@@ -746,6 +760,24 @@ impl<G: Game> ClientCore<G> {
         }
     }
 
+    /// Whether a pending camera change may ride the next batch (10 Hz limiter, see
+    /// [`CAMERA_MIN_INTERVAL_MS`]).
+    fn camera_due(&self, t_ms: u32) -> bool {
+        if !self.camera_pending {
+            return false;
+        }
+        match self.last_camera_sent_ms {
+            None => true,
+            Some(last) => {
+                let credit = self
+                    .camera_credit_ms
+                    .saturating_add(t_ms.wrapping_sub(last))
+                    .min(CAMERA_CREDIT_CAP_MS);
+                credit >= CAMERA_MIN_INTERVAL_MS
+            }
+        }
+    }
+
     /// Writes at most one `UplinkBatch` into `out`, returning its length, or `0` if nothing is due
     /// yet (0010 "Rates": at most one batch per 50 ms; at least one batch per 1 s; the camera half
     /// is included only on change, so a keepalive-only batch omits it). docs/plan/
@@ -756,16 +788,17 @@ impl<G: Game> ClientCore<G> {
     pub fn poll_uplink(&mut self, t_ms: u32, out: &mut [u8]) -> usize {
         let has_actions = !self.outbox.is_empty();
         let presence_due = self.presence_due(t_ms);
+        let camera_due = self.camera_due(t_ms);
         if !has_actions && let Some(last) = self.last_batch_ms {
             let elapsed = t_ms.wrapping_sub(last);
             if elapsed < MIN_UPLINK_INTERVAL_MS {
                 return 0;
             }
-            if !self.camera_pending && !presence_due && elapsed < KEEPALIVE_INTERVAL_MS {
+            if !camera_due && !presence_due && elapsed < KEEPALIVE_INTERVAL_MS {
                 return 0;
             }
         }
-        let camera = self.camera_pending.then_some(self.camera).flatten();
+        let camera = camera_due.then_some(self.camera).flatten();
         let presence = presence_due.then_some(&self.presence_encoded[..self.presence_len]);
         let mut sink = SliceSink::new(out);
         UplinkWriter::write(
@@ -779,7 +812,18 @@ impl<G: Game> ClientCore<G> {
         );
         let Ok(n) = sink.finish() else { return 0 };
         self.last_batch_ms = Some(t_ms);
-        self.camera_pending = false;
+        if camera_due {
+            let credit = match self.last_camera_sent_ms {
+                None => CAMERA_CREDIT_CAP_MS,
+                Some(last) => self
+                    .camera_credit_ms
+                    .saturating_add(t_ms.wrapping_sub(last))
+                    .min(CAMERA_CREDIT_CAP_MS),
+            };
+            self.camera_credit_ms = credit - CAMERA_MIN_INTERVAL_MS;
+            self.last_camera_sent_ms = Some(t_ms);
+            self.camera_pending = false;
+        }
         if presence_due {
             self.last_sent_presence = Some((self.presence_encoded, self.presence_len));
             self.last_presence_sent_ms = Some(t_ms);
