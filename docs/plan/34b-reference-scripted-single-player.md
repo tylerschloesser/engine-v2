@@ -1,6 +1,6 @@
 # M34b: Reference game: scripted full game, single-player, with persistence extras
 
-Status: not started · After: 34, 23, 24b · Tyler-dependent: R4 (offer "Export world" always, or only on the status screen? unanswered; default assumed: status screen only) and Q9 through M23 / M24b, see `docs/plan/questions-for-tyler.md`
+Status: done · After: 34, 23, 24b · Tyler-dependent: R4 (offer "Export world" always, or only on the status screen? unanswered; default assumed: status screen only) and Q9 through M23 / M24b, see `docs/plan/questions-for-tyler.md`
 
 Split from M34 during planning (see that brief). M23 and M24b are not upstream of M34 in PLAN.md, so they are listed under After explicitly.
 
@@ -56,10 +56,10 @@ Multiplayer scripts and races (M34c). Heavy mode, soak, benchmarks, the standard
 - Slow: `reference_panic_in_apply_skips_and_recovers`, `reference_save_incompatible_leaves_files`.
 
 ## Exit criteria
-- [ ] All tests above pass by name; the slow ones under `pnpm test:slow`.
-- [ ] Every single-player row of the Requirement matrix (the `reference-game.md` table of `docs/plan/coverage.md`) has its "Verified by" column filled with a test that exists.
-- [ ] Fast-suite budgets of `0020` §3 still hold; anything demoted is tagged per §4 and listed under Deviations.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name; the slow ones under `pnpm test:slow`.
+- [x] Every single-player row of the Requirement matrix (the `reference-game.md` table of `docs/plan/coverage.md`) has its "Verified by" column filled with a test that exists.
+- [x] Fast-suite budgets of `0020` §3 still hold; anything demoted is tagged per §4 and listed under Deviations.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test browser -t reference_` · `pnpm test wasm -t reference_` · `pnpm test rust -t golden_replay` · `pnpm test:slow -t reference_` · `pnpm --filter reference golden:record` (must produce no diff).
@@ -120,3 +120,5 @@ None of its own; M39's section replays this script by hand on the phone.
 - **Coverage (step 7):** `docs/plan/reference-coverage.md` §1 gains a "Verified by" column, filled only for the M34b rows (each name grepped and found); M34c's rows are left empty for it. The `reference-game.md` table of `coverage.md` already named tests for every single-player row (steps 1-4); its M34c names (`reference_full_game_two_players`, `reference_race_same_ingots`) do not exist yet, and `terrain.variants_match_reference`/`terrain.dither_only_inside_band` are dotted describe names from M09b, both not mine.
 - **Not done / open:** the `test-hooks` wording in `games/reference/CLAUDE.md` is in (still 60 lines). `SaveIncompatible` end to end in the browser (`status.ts` Export/Delete screen) is still untested in a browser: `reference_save_incompatible_leaves_files` is the Node-level test of the load refusal and export, as the brief names it.
 - **Demotion (coordinator decision; an ADR amending 0026 is written by the orchestrator).** `zeroGcSuite` gained `slowWorkerObjectControls?: boolean` (default off; only `gc-reference-single-player.spec.ts` sets it). `reference_single_player neg object client`, `neg object sim` and `neg object gen0` are now `@slow`; `clean` (with its discovered-isolates assertion) and `neg object main` stay fast. Why: the browser suite read 49 s of 48 s. Moved: 10.6 s of worker time (3.63 + 3.55 + 3.41 s). Result: `pnpm test` browser pass 240 tests 47 s of 48 s. The three still trip: `pnpm test:slow browser -t "reference_single_player neg object"` gave `browser pass 3 tests 5.5s`. Final: rust 760, unit 301, wasm 168, netcode 96, lint green.
+
+**Orchestrator gate (M34b done).** Cut into steps 1-2, 3-4, 5-7. Three findings went elsewhere: the straddling-furnace version mismatch became **M34d** (diagnosed at the gate: the replica bumps only the anchor chunk's version); "reload needs the lock released" was diagnosed on the production page (plain F5 0/12, F5 60-100 ms into a load 8/14 `world-busy`; the idle manual-clock page's sim worker lingers ~2 s in an infinite `Atomics.wait`, not a parked one), fix owned by **M37** (ledger); the browser suite reached 49 s, so this page's three worker `neg object` controls moved to `@slow` (**ADR 0043**, Q16 for Tyler). Coverage: two cited names were display-title shorthand (`terrain: variants match reference`, `terrain: dither only inside band`) and were corrected in `coverage.md`. Slow-tier lines are the implementer's (`pnpm test:slow -t reference_`: `wasm pass 2 tests`; the demoted controls `browser pass 3 tests 5.5s`). Final gate: rust 760, unit 301, wasm 168, netcode 96, browser 240 (46 s of 48 s at a 1-minute load of 13-18), lint clean.

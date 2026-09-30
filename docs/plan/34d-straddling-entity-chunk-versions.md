@@ -36,6 +36,7 @@ Predicted-entity overlay versions (the `Predicting` overlay does not bump versio
 
 ## Seams
 **Provides:** nothing new by name. **Consumes:** `Replica::region_hash`, `Host::region_hash` (M15), `footprint_rect` (M21), the resume diff (M28b), `createNetHarness` with the reference game and `worldSeed` (M34b Deviations).
+**From M34b (orchestrator):** the repro is finding 1 of M34b Deviations: `createNetHarness({ game: reference, worldSeed: '6840143426475589698' })`, a furnace at origin (-4, -1) (rows -1 and 0 are chunks cy -1 and 0), then `assertConverged` fails after `settle()`; origin (-4, 1) converges. `script.ts`'s `FURNACE_A`/`FURNACE_B` stay single-chunk so `full-game.{log,json}` is unaffected; `pnpm --filter reference golden:record` must give no diff afterwards (a golden change means the fix altered state, not just replication).
 
 ## Planning decisions
 - **The host is the reference.** Its versions follow the scopes a change was sent under, which is what a subscriber receives; the replica must match what it was sent, not the reverse.
