@@ -211,7 +211,7 @@ test('mp/superseded', async ({ browser }) => {
 /** docs/plan/30c-ci-reds-after-m30.md (red C): failure-only. Records, Node-side, when each step of
  * a spec finished, every page `load`, and the page's link log (polled, so it survives the page
  * becoming unusable after a timeout); `run` appends all of it to whatever error the steps throw. */
-function mpDiagnostics(page: Page) {
+function mpDiagnostics(page: Page, server?: TestServer) {
   const t0 = Date.now()
   const marks: string[] = []
   let lastLog = '(never read)'
@@ -241,9 +241,13 @@ function mpDiagnostics(page: Page) {
         await steps()
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e)
-        throw new Error(`${message}\n[mp diagnostics] ${marks.join(', ')}; last link ${lastLog}`, {
-          cause: e,
-        })
+        const host = server ? `\n[host] ${server.diagnostics().join('\n[host] ')}` : ''
+        throw new Error(
+          `${message}\n[mp diagnostics] ${marks.join(', ')}; last link ${lastLog}${host}`,
+          {
+            cause: e,
+          },
+        )
       } finally {
         polling = false
         await poll
@@ -263,7 +267,7 @@ test('mp/hello-resent-after-pre-welcome-drop', async ({ page }) => {
     dropFirstHello: true,
   })
   const ticks = tickInBackground(server)
-  const diag = mpDiagnostics(page)
+  const diag = mpDiagnostics(page, server)
   try {
     await diag.run(async () => {
       await openPage(page, mpUrl(server))

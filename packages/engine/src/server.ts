@@ -465,6 +465,11 @@ export interface SimHost {
   readonly running: boolean
   readonly counters: SimHostCounters
   logSink: ((bytes: Uint8Array) => void) | null
+  /** docs/plan/30d-hello-resent-silence.md: test-only diagnostic. When set, every handshake step
+   * (a `Hello` queued, an attach-queue slot filled, what `pumpHandshakes` did with an entry, a
+   * connection closing) is reported as one line. `null` in production; each call site is guarded
+   * by `if (handshakeTrace)`, so nothing is built when it is unset. */
+  handshakeTrace: ((line: string) => void) | null
   /**
    * docs/plan/15b-ring-connection-and-replica-rendering.md Scope: admits `connection` into the
    * sim role's connection table. Allocates the next free `ConnId` (0-based, `< MAX_CONNS`, the
@@ -759,6 +764,15 @@ export function createSimHostFromInstance(
       attachQueue.shift()
       const entry = front
       const state = handshakeState.get(entry.conn)
+      if (host.handshakeTrace) {
+        host.handshakeTrace(
+          `pump entry conn=${entry.conn} state=${state?.status ?? 'none'} live=${conns[entry.conn] === entry.connection} -> ${
+            state?.status !== 'awaiting-attach' || conns[entry.conn] !== entry.connection
+              ? 'skipped'
+              : 'attach'
+          } (queue left ${attachQueue.length})`,
+        )
+      }
       // Superseded/closed meanwhile. The identity check too (docs/plan/30c-ci-reds-after-m30.md,
       // `mp/hello-resent-after-pre-welcome-drop`): a connection that closed after its `Hello`
       // leaves this entry queued, and its `ConnId` can already belong to a new connection whose
@@ -1178,6 +1192,7 @@ export function createSimHostFromInstance(
     },
     counters,
     logSink: null,
+    handshakeTrace: null,
     get epoch() {
       return epoch
     },
@@ -1248,8 +1263,11 @@ export function createSimHostFromInstance(
       garbagePending++
       let garbageCount = 0
 
-      connection.onClose = (_code) => {
+      connection.onClose = (code) => {
         const state = handshakeState.get(conn)
+        if (host.handshakeTrace) {
+          host.handshakeTrace(`close conn=${conn} code=${code} state=${state?.status ?? 'none'}`)
+        }
         if (state?.status === 'settled') {
           sim.simDetach(conn)
           // docs/plan/28b-reconnect-and-lifecycle.md step 4: an ungraceful close (no `Bye` --
@@ -1335,6 +1353,9 @@ export function createSimHostFromInstance(
         garbagePending--
         const slotIndex = attachQueue.length
         attachQueue.push(null)
+        if (host.handshakeTrace) {
+          host.handshakeTrace(`hello conn=${conn} queued slot=${slotIndex}`)
+        }
         // This arrival's own turn on `sessionMutationChain` (Deviations above): captured now, in
         // `Hello`-arrival order, *before* the chain is extended for the next arrival below -- the
         // digest itself (line after) is free to resolve in whatever order the real threadpool
@@ -1362,6 +1383,11 @@ export function createSimHostFromInstance(
           resolveMyTurn() // the next arrival's own turn may now touch `sessions`
           const joined = sim.simHasPlayer(entry.playerId) === 0
           const presence = entry.lastPresenceHex ? hexDecode(entry.lastPresenceHex) : null
+          if (host.handshakeTrace) {
+            host.handshakeTrace(
+              `resolved conn=${conn} slot=${slotIndex} (queue length ${attachQueue.length})`,
+            )
+          }
           attachQueue[slotIndex] = {
             conn,
             connection,

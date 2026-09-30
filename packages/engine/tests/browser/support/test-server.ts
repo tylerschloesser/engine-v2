@@ -32,6 +32,10 @@ export interface TestServer {
    * player's own `Bye{Leave}` (no close frame, so the browser's real `WebSocket` sees an ordinary
    * network close, `net/link.ts`'s own `'close'` `DownReason`). */
   killClients(): void
+  /** docs/plan/30d-hello-resent-silence.md: the host's own account of every server-side socket
+   * (accepted, each message's length, closed with what code) and every handshake step
+   * (`SimHost.handshakeTrace`), one timestamped line each. Read only when a spec fails. */
+  diagnostics(): string[]
   stop(): Promise<void>
 }
 
@@ -86,12 +90,24 @@ export async function startTestServer(opts: StartTestServerOptions): Promise<Tes
   }
   const server = createWorldServer(worldCfg, host)
   await server.ready
+  const t0 = Date.now()
+  const lines: string[] = []
+  const note = (line: string): void => {
+    lines.push(`+${Date.now() - t0}ms ${line}`)
+  }
 
   const { WebSocketServer } = await import('ws')
   const wss = new WebSocketServer({
     host: '127.0.0.1',
     port: opts.port ?? 0,
     perMessageDeflate: false,
+  })
+  let socketSeq = 0
+  wss.on('connection', (socket) => {
+    const id = socketSeq++
+    note(`socket#${id} accepted`)
+    socket.on('message', (data: Buffer) => note(`socket#${id} message ${data.length} B`))
+    socket.on('close', (code: number) => note(`socket#${id} closed ${code}`))
   })
   if (opts.dropFirstHello) {
     // Registered before `attachWebSocketServer`'s own listener, and prepended on the socket, so
@@ -115,6 +131,7 @@ export async function startTestServer(opts: StartTestServerOptions): Promise<Tes
   }
   const url = `ws://127.0.0.1:${address.port}`
   const simHost = worldServerTestHandle(server)
+  simHost.handshakeTrace = (line) => note(`host ${line}`)
 
   return {
     url,
@@ -123,6 +140,9 @@ export async function startTestServer(opts: StartTestServerOptions): Promise<Tes
         throw new Error('startTestServer: stepTick() requires manualTimer: true')
       }
       simHost.stepTick(n)
+    },
+    diagnostics() {
+      return lines.slice()
     },
     killClients() {
       for (const socket of wss.clients) socket.terminate()
