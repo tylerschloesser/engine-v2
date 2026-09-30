@@ -5,8 +5,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { expect, test } from 'vitest'
-import { buildGame, type GameJson } from '../../src/build-game.js'
+import { beforeAll, expect, test } from 'vitest'
+import { type BuildGameResult, buildGame, type GameJson } from '../../src/build-game.js'
 import { gameCrateBuildDir } from '../support/fixtures.js'
 
 const GAME = fileURLToPath(new URL('../../../../games/reference/', import.meta.url))
@@ -14,9 +14,16 @@ const POISON = 'test-hooks: poison StartCraft'
 const read = (path: string) => readFileSync(path)
 const json = (dir: string) => JSON.parse(readFileSync(join(dir, 'game.json'), 'utf8')) as GameJson
 
-test('build-game-features', async () => {
+// A real cargo build of the hooks variant: cold on CI, and it shares the target-dir lock with
+// `reference-test-hooks.test.ts`'s own build in a parallel file, so it runs here with that file's
+// bound and both tests read its result (M34b's CI red: 5 s default, then the second test's ENOENT).
+let hooks: BuildGameResult
+beforeAll(async () => {
+  hooks = await buildGame({ crate: join(GAME, 'sim'), features: ['test-hooks'] })
+}, 240_000)
+
+test('build-game-features', () => {
   const plain = gameCrateBuildDir('reference')
-  const hooks = await buildGame({ crate: join(GAME, 'sim'), features: ['test-hooks'] })
 
   expect(hooks.dir).not.toBe(plain)
   expect(hooks.dir.endsWith('dev+test-hooks')).toBe(true)
@@ -43,7 +50,5 @@ test('build-game-features: the shipped reference build has no test-hooks', () =>
   const release = join(GAME, 'sim/target/engine/release')
   expect(json(release).features).toBeUndefined()
   expect(read(join(release, 'game.wasm')).includes(POISON)).toBe(false)
-  expect(json(release).buildHash).not.toBe(
-    json(join(GAME, 'sim/target/engine/dev+test-hooks')).buildHash,
-  )
+  expect(json(release).buildHash).not.toBe(json(hooks.dir).buildHash)
 }, 60_000)
