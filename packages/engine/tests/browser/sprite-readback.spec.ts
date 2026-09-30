@@ -6,6 +6,8 @@
 // 09b-terrain-art-and-lifecycle.md` Deviations: "every probe in the suite sat exactly at a texel
 // centre" is exactly what let the M09b magnified-sampling inversion ship unnoticed.
 import { expect, test } from '@playwright/test'
+import { scanDrawListForPick } from '../../src/input/pick.ts'
+import { LAYER_COUNT } from '../../src/render/drawables.ts'
 import { expectPixel, type PixelBuffer } from '../../src/test/render.ts'
 import { buildDrawListBytes, type DrawRecordSpec, microDrawCamera } from './support/draw-scene.ts'
 import { expectAdapter, expectNoGpuErrors } from './support/gpu.ts'
@@ -263,4 +265,51 @@ test('sprite.layering_with_shapes', async ({ page }, testInfo) => {
   expectPixel(pixels, 30, 28, [10, 20, 30, 255], TOL)
 
   expectNoGpuErrors(await page.evaluate(() => window.__drawables?.errors() ?? []))
+})
+
+// M33d: the CPU pick box must be the box the renderer draws. "quad" (id 0, pivot [0.25, 0.75], size
+// [2, 1]) at pos (0, 0), 8 px/tile: world x in [-0.5, 1.5], y in [-0.75, 0.25], i.e. px [28, 44) x
+// [26, 34). A pixel is picked as the world point `((px - 32) / 8, (py - 32) / 8)`; a centred box
+// (`+/- size / 2`, x in [-1, 1], y in [-0.5, 0.5]) would get the first two probes wrong.
+test('pick.sprite_on_page', async ({ page }, testInfo) => {
+  await initWithSprites(page, testInfo)
+  const quad: DrawRecordSpec = {
+    pos: [0, 0],
+    size: [0, 0],
+    kind: KIND_SPRITE,
+    spriteId: SPRITE_QUAD,
+    layer: 0,
+    color: WHITE,
+  }
+  const pixels = await render(page, [quad], CAMERA)
+  const table = new Float32Array(
+    await page.evaluate(() => window.__drawables?.pivotSizeTable() ?? []),
+  )
+
+  const { header, body } = buildDrawListBytes([quad])
+  const bodyBytes = new Uint8Array(body)
+  new DataView(bodyBytes.buffer).setUint32(28, 9, true)
+  const hv = new DataView(new Uint8Array(header).buffer)
+  const bv = new DataView(bodyBytes.buffer)
+  const counts = new Uint32Array(LAYER_COUNT)
+  const first = new Uint32Array(LAYER_COUNT)
+  const pickPx = (px: number, py: number): number =>
+    scanDrawListForPick(hv, bv, (px - 32) / 8, (py - 32) / 8, 0, counts, first, table)
+
+  // Inside the art, off the centred box (world x 1.25 > 1; x -0.375 and y -0.625 are inside the art
+  // but a y-centred box stops at -0.5).
+  expectPixel(pixels, 42, 28, GREEN, TOL) // the renderer draws art here
+  expect(pickPx(42, 28)).toBe(9)
+  expectPixel(pixels, 29, 27, RED, TOL)
+  expect(pickPx(29, 27)).toBe(9)
+  // Just outside the art on each side: the renderer draws nothing, the picker returns 0.
+  for (const [px, py] of [
+    [46, 30],
+    [26, 30],
+    [36, 24],
+    [36, 36],
+  ] as const) {
+    expectPixel(pixels, px, py, [0, 0, 0, 0], TOL)
+    expect(pickPx(px, py), `pixel (${px}, ${py})`).toBe(0)
+  }
 })

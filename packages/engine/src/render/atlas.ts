@@ -144,6 +144,10 @@ export type LoadedSpriteAtlas = {
   readonly rectTexture: GPUTexture
   readonly pivotSizeTexture: GPUTexture
   readonly manifest: SpritesManifest
+  /** CPU copy of the pivot/size table (`buildSpriteTables`' `pivotSizeBytes`, built once at load):
+   * texel `id` at `[id * 4 .. id * 4 + 4]` is `(pivot.x, pivot.y, size.w, size.h)`. Read by the
+   * picker (`input/pick.ts`); never mutated. */
+  readonly pivotSize: Float32Array
   /** Sum of every texture byte this call allocated (atlas mip 0 + mip 1, plus the two 64x64
    * `rgba32float` data textures, 128 KiB fixed -- Planning decisions): the GPU-side share of
    * `engine/test`'s `gpuBytes` counter this milestone owns (brief: "the sprite table ... adds 128
@@ -330,5 +334,12 @@ export async function loadSpriteAtlas(
   const atlasBytes = imageWidth * imageHeight * 4 + mip1W * mip1H * 4
   const gpuBytes = atlasBytes + SPRITE_TABLE_BYTES * 2
 
-  return { atlasTexture, rectTexture, pivotSizeTexture, manifest, gpuBytes }
+  return {
+    atlasTexture,
+    rectTexture,
+    pivotSizeTexture,
+    manifest,
+    pivotSize: pivotSizeBytes,
+    gpuBytes,
+  }
 }

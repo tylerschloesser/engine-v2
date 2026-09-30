@@ -37,11 +37,11 @@ export async function attachClientDrawables(
   })
   const spritesUrl = client.assets?.sprites
   if (spritesUrl !== undefined) {
-    drawables.setSpriteAtlas(
-      await loadSpriteAtlas(device.device, spritesUrl, {
-        checkCompilation: device.checkCompilation,
-      }),
-    )
+    const atlas = await loadSpriteAtlas(device.device, spritesUrl, {
+      checkCompilation: device.checkCompilation,
+    })
+    drawables.setSpriteAtlas(atlas)
+    client.pick.setSpriteTable(atlas.pivotSize)
   }
 
   const slot = client.drawListSlot

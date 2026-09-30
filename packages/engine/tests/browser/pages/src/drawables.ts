@@ -86,6 +86,11 @@ window.__drawables = {
     return requireRenderer().gpuBytes()
   },
 
+  pivotSizeTable() {
+    if (!spriteAtlas) throw new Error('__drawables.loadSprites() must be called first')
+    return Array.from(spriteAtlas.pivotSize)
+  },
+
   async readAtlasMip1() {
     if (!spriteAtlas) throw new Error('__drawables.loadSprites() must be called first')
     const d = device

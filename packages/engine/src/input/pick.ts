@@ -15,6 +15,7 @@ import {
   KIND_CIRCLE,
   KIND_RADIAL,
   KIND_RING,
+  KIND_SPRITE,
   LAYER_COUNT,
   SCREEN_PX_STROKE,
 } from '../render/drawables.js'
@@ -35,8 +36,14 @@ const DRAW_OFF_PICK_ID = 28
  * when `SCREEN_PX_STROKE` is set (a thin ring's own band would otherwise be nearly untappable). */
 export const MIN_STROKE_PICK_RADIUS_PX = 6
 
+/** Sprite table stride: one texel `(pivot.x, pivot.y, size.w, size.h)` per sprite id
+ * (`render/atlas.ts`'s `pivotSize`). */
+const SPRITE_TABLE_STRIDE = 4
+
 function containsRecord(
   kind: number,
+  spriteId: number,
+  spriteTable: Float32Array | undefined,
   flags: number,
   posX: number,
   posY: number,
@@ -54,10 +61,22 @@ function containsRecord(
     if ((flags & SCREEN_PX_STROKE) !== 0 && r < minPickRadiusTiles) r = minPickRadiusTiles
     return dx * dx + dy * dy <= r * r
   }
-  // Rect, bar, ghost, sprite: the axis-aligned box of `pos` and `size` (`uberquad.wgsl`'s own
-  // `vs_main`: every non-sprite kind's box is centred at `pos`, `+/- size / 2` per axis -- a
-  // sprite's own pivot offset needs the loaded sprite table this cut does not wire in, Deviations;
-  // it falls back to the same centred box every other kind uses).
+  // A sprite with a loaded table: `vs_main`'s own box, `(uv - pivot) * size` from `pos`, i.e.
+  // `[pos - pivot * size, pos + (1 - pivot) * size]` per axis. `FLIP_X` mirrors only the sampled
+  // texture, never this footprint, so it is not read here. (M33d; before it a sprite's record
+  // size is 0, `DrawList::sprite`, and the fallback below tests the single point `pos`.)
+  if (kind === KIND_SPRITE && spriteTable !== undefined) {
+    const t = spriteId * SPRITE_TABLE_STRIDE
+    if (t + SPRITE_TABLE_STRIDE <= spriteTable.length) {
+      const pvx = spriteTable[t] as number
+      const pvy = spriteTable[t + 1] as number
+      const w = spriteTable[t + 2] as number
+      const h = spriteTable[t + 3] as number
+      return dx >= -pvx * w && dx <= (1 - pvx) * w && dy >= -pvy * h && dy <= (1 - pvy) * h
+    }
+  }
+  // Rect, bar, ghost, (table-less) sprite: the axis-aligned box of `pos` and `size`, centred at
+  // `pos` (`vs_main`: every non-sprite kind's box is centred, `+/- size / 2` per axis).
   let hx = sizeX * 0.5
   let hy = sizeY * 0.5
   if ((flags & SCREEN_PX_STROKE) !== 0) {
@@ -83,6 +102,7 @@ export function scanDrawListForPick(
   minPickRadiusTiles: number,
   layerCounts: Uint32Array,
   layerFirst: Uint32Array,
+  spriteTable?: Float32Array,
 ): number {
   let acc = 0
   for (let i = 0; i < LAYER_COUNT; i++) {
@@ -103,11 +123,26 @@ export function scanDrawListForPick(
       const flags = (klf >>> 24) & 0xff
       if ((flags & ANCHOR_CURSOR_TILE) !== 0) continue // pick.skips_zero_id_and_cursor_anchored
       const kind = (klf >>> 12) & 0xf
+      const spriteId = klf & 0xfff
       const posX = bodyView.getFloat32(off + DRAW_OFF_POS, true)
       const posY = bodyView.getFloat32(off + DRAW_OFF_POS + 4, true)
       const sizeX = bodyView.getFloat32(off + DRAW_OFF_SIZE, true)
       const sizeY = bodyView.getFloat32(off + DRAW_OFF_SIZE + 4, true)
-      if (containsRecord(kind, flags, posX, posY, sizeX, sizeY, relX, relY, minPickRadiusTiles)) {
+      if (
+        containsRecord(
+          kind,
+          spriteId,
+          spriteTable,
+          flags,
+          posX,
+          posY,
+          sizeX,
+          sizeY,
+          relX,
+          relY,
+          minPickRadiusTiles,
+        )
+      ) {
         return pickId
       }
     }
@@ -119,6 +154,9 @@ export type PickerOptions = {
   drawListSlot: DrawListSlot
   cameraState: CameraState
   viewport: CameraViewport
+  /** Per-sprite `(pivot.x, pivot.y, size.w, size.h)` texels from the loaded atlas
+   * (`LoadedSpriteAtlas.pivotSize`). Optional and additive; without one a sprite is point-only. */
+  spritePivotSize?: Float32Array
 }
 
 export interface Picker {
@@ -137,6 +175,8 @@ export interface Picker {
   /** `engine/test`'s `pickScanned` counter: how many times `at()` has actually scanned the body
    * (cache misses only) since creation. */
   scanned(): number
+  /** Installs (or clears) the sprite table once the atlas has loaded, after the picker exists. */
+  setSpriteTable(table: Float32Array | undefined): void
 }
 
 /** Builds the picker over one `Client`'s own `DrawListSlot`/camera (`createClient`, `src/client.ts`
@@ -150,6 +190,7 @@ export function createPicker(opts: PickerOptions): Picker {
   let lastFrameSeq = -1
   let lastPickId = 0
   let scannedCount = 0
+  let spriteTable = opts.spritePivotSize
 
   function at(cssX: number, cssY: number): number {
     const slot = opts.drawListSlot
@@ -169,6 +210,7 @@ export function createPicker(opts: PickerOptions): Picker {
       minPickRadiusTiles,
       layerCounts,
       layerFirst,
+      spriteTable,
     )
     lastX = cssX
     lastY = cssY
@@ -185,6 +227,10 @@ export function createPicker(opts: PickerOptions): Picker {
     at,
     scanned() {
       return scannedCount
+    },
+    setSpriteTable(table) {
+      spriteTable = table
+      lastFrameSeq = -1 // the cached answer predates the table
     },
   }
 }

@@ -6,12 +6,14 @@ import { expect, test } from 'vitest'
 import {
   ANCHOR_CURSOR_TILE,
   DRAW_BYTES,
+  FLIP_X,
   KIND_BAR,
   KIND_CIRCLE,
   KIND_GHOST,
   KIND_RADIAL,
   KIND_RECT,
   KIND_RING,
+  KIND_SPRITE,
   LAYER_COUNT,
   packDrawKindLayerFlags,
   SCREEN_PX_STROKE,
@@ -33,6 +35,7 @@ type DrawSpec = {
   kind: number
   layer: number
   flags?: number
+  spriteId?: number
   pickId: number
 }
 
@@ -63,7 +66,7 @@ function buildSlot(records: DrawSpec[]): { header: DataView; bodyView: DataView 
     bodyView.setFloat32(off + DRAW_OFF_SIZE + 4, r.sizeY, true)
     bodyView.setUint32(
       off + DRAW_OFF_KIND_LAYER_FLAGS,
-      packDrawKindLayerFlags(r.kind, 0, r.layer, r.flags ?? 0),
+      packDrawKindLayerFlags(r.kind, r.spriteId ?? 0, r.layer, r.flags ?? 0),
       true,
     )
     bodyView.setUint32(off + DRAW_OFF_PICK_ID, r.pickId, true)
@@ -71,7 +74,13 @@ function buildSlot(records: DrawSpec[]): { header: DataView; bodyView: DataView 
   return { header, bodyView }
 }
 
-function pick(records: DrawSpec[], relX: number, relY: number, minRadius = 0): number {
+function pick(
+  records: DrawSpec[],
+  relX: number,
+  relY: number,
+  minRadius = 0,
+  spriteTable?: Float32Array,
+): number {
   const { header, bodyView } = buildSlot(records)
   return scanDrawListForPick(
     header,
@@ -81,6 +90,7 @@ function pick(records: DrawSpec[], relX: number, relY: number, minRadius = 0): n
     minRadius,
     new Uint32Array(LAYER_COUNT),
     new Uint32Array(LAYER_COUNT),
+    spriteTable,
   )
 }
 
@@ -289,4 +299,43 @@ test('pick.skips_zero_id_and_cursor_anchored', () => {
 
 test('pick.min_stroke_pick_radius_constant', () => {
   expect(MIN_STROKE_PICK_RADIUS_PX).toBe(6)
+})
+
+// A sprite record carries size 0 (`DrawList::sprite`): its box lives in the atlas's pivot/size table
+// (M33d), `(pivot.x, pivot.y, size.w, size.h)` per sprite id, and is `vs_main`'s own.
+const spriteAt = (over: Partial<DrawSpec> = {}): DrawSpec => ({
+  posX: 10,
+  posY: 10,
+  sizeX: 0,
+  sizeY: 0,
+  kind: KIND_SPRITE,
+  layer: 0,
+  pickId: 9,
+  spriteId: 1,
+  ...over,
+})
+
+test('pick.sprite_by_atlas_box', () => {
+  // Sprite 1: pivot (0.5, 0.5), 2 x 2 tiles. Sprite 2: pivot (0, 1) (bottom-left), 4 x 2.
+  const table = new Float32Array(3 * 4)
+  table.set([0.5, 0.5, 2, 2], 4)
+  table.set([0, 1, 4, 2], 8)
+  expect(pick([spriteAt()], 10.5, 10.5, 0, table)).toBe(9) // inside the art, off `pos`
+  expect(pick([spriteAt()], 9.1, 10.9, 0, table)).toBe(9)
+  expect(pick([spriteAt()], 11.1, 10, 0, table)).toBe(0) // just outside the 2 x 2 box
+  // Non-centre pivot: box spans x in [10, 14], y in [8, 10].
+  const off = spriteAt({ spriteId: 2 })
+  expect(pick([off], 13.5, 8.5, 0, table)).toBe(9)
+  expect(pick([off], 9.5, 9.5, 0, table)).toBe(0) // left of a pivot-x-0 box
+  expect(pick([off], 12, 10.5, 0, table)).toBe(0) // below a pivot-y-1 box
+  // FLIP_X mirrors the sampled art only, never the footprint.
+  const flipped = spriteAt({ spriteId: 2, flags: FLIP_X })
+  expect(pick([flipped], 13.5, 8.5, 0, table)).toBe(9)
+  expect(pick([flipped], 9.5, 9.5, 0, table)).toBe(0)
+})
+
+test('pick.sprite_without_table_is_point_only', () => {
+  // No table: today's behaviour, the size-0 record is the single point `pos`.
+  expect(pick([spriteAt()], 10.5, 10.5)).toBe(0)
+  expect(pick([spriteAt()], 10, 10)).toBe(9)
 })

@@ -406,6 +406,9 @@ export interface Client {
   readonly pick: {
     acquire(): void
     at(cssX: number, cssY: number): number
+    /** M33d: installs the loaded sprite atlas's pivot/size table (`attachClientDrawables` calls it
+     * once the atlas has loaded); until then a sprite picks by its record's own (size 0) point. */
+    setSpriteTable(table: Float32Array | undefined): void
   }
   /** docs/plan/18-picking-and-overlay.md Seams (Provides): `overlay.anchor`/`overlay.anchorSlot`
    * (0019 §5's own signatures). `update()` is this cut's own addition (Deviations: not itself a
@@ -1015,6 +1018,9 @@ export function createClient(options: ClientOptions): Client {
           throw err
         },
         at(): number {
+          throw err
+        },
+        setSpriteTable(): void {
           throw err
         },
       },
@@ -2076,7 +2082,7 @@ export function createClient(options: ClientOptions): Client {
     writeCameraAndWake,
     setFlags,
     input,
-    pick: { acquire: picker.acquire, at: picker.at },
+    pick: { acquire: picker.acquire, at: picker.at, setSpriteTable: picker.setSpriteTable },
     overlay: { anchor: overlay.anchor, anchorSlot: overlay.anchorSlot, update: overlay.update },
     camera,
     destroy,

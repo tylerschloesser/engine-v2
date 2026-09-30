@@ -51,6 +51,8 @@ declare global {
       /** Reads the sprite atlas's own mip level 1 back to CPU (`sprite.no_bleed_at_mip1`);
        * `loadSprites()` must be called first. */
       readAtlasMip1(): Promise<{ width: number; height: number; data: number[] }>
+      /** The loaded atlas's CPU pivot/size table (`LoadedSpriteAtlas.pivotSize`) as a plain array. */
+      pivotSizeTable(): number[]
     }
   }
 }
