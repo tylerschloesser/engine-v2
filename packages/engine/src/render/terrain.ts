@@ -69,6 +69,11 @@ export interface TerrainRenderer {
   /** Writes the whole `FrameUniform` (0018 §5's camera-relative fields); called once per frame
    * before `draw` in production, any time in a test. */
   writeFrameUniform(v: FrameUniformValues): void
+  /** The bytes the last `writeFrameUniform` staged (a live, read-only view: never write to it).
+   * Lets a second renderer copy the camera fields as raw bytes instead of re-reading the double
+   * fields of `frameUniform`, which allocates a number per field in unoptimised code
+   * (`render/client-drawables.ts`, docs/plan/33c-drawables-on-real-pages.md Deviations). */
+  readonly stagedFrameUniform: Uint8Array
   /** Replaces the whole 16 KiB visual table (`bytes.length === VISUAL_TABLE_BYTES`): built by
    * `render/art.ts` from `tiles.json`, main-thread-only (Planning decisions "Visual table comes from
    * tiles.json on main"). */
@@ -373,6 +378,7 @@ export async function createTerrainRenderer(
 
   return {
     device,
+    stagedFrameUniform: new Uint8Array(frameScratch),
 
     writeFrameUniform(v) {
       frameView.setInt32(FU_CAM_TILE_X, v.camTileX, true)

@@ -7,6 +7,8 @@ import wasm from 'virtual:engine/wasm'
 import type { Client, ClientOptions } from 'engine'
 import { createClient } from 'engine'
 import {
+  type AttachedDrawables,
+  attachClientDrawables,
   attachVisibilityHandling,
   type Clock,
   createRealFrameLoop,
@@ -46,6 +48,7 @@ export type StartedGame = {
   renderer: TerrainRenderer
   device: RendererDevice
   canvasFormat: GPUTextureFormat
+  drawables: AttachedDrawables
   real: RealFrameLoop
 }
 
@@ -70,7 +73,8 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
     viewProbePasses: device.viewProbePasses,
     checkCompilation: device.checkCompilation,
   })
-  const art = await loadTileArt(device.device, '/tiles.json', {
+  const assets = { tiles: '/tiles.json', sprites: '/sprites.json' }
+  const art = await loadTileArt(device.device, assets.tiles, {
     checkCompilation: device.checkCompilation,
   })
   renderer.setTileArray(art.texture, art.gpuBytes)
@@ -81,7 +85,7 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
     wasm,
     host: opts.host,
     genWorkers: 1,
-    assets: { tiles: '/tiles.json' },
+    assets,
     // M20b step 5 (Seams, Consumes: "`ClientOptions.cameraKey` (pass the world id)", M11): only
     // `host.kind === 'local'` ever names a world here (the `'remote'` branch has none this game
     // ever builds) -- one world per session today, so this only matters once a second world exists,
@@ -90,6 +94,11 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
     ...(opts.test ? { test: opts.test } : {}),
   }
   const client: Client = createClient(options)
+  // M33c: the client's DrawList (player circle and range ring, furnace, ghost) drawn in the
+  // terrain renderer's own pass; it loads `assets.sprites` (`client.assets`) itself.
+  const drawables = await attachClientDrawables(client, device, renderer, {
+    colorFormat: canvasFormat,
+  })
 
   // M20b step 3-4 (Scope: collect buttons, progress, cancel-on-pan-out, rejection flash, inventory
   // readout): wired here, not in each entry, so both `main.ts` and `test-entry.ts` get a working
@@ -167,5 +176,5 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
   attachVisibilityHandling(real.loop)
   real.loop.resume()
 
-  return { client, renderer, device, canvasFormat, real }
+  return { client, renderer, device, canvasFormat, drawables, real }
 }

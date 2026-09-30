@@ -25,6 +25,8 @@ export { attachVisibilityHandling, createRealFrameLoop, FRAME_PHASES } from './f
 export { installPageStyles } from './input/page-css.js'
 export type { LoadedArt, TilesManifest } from './render/art.js'
 export { loadTileArt, ManifestError } from './render/art.js'
+export type { AttachedDrawables } from './render/client-drawables.js'
+export { attachClientDrawables } from './render/client-drawables.js'
 export type { AdapterInfo, RendererDevice } from './render/device.js'
 export { initDevice, NoAdapterError, ShaderCompilationError } from './render/device.js'
 export type { FrameUniformValues, TerrainRenderer, Viewport } from './render/terrain.js'

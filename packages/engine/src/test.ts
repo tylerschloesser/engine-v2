@@ -93,6 +93,7 @@ export {
   pipelineSwitches,
   type Renderable,
   type RenderTarget,
+  readPixels,
   renderTo,
   tileCentrePx,
   uploadBytes,

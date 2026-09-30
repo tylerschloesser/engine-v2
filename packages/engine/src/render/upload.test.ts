@@ -29,6 +29,7 @@ function record(kind: number, count: number): Uint8Array {
 function fakeRenderer(): TerrainRenderer {
   return {
     device: {} as GPUDevice,
+    stagedFrameUniform: new Uint8Array(0),
     writeFrameUniform() {},
     writeVisualTable() {},
     writePageChunk() {},

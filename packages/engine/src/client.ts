@@ -323,6 +323,16 @@ export interface Client {
      * for a `{ kind: 'local' }` host (no net worker, `onLink`'s own doc comment). */
     linkLog(): LinkLogEntry[]
   }
+  /** docs/plan/33c-drawables-on-real-pages.md Scope 1: the client's own single `DrawListSlot`
+   * (`Client.pick.acquire()` is what advances it), public and read-only so `engine/render`'s
+   * `attachClientDrawables` can build the drawables renderer over it without importing this file.
+   * Chosen over an internal-only slot behind the `clientTestHandle` `WeakMap`: that would make
+   * `engine/render` import `client.ts` (and with it the loader), which 0018 §1 forbids. Read its
+   * fields; never call `acquire()` on it yourself (`pick.acquire` owns that). */
+  readonly drawListSlot: DrawListSlot
+  /** The `ClientOptions.assets` this client was created with (same object), so a renderer helper
+   * reads the one asset config instead of a second, separately threaded copy. */
+  readonly assets: ClientOptions['assets']
   /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Seams: packs the running world's own
    * key set (0005 Storage) into a gzip archive (`storage/archive.ts`) and resolves with it as a
    * `Blob`. Parks the sim worker, pauses it (snapshot-if-dirty, flush) only if it was not already
@@ -929,6 +939,10 @@ export function createClient(options: ClientOptions): Client {
       get uploadRing(): SharedArrayBuffer {
         throw err
       },
+      get drawListSlot(): DrawListSlot {
+        throw err
+      },
+      assets: options.assets,
       dispatch(): number {
         throw err
       },
@@ -2052,6 +2066,8 @@ export function createClient(options: ClientOptions): Client {
     onLink,
     onVersionMismatch,
     debug: { linkLog: () => linkLogEntries.slice() },
+    drawListSlot,
+    assets: options.assets,
     exportWorld,
     importWorld,
     deleteWorld,

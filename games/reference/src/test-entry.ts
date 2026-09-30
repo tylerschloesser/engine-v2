@@ -17,6 +17,7 @@ import {
   injectPointer,
   lastUi,
   pumpUntilLive,
+  readPixels,
   resumeWorkers,
   setCamera,
   stepFrame,
@@ -107,6 +108,12 @@ declare global {
     /** M33: dispatches `PlaceFurnace` straight through `client.dispatch` (the `placeFurnace`
      * helper; the UI flows are exercised by `reference_place_mouse`/`_touch` themselves). */
     __dispatchPlaceFurnace?: (x: number, y: number) => number
+    /** M33c: the centre pixel of a 32x32 frame centred on world point (x, y), drawn with the
+     * drawables pass on and with it off, from the same newest DrawList slot. RGBA, 0..255. */
+    __pixelAt?: (
+      x: number,
+      y: number,
+    ) => Promise<{ on: [number, number, number, number]; off: [number, number, number, number] }>
     __clock?: () => { authoritative: number; predicted: number; ticksPerSecond: number }
   }
 }
@@ -132,7 +139,7 @@ const clock = createManualClock()
 // this. Every other test on this page omits the query param and gets the real, unmodified world.
 const altSpawnParams = new URLSearchParams(location.search).has('altSpawnParams')
 
-const { client, renderer, device, canvasFormat } = await startGame({
+const { client, renderer, device, canvasFormat, drawables } = await startGame({
   canvas,
   host: {
     kind: 'local',
@@ -374,6 +381,51 @@ window.__probeTile = async (tileX, tileY) => {
   throw new Error(
     `__probeTile(${tileX}, ${tileY}): still the neutral colour after ${PROBE_MAX_STEPS} stepped frames`,
   )
+}
+
+const PIXEL_SIZE = 32
+
+async function drawCentre(): Promise<[number, number, number, number]> {
+  const texture = device.device.createTexture({
+    label: 'pixel-at-target',
+    size: [PIXEL_SIZE, PIXEL_SIZE],
+    format: canvasFormat,
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+  })
+  renderer.writeFrameUniform(renderer.frameUniform)
+  renderer.draw(texture)
+  const { data, width } = await readPixels({
+    device: device.device,
+    texture,
+    width: PIXEL_SIZE,
+    height: PIXEL_SIZE,
+  })
+  texture.destroy()
+  const o = (PIXEL_SIZE / 2) * (width * 4) + (PIXEL_SIZE / 2) * 4
+  const swap = canvasFormat === 'bgra8unorm'
+  return [
+    (swap ? data[o + 2] : data[o]) as number,
+    data[o + 1] as number,
+    (swap ? data[o] : data[o + 2]) as number,
+    data[o + 3] as number,
+  ]
+}
+
+window.__pixelAt = async (x, y) => {
+  const fu = renderer.frameUniform
+  fu.camTileX = Math.floor(x)
+  fu.camTileY = Math.floor(y)
+  fu.camFracX = x - Math.floor(x)
+  fu.camFracY = y - Math.floor(y)
+  fu.viewportPxW = PIXEL_SIZE
+  fu.viewportPxH = PIXEL_SIZE
+  fu.tilesPerPx = 1 / PIXEL_SIZE
+  client.pick.acquire() // the newest published DrawList slot (the frame loop's `acquire` phase)
+  drawables.setEnabled(false)
+  const off = await drawCentre()
+  drawables.setEnabled(true)
+  const on = await drawCentre()
+  return { on, off }
 }
 
 window.__pageReady = true

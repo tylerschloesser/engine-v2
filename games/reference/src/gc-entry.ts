@@ -186,6 +186,7 @@ function drive(f: number): void {
   harness.stepFrame(1000 / 60)
   harness.stepTick()
   uploadDrain.drain(1_000_000)
+  client.pick.acquire() // the newest DrawList slot, once (the frame loop's `acquire` phase)
   renderer.writeFrameUniform(fu)
   renderer.draw(target)
   // M18 Deviations ("client.overlay.anchor's per-frame refresh is not called automatically by

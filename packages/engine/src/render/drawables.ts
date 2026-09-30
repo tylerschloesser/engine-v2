@@ -143,6 +143,20 @@ export interface DrawablesRenderer {
   /** Writes the whole DrawFrame uniform (module doc comment); called once per frame before `draw`/
    * `encodeInto` in production, any time in a test. */
   writeFrameUniform(v: DrawFrameUniformValues): void
+  /** Call once, before `writeFrameUniformFromTerrain`: `TerrainRenderer.stagedFrameUniform`. */
+  bindTerrainFrame(staged: Uint8Array): void
+  /** Writes the DrawFrame uniform with the camera, viewport and `tilesPerPx` fields copied as raw
+   * bytes from the bound terrain staging buffer (layout: `render/terrain.ts`'s `FU_*`; the same
+   * values `writeFrameUniform` would be given, without reading a double per field, which allocates
+   * in unoptimised code) and the integer fields from its arguments. Call after the terrain's own
+   * `writeFrameUniform` for the frame. */
+  writeFrameUniformFromTerrain(
+    windowOriginX: number,
+    windowOriginY: number,
+    cursorTileX: number,
+    cursorTileY: number,
+    cursorValid: number,
+  ): void
   /** Production `acquire()`: reads whatever the caller-owned `DrawListSlot` (`opts.drawListSlot`,
    * `render/drawlist-slot.ts`) currently holds and does the one `writeBuffer` (Scope). This renderer
    * never pulls a new slot itself -- docs/plan/18-picking-and-overlay.md's own `acquire` phase
@@ -426,8 +440,45 @@ export async function createDrawablesRenderer(
     return calls
   }
 
+  // `bindTerrainFrame`'s views, built once: source = terrain's `FU_CAM_TILE_X..FU_CAM_FRAC_Y` (0..16),
+  // `FU_VIEWPORT_W..H` (16..24), `FU_TILES_PER_PX` (24..28); destination = this uniform's
+  // `DFU_CAM_TILE_X..DFU_CAM_FRAC_Y` (0..16), `DFU_VIEWPORT_PX_W..H` (32..40), `DFU_TILES_PER_PX` (40).
+  let camSrc: Uint8Array | undefined
+  let viewportSrc: Uint8Array | undefined
+  let tilesPerPxSrc: Uint8Array | undefined
+  const camDst = new Uint8Array(uniformScratch, DFU_CAM_TILE_X, 16)
+  const viewportDst = new Uint8Array(uniformScratch, DFU_VIEWPORT_PX_W, 8)
+  const tilesPerPxDst = new Uint8Array(uniformScratch, DFU_TILES_PER_PX, 4)
+
   return {
     device,
+
+    bindTerrainFrame(staged) {
+      camSrc = staged.subarray(0, 16)
+      viewportSrc = staged.subarray(16, 24)
+      tilesPerPxSrc = staged.subarray(24, 28)
+    },
+
+    writeFrameUniformFromTerrain(
+      windowOriginX,
+      windowOriginY,
+      cursorTileX,
+      cursorTileY,
+      cursorValid,
+    ) {
+      if (!camSrc || !viewportSrc || !tilesPerPxSrc) {
+        throw new Error('writeFrameUniformFromTerrain: call bindTerrainFrame first')
+      }
+      camDst.set(camSrc)
+      viewportDst.set(viewportSrc)
+      tilesPerPxDst.set(tilesPerPxSrc)
+      uniformView.setInt32(DFU_WINDOW_ORIGIN_X, windowOriginX, true)
+      uniformView.setInt32(DFU_WINDOW_ORIGIN_Y, windowOriginY, true)
+      uniformView.setInt32(DFU_CURSOR_TILE_X, cursorTileX, true)
+      uniformView.setInt32(DFU_CURSOR_TILE_Y, cursorTileY, true)
+      uniformView.setUint32(DFU_CURSOR_VALID, cursorValid, true)
+      device.queue.writeBuffer(uniformBuffer, 0, uniformScratch)
+    },
 
     writeFrameUniform(v) {
       uniformView.setInt32(DFU_CAM_TILE_X, v.camTileX, true)

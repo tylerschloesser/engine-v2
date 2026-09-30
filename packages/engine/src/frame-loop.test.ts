@@ -25,6 +25,9 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
     ready: Promise.resolve(),
     cameraState,
     uploadRing,
+    // M33c: public `Client` fields nothing in this fakes-only file reads.
+    drawListSlot: undefined as never,
+    assets: undefined,
     input,
     // M11 step 6: `Client.camera` is likewise unused by anything `frame-loop.ts` itself exercises
     // (this file's own fakes never call `onCamera`'s real production wiring), so a throwaway stub
@@ -133,6 +136,7 @@ function fakeRenderer(): TerrainRenderer & { drawCallTargets: unknown[] } {
   const drawCallTargets: unknown[] = []
   return {
     device: {} as GPUDevice,
+    stagedFrameUniform: new Uint8Array(0),
     writeFrameUniform() {},
     writeVisualTable() {},
     writePageChunk() {},
