@@ -33,6 +33,15 @@ fn script_a() -> Vec<(Tick, Record<Puts>)> {
                 ev: PlayerEvent::Joined,
             },
         ),
+        // `Host::connect` queues `Connected` right after `Joined`; since M34 step 3b it writes the
+        // roster bit, so this script carries it to stay the event stream the `.wasm` run sees.
+        (
+            Tick(1),
+            Record::Player {
+                who: PlayerId(1),
+                ev: PlayerEvent::Connected,
+            },
+        ),
         (
             Tick(1),
             Record::Action {

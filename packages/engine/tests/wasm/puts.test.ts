@@ -284,7 +284,7 @@ test('wasm_script_a_matches_native', async () => {
   const hash = wrapEngineInstance(reopened.sim).simHash()
 
   expect(hash).toBe(golden.checkpoints[0])
-  expect(hash).toBe('0a7cc2623a83a03e')
+  expect(hash).toBe('805a6100f46e3701')
 })
 
 // `fx-puts`'s own `TICK_RATE` is the trait default (`TickRate::HZ_20`, `server.ts`'s "20 Hz is
