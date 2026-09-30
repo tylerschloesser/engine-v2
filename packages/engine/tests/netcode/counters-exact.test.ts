@@ -14,7 +14,13 @@ import { createNetHarness } from '../../src/test/net-harness.js'
 import { putsFixture } from './support.js'
 
 test('counters-exact: literal per-tick byte counts for a fixed seed', async () => {
-  const harness = await createNetHarness({ fixture: await putsFixture(), seed: 4001, clients: 1 })
+  // M31b R1: hash-all off, this test pins literal per-tick byte counts (hash bytes are `integrity/`'s).
+  const harness = await createNetHarness({
+    fixture: await putsFixture(),
+    seed: 4001,
+    clients: 1,
+    hashAll: false,
+  })
   try {
     harness.clients[0]?.setCamera({ x: 0, y: 0, tilesAcross: 20 })
     await harness.advanceTicks(3)

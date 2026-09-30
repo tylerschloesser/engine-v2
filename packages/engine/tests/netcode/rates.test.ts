@@ -28,10 +28,12 @@ function enterBytes(c: { sections: Record<string, number> }): number {
 
 test('rates/idle-sends-only-heartbeats', async () => {
   // `fx-machines` with nothing placed changes nothing, ever (its own `idle-world-costs-zero`).
+  // M31b R1: hash-all off, this test asserts the heartbeat is the only thing sent: no sections at all (hash bytes are `integrity/`'s).
   const h = await createNetHarness({
     fixture: await loadFixture('machines'),
     seed: 3101,
     clients: 1,
+    hashAll: false,
   })
   try {
     h.clients[0]?.setCamera({ x: 0, y: 0, tilesAcross: 20 })
@@ -56,10 +58,12 @@ test('rates/idle-sends-only-heartbeats', async () => {
 })
 
 test('rates/steady-busy-field', async () => {
+  // M31b R1: hash-all off, this test's ceiling is a byte budget (hash bytes are `integrity/`'s).
   const h = await createNetHarness({
     fixture: await loadFixture('busy-field'),
     seed: 3102,
     clients: 1,
+    hashAll: false,
   })
   try {
     // Both chunks of the 200-machine field visible.
@@ -83,7 +87,13 @@ test('rates/steady-busy-field', async () => {
 })
 
 test('rates/join-wilderness', async () => {
-  const h = await createNetHarness({ fixture: await putsFixture(), seed: 3103, clients: 1 })
+  // M31b R1: hash-all off, this test's ceiling is a byte budget (hash bytes are `integrity/`'s).
+  const h = await createNetHarness({
+    fixture: await putsFixture(),
+    seed: 3103,
+    clients: 1,
+    hashAll: false,
+  })
   try {
     h.clients[0]?.setView({ x: 5000, y: 5000, ...MAX_VIEW })
     await h.advanceTicks(30)
@@ -268,11 +278,15 @@ test('rates/degrade-on-stall', async () => {
 test('rates/degrade-on-soft-cap', async () => {
   // No stall, no lag: every frame is acked. The soft cap alone (1,000 B/s here; the busy field
   // sends several times that) drives level 2 at once and level 4 after 2 s over the cap.
+  // M31b R1: hash-all off. At level 4 a frame goes out every 4th tick, so `assertConverged` passes
+  // only on the tick a held frame has just gone out; hash bytes shift that phase (measured: in
+  // every hash mode the replica agrees with the host on every 4th tick and no desync is reported).
   const h = await createNetHarness({
     fixture: await loadFixture('busy-field'),
     seed: 3111,
     clients: 1,
     world: { bandwidth: { softCapBytesPerS: 1_000 } },
+    hashAll: false,
   })
   try {
     h.clients[0]?.setView({ x: 30, y: 14, halfW: 40, halfH: 40 })
@@ -413,10 +427,12 @@ test('rates/uplink-panning', async () => {
 })
 
 test('rates/seven-remote-presences', async () => {
+  // M31b R1: hash-all off, this test's ceiling is a byte budget (hash bytes are `integrity/`'s).
   const h = await createNetHarness({
     fixture: await loadFixture('presence'),
     seed: 3111,
     clients: 8,
+    hashAll: false,
   })
   try {
     const observer = 7

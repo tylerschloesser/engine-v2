@@ -8,7 +8,13 @@ import { createNetHarness } from '../../src/test/net-harness.js'
 import { putsFixture, square } from './support.js'
 
 test('rates/baseline-counters-exact', async () => {
-  const harness = await createNetHarness({ fixture: await putsFixture(), seed: 4001, clients: 1 })
+  // M31b R1: hash-all off, this test pins the baseline byte counts exactly (hash bytes are `integrity/`'s).
+  const harness = await createNetHarness({
+    fixture: await putsFixture(),
+    seed: 4001,
+    clients: 1,
+    hashAll: false,
+  })
   try {
     harness.clients[0]?.setCamera({ x: 0, y: 0, tilesAcross: 20 })
     await harness.advanceTicks(3)
@@ -23,7 +29,13 @@ test('rates/baseline-counters-exact', async () => {
 })
 
 test('rates/baseline-join-converges', async () => {
-  const harness = await createNetHarness({ fixture: await putsFixture(), seed: 1001, clients: 4 })
+  // M31b R1: hash-all off, this test's ceilings are byte budgets (hash bytes are `integrity/`'s).
+  const harness = await createNetHarness({
+    fixture: await putsFixture(),
+    seed: 1001,
+    clients: 4,
+    hashAll: false,
+  })
   try {
     harness.clients.forEach((c, i) => {
       c.setCamera(square(i))
@@ -44,7 +56,13 @@ test('rates/baseline-join-converges', async () => {
 })
 
 test('rates/baseline-late-join', async () => {
-  const harness = await createNetHarness({ fixture: await putsFixture(), seed: 1002, clients: 1 })
+  // M31b R1: hash-all off, this test's ceilings are byte budgets (hash bytes are `integrity/`'s).
+  const harness = await createNetHarness({
+    fixture: await putsFixture(),
+    seed: 1002,
+    clients: 1,
+    hashAll: false,
+  })
   try {
     harness.clients[0]?.setCamera(square(0))
     await harness.advanceTicks(5)

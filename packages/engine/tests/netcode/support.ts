@@ -87,6 +87,10 @@ export async function denseWorld(
     fixture: await loadFixture('busy-field'),
     seed,
     clients,
+    // M31b R1: hash-all off, every scenario on a dense world (`zoomout/*`, `rates/hard-ceiling`,
+    // `rates/join-dense-visible-first`) asserts byte budgets, and 121 chunk hashes per frame of a
+    // 55,000-entity world would also cost real time.
+    hashAll: false,
     // The filler dispatches a Fill per tick or more: past the default 20/s action limit (0004).
     world: {
       params: { maxEntities: chunks * 200 + 4_000, maxActionGrowth: 65_536 },

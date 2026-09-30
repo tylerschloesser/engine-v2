@@ -484,7 +484,13 @@ test('reconnect/cost', async () => {
   // KB each way"; 0013 Reconnect: "Cost: one RTT plus <= ~1 KB up and typically ~1 KB down") --
   // far from `fx-puts`'s own once-a-second origin paint (`wilderness()`'s own doc comment), so
   // every kept chunk needs zero bytes beyond its own 3-byte coordinate entry.
-  const harness = await createNetHarness({ fixture: await putsFixture(), seed, clients: 1 })
+  // M31b R1: hash-all off, this test's ceiling is a byte budget (hash bytes are `integrity/`'s).
+  const harness = await createNetHarness({
+    fixture: await putsFixture(),
+    seed,
+    clients: 1,
+    hashAll: false,
+  })
   try {
     const client = harness.clients[0]
     if (!client) throw new Error('no client')

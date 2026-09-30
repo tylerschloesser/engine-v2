@@ -68,6 +68,8 @@ fn total_puts(lb: &Loopback<BusyField<false>>, i: usize) -> u32 {
 #[test]
 fn steady_field_puts_80_per_second_at_about_16_bytes() {
     let mut lb = Loopback::<BusyField<false>>::new(params(4096));
+    // M31b R1: hashing off, this test pins exact non-hash bytes (hash bytes are `integrity/`'s).
+    lb.host.set_hash_mode(engine::host::hashes::HashMode::Off);
     let i = client(&mut lb);
     lb.set_camera(i, camera(30, 14, 40));
     lb.run(60); // every machine has put once and the view is settled
@@ -88,6 +90,8 @@ fn steady_field_puts_80_per_second_at_about_16_bytes() {
 #[test]
 fn dense_chunk_is_about_4_kb() {
     let mut lb = Loopback::<BusyField<true>>::new(params(40_000));
+    // M31b R1: hashing off, this test pins exact non-hash bytes (hash bytes are `integrity/`'s).
+    lb.host.set_hash_mode(engine::host::hashes::HashMode::Off);
     let i = client(&mut lb);
     // Visible = chunk (0,0) only; ring 1 makes 9 chunks, every one dense.
     lb.set_camera(i, camera(10, 10, 1));

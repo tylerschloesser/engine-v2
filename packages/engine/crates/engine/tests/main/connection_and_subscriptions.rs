@@ -511,6 +511,8 @@ fn view_unknown_outside_subscription() {
 #[test]
 fn idle_tick_heartbeats_after_ten_silent_ticks() {
     let mut lb = loopback(8);
+    // M31b R1: hashing off, this test pins the header-only heartbeat length (hash bytes are `integrity/`'s).
+    lb.host.set_hash_mode(engine::host::hashes::HashMode::Off);
     let (idx, _who) = add_client(&mut lb, 0);
     lb.set_camera(idx, small_camera(0, 0));
     lb.step(); // first frame: non-empty
@@ -717,6 +719,8 @@ fn budgets_join_wilderness_and_modified() {
     use engine::testing::budgets::expect_within_budget;
 
     let mut lb = loopback(20);
+    // M31b R1: hashing off, this test pins a join frame's length against its budget (hash bytes are `integrity/`'s).
+    lb.host.set_hash_mode(engine::host::hashes::HashMode::Off);
     let (idx, _who) = add_client(&mut lb, 0);
     lb.set_camera(idx, small_camera(0, 0));
     lb.step();
@@ -726,6 +730,8 @@ fn budgets_join_wilderness_and_modified() {
     );
 
     let mut lb2 = loopback(21);
+    // M31b R1: hashing off, this test pins a join frame's length against its budget (hash bytes are `integrity/`'s).
+    lb2.host.set_hash_mode(engine::host::hashes::HashMode::Off);
     let (idx2, who2) = add_client(&mut lb2, 0);
     for i in 0..5i32 {
         lb2.action(
@@ -751,6 +757,8 @@ fn budgets_join_wilderness_and_modified() {
 #[test]
 fn golden_frame_bytes_join_wilderness() {
     let mut lb = loopback(20);
+    // M31b R1: hashing off, this test pins exact non-hash frame bytes (hash bytes are `integrity/`'s).
+    lb.host.set_hash_mode(engine::host::hashes::HashMode::Off);
     let (idx, _who) = add_client(&mut lb, 0);
     lb.set_camera(idx, small_camera(0, 0));
     lb.step();

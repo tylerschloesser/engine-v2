@@ -47,7 +47,7 @@ function observe(h: NetHarness, i: number): void {
 async function make(
   seed: number,
   clients: number,
-  extra: { frameMs?: number; transport?: 'memory' | 'ws' } = {},
+  extra: { frameMs?: number; transport?: 'memory' | 'ws'; hashAll?: boolean } = {},
 ) {
   return createNetHarness({
     fixture: await loadFixture('presence'),
@@ -55,6 +55,7 @@ async function make(
     clients,
     ...(extra.transport !== undefined ? { transport: extra.transport } : {}),
     ...(extra.frameMs !== undefined ? { clientFrameMs: extra.frameMs } : {}),
+    ...(extra.hashAll !== undefined ? { hashAll: extra.hashAll } : {}),
   })
 }
 
@@ -377,7 +378,8 @@ test('interpolation/seed_reproducible', async () => {
 
 test('interpolation/presence_bytes_budget', async () => {
   const seed = 3008
-  const h = await make(seed, 8)
+  // M31b R1: hash-all off, this test's ceiling is a byte budget (hash bytes are `integrity/`'s).
+  const h = await make(seed, 8, { hashAll: false })
   try {
     observe(h, 7)
     await h.advanceTicks(10)

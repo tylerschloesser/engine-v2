@@ -181,7 +181,15 @@ describe('liveness', () => {
   })
 
   test('heartbeat-idle-world', async () => {
-    const harness = await createNetHarness({ fixture: await putsFixture(), seed: 7001, clients: 1 })
+    // M31b R1/R2: hash-all off. A heartbeat carries the hashes due, so it is longer than the
+    // header-only 10 bytes this test counts; the heartbeat still flows with hashing on (every other
+    // scenario relies on it).
+    const harness = await createNetHarness({
+      fixture: await putsFixture(),
+      seed: 7001,
+      clients: 1,
+      hashAll: false,
+    })
     try {
       const client = harness.clients[0]
       if (!client) throw new Error('heartbeat-idle-world: no client 0')
