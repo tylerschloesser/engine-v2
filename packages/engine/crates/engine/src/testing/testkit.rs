@@ -208,10 +208,15 @@ where
         let n = crate::codec::encode(&action, &mut self.action_buf)
             .expect("action_buf is generously sized for this testkit's own scenarios");
         let action_bytes = self.action_buf[..n].to_vec();
+        let ack = self
+            .clients
+            .iter()
+            .find(|c| c.conn == conn)
+            .map_or(0, |c| c.core.last_summary().tick.0);
         let mut sink = crate::bytes::SliceSink::new(&mut self.uplink_buf);
         UplinkWriter::write(
             &mut sink,
-            0,
+            ack,
             core::iter::once((seq, action_bytes.as_slice())),
             None,
             None,
@@ -466,7 +471,8 @@ where
         use crate::bytes::SliceSink;
         let conn = self.clients[i].conn;
         let mut sink = SliceSink::new(&mut self.uplink_buf);
-        UplinkWriter::write(&mut sink, 0, core::iter::empty(), Some(report), None);
+        let ack = self.clients[i].core.last_summary().tick.0;
+        UplinkWriter::write(&mut sink, ack, core::iter::empty(), Some(report), None);
         let n = sink.finish().expect("uplink buffer is generously sized");
         let bytes = self.uplink_buf[..n].to_vec();
         let _ = self.host.on_uplink(conn, &bytes);
@@ -483,9 +489,10 @@ where
         let n_sample = crate::codec::encode(&value, &mut sample_buf)
             .expect("testkit::Loopback::set_presence: value must encode within MAX_ENCODED_BYTES");
         let mut sink = SliceSink::new(&mut self.uplink_buf);
+        let ack = self.clients[i].core.last_summary().tick.0;
         UplinkWriter::write(
             &mut sink,
-            0,
+            ack,
             core::iter::empty(),
             None,
             Some(&sample_buf[..n_sample]),

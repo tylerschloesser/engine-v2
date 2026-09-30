@@ -430,3 +430,31 @@ fn malformed_action_is_protocol_error() {
     lb.step();
     assert_eq!(total(&lb), 0, "a malformed action must never be admitted");
 }
+
+/// M33d: `Loopback::action` used to send `last_received_tick = 0`, which `PaceState::on_uplink`
+/// read as 13+ ticks of backlog against `BACKLOG_HI_TICKS` and answered with degrade level 2. A
+/// real client always acks its newest frame.
+#[test]
+fn loopback_action_does_not_degrade() {
+    let mut lb = loopback(105);
+    let (idx, who) = add_client(&mut lb, 0);
+    lb.set_camera(idx, small_camera(0, 0));
+    for _ in 0..25 {
+        lb.step();
+    }
+    lb.action(who, RAction::Bump { n: 1 });
+    for _ in 0..25 {
+        lb.step();
+    }
+    lb.action(who, RAction::Bump { n: 1 });
+    lb.step();
+    lb.set_presence(idx, ());
+    lb.set_camera(idx, small_camera(1, 0));
+    lb.step();
+    let conn = lb.conn(idx);
+    assert_eq!(
+        lb.host.pacing_counters(conn).unwrap().degrade_level,
+        1,
+        "well-acked uplinks never degrade the connection"
+    );
+}
