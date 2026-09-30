@@ -4,7 +4,9 @@
   "type": "module",
   "main": "index.mjs",
   "scripts": {
-    "start": "node index.mjs --data .data"
+    "start": "node index.mjs --data .data",
+    "start:bun": "bun bun.ts --data .data",
+    "start:deno": "deno run --allow-read --allow-write --allow-net --allow-env=PORT,JOIN_KEY deno.ts --data .data"
   },
   "dependencies": {
     "engine": "workspace:*",
