@@ -1062,6 +1062,9 @@ const WASM_PAGE_BYTES = 65536
  * message needed, unlike the M03/M04 harness. `hash`/`admit`/`messageTick` have no production
  * counterpart yet and reject if ever called; `errors()` is always empty (a running client has no
  * ongoing fault-reporting channel past `ready`/`fatal` yet -- Deviations).
+ *
+ * It snapshots the worker set when called: on a remote client with no `test.game` call it after
+ * `untilConfigured(client)`, or the late-spawned gen workers are not in it (docs/plan/33f).
  */
 export function asHarness(client: Client): Harness {
   const h = clientTestHandle(client)

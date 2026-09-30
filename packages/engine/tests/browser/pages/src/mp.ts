@@ -8,8 +8,9 @@
 import type { Action } from '../../../../fixtures/puts/bindings/Action.ts'
 import type { Reject } from '../../../../fixtures/puts/bindings/Reject.ts'
 import { halfExtentTiles } from '../../../../src/camera/transform.ts'
+import { hexEncode, loadOrMintSecret } from '../../../../src/client/secret.ts'
 import type { Client, ClientOptions, LinkLogEntry, LinkState } from '../../../../src/client.ts'
-import { createClient, readInvite, wsUrl } from '../../../../src/client.ts'
+import { clientTestHandle, createClient, readInvite, wsUrl } from '../../../../src/client.ts'
 import { systemClock, systemScheduler } from '../../../../src/clock.ts'
 import { createRealFrameLoop } from '../../../../src/frame-loop.ts'
 import { installPageStyles } from '../../../../src/input/page-css.ts'
@@ -18,7 +19,9 @@ import type { AdapterInfo, RendererDevice } from '../../../../src/render/device.
 import { initDevice } from '../../../../src/render/device.ts'
 import type { TerrainRenderer } from '../../../../src/render/terrain.ts'
 import { createTerrainRenderer } from '../../../../src/render/terrain.ts'
+import { RingConsumer, type RingStats } from '../../../../src/sab/ring.ts'
 import { readPixels, renderTo } from '../../../../src/test/render.ts'
+import { untilConfigured } from '../../../../src/test.ts'
 import { fixtureWasm } from './fixture-wasm.ts'
 
 declare global {
@@ -48,6 +51,17 @@ declare global {
      * terrain after. */
     __mpProbeCenterPixel?: () => Promise<{ r: number; g: number; b: number; a: number }>
     __mpHudText?: () => string
+    /** docs/plan/33f: what `mp/remote_client_configures_from_welcome` reads: how many gen workers
+     * exist now, and the page's own timeline in ms since page start (`null` = not yet). */
+    /** Chunk results the gen workers have pushed to this client (their result rings' counters). */
+    __mpGenDelivered?: () => number
+    __mpConfig?: () => {
+      genWorkers: number
+      testGame: boolean
+      welcomeMs: number | null
+      genUpMs: number | null
+      revealedMs: number | null
+    }
     __errors?: () => string[]
     __adapterInfo?: () => AdapterInfo
   }
@@ -57,6 +71,9 @@ installPageStyles() // 0019 §3: pull-to-refresh structurally prevented, canvas 
 
 const params = new URL(location.href).searchParams
 const linklogVisible = params.get('linklog') === '1'
+// `?testGame=1`: the pre-M33f way, the world's seed and params handed in out of band. Only
+// `mp/remote_client_configures_from_welcome` uses it, to compare against the `Welcome` path.
+const testGame = params.get('testGame') === '1'
 const blockedWorker = params.get('blockedWorker') === '1'
 const corruptBuildHash = params.get('corruptBuildHash') === '1'
 const urlOverride = params.get('url')
@@ -114,7 +131,20 @@ const clientOptions: ClientOptions = {
   genWorkers: 1,
   assets: { tiles: '/terrain/tiles.json' },
   // No `test.game`: the client and its gen workers take the world's seed and params from
-  // `Welcome` (ADR 0042, docs/plan/33f).
+  // `Welcome` (ADR 0042, docs/plan/33f), unless `?testGame=1` asks for the old escape hatch.
+  ...(testGame
+    ? {
+        test: {
+          game: {
+            seed: '0x1',
+            params: null,
+            secret: hexEncode(loadOrMintSecret()),
+            joinKey: readInvite(location).joinKey ?? '',
+            buildHash: clientBuildHash,
+          },
+        },
+      }
+    : {}),
 }
 // `mp/coep-worker-error-message` (Scope: "unchanged from M06, just needs to still pass on the new
 // page"): pattern B (0017 §3) points every spawned worker at the built worker chunk served with
@@ -127,6 +157,41 @@ if (blockedWorker) {
 }
 
 const client: Client = createClient(clientOptions)
+
+// docs/plan/33f: the timeline `mp/remote_client_configures_from_welcome` reads. Listeners are
+// attached before anything can settle: `Welcome` applied (`online`), the gen workers up
+// (`untilConfigured`), the first reveal (polled).
+const timeline: { welcomeMs: number | null; genUpMs: number | null; revealedMs: number | null } = {
+  welcomeMs: null,
+  genUpMs: null,
+  revealedMs: null,
+}
+client.onLink((e) => {
+  if (e.state === 'online' && timeline.welcomeMs === null) timeline.welcomeMs = performance.now()
+})
+void untilConfigured(client).then(() => {
+  timeline.genUpMs = performance.now()
+})
+const revealPoll = setInterval(() => {
+  if (timeline.revealedMs === null && workersReady && client.revealed()) {
+    timeline.revealedMs = performance.now()
+    clearInterval(revealPoll)
+  }
+}, 5)
+window.__mpGenDelivered = () => {
+  const stats: RingStats = { drops: 0, pushed: 0, popped: 0 }
+  let pushed = 0
+  for (const sab of clientTestHandle(client).sabs.genResult) {
+    new RingConsumer(sab).stats(stats)
+    pushed += stats.pushed
+  }
+  return pushed
+}
+window.__mpConfig = () => ({
+  genWorkers: clientTestHandle(client).workers.filter((w) => w.kind === 'gen').length,
+  testGame,
+  ...timeline,
+})
 
 let workersReady = false
 const readyResult: { ok: true } | { ok: false; code: string; message: string } =

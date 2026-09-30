@@ -4,10 +4,8 @@
 // this page's own spec starts before navigating), driven the same `stepFrame`/`stepTick` lockstep
 // `gc-topology.ts` already uses for the *local* topology -- so `zeroGcSuite` runs the same generated
 // clean-plus-negative-controls suite it runs against every other production-topology page, this time
-// over `net` too (0016's own net-worker row and paragraph). `mp.ts`'s own `test.game` shape is
-// reused verbatim (the full secret/joinKey/buildHash a real `Hello` needs, not merely `{seed,
-// params}` -- steps 3-4's own Deviations found the naive shape gets rejected as `VersionMismatch`).
-import { hexEncode, loadOrMintSecret } from '../../../../src/client/secret.ts'
+// over `net` too (0016's own net-worker row and paragraph). No `test.game` (M33f, ADR 0042): the
+// client takes the world from `Welcome`, as `mp.ts` does.
 import { createClient } from '../../../../src/client.ts'
 import { FLAG_REBASE } from '../../../../src/sab/control.ts'
 import {
@@ -17,6 +15,7 @@ import {
   parkWorkers,
   resumeWorkers,
   samplePresences,
+  untilConfigured,
 } from '../../../../src/test/client.ts'
 import { installGcPage } from '../../../../src/test/gc-page.ts'
 import { createManualClock } from '../../../../src/test/manual-clock.ts'
@@ -56,13 +55,6 @@ const client = createClient({
   genWorkers: 1,
   test: {
     clock,
-    game: {
-      seed: '0x1',
-      params: null,
-      secret: hexEncode(loadOrMintSecret()),
-      joinKey: '',
-      buildHash: wasm.buildHash,
-    },
     flags: { gcHook: true, ...(netInjectParse ? { netInjectParse: true } : {}) },
   },
 })
@@ -74,7 +66,7 @@ const client = createClient({
 // live topology the clean run does. `client.onLink`'s own `'online'` transition is the one signal
 // for that (`mp.ts`'s own precedent).
 await client.ready
-const harness = asHarness(client)
+let harness = asHarness(client)
 
 // **Real bug found live, fixed here**: unlike `mp.ts` (a real `createRealFrameLoop`, one real rAF
 // callback -> `writeCameraAndWake()` -- a real wake of `WORKER_CLIENT` -- every ~16 ms forever),
@@ -99,6 +91,10 @@ while (!online) {
   await new Promise((resolve) => setTimeout(resolve, 0))
 }
 unsubscribeOnline()
+// ADR 0042: the gen workers are spawned after the first `Welcome`; park only once they exist.
+await untilConfigured(client)
+// `asHarness` snapshots the worker set: build it again now that gen0 exists.
+harness = asHarness(client)
 
 // docs/plan/30-interpolation.md: the spec's own moving remote (a second client on the same server,
 // driven from Node) is only relayed to a client whose camera subscribes the chunk it stands in, so
