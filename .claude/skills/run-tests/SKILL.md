@@ -25,7 +25,7 @@ allowlist"`, `pnpm test browser -t determinism`, `pnpm test unit -t "manual cloc
 substring match, not a regex.
 
 Reference game (M34b): `pnpm test browser -t reference_` (its `reference` Playwright project), `pnpm test wasm -t reference_`
-(Node and Bun golden replay), `pnpm test rust -t golden_replay`; `pnpm --filter reference golden:record` regenerates the
+(Node and Bun golden replay, persistence, state budget), `pnpm test rust -t golden_replay`, `pnpm test:slow -t reference_` (the two `test-hooks` tests); the zero-GC page is `pnpm test browser -t reference_single_player`; `pnpm --filter reference golden:record` regenerates the
 full-game golden (a reviewed diff, never to make a red test pass).
 
 ## First time / after a Playwright bump

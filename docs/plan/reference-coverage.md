@@ -8,54 +8,54 @@ M34b and M34c keep the test columns true (here and in the `reference-game.md` ta
 
 ## 1. Engine feature → reference-game feature
 
-| Engine feature (source) | Exercised by | Kind | M |
-|---|---|---|---|
-| Game-owned deterministic worldgen, `Params`, `hash2` (`world.md`, 0008) | simplex terrain + resource scatter; golden over raw tiles | play | 20 |
-| Async generation, gen workers, chunk lifecycle, streaming (`world.md`, `client.md`) | panning the world | play | 20 |
-| Two tile layers + `aux`; `tile_visual`; art contract; dithering, variants (0007, 0018) | base + resource layer, depletion stages, script-made art | play | 20 |
-| Tile overlays, canonical overlay (0007) | depletion; last unit clears the resource | play | 20 |
-| Trait tables, `traits_at`, shared rule helper (0007, 0003) | `NOT_BUILDABLE` on water, resources, furnace; `can_place` for host, prediction and ghost | play | 33 |
-| Game actions, `dispatch` → ack → `onActionResult`, reject reasons (0004) | collect, craft, place, deposit, take, pick up | play | 20b–33b |
-| `admit` + presence witness (0001) | `StartCollect { tile, from }` | play | 20b |
-| Engine actions `Joined` / `Connected` / `Disconnected` via `on_player` (`simulation.md`) | default player state; colour on join; collect cancelled after the grace | play + scripted | 20, 32, 34, 34c |
-| Presence uplink and relay; interpolation of remote motion (0001, 0012) | own spring writes presence; remote circles | play | 20b, 34 |
-| Per-player scope (0011) | inventory, unlocks, timers | play | 20–32 |
-| Global scope: engine roster + `put_global` (0011) | coloured roster dots | play | 34 |
-| `SimRng` and its snapshot (0002, 0003) | colour picked with `w.rng()` on join | play | 34 |
-| Multi-tile entity, prototypes, occupancy, `entity_at` (0007) | 2x2 furnace | play | 33 |
-| `WorldWrite::despawn`, `EntityGone`, prediction tombstones, occupancy release (0007, 0012, ADR 0022 §7) | pick up an empty furnace (Requirement added 2026-09-19, R3): predicted despawn, tiles buildable again, a second player's open panel closes on `EntityGone` (`pickup_empty_despawns_and_returns_item`, `predicted_pickup_tombstone_then_ack`, `pickup_sends_entity_gone_and_closes_other_panel`; browser `reference_furnace_pick_up`) | play + scripted | 33b, 34b, 34c |
-| Furnace across a chunk border, partial subscription (0003 list) | scripted placement at a chunk corner | scripted | 33, 34c |
-| Timer wheel, sleep/wake, O(active) tick (0007) | smelting; idle furnaces cost nothing | play | 33b |
-| Off-screen state keeps simulating (0003 list) | furnace smelts while unsubscribed | scripted | 34b |
-| Time units, `done_at`, `clock()` (0006) | 2 s / 5 s durations as `const`; CSS progress | play | 20–33b |
-| Prediction and rollback of discrete actions; one-frame ghost swap (0012) | every own action; placement most visibly | play | 33 (engine: 25, 26) |
-| `Game::predict` opt-out (0012) | `FurnaceTake` | play | 33b |
-| `Unknown` reads → `NotPredictable` at the subscription edge (0003 list) | scripted far placement | scripted | 34c |
-| Rejection races: last unit, same spot, same ingots (0003 list) | three race tests at three latencies | scripted | 34c |
-| Provisional ids, tile addressing (ADR 0022) | deposit into a just-placed furnace; panel survives the swap | play + scripted | 33b |
-| `Ui` observation, low-GC state reads (0003, `client.md`) | every panel; `in_range` at tile-crossing rate | play | 20b |
-| Static overlay anchors (0019) | collect buttons, touch Confirm, furnace panel | play | 20b, 33, 33b |
-| Tile picking, cursor tile, ghost with `ANCHOR_CURSOR_TILE` (0019) | placement | play | 33 |
-| Entity picking from the DrawList (0019) | tap a furnace | play | 33b |
-| Semantic `tap`, `pointerType`, touch flow (0019) | mouse click-to-place vs tap-then-confirm | play | 33 |
-| Camera pan/zoom, WASD, gestures (`client.md`) | moving around | play + device | 20 |
-| `camera.moveTo`; follow target (0019) | new-player spawn; one-frame follow for a returning player | play | 20b, 34 |
-| DrawList kinds: `circle`, `ring`, `sprite`, `ghost`, `bar`, `rect`; `PREDICTED`, `SCREEN_PX_STROKE`; `FrameView.zoom` LOD (0018) | players, range ring, furnaces, progress, open-furnace outline | play | 20b–33b |
-| Persistence: log, snapshots, reload, replay equality (`simulation.md`, 0005) | reload resumes; golden log replay in every runtime | scripted | 34b |
-| Export / import; single-player → hosted (0005) | round trip; save reclaimed on a server by the same secret | scripted | 34b |
-| `WorldBusy` (0005) | second tab | scripted | 34b |
-| State budget when full (0007, 0004) | tiny `max_entities`; `PlaceFurnace` rejected | scripted | 34b |
-| Panic recovery with `Skip`; `SaveIncompatible` (0005) | `test-hooks` build | scripted (slow) | 34b |
-| Zero GC in normal play (0016) | GC window over the scripted game; allocation criterion of 20b | scripted | 20b, 34b |
-| Server entrypoint, Node adapter, join key, device secret, `max_players` (`sync.md`, 0013) | `games/reference-server`; `Full` / `BadKey` | play + scripted | 34, 34c |
-| Reconnect, resume hint, pending resend, disconnect grace (0013) | drop tests | scripted + device | 34c |
-| Late join (0013) | third client after the game | scripted | 34c |
-| Idle world pauses at zero players (`simulation.md`) | both leave; furnace frozen | scripted | 34c |
-| Viewport-scoped deltas, rates, byte budgets, desync hashes on (0010, 0013) | counters over the two-player game | scripted | 34c |
-| Same protocol single-player and multiplayer (`sync.md`) | one script, both topologies, equal hashes | scripted | 34b, 34c |
-| Capability screen from `checkSupport` (0018 §7) | reference game screen | play | 35 (owned there) |
-| Download budgets (`runtime-and-packaging.md`) | size test on the reference `.wasm` | scripted | 35 |
-| Heavy mode; tick and frame benchmarks; soak (0020) | reference logs and the standard large save | scripted (slow) | 36 |
+| Engine feature (source) | Exercised by | Kind | M | Verified by (M34b rows; M34c fills its own) |
+|---|---|---|---|---|
+| Game-owned deterministic worldgen, `Params`, `hash2` (`world.md`, 0008) | simplex terrain + resource scatter; golden over raw tiles | play | 20 |  |
+| Async generation, gen workers, chunk lifecycle, streaming (`world.md`, `client.md`) | panning the world | play | 20 |  |
+| Two tile layers + `aux`; `tile_visual`; art contract; dithering, variants (0007, 0018) | base + resource layer, depletion stages, script-made art | play | 20 |  |
+| Tile overlays, canonical overlay (0007) | depletion; last unit clears the resource | play | 20 |  |
+| Trait tables, `traits_at`, shared rule helper (0007, 0003) | `NOT_BUILDABLE` on water, resources, furnace; `can_place` for host, prediction and ghost | play | 33 |  |
+| Game actions, `dispatch` → ack → `onActionResult`, reject reasons (0004) | collect, craft, place, deposit, take, pick up | play | 20b–33b |  |
+| `admit` + presence witness (0001) | `StartCollect { tile, from }` | play | 20b |  |
+| Engine actions `Joined` / `Connected` / `Disconnected` via `on_player` (`simulation.md`) | default player state; colour on join; collect cancelled after the grace | play + scripted | 20, 32, 34, 34c |  |
+| Presence uplink and relay; interpolation of remote motion (0001, 0012) | own spring writes presence; remote circles | play | 20b, 34 |  |
+| Per-player scope (0011) | inventory, unlocks, timers | play | 20–32 |  |
+| Global scope: engine roster + `put_global` (0011) | coloured roster dots | play | 34 |  |
+| `SimRng` and its snapshot (0002, 0003) | colour picked with `w.rng()` on join | play | 34 |  |
+| Multi-tile entity, prototypes, occupancy, `entity_at` (0007) | 2x2 furnace | play | 33 |  |
+| `WorldWrite::despawn`, `EntityGone`, prediction tombstones, occupancy release (0007, 0012, ADR 0022 §7) | pick up an empty furnace (Requirement added 2026-09-19, R3): predicted despawn, tiles buildable again, a second player's open panel closes on `EntityGone` (`pickup_empty_despawns_and_returns_item`, `predicted_pickup_tombstone_then_ack`, `pickup_sends_entity_gone_and_closes_other_panel`; browser `reference_furnace_pick_up`) | play + scripted | 33b, 34b, 34c |  |
+| Furnace across a chunk border, partial subscription (0003 list) | scripted placement at a chunk corner | scripted | 33, 34c |  |
+| Timer wheel, sleep/wake, O(active) tick (0007) | smelting; idle furnaces cost nothing | play | 33b |  |
+| Off-screen state keeps simulating (0003 list) | furnace smelts while unsubscribed | scripted | 34b | `reference_offscreen_furnace_keeps_smelting` |
+| Time units, `done_at`, `clock()` (0006) | 2 s / 5 s durations as `const`; CSS progress | play | 20–33b |  |
+| Prediction and rollback of discrete actions; one-frame ghost swap (0012) | every own action; placement most visibly | play | 33 (engine: 25, 26) |  |
+| `Game::predict` opt-out (0012) | `FurnaceTake` | play | 33b |  |
+| `Unknown` reads → `NotPredictable` at the subscription edge (0003 list) | scripted far placement | scripted | 34c |  |
+| Rejection races: last unit, same spot, same ingots (0003 list) | three race tests at three latencies | scripted | 34c |  |
+| Provisional ids, tile addressing (ADR 0022) | deposit into a just-placed furnace; panel survives the swap | play + scripted | 33b |  |
+| `Ui` observation, low-GC state reads (0003, `client.md`) | every panel; `in_range` at tile-crossing rate | play | 20b |  |
+| Static overlay anchors (0019) | collect buttons, touch Confirm, furnace panel | play | 20b, 33, 33b |  |
+| Tile picking, cursor tile, ghost with `ANCHOR_CURSOR_TILE` (0019) | placement | play | 33 |  |
+| Entity picking from the DrawList (0019) | tap a furnace | play | 33b |  |
+| Semantic `tap`, `pointerType`, touch flow (0019) | mouse click-to-place vs tap-then-confirm | play | 33 |  |
+| Camera pan/zoom, WASD, gestures (`client.md`) | moving around | play + device | 20 |  |
+| `camera.moveTo`; follow target (0019) | new-player spawn; one-frame follow for a returning player | play | 20b, 34 |  |
+| DrawList kinds: `circle`, `ring`, `sprite`, `ghost`, `bar`, `rect`; `PREDICTED`, `SCREEN_PX_STROKE`; `FrameView.zoom` LOD (0018) | players, range ring, furnaces, progress, open-furnace outline | play | 20b–33b |  |
+| Persistence: log, snapshots, reload, replay equality (`simulation.md`, 0005) | reload resumes; golden log replay in every runtime | scripted | 34b | `reference_reload_resumes`, `reference_golden_replay`, `golden_replay` |
+| Export / import; single-player → hosted (0005) | round trip; save reclaimed on a server by the same secret | scripted | 34b | `reference_export_import_roundtrip`, `reference_single_player_save_to_server` |
+| `WorldBusy` (0005) | second tab | scripted | 34b | `reference_world_busy_second_tab` |
+| State budget when full (0007, 0004) | tiny `max_entities`; `PlaceFurnace` rejected | scripted | 34b | `reference_state_budget_full`, `reference_state_budget_full_shows_reason` |
+| Panic recovery with `Skip`; `SaveIncompatible` (0005) | `test-hooks` build | scripted (slow) | 34b | `reference_panic_in_apply_skips_and_recovers`, `reference_save_incompatible_leaves_files` |
+| Zero GC in normal play (0016) | GC window over the scripted game; allocation criterion of 20b | scripted | 20b, 34b | `gc.reference_single_player` (`reference_single_player clean`), `reference` page of 20b |
+| Server entrypoint, Node adapter, join key, device secret, `max_players` (`sync.md`, 0013) | `games/reference-server`; `Full` / `BadKey` | play + scripted | 34, 34c |  |
+| Reconnect, resume hint, pending resend, disconnect grace (0013) | drop tests | scripted + device | 34c |  |
+| Late join (0013) | third client after the game | scripted | 34c |  |
+| Idle world pauses at zero players (`simulation.md`) | both leave; furnace frozen | scripted | 34c |  |
+| Viewport-scoped deltas, rates, byte budgets, desync hashes on (0010, 0013) | counters over the two-player game | scripted | 34c |  |
+| Same protocol single-player and multiplayer (`sync.md`) | one script, both topologies, equal hashes | scripted | 34b, 34c | `reference_full_game_single` (single-player half; M34c adds the multiplayer one) |
+| Capability screen from `checkSupport` (0018 §7) | reference game screen | play | 35 (owned there) |  |
+| Download budgets (`runtime-and-packaging.md`) | size test on the reference `.wasm` | scripted | 35 |  |
+| Heavy mode; tick and frame benchmarks; soak (0020) | reference logs and the standard large save | scripted (slow) | 36 |  |
 
 ## 2. Engine features no reference feature exercises
 
