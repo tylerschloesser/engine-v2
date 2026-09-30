@@ -28,6 +28,10 @@
       "types": "./dist/server-bun.d.ts",
       "default": "./dist/server-bun.js"
     },
+    "./server/deno": {
+      "types": "./dist/server-deno.d.ts",
+      "default": "./dist/server-deno.js"
+    },
     "./vite": {
       "types": "./dist/vite.d.ts",
       "default": "./dist/vite.js"
