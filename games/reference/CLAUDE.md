@@ -25,7 +25,7 @@ and-collect-ui.md`.
 - `content.rs`: terrain/resource ids, `TraitSet` bits, durations, `SEED` (every real page's seed --
   `ClientSide` gets no engine seed/params channel), `Game::register`.
 - `noise.rs`/`worldgen.rs`: `engine::noise` composition, `RefWorldgen`/`hash2` scatter, `terrain_at`.
-- `rules/`: one file per feature (`collect.rs`: `StartCollect`/`CancelCollect`, `in_range`, `admit`).
+- `rules/`: one file per feature (`collect.rs`: `StartCollect`/`CancelCollect`, `in_range`, `admit`; `craft.rs`: `StartCraft`, due-craft completion, `update_unlocks`).
 - `client.rs` (`.claude/rules/hot-paths.md` applies): `ClientSide<RefGame>` (`RefClient`) -- the
   camera-follow spring, own-player circle/range-ring `extract`, `ui()` (below; `Ui.spawn` is
   `nearest_land_tile`'s one-time spiral, cached at construction), depletion visuals.
@@ -49,6 +49,12 @@ just `stepFrame` (`engine/test.stepTick`, docs/plan/20c-client-ack-freeze-under-
 safe on every topology, `gc-entry.ts`'s own connected one included -- `untilQuiescent` no longer
 waits on `uploadRing`, a page's own job to drain). `tests/helpers/game.ts`'s
 `panTo`/`uiState`/`clickCollect`/`pumpUntil` poll a real `uiState` condition, never a fixed count.
+
+## Adding an item or recipe (M32)
+
+- Item: add an `ItemId` variant and bump `ITEM_COUNT` (`content.rs`; the slot is `Inventory`'s array index), append its label to `ITEM_LABELS` (`src/ui/inventory.ts`) and `ITEM` (`tests/helpers/game.ts`), bump `SCHEMA_VERSION`.
+- Recipe: append a `Recipe` to `RECIPES` (cost, `secs`, `unlock_stone_mined`; its index is its id and its `unlocks` bit) and a name to `RECIPE_NAMES` (`src/ui/craft.ts`); `apply`/`tick`/`ui()` iterate the table, nothing else to wire.
+- Native tests reach a state with `RefScenario::give` (direct put, never an action); browser tests play with `collectN`.
 
 ## Conventions
 
