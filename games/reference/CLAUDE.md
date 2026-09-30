@@ -5,8 +5,7 @@ The reference game (`docs/spec/reference-game.md`): a private Vite app plus `sim
 ## Commands
 
 - `pnpm --filter reference dev` / `build` / `preview` / `typecheck`.
-- `node games/reference/scripts/gen-assets.mjs [--check] [--out <dir>]`: regenerates committed
-  `assets/{tiles,sprites}.{png,json}`.
+- `node games/reference/scripts/gen-assets.mjs [--check] [--out <dir>]`: regenerates committed `assets/{tiles,sprites}.{png,json}`.
 - Bindings (`src/bindings/*.ts`) and the `.wasm` regenerate together on any `pnpm --filter reference
   build`/`dev`; review `git diff src/bindings` after touching `sim/`.
 - `cargo nextest run -E 'package(reference-sim)'` for this crate's Rust tests (`pnpm test rust -t
@@ -41,7 +40,7 @@ with `client.overlay.anchor`; one CSS fill animation; `CancelCollect` on pan-out
 `StartCollect` adds a `reject-<reason>` class. `inventory.ts`: a fixed, non-anchored readout. Both
 wired in `game.ts`'s `startGame` (the device/renderer/art/client/camera/UI wiring shared by `main.ts`,
 `test-entry.ts` and `gc-entry.ts`), which also calls `client.camera.moveTo` to `Ui.spawn` once, only
-when `client.camera.restored` is `false`. **`Ui.in_range`/`world.tile()` need a real sim tick**, not
+when `shouldMoveToSpawn` (`src/spawn.ts`) allows it. **`Ui.in_range`/`world.tile()` need a real sim tick**, not
 just `stepFrame` (`engine/test.stepTick`, docs/plan/20c-client-ack-freeze-under-untilquiescent.md:
 safe on every topology, `gc-entry.ts`'s own connected one included -- `untilQuiescent` no longer
 waits on `uploadRing`, a page's own job to drain). `tests/helpers/game.ts`'s
@@ -57,5 +56,5 @@ waits on `uploadRing`, a page's own job to drain). `tests/helpers/game.ts`'s
 - Depends on `engine` alone (`reference_package_depends_only_on_engine`): never import across the
   package boundary from `packages/engine/tests/**`, even in `tests/`.
 - Placement (M33): shared rule helpers take `&dyn WorldRead` and return `Result<_, Unknown>`; never name a tile or entity type in a placement rule (`can_place` asks `traits_at`; a new unbuildable terrain or building only adds `NOT_BUILDABLE` in `content::register`). Construction mode is client-local: `client.input.emit(LOCAL.PLACE_MODE, on)` (`src/ui/build.ts`, mirrors `content::local`) -> `RefClient.placing` -> ghost in `extract`. Step one frame after an emit or a dispatch before a tick waits (the rings drain in frames; the uplink is paced at 50 ms). A page draws its DrawList (circle, ring, furnace, ghost) with `engine/render`'s `attachClientDrawables(client, device, renderer, { colorFormat })`, called in `game.ts`; it loads `ClientOptions.assets.sprites` itself, and a hand-rolled frame loop must call `client.pick.acquire()` before `renderer.draw` (`draws.spec.ts` compares pixels with the pass on and off through `__pixelAt`; `__draws` reads the DrawList).
-- Furnace (M33b): machines sleep. Change a machine's state only in `advance` (`rules/furnace.rs`), one put per state change, scheduled with `wake_at`; an idle machine has no timer and is never visited (`idle_furnaces_cost_nothing`). Actions address a machine by any footprint tile, resolved with `entity_at` (0022 section 6). Client state that points at an entity is keyed by tile and re-checked with `entity_at` every `frame`: entities can disappear (`RefClient.open`, `recheck_open`: read through the overlay-merged `FrameView::entities` when the tile is visible, since `FrameView::world()` is the raw replica; `Unknown` leaves it open). A tap finds its furnace by `ev.tile`, not `pick_id`: the engine picker tests sprites against a zero-size box, so a sprite is never picked. The panel (`src/ui/furnace.ts`) holds no open/closed state: it shows `Ui.furnace`. A panel's controls must not sit under a `.collect-button` in browser tests: stand out of collect range.
+- Furnace (M33b): machines sleep. Change a machine's state only in `advance` (`rules/furnace.rs`), one put per state change, scheduled with `wake_at`; an idle machine has no timer and is never visited (`idle_furnaces_cost_nothing`). Actions address a machine by any footprint tile, resolved with `entity_at` (0022 section 6). Client state that points at an entity is keyed by tile and re-checked with `entity_at` every `frame`: entities can disappear (`RefClient.open`, `recheck_open`: read through the overlay-merged `FrameView::entities` when the tile is visible, since `FrameView::world()` is the raw replica; `Unknown` leaves it open). A tap finds its furnace by `ev.tile`, not `pick_id` (sprites are pickable since M33d, but a tile needs no pick record and survives the ghost-to-real swap). The panel (`src/ui/furnace.ts`) holds no open/closed state: it shows `Ui.furnace`. A panel's controls must not sit under a `.collect-button` in browser tests: stand out of collect range.
 - `onUi` arrives on the real rAF: a helper that reads `Ui` waits for a non-null one (`readUi`, `panTo`; `test-entry.ts`'s `?lateUi=n` makes a late `Ui` deterministic); page code that acts on the first `Ui` checks what the player did meanwhile (`src/spawn.ts`).

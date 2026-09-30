@@ -1,6 +1,6 @@
 # M33e: The reference page's first-`Ui` races
 
-Status: not started · After: 33d · Tyler-dependent: no
+Status: done · After: 33d · Tyler-dependent: no
 
 Written by the orchestrator at M33d's gate (2026-09-30). Two reference browser tests fail intermittently with a cause M30's Deviations already diagnosed ("Left, pre-existing", `docs/plan/30-interpolation.md`). They have reddened gates at M30, M32, M33 and M33d, M34 adds more browser tests to the same page, and one of the two is a production glitch a player can hit.
 
@@ -44,9 +44,9 @@ Delivering `onUi` inside `stepFrame` under a manual clock (an engine change; led
 - No test is weakened; `reference_new_player_spawns_on_land` still passes.
 
 ## Exit criteria
-- [ ] The tests above pass by name and were red before the fix (red lines in the report).
-- [ ] `reference_player_circle_lags_and_settles` and `reference_craft_flow`: 30 targeted foreground runs of the pair, 0 failures, with the 1-minute load recorded; a failure that matches a Chrome crash report at that minute is excluded and named.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] The tests above pass by name and were red before the fix (red lines in the report).
+- [x] `reference_player_circle_lags_and_settles` and `reference_craft_flow`: 30 targeted foreground runs of the pair, 0 failures, with the 1-minute load recorded; a failure that matches a Chrome crash report at that minute is excluded and named.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test browser -t "player_circle_lags_and_settles|reference_craft_flow"` · `pnpm test browser -t reference`.
@@ -65,3 +65,8 @@ None.
 - Tests: `spawn_move_applies_to_untouched_camera`, `spawn_move_skipped_once_camera_moved` in `src/spawn.test.ts` (unit suite already covers `games/*/src`; no new browser test). Red with the old `!restored`-only rule: `expected true to be false` at spawn.test.ts:12.
 - Helper: `readUi(page)` in `tests/helpers/game.ts`; `test-entry.ts` `?lateUi=n` makes the first n `__uiState()` reads null. `reference_craft_flow` opens `/test.html?lateUi=3` and reads via `readUi` (assertions unchanged). Old read under `?lateUi=3`: `Expected: [] Received: undefined`, craft-flow.spec.ts:18.
 - Repeat: 30 runs of the pair, 0 failures; load 5.40/10.09/9.48 before, 8.68/9.31/9.30 after. `browser -t reference`: 27 pass, 9.6 s.
+
+**Gate (orchestrator, 2026-09-30).** `pnpm gate 054054b`: tree clean, 9 files, all in `games/reference` plus this brief; no golden, marker, timeout or retry. The craft-flow spec's assertions are unchanged (only its path and read helper).
+- **My repeat:** 30 foreground runs of the pair under `caffeinate -d`, 0 failures, 1-minute load 12.2 falling to 4.2. With the implementer's 30 that is 0 in 60 against about 2 in 15 before.
+- **Red at the gate, fixed by me:** `unit`'s `every CLAUDE.md is within the line cap` failed (`games/reference/CLAUDE.md` 61 lines, cap 60). Joined one wrapped line, and corrected two sentences M33d and this milestone had made stale (sprites are pickable now; the spawn move is decided by `shouldMoveToSpawn`).
+- **Not covered:** a camera write that lands on the creation pose exactly (the test's first `__setCamera(0, 0, 20)` if that equals the default) does not count as a move, so a first `Ui` arriving in that window would still move to spawn. No occurrence seen; the signature would be `player.spec.ts`'s *first* assertion, not `29.5`.

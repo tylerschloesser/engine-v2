@@ -84,7 +84,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 33c | `33c-drawables-on-real-pages.md` | public drawables seam, the reference page draws its DrawList (circle, furnace, ghost), pixel proof | 33 | |
 | [x] | 33b | `33b-reference-furnace-operation.md` | deposit/take, pick-up, smelting, panel | 33 | T |
 | [x] | 33d | `33d-bundle-results-and-sprite-picking.md` | action results survive a `FrameBundle`, sprites pickable, a viewport on stepped pages, `Loopback` uplinks carry the real ack | 33b | |
-| [ ] | 33e | `33e-reference-first-ui-races.md` | the spawn camera move no longer undoes an earlier pan; reference helpers wait for the first `Ui` | 33d | |
+| [x] | 33e | `33e-reference-first-ui-races.md` | the spawn camera move no longer undoes an earlier pan; reference helpers wait for the first `Ui` | 33d | |
 | [ ] | 34 | `34-reference-multiplayer.md` | roster, remote players, play through the reference server | 33b, 33d, 33e, 30, 31b | D |
 | [ ] | 34b | `34b-reference-scripted-single-player.md` | scripted full game, golden log, persistence extras | 34, 23, 24b | T |
 | [ ] | 34c | `34c-reference-scripted-multiplayer.md` | scripted multiplayer races + reconnect in the netcode suite. **Reference game complete.** | 34b | |
