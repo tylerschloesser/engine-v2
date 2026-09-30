@@ -9,9 +9,40 @@
 //! `Registry::resource_visual` mapping therefore already shows the "full" art with no override
 //! needed, until step 5 makes the mapping depend on `aux` too.
 
+use engine::client::rgba;
 use engine::game::Game as _;
 use engine::time::{TickRate, Ticks};
 use engine::world::{Footprint, PrototypeId, Registry, TraitSet};
+
+/// The size of `RefGlobal::colours`, indexed by `PlayerId` (M34). The engine hands out ids
+/// `1..=maxPlayers` (default 8), so 16 leaves headroom; an id past it stays unassigned.
+pub const MAX_PLAYERS: usize = 16;
+
+/// Player colours (M34), `rgba`-packed. A `RefGlobal::colours` entry is a 1-based index into this
+/// table; 0 means unassigned and draws [`UNASSIGNED_COLOUR`]. Eight entries, so eight joins can all
+/// differ.
+pub const PALETTE: [u32; 8] = [
+    rgba(0xe6, 0x4a, 0x4a, 0xff),
+    rgba(0x3a, 0x8f, 0xf0, 0xff),
+    rgba(0xf0, 0xc0, 0x30, 0xff),
+    rgba(0xb0, 0x5c, 0xe0, 0xff),
+    rgba(0xf0, 0x8a, 0x30, 0xff),
+    rgba(0x30, 0xd0, 0xd0, 0xff),
+    rgba(0xf0, 0x70, 0xb0, 0xff),
+    rgba(0xd8, 0xd8, 0xd8, 0xff),
+];
+
+/// What an unassigned player (palette index 0) draws as: the own circle's colour before M34.
+pub const UNASSIGNED_COLOUR: u32 = rgba(0x40, 0xc0, 0x40, 0xff);
+
+/// The packed colour of palette index `idx` (0 or out of range: [`UNASSIGNED_COLOUR`]).
+pub const fn colour_of(idx: u8) -> u32 {
+    if idx == 0 || idx as usize > PALETTE.len() {
+        UNASSIGNED_COLOUR
+    } else {
+        PALETTE[idx as usize - 1]
+    }
+}
 
 /// Base terrain ids (Requirements: "grass, dirt, water, sand, etc."; this game's own five, 0008
 /// §1's height+moisture classification in `worldgen.rs`).

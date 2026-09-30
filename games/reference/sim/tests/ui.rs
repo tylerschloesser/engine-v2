@@ -42,7 +42,7 @@ impl WorldRead<RefGame> for StubWorld {
         Ok(&self.player)
     }
     fn global(&self) -> &RefGlobal {
-        &RefGlobal
+        &RefGlobal::EMPTY
     }
     fn entities_in(
         &self,
@@ -177,7 +177,7 @@ impl WorldRead<RefGame> for AllResourceWorld {
         Ok(&self.player)
     }
     fn global(&self) -> &RefGlobal {
-        &RefGlobal
+        &RefGlobal::EMPTY
     }
     fn entities_in(
         &self,

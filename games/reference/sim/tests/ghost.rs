@@ -42,7 +42,7 @@ impl WorldRead<RefGame> for World<'_> {
         Ok(&self.player)
     }
     fn global(&self) -> &reference_sim::RefGlobal {
-        &reference_sim::RefGlobal
+        &reference_sim::RefGlobal::EMPTY
     }
     fn entities_in(
         &self,

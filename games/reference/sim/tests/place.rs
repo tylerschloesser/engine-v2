@@ -208,7 +208,7 @@ impl WorldRead<RefGame> for ScratchWorld {
         Err(Unknown)
     }
     fn global(&self) -> &reference_sim::RefGlobal {
-        &reference_sim::RefGlobal
+        &reference_sim::RefGlobal::EMPTY
     }
     fn entities_in(
         &self,

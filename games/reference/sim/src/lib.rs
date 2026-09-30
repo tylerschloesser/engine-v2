@@ -202,9 +202,28 @@ pub struct RefPlayer {
     pub crafting: Option<Crafting>,
 }
 
-/// `GlobalState` (Scope: "empty for now"). The engine roster (coloured dots) is M20b's.
+/// `GlobalState` (M34): each player's colour as a 1-based `content::PALETTE` index, 0 = unassigned,
+/// indexed by `PlayerId` (`content::MAX_PLAYERS` slots). Global scope: every client reads every
+/// player's colour, offline ones included. Written only by `on_player(Joined)`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
-pub struct RefGlobal;
+pub struct RefGlobal {
+    pub colours: [u8; content::MAX_PLAYERS],
+}
+
+/// The brief's name for [`RefGlobal`].
+pub type GlobalState = RefGlobal;
+
+impl RefGlobal {
+    /// No colour assigned to anyone (`genesis`'s value; a `const` so a stub world can lend it).
+    pub const EMPTY: RefGlobal = RefGlobal {
+        colours: [0; content::MAX_PLAYERS],
+    };
+
+    /// `who`'s palette index; 0 when unassigned or past the table.
+    pub fn colour(&self, who: PlayerId) -> u8 {
+        self.colours.get(who.0 as usize).copied().unwrap_or(0)
+    }
+}
 
 /// The one entity kind (M33): a 2x2 furnace (`content::FURNACE_PROTO`). `origin` is its min-corner
 /// tile (`Game::anchor`; `TileXY`, not `TilePos`, for the same `Codec` reason as [`Collecting`]).
@@ -356,12 +375,43 @@ impl Default for RefUi {
     }
 }
 
+/// Gives `who` a free palette index (M34), drawn with the sim RNG, in one `put_global`. Does
+/// nothing when `who` already has one (a rejoin) or has no slot. When every index is taken (more
+/// players than colours) any index may repeat. `rng()` is `Err` under prediction: `on_player` is
+/// host-only, so that arm is unreachable there and leaves the colour unassigned.
+fn assign_colour(w: &mut dyn WorldWrite<RefGame>, who: PlayerId) {
+    let g = *w.global();
+    let slot = who.0 as usize;
+    if slot >= content::MAX_PLAYERS || g.colours[slot] != 0 {
+        return;
+    }
+    let n = content::PALETTE.len() as u32;
+    let mut free = [0u8; content::MAX_PLAYERS];
+    let mut nfree = 0u32;
+    for idx in 1..=n as u8 {
+        if !g.colours.contains(&idx) {
+            free[nfree as usize] = idx;
+            nfree += 1;
+        }
+    }
+    let Ok(rng) = w.rng() else { return };
+    let idx = if nfree > 0 {
+        free[rng.below(nfree) as usize]
+    } else {
+        rng.below(n) as u8 + 1
+    };
+    let mut next = g;
+    next.colours[slot] = idx;
+    w.put_global(next);
+}
+
 pub struct RefGame;
 
 impl Game for RefGame {
-    const SCHEMA_VERSION: u32 = 4;
+    const SCHEMA_VERSION: u32 = 5;
     //  3: `Furnace` entity, `PlaceFurnace`, resources `NOT_BUILDABLE` (M33).
     //  4: `FurnaceDeposit`, `FurnaceTake`, `FurnacePickUp` and their rejects (M33b).
+    //  5: `RefGlobal { colours }`, written on `Joined` (M34).
     type Worldgen = RefWorldgen;
     type Action = RefAction;
     type Reject = RefReject;
@@ -384,11 +434,16 @@ impl Game for RefGame {
         e.origin.tile()
     }
 
-    fn genesis(_w: &mut dyn WorldWrite<Self>) {}
+    fn genesis(w: &mut dyn WorldWrite<Self>) {
+        w.put_global(RefGlobal::EMPTY);
+    }
 
     fn on_player(w: &mut dyn WorldWrite<Self>, who: PlayerId, ev: PlayerEvent) {
         match ev {
-            PlayerEvent::Joined => w.put_player(who, RefPlayer::default()),
+            PlayerEvent::Joined => {
+                w.put_player(who, RefPlayer::default());
+                assign_colour(w, who);
+            }
             // A disconnected player's collect is cancelled (position is presence and goes stale);
             // their craft keeps running (0013 "A disconnected player's state"). One put.
             PlayerEvent::Disconnected => {

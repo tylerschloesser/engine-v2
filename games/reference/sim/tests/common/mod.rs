@@ -256,6 +256,26 @@ impl RefScenario {
         self.sim.authority_mut().set_tile(pos, t);
     }
 
+    /// The game's `Global` (per-player palette indices), by value.
+    pub fn global(&self) -> reference_sim::RefGlobal {
+        *self.sim.authority().global()
+    }
+
+    /// `Delta::Global` writes recorded since genesis (`writes_logged`'s sibling).
+    pub fn global_puts_logged(&self) -> usize {
+        self.sim
+            .authority()
+            .changes()
+            .iter()
+            .filter(|(_, d)| matches!(d, engine::delta::Delta::Global { .. }))
+            .count()
+    }
+
+    /// The host's `SimRng` state (it is in the snapshot; `state_hash` does not cover it).
+    pub fn rng(&self) -> engine::rng::SimRng {
+        self.sim.authority().rng()
+    }
+
     pub fn hash(&self) -> u64 {
         self.sim.state_hash()
     }
