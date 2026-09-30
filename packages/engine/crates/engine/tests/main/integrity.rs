@@ -472,3 +472,158 @@ fn integrity_skipped_delta_heals() {
     assert!(lb.host.desyncs().count() >= 1);
     assert!(chunks_converged(&lb, i));
 }
+
+// -- Resync ------------------------------------------------------------------------------------
+
+/// The reserved coordinate asks for `Global` and `OwnPlayer`: the host records a `Global` report and
+/// the very next frame carries both sections, though nothing about either changed.
+#[test]
+fn integrity_reserved_coord_resends_both_scopes() {
+    let mut lb = loopback(51);
+    let (i, _) = add_client(&mut lb, 0, 0);
+    lb.run(8);
+    let conn = lb.conn(i);
+    // A quiet frame carries neither section.
+    let frame = lb.last_built_frame(i).to_vec();
+    let sections = |frame: &[u8]| {
+        let mut ids = Vec::new();
+        if !frame.is_empty() {
+            let mut r = FrameReader::new(frame).unwrap();
+            while let Some((id, _)) = r.next_section().unwrap() {
+                ids.push(id);
+            }
+        }
+        ids
+    };
+    assert!(!sections(&frame).contains(&SectionId::Global));
+
+    let mut msg = [0u8; 16];
+    let mut sink = SliceSink::new(&mut msg);
+    write_resync_chunk(&mut sink, RESERVED_SCOPE_COORD);
+    let n = sink.finish().unwrap();
+    lb.host.on_uplink(conn, &msg[..n]).unwrap();
+    assert_eq!(lb.host.desyncs().count(), 1);
+    let r = lb.host.desyncs().get(0).unwrap();
+    assert_eq!(
+        (r.scope, r.coord),
+        (DesyncScope::Global, RESERVED_SCOPE_COORD)
+    );
+
+    lb.step();
+    let ids = sections(lb.last_built_frame(i));
+    assert!(
+        ids.contains(&SectionId::Global) && ids.contains(&SectionId::OwnPlayer),
+        "{ids:?}"
+    );
+    // A second frame is quiet again: the resend is one-shot.
+    lb.step();
+    assert!(!sections(lb.last_built_frame(i)).contains(&SectionId::Global));
+    // A malformed resync closes the connection (an `UplinkError`); an unheld chunk is ignored.
+    assert!(lb.host.on_uplink(conn, &[0x04, 2]).is_err());
+    let before = lb.host.desyncs().count();
+    let mut sink = SliceSink::new(&mut msg);
+    write_resync_chunk(&mut sink, c(900, 900));
+    let n = sink.finish().unwrap();
+    lb.host.on_uplink(conn, &msg[..n]).unwrap();
+    assert_eq!(lb.host.desyncs().count(), before);
+}
+
+/// Two heavy chunks corrupted at once on a connection with a slow chunk bucket: the two resync
+/// snapshots are paid from the bucket one after the other (the second waits out the first's
+/// debt). The same scenario with no pacing delivers them within a hash period of each other.
+fn resync_snapshot_ticks(paced: bool) -> Vec<u32> {
+    use engine::host::pacing::BandwidthConfig;
+    let mut lb = loopback(61);
+    // The painter (client 0) is never paced; it only exists to put ~200 distinct tiles in each of
+    // two chunks, and to be a second connection the paced one is compared against.
+    lb.host.set_bandwidth(BandwidthConfig {
+        unpaced: true,
+        action_per_s: 100_000,
+        action_burst: 100_000,
+        ..BandwidthConfig::default()
+    });
+    let (p, painter) = add_client(&mut lb, 0, 0);
+    lb.run(3);
+    for k in 0..200 {
+        for (x0, y0) in [(0, 0), (-32, 0)] {
+            lb.action(
+                painter,
+                LAction::Paint {
+                    pos: LPos {
+                        x: x0 + (k % 25),
+                        y: y0 + (k / 25),
+                    },
+                    base: 2 + (k % 3) as u8,
+                },
+            );
+        }
+        lb.step();
+    }
+    lb.run(10);
+    assert!(chunks_converged(&lb, p));
+
+    // The observer joins with the slow bucket (or none): 10 B per tick, 100 B burst.
+    lb.host.set_bandwidth(if paced {
+        BandwidthConfig {
+            chunk_refill_bytes_per_s: 200,
+            chunk_burst_bytes: 100,
+            action_per_s: 100_000,
+            action_burst: 100_000,
+            ..BandwidthConfig::default()
+        }
+    } else {
+        BandwidthConfig {
+            unpaced: true,
+            ..BandwidthConfig::default()
+        }
+    });
+    let (o, _) = add_client(&mut lb, -8, 8);
+    let mut guard = 0;
+    while !chunks_converged(&lb, o)
+        || lb.host.pacing_counters(lb.conn(o)).unwrap().queued_enters > 0
+    {
+        lb.step();
+        guard += 1;
+        assert!(guard < 2000, "observer never converged");
+    }
+    lb.run(40);
+    let held = lb.host.debug_held(lb.conn(o));
+    assert!(held.contains(&c(0, 0)) && held.contains(&c(-1, 0)));
+    assert_eq!(lb.client(o).desyncs().count(), 0);
+
+    // Corrupt both heavy chunks, then record the ticks at which snapshots reach the observer.
+    assert!(lb.client_mut(o).debug_corrupt_chunk(c(0, 0)));
+    assert!(lb.client_mut(o).debug_corrupt_chunk(c(-1, 0)));
+    let mut ticks = Vec::new();
+    for _ in 0..1500 {
+        lb.step();
+        if !lb.last_built_frame(o).is_empty() && lb.client(o).last_summary().chunk_snapshots > 0 {
+            let t = lb.client(o).last_summary().tick.0;
+            if ticks.last() != Some(&t) {
+                ticks.push(t);
+            }
+        }
+        if ticks.len() >= 2 && chunks_converged(&lb, o) {
+            break;
+        }
+    }
+    assert!(chunks_converged(&lb, o), "healed (paced: {paced})");
+    ticks
+}
+
+#[test]
+fn integrity_resync_respects_bucket() {
+    let unpaced = resync_snapshot_ticks(false);
+    assert_eq!(unpaced.len(), 2, "{unpaced:?}");
+    assert!(
+        unpaced[1] - unpaced[0] <= 2 * CHUNK_HASH_EVERY_TICKS,
+        "without a bucket the snapshots follow the two reports: {unpaced:?}"
+    );
+    let paced = resync_snapshot_ticks(true);
+    assert_eq!(paced.len(), 2, "{paced:?}");
+    // ~800 B at 10 B/tick: the second snapshot waits ~80 ticks for the first's debt.
+    assert!(
+        paced[1] - paced[0] >= 40,
+        "the resync snapshots are paid from the chunk bucket: {paced:?}"
+    );
+}
