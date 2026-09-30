@@ -204,6 +204,12 @@ impl<G: Game> Sim<G> {
                 Record::Player { who, ev } => {
                     on_phase(Phase::OnPlayer, i as u32);
                     G::on_player(&mut self.authority as &mut dyn WorldWrite<G>, *who, *ev);
+                    // 0024 section 8: the roster bit changes only through logged connection events.
+                    match ev {
+                        PlayerEvent::Connected => self.authority.put_roster(*who, true),
+                        PlayerEvent::Disconnected => self.authority.put_roster(*who, false),
+                        PlayerEvent::Joined => {}
+                    }
                 }
                 Record::Action { who, seq, action } => {
                     on_phase(Phase::ApplyRecord, i as u32);

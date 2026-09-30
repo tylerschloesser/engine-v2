@@ -934,3 +934,40 @@ fn predict_overlay_diff_entries_counter_is_live() {
         u64::from(entries),
     );
 }
+
+/// 0024 section 8: the roster bit follows logged connection events, in the host's store and in the
+/// `Global` roster the host sends to *another* connection. Fails without `Sim::step` writing
+/// `Delta::Roster` after `Connected`/`Disconnected`.
+#[test]
+fn roster_follows_connection_events() {
+    let mut lb = loopback(3);
+    let (a, pa) = add_client(&mut lb, 0);
+    let (_b, pb) = add_client(&mut lb, 0);
+    lb.set_camera(a, camera(10, 10));
+    lb.run(4);
+
+    let host_online = |lb: &Loopback<Predict>, who: PlayerId| {
+        lb.host
+            .sim()
+            .expect("genesis ran")
+            .authority()
+            .store()
+            .player_slot(who)
+            .expect("joined")
+            .online
+    };
+    let seen_by_a = |lb: &Loopback<Predict>| {
+        let mut out = Vec::new();
+        lb.client(a).view().roster(&mut |w, o| out.push((w, o)));
+        out
+    };
+    assert!(host_online(&lb, pa) && host_online(&lb, pb), "connected");
+    assert_eq!(seen_by_a(&lb), vec![(pa, true), (pb, true)]);
+
+    lb.host.disconnect(lb.conn(1));
+    lb.host.log_disconnected(pb);
+    lb.run(3);
+    assert!(!host_online(&lb, pb));
+    assert!(host_online(&lb, pa));
+    assert_eq!(seen_by_a(&lb), vec![(pa, true), (pb, false)]);
+}

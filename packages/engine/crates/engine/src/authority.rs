@@ -483,6 +483,13 @@ impl<G: Game> Authority<G> {
         self.dirty = true;
     }
 
+    /// The engine roster bit (0024 section 8): written by `Sim::step` after a logged `Connected` or
+    /// `Disconnected` event, through the normal write path so it lands in `changes()` and in every
+    /// connection's next `Global` roster. A player with no slot is a no-op in `Store::apply`.
+    pub(crate) fn put_roster(&mut self, who: PlayerId, online: bool) {
+        self.write(Delta::Roster { who, online }, Scopes::one(Scope::Global));
+    }
+
     fn write(&mut self, delta: Delta<G>, scopes: Scopes) {
         if self.journal.is_recording() {
             self.journal.capture_pre_image(&self.store, &delta);
