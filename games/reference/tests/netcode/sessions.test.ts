@@ -146,13 +146,16 @@ test('reference_long_drop_cancels_collect_keeps_craft', async () => {
     await h.advanceTicks(260)
     const dropTick = h.hostTick()
     expect(log.n, `seed ${seed}: Disconnected logged after the grace`).toBeGreaterThan(0)
-    // The player comes back on a fresh connection with the same identity (index 2): a redial of the
-    // dead link would wait out its own backoff, which grew while it was down.
-    const returned = h.addClient(secret)
-    returned.setCamera({ x: STONE.x, y: STONE.y, tilesAcross: 20 })
+    // The same client redials once its backoff (grown while the link was down) allows: the harness
+    // accepts the fresh connection when the client dials it.
+    const a = h.clients[0]!
+    const tickBefore = a.status().tick
+    h.link(0).reconnect()
+    await until(r, 'the client is back', () => a.status().tick > dropTick, 400)
     await h.settle()
-    h.assertNoDesync()
-    const after = uiOf(h, 2)
+    expect(a.status().tick, `seed ${seed}: frames again`).toBeGreaterThan(tickBefore)
+    h.assertConverged()
+    const after = uiOf(h, 0)
     expect(after.inventory, `seed ${seed}: collect and craft both finished in the grace`).toEqual(
       inv(1, 0, 0, 0, 1, 0),
     )
@@ -160,25 +163,22 @@ test('reference_long_drop_cancels_collect_keeps_craft', async () => {
 
     // Phase 2, a player who leaves (`Bye`, no grace) with both timers running: the collect is
     // cancelled at once, the craft keeps running for the absent player.
-    await runScript(
-      script().collect('stone', 4),
-      headlessDriver(returned, (n) => h.advanceTicks(n)),
-    ) // stone 5 again
-    expect(uiOf(h, 2).inventory[0]).toBe(5)
-    returned.setCamera({ x: IRON.x, y: IRON.y, tilesAcross: 20 })
+    await runScript(script().collect('stone', 4), r.drivers[0]!) // stone 5 again
+    expect(uiOf(h, 0).inventory[0]).toBe(5)
+    a.setCamera({ x: IRON.x, y: IRON.y, tilesAcross: 20 })
     await h.advanceTicks(30)
-    returned.dispatch({ StartCraft: { recipe: 0 } })
-    startCollect(r, 2, IRON)
+    a.dispatch({ StartCraft: { recipe: 0 } })
+    startCollect(r, 0, IRON)
     await until(r, 'craft and collect shown', () => {
-      const u = uiOf(h, 2)
+      const u = uiOf(h, 0)
       return u.crafting !== null && u.collecting !== null
     })
-    returned.leave()
+    a.leave()
     await h.advanceTicks(130)
-    const back = h.addClient(secret) // client index 3
+    const back = h.addClient(secret) // a new client is what returning after a `Bye` means (index 2)
     back.setCamera({ x: IRON.x, y: IRON.y, tilesAcross: 20 })
     await h.settle()
-    const ui = uiOf(h, 3)
+    const ui = uiOf(h, 2)
     expect(ui.collecting, `seed ${seed}: the collect was cancelled`).toBeNull()
     expect(ui.inventory, `seed ${seed}: no iron; the craft finished while away`).toEqual(
       inv(0, 0, 0, 0, 2, 0),
@@ -274,9 +274,15 @@ test('reference_returning_player_supersedes_and_keeps_presence', async () => {
     await h.settle()
     // The old connection got `Bye{Superseded}` and is closed: its tick stops, the new one's goes on.
     const [oldTick, newTick] = [h.clients[0]!.status().tick, again.status().tick]
+    const oldUps = h.clients[0]!.status().linkUpCount
+    expect(h.clients[0]!.status().linkDown?.reason, `seed ${seed}: the old link was told`).toBe(
+      'superseded',
+    )
     await h.advanceTicks(20)
     expect(h.clients[0]!.status().tick, 'the superseded client hears nothing more').toBe(oldTick)
     expect(again.status().tick).toBeGreaterThan(newTick)
+    expect(h.clients[0]!.status().linkUpCount, 'no redial after Superseded').toBe(oldUps)
+    expect(h.clients[0]!.status().linkDown?.reason).toBe('superseded')
     expect(again.status().ownPlayerId, 'same player').toBe(h.clients[0]!.status().ownPlayerId)
     const ui = again.ui() as ReturnType<typeof uiOf>
     expect(

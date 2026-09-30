@@ -30,7 +30,7 @@ import { CLOCK_FIELD, ClockBlockView, readClockBlockInto, SessionState } from '.
 import { ByeReason, buildBye } from '../host/handshake.js'
 import type { EngineInstance } from '../loader.js'
 import { instantiate } from '../loader.js'
-import { createLink } from '../net/link.js'
+import { createLink, type DownReason } from '../net/link.js'
 import { createBytePump } from '../net/pump.js'
 import { readU32LE, writeU32LE } from '../sab/bytes.js'
 import { ControlBlock, WORKER_CLIENT } from '../sab/control.js'
@@ -107,6 +107,11 @@ export interface HeadlessClientStatus {
    * scenario proving a link *stayed* up (`liveness/heartbeat-idle-world`) watches this stay `1`
    * over a long idle stretch; one that forces a redial watches it increment. */
   linkUpCount: number
+  /** M34c step 8: why the link last went down (`createLink`'s `onDown`: reason, and the close code when
+   * there was one), `null` until it has; cleared when the link comes back up. `'superseded'` is
+   * terminal: no redial follows, so `linkUpCount` stays put. (`sessionState` is not told: the clock
+   * block never reads the `Bye`.) */
+  linkDown: { reason: DownReason; code?: number } | null
   /** docs/plan/28b-reconnect-and-lifecycle.md step 2: the clock block's own raw `session_state`
    * (`SessionState`, `clock-block.ts`) -- `live` above collapses everything to a boolean, so a
    * resync scenario reads this instead to see `Resyncing` (`4`) on the way through, distinct from
@@ -312,6 +317,7 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
   let helloSentAtMs = 0
   let currentConn: Connection | null = null
   let linkUpCount = 0
+  let linkDown: { reason: DownReason; code?: number } | null = null
 
   /** Builds `Hello` (`client_hello`) and sends it directly over the current connection, bypassing
    * the uplink ring entirely (0009: `Hello` precedes any `UplinkBatch`, and `client_poll_uplink`
@@ -379,10 +385,12 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
       currentConn = conn
       attached = false
       linkUpCount++
+      linkDown = null
       bytePump.attach(conn)
       sendHello()
     },
-    onDown: () => {
+    onDown: (why, code) => {
+      linkDown = code === undefined ? { reason: why } : { reason: why, code }
       // Bookkeeping only (Deviations above): `createLink` itself keeps retrying (backoff) unless
       // the reason is terminal, in which case no further `onUp` ever fires and this client simply
       // stays not-live (`status().live` reads the clock block's own `SessionState`, untouched by
@@ -631,6 +639,7 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
         ownPlayerId,
         revealed: clockScratch[CLOCK_FIELD.Revealed] === 1,
         linkUpCount,
+        linkDown,
         sessionState: clockScratch[CLOCK_FIELD.SessionState] as number,
       }
     },

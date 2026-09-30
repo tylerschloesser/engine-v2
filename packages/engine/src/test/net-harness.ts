@@ -371,14 +371,15 @@ export interface NetHarnessOptions {
 /** docs/plan/28b-reconnect-and-lifecycle.md step 3: `ConditionedLink` plus one harness-only
  * addition. */
 export interface HarnessLink extends ConditionedLink {
-  /** Builds a *fresh* `conditionLink` pair, `server.accept()`s its host-side end, and points this
-   * same client's own `createLink`-driven redial (`HeadlessClient`'s `dial`) at the new
-   * client-side end -- unlike `disconnect()` alone (whose own conditioner is left permanently
+  /** Makes this same client's own `createLink`-driven redial (`HeadlessClient`'s `dial`) build a
+   * *fresh* `conditionLink` pair and `server.accept()` its host-side end at the moment it dials
+   * (M34c step 8: not at this call, so the host's 5 s `Hello` timeout cannot close an end the
+   * client has not dialled yet, however far its backoff has grown) -- unlike `disconnect()` alone (whose own conditioner is left permanently
    * severed), this is what lets the *same* `HeadlessClient` (its own pending queue, secret, and
-   * every other bit of client-side state intact) actually reconnect. Call once, synchronously,
-   * right after `disconnect()` and before the next `advanceTicks`/`advanceTo`: `createLink`'s own
-   * backoff schedule (`net/link.ts`) starts its first redial attempt at a 0 ms delay, so the very
-   * next clock advance already dials the fresh connection this call installs. */
+   * every other bit of client-side state intact) actually reconnect. Call once after
+   * `disconnect()`. After a short outage `createLink`'s backoff starts at 0 ms, so the very next
+   * clock advance dials; after a long one the next attempt can be up to about 9 s (185 ticks) away
+   * (dead timer plus the capped backoff): advance that far. */
   reconnect(): void
 }
 
@@ -560,10 +561,8 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     connId: number
     link: ConditionedLink
     linkIdx: number
-    /** docs/plan/28b-reconnect-and-lifecycle.md step 3: reassigned by `reconnect()` -- the
-     * `dial` closure below always reads this current value, never the one captured at
-     * `makeClient` time. */
-    setClientSide: (c: Connection) => void
+    /** Set by `reconnect()`; the next `dial` builds and accepts a fresh pair (M34c step 8). */
+    pendingReconnect: boolean
     /** Distinct conditioner-seed offset per `reconnect()` call, so a second (or third) fresh pair
      * for the same client never draws the identical seeded sequence as the first. */
     reconnectCount: number
@@ -762,7 +761,11 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       // docs/plan/28b-reconnect-and-lifecycle.md step 3: `createLink`'s own `dial` -- reads the
       // current `clientSide` binding, which `HarnessLink.reconnect()` (below) reassigns to a
       // fresh conditioned end before `createLink`'s own next (0 ms-delayed) backoff attempt.
-      dial: () => clientSide,
+      dial: () => {
+        const e = entries.find((x) => x.linkIdx === linkIdx)
+        if (e?.pendingReconnect) clientSide = freshEnds(e)
+        return clientSide
+      },
       secret,
       ...(worldCfg.joinKey !== undefined ? { joinKey: worldCfg.joinKey } : {}),
       buildHash: hexDecode(worldCfg.buildHash),
@@ -782,18 +785,23 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       connId,
       link,
       linkIdx,
-      setClientSide: (c) => {
-        clientSide = c
-      },
+      pendingReconnect: false,
       reconnectCount: 0,
     })
     return client
   }
 
-  /** `HarnessLink.reconnect()`'s own implementation (module doc comment on that interface). */
+  /** `HarnessLink.reconnect()`'s own implementation: only marks the entry; the fresh pair is built
+   * and accepted when the client's `dial` runs (`freshEnds`), so the host's 5 s `Hello` timeout never
+   * starts before the client can possibly send one, whatever its backoff has grown to. */
   function reconnectEntry(i: number): void {
     const e = entries[i]
     if (!e) throw new Error(`reconnect: no client ${i}`)
+    e.pendingReconnect = true
+  }
+
+  /** Builds and accepts the fresh `conditionLink` pair for entry `e` (M34c step 8: at dial time). */
+  function freshEnds(e: (typeof entries)[number]): Connection {
     e.reconnectCount++
     const conditions = { ...DEFAULT_CONDITIONS, ...opts.conditions }
     const newLink = conditionLink(
@@ -805,7 +813,8 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     const newClientSide = traced(newLink.ends[1] as Connection, e.linkIdx, 0)
     server.accept(hostSide)
     e.link = newLink
-    e.setClientSide(newClientSide)
+    e.pendingReconnect = false
+    return newClientSide
   }
 
   // A fault injection makes reports expected: `assertConverged` then checks the hashes alone.
