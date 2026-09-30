@@ -533,6 +533,20 @@ pub fn client_hello<T: Instance>(slot: &Slot<T>) -> i32 {
     rt.inst.client_hello(out) as i32
 }
 
+/// `client_world_config() -> len`, or `-(status)`: `Instance::client_world_config` into `Tx`
+/// (33f). `0` = the client is not configured yet.
+pub fn client_world_config<T: Instance>(slot: &Slot<T>) -> i32 {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return -(status as i32),
+    };
+    let out = rt.layout.bytes_mut(RegionId::Tx);
+    match rt.inst.client_world_config(out) {
+        Ok(n) => n as i32,
+        Err(status) => -(status as i32),
+    }
+}
+
 /// `client_on_welcome(len, rtt_ms) -> status`: `len` bytes of `Downlink` are one whole `Welcome`
 /// message (same region `on_frame` reads -- both are host-to-client messages, and `Welcome` is
 /// always the first one, before any real `Frame` traffic). On success, `player_id`/

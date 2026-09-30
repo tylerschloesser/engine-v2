@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 36
+export const ABI_VERSION = 37
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -47,6 +47,9 @@ export const Status = {
   // or the old-schema bytes failed to decode. A reason byte (`IncompatReason` in host/upgrade.ts)
   // is written to `Result[0]`; every stored byte stays untouched on this path (0005 Upgrades).
   SaveIncompatible: 15,
+  // docs/plan/33f-client-world-config-from-welcome.md: `client_on_welcome` for another world than
+  // the one an earlier `Welcome` configured (one world per server, 0013); nothing was applied.
+  WorldMismatch: 16,
 } as const
 export type Status = (typeof Status)[keyof typeof Status]
 
@@ -201,6 +204,11 @@ export const ABI_EXPORTS = {
   // client role's own config (`secret`/`joinKey`/`buildHash`) into `Tx`, returning its length --
   // same shape as `client_poll_uplink`/`sim_build_frame`. Takes no other input; idempotent.
   client_hello: { role: 'client', params: 0, result: 'len' },
+  // docs/plan/33f-client-world-config-from-welcome.md (`ABI_VERSION` 36 -> 37): the client's world
+  // as JSON `{"seed":"0x<16 hex>","params":...}` (the shape of the `game` config's `seed`/`params`)
+  // into `Tx`, returning its length; `0` = not configured yet (no seed and params at `engine_init`
+  // and no `Welcome` seen).
+  client_world_config: { role: 'client', params: 0, result: 'len' },
   // docs/plan/28-sessions-and-reconnect.md: applies one `Welcome` message (`len` bytes of
   // `RegionId.Downlink`, same region `on_frame` reads) into the client role's own state
   // (`own_player`, `seed_presence`, `seed_lead_rtt_ms` from `rttMs`). On success, `player_id`/

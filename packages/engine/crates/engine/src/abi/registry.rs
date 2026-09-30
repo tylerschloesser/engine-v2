@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 36;
+pub const ABI_VERSION: u32 = 37;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -83,6 +83,11 @@ pub enum Status {
     /// `Result` (`IncompatReason as u8`). Every stored byte stays untouched on this path (0005
     /// Upgrades; Planning decisions 7): the caller must not write anything after seeing this status.
     SaveIncompatible = 15,
+    /// `client_on_welcome` (docs/plan/33f-client-world-config-from-welcome.md): this client took
+    /// its world from an earlier `Welcome` and this one carries another seed or other params (one
+    /// world per server, 0013). Nothing was applied; the page's policy is a reload. Appended,
+    /// never inserted (0014's numbering rule).
+    WorldMismatch = 16,
 }
 
 /// `sim_upgrade_end`'s own `Status::SaveIncompatible` detail, written as one byte at `Result[0]`
@@ -447,6 +452,11 @@ pub trait Instance: Sized + 'static {
         0
     }
 
+    /// docs/plan/33f-client-world-config-from-welcome.md: a first `Welcome` configures a client
+    /// that has no world (seed and params were absent from `engine_init`): terrain source, `on_init`.
+    /// `result` is widened from 16 to 20 bytes: a fifth LE `u32`, `1` when *this* call configured
+    /// the client (exactly once per instance), else `0`. `Status::WorldMismatch` when a client that
+    /// took its world from an earlier `Welcome` gets another world's; nothing is applied.
     /// docs/plan/28-sessions-and-reconnect.md: applies one `Welcome` message (`bytes`, the first
     /// `len` bytes of `RegionId::Downlink` -- same region `on_frame` reads, since both are
     /// host-to-client messages) into the client role's own state: `Replica::set_own_player`,
@@ -463,6 +473,16 @@ pub trait Instance: Sized + 'static {
     /// untouched (mirrors `on_frame`'s own "validate first" contract).
     fn client_on_welcome(&mut self, _bytes: &[u8], _rtt_ms: f64, _result: &mut [u8]) -> Status {
         Status::Unsupported
+    }
+
+    /// docs/plan/33f-client-world-config-from-welcome.md (`ABI_VERSION` 36 -> 37): the client
+    /// role's world as JSON, `{"seed":"0x<16 hex>","params":<params JSON>}` -- the shape of the
+    /// `game` config's own `seed`/`params` fields, so the caller passes it through unchanged (a gen
+    /// worker's setup message, an `engine_init` config) -- into `tx` (the whole `Tx` region, same
+    /// crossing shape as `client_hello`), returning the byte count. `0` means the client is not
+    /// configured yet (no seed and params at `engine_init` and no `Welcome` seen).
+    fn client_world_config(&mut self, _tx: &mut [u8]) -> Result<u32, Status> {
+        Err(Status::Unsupported)
     }
 
     /// docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test`'s `hostRegionHash`:
@@ -1099,6 +1119,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn client_on_welcome(len: u32, rtt_ms: f64) -> u32 {
             $crate::abi::client_on_welcome(&__ENGINE_SLOT, len, rtt_ms) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_world_config() -> i32 {
+            $crate::abi::client_world_config(&__ENGINE_SLOT)
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_region_hash(conn: u32) -> u32 {

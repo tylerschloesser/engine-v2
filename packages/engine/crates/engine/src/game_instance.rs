@@ -1268,6 +1268,23 @@ where
         }
     }
 
+    /// docs/plan/33f-client-world-config-from-welcome.md: `{"seed":"0x..","params":..}` into `tx`.
+    fn client_world_config(&mut self, tx: &mut [u8]) -> Result<u32, Status> {
+        match self {
+            GameInstance::Client(c) => match &c.world {
+                None => Ok(0),
+                Some(w) => tx
+                    .get_mut(..w.json.len())
+                    .map(|out| {
+                        out.copy_from_slice(w.json.as_bytes());
+                        w.json.len() as u32
+                    })
+                    .ok_or(Status::BadLength),
+            },
+            _ => Err(Status::Unsupported),
+        }
+    }
+
     /// docs/plan/28-sessions-and-reconnect.md: decodes `Welcome` (`session::read_welcome`) and
     /// applies it: `own_player` (`Replica::set_own_player`), the game's own per-frame presence
     /// value plus the uplink sampler (`ClientCore::seed_presence`) when `Welcome` carried a sample,
@@ -1288,6 +1305,45 @@ where
                     Ok(w) => w,
                     Err(_) => return Status::Decode,
                 };
+                if result.len() < 20 {
+                    return Status::BadLength;
+                }
+                // docs/plan/33f-client-world-config-from-welcome.md: the first `Welcome` of a
+                // client with no world configures it (validate first: nothing below runs for a
+                // `Welcome` this client must refuse). A later one for the same world (seed and
+                // the `Codec` bytes of the params: cheap and exact) changes nothing here; for
+                // another world, a client that took its world from a `Welcome` reports
+                // `Status::WorldMismatch` and is left untouched (one world per server, 0013).
+                let mut configured_now = false;
+                match &c.world {
+                    None => {
+                        let world = installed_world(welcome.seed, &welcome.params, true);
+                        c.client.on_init(welcome.seed, &welcome.params);
+                        c.core
+                            .replica_mut()
+                            .terrain_mut()
+                            .set_source(Box::new(Pristine::<G::Worldgen>::new(
+                                welcome.seed,
+                                welcome.params,
+                            )));
+                        c.world = Some(world);
+                        configured_now = true;
+                    }
+                    Some(w) if w.from_welcome => {
+                        let mut same = w.seed == welcome.seed
+                            && w.params_codec.len() == crate::codec::encoded_len(&welcome.params);
+                        if same {
+                            let mut buf = vec![0u8; w.params_codec.len()];
+                            crate::codec::encode(&welcome.params, &mut buf)
+                                .expect("params encode into their own encoded_len");
+                            same = buf == w.params_codec;
+                        }
+                        if !same {
+                            return Status::WorldMismatch;
+                        }
+                    }
+                    Some(_) => {}
+                }
                 // docs/plan/28b-reconnect-and-lifecycle.md step 5: only a real resync (the epoch
                 // actually changed -- a host restart or panic recovery, `Host::resync`'s own
                 // doc comment) drops the replica. A same-epoch `Welcome` -- a plain join's first
@@ -1314,9 +1370,10 @@ where
                 core.resend_after_welcome(welcome.last_processed_action_seq, |seq| {
                     push_lost_record(ui_buf, seq);
                 });
-                let Some(out) = result.get_mut(..16) else {
+                let Some(out) = result.get_mut(..20) else {
                     return Status::BadLength;
                 };
+                out[16..20].copy_from_slice(&u32::from(configured_now).to_le_bytes());
                 out[0..4].copy_from_slice(&welcome.player_id.0.to_le_bytes());
                 out[4..8].copy_from_slice(&welcome.last_processed_action_seq.to_le_bytes());
                 out[8..12]
@@ -1847,11 +1904,47 @@ mod tests {
         u32::from_le_bytes(out[0..4].try_into().unwrap())
     }
 
+    fn welcome_bytes(seed: u64, params: u16) -> Vec<u8> {
+        let mut buf = [0u8; 256];
+        let mut sink = crate::bytes::SliceSink::new(&mut buf);
+        session::write_welcome::<CGame>(
+            &mut sink,
+            &session::Welcome {
+                player_id: PlayerId(1),
+                epoch: 1,
+                tick: 0,
+                tick_rate_hz: 20,
+                seed,
+                params: &params,
+                view_max_tiles_per_axis: 128,
+                view_max_chunks: 64,
+                last_processed_action_seq: 0,
+                presence: None,
+                hash_all: false,
+            },
+        );
+        let n = sink.finish().unwrap();
+        buf[..n].to_vec()
+    }
+
+    /// `client_on_welcome`'s status and its `configured_now` word.
+    fn welcome(inst: &mut GameInstance<CGame>, seed: u64, params: u16) -> (Status, u32) {
+        let mut result = [0u8; 64];
+        let st = inst.client_on_welcome(&welcome_bytes(seed, params), 10.0, &mut result);
+        (st, u32::from_le_bytes(result[16..20].try_into().unwrap()))
+    }
+
     fn pristine_at_origin(inst: &GameInstance<CGame>) -> Tile {
         let GameInstance::Client(c) = inst else {
             unreachable!()
         };
         c.core.replica().terrain().tile(TilePos::new(0, 0))
+    }
+
+    fn world_config(inst: &mut GameInstance<CGame>) -> String {
+        let mut tx = [0u8; 256];
+        let n = inst.client_world_config(&mut tx).unwrap() as usize;
+        String::from_utf8(tx[..n].to_vec()).unwrap()
     }
 
     #[test]
@@ -1884,6 +1977,8 @@ mod tests {
             Err(Unknown),
             "a pristine read is Unknown, never a default tile"
         );
+        let mut tx = [0u8; 16];
+        assert_eq!(inst.client_world_config(&mut tx), Ok(0));
     }
 
     #[test]
@@ -1898,6 +1993,10 @@ mod tests {
         assert!(requested(&mut inst) > 0, "the feed runs");
         assert_eq!(client_frames(), 5, "ClientSide::frame runs every frame");
         assert_eq!(pristine_at_origin(&inst), Tile::new(1, 0, 0x2a ^ 7));
+        assert_eq!(
+            world_config(&mut inst),
+            r#"{"seed":"0x000000000000002a","params":7}"#
+        );
         assert_eq!(on_init_calls().len(), 1);
     }
 
@@ -1917,6 +2016,91 @@ mod tests {
             Some(Status::BadConfig),
             "a gen role always needs its world"
         );
+    }
+
+    #[test]
+    fn client_on_welcome_applies_seed_and_params() {
+        let mut inst = cclient(UNCONFIGURED);
+        assert_eq!(welcome(&mut inst, 0x2a, 7), (Status::Ok, 1));
+        assert_eq!(
+            on_init_calls(),
+            vec![(0x2a, 7)],
+            "on_init once, with the welcome's world"
+        );
+        // The pristine tiles are those of a client built with that config directly, and not those
+        // of another world.
+        let direct = cclient(r#"{"seed":"0x2a","params":7,"cacheChunks":1024}"#);
+        let other = cclient(r#"{"seed":"0x2b","params":7,"cacheChunks":1024}"#);
+        assert_eq!(pristine_at_origin(&inst), pristine_at_origin(&direct));
+        assert_ne!(pristine_at_origin(&inst), pristine_at_origin(&other));
+        assert_eq!(pristine_at_origin(&inst), Tile::new(1, 0, 0x2a ^ 7));
+        assert_eq!(
+            world_config(&mut inst),
+            r#"{"seed":"0x000000000000002a","params":7}"#
+        );
+        // Configured now: the frame path runs, and asks for gen jobs.
+        ON_INIT.with(|v| v.borrow_mut().clear());
+        frames(&mut inst, 3);
+        assert!(requested(&mut inst) > 0);
+        assert_eq!(client_frames(), 3);
+    }
+
+    #[test]
+    fn second_welcome_same_world_is_noop() {
+        let mut inst = cclient(UNCONFIGURED);
+        assert_eq!(welcome(&mut inst, 0x2a, 7), (Status::Ok, 1));
+        // Replica state a reconnect must keep: an overlay write, and the cached pristine chunk.
+        {
+            let GameInstance::Client(c) = &mut inst else {
+                unreachable!()
+            };
+            let t = c.core.replica_mut().terrain_mut();
+            t.set_tile(TilePos::new(1, 1), Tile::new(9, 9, 9)).unwrap();
+            assert_eq!(t.modified_tiles(), 1);
+        }
+        let json = world_config(&mut inst);
+        assert_eq!(
+            welcome(&mut inst, 0x2a, 7),
+            (Status::Ok, 0),
+            "not configured again"
+        );
+        assert_eq!(on_init_calls().len(), 1, "on_init still once");
+        assert_eq!(world_config(&mut inst), json);
+        let GameInstance::Client(c) = &inst else {
+            unreachable!()
+        };
+        assert_eq!(
+            c.core.replica().terrain().modified_tiles(),
+            1,
+            "replica kept"
+        );
+        assert_eq!(pristine_at_origin(&inst), Tile::new(1, 0, 0x2a ^ 7));
+    }
+
+    #[test]
+    fn welcome_for_a_different_world_is_fatal() {
+        let mut inst = cclient(UNCONFIGURED);
+        assert_eq!(welcome(&mut inst, 0x2a, 7), (Status::Ok, 1));
+        let json = world_config(&mut inst);
+        // Another seed, then the same seed with other params: both are another world.
+        assert_eq!(welcome(&mut inst, 0x2b, 7).0, Status::WorldMismatch);
+        assert_eq!(welcome(&mut inst, 0x2a, 8).0, Status::WorldMismatch);
+        // Nothing was applied: same world, same on_init count, same terrain.
+        assert_eq!(world_config(&mut inst), json);
+        assert_eq!(on_init_calls().len(), 1);
+        assert_eq!(pristine_at_origin(&inst), Tile::new(1, 0, 0x2a ^ 7));
+        // The refused world's welcome did not move the session either.
+        assert_eq!(welcome(&mut inst, 0x2a, 7), (Status::Ok, 0));
+    }
+
+    /// A client configured at `engine_init` (a local host, `test.game`) keeps ignoring `Welcome`'s
+    /// world, as before this milestone: nothing mismatches, nothing is installed twice.
+    #[test]
+    fn init_configured_client_ignores_the_welcome_world() {
+        let mut inst = cclient(r#"{"seed":"0x2a","params":7,"cacheChunks":1024}"#);
+        assert_eq!(welcome(&mut inst, 0x99, 1), (Status::Ok, 0));
+        assert_eq!(on_init_calls(), vec![(0x2a, 7)]);
+        assert_eq!(pristine_at_origin(&inst), Tile::new(1, 0, 0x2a ^ 7));
     }
 
     /// docs/plan/16-action-round-trip.md: the exact `client_poll_ui` JSON for a `Confirmed` and a
