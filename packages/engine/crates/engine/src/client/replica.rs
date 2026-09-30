@@ -417,19 +417,37 @@ impl<G: Game> Replica<G> {
         self.dirty.push(DirtyEvent::Tile(pos, tile));
     }
 
+    /// Bumps every *held* chunk under the entity's old footprint (read before applying) and its new
+    /// one, the host's own rule: it stamps every chunk in a write's scopes
+    /// (`Authority::entity_scopes`: old and new footprint chunks), so a footprint straddling a
+    /// chunk boundary bumps both halves. Anchor-only bumping left a held non-anchor chunk's version
+    /// stale, which `region_hash` and the resume diff both see (docs/plan/34d-straddling-entity-chunk-versions.md).
     pub(crate) fn apply_entity_put(&mut self, id: EntityId, entity: G::Entity) {
-        let chunk = chunk_of::<G>(G::anchor(&entity));
+        let new_rect = self.footprint_of(&entity);
+        let old_rect = self.store.entity(id).map(|e| self.footprint_of(e));
         self.store.apply(&Delta::EntityPut { id, entity });
-        self.bump_version(chunk);
+        self.bump_rect(old_rect);
+        self.bump_rect(Some(new_rect));
     }
 
-    /// `old_anchor` is looked up before removal (the wire carries no anchor for a `Gone` op,
+    /// The old footprint is looked up before removal (the wire carries no anchor for a `Gone` op,
     /// 0011): `None` if this replica never held the entity (nothing to bump).
     pub(crate) fn apply_entity_gone(&mut self, id: EntityId) {
-        let old_chunk = self.store.entity(id).map(|e| chunk_of::<G>(G::anchor(e)));
+        let old_rect = self.store.entity(id).map(|e| self.footprint_of(e));
         self.store.apply(&Delta::EntityGone { id });
-        if let Some(chunk) = old_chunk {
-            self.bump_version(chunk);
+        self.bump_rect(old_rect);
+    }
+
+    fn footprint_of(&self, entity: &G::Entity) -> crate::world::TileRect {
+        let footprint = self.store.registry().footprint(G::prototype(entity));
+        crate::store::footprint_rect(G::anchor(entity), footprint)
+    }
+
+    fn bump_rect(&mut self, rect: Option<crate::world::TileRect>) {
+        let Some(rect) = rect else { return };
+        let dims = self.dims;
+        for c in rect.chunks(&dims).iter() {
+            self.bump_version(c);
         }
     }
 
