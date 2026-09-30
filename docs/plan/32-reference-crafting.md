@@ -1,6 +1,6 @@
 # M32: Reference game: inventory, unlock and crafting
 
-Status: not started · After: 20b, 21b · Tyler-dependent: no
+Status: done · After: 20b, 21b · Tyler-dependent: no
 
 ## Goal
 A player who has mined the required stone sees a crafting menu appear, crafts a furnace with a timed progress bar while still able to collect, and ends with a furnace item in a six-item inventory. A logged `Disconnected` cancels that player's collect and leaves the craft running.
@@ -52,10 +52,10 @@ Construction UI and placement (M33). Cancelling a craft (no Requirement). A craf
 - Browser: `reference_craft_flow` (collect to the threshold with `collectN`, the menu appears on the step the unlock lands, craft, step the duration, inventory shows one furnace and stone reduced by the cost).
 
 ## Exit criteria
-- [ ] All tests above pass by name.
-- [ ] By hand: the menu is absent on a fresh world and appears without a reload when the threshold is reached.
-- [ ] Bindings regenerated and committed (`git diff --exit-code games/reference/src/bindings` clean after a build).
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name.
+- [x] By hand: the menu is absent on a fresh world and appears without a reload when the threshold is reached.
+- [x] Bindings regenerated and committed (`git diff --exit-code games/reference/src/bindings` clean after a build).
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t reference` · `pnpm test browser -t reference_craft` · `pnpm --filter reference dev`.
@@ -81,3 +81,10 @@ Steps 1-5 done. Base `3792287`.
 **Mutation checks (inject, fail, revert by hand).** craft.rs writes before validating: `rejected_craft_wrote_nothing` FAIL (4 failed of 11); collect.rs unlock line removed: `unlock_on_threshold_stone_not_before` FAIL (+5 others); on_player also clears `crafting`: `disconnect_cancels_collect_keeps_craft` FAIL (1 of 11); reverted: 11 passed. Browser: `root.hidden = false` made `reference_craft_flow` FAIL (first attempt passed because an empty menu is 'hidden' to Playwright; fixed to assert the `hidden` attribute).
 
 **By hand.** playwright-cli on `pnpm --filter reference dev` (index.html, real time, one page, no reload): `.craft-menu` `{"hidden":true,"buttons":0}` before and after 1-4 stone, `{"hidden":false,"buttons":1}` after the 5th.
+
+### Gate (orchestrator)
+- `pnpm gate bfde444`: tree clean, 24 files (all `games/reference` plus this brief), no goldens changed or added, +970/-91. The edits to existing tests (`collect.rs`, `ui.rs`, `collect-flow.spec.ts`) only swap accessors (`.iron` -> `.get(ItemId::Iron)`, `.stone` -> `[ITEM.stone]`); the assertions are unchanged.
+- `pnpm test && pnpm lint` green at load 8-9: rust 695, unit 292 (3.2 s of 3 s, WARN; the +2 are the `ts-rs` `export_bindings` tests of the new `UiCrafting`/`UiRecipe` types, not new vitest files), wasm 159, netcode 92, browser 219 (**49 s of 48 s, WARN, at load 8-9**; the implementer's earlier full run read 38 s; `reference_craft_flow` is 2.3 s).
+- Orchestrator inject-fail-revert: `on_player(Disconnected)` also clearing `crafting` -> `disconnect_cancels_collect_keeps_craft` FAIL (`craft untouched`); restored -> 1 passed.
+- The "by hand" criterion is met by the implementer's `playwright-cli` evidence on the dev page (Deviations): `.craft-menu` hidden with 0 buttons through 4 stone, shown with 1 button after the 5th, no reload.
+
