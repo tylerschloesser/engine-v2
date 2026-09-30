@@ -31,6 +31,8 @@ Removing a furnace that is not empty, or any removal other than pick-up; taking 
 `games/reference/` only (`sim/src/rules/furnace.rs`, `sim/src/{types,content,client,lib}.rs`, `src/ui/furnace.ts`, tests).
 
 ## Seams
+**From M33c (orchestrator):** a page draws its DrawList through `attachClientDrawables(client, device, renderer, { colorFormat })` from `engine/render` (with `Client.drawListSlot`/`Client.assets` public, read-only). Colours are packed with `engine::client::rgba(r, g, b, a)` (byte 0 = r); never write a hex literal. Inside a zero-GC window, read camera fields through the terrain renderer's staged uniform bytes (`stagedFrameUniform`), never its double fields, which allocate (M33c Deviations). A visual criterion needs a pixel readback on the production page (`engine/test` `readPixels`, `__pixelAt`), not only a DrawList read.
+
 **Provides:** `rules::furnace::advance`, `content::{SMELT, COAL_INGOTS, WOOD_INGOTS}`, `Reject::FurnaceNotEmpty`, browser helpers `openFurnace(page, tile)`, `deposit(page, item, n)`, `takeAll(page)`, `pickUp(page)`; `RefScenario::{deposit, take, pick_up, furnace_at}`.
 **Consumes:** `Furnace`, `can_place`, `local::CLOSE_PANEL`, `placeFurnace`, `craftFurnace` (M33); `TickCx::{next_woken, next_due, wake_at}` and "a put from `apply` wakes the entity" (M21b; 0024 §7); entity picking from the DrawList and `tap` events in `FrameCx` (M18); `DrawList::{bar, rect}` (M17), sprite frames (M17b); `Game::predict` honoured by the pending queue, overlay tombstones and `entity_at` over `Predicting` (M25); `despawn`, occupancy release and footprint-scoped `EntityGone` (M21; timer and wake removal M21b); tombstones skipped by `FrameView::entities()` (M26); `Growth::NONE` (M21, 0023).
 

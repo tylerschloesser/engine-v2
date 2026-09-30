@@ -81,7 +81,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 31b | `31b-desync-hashes.md` | per-chunk desync hashes, `ResyncChunk` | 31 | |
 | [x] | 32 | `32-reference-crafting.md` | inventory, unlock, crafting | 20b, 21b | |
 | [x] | 33 | `33-reference-furnace.md` | furnace entity, predicted placement | 32, 26 | T |
-| [ ] | 33c | `33c-drawables-on-real-pages.md` | public drawables seam, the reference page draws its DrawList (circle, furnace, ghost), pixel proof | 33 | |
+| [x] | 33c | `33c-drawables-on-real-pages.md` | public drawables seam, the reference page draws its DrawList (circle, furnace, ghost), pixel proof | 33 | |
 | [ ] | 33b | `33b-reference-furnace-operation.md` | deposit/take, smelting, panel | 33 | T |
 | [ ] | 34 | `34-reference-multiplayer.md` | roster, remote players, play through the reference server | 33b, 30, 31b | D |
 | [ ] | 34b | `34b-reference-scripted-single-player.md` | scripted full game, golden log, persistence extras | 34, 23, 24b | T |

@@ -1,6 +1,6 @@
 # M33c: Drawables on real pages
 
-Status: not started · After: 33 · Tyler-dependent: no
+Status: done · After: 33 · Tyler-dependent: no
 
 Written by the orchestrator at M33's gate (2026-09-30). M33's implementer found that no production page draws a drawable. `engine/render` (`packages/engine/src/render.ts`) exports terrain, art, device and upload, but not `createDrawablesRenderer`, `attachDrawables` or `loadSpriteAtlas`. The only way to reach a client's `DrawListSlot` is `clientTestHandle(client).drawListSlot`, which is test-only. The engine's own pages (`tests/browser/pages/src/gc-drawables.ts`, `drawables.ts`) wire drawables from `src/` directly. So the reference game has drawn terrain only since M20b. Its player circle (M20b), ghost and furnace (M33) exist in the DrawList and are asserted there, but never reach a pixel. M17b's Provides already names the intended seam, `ClientOptions.assets.sprites?: string`; this milestone carries it through to a production page.
 
@@ -35,11 +35,11 @@ New drawable kinds, art changes, the furnace panel (M33b), the device page (`?ha
 Browser: `reference_draws_player_furnace_and_ghost` (Scope 3). If the helper has branches (no `sprites` asset, say), one engine browser test on the atlas-less path.
 
 ## Exit criteria
-- [ ] The reference page draws through public entry points only (`git grep "engine/src\|packages/engine/src" games/reference` is empty).
-- [ ] `reference_draws_player_furnace_and_ghost` passes, and fails with `attachDrawables` removed from the helper (both lines pasted).
-- [ ] `reference clean` zero-GC passes with drawables attached, no budget changed.
-- [ ] M33's carried criterion is verified with `playwright-cli` (the ghost tracks the pointer, tint changes at a shoreline), with evidence in Deviations.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] The reference page draws through public entry points only (`git grep "engine/src\|packages/engine/src" games/reference` is empty).
+- [x] `reference_draws_player_furnace_and_ghost` passes, and fails with `attachDrawables` removed from the helper (both lines pasted).
+- [x] `reference clean` zero-GC passes with drawables attached, no budget changed.
+- [x] M33's carried criterion is verified with `playwright-cli` (the ghost tracks the pointer, tint changes at a shoreline), with evidence in Deviations.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test browser -t reference_draws` · `pnpm test browser -t reference` · `pnpm --filter reference dev` with `playwright-cli`.
@@ -69,3 +69,5 @@ None new. The M34 and M39 device checks already expect visible circles.
 - **R1.** `Draw::color` is byte 0 = r, byte 3 = a (`packDrawColor`, M17 Deviations). All seven reference constants in `sim/src/client.rs` are written `0xRRGGBBAA`, so every one renders wrong: `PLAYER_COLOR` `0x40c0_40ff` is a 25 %-alpha violet, not an opaque green. Fix at the source of the mistake: add a Rust `pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> u32` beside `Draw` in the engine crate (the Rust twin of `packDrawColor`, with a doc line naming the byte order), rewrite the seven constants through it with their intended hues, and add one engine native test pinning `rgba(1,2,3,4) == 0x0403_0201`. The existing tests that pin these constants' numeric values (`sim/tests/ghost.rs` around 163/172, `GHOST` in `tests/helpers/game.ts`) may be updated to the new values. That changes an expected constant, not a behaviour. `extract_hash_*` goldens that move only because of the colour bytes may be regenerated, each listed with old and new hash. Tighten `reference_draws_player_furnace_and_ghost` to assert hue, not just difference: circle pixel green > red, valid ghost green > red, invalid ghost red > green. It must fail with the old constants: paste the line.
 - **R1 done.** `engine::client::rgba(r, g, b, a) -> u32` (`const fn`, in `client/drawlist.rs`, re-exported from `engine::client`) plus native test `rgba_packs_byte0_as_red` (`rgba(1,2,3,4) == 0x0403_0201`). All seven constants in `sim/src/client.rs` now go through it with the intended hues: player `(40,c0,40,ff)`, ring `(40,c0,40,60)`, furnace white, ghost valid `(40,ff,40,90)`, invalid `(ff,40,40,90)`, unknown `(c0,c0,c0,90)`, predicted furnace `(ff,ff,ff,99)`. Pinned values updated: `ghost.rs` colours `[0x40ff_4090, 0xff40_4090, 0xc0c0_c090]` -> `[0x9040_ff40, 0x9040_40ff, 0x90c0_c0c0]` and the edge-water `0x40ff_4090` -> `0x9040_ff40`; `place_predict.rs` predicted tint `0xffff_ff99` -> `0x99ff_ffff`; `GHOST` in `tests/helpers/game.ts` `{ valid 0x40ff4090, invalid 0xff404090, unknown 0xc0c0c090 }` -> `{ 0x9040ff40, 0x904040ff, 0x90c0c0c0 }`. Goldens regenerated (`pnpm golden:bytes`, only these two moved): `extract_hash_player_circle` `58c2d6cad9192e34` -> `3ef62f1c7615b34e`; `extract_hash_ghost_and_furnace` `013ed85fc4dd7355` -> `54f2542f20240d45`.
 - **Hue assertions.** `reference_draws_player_furnace_and_ghost` now asserts circle green change > red change, valid ghost green > red, invalid ghost red > green. Under the old constants it fails with `Error: player circle is green: green moves more than red ... Expected: > 7 Received: -19`. Passing with the new ones (`browser pass 1 tests 2.9s/48s`) and under `ENGINE_GPU=swiftshader` (`browser pass 1 tests 2.8s/48s`). The earlier "Defect found, not fixed" bullet is resolved by this.
+- **Gate after R1 (orchestrator):** `pnpm gate 3a9253f` flagged the two changed goldens (`extract_hash_player_circle` `58c2d6cad9192e34` -> `3ef62f1c7615b34e`, `extract_hash_ghost_and_furnace` `013ed85fc4dd7355` -> `54f2542f20240d45`). Approved: the only code change under them is the seven constants rewritten through `rgba`. The coverage got stronger (the pixel test asserts hue and failed under the old constants: `Expected: > 7 Received: -19`). `pnpm test && pnpm lint` green, exit codes checked: rust 714, unit 292 (3.1 s, WARN, watch row), wasm 159, netcode 92, browser 222 in 38 s of 48 s. M33b, M34 and M36 now carry a "From M33c" note under Seams (the helper, `rgba`, `stagedFrameUniform`, pixel evidence).
+

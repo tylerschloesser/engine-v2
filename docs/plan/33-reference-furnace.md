@@ -56,7 +56,7 @@ Deposit, take, smelting, the furnace panel, picking a furnace (M33b). Removing a
 
 ## Exit criteria
 - [x] All tests above pass by name.
-- [ ] (carried to `33c-drawables-on-real-pages.md`) By hand on desktop: the ghost tracks the pointer with no visible lag and changes tint crossing a shoreline.
+- [x] (carried to `33c-drawables-on-real-pages.md`, verified there) By hand on desktop: the ghost tracks the pointer with no visible lag and changes tint crossing a shoreline.
 - [x] Assets and bindings regenerated and committed (`git diff --exit-code` clean after build and asset script).
 - [x] `pnpm test` and `pnpm lint` are green.
 
