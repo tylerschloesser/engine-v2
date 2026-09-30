@@ -114,6 +114,81 @@ impl RefScenario {
         )
     }
 
+    /// `FurnaceDeposit { at, item, count }` for `who` (Provides: `RefScenario::deposit`).
+    pub fn deposit(
+        &mut self,
+        who: PlayerId,
+        at: TilePos,
+        item: reference_sim::content::ItemId,
+        count: u32,
+    ) -> Result<(), RefReject> {
+        self.dispatch(
+            who,
+            RefAction::FurnaceDeposit {
+                at: TileXY::from_tile(at),
+                item: item as u8,
+                count,
+            },
+        )
+    }
+
+    /// `FurnaceTake { at }` for `who` (Provides: `RefScenario::take`).
+    pub fn take(&mut self, who: PlayerId, at: TilePos) -> Result<(), RefReject> {
+        self.dispatch(
+            who,
+            RefAction::FurnaceTake {
+                at: TileXY::from_tile(at),
+            },
+        )
+    }
+
+    /// `FurnacePickUp { at }` for `who` (Provides: `RefScenario::pick_up`).
+    pub fn pick_up(&mut self, who: PlayerId, at: TilePos) -> Result<(), RefReject> {
+        self.dispatch(
+            who,
+            RefAction::FurnacePickUp {
+                at: TileXY::from_tile(at),
+            },
+        )
+    }
+
+    /// The furnace whose footprint covers `at` on the host, by value (Provides:
+    /// `RefScenario::furnace_at`).
+    pub fn furnace_at(&self, at: TilePos) -> Option<reference_sim::Furnace> {
+        let id = self.entity_at(at)?;
+        self.sim
+            .authority()
+            .entity(id)
+            .expect("host reads are total")
+            .copied()
+    }
+
+    /// The host's world as a plain `&dyn WorldRead` (what `can_place` takes).
+    pub fn read(&self) -> &dyn WorldRead<RefGame> {
+        self.sim.authority()
+    }
+
+    /// Writes recorded since genesis (`Authority::changes`; nothing clears them here): two readings
+    /// differ exactly when something was put in between.
+    pub fn writes_logged(&self) -> usize {
+        self.sim.authority().changes().len()
+    }
+
+    /// Entity puts (spawns included) recorded since genesis: a furnace placement is exactly one.
+    pub fn entity_puts_logged(&self) -> usize {
+        self.sim
+            .authority()
+            .changes()
+            .iter()
+            .filter(|(_, d)| matches!(d, engine::delta::Delta::EntityPut { .. }))
+            .count()
+    }
+
+    /// Entities the last tick's rules visited (`next_woken`/`next_due` pops).
+    pub fn visited_last_tick(&self) -> u64 {
+        self.sim.authority().entities_visited_per_tick()
+    }
+
     /// The occupant of `pos` on the host (real ids only: there is no prediction here).
     pub fn entity_at(&self, pos: TilePos) -> Option<engine::game::EntityId> {
         self.sim

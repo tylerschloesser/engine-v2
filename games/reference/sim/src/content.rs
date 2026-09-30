@@ -87,6 +87,25 @@ pub const fn collect_ticks(rate: TickRate) -> Ticks {
 /// actually uses.
 pub const COLLECT: Ticks = collect_ticks(crate::RefGame::TICK_RATE);
 
+/// Smelt duration (Requirements: "smelting takes 5 seconds"), generic over the rate like
+/// [`collect_ticks`] so `smelt_takes_five_seconds_at_20_and_30_hz` can check both.
+pub const fn smelt_ticks(rate: TickRate) -> Ticks {
+    rate.secs(5)
+}
+
+/// [`smelt_ticks`] at [`crate::RefGame`]'s own `TICK_RATE`: what `rules::furnace::advance` uses.
+pub const SMELT: Ticks = smelt_ticks(crate::RefGame::TICK_RATE);
+
+/// Ingots one unit of fuel smelts (Requirements: one coal smelts 10, one wood smelts 2). A count
+/// of smelts, never a tick rate (0006 "Rates and continuous quantities"): `Furnace::burn_left`
+/// holds the smelts left in the lit unit.
+pub const COAL_INGOTS: u16 = 10;
+pub const WOOD_INGOTS: u16 = 2;
+
+/// Most one furnace slot (`iron_in`, `coal`, `wood`) holds; a deposit that would exceed it is
+/// rejected, so the entity stays plain fixed-width data.
+pub const SLOT_CAP: u32 = 999;
+
 /// Item ids (M32; the six inventory slots, in slot order): the index into [`crate::Inventory`]'s
 /// fixed array. Distinct from the tile resource ids above (`IRON = 16` ...): a resource id says what
 /// a *tile* holds, an item id what a *player* carries; [`ItemId::from_resource`] is the one bridge.
@@ -107,6 +126,19 @@ pub const ITEM_COUNT: usize = 6;
 impl ItemId {
     pub const fn idx(self) -> usize {
         self as usize
+    }
+
+    /// The item with wire id `n` (`FurnaceDeposit::item`); `None` for an id no slot has.
+    pub const fn from_wire(n: u8) -> Option<ItemId> {
+        match n {
+            0 => Some(ItemId::Stone),
+            1 => Some(ItemId::Iron),
+            2 => Some(ItemId::Wood),
+            3 => Some(ItemId::Coal),
+            4 => Some(ItemId::Furnace),
+            5 => Some(ItemId::Ingot),
+            _ => None,
+        }
     }
 
     /// The item a collected tile resource turns into; `None` for a non-resource id.
@@ -184,6 +216,6 @@ pub fn register(r: &mut Registry) {
 pub mod local {
     /// `a != 0` turns construction mode on, `a == 0` off.
     pub const PLACE_MODE: u32 = 1;
-    /// Closes the furnace panel (M33b; nothing reads it yet).
+    /// Closes the furnace panel (M33b step 3 reads it).
     pub const CLOSE_PANEL: u32 = 2;
 }

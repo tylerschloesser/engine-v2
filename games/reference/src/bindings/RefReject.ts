@@ -5,4 +5,4 @@
  * rejection reasons, in the same order Scope validates them (minus "tile readable", which is
  * `Unknown`).
  */
-export type RefReject = "Unknown" | "NoResource" | "OutOfRange" | "Busy" | "UnknownRecipe" | "Locked" | "Unaffordable" | "NoFurnace" | "NotBuildable" | "ImplausiblePosition";
+export type RefReject = "Unknown" | "NoResource" | "OutOfRange" | "Busy" | "UnknownRecipe" | "Locked" | "Unaffordable" | "NoFurnace" | "NotBuildable" | "NoFurnaceHere" | "BadItem" | "BadCount" | "NotEnoughItems" | "SlotFull" | "NothingToTake" | "FurnaceNotEmpty" | "ImplausiblePosition";

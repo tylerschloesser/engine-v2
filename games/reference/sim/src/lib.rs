@@ -9,7 +9,7 @@
 //! `Game::register`), `rules/` (one file per feature; `collect.rs` is the first).
 
 use engine::game::{
-    Game, PlayerEvent, PlayerId, PresenceTable, TickCx, Unknown, WorldRead, WorldWrite,
+    Game, Growth, PlayerEvent, PlayerId, PresenceTable, TickCx, Unknown, WorldRead, WorldWrite,
 };
 use engine::world::{PrototypeId, Registry, TilePos, WorldPos};
 use ts_rs::TS;
@@ -82,6 +82,21 @@ pub enum RefAction {
     PlaceFurnace {
         origin: TileXY,
     },
+    /// M33b: move `count` of `item` (a `content::ItemId` wire id: iron, coal or wood) from the
+    /// player into the furnace at `at`, any tile under its footprint (0022 section 6).
+    FurnaceDeposit {
+        at: TileXY,
+        item: u8,
+        count: u32,
+    },
+    /// M33b: move every ingot out of the furnace at `at` to the player. Not predicted (R2).
+    FurnaceTake {
+        at: TileXY,
+    },
+    /// M33b: pick the furnace at `at` up into the inventory; valid only when it is empty.
+    FurnacePickUp {
+        at: TileXY,
+    },
 }
 
 /// `Reject` (Scope). `NoResource`/`OutOfRange`/`Busy` are `rules::collect::start`'s own three
@@ -104,6 +119,20 @@ pub enum RefReject {
     NoFurnace,
     /// `PlaceFurnace`: some footprint tile is `NOT_BUILDABLE` (water, a resource, another furnace).
     NotBuildable,
+    /// `FurnaceDeposit`/`FurnaceTake`/`FurnacePickUp` (M33b): no furnace on the addressed tile.
+    NoFurnaceHere,
+    /// `FurnaceDeposit`: `item` is not iron, coal or wood.
+    BadItem,
+    /// `FurnaceDeposit`: `count` is zero.
+    BadCount,
+    /// `FurnaceDeposit`: the player holds fewer than `count`.
+    NotEnoughItems,
+    /// `FurnaceDeposit`: the slot would exceed `content::SLOT_CAP`.
+    SlotFull,
+    /// `FurnaceTake`: the furnace holds no ingots.
+    NothingToTake,
+    /// `FurnacePickUp`: the furnace still holds ore, fuel (lit included) or ingots.
+    FurnaceNotEmpty,
     /// `admit`'s own rejection (0001 "Witness-carrying actions" step 1, HOST ONLY, never
     /// replayed): the claimed `from` is farther than `content::ADMIT_TOLERANCE_Q8` from the
     /// player's latest presence sample, or no sample exists yet. Distinct from `OutOfRange`
@@ -187,7 +216,7 @@ pub struct Furnace {
     pub iron_in: u16,
     pub coal: u16,
     pub wood: u16,
-    /// Ticks of burn left in the current fuel unit.
+    /// Smelts left in the currently lit fuel unit (`content::{COAL,WOOD}_INGOTS` when lit).
     pub burn_left: u16,
     pub ingots_out: u16,
     /// The tick the current smelt completes, `None` while idle.
@@ -313,8 +342,9 @@ impl Default for RefUi {
 pub struct RefGame;
 
 impl Game for RefGame {
-    const SCHEMA_VERSION: u32 = 3;
+    const SCHEMA_VERSION: u32 = 4;
     //  3: `Furnace` entity, `PlaceFurnace`, resources `NOT_BUILDABLE` (M33).
+    //  4: `FurnaceDeposit`, `FurnaceTake`, `FurnacePickUp` and their rejects (M33b).
     type Worldgen = RefWorldgen;
     type Action = RefAction;
     type Reject = RefReject;
@@ -373,11 +403,29 @@ impl Game for RefGame {
             RefAction::PlaceFurnace { origin } => {
                 rules::place::place_furnace(w, who, origin.tile())
             }
+            RefAction::FurnaceDeposit { at, item, count } => {
+                rules::furnace::deposit(w, who, at.tile(), *item, *count)
+            }
+            RefAction::FurnaceTake { at } => rules::furnace::take(w, who, at.tile()),
+            RefAction::FurnacePickUp { at } => rules::furnace::pick_up(w, who, at.tile()),
+        }
+    }
+
+    /// `FurnaceTake` opts out (R2): its result depends on a counter tick rules change on the host.
+    fn predict(a: &RefAction) -> bool {
+        !matches!(a, RefAction::FurnaceTake { .. })
+    }
+
+    fn growth(a: &RefAction) -> Option<Growth> {
+        match a {
+            RefAction::PlaceFurnace { .. } => Some(Growth::entities(1)),
+            _ => Some(Growth::NONE),
         }
     }
 
     fn tick(cx: &mut TickCx<'_, Self>) {
         rules::collect::tick(cx);
+        rules::furnace::tick(cx);
     }
 
     fn admit(
@@ -390,7 +438,10 @@ impl Game for RefGame {
             RefAction::StartCollect { from, .. } => rules::collect::admit(p, who, from.world()),
             RefAction::CancelCollect
             | RefAction::StartCraft { .. }
-            | RefAction::PlaceFurnace { .. } => Ok(()),
+            | RefAction::PlaceFurnace { .. }
+            | RefAction::FurnaceDeposit { .. }
+            | RefAction::FurnaceTake { .. }
+            | RefAction::FurnacePickUp { .. } => Ok(()),
         }
     }
 }
