@@ -540,37 +540,109 @@
         "counter": "bytesDown",
         "exact": 112,
         "ceiling": 124,
-        "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing (no 0010 table cell applies yet); ceiling = ceil(exact * 1.1). Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Scenario: tests/netcode/counters-exact.test.ts (seed 4001, camera 20 wide, 5 ticks), client 0."
+        "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing. No 0010 table cell or worked number exists for this scenario, so its ceiling is headroom, ceil(exact * 1.1); rows that have a 0010 source take that as the ceiling. Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Scenario: tests/netcode/counters-exact.test.ts (seed 4001, camera 20 wide, 5 ticks), client 0."
       },
       "baselineCountersExactChunkEnters": {
         "counter": "chunkEnters",
         "exact": 15,
         "ceiling": 17,
-        "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing (no 0010 table cell applies yet); ceiling = ceil(exact * 1.1). Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Same scenario: ChunkEnterPristine coordinates."
+        "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing. No 0010 table cell or worked number exists for this scenario, so its ceiling is headroom, ceil(exact * 1.1); rows that have a 0010 source take that as the ceiling. Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Same scenario: ChunkEnterPristine coordinates."
       },
       "baselineJoinConvergesBytesDown": {
         "counter": "bytesDown",
         "exact": 335,
         "ceiling": 369,
-        "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing (no 0010 table cell applies yet); ceiling = ceil(exact * 1.1). Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Scenario: tests/netcode/join-converges.test.ts (seed 1001, four clients), client 0."
+        "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing. No 0010 table cell or worked number exists for this scenario, so its ceiling is headroom, ceil(exact * 1.1); rows that have a 0010 source take that as the ceiling. Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Scenario: tests/netcode/join-converges.test.ts (seed 1001, four clients), client 0."
       },
       "baselineJoinConvergesWorstSecondBytesDown": {
         "counter": "worstSecondBytesDown",
         "exact": 196,
         "ceiling": 216,
-        "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing (no 0010 table cell applies yet); ceiling = ceil(exact * 1.1). Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Same scenario, the worst 1 s virtual-time span."
+        "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing. No 0010 table cell or worked number exists for this scenario, so its ceiling is headroom, ceil(exact * 1.1); rows that have a 0010 source take that as the ceiling. Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Same scenario, the worst 1 s virtual-time span."
       },
       "baselineLateJoinBytesDown": {
         "counter": "bytesDown",
         "exact": 275,
         "ceiling": 303,
-        "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing (no 0010 table cell applies yet); ceiling = ceil(exact * 1.1). Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Scenario: tests/netcode/late-join.test.ts (seed 1002), the joiner (client 1)."
+        "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing. No 0010 table cell or worked number exists for this scenario, so its ceiling is headroom, ceil(exact * 1.1); rows that have a 0010 source take that as the ceiling. Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Scenario: tests/netcode/late-join.test.ts (seed 1002), the joiner (client 1)."
       },
       "baselineLateJoinWorstSecondBytesDown": {
         "counter": "worstSecondBytesDown",
         "exact": 161,
         "ceiling": 178,
-        "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing (no 0010 table cell applies yet); ceiling = ceil(exact * 1.1). Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Same scenario, the worst 1 s virtual-time span."
+        "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing. No 0010 table cell or worked number exists for this scenario, so its ceiling is headroom, ceil(exact * 1.1); rows that have a 0010 source take that as the ceiling. Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Same scenario, the worst 1 s virtual-time span."
+      },
+      "idleHeartbeatBytes10s": {
+        "counter": "bytesDown",
+        "exact": 200,
+        "ceiling": 200,
+        "source": "0010 Rates table (a heartbeat frame at least every 500 ms) x 0010 worked number (a frame header is 10 B): 20 heartbeats x 10 B over 10 s = 200 B, nothing else. tests/netcode/rates.test.ts rates/idle-sends-only-heartbeats (fx-machines, an idle world)."
+      },
+      "steadyBusyFieldBytes5s": {
+        "counter": "bytesDown",
+        "exact": 7046,
+        "ceiling": 25000,
+        "source": "0010 Bandwidth table, 'Steady state down, typical: 1-5 KB/s': ceiling = 5 KB/s x 5 s = 25,000 B. Exact = 200 busy-field machines' 400 whole-value puts in 5 s (0010 worked number: 80 puts/s x ~16 B = 1.3 KB/s of payload) plus 100 frame headers and section framing, 1.4 KB/s on the wire. rates/steady-busy-field."
+      },
+      "joinWildernessMaxZoomBytes": {
+        "counter": "bytesDown",
+        "exact": 338,
+        "ceiling": 500,
+        "source": "0010 worked numbers, 'Join, maximum zoom-out (121 chunks): < 0.5 KB in wilderness': ceiling 500 B; exact is the whole downlink (Welcome, Global, OwnPlayer, 121 pristine enters). rates/join-wilderness."
+      },
+      "joinDenseMaxZoomEnterBytes": {
+        "counter": "enterBytes",
+        "exact": 474386,
+        "ceiling": 480000,
+        "source": "0010 worked numbers, 'Join, maximum zoom-out: ~480 KB if every chunk were dense': ceiling 480,000 B of ChunkEnterPristine + ChunkSnapshots wire bytes for 121 busy-field dense chunks (200 entities + 160 modified tiles each). rates/join-dense-visible-first."
+      },
+      "joinDenseMaxZoomTicks": {
+        "counter": "ticksToDrain",
+        "exact": 148,
+        "ceiling": 150,
+        "source": "Derived from 0010 worked numbers: ~480 KB with a 128 KB burst and 48 KB/s refill drains in (480,000 - 128,000) / 48,000 = 7.33 s = 147 ticks ('~7 s'); ceiling 150 allows up to 3 ticks between the view change and the host acting on the camera report (uplink batch every 50 ms, then one host tick). Counted from setView. rates/join-dense-visible-first."
+      },
+      "hardCeilingBytesPerS": {
+        "counter": "worstSecondBytesDown",
+        "exact": 51645,
+        "ceiling": 64000,
+        "source": "0010 Bandwidth table, 'Hard ceiling 64 KB/s' (structural: 16 KB/s soft cap + 48 KB/s chunk refill): the worst 20-tick window of downlink once the initial 128 KB burst is spent, during a dense maximum-zoom join. The burst itself is a separate 0010 row (128 KB). rates/join-dense-visible-first."
+      },
+      "bucketBurst": {
+        "counter": "bucketTokens",
+        "exact": 128000,
+        "ceiling": 128000,
+        "source": "0010 Bandwidth table, 'Chunk streaming: token bucket, 48 KB/s refill, 128 KB burst': a fresh connection's bucket holds exactly the burst. rates/bucket-refill-exact."
+      },
+      "bucketRefillBytesPerTick": {
+        "counter": "refillPerTick",
+        "exact": 2400,
+        "ceiling": 2400,
+        "source": "0010 Bandwidth table, 48 KB/s refill, at the 20 Hz tick: 48,000 / 20 = 2,400 B per tick, in integer bytes. rates/bucket-refill-exact."
+      },
+      "degradeMaxLevel": {
+        "counter": "maxLevel",
+        "exact": 4,
+        "ceiling": 4,
+        "source": "0010 Rates table, 'Degrade: every 2nd, then 4th tick': a stalled client reaches level 4 and no further. rates/degrade-on-stall."
+      },
+      "degradeHeartbeatGapTicks": {
+        "counter": "maxEmitGapTicks",
+        "exact": 10,
+        "ceiling": 10,
+        "source": "0010 Rates table, 'a heartbeat frame at least every 500 ms': 500 ms at 20 Hz = 10 ticks, the longest gap between two messages to a client, held at degrade level 4. rates/degrade-heartbeat-held."
+      },
+      "collapseToSnapshotCollapses": {
+        "counter": "collapses",
+        "exact": 1,
+        "ceiling": 1,
+        "source": "0010 Bandwidth table, soft cap row: 'a chunk whose queued deltas exceed its snapshot size is sent as a snapshot instead': thirty adjacent tile writes in one chunk collapse that one chunk once. rates/deltas-collapse-to-snapshot."
+      },
+      "teleportWastedEnterBytes": {
+        "counter": "wastedBytes",
+        "exact": 32487,
+        "ceiling": 35736,
+        "source": "No 0010 cell or worked number covers this; ceiling is headroom, ceil(exact x 1.1). Enter bytes paid after a teleport out of a half-drained dense join (the ~477 KB region): what was already in flight before the host acted on the new camera report. rates/teleport-drops-queued-enters."
       }
     }
   },

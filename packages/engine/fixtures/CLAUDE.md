@@ -33,6 +33,6 @@ the detail; `hash` has none yet, described here instead.
   ticks. Goldens `place-border`, `full-world` (M21), `smelt-cycle`, `idle-world-costs-zero` (M21b).
 - `busy-field` (`fx-busy-field`, docs/plan/31-rates-and-integrity.md): the load 0010's bandwidth rows
   are measured against -- 200 timer-driven machines putting whole ~16 B values twice per 5 s
-  (80 puts/s), dense chunks (200 dormant entities + 224 modified tiles, ~3.9 KB on the wire) via
+  (80 puts/s), dense chunks (200 dormant entities + 160 modified tiles, ~3.5 KB on the wire natively, 3.9 KB with a big world's 3-byte entity ids) via
   `Action::Fill { cx, cy }` or the native-only bench genesis `BusyField<true>` (121 chunks). A `Fill`
   needs `maxActionGrowth >= 28,288` and room in `maxEntities`.

@@ -62,7 +62,10 @@ export function seedToHexU64(seed: string): string {
 /** `WorldConfig` -> the sim role's `InstanceConfig` (docs/plan/13-sim-host-tick-loop.md, Scope
  * "Sim-role config"). Pure: no instantiation, so the seed conversion is testable without a
  * module. */
-export function buildSimInstanceConfig(cfg: WorldConfig): InstanceConfig {
+export function buildSimInstanceConfig(
+  cfg: WorldConfig,
+  opts?: { unpaced?: boolean },
+): InstanceConfig {
   return {
     arenaBytes: cfg.arenaBytes ?? 96 * 1024 * 1024,
     game: {
@@ -87,6 +90,14 @@ export function buildSimInstanceConfig(cfg: WorldConfig): InstanceConfig {
       // `#[serde(default)]` fills the gap exactly as before.
       viewMaxTilesPerAxis: cfg.view?.maxTilesPerAxis,
       viewMaxChunks: cfg.view?.maxChunks,
+      // docs/plan/31-rates-and-integrity.md step 3: `WorldConfig.bandwidth` reaches `host::SimConfig`
+      // (`Option<u32>`, 0010's defaults when unset: 16 KB/s soft cap, 48 KB/s refill, 128 KB burst).
+      softCapBytesPerS: cfg.bandwidth?.softCapBytesPerS,
+      chunkRefillBytesPerS: cfg.bandwidth?.chunkRefillBytesPerS,
+      chunkBurstBytes: cfg.bandwidth?.chunkBurstBytes,
+      hardCapBytesPerS: cfg.bandwidth?.hardCapBytesPerS,
+      // A local host has no network to pace (`BandwidthConfig::unpaced`, `host/pacing.rs`).
+      unpaced: opts?.unpaced ? true : undefined,
     },
   }
 }

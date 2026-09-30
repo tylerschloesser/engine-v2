@@ -32,15 +32,15 @@ pub const FIELD_MACHINES: u32 = 200;
 /// Entities [`fill_chunk`] adds to a chunk (0010's "dense chunk").
 pub const CHUNK_ENTITIES: u32 = 200;
 /// Modified tiles [`fill_chunk`] adds to a chunk: consecutive tiles differ, so the overlay is one
-/// long non-repeat run (4 B a tile, about 0.9 KB).
-pub const OVERLAY_TILES: u32 = 224;
+/// long non-repeat run (4 B a tile, about 0.65 KB).
+pub const OVERLAY_TILES: u32 = 160;
 /// The bench genesis fills chunks `-DENSE_RADIUS..=DENSE_RADIUS` on both axes: 11 x 11 = 121, 0010's
 /// maximum zoom-out view.
 pub const DENSE_RADIUS: i32 = 5;
 
 const EDGE: i32 = 32; // `Game::CHUNK_BITS`'s default (5)
 const STOCK0: u32 = 20_000; // 3-byte varint
-const HEAT0: u16 = 300; // 2-byte varint
+const HEAT0: u8 = 100; // 1 byte
 const GRASS: u8 = 0;
 const PAINT: u8 = 1;
 
@@ -55,7 +55,7 @@ pub struct Pos {
 #[ts(export)]
 pub enum Action {
     /// Fills chunk `(cx, cy)` to the dense-chunk figure ([`fill_chunk`]). Growth: 200 entities and
-    /// 224 modified tiles, so the world's `max_entities`/`max_action_growth` must allow it.
+    /// 160 modified tiles, so the world's `max_entities`/`max_action_growth` must allow it.
     Fill { cx: i32, cy: i32 },
 }
 
@@ -79,10 +79,10 @@ pub struct Machine {
     pub count: u32,
     pub lit: bool,
     /// Payload that changes with every put, sized so a whole-value put is about 0010's 16 B net of
-    /// frame framing (two 3-byte and one 2-byte varint at the values the rule reaches).
+    /// frame framing (two 3-byte varints and a byte at the values the rule reaches).
     pub stock: u32,
     pub fuel: u32,
-    pub heat: u16,
+    pub heat: u8,
     /// Ticks between state changes; `0` is dormant (a dense-chunk filler that never acts).
     pub period: u32,
 }
@@ -211,7 +211,7 @@ impl<const DENSE: bool> Game for BusyField<DENSE> {
             m.lit = !m.lit;
             m.stock = STOCK0.wrapping_add(m.count.wrapping_mul(1_009));
             m.fuel = STOCK0.wrapping_add(m.count.wrapping_mul(3));
-            m.heat = HEAT0.wrapping_add((m.count as u16).wrapping_mul(7));
+            m.heat = HEAT0.wrapping_add((m.count as u8).wrapping_mul(7));
             cx.put_entity(id, m);
             cx.wake_at(id, cx.tick() + Ticks(m.period));
         }

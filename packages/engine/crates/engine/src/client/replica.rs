@@ -340,6 +340,25 @@ impl<G: Game> Replica<G> {
         self.store.apply(&Delta::EntityPut { id, entity });
     }
 
+    /// Before a snapshot of an already-held chunk is applied: removes every entity overlapping
+    /// `chunk` that `named` (the snapshot's own entity ids) does not list. A no-op for a chunk not
+    /// held yet (a first enter has nothing to drop).
+    pub(crate) fn drop_unnamed_entities(&mut self, chunk: ChunkCoord, named: &[EntityId]) {
+        if !self.held.contains_key(&chunk) {
+            return;
+        }
+        let stale: Vec<EntityId> = self
+            .store
+            .chunk_overlapping(chunk)
+            .iter()
+            .copied()
+            .filter(|id| !named.contains(id))
+            .collect();
+        for id in stale {
+            self.store.apply(&Delta::EntityGone { id });
+        }
+    }
+
     /// A chunk leave (0011): frees the overlay (pristine cache survives, M08b) and every entity no
     /// longer overlapping *any* held chunk (docs/plan/21-entities-and-timers.md Scope: a footprint
     /// straddling this chunk and a still-held one must not disappear -- widened from M12b's

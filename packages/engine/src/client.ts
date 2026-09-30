@@ -1914,7 +1914,8 @@ export function createClient(options: ClientOptions): Client {
     // (`TerrainConfig`, `game_instance.rs`) needs only `seed`/`params`, the rest defaulted, so it
     // is built inline here rather than through a second named export nothing else calls yet.
     const simGame =
-      options.test?.game ?? (worldConfig ? buildSimInstanceConfig(worldConfig).game : null)
+      options.test?.game ??
+      (worldConfig ? buildSimInstanceConfig(worldConfig, { unpaced: true }).game : null)
     const game =
       options.test?.game ??
       (worldConfig

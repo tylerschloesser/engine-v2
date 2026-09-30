@@ -18,7 +18,7 @@
 // (`worldServerTestHandle(server).stepTick(1)`, the manual driver `stepTick`/`onFire` both call),
 // interleaved tick-by-tick with `VirtualClock.advanceBy(tickMs)` so a conditioner's own `send`-time
 // draws see the correct virtual "now" (`conditioner.ts`'s own Deviations).
-import { Role } from '../abi.js'
+import { RegionId, Role } from '../abi.js'
 import { hexDecode } from '../host/sessions.js'
 import { instantiate } from '../loader.js'
 import {
@@ -42,7 +42,7 @@ import { loadGame, type WsSocketLike, wsSocketConnection } from '../server-node.
 import { type MemoryStorage, memoryStorage } from '../storage/memory.js'
 import type { Storage } from '../storage/types.js'
 import { createHeadlessClient, type HeadlessClient } from './headless-client.js'
-import { addFrame, emptyTotals, parseFrame, worstWindowBytes } from './net-sections.js'
+import { addFrame, emptyTotals, parseMessage, worstWindowBytes } from './net-sections.js'
 import { trapSim } from './trap.js'
 import { createVirtualClock, type VirtualClock } from './virtual-clock.js'
 
@@ -247,6 +247,30 @@ export interface NetHarnessCounters {
   chunkLeaves: number
   /** Most downlink bytes any 1 s span of virtual time carried (`net.hardCeilingBytesPerS`'s input). */
   worstSecondBytesDown: number
+  /** The host's own per-connection pacing counters (`host/pacing.rs`, read through the pacing page
+   * of `sim_conn_counters`), current values at the time of the call: enters of a chunk that left
+   * under 5 s before (`reentersWithin5s`, and their bucket bytes `reenterBytes`), subscription
+   * evictions over the 128-chunk cap, ticks from a chunk becoming visible to its enter being sent
+   * (max and p95 over all sent), the degrade level (1, 2 or 4 ticks per message) and ticks spent
+   * degraded, enters still queued, the chunk bucket's tokens, chunks the client holds, deltas
+   * collapsed into a snapshot, and multi-frame messages sent. All zero if the host instance is not
+   * reachable. */
+  reentersWithin5s: number
+  reenterBytes: number
+  capEvictions: number
+  lateVisibleTicksMax: number
+  lateVisibleTicksP95: number
+  degradeLevel: number
+  degradedTicks: number
+  queuedEnters: number
+  bucketTokens: number
+  heldChunks: number
+  collapses: number
+  bundles: number
+  /** The most host ticks between two messages sent to this client (heartbeat interval held). */
+  maxEmitGap: number
+  /** Chunks sent while a visible chunk still waited in the queue (0010: visible first): always 0. */
+  orderViolations: number
 }
 
 /** A downlink message's own leading byte for `MsgType::Welcome` (`wire/mod.rs`) -- a private local
@@ -795,6 +819,48 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     }
   }
 
+  /** `sim_conn_counters`' pacing page (`host/mod.rs` `PACING_PAGE`): fourteen LE `u32`s. */
+  function readPacing(connId: number) {
+    const zero = {
+      reentersWithin5s: 0,
+      reenterBytes: 0,
+      capEvictions: 0,
+      lateVisibleTicksMax: 0,
+      lateVisibleTicksP95: 0,
+      degradeLevel: 0,
+      degradedTicks: 0,
+      queuedEnters: 0,
+      bucketTokens: 0,
+      heldChunks: 0,
+      collapses: 0,
+      bundles: 0,
+      maxEmitGap: 0,
+      orderViolations: 0,
+    }
+    const inst = serverInternals(server).rawInstance
+    const region = inst?.region(RegionId.Result)
+    if (!inst || !region) return zero
+    const status = inst.call1(inst.x.sim_conn_counters, (connId | 0x8000_0000) >>> 0)
+    if (status !== 0) return zero
+    const v = new DataView(region.u8.buffer, region.u8.byteOffset, 56)
+    return {
+      reentersWithin5s: v.getUint32(0, true),
+      reenterBytes: v.getUint32(4, true),
+      capEvictions: v.getUint32(8, true),
+      lateVisibleTicksMax: v.getUint32(12, true),
+      lateVisibleTicksP95: v.getUint32(16, true),
+      degradeLevel: v.getUint32(20, true),
+      degradedTicks: v.getUint32(24, true),
+      queuedEnters: v.getUint32(28, true),
+      bucketTokens: v.getInt32(32, true),
+      heldChunks: v.getUint32(36, true),
+      collapses: v.getUint32(40, true),
+      bundles: v.getUint32(44, true),
+      maxEmitGap: v.getUint32(48, true),
+      orderViolations: v.getUint32(52, true),
+    }
+  }
+
   function counters(i: number): NetHarnessCounters {
     const e = entries[i]
     if (!e) throw new Error(`counters: no client ${i}`)
@@ -826,11 +892,12 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     for (const entry of trace) {
       if (entry.link !== e.linkIdx || entry.dir !== 0) continue
       downSamples.push({ t: entry.t, bytes: entry.bytes.length })
-      const frame = parseFrame(entry.bytes)
-      if (frame) addFrame(totals, frame)
+      for (const frame of parseMessage(entry.bytes)) addFrame(totals, frame)
     }
     const { up: reconnectBytesUp, down: reconnectBytesDown } = reconnectCost(trace, e.linkIdx)
+    const pacing = readPacing(e.connId)
     return {
+      ...pacing,
       bytesDown,
       bytesUp,
       messagesDown,

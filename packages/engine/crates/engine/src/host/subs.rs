@@ -104,6 +104,8 @@ pub struct SubscriptionSet {
     target: Vec<ChunkCoord>,
     entered: Vec<ChunkCoord>,
     left: Vec<ChunkCoord>,
+    /// Cumulative chunks [`Self::evict_over_cap`] has removed (`capEvictions`).
+    cap_evictions: u64,
     visible: ChunkRect,
     ring1: ChunkRect,
     ring3: ChunkRect,
@@ -119,6 +121,7 @@ impl SubscriptionSet {
             target: Vec::with_capacity(CAP_CHUNKS),
             entered: Vec::with_capacity(CAP_CHUNKS),
             left: Vec::with_capacity(CAP_CHUNKS),
+            cap_evictions: 0,
             visible: zero,
             ring1: zero,
             ring3: zero,
@@ -219,6 +222,7 @@ impl SubscriptionSet {
                 }
             }
             let removed = self.entries.swap_remove(worst_idx);
+            self.cap_evictions += 1;
             if let Some(pos) = self.entered.iter().position(|&c| c == removed.chunk) {
                 self.entered.swap_remove(pos);
             } else {
@@ -233,6 +237,15 @@ impl SubscriptionSet {
 
     pub fn left(&self) -> &[ChunkCoord] {
         &self.left
+    }
+
+    /// Whether `chunk` is inside the (clamped) visible rectangle of the last update.
+    pub fn is_visible(&self, chunk: ChunkCoord) -> bool {
+        self.visible.contains(chunk)
+    }
+
+    pub fn cap_evictions(&self) -> u64 {
+        self.cap_evictions
     }
 
     pub fn is_subscribed(&self, chunk: ChunkCoord) -> bool {

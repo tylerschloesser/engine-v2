@@ -93,6 +93,8 @@ pub struct ClientCore<G: Game> {
     /// reallocated once its capacity settles -- `.claude/rules/hot-paths.md`'s steady-state
     /// convention, though `ChunkSnapshots` itself is rare outside a join burst).
     scratch_tiles: Vec<(u16, Tile)>,
+    /// Entity ids the chunk snapshot being applied named (`apply`'s `ChunkSnapshots` arm).
+    scratch_snapshot_ids: Vec<crate::game::EntityId>,
     /// Reused scratch for one `ChunkDeltas` section's entity ops (cleared per section): see the
     /// comment where it is used.
     scratch_entity_ops: Vec<EntityDeltaOp<G>>,
@@ -224,6 +226,7 @@ impl<G: Game> ClientCore<G> {
             last_batch_ms: None,
             last_received_tick: 0,
             scratch_tiles: Vec::new(),
+            scratch_snapshot_ids: Vec::new(),
             scratch_entity_ops: Vec::new(),
             last_summary: FrameSummary::default(),
             mutations: 0,
@@ -796,6 +799,25 @@ impl<G: Game> ClientCore<G> {
     /// re-predict every action still pending. `predict_alloc` proves this whole tail allocates
     /// nothing in steady state.
     pub fn on_frame(&mut self, bytes: &[u8]) -> Result<FrameSummary, WireError> {
+        // M31 step 4 (`wire/bundle.rs`): a `FrameBundle` is several whole frames, applied one by one
+        // in order, each exactly as if it had arrived alone; the whole bundle is validated first so
+        // a malformed tail never leaves it half applied. The summary is the last frame's.
+        if bytes.first() == Some(&(crate::wire::MsgType::FrameBundle as u8)) {
+            let mut check = crate::wire::BundleReader::new(bytes)?;
+            while let Some(frame) = check.next_frame()? {
+                Self::validate(frame)?;
+            }
+            let mut reader = crate::wire::BundleReader::new(bytes)?;
+            let mut last = None;
+            while let Some(frame) = reader.next_frame()? {
+                last = Some(self.on_frame_single(frame)?);
+            }
+            return last.ok_or(WireError::Malformed);
+        }
+        self.on_frame_single(bytes)
+    }
+
+    fn on_frame_single(&mut self, bytes: &[u8]) -> Result<FrameSummary, WireError> {
         Self::validate(bytes)?;
         let summary = self.apply(bytes);
         if self.arrivals_len == ARRIVALS_CAP {
@@ -950,13 +972,24 @@ impl<G: Game> ClientCore<G> {
                             scratch_tiles,
                             ..
                         } = self;
+                        let scratch_ids = &mut self.scratch_snapshot_ids;
+                        scratch_ids.clear();
                         let (chunk, version) = sr
                             .read_chunk::<G>(
                                 &mut br,
                                 |i, t| scratch_tiles.push((i, t)),
-                                |id, e| replica.apply_snapshot_entity(id, e),
+                                |id, e| {
+                                    scratch_ids.push(id);
+                                    replica.apply_snapshot_entity(id, e);
+                                },
                             )
                             .expect("validated");
+                        // A snapshot of a chunk this replica already holds (M31: a chunk whose
+                        // queued deltas outgrew its snapshot is re-sent whole) replaces its
+                        // entities too: any entity overlapping the chunk that the snapshot does not
+                        // name is gone on the host.
+                        self.replica
+                            .drop_unnamed_entities(chunk, &self.scratch_snapshot_ids);
                         self.replica
                             .apply_snapshot_overlay(chunk, version, &self.scratch_tiles);
                         summary.chunk_snapshots += 1;

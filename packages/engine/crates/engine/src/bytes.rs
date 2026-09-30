@@ -71,6 +71,11 @@ impl<'a> SliceSink<'a> {
         }
     }
 
+    /// Bytes written so far (a section boundary marker; not meaningful after an overflow).
+    pub fn position(&self) -> usize {
+        self.pos
+    }
+
     /// The number of bytes written, or [`CodecError::Overflow`] if any `put` ran past the end of
     /// the slice.
     pub fn finish(self) -> Result<usize, CodecError> {

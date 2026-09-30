@@ -5,13 +5,13 @@ uplink batch. Every writer is generic over `ByteSink` and allocates nothing; eve
 `&[u8]` and never panics. Single home of the numbers below; link here, don't copy them elsewhere.
 
 **Message type byte** (first byte, either direction): `0x01 Frame · 0x02 UplinkBatch · 0x03
-Welcome · 0x04 ResyncChunk · 0x05 Bye`; `0x06..=0x7F` free; `Hello`/`Reject` start with the magic
+Welcome · 0x04 ResyncChunk · 0x05 Bye · 0x06 FrameBundle`; `0x07..=0x7F` free; `Hello`/`Reject` start with the magic
 `u32` (first byte `>= 0x80`, 0024 §8).
 **Section ids** (ascending, each once, empty omitted, unknown malformed): `1 ActionResults ·
 2 Global · 3 OwnPlayer · 4 ChunkEnterPristine · 5 ChunkSnapshots · 6 ChunkLeaves · 7 ChunkDeltas ·
 8 Presence · 9 Hashes · 10 ChunkTiles (reserved, unbuilt) · 11 ChunkKeeps`.
 **Frame**: `[type u8][flags u8][tick u32][ack_seq u32]` (10 B, flags always 0); no sections =
-heartbeat. **Coord list**: sorted `(cy,cx)`, first entry absolute zigzag pair, rest zigzag deltas.
+heartbeat. **FrameBundle** (`bundle.rs`): `[0x06][n varint]` then `n` x `[len varint][whole frame]`. **Coord list**: sorted `(cy,cx)`, first entry absolute zigzag pair, rest zigzag deltas.
 **Overlay runs**: `n_runs varint`, per run `gap varint`, `head=len<<1|repeat`, then `repeat?1:len`
 tiles (`u32` LE); `>=2` equal consecutive tiles -> one repeat run. **Chunk snapshot entry**: coord
 (written by `SnapshotWriter`, not `encode_chunk_snapshot`) · `version u32` · overlay runs ·

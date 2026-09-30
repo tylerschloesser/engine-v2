@@ -18,6 +18,7 @@ export const SECTION_NAMES: Record<number, string> = {
 }
 
 const MSG_TYPE_FRAME = 0x01
+const MSG_TYPE_FRAME_BUNDLE = 0x06
 const FRAME_HEADER_BYTES = 10
 
 export interface ParsedFrame {
@@ -127,4 +128,27 @@ export function worstWindowBytes(
     if (sum > worst) worst = sum
   }
   return worst
+}
+
+/** Every whole frame a downlink message carries: a `Frame` is one, a `FrameBundle` (`wire/bundle.rs`:
+ * `[0x06][n varint]` then `n` x `[len varint][frame]`) is `n`; anything else, or a malformed body,
+ * is none. */
+export function parseMessage(bytes: Uint8Array): ParsedFrame[] {
+  if (bytes[0] === MSG_TYPE_FRAME) {
+    const f = parseFrame(bytes)
+    return f ? [f] : []
+  }
+  if (bytes[0] !== MSG_TYPE_FRAME_BUNDLE) return []
+  const count = readVarint(bytes, 1)
+  if (!count) return []
+  const out: ParsedFrame[] = []
+  let at = count.next
+  for (let i = 0; i < count.value; i++) {
+    const len = readVarint(bytes, at)
+    if (!len) return out
+    const f = parseFrame(bytes.subarray(len.next, len.next + len.value))
+    if (f) out.push(f)
+    at = len.next + len.value
+  }
+  return out
 }

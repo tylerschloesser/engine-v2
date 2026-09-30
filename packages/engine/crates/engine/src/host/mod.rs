@@ -8,6 +8,7 @@
 //! has already reserved the arena and parsed config, so `Host::init` only parses and holds the
 //! parameters; `sim_genesis` is what actually builds the `Sim<G>`.
 
+pub mod pacing;
 pub mod subs;
 pub mod warm;
 
@@ -34,6 +35,9 @@ use crate::wire::{
 use crate::world::{ChunkCoord, TilePos};
 use crate::world_access::chunk_of;
 use crate::worldgen::Worldgen;
+use pacing::{
+    BandwidthConfig, EnterKind, EnterPriority, PRISTINE_ENTER_COST, Pacing, PacingCounters,
+};
 use subs::SubscriptionSet;
 use warm::Warm;
 
@@ -147,6 +151,9 @@ struct ConnSlot<G: Game> {
     /// take`) -- a resume hint is only ever meaningful for the very first subscription a fresh
     /// `ConnSlot` ever forms; every later tick's enters are ordinary camera-driven ones.
     resume_pending: Option<(ResumeHint, ChunkCoord)>,
+    /// docs/plan/31-rates-and-integrity.md: the chunk-data bucket, the enter queue, the sent set,
+    /// the soft cap and degrade state, and their counters (`host/pacing.rs`).
+    pace: Pacing,
 }
 
 fn default_max_entities() -> u32 {
@@ -217,6 +224,9 @@ const GENESIS_BASE_TICK: u32 = 0xFFFF_FFFF;
 /// `build_frame`'s own doc comment has the mechanism.
 const HEARTBEAT_MS: u32 = 500;
 
+/// `sim_conn_counters`' pacing page selector (top bit of `conn`).
+pub const PACING_PAGE: u32 = 0x8000_0000;
+
 /// The `game` value of `InstanceConfig` (0009 `WorldConfig.params` plus the host-only
 /// `cacheChunks` knob), read once by `Host::init` and held until `sim_genesis` consumes the
 /// world-params half of it. `seed`/`params` are 0008's (shared with the `gen`/`client` roles of
@@ -265,6 +275,19 @@ struct SimConfig<P> {
     /// 0009's `WorldConfig.view.maxChunks`, the subscription cap -- default `128` (0010).
     #[serde(default = "default_view_max_chunks")]
     view_max_chunks: u16,
+    /// 0009 `WorldConfig.bandwidth` (0010 defaults when absent), docs/plan/31-rates-and-integrity.md.
+    #[serde(default)]
+    soft_cap_bytes_per_s: Option<u32>,
+    #[serde(default)]
+    chunk_refill_bytes_per_s: Option<u32>,
+    #[serde(default)]
+    chunk_burst_bytes: Option<u32>,
+    #[serde(default)]
+    hard_cap_bytes_per_s: Option<u32>,
+    /// No network between host and client (single-player's local host): see
+    /// [`BandwidthConfig::unpaced`].
+    #[serde(default)]
+    unpaced: bool,
 }
 
 fn default_view_max_tiles() -> u16 {
@@ -454,6 +477,8 @@ pub struct Host<G: Game> {
     /// `scratch_entered` would otherwise have classified `scratch_pristine`/`scratch_snapshot`,
     /// pulled out by the connection's own `resume_pending` diff before that classification runs.
     scratch_keep: Vec<ChunkCoord>,
+    /// This frame's estimated delta bytes per chunk (`build_frame`'s collapse pass).
+    scratch_delta_est: Vec<(ChunkCoord, u32)>,
     /// This tick's tile deltas for the connection being built, flat and deduplicated by
     /// `(chunk, index)` (last write wins) as they're gathered, sorted by `(cy, cx, index)` right
     /// before writing (host/mod Deviations: a flat, insertion-sorted `Vec` instead of a `Vec<(_,
@@ -526,6 +551,8 @@ pub struct Host<G: Game> {
     /// parsed once and retained for every `Welcome` this host ever builds.
     view_max_tiles_per_axis: u16,
     view_max_chunks: u16,
+    /// docs/plan/31-rates-and-integrity.md: the pacing every *new* connection starts with.
+    bandwidth: BandwidthConfig,
 
     // -- M22b: restore (load a snapshot) and replay (apply a log tail) drivers ------------------
     /// The in-progress snapshot decode [`Host::sim_restore_begin`] started, fed by
@@ -766,6 +793,7 @@ impl<G: Game> Host<G> {
             scratch_pristine: Vec::new(),
             scratch_snapshot: Vec::new(),
             scratch_keep: Vec::new(),
+            scratch_delta_est: Vec::with_capacity(160),
             scratch_tile_flat: Vec::new(),
             scratch_entity_ops: Vec::new(),
             scratch_action_players: Vec::new(),
@@ -779,6 +807,7 @@ impl<G: Game> Host<G> {
             worldgen_params_bytes,
             view_max_tiles_per_axis: default_view_max_tiles(),
             view_max_chunks: default_view_max_chunks(),
+            bandwidth: BandwidthConfig::default(),
             restore_reader: None,
             restore_done: None,
             restore_budget: None,
@@ -846,6 +875,51 @@ impl<G: Game> Host<G> {
         }
     }
 
+    /// Every chunk whose enter `conn` has been sent (the client's replica holds it).
+    #[cfg(any(test, feature = "testing"))]
+    pub fn debug_held(&self, conn: ConnId) -> Vec<ChunkCoord> {
+        match self.conns.get(conn as usize) {
+            Some(Some(slot)) => slot.pace.held.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Pacing counters and gauges for `conn` (`sim_conn_counters`' tail, docs/plan/
+    /// 31-rates-and-integrity.md): re-enters, cap evictions, late-visible ticks, degrade level,
+    /// queue depth and bucket level.
+    pub fn pacing_counters(&self, conn: ConnId) -> Option<PacingCounters> {
+        let slot = self.conns.get(conn as usize)?.as_ref()?;
+        let mut c = slot.pace.counters();
+        c.cap_evictions = slot.subs.cap_evictions();
+        Some(c)
+    }
+
+    /// Replaces the pacing every *subsequently connected* connection starts with (native tests; the
+    /// ABI path sets it from `WorldConfig.bandwidth` at init).
+    pub fn set_bandwidth(&mut self, cfg: BandwidthConfig) {
+        self.bandwidth = cfg;
+    }
+
+    /// The chunk-bucket entry point for a snapshot of a chunk `conn` already holds (docs/plan/
+    /// 31-rates-and-integrity.md Provides, M31b's resync answer): queued behind the same bucket,
+    /// sorted by `priority`, sent as a `ChunkSnapshots` entry. A chunk not held is ignored (its
+    /// ordinary enter is already a snapshot); already queued, it is upgraded to a snapshot.
+    pub fn enqueue_chunk_snapshot(
+        &mut self,
+        conn: ConnId,
+        coord: ChunkCoord,
+        priority: EnterPriority,
+    ) {
+        let tick = self.last_tick.0;
+        let Some(Some(slot)) = self.conns.get_mut(conn as usize) else {
+            return;
+        };
+        if slot.pace.is_held(coord) || slot.pace.queue_position(coord).is_some() {
+            slot.pace
+                .enqueue(coord, EnterKind::Resnapshot, priority, tick);
+        }
+    }
+
     /// A connection slot's assigned player, if it is currently connected.
     pub fn player_of(&self, conn: ConnId) -> Option<PlayerId> {
         self.conns.get(conn as usize)?.as_ref().map(|s| s.player)
@@ -910,6 +984,7 @@ impl<G: Game> Host<G> {
             presence_relayed: BTreeMap::new(),
             last_sent_tick: self.last_tick,
             resume_pending: None,
+            pace: Pacing::new(self.bandwidth, G::TICK_RATE, self.last_tick.0),
         });
         player
     }
@@ -961,6 +1036,7 @@ impl<G: Game> Host<G> {
             presence_relayed: BTreeMap::new(),
             last_sent_tick: self.last_tick,
             resume_pending: None,
+            pace: Pacing::new(self.bandwidth, G::TICK_RATE, self.last_tick.0),
         });
         player
     }
@@ -1195,6 +1271,7 @@ impl<G: Game> Host<G> {
             presence_relayed: BTreeMap::new(),
             last_sent_tick: self.last_tick,
             resume_pending,
+            pace: Pacing::new(self.bandwidth, G::TICK_RATE, self.last_tick.0),
         });
 
         self.write_welcome_for(player, epoch, welcome_sink);
@@ -1330,6 +1407,11 @@ impl<G: Game> Host<G> {
             && let Some(Some(slot)) = self.conns.get_mut(idx)
         {
             slot.camera = Some(camera);
+        }
+        // docs/plan/31-rates-and-integrity.md step 4: the one backpressure path on every host.
+        let now = self.last_tick.0;
+        if let Some(Some(slot)) = self.conns.get_mut(idx) {
+            slot.pace.on_uplink(now, batch.last_received_tick);
         }
         // docs/plan/19-presence-channel.md step 3: before the `raw_actions.is_empty()` early
         // return below -- a steady-state uplink batch typically carries a presence sample with no
@@ -1555,25 +1637,31 @@ impl<G: Game> Host<G> {
                 .iter()
                 .any(|(_, d)| matches!(d, Delta::Player { who, .. } if *who == slot.player));
 
-        // -- Enter / leave, sorted by (cy, cx) --------------------------------------------------
+        // -- Enter / leave, paced (docs/plan/31-rates-and-integrity.md step 3) ------------------------
+        // A subscription change is not a send: leaves drop a still-queued enter (the client never
+        // had it) or leave a held chunk; enters join the per-connection queue, which the chunk
+        // bucket then drains visible-first. `scratch_entered` below is what *this frame* sends.
+        let tick_now = self.last_tick.0;
+        self.scratch_left.clear();
+        for &c in slot.subs.left() {
+            if slot.pace.drop_queued(c) {
+                continue;
+            }
+            if slot.pace.is_held(c) {
+                slot.pace.note_left(c, tick_now);
+                self.scratch_left.push(c);
+            }
+        }
         self.scratch_entered.clear();
         self.scratch_entered.extend_from_slice(slot.subs.entered());
         insertion_sort_by_key(&mut self.scratch_entered, |c| (c.y, c.x));
-        self.scratch_left.clear();
-        self.scratch_left.extend_from_slice(slot.subs.left());
-        insertion_sort_by_key(&mut self.scratch_left, |c| (c.y, c.x));
 
         // docs/plan/28b-reconnect-and-lifecycle.md step 5: the resume hint's own diff, consumed
-        // exactly once (`Option::take`) against *this* tick's `scratch_entered` -- the very first
-        // subscription a fresh `ConnSlot` ever forms (`resume_pending` is only ever `Some` right
-        // after `attach`, and `ConnSlot::camera` is only seeded eagerly, ahead of the connection's
-        // own first real uplink camera report, when a resume hint proved a real camera -- Host::
-        // attach's own doc comment). `keep` chunks are pulled out of `scratch_entered` before the
-        // pristine/snapshot classification below ever sees them (0013 "3-byte keep": no bytes
-        // beyond the coordinate); `leave` chunks (held per the hint, unwanted by the new
-        // subscription) are folded into `scratch_left` directly, since `subs.left()` above can
-        // never itself report them -- this brand-new `SubscriptionSet` has never held anything to
-        // leave.
+        // exactly once (`Option::take`) against *this* tick's new enters -- the very first
+        // subscription a fresh `ConnSlot` ever forms. `keep` chunks are held at once (0013 "3-byte
+        // keep": no bytes beyond the coordinate, so no bucket cost); `leave` chunks (held per the
+        // hint, unwanted by the new subscription) are folded into `scratch_left` directly, since
+        // this brand-new `SubscriptionSet` has never held anything to leave.
         self.scratch_keep.clear();
         if let Some((hint, center)) = slot.resume_pending.take() {
             let chunk_versions = &self.chunk_versions;
@@ -1587,6 +1675,11 @@ impl<G: Game> Host<G> {
             self.scratch_entered.retain(|c| !diff.keep.contains(c));
             self.scratch_keep.extend_from_slice(&diff.keep);
             insertion_sort_by_key(&mut self.scratch_keep, |c| (c.y, c.x));
+            for &c in &diff.keep {
+                if !slot.pace.is_held(c) {
+                    slot.pace.held.push(c);
+                }
+            }
             for c in diff.leave {
                 if !self.scratch_left.contains(&c) {
                     self.scratch_left.push(c);
@@ -1594,30 +1687,120 @@ impl<G: Game> Host<G> {
             }
         }
 
+        // Priority: visible first, then nearest to `camera + velocity x 0.5 s` (0010 Bandwidth).
+        let dims = crate::world::ChunkDims::new(G::CHUNK_BITS);
+        let look_center = match slot.camera {
+            Some(cam) => {
+                let cam = subs::clamp_report(cam);
+                dims.chunk_of(TilePos::new(
+                    cam.center_x.saturating_add(cam.vel_x as i32 / 2),
+                    cam.center_y.saturating_add(cam.vel_y as i32 / 2),
+                ))
+            }
+            None => ChunkCoord::new(0, 0),
+        };
+        let priority = |subs: &SubscriptionSet, c: ChunkCoord| {
+            let dx = c.x as i64 - look_center.x as i64;
+            let dy = c.y as i64 - look_center.y as i64;
+            EnterPriority {
+                visible: subs.is_visible(c),
+                dist_sq: dx * dx + dy * dy,
+            }
+        };
+        for &c in &self.scratch_entered {
+            let p = priority(&slot.subs, c);
+            slot.pace.enqueue(c, EnterKind::Enter, p, tick_now);
+        }
+        for q in slot.pace.queue.iter_mut() {
+            let p = priority(&slot.subs, q.chunk);
+            q.key = (u8::from(!p.visible), p.dist_sq);
+            if p.visible && q.visible_since.is_none() {
+                q.visible_since = Some(tick_now);
+            }
+        }
+        insertion_sort_by_key(&mut slot.pace.queue, |q| (q.key, q.chunk.y, q.chunk.x));
+
+        // Drain the queue through the bucket, strictly in priority order. A chunk costs its
+        // standalone snapshot bytes (a pristine enter ~3 B); the bucket may not pay for more than
+        // half the output buffer in one frame (a 128 KB burst is spread over a few ticks).
+        slot.pace.refill(tick_now);
+        let burst = slot.pace.cfg().chunk_burst_bytes as i64;
+        let frame_cap = (out.len() / 2) as i64;
+        let mut spent = 0i64;
+        self.scratch_entered.clear();
         self.scratch_pristine.clear();
         self.scratch_snapshot.clear();
-        for &c in &self.scratch_entered {
-            let has_overlay = store.terrain().overlay(c).is_some_and(|o| !o.is_empty());
-            // M21: a `ChunkIndex` lookup (docs/plan/21-entities-and-timers.md, `encode_chunk_
-            // snapshot`'s own doc comment) -- the O(all entities) scan this replaced is gone, not
-            // merely deferred.
-            let has_entity = !store.chunk_overlapping(c).is_empty();
-            if has_overlay || has_entity {
+        while let Some(&q) = slot.pace.queue.first() {
+            let c = q.chunk;
+            let snapshot = q.kind == EnterKind::Resnapshot
+                || store.terrain().overlay(c).is_some_and(|o| !o.is_empty())
+                || !store.chunk_overlapping(c).is_empty();
+            let cost = if snapshot {
+                let version = self.chunk_versions.get(&c).copied().unwrap_or(0);
+                let mut count = crate::bytes::CountSink::default();
+                encode_chunk_snapshot(store, c, version, &mut count);
+                count.0 as i64
+            } else {
+                PRISTINE_ENTER_COST
+            };
+            let affordable = slot.pace.tokens >= cost || slot.pace.tokens >= burst;
+            if !affordable || (spent > 0 && spent + cost > frame_cap) {
+                break;
+            }
+            slot.pace.tokens -= cost;
+            spent += cost;
+            slot.pace.queue.remove(0);
+            // Visible first: nothing goes out while a visible chunk waits behind it.
+            if !slot.subs.is_visible(c)
+                && slot
+                    .pace
+                    .queue
+                    .iter()
+                    .any(|w| w.kind == EnterKind::Enter && slot.subs.is_visible(w.chunk))
+            {
+                slot.pace.order_violations += 1;
+            }
+            self.scratch_entered.push(c);
+            if snapshot {
                 self.scratch_snapshot.push(c);
             } else {
                 self.scratch_pristine.push(c);
             }
+            if let Some(t) = q.visible_since {
+                slot.pace.note_late_visible(tick_now.wrapping_sub(t));
+            }
+            match q.kind {
+                EnterKind::Enter => {
+                    if slot.pace.is_reenter(c, tick_now) {
+                        slot.pace.reenters_within_5s += 1;
+                        slot.pace.reenter_bytes += cost as u64;
+                    }
+                    if !slot.pace.is_held(c) {
+                        slot.pace.held.push(c);
+                    }
+                }
+                EnterKind::Resnapshot => {
+                    slot.pace.collapsed.retain(|&x| x != c);
+                    slot.pace.delta_est.retain(|(x, _)| *x != c);
+                }
+            }
         }
+        insertion_sort_by_key(&mut self.scratch_entered, |c| (c.y, c.x));
+        insertion_sort_by_key(&mut self.scratch_pristine, |c| (c.y, c.x));
+        insertion_sort_by_key(&mut self.scratch_snapshot, |c| (c.y, c.x));
+        insertion_sort_by_key(&mut self.scratch_left, |c| (c.y, c.x));
 
         // -- ChunkDeltas: tiles + entity ops for subscribed, non-entering chunks ---------------
         self.scratch_tile_flat.clear();
         self.scratch_entity_ops.clear();
-        let dims = crate::world::ChunkDims::new(G::CHUNK_BITS);
         for (scopes, delta) in changes {
             match delta {
                 Delta::Tile { pos, tile } => {
                     let chunk = chunk_of::<G>(*pos);
-                    if slot.subs.is_subscribed(chunk) && !self.scratch_entered.contains(&chunk) {
+                    if slot.pace.is_held(chunk)
+                        && !slot.pace.is_collapsed(chunk)
+                        && !self.scratch_entered.contains(&chunk)
+                    {
                         let index = dims.local_index(*pos);
                         match self
                             .scratch_tile_flat
@@ -1656,7 +1839,7 @@ impl<G: Game> Host<G> {
                     let mut left_a_delta_chunk = false;
                     for scope in scopes.iter() {
                         let Scope::Chunk(c) = scope else { continue };
-                        if !slot.subs.is_subscribed(c) {
+                        if !slot.pace.is_held(c) {
                             continue;
                         }
                         let entering = self.scratch_entered.contains(&c);
@@ -1664,7 +1847,7 @@ impl<G: Game> Host<G> {
                             store.chunk_overlapping(c).binary_search(id).is_ok();
                         if currently_overlaps {
                             visible_anywhere = true;
-                            if !entering {
+                            if !entering && !slot.pace.is_collapsed(c) {
                                 deliver_put = true;
                             }
                         } else if !entering {
@@ -1680,7 +1863,7 @@ impl<G: Game> Host<G> {
                 Delta::EntityGone { id } => {
                     let in_scope = scopes.iter().any(|s| match s {
                         Scope::Chunk(c) => {
-                            slot.subs.is_subscribed(c) && !self.scratch_entered.contains(&c)
+                            slot.pace.is_held(c) && !self.scratch_entered.contains(&c)
                         }
                         _ => false,
                     });
@@ -1698,6 +1881,50 @@ impl<G: Game> Host<G> {
             }
         }
         insertion_sort_by_key(&mut self.scratch_tile_flat, |(c, i, _)| (c.y, c.x, *i));
+
+        // -- Collapse (0010 "Soft cap": a chunk whose queued deltas exceed its snapshot is sent as a
+        // snapshot instead): tally this frame's estimated delta bytes per chunk on top of what is
+        // already queued for the connection since its last send; past the chunk's snapshot size,
+        // stop sending its deltas and queue a whole snapshot through the bucket.
+        self.scratch_delta_est.clear();
+        for &(chunk, _, _) in &self.scratch_tile_flat {
+            add_estimate(&mut self.scratch_delta_est, chunk, 6);
+        }
+        for &(id, kind) in &self.scratch_entity_ops {
+            if kind == EntityOpKind::Put
+                && let Some(e) = store.entity(id)
+            {
+                let mut count = crate::bytes::CountSink::default();
+                let _ = encode_to(e, &mut count);
+                add_estimate(
+                    &mut self.scratch_delta_est,
+                    chunk_of::<G>(G::anchor(e)),
+                    2 + count.0 as u32,
+                );
+            }
+        }
+        for i in 0..self.scratch_delta_est.len() {
+            let (chunk, est) = self.scratch_delta_est[i];
+            let pending = slot.pace.add_delta_est(chunk, est);
+            let version = self.chunk_versions.get(&chunk).copied().unwrap_or(0);
+            let mut snapshot_len = crate::bytes::CountSink::default();
+            encode_chunk_snapshot(store, chunk, version, &mut snapshot_len);
+            if pending <= pacing::MIN_COLLAPSE_BYTES.max(snapshot_len.0 as u32) {
+                continue;
+            }
+            self.scratch_tile_flat.retain(|(c, _, _)| *c != chunk);
+            self.scratch_entity_ops.retain(|&(id, kind)| {
+                !(kind == EntityOpKind::Put
+                    && store
+                        .entity(id)
+                        .is_some_and(|e| chunk_of::<G>(G::anchor(e)) == chunk))
+            });
+            slot.pace.collapsed.push(chunk);
+            slot.pace.delta_est.retain(|(c, _)| *c != chunk);
+            slot.pace.collapses += 1;
+            let p = priority(&slot.subs, chunk);
+            slot.pace.enqueue(chunk, EnterKind::Resnapshot, p, tick_now);
+        }
 
         // -- Presence: relay, >= 1 Hz re-relay, Gone (docs/plan/19-presence-channel.md steps 4-6,
         // Planning decisions) --------------------------------------------------------------------
@@ -1752,6 +1979,7 @@ impl<G: Game> Host<G> {
         let want_action_results = !slot.pending_results.is_empty();
 
         // -- Nothing to say? ---------------------------------------------------------------------
+        let mut build = true;
         // docs/plan/28-sessions-and-reconnect.md step 4 (0010 Rates: "a heartbeat frame at least
         // every 500 ms"), tick-based, not a wall-clock timer, so it stays deterministic and
         // replayable exactly like every other tick-path decision here: when every `want_*`/
@@ -1778,133 +2006,194 @@ impl<G: Game> Host<G> {
             let heartbeat_ticks = G::TICK_RATE.millis(HEARTBEAT_MS).0;
             let since_last_send = self.last_tick.0.wrapping_sub(slot.last_sent_tick.0);
             if since_last_send < heartbeat_ticks {
-                return 0;
+                build = false;
             }
         }
 
-        let header = FrameHeader {
-            tick: self.last_tick.0,
-            ack_seq,
+        // Every section below is written only when there is a frame to build; otherwise the
+        // pacing tail still runs (a held frame may be due, the soft-cap window must advance).
+        let n = if build {
+            let header = FrameHeader {
+                tick: self.last_tick.0,
+                ack_seq,
+            };
+            let mut sink = crate::bytes::SliceSink::new(out);
+            let mut fw = FrameWriter::new(&mut sink, header);
+
+            // `ActionResults` is section id 1, the lowest: `FrameWriter::section` requires strictly
+            // ascending ids, so this must be written before `Global` (id 2).
+            if want_action_results {
+                let results = &slot.pending_results;
+                fw.section(SectionId::ActionResults, |s| {
+                    ActionResultsWriter::write::<G>(s, results.iter());
+                });
+            }
+
+            if want_roster || want_global_value {
+                let roster = &self.scratch_roster;
+                let global_val = store.global();
+                fw.section(SectionId::Global, |s| {
+                    write_global::<G>(
+                        s,
+                        want_roster.then(|| roster.iter().copied()),
+                        want_global_value.then_some(global_val),
+                    );
+                });
+            }
+            if player_changed && let Ok(state) = store.player(slot.player) {
+                fw.section(SectionId::OwnPlayer, |s| {
+                    write_own_player::<G>(s, slot.player, state);
+                });
+            }
+            if !self.scratch_pristine.is_empty() {
+                let pristine = &self.scratch_pristine;
+                fw.section(SectionId::ChunkEnterPristine, |s| {
+                    let mut w = ChunkCoordListWriter::new();
+                    for &c in pristine {
+                        w.write(s, c);
+                    }
+                });
+            }
+            if !self.scratch_snapshot.is_empty() {
+                let snapshot = &self.scratch_snapshot;
+                let version_of = |c: ChunkCoord| self.chunk_versions.get(&c).copied().unwrap_or(0);
+                fw.section(SectionId::ChunkSnapshots, |s| {
+                    let mut w = SnapshotWriter::new();
+                    for &c in snapshot {
+                        w.write_chunk(s, store, c, version_of(c));
+                    }
+                });
+            }
+            if !self.scratch_left.is_empty() {
+                let left = &self.scratch_left;
+                fw.section(SectionId::ChunkLeaves, |s| {
+                    let mut w = ChunkCoordListWriter::new();
+                    for &c in left {
+                        w.write(s, c);
+                    }
+                });
+            }
+            if !self.scratch_tile_flat.is_empty() || !self.scratch_entity_ops.is_empty() {
+                let tiles = &self.scratch_tile_flat;
+                let ops = &self.scratch_entity_ops;
+                fw.section(SectionId::ChunkDeltas, |s| {
+                    write_chunk_deltas_flat::<G>(s, tiles, ops, store);
+                });
+            }
+            if !self.scratch_presence.is_empty() {
+                let presence_ops = &self.scratch_presence;
+                fw.section(SectionId::Presence, |s| {
+                    write_presence_flat::<G>(s, presence_ops);
+                });
+            }
+            // docs/plan/28b-reconnect-and-lifecycle.md step 5: `SectionId::ChunkKeeps` = 11, the
+            // highest id (`FrameWriter::section`'s own strictly-ascending requirement) -- written last,
+            // after `Presence` (8). Same coordinate-list shape `ChunkEnterPristine`/`ChunkLeaves`
+            // already use (`session::resume`'s own `golden_keep_entries` pins the exact bytes).
+            if !self.scratch_keep.is_empty() {
+                let keep = &self.scratch_keep;
+                fw.section(SectionId::ChunkKeeps, |s| {
+                    let mut w = ChunkCoordListWriter::new();
+                    for &c in keep {
+                        w.write(s, c);
+                    }
+                });
+            }
+
+            let _ = fw;
+            // `SliceSink`'s own overflow convention: a too-small `out` never panics, it just drops the
+            // overflow bytes silently and `finish()` reports it. `build_frame`'s `out` is caller-sized
+            // (a real connection's send buffer, `testkit::Loopback`'s own fixed frame buffer in
+            // tests); running out of room here is Non-scope (0010's pacing/backpressure, M31), so a
+            // `Full` result is treated as "wrote nothing" rather than plumbed through `build_frame`'s
+            // `usize`-only return.
+            sink.finish().unwrap_or(0)
+        } else {
+            0
         };
-        let mut sink = crate::bytes::SliceSink::new(out);
-        let mut fw = FrameWriter::new(&mut sink, header);
-
-        // `ActionResults` is section id 1, the lowest: `FrameWriter::section` requires strictly
-        // ascending ids, so this must be written before `Global` (id 2).
-        if want_action_results {
-            let results = &slot.pending_results;
-            fw.section(SectionId::ActionResults, |s| {
-                ActionResultsWriter::write::<G>(s, results.iter());
-            });
-        }
-
-        if want_roster || want_global_value {
-            let roster = &self.scratch_roster;
-            let global_val = store.global();
-            fw.section(SectionId::Global, |s| {
-                write_global::<G>(
-                    s,
-                    want_roster.then(|| roster.iter().copied()),
-                    want_global_value.then_some(global_val),
-                );
-            });
-        }
-        if player_changed && let Ok(state) = store.player(slot.player) {
-            fw.section(SectionId::OwnPlayer, |s| {
-                write_own_player::<G>(s, slot.player, state);
-            });
-        }
-        if !self.scratch_pristine.is_empty() {
-            let pristine = &self.scratch_pristine;
-            fw.section(SectionId::ChunkEnterPristine, |s| {
-                let mut w = ChunkCoordListWriter::new();
-                for &c in pristine {
-                    w.write(s, c);
-                }
-            });
-        }
-        if !self.scratch_snapshot.is_empty() {
-            let snapshot = &self.scratch_snapshot;
-            let version_of = |c: ChunkCoord| self.chunk_versions.get(&c).copied().unwrap_or(0);
-            fw.section(SectionId::ChunkSnapshots, |s| {
-                let mut w = SnapshotWriter::new();
-                for &c in snapshot {
-                    w.write_chunk(s, store, c, version_of(c));
-                }
-            });
-        }
-        if !self.scratch_left.is_empty() {
-            let left = &self.scratch_left;
-            fw.section(SectionId::ChunkLeaves, |s| {
-                let mut w = ChunkCoordListWriter::new();
-                for &c in left {
-                    w.write(s, c);
-                }
-            });
-        }
-        if !self.scratch_tile_flat.is_empty() || !self.scratch_entity_ops.is_empty() {
-            let tiles = &self.scratch_tile_flat;
-            let ops = &self.scratch_entity_ops;
-            fw.section(SectionId::ChunkDeltas, |s| {
-                write_chunk_deltas_flat::<G>(s, tiles, ops, store);
-            });
-        }
-        if !self.scratch_presence.is_empty() {
-            let presence_ops = &self.scratch_presence;
-            fw.section(SectionId::Presence, |s| {
-                write_presence_flat::<G>(s, presence_ops);
-            });
-        }
-        // docs/plan/28b-reconnect-and-lifecycle.md step 5: `SectionId::ChunkKeeps` = 11, the
-        // highest id (`FrameWriter::section`'s own strictly-ascending requirement) -- written last,
-        // after `Presence` (8). Same coordinate-list shape `ChunkEnterPristine`/`ChunkLeaves`
-        // already use (`session::resume`'s own `golden_keep_entries` pins the exact bytes).
-        if !self.scratch_keep.is_empty() {
-            let keep = &self.scratch_keep;
-            fw.section(SectionId::ChunkKeeps, |s| {
-                let mut w = ChunkCoordListWriter::new();
-                for &c in keep {
-                    w.write(s, c);
-                }
-            });
-        }
-
-        let _ = fw;
-        // `SliceSink`'s own overflow convention: a too-small `out` never panics, it just drops the
-        // overflow bytes silently and `finish()` reports it. `build_frame`'s `out` is caller-sized
-        // (a real connection's send buffer, `testkit::Loopback`'s own fixed frame buffer in
-        // tests); running out of room here is Non-scope (0010's pacing/backpressure, M31), so a
-        // `Full` result is treated as "wrote nothing" rather than plumbed through `build_frame`'s
-        // `usize`-only return.
-        let n = sink.finish().unwrap_or(0);
-        slot.counters.frames += 1;
-        slot.counters.bytes_down += n as u64;
-        slot.counters.chunk_enters_pristine += self.scratch_pristine.len() as u64;
-        slot.counters.chunk_snapshots += self.scratch_snapshot.len() as u64;
-        slot.counters.chunk_leaves += self.scratch_left.len() as u64;
-        slot.first_frame_pending = false;
-        // docs/plan/28-sessions-and-reconnect.md step 4: this tick counts as "sent something" --
-        // a real frame or a heartbeat, both reset the same countdown.
-        slot.last_sent_tick = self.last_tick;
-        // This connection's own results have now had their one chance to ride a frame (Scope:
-        // "outcomes go to the sender's next build_frame"); clear so `pending_results` never grows
-        // past what a single tick's worth of admissions/applies can add (host/mod Deviations).
-        slot.pending_results.clear();
-        // Commits what this build decided to send (docs/plan/19-presence-channel.md steps 4-6),
-        // independent of `SliceSink`'s own overflow outcome -- the same "committed regardless of a
-        // truncated write" convention every other per-tick bookkeeping field above already follows
-        // (`first_frame_pending`, `pending_results.clear()`).
-        for (who, op) in self.scratch_presence.drain(..) {
-            match op {
-                PresenceRelayOp::Sample { .. } => {
-                    slot.presence_relayed.insert(who, self.last_tick);
-                }
-                PresenceRelayOp::Gone => {
-                    slot.presence_relayed.remove(&who);
+        if build {
+            slot.counters.frames += 1;
+            slot.counters.chunk_enters_pristine += self.scratch_pristine.len() as u64;
+            slot.counters.chunk_snapshots += self.scratch_snapshot.len() as u64;
+            slot.counters.chunk_leaves += self.scratch_left.len() as u64;
+            slot.first_frame_pending = false;
+            // This connection's own results have now had their one chance to ride a frame (Scope:
+            // "outcomes go to the sender's next build_frame"); clear so `pending_results` never grows
+            // past what a single tick's worth of admissions/applies can add (host/mod Deviations).
+            slot.pending_results.clear();
+            // Commits what this build decided to send (docs/plan/19-presence-channel.md steps 4-6),
+            // independent of `SliceSink`'s own overflow outcome -- the same "committed regardless of a
+            // truncated write" convention every other per-tick bookkeeping field above already follows
+            // (`first_frame_pending`, `pending_results.clear()`).
+            for (who, op) in self.scratch_presence.drain(..) {
+                match op {
+                    PresenceRelayOp::Sample { .. } => {
+                        slot.presence_relayed.insert(who, self.last_tick);
+                    }
+                    PresenceRelayOp::Gone => {
+                        slot.presence_relayed.remove(&who);
+                    }
                 }
             }
         }
-        n
+
+        // -- Pacing tail (docs/plan/31-rates-and-integrity.md step 4) ---------------------------
+        // The soft cap counts every byte but the chunk data the bucket paid for; a client over it,
+        // or lagging (`tick - last_received_tick`), gets one message per 2nd or 4th tick, its
+        // frames concatenated whole in a `FrameBundle` and applied one by one on arrival.
+        let tick = self.last_tick.0;
+        let chunk_bytes = if build { spent.min(n as i64) as u32 } else { 0 };
+        slot.pace
+            .account_frame(tick, (n as u32).saturating_sub(chunk_bytes));
+        let level = slot.pace.level as u32;
+        let heartbeat_ticks = G::TICK_RATE.millis(HEARTBEAT_MS).0;
+        let pace = &mut slot.pace;
+        if pace.hold_frames == 0 && level == 1 {
+            // Undegraded: the frame goes out as built, byte for byte as before pacing existed.
+            if n > 0 {
+                slot.counters.bytes_down += n as u64;
+                slot.last_sent_tick = self.last_tick;
+                pace.note_emit(tick);
+                pace.delta_est.clear();
+            }
+            return n;
+        }
+        // A pure heartbeat rides only when nothing is held (it exists to break silence).
+        let heartbeat_only = n == 10;
+        if n > 0 && !(heartbeat_only && pace.hold_frames > 0) {
+            if pace.hold_frames == 0 {
+                pace.held_since = tick;
+            }
+            let mut len = [0u8; 10];
+            let mut ls = SliceSink::new(&mut len);
+            ls.put_varint(n as u64);
+            let ln = ls.finish().unwrap_or(0);
+            pace.hold.extend_from_slice(&len[..ln]);
+            pace.hold.extend_from_slice(&out[..n]);
+            pace.hold_frames += 1;
+        }
+        let since_emit = tick.wrapping_sub(slot.last_sent_tick.0);
+        let waited = tick.wrapping_sub(pace.held_since) + 1;
+        let due = pace.hold_frames > 0
+            && (level == 1
+                || waited >= level
+                || since_emit >= heartbeat_ticks
+                || pace.hold.len() >= out.len() / 2);
+        if !due {
+            return 0;
+        }
+        let (emitted, frames) = pace.take_bundle(out);
+        if frames > 1 {
+            pace.bundles += 1;
+        }
+        if pace.hold_frames > 0 {
+            pace.held_since = tick;
+        }
+        slot.counters.bytes_down += emitted as u64;
+        slot.last_sent_tick = self.last_tick;
+        pace.note_emit(tick);
+        pace.delta_est.clear();
+        emitted
     }
 
     /// M05 state hash over `encode_chunk_snapshot` of every chunk `conn` is subscribed to (ordered
@@ -1919,7 +2208,8 @@ impl<G: Game> Host<G> {
             return 0;
         };
         let store = sim.authority().store();
-        let mut chunks: Vec<ChunkCoord> = slot.subs.chunks().collect();
+        // Held (enter sent), not merely subscribed: a queued enter is not in the client's replica.
+        let mut chunks: Vec<ChunkCoord> = slot.pace.held.clone();
         insertion_sort_by_key(&mut chunks, |c| (c.y, c.x));
         let mut h = crate::hash::Fnv64::new();
         for c in chunks {
@@ -1948,6 +2238,13 @@ fn insertion_sort_by_key<T, K: PartialOrd>(v: &mut [T], key: impl Fn(&T) -> K) {
 }
 
 /// Last-write-wins upsert into a connection's per-tick entity-op list.
+fn add_estimate(est: &mut Vec<(ChunkCoord, u32)>, chunk: ChunkCoord, bytes: u32) {
+    match est.iter_mut().find(|(c, _)| *c == chunk) {
+        Some(e) => e.1 += bytes,
+        None => est.push((chunk, bytes)),
+    }
+}
+
 fn upsert_entity_op(
     ops: &mut Vec<(crate::game::EntityId, EntityOpKind)>,
     id: crate::game::EntityId,
@@ -2120,6 +2417,7 @@ where
             scratch_pristine: Vec::new(),
             scratch_snapshot: Vec::new(),
             scratch_keep: Vec::new(),
+            scratch_delta_est: Vec::with_capacity(160),
             scratch_tile_flat: Vec::new(),
             scratch_entity_ops: Vec::new(),
             scratch_action_players: Vec::new(),
@@ -2133,6 +2431,22 @@ where
             worldgen_params_bytes,
             view_max_tiles_per_axis: cfg.view_max_tiles_per_axis,
             view_max_chunks: cfg.view_max_chunks,
+            bandwidth: {
+                let d = BandwidthConfig::default();
+                BandwidthConfig {
+                    soft_cap_bytes_per_s: cfg
+                        .soft_cap_bytes_per_s
+                        .unwrap_or(d.soft_cap_bytes_per_s),
+                    chunk_refill_bytes_per_s: cfg
+                        .chunk_refill_bytes_per_s
+                        .unwrap_or(d.chunk_refill_bytes_per_s),
+                    chunk_burst_bytes: cfg.chunk_burst_bytes.unwrap_or(d.chunk_burst_bytes),
+                    hard_cap_bytes_per_s: cfg
+                        .hard_cap_bytes_per_s
+                        .unwrap_or(d.hard_cap_bytes_per_s),
+                    unpaced: cfg.unpaced,
+                }
+            },
             restore_reader: None,
             restore_done: None,
             restore_budget: None,
@@ -3076,6 +3390,39 @@ where
     /// `netCounters`' own `uplinkPresenceBytes`. `presence_oversize` (added step 3) still has no
     /// ABI reader: nothing in this milestone's own exit criteria needs it from a browser test.
     fn sim_conn_counters(&mut self, conn: u32, result: &mut [u8]) -> Status {
+        // docs/plan/31-rates-and-integrity.md: `conn` with the top bit set selects the *pacing
+        // page* of the same export (no new ABI row): fourteen little-endian `u32`s, in order
+        // `reenters_within_5s`, `reenter_bytes`, `cap_evictions`, `late_visible_max`,
+        // `late_visible_p95`, `degrade_level`, `degraded_ticks`, `queued_enters`, `bucket_tokens`
+        // (`i32`), `held_chunks`, `collapses`, `bundles`, `max_emit_gap`, `order_violations` -- 56 bytes, all zero for an unknown conn.
+        if conn & PACING_PAGE != 0 {
+            let Some(out) = result.get_mut(..56) else {
+                return Status::BadLength;
+            };
+            let c = self
+                .pacing_counters(conn & !PACING_PAGE)
+                .unwrap_or_default();
+            let fields: [u32; 14] = [
+                c.reenters_within_5s as u32,
+                c.reenter_bytes as u32,
+                c.cap_evictions as u32,
+                c.late_visible_max as u32,
+                c.late_visible_p95 as u32,
+                c.degrade_level as u32,
+                c.degraded_ticks as u32,
+                c.queued_enters as u32,
+                c.bucket_tokens as i32 as u32,
+                c.held_chunks as u32,
+                c.collapses as u32,
+                c.bundles as u32,
+                c.max_emit_gap as u32,
+                c.order_violations as u32,
+            ];
+            for (i, f) in fields.iter().enumerate() {
+                out[i * 4..i * 4 + 4].copy_from_slice(&f.to_le_bytes());
+            }
+            return Status::Ok;
+        }
         let Some(out) = result.get_mut(..56) else {
             return Status::BadLength;
         };

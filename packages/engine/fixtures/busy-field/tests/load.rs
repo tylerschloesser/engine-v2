@@ -79,10 +79,10 @@ fn steady_field_puts_80_per_second_at_about_16_bytes() {
     assert_eq!(FIELD_MACHINES, 200);
     assert_eq!(puts, 400, "200 machines x 2 puts per 5 s = 80 puts/s");
     // 100 frames of 10 B header plus a 3 B section id and length, then the puts themselves: about
-    // 15.4 B each, 0010's "~16 B".
+    // 14.4 B each, 0010's "~16 B".
     let per_put = (bytes - 100 * 13) as f64 / puts as f64;
     assert!((14.0..=17.0).contains(&per_put), "{per_put} B per put");
-    assert_eq!(bytes, 7_446, "pinned: 5 s of the steady field, one client");
+    assert_eq!(bytes, 7_046, "pinned: 5 s of the steady field, one client");
 }
 
 #[test]
@@ -97,10 +97,10 @@ fn dense_chunk_is_about_4_kb() {
     assert_eq!(c.chunk_snapshots, 9);
     let per_chunk = c.bytes_down as f64 / 9.0;
     assert!(
-        (3_500.0..=4_500.0).contains(&per_chunk),
-        "a dense chunk is ~4 KB (0010): {per_chunk} B"
+        (3_000.0..=4_500.0).contains(&per_chunk),
+        "a dense chunk is ~4 KB (0010; 3-byte entity ids in a big world add ~0.5 KB): {per_chunk} B"
     );
-    assert_eq!(c.bytes_down, 35_195, "pinned: nine dense chunks, one join");
+    assert_eq!(c.bytes_down, 31_091, "pinned: nine dense chunks, one join");
     assert_eq!(CHUNK_ENTITIES, 200);
 }
 

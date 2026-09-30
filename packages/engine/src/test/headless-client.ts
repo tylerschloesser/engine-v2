@@ -126,6 +126,12 @@ export interface HeadlessClient {
    * synthetic square viewport (Deviations above) so a real subscription still forms. Takes effect
    * on the next `stepFrame` call. */
   setCamera(opts: { x: number; y: number; tilesAcross: number }): void
+  /** docs/plan/31-rates-and-integrity.md Provides: scripted motion on the virtual clock. Every
+   * `stepFrame(dtMs)` moves the camera centre `tilesPerS * dtMs / 1000` tiles toward `(x, y)` (never
+   * past it) and reports that speed as the view's velocity; on arrival the velocity is zero. The
+   * view extent is whatever `setCamera`/`setView` last set. A later `setCamera`/`setView` cancels
+   * the pan. */
+  panTo(x: number, y: number, tilesPerS: number): void
   /** The last kind-1 `Ui` record's decoded JSON (`src/CLAUDE.md`'s own `uiRing` framing, read here
    * directly off `client_poll_ui()` rather than through a ring), or `null` before the first one. */
   ui(): unknown
@@ -440,6 +446,27 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
     readClock()
   }
 
+  let pan: { x: number; y: number; tilesPerS: number } | null = null
+
+  function advancePan(p: { x: number; y: number; tilesPerS: number }, dtMs: number): void {
+    const dx = p.x - cameraState.centreX
+    const dy = p.y - cameraState.centreY
+    const dist = Math.hypot(dx, dy)
+    const step = (p.tilesPerS * dtMs) / 1000
+    if (dist <= step || dist === 0) {
+      cameraState.centreX = p.x
+      cameraState.centreY = p.y
+      cameraState.velocityX = 0
+      cameraState.velocityY = 0
+      pan = null
+      return
+    }
+    cameraState.centreX += (dx / dist) * step
+    cameraState.centreY += (dy / dist) * step
+    cameraState.velocityX = Math.round((dx / dist) * p.tilesPerS)
+    cameraState.velocityY = Math.round((dy / dist) * p.tilesPerS)
+  }
+
   function dispatch(action: unknown): number {
     readClock()
     if (clockScratch[CLOCK_FIELD.SessionState] !== SessionState.Online) {
@@ -470,6 +497,7 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
   return {
     dispatch,
     setView(report) {
+      pan = null
       cameraState.centreX = report.x
       cameraState.centreY = report.y
       cameraState.halfExtentTilesX = report.halfW
@@ -477,7 +505,11 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
       cameraState.velocityX = report.velX ?? 0
       cameraState.velocityY = report.velY ?? 0
     },
+    panTo(x, y, tilesPerS) {
+      pan = { x, y, tilesPerS }
+    },
     setCamera(opts) {
+      pan = null
       cameraState.centreX = opts.x
       cameraState.centreY = opts.y
       cameraState.tilesAcross = opts.tilesAcross
@@ -518,6 +550,7 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
     },
     pump,
     stepFrame(dtMs) {
+      if (pan) advancePan(pan, dtMs)
       cameraState.frameTimeMs += dtMs
       writeCameraBlock(cameraWriter, cameraState)
       readCameraBlockInto(cameraWriter, cameraRegion.u8, 0)

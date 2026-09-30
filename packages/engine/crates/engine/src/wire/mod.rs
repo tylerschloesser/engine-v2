@@ -26,6 +26,7 @@
 //! spec is not self-describing only in the sense of *type* -- boundaries are exact): a reader
 //! decodes from [`ByteReader::rest`] and advances past exactly the bytes `codec::decode` consumed.
 
+pub mod bundle;
 pub mod coordlist;
 pub mod deltas;
 pub mod global;
@@ -38,6 +39,7 @@ pub mod uplink;
 use crate::bytes::{ByteReader, ByteSink, CountSink};
 use crate::codec::CodecError;
 
+pub use bundle::{BundleReader, bundle_overhead, write_bundle};
 pub use coordlist::{ChunkCoordListReader, ChunkCoordListWriter};
 pub use deltas::{EntityDeltaOp, EntityOp, read_chunk_deltas, write_chunk_deltas};
 pub use global::{read_global, read_own_player, write_global, write_own_player};
@@ -97,7 +99,7 @@ fn varint_u32(r: &mut ByteReader) -> Result<u32, WireError> {
 }
 
 /// The post-handshake message-type byte (Planning decisions "Message type byte"): the first byte
-/// of every message in either direction. `0x06..=0x7F` are free; `Hello`/`Reject` (0013, M28) start
+/// of every message in either direction. `0x07..=0x7F` are free; `Hello`/`Reject` (0013, M28) start
 /// with the frozen magic `u32` instead, whose first byte is `>= 0x80` (0024 §8) so the two framings
 /// never collide.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -108,6 +110,8 @@ pub enum MsgType {
     Welcome = 0x03,
     ResyncChunk = 0x04,
     Bye = 0x05,
+    /// Several whole `Frame`s in one message (M31 step 4, `wire/bundle.rs`).
+    FrameBundle = 0x06,
 }
 
 /// A frame section id (Planning decisions "Section ids" -- the table is this crate's single home
