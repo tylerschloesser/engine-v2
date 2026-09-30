@@ -1,6 +1,6 @@
 # M33b: Reference game: furnace deposit, take, pick-up, smelting and panel
 
-Status: not started · After: 33 · Tyler-dependent: R2 (`FurnaceTake` opts out of prediction; unanswered; default assumed: yes), see `docs/plan/questions-for-tyler.md`. R3 is answered: "pick up an empty furnace" is a Requirement and is built here
+Status: done · After: 33 · Tyler-dependent: R2 (`FurnaceTake` opts out of prediction; unanswered; default assumed: yes), see `docs/plan/questions-for-tyler.md`. R3 is answered: "pick up an empty furnace" is a Requirement and is built here
 
 Split from M33 during planning (see that brief).
 
@@ -58,11 +58,11 @@ Removing a furnace that is not empty, or any removal other than pick-up; taking 
 - Browser: `reference_furnace_flow` (place, tap the furnace, panel anchored to it, deposit iron and coal, step one smelt, bar and lit frame present in the DrawList, take all, inventory shows the ingot), `reference_furnace_panel_survives_swap` (open the panel on a predicted furnace, step across the ack, panel still open on the same tile), `reference_furnace_pick_up` (Pick up is disabled while anything is inside; after take-all on a furnace with no fuel left it enables; a press removes the furnace record from the DrawList in the next published frame, closes the panel, and the inventory shows the furnace item; placing it again works).
 
 ## Exit criteria
-- [ ] All tests above pass by name.
-- [ ] The reference game removes an entity: `pickup_empty_despawns_and_returns_item`, `predicted_pickup_tombstone_then_ack` and `pickup_sends_entity_gone_and_closes_other_panel` pass, and `docs/plan/reference-coverage.md` §2's `despawn` row names them.
-- [ ] By hand: place, fuel and load a furnace, pan far enough away that its chunk is unsubscribed (`0010`: ring 3 plus the hold time), return, and the ingot count has advanced.
-- [ ] Bindings regenerated and committed.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name.
+- [x] The reference game removes an entity: `pickup_empty_despawns_and_returns_item`, `predicted_pickup_tombstone_then_ack` and `pickup_sends_entity_gone_and_closes_other_panel` pass, and `docs/plan/reference-coverage.md` §2's `despawn` row names them.
+- [x] By hand: place, fuel and load a furnace, pan far enough away that its chunk is unsubscribed (`0010`: ring 3 plus the hold time), return, and the ingot count has advanced. (Gate: automated instead, `furnace_smelts_while_unsubscribed`, which asserts the chunk was dropped in between.)
+- [x] Bindings regenerated and committed.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t reference` · `pnpm test browser -t reference_furnace` · `pnpm --filter reference dev`.
@@ -100,3 +100,10 @@ None of its own; M39's section plays this flow.
 - **By-hand criterion (unsubscribed smelt)**: done natively, `furnace_predict.rs::furnace_smelts_while_unsubscribed`: pans the client's camera to (4000, 4000), asserts the furnace's chunk is not held (and the open panel stays open through `Unknown`), runs a smelt on the host, returns, asserts the replica holds `ingots_out == 1`. Injection (removing `rules::furnace::tick` from `Game::tick`) went red: `smelted unwatched left: 0 right: 1`.
 - **Browser wall times** (Playwright report): `reference_furnace_flow` 1350 ms, `reference_furnace_panel_survives_swap` 962 ms, `reference_furnace_pick_up` 1425 ms.
 - **Injection results** (all reverted): bar drawn 3 tiles high: `filled part of the bar Expected: > 40 Received: 0` (the DrawList assertions still passed, only the pixel readback caught it); swap test with the panel closing on predicted furnaces: `pumpUntil: condition not met` at `openFurnace`; pick-up not despawning: `pumpUntil` timeout at the empty-DrawList wait; panel never closing: `the closed panel does not reopen on the new furnace Received: {"at": {"x": -4, "y": -1} ...}`.
+
+**Gate (orchestrator, 2026-09-30).** `pnpm gate 53ae99e`: tree clean, 22 files, no golden changed, no marker added; `pnpm test && pnpm lint` green (`rust` 741, `unit` 293, `browser` 225 at 42 s). Re-ran one injection (an always-put `advance` turns `idle_furnaces_cost_nothing` red, 2000 vs 1000). Rulings and corrections:
+- **Output cap** (above) was a gate ruling: `advance` consumed iron while `ingots_out` saturated on a `u16`, which would have destroyed ore.
+- **The "Loopback repro" above is misattributed.** A diagnosis agent could not reproduce it from the late join. The cause is `ClientCore::on_frame` clearing `results` per frame of a `FrameBundle`, a production defect; `Loopback`'s ack-0 uplinks degrade the client to level 2 and so trigger bundles. The client ordering in `furnace_predict.rs` only avoids a timing coincidence. Fixed in M33d (`33d-bundle-results-and-sprite-picking.md`), which holds the evidence.
+- **"`px_per_tile()` reads 0 on the real page" is wrong**: it reads 0 on a *stepped* test page, because `stepFrame` writes no viewport; production sets it. The bar's `zoom() > 120` rule is what the brief's Scope asked for (a threshold from `FrameView.zoom`) and stays. M33d gives stepped pages a viewport.
+- **Open by tapped tile stays** after M33d makes sprites pickable: it needs no pick record and survives the ghost-to-real swap by construction. The Planning decision "`pick_id` is the entity id" is superseded by this line.
+- `RESOURCE_TILE.wood` moved from (58, 55) to (-4, -2) with no other user of the constant; why (58, 55) never completed a collect is unexplained (ledger).
