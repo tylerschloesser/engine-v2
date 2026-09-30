@@ -60,7 +60,7 @@ Repo `scripts/` (`test-timings.mjs`, `measure-rebuild.mjs`), test files that get
 `pnpm test` · `pnpm lint` · `pnpm test:timings` · `pnpm measure:rebuild` · `pnpm test:slow wasm -t feature-matrix` · `pnpm test:slow netcode -t busy-furnace-field` · `cargo build -p engine --features measure-diff --target wasm32-unknown-unknown`
 
 ## Budgets
-PRE-PLAN §7 "Test suite" (per suite and total): `pnpm test:timings`. "Dev loop": `pnpm measure:rebuild`. "Bandwidth per client, steady": `busy-furnace-field` against `net.*` (a report, not a gate: the field is heavier than typical play). "Download": brotli deltas of the feature matrix.
+PRE-PLAN §7 "Test suite" (per suite and total): `pnpm test:timings`. "Dev loop": `pnpm measure:rebuild`. "Bandwidth per client, steady": `busy-furnace-field` against `net.*` (a report, not a gate: the field is heavier than typical play), measured with production hashing, not the harness's hash-all default (M31b R1). "Download": brotli deltas of the feature matrix.
 
 ## Context artifacts
 `run-tests` skill: `pnpm test:timings`, the demotion procedure, how to tag slow tests. Root `CLAUDE.md` gains one line only if a cache tool is adopted. No new rule file.

@@ -1,6 +1,6 @@
 # M31b: Desync hashes and chunk resync
 
-Status: not started · After: 31 · Tyler-dependent: no
+Status: done · After: 31 · Tyler-dependent: no
 
 Second half of the PLAN.md row "rates and integrity" (split explained in M31). M34 lists it in `After`.
 
@@ -54,10 +54,10 @@ Pacing (M31). Pristine-terrain hash sampling between client and server (0008 def
 Rust: `integrity/schedule-recent-first-then-round-robin`, `integrity/golden-resync-chunk`, `integrity/hash-ignores-overlay` (pending predicted action present; needs M25, else skipped with a named reason). Netcode: `integrity/clean-session-no-reports`, `integrity/corrupt-chunk-heals` (corrupt → report on both sides → resync → converged within one sweep period), `integrity/skipped-delta-heals`, `integrity/global-mismatch-heals`, `integrity/resync-respects-bucket`, `integrity/hash-all-dumps-encodings` (files exist, differ at the flipped byte), `integrity/hash-bytes-per-second` (`assertBudget('net.hashesBytesPerS')`, hash-all off).
 
 ## Exit criteria
-- [ ] Named tests pass; every pre-existing netcode scenario passes with `hashAll: true`.
-- [ ] `net.hashesBytesPerS` row exists, sourced from 0013's figure.
-- [ ] Netcode suite within its 0020 §3 budget with hash-all on (if not, hash-all drops to every 4th frame in tests and Deviations says so).
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Named tests pass; every pre-existing netcode scenario passes with `hashAll: true`.
+- [x] `net.hashesBytesPerS` row exists, sourced from 0013's figure.
+- [x] Netcode suite within its 0020 §3 budget with hash-all on (if not, hash-all drops to every 4th frame in tests and Deviations says so).
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test netcode -t integrity/` · `pnpm test netcode` · `pnpm test rust -t integrity` · `pnpm lint`
@@ -132,3 +132,12 @@ Commits `M31b step 4` (default, R2, Welcome flag, dumps, harness, budget row, te
 **Notes for later briefs**
 - The `Hashes` share is invisible to a game-level byte budget only while it is 63 B/s per client (heartbeat-carried); M34/M36 budgets that measure frames on a production host include it.
 - Not built: the dev-server hash-all flag and the browser `engine.log` first-diff line (above); the ledger row "A frame overflow still loses the deltas of other held chunks" stays open (hash-all in a 121-chunk world did not trip it).
+
+### Gate after steps 4-5 (orchestrator)
+- `pnpm gate 048b201`: tree clean, 30 files, no goldens changed or added, +800/-112. `budgets.json` only gains `net.hashesBytesPerS` (exact 63, ceiling 66 = ceil(0013's ~60 x 1.1)). The removed lines in existing tests are harness constructions re-issued with an opt-out plus the step-1 cadence test, whose rewrite I confirm: it asserts the per-period total, sweep coverage, at most `MAX_DUE_PER_FRAME` per frame, and hash frames at least 10 ticks apart.
+- `pnpm test && pnpm lint` green: rust 682, unit 290 (3.2 s of 3 s, watch row, no unit tests added), wasm 159, netcode 92 (3.6 s of 10 s with hash-all on), browser 218.
+- Inject-fail-revert re-run by the orchestrator on R2: skipping the heartbeat gate while a hash is due -> `integrity/hash-never-forces-a-frame` fails `expected 50 to be less than or equal to 21`; restored -> `netcode pass 1 tests`. The inject and restore took over 5 min, two full crate rebuilds through the netcode build steps. M30b's recurrence check was clean (no provenance xattr; a fixture binary `--list` in 0.003 s).
+- First exit criterion ticked on R1's opt-outs. The implementer also forced hash-all through every opt-out and got zero desync reports; the failures were byte pins and the two phase-sensitive convergence checks. Opt-outs beyond R1's list are accepted with the reasons at each site: `liveness/heartbeat-idle-world`, `interpolation/presence_bytes_budget`, `rates/degrade-on-soft-cap`, `zoomout/oscillate-48-tiles`, plus five Rust tests on `set_hash_mode(Off)`.
+- Not built, now ledger rows: the Vite dev server turning hash-all on; the browser `engine.log` first-differing-offset line.
+- Later briefs fixed by the orchestrator: M34 and M36b bandwidth measurements use production hashing, not the harness's hash-all default.
+

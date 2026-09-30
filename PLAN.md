@@ -78,7 +78,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 30c | `30c-ci-reds-after-m30.md` | three CI-only reds after M30: the 900 B no-alloc one-off, `ws/join-converges` handshake time, `mp/version-mismatch-reloads-once` | 30b | |
 | [x] | 31 | `31-rates-and-integrity.md` | chunk token bucket, soft cap, rate limits, byte budgets, zoom-out churn measurement | 29 | |
 | [x] | 30d | `30d-hello-resent-silence.md` | the intermittent silence after a pre-`Welcome` drop (`mp/hello-resent-after-pre-welcome-drop`): attributed and fixed | 31 | |
-| [ ] | 31b | `31b-desync-hashes.md` | per-chunk desync hashes, `ResyncChunk` | 31 | |
+| [x] | 31b | `31b-desync-hashes.md` | per-chunk desync hashes, `ResyncChunk` | 31 | |
 | [ ] | 32 | `32-reference-crafting.md` | inventory, unlock, crafting | 20b, 21b | |
 | [ ] | 33 | `33-reference-furnace.md` | furnace entity, predicted placement | 32, 26 | T |
 | [ ] | 33b | `33b-reference-furnace-operation.md` | deposit/take, smelting, panel | 33 | T |

@@ -66,7 +66,7 @@ Scripted full-game and race tests (M34b, M34c). Player names, chat, cursors. Any
 `pnpm test rust -t reference` · `pnpm test netcode -t reference_` · `pnpm test browser -t reference_two` · `pnpm --filter reference-server start` + `pnpm --filter reference dev`.
 
 ## Budgets
-Bandwidth per client, steady (`PRE-PLAN.md` §7): in `reference_presence_only_to_subscribers`, read `counters(i)` from the harness for a 10 s window of two moving players and assert against the `budgets.json` ceiling M31 set.
+Bandwidth per client, steady (`PRE-PLAN.md` §7): in `reference_presence_only_to_subscribers`, read `counters(i)` from the harness for a 10 s window of two moving players and assert against the `budgets.json` ceiling M31 set. The harness defaults to hash-all since M31b, so this scenario passes `world: { debugHashMode: 'production' }` (the production cost) and its ceiling is M31's row plus `net.hashesBytesPerS` (M31b Deviations R1).
 
 ## Context artifacts
 `games/reference/CLAUDE.md`: single-player vs invite mode, how to run two players locally. `games/reference-server/CLAUDE.md`: the start script.
