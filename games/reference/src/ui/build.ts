@@ -9,7 +9,12 @@
 // `pointerType`. A rejection flashes the control that sent the action with the reason as a CSS
 // class (`reject-<reason>`), like a collect button.
 //
-// DOM identity: `.build-button` (`data-build`), `.build-confirm` (`data-build-confirm="x,y"`).
+// A refused placement also leaves its reason on the page until the player tries again or leaves
+// construction mode: `.build-reason` (`data-reason`), for the engine's refusals (`StateBudgetFull`: the
+// world cannot take another building) and the placement rule's own.
+//
+// DOM identity: `.build-button` (`data-build`), `.build-confirm` (`data-build-confirm="x,y"`),
+// `.build-reason`.
 import type { ActionOutcome, Client } from 'engine'
 import type { RefAction } from '../bindings/RefAction.js'
 import type { RefReject } from '../bindings/RefReject.js'
@@ -20,6 +25,20 @@ import { el } from './dom.js'
 export const LOCAL = { PLACE_MODE: 1, CLOSE_PANEL: 2 } as const
 
 type AnchorHandle = ReturnType<Client['overlay']['anchor']>
+
+/** Why a placement was refused, in words; the rest of the reasons keep only the flash. */
+export function placeRefusal(reason: string): string | null {
+  switch (reason) {
+    case 'StateBudgetFull':
+      return 'The world is full: nothing more can be built.'
+    case 'RateLimited':
+      return 'Too many actions at once.'
+    case 'NotBuildable':
+      return 'Cannot build there.'
+    default:
+      return null
+  }
+}
 
 export type BuildUi = {
   /** Wired to `client.onUi<RefUi>`. */
@@ -46,6 +65,9 @@ function installBuildStyles(doc: Document): void {
     '  white-space: nowrap;',
     '}',
     '.build-button { position: fixed; left: 8px; bottom: 8px; z-index: 5; }',
+    '.build-reason { position: fixed; left: 8px; bottom: 36px; z-index: 5; padding: 2px 8px;',
+    '  border-radius: 4px; background: #a33; color: #fff; font: 11px sans-serif; }',
+    '.build-reason[hidden] { display: none; }',
     '.build-button.is-on { background: #264; }',
     '.build-confirm { background: #264; }',
     '.build-button[hidden], .build-confirm[hidden] { display: none; }',
@@ -69,6 +91,10 @@ export function createBuildUi(client: Client, doc: Document = document): BuildUi
   button.hidden = true
   doc.body.appendChild(button)
 
+  const reasonLine = el('div', 'build-reason')
+  reasonLine.hidden = true
+  doc.body.appendChild(reasonLine)
+
   const confirm = el('button', 'build-confirm')
   confirm.textContent = 'Confirm'
   confirm.hidden = true
@@ -86,7 +112,10 @@ export function createBuildUi(client: Client, doc: Document = document): BuildUi
     if (on === placing) return
     placing = on
     client.input.emit(LOCAL.PLACE_MODE, on ? 1 : 0)
-    if (!on) hideConfirm()
+    if (!on) {
+      hideConfirm()
+      showReason(null)
+    }
     render()
   }
 
@@ -101,7 +130,15 @@ export function createBuildUi(client: Client, doc: Document = document): BuildUi
     button.textContent = placing ? 'Cancel' : 'Build'
   }
 
+  function showReason(text: string | null, reason?: string): void {
+    reasonLine.hidden = text === null
+    reasonLine.textContent = text ?? ''
+    if (reason === undefined) delete reasonLine.dataset.reason
+    else reasonLine.dataset.reason = reason
+  }
+
   function place(origin: { x: number; y: number }, from: HTMLElement): void {
+    showReason(null)
     const action: RefAction = { PlaceFurnace: { origin: { x: origin.x, y: origin.y } } }
     pending.set(client.dispatch(action), from)
   }
@@ -147,6 +184,7 @@ export function createBuildUi(client: Client, doc: Document = document): BuildUi
     pending.delete(seq)
     if (result === 'Confirmed' || result === 'Lost') return
     const reason = 'Game' in result.Rejected ? result.Rejected.Game : result.Rejected.Engine
+    showReason(placeRefusal(String(reason)), String(reason))
     const cls = `reject-${String(reason).toLowerCase()}`
     from.classList.remove(cls)
     void from.offsetWidth
