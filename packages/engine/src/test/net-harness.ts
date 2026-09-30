@@ -109,6 +109,12 @@ interface WsPairStats {
   clientCalledClose: boolean
   hostDown: boolean
   clientDown: boolean
+  /** Sequence numbers (`WsOrder`) of each direction's sends not yet arrived, oldest first, and of
+   * each end's own `close()` call. */
+  c2hSeqs: number[]
+  h2cSeqs: number[]
+  hostCloseSeq: number | undefined
+  clientCloseSeq: number | undefined
 }
 
 function wsInFlight(p: WsPairStats): number {
@@ -118,10 +124,26 @@ function wsInFlight(p: WsPairStats): number {
   return n
 }
 
-/** A raw `ws` end that counts into `stats`: `send` as sent in its own direction, each delivered
- * message as received in the other. Sits under `conditionLink`, so it sees real socket traffic
- * only, never the conditioner's virtual-time holds. */
-function countedEnd(raw: Connection, stats: WsPairStats, side: 'host' | 'client'): Connection {
+/** docs/plan/30c-ci-reds-after-m30.md (red B, spike C): the order `ws` arrivals are handed on in.
+ * Real arrival order across *different* sockets is whatever the OS poll returns, so arrivals are
+ * held and released by `wsDelivered` in the order they were sent (one harness-wide sequence;
+ * each direction of one socket is FIFO, so an arrival's sequence is the front of its direction's
+ * queue). Sends are released by the `VirtualClock` in one deterministic order, which makes the
+ * release order, and so `trace()`, a function of `(seed, scenario)` alone. */
+interface WsOrder {
+  seq: number
+  held: { seq: number; run: () => void }[]
+}
+
+/** A raw `ws` end that counts into `stats` and holds each arrival in `order.held`: `send` counts as
+ * sent in its own direction, each arrival as received in the other. Sits under `conditionLink`, so
+ * it sees real socket traffic only, never the conditioner's virtual-time holds. */
+function countedEnd(
+  raw: Connection,
+  stats: WsPairStats,
+  side: 'host' | 'client',
+  order: WsOrder,
+): Connection {
   const withLen = raw as Connection & {
     send: (cls: MsgClass, bytes: Uint8Array, len?: number) => void
   }
@@ -130,30 +152,42 @@ function countedEnd(raw: Connection, stats: WsPairStats, side: 'host' | 'client'
     onMessage: null,
     onClose: null,
     send(cls, bytes, len?: number) {
-      if (side === 'client') stats.c2hSent++
-      else stats.h2cSent++
+      if (side === 'client') {
+        stats.c2hSent++
+        stats.c2hSeqs.push(++order.seq)
+      } else {
+        stats.h2cSent++
+        stats.h2cSeqs.push(++order.seq)
+      }
       withLen.send(cls, bytes, len)
     },
     close(code) {
       if (side === 'client') {
         stats.clientCalledClose = !stats.clientDown
         stats.clientDown = true
+        stats.clientCloseSeq = ++order.seq
       } else {
         stats.hostCalledClose = !stats.hostDown
         stats.hostDown = true
+        stats.hostCloseSeq = ++order.seq
       }
       raw.close(code)
     },
   }
   raw.onMessage = (bytes) => {
+    const seq = (side === 'client' ? stats.h2cSeqs.shift() : stats.c2hSeqs.shift()) ?? ++order.seq
     if (side === 'client') stats.h2cRecv++
     else stats.c2hRecv++
-    end.onMessage?.(bytes)
+    const copy = bytes.slice()
+    order.held.push({ seq, run: () => end.onMessage?.(copy) })
   }
   raw.onClose = (code) => {
+    // The other end's own `close()` call fixes this arrival's place; a close nobody here called
+    // (a socket torn down underneath) takes the next sequence as it arrives.
+    const seq = (side === 'client' ? stats.hostCloseSeq : stats.clientCloseSeq) ?? ++order.seq
     if (side === 'client') stats.clientDown = true
     else stats.hostDown = true
-    end.onClose?.(code)
+    order.held.push({ seq, run: () => end.onClose?.(code) })
   }
   return end
 }
@@ -503,6 +537,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
   // `'connection'` event carries no caller-supplied correlation of its own).
   let wsPort = 0
   const wsPairs: WsPairStats[] = []
+  const wsOrder: WsOrder = { seq: 0, held: [] }
   const pendingHostAccepts = new Map<string, (c: Connection) => void>()
   let wsServerClose: (() => Promise<void>) | null = null
   if (opts.transport === 'ws') {
@@ -560,16 +595,21 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       clientCalledClose: false,
       hostDown: false,
       clientDown: false,
+      c2hSeqs: [],
+      h2cSeqs: [],
+      hostCloseSeq: undefined,
+      clientCloseSeq: undefined,
     }
     wsPairs.push(stats)
     return [
-      countedEnd(deferredConnection(hostPromise), stats, 'host'),
-      countedEnd(clientRaw, stats, 'client'),
+      countedEnd(deferredConnection(hostPromise), stats, 'host', wsOrder),
+      countedEnd(clientRaw, stats, 'client', wsOrder),
     ]
   }
 
   /** docs/plan/30c-ci-reds-after-m30.md (red B): returns once every open `ws` link has delivered
-   * every message it has sent, polling one real event-loop turn (`setTimeout(1)`) at a time. What
+   * every message it has sent, polling one real event-loop turn (`setTimeout(1)`) at a time, and
+   * has handed every arrival on in send order (`WsOrder`: arrivals are held until then). What
    * the fixed 20 ms per-tick sleep before it only hoped for: that sleep cost every tick 20 ms or
    * more of real time whether or not anything was in flight (80-odd ticks, ~1.9 s of a 5 s test
    * budget, locally), and still guessed short when a socket was slower than 20 ms. */
@@ -578,7 +618,14 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     for (;;) {
       let inFlight = 0
       for (const p of wsPairs) inFlight += wsInFlight(p)
-      if (inFlight === 0) return
+      if (inFlight === 0) {
+        if (wsOrder.held.length === 0) return
+        // Everything sent so far has arrived: hand it on in send order (`WsOrder`). A handler may
+        // send again, synchronously (a host reply), so go round until nothing is held or moving.
+        const batch = wsOrder.held.splice(0).sort((a, b) => a.seq - b.seq)
+        for (const h of batch) h.run()
+        continue
+      }
       const waited = performance.now() - start
       if (waited > WS_DELIVERY_DEADLINE_MS) {
         const stuck = wsPairs
