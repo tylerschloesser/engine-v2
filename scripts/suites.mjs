@@ -83,6 +83,8 @@ export const suites = [
           'determinism: worldgen bun matches golden',
           'replay_world_checkpoints_bun',
           'reference_golden_replay (bun)',
+          'reference_single_player_save_to_server (bun)',
+          'reference_state_budget_full (bun)',
         ],
       },
     ],

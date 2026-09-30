@@ -8,10 +8,12 @@ import { instantiate } from '../../dist/loader.js'
 import { createWorldServer, wrapEngineInstance } from '../../dist/server.js'
 import { loadGame } from '../../dist/server-node.js'
 import { buildSimInstanceConfig } from '../../dist/sim-config.js'
+import { deleteWorld, exportWorld, importWorld } from '../../dist/storage/archive.js'
 import { memoryStorage } from '../../dist/storage/memory.js'
 import { worldKeys } from '../../dist/storage/types.js'
-import { replayLog, replayWorld } from '../../dist/test.js'
+import { createNetHarness, replayLog, replayWorld, worldServerTestHandle } from '../../dist/test.js'
 import { divergenceMessage, firstDivergence, readFullGame } from '../support/reference-golden.ts'
+import { saveToServer, stateBudgetFull } from '../support/reference-single-player.ts'
 import { diffCheckpoints, roleOf, runHashScenario } from '../support/scenario.ts'
 
 const NAME = 'determinism: bun matches golden'
@@ -20,6 +22,8 @@ const GROWTH_NAME = 'loader: views survive memory growth (bun)'
 const PUTS_NAME = 'wasm_idle_100_matches_native (bun)'
 const REPLAY_NAME = 'replay_world_checkpoints_bun'
 const REFERENCE_NAME = 'reference_golden_replay (bun)'
+const SAVE_NAME = 'reference_single_player_save_to_server (bun)'
+const BUDGET_NAME = 'reference_state_budget_full (bun)'
 
 /**
  * The Bun half of decision B (fix round 3, docs/plan/06b-workers-and-spawn.md, Deviations): the
@@ -236,6 +240,32 @@ async function runReferenceGoldenLeg() {
   return { name: REFERENCE_NAME, ok: message === null, message }
 }
 
+/** The two reference harness tests of `reference-single-player.test.ts`, same bodies, under Bun. */
+async function runReferenceHarnessLegs() {
+  const deps = {
+    loadGame,
+    createNetHarness,
+    worldServerTestHandle,
+    exportWorld,
+    importWorld,
+    deleteWorld,
+    gameDir: new URL('../../../../games/reference/sim/target/engine/dev', import.meta.url).pathname,
+  }
+  const legs = []
+  for (const [name, run] of [
+    [SAVE_NAME, saveToServer],
+    [BUDGET_NAME, stateBudgetFull],
+  ]) {
+    try {
+      await run(deps)
+      legs.push({ name, ok: true, message: null })
+    } catch (e) {
+      legs.push({ name, ok: false, message: String(e?.stack ?? e) })
+    }
+  }
+  return legs
+}
+
 let result
 try {
   if (typeof Bun === 'undefined') throw new Error('not running under Bun')
@@ -252,6 +282,7 @@ try {
   const puts = await runPutsLeg()
   const replay = await runReplayLeg()
   const reference = await runReferenceGoldenLeg()
+  const harnessLegs = await runReferenceHarnessLegs()
   result = {
     tests: [
       { name: NAME, ok: message === null, message },
@@ -260,6 +291,7 @@ try {
       puts,
       replay,
       reference,
+      ...harnessLegs,
     ],
     checkpoints,
   }
