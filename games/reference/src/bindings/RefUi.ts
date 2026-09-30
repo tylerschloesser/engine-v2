@@ -20,4 +20,12 @@ export type RefUi = { me: number, inventory: Inventory, collecting: UiCollecting
 /**
  * M32: the player's unlock bitset, the in-flight craft, and the unlocked recipes only.
  */
-unlocks: number, crafting: UiCrafting | null, recipes: Array<UiRecipe>, };
+unlocks: number, crafting: UiCrafting | null, recipes: Array<UiRecipe>, 
+/**
+ * M33: construction mode is on (client-local, `content::local::PLACE_MODE`).
+ */
+placing: boolean, 
+/**
+ * M33: the inventory holds a furnace item (shows the Build button).
+ */
+can_build: boolean, };

@@ -287,6 +287,10 @@ pub struct RefUi {
     pub unlocks: u32,
     pub crafting: Option<UiCrafting>,
     pub recipes: Vec<UiRecipe>,
+    /// M33: construction mode is on (client-local, `content::local::PLACE_MODE`).
+    pub placing: bool,
+    /// M33: the inventory holds a furnace item (shows the Build button).
+    pub can_build: bool,
 }
 
 impl Default for RefUi {
@@ -300,6 +304,8 @@ impl Default for RefUi {
             unlocks: 0,
             crafting: None,
             recipes: Vec::with_capacity(content::RECIPES.len()),
+            placing: false,
+            can_build: false,
         }
     }
 }

@@ -9,8 +9,10 @@
 
 use std::cell::RefCell;
 
+use engine::client::input::kind as input_kind;
 use engine::client::{
-    ClientSide, DrawList, FrameCx, FrameView, PREDICTED, SCREEN_PX_STROKE, SpriteId, TileTexel,
+    ANCHOR_CURSOR_TILE, ClientSide, DrawList, FrameCx, FrameView, PREDICTED, SCREEN_PX_STROKE,
+    SpriteId, TileTexel,
 };
 use engine::game::Presence;
 use engine::world::{Tile, TilePos, WorldPos};
@@ -72,6 +74,14 @@ const LAYER_FURNACE: u8 = 0;
 /// A furnace sprite's tint: white (the atlas colour comes through unchanged), and the same white at
 /// reduced alpha while the record is predicted (the ghost-to-real swap restores it in one frame).
 const FURNACE_TINT: u32 = 0xffff_ffff;
+
+/// The placement ghost (layer above the furnaces and the player): translucent green when
+/// `can_place` says yes, red when no, neutral grey when it is `Unknown` (the subscription edge: the
+/// action is still sent, 0012).
+const LAYER_GHOST: u8 = 2;
+const GHOST_VALID: u32 = 0x40ff_4090;
+const GHOST_INVALID: u32 = 0xff40_4090;
+const GHOST_UNKNOWN: u32 = 0xc0c0_c090;
 const FURNACE_TINT_PREDICTED: u32 = 0xffff_ff99;
 
 /// A drawable smaller than this many CSS px is skipped entirely (Scope: "both skipped when
@@ -224,6 +234,9 @@ pub struct RefClient {
     /// below); a real WASM instance immediately overwrites it with the seed/params its own world was
     /// actually created with, via `ClientSide::on_init` (gate round 1 fix).
     spawn: TileXY,
+    /// M33: construction mode, switched by `content::local::PLACE_MODE` events (client-local: not
+    /// sim state, not `input.setMode`, 0019 section 4). Read by `extract` (the ghost) and `ui`.
+    placing: bool,
 }
 
 impl Default for RefClient {
@@ -234,6 +247,7 @@ impl Default for RefClient {
             initialized: false,
             tracked_range: RefCell::new(Vec::with_capacity(MAX_IN_RANGE)),
             spawn: TileXY::from_tile(nearest_land_tile(content::SEED, &RefParams::default())),
+            placing: false,
         }
     }
 }
@@ -250,6 +264,20 @@ impl RefClient {
             initialized: true,
             tracked_range: RefCell::new(Vec::with_capacity(MAX_IN_RANGE)),
             spawn: TileXY::from_tile(nearest_land_tile(content::SEED, &RefParams::default())),
+            placing: false,
+        }
+    }
+
+    /// Whether construction mode is on (test-only accessor, like `spawn`).
+    pub fn placing(&self) -> bool {
+        self.placing
+    }
+
+    /// Applies one client-local intent event (`FrameCx::input()`, kind `GAME`): `PLACE_MODE` sets
+    /// construction mode from `a`. Split out of `frame` so a native test can drive it directly.
+    pub fn apply_local(&mut self, ev: &engine::client::InputEvent) {
+        if ev.kind == input_kind::GAME && ev.pick_id == content::local::PLACE_MODE {
+            self.placing = ev.tile[0] != 0;
         }
     }
 
@@ -301,6 +329,9 @@ impl ClientSide<RefGame> for RefClient {
     /// spring position, which changes every frame the camera moves even though no host mutation
     /// occurred, so `ui()` must re-run on exactly those frames too.
     fn frame(&mut self, cx: &mut FrameCx<'_, RefGame>, presence: &mut PlayerPresence) {
+        for ev in cx.input() {
+            self.apply_local(ev);
+        }
         let camera = cx.camera();
         let target = camera.centre;
         let target_vel = [camera.velocity[0] as f64, camera.velocity[1] as f64];
@@ -364,6 +395,29 @@ impl ClientSide<RefGame> for RefClient {
             }
         }
 
+        // The ghost: only in construction mode with a cursor tile. `pos` is relative to the cursor
+        // tile (`ANCHOR_CURSOR_TILE`), so it tracks the pointer with no added latency; a quad's pos
+        // is its centre, so a 2x2 footprint whose min corner is the cursor tile centres at (1, 1).
+        // The colour is the same `can_place` the host runs, over the `View`.
+        if self.placing
+            && let Some(cursor) = view.cursor_tile()
+        {
+            let color = match crate::rules::place::can_place(view.world(), cursor) {
+                Ok(true) => GHOST_VALID,
+                Ok(false) => GHOST_INVALID,
+                Err(_) => GHOST_UNKNOWN,
+            };
+            let fp = content::FURNACE_FOOTPRINT;
+            let d = out.ghost(
+                LAYER_GHOST,
+                WorldPos { x: 0, y: 0 },
+                [fp.w as f32, fp.h as f32],
+                color,
+            );
+            d.pos = [fp.w as f32 / 2.0, fp.h as f32 / 2.0];
+            d.flags |= ANCHOR_CURSOR_TILE;
+        }
+
         let px_per_tile = view.px_per_tile();
         if px_per_tile > 0.0 && PLAYER_DIAMETER_TILES * px_per_tile < MIN_VISIBLE_PX {
             return;
@@ -404,6 +458,8 @@ impl ClientSide<RefGame> for RefClient {
         out.crafting = None;
         out.recipes.clear();
         out.spawn = self.spawn;
+        out.placing = self.placing;
+        out.can_build = false;
         if let Ok(player) = world.player(view.me()) {
             out.inventory = player.inventory;
             out.collecting = player.collecting.map(|c| UiCollecting {
@@ -411,6 +467,7 @@ impl ClientSide<RefGame> for RefClient {
                 done_at: c.done_at.0,
             });
             out.unlocks = player.unlocks;
+            out.can_build = player.inventory.get(content::ItemId::Furnace) > 0;
             out.crafting = player.crafting.map(|c| UiCrafting {
                 recipe: c.recipe,
                 done_at: c.done_at.0,

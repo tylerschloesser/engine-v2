@@ -177,3 +177,13 @@ pub fn register(r: &mut Registry) {
     let furnace = r.add_prototype(NOT_BUILDABLE, FURNACE_FOOTPRINT);
     assert_eq!(furnace, FURNACE_PROTO, "the furnace must be prototype 0");
 }
+
+/// Client-local UI intent codes for `client.input.emit(code, a, b)` (M18's `InputKind.Game` record,
+/// 0024 section 7c), read by `RefClient::frame` from `FrameCx::input()`. Never sim state, never an
+/// action. Mirrored by `src/ui/build.ts`'s `LOCAL`: change both together.
+pub mod local {
+    /// `a != 0` turns construction mode on, `a == 0` off.
+    pub const PLACE_MODE: u32 = 1;
+    /// Closes the furnace panel (M33b; nothing reads it yet).
+    pub const CLOSE_PANEL: u32 = 2;
+}
