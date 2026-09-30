@@ -832,3 +832,151 @@ fn small_camera_wide() -> CameraReport {
         vel_y: 0,
     }
 }
+
+// -- M31 gate round 2 (docs/plan/31-rates-and-integrity.md Deviations, "Gate round 2") ---------
+
+use engine::host::pacing::{BandwidthConfig, EnterKind, EnterPriority};
+
+fn slow_bucket(burst: u32, refill: u32) -> BandwidthConfig {
+    BandwidthConfig {
+        chunk_burst_bytes: burst,
+        chunk_refill_bytes_per_s: refill,
+        ..BandwidthConfig::default()
+    }
+}
+
+fn client_holds_all_host_held(lb: &Loopback<LGame>, idx: usize) -> bool {
+    lb.host
+        .debug_held(lb.conn(idx))
+        .iter()
+        .all(|&c| lb.client(idx).view().is_held(c))
+}
+
+#[test]
+fn camera_drop_rule_keeps_the_latest_report() {
+    let mut lb = loopback(40);
+    let (idx, _who) = add_client(&mut lb, 0);
+    // 30 reports inside one tick: the rule admits 20 a second. The last one is the newest (an
+    // at-rest trailing report would be exactly this), so it must be the one that survives.
+    for i in 0..30 {
+        lb.set_camera(idx, small_camera(i * 64, 0));
+    }
+    lb.run(30);
+    let last_chunk = ChunkCoord::new((29 * 64) >> LGame::CHUNK_BITS, 0);
+    assert!(
+        lb.client(idx).view().is_held(last_chunk),
+        "the newest camera report was discarded instead of the older ones"
+    );
+    assert_eq!(
+        lb.host
+            .pacing_counters(lb.conn(idx))
+            .unwrap()
+            .camera_reports_dropped,
+        10
+    );
+}
+
+#[test]
+fn held_chunk_with_queued_resnapshot_is_left_when_it_leaves_the_subscription() {
+    let mut lb = loopback(41);
+    // A bucket that pays for the join (25 pristine chunks at 3 B) and then sits empty.
+    lb.host.set_bandwidth(slow_bucket(100, 1));
+    let (idx, who) = add_client(&mut lb, 0);
+    let conn = lb.conn(idx);
+    lb.set_camera(idx, small_camera(0, 0));
+    lb.run(5);
+    let home = ChunkCoord::new(0, 0);
+    assert!(lb.client(idx).view().is_held(home));
+    // Thirty tiles in one tick: the deltas outgrow the chunk's snapshot, which queues behind an
+    // empty bucket as a `Resnapshot` of a held chunk.
+    for i in 0..30 {
+        lb.action(
+            who,
+            LAction::Paint {
+                pos: LPos { x: i, y: 0 },
+                base: 2 + (i % 5) as u8,
+            },
+        );
+    }
+    lb.run(3);
+    let c = lb.host.pacing_counters(conn).unwrap();
+    assert_eq!(c.collapses, 1, "the scenario must collapse the chunk");
+    assert!(c.queued_enters > 0, "and its snapshot must still be queued");
+    // Pan away past the 5 s hysteresis: the chunk leaves the subscription with the snapshot unsent.
+    lb.set_camera(idx, small_camera(2000, 0));
+    lb.run(140);
+    assert!(
+        !lb.host.debug_held(conn).contains(&home),
+        "the host still counts the chunk as held"
+    );
+    assert!(
+        !lb.client(idx).view().is_held(home),
+        "no ChunkLeaves ever reached the client"
+    );
+}
+
+#[test]
+fn enqueue_chunk_snapshot_of_a_queued_enter_ends_held_and_gets_deltas() {
+    let mut lb = loopback(42);
+    // One pristine chunk (3 B) per tick: most of the 25-chunk subscription is still queued.
+    lb.host.set_bandwidth(slow_bucket(6, 60));
+    let (idx, who) = add_client(&mut lb, 0);
+    let conn = lb.conn(idx);
+    lb.set_camera(idx, small_camera(0, 0));
+    lb.step();
+    let far = ChunkCoord::new(-2, -2);
+    assert!(!lb.host.debug_held(conn).contains(&far), "still queued");
+    lb.host.enqueue_chunk_snapshot(
+        conn,
+        far,
+        EnterPriority {
+            visible: false,
+            dist_sq: 0,
+        },
+    );
+    lb.run(60);
+    assert!(lb.host.debug_held(conn).contains(&far));
+    assert!(lb.client(idx).view().is_held(far));
+    // Held means deltas flow: a paint in that chunk reaches the client.
+    lb.action(
+        who,
+        LAction::Paint {
+            pos: LPos { x: -60, y: -60 },
+            base: 7,
+        },
+    );
+    lb.run(3);
+    assert_eq!(
+        lb.client(idx).view().tile(TilePos::new(-60, -60)),
+        Ok(Tile::new(7, 0, 0))
+    );
+    let _ = EnterKind::Resnapshot;
+}
+
+#[test]
+fn frame_overflow_does_not_strand_paid_for_chunks() {
+    let mut lb = loopback(43);
+    let (idx, _who) = add_client(&mut lb, 0);
+    let conn = lb.conn(idx);
+    // Too small for the five chunks the bucket would pay for in the first frame (32 B: the header
+    // and Global fit, five chunks do not); each overflow halves the next frame's chunk budget.
+    lb.set_frame_buf_len(32);
+    lb.set_camera(idx, small_camera(0, 0));
+    lb.run(60);
+    assert!(
+        lb.host.debug_overflows(conn) > 0,
+        "the scenario must overflow at least one frame"
+    );
+    assert!(
+        client_holds_all_host_held(&lb, idx),
+        "the host marked chunks held that no frame ever carried"
+    );
+    lb.set_frame_buf_len(64 * 1024);
+    lb.run(40);
+    assert!(client_holds_all_host_held(&lb, idx));
+    assert_eq!(
+        lb.host.debug_held(conn).len(),
+        16,
+        "the whole subscription arrives"
+    );
+}

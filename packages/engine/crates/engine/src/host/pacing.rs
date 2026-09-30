@@ -5,7 +5,7 @@
 //! Host-side, unlogged and a function of tick count alone: the bucket refills per tick in integer
 //! bytes (`refill / tick rate`, the remainder carried), the soft-cap window is 1 s of ticks, and
 //! nothing reads a wall clock, so a run is reproducible under the virtual clock
-//! (`.claude/rules/determinism.md`). Every `Vec` is reserved once in [`Pacing::new`]; steady state
+//! (`.claude/rules/determinism.md`). Every `Vec` is reserved once in [`Pacing::new`] (a connection that outgrows a reservation, such as a `view.maxChunks` above 160, grows once); steady state
 //! allocates nothing (`.claude/rules/hot-paths.md`).
 
 use crate::time::TickRate;
@@ -120,6 +120,35 @@ pub struct PacingCounters {
     pub order_violations: u64,
 }
 
+/// The whole frames of a `[len varint][frame]` hold buffer, as `write_bundle` wants them (the one
+/// bundle encoder: what the golden pins is what ships).
+#[derive(Clone)]
+struct HoldFrames<'a> {
+    buf: &'a [u8],
+    left: usize,
+}
+
+impl<'a> Iterator for HoldFrames<'a> {
+    type Item = &'a [u8];
+    fn next(&mut self) -> Option<&'a [u8]> {
+        if self.left == 0 {
+            return None;
+        }
+        let mut r = crate::bytes::ByteReader::new(self.buf);
+        let len = r.varint().ok()? as usize;
+        let head = self.buf.len() - r.rest().len();
+        let frame = &self.buf[head..head + len];
+        self.buf = &self.buf[head + len..];
+        self.left -= 1;
+        Some(frame)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.left, Some(self.left))
+    }
+}
+
+impl ExactSizeIterator for HoldFrames<'_> {}
+
 pub struct Pacing {
     cfg: BandwidthConfig,
     hz: u32,
@@ -175,6 +204,13 @@ pub struct Pacing {
     cam_tick: u32,
     pub rate_limited: u64,
     pub camera_reports_dropped: u64,
+    /// The newest report discarded by the 20/s rule, applied as soon as the window has room
+    /// (`take_held_camera`): 0010 calls the camera report latest-wins, so only older ones are lost.
+    pub camera_held: Option<crate::wire::CameraReport>,
+    /// Frames that did not fit the output buffer and were rebuilt next tick.
+    pub overflows: u64,
+    /// Consecutive overflows: each halves the next frame's chunk budget.
+    pub overflow_shift: u32,
 }
 
 impl Pacing {
@@ -198,7 +234,7 @@ impl Pacing {
             acking: false,
             backlog_sample: 0,
             last_uplink_tick: now,
-            hold: Vec::new(),
+            hold: Vec::with_capacity(8192),
             hold_frames: 0,
             held_since: now,
             last_emit_tick: now,
@@ -225,6 +261,9 @@ impl Pacing {
             cam_tick: now,
             rate_limited: 0,
             camera_reports_dropped: 0,
+            camera_held: None,
+            overflows: 0,
+            overflow_shift: 0,
         }
     }
 
@@ -251,6 +290,30 @@ impl Pacing {
 
     /// Counts one camera report in the last second; `false` (and counted) past 20 (0010).
     pub fn take_camera(&mut self, tick: u32) -> bool {
+        if self.take_camera_slot(tick) {
+            return true;
+        }
+        self.camera_reports_dropped += 1;
+        false
+    }
+
+    /// A report that was over the limit: kept as the newest, replacing any older held one (the
+    /// older one is the one discarded, and counted).
+    pub fn hold_camera(&mut self, report: crate::wire::CameraReport) {
+        self.camera_held = Some(report);
+    }
+
+    /// The held newest report, if the window has room for it now.
+    pub fn take_held_camera(&mut self, tick: u32) -> Option<crate::wire::CameraReport> {
+        self.camera_held?;
+        if self.take_camera_slot(tick) {
+            self.camera_held.take()
+        } else {
+            None
+        }
+    }
+
+    fn take_camera_slot(&mut self, tick: u32) -> bool {
         let steps = tick.wrapping_sub(self.cam_tick).min(self.hz);
         for i in 1..=steps {
             let slot = (self.cam_tick.wrapping_add(i) % self.hz) as usize;
@@ -259,7 +322,6 @@ impl Pacing {
         }
         self.cam_tick = tick;
         if self.cam_sum >= CAMERA_REPORTS_PER_S {
-            self.camera_reports_dropped += 1;
             return false;
         }
         let slot = (tick % self.hz) as usize;
@@ -327,6 +389,9 @@ impl Pacing {
         self.held.retain(|&c| c != chunk);
         self.collapsed.retain(|&c| c != chunk);
         self.delta_est.retain(|(c, _)| *c != chunk);
+        let horizon = REENTER_SECS * self.hz;
+        self.recent_leaves
+            .retain(|&(_, t)| tick.wrapping_sub(t) < horizon);
         self.recent_leaves.push((chunk, tick));
     }
 
@@ -466,7 +531,7 @@ impl Pacing {
             // Holding frames itself delays what the client last received by up to `level - 1`
             // ticks, so calm allows that much more backlog than an undegraded client would show
             // (else a degraded client could never read as calm).
-            let calm = self.window_sum * 4 < self.cfg.soft_cap_bytes_per_s * 3
+            let calm = self.window_sum as u64 * 4 < self.cfg.soft_cap_bytes_per_s as u64 * 3
                 && backlog <= BACKLOG_CALM_TICKS + (self.level as u32 - 1);
             if calm && self.level > 1 {
                 self.calm_ticks += 1;
@@ -519,10 +584,13 @@ impl Pacing {
             first_len
         } else {
             let mut sink = crate::bytes::SliceSink::new(out);
-            use crate::bytes::ByteSink;
-            sink.put_u8(crate::wire::MsgType::FrameBundle as u8);
-            sink.put_varint(frames as u64);
-            sink.put(&self.hold[..end]);
+            crate::wire::write_bundle(
+                &mut sink,
+                HoldFrames {
+                    buf: &self.hold[..end],
+                    left: frames as usize,
+                },
+            );
             sink.finish().unwrap_or(0)
         };
         self.hold.drain(..end);
@@ -617,6 +685,176 @@ mod tests {
             t += 1;
         }
         assert_eq!(p.level, 1, "recovers one level per calm {RECOVER_SECS} s");
+    }
+
+    /// Feeds one tick of an acking client (`backlog` 1) with `bytes` of non-chunk traffic.
+    fn tick_acked(p: &mut Pacing, t: u32, bytes: u32) {
+        p.on_uplink(t, t - 1);
+        p.account_frame(t, bytes);
+    }
+
+    #[test]
+    fn soft_cap_alone_drives_level_2_then_4_with_acks_flowing() {
+        let mut p = pacing(); // soft cap 16,000 B/s at 20 Hz
+        let mut t = 0;
+        let mut first_2 = 0;
+        let mut first_4 = 0;
+        for _ in 0..200 {
+            t += 1;
+            tick_acked(&mut p, t, 1_000); // 20,000 B/s: over the cap, never behind
+            assert!(
+                p.effective_backlog(t) <= 1,
+                "the backlog path must stay quiet"
+            );
+            if p.level >= 2 && first_2 == 0 {
+                first_2 = t;
+            }
+            if p.level == 4 && first_4 == 0 {
+                first_4 = t;
+            }
+        }
+        // The window passes 16,000 B on the 17th tick; 4 needs a full 2 s over the cap.
+        assert_eq!(
+            first_2, 17,
+            "level 2 as soon as the 1 s window is over the cap"
+        );
+        assert_eq!(first_4, 17 + 2 * 20 - 1, "level 4 after 2 s over the cap");
+    }
+
+    #[test]
+    fn at_the_cap_or_under_it_stays_level_1() {
+        let mut p = pacing();
+        for t in 1..=200 {
+            tick_acked(&mut p, t, 800); // exactly 16,000 B/s: not above it
+        }
+        assert_eq!(p.level, 1);
+    }
+
+    #[test]
+    fn recovery_needs_the_full_2s_dwell_per_level() {
+        let mut p = pacing();
+        let mut t = 0;
+        for _ in 0..100 {
+            t += 1;
+            tick_acked(&mut p, t, 1_000);
+        }
+        assert_eq!(p.level, 4);
+        // Traffic drops to 100 B/tick (2,000 B/s). The window empties over 20 ticks; calm starts
+        // when it reads under 75 % of the cap.
+        let mut calm_start = 0;
+        let mut at2 = 0;
+        let mut at1 = 0;
+        for _ in 0..400 {
+            t += 1;
+            tick_acked(&mut p, t, 100);
+            if calm_start == 0 && p.window_bytes() * 4 < 16_000 * 3 {
+                calm_start = t;
+            }
+            if p.level == 2 && at2 == 0 {
+                at2 = t;
+            }
+            if p.level == 1 && at1 == 0 {
+                at1 = t;
+            }
+        }
+        assert!(calm_start > 0 && at2 > 0 && at1 > 0);
+        assert!(
+            at2 - calm_start + 1 >= 2 * 20,
+            "4 -> 2 after {} calm ticks, less than {RECOVER_SECS} s",
+            at2 - calm_start + 1
+        );
+        assert!(
+            at1 - at2 >= 2 * 20,
+            "2 -> 1 after {} calm ticks, less than {RECOVER_SECS} s",
+            at1 - at2
+        );
+    }
+
+    #[test]
+    fn recovery_is_blocked_while_the_window_is_at_75_percent() {
+        let mut p = pacing();
+        let mut t = 0;
+        for _ in 0..100 {
+            t += 1;
+            tick_acked(&mut p, t, 1_000);
+        }
+        assert_eq!(p.level, 4);
+        // 13,000 B/s: under the cap (no escalation), over 75 % of it (12,000): never calm.
+        for _ in 0..400 {
+            t += 1;
+            tick_acked(&mut p, t, 650);
+        }
+        assert_eq!(p.level, 4, "a client still near the cap must not recover");
+    }
+
+    #[test]
+    fn a_huge_soft_cap_does_not_overflow_the_calm_test() {
+        let cfg = BandwidthConfig {
+            soft_cap_bytes_per_s: 2_000_000_000,
+            ..BandwidthConfig::default()
+        };
+        let mut p = Pacing::new(cfg, TickRate::HZ_20, 0);
+        for t in 1..=10 {
+            tick_acked(&mut p, t, 100);
+        }
+        assert_eq!(p.level, 1);
+    }
+
+    #[test]
+    fn camera_reports_over_the_limit_keep_the_newest() {
+        use crate::wire::CameraReport;
+        let report = |x| CameraReport {
+            center_x: x,
+            center_y: 0,
+            half_w: 1,
+            half_h: 1,
+            vel_x: 0,
+            vel_y: 0,
+        };
+        let mut p = pacing();
+        for _ in 0..20 {
+            assert!(p.take_camera(5));
+        }
+        assert!(!p.take_camera(5));
+        p.hold_camera(report(1));
+        assert!(!p.take_camera(5));
+        p.hold_camera(report(2));
+        assert_eq!(p.take_held_camera(6), None, "the window is still full");
+        assert_eq!(
+            p.take_held_camera(25),
+            Some(report(2)),
+            "the newest, not the first"
+        );
+        assert_eq!(p.take_held_camera(25), None);
+    }
+
+    #[test]
+    fn take_bundle_writes_what_write_bundle_writes() {
+        use crate::bytes::{ByteSink, SliceSink};
+        let frames: [&[u8]; 3] = [&[5, 1, 2], &[5, 9], &[5, 7, 7, 7, 7]];
+        let mut p = pacing();
+        for f in frames {
+            let mut len = [0u8; 10];
+            let mut ls = SliceSink::new(&mut len);
+            ls.put_varint(f.len() as u64);
+            let ln = ls.finish().unwrap();
+            p.hold.extend_from_slice(&len[..ln]);
+            p.hold.extend_from_slice(f);
+            p.hold_frames += 1;
+        }
+        let mut out = [0u8; 64];
+        let (n, sent) = p.take_bundle(&mut out);
+        assert_eq!(sent, 3);
+        let mut expected = [0u8; 64];
+        let mut sink = SliceSink::new(&mut expected);
+        crate::wire::write_bundle(&mut sink, frames.iter().copied());
+        let m = sink.finish().unwrap();
+        assert_eq!(&out[..n], &expected[..m]);
+        let mut r = crate::wire::BundleReader::new(&out[..n]).unwrap();
+        for f in frames {
+            assert_eq!(r.next_frame().unwrap(), Some(f));
+        }
+        assert_eq!(r.next_frame().unwrap(), None);
     }
 
     #[test]

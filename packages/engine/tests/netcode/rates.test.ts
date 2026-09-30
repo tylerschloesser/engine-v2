@@ -106,11 +106,24 @@ test('rates/join-dense-visible-first', async () => {
     joiner.setView({ x: DENSE_CENTRE, y: DENSE_CENTRE, ...MAX_VIEW })
     const held: number[] = []
     let emptyTicks = 0
-    let gapWhileEmpty = 0
     let drainedAt = -1
     let burstSpentAt = -1
     let last = h.counters(1)
+    // An action sent mid-drain (bucket empty, chunks queued) is answered within a few ticks: tick
+    // frames are not queued behind chunk data.
+    let step = 0
+    let sentAt = -1
+    let answeredAt = -1
+    const stopResults = joiner.onActionResult(() => {
+      if (answeredAt < 0) answeredAt = step
+    })
     for (let i = 1; i <= 260; i++) {
+      step = i
+      if (i === 40) {
+        expect(h.counters(1).queuedEnters, 'the bucket is draining').toBeGreaterThan(20)
+        joiner.dispatch({ Fill: { cx: 200, cy: 200 } })
+        sentAt = i
+      }
       await h.advanceTicks(1)
       const c = h.counters(1)
       held.push(c.heldChunks - base.heldChunks)
@@ -118,7 +131,6 @@ test('rates/join-dense-visible-first', async () => {
       if (c.bucketTokens < 3000 && c.queuedEnters > 0) {
         // The bucket is empty: tick frames and acks keep flowing (a message at least every 500 ms).
         emptyTicks++
-        gapWhileEmpty = Math.max(gapWhileEmpty, c.maxEmitGap)
       }
       if (drainedAt < 0 && i > 2 && c.queuedEnters === 0) drainedAt = i
       last = c
@@ -133,7 +145,6 @@ test('rates/join-dense-visible-first', async () => {
     measure('joinDense', {
       ...result,
       emptyTicks,
-      gapWhileEmpty,
       lateVisibleTicksMax: last.lateVisibleTicksMax,
       at81: held.findIndex((n) => n >= 81),
     })
@@ -143,13 +154,29 @@ test('rates/join-dense-visible-first', async () => {
     const at81 = held.findIndex((n) => n >= 81)
     expect(at81, 'the visible rectangle arrives before the whole ring').toBeGreaterThan(0)
     expect(held[at81] ?? 0).toBeLessThanOrEqual(81 + 12)
+    // The order itself: when the last visible chunk went out (`lateVisibleTicksMax` ticks after the
+    // view was set), at most one frame's worth of other chunks had gone with them. A far-first or
+    // FIFO queue has sent most of the ring by then.
+    const lastVisibleIdx = last.lateVisibleTicksMax
+    const heldAtLastVisible = Math.max(held[lastVisibleIdx - 1] ?? 0, held[lastVisibleIdx] ?? 0)
+    measure('joinDenseOrder', { lastVisibleIdx, heldAtLastVisible })
+    expect(
+      heldAtLastVisible,
+      'ring chunks went out before the last visible one',
+    ).toBeLessThanOrEqual(81 + 8)
     expect(
       last.lateVisibleTicksMax,
       'visible chunks all land within the burst plus 4 s',
     ).toBeLessThan(90)
     expect(held[held.length - 1] ?? 0).toBeGreaterThanOrEqual(121 - 9) // the 9 far chunks may have left
     expect(emptyTicks).toBeGreaterThan(50)
-    expect(gapWhileEmpty, 'frames flow while the bucket is empty').toBeLessThanOrEqual(10)
+    stopResults()
+    measure('joinDenseAction', { sentAt, answeredAt })
+    expect(answeredAt, 'the mid-drain action was never answered').toBeGreaterThan(0)
+    expect(
+      answeredAt - sentAt,
+      'ticks until the mid-drain action was answered',
+    ).toBeLessThanOrEqual(3)
     assertBudget(result, 'net.joinDenseMaxZoomEnterBytes')
     assertBudget(result, 'net.joinDenseMaxZoomTicks')
     assertBudget(result, 'net.hardCeilingBytesPerS')
@@ -226,6 +253,48 @@ test('rates/degrade-on-stall', async () => {
     }
     measure('recover', { recovered })
     expect(recovered, 'back to level 1 after the stall').toBeGreaterThan(0)
+    // 4 -> 2 -> 1 is two calm dwells of 2 s each (`RECOVER_SECS`); the loop starts about half a
+    // second after the stall ended. A level that stepped down without its dwell would show here.
+    expect(recovered, 'recovery took less than two 2 s dwells').toBeGreaterThanOrEqual(
+      2 * 2 * TICK_HZ - 10,
+    )
+    await h.settle()
+    h.assertConverged()
+  } finally {
+    await h.dispose()
+  }
+})
+
+test('rates/degrade-on-soft-cap', async () => {
+  // No stall, no lag: every frame is acked. The soft cap alone (1,000 B/s here; the busy field
+  // sends several times that) drives level 2 at once and level 4 after 2 s over the cap.
+  const h = await createNetHarness({
+    fixture: await loadFixture('busy-field'),
+    seed: 3111,
+    clients: 1,
+    world: { bandwidth: { softCapBytesPerS: 1_000 } },
+  })
+  try {
+    h.clients[0]?.setView({ x: 30, y: 14, halfW: 40, halfH: 40 })
+    let first2 = -1
+    let first4 = -1
+    const seen: number[] = []
+    for (let i = 1; i <= 8 * TICK_HZ; i++) {
+      await h.advanceTicks(1)
+      const level = h.counters(0).degradeLevel
+      if (level > 0 && seen[seen.length - 1] !== level) seen.push(level)
+      if (level >= 2 && first2 < 0) first2 = i
+      if (level === 4 && first4 < 0) first4 = i
+    }
+    const c = h.counters(0)
+    measure('softCap', { seen, first2, first4, bundles: c.bundles })
+    expect(seen, 'levels 1, 2, 4 with nothing stalled').toEqual([1, 2, 4])
+    expect(first2, 'level 2 as soon as a 1 s window is over the cap').toBeGreaterThan(0)
+    expect(first4 - first2, 'level 4 only after 2 s over the cap').toBeGreaterThanOrEqual(
+      2 * TICK_HZ - 2,
+    )
+    expect(first4 - first2).toBeLessThanOrEqual(2 * TICK_HZ + 2)
+    expect(c.bundles, 'held frames went out concatenated').toBeGreaterThan(0)
     await h.settle()
     h.assertConverged()
   } finally {

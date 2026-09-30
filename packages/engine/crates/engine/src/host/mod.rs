@@ -475,6 +475,8 @@ pub struct Host<G: Game> {
     scratch_left: Vec<ChunkCoord>,
     scratch_pristine: Vec<ChunkCoord>,
     scratch_snapshot: Vec<ChunkCoord>,
+    /// Chunks this frame's drain newly marked held (undone if the frame overflows `out`).
+    scratch_new_held: Vec<ChunkCoord>,
     /// docs/plan/28b-reconnect-and-lifecycle.md step 5: this tick's `ChunkKeeps` entries -- chunks
     /// `scratch_entered` would otherwise have classified `scratch_pristine`/`scratch_snapshot`,
     /// pulled out by the connection's own `resume_pending` diff before that classification runs.
@@ -794,6 +796,7 @@ impl<G: Game> Host<G> {
             scratch_left: Vec::new(),
             scratch_pristine: Vec::new(),
             scratch_snapshot: Vec::new(),
+            scratch_new_held: Vec::new(),
             scratch_keep: Vec::new(),
             scratch_delta_est: Vec::with_capacity(160),
             scratch_tile_flat: Vec::new(),
@@ -883,6 +886,15 @@ impl<G: Game> Host<G> {
         match self.conns.get(conn as usize) {
             Some(Some(slot)) => slot.pace.held.clone(),
             _ => Vec::new(),
+        }
+    }
+
+    /// Frames `conn` built that did not fit the output buffer (each was undone and rebuilt).
+    #[cfg(any(test, feature = "testing"))]
+    pub fn debug_overflows(&self, conn: ConnId) -> u64 {
+        match self.conns.get(conn as usize) {
+            Some(Some(slot)) => slot.pace.overflows,
+            _ => 0,
         }
     }
 
@@ -1422,9 +1434,16 @@ impl<G: Game> Host<G> {
         let now = self.last_tick.0;
         if let Some(camera) = batch.camera
             && let Some(Some(slot)) = self.conns.get_mut(idx)
-            && slot.pace.take_camera(now)
         {
-            slot.camera = Some(camera);
+            if slot.pace.take_camera(now) {
+                slot.camera = Some(camera);
+                slot.pace.camera_held = None;
+            } else {
+                // Latest-wins (0010 "Camera report"): the discarded report may be the trailing
+                // at-rest one, so the newest over the limit is kept and applied when the window
+                // has room; only older ones are lost.
+                slot.pace.hold_camera(camera);
+            }
         }
         // Step 4: the one backpressure path on every host.
         if let Some(Some(slot)) = self.conns.get_mut(idx) {
@@ -1601,6 +1620,9 @@ impl<G: Game> Host<G> {
             }
         }
         for slot in conns.iter_mut().flatten() {
+            if let Some(held) = slot.pace.take_held_camera(completed.0) {
+                slot.camera = Some(held);
+            }
             if let Some(camera) = slot.camera {
                 slot.subs.update(camera, completed);
             }
@@ -1673,9 +1695,9 @@ impl<G: Game> Host<G> {
         let tick_now = self.last_tick.0;
         self.scratch_left.clear();
         for &c in slot.subs.left() {
-            if slot.pace.drop_queued(c, tick_now) {
-                continue;
-            }
+            // A never-sent enter is simply dropped; a held chunk (even one with a queued
+            // `Resnapshot`, which the drop also removes) still has to be left on the client.
+            slot.pace.drop_queued(c, tick_now);
             if slot.pace.is_held(c) {
                 slot.pace.note_left(c, tick_now);
                 self.scratch_left.push(c);
@@ -1754,11 +1776,15 @@ impl<G: Game> Host<G> {
         // half the output buffer in one frame (a 128 KB burst is spread over a few ticks).
         slot.pace.refill(tick_now);
         let burst = slot.pace.cfg().chunk_burst_bytes as i64;
-        let frame_cap = (out.len() / 2) as i64;
+        // Each overflow of the previous frame halves the cap (reset by a frame that fits), so a
+        // frame that is dearer on the wire than the bucket priced it converges instead of
+        // rebuilding the same overflowing frame every tick.
+        let frame_cap = ((out.len() / 2) >> slot.pace.overflow_shift.min(8)) as i64;
         let mut spent = 0i64;
         self.scratch_entered.clear();
         self.scratch_pristine.clear();
         self.scratch_snapshot.clear();
+        self.scratch_new_held.clear();
         while let Some(&q) = slot.pace.queue.first() {
             let c = q.chunk;
             let snapshot = q.kind == EnterKind::Resnapshot
@@ -1806,9 +1832,20 @@ impl<G: Game> Host<G> {
                     }
                     if !slot.pace.is_held(c) {
                         slot.pace.held.push(c);
+                        self.scratch_new_held.push(c);
                     }
                 }
                 EnterKind::Resnapshot => {
+                    // M31b's `enqueue_chunk_snapshot` may have upgraded a not-yet-held enter: the
+                    // snapshot is then the chunk's enter and it becomes held here.
+                    if !slot.pace.is_held(c) {
+                        if slot.pace.is_reenter(c, tick_now) {
+                            slot.pace.reenters_within_5s += 1;
+                            slot.pace.reenter_bytes += cost as u64;
+                        }
+                        slot.pace.held.push(c);
+                        self.scratch_new_held.push(c);
+                    }
                     slot.pace.collapsed.retain(|&x| x != c);
                     slot.pace.delta_est.retain(|(x, _)| *x != c);
                 }
@@ -2041,6 +2078,7 @@ impl<G: Game> Host<G> {
 
         // Every section below is written only when there is a frame to build; otherwise the
         // pacing tail still runs (a held frame may be due, the soft-cap window must advance).
+        let mut overflowed = false;
         let n = if build {
             let header = FrameHeader {
                 tick: self.last_tick.0,
@@ -2131,16 +2169,43 @@ impl<G: Game> Host<G> {
 
             let _ = fw;
             // `SliceSink`'s own overflow convention: a too-small `out` never panics, it just drops the
-            // overflow bytes silently and `finish()` reports it. `build_frame`'s `out` is caller-sized
-            // (a real connection's send buffer, `testkit::Loopback`'s own fixed frame buffer in
-            // tests); running out of room here is Non-scope (0010's pacing/backpressure, M31), so a
-            // `Full` result is treated as "wrote nothing" rather than plumbed through `build_frame`'s
-            // `usize`-only return.
-            sink.finish().unwrap_or(0)
+            // overflow bytes silently and `finish()` reports it. An overflow is "wrote nothing" to
+            // `build_frame`'s `usize`-only return, and the chunk-paying drain above is undone (below).
+            match sink.finish() {
+                Ok(n) => n,
+                Err(_) => {
+                    overflowed = true;
+                    0
+                }
+            }
         } else {
             0
         };
-        if build {
+        if overflowed {
+            // The frame did not fit `out`, so nothing was sent: give back what the drain paid and
+            // marked held for it (else the client would never get those chunks while the host sent
+            // it their deltas). A newly held chunk is queued again as an enter; a re-sent one as a
+            // snapshot with its deltas suppressed until it goes. Results and presence stay pending
+            // for the next build (no commit below).
+            slot.pace.tokens += spent;
+            for i in 0..self.scratch_entered.len() {
+                let c = self.scratch_entered[i];
+                let p = priority(&slot.subs, c);
+                if self.scratch_new_held.contains(&c) {
+                    slot.pace.held.retain(|&x| x != c);
+                    slot.pace.enqueue(c, EnterKind::Enter, p, tick_now);
+                } else {
+                    if !slot.pace.is_collapsed(c) {
+                        slot.pace.collapsed.push(c);
+                    }
+                    slot.pace.enqueue(c, EnterKind::Resnapshot, p, tick_now);
+                }
+            }
+            slot.pace.overflows += 1;
+            slot.pace.overflow_shift += 1;
+        }
+        if build && !overflowed {
+            slot.pace.overflow_shift = 0;
             slot.counters.frames += 1;
             slot.counters.chunk_enters_pristine += self.scratch_pristine.len() as u64;
             slot.counters.chunk_snapshots += self.scratch_snapshot.len() as u64;
@@ -2445,6 +2510,7 @@ where
             scratch_left: Vec::new(),
             scratch_pristine: Vec::new(),
             scratch_snapshot: Vec::new(),
+            scratch_new_held: Vec::new(),
             scratch_keep: Vec::new(),
             scratch_delta_est: Vec::with_capacity(160),
             scratch_tile_flat: Vec::new(),

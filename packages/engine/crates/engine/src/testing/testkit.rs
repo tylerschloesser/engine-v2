@@ -541,6 +541,12 @@ where
         }
     }
 
+    /// Replaces the send buffer `build_frame` writes into (the default is 64 KiB): a small one makes
+    /// a frame overflow (docs/plan/31-rates-and-integrity.md Deviations, "Gate round 2").
+    pub fn set_frame_buf_len(&mut self, len: usize) {
+        self.frame_buf = vec![0u8; len];
+    }
+
     /// Runs `n` ticks with no camera changes (`Loopback::step` alone).
     pub fn run(&mut self, n: u32) {
         for _ in 0..n {

@@ -702,25 +702,25 @@
         "counter": "lateVisibleTicksP95",
         "exact": 28,
         "ceiling": 31,
-        "source": "docs/plan/31-rates-and-integrity.md step 6 measurement (the brief: results recorded as ceilings); no 0010 number covers it, so the ceiling is headroom, ceil(exact x 1.1). p95 ticks from a chunk becoming visible to its enter being sent (or given up on: 58 visible chunks were dropped unsent when the pan left them behind). The risk-3 rule's threshold is 10: TRIGGERED. zoomout/pan-1vw."
+        "source": "MEASUREMENT ROW: pins today's number, it is not a criterion (the risk-3 rule's thresholds in the brief, p95 > 10 ticks and re-enter > 120,000 B, are the decision criteria; this row's ceiling sits above them because the rule is triggered). docs/plan/31-rates-and-integrity.md step 6 measurement (the brief: results recorded as ceilings); no 0010 number covers it, so the ceiling is headroom, ceil(exact x 1.1). p95 ticks from a chunk becoming visible to its enter being sent (or given up on: 58 visible chunks were dropped unsent when the pan left them behind). The risk-3 rule's threshold is 10: TRIGGERED. zoomout/pan-1vw."
       },
       "zoomoutPan2vwLateVisibleP95": {
         "counter": "lateVisibleTicksP95",
         "exact": 14,
         "ceiling": 16,
-        "source": "docs/plan/31-rates-and-integrity.md step 6 measurement (the brief: results recorded as ceilings); no 0010 number covers it, so the ceiling is headroom, ceil(exact x 1.1). Same at two view-widths per second (58 visible chunks dropped unsent). Rule threshold 10: TRIGGERED (0010: 'far chunks arrive late, and nothing is legible at that speed'). zoomout/pan-2vw."
+        "source": "MEASUREMENT ROW: pins today's number, it is not a criterion (the risk-3 rule's thresholds in the brief, p95 > 10 ticks and re-enter > 120,000 B, are the decision criteria; this row's ceiling sits above them because the rule is triggered). docs/plan/31-rates-and-integrity.md step 6 measurement (the brief: results recorded as ceilings); no 0010 number covers it, so the ceiling is headroom, ceil(exact x 1.1). Same at two view-widths per second (58 visible chunks dropped unsent). Rule threshold 10: TRIGGERED (0010: 'far chunks arrive late, and nothing is legible at that speed'). zoomout/pan-2vw."
       },
       "zoomoutPan1vwCap144LateVisibleP95": {
         "counter": "lateVisibleTicksP95",
         "exact": 30,
         "ceiling": 33,
-        "source": "docs/plan/31-rates-and-integrity.md step 6 measurement (the brief: results recorded as ceilings); no 0010 number covers it, so the ceiling is headroom, ceil(exact x 1.1). The same one-view-width pan with WorldConfig.view.maxChunks = 144: no better (bandwidth-bound, not cap-bound). zoomout/pan-1vw-cap144."
+        "source": "MEASUREMENT ROW: pins today's number, it is not a criterion (the risk-3 rule's thresholds in the brief, p95 > 10 ticks and re-enter > 120,000 B, are the decision criteria; this row's ceiling sits above them because the rule is triggered). docs/plan/31-rates-and-integrity.md step 6 measurement (the brief: results recorded as ceilings); no 0010 number covers it, so the ceiling is headroom, ceil(exact x 1.1). The same one-view-width pan with WorldConfig.view.maxChunks = 144: no better (bandwidth-bound, not cap-bound). zoomout/pan-1vw-cap144."
       },
       "zoomoutOscillateReenterBytes": {
         "counter": "reenterBytes",
         "exact": 501715,
         "ceiling": 556122,
-        "source": "docs/plan/31-rates-and-integrity.md step 6 measurement (the brief: results recorded as ceilings); no 0010 number covers it, so the ceiling is headroom, ceil(exact x 1.1). Bucket bytes spent re-entering chunks that left less than 5 s earlier, over 10 s of a 48-tile oscillation at maximum zoom-out over dense chunks (132 re-entered, 159 cap evictions): 50 KB/s against the rule's threshold of 25% of the 48 KB/s refill = 12 KB/s (120,000 B over 10 s): TRIGGERED. zoomout/oscillate-48-tiles."
+        "source": "MEASUREMENT ROW: pins today's number, it is not a criterion (the risk-3 rule's thresholds in the brief, p95 > 10 ticks and re-enter > 120,000 B, are the decision criteria; this row's ceiling sits above them because the rule is triggered). docs/plan/31-rates-and-integrity.md step 6 measurement (the brief: results recorded as ceilings); no 0010 number covers it, so the ceiling is headroom, ceil(exact x 1.1). Bucket bytes spent re-entering chunks that left less than 5 s earlier, over 10 s of a 48-tile oscillation at maximum zoom-out over dense chunks (132 re-entered, 159 cap evictions): 50 KB/s against the rule's threshold of 25% of the 48 KB/s refill = 12 KB/s (120,000 B over 10 s): TRIGGERED. zoomout/oscillate-48-tiles."
       },
       "zoomoutOscillateCap144ReenterBytes": {
         "counter": "reenterBytes",
