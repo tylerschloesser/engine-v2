@@ -85,4 +85,10 @@ Zero-GC (`budgets.json`, unchanged): the picker's sprite path and the accumulate
 None.
 
 ## Deviations
-(filled in during Phase 3)
+**Steps 1-2 (bundle results, testkit ack).**
+- Red lines, each seen on unfixed code: `bundle_keeps_every_frames_results` `left: [2]  right: [1, 2]`; `rates/results-survive-a-bundle` `expected [ 2 ] to deeply equal [ 1, 2 ]` (the `bundles > 0` assertion passed first); `loopback_action_does_not_degrade` `left: 2  right: 1`.
+- Where: `bundle_keeps_every_frames_results` is inline in `crates/engine/src/client/core.rs` (hand-built two-frame bundle via `write_bundle`); `rates/results-survive-a-bundle` in `tests/netcode/rates.test.ts` (`puts` fixture); `loopback_action_does_not_degrade` in `crates/engine/tests/main/action_round_trip.rs`.
+- Fix: `results.clear()` moved from `apply` to the top of `on_frame`. `results` is `Vec::with_capacity(OUTBOX_CAPACITY)` (32): a result answers an action this client sent and at most that many are unanswered, so one drain's worth never reallocates. `zero_gc_action` pages pass (5 tests).
+- Testkit: `Loopback::action`, `set_camera`, `set_presence` send `core.last_summary().tick.0`; `action` finds the client by connection and falls back to 0 when no client matches it (host-only scenarios).
+- Results: `rust` 743, `netcode` 93, `reference-sim` 96 (`furnace_predict` unchanged and green).
+
