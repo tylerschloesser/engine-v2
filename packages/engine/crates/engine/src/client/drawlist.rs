@@ -79,6 +79,13 @@ pub const FLIP_X: u8 = 1 << 3;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct SpriteId(pub u16);
 
+/// Packs `Draw::color`: byte 0 = r, byte 1 = g, byte 2 = b, byte 3 = a (so the `u32` reads
+/// `0xAABBGGRR`). The Rust twin of `packDrawColor` in `render/drawables.ts`; never write a colour
+/// as a `0xRRGGBBAA` literal.
+pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
+    (r as u32) | ((g as u32) << 8) | ((b as u32) << 16) | ((a as u32) << 24)
+}
+
 /// One GPU instance, exactly 32 bytes little-endian (0018 §2).
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Draw {
@@ -433,6 +440,11 @@ pub fn hash_region(region: &[u8], record_count: u32) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rgba_packs_byte0_as_red() {
+        assert_eq!(rgba(1, 2, 3, 4), 0x0403_0201);
+    }
 
     fn region() -> Vec<u8> {
         vec![0u8; REGION_BYTES]

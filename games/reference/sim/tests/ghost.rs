@@ -160,7 +160,7 @@ fn ghost_tint_follows_can_place() {
     let (_, unk, _) = ghosts(&c, &world(&r, edge), &r, &none, Some(TilePos::new(6, 2)));
     assert_eq!((ok.len(), bad.len(), unk.len()), (1, 1, 1));
     let colors = [ok[0].3, bad[0].3, unk[0].3];
-    assert_eq!(colors, [0x40ff_4090, 0xff40_4090, 0xc0c0_c090]);
+    assert_eq!(colors, [0x9040_ff40, 0x9040_40ff, 0x90c0_c0c0]);
 
     // Anchored to the cursor tile, 2x2, centred at (1, 1) relative to its min corner.
     assert_eq!(ok[0].0 & ANCHOR_CURSOR_TILE, ANCHOR_CURSOR_TILE);
@@ -169,7 +169,7 @@ fn ghost_tint_follows_can_place() {
     // Only the far column of the footprint is water: still invalid (origin (6, 2) covers x = 6, 7).
     let (_, edge_water, _) = ghosts(&c, &world(&r, shore), &r, &none, Some(TilePos::new(5, 2)));
     assert_eq!(
-        edge_water[0].3, 0x40ff_4090,
+        edge_water[0].3, 0x9040_ff40,
         "origin (5,2) covers x = 5, 6: all grass"
     );
 }

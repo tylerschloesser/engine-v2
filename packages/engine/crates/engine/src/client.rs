@@ -21,7 +21,7 @@ pub use camera::CameraBlock;
 pub use core::{ActionError, ClientCore, FrameSummary, OUTBOX_CAPACITY};
 pub use drawlist::{
     ANCHOR_CURSOR_TILE, ANCHOR_SLOTS, Draw, DrawList, FLIP_X, KIND_BAR, KIND_CIRCLE, KIND_GHOST,
-    KIND_RADIAL, KIND_RECT, KIND_RING, KIND_SPRITE, PREDICTED, SCREEN_PX_STROKE, SpriteId,
+    KIND_RADIAL, KIND_RECT, KIND_RING, KIND_SPRITE, PREDICTED, SCREEN_PX_STROKE, SpriteId, rgba,
     snap_window_origin,
 };
 pub use frame_cx::FrameCx;

@@ -53,6 +53,9 @@ test('reference_draws_player_furnace_and_ghost', async ({ page }) => {
   expect(circle, 'the player circle is in the DrawList').toBeTruthy()
   const player = await delta(page, (circle as { x: number }).x, (circle as { y: number }).y)
   expect(player.sum, 'player circle pixel differs from terrain').toBeGreaterThan(VISIBLE)
+  expect(player.d[1], 'player circle is green: green moves more than red').toBeGreaterThan(
+    player.d[0] as number,
+  )
 
   // Construction mode: the ghost's tint changes across the shore. The
   // tile (2, -1) sits inside both the shore-ok footprint (origin 1,-1) and the shore-water one (2,-1).
@@ -71,8 +74,10 @@ test('reference_draws_player_furnace_and_ghost', async ({ page }) => {
   const bad = await hover(PLACE.shoreWater)
   expect(ok.sum, 'valid ghost pixel differs from terrain').toBeGreaterThan(TINT_VISIBLE)
   expect(bad.sum, 'invalid ghost pixel differs from terrain').toBeGreaterThan(TINT_VISIBLE)
-  // The tint follows `can_place`: the same pixel moves differently under the two colours. (Which
-  // hues they are is not asserted: see Deviations, the ghost colours' byte order.)
+  // The tint follows `can_place`: green over a valid footprint, red over an invalid one (the same
+  // tile, so the terrain under it is identical; compared as the change against the pass off).
+  expect((ok.d[1] as number) - (ok.d[0] as number), 'valid ghost tints green').toBeGreaterThan(0)
+  expect((bad.d[0] as number) - (bad.d[1] as number), 'invalid ghost tints red').toBeGreaterThan(0)
   const tintGap = ok.d.reduce((a, v, i) => a + Math.abs(v - (bad.d[i] as number)), 0)
   expect(tintGap, 'valid and invalid footprints tint differently').toBeGreaterThan(TINT_VISIBLE)
 

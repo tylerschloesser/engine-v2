@@ -274,7 +274,7 @@ export const PLACE = {
 } as const
 
 /** `ghost`/`sprite` colours and flags (`sim/src/client.rs`, `engine::client::drawlist`). */
-export const GHOST = { valid: 0x40ff4090, invalid: 0xff404090, unknown: 0xc0c0c090 } as const
+export const GHOST = { valid: 0x9040ff40, invalid: 0x904040ff, unknown: 0x90c0c0c0 } as const
 export const FLAG = { anchorCursorTile: 1 << 0, predicted: 1 << 2 } as const
 export const KIND = { sprite: 0, ghost: 6 } as const
 

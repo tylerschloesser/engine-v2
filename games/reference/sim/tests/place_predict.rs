@@ -316,7 +316,7 @@ fn extract_draws_predicted_then_real_furnace_sprite() {
         if EntityId(pick).is_provisional() {
             saw_predicted = true;
             assert_eq!(flags & PREDICTED, PREDICTED);
-            assert_eq!(color, 0xffff_ff99);
+            assert_eq!(color, 0x99ff_ffff);
         } else {
             assert_eq!(flags & PREDICTED, 0, "real furnace is not flagged");
             assert_eq!(color, 0xffff_ffff);

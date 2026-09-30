@@ -12,7 +12,7 @@ use std::cell::{Cell, RefCell};
 use engine::client::input::kind as input_kind;
 use engine::client::{
     ANCHOR_CURSOR_TILE, ClientSide, DrawList, FrameCx, FrameView, PREDICTED, SCREEN_PX_STROKE,
-    SpriteId, TileTexel,
+    SpriteId, TileTexel, rgba,
 };
 use engine::game::Presence;
 use engine::world::{Tile, TilePos, WorldPos};
@@ -57,11 +57,11 @@ const SPRING_OMEGA: f64 = 6.0;
 /// number given, so a value that reads clearly at the default zoom is chosen here).
 const PLAYER_DIAMETER_TILES: f32 = 0.6;
 
-/// Opaque green-ish player colour (rgba8, arbitrary -- Requirements name no colour).
-const PLAYER_COLOR: u32 = 0x40c0_40ff;
+/// Opaque green-ish player colour (via `rgba`, arbitrary -- Requirements name no colour).
+const PLAYER_COLOR: u32 = rgba(0x40, 0xc0, 0x40, 0xff);
 /// A faint ring colour (translucent, low alpha) so the range indicator reads as a hint, not a
 /// second solid shape.
-const RANGE_RING_COLOR: u32 = 0x40c0_4060;
+const RANGE_RING_COLOR: u32 = rgba(0x40, 0xc0, 0x40, 0x60);
 
 /// `extract`'s own layer for the player circle and range ring (`0..8`, 0018 §2); low, so terrain
 /// (layer 0, implicitly) sits under it and any future UI-ish drawable (buttons are DOM, not drawn)
@@ -73,16 +73,16 @@ const LAYER_FURNACE: u8 = 0;
 
 /// A furnace sprite's tint: white (the atlas colour comes through unchanged), and the same white at
 /// reduced alpha while the record is predicted (the ghost-to-real swap restores it in one frame).
-const FURNACE_TINT: u32 = 0xffff_ffff;
+const FURNACE_TINT: u32 = rgba(0xff, 0xff, 0xff, 0xff);
 
 /// The placement ghost (layer above the furnaces and the player): translucent green when
 /// `can_place` says yes, red when no, neutral grey when it is `Unknown` (the subscription edge: the
 /// action is still sent, 0012).
 const LAYER_GHOST: u8 = 2;
-const GHOST_VALID: u32 = 0x40ff_4090;
-const GHOST_INVALID: u32 = 0xff40_4090;
-const GHOST_UNKNOWN: u32 = 0xc0c0_c090;
-const FURNACE_TINT_PREDICTED: u32 = 0xffff_ff99;
+const GHOST_VALID: u32 = rgba(0x40, 0xff, 0x40, 0x90);
+const GHOST_INVALID: u32 = rgba(0xff, 0x40, 0x40, 0x90);
+const GHOST_UNKNOWN: u32 = rgba(0xc0, 0xc0, 0xc0, 0x90);
+const FURNACE_TINT_PREDICTED: u32 = rgba(0xff, 0xff, 0xff, 0x99);
 
 /// A drawable smaller than this many CSS px is skipped entirely (Scope: "both skipped when
 /// `FrameView.zoom` makes the circle smaller than 2 px" -- read via `px_per_tile()`, the accessor
