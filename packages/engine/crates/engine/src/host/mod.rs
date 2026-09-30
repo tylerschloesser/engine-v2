@@ -474,14 +474,15 @@ pub struct Host<G: Game> {
     /// for a chunk it has only ever seen as pristine, `client::Replica` Deviations).
     chunk_versions: BTreeMap<ChunkCoord, u32>,
     /// docs/plan/31b-desync-hashes.md: how much desync hashing this host does
-    /// ([`hashes::HashMode`]; `SimConfig::hash_mode`, [`Host::set_hash_mode`]). Step 4's `HASH_ALL`
-    /// flag selects `All`.
+    /// ([`hashes::HashMode`]; `SimConfig::hash_mode`, [`Host::set_hash_mode`]); `Production` by
+    /// default, and `All` is what the `Welcome` `HASH_ALL` flag announces.
     hash_mode: hashes::HashMode,
     /// The desync reports this host recorded (a `ResyncChunk` arrived): ring of 16 plus counter.
     desyncs: crate::integrity::DesyncLog,
     /// This frame's `Hashes` entries and the chunks the schedule may pick from (reused scratch).
     scratch_hashes: Vec<crate::wire::HashEntry>,
     scratch_eligible: Vec<ChunkCoord>,
+    scratch_hash_picks: Vec<hashes::Pick>,
     /// The tick `tick()` most recently completed; `build_frame`'s `FrameHeader.tick` and the tick
     /// `chunk_versions` entries are stamped with (host/mod Deviations: `Sim::step` advances the
     /// clock at the very end, so the *completed* tick is `sim.tick()` as read just before `step`).
@@ -808,10 +809,11 @@ impl<G: Game> Host<G> {
             pending_records: Vec::new(),
             last_superseded: None,
             chunk_versions: BTreeMap::new(),
-            hash_mode: hashes::HashMode::Off,
+            hash_mode: hashes::HashMode::Production,
             desyncs: crate::integrity::DesyncLog::default(),
-            scratch_hashes: Vec::new(),
-            scratch_eligible: Vec::new(),
+            scratch_hashes: Vec::with_capacity(8),
+            scratch_eligible: Vec::with_capacity(64),
+            scratch_hash_picks: Vec::with_capacity(4),
             last_tick: Tick(0),
             scratch_roster: Vec::new(),
             scratch_entered: Vec::new(),
@@ -957,9 +959,8 @@ impl<G: Game> Host<G> {
     }
 
     /// docs/plan/31b-desync-hashes.md: sets how much desync hashing the host does, for every
-    /// connection ([`hashes::HashMode`]). Both `genesis_for_test` and the ABI path start `Off`
-    /// unless `SimConfig::hash_mode` says otherwise (pinned-byte tests predate hashing). Step 4's
-    /// `HASH_ALL` flag calls this with `All`.
+    /// connection ([`hashes::HashMode`]). Both `genesis_for_test` and the ABI path start
+    /// `Production` unless `SimConfig::hash_mode` says otherwise.
     pub fn set_hash_mode(&mut self, mode: hashes::HashMode) {
         self.hash_mode = mode;
     }
@@ -1441,6 +1442,7 @@ impl<G: Game> Host<G> {
                 view_max_chunks: self.view_max_chunks,
                 last_processed_action_seq,
                 presence: echoed_presence.as_ref(),
+                hash_all: self.hash_mode == hashes::HashMode::All,
             },
         );
     }
@@ -2199,58 +2201,16 @@ impl<G: Game> Host<G> {
         let want_action_results = !slot.pending_results.is_empty();
 
         // -- Hashes (docs/plan/31b-desync-hashes.md, 0013 "Per-chunk desync hashes") ---------------
-        // Only chunks whose state the client is guaranteed to hold once it has applied this frame
-        // are hashed: held, not collapsed (deltas withheld until its snapshot goes), not queued for
-        // a snapshot, not leaving. What was chosen is committed only if the frame is sent.
+        // Chosen below, once a frame is certain to be built: a due hash never forces one (R2), it
+        // rides the next frame sent anyway. What was chosen is committed only if the frame is sent.
         self.scratch_hashes.clear();
+        self.scratch_hash_picks.clear();
         let hash_tick = self.last_tick.0;
         let hash_hz = G::TICK_RATE.hz_value();
         let hash_all = self.hash_mode == hashes::HashMode::All;
         let hashing = self.hash_mode != hashes::HashMode::Off;
         let chunk_due = hashing && (hash_all || slot.hashes.chunk_due(hash_tick));
         let scope_due = hashing && (hash_all || slot.hashes.scope_due(hash_tick));
-        let mut hash_pick: Option<hashes::Pick> = None;
-        if chunk_due {
-            self.scratch_eligible.clear();
-            for &c in &slot.pace.held {
-                if !slot.pace.is_collapsed(c)
-                    && slot.pace.queue_position(c).is_none()
-                    && !self.scratch_left.contains(&c)
-                {
-                    self.scratch_eligible.push(c);
-                }
-            }
-            insertion_sort_by_key(&mut self.scratch_eligible, |c| (c.y, c.x));
-            if hash_all {
-                for &coord in &self.scratch_eligible {
-                    self.scratch_hashes.push(crate::wire::HashEntry::Chunk {
-                        coord,
-                        hash: crate::integrity::chunk_hash(store, coord),
-                    });
-                }
-            } else {
-                let versions = &self.chunk_versions;
-                hash_pick = slot.hashes.pick(&self.scratch_eligible, |c| {
-                    versions.get(&c).copied().unwrap_or(0)
-                });
-                if let Some(p) = hash_pick {
-                    self.scratch_hashes.push(crate::wire::HashEntry::Chunk {
-                        coord: p.coord,
-                        hash: crate::integrity::chunk_hash(store, p.coord),
-                    });
-                }
-            }
-        }
-        if scope_due {
-            self.scratch_hashes.push(crate::wire::HashEntry::Global {
-                hash: crate::integrity::global_hash(store),
-            });
-            if store.player(slot.player).is_ok() {
-                self.scratch_hashes.push(crate::wire::HashEntry::OwnPlayer {
-                    hash: crate::integrity::player_hash(store, slot.player),
-                });
-            }
-        }
 
         // -- Nothing to say? ---------------------------------------------------------------------
         let mut build = true;
@@ -2266,7 +2226,6 @@ impl<G: Game> Host<G> {
         // simply returns a real (if minimal) length instead of `0` on a tick where one is due.
         if !first
             && !resend
-            && self.scratch_hashes.is_empty()
             && !want_roster
             && !want_global_value
             && !player_changed
@@ -2283,6 +2242,60 @@ impl<G: Game> Host<G> {
             let since_last_send = self.last_tick.0.wrapping_sub(slot.last_sent_tick.0);
             if since_last_send < heartbeat_ticks {
                 build = false;
+            }
+        }
+
+        // Only chunks whose state the client is guaranteed to hold once it has applied this frame
+        // are hashed: held, not collapsed (deltas withheld until its snapshot goes), not queued for
+        // a snapshot, not leaving.
+        if build && chunk_due {
+            self.scratch_eligible.clear();
+            for &c in &slot.pace.held {
+                if !slot.pace.is_collapsed(c)
+                    && slot.pace.queue_position(c).is_none()
+                    && !self.scratch_left.contains(&c)
+                {
+                    self.scratch_eligible.push(c);
+                }
+            }
+            insertion_sort_by_key(&mut self.scratch_eligible, |c| (c.y, c.x));
+            slot.hashes.reserve_chunks(self.scratch_eligible.len());
+            if hash_all {
+                for &coord in &self.scratch_eligible {
+                    self.scratch_hashes.push(crate::wire::HashEntry::Chunk {
+                        coord,
+                        hash: crate::integrity::chunk_hash(store, coord),
+                    });
+                }
+            } else {
+                let versions = &self.chunk_versions;
+                for _ in 0..slot.hashes.due_count(hash_tick) {
+                    let Some(p) = slot.hashes.pick_after(
+                        &self.scratch_eligible,
+                        |c| versions.get(&c).copied().unwrap_or(0),
+                        &self.scratch_hash_picks,
+                    ) else {
+                        break;
+                    };
+                    if self.scratch_hash_picks.iter().any(|q| q.coord == p.coord) {
+                        break;
+                    }
+                    self.scratch_hash_picks.push(p);
+                    self.scratch_hashes.push(crate::wire::HashEntry::Chunk {
+                        coord: p.coord,
+                        hash: crate::integrity::chunk_hash(store, p.coord),
+                    });
+                }
+            }
+        }
+        if build && scope_due {
+            self.scratch_hashes.push(crate::wire::HashEntry::Global {
+                hash: crate::integrity::global_hash(store),
+            });
+            if store.player(slot.player).is_ok() {
+                self.scratch_hashes.push(crate::wire::HashEntry::OwnPlayer {
+                    hash: crate::integrity::player_hash(store, slot.player),
+                });
             }
         }
 
@@ -2423,7 +2436,7 @@ impl<G: Game> Host<G> {
             slot.pace.overflow_shift += 1;
         }
         if build && !overflowed {
-            if let Some(p) = hash_pick {
+            for &p in &self.scratch_hash_picks {
                 slot.hashes.commit(hash_tick, p);
             }
             if hash_all {
@@ -2742,11 +2755,13 @@ where
             hash_mode: match cfg.hash_mode.as_deref() {
                 Some("production") => hashes::HashMode::Production,
                 Some("all") => hashes::HashMode::All,
-                _ => hashes::HashMode::Off,
+                Some("off") => hashes::HashMode::Off,
+                _ => hashes::HashMode::Production,
             },
             desyncs: crate::integrity::DesyncLog::default(),
-            scratch_hashes: Vec::new(),
-            scratch_eligible: Vec::new(),
+            scratch_hashes: Vec::with_capacity(8),
+            scratch_eligible: Vec::with_capacity(64),
+            scratch_hash_picks: Vec::with_capacity(4),
             last_tick: Tick(0),
             scratch_roster: Vec::new(),
             scratch_entered: Vec::new(),

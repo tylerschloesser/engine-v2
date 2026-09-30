@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 35
+export const ABI_VERSION = 36
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -233,6 +233,12 @@ export const ABI_EXPORTS = {
   sim_desync: { role: 'sim', params: 1, result: 'status' },
   // Same layout for the client role's own ring.
   client_desync: { role: 'client', params: 1, result: 'status' },
+  // docs/plan/31b-desync-hashes.md (`ABI_VERSION` 35 -> 36), `engine/test` only: the dump files of
+  // hash-all mode, written into `Tx`, returning the byte count (`0` = no completed dump). `part`
+  // 0: the oldest dump's header `tick u32, cx i32, cy i32, client_len u32` (LE); 1: the client's
+  // encoding of the chunk when its hash mismatched; 2: the host's encoding (the replica's after
+  // the resync snapshot replaced it); 3: drop that dump.
+  client_desync_dump: { role: 'client', params: 1, result: 'len' },
   // Fault injection, `engine/test` only: the next frame for `conn` drops one delta of the chunk
   // packed in the second argument, `(cx as i16 as u16) | ((cy as i16 as u16) << 16)` (the loader
   // has no three-argument call); `0x80008000` instead drops every `Global` value update until a frame carries the

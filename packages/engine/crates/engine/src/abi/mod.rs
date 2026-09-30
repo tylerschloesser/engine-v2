@@ -714,6 +714,17 @@ pub fn client_desync<T: Instance>(slot: &Slot<T>, index: u32) -> Status {
     rt.inst.client_desync(index, result)
 }
 
+/// `client_desync_dump(part) -> len`, or `-(status)`: `Instance::client_desync_dump`, into `Tx`.
+/// `engine/test`-only.
+pub fn client_desync_dump<T: Instance>(slot: &Slot<T>, part: u32) -> i32 {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return -(status as i32),
+    };
+    let out = rt.layout.bytes_mut(RegionId::Tx);
+    rt.inst.client_desync_dump(part, out) as i32
+}
+
 /// `sim_skip_delta(conn, coord) -> status`: `Instance::sim_skip_delta`. `engine/test`-only.
 pub fn sim_skip_delta<T: Instance>(slot: &Slot<T>, conn: u32, coord: u32) -> Status {
     match slot.sim() {

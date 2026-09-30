@@ -536,6 +536,12 @@
       "formula": "docs/plan/28b-reconnect-and-lifecycle.md step 5, reconnect/cost (tests/netcode/reconnect.test.ts): a wilderness reconnect (fx-puts, one client, camera far from the once-a-second origin paint so every kept chunk needs zero bytes beyond its own 3-byte ChunkKeeps coordinate entry) -- reconnectBytesUp/Down (NetHarnessCounters, Hello through the first frame after its Welcome). Measured (this session, seed 3010, deterministic): 209 B up (Hello: frozen prefix 38 B + empty join_key 1 B + secret 16 B + CameraReport 16 B + resume_present 1 B + epoch/last_tick 8 B + 16 held-chunk hints * 8 B = 128 B), 90 B down (Welcome ~29 B + first frame: 10 B header + Global/OwnPlayer + one ChunkKeeps section of 16 coordinate entries, no ChunkSnapshots/ChunkEnterPristine needed). ceil(measured * 1.25) rounded up for jitter headroom, same margin convention as counters.simWorker.snapshotEventBytes: 209*1.25=261.25 -> 280; 90*1.25=112.5 -> 130. Both comfortably under 0013 Reconnect/PRE-PLAN.md §7 Bandwidth per client, burst own ~1 KB each-way ceiling -- this row is the measured, regression-catching figure for one specific scenario, not the spec ceiling itself."
     },
     "net": {
+      "hashesBytesPerS": {
+        "counter": "hashesBytesPerS",
+        "exact": 63,
+        "ceiling": 66,
+        "source": "docs/decisions/0013-sessions-and-integrity.md Per-chunk desync hashes: one subscribed chunk per 4 ticks (a Chunk entry of 11 B for small coordinates), Global and OwnPlayer every 5 s (9 B each), which 0013 puts at ~60 B/s per client; the ceiling is ceil(60 * 1.1), the 10 % covering the 2-byte Hashes section framing on each of the 2 heartbeat frames per second that carry them (docs/plan/31b-desync-hashes.md R2: a due hash rides a frame sent anyway). Measured (seed 4108, one client, quiet fx-puts world, production cadence, 20 s after the join settles): 63 B/s. Scenario: tests/netcode/integrity.test.ts integrity/hash-bytes-per-second. Hash-all is exempt (it is a dev and test mode, not a production cost)."
+      },
       "baselineCountersExactBytesDown": {
         "counter": "bytesDown",
         "exact": 112,

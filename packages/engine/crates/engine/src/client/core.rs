@@ -224,6 +224,33 @@ pub struct ClientCore<G: Game> {
     /// `ResyncChunk` requests owed to (or awaiting an answer from) the host, one per chunk or the
     /// reserved scope coordinate: see [`ResyncRequest`]. Bounded by [`MAX_RESYNC_REQUESTS`].
     resyncs: Vec<ResyncRequest>,
+    /// `Welcome`'s `HASH_ALL` flag: the host hashes every subscribed chunk every frame, so a
+    /// mismatch keeps this client's own encoding of the chunk until the resync snapshot arrives
+    /// and then keeps both ([`DesyncDump`]).
+    hash_all: bool,
+    /// Mismatched chunks whose own encoding is held until their resync snapshot lands.
+    dump_pending: Vec<PendingDump>,
+    /// Completed dumps, oldest first, at most [`MAX_DUMPS`].
+    dumps: Vec<DesyncDump>,
+}
+
+/// How many completed dumps a client keeps for the harness to take.
+pub const MAX_DUMPS: usize = 16;
+
+struct PendingDump {
+    tick: u32,
+    coord: ChunkCoord,
+    client: Vec<u8>,
+}
+
+/// Both encodings of one chunk that differed (hash-all mode only): the client's own at the tick
+/// the `Hashes` entry mismatched, and the replica's after the host's resync snapshot replaced it,
+/// which is exactly the host's encoding at the time it answered.
+pub struct DesyncDump {
+    pub tick: u32,
+    pub coord: ChunkCoord,
+    pub client: Vec<u8>,
+    pub host: Vec<u8>,
 }
 
 /// One outstanding `ResyncChunk` (docs/plan/31b-desync-hashes.md). `coord` is
@@ -296,6 +323,9 @@ impl<G: Game> ClientCore<G> {
             epoch: 0,
             desyncs: DesyncLog::default(),
             resyncs: Vec::with_capacity(16),
+            hash_all: false,
+            dump_pending: Vec::new(),
+            dumps: Vec::new(),
         }
     }
 
@@ -444,6 +474,7 @@ impl<G: Game> ClientCore<G> {
         }
         self.overlay.clear();
         self.resyncs.clear();
+        self.dump_pending.clear();
         self.rebase_interp();
     }
 
@@ -702,6 +733,23 @@ impl<G: Game> ClientCore<G> {
     /// This client's desync reports (docs/plan/31b-desync-hashes.md).
     pub fn desyncs(&self) -> &DesyncLog {
         &self.desyncs
+    }
+
+    /// `Welcome` announced (or withdrew) hash-all mode.
+    pub fn set_hash_all(&mut self, on: bool) {
+        self.hash_all = on;
+    }
+
+    /// The oldest completed dump, if any (hash-all mode; `client_desync_dump`).
+    pub fn first_dump(&self) -> Option<&DesyncDump> {
+        self.dumps.first()
+    }
+
+    /// Drops the oldest completed dump.
+    pub fn pop_dump(&mut self) {
+        if !self.dumps.is_empty() {
+            self.dumps.remove(0);
+        }
     }
 
     /// Test fault injection (`client_corrupt_chunk`): flips one replica byte of a held chunk.
@@ -1128,6 +1176,20 @@ impl<G: Game> ClientCore<G> {
                         self.replica
                             .apply_snapshot_overlay(chunk, version, &self.scratch_tiles);
                         self.resyncs.retain(|r| r.coord != chunk);
+                        if let Some(i) = self.dump_pending.iter().position(|d| d.coord == chunk) {
+                            let pending = self.dump_pending.remove(i);
+                            let mut host = Vec::new();
+                            self.replica.encode_chunk(chunk, &mut host);
+                            if self.dumps.len() == MAX_DUMPS {
+                                self.dumps.remove(0);
+                            }
+                            self.dumps.push(DesyncDump {
+                                tick: pending.tick,
+                                coord: chunk,
+                                client: pending.client,
+                                host,
+                            });
+                        }
                         summary.chunk_snapshots += 1;
                     }
                 }
@@ -1137,6 +1199,7 @@ impl<G: Game> ClientCore<G> {
                         let c = cr.read(&mut br).expect("validated");
                         self.replica.apply_leave(c);
                         self.resyncs.retain(|r| r.coord != c);
+                        self.dump_pending.retain(|d| d.coord != c);
                         summary.chunk_leaves += 1;
                     }
                 }
@@ -1209,6 +1272,8 @@ impl<G: Game> ClientCore<G> {
                         replica,
                         desyncs,
                         resyncs,
+                        hash_all,
+                        dump_pending,
                         ..
                     } = self;
                     let tick = header.tick;
@@ -1226,6 +1291,18 @@ impl<G: Game> ClientCore<G> {
                                     hash,
                                     mine,
                                 );
+                                if *hash_all
+                                    && dump_pending.len() < MAX_DUMPS
+                                    && !dump_pending.iter().any(|d| d.coord == coord)
+                                {
+                                    let mut client = Vec::new();
+                                    replica.encode_chunk(coord, &mut client);
+                                    dump_pending.push(PendingDump {
+                                        tick,
+                                        coord,
+                                        client,
+                                    });
+                                }
                             }
                         }
                         HashEntry::Global { hash } => {

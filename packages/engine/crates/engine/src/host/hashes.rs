@@ -8,10 +8,12 @@
 //! chunks faster than the sweep cannot starve a quiet, possibly corrupt, chunk forever. `Global`
 //! and `OwnPlayer` every [`SCOPE_HASH_EVERY_SECONDS`] seconds.
 //!
-//! **Hash-all** ([`HashMode::All`], `Host::set_hash_mode`: the step-4 flag's landing place): every eligible chunk and
-//! both scopes on every frame; [`HashSchedule::pick`] is not consulted.
-
-use std::collections::BTreeMap;
+//! A due hash never forces a frame: entries due since the last sent frame ride the next frame that
+//! is sent anyway (a heartbeat included), in schedule order ([`HashSchedule::due_count`] of them).
+//!
+//! **Hash-all** ([`HashMode::All`], `Host::set_hash_mode`; announced to the client by the
+//! `Welcome` `HASH_ALL` flag): every eligible chunk and both scopes on every frame sent;
+//! [`HashSchedule::pick`] is not consulted.
 
 use crate::world::ChunkCoord;
 
@@ -21,15 +23,19 @@ pub const CHUNK_HASH_EVERY_TICKS: u32 = 4;
 pub const SCOPE_HASH_EVERY_SECONDS: u32 = 5;
 /// Every this-many-th pick is round-robin even when a modified chunk is waiting.
 pub const FAIR_EVERY: u32 = 4;
+/// At most this many chunk hashes ride one frame (a heartbeat after a quiet stretch carries the
+/// ones that fell due meanwhile).
+pub const MAX_DUE_PER_FRAME: u32 = 4;
 
 /// How much desync hashing a host does (`Host::set_hash_mode`; `SimConfig::hash_mode`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum HashMode {
-    /// No `Hashes` sections at all: the default until step 4 turns hashing on for the harness and
-    /// the dev server (every pinned-byte test predates hashing).
-    #[default]
+    /// No `Hashes` sections at all: for a scenario that pins non-hash bytes (the harness opts in
+    /// with a reason at each use).
     Off,
-    /// The 0013 schedule: one chunk per 4 ticks, `Global`/`OwnPlayer` every 5 s.
+    /// The 0013 schedule: one chunk per 4 ticks, `Global`/`OwnPlayer` every 5 s. The default: a
+    /// due hash rides the next frame that is sent anyway and never forces one.
+    #[default]
     Production,
     /// Every eligible held chunk and both scopes on every frame (0013 "dev builds").
     All,
@@ -50,7 +56,9 @@ pub struct HashSchedule {
     next_scope_tick: u32,
     cursor: Option<ChunkCoord>,
     /// The tick each chunk was last hashed at.
-    last_hashed: BTreeMap<ChunkCoord, u32>,
+    /// Sorted by coordinate: a `Vec`, not a map, so a chunk entering the held set costs no node
+    /// allocation once its capacity has stepped up (hot-paths rule).
+    last_hashed: Vec<(ChunkCoord, u32)>,
     picks: u32,
     /// A `ResyncChunk` for the reserved coordinate is owed: the next frame carries `Global` and
     /// `OwnPlayer` in full.
@@ -68,10 +76,32 @@ impl HashSchedule {
             next_chunk_tick: tick,
             next_scope_tick: tick.wrapping_add(SCOPE_HASH_EVERY_SECONDS * hz),
             cursor: None,
-            last_hashed: BTreeMap::new(),
+            last_hashed: Vec::with_capacity(32),
             picks: 0,
             resend_scopes: false,
             skip_delta: None,
+        }
+    }
+
+    /// Room for `n` chunks, taken as soon as the held set is known rather than one insert at a
+    /// time as the round-robin sweep reaches each chunk (a sweep of a large held set takes hundreds
+    /// of ticks: the capacity step must not land in steady state).
+    pub fn reserve_chunks(&mut self, n: usize) {
+        if self.last_hashed.capacity() < n {
+            self.last_hashed.reserve(n - self.last_hashed.len());
+        }
+    }
+
+    fn seen(&self, chunk: ChunkCoord) -> u32 {
+        self.last_hashed
+            .binary_search_by_key(&chunk, |e| e.0)
+            .map_or(0, |i| self.last_hashed[i].1)
+    }
+
+    fn mark(&mut self, chunk: ChunkCoord, tick: u32) {
+        match self.last_hashed.binary_search_by_key(&chunk, |e| e.0) {
+            Ok(i) => self.last_hashed[i].1 = tick,
+            Err(i) => self.last_hashed.insert(i, (chunk, tick)),
         }
     }
 
@@ -85,6 +115,16 @@ impl HashSchedule {
         tick.wrapping_sub(self.next_scope_tick) < u32::MAX / 2
     }
 
+    /// How many chunk hashes have fallen due by `tick` (at most [`MAX_DUE_PER_FRAME`]), counting
+    /// the one due now: a frame that was not sent for a while carries each of them.
+    pub fn due_count(&self, tick: u32) -> u32 {
+        if !self.chunk_due(tick) {
+            return 0;
+        }
+        (1 + tick.wrapping_sub(self.next_chunk_tick) / CHUNK_HASH_EVERY_TICKS)
+            .min(MAX_DUE_PER_FRAME)
+    }
+
     /// Chooses the chunk to hash from `eligible` (sorted ascending by `(y, x)`); `version_of` is the
     /// host's last-modified tick of a chunk. Does not change the schedule: [`Self::commit`] does.
     pub fn pick(
@@ -92,25 +132,46 @@ impl HashSchedule {
         eligible: &[ChunkCoord],
         version_of: impl Fn(ChunkCoord) -> u32,
     ) -> Option<Pick> {
+        self.pick_after(eligible, version_of, &[])
+    }
+
+    /// [`Self::pick`] as the next choice after `earlier` (picked for the same frame, not yet
+    /// committed): those chunks count as hashed now, and the cursor and fairness counter as if
+    /// they were committed.
+    pub fn pick_after(
+        &self,
+        eligible: &[ChunkCoord],
+        version_of: impl Fn(ChunkCoord) -> u32,
+        earlier: &[Pick],
+    ) -> Option<Pick> {
         if eligible.is_empty() {
             return None;
         }
+        let cursor = earlier
+            .iter()
+            .rev()
+            .find(|p| p.round_robin)
+            .map(|p| p.coord)
+            .or(self.cursor);
+        let picks = self.picks.wrapping_add(earlier.len() as u32);
         let round_robin = || {
-            let after = self
-                .cursor
-                .and_then(|cur| eligible.iter().find(|c| (c.y, c.x) > (cur.y, cur.x)));
+            let after =
+                cursor.and_then(|cur| eligible.iter().find(|c| (c.y, c.x) > (cur.y, cur.x)));
             Pick {
                 coord: *after.unwrap_or(&eligible[0]),
                 round_robin: true,
             }
         };
-        if self.picks % FAIR_EVERY == FAIR_EVERY - 1 {
+        if picks % FAIR_EVERY == FAIR_EVERY - 1 {
             return Some(round_robin());
         }
         let mut best: Option<(u32, ChunkCoord)> = None;
         for &c in eligible {
+            if earlier.iter().any(|p| p.coord == c) {
+                continue;
+            }
             let v = version_of(c);
-            let seen = self.last_hashed.get(&c).copied().unwrap_or(0);
+            let seen = self.seen(c);
             if v > seen && best.is_none_or(|(bv, _)| v > bv) {
                 best = Some((v, c));
             }
@@ -126,17 +187,26 @@ impl HashSchedule {
 
     /// The frame carrying `pick` was sent at `tick`.
     pub fn commit(&mut self, tick: u32, pick: Pick) {
-        self.last_hashed.insert(pick.coord, tick);
+        self.mark(pick.coord, tick);
         if pick.round_robin {
             self.cursor = Some(pick.coord);
         }
         self.picks = self.picks.wrapping_add(1);
-        self.next_chunk_tick = tick.wrapping_add(CHUNK_HASH_EVERY_TICKS);
+        // One period per chunk hashed, counted from when it fell due, so a frame that carries
+        // several keeps the cadence; never further behind than the most one frame carries.
+        let next = self.next_chunk_tick.wrapping_add(CHUNK_HASH_EVERY_TICKS);
+        let behind = tick.wrapping_sub(next);
+        self.next_chunk_tick =
+            if (CHUNK_HASH_EVERY_TICKS * MAX_DUE_PER_FRAME..u32::MAX / 2).contains(&behind) {
+                tick.wrapping_sub(CHUNK_HASH_EVERY_TICKS * (MAX_DUE_PER_FRAME - 1))
+            } else {
+                next
+            };
     }
 
     /// A frame carrying every eligible chunk (hash-all) was sent: remember when each was hashed.
     pub fn commit_all(&mut self, tick: u32, chunk: ChunkCoord) {
-        self.last_hashed.insert(chunk, tick);
+        self.mark(chunk, tick);
     }
 
     /// The `Global`/`OwnPlayer` pair was sent at `tick`.
@@ -146,6 +216,8 @@ impl HashSchedule {
 
     /// `chunk` left the connection's held set.
     pub fn forget(&mut self, chunk: ChunkCoord) {
-        self.last_hashed.remove(&chunk);
+        if let Ok(i) = self.last_hashed.binary_search_by_key(&chunk, |e| e.0) {
+            self.last_hashed.remove(i);
+        }
     }
 }

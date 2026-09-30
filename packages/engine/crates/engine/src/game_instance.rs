@@ -1206,6 +1206,7 @@ where
                 }
                 c.core.set_epoch(welcome.epoch);
                 c.core.replica_mut().set_own_player(welcome.player_id);
+                c.core.set_hash_all(welcome.hash_all);
                 if let Some(sample) = &welcome.presence {
                     c.core.seed_presence(sample);
                     c.presence = *sample;
@@ -1368,6 +1369,40 @@ where
                 Status::Ok
             }
             _ => Status::Unsupported,
+        }
+    }
+
+    fn client_desync_dump(&mut self, part: u32, tx: &mut [u8]) -> usize {
+        let GameInstance::Client(c) = self else {
+            return 0;
+        };
+        if part == 3 {
+            c.core.pop_dump();
+            return 0;
+        }
+        let Some(d) = c.core.first_dump() else {
+            return 0;
+        };
+        let bytes: &[u8] = match part {
+            0 => {
+                let Some(out) = tx.get_mut(..16) else {
+                    return 0;
+                };
+                out[0..4].copy_from_slice(&d.tick.to_le_bytes());
+                out[4..8].copy_from_slice(&d.coord.x.to_le_bytes());
+                out[8..12].copy_from_slice(&d.coord.y.to_le_bytes());
+                out[12..16].copy_from_slice(&(d.client.len() as u32).to_le_bytes());
+                return 16;
+            }
+            1 => &d.client,
+            _ => &d.host,
+        };
+        match tx.get_mut(..bytes.len()) {
+            Some(out) => {
+                out.copy_from_slice(bytes);
+                bytes.len()
+            }
+            None => 0,
         }
     }
 

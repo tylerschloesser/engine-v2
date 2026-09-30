@@ -56,3 +56,49 @@ export function readDesyncLog(
   }
   return out
 }
+
+/** One hash-all dump (docs/plan/31b-desync-hashes.md): both encodings of a chunk whose hash
+ * mismatched. `client` is the replica's bytes when the mismatched `Hashes` entry was checked;
+ * `host` is the replica's bytes after the host's resync snapshot replaced them, i.e. the host's
+ * encoding when it answered. Both are `integrity::encode_chunk` bytes (snapshot version written 0). */
+export interface DesyncDump {
+  tick: number
+  cx: number
+  cy: number
+  client: Uint8Array
+  host: Uint8Array
+  /** The first offset at which the two differ, or -1 when they are the same bytes (the chunk
+   * changed again between the mismatch and the answer) or -2 when one is a prefix of the other. */
+  firstDiff: number
+}
+
+/** Drains every completed dump of one client (`client_desync_dump`, parts 0-3). */
+export function takeDesyncDumps(inst: EngineInstance): DesyncDump[] {
+  const out: DesyncDump[] = []
+  const call = inst.x.client_desync_dump
+  for (;;) {
+    const headLen = inst.call1(call, 0)
+    if (headLen <= 0) return out
+    const tx = inst.region(RegionId.Tx)
+    if (!tx) throw new Error('takeDesyncDumps: no Tx region')
+    const v = new DataView(tx.u8.buffer, tx.u8.byteOffset, 16)
+    const tick = v.getUint32(0, true)
+    const cx = v.getInt32(4, true)
+    const cy = v.getInt32(8, true)
+    const clientLen = inst.call1(call, 1)
+    const client = tx.u8.slice(0, Math.max(clientLen, 0))
+    const hostLen = inst.call1(call, 2)
+    const host = tx.u8.slice(0, Math.max(hostLen, 0))
+    inst.call1(call, 3)
+    let firstDiff = -1
+    const n = Math.min(client.length, host.length)
+    for (let i = 0; i < n; i++) {
+      if (client[i] !== host[i]) {
+        firstDiff = i
+        break
+      }
+    }
+    if (firstDiff < 0 && client.length !== host.length) firstDiff = -2
+    out.push({ tick, cx, cy, client, host, firstDiff })
+  }
+}

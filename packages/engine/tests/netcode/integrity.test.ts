@@ -1,7 +1,11 @@
 // `integrity/*` (docs/plan/31b-desync-hashes.md, Tests added): the desync hashes through the real
-// `.wasm` and the netcode harness. Every scenario here opts into production-cadence hashing
-// (`world.debugHashMode: 'production'`); the hash-all default and its scenarios are step 4's.
+// `.wasm` and the netcode harness. Most scenarios opt into production-cadence hashing
+// (`world.debugHashMode: 'production'`); the dump and Welcome-flag scenarios use the harness default
+// (hash-all), and `hash-bytes-per-second` measures production bytes.
+import { existsSync, readFileSync } from 'node:fs'
 import { expect, test } from 'vitest'
+import { serverInternals } from '../../src/server.js'
+import { assertBudget } from '../../src/test/budget.js'
 import { createNetHarness, type NetHarness } from '../../src/test/net-harness.js'
 import { loadFixture } from '../support/fixtures.js'
 import { putsFixture, square } from './support.js'
@@ -212,6 +216,121 @@ test('integrity/resync-respects-bucket', async () => {
     await harness.settle()
     harness.assertConverged()
     expect(harness.desyncs().length).toBe(2)
+  } finally {
+    await harness.dispose()
+  }
+})
+
+test('integrity/hash-all-dumps-encodings', async () => {
+  // The harness default (hash-all): the client learns it from `Welcome`'s `HASH_ALL` flag, keeps its
+  // own encoding of the corrupted chunk and, once the resync snapshot lands, writes both.
+  const harness = await createNetHarness({ fixture: await putsFixture(), seed: 4106, clients: 1 })
+  try {
+    harness.clients[0]?.setCamera(square(0))
+    await harness.advanceTicks(12)
+    await harness.settle()
+    harness.assertConverged()
+    expect(harness.desyncDumps()).toEqual([])
+    harness.clients[0]?.corruptChunk(0, 0)
+    // Hash-all checks every chunk in every frame: reported, resynced and dumped within a few ticks.
+    await harness.advanceTicks(12)
+    await harness.settle()
+    const dumps = harness.desyncDumps()
+    expect(dumps.length).toBe(1)
+    const dump = dumps[0]
+    if (!dump) throw new Error('no dump')
+    expect([dump.cx, dump.cy]).toEqual([0, 0])
+    expect(existsSync(dump.clientPath)).toBe(true)
+    expect(existsSync(dump.hostPath)).toBe(true)
+    const client = new Uint8Array(readFileSync(dump.clientPath))
+    const host = new Uint8Array(readFileSync(dump.hostPath))
+    expect(client).toEqual(dump.client)
+    expect(host).toEqual(dump.host)
+    // The flipped tile changed one overlay run: the files differ at `firstDiff` and agree before it.
+    expect(client).not.toEqual(host)
+    expect(dump.firstDiff).toBeGreaterThanOrEqual(0)
+    expect(client[dump.firstDiff]).not.toBe(host[dump.firstDiff])
+    expect(client.subarray(0, dump.firstDiff)).toEqual(host.subarray(0, dump.firstDiff))
+    // Reported on both sides, and `serverInternals` agrees with the host's own ring.
+    expect(harness.desyncs().length).toBeGreaterThanOrEqual(1)
+    expect(serverInternals(harness.server).desyncCount).toBe(harness.hostDesyncs().count)
+    expect(serverInternals(harness.server).desyncCount).toBeGreaterThanOrEqual(1)
+    // `assertNoDesync` fails on those reports (and `assertConverged` leaves it to the scenario
+    // once a fault was injected).
+    expect(() => harness.assertNoDesync()).toThrow(/assertNoDesync/)
+    harness.assertConverged()
+  } finally {
+    await harness.dispose()
+  }
+})
+
+test('integrity/production-mode-writes-no-dumps', async () => {
+  // Without `HASH_ALL` in `Welcome` the same corruption is reported and healed but nothing is kept.
+  const harness = await createNetHarness({
+    fixture: await putsFixture(),
+    seed: 4107,
+    clients: 1,
+    world: PRODUCTION,
+  })
+  try {
+    harness.clients[0]?.setCamera(square(0))
+    await harness.advanceTicks(12)
+    await harness.settle()
+    harness.clients[0]?.corruptChunk(0, 0)
+    await harness.advanceTicks(sweepTicks(harness, 0))
+    await harness.settle()
+    expect(harness.desyncs().length).toBe(1)
+    expect(harness.desyncDumps()).toEqual([])
+    harness.assertConverged()
+  } finally {
+    await harness.dispose()
+  }
+})
+
+test('integrity/hash-bytes-per-second', async () => {
+  // Production cadence, a quiet `fx-puts` world with one client: what the `Hashes` section costs per
+  // second (0013: one chunk per 4 ticks, `Global`/`OwnPlayer` every 5 s, ~60 B/s).
+  const harness = await createNetHarness({
+    fixture: await putsFixture(),
+    seed: 4108,
+    clients: 1,
+    world: PRODUCTION,
+  })
+  try {
+    harness.clients[0]?.setCamera(square(0))
+    await harness.advanceTicks(40)
+    await harness.settle()
+    const before = harness.counters(0).sections.Hashes ?? 0
+    const SECONDS = 20
+    await harness.advanceTicks(SECONDS * 20)
+    const after = harness.counters(0).sections.Hashes ?? 0
+    assertBudget({ hashesBytesPerS: Math.round((after - before) / SECONDS) }, 'net.hashesBytesPerS')
+  } finally {
+    await harness.dispose()
+  }
+})
+
+test('integrity/hash-never-forces-a-frame', async () => {
+  // A due hash rides the next frame sent anyway: an idle world (`fx-machines`, nothing placed) sends
+  // its heartbeats, one per 500 ms, and the hashes ride them; hashing adds no frame.
+  const harness = await createNetHarness({
+    fixture: await loadFixture('machines'),
+    seed: 4109,
+    clients: 1,
+    world: PRODUCTION,
+  })
+  try {
+    harness.clients[0]?.setCamera({ x: 0, y: 0, tilesAcross: 20 })
+    await harness.advanceTicks(40)
+    const before = harness.counters(0)
+    await harness.advanceTicks(200)
+    const after = harness.counters(0)
+    const frames = after.frames - before.frames
+    // 200 ticks = 20 heartbeats; one more of slack for the window's edges.
+    expect(frames).toBeLessThanOrEqual(21)
+    expect(frames).toBeGreaterThanOrEqual(19)
+    expect((after.sections.Hashes ?? 0) - (before.sections.Hashes ?? 0)).toBeGreaterThan(0)
+    harness.assertConverged()
   } finally {
     await harness.dispose()
   }

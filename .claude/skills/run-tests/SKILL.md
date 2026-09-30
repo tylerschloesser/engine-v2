@@ -94,6 +94,8 @@ actual/expected PNG pair checked in for them yet; if you add one for a failing s
 `test-results/browser/readback/<test-name>-{actual,expected}.png` (gitignored, next to every other
 suite's own artefacts under `test-results/`).
 
+A netcode desync (hash-all mode, `docs/plan/31b-desync-hashes.md`) leaves `test-results/desync/<tick>-<cx>_<cy>.{client,host}.bin`: the replica's encoding of the chunk when its hash mismatched, and the host's after the resync snapshot. The failure message of `assertNoDesync()` names both paths and the first differing offset.
+
 ## Golden hashes
 
 `pnpm golden [fixture]` is the only writer of a fixture's `golden/golden.json` (rebuilds first, runs

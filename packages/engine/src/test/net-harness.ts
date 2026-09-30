@@ -41,7 +41,7 @@ import {
 import { loadGame, type WsSocketLike, wsSocketConnection } from '../server-node.js'
 import { type MemoryStorage, memoryStorage } from '../storage/memory.js'
 import type { Storage } from '../storage/types.js'
-import { type DesyncLog, type DesyncReport, readDesyncLog } from './desync.js'
+import { type DesyncDump, type DesyncLog, type DesyncReport, readDesyncLog } from './desync.js'
 import { createHeadlessClient, type HeadlessClient } from './headless-client.js'
 import { addFrame, emptyTotals, parseMessage, worstWindowBytes } from './net-sections.js'
 import { trapSim } from './trap.js'
@@ -352,6 +352,12 @@ export interface NetHarnessOptions {
    * explicit per-client identity secrets, in join order. A client past the end of this array (or
    * every client, if omitted) gets `deterministicSecret(seed, index)`. */
   secrets?: Uint8Array[]
+  /** docs/plan/31b-desync-hashes.md: hash-all mode (every subscribed chunk hashed on every frame,
+   * announced to clients in `Welcome`), **default `true`**: every scenario is then also a
+   * replication-correctness test. Pass `false` only where the scenario pins non-hash bytes or
+   * budgets (`rates/*`, `zoomout/*`, `reconnect/cost`, `counters-exact`: the hashing is `'off'`,
+   * not merely production) and say why at the opt-out. `world.debugHashMode` wins when given. */
+  hashAll?: boolean
 }
 
 /** docs/plan/28b-reconnect-and-lifecycle.md step 3: `ConditionedLink` plus one harness-only
@@ -425,6 +431,13 @@ export interface NetHarness {
   /** docs/plan/31b-desync-hashes.md: every client's own desync reports, oldest first per client,
    * each tagged with the client's index (`HeadlessClient.desyncs()` is the per-client form). */
   desyncs(): (DesyncReport & { client: number })[]
+  /** Throws when any client or the host recorded a desync report. `assertConverged()` calls it,
+   * unless a fault was injected (`corruptChunk`, `skipDelta`, `skipGlobalDelta`): that scenario
+   * expects reports and asserts them itself. */
+  assertNoDesync(): void
+  /** Hash-all dumps so far (each written as `<tick>-<cx>_<cy>.{client,host}.bin` under
+   * `test-results/desync/`; `clientPath`/`hostPath` say where). */
+  desyncDumps(): (DesyncDump & { clientIndex: number; clientPath: string; hostPath: string })[]
   /** The host's desync ring (`sim_desync`): one report per `ResyncChunk` it acted on. */
   hostDesyncs(): DesyncLog
   /** Fault injection (`sim_skip_delta`): the next frame for client `i` drops one delta of chunk
@@ -488,8 +501,9 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     ...(opts.world?.actionRate !== undefined ? { actionRate: opts.world.actionRate } : {}),
     ...(opts.world?.bandwidth !== undefined ? { bandwidth: opts.world.bandwidth } : {}),
     ...(opts.world?.view !== undefined ? { view: opts.world.view } : {}),
-    // docs/plan/31b-desync-hashes.md: a scenario opts into hashing (the default is off until step 4).
-    ...(opts.world?.debugHashMode !== undefined ? { debugHashMode: opts.world.debugHashMode } : {}),
+    // docs/plan/31b-desync-hashes.md: hash-all unless the scenario opts out (`hashAll: false`, with
+    // a reason) or names a mode itself.
+    debugHashMode: opts.world?.debugHashMode ?? (opts.hashAll === false ? 'off' : 'all'),
   }
   const gameWorldgen = worldCfg.params.worldgen
 
@@ -749,6 +763,11 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       scheduler: clock,
       linkSeed: opts.seed + linkIdx * 2 + 1_000_000, // distinct offset from the conditioner's own
     })
+    const corruptChunk = client.corruptChunk.bind(client)
+    client.corruptChunk = (cx, cy) => {
+      faultInjected = true
+      corruptChunk(cx, cy)
+    }
     entries.push({
       client,
       connId,
@@ -780,6 +799,8 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     e.setClientSide(newClientSide)
   }
 
+  // A fault injection makes reports expected: `assertConverged` then checks the hashes alone.
+  let faultInjected = false
   const clients: HeadlessClient[] = []
   for (let i = 0; i < opts.clients; i++) clients.push(makeClient())
 
@@ -807,7 +828,56 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       for (let f = 0; f < framesPerTick; f++) {
         await clock.advanceBy(frameMs)
         for (const e of entries) e.client.stepFrame(frameMs)
+        await collectDumps()
       }
+    }
+  }
+
+  const dumps: (DesyncDump & { clientIndex: number; clientPath: string; hostPath: string })[] = []
+
+  /** Writes each client's completed hash-all dumps under `test-results/desync/` (node only, and
+   * only when one exists: `node:fs` is imported here, not at the top, so the module still loads in
+   * a browser). */
+  async function collectDumps(): Promise<void> {
+    for (const e of entries) {
+      const found = e.client.takeDesyncDumps()
+      if (found.length === 0) continue
+      const { mkdirSync, writeFileSync } = await import('node:fs')
+      const dir = new URL('../../../../test-results/desync/', import.meta.url)
+      mkdirSync(dir, { recursive: true })
+      for (const d of found) {
+        const base = `${d.tick}-${d.cx}_${d.cy}`
+        const clientUrl = new URL(`${base}.client.bin`, dir)
+        const hostUrl = new URL(`${base}.host.bin`, dir)
+        writeFileSync(clientUrl, d.client)
+        writeFileSync(hostUrl, d.host)
+        dumps.push({
+          ...d,
+          clientIndex: e.linkIdx,
+          clientPath: clientUrl.pathname,
+          hostPath: hostUrl.pathname,
+        })
+      }
+    }
+  }
+
+  function assertNoDesync(): void {
+    const lines: string[] = []
+    for (const r of desyncs()) {
+      lines.push(`client ${r.client}: ${JSON.stringify(r)}`)
+    }
+    const host = hostDesyncs()
+    for (const r of host.reports) lines.push(`host: ${JSON.stringify(r)}`)
+    if (lines.length > 0) {
+      const dumpNote =
+        dumps.length > 0
+          ? `\ndumps: ${dumps.map((d) => `${d.clientPath} ${d.hostPath} (first diff at ${d.firstDiff})`).join(', ')}`
+          : ''
+      throw new Error(
+        `assertNoDesync: seed=${opts.seed} tick=${simHost.counters.ticksRun} ${lines.length} report(s):\n` +
+          lines.join('\n') +
+          dumpNote,
+      )
     }
   }
 
@@ -839,6 +909,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
           mismatches.join('\n'),
       )
     }
+    if (!faultInjected) assertNoDesync()
   }
 
   /** `sim_pacing_counters`: sixteen LE `u32`s. */
@@ -909,6 +980,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
   function skipDeltaPacked(i: number, packed: number): void {
     const e = entries[i]
     if (!e) throw new Error(`skipDelta: no client ${i}`)
+    faultInjected = true
     const inst = hostInst()
     const status = inst.call2(inst.x.sim_skip_delta, e.connId, packed)
     if (status !== 0) throw new Error(`skipDelta: sim_skip_delta status ${status}`)
@@ -1057,6 +1129,8 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     assertConverged,
     desyncs,
     hostDesyncs,
+    assertNoDesync,
+    desyncDumps: () => dumps,
     skipDelta: (i, cx, cy) => skipDeltaPacked(i, packCoord(cx, cy)),
     skipGlobalDelta: (i) => skipDeltaPacked(i, 0x8000_8000),
     counters,

@@ -14,7 +14,8 @@
 //!   last_tick u32 · n varint x (dx i16, dy i16, version u32)}`.
 //! - `Welcome = MsgType::Welcome · player_id varint · epoch u32 · tick u32 · tick_rate_hz u32 ·
 //!   seed u64 · params (varint len + `Codec`-encoded `Worldgen::Params`) · view_max_tiles_per_axis
-//!   u16 · view_max_chunks u16 · last_processed_action_seq varint · presence_present u8 ·
+//!   u16 · view_max_chunks u16 · last_processed_action_seq varint ·
+//!   flags u8 (bit 0 presence, bit 1 `HASH_ALL`; the old `presence_present` byte) ·
 //!   presence?{Codec G::Presence, no length prefix: the last field, so the codec's own decode
 //!   boundary is exact, same convention `wire::global::read_own_player` uses}`.
 //! - `Reject = magic·protocol_version · reason u8 (0 VersionMismatch, 1 BadKey, 2 Full) ·
@@ -315,6 +316,9 @@ pub struct Welcome<'a, G: Game> {
     pub view_max_chunks: u16,
     pub last_processed_action_seq: u32,
     pub presence: Option<&'a G::Presence>,
+    /// The `HASH_ALL` flag: the host sends a hash for every subscribed chunk in every frame
+    /// (docs/plan/31b-desync-hashes.md), so this client keeps dump files on a mismatch.
+    pub hash_all: bool,
 }
 
 /// No `derive(Debug, PartialEq)`: `G::Worldgen::Params`/`G::Presence` are only guaranteed
@@ -331,7 +335,15 @@ pub struct WelcomeOwned<G: Game> {
     pub view_max_chunks: u16,
     pub last_processed_action_seq: u32,
     pub presence: Option<G::Presence>,
+    pub hash_all: bool,
 }
+
+/// `Welcome`'s last byte is the presence-present byte widened to a flags byte: bit 0 a presence
+/// sample follows (the value `1` it always had), bit 1 `HASH_ALL`. Both clear is the `0` every
+/// pre-M31b golden pins.
+pub const WELCOME_PRESENCE: u8 = 0b01;
+/// See [`WELCOME_PRESENCE`]: the host is in hash-all mode.
+pub const WELCOME_HASH_ALL: u8 = 0b10;
 
 pub fn write_welcome<G: Game>(sink: &mut (impl ByteSink + ?Sized), welcome: &Welcome<'_, G>) {
     sink.put_u8(MsgType::Welcome as u8);
@@ -347,10 +359,15 @@ pub fn write_welcome<G: Game>(sink: &mut (impl ByteSink + ?Sized), welcome: &Wel
     sink.put_u16(welcome.view_max_tiles_per_axis);
     sink.put_u16(welcome.view_max_chunks);
     sink.put_varint(welcome.last_processed_action_seq as u64);
+    let hash_all = if welcome.hash_all {
+        WELCOME_HASH_ALL
+    } else {
+        0
+    };
     match welcome.presence {
-        None => sink.put_u8(0),
+        None => sink.put_u8(hash_all),
         Some(p) => {
-            sink.put_u8(1);
+            sink.put_u8(WELCOME_PRESENCE | hash_all);
             codec::encode_to(p, sink)
                 .expect("Welcome presence encode is infallible for a ?Sized sink");
         }
@@ -379,15 +396,18 @@ pub fn read_welcome<G: Game>(buf: &[u8]) -> Result<WelcomeOwned<G>, WireError> {
     let view_max_chunks = r.u16().map_err(WireError::from)?;
     let last_processed_action_seq =
         u32::try_from(r.varint().map_err(WireError::from)?).map_err(|_| WireError::Malformed)?;
-    let presence_present = r.u8().map_err(WireError::from)?;
-    let presence = match presence_present {
+    let flags = r.u8().map_err(WireError::from)?;
+    if flags & !(WELCOME_PRESENCE | WELCOME_HASH_ALL) != 0 {
+        return Err(WireError::Malformed);
+    }
+    let hash_all = flags & WELCOME_HASH_ALL != 0;
+    let presence = match flags & WELCOME_PRESENCE {
         0 => None,
-        1 => Some(
+        _ => Some(
             codec::decode::<G::Presence>(r.rest())
                 .map_err(|_| WireError::Malformed)?
                 .0,
         ),
-        _ => return Err(WireError::Malformed),
     };
     Ok(WelcomeOwned {
         player_id,
@@ -400,6 +420,7 @@ pub fn read_welcome<G: Game>(buf: &[u8]) -> Result<WelcomeOwned<G>, WireError> {
         view_max_chunks,
         last_processed_action_seq,
         presence,
+        hash_all,
     })
 }
 
@@ -669,6 +690,7 @@ mod tests {
             view_max_chunks: 128,
             last_processed_action_seq: 77,
             presence: Some(&presence),
+            hash_all: false,
         };
         let mut buf = vec![0u8; 256];
         let mut sink = SliceSink::new(&mut buf);
@@ -701,6 +723,7 @@ mod tests {
             view_max_chunks: 128,
             last_processed_action_seq: 0,
             presence: None,
+            hash_all: false,
         };
         let mut buf = vec![0u8; 128];
         let mut sink = SliceSink::new(&mut buf);
@@ -708,6 +731,40 @@ mod tests {
         let n = sink.finish().unwrap();
         let got = read_welcome::<SGame>(&buf[..n]).unwrap();
         assert_eq!(got.presence, None);
+    }
+
+    /// `HASH_ALL` rides the old presence byte: it round-trips alone and beside a presence sample,
+    /// and an unknown bit is `Malformed`. Without the flag the byte is the `0`/`1` the golden pins.
+    #[test]
+    fn welcome_hash_all_flag_roundtrips() {
+        let params: u32 = 1;
+        let presence = SPresence { x: 3, y: 4 };
+        for with_presence in [false, true] {
+            let welcome = Welcome::<SGame> {
+                player_id: PlayerId(1),
+                epoch: 0,
+                tick: 0,
+                tick_rate_hz: 20,
+                seed: 1,
+                params: &params,
+                view_max_tiles_per_axis: 256,
+                view_max_chunks: 128,
+                last_processed_action_seq: 0,
+                presence: with_presence.then_some(&presence),
+                hash_all: true,
+            };
+            let mut buf = vec![0u8; 128];
+            let mut sink = SliceSink::new(&mut buf);
+            write_welcome::<SGame>(&mut sink, &welcome);
+            let n = sink.finish().unwrap();
+            let got = read_welcome::<SGame>(&buf[..n]).unwrap();
+            assert!(got.hash_all);
+            assert_eq!(got.presence.is_some(), with_presence);
+            if !with_presence {
+                buf[n - 1] |= 0b100;
+                assert!(read_welcome::<SGame>(&buf[..n]).is_err());
+            }
+        }
     }
 
     #[test]
@@ -725,6 +782,7 @@ mod tests {
             view_max_chunks: 128,
             last_processed_action_seq: 4,
             presence: Some(&presence),
+            hash_all: false,
         };
         let mut buf = vec![0u8; 256];
         let mut sink = SliceSink::new(&mut buf);

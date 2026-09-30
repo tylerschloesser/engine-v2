@@ -32,6 +32,18 @@ pub fn chunk_hash<G: Game>(store: &Store<G>, chunk: ChunkCoord) -> u64 {
     h.finish()
 }
 
+/// Appends the bytes [`chunk_hash`] hashes (the dump files of hash-all mode: what a desync report's
+/// two hashes were over). Allocates: dev and test only.
+pub fn encode_chunk<G: Game>(store: &Store<G>, chunk: ChunkCoord, out: &mut Vec<u8>) {
+    struct Sink<'a>(&'a mut Vec<u8>);
+    impl crate::bytes::ByteSink for Sink<'_> {
+        fn put(&mut self, b: &[u8]) {
+            self.0.extend_from_slice(b);
+        }
+    }
+    encode_chunk_snapshot(store, chunk, 0, &mut Sink(out));
+}
+
 /// The hash of `store`'s `Global` game value.
 pub fn global_hash<G: Game>(store: &Store<G>) -> u64 {
     let mut h = Fnv64::new();

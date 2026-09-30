@@ -41,7 +41,7 @@ import { seedToHexU64 } from '../sim-config.js'
 import { createNetPump } from '../worker/client-net.js'
 import { GEN_RECORD_HEADER_BYTES, readI32LE, writeGenHeader } from '../worker/gen-record.js'
 import { createShell } from '../worker/shell.js'
-import { type DesyncLog, readDesyncLog } from './desync.js'
+import { type DesyncDump, type DesyncLog, readDesyncLog, takeDesyncDumps } from './desync.js'
 import {
   decodeCounters,
   type InterpCounters,
@@ -140,6 +140,9 @@ export interface HeadlessClient {
   replicaHash(): string
   /** This client's desync reports (docs/plan/31b-desync-hashes.md): `client_desync`. */
   desyncs(): DesyncLog
+  /** Hash-all dumps completed since the last call (`client_desync_dump`): empty unless the host's
+   * `Welcome` carried `HASH_ALL` and a chunk hash mismatched and its resync snapshot has landed. */
+  takeDesyncDumps(): DesyncDump[]
   /** Fault injection (`client_corrupt_chunk`): flips one replicated byte of a held chunk. Throws
    * when the chunk is not held. */
   corruptChunk(cx: number, cy: number): void
@@ -539,6 +542,9 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
         (i) => inst.call1(inst.x.client_desync, i),
         'HeadlessClient.desyncs',
       )
+    },
+    takeDesyncDumps() {
+      return takeDesyncDumps(inst)
     },
     corruptChunk(cx, cy) {
       const status = inst.call2(inst.x.client_corrupt_chunk, cx, cy)

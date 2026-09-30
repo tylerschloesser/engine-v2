@@ -1479,6 +1479,9 @@ export function serverInternals(server: WorldServer): {
   readonly isTicking: boolean
   readonly idleCalls: number
   readonly rawInstance: EngineInstance | null
+  /** docs/plan/31b-desync-hashes.md: how many desync reports the host has recorded (`sim_desync`'s
+   * `count`): one per `ResyncChunk` it acted on. `0` when the live instance is unavailable. */
+  readonly desyncCount: number
 } {
   const h = worldServerTestHandle(server)
   return {
@@ -1495,6 +1498,12 @@ export function serverInternals(server: WorldServer): {
     },
     get rawInstance() {
       return h.rawInstanceForTest
+    },
+    get desyncCount() {
+      const inst = h.rawInstanceForTest
+      if (!inst || inst.call1(inst.x.sim_desync, 0) !== Status.Ok) return 0
+      const region = inst.region(RegionId.Result)
+      return region ? readU32LE(region.u8, 0) : 0
     },
   }
 }

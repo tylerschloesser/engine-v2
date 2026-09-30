@@ -32,8 +32,9 @@ export interface WorldConfig<Params = unknown> {
   arenaBytes?: number
   actionRate?: { perSecond?: number; burst?: number }
   /** docs/plan/31b-desync-hashes.md, dev and test: how much desync hashing the host does
-   * (`host::SimConfig::hash_mode`): `'off'` (default), `'production'` (0013's schedule) or `'all'`
-   * (every eligible chunk every frame). Not part of 0009's shape. */
+   * (`host::SimConfig::hash_mode`): `'production'` (default: 0013's schedule), `'off'` or `'all'`
+   * (every eligible chunk every frame, announced to clients in `Welcome`). The test harness
+   * defaults to `'all'`; the Vite dev server sets `'all'`. Not part of 0009's shape. */
   debugHashMode?: 'off' | 'production' | 'all'
   bandwidth?: {
     softCapBytesPerS?: number

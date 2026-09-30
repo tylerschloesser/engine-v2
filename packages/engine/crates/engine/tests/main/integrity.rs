@@ -5,7 +5,8 @@
 use engine::bytes::{ByteReader, SliceSink};
 use engine::game::PlayerId;
 use engine::host::hashes::{
-    CHUNK_HASH_EVERY_TICKS, FAIR_EVERY, HashMode, HashSchedule, SCOPE_HASH_EVERY_SECONDS,
+    CHUNK_HASH_EVERY_TICKS, FAIR_EVERY, HashMode, HashSchedule, MAX_DUE_PER_FRAME,
+    SCOPE_HASH_EVERY_SECONDS,
 };
 use engine::integrity::{DesyncScope, RESERVED_SCOPE_COORD};
 use engine::sim::WorldParams;
@@ -194,6 +195,9 @@ fn integrity_schedule_recent_first_then_round_robin() {
 
 /// The host side of the schedule: one chunk hash per `CHUNK_HASH_EVERY_TICKS` ticks, every held
 /// chunk covered in `held * period` ticks, `Global` + `OwnPlayer` once per `SCOPE_HASH_EVERY_SECONDS`.
+/// A due hash rides the next frame sent anyway (M31b R2): in this idle world that is a heartbeat, so
+/// a frame carries every hash that fell due since the last one (at most `MAX_DUE_PER_FRAME`), and
+/// the cadence is asserted on the running total and on the frames, not on each tick.
 #[test]
 fn integrity_host_hashes_one_chunk_per_period_and_sweeps() {
     let mut lb = loopback(11);
@@ -204,7 +208,8 @@ fn integrity_host_hashes_one_chunk_per_period_and_sweeps() {
 
     let hz = LGame::TICK_RATE.hz_value();
     let ticks = held.len() as u32 * CHUNK_HASH_EVERY_TICKS + 2 * hz * SCOPE_HASH_EVERY_SECONDS;
-    let mut chunk_ticks = Vec::new();
+    let mut frames_with_hashes = Vec::new();
+    let mut chunk_total = 0u32;
     let mut seen = std::collections::BTreeSet::new();
     let mut scope_ticks = Vec::new();
     for _ in 0..ticks {
@@ -218,9 +223,15 @@ fn integrity_host_hashes_one_chunk_per_period_and_sweeps() {
                 _ => None,
             })
             .collect();
-        assert!(chunks.len() <= 1, "production cadence: one chunk per frame");
-        if let Some(coord) = chunks.first() {
-            chunk_ticks.push(frame_tick(&frame));
+        assert!(
+            chunks.len() <= MAX_DUE_PER_FRAME as usize,
+            "production cadence: at most the hashes that fell due since the last frame"
+        );
+        if !entries.is_empty() {
+            frames_with_hashes.push(frame_tick(&frame));
+        }
+        for coord in &chunks {
+            chunk_total += 1;
             seen.insert(*coord);
         }
         let globals = entries
@@ -236,8 +247,16 @@ fn integrity_host_hashes_one_chunk_per_period_and_sweeps() {
             scope_ticks.push(frame_tick(&frame));
         }
     }
-    for w in chunk_ticks.windows(2) {
-        assert_eq!(w[1] - w[0], CHUNK_HASH_EVERY_TICKS, "{chunk_ticks:?}");
+    // One chunk per period, however the frames batch them (the last period may not have landed).
+    let expected = ticks / CHUNK_HASH_EVERY_TICKS;
+    assert!(
+        chunk_total + 3 >= expected && chunk_total <= expected + 1,
+        "{chunk_total} chunk hashes over {ticks} ticks, expected about {expected}"
+    );
+    // Nothing forces a frame: in this idle world the hash-carrying frames are the heartbeats,
+    // one per 500 ms (10 ticks), not one per 4-tick period.
+    for w in frames_with_hashes.windows(2) {
+        assert!(w[1] - w[0] >= 10, "{frames_with_hashes:?}");
     }
     let held_after = lb.host.debug_held(lb.conn(i));
     assert!(
@@ -245,9 +264,11 @@ fn integrity_host_hashes_one_chunk_per_period_and_sweeps() {
         "every held chunk was hashed: held {held_after:?}, hashed {seen:?}"
     );
     assert_eq!(scope_ticks.len(), 2, "{scope_ticks:?}");
-    assert_eq!(
-        scope_ticks[1] - scope_ticks[0],
-        hz * SCOPE_HASH_EVERY_SECONDS
+    let gap = scope_ticks[1] - scope_ticks[0];
+    let period = hz * SCOPE_HASH_EVERY_SECONDS;
+    assert!(
+        gap >= period - 10 && gap <= period + 10,
+        "scope hashes {gap} ticks apart, period {period} (a heartbeat carries them)"
     );
     assert_eq!(lb.client(i).desyncs().count(), 0);
 }

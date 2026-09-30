@@ -424,6 +424,11 @@ impl<G: Game> Replica<G> {
             .then(|| crate::integrity::chunk_hash(&self.store, coord))
     }
 
+    /// Appends the bytes [`Self::chunk_hash`] hashes for `coord` to `out` (hash-all dump files).
+    pub fn encode_chunk(&self, coord: ChunkCoord, out: &mut Vec<u8>) {
+        crate::integrity::encode_chunk(&self.store, coord, out);
+    }
+
     /// The desync hash of this replica's `Global` value.
     pub fn global_hash(&self) -> u64 {
         crate::integrity::global_hash(&self.store)

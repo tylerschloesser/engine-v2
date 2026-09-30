@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 35;
+pub const ABI_VERSION: u32 = 36;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -512,6 +512,15 @@ pub trait Instance: Sized + 'static {
     /// role's desync report ring, same 40-byte layout as `sim_desync`.
     fn client_desync(&mut self, _index: u32, _result: &mut [u8]) -> Status {
         Status::Unsupported
+    }
+
+    /// docs/plan/31b-desync-hashes.md (`ABI_VERSION` 35 -> 36), `engine/test` only: the dump files
+    /// of hash-all mode, into `Tx`, returning the byte count (`0` = no completed dump, or `Tx` too
+    /// small). `part` 0: the oldest dump's header `tick u32 · cx i32 · cy i32 · client_len u32`;
+    /// 1: the client's encoding of the chunk when its hash mismatched; 2: the host's encoding (the
+    /// replica's after the resync snapshot replaced it); 3: drop that dump (returns 0).
+    fn client_desync_dump(&mut self, _part: u32, _tx: &mut [u8]) -> usize {
+        0
     }
 
     /// docs/plan/31b-desync-hashes.md (`ABI_VERSION` 34 -> 35), `engine/test` only, fault
@@ -1114,6 +1123,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn client_desync(index: u32) -> u32 {
             $crate::abi::client_desync(&__ENGINE_SLOT, index) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_desync_dump(part: u32) -> i32 {
+            $crate::abi::client_desync_dump(&__ENGINE_SLOT, part)
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_skip_delta(conn: u32, coord: u32) -> u32 {
