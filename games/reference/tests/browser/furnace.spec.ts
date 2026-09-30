@@ -27,6 +27,7 @@ import {
 type Rgba = [number, number, number, number]
 declare global {
   interface Window {
+    __pickAt?: (x: number, y: number) => number
     __pixelAt?: (x: number, y: number) => Promise<{ on: Rgba; off: Rgba }>
   }
 }
@@ -72,6 +73,22 @@ test('reference_furnace_flow', async ({ page }) => {
   const mouth = { x: O.x + 1, y: O.y + 1.25 }
   expect((await pixel(page, mouth.x, mouth.y)).on[0], 'cold mouth is dark').toBeLessThan(80)
   expect((await draws(page)).filter((r) => r.kind === KIND.bar || outline(r))).toEqual([])
+
+  // M33d: the sprite table reaches the production picker only through `attachClientDrawables`
+  // (`game.ts`, no test hook installs it): a point inside the 2 x 2 art, away from `pos` (the
+  // origin corner, pivot [0, 0]), picks the furnace; one just outside it does not.
+  const furnacePick = (await draws(page)).find((r) => r.kind === KIND.sprite)?.pickId
+  expect(furnacePick, 'the furnace sprite carries a pick id').toBeGreaterThan(0)
+  const inside = await tileToScreen(page, O.x + 1.5, O.y + 1.5)
+  expect(
+    await page.evaluate(([x, y]) => window.__pickAt?.(x, y), [inside.x, inside.y] as const),
+    'a tap inside the furnace art picks it',
+  ).toBe(furnacePick)
+  const outside = await tileToScreen(page, O.x + 2.5, O.y + 1.5)
+  expect(
+    await page.evaluate(([x, y]) => window.__pickAt?.(x, y), [outside.x, outside.y] as const),
+    'just outside the art picks nothing',
+  ).toBe(0)
 
   // Tap the furnace: the panel opens, anchored above it, with an outline on the furnace.
   const ui = await openFurnace(page, O)

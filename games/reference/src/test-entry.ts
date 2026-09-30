@@ -94,6 +94,8 @@ declare global {
       param: number
       pickId: number
     }>
+    /** M33d: `client.pick` at a CSS-pixel point on the newest DrawList slot (acquired first). */
+    __pickAt?: (cssX: number, cssY: number) => number
     /** M33: the engine's cursor tile (`cameraState.cursor*`): mouse hover tile or last touch tap. */
     __cursorTile?: () => { x: number; y: number; valid: boolean }
     /** M33: `engine/test.injectPointer` (touch taps and drags, `pointerType` 'touch'). */
@@ -283,6 +285,11 @@ window.__draws = () => {
       param: r.param,
       pickId: r.pickId,
     }))
+}
+
+window.__pickAt = (cssX, cssY) => {
+  client.pick.acquire()
+  return client.pick.at(cssX, cssY)
 }
 
 window.__cursorTile = () => ({
