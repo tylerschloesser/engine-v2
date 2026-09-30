@@ -598,6 +598,114 @@ fn replica_hash_equals_host_region_hash() {
     }
 }
 
+/// M34d: a 2x1 entity anchored on tile 63 (chunk `(1,0)`) covers tile 64 (chunk `(2,0)`). The host
+/// stamps both chunks' versions on every put/move/removal; the replica must bump every *held*
+/// chunk the footprint overlaps, not only the anchor's, or `region_hash` (which hashes versions)
+/// diverges. `held_both`: a camera holding both chunks; otherwise only the non-anchor chunk.
+fn straddle_setup(held_both: bool) -> (Loopback<LGame>, usize, PlayerId) {
+    let mut lb = loopback(41);
+    let (idx, who) = add_client(&mut lb, 0);
+    let (center_x, center_y) = if held_both { (64, 10) } else { (100, 10) };
+    lb.set_camera(
+        idx,
+        CameraReport {
+            center_x,
+            center_y,
+            half_w: 1,
+            half_h: 1,
+            vel_x: 0,
+            vel_y: 0,
+        },
+    );
+    lb.step();
+    let view = lb.client(idx).view();
+    assert!(view.is_held(ChunkCoord::new(2, 0)));
+    assert_eq!(view.is_held(ChunkCoord::new(1, 0)), held_both);
+    (lb, idx, who)
+}
+
+fn assert_region_and_chunk_parity(lb: &Loopback<LGame>, idx: usize, what: &str) {
+    for cx in [1, 2] {
+        let c = ChunkCoord::new(cx, 0);
+        if lb.client(idx).view().is_held(c) {
+            assert_eq!(
+                lb.client(idx).view().debug_version(c),
+                lb.host.debug_version(c),
+                "{what}: version of held chunk {cx}"
+            );
+            assert_eq!(
+                lb.client(idx).view().chunk_hash(c),
+                lb.host.chunk_hash(lb.conn(idx), c),
+                "{what}: chunk_hash of chunk {cx} (version-agnostic)"
+            );
+        }
+    }
+    assert_eq!(
+        lb.host.region_hash(lb.conn(idx)),
+        lb.client(idx).region_hash(),
+        "{what}: region_hash"
+    );
+}
+
+fn spawn_straddler(lb: &mut Loopback<LGame>, who: PlayerId) {
+    lb.action(
+        who,
+        LAction::SpawnWide {
+            id_hint: 0,
+            pos: LPos { x: 63, y: 0 },
+        },
+    );
+    lb.step();
+    lb.step();
+}
+
+#[test]
+fn straddling_footprint_region_hash_matches_host() {
+    let (mut lb, idx, who) = straddle_setup(true);
+    spawn_straddler(&mut lb, who);
+    assert_region_and_chunk_parity(&lb, idx, "both held, put");
+}
+
+#[test]
+fn straddling_footprint_region_hash_matches_host_non_anchor_only() {
+    let (mut lb, idx, who) = straddle_setup(false);
+    spawn_straddler(&mut lb, who);
+    assert_region_and_chunk_parity(&lb, idx, "non-anchor held, put");
+}
+
+#[test]
+fn straddling_footprint_region_hash_matches_host_after_move_and_removal() {
+    for held_both in [true, false] {
+        let (mut lb, idx, who) = straddle_setup(held_both);
+        spawn_straddler(&mut lb, who);
+        // Move (1x1 at far chunk (0,0)): only the *old* footprint reaches the held chunks.
+        lb.action(
+            who,
+            LAction::Move {
+                id: 1,
+                pos: LPos { x: 1, y: 1 },
+            },
+        );
+        lb.step();
+        lb.step();
+        assert_region_and_chunk_parity(&lb, idx, "after move away");
+        // Put a wide one back and remove it.
+        lb.action(
+            who,
+            LAction::SpawnWide {
+                id_hint: 0,
+                pos: LPos { x: 63, y: 0 },
+            },
+        );
+        lb.step();
+        lb.step();
+        lb.action(who, LAction::Despawn { id: 2 });
+        lb.step();
+        lb.step();
+        assert_region_and_chunk_parity(&lb, idx, "after removal");
+    }
+}
+
 #[test]
 fn camera_walk_changes_no_state() {
     let run = |with_camera: bool| {
