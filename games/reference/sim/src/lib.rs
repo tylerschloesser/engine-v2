@@ -68,8 +68,15 @@ impl WorldXY {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, TS)]
 #[ts(export)]
 pub enum RefAction {
-    StartCollect { tile: TileXY, from: WorldXY },
+    StartCollect {
+        tile: TileXY,
+        from: WorldXY,
+    },
     CancelCollect,
+    /// M32: start crafting recipe `recipe` (index into `content::RECIPES`).
+    StartCraft {
+        recipe: u8,
+    },
 }
 
 /// `Reject` (Scope). `NoResource`/`OutOfRange`/`Busy` are `rules::collect::start`'s own three
@@ -82,6 +89,12 @@ pub enum RefReject {
     NoResource,
     OutOfRange,
     Busy,
+    /// `StartCraft` (M32): the recipe id is not in `content::RECIPES`.
+    UnknownRecipe,
+    /// `StartCraft`: the player has not unlocked that recipe.
+    Locked,
+    /// `StartCraft`: the inventory cannot pay the recipe's cost.
+    Unaffordable,
     /// `admit`'s own rejection (0001 "Witness-carrying actions" step 1, HOST ONLY, never
     /// replayed): the claimed `from` is farther than `content::ADMIT_TOLERANCE_Q8` from the
     /// player's latest presence sample, or no sample exists yet. Distinct from `OutOfRange`
@@ -96,32 +109,28 @@ impl From<Unknown> for RefReject {
     }
 }
 
-/// Per-resource counts (Requirements: inventory is per player). Named fields, not an array indexed
-/// by resource id: only four resource kinds exist and will not grow within this game
-/// (`docs/spec/reference-game.md` fixes the list), so a fixed struct reads better than a `[u32; N]`
-/// the caller has to remember the index convention for. `TS` (M20b step 3): also `Ui.inventory`'s
-/// own field type, read straight off the replicated `RefPlayer` -- one shape for both purposes.
+/// Per-item counts (Requirements: inventory is per player): a fixed array indexed by
+/// [`content::ItemId`] (M32: plain data, no `Vec`). `TS`: also `Ui.inventory`'s own field type and
+/// `UiRecipe::cost`'s, one shape for all three.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize, TS)]
 #[ts(export)]
-pub struct Inventory {
-    pub iron: u32,
-    pub wood: u32,
-    pub stone: u32,
-    pub coal: u32,
-}
+pub struct Inventory(pub [u32; content::ITEM_COUNT]);
 
 impl Inventory {
-    /// Adds one unit of the resource named by a resource id (`content::{IRON, WOOD, STONE,
-    /// COAL}`); any other id is a no-op (defensive: every caller already checked `COLLECTABLE`).
-    pub fn add(&mut self, resource: u8, n: u32) {
-        if resource == content::IRON {
-            self.iron = self.iron.saturating_add(n);
-        } else if resource == content::WOOD {
-            self.wood = self.wood.saturating_add(n);
-        } else if resource == content::STONE {
-            self.stone = self.stone.saturating_add(n);
-        } else if resource == content::COAL {
-            self.coal = self.coal.saturating_add(n);
+    pub fn get(&self, item: content::ItemId) -> u32 {
+        self.0[item.idx()]
+    }
+
+    pub fn add(&mut self, item: content::ItemId, n: u32) {
+        let slot = &mut self.0[item.idx()];
+        *slot = slot.saturating_add(n);
+    }
+
+    /// Adds one collected tile resource (`content::{IRON, WOOD, STONE, COAL}`); any other id is a
+    /// no-op (defensive: every caller already checked `COLLECTABLE`).
+    pub fn add_resource(&mut self, resource: u8, n: u32) {
+        if let Some(item) = content::ItemId::from_resource(resource) {
+            self.add(item, n);
         }
     }
 }
@@ -136,13 +145,23 @@ pub struct Collecting {
     pub done_at: engine::time::Tick,
 }
 
-/// `PlayerState { inventory, stone_mined, collecting }` (Scope, exactly these three fields --
-/// unlocks and `crafting` are M20b/M32, Non-scope here).
+/// A player's in-flight craft (M32): the recipe id (index into `content::RECIPES`) and the tick it
+/// completes. Independent of [`Collecting`]: one collect and one craft at a time, each its own slot.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Crafting {
+    pub recipe: u8,
+    pub done_at: engine::time::Tick,
+}
+
+/// `PlayerState { inventory, stone_mined, collecting, unlocks, crafting }`. `unlocks` is a bitset
+/// with one bit per recipe id, set by the collect tick rule (`rules::craft::update_unlocks`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct RefPlayer {
     pub inventory: Inventory,
     pub stone_mined: u32,
     pub collecting: Option<Collecting>,
+    pub unlocks: u32,
+    pub crafting: Option<Crafting>,
 }
 
 /// `GlobalState` (Scope: "empty for now"). The engine roster (coloured dots) is M20b's.
@@ -194,6 +213,25 @@ pub struct UiInRange {
     pub from: WorldXY,
 }
 
+/// An in-flight craft as `Ui` shows it (`UiCollecting`'s own reasoning: raw `done_at` tick number).
+#[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, TS)]
+#[ts(export)]
+pub struct UiCrafting {
+    pub recipe: u8,
+    pub done_at: u32,
+}
+
+/// One unlocked recipe as the crafting menu lists it (M32): `cost` per item, `secs` for the
+/// progress bar's label, `affordable` against the player's current inventory.
+#[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize, TS)]
+#[ts(export)]
+pub struct UiRecipe {
+    pub recipe: u8,
+    pub cost: Inventory,
+    pub secs: u32,
+    pub affordable: bool,
+}
+
 /// `Ui { me, inventory, collecting, in_range, spawn }` (Scope, M20b steps 3 and 5). `me` is a raw
 /// `u32`, not `engine::game::PlayerId` (same reason as [`UiCollecting::done_at`]: `PlayerId` has no
 /// `TS` impl). `Default` reserves `in_range`'s capacity once ([`MAX_IN_RANGE`]); `RefClient::ui`
@@ -210,6 +248,10 @@ pub struct RefUi {
     pub collecting: Option<UiCollecting>,
     pub in_range: Vec<UiInRange>,
     pub spawn: TileXY,
+    /// M32: the player's unlock bitset, the in-flight craft, and the unlocked recipes only.
+    pub unlocks: u32,
+    pub crafting: Option<UiCrafting>,
+    pub recipes: Vec<UiRecipe>,
 }
 
 impl Default for RefUi {
@@ -220,6 +262,9 @@ impl Default for RefUi {
             collecting: None,
             in_range: Vec::with_capacity(MAX_IN_RANGE),
             spawn: TileXY::default(),
+            unlocks: 0,
+            crafting: None,
+            recipes: Vec::with_capacity(content::RECIPES.len()),
         }
     }
 }
@@ -227,7 +272,7 @@ impl Default for RefUi {
 pub struct RefGame;
 
 impl Game for RefGame {
-    const SCHEMA_VERSION: u32 = 1;
+    const SCHEMA_VERSION: u32 = 2;
     type Worldgen = RefWorldgen;
     type Action = RefAction;
     type Reject = RefReject;
@@ -253,8 +298,24 @@ impl Game for RefGame {
     fn genesis(_w: &mut dyn WorldWrite<Self>) {}
 
     fn on_player(w: &mut dyn WorldWrite<Self>, who: PlayerId, ev: PlayerEvent) {
-        if ev == PlayerEvent::Joined {
-            w.put_player(who, RefPlayer::default());
+        match ev {
+            PlayerEvent::Joined => w.put_player(who, RefPlayer::default()),
+            // A disconnected player's collect is cancelled (position is presence and goes stale);
+            // their craft keeps running (0013 "A disconnected player's state"). One put.
+            PlayerEvent::Disconnected => {
+                if let Ok(&p) = w.player(who) {
+                    if p.collecting.is_some() {
+                        w.put_player(
+                            who,
+                            RefPlayer {
+                                collecting: None,
+                                ..p
+                            },
+                        );
+                    }
+                }
+            }
+            PlayerEvent::Connected => {}
         }
     }
 
@@ -264,6 +325,7 @@ impl Game for RefGame {
                 rules::collect::start(w, who, tile.tile(), from.world())
             }
             RefAction::CancelCollect => rules::collect::cancel(w, who),
+            RefAction::StartCraft { recipe } => rules::craft::start(w, who, *recipe),
         }
     }
 
@@ -279,7 +341,7 @@ impl Game for RefGame {
     ) -> Result<(), RefReject> {
         match a {
             RefAction::StartCollect { from, .. } => rules::collect::admit(p, who, from.world()),
-            RefAction::CancelCollect => Ok(()),
+            RefAction::CancelCollect | RefAction::StartCraft { .. } => Ok(()),
         }
     }
 }

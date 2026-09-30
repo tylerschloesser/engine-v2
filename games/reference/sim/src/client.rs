@@ -16,7 +16,8 @@ use engine::world::{Tile, TilePos, WorldPos};
 use crate::rules::collect::in_range;
 use crate::worldgen::terrain_at;
 use crate::{
-    Inventory, MAX_IN_RANGE, RefGame, RefParams, TileXY, UiCollecting, UiInRange, WorldXY, content,
+    Inventory, MAX_IN_RANGE, RefGame, RefParams, TileXY, UiCollecting, UiCrafting, UiInRange,
+    UiRecipe, WorldXY, content,
 };
 
 /// `Presence` sketch from `0001-camera-and-presence.md` (Decision, `Presence` code block),
@@ -371,6 +372,9 @@ impl ClientSide<RefGame> for RefClient {
         out.me = view.me().0;
         out.inventory = Inventory::default();
         out.collecting = None;
+        out.unlocks = 0;
+        out.crafting = None;
+        out.recipes.clear();
         out.spawn = self.spawn;
         if let Ok(player) = world.player(view.me()) {
             out.inventory = player.inventory;
@@ -378,6 +382,26 @@ impl ClientSide<RefGame> for RefClient {
                 tile: c.tile,
                 done_at: c.done_at.0,
             });
+            out.unlocks = player.unlocks;
+            out.crafting = player.crafting.map(|c| UiCrafting {
+                recipe: c.recipe,
+                done_at: c.done_at.0,
+            });
+            for (i, def) in content::RECIPES.iter().enumerate() {
+                if player.unlocks & (1 << i) == 0 {
+                    continue;
+                }
+                let mut cost = Inventory::default();
+                for &(item, n) in def.cost {
+                    cost.add(item, n);
+                }
+                out.recipes.push(UiRecipe {
+                    recipe: i as u8,
+                    cost,
+                    secs: def.secs,
+                    affordable: crate::rules::craft::affordable(player, def),
+                });
+            }
         }
 
         let from = WorldPos {

@@ -12,6 +12,7 @@ use engine::game::{PlayerId, PresenceTable, TickCx, WorldRead, WorldWrite};
 use engine::presence::Presence as _;
 use engine::world::{TilePos, WorldPos};
 
+use crate::rules::craft;
 use crate::{Collecting, RefGame, RefPlayer, RefReject, TileXY, content};
 
 /// Squared Q24.8 distance between two world positions, `i128` throughout (shared by [`in_range`]
@@ -116,28 +117,28 @@ pub fn tick(cx: &mut TickCx<'_, RefGame>) {
         let Ok(&player) = cx.player(who) else {
             continue;
         };
-        let Some(collecting) = player.collecting else {
-            continue;
-        };
-        if collecting.done_at > now {
-            continue;
+        let mut next = player;
+        let mut changed = false;
+        if let Some(collecting) = player.collecting
+            && collecting.done_at <= now
+        {
+            complete_one(cx, &mut next, collecting);
+            changed = true;
         }
-        complete_one(cx, who, player, collecting);
+        // The same scan completes due crafts (M32): one put per player per tick.
+        changed |= craft::complete_due(&mut next, now);
+        if changed {
+            cx.put_player(who, next);
+        }
     }
 }
 
-/// One player's completion (split out of [`tick`] so the borrow of `cx.player(who)` ends before
-/// this mutates it -- `TickCx`'s `WorldWrite` methods take `&mut self`). Re-reads the tile: if its
-/// resource is already gone (another player finished it first this same tick, Planning decisions
-/// "Collects are not reservations"), this player's collect ends with no item, matching `0003`
-/// Consequences' wanted "last unit" rejection race.
-fn complete_one(
-    cx: &mut TickCx<'_, RefGame>,
-    who: PlayerId,
-    player: RefPlayer,
-    collecting: Collecting,
-) {
-    let mut next = player;
+/// One player's collect completion (split out of [`tick`] so the borrow of `cx.player(who)` ends
+/// before this mutates the world -- `TickCx`'s `WorldWrite` methods take `&mut self`). Re-reads the
+/// tile: if its resource is already gone (another player finished it first this same tick, Planning
+/// decisions "Collects are not reservations"), this player's collect ends with no item, matching
+/// `0003` Consequences' wanted "last unit" rejection race. Edits `next`; the caller puts it.
+fn complete_one(cx: &mut TickCx<'_, RefGame>, next: &mut RefPlayer, collecting: Collecting) {
     next.collecting = None;
     let tile = collecting.tile.tile();
     if let Ok(t) = WorldRead::<RefGame>::tile(cx, tile) {
@@ -156,11 +157,11 @@ fn complete_one(
                     depleted
                 },
             );
-            next.inventory.add(resource, 1);
+            next.inventory.add_resource(resource, 1);
             if resource == content::STONE {
                 next.stone_mined = next.stone_mined.saturating_add(1);
+                craft::update_unlocks(next);
             }
         }
     }
-    cx.put_player(who, next);
 }

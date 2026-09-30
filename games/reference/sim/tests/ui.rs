@@ -258,7 +258,9 @@ fn ui_in_range_fills_every_tile_in_range_without_truncation() {
 fn ui_reads_inventory_and_collecting_from_player() {
     let client = RefClient::with_spring_state([0.0, 0.0], [0.0, 0.0]);
     let mut player = RefPlayer::default();
-    player.inventory.stone = 3;
+    player
+        .inventory
+        .add(reference_sim::content::ItemId::Stone, 3);
     player.collecting = Some(reference_sim::Collecting {
         tile: reference_sim::TileXY { x: 1, y: 0 },
         done_at: engine::time::Tick(42),
@@ -272,7 +274,7 @@ fn ui_reads_inventory_and_collecting_from_player() {
     client.ui(&v, &mut out);
 
     assert_eq!(out.me, 1);
-    assert_eq!(out.inventory.stone, 3);
+    assert_eq!(out.inventory.get(reference_sim::content::ItemId::Stone), 3);
     let collecting = out.collecting.expect("collecting must be Some");
     assert_eq!(collecting.tile.x, 1);
     assert_eq!(collecting.done_at, 42);

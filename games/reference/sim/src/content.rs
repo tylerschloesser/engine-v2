@@ -87,6 +87,72 @@ pub const fn collect_ticks(rate: TickRate) -> Ticks {
 /// actually uses.
 pub const COLLECT: Ticks = collect_ticks(crate::RefGame::TICK_RATE);
 
+/// Item ids (M32; the six inventory slots, in slot order): the index into [`crate::Inventory`]'s
+/// fixed array. Distinct from the tile resource ids above (`IRON = 16` ...): a resource id says what
+/// a *tile* holds, an item id what a *player* carries; [`ItemId::from_resource`] is the one bridge.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum ItemId {
+    Stone = 0,
+    Iron = 1,
+    Wood = 2,
+    Coal = 3,
+    Furnace = 4,
+    Ingot = 5,
+}
+
+/// Number of inventory slots (one per [`ItemId`]).
+pub const ITEM_COUNT: usize = 6;
+
+impl ItemId {
+    pub const fn idx(self) -> usize {
+        self as usize
+    }
+
+    /// The item a collected tile resource turns into; `None` for a non-resource id.
+    pub const fn from_resource(resource: u8) -> Option<ItemId> {
+        match resource {
+            IRON => Some(ItemId::Iron),
+            WOOD => Some(ItemId::Wood),
+            STONE => Some(ItemId::Stone),
+            COAL => Some(ItemId::Coal),
+            _ => None,
+        }
+    }
+}
+
+/// One crafting recipe (Requirements: "A furnace costs 5 stone and takes 5 seconds to craft",
+/// unlocked once the player has mined 5 stone). The recipe's id is its index in [`RECIPES`] and also
+/// its bit in `RefPlayer::unlocks`.
+pub struct Recipe {
+    pub output: ItemId,
+    /// `(item, count)` pairs deducted at `StartCraft`.
+    pub cost: &'static [(ItemId, u32)],
+    /// Duration in whole seconds; converted with `TICK_RATE.secs(..)` ([`Recipe::ticks`]).
+    pub secs: u32,
+    /// Unlock condition: `RefPlayer::stone_mined` reaching this count sets the recipe's unlock bit.
+    pub unlock_stone_mined: u32,
+}
+
+impl Recipe {
+    /// Duration in ticks at `rate` (0006 "Conversion rule"), generic over the rate so
+    /// `craft_duration_at_20_and_30_hz` can check both.
+    pub const fn ticks(&self, rate: TickRate) -> Ticks {
+        rate.secs(self.secs)
+    }
+}
+
+/// Recipe id of the furnace (index into [`RECIPES`]).
+pub const RECIPE_FURNACE: u8 = 0;
+
+/// The recipe table: one entry.
+pub const RECIPES: [Recipe; 1] = [Recipe {
+    output: ItemId::Furnace,
+    cost: &[(ItemId::Stone, 5)],
+    secs: 5,
+    unlock_stone_mined: 5,
+}];
+
 /// Trait tables + entity prototypes (0007 §6, `Game::register`'s own doc comment): both waters are
 /// `NOT_BUILDABLE`, every resource id is `COLLECTABLE`. No entity prototypes yet (furnaces are
 /// M32, Non-scope here).

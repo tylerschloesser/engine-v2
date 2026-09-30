@@ -7,4 +7,4 @@ import type { WorldXY } from "./WorldXY.js";
  * field shape). `#[ts(export)]`: without it ts-rs's derive macro writes no `export_bindings_*`
  * test at all (`add-action-type` skill).
  */
-export type RefAction = { "StartCollect": { tile: TileXY, from: WorldXY, } } | "CancelCollect";
+export type RefAction = { "StartCollect": { tile: TileXY, from: WorldXY, } } | "CancelCollect" | { "StartCraft": { recipe: number, } };

@@ -6,6 +6,7 @@ mod common;
 use common::RefScenario;
 use engine::game::PlayerId;
 use engine::world::{Tile, TilePos, WorldPos};
+use reference_sim::content::ItemId;
 use reference_sim::rules::collect::in_range;
 use reference_sim::{RefAction, RefReject, WorldXY, content};
 
@@ -48,7 +49,7 @@ fn collect_completes_and_depletes() {
         player.collecting.is_none(),
         "collect finished, timer clears"
     );
-    assert_eq!(player.inventory.iron, 1);
+    assert_eq!(player.inventory.get(ItemId::Iron), 1);
     let t = s.tile(tile);
     assert_eq!(t.resource(), content::IRON);
     assert_eq!(t.aux(), content::UNITS_PER_TILE - 1);
@@ -146,7 +147,11 @@ fn collect_last_unit_clears_resource_and_overlay_is_canonical() {
     let t = s.tile(tile);
     assert_eq!(t.resource(), 0, "resource id cleared at zero");
     assert_eq!(t.aux(), 0, "aux cleared alongside it, not left dangling");
-    assert_eq!(s.player(P1).inventory.iron, 1, "the last unit still counts");
+    assert_eq!(
+        s.player(P1).inventory.get(ItemId::Iron),
+        1,
+        "the last unit still counts"
+    );
 }
 
 /// Two players racing the same tile's last unit: the second finisher gets nothing (Planning
@@ -183,12 +188,12 @@ fn collect_second_finisher_gets_nothing() {
     s.step_ticks(content::COLLECT.0);
 
     assert_eq!(
-        s.player(P1).inventory.iron,
+        s.player(P1).inventory.get(ItemId::Iron),
         1,
         "first finisher gets the last unit"
     );
     assert_eq!(
-        s.player(P2).inventory.iron,
+        s.player(P2).inventory.get(ItemId::Iron),
         0,
         "second finisher gets nothing"
     );
@@ -216,7 +221,7 @@ fn cancel_collect_clears_timer() {
 
     s.step_ticks(content::COLLECT.0 + 5);
     assert_eq!(
-        s.player(P1).inventory.iron,
+        s.player(P1).inventory.get(ItemId::Iron),
         0,
         "cancelled collect never completes"
     );

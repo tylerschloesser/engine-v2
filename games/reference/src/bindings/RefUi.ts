@@ -2,7 +2,9 @@
 import type { Inventory } from "./Inventory.js";
 import type { TileXY } from "./TileXY.js";
 import type { UiCollecting } from "./UiCollecting.js";
+import type { UiCrafting } from "./UiCrafting.js";
 import type { UiInRange } from "./UiInRange.js";
+import type { UiRecipe } from "./UiRecipe.js";
 
 /**
  * `Ui { me, inventory, collecting, in_range, spawn }` (Scope, M20b steps 3 and 5). `me` is a raw
@@ -14,4 +16,8 @@ import type { UiInRange } from "./UiInRange.js";
  * on every `ui()` call -- it never changes for the life of a client, so it is not itself a
  * per-frame value (the `Ui` rule, `games/reference/CLAUDE.md`).
  */
-export type RefUi = { me: number, inventory: Inventory, collecting: UiCollecting | null, in_range: Array<UiInRange>, spawn: TileXY, };
+export type RefUi = { me: number, inventory: Inventory, collecting: UiCollecting | null, in_range: Array<UiInRange>, spawn: TileXY, 
+/**
+ * M32: the player's unlock bitset, the in-flight craft, and the unlocked recipes only.
+ */
+unlocks: number, crafting: UiCrafting | null, recipes: Array<UiRecipe>, };
