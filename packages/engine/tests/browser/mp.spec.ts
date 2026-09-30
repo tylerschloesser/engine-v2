@@ -102,7 +102,7 @@ test('mp/reveal-waits-for-visible-chunks', async ({ page }) => {
 // the clear colour). Bounded: without the late spawn `revealed` never turns true and this fails at
 // the 6 s wait, it does not hang.
 test('mp/remote_client_configures_from_welcome', async ({ browser }) => {
-  test.setTimeout(30_000)
+  test.setTimeout(45_000)
   const server = await startTestServer({ fixture: PUTS_DIR, manualTimer: true })
   const ticks = tickInBackground(server)
   const contextA = await browser.newContext()
@@ -134,12 +134,29 @@ test('mp/remote_client_configures_from_welcome', async ({ browser }) => {
     await expect
       .poll(() => pageA.evaluate(() => window.__mpGenDelivered?.()), { timeout: 6_000 })
       .toBeGreaterThan(8)
-    // `revealed` means the client worker holds the chunks; their GPU upload drains over later
-    // frames, so poll the pixel until it is drawn (black at 5.9 s on CI, M34 gate).
-    for (const page of [pageA, pageB]) {
+    // The probe draws with the page's current `revealed()`, and black is only the clear colour of a
+    // `reveal: false` draw (a non-resident chunk draws grey). A's earlier reveal wait can pass on
+    // the stale reading of its view before `__mpSetCamera` widened it, so wait for revealed and a
+    // drawn pixel together; on CI's shared software renderer the wide view took over 3 s (red
+    // at M34, M34b, M34d). A failure prints which half is missing: gen/subscription vs draw.
+    for (const [name, page] of [
+      ['A', pageA],
+      ['B', pageB],
+    ] as const) {
+      const state = () =>
+        page.evaluate(async () => ({
+          revealed: window.__mpRevealed?.(),
+          pixel: await window.__mpProbeCenterPixel?.(),
+          config: window.__mpConfig?.(),
+        }))
+      const drawn = (s: Awaited<ReturnType<typeof state>>) =>
+        s.revealed === true && JSON.stringify(s.pixel) !== '{"r":0,"g":0,"b":0,"a":255}'
       await expect
-        .poll(() => page.evaluate(() => window.__mpProbeCenterPixel?.()), { timeout: 3_000 })
-        .not.toEqual({ r: 0, g: 0, b: 0, a: 255 })
+        .poll(async () => drawn(await state()), { timeout: 20_000, message: `page ${name}` })
+        .toBe(true)
+        .catch(async (e) => {
+          throw new Error(`${e}\npage ${name} state: ${JSON.stringify(await state())}`)
+        })
     }
     const pixelA = await pageA.evaluate(() => window.__mpProbeCenterPixel?.())
     const pixelB = await pageB.evaluate(() => window.__mpProbeCenterPixel?.())
