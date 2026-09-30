@@ -119,7 +119,7 @@ pub fn tick(cx: &mut TickCx<'_, RefGame>) {
 
 /// The only furnace rule; idempotent for a furnace with nothing to do, so a deposit's wake and the
 /// wheel's due timer share it. If a smelt is due, finish it (iron -1, ingot +1, burn -1); then, if
-/// idle with iron and either burn left or fuel to light (coal first), light it and schedule the next
+/// idle with iron, room in the output slot (`SLOT_CAP`) and either burn left or fuel to light (coal first), light it and schedule the next
 /// finish; otherwise sleep with no timer. At most one `put_entity`, and none when nothing changed.
 pub fn advance(cx: &mut TickCx<'_, RefGame>, id: EntityId) {
     let Some(mut f) = cx.entity(id).ok().flatten().copied() else {
@@ -138,7 +138,8 @@ pub fn advance(cx: &mut TickCx<'_, RefGame>, id: EntityId) {
         f.smelt_done_at = None;
         finished = true;
     }
-    if f.iron_in > 0 {
+    // A full output slot starts nothing (fuel stays unlit); a take's put wakes the furnace again.
+    if f.iron_in > 0 && u32::from(f.ingots_out) < content::SLOT_CAP {
         if f.burn_left == 0 {
             if f.coal > 0 {
                 f.coal -= 1;

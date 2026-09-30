@@ -293,3 +293,28 @@ fn pickup_rejected_unless_empty() {
         assert_eq!(s.writes_logged(), w, "{name}: wrote");
     }
 }
+
+/// The output slot has the same cap as the others: a full one starts no smelt (the iron and fuel
+/// stay put, nothing is lit), and a take wakes the furnace so it resumes.
+#[test]
+fn full_output_pauses_smelting_and_take_resumes() {
+    let mut s = scenario();
+    let full = Furnace {
+        iron_in: 2,
+        coal: 1,
+        ingots_out: content::SLOT_CAP as u16,
+        ..furnace(&s)
+    };
+    s.put_furnace(ORIGIN, full);
+    s.step_ticks(2);
+    assert_eq!(furnace(&s), full, "nothing lit, nothing consumed");
+    assert_asleep(&mut s, 2 * SMELT);
+    assert_eq!(furnace(&s), full);
+
+    s.take(P1, ORIGIN).unwrap();
+    assert_eq!(s.player(P1).inventory.get(ItemId::Ingot), content::SLOT_CAP);
+    assert!(furnace(&s).smelt_done_at.is_some(), "the take woke it");
+    run_until(&mut s, SMELT + 5, |f| f.ingots_out == 1);
+    let f = furnace(&s);
+    assert_eq!((f.iron_in, f.coal, f.burn_left), (1, 0, 9));
+}

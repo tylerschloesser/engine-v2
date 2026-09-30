@@ -163,6 +163,13 @@ impl RefScenario {
             .copied()
     }
 
+    /// Replaces the furnace covering `at` with `f` by a direct put (native-test-only, like
+    /// [`Self::give`]): reaches states that would take 999 smelts. The put wakes the furnace.
+    pub fn put_furnace(&mut self, at: TilePos, f: reference_sim::Furnace) {
+        let id = self.entity_at(at).expect("a furnace is there");
+        self.sim.authority_mut().put_entity(id, f);
+    }
+
     /// The host's world as a plain `&dyn WorldRead` (what `can_place` takes).
     pub fn read(&self) -> &dyn WorldRead<RefGame> {
         self.sim.authority()
