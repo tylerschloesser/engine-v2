@@ -111,21 +111,29 @@ test('mp/remote_client_configures_from_welcome', async ({ browser }) => {
     const pageA = await contextA.newPage()
     const pageB = await contextB.newPage()
     await Promise.all([
-      openPage(pageA, mpUrl(server)),
+      // A: gen workers spawn 400 ms late, so the client's frames fill the 8-slot gen request ring
+      // before any gen worker exists (ADR 0042 §4); a wide view (A only) makes more than 8 chunk jobs.
+      openPage(pageA, mpUrl(server, '&genDelay=400')),
       openPage(pageB, mpUrl(server, '&testGame=1')),
     ])
+    await pageA.evaluate(() => window.__mpSetCamera?.(0, 0, 250))
     for (const page of [pageA, pageB]) {
       await page.waitForFunction(() => window.__mpRevealed?.() === true, { timeout: 6_000 })
     }
+    // A's gen workers are spawned 400 ms late; `revealed` (sync generation) can come first.
+    await pageA.waitForFunction(() => (window.__mpConfig?.().genWorkers ?? 0) === 1, {
+      timeout: 6_000,
+    })
     const a = await pageA.evaluate(() => window.__mpConfig?.())
     const b = await pageB.evaluate(() => window.__mpConfig?.())
     expect(a?.testGame).toBe(false)
     expect(a?.genWorkers, 'gen workers spawned after Welcome').toBe(1)
     expect(b?.genWorkers).toBe(1)
-    // The gen workers, not the client's synchronous miss path, generated chunks for it.
+    // The gen workers, not the client's synchronous miss path, generated chunks for it, and more
+    // than the ring held while none existed: a full ring leaves the job pending, never lost.
     await expect
       .poll(() => pageA.evaluate(() => window.__mpGenDelivered?.()), { timeout: 6_000 })
-      .toBeGreaterThan(0)
+      .toBeGreaterThan(8)
     const pixelA = await pageA.evaluate(() => window.__mpProbeCenterPixel?.())
     const pixelB = await pageB.evaluate(() => window.__mpProbeCenterPixel?.())
     expect(pixelA).not.toEqual({ r: 0, g: 0, b: 0, a: 255 })

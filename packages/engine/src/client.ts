@@ -236,6 +236,9 @@ export interface ClientOptions {
      * M07's; tests need to reach a real fixture's config today). */
     game?: unknown
     flags?: TestFlags
+    /** Delays the late gen-worker spawn of a remote client by this many ms (docs/plan/33f: lets a
+     * test fill the gen request rings before any gen worker exists). */
+    genSpawnDelayMs?: number
   }
 }
 
@@ -1950,7 +1953,14 @@ export function createClient(options: ClientOptions): Client {
     } catch {
       return
     }
-    void Promise.all(lateGenSpawns.map((sp) => spawnOne(sp, game))).then(resolveGenUp)
+    const spawns = lateGenSpawns
+    const go = (): void => {
+      if (destroyed) return
+      void Promise.all(spawns.map((sp) => spawnOne(sp, game))).then(resolveGenUp)
+    }
+    const delayMs = options.test?.genSpawnDelayMs ?? 0
+    if (delayMs > 0) scheduler.setTimer(go, delayMs)
+    else go()
   }
 
   /** `Status.WorldMismatch` reached the page (`worker/client.ts`): `onLink` `rejected`, reason

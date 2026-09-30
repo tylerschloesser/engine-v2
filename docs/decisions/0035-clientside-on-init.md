@@ -1,6 +1,6 @@
 # 0035: `ClientSide::on_init` gives a client its own world's seed and params once
 
-Status: Accepted (2026-09-25). Amends the `ClientSide` trait block of [0003](0003-game-facing-api.md)'s Decision section. Implemented in M20b (`docs/plan/20b-reference-player-and-collect-ui.md`, gate round 1 fix).
+Status: Accepted (2026-09-25). Amends the `ClientSide` trait block of [0003](0003-game-facing-api.md)'s Decision section. Implemented in M20b (`docs/plan/20b-reference-player-and-collect-ui.md`, gate round 1 fix). Amended by [0042](0042-remote-client-world-config-from-welcome.md) §3.
 
 ## Context
 

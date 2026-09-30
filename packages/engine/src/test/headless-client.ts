@@ -325,6 +325,7 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
    * (`client_on_welcome`); does nothing once `attached`. `Status.Decode` (a non-`Welcome` message,
    * or a malformed one) is swallowed here -- the same "leaves state untouched" contract `on_frame`
    * has, and there is nothing else this pump could usefully do with it before a session exists. */
+  let framedThisStep = false
   function pumpPreWelcome(): void {
     if (attached) return
     for (;;) {
@@ -339,6 +340,10 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
           const len = inst.call0(inst.x.client_world_config)
           if (len <= 0) throw new Error(`HeadlessClient: client_world_config failed: ${len}`)
           buildGen(JSON.parse(decoder.decode(txRegion.u8.subarray(0, len))))
+          // The frame of this very step ran before the world was known and did nothing: run it
+          // again now, before `pump` polls the uplink, so the first presence sample and gen
+          // requests go out as they did for a client configured at init (ADR 0042 §3).
+          if (framedThisStep) inst.call1(inst.x.frame, 0)
         }
         ownPlayerId = readU32LE(resultRegion.u8, 0)
         const seqSeed = readU32LE(resultRegion.u8, 4)
@@ -608,7 +613,9 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
       writeCameraBlock(cameraWriter, cameraState)
       readCameraBlockInto(cameraWriter, cameraRegion.u8, 0)
       inst.call1(inst.x.frame, 0)
+      framedThisStep = true
       pump()
+      framedThisStep = false
     },
     samplePresences() {
       const rows: PresenceSampleRow[] = []

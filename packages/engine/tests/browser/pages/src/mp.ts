@@ -74,6 +74,7 @@ const linklogVisible = params.get('linklog') === '1'
 // `?testGame=1`: the pre-M33f way, the world's seed and params handed in out of band. Only
 // `mp/remote_client_configures_from_welcome` uses it, to compare against the `Welcome` path.
 const testGame = params.get('testGame') === '1'
+const genDelayMs = Number(params.get('genDelay') ?? '0')
 const blockedWorker = params.get('blockedWorker') === '1'
 const corruptBuildHash = params.get('corruptBuildHash') === '1'
 const urlOverride = params.get('url')
@@ -132,6 +133,7 @@ const clientOptions: ClientOptions = {
   assets: { tiles: '/terrain/tiles.json' },
   // No `test.game`: the client and its gen workers take the world's seed and params from
   // `Welcome` (ADR 0042, docs/plan/33f), unless `?testGame=1` asks for the old escape hatch.
+  ...(genDelayMs > 0 ? { test: { genSpawnDelayMs: genDelayMs } } : {}),
   ...(testGame
     ? {
         test: {

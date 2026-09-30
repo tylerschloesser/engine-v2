@@ -389,3 +389,31 @@ test('clock_returns_same_object', async () => {
 
   client.destroy()
 })
+
+// docs/plan/33f (ADR 0042 §5): a `fatal` the client worker posts after `ready` and whose message
+// names a world mismatch reaches the page as `onLink` `rejected`/`WorldMismatch`; every other
+// post-`ready` fatal is still ignored on main, exactly as before.
+test('client.world_mismatch_fatal_becomes_link_rejected', async () => {
+  const sched = fakeScheduler()
+  const workers: FakeWorker[] = []
+  const client = createClient({
+    ...baseOptions(sched, false),
+    host: { kind: 'remote', url: 'ws://unused.invalid' },
+    createWorker: () => {
+      const w = new FakeWorker()
+      workers.push(w)
+      return w as unknown as Worker
+    },
+  })
+  const events: Array<{ state: string; reason?: string }> = []
+  client.onLink((e) => events.push(e))
+  await clientTestHandle(client).workersReady
+  const clientWorker = workers[0] as FakeWorker
+  const fatal = (message: string) =>
+    clientWorker.onmessage?.({ data: { type: 'fatal', message } } as MessageEvent)
+  fatal('some trap: unreachable')
+  expect(events).toEqual([])
+  fatal('WorldMismatch: a Welcome for a different world than this client joined')
+  expect(events).toEqual([{ state: 'rejected', reason: 'WorldMismatch' }])
+  client.destroy()
+})

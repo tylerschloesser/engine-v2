@@ -1984,6 +1984,13 @@ mod tests {
         );
         let mut tx = [0u8; 16];
         assert_eq!(inst.client_world_config(&mut tx), Ok(0));
+        let GameInstance::Client(c) = &inst else {
+            unreachable!()
+        };
+        assert!(
+            c.core.camera().is_some(),
+            "the camera report is world-independent: an unconfigured frame still records it"
+        );
     }
 
     #[test]

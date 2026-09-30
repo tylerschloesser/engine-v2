@@ -132,6 +132,8 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // clamps to the main thread (0019 §1's `setViewClamp`, which only main can call, `Client.camera`
   // being main-thread-only): `client-welcome` is a one-off lifecycle notification, the same
   // "setup, fatal errors and lifecycle only" carve-out `ready`/`fatal` already use (0015 §2).
+  // Set by `body()` when it ran `frame()` this wake; read by `onConfigured` below.
+  let framedThisWake = false
   const netPump = message.link
     ? createNetPump(
         inst,
@@ -164,6 +166,14 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
               type: 'client-configured',
               config: new TextDecoder().decode(txRegion.u8.subarray(0, len)),
             })
+            // This wake's `frame()` ran before the world was known and did nothing: run it again
+            // now, before the pump polls the uplink, so the first presence sample and gen
+            // requests go out as they did for a client configured at init (ADR 0042 §3). The
+            // camera region still holds this wake's block.
+            if (framedThisWake) {
+              inst.call1(inst.x.frame, FRAME_ARG)
+              drawlistPump.publish()
+            }
           },
           // A `Welcome` for another world than the one this client took from its first one
           // (0013: one world per server). Ends this worker; `client.ts` surfaces the prefix as
@@ -191,6 +201,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     : null
 
   function body(): void {
+    framedThisWake = false
     if (gcHook) applyGcHook(shell.control, shell.index)
     // docs/plan/18-picking-and-overlay.md, gate round 1: `inputPump.pump()` must run *before*
     // `frame()`, in this same wake, not after it -- `game_instance.rs`'s `GameInstance::frame` now
@@ -216,6 +227,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       }
       if (readCameraBlockInto(cameraReader, cameraRegion.u8, 0)) {
         inst.call1(inst.x.frame, FRAME_ARG)
+        framedThisWake = true
         // docs/plan/17-drawlist-and-sprites.md Scope: "once per produced frame" (0018 §2) -- only
         // after a real `frame()` call, never on a wake where `CB_FRAME_REQ` did not advance.
         drawlistPump.publish()
