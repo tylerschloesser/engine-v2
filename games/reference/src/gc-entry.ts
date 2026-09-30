@@ -121,7 +121,7 @@ function drainUploadsFully(): void {
 // `asHarness`/a manual clock with no real frame loop), that `engine/test.stepTick` (`stepSimTickSync`
 // + `untilQuiescent`) hung for `untilQuiescent`'s own 10s timeout the first time it ran after a run
 // of plain `stepFrame` calls, and worked around it with `stepSimTickSync` alone plus this page's own
-// `drainUploadsFully`. M20c named the cause (`packages/engine/src/test/client.ts`'s `ringSabs`,
+// `drainUploadsFully`. M20c named the cause (engine `src/test/client.ts`'s `ringSabs`,
 // Deviations): `untilQuiescent` waited on `uploadRing`, a ring only a page's own renderer/test code
 // ever drains, never a worker -- not a deadlocked client worker (its own `W_ACK`/`CB_FRAME_REQ`
 // equality already held; `uploadPump.pump()` never blocks on a full or undrained ring either).

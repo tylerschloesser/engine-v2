@@ -5,7 +5,7 @@
 // preview alongside `index.html` (Deviations has the exact build wiring).
 //
 // **Never imported by `main.ts`/`game.ts`.** Production must never carry this file's hooks or set
-// `ClientOptions.test` (`packages/engine/src/client.ts`'s own "never set by a game" -- true for
+// `ClientOptions.test` (engine `src/client.ts`'s own "never set by a game" -- true for
 // this game's *production* page; a *test* page is exactly what that field exists for).
 import { clientTestHandle } from 'engine'
 import { createUploadDrain, RingConsumer, type UploadDrain } from 'engine/render'
@@ -75,7 +75,7 @@ declare global {
     /** M20b step 6 (Seams, Provides: "`uiState(page)`"): the most recent `Ui` `client.onUi` has
      * delivered so far (`engine/test.lastUi`, M16b's own read-back seam -- not previously reached
      * from outside the engine package itself, so this milestone's own "engine only for bug fixes"
-     * added it to `engine/test`'s barrel export, `packages/engine/src/test.ts`), or `null` before
+     * added it to `engine/test`'s barrel export, engine `src/test.ts`), or `null` before
      * the first one has arrived. */
     __uiState?: () => RefUi | null
     /** M20b step 6: `client.clock()`'s own reading (M16b), copied into a plain object -- the live
@@ -130,7 +130,7 @@ const clock = createManualClock()
 
 // Gate round 1 fix (docs/plan/20b-reference-player-and-collect-ui.md Deviations): `?altSpawnParams`
 // -- a test-entry option for a *different world* (`ClientOptions.test.game`, the documented escape
-// hatch for every worker's own config, `packages/engine/src/client.ts`'s own doc comment) -- raises
+// hatch for every worker's own config, engine `src/client.ts`'s own doc comment) -- raises
 // `water_level` enough that the origin becomes water, so `spawn.spec.ts` can exercise the real
 // `RefClient::on_init` -> `Ui.spawn` -> `game.ts`'s `onUi` -> `client.camera.moveTo` pipeline against
 // a nearest land tile that is not `(0, 0)`, the trivial "origin is already land" case every real

@@ -13,7 +13,7 @@
 // different `ClientOptions.test.game` (the documented per-worker config escape hatch) that raises
 // `water_level` enough to make the origin water, reaching the real spawn pipeline via a new engine
 // hook (`ClientSide::on_init`, called once right after `Default::default()`, before `frame`/`extract`
-// /`ui` ever run -- `packages/engine/crates/engine/src/client/texel.rs`) rather than a client-side
+// /`ui` ever run -- the engine crate's `client/texel.rs`) rather than a client-side
 // hack: the true nearest land tile under that world is `(-1, -1)` (computed natively and guarded the
 // same way `landmarks.json` is: `sim/tests/spawn.rs::spawn_alt_params_is_nearest_land_tile`,
 // `tests/fixtures/spawn-alt-params.json`), distinct from both the origin and the fallback, so this
