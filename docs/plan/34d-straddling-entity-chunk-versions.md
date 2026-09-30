@@ -1,6 +1,6 @@
 # M34d: A straddling entity bumps every held chunk's version on the replica
 
-Status: not started · After: 34b · Tyler-dependent: no
+Status: done · After: 34b · Tyler-dependent: no
 
 Written by the orchestrator at M34b's first gate (2026-09-30). M34b's implementer found that a reference furnace whose 2×2 footprint straddles a chunk boundary (origin (-4, -1)) leaves the netcode harness's `assertConverged` failing after `settle()`, and moved the script's furnaces to single-chunk origins. A read-only diagnosis (below) located it. M34c runs scripted multiplayer races, where real placements straddle chunks, so this lands first.
 
@@ -49,10 +49,10 @@ Predicted-entity overlay versions (the `Predicting` overlay does not bump versio
 `straddling_footprint_region_hash_matches_host` (three cases), a resume test named for what it asserts, `reference_straddling_furnace_converges` (netcode).
 
 ## Exit criteria
-- [ ] Each new Rust test is red on base and green after (paste both lines).
-- [ ] `reference_straddling_furnace_converges` passes and fails with the fix reverted.
-- [ ] No existing test or golden changes; if one must, stop and report.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Each new Rust test is red on base and green after (paste both lines).
+- [x] `reference_straddling_furnace_converges` passes and fails with the fix reverted.
+- [x] No existing test or golden changes; if one must, stop and report.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t straddling` · `pnpm test netcode -t reference_straddling`
@@ -76,3 +76,5 @@ Each test asserts versions per held chunk, the version-agnostic `chunk_hash` par
 **Netcode (step 4, `e06922f`).** `tests/netcode/reference-straddling.test.ts` `reference_straddling_furnace_converges` (`worldSeed` from `world.json`, five stone, craft, stand at (-9,-1), `PlaceFurnace` at (-4,-1), `settle`, `assertConverged`). With `replica.rs` reverted to base: `assertConverged: seed=3406 tick=431 mismatches: client 0 (conn 0): host=1e6b997cf29ea140 replica=357e016982f8956a`. After: pass (0.9 s).
 
 **No existing test or golden moved.** `pnpm --filter reference golden:record`: no diff (`705 logged ticks, 245 log bytes, final hash 8fb31c5e69eeb99d`). Final: rust 765 (760 + 5), unit 301, wasm 168, netcode 97, browser 240 (49 s of 48 s WARN, machine load; 47 s at M34b's end), lint green.
+
+**Orchestrator gate (M34d done).** `pnpm gate`: 4 files, no golden changed. Re-checked by the orchestrator: with `client/replica.rs` reverted to base, `pnpm test rust -t straddling` failed 4 tests (the three region-hash cases and `straddling_footprint_resume_keeps_both_chunks`); restored, 5 pass. Full gate: rust 765, unit 301, wasm 168, netcode 97, browser 240 (47 s), lint clean.
