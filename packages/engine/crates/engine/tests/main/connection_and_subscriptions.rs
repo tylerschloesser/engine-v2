@@ -706,6 +706,57 @@ fn straddling_footprint_region_hash_matches_host_after_move_and_removal() {
     }
 }
 
+/// M34d (resume): a client holding a straddling entity that reconnects with nothing changed keeps
+/// both chunks -- its hinted versions equal the host's -- rather than re-snapshotting the
+/// non-anchor one. The converse (a chunk that *did* change is never kept) is
+/// `resume_hint_never_keeps_a_chunk_a_straddler_changed`.
+#[test]
+fn straddling_footprint_resume_keeps_both_chunks() {
+    let (mut lb, idx, who) = straddle_setup(true);
+    spawn_straddler(&mut lb, who);
+    let both = [ChunkCoord::new(1, 0), ChunkCoord::new(2, 0)];
+    let center = ChunkCoord::new(2, 0);
+    let hint = engine::session::build_resume_hint(
+        lb.client(idx).view().held_chunks_with_versions(),
+        center,
+        0,
+        0,
+    );
+    let diff = engine::session::diff_resume_hint(Some(&hint), 0, center, &both, |c| {
+        lb.host.debug_version(c)
+    });
+    assert_eq!(diff.keep, both.to_vec(), "snapshot: {:?}", diff.snapshot);
+    assert!(diff.snapshot.is_empty());
+}
+
+/// M34d (resume, the converse): a hint taken before a straddler is removed can never *keep* either
+/// chunk afterwards: the host stamped both, whatever the replica's own bookkeeping did.
+#[test]
+fn resume_hint_never_keeps_a_chunk_a_straddler_changed() {
+    let (mut lb, idx, who) = straddle_setup(true);
+    spawn_straddler(&mut lb, who);
+    let both = [ChunkCoord::new(1, 0), ChunkCoord::new(2, 0)];
+    let center = ChunkCoord::new(2, 0);
+    let hint = engine::session::build_resume_hint(
+        lb.client(idx).view().held_chunks_with_versions(),
+        center,
+        0,
+        0,
+    );
+    lb.action(who, LAction::Despawn { id: 1 });
+    lb.step();
+    lb.step();
+    let diff = engine::session::diff_resume_hint(Some(&hint), 0, center, &both, |c| {
+        lb.host.debug_version(c)
+    });
+    assert!(
+        diff.keep.is_empty(),
+        "kept a changed chunk: {:?}",
+        diff.keep
+    );
+    assert_eq!(diff.snapshot, both.to_vec());
+}
+
 #[test]
 fn camera_walk_changes_no_state() {
     let run = |with_camera: bool| {
