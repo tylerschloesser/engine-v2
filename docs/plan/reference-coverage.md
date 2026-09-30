@@ -32,7 +32,7 @@ M34b and M34c keep the test columns true (here and in the `reference-game.md` ta
 | `Game::predict` opt-out (0012) | `FurnaceTake` | play | 33b |  |
 | `Unknown` reads → `NotPredictable` at the subscription edge (0003 list) | scripted far placement | scripted | 34c | `reference_subscription_edge_not_predictable` |
 | Rejection races: last unit, same spot, same ingots (0003 list) | three race tests at three latencies | scripted | 34c | `reference_race_last_unit`, `reference_race_same_spot`, `reference_race_same_ingots` |
-| Provisional ids, tile addressing (ADR 0022) | deposit into a just-placed furnace; panel survives the swap | play + scripted | 33b |  |
+| Provisional ids, tile addressing (ADR 0022) | deposit into a just-placed furnace; panel survives the swap | play + scripted | 33b | `deposit_into_predicted_furnace_before_ack` (`sim/tests/furnace_predict.rs`), `reference_furnace_panel_survives_swap` (browser) |
 | `Ui` observation, low-GC state reads (0003, `client.md`) | every panel; `in_range` at tile-crossing rate | play | 20b |  |
 | Static overlay anchors (0019) | collect buttons, touch Confirm, furnace panel | play | 20b, 33, 33b |  |
 | Tile picking, cursor tile, ghost with `ANCHOR_CURSOR_TILE` (0019) | placement | play | 33 |  |

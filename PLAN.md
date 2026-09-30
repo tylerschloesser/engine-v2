@@ -89,7 +89,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 34 | `34-reference-multiplayer.md` | roster, remote players, play through the reference server | 33b, 33d, 33e, 33f, 30, 31b | D |
 | [x] | 34b | `34b-reference-scripted-single-player.md` | scripted full game, golden log, persistence extras | 34, 23, 24b | T |
 | [x] | 34d | `34d-straddling-entity-chunk-versions.md` | a straddling entity bumps every held chunk version on the replica; host/replica `region_hash` agree | 34b | |
-| [ ] | 34c | `34c-reference-scripted-multiplayer.md` | scripted multiplayer races + reconnect in the netcode suite. **Reference game complete.** | 34d | |
+| [x] | 34c | `34c-reference-scripted-multiplayer.md` | scripted multiplayer races + reconnect in the netcode suite. **Reference game complete.** | 34d | |
 | [ ] | 35b | `35b-bun-and-deno-adapters.md` | Bun and Deno server adapters | 29 | |
 | [ ] | 35 | `35-packaging-and-adapters.md` | final exports map, tarball + size tests, pattern B, `checkSupport`, release profile | 29, 35b | D |
 | [ ] | 36 | `36-slow-tier-and-benchmarks.md` | `pnpm test:slow`, standard large save, benchmarks | 34c, 35 | |

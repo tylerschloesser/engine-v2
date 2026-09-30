@@ -1,6 +1,6 @@
 # M34c: Reference game: scripted multiplayer in the netcode suite
 
-Status: not started · After: 34d · Tyler-dependent: no
+Status: done · After: 34d · Tyler-dependent: no
 
 Split from M34 during planning (see that brief). M36, M37b and M37 list M34c under After.
 
@@ -63,10 +63,10 @@ Eight-client soak and the standard large save (M36). Version-mismatch reload, `S
 Netcode: `reference_full_game_two_players`, `reference_race_last_unit`, `reference_race_same_spot`, `reference_race_same_ingots`, `reference_subscription_edge_not_predictable`, `reference_furnace_across_chunk_border`, `reference_late_join_sees_world`, `reference_short_drop_keeps_collect`, `reference_long_drop_cancels_collect_keeps_craft`, `reference_pending_place_applied_once_after_reconnect`, `reference_full_and_bad_key_rejected`, `reference_idle_world_pauses`, `reference_bytes_and_mispredictions_in_budget` (also asserts the projected `net.bytesPerHour` ceiling), `reference_full_game_two_players_ws`.
 
 ## Exit criteria
-- [ ] All tests above pass by name, each reproducible from its printed seed.
-- [ ] Every multiplayer row of the Requirement matrix (the `reference-game.md` table of `docs/plan/coverage.md`) and every "scripted" row of the engine-feature table in `docs/plan/reference-coverage.md` names a test that exists.
-- [ ] The netcode suite stays inside its budget (`0020` §3); demotions follow §4 and are listed under Deviations.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] All tests above pass by name, each reproducible from its printed seed.
+- [x] Every multiplayer row of the Requirement matrix (the `reference-game.md` table of `docs/plan/coverage.md`) and every "scripted" row of the engine-feature table in `docs/plan/reference-coverage.md` names a test that exists.
+- [x] The netcode suite stays inside its budget (`0020` §3); demotions follow §4 and are listed under Deviations.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test netcode -t reference_` · `pnpm test netcode -t reference_race` · `pnpm test`.
