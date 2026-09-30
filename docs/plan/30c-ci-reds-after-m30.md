@@ -1,6 +1,6 @@
 # M30c: Three CI-only reds after M30
 
-Status: not started · After: 30b · Tyler-dependent: no
+Status: done · After: 30b · Tyler-dependent: no
 
 Written by the orchestrator at M30b's CI read (2026-09-29). Same shape as M19c: CI-only, intermittent, so the job is to attribute from CI's own artifacts, fix the cause, and leave a failure-only diagnostic where the cause cannot be shown. Every red below passed on a same-commit rerun at least once, and every one is green locally.
 
@@ -38,10 +38,10 @@ The implementer never pushes. Commit diagnostics as `M30c: …` and stop. The or
 Each fix comes with a control that shows the test still fails on the defect it exists to catch. For A: an injected allocation in the measured path still fails the no-alloc test, run once and pasted.
 
 ## Exit criteria
-- [ ] Deviations name each red's cause, or say what the diagnostic will print on its next occurrence.
-- [ ] Two consecutive CI runs on `main` are green in the fast tier, with the orchestrator reading them.
-- [ ] No budget, timeout or skip marker is changed (`pnpm gate` markers: none).
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Deviations name each red's cause, or say what the diagnostic will print on its next occurrence.
+- [x] Two consecutive CI runs on `main` are green in the fast tier, with the orchestrator reading them.
+- [x] No budget, timeout or skip marker is changed (`pnpm gate` markers: none).
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t no_alloc` · `pnpm test netcode -t ws/` · `pnpm test browser -t mp/` · `pnpm test && pnpm lint`
@@ -94,3 +94,7 @@ Base `1369cbc`; commits `6cbfb4d` (A), `84206c2` (B), `65ceba2` (C). `pnpm gate 
 ### Other
 
 - One full local `pnpm test` run failed `[chromium] semantic input keyboard focus rules` (unrelated file, amid CVDisplayLink noise); the immediate rerun of the full suite and 3 isolated runs of that test passed.
+
+### Gate (orchestrator)
+
+One Opus implementer across two CI rounds. Round 1 (`b3854e9`, run 36647719426): fast tier green, slow tier red on `ws/spike-c`. The red-B harness change had exposed OS cross-socket delivery order in `trace()`; it reproduced 3/3 locally and was fixed by releasing ws arrivals in send order. Also red: `connected-terrain neg burst sim` at 92 s of 90 s, on a page none of M30c's changes execute. Round 2 (`542d403`, run 36650050838): green in both tiers on attempt 1 and on a full rerun (attempt 2). `pnpm gate 1369cbc`: no goldens, no markers, no budgets changed; the moved 20 s waits in `mp.spec.ts` are existing values. The red-C production fixes (`Hello` resent per dial, per-link `CB_LINK_GEN`, retries run one at a time, stale handshake entry on slot reuse) were accepted as demonstrated defects on the path under test.
