@@ -134,9 +134,15 @@ test('mp/remote_client_configures_from_welcome', async ({ browser }) => {
     await expect
       .poll(() => pageA.evaluate(() => window.__mpGenDelivered?.()), { timeout: 6_000 })
       .toBeGreaterThan(8)
+    // `revealed` means the client worker holds the chunks; their GPU upload drains over later
+    // frames, so poll the pixel until it is drawn (black at 5.9 s on CI, M34 gate).
+    for (const page of [pageA, pageB]) {
+      await expect
+        .poll(() => page.evaluate(() => window.__mpProbeCenterPixel?.()), { timeout: 3_000 })
+        .not.toEqual({ r: 0, g: 0, b: 0, a: 255 })
+    }
     const pixelA = await pageA.evaluate(() => window.__mpProbeCenterPixel?.())
     const pixelB = await pageB.evaluate(() => window.__mpProbeCenterPixel?.())
-    expect(pixelA).not.toEqual({ r: 0, g: 0, b: 0, a: 255 })
     expect(pixelA).toEqual(pixelB)
     // Cost of the late spawn, for the milestone's Deviations: ms from Welcome applied to the
     // gen workers up, and to the first fully generated view.
