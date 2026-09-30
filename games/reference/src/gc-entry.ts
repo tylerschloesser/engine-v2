@@ -2,7 +2,7 @@
 // criterion; `gc-test` skill "Production-topology pages", `gc-terrain.ts`'s own precedent): a real
 // `startGame` topology -- the exact device/renderer/collectUi/inventoryUi wiring `main.ts`/
 // `test-entry.ts` share -- driven through `asHarness` instead of a real frame loop, with two collect
-// buttons mounted and the camera panning, for 600 stepped frames (0016 §3). Proves `RefClient::
+// buttons mounted, the camera panning and (M33) construction mode on with the pointer moving, for 600 stepped frames (0016 §3). Proves `RefClient::
 // ui()`/`extract`, and the client worker's own ABI glue calling them every frame, allocate nothing.
 //
 // **Never imported by `main.ts`/`test-entry.ts`.** A separate entry, same reason `test-entry.ts`
@@ -19,6 +19,7 @@ import {
   stepTick,
 } from 'engine/test'
 import { startGame } from './game.js'
+import { LOCAL } from './ui/build.js'
 
 declare global {
   interface Window {
@@ -144,6 +145,14 @@ for (let i = 0; i < 10; i++) {
   await nextAnimationFrame()
 }
 
+// M33 (docs/plan/33-reference-furnace.md Budgets): construction mode on for the whole measured run,
+// so `RefClient::extract` emits the ghost and runs `can_place` over the `View` every frame. Emitted
+// and drained here, outside the measured window (a parked worker cannot drain a ring).
+client.input.emit(LOCAL.PLACE_MODE, 1)
+pinCamera()
+stepFrame(client, 50)
+drainUploadsFully()
+
 // A production worker enters its blocking loop right after `ready`, and stays running (not
 // parked) through every priming call above: park only now, right before `__pageReady`, so CDP can
 // reach every worker the instant the test attaches (`packages/engine/CLAUDE.md`, `gc-topology.ts`/
@@ -166,6 +175,13 @@ function drive(f: number): void {
   fu.camTileY = camTileY
   fu.camFracX = cx - camTileX
   fu.camFracY = CENTRE_Y - camTileY
+
+  // The pointer moves every frame: the cursor tile sweeps x = -6..6 along y = -1 (land, then the
+  // iron at (0, 0) under the footprint, then the shore at x >= 2), so the ghost's tint changes too.
+  // Integer writes into the reused camera state object (the block carries them to Rust).
+  client.cameraState.cursorTileX = (f % 13) - 6
+  client.cameraState.cursorTileY = -1
+  client.cameraState.cursorValid = true
 
   harness.stepFrame(1000 / 60)
   harness.stepTick()

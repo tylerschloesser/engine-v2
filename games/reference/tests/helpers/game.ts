@@ -35,6 +35,23 @@ export type RefUiState = {
   unlocks: number
   crafting: { recipe: number; done_at: number } | null
   recipes: Array<{ recipe: number; cost: number[]; secs: number; affordable: boolean }>
+  /** Construction mode is on (client-local). */
+  placing: boolean
+  /** The inventory holds a furnace item. */
+  can_build: boolean
+}
+
+/** A furnace sprite (`kind` 0) or the placement ghost (`kind` 6) from the newest DrawList. */
+export type DrawRec = {
+  kind: number
+  x: number
+  y: number
+  w: number
+  h: number
+  flags: number
+  color: number
+  param: number
+  pickId: number
 }
 
 declare global {
@@ -43,6 +60,19 @@ declare global {
     __stepFrame?: (dtMs: number) => Promise<void>
     __stepTick?: (n: number) => Promise<void>
     __uiState?: () => RefUiState | null
+    __cameraState?: () => { x: number; y: number; tilesAcross: number }
+    __tickCamera?: (dtMs: number) => void
+    __draws?: () => DrawRec[]
+    __cursorTile?: () => { x: number; y: number; valid: boolean }
+    __injectPointer?: (
+      phase: 'down' | 'move' | 'up' | 'cancel',
+      id: number,
+      x: number,
+      y: number,
+      tMs: number,
+      kind?: 'mouse' | 'touch',
+    ) => void
+    __dispatchPlaceFurnace?: (x: number, y: number) => number
   }
 }
 
@@ -230,4 +260,82 @@ export async function collectN(
     )
   }
   return ui
+}
+
+/** Tiles under `TEST_SEED` that the placement specs rely on (`sim/tests/place.rs`,
+ * `browser_fixture_tiles_hold`, checks them against worldgen): a free 2x2 of land, the last origin
+ * whose footprint is all land on the shore row, the next origin over (one footprint tile is water),
+ * and an origin covering the iron resource at (0, 0). */
+export const PLACE = {
+  free: { x: -4, y: -1 },
+  shoreOk: { x: 1, y: -1 },
+  shoreWater: { x: 2, y: -1 },
+  overIron: { x: 0, y: -1 },
+} as const
+
+/** `ghost`/`sprite` colours and flags (`sim/src/client.rs`, `engine::client::drawlist`). */
+export const GHOST = { valid: 0x40ff4090, invalid: 0xff404090, unknown: 0xc0c0c090 } as const
+export const FLAG = { anchorCursorTile: 1 << 0, predicted: 1 << 2 } as const
+export const KIND = { sprite: 0, ghost: 6 } as const
+
+export async function draws(page: Page): Promise<DrawRec[]> {
+  return page.evaluate(() => window.__draws?.() ?? [])
+}
+
+/** The one `kind` record, or `undefined` (throws when there are several: the specs never expect two). */
+export async function only(page: Page, kind: number): Promise<DrawRec | undefined> {
+  const found = (await draws(page)).filter((r) => r.kind === kind)
+  if (found.length > 1)
+    throw new Error(`expected at most one kind ${kind} record, saw ${found.length}`)
+  return found[0]
+}
+
+/** CSS-pixel position of a world point (tiles) on the `#game` canvas, from the live camera
+ * (`camera/transform.ts`: `pxPerTile = max(w, h) / tilesAcross`, the centre at the canvas centre). */
+export async function tileToScreen(
+  page: Page,
+  wx: number,
+  wy: number,
+): Promise<{ x: number; y: number }> {
+  const cam = await page.evaluate(() => window.__cameraState?.())
+  const box = await page.locator('#game').boundingBox()
+  if (!cam || !box) throw new Error('no camera state or canvas box')
+  const ppt = Math.max(box.width, box.height) / cam.tilesAcross
+  return {
+    x: box.x + box.width / 2 + (wx - cam.x) * ppt,
+    y: box.y + box.height / 2 + (wy - cam.y) * ppt,
+  }
+}
+
+/** One camera integration (recognizes pointer gestures) then one stepped frame. */
+export async function frame(page: Page, dtMs = 16): Promise<void> {
+  await page.evaluate((d) => window.__tickCamera?.(d), dtMs)
+  await page.evaluate((d) => window.__stepFrame?.(d), dtMs)
+}
+
+/** `craftFurnace(page)` (docs/plan/33-reference-furnace.md Provides): five stone and one craft,
+ * stepped ticks only; returns the `Ui` holding one furnace. Needs `/test.html` with the `Ui` primed. */
+export async function craftFurnace(page: Page): Promise<RefUiState | null> {
+  await collectN(page, 'stone', 5)
+  await page.locator('[data-craft-recipe="0"]').click()
+  await page.evaluate((d) => window.__stepFrame?.(d), 16)
+  await pumpUntil(page, (ui) => ui?.crafting !== null && ui?.crafting !== undefined)
+  await page.evaluate((k) => window.__stepTick?.(k), 101)
+  return pumpUntil(page, (ui) => ui?.crafting === null && (ui?.inventory[ITEM.furnace] ?? 0) >= 1)
+}
+
+/** `placeFurnace(page, origin)` (Provides): dispatches `PlaceFurnace` at `origin` and steps ticks
+ * until the item is spent on the host (the ack has landed). Returns the last `Ui`. */
+export async function placeFurnace(
+  page: Page,
+  origin: { x: number; y: number },
+): Promise<RefUiState | null> {
+  const before = (await uiState(page))?.inventory[ITEM.furnace] ?? 0
+  await page.evaluate(([x, y]) => window.__dispatchPlaceFurnace?.(x, y), [
+    origin.x,
+    origin.y,
+  ] as const)
+  await page.evaluate((d) => window.__stepFrame?.(d), 16)
+  await page.evaluate((k) => window.__stepTick?.(k), 3)
+  return pumpUntil(page, (ui) => (ui?.inventory[ITEM.furnace] ?? before) < before)
 }

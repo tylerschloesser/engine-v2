@@ -241,3 +241,23 @@ fn can_place_names_no_tile_type() {
         "covers (9..=10)"
     );
 }
+
+/// The tiles `tests/helpers/game.ts::PLACE` hard-codes for the browser placement specs, against the
+/// real worldgen at `TEST_SEED` (no `clear_area`): a free 2x2, a shore pair whose footprints differ
+/// by one water tile, and an origin over the iron at (0, 0). Fails if worldgen or a rule drifts.
+#[test]
+fn browser_fixture_tiles_hold() {
+    let cases = [
+        ((-4, -1), true), // free
+        ((1, -1), true),  // shoreOk
+        ((2, -1), false), // shoreWater: (3, 0) is water
+        ((0, -1), false), // overIron: covers (0, 0)
+    ];
+    for ((x, y), ok) in cases {
+        let mut s = RefScenario::new();
+        s.join(P1);
+        s.give(P1, ItemId::Furnace, 1);
+        let r = s.place(P1, TilePos::new(x, y));
+        assert_eq!(r.is_ok(), ok, "origin ({x}, {y}): {r:?}");
+    }
+}

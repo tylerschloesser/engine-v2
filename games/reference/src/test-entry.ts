@@ -14,6 +14,7 @@ import {
   createManualClock,
   type DrawRecord,
   drawListRecords,
+  injectPointer,
   lastUi,
   pumpUntilLive,
   resumeWorkers,
@@ -80,6 +81,32 @@ declare global {
      * object `clock()` returns is reused across calls (Provides: "read the fields, do not keep the
      * object past the next call"), which does not survive a `page.evaluate` structured-clone round
      * trip unchanged the way a fresh literal does. */
+    /** M33: the furnace sprites (`kind 0`) and ghost records (`kind 6`) of the newest DrawList. */
+    __draws?: () => Array<{
+      kind: number
+      x: number
+      y: number
+      w: number
+      h: number
+      flags: number
+      color: number
+      param: number
+      pickId: number
+    }>
+    /** M33: the engine's cursor tile (`cameraState.cursor*`): mouse hover tile or last touch tap. */
+    __cursorTile?: () => { x: number; y: number; valid: boolean }
+    /** M33: `engine/test.injectPointer` (touch taps and drags, `pointerType` 'touch'). */
+    __injectPointer?: (
+      phase: 'down' | 'move' | 'up' | 'cancel',
+      id: number,
+      x: number,
+      y: number,
+      tMs: number,
+      kind?: 'mouse' | 'touch',
+    ) => void
+    /** M33: dispatches `PlaceFurnace` straight through `client.dispatch` (the `placeFurnace`
+     * helper; the UI flows are exercised by `reference_place_mouse`/`_touch` themselves). */
+    __dispatchPlaceFurnace?: (x: number, y: number) => number
     __clock?: () => { authoritative: number; predicted: number; ticksPerSecond: number }
   }
 }
@@ -219,6 +246,42 @@ window.__clock = () => {
     predicted: c.predicted,
     ticksPerSecond: c.ticksPerSecond,
   }
+}
+
+/** `engine::client::{KIND_SPRITE, KIND_GHOST}` (0018 §2). */
+const KIND_SPRITE = 0
+const KIND_GHOST = 6
+
+window.__draws = () => {
+  drawListRecords(client, drawRecordsScratch)
+  return drawRecordsScratch
+    .filter((r) => r.kind === KIND_SPRITE || r.kind === KIND_GHOST)
+    .map((r) => ({
+      kind: r.kind,
+      x: r.pos[0],
+      y: r.pos[1],
+      w: r.size[0],
+      h: r.size[1],
+      flags: r.flags,
+      color: r.color,
+      param: r.param,
+      pickId: r.pickId,
+    }))
+}
+
+window.__cursorTile = () => ({
+  x: client.cameraState.cursorTileX,
+  y: client.cameraState.cursorTileY,
+  valid: client.cameraState.cursorValid,
+})
+
+window.__injectPointer = (phase, id, x, y, tMs, kind) => {
+  injectPointer(client, phase, id, x, y, tMs, kind)
+}
+
+window.__dispatchPlaceFurnace = (x, y) => {
+  const action: RefAction = { PlaceFurnace: { origin: { x, y } } }
+  return client.dispatch(action)
 }
 
 window.__playerCircle = () => {

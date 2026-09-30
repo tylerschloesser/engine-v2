@@ -1,6 +1,6 @@
 # games/reference
 
-The reference game (`docs/spec/reference-game.md`): a private Vite app plus `sim/`, a game crate on the engine's `Game` trait (`docs/decisions/0003-game-facing-api.md`). Rules: `docs/plan/20-reference-game-v0.md` (world, collect), `20b-reference-player-and-collect-ui.md` (players, overlay), `32-reference-crafting.md` (craft).
+The reference game (`docs/spec/reference-game.md`): a private Vite app plus `sim/`, a game crate on the engine's `Game` trait (`docs/decisions/0003-game-facing-api.md`). Rules: `docs/plan/20-reference-game-v0.md` (world, collect), `20b-reference-player-and-collect-ui.md` (players, overlay), `32-reference-crafting.md` (craft), `33-reference-furnace.md` (furnace, placement).
 
 ## Commands
 
@@ -22,7 +22,7 @@ The reference game (`docs/spec/reference-game.md`): a private Vite app plus `sim
 - `content.rs`: terrain/resource ids, `TraitSet` bits, durations, `SEED` (every real page's seed --
   `ClientSide` gets no engine seed/params channel), `Game::register`.
 - `noise.rs`/`worldgen.rs`: `engine::noise` composition, `RefWorldgen`/`hash2` scatter, `terrain_at`.
-- `rules/`: one file per feature (`collect.rs`: `StartCollect`/`CancelCollect`, `in_range`, `admit`; `craft.rs`: `StartCraft`, due-craft completion, `update_unlocks`).
+- `rules/`: one file per feature (`collect.rs`: `StartCollect`/`CancelCollect`, `in_range`, `admit`; `craft.rs`: `StartCraft`, due-craft completion, `update_unlocks`; `place.rs`: `can_place`, `PlaceFurnace`).
 - `client.rs` (`.claude/rules/hot-paths.md` applies): `ClientSide<RefGame>` (`RefClient`) -- the
   camera-follow spring, own-player circle/range-ring `extract`, `ui()` (below; `Ui.spawn` is
   `nearest_land_tile`'s one-time spiral, cached at construction), depletion visuals.
@@ -56,3 +56,4 @@ waits on `uploadRing`, a page's own job to drain). `tests/helpers/game.ts`'s
 - Adding an item (M32): `ItemId` variant + `ITEM_COUNT` (`content.rs`), `ITEM_LABELS` (`src/ui/inventory.ts`), `ITEM` (`tests/helpers/game.ts`), bump `SCHEMA_VERSION`. A recipe: append to `RECIPES` (index = id = `unlocks` bit) and `RECIPE_NAMES` (`src/ui/craft.ts`). Tests reach states with `RefScenario::give` (native, never an action) or `collectN` (browser).
 - Depends on `engine` alone (`reference_package_depends_only_on_engine`): never import across the
   package boundary from `packages/engine/tests/**`, even in `tests/`.
+- Placement (M33): shared rule helpers take `&dyn WorldRead` and return `Result<_, Unknown>`; never name a tile or entity type in a placement rule (`can_place` asks `traits_at`; a new unbuildable terrain or building only adds `NOT_BUILDABLE` in `content::register`). Construction mode is client-local: `client.input.emit(LOCAL.PLACE_MODE, on)` (`src/ui/build.ts`, mirrors `content::local`) -> `RefClient.placing` -> ghost in `extract`. Step one frame after an emit or a dispatch before a tick waits (the rings drain in frames; the uplink is paced at 50 ms). `sprites.json` is data only: `engine/render` exports no drawables renderer, so no real page draws sprites, the ghost or the circle yet (browser specs read the DrawList: `__draws`).
