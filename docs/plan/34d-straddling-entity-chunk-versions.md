@@ -58,4 +58,21 @@ Predicted-entity overlay versions (the `Predicting` overlay does not bump versio
 `pnpm test rust -t straddling` · `pnpm test netcode -t reference_straddling`
 
 ## Deviations
-(filled in during Phase 3)
+(Commits `M34d step 1` to `step 4`, base `55b4d6b`.)
+
+**Diagnosis confirmed in code and by running.** Host stamps every scope chunk; the replica bumped the anchor chunk only. Line numbers were close. No claim differed.
+
+**Red on base (step 1, `0efd97e`), then green after the fix (`04ddc70`).** All in `tests/main/connection_and_subscriptions.rs`, camera holds chunks (1,0)+(2,0) (`center (64,10)`) or only the non-anchor (2,0) (`center (100,10)`); `SpawnWide` at x=63 covers both:
+- `straddling_footprint_region_hash_matches_host` (both held, put): `version of held chunk 2` left 0, right 1. Green after.
+- `straddling_footprint_region_hash_matches_host_non_anchor_only`: same line, left 0, right 1. Green after.
+- `straddling_footprint_region_hash_matches_host_after_move_and_removal` (move a wide one to a 1x1 elsewhere, then respawn and despawn; both camera cases): `after move away: version of held chunk 1` left 1, right 3. Green after.
+Each test asserts versions per held chunk, the version-agnostic `chunk_hash` parity and `region_hash` parity.
+
+**Fix.** `client/replica.rs`: `apply_entity_put` and `apply_entity_gone` bump every held chunk under the old footprint (read before applying) and the new one, through two private helpers `footprint_of` and `bump_rect` (`footprint_rect(..).chunks(&dims)`). `region_hash` and `integrity::chunk_hash` are untouched.
+
+**Resume (step 3, `94717be`).** `straddling_footprint_resume_keeps_both_chunks` builds a hint with `build_resume_hint` from the client's `held_chunks_with_versions` and diffs it with `diff_resume_hint` against `Host::debug_version`: on base `keep` is `[(1,0)]` and `snapshot` `[(2,0)]` (the needless re-snapshot), after the fix both are kept. It is a pure-function test of the diff, not a full reconnect (`Host` wiring of the hint is M28b's and unchanged).
+**Could a stale version keep a chunk that changed? No.** Read: `diff_resume_hint` keeps only when `hinted == host_version`. The host stamps every scope chunk of every write with the completing tick (`host/mod.rs` tick loop), so a chunk that changed after the hint has a host version greater than any version the replica could have held for it. The replica's version only ever comes from a snapshot's wire version or from `bump_version` (the frame's tick), so a stale version is always lower than the host's: stale means over-snapshot, never a wrong keep. Test `resume_hint_never_keeps_a_chunk_a_straddler_changed` (green on base and after): a hint taken before a straddler is despawned keeps neither chunk.
+
+**Netcode (step 4, `e06922f`).** `tests/netcode/reference-straddling.test.ts` `reference_straddling_furnace_converges` (`worldSeed` from `world.json`, five stone, craft, stand at (-9,-1), `PlaceFurnace` at (-4,-1), `settle`, `assertConverged`). With `replica.rs` reverted to base: `assertConverged: seed=3406 tick=431 mismatches: client 0 (conn 0): host=1e6b997cf29ea140 replica=357e016982f8956a`. After: pass (0.9 s).
+
+**No existing test or golden moved.** `pnpm --filter reference golden:record`: no diff (`705 logged ticks, 245 log bytes, final hash 8fb31c5e69eeb99d`). Final: rust 765 (760 + 5), unit 301, wasm 168, netcode 97, browser 240 (49 s of 48 s WARN, machine load; 47 s at M34b's end), lint green.
