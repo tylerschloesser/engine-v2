@@ -77,6 +77,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 30b | `30b-rust-rebuild-quick-wins.md` | one-line Rust edit rebuild time: explain the regression since 2026-09-26, simple fixes only (Tyler: "I'd prefer a long build over complexity") | 30 | T |
 | [x] | 30c | `30c-ci-reds-after-m30.md` | three CI-only reds after M30: the 900 B no-alloc one-off, `ws/join-converges` handshake time, `mp/version-mismatch-reloads-once` | 30b | |
 | [x] | 31 | `31-rates-and-integrity.md` | chunk token bucket, soft cap, rate limits, byte budgets, zoom-out churn measurement | 29 | |
+| [ ] | 30d | `30d-hello-resent-silence.md` | the intermittent silence after a pre-`Welcome` drop (`mp/hello-resent-after-pre-welcome-drop`): attributed and fixed | 31 | |
 | [ ] | 31b | `31b-desync-hashes.md` | per-chunk desync hashes, `ResyncChunk` | 31 | |
 | [ ] | 32 | `32-reference-crafting.md` | inventory, unlock, crafting | 20b, 21b | |
 | [ ] | 33 | `33-reference-furnace.md` | furnace entity, predicted placement | 32, 26 | T |
