@@ -534,6 +534,44 @@
       "wildernessBytesUp": 280,
       "wildernessBytesDown": 130,
       "formula": "docs/plan/28b-reconnect-and-lifecycle.md step 5, reconnect/cost (tests/netcode/reconnect.test.ts): a wilderness reconnect (fx-puts, one client, camera far from the once-a-second origin paint so every kept chunk needs zero bytes beyond its own 3-byte ChunkKeeps coordinate entry) -- reconnectBytesUp/Down (NetHarnessCounters, Hello through the first frame after its Welcome). Measured (this session, seed 3010, deterministic): 209 B up (Hello: frozen prefix 38 B + empty join_key 1 B + secret 16 B + CameraReport 16 B + resume_present 1 B + epoch/last_tick 8 B + 16 held-chunk hints * 8 B = 128 B), 90 B down (Welcome ~29 B + first frame: 10 B header + Global/OwnPlayer + one ChunkKeeps section of 16 coordinate entries, no ChunkSnapshots/ChunkEnterPristine needed). ceil(measured * 1.25) rounded up for jitter headroom, same margin convention as counters.simWorker.snapshotEventBytes: 209*1.25=261.25 -> 280; 90*1.25=112.5 -> 130. Both comfortably under 0013 Reconnect/PRE-PLAN.md §7 Bandwidth per client, burst own ~1 KB each-way ceiling -- this row is the measured, regression-catching figure for one specific scenario, not the spec ceiling itself."
+    },
+    "net": {
+      "baselineCountersExactBytesDown": {
+        "counter": "bytesDown",
+        "exact": 112,
+        "ceiling": 124,
+        "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing (no 0010 table cell applies yet); ceiling = ceil(exact * 1.1). Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Scenario: tests/netcode/counters-exact.test.ts (seed 4001, camera 20 wide, 5 ticks), client 0."
+      },
+      "baselineCountersExactChunkEnters": {
+        "counter": "chunkEnters",
+        "exact": 15,
+        "ceiling": 17,
+        "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing (no 0010 table cell applies yet); ceiling = ceil(exact * 1.1). Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Same scenario: ChunkEnterPristine coordinates."
+      },
+      "baselineJoinConvergesBytesDown": {
+        "counter": "bytesDown",
+        "exact": 335,
+        "ceiling": 369,
+        "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing (no 0010 table cell applies yet); ceiling = ceil(exact * 1.1). Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Scenario: tests/netcode/join-converges.test.ts (seed 1001, four clients), client 0."
+      },
+      "baselineJoinConvergesWorstSecondBytesDown": {
+        "counter": "worstSecondBytesDown",
+        "exact": 196,
+        "ceiling": 216,
+        "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing (no 0010 table cell applies yet); ceiling = ceil(exact * 1.1). Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Same scenario, the worst 1 s virtual-time span."
+      },
+      "baselineLateJoinBytesDown": {
+        "counter": "bytesDown",
+        "exact": 275,
+        "ceiling": 303,
+        "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing (no 0010 table cell applies yet); ceiling = ceil(exact * 1.1). Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Scenario: tests/netcode/late-join.test.ts (seed 1002), the joiner (client 1)."
+      },
+      "baselineLateJoinWorstSecondBytesDown": {
+        "counter": "worstSecondBytesDown",
+        "exact": 161,
+        "ceiling": 178,
+        "source": "docs/plan/31-rates-and-integrity.md step 1: M27 scenario recorded before any pacing (no 0010 table cell applies yet); ceiling = ceil(exact * 1.1). Steps 3-4 must leave it exact, the bucket only gates chunk data past its burst and these joins are far under it. Same scenario, the worst 1 s virtual-time span."
+      }
     }
   },
   "worldgenMsPerChunkWarn": 0.25

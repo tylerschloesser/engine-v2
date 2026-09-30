@@ -58,3 +58,17 @@ builds real `client_hello()` bytes for it.
 player slot immediately (required for acks past the pending-queue cap, 32); its own `FlatWorldgen`
 fills every tile `Tile::new(1, 0, 0)` (a `Paint` writing that back is a no-op overlay-wise). `fixture`
 may also be a `buildGame()` directory path, resolved via `engine/server/node`'s `loadGame`.
+
+## Byte counters and `assertBudget` (docs/plan/31-rates-and-integrity.md)
+
+`harness.counters(i)` also parses the downlink `Frame`s in the trace: `sections` (whole-section
+bytes by `SectionId` name), `header`, `frames`, `heartbeats`, `chunkEnters`/`chunkLeaves` (coordinates
+in sections 4 and 6 only), `worstSecondBytesDown` (worst 1 s of virtual time). `assertBudget(counters,
+'net.<row>')` (`engine/test`) reads the row's `counter` path out of `counters` and requires the value
+equal the row's `exact` and be at most its `ceiling`; the message names the row.
+
+**Adding a row:** put `{ "counter": "<dotted path>", "exact": N, "ceiling": M, "source": "<0010 table
+cell, worked number, or which scenario measured it>" }` at `counters.net.<row>` in
+`packages/engine/budgets.json` (camelCase, beside `counters.presence`), run the scenario once to read
+`N`, and call `assertBudget`. **Raising a number is a reviewed change** (0020 §9): a test never edits
+its own row; a miss is answered by fixing the code (byte diffing, 0011), not the budget.

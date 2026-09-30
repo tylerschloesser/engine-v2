@@ -42,6 +42,7 @@ import { loadGame, type WsSocketLike, wsSocketConnection } from '../server-node.
 import { type MemoryStorage, memoryStorage } from '../storage/memory.js'
 import type { Storage } from '../storage/types.js'
 import { createHeadlessClient, type HeadlessClient } from './headless-client.js'
+import { addFrame, emptyTotals, parseFrame, worstWindowBytes } from './net-sections.js'
 import { trapSim } from './trap.js'
 import { createVirtualClock, type VirtualClock } from './virtual-clock.js'
 
@@ -232,6 +233,20 @@ export interface NetHarnessCounters {
    * before the very first `settle()`). */
   reconnectBytesUp: number
   reconnectBytesDown: number
+  /** docs/plan/31-rates-and-integrity.md step 1: what the downlink `Frame` messages carried, parsed
+   * from the trace (`net-sections.ts`), so a function of `(seed, scenario)` alone. `sections` is
+   * whole-section wire bytes (id + length varint + body) by `SectionId` name; `header` the fixed
+   * 10-byte frame headers; a `Welcome` or other non-frame message counts in `bytesDown` only.
+   * `chunkEnters`/`chunkLeaves` count coordinates in `ChunkEnterPristine`/`ChunkLeaves` (a chunk
+   * entered as a `ChunkSnapshots` entry is bytes in `sections`, not a coordinate here). */
+  header: number
+  sections: Record<string, number>
+  frames: number
+  heartbeats: number
+  chunkEnters: number
+  chunkLeaves: number
+  /** Most downlink bytes any 1 s span of virtual time carried (`net.hardCeilingBytesPerS`'s input). */
+  worstSecondBytesDown: number
 }
 
 /** A downlink message's own leading byte for `MsgType::Welcome` (`wire/mod.rs`) -- a private local
@@ -806,6 +821,14 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       }
     }
     const perTick = Array.from(perTickMap.values()).sort((a, b) => a.tick - b.tick)
+    const totals = emptyTotals()
+    const downSamples: { t: number; bytes: number }[] = []
+    for (const entry of trace) {
+      if (entry.link !== e.linkIdx || entry.dir !== 0) continue
+      downSamples.push({ t: entry.t, bytes: entry.bytes.length })
+      const frame = parseFrame(entry.bytes)
+      if (frame) addFrame(totals, frame)
+    }
     const { up: reconnectBytesUp, down: reconnectBytesDown } = reconnectCost(trace, e.linkIdx)
     return {
       bytesDown,
@@ -815,6 +838,13 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       perTick,
       reconnectBytesUp,
       reconnectBytesDown,
+      header: totals.header,
+      sections: totals.sections,
+      frames: totals.frames,
+      heartbeats: totals.heartbeats,
+      chunkEnters: totals.chunkEnters,
+      chunkLeaves: totals.chunkLeaves,
+      worstSecondBytesDown: worstWindowBytes(downSamples, 1000),
     }
   }
 
