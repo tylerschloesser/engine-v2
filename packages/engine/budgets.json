@@ -404,6 +404,43 @@
           }
         }
       },
+      "reference_single_player": {
+        "isolates": {
+          "main": {
+            "class": "strict",
+            "bytesPerFrame": 234,
+            "formula": "docs/plan/34b-reference-scripted-single-player.md, `gc.reference_single_player`: `games/reference`'s single-player topology (`gc-single-player.html`) in the state of the script's middle (furnace placed and stocked, both landmark tiles in range), the camera panning and a collect or a deposit dispatched every 100 frames, the host ticking every frame. Measured strict first (`gc-test` skill): budget set to 1 temporarily, `pnpm test browser -t \"reference_single_player clean\"` x 6, this machine: 225.66-225.79 B/frame on main, the same as `reference`'s own row (`byFn`: `updateProperties` the overlay's layer transform write, `draw`, `writeFrameUniform`, `drain`, `stepFrame`; the dispatches and their acks are too small to lead it). ceil(225.79) = 226, + 8 B margin (0016 §1) = 234. `object`/`burst` negative controls on main verified tripping at this budget.",
+            "attributionRoots": ["drive"]
+          },
+          "client": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the shared \"8 B\" worker figure. Measured 1.72 B/frame on 6 clean runs (constant), well under 8.",
+            "attributionRoots": ["body"]
+          },
+          "sim": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the shared \"8 B\" worker figure (brief instruction: do not raise). Measured 6.00-6.02 B/frame over 6 clean runs with the host ticking every frame (`runOneTick`, `simBuildFrame`, `resync`: the same names `connected-terrain`'s own row attributes), under 8, so strict. Needs `extraSettleFrames: 500` (the spec): without it a V8 JIT lump of about 10 KB (`waitForWake`, 22.7 B/frame) landed in the lower window on every run, the shape `terrain`'s own `client` row documents.",
+            "attributionRoots": ["body"]
+          },
+          "gen0": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 §1: the shared \"8 B\" worker figure. Measured a constant 0.52 B/frame over 6 clean runs.",
+            "attributionRoots": ["body"]
+          }
+        },
+        "software": {
+          "frames": 600,
+          "isolates": {
+            "main": {
+              "attributedBytesPerFrame": 212,
+              "formula": "ADR 0029: software mode attributes only `main` (`attributionRoots` `[\"drive\"]`). Measured (`GC_MODE=software`, budget set to 1 temporarily, `--project gc-reference --grep \"reference_single_player clean\"` x 3, this machine): an exact constant 203.91 B/frame attributed. ceil(203.91) = 204, + 8 B margin = 212. `object`/`burst` on `main` verified tripping under `GC_MODE=software` (see Deviations of M34b)."
+            }
+          }
+        }
+      },
       "reference": {
         "isolates": {
           "main": {

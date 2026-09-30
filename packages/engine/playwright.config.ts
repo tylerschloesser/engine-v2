@@ -185,10 +185,10 @@ export default defineConfig({
           ],
         },
       },
-      // `gc-reference.spec.ts` runs only in the `gc-reference` project below, against the
+      // `gc-reference*.spec.ts` (M34b adds `gc-reference-single-player`) run only in the `gc-reference` project below, against the
       // `reference` app's own preview server, not this project's default one.
       testMatch: '**/gc-*.spec.ts',
-      testIgnore: ['**/gc-reference.spec.ts'],
+      testIgnore: ['**/gc-reference*.spec.ts'],
       timeout: gcTimeoutMs,
     },
     {

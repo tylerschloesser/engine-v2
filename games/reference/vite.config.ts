@@ -44,6 +44,7 @@ export default defineConfig({
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
         test: fileURLToPath(new URL('./test.html', import.meta.url)),
         gc: fileURLToPath(new URL('./gc.html', import.meta.url)),
+        gcSinglePlayer: fileURLToPath(new URL('./gc-single-player.html', import.meta.url)),
       },
     },
   },
