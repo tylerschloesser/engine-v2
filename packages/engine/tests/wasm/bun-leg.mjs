@@ -2,10 +2,14 @@
 // same driver and the same golden as `determinism.test.ts`, under JavaScriptCore. Run by the
 // `script` adapter of `pnpm test wasm`, which reads the one JSON line printed last:
 // `{ tests: [{ name, ok, message? }], ... }`. By hand: `bun packages/engine/tests/wasm/bun-leg.mjs`.
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { RegionId, Role } from '../../dist/abi.js'
 import { Persistence } from '../../dist/host/persistence.js'
 import { instantiate } from '../../dist/loader.js'
 import { createWorldServer, wrapEngineInstance } from '../../dist/server.js'
+import * as bunAdapter from '../../dist/server-bun.js'
 import { loadGame } from '../../dist/server-node.js'
 import { buildSimInstanceConfig } from '../../dist/sim-config.js'
 import { deleteWorld, exportWorld, importWorld } from '../../dist/storage/archive.js'
@@ -15,6 +19,7 @@ import { createNetHarness, replayLog, replayWorld, worldServerTestHandle } from 
 import { divergenceMessage, firstDivergence, readFullGame } from '../support/reference-golden.ts'
 import { saveToServer, stateBudgetFull } from '../support/reference-single-player.ts'
 import { diffCheckpoints, roleOf, runHashScenario } from '../support/scenario.ts'
+import { adapterLoopback } from './adapter-loopback.mjs'
 
 const NAME = 'determinism: bun matches golden'
 const WORLDGEN_NAME = 'determinism: worldgen bun matches golden'
@@ -24,6 +29,7 @@ const REPLAY_NAME = 'replay_world_checkpoints_bun'
 const REFERENCE_NAME = 'reference_golden_replay (bun)'
 const SAVE_NAME = 'reference_single_player_save_to_server (bun)'
 const BUDGET_NAME = 'reference_state_budget_full (bun)'
+const ADAPTER_NAME = 'bun-adapter loopback'
 
 /**
  * The Bun half of decision B (fix round 3, docs/plan/06b-workers-and-spawn.md, Deviations): the
@@ -266,6 +272,38 @@ async function runReferenceHarnessLegs() {
   return legs
 }
 
+/** `engine/server/bun` on a real `Bun.serve` (docs/plan/35b-bun-and-deno-adapters.md): the scenario
+ * `adapter-loopback.mjs` shares with the Deno test. */
+async function runBunAdapterLeg() {
+  const dir = await mkdtemp(join(tmpdir(), 'bun-adapter-'))
+  try {
+    await adapterLoopback({
+      adapter: bunAdapter,
+      hostServices: bunAdapter.bunHostServices,
+      gameDir: new URL('target/engine/dev', new URL('../../fixtures/puts/', import.meta.url))
+        .pathname,
+      dataDir: join(dir, 'data'),
+      blockedDir: join(dir, 'blocked'),
+      async serve(server) {
+        const srv = Bun.serve({ port: 0, hostname: '127.0.0.1', ...bunAdapter.bunHandlers(server) })
+        // Not awaited: under Bun 1.3.8, awaiting `stop()` after the server itself closed a socket
+        // in the same process never settles (and `stop(true)` then aborts the process).
+        return {
+          port: srv.port,
+          close: () => {
+            srv.stop(true)
+          },
+        }
+      },
+    })
+    return { name: ADAPTER_NAME, ok: true, message: null }
+  } catch (e) {
+    return { name: ADAPTER_NAME, ok: false, message: String(e?.stack ?? e) }
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
 let result
 try {
   if (typeof Bun === 'undefined') throw new Error('not running under Bun')
@@ -283,6 +321,7 @@ try {
   const replay = await runReplayLeg()
   const reference = await runReferenceGoldenLeg()
   const harnessLegs = await runReferenceHarnessLegs()
+  const adapter = await runBunAdapterLeg()
   result = {
     tests: [
       { name: NAME, ok: message === null, message },
@@ -292,6 +331,7 @@ try {
       replay,
       reference,
       ...harnessLegs,
+      adapter,
     ],
     checkpoints,
   }

@@ -24,6 +24,10 @@
       "types": "./dist/server-node.d.ts",
       "default": "./dist/server-node.js"
     },
+    "./server/bun": {
+      "types": "./dist/server-bun.d.ts",
+      "default": "./dist/server-bun.js"
+    },
     "./vite": {
       "types": "./dist/vite.d.ts",
       "default": "./dist/vite.js"
