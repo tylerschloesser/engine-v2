@@ -24,6 +24,9 @@ export type RefHarnessOptions = {
   transport?: NetHarnessOptions['transport']
   hashAll?: boolean
   joinKey?: string
+  /** Each client's camera from its first frame (clients past the end keep the default, which holds
+   * the 4 x 4 chunks around the origin): so a scenario's subscribed set is exactly ring 1 of this view. */
+  cameras?: Array<{ x: number; y: number; tilesAcross: number }>
 }
 
 export type RefHarness = {
@@ -50,6 +53,9 @@ export async function refHarness(opts: RefHarnessOptions): Promise<RefHarness> {
     world: { params: { worldgen: world.worldgen }, ...opts.world },
   })
   try {
+    opts.cameras?.forEach((cam, i) => {
+      h.clients[i]?.setCamera(cam)
+    })
     const drivers = h.clients.map((c) => headlessDriver(c, (n) => h.advanceTicks(n)))
     await h.advanceTicks(20 + 4 * Math.ceil((opts.conditions?.latencyMs ?? 0) / 50))
     return { h, drivers, seed: opts.seed, dispose: () => h.dispose() }

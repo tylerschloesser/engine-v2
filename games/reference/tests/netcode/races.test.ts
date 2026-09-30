@@ -214,7 +214,7 @@ test('reference_race_same_ingots', async () => {
             .collect('iron', 2)
             .collect('coal', 1)
             .panTo(standBy(FURNACE_A))
-            .deposit(FURNACE_A, 'iron', 2)
+            .deposit(FURNACE_A, 'iron', 'all')
             .deposit(FURNACE_A, 'coal', 1)
             .waitTicks(2 * 100 + 15),
           a,
