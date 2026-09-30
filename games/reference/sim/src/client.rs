@@ -9,7 +9,9 @@
 
 use std::cell::RefCell;
 
-use engine::client::{ClientSide, DrawList, FrameCx, FrameView, SCREEN_PX_STROKE, TileTexel};
+use engine::client::{
+    ClientSide, DrawList, FrameCx, FrameView, PREDICTED, SCREEN_PX_STROKE, SpriteId, TileTexel,
+};
 use engine::game::Presence;
 use engine::world::{Tile, TilePos, WorldPos};
 
@@ -63,6 +65,14 @@ const RANGE_RING_COLOR: u32 = 0x40c0_4060;
 /// (layer 0, implicitly) sits under it and any future UI-ish drawable (buttons are DOM, not drawn)
 /// would sit above.
 const LAYER_PLAYER: u8 = 1;
+
+/// The furnace sprite's layer: under the player (layer 1), above the terrain pass.
+const LAYER_FURNACE: u8 = 0;
+
+/// A furnace sprite's tint: white (the atlas colour comes through unchanged), and the same white at
+/// reduced alpha while the record is predicted (the ghost-to-real swap restores it in one frame).
+const FURNACE_TINT: u32 = 0xffff_ffff;
+const FURNACE_TINT_PREDICTED: u32 = 0xffff_ff99;
 
 /// A drawable smaller than this many CSS px is skipped entirely (Scope: "both skipped when
 /// `FrameView.zoom` makes the circle smaller than 2 px" -- read via `px_per_tile()`, the accessor
@@ -332,10 +342,28 @@ impl ClientSide<RefGame> for RefClient {
         ];
     }
 
-    /// Draws the own player as a `circle` plus a faint `ring` of radius `RANGE` with
+    /// Draws every furnace in view as a sprite, then the own player as a `circle` plus a faint `ring` of radius `RANGE` with
     /// `SCREEN_PX_STROKE` (Scope), both skipped when `view.px_per_tile()` would render the circle
     /// smaller than [`MIN_VISIBLE_PX`].
     fn extract(&self, view: &FrameView<'_, RefGame>, out: &mut DrawList) {
+        // Furnaces first, and never culled by the player circle's size rule below: a furnace is two
+        // tiles wide. One sprite per furnace in view (overlay-merged, so a predicted one is here
+        // too); frame 1 (lit) while it has fuel burning; `pick_id` is the entity id.
+        for (id, furnace, origin) in view.entities() {
+            let d = out.sprite(
+                LAYER_FURNACE,
+                WorldPos::from_tile(origin),
+                SpriteId(content::SPRITE_FURNACE),
+            );
+            d.param = if furnace.burn_left > 0 { 1.0 } else { 0.0 };
+            d.pick_id = id.0;
+            d.color = FURNACE_TINT;
+            if view.is_predicted(id) {
+                d.flags |= PREDICTED;
+                d.color = FURNACE_TINT_PREDICTED;
+            }
+        }
+
         let px_per_tile = view.px_per_tile();
         if px_per_tile > 0.0 && PLAYER_DIAMETER_TILES * px_per_tile < MIN_VISIBLE_PX {
             return;

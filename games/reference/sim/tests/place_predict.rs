@@ -2,6 +2,8 @@
 //! testkit), docs/plan/33-reference-furnace.md Tests added. The player earns the furnace the honest
 //! way (five stone, one craft) because the loopback host offers no direct write.
 
+use engine::client::drawlist::{HEADER_BYTES, KIND_SPRITE, REGION_BYTES};
+use engine::client::{ClientSide, DrawList, PREDICTED};
 use engine::game::Game as _;
 use engine::game::{EntityId, PlayerId, WorldRead};
 use engine::predict::Prediction;
@@ -14,7 +16,7 @@ use engine::world::{
 use engine::worldgen::Worldgen;
 use reference_sim::client::PlayerPresence;
 use reference_sim::content::{self, ItemId, RECIPE_FURNACE};
-use reference_sim::{RefAction, RefGame, RefParams, RefWorldgen, TileXY, WorldXY};
+use reference_sim::{RefAction, RefClient, RefGame, RefParams, RefWorldgen, TileXY, WorldXY};
 
 const SEED: u64 = content::SEED;
 
@@ -253,4 +255,142 @@ fn predicted_place_at_subscription_edge_is_not_predictable() {
     }
     assert!(confirmed, "the host places it");
     assert_eq!(host_furnaces(&lb), 2);
+}
+
+/// One decoded sprite record of the furnace kind: `(pos, flags, color, param, pick_id)`.
+type SpriteRec = ([f32; 2], u8, u32, f32, u32);
+
+/// Runs `RefClient::extract` over client `idx`'s prediction-merged `FrameView` and returns every
+/// sprite record (the 32-byte layout of 0018 section 2, decoded by hand: the engine's reader is test-private).
+fn sprites(lb: &Loopback<RefGame>, idx: usize) -> Vec<SpriteRec> {
+    let client = RefClient::with_spring_state([0.0, 0.0], [0.0, 0.0]);
+    let view = lb.frame_view(idx, WIDE, TilePos::new(0, 0));
+    let mut out = DrawList::new();
+    out.begin_frame(TilePos::new(0, 0));
+    client.extract(&view, &mut out);
+    let mut region = vec![0u8; REGION_BYTES];
+    let n = out.sort_into(&mut region, 0.0, None);
+    let f32_at = |b: &[u8], o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let u32_at = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let mut found = Vec::new();
+    for i in 0..n as usize {
+        let r = &region[HEADER_BYTES + i * 32..HEADER_BYTES + (i + 1) * 32];
+        let kind = u16::from_le_bytes([r[16], r[17]]) >> 12;
+        if kind == KIND_SPRITE {
+            found.push((
+                [f32_at(r, 0), f32_at(r, 4)],
+                r[19],
+                u32_at(r, 20),
+                f32_at(r, 24),
+                u32_at(r, 28),
+            ));
+        }
+    }
+    found
+}
+
+/// `extract` draws the furnace as one sprite at its min-corner tile, `PREDICTED` and dimmed while it
+/// is only a prediction (provisional `pick_id`), then plain with the real id once acked -- and there
+/// is exactly one sprite record at every step in between. Fails if `extract` drops the flag or the
+/// dimming, skips overlay entities, or draws the furnace twice across the swap.
+#[test]
+fn extract_draws_predicted_then_real_furnace_sprite() {
+    let (mut lb, idx, _who) = world_with_furnaces(3, 1);
+    let origin = free_spot(-8, 30);
+    assert!(sprites(&lb, idx).is_empty(), "no furnace, no sprite");
+
+    let (seq, _) = lb.dispatch(
+        idx,
+        RefAction::PlaceFurnace {
+            origin: TileXY::from_tile(origin),
+        },
+    );
+    let mut acked = false;
+    let mut saw_predicted = false;
+    for _ in 0..14 {
+        let recs = sprites(&lb, idx);
+        assert_eq!(recs.len(), 1, "exactly one furnace sprite");
+        let (pos, flags, color, param, pick) = recs[0];
+        assert_eq!(pos, [origin.x as f32, origin.y as f32]);
+        assert_eq!(param, 0.0, "idle frame");
+        if EntityId(pick).is_provisional() {
+            saw_predicted = true;
+            assert_eq!(flags & PREDICTED, PREDICTED);
+            assert_eq!(color, 0xffff_ff99);
+        } else {
+            assert_eq!(flags & PREDICTED, 0, "real furnace is not flagged");
+            assert_eq!(color, 0xffff_ffff);
+            break;
+        }
+        lb.step();
+        lb.client_mut(idx).drain_results(|s, r| {
+            if s == seq && r.is_ok() {
+                acked = true;
+            }
+        });
+    }
+    assert!(saw_predicted, "the provisional phase was observed");
+    let recs = sprites(&lb, idx);
+    assert_eq!(recs.len(), 1);
+    assert!(
+        !EntityId(recs[0].4).is_provisional(),
+        "swapped to the real id"
+    );
+}
+
+/// `.claude/rules/hot-paths.md`: `extract` with a furnace in view (predicted, then real) retains no
+/// allocation once warm. `engine::abi::arena` (installed by `export_game!`) counts bytes allocated
+/// minus freed on this thread. Limits: a transient allocation freed inside the same window moves
+/// only the high-water mark, which the test's own multi-MiB setup has already raised far past any
+/// such allocation, so this catches a leaking or retained per-call allocation (a growing scratch,
+/// a `Box::leak`), not an alloc-then-free; the page-level check for that is the zero-GC browser
+/// page (`gc.pages.reference`, re-run with construction mode on). Fails if the furnace loop in
+/// `RefClient::extract` leaks per call.
+#[test]
+fn extract_with_furnace_allocates_nothing() {
+    let (mut lb, idx, _who) = world_with_furnaces(3, 1);
+    let origin = free_spot(-8, 30);
+    lb.dispatch(
+        idx,
+        RefAction::PlaceFurnace {
+            origin: TileXY::from_tile(origin),
+        },
+    );
+    let client = RefClient::with_spring_state([0.0, 0.0], [0.0, 0.0]);
+    let mut out = DrawList::new();
+    let mut region = vec![0u8; REGION_BYTES];
+    for phase in ["predicted", "real"] {
+        if phase == "real" {
+            for _ in 0..14 {
+                lb.step();
+            }
+            assert_eq!(lb.overlay_len(idx), 0, "acked");
+        }
+        let view = lb.frame_view(idx, WIDE, TilePos::new(0, 0));
+        // Warm-up: the first extract may size the overlay merge scratch once.
+        out.begin_frame(TilePos::new(0, 0));
+        client.extract(&view, &mut out);
+        out.sort_into(&mut region, 0.0, None);
+
+        let live_before = engine::abi::arena::thread_live_bytes();
+        let hw_before = engine::abi::arena::thread_high_water_bytes();
+        for _ in 0..50 {
+            out.begin_frame(TilePos::new(0, 0));
+            client.extract(&view, &mut out);
+            assert!(
+                out.sort_into(&mut region, 0.0, None) >= 3,
+                "furnace + circle + ring"
+            );
+        }
+        assert_eq!(
+            engine::abi::arena::thread_live_bytes(),
+            live_before,
+            "{phase}: live bytes moved"
+        );
+        assert_eq!(
+            engine::abi::arena::thread_high_water_bytes(),
+            hw_before,
+            "{phase}: a transient allocation was freed inside the window"
+        );
+    }
 }

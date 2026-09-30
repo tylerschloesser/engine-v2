@@ -2,5 +2,12 @@
   "version": 1,
   "image": "sprites.png",
   "padding": 2,
-  "sprites": {}
+  "sprites": {
+    "0": {
+      "rect": [2, 2, 32, 32],
+      "pivot": [0, 0],
+      "size": [2, 2],
+      "frames": 2
+    }
+  }
 }

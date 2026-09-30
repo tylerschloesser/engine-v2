@@ -3,8 +3,8 @@
 // `scripts/gen-assets.mjs` (docs/plan/20-reference-game-v0.md Scope): plain Node, no npm
 // dependency (PNG written with `node:zlib`), deterministic, byte-reproducible. Emits
 // `assets/tiles.png` + `tiles.json` (16 px tiles, 4 variants per terrain, dither priority and band
-// per visual) and an empty-but-valid `assets/sprites.png` + `sprites.json` (no sprites yet: the
-// player circle and DOM UI are M20b's, crafting/building is M32's).
+// per visual) and `assets/sprites.png` + `sprites.json` (sprite 0: the furnace, M33; the player
+// circle and DOM UI are not sprites).
 //
 // Ids here must match `sim/src/content.rs` exactly (terrain ids 0-4; a resource id doubles as its
 // own "full" depletion-stage visual id, +1/+2 are the half/low stages -- see that file's own doc
@@ -75,6 +75,72 @@ const RESOURCES = [
     ],
   }, // coal
 ]
+
+// --- sprites (must match sim/src/content.rs's SPRITE_* ids) ------------------------------------
+// One sprite today: id 0, the 2x2-tile furnace, two frames laid left to right (frame 0 idle, frame 1
+// lit; the game passes the frame in `Draw.param`). 0018 section 4: 2 px extruded padding around the whole
+// strip, frames contiguous. The art is fully opaque (the sprite pipeline's blend is straight alpha
+// over a premultiplied atlas, which is only exact for alpha 255: docs/plan/17b Deviations).
+const SPRITE_PAD_PX = 2
+const FURNACE_PX = 32 // one frame, 2 tiles x 16 px
+const FURNACE_FRAMES = 2
+
+/** One 32x32 furnace frame as an array of [r, g, b] rows; `lit` swaps the mouth from cold to glowing. */
+function furnaceFrame(lit) {
+  const px = []
+  for (let y = 0; y < FURNACE_PX; y++) {
+    const row = []
+    for (let x = 0; x < FURNACE_PX; x++) {
+      let c = [112, 106, 100] // stone body
+      if ((y % 8 === 0 && y > 0) || ((x + (Math.floor(y / 8) % 2) * 8) % 16 === 0 && x > 0)) {
+        c = [92, 86, 82] // brick mortar
+      }
+      if (x < 2 || y < 2 || x >= FURNACE_PX - 2 || y >= FURNACE_PX - 2) c = [48, 44, 44] // rim
+      if (x >= 9 && x < 23 && y >= 14 && y < 26) {
+        c = lit ? (y < 20 ? [255, 214, 90] : [255, 140, 30]) : [26, 22, 22] // mouth
+      }
+      row.push(c)
+    }
+    px.push(row)
+  }
+  return px
+}
+
+function buildSprites() {
+  const frames = [furnaceFrame(false), furnaceFrame(true)]
+  const width = FURNACE_FRAMES * FURNACE_PX + 2 * SPRITE_PAD_PX
+  const height = FURNACE_PX + 2 * SPRITE_PAD_PX
+  const rgba = new Uint8Array(width * height * 4)
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      // Clamp into the strip: the padding replicates each edge pixel outward (extrusion).
+      const sx = Math.min(Math.max(x - SPRITE_PAD_PX, 0), FURNACE_FRAMES * FURNACE_PX - 1)
+      const sy = Math.min(Math.max(y - SPRITE_PAD_PX, 0), FURNACE_PX - 1)
+      const frame = frames[Math.floor(sx / FURNACE_PX)]
+      const [r, g, b] = frame[sy][sx % FURNACE_PX]
+      const o = (y * width + x) * 4
+      rgba[o] = r
+      rgba[o + 1] = g
+      rgba[o + 2] = b
+      rgba[o + 3] = 255
+    }
+  }
+  const manifest = {
+    version: 1,
+    image: 'sprites.png',
+    padding: SPRITE_PAD_PX,
+    sprites: {
+      // pivot [0, 0]: the sprite's top-left is its `pos`, the furnace's min-corner tile.
+      0: {
+        rect: [SPRITE_PAD_PX, SPRITE_PAD_PX, FURNACE_PX, FURNACE_PX],
+        pivot: [0, 0],
+        size: [2, 2],
+        frames: FURNACE_FRAMES,
+      },
+    },
+  }
+  return { rgba, width, height, manifest }
+}
 
 // --- cell layout: row-major at COLUMNS, terrains first (4 variants each), then one cell per
 // resource depletion stage ------------------------------------------------------------------
@@ -199,12 +265,17 @@ function buildOutputs() {
     2,
   )}\n`
 
-  // Empty-but-valid sprite atlas: 1x1 fully transparent pixel, no sprites declared yet.
-  const spritesPng = encodePNG(1, 1, new Uint8Array([0, 0, 0, 0]))
-  const spritesJson = `${JSON.stringify(
-    { version: 1, image: 'sprites.png', padding: 2, sprites: {} },
-    null,
-    2,
+  const sprites = buildSprites()
+  const spritesPng = encodePNG(sprites.width, sprites.height, sprites.rgba)
+  // Number arrays on one line, the layout `pnpm format` (Biome) writes, so a format run never
+  // leaves the committed file differing from a fresh generation.
+  const spritesJson = `${JSON.stringify(sprites.manifest, null, 2).replace(
+    /\[([^[\]{}]*)\]/g,
+    (_, inner) =>
+      `[${inner
+        .split(',')
+        .map((x) => x.trim())
+        .join(', ')}]`,
   )}\n`
 
   return {
