@@ -11,7 +11,7 @@
 
 use engine::game::Game as _;
 use engine::time::{TickRate, Ticks};
-use engine::world::{Registry, TraitSet};
+use engine::world::{Footprint, PrototypeId, Registry, TraitSet};
 
 /// Base terrain ids (Requirements: "grass, dirt, water, sand, etc."; this game's own five, 0008
 /// §1's height+moisture classification in `worldgen.rs`).
@@ -153,13 +153,27 @@ pub const RECIPES: [Recipe; 1] = [Recipe {
     unlock_stone_mined: 5,
 }];
 
-/// Trait tables + entity prototypes (0007 §6, `Game::register`'s own doc comment): both waters are
-/// `NOT_BUILDABLE`, every resource id is `COLLECTABLE`. No entity prototypes yet (furnaces are
-/// M32, Non-scope here).
+/// The furnace's prototype id: the one entity prototype, registered first in [`register`] (so the
+/// engine hands out id 0; `register` asserts it).
+pub const FURNACE_PROTO: PrototypeId = PrototypeId(0);
+
+/// The furnace's footprint (Requirements: 2x2 tiles), anchored at its min corner (`Furnace::origin`).
+pub const FURNACE_FOOTPRINT: Footprint = Footprint { w: 2, h: 2 };
+
+/// Sprite id of the furnace in `assets/sprites.json` (two frames, left to right: idle = 0, lit = 1;
+/// the frame is `Draw::param`). Must match `scripts/gen-assets.mjs`'s `SPRITES`.
+pub const SPRITE_FURNACE: u16 = 0;
+
+/// Trait tables + entity prototypes (0007 §6, `Game::register`'s own doc comment): both waters and
+/// every resource id are `NOT_BUILDABLE` (R1 default: no furnace over a resource tile); every
+/// resource id is also `COLLECTABLE`; the furnace prototype is `NOT_BUILDABLE` too, so one furnace
+/// refuses another through the occupant term of `traits_at`, with no entity named in the rule.
 pub fn register(r: &mut Registry) {
     r.set_base_traits(DEEP_WATER, NOT_BUILDABLE);
     r.set_base_traits(WATER, NOT_BUILDABLE);
     for &resource in &[IRON, WOOD, STONE, COAL] {
-        r.set_resource_traits(resource, COLLECTABLE);
+        r.set_resource_traits(resource, COLLECTABLE.union(NOT_BUILDABLE));
     }
+    let furnace = r.add_prototype(NOT_BUILDABLE, FURNACE_FOOTPRINT);
+    assert_eq!(furnace, FURNACE_PROTO, "the furnace must be prototype 0");
 }

@@ -168,9 +168,35 @@ pub struct RefPlayer {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct RefGlobal;
 
-/// This game has no entities yet (furnaces arrive with M32).
+/// The one entity kind (M33): a 2x2 furnace (`content::FURNACE_PROTO`). `origin` is its min-corner
+/// tile (`Game::anchor`; `TileXY`, not `TilePos`, for the same `Codec` reason as [`Collecting`]).
+/// The fields after `origin` are the furnace's own state (`PRE-PLAN.md` §4, Entity row), operated
+/// by M33b; placement leaves them all zero. Furnaces are addressed by tile everywhere (0022 §6).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
-pub struct RefEntity;
+pub struct Furnace {
+    pub origin: TileXY,
+    pub iron_in: u16,
+    pub coal: u16,
+    pub wood: u16,
+    /// Ticks of burn left in the current fuel unit.
+    pub burn_left: u16,
+    pub ingots_out: u16,
+    /// The tick the current smelt completes, `None` while idle.
+    pub smelt_done_at: Option<engine::time::Tick>,
+}
+
+impl Furnace {
+    /// A fresh, empty furnace anchored at `origin`.
+    pub fn new(origin: TileXY) -> Self {
+        Furnace {
+            origin,
+            ..Furnace::default()
+        }
+    }
+}
+
+/// The game's `Game::Entity`; the name every pre-M33 test already imports.
+pub type RefEntity = Furnace;
 
 /// The maximum number of simultaneous `Ui.in_range` entries (M20b step 3, sized correctly in step
 /// 5's own orchestrator fix): `RefClient::ui`'s bounding-box scan (`client.rs`) visits every tile in
@@ -272,11 +298,12 @@ impl Default for RefUi {
 pub struct RefGame;
 
 impl Game for RefGame {
-    const SCHEMA_VERSION: u32 = 2;
+    const SCHEMA_VERSION: u32 = 3;
+    //  3: `Furnace` entity, resources `NOT_BUILDABLE` (M33).
     type Worldgen = RefWorldgen;
     type Action = RefAction;
     type Reject = RefReject;
-    type Entity = RefEntity;
+    type Entity = Furnace;
     type Player = RefPlayer;
     type Global = RefGlobal;
     type Presence = PlayerPresence;
@@ -287,12 +314,12 @@ impl Game for RefGame {
         content::register(r);
     }
 
-    fn prototype(_e: &RefEntity) -> PrototypeId {
-        PrototypeId(0)
+    fn prototype(_e: &Furnace) -> PrototypeId {
+        content::FURNACE_PROTO
     }
 
-    fn anchor(_e: &RefEntity) -> TilePos {
-        TilePos::new(0, 0)
+    fn anchor(e: &Furnace) -> TilePos {
+        e.origin.tile()
     }
 
     fn genesis(_w: &mut dyn WorldWrite<Self>) {}
