@@ -63,6 +63,14 @@ jobs:
         with:
           bun-version: 1.3.8
 
+      # `deno-adapter @slow` (docs/plan/35b-bun-and-deno-adapters.md): Deno is best-effort (0009), so
+      # its version is pinned here only, not in 0017 §10's table. `REQUIRE_DENO` (slow step below)
+      # makes the test fail, not warn `deno-missing`, if this step ever stops providing it.
+      - name: Install Deno
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: 2.9.6
+
       # SwiftShader's Vulkan backend (0020 §6).
       - name: Install Vulkan packages
         run: |
@@ -104,6 +112,7 @@ jobs:
       - name: pnpm test:slow
         env:
           CI: 'true'
+          REQUIRE_DENO: '1'
           ENGINE_GPU: swiftshader
           GC_MODE: software
         run: pnpm test:slow --budget-scale 1000 --timings-json test-results/timings-slow.json

@@ -36,6 +36,10 @@ One fixed world id per process (0013 "One server instance hosts exactly one worl
 `/ws` on its own origin; a proxy in front of this process, e.g. `pnpm device:serve --ws`, is what
 strips the path before the connection reaches here).
 
+## Bun and Deno entries
+
+`bun.ts` (`pnpm --filter reference-server start:bun`) and `deno.ts` (`start:deno`: `deno run --allow-read --allow-write --allow-net --allow-env=PORT,JOIN_KEY`) serve through `engine/server/bun` / `/deno`, with no `ws`; `common.mjs` holds the shared flag and world-config code. Flags: `--game`, `--data` (the same default-game rule as `index.mjs`); `PORT`, `JOIN_KEY`. No `--import` or `--exit-on-idle`. The three start commands: `start` (Node), `start:bun`, `start:deno`.
+
 ## Not here (Non-scope)
 
-Static file serving (`--static`, M38); Bun/Deno adapters (M35b); a Fly deploy.
+Static file serving (`--static`, M38); a Fly deploy.

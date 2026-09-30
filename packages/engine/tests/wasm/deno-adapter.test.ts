@@ -15,7 +15,7 @@ const script = fileURLToPath(new URL('./deno-adapter.mjs', import.meta.url))
 
 function denoVersion(): string | null {
   const r = spawnSync('deno', ['--version'], { encoding: 'utf8' })
-  return r.status === 0 ? r.stdout.split('\n')[0] : null
+  return r.status === 0 ? (r.stdout.split('\n')[0] ?? '') : null
 }
 
 test('deno-adapter @slow', async () => {
