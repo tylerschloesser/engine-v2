@@ -20,8 +20,8 @@ use engine::world::{Tile, TilePos, WorldPos};
 use crate::rules::collect::in_range;
 use crate::worldgen::terrain_at;
 use crate::{
-    Inventory, MAX_IN_RANGE, RefGame, RefParams, TileXY, UiCollecting, UiCrafting, UiInRange,
-    UiRecipe, WorldXY, content,
+    Inventory, MAX_IN_RANGE, RefGame, RefParams, TileXY, UiCollecting, UiCrafting, UiFurnace,
+    UiInRange, UiRecipe, WorldXY, content,
 };
 
 /// `Presence` sketch from `0001-camera-and-presence.md` (Decision, `Presence` code block),
@@ -83,6 +83,17 @@ const GHOST_VALID: u32 = rgba(0x40, 0xff, 0x40, 0x90);
 const GHOST_INVALID: u32 = rgba(0xff, 0x40, 0x40, 0x90);
 const GHOST_UNKNOWN: u32 = rgba(0xc0, 0xc0, 0xc0, 0x90);
 const FURNACE_TINT_PREDICTED: u32 = rgba(0xff, 0xff, 0xff, 0x99);
+
+/// The smelt progress bar (M33b): a strip above the furnace, filling left to right; and the outline
+/// of the open furnace, four thin `rect`s (a `rect` is a filled quad). Both above the furnace sprite.
+const LAYER_FURNACE_UI: u8 = 1;
+const SMELT_BAR_COLOR: u32 = rgba(0xff, 0x90, 0x20, 0xff);
+const OPEN_OUTLINE_COLOR: u32 = rgba(0xff, 0xe0, 0x40, 0xff);
+/// Bar height and outline thickness, tiles.
+const BAR_HEIGHT_TILES: f32 = 0.22;
+const OUTLINE_TILES: f32 = 0.1;
+/// Bars are skipped below this many device px per tile: at that zoom the strip is under ~3 px.
+const BAR_MIN_PX_PER_TILE: f32 = 14.0;
 
 /// A drawable smaller than this many CSS px is skipped entirely (Scope: "both skipped when
 /// `FrameView.zoom` makes the circle smaller than 2 px" -- read via `px_per_tile()`, the accessor
@@ -191,6 +202,14 @@ fn consider_spawn_tile(
     }
 }
 
+/// The point `(dx, dy)` tiles from `origin`'s min corner, as a Q24.8 world position.
+fn tile_point(origin: TilePos, dx: f32, dy: f32) -> WorldPos {
+    WorldPos {
+        x: origin.x * 256 + (dx * 256.0).round() as i32,
+        y: origin.y * 256 + (dy * 256.0).round() as i32,
+    }
+}
+
 /// Q24.8 raw units per tile (0007 §2).
 const Q8: f64 = 256.0;
 
@@ -241,6 +260,10 @@ pub struct RefClient {
     /// never has to emit an "off" from a `Ui` callback (that record is undrained until the next
     /// frame, which a stepped test's `stepTick` waits on).
     placing: Cell<bool>,
+    /// M33b: the anchor tile of the furnace whose panel is open. Keyed by tile, never by entity id,
+    /// so it survives the ghost-to-real swap (0022 section 6); `frame` re-checks it every frame and
+    /// clears it when the furnace is gone. TypeScript holds no state for it: it reads `Ui.furnace`.
+    open: Option<TilePos>,
 }
 
 impl Default for RefClient {
@@ -252,6 +275,7 @@ impl Default for RefClient {
             tracked_range: RefCell::new(Vec::with_capacity(MAX_IN_RANGE)),
             spawn: TileXY::from_tile(nearest_land_tile(content::SEED, &RefParams::default())),
             placing: Cell::new(false),
+            open: None,
         }
     }
 }
@@ -269,6 +293,7 @@ impl RefClient {
             tracked_range: RefCell::new(Vec::with_capacity(MAX_IN_RANGE)),
             spawn: TileXY::from_tile(nearest_land_tile(content::SEED, &RefParams::default())),
             placing: Cell::new(false),
+            open: None,
         }
     }
 
@@ -278,10 +303,99 @@ impl RefClient {
     }
 
     /// Applies one client-local intent event (`FrameCx::input()`, kind `GAME`): `PLACE_MODE` sets
-    /// construction mode from `a`. Split out of `frame` so a native test can drive it directly.
+    /// construction mode from `a`, `CLOSE_PANEL` closes the furnace panel. Split out of `frame` so a
+    /// native test can drive it directly.
     pub fn apply_local(&mut self, ev: &engine::client::InputEvent) {
-        if ev.kind == input_kind::GAME && ev.pick_id == content::local::PLACE_MODE {
+        if ev.kind != input_kind::GAME {
+            return;
+        }
+        if ev.pick_id == content::local::PLACE_MODE {
             self.placing.set(ev.tile[0] != 0);
+        } else if ev.pick_id == content::local::CLOSE_PANEL {
+            self.open = None;
+        }
+    }
+
+    /// The anchor tile of the furnace whose panel is open (test-only accessor).
+    pub fn open(&self) -> Option<TilePos> {
+        self.open
+    }
+
+    /// A tap (outside construction mode): on a furnace opens its panel (keyed by its anchor tile),
+    /// on anything else closes it. `pick_id` is the entity id, real or provisional (0 = nothing).
+    pub fn apply_tap(&mut self, ev: &engine::client::InputEvent, view: &FrameView<'_, RefGame>) {
+        if ev.kind != input_kind::TAP || self.placing.get() {
+            return;
+        }
+        self.open = if ev.pick_id == 0 {
+            None
+        } else {
+            view.entities()
+                .find(|(id, _, _)| id.0 == ev.pick_id)
+                .map(|(_, _, origin)| origin)
+        };
+    }
+
+    /// Closes the panel when its furnace is gone. Reads through the prediction overlay
+    /// (`FrameView::entities`, which skips tombstones) while the anchor is in the visible rect;
+    /// `world()` is the raw replica, so it is only asked outside it. `Unknown` (the chunk is not
+    /// held) leaves the panel open.
+    pub fn recheck_open(&mut self, view: &FrameView<'_, RefGame>) {
+        let Some(open) = self.open else { return };
+        if view.world().tile(open).is_err() {
+            return;
+        }
+        let present = if view.visible().contains(open) {
+            view.entities().any(|(_, f, _)| f.origin.tile() == open)
+        } else {
+            matches!(view.world().entity_at(open), Ok(Some(_)))
+        };
+        if !present {
+            self.open = None;
+        }
+    }
+
+    /// The smelt bar (skipped below [`BAR_MIN_PX_PER_TILE`]) and, for the open furnace, its outline.
+    /// The bar reads the authoritative clock: a furnace is nobody's own timer (0012 "Two clocks").
+    fn extract_furnace_ui(
+        &self,
+        view: &FrameView<'_, RefGame>,
+        out: &mut DrawList,
+        furnace: &crate::Furnace,
+        origin: TilePos,
+    ) {
+        if let Some(done) = furnace.smelt_done_at
+            && view.px_per_tile() >= BAR_MIN_PX_PER_TILE
+        {
+            let started = engine::time::Tick(done.0.saturating_sub(content::SMELT.0));
+            let progress = view.clocks().progress(started, done);
+            // A quad's `pos` is its centre: the strip sits just above the furnace's top edge.
+            out.bar(
+                LAYER_FURNACE_UI,
+                tile_point(origin, 1.0, -BAR_HEIGHT_TILES / 2.0),
+                [2.0, BAR_HEIGHT_TILES],
+                SMELT_BAR_COLOR,
+                progress,
+            );
+        }
+        if self.open == Some(origin) {
+            let t = OUTLINE_TILES;
+            let fp = content::FURNACE_FOOTPRINT;
+            let (w, h) = (fp.w as f32, fp.h as f32);
+            // top, bottom, left, right; centres relative to the tile, sizes in tiles.
+            for (c, size) in [
+                ([w / 2.0, t / 2.0], [w, t]),
+                ([w / 2.0, h - t / 2.0], [w, t]),
+                ([t / 2.0, h / 2.0], [t, h]),
+                ([w - t / 2.0, h / 2.0], [t, h]),
+            ] {
+                out.rect(
+                    LAYER_FURNACE_UI,
+                    tile_point(origin, c[0], c[1]),
+                    size,
+                    OPEN_OUTLINE_COLOR,
+                );
+            }
         }
     }
 
@@ -335,7 +449,9 @@ impl ClientSide<RefGame> for RefClient {
     fn frame(&mut self, cx: &mut FrameCx<'_, RefGame>, presence: &mut PlayerPresence) {
         for ev in cx.input() {
             self.apply_local(ev);
+            self.apply_tap(ev, cx.view());
         }
+        self.recheck_open(cx.view());
         let camera = cx.camera();
         let target = camera.centre;
         let target_vel = [camera.velocity[0] as f64, camera.velocity[1] as f64];
@@ -397,6 +513,7 @@ impl ClientSide<RefGame> for RefClient {
                 d.flags |= PREDICTED;
                 d.color = FURNACE_TINT_PREDICTED;
             }
+            self.extract_furnace_ui(view, out, furnace, origin);
         }
 
         // The ghost: only in construction mode with a cursor tile. `pos` is relative to the cursor
@@ -497,6 +614,23 @@ impl ClientSide<RefGame> for RefClient {
         }
 
         out.placing = self.placing.get();
+
+        out.furnace = None;
+        if let Some(open) = self.open {
+            for (_, f, origin) in view.entities() {
+                if origin == open {
+                    out.furnace = Some(UiFurnace {
+                        at: TileXY::from_tile(origin),
+                        iron_in: f.iron_in,
+                        coal: f.coal,
+                        wood: f.wood,
+                        burn_left: f.burn_left,
+                        ingots_out: f.ingots_out,
+                        smelt_done_at: f.smelt_done_at.map(|t| t.0),
+                    });
+                }
+            }
+        }
 
         let from = WorldPos {
             x: quantize_pos(self.spring_pos[0]),

@@ -581,6 +581,14 @@ fn pickup_sends_entity_gone_and_closes_other_panel() {
         seen_furnace(&lb, b, origin).is_some(),
         "B has not heard yet"
     );
+    // B has the panel open on it.
+    let mut client_b = RefClient::with_spring_state([0.0, 0.0], [0.0, 0.0]);
+    client_b.apply_tap(
+        &tap(lb.entity_at(b, origin).unwrap().0),
+        &lb.frame_view(b, WIDE, TilePos::new(0, 0)),
+    );
+    assert_eq!(client_b.open(), Some(origin));
+    assert_eq!(ui_of(&lb, b, &client_b).furnace.map(|f| f.at), Some(at));
     let (seq, st) = lb.dispatch(
         b,
         RefAction::FurnaceDeposit {
@@ -605,6 +613,10 @@ fn pickup_sends_entity_gone_and_closes_other_panel() {
         seen_furnace(&lb, b, origin).is_none(),
         "EntityGone reached B"
     );
+    // B's next `frame` closes the panel, and the `Ui` after it has no furnace.
+    client_b.recheck_open(&lb.frame_view(b, WIDE, TilePos::new(0, 0)));
+    assert_eq!(client_b.open(), None, "B's panel closed");
+    assert_eq!(ui_of(&lb, b, &client_b).furnace, None);
     assert_eq!(merged(&lb, b, origin), (None, true));
     assert_eq!(items(&lb, b, ItemId::Iron), 1, "B's iron never left");
     assert_eq!(items(&lb, a, ItemId::Furnace), 1);
@@ -638,4 +650,181 @@ fn host_count(lb: &Loopback<RefGame>) -> usize {
         )
         .expect("host reads are total");
     n
+}
+
+fn tap(pick_id: u32) -> engine::client::InputEvent {
+    engine::client::InputEvent {
+        kind: engine::client::input::kind::TAP,
+        pick_id,
+        ..Default::default()
+    }
+}
+
+fn local(code: u32, a: i32) -> engine::client::InputEvent {
+    engine::client::InputEvent {
+        kind: engine::client::input::kind::GAME,
+        pick_id: code,
+        tile: [a, 0],
+        ..Default::default()
+    }
+}
+
+fn ui_of(lb: &Loopback<RefGame>, idx: usize, client: &RefClient) -> reference_sim::RefUi {
+    let view = lb.frame_view(idx, WIDE, TilePos::new(0, 0));
+    let mut ui = reference_sim::RefUi::default();
+    client.ui(&view, &mut ui);
+    ui
+}
+
+/// The panel rules of `RefClient`, tile-keyed: a tap on a furnace (predicted or real) opens it, a
+/// tap on nothing or `CLOSE_PANEL` closes it, construction mode ignores taps, it survives the
+/// ghost-to-real swap, and it closes the moment the furnace is gone from the merged view (a predicted
+/// pick-up included). Fails if `open` is keyed by entity id, or the gone-check reads the raw replica.
+#[test]
+fn panel_open_close_rules() {
+    let (mut lb, idx, _who) = world(3, 1, 0);
+    let origin = free_spot(-8, 30);
+    let at = TileXY::from_tile(origin);
+    let mut client = RefClient::with_spring_state([0.0, 0.0], [0.0, 0.0]);
+
+    let (_, st) = lb.dispatch(idx, RefAction::PlaceFurnace { origin: at });
+    assert_eq!(st, Prediction::Applied);
+    let ghost = lb.entity_at(idx, origin).unwrap();
+    assert!(ghost.is_provisional());
+    client.apply_tap(&tap(ghost.0), &lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+    assert_eq!(client.open(), Some(origin), "opened on the provisional id");
+    assert_eq!(ui_of(&lb, idx, &client).furnace.map(|f| f.at), Some(at));
+
+    // Across the ack the id changes, the panel does not.
+    for step in 0..14 {
+        lb.step();
+        client.recheck_open(&lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+        assert_eq!(client.open(), Some(origin), "step {step}");
+        assert!(ui_of(&lb, idx, &client).furnace.is_some(), "step {step}");
+    }
+    assert!(
+        !lb.entity_at(idx, origin).unwrap().is_provisional(),
+        "swapped"
+    );
+
+    // Close by a tap on nothing, and by CLOSE_PANEL; reopen by a tap on the real id.
+    client.apply_tap(&tap(0), &lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+    assert_eq!(client.open(), None);
+    let real = lb.entity_at(idx, origin).unwrap().0;
+    client.apply_tap(&tap(real), &lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+    assert_eq!(client.open(), Some(origin));
+    client.apply_local(&local(content::local::CLOSE_PANEL, 0));
+    assert_eq!(client.open(), None);
+    assert_eq!(ui_of(&lb, idx, &client).furnace, None);
+
+    // Construction mode: taps belong to placement.
+    client.apply_local(&local(content::local::PLACE_MODE, 1));
+    client.apply_tap(&tap(real), &lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+    assert_eq!(client.open(), None, "ignored while placing");
+    client.apply_local(&local(content::local::PLACE_MODE, 0));
+    client.apply_tap(&tap(real), &lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+    assert_eq!(client.open(), Some(origin));
+
+    // A predicted pick-up hides the furnace from the merged view, so the panel closes at once, before
+    // the host has heard of it.
+    let (_, st) = lb.dispatch(idx, RefAction::FurnacePickUp { at });
+    assert_eq!(st, Prediction::Applied);
+    client.recheck_open(&lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+    assert_eq!(client.open(), None, "tombstoned: gone");
+}
+
+/// A furnace keeps smelting while its chunk is unsubscribed, and the replica has the ingot on
+/// return. The middle assertion is the one that can fail: the chunk really is not held then, and the
+/// open panel stays open through `Unknown`.
+#[test]
+fn furnace_smelts_while_unsubscribed() {
+    let (mut lb, idx, who) = world(3, 1, 1);
+    let origin = free_spot(-8, 30);
+    let at = TileXY::from_tile(origin);
+    let wood_from = WorldXY {
+        x: -3 * 256 - 128,
+        y: -2 * 256,
+    };
+    lb.set_presence(
+        idx,
+        PlayerPresence {
+            pos: [wood_from.x, wood_from.y],
+            vel: [0, 0],
+        },
+    );
+    lb.action(
+        who,
+        RefAction::StartCollect {
+            tile: TileXY { x: -4, y: -2 },
+            from: wood_from,
+        },
+    );
+    lb.run(content::COLLECT.0 + 2);
+    place_settled(&mut lb, idx, origin);
+    for (item, count) in [(ItemId::Iron, 1), (ItemId::Wood, 1)] {
+        dispatch_settled(
+            &mut lb,
+            idx,
+            RefAction::FurnaceDeposit {
+                at,
+                item: item as u8,
+                count,
+            },
+        )
+        .expect("deposit accepted");
+    }
+    let mut client = RefClient::with_spring_state([0.0, 0.0], [0.0, 0.0]);
+    let id = lb.entity_at(idx, origin).unwrap().0;
+    client.apply_tap(&tap(id), &lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+    assert_eq!(client.open(), Some(origin));
+    let chunk = ChunkDims::new(RefGame::CHUNK_BITS).chunk_of(origin);
+    assert!(lb.client(idx).view().is_held(chunk), "held to begin with");
+    assert_eq!(seen_furnace(&lb, idx, origin).unwrap().ingots_out, 0);
+
+    // Pan far away and wait for the chunk to leave the subscription (ring plus hold time).
+    lb.set_camera(idx, camera(4000, 4000));
+    let mut left = false;
+    for _ in 0..600 {
+        lb.step();
+        if !lb.client(idx).view().is_held(chunk) {
+            left = true;
+            break;
+        }
+    }
+    assert!(left, "the furnace's chunk left the subscription");
+    // Unknown leaves the panel open.
+    let far = lb.frame_view(
+        idx,
+        TileRect::new(TilePos::new(3990, 3990), TilePos::new(4010, 4010)),
+        TilePos::new(0, 0),
+    );
+    client.recheck_open(&far);
+    assert_eq!(client.open(), Some(origin), "Unknown leaves the panel open");
+    // The host smelts on regardless.
+    lb.run(SMELT + 20);
+    assert_eq!(
+        host_furnace(&lb, origin).unwrap().ingots_out,
+        1,
+        "smelted unwatched"
+    );
+    assert!(!lb.client(idx).view().is_held(chunk), "still unsubscribed");
+
+    // Back: the resnapshot carries the ingot.
+    lb.set_camera(idx, camera(10, 10));
+    for _ in 0..200 {
+        lb.step();
+        if lb.client(idx).view().is_held(chunk) {
+            break;
+        }
+    }
+    lb.run(10);
+    assert!(lb.client(idx).view().is_held(chunk), "held again");
+    assert_eq!(
+        seen_furnace(&lb, idx, origin).unwrap().ingots_out,
+        1,
+        "the ingot is there"
+    );
+    client.recheck_open(&lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+    assert_eq!(client.open(), Some(origin));
+    assert_eq!(ui_of(&lb, idx, &client).furnace.unwrap().ingots_out, 1);
 }

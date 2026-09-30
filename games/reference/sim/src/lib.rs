@@ -296,6 +296,20 @@ pub struct UiRecipe {
     pub affordable: bool,
 }
 
+/// The open furnace as the panel reads it (M33b): its anchor tile and the six state fields, with
+/// `smelt_done_at` as a raw tick number (`UiCollecting::done_at`'s reasoning).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, TS)]
+#[ts(export)]
+pub struct UiFurnace {
+    pub at: TileXY,
+    pub iron_in: u16,
+    pub coal: u16,
+    pub wood: u16,
+    pub burn_left: u16,
+    pub ingots_out: u16,
+    pub smelt_done_at: Option<u32>,
+}
+
 /// `Ui { me, inventory, collecting, in_range, spawn }` (Scope, M20b steps 3 and 5). `me` is a raw
 /// `u32`, not `engine::game::PlayerId` (same reason as [`UiCollecting::done_at`]: `PlayerId` has no
 /// `TS` impl). `Default` reserves `in_range`'s capacity once ([`MAX_IN_RANGE`]); `RefClient::ui`
@@ -320,6 +334,8 @@ pub struct RefUi {
     pub placing: bool,
     /// M33: the inventory holds a furnace item (shows the Build button).
     pub can_build: bool,
+    /// M33b: the furnace whose panel is open (`RefClient::open`), `None` when none or it is gone.
+    pub furnace: Option<UiFurnace>,
 }
 
 impl Default for RefUi {
@@ -335,6 +351,7 @@ impl Default for RefUi {
             recipes: Vec::with_capacity(content::RECIPES.len()),
             placing: false,
             can_build: false,
+            furnace: None,
         }
     }
 }

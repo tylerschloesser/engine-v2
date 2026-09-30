@@ -3,6 +3,7 @@ import type { Inventory } from "./Inventory.js";
 import type { TileXY } from "./TileXY.js";
 import type { UiCollecting } from "./UiCollecting.js";
 import type { UiCrafting } from "./UiCrafting.js";
+import type { UiFurnace } from "./UiFurnace.js";
 import type { UiInRange } from "./UiInRange.js";
 import type { UiRecipe } from "./UiRecipe.js";
 
@@ -28,4 +29,8 @@ placing: boolean,
 /**
  * M33: the inventory holds a furnace item (shows the Build button).
  */
-can_build: boolean, };
+can_build: boolean, 
+/**
+ * M33b: the furnace whose panel is open (`RefClient::open`), `None` when none or it is gone.
+ */
+furnace: UiFurnace | null, };
