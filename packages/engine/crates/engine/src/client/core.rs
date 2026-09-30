@@ -125,10 +125,11 @@ pub struct ClientCore<G: Game> {
     /// (0003, 0016 §2's own exemption), so allocating one `Vec<u8>` per queued action here is not
     /// a zero-allocation-rule violation the way it would be on a per-frame path.
     outbox: Vec<(u32, Vec<u8>)>,
-    /// `ActionResults` entries decoded from the most recently applied frame, drained by the
-    /// caller (`game_instance::ClientInstance`, which turns each into a UI-ring record) via
-    /// [`Self::drain_results`]. Cleared at the top of every [`Self::apply`] (Scope: "`on_frame`
-    /// reads `ActionResults`").
+    /// `ActionResults` entries decoded from the most recently applied `on_frame` message (every
+    /// frame of a `FrameBundle`, in order), drained by the caller (`game_instance::ClientInstance`,
+    /// which turns each into a UI-ring record) via [`Self::drain_results`]. Cleared on entry to
+    /// [`Self::on_frame`], not per frame (M33d). Capacity is reserved once ([`OUTBOX_CAPACITY`]):
+    /// a result answers one action this client sent, and at most that many are unanswered.
     results: Vec<(u32, Result<Applied, Rejected<G>>)>,
     /// docs/plan/19-presence-channel.md step 2: this frame's presence sample, `Codec`-encoded
     /// eagerly on every [`Self::set_presence`] call so the sampler (`poll_uplink`) only ever
@@ -294,7 +295,7 @@ impl<G: Game> ClientCore<G> {
             last_summary: FrameSummary::default(),
             mutations: 0,
             outbox: Vec::new(),
-            results: Vec::new(),
+            results: Vec::with_capacity(OUTBOX_CAPACITY),
             presence_encoded,
             presence_len,
             last_sent_presence: None,
@@ -977,6 +978,8 @@ impl<G: Game> ClientCore<G> {
     /// re-predict every action still pending. `predict_alloc` proves this whole tail allocates
     /// nothing in steady state.
     pub fn on_frame(&mut self, bytes: &[u8]) -> Result<FrameSummary, WireError> {
+        // The caller drains once after this returns; a bundle's frames append in order (M33d).
+        self.results.clear();
         // M31 step 4 (`wire/bundle.rs`): a `FrameBundle` is several whole frames, applied one by one
         // in order, each exactly as if it had arrived alone; the whole bundle is validated first so
         // a malformed tail never leaves it half applied. The summary is the last frame's.
@@ -1114,11 +1117,6 @@ impl<G: Game> ClientCore<G> {
             ack_seq: header.ack_seq,
             ..Default::default()
         };
-        // Each applied frame's own results replace the last: the caller (`game_instance.rs`)
-        // drains them right after this call returns, so nothing here needs to persist across
-        // frames (docs/plan/16-action-round-trip.md Scope).
-        self.results.clear();
-
         while let Some((id, body)) = r.next_section().expect("validated") {
             let mut br = ByteReader::new(body);
             match id {
@@ -1584,6 +1582,38 @@ mod tests {
         let mut got2 = Vec::new();
         c.drain_results(|seq, _| got2.push(seq));
         assert!(got2.is_empty());
+    }
+
+    /// A `FrameBundle` applies its frames one by one; every frame's `ActionResults` must survive to
+    /// the single drain that follows `on_frame` (M33d: `apply` used to clear `results`, so only
+    /// the last frame's survived while `pending` was still retired by the last frame's ack).
+    #[test]
+    fn bundle_keeps_every_frames_results() {
+        let mut c = client();
+        let mut frames: Vec<Vec<u8>> = Vec::new();
+        for (tick, seq) in [(1u32, 1u32), (2, 2)] {
+            let outcomes = [Outcome {
+                seq,
+                result: Ok(Applied),
+            }];
+            let mut buf = [0u8; 128];
+            let mut sink = SliceSink::new(&mut buf);
+            let mut fw = FrameWriter::new(&mut sink, FrameHeader { tick, ack_seq: seq });
+            fw.section(SectionId::ActionResults, |s| {
+                ActionResultsWriter::write::<CGame>(s, outcomes.iter());
+            });
+            let n = sink.finish().unwrap();
+            frames.push(buf[..n].to_vec());
+        }
+        let mut out = [0u8; 512];
+        let mut sink = SliceSink::new(&mut out);
+        crate::wire::write_bundle(&mut sink, frames.iter().map(|f| f.as_slice()));
+        let n = sink.finish().unwrap();
+
+        c.on_frame(&out[..n]).unwrap();
+        let mut got = Vec::new();
+        c.drain_results(|seq, _| got.push(seq));
+        assert_eq!(got, vec![1, 2], "both frames' results, in seq order");
     }
 
     /// `revealed()`: `false` on a fresh instance (nothing held), `false` once the chunk is held

@@ -275,6 +275,33 @@ test('rates/degrade-on-stall', async () => {
   }
 })
 
+test('rates/results-survive-a-bundle', async () => {
+  // M33d: a client applies a bundle's frames one by one and used to keep only the last frame's
+  // `ActionResults`. Two actions a tick apart ride two frames of one bundle after a stall.
+  const h = await createNetHarness({ fixture: await putsFixture(), seed: 3301, clients: 1 })
+  try {
+    const c0 = h.clients[0]
+    if (!c0) throw new Error('no client')
+    c0.setCamera({ x: 0, y: 0, tilesAcross: 20 })
+    const seqs: number[] = []
+    c0.onActionResult((seq) => {
+      seqs.push(seq)
+    })
+    await h.advanceTicks(20)
+    h.link(0).stall(2_600)
+    await h.advanceTicks(60)
+    c0.dispatch({ SetMotd: { n: 1 } })
+    await h.advanceTicks(1)
+    c0.dispatch({ SetMotd: { n: 2 } })
+    await h.advanceTicks(80)
+    await h.settle()
+    expect(h.counters(0).bundles, 'the run really sent bundles').toBeGreaterThan(0)
+    expect(seqs).toEqual([1, 2])
+  } finally {
+    await h.dispose()
+  }
+}, 60_000)
+
 test('rates/degrade-on-soft-cap', async () => {
   // No stall, no lag: every frame is acked. The soft cap alone (1,000 B/s here; the busy field
   // sends several times that) drives level 2 at once and level 4 after 2 s over the cap.
