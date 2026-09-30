@@ -703,7 +703,12 @@ export function createSimHostFromInstance(
   // `null`) the instant a valid `Hello` clears the join-key/build-hash/capacity checks, resolved
   // in place once the secret's digest (and, for a brand-new secret, the session-table write) has
   // finished -- consumed from the front, in order, only once resolved, at the next tick boundary.
-  const attachQueue: (QueuedAttach | null)[] = []
+  // docs/plan/30d-hello-resent-silence.md: each entry is a slot object, filled in place by its own
+  // `Hello`'s `settle` below. A slot was once an array index captured at push time, but the drain
+  // loop's `shift()` moves every later entry down: a `Hello` still hashing when an earlier entry
+  // was shifted off wrote to an index one too high, left its own position empty for good, and the
+  // `if (!front) break` below then blocked every later `Hello` too.
+  const attachQueue: { entry: QueuedAttach | null }[] = []
   // `serverInternals(...).handshakesSettled()`'s own source: every in-flight digest/allocate
   // promise, removed as each settles (Seams).
   const inFlightHandshakes = new Set<Promise<void>>()
@@ -760,9 +765,9 @@ export function createSimHostFromInstance(
     }
     while (attachQueue.length > 0) {
       const front = attachQueue[0]
-      if (!front) break
+      if (!front?.entry) break
       attachQueue.shift()
-      const entry = front
+      const entry = front.entry
       const state = handshakeState.get(entry.conn)
       if (host.handshakeTrace) {
         host.handshakeTrace(
@@ -1351,10 +1356,10 @@ export function createSimHostFromInstance(
 
         state.status = 'awaiting-attach'
         garbagePending--
-        const slotIndex = attachQueue.length
-        attachQueue.push(null)
+        const slot: { entry: QueuedAttach | null } = { entry: null }
+        attachQueue.push(slot)
         if (host.handshakeTrace) {
-          host.handshakeTrace(`hello conn=${conn} queued slot=${slotIndex}`)
+          host.handshakeTrace(`hello conn=${conn} queued (queue length ${attachQueue.length})`)
         }
         // This arrival's own turn on `sessionMutationChain` (Deviations above): captured now, in
         // `Hello`-arrival order, *before* the chain is extended for the next arrival below -- the
@@ -1385,10 +1390,10 @@ export function createSimHostFromInstance(
           const presence = entry.lastPresenceHex ? hexDecode(entry.lastPresenceHex) : null
           if (host.handshakeTrace) {
             host.handshakeTrace(
-              `resolved conn=${conn} slot=${slotIndex} (queue length ${attachQueue.length})`,
+              `resolved conn=${conn} queued=${attachQueue.includes(slot)} (queue length ${attachQueue.length})`,
             )
           }
-          attachQueue[slotIndex] = {
+          slot.entry = {
             conn,
             connection,
             playerId: entry.playerId,

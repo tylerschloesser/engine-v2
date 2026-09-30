@@ -300,6 +300,66 @@ describe('handshake', () => {
     }
   })
 
+  test('hello-behind-a-shifted-entry-is-still-answered', async () => {
+    // docs/plan/30d-hello-resent-silence.md: `mp/hello-resent-after-pre-welcome-drop`'s intermittent
+    // red. A `Hello` whose connection then closed leaves a resolved entry in the attach queue; the
+    // redial (same `ConnId`) says `Hello` while it is still hashing; a tick then shifts the stale
+    // entry off *before* the new one resolves. The new entry used to be written to the index it
+    // was pushed at, one past where it now sat, leaving the queue's front empty for good: no
+    // `Welcome` for this connection or any later one.
+    const { wasm, buildHash } = await putsFixture()
+    const cfg: WorldConfig = {
+      worldId: 'w-hello-behind-a-shifted-entry',
+      buildHash,
+      params: { seed: '78', worldgen: null },
+    }
+    let fire: (() => void) | null = null
+    const server = createWorldServer(cfg, {
+      wasm,
+      storage: memoryStorage(),
+      clock: { now: () => 0 },
+      timer: {
+        every: (_ms: number, cb: () => void) => {
+          fire = cb
+          return () => {
+            fire = null
+          }
+        },
+      },
+    })
+    await server.ready
+    const hello = buildHelloBytes(wasm, {
+      secret: fixedSecret(0x7b),
+      joinKey: '',
+      buildHash: hexDecode(buildHash),
+    })
+    const fake = (into: Uint8Array[]): Connection => ({
+      datagrams: false,
+      onMessage: null,
+      onClose: null,
+      send: (_cls, bytes, len) => into.push(bytes.slice(0, len)),
+      close: () => {},
+    })
+
+    const first = fake([])
+    server.accept(first)
+    first.onMessage?.(hello)
+    await serverInternals(server).handshakesSettled() // the first entry is resolved and queued
+    first.onClose?.(1006) // dropped after its Hello, before any tick attached it
+
+    const redialMessages: Uint8Array[] = []
+    const redial = fake(redialMessages)
+    server.accept(redial) // reuses the first connection's `ConnId`
+    redial.onMessage?.(hello) // hashing now
+    fire?.() // this tick shifts the stale entry off; the redial's entry is not resolved yet
+    await serverInternals(server).handshakesSettled()
+    fire?.()
+
+    expect(redialMessages.length).toBeGreaterThanOrEqual(1)
+    expect(parseWelcomePlayerId(redialMessages[0] as Uint8Array)).toBe(1)
+    await server.stop()
+  })
+
   test('crash-between-table-and-log', async () => {
     const { wasm, buildHash } = await putsFixture()
     const cfg: WorldConfig = {
