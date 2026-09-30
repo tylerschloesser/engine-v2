@@ -2013,9 +2013,12 @@ export function createClient(options: ClientOptions): Client {
     // server with `BadKey` (never exercised until this milestone's own `mp/*` browser tests: M28b's
     // browser specs only ever drove a `{ kind: 'local' }` host). `options.host.joinKey` is the real
     // source for a remote host; `worldConfig?.joinKey` stays the source for local.
+    // `netNoDial` (test only): no `Welcome` will ever come, so nothing can configure the client
+    // late; it keeps the old behaviour (its `game` as is, gen workers spawned at start).
+    const netNoDial = options.test?.flags?.netNoDial === true
     const clientGame =
       options.test?.game ??
-      (linked
+      (linked && (game !== null || !netNoDial)
         ? {
             // A remote client with no `test.game` has no `game` here: its config carries neither
             // `seed` nor `params` and it starts unconfigured until `Welcome` (docs/plan/33f).
@@ -2032,7 +2035,7 @@ export function createClient(options: ClientOptions): Client {
     // docs/plan/33f (ADR 0042): a remote client with no `test.game` knows no world yet, so it
     // spawns no gen workers here (they would fail `engine_init` with `BadConfig`); `spawnGenLate`
     // spawns them, once, from the config the client worker reports after the first `Welcome`.
-    const lateGen = options.host.kind === 'remote' && options.test?.game === undefined
+    const lateGen = options.host.kind === 'remote' && options.test?.game === undefined && !netNoDial
     const genIndices = [WORKER_GEN0, WORKER_GEN1]
     const genSpawns: Spawn[] = []
     for (let i = 0; i < genWorkers; i++) {
