@@ -615,6 +615,15 @@ fn pickup_sends_entity_gone_and_closes_other_panel() {
         assert_eq!(lb.entities_in(idx, WIDE).len(), 0);
     }
     assert_eq!(host_count(&lb), 0);
+    // Both replicas hash equal to the host over everything each holds (chunks, `Global`, own player).
+    lb.run(8);
+    for idx in [a, b] {
+        assert_eq!(
+            lb.client(idx).view().region_hash(),
+            lb.host.region_hash(lb.conn(idx)),
+            "client {idx} replica hash equals the host's"
+        );
+    }
 }
 
 fn host_count(lb: &Loopback<RefGame>) -> usize {
