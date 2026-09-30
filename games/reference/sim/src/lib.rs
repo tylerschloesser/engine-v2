@@ -77,6 +77,11 @@ pub enum RefAction {
     StartCraft {
         recipe: u8,
     },
+    /// M33: place a furnace item from the inventory with its min corner at `origin` (footprint
+    /// 2x2). Addressed by tile, never by id.
+    PlaceFurnace {
+        origin: TileXY,
+    },
 }
 
 /// `Reject` (Scope). `NoResource`/`OutOfRange`/`Busy` are `rules::collect::start`'s own three
@@ -95,6 +100,10 @@ pub enum RefReject {
     Locked,
     /// `StartCraft`: the inventory cannot pay the recipe's cost.
     Unaffordable,
+    /// `PlaceFurnace` (M33): the inventory holds no furnace.
+    NoFurnace,
+    /// `PlaceFurnace`: some footprint tile is `NOT_BUILDABLE` (water, a resource, another furnace).
+    NotBuildable,
     /// `admit`'s own rejection (0001 "Witness-carrying actions" step 1, HOST ONLY, never
     /// replayed): the claimed `from` is farther than `content::ADMIT_TOLERANCE_Q8` from the
     /// player's latest presence sample, or no sample exists yet. Distinct from `OutOfRange`
@@ -299,7 +308,7 @@ pub struct RefGame;
 
 impl Game for RefGame {
     const SCHEMA_VERSION: u32 = 3;
-    //  3: `Furnace` entity, resources `NOT_BUILDABLE` (M33).
+    //  3: `Furnace` entity, `PlaceFurnace`, resources `NOT_BUILDABLE` (M33).
     type Worldgen = RefWorldgen;
     type Action = RefAction;
     type Reject = RefReject;
@@ -355,6 +364,9 @@ impl Game for RefGame {
             }
             RefAction::CancelCollect => rules::collect::cancel(w, who),
             RefAction::StartCraft { recipe } => rules::craft::start(w, who, *recipe),
+            RefAction::PlaceFurnace { origin } => {
+                rules::place::place_furnace(w, who, origin.tile())
+            }
         }
     }
 
@@ -370,7 +382,9 @@ impl Game for RefGame {
     ) -> Result<(), RefReject> {
         match a {
             RefAction::StartCollect { from, .. } => rules::collect::admit(p, who, from.world()),
-            RefAction::CancelCollect | RefAction::StartCraft { .. } => Ok(()),
+            RefAction::CancelCollect
+            | RefAction::StartCraft { .. }
+            | RefAction::PlaceFurnace { .. } => Ok(()),
         }
     }
 }

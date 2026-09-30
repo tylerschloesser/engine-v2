@@ -8,8 +8,8 @@
 
 use engine::game::{PlayerEvent, PlayerId, WorldRead, WorldWrite};
 use engine::sim::{Record, Rejected, Sim, WorldParams};
-use engine::world::{Tile, TilePos};
-use reference_sim::{RefAction, RefGame, RefParams, RefPlayer, RefReject};
+use engine::world::{Tile, TilePos, TileRect};
+use reference_sim::{RefAction, RefGame, RefParams, RefPlayer, RefReject, TileXY};
 
 /// The one seed every native test in this crate shares (Provides: "the `TEST_SEED` value") --
 /// `reference_sim::content::SEED` (M20b step 5 Deviations) is now the single source of that literal;
@@ -102,6 +102,52 @@ impl RefScenario {
         let mut p = self.player(who);
         p.inventory.add(item, n);
         self.sim.authority_mut().put_player(who, p);
+    }
+
+    /// `PlaceFurnace { origin }` for `who` (Provides: `RefScenario::place(player, origin)`).
+    pub fn place(&mut self, who: PlayerId, origin: TilePos) -> Result<(), RefReject> {
+        self.dispatch(
+            who,
+            RefAction::PlaceFurnace {
+                origin: TileXY::from_tile(origin),
+            },
+        )
+    }
+
+    /// The occupant of `pos` on the host (real ids only: there is no prediction here).
+    pub fn entity_at(&self, pos: TilePos) -> Option<engine::game::EntityId> {
+        self.sim
+            .authority()
+            .entity_at(pos)
+            .expect("host reads are total")
+    }
+
+    /// How many entities (furnaces) the host holds whose footprint touches the square of `radius`
+    /// tiles around the origin (every test here places near it).
+    pub fn furnace_count(&self) -> usize {
+        let r = 200;
+        let mut n = 0;
+        self.sim
+            .authority()
+            .entities_in(
+                TileRect::new(TilePos::new(-r, -r), TilePos::new(r, r)),
+                &mut |_, _| n += 1,
+            )
+            .expect("host reads are total");
+        n
+    }
+
+    /// Makes `w` x `h` tiles from `min` plain grass with no resource (native-test-only, like
+    /// [`Self::set_tile`]): placement tests must not depend on what worldgen put there.
+    pub fn clear_area(&mut self, min: TilePos, w: i32, h: i32) {
+        for dy in 0..h {
+            for dx in 0..w {
+                self.set_tile(
+                    TilePos::new(min.x + dx, min.y + dy),
+                    Tile::new(reference_sim::content::GRASS, 0, 0),
+                );
+            }
+        }
     }
 
     pub fn step_ticks(&mut self, n: u32) {
