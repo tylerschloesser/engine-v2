@@ -131,6 +131,10 @@ export function zeroGcSuite(opts: {
    * fix round 2, docs/plan/09-renderer-terrain.md Deviations. Default 0, every other page
    * unaffected. */
   extraSettleFrames?: number
+  /** Default false. `true`: this page's worker-isolate `object` negatives are `@slow` too (`main`'s
+   * stays fast), the same move as `burst` (0026), by caller option: M34b's `reference_single_player`
+   * page, which the browser budget cannot carry in full. */
+  slowWorkerObjectControls?: boolean
   /** Opt-in, page-specific check run once, after the `${pageId} clean` test's own environment/
    * verdict assertions (never inside a negative-control test, and never inside the measured
    * window itself: `run()` above has already finished by the time this fires) -- `gc-slice.ts`'s
@@ -172,7 +176,9 @@ export function zeroGcSuite(opts: {
         // `gc-loop`'s own, which stays fast so both instruments are proven live on every `pnpm
         // test` (0016 §8's "permanent negative controls", amended by 0026). `object` stays fast for
         // every page (instrument B, every isolate).
-        const slow = kind === 'burst' && opts.pageId !== 'gc-loop'
+        const slow =
+          (kind === 'burst' && opts.pageId !== 'gc-loop') ||
+          (kind === 'object' && opts.slowWorkerObjectControls === true && name !== 'main')
         const title = `${opts.pageId} neg ${kind} ${name}${slow ? ' @slow' : ''}`
         test(title, async ({ page, browser }) => {
           const control: NegativeControl = { isolate: name, kind }

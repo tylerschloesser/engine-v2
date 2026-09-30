@@ -1,6 +1,6 @@
 # 0026: `burst` negative controls move to the slow tier for every page but `gc-loop`
 
-Status: Accepted (2026-09-20). Amends [0016](0016-zero-gc-definition.md) §3 step 8 ("Permanent negative controls"); cites [0020](0020-testing-strategy.md) §4. Implemented in milestone M09 (gate round 3).
+Status: Accepted (2026-09-20). Amends [0016](0016-zero-gc-definition.md) §3 step 8 ("Permanent negative controls"); cites [0020](0020-testing-strategy.md) §4. Implemented in milestone M09 (gate round 3). Amended by [0043](0043-zero-gc-worker-object-controls-slow-on-reference-page.md) §1.
 
 ## Context
 

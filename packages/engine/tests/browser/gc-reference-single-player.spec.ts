@@ -11,4 +11,5 @@ zeroGcSuite({
   expectAdapter: true,
   controlKinds: ['object', 'burst'],
   extraSettleFrames: 500,
+  slowWorkerObjectControls: true,
 })
