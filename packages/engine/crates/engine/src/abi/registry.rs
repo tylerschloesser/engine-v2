@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 34;
+pub const ABI_VERSION: u32 = 35;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -496,6 +496,36 @@ pub trait Instance: Sized + 'static {
     /// PacingCounters` for `conn`, sixteen little-endian `u32`s (64 bytes) into `Result`, in the
     /// order `Host::sim_pacing_counters` documents. An unknown `conn` writes zeros and returns `Ok`.
     fn sim_pacing_counters(&mut self, _conn: u32, _result: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/31b-desync-hashes.md (`ABI_VERSION` 34 -> 35), `engine/test` only: the sim role's
+    /// desync report ring, one report per call. `Result` gets 40 little-endian bytes,
+    /// `integrity::DesyncLog::write_result`'s layout: `count u32 (total ever) · retained u32 ·`
+    /// then the `index`th retained report (oldest first) `tick u32 · scope u32 (0 Chunk, 1 Global,
+    /// 2 OwnPlayer) · cx i32 · cy i32 · host_hash u64 · client_hash u64` (zero when out of range).
+    fn sim_desync(&mut self, _index: u32, _result: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/31b-desync-hashes.md (`ABI_VERSION` 34 -> 35), `engine/test` only: the client
+    /// role's desync report ring, same 40-byte layout as `sim_desync`.
+    fn client_desync(&mut self, _index: u32, _result: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/31b-desync-hashes.md (`ABI_VERSION` 34 -> 35), `engine/test` only, fault
+    /// injection: the next frame built for `conn` drops one delta of the chunk packed in `coord`
+    /// (`(cx as i16 as u16) | ((cy as i16 as u16) << 16)`: two chunk coordinates in one `u32`,
+    /// because the loader has no three-argument call).
+    fn sim_skip_delta(&mut self, _conn: u32, _coord: u32) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/31b-desync-hashes.md (`ABI_VERSION` 34 -> 35), `engine/test` only, fault
+    /// injection: flips one replica byte of the held chunk `(cx as i32, cy as i32)`;
+    /// `Status::NotCached` when the client does not hold it.
+    fn client_corrupt_chunk(&mut self, _cx: u32, _cy: u32) -> Status {
         Status::Unsupported
     }
 
@@ -1074,6 +1104,22 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_pacing_counters(conn: u32) -> u32 {
             $crate::abi::sim_pacing_counters(&__ENGINE_SLOT, conn) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_desync(index: u32) -> u32 {
+            $crate::abi::sim_desync(&__ENGINE_SLOT, index) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_desync(index: u32) -> u32 {
+            $crate::abi::client_desync(&__ENGINE_SLOT, index) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_skip_delta(conn: u32, coord: u32) -> u32 {
+            $crate::abi::sim_skip_delta(&__ENGINE_SLOT, conn, coord) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_corrupt_chunk(cx: u32, cy: u32) -> u32 {
+            $crate::abi::client_corrupt_chunk(&__ENGINE_SLOT, cx, cy) as u32
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn on_action(len: u32) -> u32 {

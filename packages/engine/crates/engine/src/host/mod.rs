@@ -8,6 +8,7 @@
 //! has already reserved the arena and parsed config, so `Host::init` only parses and holds the
 //! parameters; `sim_genesis` is what actually builds the `Sim<G>`.
 
+pub mod hashes;
 pub mod pacing;
 pub mod subs;
 pub mod warm;
@@ -154,6 +155,9 @@ struct ConnSlot<G: Game> {
     /// docs/plan/31-rates-and-integrity.md: the chunk-data bucket, the enter queue, the sent set,
     /// the soft cap and degrade state, and their counters (`host/pacing.rs`).
     pace: Pacing,
+    /// docs/plan/31b-desync-hashes.md: this connection's hash schedule, pending scope resend and
+    /// the `sim_skip_delta` hook.
+    hashes: hashes::HashSchedule,
 }
 
 fn default_max_entities() -> u32 {
@@ -290,6 +294,10 @@ struct SimConfig<P> {
     action_per_s: Option<u32>,
     #[serde(default)]
     action_burst: Option<u32>,
+    /// docs/plan/31b-desync-hashes.md: `"off"`, `"production"` (the default when absent) or
+    /// `"all"` (0013 "dev builds": every eligible chunk every frame).
+    #[serde(default)]
+    hash_mode: Option<String>,
 }
 
 fn default_view_max_tiles() -> u16 {
@@ -464,6 +472,15 @@ pub struct Host<G: Game> {
     /// world state. Absent = never modified = version 0 (the same default a client replica uses
     /// for a chunk it has only ever seen as pristine, `client::Replica` Deviations).
     chunk_versions: BTreeMap<ChunkCoord, u32>,
+    /// docs/plan/31b-desync-hashes.md: how much desync hashing this host does
+    /// ([`hashes::HashMode`]; `SimConfig::hash_mode`, [`Host::set_hash_mode`]). Step 4's `HASH_ALL`
+    /// flag selects `All`.
+    hash_mode: hashes::HashMode,
+    /// The desync reports this host recorded (a `ResyncChunk` arrived): ring of 16 plus counter.
+    desyncs: crate::integrity::DesyncLog,
+    /// This frame's `Hashes` entries and the chunks the schedule may pick from (reused scratch).
+    scratch_hashes: Vec<crate::wire::HashEntry>,
+    scratch_eligible: Vec<ChunkCoord>,
     /// The tick `tick()` most recently completed; `build_frame`'s `FrameHeader.tick` and the tick
     /// `chunk_versions` entries are stamped with (host/mod Deviations: `Sim::step` advances the
     /// clock at the very end, so the *completed* tick is `sim.tick()` as read just before `step`).
@@ -790,6 +807,10 @@ impl<G: Game> Host<G> {
             pending_records: Vec::new(),
             last_superseded: None,
             chunk_versions: BTreeMap::new(),
+            hash_mode: hashes::HashMode::Off,
+            desyncs: crate::integrity::DesyncLog::default(),
+            scratch_hashes: Vec::new(),
+            scratch_eligible: Vec::new(),
             last_tick: Tick(0),
             scratch_roster: Vec::new(),
             scratch_entered: Vec::new(),
@@ -934,6 +955,90 @@ impl<G: Game> Host<G> {
         }
     }
 
+    /// docs/plan/31b-desync-hashes.md: sets how much desync hashing the host does, for every
+    /// connection ([`hashes::HashMode`]). `genesis_for_test` starts `Off` (its pinned-byte tests
+    /// predate hashing); the ABI path starts `Production`. Step 4's `HASH_ALL` flag calls this
+    /// with `All`.
+    pub fn set_hash_mode(&mut self, mode: hashes::HashMode) {
+        self.hash_mode = mode;
+    }
+
+    /// The desync hash of `coord` as this host holds it, for a chunk `conn` holds
+    /// ([`crate::integrity::chunk_hash`]); `None` when `conn` does not hold it. Its client-side
+    /// counterpart is `client::Replica::chunk_hash`.
+    pub fn chunk_hash(&self, conn: ConnId, coord: ChunkCoord) -> Option<u64> {
+        let sim = self.sim.as_ref()?;
+        let Some(Some(slot)) = self.conns.get(conn as usize) else {
+            return None;
+        };
+        slot.pace
+            .is_held(coord)
+            .then(|| crate::integrity::chunk_hash(sim.authority().store(), coord))
+    }
+
+    /// The desync reports this host recorded (one per `ResyncChunk` it acted on).
+    pub fn desyncs(&self) -> &crate::integrity::DesyncLog {
+        &self.desyncs
+    }
+
+    /// Test fault injection (`sim_skip_delta`): the next frame built for `conn` drops one tile (or
+    /// entity `Put`) delta of `chunk`, or (for [`crate::integrity::RESERVED_SCOPE_COORD`]) one
+    /// `Global` value update; the flag stays armed until a frame had one to drop.
+    pub fn skip_delta(&mut self, conn: ConnId, chunk: ChunkCoord) {
+        if let Some(Some(slot)) = self.conns.get_mut(conn as usize) {
+            slot.hashes.skip_delta = Some(chunk);
+        }
+    }
+
+    /// `ResyncChunk` (`wire::hashes`): answers a client's desync report. A chunk `conn` holds gets
+    /// its snapshot through the chunk bucket at visible priority; the reserved coordinate
+    /// ([`crate::integrity::RESERVED_SCOPE_COORD`]) makes the next frame carry `Global` and
+    /// `OwnPlayer` in full. Either way one desync report is recorded. A chunk not held is ignored.
+    fn on_resync(&mut self, conn: ConnId, bytes: &[u8]) -> Result<(), UplinkError> {
+        use crate::integrity::{DesyncReport, DesyncScope, RESERVED_SCOPE_COORD};
+        let coord = crate::wire::read_resync_chunk(bytes).map_err(|_| UplinkError)?;
+        let tick = self.last_tick.0;
+        let Some(sim) = self.sim.as_ref() else {
+            return Ok(());
+        };
+        let store = sim.authority().store();
+        let Some(Some(slot)) = self.conns.get_mut(conn as usize) else {
+            return Ok(());
+        };
+        let report = if coord == RESERVED_SCOPE_COORD {
+            slot.hashes.resend_scopes = true;
+            DesyncReport {
+                tick,
+                scope: DesyncScope::Global,
+                coord,
+                host_hash: crate::integrity::global_hash(store),
+                client_hash: 0,
+            }
+        } else if slot.pace.is_held(coord) {
+            DesyncReport {
+                tick,
+                scope: DesyncScope::Chunk,
+                coord,
+                host_hash: crate::integrity::chunk_hash(store, coord),
+                client_hash: 0,
+            }
+        } else {
+            return Ok(());
+        };
+        self.desyncs.record("host", report);
+        if coord != RESERVED_SCOPE_COORD {
+            self.enqueue_chunk_snapshot(
+                conn,
+                coord,
+                EnterPriority {
+                    visible: true,
+                    dist_sq: 0,
+                },
+            );
+        }
+        Ok(())
+    }
+
     /// A connection slot's assigned player, if it is currently connected.
     pub fn player_of(&self, conn: ConnId) -> Option<PlayerId> {
         self.conns.get(conn as usize)?.as_ref().map(|s| s.player)
@@ -1003,6 +1108,7 @@ impl<G: Game> Host<G> {
             last_sent_tick: self.last_tick,
             resume_pending: None,
             pace: Pacing::new(self.bandwidth, G::TICK_RATE, self.last_tick.0),
+            hashes: hashes::HashSchedule::new(self.last_tick.0, G::TICK_RATE.hz_value()),
         });
         player
     }
@@ -1059,6 +1165,7 @@ impl<G: Game> Host<G> {
             last_sent_tick: self.last_tick,
             resume_pending: None,
             pace: Pacing::new(self.bandwidth, G::TICK_RATE, self.last_tick.0),
+            hashes: hashes::HashSchedule::new(self.last_tick.0, G::TICK_RATE.hz_value()),
         });
         player
     }
@@ -1298,6 +1405,7 @@ impl<G: Game> Host<G> {
             last_sent_tick: self.last_tick,
             resume_pending,
             pace: Pacing::new(self.bandwidth, G::TICK_RATE, self.last_tick.0),
+            hashes: hashes::HashSchedule::new(self.last_tick.0, G::TICK_RATE.hz_value()),
         });
 
         self.write_welcome_for(player, epoch, welcome_sink);
@@ -1419,6 +1527,9 @@ impl<G: Game> Host<G> {
             return Ok(());
         };
         slot.counters.bytes_up += bytes.len() as u64;
+        if bytes.first() == Some(&(crate::wire::MsgType::ResyncChunk as u8)) {
+            return self.on_resync(conn, bytes);
+        }
         let player = slot.player;
         let mut highest_seen = slot.highest_admitted_seq;
 
@@ -1655,11 +1766,14 @@ impl<G: Game> Host<G> {
         let store = sim.authority().store();
         let changes = sim.authority().changes();
         let first = slot.first_frame_pending;
+        // docs/plan/31b-desync-hashes.md: a `ResyncChunk` for the reserved coordinate owes this
+        // connection `Global` and `OwnPlayer` in full, exactly like its first frame.
+        let resend = slot.hashes.resend_scopes;
         let ack_seq = store.last_seq(slot.player).unwrap_or(0);
 
         // -- Global: roster (incremental unless `first`) + value (on change or `first`) --------
         self.scratch_roster.clear();
-        if first {
+        if first || resend {
             for i in 0..store.player_count() {
                 if let Some(p) = store.player_id_at(i) {
                     let online = store.player_slot(p).map(|s| s.online).unwrap_or(false);
@@ -1677,13 +1791,25 @@ impl<G: Game> Host<G> {
             }
         }
         let global_value_changed = first
+            || resend
             || changes
                 .iter()
                 .any(|(_, d)| matches!(d, Delta::Global { .. }));
         let want_roster = !self.scratch_roster.is_empty();
-        let want_global_value = global_value_changed;
+        // `sim_skip_delta(conn, RESERVED_SCOPE_COORD)`: drop one ordinary `Global` value update
+        // (never a first frame's or a resend's) so the client's `Global` goes stale.
+        let mut want_global_value = global_value_changed;
+        if slot.hashes.skip_delta == Some(crate::integrity::RESERVED_SCOPE_COORD)
+            && want_global_value
+            && !first
+            && !resend
+        {
+            want_global_value = false;
+            slot.hashes.skip_delta = None;
+        }
 
         let player_changed = first
+            || resend
             || changes
                 .iter()
                 .any(|(_, d)| matches!(d, Delta::Player { who, .. } if *who == slot.player));
@@ -1700,6 +1826,7 @@ impl<G: Game> Host<G> {
             slot.pace.drop_queued(c, tick_now);
             if slot.pace.is_held(c) {
                 slot.pace.note_left(c, tick_now);
+                slot.hashes.forget(c);
                 self.scratch_left.push(c);
             }
         }
@@ -1947,6 +2074,30 @@ impl<G: Game> Host<G> {
             }
         }
         insertion_sort_by_key(&mut self.scratch_tile_flat, |(c, i, _)| (c.y, c.x, *i));
+        // `sim_skip_delta` (docs/plan/31b-desync-hashes.md): drop one delta of the armed chunk.
+        if let Some(target) = slot.hashes.skip_delta {
+            let dropped = if let Some(at) = self
+                .scratch_tile_flat
+                .iter()
+                .position(|(c, _, _)| *c == target)
+            {
+                self.scratch_tile_flat.remove(at);
+                true
+            } else if let Some(at) = self.scratch_entity_ops.iter().position(|&(id, kind)| {
+                kind == EntityOpKind::Put
+                    && store
+                        .entity(id)
+                        .is_some_and(|e| chunk_of::<G>(G::anchor(e)) == target)
+            }) {
+                self.scratch_entity_ops.remove(at);
+                true
+            } else {
+                false
+            };
+            if dropped {
+                slot.hashes.skip_delta = None;
+            }
+        }
 
         // -- Collapse (0010 "Soft cap": a chunk whose queued deltas exceed its snapshot is sent as a
         // snapshot instead): tally this frame's estimated delta bytes per chunk on top of what is
@@ -2044,6 +2195,60 @@ impl<G: Game> Host<G> {
         insertion_sort_by_key(&mut slot.pending_results, |o| o.seq);
         let want_action_results = !slot.pending_results.is_empty();
 
+        // -- Hashes (docs/plan/31b-desync-hashes.md, 0013 "Per-chunk desync hashes") ---------------
+        // Only chunks whose state the client is guaranteed to hold once it has applied this frame
+        // are hashed: held, not collapsed (deltas withheld until its snapshot goes), not queued for
+        // a snapshot, not leaving. What was chosen is committed only if the frame is sent.
+        self.scratch_hashes.clear();
+        let hash_tick = self.last_tick.0;
+        let hash_hz = G::TICK_RATE.hz_value();
+        let hash_all = self.hash_mode == hashes::HashMode::All;
+        let hashing = self.hash_mode != hashes::HashMode::Off;
+        let chunk_due = hashing && (hash_all || slot.hashes.chunk_due(hash_tick));
+        let scope_due = hashing && (hash_all || slot.hashes.scope_due(hash_tick));
+        let mut hash_pick: Option<hashes::Pick> = None;
+        if chunk_due {
+            self.scratch_eligible.clear();
+            for &c in &slot.pace.held {
+                if !slot.pace.is_collapsed(c)
+                    && slot.pace.queue_position(c).is_none()
+                    && !self.scratch_left.contains(&c)
+                {
+                    self.scratch_eligible.push(c);
+                }
+            }
+            insertion_sort_by_key(&mut self.scratch_eligible, |c| (c.y, c.x));
+            if hash_all {
+                for &coord in &self.scratch_eligible {
+                    self.scratch_hashes.push(crate::wire::HashEntry::Chunk {
+                        coord,
+                        hash: crate::integrity::chunk_hash(store, coord),
+                    });
+                }
+            } else {
+                let versions = &self.chunk_versions;
+                hash_pick = slot.hashes.pick(&self.scratch_eligible, |c| {
+                    versions.get(&c).copied().unwrap_or(0)
+                });
+                if let Some(p) = hash_pick {
+                    self.scratch_hashes.push(crate::wire::HashEntry::Chunk {
+                        coord: p.coord,
+                        hash: crate::integrity::chunk_hash(store, p.coord),
+                    });
+                }
+            }
+        }
+        if scope_due {
+            self.scratch_hashes.push(crate::wire::HashEntry::Global {
+                hash: crate::integrity::global_hash(store),
+            });
+            if store.player(slot.player).is_ok() {
+                self.scratch_hashes.push(crate::wire::HashEntry::OwnPlayer {
+                    hash: crate::integrity::player_hash(store, slot.player),
+                });
+            }
+        }
+
         // -- Nothing to say? ---------------------------------------------------------------------
         let mut build = true;
         // docs/plan/28-sessions-and-reconnect.md step 4 (0010 Rates: "a heartbeat frame at least
@@ -2057,6 +2262,8 @@ impl<G: Game> Host<G> {
         // "no sections = heartbeat"). No new wire shape, no new `Instance` method: `sim_build_frame`
         // simply returns a real (if minimal) length instead of `0` on a tick where one is due.
         if !first
+            && !resend
+            && self.scratch_hashes.is_empty()
             && !want_roster
             && !want_global_value
             && !player_changed
@@ -2153,6 +2360,14 @@ impl<G: Game> Host<G> {
                     write_presence_flat::<G>(s, presence_ops);
                 });
             }
+            if !self.scratch_hashes.is_empty() {
+                let entries = &self.scratch_hashes;
+                fw.section(SectionId::Hashes, |s| {
+                    for &e in entries {
+                        crate::wire::write_hash_entry(s, e);
+                    }
+                });
+            }
             // docs/plan/28b-reconnect-and-lifecycle.md step 5: `SectionId::ChunkKeeps` = 11, the
             // highest id (`FrameWriter::section`'s own strictly-ascending requirement) -- written last,
             // after `Presence` (8). Same coordinate-list shape `ChunkEnterPristine`/`ChunkLeaves`
@@ -2205,6 +2420,20 @@ impl<G: Game> Host<G> {
             slot.pace.overflow_shift += 1;
         }
         if build && !overflowed {
+            if let Some(p) = hash_pick {
+                slot.hashes.commit(hash_tick, p);
+            }
+            if hash_all {
+                for e in &self.scratch_hashes {
+                    if let crate::wire::HashEntry::Chunk { coord, .. } = e {
+                        slot.hashes.commit_all(hash_tick, *coord);
+                    }
+                }
+            }
+            if scope_due {
+                slot.hashes.commit_scopes(hash_tick, hash_hz);
+            }
+            slot.hashes.resend_scopes = false;
             slot.pace.overflow_shift = 0;
             slot.counters.frames += 1;
             slot.counters.chunk_enters_pristine += self.scratch_pristine.len() as u64;
@@ -2504,6 +2733,14 @@ where
             pending_records: Vec::new(),
             last_superseded: None,
             chunk_versions: BTreeMap::new(),
+            hash_mode: match cfg.hash_mode.as_deref() {
+                Some("off") => hashes::HashMode::Off,
+                Some("all") => hashes::HashMode::All,
+                _ => hashes::HashMode::Production,
+            },
+            desyncs: crate::integrity::DesyncLog::default(),
+            scratch_hashes: Vec::new(),
+            scratch_eligible: Vec::new(),
             last_tick: Tick(0),
             scratch_roster: Vec::new(),
             scratch_entered: Vec::new(),
@@ -3506,6 +3743,21 @@ where
     /// `cap_evictions`, `late_visible_max`, `late_visible_p95`, `degrade_level`, `dropped_visible`,
     /// `queued_enters`, `bucket_tokens` (`i32`), `held_chunks`, `collapses`, `bundles`,
     /// `max_emit_gap`, `order_violations`, `rate_limited`, `camera_reports_dropped` -- 64 bytes, all zero for an unknown conn.
+    fn sim_desync(&mut self, index: u32, result: &mut [u8]) -> Status {
+        let Some(out) = result.get_mut(..40) else {
+            return Status::BadLength;
+        };
+        self.desyncs.write_result(index, out);
+        Status::Ok
+    }
+
+    fn sim_skip_delta(&mut self, conn: u32, coord: u32) -> Status {
+        let cx = (coord & 0xFFFF) as u16 as i16 as i32;
+        let cy = (coord >> 16) as u16 as i16 as i32;
+        self.skip_delta(conn, ChunkCoord::new(cx, cy));
+        Status::Ok
+    }
+
     fn sim_pacing_counters(&mut self, conn: u32, result: &mut [u8]) -> Status {
         let Some(out) = result.get_mut(..64) else {
             return Status::BadLength;

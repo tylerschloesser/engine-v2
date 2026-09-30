@@ -24,6 +24,8 @@ mod codec;
 mod connection_and_subscriptions;
 #[path = "main/gen_queue.rs"]
 mod gen_queue;
+#[path = "main/integrity.rs"]
+mod integrity;
 #[path = "main/module_layering.rs"]
 mod module_layering;
 #[path = "main/state_budget.rs"]

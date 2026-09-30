@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 34
+export const ABI_VERSION = 35
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -226,6 +226,20 @@ export const ABI_EXPORTS = {
   // queued_enters, bucket_tokens (i32), held_chunks, collapses, bundles, max_emit_gap,
   // order_violations, rate_limited, camera_reports_dropped`.
   sim_pacing_counters: { role: 'sim', params: 1, result: 'status' },
+  // docs/plan/31b-desync-hashes.md (`ABI_VERSION` 34 -> 35), `engine/test` only: the sim role's
+  // desync report ring, one report per call: 40 LE bytes into `Result`, `count u32` (total ever),
+  // `retained u32`, then the `index`th retained report (oldest first): `tick u32`, `scope u32`
+  // (0 Chunk, 1 Global, 2 OwnPlayer), `cx i32`, `cy i32`, `host_hash u64`, `client_hash u64`.
+  sim_desync: { role: 'sim', params: 1, result: 'status' },
+  // Same layout for the client role's own ring.
+  client_desync: { role: 'client', params: 1, result: 'status' },
+  // Fault injection, `engine/test` only: the next frame for `conn` drops one delta of the chunk
+  // packed in the second argument, `(cx as i16 as u16) | ((cy as i16 as u16) << 16)` (the loader
+  // has no three-argument call).
+  sim_skip_delta: { role: 'sim', params: 2, result: 'status' },
+  // Fault injection, `engine/test` only: flips one replica byte of the held chunk (cx, cy);
+  // `Status.NotCached` when it is not held.
+  client_corrupt_chunk: { role: 'client', params: 2, result: 'status' },
   // docs/plan/16-action-round-trip.md: parses one action-ring record (`[seq u32 LE][len u32
   // LE][UTF-8 JSON]`) out of `len` bytes of `RegionId.Rx` (shared with `on_input`'s own,
   // differently-shaped records) into the game's `Action`, queues it for the next uplink batch.

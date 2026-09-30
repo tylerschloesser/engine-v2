@@ -694,6 +694,42 @@ pub fn sim_pacing_counters<T: Instance>(slot: &Slot<T>, conn: u32) -> Status {
     rt.inst.sim_pacing_counters(conn, result)
 }
 
+/// `sim_desync(index) -> status`: `Instance::sim_desync`, into `Result`. `engine/test`-only.
+pub fn sim_desync<T: Instance>(slot: &Slot<T>, index: u32) -> Status {
+    let rt = match slot.sim() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.sim_desync(index, result)
+}
+
+/// `client_desync(index) -> status`: `Instance::client_desync`, into `Result`. `engine/test`-only.
+pub fn client_desync<T: Instance>(slot: &Slot<T>, index: u32) -> Status {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.client_desync(index, result)
+}
+
+/// `sim_skip_delta(conn, coord) -> status`: `Instance::sim_skip_delta`. `engine/test`-only.
+pub fn sim_skip_delta<T: Instance>(slot: &Slot<T>, conn: u32, coord: u32) -> Status {
+    match slot.sim() {
+        Ok(rt) => rt.inst.sim_skip_delta(conn, coord),
+        Err(status) => status,
+    }
+}
+
+/// `client_corrupt_chunk(cx, cy) -> status`: `Instance::client_corrupt_chunk`. `engine/test`-only.
+pub fn client_corrupt_chunk<T: Instance>(slot: &Slot<T>, cx: u32, cy: u32) -> Status {
+    match slot.client() {
+        Ok(rt) => rt.inst.client_corrupt_chunk(cx, cy),
+        Err(status) => status,
+    }
+}
+
 /// `drawlist_len() -> u32`: `Instance::drawlist_len`'s own "always answer, cost nothing" shape --
 /// `0` on a wrong role (docs/plan/17-drawlist-and-sprites.md), not an error.
 pub fn drawlist_len<T: Instance>(slot: &Slot<T>) -> u32 {

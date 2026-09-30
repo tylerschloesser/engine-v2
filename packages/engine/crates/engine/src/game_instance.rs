@@ -1351,6 +1351,48 @@ where
         }
     }
 
+    fn sim_desync(&mut self, index: u32, result: &mut [u8]) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_desync(index, result),
+            _ => Status::WrongRole,
+        }
+    }
+
+    fn client_desync(&mut self, index: u32, result: &mut [u8]) -> Status {
+        match self {
+            GameInstance::Client(c) => {
+                let Some(out) = result.get_mut(..40) else {
+                    return Status::BadLength;
+                };
+                c.core.desyncs().write_result(index, out);
+                Status::Ok
+            }
+            _ => Status::Unsupported,
+        }
+    }
+
+    fn sim_skip_delta(&mut self, conn: u32, coord: u32) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_skip_delta(conn, coord),
+            _ => Status::WrongRole,
+        }
+    }
+
+    fn client_corrupt_chunk(&mut self, cx: u32, cy: u32) -> Status {
+        match self {
+            GameInstance::Client(c) => {
+                if c.core
+                    .debug_corrupt_chunk(crate::world::ChunkCoord::new(cx as i32, cy as i32))
+                {
+                    Status::Ok
+                } else {
+                    Status::NotCached
+                }
+            }
+            _ => Status::Unsupported,
+        }
+    }
+
     /// docs/plan/16-action-round-trip.md: `ClientCore::last_summary()`'s `tick`/`ack_seq`, two LE
     /// `u32` into `result` -- the client worker's own source for the clock block's
     /// `authoritative_tick`/`ack_seq` fields (`ticks_per_second`, `session_state` and `seq_seed`

@@ -30,6 +30,7 @@ pub mod bundle;
 pub mod coordlist;
 pub mod deltas;
 pub mod global;
+pub mod hashes;
 pub mod overlay_runs;
 pub mod presence;
 pub mod results;
@@ -43,6 +44,10 @@ pub use bundle::{BundleReader, bundle_overhead, write_bundle};
 pub use coordlist::{ChunkCoordListReader, ChunkCoordListWriter};
 pub use deltas::{EntityDeltaOp, EntityOp, read_chunk_deltas, write_chunk_deltas};
 pub use global::{read_global, read_own_player, write_global, write_own_player};
+pub use hashes::{
+    HashEntry, RESERVED_SCOPE_COORD, read_hashes, read_resync_chunk, write_hash_entry,
+    write_resync_chunk,
+};
 pub use overlay_runs::{OverlayRunsReader, OverlayRunsWriter};
 pub use presence::{PresenceDeltaOp, PresenceOp, read_presence, write_presence};
 pub use results::{ActionResultsReader, ActionResultsWriter};

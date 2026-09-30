@@ -415,6 +415,42 @@ impl<G: Game> Replica<G> {
         }
     }
 
+    /// The desync hash of one held chunk ([`crate::integrity::chunk_hash`]): the replica's own
+    /// state only, never the prediction overlay (that lives in `ClientCore`). `None` for a chunk
+    /// this replica does not hold. The host's counterpart is `Host::chunk_hash`.
+    pub fn chunk_hash(&self, coord: ChunkCoord) -> Option<u64> {
+        self.held
+            .contains_key(&coord)
+            .then(|| crate::integrity::chunk_hash(&self.store, coord))
+    }
+
+    /// The desync hash of this replica's `Global` value.
+    pub fn global_hash(&self) -> u64 {
+        crate::integrity::global_hash(&self.store)
+    }
+
+    /// The desync hash of this replica's own player state.
+    pub fn own_player_hash(&self) -> u64 {
+        crate::integrity::player_hash(&self.store, self.own_player)
+    }
+
+    /// Test fault injection (`client_corrupt_chunk`): rewrites tile index 0 of a held `chunk` to a
+    /// different value, changing exactly one replicated byte the host never sent. `false` when
+    /// the chunk is not held.
+    pub fn debug_corrupt_chunk(&mut self, chunk: ChunkCoord) -> bool {
+        if !self.held.contains_key(&chunk) {
+            return false;
+        }
+        let pos = self.dims.tile_at(chunk, 0);
+        let tile = self.store.terrain().tile(pos);
+        let _ = self
+            .store
+            .terrain_mut()
+            .set_tile(pos, tile.with_aux(tile.aux() ^ 1));
+        self.dirty.push(DirtyEvent::Whole(chunk));
+        true
+    }
+
     /// M05 state hash over `encode_chunk_snapshot` of each held chunk (ordered by coord, the
     /// ordering key only -- not part of the hashed bytes, M14 Deviations), plus `Global` and
     /// `OwnPlayer` (docs/plan/15-connection-and-subscriptions.md Scope "region_hash"). Matches

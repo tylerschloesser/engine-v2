@@ -12,6 +12,7 @@
 
 use crate::clock::{HostClock, LeadEstimator};
 use crate::game::Game;
+use crate::integrity::{DesyncLog, DesyncReport, DesyncScope, RESERVED_SCOPE_COORD};
 use crate::interp::InterpDelay;
 use crate::predict::{Overlay, OverlayDiff, Pending, PendingQueue, Prediction};
 use crate::sim::{Applied, Rejected};
@@ -20,7 +21,7 @@ use crate::wire::{
     ActionResultsReader, ChunkCoordListReader, SectionId, SnapshotReader, UplinkWriter, WireError,
     read_chunk_deltas, read_global, read_own_player,
 };
-use crate::wire::{CameraReport, FrameReader};
+use crate::wire::{CameraReport, FrameReader, HashEntry};
 use crate::world::{ChunkCoord, ChunkRect, Tile, TileRect};
 use crate::world_access::{WorldRead, chunk_of};
 use crate::{bytes::ByteReader, bytes::SliceSink, wire::EntityDeltaOp};
@@ -217,7 +218,28 @@ pub struct ClientCore<G: Game> {
     /// changed; a same-epoch Welcome on a *fresh* connection, this milestone's own resume-hint
     /// round trip, must not wipe what the resume hint just told the host it could keep).
     epoch: u32,
+    /// docs/plan/31b-desync-hashes.md: this replica's desync reports (`Hashes` mismatches), a ring
+    /// of the last 16 plus a counter.
+    desyncs: DesyncLog,
+    /// `ResyncChunk` requests owed to (or awaiting an answer from) the host, one per chunk or the
+    /// reserved scope coordinate: see [`ResyncRequest`]. Bounded by [`MAX_RESYNC_REQUESTS`].
+    resyncs: Vec<ResyncRequest>,
 }
+
+/// One outstanding `ResyncChunk` (docs/plan/31b-desync-hashes.md). `coord` is
+/// [`RESERVED_SCOPE_COORD`] for the `Global` + `OwnPlayer` scopes. Removed when the answer lands (a
+/// snapshot of that chunk, a leave, or an `OwnPlayer` section for the reserved coordinate) and
+/// re-armed by a later mismatch once `5 s` of ticks have passed without one.
+#[derive(Clone, Copy, Debug)]
+struct ResyncRequest {
+    coord: ChunkCoord,
+    /// The frame tick of the mismatch that raised (or last re-armed) it.
+    tick: u32,
+    sent: bool,
+}
+
+/// Most requests in flight at once (`view.maxChunks` is 128 by default, plus the reserved one).
+const MAX_RESYNC_REQUESTS: usize = 256;
 
 impl<G: Game> ClientCore<G> {
     pub fn new(replica: Replica<G>) -> Self {
@@ -272,6 +294,8 @@ impl<G: Game> ClientCore<G> {
             last_tick_fraction: 0.0,
             predict_applied_ever: 0,
             epoch: 0,
+            desyncs: DesyncLog::default(),
+            resyncs: Vec::with_capacity(16),
         }
     }
 
@@ -419,6 +443,7 @@ impl<G: Game> ClientCore<G> {
             self.replica.apply_leave(chunk);
         }
         self.overlay.clear();
+        self.resyncs.clear();
         self.rebase_interp();
     }
 
@@ -674,6 +699,57 @@ impl<G: Game> ClientCore<G> {
         self.replica.region_hash()
     }
 
+    /// This client's desync reports (docs/plan/31b-desync-hashes.md).
+    pub fn desyncs(&self) -> &DesyncLog {
+        &self.desyncs
+    }
+
+    /// Test fault injection (`client_corrupt_chunk`): flips one replica byte of a held chunk.
+    pub fn debug_corrupt_chunk(&mut self, chunk: ChunkCoord) -> bool {
+        self.replica.debug_corrupt_chunk(chunk)
+    }
+
+    /// Records one `Hashes` mismatch (a report every time) and, unless a request for `coord` is
+    /// already in flight, queues a `ResyncChunk` for the next [`Self::poll_uplink`].
+    fn note_desync(
+        desyncs: &mut DesyncLog,
+        resyncs: &mut Vec<ResyncRequest>,
+        tick: u32,
+        scope: DesyncScope,
+        coord: ChunkCoord,
+        host_hash: u64,
+        client_hash: u64,
+    ) {
+        desyncs.record(
+            "client",
+            DesyncReport {
+                tick,
+                scope,
+                coord,
+                host_hash,
+                client_hash,
+            },
+        );
+        let retry_after = G::TICK_RATE.hz_value().saturating_mul(5);
+        match resyncs.iter_mut().find(|r| r.coord == coord) {
+            Some(r) => {
+                if r.sent && tick.wrapping_sub(r.tick) >= retry_after {
+                    r.sent = false;
+                    r.tick = tick;
+                }
+            }
+            None => {
+                if resyncs.len() < MAX_RESYNC_REQUESTS {
+                    resyncs.push(ResyncRequest {
+                        coord,
+                        tick,
+                        sent: false,
+                    });
+                }
+            }
+        }
+    }
+
     /// Records the latest camera state (0010 "Camera report"). Queues an uplink send only when it
     /// differs from the last one queued/sent -- "sent when the tile-quantized rectangle or
     /// velocity changes, with a leading-edge send when motion starts and a trailing send at rest".
@@ -786,6 +862,16 @@ impl<G: Game> ClientCore<G> {
     /// tick plus the network", does not have a 50 ms pacing floor to spend), and every queued
     /// action goes out in the very next batch, whichever tick it is polled on.
     pub fn poll_uplink(&mut self, t_ms: u32, out: &mut [u8]) -> usize {
+        // docs/plan/31b-desync-hashes.md: a owed `ResyncChunk` goes out alone, ahead of and outside
+        // the batch pacing below (one per call; the next call sends the next or the batch).
+        if let Some(i) = self.resyncs.iter().position(|r| !r.sent) {
+            let mut sink = SliceSink::new(out);
+            crate::wire::write_resync_chunk(&mut sink, self.resyncs[i].coord);
+            if let Ok(n) = sink.finish() {
+                self.resyncs[i].sent = true;
+                return n;
+            }
+        }
         let has_actions = !self.outbox.is_empty();
         let presence_due = self.presence_due(t_ms);
         let camera_due = self.camera_due(t_ms);
@@ -959,7 +1045,10 @@ impl<G: Game> ClientCore<G> {
                 SectionId::Presence => {
                     crate::wire::read_presence::<G>(&mut br, |_| {})?;
                 }
-                SectionId::Hashes | SectionId::ChunkTiles => {} // Non-scope bodies (opaque here)
+                SectionId::Hashes => {
+                    crate::wire::read_hashes(&mut br, |_| {})?;
+                }
+                SectionId::ChunkTiles => {} // Non-scope body (opaque here)
             }
         }
         Ok(())
@@ -998,6 +1087,8 @@ impl<G: Game> ClientCore<G> {
                 SectionId::OwnPlayer => {
                     let (who, state) = read_own_player::<G>(&mut br).expect("validated");
                     self.replica.apply_own_player(who, state);
+                    // The host's answer to a `Global`/`OwnPlayer` resync carries both scopes.
+                    self.resyncs.retain(|r| r.coord != RESERVED_SCOPE_COORD);
                 }
                 SectionId::ChunkEnterPristine => {
                     let mut cr = ChunkCoordListReader::new();
@@ -1036,6 +1127,7 @@ impl<G: Game> ClientCore<G> {
                             .drop_unnamed_entities(chunk, &self.scratch_snapshot_ids);
                         self.replica
                             .apply_snapshot_overlay(chunk, version, &self.scratch_tiles);
+                        self.resyncs.retain(|r| r.coord != chunk);
                         summary.chunk_snapshots += 1;
                     }
                 }
@@ -1044,6 +1136,7 @@ impl<G: Game> ClientCore<G> {
                     while !br.rest().is_empty() {
                         let c = cr.read(&mut br).expect("validated");
                         self.replica.apply_leave(c);
+                        self.resyncs.retain(|r| r.coord != c);
                         summary.chunk_leaves += 1;
                     }
                 }
@@ -1109,7 +1202,64 @@ impl<G: Game> ClientCore<G> {
                     })
                     .expect("validated");
                 }
-                SectionId::Hashes | SectionId::ChunkTiles | SectionId::ChunkKeeps => {} // Non-scope bodies
+                SectionId::Hashes => {
+                    // Right after this frame's own sections up to here, against the replica alone
+                    // (the prediction overlay is rebuilt after `apply` and never hashed).
+                    let ClientCore {
+                        replica,
+                        desyncs,
+                        resyncs,
+                        ..
+                    } = self;
+                    let tick = header.tick;
+                    crate::wire::read_hashes(&mut br, |entry| match entry {
+                        HashEntry::Chunk { coord, hash } => {
+                            if let Some(mine) = replica.chunk_hash(coord)
+                                && mine != hash
+                            {
+                                Self::note_desync(
+                                    desyncs,
+                                    resyncs,
+                                    tick,
+                                    DesyncScope::Chunk,
+                                    coord,
+                                    hash,
+                                    mine,
+                                );
+                            }
+                        }
+                        HashEntry::Global { hash } => {
+                            let mine = replica.global_hash();
+                            if mine != hash {
+                                Self::note_desync(
+                                    desyncs,
+                                    resyncs,
+                                    tick,
+                                    DesyncScope::Global,
+                                    RESERVED_SCOPE_COORD,
+                                    hash,
+                                    mine,
+                                );
+                            }
+                        }
+                        HashEntry::OwnPlayer { hash } => {
+                            let mine = replica.own_player_hash();
+                            if mine != hash {
+                                Self::note_desync(
+                                    desyncs,
+                                    resyncs,
+                                    tick,
+                                    DesyncScope::OwnPlayer,
+                                    RESERVED_SCOPE_COORD,
+                                    hash,
+                                    mine,
+                                );
+                            }
+                        }
+                    })
+                    .expect("validated");
+                }
+                SectionId::ChunkTiles | SectionId::ChunkKeeps => {} // Non-scope bodies
             }
         }
         summary
