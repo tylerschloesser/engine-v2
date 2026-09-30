@@ -23,7 +23,7 @@ M34b and M34c keep the test columns true (here and in the `reference-game.md` ta
 | Global scope: engine roster + `put_global` (0011) | coloured roster dots | play | 34 |
 | `SimRng` and its snapshot (0002, 0003) | colour picked with `w.rng()` on join | play | 34 |
 | Multi-tile entity, prototypes, occupancy, `entity_at` (0007) | 2x2 furnace | play | 33 |
-| `WorldWrite::despawn`, `EntityGone`, prediction tombstones, occupancy release (0007, 0012, ADR 0022 §7) | pick up an empty furnace (Requirement added 2026-09-19, R3): predicted despawn, tiles buildable again, a second player's open panel closes on `EntityGone` | play + scripted | 33b, 34b, 34c |
+| `WorldWrite::despawn`, `EntityGone`, prediction tombstones, occupancy release (0007, 0012, ADR 0022 §7) | pick up an empty furnace (Requirement added 2026-09-19, R3): predicted despawn, tiles buildable again, a second player's open panel closes on `EntityGone` (`pickup_empty_despawns_and_returns_item`, `predicted_pickup_tombstone_then_ack`, `pickup_sends_entity_gone_and_closes_other_panel`; browser `reference_furnace_pick_up`) | play + scripted | 33b, 34b, 34c |
 | Furnace across a chunk border, partial subscription (0003 list) | scripted placement at a chunk corner | scripted | 33, 34c |
 | Timer wheel, sleep/wake, O(active) tick (0007) | smelting; idle furnaces cost nothing | play | 33b |
 | Off-screen state keeps simulating (0003 list) | furnace smelts while unsubscribed | scripted | 34b |
