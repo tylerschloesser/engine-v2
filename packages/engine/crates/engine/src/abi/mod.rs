@@ -683,6 +683,17 @@ pub fn sim_conn_counters<T: Instance>(slot: &Slot<T>, conn: u32) -> Status {
     rt.inst.sim_conn_counters(conn, result)
 }
 
+/// `sim_pacing_counters(conn) -> status`: `Instance::sim_pacing_counters`, into `Result`.
+/// `engine/test`-only (`harness.counters(i)`).
+pub fn sim_pacing_counters<T: Instance>(slot: &Slot<T>, conn: u32) -> Status {
+    let rt = match slot.sim() {
+        Ok(rt) => rt,
+        Err(status) => return status,
+    };
+    let result = rt.layout.bytes_mut(RegionId::Result);
+    rt.inst.sim_pacing_counters(conn, result)
+}
+
 /// `drawlist_len() -> u32`: `Instance::drawlist_len`'s own "always answer, cost nothing" shape --
 /// `0` on a wrong role (docs/plan/17-drawlist-and-sprites.md), not an error.
 pub fn drawlist_len<T: Instance>(slot: &Slot<T>) -> u32 {

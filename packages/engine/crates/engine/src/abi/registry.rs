@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 33;
+pub const ABI_VERSION: u32 = 34;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -489,6 +489,13 @@ pub trait Instance: Sized + 'static {
     /// docs/plan/19-presence-channel.md steps 4-6: widened to 56 bytes, a 7th `u64`
     /// (`presence_bytes_up`) -- `engine/test`'s `netCounters`' own `uplinkPresenceBytes`.
     fn sim_conn_counters(&mut self, _conn: u32, _result: &mut [u8]) -> Status {
+        Status::Unsupported
+    }
+
+    /// docs/plan/31-rates-and-integrity.md (`ABI_VERSION` 33 -> 34), `engine/test` only: `host::
+    /// PacingCounters` for `conn`, fourteen little-endian `u32`s (56 bytes) into `Result`, in the
+    /// order `Host::sim_pacing_counters` documents. An unknown `conn` writes zeros and returns `Ok`.
+    fn sim_pacing_counters(&mut self, _conn: u32, _result: &mut [u8]) -> Status {
         Status::Unsupported
     }
 
@@ -1063,6 +1070,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn sim_conn_counters(conn: u32) -> u32 {
             $crate::abi::sim_conn_counters(&__ENGINE_SLOT, conn) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_pacing_counters(conn: u32) -> u32 {
+            $crate::abi::sim_pacing_counters(&__ENGINE_SLOT, conn) as u32
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn on_action(len: u32) -> u32 {

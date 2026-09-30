@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 33
+export const ABI_VERSION = 34
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -220,6 +220,12 @@ export const ABI_EXPORTS = {
   // `bytes_down, frames, chunk_enters_pristine, chunk_snapshots, chunk_leaves, bytes_up,
   // presence_bytes_up` -- docs/plan/19-presence-channel.md steps 4-6 appended the 7th field).
   sim_conn_counters: { role: 'sim', params: 1, result: 'status' },
+  // docs/plan/31-rates-and-integrity.md (`ABI_VERSION` 33 -> 34), `engine/test` only: `host::
+  // PacingCounters` for `conn`, fourteen LE `u32`s (56 bytes) into `Result`: `reenters_within_5s,
+  // reenter_bytes, cap_evictions, late_visible_max, late_visible_p95, degrade_level, degraded_ticks,
+  // queued_enters, bucket_tokens (i32), held_chunks, collapses, bundles, max_emit_gap,
+  // order_violations`.
+  sim_pacing_counters: { role: 'sim', params: 1, result: 'status' },
   // docs/plan/16-action-round-trip.md: parses one action-ring record (`[seq u32 LE][len u32
   // LE][UTF-8 JSON]`) out of `len` bytes of `RegionId.Rx` (shared with `on_input`'s own,
   // differently-shaped records) into the game's `Action`, queues it for the next uplink batch.

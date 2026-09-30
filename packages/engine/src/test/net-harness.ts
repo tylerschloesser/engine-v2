@@ -247,8 +247,8 @@ export interface NetHarnessCounters {
   chunkLeaves: number
   /** Most downlink bytes any 1 s span of virtual time carried (`net.hardCeilingBytesPerS`'s input). */
   worstSecondBytesDown: number
-  /** The host's own per-connection pacing counters (`host/pacing.rs`, read through the pacing page
-   * of `sim_conn_counters`), current values at the time of the call: enters of a chunk that left
+  /** The host's own per-connection pacing counters (`host/pacing.rs`, read through
+   * `sim_pacing_counters`), current values at the time of the call: enters of a chunk that left
    * under 5 s before (`reentersWithin5s`, and their bucket bytes `reenterBytes`), subscription
    * evictions over the 128-chunk cap, ticks from a chunk becoming visible to its enter being sent
    * (max and p95 over all sent), the degrade level (1, 2 or 4 ticks per message) and ticks spent
@@ -819,7 +819,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     }
   }
 
-  /** `sim_conn_counters`' pacing page (`host/mod.rs` `PACING_PAGE`): fourteen LE `u32`s. */
+  /** `sim_pacing_counters`: fourteen LE `u32`s. */
   function readPacing(connId: number) {
     const zero = {
       reentersWithin5s: 0,
@@ -840,7 +840,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     const inst = serverInternals(server).rawInstance
     const region = inst?.region(RegionId.Result)
     if (!inst || !region) return zero
-    const status = inst.call1(inst.x.sim_conn_counters, (connId | 0x8000_0000) >>> 0)
+    const status = inst.call1(inst.x.sim_pacing_counters, connId)
     if (status !== 0) return zero
     const v = new DataView(region.u8.buffer, region.u8.byteOffset, 56)
     return {

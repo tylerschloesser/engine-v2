@@ -224,9 +224,6 @@ const GENESIS_BASE_TICK: u32 = 0xFFFF_FFFF;
 /// `build_frame`'s own doc comment has the mechanism.
 const HEARTBEAT_MS: u32 = 500;
 
-/// `sim_conn_counters`' pacing page selector (top bit of `conn`).
-pub const PACING_PAGE: u32 = 0x8000_0000;
-
 /// The `game` value of `InstanceConfig` (0009 `WorldConfig.params` plus the host-only
 /// `cacheChunks` knob), read once by `Host::init` and held until `sim_genesis` consumes the
 /// world-params half of it. `seed`/`params` are 0008's (shared with the `gen`/`client` roles of
@@ -3390,39 +3387,6 @@ where
     /// `netCounters`' own `uplinkPresenceBytes`. `presence_oversize` (added step 3) still has no
     /// ABI reader: nothing in this milestone's own exit criteria needs it from a browser test.
     fn sim_conn_counters(&mut self, conn: u32, result: &mut [u8]) -> Status {
-        // docs/plan/31-rates-and-integrity.md: `conn` with the top bit set selects the *pacing
-        // page* of the same export (no new ABI row): fourteen little-endian `u32`s, in order
-        // `reenters_within_5s`, `reenter_bytes`, `cap_evictions`, `late_visible_max`,
-        // `late_visible_p95`, `degrade_level`, `degraded_ticks`, `queued_enters`, `bucket_tokens`
-        // (`i32`), `held_chunks`, `collapses`, `bundles`, `max_emit_gap`, `order_violations` -- 56 bytes, all zero for an unknown conn.
-        if conn & PACING_PAGE != 0 {
-            let Some(out) = result.get_mut(..56) else {
-                return Status::BadLength;
-            };
-            let c = self
-                .pacing_counters(conn & !PACING_PAGE)
-                .unwrap_or_default();
-            let fields: [u32; 14] = [
-                c.reenters_within_5s as u32,
-                c.reenter_bytes as u32,
-                c.cap_evictions as u32,
-                c.late_visible_max as u32,
-                c.late_visible_p95 as u32,
-                c.degrade_level as u32,
-                c.degraded_ticks as u32,
-                c.queued_enters as u32,
-                c.bucket_tokens as i32 as u32,
-                c.held_chunks as u32,
-                c.collapses as u32,
-                c.bundles as u32,
-                c.max_emit_gap as u32,
-                c.order_violations as u32,
-            ];
-            for (i, f) in fields.iter().enumerate() {
-                out[i * 4..i * 4 + 4].copy_from_slice(&f.to_le_bytes());
-            }
-            return Status::Ok;
-        }
         let Some(out) = result.get_mut(..56) else {
             return Status::BadLength;
         };
@@ -3434,6 +3398,38 @@ where
         out[32..40].copy_from_slice(&c.chunk_leaves.to_le_bytes());
         out[40..48].copy_from_slice(&c.bytes_up.to_le_bytes());
         out[48..56].copy_from_slice(&c.presence_bytes_up.to_le_bytes());
+        Status::Ok
+    }
+
+    /// docs/plan/31-rates-and-integrity.md (`ABI_VERSION` 34): `PacingCounters` for `conn` as
+    /// fourteen little-endian `u32`s, in order `reenters_within_5s`, `reenter_bytes`,
+    /// `cap_evictions`, `late_visible_max`, `late_visible_p95`, `degrade_level`, `degraded_ticks`,
+    /// `queued_enters`, `bucket_tokens` (`i32`), `held_chunks`, `collapses`, `bundles`,
+    /// `max_emit_gap`, `order_violations` -- 56 bytes, all zero for an unknown conn.
+    fn sim_pacing_counters(&mut self, conn: u32, result: &mut [u8]) -> Status {
+        let Some(out) = result.get_mut(..56) else {
+            return Status::BadLength;
+        };
+        let c = self.pacing_counters(conn).unwrap_or_default();
+        let fields: [u32; 14] = [
+            c.reenters_within_5s as u32,
+            c.reenter_bytes as u32,
+            c.cap_evictions as u32,
+            c.late_visible_max as u32,
+            c.late_visible_p95 as u32,
+            c.degrade_level as u32,
+            c.degraded_ticks as u32,
+            c.queued_enters as u32,
+            c.bucket_tokens as i32 as u32,
+            c.held_chunks as u32,
+            c.collapses as u32,
+            c.bundles as u32,
+            c.max_emit_gap as u32,
+            c.order_violations as u32,
+        ];
+        for (i, f) in fields.iter().enumerate() {
+            out[i * 4..i * 4 + 4].copy_from_slice(&f.to_le_bytes());
+        }
         Status::Ok
     }
 }

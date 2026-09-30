@@ -1344,6 +1344,13 @@ where
         }
     }
 
+    fn sim_pacing_counters(&mut self, conn: u32, result: &mut [u8]) -> Status {
+        match self {
+            GameInstance::Sim(h) => h.sim_pacing_counters(conn, result),
+            _ => Status::WrongRole,
+        }
+    }
+
     /// docs/plan/16-action-round-trip.md: `ClientCore::last_summary()`'s `tick`/`ack_seq`, two LE
     /// `u32` into `result` -- the client worker's own source for the clock block's
     /// `authoritative_tick`/`ack_seq` fields (`ticks_per_second`, `session_state` and `seq_seed`
