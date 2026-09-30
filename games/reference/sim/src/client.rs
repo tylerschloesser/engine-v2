@@ -459,9 +459,21 @@ impl ClientSide<RefGame> for RefClient {
         let target_vel = [camera.velocity[0] as f64, camera.velocity[1] as f64];
 
         if !self.initialized {
-            self.spring_pos = target;
-            self.spring_vel = target_vel;
             self.initialized = true;
+            if *presence != PlayerPresence::default() {
+                // `Welcome` seeded the presence passed in (`ClientCore::seed_presence`: the host
+                // kept this player's last sample, 0013): a returning player. Start the spring
+                // there and point the camera at it for this one frame (0019 section 1; the
+                // default `None` of every later frame releases it), instead of at the camera
+                // the page restored. A never-seen player has the default sample and takes the
+                // spawn rule of `src/spawn.ts`.
+                self.spring_pos = [presence.pos[0] as f64 / Q8, presence.pos[1] as f64 / Q8];
+                self.spring_vel = [presence.vel[0] as f64 / Q8, presence.vel[1] as f64 / Q8];
+                cx.follow(Some(presence.pos()));
+            } else {
+                self.spring_pos = target;
+                self.spring_vel = target_vel;
+            }
         } else {
             let dt = (cx.dt_ms() as f64 / 1000.0).max(0.0);
             let (nx, nvx) = spring_step(

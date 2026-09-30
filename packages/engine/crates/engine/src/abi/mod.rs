@@ -213,9 +213,21 @@ pub fn sim_resync<T: Instance>(slot: &Slot<T>, conn: u32, epoch: u32) -> i32 {
     }
 }
 
+/// `sim_detach(conn)`. docs/plan/34-reference-multiplayer.md (`ABI_VERSION` 37 -> 38): on success
+/// also writes the presence sample the detach removed into `Result` (LE `u32` length at offset 0,
+/// `0` = none, then that many bytes) -- widened in place, the same way `sim_attach`'s `Result` was.
 pub fn sim_detach<T: Instance>(slot: &Slot<T>, conn: u32) -> Status {
     match slot.sim() {
-        Ok(rt) => rt.inst.sim_detach(conn),
+        Ok(rt) => {
+            let status = rt.inst.sim_detach(conn);
+            if status == Status::Ok {
+                let result = rt.layout.bytes_mut(RegionId::Result);
+                let (len, bytes) = result.split_at_mut(4);
+                let n = rt.inst.sim_last_detached_presence(bytes) as u32;
+                len.copy_from_slice(&n.to_le_bytes());
+            }
+            status
+        }
         Err(status) => status,
     }
 }

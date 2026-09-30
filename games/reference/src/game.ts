@@ -32,6 +32,7 @@ import { createCraftUi } from './ui/craft.js'
 import { createFurnaceUi } from './ui/furnace.js'
 import { createInventoryUi } from './ui/inventory.js'
 import { createRosterUi } from './ui/roster.js'
+import { createStatusUi } from './ui/status.js'
 
 export type StartGameOptions = {
   canvas: HTMLCanvasElement
@@ -111,6 +112,10 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
   const collectUi = createCollectUi(client)
   const inventoryUi = createInventoryUi(document.body)
   const rosterUi = createRosterUi(document.body)
+  // M34: the link indicator (never fires for a local host).
+  const statusUi = createStatusUi(document.body)
+  client.onLink((e) => statusUi.onLink(e))
+  if (opts.host.kind === 'remote') statusUi.onLink({ state: 'connecting' }) // `onLink` starts at the first change
   const craftUi = createCraftUi(client)
   const buildUi = createBuildUi(client)
   const furnaceUi = createFurnaceUi(client)

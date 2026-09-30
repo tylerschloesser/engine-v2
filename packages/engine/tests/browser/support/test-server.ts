@@ -51,6 +51,12 @@ export interface StartTestServerOptions {
   manualTimer: boolean
   worldId?: string
   joinKey?: string
+  /** `WorldConfig.maxPlayers` (default 8, the host's own). */
+  maxPlayers?: number
+  /** `WorldConfig.params` (seed and game params): the default, `{ seed: '1', worldgen: null }`, is
+   * what a fixture with `Params = ()` needs; a game with real params (the reference game's
+   * `games/reference/world.json`, M34) passes its own. */
+  params?: WorldConfig['params']
   /** A fixed port instead of the default OS-assigned one (docs/plan/
    * 29-net-worker-and-reference-server.md, this cut's own step 5): `gc/multiplayer-topology`'s own
    * spec needs a URL it can bake into `zeroGcSuite`'s `path` *before* `test.beforeAll` ever runs
@@ -76,8 +82,9 @@ export async function startTestServer(opts: StartTestServerOptions): Promise<Tes
   const worldCfg: WorldConfig = {
     worldId: opts.worldId ?? 'mp-test',
     buildHash,
-    params: { seed: '1', worldgen: null },
+    params: opts.params ?? { seed: '1', worldgen: null },
     ...(opts.joinKey !== undefined ? { joinKey: opts.joinKey } : {}),
+    ...(opts.maxPlayers !== undefined ? { maxPlayers: opts.maxPlayers } : {}),
   }
   const host: HostServices = {
     wasm,

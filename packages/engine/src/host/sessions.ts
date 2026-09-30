@@ -25,6 +25,9 @@ export interface SessionTable {
    * bug: check `lookup` first). */
   create(hashHex: string, playerId: number): SessionEntry
   setLastPresence(hashHex: string, presenceHex: string | null): void
+  /** `setLastPresence` for the row holding `playerId` (a detach knows the player, not the secret's
+   * hash); a no-op for an id with no row. Does not persist: `save()` afterward. */
+  setLastPresenceOf(playerId: number, presenceHex: string | null): void
   /** The highest `playerId` ever recorded in this table, `0` if empty -- the caller's own starting
    * point for "next id is `max(table, sim) + 1`" (Planning decisions). */
   highestPlayerId(): number
@@ -34,7 +37,7 @@ export interface SessionTable {
   save(): Promise<void>
 }
 
-function hexEncode(bytes: Uint8Array): string {
+export function hexEncode(bytes: Uint8Array): string {
   let out = ''
   for (let i = 0; i < bytes.length; i++) {
     const b = bytes[i] as number
@@ -87,6 +90,12 @@ export async function loadSessionTable(storage: Storage, keys: WorldKeys): Promi
     setLastPresence(hashHex, presenceHex) {
       const entry = table[hashHex]
       if (entry) entry.lastPresenceHex = presenceHex
+    },
+    setLastPresenceOf(playerId, presenceHex) {
+      for (const key in table) {
+        const entry = table[key]
+        if (entry && entry.playerId === playerId) entry.lastPresenceHex = presenceHex
+      }
     },
     highestPlayerId() {
       let max = 0

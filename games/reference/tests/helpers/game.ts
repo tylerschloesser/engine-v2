@@ -13,8 +13,14 @@ declare global {
 }
 
 export type OpenGameOptions = {
-  /** Default `/index.html`. */
+  /** Default `/index.html`, or `/test.html` when `invite` is given. */
   path?: string
+  /**
+   * Play on a test server instead of a world of this page's own (`startReferenceServer`): the page
+   * is `/test.html?server=<ws url>#k=<joinKey>`, and `window.__serverTick` runs ticks on `server`.
+   * Two players need two browser contexts: the identity secret lives in `localStorage`.
+   */
+  invite?: { server: { url: string; stepTick(n?: number): void }; joinKey?: string }
 }
 
 /** `Ui`'s own shape, as `window.__uiState` (`test-entry.ts`) hands it back -- kept as a loose
@@ -71,6 +77,11 @@ declare global {
     __setCamera?: (x: number, y: number, tilesAcross: number) => Promise<void>
     __stepFrame?: (dtMs: number) => Promise<void>
     __stepTick?: (n: number) => Promise<void>
+    /** Remote pages: resolves once `Welcome` configured the client. */
+    __untilConfigured?: () => Promise<void>
+    __linkState?: () => string
+    /** Every circle of the newest DrawList, own and remote; `color` is packed `rgba` (byte 0 = r). */
+    __circles?: () => Array<{ x: number; y: number; color: number }>
     __uiState?: () => RefUiState | null
     __cameraState?: () => { x: number; y: number; tilesAcross: number }
     __tickCamera?: (dtMs: number) => void
@@ -225,7 +236,8 @@ export async function clickCollect(page: Page, tile: { x: number; y: number }): 
 }
 
 export async function openGame(page: Page, opts: OpenGameOptions = {}): Promise<void> {
-  const path = opts.path ?? '/index.html'
+  const { invite } = opts
+  const path = opts.path ?? (invite ? '/test.html' : '/index.html')
   page.on('pageerror', (error) => {
     expect(error.message, `${path}: page error`).toBe('')
   })
@@ -235,7 +247,13 @@ export async function openGame(page: Page, opts: OpenGameOptions = {}): Promise<
     }
   })
 
-  await page.goto(path)
+  if (invite) {
+    await page.exposeFunction('__serverTick', (n: number) => invite.server.stepTick(n))
+  }
+  const url = invite
+    ? `${path}?server=${encodeURIComponent(invite.server.url)}#k=${encodeURIComponent(invite.joinKey ?? '')}`
+    : path
+  await page.goto(url)
   await page.waitForFunction(() => window.__pageReady === true)
   const isolated = await page.evaluate(() => window.crossOriginIsolated)
   expect(isolated, `${path}: crossOriginIsolated`).toBe(true)

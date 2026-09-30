@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 37
+export const ABI_VERSION = 38
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -137,6 +137,9 @@ export const ABI_EXPORTS = {
   // docs/plan/28-sessions-and-reconnect.md: frees `conn`'s slot, same as `sim_disconnect` -- a
   // distinct export name so the handshake path (`sim_attach`) and its own teardown pair cleanly,
   // without retiring `sim_disconnect` (still real: native tests, `testkit::Loopback`, recovery).
+  // docs/plan/34-reference-multiplayer.md (`ABI_VERSION` 37 -> 38): on success also writes the
+  // presence sample the detach removed into `Result` (LE `u32` length at 0, `0` = none, then the
+  // bytes), for the session table's `lastPresenceHex` (0013). Params and result unchanged.
   sim_detach: { role: 'sim', params: 1, result: 'status' },
   // docs/plan/28-sessions-and-reconnect.md: `1`/`0`, whether this world's own `Store` already has
   // a player slot for `player` (not a `Status`: costs nothing, always answers, same shape as

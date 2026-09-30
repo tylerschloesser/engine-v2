@@ -568,6 +568,14 @@ where
         }
     }
 
+    /// docs/plan/34-reference-multiplayer.md.
+    fn sim_last_detached_presence(&self, out: &mut [u8]) -> usize {
+        match self {
+            GameInstance::Sim(h) => h.sim_last_detached_presence(out),
+            _ => 0,
+        }
+    }
+
     fn sim_tick(&mut self) -> Status {
         match self {
             GameInstance::Sim(h) => h.sim_tick(),

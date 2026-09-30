@@ -468,6 +468,10 @@ pub struct Host<G: Game> {
     /// calls to it, only overwritten by the next `attach()`, since `sim_attach` -> `sim_last_
     /// superseded` is always the caller's own immediate next call (`server.ts`'s `pumpHandshakes`).
     last_superseded: Option<ConnId>,
+    /// docs/plan/34-reference-multiplayer.md: the presence sample the most recent `disconnect`
+    /// removed, encoded (`G::Presence`'s codec), length `0` when it removed none. `sim_detach`
+    /// reports it (`sim_last_detached_presence`) so the session table can keep it (0013).
+    last_detached_presence: ([u8; crate::presence::MAX_ENCODED_BYTES], usize),
     /// Tick of each chunk's last replicated change (Scope: "Per-chunk version ... stored with the
     /// chunk on both sides"), global (not per connection): a chunk's version is a property of
     /// world state. Absent = never modified = version 0 (the same default a client replica uses
@@ -808,6 +812,7 @@ impl<G: Game> Host<G> {
             ever_joined: vec![false; MAX_CONNS],
             pending_records: Vec::new(),
             last_superseded: None,
+            last_detached_presence: ([0; crate::presence::MAX_ENCODED_BYTES], 0),
             chunk_versions: BTreeMap::new(),
             hash_mode: hashes::HashMode::Production,
             desyncs: crate::integrity::DesyncLog::default(),
@@ -1221,7 +1226,14 @@ impl<G: Game> Host<G> {
             Some(Some(slot)) => Some(slot.player),
             _ => None,
         };
+        self.last_detached_presence.1 = 0;
         if let Some(player) = player {
+            if let Some(entry) = self.presence.get(player) {
+                let mut buf = [0u8; crate::presence::MAX_ENCODED_BYTES];
+                if let Ok(n) = crate::codec::encode(&entry.sample, &mut buf) {
+                    self.last_detached_presence = (buf, n);
+                }
+            }
             self.presence.remove(player);
         }
         if let Some(slot) = self.conns.get_mut(idx) {
@@ -2751,6 +2763,7 @@ where
             ever_joined: vec![false; MAX_CONNS],
             pending_records: Vec::new(),
             last_superseded: None,
+            last_detached_presence: ([0; crate::presence::MAX_ENCODED_BYTES], 0),
             chunk_versions: BTreeMap::new(),
             hash_mode: match cfg.hash_mode.as_deref() {
                 Some("production") => hashes::HashMode::Production,
@@ -2914,6 +2927,17 @@ where
 
     fn sim_has_player(&mut self, player: u32) -> u32 {
         u32::from(self.has_player(PlayerId(player)))
+    }
+
+    fn sim_last_detached_presence(&self, out: &mut [u8]) -> usize {
+        let (buf, n) = &self.last_detached_presence;
+        match out.get_mut(..*n) {
+            Some(dst) => {
+                dst.copy_from_slice(&buf[..*n]);
+                *n
+            }
+            None => 0,
+        }
     }
 
     /// docs/plan/15b-ring-connection-and-replica-rendering.md: `sim_admit(conn, len)` -- `rx` (the

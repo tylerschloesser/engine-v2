@@ -1,10 +1,11 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": "src",
+    "rootDir": ".",
+    "resolveJsonModule": true,
     "noEmit": true,
     "lib": ["es2023", "dom"],
     "types": ["node", "engine/virtual", "vite/client", "@webgpu/types"]
   },
-  "include": ["src"]
+  "include": ["src", "world.json"]
 }

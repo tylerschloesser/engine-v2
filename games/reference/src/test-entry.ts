@@ -22,10 +22,12 @@ import {
   setCamera,
   stepFrame,
   stepTick,
+  untilConfigured,
 } from 'engine/test'
 import type { RefAction } from './bindings/RefAction.js'
 import type { RefUi } from './bindings/RefUi.js'
 import { startGame } from './game.js'
+import { selectHost } from './mode.js'
 
 declare global {
   interface Window {
@@ -116,6 +118,11 @@ declare global {
       x: number,
       y: number,
     ) => Promise<{ on: [number, number, number, number]; off: [number, number, number, number] }>
+    /** M34 (remote pages only): runs `n` ticks on the test's own server (`page.exposeFunction`). */
+    __serverTick?: (n: number) => Promise<void>
+    __untilConfigured?: () => Promise<void>
+    __linkState?: () => string
+    __circles?: () => Array<{ x: number; y: number; color: number }>
     __clock?: () => { authoritative: number; predicted: number; ticksPerSecond: number }
   }
 }
@@ -141,13 +148,16 @@ const clock = createManualClock()
 // this. Every other test on this page omits the query param and gets the real, unmodified world.
 const altSpawnParams = new URLSearchParams(location.search).has('altSpawnParams')
 
+// M34: `?server=<ws url>` plus an invite (`#k=<joinKey>`) makes this a remote page against a test
+// server on another port (`tests/helpers/server.ts`); without them it is the local page every
+// single-player spec drives. A remote page has no `test.game`: the world comes from `Welcome`.
+const serverUrl = new URLSearchParams(location.search).get('server') ?? undefined
+const host = selectHost(location, serverUrl)
+const remote = host.kind === 'remote'
+
 const { client, renderer, device, canvasFormat, drawables } = await startGame({
   canvas,
-  host: {
-    kind: 'local',
-    world: { worldId: 'reference', params: { seed: '6840143426475589698', worldgen: {} } },
-    connect: true,
-  },
+  host,
   test: {
     clock,
     flags: {},
@@ -169,7 +179,10 @@ lastUi<RefUi>(client)
 // `pumpUntilLive`, not a bare `await client.ready` (`engine/test`'s own doc comment): this page's
 // ticks are test-driven, so `client.ready` (which now also waits for a real host frame) only
 // resolves once something drives the sim -- `pumpUntilLive` does that itself.
-await pumpUntilLive(client)
+// A remote page has no sim worker to step: the test's own server ticks (`__serverTick`, below), and
+// its handshake completes across those ticks, so the page is "ready" once its workers are.
+if (remote) await client.ready
+else await pumpUntilLive(client)
 
 attachCameraInputTestHooks(client, clientTestHandle(client).cameraBundle)
 
@@ -203,10 +216,24 @@ setInterval(drainUploadsFully, 16)
 // `resumeWorkers` on an already-running client is a documented no-op, so calling it
 // unconditionally here is always safe.
 
+/**
+ * One stepped frame. A remote page also does what the real frame loop does around it: acquire the
+ * newest DrawList slot and run the camera (`client.camera.tick`), which is how a follow target the
+ * game set (`cx.follow`: the returning player's one frame) reaches the camera. Local pages keep the
+ * bare step their specs were written against.
+ */
+function step(dtMs: number): void {
+  stepFrame(client, dtMs)
+  if (remote) {
+    client.pick.acquire()
+    client.camera.tick(0)
+  }
+}
+
 window.__setCamera = async (x, y, tilesAcross) => {
   await resumeWorkers(client)
   setCamera(client, { x, y, tilesAcross })
-  stepFrame(client, 16)
+  step(16)
 }
 
 window.__cameraState = () => ({
@@ -221,7 +248,7 @@ window.__tickCamera = (dtMs) => {
 
 window.__stepFrame = async (dtMs) => {
   await resumeWorkers(client)
-  stepFrame(client, dtMs)
+  step(dtMs)
   // M20b step 3 (M18 Deviations: "a page must wire it through its own `onOverlay` hook once per
   // rAF"): `startGame`'s own `onOverlay` is wired into `real.loop`'s per-rAF phase list, but
   // nothing ever fires that loop on this page (step 0's own note: no `.frame()`/scheduler tick) --
@@ -232,7 +259,63 @@ window.__stepFrame = async (dtMs) => {
 
 window.__stepTick = async (n) => {
   await resumeWorkers(client)
-  await stepTick(client, n)
+  if (!remote) {
+    await stepTick(client, n)
+    return
+  }
+  // Remote: the server is the test's (manual timer, `tests/helpers/server.ts`), exposed to the page
+  // as `__serverTick`. One tick, one 50 ms frame at a time, so an action dispatched just before is
+  // uplinked (paced at 50 ms) while the ticks run; then wait for the last tick's frame to arrive.
+  const serverTick = window.__serverTick
+  if (!serverTick)
+    throw new Error('__stepTick: no __serverTick (the page was not opened by openGame)')
+  const t0 = client.clock().authoritative
+  for (let i = 0; i < n; i++) {
+    await serverTick(1)
+    step(50)
+  }
+  // A host holds frames while it paces a burst of chunk enters (0010 degrade), so the last tick's
+  // frame can lag by a few ticks: tick on until it arrives.
+  for (let spins = 0; client.clock().authoritative < t0 + n; spins++) {
+    if (spins > 400) throw new Error(`__stepTick: ${n} server ticks never arrived`)
+    await new Promise((r) => setTimeout(r, 1))
+    await serverTick(1)
+    step(50)
+  }
+}
+
+/** Remote pages: resolves once `Welcome` configured the client (its gen workers are up). The test
+ * ticks its server meanwhile (the handshake completes across host ticks). */
+window.__untilConfigured = async () => {
+  // A stepped frame per poll: the net worker's "link is up" notify is lost when the client worker has
+  // not reached its first wait yet, and only a fresh wake recovers it (`gc-multiplayer-topology.ts`).
+  let done = false
+  const configured = untilConfigured(client).then(() => {
+    done = true
+  })
+  while (!done) {
+    step(16)
+    await new Promise((r) => setTimeout(r, 0))
+  }
+  await configured
+}
+
+/** Remote pages: the last `client.onLink` state. */
+let linkState = 'connecting'
+client.onLink((e) => {
+  linkState = e.state
+})
+window.__linkState = () => linkState
+
+/** Every circle of the newest DrawList (own and remote): position and packed colour (`rgba`, byte
+ * 0 = r). Range rings are another kind. */
+window.__circles = () => {
+  drawListRecords(client, drawRecordsScratch)
+  const out: Array<{ x: number; y: number; color: number }> = []
+  for (const rec of drawRecordsScratch) {
+    if (rec.kind === KIND_CIRCLE) out.push({ x: rec.pos[0], y: rec.pos[1], color: rec.color })
+  }
+  return out
 }
 
 window.__dispatchStartCollect = (tileX, tileY, fromX, fromY) => {

@@ -6,6 +6,7 @@
 // (drives real Playwright gestures through `client.camera.tick()` with no real rAF), lives on
 // `test-entry.ts`/`test.html` instead.
 import { startGame } from './game.js'
+import { selectHost } from './mode.js'
 
 declare global {
   interface Window {
@@ -15,17 +16,10 @@ declare global {
 
 const canvas = document.getElementById('game') as HTMLCanvasElement
 
-const { client } = await startGame({
-  canvas,
-  host: {
-    kind: 'local',
-    // `6840143426475589698` = `0x5EED_1234_ABCD_0042` = `sim/tests/common/mod.rs::TEST_SEED`:
-    // the real page uses the same seed every native test does, so the landmark tiles this
-    // package's tests probe are the same ones a player actually sees.
-    world: { worldId: 'reference', params: { seed: '6840143426475589698', worldgen: {} } },
-    connect: true,
-  },
-})
+// `#k=<joinKey>` in the URL: play on the server this page came from (`/ws` on its own origin);
+// otherwise a world of this browser's own. The local world is `world.json` (the seed every native
+// test also uses, so the landmark tiles this package's tests probe are the ones a player sees).
+const { client } = await startGame({ canvas, host: selectHost(location) })
 await client.ready
 
 window.__pageReady = true

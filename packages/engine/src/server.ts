@@ -33,7 +33,13 @@ import {
   readProgressCursor,
   runPanicRecovery,
 } from './host/recovery.js'
-import { hashSecretHex, hexDecode, loadSessionTable, type SessionTable } from './host/sessions.js'
+import {
+  hashSecretHex,
+  hexDecode,
+  hexEncode,
+  loadSessionTable,
+  type SessionTable,
+} from './host/sessions.js'
 import type { EngineInstance } from './loader.js'
 import { instantiate } from './loader.js'
 import { readU32LE } from './sab/bytes.js'
@@ -252,6 +258,10 @@ export interface SimInstance {
   /** docs/plan/28-sessions-and-reconnect.md: frees `conn`'s slot (`sim_detach`, same effect as
    * `sim_disconnect`). `Status` (numeric); tolerates an unknown/already-freed `conn`. */
   simDetach(conn: number): number
+  /** docs/plan/34-reference-multiplayer.md (`ABI_VERSION` 38): the presence sample the `simDetach`
+   * just before removed with its connection (`G::Presence`'s codec bytes), `null` when it removed
+   * none. Valid only until the next call that touches `Result`. Optional: a test double may omit it. */
+  simDetachedPresence?(): Uint8Array | null
   /** docs/plan/28-sessions-and-reconnect.md: `1`/`0`, whether this world's own `Store` already has
    * a player slot for `player` (`sim_has_player`). */
   simHasPlayer(player: number): number
@@ -369,6 +379,12 @@ export function wrapEngineInstance(inst: EngineInstance): SimInstance {
       return { len: raw, bytes: txRegion.u8 }
     },
     simDetach: (conn) => inst.call1(inst.x.sim_detach, conn),
+    simDetachedPresence: () => {
+      const result = inst.region(RegionId.Result)
+      if (!result) return null
+      const n = readU32LE(result.u8, 0)
+      return n > 0 ? result.u8.slice(4, 4 + n) : null
+    },
     simHasPlayer: (player) => inst.call1(inst.x.sim_has_player, player),
   }
 }
@@ -681,6 +697,20 @@ export function createSimHostFromInstance(
   })
 
   // -- M28: the real handshake (docs/plan/28-sessions-and-reconnect.md) -----------------------
+  /** docs/plan/34-reference-multiplayer.md: frees `conn` (`sim_detach`) and keeps the presence
+   * sample that went with it in the session table (0013: "the last presence sample is kept in the
+   * host-side session table ... so a returning player resumes where they were"), which `Welcome`
+   * then echoes on the next attach. A tick-rate-irrelevant, human-rate event: the table is saved at
+   * once, unawaited (a lost write costs a returning player the camera restore, nothing else). */
+  function detachKeepingPresence(conn: number, playerId: number | undefined): void {
+    sim.simDetach(conn)
+    if (!handshake || playerId === undefined) return
+    const sample = sim.simDetachedPresence?.()
+    if (!sample) return
+    handshake.sessions.setLastPresenceOf(playerId, hexEncode(sample))
+    void handshake.sessions.save()
+  }
+
   // Per-connection handshake bookkeeping, only ever populated when `handshake` is given (Deviations
   // above: `worker/sim.ts`'s single-player topology never reaches any of this).
   const handshakeState = new Map<ConnId, HandshakeConnState>()
@@ -840,7 +870,7 @@ export function createSimHostFromInstance(
         // hot-paths.md`, a real regression found live).
         if (parseBye(bytes, len) === ByeReason.Leave) {
           lifecycle.playerLeft(entry.playerId)
-          sim.simDetach(entry.conn)
+          detachKeepingPresence(entry.conn, entry.playerId)
           conns[entry.conn] = null
           handshakeState.delete(entry.conn)
           return
@@ -1274,7 +1304,7 @@ export function createSimHostFromInstance(
           host.handshakeTrace(`close conn=${conn} code=${code} state=${state?.status ?? 'none'}`)
         }
         if (state?.status === 'settled') {
-          sim.simDetach(conn)
+          detachKeepingPresence(conn, state.playerId)
           // docs/plan/28b-reconnect-and-lifecycle.md step 4: an ungraceful close (no `Bye` --
           // `playerLeft`'s own `onMessage` branch already tore this connection down before any
           // `close`/`onClose` could reach here, so `state` is always still `'settled'` at this

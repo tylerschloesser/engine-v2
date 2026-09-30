@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 37;
+pub const ABI_VERSION: u32 = 38;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -294,6 +294,16 @@ pub trait Instance: Sized + 'static {
     /// widened, not a new wire shape, the same way `client_clock_stats` widened in place.
     fn sim_last_superseded(&self) -> u32 {
         u32::MAX
+    }
+
+    /// docs/plan/34-reference-multiplayer.md (`ABI_VERSION` 37 -> 38): the presence sample the most
+    /// recent `sim_detach` removed with its connection, `G::Presence`'s own codec bytes, copied into
+    /// `out`; returns their length, `0` for "none" (no sample, or nothing detached). `abi::mod::
+    /// sim_detach` reads it right after a successful call and writes it into `Result` (a LE `u32`
+    /// length, then the bytes): the host keeps it in the session table (0013: "the last presence
+    /// sample is kept ... so a returning player resumes where they were"), which nothing wrote before.
+    fn sim_last_detached_presence(&self, _out: &mut [u8]) -> usize {
+        0
     }
 
     fn sim_tick(&mut self) -> Status {
