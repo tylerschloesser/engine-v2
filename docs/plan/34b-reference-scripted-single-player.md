@@ -34,6 +34,7 @@ Multiplayer scripts and races (M34c). Heavy mode, soak, benchmarks, the standard
 ## Seams
 **Provides:** `buildGame({ features?: string[] })` (engine, `engine/vite`); `script.ts` with both drivers; `tests/golden/full-game.log` and its hashes (M36 heavy mode and M36b measurements consume them); cargo feature `test-hooks`; `golden:record` command.
 **Consumes:** everything M20–M34 provide; `HeadlessClient`, `createNetHarness`/memory storage, `VirtualClock` (M27); determinism page and golden regeneration pattern (M03, M05); `forceSnapshot`, `client.exportWorld`/`importWorld`, server `exportWorld`/`importWorld`, `EngineStartError` code `'world-busy'`, `client.onStorage` (M23); recovery, `Skip`, `EngineFault` (M24); `client.onResyncing` (M28b); `EngineStartError` code `'save-incompatible'` (M24b); state-budget check (M21); zero-GC harness (M04); `engine/test` input injection (M11), `drawListRecords` (M17), `untilQuiescent` (M06b).
+**From M34 (orchestrator):** `games/reference/src/ui/status.ts` (`createStatusUi`, `statusText`, `INDICATOR_DELAY_MS`) and `src/mode.ts::selectHost` exist; extend them. `games/reference/world.json` is the declared world; `ABI_VERSION` is 38 (`sim_detach` widened). `GlobalState` is an alias of `RefGlobal { colours }` (schema 5): a script's state hashes include it.
 
 ## Planning decisions
 - **One script, two drivers.** The DOM run proves the UI path; the headless run is fast, feeds the golden log, and is what M34c reuses. Their final hashes must match, which pins "the UI adds nothing the actions do not say".

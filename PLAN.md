@@ -86,7 +86,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 33d | `33d-bundle-results-and-sprite-picking.md` | action results survive a `FrameBundle`, sprites pickable, a viewport on stepped pages, `Loopback` uplinks carry the real ack | 33b | |
 | [x] | 33e | `33e-reference-first-ui-races.md` | the spawn camera move no longer undoes an earlier pan; reference helpers wait for the first `Ui` | 33d | |
 | [x] | 33f | `33f-client-world-config-from-welcome.md` | a remote client and its gen workers are configured from `Welcome`'s seed and params; no `test.game` on remote pages; ADR 0042 | 33e | |
-| [ ] | 34 | `34-reference-multiplayer.md` | roster, remote players, play through the reference server | 33b, 33d, 33e, 33f, 30, 31b | D |
+| [x] | 34 | `34-reference-multiplayer.md` | roster, remote players, play through the reference server | 33b, 33d, 33e, 33f, 30, 31b | D |
 | [ ] | 34b | `34b-reference-scripted-single-player.md` | scripted full game, golden log, persistence extras | 34, 23, 24b | T |
 | [ ] | 34c | `34c-reference-scripted-multiplayer.md` | scripted multiplayer races + reconnect in the netcode suite. **Reference game complete.** | 34b | |
 | [ ] | 35b | `35b-bun-and-deno-adapters.md` | Bun and Deno server adapters | 29 | |

@@ -1,6 +1,6 @@
 # M34: Reference game: roster, remote players, play through the reference server
 
-Status: not started · After: 33b, 33d, 33e, 33f, 30, 31b · Tyler-dependent: no
+Status: done · After: 33b, 33d, 33e, 33f, 30, 31b · Tyler-dependent: no
 
 Split during planning: the PLAN.md row for M34 also held the scripted full-game tests, which alone exceed one session. They are `34b-reference-scripted-single-player.md` and `34c-reference-scripted-multiplayer.md`. This brief makes the game multiplayer; those two prove the whole game.
 
@@ -62,10 +62,10 @@ Scripted full-game and race tests (M34b, M34c). Player names, chat, cursors. Any
 - Browser, two pages against `startReferenceServer`: `reference_two_players_see_each_other` (each page's DrawList holds two circles in distinct colours; two roster dots), `reference_shared_world` (A depletes a tile and places a furnace; B's texel and DrawList show both), `reference_returning_player_resumes` (close page A, reopen with the same storage state, camera within one tile of where it left).
 
 ## Exit criteria
-- [ ] All tests above pass by name.
+- [x] All tests above pass by name.
 - [ ] By hand: `pnpm --filter reference-server start`, two desktop browser windows on the invite link; circles move without stutter, a closed window's dot goes hollow after the grace.
-- [ ] Single-player still passes every earlier `reference_*` test.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Single-player still passes every earlier `reference_*` test.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test rust -t reference` · `pnpm test netcode -t reference_` · `pnpm test browser -t reference_two` · `pnpm --filter reference-server start` + `pnpm --filter reference dev`.
@@ -125,3 +125,5 @@ Steps 1-3 (commits `M34 step 1..3`, base `cd44372`).
 **By hand (`pnpm --filter reference-server start` + `vite preview` with `ENGINE_WS_PROXY_PORT=4174`, two `playwright-cli` sessions on `http://127.0.0.1:4173/#k=`, both killed after).** Both pages showed roster `1:true (me)`, `2:true` with colours `216,216,216` / `176,92,224` and a screenshot of page A held two overlapping circles (grey, purple rim); after B's window closed A's dots read `2:true` at 5 s and `2:false offline` at 13 s (grace 10 s). Not verified: circles moving "without stutter" (no way to judge in a screenshot; B's drag flung its camera out of A's view), a returning page resuming (an in-memory `playwright-cli` profile mints a new secret; covered by the browser test), and the own-timer check (collect and craft bars ending at the result) over a throttled link: no throttling was set up.
 
 **Not done / notes.** `hashesBytesPerS` busy-world figure above. The status indicator has no browser test. `games/reference/CLAUDE.md` is at 59 lines.
+
+**Orchestrator gate (M34 done).** Accepted: `sim_detach` returning the removed presence sample and `ABI_VERSION` 38 (without it `Welcome.presence` was always empty and the returning-player rule had nothing to seed; a defect fix, not a changed decision, so no ADR). Goldens moved by the step 3b roster bit and approved: `join_wilderness_frame.hex` (one byte, the online flag 00 -> 01), `golden-connected.json`, `golden-script-a.json` (native `script_a()` now logs `Connected` after each `Joined`, as `Host::connect` does; native = wasm = `805a6100f46e3701`). `reference_returning_player_resumes` failed 1 in 35 repeats at the gate with ui1's own roster entry absent (the first `Ui` can precede the frame carrying the roster); fixed in the test (`readOwnUi`: `pumpUntil` the own online entry), then 25/25. Repeats: netcode 30/30 quiet and 30/30 under `--load 10`; the three two-page tests 35 runs, then 25 after the fix. By-hand criterion: the hollow dot after the grace is evidenced (A read `2:true` at 5 s, `2:false offline` at 13 s after B closed); smooth motion and the throttled own-timer check were not verified and are under "Criteria awaiting Tyler" in `questions-for-tyler.md`.
