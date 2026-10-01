@@ -18,6 +18,7 @@
     "format": "pnpm exec biome check --write . && cargo fmt",
     "golden": "pnpm --silent --filter engine build && node --disable-warning=ExperimentalWarning packages/engine/scripts/golden.mjs",
     "golden:bytes": "node scripts/golden-bytes.mjs",
+    "bench:baseline": "node scripts/lib/bench-gate.mjs baseline",
     "bench:frame": "pnpm --silent --filter engine build && node packages/engine/scripts/build-fixtures.mjs && pnpm exec vite build --config packages/engine/tests/browser/pages/vite.config.ts && pnpm exec playwright test --config packages/engine/playwright.config.ts --project frame-bench"
   },
   "devDependencies": {
