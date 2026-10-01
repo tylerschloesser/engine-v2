@@ -656,6 +656,7 @@ export function createSimHostFromInstance(
   // `raiseFatal`. A fatal host runs no tick, writes no file (no snapshot on `stop()`/`pause()`) and
   // never starts again: a fixed build loads the last snapshot through the upgrade path.
   let fatal = false
+  let storageFatal = false
 
   // docs/plan/28b-reconnect-and-lifecycle.md step 2: the session epoch (0013/0005), loaded from
   // `persistence.epoch` when a `Persistence` is wired in (`ManifestV1.epoch`, reserved by M22),
@@ -934,7 +935,9 @@ export function createSimHostFromInstance(
    * connection, in `ConnId` order. No clock read here any more (Deviations): a tick's own overrun
    * is no longer measured individually. */
   function runOneTick(): void {
-    if (fatal) return
+    // A fatal host runs no tick. A storage failure is the exception: a manual driver that still
+    // steps gets `Persistence`'s own "a previous storage error is fatal" throw (M22's contract).
+    if (fatal && !storageFatal) return
     // docs/plan/28-sessions-and-reconnect.md Planning decisions "Async digest, deterministic
     // order": consumed at *this* tick boundary, before anything else -- an attach's own
     // `Joined`/`Connected` records must reach `pending_records` before `sim.simTick()` drains it
@@ -1103,6 +1106,7 @@ export function createSimHostFromInstance(
   // refuses further writes, this makes the host stop and say so.
   if (persistence) {
     persistence.onStorageError = (err) => {
+      storageFatal = true
       raiseFatal({
         tick: counters.ticksRun,
         message: `storage error: ${err instanceof Error ? err.message : String(err)}`,
