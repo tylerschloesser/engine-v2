@@ -790,5 +790,9 @@
       }
     }
   },
+  "mem": {
+    "simHighWaterLargeSave": 92274688,
+    "simHighWaterLargeSaveFormula": "docs/plan/36-slow-tier-and-benchmarks.md step 4 (0007 section 8, 0015 section 5): the sim instance's arena live-byte peak on the standard large save (0020 section 9) over genesis, eight maximum-view connections for 80 ticks of frames and one whole snapshot. Measured as the smallest arenaBytes with engine_mem_grows() == 0 in the release+bench module: 79.75 MiB grows once, 80 MiB (83,886,080 B) does not. Ceiling = 88 MiB = ceil(80 MiB x 1.1) = 92,274,688 B, inside the 96 MiB default arena. Native cross-check (64-bit, slow_highwater_large_save): 81,645,391 B. tests/wasm/large-save-memory.test.ts asserts 0 grows at the ceiling and growth at 72 MiB."
+  },
   "worldgenMsPerChunkWarn": 0.25
 }

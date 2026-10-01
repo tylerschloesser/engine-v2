@@ -1,9 +1,8 @@
 //! `slow_worldgen_chunk_reference` (docs/plan/20-reference-game-v0.md "Budgets", wired into
 //! `pnpm test:slow` by docs/plan/36-slow-tier-and-benchmarks.md): median ms per generated chunk of
-//! `RefWorldgen`, a runner `warn` line above 0008 §6's desktop threshold (never a failure; the
-//! checked-in baseline and its 25 % gate are M36 step 5's). The slow nextest profile builds the dev
-//! profile (the `engine` crate at `opt-level = 1`), so this number is an upper bound on the release
-//! figure; it is printed with its profile.
+//! `RefWorldgen`, release profile (the slow nextest profile builds dev, so under it the test re-runs
+//! itself in release, `common::bench_run`), a runner `warn` line above 0008 section 6's desktop
+//! threshold, and the 25 % gate of `baselines/worldgen.json` through `scripts/lib/bench-gate.mjs`.
 
 use engine::world::{ChunkCoord, ChunkDims, Tile};
 use engine::worldgen::Worldgen;
@@ -11,6 +10,7 @@ use reference_sim::{RefParams, RefWorldgen};
 
 mod common;
 use common::TEST_SEED;
+use common::bench_run::{gate, run_in_release};
 
 /// 0008 §6: warn above this per chunk (`packages/engine/budgets.json` `worldgenMsPerChunkWarn`).
 const WARN_MS_PER_CHUNK: f64 = 0.25;
@@ -20,6 +20,12 @@ const CHUNKS_PER_BATCH: i32 = 64;
 
 #[test]
 fn slow_worldgen_chunk_reference() {
+    if cfg!(debug_assertions) {
+        // Release profile (the baseline's): see `common::bench_run`.
+        let sample = run_in_release("worldgen_bench", "slow_worldgen_chunk_reference");
+        gate("worldgen", &sample);
+        return;
+    }
     let dims = ChunkDims::new(5);
     let params = RefParams::default();
     let mut out = vec![Tile::VOID; dims.area() as usize];
@@ -43,15 +49,12 @@ fn slow_worldgen_chunk_reference() {
     }
     per_chunk_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let median = per_chunk_ms[per_chunk_ms.len() / 2];
-    let profile = if cfg!(debug_assertions) {
-        "dev"
-    } else {
-        "release"
-    };
+    let profile = "release";
     println!(
         "worldgen-bench reference: median {median:.4} ms/chunk ({profile}, native) sink {sink}"
     );
     assert!(median.is_finite() && median > 0.0);
+    println!("BENCH_SAMPLE {{\"medianMsPerChunk\":{median:.5}}}");
     if median > WARN_MS_PER_CHUNK {
         println!(
             "warn: reference worldgen median {median:.4} ms/chunk exceeds {WARN_MS_PER_CHUNK} ms/chunk (0008 section 6)"
