@@ -13,7 +13,7 @@ import { gate } from '../../../../scripts/lib/bench-gate.mjs'
 import type { BuildGameResult } from '../../src/build-game.js'
 import { worldServerTestHandle } from '../../src/server.js'
 import { createNetHarness } from '../../src/test/net-harness.js'
-import { benchWorldConfig, buildBench } from '../support/bench-build.js'
+import { benchBudgets, benchWorldConfig, buildBench } from '../support/bench-build.js'
 
 let bench: BuildGameResult
 beforeAll(async () => {
@@ -35,13 +35,7 @@ test('tick-large-save node @slow', async () => {
     worldSeed: cfg.params.seed,
     clients: PLAYERS,
     hashAll: false,
-    world: {
-      params: {
-        worldgen: cfg.params.worldgen,
-        maxEntities: cfg.params.maxEntities,
-        maxModifiedTiles: cfg.params.maxModifiedTiles,
-      },
-    },
+    world: { params: { worldgen: cfg.params.worldgen, ...benchBudgets(1) } },
   })
   try {
     const host = worldServerTestHandle(harness.server)

@@ -101,8 +101,8 @@ fn slow_tick_large_save() {
     gate("tick", &sample);
 }
 
+#[allow(clippy::disallowed_types)] // a bench's own timer never reaches state (0002 section 2)
 fn measure_snapshot() -> String {
-    #[allow(clippy::disallowed_types)] // a bench's own timer never reaches state
     use std::time::Instant;
     let mut bench = BenchHost::new(SEED, 1);
     for _ in 0..60 {
