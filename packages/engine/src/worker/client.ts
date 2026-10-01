@@ -7,7 +7,7 @@
 import { RegionId, Role } from '../abi.js'
 import { CameraBlockView, readCameraBlockInto } from '../camera/block.js'
 import { systemClock } from '../clock.js'
-import type { EngineInstance, RegionView } from '../loader.js'
+import { type EngineInstance, EngineTrap, type RegionView } from '../loader.js'
 import {
   CB_CLIENT_FRAME_N,
   CB_CLIENT_FRAME_US,
@@ -26,11 +26,18 @@ import { createInputPump } from './client-input.js'
 import { createNetPump } from './client-net.js'
 import { createUploadPump } from './client-upload.js'
 import { applyGcHook } from './gc-hook.js'
-import { instantiateForSetup } from './instantiate.js'
-import type { SetupMessage } from './protocol.js'
+import { instantiateFactoryForSetup } from './instantiate.js'
+import {
+  CLIENT_TRAPS_CALL,
+  type FromWorker,
+  type SetupMessage,
+  type TestCallMessage,
+  TRAPS_BYTES,
+} from './protocol.js'
 import type { LoopState, Shell } from './shell.js'
 import { noTimeout } from './shell.js'
 import { handleTestCall } from './test-call.js'
+import { asNumberList, injectTrap } from './test-trap.js'
 
 /**
  * The *raw export argument* of `frame(t_ms: f64)` is a vestigial Smi, not the frame time (Planning
@@ -56,8 +63,36 @@ function requireRegion(inst: EngineInstance, id: RegionId, what: string): Region
   return r
 }
 
-export async function setup(shell: Shell, message: SetupMessage): Promise<LoopState> {
-  const inst = await instantiateForSetup(shell, message, Role.Client)
+/** One client instance and every pump built over it (docs/plan/37-robustness-events.md step 1):
+ * `setup` builds one, and builds a fresh one over a fresh instance when the first traps (0014 §6).
+ * Nothing here outlives its instance: the pumps close over `inst`, the regions and the ring
+ * endpoints (the rings themselves live in the SABs, so a new endpoint continues where the old one
+ * stopped). */
+type Assembly = {
+  body(): void
+  testCall(m: TestCallMessage): FromWorker
+  /** See `NetPump.ackSeq`; `0` for a topology with no link. */
+  ackSeq(): number
+  /** See `ActionPump.lastSeq`; `-1` before the first action or without an action pump. */
+  lastSeq(): number
+  pushLost(afterSeq: number, throughSeq: number): void
+}
+
+type AssembleOptions = {
+  /** Test only: called before each `frame()`; may trap the instance (`TestFlags.trapClientAtFrame`). */
+  beforeFrame: ((inst: EngineInstance) => void) | null
+  /** This assembly replaced a trapped one on an up link: a restarted net pump (`Resyncing`, `Hello`
+   * without a resume hint) and no DrawList published until the replica holds a frame, so main keeps
+   * presenting the last DrawList it had. */
+  restart: boolean
+}
+
+function assemble(
+  shell: Shell,
+  message: SetupMessage,
+  inst: EngineInstance,
+  opts: AssembleOptions,
+): Assembly {
   // A debugging/test convenience only, gated the same way as `worker.ts`'s own globals
   // (orchestrator decision 1): lets a Playwright test read the client instance's own memory
   // directly through `worker.evaluate()` (docs/plan/06b-workers-and-spawn.md, Tests added,
@@ -164,6 +199,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
           // own doc comment) -- absent for a `local` host, unchanged from before this milestone
           // (`exactOptionalPropertyTypes`: omitted, not `undefined`, when unset).
           ...(message.remoteLinked ? { remoteLinked: true as const } : {}),
+          ...(opts.restart ? { restart: true as const } : {}),
           // docs/plan/33f (ADR 0042): the one `Welcome` that configured this client's world.
           // Once per instance (the wasm side reports it once), so this is not a steady-state
           // message: it carries the config main needs to spawn the gen workers late.
@@ -212,6 +248,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       )
     : null
 
+  let gateDraw = opts.restart && netPump !== null
   function body(): void {
     framedThisWake = false
     if (gcHook) applyGcHook(shell.control, shell.index)
@@ -246,6 +283,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
         inst.call0(inst.x.client_rebase)
       }
       if (readCameraBlockInto(cameraReader, cameraRegion.u8, 0)) {
+        if (opts.beforeFrame) opts.beforeFrame(inst)
         if (timing) {
           const t0 = systemClock.now()
           inst.call1(inst.x.frame, FRAME_ARG)
@@ -261,7 +299,10 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
         framedThisWake = true
         // docs/plan/17-drawlist-and-sprites.md Scope: "once per produced frame" (0018 §2) -- only
         // after a real `frame()` call, never on a wake where `CB_FRAME_REQ` did not advance.
-        drawlistPump.publish()
+        if (gateDraw) {
+          if (netPump?.hasFrame()) gateDraw = false
+        }
+        if (!gateDraw) drawlistPump.publish()
       }
     }
     if (actionRing && uiRing && rx && tx) {
@@ -314,5 +355,69 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // own non-shared WASM memory) through this, while parked only (docs/plan/
   // 08b-gen-workers-and-queue.md, orchestrator decision 1 at the step-5 boundary): `worker.ts`
   // routes a `test-call` message here only when this worker's own setup carried `test`.
-  return { body, timeoutMs: noTimeout, testCall: (m) => handleTestCall(inst, m) }
+  return {
+    body,
+    testCall: (m) => handleTestCall(inst, m),
+    ackSeq: () => netPump?.ackSeq() ?? 0,
+    lastSeq: () => actionPump?.lastSeq() ?? -1,
+    pushLost: (afterSeq, throughSeq) => actionPump?.pushLost(afterSeq, throughSeq),
+  }
+}
+
+export async function setup(shell: Shell, message: SetupMessage): Promise<LoopState> {
+  const newInstance = await instantiateFactoryForSetup(shell, message, Role.Client)
+  // `TestFlags.trapClientAtFrame`: counts every `frame()` this worker runs, across rebuilds.
+  const trapAtFrames = asNumberList(message.test?.trapClientAtFrame)
+  let framesRun = 0
+  const beforeFrame =
+    trapAtFrames === null
+      ? null
+      : (inst: EngineInstance): void => {
+          framesRun++
+          if (trapAtFrames.includes(framesRun)) {
+            injectTrap(inst, `trapClientAtFrame: client trap at frame ${framesRun}`)
+          }
+        }
+
+  let current = assemble(shell, message, newInstance(), { beforeFrame, restart: false })
+  let traps = 0
+
+  /** 0014 §6 (client role): the instance is garbage; a fresh one from the kept `Module`, then the
+   * full resync used for reconnect. Prediction, interpolation and pending actions died with the old
+   * instance: the seqs it had not resolved are reported `Lost` (M28b). The main thread keeps its
+   * last DrawList meanwhile (`AssembleOptions.restart`). A trap while building the new instance
+   * (`engine_init` itself) is not recoverable and ends the worker like any other error. */
+  function recover(trap: EngineTrap): void {
+    const afterSeq = current.ackSeq()
+    const throughSeq = current.lastSeq()
+    traps++
+    shell.post({ type: 'client-trapped', message: trap.panicMessage })
+    current = assemble(shell, message, newInstance(), { beforeFrame, restart: true })
+    current.pushLost(afterSeq, throughSeq)
+    // The wake that trapped is finished: a caller waiting on `W_ACK` (`stepFrame`) must not spin on it.
+    const frameReq = Atomics.load(shell.control.words, CB_FRAME_REQ)
+    Atomics.store(shell.control.words, workerWord(shell.index, W_ACK), frameReq)
+  }
+
+  function body(): void {
+    try {
+      current.body()
+    } catch (e) {
+      if (!(e instanceof EngineTrap)) throw e
+      recover(e)
+    }
+  }
+
+  return {
+    body,
+    timeoutMs: noTimeout,
+    testCall: (m) => {
+      if (m.name === CLIENT_TRAPS_CALL) {
+        const result = new Uint8Array(TRAPS_BYTES)
+        new DataView(result.buffer).setUint32(0, traps, true)
+        return { type: 'test-result', id: m.id, value: 0, result }
+      }
+      return current.testCall(m)
+    },
+  }
 }

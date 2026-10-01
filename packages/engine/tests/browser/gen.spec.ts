@@ -9,7 +9,12 @@ import { openPage } from './support/page.ts'
 
 declare global {
   interface Window {
-    __genCreateClient?: (opts?: { genWorkers?: number; seed?: string; chunkBits?: number }) => void
+    __genCreateClient?: (opts?: {
+      genWorkers?: number
+      seed?: string
+      chunkBits?: number
+      test?: { flags?: Record<string, unknown> }
+    }) => void
     __genClientReady?: () => Promise<{ ok: true } | { ok: false; code: string; message: string }>
     __genClientDestroy?: () => void
     __genSetView?: (opts: {
@@ -22,6 +27,8 @@ declare global {
     }) => void
     __genStep?: (dtMs: number) => void
     __genStats?: () => Promise<GenStats>
+    __genTraps?: () => Promise<number>
+    __genFatal?: () => { tick: number; message: string }[]
     __genIdle?: () => Promise<void>
     __genChunkHash?: (cx: number, cy: number) => Promise<string | null>
     __genChunkHashRect?: (
@@ -45,7 +52,12 @@ type Page = import('@playwright/test').Page
 
 async function createClient(
   page: Page,
-  opts?: { genWorkers?: number; seed?: string; chunkBits?: number },
+  opts?: {
+    genWorkers?: number
+    seed?: string
+    chunkBits?: number
+    test?: { flags?: Record<string, unknown> }
+  },
 ): Promise<void> {
   await page.evaluate((o) => window.__genCreateClient?.(o), opts)
 }
@@ -181,5 +193,47 @@ test('gen: oversize slab is a readable fatal', async ({ page }) => {
   expect(r.code).toBe('worker-fatal')
   expect(r.message).toContain('does not fit the configured genResult slot')
 
+  await page.evaluate(() => window.__genClientDestroy?.())
+})
+
+// docs/plan/37-robustness-events.md step 1 (0014 §6, gen role): a trap in the gen instance means a
+// fresh instance and the request tried again; the same chunk trapping twice is fatal (worldgen is
+// pure: it would trap forever). `TestFlags.trapGenAtChunk` traps `gen_chunk` for one chunk.
+test('trap: gen instance recovers and chunk arrives', async ({ page }) => {
+  await openPage(page, '/gen.html')
+  await createClient(page, {
+    genWorkers: 1,
+    test: { flags: { trapGenAtChunk: { cx: 0, cy: 0 } } },
+  })
+  expect(await ready(page)).toEqual({ ok: true })
+  await setViewAndIdle(page, SMALL_VIEW)
+
+  // The whole generation set arrived, the trapped chunk included, and the gen worker did replace its
+  // instance once; nothing is fatal.
+  const stats = (await page.evaluate(() => window.__genStats?.())) as GenStats
+  expect(stats.delivered).toBe(SMALL_GENERATION_SET_SIZE)
+  expect(typeof (await page.evaluate(() => window.__genChunkHash?.(0, 0)))).toBe('string')
+  expect(await page.evaluate(() => window.__genTraps?.())).toBe(1)
+  expect(await page.evaluate(() => window.__genFatal?.())).toEqual([])
+  await page.evaluate(() => window.__genClientDestroy?.())
+})
+
+test('trap: gen twice is fatal', async ({ page }) => {
+  await openPage(page, '/gen.html')
+  await createClient(page, {
+    genWorkers: 1,
+    test: { flags: { trapGenAtChunk: { cx: 0, cy: 0, times: 2 } } },
+  })
+  expect(await ready(page)).toEqual({ ok: true })
+
+  // One synchronous burst of frames dispatches the requests; the gen worker then traps on (0, 0),
+  // replaces its instance, traps on it again and ends. Main hears of that only between page tasks.
+  await page.evaluate((v) => {
+    window.__genSetView?.(v)
+    for (let i = 0; i < 3; i++) window.__genStep?.(16)
+  }, SMALL_VIEW)
+  await expect.poll(() => page.evaluate(() => window.__genFatal?.().length)).toBe(1)
+  const [fatal] = (await page.evaluate(() => window.__genFatal?.())) ?? []
+  expect(fatal?.message).toMatch(/gen worker ended: .*chunk \(0, 0\) trapped twice/)
   await page.evaluate(() => window.__genClientDestroy?.())
 })

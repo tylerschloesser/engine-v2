@@ -82,6 +82,9 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
     onResyncing(): () => void {
       return () => {}
     },
+    onFatal(): () => void {
+      return () => {}
+    },
     onRendererLost(): () => void {
       return () => {}
     },

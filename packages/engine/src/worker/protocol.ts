@@ -85,6 +85,24 @@ export type TestFlags = {
    * own `noDialConnection`), so these pages get exactly the pre-M29 behaviour back: never up, never
    * down, no bytes, no timers, no real network attempt. Never true in production. */
   netNoDial?: boolean
+  /** `worker/client.ts` only (docs/plan/37-robustness-events.md step 1, 0014 §6): the client worker
+   * throws a real `EngineTrap` (`worker/test-trap.ts`) in place of its `frame()` call at the N-th
+   * frame it runs (1-based, counted across instance rebuilds; an array traps at each listed N). Test
+   * only: a shipped build never sets it. */
+  trapClientAtFrame?: number | number[]
+  /** `worker/gen.ts` only (same milestone): the gen worker traps in place of `gen_chunk(cx, cy)`
+   * for that chunk, `times` times (default 1; counted across instance rebuilds). One trap
+   * recovers (fresh instance, the request re-queued); the second trap on the same chunk is fatal.
+   * Test only. */
+  trapGenAtChunk?: { cx: number; cy: number; times?: number }
+  /** `worker/sim.ts` only (same milestone, step 2): the sim worker dies (`shell.fatal`, as an
+   * uncaught error would end it) at the first pass whose tick count has reached N; an array dies
+   * once per entry. `client.ts` strips the entries already used when it respawns the worker, so a
+   * respawned worker does not die at the same tick again. Test only. */
+  killSimWorkerAtTick?: number | number[]
+  /** `worker/sim.ts` only (same milestone, step 3): reports a `Storage.onError` once the world
+   * has run N ticks, as a failing OPFS write would. Test only. */
+  failStorageAtTick?: number
 }
 
 export type SetupMessage = {
@@ -137,6 +155,11 @@ export type SetupMessage = {
    * the `net`-kind worker) instead of sending `client_hello()` on this worker's very first wake
    * regardless of whether a real net-worker `Connection` exists yet. */
   remoteLinked?: boolean
+  /** docs/plan/37-robustness-events.md step 2: `true` on the `sim`-kind spawn `client.ts` makes
+   * after the first sim worker died. The worker's start-up is the ordinary load path (snapshot and
+   * log tail), then it bumps the epoch, and its ring connection discards whatever the client pushed
+   * while no sim was listening, up to the client's next `Hello`. */
+  respawn?: boolean
 }
 
 /**
@@ -178,6 +201,14 @@ export const SIM_COUNTERS_BYTES = 20
 export const NET_COUNTERS_CALL = '__net_counters'
 /** One little-endian `u32`: `RingConnection.downlinkRetries`. */
 export const NET_COUNTERS_BYTES = 4
+
+/** docs/plan/37-robustness-events.md step 1: `test-call` names the client and gen workers answer
+ * themselves (like `SIM_COUNTERS_CALL`): how many times that worker replaced a trapped instance,
+ * one little-endian `u32` in the reply's `result`. The evidence a recovery test needs that the
+ * recovery path ran at all. */
+export const CLIENT_TRAPS_CALL = '__client_traps'
+export const GEN_TRAPS_CALL = '__gen_traps'
+export const TRAPS_BYTES = 4
 
 /** docs/plan/23-persistence-opfs-and-lifecycle.md, coordinator fix round 1: a minimal, page-local
  * debug call for the periodic-OPFS-snapshot behavioural test (`world.spec.ts`'s own
@@ -224,6 +255,8 @@ export const POST_SETUP_MESSAGE_TYPES: readonly string[] = [
   'client-welcome',
   'client-resyncing',
   'client-configured',
+  'client-trapped',
+  'sim-fatal',
   'link',
 ]
 
@@ -243,6 +276,12 @@ export const POST_SETUP_MESSAGE_TYPES: readonly string[] = [
  * `fatal` that follows once already settled. */
 export type SimLifecycleMessage =
   | { type: 'storage'; status: StorageStatus; created: boolean }
+  /** docs/plan/37-robustness-events.md step 3 (0005 Panic recovery 4, Storage): the world is wedged
+   * under this build (a tick that panics again after recovery, a failed `memory.grow`) or its
+   * storage failed. The worker stops ticking and stays alive (files untouched, export still
+   * reachable); main raises `client.onFatal`. Distinct from a plain `fatal`, which means the
+   * worker itself died and main respawns it. */
+  | { type: 'sim-fatal'; tick: number; message: string }
   | { type: 'start-failed'; code: 'world-busy' | 'load-failed'; detail: string }
   /** docs/plan/24b-upgrade-and-migration.md: carved out of `'load-failed'` above -- an identity/
    * schema/tick-rate/worldgen/chunk-size mismatch that ends in `SaveIncompatible` (`WorldLoadError
@@ -283,6 +322,11 @@ export type ClientLifecycleMessage =
    * message carries. `client.ts` spawns the gen workers on it. Never sent for a client configured
    * at `engine_init`'s own `game` (a local host, `test.game`). */
   | { type: 'client-configured'; config: string }
+  /** docs/plan/37-robustness-events.md step 1 (0014 §6): the client worker's instance trapped and
+   * the worker is replacing it (fresh instance, `Hello` without a resume hint). Main fans it out to
+   * `onResyncing` and counts it for the loop guard (two within 10 s of the injected clock is fatal).
+   * Posted at most once per trap. */
+  | { type: 'client-trapped'; message: string }
 
 /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: main -> sim worker, parked-only (like
  * `TestCallMessage`, whose own doc comment gives the reason: a worker blocked in `Atomics.wait`

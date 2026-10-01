@@ -294,6 +294,9 @@ export class Persistence {
    * does (`sim_tick` returning a bad status, `sim_seal_frame` failing) -- the caller's own error
    * boundary is the same one either way. */
   private fatalError: unknown = undefined
+  /** docs/plan/37-robustness-events.md step 3: called once with the error `Storage.onError` reported.
+   * `SimHost` sets it and raises its `onFatal`: a failed or lost write is fatal to the world (0005). */
+  onStorageError: ((err: unknown) => void) | null = null
 
   private constructor(
     storage: Storage,
@@ -319,7 +322,9 @@ export class Persistence {
     this.logOffset = initial.logOffset
     this.tick = initial.tick
     storage.onError = (err) => {
+      const first = this.fatalError === undefined
       this.fatalError = err
+      if (first) this.onStorageError?.(err)
     }
   }
 

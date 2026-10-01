@@ -29,7 +29,7 @@ import type { Clock, Scheduler } from '../clock.js'
 import { CLOCK_FIELD, ClockBlockView, readClockBlockInto, SessionState } from '../clock-block.js'
 import { ByeReason, buildBye } from '../host/handshake.js'
 import type { EngineInstance } from '../loader.js'
-import { instantiate } from '../loader.js'
+import { EngineTrap, instantiate } from '../loader.js'
 import { createLink, type DownReason } from '../net/link.js'
 import { createBytePump } from '../net/pump.js'
 import { readU32LE, writeU32LE } from '../sab/bytes.js'
@@ -41,6 +41,7 @@ import { seedToHexU64 } from '../sim-config.js'
 import { createNetPump } from '../worker/client-net.js'
 import { GEN_RECORD_HEADER_BYTES, readI32LE, writeGenHeader } from '../worker/gen-record.js'
 import { createShell } from '../worker/shell.js'
+import { injectTrap } from '../worker/test-trap.js'
 import type { DrawRecord } from './client.js'
 import { type DesyncDump, type DesyncLog, readDesyncLog, takeDesyncDumps } from './desync.js'
 import {
@@ -191,6 +192,11 @@ export interface HeadlessClient {
   interpCounters(): InterpCounters
   /** `client_rebase()`: what the client worker calls on `FLAG_REBASE` (0018 section 8). */
   rebase(): void
+  /** docs/plan/37-robustness-events.md step 1: kills this client's instance the way a WASM trap does
+   * (`worker/test-trap.ts`). The next `pump()`/`stepFrame()`/`dispatch()` replaces it. */
+  injectTrap(): void
+  /** How many times the instance has been replaced after a trap. */
+  trapCount(): number
 }
 
 /** A `Scheduler` that never fires anything (`HeadlessClientOptions.scheduler`'s own default):
@@ -265,7 +271,7 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
     },
   }
 
-  const inst = instantiate(opts.wasm, Role.Client, clientConfig)
+  let inst = instantiate(opts.wasm, Role.Client, clientConfig)
   // The generator role is immutable after `engine_init`: built now when the world is known, else
   // on the `Welcome` that configures the client (`ensureGen`, ADR 0042: the late spawn of a page).
   let genInst: EngineInstance | null = null
@@ -276,13 +282,14 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
   }
   if (opts.game) buildGen({ seed: hexSeed, params: opts.game.worldgen })
 
-  const rx = requireRegion(inst, RegionId.Rx, 'Rx')
-  const uiRegion = inst.region(RegionId.Ui)
-  const resultRegion = requireRegion(inst, RegionId.Result, 'Result')
-  const downlinkRegion = requireRegion(inst, RegionId.Downlink, 'Downlink')
-  const txRegion = requireRegion(inst, RegionId.Tx, 'Tx')
-  const genInRegion = inst.region(RegionId.GenIn)
-  const cameraRegion = requireRegion(inst, RegionId.Camera, 'Camera')
+  // `let`: a trap replaces the instance (`recoverFromTrap`), and every region view with it.
+  let rx = requireRegion(inst, RegionId.Rx, 'Rx')
+  let uiRegion = inst.region(RegionId.Ui)
+  let resultRegion = requireRegion(inst, RegionId.Result, 'Result')
+  let downlinkRegion = requireRegion(inst, RegionId.Downlink, 'Downlink')
+  let txRegion = requireRegion(inst, RegionId.Tx, 'Tx')
+  let genInRegion = inst.region(RegionId.GenIn)
+  let cameraRegion = requireRegion(inst, RegionId.Camera, 'Camera')
 
   // Only the two rings a real boundary crosses here (Deviations above): no `actionRing`/`uiRing`,
   // no `genRequest`/`genResult`, no `inputRing`/`uploadRing`/`drawList` -- `createSabSet` builds
@@ -291,17 +298,20 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
   const sabs = createSabSet('net', 0)
   const shell = createShell(new ControlBlock(sabs.control), WORKER_CLIENT)
   const ticksPerSecond = inst.call0(inst.x.tick_hz)
-  const netPump = createNetPump(
-    inst,
-    shell,
-    sabs.uplink,
-    sabs.downlink,
-    downlinkRegion,
-    txRegion,
-    sabs.clockBlock,
-    resultRegion,
-    ticksPerSecond,
-  )
+  function buildNetPump(): ReturnType<typeof createNetPump> {
+    return createNetPump(
+      inst,
+      shell,
+      sabs.uplink,
+      sabs.downlink,
+      downlinkRegion,
+      txRegion,
+      sabs.clockBlock,
+      resultRegion,
+      ticksPerSecond,
+    )
+  }
+  let netPump = buildNetPump()
   const bytePump = createBytePump({ uplink: sabs.uplink, downlink: sabs.downlink })
 
   // docs/plan/28-sessions-and-reconnect.md: a second `RingConsumer` over the same `downlink` SAB,
@@ -477,7 +487,43 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
     }
   }
 
+  /** docs/plan/37-robustness-events.md step 1 (0014 §6, client role): the instance is garbage. A
+   * fresh one from the kept `Module`, the same `Hello` a new connection sends (no resume hint: the
+   * replica died with the instance) on the connection that is already up (the host re-handshakes a
+   * settled connection that sends `Hello`, `server.ts`'s `reopenOnHello`), and `Lost` for the
+   * pending actions the old instance can no longer resolve (M28b). */
+  let trapCount = 0
+  let lastDispatchedSeq = -1
+  function recoverFromTrap(): void {
+    const afterSeq = netPump.ackSeq()
+    trapCount++
+    inst = instantiate(opts.wasm, Role.Client, clientConfig)
+    rx = requireRegion(inst, RegionId.Rx, 'Rx')
+    uiRegion = inst.region(RegionId.Ui)
+    resultRegion = requireRegion(inst, RegionId.Result, 'Result')
+    downlinkRegion = requireRegion(inst, RegionId.Downlink, 'Downlink')
+    txRegion = requireRegion(inst, RegionId.Tx, 'Tx')
+    genInRegion = inst.region(RegionId.GenIn)
+    cameraRegion = requireRegion(inst, RegionId.Camera, 'Camera')
+    netPump = buildNetPump()
+    attached = false
+    for (let seq = afterSeq + 1; seq <= lastDispatchedSeq; seq++) {
+      for (const cb of listeners.slice()) cb(seq, 'Lost')
+    }
+    sendHello()
+  }
+
   function pump(): void {
+    if (inst.dead) recoverFromTrap()
+    try {
+      pumpOnce()
+    } catch (e) {
+      if (!(e instanceof EngineTrap)) throw e
+      recoverFromTrap()
+    }
+  }
+
+  function pumpOnce(): void {
     bytePump.drain() // retry any downlink backpressure before this wake's own drain
     if (!attached) {
       pumpPreWelcome()
@@ -512,8 +558,11 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
   }
 
   function dispatch(action: unknown): number {
+    if (inst.dead) recoverFromTrap()
     readClock()
-    if (clockScratch[CLOCK_FIELD.SessionState] !== SessionState.Online) {
+    // `!attached`: between a trap and the new `Welcome` the clock block still reads `Online` (the
+    // dead instance's last write), but no session exists yet.
+    if (!attached || clockScratch[CLOCK_FIELD.SessionState] !== SessionState.Online) {
       throw new Error('engine: dispatch before ready')
     }
     const candidateSeq = nextSeq
@@ -535,6 +584,7 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
       throw new Error(`engine: dispatch: on_action failed: status ${status}`)
     }
     nextSeq = candidateSeq + 1
+    lastDispatchedSeq = candidateSeq
     return candidateSeq
   }
 
@@ -648,12 +698,27 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
       if (pan) advancePan(pan, dtMs)
       cameraState.frameTimeMs += dtMs
       writeCameraBlock(cameraWriter, cameraState)
+      if (inst.dead) recoverFromTrap()
       readCameraBlockInto(cameraWriter, cameraRegion.u8, 0)
-      inst.call1(inst.x.frame, 0)
+      try {
+        inst.call1(inst.x.frame, 0)
+      } catch (e) {
+        if (!(e instanceof EngineTrap)) throw e
+        recoverFromTrap()
+        return
+      }
       framedThisStep = true
       pump()
       framedThisStep = false
     },
+    injectTrap() {
+      try {
+        injectTrap(inst, 'HeadlessClient.injectTrap: client trap')
+      } catch (e) {
+        if (!(e instanceof EngineTrap)) throw e
+      }
+    },
+    trapCount: () => trapCount,
     samplePresences() {
       const rows: PresenceSampleRow[] = []
       for (let i = 0; ; i++) {

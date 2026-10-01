@@ -57,6 +57,17 @@ export type NetPump = {
    * used when `handshake` (below) is given -- that caller's `pump()` seeds itself once it applies
    * `Welcome` internally. */
   seedFromWelcome(seqSeed: number): void
+  /** docs/plan/37-robustness-events.md step 1: the highest `ack_seq` this pump knows the host had
+   * processed: the last one a frame carried, or the `Welcome`'s own `last_processed_action_seq`,
+   * whichever is later. The client worker reads it off a dead pump to learn which pending actions
+   * to report `Lost`. */
+  ackSeq(): number
+  /** `true` once a `Welcome` has been applied (always `true` without a `handshake`). */
+  attached(): boolean
+  /** `true` once an `on_frame` has applied since this pump was built: the replica holds something
+   * worth drawing. A rebuilt client worker withholds its first DrawList until then, so main keeps
+   * presenting the last one it had. */
+  hasFrame(): boolean
 }
 
 /** docs/plan/28-sessions-and-reconnect.md step 5: opt-in argument to `createNetPump` -- when
@@ -94,6 +105,12 @@ export type NetPumpHandshake = {
    * world than the one this client was configured from). Nothing was applied; the caller ends the
    * worker with a fatal a page can tell from a trap. */
   onWorldMismatch?: () => void
+  /** docs/plan/37-robustness-events.md step 1: this pump belongs to a client instance that replaced
+   * a trapped one (0014 §6), on a link that is already up. It writes `Resyncing` to the clock block
+   * at once (so `dispatch` refuses until the new `Welcome`) and its `Hello` goes out on the first
+   * pump: the host sees a `Hello` on a settled connection and re-handshakes it (`server.ts`,
+   * `reopenOnHello`), so no redial is needed on either transport. */
+  restart?: boolean
 }
 
 /** `net/link.ts`'s own `LinkState.Up = 1`, mirrored the same numeric-parity way `sab/control.ts`'s
@@ -154,6 +171,10 @@ export function createNetPump(
     revealed: 0,
   }
   let live = false
+  if (handshake?.restart) {
+    clockFields.sessionState = SessionState.Resyncing
+    writeClockBlock(clockView, clockFields)
+  }
   // docs/plan/28-sessions-and-reconnect.md step 5: `attached` starts `true` (the whole handshake
   // block below never runs) when no `handshake` was given -- every existing caller (`HeadlessClient`,
   // any hand-rolled fixture) keeps exactly today's behaviour (Deviations: this is an additive,
@@ -169,6 +190,12 @@ export function createNetPump(
   // is told apart from an ordinary wake with nothing new to do. `-1`: no generation sent yet (`net/
   // link.ts`'s own `gen` starts at `1` on the first real dial, so this sentinel never collides).
   let lastHelloLinkGen = -1
+  // docs/plan/37-robustness-events.md step 2: a local (ring) link has no net worker to count dials, so
+  // main bumps `CB_LINK_GEN` itself after it respawned the sim worker; a change from the value seen at
+  // construction means "the host end is new: send `Hello` again" (warm, with the resume hint).
+  let localLinkGenSeen = Atomics.load(shell.control.words, CB_LINK_GEN)
+  let lastWelcomeAck = 0
+  let sawAnyFrame = false
 
   /** `client_hello()` + push onto the uplink ring, `helloSentAtMs` for the RTT `client_on_welcome`
    * will want. Shared by the pre-attach path (`pumpHandshake`) and the reconnect-resend path
@@ -209,6 +236,7 @@ export function createNetPump(
       }
     } else if (!helloSent) {
       helloSent = true
+      localLinkGenSeen = Atomics.load(shell.control.words, CB_LINK_GEN)
       sendHelloNow(hs)
     }
     if (!downlink || !result) return
@@ -226,6 +254,7 @@ export function createNetPump(
       if (readU32LE(result.u8, 16) === 1) hs.onConfigured?.()
       const playerId = readU32LE(result.u8, 0)
       const seqSeed = readU32LE(result.u8, 4)
+      lastWelcomeAck = seqSeed
       const viewMaxTilesPerAxis = readU32LE(result.u8, 8)
       const viewMaxChunks = readU32LE(result.u8, 12)
       live = true
@@ -259,6 +288,13 @@ export function createNetPump(
         sendHelloNow(handshake)
       }
     }
+    if (handshake && !handshake.remoteLinked) {
+      const gen = Atomics.load(shell.control.words, CB_LINK_GEN)
+      if (gen !== localLinkGenSeen) {
+        localLinkGenSeen = gen
+        sendHelloNow(handshake)
+      }
+    }
     let sawFrame = false
     if (downlink) {
       for (;;) {
@@ -280,6 +316,7 @@ export function createNetPump(
             const status = inst.call2(inst.x.client_on_welcome, len, 0)
             if (status === Status.WorldMismatch) handshake?.onWorldMismatch?.()
             if (status === Status.Ok) {
+              lastWelcomeAck = readU32LE(result.u8, 4)
               // "proceeds as after a join" (Scope): the same terminal state a plain join's own
               // `Welcome` lands in, `seqSeed` deliberately untouched (Scope: "Main's `seq` counter
               // needs nothing ... M28 made `Welcome` the source" -- re-seeding it here would race
@@ -290,7 +327,10 @@ export function createNetPump(
           }
           continue
         }
-        if (inst.call1(inst.x.on_frame, len) === Status.Ok) sawFrame = true
+        if (inst.call1(inst.x.on_frame, len) === Status.Ok) {
+          sawFrame = true
+          sawAnyFrame = true
+        }
       }
     }
     if (tx) {
@@ -334,6 +374,9 @@ export function createNetPump(
 
   return {
     pump,
+    ackSeq: () => Math.max(clockFields.ackSeq, lastWelcomeAck),
+    attached: () => attached,
+    hasFrame: () => sawAnyFrame,
     seedFromWelcome(seqSeed) {
       live = true
       clockFields.seqSeed = seqSeed

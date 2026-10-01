@@ -366,6 +366,9 @@ export interface NetHarnessOptions {
    * budgets (`rates/*`, `zoomout/*`, `reconnect/cost`, `counters-exact`: the hashing is `'off'`,
    * not merely production) and say why at the opt-out. `world.debugHashMode` wins when given. */
   hashAll?: boolean
+  /** docs/plan/37-robustness-events.md step 3: `HostServices.onFatal` (0024 §5) of the world server
+   * this harness builds. */
+  onFatal?: (f: { tick: number; message: string }) => void
 }
 
 /** docs/plan/28b-reconnect-and-lifecycle.md step 3: `ConditionedLink` plus one harness-only
@@ -547,6 +550,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       storage: onStorage,
       clock: { now: () => clock.now() },
       timer: { every: () => () => {} }, // ticking is `simHost.stepTick`, driven from `advanceTicks`
+      ...(opts.onFatal ? { onFatal: opts.onFatal } : {}),
       // docs/plan/28b-reconnect-and-lifecycle.md step 4: the real `VirtualClock` (also a real
       // `Scheduler`) -- grace/idle timers (`host/lifecycle.ts`) must fire deterministically as
       // `advanceTicks`/`advanceTo` advance virtual time, unlike `timer.every` above (stubbed: this

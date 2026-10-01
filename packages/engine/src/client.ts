@@ -29,9 +29,12 @@ import {
   CB_FLAGS,
   CB_FRAME_REQ,
   CB_LIFECYCLE,
+  CB_LINK_GEN,
+  CB_SIM_TICKS_RUN,
   ControlBlock,
   Lifecycle,
   W_PARKED,
+  W_READY,
   W_YIELD,
   WORKER_CLIENT,
   WORKER_GEN0,
@@ -250,6 +253,10 @@ export interface ClientOptions {
   }
 }
 
+/** `client.onFatal`'s argument (docs/plan/37-robustness-events.md): the same shape as
+ * `HostServices.onFatal`'s (0024 §5). */
+export type FatalEvent = { tick: number; message: string }
+
 /** Why the renderer gave up (0018 §8). */
 export type RendererLostReason = 'no-adapter' | 'repeated-loss'
 
@@ -309,6 +316,17 @@ export interface Client {
    * for a topology with no linked client worker (`host.kind !== 'local'`, or M29's net worker,
    * Non-scope here). Returns an unsubscribe function. */
   onResyncing(cb: () => void): () => void
+  /** docs/plan/37-robustness-events.md (0005 Panic recovery 4, Storage; 0014 §6): the world cannot
+   * continue under this build, and no recovery is left. Fires at most once, with the tick the
+   * engine had reached and a readable message: a tick that panics again after recovery, a failed
+   * `memory.grow`, a failed or lost storage write, the client instance trapping twice (or the sim
+   * worker dying twice) within 10 s of the injected clock, or the same chunk trapping a gen worker
+   * twice. Afterwards the engine stops ticking and touches no file (a fixed build then loads the
+   * last snapshot through the upgrade path), and `dispatch` hands back a seq whose result is
+   * `Rejected: { Engine: 'EngineFault' }`. A listener added after the event is called at once. A
+   * per-event subscription in the style of `onUi`; returns an unsubscribe function. On a server the
+   * same event reaches `HostServices.onFatal`. */
+  onFatal(cb: (e: FatalEvent) => void): () => void
   /** docs/plan/37b-device-loss.md (0018 §8): fires once when the renderer gave up recovering --
    * `'no-adapter'` (the rebuild found no adapter) or `'repeated-loss'` (a second device loss within
    * 10 s of the previous one, on the injected clock). The renderer then makes no further attempt;
@@ -840,12 +858,21 @@ function setupWorker(
   /** docs/plan/33f: a `fatal` posted after `ready` settled whose message names a world mismatch
    * (`worker/client.ts`'s `onWorldMismatch`); every other late `fatal` stays ignored here. */
   onWorldMismatch: () => void,
+  /** docs/plan/37-robustness-events.md step 2: the worker ended after `ready` -- an `error` event, or
+   * a `fatal` message that is not a world mismatch. The sim worker is respawned, any other kind is
+   * fatal (`client.ts`'s `onWorkerDeath`). */
+  onDeath: (why: string) => void,
+  /** docs/plan/37-robustness-events.md step 2: this is the respawn of a dead sim worker. */
+  respawn: boolean,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false
     let onModuleRefused: () => boolean = () => false
     worker.onerror = (e) => {
-      if (settled) return
+      if (settled) {
+        onDeath(`worker error: ${e.message}`)
+        return
+      }
       settled = true
       reject(
         new EngineStartError(
@@ -864,6 +891,7 @@ function setupWorker(
         if (m.message.startsWith(MODULE_REFUSED) && onModuleRefused()) return
         if (settled) {
           if (m.message.startsWith('WorldMismatch')) onWorldMismatch()
+          else onDeath(m.message)
           return
         }
         settled = true
@@ -885,7 +913,7 @@ function setupWorker(
         } else {
           reject(new EngineStartError(m.code, m.detail))
         }
-      } else if (m.type === 'storage') {
+      } else if (m.type === 'storage' || m.type === 'sim-fatal') {
         onLifecycle(m)
       } else if (
         m.type === 'export-world-result' ||
@@ -897,7 +925,8 @@ function setupWorker(
       } else if (
         m.type === 'client-welcome' ||
         m.type === 'client-resyncing' ||
-        m.type === 'client-configured'
+        m.type === 'client-configured' ||
+        m.type === 'client-trapped'
       ) {
         // Real bug found (Deviations): this used to check only `'client-welcome'`, so a linked
         // client worker's own `client-resyncing` message (M28b, `worker/client-net.ts`'s
@@ -924,6 +953,7 @@ function setupWorker(
       ...(world ? { world } : {}),
       ...(net ? { net } : {}),
       ...(remoteLinked ? { remoteLinked } : {}),
+      ...(respawn ? { respawn } : {}),
     }
     // 0017 §4 fallback: a browser that refuses a posted `Module` (a throwing `postMessage`, or the
     // worker's `messageerror`, reported as `fatal` `module-refused`) gets the same setup with the URL.
@@ -1022,6 +1052,9 @@ export function createClient(options: ClientOptions): Client {
         throw err
       },
       onResyncing(): () => void {
+        throw err
+      },
+      onFatal(): () => void {
         throw err
       },
       onRendererLost(): () => void {
@@ -1335,6 +1368,15 @@ export function createClient(options: ClientOptions): Client {
   let nextSeq = -1
 
   function dispatch(action: unknown): number {
+    if (fatalEvent) {
+      // 37: the world cannot continue. The seq is real (it continues the counter) and its result is
+      // an `EngineFault` rejection, delivered by the next `pollActionResults`.
+      if (nextSeq < 0) throw new Error('engine: dispatch before ready')
+      if (fatalNextSeq < nextSeq) fatalNextSeq = nextSeq
+      const seq = fatalNextSeq++
+      fatalRejectSeqs.push(seq)
+      return seq
+    }
     // docs/plan/23-persistence-opfs-and-lifecycle.md Planning decision 5: "or the first
     // `client.dispatch`, whichever comes first" -- `tryPersist` itself no-ops outside a `persist:
     // true` local host (`persistWorldCreated` never becomes `true` there).
@@ -1481,6 +1523,124 @@ export function createClient(options: ClientOptions): Client {
   function raiseRendererLost(reason: RendererLostReason): void {
     const e = { reason }
     for (const l of rendererLostListeners.slice()) l(e)
+  }
+
+  // docs/plan/37-robustness-events.md step 3: `client.onFatal` and everything that ends the engine.
+  // Sources: the sim worker's own `sim-fatal` (`SimHost.onFatal`: a tick that panics again after
+  // recovery, a failed `memory.grow`; `Storage.onError`), and, decided here on main, the loop guards
+  // below and any worker other than the sim that ends after `ready`.
+  const fatalListeners: Array<(e: FatalEvent) => void> = []
+  let fatalEvent: FatalEvent | null = null
+  /** Seqs `dispatch` handed out after the fatal event; `pollActionResults` reports each one
+   * `Rejected: { Engine: 'EngineFault' }` (0004's engine-fault outcome) on the next frame. */
+  const fatalRejectSeqs: number[] = []
+  let fatalNextSeq = 0
+
+  function onFatal(cb: (e: FatalEvent) => void): () => void {
+    fatalListeners.push(cb)
+    if (fatalEvent) cb(fatalEvent)
+    return () => {
+      const i = fatalListeners.indexOf(cb)
+      if (i >= 0) fatalListeners.splice(i, 1)
+    }
+  }
+
+  /** The one place the engine gives up. Idempotent. Parks every worker without a snapshot or any
+   * other write (`W_YIELD` and a wake: the same park `parkWorkers` uses), so nothing ticks and
+   * every file stays as it is for the fixed build to load; the sim worker stays reachable for
+   * `exportWorld`. Then tells the listeners. */
+  function raiseFatal(message: string, tick?: number): void {
+    if (fatalEvent || destroyed) return
+    fatalEvent = { tick: tick ?? Atomics.load(control.words, CB_SIM_TICKS_RUN), message }
+    for (const w of workers) {
+      if (w.kind === 'net') continue
+      Atomics.store(control.words, workerWord(w.index, W_YIELD), 1)
+      control.wake(w.index)
+    }
+    for (const l of fatalListeners.slice()) l(fatalEvent)
+  }
+
+  /** Loop guards (0005 Panic recovery 3-4, 0014 §6): a second client-instance trap, or a second
+   * sim-worker death, within this window of the injected clock is fatal. The clock is main's: the
+   * workers have none that a test can move, so they report each event and main counts. */
+  const LOOP_GUARD_WINDOW_MS = 10_000
+  let lastClientTrapMs: number | null = null
+  let lastSimDeathMs: number | null = null
+  let simDeaths = 0
+
+  function onClientTrapped(m: { message: string }): void {
+    for (const l of resyncingListeners.slice()) l()
+    const now = clock.now()
+    const repeated = lastClientTrapMs !== null && now - lastClientTrapMs < LOOP_GUARD_WINDOW_MS
+    lastClientTrapMs = now
+    if (repeated) {
+      raiseFatal(`the client instance trapped twice within 10 s: ${m.message}`)
+    }
+  }
+
+  function killList(): number[] {
+    const v = options.test?.flags?.killSimWorkerAtTick
+    return v === undefined ? [] : Array.isArray(v) ? v : [v]
+  }
+
+  /** A worker ended after `ready` (an `error` event or a `fatal` message). The sim worker of a
+   * persisted world is replaced (0005 Panic recovery 2, last sentence); every other case has nothing
+   * to recover from. */
+  function onWorkerDeath(worker: Worker, why: string): void {
+    if (destroyed || fatalEvent) return
+    const entry = workers.find((w) => w.worker === worker)
+    if (!entry) return // already replaced or torn down
+    if (entry.kind !== 'sim') {
+      raiseFatal(`${entry.kind} worker ended: ${why}`)
+      return
+    }
+    void respawnSim(entry, why)
+  }
+
+  async function respawnSim(entry: WorkerEntry, why: string): Promise<void> {
+    const now = clock.now()
+    const repeated = lastSimDeathMs !== null && now - lastSimDeathMs < LOOP_GUARD_WINDOW_MS
+    lastSimDeathMs = now
+    simDeaths++
+    if (repeated) {
+      raiseFatal(`the sim worker died twice within 10 s: ${why}`)
+      return
+    }
+    if (options.host.kind !== 'local' || options.host.persist !== true) {
+      // An unpersisted world has no snapshot to load: a new sim worker would start a different world.
+      raiseFatal(`the sim worker died and the world is not persisted: ${why}`)
+      return
+    }
+    // Terminating releases the world's Web Lock; the new worker's own lock request retries briefly.
+    entry.worker.terminate()
+    workers.splice(workers.indexOf(entry), 1)
+    for (const word of [W_YIELD, W_PARKED, W_READY]) {
+      Atomics.store(control.words, workerWord(entry.index, word), 0)
+    }
+    try {
+      await spawnOne({ kind: 'sim', index: entry.index, arenaBytes: arenas.sim }, undefined, {
+        respawn: true,
+        flags: respawnFlags(),
+      })
+    } catch (e) {
+      raiseFatal(`the sim worker could not be respawned: ${errorMessage(e)}`)
+      return
+    }
+    // The new sim end knows no session. A change of `CB_LINK_GEN` makes the client worker send
+    // `Hello` again (warm, with its resume hint); the answer is a second `Welcome` at the bumped
+    // epoch, the same resync a reconnect takes.
+    Atomics.add(control.words, CB_LINK_GEN, 1)
+    control.wake(WORKER_CLIENT)
+  }
+
+  /** `TestFlags` for a respawned sim worker: the `killSimWorkerAtTick` entries already used are
+   * dropped (the world resumes below that tick and would otherwise die there again). */
+  function respawnFlags(): TestFlags | undefined {
+    const flags = options.test?.flags
+    if (!flags) return undefined
+    const { killSimWorkerAtTick: _used, ...rest } = flags
+    const left = killList().slice(simDeaths)
+    return left.length > 0 ? { ...rest, killSimWorkerAtTick: left } : rest
   }
 
   // docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "Link events"): `client.
@@ -1689,6 +1849,10 @@ export function createClient(options: ClientOptions): Client {
     void navigator.storage.persist()
   }
   function onLifecycle(m: SimLifecycleMessage): void {
+    if (m.type === 'sim-fatal') {
+      raiseFatal(m.message, m.tick)
+      return
+    }
     if (m.type === 'storage') {
       if (persistWorldCreated === undefined) persistWorldCreated = m.created
       tryPersist()
@@ -1709,6 +1873,10 @@ export function createClient(options: ClientOptions): Client {
     }
     if (m.type === 'client-configured') {
       spawnGenLate(m.config)
+      return
+    }
+    if (m.type === 'client-trapped') {
+      onClientTrapped(m)
       return
     }
     cameraIntegrator.setViewClamp(m.viewMaxTilesPerAxis)
@@ -1915,6 +2083,12 @@ export function createClient(options: ClientOptions): Client {
         at(actionResultListeners, li)(seq, result)
       }
     }
+    if (fatalRejectSeqs.length > 0) {
+      const engineFault: ActionOutcome<unknown> = { Rejected: { Engine: 'EngineFault' } }
+      for (const seq of fatalRejectSeqs.splice(0)) {
+        for (const l of actionResultListeners.slice()) l(seq, engineFault)
+      }
+    }
   }
 
   // docs/plan/16b-ui-observation-and-clock.md Scope: "`client.clock()` returns a reused object
@@ -1993,7 +2167,9 @@ export function createClient(options: ClientOptions): Client {
   }
 
   type Spawn = { kind: WorkerKind; index: number; arenaBytes: number }
-  let spawnOne: (sp: Spawn, game?: unknown) => Promise<void> = () => Promise.resolve()
+  type SpawnExtra = { respawn?: boolean; flags?: TestFlags | undefined }
+  let spawnOne: (sp: Spawn, game?: unknown, extra?: SpawnExtra) => Promise<void> = () =>
+    Promise.resolve()
   let compiledModule: WebAssembly.Module | undefined
   let lateGenSpawns: Spawn[] | null = null
   let genSpawned = false
@@ -2127,7 +2303,7 @@ export function createClient(options: ClientOptions): Client {
     // Orchestrator ruling 1 (Planning decisions): a topology fact, carried identically to the
     // `sim` and `client` setup messages, never to `gen`/`net` (`linked` itself is computed once,
     // above `start()`, so this and `ready`'s own extended meaning cannot drift apart).
-    spawnOne = ({ kind, index, arenaBytes }, gameForKind) => {
+    spawnOne = ({ kind, index, arenaBytes }, gameForKind, extra) => {
       const worker = spawnWorker(options)
       workers.push({ kind, index, worker })
       const config: InstanceConfig = {
@@ -2177,7 +2353,7 @@ export function createClient(options: ClientOptions): Client {
         sabs,
         config,
         wasm,
-        options.test?.flags,
+        extra && 'flags' in extra ? extra.flags : options.test?.flags,
         link,
         world,
         net,
@@ -2187,6 +2363,8 @@ export function createClient(options: ClientOptions): Client {
         onWelcome,
         handleNetLink,
         onWorldMismatch,
+        (why) => onWorkerDeath(worker, why),
+        extra?.respawn === true,
       )
     }
     await Promise.all(spawns.map((sp) => spawnOne(sp)))
@@ -2222,6 +2400,7 @@ export function createClient(options: ClientOptions): Client {
     onUi,
     onStorage,
     onResyncing,
+    onFatal,
     onRendererLost,
     raiseRendererLost,
     onLink,

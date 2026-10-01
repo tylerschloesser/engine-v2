@@ -17,6 +17,7 @@ import {
   type ClientOptions,
   clientTestHandle,
   createClient,
+  type FatalEvent,
   type WorkerEntry,
 } from '../../../../src/client.ts'
 import {
@@ -29,7 +30,7 @@ import {
 import { RingConsumer, type RingStats } from '../../../../src/sab/ring.ts'
 import { callParked, parkWorkers, resumeWorkers, stepFrame } from '../../../../src/test/client.ts'
 import * as gen from '../../../../src/test/gen.ts'
-import { isolateName } from '../../../../src/worker/protocol.ts'
+import { GEN_TRAPS_CALL, isolateName, TRAPS_BYTES } from '../../../../src/worker/protocol.ts'
 import { fixtureWasm } from './fixture-wasm.ts'
 
 const wasm = await fixtureWasm('worldgen')
@@ -68,6 +69,10 @@ declare global {
     }) => void
     __genStep?: (dtMs: number) => void
     __genStats?: () => Promise<gen.GenStats>
+    /** docs/plan/37-robustness-events.md step 1: how many times `gen0` replaced a trapped instance. */
+    __genTraps?: () => Promise<number>
+    /** `client.onFatal` events so far (registered when the client is created). */
+    __genFatal?: () => FatalEvent[]
     __genIdle?: () => Promise<void>
     __genChunkHash?: (cx: number, cy: number) => Promise<string | null>
     __genChunkHashRect?: (
@@ -99,6 +104,9 @@ function requireClient(): Client {
   return c
 }
 
+const genFatal: FatalEvent[] = []
+window.__genFatal = () => genFatal.slice()
+
 window.__genCreateClient = (opts = {}) => {
   const canvas = document.createElement('canvas')
   const genWorkers = opts.genWorkers ?? 1
@@ -123,6 +131,10 @@ window.__genCreateClient = (opts = {}) => {
   if (opts.arenas) options.arenas = opts.arenas
   if (opts.createWorker) options.createWorker = opts.createWorker
   window.__genClient = createClient(options)
+  genFatal.length = 0
+  window.__genClient.onFatal((e) => {
+    genFatal.push(e)
+  })
   // Swallow here, synchronously with creation (same reasoning as `topology.ts`): `__genClientReady`
   // observes the same promise's outcome independently later.
   window.__genClient.ready.catch(() => {})
@@ -159,6 +171,13 @@ window.__genStep = (dtMs) => {
 }
 
 window.__genStats = () => gen.stats(requireClient())
+window.__genTraps = async () => {
+  const client = requireClient()
+  await parkWorkers(client)
+  const { result } = await callParked(client, 'gen0', GEN_TRAPS_CALL, [], TRAPS_BYTES)
+  await resumeWorkers(client)
+  return new DataView(result.buffer).getUint32(0, true)
+}
 window.__genIdle = () => gen.idle(requireClient())
 window.__genChunkHash = (cx, cy) => gen.chunkHash(requireClient(), cx, cy)
 /** Batched form of `__genChunkHash`, one `page.evaluate` round trip for a whole rect instead of one

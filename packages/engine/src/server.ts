@@ -16,6 +16,7 @@ import {
   buildBye,
   buildReject,
   CloseCode,
+  MAGIC,
   ProtocolError,
   parseBuildHash32,
   parseBye,
@@ -576,6 +577,10 @@ interface QueuedAttach {
 /** 0013 Client policy's own handshake analogue (Scope: "no `Hello` within 5 s, closes with
  * `ProtocolError`"). */
 const HELLO_TIMEOUT_MS = 5000
+/** `Hello`'s first wire byte (the low byte of `MAGIC`, `>= 0x80`: 0024 §8 keeps it clear of every
+ * post-handshake `MsgType`, `0x01..=0x05`). A settled connection that sends one is starting its
+ * handshake over (`reopenOnHello`). */
+const HELLO_LEAD_BYTE = MAGIC & 0xff
 /** Scope: "Non-`Hello` messages before `Hello` are dropped silently (at most 8, then close)". */
 const MAX_GARBAGE_MESSAGES = 8
 
@@ -647,6 +652,10 @@ export function createSimHostFromInstance(
   // docs/plan/28b-reconnect-and-lifecycle.md step 4: `SimHost.idleCalls`'s own backing counter,
   // bumped once per completed idle sequence (`lifecycle.ts`'s own `deps.idle` callback, below).
   let idleCalls = 0
+  // docs/plan/37-robustness-events.md step 3 (0005 Panic recovery 4, Storage): set once by
+  // `raiseFatal`. A fatal host runs no tick, writes no file (no snapshot on `stop()`/`pause()`) and
+  // never starts again: a fixed build loads the last snapshot through the upgrade path.
+  let fatal = false
 
   // docs/plan/28b-reconnect-and-lifecycle.md step 2: the session epoch (0013/0005), loaded from
   // `persistence.epoch` when a `Persistence` is wired in (`ManifestV1.epoch`, reserved by M22),
@@ -862,6 +871,11 @@ export function createSimHostFromInstance(
       entry.connection.onMessage = (bytes) => {
         const withLenIn = entry.connection as Connection & { lastMessageLength?: number }
         const len = withLenIn.lastMessageLength ?? bytes.length
+        // docs/plan/37-robustness-events.md step 1: a `Hello` on a settled connection restarts it.
+        if (bytes[0] === HELLO_LEAD_BYTE) {
+          reopenOnHello(entry.conn, entry.connection, bytes)
+          return
+        }
         // docs/plan/28b-reconnect-and-lifecycle.md step 4 (0013 "an explicit `Bye` skips the
         // grace"): peeks the one `MsgType` byte every message opens with (`parseBye`'s own doc
         // comment) before falling back to the ordinary admit path -- an explicit `Bye{Leave}` from
@@ -920,6 +934,7 @@ export function createSimHostFromInstance(
    * connection, in `ConnId` order. No clock read here any more (Deviations): a tick's own overrun
    * is no longer measured individually. */
   function runOneTick(): void {
+    if (fatal) return
     // docs/plan/28-sessions-and-reconnect.md Planning decisions "Async digest, deterministic
     // order": consumed at *this* tick boundary, before anything else -- an attach's own
     // `Joined`/`Connected` records must reach `pending_records` before `sim.simTick()` drains it
@@ -1073,9 +1088,47 @@ export function createSimHostFromInstance(
     }
   }
 
+  /** The one way a host gives up. Idempotent; reports through `host.onFatal` (0024 §5 on a server:
+   * `HostServices.onFatal`; the sim worker posts `sim-fatal`). */
+  function raiseFatal(f: { tick: number; message: string }): void {
+    if (fatal) return
+    fatal = true
+    disarm()
+    running = false
+    lifecycle.dispose()
+    host.onFatal?.(f)
+  }
+
+  // A failed or lost storage write is fatal to the world (0005 Storage, 0004); `Persistence` already
+  // refuses further writes, this makes the host stop and say so.
+  if (persistence) {
+    persistence.onStorageError = (err) => {
+      raiseFatal({
+        tick: counters.ticksRun,
+        message: `storage error: ${err instanceof Error ? err.message : String(err)}`,
+      })
+    }
+  }
+
+  /** A settled connection sent a `Hello`: its client replaced the instance that held the session (a
+   * client-role trap, 0014 §6) or lost the sim it spoke to. Same teardown as an ungraceful close,
+   * then the connection is accepted afresh and the `Hello` handed to the new handshake, so a
+   * trapped client's full resync needs no redial on any transport (ring pair, socket, memory pair).
+   * The player's slot, presence and grace timer behave as they do across a reconnect. */
+  function reopenOnHello(conn: ConnId, connection: Connection, bytes: Uint8Array): void {
+    const state = handshakeState.get(conn)
+    if (state?.status !== 'settled') return
+    detachKeepingPresence(conn, state.playerId)
+    if (state.playerId !== undefined) lifecycle.connectionDropped(state.playerId)
+    conns[conn] = null
+    handshakeState.delete(conn)
+    host.accept(connection)
+    connection.onMessage?.(bytes)
+  }
+
   const host: SimHost = {
     start() {
-      if (running) return
+      if (running || fatal) return
       ensureGenesis()
       // A fresh resync anchor (Deviations): the first tick after this arms sets `syncBaseMs` from
       // real "now" at that moment, so neither the time this call itself took nor (on a second
@@ -1090,6 +1143,7 @@ export function createSimHostFromInstance(
       disarm()
       running = false
       lifecycle.dispose()
+      if (fatal) return // 37: a fatal world touches no file
       persistence?.snapshotIfDirty()
       await persistence?.pruneSnapshots()
       await persistence?.flush()
@@ -1104,12 +1158,13 @@ export function createSimHostFromInstance(
       paused = true
       disarm()
       running = false
+      if (fatal) return
       persistence?.snapshotIfDirty()
       await persistence?.pruneSnapshots()
       await persistence?.flush()
     },
     resume() {
-      if (running) return
+      if (running || fatal) return
       ensureGenesis()
       // Same reasoning as `start()`: a fresh anchor makes the paused wall-clock interval invisible
       // to pacing (0005 "Idle pause is replay-safe"), with no separate `pausedAt` bookkeeping needed
@@ -1162,14 +1217,14 @@ export function createSimHostFromInstance(
       const admitConnAtTrap = inFlightAdmitConn
       inFlightAdmitConn = null
       if (!recoveryDeps || !persistence) {
-        host.onFatal?.({
+        raiseFatal({
           tick: trapTick,
           message: 'recovery unavailable: no persistence configured for this world',
         })
         return 'fatal'
       }
       if (recoveryCount >= RECOVERY_LOOP_LIMIT) {
-        host.onFatal?.({
+        raiseFatal({
           tick: trapTick,
           message: `recovery loop guard: more than ${RECOVERY_LOOP_LIMIT} recoveries without ${RECOVERY_GOOD_TICKS_RESET} ticked ticks in between`,
         })
@@ -1179,7 +1234,7 @@ export function createSimHostFromInstance(
       goodTicksSinceRecovery = 0
       const result = await runPanicRecovery(persistence, recoveryDeps.newInstance)
       if (result.kind === 'fatal') {
-        host.onFatal?.({ tick: result.tick, message: result.message })
+        raiseFatal({ tick: result.tick, message: result.message })
         return 'fatal'
       }
       recoveryDeps.instance = result.sim
@@ -1587,14 +1642,14 @@ export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldSe
         cfg.keepTickingWhenEmpty ?? false,
       )
       // 0024 §5: "`HostServices` gains `onFatal?`, fed from `SimHost.onFatal`; after it fires the
-      // server stops ticking, closes sockets, touches no file, and adds no protocol." `SimHost.stop()`
-      // is not called here: `recover()` (the only caller of `onFatal`) has already disarmed pacing
-      // itself before reporting fatal (`server.ts`'s own `recover()`, above) -- calling `stop()` again
-      // would re-run its snapshot/flush sequence against a world `onFatal`'s own doc comment says
-      // "touches no file" for.
+      // server stops ticking, closes sockets, touches no file, and adds no protocol." Sockets close
+      // first (clients fall into the ordinary reconnect policy of 0013, and a fixed deploy answers
+      // them with a version mismatch), then the deployer hears of it, then `stop()`: `SimHost` is
+      // already fatal (`raiseFatal` disarmed pacing), so its `stop()` writes no snapshot.
       h.onFatal = (f) => {
         for (const c of acceptedConnections) c.close(0)
         host.onFatal?.(f)
+        void worldServer.stop()
       }
       // docs/plan/28b-reconnect-and-lifecycle.md step 2 (0005 Panic recovery 2: "the host bumps
       // the session epoch; clients see Resyncing ... and take a full resync"): every successful

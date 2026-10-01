@@ -66,6 +66,9 @@ export class RingConnection implements Connection {
   private readonly producer: RingProducer
   private readonly recvBuf: Uint8Array
   private recvLen = 0
+  /** docs/plan/37-robustness-events.md step 2: while `>= 0`, `drainUplink` drops every message whose
+   * first byte is not this one (then clears it). */
+  private skipUntilByte = -1
 
   private readonly retryDepth: number
   private readonly retryBufs: Uint8Array[]
@@ -161,6 +164,14 @@ export class RingConnection implements Connection {
     // Intentionally empty; see the doc comment above.
   }
 
+  /** A sim worker respawned after the first died (docs/plan/37-robustness-events.md step 2): the
+   * client kept pushing camera reports and actions into the uplink ring while nobody drained it, and
+   * they belong to a session this connection never had. Drops everything up to the first message that
+   * opens with `byte` (a `Hello`'s lead byte), which is delivered like any other. */
+  skipUplinkUntilFirstByte(byte: number): void {
+    this.skipUntilByte = byte
+  }
+
   /** Drains every pending `uplink` message, calling `onMessage` once per message with the shared
    * receive buffer (`lastMessageLength` gives its valid length). The caller (`SimHost.accept`'s
    * own per-tick/per-wake pump, Scope) decides when this runs; `RingConnection` never polls on
@@ -169,6 +180,10 @@ export class RingConnection implements Connection {
     for (;;) {
       const len = this.consumer.popInto(this.recvBuf, 0)
       if (len < 0) break
+      if (this.skipUntilByte >= 0) {
+        if (this.recvBuf[0] !== this.skipUntilByte) continue
+        this.skipUntilByte = -1
+      }
       this.recvLen = len
       if (this.onMessage) this.onMessage(this.recvBuf)
     }

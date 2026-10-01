@@ -24,7 +24,7 @@
 // does.
 import { Role } from '../abi.js'
 import { systemClock, systemScheduler } from '../clock.js'
-import { parseBuildHash32 } from '../host/handshake.js'
+import { MAGIC, parseBuildHash32 } from '../host/handshake.js'
 import { Persistence, WorldLoadError } from '../host/persistence.js'
 import { loadSessionTable } from '../host/sessions.js'
 import { EngineTrap } from '../loader.js'
@@ -64,6 +64,7 @@ import {
 } from './protocol.js'
 import type { LoopState, Shell } from './shell.js'
 import { handleTestCall } from './test-call.js'
+import { asNumberList } from './test-trap.js'
 
 /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: the Web Lock name a persisted world's
  * sim worker holds for its whole life (Planning decision 6: "Import ... takes lock `world:<id>` for
@@ -516,8 +517,13 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // docs/plan/24-recovery-and-migration.md: the fatal report, through M06b's `shell.fatal`, with the
   // tick prefixed (Scope: "wiring into ... the sim worker (fatal report via `shell.fatal` with the
   // tick prefixed)").
+  // docs/plan/37-robustness-events.md step 3: the world is wedged (or its storage failed), which is
+  // not the worker dying. Say so with `sim-fatal` (main raises `client.onFatal`) and stay alive: the
+  // body below runs no more ticks, no file is touched, and `exportWorld` still reaches the storage.
+  let fatalSeen = false
   simHost.onFatal = (f) => {
-    shell.fatal(`sim fatal at tick ${f.tick}: ${f.message}`)
+    fatalSeen = true
+    shell.post({ type: 'sim-fatal', tick: f.tick, message: f.message })
   }
   // docs/plan/28b-reconnect-and-lifecycle.md step 2 (0005 Panic recovery 2): the same per-call-site
   // wiring `server.ts`'s own `createWorldServer` uses -- every successful `recover()` (a live panic,
@@ -531,6 +537,10 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // is already live by the time this runs, so this is not a no-op (only relevant here since
   // load-time `Persistence.open` decides the upgrade path before any connection exists to resync --
   // `resyncAll()` itself is a no-op with none open yet).
+  // docs/plan/37-robustness-events.md step 2: this worker replaces one that died. The ordinary load
+  // path above has already run (snapshot and log tail); a new session epoch tells the clients their
+  // old one is over (0005 Panic recovery 2).
+  if (message.respawn === true) simHost.bumpEpoch()
   if (openedUpgrade) {
     simHost.onRecovered?.({
       reason: 'upgrade',
@@ -563,6 +573,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
           { control: shell.control, index: WORKER_CLIENT },
         )
       : null
+  if (connection && message.respawn === true) connection.skipUplinkUntilFirstByte(MAGIC & 0xff)
   if (connection) simHost.accept(connection)
 
   let lastStepReq = Atomics.load(shell.control.words, CB_SIM_STEP_REQ)
@@ -603,11 +614,21 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // made (kept as one flag, not two independent conditions that could drift).
   if (pacingEnabled) simHost.start()
 
+  // `TestFlags.killSimWorkerAtTick` / `failStorageAtTick` (docs/plan/37-robustness-events.md): the
+  // first listed tick is this worker's; `client.ts` hands a respawned worker the rest.
+  const killAtTick = asNumberList(message.test?.killSimWorkerAtTick)?.[0] ?? null
+  const failStorageAt = message.test?.failStorageAtTick ?? null
+  let storageFailed = false
   const leakyAppendArmed = message.test?.leakyStorageAppend === true
   // M36's bench HUD (`CB_SIM_TICK_US`); only a bench page's setup carries it.
   const timing = message.test?.timing === true
 
   function body(wokenBy: number): void {
+    if (fatalSeen) {
+      // A wedged world runs nothing more (and may be woken by a stray ring push): ack and return.
+      Atomics.store(shell.control.words, workerWord(shell.index, W_ACK), wokenBy)
+      return
+    }
     try {
       if (gcHook) applyGcHook(shell.control, shell.index)
       // `neg_control_snapshot_allocates`'s own per-tick trigger (above): unconditional, every real
@@ -655,6 +676,18 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       lastWokenBy = wokenBy
       Atomics.store(shell.control.words, CB_SIM_TICKS_RUN, simHost.counters.ticksRun)
       Atomics.store(shell.control.words, workerWord(shell.index, W_ACK), wokenBy)
+      if (failStorageAt !== null && !storageFailed && simHost.counters.ticksRun >= failStorageAt) {
+        // What a failing OPFS write reports (0005 Storage): `Storage.onError`, which `Persistence`
+        // forwards to `SimHost`, which raises `onFatal`.
+        storageFailed = true
+        worldStorage?.onError?.(new Error('failStorageAtTick: injected storage failure'))
+      }
+      if (killAtTick !== null && simHost.counters.ticksRun >= killAtTick) {
+        // As if an uncaught error had ended this worker (`TestFlags.killSimWorkerAtTick`): main sees a
+        // `fatal` after `ready`, which for the sim worker means respawn. The wake is already acked.
+        shell.fatal(`killSimWorkerAtTick: sim worker killed at tick ${simHost.counters.ticksRun}`)
+        return
+      }
       // Planning decision 2, wired for real (M23 fix round 1: `shell.runAsync` now actually leaves
       // this pass's own enclosing loop instead of starving `fn` -- see `worker/shell.ts`). Polled after
       // every pass, cheap on the (overwhelmingly common) `null` read: `pendingAsync()` itself allocates
