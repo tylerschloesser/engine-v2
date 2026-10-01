@@ -8,8 +8,8 @@
 // - `dist`: every `dist/*.js` reachable from a non-test subpath, unminified, comments included, as
 //   `tsc` wrote them. Recorded only: that includes `engine/server/*` and `engine/vite`, which a
 //   browser never downloads, and doc comments.
-// - `browser`: `engine`, `engine/render` and `engine/worker` (the worker script, reached as the
-//   `new Worker(new URL(...))` asset) bundled and minified by Vite, the way a game's own build
+// - `browser`: `engine` and `engine/render`, plus the worker script `client.js` reaches as a
+//   `new Worker(new URL(...))` asset, bundled and minified by Vite, the way a game's own build
 //   ships them. This is the one `size.engineJsBrotli` is read against.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -49,8 +49,7 @@ async function browserBundle(): Promise<FileSize[]> {
           id === entry
             ? `import * as client from ${JSON.stringify(dist('client.js'))}
 import * as render from ${JSON.stringify(dist('render.js'))}
-import * as worker from ${JSON.stringify(dist('worker.js'))}
-globalThis.__size = [client, render, worker]`
+globalThis.__size = [client, render]`
             : undefined,
       },
     ],

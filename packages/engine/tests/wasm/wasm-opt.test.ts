@@ -58,7 +58,7 @@ test('build: wasm-opt changes hash and sets game.json @slow', async () => {
   }
   const plain: BuildGameResult = await buildGame({ crate: CRATE, profile: 'release' })
   expect(plain.wasmOpt).toBe(false)
-  expect(json().wasmOpt, 'not requested: the key is absent').toBeUndefined()
+  expect(json().wasmOpt, 'not requested: false').toBe(false)
   const plainBytes = readFileSync(plain.wasmPath)
 
   const opt = await buildGame({ crate: CRATE, profile: 'release', wasmOpt: true })

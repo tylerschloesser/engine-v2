@@ -123,15 +123,12 @@ async function checkCell(page: Page, a: ScratchApp, mode: 'dev' | 'build', baseU
     buildHash: string
   }
   let server: Awaited<ReturnType<typeof startTestServer>> | undefined
-  let ticker: NodeJS.Timeout | undefined
   try {
     for (const host of ['local', 'remote'] as const) {
       const where = `${cell} (${host})`
       if (host === 'remote') {
-        const started = await startTestServer({ fixture: a.buildDir(profile), manualTimer: true })
+        const started = await startTestServer({ fixture: a.buildDir(profile), manualTimer: false })
         server = started
-        // `manualTimer: false` is the helper's unused path; the manual one is what every `mp` spec drives.
-        ticker = setInterval(() => started.stepTick(1), 50)
       }
       const query =
         host === 'local'
@@ -164,7 +161,6 @@ async function checkCell(page: Page, a: ScratchApp, mode: 'dev' | 'build', baseU
       expect(page.workers().length, `${where}: workers running`).toBeGreaterThanOrEqual(3)
     }
   } finally {
-    clearInterval(ticker)
     await server?.stop()
   }
 }

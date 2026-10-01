@@ -9,7 +9,7 @@
 // `createClient` cannot own the assembly without taking a clock and a drain policy it deliberately
 // does not know (0018 §1). The map below pins it.
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -166,4 +166,19 @@ test('exports-map: the shipped crate manifest has no workspace inheritance and t
     pick(tomlTable(root, 'workspace.package'), ['version', 'edition', 'publish']),
   )
   expect(tomlTable(crate, 'lints.clippy')).toEqual(tomlTable(root, 'workspace.lints.clippy'))
+})
+
+/** Every file under `dir`, as paths relative to it. */
+function filesUnder(dir: string, prefix = ''): string[] {
+  return readdirSync(join(dir, prefix), { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? filesUnder(dir, `${prefix}${e.name}/`) : [`${prefix}${e.name}`],
+  )
+}
+
+test('exports-map: every file in dist has a source file (build cleans dist)', () => {
+  const orphans = filesUnder(`${PKG}dist`).filter((f) => {
+    const stem = f.replace(/\.(d\.ts|js\.map|d\.ts\.map|js)$/, '')
+    return !existsSync(`${PKG}src/${stem}.ts`) && !existsSync(`${PKG}src/${f}`)
+  })
+  expect(orphans).toEqual([])
 })

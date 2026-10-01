@@ -85,10 +85,10 @@ export type GameJson = {
   abiVersion: number
   profile: Profile
   features?: string[]
-  /** Present only when `buildGame({ wasmOpt: true })` was asked: `true` if `wasm-opt` ran, `false` if
-   * it was missing (`wasm-opt-missing`). Absent means not requested. Makes the deploy skew of 0017
+  /** Always written: `true` if `wasm-opt` ran on these bytes, `false` if it was not asked for or was
+   * missing (`wasm-opt-missing`). Makes the deploy skew of 0017
    * (client and server built on machines with and without `wasm-opt`) readable from the file. */
-  wasmOpt?: boolean
+  wasmOpt: boolean
 }
 
 export class CargoBuildError extends Error {
@@ -267,9 +267,8 @@ export async function buildGame(opts: BuildGameOptions): Promise<BuildGameResult
 
   const wasmPath = join(dir, 'game.wasm')
   const jsonPath = join(dir, 'game.json')
-  const json: GameJson = { buildHash, abiVersion, profile }
+  const json: GameJson = { buildHash, abiVersion, profile, wasmOpt: optimised }
   if (features.length > 0) json.features = features
-  if (opts.wasmOpt) json.wasmOpt = optimised
   await mkdir(dirname(wasmPath), { recursive: true })
   // Write beside the target, then rename: a reader (the dev server's wasm route, a concurrent
   // build of the same crate, a test comparing bytes) never sees a truncated 3.7 MB file.

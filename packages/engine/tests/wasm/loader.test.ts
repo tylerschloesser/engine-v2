@@ -177,7 +177,12 @@ describe('loader', () => {
   test('build: game.json matches bytes', () => {
     const json = JSON.parse(readFileSync(join(fixtureBuildDir('hash'), 'game.json'), 'utf8'))
     const hash = createHash('sha256').update(fixtureBytes('hash')).digest('hex')
-    expect(json).toEqual({ buildHash: hash, abiVersion: ABI_VERSION, profile: 'dev' })
+    expect(json).toEqual({
+      buildHash: hash,
+      abiVersion: ABI_VERSION,
+      profile: 'dev',
+      wasmOpt: false,
+    })
     expect(buildHash).toBe(hash)
   })
 })
