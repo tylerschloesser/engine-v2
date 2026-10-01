@@ -96,3 +96,16 @@ fn golden_replay_reports_the_first_divergent_tick() {
         .expect("a changed log must not replay to the golden");
     assert!(message.contains("first divergent tick"), "{message}");
 }
+
+/// Heavy mode at N = 1 (0002 "Heavy mode", 0020 section 5; docs/plan/36-slow-tier-and-benchmarks.md):
+/// every tick of the full-game golden log, snapshot and restore into a fresh `Sim`, same hashes as
+/// the uninterrupted run. The `.wasm` twin is `heavy-n1 all logs @slow`.
+#[test]
+fn slow_heavy_full_game_n1() {
+    let (golden, log) = read_golden();
+    let result = engine::testing::replay::heavy::<RefGame>(params(golden.seed), &log, 1);
+    assert!(
+        result.is_ok(),
+        "heavy mode (N=1) over full-game.log: {result:?}"
+    );
+}

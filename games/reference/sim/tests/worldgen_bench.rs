@@ -8,7 +8,6 @@
 use engine::world::{ChunkCoord, ChunkDims, Tile};
 use engine::worldgen::Worldgen;
 use reference_sim::{RefParams, RefWorldgen};
-use std::time::Instant;
 
 mod common;
 use common::TEST_SEED;
@@ -35,7 +34,10 @@ fn slow_worldgen_chunk_reference() {
     gen_batch(-WARMUP, &mut out);
     let mut per_chunk_ms = Vec::with_capacity(BATCHES as usize);
     for b in 0..BATCHES {
-        let t = Instant::now();
+        // The ban on `Instant` (0002 section 2) is about sim code; a bench's own timer never
+        // reaches state (the chunk bytes are discarded).
+        #[allow(clippy::disallowed_types)]
+        let t = std::time::Instant::now();
         gen_batch(1_000 + b * CHUNKS_PER_BATCH, &mut out);
         per_chunk_ms.push(t.elapsed().as_secs_f64() * 1000.0 / f64::from(CHUNKS_PER_BATCH));
     }
