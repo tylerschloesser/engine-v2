@@ -35,9 +35,12 @@ async function bothCraftAFurnace(r: RefHarness): Promise<void> {
   }
 }
 
-test('reference_race_same_spot', async () => {
-  for (const latency of LATENCIES) {
-    for (const winner of [0, 1] as const) {
+// One test per (latency, arrival order) pair (M36b step 4b): the body is the former double loop's,
+// unchanged; ids were `reference_race_same_spot`, now `reference_race_same_spot <ms> ms, winner <n>`.
+test.each(LATENCIES.flatMap((l) => ([0, 1] as const).map((w) => [l, w] as const)))(
+  'reference_race_same_spot %i ms, winner %i',
+  async (latency, winner) => {
+    {
       const loser = (1 - winner) as 0 | 1
       const seed = 3420 + latency + winner
       const tag = `seed ${seed}, ${latency} ms, winner client ${winner}`
@@ -97,8 +100,9 @@ test('reference_race_same_spot', async () => {
         await r.dispose()
       }
     }
-  }
-}, 60_000)
+  },
+  60_000,
+)
 
 type Ui = ReturnType<typeof uiOf>
 const STONE = 0

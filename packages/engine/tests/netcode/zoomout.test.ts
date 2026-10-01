@@ -7,7 +7,7 @@
 // Every scenario starts in wilderness west of the block (pristine enters, nothing queued) and pans
 // into it, so `lateVisibleTicks` and the enter bytes are the pan's own. The results are recorded as
 // `counters.net.zoomout*` rows and in the brief's Deviations, with the risk-3 rule's outcome.
-import { afterAll, expect, test } from 'vitest'
+import { afterAll, beforeAll, expect, test } from 'vitest'
 import { assertBudget } from '../../src/test/budget.js'
 import type { NetHarness } from '../../src/test/net-harness.js'
 import { denseWorld, worstSecondAfter } from './support.js'
@@ -40,6 +40,12 @@ function takeClient(cap: number): number {
   nextClient.set(cap, i + 1)
   return i
 }
+// The ~55,000-entity fill is shared fixture setup, not a scenario: built here it is no single test's
+// time (it used to land on whichever test ran first, `baseline-256x144`, and the first cap-144 test).
+beforeAll(async () => {
+  await shared()
+  await shared(144)
+}, 120_000)
 afterAll(async () => {
   for (const w of worlds.values()) await (await w).dispose()
 })
