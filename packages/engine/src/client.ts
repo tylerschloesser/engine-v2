@@ -1677,8 +1677,7 @@ export function createClient(options: ClientOptions): Client {
     // Terminating releases the world's Web Lock. A worker that ended with `shell.fatal` still sits in
     // `Atomics.wait`, which a termination does not interrupt (Chromium kills such a thread after 2 s):
     // wake it first so its loop sees it is finished and returns, and the termination is immediate.
-    Atomics.store(control.words, workerWord(entry.index, W_YIELD), 1)
-    control.wake(entry.index)
+    wakeOutOfWait(entry.index)
     entry.worker.terminate()
     workers.splice(workers.indexOf(entry), 1)
     for (const word of [W_YIELD, W_PARKED, W_READY]) {
@@ -2205,18 +2204,27 @@ export function createClient(options: ClientOptions): Client {
     resultsFrameHandle = scheduler.requestFrame(resultsFrame)
   }
 
+  /** A worker blocked in `Atomics.wait` is not interrupted by a termination, or by its document going
+   * away: Chromium kills the thread only after about 2 s, and a sim worker's `world:<id>` lock goes with
+   * it (the M34b seam, "F5 during startup gets `world-busy`"). Asking it to yield and waking it takes it
+   * out of the wait at once (it parks, which a message-handling worker survives). The one function for
+   * every teardown: `destroy`, a dead sim worker, `pagehide`. */
+  function wakeOutOfWait(index: number): void {
+    Atomics.store(control.words, workerWord(index, W_YIELD), 1)
+    control.wake(index)
+  }
+
   /** Releases `world-owner:<id>` (`holdWorldOwnerLock`); `null` until taken. */
   let releaseWorldOwner: (() => void) | null = null
+  let removePageHide: (() => void) | null = null
 
   function destroy(): void {
     destroyed = true
     releaseWorldOwner?.()
     releaseWorldOwner = null
+    removePageHide?.()
     Atomics.store(control.words, CB_LIFECYCLE, Lifecycle.Stopping)
-    for (const w of workers) {
-      Atomics.store(control.words, workerWord(w.index, W_YIELD), 1)
-      control.wake(w.index)
-    }
+    for (const w of workers) wakeOutOfWait(w.index)
     for (const w of workers) w.worker.terminate()
     for (const dispose of cameraInputDisposers) dispose()
     for (const dispose of persistGestureDisposers) dispose()
@@ -2320,6 +2328,16 @@ export function createClient(options: ClientOptions): Client {
       const owner = await holdWorldOwnerLock(worldConfig.worldId, WORLD_OWNER_WAIT_MS)
       releaseWorldOwner = owner.release
       if (!owner.owned) worldLockWaitMs = 0
+      // The document is going away (not into the bfcache, which keeps the page and its workers
+      // working): take the sim worker out of `Atomics.wait` so the browser can end it promptly and
+      // the lock goes with it. Nothing is released early and the worker does not exit.
+      const onPageHide = (e: Event): void => {
+        if ((e as PageTransitionEvent).persisted) return
+        const sim = workers.find((w) => w.kind === 'sim')
+        if (sim) wakeOutOfWait(sim.index)
+      }
+      globalThis.addEventListener?.('pagehide', onPageHide)
+      removePageHide = () => globalThis.removeEventListener?.('pagehide', onPageHide)
     }
 
     // `options.test.game` is the documented escape hatch for *every* worker (its own doc comment:

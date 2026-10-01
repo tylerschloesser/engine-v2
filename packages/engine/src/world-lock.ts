@@ -2,9 +2,10 @@
 // "F5 during startup gets `world-busy`"). Plain constants: `client.ts` (main thread) imports them, and
 // it must not import anything under `worker/` (`main.no_wasm_instantiate`).
 
-/** How long a starting sim worker waits for `world:<id>`. A reload starts the new document's worker
- * while the old document's sim worker is still alive: a worker blocked in `Atomics.wait` is terminated
- * by the browser only after about 2 s (measured: 1 s is not enough, 2.2 s is), and its lock goes with it. */
+/** The ceiling on how long a starting sim worker waits for `world:<id>`, not the mechanism. A reload
+ * starts the new document's worker while the old document's sim worker may still be alive; main wakes
+ * it out of `Atomics.wait` on `pagehide` (`client.ts` `wakeOutOfWait`), so the browser ends it at once
+ * and the lock goes with it (measured: without the wake about 2 s, with it a reload test is 0.75 s). */
 export const WORLD_LOCK_WAIT_MS = 3000
 
 /** How long main waits for the world-owner lock (`world-owner:<id>`, held by a document's main thread
