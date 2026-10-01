@@ -4,13 +4,13 @@
     "cpu": "Apple M3 Max",
     "arch": "arm64"
   },
-  "measuredAt": "2026-10-01T05:30:09.909Z",
-  "conditions": "Tyler's Mac (Mac15,10, Apple M3 Max), the same save and load as `tick` as the release+bench .wasm in Node through createWorldServer and 8 HeadlessClients (tests/netcode/tick-large-save-node.test.ts); SimHost.stepTick timed, the replicas decode outside the timer; 200 warm-up and 1,200 measured ticks. Warn-only, no absolute budget (0024 section 14).",
+  "measuredAt": "2026-10-01T05:45:05.483Z",
+  "conditions": "Tyler's Mac (Mac15,10, Apple M3 Max), the same save and load as `tick` as the release+bench .wasm in Node through createWorldServer and 8 HeadlessClients (tests/netcode/tick-large-save-node.test.ts); SimHost.stepTick timed, the replicas decode outside the timer; 200 warm-up and 1,200 measured ticks. Warn-only, no absolute budget (0024 section 14). Re-recorded after step 5b (the collapse-check fix; first measurement 12.1 ms).",
   "gated": ["medianMs"],
   "limits": {},
   "metrics": {
-    "medianMs": 12.1109,
-    "p99Ms": 14.4621,
-    "maxMs": 100.7509
+    "medianMs": 10.6292,
+    "p99Ms": 12.6965,
+    "maxMs": 93.1453
   }
 }

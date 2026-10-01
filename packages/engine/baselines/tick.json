@@ -4,19 +4,19 @@
     "cpu": "Apple M3 Max",
     "arch": "arm64"
   },
-  "measuredAt": "2026-10-01T05:26:34.991Z",
-  "conditions": "Tyler's Mac (Mac15,10, Apple M3 Max, 14 logical CPUs), native release (cargo test --release, fat LTO), the standard large save of 0020 section 9 at full scale (262,144 furnaces, 1,048,576 modified tiles) through games/reference/sim/tests/bench_large_save.rs: Host<RefGame> with 8 connections holding maximum views (121 chunks of the furnace block each), unpaced, one FurnaceTake per player per second; 200 warm-up ticks then 1,200 measured; a tick is admit + seal + tick + build_frame x 8, frames discarded. Load average 2-4 (a shared machine). FIRST MEASUREMENT: median 9.6 ms is over the 0010 desktop proxy of 3 ms, so `slow_tick_large_save` fails by design until the plan edit; 62 % of the samples were encode_chunk_snapshot, called per delta-bearing chunk per connection per tick to size the collapse threshold (host/mod.rs build_frame). See docs/plan/36-slow-tier-and-benchmarks.md Deviations, step 4.",
+  "measuredAt": "2026-10-01T05:44:01.476Z",
+  "conditions": "Tyler's Mac (Mac15,10, Apple M3 Max, 14 logical CPUs), native release (cargo test --release, fat LTO), the standard large save of 0020 section 9 at full scale (262,144 furnaces, 1,048,576 modified tiles) through games/reference/sim/tests/bench_large_save.rs: Host<RefGame> with 8 connections holding maximum views (121 chunks of the furnace block each), unpaced, one FurnaceTake per player per second; 200 warm-up ticks then 1,200 measured; a tick is admit + seal + tick + build_frame x 8, frames discarded. Load average 2-4 (a shared machine). Re-recorded after step 5b (M36): the collapse check no longer encodes a chunk snapshot per delta-bearing chunk per connection per tick (short-circuit at 64 B pending, size shared across connections); first measurement was 9.6 ms. Median headroom against the 3 ms proxy is about 4 %.",
   "gated": ["medianMs"],
   "limits": {
     "medianMs": 3
   },
   "metrics": {
-    "medianMs": 9.5962,
-    "p99Ms": 10.772,
-    "maxMs": 11.5723,
-    "tickMedianMs": 1.2777,
-    "framesMedianMs": 8.3135,
+    "medianMs": 2.8711,
+    "p99Ms": 3.5332,
+    "maxMs": 4.2423,
+    "tickMedianMs": 1.219,
+    "framesMedianMs": 1.645,
     "frameBytesPerTick": 32229,
-    "joinMaxMs": 17.254
+    "joinMaxMs": 16.0655
   }
 }
