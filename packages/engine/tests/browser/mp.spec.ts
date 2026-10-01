@@ -277,7 +277,7 @@ test('mp/reconnect-indicator-delay', async ({ page }) => {
     await page.waitForFunction(() => window.__mpLinkState?.() === 'online', { timeout: 20_000 })
     expect(await page.evaluate(() => window.__mpHeldTimers?.())).toEqual([])
     const held = () =>
-      page.waitForFunction(() => (window.__mpHeldTimers?.().length ?? 0) === 1, { timeout: 10_000 })
+      page.waitForFunction(() => (window.__mpHeldTimers?.().length ?? 0) >= 1, { timeout: 10_000 })
 
     // A drop that heals: the timer is asked for, the link is up again (`open` after `close`), and
     // firing the stale timer shows nothing.
@@ -290,7 +290,10 @@ test('mp/reconnect-indicator-delay', async ({ page }) => {
       },
       { timeout: 20_000 },
     )
-    expect(await page.evaluate(() => window.__mpHeldTimers?.())).toEqual([1000])
+    // Every drop asks for the 1,000 ms timer (a redial that fails again asks once more).
+    const timers = (await page.evaluate(() => window.__mpHeldTimers?.())) ?? []
+    expect(timers.length).toBeGreaterThanOrEqual(1)
+    expect(timers.every((ms) => ms === 1000)).toBe(true)
     await page.evaluate(() => window.__mpFireHeld?.())
     expect(await page.evaluate(() => window.__mpLinkState?.())).toBe('online')
 

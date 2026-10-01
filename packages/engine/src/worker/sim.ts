@@ -50,6 +50,7 @@ import { memoryStorage } from '../storage/memory.js'
 import { type OpfsStorage, OpfsUnavailable, opfsStorage } from '../storage/opfs.js'
 import type { Storage } from '../storage/types.js'
 import { worldKeys } from '../storage/types.js'
+import { WORLD_LOCK_WAIT_MS } from '../world-lock.js'
 import { createAtomicsTimer } from './atomics-timer.js'
 import { applyGcHook } from './gc-hook.js'
 import { instantiateFactoryForSetup } from './instantiate.js'
@@ -61,7 +62,6 @@ import {
   PERSISTENCE_DEBUG_CALL,
   SIM_COUNTERS_BYTES,
   SIM_COUNTERS_CALL,
-  WORLD_LOCK_WAIT_MS,
 } from './protocol.js'
 import type { LoopState, Shell } from './shell.js'
 import { handleTestCall } from './test-call.js'

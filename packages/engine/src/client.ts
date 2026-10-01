@@ -63,7 +63,7 @@ import type {
   ToWorker,
   WorkerKind,
 } from './worker/protocol.js'
-import { WORLD_LOCK_WAIT_MS, WORLD_OWNER_WAIT_MS } from './worker/protocol.js'
+import { WORLD_LOCK_WAIT_MS, WORLD_OWNER_WAIT_MS } from './world-lock.js'
 
 export type {
   SupportFailure,

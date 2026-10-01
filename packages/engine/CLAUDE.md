@@ -48,9 +48,7 @@ Rules in force; the rest: briefs 09, 09b, 11, 17b, 18, `docs/plan/device-checks.
 
 ## Where tests live
 
-- **Engine-to-game events (M37):** one delivery style, `client.on<Name>(cb)` per event (no `EngineEvent` union). `src/engine-events.test.ts` (`engine event surface`, `unit`) is the audit: its `ROWS` table names, per event, the `Client` members and the behaviour tests (exact titles) that must exist and not be skipped. **A new engine-to-game event adds a row and a behaviour test.** Rows for `onFatal`, `onDesync`, `rendererLost` and the rest are there to copy.
-
-- `unit`: `*.test.ts` beside the source in `src/`; import `test`/`expect` from `vitest`. `wasm`, `netcode`, `browser`: `tests/<suite>/`. Helpers: `tests/support/` (`scenario.ts` imports only `src/abi.ts` at runtime, so it loads unbuilt).
+- `unit`: `*.test.ts` beside the source in `src/`; import `test`/`expect` from `vitest`. `wasm`, `netcode`, `browser`: `tests/<suite>/`. Helpers: `tests/support/` (`scenario.ts` imports only `src/abi.ts` at runtime, so it loads unbuilt). **Engine-to-game events (M37):** one style, `client.on<Name>(cb)` (no `EngineEvent` union); `src/engine-events.test.ts` (`engine event surface`) audits them: a new event adds a row (members, exact behaviour-test titles, the reference `StatusUi` answer) and a behaviour test.
 - Fixture crates: `fixtures/` (`fixtures/CLAUDE.md`). `tests/` and `fixtures/` are unpublished. Slow tier: `@slow` in the title. New suites and build steps are registered in `scripts/suites.mjs` only.
 
 ## Browser test pages and specs
