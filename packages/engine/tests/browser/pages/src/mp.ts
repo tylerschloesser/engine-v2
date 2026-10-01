@@ -12,13 +12,14 @@ import { hexEncode, loadOrMintSecret } from '../../../../src/client/secret.ts'
 import type { Client, ClientOptions, LinkLogEntry, LinkState } from '../../../../src/client.ts'
 import { clientTestHandle, createClient, readInvite, wsUrl } from '../../../../src/client.ts'
 import { systemClock, systemScheduler } from '../../../../src/clock.ts'
-import { createRealFrameLoop } from '../../../../src/frame-loop.ts'
+import { createFrameLoop } from '../../../../src/frame-loop.ts'
 import { installPageStyles } from '../../../../src/input/page-css.ts'
 import { loadTileArt } from '../../../../src/render/art.ts'
 import type { AdapterInfo, RendererDevice } from '../../../../src/render/device.ts'
 import { initDevice } from '../../../../src/render/device.ts'
 import type { TerrainRenderer } from '../../../../src/render/terrain.ts'
 import { createTerrainRenderer } from '../../../../src/render/terrain.ts'
+import { createViewportController } from '../../../../src/render/viewport.ts'
 import { RingConsumer, type RingStats } from '../../../../src/sab/ring.ts'
 import { readPixels, renderTo } from '../../../../src/test/render.ts'
 import { untilConfigured } from '../../../../src/test.ts'
@@ -235,13 +236,22 @@ function onCamera(): void {
 }
 
 if (workersReady) {
-  const { loop } = createRealFrameLoop({
+  // The terrain pipeline is built for `rgba8unorm` (`__renderAndRead`'s probe target), so the canvas
+  // is configured with the same format (`slice.ts`'s precedent) instead of `createRealFrameLoop`'s
+  // preferred one: a pass whose attachment format differs from the pipeline's is a validation error.
+  const ctx = canvas.getContext('webgpu')
+  if (!ctx) throw new Error('mp.ts: canvas.getContext("webgpu") returned null')
+  ctx.configure({ device: device.device, format: 'rgba8unorm', alphaMode: 'opaque' })
+  const viewport = createViewportController(canvas, renderer, {
+    maxTextureDimension2D: device.device.limits.maxTextureDimension2D,
+  })
+  const loop = createFrameLoop({
     client,
     renderer,
-    canvas,
+    target: () => ctx.getCurrentTexture(),
+    viewport,
     clock: systemClock,
     scheduler: systemScheduler,
-    maxTextureDimension2D: device.device.limits.maxTextureDimension2D,
     onCamera,
     // docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal gate"): the one real page
     // this milestone wires it into -- `client.revealed()` straight through, no page-owned state.

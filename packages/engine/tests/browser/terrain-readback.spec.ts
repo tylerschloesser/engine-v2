@@ -8,7 +8,7 @@ import { expect, test } from '@playwright/test'
 import type { FrameUniformValues } from '../../src/render/terrain.ts'
 import { expectPixel, type PixelBuffer } from '../../src/test/render.ts'
 import { expectAdapter, expectNoGpuErrors } from './support/gpu.ts'
-import { openPage } from './support/page.ts'
+import { allowGpuErrors, openPage } from './support/page.ts'
 import {
   applyTransform,
   jitterDelta,
@@ -1005,6 +1005,7 @@ test('terrain: evicted slot shows new chunk, never stale texels', async ({ page 
 // `expectAdapter|readback` grep, docs/plan/09-renderer-terrain.md Consumes).
 test('device: bad wgsl fails the compilation check', async ({ page }, testInfo) => {
   await openPage(page, '/terrain.html')
+  allowGpuErrors(page) // provokes a WGSL error on purpose
   const init = await page.evaluate(() => window.__terrain?.init())
   expectAdapter(testInfo, init?.adapterInfo ?? null)
   const errors = await page.evaluate(() => window.__terrain?.checkBadWgsl() ?? [])

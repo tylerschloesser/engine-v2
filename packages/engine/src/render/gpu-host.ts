@@ -42,6 +42,7 @@ export async function createGpuHost(opts: GpuHostOptions): Promise<GpuHost> {
   let generation = 0
   let rebuilding: Promise<void> | null = null
   let disposed = false
+  let lastDrawablesEnabled: boolean | null = null
 
   function notify(resources: GpuResources | null): void {
     for (const cb of listeners.slice()) cb(resources)
@@ -55,6 +56,7 @@ export async function createGpuHost(opts: GpuHostOptions): Promise<GpuHost> {
   }
 
   function onLost(): void {
+    lastDrawablesEnabled = current?.drawables?.isEnabled() ?? null
     current = null
     notify(null)
     rebuilding = rebuild().finally(() => {
@@ -75,6 +77,8 @@ export async function createGpuHost(opts: GpuHostOptions): Promise<GpuHost> {
       next.device.device.destroy()
       return
     }
+    // The drawables pass's on/off switch is page state, not GPU state: carry it over.
+    if (lastDrawablesEnabled !== null) next.drawables?.setEnabled(lastDrawablesEnabled)
     current = next
     generation += 1
     watch(next)

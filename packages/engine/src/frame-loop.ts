@@ -282,6 +282,11 @@ export type RealFrameLoopOptions = {
   revealed?(): boolean
   /** M09b step 6: forwarded straight to `createFrameLoop` (see its own doc comment). */
   onPhase?(phase: FramePhase): void
+  /** The canvas context's format and usage, applied on the first configure and on every rebuild.
+   * Default: `getPreferredCanvasFormat()` and `RENDER_ATTACHMENT`. The terrain pipeline's colour
+   * format (`GpuResourcesOptions.colorFormat`) must equal `format`. A page that probes the canvas
+   * texture adds `COPY_SRC` to `usage`. */
+  canvasConfig?: { format?: GPUTextureFormat; usage?: GPUTextureUsageFlags }
   /** Fix round 1 (docs/plan/09b-terrain-art-and-lifecycle.md Deviations): forwarded straight to
    * `createViewportController`'s own `test.observeReal` -- see that option's own doc comment.
    * Never set by a production caller. */
@@ -305,7 +310,7 @@ export type RealFrameLoop = {
  * target).
  */
 export function createRealFrameLoop(opts: RealFrameLoopOptions): RealFrameLoop {
-  let ctx = configureCanvasContext(opts.canvas, opts.renderer.device)
+  let ctx = configureCanvasContext(opts.canvas, opts.renderer.device, opts.canvasConfig)
   const neighbourCutoffPx = opts.render?.neighbourCutoffPx ?? 0
   opts.renderer.frameUniform.neighbourCutoffPx = neighbourCutoffPx
   // `exactOptionalPropertyTypes`: an optional key set to `undefined` is not the same as an absent
@@ -335,7 +340,7 @@ export function createRealFrameLoop(opts: RealFrameLoopOptions): RealFrameLoop {
   // swaps in the rebuilt renderer the canvas is already configured for the new device.
   const unsubscribe = opts.gpu?.onChange((next) => {
     if (next === null) return
-    ctx = configureCanvasContext(opts.canvas, next.device.device)
+    ctx = configureCanvasContext(opts.canvas, next.device.device, opts.canvasConfig)
     next.renderer.frameUniform.neighbourCutoffPx = neighbourCutoffPx
   })
   const loop = createFrameLoop(frameLoopOpts)

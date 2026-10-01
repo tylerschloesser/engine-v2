@@ -16,6 +16,9 @@ export const DEVICE_REQUEST: GPUDeviceDescriptor = {}
 
 /** The `console.warn` line every lost device logs (`initDevice`); the browser harness matches it. */
 export const DEVICE_LOST_PREFIX = 'GPU device lost'
+/** Likewise for every `uncapturederror` (a WebGPU validation error), on every device `initDevice`
+ * ever creates, rebuilt ones included. */
+export const GPU_ERROR_PREFIX = 'GPU uncapturederror'
 
 export type AdapterInfo = {
   vendor: string
@@ -175,7 +178,9 @@ export async function initDevice(opts?: {
     console.warn(`${DEVICE_LOST_PREFIX} (${info.reason}): ${info.message}`)
   })
   device.addEventListener('uncapturederror', (ev) => {
-    errors.push((ev as GPUUncapturedErrorEvent).error.message)
+    const message = (ev as GPUUncapturedErrorEvent).error.message
+    errors.push(message)
+    console.warn(`${GPU_ERROR_PREFIX}: ${message}`)
   })
   const viewProbePasses =
     opts?.test?.forceViewProbe !== undefined

@@ -37,6 +37,12 @@ declare global {
       /** `engine/test`'s `untilRendererRecovered(client)`: the rebuild count. */
       untilRecovered(): Promise<number>
       hasDevice(): boolean
+      /** One `tick()` into the real canvas texture, read back at once: the first 64 pixels of row
+       * 0 as RGBA bytes (`data`), plus the canvas size. */
+      canvasRead(): Promise<{ width: number; height: number; data: number[] }>
+      setDrawablesEnabled(on: boolean): void
+      /** `null` when the drawables pass does not exist. */
+      drawablesEnabled(): boolean | null
       renderAndRead(
         width: number,
         height: number,

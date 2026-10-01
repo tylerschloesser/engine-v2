@@ -22,6 +22,8 @@ export type AttachedDrawables = {
   /** Turns the drawables pass off and on (default on), keeping everything wired: a pixel test
    * compares a frame with the pass on against the same frame with it off. */
   setEnabled(on: boolean): void
+  /** The current `setEnabled` state (carried across a device rebuild by `GpuHost`). */
+  isEnabled(): boolean
 }
 
 export async function attachClientDrawables(
@@ -69,6 +71,9 @@ export async function attachClientDrawables(
     spriteAtlasLoaded: spritesUrl !== undefined,
     setEnabled(on) {
       enabled = on
+    },
+    isEnabled() {
+      return enabled
     },
   }
 }

@@ -4,10 +4,9 @@
 // that format; a real canvas would need the preferred one). Every step is stepped, never real rAF:
 // `step(dtMs)` is `stepFrame` (lockstep with the client worker) followed by one `loop.tick()`.
 import { clientTestHandle, createClient } from '../../../../src/client.ts'
-import { createFrameLoop } from '../../../../src/frame-loop.ts'
+import { createRealFrameLoop, type RealFrameLoop } from '../../../../src/frame-loop.ts'
 import { createGpuHost, type GpuHost } from '../../../../src/render/gpu-host.ts'
 import type { GpuResources } from '../../../../src/render/gpu-resources.ts'
-import { createViewportController } from '../../../../src/render/viewport.ts'
 import { CB_FRAME_REQ, W_ACK, WORKER_CLIENT, workerWord } from '../../../../src/sab/control.ts'
 import { stepFrame as clientStepFrame } from '../../../../src/test/client.ts'
 import { stats as genStats } from '../../../../src/test/gen.ts'
@@ -28,7 +27,7 @@ declare global {
 }
 
 type Client = ReturnType<typeof createClient>
-type FrameLoopT = ReturnType<typeof createFrameLoop>
+type FrameLoopT = RealFrameLoop['loop']
 type ProbeCamera = Parameters<GpuResources['renderer']['writeFrameUniform']>[0]
 
 let client: Client | undefined
@@ -37,8 +36,7 @@ let loop: FrameLoopT | undefined
 let errorsSeen: string[] = []
 let anchorEl: HTMLElement | undefined
 let probeCamera: ProbeCamera | undefined
-let targetOwner: GpuResources | null = null
-let target: GPUTexture | undefined
+let real: RealFrameLoop | undefined
 let ticks = 0
 let ticksWithoutDevice = 0
 
@@ -91,37 +89,30 @@ window.__deviceLoss = {
     gpu.onChange((r) => {
       collect(r)
     })
-    const viewport = createViewportController(canvas, first.renderer, {
-      maxTextureDimension2D: first.device.device.limits.maxTextureDimension2D,
-      test: { observeReal: false },
-    })
-    viewport.forceSize(opts?.cssSize ?? 256, opts?.cssSize ?? 256, 1)
     const probeFrame = (): void => {
       const r = gpu.current
       if (r && probeCamera) r.renderer.writeFrameUniform(probeCamera)
     }
-    loop = createFrameLoop({
+    // A real canvas, `rgba8unorm` (the terrain pipeline's format) with `COPY_SRC` so the page can
+    // read the presented texture back; reconfigured by `createRealFrameLoop` for each rebuilt device.
+    real = createRealFrameLoop({
       clock,
       scheduler: clock,
       client: c,
       renderer: first.renderer,
       gpu,
-      viewport,
-      target: () => {
-        const r = gpu.current as GpuResources
-        if (targetOwner !== r) {
-          targetOwner = r
-          target = r.device.device.createTexture({
-            size: [64, 16],
-            format: 'rgba8unorm',
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-          })
-        }
-        return target as GPUTexture
+      canvas,
+      maxTextureDimension2D: first.device.device.limits.maxTextureDimension2D,
+      canvasConfig: {
+        format: 'rgba8unorm',
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
       },
+      test: { observeReal: false },
       onCamera: probeFrame,
       onOverlay: () => c.overlay.update(),
     })
+    real.viewport.forceSize(opts?.cssSize ?? 256, opts?.cssSize ?? 256, 1)
+    loop = real.loop
     return { adapterInfo: first.device.adapterInfo }
   },
 
@@ -165,6 +156,35 @@ window.__deviceLoss = {
     if (gpu.current === null) ticksWithoutDevice += 1
     const r = requireLoop().tick()
     return { uploadBytes: r.uploadBytes, uploadRecords: r.uploadRecords }
+  },
+
+  /** One production `tick()` drawing into the canvas's own current texture, read back in the same
+   * task (the presented texture is only valid until the task ends). Rows are the canvas's
+   * `width` x `height` (the viewport controller sizes it). */
+  async canvasRead() {
+    const r = requireLoop()
+    r.tick()
+    const gpu = requireHost().current as GpuResources
+    const canvasTexture = (real as RealFrameLoop).ctx.getCurrentTexture()
+    const pixels = await readPixels({
+      device: gpu.device.device,
+      texture: canvasTexture,
+      width: canvasTexture.width,
+      height: canvasTexture.height,
+    })
+    return {
+      width: pixels.width,
+      height: pixels.height,
+      data: Array.from(pixels.data.slice(0, 64 * 4)),
+    }
+  },
+
+  setDrawablesEnabled(on) {
+    ;(requireHost().current as GpuResources).drawables?.setEnabled(on)
+  },
+
+  drawablesEnabled() {
+    return (requireHost().current as GpuResources).drawables?.isEnabled() ?? null
   },
 
   /** Steps until nothing is generating or uploading for a streak of frames. */

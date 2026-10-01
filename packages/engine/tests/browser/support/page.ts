@@ -19,6 +19,13 @@ declare global {
 }
 
 const lossAllowed = new WeakSet<Page>()
+const gpuErrorsAllowed = new WeakSet<Page>()
+
+/** Opts one test out of "every browser test fails on `uncapturederror`" (0020 §6): only for a test
+ * that provokes a validation error on purpose. */
+export function allowGpuErrors(page: Page): void {
+  gpuErrorsAllowed.add(page)
+}
 
 /** M37b (docs/decisions/0020-testing-strategy.md §6): opts one test out of "every browser test fails
  * on a device loss". Only a test that loses the device on purpose (`engine/test`'s `loseDevice`)
@@ -57,6 +64,16 @@ export async function openPage(
       !lossAllowed.has(page)
     ) {
       expect(msg.text(), `${path}: unexpected device loss (use allowDeviceLoss(page))`).toBe('')
+    }
+  })
+
+  page.on('console', (msg) => {
+    if (
+      msg.type() === 'warning' &&
+      msg.text().startsWith('GPU uncapturederror') &&
+      !gpuErrorsAllowed.has(page)
+    ) {
+      expect(msg.text(), `${path}: uncapturederror (0020 §6)`).toBe('')
     }
   })
 

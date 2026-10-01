@@ -40,12 +40,18 @@ export function computeRenderScale(dpr: number, opts?: RenderScaleOptions): numb
 export function configureCanvasContext(
   canvas: HTMLCanvasElement,
   device: GPUDevice,
+  opts?: { format?: GPUTextureFormat; usage?: GPUTextureUsageFlags },
 ): GPUCanvasContext {
   const gpu = (globalThis.navigator as { gpu?: GPU } | undefined)?.gpu
   if (!gpu) throw new Error('configureCanvasContext: navigator.gpu is not present')
   const ctx = canvas.getContext('webgpu')
   if (!ctx) throw new Error('configureCanvasContext: canvas.getContext("webgpu") returned null')
-  ctx.configure({ device, format: gpu.getPreferredCanvasFormat(), alphaMode: 'opaque' })
+  ctx.configure({
+    device,
+    format: opts?.format ?? gpu.getPreferredCanvasFormat(),
+    alphaMode: 'opaque',
+    ...(opts?.usage !== undefined ? { usage: opts.usage } : {}),
+  })
   return ctx
 }
 
