@@ -38,6 +38,10 @@ type BenchHud = {
   dropped: number
   drawCallsMax: number
   uploadBytesMax: number
+  uploadBacklog: number
+  uploadDrops: number
+  uploadFramesAtCap: number
+  uploadBacklogMax: number
 }
 
 declare global {
@@ -50,6 +54,7 @@ declare global {
       stopMarking(): void
       resetCounters(): void
       holdPan(): void
+      stopPan(): void
       releasePan(): void
       adapter(): never
       park(): Promise<void>
@@ -192,11 +197,27 @@ test('bench.frame_reference @slow', async ({ page, browser }, testInfo) => {
   await page.evaluate(() => window.__bench?.stopMarking())
   const hud = await page.evaluate(() => window.__bench?.hud() as BenchHud)
   const hudText = await page.evaluate(() => window.__bench?.hudText() ?? '')
+  // Do the uploads keep up with the pan? Stop the pan, let the loop run, and read the ring again.
+  await page.evaluate(() => window.__bench?.stopPan())
+  await page.waitForFunction(() => window.__bench?.hud().uploadBacklog === 0, null, {
+    timeout: 10_000,
+  })
+  const afterHold = await page.evaluate(() => window.__bench?.hud() as BenchHud)
   await browserSession.send('Tracing.end')
   await traceDone
   await browserSession.detach()
   close?.()
 
+  // Uploads keep up: nothing dropped, the backlog at the end of the pan is bounded and the queue is
+  // empty once the pan stops (`counters.render.uploadBacklogRecords`: derivation in budgets.json).
+  console.log(
+    `  uploads: backlog max over the pan ${hud.uploadBacklogMax}, at end ${hud.uploadBacklog}, after the pan stops ${afterHold.uploadBacklog}, frames at cap ${hud.uploadFramesAtCap}/${TIMED_FRAMES}, drops ${afterHold.uploadDrops}`,
+  )
+  expect(afterHold.uploadDrops, 'upload ring drops').toBe(0)
+  expect(afterHold.uploadBacklog, 'upload backlog after the pan stops').toBe(0)
+  expect(hud.uploadBacklogMax, 'upload backlog, worst frame of the pan').toBeLessThanOrEqual(
+    budget('counters.render.uploadBacklogRecords'),
+  )
   expect(hud.dropped, 'DrawList records dropped at the end').toBe(0)
   expect(hud.records, 'DrawList records at the end of the window').toBeGreaterThanOrEqual(
     MIN_RECORDS,

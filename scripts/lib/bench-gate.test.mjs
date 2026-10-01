@@ -20,6 +20,10 @@ test('bench-gate: threshold and fingerprint', () => {
     failures: [],
     warnings: [expect.any(String)],
   })
+  // 0047: an absolute floor (`minDeltaMs`) must be cleared as well as the 25 %.
+  expect(
+    decide({ baseline: { ...baseline, minDeltaMs: 1 }, sample: { medianMs: 2.6 }, fp }).failures,
+  ).toEqual([])
   // The absolute proxy fails even inside 25 % of a baseline already over it.
   expect(
     decide({ baseline: { ...baseline, metrics: { medianMs: 2.9 } }, sample: { medianMs: 3.2 }, fp })

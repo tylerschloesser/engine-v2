@@ -545,6 +545,8 @@
     },
     "render": {
       "uploadBytesPerFrame": 65536,
+      "uploadBacklogRecords": 16,
+      "uploadBacklogRecordsFormula": "docs/plan/36-slow-tier-and-benchmarks.md step 9b: bench.frame_reference reads the upload ring (pushed - popped; a second RingConsumer used for stats only) on every frame of the 2,000-frame slow pan on the standard large save and keeps the maximum. 16 = DEFAULT_UPLOAD_BUDGET_BYTES (65,536) / 4,096 B per chunk record: a backlog above one frame of drain means uploads do not keep up with the pan. Measured (release, M3 Max, 5 runs): maximum 6-8 records, 0 ring drops, 0-2 of 2,000 frames at the per-frame cap. The test also requires 0 drops and an empty queue once the pan has stopped. Derived from the cap, not measured plus margin.",
       "drawCallsTerrain": 1,
       "drawCallsMax": 9,
       "pipelineSwitches": 1,

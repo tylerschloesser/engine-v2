@@ -10,7 +10,7 @@
 // `engine_mem_grows`, `tick`, and the draw-call and upload-byte counters per frame.
 import type { Client } from 'engine'
 import type { Scheduler } from 'engine/render'
-import { systemScheduler } from 'engine/render'
+import { RingConsumer, type RingStats, systemScheduler } from 'engine/render'
 import { type BenchProbe, benchProbe, parkWorkers, resumeWorkers } from 'engine/test'
 import type { StartedGame } from './game.js'
 import { DEFAULT_WORLD, type Host } from './mode.js'
@@ -104,6 +104,14 @@ export type BenchHud = {
   /** The most draw calls / upload bytes any one frame issued since `resetCounters()`. */
   drawCallsMax: number
   uploadBytesMax: number
+  /** Upload records the client worker pushed that the frame loop has not drained yet, right now. */
+  uploadBacklog: number
+  /** Upload records the ring dropped (full ring). */
+  uploadDrops: number
+  /** The most records waiting in the ring at any frame since `resetCounters()`. */
+  uploadBacklogMax: number
+  /** Frames since `resetCounters()` whose drain hit the per-frame byte cap (the queue was not empty after it). */
+  uploadFramesAtCap: number
 }
 
 export type BenchApi = {
@@ -118,6 +126,8 @@ export type BenchApi = {
   /** Moves the camera to the pan's first position and holds it there (the test then lets the view
    * stream in, parks the workers, wraps `frame`, resumes). */
   holdPan(): void
+  /** Stops the pan where it is. */
+  stopPan(): void
   /** Starts the pan from its first position, counting frames from now: the camera path inside the
    * timed window is then the same every run, whatever the page and CDP round trips took before. */
   releasePan(): void
@@ -154,11 +164,17 @@ export function createBenchMeter(): BenchMeter {
   let lastFrameN = 0
   let panFrame0 = 0
   let panHeld = false
+  let heldD = 0
+  const lastD = 0
   let lastTickN = 0
   let lastDraws = 0
   let lastUpload = 0
   let drawCallsMax = 0
   let uploadBytesMax = 0
+  let framesAtCap = 0
+  let backlogMax = 0
+  const ringStats: RingStats = { drops: 0, pushed: 0, popped: 0 }
+  let ring: RingConsumer | undefined
 
   function steer(): void {
     if (!game || !request) return
@@ -210,6 +226,8 @@ export function createBenchMeter(): BenchMeter {
     const upload = game.real.loop.uploadBytes()
     drawCallsMax = Math.max(drawCallsMax, draws - lastDraws)
     uploadBytesMax = Math.max(uploadBytesMax, upload - lastUpload)
+    if (upload - lastUpload >= 65_536 - 4112) framesAtCap++
+    backlogMax = Math.max(backlogMax, backlog().uploadBacklog)
     lastDraws = draws
     lastUpload = upload
   }
@@ -229,7 +247,15 @@ export function createBenchMeter(): BenchMeter {
       dropped: g.drawables.drawables.drawListDropped(),
       drawCallsMax,
       uploadBytesMax,
+      ...backlog(),
+      uploadFramesAtCap: framesAtCap,
+      uploadBacklogMax: backlogMax,
     }
+  }
+
+  function backlog(): { uploadBacklog: number; uploadDrops: number } {
+    ring?.stats(ringStats)
+    return { uploadBacklog: ringStats.pushed - ringStats.popped, uploadDrops: ringStats.drops }
   }
 
   function hudText(): string {
@@ -242,7 +268,7 @@ export function createBenchMeter(): BenchMeter {
       `main p95: ${ms(h.mainP95Ms)} ms`,
       `frame p95: ${ms(h.frameP95Ms)} ms`,
       `tick p95: ${ms(h.tickP95Ms)} ms`,
-      `drawables: ${h.records} (dropped ${h.dropped}), draws/frame max ${h.drawCallsMax}, upload B/frame max ${h.uploadBytesMax}`,
+      `drawables: ${h.records} (dropped ${h.dropped}), draws/frame max ${h.drawCallsMax}, upload B/frame max ${h.uploadBytesMax}, upload backlog ${h.uploadBacklog}, at cap ${h.uploadFramesAtCap} frames, drops ${h.uploadDrops}`,
     ].join('\n')
   }
 
@@ -252,6 +278,8 @@ export function createBenchMeter(): BenchMeter {
       game = g
       request = req
       probe = benchProbe(g.client as Client)
+      // A second view of the upload ring, for its counters only: it never pops.
+      ring = new RingConsumer(g.client.uploadRing)
       // Max zoom-out over the middle of the dense block, before the first `Ui` can move it to the
       // spawn (`shouldMoveToSpawn` sees a camera that is no longer where the client made it).
       const block = furnaceBlock(req.scale)
@@ -278,9 +306,16 @@ export function createBenchMeter(): BenchMeter {
         resetCounters() {
           drawCallsMax = 0
           uploadBytesMax = 0
+          framesAtCap = 0
+          backlogMax = 0
         },
         holdPan() {
           panHeld = true
+          heldD = 0
+        },
+        stopPan() {
+          panHeld = true
+          heldD = lastD
         },
         releasePan() {
           panHeld = false

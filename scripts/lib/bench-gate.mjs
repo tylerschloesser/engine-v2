@@ -68,7 +68,8 @@ export function decide({ baseline, sample, fp, warnOnly = false }) {
   for (const [metric, base] of Object.entries(baseline.metrics ?? {})) {
     const value = sample[metric]
     if (typeof value !== 'number') continue
-    const over = value > base * (1 + TOLERANCE)
+    // 0047: sub-millisecond metrics also need to clear an absolute floor (default 0).
+    const over = value > base * (1 + TOLERANCE) && value - base > (baseline.minDeltaMs ?? 0)
     const limit = limits[metric]
     const overLimit = typeof limit === 'number' && value > limit
     const messages = []
