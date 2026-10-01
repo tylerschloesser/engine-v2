@@ -1,6 +1,6 @@
 # M35: Packaging: final exports map, tarball and size tests, pattern B proven, `checkSupport` final, release profile
 
-Status: not started · After: 29, 35b · Tyler-dependent: no (Q1 answered: `ts-rs` is a normal dependency; the size test watches that LTO removes it)
+Status: done · After: 29, 35b · Tyler-dependent: no (Q1 answered: `ts-rs` is a normal dependency; the size test watches that LTO removes it)
 
 Split: the Bun and Deno server adapters are `35b-bun-and-deno-adapters.md`; with them the reading list was 0017 + 0020 + 0018 + 0009 + 0005. 35b runs **first**, so the exports map frozen here has a real file behind every subpath and the tarball test can start a Bun server.
 
@@ -56,12 +56,12 @@ Bun/Deno adapters (35b). Durable Object adapter (M38: a recipe package outside t
 `unit`: `exports-map` (final), `checkSupport: each code` (each failure forced by stubbing the global it probes; the only stubs in this milestone). `browser` fast: `checkSupport ok on the harness page`, `reference: capability screen on failure`, packaging smoke if absent. `browser` slow: `tarball-install @slow` (4 tarball cells: dev and build+preview × A and B; 1 link cell; server leg Node + Bun). `wasm`: `plugin-dev: nested touch triggers rebuild`; slow: `size @slow`, `ts-rs zero bytes @slow`, `build: wasm-opt changes hash and sets game.json @slow`, `release module drops info logs @slow` (the `release-names` module holds the fixture's `warn` and `error` strings and neither its `info` nor its `debug` string, and `onLog` never fires below `warn`), `release growth steps 16 MiB and counts @slow` (a release instance allocating past its initial arena: every `memoryBytes()` delta is the 0015 §5 step, `memGrows()` equals the number of steps, growth stops at the ceiling).
 
 ## Exit criteria
-- [ ] `pnpm test unit -t exports-map` passes; `pnpm --filter engine pack --json` lists only `dist/**`, `crates/**`, `package.json`.
-- [ ] `pnpm test:slow browser -t tarball-install` passes every cell, all four worker kinds under pattern B, and the server leg.
-- [ ] `pnpm test:slow wasm -t size`, `-t "ts-rs zero bytes"`, `-t "release module drops info logs"` and `-t "release growth steps"` pass; `test-results/wasm/size.json` exists; a warn-level size is recorded in Deviations, not hidden.
-- [ ] `checkSupport` returns each code under its forced condition and `ok: true` on the harness page; the reference game shows the capability screen when `ok` is false.
-- [ ] The ADR "Build profiles, measured" holds every number listed under Scope, the three profile decisions and the browser-version policy paragraph (Planning decisions); root `Cargo.toml` matches it.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `pnpm test unit -t exports-map` passes; `pnpm --filter engine pack --json` lists only `dist/**`, `crates/**`, `package.json`.
+- [x] `pnpm test:slow browser -t tarball-install` passes every cell, all four worker kinds under pattern B, and the server leg.
+- [x] `pnpm test:slow wasm -t size`, `-t "ts-rs zero bytes"`, `-t "release module drops info logs"` and `-t "release growth steps"` pass; `test-results/wasm/size.json` exists; a warn-level size is recorded in Deviations, not hidden.
+- [x] `checkSupport` returns each code under its forced condition and `ok: true` on the harness page; the reference game shows the capability screen when `ok` is false.
+- [x] The ADR "Build profiles, measured" holds every number listed under Scope, the three profile decisions and the browser-version policy paragraph (Planning decisions); root `Cargo.toml` matches it.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test` · `pnpm lint` · `pnpm test unit -t exports-map` · `pnpm test:slow browser -t tarball-install` · `pnpm test:slow wasm -t size` · `pnpm --filter engine pack --json`

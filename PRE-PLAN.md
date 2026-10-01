@@ -274,7 +274,7 @@ Owner: [0020]; what is asserted: [0002] (determinism), [0016] (zero GC). One com
 | Action rate / log | 20 actions/s sustained, burst 40; ≈ 12–18 B per logged action, 65 KB per active player-hour | [0004] |
 | Memory per instance | arenas: sim 96 MiB, client 48 MiB, gen 4 MiB; ceiling 256 MiB on mobile; world budget 64 MiB (262,144 entities, 1,048,576 modified tiles); dense cache 1,024 chunks = 4 MiB | [0015], [0007] |
 | Memory, whole tab | ≤ 256 MiB single-player on the baseline phone (~160 MiB multiplayer); GPU ≈ 4 MiB page + 2 MiB instances + art; SABs ≈ 12 MiB | [0015], [0018] |
-| Download | game `.wasm` ≤ 1 MB brotli warn / 2 MB fail; engine JS ≤ 50 KB brotli | spec, [0015] |
+| Download | game `.wasm` ≤ 1 MB brotli warn / 2 MB fail; engine JS as downloaded by a player (browser entrypoints, Vite-minified) ≤ 58 KB brotli | spec, [0015], [0045] §5 |
 | Allocation per isolate | main 110 B/frame; client, sim, gen workers 8 B/frame; net worker ≤ 1 KB per message; zero major GCs; zero `memory.grow` | [0016] |
 | Latency | action → authority ≤ 1 tick + network; interpolation delay 100–400 ms adaptive (initial 150); snapshot every 60 s; log sync ≤ 1 s | [0004], [0010], [0005] |
 | Dev loop | ≤ 30 s from one-line Rust edit to tests starting (spike floor: 0.2–0.6 s save → page on the dev profile) | [0020], [0017] |

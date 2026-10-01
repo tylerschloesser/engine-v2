@@ -206,7 +206,7 @@ When: M35 ticked.
 
 **Open:** the `vite build` + `vite preview` output of `games/reference` (`pnpm device:serve --app reference`): on the Mac over loopback; on the iPhone with `--tunnel`.
 
-- [ ] **M35-safari-build-mac** (`0017` §4). *Steps:* load in desktop Safari. *Pass:* the game plays; the debug line reports wasm delivery `module` (`url` only if M35 item (c) built the automatic fallback). *If it fails:* M35 item (c): the automatic `wasmUrl` fallback becomes required; plan edit.
+- [ ] **M35-safari-build-mac** (`0017` §4). *Steps:* load in desktop Safari. *Pass:* the game plays. M35 built item (c)'s automatic fallback (a refused posted `Module` re-sends setup with the `.wasm` URL), so either delivery passes, and the reference game shows no delivery line. *If it fails:* a defect (the fallback did not engage, or something else broke); note the page's error text and the Web Inspector console.
 - [ ] **M35-safari-build-iphone**. Same on the iPhone. *Pass / If it fails:* as above.
 - [ ] **M35-capability** (`0018` §7). *Steps:* open the game in a browser with no `navigator.gpu` (for example Safari with the WebGPU feature flag off). *Pass:* the capability screen appears with `no-webgpu`; no blank page.
 

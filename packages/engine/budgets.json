@@ -5,7 +5,7 @@
     "wasmBrotliWarn": 1000000,
     "wasmBrotliFail": 2000000,
     "engineJsBrotli": 58000,
-    "engineJsBrotliExact": 52853
+    "engineJsBrotliExact": 53251
   },
   "gc": {
     "pages": {

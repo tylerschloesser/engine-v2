@@ -1,6 +1,6 @@
 # 0015: Threads, memory, and topology
 
-Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §9, §10. Amended by [0042](0042-remote-client-world-config-from-welcome.md) §4.
+Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §9, §10. Amended by [0042](0042-remote-client-world-config-from-welcome.md) §4. §6's engine JS budget amended by [0045](0045-build-profiles-measured.md) §5.
 
 ## Context
 

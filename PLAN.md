@@ -91,7 +91,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 34d | `34d-straddling-entity-chunk-versions.md` | a straddling entity bumps every held chunk version on the replica; host/replica `region_hash` agree | 34b | |
 | [x] | 34c | `34c-reference-scripted-multiplayer.md` | scripted multiplayer races + reconnect in the netcode suite. **Reference game complete.** | 34d | |
 | [x] | 35b | `35b-bun-and-deno-adapters.md` | Bun and Deno server adapters | 29 | |
-| [ ] | 35 | `35-packaging-and-adapters.md` | final exports map, tarball + size tests, pattern B, `checkSupport`, release profile | 29, 35b | D |
+| [x] | 35 | `35-packaging-and-adapters.md` | final exports map, tarball + size tests, pattern B, `checkSupport`, release profile | 29, 35b | D |
 | [ ] | 36 | `36-slow-tier-and-benchmarks.md` | `pnpm test:slow`, standard large save, benchmarks | 34c, 35 | |
 | [ ] | 36b | `36b-suite-audit-and-measurements.md` | suite audit, deferred measurements (byte diffing, `wasm-opt`/simd, rebuild time) | 36 | |
 | [ ] | 37b | `37b-device-loss.md` | WebGPU device loss, `rendererLost` | 34c | D |
