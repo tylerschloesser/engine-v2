@@ -169,7 +169,11 @@ impl<G: Game> Sim<G> {
             params.max_modified_tiles,
             params.max_action_growth,
         );
+        // ADR 0046: genesis writes are applied but not logged, and may arm timers.
+        authority.set_in_genesis(true);
         G::genesis(&mut authority as &mut dyn WorldWrite<G>);
+        authority.set_in_genesis(false);
+        authority.clear_changes();
         Sim { authority }
     }
 

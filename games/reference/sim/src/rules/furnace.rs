@@ -130,11 +130,6 @@ pub fn advance(cx: &mut TickCx<'_, RefGame>, id: EntityId) {
     let mut finished = false;
     if let Some(done) = f.smelt_done_at {
         if done > now {
-            // `bench` (never shipped): a builder-made furnace carries a deadline but no timer
-            // (`genesis` has no `wake_at`); its first wake arms it. Replaces the one timer with the
-            // same value elsewhere, so it is only compiled in where it is needed.
-            #[cfg(feature = "bench")]
-            cx.wake_at(id, done);
             return; // a spurious wake mid-smelt: the timer stays.
         }
         f.iron_in = f.iron_in.saturating_sub(1);

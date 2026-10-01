@@ -155,6 +155,9 @@ pub struct Authority<G: Game> {
     store: Store<G>,
     rng: SimRng,
     tick: Tick,
+    /// True only while `Sim::genesis` runs `Game::genesis` (ADR 0046): writes still apply and set
+    /// `dirty`, but are not logged in `changes`, and `WorldWrite::wake_at` is allowed.
+    in_genesis: bool,
     changes: ChangeLog<G>,
     /// Reused across `entities_in` calls (`.claude/rules/hot-paths.md`): a `RefCell` since
     /// `WorldRead::entities_in` takes `&self`.
@@ -221,6 +224,7 @@ impl<G: Game> Authority<G> {
             #[cfg(any(test, feature = "testing"))]
             journal_disabled_for_test: false,
             dirty: false,
+            in_genesis: false,
         }
     }
 
@@ -335,6 +339,7 @@ impl<G: Game> Authority<G> {
             #[cfg(any(test, feature = "testing"))]
             journal_disabled_for_test: false,
             dirty: false,
+            in_genesis: false,
         }
     }
 
@@ -351,6 +356,12 @@ impl<G: Game> Authority<G> {
 
     pub fn changes(&self) -> &[(Scopes, Delta<G>)] {
         self.changes.as_slice()
+    }
+
+    /// `Sim::genesis`'s bracket around `Game::genesis` (ADR 0046): while set, writes are not logged
+    /// and `WorldWrite::wake_at` arms a timer.
+    pub(crate) fn set_in_genesis(&mut self, on: bool) {
+        self.in_genesis = on;
     }
 
     pub fn clear_changes(&mut self) {
@@ -495,7 +506,11 @@ impl<G: Game> Authority<G> {
             self.journal.capture_pre_image(&self.store, &delta);
         }
         self.store.apply(&delta);
-        self.changes.push(scopes, delta);
+        // ADR 0046: genesis writes are not logged. Nothing consumes them (every reader, a first
+        // frame included, reads the store), and the large save's would hold ~210 MB.
+        if !self.in_genesis {
+            self.changes.push(scopes, delta);
+        }
         self.dirty = true;
     }
 
@@ -676,6 +691,16 @@ impl<G: Game> WorldWrite<G> for Authority<G> {
     fn rng(&mut self) -> Result<&mut SimRng, Unknown> {
         Ok(&mut self.rng)
     }
+
+    /// Genesis only (ADR 0046): `apply` and `on_player` also run on `Authority`, where the undo
+    /// journal has no timer pre-image, so anywhere else this is a loud failure, never a no-op.
+    fn wake_at(&mut self, id: EntityId, at: Tick) {
+        assert!(
+            self.in_genesis,
+            "WorldWrite::wake_at is callable from Game::genesis and Game::tick only (ADR 0046)"
+        );
+        self.store.timer_wake_at(id, at);
+    }
 }
 
 /// The write context `Game::tick` receives (0003: "HOST ONLY. `TickCx` is a `WorldWrite`: the
@@ -822,6 +847,9 @@ impl<G: Game> WorldWrite<G> for TickCx<'_, G> {
     }
     fn rng(&mut self) -> Result<&mut SimRng, Unknown> {
         self.authority.rng()
+    }
+    fn wake_at(&mut self, id: EntityId, at: Tick) {
+        TickCx::wake_at(self, id, at);
     }
 }
 
@@ -1098,6 +1126,37 @@ mod tests {
             Ok(())
         }
         fn tick(_cx: &mut crate::game::TickCx<'_, Self>) {}
+    }
+
+    /// ADR 0046: outside genesis `WorldWrite::wake_at` is a loud failure, never a silent no-op.
+    #[test]
+    #[should_panic(expected = "ADR 0046")]
+    fn wake_at_outside_genesis_panics() {
+        let mut a = authority();
+        let id = a.spawn(TEntity {
+            anchor: (5, 5),
+            has_bit: false,
+        });
+        WorldWrite::wake_at(&mut a, id, Tick(5));
+    }
+
+    /// ADR 0046: genesis writes apply and dirty the world but are not logged, and may arm timers.
+    #[test]
+    fn genesis_writes_are_applied_not_logged_and_may_arm_timers() {
+        let mut a = authority();
+        a.set_in_genesis(true);
+        let id = a.spawn(TEntity {
+            anchor: (5, 5),
+            has_bit: false,
+        });
+        WorldWrite::wake_at(&mut a, id, Tick(5));
+        a.set_in_genesis(false);
+        assert!(a.changes().is_empty(), "genesis writes are not logged");
+        assert!(a.store().entity(id).is_some(), "but they are applied");
+        assert!(a.dirty());
+        // A write after genesis is logged again.
+        a.put_global(TGlobal { day: 1 });
+        assert_eq!(a.changes().len(), 1);
     }
 
     fn authority() -> Authority<TGame> {

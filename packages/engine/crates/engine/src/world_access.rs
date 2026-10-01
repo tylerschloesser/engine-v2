@@ -77,6 +77,12 @@ pub trait WorldWrite<G: Game>: WorldRead<G> {
     fn put_global(&mut self, g: G::Global);
     /// Host only; `Unknown` under prediction (`NotPredictable`, M25).
     fn rng(&mut self) -> Result<&mut SimRng, Unknown>;
+    /// Sets `id`'s one timer (0007 §7), replacing any existing one. Not a logged `Delta`. Callable
+    /// from `Game::genesis` and `Game::tick` (`TickCx`); every other context panics rather than
+    /// silently ignoring it: `apply` and prediction journal no timer pre-image (ADR 0046).
+    fn wake_at(&mut self, _id: EntityId, _at: Tick) {
+        panic!("WorldWrite::wake_at is callable from Game::genesis and Game::tick only (ADR 0046)");
+    }
 }
 
 /// The read-only context (0003 "Contexts"): renderer, `ClientSide::ui`, and shared rule helpers

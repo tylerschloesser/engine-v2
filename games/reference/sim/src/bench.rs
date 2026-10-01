@@ -19,8 +19,7 @@
 //!   really changes a tile. Disjoint from the furnace block.
 //! - **Timers:** every furnace is lit (`burn_left`), stocked and carries a `smelt_done_at` deadline,
 //!   `2 + (index + seed) mod SMELT`, uniformly staggered: 262,144 / 100 = 2,621.4 completions per
-//!   tick. `genesis` has no `wake_at`; the first wake of each furnace re-arms its timer from the
-//!   deadline (`rules::furnace::advance`, the one `cfg(feature = "bench")` line outside this file).
+//!   tick. The builder arms each timer itself with `WorldWrite::wake_at` (ADR 0046).
 
 use engine::game::{WorldRead, WorldWrite};
 use engine::time::Tick;
@@ -127,15 +126,18 @@ pub fn build(w: &mut dyn WorldWrite<RefGame>, seed: u64, shape: Shape) {
             y: cy * 32 + (slot / 16) * 2,
         };
         let phase = (i + offset) % content::SMELT.0;
-        w.spawn(Furnace {
+        let done = Tick(2 + phase);
+        let id = w.spawn(Furnace {
             origin,
             iron_in: 999,
             coal: 50,
             wood: 0,
             burn_left: content::COAL_INGOTS,
             ingots_out: 0,
-            smelt_done_at: Some(Tick(2 + phase)),
+            smelt_done_at: Some(done),
         });
+        // Armed here (ADR 0046): the first wake finds `done` still ahead and leaves the timer.
+        w.wake_at(id, done);
     }
     let mc = cols(shape.modified_chunks()) as i32;
     for i in 0..shape.modified_tiles {

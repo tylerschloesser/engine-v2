@@ -1,9 +1,9 @@
 // `bench-build @slow` (docs/plan/36-slow-tier-and-benchmarks.md step 3): the reference game's `bench`
 // feature, built through `buildGame({ features: ['bench'] })`. A separate directory and build hash;
 // a shipped build ignores the marker (the same world with or without `{ bench }`); the bench build
-// reaches `genesis` through the worldgen marker, builds the save at 1/8 scale inside the default
-// arena (the full save needs ~1 GiB at genesis today: the change log, see M36 Deviations), is
-// deterministic across instances and carries no `test-hooks`. Native counts: `large_save.rs`.
+// reaches `genesis` through the worldgen marker, builds the FULL save inside the default arena with
+// no memory growth (genesis writes are not logged, ADR 0046), arms its timers in genesis (the world
+// hash moves over 120 ticks), is deterministic across instances and carries no `test-hooks`. Native counts: `large_save.rs`.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { beforeAll, expect, test } from 'vitest'
@@ -50,6 +50,9 @@ test('bench-build @slow', async () => {
   expect(a120).not.toBe(a0)
   expect(await worldHash(bench.dir, cfg, 120)).toBe(a120)
   expect(await worldHash(bench.dir, benchWorldConfig(bench.buildHash, 16), 0)).not.toBe(a0)
+
+  // The full save fits the default 96 MiB arena: `worldHash` asserts zero grows.
+  await worldHash(bench.dir, benchWorldConfig(bench.buildHash, 1), 2)
 
   // A shipped build has no marker field: the same world with and without it hashes equal.
   const shipped = json(plain).buildHash

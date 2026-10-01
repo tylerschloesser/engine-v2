@@ -102,6 +102,10 @@ fn large_save_builder_is_deterministic() {
         "entities, entity chunks, modified tiles, modified chunks"
     );
     assert_eq!((shape.entities, shape.modified_tiles), (want.0, want.2));
+    assert!(
+        a.authority().changes().is_empty(),
+        "genesis writes are not logged (ADR 0046): the large save would hold ~210 MB of them"
+    );
     assert_eq!(a.state_hash(), b.state_hash(), "one seed, one world");
     assert_ne!(
         a.state_hash(),
@@ -110,9 +114,34 @@ fn large_save_builder_is_deterministic() {
     );
     assert_uniform(&phase_histogram(&a), want.0);
 
+    let mut sim = a;
+    // A genesis-armed timer fires at its deadline: the earliest furnace has made no ingot on the
+    // tick before its `smelt_done_at` and one on it.
+    let first = sim
+        .authority()
+        .store()
+        .entities()
+        .min_by_key(|(_, f)| f.smelt_done_at)
+        .map(|(id, f)| (id, f.smelt_done_at.unwrap()))
+        .unwrap();
+    let ingots = |s: &Sim<RefGame>| s.authority().store().entity(first.0).unwrap().ingots_out;
+    let mut out0 = Vec::new();
+    while sim.tick().0 + 1 < first.1.0 {
+        sim.step(&[], &mut out0);
+    }
+    assert_eq!(ingots(&sim), 0);
+    sim.step(&[], &mut out0);
+    sim.step(&[], &mut out0);
+    assert_eq!(
+        ingots(&sim),
+        1,
+        "armed at {:?}, tick now {:?}",
+        first.1,
+        sim.tick()
+    );
+
     // The timers fire: after the first-wake re-arm every tick completes its share of furnaces
     // (4,096 / 100 = 40.96 per tick), none are lost, and each completion is one visit.
-    let mut sim = a;
     let mut out = Vec::new();
     let mut visited = Vec::new();
     for _ in 0..260 {
