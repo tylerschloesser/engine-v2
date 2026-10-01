@@ -65,11 +65,18 @@ type Row = {
   client: string[]
   /** Titles of the behaviour tests, exactly as they appear in the test tree. */
   tests: string[]
+  /** What the reference game's `ui/status.ts` (`StatusUi`) answers it with, or why it has no such
+   * answer. An `on<Name>` member must be registered on the client in `game.ts`. */
+  status: string[] | { na: string }
 }
+
+/** The one test that walks every status the reference game shows (`tests/browser/status.spec.ts`). */
+const STATUS_WALK = 'reference: status walks every event'
 
 const ROWS: Row[] = [
   {
     event: 'SaveIncompatible',
+    status: ['showStartFailure'],
     adr: '0005 Upgrades',
     milestone: 'M24b',
     client: ['ready', 'exportWorld', 'deleteWorld'],
@@ -81,6 +88,7 @@ const ROWS: Row[] = [
   },
   {
     event: 'WorldBusy',
+    status: ['showStartFailure'],
     adr: '0005 Storage',
     milestone: 'M23',
     client: ['ready'],
@@ -88,6 +96,7 @@ const ROWS: Row[] = [
   },
   {
     event: 'durable: false; storage estimate { persisted, usage, quota }',
+    status: ['onStorage'],
     adr: '0005 Storage',
     milestone: 'M23',
     client: ['onStorage'],
@@ -95,6 +104,7 @@ const ROWS: Row[] = [
   },
   {
     event: 'Resyncing (client.onResyncing)',
+    status: ['onResyncing'],
     adr: '0005 Panic recovery',
     milestone: 'M28b (host hook: M24)',
     client: ['onResyncing'],
@@ -102,6 +112,7 @@ const ROWS: Row[] = [
   },
   {
     event: 'onFatal',
+    status: ['onFatal'],
     adr: '0005, 0015 §5',
     milestone: 'M24 (host), M37 (surface, servers, guards)',
     client: ['onFatal'],
@@ -114,6 +125,7 @@ const ROWS: Row[] = [
   },
   {
     event: 'rendererLost',
+    status: ['onRendererLost'],
     adr: '0018 §8',
     milestone: 'M37b',
     client: ['onRendererLost'],
@@ -121,6 +133,7 @@ const ROWS: Row[] = [
   },
   {
     event: 'version mismatch -> reload once -> updating',
+    status: ['onLink'],
     adr: '0013',
     milestone: 'M29',
     client: ['onVersionMismatch', 'onLink'],
@@ -128,6 +141,7 @@ const ROWS: Row[] = [
   },
   {
     event: 'exportWorld / importWorld',
+    status: ['showStartFailure'],
     adr: '0005 Storage',
     milestone: 'M23',
     client: ['exportWorld', 'importWorld', 'deleteWorld'],
@@ -135,6 +149,7 @@ const ROWS: Row[] = [
   },
   {
     event: 'EngineFault action result',
+    status: { na: 'an action result: the feature panels handle it (`onActionResult`)' },
     adr: '0005',
     milestone: 'M24',
     client: ['onActionResult'],
@@ -142,6 +157,7 @@ const ROWS: Row[] = [
   },
   {
     event: 'Lost action result',
+    status: { na: 'an action result: the feature panels handle it (`onActionResult`)' },
     adr: '0005',
     milestone: 'M28b',
     client: ['onActionResult'],
@@ -149,6 +165,7 @@ const ROWS: Row[] = [
   },
   {
     event: 'superseded stops auto-reconnect',
+    status: ['onLink'],
     adr: '0013',
     milestone: 'M29',
     client: ['onLink'],
@@ -156,6 +173,7 @@ const ROWS: Row[] = [
   },
   {
     event: 'reconnect indicator delay',
+    status: ['onLink'],
     adr: '0013',
     milestone: 'M29 (test: M37)',
     client: ['onLink'],
@@ -163,6 +181,7 @@ const ROWS: Row[] = [
   },
   {
     event: 'desync report',
+    status: ['onDesync'],
     adr: '0013',
     milestone: 'M31b, M37',
     client: ['onDesync'],
@@ -236,6 +255,32 @@ test('engine event surface', () => {
         problems.push(`${row.event}: behaviour test "${title}" is skipped (${found})`)
     }
   }
+
+  // The reference game: every row has a visible answer in `StatusUi`, registered in `game.ts`, and the
+  // walk test exists.
+  const statusSrc = readFileSync(join(REPO, 'games', 'reference', 'src', 'ui', 'status.ts'), 'utf8')
+  const typeStart = statusSrc.indexOf('export type StatusUi = {')
+  const statusType = statusSrc.slice(typeStart, statusSrc.indexOf('\n}\n', typeStart))
+  const gameSrc = readFileSync(join(REPO, 'games', 'reference', 'src', 'game.ts'), 'utf8')
+  for (const row of ROWS) {
+    if (!Array.isArray(row.status)) continue
+    if (row.status.length === 0) problems.push(`${row.event}: no StatusUi member is named`)
+    for (const member of row.status) {
+      if (!new RegExp(`^  ${member}\\(`, 'm').test(statusType)) {
+        problems.push(
+          `${row.event}: \`StatusUi.${member}\` is not on the reference game's StatusUi`,
+        )
+      }
+      if (member.startsWith('on') && !gameSrc.includes(`client.${member}(`)) {
+        problems.push(
+          `${row.event}: game.ts does not register \`client.${member}\` with the status UI`,
+        )
+      }
+    }
+  }
+  const walk = findTest(STATUS_WALK)
+  if (!walk.found || walk.skipped)
+    problems.push(`the status walk test "${STATUS_WALK}" is missing or skipped`)
 
   // One delivery style: per-event subscriptions. No `EngineEvent` union, no `onEngineEvent`.
   const sources = readdirSync(join(ENGINE, 'src'), { recursive: true, encoding: 'utf8' })

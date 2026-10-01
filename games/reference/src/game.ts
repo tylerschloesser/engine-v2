@@ -43,6 +43,8 @@ export type StartGameOptions = {
    * passes as `test.clock` (Deviations: "one manual clock drives everything"). */
   clock?: Clock
   scheduler?: Scheduler
+  /** The dev-only desync counter (default: a Vite dev server, `import.meta.env.DEV`). */
+  dev?: boolean
 }
 
 export type StartedGame = {
@@ -97,6 +99,20 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
   // below is still awaited, before the caller attaches its own handler: mark it handled here so it
   // is never an unhandled rejection. The caller still sees the rejection through `client.ready`.
   client.ready.catch(() => {})
+  // M37: `ui/status.ts` is the one place engine events are handled: storage, resyncing, the
+  // renderer-lost prompt (M37b), fatal, desync (a dev-build counter) beside the link line. Registered
+  // before the first `await`: `onStorage` and `onResyncing` do not replay to a late subscriber.
+  const statusUi = createStatusUi(document.body, document, {
+    ...(opts.scheduler ? { scheduler: opts.scheduler } : {}),
+    dev: opts.dev ?? import.meta.env.DEV,
+  })
+  client.onLink((e) => statusUi.onLink(e))
+  client.onStorage((s) => statusUi.onStorage(s))
+  client.onResyncing(() => statusUi.onResyncing())
+  client.onRendererLost((e) => statusUi.onRendererLost(e))
+  client.onFatal((e) => statusUi.onFatal(e))
+  client.onDesync((r) => statusUi.onDesync(r))
+  if (opts.host.kind === 'remote') statusUi.onLink({ state: 'connecting' }) // `onLink` starts at the first change
   // M37b: every GPU object (device, terrain pipeline and art, and M33c's drawables pass: the
   // client's DrawList drawn in the terrain renderer's own pass, which loads `assets.sprites`) lives
   // in one `GpuResources` owned by the host, which rebuilds it after a WebGPU device loss.
@@ -106,10 +122,6 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
     client,
     ...(opts.clock ? { clock: opts.clock } : {}),
   })
-  // M37b registers the callback; the reload prompt is M37's `status.ts` work.
-  client.onRendererLost((e) =>
-    console.warn(`renderer lost (${e.reason}): reload to restore the picture`),
-  )
   const first = gpu.current as NonNullable<GpuHost['current']>
   const { device, renderer } = first
   const drawables = first.drawables as AttachedDrawables
@@ -122,10 +134,6 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
   const collectUi = createCollectUi(client)
   const inventoryUi = createInventoryUi(document.body)
   const rosterUi = createRosterUi(document.body)
-  // M34: the link indicator (never fires for a local host).
-  const statusUi = createStatusUi(document.body)
-  client.onLink((e) => statusUi.onLink(e))
-  if (opts.host.kind === 'remote') statusUi.onLink({ state: 'connecting' }) // `onLink` starts at the first change
   const craftUi = createCraftUi(client)
   const buildUi = createBuildUi(client)
   const furnaceUi = createFurnaceUi(client)

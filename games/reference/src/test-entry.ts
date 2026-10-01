@@ -7,15 +7,26 @@
 // **Never imported by `main.ts`/`game.ts`.** Production must never carry this file's hooks or set
 // `ClientOptions.test` (engine `src/client.ts`'s own "never set by a game" -- true for
 // this game's *production* page; a *test* page is exactly what that field exists for).
-import { clientTestHandle, EngineStartError } from 'engine'
+import {
+  type ClientOptions,
+  clientTestHandle,
+  EngineStartError,
+  type LinkReason,
+  type LinkState,
+} from 'engine'
 import { createUploadDrain, RingConsumer, type UploadDrain } from 'engine/render'
 import {
   attachCameraInputTestHooks,
+  attachGpuHost,
+  callParked,
   createManualClock,
   type DrawRecord,
   drawListRecords,
+  failNextAdapter,
   injectPointer,
   lastUi,
+  loseDevice,
+  parkWorkers,
   readPixels,
   resumeWorkers,
   setCamera,
@@ -24,6 +35,7 @@ import {
   stepSimTickSync,
   stepTick,
   untilConfigured,
+  untilRendererRecovered,
   worldHash,
 } from 'engine/test'
 import type { RefAction } from './bindings/RefAction.js'
@@ -141,6 +153,18 @@ declare global {
     __importWorld?: (bytes: number[], worldId: string) => Promise<string>
     __linkState?: () => string
     __circles?: () => Array<{ x: number; y: number; color: number }>
+    /** M37 (`reference: status walks every event`): the engine events `ui/status.ts` handles, driven
+     * without a server. A device loss (`allowDeviceLoss`-style: the engine logs a warning), the next
+     * adapter request failing, the page's manual clock, one replica byte of a held chunk flipped
+     * (M31b), a synthetic link state and start failure straight into the game's `StatusUi`. */
+    __loseDevice?: () => Promise<void>
+    __failNextAdapter?: () => void
+    __advanceClock?: (ms: number) => void
+    __corruptChunk?: (cx: number, cy: number) => Promise<number>
+    __statusLink?: (state: string, reason?: string) => void
+    __statusRendererLost?: (reason: 'no-adapter' | 'repeated-loss') => void
+    __showStartFailure?: (code: string) => boolean
+    __startFailureOps?: () => { exports: number; deletes: number }
     __clock?: () => { authoritative: number; predicted: number; ticksPerSecond: number }
   }
 }
@@ -189,13 +213,18 @@ const game = await startGame({
   host,
   test: {
     clock,
-    flags: {},
+    // `?flags=<json>`: `TestFlags` for the page (the status walk traps the client instance, runs
+    // without OPFS, ...). Nothing else passes any.
+    flags: JSON.parse(query.get('flags') ?? '{}') as NonNullable<
+      NonNullable<ClientOptions['test']>['flags']
+    >,
     ...(altSpawnParams
       ? { game: { seed: '0x5eed1234abcd0042', params: { water_level: 0.05 } } }
       : {}),
   },
   clock,
   scheduler: clock,
+  dev: true,
 })
 const { client, renderer, device, canvasFormat, drawables } = game
 
@@ -227,6 +256,44 @@ window.__importWorld = async (bytes, worldId) => {
 }
 if (startError !== undefined) {
   // Nothing of the game runs behind the screen: report ready and stop wiring the page.
+  // M37: hooks for `reference: status walks every event` (`tests/browser/status.spec.ts`).
+  attachGpuHost(client, game.gpu)
+  window.__loseDevice = async () => {
+    await loseDevice(client)
+    await untilRendererRecovered(client)
+  }
+  window.__failNextAdapter = () => failNextAdapter(client)
+  window.__advanceClock = (ms) => clock.advance(ms)
+  window.__corruptChunk = async (cx, cy) => {
+    await parkWorkers(client)
+    const { value } = await callParked(client, 'client', 'client_corrupt_chunk', [cx, cy], 0)
+    await resumeWorkers(client)
+    return value
+  }
+  window.__statusLink = (state, reason) => {
+    game.status.onLink({
+      state: state as LinkState,
+      ...(reason ? { reason: reason as LinkReason } : {}),
+    })
+  }
+  window.__statusRendererLost = (reason) => game.status.onRendererLost({ reason })
+  const failureOps = { exports: 0, deletes: 0 }
+  window.__showStartFailure = (code) =>
+    game.status.showStartFailure(
+      { code },
+      {
+        worldId: 'status-walk',
+        exportWorld: async () => {
+          failureOps.exports++
+          return new Blob([new Uint8Array(3)])
+        },
+        deleteWorld: async () => {
+          failureOps.deletes++
+        },
+      },
+    )
+  window.__startFailureOps = () => ({ ...failureOps })
+
   window.__pageReady = true
   await new Promise<never>(() => {})
 }
@@ -627,5 +694,43 @@ window.__pixelAt = async (x, y) => {
   const on = await drawCentre()
   return { on, off }
 }
+
+// M37: hooks for `reference: status walks every event` (`tests/browser/status.spec.ts`).
+attachGpuHost(client, game.gpu)
+window.__loseDevice = async () => {
+  await loseDevice(client)
+  await untilRendererRecovered(client)
+}
+window.__failNextAdapter = () => failNextAdapter(client)
+window.__advanceClock = (ms) => clock.advance(ms)
+window.__corruptChunk = async (cx, cy) => {
+  await parkWorkers(client)
+  const { value } = await callParked(client, 'client', 'client_corrupt_chunk', [cx, cy], 0)
+  await resumeWorkers(client)
+  return value
+}
+window.__statusLink = (state, reason) => {
+  game.status.onLink({
+    state: state as LinkState,
+    ...(reason ? { reason: reason as LinkReason } : {}),
+  })
+}
+window.__statusRendererLost = (reason) => game.status.onRendererLost({ reason })
+const failureOps = { exports: 0, deletes: 0 }
+window.__showStartFailure = (code) =>
+  game.status.showStartFailure(
+    { code },
+    {
+      worldId: 'status-walk',
+      exportWorld: async () => {
+        failureOps.exports++
+        return new Blob([new Uint8Array(3)])
+      },
+      deleteWorld: async () => {
+        failureOps.deletes++
+      },
+    },
+  )
+window.__startFailureOps = () => ({ ...failureOps })
 
 window.__pageReady = true

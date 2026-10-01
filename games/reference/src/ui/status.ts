@@ -1,7 +1,24 @@
-// Link status (docs/plan/34-reference-multiplayer.md Scope): a small line fed by `client.onLink`.
-// Nothing while the session is online; a short message when the link is down or was refused. No
-// modal, no retry button (the engine redials by itself, 0013 Client policy). Framework-free.
-import type { LinkReason, LinkState } from 'engine'
+// The one place engine events are handled (docs/plan/37-robustness-events.md; the audit is
+// `packages/engine/src/engine-events.test.ts`). Framework-free plain text, one button where a button
+// helps:
+// - link state (M34, `client.onLink`): a small line, nothing while online; no retry button (the
+//   engine redials by itself, 0013 Client policy). `resyncing` (`client.onResyncing`) is the same
+//   line for a moment.
+// - a refused start (M23 `world-busy`, M24b `save-incompatible`): a screen; Export and Delete on
+//   `save-incompatible` only.
+// - storage (`client.onStorage`, 0005): a notice when the world is not durable, and a storage line.
+// - `rendererLost` (M37b): a banner with a Reload button; the sim keeps running and saving.
+// - `onFatal` (M37): a screen with the engine's message and a Reload button; the world is untouched.
+// - desync (`client.onDesync`, M31b): a counter in dev builds only.
+import type {
+  DesyncReport,
+  FatalEvent,
+  LinkReason,
+  LinkState,
+  RendererLostReason,
+  StorageStatus,
+} from 'engine'
+import { type Scheduler, systemScheduler } from 'engine/render'
 
 /** 0013 Client policy: an indicator appears after 1 s. `reconnecting` is already emitted after that
  * delay by the engine; the first `connecting` is delayed here. */
@@ -30,6 +47,27 @@ export function statusText(state: LinkState, reason?: LinkReason): string | null
   }
 }
 
+/** How long the `resyncing` notice stays on the line (the engine gives no "resynced" event: the second
+ * `Welcome` is applied within a few frames). */
+export const RESYNC_NOTICE_MS = 1500
+
+const RENDERER_LOST: Record<RendererLostReason, string> = {
+  'repeated-loss': 'The graphics device was lost twice in a row and could not be restored.',
+  'no-adapter': 'No graphics adapter is available any more.',
+}
+
+/** `1536` -> `1.5 KB`. */
+export function formatBytes(n: number): string {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let v = n
+  let u = 0
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024
+    u++
+  }
+  return `${u === 0 ? v : v.toFixed(1)} ${units[u]}`
+}
+
 /** What a refused start looks like to the screen below: `EngineStartError`'s `code` and `message`. */
 export type StartFailure = { code: string; message?: string }
 
@@ -54,8 +92,27 @@ export type WorldOps = {
   afterDelete?: () => void
 }
 
+export type StatusOptions = {
+  /** Times the `resyncing` notice; the page's injected `Scheduler` under test. */
+  scheduler?: Scheduler
+  /** What the Reload buttons do (`location.reload()`). */
+  reload?: () => void
+  /** Dev builds: the desync counter. */
+  dev?: boolean
+}
+
 export type StatusUi = {
   onLink(e: { state: LinkState; reason?: LinkReason }): void
+  /** `client.onResyncing`: "Resyncing..." for `RESYNC_NOTICE_MS`, then the link line again. */
+  onResyncing(): void
+  /** `client.onStorage`: the not-durable notice and the storage line. */
+  onStorage(status: StorageStatus): void
+  /** `client.onRendererLost`: the Reload banner. */
+  onRendererLost(e: { reason: RendererLostReason }): void
+  /** `client.onFatal`: the fatal screen. */
+  onFatal(e: FatalEvent): void
+  /** `client.onDesync`: counts, and shows the counter in a dev build. */
+  onDesync(r: DesyncReport): void
   /**
    * The screen for a refused start (M23 `'world-busy'`, M24b `'save-incompatible'`): a message, and
    * for `save-incompatible` only Export and Delete (M23's default, Q9; nowhere else, R4's default).
@@ -64,7 +121,13 @@ export type StatusUi = {
   showStartFailure(failure: StartFailure, ops: WorldOps): boolean
 }
 
-export function createStatusUi(container: HTMLElement, doc: Document = document): StatusUi {
+export function createStatusUi(
+  container: HTMLElement,
+  doc: Document = document,
+  opts: StatusOptions = {},
+): StatusUi {
+  const scheduler = opts.scheduler ?? systemScheduler
+  const reload = opts.reload ?? (() => location.reload())
   const line = doc.createElement('div')
   line.className = 'link-status'
   line.hidden = true
@@ -73,12 +136,47 @@ export function createStatusUi(container: HTMLElement, doc: Document = document)
     'background:rgba(0,0,0,0.6);color:#fff;pointer-events:none'
   container.append(line)
   let timer: ReturnType<typeof setTimeout> | undefined
+  let linkText: string | null = null
+  let linkState: LinkState = 'online'
+  let resyncTimer: number | undefined
 
-  function show(text: string | null, state: LinkState): void {
+  function show(text: string | null, state: string): void {
     line.hidden = text === null
     line.textContent = text ?? ''
     line.dataset.state = state
   }
+
+  function button(label: string, attr: string, onClick: () => void): HTMLButtonElement {
+    const b = doc.createElement('button')
+    b.dataset[attr] = ''
+    b.textContent = label
+    b.addEventListener('click', onClick)
+    return b
+  }
+
+  const banner = (className: string, css: string): HTMLDivElement => {
+    const el = doc.createElement('div')
+    el.className = className
+    el.hidden = true
+    el.style.cssText = css
+    container.append(el)
+    return el
+  }
+  const BANNER =
+    'position:fixed;left:50%;transform:translateX(-50%);padding:6px 10px;border-radius:4px;' +
+    'font:12px sans-serif;background:#612;color:#fff;z-index:10'
+  const durableNotice = banner('durable-notice', `${BANNER};top:8px`)
+  const storageLine = banner(
+    'storage-line',
+    'position:fixed;right:8px;bottom:8px;font:11px sans-serif;color:#fff;opacity:0.7;' +
+      'pointer-events:none',
+  )
+  const rendererBanner = banner('renderer-lost', `${BANNER};top:40px`)
+  const desyncCounter = banner(
+    'desync-counter',
+    'position:fixed;right:8px;top:8px;font:11px monospace;color:#fc8;pointer-events:none',
+  )
+  let desyncCount = 0
 
   function showStartFailure(failure: StartFailure, ops: WorldOps): boolean {
     const text = startFailureText(failure.code)
@@ -155,17 +253,78 @@ export function createStatusUi(container: HTMLElement, doc: Document = document)
     return true
   }
 
+  function showFatal(e: FatalEvent): void {
+    const screen = doc.createElement('div')
+    screen.className = 'engine-fatal'
+    screen.dataset.tick = String(e.tick)
+    screen.style.cssText =
+      'position:fixed;inset:0;z-index:30;display:flex;flex-direction:column;align-items:center;' +
+      'justify-content:center;gap:12px;padding:16px;background:#312;color:#fff;font:14px sans-serif;' +
+      'text-align:center'
+    const text = doc.createElement('p')
+    text.className = 'engine-fatal-text'
+    text.textContent =
+      'The game stopped because the world cannot continue. Nothing was changed on disk: reload to try again.'
+    const message = doc.createElement('pre')
+    message.className = 'engine-fatal-message'
+    message.style.cssText = 'max-width:90vw;white-space:pre-wrap;font:12px monospace'
+    message.textContent = `${e.message} (tick ${e.tick})`
+    screen.append(text, message, button('Reload', 'reload', reload))
+    container.append(screen)
+  }
+
   return {
     showStartFailure,
     onLink(e) {
       clearTimeout(timer)
-      const text = statusText(e.state, e.reason)
+      linkState = e.state
+      linkText = statusText(e.state, e.reason)
+      if (resyncTimer !== undefined) return // the resync notice ends on its own and restores this
       if (e.state === 'connecting') {
         show(null, e.state)
-        timer = setTimeout(() => show(text, e.state), INDICATOR_DELAY_MS)
+        timer = setTimeout(() => show(linkText, e.state), INDICATOR_DELAY_MS)
       } else {
-        show(text, e.state)
+        show(linkText, e.state)
       }
+    },
+    onResyncing() {
+      if (resyncTimer !== undefined) scheduler.clearTimer(resyncTimer)
+      show('Resyncing with the host...', 'resyncing')
+      resyncTimer = scheduler.setTimer(() => {
+        resyncTimer = undefined
+        show(linkText, linkState)
+      }, RESYNC_NOTICE_MS)
+    },
+    onStorage(status) {
+      durableNotice.hidden = status.durable
+      if (!status.durable) {
+        durableNotice.textContent =
+          'This browser cannot save your world: progress is lost when the tab closes.'
+      }
+      storageLine.hidden = false
+      storageLine.dataset.durable = String(status.durable)
+      storageLine.dataset.persisted = String(status.persisted)
+      storageLine.textContent =
+        `Storage: ${formatBytes(status.usage)} of ${formatBytes(status.quota)} used` +
+        (status.durable && !status.persisted ? ' (the browser may clear it)' : '')
+    },
+    onRendererLost(e) {
+      rendererBanner.hidden = false
+      rendererBanner.dataset.reason = e.reason
+      rendererBanner.replaceChildren(
+        doc.createTextNode(`${RENDERER_LOST[e.reason]} Reload to restore the picture. `),
+        button('Reload', 'reload', reload),
+      )
+    },
+    onFatal: showFatal,
+    onDesync(r) {
+      desyncCount++
+      if (!opts.dev) return
+      desyncCounter.hidden = false
+      desyncCounter.dataset.count = String(desyncCount)
+      desyncCounter.textContent =
+        `desyncs: ${desyncCount} (last: ${r.scope}` +
+        `${r.scope === 'chunk' ? ` ${r.cx},${r.cy}` : ''} at tick ${r.tick})`
     },
   }
 }

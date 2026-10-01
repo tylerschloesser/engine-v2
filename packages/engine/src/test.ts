@@ -91,6 +91,7 @@ export {
   drawCalls,
   drawListDropped,
   expectPixel,
+  failNextAdapter,
   instanceBytes,
   loseDevice,
   type PixelBuffer,
