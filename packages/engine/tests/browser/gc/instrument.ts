@@ -179,6 +179,10 @@ export async function measure(
      * signal too (found live: `pnpm exec playwright test --grep net-negative-control` failed 5/5
      * under forced software mode before this field existed). */
     verdictIsolate?: string | null
+    /** Frames in each of the two measured windows (default `FRAMES`, 600; the budgets are per frame,
+     * so a longer window checks the same figure over more of the run). `soak-browser` (M36) passes
+     * 12,000. */
+    frames?: number
   },
 ): Promise<GcResult> {
   const mode = gcModeFromEnv()
@@ -190,7 +194,8 @@ export async function measure(
   if (mode === 'software' && budgets.software === null) {
     throw new Error(`gc verdict: no software budget for ${opts.pageId}`)
   }
-  const frames = mode === 'software' ? (budgets.software?.frames ?? FRAMES) : FRAMES
+  const frames =
+    opts.frames ?? (mode === 'software' ? (budgets.software?.frames ?? FRAMES) : FRAMES)
   const warnings: string[] = []
   const t0 = performance.now()
 
