@@ -8,14 +8,12 @@ import type { Client, ClientOptions } from 'engine'
 import { createClient, EngineStartError } from 'engine'
 import {
   type AttachedDrawables,
-  attachClientDrawables,
   attachVisibilityHandling,
   type Clock,
+  createGpuHost,
   createRealFrameLoop,
-  createTerrainRenderer,
-  initDevice,
+  type GpuHost,
   installPageStyles,
-  loadTileArt,
   type RealFrameLoop,
   type RendererDevice,
   type Scheduler,
@@ -49,10 +47,14 @@ export type StartGameOptions = {
 
 export type StartedGame = {
   client: Client
+  /** The GPU resources as first built. After a WebGPU device loss these are the dead ones: read
+   * `gpu.current` for the live set (`null` while the device is lost). */
   renderer: TerrainRenderer
   device: RendererDevice
   canvasFormat: GPUTextureFormat
   drawables: AttachedDrawables
+  /** Owns the current `GpuResources` and rebuilds them after a device loss (M37b). */
+  gpu: GpuHost
   real: RealFrameLoop
   /** Link status and the refused-start screen (`status.showStartFailure`). */
   status: StatusUi
@@ -71,22 +73,11 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
   installPageStyles() // 0019 §3: pull-to-refresh structurally prevented, canvas touch-action.
 
   const { canvas } = opts
-  const device: RendererDevice = await initDevice()
   // `TerrainRenderer` builds one pipeline fixed to one colour-target format (`createTerrainRenderer`'s
   // own contract): a probe target must use the *same* format, since it draws through this same
   // renderer/pipeline.
   const canvasFormat = navigator.gpu.getPreferredCanvasFormat()
-  const renderer: TerrainRenderer = await createTerrainRenderer(device.device, {
-    colorFormat: canvasFormat,
-    viewProbePasses: device.viewProbePasses,
-    checkCompilation: device.checkCompilation,
-  })
   const assets = { tiles: '/tiles.json', sprites: '/sprites.json' }
-  const art = await loadTileArt(device.device, assets.tiles, {
-    checkCompilation: device.checkCompilation,
-  })
-  renderer.setTileArray(art.texture, art.gpuBytes)
-  renderer.writeVisualTable(art.visualTableBytes)
 
   const options: ClientOptions = {
     canvas,
@@ -102,11 +93,18 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
     ...(opts.test ? { test: opts.test } : {}),
   }
   const client: Client = createClient(options)
-  // M33c: the client's DrawList (player circle and range ring, furnace, ghost) drawn in the
-  // terrain renderer's own pass; it loads `assets.sprites` (`client.assets`) itself.
-  const drawables = await attachClientDrawables(client, device, renderer, {
+  // M37b: every GPU object (device, terrain pipeline and art, and M33c's drawables pass: the
+  // client's DrawList drawn in the terrain renderer's own pass, which loads `assets.sprites`) lives
+  // in one `GpuResources` owned by the host, which rebuilds it after a WebGPU device loss.
+  const gpu: GpuHost = await createGpuHost({
     colorFormat: canvasFormat,
+    tilesUrl: assets.tiles,
+    client,
+    ...(opts.clock ? { clock: opts.clock } : {}),
   })
+  const first = gpu.current as NonNullable<GpuHost['current']>
+  const { device, renderer } = first
+  const drawables = first.drawables as AttachedDrawables
 
   // M20b step 3-4 (Scope: collect buttons, progress, cancel-on-pan-out, rejection flash, inventory
   // readout): wired here, not in each entry, so both `main.ts` and `test-entry.ts` get a working
@@ -162,6 +160,9 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
     lastCameraT = t
     client.camera.tick(dtMs) // real pan/pinch/wheel/WASD/inertia + semantic recognition
 
+    const live = gpu.current
+    if (live === null) return // no device (M37b): the camera block still goes out, the uniform has no target
+    const renderer = live.renderer
     const v = renderer.viewport
     // `camera/transform.ts`'s `pxPerTile` formula, inlined (`main.ts`'s own precedent, `engine/
     // render` staying focused on device/renderer/art/frame-loop machinery).
@@ -181,6 +182,7 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
   const real: RealFrameLoop = createRealFrameLoop({
     client,
     renderer,
+    gpu,
     canvas,
     maxTextureDimension2D: device.device.limits.maxTextureDimension2D,
     onCamera,
@@ -203,6 +205,7 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
     device,
     canvasFormat,
     drawables,
+    gpu,
     real,
     status: statusUi,
     worldId: opts.host.kind === 'local' ? opts.host.world.worldId : '',
