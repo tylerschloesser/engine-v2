@@ -85,6 +85,8 @@ window.__init = async () => {
     canvas,
     clock: systemClock,
     scheduler: systemScheduler,
+    // The terrain pipeline above is built for `rgba8unorm`; the canvas must match it (M37b).
+    canvasConfig: { format: 'rgba8unorm' },
     maxTextureDimension2D: device.device.limits.maxTextureDimension2D,
   })
   attachVisibilityHandling(real.loop, fakeDoc as unknown as Document)
