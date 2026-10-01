@@ -507,8 +507,9 @@ pub struct Host<G: Game> {
     /// This frame's estimated delta bytes per chunk (`build_frame`'s collapse pass).
     scratch_delta_est: Vec<(ChunkCoord, u32)>,
     /// Snapshot byte size per chunk for the current tick (the collapse check, shared by every
-    /// connection); cleared by `tick`, capacity kept.
-    scratch_snapshot_len: std::collections::HashMap<ChunkCoord, u32>,
+    /// connection); sorted by chunk for a binary search (no `HashMap`, 0002 §2), cleared by `tick`,
+    /// capacity kept.
+    scratch_snapshot_len: Vec<(ChunkCoord, u32)>,
     /// This tick's tile deltas for the connection being built, flat and deduplicated by
     /// `(chunk, index)` (last write wins) as they're gathered, sorted by `(cy, cx, index)` right
     /// before writing (host/mod Deviations: a flat, insertion-sorted `Vec` instead of a `Vec<(_,
@@ -831,7 +832,7 @@ impl<G: Game> Host<G> {
             scratch_new_held: Vec::new(),
             scratch_keep: Vec::new(),
             scratch_delta_est: Vec::with_capacity(160),
-            scratch_snapshot_len: std::collections::HashMap::new(),
+            scratch_snapshot_len: Vec::new(),
             scratch_tile_flat: Vec::new(),
             scratch_entity_ops: Vec::new(),
             scratch_action_players: Vec::new(),
@@ -2153,11 +2154,19 @@ impl<G: Game> Host<G> {
             if pending <= pacing::MIN_COLLAPSE_BYTES {
                 continue;
             }
-            let snapshot_len = *self.scratch_snapshot_len.entry(chunk).or_insert_with(|| {
-                let mut count = crate::bytes::CountSink::default();
-                encode_chunk_snapshot(store, chunk, version, &mut count);
-                count.0 as u32
-            });
+            let snapshot_len = match self
+                .scratch_snapshot_len
+                .binary_search_by(|(c, _)| c.cmp(&chunk))
+            {
+                Ok(i) => self.scratch_snapshot_len[i].1,
+                Err(i) => {
+                    let mut count = crate::bytes::CountSink::default();
+                    encode_chunk_snapshot(store, chunk, version, &mut count);
+                    let len = count.0 as u32;
+                    self.scratch_snapshot_len.insert(i, (chunk, len));
+                    len
+                }
+            };
             if pending <= snapshot_len {
                 continue;
             }
@@ -2799,7 +2808,7 @@ where
             scratch_new_held: Vec::new(),
             scratch_keep: Vec::new(),
             scratch_delta_est: Vec::with_capacity(160),
-            scratch_snapshot_len: std::collections::HashMap::new(),
+            scratch_snapshot_len: Vec::new(),
             scratch_tile_flat: Vec::new(),
             scratch_entity_ops: Vec::new(),
             scratch_action_players: Vec::new(),
