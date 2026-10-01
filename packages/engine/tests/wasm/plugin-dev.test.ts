@@ -3,12 +3,14 @@
 // Against the real fixture app (tests/browser/pages), through Vite's JS API, on an ephemeral port.
 
 import { readFileSync } from 'node:fs'
-import { stat, utimes } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import type { AddressInfo } from 'node:net'
-import { resolve } from 'node:path'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createServer, searchForWorkspaceRoot, type ViteDevServer } from 'vite'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import { watchCrate } from '../../src/vite.js'
 import { fixtureBuildDir } from '../support/fixtures.js'
 
 const CONFIG_FILE = fileURLToPath(new URL('../browser/pages/vite.config.ts', import.meta.url))
@@ -126,6 +128,35 @@ describe('plugin-dev', () => {
       expect(afterVersion).toBe(beforeVersion + 1)
     } finally {
       await utimes(LIB_RS, beforeStat.atime, beforeStat.mtime)
+    }
+  })
+
+  // M35 Planning decision (b): the recursive `fs.watch` of the crate's `src/` reports a `.rs` file two
+  // directories deep (on Linux that is Node's own JS walker, not inotify). A crate with no such file
+  // in-repo, so a temp one; `watchCrate` is what `engine()` calls for the game and engine crates.
+  test('plugin-dev: nested touch triggers rebuild', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'engine-nested-touch-'))
+    const deep = join(dir, 'src', 'a', 'b')
+    await mkdir(deep, { recursive: true })
+    await writeFile(join(deep, 'deep.rs'), '// one\n')
+    const changed: string[] = []
+    const watcher = watchCrate(dir, (file) => changed.push(file))
+    try {
+      expect(watcher).toBeDefined()
+      const deadline = Date.now() + 5_000
+      while (!changed.includes('src/a/b/deep.rs') && Date.now() < deadline) {
+        await writeFile(join(deep, 'deep.rs'), `// ${Date.now()}\n`)
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      expect(changed).toContain('src/a/b/deep.rs')
+      // A non-source file two deep is not a change.
+      changed.length = 0
+      await writeFile(join(deep, 'notes.txt'), 'x')
+      await new Promise((r) => setTimeout(r, 300))
+      expect(changed).toEqual([])
+    } finally {
+      watcher?.close()
+      await rm(dir, { recursive: true, force: true })
     }
   })
 })
