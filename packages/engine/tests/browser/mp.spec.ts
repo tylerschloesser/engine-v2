@@ -31,6 +31,7 @@ declare global {
     __mpGenDelivered?: () => number
     __mpHeldTimers?: () => number[]
     __mpFireHeld?: () => void
+    __mpLinkEvent?: (state: 'up' | 'down', reason?: string) => void
     __mpConfig?: () => {
       genWorkers: number
       testGame: boolean
@@ -265,50 +266,42 @@ test('mp/reconnect', async ({ page }) => {
 
 test('mp/reconnect-indicator-delay', async ({ page }) => {
   // 0013 Client policy: the `reconnecting` indicator appears only after a 1 s delay, so a quick
-  // reconnect never flashes it. The page holds the client's 1,000 ms timer (`?holdIndicator=1`): a
-  // dropped link asks for exactly one such timer; one that heals first makes it stale (firing it
-  // changes nothing), one that stays down shows `reconnecting` when it fires.
+  // reconnect never flashes it. The page holds the client's 1,000 ms timer (`?holdIndicator=1`) and
+  // the test delivers the net worker's `link` messages itself (`__mpLinkEvent`), so no socket flaps
+  // can interleave (a killed connection redials at once and a real drop produces a variable number of
+  // `up`/`down` pairs; `mp/reconnect` covers the real one). A drop asks for exactly one timer; an `up`
+  // before it fires makes it stale (firing it shows nothing); further failed redials inside one outage
+  // ask for nothing more; a timer that fires inside an outage shows `reconnecting`.
   test.setTimeout(45_000)
   const server = await startTestServer({ fixture: PUTS_DIR, manualTimer: true })
   const ticks = tickInBackground(server)
-  let stopped = false
   try {
     await openPage(page, mpUrl(server, '&holdIndicator=1'))
     await page.waitForFunction(() => window.__mpLinkState?.() === 'online', { timeout: 20_000 })
-    expect(await page.evaluate(() => window.__mpHeldTimers?.())).toEqual([])
-    const held = () =>
-      page.waitForFunction(() => (window.__mpHeldTimers?.().length ?? 0) >= 1, { timeout: 10_000 })
+    const held = () => page.evaluate(() => window.__mpHeldTimers?.())
+    const state = () => page.evaluate(() => window.__mpLinkState?.())
+    expect(await held()).toEqual([])
 
-    // A drop that heals: the timer is asked for, the link is up again (`open` after `close`), and
-    // firing the stale timer shows nothing.
-    server.killClients()
-    await held()
-    await page.waitForFunction(
-      () => {
-        const log = window.__mpLinkLog?.() ?? []
-        return log.length >= 2 && log[log.length - 1]?.event === 'open'
-      },
-      { timeout: 20_000 },
-    )
-    // Every drop asks for the 1,000 ms timer (a redial that fails again asks once more).
-    const timers = (await page.evaluate(() => window.__mpHeldTimers?.())) ?? []
-    expect(timers.length).toBeGreaterThanOrEqual(1)
-    expect(timers.every((ms) => ms === 1000)).toBe(true)
+    // A drop that heals.
+    await page.evaluate(() => window.__mpLinkEvent?.('down', 'close'))
+    expect(await held()).toEqual([1000])
+    expect(await state()).toBe('online')
+    await page.evaluate(() => window.__mpLinkEvent?.('up'))
     await page.evaluate(() => window.__mpFireHeld?.())
-    expect(await page.evaluate(() => window.__mpLinkState?.())).toBe('online')
+    await page.waitForFunction(() => window.__mpLinkState?.() === 'online')
+    expect(await state()).toBe('online')
 
-    // A drop that stays down (the server is gone): nothing shows before the timer, `reconnecting`
-    // after it.
-    ticks.stop()
-    stopped = true
-    await server.stop()
-    await held()
-    expect(await page.evaluate(() => window.__mpLinkState?.())).toBe('online')
+    // An outage with failed redials: one request, nothing before it fires, `reconnecting` after.
+    await page.evaluate(() => window.__mpLinkEvent?.('down', 'close'))
+    await page.evaluate(() => window.__mpLinkEvent?.('down', 'close'))
+    await page.evaluate(() => window.__mpLinkEvent?.('down', 'dead'))
+    expect(await held()).toEqual([1000])
+    expect(await state()).toBe('online')
     await page.evaluate(() => window.__mpFireHeld?.())
-    expect(await page.evaluate(() => window.__mpLinkState?.())).toBe('reconnecting')
+    expect(await state()).toBe('reconnecting')
   } finally {
     ticks.stop()
-    if (!stopped) await server.stop()
+    await server.stop()
   }
 })
 

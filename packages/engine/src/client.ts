@@ -1860,9 +1860,14 @@ export function createClient(options: ClientOptions): Client {
   // pending indicator (a stale timer's own check just no-ops instead).
   const RECONNECT_INDICATOR_DELAY_MS = 1000
   let downGen = 0
+  // An outage (the first `down` after an `up`) asks for the indicator once. A failed redial inside it
+  // is another `down` but not a new outage: restarting the delay on each would push `reconnecting`
+  // back by a backoff step every time (measured: three closes within 20 ms of one drop).
+  let outagePending = false
   function handleNetLink(m: NetLinkMessage): void {
     if (m.state === 'up') {
       downGen++
+      outagePending = false
       if (!everLinkedUp) {
         everLinkedUp = true
         emitLink({ state: 'connecting' })
@@ -1895,6 +1900,8 @@ export function createClient(options: ClientOptions): Client {
     }
     // `'dead'` or `'close'`: a transient drop the net worker's own `Link` is already retrying on
     // its own backoff schedule (`net/link.ts`) -- this is purely the UI-facing indicator delay.
+    if (outagePending) return
+    outagePending = true
     const myGen = ++downGen
     scheduler.setTimer(() => {
       if (myGen === downGen) emitLink({ state: 'reconnecting' })

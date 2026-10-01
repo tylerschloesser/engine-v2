@@ -61,6 +61,8 @@ declare global {
      * client's scheduler was asked for and held back, and a call that fires the held ones. */
     __mpHeldTimers?: () => number[]
     __mpFireHeld?: () => void
+    /** Delivers a `link` message to the client as if the net worker had posted it. */
+    __mpLinkEvent?: (state: 'up' | 'down', reason?: string) => void
     __mpConfig?: () => {
       genWorkers: number
       testGame: boolean
@@ -202,6 +204,15 @@ const revealPoll = setInterval(() => {
   }
 }, 5)
 window.__mpHeldTimers = () => heldTimers.map((t) => t.delayMs)
+window.__mpLinkEvent = (state, reason) => {
+  const net = clientTestHandle(client).workers.find((w) => w.kind === 'net')
+  if (!net) throw new Error('mp.ts: no net worker')
+  const data =
+    state === 'up'
+      ? { type: 'link', state }
+      : { type: 'link', state, reason: reason ?? 'close', code: 1006 }
+  net.worker.dispatchEvent(new MessageEvent('message', { data }))
+}
 window.__mpFireHeld = () => {
   for (const t of heldTimers.splice(0)) t.cb()
 }
