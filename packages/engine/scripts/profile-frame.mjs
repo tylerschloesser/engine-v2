@@ -11,10 +11,12 @@
 // raw CDP trace to `test-results/profile-frame/trace.json` and exits 0 regardless of the numbers: a
 // diagnostic tool, not a gate (`bench.frame_worstcase`, the Playwright test, is the gate).
 //
-// Usage: `node packages/engine/scripts/profile-frame.mjs [--fixture drawables] [--frames 300]`.
-// Only `--fixture drawables` (the one wired scene, `frame-bench.html`) is supported today; a later
-// milestone wiring a second fixture's own frame-bench page extends the `--fixture` switch below,
-// not this comment (M36's own "re-points the benchmark at the reference game", brief Consumes).
+// Usage: `node packages/engine/scripts/profile-frame.mjs [--fixture drawables|reference] [--frames 300]`.
+// `--fixture drawables` (default): `frame-bench.html`, the synthetic worst case behind
+// `bench.frame_worstcase`. `--fixture reference` (M36): the reference game's bench build at
+// `?bench=large-save` (the standard large save, maximum zoom-out, slow pan), the capture behind
+// `bench.frame_reference`; it builds `games/reference` with `vite build --mode bench`, serves
+// `dist-bench/`, and drives the page's `window.__bench` the way the spec does.
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -28,14 +30,22 @@ function argValue(name, fallback) {
 }
 
 const fixture = argValue('fixture', 'drawables')
-if (fixture !== 'drawables') {
-  console.error(`profile-frame: only --fixture drawables is wired today (got '${fixture}')`)
+if (fixture !== 'drawables' && fixture !== 'reference') {
+  console.error(`profile-frame: --fixture is drawables or reference (got '${fixture}')`)
   process.exit(2)
 }
+const isReference = fixture === 'reference'
+// The page API both scenes share (`park`, `resume`, `framesRendered`, `startMarking`, `stopMarking`):
+// `window.__frameBench` (frame-bench.html) or `window.__bench` (the reference bench page).
+const API = isReference ? '__bench' : '__frameBench'
+const BASELINE_FILE = isReference ? 'frame-reference.json' : 'frame.json'
+const TITLE = isReference ? 'bench.frame_reference' : 'bench.frame_worstcase'
 const TIMED_FRAMES = Number(argValue('frames', '300'))
 const WARMUP_FRAMES = 120
 const PORT = 4520
 const RECORD_COUNT = 65_536
+// The reference scene's view holds a few thousand furnaces, not a fixed count (bench.frame_reference).
+const MIN_REFERENCE_RECORDS = 5000
 const EXPECTED_WORKERS = 3 // client, sim, gen0 (frame-bench.ts's own topology)
 const TRACE_CATEGORIES = ['v8', 'devtools.timeline', 'blink.user_timing']
 const SAMPLING_INTERVAL_US = 100
@@ -49,8 +59,8 @@ const MAIN_BUDGET_MS = 1.3
 const WORKER_BUDGET_MS = 2.7
 const BASELINE_TOLERANCE = 0.25
 
-function run(cmd, args) {
-  const res = spawnSync(cmd, args, { cwd: root, stdio: 'inherit' })
+function run(cmd, args, cwd = root) {
+  const res = spawnSync(cmd, args, { cwd, stdio: 'inherit' })
   if (res.status !== 0) {
     console.error(`profile-frame: '${cmd} ${args.join(' ')}' exited ${res.status}`)
     process.exit(res.status ?? 1)
@@ -167,33 +177,55 @@ const INSTALL_WORKER_WRAP = `(() => {
 
 console.log('profile-frame: building engine + fixtures + pages…')
 run('pnpm', ['--silent', '--filter', 'engine', 'build'])
-run('node', ['packages/engine/scripts/build-fixtures.mjs'])
-run('pnpm', [
-  'exec',
-  'vite',
-  'build',
-  '--config',
-  'packages/engine/tests/browser/pages/vite.config.ts',
-])
-
-console.log(`profile-frame: serving on 127.0.0.1:${PORT}…`)
-const preview = spawn(
-  'pnpm',
-  [
+const referenceDir = fileURLToPath(new URL('../../../games/reference', import.meta.url))
+if (isReference) {
+  run('pnpm', ['exec', 'vite', 'build', '--mode', 'bench'], referenceDir)
+} else {
+  run('node', ['packages/engine/scripts/build-fixtures.mjs'])
+  run('pnpm', [
     'exec',
     'vite',
-    'preview',
+    'build',
     '--config',
     'packages/engine/tests/browser/pages/vite.config.ts',
-    '--host',
-    '127.0.0.1',
-  ],
-  {
-    cwd: root,
-    stdio: ['ignore', 'pipe', 'inherit'],
-    env: { ...process.env, ENGINE_TEST_PORT: String(PORT) },
-  },
-)
+  ])
+}
+
+console.log(`profile-frame: serving on 127.0.0.1:${PORT}…`)
+const preview = isReference
+  ? spawn(
+      'pnpm',
+      [
+        'exec',
+        'vite',
+        'preview',
+        '--mode',
+        'bench',
+        '--host',
+        '127.0.0.1',
+        '--port',
+        String(PORT),
+        '--strictPort',
+      ],
+      { cwd: referenceDir, stdio: ['ignore', 'pipe', 'inherit'] },
+    )
+  : spawn(
+      'pnpm',
+      [
+        'exec',
+        'vite',
+        'preview',
+        '--config',
+        'packages/engine/tests/browser/pages/vite.config.ts',
+        '--host',
+        '127.0.0.1',
+      ],
+      {
+        cwd: root,
+        stdio: ['ignore', 'pipe', 'inherit'],
+        env: { ...process.env, ENGINE_TEST_PORT: String(PORT) },
+      },
+    )
 await new Promise((resolve, reject) => {
   preview.stdout.on('data', function onData(d) {
     if (String(d).includes(`:${PORT}`)) {
@@ -213,24 +245,42 @@ const browser = await chromium.launch({
 try {
   const page = await browser.newPage()
   page.on('pageerror', (e) => console.error(`profile-frame: page error: ${e.message}`))
-  await page.goto(`http://127.0.0.1:${PORT}/frame-bench.html`)
+  await page.goto(
+    `http://127.0.0.1:${PORT}/${isReference ? 'index.html?bench=large-save' : 'frame-bench.html'}`,
+  )
   await page.waitForFunction(() => window.__pageReady === true, { timeout: 60_000 })
+  if (isReference) {
+    // The save is generated and the first view's furnaces are in the DrawList.
+    await page.waitForFunction(() => (window.__bench?.hud().records ?? 0) >= 5000, null, {
+      timeout: 120_000,
+    })
+  }
 
-  const setup = await page.evaluate(() => ({
-    adapter: window.__frameBench?.adapterInfo ?? null,
-    recordCount: window.__frameBench?.recordCount ?? 0,
-  }))
+  const setup = await page.evaluate((reference) => {
+    if (reference) {
+      return {
+        adapter: window.__bench?.adapter() ?? null,
+        recordCount: window.__bench?.hud().records ?? 0,
+      }
+    }
+    return {
+      adapter: window.__frameBench?.adapterInfo ?? null,
+      recordCount: window.__frameBench?.recordCount ?? 0,
+    }
+  }, isReference)
   console.log(
     `profile-frame: adapter=${JSON.stringify(setup.adapter)} recordCount=${setup.recordCount}`,
   )
-  if (setup.recordCount !== RECORD_COUNT) {
+  if (
+    isReference ? setup.recordCount < MIN_REFERENCE_RECORDS : setup.recordCount !== RECORD_COUNT
+  ) {
     console.error(
-      `profile-frame: expected ${RECORD_COUNT} entities, page reports ${setup.recordCount}`,
+      `profile-frame: expected ${isReference ? `at least ${MIN_REFERENCE_RECORDS}` : RECORD_COUNT} entities, page reports ${setup.recordCount}`,
     )
     exitCode = 1
   }
 
-  await page.evaluate(() => window.__frameBench?.park())
+  await page.evaluate((api) => window[api]?.park(), API)
 
   const pageSession = await page.context().newCDPSession(page)
   const workers = []
@@ -257,12 +307,13 @@ try {
     returnByValue: true,
   })
 
-  await page.evaluate(() => window.__frameBench?.resume())
-  await page.evaluate(() => window.__frameBench?.start())
+  await page.evaluate((api) => window[api]?.resume(), API)
+  // The reference page's loop is already running; only `frame-bench.html` waits for `start()`.
+  await page.evaluate((api) => window[api]?.start?.(), API)
 
   await page.waitForFunction(
-    (n) => (window.__frameBench?.framesRendered() ?? 0) >= n,
-    WARMUP_FRAMES,
+    ([api, n]) => (window[api]?.framesRendered() ?? 0) >= n,
+    [API, WARMUP_FRAMES],
     { timeout: 60_000 },
   )
 
@@ -284,25 +335,27 @@ try {
   await pageSession.send('Profiler.start')
   await clientWorker.send('Profiler.start')
 
-  const startFrames = await page.evaluate(() => {
-    window.__frameBench?.startMarking()
-    return window.__frameBench?.framesRendered() ?? 0
-  })
+  const startFrames = await page.evaluate((api) => {
+    window[api]?.startMarking()
+    return window[api]?.framesRendered() ?? 0
+  }, API)
 
   await page.waitForFunction(
-    (n) => (window.__frameBench?.framesRendered() ?? 0) >= n,
-    startFrames + TIMED_FRAMES,
-    { timeout: 60_000 },
+    ([api, n]) => (window[api]?.framesRendered() ?? 0) >= n,
+    [API, startFrames + TIMED_FRAMES],
+    { timeout: 120_000 },
   )
 
-  await page.evaluate(() => window.__frameBench?.stopMarking())
+  await page.evaluate((api) => window[api]?.stopMarking(), API)
   const { profile: mainProfile } = await pageSession.send('Profiler.stop')
   const { profile: workerProfile } = await clientWorker.send('Profiler.stop')
   await browserSession.send('Tracing.end')
   await traceDone
   await browserSession.detach()
 
-  const gpuErrors = await page.evaluate(() => window.__frameBench?.errors() ?? [])
+  const gpuErrors = isReference
+    ? []
+    : await page.evaluate(() => window.__frameBench?.errors() ?? [])
   if (gpuErrors.length > 0) {
     console.error(`profile-frame: uncapturederror: ${JSON.stringify(gpuErrors)}`)
     exitCode = 1
@@ -321,12 +374,12 @@ try {
   const mainCpu = sumCpuProfile(mainProfile)
   const workerCpu = sumCpuProfile(workerProfile)
 
-  const baselineUrl = new URL('../baselines/frame.json', import.meta.url)
+  const baselineUrl = new URL(`../baselines/${BASELINE_FILE}`, import.meta.url)
   const baseline = existsSync(baselineUrl) ? JSON.parse(readFileSync(baselineUrl, 'utf8')) : null
 
   console.log('')
   console.log(
-    `bench.frame_worstcase profile: records=${RECORD_COUNT} frames main=${mainMs.length} worker=${workerMs.length} warmup=${WARMUP_FRAMES}`,
+    `${TITLE} profile: records=${isReference ? setup.recordCount : RECORD_COUNT} frames main=${mainMs.length} worker=${workerMs.length} warmup=${WARMUP_FRAMES}`,
   )
   console.log(
     `  main   p50=${mainP50.toFixed(3)}ms p95=${mainP95.toFixed(3)}ms  budget<=${MAIN_BUDGET_MS}ms` +

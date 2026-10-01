@@ -1,6 +1,6 @@
 ---
 name: profile-frame
-description: Profile the repo's real-rAF frame-time benchmark (bench.frame_worstcase, docs/decisions/0018-renderer.md §9) -- prints main-thread and client-worker frame durations plus the top five self-time functions per thread. Use when a frame-time benchmark fails, when a renderer or `extract`/sort change is suspected of a regression, or before updating packages/engine/baselines/frame.json.
+description: Profile the repo's real-rAF frame-time benchmarks (bench.frame_worstcase and bench.frame_reference, docs/decisions/0018-renderer.md §9) -- prints main-thread and client-worker frame durations plus the top five self-time functions per thread. Use when a frame-time benchmark fails, when a renderer or `extract`/sort change is suspected of a regression, or before updating packages/engine/baselines/frame.json or frame-reference.json.
 ---
 
 # profile-frame
@@ -13,6 +13,11 @@ pass/fail against the desktop-proxy budget (main <= 1.3 ms, worker <= 2.7 ms) an
 checked-in baseline (`packages/engine/baselines/frame.json`) within 25%. This skill is the
 diagnostic twin: it runs the identical scene and measurement window but prints numbers instead of
 asserting, plus a CPU self-time breakdown the pass/fail test does not compute.
+
+## Two scenes
+
+- `--fixture drawables` (default): the synthetic worst case above (`frame-bench.html`, 65,536 drawables), baseline `baselines/frame.json`.
+- `--fixture reference` (M36): **the capture for reference-game regressions**, behind `bench.frame_reference` (`packages/engine/tests/browser/frame-bench-reference.spec.ts`). It builds `games/reference` in bench mode (`vite build --mode bench`: cargo feature `bench`, output `dist-bench/`), serves it, opens `index.html?bench=large-save` (the standard large save of 0020 §9, single-player, camera at maximum zoom-out over the dense furnace block, a slow pan, a few thousand furnaces in the DrawList) and runs the same park / wrap / resume / warm-up / timed-window sequence through the page's own `window.__bench`. Baseline `baselines/frame-reference.json`; budgets main <= 1.3 ms and worker <= 2.7 ms (0018 §9). Use it when `bench.frame_reference` fails, when a game's `extract`, the furnace sprites or the DrawList publish path changed, or when the bench HUD on a phone (`?bench=large-save`, `main p95` / `frame p95` / `tick p95`) misses its share: capture the same view on the desktop first. A miss is reported with this profile and handled as a plan edit; never retune the scene, a limit or a threshold. The profile's own `mark` calls inflate both thread totals; read the ranking, not the totals.
 
 ## When to use it
 
@@ -30,10 +35,10 @@ asserting, plus a CPU self-time breakdown the pass/fail test does not compute.
 ## The command
 
 ```
-node packages/engine/scripts/profile-frame.mjs [--fixture drawables] [--frames 300]
+node packages/engine/scripts/profile-frame.mjs [--fixture drawables|reference] [--frames 300]
 ```
 
-Run from the repo root. Only `--fixture drawables` (the one wired scene) exists today; `--frames`
+Run from the repo root. `--frames`
 overrides the timed-window frame count (default 300, matching `bench.frame_worstcase`'s own
 `TIMED_FRAMES`). It rebuilds the engine, fixtures and browser-suite pages, serves them on
 `127.0.0.1:4520`, launches Chromium with the same `--disable-frame-rate-limit --disable-gpu-vsync`
@@ -107,3 +112,5 @@ baseline's `metrics`, fingerprint and date from the latest record, an explicit c
 reviewed; update `conditions` by hand. Only raise the baseline for a change that is expected to cost more and was
 reviewed as such; a baseline that silently absorbs a regression defeats the whole point of checking
 one in.
+
+`baselines/frame-reference.json` follows the same rule (`pnpm test:slow frame-bench -t bench.frame_reference` a few times, then `pnpm bench:baseline frame-reference`; its `limits` are the 0018 §9 proxies and stay).
