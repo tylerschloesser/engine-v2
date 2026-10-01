@@ -11,6 +11,7 @@ import { halfExtentTiles } from '../../../../src/camera/transform.ts'
 import { hexEncode, loadOrMintSecret } from '../../../../src/client/secret.ts'
 import type { Client, ClientOptions, LinkLogEntry, LinkState } from '../../../../src/client.ts'
 import { clientTestHandle, createClient, readInvite, wsUrl } from '../../../../src/client.ts'
+import type { Scheduler } from '../../../../src/clock.ts'
 import { systemClock, systemScheduler } from '../../../../src/clock.ts'
 import { createFrameLoop } from '../../../../src/frame-loop.ts'
 import { installPageStyles } from '../../../../src/input/page-css.ts'
@@ -56,6 +57,10 @@ declare global {
      * exist now, and the page's own timeline in ms since page start (`null` = not yet). */
     /** Chunk results the gen workers have pushed to this client (their result rings' counters). */
     __mpGenDelivered?: () => number
+    /** `?holdIndicator=1` (`mp/reconnect-indicator-delay`): the delays of the 1,000 ms timers the
+     * client's scheduler was asked for and held back, and a call that fires the held ones. */
+    __mpHeldTimers?: () => number[]
+    __mpFireHeld?: () => void
     __mpConfig?: () => {
       genWorkers: number
       testGame: boolean
@@ -79,6 +84,20 @@ const genDelayMs = Number(params.get('genDelay') ?? '0')
 const blockedWorker = params.get('blockedWorker') === '1'
 const corruptBuildHash = params.get('corruptBuildHash') === '1'
 const urlOverride = params.get('url')
+// `?holdIndicator=1`: the client's `Scheduler` is the system one except that a 1,000 ms timer (0013's
+// reconnect-indicator delay, `client.ts` `RECONNECT_INDICATOR_DELAY_MS`) is recorded and held until
+// `__mpFireHeld()`, so the test sees both that the indicator waits and what it waits for, without
+// sleeping a real second.
+const holdIndicator = params.get('holdIndicator') === '1'
+const heldTimers: Array<{ delayMs: number; cb: () => void }> = []
+const holdingScheduler: Scheduler = {
+  ...systemScheduler,
+  setTimer(cb, delayMs) {
+    if (delayMs !== 1000) return systemScheduler.setTimer(cb, delayMs)
+    heldTimers.push({ delayMs, cb })
+    return -1
+  },
+}
 
 const hudEl = document.createElement('pre')
 hudEl.id = 'hud'
@@ -135,6 +154,7 @@ const clientOptions: ClientOptions = {
   // No `test.game`: the client and its gen workers take the world's seed and params from
   // `Welcome` (ADR 0042, docs/plan/33f), unless `?testGame=1` asks for the old escape hatch.
   ...(genDelayMs > 0 ? { test: { genSpawnDelayMs: genDelayMs } } : {}),
+  ...(holdIndicator ? { test: { scheduler: holdingScheduler } } : {}),
   ...(testGame
     ? {
         test: {
@@ -181,6 +201,10 @@ const revealPoll = setInterval(() => {
     clearInterval(revealPoll)
   }
 }, 5)
+window.__mpHeldTimers = () => heldTimers.map((t) => t.delayMs)
+window.__mpFireHeld = () => {
+  for (const t of heldTimers.splice(0)) t.cb()
+}
 window.__mpGenDelivered = () => {
   const stats: RingStats = { drops: 0, pushed: 0, popped: 0 }
   let pushed = 0

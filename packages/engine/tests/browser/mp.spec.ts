@@ -29,6 +29,8 @@ declare global {
     __mpRevealed?: () => boolean
     __mpProbeCenterPixel?: () => Promise<{ r: number; g: number; b: number; a: number }>
     __mpGenDelivered?: () => number
+    __mpHeldTimers?: () => number[]
+    __mpFireHeld?: () => void
     __mpConfig?: () => {
       genWorkers: number
       testGame: boolean
@@ -258,6 +260,52 @@ test('mp/reconnect', async ({ page }) => {
   } finally {
     ticks.stop()
     await server.stop()
+  }
+})
+
+test('mp/reconnect-indicator-delay', async ({ page }) => {
+  // 0013 Client policy: the `reconnecting` indicator appears only after a 1 s delay, so a quick
+  // reconnect never flashes it. The page holds the client's 1,000 ms timer (`?holdIndicator=1`): a
+  // dropped link asks for exactly one such timer; one that heals first makes it stale (firing it
+  // changes nothing), one that stays down shows `reconnecting` when it fires.
+  test.setTimeout(45_000)
+  const server = await startTestServer({ fixture: PUTS_DIR, manualTimer: true })
+  const ticks = tickInBackground(server)
+  let stopped = false
+  try {
+    await openPage(page, mpUrl(server, '&holdIndicator=1'))
+    await page.waitForFunction(() => window.__mpLinkState?.() === 'online', { timeout: 20_000 })
+    expect(await page.evaluate(() => window.__mpHeldTimers?.())).toEqual([])
+    const held = () =>
+      page.waitForFunction(() => (window.__mpHeldTimers?.().length ?? 0) === 1, { timeout: 10_000 })
+
+    // A drop that heals: the timer is asked for, the link is up again (`open` after `close`), and
+    // firing the stale timer shows nothing.
+    server.killClients()
+    await held()
+    await page.waitForFunction(
+      () => {
+        const log = window.__mpLinkLog?.() ?? []
+        return log.length >= 2 && log[log.length - 1]?.event === 'open'
+      },
+      { timeout: 20_000 },
+    )
+    expect(await page.evaluate(() => window.__mpHeldTimers?.())).toEqual([1000])
+    await page.evaluate(() => window.__mpFireHeld?.())
+    expect(await page.evaluate(() => window.__mpLinkState?.())).toBe('online')
+
+    // A drop that stays down (the server is gone): nothing shows before the timer, `reconnecting`
+    // after it.
+    ticks.stop()
+    stopped = true
+    await server.stop()
+    await held()
+    expect(await page.evaluate(() => window.__mpLinkState?.())).toBe('online')
+    await page.evaluate(() => window.__mpFireHeld?.())
+    expect(await page.evaluate(() => window.__mpLinkState?.())).toBe('reconnecting')
+  } finally {
+    ticks.stop()
+    if (!stopped) await server.stop()
   }
 })
 
