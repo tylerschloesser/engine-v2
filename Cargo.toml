@@ -21,6 +21,12 @@ opt-level = 1
 # M35 (0045 §3): line tables only. Panic file:line (0014 §6) needs no more; the dev module of the
 # reference game shrinks from 19.0 MB to 7.3 MB and a one-line-edit rebuild gets no slower.
 debug = "line-tables-only"
+# M36b step 4b (amends 0045 §3): on macOS the default `split-debuginfo = "unpacked"` keeps every
+# `.rcgu.o` next to the binaries (4.6k per engine edit, 80k after a day) and each freshly linked test
+# binary then takes 0.5-0.9 s to first launch instead of 0.16 s: the one-line-edit rebuild drifted
+# 38 -> 60 s. `"off"` holds it flat but drops the file:line of native backtrace frames (the panic
+# message keeps its location); `"packed"` is flat and keeps them.
+split-debuginfo = "packed"
 
 [profile.dev.package."*"]
 opt-level = 3

@@ -8,3 +8,4 @@ playwright-report/
 .playwright-cli/
 .data/
 dist-bench/
+target-old/

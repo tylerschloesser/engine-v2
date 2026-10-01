@@ -11,6 +11,8 @@ const MAX_LINES = 60
 const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
   cwd: root,
   encoding: 'utf8',
+  // An untracked, un-ignored build directory (M30b's `target-old/`) lists tens of thousands of paths.
+  maxBuffer: 256 * 1024 * 1024,
 })
   .split('\n')
   .filter((f) => f && !f.startsWith('spikes/') && !f.startsWith('docs/'))
