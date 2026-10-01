@@ -126,6 +126,25 @@ function engineCrateDir(): string {
   return join(enginePackageDir(), 'crates')
 }
 
+/**
+ * `server.fs.allow` (0017 §3): the engine package's real directory, plus what Vite would have allowed
+ * by default. A plugin that returns `fs.allow` *replaces* that default (`[searchForWorkspaceRoot(root)]`),
+ * which until M35 left a game's own `worker.ts` (pattern B) outside the list in any project without a
+ * workspace-root marker above it, such as a tarball install: the project root and Vite's workspace root
+ * go back in. `vite` is the host process of this plugin, so the dynamic import cannot miss it; the
+ * fallback is only for a host that does not export `searchForWorkspaceRoot`.
+ */
+async function fsAllow(root: string): Promise<string[]> {
+  const allow = [enginePackageDir(), root]
+  try {
+    const { searchForWorkspaceRoot } = await import('vite')
+    allow.push(searchForWorkspaceRoot(root))
+  } catch {
+    // The project root above is the part a pattern-B worker needs.
+  }
+  return allow
+}
+
 export function engine(opts: EngineOptions): Plugin {
   let root = process.cwd()
   let crateDir = ''
@@ -161,13 +180,13 @@ export function engine(opts: EngineOptions): Plugin {
     name: 'engine:vite',
     api,
 
-    config(_userConfig, env) {
+    async config(userConfig, env) {
       profile = opts.profile ?? (env.command === 'build' ? 'release' : 'dev')
       api.profile = profile
       return {
         server: {
           headers: COI_HEADERS,
-          fs: { allow: [enginePackageDir()] },
+          fs: { allow: await fsAllow(resolve(userConfig.root ?? process.cwd())) },
         },
         preview: { headers: COI_HEADERS },
         worker: { format: 'es' },

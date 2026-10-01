@@ -1,0 +1,27 @@
+[package]
+name = "scratch-sim"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# What an external game writes (0017 §6): the crate the package ships, through node_modules.
+engine = { path = "../node_modules/engine/crates/engine" }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+ts-rs = "12"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

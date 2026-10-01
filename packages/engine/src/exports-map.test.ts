@@ -137,3 +137,33 @@ test('exports-map: pnpm pack lists only dist/**, crates/** and package.json', ()
     rmSync(dest, { recursive: true, force: true })
   }
 })
+
+const ROOT_CARGO = fileURLToPath(new URL('../../../Cargo.toml', import.meta.url))
+
+/** The `key = value` lines of one TOML table (flat, which is all these two manifests use there). */
+function tomlTable(text: string, table: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  let inside = false
+  for (const line of text.split('\n')) {
+    const header = /^\[([^\]]+)\]\s*$/.exec(line)
+    if (header) inside = header[1] === table
+    else if (inside) {
+      const kv = /^([\w.-]+)\s*=\s*(.+?)\s*(?:#.*)?$/.exec(line)
+      if (kv) out[kv[1] as string] = kv[2] as string
+    }
+  }
+  return out
+}
+
+test('exports-map: the shipped crate manifest has no workspace inheritance and tracks the root', () => {
+  const crate = readFileSync(`${PKG}crates/engine/Cargo.toml`, 'utf8')
+  const root = readFileSync(ROOT_CARGO, 'utf8')
+  // No workspace root exists inside `node_modules` (0017 §8): `x.workspace = true`, `workspace = true`.
+  const inheriting = crate.split('\n').filter((l) => /\bworkspace\s*=\s*true\b/.test(l))
+  expect(inheriting).toEqual([])
+  const pick = (t: Record<string, string>, keys: string[]) => keys.map((k) => t[k])
+  expect(pick(tomlTable(crate, 'package'), ['version', 'edition', 'publish'])).toEqual(
+    pick(tomlTable(root, 'workspace.package'), ['version', 'edition', 'publish']),
+  )
+  expect(tomlTable(crate, 'lints.clippy')).toEqual(tomlTable(root, 'workspace.lints.clippy'))
+})

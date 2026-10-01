@@ -1,11 +1,16 @@
 [package]
 name = "engine"
-version.workspace = true
-edition.workspace = true
-publish.workspace = true
+# No workspace inheritance anywhere in this manifest (M35, 0017 §8): the crate ships inside the npm
+# tarball and a game path-depends on it under `node_modules/engine/crates/engine`, where no workspace
+# root exists. The same values live in the root `Cargo.toml`'s `[workspace.package]` and
+# `[workspace.lints.clippy]`; `exports-map` (src/exports-map.test.ts) fails when they drift.
+version = "0.0.0"
+edition = "2024"
+publish = false
 
-[lints]
-workspace = true
+[lints.clippy]
+disallowed_methods = "deny"
+disallowed_types = "deny"
 
 [features]
 # Native test helpers (`engine::testing`). Dev-dependency use only; never on in a `.wasm` build.

@@ -7,7 +7,7 @@ import { stat, utimes } from 'node:fs/promises'
 import type { AddressInfo } from 'node:net'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createServer, type ViteDevServer } from 'vite'
+import { createServer, searchForWorkspaceRoot, type ViteDevServer } from 'vite'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { fixtureBuildDir } from '../support/fixtures.js'
 
@@ -77,6 +77,14 @@ describe('plugin-dev', () => {
   test('plugin-dev: fs.allow contains engine dir', () => {
     const allow = server.config.server.fs.allow.map((p) => resolve(p))
     expect(allow).toContain(ENGINE_PKG_DIR)
+  })
+
+  test('plugin-dev: fs.allow keeps the project root and Vite workspace root', () => {
+    // M35: returning `fs.allow` from the plugin replaces Vite's default; a game's own `worker.ts`
+    // (pattern B) is outside the list in a project with no workspace marker above it.
+    const allow = server.config.server.fs.allow.map((p) => resolve(p))
+    expect(allow).toContain(resolve(server.config.root))
+    expect(allow).toContain(resolve(searchForWorkspaceRoot(server.config.root)))
   })
 
   test('plugin-dev: touch triggers rebuild and full-reload', async () => {
