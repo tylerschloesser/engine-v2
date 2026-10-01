@@ -139,6 +139,16 @@ export async function adapterLoopback(o) {
   if (probeClose !== 1000) throw new Error(`stop() closed a socket with code ${probeClose}`)
   for (const c of clients) c.leave()
   await listener.close()
+  // The listener is gone: a new dial is refused.
+  const refused = await new Promise((resolve) => {
+    const late = new WebSocket(`ws://127.0.0.1:${listener.port}`)
+    late.onopen = () => {
+      late.close()
+      resolve(false)
+    }
+    late.onerror = () => resolve(true)
+  })
+  if (!refused) throw new Error('the listener still accepts connections after close()')
 
   // A Storage write failure reaches `onError`: an `append` whose parent is a regular file.
   const { mkdir, writeFile } = await import('node:fs/promises')

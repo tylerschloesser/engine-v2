@@ -286,14 +286,7 @@ async function runBunAdapterLeg() {
       blockedDir: join(dir, 'blocked'),
       async serve(server) {
         const srv = Bun.serve({ port: 0, hostname: '127.0.0.1', ...bunAdapter.bunHandlers(server) })
-        // Not awaited: under Bun 1.3.8, awaiting `stop()` after the server itself closed a socket
-        // in the same process never settles (and `stop(true)` then aborts the process).
-        return {
-          port: srv.port,
-          close: () => {
-            srv.stop(true)
-          },
-        }
+        return { port: srv.port, close: () => srv.stop(true) }
       },
     })
     return { name: ADAPTER_NAME, ok: true, message: null }
