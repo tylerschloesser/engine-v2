@@ -1,6 +1,6 @@
 # M36: Slow tier and wall-clock benchmarks
 
-Status: not started · After: 34c, 35 · Tyler-dependent: no
+Status: done · After: 34c, 35 · Tyler-dependent: no
 
 Split: the suite audit and the deferred measurements (demotion audit, 30 s rebuild, build-cache decision, `wasm-opt`/`+simd128`, byte diffing) are `36b-suite-audit-and-measurements.md`; together they were well past the line rule. `After` includes 35 because the slow tier this milestone completes includes M35's packaging tests; M35 needs only M29, so no ordering is lost.
 
@@ -56,15 +56,15 @@ Everything in M36b. Phone frame times (manual, 0018 Consequences). Optimisation 
 By name under Provides; all slow. One fast `rust` test: `large_save_builder_is_deterministic` on a 1/64-scale config (inside the 0020 §4 p95 limit), so the builder cannot rot between slow runs. `unit`: `bench-gate: threshold and fingerprint`.
 
 ## Exit criteria
-- [ ] `pnpm test:slow` runs every slow test of every suite, one line per suite, exit 0 on Tyler's Mac; `pnpm bench:frame` still works as an alias.
-- [ ] `heavy-n1 all logs` and `release-golden` pass under Node (and Bun for the replay).
-- [ ] The builder's native test proves the §9 counts and determinism.
-- [ ] `slow_tick_large_save` meets the 0010 desktop proxy and `bench.frame_reference` both 0018 §9 proxies, each with a baseline. A miss is not hidden: Deviations gets the profile and a plan edit is raised.
-- [ ] The gate fails when a sample is pushed 30 % over baseline on the baseline machine (checked once with an injected delay, then reverted) and only records under another fingerprint (`unit` test).
-- [ ] Snapshot-stall answer and the high-water mark are recorded (Deviations and `budgets.json`); a "no" on the stall has its ADR or a plan edit.
-- [ ] The three soak variants and `webkit-readback` pass.
-- [ ] In desktop Chrome the bench build's `?bench=large-save` page shows the bench HUD with non-zero `main`, `frame` and `tick` p95 values (`bench.frame_reference` asserts the fields exist).
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `pnpm test:slow` runs every slow test of every suite, one line per suite, exit 0 on Tyler's Mac; `pnpm bench:frame` still works as an alias.
+- [x] `heavy-n1 all logs` and `release-golden` pass under Node (and Bun for the replay).
+- [x] The builder's native test proves the §9 counts and determinism.
+- [x] `slow_tick_large_save` meets the 0010 desktop proxy and `bench.frame_reference` both 0018 §9 proxies, each with a baseline. A miss is not hidden: Deviations gets the profile and a plan edit is raised.
+- [x] The gate fails when a sample is pushed 30 % over baseline on the baseline machine (checked once with an injected delay, then reverted) and only records under another fingerprint (`unit` test).
+- [x] Snapshot-stall answer and the high-water mark are recorded (Deviations and `budgets.json`); a "no" on the stall has its ADR or a plan edit.
+- [x] The three soak variants and `webkit-readback` pass.
+- [x] In desktop Chrome the bench build's `?bench=large-save` page shows the bench HUD with non-zero `main`, `frame` and `tick` p95 values (`bench.frame_reference` asserts the fields exist).
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test` · `pnpm lint` · `pnpm test:slow` · `pnpm test:slow rust -t slow_tick_large_save` · `pnpm test:slow browser -t bench.frame_reference` · `pnpm test:slow netcode -t soak-netcode` · `pnpm bench:baseline tick` (only to create or deliberately move a baseline)
@@ -124,7 +124,7 @@ None of its own. It supplies `?bench=large-save` and the bench HUD for items M39
 - Slow-tier results, one suite per call: `wasm pass 18 tests`, `netcode pass 8 tests`, `frame-bench pass 1 tests`, `rust FAIL 8 tests` (only `slow_tick_large_save`: `medianMs 9.614 exceeds the desktop proxy 3`). `pnpm test`: rust 770, unit 323 (3.6 s of 3 s, still the WARN), wasm 172, netcode 114, browser 241 pass; `pnpm lint` green.
 
 
-**Step 5b (coordinator ruling: the tick miss).** `Host::build_frame`'s collapse check now (a) skips when `pending <= MIN_COLLAPSE_BYTES` before any encode and (b) computes a chunk's snapshot size once per tick for every connection (`Host::scratch_snapshot_len: HashMap<ChunkCoord, u32>`, cleared at the top of `Host::tick`, capacity kept; the size depends on store, chunk and `chunk_versions` only, never the connection). Behaviour identical: `pending <= max(64, len)` unchanged. Proof: all 770 native, 172 wasm and 114 netcode tests pass with no golden, byte baseline or `rates` counter touched. The collapse branch is covered by the existing `connection_and_subscriptions::held_chunk_with_queued_resnapshot_is_left_when_it_leaves_the_subscription` (asserts `collapses == 1`); injected `|| pending > 0` into the short-circuit (never collapses): that test went red (769/770), reverted.
+**Step 5b (coordinator ruling: the tick miss).** `Host::build_frame`'s collapse check now (a) skips when `pending <= MIN_COLLAPSE_BYTES` before any encode and (b) computes a chunk's snapshot size once per tick for every connection (`Host::scratch_snapshot_len: HashMap<ChunkCoord, u32>`, cleared at the top of `Host::tick`, capacity kept; the size depends on store, chunk and `chunk_versions` only, never the connection). Behaviour identical: `pending <= max(64, len)` unchanged. Proof: all 770 native, 172 wasm and 114 netcode tests pass with no golden, byte baseline or `rates` counter touched. The collapse branch is covered by the existing `connection_and_subscriptions::held_chunk_with_queued_resnapshot_is_left_when_it_leaves_the_subscription` (asserts `collapses == 1`); injected `|| pending > 0` into the short-circuit (never collapses): that test went red (769/770), reverted. **Gate correction (orchestrator, `1e373d6`):** the per-host `HashMap` broke clippy's `disallowed-types` (0002 §2); `scratch_snapshot_len` is a sorted `Vec<(ChunkCoord, u32)>` with a binary search, same capacity rule, re-measured 2.8845 ms median.
 - Before/after, release, this machine: `slow_tick_large_save` median **9.60 -> 2.876 ms**, p99 10.8 -> 3.58, max 11.3 -> 4.22; tick 1.22 ms, frames 8.28 -> 1.65 ms; join max 16.0 ms (unchanged: join frames are real snapshots). Node twin median 12.11 -> 10.63 ms (p99 12.70).
 - **Under 3 ms but within 15 % of it (2.876 is 4 % under), so per the ruling `baselines/tick.json` and `tick-node.json` were NOT re-recorded**: the committed `tick.json` still holds the 9.6 ms numbers and its "FIRST MEASUREMENT" text, and the gate currently passes only because the median is under the 3 ms limit. Fresh profile (about 350 busy samples, 6 s): `Host::build_frame` self 172 plus its closure 27 (~57 %), `memmove` 26, `furnace::advance` 23, `BTreeMap::remove` 22 / `insert` 16 + 14, `entity_scopes` 17, `Store::apply` 13, `BenchHost::step` 11, `TimerWheel::wake_at` 7. `encode_chunk_snapshot` is gone. What remains is the per-delta-per-connection frame assembly itself (242 puts per connection per tick).
 - Slow results: `pnpm test:slow rust` pass 8, `pnpm test:slow netcode` pass 8.

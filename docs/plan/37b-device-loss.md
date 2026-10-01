@@ -32,6 +32,7 @@ The event audit, `onFatal`, trap reactions (M37). Context loss for anything but 
 ## Seams
 **Provides:** `client.onRendererLost`; `GpuResources` (internal, one constructor); `CB_FLAGS` bit `RENDERER_RESET` given its meaning (set the same way M09b's own `CB_FLAGS.REBASE` is: `Client.setFlags(mask)`, an `Atomics.or` into the word, never a load-then-store, so a bit set elsewhere between isn't clobbered); Rust `Uploader::requeue_all()` behind client export `upload_requeue_all`; `engine/test` `loseDevice`, `failNextAdapter`; helper `allowDeviceLoss(page)`.
 **Consumes:** `render/device.ts`, terrain path, `Uploader`, chunk-upload ring, `upload_stage`, `renderTo` / `readPixels` / probes (overloaded since M09's Steps 5-7: a renderer-only shape and `renderTo(client, opts)`/`readPixels(client)` against a real `Client.uploadRing`), counters (M09); `Uploader::requeue_all` as M09 actually left it (Deviations, Step 1: minimal — clears every "on GPU" bit and forces the next `on_frame` to rescan ring 1 + look-ahead from scratch; it does **not** replay chunks resident outside that window, which is exactly the gap this milestone's own `requeue_all_marks_every_resident_chunk_once` test and Provides entry complete, per 0018 §8's "ask the worker to re-enqueue every resident chunk"); art loading, mips, lifecycle handlers (M09b); DrawList triple buffer, uber-quad pipeline, atlas (M17, M17b); control block and `wake` (M06, M06b); camera block writer and overlay writes (M11, M18); injected `Clock`, `stepFrame`, quiescence (M03); zero-GC `measure` (M04); ABI registry (M02).
+**From M36 (orchestrator):** the "no regression" check is `pnpm test:slow frame-bench` (project `frame-bench`, solo, runs both `bench.frame_worstcase` and `bench.frame_reference`; `bench.frame_reference` is `pnpm test:slow frame-bench -t bench.frame_reference`, **not** `browser -t`, which matches nothing). Baselines `baselines/frame.json` and `frame-reference.json` (shape and the 25 % rule with the `minDeltaMs` floor: ADR 0047); a miss at load above ~8 is noise: check `uptime`, rerun alone ([M36 Deviations](36-slow-tier-and-benchmarks.md#deviations), "Load note"). `bench.frame_reference` and `profile-frame --fixture reference` both build `games/reference/dist-bench/` and bind their own port; never run them together.
 
 ## Planning decisions
 - **A control-block flag, not a message.** Device loss is outside the zero-GC window, so `postMessage` would be legal, but M06 already reserved `RENDERER_RESET`, a flag is idempotent if two losses race, and tests can read it.
@@ -50,11 +51,11 @@ The event audit, `onFatal`, trap reactions (M37). Context loss for anything but 
 - [ ] The five `browser` tests pass locally on the real GPU and in CI on the software adapter (or carry the named local-only notice above).
 - [ ] Every other browser test still fails on an unexpected device loss (negative check: `loseDevice` without `allowDeviceLoss` turns a test red).
 - [ ] The M04/M17 zero-GC tests pass untouched, and `device loss then zero-GC window @slow` passes.
-- [ ] `pnpm test:slow browser -t bench.frame` shows no regression against its baseline if M36 has landed (M17b's `bench.frame_worstcase` otherwise).
+- [ ] `pnpm test:slow frame-bench` shows no regression against `baselines/frame.json` and `frame-reference.json` (M36 landed; the suite is `frame-bench`, not `browser`).
 - [ ] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
-`pnpm test` · `pnpm lint` · `pnpm test browser -t "device loss"` · `pnpm test browser -t rendererLost` · `pnpm test rust -t requeue_all` · `pnpm test:slow browser -t "device loss then zero-GC"`
+`pnpm test` · `pnpm lint` · `pnpm test browser -t "device loss"` · `pnpm test browser -t rendererLost` · `pnpm test rust -t requeue_all` · `pnpm test:slow browser -t "device loss then zero-GC"` · `pnpm test:slow frame-bench`
 
 ## Budgets
 PRE-PLAN §7 "Allocation per isolate": unchanged main and client-worker numbers on the healthy path (M04 tests). "GPU upload": the refill respects the per-frame byte budget (`uploadBytes` counter). "Frame time": main share unchanged (frame benchmark). "Test suite": stepped frames and the virtual clock only; each test inside the 0020 §4 browser p95.
