@@ -68,7 +68,7 @@ export const suites = [
   // `rust` slow tier gate on a median (0010 desktop proxy, 25 % rule); run beside `browser`'s Chromium
   // pool they measured 32 % over a baseline they hold alone. Same reason as `frame-bench`'s `solo`.
   { name: 'rust', kind: 'nextest', tiers: ['fast', 'slow'], budgetMs: 10_000, soloTiers: ['slow'] },
-  { name: 'unit', kind: 'vitest', tiers: ['fast', 'slow'], budgetMs: 3_000 },
+  { name: 'unit', kind: 'vitest', tiers: ['fast', 'slow'], budgetMs: 3_000, first: true },
   {
     name: 'wasm',
     kind: 'vitest',

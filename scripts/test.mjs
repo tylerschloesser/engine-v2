@@ -96,12 +96,19 @@ async function main() {
   // needs the machine to itself, the same reasoning `frame-bench` already established for real-time
   // measurement, applied here to real-time *correctness* instead.
   const isSolo = (s) => s.solo === true || (s.soloTiers?.includes(opts.tier) ?? false)
-  const concurrent = selected.filter((s) => !isSolo(s))
+  // `first: true` (M36b step 4b): runs alone before every concurrent suite starts. `unit` is 1.3 s alone
+  // and 3.3 s beside nextest, two more Vitest runs and Playwright's pool, which is all CPU contention.
+  const first = selected.filter((s) => s.first === true && !isSolo(s))
+  const concurrent = selected.filter((s) => !isSolo(s) && !first.includes(s))
   const solo = selected.filter((s) => isSolo(s))
-  const outcomes = await Promise.all(concurrent.map((suite) => runSuite(suite, opts)))
+  const outcomes = []
+  for (const suite of first) outcomes.push(await runSuite(suite, opts))
+  outcomes.push(...(await Promise.all(concurrent.map((suite) => runSuite(suite, opts)))))
   for (const suite of solo) {
     outcomes.push(await runSuite(suite, opts))
   }
+
+  outcomes.sort((a, b) => selected.indexOf(a.suite) - selected.indexOf(b.suite))
 
   // Phase 3: one line per suite in registration order, then one block per failure.
   const nameWidth = Math.max(...selected.map((s) => s.name.length))
