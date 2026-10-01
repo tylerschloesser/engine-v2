@@ -2,23 +2,12 @@
 import { describe, expect, test } from 'vitest'
 import { ABI_EXPORTS } from '../../src/abi.js'
 import { fixtureBytes, fixtureNames, gameCrateBytes, gameCrateNames } from '../support/fixtures.js'
-import { readSections } from '../support/wasm-sections.js'
+import { allowedTargetFeatures, readSections, targetFeatures } from '../support/wasm-sections.js'
 
 const ALLOWED_IMPORTS = ['engine.panic', 'engine.log']
 
-// What the pinned toolchain (0017 §10) turns on for wasm32-unknown-unknown by default, captured
-// from its output. `buildGame` never passes target-feature flags; whether `simd128` may ever be
-// enabled is measured by M36b. A toolchain bump that changes this list re-checks the goldens.
-const DEFAULT_FEATURES = [
-  'bulk-memory',
-  'bulk-memory-opt',
-  'call-indirect-overlong',
-  'multivalue',
-  'mutable-globals',
-  'nontrapping-fptoint',
-  'reference-types',
-  'sign-ext',
-]
+// The default feature set and the one variant-only exception (`simd128`, `feature-matrix @slow`'s
+// case (c)) live in `support/wasm-sections.ts`; a module built by `pnpm test` never has the exception.
 const BANNED_FEATURES = ['simd128', 'relaxed-simd', 'atomics']
 
 const WASM_BINDGEN =
@@ -29,23 +18,6 @@ const CULPRITS: Record<string, string> = {
   wbg: WASM_BINDGEN,
   env: 'an unresolved C symbol',
   wasi_snapshot_preview1: 'wrong target: build for wasm32-unknown-unknown',
-}
-
-/** `+name` entries of the `target_features` custom section. */
-function targetFeatures(module: WebAssembly.Module): string[] {
-  const [section] = WebAssembly.Module.customSections(module, 'target_features')
-  if (!section) return []
-  const bytes = new Uint8Array(section)
-  const features: string[] = []
-  // A count, then (prefix byte, name length, name) each; all lengths here fit one LEB128 byte.
-  for (let at = 1; at < bytes.length; ) {
-    const prefix = String.fromCharCode(bytes[at] as number)
-    const len = bytes[at + 1] as number
-    const name = new TextDecoder().decode(bytes.subarray(at + 2, at + 2 + len))
-    if (prefix === '+') features.push(name)
-    at += 2 + len
-  }
-  return features.sort()
 }
 
 /** The two checks below, shared by every fixture and every in-repo game's `sim/` crate (docs/plan/
@@ -88,7 +60,7 @@ function checkAllowlist(label: string, bytes: Uint8Array<ArrayBuffer>): void {
     for (const banned of BANNED_FEATURES) {
       expect(features, `${banned} is off for ${label} (0002 §2)`).not.toContain(banned)
     }
-    const unknown = features.filter((f) => !DEFAULT_FEATURES.includes(f))
+    const unknown = features.filter((f) => !allowedTargetFeatures().includes(f))
     expect(unknown, 'features beyond the default target set (0002 §3)').toEqual([])
   })
 }

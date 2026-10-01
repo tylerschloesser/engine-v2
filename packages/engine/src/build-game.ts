@@ -46,6 +46,12 @@ export type BuildGameOptions = {
   /** Environment for the cargo spawns. Default `process.env`. */
   env?: NodeJS.ProcessEnv
   /**
+   * Where `game.wasm` and `game.json` are written, instead of `<crate>/target/engine/<profile>[+features]`
+   * (M36b: a measurement build with `wasmOpt` or its own `RUSTFLAGS` must not overwrite the shared
+   * directory other suites read the plain module from). `BuildGameResult.dir` is this directory.
+   */
+  outDir?: string
+  /**
    * 0017 §5's bindings step (docs/plan/16-action-round-trip.md step 4): run, after a successful
    * `cargo build`, `cargo test export_bindings` in `crate` with `TS_RS_EXPORT_DIR=dir` (relative
    * to `crate`; ts-rs's own default is `./bindings` when unset, which is exactly a fixture's own
@@ -241,7 +247,7 @@ export async function buildGame(opts: BuildGameOptions): Promise<BuildGameResult
   const warnings: BuildWarning[] = []
   let optimised = false
   const suffix = features.length > 0 ? `+${features.join('+')}` : ''
-  const dir = join(crate, 'target', 'engine', `${profile}${suffix}`)
+  const dir = opts.outDir ?? join(crate, 'target', 'engine', `${profile}${suffix}`)
   await mkdir(dir, { recursive: true })
   if (opts.wasmOpt) {
     const bin = await findWasmOpt(env)

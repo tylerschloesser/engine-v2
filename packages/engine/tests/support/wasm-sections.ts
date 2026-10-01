@@ -101,3 +101,43 @@ export function funcType(sections: Sections, index: number): FuncType {
   if (!found) throw new Error(`wasm-sections: no type for function ${index}`)
   return found
 }
+
+/** What the pinned toolchain (0017 §10) turns on for wasm32-unknown-unknown by default, captured
+ * from its output. `buildGame` never passes target-feature flags; a toolchain bump that changes
+ * this list re-checks the goldens. */
+export const DEFAULT_TARGET_FEATURES = [
+  'bulk-memory',
+  'bulk-memory-opt',
+  'call-indirect-overlong',
+  'multivalue',
+  'mutable-globals',
+  'nontrapping-fptoint',
+  'reference-types',
+  'sign-ext',
+]
+
+/**
+ * The target features a module may carry (0002 §2-§3): the defaults, and `simd128` for the one
+ * measurement variant that asks for it (`feature-matrix @slow`, M36b, case (c)). Never anything a
+ * shipped module has: every other caller passes no variant.
+ */
+export function allowedTargetFeatures(variant: 'default' | 'simd128' = 'default'): string[] {
+  return variant === 'simd128' ? [...DEFAULT_TARGET_FEATURES, 'simd128'] : DEFAULT_TARGET_FEATURES
+}
+
+/** `+name` entries of the `target_features` custom section, sorted. */
+export function targetFeatures(module: WebAssembly.Module): string[] {
+  const [section] = WebAssembly.Module.customSections(module, 'target_features')
+  if (!section) return []
+  const bytes = new Uint8Array(section)
+  const features: string[] = []
+  // A count, then (prefix byte, name length, name) each; all lengths here fit one LEB128 byte.
+  for (let at = 1; at < bytes.length; ) {
+    const prefix = String.fromCharCode(bytes[at] as number)
+    const len = bytes[at + 1] as number
+    const name = new TextDecoder().decode(bytes.subarray(at + 2, at + 2 + len))
+    if (prefix === '+') features.push(name)
+    at += 2 + len
+  }
+  return features.sort()
+}

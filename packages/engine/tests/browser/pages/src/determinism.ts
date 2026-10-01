@@ -26,6 +26,17 @@ declare global {
       userAgent: string
       crossOriginIsolated: boolean
     }
+    /** M36b `feature-matrix`: the same worker, any module's bytes (base64) and scenario or log from
+     * Node; checkpoints back, compared by `determinism.spec.ts`. */
+    __determinismVariant?: {
+      run(wasmB64: string, scenario: HashScenario): Promise<string[]>
+      replay(
+        wasmB64: string,
+        params: { seed: string; worldgen: unknown },
+        framesB64: string,
+        ticks: number[],
+      ): Promise<string[]>
+    }
     __pageReady?: true
   }
 }
@@ -117,6 +128,22 @@ for (const entry of entries) {
     outcome.checkpoints.length === want.length && outcome.checkpoints.every((c, i) => c === want[i])
   fixtures.reference = { checkpoints: outcome.checkpoints, pass }
   lines.push(`reference (full-game.log): ${pass ? 'PASS' : 'FAIL'}`)
+}
+
+const fromB64 = (b64: string): Uint8Array<ArrayBuffer> =>
+  Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+const settle = (outcome: FromWorker): string[] => {
+  if (outcome.type === 'error') throw new Error(outcome.message)
+  return outcome.checkpoints
+}
+window.__determinismVariant = {
+  async run(wasmB64, scenario) {
+    return settle(await runOn(await WebAssembly.compile(fromB64(wasmB64)), scenario))
+  },
+  async replay(wasmB64, params, framesB64, ticks) {
+    const module = await WebAssembly.compile(fromB64(wasmB64))
+    return settle(await ask({ type: 'replay', module, params, frames: fromB64(framesB64), ticks }))
+  },
 }
 
 window.__determinism = {

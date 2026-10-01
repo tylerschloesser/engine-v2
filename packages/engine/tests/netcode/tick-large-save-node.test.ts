@@ -17,7 +17,13 @@ import { benchBudgets, benchWorldConfig, buildBench } from '../support/bench-bui
 
 let bench: BuildGameResult
 beforeAll(async () => {
-  bench = await buildBench('release')
+  // `BENCH_VARIANT=wasm-opt|simd128` times that build instead (M36b's tick-time delta; never set by
+  // `pnpm test:slow`). The gate then compares it with the plain baseline: a warn line, nothing more.
+  const variant = process.env.BENCH_VARIANT
+  bench = await buildBench(
+    'release',
+    variant === 'wasm-opt' || variant === 'simd128' ? variant : 'plain',
+  )
 }, 240_000)
 
 const PLAYERS = 8

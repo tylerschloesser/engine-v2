@@ -5,6 +5,7 @@
 // marker rides in `worldgen` (`{ bench: scale }`, `scale` 1 = the full save, 64 = 1/64), and
 // `RefGame::genesis` fills the world (`games/reference/sim/src/bench.rs`). Never combine with
 // `test-hooks` (M34b): a release golden or bench build never carries it.
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { type BuildGameResult, buildGame } from '../../src/build-game.js'
@@ -22,8 +23,33 @@ export function benchBudgets(scale: number): { maxEntities: number; maxModifiedT
   }
 }
 
-export function buildBench(profile: 'dev' | 'release' = 'release'): Promise<BuildGameResult> {
-  return buildGame({ crate: REFERENCE_SIM, profile, features: ['bench'] })
+/**
+ * M36b's measurement knob: `variant` builds the release `bench` module as `feature-matrix` does
+ * (`wasm-opt`, or `+simd128` in its own cargo target directory), into a private `outDir` that never
+ * touches `target/engine/release+bench`. Plain by default; `tick-large-save node` reads
+ * `BENCH_VARIANT` to time a variant.
+ */
+export function buildBench(
+  profile: 'dev' | 'release' = 'release',
+  variant: 'plain' | 'wasm-opt' | 'simd128' = 'plain',
+): Promise<BuildGameResult> {
+  if (variant === 'plain') return buildGame({ crate: REFERENCE_SIM, profile, features: ['bench'] })
+  return buildGame({
+    crate: REFERENCE_SIM,
+    profile,
+    features: ['bench'],
+    outDir: join(tmpdir(), 'engine-feature-matrix', `bench-${variant}`),
+    ...(variant === 'wasm-opt' ? { wasmOpt: true } : {}),
+    ...(variant === 'simd128'
+      ? {
+          env: {
+            ...process.env,
+            RUSTFLAGS: '-C target-feature=+simd128',
+            CARGO_TARGET_DIR: join(REFERENCE_SIM, '../../../target/feature-matrix-simd'),
+          },
+        }
+      : {}),
+  })
 }
 
 export function benchWorldConfig(
