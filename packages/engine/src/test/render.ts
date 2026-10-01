@@ -43,6 +43,9 @@ export type RenderTarget = {
   readonly texture: GPUTexture
   readonly width: number
   readonly height: number
+  /** Default `rgba8unorm`. `bgra8unorm` (a host built for the canvas's preferred format, M37b):
+   * `readPixels` swaps the channels so every probe still reads RGBA. */
+  readonly format?: 'rgba8unorm' | 'bgra8unorm'
 }
 
 /** `readPixels`'s return shape (docs/plan/09-renderer-terrain.md Deviations: the brief says
@@ -141,17 +144,18 @@ function newTarget(
   renderer: TerrainRenderer | Renderable,
   width: number,
   height: number,
+  format: 'rgba8unorm' | 'bgra8unorm' = 'rgba8unorm',
 ): RenderTarget {
   const texture = renderer.device.createTexture({
     label: 'renderTo-target',
     size: [width, height],
-    format: 'rgba8unorm',
+    format,
     usage:
       GPUTextureUsage.RENDER_ATTACHMENT |
       GPUTextureUsage.COPY_SRC |
       GPUTextureUsage.TEXTURE_BINDING,
   })
-  return { device: renderer.device, texture, width, height }
+  return { device: renderer.device, texture, width, height, format }
 }
 
 /** Creates a fresh `rgba8unorm` offscreen target (0020 §6) of `width`x`height`, draws one frame of
@@ -180,7 +184,13 @@ export function renderTo(
       const { records } = drain.drain(Number.MAX_SAFE_INTEGER)
       if (records === 0) break
     }
-    const result = newTarget(renderer, opts.width, opts.height)
+    const hostFormat = clientHosts.get(target)?.current?.colorFormat
+    const result = newTarget(
+      renderer,
+      opts.width,
+      opts.height,
+      hostFormat === 'bgra8unorm' ? hostFormat : 'rgba8unorm',
+    )
     renderer.draw(result.texture)
     clientTargets.set(target, result)
     return result
@@ -224,6 +234,13 @@ async function readPixelsFromTarget(target: RenderTarget): Promise<PixelBuffer> 
   }
   buffer.unmap()
   buffer.destroy()
+  if (target.format === 'bgra8unorm') {
+    for (let i = 0; i < data.length; i += 4) {
+      const b = data[i] as number
+      data[i] = data[i + 2] as number
+      data[i + 2] = b
+    }
+  }
   return { width: target.width, height: target.height, data }
 }
 

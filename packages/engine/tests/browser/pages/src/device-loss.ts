@@ -4,9 +4,14 @@
 // that format; a real canvas would need the preferred one). Every step is stepped, never real rAF:
 // `step(dtMs)` is `stepFrame` (lockstep with the client worker) followed by one `loop.tick()`.
 import { clientTestHandle, createClient } from '../../../../src/client.ts'
-import { createRealFrameLoop, type RealFrameLoop } from '../../../../src/frame-loop.ts'
+import {
+  createFrameLoop,
+  createRealFrameLoop,
+  type RealFrameLoop,
+} from '../../../../src/frame-loop.ts'
 import { createGpuHost, type GpuHost } from '../../../../src/render/gpu-host.ts'
 import type { GpuResources } from '../../../../src/render/gpu-resources.ts'
+import { createViewportController } from '../../../../src/render/viewport.ts'
 import { CB_FRAME_REQ, W_ACK, WORKER_CLIENT, workerWord } from '../../../../src/sab/control.ts'
 import { stepFrame as clientStepFrame } from '../../../../src/test/client.ts'
 import { stats as genStats } from '../../../../src/test/gen.ts'
@@ -40,6 +45,8 @@ let probeCamera: ProbeCamera | undefined
 let real: RealFrameLoop | undefined
 let ticks = 0
 let ticksWithoutDevice = 0
+let useCanvas = true
+let canvasFormat: 'rgba8unorm' | 'bgra8unorm' = 'rgba8unorm'
 let manualClock: ReturnType<typeof createManualClock> | undefined
 const lostEvents: string[] = []
 let adapterRequests = 0
@@ -67,6 +74,18 @@ window.__deviceLoss = {
     document.body.appendChild(canvas)
     const clock = createManualClock()
     manualClock = clock
+    // The canvas's preferred format: a non-preferred one costs the browser an extra internal copy
+    // that fails on SwiftShader (M37b step 4). `renderTo`/`readPixels` follow the host's format.
+    // SwiftShader cannot present a WebGPU canvas here: configuring one makes the browser's own
+    // compositor copy fail with an `uncapturederror` and then loses the device ("A valid external
+    // Instance reference no longer exists"), with no device loss of ours involved. On a fallback
+    // adapter the page draws into an offscreen target instead and the canvas-path proof is skipped
+    // (named local-only notice in the spec); every other check runs on both.
+    const probe = await navigator.gpu.requestAdapter()
+    useCanvas = probe?.info.isFallbackAdapter !== true
+    canvasFormat = useCanvas
+      ? (navigator.gpu.getPreferredCanvasFormat() as 'rgba8unorm' | 'bgra8unorm')
+      : 'rgba8unorm'
     // Counts every `requestAdapter` the page makes (a rebuild attempt is exactly one).
     const gpuApi = navigator.gpu
     const realRequest = gpuApi.requestAdapter.bind(gpuApi)
@@ -89,7 +108,7 @@ window.__deviceLoss = {
     })
     adapterRequests = 0
     host = await createGpuHost({
-      colorFormat: 'rgba8unorm',
+      colorFormat: canvasFormat,
       tilesUrl: '/terrain/tiles.json',
       client: c,
       clock,
@@ -109,26 +128,59 @@ window.__deviceLoss = {
       const r = gpu.current
       if (r && probeCamera) r.renderer.writeFrameUniform(probeCamera)
     }
-    // A real canvas, `rgba8unorm` (the terrain pipeline's format) with `COPY_SRC` so the page can
-    // read the presented texture back; reconfigured by `createRealFrameLoop` for each rebuilt device.
-    real = createRealFrameLoop({
-      clock,
-      scheduler: clock,
-      client: c,
-      renderer: first.renderer,
-      gpu,
-      canvas,
-      maxTextureDimension2D: first.device.device.limits.maxTextureDimension2D,
-      canvasConfig: {
-        format: 'rgba8unorm',
-        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-      },
-      test: { observeReal: false },
-      onCamera: probeFrame,
-      onOverlay: () => c.overlay.update(),
-    })
-    real.viewport.forceSize(opts?.cssSize ?? 256, opts?.cssSize ?? 256, 1)
-    loop = real.loop
+    if (useCanvas) {
+      // A real canvas in the preferred format (a non-preferred one costs the browser an extra
+      // internal copy) with `COPY_SRC` so the page can read the presented texture back; reconfigured
+      // by `createRealFrameLoop` for each rebuilt device.
+      real = createRealFrameLoop({
+        clock,
+        scheduler: clock,
+        client: c,
+        renderer: first.renderer,
+        gpu,
+        canvas,
+        maxTextureDimension2D: first.device.device.limits.maxTextureDimension2D,
+        canvasConfig: {
+          format: canvasFormat,
+          usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+        },
+        test: { observeReal: false },
+        onCamera: probeFrame,
+        onOverlay: () => c.overlay.update(),
+      })
+      real.viewport.forceSize(opts?.cssSize ?? 256, opts?.cssSize ?? 256, 1)
+      loop = real.loop
+    } else {
+      const viewport = createViewportController(canvas, first.renderer, {
+        maxTextureDimension2D: first.device.device.limits.maxTextureDimension2D,
+        test: { observeReal: false },
+      })
+      viewport.forceSize(opts?.cssSize ?? 256, opts?.cssSize ?? 256, 1)
+      let targetOwner: GpuResources | null = null
+      let target: GPUTexture | undefined
+      loop = createFrameLoop({
+        clock,
+        scheduler: clock,
+        client: c,
+        renderer: first.renderer,
+        gpu,
+        viewport,
+        target: () => {
+          const r = gpu.current as GpuResources
+          if (targetOwner !== r) {
+            targetOwner = r
+            target = r.device.device.createTexture({
+              size: [64, 16],
+              format: 'rgba8unorm',
+              usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+            })
+          }
+          return target as GPUTexture
+        },
+        onCamera: probeFrame,
+        onOverlay: () => c.overlay.update(),
+      })
+    }
     return { adapterInfo: first.device.adapterInfo }
   },
 
@@ -178,6 +230,7 @@ window.__deviceLoss = {
    * task (the presented texture is only valid until the task ends). Rows are the canvas's
    * `width` x `height` (the viewport controller sizes it). */
   async canvasRead() {
+    if (!real) return null
     const r = requireLoop()
     r.tick()
     const gpu = requireHost().current as GpuResources
@@ -187,6 +240,7 @@ window.__deviceLoss = {
       texture: canvasTexture,
       width: canvasTexture.width,
       height: canvasTexture.height,
+      format: canvasFormat,
     })
     return {
       width: pixels.width,

@@ -46,8 +46,9 @@ declare global {
       adapterRequests(): number
       hasDevice(): boolean
       /** One `tick()` into the real canvas texture, read back at once: the first 64 pixels of row
-       * 0 as RGBA bytes (`data`), plus the canvas size. */
-      canvasRead(): Promise<{ width: number; height: number; data: number[] }>
+       * 0 as RGBA bytes (`data`), plus the canvas size; `null` on a fallback (software) adapter, where the
+       * page has no canvas path (see `device-loss.ts`'s `init`). */
+      canvasRead(): Promise<{ width: number; height: number; data: number[] } | null>
       setDrawablesEnabled(on: boolean): void
       /** `null` when the drawables pass does not exist. */
       drawablesEnabled(): boolean | null
