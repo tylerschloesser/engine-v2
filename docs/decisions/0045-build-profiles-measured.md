@@ -1,6 +1,6 @@
 # 0045: Build profiles, measured
 
-Status: Accepted (2026-09-30). Settles the Phase 3 deferral bullet of [0017](0017-packaging-and-build.md) Consequences (real release build time and size, an intermediate profile, `debug = "line-tables-only"`); amends [0015](0015-threads-memory-and-topology.md) §6 (engine JS budget: scope and number); closes [0034](0034-provisional-render-exports-subpath.md); records the Tier 1 browser-version policy. Implemented by M35.
+Status: Accepted (2026-09-30). Settles the Phase 3 deferral bullet of [0017](0017-packaging-and-build.md) Consequences (real release build time and size, an intermediate profile, `debug = "line-tables-only"`); amends [0015](0015-threads-memory-and-topology.md) §6 (engine JS budget: scope and number); closes [0034](0034-provisional-render-exports-subpath.md); records the Tier 1 browser-version policy. Implemented by M35. §3 amended by [0048](0048-fast-tier-budgets-dev-loop-and-wire-measurements.md) (`split-debuginfo = "packed"`).
 
 ## Context
 

@@ -1,6 +1,6 @@
 # M36b: Suite audit and the deferred measurements
 
-Status: not started · After: 36 · Tyler-dependent: no
+Status: done (feature-matrix CI half pending the `done` push) · After: 36 · Tyler-dependent: no
 
 Split out of M36 (sizing rule: line count). This milestone writes little product code: it measures, decides and records. Four PRE-PLAN §10 items end here: the 30 s rebuild and per-suite numbers with the build-cache choice (0020), engine-side byte diffing (0011), and `wasm-opt` / `+simd128` for the sim module (0002, handed over by M02). The undo-journal item is **not** here: M21b measures and decides it.
 
@@ -54,13 +54,13 @@ Repo `scripts/` (`test-timings.mjs`, `measure-rebuild.mjs`), test files that get
 `busy-furnace-field @slow` (asserts only that both counters are non-zero and reproducible for the seed; the decision reads its report). `feature-matrix @slow` (asserts golden equality per build per runtime; a mismatch is a finding, recorded, and that variant stays off). `unit`: `test-timings: aggregates reports`.
 
 ## Exit criteria
-- [ ] `pnpm test:timings` over 10 warm runs shows every fast suite within its 0020 §3 budget and no fast test over the 0020 §4 p95 limits; every demoted test runs under `pnpm test:slow`; no feature lost its only fast test.
-- [ ] `pnpm test` parallel wall clock is under the Requirement's one minute on Tyler's Mac, warm; the number is in the ADR.
-- [ ] `pnpm measure:rebuild` reports both medians; they meet the compile budget, or lever 1 was pulled and the remainder is raised as a plan edit.
-- [ ] Fresh-worktree and cached-CI build times are in the ADR with the decision the triggers produce; any config change it implies is committed.
+- [x] `pnpm test:timings` over 10 warm runs shows every fast suite within its 0020 §3 budget and no fast test over the 0020 §4 p95 limits; every demoted test runs under `pnpm test:slow`; no feature lost its only fast test.
+- [x] `pnpm test` parallel wall clock is under the Requirement's one minute on Tyler's Mac, warm; the number is in the ADR.
+- [x] `pnpm measure:rebuild` reports both medians; they meet the compile budget, or lever 1 was pulled and the remainder is raised as a plan edit.
+- [x] Fresh-worktree and cached-CI build times are in the ADR with the decision the triggers produce; any config change it implies is committed.
 - [ ] `pnpm test:slow wasm -t feature-matrix` has run locally and on CI (run URL in Deviations); the allow / keep-off decision for each of `wasm-opt` and `+simd128` is recorded by ADR.
-- [ ] `pnpm test:slow netcode -t busy-furnace-field` passes; both counters and the build / do-not-build decision are in the ADR; if "build", `docs/plan/36c-byte-diffing.md` and its `PLAN.md` row exist.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `pnpm test:slow netcode -t busy-furnace-field` passes; both counters and the build / do-not-build decision are in the ADR; if "build", `docs/plan/36c-byte-diffing.md` and its `PLAN.md` row exist.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test` · `pnpm lint` · `pnpm test:timings` · `pnpm measure:rebuild` · `pnpm test:slow wasm -t feature-matrix` · `pnpm test:slow netcode -t busy-furnace-field` · `cargo build -p engine --features measure-diff --target wasm32-unknown-unknown`
