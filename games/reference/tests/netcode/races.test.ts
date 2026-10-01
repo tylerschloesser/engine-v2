@@ -115,9 +115,13 @@ function recordResults(r: RefHarness, i: number): unknown[] {
   return seen
 }
 
-test('reference_race_last_unit', async () => {
-  for (const latency of LATENCIES) {
-    for (const first of [0, 1] as const) {
+// One test per (latency, order) pair, as `reference_race_same_spot` (M36b step 4b): the body is the
+// former double loop's, unchanged; ids were `reference_race_last_unit`, now
+// `reference_race_last_unit <ms> ms, first <n>`.
+test.each(LATENCIES.flatMap((l) => ([0, 1] as const).map((w) => [l, w] as const)))(
+  'reference_race_last_unit %i ms, first %i',
+  async (latency, first) => {
+    {
       const second = (1 - first) as 0 | 1
       const seed = 3430 + latency + first
       const tag = `seed ${seed}, ${latency} ms, client ${first} takes the last unit`
@@ -185,12 +189,16 @@ test('reference_race_last_unit', async () => {
         await r.dispose()
       }
     }
-  }
-}, 60_000)
+  },
+  60_000,
+)
 
-test('reference_race_same_ingots', async () => {
-  for (const latency of LATENCIES) {
-    for (const winner of [0, 1] as const) {
+// Same split (M36b step 4b); ids were `reference_race_same_ingots`, now
+// `reference_race_same_ingots <ms> ms, winner <n>`.
+test.each(LATENCIES.flatMap((l) => ([0, 1] as const).map((w) => [l, w] as const)))(
+  'reference_race_same_ingots %i ms, winner %i',
+  async (latency, winner) => {
+    {
       const loser = (1 - winner) as 0 | 1
       const seed = 3440 + latency + winner
       const tag = `seed ${seed}, ${latency} ms, client ${winner} takes first`
@@ -266,5 +274,6 @@ test('reference_race_same_ingots', async () => {
         await r.dispose()
       }
     }
-  }
-}, 60_000)
+  },
+  60_000,
+)
