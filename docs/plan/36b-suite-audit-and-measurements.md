@@ -1,6 +1,6 @@
 # M36b: Suite audit and the deferred measurements
 
-Status: done (feature-matrix CI half pending the `done` push) · After: 36 · Tyler-dependent: no
+Status: done · After: 36 · Tyler-dependent: no
 
 Split out of M36 (sizing rule: line count). This milestone writes little product code: it measures, decides and records. Four PRE-PLAN §10 items end here: the 30 s rebuild and per-suite numbers with the build-cache choice (0020), engine-side byte diffing (0011), and `wasm-opt` / `+simd128` for the sim module (0002, handed over by M02). The undo-journal item is **not** here: M21b measures and decides it.
 
@@ -58,7 +58,7 @@ Repo `scripts/` (`test-timings.mjs`, `measure-rebuild.mjs`), test files that get
 - [x] `pnpm test` parallel wall clock is under the Requirement's one minute on Tyler's Mac, warm; the number is in the ADR.
 - [x] `pnpm measure:rebuild` reports both medians; they meet the compile budget, or lever 1 was pulled and the remainder is raised as a plan edit.
 - [x] Fresh-worktree and cached-CI build times are in the ADR with the decision the triggers produce; any config change it implies is committed.
-- [ ] `pnpm test:slow wasm -t feature-matrix` has run locally and on CI (run URL in Deviations); the allow / keep-off decision for each of `wasm-opt` and `+simd128` is recorded by ADR.
+- [x] `pnpm test:slow wasm -t feature-matrix` has run locally and on CI (run URL in Deviations); the allow / keep-off decision for each of `wasm-opt` and `+simd128` is recorded by ADR.
 - [x] `pnpm test:slow netcode -t busy-furnace-field` passes; both counters and the build / do-not-build decision are in the ADR; if "build", `docs/plan/36c-byte-diffing.md` and its `PLAN.md` row exist.
 - [x] `pnpm test` and `pnpm lint` are green.
 
@@ -159,3 +159,5 @@ Netcode fast count 118 (113 - 0 + 6 - 1), unit 325, rust 770, wasm 172, browser 
 **Final timing/rebuild lines (this session).** `pnpm measure:rebuild`: engine `hash.rs` median 37.6 s (37.1-39.5, load 11-16), reference `noise.rs` 17.0 s (16.9-17.2). Criterion 3 therefore: sim meets, engine misses by 7.6 s, lever 1 pulled, remainder is Q17 (not a plan edit made here).
 
 **Not done by me (bookkeeping outside my edit rights):** `PRE-PLAN.md` §1 ADR index row and the `PLAN.md` "Plan-level decisions" line for 0048, the root `CLAUDE.md` ADR range, `Amended by [0048](...)` on 0045's Status line, the `PLAN.md` checkboxes.
+
+**CI half of `feature-matrix` (orchestrator):** run [36852750184](https://github.com/tylerschloesser/engine-v2/actions/runs/36852750184) (`M36b done`, ubuntu x64, `wasm-opt` 132): `wasm` slow suite passed (Node and Bun equal for every variant), and `test-results/feature-matrix/{chromium,webkit,firefox}.json` show all 12 verdicts null (equal) in each browser. Reference brotli on x64: plain 195,101 B.
