@@ -22,6 +22,11 @@ declare global {
       logLines: string[]
     }
     __createHarness?: (workers: HarnessWorkerSpec[]) => Promise<Harness>
+    __checkSupport?: () => Promise<{
+      ok: boolean
+      failures: { code: string }[]
+      warnings: { code: string }[]
+    }>
   }
 }
 
@@ -32,6 +37,9 @@ test('wiring: crossOriginIsolated and SharedArrayBuffer on main', async ({ page 
     sab: typeof SharedArrayBuffer !== 'undefined',
   }))
   expect(main).toEqual({ crossOriginIsolated: true, sab: true })
+  // M35: `checkSupport` is ok on the harness page, with no failures and no warnings.
+  const report = await page.evaluate(() => window.__checkSupport?.())
+  expect(report).toEqual({ ok: true, failures: [], warnings: [] })
 })
 
 test('wiring: crossOriginIsolated and Atomics.wait in the worker', async ({ page }) => {

@@ -6,6 +6,7 @@
 import wasm from 'virtual:engine/wasm'
 import { Role } from '../../../../src/abi.ts'
 import { instantiate } from '../../../../src/loader.ts'
+import { checkSupport, type SupportReport } from '../../../../src/support.ts'
 import {
   createHarness,
   type Harness,
@@ -22,6 +23,7 @@ declare global {
       abiVersion: number
       logLines: string[]
     }
+    __checkSupport?: () => Promise<SupportReport>
     __createHarness?: (workers: HarnessWorkerSpec[]) => Promise<Harness>
     /** The signal `tests/browser/support/page.ts`'s `openPage` waits for: `page.goto`'s `load`
      * event does not reliably wait out this module's top-level `await` chain (measured). */
@@ -56,5 +58,6 @@ window.__wiring = {
   logLines,
 }
 
+window.__checkSupport = checkSupport
 window.__createHarness = (workers) => createHarness({ wasm: module, workers })
 window.__pageReady = true
