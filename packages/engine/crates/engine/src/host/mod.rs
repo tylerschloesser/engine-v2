@@ -506,6 +506,9 @@ pub struct Host<G: Game> {
     scratch_keep: Vec<ChunkCoord>,
     /// This frame's estimated delta bytes per chunk (`build_frame`'s collapse pass).
     scratch_delta_est: Vec<(ChunkCoord, u32)>,
+    /// Snapshot byte size per chunk for the current tick (the collapse check, shared by every
+    /// connection); cleared by `tick`, capacity kept.
+    scratch_snapshot_len: std::collections::HashMap<ChunkCoord, u32>,
     /// This tick's tile deltas for the connection being built, flat and deduplicated by
     /// `(chunk, index)` (last write wins) as they're gathered, sorted by `(cy, cx, index)` right
     /// before writing (host/mod Deviations: a flat, insertion-sorted `Vec` instead of a `Vec<(_,
@@ -828,6 +831,7 @@ impl<G: Game> Host<G> {
             scratch_new_held: Vec::new(),
             scratch_keep: Vec::new(),
             scratch_delta_est: Vec::with_capacity(160),
+            scratch_snapshot_len: std::collections::HashMap::new(),
             scratch_tile_flat: Vec::new(),
             scratch_entity_ops: Vec::new(),
             scratch_action_players: Vec::new(),
@@ -1698,6 +1702,7 @@ impl<G: Game> Host<G> {
     /// re-evaluated every tick, not only on a fresh uplink, so hysteresis advances in ticks exactly
     /// as Planning decisions requires even when uplinks arrive less than once a tick).
     pub fn tick(&mut self) {
+        self.scratch_snapshot_len.clear();
         let progress_ptr = self.progress_ptr;
         let Host {
             sim,
@@ -2141,9 +2146,19 @@ impl<G: Game> Host<G> {
             let (chunk, est) = self.scratch_delta_est[i];
             let pending = slot.pace.add_delta_est(chunk, est);
             let version = self.chunk_versions.get(&chunk).copied().unwrap_or(0);
-            let mut snapshot_len = crate::bytes::CountSink::default();
-            encode_chunk_snapshot(store, chunk, version, &mut snapshot_len);
-            if pending <= pacing::MIN_COLLAPSE_BYTES.max(snapshot_len.0 as u32) {
+            // Cheap exits first (M36 step 5b): at most `MIN_COLLAPSE_BYTES` pending never collapses,
+            // whatever the snapshot weighs, and the snapshot's size depends on the store, the chunk
+            // and its version alone (no connection), so one encode per chunk per tick serves every
+            // connection (`scratch_snapshot_len`, cleared by `tick`).
+            if pending <= pacing::MIN_COLLAPSE_BYTES {
+                continue;
+            }
+            let snapshot_len = *self.scratch_snapshot_len.entry(chunk).or_insert_with(|| {
+                let mut count = crate::bytes::CountSink::default();
+                encode_chunk_snapshot(store, chunk, version, &mut count);
+                count.0 as u32
+            });
+            if pending <= snapshot_len {
                 continue;
             }
             self.scratch_tile_flat.retain(|(c, _, _)| *c != chunk);
@@ -2784,6 +2799,7 @@ where
             scratch_new_held: Vec::new(),
             scratch_keep: Vec::new(),
             scratch_delta_est: Vec::with_capacity(160),
+            scratch_snapshot_len: std::collections::HashMap::new(),
             scratch_tile_flat: Vec::new(),
             scratch_entity_ops: Vec::new(),
             scratch_action_players: Vec::new(),
