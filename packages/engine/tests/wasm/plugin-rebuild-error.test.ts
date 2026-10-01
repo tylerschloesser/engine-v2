@@ -3,7 +3,7 @@
 // restoring it recovers. @slow: the copy gets its own `[workspace]` table and an absolute-path
 // `engine` dependency, so cargo gives it its own cold target dir instead of reusing the repo's
 // (0017 "untested": a real cold build, not just the fast tier's no-content-diff touch).
-import { cp, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
@@ -31,10 +31,9 @@ const BROKEN_LINE = '\nfn __plugin_rebuild_error_test() { let x = ; }\n'
  * dependency (the copy no longer sits two directories under the real one), and concrete
  * `edition`/`version` in place of the workspace-inherited ones the real fixture uses. */
 async function copyStandaloneHashCrate(): Promise<string> {
-  // Realpath'd: on macOS, $TMPDIR is itself a symlink (/var/folders/… -> /private/var/folders/…),
-  // and `cargo metadata`'s `manifest_path` is always the resolved one; `buildGame` matches by exact
-  // string, so a symlinked crate dir would never be found.
-  const dir = await realpath(await mkdtemp(join(tmpdir(), 'engine-plugin-rebuild-error-')))
+  // Not realpath'd: on macOS `$TMPDIR` is a symlink, and `buildGame` resolves the crate directory
+  // itself (M35, `build-game-symlink.test.ts`).
+  const dir = await mkdtemp(join(tmpdir(), 'engine-plugin-rebuild-error-'))
   await cp(fixtureDir('hash'), dir, {
     recursive: true,
     filter: (src) => !src.split(sep).includes('target'),

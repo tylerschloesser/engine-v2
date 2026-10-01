@@ -2,7 +2,7 @@
 // cargo and Node built-ins only. The Vite plugin (M02b), `pnpm test` and server scripts all call it.
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFile, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readdir, readFile, realpath, rename, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 
 export type Profile = 'dev' | 'release'
@@ -128,7 +128,10 @@ function readAbiVersion(bytes: Uint8Array<ArrayBuffer>): number {
 }
 
 export async function buildGame(opts: BuildGameOptions): Promise<BuildGameResult> {
-  const crate = resolve(opts.crate)
+  // `cargo metadata` reports the resolved manifest path, which `artifactPath` matches by exact
+  // string: a crate that sits under a symlink (macOS `$TMPDIR` -> `/private/var/...`, a symlinked
+  // home) would otherwise fail with the misleading "has no cdylib target" (M02b, fixed in M35).
+  const crate = await realpath(resolve(opts.crate))
   const profile = opts.profile ?? 'dev'
   const env = opts.env ?? process.env
   if (opts.wasmOpt) console.warn('buildGame: wasmOpt is ignored until the packaging milestone')
