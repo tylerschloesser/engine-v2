@@ -21,6 +21,7 @@ import { installPointerListeners, PointerSlots } from './input/pointers.js'
 import { createSemanticRecognizer, type SemanticRecognizer } from './input/semantic.js'
 import { installWheelListeners, WheelState } from './input/wheel.js'
 import type { InstanceConfig } from './loader.js'
+import { MODULE_REFUSED } from './module-refused.js'
 import { createOverlay, type Overlay, type OverlayOptions } from './overlay/anchors.js'
 import { createDrawListSlot, type DrawListSlot } from './render/drawlist-slot.js'
 import { at, copyBytes, readU32LE } from './sab/bytes.js'
@@ -49,6 +50,7 @@ import type {
   ClientLifecycleMessage,
   FromWorker,
   NetLinkMessage,
+  SetupMessage,
   SimLifecycleMessage,
   SimWorldOpResult,
   StorageStatus,
@@ -57,7 +59,13 @@ import type {
   WorkerKind,
 } from './worker/protocol.js'
 
-export type { SupportFailure, SupportFailureCode, SupportReport } from './support.js'
+export type {
+  SupportFailure,
+  SupportFailureCode,
+  SupportReport,
+  SupportWarning,
+  SupportWarningCode,
+} from './support.js'
 export { checkSupport } from './support.js'
 // docs/plan/23-persistence-opfs-and-lifecycle.md Seams (Provides): `StorageStatus` is declared in
 // `worker/protocol.ts` (so `SimLifecycleMessage` can reference it without a `client.ts` import
@@ -823,6 +831,7 @@ function setupWorker(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false
+    let onModuleRefused: () => boolean = () => false
     worker.onerror = (e) => {
       if (settled) return
       settled = true
@@ -840,6 +849,7 @@ function setupWorker(
         settled = true
         resolve()
       } else if (m.type === 'fatal') {
+        if (m.message.startsWith(MODULE_REFUSED) && onModuleRefused()) return
         if (settled) {
           if (m.message.startsWith('WorldMismatch')) onWorldMismatch()
           return
@@ -890,21 +900,40 @@ function setupWorker(
         onLink(m)
       }
     }
-    const setup: ToWorker = {
+    const setup: SetupMessage = {
       type: 'setup',
       kind,
       index,
       sabs,
       config,
-      ...(wasm.module ? { module: wasm.module } : {}),
-      ...(wasm.url ? { wasmUrl: wasm.url } : {}),
+      ...(wasm.module ? { module: wasm.module } : wasm.url ? { wasmUrl: wasm.url } : {}),
       ...(test ? { test } : {}),
       ...(link ? { link } : {}),
       ...(world ? { world } : {}),
       ...(net ? { net } : {}),
       ...(remoteLinked ? { remoteLinked } : {}),
     }
-    worker.postMessage(setup)
+    // 0017 §4 fallback: a browser that refuses a posted `Module` (a throwing `postMessage`, or the
+    // worker's `messageerror`, reported as `fatal` `module-refused`) gets the same setup with the URL.
+    const fallbackUrl = setup.module ? wasm.url : undefined
+    let fellBack = false
+    const sendWithUrl = (): void => {
+      fellBack = true
+      const { module: _refused, ...rest } = setup
+      worker.postMessage({ ...rest, wasmUrl: fallbackUrl })
+    }
+    onModuleRefused = () => {
+      if (settled || fellBack || fallbackUrl === undefined) return false
+      sendWithUrl()
+      return true
+    }
+    try {
+      if (test?.failModulePost && setup.module) throw new DOMException('forced', 'DataCloneError')
+      worker.postMessage(setup)
+    } catch (e) {
+      if (fallbackUrl === undefined) throw e
+      sendWithUrl()
+    }
   })
 }
 
@@ -2081,7 +2110,8 @@ export function createClient(options: ClientOptions): Client {
       const wasm: { module?: WebAssembly.Module; url?: string } = {}
       if (kind !== 'net') {
         if (compiledModule) wasm.module = compiledModule
-        else wasm.url = options.wasm.url
+        // The URL travels with the `Module` only as the fallback `setupWorker` re-sends on refusal.
+        wasm.url = options.wasm.url
       }
       const link = linked && (kind === 'sim' || kind === 'client')
       // docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: the sim spawn only, only when

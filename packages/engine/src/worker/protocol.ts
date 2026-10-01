@@ -29,6 +29,9 @@ export type TestFlags = {
   /** `false` exercises the URL fallback (the worker calls `instantiateStreaming` itself) instead
    * of a posted `Module` (Planning decisions "Posted `Module` first, URL as fallback"). */
   postModule?: boolean
+  /** Makes the first post of the setup message that carries a `Module` throw a `DataCloneError`, as
+   * a browser that cannot structured-clone one would: exercises the automatic URL fallback (M35). */
+  failModulePost?: boolean
   /** M04's negative-control hook (`applyStepControl`), applied once per tick/frame this worker
    * runs, read fresh from the control block's `Control` word set up the same way `step-block.ts`
    * does it for the test harness. */

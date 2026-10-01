@@ -417,3 +417,74 @@ test('client.world_mismatch_fatal_becomes_link_rejected', async () => {
   expect(events).toEqual([{ state: 'rejected', reason: 'WorldMismatch' }])
   client.destroy()
 })
+
+// M35 Planning decision (c): a browser that refuses a posted `Module` gets the same setup with the URL.
+// `compileStreaming`/`fetch` are stubbed (no real module under Node); the module is the 8-byte empty one.
+const EMPTY_MODULE = new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0])
+
+/** A worker that records each setup message and answers per `onSetup` (1 = the first it saw). */
+function recordingWorker(
+  log: Record<string, unknown>[],
+  onSetup: (n: number, reply: (m: unknown) => void) => void,
+): Worker {
+  let seen = 0
+  const w = {
+    onmessage: null as ((ev: MessageEvent) => void) | null,
+    onerror: null,
+    postMessage(m: Record<string, unknown>) {
+      log.push(m)
+      seen++
+      queueMicrotask(() => onSetup(seen, (d) => w.onmessage?.({ data: d } as MessageEvent)))
+    },
+    terminate() {},
+  }
+  return w as unknown as Worker
+}
+
+function moduleOptions(createWorker: () => Worker, flags: Record<string, unknown>) {
+  const base = baseOptions(fakeScheduler(), false)
+  return { ...base, createWorker, test: { ...base.test, flags } }
+}
+
+test('module fallback: a throwing postMessage re-sends the setup with the URL', async () => {
+  vi.stubGlobal('fetch', () => Promise.resolve(new Response()))
+  vi.spyOn(WebAssembly, 'compileStreaming').mockResolvedValue(new WebAssembly.Module(EMPTY_MODULE))
+  const log: Record<string, unknown>[] = []
+  const client = createClient(
+    moduleOptions(() => recordingWorker(log, (_n, reply) => reply({ type: 'ready' })), {
+      failModulePost: true,
+    }),
+  )
+  await client.ready
+  expect(log.length).toBeGreaterThan(0)
+  for (const setup of log) {
+    expect(setup.module, 'no setup carried the refused Module').toBeUndefined()
+    expect(setup.wasmUrl).toBe('fake://game.wasm')
+  }
+  client.destroy()
+  vi.restoreAllMocks()
+})
+
+test('module fallback: a worker messageerror (fatal module-refused) re-sends the setup with the URL', async () => {
+  vi.stubGlobal('fetch', () => Promise.resolve(new Response()))
+  vi.spyOn(WebAssembly, 'compileStreaming').mockResolvedValue(new WebAssembly.Module(EMPTY_MODULE))
+  const log: Record<string, unknown>[] = []
+  const client = createClient(
+    moduleOptions(
+      () =>
+        recordingWorker(log, (n, reply) =>
+          reply(
+            n === 1 ? { type: 'fatal', message: 'module-refused: refused' } : { type: 'ready' },
+          ),
+        ),
+      {},
+    ),
+  )
+  await client.ready
+  const withModule = log.filter((m) => m.module !== undefined).length
+  const withUrl = log.filter((m) => m.wasmUrl === 'fake://game.wasm').length
+  expect(withModule).toBeGreaterThan(0)
+  expect(withUrl).toBe(withModule)
+  client.destroy()
+  vi.restoreAllMocks()
+})

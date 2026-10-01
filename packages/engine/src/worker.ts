@@ -3,6 +3,7 @@
 // `import()`": relative imports of sibling files are fine, docs/plan/06b-workers-and-spawn.md,
 // Planning decisions "Worker script layout"). The kind arrives in the setup message, so there is one
 // worker script however many workers a topology spawns (pattern A/B, 0017 §3).
+import { MODULE_REFUSED } from './module-refused.js'
 import { ControlBlock } from './sab/control.js'
 import * as clientKind from './worker/client.js'
 import * as genKind from './worker/gen.js'
@@ -47,6 +48,7 @@ const kinds: Record<SetupMessage['kind'], WorkerKindModule> = {
 const scope = self as unknown as {
   postMessage(m: FromWorker): void
   onmessage: ((ev: MessageEvent<ToWorker>) => void) | null
+  onmessageerror: (() => void) | null
 }
 
 function post(m: FromWorker): void {
@@ -78,6 +80,11 @@ export function run(): void {
   // `shell?.stop()` below. `null` for every kind but `net`.
   let netStop: (() => void) | null = null
 
+  // A posted `Module` this browser cannot deserialise (0017 §4: real Safari is the untested case)
+  // arrives as `messageerror`, not as a message: say so, and `createClient` re-sends the setup with
+  // the URL (`worker-fallback`, M35). Only `fatal` is used, so the protocol gains no message type.
+  scope.onmessageerror = () =>
+    post({ type: 'fatal', message: `${MODULE_REFUSED}: the posted WebAssembly.Module was refused` })
   scope.onmessage = (ev) => {
     const m = ev.data
     if (m.type === 'setup') {
