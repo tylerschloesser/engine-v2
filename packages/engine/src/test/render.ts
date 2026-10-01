@@ -9,6 +9,7 @@
 // `attachRenderer` -- the two-argument `renderTo(renderer, opts)` shape from steps 2-4 stays for the
 // three tests that still hand-fill the renderer's textures directly (no client, no worker).
 import type { Client } from '../client.js'
+import { armFailNextAdapter } from '../render/device.js'
 import type { DrawablesRenderer } from '../render/drawables.js'
 import type { GpuHost } from '../render/gpu-host.js'
 import type { TerrainRenderer } from '../render/terrain.js'
@@ -107,6 +108,13 @@ export async function loseDevice(client: Client): Promise<void> {
   await device.lost
   // The host's own `lost` handler was registered first, so it has already run.
   if (host.current !== null) await Promise.resolve()
+}
+
+/** M37b (0018 §8, PRE-PLAN §6): the next `requestAdapter` (the next device (re)build) resolves
+ * `null`, once. With `loseDevice`, the rebuild finds no adapter and `client.onRendererLost` fires
+ * with `'no-adapter'`. Call it before `loseDevice`. */
+export function failNextAdapter(_client: Client): void {
+  armFailNextAdapter()
 }
 
 /** Resolves once no rebuild is in flight (M37b): the renderer exists again, or has been given up

@@ -82,6 +82,10 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
     onResyncing(): () => void {
       return () => {}
     },
+    onRendererLost(): () => void {
+      return () => {}
+    },
+    raiseRendererLost(): void {},
     // docs/plan/29-net-worker-and-reference-server.md steps 1-2: unused by anything
     // `frame-loop.ts` itself exercises (no `{ kind: 'remote' }` host here), same precedent as
     // `onResyncing` above.

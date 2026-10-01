@@ -158,3 +158,105 @@ test('device loss: uploads stay under the frame budget', async ({ page }, testIn
   expect(refill.perFrame.filter((b) => b > 0).length).toBeGreaterThan(2)
   expectNoGpuErrors(await page.evaluate(() => (window.__deviceLoss as DeviceLoss).errors()))
 })
+
+// ---- rendererLost (0018 §8: a null adapter, or two losses within 10 s) --------------------------
+
+/** `GpuHost`'s `REPEATED_LOSS_WINDOW_MS`, spelt out: the test fails if the rule moves. */
+const REPEATED_LOSS_WINDOW_MS = 10_000
+
+test('two losses raise rendererLost', async ({ page }, testInfo) => {
+  await openLossPage(page, testInfo)
+  const out = await page.evaluate(
+    async ({ windowMs, frameMs }) => {
+      const d = window.__deviceLoss as DeviceLoss
+      const steps = (n: number): void => {
+        for (let i = 0; i < n; i++) d.step(frameMs)
+      }
+      // Loss 1: recovers (no previous loss). Loss 2, a full window later: recovers, no event.
+      await d.loseDevice()
+      await d.untilRecovered()
+      steps(2)
+      d.advanceClock(windowMs + 1)
+      await d.loseDevice()
+      const generation = await d.untilRecovered()
+      steps(2)
+      const afterOutside = { events: d.rendererLostEvents(), hasDevice: d.hasDevice(), generation }
+      // Loss 3, inside the window of loss 2: the renderer gives up.
+      // (`step` also moves the clock by one frame each: stay clear of the edge)
+      d.advanceClock(windowMs - 1000)
+      await d.loseDevice()
+      const regeneration = await d.untilRecovered()
+      steps(3)
+      return {
+        afterOutside,
+        inside: {
+          events: d.rendererLostEvents(),
+          hasDevice: d.hasDevice(),
+          generation: regeneration,
+          counters: d.counters(),
+        },
+      }
+    },
+    { windowMs: REPEATED_LOSS_WINDOW_MS, frameMs: FRAME_MS },
+  )
+  expect(out.afterOutside).toEqual({ events: [], hasDevice: true, generation: 2 })
+  expect(out.inside.events).toEqual(['repeated-loss'])
+  expect(out.inside.hasDevice, 'no rebuild after the repeated loss').toBe(false)
+  expect(out.inside.generation).toBe(2)
+  expect(out.inside.counters.ticksWithoutDevice, 'the frame loop kept running').toBeGreaterThan(2)
+})
+
+test('null adapter raises rendererLost', async ({ page }, testInfo) => {
+  await openLossPage(page, testInfo)
+  const out = await page.evaluate(async (frameMs) => {
+    const d = window.__deviceLoss as DeviceLoss
+    d.failNextAdapter()
+    await d.loseDevice()
+    await d.untilRecovered()
+    const before = d.controlWords()
+    for (let i = 0; i < 3; i++) d.step(frameMs)
+    return {
+      events: d.rendererLostEvents(),
+      hasDevice: d.hasDevice(),
+      generation: d.counters().generation,
+      ackAdvanced: d.controlWords().ack !== before.ack,
+    }
+  }, FRAME_MS)
+  expect(out.events).toEqual(['no-adapter'])
+  expect(out.hasDevice).toBe(false)
+  expect(out.generation).toBe(0)
+  expect(out.ackAdvanced, 'sim and frame loop continue without a renderer').toBe(true)
+})
+
+test('no recovery attempt after rendererLost', async ({ page }, testInfo) => {
+  await openLossPage(page, testInfo)
+  const out = await page.evaluate(
+    async ({ frameMs, windowMs }) => {
+      const d = window.__deviceLoss as DeviceLoss
+      d.failNextAdapter()
+      await d.loseDevice()
+      await d.untilRecovered()
+      const atLoss = { requests: d.adapterRequests(), events: d.rendererLostEvents() }
+      // Plenty of time and frames: a retry would show as a requestAdapter or a device.
+      for (let i = 0; i < 20; i++) {
+        d.advanceClock(windowMs)
+        d.step(frameMs)
+      }
+      // A macrotask turn, so a retry scheduled by a timer would have run too.
+      await new Promise((r) => setTimeout(r, 30))
+      await d.untilRecovered()
+      return {
+        atLoss,
+        requests: d.adapterRequests(),
+        events: d.rendererLostEvents(),
+        hasDevice: d.hasDevice(),
+      }
+    },
+    { frameMs: FRAME_MS, windowMs: REPEATED_LOSS_WINDOW_MS },
+  )
+  expect(out.atLoss.events).toEqual(['no-adapter'])
+  expect(out.atLoss.requests, 'one rebuild attempt (the one that found no adapter)').toBe(1)
+  expect(out.requests, 'no requestAdapter after rendererLost').toBe(out.atLoss.requests)
+  expect(out.events, 'raised once').toEqual(['no-adapter'])
+  expect(out.hasDevice).toBe(false)
+})

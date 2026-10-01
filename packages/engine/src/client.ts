@@ -250,6 +250,9 @@ export interface ClientOptions {
   }
 }
 
+/** Why the renderer gave up (0018 §8). */
+export type RendererLostReason = 'no-adapter' | 'repeated-loss'
+
 export interface Client {
   /** docs/plan/16-action-round-trip.md Scope: "M06b's `Client.ready` now also waits for
    * `session_state = 1`" -- but only for `{ kind: 'local', connect: true }`. Every other topology
@@ -306,6 +309,15 @@ export interface Client {
    * for a topology with no linked client worker (`host.kind !== 'local'`, or M29's net worker,
    * Non-scope here). Returns an unsubscribe function. */
   onResyncing(cb: () => void): () => void
+  /** docs/plan/37b-device-loss.md (0018 §8): fires once when the renderer gave up recovering --
+   * `'no-adapter'` (the rebuild found no adapter) or `'repeated-loss'` (a second device loss within
+   * 10 s of the previous one, on the injected clock). The renderer then makes no further attempt;
+   * sim, storage and link continue, so a reload loses nothing. A per-event subscription in the style
+   * of `onUi`; never fires while the device recovers. Returns an unsubscribe function. */
+  onRendererLost(cb: (e: { reason: RendererLostReason }) => void): () => void
+  /** Raises `onRendererLost` listeners (called by `GpuHost`, `render/gpu-host.ts`, the only
+   * caller). */
+  raiseRendererLost(reason: RendererLostReason): void
   /** docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "Link events"): a per-event
    * subscription in the style of `onUi`/`onResyncing`, fired with this client's own multiplayer
    * link state (`connecting | online | reconnecting | updating | superseded | rejected`) --
@@ -1012,6 +1024,12 @@ export function createClient(options: ClientOptions): Client {
       onResyncing(): () => void {
         throw err
       },
+      onRendererLost(): () => void {
+        throw err
+      },
+      raiseRendererLost(): void {
+        throw err
+      },
       onLink(): () => void {
         throw err
       },
@@ -1447,6 +1465,22 @@ export function createClient(options: ClientOptions): Client {
       const i = resyncingListeners.indexOf(listener)
       if (i >= 0) resyncingListeners.splice(i, 1)
     }
+  }
+
+  // docs/plan/37b-device-loss.md: `client.onRendererLost`, raised by `GpuHost` (0018 §8).
+  const rendererLostListeners: Array<(e: { reason: RendererLostReason }) => void> = []
+
+  function onRendererLost(cb: (e: { reason: RendererLostReason }) => void): () => void {
+    rendererLostListeners.push(cb)
+    return () => {
+      const i = rendererLostListeners.indexOf(cb)
+      if (i >= 0) rendererLostListeners.splice(i, 1)
+    }
+  }
+
+  function raiseRendererLost(reason: RendererLostReason): void {
+    const e = { reason }
+    for (const l of rendererLostListeners.slice()) l(e)
   }
 
   // docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "Link events"): `client.
@@ -2188,6 +2222,8 @@ export function createClient(options: ClientOptions): Client {
     onUi,
     onStorage,
     onResyncing,
+    onRendererLost,
+    raiseRendererLost,
     onLink,
     onVersionMismatch,
     debug: { linkLog: () => linkLogEntries.slice() },

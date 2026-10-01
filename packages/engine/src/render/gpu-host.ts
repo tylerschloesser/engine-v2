@@ -8,16 +8,16 @@
 // While `current` is `null` nothing here blocks: the frame loop keeps integrating the camera and
 // skips upload/encode/submit (`frame-loop.ts`).
 import type { Client } from '../client.js'
-import type { Clock } from '../clock.js'
+import { type Clock, systemClock } from '../clock.js'
 import { FLAG_RENDERER_RESET } from '../sab/control.js'
+import { NoAdapterError } from './device.js'
 import { createGpuResources, type GpuResources, type GpuResourcesOptions } from './gpu-resources.js'
 
 export type GpuHostOptions = GpuResourcesOptions & {
   /** Gets `FLAG_RENDERER_RESET` after each successful rebuild. Normally the same client as
    * `GpuResourcesOptions.client`. */
   client: Client
-  /** The injected clock the repeated-loss window reads (0018 §8; read by M37b step 4, not yet).
-   * Default `systemClock`. */
+  /** The injected clock the repeated-loss window reads (0018 §8). Default `systemClock`. */
   clock?: Clock
 }
 
@@ -36,6 +36,9 @@ export interface GpuHost {
   dispose(): void
 }
 
+/** 0018 §8: a second loss within this many ms of the previous one gives up (`rendererLost`). */
+export const REPEATED_LOSS_WINDOW_MS = 10_000
+
 export async function createGpuHost(opts: GpuHostOptions): Promise<GpuHost> {
   const listeners: Array<(resources: GpuResources | null) => void> = []
   let current: GpuResources | null = await createGpuResources(opts)
@@ -43,6 +46,10 @@ export async function createGpuHost(opts: GpuHostOptions): Promise<GpuHost> {
   let rebuilding: Promise<void> | null = null
   let disposed = false
   let lastDrawablesEnabled: boolean | null = null
+  const clock = opts.clock ?? systemClock
+  let lastLossAt: number | null = null
+  /** Set once `rendererLost` was raised: no further attempt, ever (0018 §8). */
+  let gaveUp = false
 
   function notify(resources: GpuResources | null): void {
     for (const cb of listeners.slice()) cb(resources)
@@ -55,10 +62,23 @@ export async function createGpuHost(opts: GpuHostOptions): Promise<GpuHost> {
     })
   }
 
+  function giveUp(reason: 'no-adapter' | 'repeated-loss'): void {
+    gaveUp = true
+    opts.client.raiseRendererLost(reason)
+  }
+
   function onLost(): void {
+    if (gaveUp) return
     lastDrawablesEnabled = current?.drawables?.isEnabled() ?? null
     current = null
     notify(null)
+    const now = clock.now()
+    const repeated = lastLossAt !== null && now - lastLossAt < REPEATED_LOSS_WINDOW_MS
+    lastLossAt = now
+    if (repeated) {
+      giveUp('repeated-loss')
+      return
+    }
     rebuilding = rebuild().finally(() => {
       rebuilding = null
     })
@@ -69,8 +89,11 @@ export async function createGpuHost(opts: GpuHostOptions): Promise<GpuHost> {
     try {
       next = await createGpuResources(opts)
     } catch (e) {
-      // M37b step 4 turns this into `rendererLost` ('no-adapter'); until then it is loud.
-      console.error('GPU device lost and could not be rebuilt:', e)
+      // No adapter (or no `navigator.gpu`): the game is told and the renderer stays down (0018 §8).
+      // Any other failure is loud and treated the same way: there is nothing else to retry with.
+      if (!(e instanceof NoAdapterError))
+        console.error('GPU device lost and could not be rebuilt:', e)
+      if (!disposed) giveUp('no-adapter')
       return
     }
     if (disposed) {

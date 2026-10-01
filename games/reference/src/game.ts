@@ -102,6 +102,10 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
     client,
     ...(opts.clock ? { clock: opts.clock } : {}),
   })
+  // M37b registers the callback; the reload prompt is M37's `status.ts` work.
+  client.onRendererLost((e) =>
+    console.warn(`renderer lost (${e.reason}): reload to restore the picture`),
+  )
   const first = gpu.current as NonNullable<GpuHost['current']>
   const { device, renderer } = first
   const drawables = first.drawables as AttachedDrawables

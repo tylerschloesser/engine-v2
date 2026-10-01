@@ -36,6 +36,14 @@ declare global {
       loseDevice(): Promise<void>
       /** `engine/test`'s `untilRendererRecovered(client)`: the rebuild count. */
       untilRecovered(): Promise<number>
+      /** `engine/test`'s `failNextAdapter(client)`. */
+      failNextAdapter(): void
+      /** Moves the page's manual clock, which the `GpuHost` repeated-loss window reads. */
+      advanceClock(ms: number): void
+      /** The `reason` of every `client.onRendererLost` event so far. */
+      rendererLostEvents(): string[]
+      /** `navigator.gpu.requestAdapter` calls since `init()` finished creating the page's client. */
+      adapterRequests(): number
       hasDevice(): boolean
       /** One `tick()` into the real canvas texture, read back at once: the first 64 pixels of row
        * 0 as RGBA bytes (`data`), plus the canvas size. */

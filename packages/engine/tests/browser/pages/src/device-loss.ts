@@ -13,6 +13,7 @@ import { stats as genStats } from '../../../../src/test/gen.ts'
 import { createManualClock } from '../../../../src/test/manual-clock.ts'
 import {
   attachGpuHost,
+  failNextAdapter,
   loseDevice,
   readPixels,
   renderTo,
@@ -39,6 +40,9 @@ let probeCamera: ProbeCamera | undefined
 let real: RealFrameLoop | undefined
 let ticks = 0
 let ticksWithoutDevice = 0
+let manualClock: ReturnType<typeof createManualClock> | undefined
+const lostEvents: string[] = []
+let adapterRequests = 0
 
 function requireClient(): Client {
   if (!client) throw new Error('__deviceLoss.init() must be called first')
@@ -62,6 +66,14 @@ window.__deviceLoss = {
     canvas.style.cssText = 'position:fixed;left:0;top:0;width:256px;height:256px'
     document.body.appendChild(canvas)
     const clock = createManualClock()
+    manualClock = clock
+    // Counts every `requestAdapter` the page makes (a rebuild attempt is exactly one).
+    const gpuApi = navigator.gpu
+    const realRequest = gpuApi.requestAdapter.bind(gpuApi)
+    gpuApi.requestAdapter = (o) => {
+      adapterRequests += 1
+      return realRequest(o)
+    }
     client = createClient({
       canvas,
       wasm,
@@ -72,6 +84,10 @@ window.__deviceLoss = {
     })
     await client.ready
     const c = client
+    c.onRendererLost((e) => {
+      lostEvents.push(e.reason)
+    })
+    adapterRequests = 0
     host = await createGpuHost({
       colorFormat: 'rgba8unorm',
       tilesUrl: '/terrain/tiles.json',
@@ -210,6 +226,24 @@ window.__deviceLoss = {
   /** Resolves with the rebuild count once no rebuild is in flight. */
   async untilRecovered() {
     return untilRendererRecovered(requireClient())
+  },
+
+  failNextAdapter() {
+    failNextAdapter(requireClient())
+  },
+
+  /** Moves the injected manual clock (the repeated-loss window reads it). */
+  advanceClock(ms) {
+    ;(manualClock as ReturnType<typeof createManualClock>).advance(ms)
+  },
+
+  /** The `reason` of every `client.onRendererLost` event so far. */
+  rendererLostEvents() {
+    return lostEvents.slice()
+  },
+
+  adapterRequests() {
+    return adapterRequests
   },
 
   hasDevice() {

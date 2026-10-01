@@ -157,6 +157,14 @@ async function probeWriteTextureFromSharedView(device: GPUDevice): Promise<boole
   return error === null
 }
 
+let failNextAdapterOnce = false
+
+/** Test flag (0018 §8, `engine/test`'s `failNextAdapter`): the next `initDevice` finds no adapter
+ * (as if `requestAdapter()` resolved `null`), once. */
+export function armFailNextAdapter(): void {
+  failNextAdapterOnce = true
+}
+
 /**
  * Requests an adapter and device (rejects with `NoAdapterError` on a null adapter or missing
  * `navigator.gpu`), wires `uncapturederror` into `errors()`, and runs the `GPUTexture`-as-view probe
@@ -168,7 +176,8 @@ export async function initDevice(opts?: {
 }): Promise<RendererDevice> {
   const gpu = (globalThis.navigator as { gpu?: GPU } | undefined)?.gpu
   if (!gpu) throw new NoAdapterError('is unavailable: navigator.gpu is not present')
-  const adapter = await gpu.requestAdapter(ADAPTER_REQUEST)
+  const adapter = failNextAdapterOnce ? null : await gpu.requestAdapter(ADAPTER_REQUEST)
+  failNextAdapterOnce = false
   if (!adapter) throw new NoAdapterError('returned null')
   const device = await adapter.requestDevice(DEVICE_REQUEST)
   const errors: string[] = []
