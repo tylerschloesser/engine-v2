@@ -46,15 +46,17 @@ const built: Partial<Record<VariantName, Record<CrateKey, Built>>> = {}
 const brotli = (bytes: Uint8Array): number =>
   brotliCompressSync(bytes, { params: { [constants.BROTLI_PARAM_QUALITY]: 11 } }).length
 
-// Four fat-LTO release builds per variant, each hook bounded explicitly (cargo, not the default 10 s).
-async function buildAll(variant: VariantName): Promise<void> {
-  const row: Partial<Record<CrateKey, Built>> = {}
-  for (const key of CRATE_KEYS) row[key] = await buildVariant(variant, key)
-  built[variant] = row as Record<CrateKey, Built>
+// One hook per (variant, crate): a fat-LTO release build each, bounded explicitly (cargo, not the
+// default 10 s). A cold CI runner builds the engine again for the simd target directory.
+for (const variant of VARIANTS) {
+  for (const key of CRATE_KEYS) {
+    beforeAll(async () => {
+      const row = built[variant] ?? ({} as Record<CrateKey, Built>)
+      built[variant] = row
+      row[key] = await buildVariant(variant, key)
+    }, 240_000)
+  }
 }
-beforeAll(() => buildAll('plain'), 240_000)
-beforeAll(() => buildAll('wasm-opt'), 240_000)
-beforeAll(() => buildAll('simd128'), 240_000)
 
 afterAll(() => {
   const wasmOpt = spawnSync('wasm-opt', ['--version'], { encoding: 'utf8' })
