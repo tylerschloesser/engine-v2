@@ -13,12 +13,16 @@ use super::registry::Status;
 #[serde(rename_all = "camelCase")]
 struct Raw {
     arena_bytes: u32,
+    /// 0015 §5: where release-build growth stops; default `arena::DEFAULT_CEILING_BYTES`.
+    #[serde(default)]
+    arena_ceiling_bytes: Option<u32>,
     #[serde(default)]
     game: serde_json::Value,
 }
 
 pub(crate) struct Config {
     pub arena_bytes: u32,
+    pub arena_ceiling_bytes: Option<u32>,
     /// The `game` value, re-serialised; `null` when the key is missing.
     pub game_json: String,
 }
@@ -28,6 +32,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Config, Status> {
     let game_json = serde_json::to_string(&raw.game).map_err(|_| Status::BadConfig)?;
     Ok(Config {
         arena_bytes: raw.arena_bytes,
+        arena_ceiling_bytes: raw.arena_ceiling_bytes,
         game_json,
     })
 }

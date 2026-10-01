@@ -28,3 +28,9 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# M35 (0017 §7, §9): `release` with the symbol names kept. Used only by `ts-rs zero bytes` and the
+# release-only behaviour tests, which look for names and strings in the module; never shipped.
+[profile.release-names]
+inherits = "release"
+strip = false

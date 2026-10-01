@@ -12,6 +12,7 @@ import { buildGame, CargoBuildError, exportBindings, type Profile } from './buil
 export {
   type BuildGameOptions,
   type BuildGameResult,
+  type BuildWarning,
   buildGame,
   CargoBuildError,
   exportBindings,
@@ -32,6 +33,8 @@ export interface EngineOptions {
    * delays the page's own `full-reload`.
    */
   bindings?: { dir: string }
+  /** `buildGame({ wasmOpt })` (0017 §5): run `wasm-opt` when it is on `PATH`. Default off. */
+  wasmOpt?: boolean
 }
 
 /** `plugin.api.profile`, readable once the config has resolved (0017 §4). */
@@ -157,7 +160,11 @@ export function engine(opts: EngineOptions): Plugin {
   const api: EnginePluginApi = { profile }
 
   const doBuild = async (): Promise<void> => {
-    const result = await buildGame({ crate: crateDir, profile })
+    const result = await buildGame({
+      crate: crateDir,
+      profile,
+      ...(opts.wasmOpt !== undefined ? { wasmOpt: opts.wasmOpt } : {}),
+    })
     wasmBytes = await readFile(result.wasmPath)
     buildHash = result.buildHash
     version++

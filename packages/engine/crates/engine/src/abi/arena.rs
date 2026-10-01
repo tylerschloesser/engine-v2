@@ -1,7 +1,9 @@
 //! The arena (0015 §5) without owning an allocator: [`Arena`] wraps std's allocator and counts
 //! bytes; `engine_init` reserves the arena by allocating and freeing one block of `arenaBytes`,
 //! which makes std's allocator perform the single `memory.grow`. Growth after that is tolerated
-//! but counted ([`mem_grows`]); dev builds treat live bytes past the reservation as a bug.
+//! but counted ([`mem_grows`]): dev builds treat live bytes past the reservation as a bug and trap;
+//! release builds grow in [`GROW_STEP_BYTES`] steps up to the ceiling (`arenaCeilingBytes`,
+//! [`DEFAULT_CEILING_BYTES`]) and trap past it.
 
 use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -16,7 +18,18 @@ pub struct Arena;
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 static HIGH_WATER: AtomicUsize = AtomicUsize::new(0);
 static RESERVED: AtomicUsize = AtomicUsize::new(0);
-static PAGES_AT_INIT: AtomicUsize = AtomicUsize::new(0);
+/// Memory size (pages) as of the last growth the arena accounted for; see [`mem_grows`].
+static PAGES_SEEN: AtomicUsize = AtomicUsize::new(0);
+static GROW_EVENTS: AtomicUsize = AtomicUsize::new(0);
+static CEILING: AtomicUsize = AtomicUsize::new(DEFAULT_CEILING_BYTES);
+
+/// 0015 §5: past the reservation, release builds grow memory in steps of this many bytes.
+pub const GROW_STEP_BYTES: usize = 16 << 20;
+/// 0015 §5's mobile ceiling for the sim and client arenas, used when config gives none.
+pub const DEFAULT_CEILING_BYTES: usize = 256 << 20;
+/// A block this far under one step makes std's allocator map exactly one step: it rounds the
+/// request plus its own footer up to 64 KiB pages, whatever its free top holds.
+const STEP_BLOCK_BYTES: usize = GROW_STEP_BYTES - 4096;
 
 /// Bytes currently allocated through [`Arena`].
 pub fn live_bytes() -> usize {
@@ -89,9 +102,12 @@ fn thread_delta(delta: isize) {
 #[inline]
 fn thread_delta(_delta: isize) {}
 
-/// WASM pages grown since `engine_init` reserved the arena. 0 in steady state (asserted by 0016).
+/// Growth events since `engine_init` reserved the arena: one per release-build step
+/// ([`GROW_STEP_BYTES`]) or growth std's allocator made on its own, plus one if memory grew behind
+/// the allocator's back (`memory.grow` called directly). 0 in steady state (asserted by 0016).
 pub fn mem_grows() -> u32 {
-    (pages() - PAGES_AT_INIT.load(Relaxed)) as u32
+    let unaccounted = usize::from(pages() != PAGES_SEEN.load(Relaxed));
+    (GROW_EVENTS.load(Relaxed) + unaccounted) as u32
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -105,7 +121,7 @@ fn pages() -> usize {
 }
 
 /// Make the allocator grow memory once, now. False when the block cannot be had.
-pub(crate) fn reserve(bytes: u32) -> bool {
+pub(crate) fn reserve(bytes: u32, ceiling: Option<u32>) -> bool {
     let Ok(layout) = Layout::from_size_align(bytes as usize, 8) else {
         return false;
     };
@@ -121,7 +137,12 @@ pub(crate) fn reserve(bytes: u32) -> bool {
         }
     }
     RESERVED.store(bytes as usize, Relaxed);
-    PAGES_AT_INIT.store(pages(), Relaxed);
+    CEILING.store(
+        ceiling.map_or(DEFAULT_CEILING_BYTES, |c| c as usize),
+        Relaxed,
+    );
+    GROW_EVENTS.store(0, Relaxed);
+    PAGES_SEEN.store(pages(), Relaxed);
     true
 }
 
@@ -131,17 +152,79 @@ const fn exceeds(live: usize, size: usize, reserved: usize) -> bool {
     reserved != 0 && live.saturating_add(size) > reserved
 }
 
+/// Release builds, off the steady-state path (it runs only when an allocation would pass the
+/// reservation): grow memory one [`GROW_STEP_BYTES`] step at a time until the allocation fits, and
+/// raise the reservation by each step actually taken. A step is one block from std's allocator,
+/// which maps exactly one step when it has to grow (see `STEP_BLOCK_BYTES`). Blocks are held until
+/// the last step, so the next one cannot be served from the space the previous one just mapped (the
+/// free top the arena already had serves the first, without growing), then given back: the heap
+/// keeps the pages and nothing stays allocated. Past the ceiling it traps, like a failed grow
+/// (0015 §5).
+#[cold]
+#[inline(never)]
+fn grow_steps(live: usize, size: usize) {
+    const MAX_BLOCKS: usize = 129; // 2 GiB of steps (the largest ceiling 0015 §5 names), plus the free top
+    let needed = (live + size).saturating_sub(RESERVED.load(Relaxed));
+    let steps = needed.div_ceil(GROW_STEP_BYTES);
+    let mut held: [*mut u8; MAX_BLOCKS] = [core::ptr::null_mut(); MAX_BLOCKS];
+    let mut blocks = 0;
+    let mut grown = 0;
+    // `from_size_align` cannot fail for a constant size and alignment 8.
+    let layout = Layout::from_size_align(STEP_BLOCK_BYTES, 8).unwrap_or(Layout::new::<u8>());
+    while grown < steps {
+        let reserved = RESERVED.load(Relaxed);
+        let ceiling = CEILING.load(Relaxed);
+        if reserved.saturating_add(GROW_STEP_BYTES) > ceiling || blocks == MAX_BLOCKS {
+            super::panic::fatal(format_args!(
+                "arena ceiling: requested {size} bytes with {live} live, reserved {reserved} bytes, ceiling {ceiling} bytes (arenaCeilingBytes)"
+            ));
+        }
+        // SAFETY: non-zero size; every block taken here is freed below with the same layout. Goes
+        // around the counters: the blocks are never live.
+        let block = unsafe { System.alloc(layout) };
+        if block.is_null() {
+            super::panic::fatal(format_args!(
+                "memory.grow failed: a {GROW_STEP_BYTES}-byte step past {reserved} reserved bytes"
+            ));
+        }
+        held[blocks] = block;
+        blocks += 1;
+        if note_growth() {
+            RESERVED.store(reserved + GROW_STEP_BYTES, Relaxed);
+            grown += 1;
+        }
+    }
+    for block in &held[..blocks] {
+        // SAFETY: taken above with `layout`.
+        unsafe { System.dealloc(*block, layout) };
+    }
+}
+
+/// Counts one growth event if memory is larger than the last time the arena looked, and says
+/// whether it was. Release only: dev builds trap before the allocator could grow.
+#[inline]
+fn note_growth() -> bool {
+    let pages = pages();
+    let grew = pages != PAGES_SEEN.load(Relaxed);
+    if grew {
+        PAGES_SEEN.store(pages, Relaxed);
+        GROW_EVENTS.store(GROW_EVENTS.load(Relaxed) + 1, Relaxed);
+    }
+    grew
+}
+
 #[inline]
 fn grow_live(size: usize) {
     let live = LIVE.load(Relaxed);
-    if cfg!(debug_assertions) {
-        let reserved = RESERVED.load(Relaxed);
-        if exceeds(live, size, reserved) {
+    let reserved = RESERVED.load(Relaxed);
+    if exceeds(live, size, reserved) {
+        if cfg!(debug_assertions) {
             // Not `panic!`: std formats a panic message into a `String`, and this is the allocator.
             super::panic::fatal(format_args!(
                 "arena exhausted: requested {size} bytes with {live} live, reserved {reserved} bytes (arenaBytes)"
             ));
         }
+        grow_steps(live, size);
     }
     let live = live + size;
     LIVE.store(live, Relaxed);
@@ -165,6 +248,8 @@ unsafe impl GlobalAlloc for Arena {
         let ptr = unsafe { System.alloc(layout) };
         if ptr.is_null() {
             shrink_live(layout.size());
+        } else if !cfg!(debug_assertions) {
+            let _ = note_growth();
         }
         ptr
     }
@@ -174,6 +259,8 @@ unsafe impl GlobalAlloc for Arena {
         let ptr = unsafe { System.alloc_zeroed(layout) };
         if ptr.is_null() {
             shrink_live(layout.size());
+        } else if !cfg!(debug_assertions) {
+            let _ = note_growth();
         }
         ptr
     }
@@ -195,6 +282,8 @@ unsafe impl GlobalAlloc for Arena {
             }
         } else if new_size < old {
             shrink_live(old - new_size);
+        } else if !cfg!(debug_assertions) {
+            let _ = note_growth();
         }
         new_ptr
     }

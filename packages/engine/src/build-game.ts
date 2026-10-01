@@ -2,10 +2,26 @@
 // cargo and Node built-ins only. The Vite plugin (M02b), `pnpm test` and server scripts all call it.
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFile, mkdir, readdir, readFile, realpath, rename, writeFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { constants } from 'node:fs'
+import {
+  access,
+  copyFile,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
+import { delimiter, dirname, join, resolve } from 'node:path'
 
-export type Profile = 'dev' | 'release'
+/**
+ * `release-names` is `release` with `strip = false`, defined only in this repo's root `Cargo.toml`
+ * and used only by the size tests (0017 §7: they look for `ts_rs` symbols and log strings in the
+ * module). A game's own manifest does not define it.
+ */
+export type Profile = 'dev' | 'release' | 'release-names'
 
 export type BuildGameOptions = {
   /** Directory of the game crate (the one holding its `Cargo.toml`). */
@@ -18,7 +34,14 @@ export type BuildGameOptions = {
    * build never joins a normal server (M34b: the `test-hooks` build). Default none.
    */
   features?: string[]
-  /** Accepted and ignored with a warning until M35 runs `wasm-opt`. */
+  /**
+   * Run `wasm-opt` on the cargo output (0017 §5) when it is on `PATH` (`env.PATH` if `env` is given):
+   * `-O3` plus `WASM_OPT_FEATURES`, hashing afterwards, so `buildHash` is the optimised bytes'.
+   * Requested but not found: a `wasm-opt-missing` entry in `warnings` (and one `console.warn`), the
+   * build proceeds unoptimised and `game.json` says `wasmOpt: false`. Default off; never an npm
+   * dependency. A machine with `wasm-opt` and one without produce different hashes (0017
+   * Consequences): ship client and server from one build.
+   */
   wasmOpt?: boolean
   /** Environment for the cargo spawns. Default `process.env`. */
   env?: NodeJS.ProcessEnv
@@ -46,7 +69,13 @@ export type BuildGameResult = {
   cargoMs: number
   /** Set only when `opts.bindings` was given: how long the bindings `cargo test` took. */
   bindingsMs?: number
+  /** True when `wasm-opt` ran on `wasmPath`'s bytes. */
+  wasmOpt: boolean
+  /** Named, non-fatal things the build did not do as asked: `wasm-opt-missing`. */
+  warnings: BuildWarning[]
 }
+
+export type BuildWarning = { code: 'wasm-opt-missing'; message: string }
 
 let writeSeq = 0
 
@@ -56,6 +85,10 @@ export type GameJson = {
   abiVersion: number
   profile: Profile
   features?: string[]
+  /** Present only when `buildGame({ wasmOpt: true })` was asked: `true` if `wasm-opt` ran, `false` if
+   * it was missing (`wasm-opt-missing`). Absent means not requested. Makes the deploy skew of 0017
+   * (client and server built on machines with and without `wasm-opt`) readable from the file. */
+  wasmOpt?: boolean
 }
 
 export class CargoBuildError extends Error {
@@ -66,6 +99,65 @@ export class CargoBuildError extends Error {
     this.name = 'CargoBuildError'
     this.stderr = stderr
   }
+}
+
+/**
+ * 0017 §5: `strip = true` removes the `target_features` section `wasm-opt` would detect these from,
+ * and without them it rejects the module. The pinned toolchain's wasm32 defaults (see
+ * `tests/wasm/allowlist.test.ts`'s `DEFAULT_FEATURES`); `simd128`, `relaxed-simd` and `atomics` stay
+ * banned (0002).
+ */
+export const WASM_OPT_FEATURES = [
+  '--enable-bulk-memory',
+  '--enable-bulk-memory-opt',
+  '--enable-sign-ext',
+  '--enable-mutable-globals',
+  '--enable-nontrapping-float-to-int',
+  '--enable-multivalue',
+  '--enable-reference-types',
+] as const
+
+/** `wasm-opt` on `PATH` as an absolute path, or `undefined`. */
+async function findWasmOpt(env: NodeJS.ProcessEnv): Promise<string | undefined> {
+  const names = process.platform === 'win32' ? ['wasm-opt.exe', 'wasm-opt.cmd'] : ['wasm-opt']
+  for (const dir of (env.PATH ?? '').split(delimiter)) {
+    if (dir === '') continue
+    for (const name of names) {
+      const candidate = join(dir, name)
+      try {
+        await access(candidate, constants.X_OK)
+        return candidate
+      } catch {
+        // not here
+      }
+    }
+  }
+  return undefined
+}
+
+async function runWasmOpt(
+  bin: string,
+  input: string,
+  output: string,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  const args = ['-O3', ...WASM_OPT_FEATURES, input, '-o', output]
+  const done = await new Promise<Spawned>((resolveDone) => {
+    const child = spawn(bin, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (d) => {
+      stdout += d
+    })
+    child.stderr.on('data', (d) => {
+      stderr += d
+    })
+    child.on('error', (e) =>
+      resolveDone({ code: 127, stdout, stderr: `cannot run wasm-opt: ${e.message}` }),
+    )
+    child.on('close', (code) => resolveDone({ code: code ?? 1, stdout, stderr }))
+  })
+  if (done.code !== 0) throw new CargoBuildError('wasm-opt', done.stderr || done.stdout)
 }
 
 type Spawned = { code: number; stdout: string; stderr: string }
@@ -102,7 +194,7 @@ async function artifactPath(crate: string, profile: Profile, env: NodeJS.Process
     ?.targets.find((t) => t.kind.includes('cdylib'))
   if (!lib) throw new CargoBuildError('buildGame', `${manifest} has no cdylib target`)
   const file = `${lib.name.replaceAll('-', '_')}.wasm`
-  const profileDir = profile === 'release' ? 'release' : 'debug'
+  const profileDir = profile === 'dev' ? 'debug' : profile
   return join(target_directory, 'wasm32-unknown-unknown', profileDir, file)
 }
 
@@ -134,28 +226,50 @@ export async function buildGame(opts: BuildGameOptions): Promise<BuildGameResult
   const crate = await realpath(resolve(opts.crate))
   const profile = opts.profile ?? 'dev'
   const env = opts.env ?? process.env
-  if (opts.wasmOpt) console.warn('buildGame: wasmOpt is ignored until the packaging milestone')
-
   const artifact = await artifactPath(crate, profile, env)
   const features = [...new Set(opts.features ?? [])].sort()
   const args = ['build', '--target', 'wasm32-unknown-unknown', '--color', 'never']
   if (profile === 'release') args.push('--release')
+  else if (profile === 'release-names') args.push('--profile', 'release-names')
   if (features.length > 0) args.push('--features', features.join(','))
   const start = performance.now()
   const built = await cargo(args, crate, env)
   const cargoMs = performance.now() - start
   if (built.code !== 0) throw new CargoBuildError('cargo build', built.stderr)
 
-  const bytes = await readFile(artifact)
+  let bytes = await readFile(artifact)
+  const warnings: BuildWarning[] = []
+  let optimised = false
+  const suffix = features.length > 0 ? `+${features.join('+')}` : ''
+  const dir = join(crate, 'target', 'engine', `${profile}${suffix}`)
+  await mkdir(dir, { recursive: true })
+  if (opts.wasmOpt) {
+    const bin = await findWasmOpt(env)
+    if (bin === undefined) {
+      const message =
+        'wasm-opt-missing: wasmOpt was requested but no wasm-opt is on PATH; building unoptimised'
+      warnings.push({ code: 'wasm-opt-missing', message })
+      console.warn(`buildGame: ${message}`)
+    } else {
+      // Beside the target, then read back: the optimised bytes replace cargo's before hashing.
+      const optimisedPath = join(dir, `.${process.pid}.${++writeSeq}.opt.wasm`)
+      try {
+        await runWasmOpt(bin, artifact, optimisedPath, env)
+        bytes = await readFile(optimisedPath)
+        optimised = true
+      } finally {
+        await rm(optimisedPath, { force: true })
+      }
+    }
+  }
   const buildHash = createHash('sha256').update(bytes).digest('hex')
   const abiVersion = readAbiVersion(bytes)
 
-  const suffix = features.length > 0 ? `+${features.join('+')}` : ''
-  const dir = join(crate, 'target', 'engine', `${profile}${suffix}`)
   const wasmPath = join(dir, 'game.wasm')
   const jsonPath = join(dir, 'game.json')
   const json: GameJson = { buildHash, abiVersion, profile }
   if (features.length > 0) json.features = features
+  if (opts.wasmOpt) json.wasmOpt = optimised
   await mkdir(dirname(wasmPath), { recursive: true })
   // Write beside the target, then rename: a reader (the dev server's wasm route, a concurrent
   // build of the same crate, a test comparing bytes) never sees a truncated 3.7 MB file.
@@ -173,6 +287,8 @@ export async function buildGame(opts: BuildGameOptions): Promise<BuildGameResult
     abiVersion,
     profile,
     cargoMs,
+    wasmOpt: optimised,
+    warnings,
   }
   if (opts.bindings) {
     const bindingsStart = performance.now()

@@ -18,6 +18,11 @@ unsafe extern "C" {
 }
 
 /// Send one line of diagnostics to the host. Release builds drop everything below `Warn`.
+///
+/// `inline(always)`: with a constant `level` the early return folds away at the call site, and with
+/// it the string literal (0014 §3); a call through the function would keep every message in the
+/// module (`release module drops info logs`).
+#[inline(always)]
 pub fn log(level: LogLevel, text: &str) {
     if !cfg!(debug_assertions) && level > LogLevel::Warn {
         return;

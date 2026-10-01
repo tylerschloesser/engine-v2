@@ -92,7 +92,7 @@ fn try_init<T: Instance>(slot: &Slot<T>, role: u32, cfg_len: u32) -> Result<(), 
     }
     let role = Role::from_u32(role).ok_or(Status::BadConfig)?;
     let cfg = config::parse(boot::config(cfg_len).ok_or(Status::BadLength)?)?;
-    if !arena::reserve(cfg.arena_bytes) {
+    if !arena::reserve(cfg.arena_bytes, cfg.arena_ceiling_bytes) {
         return Err(Status::OutOfMemory);
     }
     let mut layout = RegionLayout::new();

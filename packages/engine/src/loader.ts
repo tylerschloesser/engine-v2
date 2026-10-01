@@ -16,6 +16,8 @@ import {
 export type InstanceConfig = {
   /** Reserved once by `engine_init`; growth past it is counted by `memGrows()` (0015 §5). */
   arenaBytes: number
+  /** Where release-build growth stops (0015 §5); default 256 MiB. Growth is in 16 MiB steps. */
+  arenaCeilingBytes?: number
   /** Handed to the game as JSON. A u64 is a `"0x…"` string. */
   game: unknown
 }

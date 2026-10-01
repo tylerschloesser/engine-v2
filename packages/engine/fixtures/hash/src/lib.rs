@@ -3,9 +3,12 @@
 //! sim in 16.16 fixed point, a SplitMix64 action stream) and hashes raw state bits, so the golden
 //! in `golden/` proves they agree natively, under Node, under Bun and in browsers.
 //!
-//! Config switches exist for the loader tests: `panicAtTick`, `growAtTick`, `exhaustAtTick`.
+//! Config switches exist for the loader tests: `panicAtTick`, `growAtTick`, `exhaustAtTick`, and
+//! `logAtTick` (one distinct line per level, for the release-module test of 0014 §3).
 
 use engine::abi::config::HexU64;
+use engine::abi::panic::log;
+use engine::abi::registry::LogLevel;
 use engine::abi::{Instance, RegionId, RegionLayout, Role, Status};
 use engine::client::CameraBlock;
 use engine::hash::{Fnv64, hash_value};
@@ -37,6 +40,7 @@ struct Config {
     panic_at_tick: Option<u32>,
     grow_at_tick: Option<u32>,
     exhaust_at_tick: Option<u32>,
+    log_at_tick: Option<u32>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -202,6 +206,14 @@ impl Instance for HashFixture {
             // allocator's switch).
             #[cfg(target_arch = "wasm32")]
             core::arch::wasm32::memory_grow(0, 1);
+        }
+        if self.cfg.log_at_tick == now {
+            // One call per level, each with its own string: a release module must hold the first
+            // two and neither of the last two (0014 §3: `log` below `warn` is compiled out).
+            log(LogLevel::Error, "fx-hash log line: error level");
+            log(LogLevel::Warn, "fx-hash log line: warn level");
+            log(LogLevel::Info, "fx-hash log line: info level");
+            log(LogLevel::Debug, "fx-hash log line: debug level");
         }
         if self.cfg.exhaust_at_tick == now {
             let past_the_arena: Vec<u8> = Vec::with_capacity(EXHAUST_BYTES);
