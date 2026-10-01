@@ -13,6 +13,7 @@
     "handoff": "node scripts/handoff.mjs",
     "test:slow": "node scripts/test.mjs --tier slow",
     "test:timings": "node scripts/test-timings.mjs",
+    "measure:rebuild": "node scripts/measure-rebuild.mjs",
     "lint": "node scripts/lint.mjs",
     "setup:tools": "node scripts/setup-tools.mjs",
     "device:serve": "node packages/engine/scripts/device-serve.mjs",
