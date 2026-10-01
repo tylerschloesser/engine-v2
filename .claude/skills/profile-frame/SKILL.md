@@ -96,11 +96,14 @@ bench.frame_worstcase profile: records=65536 frames main=302 worker=23 warmup=12
 ## Updating the baseline
 
 `packages/engine/baselines/frame.json` is checked in from a real measured run, never estimated: the
-same file `bench.frame_worstcase` reads for its own 25% tolerance check. Run this skill's command
-several times (numbers vary run to run with a ~23-sample worker window; look at the spread, not one
-run), pick representative main/worker p50 and p95, and write them into the JSON by hand together with
-`measuredAt`, `frames`, `warmupFrames`, `recordCount` and a `conditions` string naming the machine,
-CPU count, launch flags and load average at measurement time (the existing file's own `conditions`
-field is the template). Only raise the baseline for a change that is expected to cost more and was
+same file `bench.frame_worstcase` hands to `scripts/lib/bench-gate.mjs` for its 25% check (the
+helper compares only under the baseline's machine fingerprint, `os.cpus()[0].model` + `os.arch()`).
+The file holds `metrics` (`mainP50Ms`, `mainP95Ms`, `workerP50Ms`, `workerP95Ms`), `fingerprint`,
+`gated`, `measuredAt`, `frames`, `warmupFrames`, `recordCount` and a `conditions` string naming the
+machine, CPU count, launch flags and load average. Run `pnpm bench:frame` several times (numbers
+vary run to run with a ~23-sample worker window; look at the spread, not one run; each run records
+`test-results/frame-bench/bench/frame.json`), then `pnpm bench:baseline frame` rewrites the
+baseline's `metrics`, fingerprint and date from the latest record, an explicit command whose diff is
+reviewed; update `conditions` by hand. Only raise the baseline for a change that is expected to cost more and was
 reviewed as such; a baseline that silently absorbs a regression defeats the whole point of checking
 one in.

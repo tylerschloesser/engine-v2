@@ -1,0 +1,14 @@
+{
+  "name": "worldgen",
+  "fingerprint": {
+    "cpu": "Apple M3 Max",
+    "arch": "arm64"
+  },
+  "measuredAt": "2026-10-01T05:32:04.106Z",
+  "conditions": "Tyler's Mac (Mac15,10, Apple M3 Max), native release, games/reference/sim/tests/worldgen_bench.rs: median over 15 batches of 64 RefWorldgen::generate calls after 64 warm-up chunks. Five direct re-runs on the same machine: 0.0621-0.0671 ms/chunk. 0008 section 6 warns above 0.25 ms/chunk (budgets.json worldgenMsPerChunkWarn).",
+  "gated": ["medianMsPerChunk"],
+  "limits": {},
+  "metrics": {
+    "medianMsPerChunk": 0.06853
+  }
+}

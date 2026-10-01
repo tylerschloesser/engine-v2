@@ -331,7 +331,7 @@ try {
   console.log(
     `  main   p50=${mainP50.toFixed(3)}ms p95=${mainP95.toFixed(3)}ms  budget<=${MAIN_BUDGET_MS}ms` +
       (baseline
-        ? `  baseline.p50=${baseline.mainMs.p50}ms (+${(BASELINE_TOLERANCE * 100).toFixed(0)}%=${(baseline.mainMs.p50 * (1 + BASELINE_TOLERANCE)).toFixed(3)}ms)`
+        ? `  baseline.p50=${baseline.metrics.mainP50Ms}ms (+${(BASELINE_TOLERANCE * 100).toFixed(0)}%=${(baseline.metrics.mainP50Ms * (1 + BASELINE_TOLERANCE)).toFixed(3)}ms)`
         : ''),
   )
   console.log(`    top self-time (${mainCpu.totalMs.toFixed(2)}ms sampled):`)
@@ -339,7 +339,7 @@ try {
   console.log(
     `  worker p50=${workerP50.toFixed(3)}ms p95=${workerP95.toFixed(3)}ms  budget<=${WORKER_BUDGET_MS}ms` +
       (baseline
-        ? `  baseline.p50=${baseline.workerMs.p50}ms (+${(BASELINE_TOLERANCE * 100).toFixed(0)}%=${(baseline.workerMs.p50 * (1 + BASELINE_TOLERANCE)).toFixed(3)}ms)`
+        ? `  baseline.p50=${baseline.metrics.workerP50Ms}ms (+${(BASELINE_TOLERANCE * 100).toFixed(0)}%=${(baseline.metrics.workerP50Ms * (1 + BASELINE_TOLERANCE)).toFixed(3)}ms)`
         : ''),
   )
   console.log(`    top self-time (${workerCpu.totalMs.toFixed(2)}ms sampled):`)

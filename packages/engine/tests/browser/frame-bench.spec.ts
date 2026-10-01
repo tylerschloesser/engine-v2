@@ -9,13 +9,15 @@
 // .call1` makes -- a production worker cannot call `performance.mark` itself, `.claude/rules/
 // hot-paths.md`, the same reasoning `tests/browser/gc/instrument.ts` already documents for its own
 // `gc-isolate:*` marks). Asserted against 0018 §9's desktop proxy (main <= 1.3 ms, worker <= 2.7 ms)
-// and against `baselines/frame.json` within 25% (0020 §9) -- both gate only on Tyler's Mac (0020
+// and against `baselines/frame.json` within 25% (0020 §9), through the shared `scripts/lib/
+// bench-gate.mjs` (gated only under the baseline's machine fingerprint; warn-only under SwiftShader) -- both gate only on Tyler's Mac (0020
 // §10: "Real-GPU rendering and timing runs happen only on Tyler's Mac"), so under the CI SwiftShader
 // adapter this test still runs and still prints its numbers, but a budget/baseline miss is a warning
 // there, the same convention `tests/wasm/worldgen-bench.test.ts` already uses for its own
 // machine-dependent ms/chunk figure.
-import { existsSync, readFileSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
+// @ts-expect-error -- plain .mjs helper without types (the repo's scripts)
+import { gate } from '../../../../scripts/lib/bench-gate.mjs'
 import type { TraceEvent } from './gc/analyse.ts'
 import { attachTunnelSessions } from './gc/sessions.ts'
 import { type AdapterInfo, expectAdapter, expectNoGpuErrors } from './support/gpu.ts'
@@ -49,7 +51,6 @@ const TRACE_CATEGORIES = ['v8', 'devtools.timeline', 'blink.user_timing']
 // worst-case view)".
 const MAIN_BUDGET_MS = 1.3
 const WORKER_BUDGET_MS = 2.7
-const BASELINE_TOLERANCE = 0.25
 
 // The one switch between "full" (real hardware, gates for real) and "smoke" (CI's own SwiftShader
 // adapter) mode -- known from the platform (the same env var CI's own workflow sets, `isSwiftShader`
@@ -70,18 +71,6 @@ const SMOKE_WARMUP_FRAMES = 5
 const SMOKE_TIMED_FRAMES = 20
 const WARMUP_FRAMES = isSwiftShader ? SMOKE_WARMUP_FRAMES : 120
 const TIMED_FRAMES = isSwiftShader ? SMOKE_TIMED_FRAMES : 300
-
-type Baseline = {
-  recordCount: number
-  frames: number
-  warmupFrames: number
-  measuredAt: string
-  conditions: string
-  mainMs: { p50: number; p95: number }
-  workerMs: { p50: number; p95: number }
-}
-
-const baselineUrl = new URL('../../baselines/frame.json', import.meta.url)
 
 function percentile(vals: readonly number[], p: number): number {
   if (vals.length === 0) return 0
@@ -287,11 +276,6 @@ test('bench.frame_worstcase @slow', async ({ page, browser }, testInfo) => {
   const workerP50 = percentile(workerMs, 0.5)
   const workerP95 = percentile(workerMs, 0.95)
 
-  const baselineExists = existsSync(baselineUrl)
-  const baseline = baselineExists
-    ? (JSON.parse(readFileSync(baselineUrl, 'utf8')) as Baseline)
-    : null
-
   // Named explicitly (not just `warmup=`/`swiftshader=`, both already printed) so a CI log's own
   // reader does not mistake a smoke run's own tiny numbers for a full one (CI round 1).
   const mode = isSwiftShader ? 'smoke' : 'full'
@@ -300,14 +284,10 @@ test('bench.frame_worstcase @slow', async ({ page, browser }, testInfo) => {
       `warmup=${WARMUP_FRAMES} timed=${TIMED_FRAMES} swiftshader=${isSwiftShader}`,
   )
   console.log(
-    `  main   p50=${mainP50.toFixed(3)}ms p95=${mainP95.toFixed(3)}ms budget<=${MAIN_BUDGET_MS}ms` +
-      (baseline ? ` baseline.p50=${baseline.mainMs.p50}ms (+/-${BASELINE_TOLERANCE * 100}%)` : ''),
+    `  main   p50=${mainP50.toFixed(3)}ms p95=${mainP95.toFixed(3)}ms budget<=${MAIN_BUDGET_MS}ms`,
   )
   console.log(
-    `  worker p50=${workerP50.toFixed(3)}ms p95=${workerP95.toFixed(3)}ms budget<=${WORKER_BUDGET_MS}ms` +
-      (baseline
-        ? ` baseline.p50=${baseline.workerMs.p50}ms (+/-${BASELINE_TOLERANCE * 100}%)`
-        : ''),
+    `  worker p50=${workerP50.toFixed(3)}ms p95=${workerP95.toFixed(3)}ms budget<=${WORKER_BUDGET_MS}ms`,
   )
 
   function assertOrWarn(actual: number, limit: number, label: string): void {
@@ -322,16 +302,16 @@ test('bench.frame_worstcase @slow', async ({ page, browser }, testInfo) => {
 
   assertOrWarn(mainP50, MAIN_BUDGET_MS, 'main p50 vs 0018 §9 desktop proxy')
   assertOrWarn(workerP50, WORKER_BUDGET_MS, 'worker p50 vs 0018 §9 desktop proxy')
-  if (baseline) {
-    assertOrWarn(
-      mainP50,
-      baseline.mainMs.p50 * (1 + BASELINE_TOLERANCE),
-      `main p50 vs baseline ${baseline.mainMs.p50}ms`,
-    )
-    assertOrWarn(
-      workerP50,
-      baseline.workerMs.p50 * (1 + BASELINE_TOLERANCE),
-      `worker p50 vs baseline ${baseline.workerMs.p50}ms`,
-    )
-  }
+  // The 25 % rule against `baselines/frame.json` (`bench-gate.mjs`: fingerprint-matched, throws on a
+  // gated miss; `warnOnly` under SwiftShader, whose own timings are never the baseline's).
+  gate(
+    'frame',
+    {
+      mainP50Ms: mainP50,
+      mainP95Ms: mainP95,
+      workerP50Ms: workerP50,
+      workerP95Ms: workerP95,
+    },
+    { warnOnly: isSwiftShader, suite: 'frame-bench' },
+  )
 })
