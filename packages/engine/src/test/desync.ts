@@ -4,21 +4,10 @@
 // `scope u32` (0 Chunk, 1 Global, 2 OwnPlayer), `cx i32`, `cy i32`, `host_hash u64`, `client_hash
 // u64`. `engine/test` only.
 import { RegionId, Status } from '../abi.js'
+import { DESYNC_SCOPES, type DesyncReport } from '../desync.js'
 import type { EngineInstance } from '../loader.js'
 
-export type DesyncScope = 'chunk' | 'global' | 'ownPlayer'
-
-export interface DesyncReport {
-  tick: number
-  scope: DesyncScope
-  /** The chunk; `(-2147483648, -2147483648)` for `global`/`ownPlayer`. */
-  cx: number
-  cy: number
-  /** 16-digit lowercase hex. */
-  hostHash: string
-  /** 16-digit lowercase hex; all zero on the host side (`ResyncChunk` carries only the coord). */
-  clientHash: string
-}
+export type { DesyncReport, DesyncScope } from '../desync.js'
 
 export interface DesyncLog {
   /** Reports ever recorded. */
@@ -26,8 +15,6 @@ export interface DesyncLog {
   /** The last (at most 16) reports, oldest first. */
   reports: DesyncReport[]
 }
-
-const SCOPES: DesyncScope[] = ['chunk', 'global', 'ownPlayer']
 
 export function readDesyncLog(
   inst: EngineInstance,
@@ -47,7 +34,7 @@ export function readDesyncLog(
     if (index >= retained) break
     out.reports.push({
       tick: v.getUint32(8, true),
-      scope: SCOPES[v.getUint32(12, true)] ?? 'chunk',
+      scope: DESYNC_SCOPES[v.getUint32(12, true)] ?? 'chunk',
       cx: v.getInt32(16, true),
       cy: v.getInt32(20, true),
       hostHash: inst.readU64Hex(RegionId.Result, 24),

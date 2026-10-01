@@ -24,6 +24,7 @@ import {
   SessionState,
   writeClockBlock,
 } from '../clock-block.js'
+import { type DesyncReport, readDesyncCounts, readDesyncReport } from '../desync.js'
 import type { EngineInstance, RegionView } from '../loader.js'
 import { readU32LE } from '../sab/bytes.js'
 import { CB_LINK_GEN, CB_LINK_STATE, WORKER_HOST } from '../sab/control.js'
@@ -111,6 +112,11 @@ export type NetPumpHandshake = {
    * pump: the host sees a `Hello` on a settled connection and re-handshakes it (`server.ts`,
    * `reopenOnHello`), so no redial is needed on either transport. */
   restart?: boolean
+  /** docs/plan/37-robustness-events.md step 4: called once per new entry of the instance's desync
+   * report ring (M31b), oldest first, right after the frame that recorded it was applied. Checking
+   * costs one allocation-free call after each applied frame; a report allocates (a rare event). A
+   * rebuilt instance starts a new ring and a new count. */
+  onDesync?: (report: DesyncReport) => void
 }
 
 /** `net/link.ts`'s own `LinkState.Up = 1`, mirrored the same numeric-parity way `sab/control.ts`'s
@@ -171,6 +177,10 @@ export function createNetPump(
     revealed: 0,
   }
   let live = false
+  const onDesync = handshake?.onDesync
+  // Preallocated (hot-paths.md): the ring's counters, and how many reports this pump has passed on.
+  const desyncCounts = { count: 0, retained: 0 }
+  let desyncSeen = 0
   if (handshake?.restart) {
     clockFields.sessionState = SessionState.Resyncing
     writeClockBlock(clockView, clockFields)
@@ -369,6 +379,17 @@ export function createNetPump(
       clockFields.tickFraction = tickFraction
       clockFields.revealed = revealed
       writeClockBlock(clockView, clockFields)
+    }
+    if (sawFrame && onDesync && readDesyncCounts(inst, inst.x.client_desync, desyncCounts)) {
+      if (desyncCounts.count > desyncSeen) {
+        // The ring keeps the last 16, oldest first: the new ones are its tail.
+        const fresh = Math.min(desyncCounts.count - desyncSeen, desyncCounts.retained)
+        desyncSeen = desyncCounts.count
+        for (let i = desyncCounts.retained - fresh; i < desyncCounts.retained; i++) {
+          const report = readDesyncReport(inst, inst.x.client_desync, i)
+          if (report) onDesync(report)
+        }
+      }
     }
   }
 

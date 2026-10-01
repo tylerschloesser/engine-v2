@@ -7,7 +7,12 @@
 // Query: `fixture` (default `puts`), `persist=1` plus `world=<id>` (OPFS, the sim-respawn and storage
 // tests), `flags=<json>` (`TestFlags`). Every global is `__rec*`-prefixed (the page programs share
 // one `Window` declaration space, `tests/browser/pages/tsconfig.json`).
-import { clientTestHandle, createClient, type FatalEvent } from '../../../../src/client.ts'
+import {
+  clientTestHandle,
+  createClient,
+  type DesyncReport,
+  type FatalEvent,
+} from '../../../../src/client.ts'
 import {
   CLOCK_FIELD,
   ClockBlockView,
@@ -57,6 +62,8 @@ declare global {
     __recDump?: (worldId: string) => Promise<Record<string, number[]>>
     __recSimWorkers?: () => number
     __recSimRespawns?: () => number
+    __recDesyncs?: () => DesyncReport[]
+    __recCorrupt?: (cx: number, cy: number) => Promise<number>
   }
 }
 
@@ -94,6 +101,10 @@ client.onResyncing(() => {
 })
 client.onFatal((e) => {
   fatal.push(e)
+})
+const desyncs: DesyncReport[] = []
+client.onDesync((r) => {
+  desyncs.push(r)
 })
 
 await pumpUntilLive(client)
@@ -209,6 +220,14 @@ window.__recDump = (id) =>
     }
     worker.postMessage({ worldId: id })
   })
+window.__recDesyncs = () => desyncs.slice()
+// M31b's fault injection: flips one replica byte of the held chunk (Status.Ok = 0, NotCached else).
+window.__recCorrupt = async (cx, cy) => {
+  await parkWorkers(client)
+  const { value } = await callParked(client, 'client', 'client_corrupt_chunk', [cx, cy], 0)
+  await resumeWorkers(client)
+  return value
+}
 window.__recSimRespawns = () => handle.simRespawns()
 window.__recSimWorkers = () => handle.workers.filter((w) => w.kind === 'sim').length
 

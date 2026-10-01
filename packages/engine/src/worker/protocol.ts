@@ -1,6 +1,7 @@
 // Messages between `client.ts` (main) and `worker.ts`'s `run()` (docs/plan/06b-workers-and-spawn.md,
 // Seams: "the only steady use of postMessage besides fatal and resume"). Types only, erased at
 // compile time.
+import type { DesyncReport } from '../desync.js'
 import type { IdentityJson } from '../host/persistence.js'
 import type { IncompatReasonName } from '../host/upgrade.js'
 import type { InstanceConfig } from '../loader.js'
@@ -256,6 +257,7 @@ export const POST_SETUP_MESSAGE_TYPES: readonly string[] = [
   'client-resyncing',
   'client-configured',
   'client-trapped',
+  'client-desync',
   'sim-fatal',
   'link',
 ]
@@ -327,6 +329,9 @@ export type ClientLifecycleMessage =
    * `onResyncing` and counts it for the loop guard (two within 10 s of the injected clock is fatal).
    * Posted at most once per trap. */
   | { type: 'client-trapped'; message: string }
+  /** docs/plan/37-robustness-events.md step 4: one entry of the client instance's desync report
+   * ring (M31b), forwarded to `Client.onDesync` listeners, once per report. */
+  | { type: 'client-desync'; report: DesyncReport }
 
 /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: main -> sim worker, parked-only (like
  * `TestCallMessage`, whose own doc comment gives the reason: a worker blocked in `Atomics.wait`

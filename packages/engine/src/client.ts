@@ -1,6 +1,7 @@
 // Main-thread entrypoint (`engine`): `createClient`'s spawn path (docs/plan/06b-workers-and-spawn.md).
 // Checks isolation, compiles the module once, creates the `SabSet`, spawns the worker set for the
 // chosen topology, and posts each worker its `Module` (or `wasmUrl`), its SABs and its config.
+
 import { CameraBlockView, writeCameraBlock } from './camera/block.js'
 import type { CameraInput, CameraIntegrator, MoveToOptions, Rect } from './camera/camera.js'
 import { createCameraIntegrator } from './camera/camera.js'
@@ -12,6 +13,7 @@ import { hexEncode, loadOrMintSecret } from './client/secret.js'
 import type { Clock, Scheduler } from './clock.js'
 import { systemClock, systemScheduler } from './clock.js'
 import { CLOCK_FIELD, ClockBlockView, readClockBlockInto, SessionState } from './clock-block.js'
+import type { DesyncReport } from './desync.js'
 import type { IdentityJson } from './host/persistence.js'
 import type { IncompatReasonName } from './host/upgrade.js'
 import { installBlurAndVisibilityReset } from './input/focus.js'
@@ -257,6 +259,8 @@ export interface ClientOptions {
  * `HostServices.onFatal`'s (0024 §5). */
 export type FatalEvent = { tick: number; message: string }
 
+export type { DesyncReport } from './desync.js'
+
 /** Why the renderer gave up (0018 §8). */
 export type RendererLostReason = 'no-adapter' | 'repeated-loss'
 
@@ -327,6 +331,16 @@ export interface Client {
    * per-event subscription in the style of `onUi`; returns an unsubscribe function. On a server the
    * same event reaches `HostServices.onFatal`. */
   onFatal(cb: (e: FatalEvent) => void): () => void
+  /** docs/plan/37-robustness-events.md (0013 "Per-chunk desync hashes", M31b): this client's replica
+   * disagreed with the host's hash of a chunk, `Global` or its own player. Called once per report,
+   * in order, right after the frame that carried the hash (the report ring's entry:
+   * `{ tick, scope, cx, cy, hostHash, clientHash }`); the engine has already asked for the resync,
+   * and the connection stays up. A report the ring recorded before the callback was added is not
+   * replayed. Linked topologies only (the client worker has a host to compare with: a connected local
+   * world or a multiplayer one). The
+   * host-side twin is a counter on the server's stats, not an event. A per-event subscription in
+   * the style of `onUi`; returns an unsubscribe function. */
+  onDesync(cb: (r: DesyncReport) => void): () => void
   /** docs/plan/37b-device-loss.md (0018 §8): fires once when the renderer gave up recovering --
    * `'no-adapter'` (the rebuild found no adapter) or `'repeated-loss'` (a second device loss within
    * 10 s of the previous one, on the injected clock). The renderer then makes no further attempt;
@@ -929,7 +943,8 @@ function setupWorker(
         m.type === 'client-welcome' ||
         m.type === 'client-resyncing' ||
         m.type === 'client-configured' ||
-        m.type === 'client-trapped'
+        m.type === 'client-trapped' ||
+        m.type === 'client-desync'
       ) {
         // Real bug found (Deviations): this used to check only `'client-welcome'`, so a linked
         // client worker's own `client-resyncing` message (M28b, `worker/client-net.ts`'s
@@ -1058,6 +1073,9 @@ export function createClient(options: ClientOptions): Client {
         throw err
       },
       onFatal(): () => void {
+        throw err
+      },
+      onDesync(): () => void {
         throw err
       },
       onRendererLost(): () => void {
@@ -1512,6 +1530,18 @@ export function createClient(options: ClientOptions): Client {
     }
   }
 
+  // docs/plan/37-robustness-events.md step 4: `client.onDesync`, fed by the client worker's
+  // `client-desync` message (one per report of the instance's ring).
+  const desyncListeners: Array<(r: DesyncReport) => void> = []
+
+  function onDesync(cb: (r: DesyncReport) => void): () => void {
+    desyncListeners.push(cb)
+    return () => {
+      const i = desyncListeners.indexOf(cb)
+      if (i >= 0) desyncListeners.splice(i, 1)
+    }
+  }
+
   // docs/plan/37b-device-loss.md: `client.onRendererLost`, raised by `GpuHost` (0018 §8).
   const rendererLostListeners: Array<(e: { reason: RendererLostReason }) => void> = []
 
@@ -1886,6 +1916,10 @@ export function createClient(options: ClientOptions): Client {
     }
     if (m.type === 'client-trapped') {
       onClientTrapped(m)
+      return
+    }
+    if (m.type === 'client-desync') {
+      for (const l of desyncListeners.slice()) l(m.report)
       return
     }
     cameraIntegrator.setViewClamp(m.viewMaxTilesPerAxis)
@@ -2410,6 +2444,7 @@ export function createClient(options: ClientOptions): Client {
     onStorage,
     onResyncing,
     onFatal,
+    onDesync,
     onRendererLost,
     raiseRendererLost,
     onLink,

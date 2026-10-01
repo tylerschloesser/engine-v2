@@ -229,6 +229,11 @@ function assemble(
           onWorldMismatch: () => {
             shell.fatal('WorldMismatch: a Welcome for a different world than this client joined')
           },
+          // docs/plan/37-robustness-events.md step 4: a new entry in the instance's desync report
+          // ring (M31b): one `client-desync` message per report, a rare event, so `client.onDesync`.
+          onDesync: (report) => {
+            shell.post({ type: 'client-desync', report })
+          },
           onAttached: (info) => {
             shell.post({
               type: 'client-welcome',

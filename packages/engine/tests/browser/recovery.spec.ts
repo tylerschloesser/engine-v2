@@ -4,6 +4,7 @@
 // single-player topology on stepped frames and ticks and an injected clock: nothing here sleeps.
 // Chromium only (nothing is renderer-specific). Gen-role traps: `gen-trap.spec.ts`.
 import { expect, test } from '@playwright/test'
+import type { DesyncReport } from '../../src/client.js'
 import { importWorld } from '../../src/storage/archive.js'
 import { memoryStorage } from '../../src/storage/memory.js'
 import { replayWorld } from '../../src/test.js'
@@ -34,6 +35,8 @@ declare global {
     __recDump?: (worldId: string) => Promise<Record<string, number[]>>
     __recSimWorkers?: () => number
     __recSimRespawns?: () => number
+    __recDesyncs?: () => DesyncReport[]
+    __recCorrupt?: (cx: number, cy: number) => Promise<number>
   }
 }
 
@@ -246,4 +249,42 @@ test('fatal: storage error', async ({ page }) => {
     .toEqual({ Rejected: { Engine: 'EngineFault' } })
   expect(await page.evaluate(() => window.__recSimTicks?.())).toBe(ticksAtFatal)
   expect(await page.evaluate((id) => window.__recDump?.(id), worldId)).toEqual(filesAtFatal)
+})
+
+test('desync: onDesync fires once per report', async ({ page }) => {
+  // M31b's `client_corrupt_chunk` on a linked page (production hash cadence: one chunk every 4
+  // ticks): the sweep reaches the flipped chunk, the client reports it, asks for the resync and
+  // heals. `client.onDesync` is called once, with a report naming the chunk; the healed chunk's
+  // next sweep is clean and calls nothing.
+  await openPage(page, recoveryUrl({ fixture: 'puts' }))
+  await page.evaluate(() => window.__recAdvance?.(0, 0, 32, 8))
+  const before = await page.evaluate(() => window.__recDesyncs?.())
+  expect(before, 'a clean session reports nothing').toEqual([])
+
+  expect(await page.evaluate(() => window.__recCorrupt?.(0, 0)), 'chunk (0,0) is held').toBe(0)
+  await expect
+    .poll(
+      async () => {
+        await page.evaluate(() => window.__recAdvance?.(0, 0, 32, 8))
+        return (await page.evaluate(() => window.__recDesyncs?.()))?.length
+      },
+      { timeout: 20_000 },
+    )
+    .toBe(1)
+  const [report] = (await page.evaluate(() => window.__recDesyncs?.())) ?? []
+  expect(report?.scope).toBe('chunk')
+  expect([report?.cx, report?.cy]).toEqual([0, 0])
+  expect(report?.hostHash).toMatch(/^[0-9a-f]{16}$/)
+  expect(report?.clientHash).toMatch(/^[0-9a-f]{16}$/)
+  expect(report?.clientHash).not.toBe(report?.hostHash)
+
+  // The resync healed it: the replica matches the host, and two further sweeps report nothing.
+  await page.evaluate(() => window.__recAdvance?.(0, 0, 32, 8))
+  const hashes = await page.evaluate(() => window.__recHashes?.())
+  expect(hashes?.replica).toBe(hashes?.host)
+  for (let i = 0; i < 20; i++) await page.evaluate(() => window.__recAdvance?.(0, 0, 32, 8))
+  expect(
+    await page.evaluate(() => window.__recDesyncs?.()),
+    'a healed chunk fires nothing',
+  ).toHaveLength(1)
 })
