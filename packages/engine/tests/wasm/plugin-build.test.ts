@@ -37,7 +37,7 @@ test('plugin: default profile follows the Vite command', async () => {
 
 describe('plugin-build', () => {
   let outDir: string
-  let server: PreviewServer
+  let server: PreviewServer | undefined
   let base: string
 
   beforeAll(async () => {
@@ -57,10 +57,13 @@ describe('plugin-build', () => {
     const port = (server.httpServer?.address() as AddressInfo | null)?.port
     if (port === undefined) throw new Error('plugin-build: preview server has no address')
     base = `http://localhost:${port}`
-  })
+    // A real release cargo build of `fx-hash` (the `fixtures` step pre-builds dev only): seconds
+    // with a warm target, longer cold, which CI hit after M35 changed the root profiles (red at
+    // `M35 done`: 10 s default hook timeout). Same bound as the other cargo-building hooks.
+  }, 240_000)
 
   afterAll(async () => {
-    await server.close()
+    await server?.close()
     await rm(outDir, { recursive: true, force: true })
   })
 
