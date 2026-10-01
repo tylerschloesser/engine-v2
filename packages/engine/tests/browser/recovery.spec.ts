@@ -18,6 +18,8 @@ declare global {
     __recFrames?: (n: number, dtMs?: number) => Promise<void>
     __recAdvanceClock?: (ms: number) => void
     __recStepSim?: (n: number) => Promise<void>
+    __recUntilRespawned?: (n: number) => Promise<void>
+    __recStaleReports?: (n: number) => Promise<void>
     __recDispatch?: (action: unknown) => number
     __recResults?: () => [number, unknown][]
     __recEvents?: () => { resyncing: number; fatal: FatalEvent[] }
@@ -31,6 +33,7 @@ declare global {
     __recExport?: () => Promise<number[]>
     __recDump?: (worldId: string) => Promise<Record<string, number[]>>
     __recSimWorkers?: () => number
+    __recSimRespawns?: () => number
   }
 }
 
@@ -112,4 +115,135 @@ test('fatal: two client traps', async ({ page }) => {
         (await page.evaluate(() => window.__recResults?.()))?.find(([s]) => s === seq)?.[1],
     )
     .toEqual({ Rejected: { Engine: 'EngineFault' } })
+})
+
+const PAINTS: [number, number][] = [
+  [2, 2],
+  [3, 3],
+  [4, 4],
+]
+
+/** Dispatches one `Paint` per entry of `PAINTS`, runs three ticks and waits for every result. */
+async function paintAndConfirm(page: Page): Promise<number[]> {
+  const seqs: number[] = []
+  for (const [x, y] of PAINTS) {
+    const seq = await page.evaluate(
+      ([px, py]) =>
+        window.__recDispatch?.({ Paint: { pos: { x: px, y: py }, base: 1, resource: 0 } }),
+      [x, y],
+    )
+    seqs.push(seq as number)
+  }
+  await page.evaluate(() => window.__recAdvance?.(0, 0, 32, 3))
+  await expect
+    .poll(async () => {
+      const results = (await page.evaluate(() => window.__recResults?.())) ?? []
+      return seqs.filter((s) => results.some(([r, v]) => r === s && v === 'Confirmed')).length
+    })
+    .toBe(seqs.length)
+  return seqs
+}
+
+test('sim worker death respawns and resyncs', async ({ page }) => {
+  const worldId = `death-${test.info().workerIndex}-${Date.now()}`
+  const KILL_AT = 40
+  const KILL_AGAIN_AT = 90
+  await openPage(
+    page,
+    recoveryUrl({
+      fixture: 'puts',
+      persist: '1',
+      world: worldId,
+      // The respawned worker gets the entries not yet used, so it dies once more at the second tick.
+      flags: JSON.stringify({ killSimWorkerAtTick: [KILL_AT, KILL_AGAIN_AT] }),
+    }),
+  )
+  await paintAndConfirm(page)
+  // The world as the host has it, with every admitted action in it, before the worker dies.
+  const before = await page.evaluate(() => window.__recWorldHashAndTick?.())
+  if (!before) throw new Error('no world hash')
+  expect(before.tick).toBeLessThan(KILL_AT)
+
+  // Ticks past `killSimWorkerAtTick`: the sim worker ends (as an uncaught error would end it). Main
+  // replaces it from the kept `Module`; start-up is the ordinary load path (snapshot and log tail).
+  await page.evaluate((n) => window.__recStepSim?.(n), KILL_AT - before.tick + 2)
+  // The client keeps sending camera reports meanwhile (more than the 8 a connection may send before its
+  // `Hello`): the new worker's connection drops them, up to the `Hello`.
+  await page.evaluate(() => window.__recStaleReports?.(12))
+  await page.evaluate(() => window.__recUntilRespawned?.(1))
+  // The new sim knows no session: the client says `Hello` again, the answer is a second `Welcome`
+  // at the bumped epoch (`onResyncing`), and the replica is rebuilt from the host.
+  await page.evaluate(() => window.__recPumpUntilOnline?.(1))
+  await page.evaluate(() => window.__recAdvance?.(0, 0, 32, 3))
+
+  expect((await events(page))?.fatal).toEqual([])
+  expect(await page.evaluate(() => window.__recSimWorkers?.())).toBe(1)
+  const hashes = await page.evaluate(() => window.__recHashes?.())
+  expect(hashes?.replica).toBe(hashes?.host)
+
+  // No admitted action lost, by log comparison: the stored log, replayed to the tick the world had
+  // reached before the death, gives the very hash the host reported then.
+  const bytes = await page.evaluate(() => window.__recExport?.())
+  if (!bytes) throw new Error('export returned nothing')
+  const storage = memoryStorage()
+  await importWorld(storage, new Uint8Array(bytes), { worldId })
+  const { wasm } = await loadFixture('puts')
+  const replayed = await replayWorld({ wasm, storage, worldId, checkpoints: [before.tick] })
+  expect(replayed[0]?.hash).toBe(before.hash)
+
+  // The epoch bumped (0005 Panic recovery 2): the manifest on disk says so.
+  const dump = await page.evaluate((id) => window.__recDump?.(id), worldId)
+  const manifest = JSON.parse(
+    new TextDecoder().decode(new Uint8Array(dump?.[`worlds/${worldId}/manifest`] ?? [])),
+  ) as { epoch: number }
+  expect(manifest.epoch).toBeGreaterThanOrEqual(1)
+
+  // Loop guard (0005 Panic recovery 3-4): a second death within 10 s of injected time is fatal, not
+  // another respawn.
+  await page.evaluate((n) => window.__recStepSim?.(n), KILL_AGAIN_AT)
+  await expect.poll(async () => (await events(page))?.fatal.length).toBe(1)
+  expect((await events(page))?.fatal[0]?.message).toMatch(/sim worker died twice within 10 s/)
+  expect(await page.evaluate(() => window.__recSimRespawns?.())).toBe(1)
+})
+
+test('fatal: storage error', async ({ page }) => {
+  const worldId = `storage-${test.info().workerIndex}-${Date.now()}`
+  const FAIL_AT = 12
+  await openPage(
+    page,
+    recoveryUrl({
+      fixture: 'puts',
+      persist: '1',
+      world: worldId,
+      flags: JSON.stringify({ failStorageAtTick: FAIL_AT }),
+    }),
+  )
+  await paintAndConfirm(page)
+  const before = await page.evaluate(() => window.__recWorldHashAndTick?.())
+  expect(before?.tick ?? FAIL_AT).toBeLessThan(FAIL_AT)
+
+  // The world has run `FAIL_AT` ticks: its storage reports a failed write (`Storage.onError`, 0005
+  // Storage: a failed or lost write is fatal to the world). `onFatal`, not a respawn.
+  await page.evaluate((n) => window.__recStepSim?.(n), FAIL_AT - (before?.tick ?? 0) + 2)
+  await expect.poll(async () => (await events(page))?.fatal.length).toBe(1)
+  const fatal = (await events(page))?.fatal[0]
+  expect(fatal?.message).toMatch(/storage error: .*failStorageAtTick/)
+  expect(fatal?.tick).toBeGreaterThanOrEqual(FAIL_AT)
+  expect(await page.evaluate(() => window.__recSimRespawns?.())).toBe(0)
+
+  // From here on nothing touches a file and nothing ticks, and `dispatch` is a rejection.
+  const filesAtFatal = await page.evaluate((id) => window.__recDump?.(id), worldId)
+  expect(Object.keys(filesAtFatal ?? {}).length).toBeGreaterThan(0)
+  const ticksAtFatal = await page.evaluate(() => window.__recSimTicks?.())
+  const seq = await page.evaluate(() =>
+    window.__recDispatch?.({ Paint: { pos: { x: 9, y: 9 }, base: 1, resource: 0 } }),
+  )
+  await expect
+    .poll(
+      async () =>
+        (await page.evaluate(() => window.__recResults?.()))?.find(([s]) => s === seq)?.[1],
+    )
+    .toEqual({ Rejected: { Engine: 'EngineFault' } })
+  expect(await page.evaluate(() => window.__recSimTicks?.())).toBe(ticksAtFatal)
+  expect(await page.evaluate((id) => window.__recDump?.(id), worldId)).toEqual(filesAtFatal)
 })

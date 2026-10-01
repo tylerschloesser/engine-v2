@@ -41,6 +41,8 @@ declare global {
     __recFrames?: (n: number, dtMs?: number) => Promise<void>
     __recAdvanceClock?: (ms: number) => void
     __recStepSim?: (n: number) => Promise<void>
+    __recUntilRespawned?: (n: number) => Promise<void>
+    __recStaleReports?: (n: number) => Promise<void>
     __recDispatch?: (action: unknown) => number
     __recResults?: () => [number, unknown][]
     __recEvents?: () => { resyncing: number; fatal: FatalEvent[] }
@@ -54,6 +56,7 @@ declare global {
     __recExport?: () => Promise<number[]>
     __recDump?: (worldId: string) => Promise<Record<string, number[]>>
     __recSimWorkers?: () => number
+    __recSimRespawns?: () => number
   }
 }
 
@@ -150,6 +153,25 @@ window.__recPumpUntilOnline = async (minResyncing) => {
   }
   throw new Error(`recovery: not online again after 400 steps (resyncing ${resyncing})`)
 }
+// Waits (macrotask polls, bounded) for the n-th replacement of the sim worker to report `ready`: only
+// then is it safe to step the new sim (the old one never acks again).
+window.__recUntilRespawned = async (n) => {
+  for (let i = 0; i < 2000; i++) {
+    if (handle.simRespawns() >= n || fatal.length > 0) return
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  throw new Error(`recovery: the sim worker was not respawned (${handle.simRespawns()})`)
+}
+// `n` camera reports pushed to the uplink while the sim worker is down (each frame moves the camera
+// and is 100 ms of manual time, past the 50 ms report limit): what a real client keeps sending between the
+// death and the new worker's first `Hello`.
+window.__recStaleReports = async (n) => {
+  await resumeWorkers(client)
+  for (let i = 0; i < n; i++) {
+    setCamera(client, { x: 100 + i * 7, y: 0, tilesAcross: 32 })
+    stepFrame(client, 100)
+  }
+}
 window.__recHashes = async () => {
   await parkWorkers(client)
   const replica = await replicaHash(client)
@@ -187,6 +209,7 @@ window.__recDump = (id) =>
     }
     worker.postMessage({ worldId: id })
   })
+window.__recSimRespawns = () => handle.simRespawns()
 window.__recSimWorkers = () => handle.workers.filter((w) => w.kind === 'sim').length
 
 window.__pageReady = true

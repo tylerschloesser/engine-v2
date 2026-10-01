@@ -639,6 +639,9 @@ export interface ClientTestHandle {
    * (including whatever park/unpark it does around the host worker) before the other runs, so the
    * two families are never interleaved on the same worker. */
   hostWorkerLock<T>(fn: () => Promise<T>): Promise<T>
+  /** docs/plan/37-robustness-events.md step 2: how many times a dead sim worker has been replaced and
+   * the new one reported `ready` (the client has been told to say `Hello` again at that point). */
+  simRespawns(): number
 }
 
 const handles = new WeakMap<Client, ClientTestHandle>()
@@ -1567,6 +1570,7 @@ export function createClient(options: ClientOptions): Client {
   let lastClientTrapMs: number | null = null
   let lastSimDeathMs: number | null = null
   let simDeaths = 0
+  let simRespawnsDone = 0
 
   function onClientTrapped(m: { message: string }): void {
     for (const l of resyncingListeners.slice()) l()
@@ -1611,7 +1615,11 @@ export function createClient(options: ClientOptions): Client {
       raiseFatal(`the sim worker died and the world is not persisted: ${why}`)
       return
     }
-    // Terminating releases the world's Web Lock; the new worker's own lock request retries briefly.
+    // Terminating releases the world's Web Lock. A worker that ended with `shell.fatal` still sits in
+    // `Atomics.wait`, which a termination does not interrupt (Chromium kills such a thread after 2 s):
+    // wake it first so its loop sees it is finished and returns, and the termination is immediate.
+    Atomics.store(control.words, workerWord(entry.index, W_YIELD), 1)
+    control.wake(entry.index)
     entry.worker.terminate()
     workers.splice(workers.indexOf(entry), 1)
     for (const word of [W_YIELD, W_PARKED, W_READY]) {
@@ -1626,6 +1634,7 @@ export function createClient(options: ClientOptions): Client {
       raiseFatal(`the sim worker could not be respawned: ${errorMessage(e)}`)
       return
     }
+    simRespawnsDone++
     // The new sim end knows no session. A change of `CB_LINK_GEN` makes the client worker send
     // `Hello` again (warm, with its resume hint); the answer is a second `Welcome` at the bumped
     // epoch, the same resync a reconnect takes.
@@ -2440,6 +2449,7 @@ export function createClient(options: ClientOptions): Client {
     genWorkersUp: genUp,
     uiDrainStats: () => ({ recordsSeen: uiRecordsSeenTotal, onUi: onUiFiredTotal }),
     hostWorkerLock,
+    simRespawns: () => simRespawnsDone,
   })
   return client
 }

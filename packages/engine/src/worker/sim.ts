@@ -115,8 +115,7 @@ function tryAcquireWorldLock(worldId: string): Promise<boolean> {
  * budget, and passed unchanged after this fix, `pnpm test browser` x2 plus a 5x repeat). What changes
  * is only the *reload* case: there, the "holder" is a worker already mid-teardown with nothing left
  * to hold the lock for, so it clears within the retry window instead of never. */
-async function requestWorldLock(worldId: string): Promise<boolean> {
-  const attempts = 5
+async function requestWorldLock(worldId: string, attempts = 5): Promise<boolean> {
   const retryDelayMs = 50
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (await tryAcquireWorldLock(worldId)) return true
@@ -358,7 +357,10 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
 
   if (message.world) {
     const world = message.world
-    const locked = await requestWorldLock(world.worldId)
+    // A respawned worker (docs/plan/37-robustness-events.md step 2) takes the lock the dead one held:
+    // main terminated it a moment ago, and the browser releases the lock when that thread is gone,
+    // which is not instant. Wait up to 3 s (a held lock of a live second tab is still reported).
+    const locked = await requestWorldLock(world.worldId, message.respawn === true ? 60 : 5)
     if (!locked) {
       shell.post({
         type: 'start-failed',
