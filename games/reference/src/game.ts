@@ -93,6 +93,10 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
     ...(opts.test ? { test: opts.test } : {}),
   }
   const client: Client = createClient(options)
+  // A refused start (`world-busy`, `save-incompatible`) rejects `client.ready` while the GPU setup
+  // below is still awaited, before the caller attaches its own handler: mark it handled here so it
+  // is never an unhandled rejection. The caller still sees the rejection through `client.ready`.
+  client.ready.catch(() => {})
   // M37b: every GPU object (device, terrain pipeline and art, and M33c's drawables pass: the
   // client's DrawList drawn in the terrain renderer's own pass, which loads `assets.sprites`) lives
   // in one `GpuResources` owned by the host, which rebuilds it after a WebGPU device loss.
