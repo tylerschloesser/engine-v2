@@ -18,6 +18,9 @@ disallowed_types = "deny"
 # dependencies, so the `engine` crate builds at the dev opt-level (0024 §13).
 [profile.dev]
 opt-level = 1
+# M35 (0045 §3): line tables only. Panic file:line (0014 §6) needs no more; the dev module of the
+# reference game shrinks from 19.0 MB to 7.3 MB and a one-line-edit rebuild gets no slower.
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3

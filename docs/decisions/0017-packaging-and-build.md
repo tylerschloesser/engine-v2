@@ -1,6 +1,6 @@
 # 0017: Packaging and build
 
-Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §13. §10's Bun row amended by [0044](0044-bun-1-4-2.md).
+Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §13. §10's Bun row amended by [0044](0044-bun-1-4-2.md). Amended by [0045](0045-build-profiles-measured.md) (the Phase 3 measurements; `./render` in §2).
 
 ## Context
 

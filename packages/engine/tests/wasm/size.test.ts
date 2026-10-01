@@ -127,6 +127,10 @@ test('size @slow: reference game.wasm brotli is under the fail budget (warn reco
 
 test('size @slow: engine JS the browser downloads is within size.engineJsBrotli', () => {
   const total = sum(measured.browserJs, 'brotli')
+  const exact = budget('size.engineJsBrotliExact')
+  console.log(
+    `size: engine JS ${total} B brotli (recorded ${exact}, ${total - exact >= 0 ? '+' : ''}${total - exact})`,
+  )
   expect(
     total,
     `engine JS brotli 11 (client + render + worker, minified): ${measured.browserJs

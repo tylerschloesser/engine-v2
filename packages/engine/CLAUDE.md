@@ -4,18 +4,21 @@ The one publishable package (working name `engine`, private for now). Layout and
 
 ## Layout
 
-- `src/abi.ts` mirrors the ABI registry; `src/loader.ts` (`instantiate`, internal) is the one loader for every runtime. `build-game.ts`: `buildGame()` (`engine/vite`); `server-node.ts`: `engine/server/node`; `server-bun.ts` / `server-deno.ts`: `engine/server/bun` / `/deno`. Adapter parity: `engine/server/{node,bun,deno}` export parallel names (`server adapters export parity`): `loadGame`, `fsStorage`, `<runtime>HostServices`, and one attachment (`attachWebSocketServer`, `bunHandlers(server)` for `Bun.serve`, `denoHandler(server)` for `Deno.serve`). Keep them parallel: a new export goes in all three or the test says why not. `fsStorage`/`loadGame` are the one `node:fs` implementation (Bun and Deno implement `node:fs`); `server-host-services.ts` is the shared body; `Bun.`/`Deno.` appear only in their own adapter; runtime types are local structural interfaces. Tests: `bun-adapter loopback` (Bun leg of `wasm`, scenario in `tests/wasm/adapter-loopback.mjs`) and `deno-adapter @slow` (runs `deno run --allow-read=<game dir>,<scratch> --allow-write=<scratch> --allow-net=127.0.0.1 tests/wasm/deno-adapter.mjs`; no `deno` on `PATH` prints `deno-missing` and passes, `REQUIRE_DENO=1` fails instead; CI sets it, Deno version in `.github/workflows/ci.yml`). Bun is pinned at 1.4.2 (0044): 1.3.8 was killed by SIGTRAP about 10 s after any `WebAssembly.compile` on this machine.
+- `src/abi.ts` mirrors the ABI registry; `src/loader.ts` (`instantiate`, internal) is the one loader for every runtime. `build-game.ts`: `buildGame()` (`engine/vite`); `server-node.ts` / `server-bun.ts` / `server-deno.ts`: `engine/server/{node,bun,deno}`, parallel exports (`server adapters export parity`: `loadGame`, `fsStorage`, `<runtime>HostServices`, one attachment): a new export goes in all three or the test says why not. `fsStorage`/`loadGame` are the one `node:fs` implementation; `server-host-services.ts` is the shared body; `Bun.`/`Deno.` appear only in their own adapter. Tests: `bun-adapter loopback` (`wasm` suite, `tests/wasm/adapter-loopback.mjs`) and `deno-adapter @slow` (no `deno` on `PATH`: prints `deno-missing`, passes; `REQUIRE_DENO=1` fails). Bun is pinned at 1.4.2 (0044).
 - `src/client.ts`: `createClient()`, main thread, never instantiates WASM (`main.no_wasm_instantiate`). `src/worker.ts`: one script for every worker kind (`src/worker/*.ts`) and one blocking-loop shell (`worker/shell.ts`); after setup, `postMessage` carries only `ready`/`fatal`/`resume`/`stop` (0015 §2).
 - `src/render/` (0018); `src/camera/`, `src/input/`, `src/overlay/` (0019); `frame-loop.ts`: the per-rAF phase list. `src/net/link.ts`: the client's dead-timer/probe/backoff machine. `src/host/handshake.ts`'s `CloseCode` is the only signal a non-parsing net worker acts on; `src/host/sessions.ts`: session table; `src/client/secret.ts`: `loadOrMintSecret()`.
 - `scripts/` (repo-only, plain Node): `build-fixtures.mjs` (`pnpm test`'s `fixtures` step), `golden.mjs` (`pnpm golden`); both import `dist/`, so run after `tsc`. `tsconfig.json` adds `lib: dom` only because `lib.dom`/`lib.webworker` declare `WebAssembly`; keep `loader.ts` and `abi.ts` free of DOM-only globals (they also run in Node, Bun, workerd).
 
-## Worldgen
+## Packaging (M35, 0017 §8, 0045)
 
-Rust (`engine::worldgen`, `engine::noise`; 0008 §1). Cross-runtime proof: `tests/support/scenario.ts`'s `kind: 'worldgen'` branch and `fixtures/worldgen`'s golden.
+- `exports-map` (unit) pins `package.json`'s map, `files`, `dist` having no orphan file (`build` cleans it first), the pack list, and the **shipped crate manifest: no `workspace = true` anywhere** (no workspace root exists in `node_modules`; version, edition, lints are literal and tracked against the root). `./render` is a real subpath (0034, kept).
+- `pnpm test:slow browser -t tarball-install`: `tests/support/scratch-app.ts` (`createScratchApp`) packs, installs with `--ignore-workspace` under `<tmpdir>/engine-tarball-test/` (never in the repo; cargo target kept in `<tmpdir>/engine-tarball-target/`) and drives dev, build + preview, a `link:` install and a Node and Bun server leg. Template: `tests/browser/packaging/scratch-app/`.
+- Pattern B recipe: `worker.ts` = `import { run } from 'engine/worker'; run()`, plus `createClient({ createWorker: () => new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' }) })`.
+- `pnpm test:slow wasm -t "size @slow|ts-rs|release |wasm-opt"`: sizes in `test-results/wasm/size.json` (`run-tests` skill), budgets `budgets.json` `size.*`, the `release-names` profile, release-only behaviour on `fx-hash`. `REQUIRE_WASM_OPT=1` makes a missing `wasm-opt` fail (CI).
 
-## Gen workers and the client queue
+## Worldgen, gen workers
 
-`worker/gen.ts` (gen role) and `worker/client-gen.ts` (the client's pump) move `genRequest`/`genResult` records (layout: `src/sab/layout.ts`); Rust side: `GenQueue`, `TerrainFeed` (0008 §4–5; M08b).
+Rust `engine::worldgen`/`engine::noise` (0008 §1); cross-runtime proof: `tests/support/scenario.ts` `kind: 'worldgen'` and `fixtures/worldgen`'s golden. `worker/gen.ts` and `worker/client-gen.ts` move `genRequest`/`genResult` records (`src/sab/layout.ts`); Rust: `GenQueue`, `TerrainFeed` (0008 §4–5).
 
 ## Rendering, camera and input
 
@@ -48,12 +51,9 @@ Rules in force; the rest: briefs 09, 09b, 11, 17b, 18, `docs/plan/device-checks.
 - `unit`: `*.test.ts` beside the source in `src/`; import `test`/`expect` from `vitest`. `wasm`, `netcode`, `browser`: `tests/<suite>/`. Helpers: `tests/support/` (`scenario.ts` imports only `src/abi.ts` at runtime, so it loads unbuilt).
 - Fixture crates: `fixtures/` (`fixtures/CLAUDE.md`). `tests/` and `fixtures/` are unpublished. Slow tier: `@slow` in the title. New suites and build steps are registered in `scripts/suites.mjs` only.
 
-## Browser test pages
+## Browser test pages and specs
 
 `tests/browser/pages/` (default fixture `hash`, `profile: 'dev'`): add `<name>.html` plus `src/<name>.ts`. Other fixtures load through `fixtureWasm(name)`; `wiring.html` and `gc-loop.html` keep the real virtual module tested. A page ends with `window.__pageReady = true`, which `openPage` waits for. Port: `ENGINE_TEST_PORT` (default 4517).
-
-## Adding a browser spec
-
 - `tests/browser/*.spec.ts`: `test`/`expect` from `@playwright/test`, `openPage` from `./support/page.js` (fails on any page or console error). `@engines` in a title adds WebKit and Firefox, `pnpm test:slow` only (0020 §4); `@slow` moves a test there.
 - Drive `window.__harness` via `engine/test` (contract: `src/test/harness.ts`; real-client counterparts: `src/test/client.ts`). Call `parkWorkers` before any CDP call into a worker (a blocked worker receives none); a production-topology page parks right after `client.ready`, before `__pageReady`.
 - `stepFrame` writes a viewport into the camera block (the client canvas's `width` x `height`; override with `setViewport(client, w, h)`), so a stepped page's `FrameView::px_per_tile()` is real, not 0.

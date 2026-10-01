@@ -1,10 +1,11 @@
 {
   "version": 1,
   "size": {
-    "source": "PRE-PLAN section 7, Download; 0015 section 6; 0017 section 9. Brotli quality 11, decimal units (1 MB = 1,000,000 bytes). wasmBrotliWarn/Fail: release game.wasm of games/reference. engineJsBrotli: the browser entrypoints (engine, engine/render, engine/worker) bundled and minified by Vite, see tests/wasm/size.test.ts.",
+    "source": "wasmBrotliWarn/Fail: PRE-PLAN section 7 Download (1 MB / 2 MB; decimal units), release game.wasm of games/reference, brotli 11. engineJsBrotli: ADR 0045 (amends 0015 section 6): what a player downloads, the browser entrypoints (engine, engine/render) plus the worker chunk each counted once, Vite-minified, brotli 11; ceiling = ceil(exact x 1.1). See tests/wasm/size.test.ts.",
     "wasmBrotliWarn": 1000000,
     "wasmBrotliFail": 2000000,
-    "engineJsBrotli": 50000
+    "engineJsBrotli": 58000,
+    "engineJsBrotliExact": 52853
   },
   "gc": {
     "pages": {

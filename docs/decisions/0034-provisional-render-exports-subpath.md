@@ -1,6 +1,6 @@
 # 0034: Provisional `./render` exports subpath
 
-Status: Accepted (2026-09-24). Amends [0017](0017-packaging-and-build.md) §2 (exports map). Implemented by M20 (`docs/plan/20-reference-game-v0.md`).
+Status: Accepted (2026-09-24). Amends [0017](0017-packaging-and-build.md) §2 (exports map). Implemented by M20 (`docs/plan/20-reference-game-v0.md`). Closed by [0045](0045-build-profiles-measured.md) §4: kept as its own subpath, no longer provisional.
 
 ## Context
 

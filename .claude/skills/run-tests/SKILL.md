@@ -53,6 +53,10 @@ package-selection scope (`--workspace`, matching `cargo-tests`'s own `cargo next
 --workspace --no-run`) -- a mismatched scope (even with an *identical* env var value) dirties a
 shared dependency's fingerprint and recompiles a crate on every single run, not just a cold one.
 
+## Reading `size.json` (M35)
+
+`pnpm test:slow wasm -t "size @slow"` writes `test-results/wasm/size.json`: `wasm` (`raw`, `brotli`, `warnBudget`, `failBudget`, `status` `ok|warn|fail`: release `game.wasm` of `games/reference`, brotli 11) and `engineJs` (`browser`: the minified client + render + worker bundle the `size.engineJsBrotli` ceiling is read against, per file; `dist`: every reachable `dist/*.js` unminified, recorded only). A `warn` status passes with a `console.warn` line: note it, do not hide it. Budgets live in `packages/engine/budgets.json` `size.*` (`engineJsBrotliExact` is the number the ceiling was set from; the test prints the delta). Other slow packaging tests: `-t tarball-install` (browser suite), `-t "ts-rs zero bytes"`, `-t "release "`, `-t wasm-opt` (`REQUIRE_WASM_OPT=1` fails when no `wasm-opt`).
+
 ## The `browser` suite specifically
 
 Four projects: `chromium` runs everything under `packages/engine/tests/browser/*.spec.ts` except
