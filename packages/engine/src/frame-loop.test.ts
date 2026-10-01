@@ -182,6 +182,7 @@ function fakeViewport(): {
   applyPending(): boolean
   invalidate(): void
   forceSize(): void
+  setRenderer(): void
   dispose(): void
   invalidateCount: number
 } {
@@ -194,6 +195,7 @@ function fakeViewport(): {
       this.invalidateCount += 1
     },
     forceSize() {},
+    setRenderer() {},
     dispose() {},
   }
 }

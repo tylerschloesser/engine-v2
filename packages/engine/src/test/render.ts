@@ -10,6 +10,7 @@
 // three tests that still hand-fill the renderer's textures directly (no client, no worker).
 import type { Client } from '../client.js'
 import type { DrawablesRenderer } from '../render/drawables.js'
+import type { GpuHost } from '../render/gpu-host.js'
 import type { TerrainRenderer } from '../render/terrain.js'
 import { createUploadDrain, type UploadDrain } from '../render/upload.js'
 import { RingConsumer } from '../sab/ring.js'
@@ -76,7 +77,53 @@ export function attachRenderer(client: Client, renderer: TerrainRenderer): void 
   clientRenderers.set(client, renderer)
 }
 
+/** M37b: the `GpuHost` a test built around a client (`attachGpuHost`): `renderTo(client, ...)`
+ * then draws with whatever renderer the host currently has, so it keeps working across a device
+ * rebuild. */
+const clientHosts = new WeakMap<Client, GpuHost>()
+
+/** Pairs `client` with the `GpuHost` that owns its renderer (M37b). `renderTo`/`readPixels`/
+ * `loseDevice`/`untilRendererRecovered` then work on `client`. */
+export function attachGpuHost(client: Client, host: GpuHost): void {
+  clientHosts.set(client, host)
+}
+
+function hostOf(client: Client): GpuHost {
+  const h = clientHosts.get(client)
+  if (!h) throw new Error('call attachGpuHost(client, host) first')
+  return h
+}
+
+/** M37b (0018 §8, PRE-PLAN §6): destroys the current `GPUDevice` (`device.destroy()`), i.e. a
+ * device loss with reason `destroyed`. Resolves once the host has observed the loss (`current` is
+ * `null` and the rebuild has started). The test must have called `allowDeviceLoss(page)`, or the
+ * harness fails it for the loss (0020 §6). */
+export async function loseDevice(client: Client): Promise<void> {
+  const host = hostOf(client)
+  const resources = host.current
+  if (!resources) throw new Error('loseDevice: there is no device to lose')
+  const device = resources.device.device
+  device.destroy()
+  await device.lost
+  // The host's own `lost` handler was registered first, so it has already run.
+  if (host.current !== null) await Promise.resolve()
+}
+
+/** Resolves once no rebuild is in flight (M37b): the renderer exists again, or has been given up
+ * on. Returns the rebuild count (`GpuHost.generation`). */
+export async function untilRendererRecovered(client: Client): Promise<number> {
+  const host = hostOf(client)
+  await host.settled()
+  return host.generation
+}
+
 function rendererOf(client: Client): TerrainRenderer {
+  const host = clientHosts.get(client)
+  if (host) {
+    const current = host.current
+    if (!current) throw new Error('renderTo(client, ...): the device is lost (no renderer)')
+    return current.renderer
+  }
   const r = clientRenderers.get(client)
   if (!r) throw new Error('renderTo(client, ...): call attachRenderer(client, renderer) first')
   return r

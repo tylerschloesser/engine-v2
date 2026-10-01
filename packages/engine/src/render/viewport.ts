@@ -78,6 +78,9 @@ export interface ViewportController {
    * matching production's own single-writer invariant (only the real observer ever calls
    * `setPending` there; nothing there ever calls `forceSize`). */
   forceSize(cssWidth: number, cssHeight: number, dpr: number): void
+  /** M37b (device loss): points the controller at the rebuilt `TerrainRenderer`, carrying the
+   * current `viewport` values over so the canvas size and render scale survive the rebuild. */
+  setRenderer(renderer: Pick<TerrainRenderer, 'viewport' | 'notifyViewportChange'>): void
   dispose(): void
 }
 
@@ -94,7 +97,7 @@ function readCssSizeAndDpr(canvas: HTMLCanvasElement): PendingSize {
  */
 export function createViewportController(
   canvas: HTMLCanvasElement,
-  renderer: Pick<TerrainRenderer, 'viewport' | 'notifyViewportChange'>,
+  initialRenderer: Pick<TerrainRenderer, 'viewport' | 'notifyViewportChange'>,
   opts: {
     render?: RenderScaleOptions
     maxTextureDimension2D: number
@@ -109,6 +112,7 @@ export function createViewportController(
 ): ViewportController {
   const doc = opts.doc ?? (typeof document !== 'undefined' ? document : undefined)
   const observeReal = opts.test?.observeReal ?? true
+  let renderer = initialRenderer
   let pending: PendingSize | undefined
   let dirty = false
 
@@ -205,6 +209,11 @@ export function createViewportController(
 
     forceSize(cssWidth, cssHeight, dpr) {
       setPending({ cssWidth, cssHeight, dpr })
+    },
+
+    setRenderer(next) {
+      Object.assign(next.viewport, renderer.viewport)
+      renderer = next
     },
 
     dispose() {

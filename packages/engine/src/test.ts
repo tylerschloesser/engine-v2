@@ -87,10 +87,12 @@ export type {
   PresenceSampleRow,
 } from './test/presence-samples.js'
 export {
+  attachGpuHost,
   drawCalls,
   drawListDropped,
   expectPixel,
   instanceBytes,
+  loseDevice,
   type PixelBuffer,
   pageSlotsUsed,
   pipelineSwitches,
@@ -99,6 +101,7 @@ export {
   readPixels,
   renderTo,
   tileCentrePx,
+  untilRendererRecovered,
   uploadBytes,
   uploadRecords,
 } from './test/render.js'

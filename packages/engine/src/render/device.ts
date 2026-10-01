@@ -14,6 +14,9 @@
 export const ADAPTER_REQUEST: GPURequestAdapterOptions = { featureLevel: 'compatibility' }
 export const DEVICE_REQUEST: GPUDeviceDescriptor = {}
 
+/** The `console.warn` line every lost device logs (`initDevice`); the browser harness matches it. */
+export const DEVICE_LOST_PREFIX = 'GPU device lost'
+
 export type AdapterInfo = {
   vendor: string
   architecture: string
@@ -166,6 +169,11 @@ export async function initDevice(opts?: {
   if (!adapter) throw new NoAdapterError('returned null')
   const device = await adapter.requestDevice(DEVICE_REQUEST)
   const errors: string[] = []
+  // A lost device is never silent (0020 §6): `tests/browser/support/page.ts`'s `openPage` fails any
+  // test that sees this line unless it opted in with `allowDeviceLoss(page)`.
+  void device.lost.then((info) => {
+    console.warn(`${DEVICE_LOST_PREFIX} (${info.reason}): ${info.message}`)
+  })
   device.addEventListener('uncapturederror', (ev) => {
     errors.push((ev as GPUUncapturedErrorEvent).error.message)
   })

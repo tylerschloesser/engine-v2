@@ -18,6 +18,15 @@ declare global {
   }
 }
 
+const lossAllowed = new WeakSet<Page>()
+
+/** M37b (docs/decisions/0020-testing-strategy.md §6): opts one test out of "every browser test fails
+ * on a device loss". Only a test that loses the device on purpose (`engine/test`'s `loseDevice`)
+ * calls this; any other loss still turns the test red. Call before or after `openPage`. */
+export function allowDeviceLoss(page: Page): void {
+  lossAllowed.add(page)
+}
+
 export interface OpenPageOptions {
   /** docs/plan/24-recovery-and-migration.md: a page that deliberately traps a WASM instance (a real
    * panic recovery test) triggers the loader's own default `onPanic` (`console.error`, `loader.ts`)
@@ -38,6 +47,16 @@ export async function openPage(
   page.on('console', (msg) => {
     if (msg.type() === 'error' && !opts.allowConsoleError?.(msg.text())) {
       expect(msg.text(), `${path}: console.error`).toBe('')
+    }
+  })
+
+  page.on('console', (msg) => {
+    if (
+      msg.type() === 'warning' &&
+      msg.text().startsWith('GPU device lost') &&
+      !lossAllowed.has(page)
+    ) {
+      expect(msg.text(), `${path}: unexpected device loss (use allowDeviceLoss(page))`).toBe('')
     }
   })
 

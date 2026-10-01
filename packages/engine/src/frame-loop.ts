@@ -16,7 +16,8 @@
 // hot-paths.md`).
 import type { Client, RenderOptions } from './client.js'
 import { type Clock, createResyncingClock, type Scheduler } from './clock.js'
-import type { TerrainRenderer } from './render/terrain.js'
+import type { GpuHost } from './render/gpu-host.js'
+import type { TerrainRenderer, Viewport } from './render/terrain.js'
 import { createUploadDrain, DEFAULT_UPLOAD_BUDGET_BYTES } from './render/upload.js'
 import {
   configureCanvasContext,
@@ -58,6 +59,12 @@ export type FrameLoopOptions = {
   /** `RendererDevice.sabWriteTextureOk` (Planning decisions "`writeTexture` from a SAB view is
    * unverified"): forwarded to `render/upload.ts`'s own drain. Default `false` (the safe path). */
   sabWriteTextureOk?: boolean
+  /** M37b (device loss): the host that owns the current `GpuResources`. When given, the loop
+   * follows it: while it has no device the rAF callback integrates the camera and runs `acquire`/
+   * `writeCamera`/`overlay`/`ui` but skips upload, encode and submit; when a rebuilt device arrives
+   * the upload drain and the viewport controller are pointed at its renderer. Omitted (fakes-only
+   * unit tests, hand-built pages), the loop owns `renderer` for good. */
+  gpu?: GpuHost
   /** M09b: applied once per frame, before every other phase (`applyPending()`, before `onCamera`).
    * Optional so a fakes-only unit test (no canvas to resize) can omit it. Production always supplies
    * one (`createRealFrameLoop`, below). */
@@ -117,6 +124,9 @@ export type FrameLoop = {
 }
 
 const noop = (): void => {}
+/** What `tick()` returns while there is no device: nothing was uploaded. One shared object, never
+ * mutated (`.claude/rules/hot-paths.md`). */
+const NO_UPLOAD: FrameTickResult = { uploadBytes: 0, uploadRecords: 0 }
 const noopPhase = (_phase: FramePhase): void => {}
 
 // docs/plan/15d-client-clock-allocation.md: `opts.clock.now()` used to be read fresh every `tick()`
@@ -146,6 +156,22 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoop {
   const drain = createUploadDrain(consumer, opts.renderer, {
     sabWriteTextureOk: opts.sabWriteTextureOk ?? false,
   })
+  // M37b: `null` while the host has no device. `viewportRef` keeps the last renderer's `Viewport`
+  // object so the camera block still gets a size during an outage.
+  let renderer: TerrainRenderer | null = opts.renderer
+  let viewportRef: Viewport = opts.renderer.viewport
+  if (opts.gpu) {
+    opts.gpu.onChange((next) => {
+      if (next === null) {
+        renderer = null
+        return
+      }
+      opts.viewport?.setRenderer(next.renderer)
+      drain.setRenderer(next.renderer, next.device.sabWriteTextureOk)
+      renderer = next.renderer
+      viewportRef = next.renderer.viewport
+    })
+  }
   const frameClock = createResyncingClock(opts.clock, RESYNC_FRAMES)
   let handle = -1
   let running = false
@@ -172,16 +198,26 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoop {
     // straight off `renderer.viewport` (already refreshed this tick by `applyPending()`, above,
     // before the `camera` phase) -- plain number assignments, no allocation
     // (`.claude/rules/hot-paths.md`), the same pattern `frameTimeMs` just used on the line above.
-    opts.client.cameraState.viewportPxW = opts.renderer.viewport.widthPx
-    opts.client.cameraState.viewportPxH = opts.renderer.viewport.heightPx
+    opts.client.cameraState.viewportPxW = viewportRef.widthPx
+    opts.client.cameraState.viewportPxH = viewportRef.heightPx
     onPhase('writeCamera')
     opts.client.writeCameraAndWake() // writeCamera: writeCameraBlock + CB_FRAME_REQ + wake
+    if (renderer === null) {
+      // M37b: no device (0018 §8). The upload ring is not drained (the refill after the rebuild
+      // takes it under the byte budget), nothing is encoded or submitted; the canvas keeps its last
+      // presented frame. Overlay and UI keep running.
+      onPhase('overlay')
+      onOverlay()
+      onPhase('ui')
+      onUi()
+      return NO_UPLOAD
+    }
     onPhase('upload')
     const stats = drain.drain(budget) // upload
     onPhase('render')
-    opts.renderer.writeFrameUniform(opts.renderer.frameUniform)
+    renderer.writeFrameUniform(renderer.frameUniform)
     drawOpts.reveal = opts.revealed ? opts.revealed() : true
-    opts.renderer.draw(currentTarget(), drawOpts) // render
+    renderer.draw(currentTarget(), drawOpts) // render
     onPhase('overlay')
     onOverlay()
     onPhase('ui')
@@ -220,6 +256,9 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoop {
 export type RealFrameLoopOptions = {
   client: Client
   renderer: TerrainRenderer
+  /** M37b: the host the renderer came from; the loop follows it through a device loss (see
+   * `FrameLoopOptions.gpu`) and reconfigures the canvas for each rebuilt device. */
+  gpu?: GpuHost
   canvas: HTMLCanvasElement
   clock: Clock
   scheduler: Scheduler
@@ -252,7 +291,8 @@ export type RealFrameLoopOptions = {
 export type RealFrameLoop = {
   loop: FrameLoop
   viewport: ViewportController
-  ctx: GPUCanvasContext
+  /** The canvas context configured for the current device (replaced after a device rebuild). */
+  readonly ctx: GPUCanvasContext
   dispose(): void
 }
 
@@ -265,8 +305,9 @@ export type RealFrameLoop = {
  * target).
  */
 export function createRealFrameLoop(opts: RealFrameLoopOptions): RealFrameLoop {
-  const ctx = configureCanvasContext(opts.canvas, opts.renderer.device)
-  opts.renderer.frameUniform.neighbourCutoffPx = opts.render?.neighbourCutoffPx ?? 0
+  let ctx = configureCanvasContext(opts.canvas, opts.renderer.device)
+  const neighbourCutoffPx = opts.render?.neighbourCutoffPx ?? 0
+  opts.renderer.frameUniform.neighbourCutoffPx = neighbourCutoffPx
   // `exactOptionalPropertyTypes`: an optional key set to `undefined` is not the same as an absent
   // key, so `render`/`doc` are added only when actually given, rather than built as one literal with
   // `opts.render`/`opts.doc` spliced straight in.
@@ -285,16 +326,27 @@ export function createRealFrameLoop(opts: RealFrameLoopOptions): RealFrameLoop {
     target: () => ctx.getCurrentTexture(),
     viewport,
   }
+  if (opts.gpu !== undefined) frameLoopOpts.gpu = opts.gpu
   if (opts.onCamera !== undefined) frameLoopOpts.onCamera = opts.onCamera
   if (opts.onOverlay !== undefined) frameLoopOpts.onOverlay = opts.onOverlay
   if (opts.revealed !== undefined) frameLoopOpts.revealed = opts.revealed
   if (opts.onPhase !== undefined) frameLoopOpts.onPhase = opts.onPhase
+  // Registered before the loop's own subscription (`createFrameLoop`), so by the time the loop
+  // swaps in the rebuilt renderer the canvas is already configured for the new device.
+  const unsubscribe = opts.gpu?.onChange((next) => {
+    if (next === null) return
+    ctx = configureCanvasContext(opts.canvas, next.device.device)
+    next.renderer.frameUniform.neighbourCutoffPx = neighbourCutoffPx
+  })
   const loop = createFrameLoop(frameLoopOpts)
   return {
     loop,
     viewport,
-    ctx,
+    get ctx() {
+      return ctx
+    },
     dispose() {
+      unsubscribe?.()
       loop.pause()
       viewport.dispose()
     },

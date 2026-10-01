@@ -45,6 +45,10 @@ export type UploadDrain = {
    * a proxy for "an eviction reached the render side", one entry per `CacheEvent::Evicted` that
    * made it through `Uploader::stage`'s own INDIR queue -- no new ABI export needed). */
   evictedTotal(): number
+  /** M37b (device loss): points the drain at the `TerrainRenderer` of a rebuilt `GpuResources`
+   * (`sabOk` is that device's own `RendererDevice.sabWriteTextureOk`). Counters carry on; setup
+   * only, never per frame. */
+  setRenderer(renderer: TerrainRenderer, sabOk: boolean): void
 }
 
 function readU16(u8: Uint8Array, off: number): number {
@@ -64,18 +68,19 @@ function readU16(u8: Uint8Array, off: number): number {
  * `stagingU16` first. Both paths allocate nothing per record either way. */
 export function createUploadDrain(
   consumer: RingConsumer,
-  renderer: TerrainRenderer,
+  initialRenderer: TerrainRenderer,
   opts?: { sabWriteTextureOk?: boolean },
 ): UploadDrain {
-  const sabWriteTextureOk = opts?.sabWriteTextureOk ?? false
+  let renderer = initialRenderer
+  let sabWriteTextureOk = opts?.sabWriteTextureOk ?? false
+  // Built unconditionally (M37b: `setRenderer` may switch the fast path on for a rebuilt device);
+  // setup only, one view per ring slot.
   const chunkViews: Uint16Array[] = []
-  if (sabWriteTextureOk) {
-    for (let i = 0; i < consumer.slotCount(); i++) {
-      const payload = consumer.slotView(i)
-      chunkViews.push(
-        new Uint16Array(payload.buffer, payload.byteOffset + HEADER_BYTES, CHUNK_TEXELS * 2),
-      )
-    }
+  for (let i = 0; i < consumer.slotCount(); i++) {
+    const payload = consumer.slotView(i)
+    chunkViews.push(
+      new Uint16Array(payload.buffer, payload.byteOffset + HEADER_BYTES, CHUNK_TEXELS * 2),
+    )
   }
   const stagingU16 = new Uint16Array(CHUNK_TEXELS * 2)
   const stagingU8 = new Uint8Array(stagingU16.buffer)
@@ -156,5 +161,9 @@ export function createUploadDrain(
     recordsTotal: () => recordsTotal,
     chunkRecordsTotal: () => chunkRecordsTotal,
     evictedTotal: () => evictedTotal,
+    setRenderer(next, sabOk) {
+      renderer = next
+      sabWriteTextureOk = sabOk
+    },
   }
 }
