@@ -8,7 +8,15 @@ import { RegionId, Role } from '../abi.js'
 import { CameraBlockView, readCameraBlockInto } from '../camera/block.js'
 import { systemClock } from '../clock.js'
 import type { EngineInstance, RegionView } from '../loader.js'
-import { CB_FLAGS, CB_FRAME_REQ, FLAG_REBASE, W_ACK, workerWord } from '../sab/control.js'
+import {
+  CB_CLIENT_FRAME_N,
+  CB_CLIENT_FRAME_US,
+  CB_FLAGS,
+  CB_FRAME_REQ,
+  FLAG_REBASE,
+  W_ACK,
+  workerWord,
+} from '../sab/control.js'
 import { RingConsumer, RingProducer } from '../sab/ring.js'
 import { createActionPump } from './client-action.js'
 import { createDrawlistPump } from './client-drawlist.js'
@@ -57,6 +65,9 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     ;(self as unknown as { __engineInstance?: EngineInstance }).__engineInstance = inst
   }
   const gcHook = message.test?.gcHook === true
+  // M36's bench HUD (`CB_CLIENT_FRAME_US`): times each `frame()` call. Only a bench page's setup
+  // carries it; a shipped build never reads the clock here.
+  const timing = message.test?.timing === true
   const cameraRegion = requireRegion(inst, RegionId.Camera, 'Camera')
   const cameraReader = new CameraBlockView(message.sabs.cameraBlock)
   let lastFrameReq = Atomics.load(shell.control.words, CB_FRAME_REQ)
@@ -226,7 +237,18 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
         inst.call0(inst.x.client_rebase)
       }
       if (readCameraBlockInto(cameraReader, cameraRegion.u8, 0)) {
-        inst.call1(inst.x.frame, FRAME_ARG)
+        if (timing) {
+          const t0 = systemClock.now()
+          inst.call1(inst.x.frame, FRAME_ARG)
+          Atomics.store(
+            shell.control.words,
+            CB_CLIENT_FRAME_US,
+            Math.round((systemClock.now() - t0) * 1000),
+          )
+          Atomics.add(shell.control.words, CB_CLIENT_FRAME_N, 1)
+        } else {
+          inst.call1(inst.x.frame, FRAME_ARG)
+        }
         framedThisWake = true
         // docs/plan/17-drawlist-and-sprites.md Scope: "once per produced frame" (0018 §2) -- only
         // after a real `frame()` call, never on a wake where `CB_FRAME_REQ` did not advance.

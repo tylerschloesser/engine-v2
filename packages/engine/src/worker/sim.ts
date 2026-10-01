@@ -32,6 +32,7 @@ import { RingConnection } from '../ring-connection.js'
 import {
   CB_FORCE_SNAPSHOT_REQ,
   CB_SIM_STEP_REQ,
+  CB_SIM_TICK_US,
   CB_SIM_TICKS_RUN,
   W_ACK,
   WORKER_CLIENT,
@@ -603,6 +604,8 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   if (pacingEnabled) simHost.start()
 
   const leakyAppendArmed = message.test?.leakyStorageAppend === true
+  // M36's bench HUD (`CB_SIM_TICK_US`); only a bench page's setup carries it.
+  const timing = message.test?.timing === true
 
   function body(wokenBy: number): void {
     try {
@@ -633,7 +636,21 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
         lastForceSnapshotReq = forceSnapshotReq
         persistence?.snapshotNow()
       }
-      if (wokenBy === lastWokenBy) atomicsTimer.poll()
+      if (timing) {
+        // M36's bench HUD: the duration of a pass that ran a tick (admit and frames included),
+        // stored before `CB_SIM_TICKS_RUN` so main never reads a count ahead of its duration.
+        const ticksBefore = simHost.counters.ticksRun
+        const t0 = systemClock.now()
+        if (wokenBy === lastWokenBy) atomicsTimer.poll()
+        else atomicsTimer.interrupt()
+        if (simHost.counters.ticksRun !== ticksBefore) {
+          Atomics.store(
+            shell.control.words,
+            CB_SIM_TICK_US,
+            Math.round((systemClock.now() - t0) * 1000),
+          )
+        }
+      } else if (wokenBy === lastWokenBy) atomicsTimer.poll()
       else atomicsTimer.interrupt()
       lastWokenBy = wokenBy
       Atomics.store(shell.control.words, CB_SIM_TICKS_RUN, simHost.counters.ticksRun)

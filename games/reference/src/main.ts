@@ -28,8 +28,23 @@ if (!support.ok) {
   // `#k=<joinKey>` in the URL: play on the server this page came from (`/ws` on its own origin);
   // otherwise a world of this browser's own. The local world is `world.json` (the seed every native
   // test also uses, so the landmark tiles this package's tests probe are the ones a player sees).
-  const game = await startGame({ canvas, host: selectHost(location, undefined, { persist: true }) })
+  // `?bench=large-save` (M36): in a bench build only (`vite build --mode bench`); `__BENCH__` is a
+  // build-time false everywhere else, so the branch and `bench.ts` are not in the bundle at all.
+  const benchModule = __BENCH__ ? await import('./bench.js') : undefined
+  const bench = benchModule?.benchRequest(location.search)
+  const meter = bench ? benchModule?.createBenchMeter() : undefined
+  const game = await startGame(
+    bench && meter && benchModule
+      ? {
+          canvas,
+          host: benchModule.benchHost(bench.scale),
+          scheduler: meter.scheduler,
+          test: benchModule.BENCH_TEST_OPTIONS,
+        }
+      : { canvas, host: selectHost(location, undefined, { persist: true }) },
+  )
   const { client } = game
+  if (bench && meter) meter.start(game, bench)
   try {
     await client.ready
     attachHostLifecycle(client) // snapshot and flush when the tab is hidden (M23)

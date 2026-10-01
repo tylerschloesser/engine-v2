@@ -119,7 +119,7 @@ export default defineConfig({
       // `--disable-frame-rate-limit --disable-gpu-vsync`): otherwise this project's own slow-tier
       // grep (`(?=.*@slow)`) would also pick up `bench.frame_worstcase @slow` and run it a second
       // time, without those flags, under real (capped) rAF pacing.
-      testIgnore: ['**/gc-*.spec.ts', '**/frame-bench.spec.ts'],
+      testIgnore: ['**/gc-*.spec.ts', '**/frame-bench*.spec.ts'],
     },
     {
       // Sim hash only (0020 §6: Firefox returns a null WebGPU adapter headless); multi-engine repeats
@@ -161,7 +161,9 @@ export default defineConfig({
           ],
         },
       },
-      testMatch: '**/frame-bench.spec.ts',
+      // `frame-bench-reference.spec.ts` (M36): `bench.frame_reference`, the reference game on the
+      // standard large save, measured the same way.
+      testMatch: '**/frame-bench*.spec.ts',
       // 512 one-time setup dispatches (`frame-bench.ts`'s own batched `SpawnMany` population, well
       // over the `chromium` project's own default page's worth of setup work) plus 420 real rAF
       // frames comfortably exceed the config's own 30 s default.

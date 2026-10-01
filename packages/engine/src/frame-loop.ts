@@ -111,6 +111,9 @@ export type FrameLoop = {
    * `systemScheduler`, no `clock.now()` call at all. Omitted only by a direct manual `tick()` call
    * (`engine/test`, fakes-only unit tests): falls back to the resync clock in that case. */
   tick(tMs?: number): FrameTickResult
+  /** Cumulative bytes the upload phase has drained (`UploadDrain.bytesTotal`): the bench HUD's
+   * GPU-upload counter (M36), read per frame as a difference. A plain read, no allocation. */
+  uploadBytes(): number
 }
 
 const noop = (): void => {}
@@ -210,6 +213,7 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoop {
       opts.scheduler.cancelFrame(handle)
     },
     tick,
+    uploadBytes: drain.bytesTotal,
   }
 }
 

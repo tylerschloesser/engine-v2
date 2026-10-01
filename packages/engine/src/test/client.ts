@@ -9,9 +9,13 @@ import type { ActionOutcome, Client, ClientTestHandle, WorkerEntry } from '../cl
 import { clientTestHandle } from '../client.js'
 import { createResyncingClock, type ResyncingClock } from '../clock.js'
 import {
+  CB_CLIENT_FRAME_N,
+  CB_CLIENT_FRAME_US,
   CB_FORCE_SNAPSHOT_REQ,
   CB_FRAME_REQ,
   CB_SIM_STEP_REQ,
+  CB_SIM_TICK_US,
+  CB_SIM_TICKS_RUN,
   CB_TEST_CONTROL,
   Ready,
   W_ACK,
@@ -1048,6 +1052,36 @@ export function styleWrites(client: Client): number {
 }
 
 const WASM_PAGE_BYTES = 65536
+
+/**
+ * M36's bench HUD readout (docs/plan/36-slow-tier-and-benchmarks.md step 6): the worker timings of a
+ * client created with `test.flags.timing` and the grow counters, each one `Atomics.load` of the
+ * control block, no park. `frameN`/`tickN` move when a new duration is available (`frameUs`/
+ * `tickUs`, whole microseconds). Without `timing` the durations stay 0.
+ */
+export type BenchProbe = {
+  frameN(): number
+  frameUs(): number
+  tickN(): number
+  tickUs(): number
+  /** `engine_mem_grows` of the sim worker (`W_MEM_GROWS`); the client worker's is `clientGrows`. */
+  simGrows(): number
+  clientGrows(): number
+}
+
+export function benchProbe(client: Client): BenchProbe {
+  const w = clientTestHandle(client).control.words
+  const host = workerWord(WORKER_HOST, W_MEM_GROWS)
+  const cli = workerWord(WORKER_CLIENT, W_MEM_GROWS)
+  return {
+    frameN: () => Atomics.load(w, CB_CLIENT_FRAME_N),
+    frameUs: () => Atomics.load(w, CB_CLIENT_FRAME_US),
+    tickN: () => Atomics.load(w, CB_SIM_TICKS_RUN),
+    tickUs: () => Atomics.load(w, CB_SIM_TICK_US),
+    simGrows: () => Atomics.load(w, host),
+    clientGrows: () => Atomics.load(w, cli),
+  }
+}
 
 /**
  * `engine/test`: adapts a real `createClient()` result to the `Harness` shape `installGcPage`/

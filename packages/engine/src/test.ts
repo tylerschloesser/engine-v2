@@ -17,6 +17,8 @@ export { assertBudget } from './test/budget.js'
 export {
   actionResults,
   asHarness,
+  type BenchProbe,
+  benchProbe,
   callParked,
   type DrawRecord,
   dispatchRaw,

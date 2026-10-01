@@ -7,3 +7,4 @@ test-results/
 playwright-report/
 .playwright-cli/
 .data/
+dist-bench/

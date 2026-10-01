@@ -35,6 +35,13 @@ export interface EngineOptions {
   bindings?: { dir: string }
   /** `buildGame({ wasmOpt })` (0017 §5): run `wasm-opt` when it is on `PATH`. Default off. */
   wasmOpt?: boolean
+  /**
+   * `buildGame({ features })`: cargo features of the game crate. Only the reference game's bench
+   * build passes one (`vite build --mode bench`, docs/plan/36-slow-tier-and-benchmarks.md step 6);
+   * the output's `buildHash` differs from the plain build's, so a bench page never joins a normal
+   * server.
+   */
+  features?: string[]
 }
 
 /** `plugin.api.profile`, readable once the config has resolved (0017 §4). */
@@ -164,6 +171,7 @@ export function engine(opts: EngineOptions): Plugin {
       crate: crateDir,
       profile,
       ...(opts.wasmOpt !== undefined ? { wasmOpt: opts.wasmOpt } : {}),
+      ...(opts.features !== undefined ? { features: opts.features } : {}),
     })
     wasmBytes = await readFile(result.wasmPath)
     buildHash = result.buildHash

@@ -1,0 +1,22 @@
+{
+  "name": "frame-reference",
+  "fingerprint": {
+    "cpu": "Apple M3 Max",
+    "arch": "arm64"
+  },
+  "measuredAt": "2026-10-01T06:00:07.654Z",
+  "conditions": "Tyler's Mac (Apple M3 Max, 14 logical CPUs), channel 'chromium' (real Metal adapter headless), --enable-unsafe-webgpu --disable-frame-rate-limit --disable-gpu-vsync, playwright.config.ts 'frame-bench' project. games/reference bench build (`vite build --mode bench`, cargo feature bench, release) at `?bench=large-save` (the standard large save of 0020 section 9: 262,144 furnaces, 1,048,576 modified tiles), single-player (local host, connect, genWorkers 1), viewport 1280x720, camera tilesAcross 256 (maximum zoom-out) centred on the furnace block (~5,700-5,800 DrawList records in view), slow pan of 12 tiles/s at 60 frames/s (per-frame step, so ~0.2 tile per frame), 300 warm-up + 2,000 timed rAF frames, trace marks mf-s/mf-e (main) and wf-s/wf-e (client-worker frame()) as in bench.frame_worstcase. Load average 4-6 (shared machine). Four consecutive runs: main p50 0.082-0.094, worker p50 0.117-0.140 ms; this baseline is the fourth run. limits are the 0018 section 9 desktop proxies (main 1.3 ms, worker 2.7 ms). Counters of the same run: draw calls per frame max 3 (budget 9), upload bytes per frame max 65,536 (budget 65,536), engine_mem_grows 0.",
+  "gated": ["mainP50Ms", "workerP50Ms"],
+  "limits": {
+    "mainP50Ms": 1.3,
+    "workerP50Ms": 2.7
+  },
+  "metrics": {
+    "mainP50Ms": 0.085,
+    "mainP95Ms": 0.112,
+    "mainP99Ms": 0.133,
+    "workerP50Ms": 0.125,
+    "workerP95Ms": 0.218,
+    "workerP99Ms": 0.267
+  }
+}

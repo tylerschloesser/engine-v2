@@ -14,7 +14,7 @@
 // global words *after* the existing per-worker region: `WORKER_BASE`/`WORKER_STRIDE`/`MAX_WORKERS`
 // are unchanged, so every existing `workerWord(...)` address (and `control.workerWord addressing`'s
 // own pinned literals, `control.test.ts`) is untouched -- only the block's own total size grows.
-export const CONTROL_BLOCK_INT32S = 66
+export const CONTROL_BLOCK_INT32S = 69
 export const CONTROL_BLOCK_BYTES = CONTROL_BLOCK_INT32S * 4
 
 // Global words (indices 0-7, all now used as of `CB_FORCE_SNAPSHOT_REQ` below).
@@ -101,6 +101,19 @@ export type Ready = (typeof Ready)[keyof typeof Ready]
  */
 export const CB_LINK_STATE = 64
 export const CB_LINK_GEN = 65
+
+/**
+ * docs/plan/36-slow-tier-and-benchmarks.md step 6: the bench HUD's worker timings (appended after
+ * `CB_LINK_GEN`, indices 66-68; same reasoning as that pair). Written only by a worker whose setup
+ * carried `test.timing` (the bench build's page, never a shipped one): the client worker after each
+ * `frame()` call (`CB_CLIENT_FRAME_US` = the call's duration in whole microseconds, then
+ * `CB_CLIENT_FRAME_N` += 1) and the sim worker after a pass that ran a tick (`CB_SIM_TICK_US` = that
+ * pass's tick duration in microseconds, stored before `CB_SIM_TICKS_RUN`). Main reads them with
+ * `Atomics.load`; a counter that moved since the last read means the duration word is new.
+ */
+export const CB_CLIENT_FRAME_US = 66
+export const CB_CLIENT_FRAME_N = 67
+export const CB_SIM_TICK_US = 68
 
 // Worker indexes (docs/plan/06-sab-primitives-and-workers.md, Seams).
 export const WORKER_CLIENT = 0

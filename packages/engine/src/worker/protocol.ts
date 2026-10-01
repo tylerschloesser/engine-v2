@@ -36,6 +36,11 @@ export type TestFlags = {
    * runs, read fresh from the control block's `Control` word set up the same way `step-block.ts`
    * does it for the test harness. */
   gcHook?: boolean
+  /** M36's bench HUD (docs/plan/36-slow-tier-and-benchmarks.md step 6): the client worker times each
+   * `frame()` call and the sim worker each tick-running pass into `CB_CLIENT_FRAME_*`/
+   * `CB_SIM_TICK_US` (`sab/control.ts`), for main to read. Set only by the reference game's bench
+   * build; a shipped build never carries it. */
+  timing?: boolean
   /** `worker/sim.ts` only (docs/plan/13b-tick-timing-allocation.md, Order of work 1): arms
    * `simHost.start()` (real-time pacing, `onFire` via `AtomicsTimer`) even though `test` is
    * present, so a zero-GC page can prove the production pacing path itself is allocation-free --

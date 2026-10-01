@@ -35,7 +35,10 @@ export const BENCHES = {
   // 0010 "Tick CPU budget": median <= 3 ms on Tyler's Mac, native, on the standard large save.
   tick: { gated: ['medianMs'], limits: { medianMs: 3 } },
   // 0018 §9 desktop proxies of the reference game on the large save (main rAF callback, client worker).
-  'frame-reference': { gated: ['mainP50Ms', 'workerP50Ms'], limits: {} },
+  'frame-reference': {
+    gated: ['mainP50Ms', 'workerP50Ms'],
+    limits: { mainP50Ms: 1.3, workerP50Ms: 2.7 },
+  },
   // The record-only Node twin of `tick` (`.wasm` through `createWorldServer`): warn-only at its call site.
   'tick-node': { gated: ['medianMs'], limits: {} },
   // M17b's synthetic worst-case DrawList.
