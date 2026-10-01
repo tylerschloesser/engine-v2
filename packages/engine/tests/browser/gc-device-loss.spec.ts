@@ -8,6 +8,7 @@
 import { expect, test } from '@playwright/test'
 import { gcPage } from '../support/budgets.ts'
 import { measure } from './gc/instrument.ts'
+import type {} from './support/device-loss-window.d.ts'
 import { expectAdapter } from './support/gpu.ts'
 import { allowDeviceLoss, openPage } from './support/page.ts'
 

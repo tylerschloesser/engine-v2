@@ -19,12 +19,12 @@ import {
 import { installGcPage } from '../../../../src/test/gc-page.ts'
 import { createManualClock } from '../../../../src/test/manual-clock.ts'
 import { attachGpuHost, loseDevice, untilRendererRecovered } from '../../../../src/test/render.ts'
+import type {} from '../../support/device-loss-window.d.ts'
 import { fixtureWasm } from './fixture-wasm.ts'
 
 declare global {
   interface Window {
     __pageReady?: true
-    __lossThenGc?: { loseAndRecover(): Promise<{ generation: number; outageFrames: number }> }
   }
 }
 

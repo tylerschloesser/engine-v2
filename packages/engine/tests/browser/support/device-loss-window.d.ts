@@ -4,6 +4,8 @@ export {}
 
 declare global {
   interface Window {
+    /** `gc-device-loss.html` (M37b step 5): loses the device, steps through the outage and the refill, parks. */
+    __lossThenGc?: { loseAndRecover(): Promise<{ generation: number; outageFrames: number }> }
     __deviceLoss?: {
       /** A real `createClient()` over `fx-terrain`, a `GpuHost` (art, visual table) and one
        * `createFrameLoop` over it with a manual clock and an offscreen `rgba8unorm` target. */
