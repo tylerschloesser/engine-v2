@@ -64,7 +64,10 @@ export const buildSteps = [
  * whose own numbers are only meaningful with the machine to itself (today: `frame-bench` alone).
  */
 export const suites = [
-  { name: 'rust', kind: 'nextest', tiers: ['fast', 'slow'], budgetMs: 10_000 },
+  // `soloTiers: ['slow']` (M36): `slow_tick_large_save` and the other wall-clock benchmarks of the
+  // `rust` slow tier gate on a median (0010 desktop proxy, 25 % rule); run beside `browser`'s Chromium
+  // pool they measured 32 % over a baseline they hold alone. Same reason as `frame-bench`'s `solo`.
+  { name: 'rust', kind: 'nextest', tiers: ['fast', 'slow'], budgetMs: 10_000, soloTiers: ['slow'] },
   { name: 'unit', kind: 'vitest', tiers: ['fast', 'slow'], budgetMs: 3_000 },
   {
     name: 'wasm',

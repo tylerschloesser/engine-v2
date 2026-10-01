@@ -49,6 +49,8 @@ declare global {
       startMarking(): void
       stopMarking(): void
       resetCounters(): void
+      holdPan(): void
+      releasePan(): void
       adapter(): never
       park(): Promise<void>
       resume(): Promise<void>
@@ -73,8 +75,8 @@ const EXPECTED_WORKERS = 3
 const isSwiftShader = process.env.ENGINE_GPU === 'swiftshader'
 const WARMUP_FRAMES = isSwiftShader ? 5 : 300
 const TIMED_FRAMES = isSwiftShader ? 20 : 2000
-// The view at maximum zoom-out over the block holds ~8,500 furnaces (1280x720: 12,800 at most).
-const MIN_RECORDS = 5000
+// The view at maximum zoom-out over the block holds 4,000 to 7,500 furnaces along the pan (1280x720).
+const MIN_RECORDS = 3000
 
 let preview: ChildProcess | undefined
 
@@ -127,13 +129,18 @@ test('bench.frame_reference @slow', async ({ page, browser }, testInfo) => {
   expectAdapter(testInfo, await page.evaluate(() => window.__bench?.adapter() ?? null))
 
   // The save is generated and the first view's furnaces are in the DrawList.
-  await page.waitForFunction(() => (window.__bench?.hud().records ?? 0) >= 5000, null, {
+  await page.waitForFunction(() => (window.__bench?.hud().records ?? 0) >= 3000, null, {
     timeout: 120_000,
   })
 
   // A worker blocked in its `Atomics.wait` loop answers no CDP `Runtime.evaluate`: park, install the
   // `frame()` wrapper over the client worker's instance (`test.flags` exposes it), resume, all before
   // anything is measured (`bench.frame_worstcase` has the story).
+  // The camera path inside the timed window must not depend on how long the page took to load.
+  await page.evaluate(() => window.__bench?.holdPan())
+  await page.waitForFunction((n) => (window.__bench?.hud().records ?? 0) >= n, MIN_RECORDS, {
+    timeout: 120_000,
+  })
   await page.evaluate(() => window.__bench?.park())
   const { workers, close } = await attachTunnelSessions(page, EXPECTED_WORKERS)
   for (const w of workers) {
@@ -147,6 +154,7 @@ test('bench.frame_reference @slow', async ({ page, browser }, testInfo) => {
     returnByValue: true,
   })
   await page.evaluate(() => window.__bench?.resume())
+  await page.evaluate(() => window.__bench?.releasePan())
 
   await page.waitForFunction((n) => (window.__bench?.framesRendered() ?? 0) >= n, WARMUP_FRAMES, {
     timeout: 120_000,

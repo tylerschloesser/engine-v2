@@ -115,6 +115,12 @@ export type BenchApi = {
   startMarking(): void
   stopMarking(): void
   resetCounters(): void
+  /** Moves the camera to the pan's first position and holds it there (the test then lets the view
+   * stream in, parks the workers, wraps `frame`, resumes). */
+  holdPan(): void
+  /** Starts the pan from its first position, counting frames from now: the camera path inside the
+   * timed window is then the same every run, whatever the page and CDP round trips took before. */
+  releasePan(): void
   adapter(): unknown
   /** `engine/test`'s park/resume of every worker (a CDP `Runtime.evaluate` reaches a worker only
    * while it is parked). */
@@ -146,6 +152,8 @@ export function createBenchMeter(): BenchMeter {
   let frames = 0
   let markN = 0
   let lastFrameN = 0
+  let panFrame0 = 0
+  let panHeld = false
   let lastTickN = 0
   let lastDraws = 0
   let lastUpload = 0
@@ -159,7 +167,9 @@ export function createBenchMeter(): BenchMeter {
     // step is per frame (`pan` tiles per second at 60 frames a second), so the pan covers the same
     // ground whether rAF runs at 60 Hz or, as in `bench.frame_reference`, uncapped.
     const amp = Math.max(0, block.halfSpan - 140)
-    const d = (frames * (request.panTilesPerSecond / 60)) % (4 * amp || 1)
+    const d = panHeld
+      ? 0
+      : ((frames - panFrame0) * (request.panTilesPerSecond / 60)) % (4 * amp || 1)
     const x = block.x + (d < 2 * amp ? -amp + d : 3 * amp - d)
     game.client.camera.moveTo(x, block.y, { durationMs: 0 })
   }
@@ -268,6 +278,13 @@ export function createBenchMeter(): BenchMeter {
         resetCounters() {
           drawCallsMax = 0
           uploadBytesMax = 0
+        },
+        holdPan() {
+          panHeld = true
+        },
+        releasePan() {
+          panHeld = false
+          panFrame0 = frames
         },
         adapter: () => g.device.adapterInfo,
         park: () => parkWorkers(g.client),
