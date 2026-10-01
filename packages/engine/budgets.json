@@ -281,6 +281,43 @@
           }
         }
       },
+      "device-loss": {
+        "isolates": {
+          "main": {
+            "class": "strict",
+            "bytesPerFrame": 111,
+            "formula": "ADR 0029 / M37b: the same rows as `connected-terrain` (same topology and pan; the page only adds a device loss and rebuild before the window), unchanged: a device generation after a loss must meet the healthy-path budget.",
+            "attributionRoots": ["drive"]
+          },
+          "client": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "ADR 0029 / M37b: the same rows as `connected-terrain` (same topology and pan; the page only adds a device loss and rebuild before the window), unchanged: a device generation after a loss must meet the healthy-path budget.",
+            "attributionRoots": ["body"]
+          },
+          "sim": {
+            "class": "strict",
+            "bytesPerFrame": 17,
+            "formula": "ADR 0029 / M37b: the same rows as `connected-terrain` (same topology and pan; the page only adds a device loss and rebuild before the window), unchanged: a device generation after a loss must meet the healthy-path budget.",
+            "attributionRoots": ["body"]
+          },
+          "gen0": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "ADR 0029 / M37b: the same rows as `connected-terrain` (same topology and pan; the page only adds a device loss and rebuild before the window), unchanged: a device generation after a loss must meet the healthy-path budget.",
+            "attributionRoots": ["body"]
+          }
+        },
+        "software": {
+          "frames": 600,
+          "isolates": {
+            "main": {
+              "attributedBytesPerFrame": 89,
+              "formula": "ADR 0029 / M37b: the same rows as `connected-terrain` (same topology and pan; the page only adds a device loss and rebuild before the window), unchanged: a device generation after a loss must meet the healthy-path budget."
+            }
+          }
+        }
+      },
       "zero_gc_action": {
         "isolates": {
           "main": {
