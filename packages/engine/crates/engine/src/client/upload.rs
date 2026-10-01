@@ -315,17 +315,39 @@ impl<C: ClientSide<G>, G: crate::game::Game> Uploader<C, G> {
         );
     }
 
-    /// M37b (device loss): forget every slot's "on GPU" bit and force the next `on_frame` to
-    /// re-scan from scratch, so every still-resident chunk in view is re-queued. Full replay of
-    /// every resident chunk regardless of view (not just ring 1 + look-ahead) is M37b's own
-    /// extension (docs/plan/09-renderer-terrain.md Deviations: out of this milestone's scope).
-    pub fn requeue_all(&mut self) {
+    /// M37b (device loss, 0018 §8: "ask the worker to re-enqueue every resident chunk"): the GPU
+    /// lost every page texel and the indirection window, so forget every "on GPU" bit and queue a
+    /// fresh `CHUNK` record for **every** resident chunk of `store` exactly once (also those
+    /// outside ring 1 + look-ahead), nearest the last scanned view first (the existing priority;
+    /// before any scan, most recently used first). Each `CHUNK`'s `INDIR` follows through the normal
+    /// `stage_chunk` path, so the refill is paced by the caller's `max_records` like a join. Drops
+    /// everything queued before the loss (stale `INDIR`-none and patches address a texture that no
+    /// longer exists; a chunk's staging re-reads the store and overlay anyway). No allocation.
+    pub fn requeue_all(&mut self, store: &TerrainStore) {
         self.uploaded = [false; PAGE_SLOTS as usize];
         self.indir_none_pending = [false; PAGE_SLOTS as usize];
-        self.last_visible = None;
         self.pending_indir.clear();
         self.pending_patches.clear();
         self.pending_chunks.clear();
+        let uploaded = &mut self.uploaded;
+        let pending = &mut self.pending_chunks;
+        store.for_each_resident(|chunk, slot| {
+            if let Some(bit) = uploaded.get_mut(slot as usize) {
+                *bit = true;
+                push_bounded(pending, chunk);
+            }
+        });
+        if let Some(rect) = self.last_visible {
+            let centre = ChunkCoord::new(
+                ((rect.min.x as i64 + rect.max.x as i64) / 2) as i32,
+                ((rect.min.y as i64 + rect.max.y as i64) / 2) as i32,
+            );
+            self.pending_chunks
+                .make_contiguous()
+                .sort_by_key(|c| chunk_dist_sq(*c, centre));
+        }
+        // The next `on_frame` re-scans (cheaply: everything resident in view is already marked).
+        self.last_visible = None;
     }
 
     /// Stages up to `max_records` records into `region` (`RegionId::ChunkTexels`, sized for at
@@ -747,6 +769,49 @@ mod tests {
     /// old occupant's cell going empty) *before* CHUNK (the new occupant's texels), *before* INDIR
     /// (the new occupant's own cell) -- proving `stage_one`'s block holds even when `max_records`
     /// splits every record across its own `stage()` call.
+    /// M37b: `requeue_all` queues one `CHUNK` per resident chunk, no duplicates, including chunks
+    /// outside ring 1 + look-ahead of the last scanned view, and drops pre-loss queue entries.
+    #[test]
+    fn requeue_all_marks_every_resident_chunk_once() {
+        let mut up = Uploader::<Fixture, NoGame>::new(ChunkDims::new(5));
+        let s = store(64);
+        materialize_grid(&s); // 25 chunks around the origin
+        s.materialize(ChunkCoord::new(40, 40)); // far outside any view window
+        s.materialize(ChunkCoord::new(-33, 7));
+        // Scan a tiny view at the origin, stage everything pending, then lose the device.
+        up.on_frame(&camera_at(0.0, 0.0), &s);
+        let mut region = vec![0u8; RECORD_BYTES * 200];
+        up.stage(200, &s, &mut region);
+        up.patch_tile(TilePos::new(1, 1), Tile::new(9, 9, 9));
+        let mut resident = 0usize;
+        s.for_each_resident(|_, _| resident += 1);
+        assert_eq!(resident, 27);
+
+        up.requeue_all(&s);
+
+        assert_eq!(up.pending_chunks.len(), resident);
+        let mut seen = std::collections::BTreeSet::new();
+        for c in &up.pending_chunks {
+            assert!(seen.insert(c.key()), "chunk {c:?} queued twice");
+            assert!(s.is_cached(*c));
+        }
+        assert!(seen.contains(&ChunkCoord::new(40, 40).key()));
+        assert!(up.pending_patches.is_empty() && up.pending_indir.is_empty());
+        // Staging them all yields exactly one CHUNK record per resident chunk.
+        let mut region = vec![0u8; RECORD_BYTES * 200];
+        let n = up.stage(200, &s, &mut region) as usize;
+        let chunk_records = (0..n)
+            .filter(|i| {
+                u16::from_le_bytes([region[i * RECORD_BYTES], region[i * RECORD_BYTES + 1]])
+                    == KIND_CHUNK
+            })
+            .count();
+        assert_eq!(chunk_records, resident);
+        // A later on_frame does not queue them again.
+        up.on_frame(&camera_wide(0.0, 0.0), &s);
+        assert!(up.pending_chunks.is_empty());
+    }
+
     #[test]
     fn evicted_slot_reuse_restages() {
         let mut up = Uploader::<Fixture, NoGame>::new(ChunkDims::new(5));

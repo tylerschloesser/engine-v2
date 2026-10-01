@@ -308,6 +308,17 @@ impl Cache {
         self.meta[slot as usize].next = NONE;
     }
 
+    /// Calls `f(chunk_key, slot)` once per resident chunk, most recently used first (M37b:
+    /// `Uploader::requeue_all`). Walks the intrusive list: no allocation.
+    pub(crate) fn for_each_resident(&self, mut f: impl FnMut(u64, u32)) {
+        let mut slot = self.head;
+        while slot != NONE {
+            let meta = &self.meta[slot as usize];
+            f(meta.chunk_key, slot);
+            slot = meta.next;
+        }
+    }
+
     /// Moves `slot` to the front of the LRU list (most recently used).
     pub(crate) fn touch(&mut self, slot: u32) {
         if self.head == slot {

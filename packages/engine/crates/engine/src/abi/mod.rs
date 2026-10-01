@@ -650,6 +650,14 @@ pub fn client_rebase<T: Instance>(slot: &Slot<T>) -> Status {
     }
 }
 
+/// `upload_requeue_all() -> status`: `Instance::upload_requeue_all`'s own doc comment.
+pub fn upload_requeue_all<T: Instance>(slot: &Slot<T>) -> Status {
+    match slot.client() {
+        Ok(rt) => rt.inst.upload_requeue_all(),
+        Err(status) => status,
+    }
+}
+
 /// `client_presence_sample_at(index) -> status`: `Instance::client_presence_sample_at`'s own doc
 /// comment has the 52-byte `Result` shape. `engine/test`-only (`samplePresences`).
 pub fn client_presence_sample_at<T: Instance>(slot: &Slot<T>, index: u32) -> Status {

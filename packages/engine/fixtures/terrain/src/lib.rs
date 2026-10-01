@@ -304,6 +304,19 @@ impl Instance for FixtureTerrain {
         }
     }
 
+    /// docs/plan/37b-device-loss.md: the client worker's answer to `FLAG_RENDERER_RESET`.
+    fn upload_requeue_all(&mut self) -> Status {
+        match &mut self.role {
+            FixtureRole::Client {
+                terrain, uploader, ..
+            } => {
+                uploader.requeue_all(terrain);
+                Status::Ok
+            }
+            FixtureRole::Gen(_) => Status::Unsupported,
+        }
+    }
+
     /// This range's own test export (docs/plan/11-camera-and-input.md, browser `input: events
     /// reach wasm`): decodes `rx` into the queue, then writes the queue's own length (`u32`) and
     /// its last event's tile (`i32` x2) into `result[0..12)` -- whatever `on_input` ran last owns

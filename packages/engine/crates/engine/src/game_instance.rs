@@ -1662,6 +1662,16 @@ where
         }
     }
 
+    fn upload_requeue_all(&mut self) -> Status {
+        match self {
+            GameInstance::Client(c) => {
+                c.uploader.requeue_all(c.core.replica().terrain());
+                Status::Ok
+            }
+            _ => Status::Unsupported,
+        }
+    }
+
     fn client_presence_sample_at(&mut self, index: u32, result: &mut [u8]) -> Status {
         match self {
             GameInstance::Client(c) => {

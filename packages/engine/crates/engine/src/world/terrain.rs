@@ -326,6 +326,14 @@ impl TerrainStore {
         self.cache.borrow().slot_of(chunk.key())
     }
 
+    /// Calls `f(chunk, slot)` once per cached chunk, most recently used first. No allocation, no
+    /// LRU change (M37b: `Uploader::requeue_all` replays every resident chunk).
+    pub fn for_each_resident(&self, mut f: impl FnMut(ChunkCoord, u32)) {
+        self.cache
+            .borrow()
+            .for_each_resident(|key, slot| f(ChunkCoord::from_key(key), slot));
+    }
+
     /// Moves `chunk` to the front of the LRU list if it is cached; a no-op otherwise (it does not
     /// materialize).
     pub fn touch(&self, chunk: ChunkCoord) {

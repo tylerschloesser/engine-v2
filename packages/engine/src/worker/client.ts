@@ -14,6 +14,7 @@ import {
   CB_FLAGS,
   CB_FRAME_REQ,
   FLAG_REBASE,
+  FLAG_RENDERER_RESET,
   W_ACK,
   workerWord,
 } from '../sab/control.js'
@@ -226,6 +227,14 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     // this function reads `Rx` before overwriting it for its own, unrelated purpose (`actionPump`'s
     // own action-record decode, below) -- single-threaded, sequential, no concurrent readers.
     inputPump.pump()
+    // docs/plan/37b-device-loss.md (0018 §8): main rebuilt the renderer after a WebGPU device loss
+    // and set `FLAG_RENDERER_RESET`. Consume it at this wake, before `frame()` and `uploadPump`:
+    // every resident chunk and the indirection window are marked for re-upload, and the ring's byte
+    // budget on main paces the refill like a join. One atomic load per wake, no allocation.
+    if ((Atomics.load(shell.control.words, CB_FLAGS) & FLAG_RENDERER_RESET) !== 0) {
+      Atomics.and(shell.control.words, CB_FLAGS, ~FLAG_RENDERER_RESET)
+      inst.call0(inst.x.upload_requeue_all)
+    }
     const frameReq = Atomics.load(shell.control.words, CB_FRAME_REQ)
     if (frameReq !== lastFrameReq) {
       lastFrameReq = frameReq
