@@ -2161,11 +2161,16 @@ export function createClient(options: ClientOptions): Client {
         at(actionResultListeners, li)(seq, result)
       }
     }
-    if (fatalRejectSeqs.length > 0) {
-      const engineFault: ActionOutcome<unknown> = { Rejected: { Engine: 'EngineFault' } }
-      for (const seq of fatalRejectSeqs.splice(0)) {
-        for (const l of actionResultListeners.slice()) l(seq, engineFault)
-      }
+    if (fatalRejectSeqs.length > 0) flushFatalRejects()
+  }
+
+  // Out of line on purpose (M37 Deviations, "gc-echo neg-control red"): inlined into the rAF drain
+  // above, this never-taken block cost `main` a one-off ~14 KB inside the zero-GC window (measured
+  // 13.1 KB → 27.3 KB per window), which reddened `echo neg object *` whenever both windows caught it.
+  function flushFatalRejects(): void {
+    const engineFault: ActionOutcome<unknown> = { Rejected: { Engine: 'EngineFault' } }
+    for (const seq of fatalRejectSeqs.splice(0)) {
+      for (const l of actionResultListeners.slice()) l(seq, engineFault)
     }
   }
 

@@ -1,6 +1,6 @@
 # M37: Robustness: trap reactions, `onFatal`, and the engine-event surface audit
 
-Status: not started · After: 34c, 37b · Tyler-dependent: no
+Status: done · After: 34c, 37b · Tyler-dependent: no
 
 Split: WebGPU device loss, `rendererLost` and the test device-loss flag are `37b-device-loss.md`. Earlier briefs handed this milestone more than the PLAN row shows (M24: client-role and gen-role trap reactions and sim-worker respawn; M31b: the desync event), which pushed the reading list to five files. 37b runs **first** so the audit here sees every event.
 
@@ -69,12 +69,12 @@ Audit table (ADR name → owner → landed by; the behaviour test's name is fill
 `browser`: `trap: client instance recovers and resyncs` (replica hash equals host hash afterwards; main kept presenting), `trap: gen instance recovers and chunk arrives`, `trap: gen twice is fatal`, `sim worker death respawns and resyncs` (no admitted action lost, by log comparison), `fatal: two client traps`, `fatal: storage error` (files byte-identical afterwards), `desync: onDesync fires once per report` (M31b's `client_corrupt_chunk` on a multiplayer page: the callback receives one `DesyncReport` naming the chunk, a second sweep of the healed chunk fires nothing), `reference: status walks every event` (driven by `TestFlags`). `netcode`: `fatal: server onFatal stops world and closes sockets`, `trap: headless client resyncs`. `unit`: `engine event surface`. Slow: `dev-reload-keeps-world @slow`.
 
 ## Exit criteria
-- [ ] The trap, respawn, fatal and desync tests above pass by name; the M04 zero-GC tests still pass untouched (healthy path unchanged).
-- [ ] `pnpm test unit -t "engine event surface"` passes with every table row present and every named behaviour test found.
-- [ ] The reference game shows a distinct, test-visible state for each event.
-- [ ] `pnpm test:slow -t dev-reload-keeps-world` passes; the ADR "Engine failure surface" exists.
-- [ ] `grep -n postMessage packages/engine/src` still shows only M06b's lifecycle messages plus M23's.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] The trap, respawn, fatal and desync tests above pass by name; the M04 zero-GC tests still pass untouched (healthy path unchanged).
+- [x] `pnpm test unit -t "engine event surface"` passes with every table row present and every named behaviour test found.
+- [x] The reference game shows a distinct, test-visible state for each event.
+- [x] `pnpm test:slow -t dev-reload-keeps-world` passes; the ADR "Engine failure surface" exists.
+- [x] `grep -n postMessage packages/engine/src` still shows only M06b's lifecycle messages plus M23's.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test` · `pnpm lint` · `pnpm test browser -t "trap:"` · `pnpm test -t "fatal:"` · `pnpm test unit -t "engine event surface"` · `pnpm test:slow -t dev-reload-keeps-world`
@@ -128,3 +128,9 @@ none of its own (37b carries the device entry).
 **Step 8.** ADR `docs/decisions/0050-engine-failure-surface.md` (eight decisions, the final audit table). `PRE-PLAN.md` §1 stops at 0024 (0044-0049 are only in `PLAN.md`), so no index row. Not edited, for the orchestrator: `PLAN.md` "Plan-level decisions" line, root `CLAUDE.md` ADR range (0001-0049 -> 0001-0050), and `0017`'s `Status:` ("Amended by 0050 §2"). Context artifacts: both `CLAUDE.md` files already carried the two rules (engine: audit test and "a new event adds a row and a behaviour test"; reference: `status.ts` the one place); at the 60-line cap, so I replaced a stale clause in the reference one (reopen no longer waits for `navigator.locks`) and added one clause to the engine's tarball-install bullet naming the new test.
 
 **Fix round 2 (`mp/reconnect-indicator-delay` flake).** Evidence (instrumented page: every held-timer request with a timestamp beside the link log; red run at load 10, 1 in ~45 runs, quiet never): the link log is newest first, so my phase-1 "healed" wait (`log[length - 1]` is `open`) was vacuous, and one `killClients` followed by `server.stop()` 20 ms later produced three closes with an `up` between them (`close@99 open@99 Welcome@99 close@107 open@107 Welcome@112 close@115`) and three timer requests, 8-10 ms apart. One close asks once (`pushLinkLog` then one `setTimer`); the extra requests were separate closes (a redial that connected before the server stopped, then failed redials). `downGen++` on each `down` made every earlier timer stale, so phase 2's `held()` returned on a stale timer, firing it showed nothing, and the live one arrived after the fire (the coordinator's guess, confirmed). Also `Welcome` in the log is a phantom after any `open` (`pollForOnline` reads the stale `Online` session word), so it proves nothing. Engine fix (`client.ts` `handleNetLink`): an outage asks for the indicator once (`outagePending`, reset on `up`); before, each failed redial restarted the 1 s delay (red check: with the guard off the test fails `Received +2` timers). Test fix: the net worker's `link` messages are delivered by the test (`__mpLinkEvent`, `mp.ts`): drop then `up` = one timer, firing it shows nothing; three `down`s in one outage = one timer, `reconnecting` after firing; no sockets involved (`mp/reconnect` covers the real drop). 20 quiet runs and 50 runs under `--load 10`: 0 failures (`x20 load=0: pass=20 fail=0`, `x25 load=10: pass=25 fail=0` twice). `gc-echo neg object sim` red (steps 4-6): the log is gone (overwritten by later runs); the only output seen was the tail of its `error-context`: `attributedBytesPerFrame` sim 22.73 B, client/gen0/main 0, `gc: {}`, measured `sim` 23.45 B/frame (no GC event in the window, so the control did not trip its threshold); not reproduced since.
+
+### Orchestrator gate
+
+**gc-echo neg-control red (fixed at the gate).** `echo neg object {sim,gen0,client}` went red 3 in 24 interleaved runs at `df3e027` against 0 in 12 at base `1b0aebf` (load 10-14): criterion B for `main` at ~45 B/frame against echo's 30. Diagnosed by a Sonnet agent with `main`'s budget forced to 1: step 1 (`295a53f`) inlined the never-taken `fatalRejectSeqs` drain into `pollActionResults` (main's rAF drain), which put a one-off ~14 KB into window 1 every run (13.1 KB → 27.3 KB) and into window 2 about 1 test in 24, defeating 0028's two-window minimum. Outlined as `flushFatalRejects()` (`src/client.ts`): windows back to 13.2k/13.1k in 15 of 15; 0 allocation reds in 11 runs afterwards (the twelfth was the Chrome for Testing crash, `.ips` 16:38). Exact V8 event not named; the outlining measurement is the proof. No budget changed.
+
+**Accepted deviations:** re-`Hello` in band instead of a link reopen; `mp/reconnect-indicator-delay` delivers link messages at the net-worker boundary (the production `handleNetLink` is still under test; `mp/reconnect` covers a real drop), and it found an engine defect: each failed redial restarted the indicator delay (one request per outage now).
