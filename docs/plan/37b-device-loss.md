@@ -1,6 +1,6 @@
 # M37b: WebGPU device loss, `rendererLost`, the test device-loss flag
 
-Status: not started · After: 34c (runs **before** M37) · Tyler-dependent: no
+Status: done (criterion 1's CI half pending the `done` push) · After: 34c (runs **before** M37) · Tyler-dependent: no
 
 Split out of M37 (sizing rule: reading list). It runs first so M37's event audit includes `rendererLost`.
 
@@ -50,10 +50,10 @@ The event audit, `onFatal`, trap reactions (M37). Context loss for anything but 
 
 ## Exit criteria
 - [ ] The five `browser` tests pass locally on the real GPU and in CI on the software adapter (or carry the named local-only notice above).
-- [ ] Every other browser test still fails on an unexpected device loss (negative check: `loseDevice` without `allowDeviceLoss` turns a test red).
-- [ ] The M04/M17 zero-GC tests pass untouched, and `device loss then zero-GC window @slow` passes.
-- [ ] `pnpm test:slow frame-bench` shows no regression against `baselines/frame.json` and `frame-reference.json` (M36 landed; the suite is `frame-bench`, not `browser`).
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Every other browser test still fails on an unexpected device loss (negative check: `loseDevice` without `allowDeviceLoss` turns a test red).
+- [x] The M04/M17 zero-GC tests pass untouched, and `device loss then zero-GC window @slow` passes.
+- [x] `pnpm test:slow frame-bench` shows no regression against `baselines/frame.json` and `frame-reference.json` (M36 landed; the suite is `frame-bench`, not `browser`).
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test` · `pnpm lint` · `pnpm test browser -t "device loss"` · `pnpm test browser -t rendererLost` · `pnpm test rust -t requeue_all` · `pnpm test:slow browser -t "device loss then zero-GC"` · `pnpm test:slow frame-bench`

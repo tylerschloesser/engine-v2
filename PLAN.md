@@ -94,7 +94,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 35 | `35-packaging-and-adapters.md` | final exports map, tarball + size tests, pattern B, `checkSupport`, release profile | 29, 35b | D |
 | [x] | 36 | `36-slow-tier-and-benchmarks.md` | `pnpm test:slow`, standard large save, benchmarks | 34c, 35 | |
 | [x] | 36b | `36b-suite-audit-and-measurements.md` | suite audit, deferred measurements (byte diffing, `wasm-opt`/simd, rebuild time) | 36 | |
-| [ ] | 37b | `37b-device-loss.md` | WebGPU device loss, `rendererLost` | 34c | D |
+| [x] | 37b | `37b-device-loss.md` | WebGPU device loss, `rendererLost` | 34c | D |
 | [ ] | 37 | `37-robustness-events.md` | trap reactions, `onFatal`, engine-event surface audit | 34c, 37b | |
 | [ ] | 38 | `38-hosting-checks.md` | Durable Objects go/no-go, COOP/COEP on a real host, Fly deploy | 35, 31 | D |
 | [ ] | 39 | `39-acceptance.md` | coverage + budget audit, full device checklist, Phase 3 exit | all above | D |
