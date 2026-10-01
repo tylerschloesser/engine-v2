@@ -245,8 +245,47 @@ test('terrain: probe tile colours', async ({ page }, testInfo) => {
 // `@webkit-gpu` (playwright.config.ts's own webkit project grep) + `@slow` (0020 §4): runs only
 // under `pnpm test:slow`, only in the `webkit` project -- Firefox's own `@engines`-only grep never
 // matches this title, so a null WebGPU adapter there (0020 §6) never reaches `expectAdapter`.
-test('terrain: probe tile colours webkit @webkit-gpu @slow', async ({ page }, testInfo) => {
+//
+// M36 scoping fix (docs/plan/36-slow-tier-and-benchmarks.md step 8; M09 Deviations, "Gate round 3"):
+// a `@slow` tag alone does not scope a test to the `webkit` project, because the `chromium` project
+// has no grep of its own, so under `pnpm test:slow` this title also ran in headless Chromium. The
+// guard is explicit now: it runs in real WebKit only.
+test('terrain: probe tile colours webkit @webkit-gpu @slow', async ({
+  page,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'webkit', 'the WebKit repeat runs in the webkit project only')
   await runProbeTileColours(page, testInfo)
+})
+
+// `webkit-readback @slow` (docs/plan/36-slow-tier-and-benchmarks.md step 8; 0020 §6: "Playwright
+// WebKit has a working headless adapter on macOS: one readback scene in the slow tier"). The hand-fed
+// border scene of M09 (`terrain.html`: no workers, no client, two chunks staged straight into the page
+// table), the same four semantic pixel probes as the Chromium scene above; the sibling WebKit test
+// above covers the real-client path. Records `adapter.info` (`expectAdapter`; a null adapter fails, never
+// skips). Guarded explicitly, twice: real WebKit only (a `@slow` title also runs under `chromium`), and
+// not on Linux, whose WebKit (WebKitGTK) has no WebGPU at all: 0020 §6 promises that adapter on macOS
+// only, so the skip names itself and the platform, instead of the test finding `navigator.gpu` missing.
+test('webkit-readback @webkit-gpu @slow', async ({ page, browserName }, testInfo) => {
+  test.skip(browserName !== 'webkit', 'webkit-readback runs in the webkit project only')
+  test.skip(
+    process.platform === 'linux',
+    'webkit-readback skipped on Linux: WebKitGTK has no WebGPU adapter (0020 §6: macOS only)',
+  )
+  await openPage(page, '/terrain.html')
+  const init = await page.evaluate(() => window.__terrain?.init())
+  expectAdapter(testInfo, init?.adapterInfo ?? null)
+  await stageBorderScene(page)
+
+  const pixels = await renderBorderScene(page, borderCamera(64, 32, 8))
+  // Both sides of the chunk (0,0)/(1,0) border (tile 31 vs tile 32).
+  expectPixel(pixels, 31, 0, GRASS, TOL)
+  expectPixel(pixels, 32, 0, WATER, TOL)
+  // The resource tile (local index 5 of chunk 0) shows the resource's colour, not the base's.
+  expectPixel(pixels, 5, 0, ORE, TOL)
+  // A plain grass tile elsewhere in chunk 0.
+  expectPixel(pixels, 10, 0, GRASS, TOL)
+  expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
 })
 
 test('terrain: nonresident is neutral', async ({ page }, testInfo) => {
