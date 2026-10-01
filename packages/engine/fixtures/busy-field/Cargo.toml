@@ -7,6 +7,10 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"] # cdylib -> the .wasm; rlib -> the native golden test
 
+[features]
+# M36b: forwards the engine's `measure-diff` counters (never on in `pnpm test`'s own builds).
+measure-diff = ["engine/measure-diff"]
+
 [lints]
 workspace = true
 

@@ -16,6 +16,9 @@ test-hooks = []
 # ['bench'] })` (dir `target/engine/<profile>+bench`) is the only way in. Native tests turn it on
 # through the self dev-dependency below.
 bench = []
+# M36b: forwards the engine's `measure-diff` counters (what a byte-mask diff of entity puts would
+# have sent). Measurement only; `buildGame({ features: ['measure-diff'] })` is the only way in.
+measure-diff = ["engine/measure-diff"]
 
 [lints]
 workspace = true

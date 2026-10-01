@@ -9,6 +9,8 @@
 //! parameters; `sim_genesis` is what actually builds the `Sim<G>`.
 
 pub mod hashes;
+#[cfg(feature = "measure-diff")]
+mod measure_diff;
 pub mod pacing;
 pub mod subs;
 pub mod warm;
@@ -97,6 +99,17 @@ pub struct ConnCounters {
     /// exactly one byte (the same fact `budgets.json`'s own `counters.presence.uplinkBytesPerSec`
     /// formula already relies on).
     pub presence_bytes_up: u64,
+    /// Feature `measure-diff` only (`measure_diff.rs`): entity-put bytes sent whole, and what a
+    /// byte-mask diff of the same puts would have sent; the puts counted, and those with a known
+    /// previous encoding of the same length. Read through `sim_conn_counters`' last eight bytes.
+    #[cfg(feature = "measure-diff")]
+    pub diff_bytes_whole: u64,
+    #[cfg(feature = "measure-diff")]
+    pub diff_bytes_masked: u64,
+    #[cfg(feature = "measure-diff")]
+    pub diff_puts: u64,
+    #[cfg(feature = "measure-diff")]
+    pub diff_puts_known: u64,
 }
 
 struct ConnSlot<G: Game> {
@@ -158,6 +171,9 @@ struct ConnSlot<G: Game> {
     /// docs/plan/31b-desync-hashes.md: this connection's hash schedule, pending scope resend and
     /// the `sim_skip_delta` hook.
     hashes: hashes::HashSchedule,
+    /// Feature `measure-diff` only: the last encoding sent per entity, for `measure_diff.rs`.
+    #[cfg(feature = "measure-diff")]
+    measure_prev: measure_diff::Prev,
 }
 
 fn default_max_entities() -> u32 {
@@ -1122,6 +1138,8 @@ impl<G: Game> Host<G> {
             resume_pending: None,
             pace: Pacing::new(self.bandwidth, G::TICK_RATE, self.last_tick.0),
             hashes: hashes::HashSchedule::new(self.last_tick.0, G::TICK_RATE.hz_value()),
+            #[cfg(feature = "measure-diff")]
+            measure_prev: Default::default(),
         });
         player
     }
@@ -1179,6 +1197,8 @@ impl<G: Game> Host<G> {
             resume_pending: None,
             pace: Pacing::new(self.bandwidth, G::TICK_RATE, self.last_tick.0),
             hashes: hashes::HashSchedule::new(self.last_tick.0, G::TICK_RATE.hz_value()),
+            #[cfg(feature = "measure-diff")]
+            measure_prev: Default::default(),
         });
         player
     }
@@ -1426,6 +1446,8 @@ impl<G: Game> Host<G> {
             resume_pending,
             pace: Pacing::new(self.bandwidth, G::TICK_RATE, self.last_tick.0),
             hashes: hashes::HashSchedule::new(self.last_tick.0, G::TICK_RATE.hz_value()),
+            #[cfg(feature = "measure-diff")]
+            measure_prev: Default::default(),
         });
 
         self.write_welcome_for(player, epoch, welcome_sink);
@@ -2495,6 +2517,16 @@ impl<G: Game> Host<G> {
             slot.counters.chunk_snapshots += self.scratch_snapshot.len() as u64;
             slot.counters.chunk_leaves += self.scratch_left.len() as u64;
             slot.first_frame_pending = false;
+            // Beside the collapse decision, after the frame is certain to go: counts what a byte-mask
+            // diff of these puts would have sent. Compiled out without the feature.
+            #[cfg(feature = "measure-diff")]
+            measure_diff::record_frame::<G>(
+                &mut slot.measure_prev,
+                &mut slot.counters,
+                store,
+                &self.scratch_snapshot,
+                &self.scratch_entity_ops,
+            );
             // This connection's own results have now had their one chance to ride a frame (Scope:
             // "outcomes go to the sender's next build_frame"); clear so `pending_results` never grows
             // past what a single tick's worth of admissions/applies can add (host/mod Deviations).
@@ -3805,6 +3837,15 @@ where
         out[32..40].copy_from_slice(&c.chunk_leaves.to_le_bytes());
         out[40..48].copy_from_slice(&c.bytes_up.to_le_bytes());
         out[48..56].copy_from_slice(&c.presence_bytes_up.to_le_bytes());
+        // Feature `measure-diff`: two more `u32`s in the rest of the 64-byte `Result` (saturating);
+        // without it these bytes are not written and mean nothing.
+        #[cfg(feature = "measure-diff")]
+        if let Some(extra) = result.get_mut(56..64) {
+            extra[0..4]
+                .copy_from_slice(&(c.diff_bytes_whole.min(u32::MAX as u64) as u32).to_le_bytes());
+            extra[4..8]
+                .copy_from_slice(&(c.diff_bytes_masked.min(u32::MAX as u64) as u32).to_le_bytes());
+        }
         Status::Ok
     }
 

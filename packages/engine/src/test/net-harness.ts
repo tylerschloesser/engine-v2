@@ -456,6 +456,14 @@ export interface NetHarness {
    * `i` drops every `Global` value update until one carries the `Global` hash (5 s cadence). */
   skipGlobalDelta(i: number): void
   counters(i: number): NetHarnessCounters
+  /**
+   * M36b, a build with cargo feature `measure-diff` only (`buildGame({ features: ['measure-diff'] })`;
+   * on any other build the numbers mean nothing): the host's own tally, for client `i`'s connection
+   * since it connected, of its entity-put bytes sent whole and of what a byte-mask diff of the same
+   * puts would have sent (`crates/engine/src/host/measure_diff.rs`), read from the last eight bytes
+   * of `sim_conn_counters`.
+   */
+  diffBytes(i: number): { whole: number; masked: number }
   trace(): Uint8Array
   dispose(): Promise<void>
 }
@@ -976,6 +984,18 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     }
   }
 
+  function diffBytes(i: number): { whole: number; masked: number } {
+    const e = entries[i]
+    if (!e) throw new Error(`diffBytes: no client ${i}`)
+    const inst = hostInst()
+    const region = inst.region(RegionId.Result)
+    if (!region) throw new Error('diffBytes: no Result region')
+    const status = inst.call1(inst.x.sim_conn_counters, e.connId)
+    if (status !== 0) throw new Error(`diffBytes: sim_conn_counters failed: status ${status}`)
+    const v = new DataView(region.u8.buffer, region.u8.byteOffset, 64)
+    return { whole: v.getUint32(56, true), masked: v.getUint32(60, true) }
+  }
+
   function hostInst() {
     const inst = serverInternals(server).rawInstance
     if (!inst) throw new Error('harness: the live sim instance is unavailable')
@@ -1152,6 +1172,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     skipDelta: (i, cx, cy) => skipDeltaPacked(i, packCoord(cx, cy)),
     skipGlobalDelta: (i) => skipDeltaPacked(i, 0x8000_8000),
     counters,
+    diffBytes,
     trace: encodeTrace,
     async dispose() {
       await server.stop()

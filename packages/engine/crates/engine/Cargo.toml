@@ -15,6 +15,10 @@ disallowed_types = "deny"
 [features]
 # Native test helpers (`engine::testing`). Dev-dependency use only; never on in a `.wasm` build.
 testing = []
+# M36b (docs/plan/36b-suite-audit-and-measurements.md): counts, beside the real encoding, what a
+# byte-mask diff of every entity put would have sent (`host/measure_diff.rs`). Measurement only: no
+# `buildGame` call and no shipped `.wasm` turns it on, and the host sends the same bytes with it.
+measure-diff = []
 
 # Policy and the exact allowed list: docs/decisions/0017 §7 (checked by scripts/lib/crate-policy.test.mjs).
 [dependencies]
