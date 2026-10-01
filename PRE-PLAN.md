@@ -277,7 +277,7 @@ Owner: [0020]; what is asserted: [0002] (determinism), [0016] (zero GC). One com
 | Download | game `.wasm` ≤ 1 MB brotli warn / 2 MB fail; engine JS as downloaded by a player (browser entrypoints, Vite-minified) ≤ 58 KB brotli | spec, [0015], [0045] §5 |
 | Allocation per isolate | main 110 B/frame; client, sim, gen workers 8 B/frame; net worker ≤ 1 KB per message; zero major GCs; zero `memory.grow` | [0016] |
 | Latency | action → authority ≤ 1 tick + network; interpolation delay 100–400 ms adaptive (initial 150); snapshot every 60 s; log sync ≤ 1 s | [0004], [0010], [0005] |
-| Dev loop | ≤ 30 s from one-line Rust edit to tests starting (spike floor: 0.2–0.6 s save → page on the dev profile) | [0020], [0017] |
+| Dev loop | ≤ 45 s from one-line Rust edit to tests starting (was 30 s; [0049] after M36b measured 37.6 s) (spike floor: 0.2–0.6 s save → page on the dev profile) | [0020], [0017] |
 | Test suite | fast tier < 60 s warm (55 s serial budget; ≈ 25–30 s parallel) | [0020] |
 | Hosting cost | ≈ $5/month always-available, ≈ $0 idle | [0009] |
 

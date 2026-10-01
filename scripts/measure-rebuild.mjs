@@ -131,7 +131,7 @@ if (dirty) {
   failed = true
 }
 for (const t of summary) {
-  const over = t.median > 30_000 ? ' OVER the 30 s compile budget' : ''
+  const over = t.median > 45_000 ? ' OVER the 45 s compile budget (ADR 0049)' : ''
   console.log(
     `${t.name}: median ${s(t.median)} (min ${s(t.min)}, max ${s(t.max)}), load ${t.load[0].toFixed(1)}..${t.load[1].toFixed(1)}${over}; steps ${t.steps.map(([n, ms]) => `${n} ${s(ms)}`).join(', ')}`,
   )
