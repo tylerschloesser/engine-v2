@@ -14,6 +14,8 @@ use engine::game::{
 use engine::world::{PrototypeId, Registry, TilePos, WorldPos};
 use ts_rs::TS;
 
+#[cfg(feature = "bench")]
+pub mod bench;
 pub mod client;
 pub mod content;
 pub mod noise;
@@ -453,6 +455,17 @@ impl Game for RefGame {
 
     fn genesis(w: &mut dyn WorldWrite<Self>) {
         w.put_global(RefGlobal::EMPTY);
+        // `bench` (never shipped): the worldgen carried the bench marker, so fill the world with the
+        // standard large save (0020 section 9). The seed comes from the world's own rng, which is
+        // seeded from the world seed: genesis sees no params.
+        #[cfg(feature = "bench")]
+        if let Some(scale) = bench::marker_scale(w) {
+            let seed = match w.rng() {
+                Ok(r) => (u64::from(r.next_u32()) << 32) | u64::from(r.next_u32()),
+                Err(_) => 0,
+            };
+            bench::build(w, seed, bench::Shape::scaled(scale));
+        }
     }
 
     fn on_player(w: &mut dyn WorldWrite<Self>, who: PlayerId, ev: PlayerEvent) {

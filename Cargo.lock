@@ -387,6 +387,7 @@ name = "reference-sim"
 version = "0.0.0"
 dependencies = [
  "engine",
+ "reference-sim",
  "serde",
  "serde_json",
  "ts-rs",

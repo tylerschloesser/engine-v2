@@ -43,6 +43,12 @@ pub struct RefParams {
     pub wood_density: u32,
     pub stone_density: u32,
     pub coal_density: u32,
+    /// `bench` builds only (never shipped, `crate::bench`): `0` is the normal world; `n > 0` makes
+    /// the worldgen flat bench terrain carrying the marker `RefGame::genesis` reads, and the world
+    /// the standard large save at 1/`n` scale (`1` = full). Not in the TypeScript bindings.
+    #[cfg(feature = "bench")]
+    #[ts(skip)]
+    pub bench: u32,
 }
 
 impl Default for RefParams {
@@ -60,6 +66,8 @@ impl Default for RefParams {
             wood_density: 3500,
             stone_density: 1200,
             coal_density: 900,
+            #[cfg(feature = "bench")]
+            bench: 0,
         }
     }
 }
@@ -143,6 +151,16 @@ impl Worldgen for RefWorldgen {
 
     fn generate(seed: u64, params: &RefParams, chunk: ChunkCoord, out: &mut [Tile]) {
         debug_assert_eq!(out.len(), (EDGE * EDGE) as usize);
+        #[cfg(feature = "bench")]
+        if params.bench != 0 {
+            for ty in 0..EDGE {
+                for tx in 0..EDGE {
+                    out[(ty * EDGE + tx) as usize] =
+                        crate::bench::pristine_tile(chunk, tx, ty, params.bench);
+                }
+            }
+            return;
+        }
         let seed32 = (seed as u32) ^ ((seed >> 32) as u32);
         let bx = chunk.x.wrapping_mul(EDGE);
         let by = chunk.y.wrapping_mul(EDGE);

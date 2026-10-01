@@ -11,6 +11,11 @@ crate-type = ["cdylib", "rlib"] # cdylib -> the .wasm; rlib -> native tests and 
 # M34b: never enabled by `vite build`. `SCHEMA_VERSION + 1` and a poison `StartCraft` (recipe 255
 # panics in `apply`), for the two `slow` tests built through `buildGame({ features })`.
 test-hooks = []
+# M36: the standard large save (0020 section 9) and its bench worldgen marker, for the tick and frame
+# benchmarks. Never enabled by `vite build` or the fast tier's `.wasm`; `buildGame({ features:
+# ['bench'] })` (dir `target/engine/<profile>+bench`) is the only way in. Native tests turn it on
+# through the self dev-dependency below.
+bench = []
 
 [lints]
 workspace = true
@@ -22,6 +27,10 @@ serde = { version = "1", default-features = false, features = ["derive", "alloc"
 ts-rs = "12"
 
 [dev-dependencies]
+# Turns `bench` on for this crate's own test builds (`tests/large_save.rs`), so the fast
+# `large_save_builder_is_deterministic` runs under a plain `cargo nextest run`. Never part of the
+# `.wasm` (`buildGame` builds no dev-dependencies).
+reference-sim = { path = ".", features = ["bench"] }
 engine = { path = "../../../packages/engine/crates/engine", features = ["testing"] }
 # `landmarks_fixture.rs` alone: parses `tests/fixtures/landmarks.json` (test-only, never in the
 # `.wasm` -- already a dependency elsewhere in the workspace, e.g. `packages/engine/crates/engine`).
