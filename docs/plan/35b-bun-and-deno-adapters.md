@@ -1,6 +1,6 @@
 # M35b: Bun and Deno server adapters
 
-Status: not started · After: 29 (runs **before** M35) · Tyler-dependent: no
+Status: done · After: 29 (runs **before** M35) · Tyler-dependent: no
 
 Split out of M35 (sizing rule: reading list). It runs first so that M35 freezes an exports map in which `./server/bun` and `./server/deno` are real.
 
@@ -47,12 +47,12 @@ The Durable Object adapter and any deploy (M38). Changes to `Connection`, `HostS
 `unit`: `server adapters export parity`. `wasm` suite, Bun script (fast): `bun-adapter loopback`. Slow: `deno-adapter @slow`. Both adapter tests also assert a clean `stop()` (flush awaited, sockets closed) and that a `Storage` write failure reaches `onError`.
 
 ## Exit criteria
-- [ ] `pnpm test wasm -t "bun-adapter"` passes and the `wasm` suite stays within its 0020 §3 budget.
-- [ ] `pnpm test:slow -t deno-adapter` passes with Deno installed, and prints `deno-missing` and passes without it.
-- [ ] `pnpm --filter reference-server start:bun` serves a world that the reference game joins in the browser (checked once by hand with the `playwright-cli` skill; not an automated test).
-- [ ] The three adapters export the same names (`server adapters export parity`).
-- [ ] `packages/engine` still has zero `dependencies`; no `Bun.` or `Deno.` identifier outside `server-bun.ts` / `server-deno.ts`.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `pnpm test wasm -t "bun-adapter"` passes and the `wasm` suite stays within its 0020 §3 budget.
+- [x] `pnpm test:slow -t deno-adapter` passes with Deno installed, and prints `deno-missing` and passes without it.
+- [x] `pnpm --filter reference-server start:bun` serves a world that the reference game joins in the browser (checked once by hand with the `playwright-cli` skill; not an automated test).
+- [x] The three adapters export the same names (`server adapters export parity`).
+- [x] `packages/engine` still has zero `dependencies`; no `Bun.` or `Deno.` identifier outside `server-bun.ts` / `server-deno.ts`.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test` · `pnpm lint` · `pnpm test wasm -t "bun-adapter"` · `pnpm test:slow -t deno-adapter` · `pnpm --filter reference-server start:bun`
