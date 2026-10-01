@@ -6,7 +6,7 @@
 // Each run records the 1-minute load average before it starts: a p95 taken under load is not evidence.
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { loadavg } from 'node:os'
+import { cpus, loadavg } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -58,10 +58,25 @@ function collect(tmp, load, totalMs, exitCode) {
   }
 }
 
-function runOnce(i) {
+/** Fraction of CPU busy over one second, right before a run: the 1-minute load average also counts
+ * this script's own previous run, so it cannot tell foreign load from self-inflicted load. */
+async function busyNow() {
+  const snap = () =>
+    cpus().reduce(
+      (a, c) => [a[0] + c.times.idle, a[1] + Object.values(c.times).reduce((x, y) => x + y, 0)],
+      [0, 0],
+    )
+  const a = snap()
+  await new Promise((r) => setTimeout(r, 1000))
+  const b = snap()
+  return 1 - (b[0] - a[0]) / (b[1] - a[1])
+}
+
+async function runOnce(i) {
   mkdirSync(dir, { recursive: true })
   const tmp = join(dir, `.raw-${i}.json`)
   const load = loadavg()[0]
+  const busy = await busyNow()
   return new Promise((done) => {
     const start = performance.now()
     const child = spawn(process.execPath, ['scripts/test.mjs', '--timings-json', tmp], {
@@ -82,7 +97,7 @@ function runOnce(i) {
       const totalMs = performance.now() - start
       let record = null
       try {
-        record = collect(tmp, load, totalMs, code)
+        record = { ...collect(tmp, load, totalMs, code), busyBefore: busy }
       } catch (e) {
         console.log(`run ${i}: no usable report (${e.message})\n${out.slice(-600)}`)
       }
@@ -91,10 +106,14 @@ function runOnce(i) {
         record.stdout = out
           .trim()
           .split('\n')
-          .filter((l) => /^(rust|unit|wasm|netcode|browser|build)\b/.test(l))
+          .filter(
+            (l) =>
+              /^(rust|unit|wasm|netcode|browser|build|FAIL)\b/.test(l) ||
+              /^ {2}\S.*(Error|Timeout|expected)/.test(l),
+          )
         writeFileSync(join(dir, `run-${i}.json`), `${JSON.stringify(record)}\n`)
         console.log(
-          `run ${i} exit ${code} load ${load.toFixed(1)} wall ${(totalMs / 1000).toFixed(1)}s | ${record.stdout.join(' | ')}`,
+          `run ${i} exit ${code} load ${load.toFixed(1)} busy ${(busy * 100).toFixed(0)}% wall ${(totalMs / 1000).toFixed(1)}s | ${record.stdout.join(' | ')}`,
         )
       }
       done()

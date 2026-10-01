@@ -113,7 +113,9 @@ test('exports-map: no production entry reaches dist/test.js', () => {
   expect(offenders).toEqual([])
 })
 
-test('exports-map: pnpm pack lists only dist/**, crates/** and package.json', () => {
+// `@slow` (M36b step 2, 0020 §4): spawns `pnpm pack`, 1.7-2.0 s p95 inside `pnpm test` and the unit
+// suite's slowest test by 2x. The `files`-is-`dist`+`crates` assertion above stays fast.
+test('exports-map: pnpm pack lists only dist/**, crates/** and package.json @slow', () => {
   const dest = mkdtempSync(join(tmpdir(), 'engine-pack-'))
   try {
     const out = execFileSync('pnpm', ['pack', '--json', '--pack-destination', dest], {

@@ -15,7 +15,8 @@ test('reference_full_game_two_players', async () => {
 }, 30_000)
 
 // Once over real loopback sockets (`transport: 'ws'`): the conditioner wraps them the same way.
-test('reference_full_game_two_players_ws', async () => {
+// `@slow` (M36b step 2, 0020 §4 rung 2: a real-socket repeat of the in-memory test above; 0.87 s p95).
+test('reference_full_game_two_players_ws @slow', async () => {
   const seed = 3411
   const r = await refHarness({
     clients: 2,

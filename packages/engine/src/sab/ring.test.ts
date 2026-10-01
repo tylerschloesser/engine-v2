@@ -5,7 +5,8 @@ import { createRing, RingConsumer, RingProducer, type RingStats } from './ring.j
 test('ring.spsc_sequence', async () => {
   const slotBytes = 64
   const slots = 64
-  const count = 200_000
+  // 50,000 (M36b step 2, was 200,000): 780 laps of the 64-slot ring, p95 1.1 s -> under 0.5 s.
+  const count = 50_000
   const sab = createRing(slotBytes, slots)
   const payloadBytes = slotBytes - 8
   const consumer = new RingConsumer(sab)
