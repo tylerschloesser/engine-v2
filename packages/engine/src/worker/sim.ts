@@ -61,6 +61,7 @@ import {
   PERSISTENCE_DEBUG_CALL,
   SIM_COUNTERS_BYTES,
   SIM_COUNTERS_CALL,
+  WORLD_LOCK_WAIT_MS,
 } from './protocol.js'
 import type { LoopState, Shell } from './shell.js'
 import { handleTestCall } from './test-call.js'
@@ -74,56 +75,27 @@ function worldLockName(worldId: string): string {
   return `world:${worldId}`
 }
 
-/** Web Lock acquisition without ever blocking this worker (`{ mode: 'exclusive', ifAvailable: true
- * }`): resolves `true`/`false` the instant the browser knows whether the lock was free, while the
- * lock itself (if granted) stays held until the returned `release` function is called -- the
- * standard "hold a lock for an arbitrary duration" idiom (`navigator.locks.request`'s own callback
- * keeps the lock for as long as the promise it returns is pending). Never releases on its own: a
- * persisted world holds its lock for the sim worker's whole life (Planning decision 6), released
- * only by whatever later milestone tears the worker down cleanly (Non-scope here, same as M23's own
- * "clean boundaries" not covering worker respawn, M24/M37). */
-function tryAcquireWorldLock(worldId: string): Promise<boolean> {
+/** Web Lock acquisition without ever blocking this worker: one *waiting* exclusive request, aborted
+ * after `waitMs` (`AbortSignal.timeout`; `0`: only if free right now), resolving `true` the moment it
+ * is granted and `false` when the wait ran out. The lock itself stays held until the worker is gone -- the standard "hold a lock
+ * for an arbitrary duration" idiom (`navigator.locks.request`'s callback keeps it for as long as the
+ * promise it returns is pending; this one never settles). A persisted world holds its lock for the sim
+ * worker's whole life (Planning decision 6); a closing document's worker releases it by dying. */
+function requestWorldLock(worldId: string, waitMs: number): Promise<boolean> {
   return new Promise((resolveGranted) => {
-    navigator.locks.request(
-      worldLockName(worldId),
-      { mode: 'exclusive', ifAvailable: true },
-      (lock) => {
-        return new Promise<void>(() => {
-          // Never resolves: holding the lock for the worker's whole life, deliberately (above).
-          resolveGranted(lock !== null)
-        })
-      },
-    )
+    navigator.locks
+      .request(
+        worldLockName(worldId),
+        waitMs > 0
+          ? { mode: 'exclusive', signal: AbortSignal.timeout(waitMs) }
+          : { mode: 'exclusive', ifAvailable: true },
+        (lock) =>
+          new Promise<void>(() => {
+            resolveGranted(lock !== null)
+          }),
+      )
+      .catch(() => resolveGranted(false)) // AbortError: still held by someone else after `waitMs`
   })
-}
-
-/** docs/plan/23-persistence-opfs-and-lifecycle.md step 5 (Deviations, fix round): a page reload
- * (`export_works_after_load_failure`'s own sequence -- hidden-pause, corrupt, `page.reload()`,
- * immediately check `world-busy`) raced the *previous* document's own worker tearing down and
- * releasing this exact lock name against the *new* document's very first `tryAcquireWorldLock` call
- * -- `ifAvailable: true` never waits, so a transient overlap (measured: reproduced 2/3 runs under
- * full-suite contention, 0/12 in isolation) reported a spurious `world-busy` for a world nothing else
- * actually held.
- *
- * Not a mask for the real `WorldBusy` case (coordinator review): the Web Lock a genuinely concurrent
- * second tab holds is held *forever* (`tryAcquireWorldLock`'s own callback never resolves its
- * promise, by construction, for as long as that tab's own worker lives) -- every one of the 5
- * attempts here sees it unavailable, identically, whether there are 1 or 5 attempts. A real second
- * tab therefore still always ends up `world-busy`, just up to 200 ms slower to be told so (4 waits
- * of 50 ms between 5 attempts) than a single `ifAvailable` check would report -- `second_tab_gets_
- * world_busy` still exercises this exact path (its own `expect(...).toBe(true)` has no tight timing
- * budget, and passed unchanged after this fix, `pnpm test browser` x2 plus a 5x repeat). What changes
- * is only the *reload* case: there, the "holder" is a worker already mid-teardown with nothing left
- * to hold the lock for, so it clears within the retry window instead of never. */
-async function requestWorldLock(worldId: string, attempts = 5): Promise<boolean> {
-  const retryDelayMs = 50
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    if (await tryAcquireWorldLock(worldId)) return true
-    if (attempt < attempts - 1) {
-      await new Promise<void>((resolve) => systemScheduler.setTimer(resolve, retryDelayMs))
-    }
-  }
-  return false
 }
 
 /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 1-2 (Deviations): OPFS's own probe --
@@ -359,8 +331,8 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     const world = message.world
     // A respawned worker (docs/plan/37-robustness-events.md step 2) takes the lock the dead one held:
     // main terminated it a moment ago, and the browser releases the lock when that thread is gone,
-    // which is not instant. Wait up to 3 s (a held lock of a live second tab is still reported).
-    const locked = await requestWorldLock(world.worldId, message.respawn === true ? 60 : 5)
+    // which is not instant: the same wait as a start after a reload.
+    const locked = await requestWorldLock(world.worldId, world.lockWaitMs ?? WORLD_LOCK_WAIT_MS)
     if (!locked) {
       shell.post({
         type: 'start-failed',

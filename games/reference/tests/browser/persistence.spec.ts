@@ -46,30 +46,13 @@ const tick = async (page: Page) => {
   return page.evaluate(() => window.__simTick?.())
 }
 
-/** Waits until no `world:*` Web Lock is held, asked from a probe tab of the same origin (a static
- * file: no game, no console errors that `openGame` would fail on). */
-async function waitForWorldLocksFree(page: Page): Promise<void> {
-  const probe = await page.context().newPage()
-  try {
-    await probe.goto('/tiles.json')
-    await probe.waitForFunction(async () => {
-      const { held } = await navigator.locks.query()
-      return !(held ?? []).some((l) => l.name?.startsWith('world:'))
-    })
-  } finally {
-    await probe.close()
-  }
-}
-
 /**
- * Leaves the page and opens `path` again once the world's Web Lock is free. A reload races the old
- * document's sim worker giving its lock up (`worker/sim.ts` retries for 200 ms, which a parked worker
- * can overrun), so the wait is on the condition itself: a same-origin static document to ask
- * `navigator.locks.query()`, then the page.
+ * Opens `path` again in the same tab, straight away. The old document's sim worker may outlive it
+ * for a moment (a worker in `Atomics.wait` is terminated by the browser after about 2 s) and takes its
+ * `world:<id>` lock with it; the new worker waits for that lock (`worker/sim.ts`, M37), so no test
+ * has to wait for it to be free first.
  */
 async function reopen(page: Page, path = PERSIST): Promise<void> {
-  await page.goto('about:blank')
-  await waitForWorldLocksFree(page)
   await page.goto(path)
   await page.waitForFunction(() => window.__pageReady === true)
   await uiState(page)
@@ -216,4 +199,28 @@ test('reference_export_import_roundtrip', async ({ page, context }) => {
   await pumpUntil(second, (u) => (u?.furnace?.ingots_out ?? 0) > 0, { maxSteps: 200 })
   await driver.takeAll(A)
   expect((await readUi(second)).inventory[ITEM.ingot]).toBe(1)
+})
+
+test('reference_reload_during_load', async ({ page }) => {
+  // The M34b gate's finding (deferred ledger, "F5 during startup gets `world-busy`"): a reload 60-100
+  // ms into a load found the first load's sim worker still holding the world's Web Lock and was
+  // refused (8 of 14 runs). Three reloads in a row at those moments, no waiting for the lock: the
+  // last load starts the world, and the world it saved is still there.
+  test.setTimeout(60_000)
+  await start(page)
+  await runScript(script().collect('stone', 1), await domDriver(page))
+  await page.evaluate(() => window.__exportWorld?.()) // on disk
+
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(e.message))
+  for (const delayMs of [60, 80, 100]) {
+    await page.goto(PERSIST, { waitUntil: 'commit' })
+    await page.waitForTimeout(delayMs)
+  }
+  await page.goto(PERSIST)
+  await page.waitForFunction(() => window.__pageReady === true, undefined, { timeout: 20_000 })
+  await uiState(page)
+  expect(await page.evaluate(() => window.__startError?.())).toBeUndefined()
+  expect((await readUi(page)).inventory[ITEM.stone]).toBe(1)
+  expect(errors).toEqual([])
 })

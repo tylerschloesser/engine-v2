@@ -63,6 +63,7 @@ import type {
   ToWorker,
   WorkerKind,
 } from './worker/protocol.js'
+import { WORLD_LOCK_WAIT_MS, WORLD_OWNER_WAIT_MS } from './worker/protocol.js'
 
 export type {
   SupportFailure,
@@ -548,6 +549,34 @@ const GPU_SHARE_BYTES = 20 * MIB
  * (0015 §5; Planning decisions "Arena config check on main"). Exported for `arena.sum_rule`. */
 export function arenaBudgetBytes(): number {
   return TAB_TARGET_BYTES - sabBytesTotal() - GPU_SHARE_BYTES
+}
+
+/** Takes `world-owner:<worldId>` on this document's main thread and holds it until the returned
+ * function is called (or the document is gone): one exclusive request, waited on for at most
+ * `waitMs` (a reload's old document may still be tearing down). `owned: false`: another live
+ * document owns the world. Without Web Locks (no `navigator.locks`) the lock is not taken and nothing is refused. */
+async function holdWorldOwnerLock(
+  worldId: string,
+  waitMs: number,
+): Promise<{ owned: boolean; release: () => void }> {
+  let release: () => void = () => {}
+  if (typeof navigator === 'undefined' || !navigator.locks) return { owned: true, release }
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const granted = await new Promise<boolean>((resolve) => {
+    navigator.locks
+      .request(
+        `world-owner:${worldId}`,
+        { mode: 'exclusive', signal: AbortSignal.timeout(waitMs) },
+        () => {
+          resolve(true)
+          return held
+        },
+      )
+      .catch(() => resolve(false))
+  })
+  return { owned: granted, release }
 }
 
 /** Total arena bytes the chosen topology reserves: `client` + (`sim`, only when hosting locally)
@@ -2176,8 +2205,13 @@ export function createClient(options: ClientOptions): Client {
     resultsFrameHandle = scheduler.requestFrame(resultsFrame)
   }
 
+  /** Releases `world-owner:<id>` (`holdWorldOwnerLock`); `null` until taken. */
+  let releaseWorldOwner: (() => void) | null = null
+
   function destroy(): void {
     destroyed = true
+    releaseWorldOwner?.()
+    releaseWorldOwner = null
     Atomics.store(control.words, CB_LIFECYCLE, Lifecycle.Stopping)
     for (const w of workers) {
       Atomics.store(control.words, workerWord(w.index, W_YIELD), 1)
@@ -2274,6 +2308,19 @@ export function createClient(options: ClientOptions): Client {
       options.host.kind === 'local'
         ? { ...options.host.world, buildHash: options.wasm.buildHash }
         : undefined
+
+    // docs/plan/37-robustness-events.md (the M34b seam): a persisted local world's *main thread*
+    // holds `world-owner:<id>` for as long as this client lives. The sim worker's own `world:<id>` is
+    // released only when the worker is gone, which after a reload can take about 2 s (a worker in
+    // `Atomics.wait`); a main thread's lock goes with its document. So a lock held by a live second
+    // tab is told apart from a closing document's worker: the new worker waits for `world:<id>` only
+    // when no other document owns the world.
+    let worldLockWaitMs = WORLD_LOCK_WAIT_MS
+    if (options.host.kind === 'local' && options.host.persist === true && worldConfig) {
+      const owner = await holdWorldOwnerLock(worldConfig.worldId, WORLD_OWNER_WAIT_MS)
+      releaseWorldOwner = owner.release
+      if (!owner.owned) worldLockWaitMs = 0
+    }
 
     // `options.test.game` is the documented escape hatch for *every* worker (its own doc comment:
     // "overriding `host.world.game`"), so it still wins over a real `WorldConfig` when set. Absent
@@ -2376,6 +2423,7 @@ export function createClient(options: ClientOptions): Client {
               worldId: worldConfig.worldId,
               buildHash: worldConfig.buildHash,
               params: worldConfig.params,
+              lockWaitMs: worldLockWaitMs,
             }
           : undefined
       // docs/plan/29-net-worker-and-reference-server.md steps 1-2: the `net`-kind spawn's own real

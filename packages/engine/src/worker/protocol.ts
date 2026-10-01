@@ -127,7 +127,14 @@ export type SetupMessage = {
    * (`params` is stored verbatim in the manifest; `buildHash` feeds `sim_segment_header`'s identity
    * indirectly through `engine_init`, already carried by `config`, but `Persistence` also keeps its
    * own JSON copy for `ManifestV1.created`/`.params`). */
-  world?: { worldId: string; buildHash: string; params: WorldConfig['params'] }
+  world?: {
+    worldId: string
+    buildHash: string
+    params: WorldConfig['params']
+    /** How long the sim worker waits for the world's Web Lock (`WORLD_LOCK_WAIT_MS`); `0` takes it
+     * only when free. Main decides (`client.ts`, the world-owner lock). Absent = `WORLD_LOCK_WAIT_MS`. */
+    lockWaitMs?: number
+  }
   /**
    * docs/plan/15b-ring-connection-and-replica-rendering.md, Orchestrator ruling 1: whether this
    * topology's `sim`/`client` link the uplink/downlink ring pair -- a topology fact carried on
@@ -243,6 +250,17 @@ export const SETUP_PHASE_MESSAGE_TYPES: readonly string[] = ['ready']
 /** Every `FromWorker` type a worker may post once its blocking loop has started (0015 §2: "fatal
  * errors and lifecycle", plus this milestone's own world-op results and every `test-call` reply) --
  * the other half of the allowlist `postmessage_type_literals_are_allowlisted` checks. */
+/** docs/plan/37-robustness-events.md (the M34b seam, "F5 during startup gets `world-busy`"): how long a
+ * starting sim worker waits for `world:<id>`. A reload starts the new document's worker while the old
+ * document's sim worker is still alive: a worker blocked in `Atomics.wait` is terminated by the
+ * browser only after about 2 s (measured: 1 s is not enough, 2.2 s is), and the lock goes with it. */
+export const WORLD_LOCK_WAIT_MS = 3000
+/** How long main waits for the world-owner lock (`world-owner:<id>`, held by a document's main thread
+ * for as long as its client lives). A main thread's locks are released when its document is gone, so
+ * a held one means a live second tab: the start is refused at once (`lockWaitMs: 0`) instead of after
+ * `WORLD_LOCK_WAIT_MS`. The wait only covers the document teardown race of a reload. */
+export const WORLD_OWNER_WAIT_MS = 300
+
 export const POST_SETUP_MESSAGE_TYPES: readonly string[] = [
   'fatal',
   'test-result',
