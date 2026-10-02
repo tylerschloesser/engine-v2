@@ -237,6 +237,7 @@ When: M38 ticked. Q6: the Workers plan and the Fly machine are approved; the Clo
 - [ ] **M38-hosted-boot** (COOP/COEP from the reference server's static handler on a real deployment; same-origin `wss`). *Steps:* open the URL. *Pass:* the page is cross-origin isolated, gets an adapter, and reaches `online` on the same Fly origin, including the first load that wakes a stopped machine. *If it fails:* compare with `scripts/check-coi.mjs <url>`; plan edit against the `--static` handler or the Fly recipe.
 - [ ] **M38-socket-resume**. *Steps:* with `?linklog=1`, each step of M29-socket-resume once over the real network; record `visible → Welcome` from the on-page log. *Pass / If it fails:* as M29-socket-resume.
 - [ ] **M38-remote-motion**. *Steps:* M34-remote-motion with the phone on cellular and the Mac on Wi-Fi. *Pass / If it fails:* as M34-remote-motion.
+- First dial to a stopped machine may show `reconnecting` for about 1 s; an error screen is a failure.
 
 **Run on:** <device, OS, carrier, date>; **result:** <per item; ms to Welcome>
 
