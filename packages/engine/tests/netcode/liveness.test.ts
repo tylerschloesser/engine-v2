@@ -97,6 +97,18 @@ describe('liveness', () => {
     expect(h.dials.length).toBeGreaterThanOrEqual(2)
   })
 
+  // 0013 Client policy: the tests above import `DEAD_MS`/`PROBE_DEADLINE_MS`, so they follow the
+  // constants wherever they go. These are the ADR's literals: dead after 3 s, probe deadline 1 s.
+  test('dead-and-probe-literals-are-3000-and-1000', () => {
+    expect(DEAD_MS).toBe(3000)
+    expect(PROBE_DEADLINE_MS).toBe(1000)
+    const h = makeHarness(7)
+    h.clock.advance(2999)
+    expect(h.downs).toHaveLength(0)
+    h.clock.advance(1)
+    expect(h.downs).toHaveLength(1)
+  })
+
   test('stale-socket-ignored', () => {
     const h = makeHarness(2)
     const first = h.dials[0]

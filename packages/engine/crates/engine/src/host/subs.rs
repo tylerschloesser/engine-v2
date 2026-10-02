@@ -446,6 +446,82 @@ mod tests {
         );
     }
 
+    /// 0010 Subscription (cap priority): visible > ring 1 > look-ahead > retained. With a cap of
+    /// one under the target (ring 1 plus 2 look-ahead chunks) the one evicted chunk is a
+    /// look-ahead chunk; two under, both look-ahead chunks go and every ring-1 chunk stays; only
+    /// below the ring-1 count does a ring-1 chunk (never a visible one) go.
+    #[test]
+    fn subs_cap_evicts_lookahead_before_ring1_before_visible() {
+        let dims = dims32();
+        let r = report(0, 0, 16, (300, -300));
+        let visible = visible_rect(clamp_report(r), dims);
+        let ring1 = visible.expanded(1);
+        let mut buf = [ChunkCoord::default(); 2];
+        let n = lookahead_chunks(visible, (300, -300), dims, &mut buf);
+        assert_eq!(n, 2);
+        let ring1_count = ring1.iter().count();
+        let subscribed = |cap: usize| {
+            let mut s = SubscriptionSet::with_cap(dims, TickRate::HZ_20, cap);
+            s.update(r, Tick(1));
+            s
+        };
+
+        let s = subscribed(ring1_count + 1);
+        assert_eq!(s.len(), ring1_count + 1);
+        assert!(ring1.iter().all(|c| s.is_subscribed(c)), "ring 1 survives");
+        assert_eq!(buf[..n].iter().filter(|&&c| s.is_subscribed(c)).count(), 1);
+
+        let s = subscribed(ring1_count);
+        assert_eq!(s.len(), ring1_count);
+        assert!(ring1.iter().all(|c| s.is_subscribed(c)), "ring 1 survives");
+        assert!(
+            buf[..n].iter().all(|&c| !s.is_subscribed(c)),
+            "look-ahead gone"
+        );
+
+        let s = subscribed(ring1_count - 1);
+        assert_eq!(s.len(), ring1_count - 1);
+        assert!(
+            visible.iter().all(|c| s.is_subscribed(c)),
+            "visible survives"
+        );
+        assert_eq!(ring1.iter().filter(|&c| !s.is_subscribed(c)).count(), 1);
+    }
+
+    /// 0010 Subscription (cap priority): a look-ahead chunk outranks a retained one. After a pan
+    /// leaves old chunks retained (outside the target, inside ring 3, hold not elapsed), a cap equal
+    /// to the new target evicts every retained chunk and keeps the 2 look-ahead chunks.
+    #[test]
+    fn subs_cap_evicts_retained_before_lookahead() {
+        let dims = dims32();
+        let first = report(0, 0, 16, (0, 0));
+        let second = report(96, 0, 16, (300, -300));
+        let visible = visible_rect(clamp_report(second), dims);
+        let target = visible.expanded(1);
+        let mut buf = [ChunkCoord::default(); 2];
+        let n = lookahead_chunks(visible, (300, -300), dims, &mut buf);
+        assert_eq!(n, 2);
+        let target_count = target.iter().count() + n;
+
+        let mut free = SubscriptionSet::new(dims, TickRate::HZ_20);
+        free.update(first, Tick(1));
+        free.update(second, Tick(2));
+        assert!(
+            free.len() > target_count,
+            "the pan must leave retained chunks"
+        );
+
+        let mut capped = SubscriptionSet::with_cap(dims, TickRate::HZ_20, target_count);
+        capped.update(first, Tick(1));
+        capped.update(second, Tick(2));
+        assert_eq!(capped.len(), target_count);
+        assert!(target.iter().all(|c| capped.is_subscribed(c)));
+        assert!(
+            buf[..n].iter().all(|&c| capped.is_subscribed(c)),
+            "look-ahead kept"
+        );
+    }
+
     #[test]
     fn subs_clamps_oversized_and_zero_views() {
         let dims = dims32();

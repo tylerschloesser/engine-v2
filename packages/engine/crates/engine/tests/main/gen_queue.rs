@@ -336,3 +336,49 @@ fn overlay_replace_evicts_and_regenerates_with_view_unchanged() {
         "a chunk the render side never actually lost residency for must not be re-requested"
     );
 }
+
+fn order_with_velocity(vx_tiles_per_s: i32) -> Vec<ChunkCoord> {
+    let s = store(CacheCapacity::Unlimited);
+    let mut q = GenQueue::new(ChunkDims::new(4), 1);
+    let mut v = view_at(single(ChunkCoord::new(0, 0)));
+    v.velocity = (vx_tiles_per_s * 256, 0); // Q24.8 tiles per second
+    q.set_view(&v, &s);
+    drain_all(&mut q, 0)
+}
+
+fn before(order: &[ChunkCoord], a: (i32, i32), b: (i32, i32)) -> bool {
+    let pos = |c: (i32, i32)| {
+        order
+            .iter()
+            .position(|&o| o == ChunkCoord::new(c.0, c.1))
+            .unwrap()
+    };
+    pos(a) < pos(b)
+}
+
+/// 0008 §4: within one ring class, distance is measured to `camera + velocity * 0.5 s`. Chunk edge
+/// 16, so ring 1's (1, 0) centre is 24 tiles from the camera and (-1, 0)'s is 8 the other way: they
+/// swap once the point has moved past 8 tiles. At 12 tiles/s the point is 6 tiles ahead (still
+/// (-1, 0) first); at 24 tiles/s it is 12 ahead ((1, 0) first). A factor of 1.0 s would flip the
+/// first case, 0.25 s would not flip the second, so only about 0.5 s passes both.
+#[test]
+fn queue_distance_is_measured_to_the_half_second_lookahead_point() {
+    assert!(before(&order_with_velocity(0), (-1, 0), (1, 0)));
+    assert!(
+        before(&order_with_velocity(12), (-1, 0), (1, 0)),
+        "6 tiles ahead: not yet past the midpoint"
+    );
+    assert!(
+        before(&order_with_velocity(24), (1, 0), (-1, 0)),
+        "12 tiles ahead: past the midpoint"
+    );
+}
+
+/// 0008 §4: ring 2 goes in the direction of motion first, either way along the axis.
+#[test]
+fn queue_ring2_goes_direction_of_motion_first() {
+    assert!(before(&order_with_velocity(0), (-2, -2), (2, -2)));
+    assert!(before(&order_with_velocity(40), (2, -2), (-2, -2)));
+    assert!(before(&order_with_velocity(-40), (-2, -2), (2, -2)));
+    assert!(before(&order_with_velocity(40), (2, 2), (-2, 2)));
+}

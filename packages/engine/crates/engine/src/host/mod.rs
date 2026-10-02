@@ -3920,6 +3920,10 @@ mod default_tests {
         assert_eq!(cfg.max_modified_tiles, 1_048_576);
         assert_eq!(cfg.max_action_growth, 4096, "4 KiB");
         assert_eq!(cfg.cache_chunks, 1024);
+        // 0010 (spec client R3): 256 tiles per axis, about 128 subscribed chunks per client.
+        assert_eq!(cfg.view_max_tiles_per_axis, 256);
+        assert_eq!(cfg.view_max_chunks, 128);
+        assert_eq!(subs::CAP_CHUNKS, 128);
         assert_eq!(
             cfg.world_budget_bytes,
             u32::MAX,

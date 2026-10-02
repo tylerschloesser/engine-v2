@@ -61,6 +61,36 @@ test('lifecycle/idle-stops-ticks-then-onidle', async () => {
   }
 })
 
+// 0013 World lifecycle: "if nobody returns within 30 s the host snapshots, flushes and calls
+// \`onIdle\`". The test above only shows it fires some time before 31 s after a late sample of the
+// clock. Here the stop tick is found tick by tick, and the call must not come at 29 s after it and
+// must have come by 31 s.
+test('lifecycle/onidle-fires-30-s-after-ticking-stops', async () => {
+  const harness = await createNetHarness({ fixture: await putsFixture(), seed: 4003, clients: 1 })
+  try {
+    const client = harness.clients[0]
+    if (!client) throw new Error('no client')
+    client.setCamera(square(0))
+    await harness.settle()
+    harness.link(0).disconnect()
+    let ticks = 0
+    while (serverInternals(harness.server).isTicking && ticks++ < PAST_GRACE_TICKS) {
+      await harness.advanceTicks(1)
+    }
+    expect(serverInternals(harness.server).isTicking).toBe(false)
+    const stoppedAt = harness.clock.now()
+
+    await harness.advanceTo(stoppedAt + 29_000)
+    await flushMicrotasks()
+    expect(serverInternals(harness.server).idleCalls, 'not yet at 29 s').toBe(0)
+    await harness.advanceTo(stoppedAt + 31_000)
+    await flushMicrotasks()
+    expect(serverInternals(harness.server).idleCalls, 'called by 31 s').toBe(1)
+  } finally {
+    await harness.dispose()
+  }
+})
+
 test('lifecycle/hello-resumes', async () => {
   const seed = 4002
   const harness = await createNetHarness({ fixture: await putsFixture(), seed, clients: 1 })

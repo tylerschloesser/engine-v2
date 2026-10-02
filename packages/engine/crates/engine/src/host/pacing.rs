@@ -629,6 +629,21 @@ mod tests {
         Pacing::new(BandwidthConfig::default(), TickRate::HZ_20, 0)
     }
 
+    /// 0009 WorldConfig defaults / 0004: the default action rate is 20 per second with a burst of
+    /// 40, read through behaviour: a fresh connection takes exactly 40 actions in one tick, and the
+    /// bucket then refills one token per 20 Hz tick (20 per second), not faster or slower.
+    #[test]
+    fn default_action_rate_is_20_per_second_burst_40() {
+        let d = BandwidthConfig::default();
+        assert_eq!((d.action_per_s, d.action_burst), (20, 40));
+        let mut p = pacing();
+        let taken = (0..100).filter(|_| p.take_action(0)).count();
+        assert_eq!(taken, 40, "the burst");
+        // One second later (20 ticks) 20 tokens are back, and no more.
+        let refilled = (0..100).filter(|_| p.take_action(20)).count();
+        assert_eq!(refilled, 20, "20 per second");
+    }
+
     #[test]
     fn bucket_refill_is_a_function_of_ticks_alone() {
         let mut p = pacing();

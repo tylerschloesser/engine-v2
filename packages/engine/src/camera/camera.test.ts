@@ -141,6 +141,38 @@ test('camera: zoom clamps and constraints', () => {
   expect(zoomIn.tilesAcross).toBe(DEFAULT_MIN_TILES)
 })
 
+// spec client R2b / R3: the default zoom range is 12 to 256 tiles across (the literals of 0019 §1,
+// not the exported constants), and a game narrows it, and bounds the centre, through
+// `setConstraints`.
+test('camera: constraints set by a game narrow zoom and bound the centre', () => {
+  expect([DEFAULT_MIN_TILES, DEFAULT_MAX_TILES]).toEqual([12, 256])
+
+  const state = new CameraState()
+  state.tilesAcross = 40
+  const wheel = new WheelState()
+  const keys = new KeyState()
+  const integrator = createCameraIntegrator({ pointers: new PointerSlots(), keys, wheel })
+  expect(integrator.constraints).toEqual({ minTiles: 12, maxTiles: 256 })
+  integrator.setConstraints({
+    minTiles: 30,
+    maxTiles: 50,
+    bounds: { minX: -10, minY: -5, maxX: 10, maxY: 5 },
+  })
+
+  recordWheel(wheel, 100_000, 0, 800, 400, false) // zoom out as far as the wheel goes
+  for (let i = 0; i < 50; i++) integrator.integrate(state, viewport, 16)
+  expect(state.tilesAcross).toBe(50)
+  recordWheel(wheel, -100_000, 0, 800, 400, false)
+  for (let i = 0; i < 50; i++) integrator.integrate(state, viewport, 16)
+  expect(state.tilesAcross).toBe(30)
+
+  // Pan right then down far past the bounds: the centre stops at the bound on each axis.
+  recordKey(keys, 'KeyD', true)
+  recordKey(keys, 'KeyS', true)
+  for (let i = 0; i < 200; i++) integrator.integrate(state, viewport, 16)
+  expect([state.centreX, state.centreY]).toEqual([10, 5])
+})
+
 test('camera: inertia decay time based', () => {
   function run(dtMs: number, steps: number): CameraState {
     const state = new CameraState()
@@ -191,7 +223,8 @@ test('camera: precision at 2^23', () => {
 })
 
 test('camera: wasd speed scales with extent', () => {
-  function measure(tilesAcross: number): number {
+  /** Centre displacement of one fully ramped 16 ms frame with `code` held, per tile of extent. */
+  function measure(tilesAcross: number, code: string): { dx: number; dy: number } {
     const state = new CameraState()
     state.tilesAcross = tilesAcross
     const keys = new KeyState()
@@ -200,16 +233,25 @@ test('camera: wasd speed scales with extent', () => {
       keys,
       wheel: new WheelState(),
     })
-    recordKey(keys, 'KeyD', true)
+    recordKey(keys, code, true)
     for (let i = 0; i < 10; i++) integrator.integrate(state, viewport, 16) // past the 120ms ramp
     const x0 = state.centreX
+    const y0 = state.centreY
     integrator.integrate(state, viewport, 16) // one fully-ramped frame to measure
-    return (state.centreX - x0) / tilesAcross
+    return { dx: (state.centreX - x0) / tilesAcross, dy: (state.centreY - y0) / tilesAcross }
   }
 
-  const at12 = measure(12)
-  const at256 = measure(256)
-  expect(at12).toBeCloseTo(at256, 9)
+  // One extent per second: a 16 ms frame moves 0.016 of the view at any zoom. Asserted as a value,
+  // so a WASD that moved nothing (0 === 0) fails.
+  const expectMove = (m: { dx: number; dy: number }, dx: number, dy: number): void => {
+    expect(m.dx).toBeCloseTo(dx, 9)
+    expect(m.dy).toBeCloseTo(dy, 9)
+  }
+  for (const tilesAcross of [12, 256]) expectMove(measure(tilesAcross, 'KeyD'), 0.016, 0)
+  // Direction: D right (+x), A left, S down the screen (+y), W up (-y); the other axis stays put.
+  expectMove(measure(40, 'KeyA'), -0.016, 0)
+  expectMove(measure(40, 'KeyS'), 0, 0.016)
+  expectMove(measure(40, 'KeyW'), 0, -0.016)
 })
 
 test('camera: moveto cancelled by input', () => {
