@@ -24,6 +24,8 @@ import {
  * (Deviations): 20 Hz, 50 ms per tick. */
 const TICK_MS = 50
 
+type SimHostLike = ReturnType<typeof createSimHostFromInstance>
+
 function manualClock(startMs = 0) {
   let now = startMs
   return {
@@ -388,4 +390,109 @@ test('createWorldServer / HostServices.onFatal? match 0024 §5', () => {
   const onFatalShape: ((f: { tick: number; message: string }) => void) | undefined =
     {} as HostServices['onFatal']
   void onFatalShape
+})
+
+// 0030 §2: `stepTick(n)` shares `runPacedTick`, hence the resync accounting, with the timer's
+// `onFire`. The same overrun scenario, driven once by timer fires and once by `stepTick`, must end
+// in identical counters, and those counters must show a resync happened (catch-up and drops).
+test('simhost_stepTick_shares_the_resync_accounting_with_onFire', () => {
+  const scenario = (drive: (host: SimHostLike, n: () => void) => void) => {
+    const clock = manualClock()
+    const timer = manualTimer()
+    const host = createSimHostFromInstance(fakeSim(), {
+      clock,
+      timer: timer.services,
+      scheduler: noopScheduler,
+    })
+    host.start()
+    for (let i = 0; i < RESYNC_TICKS; i++) {
+      clock.advance(TICK_MS * 10)
+      drive(host, () => timer.fire())
+    }
+    return { ...host.counters }
+  }
+  const viaTimer = scenario((_host, fire) => fire())
+  const viaStep = scenario((host) => host.stepTick())
+  const behindTicks = (RESYNC_TICKS - 1) * 10 - RESYNC_TICKS
+  expect(viaStep.ticksRun).toBe(RESYNC_TICKS + MAX_CATCHUP_TICKS)
+  expect(viaStep.ticksDropped).toBe(behindTicks - MAX_CATCHUP_TICKS)
+  expect(viaStep.tickOverruns).toBe(1)
+  expect(viaStep).toEqual(viaTimer)
+})
+
+// 0030 §5 and 0032 Amendment (round 3) b share a scenario: `start()` and `resume()` reset the resync
+// anchor (`syncInitialized`, `ticksSinceSync`), so a stopped or paused span is invisible to pacing.
+// Four ticks, a long interruption, a restart, then eight ticks on schedule: with the anchor reset
+// the window never looks behind (no overrun, no catch-up, no drops), and the first resync comes
+// eight ticks after the restart, not four (the warmer, which runs only at a resync, is the witness).
+for (const [name, interrupt, restart] of [
+  ['pause then resume', (h: SimHostLike) => h.pause(), (h: SimHostLike) => h.resume()],
+  ['stop then start', (h: SimHostLike) => h.stop(), (h: SimHostLike) => h.start()],
+] as const) {
+  test(`simhost_${name.replaceAll(' ', '_')}_resets_the_resync_anchor`, async () => {
+    const clock = manualClock()
+    const timer = manualTimer()
+    let warmCalls = 0
+    const host = createSimHostFromInstance(
+      fakeSim({
+        simWarmOne: () => {
+          warmCalls++
+          clock.advance(WARM_BUDGET_MS) // one chunk uses the whole budget: the loop ends after it
+          return 1
+        },
+      }),
+      { clock, timer: timer.services, scheduler: noopScheduler },
+    )
+    host.start()
+    for (let i = 0; i < RESYNC_TICKS / 2; i++) {
+      clock.advance(TICK_MS)
+      timer.fire()
+    }
+    await interrupt(host)
+    clock.advance(TICK_MS * 100) // the interrupted span: 100 tick periods
+    restart(host)
+
+    for (let i = 0; i < RESYNC_TICKS / 2; i++) {
+      clock.advance(TICK_MS)
+      timer.fire()
+    }
+    expect(warmCalls, 'a resync only eight ticks after the restart').toBe(0)
+    for (let i = 0; i < RESYNC_TICKS / 2; i++) {
+      clock.advance(TICK_MS)
+      timer.fire()
+    }
+    expect(warmCalls).toBe(1) // the first resync after the restart, on schedule: it warmed
+    expect(host.counters.tickOverruns).toBe(0)
+    expect(host.counters.ticksDropped).toBe(0)
+    expect(host.counters.ticksRun).toBe(RESYNC_TICKS * 1.5)
+  })
+}
+
+// 0032 Amendment (round 3) b: a resync window that had to catch up skips the warmer.
+test('simhost_catch_up_window_skips_warming', () => {
+  const clock = manualClock()
+  const timer = manualTimer()
+  let warmCalls = 0
+  const host = createSimHostFromInstance(
+    fakeSim({
+      simWarmOne: () => {
+        warmCalls++
+        return 0
+      },
+    }),
+    { clock, timer: timer.services, scheduler: noopScheduler },
+  )
+  host.start()
+  for (let i = 0; i < RESYNC_TICKS; i++) {
+    clock.advance(TICK_MS * 10) // far behind schedule at the resync
+    timer.fire()
+  }
+  expect(host.counters.ticksRun).toBeGreaterThan(RESYNC_TICKS) // it caught up
+  expect(warmCalls).toBe(0)
+  // Control: the next window, on schedule, does warm.
+  for (let i = 0; i < RESYNC_TICKS; i++) {
+    clock.advance(TICK_MS)
+    timer.fire()
+  }
+  expect(warmCalls).toBe(1)
 })
