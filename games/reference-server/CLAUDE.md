@@ -44,8 +44,8 @@ strips the path before the connection reaches here).
 
 ## Fly image (M38)
 
-`Dockerfile`, `fly.toml`, `.dockerignore`; the build context is `.stage/` (gitignored), filled by `node scripts/stage-image.mjs` after `pnpm --filter engine build && pnpm --filter reference build`; then `fly deploy --remote-only --config fly.toml --dockerfile Dockerfile` from this directory. `reference-server/docker-args` keeps the three files and the CLI in agreement. `scripts/loadtest.mjs --url wss://<host>/ws --clients 8 --seconds 120 [--trace]`. The README recipes are M38 step 4.
+`Dockerfile`, `fly.toml`, `.dockerignore`; the build context is `.stage/` (gitignored), filled by `node scripts/stage-image.mjs` after `pnpm --filter engine build && pnpm --filter reference build`; then `fly deploy --remote-only --config fly.toml --dockerfile Dockerfile` from this directory. `reference-server/docker-args` keeps the three files and the CLI in agreement. `scripts/loadtest.mjs --url wss://<host>/ws --clients 8 --seconds 120 [--trace]`. The Fly recipe is in the README.
 
 ## Not here (Non-scope)
 
-A Durable Object adapter (`games/reference-server-do`, M38 step 3).
+A Durable Object adapter (tried in M38 and dropped: [ADR 0051](../../docs/decisions/0051-durable-objects-no-go.md)).

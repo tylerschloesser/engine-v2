@@ -196,3 +196,23 @@ Why the restart path fails (diagnosed, not fixed): `Persistence.open` instantiat
 **Differences from the brief:** (1) the "1 h memory" and "30 min timer" runs are slices of the one 24 h run (same object, so the billing is one clean number) rather than separate runs. (2) "tick interval p50/p99 and overrun counter" are reported from the clients plus the engine's host counters because the object's own clock is I/O-driven. (3) `do/local-smoke` also kills the runtime hard and checks recovery (a small world, genesis replay of the log: no snapshot is reached in 10 s). (4) Two more Cloudflare resources than the brief expects (the probe Worker and the account subdomain). (5) Diagnostic exports used in the DO (`serverInternals`, `worldServerTestHandle`) are test-only re-exports of `engine/server`; the ADR should say the recipe does not need them.
 
 **Notes for the ADR and later briefs:** record the restart-path finding and the instance-count cause; the deploy of any new version resets every object (observed), so a world on a DO that fails to reload is down until fixed; `wrangler dev --local` does not reproduce the limit, so only a deployed run proves a DO claim.
+
+### Step 4: ADR, READMEs, teardown, results (2026-10-02)
+
+- ADR: [0051 Durable Objects: no-go](../decisions/0051-durable-objects-no-go.md) (amends 0009 §Targets). `games/reference-server-do/`, `do/local-smoke`, `do/storage-adapter` deleted (no `suites.mjs` row existed; lockfile importer removed); the root `CLAUDE.md` ADR range reads 0001-0051; `PLAN.md` is the orchestrator's. The 24 h run was stopped at 1 h 2 min on the orchestrator's decision (`test-results/m38-do/summary-final.txt`).
+- **Cloudflare torn down:** `wrangler delete --name engine-v2-ref-do --force` and `--name engine-v2-ref-do-probe --force` both printed `Successfully deleted`; `wrangler deployments list --name <each>` now answers `This Worker does not exist on your account. [code: 10007]`, and `curl .../stats/x` on the old URL returns 404. The `reference-server-do` workers.dev subdomain is account-level and wrangler 4.145 has no command for it: Tyler removes or renames it in the dashboard, https://dash.cloudflare.com/83c4b0d34a69f15c26049dfcb5165802/workers/subdomain (Workers & Pages -> Overview -> Account details -> Subdomain).
+- **Fly kept on purpose** for Tyler's iPhone device check: app `engine-v2-ref` (machine, 1 GB volume), idle cost about $0.16/month. Teardown: `fly apps destroy engine-v2-ref --yes`.
+- READMEs: `games/reference/README.md` Hosting section (two headers, per-host listings marked from documentation and unverified, 0015 limits, the static-host check unverified and carried to M39b); `games/reference-server/README.md` Fly recipe and a Durable Objects paragraph pointing at 0051. `39b-phase-4-handoff.md` already names the static-host item (its "Open items carried forward").
+- Deferred-ledger row added: `Persistence.open` instantiates twice on a restore.
+
+**Results table**
+
+| Item | Result |
+|---|---|
+| DO usable memory | fresh scale-1 world: 96 MiB and 128 MiB arenas run, `memGrows` 0; **restore from a snapshot: reset before the first tick** (scale 1 at 96 MiB; scale 4 fails at 48 MiB and up, recovers at 40 MiB and down) |
+| DO timer p50/p99 | server clock is I/O-driven (reads 50.00 ms); engine counters 0 drops, 0 overruns, 20.0 Hz over 1 h; client downlink gap median 49.8 ms, p99 about 62 ms (worst 3.2 s, a network blip) |
+| DO projected monthly cost | 324,000 GB-s of 400,000 included; 2.2 M billed requests for 2 clients (about $0.18 over); inside the $5 plan; dashboard not read |
+| DO restarts | 0 in the first hour (one object start); 24 h not collected |
+| Fly always-on / idle cost | computed $3.69-4.62 + $0.15 volume / about $0.16; **billed figures awaiting Tyler**: https://fly.io/dashboard/personal/billing -> "Upcoming invoice" and Cost Explorer for `engine-v2-ref` |
+| Fly wake time | cold 3.4-4.1 s dial to `Welcome` (one redial), warm 0.34-0.42 s |
+| Fly tick p50/p99, 8 clients | p50 0.06-0.43 ms, window p99 about 2.4 ms (max 7.9 ms), 0 overruns |
