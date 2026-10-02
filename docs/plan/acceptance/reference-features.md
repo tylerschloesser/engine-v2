@@ -1,0 +1,68 @@
+# Reference-game features and scripted full-game tests
+
+Audit unit: the reference-game feature-coverage list in [`0003` Consequences](../../decisions/0003-game-facing-api.md) (rows F1 to F26) and the tests M34, M34b and M34c add (rows T1 to T36). Row ids: `F` = a feature-list item, `T` = a test the briefs promise.
+
+| # | Item | Evidence | Status |
+|---|---|---|---|
+| F1 | Worldgen (game-owned, deterministic, no resource on water) | test: rust "worldgen_contract"; test: rust "worldgen_golden"; test: rust "worldgen_no_resource_on_water"; test: browser "reference_terrain_renders" | covered |
+| F2 | Streaming: chunks generated and sent as the view moves; an unsubscribed chunk is sent again on return | test: browser "reference_offscreen_furnace_keeps_smelting"; test: netcode "reference_furnace_across_chunk_border" | covered |
+| F3 | Tile overlays: depletion shows per tile; last unit clears the resource and the overlay is canonical | test: rust "collect_last_unit_clears_resource_and_overlay_is_canonical"; test: browser "reference_depletion_visible" | covered |
+| F4 | Trait queries: `NOT_BUILDABLE` on water, resources, furnaces; one `can_place` for host, prediction and ghost | test: rust "place_on_water_rejected"; test: rust "place_on_resource_rejected"; test: rust "place_overlapping_furnace_rejected"; test: rust "can_place_names_no_tile_type"; test: browser "reference_place_mouse" | covered |
+| F5 | Game actions: dispatch, ack, `onActionResult`, reject reasons | test: netcode "reference_full_game_two_players"; test: browser "reference_full_game_single"; test: netcode "reference_race_same_spot 0 ms, winner 0" | covered |
+| F6 | Engine actions (`Joined`, `Connected`, `Disconnected`) reach `on_player`: colour on join, collect cancelled after the grace | test: rust "joined_assigns_distinct_colours"; test: rust "disconnect_cancels_collect_keeps_craft"; test: netcode "reference_long_drop_cancels_collect_keeps_craft"; test: netcode "reference_roster_follows_join_grace_and_return" | covered |
+| F7 | Prediction and rollback of discrete actions (predict, ghost, reject restores) | test: browser "reference_place_mouse"; test: rust "predicted_pickup_rejected_restores_furnace"; test: netcode "reference_race_same_spot 0 ms, winner 0"; test: netcode "reference_race_same_spot 60 ms, winner 1" | covered |
+| F8 | Presence: own spring written as presence, relayed to subscribers only, kept across a supersede | test: netcode "reference_presence_only_to_subscribers"; test: netcode "reference_returning_player_supersedes_and_keeps_presence"; test: browser "reference_two_players_see_each_other"; test: browser "reference_player_circle_lags_and_settles" | covered |
+| F9 | Per-player state (inventory, unlocks, collect and craft timers) | test: rust "unlock_is_per_player"; test: browser "reference_craft_flow"; test: netcode "reference_long_drop_cancels_collect_keeps_craft" | covered |
+| F10 | Global state: roster online bit and colours (`put_global`) | test: rust "global_written_only_on_join"; test: rust "colour_assignment_replays_identically"; test: rust "roster_follows_connection_events"; test: browser "reference_roster_single_player" | covered |
+| F11 | Off-screen state keeps simulating (furnace smelts while unsubscribed) | test: rust "furnace_smelts_while_unsubscribed"; test: browser "reference_offscreen_furnace_keeps_smelting" | covered |
+| F12 | Persistence: reload resumes, replay equals live, golden log replays natively and in Node and Bun | test: browser "reference_reload_resumes"; test: wasm "reference_golden_replay"; test: rust "golden_replay" | covered |
+| F13 | Anchoring: collect buttons, furnace panel above its furnace, touch Confirm, ghost on the cursor tile | test: browser "reference_furnace_flow"; test: browser "reference_collect_flow"; test: browser "reference_place_touch" | covered |
+| F14 | Picking: tap inside the furnace art picks it, just outside picks nothing; predicted furnace has a provisional pick id | test: browser "reference_furnace_flow"; test: browser "reference_place_mouse" | covered |
+| F15 | Ghost: follows the pointer, green when valid and red when not, gone outside build mode and after placing | test: browser "reference_place_mouse"; test: browser "reference_draws_player_furnace_and_ghost"; test: rust "ghost_tint_follows_can_place" | covered |
+| F16 | Time units: 2 s, 5 s durations hold at 20 and 30 Hz | test: rust "durations_at_20_and_30_hz"; test: rust "craft_duration_at_20_and_30_hz"; test: rust "smelt_takes_five_seconds_at_20_and_30_hz" | covered |
+| F17 | Reconnect: short drop inside the grace, long drop past it, pending action applied once, resume and supersede | test: netcode "reference_short_drop_keeps_collect"; test: netcode "reference_long_drop_cancels_collect_keeps_craft"; test: netcode "reference_pending_place_applied_once_after_reconnect (before_flush)"; test: netcode "reference_pending_place_applied_once_after_reconnect (ack_lost)"; test: netcode "reference_returning_player_supersedes_and_keeps_presence" | covered |
+| F18 | Scripted: furnace spanning a chunk border, partial subscription, hash-all converges | test: netcode "reference_furnace_across_chunk_border"; test: rust "place_across_chunk_corner_sets_occupancy_in_four_chunks" | covered |
+| F19 | Scripted race: last unit (loser predicts it, host answers `NoResource`, both converge) | test: netcode "reference_race_last_unit 0 ms, first 0"; test: netcode "reference_race_last_unit 0 ms, first 1"; test: netcode "reference_race_last_unit 60 ms, first 0"; test: netcode "reference_race_last_unit 60 ms, first 1"; test: netcode "reference_race_last_unit 250 ms, first 0"; test: netcode "reference_race_last_unit 250 ms, first 1" | covered |
+| F20 | Scripted race: same spot (overlapping footprints, loser `NotBuildable`, item returned, ghost shown while waiting) | test: netcode "reference_race_same_spot 0 ms, winner 0"; test: netcode "reference_race_same_spot 0 ms, winner 1"; test: netcode "reference_race_same_spot 60 ms, winner 0"; test: netcode "reference_race_same_spot 60 ms, winner 1"; test: netcode "reference_race_same_spot 250 ms, winner 0"; test: netcode "reference_race_same_spot 250 ms, winner 1" | covered |
+| F21 | Scripted race: same ingots (second take rejected, winner holds both) | test: netcode "reference_race_same_ingots 0 ms, winner 0"; test: netcode "reference_race_same_ingots 0 ms, winner 1"; test: netcode "reference_race_same_ingots 60 ms, winner 0"; test: netcode "reference_race_same_ingots 60 ms, winner 1"; test: netcode "reference_race_same_ingots 250 ms, winner 0"; test: netcode "reference_race_same_ingots 250 ms, winner 1"; test: rust "same_ingots_race_second_take_rejected" | covered |
+| F22 | Scripted: action at the subscription edge is `NotPredictable`, taints later actions | test: netcode "reference_subscription_edge_not_predictable"; test: rust "predicted_place_at_subscription_edge_is_not_predictable" | covered |
+| F23 | Scripted: state budget when full (`StateBudgetFull`, item kept, reason shown) | test: wasm "reference_state_budget_full"; test: browser "reference_state_budget_full_shows_reason" | covered |
+| F24 | Scripted: panic recovery with `Skip`; `SaveIncompatible` leaves files byte-for-byte; export/import | test: wasm "reference_panic_in_apply_skips_and_recovers @slow"; test: wasm "reference_save_incompatible_leaves_files @slow"; test: browser "reference_export_import_roundtrip"; test: wasm "reference_single_player_save_to_server" | covered |
+| F25 | Keyboard focus (covered by an engine test page, not the reference game) | test: browser "input: keyboard focus rules" | covered |
+| F26 | Accepted gaps: no sim-owned moving entity, no continuous prediction | adr: 0003 Consequences; adr: 0001 Camera and presence | not applicable (accepted gap in 0003) |
+| T1 | M34 `joined_assigns_distinct_colours` (eight joins, eight indices) | test: rust "joined_assigns_distinct_colours" | covered |
+| T2 | M34 `colour_assignment_replays_identically` (replay hash equal, RNG in snapshot) | test: rust "colour_assignment_replays_identically" | covered |
+| T3 | M34 `global_written_only_on_join` | test: rust "global_written_only_on_join" | covered |
+| T4 | M34 `extract_hash_remote_players` (two presences, one faded) | test: rust "extract_hash_remote_players" | covered |
+| T5 | M34 `reference_roster_follows_join_grace_and_return` | test: netcode "reference_roster_follows_join_grace_and_return" | covered |
+| T6 | M34 `reference_presence_only_to_subscribers` (also the steady bandwidth ceiling) | test: netcode "reference_presence_only_to_subscribers" | covered |
+| T7 | M34 `reference_two_players_see_each_other` | test: browser "reference_two_players_see_each_other" | covered |
+| T8 | M34 `reference_shared_world` | test: browser "reference_shared_world" | covered |
+| T9 | M34 `reference_returning_player_resumes` | test: browser "reference_returning_player_resumes" | covered |
+| T10 | M34b `reference_full_game_single` (DOM script; final hash equals golden) | test: browser "reference_full_game_single" | covered |
+| T11 | M34b `reference_reload_resumes` | test: browser "reference_reload_resumes" | covered |
+| T12 | M34b `reference_offscreen_furnace_keeps_smelting` | test: browser "reference_offscreen_furnace_keeps_smelting" | covered |
+| T13 | M34b `reference_world_busy_second_tab` | test: browser "reference_world_busy_second_tab" | covered |
+| T14 | M34b `reference_export_import_roundtrip` | test: browser "reference_export_import_roundtrip" | covered |
+| T15 | M34b `reference_state_budget_full_shows_reason` | test: browser "reference_state_budget_full_shows_reason" | covered |
+| T16 | M34b `gc.reference_single_player` (zero GC over the scripted game; negative controls) | test: browser "reference_single_player clean" | covered |
+| T17 | M34b `build-game-features` (with and without a feature, two directories, two hashes) | test: wasm "build-game-features" | covered |
+| T18 | M34b `reference_golden_replay` (checkpoints, first divergent tick, log bytes per player-hour) | test: wasm "reference_golden_replay"; test: wasm "reference_golden_replay reports the first divergent tick" | covered |
+| T19 | M34b `reference_single_player_save_to_server` | test: wasm "reference_single_player_save_to_server" | covered |
+| T20 | M34b `reference_state_budget_full` | test: wasm "reference_state_budget_full" | covered |
+| T21 | M34b native `golden_replay` | test: rust "golden_replay"; test: rust "golden_replay_reports_the_first_divergent_tick" | covered |
+| T22 | M34b slow `reference_panic_in_apply_skips_and_recovers` | test: wasm "reference_panic_in_apply_skips_and_recovers @slow" | covered |
+| T23 | M34b slow `reference_save_incompatible_leaves_files` | test: wasm "reference_save_incompatible_leaves_files @slow" | covered |
+| T24 | M34c `reference_full_game_two_players` (replicas converge, roster, furnace pick-up and re-place, deposit and take) | test: netcode "reference_full_game_two_players" | covered |
+| T25 | M34c `reference_race_last_unit` (six ids) | test: netcode "reference_race_last_unit 0 ms, first 0"; test: netcode "reference_race_last_unit 0 ms, first 1"; test: netcode "reference_race_last_unit 60 ms, first 0"; test: netcode "reference_race_last_unit 60 ms, first 1"; test: netcode "reference_race_last_unit 250 ms, first 0"; test: netcode "reference_race_last_unit 250 ms, first 1" | covered |
+| T26 | M34c `reference_race_same_spot` (six ids) | test: netcode "reference_race_same_spot 0 ms, winner 0"; test: netcode "reference_race_same_spot 0 ms, winner 1"; test: netcode "reference_race_same_spot 60 ms, winner 0"; test: netcode "reference_race_same_spot 60 ms, winner 1"; test: netcode "reference_race_same_spot 250 ms, winner 0"; test: netcode "reference_race_same_spot 250 ms, winner 1" | covered |
+| T27 | M34c `reference_race_same_ingots` (six ids) | test: netcode "reference_race_same_ingots 0 ms, winner 0"; test: netcode "reference_race_same_ingots 0 ms, winner 1"; test: netcode "reference_race_same_ingots 60 ms, winner 0"; test: netcode "reference_race_same_ingots 60 ms, winner 1"; test: netcode "reference_race_same_ingots 250 ms, winner 0"; test: netcode "reference_race_same_ingots 250 ms, winner 1" | covered |
+| T28 | M34c `reference_subscription_edge_not_predictable` | test: netcode "reference_subscription_edge_not_predictable" | covered |
+| T29 | M34c `reference_furnace_across_chunk_border` | test: netcode "reference_furnace_across_chunk_border" | covered |
+| T30 | M34c `reference_late_join_sees_world` | test: netcode "reference_late_join_sees_world" | covered |
+| T31 | M34c `reference_short_drop_keeps_collect` | test: netcode "reference_short_drop_keeps_collect" | covered |
+| T32 | M34c `reference_long_drop_cancels_collect_keeps_craft` | test: netcode "reference_long_drop_cancels_collect_keeps_craft" | covered |
+| T33 | M34c `reference_pending_place_applied_once_after_reconnect` (two cases) | test: netcode "reference_pending_place_applied_once_after_reconnect (before_flush)"; test: netcode "reference_pending_place_applied_once_after_reconnect (ack_lost)" | covered |
+| T34 | M34c `reference_full_and_bad_key_rejected` (engine package, `reference-admission.test.ts`) | test: netcode "reference_full_and_bad_key_rejected" | covered |
+| T35 | M34c `reference_idle_world_pauses` | test: netcode "reference_idle_world_pauses" | covered |
+| T36 | M34c `reference_bytes_and_mispredictions_in_budget` (ceilings, no mispredictions, projected bytes per hour); `reference_full_game_two_players_ws` (`@slow`, same game over sockets) | test: netcode "reference_bytes_and_mispredictions_in_budget"; test: netcode "reference_full_game_two_players_ws @slow" | covered |
