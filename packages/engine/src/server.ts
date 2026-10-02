@@ -1606,7 +1606,11 @@ export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldSe
   // flushed on a rejection -- there is no host to accept them into, and 0024 §5 defines no protocol
   // for reporting that back over a `Connection` this milestone's own accept-before-ready caller
   // holds no other handle on.
-  const pendingConnections: Connection[] = []
+  // M38: a connection queued here keeps what it sends meanwhile (`early`, copied: `onMessage` bytes are
+  // valid only during the call) and a close (`closed`), replayed once `SimHost.accept` has wired the
+  // real handlers. Before this a `Hello` that arrived while the world was loading was dropped (the
+  // adapter calls `conn.onMessage?.()` on a null handler) and the client waited out its link timeout.
+  const pendingConnections: { c: Connection; early: Uint8Array[]; closed: number | null }[] = []
   // Every connection this world has ever accepted (Traps below: `onFatal`'s own "closes sockets").
   // Sized on demand, not `MAX_CONNS`-preallocated (`.claude/rules/hot-paths.md` does not reach this
   // file: `createWorldServer` runs once per world, not per frame or per tick).
@@ -1677,9 +1681,11 @@ export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldSe
       simHost = h
       worldServerHandles.set(worldServer, h)
       h.start()
-      for (const c of pendingConnections) {
-        acceptedConnections.push(c)
-        h.accept(c)
+      for (const p of pendingConnections) {
+        acceptedConnections.push(p.c)
+        h.accept(p.c)
+        for (const bytes of p.early) p.c.onMessage?.(bytes)
+        if (p.closed !== null) p.c.onClose?.(p.closed)
       }
       pendingConnections.length = 0
     },
@@ -1692,7 +1698,14 @@ export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldSe
         acceptedConnections.push(c)
         simHost.accept(c)
       } else {
-        pendingConnections.push(c)
+        const pending = { c, early: [] as Uint8Array[], closed: null as number | null }
+        c.onMessage = (bytes) => {
+          pending.early.push(bytes.slice())
+        }
+        c.onClose = (code) => {
+          pending.closed = code
+        }
+        pendingConnections.push(pending)
       }
     },
     async stop() {
@@ -1705,7 +1718,7 @@ export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldSe
       if (simHost) await simHost.stop()
       // Brief Scope: "`stop()` = `SimHost.stop()` then close connections" -- queued ones included.
       for (const c of acceptedConnections) c.close(0)
-      for (const c of pendingConnections) c.close(0)
+      for (const p of pendingConnections) p.c.close(0)
       acceptedConnections.length = 0
       pendingConnections.length = 0
     },

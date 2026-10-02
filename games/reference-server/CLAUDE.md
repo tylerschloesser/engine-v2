@@ -22,8 +22,6 @@ resolves it via `package.json`'s `main`.
 - `--static <dir>` (M38, `static.mjs`): the same `node:http` server serves files from `<dir>` (`/` is `index.html`), with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` on every response including 404s, `application/wasm`, immutable `/assets/*`, and no path outside `<dir>`. Only `/ws` upgrades then (without the flag any path does). Test: `reference-server/static-headers`.
 - `--stats-every <s>`: a `stats: ticks=.. tick_ms p50=.. p99=.. max=.. overruns=..` line every `<s>` seconds (the tick callback's own duration, measured around `timer.every`); off by default. `scripts/loadtest.mjs` reads nothing from it: read `fly logs`.
 
-The WebSocket upgrade waits for `server.ready`: a `Hello` that reaches a connection `WorldServer.accept` has only queued is dropped (a dial that wakes a stopped machine, or a restart, is exactly that case).
-
 `pnpm --filter reference-server start` = `node index.mjs --data .data` (gitignored), serving the reference game's release build (`pnpm --filter reference build` first). `--game` left at its default uses `games/reference/world.json` as the world (`null` params do not deserialize into `RefParams`); an explicit `--game` keeps seed `'1'`, `worldgen: null`.
 
 Env: `PORT` (default `4174`), `HOST` (default `127.0.0.1`; the image sets `0.0.0.0`), `JOIN_KEY` (default `''`, 0013's join key).

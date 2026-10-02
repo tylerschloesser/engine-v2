@@ -128,7 +128,7 @@ if (statsEvery > 0) {
 const server = createWorldServer(worldCfg, host)
 
 // `attachWebSocketServer` queues every accepted connection until `server.ready` resolves (0024
-// §5), so the socket can open before the world has finished loading. Without `--static` any path
+// §5, and it keeps what the socket sends meanwhile), so the socket can open before the world has finished loading. Without `--static` any path
 // upgrades (a real client dials `/ws` on its own origin through a proxy that strips the path before
 // it reaches this port, `pnpm device:serve --ws`); with it, only `/ws` does and everything else is a
 // file (`static.mjs`).
@@ -148,13 +148,7 @@ httpServer.on('upgrade', (req, socket, head) => {
     socket.destroy()
     return
   }
-  // The 101 waits for `ready`: a `Hello` that arrives on a socket `server.accept` has only queued
-  // is dropped (M38 Deviations, found on the second spawn of `sigterm-snapshots`: the client waited
-  // out a 3 s link timeout), and a machine just woken by a dial is exactly that case.
-  void server.ready.then(
-    () => wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req)),
-    () => socket.destroy(),
-  )
+  wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
 })
 attachWebSocketServer(wss, server)
 httpServer.listen(port, bindHost, () => {

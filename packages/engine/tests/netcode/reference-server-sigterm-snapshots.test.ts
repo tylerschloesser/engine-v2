@@ -27,7 +27,7 @@ afterEach(async () => {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-test('reference-server/sigterm-snapshots', async () => {
+test('reference-server/sigterm-snapshots @slow', async () => {
   dataDir = await mkdtemp(join(tmpdir(), 'reference-server-sigterm-'))
   const { wasm, buildHash } = await loadFixture('puts')
   const args = ['--game', fixtureBuildDir('puts'), '--data', dataDir]
@@ -84,8 +84,8 @@ test('reference-server/sigterm-snapshots', async () => {
   // replay would show as more than that.
   await stepUntil(second.client, () => second.client.replicaHash() === hashBefore, 3_000)
   const elapsedTicks = Math.ceil(((Date.now() - spawnedAt) / 1000) * 20)
-  // Dialling at once, while the world is still loading, must not cost a link timeout (the upgrade
-  // waits for `ready`).
+  // Dialling at once, while the world is still loading, must not cost a link timeout (`accept` keeps a
+  // `Hello` that arrives before `ready`).
   expect(second.ms).toBeLessThan(1500)
   const resumedTick = second.client.status().tick
   expect(resumedTick).toBeGreaterThanOrEqual(snapTick)
