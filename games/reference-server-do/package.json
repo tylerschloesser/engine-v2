@@ -1,0 +1,13 @@
+{
+  "name": "reference-server-do",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "stage": "node scripts/stage.mjs",
+    "dev": "wrangler dev --local",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "engine": "workspace:*"
+  }
+}
