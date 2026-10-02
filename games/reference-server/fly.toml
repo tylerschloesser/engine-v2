@@ -1,0 +1,32 @@
+# One machine, one 1 GB volume (Q6). `app` is set by `fly apps create`; see README "Fly".
+app = 'engine-v2-ref'
+primary_region = 'ord'
+# 0005 Cadence: snapshot on the shutdown signal. Fly sends `kill_signal`, waits `kill_timeout`.
+kill_signal = 'SIGTERM'
+kill_timeout = 30
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  PORT = '8080'
+  HOST = '0.0.0.0'
+
+[[mounts]]
+  source = 'world_data'
+  destination = '/data'
+  initial_size = '1gb'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[restart]]
+  policy = 'on-failure'
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb'

@@ -6,11 +6,13 @@
 // exists. CLI contract and run recipe: `CLAUDE.md`/`README.md`.
 
 import { readFile } from 'node:fs/promises'
+import { createServer } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { createWorldServer, importWorld } from 'engine/server'
 import { attachWebSocketServer, fsStorage, loadGame, nodeHostServices } from 'engine/server/node'
 import { WebSocketServer } from 'ws'
+import { staticHandler } from './static.mjs'
 
 // The reference game's own release build (`games/reference/vite.config.ts`'s `engine()` plugin,
 // `profile: 'release'` by default under `vite build`) -- not yet multiplayer before M34, but a
@@ -29,6 +31,8 @@ const { values } = parseArgs({
     data: { type: 'string' },
     import: { type: 'string' },
     'exit-on-idle': { type: 'boolean', default: false },
+    static: { type: 'string' },
+    'stats-every': { type: 'string', default: '0' },
   },
 })
 
@@ -38,6 +42,8 @@ if (!values.data) {
 }
 
 const port = Number(process.env.PORT ?? 4174)
+// 127.0.0.1 unless a container asks for more (`HOST=0.0.0.0`, the Dockerfile).
+const bindHost = process.env.HOST ?? '127.0.0.1'
 const joinKey = process.env.JOIN_KEY ?? ''
 
 const { wasm, buildHash } = await loadGame(values.game)
@@ -82,17 +88,78 @@ const host = nodeHostServices({
   },
 })
 
+// `--stats-every <s>` (docs/plan/38-hosting-checks.md): one stdout line per window with the tick
+// callback's own duration (p50/p99/max, ms) and how many fired more than 1.5 ticks after the last
+// one (an overrun). Measured around `timer.every`'s callback, so the engine stays untouched.
+const statsEvery = Number(values['stats-every'])
+if (statsEvery > 0) {
+  const every = host.timer.every
+  host.timer = {
+    every(ms, fn) {
+      let durations = []
+      let overruns = 0
+      let last = performance.now()
+      const stopTimer = every(ms, () => {
+        const t0 = performance.now()
+        if (t0 - last > ms * 1.5) overruns++
+        last = t0
+        fn()
+        durations.push(performance.now() - t0)
+      })
+      const line = setInterval(() => {
+        if (durations.length === 0) return
+        durations.sort((a, b) => a - b)
+        const q = (p) => durations[Math.min(durations.length - 1, Math.floor(p * durations.length))]
+        console.log(
+          `stats: ticks=${durations.length} tick_ms p50=${q(0.5).toFixed(2)} p99=${q(0.99).toFixed(2)} max=${durations[durations.length - 1].toFixed(2)} overruns=${overruns}`,
+        )
+        durations = []
+        overruns = 0
+      }, statsEvery * 1000)
+      line.unref()
+      return () => {
+        clearInterval(line)
+        stopTimer()
+      }
+    },
+  }
+}
+
 const server = createWorldServer(worldCfg, host)
 
 // `attachWebSocketServer` queues every accepted connection until `server.ready` resolves (0024
-// §5), so the socket can open before the world has finished loading -- no path filtering: a real
-// client dials `/ws` on its own origin (`wsUrl(location)`) through a proxy that strips the path
-// before it ever reaches this port (`pnpm device:serve --ws`).
-const wss = new WebSocketServer({ port, host: '127.0.0.1', perMessageDeflate: false })
+// §5), so the socket can open before the world has finished loading. Without `--static` any path
+// upgrades (a real client dials `/ws` on its own origin through a proxy that strips the path before
+// it reaches this port, `pnpm device:serve --ws`); with it, only `/ws` does and everything else is a
+// file (`static.mjs`).
+const staticDir = values.static
+const serveFile = staticDir
+  ? staticHandler(staticDir)
+  : (_req, res) => {
+      res.writeHead(404)
+      res.end()
+    }
+const httpServer = createServer((req, res) => {
+  void serveFile(req, res)
+})
+const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false })
+httpServer.on('upgrade', (req, socket, head) => {
+  if (staticDir && new URL(req.url ?? '/', 'http://x').pathname !== '/ws') {
+    socket.destroy()
+    return
+  }
+  // The 101 waits for `ready`: a `Hello` that arrives on a socket `server.accept` has only queued
+  // is dropped (M38 Deviations, found on the second spawn of `sigterm-snapshots`: the client waited
+  // out a 3 s link timeout), and a machine just woken by a dial is exactly that case.
+  void server.ready.then(
+    () => wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req)),
+    () => socket.destroy(),
+  )
+})
 attachWebSocketServer(wss, server)
-wss.on('listening', () => {
-  const addr = wss.address()
-  console.log(`listening: ws://127.0.0.1:${typeof addr === 'string' ? port : addr.port}`)
+httpServer.listen(port, bindHost, () => {
+  const addr = httpServer.address()
+  console.log(`listening: ws://${bindHost}:${typeof addr === 'object' && addr ? addr.port : port}`)
 })
 
 server.ready.catch((err) => {
