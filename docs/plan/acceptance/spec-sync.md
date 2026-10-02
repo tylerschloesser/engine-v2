@@ -9,7 +9,7 @@ One row per Requirement bullet; bullets 3, 10 and 11 are split into lettered sub
 | R3a | Engine derives deltas from the rules' writes | test: rust "every_put_is_one_delta_with_scope"; test: browser "replica_hash_equals_host_in_browser"; test: netcode "join-converges" | covered |
 | R3b | Engine predicts by re-running the same `apply` on the client | test: rust "predict_placement_is_immediate_and_converges"; test: rust "predict_dependent_actions_replay_across_ack"; test: rust "predict_provisional_id_stable_across_replays" | covered |
 | R3c | Engine interpolates remote motion | test: rust "interp_hermite_hits_samples_and_is_c1"; test: netcode "interpolation/constant_latency_tracks_path"; test: netcode "interpolation/resting_player_stays_solid" | covered |
-| R3d | The game writes no delta types and no separate prediction or interpolation logic | | gap |
+| R3d | The game writes no delta types and no separate prediction or interpolation logic | - | gap |
 | R3e | The game may opt individual actions out of prediction | test: rust "predict_opt_out_declines"; test: wasm "predict_not_predictable_event" | covered |
 | R4 | Tick rate accommodates mobile network patterns (decent modern speeds, not 5G) | test: netcode "rates/idle-sends-only-heartbeats"; test: netcode "rates/steady-busy-field"; test: netcode "rates/degrade-on-stall"; test: netcode "rates/baseline-counters-exact"; test: netcode "interpolation/jitter_profile_adapts"; device: M29-socket-resume | covered |
 | R5 | Transport is WebSockets | test: netcode "ws/join-converges"; test: netcode "ws/deflate-refused"; test: netcode "ws/reconnect-resume @slow" | covered |

@@ -123,6 +123,27 @@ mod tests {
         assert_eq!(TickRate::HZ_20.hz_value(), 20);
     }
 
+    /// 0006 Conversion rule / 0010 Rates: outside `10..=60` is refused. The `compile_fail` doc
+    /// tests on `TickRate::hz` pin the const-evaluation form; these pin the same boundaries at
+    /// run time, where the acceptance table can cite them.
+    #[test]
+    #[should_panic(expected = "tick rate must be in 10..=60")]
+    fn tick_rate_hz_below_10_panics() {
+        let _ = TickRate::hz(core::hint::black_box(9));
+    }
+
+    #[test]
+    #[should_panic(expected = "tick rate must be in 10..=60")]
+    fn tick_rate_hz_above_60_panics() {
+        let _ = TickRate::hz(core::hint::black_box(61));
+    }
+
+    #[test]
+    fn tick_rate_hz_accepts_10_and_60() {
+        assert_eq!(TickRate::hz(core::hint::black_box(10)).hz_value(), 10);
+        assert_eq!(TickRate::hz(core::hint::black_box(60)).hz_value(), 60);
+    }
+
     #[test]
     fn tick_and_ticks_order_by_value() {
         assert!(Tick(1) < Tick(2));
