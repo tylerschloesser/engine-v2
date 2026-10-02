@@ -1,6 +1,6 @@
 # M38: Hosting checks
 
-Status: not started · After: 35, 31 (run after 34 when possible, so the reference game is the payload; otherwise the `busy-field` fixture) · Tyler-dependent: no (Q6 answered: the $5 Cloudflare Workers plan and a Fly machine with a 1 GB volume are approved; the Cloudflare Pages deploy is **not**). Tyler logs the CLIs in
+Status: done (2026-10-02; two criteria await Tyler: the Fly billed cost and the Fly teardown after his device check) · After: 35, 31 (run after 34 when possible, so the reference game is the payload; otherwise the `busy-field` fixture) · Tyler-dependent: no (Q6 answered: the $5 Cloudflare Workers plan and a Fly machine with a 1 GB volume are approved; the Cloudflare Pages deploy is **not**). Tyler logs the CLIs in
 
 ## Goal
 Two claims that Phase 1 could only compute are measured on real hosts: a Durable Object can (or cannot) host a world within 0009's constraints and cost target, and the reference server on Fly meets the cost target with idle stop and wake. The Fly machine also serves the built client with COOP/COEP, so the phone check runs against a real deployment. The Durable Objects outcome is recorded as a new ADR. The third claim, 0015 §3's header listings on a real static host (and its sentence about a cross-origin `wss`), is **not** checked: no static-host deploy was approved. It stays unverified and is handed to M39b as an open item.
@@ -58,13 +58,13 @@ Any engine change for DO (if one is needed, that is a finding for the ADR, not a
 Slow tier: `do/local-smoke` (only if go), `deployed/coi-and-online` (runs only with `DEPLOYED_URL`, otherwise reported as skipped by name). Fast tier: `reference-server/docker-args` (Dockerfile and `fly.toml` agree on port, data dir and static dir with the server's CLI; a parse test, no Docker), `reference-server/static-headers` (spawn with `--static <tmp dir>`: both headers with exact values on `/`, a `.js`, a `.wasm` served as `application/wasm`, and a 404; `..` traversal refused; `/ws` still upgrades), `reference-server/sigterm-snapshots` (spawn on a fixture with `--data <tmp dir>`, a headless client acts, `SIGTERM`: the process exits 0 and a second spawn on the same dir resumes at the same tick and hash with no log tail to replay).
 
 ## Exit criteria
-- [ ] `node games/reference/scripts/check-coi.mjs $FLY_URL` exits 0; `DEPLOYED_URL=$FLY_URL pnpm test:slow -t deployed/` passes; `$FLY_URL/?linklog=1` shows the link log.
-- [ ] `games/reference/README.md` has a Hosting section with the two-header requirement and the per-host listings of 0017 §6 (the values `check-coi.mjs` asserts) and the hosting limits of 0015 Consequences. It and Deviations both state that the static-host COOP/COEP listings (0015 §3) are unverified, and `39b-phase-4-handoff.md`'s open item still names it.
-- [ ] The fast-tier tests above pass by name.
+- [x] `node games/reference/scripts/check-coi.mjs $FLY_URL` exits 0; `DEPLOYED_URL=$FLY_URL pnpm test:slow -t deployed/` passes; `$FLY_URL/?linklog=1` shows the link log.
+- [x] `games/reference/README.md` has a Hosting section with the two-header requirement and the per-host listings of 0017 §6 (the values `check-coi.mjs` asserts) and the hosting limits of 0015 Consequences. It and Deviations both state that the static-host COOP/COEP listings (0015 §3) are unverified, and `39b-phase-4-handoff.md`'s open item still names it.
+- [x] The fast-tier tests above pass by name (`sigterm-snapshots` moved to `@slow` at the gate: two process spawns cannot meet the 500 ms p95; Deviations).
 - [ ] Deviations holds the results table: DO memory, timer p50/p99, projected monthly cost, restarts; Fly always-on and idle cost, wake time, tick p50/p99 under 8 clients.
-- [ ] The DO ADR exists and `PLAN.md` "Plan-level decisions" lists it.
+- [x] The DO ADR exists and `PLAN.md` "Plan-level decisions" lists it.
 - [ ] Both recipes are in `games/reference-server/README.md`; cloud resources are torn down.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test -t reference-server/` · `node games/reference/scripts/check-coi.mjs <url>` · `DEPLOYED_URL=<url> pnpm test:slow -t deployed/` · `node games/reference-server/scripts/loadtest.mjs --url <wss url> --clients 8 --seconds 120` · `pnpm lint`
@@ -216,3 +216,7 @@ Why the restart path fails (diagnosed, not fixed): `Persistence.open` instantiat
 | Fly always-on / idle cost | computed $3.69-4.62 + $0.15 volume / about $0.16; **billed figures awaiting Tyler**: https://fly.io/dashboard/personal/billing -> "Upcoming invoice" and Cost Explorer for `engine-v2-ref` |
 | Fly wake time | cold 3.4-4.1 s dial to `Welcome` (one redial), warm 0.34-0.42 s |
 | Fly tick p50/p99, 8 clients | p50 0.06-0.43 ms, window p99 about 2.4 ms (max 7.9 ms), 0 overruns |
+
+### Orchestrator gate (M38)
+
+`pnpm test && pnpm lint` green at `443ab9b` + record (rust 771, unit 328, wasm 172, netcode 133, browser 256 at 44 s). Rulings: `sigterm-snapshots` → `@slow`; the pre-`ready` `Hello` drop fixed in the engine (`60e373c`), and `server/accept-before-ready-waits` rewritten at the gate to assert its intent (no send before `ready`, the host's handler after) instead of a null `onMessage` (`0f1757e`); cold-wake redial and page-only wake accepted. **Durable Objects: no-go** on the memory criterion, by the rule fixed in advance ([ADR 0051](../decisions/0051-durable-objects-no-go.md)); the 24 h run was stopped at 1 h 2 min because it could not change the outcome (0 restarts, 74,400 ticks, 0 overruns in that hour). The Cloud resources table above lists the two Workers as created; both were deleted in step 4. Unticked, awaiting Tyler (`questions-for-tyler.md`): the Fly billed cost, and `fly apps destroy engine-v2-ref --yes` after the M38 device check; the `reference-server-do` workers.dev subdomain is removed in the Cloudflare dashboard.
