@@ -177,6 +177,38 @@ test('hidden_pauses_and_snapshots', async ({ page }) => {
   expect(await page.evaluate(() => window.__errors?.())).toEqual([])
 })
 
+// 0005 Cadence: `pagehide` also snapshots (best effort). Same shape as `hidden_pauses_and_snapshots`,
+// but the clean boundary is a `pagehide` event on the window, with `document.hidden` left false.
+// `persisted: true` is the bfcache case the lock-release handler of `client.ts` ignores, so only
+// `attachHostLifecycle`'s own `pagehide` listener is under test. @slow: browser has no fast headroom.
+test('pagehide_pauses_and_snapshots @slow', async ({ page }) => {
+  const worldId = `pagehide-${test.info().workerIndex}-${Date.now()}`
+  await openPage(page, `/world.html?world=${worldId}`)
+
+  // Dirty tile away from the tick rule's own tiles, so the snapshot is not vacuous (see above).
+  await page.evaluate(() => window.__dispatchPaintAt?.(50, 50))
+  await expect.poll(() => page.evaluate(() => window.__simTicksRun?.() ?? 0)).toBeGreaterThan(0)
+
+  const beforeDump = await page.evaluate((id) => window.__dumpWorldStorage?.(id), worldId)
+  const snapKeysBefore = Object.keys(beforeDump ?? {}).filter((k) => k.includes('/snap/'))
+
+  await page.evaluate(() =>
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })),
+  )
+
+  await expect
+    .poll(async () => {
+      const dump = await page.evaluate((id) => window.__dumpWorldStorage?.(id), worldId)
+      return Object.keys(dump ?? {}).filter((k) => k.includes('/snap/')).length
+    })
+    .toBeGreaterThan(snapKeysBefore.length)
+
+  // The sim is paused too: ticks stop.
+  const ticksAfterPagehide = await page.evaluate(() => window.__simTicksRun?.() ?? -1)
+  await page.waitForTimeout(300)
+  expect(await page.evaluate(() => window.__simTicksRun?.() ?? -1)).toBe(ticksAfterPagehide)
+})
+
 test('world_survives_reload', async ({ page }) => {
   const worldId = `reload-${test.info().workerIndex}-${Date.now()}`
   await openPage(page, `/world.html?world=${worldId}`)

@@ -458,3 +458,36 @@ fn init_rejects_budget_over_arena() {
     let err = engine::host::Host::<BGame>::init(Role::Sim, bad_cfg, &mut layout2);
     assert_eq!(err.err(), Some(Status::BudgetExceedsArena));
 }
+
+/// spec runtime-and-packaging R16b / 0007 §8: the default memory split of a `SimConfig` that sets
+/// none of `maxEntities`, `maxModifiedTiles` or `cacheChunks`: 1,024 chunks x 4 KiB, plus
+/// 262,144 entities x `size_of::<Entity>()`, plus 1,048,576 modified tiles x 12 B, plus 8 MiB of
+/// chunk index and 8 MiB of slack; for the ADR's nominal 128 B entity that is 64 MiB.
+/// `worldBudgetBytes` is an optional ceiling (unset means unchecked), so the split is pinned by
+/// setting the ceiling to exactly the sum (accepted) and one byte less (rejected): a changed default
+/// or a changed term moves one of the two. `BEntity` is deliberately larger than 128 B, so the sum
+/// is computed here from its real size, as `Host::init` does.
+#[test]
+fn default_memory_split_is_64_mib() {
+    use engine::abi::{Instance, RegionLayout, Role, Status};
+    const MIB: u64 = 1024 * 1024;
+
+    // The ADR's figure, with its nominal entity.
+    assert_eq!(
+        1024 * 4096 + 262_144 * 128 + 1_048_576 * 12 + 8 * MIB + 8 * MIB,
+        64 * MIB
+    );
+
+    let entity = core::mem::size_of::<BEntity>() as u64;
+    let split = 1024 * 4096 + 262_144 * entity + 1_048_576 * 12 + 8 * MIB + 8 * MIB;
+    let at = |budget: u64| {
+        let cfg = format!(r#"{{"seed":"0x1","params":null,"worldBudgetBytes":{budget}}}"#);
+        engine::host::Host::<BGame>::init(Role::Sim, &cfg, &mut RegionLayout::new()).err()
+    };
+    assert_eq!(at(split), None, "a default config fits exactly its split");
+    assert_eq!(
+        at(split - 1),
+        Some(Status::BudgetExceedsArena),
+        "one byte less than the default split is over budget"
+    );
+}

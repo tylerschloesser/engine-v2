@@ -167,4 +167,18 @@ mod tests {
         assert!(rest.is_empty());
         assert_eq!(rng, decoded);
     }
+
+    /// 0002 §2: wrapping integer ops are explicit. Overflow checks are on in the test profile, so a
+    /// bare `+`/`*` in the generator panics on all-ones seeds and streams.
+    #[test]
+    fn simrng_wraps_explicitly_on_all_ones_seed_and_stream() {
+        let mut a = SimRng::seed_seq(u64::MAX, u64::MAX);
+        let mut b = SimRng::seed_seq(u64::MAX, u64::MAX);
+        for _ in 0..64 {
+            assert_eq!(a.next_u32(), b.next_u32());
+            assert!(a.below(u32::MAX) < u32::MAX);
+            b.below(u32::MAX);
+        }
+        let _ = a.fork(u64::MAX);
+    }
 }

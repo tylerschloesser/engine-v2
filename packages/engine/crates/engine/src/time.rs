@@ -144,6 +144,30 @@ mod tests {
         assert_eq!(TickRate::hz(core::hint::black_box(60)).hz_value(), 60);
     }
 
+    /// 0006 Types: `Tick` is a point and `Ticks` a duration, both a bare `u32` (a plain `number` in
+    /// TypeScript), never seconds or a float. The field types are named, so a float or `u64` field
+    /// fails to compile; the point plus a duration is a point.
+    #[test]
+    fn tick_and_ticks_are_bare_u32_points_and_durations() {
+        let point: u32 = Tick(7).0;
+        let span: u32 = Ticks(3).0;
+        assert_eq!((point, span), (7, 3));
+        assert_eq!(core::mem::size_of::<Tick>(), 4);
+        assert_eq!(core::mem::size_of::<Ticks>(), 4);
+        assert_eq!(core::mem::align_of::<Tick>(), 4);
+        assert_eq!(Tick(7) + Ticks(3), Tick(10));
+        assert_eq!(Tick(7).add(Ticks(3)), Tick(10));
+        // The postcard wire form of both is one LEB128 varint of the `u32`, as a bare number.
+        assert_eq!(
+            postcard::to_allocvec(&Tick(300)).unwrap(),
+            postcard::to_allocvec(&300u32).unwrap()
+        );
+        assert_eq!(
+            postcard::to_allocvec(&Ticks(300)).unwrap(),
+            postcard::to_allocvec(&300u32).unwrap()
+        );
+    }
+
     #[test]
     fn tick_and_ticks_order_by_value() {
         assert!(Tick(1) < Tick(2));

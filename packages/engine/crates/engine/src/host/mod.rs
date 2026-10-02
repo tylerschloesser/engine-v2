@@ -3906,3 +3906,24 @@ where
         Status::Ok
     }
 }
+
+#[cfg(test)]
+mod default_tests {
+    use super::*;
+
+    /// 0007 §8 (defaults): a `SimConfig` that sets none of the budget fields carries the ADR's
+    /// literal figures, read through the real serde defaults rather than a test-local copy.
+    #[test]
+    fn sim_config_defaults_are_the_0007_section_8_figures() {
+        let cfg: SimConfig<()> = serde_json::from_str(r#"{"seed":"0x1","params":null}"#).unwrap();
+        assert_eq!(cfg.max_entities, 262_144);
+        assert_eq!(cfg.max_modified_tiles, 1_048_576);
+        assert_eq!(cfg.max_action_growth, 4096, "4 KiB");
+        assert_eq!(cfg.cache_chunks, 1024);
+        assert_eq!(
+            cfg.world_budget_bytes,
+            u32::MAX,
+            "an unset ceiling is unchecked"
+        );
+    }
+}

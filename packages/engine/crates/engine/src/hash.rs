@@ -113,4 +113,28 @@ mod tests {
         b.write(b"abc");
         assert_eq!(a.finish(), b.finish());
     }
+
+    /// 0002 §2: integer arithmetic on hashed state is written `wrapping_*` explicitly. The test
+    /// profile keeps overflow checks on, so a bare `*` or `+` in `Fnv64` or `mix64` panics on these
+    /// all-ones inputs; the results are compared with the same arithmetic done in `u128`.
+    #[test]
+    fn hashing_wraps_explicitly_on_all_ones_inputs() {
+        let mut h = Fnv64::new();
+        h.write(&[0xFF; 64]);
+        h.write_u64(u64::MAX);
+        h.write_u32(u32::MAX);
+        let mut want: u64 = 0xcbf2_9ce4_8422_2325;
+        for _ in 0..(64 + 8 + 4) {
+            want = (((want ^ 0xFF) as u128 * 0x0000_0100_0000_01b3_u128) & u128::from(u64::MAX))
+                as u64;
+        }
+        assert_eq!(h.finish(), want);
+
+        let mut z = u64::MAX;
+        z = (z ^ (z >> 30)) as u64;
+        z = ((z as u128 * 0xBF58_476D_1CE4_E5B9_u128) & u128::from(u64::MAX)) as u64;
+        z = (z ^ (z >> 27)) as u64;
+        z = ((z as u128 * 0x94D0_49BB_1331_11EB_u128) & u128::from(u64::MAX)) as u64;
+        assert_eq!(mix64(u64::MAX), z ^ (z >> 31));
+    }
 }
