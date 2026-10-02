@@ -389,3 +389,42 @@ test('shell.entry_drains_before_waiting', () => {
   expect(elapsed).toBeLessThan(WAIT_MS / 2)
   expect(Atomics.load(control.words, workerWord(INDEX, W_PARKED))).toBe(1)
 })
+
+/**
+ * M37 fix (CI red on `sim worker death respawns and resyncs`): `{ type: 'resume', cleared: true }`
+ * reaches the worker an unknown time after the sender cleared `W_YIELD` and posted it, and a newer
+ * park request can land in between (the worker was not handling messages: it was blocked in its loop
+ * behind a finished `runAsync`). That stale resume used to clear the newer request and re-enter the
+ * loop; now it yields to it. A resume with no park request pending in between still re-enters.
+ */
+test('shell.stale_cleared_resume_yields_to_a_newer_park_request', () => {
+  const control = new ControlBlock(createControlBlock())
+  const shell = createShell(control, INDEX)
+  let bodyCalls = 0
+  const yieldOnEveryPass = () => {
+    bodyCalls++
+    Atomics.store(control.words, workerWord(INDEX, W_YIELD), 1)
+    control.wake(INDEX)
+  }
+  const enter = () => {
+    const seen = shell.observeWake()
+    Atomics.store(control.words, workerWord(INDEX, W_PARKED), 0)
+    runBlockingLoop(shell, yieldOnEveryPass, () => WAIT_MS, seen)
+  }
+  enter()
+  expect(bodyCalls).toBe(1)
+  expect(Atomics.load(control.words, workerWord(INDEX, W_PARKED))).toBe(1)
+
+  // The sender cleared the park request and posted; a newer park request lands before delivery.
+  Atomics.store(control.words, workerWord(INDEX, W_YIELD), 0)
+  Atomics.store(control.words, workerWord(INDEX, W_YIELD), 1)
+  shell.resume(true)
+  expect(bodyCalls).toBe(1) // the loop was not re-entered
+  expect(Atomics.load(control.words, workerWord(INDEX, W_YIELD))).toBe(1) // the request stands
+  expect(Atomics.load(control.words, workerWord(INDEX, W_PARKED))).toBe(1)
+
+  // Nothing newer in between: an ordinary cleared resume re-enters the loop.
+  Atomics.store(control.words, workerWord(INDEX, W_YIELD), 0)
+  shell.resume(true)
+  expect(bodyCalls).toBe(2)
+})

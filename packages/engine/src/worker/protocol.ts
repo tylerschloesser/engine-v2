@@ -411,7 +411,13 @@ export type NetLinkMessage =
 
 export type ToWorker =
   | SetupMessage
-  | { type: 'resume' }
+  /** `cleared: true`: the sender has already stored `W_YIELD = 0` itself, and the worker honours the
+   * message only while that is still so (`Shell.resume`). A message is delivered an unknown time after
+   * it was sent -- the worker handles one only between loop passes -- so by then a newer park request
+   * may have set `W_YIELD = 1` again; an unconditional resume would silently undo it and the next
+   * `parkWorkers` would time out on a worker that is running. Without the flag: clears `W_YIELD`
+   * itself, as before. */
+  | { type: 'resume'; cleared?: true }
   | { type: 'stop' }
   | TestCallMessage
   | SimControlMessage

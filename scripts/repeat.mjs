@@ -6,7 +6,7 @@
 // a directory, written one file per run as `<dir>/run-<i>.json`.
 //
 // node scripts/repeat.mjs <suite> <runs> [--load <n>] [--timeout <seconds>] [--budget-scale <n>]
-//                          [--timings-json <dir>]
+//                          [--timings-json <dir>] [-t <pattern>]
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 
@@ -17,7 +17,8 @@ const runs = Number(runsArg),
   load = opt('--load', 0),
   timeoutMs = opt('--timeout', 120) * 1000,
   budgetScale = str('--budget-scale'),
-  timingsDir = str('--timings-json')
+  timingsDir = str('--timings-json'),
+  pattern = str('-t')
 const burner =
   'const p=process.ppid;(function s(){const t=Date.now();while(Date.now()-t<200);if(process.ppid!==p)process.exit();setImmediate(s)})()'
 const burners = Array.from({ length: load }, () =>
@@ -38,6 +39,7 @@ let pass = 0,
 for (let i = 0; i < runs; i++) {
   await new Promise((done) => {
     const args = ['test', suite]
+    if (pattern !== undefined) args.push('-t', pattern)
     if (budgetScale !== undefined) args.push('--budget-scale', budgetScale)
     if (timingsDir !== undefined) args.push('--timings-json', join(timingsDir, `run-${i + 1}.json`))
     const c = spawn('pnpm', args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })

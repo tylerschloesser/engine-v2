@@ -329,12 +329,18 @@ function allResumed(h: ClientTestHandle): boolean {
  * `allResumed`'s poll is already true. */
 export function resumeWorkers(client: Client): Promise<void> {
   const h = clientTestHandle(client)
+  const fatalAtStart = h.isFatal()
   for (const w of h.workers) {
     if (Atomics.load(h.control.words, workerWord(w.index, W_PARKED)) !== 1) continue
     Atomics.store(h.control.words, workerWord(w.index, W_YIELD), 0)
-    w.worker.postMessage({ type: 'resume' })
+    // `cleared`: a park request that lands before the worker handles this message (`raiseFatal`'s, or
+    // a `parkWorkers`) stands, instead of being undone by a message that is stale by then.
+    w.worker.postMessage({ type: 'resume', cleared: true })
   }
-  return pollUntil(() => allResumed(h), 'resumeWorkers', h)
+  // An engine that went fatal while this waits parked every worker on purpose (`raiseFatal`): the
+  // resume yielded to that park and there is nothing left to wait for. Fatal before the call is the
+  // old case: the caller resumes a parked-by-fatal world and waits for it as before.
+  return pollUntil(() => allResumed(h) || (!fatalAtStart && h.isFatal()), 'resumeWorkers', h)
 }
 
 /** Resolves once every worker has acknowledged every request and is parked (Seams): the client's

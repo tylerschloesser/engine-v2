@@ -268,9 +268,21 @@ export class Shell implements WorkerShell {
    * while async work was running must not make the loop immediately re-yield the instant that work's
    * own re-entry happens. Coherence for `parkWorkers`/`attachHostLifecycle`'s `sim-pause`: `W_PARKED
    * = 1` means the same thing either way (this worker is not blocked in `Atomics.wait` and will
-   * accept a `postMessage`), whether it got there via the yielded exit below or via `runAsync`. */
-  resume(): void {
+   * accept a `postMessage`), whether it got there via the yielded exit below or via `runAsync`.
+   *
+   * `senderCleared` (`{ type: 'resume', cleared: true }`; M37 fix, below): the sender stored `W_YIELD = 0`
+   * itself before posting, so this call must not store it again and must not act at all while it reads
+   * 1. The message was posted when this worker read as parked, but the worker handles it only between
+   * loop passes, which can be after that park ended (an in-flight `runAsync` finished and the loop
+   * re-entered and blocked, the message still queued behind it) and a *newer* park request landed. Only
+   * that newer request can have set `W_YIELD` since the sender cleared it, so the stale resume yields
+   * to it: the worker parks as asked, where an unconditional resume cleared the request and re-entered
+   * the loop (a running worker `parkWorkers` timed out on, `W_YIELD = 0`, `W_PARKED = 0`). */
+  resume(senderCleared = false): void {
     if (this.#stopped) return
+    if (senderCleared && Atomics.load(this.control.words, workerWord(this.index, W_YIELD)) !== 0) {
+      return
+    }
     Atomics.store(this.control.words, workerWord(this.index, W_YIELD), 0)
     if (this.#asyncInFlight) return
     const loop = this.#loop

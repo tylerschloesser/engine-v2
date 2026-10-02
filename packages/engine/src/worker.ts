@@ -123,7 +123,7 @@ export function run(): void {
         (e: unknown) => s.fatal(e instanceof Error ? e.message : String(e)),
       )
     } else if (m.type === 'resume') {
-      shell?.resume()
+      shell?.resume(m.cleared === true)
     } else if (m.type === 'stop') {
       netStop?.()
       shell?.stop()

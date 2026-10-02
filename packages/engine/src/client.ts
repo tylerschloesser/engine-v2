@@ -685,6 +685,8 @@ export interface ClientTestHandle {
   /** docs/plan/37-robustness-events.md step 2: how many times a dead sim worker has been replaced and
    * the new one reported `ready` (the client has been told to say `Hello` again at that point). */
   simRespawns(): number
+  /** M37 fix: whether `onFatal` has fired (`raiseFatal` parked every worker on purpose). */
+  isFatal(): boolean
 }
 
 const handles = new WeakMap<Client, ClientTestHandle>()
@@ -2031,7 +2033,10 @@ export function createClient(options: ClientOptions): Client {
           throw new Error(`engine: ${method}: ${result.message}`)
         return result
       } finally {
-        if (!alreadyParked) w.worker.postMessage({ type: 'resume' } satisfies ToWorker)
+        if (!alreadyParked) {
+          Atomics.store(control.words, workerWord(WORKER_HOST, W_YIELD), 0)
+          w.worker.postMessage({ type: 'resume', cleared: true } satisfies ToWorker)
+        }
       }
     })
   }
@@ -2563,6 +2568,7 @@ export function createClient(options: ClientOptions): Client {
     uiDrainStats: () => ({ recordsSeen: uiRecordsSeenTotal, onUi: onUiFiredTotal }),
     hostWorkerLock,
     simRespawns: () => simRespawnsDone,
+    isFatal: () => fatalEvent !== null,
   })
   return client
 }
