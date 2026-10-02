@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
+import { buildBudgetMs, suites } from '../suites.mjs'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const read = (rel) => readFileSync(join(root, rel), 'utf8')
@@ -49,6 +50,75 @@ describe('repo-config', () => {
       'postcard = { version = "1", default-features = false, features = ["alloc"] }',
     )
     expect(byName.serde).toMatch(/^serde = \{ version = "1", default-features = false,/)
+  })
+
+  // Spec testing R5: all tests run in under a minute. `pnpm test` runs the `first` suite alone, then
+  // every other fast-tier suite concurrently, so its budgeted length is the first suite's budget plus
+  // the longest of the rest (the build steps carry their own 10 s warning budget, apart). The literal
+  // budgets are those of 0020 §3 as amended (0033, 0036 §1): a loosened one fails here.
+  test('repo-config: the fast tier is budgeted under one minute', () => {
+    const fast = suites.filter((s) => s.tiers.includes('fast'))
+    expect(Object.fromEntries(fast.map((s) => [s.name, s.budgetMs]))).toEqual({
+      rust: 10_000,
+      unit: 3_000,
+      wasm: 7_000,
+      netcode: 10_000,
+      browser: 48_000,
+    })
+    const alone = fast.filter((s) => s.first).reduce((n, s) => n + s.budgetMs, 0)
+    const concurrent = Math.max(...fast.filter((s) => !s.first).map((s) => s.budgetMs))
+    expect(alone + concurrent).toBe(51_000)
+    expect(alone + concurrent).toBeLessThan(60_000)
+    expect(buildBudgetMs).toBeLessThanOrEqual(10_000)
+  })
+
+  // Spec testing R8 / 0020 §10: CI is GitHub Actions on Linux with a software WebGPU adapter; both
+  // tiers run on every push; timings are recorded and never gate (`--budget-scale 1000`).
+  test('repo-config: CI runs both tiers on ubuntu-latest with SwiftShader and never gates on time (0020 §10)', () => {
+    const ci = read('.github/workflows/ci.yml')
+    expect(ci).toMatch(/^on:\n {2}push:\n {4}branches: \[main\]\n {2}pull_request:/m)
+    expect(ci).toMatch(/^ {4}runs-on: ubuntu-latest$/m)
+    expect(ci.match(/runs-on:/g)).toHaveLength(1)
+    const step = (name) => {
+      const at = ci.indexOf(`- name: ${name}\n`)
+      expect(at, `step ${name}`).toBeGreaterThan(-1)
+      const next = ci.indexOf('\n      - name:', at + 1)
+      return ci.slice(at, next < 0 ? undefined : next)
+    }
+    const fast = step('pnpm test')
+    const slow = step('pnpm test:slow')
+    expect(fast).toContain('ENGINE_GPU: swiftshader')
+    expect(slow).toContain('ENGINE_GPU: swiftshader')
+    expect(fast).toContain(
+      'run: pnpm test --budget-scale 1000 --timings-json test-results/timings.json',
+    )
+    expect(slow).toContain(
+      'run: pnpm test:slow --budget-scale 1000 --timings-json test-results/timings-slow.json',
+    )
+  })
+
+  // 0020 §6 (spike B): the software adapter is a branch of the Playwright config.
+  test('repo-config: the SwiftShader branch of playwright.config.ts picks the headless shell and the five software-adapter flags', () => {
+    const config = read('packages/engine/playwright.config.ts')
+    expect(config).toContain(
+      "process.env.ENGINE_GPU === 'swiftshader' ? 'chromium-headless-shell' : 'chromium'",
+    )
+    const block =
+      /const swiftshaderArgs =\s*process\.env\.ENGINE_GPU === 'swiftshader'\s*\? \[([^\]]*)\]\s*: \[\]/.exec(
+        config,
+      )
+    expect(block, 'the swiftshaderArgs branch').not.toBeNull()
+    const flags = [...(block?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1])
+    expect(flags).toEqual([
+      '--enable-features=Vulkan',
+      '--use-angle=vulkan',
+      '--use-vulkan=swiftshader',
+      '--use-webgpu-adapter=swiftshader',
+      '--disable-vulkan-surface',
+    ])
+    expect(config).toContain(
+      "launchOptions: { args: ['--enable-unsafe-webgpu', ...swiftshaderArgs] }",
+    )
   })
 
   describe('repo-config: vite plugin runtime imports (0017 §1, spec R9)', () => {
