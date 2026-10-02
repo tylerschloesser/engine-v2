@@ -147,4 +147,11 @@ fn slow_apply_journal_overhead() {
          {} B",
         (after - before).max(0)
     );
+
+    // ADR 0037 §3 (the 0023 bar): at most 10% median overhead and no steady-state arena growth.
+    assert!(
+        overhead_pct <= 10.0,
+        "journal overhead {overhead_pct:.1}% exceeds the 10% bar (0037 §3)"
+    );
+    assert_eq!(after - before, 0, "journal grew the arena in steady state");
 }
