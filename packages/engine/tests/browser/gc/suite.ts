@@ -7,6 +7,7 @@ import type { NegativeControl } from '../../../src/test/controls.ts'
 import { gcPage, type IsolateBudget } from '../../support/budgets.ts'
 import { openPage } from '../support/page.ts'
 import { type GcResult, measure } from './instrument.ts'
+import { negControlTitle } from './titles.ts'
 
 type ControlVerdict = { A: Record<string, boolean>; B: Record<string, boolean> }
 
@@ -176,10 +177,12 @@ export function zeroGcSuite(opts: {
         // `gc-loop`'s own, which stays fast so both instruments are proven live on every `pnpm
         // test` (0016 §8's "permanent negative controls", amended by 0026). `object` stays fast for
         // every page (instrument B, every isolate).
-        const slow =
-          (kind === 'burst' && opts.pageId !== 'gc-loop') ||
-          (kind === 'object' && opts.slowWorkerObjectControls === true && name !== 'main')
-        const title = `${opts.pageId} neg ${kind} ${name}${slow ? ' @slow' : ''}`
+        const title = negControlTitle(
+          opts.pageId,
+          kind,
+          name,
+          opts.slowWorkerObjectControls === true,
+        )
         test(title, async ({ page, browser }) => {
           const control: NegativeControl = { isolate: name, kind }
           const r = await run(

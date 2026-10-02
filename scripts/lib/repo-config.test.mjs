@@ -121,6 +121,57 @@ describe('repo-config', () => {
     )
   })
 
+  // 0031 §1: five workers, measured faster than three; shared by `chromium`, `gc` and `engines`.
+  test('repo-config: playwright.config.ts runs five workers (0031 §1)', () => {
+    const config = read('packages/engine/playwright.config.ts')
+    expect([...config.matchAll(/^\s*workers:\s*(\d+),/gm)].map((m) => m[1])).toEqual(['5'])
+  })
+
+  // 0033 §1: the build-step warning budget is 10 s (it was 30 s).
+  test('repo-config: buildBudgetMs is 10000 (0033 §1)', () => {
+    expect(buildBudgetMs).toBe(10_000)
+  })
+
+  // 0033 §2 as amended by 0048 §2: `unit` is the one suite that runs alone before the others start.
+  test('repo-config: unit alone runs first, before the concurrent suites (0033 §2)', () => {
+    expect(suites.filter((s) => s.first === true).map((s) => s.name)).toEqual(['unit'])
+    const runner = read('scripts/test.mjs')
+    const firstRun = runner.indexOf(
+      'for (const suite of first) outcomes.push(await runSuite(suite, opts))',
+    )
+    const concurrentRun = runner.indexOf('await Promise.all(concurrent.map(')
+    expect(firstRun, 'the first-suite loop').toBeGreaterThan(-1)
+    expect(concurrentRun, 'the concurrent run').toBeGreaterThan(firstRun)
+    expect(runner).toContain(
+      'const concurrent = selected.filter((s) => !isSolo(s) && !first.includes(s))',
+    )
+  })
+
+  // 0017 §10: exact pins. The Rust channel is a full release, and no devDependency carries a range.
+  test('repo-config: toolchain pins are exact: Rust 1.93.0, Node >= 22.18, pnpm 11.x, no ranges in devDependencies (0017 §10)', () => {
+    const toolchain = tomlSection(read('rust-toolchain.toml'), 'toolchain')
+    expect(toolchain.find((l) => l.startsWith('channel'))).toMatch(/^channel = "1\.93\.0"/)
+    const rootPkg = JSON.parse(read('package.json'))
+    expect(rootPkg.engines.node).toBe('>=22.18')
+    expect(rootPkg.packageManager).toMatch(/^pnpm@11\.\d+\.\d+$/)
+    const manifests = [
+      'package.json',
+      'packages/engine/package.json',
+      'games/reference/package.json',
+      'games/reference-server/package.json',
+    ]
+    let checked = 0
+    for (const rel of manifests) {
+      const dev = JSON.parse(read(rel)).devDependencies ?? {}
+      for (const [name, version] of Object.entries(dev)) {
+        checked++
+        expect(version, `${rel} devDependencies.${name}`).toMatch(/^\d+\.\d+\.\d+(-[\w.]+)?$/)
+      }
+    }
+    expect(checked).toBeGreaterThan(5)
+    expect(readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8')).toMatch(/^lockfileVersion:/m)
+  })
+
   describe('repo-config: vite plugin runtime imports (0017 §1, spec R9)', () => {
     const entry = join(root, 'packages/engine/src/vite.ts')
     const pkg = JSON.parse(read('packages/engine/package.json'))

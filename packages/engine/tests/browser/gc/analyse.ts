@@ -268,3 +268,26 @@ export function verdict(
   const pass = Object.values(A).every(Boolean) && Object.values(B).every(Boolean)
   return { pass, A, B }
 }
+
+/** Frames per measured window (0016 §3 step 5: N = 600). */
+export const MEASURED_FRAMES = 600
+
+/** 0028: two consecutive measured windows of `frames` each. Only the second carries the
+ * `window-start`/`window-end` marks (`marks`), so assertion A's GC events are counted over exactly
+ * one window (0016 §3 step 6); `analyseTrace` takes the last `window-start`, so marking both would
+ * pass silently, which is why the plan is one value the unit test pins. */
+export function measuredWindows(
+  frames: number,
+): readonly [{ frames: number; marks: false }, { frames: number; marks: true }] {
+  return [
+    { frames, marks: false },
+    { frames, marks: true },
+  ]
+}
+
+/** 0028 §1: assertion B's per-isolate total is the lower of the two windows; the winner's own
+ * profile (and so its `byFn` and `attributedBytes`) is what the verdict reads. A tie keeps the
+ * first. */
+export function lowerWindow<T>(totals: readonly [number, number], first: T, second: T): T {
+  return totals[0] <= totals[1] ? first : second
+}

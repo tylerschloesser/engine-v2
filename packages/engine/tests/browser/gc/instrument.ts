@@ -12,6 +12,9 @@ import {
   attributedBytes,
   verdict as computeVerdict,
   type GcCounts,
+  lowerWindow,
+  MEASURED_FRAMES,
+  measuredWindows,
   type Profile,
   sumProfile,
   type TraceEvent,
@@ -31,7 +34,7 @@ declare global {
 // 0016 §3 step 5 and the spike's own reliability numbers (RESULT.md).
 const TRACE_CATEGORIES = ['v8', 'devtools.timeline', 'blink.user_timing']
 const SAMPLING_INTERVAL = 1
-const FRAMES = 600
+const FRAMES = MEASURED_FRAMES
 // `gc-loop`'s own tuned figure is 120; the production `yield`-protocol shell (`ControlBlock`,
 // `worker/shell.ts`, `asHarness`) is a deeper call chain that needs more to reach steady optimised
 // code (docs/plan/06b-workers-and-spawn.md, Deviations "fix round 2"). Applied globally (not a
@@ -344,16 +347,17 @@ export async function measure(
   // real per-frame allocation lands in both and survives the minimum untouched. Nothing is excluded
   // by name, by size or by isolate: the discriminator is the one property the budget actually
   // asserts, "does this recur every frame?".
+  const [window1, window2] = measuredWindows(frames)
   await startSampling()
   const firstRun = await runPhase('measured window 1', () =>
-    page.evaluate((n) => window.__gc?.run(n, false), frames),
+    page.evaluate((w) => window.__gc?.run(w.frames, w.marks), window1),
   )
   if (!firstRun) throw new Error('gc instrument: run() returned nothing')
   const firstProfiles = await stopSampling()
 
   await startSampling()
   const runResult = await runPhase('measured window 2', () =>
-    page.evaluate((n) => window.__gc?.run(n, true), frames),
+    page.evaluate((w) => window.__gc?.run(w.frames, w.marks), window2),
   )
   if (!runResult) throw new Error('gc instrument: run() returned nothing')
   const secondProfiles = await stopSampling()
@@ -372,7 +376,7 @@ export async function measure(
     const totals: [number, number] = [firstSummed.total, secondSummed.total]
     windowBytes[name] = totals
     windowByFn[name] = [firstSummed.byFn, secondSummed.byFn]
-    rawProfiles[name] = totals[0] <= totals[1] ? first : second
+    rawProfiles[name] = lowerWindow(totals, first, second)
   }
   await browserSession.send('Tracing.end')
   await traceDone

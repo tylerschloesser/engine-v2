@@ -1,7 +1,11 @@
+import { readFileSync } from 'node:fs'
 import { expect, test } from 'vitest'
 import {
   analyseTrace,
   attributedBytes,
+  lowerWindow,
+  MEASURED_FRAMES,
+  measuredWindows,
   sumProfile,
   tracingStallWarning,
   verdict,
@@ -241,4 +245,30 @@ test('gc verdict: a wide software-mode ceiling never applies to the isolate a co
 test('gc verdict: tracing stall is a warning', () => {
   expect(tracingStallWarning(2500)).toBe('gc-tracing-start-stall 2500ms')
   expect(tracingStallWarning(1999)).toBeNull()
+})
+
+// 0016 §3 step 5 and 0028 §3: N is 600 frames in each of two consecutive windows, and only window 2
+// is marked (assertion A counts GC events over exactly one window). `instrument.ts` drives both
+// `run()` calls from this plan, which the source assertion pins.
+test('gc analyse: two measured windows of 600 frames, only the second marked', () => {
+  expect(MEASURED_FRAMES).toBe(600)
+  expect(measuredWindows(MEASURED_FRAMES)).toEqual([
+    { frames: 600, marks: false },
+    { frames: 600, marks: true },
+  ])
+  const instrument = readFileSync(new URL('./instrument.ts', import.meta.url), 'utf8')
+  expect(instrument).toContain('const [window1, window2] = measuredWindows(frames)')
+  expect(instrument.match(/window\.__gc\?\.run\(w\.frames, w\.marks\), window1\)/g)).toHaveLength(1)
+  expect(instrument.match(/window\.__gc\?\.run\(w\.frames, w\.marks\), window2\)/g)).toHaveLength(1)
+})
+
+// 0028 §1: the lower of the two windows' totals wins; its profile is what is read afterwards.
+test('gc analyse: the lower of the two windows is selected per isolate', () => {
+  const w1 = { name: 'window 1' }
+  const w2 = { name: 'window 2' }
+  expect(lowerWindow([100, 200], w1, w2)).toBe(w1)
+  expect(lowerWindow([300, 200], w1, w2)).toBe(w2)
+  expect(lowerWindow([200, 200], w1, w2)).toBe(w1) // a tie keeps the first
+  const instrument = readFileSync(new URL('./instrument.ts', import.meta.url), 'utf8')
+  expect(instrument).toContain('rawProfiles[name] = lowerWindow(totals, first, second)')
 })

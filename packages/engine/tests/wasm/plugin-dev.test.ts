@@ -129,6 +129,8 @@ describe('plugin-dev', () => {
     } finally {
       await utimes(LIB_RS, beforeStat.atime, beforeStat.mtime)
     }
+    // 0033 Context 2: the touch leaves the real source's mtime where it was (a dropped restore fails here).
+    expect((await stat(LIB_RS)).mtime.getTime()).toBe(beforeStat.mtime.getTime())
   })
 
   // M35 Planning decision (b): the recursive `fs.watch` of the crate's `src/` reports a `.rs` file two
