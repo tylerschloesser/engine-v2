@@ -79,3 +79,16 @@ PRE-PLAN §7 "Hosting cost": Fly and Cloudflare billing pages after the runs. "T
 [device-checks.md, M38: Hosted deployment](device-checks.md#m38-hosted-deployment). Run on the iPhone on cellular against the Fly URL (client and `/ws` on one origin).
 
 ## Deviations
+
+### Cloud resources (record for teardown, step 4)
+
+Created 2026-10-02 by the step 1-2 session. Nothing else exists in the Fly org `personal`.
+
+| Resource | Id / name | Region | URL |
+|---|---|---|---|
+| Fly app | `engine-v2-ref` (org `personal`) | `ord` | https://engine-v2-ref.fly.dev |
+| Fly volume | `vol_re1j5dn5gz5p16l4` (`world_data`, 1 GB, encrypted, snapshots on) | `ord` | n/a |
+| Fly machine | `83519ec7970218` (`billowing-fog-8944`, `shared-cpu-1x:512MB`, volume attached) | `ord` | n/a |
+| IPs (free) | shared v4 66.241.124.2, dedicated v6 2a09:8280:1::1a4:4c5d:0 | n/a | n/a |
+
+Teardown: `fly apps destroy engine-v2-ref --yes` (removes the machine and volume with it; confirm with `fly volumes list -a engine-v2-ref` and `fly apps list`). Local leftovers: docker image `engine-v2-ref:local` (`docker rmi`).

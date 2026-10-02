@@ -10,6 +10,8 @@
 // - `rendererLost` (M37b): a banner with a Reload button; the sim keeps running and saving.
 // - `onFatal` (M37): a screen with the engine's message and a Reload button; the world is untouched.
 // - desync (`client.onDesync`, M31b): a counter in dev builds only.
+// - `?linklog=1` (M38, `createLinkLog`): the on-page link log of `mp.html?linklog=1`, for a phone with
+//   no console.
 import type {
   DesyncReport,
   FatalEvent,
@@ -45,6 +47,42 @@ export function statusText(state: LinkState, reason?: LinkReason): string | null
     case 'rejected':
       return reason ? REJECTED[reason] : 'The server refused the connection.'
   }
+}
+
+/** One row of the `?linklog=1` view: the event, the link state, the close code (`-`: `onLink` does not
+ * carry one) and the milliseconds since the page last became visible. */
+export function linkLogRow(event: string, state: string, msSinceVisible: number): string {
+  return `${event.padEnd(10)} ${state.padEnd(12)} code=- sinceVisible=${Math.round(msSinceVisible)}ms`
+}
+
+/**
+ * The hosted build's link log (M38, `?linklog=1` only): `client.onLink` events and `visibilitychange`
+ * timestamps from the public API, newest first, in a `<pre id="linklog">`. A step of M38-socket-resume
+ * reads `visible` to the next `online` row.
+ */
+export function createLinkLog(
+  container: HTMLElement,
+  doc: Document = document,
+  now: () => number = () => performance.now(),
+): { onLink(e: { state: LinkState }): void; rows(): string[] } {
+  const pre = doc.createElement('pre')
+  pre.id = 'linklog'
+  pre.style.cssText =
+    'position:fixed;left:8px;top:8px;margin:0;max-width:95vw;max-height:60vh;overflow:auto;' +
+    'padding:4px 8px;font:11px monospace;background:rgba(0,0,0,0.7);color:#cfc;z-index:40'
+  container.append(pre)
+  const rows: string[] = []
+  let visibleAt = now()
+  function push(event: string, state: string): void {
+    rows.unshift(linkLogRow(event, state, now() - visibleAt))
+    if (rows.length > 100) rows.pop()
+    pre.textContent = rows.join('\n')
+  }
+  doc.addEventListener('visibilitychange', () => {
+    if (doc.visibilityState === 'visible') visibleAt = now()
+    push(doc.visibilityState, '-')
+  })
+  return { onLink: (e) => push('link', e.state), rows: () => rows }
 }
 
 /** How long the `resyncing` notice stays on the line (the engine gives no "resynced" event: the second

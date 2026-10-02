@@ -30,7 +30,7 @@ import { createCraftUi } from './ui/craft.js'
 import { createFurnaceUi } from './ui/furnace.js'
 import { createInventoryUi } from './ui/inventory.js'
 import { createRosterUi } from './ui/roster.js'
-import { createStatusUi, type StatusUi } from './ui/status.js'
+import { createLinkLog, createStatusUi, type StatusUi } from './ui/status.js'
 
 export type StartGameOptions = {
   canvas: HTMLCanvasElement
@@ -113,6 +113,12 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
   client.onFatal((e) => statusUi.onFatal(e))
   client.onDesync((r) => statusUi.onDesync(r))
   if (opts.host.kind === 'remote') statusUi.onLink({ state: 'connecting' }) // `onLink` starts at the first change
+  // M38: `?linklog=1` adds the on-page link log (off unless the parameter is present).
+  if (opts.host.kind === 'remote' && new URL(location.href).searchParams.get('linklog') === '1') {
+    const linkLog = createLinkLog(document.body, document)
+    linkLog.onLink({ state: 'connecting' })
+    client.onLink((e) => linkLog.onLink(e))
+  }
   // M37b: every GPU object (device, terrain pipeline and art, and M33c's drawables pass: the
   // client's DrawList drawn in the terrain renderer's own pass, which loads `assets.sprites`) lives
   // in one `GpuResources` owned by the host, which rebuilds it after a WebGPU device loss.
