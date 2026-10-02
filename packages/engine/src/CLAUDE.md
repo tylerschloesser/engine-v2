@@ -12,7 +12,7 @@ Package-level layout, commands and conventions: `../CLAUDE.md`.
   sim.ts` (the sim worker kind, paced by `worker/atomics-timer.ts`'s `AtomicsTimer` on top of
   `runBlockingLoop`) and a future `createWorldServer` (M27) both drive a `SimHost` through
   `createSimHostFromInstance`; only `Connection`, `Storage`, the clock and the timer differ between
-  them. `SimHost.accept(connection)` (M15b) allocates the next free `ConnId` (`< MAX_CONNS = 8`,
+  them. `SimHost.accept(connection)` (M15b) allocates the next free `ConnId` (`< MAX_CONNS = 16`,
   `host::MAX_CONNS`'s own mirror), wires `connection.onMessage`/`onClose` to `sim_admit`/
   `sim_disconnect`, and the tick procedure then calls `sim_build_frame`/`connection.send` for every
   accepted connection automatically, every tick. `sim-config.ts` holds the three pure pieces

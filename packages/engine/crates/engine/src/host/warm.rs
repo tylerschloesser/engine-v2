@@ -10,9 +10,9 @@
 use crate::view::nearest_first;
 use crate::world::{ChunkCoord, ChunkRect, TerrainStore, TilePos};
 
-/// Connections a warm list tracks (0009 `WorldConfig.maxPlayers` default 8): generous headroom
-/// above that default without depending on M15's actual connection type.
-pub const MAX_VIEWS: usize = 8;
+/// Connections a warm list tracks: 16 = twice the largest `maxPlayers` (8, 0009), the spare half
+/// being reconnect headroom (docs/decisions/0053), without depending on M15's actual connection type.
+pub const MAX_VIEWS: usize = 16;
 
 /// Chunks one view's rect can hold and still get a fully correct nearest-first order (0008 §5's
 /// worst case at the view bound is 13x13 = 169); the scratch buffer `warm_one` sorts into,

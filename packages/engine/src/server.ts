@@ -139,7 +139,12 @@ export interface WorldServer {
  * `ConnId` is a plain, host-picked `u32 < MAX_CONNS`, and `host::Host::connect` enforces this
  * bound itself with a native `assert!`) -- mirrored here as a plain constant, the same relationship
  * `DEFAULT_TICK_HZ` already has to `TickRate::HZ_20`. */
-export const MAX_CONNS = 8
+export const MAX_CONNS = 16
+
+/** The default `maxPlayers` (0009), and the most a world may configure: the other half of
+ * `MAX_CONNS` is reconnect headroom, so a returning player whose old socket has not yet been
+ * declared dead can be accepted (and then supersede it) in a full world (0013, docs/decisions/0053). */
+export const MAX_PLAYERS_LIMIT = MAX_CONNS / 2
 
 /** `Instance::sim_last_superseded()`'s own sentinel (Rust `u32::MAX`), mirrored: `sim_attach`'s
  * `Result`-region word when this attach superseded no other connection. */
@@ -1431,17 +1436,8 @@ export function createSimHostFromInstance(
           closeHandshake(conn, connection, rejectReasonCloseCode(RejectReason.BadKey))
           return
         }
-        // 0013 Planning decisions "Full counts concurrent sessions": every connection already past
-        // this point (awaiting-attach or settled) counts, this one not yet included.
-        let concurrent = 0
-        for (const s of handshakeState.values()) {
-          if (s.status === 'awaiting-attach' || s.status === 'settled') concurrent++
-        }
-        if (concurrent >= deps.maxPlayers) {
-          connection.send(MsgClass.ReliableOrdered, buildReject(RejectReason.Full, deps.buildHash))
-          closeHandshake(conn, connection, rejectReasonCloseCode(RejectReason.Full))
-          return
-        }
+        // 0013 / 0053: `Full` is decided in `settle` below, once the secret's hash says whether this
+        // `Hello` is a returning player (which supersedes, never `Full`) or a new distinct one.
 
         state.status = 'awaiting-attach'
         garbagePending--
@@ -1467,6 +1463,34 @@ export function createSimHostFromInstance(
           // never race the same candidate id -- the first one's `create` is already visible to
           // `highestPlayerId()` before the second's own lookup runs.
           let entry = deps.sessions.lookup(hashHex)
+          // 0053: `Full` counts players attached by distinct secret (settled, or resolved and
+          // queued ahead of this one), not connections; a secret that maps to an attached player
+          // supersedes it. A refused `Hello` creates no session and leaves nothing in the queue.
+          const attachedPlayers = new Set<number>()
+          for (const s of handshakeState.values()) {
+            if (s.status === 'settled' && s.playerId !== undefined) attachedPlayers.add(s.playerId)
+          }
+          for (const q of attachQueue) {
+            if (q.entry && handshakeState.get(q.entry.conn)?.status === 'awaiting-attach') {
+              attachedPlayers.add(q.entry.playerId)
+            }
+          }
+          if (
+            !(entry && attachedPlayers.has(entry.playerId)) &&
+            attachedPlayers.size >= deps.maxPlayers
+          ) {
+            resolveMyTurn()
+            const at = attachQueue.indexOf(slot)
+            if (at >= 0) attachQueue.splice(at, 1)
+            if (handshakeState.get(conn) === state && conns[conn] === connection) {
+              connection.send(
+                MsgClass.ReliableOrdered,
+                buildReject(RejectReason.Full, deps.buildHash),
+              )
+              closeHandshake(conn, connection, rejectReasonCloseCode(RejectReason.Full))
+            }
+            return
+          }
           if (!entry) {
             let candidate = deps.sessions.highestPlayerId() + 1
             while (sim.simHasPlayer(candidate) === 1) candidate++
@@ -1598,6 +1622,14 @@ export function serverInternals(server: WorldServer): {
 }
 
 export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldServer {
+  if (
+    cfg.maxPlayers !== undefined &&
+    !(cfg.maxPlayers >= 1 && cfg.maxPlayers <= MAX_PLAYERS_LIMIT)
+  ) {
+    throw new Error(
+      `createWorldServer: maxPlayers ${cfg.maxPlayers} is out of range (1..=${MAX_PLAYERS_LIMIT}; half of MAX_CONNS = ${MAX_CONNS} is reconnect headroom)`,
+    )
+  }
   const newInstance = (): EngineInstance =>
     instantiate(host.wasm, Role.Sim, buildSimInstanceConfig(cfg))
 

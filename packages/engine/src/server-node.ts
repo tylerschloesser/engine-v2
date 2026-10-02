@@ -160,7 +160,7 @@ export function attachWebSocketServer(wss: WsServerLike, server: WorldServer): v
     // no backpressure against whether the previous retry's own connection has resolved yet -- and a
     // slot is occupied from the instant a socket's own TCP/WS handshake completes (`accept()`,
     // called here), not from when its `Hello` is later processed, so under real, variable CI timing
-    // enough of these can be simultaneously "accepted, not yet Hello'd" to exceed `MAX_CONNS` (8)
+    // enough of these can be simultaneously "accepted, not yet Hello'd" to exceed `MAX_CONNS` (16)
     // before any of them individually resolves. `SimHost.accept` itself is unchanged (a pinned
     // Provides seam; still throws on the same documented condition) -- this is the one caller in
     // this repo that turns that throw into what a real production server should do instead: close

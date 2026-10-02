@@ -56,9 +56,10 @@ impl ByteSink for VecSink<'_> {
     }
 }
 
-/// A connection slot index (Scope: "`ConnId = u32 < maxPlayers`"). 0009's `WorldConfig.maxPlayers`
-/// default is 8, matching `warm::MAX_VIEWS`, which this milestone's connection table reuses
-/// directly (`host::mod` Deviations: one cap, not two).
+/// A connection slot index (Scope: "`ConnId = u32 < maxPlayers`"). `MAX_CONNS` is 16, twice the
+/// largest `WorldConfig.maxPlayers` (8): `warm::MAX_VIEWS`, reused directly (`host::mod` Deviations:
+/// one cap, not two); the spare half lets a returning player attach before its old connection is
+/// declared dead (docs/decisions/0053).
 pub type ConnId = u32;
 pub const MAX_CONNS: usize = warm::MAX_VIEWS;
 
