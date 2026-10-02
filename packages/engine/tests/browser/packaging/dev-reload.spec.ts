@@ -71,7 +71,7 @@ const ui = (page: Page) => page.evaluate(() => (window as unknown as W).__ui?.()
 test.setTimeout(600_000)
 
 test('dev-reload-keeps-world @slow', async ({ page }) => {
-  const app = await createScratchApp({ pattern: 'A', install: 'link' })
+  const app = await createScratchApp({ pattern: 'A', install: 'link', label: 'dev-reload' })
   const lib = join(app.dir, 'sim/src/lib.rs')
   await writeFile(lib, withUi(await readFile(lib, 'utf8')))
   const dev = await app.dev()

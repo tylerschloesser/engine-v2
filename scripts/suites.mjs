@@ -54,7 +54,7 @@ export const buildSteps = [
  * A suite is `{ name, kind, tiers, budgetMs, args?, cwd?, env?, legs?, solo? }`; `kind` names an
  * adapter in scripts/lib/adapters.mjs. `legs` are extra runs reported on the suite's line, each
  * `{ name, kind, ... }` with what its adapter needs, run concurrently with the suite's own main leg
- * (`runSuite`'s `Promise.all`). Ids follow the rows of the 0020 §3 table: `rust`, `unit`, `wasm`,
+ * (`runSuite`'s `Promise.all`), except a leg with `after: true`, which starts once all the others have finished. Ids follow the rows of the 0020 §3 table: `rust`, `unit`, `wasm`,
  * `netcode`, `browser`; `frame-bench` (docs/plan/
  * 17b-sprites-and-frame-budget.md, Fix round 2) is this repo's one addition outside that table, for
  * the reason its own entry below explains. `budgetMs` is the fast-tier budget; owner of the numbers:
@@ -182,6 +182,17 @@ export const suites = [
         // same config, and `ENGINE_TEST_PORT` is what tells the config's own `webServer` which port
         // to bind (playwright.config.ts, tests/browser/pages/vite.config.ts).
         port: 4518,
+      },
+      {
+        // The heavy packaging specs (`tarball-install`, `dev-reload`: an install and a cargo build
+        // each) run `after` the main leg and the `engines` leg, never beside the `gc` projects: run
+        // concurrently they pushed `connected-terrain neg burst sim` over its 90 s timeout on CI (M37
+        // Deviations). Same default port as the main leg: nothing else runs then.
+        name: 'packaging',
+        kind: 'playwright',
+        onlyTier: 'slow',
+        after: true,
+        args: ['--project', 'packaging'],
       },
     ],
   },

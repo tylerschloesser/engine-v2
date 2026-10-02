@@ -119,7 +119,23 @@ export default defineConfig({
       // `--disable-frame-rate-limit --disable-gpu-vsync`): otherwise this project's own slow-tier
       // grep (`(?=.*@slow)`) would also pick up `bench.frame_worstcase @slow` and run it a second
       // time, without those flags, under real (capped) rAF pacing.
-      testIgnore: ['**/gc-*.spec.ts', '**/frame-bench*.spec.ts'],
+      testIgnore: ['**/gc-*.spec.ts', '**/frame-bench*.spec.ts', '**/packaging/*.spec.ts'],
+    },
+    {
+      // `tarball-install` and `dev-reload` (all `@slow`): a package install and a cargo build each, the
+      // CPU-heaviest tests of the tier (222 s and 237 s on a CI runner). Beside the `gc` projects they
+      // starved the zero-GC burst controls into their 90 s timeout (M37 Deviations, "Open gate
+      // failures", CI run 36968222365), so `scripts/suites.mjs` runs this project as the `browser`
+      // suite's `packaging` leg, after the main leg (every gc test included) has finished. Not
+      // Playwright `dependencies`: those run the dependency projects whole and ignore `--grep`, which
+      // would put the fast gc tests into the slow tier. A red main leg does not stop this leg.
+      name: 'packaging',
+      use: {
+        ...devices['Desktop Chrome'],
+        channel: chromiumChannel,
+        launchOptions: { args: ['--enable-unsafe-webgpu', ...swiftshaderArgs] },
+      },
+      testMatch: '**/packaging/*.spec.ts',
     },
     {
       // Sim hash only (0020 §6: Firefox returns a null WebGPU adapter headless); multi-engine repeats

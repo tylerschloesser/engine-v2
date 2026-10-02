@@ -3,9 +3,9 @@
 // `<tmpdir>/engine-tarball-test/`, never inside the repo (0017 §6: an ancestor `[workspace]` would
 // adopt the crate), and installs the engine either from a `pnpm pack` tarball or as a `link:`.
 //
-// Layout of the scratch root, recreated by the first `createScratchApp` call of a process:
-//   tarballs/engine-0.0.0.tgz   one `pnpm pack` per process
-//   <install>-<pattern>/        one app: package.json (no lockfile), node_modules, sim/, src/
+// Layout of the scratch root (shared by concurrent processes, never removed as a whole):
+//   tarballs-<pid>/engine-0.0.0.tgz   one `pnpm pack` per process
+//   <install>-<pattern>[-<label>]/    one app: package.json (no lockfile), node_modules, sim/, src/
 // `CARGO_TARGET_DIR` is a sibling directory kept between runs, so the slow tier pays the cold
 // dependency build once (`<tmpdir>/engine-tarball-target/`).
 //
@@ -27,7 +27,13 @@ const TEMPLATE = fileURLToPath(new URL('../browser/packaging/scratch-app/', impo
 export const SCRATCH_ROOT = join(tmpdir(), 'engine-tarball-test')
 export const SCRATCH_TARGET = join(tmpdir(), 'engine-tarball-target')
 
-export type ScratchOptions = { pattern: 'A' | 'B'; install: 'tarball' | 'link' }
+export type ScratchOptions = {
+  pattern: 'A' | 'B'
+  install: 'tarball' | 'link'
+  /** Names the app directory beside the others (`<install>-<pattern>-<label>`): two specs asking for
+   * the same install and pattern in different Playwright workers must not share one directory. */
+  label?: string
+}
 
 export interface RunningServer {
   url: string
@@ -56,11 +62,14 @@ export interface ScratchApp {
 
 let prepared: Promise<string> | undefined
 
-/** Recreates the scratch root and packs the engine once per process; returns the `.tgz` path. */
+/** Packs the engine once per process into a directory of its own; returns the `.tgz` path. The root
+ * itself is shared by every Playwright worker that runs a scratch app at the same time (the packaging
+ * project runs its specs in parallel), so nothing here removes it: each process clears only its own
+ * tarball directory and each app its own `dir`. */
 function prepareRoot(): Promise<string> {
   prepared ??= (async () => {
-    await rm(SCRATCH_ROOT, { recursive: true, force: true })
-    const tarballs = join(SCRATCH_ROOT, 'tarballs')
+    const tarballs = join(SCRATCH_ROOT, `tarballs-${process.pid}`)
+    await rm(tarballs, { recursive: true, force: true })
     await mkdir(tarballs, { recursive: true })
     await mkdir(SCRATCH_TARGET, { recursive: true })
     await run('pnpm', ['pack', '--pack-destination', tarballs], { cwd: ENGINE_PKG })
@@ -133,7 +142,10 @@ function spawnServer(
 
 export async function createScratchApp(opts: ScratchOptions): Promise<ScratchApp> {
   const tarball = await prepareRoot()
-  const dir = join(SCRATCH_ROOT, `${opts.install}-${opts.pattern}`)
+  const dir = join(
+    SCRATCH_ROOT,
+    `${opts.install}-${opts.pattern}${opts.label ? `-${opts.label}` : ''}`,
+  )
   await rm(dir, { recursive: true, force: true })
   await cp(TEMPLATE, dir, {
     recursive: true,

@@ -168,7 +168,12 @@ async function runSuite(suite, opts) {
     ...(suite.legs ?? []).map((leg) => ({ ...leg, log: `${leg.name}.log` })),
   ]
   const start = performance.now()
-  const parts = await Promise.all(legs.map((leg) => runLeg(suite, leg, opts)))
+  // A leg with `after: true` starts once every other leg has finished (its CPU load must not overlap
+  // theirs), one after another if there are several.
+  const parts = await Promise.all(
+    legs.filter((leg) => !leg.after).map((leg) => runLeg(suite, leg, opts)),
+  )
+  for (const leg of legs.filter((leg) => leg.after)) parts.push(await runLeg(suite, leg, opts))
   return {
     suite,
     ms: performance.now() - start,
