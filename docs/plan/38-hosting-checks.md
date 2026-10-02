@@ -90,6 +90,11 @@ Created 2026-10-02 by the step 1-2 session. Nothing else exists in the Fly org `
 | Fly volume | `vol_re1j5dn5gz5p16l4` (`world_data`, 1 GB, encrypted, snapshots on) | `ord` | n/a |
 | Fly machine | `83519ec7970218` (`billowing-fog-8944`, `shared-cpu-1x:512MB`, volume attached) | `ord` | n/a |
 | IPs (free) | shared v4 66.241.124.2, dedicated v6 2a09:8280:1::1a4:4c5d:0 | n/a | n/a |
+| Cloudflare Worker (step 3) | `engine-v2-ref-do`, DO namespace class `WorldDO` (SQLite-backed, migration `v1`); bench scale 1 payload, arena 96 MiB; **the measured one: do not redeploy during the 24 h run** | account `83c4b0d34a69f15c26049dfcb5165802` | https://engine-v2-ref-do.reference-server-do.workers.dev (worlds `day24b` = the 24 h run; `day24`, `probe`, `probe2` = short runs) |
+| Cloudflare Worker (step 3, probes) | `engine-v2-ref-do-probe`, class `WorldDO`; redeployed many times with different payloads (scale/arena), `ALLOW_ALLOC` var on some deploys | same | https://engine-v2-ref-do-probe.reference-server-do.workers.dev (many world ids, all disposable) |
+| workers.dev subdomain | `reference-server-do` (registered by the first `wrangler deploy`, account level) | n/a | n/a |
+
+Teardown for the two Workers (and their objects' storage): `wrangler delete --name engine-v2-ref-do` and `wrangler delete --name engine-v2-ref-do-probe` (after the 24 h log is read). The subdomain stays on the account (Tyler can rename it in the dashboard).
 
 Teardown: `fly apps destroy engine-v2-ref --yes` (removes the machine and volume with it; confirm with `fly volumes list -a engine-v2-ref` and `fly apps list`). Local leftovers: docker image `engine-v2-ref:local` (`docker rmi`).
 
@@ -141,3 +146,53 @@ Files touched grows by `packages/engine/src/server.ts` (`createWorldServer`) and
 - **Ledger:** the "rejected-`Hello`-settle stall" row (`deferred-ledger.md`) is a different defect (`hashSecretHex`/`sessions.save` rejecting leaves the attach-queue slot unfilled); not closed here.
 - **Redeployed** (same app/machine/volume; image `deployment-01M3YNEP03QF2B1TXXXN7...`, engine `dist` with the fix). `check-coi` exit 0 (all five rows) and `deployed/coi-and-online` pass: `online 1220 ms after navigation` (warm machine).
 - Page-only wake costing up to Fly's autostop (observed 6 min 31 s) is accepted; it goes in the README in step 4 (also item 4 above).
+
+### Step 3 (A: Durable Objects): done 2026-10-02, 24 h run pending
+
+Commits `bea151f`, `7c54e42` (and this Deviations commit). Steps 4 (ADR, READMEs, teardown) open. Evidence and logs under `test-results/m38-do/` (gitignored; the 24 h log is `24h.jsonl`).
+
+**Package `games/reference-server-do/`** (plain `.mjs`, `wrangler.toml`, `CLAUDE.md`): `src/worker.mjs` (Worker routes `/ws/<id>`, `/stats/<id>?since=<seq>`, `/alloc/<id>` only with `--var ALLOW_ALLOC:1`; class `WorldDO`), `src/storage.mjs` (`doStorage(ctx.storage)`, `PART_BYTES` = 1 MiB parts `p/<key>/<gen>/<seq>` + `idx`), `scripts/stage.mjs <puts|reference|bench> [--scale n] [--arena-mib n]` (copies the `.wasm` out of `target/`, sha256 == buildHash), `smoke.mjs`, `measure.mjs`, `summarize.mjs`, `probe-memory.mjs`, `probe-recovery.mjs`. Tests: `do/storage-adapter` (fast, netcode; passes `runStorageConformance` on a `ctx.storage` double, plus multi-part, cut-threshold, replace and reopen checks) and `do/local-smoke` (`netcode`, slow tier, `test.skip` until the ADR decides; run once unskipped: `netcode pass 1 tests 9.3s`, join, act, reconnect, `kill -9` of `wrangler dev`, restart on the same storage, `motd` 7 still there). It sits in `netcode`, which is solo in the slow tier, so it cannot overlap the `packaging` leg. `pnpm-lock.yaml` gains the importer. Biome keeps `games/reference-server-do` under lint; `wrangler` is the global CLI (4.145.0), not a dependency.
+
+**Adapter facts a deployer needs (found by running it, no engine change made):** `Connection.send` receives `(cls, bytes, len?)` and must honour `len` (the engine's buffer is 64 KiB); workerd's server `WebSocket.binaryType` defaults to `blob`, set `'arraybuffer'`; without `HostServices.scheduler` `onIdle` never fires; `serverInternals`/`worldServerTestHandle` (`engine/server`) give `memGrows`, wasm memory bytes and the host counters for `/stats`. `compatibility_date = 2026-06-01` accepted. A DO accepts a connection before `ready` (60e373c).
+
+**Local smoke (step 1), final code:** `node scripts/smoke.mjs --url ws://localhost:8807/ws/smoke` against `wrangler dev --local`:
+```
+PASS join: live=true tick=0 in 118 ms
+PASS act: ackSeq=1 (seq 1) motd=7 replicaHash=ed17f20e22594569
+PASS reconnect: linkUpCount=2 live=true back in 221 ms replicaHash=ed17f20e22594569 (same: true)
+```
+**Deployed:** https://engine-v2-ref-do.reference-server-do.workers.dev (Workers Paid accepted the DO binding and the 100 MiB-memory genesis; nothing was refused for plan or billing reasons). The first deploy needed ~1 min before TLS worked.
+
+**Deployed measurements (bench scale 1 = 262,144 furnaces, arena 96 MiB, `memoryBytes` 101,974,016 = M36's figure, 2 headless observers over `wss`, 20 Hz, one object `day24b`, observers dispatch `CancelCollect` every 20 s so the world is dirty and a snapshot is written every 1,200 ticks)**
+
+| Item | Result | Command |
+|---|---|---|
+| Instantiate + bench genesis in the object | live 1.4 s after dial (genesis 264 ms release natively) | `measure.mjs` probe, `test-results/m38-do/probe.jsonl` |
+| Memory, first hour of the 24 h run | 360 windows, `memGrows` 0, no restart, no fault; wasm memory 101,974,016 B constant | `node scripts/summarize.mjs test-results/m38-do/24h.jsonl --to 1790962640000` (`first-hour-summary.txt`) |
+| Timer, 30 min and 60 min, 2 clients | host counters `ticksRun` 72,000 = 20.0 Hz, `ticksDropped` 0, `tickOverruns` 0; client tick 71,992 after 3,600 s = 19.998 Hz. **Server-side tick intervals are not measurable in workerd**: the clock only advances at I/O, so the object reads exactly 50.00 ms (p50 = p99 = max) for every callback and a callback's own duration as 0 ms (locally the same code reads 53 ms and 0-3 ms, because the clock is real there). What is observable: the downlink message arrival gap at the clients, one message per tick: median p50 49.81 ms, median per-10 s p99 61.7 ms, p99 of those p99s 589 ms, worst single 3.2 s (client 1 had three link re-ups in the hour, the object never restarted: network, not the host) | `first-hour-summary.txt` |
+| Snapshot path in the object | scale 1 snapshot = 13 parts (~12.5 MiB), written at ticks 1,200 and 2,400 without a fault or restart; scale 4 = 4 parts | `/stats` `storageIndex`, `probe-snap.jsonl` |
+| Arena 128 MiB (past the 0015 section 5 96 MiB ceiling) on a fresh world | instantiates, genesis, ticks, `memBytes` 135,528,448, 60 s, no fault | `probe-128.jsonl` |
+| JS heap headroom on a fresh scale-1 world | +96 MiB of touched JS heap held, then the object reset at the next +8 MiB | `probe-memory-96.txt` |
+| **Restart path: reload a world that has a snapshot** | **fails**: the object reaches `ready`, writes the epoch bump, then is reset before its first tick (`Durable Object connection closed because the object was reset`), over and over (10-13 restarts in 40 s). Scale 1 / 96 MiB (13 MiB snapshot), scale 4 / 96, 64 and 48 MiB: all fail. Scale 4 / 40 and 32 MiB, scale 16 / 24, scale 64 / 16: recover. The same code recovers on `wrangler dev --local` (no limit) | `scripts/probe-recovery.mjs`, `test-results/m38-do/recovery-*.txt` |
+| Billing, 24 h | **pending**, see below | |
+
+Why the restart path fails (diagnosed, not fixed): `Persistence.open` instantiates a probe instance for the `chunk_bits` check and `loadLatest` a second one for the restore, and neither is released before the first GC. Node: `WebAssembly.Instance` count 1 on genesis, 2 on a restore; scale 1 / 96 MiB `external` 99 MiB -> 221 MiB, RSS 111 -> 213 MiB (`$S/rss2.mjs`, session-local). A fresh world uses one instance. Memory is the strongest fit (a threshold between 40 and 48 MiB arenas at scale 4, none with small states), but the isolate's accounting is not documented: a single 128 MiB-arena instance (135 MB) passes while two 48 MiB ones fail, so the unit that counts is not simply the reserved bytes. An engine change (release the probe instance, restore into it) might make go possible; **that is a finding for the ADR, not a patch here** (brief Non-scope).
+
+**Go/no-go as fixed in advance (go needs all of the following):**
+1. Cost within the $5 plan for an always-available world: projected, **met**. Duration 0.125 GB x 86,400 s x 30 = 324,000 GB-s of the 400,000 included; uplink 17.0 messages/s for 2 observers (8.5 per client; the heartbeat/view traffic dominates) = 2.2 M billed requests/month at 20:1 for 2 clients, 1 M included then $0.15/M = about $0.18 over (about $1.2 over for 8 players); rows written are far inside the 50 M included. Prices fetched from developers.cloudflare.com/durable-objects/platform/pricing today. The dashboard figure is pending the 24 h run.
+2. No tick throttling: **met** (20.0 Hz, 0 drops, 0 overruns, 60 min).
+3. Usable memory at the ceiling (PRE-PLAN section 9 risk 5: "< 96 MiB usable"): **NOT met** on the restart path (usable arena between 40 and 48 MiB at scale 4; no arena holds the scale 1 save). Met for a fresh world only.
+4. At most one restart per hour while connected: **pending the 24 h run** (0 in the first hour, 1 constructor run in 60 min).
+**Rule outcome: NO-GO on item 3 already.** Nothing can restore it except an engine change, which the brief hands to the ADR. Items 1 (billing) and 4 are still pending; the 24 h observers keep logging and show what a restart does to a scale 1 world (it should not come back).
+
+**24 h run (detached; read it in a later session)**
+- Started 2026-10-02 16:37:01 UTC (epoch ms 1790959021188), ends by itself 2026-10-03 16:37:01 UTC; hard cap `timeout 25h` = 17:37 UTC.
+- PIDs: `timeout` 45054 (parent), `caffeinate` 45056, `node measure.mjs` 45057. Stop early: `kill 45054` (writes the `summary` row). `caffeinate -i` stops idle sleep; closing the lid or a power-off ends the run (the log then shows a `summary` row missing).
+- Log `test-results/m38-do/24h.jsonl` (one JSON row per event; `window` rows are the object's own 10 s windows polled every 60 s; `starts` rows list every constructor run of the object), stdout `24h.stdout`. Read: `node games/reference-server-do/scripts/summarize.mjs test-results/m38-do/24h.jsonl` (restarts = "object starts" minus 1; "link transitions ... with a recorded down" lists client-side drops with times). A first run without actions (`24h-first-no-actions.jsonl`, world `day24`, 10 min) was stopped and replaced because a world with no logged action never dirties, so no snapshot was exercised.
+- The measured Worker runs the code of `bea151f` plus the stats additions of `7c54e42` only in the *probe* Worker: the main Worker has the earlier `/stats` (no `storageIndex`, no `/alloc`). Same engine path.
+- **Billing: read in Tyler's Cloudflare dashboard**, not available to the CLI: https://dash.cloudflare.com/83c4b0d34a69f15c26049dfcb5165802 -> Workers & Pages -> Durable Objects -> `WorldDO` (metrics: requests, wall-clock duration GB-s, rows read/written; filter to the namespace of `engine-v2-ref-do`), and Account Home -> Billing -> Billable usage (month to date; includes the probe Worker, which ran for about two hours). Compare the 24 h delta with 324,000 GB-s/month projected (10,800 GB-s/day) and 73,000 billed requests/day.
+- Observers' own request counts (client `sent`, per `status` row) are the 20:1 input in the table above.
+
+**Differences from the brief:** (1) the "1 h memory" and "30 min timer" runs are slices of the one 24 h run (same object, so the billing is one clean number) rather than separate runs. (2) "tick interval p50/p99 and overrun counter" are reported from the clients plus the engine's host counters because the object's own clock is I/O-driven. (3) `do/local-smoke` also kills the runtime hard and checks recovery (a small world, genesis replay of the log: no snapshot is reached in 10 s). (4) Two more Cloudflare resources than the brief expects (the probe Worker and the account subdomain). (5) Diagnostic exports used in the DO (`serverInternals`, `worldServerTestHandle`) are test-only re-exports of `engine/server`; the ADR should say the recipe does not need them.
+
+**Notes for the ADR and later briefs:** record the restart-path finding and the instance-count cause; the deploy of any new version resets every object (observed), so a world on a DO that fails to reload is down until fixed; `wrangler dev --local` does not reproduce the limit, so only a deployed run proves a DO claim.
