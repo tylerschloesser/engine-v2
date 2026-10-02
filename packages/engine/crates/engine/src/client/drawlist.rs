@@ -649,6 +649,16 @@ mod tests {
         )
     }
 
+    /// 0024 §11a: the slot header is 1,024 B and the anchor table starts at 128 (64 slots x 8 B,
+    /// ending at 640), as literals: `layout.ts`'s `DRAWLIST_HEADER_BYTES` must agree.
+    #[test]
+    fn drawlist_header_is_1024_with_anchors_at_128() {
+        assert_eq!(HEADER_BYTES, 1024);
+        assert_eq!(OFF_ANCHORS, 128);
+        assert_eq!(OFF_ANCHORS + ANCHOR_SLOTS * 8, 640);
+        assert_eq!(REGION_BYTES, HEADER_BYTES + BODY_BYTES);
+    }
+
     /// `drawlist.anchor_table_and_mask` (Tests added): `DrawList::anchor` writes both the mask bit
     /// and the tiles-relative-to-`window_origin` value; a slot no `anchor` call touches this frame
     /// keeps its mask bit clear; a later frame that calls `anchor` for a different slot set does not

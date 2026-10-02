@@ -739,4 +739,41 @@ mod tests {
         );
         assert_eq!(s.memory_bytes(), 1024 * dims.slab_bytes());
     }
+    /// 0024 §9a: `ChunkDims` is a runtime value (`G::CHUNK_BITS`); the native fixtures run at 4 and 5,
+    /// so size 6 (a 64 x 64 slab, 16,384 B) is pinned here: the slab size, the pool reservation, a
+    /// whole-chunk copy and a tile written and read back across a chunk edge and at a negative
+    /// coordinate.
+    #[test]
+    fn chunk_bits_6_slab_pool_and_tile_round_trip() {
+        let dims = ChunkDims::new(6);
+        assert_eq!(
+            (dims.edge(), dims.area(), dims.slab_bytes()),
+            (64, 4096, 16_384)
+        );
+        let mut s = TerrainStore::new(
+            dims,
+            Box::new(DeterministicSource { seed: 6 }),
+            CacheCapacity::Chunks(1024),
+        );
+        assert_eq!(s.memory_bytes(), 1024 * 16_384);
+        let mut slab = vec![Tile::VOID; 4096];
+        s.copy_chunk(ChunkCoord::new(0, 0), &mut slab);
+        assert_eq!(slab[0], s.tile(TilePos::new(0, 0)));
+        assert_eq!(slab[4095], s.tile(TilePos::new(63, 63)));
+        for pos in [
+            TilePos::new(63, 63),
+            TilePos::new(64, 64),
+            TilePos::new(-1, -65),
+        ] {
+            let t = Tile::new(0x55, 0x2a, 0xbeef);
+            assert_ne!(s.tile(pos), t);
+            assert!(matches!(s.set_tile(pos, t), Ok(TileChange::Changed { .. })));
+            assert_eq!(s.tile(pos), t, "{pos:?}");
+        }
+        assert_eq!(dims.chunk_of(TilePos::new(64, 64)), ChunkCoord::new(1, 1));
+        assert_eq!(
+            dims.chunk_of(TilePos::new(-1, -65)),
+            ChunkCoord::new(-1, -2)
+        );
+    }
 }

@@ -591,3 +591,30 @@ fn replay_equals_live_with_timers() {
 
     assert_eq!(live_hash, replay_hash);
 }
+
+/// 0024 §7b-3: the wake queue is deduplicated, in insertion order. Three entities are spawned
+/// outside `tick` (A plain, S the "stop" sentinel, C plain) and A is put a second time: the queue
+/// is [A, S, C], each once. The tick rule drains in that order and stops after S, so A and S are
+/// each seen exactly once and C, last, is left undrained. A duplicate would show A twice; a re-put
+/// moving A to the back would leave A unseen.
+#[test]
+fn wake_queue_is_deduplicated_in_insertion_order() {
+    let mut sim = genesis(30);
+    let plain = WEntity::default();
+    let stop = WEntity {
+        mode: Mode::Stop,
+        ..WEntity::default()
+    };
+    let a = sim.authority_mut().spawn(plain);
+    sim.authority_mut().put_entity(a, plain);
+    let s = sim.authority_mut().spawn(stop);
+    let c = sim.authority_mut().spawn(plain);
+    sim.authority_mut().put_entity(a, plain);
+    sim.step(&[], &mut Vec::new());
+    let hits = |id: EntityId| sim.authority().store().entity(id).unwrap().woken_hits;
+    assert_eq!(
+        (hits(a), hits(s), hits(c)),
+        (1, 1, 0),
+        "A once (deduplicated, first position), S once, C undrained behind the stop"
+    );
+}

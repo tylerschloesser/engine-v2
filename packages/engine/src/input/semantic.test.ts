@@ -277,3 +277,17 @@ test('semantic: tool mode drag events', () => {
   expect(drags).toEqual([])
   expect(state.centreX).toBe(centreAfterOnePointer)
 })
+
+// 0024 §7c-3: `client.input.emit` writes a game record to the input ring, returns `false` when the
+// ring is full (nothing written, never a block), and never delivers the record to `on` handlers.
+test('semantic: emit returns false on a full ring and never reaches on handlers', () => {
+  const recognizer = createSemanticRecognizer(createRing(INPUT_RECORD_BYTES + 8, 2))
+  const seen: string[] = []
+  for (const type of ['tap', 'hover', 'longpress', 'dragstart', 'drag', 'dragend'] as const) {
+    recognizer.on(type, () => seen.push(type))
+  }
+  expect(recognizer.emit(3, 10, 20)).toBe(true)
+  expect(recognizer.emit(4)).toBe(true)
+  expect(recognizer.emit(5, 1, 1)).toBe(false) // two slots, both claimed, nothing consumed
+  expect(seen).toEqual([])
+})

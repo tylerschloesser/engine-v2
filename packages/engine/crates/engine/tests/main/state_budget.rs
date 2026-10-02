@@ -491,3 +491,145 @@ fn default_memory_split_is_64_mib() {
         "one byte less than the default split is over budget"
     );
 }
+
+fn one_action(sim: &mut Sim<BGame>, action: BAction) -> Result<(), Rejected<BGame>> {
+    let mut out = Vec::new();
+    sim.step(
+        &[Record::Action {
+            who: PlayerId(1),
+            seq: 1,
+            action,
+        }],
+        &mut out,
+    );
+    out.remove(0).result.map(|_| ())
+}
+
+/// 0022 §2b: an undeclared action's id clause is the entity count of `max_action_growth`: with the
+/// default 4,096 B that is 4,096 / 128 = 32 ids. Entity and tile headroom are generous, so only the
+/// id clause can reject; 31 ids left rejects, 32 accepts.
+#[test]
+fn undeclared_action_id_clause_uses_max_action_growth_entity_count() {
+    let max_real_id = EntityId::PROVISIONAL_BIT - 1;
+    for (ids_left, accepted) in [(31u32, false), (32, true)] {
+        let mut sim = genesis(12, 1_000_000, 1_000_000, 4096);
+        set_next_entity_id(&mut sim, max_real_id + 1 - ids_left);
+        let result = one_action(&mut sim, BAction::SpawnUndeclared);
+        if accepted {
+            assert!(result.is_ok(), "{ids_left} ids left covers 4096 / 128 = 32");
+        } else {
+            assert!(
+                matches!(result, Err(Rejected::Engine(EngineReject::StateBudgetFull))),
+                "{ids_left} ids left is under 4096 / 128 = 32"
+            );
+        }
+    }
+}
+
+/// 0023 §2b: the modified-tile side gates too. A declared `Growth::tiles(1)` (`PaintTile`) is
+/// rejected with no free modified tile and accepted with one; an undeclared action is rejected on
+/// tile headroom alone (free tiles x 12 B under `max_action_growth` 256: 21 tiles = 252 B rejects,
+/// 22 = 264 B accepts) while entity headroom is generous.
+#[test]
+fn modified_tile_headroom_gates_declared_and_undeclared_actions() {
+    let mut full = genesis(13, 1_000_000, 5, 256);
+    fill_world(&mut full, 0, 5); // 0 free tiles
+    assert!(
+        matches!(
+            one_action(&mut full, BAction::PaintTile),
+            Err(Rejected::Engine(EngineReject::StateBudgetFull))
+        ),
+        "Growth::tiles(1) with no free modified tile"
+    );
+    let mut one_free = genesis(14, 1_000_000, 6, 256);
+    fill_world(&mut one_free, 0, 5); // 1 free tile
+    assert!(one_action(&mut one_free, BAction::PaintTile).is_ok());
+
+    for (free, accepted) in [(21u32, false), (22, true)] {
+        let mut sim = genesis(15, 1_000_000, 100, 256);
+        fill_world(&mut sim, 0, 100 - free);
+        let result = one_action(&mut sim, BAction::SpawnUndeclared);
+        if accepted {
+            assert!(result.is_ok(), "{free} free tiles x 12 B >= 256 B");
+        } else {
+            assert!(
+                matches!(result, Err(Rejected::Engine(EngineReject::StateBudgetFull))),
+                "{free} free tiles x 12 B < 256 B: rejected on tile headroom alone"
+            );
+        }
+    }
+}
+
+struct VoidSource;
+impl engine::world::PristineSource for VoidSource {
+    fn generate(&self, _chunk: ChunkCoord, out: &mut [Tile]) {
+        out.fill(Tile::VOID);
+    }
+}
+
+/// 0023 §4: the check never runs on a predicting client. The host's world is full (`max_entities`
+/// 0), the client's replica does not know that: it applies a declared-growth action locally
+/// (`Prediction::Applied`), and the host's verdict arrives later as a rejection, which retires the
+/// pending entry.
+#[test]
+fn predicting_client_accepts_what_the_full_host_rejects() {
+    use engine::predict::Prediction;
+    use engine::testing::testkit::Loopback;
+    use engine::wire::CameraReport;
+    use engine::world::{CacheCapacity, ChunkDims};
+
+    let mut lb = Loopback::new(params(21, 0, 1_000_000, 4096));
+    let (idx, _who) = lb.add_client(
+        1,
+        ChunkDims::new(BGame::CHUNK_BITS),
+        Box::new(VoidSource),
+        CacheCapacity::Chunks(1024),
+    );
+    lb.set_camera(
+        idx,
+        CameraReport {
+            center_x: 0,
+            center_y: 0,
+            half_w: 1,
+            half_h: 1,
+            vel_x: 0,
+            vel_y: 0,
+        },
+    );
+    lb.run(4);
+
+    let (seq, status) = lb.dispatch(idx, BAction::SpawnDeclared);
+    assert_eq!(
+        status,
+        Prediction::Applied,
+        "the client does not run the budget check"
+    );
+    let mut verdict = None;
+    for _ in 0..12 {
+        lb.step();
+        lb.client_mut(idx).drain_results(|s, r| {
+            if s == seq {
+                verdict = Some(r.is_ok());
+                if let Err(e) = r {
+                    assert!(
+                        matches!(e, Rejected::Engine(EngineReject::StateBudgetFull)),
+                        "the rejection is the host's StateBudgetFull"
+                    );
+                }
+            }
+        });
+        if verdict.is_some() {
+            break;
+        }
+    }
+    assert_eq!(
+        verdict,
+        Some(false),
+        "the host rejected the predicted action"
+    );
+    assert_eq!(
+        lb.pending(idx).count(),
+        0,
+        "the rejection retires the pending entry"
+    );
+}

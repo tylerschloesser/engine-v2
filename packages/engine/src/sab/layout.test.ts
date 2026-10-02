@@ -1,5 +1,11 @@
 import { expect, test } from 'vitest'
-import { createSabSet, MAX_GEN_WORKERS, RING_DEFAULTS, WORKER_GEN1 } from './layout.js'
+import {
+  createSabSet,
+  DRAWLIST_HEADER_BYTES,
+  MAX_GEN_WORKERS,
+  RING_DEFAULTS,
+  WORKER_GEN1,
+} from './layout.js'
 
 // `layout.sab_total_under_budget` (docs/plan/06-sab-primitives-and-workers.md, Tests added) lives
 // in tests/support/layout-budget.test.ts: `tests/support/budgets.ts` cannot be imported from a
@@ -20,4 +26,10 @@ test('layout.createSabSet shape', () => {
   // Ring SABs are sized control block (32 B) + slotBytes * slots.
   const downlinkBytes = single.downlink.byteLength
   expect(downlinkBytes).toBe(32 + RING_DEFAULTS.downlink.slotBytes * RING_DEFAULTS.downlink.slots)
+})
+
+// 0024 §11a: the DrawList slot header is 1,024 B (the Rust `HEADER_BYTES`, pinned by
+// `drawlist_header_is_1024_with_anchors_at_128`), and the triple's header field carries it.
+test('layout.drawlist header is 1024 bytes', () => {
+  expect(DRAWLIST_HEADER_BYTES).toBe(1024)
 })
