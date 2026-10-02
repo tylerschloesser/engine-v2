@@ -101,6 +101,9 @@ test('reference: status walks every event', async ({ page }) => {
   const lost = page.locator('.renderer-lost')
   await expect(lost).toBeVisible()
   await expect(lost).toHaveAttribute('data-reason', 'repeated-loss')
+  // `rendererLost` is not `onFatal` (0050 §3): the world is intact and the sim keeps ticking, so the
+  // fatal screen stays away.
+  await expect(page.locator('.engine-fatal')).toBeHidden()
   await expect(lost.locator('[data-reload]')).toHaveCount(1)
   await page.evaluate(() => window.__statusRendererLost?.('no-adapter'))
   await expect(lost).toHaveAttribute('data-reason', 'no-adapter')

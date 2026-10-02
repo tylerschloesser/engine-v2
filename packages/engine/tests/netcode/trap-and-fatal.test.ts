@@ -30,6 +30,7 @@ test('trap: headless client resyncs', async () => {
     await harness.settle()
     harness.assertConverged()
     const playerBefore = client.status().ownPlayerId
+    const linkUpBefore = client.status().linkUpCount
 
     // An action dispatched but not yet sent when the instance dies: the new instance cannot resolve
     // it, so it is reported `Lost` (M28b), never silently dropped.
@@ -50,6 +51,8 @@ test('trap: headless client resyncs', async () => {
     await harness.settle()
     expect(client.status().sessionState).toBe(SessionState.Online)
     expect(client.status().ownPlayerId).toBe(playerBefore)
+    // In band (0050 §5): the resync is a new `Hello` on the settled connection, no link reopened.
+    expect(client.status().linkUpCount, 'the link was not redialled').toBe(linkUpBefore)
     // The fresh replica is rebuilt from the host: it matches the host's view of this connection.
     harness.assertConverged()
     // And the session works again.
