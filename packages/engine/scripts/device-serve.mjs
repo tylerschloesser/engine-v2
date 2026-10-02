@@ -1,4 +1,4 @@
-// `pnpm device:serve [--tunnel] [--ws [<fixture>]] [--app reference]` (docs/plan/03-browser-
+// `pnpm device:serve [--tunnel] [--ws [<fixture>]] [--app reference [--bench]]` (docs/plan/03-browser-
 // harness.md, Planning decisions "Determinism on a physical phone"; docs/plan/
 // 29-net-worker-and-reference-server.md Scope). Builds an app and serves it statically with `vite
 // preview` on `127.0.0.1:4173` (no HMR socket; the engine plugin's COOP/COEP headers land on every
@@ -17,6 +17,12 @@
 // `--app reference`: builds and previews `games/reference` (its own Vite config, release profile)
 // instead of the fixture app, on the same port/tunnel/proxy. Before M34 the reference game ignores
 // the socket and this still serves it single-player.
+//
+// `--bench` (only with `--app reference`; M39 acceptance, "From M36" note 2): builds with `vite build
+// --mode bench` (cargo feature `bench`, `__BENCH__` true, output `games/reference/dist-bench/`) and
+// previews that build with `vite preview --mode bench`, so `?bench=large-save` and its `#bench-hud`
+// exist on the phone. The bench build is the production page alone (no `test.html`/`gc.html`).
+// `--tunnel` and `--ws` combine with it unchanged.
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -46,6 +52,11 @@ const appIndex = argv.indexOf('--app')
 const app = appIndex >= 0 ? argv[appIndex + 1] : undefined
 if (app !== undefined && app !== 'reference') {
   console.error(`device-serve: unknown --app '${app}' (only 'reference' is supported)`)
+  process.exit(1)
+}
+const bench = argv.includes('--bench')
+if (bench && app !== 'reference') {
+  console.error('device-serve: --bench is only valid with --app reference')
   process.exit(1)
 }
 const wsIndex = argv.indexOf('--ws')
@@ -128,11 +139,15 @@ const pagesDir = app === 'reference' ? referenceDir : fixturePagesDir
 
 console.log(
   app === 'reference'
-    ? 'building games/reference (release profile)…'
+    ? bench
+      ? 'building games/reference (bench build, dist-bench/)…'
+      : 'building games/reference (release profile)…'
     : 'building the fixture app (dev profile)…',
 )
 if (app === 'reference') {
-  await run('pnpm', ['--filter', 'reference', 'build'], { env: toolEnv() })
+  await run('pnpm', ['--filter', 'reference', 'build', ...(bench ? ['--mode', 'bench'] : [])], {
+    env: toolEnv(),
+  })
 } else {
   await run('pnpm', ['exec', 'vite', 'build', '--config', configPath], { env: toolEnv() })
 }
@@ -145,7 +160,7 @@ const previewEnv = {
 }
 const previewArgs =
   app === 'reference'
-    ? ['exec', 'vite', 'preview', '--host', '127.0.0.1']
+    ? ['exec', 'vite', 'preview', '--host', '127.0.0.1', ...(bench ? ['--mode', 'bench'] : [])]
     : ['exec', 'vite', 'preview', '--config', configPath, '--host', '127.0.0.1']
 // `detached: true` (M29b fix round 2): `preview` is `pnpm exec vite preview`, and the real HTTP
 // listener -- the port a subsequent run actually needs released -- lives in `vite`, a *grandchild*
@@ -173,7 +188,8 @@ await new Promise((resolve, reject) => {
   preview.on('close', (code) => reject(new Error(`vite preview exited ${code}`)))
 })
 
-const pages = htmlPages(pagesDir)
+// The bench build is the production page alone, so only `index.html` exists in `dist-bench/`.
+const pages = bench ? ['index.html'] : htmlPages(pagesDir)
 console.log(`pages: ${pages.join(', ')}`)
 
 let cloudflared
