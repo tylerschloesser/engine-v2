@@ -67,4 +67,8 @@ None.
 None.
 
 ## Deviations
-(filled in during Phase 3)
+(Steps 1-2, first delegation.)
+- **Step 1.** Every gap row now carries `-` as Evidence; the auditor's prose (what a test would assert) moved to the end of the Item cell after ` Gap: ` and is stripped when the row closes. A trailing `)` of a parenthetical note on a few steps 3-4 rows was lost in that move (cosmetic). Doc tests are not `#[test]` titles, so 0006 range / 0010 tick cite three new runtime tests (`tick_rate_hz_below_10_panics`, `tick_rate_hz_above_60_panics`, `tick_rate_hz_accepts_10_and_60`, `time.rs`). `reference_bindings_have_no_bigint` is a `describe` whose tests are named after the generated files, so it is cited as `reference_bindings_have_no_bigint > file` (how `vitest list` prints it).
+- **Step 2 findings (rows left gap):** 0009 Message classes (no per-type class tag exists in code: only `MsgClass` on `Connection.send`, production sends everything `ReliableOrdered`); 0013 Identity (max_players) and the maxPlayers part of 0009 WorldConfig defaults (default 8 equals `MAX_CONNS` = 8, so a 9th connection finds no slot and `SimHost.accept` throws, `attachWebSocketServer` closes it with `CloseCode.Full`; the `Reject{Full}` branch is unreachable at the default). Its other defaults are pinned (`default_action_rate_is_20_per_second_burst_40`, `sim-config: the default sim arena is 96 MiB`, `sim_config_defaults_are_the_0007_section_8_figures`).
+- `default_memory_split_is_64_mib`: `Host::init` uses the real `size_of::<Entity>()`, so the default split is 64 MiB only for a 128 B entity; the test pins the sum for the fixture's real size and asserts the 128 B arithmetic literally.
+- `scripts/lib/repo-config.test.mjs` now holds: Cargo.lock tracked, engine crate dependency set, vite plugin runtime imports and package peers, fast-tier budget under a minute, CI workflow, SwiftShader branch. Steps 3-4 add to it.
