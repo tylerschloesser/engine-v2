@@ -8,7 +8,10 @@ export type NegativeControl = { isolate: string; kind: 'object' | 'burst' | 'pos
 
 /** The spike's coarse control: enough to trip both `MinorGC` events and the byte budget (0016 §3
  * step 8, "2000 objects per frame"). */
-const BURST_COUNT = 2000
+const BURST_ARRAYS = 4
+/** Elements per array: sized so one frame allocates the same ~40 KB the original 2000 `{ n, k }`
+ * objects did (20 B each), measured per isolate via the sampling heap profiler. */
+const BURST_ELEMS = 2500
 
 /**
  * A plain module-level `let sink` (the spike's own shape: assigned but never read, "keeps dirty
@@ -38,9 +41,19 @@ export function allocateObject(n: number): void {
   sinkHolder.__gcControlSink = { n }
 }
 
-/** `BURST_COUNT` small retained objects. */
+/**
+ * The same bytes per frame as 2000 small objects, in `BURST_ARRAYS` large allocations. The sampling
+ * heap profiler samples every allocation (`SAMPLING_INTERVAL = 1`) and bills per allocation, so
+ * 2000 objects cost ~7x a clean window in wall time -- the CI timeouts of M39's gate. Each array is
+ * written through `sinkHolder` (escapes, so it cannot be elided); `new Array(len)` preallocates a
+ * holey backing store of `len` slots on the heap (a typed array's would live off-heap, uncounted).
+ */
 export function allocateBurst(n: number): void {
-  for (let k = 0; k < BURST_COUNT; k++) sinkHolder.__gcControlSink = { n, k }
+  for (let k = 0; k < BURST_ARRAYS; k++) {
+    const a = new Array<number>(BURST_ELEMS)
+    a[0] = n
+    sinkHolder.__gcControlSink = a
+  }
 }
 
 /** Applies the `StepControl` encoded in a worker's step block, once, for tick/frame number `n`.
