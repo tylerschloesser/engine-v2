@@ -46,24 +46,26 @@ test('reference-server/sigterm-snapshots', async () => {
     const deadline = Date.now() + 5_000
     while (!client.status().live) {
       if (Date.now() > deadline) throw new Error('client never went live')
-      client.stepFrame(20)
-      await sleep(20)
+      client.stepFrame(10)
+      await sleep(10)
     }
     return { client, ms: Date.now() - t0, tick: client.status().tick }
   }
-  async function settleFor(client: HeadlessClient, ms: number) {
+  /** Steps frames every 10 ms until `done()` or `ms` have passed. */
+  async function stepUntil(client: HeadlessClient, done: () => boolean, ms: number) {
     const until = Date.now() + ms
-    while (Date.now() < until) {
-      client.stepFrame(20)
-      await sleep(20)
+    while (!done() && Date.now() < until) {
+      client.stepFrame(10)
+      await sleep(10)
     }
   }
 
   server = await spawnReferenceServer(args)
   const { client: first } = await join_(server.port)
   const seq = first.dispatch({ SetMotd: { n: 7 } })
-  await settleFor(first, 600)
+  await stepUntil(first, () => first.status().ackSeq >= seq, 3_000)
   expect(first.status().ackSeq).toBeGreaterThanOrEqual(seq)
+  await stepUntil(first, () => false, 40)
   const hashBefore = first.replicaHash()
 
   server.proc.kill('SIGTERM')
@@ -80,7 +82,7 @@ test('reference-server/sigterm-snapshots', async () => {
   // A resumed world ticks from the snapshot's tick at 20 Hz from the moment the process is up, so what
   // `Welcome` reports is the snapshot tick plus the ticks that elapsed since the spawn; a log tail to
   // replay would show as more than that.
-  await settleFor(second.client, 200)
+  await stepUntil(second.client, () => second.client.replicaHash() === hashBefore, 3_000)
   const elapsedTicks = Math.ceil(((Date.now() - spawnedAt) / 1000) * 20)
   // Dialling at once, while the world is still loading, must not cost a link timeout (the upgrade
   // waits for `ready`).
