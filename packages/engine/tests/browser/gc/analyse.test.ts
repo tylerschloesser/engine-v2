@@ -9,6 +9,8 @@ import {
   sumProfile,
   tracingStallWarning,
   verdict,
+  WARMUP,
+  WARMUP_PASSES,
 } from './analyse.ts'
 import { profileSample, traceSample } from './fixtures.ts'
 
@@ -271,4 +273,13 @@ test('gc analyse: the lower of the two windows is selected per isolate', () => {
   expect(lowerWindow([200, 200], w1, w2)).toBe(w1) // a tie keeps the first
   const instrument = readFileSync(new URL('./instrument.ts', import.meta.url), 'utf8')
   expect(instrument).toContain('rawProfiles[name] = lowerWindow(totals, first, second)')
+})
+
+// 0016 §3 step 3 as amended by ADR 0052: 4000 warm-up frames in 8 passes (500 each), then the
+// 600-frame windows pinned above. Literals, so a shortened warm-up fails here.
+test('gc analyse: warm-up is 4000 frames in 8 passes (ADR 0052)', () => {
+  expect(WARMUP).toBe(4000)
+  expect(WARMUP_PASSES).toBe(8)
+  const instrument = readFileSync(new URL('./instrument.ts', import.meta.url), 'utf8')
+  expect(instrument).toContain('WARMUP / WARMUP_PASSES')
 })

@@ -20,6 +20,8 @@ import {
   type TraceEvent,
   tracingStallWarning,
   type Verdict,
+  WARMUP,
+  WARMUP_PASSES,
 } from './analyse.ts'
 import { attachFlatSessions, ENGINE_CDP_PORT_BASE } from './cdp-flat.ts'
 import { attachTunnelSessions, type IsolateSession } from './sessions.ts'
@@ -58,11 +60,7 @@ const FRAMES = MEASURED_FRAMES
 // `gc` project (77 tests, every page, `@slow` burst included) at 4000: 3/3 clean runs, 77/77 passing
 // each time, quiet and under `--load 10` (`docs/plan/16c-browser-suite-time.md`'s own verification);
 // fast tier alone (48 tests) fell from 17.4 s to 12.3 s wall.
-const WARMUP = 4000
-/** Warm-up frames are driven in this many separate `run()` calls (fix round 3; see the call site):
- * one pass warms the per-frame work but gives `run()`'s own resume/park path a single invocation,
- * which is too few for V8 to have allocated its feedback before the measured window. */
-const WARMUP_PASSES = 8
+// (The figures `WARMUP` and `WARMUP_PASSES` now live in `analyse.ts`, pinned by a unit test; ADR 0052.)
 
 export type GcMode = 'hardware' | 'software'
 export type GcTransport = 'tunnel' | 'flat'

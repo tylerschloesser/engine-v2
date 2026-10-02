@@ -272,6 +272,15 @@ export function verdict(
 /** Frames per measured window (0016 §3 step 5: N = 600). */
 export const MEASURED_FRAMES = 600
 
+/** Warm-up frames before the first measured window: 4000 (ADR 0052, amending 0016 §3 step 3's 120). */
+export const WARMUP = 4000
+
+/** Warm-up frames are driven in this many separate `run()` calls (fix round 3; see the call site in
+ * `instrument.ts`): one pass warms the per-frame work but gives `run()`'s own resume/park path a
+ * single invocation, which is too few for V8 to have allocated its feedback before the measured
+ * window. */
+export const WARMUP_PASSES = 8
+
 /** 0028: two consecutive measured windows of `frames` each. Only the second carries the
  * `window-start`/`window-end` marks (`marks`), so assertion A's GC events are counted over exactly
  * one window (0016 §3 step 6); `analyseTrace` takes the last `window-start`, so marking both would
