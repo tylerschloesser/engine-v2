@@ -1,6 +1,6 @@
 # M39c: Acceptance gap tests
 
-Status: not started · After: 38 (M39's coverage tables at `c02388c`) · Tyler-dependent: no
+Status: done (2026-10-02; two rows handed to M39d) · After: 38 (M39's coverage tables at `c02388c`) · Tyler-dependent: no
 
 ## Goal
 M39's coverage audit (`docs/plan/acceptance/`) found 75 rows with status `gap`: behaviour the code has, or a decision an ADR made, that no test would notice breaking. That is far over M39's budget of about ten gap tests, so they land here, before M39 is ticked. Each gap is closed by **one small test on existing behaviour** that fails if the item stops being true, and the row's status becomes `covered` with the new title cited. No features, no refactors: a gap that turns out to need engine work is reported, not built.
@@ -50,9 +50,9 @@ One per closed row, named in that row.
 
 ## Exit criteria
 - [ ] `pnpm acceptance:check` reports no `gap` row and no format problem; the only remaining lines are unticked device checks (M39 owns those).
-- [ ] Every new test has an inject-fail-revert line in its step report.
-- [ ] Fast-tier suites inside budget (`pnpm test:timings`), no new fast test over its p95 limit.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Every new test has an inject-fail-revert line in its step report.
+- [x] Fast-tier suites inside budget (`pnpm test:timings`), no new fast test over its p95 limit.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm acceptance:check` · `pnpm test unit -t repo-config` · `pnpm test:timings` · `pnpm test` · `pnpm lint`
@@ -73,3 +73,7 @@ None.
 - `default_memory_split_is_64_mib`: `Host::init` uses the real `size_of::<Entity>()`, so the default split is 64 MiB only for a 128 B entity; the test pins the sum for the fixture's real size and asserts the 128 B arithmetic literally.
 - `scripts/lib/repo-config.test.mjs` now holds: Cargo.lock tracked, engine crate dependency set, vite plugin runtime imports and package peers, fast-tier budget under a minute, CI workflow, SwiftShader branch. Steps 3-4 add to it.
 - **Step 5 (row `0042 §3 (frame again)`).** `mp/welcome_frame_same_wake @slow` (`tests/browser/welcome-frame.spec.ts`, page `pages/welcome-frame.html` + `src/welcome-frame.ts`; browser suite, slow tier). No production hook: the server's `Welcome` waits for a server tick (`manualTimer`), so the page parks the client worker once its `Hello` is on the uplink ring, the spec ticks the server until the `Welcome` is in the downlink ring, then the page bumps one `CB_FRAME_REQ` (`writeCameraAndWake`) and `resumeWorkers`: `Welcome` and frame request share one wake. It reads the gen request ring's `pushed` counter at that wake's ack (gen workers spawned an hour late via `test.genSpawnDelayMs`). Inject-fail-revert with `if (false && framedThisWake)` in `worker/client.ts` `onConfigured`: `FAIL browser [chromium] mp/welcome_frame_same_wake @slow ... Expected: > 0, Received: 0`; green when reverted (3.9 s).
+
+### Orchestrator gate (M39c)
+
+74 of 75 rows closed or ruled across steps 1-5; `pnpm test && pnpm lint` green at `9c6704a` (rust 801, unit 371, wasm 172, netcode 137, browser 256 at 43 s); `pnpm test:slow` green except `slow_tick_large_save` once at load ~8-10 (median 3.002 ms vs the 3 ms proxy; 2.93 ms twice quiet; M39c changed no production code). The first box stays unticked by design: the two rows the full-world finding owns (`0013 Identity (max_players)`, `0009 WorldConfig (defaults)`) move to [M39d](39d-full-world-reconnect.md). Gate findings: step 4's `0042 §3 (frame again)` was closed on a headless test only; the orchestrator's injection in `worker/client.ts` left the browser tests green, so step 5 added `mp/welcome_frame_same_wake @slow`. ADR 0052 (warm-up 4000 frames, amends 0016 §3) settled step 3's finding. The gc-harness title refactor was checked against `727bfa4`: the 140 gc titles are identical.
