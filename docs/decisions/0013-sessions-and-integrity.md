@@ -1,6 +1,6 @@
 # 0013: Sessions and integrity
 
-Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §8. Amended by [0042](0042-remote-client-world-config-from-welcome.md) §5.
+Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §8. Amended by [0042](0042-remote-client-world-config-from-welcome.md) §5. Amended by [0053](0053-connection-slots-and-full-admission.md) §§1-3.
 
 ## Context
 
