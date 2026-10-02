@@ -6,7 +6,7 @@
 // a directory, written one file per run as `<dir>/run-<i>.json`.
 //
 // node scripts/repeat.mjs <suite> <runs> [--load <n>] [--timeout <seconds>] [--budget-scale <n>]
-//                          [--timings-json <dir>] [-t <pattern>]
+//                          [--timings-json <dir>] [-t <pattern>] [--slow]
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 
@@ -38,7 +38,7 @@ let pass = 0,
   slowest = 0
 for (let i = 0; i < runs; i++) {
   await new Promise((done) => {
-    const args = ['test', suite]
+    const args = [rest.includes('--slow') ? 'test:slow' : 'test', suite]
     if (pattern !== undefined) args.push('-t', pattern)
     if (budgetScale !== undefined) args.push('--budget-scale', budgetScale)
     if (timingsDir !== undefined) args.push('--timings-json', join(timingsDir, `run-${i + 1}.json`))
