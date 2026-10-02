@@ -1,6 +1,6 @@
 # M39d: A full world lets a returning player back in
 
-Status: not started · After: 39c steps 1-2 (`727bfa4`) · Tyler-dependent: no
+Status: done (2026-10-02) · After: 39c steps 1-2 (`727bfa4`) · Tyler-dependent: no
 
 ## Goal
 Found by M39c step 2 (row `0013 Identity (max_players)`, [M39c Deviations](39c-acceptance-gap-tests.md#deviations)): the default `maxPlayers` 8 equals `MAX_CONNS` 8 (`src/server.ts:142`; Rust `host::MAX_CONNS = warm::MAX_VIEWS`). In a world with 8 players, a connection beyond the 8th finds no slot, `SimHost.accept` throws and the adapter closes it with `CloseCode.Full`; the admission branch that sends `Reject{Full}` (`server.ts` ~1440) can never fire at the default. The user-visible defect: a player whose socket died silently and who redials **before** the host declares the old connection dead (0013: 3 s) is refused `full`, and `createLink` stops for good on `full`, so that player is locked out of a full world until reload, although 0013's supersede rule (same secret replaces the old connection) exists for exactly that case. Fix it so that, at the default `maxPlayers`, a returning player is admitted (superseding the old connection) and a ninth *distinct* player gets `Reject{Full}`.
@@ -33,9 +33,9 @@ Step 1, report; step 2 after the ruling.
 `netcode`: `full-world/returning-player-supersedes` (8 players; one player's socket dies silently; it redials with its secret before 3 s; it is admitted, the old connection is superseded, 8 players remain); `full-world/ninth-player-gets-reject-full` (a ninth distinct secret receives a `Reject{Full}` frame, then the close). Both inject-fail-reverted. The M39c row `0013 Identity (max_players)` and the maxPlayers part of `0009 WorldConfig defaults` cite them.
 
 ## Exit criteria
-- [ ] Both tests pass and fail without the fix.
-- [ ] The two M39 table rows are `covered`.
-- [ ] Fast tier inside budget; `pnpm test` and `pnpm lint` green.
+- [x] Both tests pass and fail without the fix.
+- [x] The two M39 table rows are `covered`.
+- [x] Fast tier inside budget; `pnpm test` and `pnpm lint` green.
 
 ## Verification commands
 `pnpm test netcode -t full-world` · `pnpm acceptance:check` · `pnpm test` · `pnpm lint`
@@ -57,3 +57,4 @@ None.
 - **Tests:** `tests/netcode/full-world.test.ts`: `returning-player-supersedes`, `ninth-player-gets-reject-full`, `max-players-above-half-the-slots-is-rejected`. Inject-fail-reverted: without the returning-player check `AssertionError: expected 4004 to be undefined` (Full close code); without the Full branch `one Reject frame, then the close: expected 2 to be 1` (the ninth got a Welcome); without the construction check `promise resolved ... instead of rejecting`.
 - **Acceptance rows:** `0013 Identity (max_players)` covered; `0009 WorldConfig (defaults)` split, the new `(defaults: maxPlayers)` row covered, the remaining defaults row stays `gap` (rate, arena, cache, joinKey), so `pnpm acceptance:check` still reports it (and the unticked device checks).
 - `pnpm test netcode` (140) and `pnpm test rust -t host` pass; the full `pnpm test`/`pnpm lint` were not run, per instruction.
+- **Orchestrator gate:** `pnpm test && pnpm lint` green (netcode 140), `pnpm test:slow netcode` green. The remaining `0009 WorldConfig (defaults)` row was closed by citation at the gate: `actionRate` and `arenaBytes` were pinned in M39c, `cacheChunks` by `sim_config_defaults_are_the_0007_section_8_figures`, `joinKey` "" by every keyless join (`ws/join-converges`). `pnpm acceptance:check` now reports only unticked device checks.
