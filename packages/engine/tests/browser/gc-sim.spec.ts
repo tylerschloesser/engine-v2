@@ -54,6 +54,14 @@ test('zero_gc_singleplayer_with_snapshot', async ({ page, browser }) => {
       `over the ${snapshotEventBudget} B snapshotEventBytes budget. windowByFn.sim: ` +
       `${JSON.stringify(r.windowByFn.sim)}`,
   ).toBeLessThanOrEqual(snapshotEventBudget)
+  // ADR 0039 §3: the snapshot fires in both of 0028's measured windows, so the lower of the two still
+  // carries it. Fired in one window only, the minimum falls to the snapshot-free rate and the delta to
+  // under 100 B (measured 72-84 B, `?forceSnapshot=1` dropped); with the snapshot in both it is
+  // 3144-3168 B. The floor is half of one snapshot's measured cost.
+  expect(
+    delta,
+    `the snapshot's own cost is missing from the reported window: ${delta} B`,
+  ).toBeGreaterThanOrEqual(1500)
 })
 
 /**
