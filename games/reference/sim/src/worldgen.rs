@@ -221,6 +221,41 @@ mod tests {
         }
     }
 
+    /// spec reference-game World 4b: a resource is a layer on top of the base tile, not a tile
+    /// type. In a generated area every tile's base is exactly what the noise classifies for that
+    /// tile, resource or not (grass with wood, sand with coal, ...), and the resource byte is a
+    /// second field of the same `Tile`, present only on land.
+    #[test]
+    fn resource_tiles_keep_the_base_terrain_the_noise_classifies() {
+        use engine::world::{ChunkCoord, Tile};
+        let (seed, p) = (content::SEED, RefParams::default());
+        let mut out = vec![Tile::VOID; (EDGE * EDGE) as usize];
+        let (mut with_resource, mut on_grass) = (0, 0);
+        for cy in -2..2 {
+            for cx in -2..2 {
+                RefWorldgen::generate(seed, &p, ChunkCoord::new(cx, cy), &mut out);
+                for ty in 0..EDGE {
+                    for tx in 0..EDGE {
+                        let tile = out[(ty * EDGE + tx) as usize];
+                        let (wx, wy) = (cx * EDGE + tx, cy * EDGE + ty);
+                        assert_eq!(tile.base(), terrain_at(seed, wx, wy, &p), "({wx}, {wy})");
+                        if tile.resource() != 0 {
+                            with_resource += 1;
+                            assert!(
+                                tile.base() != content::WATER && tile.base() != content::DEEP_WATER
+                            );
+                            on_grass += (tile.base() == content::GRASS) as u32;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            with_resource > 0 && on_grass > 0,
+            "the area must hold resources on grass"
+        );
+    }
+
     #[test]
     fn scatter_never_offers_stone_on_grass() {
         let p = RefParams::default();

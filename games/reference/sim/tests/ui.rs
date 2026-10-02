@@ -279,3 +279,99 @@ fn ui_reads_inventory_and_collecting_from_player() {
     assert_eq!(collecting.tile.x, 1);
     assert_eq!(collecting.done_at, 42);
 }
+
+/// One stone tile at `at`, nothing else.
+struct OneStoneWorld {
+    at: TilePos,
+    player: RefPlayer,
+}
+
+impl WorldRead<RefGame> for OneStoneWorld {
+    fn tick(&self) -> engine::time::Tick {
+        engine::time::Tick(0)
+    }
+    fn tile(&self, p: TilePos) -> Result<Tile, Unknown> {
+        if p == self.at {
+            Ok(Tile::new(0, reference_sim_content_stone(), 10))
+        } else {
+            Ok(Tile::new(0, 0, 0))
+        }
+    }
+    fn traits_at(&self, _p: TilePos) -> Result<TraitSet, Unknown> {
+        Ok(TraitSet(0))
+    }
+    fn entity_at(&self, _p: TilePos) -> Result<Option<engine::game::EntityId>, Unknown> {
+        Ok(None)
+    }
+    fn entity(&self, _id: engine::game::EntityId) -> Result<Option<&RefEntity>, Unknown> {
+        Ok(None)
+    }
+    fn player(&self, _who: PlayerId) -> Result<&RefPlayer, Unknown> {
+        Ok(&self.player)
+    }
+    fn global(&self) -> &RefGlobal {
+        &RefGlobal::EMPTY
+    }
+    fn entities_in(
+        &self,
+        _rect: TileRect,
+        _f: &mut dyn FnMut(engine::game::EntityId, &RefEntity),
+    ) -> Result<(), Unknown> {
+        Ok(())
+    }
+}
+
+/// spec reference-game Players 4a: a collect button (one `Ui.in_range` entry) appears for a
+/// resource whose tile centre is within 3 tiles of the player's circle centre, and not beyond. The
+/// distance is the literal 3 tiles (768 raw units), not `content::RANGE_Q8`: the player stands on
+/// the centre of tile (0, 0), so the stone at (3, 0) is exactly 3.0 tiles away (listed); a
+/// 1/256-tile step away from it makes it 3.004 (not listed). Tile (4, 0) is 4 tiles away (not
+/// listed) at any such position.
+#[test]
+fn ui_button_appears_within_exactly_3_tiles_centre_to_centre() {
+    let entities = BTreeMap::new();
+    let registry = Registry::new();
+    let remote = RemotePresences::<RefGame>::new();
+    let listed = |stone_at: TilePos, player_x: f64| {
+        let client = RefClient::with_spring_state([player_x, 0.5], [0.0, 0.0]);
+        let world = OneStoneWorld {
+            at: stone_at,
+            player: RefPlayer::default(),
+        };
+        // `view` takes the `StubWorld`'s type: build the `FrameView` here against this world.
+        let v = FrameView::new(
+            &world as &dyn WorldRead<RefGame>,
+            Default::default(),
+            PlayerId(1),
+            &entities,
+            &registry,
+            TileRect::new(TilePos::new(-20, -20), TilePos::new(20, 20)),
+            20.0,
+            40.0,
+            None,
+            TilePos::new(0, 0),
+            0.0,
+            reference_sim::PlayerPresence::default(),
+            &remote,
+        );
+        let mut out = reference_sim::RefUi::default();
+        client.ui(&v, &mut out);
+        out.in_range.len()
+    };
+    assert_eq!(
+        listed(TilePos::new(3, 0), 0.5),
+        1,
+        "exactly 3.0 tiles: in range"
+    );
+    assert_eq!(
+        listed(TilePos::new(3, 0), 0.5 - 1.0 / 256.0_f64),
+        0,
+        "3.004 tiles: out of range"
+    );
+    assert_eq!(listed(TilePos::new(4, 0), 0.5), 0, "4 tiles: out of range");
+    assert_eq!(
+        listed(TilePos::new(-3, 0), 0.5 - 6.0),
+        1,
+        "and the same on the other side"
+    );
+}

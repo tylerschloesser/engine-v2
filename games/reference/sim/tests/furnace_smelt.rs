@@ -197,6 +197,49 @@ fn take_all_moves_ingots() {
     assert_asleep(&mut s, SMELT);
 }
 
+/// spec reference-game Furnace 4c: taking the ingots leaves ore and fuel where they are, and the
+/// smelt carries on with them. Taken mid-run: after the first ingot there is iron still in, a
+/// lit fuel unit part-burnt and spare wood, none of which a take may touch.
+#[test]
+fn take_leaves_ore_and_fuel_in() {
+    let mut s = scenario();
+    s.deposit(P1, ORIGIN, ItemId::Iron, 4).unwrap();
+    s.deposit(P1, ORIGIN, ItemId::Wood, 2).unwrap();
+    run_until(&mut s, SMELT + 5, |f| f.ingots_out == 1);
+    let before = furnace(&s);
+    assert!(
+        before.iron_in > 0 && before.burn_left > 0 && before.wood > 0,
+        "{before:?}"
+    );
+
+    s.take(P1, ORIGIN).unwrap();
+    let after = furnace(&s);
+    assert_eq!(after.ingots_out, 0);
+    assert_eq!(
+        (
+            after.iron_in,
+            after.coal,
+            after.wood,
+            after.burn_left,
+            after.smelt_done_at
+        ),
+        (
+            before.iron_in,
+            before.coal,
+            before.wood,
+            before.burn_left,
+            before.smelt_done_at
+        ),
+        "a take changes the output and nothing else"
+    );
+    run_until(&mut s, 4 * SMELT, |f| f.ingots_out == 3);
+    assert_eq!(
+        furnace(&s).iron_in,
+        0,
+        "the smelt went on with the iron that stayed in"
+    );
+}
+
 #[test]
 fn any_player_can_use_any_furnace() {
     let mut s = scenario();

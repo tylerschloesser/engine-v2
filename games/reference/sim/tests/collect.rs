@@ -154,6 +154,84 @@ fn collect_last_unit_clears_resource_and_overlay_is_canonical() {
     );
 }
 
+/// spec reference-game World 4b: depleting a resource clears the resource layer only; the base
+/// tile under it (here whatever land the iron sits on) is the same tile afterwards.
+#[test]
+fn collect_depletion_keeps_the_base_tile_under_the_resource() {
+    let mut s = RefScenario::new();
+    s.join(P1);
+    let tile = iron_tile();
+    let base = s.tile(tile).base();
+    assert!(
+        base != content::WATER && base != content::DEEP_WATER,
+        "iron sits on land"
+    );
+    s.set_tile(tile, Tile::new(base, content::IRON, 1));
+    s.dispatch(
+        P1,
+        RefAction::StartCollect {
+            tile: reference_sim::TileXY::from_tile(tile),
+            from: centre_of(tile),
+        },
+    )
+    .unwrap();
+    s.step_ticks(content::COLLECT.0);
+    let t = s.tile(tile);
+    assert_eq!(t.resource(), 0, "the resource layer is gone");
+    assert_eq!(t.base(), base, "the base layer is the tile it was");
+}
+
+/// spec reference-game Players 7b: players may float over water. A player whose witnessed
+/// position is the centre of a water tile (the tile next to the iron is made water here) starts and
+/// finishes a collect: no rule reads the terrain under `from`, and `admit` accepts the sample.
+#[test]
+fn collect_from_a_position_over_water_is_allowed() {
+    use engine::game::PresenceTable;
+    use engine::time::Tick;
+    use reference_sim::client::PlayerPresence;
+    use reference_sim::rules::collect::admit;
+
+    let mut s = RefScenario::new();
+    s.join(P1);
+    let tile = iron_tile();
+    let water = TilePos::new(tile.x + 1, tile.y);
+    s.set_tile(water, Tile::new(content::WATER, 0, 0));
+    assert_eq!(s.tile(water).base(), content::WATER);
+    let from = centre_of(water);
+
+    let mut table = PresenceTable::<reference_sim::RefGame>::empty();
+    table.on_sample(
+        P1,
+        PlayerPresence {
+            pos: [from.x, from.y],
+            vel: [0, 0],
+        },
+        Tick(0),
+    );
+    assert_eq!(
+        admit(
+            &table,
+            P1,
+            WorldPos {
+                x: from.x,
+                y: from.y
+            }
+        ),
+        Ok(())
+    );
+
+    s.dispatch(
+        P1,
+        RefAction::StartCollect {
+            tile: reference_sim::TileXY::from_tile(tile),
+            from,
+        },
+    )
+    .expect("standing over water is not a reason to refuse");
+    s.step_ticks(content::COLLECT.0);
+    assert_eq!(s.player(P1).inventory.get(ItemId::Iron), 1);
+}
+
 /// Two players racing the same tile's last unit: the second finisher gets nothing (Planning
 /// decisions "Collects are not reservations"; `0003` Consequences). Both `apply` before the tile is
 /// touched (so both are admitted -- a reservation scheme would instead reject the second `apply`
