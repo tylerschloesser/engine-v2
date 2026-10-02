@@ -82,4 +82,5 @@ None created. The `run-tests` skill gains one line for `pnpm acceptance:check` o
 The whole of `docs/plan/device-checks.md`, re-run on the final build. [device-checks.md, M39: Acceptance](device-checks.md#m39-acceptance) holds the re-run item, M39-large-save, and the play-test sign-off (its last item, owned by this milestone).
 
 ## Deviations
-(filled in during Phase 3)
+
+**Gap closing split out (orchestrator, 2026-10-02).** The audit (`c02388c`) found 75 `gap` rows across 17 tables, far over this brief's ~10 small tests, nearly all small tests on existing behaviour: they land as [M39c](39c-acceptance-gap-tests.md), and this milestone stays unticked until it does. Rulings recorded there (compile-budget rows `not applicable` with the ledger; R16b's 64 MiB is 0007 §8's default split; the unfailable WASD test is fixed). `adr-0006-0010.md` 0009 Message classes ruled `not applicable` (no datagram transport in v1; 0009 packs both classes into one packet per flush). Fast tier whole wall 51.7 s p50 (`pnpm test:timings`, budget ledger). Baseline on 2026-10-02: `pnpm test`, `pnpm lint`, `pnpm test:slow` green (first run hit the Chrome for Testing `EXC_GUARD` crash, `.ips` 11:16); CI green on run 37042896324 attempt 2.
