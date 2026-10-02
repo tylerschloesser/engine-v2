@@ -131,9 +131,9 @@ mod tests {
         assert_eq!(h.finish(), want);
 
         let mut z = u64::MAX;
-        z = (z ^ (z >> 30)) as u64;
+        z ^= z >> 30;
         z = ((z as u128 * 0xBF58_476D_1CE4_E5B9_u128) & u128::from(u64::MAX)) as u64;
-        z = (z ^ (z >> 27)) as u64;
+        z ^= z >> 27;
         z = ((z as u128 * 0x94D0_49BB_1331_11EB_u128) & u128::from(u64::MAX)) as u64;
         assert_eq!(mix64(u64::MAX), z ^ (z >> 31));
     }
