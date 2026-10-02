@@ -161,6 +161,13 @@ export function doStorage(ds) {
         return out
       })
     },
+    /** Diagnostics: the index (`key -> { gen, parts }`) as stored. */
+    index() {
+      return enqueue(async () => {
+        await loadIdx()
+        return idxObject()
+      })
+    },
     list(prefix) {
       return enqueue(async () => {
         await loadIdx()

@@ -7,7 +7,7 @@
 // The payload is staged by `scripts/stage.mjs` (`.stage/`): `game.wasm` imported as a precompiled
 // module (the only way WASM runs on Workers), `game.json`'s `buildHash` (0017 section 5), and the
 // world's config.
-import { createWorldServer, serverInternals } from 'engine/server'
+import { createWorldServer, serverInternals, worldServerTestHandle } from 'engine/server'
 import game from '../.stage/game.json'
 import wasm from '../.stage/game.wasm'
 import payload from '../.stage/payload.json'
@@ -64,6 +64,7 @@ export class WorldDO {
     this.windows = []
     this.nextSeq = 0
     this.fault = null
+    this.storage = doStorage(ctx.storage)
     this.bootedAt = Date.now()
     ctx.blockConcurrencyWhile(async () => {
       const starts = (await ctx.storage.get('meta:starts')) ?? []
@@ -76,7 +77,7 @@ export class WorldDO {
   world() {
     if (this.server) return this.server
     const self = this
-    const storage = doStorage(this.ctx.storage)
+    const storage = this.storage
     const server = createWorldServer(
       {
         worldId: 'world',
@@ -147,6 +148,15 @@ export class WorldDO {
         n = 0
         let memBytes = 0
         let memGrows = 0
+        let host = null
+        try {
+          const c = worldServerTestHandle(this.server).counters
+          host = {
+            ticksRun: c.ticksRun,
+            ticksDropped: c.ticksDropped,
+            tickOverruns: c.tickOverruns,
+          }
+        } catch {}
         try {
           const inst = serverInternals(this.server).rawInstance
           memBytes = inst.x.memory.buffer.byteLength
@@ -163,6 +173,7 @@ export class WorldDO {
           interval_ms: summary(intervals),
           dur_ms: summary(durations),
           overruns,
+          host,
           memBytes,
           memGrows,
           conns: this.conns.size,
@@ -184,6 +195,7 @@ export class WorldDO {
     if (url.pathname === '/stats') {
       const since = Number(url.searchParams.get('since') ?? '-1')
       return Response.json({
+        storageIndex: (await this.storage?.index().catch(() => null)) ?? null,
         now: Date.now(),
         bootedAt: this.bootedAt,
         starts: this.starts,
@@ -191,6 +203,14 @@ export class WorldDO {
         ticking: this.server !== null,
         windows: this.windows.filter((w) => w.seq > since),
       })
+    }
+    // Diagnostics for the memory-headroom probe (`ALLOW_ALLOC=1` only): allocate and touch `mb` MiB of
+    // JS heap on top of the world, keep it, report the total.
+    if (url.pathname === '/alloc' && this.env.ALLOW_ALLOC === '1') {
+      const mb = Number(url.searchParams.get('mb') ?? '0')
+      this.held ??= []
+      for (let i = 0; i < mb; i++) this.held.push(new Uint8Array(1024 * 1024).fill(i & 255))
+      return Response.json({ heldMiB: this.held.length })
     }
     if (req.headers.get('Upgrade') !== 'websocket') {
       return new Response('expected a WebSocket upgrade', { status: 426 })
@@ -209,7 +229,7 @@ export class WorldDO {
 
 export default {
   async fetch(req, env) {
-    const m = /^\/(ws|stats)\/([A-Za-z0-9_-]{1,64})$/.exec(new URL(req.url).pathname)
+    const m = /^\/(ws|stats|alloc)\/([A-Za-z0-9_-]{1,64})$/.exec(new URL(req.url).pathname)
     if (!m) return new Response('not found', { status: 404 })
     const stub = env.WORLD.get(env.WORLD.idFromName(m[2]))
     const inner = new URL(req.url)
