@@ -1646,6 +1646,55 @@ mod tests {
         assert_eq!(got, vec![1, 2], "both frames' results, in seq order");
     }
 
+    /// 0041 §1: the whole bundle is validated before any frame of it is applied, so a malformed
+    /// second frame leaves the replica, the mutation count, the last summary and the results as they
+    /// were, although the first frame is good.
+    #[test]
+    fn bundle_with_a_malformed_second_frame_applies_nothing() {
+        let mut c = client();
+        let outcomes = [Outcome {
+            seq: 1,
+            result: Ok(Applied),
+        }];
+        let mut buf = [0u8; 128];
+        let mut sink = SliceSink::new(&mut buf);
+        let mut fw = FrameWriter::new(
+            &mut sink,
+            FrameHeader {
+                tick: 5,
+                ack_seq: 1,
+            },
+        );
+        fw.section(SectionId::ActionResults, |s| {
+            ActionResultsWriter::write::<CGame>(s, outcomes.iter());
+        });
+        let n = sink.finish().unwrap();
+        let good = buf[..n].to_vec();
+        let truncated = &good[..2];
+        let mut out = [0u8; 512];
+        let mut sink = SliceSink::new(&mut out);
+        crate::wire::write_bundle(&mut sink, [good.as_slice(), truncated].into_iter());
+        let m = sink.finish().unwrap();
+
+        // The good frame alone applies (the control: it is the second frame that fails the bundle).
+        let before_tick = c.last_summary().tick;
+        let before_ack = c.last_summary().ack_seq;
+        let before_mutations = c.mutations();
+        assert!(c.on_frame(&out[..m]).is_err());
+        assert_eq!(c.mutations(), before_mutations, "no frame counted");
+        assert_eq!(c.last_summary().tick, before_tick, "replica tick unchanged");
+        assert_eq!(c.last_summary().ack_seq, before_ack, "ack unchanged");
+        let mut got = Vec::new();
+        c.drain_results(|seq, _| got.push(seq));
+        assert!(got.is_empty(), "the good frame's result was not applied");
+        c.on_frame(&good).unwrap();
+        assert_eq!(
+            c.mutations(),
+            before_mutations + 1,
+            "the good frame is valid alone"
+        );
+    }
+
     /// `revealed()`: `false` on a fresh instance (nothing held), `false` once the chunk is held
     /// but not yet generated (`apply_enter_pristine` alone), `true` only once it is also cached
     /// (a `tile()` read materializes it). Inject-fail-revert: swapping the final assertion's own

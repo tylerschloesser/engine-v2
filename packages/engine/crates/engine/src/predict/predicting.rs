@@ -422,6 +422,23 @@ mod tests {
         assert_eq!(p.entity(tombstoned), Ok(None));
     }
 
+    /// ADR 0046: `Predicting` keeps the defaulted `WorldWrite::wake_at`, so a predicted handler
+    /// that arms a timer fails loudly instead of the prediction silently losing it.
+    #[test]
+    #[should_panic(expected = "ADR 0046")]
+    fn predicting_wake_at_panics() {
+        let base = FakeBase {
+            known: BTreeMap::new(),
+            global: TGlobal,
+            unknown_entities_in: false,
+        };
+        let registry = Registry::new();
+        let mut overlay = Overlay::<TGame>::new();
+        let base: &dyn WorldRead<TGame> = &base;
+        let mut p = Predicting::new(base, &registry, &mut overlay, Tick(0), 1);
+        WorldWrite::wake_at(&mut p, EntityId(1), Tick(5));
+    }
+
     /// M25 step 8 (docs/plan/25-prediction-core.md Tests added): override, tombstone,
     /// provisional-last order, and `Unknown` at the edge -- all through `Predicting::entities_in`,
     /// the real merge (`predict::merge_entities_in`).

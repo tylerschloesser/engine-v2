@@ -898,6 +898,19 @@ mod tests {
                 super::super::migrate::<DGame>(empty_old(1), terrain, Tick(0), SimRng::new(0));
             assert!(matches!(result, Err(SaveIncompatible)));
         }
+
+        /// ADR 0046: `Migrating` keeps the defaulted `WorldWrite::wake_at`, so a `Game::migrate`
+        /// that tries to arm a timer fails loudly (the carried timers are the engine's to move).
+        #[test]
+        #[should_panic(expected = "ADR 0046")]
+        fn migrating_wake_at_panics() {
+            let dims = ChunkDims::new(4);
+            let terrain = TerrainStore::new(dims, Box::new(ZeroSource), CacheCapacity::Chunks(8));
+            let store = crate::store::Store::new(terrain, DGlobal);
+            let mut authority = Authority::<DGame>::from_snapshot(store, SimRng::new(0), Tick(0));
+            let mut migrating = Migrating::new(&mut authority);
+            WorldWrite::wake_at(&mut migrating, EntityId(1), Tick(5));
+        }
     }
 
     // -- Fix round 1 (orchestrator ruling): decision 5 makes a SCHEMA_VERSION mismatch

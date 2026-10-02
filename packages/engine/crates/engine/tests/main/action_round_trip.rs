@@ -458,3 +458,48 @@ fn loopback_action_does_not_degrade() {
         "well-acked uplinks never degrade the connection"
     );
 }
+
+/// 0041 Consequences 2: the frame count of each message sent to a connection held at level 4, with
+/// the given send-buffer length and one ~20-40 B frame per tick (a bundle is `[0x06][n varint]...`,
+/// a lone frame is sent as built).
+fn level_4_frames_per_message(buf_len: usize) -> Vec<u8> {
+    use engine::host::pacing::BandwidthConfig;
+    let mut lb = loopback(106);
+    lb.host.set_bandwidth(BandwidthConfig {
+        soft_cap_bytes_per_s: 1,
+        action_per_s: 100_000,
+        action_burst: 100_000,
+        ..BandwidthConfig::default()
+    });
+    let (idx, who) = add_client(&mut lb, 0);
+    lb.set_camera(idx, small_camera(0, 0));
+    lb.set_frame_buf_len(buf_len);
+    let conn = lb.conn(idx);
+    let mut counts = Vec::new();
+    let mut at_4 = false;
+    for _ in 0..200u32 {
+        lb.action(who, RAction::Bump { n: 1 });
+        lb.step();
+        at_4 |= lb.host.pacing_counters(conn).unwrap().degrade_level == 4;
+        let msg = lb.last_built_frame(idx);
+        if at_4 && !msg.is_empty() {
+            counts.push(if msg[0] == 0x06 { msg[1] } else { 1 });
+        }
+    }
+    counts
+}
+
+#[test]
+fn hold_is_flushed_at_half_the_tx_region_before_the_level_wait() {
+    // A 64 KiB Tx region never reaches 32 KiB held: level 4 waits four ticks and bundles four frames.
+    let big = level_4_frames_per_message(64 * 1024);
+    assert!(big.len() > 20 && big.iter().all(|&n| n == 4), "{big:?}");
+    // A 128 B region flushes once the hold reaches 64 B, which three frames of the larger sizes reach:
+    // some message goes out after fewer than four frames, before the wait of four ticks has elapsed.
+    let small = level_4_frames_per_message(128);
+    assert!(small.len() > 20, "{small:?}");
+    assert!(
+        small.iter().any(|&n| n < 4),
+        "a hold past half of the region goes out although waited < level: {small:?}"
+    );
+}

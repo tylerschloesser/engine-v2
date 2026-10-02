@@ -873,6 +873,25 @@ mod tests {
     }
 
     #[test]
+    fn take_bundle_sends_a_lone_held_frame_as_it_was_built() {
+        use crate::bytes::{ByteSink, SliceSink};
+        let frame: &[u8] = &[0x01, 9, 8, 7];
+        let mut p = pacing();
+        let mut len = [0u8; 10];
+        let mut ls = SliceSink::new(&mut len);
+        ls.put_varint(frame.len() as u64);
+        let ln = ls.finish().unwrap();
+        p.hold.extend_from_slice(&len[..ln]);
+        p.hold.extend_from_slice(frame);
+        p.hold_frames += 1;
+        let mut out = [0u8; 64];
+        let (n, sent) = p.take_bundle(&mut out);
+        assert_eq!((n, sent), (frame.len(), 1));
+        assert_eq!(&out[..n], frame);
+        assert_eq!(out[0], 0x01);
+    }
+
+    #[test]
     fn late_visible_p95() {
         let mut p = pacing();
         for _ in 0..94 {
