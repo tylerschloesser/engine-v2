@@ -37,6 +37,7 @@ declare global {
     __recSimRespawns?: () => number
     __recDesyncs?: () => DesyncReport[]
     __recCorrupt?: (cx: number, cy: number) => Promise<number>
+    __recLateSubscribe?: () => Promise<{ fatal: FatalEvent[]; resyncing: number }>
   }
 }
 
@@ -118,6 +119,45 @@ test('fatal: two client traps', async ({ page }) => {
         (await page.evaluate(() => window.__recResults?.()))?.find(([s]) => s === seq)?.[1],
     )
     .toEqual({ Rejected: { Engine: 'EngineFault' } })
+})
+
+// 0050 §1: most events do not replay to a late subscriber; `onFatal` does (a screen mounted after the
+// engine gave up must still learn it). The same two-trap run as above, then both subscriptions late.
+test('late subscriber: onFatal replays once, onResyncing does not @slow', async ({ page }) => {
+  await openPage(
+    page,
+    recoveryUrl({ fixture: 'drawables', flags: JSON.stringify({ trapClientAtFrame: [3, 5, 7] }) }),
+  )
+  await page.evaluate(() => window.__recAdvance?.(0, 0, 32, 2))
+  await page.evaluate(() => window.__recAdvance?.(0, 0, 32, 2))
+  await page.evaluate(() => window.__recFrames?.(1)) // frame 3: trap, a resync
+  await page.evaluate(() => window.__recPumpUntilOnline?.(1))
+  await page.evaluate(() => window.__recAdvanceClock?.(11_000))
+  await page.evaluate(() => window.__recFrames?.(2)) // frames 4, 5: trap, a second resync
+  await page.evaluate(() => window.__recPumpUntilOnline?.(2))
+  await page.evaluate(() => window.__recFrames?.(2)) // frames 6, 7: trap, a few ms later: fatal
+  await expect.poll(async () => (await events(page))?.fatal.length).toBe(1)
+  expect((await events(page))?.resyncing, 'resyncs happened before the late subscription').toBe(3)
+
+  const late = await page.evaluate(() => window.__recLateSubscribe?.())
+  expect(late?.fatal, 'the late onFatal listener is called once, with the event').toHaveLength(1)
+  expect(late?.fatal[0]).toEqual((await events(page))?.fatal[0])
+  expect(late?.resyncing, 'the late onResyncing listener is not replayed to').toBe(0)
+})
+
+// 0050 §5: a dead sim worker of a world that is not persisted is fatal at once: a new worker would
+// start a different world, so nothing is respawned.
+test('sim worker death of an unpersisted world is fatal at once @slow', async ({ page }) => {
+  const KILL_AT = 40
+  await openPage(
+    page,
+    recoveryUrl({ fixture: 'puts', flags: JSON.stringify({ killSimWorkerAtTick: [KILL_AT] }) }),
+  )
+  await page.evaluate(() => window.__recAdvance?.(0, 0, 32, 3))
+  await page.evaluate((n) => window.__recStepSim?.(n), KILL_AT)
+  await expect.poll(async () => (await events(page))?.fatal.length).toBe(1)
+  expect((await events(page))?.fatal[0]?.message).toMatch(/not persisted/)
+  expect(await page.evaluate(() => window.__recSimRespawns?.()), 'no respawn').toBe(0)
 })
 
 const PAINTS: [number, number][] = [

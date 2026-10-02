@@ -64,6 +64,7 @@ declare global {
     __recSimRespawns?: () => number
     __recDesyncs?: () => DesyncReport[]
     __recCorrupt?: (cx: number, cy: number) => Promise<number>
+    __recLateSubscribe?: () => Promise<{ fatal: FatalEvent[]; resyncing: number }>
   }
 }
 
@@ -227,6 +228,21 @@ window.__recCorrupt = async (cx, cy) => {
   const { value } = await callParked(client, 'client', 'client_corrupt_chunk', [cx, cy], 0)
   await resumeWorkers(client)
   return value
+}
+// Subscribes after the fact (0050 §1): `onFatal` calls a late listener at once with the event that
+// already happened; `onResyncing` does not replay, so its late listener hears nothing until the next
+// event. Waits a macrotask turn so a replay scheduled on a timer would show too.
+window.__recLateSubscribe = async () => {
+  const lateFatal: FatalEvent[] = []
+  let lateResyncing = 0
+  client.onFatal((e) => {
+    lateFatal.push(e)
+  })
+  client.onResyncing(() => {
+    lateResyncing++
+  })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  return { fatal: lateFatal, resyncing: lateResyncing }
 }
 window.__recSimRespawns = () => handle.simRespawns()
 window.__recSimWorkers = () => handle.workers.filter((w) => w.kind === 'sim').length
