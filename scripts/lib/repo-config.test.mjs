@@ -7,6 +7,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
 import { buildBudgetMs, suites } from '../suites.mjs'
+import { p95LimitMs } from './timings.mjs'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const read = (rel) => readFileSync(join(root, rel), 'utf8')
@@ -145,6 +146,30 @@ describe('repo-config', () => {
     expect(runner).toContain(
       'const concurrent = selected.filter((s) => !isSolo(s) && !first.includes(s))',
     )
+  })
+
+  // 0036 §2: the 0020 §4 per-test p95 limits. `pnpm test:timings` only reports against them, so the
+  // literals are pinned here.
+  test('repo-config: per-test p95 limits are 500 ms for Rust and Node and 3 s for the browser (0036 §2)', () => {
+    expect(p95LimitMs).toEqual({ rust: 500, unit: 500, wasm: 500, netcode: 500, browser: 3_000 })
+  })
+
+  // 0045 §1: the shipped profile trades compile time for size and speed.
+  test('repo-config: [profile.release] is opt-level 3, fat LTO, one codegen unit, abort, stripped (0045 §1)', () => {
+    expect(tomlSection(read('Cargo.toml'), 'profile.release')).toEqual([
+      'opt-level = 3',
+      'lto = "fat"',
+      'codegen-units = 1',
+      'panic = "abort"',
+      'strip = true',
+    ])
+  })
+
+  // 0045 §3 (line tables only) and 0048 §3 (packed debuginfo, amends 0045 §3).
+  test('repo-config: [profile.dev] keeps line-tables-only debug and packed split-debuginfo (0045 §3, 0048 §3)', () => {
+    const dev = tomlSection(read('Cargo.toml'), 'profile.dev')
+    expect(dev).toContain('debug = "line-tables-only"')
+    expect(dev).toContain('split-debuginfo = "packed"')
   })
 
   // 0017 §10: exact pins. The Rust channel is a full release, and no devDependency carries a range.
