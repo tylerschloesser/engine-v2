@@ -181,25 +181,32 @@ test('server/accept-before-ready-waits', async () => {
     timer: timerDouble(),
   })
 
+  let sends = 0
   const conn: Connection = {
     datagrams: false,
     onMessage: null,
     onClose: null,
-    send: () => {},
+    send: () => {
+      sends++
+    },
     close: () => {},
   }
   server.accept(conn)
 
   // Give the microtask queue several turns: `ready` is still pending (blocked on `manifestRead`),
-  // so `accept` must not have wired this connection into a real `SimHost` yet.
+  // so `accept` must not have wired this connection into a real `SimHost` yet. Since M38 the
+  // queued connection holds a buffering handler (it keeps an early `Hello`), never the host's:
+  // nothing is answered before `ready`, and the host's own handler replaces it after.
   await Promise.resolve()
   await Promise.resolve()
   await Promise.resolve()
-  expect(conn.onMessage).toBeNull()
+  const buffering = conn.onMessage
+  expect(sends).toBe(0)
 
   manifestResolver.resolve?.(null) // no stored manifest: `Persistence.open` creates a fresh world
   await server.ready
   expect(conn.onMessage).not.toBeNull()
+  expect(conn.onMessage).not.toBe(buffering)
 
   await server.stop()
 })
