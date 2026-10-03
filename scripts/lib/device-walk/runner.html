@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Device walk</title>
+<style>
+  :root { --bg: #fff; --fg: #14161a; --dim: #5a6070; --card: #f1f3f6; --ok: #137a3a; --bad: #b3261e; --accent: #1f5fd6; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0e1013; --fg: #eceef2; --dim: #9aa1b0; --card: #1a1d23; --ok: #5fd68a; --bad: #ff8a80; --accent: #7aa7ff; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 17px/1.45 system-ui, sans-serif; }
+  main { max-width: 34rem; margin: 0 auto; padding: 16px 16px calc(24px + env(safe-area-inset-bottom)); }
+  h1 { font-size: 1.3rem; margin: 8px 0 4px; }
+  h2 { font-size: 1.05rem; margin: 20px 0 6px; }
+  .card { background: var(--card); border-radius: 12px; padding: 12px 14px; margin: 12px 0; }
+  .dim { color: var(--dim); font-size: 0.9rem; }
+  button { font: inherit; font-weight: 600; width: 100%; padding: 14px; border: 0; border-radius: 12px; background: var(--accent); color: #fff; margin-top: 8px; }
+  button:disabled { opacity: 0.5; }
+  #tap { background: var(--bad); font-size: 1.5rem; padding: 36px 14px; }
+  #timer { font-size: 2.2rem; font-variant-numeric: tabular-nums; font-weight: 700; }
+  pre { white-space: pre-wrap; font: 14px/1.4 ui-monospace, monospace; margin: 0; }
+  .pass { color: var(--ok); } .fail { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Device walk</h1>
+  <div class="dim" id="status">Connecting to the Mac...</div>
+
+  <section id="idle" hidden>
+    <div class="card">
+      <h2>Before you start (self-test, about 7 minutes)</h2>
+      <ul>
+        <li>Settings, Display &amp; Brightness, Auto-Lock: <b>30 seconds</b>. The test shows the page keeps the screen awake by itself.</li>
+        <li>Low Power Mode <b>off</b>.</li>
+        <li>Stay in Safari, on this tab. After Start, touch the screen only when asked.</li>
+      </ul>
+    </div>
+    <button type="button" id="start">Start</button>
+  </section>
+
+  <section id="run" hidden>
+    <div class="card">
+      <div id="timer">0:00</div>
+      <div id="phase"></div>
+      <div class="dim" id="wake"></div>
+    </div>
+    <div id="tapbox" hidden>
+      <div class="card"><b id="cut">The link to the Mac is cut.</b><br>Tap the button below 5 or more times while it is cut. Each tap is saved on the phone and sent when the link returns.</div>
+      <button type="button" id="tap">TAP <span id="taps">0</span></button>
+    </div>
+  </section>
+
+  <section id="done" hidden>
+    <div class="card"><pre id="verdict"></pre></div>
+    <div class="dim">The Mac prints the same result. You can close this tab.</div>
+  </section>
+</main>
+<script src="/__walk/agent.js"></script>
+<script>
+(() => {
+  const A = window.__walkAgent
+  const $ = (id) => document.getElementById(id)
+  const status = (t) => { $('status').textContent = t }
+  if (!A) { status('No run token in this tab: scan the QR code on the Mac again.'); return }
+  const show = (name) => { for (const s of ['idle', 'run', 'done']) $(s).hidden = s !== name }
+  const mmss = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` }
+  const TAPS = '__walk_taps'
+  let cur = null
+  let hopKey = ''
+  let loop = 0
+  let dropping = false
+  let reporting = false
+  let finishing = false
+  let tapN = +sessionStorage.getItem(TAPS) || 0
+
+  A.on('step', (s) => { cur = s; drive(s) })
+
+  $('start').onclick = async () => {
+    $('start').disabled = true
+    await A.start() // the gesture: wake lock, and the wish to keep it
+    const ack = await A.sendAndWait('selftest', { phase: 'start', origin: location.origin })
+    if (!ack) { status('The Mac did not answer; tap Start again.'); $('start').disabled = false }
+  }
+  $('tap').onclick = () => {
+    tapN++
+    sessionStorage.setItem(TAPS, String(tapN))
+    $('taps').textContent = String(tapN)
+    A.send('selftest', { phase: 'tap', n: tapN })
+  }
+
+  async function drive(step) {
+    if (step.id !== 'M39f-selftest') return
+    $('taps').textContent = String(tapN)
+    if (step.phase === 'idle') { show('idle'); status('Ready.'); return }
+    if (step.phase === 'done') { done(step.result); return }
+    show('run')
+    if (step.phase === 'hop-b' || step.phase === 'hop-a') {
+      const key = `${step.phase}:${location.origin}`
+      if (key === hopKey) return
+      hopKey = key
+      if (location.origin !== step.expectOrigin) {
+        $('phase').textContent = 'Moving to the other server (no tap needed)'
+        // A fresh tunnel name can take a while to resolve: wait until the other origin answers (an
+        // opaque cross-origin fetch only needs the name to resolve and the server to be up).
+        const probe = new URL('/__walk/agent.js', step.expectOrigin).href
+        const t0 = Date.now()
+        for (let up = false; !up && Date.now() - t0 < 120000; ) {
+          status(`Waiting for ${new URL(step.expectOrigin).host} (${Math.round((Date.now() - t0) / 1000)} s)...`)
+          up = await fetch(probe, { mode: 'no-cors', cache: 'no-store' }).then(() => true, () => false)
+          if (!up) await new Promise((r) => setTimeout(r, 2000))
+        }
+        status(`Hopping to ${new URL(step.expectOrigin).host}...`)
+        await A.hop(step.expectOrigin, '/__walk/runner.html')
+        return
+      }
+      status(`On ${location.host}`)
+      await A.wakeRequest('hop')
+      const ack = await A.sendAndWait('selftest', { phase: 'hop-arrive', origin: location.origin, wake: A.wake.state })
+      if (!ack) hopKey = ''
+      return
+    }
+    if (!loop) {
+      A.rafReset()
+      A.setMeasuring(true)
+      loop = setInterval(tick, 250)
+    }
+  }
+
+  async function tick() {
+    const s = cur
+    if (!s?.holdStartedAt) return
+    const el = A.serverNow() - s.holdStartedAt
+    $('timer').textContent = `${mmss(el)} / ${mmss(s.params.holdMs)}`
+    $('wake').textContent = `wake lock: ${A.wake.state} (released ${A.wake.releases}x), screen untouched`
+    status(`Holding the screen awake (${A.state().connected ? 'linked' : 'link down'})`)
+    if (s.phase === 'hold' && !s.dropBeginAt && !dropping && el >= s.params.dropAtMs) {
+      dropping = true
+      $('phase').textContent = 'Cutting the link...'
+      const ack = await A.sendAndWait('selftest', { phase: 'drop-begin' })
+      if (!ack) dropping = false
+    } else if (s.phase === 'drop') {
+      $('tapbox').hidden = false
+      const left = s.dropBeginAt + s.params.dropMs - A.serverNow()
+      $('phase').textContent = 'Link cut'
+      $('cut').textContent = left > 0 ? `The link to the Mac is cut for ${Math.ceil(left / 1000)} more s.` : 'Link restored; sending the saved taps...'
+      const st = A.state()
+      if (left <= 0 && st.connected && st.outbox === 0 && !reporting) {
+        reporting = true
+        const ack = await A.sendAndWait('selftest', { phase: 'drop-report', tapsSent: tapN, reconnects: st.reconnects })
+        if (!ack) reporting = false
+      }
+    } else if (s.phase === 'hold') {
+      $('tapbox').hidden = true
+      $('phase').textContent = s.dropReported ? 'Link restored; holding to the end' : 'Holding (the link will be cut soon)'
+      if (s.dropReported && el >= s.params.holdMs && !finishing) {
+        finishing = true
+        const r = A.rafStats()
+        A.setMeasuring(false)
+        const ack = await A.sendAndWait('selftest', { phase: 'hold-end', rafMax: r.max, rafFrames: r.frames })
+        if (!ack) { finishing = false; A.setMeasuring(true) }
+      }
+    }
+  }
+
+  function done(r) {
+    clearInterval(loop)
+    A.setMeasuring(false)
+    show('done')
+    status(r.result === 'pass' ? 'Self-test passed.' : 'Self-test failed.')
+    const lines = [`${r.result.toUpperCase()}`]
+    for (const c of r.criteria || []) lines.push(`${c.ok ? 'ok  ' : 'FAIL'} ${c.name}: ${c.value} (limit ${c.limit})`)
+    $('verdict').textContent = lines.join('\n')
+    $('verdict').className = r.result
+  }
+})()
+</script>
+</body>
+</html>

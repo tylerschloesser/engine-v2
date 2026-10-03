@@ -17,6 +17,15 @@ pnpm device:walk --round <name> [--only M03,M08,M11]
 
 It opens a page in the Mac browser (QR, steps, pass criterion, result buttons, notes) and prints the QR in the terminal too. Ctrl-C stops the tool and every server it started. Re-running the same command resumes at the same item; back, redo and a changed result are always available and keep the earlier result in the history. `--no-tunnel` serves loopback only (no phone), `--no-open` skips opening the browser.
 
+## Phone self-test (M39f, run once before the auto-runner is built on)
+
+```
+pnpm device:walk --selftest [--round <name>] [--no-tunnel]     # about 7 minutes, one QR scan
+pnpm device:walk --status <name>                               # the verdict again, any session
+```
+
+Two fixture servers (two origins, one tunnel each), the phone API, and the built-in `M39f-selftest` step: Tyler scans the QR, taps Start, and the phone hops between the two origins, holds the screen awake for 6 minutes, and rides out a 20 s link cut with taps. The tool prints `M39f-selftest: PASS|FAIL` with one line per criterion and exits 0 or 1. Design and phases: `scripts/lib/device-walk/selftest.mjs`; the agent is `scripts/lib/device-walk/agent/agent.js`. Dev timers: `--hold <s> --drop-at <s> --drop <s>`.
+
 ## Read a round (any session)
 
 ```

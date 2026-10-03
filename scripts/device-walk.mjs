@@ -5,6 +5,8 @@
 //   pnpm device:walk [--round <name>] [--only <id-prefix,...>] [--no-open] [--no-tunnel] [--port <n>]
 //   pnpm device:walk --status <round> [--json]
 //   pnpm device:walk --apply <round> [--dry-run]
+//   pnpm device:walk --selftest [--round <name>] [--no-tunnel] [--hold <s> --drop-at <s> --drop <s>]
+//     (M39f: the phone self-test: two origins, wake lock held, a tunnel drop; one QR scan, about 7 min)
 // Test/scratch overrides: --checks <file>, --rounds-dir <dir>.
 
 import { spawn } from 'node:child_process'
@@ -16,6 +18,8 @@ import { applyRound, lineDiff } from './lib/device-walk/apply.mjs'
 import { parseChecks, selectItems } from './lib/device-walk/parse.mjs'
 import { qrTerminal } from './lib/device-walk/qr.mjs'
 import { readEvents, replay } from './lib/device-walk/rounds.mjs'
+import { DEFAULT_PARAMS, formatSelftest, SELFTEST_ID } from './lib/device-walk/selftest.mjs'
+import { runSelftest } from './lib/device-walk/selftest-cli.mjs'
 import { createServerControl } from './lib/device-walk/servers.mjs'
 import { OVERRIDES } from './lib/device-walk/serving.mjs'
 import { reapStale, spawnServe } from './lib/device-walk/spawn-serve.mjs'
@@ -33,12 +37,52 @@ export function parseArgs(argv) {
     '--port',
     '--checks',
     '--rounds-dir',
+    '--hold',
+    '--drop-at',
+    '--drop',
   ])
   for (let i = 0; i < argv.length; i++) {
     if (withValue.has(argv[i])) o.values[argv[i].slice(2)] = argv[++i]
     else o.flags.add(argv[i])
   }
   return o
+}
+
+async function selftest({ values, roundFile }) {
+  const round = values.round ?? `selftest-${new Date().toISOString().slice(0, 10)}`
+  if (!/^[\w.-]+$/.test(round)) fail('--round must be letters, digits, dot, dash, underscore')
+  if (replay(readEvents(roundFile(round)), []).others.has(SELFTEST_ID))
+    fail(`round "${round}" already has a self-test result; pick another --round`)
+  const sec = (v, d) => (v === undefined ? d : Math.round(Number(v) * 1000))
+  const params = {
+    holdMs: sec(values.hold, DEFAULT_PARAMS.holdMs),
+    dropAtMs: sec(values['drop-at'], DEFAULT_PARAMS.dropAtMs),
+    dropMs: sec(values.drop, DEFAULT_PARAMS.dropMs),
+  }
+  if (Object.values(params).some((n) => !Number.isFinite(n) || n <= 0))
+    fail('bad --hold/--drop-at/--drop')
+  const stale = reapStale()
+  if (stale.length) console.log(`stopped ${stale.length} server(s) left by an earlier run`)
+  const ac = new AbortController()
+  let run = null
+  const bye = (code) => {
+    ac.abort()
+    ;(run?.stop() ?? Promise.resolve()).finally(() => process.exit(code))
+  }
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => bye(130))
+  console.log(`device:walk self-test, round "${round}" (hold ${params.holdMs / 1000} s)`)
+  run = await runSelftest({
+    round,
+    file: roundFile(round),
+    seriesDir: join(REPO, 'test-results/device-walk', round),
+    spawnServe,
+    tunnel: !process.argv.includes('--no-tunnel'),
+    params,
+    signal: ac.signal,
+  })
+  const pass = run.row?.result === 'pass'
+  await run.stop()
+  process.exit(pass ? 0 : 1)
 }
 
 const fail = (msg) => {
@@ -54,12 +98,23 @@ async function main() {
   const { items } = parseChecks(checksText)
   const roundFile = (r) => join(roundsDir, `${r}.jsonl`)
 
+  if (flags.has('--selftest')) return selftest({ flags, values, roundFile })
+
   const reading = values.status ?? values.apply
   if (reading !== undefined) {
     if (!reading || reading.startsWith('--')) fail('--status and --apply take a round name')
     const events = readEvents(roundFile(reading))
     if (!events.length) fail(`no round "${reading}" (${roundFile(reading)})`)
-    const only = [...events].reverse().find((e) => e.type === 'start')?.only
+    const start = [...events].reverse().find((e) => e.type === 'start')
+    if (start?.mode === 'selftest') {
+      const row = replay(events, []).others.get(SELFTEST_ID)
+      return console.log(
+        flags.has('--json')
+          ? JSON.stringify({ round: reading, selftest: row ?? null }, null, 2)
+          : formatSelftest(row),
+      )
+    }
+    const only = start?.only
     const sel = selectItems(items, only ?? undefined)
     const state = replay(
       events,

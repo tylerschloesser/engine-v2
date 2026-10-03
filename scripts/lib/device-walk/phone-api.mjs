@@ -31,6 +31,9 @@ export const SEQUENCED = new Set([
   'gpu',
   'error',
   'selftest',
+  'wake',
+  'redo',
+  'pause',
   'series',
   'attempt',
   'prompt',
@@ -54,6 +57,7 @@ export function createPhoneApi({
   clock = Date.now,
   stepFor = () => ({}),
   react = () => [],
+  observe = () => {},
   agentPath = here('./agent/agent.js'),
   runnerPath = here('./runner.html'),
 }) {
@@ -109,6 +113,7 @@ export function createPhoneApi({
     seen.at = clock()
     seen.tab = tab
     seen.count++
+    observe(msg, seen.at, api)
     if (type === 'ping') return { type: 'pong', now: clock() }
     if (type === 'hello' || type === 'step?')
       return stepFields({

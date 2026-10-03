@@ -119,3 +119,37 @@ describe('device-walk preview plugin', () => {
     expect(injectWalkTag('<p>no head</p>').startsWith(WALK_TAG)).toBe(true)
   })
 })
+
+describe('device-walk reapStale', () => {
+  test('device-walk reap: only servers whose owning tool is gone are killed; a live owner and legacy entries are kept', async () => {
+    const { mkdtempSync, readFileSync, writeFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const { reapStale } = await import('./device-walk/spawn-serve.mjs')
+    const file = join(mkdtempSync(join(tmpdir(), 'dwreap-')), 'pids.json')
+    writeFileSync(
+      file,
+      JSON.stringify([
+        { pid: 11, owner: 1 }, // owner gone: reaped
+        { pid: 12, owner: 2 }, // owner alive (somebody else's round): kept
+        99934, // legacy bare number: owner unknown, kept
+        { pid: 14 }, // no owner recorded: kept
+        { pid: 13, owner: 1 }, // owner gone, but the pid is no longer a device-serve: dropped, not killed
+      ]),
+    )
+    const killed = []
+    const out = reapStale({
+      file,
+      isAlive: (p) => p === 2,
+      command: (p) => (p === 13 ? 'vim' : 'node device-serve.mjs'),
+      kill: (pid, sig) => killed.push([pid, sig]),
+    })
+    expect(out).toEqual([11])
+    expect(killed).toEqual([[11, 'SIGTERM']])
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual([
+      { pid: 12, owner: 2 },
+      99934,
+      { pid: 14 },
+    ])
+  })
+})
