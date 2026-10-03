@@ -245,3 +245,5 @@ One new, run once: the `M39f-selftest` scan (wake lock, two-origin hop, tunnel d
 ### Not verified
 
 Safari's behaviour after a script-initiated cross-origin navigation, Low Power Mode, the real Auto-Lock interaction, tunnel behaviour with a phone on cellular.
+
+**Self-test PASS on Tyler's iPhone (2026-10-03, round `selftest-2026-10-03b`, Auto-Lock Never).** All 8 criteria ok: `hidden_events_in_hold` 0 over a 360 s hold, 2 origins, 9/9 taps in order during the 20 s link cut, `recovery_ms` 292, max rAF gap 51 ms, max ping gap 2.0 s; wake lock granted 10, denied 0 (it is requested on taps only now). The first run (`selftest-2026-10-03.`, trailing dot) locked at ~1:30: the wake lock is denied after a cross-origin navigation (`NotAllowedError`), hence Tyler's ruling, Auto-Lock Never per round. **Orchestrator note for delegations 2-5:** wherever Scope assumes the wake lock holds across navigations, read the Fix-round Deviations: the round relies on Auto-Lock Never; an attempt interrupted by `hidden` is discarded and redone (`endMeasure().interrupted`). The CLI round-name test must pass `--no-tunnel` (a mutation run once started a real tunnel).
