@@ -99,6 +99,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 38 | `38-hosting-checks.md` | Durable Objects go/no-go, COOP/COEP on a real host, Fly deploy | 35, 31 | D |
 | [x] | 39c | `39c-acceptance-gap-tests.md` | close M39's 75 coverage `gap` rows with one small test each (added at M39, 2026-10-02) | 38 | |
 | [x] | 39d | `39d-full-world-reconnect.md` | a full world admits a returning player (supersede) and gives a ninth player `Reject{Full}` (found by M39c, 2026-10-02) | 39c | |
+| [ ] | 39e | `39e-device-walkthrough-tool.md` | `pnpm device:walk`: local walkthrough of a manual-check round (auto QR, resumable log, `--apply` to `device-checks.md`), `device-round` skill (Tyler's request, 2026-10-03) | 39d | |
 | [ ] | 39 | `39-acceptance.md` | coverage + budget audit, full device checklist, Phase 3 exit | all above | D |
 | [ ] | 39b | `39b-phase-4-handoff.md` | capture what code cannot say in ADRs, `PROMPT.md` for Phase 4. **Phase 3 complete.** | 39 | |
 
