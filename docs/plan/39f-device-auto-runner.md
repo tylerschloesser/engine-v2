@@ -1,6 +1,6 @@
 # M39f: Device auto-runner (one QR, the phone walks the round)
 
-Status: draft, not started · After: 39e · Tyler-dependent: yes (four decisions under Planning decisions, "For Tyler")
+Status: not started · After: 39e · Tyler-dependent: partly (Tyler answered the four decisions on 2026-10-03; delegation 1 ends with a wake-lock self-test Tyler runs on the iPhone)
 
 ## Goal
 Tyler, 2026-10-03, after trying M39e: "Ok this is a good start. But now you're asking me to record a ton of information that honestly you should be able to get from the device/browser automatically. Extend to build a data collection service. Further, I feel like you could just instrument an entire test run in a single page. Like, I scan a QR code, and you do all of the rest. Either via a script on the phone, or via websockets remotely or something like that."
