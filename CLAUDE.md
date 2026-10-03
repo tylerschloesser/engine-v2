@@ -28,6 +28,7 @@ Read only what the task needs. A sub-agent should be briefable with `docs/spec/o
 | `PLAN.md` | Phase 2 output: milestone index in execution order, dependencies, progress checkboxes | Deleted in Phase 4 |
 | `docs/plan/<NN>-<slug>.md` | One brief per milestone: the whole instruction set for one implementer sub-agent (format: `docs/plan/README.md`) | Deleted in Phase 4 |
 | `docs/plan/*.md` (unnumbered) | `questions-for-tyler`, `device-checks` (Tyler-run), `deferred-ledger`, `coverage`, `coverage-adrs`, `reference-coverage` | Deleted in Phase 4 |
+| `scripts/device-walk.mjs`, `.claude/skills/device-round/` | Tyler's device-check walkthrough (`pnpm device:walk`): serves pages, shows QR codes, records rounds in `docs/plan/device-rounds/`; the skill is how to start, read and apply one | Until Phase 4 |
 
 ## Invariants
 
