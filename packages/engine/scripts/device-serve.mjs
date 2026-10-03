@@ -23,6 +23,12 @@
 // previews that build with `vite preview --mode bench`, so `?bench=large-save` and its `#bench-hud`
 // exist on the phone. The bench build is the production page alone (no `test.html`/`gc.html`).
 // `--tunnel` and `--ws` combine with it unchanged.
+//
+// `--walk <port>` (M39f, `pnpm device:walk`): sets `ENGINE_WALK_PORT` for `vite preview`, whose two
+// configs then proxy `/__walk` (http and ws) to the phone API on that loopback port and inject the
+// agent's `<script>` into served HTML (`scripts/walk-preview-plugin.ts`). Serve time only: `vite build`
+// is never given the variable. `--no-build` skips the build and previews what `dist/` (or `dist-bench/`)
+// already holds, for a second server of an app another process has just built.
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -54,6 +60,13 @@ if (app !== undefined && app !== 'reference') {
   console.error(`device-serve: unknown --app '${app}' (only 'reference' is supported)`)
   process.exit(1)
 }
+const walkIndex = argv.indexOf('--walk')
+const walkPort = walkIndex >= 0 ? argv[walkIndex + 1] : undefined
+if (walkIndex >= 0 && !/^\d+$/.test(walkPort ?? '')) {
+  console.error('device-serve: --walk takes the phone API port')
+  process.exit(1)
+}
+const noBuild = argv.includes('--no-build')
 const bench = argv.includes('--bench')
 if (bench && app !== 'reference') {
   console.error('device-serve: --bench is only valid with --app reference')
@@ -144,7 +157,9 @@ console.log(
       : 'building games/reference (release profile)…'
     : 'building the fixture app (dev profile)…',
 )
-if (app === 'reference') {
+if (noBuild) {
+  console.log('--no-build: previewing the existing build output')
+} else if (app === 'reference') {
   await run('pnpm', ['--filter', 'reference', 'build', ...(bench ? ['--mode', 'bench'] : [])], {
     env: toolEnv(),
   })
@@ -157,6 +172,7 @@ const previewEnv = {
   ENGINE_TEST_PORT: String(port), // both apps' own configs read this for port/allowedHosts (Seams)
   ...(tunnel ? { ENGINE_DEVICE: '1' } : {}),
   ...(ws ? { ENGINE_WS_PROXY_PORT: String(wsPort) } : {}),
+  ...(walkPort ? { ENGINE_WALK_PORT: walkPort } : {}),
 }
 const previewArgs =
   app === 'reference'

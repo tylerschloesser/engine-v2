@@ -103,3 +103,105 @@ export function createServerControl({
     },
   }
 }
+
+/**
+ * M39f: the keyed form. One `device-serve` per variant, all running at once, each with its own
+ * `ENGINE_TEST_PORT`/`ENGINE_WS_PORT` (`portStep` apart), its own tunnel and `--walk <walkPort>`, so the
+ * phone never waits for a server switch and a hop between variants is a plain navigation. Each key owns a
+ * single-slot `createServerControl`. Builds of one app are serialised (the two `games/reference` builds
+ * share a cargo target dir): a variant starts when the earlier one of its app is serving, and one whose
+ * build output already exists (same app and bench flag) gets `--no-build`.
+ * A variant is a serving record plus an optional `key`.
+ */
+export function variantKey(v) {
+  return v.key ?? `${v.app}${v.bench ? '-bench' : ''}${v.ws ? '-ws' : ''}`
+}
+
+export function createMultiServerControl({
+  spawnServe,
+  walkPort,
+  basePort = 4173,
+  wsBasePort = 4174,
+  portStep = 10,
+  ...opts
+}) {
+  const slots = new Map() // key -> { index, want, control }
+  const appChain = new Map() // app -> Promise of the last start
+  const built = new Set()
+  const onChange = opts.onChange ?? (() => {})
+
+  function slot(v) {
+    const key = variantKey(v)
+    let s = slots.get(key)
+    if (!s) {
+      const index = slots.size
+      s = { key, index, want: null, control: null, noBuild: false }
+      const env = {
+        ENGINE_TEST_PORT: String(basePort + index * portStep),
+        ENGINE_WS_PORT: String(wsBasePort + index * portStep),
+      }
+      s.control = createServerControl({
+        ...opts,
+        onChange: () => onChange(status()),
+        spawnServe: (args, io) =>
+          spawnServe(
+            [
+              ...args,
+              ...(walkPort ? ['--walk', String(walkPort)] : []),
+              ...(s.noBuild ? ['--no-build'] : []),
+            ],
+            { ...io, env },
+          ),
+      })
+      slots.set(key, s)
+    }
+    s.want = v
+    return s
+  }
+
+  const status = () => ({
+    servers: Object.fromEntries([...slots].map(([k, s]) => [k, s.control.status()])),
+  })
+  const urlsOf = (key) => {
+    const s = slots.get(key)
+    return s ? s.control.status().urls : {}
+  }
+
+  return {
+    status,
+    /** Start every variant (those already serving are kept); resolves `{ key: { loopback, tunnel? } }`. */
+    async ensureAll(variants) {
+      const starts = variants.map((v) => {
+        const s = slot(v)
+        const bk = `${v.app}|${v.bench ? 1 : 0}`
+        const prev = appChain.get(v.app) ?? Promise.resolve()
+        const run = async () => {
+          s.noBuild = built.has(bk)
+          const urls = await s.control.ensure(v)
+          built.add(bk)
+          return urls
+        }
+        const p = prev.then(run, run)
+        appChain.set(
+          v.app,
+          p.catch(() => {}),
+        )
+        return p.then((urls) => [s.key, urls])
+      })
+      return Object.fromEntries(await Promise.all(starts))
+    },
+    /** The origin a variant is reachable at: its tunnel when it has one, else the loopback origin. */
+    urlFor(key) {
+      const s = slots.get(key)
+      const u = urlsOf(key)
+      return (s?.want.tunnel ? u.tunnel : u.loopback) ?? null
+    },
+    urlsFor: urlsOf,
+    async stopAll() {
+      await Promise.all([...slots.values()].map((s) => s.control.stopAll()))
+      slots.clear()
+      appChain.clear()
+      built.clear()
+    },
+  }
+}

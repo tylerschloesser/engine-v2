@@ -39,10 +39,11 @@ export function reapStale() {
   return killed
 }
 
-export function spawnServe(args, { onLine, onExit }) {
+export function spawnServe(args, { onLine, onExit, env }) {
   const child = spawn(process.execPath, [SCRIPT, ...args], {
     cwd: REPO,
     stdio: ['ignore', 'pipe', 'pipe'],
+    ...(env ? { env: { ...process.env, ...env } } : {}),
   })
   writePids([...readPids(), child.pid])
   for (const stream of [child.stdout, child.stderr]) {

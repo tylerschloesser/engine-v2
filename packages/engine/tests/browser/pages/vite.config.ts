@@ -5,11 +5,20 @@
 import { readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
+import { walkPreview, walkProxy } from '../../../scripts/walk-preview-plugin.ts'
 import { engine } from '../../../src/vite.ts'
 import { fixturesPlugin } from './fixtures-plugin.ts'
 
 const root = import.meta.dirname
 const port = Number(process.env.ENGINE_TEST_PORT ?? 4517)
+
+// `/ws` for `device-serve --ws` and `/__walk` for `device:walk` (M39f); empty (no `preview.proxy`) otherwise.
+const proxy = {
+  ...(process.env.ENGINE_WS_PROXY_PORT
+    ? { '/ws': { target: `ws://127.0.0.1:${process.env.ENGINE_WS_PROXY_PORT}`, ws: true } }
+    : {}),
+  ...walkProxy(),
+}
 
 const input = Object.fromEntries(
   readdirSync(root, { withFileTypes: true })
@@ -19,7 +28,12 @@ const input = Object.fromEntries(
 
 export default defineConfig({
   root,
-  plugins: [engine({ crate: '../../../fixtures/hash', profile: 'dev' }), fixturesPlugin()],
+  plugins: [
+    engine({ crate: '../../../fixtures/hash', profile: 'dev' }),
+    fixturesPlugin(),
+    // `pnpm device:walk`: only under `vite preview` with `ENGINE_WALK_PORT` set (no-op otherwise).
+    ...walkPreview(),
+  ],
   build: {
     target: 'es2022',
     // M04 attributes allocations by function name; minified names would hide them.
@@ -39,12 +53,6 @@ export default defineConfig({
     // plain `ws://`, so `wsUrl(location)` always dials this same origin's `/ws`, proxied by Vite's
     // own dev-server WebSocket proxy to the real `games/reference-server` child `device-serve.mjs`
     // spawns. Unset (every other `pnpm test`/`pnpm device:serve` run), this is a no-op.
-    ...(process.env.ENGINE_WS_PROXY_PORT
-      ? {
-          proxy: {
-            '/ws': { target: `ws://127.0.0.1:${process.env.ENGINE_WS_PROXY_PORT}`, ws: true },
-          },
-        }
-      : {}),
+    ...(Object.keys(proxy).length ? { proxy } : {}),
   },
 })

@@ -3,6 +3,7 @@
 import { fileURLToPath } from 'node:url'
 import { engine } from 'engine/vite'
 import { defineConfig } from 'vite'
+import { walkPreview, walkProxy } from '../../packages/engine/scripts/walk-preview-plugin.ts'
 
 // docs/plan/29-net-worker-and-reference-server.md Scope: `pnpm device:serve --app reference`
 // serves this app (instead of the fixture app) on the same port/tunnel/proxy shape `packages/
@@ -33,6 +34,13 @@ export default defineConfig(({ mode }) => {
 })
 
 function config(bench: boolean) {
+  // `/ws` for `device-serve --ws` and `/__walk` for `device:walk` (M39f); empty (no `preview.proxy`) otherwise.
+  const proxy = {
+    ...(process.env.ENGINE_WS_PROXY_PORT
+      ? { '/ws': { target: `ws://127.0.0.1:${process.env.ENGINE_WS_PROXY_PORT}`, ws: true } }
+      : {}),
+    ...walkProxy(),
+  }
   return {
     publicDir: 'assets',
     // `bindings.dir` is relative to the *crate* dir (`./sim`, `exportBindings`'s own contract), and
@@ -48,6 +56,8 @@ function config(bench: boolean) {
         bindings: { dir: '../src/bindings' },
         ...(bench ? { features: ['bench'] } : {}),
       }),
+      // `pnpm device:walk` (M39f): `vite preview` with `ENGINE_WALK_PORT` only; `[]` otherwise.
+      ...walkPreview(),
     ],
     // Three entries: `index.html` (production), `test.html` (step 0: `ClientOptions.test` and every
     // diagnostic `window.__*` hook), `gc.html` (step 6's own zero-allocation exit criterion: a
@@ -84,13 +94,7 @@ function config(bench: boolean) {
       // `pnpm device:serve --app reference --ws`: same `/ws` proxy shape as the fixture app's own
       // config, so a real multiplayer reference game (M34) reaches the socket cross-origin-isolated
       // on this same port. A no-op until then (the reference game itself ignores the socket, Scope).
-      ...(process.env.ENGINE_WS_PROXY_PORT
-        ? {
-            proxy: {
-              '/ws': { target: `ws://127.0.0.1:${process.env.ENGINE_WS_PROXY_PORT}`, ws: true },
-            },
-          }
-        : {}),
+      ...(Object.keys(proxy).length ? { proxy } : {}),
     },
   }
 }
