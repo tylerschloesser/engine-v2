@@ -3,6 +3,20 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
+/**
+ * Round names are file names and are typed from sentences: lower-case letters, digits and dashes, not
+ * starting with a dash (`m39`, `selftest-2026-10-03`). Returns an error message, or null when fine.
+ * A trailing full stop copied from a sentence once made `selftest-2026-10-03..jsonl`.
+ */
+export function checkRoundName(name) {
+  if (typeof name !== 'string' || name === '' || name.startsWith('--'))
+    return 'a round name is required (lower-case letters, digits and dashes)'
+  if (/^[a-z0-9][a-z0-9-]*$/.test(name)) return null
+  const bad = [...name].findIndex((c, i) => !(i === 0 ? /[a-z0-9]/ : /[a-z0-9-]/).test(c))
+  const c = [...name][bad]
+  return `bad round name "${name}": character ${JSON.stringify(c)} at position ${bad + 1} is not allowed (use lower-case letters, digits and dashes, starting with a letter or digit)`
+}
+
 export const RESULTS = ['pass', 'fail', 'skip', 'not run: no device']
 
 export function readEvents(file) {

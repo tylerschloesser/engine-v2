@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
 import { WebSocket } from 'ws'
 import { createPhoneApi } from './device-walk/phone-api.mjs'
-import { appendEvent, readEvents, replay } from './device-walk/rounds.mjs'
+import { appendEvent, checkRoundName, readEvents, replay } from './device-walk/rounds.mjs'
 
 const TOKEN = 'a'.repeat(32)
 let open = []
@@ -285,5 +285,45 @@ describe('device-walk round log, phone events', () => {
       { t: expect.any(String), result: 'pass', notes: '', numbers: '' },
       { t: expect.any(String), result: null, redo: true },
     ])
+  })
+})
+
+describe('device-walk round names', () => {
+  test('device-walk round names: lower-case letters, digits and dashes only; the error names the bad character', () => {
+    for (const ok of ['m39', 'selftest-2026-10-03', 'round-1', '0a'])
+      expect(checkRoundName(ok), ok).toBeNull()
+    expect(checkRoundName('selftest-2026-10-03.')).toMatch(/character "\." at position 20/)
+    expect(checkRoundName('Demo')).toMatch(/character "D" at position 1/)
+    expect(checkRoundName('a_b')).toMatch(/character "_" at position 2/)
+    expect(checkRoundName('-x')).toMatch(/character "-" at position 1/)
+    expect(checkRoundName('a b')).toMatch(/character " " at position 2/)
+    for (const empty of ['', undefined, '--json']) expect(checkRoundName(empty)).toMatch(/required/)
+  })
+
+  test('device-walk round names: the CLI refuses a bad name for walk, selftest, status and apply, and an unknown round', async () => {
+    const { spawnSync } = await import('node:child_process')
+    const cwd = new URL('../../', import.meta.url)
+    const run = (...a) =>
+      spawnSync(
+        'node',
+        ['scripts/device-walk.mjs', '--rounds-dir', mkdtempSync(join(tmpdir(), 'dwn-')), ...a],
+        {
+          cwd,
+          encoding: 'utf8',
+        },
+      )
+    for (const args of [
+      ['--round', 'x.', '--only', 'M03'],
+      ['--selftest', '--round', 'x.'],
+      ['--status', 'x.'],
+      ['--apply', 'x.'],
+    ]) {
+      const r = run(...args)
+      expect(r.status, args.join(' ')).toBe(1)
+      expect(r.stderr).toMatch(/character "\." at position 2/)
+    }
+    const unknown = run('--status', 'nope')
+    expect(unknown.status).toBe(1)
+    expect(unknown.stderr).toMatch(/no round "nope"/)
   })
 })

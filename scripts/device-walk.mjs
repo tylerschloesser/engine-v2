@@ -5,8 +5,8 @@
 //   pnpm device:walk [--round <name>] [--only <id-prefix,...>] [--no-open] [--no-tunnel] [--port <n>]
 //   pnpm device:walk --status <round> [--json]
 //   pnpm device:walk --apply <round> [--dry-run]
-//   pnpm device:walk --selftest [--round <name>] [--no-tunnel] [--hold <s> --drop-at <s> --drop <s>]
-//     (M39f: the phone self-test: two origins, wake lock held, a tunnel drop; one QR scan, about 7 min)
+//   pnpm device:walk --selftest [--round <name>] [--no-tunnel] [--hold <s> --drop-at <s> --drop <s> --probe <s>]
+//     (M39f: the phone self-test: Auto-Lock Never idle probe, two origins, 6 min hold, a link cut; one QR scan, about 8 min)
 // Test/scratch overrides: --checks <file>, --rounds-dir <dir>.
 
 import { spawn } from 'node:child_process'
@@ -17,7 +17,7 @@ import { createApp } from './lib/device-walk/app.mjs'
 import { applyRound, lineDiff } from './lib/device-walk/apply.mjs'
 import { parseChecks, selectItems } from './lib/device-walk/parse.mjs'
 import { qrTerminal } from './lib/device-walk/qr.mjs'
-import { readEvents, replay } from './lib/device-walk/rounds.mjs'
+import { checkRoundName, readEvents, replay } from './lib/device-walk/rounds.mjs'
 import { DEFAULT_PARAMS, formatSelftest, SELFTEST_ID } from './lib/device-walk/selftest.mjs'
 import { runSelftest } from './lib/device-walk/selftest-cli.mjs'
 import { createServerControl } from './lib/device-walk/servers.mjs'
@@ -40,6 +40,7 @@ export function parseArgs(argv) {
     '--hold',
     '--drop-at',
     '--drop',
+    '--probe',
   ])
   for (let i = 0; i < argv.length; i++) {
     if (withValue.has(argv[i])) o.values[argv[i].slice(2)] = argv[++i]
@@ -50,7 +51,8 @@ export function parseArgs(argv) {
 
 async function selftest({ values, roundFile }) {
   const round = values.round ?? `selftest-${new Date().toISOString().slice(0, 10)}`
-  if (!/^[\w.-]+$/.test(round)) fail('--round must be letters, digits, dot, dash, underscore')
+  const badName = checkRoundName(round)
+  if (badName) fail(badName)
   if (replay(readEvents(roundFile(round)), []).others.has(SELFTEST_ID))
     fail(`round "${round}" already has a self-test result; pick another --round`)
   const sec = (v, d) => (v === undefined ? d : Math.round(Number(v) * 1000))
@@ -58,6 +60,7 @@ async function selftest({ values, roundFile }) {
     holdMs: sec(values.hold, DEFAULT_PARAMS.holdMs),
     dropAtMs: sec(values['drop-at'], DEFAULT_PARAMS.dropAtMs),
     dropMs: sec(values.drop, DEFAULT_PARAMS.dropMs),
+    probeMs: sec(values.probe, DEFAULT_PARAMS.probeMs),
   }
   if (Object.values(params).some((n) => !Number.isFinite(n) || n <= 0))
     fail('bad --hold/--drop-at/--drop')
@@ -102,7 +105,8 @@ async function main() {
 
   const reading = values.status ?? values.apply
   if (reading !== undefined) {
-    if (!reading || reading.startsWith('--')) fail('--status and --apply take a round name')
+    const bad = checkRoundName(reading)
+    if (bad) fail(`--status and --apply take an existing round: ${bad}`)
     const events = readEvents(roundFile(reading))
     if (!events.length) fail(`no round "${reading}" (${roundFile(reading)})`)
     const start = [...events].reverse().find((e) => e.type === 'start')
@@ -148,7 +152,8 @@ async function main() {
 
   // --- Walk mode --------------------------------------------------------------------------
   const round = values.round ?? `round-${new Date().toISOString().slice(0, 10)}`
-  if (!/^[\w.-]+$/.test(round)) fail('--round must be letters, digits, dot, dash, underscore')
+  const badName = checkRoundName(round)
+  if (badName) fail(badName)
   const events = readEvents(roundFile(round))
   const only = values.only
     ? values.only.split(',').filter(Boolean)

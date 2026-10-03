@@ -45,11 +45,17 @@ declare global {
       }
       bar: { show(s: unknown): void; tick(n: string, ok: boolean): void; present(): boolean }
       setMeasuring(on: boolean): void
+      beginMeasure(id: string, n: number): void
+      endMeasure(): { id: string; n: number; interrupted: boolean }
+      measure(): { on: boolean; interrupted: boolean }
+      rafStats(): { frames: number }
     }
   }
 }
 
-async function rig(params = { holdMs: 9000, dropAtMs: 3000, dropMs: 3000 }): Promise<Rig> {
+async function rig(
+  params = { holdMs: 9000, dropAtMs: 3000, dropMs: 3000, probeMs: 1200 },
+): Promise<Rig> {
   const { createPhoneApi } = (await import(`${scripts}phone-api.mjs`)) as {
     createPhoneApi: (o: Record<string, unknown>) => Api
   }
@@ -114,6 +120,28 @@ async function stubWakeLock(page: Page): Promise<void> {
   })
 }
 
+/** Pretend the screen locked / came back: what Safari does to a page on Auto-Lock. */
+async function hidePage(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    for (const [k, v] of [
+      ['hidden', true],
+      ['visibilityState', 'hidden'],
+    ] as const)
+      Object.defineProperty(document, k, { configurable: true, get: () => v })
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+}
+async function showPage(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    for (const [k, v] of [
+      ['hidden', false],
+      ['visibilityState', 'visible'],
+    ] as const)
+      Object.defineProperty(document, k, { configurable: true, get: () => v })
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+}
+
 const until = async (what: string, fn: () => boolean | Promise<boolean>, ms = 15_000) => {
   const t0 = Date.now()
   while (!(await fn())) {
@@ -131,6 +159,17 @@ test('walk: the self-test runs end to end (two-origin hop, hold, link cut with t
     await stubWakeLock(page)
     await page.goto(r.runner())
     await expect(page.locator('#idle')).toBeVisible()
+    // Pre-flight: Start is locked until an idle probe passes. The first probe is spoiled by hiding the
+    // page (a locked screen); the message shows on return and the probe repeats.
+    await expect(page.locator('#start')).toBeHidden()
+    await page.locator('#autolock').click()
+    await page.locator('#probe').click()
+    await hidePage(page)
+    await showPage(page)
+    await expect(page.locator('#probemsg')).toContainText('set Auto-Lock to Never')
+    await expect(page.locator('#start')).toBeHidden()
+    await page.locator('#probe').click()
+    await expect(page.locator('#start')).toBeVisible({ timeout: 10_000 })
     await page.locator('#start').click()
     // The cut: while the Mac refuses the phone, taps are queued in the outbox, not lost.
     await expect(page.locator('#tapbox')).toBeVisible({ timeout: 30_000 })
@@ -148,6 +187,8 @@ test('walk: the self-test runs end to end (two-origin hop, hold, link cut with t
     const ev = r.events()
     const phases = ev.filter((e) => e.type === 'selftest').map((e) => e.phase)
     expect(phases.filter((p) => p !== 'tap')).toEqual([
+      'preflight',
+      'preflight',
       'start',
       'hop-arrive',
       'hop-arrive',
@@ -157,6 +198,7 @@ test('walk: the self-test runs end to end (two-origin hop, hold, link cut with t
       'hold-end',
     ])
     expect(phases.filter((p) => p === 'tap')).toHaveLength(3)
+    expect(ev.filter((e) => e.phase === 'preflight').map((e) => e.ok)).toEqual([false, true])
     const arrivals = ev.filter((e) => e.phase === 'hop-arrive')
     expect(arrivals.map((e) => e.origin)).toEqual([r.b, r.a]) // started on A, hopped to B, came back
     // Each hop starts a new tab id (`<base>-<x>`) with its own counter: per tab `src.seq` is 1, 2, 3...
@@ -308,6 +350,7 @@ test('walk: the requestDevice wrapper reports an uncapturederror and a device lo
 test('walk: the walk bar is removed from the DOM during a measuring window and returns after @slow @webkit-gpu', async ({
   page,
 }) => {
+  await stubWakeLock(page)
   const r = await rig()
   try {
     await page.goto(r.page())
@@ -347,6 +390,8 @@ test('walk: the walk bar is removed from the DOM during a measuring window and r
       first?.click()
     })
     await until('answer', () => r.events().some((e) => e.type === 'answer'))
+    // Every tap on the bar asks for the wake lock (best effort; a denial is only recorded).
+    expect(r.events().some((e) => e.type === 'wake' && e.reason === 'tap')).toBe(true)
     expect(r.events().find((e) => e.type === 'answer')).toMatchObject({
       id: 'M35',
       n: 2,
@@ -369,6 +414,60 @@ test('walk: a page opened without the run token or with a wrong one has no agent
     await new Promise((res) => setTimeout(res, 1500))
     expect(await page.evaluate(() => window.__walkAgent?.state().connected)).toBe(false)
     expect(r.events()).toEqual([])
+  } finally {
+    await r.close()
+  }
+})
+
+test('walk: a page hidden during a measuring window interrupts that attempt, keeps no data, and offers Redo this check @slow @webkit-gpu', async ({
+  page,
+}) => {
+  const r = await rig()
+  try {
+    await page.goto(r.page())
+    await until(
+      'connected',
+      async () => !!(await page.evaluate(() => window.__walkAgent?.state().connected)),
+    )
+    await page.evaluate(() => window.__walkAgent?.beginMeasure('M09b-fill-rate', 2))
+    await until(
+      'frames recorded',
+      async () => ((await page.evaluate(() => window.__walkAgent?.rafStats().frames)) ?? 0) > 5,
+    )
+    expect(await page.evaluate(() => document.getElementById('walk-bar') !== null)).toBe(false)
+    await hidePage(page)
+    const m = await page.evaluate(() => window.__walkAgent?.measure())
+    expect(m).toMatchObject({ on: false, interrupted: true })
+    // Nothing recorded before the gap survives it.
+    expect(await page.evaluate(() => window.__walkAgent?.rafStats().frames)).toBe(0)
+    await showPage(page)
+    const sheet = await page.evaluate(
+      () => document.getElementById('walk-bar')?.shadowRoot?.textContent ?? '',
+    )
+    expect(sheet).toContain('Redo this check')
+    await until('interrupted attempt in the log', () =>
+      r
+        .events()
+        .some(
+          (e) =>
+            e.type === 'attempt' &&
+            e.status === 'interrupted' &&
+            e.id === 'M09b-fill-rate' &&
+            e.n === 2,
+        ),
+    )
+    await page.evaluate(() =>
+      (
+        document
+          .getElementById('walk-bar')
+          ?.shadowRoot?.querySelector('button') as HTMLButtonElement | null
+      )?.click(),
+    )
+    await until('redo', () =>
+      r.events().some((e) => e.type === 'redo' && e.id === 'M09b-fill-rate'),
+    )
+    expect(await page.evaluate(() => window.__walkAgent?.measure().interrupted)).toBe(false)
+    expect(await page.evaluate(() => document.getElementById('walk-bar') !== null)).toBe(false) // the sheet closed
   } finally {
     await r.close()
   }

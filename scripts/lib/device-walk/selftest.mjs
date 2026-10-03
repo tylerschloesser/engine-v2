@@ -10,10 +10,17 @@
 // the hold the phone sends `drop-begin`, the service refuses its whole phone API for `dropMs` (the
 // phone's "tunnel drop"; a real cloudflared kill would change the URL), the person taps a button on the
 // page and every tap queues in the agent's outbox; on recovery the outbox must flush in order.
+// `hidden_events_in_hold` is the Auto-Lock check: a round runs with Auto-Lock set to Never, not on the wake
+// lock (iOS grants it only with user activation on the document, so every navigation loses it).
 // The service decides pass or fail from the criteria below (a page hint is advisory).
 
 export const SELFTEST_ID = 'M39f-selftest'
-export const DEFAULT_PARAMS = { holdMs: 360_000, dropAtMs: 150_000, dropMs: 20_000 }
+export const DEFAULT_PARAMS = {
+  holdMs: 360_000,
+  dropAtMs: 150_000,
+  dropMs: 20_000,
+  probeMs: 30_000,
+}
 export const LIMITS = { maxPingGapMs: 8_000, maxRafGapMs: 3_000, recoveryMs: 15_000 }
 
 const phases = (events) => events.filter((e) => e.type === 'selftest')
@@ -73,7 +80,6 @@ export function evaluate(events, params, mem = {}) {
     c('origins_visited', origins.size, 2, origins.size >= 2),
     c('hold_ms', heldMs, params.holdMs, heldMs >= params.holdMs),
     c('hidden_events_in_hold', hidden, 0, hidden === 0),
-    c('wake_lock_releases_while_visible', released, 0, released === 0),
     c(
       'max_ping_gap_ms',
       mem.maxPingGapMs ?? null,
@@ -105,6 +111,11 @@ export function evaluate(events, params, mem = {}) {
     taps: taps.length,
     origins: [...origins].join(' '),
     wake_after_hops: arrivals.map((e) => e.wake).join(' '),
+    wake_releases_visible: released, // recorded, not judged: iOS drops the lock on navigation
+    preflight: st
+      .filter((e) => e.phase === 'preflight')
+      .map((e) => (e.ok ? 'ok' : 'fail'))
+      .join(' '),
     wake_granted: events.filter((e) => e.type === 'wake' && e.event === 'granted').length,
     wake_denied: events.filter((e) => e.type === 'wake' && e.event === 'denied').length,
     raf_frames: endEv?.rafFrames ?? null,

@@ -69,13 +69,11 @@ describe('device-walk selftest', () => {
     const hid = goodLog()
     hid.splice(5, 0, { t: iso(60_000), type: 'visibility', state: 'hidden' })
     expect(bad(hid)).toEqual(['hidden_events_in_hold'])
-    // A visible release of the wake lock fails; a release while hidden (a hop) is not counted.
+    // A visible release of the wake lock is recorded, not judged (Auto-Lock Never is the contract).
     const rel = goodLog()
     rel.splice(5, 0, { t: iso(70_000), type: 'wake', event: 'released', visible: true })
-    expect(bad(rel)).toEqual(['wake_lock_releases_while_visible'])
-    const relHidden = goodLog()
-    relHidden.splice(5, 0, { t: iso(70_000), type: 'wake', event: 'released', visible: false })
-    expect(bad(relHidden)).toEqual([])
+    expect(bad(rel)).toEqual([])
+    expect(evaluate(rel, P, MEM).metrics.wake_releases_visible).toBe(1)
     // Held one ms short of the hold.
     expect(
       bad(edit((e) => (e.phase === 'hold-end' ? [{ ...e, t: iso(364_000 - 1) }] : [e]))),

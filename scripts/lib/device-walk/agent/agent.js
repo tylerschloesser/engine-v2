@@ -319,13 +319,35 @@
 
   // --- Visibility, pagehide -------------------------------------------------------------------
   const vis = { hidden: 0 }
+  // A measured attempt (beginMeasure) that sees the page hidden is interrupted, never failed: its data
+  // is discarded (rAF recorder reset) and, on return, the bar offers "Redo this check".
+  const meas = { on: false, id: null, n: 0, interrupted: false }
+  function interrupt(why) {
+    if (!meas.on) return
+    meas.on = false
+    meas.interrupted = true
+    rafReset()
+    send('attempt', { id: meas.id, n: meas.n, status: 'interrupted', reason: why })
+  }
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) vis.hidden++
+    if (document.hidden) {
+      vis.hidden++
+      interrupt('hidden')
+    }
     report('visibility', { state: document.visibilityState, path: location.pathname })
     rafLast = 0
-    if (!document.hidden) wakeRequest('visible')
+    if (!document.hidden && meas.interrupted) {
+      measuring = false
+      bar.show({
+        kind: 'interrupted',
+        id: meas.id,
+        n: meas.n,
+        text: 'The page was hidden during this measurement, so it was stopped. Nothing from it is kept.',
+      })
+    }
   })
   addEventListener('pagehide', (e) => {
+    interrupt('pagehide')
     report('visibility', { state: 'pagehide', persisted: !!e.persisted, path: location.pathname })
     try {
       navigator.sendBeacon(url('msg'), JSON.stringify(outbox)) // best effort; the service dedupes by seq
@@ -377,7 +399,10 @@
     denied: 0,
     error: '',
   }
-  let wakeWanted = get('wl') === '1'
+  // Best effort (docs/plan/39f, Deviations): iOS grants the lock only with user activation on this
+  // document, so it is requested on the Start tap and on every walk-bar tap; a denial is recorded and
+  // never fails anything. A round relies on Auto-Lock set to Never, not on this.
+  const wakeWanted = true
   async function wakeRequest(reason) {
     if (!wakeWanted) return wake.state
     if (!navigator.wakeLock) {
@@ -397,7 +422,6 @@
         if (visible) wake.releasesVisible++
         wake.state = 'released'
         report('wake', { event: 'released', visible })
-        if (visible) wakeRequest('re-request')
       })
     } catch (e) {
       wake.denied++
@@ -425,7 +449,10 @@
       const b = document.createElement('button')
       b.textContent = label
       b.className = cls
-      b.onclick = fn
+      b.onclick = () => {
+        wakeRequest('tap')
+        fn()
+      }
       return b
     }
     root.innerHTML =
@@ -441,6 +468,18 @@
         .map(([k, v]) => `${v ? '✓' : '○'} ${k}`)
         .join('   ')
       box.append(d)
+    }
+    if (s.kind === 'interrupted') {
+      box.append(
+        btn('Redo this check', () => {
+          meas.interrupted = false
+          send('redo', { id: s.id, n: s.n })
+          emit('redo', { id: s.id, n: s.n })
+          bar.hide()
+        }),
+      )
+      document.body.append(host)
+      return
     }
     if (s.kind === 'judge') {
       const note = document.createElement('input')
@@ -477,6 +516,19 @@
     measuring = !!on
     drawBar()
   }
+  /** Open a measuring window for attempt `n` of check `id`: bar removed, recorder reset, hidden = interrupted. */
+  function beginMeasure(id, n) {
+    Object.assign(meas, { on: true, id, n, interrupted: false })
+    rafReset()
+    setMeasuring(true)
+  }
+  /** Close it; `interrupted` true means the data must be discarded. */
+  function endMeasure() {
+    const r = { id: meas.id, n: meas.n, interrupted: meas.interrupted }
+    meas.on = false
+    setMeasuring(false)
+    return r
+  }
 
   // --- Public surface -------------------------------------------------------------------------
   /** Navigate this tab to `path` on `origin`, carrying the token under a new tab id; waits (bounded) for acks. */
@@ -497,13 +549,14 @@
     hop,
     bar,
     setMeasuring,
+    beginMeasure,
+    endMeasure,
+    measure: () => ({ on: meas.on, id: meas.id, n: meas.n, interrupted: meas.interrupted }),
     rafStats,
     rafReset,
     envFacts,
     /** Call from a user gesture (the runner's Start tap): remembers the wish and requests the lock. */
     start() {
-      wakeWanted = true
-      set('wl', '1')
       return wakeRequest('start')
     },
     wakeRequest,
@@ -533,5 +586,4 @@
     }),
   }
   connect()
-  if (wakeWanted) addEventListener('load', () => wakeRequest('load'))
 })()

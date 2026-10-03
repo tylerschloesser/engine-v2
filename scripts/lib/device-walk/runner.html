@@ -28,14 +28,20 @@
 
   <section id="idle" hidden>
     <div class="card">
-      <h2>Before you start (self-test, about 7 minutes)</h2>
-      <ul>
-        <li>Settings, Display &amp; Brightness, Auto-Lock: <b>30 seconds</b>. The test shows the page keeps the screen awake by itself.</li>
+      <h2>Before you start (self-test, about 8 minutes)</h2>
+      <ol>
+        <li><b>Set Auto-Lock to Never for this round</b> (Settings, Display &amp; Brightness, Auto-Lock) and set it back afterwards. A web page cannot keep an iPhone awake across page loads; this setting does.</li>
         <li>Low Power Mode <b>off</b>.</li>
         <li>Stay in Safari, on this tab. After Start, touch the screen only when asked.</li>
-      </ul>
+      </ol>
+      <button type="button" id="autolock">Done: Auto-Lock is Never</button>
     </div>
-    <button type="button" id="start">Start</button>
+    <div class="card" id="probebox" hidden>
+      <b>Idle check</b>
+      <div id="probemsg">Leave the phone alone for <span id="probesecs">30</span> s. Do not touch it or leave this page.</div>
+      <button type="button" id="probe">Start the idle check</button>
+    </div>
+    <button type="button" id="start" hidden disabled>Start</button>
   </section>
 
   <section id="run" hidden>
@@ -75,13 +81,52 @@
 
   A.on('step', (s) => { cur = s; drive(s) })
 
+  $('autolock').onclick = () => {
+    $('autolock').disabled = true
+    $('probebox').hidden = false
+  }
+  // The idle probe: the agent cannot read Auto-Lock, so it proves it. No tap for probeMs and the page
+  // never goes hidden. A lock or a leave fails the probe; the message shows on return and it repeats.
+  let probing = false
+  let probeHidden = false
+  document.addEventListener('visibilitychange', () => {
+    if (probing && document.hidden) probeHidden = true
+    if (!document.hidden && probeHidden && !probing) $('probemsg').textContent = 'The screen locked or you left the page: set Auto-Lock to Never, then run the idle check again.'
+  })
+  $('probe').onclick = () => {
+    const ms = (cur && cur.params && cur.params.probeMs) || 30000
+    probing = true
+    probeHidden = false
+    $('probe').disabled = true
+    const t0 = Date.now()
+    const iv = setInterval(() => {
+      const left = ms - (Date.now() - t0)
+      $('probemsg').textContent = `Leave the phone alone: ${Math.max(0, Math.ceil(left / 1000))} s left.`
+      if (left > 0 && !probeHidden) return
+      clearInterval(iv)
+      probing = false
+      const ok = !probeHidden
+      A.send('selftest', { phase: 'preflight', ok, ms, elapsed: Date.now() - t0 })
+      if (ok) {
+        $('probemsg').textContent = 'Idle check passed.'
+        $('probe').hidden = true
+        $('start').hidden = false
+        $('start').disabled = false
+      } else {
+        $('probe').disabled = false
+        $('probe').textContent = 'Run the idle check again'
+        if (!document.hidden) $('probemsg').textContent = 'The screen locked or you left the page: set Auto-Lock to Never, then run the idle check again.'
+      }
+    }, 250)
+  }
   $('start').onclick = async () => {
     $('start').disabled = true
-    await A.start() // the gesture: wake lock, and the wish to keep it
+    await A.start() // the gesture: best-effort wake lock
     const ack = await A.sendAndWait('selftest', { phase: 'start', origin: location.origin })
     if (!ack) { status('The Mac did not answer; tap Start again.'); $('start').disabled = false }
   }
   $('tap').onclick = () => {
+    A.wakeRequest('tap')
     tapN++
     sessionStorage.setItem(TAPS, String(tapN))
     $('taps').textContent = String(tapN)
@@ -114,7 +159,6 @@
         return
       }
       status(`On ${location.host}`)
-      await A.wakeRequest('hop')
       const ack = await A.sendAndWait('selftest', { phase: 'hop-arrive', origin: location.origin, wake: A.wake.state })
       if (!ack) hopKey = ''
       return
@@ -131,7 +175,7 @@
     if (!s?.holdStartedAt) return
     const el = A.serverNow() - s.holdStartedAt
     $('timer').textContent = `${mmss(el)} / ${mmss(s.params.holdMs)}`
-    $('wake').textContent = `wake lock: ${A.wake.state} (released ${A.wake.releases}x), screen untouched`
+    $('wake').textContent = `screen untouched (best-effort wake lock: ${A.wake.state})`
     status(`Holding the screen awake (${A.state().connected ? 'linked' : 'link down'})`)
     if (s.phase === 'hold' && !s.dropBeginAt && !dropping && el >= s.params.dropAtMs) {
       dropping = true
