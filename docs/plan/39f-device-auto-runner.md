@@ -142,11 +142,11 @@ Of the 25 `auto` rows, 11 ask Tyler to act (rotate, leave the app, a drop, a Pri
 
 **What leaves the machine.** Nothing beyond what M39e already approved (Q7): the Cloudflare quick tunnel carries the pages and the agent's traffic (UA, screen, adapter, readings) over TLS through Cloudflare's edge. The phone API is reachable from the internet to anyone with the tunnel hostname, so: run token required on every request and socket, Origin/Host checks, a **separate listener from the Mac UI**, and the phone API can only append readings and answer prompts (it cannot read the log, serve repo files or move the cursor except through the step protocol). The agent never reads location, clipboard, contacts, camera, microphone, cookies of other sites, or anything outside the page. Raw series stay in untracked `test-results/`; the committed log holds aggregates, the UA string and the adapter string (no IP, no identifiers).
 
-### For Tyler
-1. **Hitch proxy:** accept a numeric rAF-gap proxy in place of "no visible hitch", with a judge prompt only when borderline (recommended), or always ask?
-2. **Bot partner:** let M34's two-device items use a Playwright Chromium on the Mac as the second player (the phone is the device under test; M39-two-devices and sign-off stay with a real second device), or keep the real Mac Chrome?
-3. **Retire M35-capability** from the device list (the automated `capability.spec.ts` covers it; here it is run again in headless Chromium)? And **M38 on Fly stays human** because the Fly origin cannot be instrumented without putting a script hook in the production static handler: confirm that is fine.
-4. **Committed device facts:** the round log would include the UA string and adapter string (no IP). OK to commit, or keep them in `test-results/` only? Also the iOS field: Safari's UA reports a frozen OS version, so the runner offers a one-tap iOS and model picker once, prefilled from the `Version/` token and screen size (no model API exists).
+### Tyler's answers (2026-10-03)
+1. **Hitch proxy:** numeric rAF-gap proxy; a judge prompt only when borderline.
+2. **Bot partner:** yes. A headless Chromium on the Mac is player 2 for M34's two-device items; M39-two-devices and the sign-off keep a real second device.
+3. **M35-capability retired** from the device list (covered by `capability.spec.ts`); **M38 on Fly stays human** (no script hook in the production static handler).
+4. **Device facts committed:** the round log and **Run on** lines carry the UA and adapter strings (no IP); iOS version and model come from the one-tap picker.
 
 ### Risks
 - **Wake lock and Auto-Lock (riskiest).** The 10 min items (M16-coexist, M29-net-heap, M39-large-save) and every foreground measurement die if the screen locks. iOS Safari supports the Screen Wake Lock API (16.4+) but releases it on any page hide and on navigation, and its behaviour in a plain tab after a script-driven navigation is untested here. Retire it first: the `M39f-selftest` step of delegation 1 holds the lock 6 min with Auto-Lock at 30 s, after two origin hops; fallback is the pre-flight "Auto-Lock: Never" plus the no-sleep looping-video trick. Delegation 2 does not start on a red result.
