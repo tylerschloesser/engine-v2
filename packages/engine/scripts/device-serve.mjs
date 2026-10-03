@@ -191,6 +191,9 @@ await new Promise((resolve, reject) => {
 // The bench build is the production page alone, so only `index.html` exists in `dist-bench/`.
 const pages = bench ? ['index.html'] : htmlPages(pagesDir)
 console.log(`pages: ${pages.join(', ')}`)
+// Machine-readable lines for `pnpm device:walk` (M39e): the loopback origin, then (with --tunnel) the
+// tunnel origin once cloudflared prints it.
+console.log(`DEVICE_SERVE_URL=http://127.0.0.1:${port}`)
 
 let cloudflared
 if (tunnel) {
@@ -207,6 +210,7 @@ if (tunnel) {
     const match = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/.exec(text)
     if (match && !printed.has(match[0])) {
       printed.add(match[0])
+      console.log(`DEVICE_SERVE_TUNNEL_URL=${match[0]}`)
       for (const page of pages) console.log(`${match[0]}/${page}`)
     }
   }
