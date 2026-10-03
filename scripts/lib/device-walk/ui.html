@@ -133,11 +133,11 @@ function renderMain() {
   $('main').innerHTML =
     (done ? `<div class="done">All ${S.total} items have a result. Next: <code>pnpm device:walk --apply ${esc(S.round)} --dry-run</code>, then without <code>--dry-run</code>.</div>` : '') +
     `<h1>${esc(it.id)}<small>${esc(it.section)} · ${esc(it.heading)}</small></h1>` +
+    `<div id="pageblock"></div>` +
     (it.lead ? `<div class="block">${md(it.lead)}</div>` : '') +
     (it.steps ? `<div class="block"><h3>Steps</h3>${md(it.steps)}</div>` : '') +
     (it.pass ? `<div class="block"><h3>Pass</h3>${md(it.pass)}</div>` : '') +
     (it.ifFails ? `<div class="block"><h3>If it fails</h3>${md(it.ifFails)}</div>` : '') +
-    `<div id="pageblock"></div>` +
     `<div class="res">${RES.map(([v, label, cls, k]) => `<button class="btn ${cls} ${it.result === v ? 'on' : ''}" onclick="setResult(${esc(JSON.stringify(v))})">${label} <span class="keys">${k}</span></button>`).join('')}${it.result ? '<button class="btn" onclick="redo()">Redo (reopen)</button>' : ''}</div>` +
     `<label for="notes">Notes</label><textarea id="notes" rows="3">${esc(d.notes)}</textarea>` +
     `<label for="numbers">Numbers asked for by the item (HUD readings, ms, MiB)</label><textarea id="numbers" rows="2">${esc(d.numbers)}</textarea>` +

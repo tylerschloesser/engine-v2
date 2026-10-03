@@ -108,10 +108,8 @@ async function main() {
   const printed = new Set()
   const control = createServerControl({
     spawnServe,
-    probe: async (url) => {
-      const r = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(5000) })
-      return r.status < 500
-    },
+    // No reachability probe: this Mac often cannot resolve a fresh trycloudflare name for a minute
+    // while the phone can, so a probe only delayed `ready`. The UI says to reload if Safari can't find it.
     onChange: (st) => {
       if (!appRef || st.status !== 'ready') return
       const s = appRef.state()
