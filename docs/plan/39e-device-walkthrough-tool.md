@@ -1,6 +1,6 @@
 # M39e: Device walkthrough tool
 
-Status: not started · After: 39d · Tyler-dependent: no (Tyler uses it in M39's device run)
+Status: done (2026-10-03) · After: 39d · Tyler-dependent: no (Tyler uses it in M39's device run)
 
 ## Goal
 Tyler asked for this on 2026-10-03: "The device checks are honestly really complicated, even with a dedicated page. Running through all the tests across various devices and recording results is tedious and error prone." Build a simple, **local-only** tool that walks Tyler through a round of manual checks one item at a time and records the results. It **shows a QR code automatically** for the page the current item needs, which means it runs the serving commands itself (today Tyler runs `pnpm device:serve …` by hand, copies the tunnel URL and types it into the phone). Tyler can go back, redo an item or change a result without losing anything. The same tool serves **future rounds** of manual testing, not just M39. And the orchestrating session can start a round and read its results through a documented interface, or hand that to a sub-agent.
@@ -47,11 +47,11 @@ Automating any check itself; anything that needs the phone to run something besi
 `unit`: parsing the real `device-checks.md` (every non-Android id found, with its section and serving variant); round log replay (redo, back, a changed result keeps history, resume after a truncated last line); `--apply` on a fixture copy (ticks, **Run on** lines, Android never ticked, idempotent on a second run, dry-run writes nothing); server control with a fake `device:serve` child (URL captured, a reused variant is not restarted, a switch kills the old child, exit kills all). Each test inject-fail-reverted.
 
 ## Exit criteria
-- [ ] `pnpm device:walk --round demo --only M03` opens the UI, starts the right server and shows a QR code for the page URL. Evidence: a `playwright-cli` or Playwright screenshot of the UI and the QR decoded back to the URL (a decoder in the test, or `zbarimg` if present).
-- [ ] Killing the tool leaves no `vite preview`/`cloudflared` child (`pgrep` before and after, pasted).
-- [ ] Redo/back/resume and `--apply` behave as the tests above; `pnpm acceptance:check` still runs after an apply on a scratch copy.
-- [ ] The skill, the `CLAUDE.md` map line and the `device-checks.md` header line exist.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `pnpm device:walk --round demo --only M03` opens the UI, starts the right server and shows a QR code for the page URL. Evidence: a `playwright-cli` or Playwright screenshot of the UI and the QR decoded back to the URL (a decoder in the test, or `zbarimg` if present).
+- [x] Killing the tool leaves no `vite preview`/`cloudflared` child (`pgrep` before and after, pasted).
+- [x] Redo/back/resume and `--apply` behave as the tests above; `pnpm acceptance:check` still runs after an apply on a scratch copy.
+- [x] The skill, the `CLAUDE.md` map line and the `device-checks.md` header line exist.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm device:walk --round demo --only M03` · `pnpm device:walk --status demo --json` · `pnpm device:walk --apply demo --dry-run` · `pnpm test unit -t device-walk` · `pnpm lint`
@@ -88,3 +88,7 @@ None (Tyler's first real use is M39's run).
 - **Measured:** the real demo run reached `ready` in about 25 s (build, preview, tunnel). QR for a tunnel URL is version 4 or 5; capacity is 213 bytes.
 - **Decoded QR (demo, from the screenshot of the `<img>`):** `https://chef-causing-examine-engaging.trycloudflare.com/determinism.html`. Screenshots (outside the repo): `/private/tmp/claude-501/shots/walk-ui2.png`, `/private/tmp/claude-501/shots/walk-qr.png`.
 - **Not verified:** the walk UI on the iPhone (Tyler's first use); desktop Safari and Firefox rendering of the page (Chromium only); `--apply` against a real device-checks.md beyond the dry run and the scratch-copy tests; `pnpm test`/`pnpm lint` in full (orchestrator is the gate). `pnpm acceptance:check` on the real repo exits 1 on its existing "not ticked" rows (no device run yet), which is unchanged by this work.
+
+### Orchestrator gate (M39e)
+
+`pnpm test && pnpm lint` green (unit 399; `browser` read 54 s once at load ~16, 45 s on the re-run; M39e touches no browser code). Screenshot reviewed (item position, server state, QR, URL, Copy). The QR decoded to the tunnel URL in the implementer's run. The three `device:serve --tunnel` processes `pgrep` still showed belong to a `pnpm device:serve --tunnel` started at 08:15 outside the tool (left alone). Cosmetic, not blocking: the steps block of an item can begin with the item line's trailing ADR reference ("(`0002`)."). Not verified on the iPhone or in desktop Safari/Firefox: Tyler's first round is the check.
