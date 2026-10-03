@@ -88,7 +88,7 @@ export function compatible(have, want) {
 /** The origin and full URL list an item should show given a running server's URLs. */
 export function pageUrl(s, urls, page) {
   if (s.device === 'none') return null
-  const origin = s.fly ? FLY_URL : s.device === 'mac' ? urls?.loopback : urls?.tunnel
+  const origin = s.fly ? FLY_URL : s.tunnel ? urls?.tunnel : urls?.loopback
   if (!origin) return null
   return `${origin}/${page}`
 }
