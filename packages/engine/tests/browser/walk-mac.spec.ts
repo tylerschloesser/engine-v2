@@ -35,7 +35,7 @@ test('walk-mac: five Mac rows walked in tabs the service opens: pinch, M17b in t
       (async () => {
         const b =
           browser === 'firefox'
-            ? await firefox.launch({ channel: undefined })
+            ? await firefox.launch({ channel: undefined } as never) // the chromium project's `channel` is not Firefox's
             : isWebkit
               ? await webkit.launch()
               : await chromium.launch({ channel: 'chromium', args: ['--enable-unsafe-webgpu'] })

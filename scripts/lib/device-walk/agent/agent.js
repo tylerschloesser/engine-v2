@@ -418,6 +418,7 @@
     }
     if (document.visibilityState !== 'visible') return wake.state
     wake.requests++
+    report('wake', { event: 'requested', reason }) // logged before the answer a tap sends; the outcome follows
     try {
       const s = await navigator.wakeLock.request('screen')
       wake.granted++
@@ -545,7 +546,7 @@
     const u = new URL(path, origin)
     u.searchParams.set('walk', id.token)
     u.searchParams.set('run', id.run)
-    u.searchParams.set('tab', `${id.tab.split('-')[0]}-${Math.random().toString(36).slice(2, 5)}`)
+    u.searchParams.set('tab', `${id.tab.split('-')[0]}-x${Math.random().toString(36).slice(2, 4)}`)
     for (const [k, v] of Object.entries(extra || {})) u.searchParams.set(k, v)
     location.href = u.href
   }

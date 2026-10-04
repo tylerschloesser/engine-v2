@@ -349,3 +349,44 @@ test('device-walk track: fullStatus of a round with no live record is stalled, n
   })
   expect(s).toMatchObject({ mode: 'auto', state: 'stalled', joinUrl: null, humanPending: [] })
 })
+
+// The demonstration's last step: acceptance:check against an applied scratch copy of the checklist.
+test('device-walk track: acceptance-check reads the device ticks from another copy of device-checks.md', async () => {
+  const { checkAcceptance } = await import('../acceptance-check.mjs')
+  const root = mkdtempSync(join(tmpdir(), 'dwt-acc-'))
+  mkdirSync(join(root, 'docs/plan/acceptance'), { recursive: true })
+  writeFileSync(
+    join(root, 'docs/plan/device-checks.md'),
+    '- [ ] **M03-determinism** text\n- [ ] **M08-x** text\n',
+  )
+  writeFileSync(
+    join(root, 'docs/plan/acceptance/unit-a.md'),
+    '| # | Item | Evidence | Status |\n|---|---|---|---|\n| R1 | one | device: M03-determinism | device |\n| R2 | two | device: M08-x | device |\n',
+  )
+  const applied = join(root, 'applied.md')
+  writeFileSync(applied, '- [x] **M03-determinism** text\n- [ ] **M08-x** text\n')
+  expect(checkAcceptance({ root }).problems).toHaveLength(2)
+  const problems = checkAcceptance({ root, deviceChecks: applied }).problems
+  expect(problems).toHaveLength(1)
+  expect(problems[0]).toMatch(/M08-x is not ticked/)
+})
+
+// Found by the demonstration: an item wrapped over several lines had `line` of its last line, so `--apply`
+// "ticked" a continuation line (a no-op) and the item stayed unticked.
+test('device-walk track: every item line is its checkbox line, and apply ticks a wrapped item (M23-opfs-latency)', async () => {
+  const { applyRound } = await import('./device-walk/apply.mjs')
+  const { replay } = await import('./device-walk/rounds.mjs')
+  const lines = readFileSync(REAL, 'utf8').split('\n')
+  for (const it of items)
+    expect(lines[it.line - 1], it.id).toMatch(new RegExp(`^- \\[[ xX]\\] \\*\\*${it.id}\\*\\*`))
+  const file = join(mkdtempSync(join(tmpdir(), 'dwt-')), 'r.jsonl')
+  appendEvent(file, { type: 'result', id: 'M23-opfs-latency', result: 'pass', by: 'auto' })
+  const walked = items.filter((i) => i.id === 'M23-opfs-latency')
+  const { text, changes } = applyRound(
+    readFileSync(REAL, 'utf8'),
+    replay(readEvents(file), walked),
+    { round: 'r', overrides: {} },
+  )
+  expect(changes).toContain('tick M23-opfs-latency')
+  expect(text).toMatch(/^- \[x\] \*\*M23-opfs-latency\*\*/m)
+})

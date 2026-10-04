@@ -398,7 +398,7 @@ const STATUS_NA = /^not applicable \(.+\)$/
  * Check every table. Returns `{ problems: string[], rows, files }`; `problems` are
  * `file:line  reason` lines.
  */
-export function checkAcceptance({ root = REPO, lister = null } = {}) {
+export function checkAcceptance({ root = REPO, lister = null, deviceChecks = null } = {}) {
   const dir = join(root, 'docs', 'plan', 'acceptance')
   const problems = []
   const files = readdirSync(dir)
@@ -406,7 +406,10 @@ export function checkAcceptance({ root = REPO, lister = null } = {}) {
     .sort()
   let devices = { all: new Set(), ticked: new Set() }
   try {
-    devices = readDeviceChecks(readFileSync(join(root, 'docs', 'plan', 'device-checks.md'), 'utf8'))
+    // `deviceChecks`: another copy of the checklist (the device-round demonstration's applied scratch copy).
+    devices = readDeviceChecks(
+      readFileSync(deviceChecks ?? join(root, 'docs', 'plan', 'device-checks.md'), 'utf8'),
+    )
   } catch {
     problems.push('docs/plan/device-checks.md:1  cannot read the device checklist')
   }
@@ -493,7 +496,11 @@ export function checkAcceptance({ root = REPO, lister = null } = {}) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const { problems, rows, files } = checkAcceptance({ lister: createRunnerLister(REPO) })
+  const at = process.argv.indexOf('--device-checks')
+  const { problems, rows, files } = checkAcceptance({
+    lister: createRunnerLister(REPO),
+    deviceChecks: at > 0 ? process.argv[at + 1] : null,
+  })
   if (problems.length > 0) {
     for (const p of problems) console.log(p)
     process.exit(1)

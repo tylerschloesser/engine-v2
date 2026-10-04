@@ -67,12 +67,16 @@
   let running = ''
   let judged = ''
 
+  const isHelperTab = () => /-h[a-z0-9]{2,3}$/.test(A.id.tab)
+
   /** Is this document the page of `item` (origin, path, and exactly its own query parameters)? */
   function here(item) {
     if (!item.origin || location.origin !== item.origin) return false
     const [path, query = ''] = item.page.split('#')[0].split('?') // `#k=` (an invite) is the page's own
     if (location.pathname !== `/${path}`) return false
-    const tol = new Set(item.plan.tolerate || []) // knobs a helper tab's link may carry or change
+    // Knobs a helper tab's link may carry or change (`-h...` tab ids: `linkFor`). The first tab is strict: the
+    // page of the previous check (same path, another `world=`) is not the page of this one.
+    const tol = new Set(isHelperTab() ? item.plan.tolerate || [] : [])
     const want = [...new URLSearchParams(query)].filter(([k]) => !tol.has(k))
     const have = new URLSearchParams(location.search)
     have.delete('_walk') // the cache-buster of a fresh attempt (below)
@@ -274,6 +278,10 @@
 
   async function go(item) {
     const key = `${item.id}:${item.n}`
+    // A helper tab (a second tab, a Private tab, the imported world: opened with a `-h...` tab id) did its part
+    // of one check: it takes no further step. Left open, it would walk the next check beside the first tab. The
+    // first tab never does (a first tab in a Private window measures itself, and walks on).
+    if (get('helper') && isHelperTab()) return
     if (running === key || navigating) return
     if (!here(item)) {
       navigating = true
@@ -287,7 +295,7 @@
       // Embedder-Policy", seen on the second `worldgen-bench.html` load); a plain navigation does not.
       navigating = true
       const u = new URL(location.href)
-      u.searchParams.set('_walk', String(item.n))
+      u.searchParams.set('_walk', `${item.n}-${Date.now().toString(36)}`) // unique: `n` restarts at 1 for every check, and the same URL again is no navigation at all
       return location.assign(u.href)
     }
     if (get('helper') === key) return // a second tab of this attempt that already did its part
@@ -342,7 +350,7 @@
 
   function onStep(s) {
     if (!s || s.kind !== 'walk') return
-    if (get('helper')) return // a helper tab (second tab, Private tab) stays out of the walk once done
+    if (get('helper') && isHelperTab()) return // a helper tab (second tab, Private tab) stays out of the walk once done
     if (judged && s.phase !== 'judge') {
       judged = ''
       A.bar.hide()

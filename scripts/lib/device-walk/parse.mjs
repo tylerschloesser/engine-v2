@@ -55,6 +55,7 @@ export function parseChecks(text) {
     }
     const b = /^- \[([ xX])\] (\*\*([^*]+)\*\*.*)$/.exec(line)
     if (!b) continue
+    const first = i + 1 // the line of the checkbox, before the wrapped continuation lines are consumed
     let raw = b[2]
     while (i + 1 < lines.length && /^ {2,}\S/.test(lines[i + 1])) raw += ` ${lines[++i].trim()}`
     const id = b[3]
@@ -62,7 +63,7 @@ export function parseChecks(text) {
       id,
       section,
       heading: cur.heading,
-      line: i + 1,
+      line: first,
       ticked: b[1] !== ' ',
       android: /-android$/.test(id),
       raw,
