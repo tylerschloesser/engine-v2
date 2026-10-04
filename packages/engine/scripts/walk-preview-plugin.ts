@@ -25,6 +25,36 @@ export function injectWalkTag(html: string): string {
   return html.slice(0, at) + WALK_TAG + html.slice(at)
 }
 
+/**
+ * Every `vite preview` of either app (with or without `--walk`): the config's `preview.headers`
+ * (COOP/COEP) and `Cache-Control: no-store` on **every** response, set before the file server runs.
+ * `vite preview` answers a revalidation with a bare 304 that lacks COOP/COEP, and WebKit then refuses the
+ * worker script of a page it loads a second time ("Worker load was blocked by Cross-Origin-Embedder-
+ * Policy"; found by `walk-auto` on `worldgen-bench.html`, reproduced by a plain `page.reload()`). iOS
+ * Safari likely does the same on a plain `pnpm device:serve`. `no-store` means a browser has nothing to
+ * revalidate; the headers on the response also cover a 304 a client asks for anyway. Serve time only
+ * (`apply: 'serve'`, preview hook): a built bundle is untouched.
+ */
+export function previewHeaders(): Plugin[] {
+  return [
+    {
+      name: 'engine-preview-headers',
+      apply: 'serve',
+      configurePreviewServer(server) {
+        const headers = server.config.preview.headers ?? {}
+        server.middlewares.use((_req, res, next) => {
+          for (const [k, v] of Object.entries(headers)) res.setHeader(k, v as string)
+          res.setHeader('cache-control', 'no-store')
+          next()
+        })
+      },
+    },
+  ]
+}
+
+/** What both Vite configs add: the headers for every serve, plus the walk agent injection under `--walk`. */
+export const servePreview = (): Plugin[] => [...previewHeaders(), ...walkPreview()]
+
 export function walkPreview(port: string | undefined = process.env.ENGINE_WALK_PORT): Plugin[] {
   if (!port) return []
   return [
@@ -35,10 +65,6 @@ export function walkPreview(port: string | undefined = process.env.ENGINE_WALK_P
         const outDir = resolve(server.config.root, server.config.build.outDir)
         const headers = server.config.preview.headers ?? {}
         server.middlewares.use((req, res, next) => {
-          // Every response, not only pages: `vite preview` answers a revalidation with a bare 304 that
-          // lacks COOP/COEP, and WebKit then refuses the worker script of a page it loads a second time
-          // ("blocked by Cross-Origin-Embedder-Policy"; found by `walk-auto` on `worldgen-bench.html`).
-          // `no-store` means there is nothing to revalidate; the headers go on before the file server runs.
           for (const [k, v] of Object.entries(headers)) res.setHeader(k, v as string)
           res.setHeader('cache-control', 'no-store')
           const raw = (req.url ?? '/').split('?')[0] ?? '/'

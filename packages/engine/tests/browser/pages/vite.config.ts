@@ -5,7 +5,7 @@
 import { readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
-import { walkPreview, walkProxy } from '../../../scripts/walk-preview-plugin.ts'
+import { servePreview, walkProxy } from '../../../scripts/walk-preview-plugin.ts'
 import { engine } from '../../../src/vite.ts'
 import { fixturesPlugin } from './fixtures-plugin.ts'
 
@@ -31,8 +31,9 @@ export default defineConfig({
   plugins: [
     engine({ crate: '../../../fixtures/hash', profile: 'dev' }),
     fixturesPlugin(),
-    // `pnpm device:walk`: only under `vite preview` with `ENGINE_WALK_PORT` set (no-op otherwise).
-    ...walkPreview(),
+    // `vite preview` only: COOP/COEP + no-store on every response (a bare 304 lacks them), and under
+    // `pnpm device:walk` (`ENGINE_WALK_PORT`) the agent tag. Never in `vite build` output.
+    ...servePreview(),
   ],
   build: {
     target: 'es2022',

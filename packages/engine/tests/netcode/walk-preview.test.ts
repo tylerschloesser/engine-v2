@@ -49,6 +49,19 @@ afterEach(async () => {
   for (const a of apis.splice(0)) await a.close()
 })
 
+const referenceDir = join(root, 'games/reference')
+
+/** `vite preview` of `games/reference` (its own config, release output), no walk port. */
+function previewReference(port: number): ChildProcess {
+  const child = spawn(process.execPath, [viteBin, 'preview', '--host', '127.0.0.1'], {
+    cwd: referenceDir,
+    stdio: 'ignore',
+    env: { ...process.env, ENGINE_TEST_PORT: String(port), ENGINE_WALK_PORT: '' },
+  })
+  children.push(child)
+  return child
+}
+
 function preview(port: number, walkPort?: number): ChildProcess {
   const child = spawn(
     process.execPath,
@@ -67,10 +80,10 @@ function preview(port: number, walkPort?: number): ChildProcess {
   return child
 }
 
-async function up(port: number): Promise<void> {
+async function up(port: number, path = '/determinism.html'): Promise<void> {
   for (let i = 0; i < 150; i++) {
     try {
-      if ((await fetch(`http://127.0.0.1:${port}/determinism.html`)).ok) return
+      if ((await fetch(`http://127.0.0.1:${port}${path}`)).ok) return
     } catch {
       // not listening yet
     }
@@ -174,3 +187,31 @@ test('walk-preview: no release build output contains the agent, its tag or the /
   for (const d of dirs)
     for (const f of textFiles(d)) expect(readFileSync(f, 'utf8'), f).not.toContain('__walk')
 })
+
+// The bare 304 of `vite preview` lacked COOP/COEP, and WebKit then refused the worker of a page loaded a
+// second time (found by walk-auto; the browser spec `preview-revalidation` is the WebKit proof). The fix is
+// every serve, so both apps, and neither is started with a walk port here.
+test('walk-preview: a revalidation (304) keeps COOP/COEP and every response is no-store, in both apps, without --walk', async () => {
+  expect(existsSync(join(root, 'games/reference/dist/index.html')), 'run pnpm test').toBe(true)
+  const [portF, portR] = [14393, 14394]
+  preview(portF)
+  previewReference(portR)
+  await Promise.all([up(portF), up(portR, '/')])
+  for (const [base, path] of [
+    [`http://127.0.0.1:${portF}`, '/determinism.html'],
+    [`http://127.0.0.1:${portR}`, '/index.html'],
+  ] as const) {
+    const first = await fetch(base + path)
+    const etag = first.headers.get('etag')
+    expect(etag, `${base} sends an ETag to revalidate against`).toBeTruthy()
+    const again = await fetch(base + path, { headers: { 'if-none-match': etag as string } })
+    expect([base, again.status]).toEqual([base, 304])
+    for (const r of [first, again]) {
+      expect(r.headers.get('cross-origin-opener-policy'), `${base} ${r.status}`).toBe('same-origin')
+      expect(r.headers.get('cross-origin-embedder-policy'), `${base} ${r.status}`).toBe(
+        'require-corp',
+      )
+      expect(r.headers.get('cache-control'), `${base} ${r.status}`).toBe('no-store')
+    }
+  }
+}, 60_000)

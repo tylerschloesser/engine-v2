@@ -3,7 +3,7 @@
 import { fileURLToPath } from 'node:url'
 import { engine } from 'engine/vite'
 import { defineConfig } from 'vite'
-import { walkPreview, walkProxy } from '../../packages/engine/scripts/walk-preview-plugin.ts'
+import { servePreview, walkProxy } from '../../packages/engine/scripts/walk-preview-plugin.ts'
 
 // docs/plan/29-net-worker-and-reference-server.md Scope: `pnpm device:serve --app reference`
 // serves this app (instead of the fixture app) on the same port/tunnel/proxy shape `packages/
@@ -56,8 +56,9 @@ function config(bench: boolean) {
         bindings: { dir: '../src/bindings' },
         ...(bench ? { features: ['bench'] } : {}),
       }),
-      // `pnpm device:walk` (M39f): `vite preview` with `ENGINE_WALK_PORT` only; `[]` otherwise.
-      ...walkPreview(),
+      // `vite preview` only: COOP/COEP + no-store on every response (a bare 304 lacks them), and under
+      // `pnpm device:walk` (`ENGINE_WALK_PORT`) the agent tag. Never in `vite build` output.
+      ...servePreview(),
     ],
     // Three entries: `index.html` (production), `test.html` (step 0: `ClientOptions.test` and every
     // diagnostic `window.__*` hook), `gc.html` (step 6's own zero-allocation exit criterion: a
