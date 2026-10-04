@@ -1,6 +1,6 @@
 # M39f: Device auto-runner (one QR, the phone walks the round)
 
-Status: not started · After: 39e · Tyler-dependent: partly (Tyler answered the four decisions on 2026-10-03; delegation 1 ends with a wake-lock self-test Tyler runs on the iPhone)
+Status: done (2026-10-04; real-iPhone use is M39's round) · After: 39e · Tyler-dependent: partly (decisions answered 2026-10-03; self-test passed on the iPhone)
 
 ## Goal
 Tyler, 2026-10-03, after trying M39e: "Ok this is a good start. But now you're asking me to record a ton of information that honestly you should be able to get from the device/browser automatically. Extend to build a data collection service. Further, I feel like you could just instrument an entire test run in a single page. Like, I scan a QR code, and you do all of the rest. Either via a script on the phone, or via websockets remotely or something like that."
@@ -165,14 +165,14 @@ Delegations 1 to 5 in order; steps 1 to 15 as above. The phone self-test (Tyler 
 `unit` (each inject-fail-reverted): envelope dedupe and `src` rebuild after restart; replay of the new events with an old reader; interrupted-attempt and resume state machine; two-listener separation (the phone API refuses `/api/*`, a request without the token or with a foreign Origin is refused); the `checks.mjs` drift test (ids both ways, Pass-text hash); criteria evaluation (limits at, above and below); drop-choreographer timing (+-30% window, repeat); `--wait` exit codes; `--status --json` shape. `browser` (Playwright Chromium and WebKit, fixture app with the agent injected, no real tunnel): the agent reports `env` and survives a navigation; outbox flush after the socket is cut; the `requestDevice` wrapper sees a forced `uncapturederror` and `device.lost`; the walk bar is absent in a measuring window. A `check-absent` spec beside `bench-absent.spec.ts`: no `window.__check`, `__walk` or agent string in `games/reference/dist/`, and none in the page served without `--walk`.
 
 ## Exit criteria
-- [ ] `pnpm device:walk --auto --round demo --only M03,M08,M11-boot,M16-round-trip,M23-opfs,M23-hidden-pause --no-open` completes with a Playwright WebKit page in iPhone emulation as the phone, no human input, every row recorded with `by: auto`; evidence: `--status demo --json` pasted, the round log, the `test-results/device-walk/demo/` series.
-- [ ] A scripted run that kills the page mid-attempt and cuts the socket for 20 s resumes and finishes with no duplicate `result` rows (the log shows `interrupted` then `attempt 2`).
-- [ ] The release `games/reference/dist/` carries none of the agent or reporter (`check-absent`).
-- [ ] The `checks.mjs` drift test covers all 45 rows and fails when a Pass line is edited.
-- [ ] `--status --json` shows `state`, `joinUrl`, `phone.lastSeen`, per-item `by`, `criteria`, `attempts`, `evidence`; `--wait` returns the final state.
-- [ ] `pgrep` after Ctrl-C shows no `vite preview`, `cloudflared`, `reference-server` or Playwright child (as M39e).
-- [ ] Tyler's single-scan self-test run is recorded in `device-checks.md`'s header section: wake lock held 6 min, two-origin hop, 20 s drop and recovery.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] `pnpm device:walk --auto --round demo --only M03,M08,M11-boot,M16-round-trip,M23-opfs,M23-hidden-pause --no-open` completes with a Playwright WebKit page in iPhone emulation as the phone, no human input, every row recorded with `by: auto`; evidence: `--status demo --json` pasted, the round log, the `test-results/device-walk/demo/` series.
+- [x] A scripted run that kills the page mid-attempt and cuts the socket for 20 s resumes and finishes with no duplicate `result` rows (the log shows `interrupted` then `attempt 2`).
+- [x] The release `games/reference/dist/` carries none of the agent or reporter (`check-absent`).
+- [x] The `checks.mjs` drift test covers all 45 rows and fails when a Pass line is edited.
+- [x] `--status --json` shows `state`, `joinUrl`, `phone.lastSeen`, per-item `by`, `criteria`, `attempts`, `evidence`; `--wait` returns the final state.
+- [x] `pgrep` after Ctrl-C shows no `vite preview`, `cloudflared`, `reference-server` or Playwright child (as M39e).
+- [x] Tyler's single-scan self-test run is recorded in `device-checks.md`'s header section: wake lock held 6 min, two-origin hop, 20 s drop and recovery.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm device:walk --auto --round demo --only M03 --no-open` · `pnpm device:walk --wait demo --timeout 600` · `pnpm device:walk --status demo --json` · `pnpm test unit -t device-walk` · `pnpm test browser -t walk` · `pnpm lint`
@@ -420,3 +420,7 @@ A real iPhone or a real Safari on any of this; that the release build "plays" (o
 #### Not verified
 
 A real iPhone or a real desktop Safari or Firefox on any of step 13-15; `open -a Safari|Firefox` itself (the demonstration uses `DEVICE_WALK_OPEN`); Firefox with a WebGPU adapter; the monitor page in a browser (the HTTP API is tested); a real tunnel round with the Mac rows; the phone's Pause (advisory); an auto round started with the first tab in a Private window (the driver's guards now let it walk on, untested); the whole set in ONE uninterrupted `device:walk --auto` (run in slices of under 10 minutes; one earlier single run stalled on the two bugs fixed above and ran 40 minutes before its own timeout).
+
+### Orchestrator gate (M39f)
+
+`pnpm test && pnpm lint && pnpm test:slow` green at the record commit (rust 801, unit 505, wasm 172, netcode 146, browser 256 at 43 s; slow browser 154). Delegation 5's two `vite preview` orphans (started 21:21 on 2026-10-03, inside its run, parent 1) were killed at the gate. Rulings: the third test-example swap accepted; the acceptance tables' two `device: M35-capability` citations replaced by `test: browser "reference: capability screen on failure"` (M35-capability is retired); the human rows' "not automated yet" note left as is. The whole-round demo on a scratch copy ticked 32 of 55 and found four runner bugs, all fixed (the worst: `--apply` ticked a wrapped item's continuation line, an M39e defect that would have left M23/M29/M34 unticked). Not verified on a real iPhone beyond the self-test: M39's round is the check. Estimated real round 2.5-3 h (unmeasured).
