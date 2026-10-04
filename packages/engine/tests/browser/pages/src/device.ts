@@ -28,7 +28,7 @@
 // against the *render* viewport (device pixels) -- a different space from the camera's own internal
 // CSS-pixel one (`camera/transform.ts`'s own doc comment), which is why this can't also come from
 // `client.camera.read()`.
-import { pxPerTile } from '../../../../src/camera/transform.ts'
+import { pxPerTile, screenToWorld, worldToScreen } from '../../../../src/camera/transform.ts'
 import type { Client, ClientOptions, RenderOptions } from '../../../../src/client.ts'
 import { clientTestHandle, createClient } from '../../../../src/client.ts'
 import type { Scheduler } from '../../../../src/clock.ts'
@@ -105,6 +105,17 @@ if (params.has('cutoff')) renderOptions.neighbourCutoffPx = Number(params.get('c
 const postModule = params.get('module') !== 'url'
 
 const check = installCheck('device')
+// The last tap and how many there were (M39f: M11-gestures, M18-pick, M18-touch-ghost read them through
+// `__check`; the engine's own `tap` event, so what is compared is what the page was told).
+const tapLog = { n: 0, tileX: 0, tileY: 0, pickId: 0 }
+function countTaps(client: Client): void {
+  client.input.on('tap', (e) => {
+    tapLog.n += 1
+    tapLog.tileX = e.tileX
+    tapLog.tileY = e.tileY
+    tapLog.pickId = e.pickId
+  })
+}
 const wasm = await fixtureWasm('terrain')
 
 /** M09b step 7's own page, unchanged: the fill-rate/lifecycle HUD, gestures now real (M11). */
@@ -198,6 +209,7 @@ async function runFillRateHud(): Promise<void> {
   let workersReady = false
   await client.ready
   workersReady = true
+  countTaps(client)
 
   if (tilesAcross !== undefined) client.cameraState.tilesAcross = tilesAcross
   client.cameraState.centreX = startX
@@ -334,6 +346,9 @@ async function runFillRateHud(): Promise<void> {
       cursor_valid: cam.cursorValid,
       cursor_tile_x: cam.cursorValid ? cam.cursorTileX : null,
       cursor_tile_y: cam.cursorValid ? cam.cursorTileY : null,
+      taps: tapLog.n,
+      tap_tile_x: tapLog.n ? tapLog.tileX : null,
+      tap_tile_y: tapLog.n ? tapLog.tileY : null,
       raf_p50_ms: r3(percentile(raf, 0.5)),
       raf_p95_ms: r3(percentile(raf, 0.95)),
       raf_worst_ms: r3(raf.length ? Math.max(...raf) : 0),
@@ -345,6 +360,23 @@ async function runFillRateHud(): Promise<void> {
       frames: framesRendered,
       steps: [],
     }
+  }
+
+  // The tile the camera puts under a client point: M11-gestures compares the tapped tile against it.
+  check.act = {
+    tileUnder: async (arg) => {
+      const { x = 0, y = 0 } = (arg ?? {}) as { x?: number; y?: number }
+      const r = canvas.getBoundingClientRect()
+      const out = { x: 0, y: 0 }
+      screenToWorld(
+        client.cameraState,
+        { widthPx: canvas.clientWidth, heightPx: canvas.clientHeight },
+        x - r.left,
+        y - r.top,
+        out,
+      )
+      return { tileX: Math.floor(out.x), tileY: Math.floor(out.y) }
+    },
   }
 
   // --- Test hook (canvas.spec.ts: `canvas: presents`, `frame-loop: production runs phases in
@@ -769,6 +801,7 @@ async function runAnchorsCheck(count: number, mode: 'properties' | 'translate'):
   // `fixtures/overlay/src/lib.rs`'s own grid). `count` is honoured only for a smaller manual check;
   // the fixture's own `extract()` always draws the full 50 regardless (a smaller `count` here just
   // mounts fewer buttons over the same fixed ring field).
+  const ringButtons: { pickId: number; el: HTMLButtonElement; wx: number; wy: number }[] = []
   for (let i = 0; i < Math.min(count, RING_COUNT); i++) {
     const btn = document.createElement('button')
     const pickId = i + 1
@@ -776,6 +809,7 @@ async function runAnchorsCheck(count: number, mode: 'properties' | 'translate'):
     btn.style.cssText = RING_BUTTON_CSS
     const w = ringWorld(pickId)
     client.overlay.anchor(btn, w.x, w.y)
+    ringButtons.push({ pickId, el: btn, wx: w.x, wy: w.y })
   }
   for (let slot = 0; slot < ANCHOR_SLOT_COUNT; slot++) {
     const el = document.createElement('div')
@@ -785,15 +819,29 @@ async function runAnchorsCheck(count: number, mode: 'properties' | 'translate'):
   }
 
   let lastPickIdHud = '-'
+  let lastPickId = 0
   client.input.on('tap', (e) => {
     lastPickIdHud = e.pickId === 0 ? '-' : String(e.pickId)
+    lastPickId = e.pickId
   })
+  countTaps(client)
+
+  // M39f step 9: a scripted pan and zoom sweep (`__check.act.sweep`), on top of real gestures like autopan.
+  let sweepOn = false
+  let sweepT0 = 0
+  const sweepBase = { x: 0, y: 0, tiles: 0 }
 
   let lastCameraT: number | undefined
   function onCamera(): void {
     const t = performance.now()
     const dtMs = lastCameraT === undefined ? 0 : t - lastCameraT
     lastCameraT = t
+    if (sweepOn) {
+      const sec = (t - sweepT0) / 1000
+      client.cameraState.centreX = sweepBase.x + 8 * Math.sin(sec * 0.6)
+      client.cameraState.centreY = sweepBase.y + 4 * Math.sin(sec * 0.37)
+      client.cameraState.tilesAcross = sweepBase.tiles * (1 + 0.45 * Math.sin(sec * 0.9))
+    }
     client.camera.tick(dtMs)
   }
 
@@ -863,6 +911,142 @@ async function runAnchorsCheck(count: number, mode: 'properties' | 'translate'):
   renderHud()
 
   window.__anchorsRingWorld = ringWorld
+
+  // --- `window.__check` (docs/plan/39f-device-auto-runner.md, step 9) ---------------------------------
+  // The anchor probe: every animation frame, while on, each button's box (`getBoundingClientRect`) against
+  // where `worldToScreen` puts its ring (the button's bottom centre is the anchor point, `align: 'bottom'`):
+  // the largest error in CSS px over every frame, and the largest frame-to-frame change of a frame's
+  // worst error (jitter). Compositor-side swim is invisible to JS, hence the judge prompt on top.
+  const probe = { on: false, frames: 0, maxErr: 0, jitter: 0, lastErr: 0 }
+  const sp = { x: 0, y: 0 }
+  const cssViewport = () => ({ widthPx: canvas.clientWidth, heightPx: canvas.clientHeight })
+  function probeFrame(): void {
+    if (probe.on) {
+      const r = canvas.getBoundingClientRect()
+      const vp = cssViewport()
+      let worst = 0
+      let seen = 0
+      for (const b of ringButtons) {
+        worldToScreen(client.cameraState, vp, b.wx, b.wy, sp)
+        if (sp.x < 0 || sp.y < 0 || sp.x > vp.widthPx || sp.y > vp.heightPx) continue
+        const br = b.el.getBoundingClientRect()
+        if (br.width === 0) continue
+        seen++
+        worst = Math.max(
+          worst,
+          Math.hypot(br.left + br.width / 2 - (r.left + sp.x), br.bottom - (r.top + sp.y)),
+        )
+      }
+      if (seen > 0) {
+        probe.frames++
+        probe.maxErr = Math.max(probe.maxErr, worst)
+        probe.jitter = Math.max(probe.jitter, Math.abs(worst - probe.lastErr))
+        probe.lastErr = worst
+      }
+    }
+    requestAnimationFrame(probeFrame)
+  }
+  requestAnimationFrame(probeFrame)
+
+  check.errors = () => device.errors()
+  check.readings = () => {
+    const v = renderer.viewport
+    const raf = rafInterval.values()
+    const gpuVals = gpuLatency.values()
+    const cam = client.cameraState
+    return {
+      isolated: globalThis.crossOriginIsolated,
+      adapter: [device.adapterInfo.vendor, device.adapterInfo.architecture]
+        .filter((x) => x !== '')
+        .join('/'),
+      workers_ready: true,
+      orientation: window.innerWidth >= window.innerHeight ? 'landscape' : 'portrait',
+      canvas_w: v.widthPx,
+      canvas_h: v.heightPx,
+      tiles_across: r3(cam.tilesAcross),
+      centre_x: r3(cam.centreX),
+      centre_y: r3(cam.centreY),
+      cursor_valid: cam.cursorValid,
+      cursor_tile_x: cam.cursorValid ? cam.cursorTileX : null,
+      cursor_tile_y: cam.cursorValid ? cam.cursorTileY : null,
+      taps: tapLog.n,
+      tap_tile_x: tapLog.n ? tapLog.tileX : null,
+      tap_tile_y: tapLog.n ? tapLog.tileY : null,
+      pick_id: lastPickId,
+      raf_p50_ms: r3(percentile(raf, 0.5)),
+      raf_p95_ms: r3(percentile(raf, 0.95)),
+      raf_worst_ms: r3(raf.length ? Math.max(...raf) : 0),
+      raf_n: raf.length,
+      raf_over20: raf.filter((x) => x > 20).length,
+      gpu_p95_ms: r3(percentile(gpuVals, 0.95)),
+      gpu_n: gpuVals.length,
+      frames: framesRendered,
+      anchor_frames: probe.frames,
+      anchor_err_max_px: r3(probe.maxErr),
+      anchor_jitter_px: r3(probe.jitter),
+    }
+  }
+  check.act = {
+    /** `{on}`: the scripted pan and zoom sweep (around where the camera is now). */
+    sweep: async (arg) => {
+      const { on = true } = (arg ?? {}) as { on?: boolean }
+      sweepOn = on
+      if (on) {
+        sweepT0 = performance.now()
+        sweepBase.x = client.cameraState.centreX
+        sweepBase.y = client.cameraState.centreY
+        sweepBase.tiles = client.cameraState.tilesAcross
+      }
+      return { on }
+    },
+    /** `{on, reset}`: the anchor probe. */
+    probe: async (arg) => {
+      const { on = true, reset = false } = (arg ?? {}) as { on?: boolean; reset?: boolean }
+      probe.on = on
+      if (reset) Object.assign(probe, { frames: 0, maxErr: 0, jitter: 0, lastErr: 0 })
+      return { on }
+    },
+    /** `{tiles}`: the zoom level of a pick step (the page's own `&tiles=`, at run time). */
+    zoomTo: async (arg) => {
+      const { tiles = 40, x = 0, y = 0 } = (arg ?? {}) as { tiles?: number; x?: number; y?: number }
+      sweepOn = false
+      client.cameraState.tilesAcross = tiles
+      client.cameraState.centreX = x
+      client.cameraState.centreY = y
+      return { tiles }
+    },
+    /** `{pickId}`: where ring `pickId` is on screen now (client coordinates) and whether a tap can reach it. */
+    ringScreen: async (arg) => {
+      const { pickId = 1 } = (arg ?? {}) as { pickId?: number }
+      const w = ringWorld(pickId)
+      const r = canvas.getBoundingClientRect()
+      const vp = cssViewport()
+      worldToScreen(client.cameraState, vp, w.x, w.y, sp)
+      // The ring is drawn a little below its anchor tile centre (the pick area of `extract()`'s ring starts
+      // about a tenth of a tile under the anchor point, `anchors.spec.ts`'s own RING_SCREEN): `tapY` is
+      // a quarter of a tile under it, the middle of the ring.
+      return {
+        x: r.left + sp.x,
+        y: r.top + sp.y,
+        tapY: r.top + sp.y + 0.25 * pxPerTile(client.cameraState, vp),
+        visible: sp.x > 12 && sp.y > 12 && sp.x < vp.widthPx - 12 && sp.y < vp.heightPx - 12,
+      }
+    },
+    /** `{pickId}`: the centre of that ring's button (a tap there must never reach the canvas). */
+    buttonScreen: async (arg) => {
+      const { pickId = 1 } = (arg ?? {}) as { pickId?: number }
+      const b = ringButtons.find((x) => x.pickId === pickId)
+      const br = b?.el.getBoundingClientRect()
+      return br ? { x: br.left + br.width / 2, y: br.top + br.height / 2 } : null
+    },
+    /** `{x, y}` client coordinates: the tile the camera puts under that point. */
+    tileUnder: async (arg) => {
+      const { x = 0, y = 0 } = (arg ?? {}) as { x?: number; y?: number }
+      const r = canvas.getBoundingClientRect()
+      screenToWorld(client.cameraState, cssViewport(), x - r.left, y - r.top, sp)
+      return { tileX: Math.floor(sp.x), tileY: Math.floor(sp.y) }
+    },
+  }
 }
 
 if (params.get('harness') === '1') {

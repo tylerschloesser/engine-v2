@@ -110,6 +110,7 @@
       const first = orientation()
       const windows = []
       const steady = []
+      if (item.plan.sweep) await check().act.sweep({ on: true }) // the scripted pan and zoom of M18
       for (let w = 0; w < 2; w++) {
         if (w === 1 && !(await rotate(item, first))) break
         const m = await measureWindow(item)

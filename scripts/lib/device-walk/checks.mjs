@@ -321,9 +321,16 @@ export const CHECKS = {
     pass: '027f879c',
     class: 'auto+confirm',
     signal:
-      'agent pointer log; __check camera (tilesAcross, cursorTile, centre across orientationchange)',
-    plan: later(3, 'device.html', { collector: 'gestures' }),
+      'agent pointer log (scroll, visualViewport, gesture events, flick speed and glide, pull-down, double tap); __check camera (tiles across range, the tapped tile against the tile under the finger, centre across the rotation); reload nonce',
+    plan: lifecycle('device.html', { collector: 'gestures', reloadIsFail: true }),
     criteria: [
+      {
+        name: 'gestures_done',
+        source: 'steps_done',
+        op: '>=',
+        limit: 7,
+        ref: 'Steps: the seven gestures of the item (a completeness check, not a Pass number)',
+      },
       {
         name: 'page_scrolled',
         source: 'pointer.pageScrolled',
@@ -342,15 +349,30 @@ export const CHECKS = {
       },
       {
         name: 'rotation_keeps_centre',
-        source: 'rotation.centreMoved',
+        source: 'rotation.centreShiftPx',
+        op: '<=',
+        limit: null,
+        ref: 'none: the Pass text names no tolerance, so the shift in CSS px is shown to the judge',
+        judge: 'always',
+      },
+      {
+        name: 'world_point_and_flick',
+        source: 'camera.judged',
         op: '==',
-        limit: false,
-        ref: 'pass',
+        limit: null,
+        ref: 'none: the Pass text says "stays under the finger" and "glides and stops": the person\'s, with the zoom range and the glide shown',
+        judge: 'always',
       },
     ],
-    metrics: [],
+    metrics: [
+      { name: 'tiles_min', source: 'camera.tilesMin' },
+      { name: 'tiles_max', source: 'camera.tilesMax' },
+      { name: 'flick_speed_px_ms', source: 'pointer.flickSpeed' },
+      { name: 'glide_tiles', source: 'pointer.glide' },
+      { name: 'centre_shift_tiles', source: 'rotation.centreShiftTiles' },
+    ],
     acts: [
-      'one-finger pan, flick, pinch to both limits, tap a tile, pull down, double-tap, rotate',
+      'one-finger pan 10 s, flick, pinch in and out, tap a tile, pull down from the top edge, double-tap, rotate',
     ],
     judges: ['the world point stays under the finger', 'the flick glides and stops'],
   },
@@ -619,8 +641,13 @@ export const CHECKS = {
     pass: 'dab2b88b',
     class: 'auto+confirm',
     signal:
-      '__anchorsRingWorld and the camera transform against each button rect per frame; rAF p95',
-    plan: later(3, 'device.html?anchors=50', { collector: 'anchors' }),
+      "__check anchor probe (every button's box against where worldToScreen puts its ring, per frame: max px error and jitter) under a scripted pan and zoom sweep, in both orientations; rAF p95 of the sweep alone",
+    plan: lifecycle('device.html?anchors=50', {
+      collector: 'anchors',
+      mode: 'swim',
+      windowMs: 15 * SECOND,
+      warmupMs: 3 * SECOND,
+    }),
     criteria: [
       {
         name: 'anchor_max_error_px',
@@ -639,17 +666,23 @@ export const CHECKS = {
         ref: 'pass',
       },
     ],
-    metrics: [],
-    acts: ['pan, flick, pinch for 30 s in both orientations'],
-    judges: ['no swim, text crisp'],
+    metrics: [
+      { name: 'anchor_jitter_px', source: 'anchors.jitterPx' },
+      { name: 'anchor_probe_frames', source: 'anchors.frames' },
+    ],
+    acts: ['rotate the phone once between the two stretches (the pan and zoom are scripted)'],
+    judges: ['no swim, text crisp at every zoom'],
   },
   'M18-fill-rate-with-anchors': {
     pass: '530d7b25',
     class: 'auto',
-    signal: 'as M09b-fill-rate on ?anchors=50 with a scripted pan and zoom sweep',
-    plan: later(3, 'device.html?anchors=50', {
+    signal:
+      'as M09b-fill-rate on ?anchors=50 with the scripted pan and zoom sweep (__check.act.sweep), ladder &anchorMode=translate first',
+    plan: lifecycle('device.html?anchors=50', {
       collector: 'fill-rate',
+      sweep: true,
       windowMs: 60 * SECOND,
+      warmupMs: 10 * SECOND,
       ladder: ['&anchorMode=translate', ...FILL_LADDER],
     }),
     criteria: fillRate(),
@@ -661,8 +694,8 @@ export const CHECKS = {
     pass: 'f47c72cf',
     class: 'auto',
     signal:
-      'pick_id in __check; the bar highlights a target ring and the page knows the expected id',
-    plan: later(3, 'device.html?anchors=50', { collector: 'anchors' }),
+      'pick_id in __check; the bar highlights a target ring at three zoom levels and the page knows the expected id; a tap on a button must leave pick_id and the tap count unchanged',
+    plan: lifecycle('device.html?anchors=50', { collector: 'anchors', mode: 'pick' }),
     criteria: [
       { name: 'pick_misses', source: 'pick.misses', op: '==', limit: 0, ref: 'pass' },
       {
@@ -673,15 +706,16 @@ export const CHECKS = {
         ref: 'pass',
       },
     ],
-    metrics: [],
+    metrics: [{ name: 'rings_tapped', source: 'pick.taps.*', reduce: 'len' }],
     acts: ['tap the highlighted rings at three zoom levels, then a button'],
     judges: [],
   },
   'M18-touch-ghost': {
     pass: 'c02c078f',
     class: 'auto+confirm',
-    signal: 'cursorTile after a tap (__check); the camera centre moved by a drag',
-    plan: later(3, 'device.html?anchors=50', { collector: 'anchors' }),
+    signal:
+      "cursorTile after a tap against the tile under the finger (worked out from the pointer's own position); the camera centre moved by a drag",
+    plan: lifecycle('device.html?anchors=50', { collector: 'anchors', mode: 'ghost' }),
     criteria: [
       {
         name: 'cursor_tile_matches_tap',
@@ -691,10 +725,18 @@ export const CHECKS = {
         ref: 'pass',
       },
       { name: 'drag_pans', source: 'ghost.centreMoved', op: '==', limit: true, ref: 'pass' },
+      {
+        name: 'ghost_on_tile',
+        source: 'ghost.cursor',
+        op: '==',
+        limit: null,
+        ref: "none: the Pass text says the ghost sits on the tapped tile; seeing it is the person's",
+        judge: 'always',
+      },
     ],
     metrics: [],
     acts: ['tap to move the cursor tile, then drag'],
-    judges: ['the ghost sits on the tapped tile'],
+    judges: ['the ghost (a translucent square) sits on the tapped tile'],
   },
   'M23-opfs-latency': {
     pass: 'db650cb0',

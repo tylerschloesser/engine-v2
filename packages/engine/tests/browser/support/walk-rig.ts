@@ -76,8 +76,10 @@ export async function start(
   const dir = mkdtempSync(join(tmpdir(), 'walk-rig-'))
   const file = join(dir, 'r.jsonl')
   // The chromium and the engines legs run at once, each with its own parallel indexes: ports per project.
+  // A rig uses up to a dozen ports from its base (two servers, each with a socket port beside it): bases are
+  // 100 apart, a worker 15 on, and the second engine 5000 up.
   const port =
-    portBase + (test.info().project.name === 'chromium' ? 0 : 300) + test.info().parallelIndex * 30
+    portBase + (test.info().project.name === 'chromium' ? 0 : 5000) + test.info().parallelIndex * 15
   // `--no-build`: `pnpm test`'s `pages` step built the fixture app; this serves that output.
   const round = await auto.startAutoRound({
     round: 'spec',

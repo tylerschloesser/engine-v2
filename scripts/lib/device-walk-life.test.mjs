@@ -252,4 +252,57 @@ describe('device-walk life', () => {
       'mp.html?linklog=1',
     ])
   })
+
+  test('device-walk life: M11-gestures: every gesture done and the page quiet leaves one judge prompt; a scrolled page, a missing gesture or a reload is a failure', () => {
+    const g = CHECKS['M11-gestures']
+    const data = (over = {}) => ({
+      steps_done: 7,
+      reloads: 0,
+      pointer: { pageScrolled: false, pageZoomed: false },
+      camera: { judged: 'zoom 12 to 256 tiles across' },
+      rotation: { centreShiftPx: 5.1 },
+      final: { cursor_valid: true },
+      ...over,
+    })
+    expect(evaluate(g, data()).verdict).toBe('judge')
+    const bad = (over, name) => {
+      const e = evaluate(g, data(over))
+      expect(e.verdict).toBe('fail')
+      expect(e.criteria.find((c) => c.name === name).ok).toBe(false)
+    }
+    bad({ pointer: { pageScrolled: true, pageZoomed: false } }, 'page_scrolled')
+    bad({ pointer: { pageScrolled: false, pageZoomed: true } }, 'page_zoomed')
+    bad({ steps_done: 6 }, 'gestures_done')
+    bad({ reloads: 1 }, 'page_reloaded')
+    // The shift in px is shown to the judge, never judged by a number nobody wrote down.
+    expect(
+      evaluate(g, data()).criteria.find((c) => c.name === 'rotation_keeps_centre'),
+    ).toMatchObject({
+      value: 5.1,
+      limit: null,
+      ok: null,
+    })
+  })
+
+  test('device-walk life: M18-pick fails on a missed ring or a button that reached the canvas; M18-touch-ghost and M18-anchors keep the confirm tap', () => {
+    const pick = CHECKS['M18-pick']
+    expect(evaluate(pick, { pick: { misses: 0, buttonChanged: false } }).verdict).toBe('pass')
+    expect(evaluate(pick, { pick: { misses: 1, buttonChanged: false } }).verdict).toBe('fail')
+    expect(evaluate(pick, { pick: { misses: 0, buttonChanged: true } }).verdict).toBe('fail')
+    // A button that was never tapped (none in view) is not a pass.
+    expect(evaluate(pick, { pick: { misses: 0, buttonChanged: null } }).verdict).toBe('fail')
+    const ghost = CHECKS['M18-touch-ghost']
+    const gd = (over = {}) => ({
+      ghost: { tileMatches: true, centreMoved: true, cursor: [3, 4], ...over },
+    })
+    expect(evaluate(ghost, gd()).verdict).toBe('judge')
+    expect(evaluate(ghost, gd({ tileMatches: false })).verdict).toBe('fail')
+    const swim = CHECKS['M18-anchors']
+    const sd = (p95) => ({
+      anchors: { maxErrorPx: 0.2 },
+      steady: [{ raf_p95_ms: p95 }],
+    })
+    expect(evaluate(swim, sd(17.5)).verdict).toBe('judge')
+    expect(evaluate(swim, sd(17.6)).verdict).toBe('fail')
+  })
 })
