@@ -1,0 +1,151 @@
+// `pnpm device:walk --auto | --wait` (M39f step 13): the command line around `startAutoRound`. `--auto` starts
+// the round (servers, phone API, the Mac monitor, one QR), keeps `state.json` current for other sessions and
+// exits when every walked check has a result; `--wait` is how another session (the orchestrator, a sub-agent)
+// blocks on it without polling the phone.
+import { spawn } from 'node:child_process'
+import { join } from 'node:path'
+import { startAutoRound } from './auto-cli.mjs'
+import { createLive, readLive, waitRound } from './live.mjs'
+import { openMacBrowser } from './mac-browser.mjs'
+import { createMonitor } from './monitor.mjs'
+import { readEvents } from './rounds.mjs'
+import { OVERRIDES } from './serving.mjs'
+import { reapStale, spawnServe } from './spawn-serve.mjs'
+import { formatState, formatStatus, fullStatus } from './status.mjs'
+
+/** Where a round's untracked files live: raw series, `qr.svg`, `state.json`. */
+export const seriesDirFor = (repo, round, override) =>
+  override ?? join(repo, 'test-results/device-walk', round)
+
+/** The `--status --json` object of a round, read fresh from its log and `state.json`. */
+export function readStatus({ round, file, items, seriesDir, now = Date.now(), alive }) {
+  return fullStatus({
+    round,
+    file,
+    items,
+    events: readEvents(file),
+    overrides: OVERRIDES,
+    live: readLive(join(seriesDir, 'state.json')),
+    now,
+    alive,
+  })
+}
+
+/** `--wait <round> [--timeout s] [--json]`. Returns the process exit code: 0 done, 2 stalled or timed out. */
+export async function waitCli({ round, timeoutS, json, read, out = console.log }) {
+  const { code, final, timedOut } = await waitRound({
+    read,
+    timeoutMs: timeoutS === undefined ? 600_000 : Math.round(Number(timeoutS) * 1000),
+    onChange: (s) => out(`wait ${round}: ${formatState(s)}`),
+  })
+  if (timedOut) out(`wait ${round}: timed out (${formatState(final)})`)
+  out(json ? JSON.stringify(final, null, 2) : `${formatStatus(final)}\n${formatState(final)}`)
+  return code
+}
+
+/**
+ * `--auto`: returns when the round is done (exit code 0) or was stopped (2). `o`: `{ repo, round, only, items,
+ * file, seriesDir, tunnel, noOpen, noBuild, params, monitorPort, log }`.
+ */
+export async function autoCli(o) {
+  const { repo, round, items, file, seriesDir, log = console.log } = o
+  const stale = reapStale()
+  if (stale.length) log(`stopped ${stale.length} server(s) left by an earlier run`)
+  const prior = readLive(join(seriesDir, 'state.json'))
+  if (prior?.pid && prior.pid !== process.pid && prior.phase !== 'stopped') {
+    try {
+      process.kill(prior.pid, 0)
+      throw new Error(
+        `round "${round}" is already running (pid ${prior.pid}); --wait it, or stop it first`,
+      )
+    } catch (e) {
+      if (e.message.startsWith('round')) throw e
+    }
+  }
+  const live = createLive({ path: join(seriesDir, 'state.json'), round })
+  const ac = new AbortController()
+  let run = null
+  let monitor = null
+  let beat = null
+  let stopping = false
+  const shutdown = async () => {
+    if (stopping) return
+    stopping = true
+    ac.abort()
+    clearInterval(beat)
+    live.set({ phase: 'stopped' })
+    await monitor?.close().catch(() => {})
+    await run?.stop().catch(() => {})
+  }
+  const bye = (code) => shutdown().finally(() => process.exit(code))
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => bye(130))
+  process.on('uncaughtException', (e) => {
+    console.error(e)
+    bye(1)
+  })
+
+  const noBuild = o.noBuild ? ['--no-build'] : []
+  try {
+    log(`device:walk --auto, round "${round}"`)
+    run = await startAutoRound({
+      round,
+      file,
+      seriesDir,
+      items,
+      only: o.only,
+      spawnServe: (args, io) => spawnServe([...args, ...noBuild], io),
+      tunnel: o.tunnel,
+      params: o.params,
+      signal: ac.signal,
+      log,
+      openMac: o.openMac ?? ((browser, url) => openMacBrowser(browser, url, { log })),
+      basePort: o.basePort,
+      wsBasePort: o.wsBasePort,
+    })
+    const walked = items.filter((i) => !i.android)
+    const status = () => readStatus({ round, file, items: walked, seriesDir })
+    monitor = createMonitor({
+      status,
+      event: (e) => {
+        const known = new Set(walked.map((i) => i.id))
+        if (!known.has(e.id)) throw new Error('bad id')
+        if (e.type === 'redo') run.api.append({ type: 'redo', id: e.id })
+        else if (e.type === 'result')
+          run.api.append({
+            type: 'result',
+            id: e.id,
+            result: e.result,
+            by: 'human',
+            notes: String(e.notes ?? ''),
+          })
+        else throw new Error('bad event')
+        run.machine.settle()
+      },
+    })
+    const monitorPort = await monitor.listen(Number(o.monitorPort ?? 0))
+    const monitorUrl = `http://127.0.0.1:${monitorPort}/`
+    live.set({ phase: 'serving', joinUrl: run.joinUrl, monitorUrl, mode: 'auto' })
+    let lastAt = 0
+    beat = setInterval(() => {
+      const seen = run.api.seen()
+      if (seen.at !== lastAt) {
+        lastAt = seen.at
+        live.set({ phone: { lastSeen: seen.at, tab: seen.tab, count: seen.count } })
+      }
+    }, 1000)
+    log(`monitor: ${monitorUrl}   (Ctrl-C stops the tool and every server it started)`)
+    log(`results: ${file}`)
+    log(`another session: pnpm device:walk --wait ${round}   or   --status ${round} --json`)
+    if (!o.noOpen && process.platform === 'darwin')
+      spawn('open', [monitorUrl], { stdio: 'ignore', detached: true }).unref()
+    const done = await run.finished()
+    live.set({ phase: done ? 'done' : 'stopped' })
+    const final = status()
+    log(`${formatStatus(final)}\n${formatState({ ...final, state: done ? 'done' : final.state })}`)
+    await shutdown()
+    return done ? 0 : 2
+  } catch (e) {
+    await shutdown()
+    throw e
+  }
+}

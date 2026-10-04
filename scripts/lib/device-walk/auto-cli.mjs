@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createAutoRound } from './auto-round.mjs'
 import { createBots } from './bot.mjs'
-import { MP_TILES } from './checks.mjs'
+import { CHECKS, MP_TILES } from './checks.mjs'
 import { desktopMedian } from './desktop-median.mjs'
 import { createPhoneApi } from './phone-api.mjs'
 import { qrSvg, qrTerminal } from './qr.mjs'
@@ -61,6 +61,20 @@ export async function startAutoRound(o) {
   const token = randomBytes(16).toString('hex')
   if (!readEvents(file).some((e) => e.type === 'start'))
     appendEvent(file, { type: 'start', only: o.only ?? null, mode: 'auto' })
+  // A retired check (M35-capability: `capability.spec.ts` covers it, Tyler's ruling) is not walked and is
+  // recorded as such, so a finished round has no open row.
+  for (const it of items) {
+    const entry = CHECKS[it.id]
+    if (entry?.class === 'retired' && !it.android)
+      if (!readEvents(file).some((e) => e.type === 'result' && e.id === it.id))
+        appendEvent(file, {
+          type: 'result',
+          id: it.id,
+          result: 'skip',
+          by: 'auto',
+          notes: `retired from the device list: ${entry.signal}`,
+        })
+  }
   const origins = {}
   // The Mac bot partner of M34 (`bot.mjs`): started when an attempt of a check with `plan.bot` opens, one at a
   // time, on the check build's loopback origin (the bot is on the Mac). Built once the servers are up.

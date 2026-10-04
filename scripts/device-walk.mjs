@@ -5,9 +5,14 @@
 //   pnpm device:walk [--round <name>] [--only <id-prefix,...>] [--no-open] [--no-tunnel] [--port <n>]
 //   pnpm device:walk --status <round> [--json]
 //   pnpm device:walk --apply <round> [--dry-run]
+//   pnpm device:walk --auto [--round <name>] [--only <id-prefix,...>] [--no-open] [--no-tunnel]
+//     (M39f: one QR, the phone and the Mac's own browsers walk the round; the Mac page is a live monitor)
+//   pnpm device:walk --wait <round> [--timeout <s>] [--json]       (exit 0 done, 2 stalled or timed out)
+//   pnpm device:walk --manual ...                                  (the M39e flow; the default without --auto)
 //   pnpm device:walk --selftest [--round <name>] [--no-tunnel] [--hold <s> --drop-at <s> --drop <s> --probe <s>]
 //     (M39f: the phone self-test: Auto-Lock Never idle probe, two origins, 6 min hold, a link cut; one QR scan, about 8 min)
-// Test/scratch overrides: --checks <file>, --rounds-dir <dir>.
+// Test/scratch overrides: --checks <file>, --rounds-dir <dir>, --series-dir <dir>, --params <json> (round
+// timings), --no-build (serve existing builds), --monitor-port <n>, --base-port <n>.
 
 import { spawn } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -15,6 +20,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createApp } from './lib/device-walk/app.mjs'
 import { applyRound, lineDiff } from './lib/device-walk/apply.mjs'
+import { autoCli, readStatus, seriesDirFor, waitCli } from './lib/device-walk/auto-main.mjs'
 import { parseChecks, selectItems } from './lib/device-walk/parse.mjs'
 import { qrTerminal } from './lib/device-walk/qr.mjs'
 import { checkRoundName, readEvents, replay } from './lib/device-walk/rounds.mjs'
@@ -23,7 +29,7 @@ import { runSelftest } from './lib/device-walk/selftest-cli.mjs'
 import { createServerControl } from './lib/device-walk/servers.mjs'
 import { OVERRIDES } from './lib/device-walk/serving.mjs'
 import { reapStale, spawnServe } from './lib/device-walk/spawn-serve.mjs'
-import { formatStatus, summarize } from './lib/device-walk/status.mjs'
+import { formatState, formatStatus } from './lib/device-walk/status.mjs'
 
 const REPO = fileURLToPath(new URL('..', import.meta.url))
 
@@ -41,6 +47,12 @@ export function parseArgs(argv) {
     '--drop-at',
     '--drop',
     '--probe',
+    '--wait',
+    '--timeout',
+    '--params',
+    '--series-dir',
+    '--monitor-port',
+    '--base-port',
   ])
   for (let i = 0; i < argv.length; i++) {
     if (withValue.has(argv[i])) o.values[argv[i].slice(2)] = argv[++i]
@@ -103,6 +115,57 @@ async function main() {
 
   if (flags.has('--selftest')) return selftest({ flags, values, roundFile })
 
+  if (values.wait !== undefined) {
+    const bad = checkRoundName(values.wait)
+    if (bad) fail(`--wait takes an existing round: ${bad}`)
+    const file = roundFile(values.wait)
+    if (!readEvents(file).length) fail(`no round "${values.wait}" (${file})`)
+    const start = readEvents(file).findLast((e) => e.type === 'start')
+    const sel = selectItems(items, start?.only ?? undefined)
+    const seriesDir = seriesDirFor(REPO, values.wait, values['series-dir'])
+    const code = await waitCli({
+      round: values.wait,
+      timeoutS: values.timeout,
+      json: flags.has('--json'),
+      read: () => readStatus({ round: values.wait, file, items: sel, seriesDir }),
+    })
+    process.exit(code)
+  }
+
+  if (flags.has('--auto') && flags.has('--manual')) fail('--auto and --manual are different flows')
+  if (flags.has('--auto')) {
+    const round = values.round ?? `round-${new Date().toISOString().slice(0, 10)}`
+    const badName = checkRoundName(round)
+    if (badName) fail(badName)
+    const only = values.only
+      ? values.only.split(',').filter(Boolean)
+      : (readEvents(roundFile(round)).find((e) => e.type === 'start')?.only ?? undefined)
+    const sel = selectItems(items, only)
+    if (!sel.some((i) => !i.android)) fail(`no items match --only ${values.only}`)
+    let params
+    try {
+      params = values.params ? JSON.parse(values.params) : undefined
+    } catch {
+      fail('--params is a JSON object')
+    }
+    const code = await autoCli({
+      repo: REPO,
+      round,
+      items: sel,
+      only,
+      file: roundFile(round),
+      seriesDir: seriesDirFor(REPO, round, values['series-dir']),
+      tunnel: !flags.has('--no-tunnel'),
+      noOpen: flags.has('--no-open'),
+      noBuild: flags.has('--no-build'),
+      params,
+      monitorPort: values['monitor-port'],
+      basePort: values['base-port'] ? Number(values['base-port']) : undefined,
+      wsBasePort: values['base-port'] ? Number(values['base-port']) + 1 : undefined,
+    })
+    process.exit(code)
+  }
+
   const reading = values.status ?? values.apply
   if (reading !== undefined) {
     const bad = checkRoundName(reading)
@@ -125,14 +188,17 @@ async function main() {
       sel.filter((i) => !i.android),
     )
     if (values.status !== undefined) {
-      const sum = summarize({
+      const full = readStatus({
         round: reading,
         file: roundFile(reading),
         items: sel,
-        state,
-        overrides: OVERRIDES,
+        seriesDir: seriesDirFor(REPO, reading, values['series-dir']),
       })
-      console.log(flags.has('--json') ? JSON.stringify(sum, null, 2) : formatStatus(sum))
+      console.log(
+        flags.has('--json')
+          ? JSON.stringify(full, null, 2)
+          : `${formatStatus(full)}${full.mode === 'auto' ? `\n${formatState(full)}` : ''}`,
+      )
       return
     }
     const { text, changes } = applyRound(checksText, state, {
