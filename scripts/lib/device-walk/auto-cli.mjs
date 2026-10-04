@@ -58,8 +58,15 @@ export async function startAutoRound(o) {
   try {
     const keys = machine.variants()
     log(`starting ${keys.length} server(s): ${keys.join(', ')}`)
+    // `fixture-ws`: the fixture app with `--ws puts` (the real-time server `mp.html` dials through `/ws`).
     await control.ensureAll(
-      keys.map((key) => ({ key, app: 'fixture', ws: false, bench: false, tunnel })),
+      keys.map((key) => ({
+        key,
+        app: 'fixture',
+        ws: key === 'fixture-ws' ? 'puts' : false,
+        bench: false,
+        tunnel,
+      })),
     )
     for (const key of keys) {
       const u = control.urlsFor(key)

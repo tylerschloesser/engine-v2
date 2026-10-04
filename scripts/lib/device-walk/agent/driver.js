@@ -59,6 +59,9 @@
     }
   }
 
+  // A collector's return value for a helper tab (a second tab, a Private tab): it did its part (and may
+  // carry the attempt's data); the first tab walks on and this one stays out of the walk.
+  const helperDone = (data) => ({ __walkHelper: true, data: data || null })
   let served = false // this document has already run (or started) an attempt
   let navigating = false
   let running = ''
@@ -69,9 +72,11 @@
     if (!item.origin || location.origin !== item.origin) return false
     const [path, query = ''] = item.page.split('?')
     if (location.pathname !== `/${path}`) return false
-    const want = [...new URLSearchParams(query)]
+    const tol = new Set(item.plan.tolerate || []) // knobs a helper tab's link may carry or change
+    const want = [...new URLSearchParams(query)].filter(([k]) => !tol.has(k))
     const have = new URLSearchParams(location.search)
     have.delete('_walk') // the cache-buster of a fresh attempt (below)
+    for (const k of tol) have.delete(k)
     if (want.some(([k, v]) => have.get(k) !== v)) return false
     return [...have].length === want.length
   }
@@ -136,8 +141,11 @@
     },
   }
 
-  /** One measuring window: the bar is gone, the rAF recorder is reset, a hide interrupts. */
-  async function measureWindow(item) {
+  /**
+   * One measuring window: the bar is gone, the rAF recorder is reset, a hide interrupts. `each(i, t)` runs
+   * once a second inside the window (scripted paints, a pan: whatever the check drives), never per frame.
+   */
+  async function measureWindow(item, each) {
     const o = item.opts
     let last = null
     for (let tries = 0; tries < 3; tries++) {
@@ -155,6 +163,7 @@
         const r = readings()
         if (r.orientation !== orient) turned = true
         samples.push(Object.assign({ t: Date.now() - t0 }, r))
+        if (each) await each(samples.length, Date.now() - t0)
       }
       const raf = A.rafStats()
       if (A.endMeasure().interrupted) return null
@@ -173,22 +182,47 @@
     return last
   }
 
+  /**
+   * An act prompt with live "detected" ticks. `detect`: `{ name: () => boolean }` polled every 250 ms (a
+   * name that turns true stays true); `buttons`: `[{ label, fn }]` on the sheet. Resolves with the detected
+   * map when every name is true, or `null` after `timeoutMs`. The sheet is removed on the way out.
+   */
+  async function ask(item, { text, detect, buttons, timeoutMs, settleMs = 0 }) {
+    const names = Object.keys(detect || {})
+    const seen = {}
+    for (const k of names) seen[k] = false
+    A.bar.show({ kind: 'act', id: item.id, n: item.n, text, detected: { ...seen }, buttons })
+    const ok = await waitFor(
+      () => {
+        for (const k of names)
+          if (!seen[k]) {
+            let v = false
+            try {
+              v = !!detect[k]()
+            } catch {}
+            if (v) {
+              seen[k] = true
+              A.bar.tick(k, true)
+            }
+          }
+        return names.every((k) => seen[k])
+      },
+      timeoutMs ?? item.opts.actTimeoutMs,
+      250,
+    )
+    if (ok && settleMs) await sleep(settleMs)
+    A.bar.hide()
+    return ok ? seen : null
+  }
+
   /** The act prompt between two windows: live "detected" tick, up to `actTimeoutMs`. */
   async function rotate(item, first) {
     const want = first === 'portrait' ? 'landscape' : 'portrait'
-    A.bar.show({
-      kind: 'act',
-      id: item.id,
-      n: item.n,
+    const ok = await ask(item, {
       text: `Rotate the phone to ${want}.`,
-      detected: { rotated: false },
+      detect: { rotated: () => orientation() !== first },
+      settleMs: 1500, // the layout and the canvas settle before the next window
     })
-    const ok = await waitFor(() => orientation() !== first, item.opts.actTimeoutMs, 250)
-    if (ok) {
-      A.bar.tick('rotated', true)
-      await sleep(1500) // the layout and the canvas settle before the next window
-    }
-    A.bar.hide()
     return !!ok
   }
 
@@ -197,6 +231,35 @@
     set('col', null)
     const body = Object.assign({ page: location.pathname + location.search, gpu: A.gpu }, data)
     await A.sendAndWait('series', { id: item.id, n: item.n, data: body }, 15000)
+  }
+
+  /** The newest step's item for the attempt a collector is running (its `state` changes as readings arrive). */
+  const live = (item) => {
+    const s = A.step
+    return s && s.kind === 'walk' && s.item && s.item.id === item.id && s.item.n === item.n
+      ? s.item
+      : item
+  }
+
+  // Collectors that need more than a page's globals live in two further public files (`/__walk/*.js`),
+  // loaded the first time a check asks for one; each registers itself on `kit.collectors`.
+  const FILES = {
+    slice: 'collect-life',
+    world: 'collect-life',
+    mp: 'collect-life',
+    anchors: 'collect-touch',
+    gestures: 'collect-touch',
+  }
+  const loaded = {}
+  function load(name) {
+    if (!loaded[name])
+      loaded[name] = new Promise((resolve) => {
+        const el = document.createElement('script')
+        el.src = `/__walk/${name}.js`
+        el.onload = el.onerror = () => resolve()
+        ;(document.head || document.documentElement).append(el)
+      })
+    return loaded[name]
   }
 
   async function go(item) {
@@ -217,39 +280,57 @@
       u.searchParams.set('_walk', String(item.n))
       return location.assign(u.href)
     }
+    if (get('helper') === key) return // a second tab of this attempt that already did its part
     served = true
     running = key
     A.bar.hide()
     const prior = json(get('col'), null)
-    if (prior && prior.key === key) {
+    let reloaded = false
+    // A second tab opened from this one copies its sessionStorage: only the same tab's mark is a reload.
+    if (prior && prior.key === key && prior.tab === A.id.tab) {
       // This document is a reload of an attempt that never finished.
       const reloads = (prior.reloads || 0) + 1
-      set('col', JSON.stringify({ key, reloads }))
-      if (item.plan.reloadIsFail)
+      set('col', JSON.stringify({ key, reloads, tab: A.id.tab }))
+      if (item.plan.resumable)
+        reloaded = true // the check itself spans documents (kill-resume, drops)
+      else if (item.plan.reloadIsFail)
         return finish(item, {
           ready: false,
           reloaded: true,
           reloads,
           final: { steps: json(get('steps'), []) },
         })
-      A.send('attempt', { id: item.id, n: item.n, status: 'interrupted', reason: 'reload' })
-      return
+      else {
+        A.send('attempt', { id: item.id, n: item.n, status: 'interrupted', reason: 'reload' })
+        return
+      }
+    } else {
+      set('col', JSON.stringify({ key, reloads: 0, tab: A.id.tab }))
+      set('steps', null)
     }
-    set('col', JSON.stringify({ key, reloads: 0 }))
-    set('steps', null)
+    if (FILES[item.plan.collector]) await load(FILES[item.plan.collector])
     const collect = collectors[item.plan.collector]
     let data
     try {
-      data = collect ? await collect(item) : { error: `no collector ${item.plan.collector}` }
+      data = collect
+        ? await collect(item, { reloaded })
+        : { error: `no collector ${item.plan.collector}` }
     } catch (e) {
       data = { error: String((e && e.message) || e) }
     }
     if (data === null) return // interrupted: wait for the person's Redo
+    if (data && data.__walkHelper) {
+      set('helper', key)
+      set('col', null)
+      if (data.data) await finish(item, data.data)
+      return
+    }
     await finish(item, data)
   }
 
   function onStep(s) {
     if (!s || s.kind !== 'walk') return
+    if (get('helper')) return // a helper tab (second tab, Private tab) stays out of the walk once done
     if (judged && s.phase !== 'judge') {
       judged = ''
       A.bar.hide()
@@ -263,7 +344,7 @@
     else if (s.phase === 'redo' && s.item && !served) {
       // A reload looks like a hide to the service until this new document says it found its attempt's mark.
       const mark = json(get('col'), null)
-      if (mark && mark.key === `${s.item.id}:${s.item.n}`) go(s.item)
+      if (mark && mark.tab === A.id.tab && mark.key === `${s.item.id}:${s.item.n}`) go(s.item)
     } else if (
       s.phase === 'done' &&
       !/runner\.html$/.test(location.pathname) &&
@@ -280,6 +361,36 @@
     }
   }
 
+  window.__walkKit = {
+    A,
+    get,
+    set,
+    json,
+    sleep,
+    waitFor,
+    clone,
+    orientation,
+    check,
+    readings,
+    measureWindow,
+    ask,
+    live,
+    helperDone,
+    collectors,
+    /** `{ token, run, tab }` of this tab: what a helper tab's link carries (a new tab id of its own). */
+    linkFor(path, extra) {
+      const id = json(get('id'), null)
+      const u = new URL(path, location.origin)
+      for (const [k, v] of Object.entries(extra || {})) u.searchParams.set(k, v)
+      u.searchParams.set('walk', id.token)
+      u.searchParams.set('run', id.run)
+      u.searchParams.set(
+        'tab',
+        `${id.tab.split('-')[0]}-h${Math.random().toString(36).slice(2, 5)}`,
+      )
+      return u.href
+    },
+  }
   A.on('step', onStep)
   if (A.step) onStep(A.step)
 })()

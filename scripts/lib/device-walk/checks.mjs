@@ -6,7 +6,9 @@
 //   signal   where the verdict's numbers come from
 //   plan     how the phone collects it: { page, variant, collector, ... built, delegation }. `built: false`
 //            is a row whose adapter a later delegation writes; the round marks it `skip` with that note.
-//   criteria [{ name, source, reduce?, op, limit, ref, group?, judge? }]   the service decides, never the page
+//   criteria [{ name, source, reduce?, op, limit, ref, group?, judge?, nullIs? }]   the service decides, never
+//            the page. `nullIs: 'judge'`: a value the data cannot give (an item not in this round, two worlds
+//            at different ticks) is a judge prompt, not a failure.
 //   metrics  [{ name, source, reduce? }]        recorded in `result.metrics`, never gating
 //   acts     what the person is asked to do (a prompt with a live "detected" tick)
 //   judges   what only the person can judge (a judge prompt)
@@ -96,6 +98,56 @@ const fillMetrics = [
 ]
 // *If it fails* of M09b-fill-rate, in the order 0018 Consequences states: 1.5, then 1, then add cutoff 4
 const FILL_LADDER = ['&scaleCap=1.5', '&scaleCap=1', '&scaleCap=1&cutoff=4']
+
+/** A built entry of delegation 3 (the lifecycle and choreography checks of the fixture pages). */
+const lifecycle = (page, extra = {}) => ({
+  page,
+  variant: 'fixture',
+  built: true,
+  delegation: 3,
+  ...extra,
+})
+
+/** M29's six drops, three runs each (`device-checks.md`): what the person is told, and the absence the
+ * service holds them to (+-30%: a run outside it is repeated). `ms: null`: no stated length. */
+export const MP_SCENARIOS = [
+  {
+    key: 'app-5s',
+    kind: 'hide',
+    ms: 5 * SECOND,
+    text: 'Switch to another app for {s} seconds, then come back to this page.',
+  },
+  {
+    key: 'app-30s',
+    kind: 'hide',
+    ms: 30 * SECOND,
+    text: 'Switch to another app for {s} seconds, then come back to this page.',
+  },
+  {
+    key: 'app-5min',
+    kind: 'hide',
+    ms: 300 * SECOND,
+    text: 'Switch to another app for {s} seconds, then come back to this page.',
+  },
+  {
+    key: 'lock-60s',
+    kind: 'hide',
+    ms: 60 * SECOND,
+    text: 'Lock the screen for {s} seconds, then unlock the phone and come back to this page.',
+  },
+  {
+    key: 'wifi-cellular',
+    kind: 'net',
+    ms: null,
+    text: 'Turn Wi-Fi off so the phone moves to cellular, keep this page in front, and wait until the link is back.',
+  },
+  {
+    key: 'airplane-15s',
+    kind: 'net',
+    ms: 15 * SECOND,
+    text: 'Turn airplane mode on for {s} seconds, then off, with this page in front.',
+  },
+]
 
 const later = (delegation, page, extra = {}) => ({
   page,
@@ -364,46 +416,77 @@ export const CHECKS = {
   'M16-slice-boot': {
     pass: 'ece04a7b',
     class: 'auto+confirm',
-    signal: 'slice.html HUD text, M03 result, terrain readback',
-    plan: later(3, 'slice.html', { collector: 'slice' }),
+    signal:
+      'slice.html __check.readings() (isolated, adapter, workers, terrain drawn: the __probeTile readback); M03 from this round',
+    plan: lifecycle('slice.html', {
+      collector: 'slice',
+      mode: 'boot',
+      inherit: { m03: 'M03-determinism' },
+    }),
     criteria: [
-      { name: 'm03_criterion', source: 'm03.pass', op: '==', limit: true, ref: 'pass' },
+      {
+        name: 'm03_criterion',
+        source: 'm03.pass',
+        op: '==',
+        limit: true,
+        ref: 'pass',
+        nullIs: 'judge',
+      },
       { name: 'isolated', source: 'final.isolated', op: '==', limit: true, ref: 'pass' },
       { name: 'adapter', source: 'final.adapter', op: 'truthy', limit: true, ref: 'pass' },
       { name: 'workers_ready', source: 'final.workers_ready', op: '==', limit: true, ref: 'pass' },
       { name: 'terrain_drawn', source: 'final.terrain_drawn', op: '==', limit: true, ref: 'pass' },
+      {
+        name: 'pan_pinch_as_m11',
+        source: 'gestures',
+        op: '==',
+        limit: null,
+        ref: 'none: the Pass text says "as M11-gestures": one confirm tap',
+        judge: 'always',
+      },
     ],
     metrics: [],
     acts: [],
-    judges: ['pan and pinch behave as M11-gestures'],
+    judges: ['pan and pinch behave as in M11-gestures (inherited when that item is in this round)'],
   },
   'M16-round-trip': {
     pass: 'bcc277ca',
     class: 'auto',
     signal:
-      '__dispatchPaintAt x10, __sliceConfirmed/__sliceRejected, ring drops, click-to-confirm latency',
-    plan: later(3, 'slice.html', { collector: 'slice' }),
+      '__check.act.paint x10 (verdict and click-to-verdict time per paint), final confirmed/rejected/ring drops',
+    plan: lifecycle('slice.html', { collector: 'slice', mode: 'roundtrip' }),
     criteria: [
       { name: 'confirmed', source: 'final.confirmed', op: '==', limit: 10, ref: 'pass' },
       { name: 'rejected', source: 'final.rejected', op: '==', limit: 0, ref: 'pass' },
       { name: 'ring_drops', source: 'final.ring_drops', op: '==', limit: 0, ref: 'pass' },
     ],
-    metrics: [{ name: 'confirm_latency_ms', source: 'latency.*', reduce: 'max' }],
+    // "No perceptible delay" names no number in the Pass text, so the latency is recorded, not judged.
+    metrics: [
+      { name: 'confirm_latency_max_ms', source: 'latency.*', reduce: 'max' },
+      { name: 'confirm_latency_median_ms', source: 'latency.*', reduce: 'median' },
+    ],
     acts: [],
-    judges: ['no perceptible delay (the Pass text names no number, so it is a judge prompt)'],
+    judges: [],
   },
   'M16-coexist': {
     pass: 'a8d52217',
     class: 'auto',
     signal:
-      '?autopan=1 slice, scripted paints, engine_mem_grows, reload nonce, rAF long-frame counters, 10 min',
-    plan: later(3, 'slice.html?autopan=1', { collector: 'slice', windowMs: 600 * SECOND }),
+      '?autopan=1 slice, one scripted Paint a second, __check engine_mem_grows, reload nonce, rAF long-frame counters, 10 min',
+    plan: lifecycle('slice.html', {
+      query: 'autopan=1',
+      collector: 'slice',
+      mode: 'coexist',
+      windowMs: 600 * SECOND,
+      warmupMs: 10 * SECOND,
+      reloadIsFail: true,
+    }),
     criteria: [
       { name: 'reloads', source: 'reloads', op: '==', limit: 0, ref: 'pass' },
       {
         name: 'engine_mem_grows',
         source: 'steady.*.engine_mem_grows',
-        reduce: 'max',
+        reduce: 'max-known',
         op: '==',
         limit: 0,
         ref: 'pass',
@@ -418,41 +501,73 @@ export const CHECKS = {
         judge: 'borderline',
       },
     ],
-    metrics: [{ name: 'raf_gap_max_ms', source: 'windows.*.raf.max', reduce: 'max' }],
+    metrics: [
+      { name: 'raf_gap_max_ms', source: 'windows.*.raf.max', reduce: 'max' },
+      { name: 'paints', source: 'paints' },
+    ],
     acts: [],
     judges: ['no visible hitch (only when the proxy is not clean)'],
   },
   'M16-background': {
     pass: '10fe26ba',
     class: 'auto',
-    signal: 'visibility log, __tick at hidden versus visible, rAF resumes, no reload (nonce)',
-    plan: later(3, 'slice.html', { collector: 'slice' }),
+    signal:
+      'visibility events (the page is left twice, on purpose), __check tick at hidden versus at visible, frames resume, no reload (nonce)',
+    plan: lifecycle('slice.html', {
+      collector: 'slice',
+      mode: 'background',
+      reloadIsFail: true,
+      leaves: [
+        {
+          text: 'Switch to another app for {s} seconds, then come back to this page.',
+          ms: 30 * SECOND,
+        },
+        {
+          text: 'Lock the screen for {s} seconds, then unlock the phone and come back to this page.',
+          ms: 60 * SECOND,
+        },
+      ],
+    }),
     criteria: [
+      {
+        name: 'left_twice',
+        source: 'hidden.rounds.*',
+        reduce: 'len',
+        op: '>=',
+        limit: 2,
+        ref: 'Steps: another app 30 s, then lock 60 s (a completeness check, not a Pass number)',
+      },
       { name: 'reloads', source: 'reloads', op: '==', limit: 0, ref: 'pass' },
       {
         name: 'tick_advanced_while_hidden',
-        source: 'hidden.tickDelta',
+        source: 'hidden.rounds.*.tickDelta',
+        reduce: 'max',
         op: '<=',
         limit: 0,
         ref: 'pass',
       },
       {
         name: 'frame_loop_resumed',
-        source: 'hidden.rafResumed',
+        source: 'hidden.rounds.*.rafResumed',
+        reduce: 'all',
         op: '==',
         limit: true,
         ref: 'pass',
       },
     ],
-    metrics: [],
+    metrics: [
+      { name: 'hidden_ms', source: 'hidden.rounds.*.ms', reduce: 'min' },
+      { name: 'tick_delta_max', source: 'hidden.rounds.*.tickDelta', reduce: 'max' },
+    ],
     acts: ['leave the app for 30 s and return; lock the screen for 60 s and return'],
     judges: [],
   },
   'M16-low-power': {
     pass: '39cfc710',
     class: 'auto',
-    signal: 'Low Power Mode as a ~30 Hz rAF; scripted flick distance at 60 Hz versus 30 Hz',
-    plan: later(3, 'slice.html', { collector: 'slice' }),
+    signal:
+      'Low Power Mode as a ~30 Hz rAF (the agent recorder); one scripted flick (__check.act.flick) at normal cadence, one at the halved one',
+    plan: lifecycle('slice.html', { collector: 'slice', mode: 'lowpower' }),
     criteria: [
       {
         name: 'low_power_detected',
@@ -470,9 +585,14 @@ export const CHECKS = {
         judge: 'always',
       },
     ],
-    metrics: [],
+    metrics: [
+      { name: 'rafp50_normal_ms', source: 'lowPower.p50Normal' },
+      { name: 'rafp50_low_power_ms', source: 'lowPower.p50Low' },
+    ],
     acts: ['turn Low Power Mode on'],
-    judges: [],
+    judges: [
+      'flick distance at the halved frame rate against the one at 60 Hz (ratio near 1 = unchanged)',
+    ],
   },
   'M17b-harness-desktop-safari': {
     pass: '4c162c7f',
@@ -610,23 +730,46 @@ export const CHECKS = {
   'M23-kill-resume': {
     pass: '71786b62',
     class: 'auto',
-    signal: 'hash, tick and admitted count kept on the service, compared after the reopen',
-    plan: later(3, 'world.html', { collector: 'world' }),
+    signal:
+      'a play phase of Paints, then hash, tick and admitted count kept on the service (`reading before`); after the reopen the same three from __check/__worldHashAndTick',
+    plan: lifecycle('world.html', {
+      query: 'world=walk-kill',
+      collector: 'world',
+      mode: 'kill',
+      resumable: true,
+    }),
     criteria: [
       { name: 'world_resumed', source: 'after.resumed', op: '==', limit: true, ref: 'pass' },
       { name: 'admitted_actions_lost', source: 'after.lost', op: '==', limit: 0, ref: 'pass' },
     ],
-    metrics: [],
-    acts: ['swipe-kill Safari and reopen'],
+    metrics: [
+      { name: 'admitted_before', source: 'before.admitted' },
+      { name: 'tick_before', source: 'before.tick' },
+      { name: 'tick_last_action', source: 'before.lastActionTick' },
+      { name: 'tick_after', source: 'after.tick' },
+    ],
+    acts: ['swipe-kill Safari and reopen it (the QR code again if the tab is gone)'],
     judges: [],
   },
   'M23-world-busy': {
     pass: '84503370',
     class: 'auto',
-    signal: 'two tabs report: __worldBusy() true in the second, the first not superseded',
-    plan: later(3, 'world.html', { collector: 'world' }),
+    signal:
+      'two tabs of one world report: __check world_busy true in the second (and the banner shown), the first still playing',
+    plan: lifecycle('world.html', {
+      query: 'world=walk-busy',
+      collector: 'world',
+      mode: 'busy',
+    }),
     criteria: [
       { name: 'second_tab_busy', source: 'second.worldBusy', op: '==', limit: true, ref: 'pass' },
+      {
+        name: 'second_tab_banner',
+        source: 'second.banner',
+        op: '==',
+        limit: true,
+        ref: 'pass',
+      },
       {
         name: 'first_keeps_playing',
         source: 'first.superseded',
@@ -635,15 +778,21 @@ export const CHECKS = {
         ref: 'pass',
       },
     ],
-    metrics: [],
-    acts: ['tap "open second tab" and come back'],
+    metrics: [{ name: 'first_tick_delta', source: 'first.tickDelta' }],
+    acts: ['tap "Open second tab", look at it, come back to this tab'],
     judges: [],
   },
   'M23-private': {
     pass: '7d0fb74f',
     class: 'auto',
-    signal: 'durable:false from the HUD text; Paint still advances tick',
-    plan: later(3, 'world.html', { collector: 'world' }),
+    signal:
+      'the Private tab (opened from a link on the bar) reports durable:false from __check, and a Paint still advances tick',
+    plan: lifecycle('world.html', {
+      query: 'world=walk-private',
+      collector: 'world',
+      mode: 'private',
+      tolerate: ['noOpfs', 'world'],
+    }),
     criteria: [
       { name: 'durable', source: 'final.durable', op: '==', limit: false, ref: 'pass' },
       {
@@ -655,15 +804,25 @@ export const CHECKS = {
       },
     ],
     metrics: [],
-    acts: ['open the link in a Private tab'],
+    acts: ['open the link in a Private tab (the bar offers it, with Copy link)'],
     judges: [],
   },
   'M23-hidden-pause': {
     pass: '40758c59',
     class: 'auto',
     signal:
-      'Paint before and after a 30 s hide, __worldHashAndTick, visibility log, durable, nonce',
-    plan: later(3, 'world.html', { collector: 'world' }),
+      'Paint (a fresh tick), the page is left for 30 s (visibility events), Paint again; __check durable; reload nonce',
+    plan: lifecycle('world.html', {
+      collector: 'world',
+      mode: 'hidden-pause',
+      reloadIsFail: true,
+      leaves: [
+        {
+          text: 'Switch to another app for {s} seconds, then come back to this page.',
+          ms: 30 * SECOND,
+        },
+      ],
+    }),
     criteria: [
       {
         name: 'tick_delta',
@@ -676,27 +835,70 @@ export const CHECKS = {
       { name: 'durable', source: 'final.durable', op: '==', limit: true, ref: 'pass' },
       { name: 'reloads', source: 'reloads', op: '==', limit: 0, ref: 'pass' },
     ],
-    metrics: [],
+    metrics: [{ name: 'hidden_ms', source: 'hidden.ms' }],
     acts: ['leave the app for 30 s'],
-    judges: [],
+    judges: ['the second tick is only a few ticks past the first (not about 600)'],
   },
   'M23-export-import': {
     pass: 'ba6dc55f',
     class: 'auto+confirm',
-    signal: '__worldHashAndTick on both worlds; the download and picker are real',
-    plan: later(3, 'world.html', { collector: 'world' }),
+    signal:
+      "the page's own Export, Import and the second world (opened from the bar) read through __check; the download and the picker are real",
+    plan: lifecycle('world.html', {
+      query: 'world=walk-export',
+      collector: 'world',
+      mode: 'export',
+      tolerate: ['world'],
+      importId: 'walk-import',
+    }),
     criteria: [
-      { name: 'hash_equal', source: 'import.hashEqual', op: '==', limit: true, ref: 'pass' },
+      {
+        name: 'exported',
+        source: 'export.bytes',
+        op: '>=',
+        limit: 1,
+        ref: 'Steps: Export downloads a file',
+      },
+      { name: 'imported_loads', source: 'import.loaded', op: '==', limit: true, ref: 'pass' },
+      {
+        name: 'hash_equal',
+        source: 'import.hashEqual',
+        op: '==',
+        limit: true,
+        ref: 'pass',
+        nullIs: 'judge',
+      },
+      {
+        name: 'download_in_files',
+        source: 'export.bytes',
+        op: '>=',
+        limit: null,
+        ref: "none: the Pass text names no number; whether the file reached Files is the person's to say",
+        judge: 'always',
+      },
     ],
-    metrics: [],
-    acts: ['tap Export, choose the file in Import'],
-    judges: ['the file arrived in Files'],
+    metrics: [
+      { name: 'ticks_apart', source: 'import.ticksApart' },
+      { name: 'export_bytes', source: 'export.bytes' },
+    ],
+    acts: [
+      'tap Export, choose the file in Import (id walk-import), tap Import, open the imported world',
+    ],
+    judges: ['the exported file arrived in Files (hashes are compared only at equal ticks)'],
   },
   'M29-socket-resume': {
     pass: 'a59a15f9',
     class: 'auto',
-    signal: '__mpLinkLog() rows plus the service-timed absence; 6 scenarios x 3 runs',
-    plan: later(3, 'mp.html?linklog=1', { collector: 'mp' }),
+    signal:
+      "six drops x three runs: the absence timed from the page's visibility and online events (the service holds each run to +-30% of its stated time), __mpLinkLog rows (close or silence, visible to Welcome), the discard flag",
+    plan: lifecycle('mp.html?linklog=1&autopan=1', {
+      variant: 'fixture-ws',
+      collector: 'mp',
+      mode: 'drops',
+      scenarios: MP_SCENARIOS,
+      runsEach: 3,
+      resumable: true,
+    }),
     criteria: [
       {
         name: 'visible_to_welcome_median_ms',
@@ -705,17 +907,23 @@ export const CHECKS = {
         op: '<=',
         limit: 1500,
         ref: 'pass: "median ≤ 1.5 s" in ms',
+        nullIs: 'judge',
       },
       {
         name: 'visible_to_welcome_max_ms',
         source: 'runs.*.welcomeMs',
-        reduce: 'max',
+        reduce: 'max-known',
         op: '<=',
         limit: 4000,
         ref: 'pass: "max ≤ 4 s" in ms',
+        nullIs: 'judge',
       },
     ],
-    metrics: [],
+    metrics: [
+      { name: 'runs', source: 'runs.*.scenario', reduce: 'len' },
+      { name: 'discarded_runs', source: 'runs.*.discarded', reduce: 'any' },
+      { name: 'survived_runs', source: 'runs.*.survived', reduce: 'any' },
+    ],
     acts: ['do each drop for the stated time'],
     judges: [],
   },
@@ -723,8 +931,16 @@ export const CHECKS = {
     pass: '4b9a2320',
     class: 'auto',
     signal:
-      'the same runs, scripted pan across every drop, link-log indicator timing, no dialog element',
-    plan: later(3, 'mp.html?linklog=1', { collector: 'mp' }),
+      'the same runs as M29-socket-resume (read from them when both are in the round), the scripted pan (?autopan=1) across every drop, frames and camera moving after each, no dialog element in the DOM',
+    plan: lifecycle('mp.html?linklog=1&autopan=1', {
+      variant: 'fixture-ws',
+      collector: 'mp',
+      mode: 'drops',
+      scenarios: MP_SCENARIOS,
+      runsEach: 3,
+      resumable: true,
+      reuse: 'M29-socket-resume',
+    }),
     criteria: [
       {
         name: 'stayed_interactive',
@@ -750,9 +966,18 @@ export const CHECKS = {
   'M29-net-heap': {
     pass: 'f9a5c4f1',
     class: 'auto',
-    signal: '10 min of scripted paints, rAF long-frame count and max (hitch proxy)',
-    plan: later(3, 'mp.html?linklog=1', { collector: 'mp', windowMs: 600 * SECOND }),
+    signal:
+      '10 min connected, four scripted Paints a second (steady traffic), rAF long-frame count and max (hitch proxy)',
+    plan: lifecycle('mp.html?linklog=1', {
+      variant: 'fixture-ws',
+      collector: 'mp',
+      mode: 'netheap',
+      windowMs: 600 * SECOND,
+      warmupMs: 10 * SECOND,
+      reloadIsFail: true,
+    }),
     criteria: [
+      { name: 'reloads', source: 'reloads', op: '==', limit: 0, ref: 'pass' },
       {
         name: 'hitch_gaps_over_25ms',
         source: 'windows.*.raf.long25',
@@ -763,7 +988,10 @@ export const CHECKS = {
         judge: 'borderline',
       },
     ],
-    metrics: [{ name: 'raf_gap_max_ms', source: 'windows.*.raf.max', reduce: 'max' }],
+    metrics: [
+      { name: 'raf_gap_max_ms', source: 'windows.*.raf.max', reduce: 'max' },
+      { name: 'paints', source: 'paints' },
+    ],
     acts: [],
     judges: ['no visible periodic hitch (only when the proxy is not clean)'],
   },
@@ -1081,6 +1309,11 @@ const REDUCERS = {
     const a = v.at(-1)
     return Array.isArray(a) ? (a.at(-1) ?? null) : (a ?? null)
   },
+  /** Largest of the readings the page could give; null readings (not taken yet) are ignored. */
+  'max-known': (v) => {
+    const k = v.filter(num)
+    return k.length ? Math.max(...k) : null
+  },
   'ceiling-mib': (v) => {
     const line = (v[0] ?? []).find?.((l) => /^\(1\) ceiling: (\d+) MiB reached/.test(l))
     return line ? Number(/(\d+) MiB/.exec(line)[1]) : null
@@ -1132,7 +1365,8 @@ export function evaluate(entry, data, ctx = {}) {
     const value = read(root, c.source, c.reduce)
     let ok
     if (c.op === 'proxy') ok = num(value) ? (value <= c.limit ? true : null) : null
-    else ok = value === null || value === undefined ? false : !!OPS[c.op](value, c.limit)
+    else if (value === null || value === undefined) ok = c.nullIs === 'judge' ? null : false
+    else ok = !!OPS[c.op](value, c.limit)
     if (c.judge === 'always') ok = null
     return { c, row: { name: c.name, value: round(value ?? null), limit: c.limit, ok } }
   })

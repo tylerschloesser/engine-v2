@@ -16,6 +16,11 @@
 // `confirmed`, `rejected`, `ring drops`, `engine_mem_grows` (per instance), `tick`. `?hud=0` hides
 // the HUD element (a human running a long device session without the visual noise); the counters
 // underneath it keep updating either way.
+//
+// M39f step 7 (docs/plan/39f-device-auto-runner.md): `?autopan=1` is `device.html`'s scripted pan (a steady
+// ~4 tiles/s on top of real gestures; M16-coexist) and `window.__check` (`check.ts`) reports the HUD's own
+// numbers as numbers plus two scripted drivers (`act.paint`, `act.flick`). Diagnostic page, outside the
+// hot-path rule like the HUD.
 import type { Action } from '../../../../fixtures/puts/bindings/Action.ts'
 import type { Reject } from '../../../../fixtures/puts/bindings/Reject.ts'
 import { pxPerTile } from '../../../../src/camera/transform.ts'
@@ -67,6 +72,7 @@ import {
   type PointerPhase,
 } from '../../../../src/test/input.ts'
 import { readPixels, renderTo } from '../../../../src/test/render.ts'
+import { installCheck, r3 } from './check.ts'
 import { fixtureWasm } from './fixture-wasm.ts'
 
 declare global {
@@ -124,6 +130,8 @@ installPageStyles() // 0019 §3: pull-to-refresh structurally prevented, canvas 
 
 const params = new URL(location.href).searchParams
 const hudVisible = params.get('hud') !== '0'
+const autopan = params.get('autopan') === '1' || params.get('autopan') === 'true'
+const check = installCheck('slice')
 
 const hudEl = document.createElement('pre')
 hudEl.id = 'hud'
@@ -228,10 +236,14 @@ workersReady = true
 // frame's `camTileX/Y`/`camFracX/Y`/`tilesPerPx` -- a different (device-pixel) space from `client.
 // camera`'s own CSS-pixel one, `pxPerTile`'s own formula against `renderer.viewport`.
 let lastCameraT: number | undefined
+let framesRendered = 0
+const PAN_TILES_PER_SECOND = 4 // `device.ts`'s own scripted pan
 function onCamera(): void {
   const t = performance.now()
   const dtMs = lastCameraT === undefined ? 0 : t - lastCameraT
   lastCameraT = t
+  framesRendered += 1
+  if (autopan) client.cameraState.centreX += PAN_TILES_PER_SECOND * (dtMs / 1000)
   client.camera.tick(dtMs) // real pan/pinch/wheel/WASD/inertia + semantic recognition
 
   const v = renderer.viewport
@@ -281,7 +293,9 @@ loop.resume()
 let confirmed = 0
 let rejected = 0
 let lastReject: unknown
-client.onActionResult<Reject>((_seq, result) => {
+const verdicts = new Map<number, (r: unknown) => void>() // `__check.act.paint`'s waiters, by seq
+client.onActionResult<Reject>((seq, result) => {
+  if (result !== 'NotPredictable') verdicts.get(seq)?.(result)
   if (result === 'Confirmed') confirmed += 1
   // `NotPredictable` (docs/plan/25-prediction-core.md) is a hint, never a verdict (0012): this
   // page counts only the host's own eventual verdict, so a declined prediction does not inflate
@@ -555,4 +569,85 @@ window.__probeTile = async (tileX, tileY, size, notTexel) => {
 window.__errors = () => device.errors()
 window.__adapterInfo = () => device.adapterInfo
 
+// --- `window.__check` (docs/plan/39f-device-auto-runner.md, step 7): the HUD's numbers as numbers ------
+// "Terrain drawn": the centre tile's chunk is resident on the GPU and the offscreen probe of it read back
+// something (the existing `__probeTile`/`gpuTexel`); asked once, a moment after boot.
+let terrainDrawn = false
+void window
+  .__probeTile?.(Math.floor(client.cameraState.centreX), Math.floor(client.cameraState.centreY), 4)
+  .then((p) => {
+    terrainDrawn = p.texel >= 0 && p.data.some((v) => v !== 0)
+  })
+  .catch(() => {})
+
+check.errors = () => device.errors()
+check.readings = () => {
+  const grows = Object.values(memGrows)
+  const cam = client.cameraState
+  const v = renderer.viewport
+  return {
+    isolated: globalThis.crossOriginIsolated,
+    adapter: [device.adapterInfo.vendor, device.adapterInfo.architecture]
+      .filter((x) => x !== '')
+      .join('/'),
+    workers_ready: workersReady,
+    session_live: workersReady ? sessionLive() : false,
+    confirmed,
+    rejected,
+    ring_drops: ringDrops(),
+    tick: workersReady ? authoritativeTick() : 0,
+    // The worst `engine_mem_grows` over every instance; null until the first reading (every 3 s).
+    engine_mem_grows: grows.length ? Math.max(...grows) : null,
+    frames: framesRendered,
+    terrain_drawn: terrainDrawn,
+    orientation: window.innerWidth >= window.innerHeight ? 'landscape' : 'portrait',
+    canvas_w: v.widthPx,
+    canvas_h: v.heightPx,
+    tiles_across: r3(cam.tilesAcross),
+    centre_x: r3(cam.centreX),
+    centre_y: r3(cam.centreY),
+  }
+}
+const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+check.act = {
+  /** One Paint at `(x, y)`; resolves with the host's verdict and the click-to-verdict time in ms. */
+  paint: (arg) => {
+    const { x, y } = arg as { x: number; y: number }
+    const t0 = performance.now()
+    return new Promise((resolve) => {
+      const seq = paintAt(x, y)
+      verdicts.set(seq, (result) => {
+        verdicts.delete(seq)
+        resolve({ seq, result, ms: r3(performance.now() - t0) })
+      })
+      setTimeout(() => {
+        if (verdicts.delete(seq))
+          resolve({ seq, result: 'timeout', ms: r3(performance.now() - t0) })
+      }, 10_000)
+    })
+  },
+  /**
+   * A scripted one-finger flick (M16-low-power): `px` CSS pixels right in six ~16 ms steps, the pointer
+   * lifted at speed, then the camera glides for `settleMs`. Resolves with how far the centre went, in
+   * tiles. Time-based motion (0019) means the distance must not depend on the frame rate.
+   */
+  flick: async (arg) => {
+    const { px = 360, settleMs = 1600 } = (arg ?? {}) as { px?: number; settleMs?: number }
+    const x0 = Math.round(window.innerWidth * 0.25)
+    const y = Math.round(window.innerHeight * 0.5)
+    const c0 = { x: client.cameraState.centreX, y: client.cameraState.centreY }
+    injectPointer(client, 'down', 7, x0, y, performance.now(), 'touch')
+    for (let i = 1; i <= 6; i++) {
+      await sleepMs(16)
+      injectPointer(client, 'move', 7, x0 + (px * i) / 6, y, performance.now(), 'touch')
+    }
+    injectPointer(client, 'up', 7, x0 + px, y, performance.now(), 'touch')
+    await sleepMs(settleMs)
+    const dx = client.cameraState.centreX - c0.x
+    const dy = client.cameraState.centreY - c0.y
+    return { tiles: r3(Math.hypot(dx, dy)), dx: r3(dx), dy: r3(dy) }
+  },
+}
+
 window.__pageReady = true
+check.ready = true

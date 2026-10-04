@@ -36,6 +36,7 @@ import {
   resumeWorkers,
   simCounters,
 } from '../../../../src/test/client.ts'
+import { installCheck, r3 } from './check.ts'
 import { fixtureWasm } from './fixture-wasm.ts'
 
 declare global {
@@ -89,6 +90,7 @@ declare global {
   }
 }
 
+const check = installCheck('world') // M39f step 7: `window.__check`, at the foot of this file
 const params = new URL(location.href).searchParams
 const worldId = params.get('world') ?? 'device'
 // `no_opfs_falls_back_durable_false`'s own deterministic switch (Deviations: not the brief's own
@@ -354,6 +356,15 @@ deleteBtn.addEventListener('click', () => {
     .catch((e: unknown) => setWorldOpStatus(`delete error: ${String(e)}`))
 })
 
+// M39f: the host's verdicts, for `__check` (`admitted` is what a kill-resume run must not lose).
+let admitted = 0
+const verdicts = new Map<number, (r: unknown) => void>()
+client.onActionResult((seq, result) => {
+  if (result === 'NotPredictable') return
+  if (result === 'Confirmed') admitted += 1
+  verdicts.get(seq)?.(result)
+})
+
 function paintAt(x: number, y: number): number {
   const action: Action = { Paint: { pos: { x, y }, base: 1, resource: 2 } }
   return client.dispatch(action)
@@ -464,4 +475,53 @@ renderHud()
 window.__hudText = hudText
 window.__errors = () => []
 
+// --- `window.__check` (docs/plan/39f-device-auto-runner.md, step 7) -------------------------------------
+// `hash`/`tick` are the HUD's own discrete readings (page load, a Paint through `act.paint` or the button);
+// `act.read` takes a fresh one (the same park/resume round trip `__worldHashAndTick` makes).
+check.errors = () => []
+check.readings = () => {
+  const status = latestStatus()
+  return {
+    world: worldId,
+    world_busy: worldBusy,
+    load_failed: loadFailed,
+    save_incompatible: saveIncompatible,
+    unusable,
+    hidden: controllableDoc.hidden,
+    hash: lastHash,
+    tick: lastTick,
+    sim_ticks: unusable
+      ? 0
+      : Atomics.load(clientTestHandle(client).control.words, CB_SIM_TICKS_RUN),
+    durable: status ? status.durable : null,
+    persisted: status ? status.persisted : null,
+    admitted,
+  }
+}
+check.act = {
+  /** One Paint at `(x, y)`, then a fresh hash and tick (what the Paint button does, awaited). */
+  paint: async (arg) => {
+    const { x = 0, y = 0 } = (arg ?? {}) as { x?: number; y?: number }
+    const t0 = performance.now()
+    const result = await new Promise((resolve) => {
+      const seq = paintAt(x, y)
+      verdicts.set(seq, (r) => {
+        verdicts.delete(seq)
+        resolve(r)
+      })
+      setTimeout(() => {
+        if (verdicts.delete(seq)) resolve('timeout')
+      }, 10_000)
+    })
+    await refreshHash()
+    return { result, ms: r3(performance.now() - t0), hash: lastHash, tick: lastTick }
+  },
+  /** A fresh hash and tick without a Paint. */
+  read: async () => {
+    await refreshHash()
+    return { hash: lastHash, tick: lastTick }
+  },
+}
+
 window.__pageReady = true
+check.ready = true

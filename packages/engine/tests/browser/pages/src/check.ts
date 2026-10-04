@@ -16,6 +16,8 @@ export type CheckReporter = {
   readings(): Record<string, CheckReading>
   /** The page's own error channel (`device.errors()`). */
   errors(): string[]
+  /** Scripted drivers a collector calls (`paint`, `flick`, a sweep): the brief's `act`, one async function each. */
+  act?: Record<string, (arg?: unknown) => Promise<unknown>>
 }
 
 declare global {

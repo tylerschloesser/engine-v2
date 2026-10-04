@@ -24,6 +24,7 @@ import { createViewportController } from '../../../../src/render/viewport.ts'
 import { RingConsumer, type RingStats } from '../../../../src/sab/ring.ts'
 import { readPixels, renderTo } from '../../../../src/test/render.ts'
 import { untilConfigured } from '../../../../src/test.ts'
+import { installCheck, r3 } from './check.ts'
 import { fixtureWasm } from './fixture-wasm.ts'
 
 declare global {
@@ -77,8 +78,14 @@ declare global {
 
 installPageStyles() // 0019 §3: pull-to-refresh structurally prevented, canvas touch-action
 
+// M39f step 8: `window.__check` (foot of this file) and `?autopan=1`, `device.html`'s scripted pan, so the
+// camera keeps moving through every drop of M29-play-through-drop (this page otherwise sets it once).
+const check = installCheck('mp')
 const params = new URL(location.href).searchParams
 const linklogVisible = params.get('linklog') === '1'
+const autopan = params.get('autopan') === '1'
+let framesRendered = 0
+let lastPanT: number | undefined
 // `?testGame=1`: the pre-M33f way, the world's seed and params handed in out of band. Only
 // `mp/remote_client_configures_from_welcome` uses it, to compare against the `Welcome` path.
 const testGame = params.get('testGame') === '1'
@@ -257,6 +264,11 @@ window.__mpSetCamera = setCameraState
 setCameraState(0, 0, 20) // `square(0)` (`tests/netcode/support.ts`'s own convention)
 
 function onCamera(): void {
+  framesRendered += 1
+  const nowT = performance.now()
+  if (autopan && lastPanT !== undefined)
+    client.cameraState.centreX += 4 * ((nowT - lastPanT) / 1000) // ~4 tiles/s, as device.html
+  lastPanT = nowT
   const v = renderer.viewport
   const camTileX = Math.floor(client.cameraState.centreX)
   const camTileY = Math.floor(client.cameraState.centreY)
@@ -383,4 +395,57 @@ window.__mpHudText = hudText
 window.__errors = () => device.errors()
 window.__adapterInfo = () => device.adapterInfo
 
+// --- `window.__check` (docs/plan/39f-device-auto-runner.md, step 8) -------------------------------------
+// `linkEvents` stamps every `client.onLink` transition with the wall clock (the link log has none), which
+// is what M29's per-drop timing reads for a drop that happens with the page in front of the person.
+const linkEvents: { state: string; t: number }[] = []
+client.onLink((e) => {
+  linkEvents.push({ state: e.state, t: Date.now() })
+  if (linkEvents.length > 200) linkEvents.shift()
+})
+const verdicts = new Map<number, (r: unknown) => void>()
+client.onActionResult<Reject>((seq, result) => {
+  if (result !== 'NotPredictable') verdicts.get(seq)?.(result)
+})
+check.errors = () => device.errors()
+check.readings = () => ({
+  isolated: globalThis.crossOriginIsolated,
+  adapter: [device.adapterInfo.vendor, device.adapterInfo.architecture]
+    .filter((x) => x !== '')
+    .join('/'),
+  workers_ready: workersReady,
+  link: linkState,
+  revealed: workersReady ? client.revealed() : false,
+  confirmed,
+  rejected,
+  frames: framesRendered,
+  centre_x: r3(client.cameraState.centreX),
+  centre_y: r3(client.cameraState.centreY),
+  link_log_n: client.debug.linkLog().length,
+  was_discarded: (document as unknown as { wasDiscarded?: boolean }).wasDiscarded === true,
+})
+check.act = {
+  paint: (arg) => {
+    const { x = 50, y = 50 } = (arg ?? {}) as { x?: number; y?: number }
+    const t0 = performance.now()
+    return new Promise((resolve) => {
+      const seq = paintAt(x, y)
+      verdicts.set(seq, (result) => {
+        verdicts.delete(seq)
+        resolve({ seq, result, ms: r3(performance.now() - t0) })
+      })
+      setTimeout(() => {
+        if (verdicts.delete(seq))
+          resolve({ seq, result: 'timeout', ms: r3(performance.now() - t0) })
+      }, 10_000)
+    })
+  },
+  /** The link log (newest first) and the stamped link transitions, as plain JSON. */
+  linkLog: async () => ({
+    rows: client.debug.linkLog().map((e) => ({ ...e })),
+    events: linkEvents.map((e) => ({ ...e })),
+  }),
+}
+
 window.__pageReady = true
+check.ready = true

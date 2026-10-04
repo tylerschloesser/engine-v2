@@ -4,7 +4,8 @@
 //
 //   GET  /__walk/agent.js     the agent (public code, no secret in it; the pages carry no token, so
 //                             the injected <script> tag cannot either)
-//   GET  /__walk/driver.js    the round driver the agent loads on a walk step (public code, same reason)
+//   GET  /__walk/driver.js    the round driver the agent loads on a walk step (public code, same reason),
+//        /__walk/collect-life.js and /__walk/collect-touch.js: the collectors the driver loads on demand
 //   GET  /__walk/runner.html  the QR target                                   (run token)
 //   WS   /__walk/ws           the live channel                                (run token + Origin)
 //   POST /__walk/msg          the same messages when the socket is not up      (run token + Origin)
@@ -62,6 +63,8 @@ export function createPhoneApi({
   observe = () => {},
   agentPath = here('./agent/agent.js'),
   driverPath = here('./agent/driver.js'),
+  lifePath = here('./agent/collect-life.js'),
+  touchPath = here('./agent/collect-touch.js'),
   runnerPath = here('./runner.html'),
 }) {
   const allowed = new Set()
@@ -146,6 +149,15 @@ export function createPhoneApi({
     return stepFields({ type: 'ack', seq })
   }
 
+  // Public repo code, no secret (the injected <script> tag cannot carry one): the agent, the round driver
+  // and the two files of collectors it loads on demand.
+  const publicCode = {
+    '/__walk/agent.js': agentPath,
+    '/__walk/driver.js': driverPath,
+    '/__walk/collect-life.js': lifePath,
+    '/__walk/collect-touch.js': touchPath,
+  }
+
   const asset = (res, path, type) => {
     let text
     try {
@@ -166,10 +178,8 @@ export function createPhoneApi({
     if (!url.pathname.startsWith('/__walk/')) return send(res, 404, { error: 'not found' })
     if (!hostOk(req)) return send(res, 403, { error: 'host' })
     if (isCut()) return send(res, 503, { error: 'cut' })
-    if (req.method === 'GET' && url.pathname === '/__walk/agent.js')
-      return asset(res, agentPath, 'text/javascript; charset=utf-8')
-    if (req.method === 'GET' && url.pathname === '/__walk/driver.js')
-      return asset(res, driverPath, 'text/javascript; charset=utf-8')
+    const code = req.method === 'GET' ? publicCode[url.pathname] : undefined
+    if (code) return asset(res, code, 'text/javascript; charset=utf-8')
     if (!tokenOk(url)) return send(res, 403, { error: 'token' })
     if (req.method === 'GET' && url.pathname === '/__walk/runner.html')
       return asset(res, runnerPath, 'text/html; charset=utf-8')

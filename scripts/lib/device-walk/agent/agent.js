@@ -475,6 +475,7 @@
         .map(([k, v]) => `${v ? '✓' : '○'} ${k}`)
         .join('   ')
       box.append(d)
+      for (const b of s.buttons || []) box.append(btn(b.label, b.fn))
     }
     if (s.kind === 'interrupted') {
       box.append(

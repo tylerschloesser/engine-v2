@@ -43,6 +43,26 @@ test('check-reporter: the fixture pages carry window.__check; no production outp
       : []),
   ]
   expect(production.length).toBeGreaterThan(50)
-  for (const needle of ['__check', '__walkDriver', '__walkAgent'])
+  for (const needle of ['__check', '__walkDriver', '__walkAgent', '__walkKit', 'collect-life'])
     expect(has(production, needle), `${needle} in production output`).toEqual([])
+})
+
+// M39f steps 7-9: every fixture page that reports installs the reporter under its own name (the positive
+// control per page: a page that lost its `installCheck` would pass the absence half above for the wrong
+// reason), and none of the collectors' own globals is in a page bundle either (they are served by the phone
+// API, never built in).
+test('check-reporter: each reporting fixture page installs window.__check under its own name', () => {
+  const assets = join(root, 'packages/engine/tests/browser/pages/dist/assets')
+  expect(existsSync(assets), 'run pnpm test (pages build)').toBe(true)
+  const all = files(assets)
+  for (const page of ['device', 'slice', 'world', 'mp']) {
+    const chunk = all.filter((f) => new RegExp(`/${page}-[\\w-]+\\.js$`).test(f))
+    expect(chunk.length, `a ${page} chunk`).toBeGreaterThan(0)
+    expect(
+      has(chunk, `installCheck("${page}")`).length + has(chunk, `installCheck('${page}')`).length,
+      `${page} installs the reporter`,
+    ).toBeGreaterThan(0)
+  }
+  for (const needle of ['__walkKit', '__walkDriver', '__walkAgent'])
+    expect(has(all, needle), `${needle} in the fixture build`).toEqual([])
 })

@@ -28,6 +28,10 @@ export const DEFAULTS = {
   actTimeoutMs: 300_000,
   memoryTimeoutMs: 6 * 60_000,
   maxReloads: 2,
+  // The absences a lifecycle check asks for (M16-background, M23-hidden-pause): `leaveMs` replaces each
+  // one's own target (tests and dev runs only); the others are the kill-resume play time and the
+  // number of tries a check gives a person to stay away for the stated time.
+  playMs: 120_000,
 }
 
 /** The check's page with a ladder rung (`&scaleCap=1.5`, or `?module=url`, which replaces the query). */
@@ -39,7 +43,12 @@ export function withRung(page, rung) {
 
 /** The page of an attempt; `params.probeS` shortens the memory probe's two sessions (tests only). */
 export function pageFor(entry, rung, params = {}) {
-  let page = withRung(entry.plan.page, entry.plan.ladder?.[rung - 1])
+  // `plan.query`: what a lifecycle check adds to the page `device-checks.md` names (`world=walk-busy`: its own
+  // world; `autopan=1`), so `plan.page` stays what the serving derivation shows.
+  const base = entry.plan.query
+    ? `${entry.plan.page}${entry.plan.page.includes('?') ? '&' : '?'}${entry.plan.query}`
+    : entry.plan.page
+  let page = withRung(base, entry.plan.ladder?.[rung - 1])
   if (entry.plan.collector === 'memory' && params.probeS) page += `&probeS=${params.probeS}`
   return page
 }
@@ -89,6 +98,77 @@ export function foldItem(events, id) {
   st.first = since.find((a) => a.criteria)
   st.last = st.attempts.get(st.n)
   return st
+}
+
+/**
+ * What the phone has told the service during attempt `n` of `id` with `reading {id, n, key, data}`: the
+ * newest value per key. A check that spans documents or tabs keeps its state here, on the service: the
+ * kill-resume `before`, the second tab's `second`, the export's `import`. It is part of the step, so a
+ * page that was killed and reopened (a new document, a new tab) finds it again.
+ */
+export function readingsOf(events, id, n) {
+  const state = {}
+  for (const e of events)
+    if (e.type === 'reading' && e.id === id && e.n === n && typeof e.key === 'string')
+      state[e.key] = e.data
+  return state
+}
+
+/**
+ * The drop choreographer of M29 (`plan.mode: 'drops'`), a pure function of the round log. The phone sends one
+ * `reading {key: 'run', data: {scenario, ms, ...}}` per run; the **service** decides whether the run counts: its
+ * absence (`ms`, timed on the phone from its own visibility and online events) must be within +-30% of the
+ * scenario's stated time (`opts.scenarioMs[key]` replaces it in tests), or the run repeats. A discarded page
+ * counts (its absence cannot be timed), a scenario with no stated time counts whenever the link dropped.
+ * Returns what the page shows next and what has been accepted so far.
+ */
+export function mpProgress(events, id, n, plan, opts = {}) {
+  const runs = events
+    .filter((e) => e.type === 'reading' && e.id === id && e.n === n && e.key === 'run')
+    .map((e) => e.data)
+  const accepted = []
+  let lastRejected = null
+  const per = {}
+  for (const d of runs) {
+    const sc = plan.scenarios.find((x) => x.key === d.scenario)
+    if (!sc) continue
+    const target = opts.scenarioMs?.[sc.key] ?? sc.ms
+    const within =
+      d.discarded ||
+      (target === null ? d.dropped === true : d.ms >= 0.7 * target && d.ms <= 1.3 * target)
+    if (within && (per[sc.key] ?? 0) < plan.runsEach) {
+      per[sc.key] = (per[sc.key] ?? 0) + 1
+      accepted.push(d)
+      lastRejected = null
+    } else if (!within) lastRejected = { scenario: sc.key, ms: d.ms, target }
+  }
+  const sc = plan.scenarios.find((x) => (per[x.key] ?? 0) < plan.runsEach)
+  const total = plan.scenarios.length * plan.runsEach
+  const next = sc
+    ? {
+        scenario: sc.key,
+        kind: sc.kind,
+        run: (per[sc.key] ?? 0) + 1,
+        of: plan.runsEach,
+        targetMs: opts.scenarioMs?.[sc.key] ?? sc.ms,
+        text: sc.text,
+      }
+    : null
+  return { next, accepted, lastRejected, done: accepted.length, total }
+}
+
+/**
+ * `plan.inherit: { m03: 'M03-determinism' }`: a check whose Pass text says "as that item" (M16-slice-boot
+ * re-runs M03's criterion) reads that item's result from this round: `{ pass: true|false|null, from }`
+ * (null: not walked in this round, or no verdict yet; a criterion that says `nullIs: 'judge'` then asks).
+ */
+export function inherited(entry, data, events) {
+  const out = { ...data }
+  for (const [key, id] of Object.entries(entry.plan.inherit ?? {})) {
+    const r = events.findLast((e) => e.type === 'result' && e.id === id)
+    out[key] = { pass: r ? r.result === 'pass' : null, from: id }
+  }
+  return out
 }
 
 const rel = (path, base) => (base && isAbsolute(path) ? relative(base, path) : path)
@@ -193,6 +273,38 @@ export function createAutoRound({ file, items, origins, params = {}, evidenceBas
     if (needsDesktop(entry)) return []
     const n = s.n + 1
     const rung = s.fails
+    const shared = entry.plan.reuse && reused(entry, events)
+    if (shared) {
+      // The same runs as another check of this round (M29-play-through-drop reads M29-socket-resume's
+      // 18 drops: the person is not asked to do them twice).
+      const { verdict, criteria, metrics } = evaluate(entry, shared.data, {})
+      const open = {
+        type: 'attempt',
+        id: it.id,
+        n,
+        variant: entry.plan.variant,
+        page: pageFor(entry, 0, params),
+        rung: 0,
+      }
+      const done = {
+        type: 'attempt',
+        id: it.id,
+        n,
+        status: 'done',
+        outcome: verdict,
+        criteria,
+        metrics,
+        evidence: shared.evidence,
+      }
+      const st = foldItem([...events, open, done], it.id)
+      const note = `the same runs as ${entry.plan.reuse}`
+      return [
+        { type: 'cursor', id: it.id },
+        open,
+        done,
+        ...(verdict === 'judge' ? [] : conclude(it, st, st.attempts.get(n), verdict, 'auto', note)),
+      ]
+    }
     return [
       { type: 'cursor', id: it.id },
       {
@@ -212,6 +324,15 @@ export function createAutoRound({ file, items, origins, params = {}, evidenceBas
       if (!next.length) return
       for (const e of next) api.append(e)
     }
+  }
+
+  /** The collected data of the finished attempt of the check `entry.plan.reuse`, when it produced some. */
+  function reused(entry, events) {
+    const st = foldItem(events, entry.plan.reuse)
+    const a = [...st.attempts.values()].findLast((x) => x.evidence && x.status !== 'interrupted')
+    if (!a) return null
+    const data = readData(a.evidence)
+    return data && !data.unreadable && !data.reloaded ? { data, evidence: a.evidence } : null
   }
 
   function readData(path) {
@@ -234,7 +355,9 @@ export function createAutoRound({ file, items, origins, params = {}, evidenceBas
     const reloaded = data.reloaded === true && a.status === 'interrupted'
     if (a.status !== 'open' && !reloaded) return // stale: interrupted by a hide, or already judged
     const entry = CHECKS[it.id]
-    const { verdict, criteria, metrics } = evaluate(entry, data, { desktopMedianMs: desktop })
+    const { verdict, criteria, metrics } = evaluate(entry, inherited(entry, data, events), {
+      desktopMedianMs: desktop,
+    })
     const done = {
       type: 'attempt',
       id: it.id,
@@ -296,15 +419,16 @@ export function createAutoRound({ file, items, origins, params = {}, evidenceBas
           variant: entry.plan.variant,
           origin: origins[entry.plan.variant] ?? null,
           page: a.page ?? pageFor(entry, a.rung, params),
-          plan: {
-            collector: entry.plan.collector,
-            globals: entry.plan.globals,
-            dom: entry.plan.dom,
-            completeSteps: entry.plan.completeSteps,
-            reloadIsFail: entry.plan.reloadIsFail,
-          },
+          // The whole plan (JSON-safe by construction): collectors read `mode`, `leaves`, `scenarios`...
+          plan: { ...entry.plan, ladder: undefined },
           opts: optsFor(entry),
           acts: entry.acts,
+          state: {
+            ...readingsOf(events, it.id, a.n),
+            ...(entry.plan.mode === 'drops'
+              ? { mp: mpProgress(events, it.id, a.n, entry.plan, optsFor(entry)) }
+              : {}),
+          },
         }
         if (a.status === 'open') return { ...base, phase: 'run', item, progress }
         if (a.status === 'judge') {
@@ -319,7 +443,7 @@ export function createAutoRound({ file, items, origins, params = {}, evidenceBas
             judge: {
               id: it.id,
               n: a.n,
-              text: `${entry.judges[0] ?? 'Judge this check'}. Measured: ${hint}.`,
+              text: `${entry.judges.join('; ') || 'Judge this check'}. Measured: ${hint}.`,
             },
             progress,
           }
