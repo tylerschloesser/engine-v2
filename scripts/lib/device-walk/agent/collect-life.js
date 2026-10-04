@@ -446,16 +446,17 @@
     K.set('mp_run', JSON.stringify({ scenario: next.scenario, at: startedAt }))
     const r0 = readings()
     let dialog = false
-    let was = 'online'
     const scan = () => {
       if (document.querySelector(SCAN)) dialog = true
     }
     const sample = () => {
       scan()
-      const link = readings().link
-      if (link !== 'online' && was === 'online' && !t.linkDown) t.linkDown = Date.now()
-      if (link === 'online' && was !== 'online' && t.linkDown && !t.linkUp) t.linkUp = Date.now()
-      was = link
+      const r = readings()
+      const fresh = r.link_log_n > r0.link_log_n // the log has grown since this run began
+      if (!t.linkDown && (r.link !== 'online' || (fresh && /^(close|silence)$/.test(r.link_last))))
+        t.linkDown = Date.now()
+      else if (t.linkDown && !t.linkUp && r.link === 'online' && r.link_last === 'Welcome')
+        t.linkUp = Date.now()
     }
     const onVis = () => {
       if (net) return
@@ -498,13 +499,14 @@
     const welcome = drop && mine.find((e) => e.state === 'online' && e.t >= drop.t)
     const rows = log.rows.slice(0, Math.max(0, log.rows.length - r0.link_log_n))
     const first = (ev) => rows.findLast((x) => x.event === ev)
+    const dropped = !!drop || rows.some((x) => x.event === 'close' || x.event === 'silence')
     const refBack = net ? t.online : t.back // the moment "visible" (or "online") happened
     const data = {
       scenario: next.scenario,
       run: next.run,
       ms: backAt && leftAt ? backAt - leftAt : null,
-      dropped: !!drop,
-      survived: !drop,
+      dropped,
+      survived: !dropped,
       welcomeMs: drop ? (welcome ? (refBack ? welcome.t - refBack : null) : 999_999) : null,
       outageMs: drop && welcome ? welcome.t - drop.t : null,
       neverOnline: !!drop && !welcome,

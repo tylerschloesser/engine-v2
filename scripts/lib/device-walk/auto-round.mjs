@@ -118,11 +118,12 @@ export function readingsOf(events, id, n) {
  * The drop choreographer of M29 (`plan.mode: 'drops'`), a pure function of the round log. The phone sends one
  * `reading {key: 'run', data: {scenario, ms, ...}}` per run; the **service** decides whether the run counts: its
  * absence (`ms`, timed on the phone from its own visibility and online events) must be within +-30% of the
- * scenario's stated time (`opts.scenarioMs[key]` replaces it in tests), or the run repeats. A discarded page
+ * scenario's stated time (`opts.scenarioMs[key]` and `opts.runsEach` replace them in tests), or the run repeats. A discarded page
  * counts (its absence cannot be timed), a scenario with no stated time counts whenever the link dropped.
  * Returns what the page shows next and what has been accepted so far.
  */
 export function mpProgress(events, id, n, plan, opts = {}) {
+  const each = opts.runsEach ?? plan.runsEach
   const runs = events
     .filter((e) => e.type === 'reading' && e.id === id && e.n === n && e.key === 'run')
     .map((e) => e.data)
@@ -136,20 +137,20 @@ export function mpProgress(events, id, n, plan, opts = {}) {
     const within =
       d.discarded ||
       (target === null ? d.dropped === true : d.ms >= 0.7 * target && d.ms <= 1.3 * target)
-    if (within && (per[sc.key] ?? 0) < plan.runsEach) {
+    if (within && (per[sc.key] ?? 0) < each) {
       per[sc.key] = (per[sc.key] ?? 0) + 1
       accepted.push(d)
       lastRejected = null
     } else if (!within) lastRejected = { scenario: sc.key, ms: d.ms, target }
   }
-  const sc = plan.scenarios.find((x) => (per[x.key] ?? 0) < plan.runsEach)
-  const total = plan.scenarios.length * plan.runsEach
+  const sc = plan.scenarios.find((x) => (per[x.key] ?? 0) < each)
+  const total = plan.scenarios.length * each
   const next = sc
     ? {
         scenario: sc.key,
         kind: sc.kind,
         run: (per[sc.key] ?? 0) + 1,
-        of: plan.runsEach,
+        of: each,
         targetMs: opts.scenarioMs?.[sc.key] ?? sc.ms,
         text: sc.text,
       }

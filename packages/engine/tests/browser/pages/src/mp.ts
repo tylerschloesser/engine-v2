@@ -414,6 +414,7 @@ check.readings = () => ({
     .filter((x) => x !== '')
     .join('/'),
   workers_ready: workersReady,
+  orientation: window.innerWidth >= window.innerHeight ? 'landscape' : 'portrait',
   link: linkState,
   revealed: workersReady ? client.revealed() : false,
   confirmed,
@@ -422,6 +423,9 @@ check.readings = () => ({
   centre_x: r3(client.cameraState.centreX),
   centre_y: r3(client.cameraState.centreY),
   link_log_n: client.debug.linkLog().length,
+  // The newest link-log event (`close`, `silence`, `Welcome`, ...): a drop shorter than the indicator's
+  // 1 s delay never shows in `link`, but it is in the log.
+  link_last: client.debug.linkLog()[0]?.event ?? '',
   was_discarded: (document as unknown as { wasDiscarded?: boolean }).wasDiscarded === true,
 })
 check.act = {
