@@ -4,6 +4,7 @@
 //
 //   GET  /__walk/agent.js     the agent (public code, no secret in it; the pages carry no token, so
 //                             the injected <script> tag cannot either)
+//   GET  /__walk/driver.js    the round driver the agent loads on a walk step (public code, same reason)
 //   GET  /__walk/runner.html  the QR target                                   (run token)
 //   WS   /__walk/ws           the live channel                                (run token + Origin)
 //   POST /__walk/msg          the same messages when the socket is not up      (run token + Origin)
@@ -40,6 +41,7 @@ export const SEQUENCED = new Set([
   'answer',
   'result',
   'reading',
+  'walk',
 ])
 const RESERVED = new Set(['run', 'tab', 'seq', 't', 'type', 'src'])
 const MAX_BODY = 200_000
@@ -59,6 +61,7 @@ export function createPhoneApi({
   react = () => [],
   observe = () => {},
   agentPath = here('./agent/agent.js'),
+  driverPath = here('./agent/driver.js'),
   runnerPath = here('./runner.html'),
 }) {
   const allowed = new Set()
@@ -165,6 +168,8 @@ export function createPhoneApi({
     if (isCut()) return send(res, 503, { error: 'cut' })
     if (req.method === 'GET' && url.pathname === '/__walk/agent.js')
       return asset(res, agentPath, 'text/javascript; charset=utf-8')
+    if (req.method === 'GET' && url.pathname === '/__walk/driver.js')
+      return asset(res, driverPath, 'text/javascript; charset=utf-8')
     if (!tokenOk(url)) return send(res, 403, { error: 'token' })
     if (req.method === 'GET' && url.pathname === '/__walk/runner.html')
       return asset(res, runnerPath, 'text/html; charset=utf-8')

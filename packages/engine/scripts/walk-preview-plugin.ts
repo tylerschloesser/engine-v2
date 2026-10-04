@@ -35,6 +35,12 @@ export function walkPreview(port: string | undefined = process.env.ENGINE_WALK_P
         const outDir = resolve(server.config.root, server.config.build.outDir)
         const headers = server.config.preview.headers ?? {}
         server.middlewares.use((req, res, next) => {
+          // Every response, not only pages: `vite preview` answers a revalidation with a bare 304 that
+          // lacks COOP/COEP, and WebKit then refuses the worker script of a page it loads a second time
+          // ("blocked by Cross-Origin-Embedder-Policy"; found by `walk-auto` on `worldgen-bench.html`).
+          // `no-store` means there is nothing to revalidate; the headers go on before the file server runs.
+          for (const [k, v] of Object.entries(headers)) res.setHeader(k, v as string)
+          res.setHeader('cache-control', 'no-store')
           const raw = (req.url ?? '/').split('?')[0] ?? '/'
           let path: string
           try {
@@ -52,9 +58,7 @@ export function walkPreview(port: string | undefined = process.env.ENGINE_WALK_P
           } catch {
             return next()
           }
-          for (const [k, v] of Object.entries(headers)) res.setHeader(k, v as string)
           res.setHeader('content-type', 'text/html; charset=utf-8')
-          res.setHeader('cache-control', 'no-store')
           res.end(injectWalkTag(html))
         })
       },

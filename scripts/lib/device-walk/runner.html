@@ -122,7 +122,10 @@
   $('start').onclick = async () => {
     $('start').disabled = true
     await A.start() // the gesture: best-effort wake lock
-    const ack = await A.sendAndWait('selftest', { phase: 'start', origin: location.origin })
+    const walk = cur && cur.kind === 'walk'
+    const ack = walk
+      ? await A.sendAndWait('walk', { phase: 'start', origin: location.origin })
+      : await A.sendAndWait('selftest', { phase: 'start', origin: location.origin })
     if (!ack) { status('The Mac did not answer; tap Start again.'); $('start').disabled = false }
   }
   $('tap').onclick = () => {
@@ -133,7 +136,28 @@
     A.send('selftest', { phase: 'tap', n: tapN })
   }
 
+  // A check round (kind 'walk'): the pre-flight is the same; after Start the driver (loaded by the agent)
+  // takes this tab to the first check's page, and the rest happens on those pages.
+  function driveWalk(step) {
+    if (step.phase === 'idle') {
+      document.querySelector('#idle h2').textContent = 'Before you start (a check round)'
+      show('idle')
+      status('Ready.')
+    } else if (step.phase === 'done') {
+      show('done')
+      status('The round is finished.')
+      $('verdict').textContent = `${step.progress.done} of ${step.progress.total} checks recorded. The results are on the Mac.`
+    } else {
+      show('run')
+      const p = step.progress || { done: 0, total: 0 }
+      $('timer').textContent = `${p.done} / ${p.total}`
+      $('phase').textContent = step.item ? `Next: ${step.item.id}` : 'Waiting for the Mac'
+      status('Walking the round; touch the screen only when asked.')
+    }
+  }
+
   async function drive(step) {
+    if (step.kind === 'walk') return driveWalk(step)
     if (step.id !== 'M39f-selftest') return
     $('taps').textContent = String(tapN)
     if (step.phase === 'idle') { show('idle'); status('Ready.'); return }

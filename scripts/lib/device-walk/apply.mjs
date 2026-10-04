@@ -1,5 +1,6 @@
 // `--apply`: round state -> device-checks.md (M39e). Pure text in, text out; idempotent because the
 // Run on line it writes is regenerated from the round and carries the round's tag.
+import { describeEnv } from './env.mjs'
 import { parseChecks } from './parse.mjs'
 import { servingFor } from './serving.mjs'
 
@@ -48,11 +49,20 @@ export function applyRound(checksText, state, { round, overrides }) {
       const d = state.device
       const dev = servingFor(it, overrides).device
       if (dev === 'mac') devices.add(d.mac ? `Mac ${d.mac}` : 'Mac')
-      else
+      else {
+        // Typed in the Mac UI wins; else what the phone's own `env` says (an auto round, M39f).
+        const e = describeEnv(state.env)
+        const own = [d.phone, d.ios && `iOS ${d.ios}`].filter(Boolean).join(' ')
+        const seen = e ? [e.device, e.os, e.browser].filter(Boolean).join(', ') : ''
+        const gpu = e
+          ? [e.adapter && `adapter ${e.adapter}`, e.cores !== null && `${e.cores} cores`]
+          : []
         devices.add(
-          [d.phone, d.ios && `iOS ${d.ios}`].filter(Boolean).join(' ') ||
-            'iPhone (model not recorded)',
+          (own || seen
+            ? [own || seen, ...(own ? [e?.browser] : []), ...gpu].filter(Boolean).join(', ')
+            : '') || 'iPhone (model not recorded)',
         )
+      }
     }
     const date = rows
       .map((it) => state.items.get(it.id).at ?? '')

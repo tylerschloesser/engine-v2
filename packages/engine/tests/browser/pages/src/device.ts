@@ -13,6 +13,11 @@
 // here worries about per-frame allocation the way `.claude/rules/hot-paths.md` requires of
 // production code.
 //
+// M39f (docs/plan/39f-device-auto-runner.md steps 5-6): `window.__check` (`check.ts`) reports the HUD's own
+// numbers as numbers, so `pnpm device:walk --auto` reads them instead of Tyler copying them down:
+// `readings()` per mode below, `ready` set with `__pageReady`. `?probeS=<seconds>` shortens the memory
+// probe's two sessions for the automated run of that check (unset: the 2 minutes of the checklist).
+//
 // M11 step 8 (docs/plan/11-camera-and-input.md, Scope: "device.html additions: gestures enabled,
 // `?module=url`, and `?probe=memory`"): `onCamera` below is no longer a hand-written stand-in for
 // the camera -> frame-uniform maths (docs/plan/09b-terrain-art-and-lifecycle.md Deviations,
@@ -52,6 +57,7 @@ import {
   pumpUntilLive,
   stepSimTickSync,
 } from '../../../../src/test/client.ts'
+import { installCheck, r3 } from './check.ts'
 import { fixtureWasm } from './fixture-wasm.ts'
 
 declare global {
@@ -98,6 +104,7 @@ if (params.has('cutoff')) renderOptions.neighbourCutoffPx = Number(params.get('c
 // =url` instead posts `wasmUrl` and lets each worker compile it itself.
 const postModule = params.get('module') !== 'url'
 
+const check = installCheck('device')
 const wasm = await fixtureWasm('terrain')
 
 /** M09b step 7's own page, unchanged: the fill-rate/lifecycle HUD, gestures now real (M11). */
@@ -301,6 +308,45 @@ async function runFillRateHud(): Promise<void> {
   setInterval(renderHud, 200)
   renderHud()
 
+  // --- `window.__check` (docs/plan/39f-device-auto-runner.md): the HUD's own numbers as numbers ------
+  check.errors = () => device.errors()
+  check.readings = () => {
+    const v = renderer.viewport
+    const raf = rafInterval.values()
+    const cb = callbackDuration.values()
+    const gpuVals = gpuLatency.values()
+    const cam = client.cameraState
+    return {
+      isolated: globalThis.crossOriginIsolated,
+      adapter: [device.adapterInfo.vendor, device.adapterInfo.architecture]
+        .filter((x) => x !== '')
+        .join('/'),
+      workers_ready: workersReady,
+      delivery: postModule ? 'posted Module' : 'url',
+      orientation: window.innerWidth >= window.innerHeight ? 'landscape' : 'portrait',
+      canvas_w: v.widthPx,
+      canvas_h: v.heightPx,
+      dpr: v.dpr,
+      render_scale: v.renderScale,
+      tiles_across: r3(cam.tilesAcross),
+      centre_x: r3(cam.centreX),
+      centre_y: r3(cam.centreY),
+      cursor_valid: cam.cursorValid,
+      cursor_tile_x: cam.cursorValid ? cam.cursorTileX : null,
+      cursor_tile_y: cam.cursorValid ? cam.cursorTileY : null,
+      raf_p50_ms: r3(percentile(raf, 0.5)),
+      raf_p95_ms: r3(percentile(raf, 0.95)),
+      raf_worst_ms: r3(raf.length ? Math.max(...raf) : 0),
+      raf_n: raf.length,
+      raf_over20: raf.filter((x) => x > 20).length,
+      cb_p95_ms: r3(percentile(cb, 0.95)),
+      gpu_p95_ms: r3(percentile(gpuVals, 0.95)),
+      gpu_n: gpuVals.length,
+      frames: framesRendered,
+      steps: [],
+    }
+  }
+
   // --- Test hook (canvas.spec.ts: `canvas: presents`, `frame-loop: production runs phases in
   // order`) -- and Tyler's own manual troubleshooting via the Playwright CLI skill. ----------------
   window.__device = {
@@ -359,7 +405,14 @@ async function runMemoryProbe(): Promise<void> {
   // arenas per the checklist's own *If it fails* rule.
   const simMiB = params.has('sim') ? Number(params.get('sim')) : undefined
   const clientMiB = params.has('client') ? Number(params.get('client')) : undefined
-  const PROBE_DURATION_MS = 2 * 60 * 1000
+  const PROBE_DURATION_MS = params.has('probeS')
+    ? Number(params.get('probeS')) * 1000
+    : 2 * 60 * 1000
+  check.readings = () => ({
+    mode: 'memory',
+    probe_complete: log.some((l) => l === 'probe=memory: complete'),
+    steps: log.slice(),
+  })
 
   const device: RendererDevice = await initDevice()
   const gpuApi = (navigator as unknown as { gpu: GPU }).gpu
@@ -823,3 +876,4 @@ if (params.get('harness') === '1') {
 }
 
 window.__pageReady = true
+check.ready = true

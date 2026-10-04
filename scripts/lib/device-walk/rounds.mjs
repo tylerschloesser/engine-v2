@@ -56,6 +56,15 @@ export function formatMetrics(metrics) {
 }
 
 const RESULT_EXTRAS = ['by', 'attempt', 'criteria', 'metrics', 'evidence']
+const ATTEMPT_FIELDS = [
+  'status',
+  'variant',
+  'page',
+  'rung',
+  'reason',
+  'outcome',
+  ...RESULT_EXTRAS.slice(2),
+]
 
 /**
  * Replay events over the walked `items`. Returns
@@ -101,9 +110,16 @@ export function replay(events, items) {
     else if (e.type === 'attempt' && ids.has(e.id)) {
       const list = state.items.get(e.id).attempts
       const at = list.find((a) => a.n === e.n)
-      if (at) Object.assign(at, pickDefined(e, ['status', 'variant', 'page']))
+      if (at) Object.assign(at, pickDefined(e, ATTEMPT_FIELDS))
       else
-        list.push({ t: e.t, n: e.n, variant: e.variant, page: e.page, status: e.status ?? 'open' })
+        list.push({
+          t: e.t,
+          n: e.n,
+          variant: e.variant,
+          page: e.page,
+          status: e.status ?? 'open',
+          ...pickDefined(e, ATTEMPT_FIELDS.slice(3)),
+        })
     } else if (e.type === 'prompt' && ids.has(e.id))
       state.items.get(e.id).prompts.push({ t: e.t, n: e.n, kind: e.kind, text: e.text })
     else if ((e.type === 'result' || e.type === 'redo') && ids.has(e.id)) {

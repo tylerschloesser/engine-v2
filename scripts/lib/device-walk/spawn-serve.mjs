@@ -66,11 +66,22 @@ export function reapStale({
   return killed
 }
 
+/**
+ * The child's environment without colour: `device-serve` waits for `:<port>` in vite's output, which a
+ * coloured run (FORCE_COLOR, set by Playwright's runner, say) splits with escape codes, and the server then
+ * never reports ready. (picocolors treats a FORCE_COLOR key of any value as "on", so it is removed.)
+ */
+export function plainEnv(extra) {
+  const e = { ...process.env, ...extra, NO_COLOR: '1' }
+  delete e.FORCE_COLOR
+  return e
+}
+
 export function spawnServe(args, { onLine, onExit, env }) {
   const child = spawn(process.execPath, [SCRIPT, ...args], {
     cwd: REPO,
     stdio: ['ignore', 'pipe', 'pipe'],
-    ...(env ? { env: { ...process.env, ...env } } : {}),
+    env: plainEnv(env),
   })
   writePids([...readPids(), { pid: child.pid, owner: process.pid }])
   for (const stream of [child.stdout, child.stderr]) {

@@ -108,6 +108,7 @@
     } else if (m.type === 'ack') trim(m.seq)
     if (m.step) {
       step = m.step
+      if (step.kind === 'walk' && step.phase !== 'idle') loadDriver()
       emit('step', step)
     }
     if (m.type === 'ack') {
@@ -117,6 +118,14 @@
           fn(m)
         }
     }
+  }
+  /** A walk round: load the driver (adapters, navigation) once; it reads `step` and does the rest. */
+  function loadDriver() {
+    if (window.__walkDriver) return
+    window.__walkDriver = true
+    const el = document.createElement('script')
+    el.src = '/__walk/driver.js'
+    ;(document.head || document.documentElement).append(el)
   }
   function trim(upTo) {
     const n = outbox.length
@@ -197,6 +206,7 @@
   setInterval(() => {
     if (ws && ws.readyState === 1) {
       control('ping', { vis: document.visibilityState })
+      if (step && step.kind === 'walk' && step.phase !== 'done') control('step?') // a walk waits on the Mac
       if (Date.now() - lastRx > 7000) {
         const dead = ws
         try {
@@ -399,12 +409,9 @@
     denied: 0,
     error: '',
   }
-  // Best effort (docs/plan/39f, Deviations): iOS grants the lock only with user activation on this
-  // document, so it is requested on the Start tap and on every walk-bar tap; a denial is recorded and
-  // never fails anything. A round relies on Auto-Lock set to Never, not on this.
-  const wakeWanted = true
+  // Best effort (docs/plan/39f Deviations): iOS grants it only with user activation on this document, so
+  // it is asked for on the Start tap and every bar tap; a denial never fails anything (Auto-Lock Never).
   async function wakeRequest(reason) {
-    if (!wakeWanted) return wake.state
     if (!navigator.wakeLock) {
       wake.state = 'unsupported'
       return wake.state
