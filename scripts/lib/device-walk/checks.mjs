@@ -146,10 +146,7 @@ export const CHECKS = {
         ref: 'pass',
       },
     ],
-    metrics: [
-      { name: 'fixtures', source: 'g.__determinism.fixtures.*.pass', reduce: 'len' },
-      { name: 'ua', source: 'g.__determinism.userAgent' },
-    ],
+    metrics: [{ name: 'fixtures', source: 'g.__determinism.fixtures.*.pass', reduce: 'len' }],
     acts: [],
     judges: [],
   },
