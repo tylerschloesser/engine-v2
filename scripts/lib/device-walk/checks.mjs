@@ -101,6 +101,32 @@ const fillMetrics = [
 const FILL_LADDER = ['&scaleCap=1.5', '&scaleCap=1', '&scaleCap=1&cutoff=4']
 
 /** A built entry of delegation 3 (the lifecycle and choreography checks of the fixture pages). */
+/**
+ * M17b (`human`, assisted): the harness page's own probe lines and errors are collected, the allocation
+ * timeline and the GC markers are the person's (Web Inspector or the Firefox Profiler: nothing a page can
+ * read). `criteria` stays empty for a `human` row; `assist.criteria` are what the page can say.
+ */
+const HARNESS_ASSIST = {
+  criteria: [
+    { name: 'gpu_errors', source: 'harness.errors', op: '==', limit: 0, ref: 'pass' },
+    {
+      name: 'allocation_and_gc_markers',
+      source: 'harness.memoryTotal',
+      op: '>=',
+      limit: null,
+      ref: "none: allocations and GC markers are read off the browser's own tool: the person types the two numbers",
+      judge: 'always',
+    },
+  ],
+  metrics: [
+    { name: 'view_probe_passes', source: 'harness.viewProbe' },
+    { name: 'sab_write_texture_ok', source: 'harness.sabWriteTexture' },
+    { name: 'memory_total_bytes', source: 'harness.memoryTotal' },
+  ],
+}
+const HARNESS_JUDGE =
+  'from the Timelines panel (Safari) or the Profiler (Firefox) over the 600 frames: allocation growth in KB (at most about 70) and the GC pause markers (0); type both in the note'
+
 const lifecycle = (page, extra = {}) => ({
   page,
   variant: 'fixture',
@@ -505,7 +531,14 @@ export const CHECKS = {
     class: 'auto+confirm',
     signal:
       'agent on Mac Safari: gesturechange count and scale, visualViewport.scale, __check tilesAcross',
-    plan: later(5, 'device.html', { collector: 'gestures', device: 'mac' }),
+    // A Mac browser's tab (`device: 'mac'`, `browsers`: the service opens it, `mac-browser.mjs`); the
+    // collector is `collect-mac.js`: trackpad pinch events and the page's own zoom, never a touch gesture.
+    plan: later(5, 'device.html', {
+      collector: 'pinch-desktop',
+      device: 'mac',
+      browsers: ['safari'],
+      built: true,
+    }),
     criteria: [
       { name: 'page_zoomed', source: 'pointer.pageZoomed', op: '==', limit: false, ref: 'pass' },
       {
@@ -514,6 +547,14 @@ export const CHECKS = {
         op: '==',
         limit: true,
         ref: 'pass',
+      },
+      {
+        name: 'zoom_follows_cursor',
+        source: 'camera.pinchEvents',
+        op: '>=',
+        limit: null,
+        ref: 'none: "about the cursor" is the person\'s; the pinch events seen are shown to the judge',
+        judge: 'always',
       },
     ],
     metrics: [],
@@ -706,21 +747,35 @@ export const CHECKS = {
     class: 'human',
     signal:
       'window.__deviceHarness probe lines and errors; the allocation timeline is Web Inspector only',
-    plan: later(5, 'device.html?harness=1', { device: 'mac' }),
+    plan: later(5, 'device.html?harness=1', {
+      collector: 'harness',
+      device: 'mac',
+      browsers: ['safari'],
+      built: true,
+      assist: true,
+    }),
     criteria: [],
+    assist: HARNESS_ASSIST,
     metrics: [],
     acts: ['read the allocation growth and GC marker count off the Timelines panel'],
-    judges: ['allocation growth and GC pause markers within the Pass line'],
+    judges: [HARNESS_JUDGE],
   },
   'M17b-harness-desktop-firefox': {
     pass: '0f644141',
     class: 'human',
     signal: 'as the Safari item; Firefox Profiler',
-    plan: later(5, 'device.html?harness=1', { device: 'mac' }),
+    plan: later(5, 'device.html?harness=1', {
+      collector: 'harness',
+      device: 'mac',
+      browsers: ['firefox'],
+      built: true,
+      assist: true,
+    }),
     criteria: [],
+    assist: HARNESS_ASSIST,
     metrics: [],
     acts: ['read the allocation growth off the Profiler'],
-    judges: ['allocation growth and GC pauses within the Pass line'],
+    judges: [HARNESS_JUDGE],
   },
   'M18-anchors': {
     pass: 'dab2b88b',
@@ -1295,6 +1350,7 @@ export const CHECKS = {
     plan: reference('', {
       collector: 'reference-dom',
       device: 'mac',
+      browsers: ['safari'],
       observeMs: 8 * SECOND,
       built: true,
     }),
@@ -1529,9 +1585,28 @@ export const CHECKS = {
     class: 'auto',
     signal:
       'Mac Safari and Firefox tabs opened by the service: console and uncapturederror capture, long-frame proxy',
-    plan: later(5, '', { variant: 'reference', collector: 'reference-dom', device: 'mac' }),
+    // The check build (`reference-bench`) so the pan is scripted (`__check.act.moveTo`), in each Mac browser in
+    // turn (`browsers`): the legs report through the round log and the last one sends the attempt's data.
+    // A browser with no `navigator.gpu` (Firefox) is recorded as unsupported: the row is then `skip`.
+    plan: later(5, '', {
+      variant: 'reference-bench',
+      collector: 'desktop-play',
+      device: 'mac',
+      browsers: ['safari', 'firefox'],
+      windowMs: 5 * 60 * SECOND,
+      warmupMs: 0,
+      built: true,
+    }),
     criteria: [
       { name: 'validation_errors', source: 'gpu.errors', op: '==', limit: 0, ref: 'pass' },
+      { name: 'page_errors', source: 'pageErrors', op: '==', limit: 0, ref: 'pass' },
+      {
+        name: 'ran_in_every_browser',
+        source: 'ran',
+        op: '==',
+        limit: true,
+        ref: 'none: a browser that never started the game did not play it',
+      },
       {
         name: 'hitch_gaps_over_25ms',
         source: 'windows.*.raf.long25',
@@ -1708,7 +1783,7 @@ const round = (v) => (typeof v === 'number' ? +v.toFixed(3) : v)
 export function evaluate(entry, data, ctx = {}) {
   const root = { ...data }
   if (entry.plan.derive) root.derived = DERIVE[entry.plan.derive](data, ctx, entry)
-  const rows = entry.criteria.map((c) => {
+  const rows = [...entry.criteria, ...(entry.assist?.criteria ?? [])].map((c) => {
     const value = read(root, c.source, c.reduce)
     let ok
     if (c.op === 'proxy') ok = num(value) ? (value <= c.limit ? true : null) : null
@@ -1734,7 +1809,7 @@ export function evaluate(entry, data, ctx = {}) {
   const flat = settled.filter((x) => typeof x !== 'string')
   const verdict = flat.includes(false) ? 'fail' : flat.includes(null) ? 'judge' : 'pass'
   const metrics = {}
-  for (const m of entry.metrics ?? []) {
+  for (const m of [...(entry.metrics ?? []), ...(entry.assist?.metrics ?? [])]) {
     const v = read(root, m.source, m.reduce)
     if (v !== null && v !== undefined) metrics[m.name] = round(v)
   }

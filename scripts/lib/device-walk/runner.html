@@ -138,8 +138,18 @@
 
   // A check round (kind 'walk'): the pre-flight is the same; after Start the driver (loaded by the agent)
   // takes this tab to the first check's page, and the rest happens on those pages.
+  let macStarted = false
   function driveWalk(step) {
-    if (step.phase === 'idle') {
+    if (step.phase === 'idle' && A.id.tab.startsWith('mac')) {
+      // A Mac browser tab opened by the service: no pre-flight (no Auto-Lock, no Low Power Mode); it starts the walk.
+      show('run')
+      $('phase').textContent = 'Starting on the Mac'
+      status('Mac browser: starting the round.')
+      if (!macStarted) {
+        macStarted = true
+        A.sendAndWait('walk', { phase: 'start', origin: location.origin }).then((ack) => { if (!ack) macStarted = false })
+      }
+    } else if (step.phase === 'idle') {
       document.querySelector('#idle h2').textContent = 'Before you start (a check round)'
       show('idle')
       status('Ready.')

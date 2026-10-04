@@ -48,8 +48,19 @@ export function applyRound(checksText, state, { round, overrides }) {
     for (const it of rows) {
       const d = state.device
       const dev = servingFor(it, overrides).device
-      if (dev === 'mac') devices.add(d.mac ? `Mac ${d.mac}` : 'Mac')
-      else {
+      if (dev === 'mac') {
+        // Typed in the Mac UI wins; else what the Mac's own browsers said (an auto round): `Mac (Safari 26.0,
+        // adapter apple/metal-3; Firefox 143.0, no WebGPU)`.
+        const seen = [...(state.macEnvs?.values() ?? [])].map(describeEnv).filter(Boolean)
+        const text = seen
+          .map((e) =>
+            [e.browser, e.adapter ? `adapter ${e.adapter}` : 'no WebGPU']
+              .filter(Boolean)
+              .join(', '),
+          )
+          .join('; ')
+        devices.add(d.mac ? `Mac ${d.mac}` : text ? `Mac (${seen[0].os}; ${text})` : 'Mac')
+      } else {
         // Typed in the Mac UI wins; else what the phone's own `env` says (an auto round, M39f).
         const e = describeEnv(state.env)
         const own = [d.phone, d.ios && `iOS ${d.ios}`].filter(Boolean).join(' ')

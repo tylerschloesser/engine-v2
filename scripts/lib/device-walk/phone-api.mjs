@@ -66,12 +66,14 @@ export function createPhoneApi({
   lifePath = here('./agent/collect-life.js'),
   touchPath = here('./agent/collect-touch.js'),
   refPath = here('./agent/collect-ref.js'),
+  macPath = here('./agent/collect-mac.js'),
   runnerPath = here('./runner.html'),
 }) {
   const allowed = new Set()
   const lastSeq = new Map()
   const sockets = new Set()
   const seen = { at: 0, tab: null, count: 0 }
+  const seenMac = { at: 0, tab: null, count: 0 } // the Mac browsers' tabs (`mac-...`), apart from the phone's
   let cut = { from: 0, until: 0 }
   let listener = null
 
@@ -104,11 +106,12 @@ export function createPhoneApi({
   }
   const isCut = () => clock() < cut.until
 
-  const step = () => stepFor(readEvents(file), now ? Date.parse(now()) : clock())
+  // `tab`: the asking page's tab id, so one round can tell a phone's tab from a Mac browser's (`mac-...`).
+  const step = (tab) => stepFor(readEvents(file), now ? Date.parse(now()) : clock(), tab)
   const append = (event) => appendEvent(file, event, now)
 
-  function stepFields(extra) {
-    return { ...extra, step: step() }
+  function stepFields(extra, tab) {
+    return { ...extra, step: step(tab) }
   }
 
   /** Handle one parsed message; returns the reply message (or null). */
@@ -117,22 +120,26 @@ export function createPhoneApi({
       return { type: 'error', error: 'envelope' }
     if (typeof msg.tab !== 'string' || !TAB.test(msg.tab)) return { type: 'error', error: 'tab' }
     const { tab, type } = msg
-    seen.at = clock()
-    seen.tab = tab
-    seen.count++
-    observe(msg, seen.at, api)
+    const rec = tab.startsWith('mac') ? seenMac : seen
+    rec.at = clock()
+    rec.tab = tab
+    rec.count++
+    observe(msg, rec.at, api)
     if (type === 'ping') return { type: 'pong', now: clock() }
     if (type === 'hello' || type === 'step?')
-      return stepFields({
-        type: type === 'hello' ? 'welcome' : 'step',
-        lastSeq: lastSeq.get(tab) ?? 0,
-        now: clock(),
-      })
+      return stepFields(
+        {
+          type: type === 'hello' ? 'welcome' : 'step',
+          lastSeq: lastSeq.get(tab) ?? 0,
+          now: clock(),
+        },
+        tab,
+      )
     if (!SEQUENCED.has(type)) return { type: 'error', error: 'type' }
     if (msg.run !== round) return { type: 'error', error: 'run' }
     const seq = msg.seq
     if (!Number.isInteger(seq) || seq < 1) return { type: 'error', error: 'seq' }
-    if (seq <= (lastSeq.get(tab) ?? 0)) return stepFields({ type: 'ack', seq, dup: true })
+    if (seq <= (lastSeq.get(tab) ?? 0)) return stepFields({ type: 'ack', seq, dup: true }, tab)
     const body = Object.fromEntries(Object.entries(msg).filter(([k]) => !RESERVED.has(k)))
     const event = { type, ...(typeof msg.t === 'number' ? { pt: msg.t } : {}), src: { tab, seq } }
     if (type === 'series') {
@@ -147,7 +154,7 @@ export function createPhoneApi({
     const logged = append(event)
     lastSeq.set(tab, seq)
     for (const extra of react(logged, { api, via, events: readEvents(file) })) append(extra)
-    return stepFields({ type: 'ack', seq })
+    return stepFields({ type: 'ack', seq }, tab)
   }
 
   // Public repo code, no secret (the injected <script> tag cannot carry one): the agent, the round driver
@@ -158,6 +165,7 @@ export function createPhoneApi({
     '/__walk/collect-life.js': lifePath,
     '/__walk/collect-touch.js': touchPath,
     '/__walk/collect-ref.js': refPath,
+    '/__walk/collect-mac.js': macPath,
   }
 
   const asset = (res, path, type) => {
@@ -254,6 +262,7 @@ export function createPhoneApi({
     process,
     lastSeq: (tab) => lastSeq.get(tab) ?? 0,
     seen: () => ({ ...seen }),
+    seenMac: () => ({ ...seenMac }),
     /** Refuse every request and socket for `ms` (the self-test's "tunnel drop"); open sockets are closed. */
     cut(ms) {
       cut = { from: clock(), until: clock() + ms }

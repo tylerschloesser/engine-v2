@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createAutoRound } from './auto-round.mjs'
+import { browserOf, createAutoRound } from './auto-round.mjs'
 import { createBots } from './bot.mjs'
 import { CHECKS, MP_TILES } from './checks.mjs'
 import { desktopMedian } from './desktop-median.mjs'
@@ -76,6 +76,21 @@ export async function startAutoRound(o) {
         })
   }
   const origins = {}
+  // The Mac's own browsers (step 14, `plan.device: 'mac'`): loopback origins, one tab per browser, opened by
+  // `o.openMac(browser, url)` when a Mac row opens an attempt (or its next leg); a tab of that browser heard
+  // from in the last 30 s is alive and polls the step, so none is opened beside it.
+  const macOrigins = {}
+  const macSeen = {}
+  let macN = 0
+  const openLeg = (plan, k) => {
+    const browser = plan.browsers?.[k]
+    const origin = macOrigins[plan.variant]
+    if (!browser || !origin || !o.openMac) return
+    if (Date.now() - (macSeen[browser] ?? 0) < 30_000) return
+    const url = `${origin}/__walk/runner.html?walk=${token}&run=${encodeURIComponent(round)}&tab=mac${browser}-${++macN}`
+    log(`opening ${browser} on the Mac: ${url}`)
+    o.openMac(browser, url)
+  }
   // The Mac bot partner of M34 (`bot.mjs`): started when an attempt of a check with `plan.bot` opens, one at a
   // time, on the check build's loopback origin (the bot is on the Mac). Built once the servers are up.
   let bots = null
@@ -83,15 +98,27 @@ export async function startAutoRound(o) {
     file,
     items,
     origins,
+    macOrigins,
     params: o.params,
     evidenceBase: REPO,
+    onLeg: (l) => openLeg(l.plan, l.k),
     onAttempt: (a) => {
+      if (a.plan.device === 'mac') openLeg(a.plan, 0)
       if (!bots) return
       for (const other of bots.active()) if (other !== a.id) bots.finish(other)
       bots.start(a)
     },
   })
-  const api = createPhoneApi({ file, round, token, seriesDir, ...machine.hooks })
+  const api = createPhoneApi({
+    file,
+    round,
+    token,
+    seriesDir,
+    ...machine.hooks,
+    observe: (msg, at) => {
+      if (String(msg.tab).startsWith('mac')) macSeen[browserOf(msg.tab)] = at
+    },
+  })
   machine.attach(api)
   const walkPort = await api.listen(0)
   const control = createMultiServerControl({
@@ -112,6 +139,7 @@ export async function startAutoRound(o) {
     for (const key of keys) {
       const u = control.urlsFor(key)
       origins[key] = control.urlFor(key)
+      macOrigins[key] = u.loopback ?? origins[key]
       for (const x of [u.loopback, u.tunnel, origins[key]]) if (x) api.allowHost(x)
       if (u.loopback) api.allowHost(u.loopback.replace('127.0.0.1', 'localhost'))
     }
@@ -133,6 +161,11 @@ export async function startAutoRound(o) {
         (v) => machine.setDesktopMedian(v ?? null),
         () => machine.setDesktopMedian(null),
       )
+    }
+    // Only Mac rows: no phone is needed, the first Mac tab opens by itself and starts the walk.
+    if (machine.macOnly()) {
+      const firstRow = machine.list.find((i) => CHECKS[i.id].plan.built)
+      if (firstRow) openLeg(CHECKS[firstRow.id].plan, 0)
     }
     const first = origins[keys[0]]
     const joinUrl = `${first}/__walk/runner.html?walk=${token}&run=${encodeURIComponent(round)}`

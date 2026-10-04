@@ -255,6 +255,10 @@
     'reference-bg': ['collect-life', 'collect-ref'],
     bench: 'collect-ref',
     'reference-mp': ['collect-life', 'collect-ref'],
+    // The Mac's own browsers (step 14).
+    'pinch-desktop': 'collect-mac',
+    harness: 'collect-mac',
+    'desktop-play': 'collect-mac',
   }
   const loaded = {}
   function load(name) {

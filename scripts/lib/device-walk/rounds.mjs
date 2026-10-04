@@ -68,7 +68,7 @@ const ATTEMPT_FIELDS = [
 
 /**
  * Replay events over the walked `items`. Returns
- * `{ only, device, cursor, env, others, items: Map<id, { result, notes, numbers, device, history,
+ * `{ only, device, cursor, env, macEnvs (by user agent), others, items: Map<id, { result, notes, numbers, device, history,
  * attempts, prompts, by, criteria, metrics, evidence }> }`. Events from the phone API (M39f: `env`,
  * `attempt`, `prompt`, `result` with `by`/`criteria`/`metrics`/`evidence`) are replayed here; readers
  * from before M39f ignore the extra types and fields. A `result` for an id that is not walked (the
@@ -81,6 +81,7 @@ export function replay(events, items) {
     device: { phone: '', ios: '', mac: '' },
     cursor: null,
     env: null,
+    macEnvs: new Map(),
     others: new Map(),
     items: new Map(),
   }
@@ -99,8 +100,11 @@ export function replay(events, items) {
     else if (e.type === 'device')
       state.device = { ...state.device, ...pick(e, ['phone', 'ios', 'mac']) }
     else if (e.type === 'cursor' && ids.has(e.id)) state.cursor = e.id
-    else if (e.type === 'env') state.env = withoutMeta(e)
-    else if (e.type === 'result' && !ids.has(e.id) && typeof e.id === 'string')
+    else if (e.type === 'env') {
+      // A Mac browser's tab (`mac...`) is the Mac's, never the phone's: its facts go to `macEnvs`.
+      if (String(e.src?.tab ?? '').startsWith('mac')) state.macEnvs.set(e.ua ?? '', withoutMeta(e))
+      else state.env = withoutMeta(e)
+    } else if (e.type === 'result' && !ids.has(e.id) && typeof e.id === 'string')
       state.others.set(e.id, {
         t: e.t,
         result: e.result,

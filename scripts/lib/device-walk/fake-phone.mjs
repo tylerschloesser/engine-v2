@@ -93,13 +93,16 @@ export async function walkAsPhone(page, o) {
     rotate = true,
     onBar,
     handlers = [],
+    preflight = true, // false: a Mac browser tab the service opened (no pre-flight, it starts the walk itself)
   } = o
   const seen = { judged: 0, rotated: 0, redone: 0, sheets: [] }
-  await page.goto(runnerUrl)
-  await page.locator('#autolock').click()
-  await page.locator('#probe').click()
-  await page.locator('#start').waitFor({ state: 'visible', timeout: 60_000 })
-  await page.locator('#start').click()
+  if (preflight) {
+    await page.goto(runnerUrl)
+    await page.locator('#autolock').click()
+    await page.locator('#probe').click()
+    await page.locator('#start').waitFor({ state: 'visible', timeout: 60_000 })
+    await page.locator('#start').click()
+  } else if (runnerUrl) await page.goto(runnerUrl)
   const t0 = Date.now()
   let last = ''
   let handled = '' // the prompt a handler already answered (its ticks change the sheet's text, not the prompt)

@@ -85,6 +85,7 @@ export async function autoCli(o) {
   })
 
   const noBuild = o.noBuild ? ['--no-build'] : []
+  const { botTimings, ...paramsRest } = o.params ?? {}
   try {
     log(`device:walk --auto, round "${round}"`)
     run = await startAutoRound({
@@ -95,7 +96,10 @@ export async function autoCli(o) {
       only: o.only,
       spawnServe: (args, io) => spawnServe([...args, ...noBuild], io),
       tunnel: o.tunnel,
-      params: o.params,
+      // `client: 'both'`: the phone walks its rows, the Mac's own browsers walk theirs. `botTimings` (dev and
+      // tests) is the M34 bot's, not a round parameter.
+      params: { client: 'both', ...paramsRest },
+      botTimings,
       signal: ac.signal,
       log,
       openMac: o.openMac ?? ((browser, url) => openMacBrowser(browser, url, { log })),
@@ -126,11 +130,17 @@ export async function autoCli(o) {
     const monitorUrl = `http://127.0.0.1:${monitorPort}/`
     live.set({ phase: 'serving', joinUrl: run.joinUrl, monitorUrl, mode: 'auto' })
     let lastAt = 0
+    let lastMac = 0
     beat = setInterval(() => {
       const seen = run.api.seen()
+      const mac = run.api.seenMac()
       if (seen.at !== lastAt) {
         lastAt = seen.at
         live.set({ phone: { lastSeen: seen.at, tab: seen.tab, count: seen.count } })
+      }
+      if (mac.at !== lastMac) {
+        lastMac = mac.at
+        live.set({ mac: { lastSeen: mac.at, tab: mac.tab, count: mac.count } })
       }
     }, 1000)
     log(`monitor: ${monitorUrl}   (Ctrl-C stops the tool and every server it started)`)

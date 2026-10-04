@@ -55,6 +55,19 @@ export function pageFor(entry, rung, params = {}) {
   return page
 }
 
+/** The browser a Mac tab id belongs to: `macsafari-3` is `safari`. */
+export const browserOf = (tab) => String(tab).slice(3).split('-')[0]
+
+/** Legs of attempt `n` of `id` already reported by a Mac browser (`reading {key: 'leg:<k>'}`). */
+export const legsDone = (events, id, n) =>
+  Object.keys(readingsOf(events, id, n)).filter((k) => k.startsWith('leg:')).length
+
+/** The browser that is to walk the next leg of a Mac row. */
+export function browserFor(entry, events, id, n) {
+  const b = entry.plan.browsers ?? []
+  return b[Math.min(legsDone(events, id, n), b.length - 1)]
+}
+
 /** One check's state from the round log. */
 export function foldItem(events, id) {
   const st = { attempts: new Map(), result: null, n: 0, since: 0 }
@@ -183,8 +196,26 @@ const rel = (path, base) => (base && isAbsolute(path) ? relative(base, path) : p
  *   entry or retired are left out). `onAttempt`: an attempt was opened for the phone (the Mac bot partner of
  *   M34 starts here, `bot.mjs`).
  */
-export function createAutoRound({ file, items, origins, params = {}, evidenceBase, onAttempt }) {
-  const list = items.filter((i) => !i.android && walkable(i.id))
+export function createAutoRound({
+  file,
+  items,
+  origins,
+  macOrigins = {},
+  params = {},
+  evidenceBase,
+  onAttempt,
+  onLeg,
+}) {
+  const clientOf = (entry) => entry.plan.device ?? 'phone'
+  const walked = items.filter((i) => !i.android && walkable(i.id))
+  // `client: 'both'` (the CLI): the phone walks its rows first, then the Mac's own browsers walk theirs.
+  const list =
+    params.client === 'both'
+      ? [
+          ...walked.filter((i) => clientOf(CHECKS[i.id]) !== 'mac'),
+          ...walked.filter((i) => clientOf(CHECKS[i.id]) === 'mac'),
+        ]
+      : walked
   const byId = new Map(list.map((i) => [i.id, i]))
   const opts = { ...DEFAULTS, ...params }
   let desktop // undefined: not run yet; null: failed; number: ms
@@ -200,10 +231,14 @@ export function createAutoRound({ file, items, origins, params = {}, evidenceBas
 
   const states = (events) => new Map(list.map((it) => [it.id, foldItem(events, it.id)]))
   const needsDesktop = (entry) => entry.plan.needs === 'desktopMedianMs' && desktop === undefined
-  const automated = (entry) => entry.plan.built && entry.class !== 'human'
+  // `plan.assist`: a `human` row the service still collects what the page can say (M17b: the harness's probe
+  // lines and errors) and asks the person only for what a browser's own tool shows.
+  const automated = (entry) =>
+    entry.plan.built && (entry.class !== 'human' || entry.plan.assist === true)
   // `plan.device: 'mac'` rows are walked in a Mac browser tab (`params.client: 'mac'`, delegation 5 opens one);
   // a phone is never made to walk one (it would record the phone's browser as the Mac's).
-  const onThisClient = (entry) => (entry.plan.device ?? 'phone') !== 'mac' || opts.client === 'mac'
+  const onThisClient = (entry) =>
+    clientOf(entry) !== 'mac' || opts.client === 'mac' || opts.client === 'both'
 
   function resultEvent(it, a, verdict, by, extra = {}) {
     return {
@@ -394,7 +429,14 @@ export function createAutoRound({ file, items, origins, params = {}, evidenceBas
     api.append(done)
     if (verdict === 'judge') return
     const after = foldItem(readEvents(file), it.id)
-    for (const r of conclude(it, after, after.attempts.get(e.n), verdict, 'auto')) api.append(r)
+    // A browser that cannot run the check at all (Firefox without `navigator.gpu`) is recorded, not failed:
+    // a clean run elsewhere (or no run anywhere: `noRun`) makes the row `skip` with that evidence; a failure
+    // elsewhere stays a failure.
+    const unsupported = [data.unsupported].flat().filter(Boolean)
+    const final =
+      unsupported.length && (verdict === 'pass' || data.noRun === true) ? 'skip' : verdict
+    const note = unsupported.length ? unsupported.join('; ') : undefined
+    for (const r of conclude(it, after, after.attempts.get(e.n), final, 'auto', note)) api.append(r)
   }
 
   function onAnswer(e) {
@@ -403,19 +445,29 @@ export function createAutoRound({ file, items, origins, params = {}, evidenceBas
     const st = foldItem(readEvents(file), e.id)
     const a = st.attempts.get(e.n)
     if (!a || a.status !== 'answered') return
-    const verdict = ['pass', 'fail', 'skip'].includes(e.value) ? e.value : 'skip'
+    const answered = ['pass', 'fail', 'skip'].includes(e.value) ? e.value : 'skip'
+    let verdict = answered
+    // A browser that could not run the check (`unsupported`, see `onSeries`): the person's pass on what did
+    // run is recorded as `skip`, with that evidence.
+    const data = a.evidence ? readData(a.evidence) : null
+    const unsupported = [data?.unsupported].flat().filter(Boolean)
+    const note = [e.note, ...unsupported].filter(Boolean).join('; ') || undefined
+    if (verdict === 'pass' && unsupported.length) verdict = 'skip'
     const settled = {
       ...a,
       criteria: (a.criteria ?? []).map((c) =>
-        c.ok === null ? { ...c, ok: verdict === 'pass', by: 'human' } : c,
+        c.ok === null ? { ...c, ok: answered === 'pass', by: 'human' } : c,
       ),
     }
     st.attempts.set(e.n, settled)
-    for (const r of conclude(it, st, settled, verdict, 'mixed', e.note || undefined)) api.append(r)
+    for (const r of conclude(it, st, settled, verdict, 'mixed', note)) api.append(r)
   }
 
   const hooks = {
-    stepFor(events, now) {
+    stepFor(events, now, tab) {
+      // Which kind of client is asking (`client: 'both'`): a Mac browser's tab id starts with `mac`.
+      const tabClient =
+        opts.client === 'both' ? (String(tab).startsWith('mac') ? 'mac' : 'phone') : null
       const base = {
         kind: 'walk',
         id: WALK_ID,
@@ -435,12 +487,24 @@ export function createAutoRound({ file, items, origins, params = {}, evidenceBas
         const a = s.last
         if (!a || a.n <= s.since) continue
         const entry = CHECKS[it.id]
+        if (tabClient && clientOf(entry) !== tabClient)
+          return { ...base, phase: 'wait', waitFor: clientOf(entry), progress }
+        // A Mac row names its browser(s) (`plan.browsers`); only a tab of that browser (its id is
+        // `mac<browser>-...`) is handed the row, one leg at a time.
+        if (tabClient === 'mac' && entry.plan.browsers) {
+          const want = browserFor(entry, events, it.id, a.n)
+          if (browserOf(tab) !== want)
+            return { ...base, phase: 'wait', waitFor: `mac ${want}`, progress }
+        }
         const item = {
           id: it.id,
           n: a.n,
           rung: a.rung,
           variant: entry.plan.variant,
-          origin: origins[entry.plan.variant] ?? null,
+          origin:
+            (tabClient === 'mac' ? macOrigins[entry.plan.variant] : null) ??
+            origins[entry.plan.variant] ??
+            null,
           page: a.page ?? pageFor(entry, a.rung, params),
           // The whole plan (JSON-safe by construction): collectors read `mode`, `leaves`, `scenarios`...
           plan: { ...entry.plan, ladder: undefined },
@@ -480,7 +544,14 @@ export function createAutoRound({ file, items, origins, params = {}, evidenceBas
       if (!api) return []
       if (event.type === 'series') onSeries(event)
       else if (event.type === 'answer') onAnswer(event)
-      else if (event.type !== 'walk' && event.type !== 'redo' && event.type !== 'attempt') return []
+      else if (event.type === 'reading' && event.key === 'leg-done') {
+        // A Mac browser finished its leg of a check that runs in more than one (M39-desktop-browsers):
+        // the service opens the next one.
+        if (event.data && Number.isInteger(event.data.k))
+          onLeg?.({ id: event.id, n: event.n, k: event.data.k + 1, plan: CHECKS[event.id]?.plan })
+        return []
+      } else if (event.type !== 'walk' && event.type !== 'redo' && event.type !== 'attempt')
+        return []
       settle()
       return []
     },
@@ -509,6 +580,11 @@ export function createAutoRound({ file, items, origins, params = {}, evidenceBas
           .map((e) => e.plan.variant),
       ),
     ],
+    /** Every walked check is a Mac browser's (no phone is needed: the first Mac tab opens by itself). */
+    macOnly: () =>
+      opts.client === 'both' &&
+      list.filter((i) => automated(CHECKS[i.id])).length > 0 &&
+      list.filter((i) => automated(CHECKS[i.id])).every((i) => clientOf(CHECKS[i.id]) === 'mac'),
     needsDesktopMedian: () => list.some((i) => CHECKS[i.id].plan.needs === 'desktopMedianMs'),
     done: (events = readEvents(file)) => {
       const st = states(events)

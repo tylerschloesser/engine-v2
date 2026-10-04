@@ -14,7 +14,7 @@
 //   stalled            the process is gone (killed, crashed, timed out) and the round is not done
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { walkable } from './checks.mjs'
+import { CHECKS, walkable } from './checks.mjs'
 
 export const STALE_MS = 90_000
 
@@ -128,7 +128,13 @@ export function roundState({
   const result = new Set(events.filter((e) => e.type === 'result').map((e) => e.id))
   const left = ids.filter((id) => walkable(id) && !result.has(id))
   const prompts = openPrompts(events, left)
-  const lastSeen = live?.phone?.lastSeen ?? null
+  // The client the round is waiting on: the Mac's own browser for a row that is the Mac's, else the phone.
+  const cursorId =
+    [...events].reverse().find((e) => e.type === 'cursor' && left.includes(e.id))?.id ??
+    left[0] ??
+    null
+  const onMac = !!cursorId && (CHECKS[cursorId]?.plan.device ?? 'phone') === 'mac'
+  const lastSeen = (onMac ? live?.mac?.lastSeen : live?.phone?.lastSeen) ?? null
   const phone = {
     connected: lastSeen !== null && now - lastSeen <= staleMs,
     lastSeen: lastSeen === null ? null : new Date(lastSeen).toISOString(),
@@ -150,7 +156,13 @@ export function roundState({
         prompt: prompts.find((p) => p.id === cursor) ?? first ?? null,
       }
     : null
-  const base = { phone, current, humanPending: prompts.map((p) => p.id), prompts }
+  const base = {
+    phone,
+    client: onMac ? 'mac' : 'phone',
+    current,
+    humanPending: prompts.map((p) => p.id),
+    prompts,
+  }
   if (left.length === 0 && ids.some((id) => walkable(id)))
     return { state: 'done', reason: null, ...base }
   const up = live && (typeof alive === 'function' ? alive(live.pid) : alive)
@@ -165,7 +177,11 @@ export function roundState({
   if (!live.joinUrl) return { state: 'starting', reason: null, ...base }
   const started = events.some((e) => e.type === 'walk' && e.phase === 'start')
   if (!started)
-    return { state: 'waiting-for-phone', reason: 'the phone has not tapped Start', ...base }
+    return {
+      state: 'waiting-for-phone',
+      reason: onMac ? 'the Mac browser tab has not opened' : 'the phone has not tapped Start',
+      ...base,
+    }
   if (first) return { state: 'waiting-for-human', reason: `${first.id}: ${first.text}`, ...base }
   const lastPause = events.findLastIndex((e) => e.type === 'pause')
   if (lastPause >= 0 && !events.slice(lastPause + 1).some((e) => PROGRESS.has(e.type) && e.id))
@@ -173,7 +189,7 @@ export function roundState({
   if (!phone.connected)
     return {
       state: 'waiting-for-phone',
-      reason: `the phone was last heard from ${phone.secondsSince ?? '?'} s ago`,
+      reason: `the ${onMac ? 'Mac browser tab' : 'phone'} was last heard from ${phone.secondsSince ?? '?'} s ago`,
       ...base,
     }
   return { state: 'running', reason: null, ...base }

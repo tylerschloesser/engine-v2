@@ -188,7 +188,10 @@ const seedAuto = (s, evs) => {
   return file
 }
 
-describe('device-walk track: --status --json and --wait from another process', () => {
+// Real child processes of the CLI: each starts in about 0.25 s, several times that on a loaded machine.
+describe('device-walk track: --status --json and --wait from another process', {
+  timeout: 20_000,
+}, () => {
   test('device-walk track: --status --json of an auto round carries state, joinUrl, phone.lastSeen and per item by, attempts, criteria, evidence', () => {
     const s = scratch()
     const crit = [{ name: 'pass', value: true, limit: true, ok: true }]
