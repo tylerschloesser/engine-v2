@@ -158,6 +158,75 @@ const later = (delegation, page, extra = {}) => ({
   ...extra,
 })
 
+/** A built entry of delegation 4 (the reference game: the release build, or the bench build that is also its
+ * check build, M39f step 11). `variant` is `reference` (release, no hooks, no server), `reference-bench`
+ * (`vite build --mode bench` plus `--ws`: `window.__check`, `?bench=large-save`, the real-time server built
+ * with the same cargo feature) or `fly` (not ours to inject into). */
+const reference = (page, extra = {}) => ({
+  page,
+  variant: 'reference',
+  built: true,
+  delegation: 4,
+  ...extra,
+})
+
+/** M35's criteria, the same for both builds of the row (Mac and iPhone): the DOM and the wrapped device. */
+const m35Criteria = () => [
+  {
+    name: 'capability_screen',
+    source: 'dom.capability',
+    op: '==',
+    limit: false,
+    ref: 'pass',
+  },
+  { name: 'fatal_screen', source: 'dom.fatal', op: '==', limit: false, ref: 'pass' },
+  { name: 'canvas_present', source: 'dom.canvas', op: '==', limit: true, ref: 'pass' },
+  {
+    name: 'delivery_line_absent',
+    source: 'dom.delivery_line',
+    op: '==',
+    limit: false,
+    ref: 'pass',
+  },
+  {
+    name: 'gpu_errors',
+    source: 'gpu.errors',
+    op: '==',
+    limit: 0,
+    ref: 'none: a validation error or a lost device while the game boots means it did not play; the Pass text names no count',
+  },
+  {
+    name: 'device_lost',
+    source: 'gpu.lost',
+    op: '==',
+    limit: 0,
+    ref: 'none: as gpu_errors',
+  },
+  {
+    name: 'reloads',
+    source: 'reloads',
+    op: '==',
+    limit: 0,
+    ref: 'none: a reload is not a played game',
+  },
+  {
+    name: 'world_drawn',
+    source: 'dom.canvas_w',
+    op: '>=',
+    limit: null,
+    ref: 'none: "the game plays" is the person\'s: one confirm tap (a release build has no hook that says what the canvas shows)',
+    judge: 'always',
+  },
+]
+const m35Metrics = [
+  { name: 'canvas_w', source: 'dom.canvas_w' },
+  { name: 'canvas_h', source: 'dom.canvas_h' },
+  { name: 'raf_p50_ms', source: 'raf.p50' },
+  { name: 'raf_p95_ms', source: 'raf.p95' },
+  { name: 'raf_gap_max_ms', source: 'raf.max' },
+  { name: 'raf_gaps_over_25ms', source: 'raf.long25' },
+]
+
 /** @type {Record<string, object>} */
 export const CHECKS = {
   'M03-determinism': {
@@ -1105,13 +1174,17 @@ export const CHECKS = {
     pass: 'c814759c',
     class: 'auto+confirm',
     signal:
-      'release build, DOM only: no capability or fatal screen, canvas present, frame cadence, no delivery line',
-    plan: later(4, '', { variant: 'reference', collector: 'reference-dom', device: 'mac' }),
-    criteria: [
-      { name: 'fatal_screen', source: 'dom.fatal', op: '==', limit: false, ref: 'pass' },
-      { name: 'canvas_present', source: 'dom.canvas', op: '==', limit: true, ref: 'pass' },
-    ],
-    metrics: [],
+      'release build, DOM only: no capability or fatal screen, canvas present and sized, no delivery line, the wrapped device (errors, loss), frame cadence from the agent',
+    // `device: 'mac'`: walked in a Mac browser tab (the service opens it, delegation 5 step 14); a phone
+    // that reaches it is told it is not its row (`params.client`, auto-round.mjs).
+    plan: reference('', {
+      collector: 'reference-dom',
+      device: 'mac',
+      observeMs: 8 * SECOND,
+      built: true,
+    }),
+    criteria: [...m35Criteria()],
+    metrics: m35Metrics,
     acts: [],
     judges: ['the game plays (world drawn)'],
   },
@@ -1119,12 +1192,9 @@ export const CHECKS = {
     pass: '0f644141',
     class: 'auto+confirm',
     signal: 'as M35-safari-build-mac',
-    plan: later(4, '', { variant: 'reference', collector: 'reference-dom' }),
-    criteria: [
-      { name: 'fatal_screen', source: 'dom.fatal', op: '==', limit: false, ref: 'pass' },
-      { name: 'canvas_present', source: 'dom.canvas', op: '==', limit: true, ref: 'pass' },
-    ],
-    metrics: [],
+    plan: reference('', { collector: 'reference-dom', observeMs: 8 * SECOND, built: true }),
+    criteria: [...m35Criteria()],
+    metrics: m35Metrics,
     acts: [],
     judges: ['the game plays (world drawn)'],
   },
@@ -1142,9 +1212,23 @@ export const CHECKS = {
     pass: '533b2c8b',
     class: 'auto+confirm',
     signal:
-      'device lost/uncapturederror via the requestDevice wrapper, rendererLost banner, rAF resumes, nonce; 3 runs',
-    plan: later(4, '', { variant: 'reference', collector: 'reference-dom' }),
+      'release build, DOM only: three deliberate leaves; per run the wrapped device (lost, uncapturederror), the renderer-lost banner, the agent rAF resuming; the boot nonce (a reload is a failure)',
+    plan: reference('', {
+      collector: 'reference-bg',
+      built: true,
+      reloadIsFail: true,
+      // `ms`: how long "several minutes" is for one leave (a run outside 70% of it asks again); `runs`: 3.
+      leaves: { runs: 3, ms: 180 * SECOND },
+    }),
     criteria: [
+      {
+        name: 'runs_done',
+        source: 'runs.*',
+        reduce: 'len',
+        op: '>=',
+        limit: 3,
+        ref: 'Steps: three runs',
+      },
       {
         name: 'black_or_frozen_runs',
         source: 'runs.*.frozen',
@@ -1153,8 +1237,23 @@ export const CHECKS = {
         limit: false,
         ref: 'pass',
       },
+      { name: 'reloads', source: 'reloads', op: '==', limit: 0, ref: 'pass' },
+      {
+        name: 'drawn_again_per_run',
+        source: 'runs.*.rendererLost',
+        reduce: 'any',
+        op: '==',
+        limit: null,
+        ref: 'none: "the world drawn again" is the person\'s, per run; the device-loss and banner facts of each run are shown with it',
+        judge: 'always',
+      },
     ],
-    metrics: [],
+    metrics: [
+      { name: 'device_lost_total', source: 'runs.*.deviceLost', reduce: 'sum' },
+      { name: 'uncaptured_errors_total', source: 'runs.*.gpuErrors', reduce: 'sum' },
+      { name: 'renderer_lost_banners', source: 'runs.*.rendererLost', reduce: 'count-true' },
+      { name: 'leave_ms_min', source: 'runs.*.ms', reduce: 'min' },
+    ],
     acts: ['background the tab under memory pressure for several minutes, three times'],
     judges: ['drawn again, per run'],
   },
@@ -1356,6 +1455,7 @@ const REDUCERS = {
     const k = v.filter(num)
     return k.length ? Math.max(...k) : null
   },
+  'count-true': (v) => v.filter((x) => x === true).length,
   'ceiling-mib': (v) => {
     const line = (v[0] ?? []).find?.((l) => /^\(1\) ceiling: (\d+) MiB reached/.test(l))
     return line ? Number(/(\d+) MiB/.exec(line)[1]) : null

@@ -70,7 +70,7 @@
   /** Is this document the page of `item` (origin, path, and exactly its own query parameters)? */
   function here(item) {
     if (!item.origin || location.origin !== item.origin) return false
-    const [path, query = ''] = item.page.split('?')
+    const [path, query = ''] = item.page.split('#')[0].split('?') // `#k=` (an invite) is the page's own
     if (location.pathname !== `/${path}`) return false
     const tol = new Set(item.plan.tolerate || []) // knobs a helper tab's link may carry or change
     const want = [...new URLSearchParams(query)].filter(([k]) => !tol.has(k))
@@ -250,6 +250,11 @@
     mp: 'collect-life',
     anchors: 'collect-touch',
     gestures: 'collect-touch',
+    // The reference game (step 10-12): `reference-bg` leaves the page with `leave` from collect-life.
+    'reference-dom': 'collect-ref',
+    'reference-bg': ['collect-life', 'collect-ref'],
+    bench: 'collect-ref',
+    'reference-mp': ['collect-life', 'collect-ref'],
   }
   const loaded = {}
   function load(name) {
@@ -300,6 +305,7 @@
           reloaded: true,
           reloads,
           final: { steps: json(get('steps'), []) },
+          runs: json(get('runs'), []), // M37b: the runs that finished before the tab was discarded
         })
       else {
         A.send('attempt', { id: item.id, n: item.n, status: 'interrupted', reason: 'reload' })
@@ -308,8 +314,9 @@
     } else {
       set('col', JSON.stringify({ key, reloads: 0, tab: A.id.tab }))
       set('steps', null)
+      set('runs', null)
     }
-    if (FILES[item.plan.collector]) await load(FILES[item.plan.collector])
+    for (const file of [FILES[item.plan.collector] ?? []].flat()) await load(file) // in order
     const collect = collectors[item.plan.collector]
     let data
     try {

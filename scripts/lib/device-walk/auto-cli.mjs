@@ -13,6 +13,25 @@ import { qrSvg, qrTerminal } from './qr.mjs'
 import { appendEvent, readEvents } from './rounds.mjs'
 import { createMultiServerControl } from './servers.mjs'
 
+/**
+ * What each variant of `checks.mjs` is served as. `fixture-ws`: the fixture app with `--ws puts` (the real-time
+ * server `mp.html` dials). `reference`: the release build, no hooks, no server. `reference-bench`: the bench
+ * build (`vite build --mode bench`, the reference game's check build: `window.__check`, `?bench=large-save`)
+ * with the real-time server built with the same cargo feature, so a phone and the Mac bot join one world.
+ * `reference-ws`: the release build with its server (the human M39 rows; never walked by the agent).
+ */
+export const VARIANTS = {
+  fixture: { app: 'fixture', ws: false, bench: false },
+  'fixture-ws': { app: 'fixture', ws: 'puts', bench: false },
+  reference: { app: 'reference', ws: false, bench: false },
+  'reference-ws': { app: 'reference', ws: 'default', bench: false },
+  'reference-bench': { app: 'reference', ws: 'default', bench: true },
+}
+const serving = (key) => {
+  if (!VARIANTS[key]) throw new Error(`no serving for the variant "${key}" (auto-cli.mjs VARIANTS)`)
+  return VARIANTS[key]
+}
+
 const REPO = fileURLToPath(new URL('../../..', import.meta.url))
 
 /**
@@ -58,16 +77,7 @@ export async function startAutoRound(o) {
   try {
     const keys = machine.variants()
     log(`starting ${keys.length} server(s): ${keys.join(', ')}`)
-    // `fixture-ws`: the fixture app with `--ws puts` (the real-time server `mp.html` dials through `/ws`).
-    await control.ensureAll(
-      keys.map((key) => ({
-        key,
-        app: 'fixture',
-        ws: key === 'fixture-ws' ? 'puts' : false,
-        bench: false,
-        tunnel,
-      })),
-    )
+    await control.ensureAll(keys.map((key) => ({ key, ...serving(key), tunnel })))
     for (const key of keys) {
       const u = control.urlsFor(key)
       origins[key] = control.urlFor(key)

@@ -77,6 +77,8 @@
     }
   }
 
+  K.leave = leave // the reference game's M37b leaves the same way (collect-ref.js)
+
   // --- slice.html -----------------------------------------------------------------------------
   const SLICE = {
     /** M16-slice-boot: the boot facts and "terrain drawn"; M03 comes from the round, the gestures from a tap. */

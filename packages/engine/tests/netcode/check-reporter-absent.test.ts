@@ -1,8 +1,9 @@
 // `window.__check` (docs/plan/39f-device-auto-runner.md, "The check reporter contract") is page
 // instrumentation for the fixture pages only: no production output carries it. The fixture app's own
 // build is the positive control (it must), the engine package's output and sources and the reference
-// game's release build must not. (The bench/check build of `games/reference` gets its own row when
-// delegation 4 gives it a reporter.)
+// game's release build must not. The bench build of `games/reference` (`dist-bench/`, never ships) is the
+// reference game's check build and carries `__check` by design (M39f step 11), but never the agent: that
+// is injected at serve time by `vite preview`, in neither `dist/` nor `dist-bench/`.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -43,7 +44,14 @@ test('check-reporter: the fixture pages carry window.__check; no production outp
       : []),
   ]
   expect(production.length).toBeGreaterThan(50)
-  for (const needle of ['__check', '__walkDriver', '__walkAgent', '__walkKit', 'collect-life'])
+  for (const needle of [
+    '__check',
+    '__walkDriver',
+    '__walkAgent',
+    '__walkKit',
+    'collect-life',
+    'collect-ref',
+  ])
     expect(has(production, needle), `${needle} in production output`).toEqual([])
 })
 
@@ -65,4 +73,22 @@ test('check-reporter: each reporting fixture page installs window.__check under 
   }
   for (const needle of ['__walkKit', '__walkDriver', '__walkAgent'])
     expect(has(all, needle), `${needle} in the fixture build`).toEqual([])
+})
+
+// The reference game's bench build is built by the bench specs (`vite build --mode bench`), not by
+// `pnpm test`'s steps: when it is there it is checked, and the `walk-ref` spec builds it before it serves it.
+test('check-reporter: the reference bench build (dist-bench) never carries the agent or a collector', () => {
+  const dir = join(root, 'games/reference/dist-bench')
+  if (!existsSync(dir)) return // not built in this checkout; `walk-ref` builds and checks it
+  const built = files(dir)
+  expect(built.length).toBeGreaterThan(3)
+  for (const needle of [
+    '__walkDriver',
+    '__walkAgent',
+    '__walkKit',
+    'collect-life',
+    'collect-ref',
+    '/__walk/',
+  ])
+    expect(has(built, needle), `${needle} in dist-bench`).toEqual([])
 })

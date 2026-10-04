@@ -22,7 +22,11 @@
 // --mode bench` (cargo feature `bench`, `__BENCH__` true, output `games/reference/dist-bench/`) and
 // previews that build with `vite preview --mode bench`, so `?bench=large-save` and its `#bench-hud`
 // exist on the phone. The bench build is the production page alone (no `test.html`/`gc.html`).
-// `--tunnel` and `--ws` combine with it unchanged.
+// `--tunnel` and `--ws` combine with it; with `--ws` the server runs the `release+bench` module (the page's
+// own cargo feature, so both sides have one build hash), and the server starts after the build, since the
+// build is what produces the module. `window.__check` (M39f) is in this build too, so it is the reference
+// game's one check build: no `?bench=` parameter plays the normal world, bit-identical (reference-bench-
+// identical.test.ts).
 //
 // `--walk <port>` (M39f, `pnpm device:walk`): sets `ENGINE_WALK_PORT` for `vite preview`, whose two
 // configs then proxy `/__walk` (http and ws) to the phone API on that loopback port and inject the
@@ -47,6 +51,9 @@ const referenceServerEntry = fileURLToPath(
 const fixturesRoot = fileURLToPath(new URL('../fixtures/', import.meta.url))
 const referenceReleaseGameDir = fileURLToPath(
   new URL('../../../games/reference/sim/target/engine/release', import.meta.url),
+)
+const referenceBenchGameDir = fileURLToPath(
+  new URL('../../../games/reference/sim/target/engine/release+bench', import.meta.url),
 )
 
 const port = Number(process.env.ENGINE_TEST_PORT ?? 4173)
@@ -107,13 +114,41 @@ if (tunnel) {
   }
 }
 
-// --- `--ws`: the real `games/reference-server` child, real-time timer ---------------------------
+// --- The app itself (fixture, default, or `--app reference`) -----------------------------------
+const configPath = app === 'reference' ? undefined : fixtureConfigPath
+const previewCwd = app === 'reference' ? referenceDir : root
+const pagesDir = app === 'reference' ? referenceDir : fixturePagesDir
+
+console.log(
+  app === 'reference'
+    ? bench
+      ? 'building games/reference (bench build, dist-bench/)…'
+      : 'building games/reference (release profile)…'
+    : 'building the fixture app (dev profile)…',
+)
+if (noBuild) {
+  console.log('--no-build: previewing the existing build output')
+} else if (app === 'reference') {
+  await run('pnpm', ['--filter', 'reference', 'build', ...(bench ? ['--mode', 'bench'] : [])], {
+    env: toolEnv(),
+  })
+} else {
+  await run('pnpm', ['exec', 'vite', 'build', '--config', configPath], { env: toolEnv() })
+}
+
+// --- `--ws`: the real `games/reference-server` child, real-time timer (after the build: the module it runs
+// is what the build just produced) --------------------------------------------------------------------
 let wsChild
 let wsDataDir
 if (ws) {
+  // The server runs the module the page was built with: a `--bench` page (the bench build, which is also the
+  // check build of `pnpm device:walk`) carries cargo feature `bench`, so its server does too (a client and a
+  // server with different build hashes refuse each other).
   const gameDir = wsFixture
     ? join(fixturesRoot, wsFixture, 'target', 'engine', 'dev')
-    : referenceReleaseGameDir
+    : bench
+      ? referenceBenchGameDir
+      : referenceReleaseGameDir
   if (!existsSync(gameDir)) {
     console.error(
       `device-serve --ws: no built game at ${gameDir} (build it first: ` +
@@ -143,28 +178,6 @@ if (ws) {
     wsChild.on('error', reject)
     wsChild.on('close', (code) => reject(new Error(`games/reference-server exited ${code}`)))
   })
-}
-
-// --- The app itself (fixture, default, or `--app reference`) -----------------------------------
-const configPath = app === 'reference' ? undefined : fixtureConfigPath
-const previewCwd = app === 'reference' ? referenceDir : root
-const pagesDir = app === 'reference' ? referenceDir : fixturePagesDir
-
-console.log(
-  app === 'reference'
-    ? bench
-      ? 'building games/reference (bench build, dist-bench/)…'
-      : 'building games/reference (release profile)…'
-    : 'building the fixture app (dev profile)…',
-)
-if (noBuild) {
-  console.log('--no-build: previewing the existing build output')
-} else if (app === 'reference') {
-  await run('pnpm', ['--filter', 'reference', 'build', ...(bench ? ['--mode', 'bench'] : [])], {
-    env: toolEnv(),
-  })
-} else {
-  await run('pnpm', ['exec', 'vite', 'build', '--config', configPath], { env: toolEnv() })
 }
 
 const previewEnv = {

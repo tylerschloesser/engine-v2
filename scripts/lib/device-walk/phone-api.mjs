@@ -5,7 +5,7 @@
 //   GET  /__walk/agent.js     the agent (public code, no secret in it; the pages carry no token, so
 //                             the injected <script> tag cannot either)
 //   GET  /__walk/driver.js    the round driver the agent loads on a walk step (public code, same reason),
-//        /__walk/collect-life.js and /__walk/collect-touch.js: the collectors the driver loads on demand
+//        /__walk/collect-life.js, collect-touch.js and collect-ref.js: the collectors the driver loads on demand
 //   GET  /__walk/runner.html  the QR target                                   (run token)
 //   WS   /__walk/ws           the live channel                                (run token + Origin)
 //   POST /__walk/msg          the same messages when the socket is not up      (run token + Origin)
@@ -65,6 +65,7 @@ export function createPhoneApi({
   driverPath = here('./agent/driver.js'),
   lifePath = here('./agent/collect-life.js'),
   touchPath = here('./agent/collect-touch.js'),
+  refPath = here('./agent/collect-ref.js'),
   runnerPath = here('./runner.html'),
 }) {
   const allowed = new Set()
@@ -156,6 +157,7 @@ export function createPhoneApi({
     '/__walk/driver.js': driverPath,
     '/__walk/collect-life.js': lifePath,
     '/__walk/collect-touch.js': touchPath,
+    '/__walk/collect-ref.js': refPath,
   }
 
   const asset = (res, path, type) => {

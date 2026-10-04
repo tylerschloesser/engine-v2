@@ -197,6 +197,9 @@ export function createAutoRound({ file, items, origins, params = {}, evidenceBas
   const states = (events) => new Map(list.map((it) => [it.id, foldItem(events, it.id)]))
   const needsDesktop = (entry) => entry.plan.needs === 'desktopMedianMs' && desktop === undefined
   const automated = (entry) => entry.plan.built && entry.class !== 'human'
+  // `plan.device: 'mac'` rows are walked in a Mac browser tab (`params.client: 'mac'`, delegation 5 opens one);
+  // a phone is never made to walk one (it would record the phone's browser as the Mac's).
+  const onThisClient = (entry) => (entry.plan.device ?? 'phone') !== 'mac' || opts.client === 'mac'
 
   function resultEvent(it, a, verdict, by, extra = {}) {
     return {
@@ -269,6 +272,17 @@ export function createAutoRound({ file, items, origins, params = {}, evidenceBas
           result: 'skip',
           by: 'auto',
           notes: `not automated yet (${entry.plan.built ? entry.class : `M39f delegation ${entry.plan.delegation}`}): walk it by hand with --manual`,
+        },
+      ]
+    if (!onThisClient(entry))
+      return [
+        {
+          type: 'result',
+          id: it.id,
+          result: 'skip',
+          by: 'auto',
+          notes:
+            'a Mac browser row: it is walked in a Mac tab, which a phone round does not open (M39f delegation 5); walk it by hand with --manual',
         },
       ]
     if (needsDesktop(entry)) return []
@@ -483,7 +497,7 @@ export function createAutoRound({ file, items, origins, params = {}, evidenceBas
       ...new Set(
         list
           .map((i) => CHECKS[i.id])
-          .filter(automated)
+          .filter((e) => automated(e) && onThisClient(e))
           .map((e) => e.plan.variant),
       ),
     ],
