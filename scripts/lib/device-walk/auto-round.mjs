@@ -41,7 +41,7 @@ export function withRung(page, rung) {
   return page.includes('?') ? page + rung : `${page}?${rung.slice(1)}`
 }
 
-/** The page of an attempt; `params.probeS` shortens the memory probe's two sessions (tests only). */
+/** The page of an attempt; `params.probeS` shortens the memory probe's two sessions, `params.benchScale` divides the large save (tests only). */
 export function pageFor(entry, rung, params = {}) {
   // `plan.query`: what a lifecycle check adds to the page `device-checks.md` names (`world=walk-busy`: its own
   // world; `autopan=1`), so `plan.page` stays what the serving derivation shows.
@@ -50,6 +50,8 @@ export function pageFor(entry, rung, params = {}) {
     : entry.plan.page
   let page = withRung(base, entry.plan.ladder?.[rung - 1])
   if (entry.plan.collector === 'memory' && params.probeS) page += `&probeS=${params.probeS}`
+  // Tests only: the bench page's `scale=n` divides the large save (64: a 1/64 world a headless engine plays).
+  if (entry.plan.collector === 'bench' && params.benchScale) page += `&scale=${params.benchScale}`
   return page
 }
 

@@ -24,7 +24,7 @@ export const OVERRIDES = {
   'M38-socket-resume': { page: '?linklog=1' },
   'M39-rerun': { device: 'none' },
   'M39-large-save': { page: '?bench=large-save', bench: true, ws: false },
-  'M39-frame-shares': { page: '?bench=large-save&pan=2', bench: true, ws: false },
+  'M39-frame-shares': { page: '?bench=large-save&pan=2&zoom=max', bench: true, ws: false },
   'M39-full-game-touch': { ws: false },
   'M39-two-devices': { ws: true },
   'M39-sign-off': { ws: true },

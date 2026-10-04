@@ -7,6 +7,7 @@
 // not simulated at all (a reload is a closed and reopened page), a lost WebGPU device is the page's own
 // device `destroy()`ed through a handle the test's init script keeps. All `@slow @webkit-gpu`.
 import { expect, type Page, test } from '@playwright/test'
+import { ensureBenchBuild } from './support/reference-build.js'
 import { type Final, fake, finalOf, type Handler, start } from './support/walk-rig.js'
 
 const crit = (e: Final, n: string) => e.criteria.find((c) => c.name === n)
@@ -113,6 +114,57 @@ test('walk-ref: M37b, three leaves with the wrapped device lost during each: cou
     expect(Number(e.metrics.device_lost_total)).toBeGreaterThanOrEqual(2)
     // Two losses within the engine's 10 s window end in the rendererLost prompt: allowed by the Pass text.
     expect(Number(e.metrics.renderer_lost_banners)).toBeGreaterThanOrEqual(1)
+  } finally {
+    await r.stop()
+  }
+})
+
+test('walk-ref: M39-large-save and M39-frame-shares read the bench HUD through __check after the warm-up, 1/64 save @slow @webkit-gpu', async ({
+  page,
+}) => {
+  test.setTimeout(600_000)
+  await ensureBenchBuild()
+  // `benchScale: 64` is the 1/64 save (4,096 furnaces): the full one is the phone's, and the device walk
+  // reads it after ten seconds; here the window is 12 s with a 4 s warm-up.
+  const r = await start(
+    ['M39-large-save', 'M39-frame-shares'],
+    { windowMs: 12_000, warmupMs: 4000, benchScale: 64, timeoutMs: 90_000 },
+    15900,
+  )
+  try {
+    await r.phone(page, { timeoutMs: 240_000 })
+    const large = finalOf(r, 'M39-large-save')
+    const shares = finalOf(r, 'M39-frame-shares')
+    for (const e of [large, shares]) expect(e, e.id as string).toMatchObject({ by: 'auto' })
+    // The memory counters and the reload nonce are exact (strict on every engine); the three p95 limits are
+    // the phone's (10 / 4 / 8 ms), and a software WebGPU adapter in a headless engine may miss them.
+    expect(large.criteria.slice(0, 3).map((c) => [c.name, c.value, c.ok])).toEqual([
+      ['engine_mem_grows_sim', 0, true],
+      ['engine_mem_grows_client', 0, true],
+      ['reloads', 0, true],
+    ])
+    for (const e of [large, shares]) {
+      const readings = e.metrics as Record<string, number>
+      expect(
+        Number.isFinite(readings.tick_p95_ms ?? readings.tick_p95_ms_last),
+        e.id as string,
+      ).toBe(true)
+    }
+    expect(typeof large.metrics.tick_p95_ms).toBe('number')
+    expect(typeof large.metrics.ticks).toBe('number')
+    expect(typeof shares.metrics.main_p95_ms).toBe('number')
+    expect(typeof shares.metrics.frame_p95_ms).toBe('number')
+    // The 1/64 save is a world a headless engine plays easily: all five p95 limits hold here.
+    expect([large.result, shares.result]).toEqual(['pass', 'pass'])
+    // The pages the round walked: the zoom is the scripted one.
+    const pages = r
+      .events()
+      .filter((e) => e.type === 'attempt' && e.status === undefined)
+      .map((e) => e.page)
+    expect(pages).toEqual([
+      '?bench=large-save&scale=64',
+      '?bench=large-save&pan=2&zoom=max&scale=64',
+    ])
   } finally {
     await r.stop()
   }

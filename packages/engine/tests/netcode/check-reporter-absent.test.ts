@@ -82,6 +82,8 @@ test('check-reporter: the reference bench build (dist-bench) never carries the a
   if (!existsSync(dir)) return // not built in this checkout; `walk-ref` builds and checks it
   const built = files(dir)
   expect(built.length).toBeGreaterThan(3)
+  // Positive control: it is the check build, so `window.__check` (and not the agent) is in it.
+  expect(has(built, '__check').length, 'dist-bench carries window.__check').toBeGreaterThan(0)
   for (const needle of [
     '__walkDriver',
     '__walkAgent',

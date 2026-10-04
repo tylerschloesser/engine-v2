@@ -44,7 +44,10 @@ if (!support.ok) {
       : { canvas, host: selectHost(location, undefined, { persist: true }) },
   )
   const { client } = game
-  if (bench && meter) meter.start(game, bench)
+  const benchApi = bench && meter ? meter.start(game, bench) : undefined
+  // The check build (M39f): the bench build also carries `window.__check` (`src/check.ts`, never in a
+  // release build: `__BENCH__` is a build-time false there, and the module is not in the bundle at all).
+  if (__BENCH__) (await import('./check.js')).installCheck(game, benchApi)
   try {
     await client.ready
     attachHostLifecycle(client) // snapshot and flush when the tab is hidden (M23)

@@ -12,38 +12,11 @@ import type { Client } from 'engine'
 import type { Scheduler } from 'engine/render'
 import { RingConsumer, type RingStats, systemScheduler } from 'engine/render'
 import { type BenchProbe, benchProbe, parkWorkers, resumeWorkers } from 'engine/test'
+import { type BenchRequest, furnaceBlock } from './bench-request.js'
 import type { StartedGame } from './game.js'
 import { DEFAULT_WORLD, type Host } from './mode.js'
 
-/** `?bench=large-save[&scale=n][&pan=tiles-per-second]`: `scale` divides the save (1 = the full
- * 0020 section 9 save, 64 = the 1/64 one the fast test builds), `pan` is the camera's drift speed. */
-export type BenchRequest = { scale: number; panTilesPerSecond: number }
-
-export function benchRequest(search: string): BenchRequest | undefined {
-  const p = new URLSearchParams(search)
-  if (p.get('bench') !== 'large-save') return undefined
-  const scale = Math.max(1, Math.floor(Number(p.get('scale') ?? 1)) || 1)
-  const pan = Number(p.get('pan') ?? 12)
-  return { scale, panTilesPerSecond: Number.isFinite(pan) ? pan : 12 }
-}
-
-// `bench.rs`'s shape: 262,144 / scale furnaces, 200 a chunk, chunks of 32 tiles in a square-ish
-// block from the origin (`cols` wide, row-major).
-const CHUNK_TILES = 32
-const FURNACES_PER_CHUNK = 200
-
-/** The centre of the furnace block and half of its shorter side, in tiles. */
-export function furnaceBlock(scale: number): { x: number; y: number; halfSpan: number } {
-  const chunks = Math.ceil(Math.floor(262_144 / scale) / FURNACES_PER_CHUNK)
-  let cols = 1
-  while (cols * cols < chunks) cols++
-  const rows = Math.ceil(chunks / cols)
-  return {
-    x: (cols * CHUNK_TILES) / 2,
-    y: (rows * CHUNK_TILES) / 2,
-    halfSpan: (Math.min(cols, rows) * CHUNK_TILES) / 2,
-  }
-}
+export { type BenchRequest, benchRequest, furnaceBlock, MAX_TILES_ACROSS } from './bench-request.js'
 
 /** The local world with the bench marker in its worldgen params and both state budgets raised to
  * hold the save (`WorldConfig` defaults would refuse it). Not persisted: 13 MB of snapshot each
@@ -283,7 +256,7 @@ export function createBenchMeter(): BenchMeter {
       // Max zoom-out over the middle of the dense block, before the first `Ui` can move it to the
       // spawn (`shouldMoveToSpawn` sees a camera that is no longer where the client made it).
       const block = furnaceBlock(req.scale)
-      g.client.camera.moveTo(block.x, block.y, { tiles: 256, durationMs: 0 })
+      g.client.camera.moveTo(block.x, block.y, { tiles: req.tilesAcross, durationMs: 0 })
       const el = document.createElement('pre')
       el.id = 'bench-hud'
       el.style.cssText =

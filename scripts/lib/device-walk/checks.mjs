@@ -1291,23 +1291,30 @@ export const CHECKS = {
   'M39-large-save': {
     pass: '85d26f8a',
     class: 'auto',
-    signal: 'window.__bench.hud() after 10 s: engine_mem_grows, tick p95; reload nonce; 10 min',
-    plan: later(4, '?bench=large-save', {
+    signal:
+      'bench build `window.__check.readings()` (the bench HUD as numbers, once a second) read after the first 10 s: engine_mem_grows sim and client, tick p95; reload nonce; 10 min',
+    // The HUD is read after `warmupMs` only: the first tick visits all 262,144 furnaces, so `tick p95` is
+    // inflated early (device-checks.md). The criteria read the worst steady sample, never the last one.
+    plan: reference('?bench=large-save', {
       variant: 'reference-bench',
       collector: 'bench',
       windowMs: 600 * SECOND,
+      warmupMs: 10 * SECOND,
+      reloadIsFail: true,
     }),
     criteria: [
       {
         name: 'engine_mem_grows_sim',
-        source: 'final.engine_mem_grows_sim',
+        source: 'steady.*.engine_mem_grows_sim',
+        reduce: 'max',
         op: '==',
         limit: 0,
         ref: 'pass',
       },
       {
         name: 'engine_mem_grows_client',
-        source: 'final.engine_mem_grows_client',
+        source: 'steady.*.engine_mem_grows_client',
+        reduce: 'max',
         op: '==',
         limit: 0,
         ref: 'pass',
@@ -1322,18 +1329,29 @@ export const CHECKS = {
         ref: 'PRE-PLAN §7 Tick time (0010)',
       },
     ],
-    metrics: [],
+    // What `docs/plan/acceptance/budgets.md` cites for "Tick time: phone sim worker": the worst steady
+    // `tick p95` (the criterion's own value) and the last HUD reading (what a person copying the HUD gets).
+    metrics: [
+      { name: 'tick_p95_ms_last', source: 'final.tick_p95_ms' },
+      { name: 'main_p95_ms_last', source: 'final.main_p95_ms' },
+      { name: 'frame_p95_ms_last', source: 'final.frame_p95_ms' },
+      { name: 'ticks', source: 'final.tick' },
+      { name: 'raf_gap_max_ms', source: 'windows.*.raf.max', reduce: 'max' },
+    ],
     acts: [],
     judges: [],
   },
   'M39-frame-shares': {
     pass: '11772ba9',
     class: 'auto',
-    signal: '__bench.hud() main p95 and frame p95 after 10 s, scripted pan, bench-only ?zoom=max',
-    plan: later(4, '?bench=large-save&pan=2', {
+    signal:
+      'bench build `window.__check.readings()` main p95 and frame p95 after the first 10 s, scripted pan (`pan=2`), `zoom=max` (bench-only parameter)',
+    plan: reference('?bench=large-save&pan=2&zoom=max', {
       variant: 'reference-bench',
       collector: 'bench',
       windowMs: 60 * SECOND,
+      warmupMs: 10 * SECOND,
+      reloadIsFail: true,
     }),
     criteria: [
       {
@@ -1352,8 +1370,22 @@ export const CHECKS = {
         limit: 8,
         ref: 'PRE-PLAN §7 Frame time (0018 §9)',
       },
+      {
+        name: 'reloads',
+        source: 'reloads',
+        op: '==',
+        limit: 0,
+        ref: 'none: a reload would restart the window',
+      },
     ],
-    metrics: [],
+    // "Frame time: main rAF callback, phone" and "client-worker `frame`, phone" of the acceptance budgets:
+    // the criteria's worst steady values above, and the last HUD reading beside them.
+    metrics: [
+      { name: 'main_p95_ms_last', source: 'final.main_p95_ms' },
+      { name: 'frame_p95_ms_last', source: 'final.frame_p95_ms' },
+      { name: 'tick_p95_ms', source: 'steady.*.tick_p95_ms', reduce: 'max' },
+      { name: 'raf_gap_max_ms', source: 'windows.*.raf.max', reduce: 'max' },
+    ],
     acts: [],
     judges: [],
   },
