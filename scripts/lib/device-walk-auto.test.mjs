@@ -282,11 +282,11 @@ describe('device-walk auto', () => {
   })
 
   test('device-walk auto: rows no adapter covers yet (a later delegation, or human) are skipped with that note, not left hanging', () => {
-    const r = rig(['M34-two-devices', 'M38-hosted-boot', 'M35-capability', 'M03-determinism'])
+    const r = rig(['M39-desktop-browsers', 'M38-hosted-boot', 'M35-capability', 'M03-determinism'])
     expect(r.m.list.map((i) => i.id)).toEqual([
       'M03-determinism',
-      'M34-two-devices',
       'M38-hosted-boot',
+      'M39-desktop-browsers',
     ])
     r.start()
     r.series('M03-determinism', 1, {
@@ -296,14 +296,14 @@ describe('device-walk auto', () => {
     const res = r.results()
     expect(res.map((x) => [x.id, x.result])).toEqual([
       ['M03-determinism', 'pass'],
-      ['M34-two-devices', 'skip'],
       ['M38-hosted-boot', 'skip'],
+      ['M39-desktop-browsers', 'skip'],
     ])
     expect(res[1].notes).toBe(
       'not automated yet (M39f delegation 4): walk it by hand with --manual',
     )
     expect(res[2].notes).toBe(
-      'not automated yet (M39f delegation 4): walk it by hand with --manual',
+      'not automated yet (M39f delegation 5): walk it by hand with --manual',
     )
     expect(r.step().phase).toBe('done')
   })

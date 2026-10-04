@@ -52,6 +52,9 @@ const fixturesRoot = fileURLToPath(new URL('../fixtures/', import.meta.url))
 const referenceReleaseGameDir = fileURLToPath(
   new URL('../../../games/reference/sim/target/engine/release', import.meta.url),
 )
+const referenceWorldJson = fileURLToPath(
+  new URL('../../../games/reference/world.json', import.meta.url),
+)
 const referenceBenchGameDir = fileURLToPath(
   new URL('../../../games/reference/sim/target/engine/release+bench', import.meta.url),
 )
@@ -160,7 +163,16 @@ if (ws) {
   console.log(`starting games/reference-server on 127.0.0.1:${wsPort} (--game ${gameDir})…`)
   wsChild = spawn(
     process.execPath,
-    [referenceServerEntry, '--game', gameDir, '--data', wsDataDir],
+    [
+      referenceServerEntry,
+      '--game',
+      gameDir,
+      '--data',
+      wsDataDir,
+      // The bench module is not the server's default `--game`, so it would get the `Params = ()` world
+      // (`null` worldgen, `BadConfig` for the reference game's `RefParams`): name the declared world.
+      ...(bench && !wsFixture ? ['--world', referenceWorldJson] : []),
+    ],
     {
       cwd: root,
       stdio: ['ignore', 'pipe', 'inherit'],

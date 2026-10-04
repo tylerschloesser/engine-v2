@@ -19,6 +19,7 @@
 // finds it there), `budgets.json <key>`, `PRE-PLAN §7 <row>`, or an ADR section. `source` is a path into
 // the collected data (`*` fans out over an array); `reduce` folds the fan-out (max, min, sum, all, ...).
 import { createHash } from 'node:crypto'
+import landmarks from '../../../games/reference/tests/fixtures/landmarks.json' with { type: 'json' }
 
 export const SECOND = 1000
 
@@ -169,6 +170,21 @@ const reference = (page, extra = {}) => ({
   delegation: 4,
   ...extra,
 })
+
+/**
+ * M34 on the reference game's check build joined to the real-time server (`#k=`, an open server): the phone
+ * is player 1, a Playwright Chromium on the Mac (`bot.mjs`) is player 2. `tiles`: the stone landmark of
+ * `games/reference/tests/fixtures/landmarks.json` (checked against worldgen by `landmarks_fixture_current`)
+ * and the free 2x2 of land `tests/helpers/script.ts` calls FURNACE_A (a unit test pins both).
+ */
+export const MP_TILES = { stone: landmarks.resources.stone, furnace: { x: -4, y: 1 } }
+const mp = (extra) =>
+  reference('#k=', {
+    variant: 'reference-bench',
+    collector: 'reference-mp',
+    tiles: MP_TILES,
+    ...extra,
+  })
 
 /** M35's criteria, the same for both builds of the row (Mac and iPhone): the DOM and the wrapped device. */
 const m35Criteria = () => [
@@ -1109,16 +1125,25 @@ export const CHECKS = {
   'M34-two-devices': {
     pass: '27919208',
     class: 'auto+confirm',
-    signal: 'bot partner on the Mac; check-build __check roster and remote entities',
-    plan: later(4, '', { variant: 'reference-ws', collector: 'reference' }),
+    signal:
+      'bot partner on the Mac (Playwright Chromium, scripted by the service: collect, craft, place, disconnect, return); check build `__check` roster dots and remote circles and furnaces on both sides',
+    plan: mp({ mode: 'two', bot: 'two' }),
     criteria: [
       {
         name: 'remote_entity_seen',
         source: 'final.remote_entities',
         op: '>=',
         limit: 1,
-        ref: 'pass: "each sees the other\'s circle", read as at least one remote entity',
+        ref: 'Steps: phone and Mac join one world; the other player is at least one remote circle',
       },
+      {
+        name: 'furnace_seen',
+        source: 'final.furnaces',
+        op: '>=',
+        limit: 1,
+        ref: 'Steps: collect on one, place on the other: the placed furnace is at least one sprite on the other side',
+      },
+      { name: 'bot_sees_phone', source: 'botView.sawPhone', op: '==', limit: true, ref: 'pass' },
       {
         name: 'roster_dot_hollow_after_drop',
         source: 'roster.hollowAfterDrop',
@@ -1126,18 +1151,55 @@ export const CHECKS = {
         limit: true,
         ref: 'pass',
       },
+      {
+        name: 'roster_dot_filled_on_return',
+        source: 'roster.filledOnReturn',
+        op: '==',
+        limit: true,
+        ref: 'pass',
+      },
+      {
+        name: 'sees_its_circle',
+        source: 'final.remote_entities',
+        op: '>=',
+        limit: null,
+        ref: 'none: "each sees the other\'s circle" is the person\'s eyes: one confirm tap',
+        judge: 'always',
+      },
     ],
-    metrics: [],
-    acts: ['collect on one device, place on the other'],
+    metrics: [
+      { name: 'bot_roster_n', source: 'botView.roster_n' },
+      { name: 'hollow_after_ms', source: 'roster.hollowAfterMs' },
+    ],
+    acts: ['collect on one device, place on the other (the bot does the Mac half)'],
     judges: ['I see its circle'],
   },
   'M34-own-timer-bar': {
     pass: '259f2df2',
     class: 'auto',
     signal:
-      'check-build __check own-timer progress per frame: tap, bar-full and result times per link',
-    plan: later(4, '', { variant: 'reference-ws', collector: 'reference' }),
+      'check build `__check.act.collectOnce`: the tap, the moment the bar finishes filling (`animationend`) and the first `Ui` with the item in the inventory, per link (Wi-Fi, then a throttled or cellular link)',
+    // `timer.toleranceMs`: the resolution of the measurement, not a Pass number: one 20 Hz tick (50 ms) plus
+    // two frames. A result earlier than that before the bar is full, or a full bar left waiting for longer
+    // than that, is what the Pass text forbids.
+    plan: mp({ mode: 'timer', timer: { toleranceMs: 100 } }),
     criteria: [
+      {
+        name: 'links_measured',
+        source: 'links.*',
+        reduce: 'len',
+        op: '>=',
+        limit: 2,
+        ref: 'Steps: start own timers on Wi-Fi, then on a throttled or cellular link',
+      },
+      {
+        name: 'timers_completed',
+        source: 'timers.*.ok',
+        reduce: 'all',
+        op: '==',
+        limit: true,
+        ref: 'none: a collect with no result in time is a failed run, not a bar',
+      },
       {
         name: 'result_before_bar_full',
         source: 'timers.*.resultBeforeFull',
@@ -1155,7 +1217,12 @@ export const CHECKS = {
         ref: 'pass',
       },
     ],
-    metrics: [],
+    metrics: [
+      { name: 'gap_ms_min', source: 'timers.*.gapMs', reduce: 'min' },
+      { name: 'gap_ms_max', source: 'timers.*.gapMs', reduce: 'max' },
+      { name: 'bar_ms_median', source: 'timers.*.durationMs', reduce: 'median' },
+      { name: 'runs', source: 'timers.*.ok', reduce: 'len' },
+    ],
     acts: ['switch the phone off Wi-Fi when asked'],
     judges: [],
   },
@@ -1163,10 +1230,58 @@ export const CHECKS = {
     pass: 'f469a332',
     class: 'auto+confirm',
     signal:
-      'check-build remote render positions: per-frame jump versus speed, fade after the bot drops',
-    plan: later(4, '', { variant: 'reference-ws', collector: 'reference' }),
-    criteria: [{ name: 'snaps', source: 'motion.snaps', op: '==', limit: 0, ref: 'pass' }],
-    metrics: [],
+      'check build `__check.act.sample`: the remote circle of the bot from the newest DrawList every frame, jump against the neighbouring frames (a snap), and its alpha after the bot disconnects',
+    // `snap`: what counts as a snap is a definition of the measurement, not a Pass number: a jump of more
+    // than `factor` times the median step of the `window` frames either side, and of more than `floorTiles`
+    // (a circle at rest has a median step of 0). A snap is a judge prompt, never a failure by itself.
+    plan: mp({
+      mode: 'motion',
+      bot: 'motion',
+      derive: 'motion',
+      snap: { factor: 4, floorTiles: 0.25, window: 5 },
+    }),
+    criteria: [
+      {
+        name: 'remote_moved',
+        source: 'derived.travelTiles',
+        op: '>=',
+        limit: 1,
+        ref: 'Steps: move on the Mac and watch the phone: a remote circle that never moved shows nothing about snapping',
+      },
+      {
+        name: 'snaps',
+        source: 'derived.snaps',
+        op: 'proxy',
+        limit: 0,
+        ref: 'hitch proxy (39f Planning decisions): a count of jumps above the snap definition; any is a judge prompt',
+        judge: 'borderline',
+      },
+      {
+        name: 'fade_missing',
+        source: 'derived.fadeMissing',
+        op: 'proxy',
+        limit: 0,
+        // 1 when the circle was never drawn with an alpha under 255 after the bot went. `0012` fades an avatar
+        // after 2 s of silence (a dropped link: the Mac's Wi-Fi off); a bot that closes its page is a clean
+        // close, which `0013` makes vanish at once. So "no fade seen" is a judge prompt, never a failure.
+        ref: 'hitch proxy (39f Planning decisions): 1 when no fade was seen; the person judges, never an automatic failure',
+        judge: 'borderline',
+      },
+      {
+        name: 'no_snap_and_fades',
+        source: 'derived.maxJumpTiles',
+        op: '<=',
+        limit: null,
+        ref: 'none: "moves without snapping" and "it fades" are seen by the person: one confirm tap, with the largest jump shown',
+        judge: 'always',
+      },
+    ],
+    metrics: [
+      { name: 'max_jump_tiles', source: 'derived.maxJumpTiles' },
+      { name: 'travel_tiles', source: 'derived.travelTiles' },
+      { name: 'frames', source: 'derived.frames' },
+      { name: 'fade_min_alpha', source: 'derived.minAlpha' },
+    ],
     acts: [],
     judges: ['it fades, no snap'],
   },
@@ -1509,7 +1624,65 @@ const OPS = {
   has: (v, l) => Array.isArray(v) && v.some((x) => String(x).includes(l)),
 }
 
+const medianOfAll = (a) => {
+  const s = [...a].sort((x, y) => x - y)
+  return s.length ? s[Math.floor((s.length - 1) / 2)] : 0
+}
+
+/**
+ * M34-remote-motion's numbers from the phone's raw per-frame record of the remote circle (`frames`:
+ * `[t, x, y]` for each frame the circle was in the DrawList). A *snap* is a frame-to-frame jump above
+ * `floorTiles` and above `factor` times the median jump of the `window` frames on either side (the
+ * "expected step": a circle at rest has median 0, which is why the floor exists). The definition lives
+ * here, beside the criterion, and the page only reports what it saw.
+ */
+export function analyseMotion(frames, { factor, floorTiles, window: w }) {
+  const jumps = []
+  let travel = 0
+  for (let i = 1; i < frames.length; i++) {
+    const d = Math.hypot(frames[i][1] - frames[i - 1][1], frames[i][2] - frames[i - 1][2])
+    jumps.push(d)
+    travel += d
+  }
+  let snaps = 0
+  let max = 0
+  jumps.forEach((d, i) => {
+    max = Math.max(max, d)
+    const near = [...jumps.slice(Math.max(0, i - w), i), ...jumps.slice(i + 1, i + 1 + w)]
+    if (d > floorTiles && d > factor * medianOfAll(near)) snaps++
+  })
+  return {
+    frames: frames.length,
+    travelTiles: +travel.toFixed(3),
+    maxJumpTiles: +max.toFixed(3),
+    snaps,
+  }
+}
+
+/**
+ * The fade after the other player's socket is gone (`frames`: `[t, circles, alpha]` per frame, `alpha` the
+ * first remote circle's byte, null with none): it fades when the circle is drawn with an alpha under 255
+ * (0012: "fade an avatar after 2 s of silence"); `vanished` when it ends up not drawn at all.
+ */
+export function analyseFade(frames) {
+  const drawn = frames.filter((f) => f[1] >= 1 && typeof f[2] === 'number')
+  const minAlpha = drawn.length ? Math.min(...drawn.map((f) => f[2])) : null
+  const last = frames.at(-1)
+  const fades = minAlpha !== null && minAlpha < 255
+  return {
+    fades,
+    fadeMissing: fades ? 0 : 1,
+    minAlpha,
+    fadeFrames: drawn.filter((f) => f[2] < 255).length,
+    vanished: !!last && last[1] === 0 && drawn.length > 0,
+  }
+}
+
 const DERIVE = {
+  motion: (data, _ctx, entry) => ({
+    ...analyseMotion(data.motionFrames ?? [], entry.plan.snap),
+    ...analyseFade(data.fadeFrames ?? []),
+  }),
   /** F = phone median / desktop median (`0008` Consequences; the M08-warn-threshold item). */
   'worldgen-F'(data, ctx) {
     const phone = read(data, 'g.__worldgenBench.medianMs')
@@ -1534,7 +1707,7 @@ const round = (v) => (typeof v === 'number' ? +v.toFixed(3) : v)
  */
 export function evaluate(entry, data, ctx = {}) {
   const root = { ...data }
-  if (entry.plan.derive) root.derived = DERIVE[entry.plan.derive](data, ctx)
+  if (entry.plan.derive) root.derived = DERIVE[entry.plan.derive](data, ctx, entry)
   const rows = entry.criteria.map((c) => {
     const value = read(root, c.source, c.reduce)
     let ok

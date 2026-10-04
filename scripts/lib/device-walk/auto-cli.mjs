@@ -7,6 +7,8 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createAutoRound } from './auto-round.mjs'
+import { createBots } from './bot.mjs'
+import { MP_TILES } from './checks.mjs'
 import { desktopMedian } from './desktop-median.mjs'
 import { createPhoneApi } from './phone-api.mjs'
 import { qrSvg, qrTerminal } from './qr.mjs'
@@ -60,7 +62,21 @@ export async function startAutoRound(o) {
   if (!readEvents(file).some((e) => e.type === 'start'))
     appendEvent(file, { type: 'start', only: o.only ?? null, mode: 'auto' })
   const origins = {}
-  const machine = createAutoRound({ file, items, origins, params: o.params, evidenceBase: REPO })
+  // The Mac bot partner of M34 (`bot.mjs`): started when an attempt of a check with `plan.bot` opens, one at a
+  // time, on the check build's loopback origin (the bot is on the Mac). Built once the servers are up.
+  let bots = null
+  const machine = createAutoRound({
+    file,
+    items,
+    origins,
+    params: o.params,
+    evidenceBase: REPO,
+    onAttempt: (a) => {
+      if (!bots) return
+      for (const other of bots.active()) if (other !== a.id) bots.finish(other)
+      bots.start(a)
+    },
+  })
   const api = createPhoneApi({ file, round, token, seriesDir, ...machine.hooks })
   machine.attach(api)
   const walkPort = await api.listen(0)
@@ -71,6 +87,7 @@ export async function startAutoRound(o) {
     wsBasePort: o.wsBasePort ?? Number(process.env.ENGINE_WS_PORT ?? 4174),
   })
   const stop = async () => {
+    await bots?.stop()
     await control.stopAll()
     await api.close()
   }
@@ -84,6 +101,16 @@ export async function startAutoRound(o) {
       for (const x of [u.loopback, u.tunnel, origins[key]]) if (x) api.allowHost(x)
       if (u.loopback) api.allowHost(u.loopback.replace('127.0.0.1', 'localhost'))
     }
+    if (keys.includes('reference-bench'))
+      bots = createBots({
+        file,
+        append: (e) => api.append(e),
+        origin: control.urlsFor('reference-bench').loopback,
+        tiles: MP_TILES,
+        launch: o.launchBot,
+        timings: o.botTimings,
+        log,
+      })
     if (machine.needsDesktopMedian()) {
       const loopback = control.urlsFor('fixture').loopback
       log('running worldgen-bench.html in headless Chromium for the desktop median...')

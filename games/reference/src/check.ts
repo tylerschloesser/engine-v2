@@ -91,15 +91,47 @@ export function installCheck(game: StartedGame, bench?: BenchApi): void {
   const tick = (): void => {
     frames++
     if (sampling) recorded.push({ t: performance.now(), circles: world().remote })
+    if (watch?.fill?.parentElement?.classList.contains('is-filling'))
+      watch.lastFill = fillOf(watch.fill)
     requestAnimationFrame(tick)
   }
   requestAnimationFrame(tick)
 
   // --- the own collect bar (M34-own-timer-bar) --------------------------------------------------
+  // The page's own collect UI (`ui/collect.ts`) stops the bar's CSS animation in the same `onUi` that
+  // clears `collecting`, so the bar's fill cannot be read after the result: it is tracked every frame while
+  // a collect is being watched (`lastFill`, at most one frame old) and read as of the result.
+  type Watch = {
+    fill: HTMLElement | null
+    before: number
+    lastFill: number | null
+    resultAt: number | null
+    fillAtResult: number | null
+  }
+  let watch: Watch | null = null
+  const fillOf = (el: HTMLElement): number => {
+    const m = /matrix\(([^,]+)/.exec(getComputedStyle(el).transform)
+    return m ? Number(m[1]) : 0
+  }
+  client.onUi<RefUi>((u) => {
+    const w = watch
+    if (
+      w &&
+      w.resultAt === null &&
+      u.collecting === null &&
+      (u.inventory[SLOT.stone] ?? 0) > w.before
+    ) {
+      w.resultAt = performance.now()
+      w.fillAtResult = w.lastFill
+    }
+  })
+
   /**
-   * Taps the Collect button of `tile` (the page's own UI path: `button.click()`), then times the bar:
-   * the tap, the moment the CSS fill animation finishes (`animationend`), and the first `Ui` that has the
-   * collect over with the item in the inventory. Resolves when the result arrived (or `timeoutMs`).
+   * Taps the Collect button of `tile` (the page's own UI path: `button.click()`), then times the bar: the
+   * tap, the moment the CSS fill animation finishes (`animationend`; none when the host's result arrives
+   * first and the bar is cancelled part-way), and the first `Ui` that has the collect over with the item in
+   * the inventory. `gapMs` is the result against the full bar: positive, a full bar left waiting; negative,
+   * the result before the bar was full (read from the fill at the last frame when the bar never finished).
    */
   async function collectOnce(tile: { x: number; y: number }, timeoutMs = 20_000): Promise<Timed> {
     const button = document.querySelector<HTMLButtonElement>(
@@ -109,47 +141,42 @@ export function installCheck(game: StartedGame, bench?: BenchApi): void {
     if (button.disabled)
       return { ok: false, reason: 'the button is disabled (a collect is running)' }
     const fill = button.querySelector<HTMLElement>('.collect-fill')
-    const before = ui?.inventory[SLOT.stone] ?? 0
+    const w: Watch = {
+      fill,
+      before: ui?.inventory[SLOT.stone] ?? 0,
+      lastFill: null,
+      resultAt: null,
+      fillAtResult: null,
+    }
     const out: Timed = { ok: false, fullAt: null, resultAt: null, gapMs: null, fillAtResult: null }
     const onEnd = (e: AnimationEvent): void => {
       if (e.animationName === 'collect-fill-anim' && out.fullAt === null)
         out.fullAt = performance.now()
     }
     fill?.addEventListener('animationend', onEnd)
+    watch = w
     out.tapAt = performance.now()
     button.click()
-    const t0 = out.tapAt
     try {
-      while (performance.now() - t0 < timeoutMs) {
+      while (performance.now() - out.tapAt < timeoutMs && w.resultAt === null) {
         await new Promise((r) => setTimeout(r, 8))
-        if (out.durationMs === undefined) {
+        if (out.durationMs === undefined && button.classList.contains('is-filling')) {
           const ms = Number.parseFloat(button.style.getPropertyValue('--collect-duration'))
-          if (Number.isFinite(ms) && button.classList.contains('is-filling')) out.durationMs = ms
-        }
-        const u = ui
-        const landed =
-          u !== null && u.collecting === null && (u.inventory[SLOT.stone] ?? 0) > before
-        if (landed && out.resultAt === null) {
-          out.resultAt = performance.now()
-          out.fillAtResult = fillOf(fill)
-          // Give the animation's own end a moment to arrive if the result beat it.
-          if (out.fullAt === null) await new Promise((r) => setTimeout(r, 400))
-          break
+          if (Number.isFinite(ms)) out.durationMs = ms
         }
       }
     } finally {
       fill?.removeEventListener('animationend', onEnd)
+      watch = null
     }
-    if (out.resultAt === null) return { ...out, reason: 'no result in time' }
+    if (w.resultAt === null) return { ...out, reason: 'no result in time' }
     out.ok = true
+    out.resultAt = w.resultAt
+    out.fillAtResult = w.fillAtResult
     const full = out.fullAt ?? null
-    out.gapMs = full === null ? null : (out.resultAt ?? 0) - full
+    out.gapMs =
+      full !== null ? w.resultAt - full : -((1 - (w.fillAtResult ?? 1)) * (out.durationMs ?? 0))
     return out
-  }
-  const fillOf = (el: HTMLElement | null | undefined): number | null => {
-    if (!el) return null
-    const m = /matrix\(([^,]+)/.exec(getComputedStyle(el).transform)
-    return m ? Number(m[1]) : 0
   }
 
   const reading = (): Record<string, CheckReading> => {

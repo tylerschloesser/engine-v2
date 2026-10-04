@@ -56,6 +56,7 @@ export async function start(
   ids: string[],
   params: Record<string, unknown> = {},
   portBase = 15300,
+  more: Record<string, unknown> = {},
 ): Promise<Run> {
   const auto = (await import(`${lib}auto-cli.mjs`)) as {
     startAutoRound(o: Record<string, unknown>): Promise<Started>
@@ -92,6 +93,7 @@ export async function start(
     basePort: port,
     wsBasePort: port + 1,
     log: () => {},
+    ...more,
     spawnServe: (args: string[], io: unknown) => serve.spawnServe([...args, '--no-build'], io),
   })
   const events = () => rounds.readEvents(file)

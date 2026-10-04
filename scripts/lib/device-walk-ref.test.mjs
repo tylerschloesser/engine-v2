@@ -7,7 +7,8 @@ import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { applyRound } from './device-walk/apply.mjs'
 import { createAutoRound } from './device-walk/auto-round.mjs'
-import { CHECKS, evaluate } from './device-walk/checks.mjs'
+import { createBots } from './device-walk/bot.mjs'
+import { analyseFade, analyseMotion, CHECKS, evaluate, MP_TILES } from './device-walk/checks.mjs'
 import { parseChecks } from './device-walk/parse.mjs'
 import { appendEvent, readEvents, replay } from './device-walk/rounds.mjs'
 
@@ -209,5 +210,226 @@ describe('device-walk reference: which client walks a row', () => {
       id: 'M35-safari-build-mac',
       n: 1,
     })
+  })
+})
+
+describe('device-walk reference: M34 (the bot partner)', () => {
+  const snap = CHECKS['M34-remote-motion'].plan.snap
+  // A circle walking at a steady 0.1 tile a frame.
+  const smooth = Array.from({ length: 60 }, (_, i) => [i * 16, i * 0.1, 0])
+
+  test('device-walk reference: a steady walk has no snap, a hold-then-jump walk and a teleport do', () => {
+    expect(analyseMotion(smooth, snap)).toMatchObject({ frames: 60, snaps: 0, travelTiles: 5.9 })
+    // A fast steady walk (0.5 tile a frame, above the floor) is not a snap either: the step is what is expected.
+    const fast = smooth.map(([t], i) => [t, i * 0.5, 0])
+    expect(analyseMotion(fast, snap)).toMatchObject({ snaps: 0, maxJumpTiles: 0.5 })
+    // The same distance in steps every six frames (a circle that only moves when a sample arrives).
+    const steps = smooth.map(([t, x], i) => [t, Math.floor(i / 6) * 0.6, 0].slice(0, 3))
+    expect(analyseMotion(steps, snap).snaps).toBeGreaterThan(5)
+    const teleport = smooth.map(([t, x], i) => [t, i < 30 ? x : x + 4, 0])
+    expect(analyseMotion(teleport, snap)).toMatchObject({ snaps: 1, maxJumpTiles: 4.1 })
+    // A circle at rest is not a snap (its median step is 0: the floor), and nothing drawn is nothing moved.
+    expect(
+      analyseMotion(
+        smooth.map(([t]) => [t, 3, 3]),
+        snap,
+      ),
+    ).toMatchObject({ snaps: 0 })
+    expect(analyseMotion([], snap)).toMatchObject({ frames: 0, snaps: 0, travelTiles: 0 })
+  })
+
+  test('device-walk reference: a fade is an alpha under 255 while the circle is drawn; vanishing at once is not one', () => {
+    const fade = [
+      [0, 1, 255],
+      [16, 1, 200],
+      [32, 1, 90],
+      [48, 0, null],
+    ]
+    expect(analyseFade(fade)).toMatchObject({
+      fades: true,
+      fadeMissing: 0,
+      minAlpha: 90,
+      vanished: true,
+    })
+    const gone = [
+      [0, 1, 255],
+      [16, 1, 255],
+      [32, 0, null],
+    ]
+    expect(analyseFade(gone)).toMatchObject({ fades: false, fadeMissing: 1, vanished: true })
+    expect(analyseFade([])).toMatchObject({ fades: false, fadeMissing: 1, minAlpha: null })
+  })
+
+  const motion = (over = {}) => ({
+    motionFrames: Array.from({ length: 60 }, (_, i) => [i * 16, i * 0.1, 0]),
+    fadeFrames: [
+      [0, 1, 255],
+      [16, 1, 128],
+      [32, 0, null],
+    ],
+    ...over,
+  })
+  test('device-walk reference: M34-remote-motion asks the person for a snap or a missing fade, fails a circle that never moved', () => {
+    const e = CHECKS['M34-remote-motion']
+    const clean = evaluate(e, motion())
+    expect(clean.criteria.map((c) => [c.name, c.ok])).toEqual([
+      ['remote_moved', true],
+      ['snaps', true],
+      ['fade_missing', true],
+      ['no_snap_and_fades', null], // always the person's tap
+    ])
+    expect(clean.verdict).toBe('judge')
+    const snappy = evaluate(
+      e,
+      motion({
+        motionFrames: motion().motionFrames.map(([t, x], i) => [t, i < 30 ? x : x + 4, 0]),
+      }),
+    )
+    expect(snappy.criteria.find((c) => c.name === 'snaps')).toMatchObject({ value: 1, ok: null })
+    const nofade = evaluate(
+      e,
+      motion({
+        fadeFrames: [
+          [0, 1, 255],
+          [16, 0, null],
+        ],
+      }),
+    )
+    expect(nofade.criteria.find((c) => c.name === 'fade_missing')).toMatchObject({
+      value: 1,
+      ok: null,
+    })
+    expect(nofade.verdict).toBe('judge') // never an automatic failure
+    const still = evaluate(e, motion({ motionFrames: [[0, 1, 1]] }))
+    expect(still.verdict).toBe('fail')
+    expect(still.criteria.find((c) => c.name === 'remote_moved')).toMatchObject({
+      value: 0,
+      ok: false,
+    })
+  })
+
+  const timer = (over = {}) => ({
+    link: 'wifi',
+    ok: true,
+    durationMs: 1500,
+    gapMs: 20,
+    resultBeforeFull: false,
+    fullWaiting: false,
+    ...over,
+  })
+  test('device-walk reference: M34-own-timer-bar passes in tolerance on two links; a result before the bar or a full bar left waiting fails', () => {
+    const e = CHECKS['M34-own-timer-bar']
+    const run = (timers) =>
+      evaluate(e, { timers, links: [...new Set(timers.filter((t) => t.ok).map((t) => t.link))] })
+    const ok = run([timer(), timer({ link: 'cellular', gapMs: -30 })])
+    expect(ok.verdict).toBe('pass')
+    expect(ok.metrics).toMatchObject({
+      runs: 2,
+      gap_ms_min: -30,
+      gap_ms_max: 20,
+      bar_ms_median: 1500,
+    })
+    expect(run([timer()]).criteria.find((c) => c.name === 'links_measured')).toMatchObject({
+      value: 1,
+      ok: false,
+    })
+    expect(run([timer(), timer({ link: 'cellular', resultBeforeFull: true })]).verdict).toBe('fail')
+    expect(run([timer(), timer({ link: 'cellular', fullWaiting: true })]).verdict).toBe('fail')
+    expect(run([timer(), timer({ link: 'cellular', ok: false })]).criteria[1]).toMatchObject({
+      name: 'timers_completed',
+      ok: false,
+    })
+  })
+
+  test('device-walk reference: M34 tiles are the stone landmark and the free 2x2 the scripted play places on', async () => {
+    const script = await import('../../games/reference/tests/helpers/script.ts')
+    expect(MP_TILES.furnace).toEqual(script.FURNACE_A)
+    expect(MP_TILES.stone).toEqual(script.LANDMARKS.resources.stone)
+  })
+
+  /** A Playwright stand-in: `evaluate` answers `readings()` (no argument) and records `act` calls. */
+  function fakeLaunch() {
+    const calls = []
+    const log = { closed: 0, pages: 0 }
+    const page = () => ({
+      goto: async () => {},
+      waitForFunction: async () => {},
+      evaluate: async (_fn, arg) => {
+        if (Array.isArray(arg)) {
+          calls.push(arg)
+          return undefined
+        }
+        return {
+          link: 'online',
+          ui_seen: true,
+          spawn_x: 10,
+          spawn_y: 20,
+          roster_n: 2,
+          remote_circles: 1,
+        }
+      },
+      close: async () => {
+        log.closed++
+      },
+    })
+    return {
+      calls,
+      log,
+      launch: async () => ({
+        newContext: async () => ({ newPage: async () => (log.pages++, page()) }),
+        close: async () => {
+          log.browserClosed = true
+        },
+      }),
+    }
+  }
+
+  test('device-walk reference: the motion bot walks when the phone is ready, says moved, goes when the phone has seen it, and goes home on finish', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'walk-bot-'))
+    const file = join(dir, 'r.jsonl')
+    const fake = fakeLaunch()
+    const bots = createBots({
+      file,
+      append: (e) => appendEvent(file, e),
+      origin: 'http://127.0.0.1:1',
+      tiles: MP_TILES,
+      launch: fake.launch,
+      timings: { stepMs: 10, walkMs: 60, settleMs: 5, pollMs: 10 },
+    })
+    const phase = () =>
+      readEvents(file)
+        .filter((e) => e.key === 'bot')
+        .map((e) => e.data.phase)
+    const says = (p) =>
+      appendEvent(file, {
+        type: 'reading',
+        id: 'M34-remote-motion',
+        n: 1,
+        key: 'phone',
+        data: { phase: p },
+      })
+    const until = async (fn) => {
+      for (let i = 0; i < 300 && !fn(); i++) await new Promise((r) => setTimeout(r, 10))
+      expect(fn()).toBe(true)
+    }
+    bots.start({ id: 'M34-remote-motion', n: 1, plan: CHECKS['M34-remote-motion'].plan })
+    expect(bots.active()).toEqual(['M34-remote-motion'])
+    await until(() => phase().includes('joined'))
+    expect(phase()).toEqual(['joined']) // it waits for the phone
+    says('ready')
+    await until(() => phase().includes('moved'))
+    expect(phase()).toEqual(['joined', 'moved'])
+    const xs = fake.calls.filter(([k]) => k === 'moveTo').map(([, a]) => a.x)
+    expect([...new Set(xs)].sort((a, b) => a - b)).toEqual([10, 16]) // the spawn, and 6 tiles on: back and forth, not one move
+    expect(xs.length).toBeGreaterThan(3)
+    says('moved-seen')
+    await until(() => phase().includes('gone'))
+    expect(fake.log.closed).toBe(1)
+    await bots.stop()
+    expect(fake.log.browserClosed).toBe(true)
+    expect(bots.active()).toEqual([])
+    // A check without a partner starts none.
+    bots.start({ id: 'M34-own-timer-bar', n: 1, plan: CHECKS['M34-own-timer-bar'].plan })
+    expect(bots.active()).toEqual([])
   })
 })

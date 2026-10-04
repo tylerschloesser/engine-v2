@@ -169,3 +169,92 @@ test('walk-ref: M39-large-save and M39-frame-shares read the bench HUD through _
     await r.stop()
   }
 })
+
+// M34: the phone and a bot partner (headless Chromium, started by the service) in one world on the check
+// build with its own-feature real-time server. Simulated: the "Wi-Fi off" prompt is a tap on its button (the
+// link itself is not throttled here), the drop of the bot is its page closing, fingers are `button.click()`
+// of the page's own collect button, and the camera is moved by `__check.act.moveTo`.
+test('walk-ref: M34-own-timer-bar (three collects per link, tap to result) and M34-remote-motion (the bot walks, goes; per-frame jumps and fade) @slow @webkit-gpu', async ({
+  page,
+}) => {
+  test.setTimeout(420_000)
+  await ensureBenchBuild()
+  const f = await fake()
+  const r = await start(
+    ['M34-own-timer-bar', 'M34-remote-motion'],
+    { timeoutMs: 90_000, botTimeoutMs: 120_000, fadeMs: 12_000, settleMs: 500 },
+    16000,
+    { botTimings: { walkMs: 6000 } },
+  )
+  const handlers: Handler[] = [
+    {
+      match: /^Switch the phone off Wi-Fi now/,
+      run: async ({ page: p }) => {
+        await new Promise((res) => setTimeout(res, 300))
+        await f.tapBar(p, 'Wi-Fi is off')
+      },
+    },
+  ]
+  try {
+    const seen = await r.phone(page, { timeoutMs: 380_000, handlers })
+    expect(seen.judged, 'one confirm tap, for remote-motion only').toBe(1)
+    const timer = finalOf(r, 'M34-own-timer-bar')
+    // Measured here, on loopback with the engine's own lead: the bar's fill ends before the host's result and
+    // stays full for `gap_ms` (see the step's Deviations); the flow is what this test pins: six timed collects
+    // on two links, a verdict from the numbers, and the only criterion allowed to fail is the bar waiting.
+    test.info().annotations.push({ type: 'own-timer', description: JSON.stringify(timer.metrics) })
+    expect(['pass', 'fail']).toContain(timer.result)
+    expect(timer).toMatchObject({ by: 'auto' })
+    const failed = timer.criteria.filter((c) => c.ok === false).map((c) => c.name)
+    expect(
+      failed.every((n) => n === 'bar_waiting_after_full'),
+      failed.join(),
+    ).toBe(true)
+    expect(crit(timer, 'links_measured')).toMatchObject({ value: 2, ok: true })
+    expect(crit(timer, 'timers_completed')).toMatchObject({ ok: true })
+    expect(crit(timer, 'result_before_bar_full')).toMatchObject({ ok: true })
+    expect(Number(timer.metrics.runs)).toBe(6)
+    expect(typeof timer.metrics.gap_ms_max).toBe('number')
+    expect(Number(timer.metrics.bar_ms_median)).toBeGreaterThan(500)
+    const motion = finalOf(r, 'M34-remote-motion')
+    test
+      .info()
+      .annotations.push({ type: 'remote-motion', description: JSON.stringify(motion.metrics) })
+    // A bot that closes its page is a clean close (0013: its circle vanishes at once, no fade) and the
+    // remote circle is drawn at each presence sample: both are the person's to judge, never a failure.
+    expect(motion, JSON.stringify(motion.criteria)).toMatchObject({ result: 'pass', by: 'mixed' })
+    expect(crit(motion, 'remote_moved')).toMatchObject({ ok: true })
+    expect(Number(motion.metrics.travel_tiles)).toBeGreaterThan(1)
+    expect(Number(motion.metrics.frames)).toBeGreaterThan(30)
+  } finally {
+    await r.stop()
+  }
+})
+
+test('walk-ref: M34-two-devices (the bot collects, crafts, places, drops and returns; both sides see each other) @slow @webkit-gpu', async ({
+  page,
+}) => {
+  test.setTimeout(420_000)
+  await ensureBenchBuild()
+  const r = await start(
+    ['M34-two-devices'],
+    { timeoutMs: 90_000, botTimeoutMs: 150_000, graceMs: 60_000 },
+    16100,
+  )
+  try {
+    const seen = await r.phone(page, { timeoutMs: 380_000 })
+    expect(seen.judged, 'one confirm tap: I see its circle').toBe(1)
+    const e = finalOf(r, 'M34-two-devices')
+    expect(e, JSON.stringify(e.criteria)).toMatchObject({ result: 'pass', by: 'mixed' })
+    for (const n of [
+      'remote_entity_seen',
+      'furnace_seen',
+      'bot_sees_phone',
+      'roster_dot_hollow_after_drop',
+      'roster_dot_filled_on_return',
+    ])
+      expect(crit(e, n), n).toMatchObject({ ok: true })
+  } finally {
+    await r.stop()
+  }
+})

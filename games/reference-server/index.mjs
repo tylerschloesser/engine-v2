@@ -28,6 +28,9 @@ const WORLD_ID = 'world'
 const { values } = parseArgs({
   options: {
     game: { type: 'string', default: DEFAULT_GAME_DIR },
+    // `--world <file>`: a `world.json` (`{ seed, worldgen }`) for an explicit `--game` that is a build of the
+    // reference game itself (`pnpm device:serve --bench --ws` serves its `release+bench` module, M39f).
+    world: { type: 'string' },
     data: { type: 'string' },
     import: { type: 'string' },
     'exit-on-idle': { type: 'boolean', default: false },
@@ -60,8 +63,9 @@ if (values.import) {
 // its default; an explicit `--game` (a fixture, `Params = ()`) keeps `{ seed: '1', worldgen: null }`:
 // `null` does not deserialize into the reference game's `RefParams` (a struct), which is why the
 // old default refused to start (`BadConfig`).
-const params =
-  values.game === DEFAULT_GAME_DIR
+const params = values.world
+  ? JSON.parse(await readFile(values.world, 'utf8'))
+  : values.game === DEFAULT_GAME_DIR
     ? JSON.parse(await readFile(new URL('../reference/world.json', import.meta.url), 'utf8'))
     : { seed: '1', worldgen: null }
 

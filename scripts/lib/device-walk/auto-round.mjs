@@ -178,10 +178,12 @@ const rel = (path, base) => (base && isAbsolute(path) ? relative(base, path) : p
 
 /**
  * @param {{ file: string, items: object[], origins: Record<string, string>, params?: object,
- *   evidenceBase?: string }} o  `items`: parsed device-checks.md items to walk (Android rows are not
- *   walked; ids without a `checks.mjs` entry or retired are left out).
+ *   evidenceBase?: string, onAttempt?: (a: { id: string, n: number, plan: object }) => void }} o
+ *   `items`: parsed device-checks.md items to walk (Android rows are not walked; ids without a `checks.mjs`
+ *   entry or retired are left out). `onAttempt`: an attempt was opened for the phone (the Mac bot partner of
+ *   M34 starts here, `bot.mjs`).
  */
-export function createAutoRound({ file, items, origins, params = {}, evidenceBase }) {
+export function createAutoRound({ file, items, origins, params = {}, evidenceBase, onAttempt }) {
   const list = items.filter((i) => !i.android && walkable(i.id))
   const byId = new Map(list.map((i) => [i.id, i]))
   const opts = { ...DEFAULTS, ...params }
@@ -339,7 +341,11 @@ export function createAutoRound({ file, items, origins, params = {}, evidenceBas
     for (let i = 0; i < 200 && api; i++) {
       const next = advance(readEvents(file))
       if (!next.length) return
-      for (const e of next) api.append(e)
+      for (const e of next) {
+        api.append(e)
+        if (e.type === 'attempt' && e.status === undefined && onAttempt)
+          onAttempt({ id: e.id, n: e.n, plan: CHECKS[e.id].plan })
+      }
     }
   }
 
