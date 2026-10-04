@@ -9,10 +9,11 @@ resolves it via `package.json`'s `main`.
 
 ## CLI
 
-`node games/reference-server --game <dir> --data <dir> [--import <archive>] [--exit-on-idle] [--static <dir>] [--stats-every <s>]`
+`node games/reference-server --game <dir> --data <dir> [--world <file>] [--import <archive>] [--exit-on-idle] [--static <dir>] [--stats-every <s>]`
 
 - `--game <dir>`: a `buildGame()` output directory (`game.wasm` + `game.json`, `loadGame`).
   Default: the reference game's own release build (`games/reference/sim/target/engine/release`).
+- `--world <file>`: a `world.json` (seed, worldgen) for an explicit `--game`; without it an explicit `--game` gets `worldgen: null`, which `RefParams` refuses (`BadConfig`). `device-serve --app reference --bench` passes it.
 - `--data <dir>`: `fsStorage(dir)`'s own root -- required.
 - `--import <archive>`: an exported world archive's bytes (`client.exportWorld()`), imported via
   `importWorld(storage, bytes, { worldId, overwrite: true })` before the world ever starts (0005's
@@ -22,7 +23,7 @@ resolves it via `package.json`'s `main`.
 - `--static <dir>` (M38, `static.mjs`): the same `node:http` server serves files from `<dir>` (`/` is `index.html`), with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` on every response including 404s, `application/wasm`, immutable `/assets/*`, and no path outside `<dir>`. Only `/ws` upgrades then (without the flag any path does). Test: `reference-server/static-headers`.
 - `--stats-every <s>`: a `stats: ticks=.. tick_ms p50=.. p99=.. max=.. overruns=..` line every `<s>` seconds (the tick callback's own duration, measured around `timer.every`); off by default. `scripts/loadtest.mjs` reads nothing from it: read `fly logs`.
 
-`pnpm --filter reference-server start` = `node index.mjs --data .data` (gitignored), serving the reference game's release build (`pnpm --filter reference build` first). `--game` left at its default uses `games/reference/world.json` as the world (`null` params do not deserialize into `RefParams`); an explicit `--game` keeps seed `'1'`, `worldgen: null`.
+`pnpm --filter reference-server start` = `node index.mjs --data .data` (gitignored), serving the reference game's release build (`pnpm --filter reference build` first). `--game` left at its default uses `games/reference/world.json` as the world (`null` params do not deserialize into `RefParams`); an explicit `--game` without `--world` keeps seed `'1'`, `worldgen: null`.
 
 Env: `PORT` (default `4174`), `HOST` (default `127.0.0.1`; the image sets `0.0.0.0`), `JOIN_KEY` (default `''`, 0013's join key).
 

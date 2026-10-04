@@ -22,7 +22,7 @@ import {
 } from './lib/report.mjs'
 import { lastLines, readLog, run } from './lib/run.mjs'
 import { probeTool, TOOLS } from './setup-tools.mjs'
-import { buildBudgetMs, buildSteps, suites } from './suites.mjs'
+import { buildBudgetMs, buildStepsFor, suites } from './suites.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const results = join(root, 'test-results')
@@ -58,7 +58,7 @@ async function main() {
   // Phase 1: build steps, in order.
   let buildMs = 0
   const stepTimings = []
-  for (const step of buildSteps) {
+  for (const step of buildStepsFor(opts.tier)) {
     const log = join(results, 'build', `${step.name}.log`)
     const { code, ms } = await run(step.cmd, step.args, {
       log,

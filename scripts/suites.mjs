@@ -9,7 +9,8 @@ export const buildBudgetMs = 10_000
 
 /**
  * Build steps run one after another, in order, before any suite (cargo steps would only queue on
- * the target-dir lock). A step is `{ name, cmd, args, cwd? }`.
+ * the target-dir lock). A step is `{ name, cmd, args, cwd?, tiers? }`; `tiers` (default both) names the
+ * tiers that run it (`buildStepsFor`).
  */
 export const buildSteps = [
   { name: 'tsc', cmd: 'pnpm', args: ['--filter', 'engine', 'build'] },
@@ -48,7 +49,20 @@ export const buildSteps = [
     args: ['exec', 'vite', 'build', '--minify', 'false'],
     cwd: 'games/reference',
   },
+  // docs/plan/39f-device-auto-runner.md (orchestrator ruling after delegation 4): the reference game's
+  // bench/check build (`dist-bench/` and the `release+bench` module), which only the slow tier's walk
+  // browser specs serve. Without this step they built it on demand (`ensureBenchBuild`) beside running
+  // tests, and the load made the first run flaky. Slow tier only: the fast tier never builds it.
+  {
+    name: 'reference-bench',
+    cmd: 'pnpm',
+    args: ['--filter', 'reference', 'build', '--mode', 'bench'],
+    tiers: ['slow'],
+  },
 ]
+
+/** The build steps a tier runs, in order. */
+export const buildStepsFor = (tier) => buildSteps.filter((s) => s.tiers?.includes(tier) ?? true)
 
 /**
  * A suite is `{ name, kind, tiers, budgetMs, args?, cwd?, env?, legs?, solo? }`; `kind` names an
