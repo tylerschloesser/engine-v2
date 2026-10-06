@@ -433,6 +433,44 @@ test('walk-life: M29 a page the browser discards mid-run is a discarded run, not
   }
 })
 
+// M39q (finding 6 of the driven rounds): over a tunnel the agent attaches before mp.html has booted, so
+// `__check.act` and `__check.ready` do not exist yet (they are assigned after `client.ready`). The page's boot
+// is held here by a test-only route that answers every `.wasm` request 8 s late.
+// The old collector threw on `check().act` and the result carried no `reloads`.
+test('walk-life: M29-net-heap: a page that boots after the agent attached is waited for @slow @webkit-gpu', async ({
+  page,
+}) => {
+  test.setTimeout(180_000)
+  const r = await start(['M29-net-heap'], { windowMs: 4000, warmupMs: 0 }, 16400)
+  try {
+    let delayed = 0
+    await page.route(/\.wasm(\?|$)/, async (route) => {
+      delayed++
+      await sleep(8000)
+      await route.continue()
+    })
+    await r.phone(page, { timeoutMs: 170_000 })
+    expect(delayed, 'the page load was delayed').toBeGreaterThan(0)
+    const nh = finalOf(r, 'M29-net-heap')
+    expect(crit(nh, 'reloads'), 'a measured value, not an error').toMatchObject({
+      value: 0,
+      ok: true,
+    })
+    const att = r
+      .events()
+      .find((e) => e.type === 'attempt' && e.id === 'M29-net-heap' && e.status === 'done')
+    const series = JSON.parse(readFileSync(att?.evidence as string, 'utf8')) as {
+      error?: unknown
+      windows: { samples: unknown[] }[]
+    }
+    expect(series.error).toBeUndefined()
+    expect(series.windows).toHaveLength(1)
+    expect(Number(nh.metrics.paints)).toBe(4 * (series.windows[0]?.samples.length ?? -1))
+  } finally {
+    await r.stop()
+  }
+})
+
 test('walk-life: M29-net-heap: a window of steady Paints with the long-frame counters (hitch proxy) @slow @webkit-gpu', async ({
   page,
 }) => {

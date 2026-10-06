@@ -168,7 +168,7 @@
    * the finger and the flick glides is the judge prompt that follows.
    */
   async function gestures(item) {
-    if (!(await ready(item))) return { ready: false, reloads: 0 }
+    if (!(await ready(item))) return { ready: false }
     const P = pointerLog()
     const o = item.opts
     const r0 = readings()

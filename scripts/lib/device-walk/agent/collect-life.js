@@ -27,6 +27,24 @@
       return []
     }
   }
+  /** What the page says about itself when a wait timed out (the M39n `why` shape, without the resource list). */
+  const notReadyWhy = () => {
+    let link = null
+    let isReady = false
+    try {
+      link = readings().link ?? null
+    } catch {}
+    try {
+      isReady = !!check()?.ready
+    } catch {}
+    return {
+      ready: isReady,
+      link,
+      errors: errors(),
+      url: location.href,
+      readyState: document.readyState,
+    }
+  }
   const act = (name, arg) => check().act[name](arg)
   const say = (item, text) =>
     A.bar.show({ kind: 'act', id: item.id, n: item.n, text, detected: {} })
@@ -215,7 +233,7 @@
   const WORLD = {
     /** M23-hidden-pause: Paint (a fresh tick), leave 30 s, Paint again: the second tick a few past the first. */
     async 'hidden-pause'(item) {
-      if (!(await ready(item))) return { ready: false, reloads: 0 }
+      if (!(await ready(item))) return { ready: false }
       const pre = await act('paint', { x: 0, y: 0 })
       const L = item.plan.leaves[0]
       const r = await leave(item, { text: L.text, ms: L.ms })
@@ -569,6 +587,13 @@
     },
     /** M29-net-heap: the whole window, four Paints a second of steady traffic. */
     async netheap(item) {
+      // Over a tunnel the agent attaches before the page has booted (`check.act` and `check.ready` are set
+      // after `client.ready`) and before the link is Welcomed: wait for both, and report which one failed.
+      if (
+        !(await ready(item)) ||
+        !(await waitFor(() => readings().link === 'online', item.opts.timeoutMs, 100))
+      )
+        return { ready: false, why: notReadyWhy(), errors: errors() }
       let paints = 0
       const m = await measureWindow(item, async () => {
         for (let k = 0; k < 4; k++) {

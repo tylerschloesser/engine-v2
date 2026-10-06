@@ -196,6 +196,8 @@
       const raf = A.rafStats()
       const gaps = A.rafGaps()
       if (A.endMeasure().interrupted) return null
+      // A window that saw no frame measured nothing: its counts are unknown, never 0 (M39q).
+      if (!raf.frames) Object.assign(raf, { long25: null, long50: null, max: null })
       last = {
         window: {
           orientation: orient,

@@ -1716,7 +1716,7 @@ const num = (x) => typeof x === 'number' && Number.isFinite(x)
 const REDUCERS = {
   max: (v) => (v.every(num) && v.length ? Math.max(...v) : null),
   min: (v) => (v.every(num) && v.length ? Math.min(...v) : null),
-  sum: (v) => (v.every(num) ? v.reduce((a, b) => a + b, 0) : null),
+  sum: (v) => (v.length && v.every(num) ? v.reduce((a, b) => a + b, 0) : null),
   median: (v) => {
     const s = v.filter(num).sort((a, b) => a - b)
     return s.length ? s[Math.floor((s.length - 1) / 2)] : null

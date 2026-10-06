@@ -360,7 +360,7 @@
      */
     async bench(item) {
       if (!(await waitFor(() => check()?.ready, item.opts.timeoutMs)))
-        return { ready: false, windows: [], steady: [], reloads: 0 }
+        return { ready: false, windows: [], steady: [] }
       const m = await measureWindow(item)
       if (!m) return null
       const last = m.window.samples.at(-1) || {}
