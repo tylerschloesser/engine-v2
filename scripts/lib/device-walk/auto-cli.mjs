@@ -14,6 +14,7 @@ import { createPhoneApi } from './phone-api.mjs'
 import { qrSvg, qrTerminal } from './qr.mjs'
 import { appendEvent, readEvents } from './rounds.mjs'
 import { createMultiServerControl } from './servers.mjs'
+import { pagePaths, warmTunnel, wsHandshake } from './warm.mjs'
 
 /**
  * What each variant of `checks.mjs` is served as. `fixture-ws`: the fixture app with `--ws puts` (the real-time
@@ -136,6 +137,22 @@ export async function startAutoRound(o) {
     const keys = machine.variants()
     log(`starting ${keys.length} server(s): ${keys.join(', ')}`)
     await control.ensureAll(keys.map((key) => ({ key, ...serving(key), tunnel })))
+    // A cold quick tunnel serves its first loads without COOP/COEP for a while: the Mac loads each variant's page,
+    // scripts and module through it until they all carry the headers, before any attempt can open (M39n).
+    if (tunnel)
+      await Promise.all(
+        keys.map((key) => {
+          const u = control.urlsFor(key)
+          if (!u.tunnel) return null
+          const s = serving(key)
+          const dist = join(REPO, 'games/reference', s.bench ? 'dist-bench' : 'dist')
+          return (o.warm ?? warmTunnel)({
+            origin: u.tunnel,
+            paths: s.app === 'reference' ? pagePaths(dist) : ['/'],
+            log,
+          })
+        }),
+      )
     for (const key of keys) {
       const u = control.urlsFor(key)
       origins[key] = control.urlFor(key)
@@ -153,6 +170,8 @@ export async function startAutoRound(o) {
         timings: o.botTimings,
         log,
         serverLog: () => control.logFor('reference-bench'),
+        handshake: () =>
+          (o.handshake ?? wsHandshake)({ origin: control.urlsFor('reference-bench').loopback }),
       })
     if (machine.needsDesktopMedian()) {
       const loopback = control.urlsFor('fixture').loopback

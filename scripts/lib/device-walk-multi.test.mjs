@@ -187,4 +187,19 @@ describe('device-walk reapOrphans', () => {
     expect(out).toEqual([101, 102, 103])
     expect(killed.every(([, sig]) => sig === 'SIGTERM')).toBe(true)
   })
+  test('device-walk reap: a reference-server listening in the port range under this repo is reaped when orphaned, and left alone while its tool lives', async () => {
+    const { reapOrphans } = await import('./device-walk/spawn-serve.mjs')
+    const repo = new URL('../..', import.meta.url).pathname
+    const cmd = `/usr/local/bin/node ${repo}games/reference-server --game ${repo}games/reference/sim/target/engine/release+bench --data /tmp/x`
+    const killed = []
+    const out = reapOrphans({
+      list: () => [
+        { pid: 201, ppid: 1, command: cmd, ports: [4194] }, // the orphan on a ws port
+        { pid: 202, ppid: 777, command: cmd, ports: [4184] }, // its tool is alive
+      ],
+      kill: (pid) => killed.push(pid),
+    })
+    expect(out).toEqual([201])
+    expect(killed).toEqual([201])
+  })
 })

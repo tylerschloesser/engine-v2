@@ -47,7 +47,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
  * @param {{ file: string, append: (e: object) => object, origin: string, tiles: { stone: {x,y}, furnace: {x,y} },
  *   launch?: () => Promise<{ newContext(o?: object): Promise<any>, close(): Promise<void> }>,
  *   timings?: { stepMs?: number, walkMs?: number, settleMs?: number, pollMs?: number }, log?: (s: string) => void,
- *   serverLog?: () => string[] }} o
+ *   serverLog?: () => string[], handshake?: () => Promise<boolean> }} o
+ *   `handshake`: does the server answer a websocket handshake (`warm.mjs`); the bot does not start before it does.
  *   `serverLog`: the tail of the real-time server's output (what `device-serve` printed), for a failed join.
  *   `origin`: the loopback origin of the check build's server (the bot is on the Mac).
  */
@@ -60,6 +61,7 @@ export function createBots({
   timings = {},
   log = () => {},
   serverLog = () => [],
+  handshake = async () => true,
 }) {
   const running = new Map() // id -> { n, stop }
   let seq = 0
@@ -103,6 +105,17 @@ export function createBots({
         await sleep(every)
       }
       return false
+    }
+    // The server must be answering before a page is opened on it (an orphan on the port, or a server that has
+    // not come up, otherwise shows as a bot that "never came online" 120 s later).
+    const tHs = Date.now()
+    while (!stopped() && !(await handshake().catch(() => false))) {
+      if (Date.now() - tHs > (timings.handshakeMs ?? 20_000)) {
+        const err = new Error('the server did not answer a websocket handshake')
+        err.diag = { step: 'ws handshake', url: origin, server: serverLog().slice(-20) }
+        throw err
+      }
+      await sleep(timings.pollMs ?? 500)
     }
     const browser = await open()
     try {
