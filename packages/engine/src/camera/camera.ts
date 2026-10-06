@@ -274,7 +274,8 @@ export function createCameraIntegrator(
     } else {
       const wasTwo = hadTwo
       hadTwo = false
-      if (activeCount === 0 && !wasTwo) {
+      // Only on the release frame itself: an idle frame must not touch the camera state at all.
+      if (activeCount === 0 && !wasTwo && (wasActive[0] === 1 || wasActive[1] === 1)) {
         // Release tail: the finger moved from its last applied position to where it lifted, and no
         // frame saw it active, so apply that movement before the release velocity takes over.
         const ppt = pxPerTile(state, viewport)
