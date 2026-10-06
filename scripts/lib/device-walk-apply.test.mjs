@@ -82,6 +82,25 @@ describe('device-walk apply', () => {
     expect(after.filter((l, i) => l !== before[i])).toHaveLength(4)
   })
 
+  test('device-walk apply: a round run on an Android phone writes its Run on lines and ticks nothing (the ids are the iPhone rows)', () => {
+    const s = scratch()
+    seed(s.log('a'), [
+      { type: 'start', only },
+      {
+        type: 'env',
+        ua: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36',
+      },
+      { type: 'result', id: 'M03-determinism', result: 'pass', by: 'auto' },
+    ])
+    const { text: out, changes } = applyRound(text, state(s.log('a')), { round: 'a' })
+    expect(readDeviceChecks(out).ticked.has('M03-determinism')).toBe(false)
+    expect(changes.some((c) => /^tick /.test(c))).toBe(false)
+    const run = out.split('\n').find((l) => l.includes('[round a]'))
+    expect(run).toMatch(/Android/)
+    expect(run).toContain('M03-determinism PASS')
+    expect(run).not.toContain('Android: not run')
+  })
+
   test('device-walk apply: an Android result in a hand-edited log is never ticked or written', () => {
     const s = scratch()
     seed(s.log('r'), [

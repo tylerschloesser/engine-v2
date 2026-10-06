@@ -1,6 +1,6 @@
 ---
 name: device-round
-description: Start, wait for, read and apply a round of device checks (docs/plan/device-checks.md) with `pnpm device:walk`. The auto runner has Tyler scan one QR code and collects the results itself; this is how an orchestrating session or a sub-agent starts it, waits without polling the phone, reads per-item evidence and applies the result. Use when a milestone's device section is due, when Tyler asks to run the device checks, or when reading what a round found.
+description: Start, wait for, read and apply a round of device checks (docs/plan/device-checks.md) with `pnpm device:walk`. The auto runner has Tyler scan one QR code and collects the results itself, or (`--drive`) the Mac does his part on a USB phone; this is how an orchestrating session or a sub-agent starts it, waits without polling the phone, reads per-item evidence, judges pending sheets from screenshots and applies the result. Use when a milestone's device section is due, when Tyler asks to run the device checks, or when reading what a round found.
 ---
 
 # device-round
@@ -21,7 +21,27 @@ pnpm device:walk --auto --round <name> [--only M03,M08,M11-boot] --no-open
 
 Then tell Tyler, in one message: the join URL (or the QR file), the pre-flight, and that nothing else is needed. Pre-flight he does once on the phone: Settings, Display & Brightness, **Auto-Lock: Never** (set it back afterwards), Low Power Mode off, Safari as the browser (any network: the tunnel carries it), the Mac awake and on the network. The phone page runs a 30 s idle check and then shows Start.
 
-Do not start an auto round without Tyler: the phone is needed.
+Do not start a QR (non-driven) auto round without Tyler: the phone is needed. A driven round (1b) needs only the USB phone.
+
+## 1b. Start a driven round (no person, a USB phone)
+
+When a phone is plugged into the Mac (Pixel: `adb devices` shows it; iPhone: `xcrun devicectl list devices` shows it connected, unlocked, Auto-Lock Never already set, WDA trusted), the Mac does Tyler's part itself:
+
+```
+pnpm device:walk --auto --drive android --tunnel --round <name> [--only ...] --timeout 36000   # Pixel; without --tunnel the origins go over adb reverse
+pnpm device:walk --auto --drive ios --round <name> [--only ...] --timeout 36000                # iPhone, through the tunnel; the first WDA session can take ~5 min
+```
+
+Run it in the background; there is no QR to scan (the printed one is not needed). One phone per process; two processes at once need different `--base-port`s. Never let the screen sleep or lock, never fake a battery unplug (the driver wakes a sleeping Pixel with a wake key and never sends a sleep key; Low Power Mode and Airplane are toggled for a prompt and turned back off in cleanup). Then follow sections 2 to 4 as usual. What differs:
+
+- **Act prompts** are answered by the device person (`scripts/lib/device-walk/drive/person.mjs`: `HANDLERS` map the prompt text to device actions, `ACT_COVERAGE` lists every act of `checks.mjs` as handled or `NotDrivable`; a unit test keeps them equal). A prompt the phone cannot do ends its row as `skip`, `by: device`, notes `NotDrivable: <reason>`: lock screen, Wi-Fi switch, Low Power on the Pixel (does not engage while charging), Private tab, export/import file picker, and the Mac-only and human rows.
+- **Judge sheets are not answered.** The driver saves `test-results/device-walk/<round>/<id>-<n>-judge.png`, logs `shot` and `defer` events and the walk goes on; the row stays open and `--status --json` shows it in `humanPending` and as `shots`. Read the screenshot (and the `criteria` with `ok: null`, which are the questions) and record the verdict: `pnpm device:walk --judge <round> <id> pass|fail|skip [--note "..."]` (a result row `by: orchestrator`). The driving process may be gone by then; `--judge` only reads and appends the log. A verdict is yours, never the driver's.
+- **A fail is a finding.** Do not rerun an item to turn it into a pass; record it, and each finding becomes its own brief.
+- **Check `uptime` before a measuring item** (M09b, the 10 minute items): the phone's numbers do not depend on the Mac's load but the tunnel and WDA do; note a load above 8 in the item's notes.
+- **Debugging aids:** `DRIVE_SHOTS=<dir>` saves a screenshot after every answered act prompt; `IOS_TRACE=1` logs every Appium call. Do not probe a live iOS session from a second client (Appium serialises commands).
+- **Applying** an Android round writes **Run on** lines only and ticks nothing (the ids are the iPhone's rows; the `-android` rows are never ticked). Apply iPhone rounds as in section 4.
+- **Clean up** when the round is over (Ctrl-C or SIGTERM: the tool restores rotation, turns Airplane and Low Power off, removes `adb reverse`/`forward`, ends the Appium session and WDA): `pgrep -fl "device-walk|appium|xcodebuild|cloudflared|vite preview"` must show nothing, `adb reverse --list` and `adb forward --list` must be empty.
+- **Stay Tyler's:** the Mac trackpad pinch (`M11-pinch-desktop-safari`), the desktop Safari and Firefox allocation recordings (`M17b-harness-*`), the human rows (`M38-*`, `M39-full-game-touch`, `M39-two-devices`), `M39-sign-off`, `M39-rerun`.
 
 ## 2. Wait without polling the phone
 
@@ -74,4 +94,4 @@ The tool serves a live monitor (the URL is in `--status` as `monitorUrl`): items
 
 ## Do not
 
-Hand-edit the `.jsonl` log or `test-results/`; start an auto round without Tyler; treat a proxy-judged hitch as a measured frame time; tick items in `device-checks.md` by hand when a round exists for them; leave the tool running when the round is finished (it exits by itself) or kill it with `-9` (`pnpm device:walk` reaps servers an earlier tool left, but stop it with Ctrl-C or SIGTERM).
+Record a verdict for a judge sheet from the driver's side (only `--judge`, by the orchestrator, does); rerun an item to turn a fail into a pass; hand-edit the `.jsonl` log or `test-results/`; start an auto round without Tyler; treat a proxy-judged hitch as a measured frame time; tick items in `device-checks.md` by hand when a round exists for them; leave the tool running when the round is finished (it exits by itself) or kill it with `-9` (`pnpm device:walk` reaps servers an earlier tool left, but stop it with Ctrl-C or SIGTERM).

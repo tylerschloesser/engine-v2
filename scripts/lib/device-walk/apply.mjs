@@ -19,12 +19,16 @@ export function applyRound(checksText, state, { round, overrides }) {
   const tag = `[round ${round}]`
   const walked = items.filter((i) => !i.android && state.items.has(i.id))
   const bySection = new Map()
+  // A round run on an Android phone (M39j) is evidence about Android: the ids are the iPhone's rows, and the
+  // `-android` rows are never ticked (Q5), so such a round writes its Run on lines and ticks nothing.
+  const onAndroid = describeEnv(state.env)?.device === 'Android'
   for (const it of walked) {
     if (!state.items.get(it.id).result) continue
     if (!bySection.has(it.section)) bySection.set(it.section, [])
     bySection.get(it.section).push(it)
     const r = state.items.get(it.id).result
     const l = it.line - 1
+    if (onAndroid) continue
     if (r === 'pass' && !it.ticked) {
       lines[l] = lines[l].replace('- [ ]', '- [x]')
       changes.push(`tick ${it.id}`)
@@ -87,7 +91,7 @@ export function applyRound(checksText, state, { round, overrides }) {
         .join('; ')
       return `${it.id} ${SHORT[s.result]}${extra ? ` (${extra})` : ''}`
     })
-    if (hasAndroid) results.push('Android: not run: no device')
+    if (hasAndroid && !onAndroid) results.push('Android: not run: no device')
     const build = (old) =>
       `**Run on:** ${[...devices].join(' + ')}, ${date}; **result:** ${results.join('; ')}${old?.match(SIGN_OFF)?.[0] ?? ''} ${tag}`
     const mine = runOns.find((i) => lines[i].includes(tag))
