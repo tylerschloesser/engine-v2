@@ -1,6 +1,6 @@
 # M39h: Mobile viewport from the page-CSS helper
 
-Status: not started · After: 39g · Tyler-dependent: no (M09b and M11 re-run on the phones follows)
+Status: done (2026-10-05; phone re-runs of M09b and M11 owed) · After: 39g · Tyler-dependent: no (M09b and M11 re-run on the phones follows)
 
 ## Goal
 The 2026-10-05 device-driver spikes (`spikes/device-driver-android/RESULT.md`, `spikes/device-driver-ios/RESULT.md`) found that `device.html` lays out at a 980 CSS px width on both phones: Pixel 5 canvas 1960x3999 px at about 40 fps, iPhone `visualViewport.scale` 0.398, screenshots a black page with a green block. Every fixture page lacks a viewport `<meta>`, and the engine's page-CSS helper (`packages/engine/src/input/page-css.ts`), which inserts one when absent, writes only `viewport-fit=cover`. With no `width=device-width` a mobile browser uses its desktop layout width. So every phone reading from a fixture page so far (M09b fill-rate's GPU p95 of about 14 ms on the iPhone, M11) was taken at the wrong size. When this is done a page set up by the helper lays out at the device width on a phone, with `viewport-fit=cover` kept.
@@ -23,9 +23,9 @@ Renderer, scale caps, budgets, any device-walk tooling, the desktop-only test pa
 - A browser-free check (unit suite) that every page named in scope 2 carries a viewport meta with `width=device-width`, red if one is removed.
 
 ## Exit criteria
-- [ ] The helper tests and the page check exist, pass, and each was seen red.
-- [ ] No golden, budget or baseline changed. Desktop Chromium ignores the meta, so a moved desktop number is a finding to report, not to absorb.
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The helper tests and the page check exist, pass, and each was seen red.
+- [x] No golden, budget or baseline changed. Desktop Chromium ignores the meta, so a moved desktop number is a finding to report, not to absorb.
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test unit -t page` (targeted, foreground).
