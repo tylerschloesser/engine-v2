@@ -194,6 +194,10 @@ export function installCheck(game: StartedGame, bench?: BenchApi): void {
       roster_offline_n: u?.roster.filter((p) => !p.online).length ?? 0,
       roster: roster(),
       remote_circles: w.remote.length,
+      // Where each remote circle is drawn, and the own one (null when the DrawList has no range ring, so the
+      // own circle cannot be told from a remote one): what a partner counts as "the other player" (M39n).
+      remote_xy: w.remote.map((c) => `${c.x.toFixed(2)},${c.y.toFixed(2)}`),
+      own_xy: w.own ? `${w.own.x.toFixed(2)},${w.own.y.toFixed(2)}` : null,
       remote_alpha_min: w.remote.length ? Math.min(...w.remote.map((c) => c.alpha)) : null,
       furnaces: w.furnaces,
       inv_stone: u?.inventory[SLOT.stone] ?? 0,

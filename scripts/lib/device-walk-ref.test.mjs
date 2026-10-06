@@ -4,6 +4,7 @@
 import { mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { runInNewContext } from 'node:vm'
 import { describe, expect, test } from 'vitest'
 import { applyRound } from './device-walk/apply.mjs'
 import { createAutoRound } from './device-walk/auto-round.mjs'
@@ -536,5 +537,147 @@ describe('device-walk reference: M34 (the bot partner)', () => {
     // A check without a partner starts none.
     bots.start({ id: 'M34-own-timer-bar', n: 1, plan: CHECKS['M34-own-timer-bar'].plan })
     expect(bots.active()).toEqual([])
+  })
+  /** collect-ref.js in a sandbox with a stand-in kit: `page` is the fake `window.__check`, `store` the sessionStorage. */
+  function sandbox(page, store = new Map()) {
+    const assigned = []
+    const K = {
+      collectors: {},
+      A: { send() {} },
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      waitFor: async (fn, ms, every = 5) => {
+        const t0 = Date.now()
+        while (Date.now() - t0 < ms) {
+          if (fn()) return true
+          await new Promise((r) => setTimeout(r, every))
+        }
+        return false
+      },
+      readings: () => page.readings(),
+      check: () => ({ act: { moveTo: async () => {} }, ...page }),
+      get: (k) => store.get(k) ?? null,
+      set: (k, v) => store.set(k, v),
+      live: () => ({ state: {} }),
+      json: (v, d) => v ?? d,
+      clone: (v) => JSON.parse(JSON.stringify(v)),
+    }
+    const entry = (name, ok, status, size) => ({
+      name,
+      responseStatus: status,
+      transferSize: size,
+      decodedBodySize: size,
+      initiatorType: 'fetch',
+      ok,
+    })
+    runInNewContext(
+      readFileSync(new URL('./device-walk/agent/collect-ref.js', import.meta.url), 'utf8'),
+      {
+        window: { __walkKit: K },
+        document: { readyState: 'loading' },
+        location: {
+          href: 'https://x.trycloudflare.com/index.html',
+          assign: (u) => assigned.push(u),
+        },
+        performance: {
+          getEntriesByType: () => [
+            entry('https://x/ok.js', 1, 200, 10),
+            entry('https://x/a.wasm', 0, 0, 0),
+          ],
+        },
+        URL,
+        Date,
+        setTimeout,
+        getComputedStyle: () => ({}),
+      },
+    )
+    const item = (opts) => ({
+      id: 'M34-two-devices',
+      n: 1,
+      plan: { mode: 'two' },
+      opts: { timeoutMs: 40, reloadWaitMs: 1, ...opts },
+    })
+    return {
+      run: (opts) => K.collectors['reference-mp'](item(opts)),
+      joined: (item) => K.refFacts.joined(item),
+      assigned,
+      store,
+    }
+  }
+
+  test('device-walk reference: a join that times out says which condition failed and why; the page is reloaded once, then it fails', async () => {
+    const page = {
+      ready: false,
+      readings: () => ({ link: 'connecting', ui_seen: false }),
+      errors: () => ['engine fatal: worker script blocked'],
+    }
+    const sb = sandbox(page)
+    const first = await sb.run()
+    expect(first.ready).toBe(false)
+    expect(first.why).toMatchObject({
+      ready: false,
+      link: 'connecting',
+      ui_seen: false,
+      errors: ['engine fatal: worker script blocked'],
+      url: 'https://x.trycloudflare.com/index.html',
+      readyState: 'loading',
+      failedResources: [{ name: 'https://x/a.wasm', status: 0, type: 'fetch' }],
+    })
+    expect(sb.assigned).toHaveLength(1) // reloaded once (fresh URL)
+    expect(sb.assigned[0]).toContain('_retry=')
+    const second = await sb.run() // the next document of the same check: the retry is spent
+    expect(second.why.ready).toBe(false)
+    expect(sb.assigned).toHaveLength(1)
+    // A page that joins is not reloaded and says nothing.
+    const good = sandbox({
+      ready: true,
+      readings: () => ({ link: 'online', ui_seen: true }),
+      errors: () => [],
+    })
+    expect(await good.joined({ id: 'x', opts: { timeoutMs: 20 } })).toEqual({ ok: true })
+    expect(good.assigned).toHaveLength(0)
+  })
+
+  test('device-walk reference: a bot that cannot join posts why: the page url, its console tail, its readings and the server log tail', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'walk-bot-'))
+    const file = join(dir, 'r.jsonl')
+    const page = () => ({
+      goto: async () => {},
+      on: (ev, fn) => {
+        if (ev === 'console') fn({ type: () => 'error', text: () => 'worker script blocked' })
+      },
+      url: () => 'http://127.0.0.1:4183/#k=',
+      waitForFunction: async () => {
+        throw new Error('page.waitForFunction: Timeout 60000ms exceeded.\nCall log: ...')
+      },
+      evaluate: async () => ({ link: 'connecting', ui_seen: false }),
+      close: async () => {},
+    })
+    const bots = createBots({
+      file,
+      append: (e) => appendEvent(file, e),
+      origin: 'http://127.0.0.1:1',
+      tiles: MP_TILES,
+      launch: async () => ({
+        newContext: async () => ({ newPage: async () => page() }),
+        close: async () => {},
+      }),
+      serverLog: () => [
+        '[reference-server] listening: 4184',
+        '[reference-server] Reject VersionMismatch',
+      ],
+    })
+    bots.start({ id: 'M34-two-devices', n: 1, plan: CHECKS['M34-two-devices'].plan })
+    for (let i = 0; i < 300 && !readEvents(file).some((e) => e.key === 'bot'); i++)
+      await new Promise((r) => setTimeout(r, 10))
+    await bots.stop()
+    const failed = readEvents(file).find((e) => e.key === 'bot').data
+    expect(failed.phase).toBe('failed')
+    expect(failed.error).toMatch(/Timeout 60000ms/)
+    expect(failed.diag).toMatchObject({
+      url: 'http://127.0.0.1:4183/#k=',
+      console: ['error: worker script blocked'],
+      readings: { link: 'connecting', ui_seen: false },
+      server: ['[reference-server] listening: 4184', '[reference-server] Reject VersionMismatch'],
+    })
   })
 })

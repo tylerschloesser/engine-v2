@@ -16,15 +16,39 @@
 import { readingsOf } from './auto-round.mjs'
 import { readEvents } from './rounds.mjs'
 
+/** What a reading says of the other players: roster ids with their `me` flag, and the circles drawn. */
+export const viewOf = (r) => ({
+  roster: r.roster ?? [],
+  remote_xy: r.remote_xy ?? [],
+  own_xy: r.own_xy ?? null,
+})
+
+/**
+ * Does this reading of the bot's page show the *phone*? Today: what the old code counted, two or more roster
+ * entries and one remote circle. (Replaced in step 2 once the ghost is named.)
+ */
+export const phoneSeen = (r) => r.roster_n >= 2 && r.remote_circles >= 1
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /**
  * @param {{ file: string, append: (e: object) => object, origin: string, tiles: { stone: {x,y}, furnace: {x,y} },
  *   launch?: () => Promise<{ newContext(o?: object): Promise<any>, close(): Promise<void> }>,
- *   timings?: { stepMs?: number, walkMs?: number, settleMs?: number, pollMs?: number }, log?: (s: string) => void }} o
+ *   timings?: { stepMs?: number, walkMs?: number, settleMs?: number, pollMs?: number }, log?: (s: string) => void,
+ *   serverLog?: () => string[] }} o
+ *   `serverLog`: the tail of the real-time server's output (what `device-serve` printed), for a failed join.
  *   `origin`: the loopback origin of the check build's server (the bot is on the Mac).
  */
-export function createBots({ file, append, origin, tiles, launch, timings = {}, log = () => {} }) {
+export function createBots({
+  file,
+  append,
+  origin,
+  tiles,
+  launch,
+  timings = {},
+  log = () => {},
+  serverLog = () => [],
+}) {
   const running = new Map() // id -> { n, stop }
   let seq = 0
   // A real WebGPU adapter headless: `channel: 'chromium'` (new headless mode, Metal on the Mac) and
@@ -74,17 +98,43 @@ export function createBots({ file, append, origin, tiles, launch, timings = {}, 
       let page
       const rd = () => page.evaluate(() => window.__check.readings())
       const act = (name, arg) => page.evaluate(([k, a]) => window.__check.act[k](a), [name, arg])
+      const consoleTail = []
       const join = async () => {
         page = await ctx.newPage()
-        await page.goto(`${origin}/#k=`)
-        await page.waitForFunction(() => window.__check?.ready === true, undefined, {
-          timeout: 60_000,
-        })
-        const up = await until(async () => {
-          const r = await rd()
-          return r.link === 'online' && r.ui_seen
-        }, 60_000)
-        if (!up) throw new Error('the bot never came online')
+        const note = (s) => {
+          consoleTail.push(String(s).slice(0, 300))
+          if (consoleTail.length > 20) consoleTail.shift()
+        }
+        page.on?.('console', (m) => note(`${m.type()}: ${m.text()}`))
+        page.on?.('pageerror', (e) => note(`pageerror: ${e?.message ?? e}`))
+        try {
+          await page.goto(`${origin}/#k=`)
+          await page.waitForFunction(() => window.__check?.ready === true, undefined, {
+            timeout: 60_000,
+          })
+          const up = await until(async () => {
+            const r = await rd()
+            return r.link === 'online' && r.ui_seen
+          }, 60_000)
+          if (!up) throw new Error('the bot never came online')
+        } catch (e) {
+          // Which condition failed, and what the page and the server said meanwhile.
+          let readings = null
+          try {
+            readings = await rd()
+          } catch {
+            // the page has no check hook (yet)
+          }
+          let url = null
+          try {
+            url = page.url()
+          } catch {
+            // closed
+          }
+          const err = new Error(String(e?.message ?? e).split('\n')[0])
+          err.diag = { url, console: [...consoleTail], readings, server: serverLog().slice(-20) }
+          throw err
+        }
         const r = await rd()
         await act('moveTo', { x: r.spawn_x, y: r.spawn_y, tiles: 40 })
       }
@@ -93,16 +143,23 @@ export function createBots({ file, append, origin, tiles, launch, timings = {}, 
       log(`bot ${id} #${n}: joined (${mode})`)
 
       if (mode === 'two') {
-        // What the bot sees of the phone: its roster dot and its circle.
+        // What the bot sees of the phone: its roster dot and its circle. `first` is the view at the moment
+        // the bot decided (what it counted, M39n), `ms` how long after joining that was.
+        const tJoined = Date.now()
+        let first = null
         const sawPhone = await until(async () => {
           const r = await rd()
-          return r.roster_n >= 2 && r.remote_circles >= 1
+          if (!phoneSeen(r)) return false
+          first = { ms: Date.now() - tJoined, ...viewOf(r) }
+          return true
         }, 120_000)
         const r0 = await rd()
         post(id, n, 'botView', {
           sawPhone: !!sawPhone,
           roster_n: r0.roster_n,
           remote_circles: r0.remote_circles,
+          ...viewOf(r0),
+          first,
         })
         // Collect five stone by the page's own button, craft the furnace, place it.
         const { stone, furnace } = tiles
@@ -170,7 +227,11 @@ export function createBots({ file, append, origin, tiles, launch, timings = {}, 
       const ctl = new AbortController()
       const done = play({ id, n, mode: plan.bot, signal: ctl.signal }).catch((e) => {
         log(`bot ${id} #${n} failed: ${e?.message ?? e}`)
-        post(id, n, 'bot', { phase: 'failed', error: String(e?.message ?? e) })
+        post(id, n, 'bot', {
+          phase: 'failed',
+          error: String(e?.message ?? e),
+          ...(e?.diag ? { diag: e.diag } : {}),
+        })
       })
       running.set(id, { n, stop: () => ctl.abort(), done })
     },

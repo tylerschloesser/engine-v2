@@ -152,6 +152,7 @@ export async function startAutoRound(o) {
         launch: o.launchBot,
         timings: o.botTimings,
         log,
+        serverLog: () => control.logFor('reference-bench'),
       })
     if (machine.needsDesktopMedian()) {
       const loopback = control.urlsFor('fixture').loopback

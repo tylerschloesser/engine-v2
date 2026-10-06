@@ -197,6 +197,10 @@ export function createMultiServerControl({
       return (s?.want.tunnel ? u.tunnel : u.loopback) ?? null
     },
     urlsFor: urlsOf,
+    /** The tail (40 lines) of what a variant's `device-serve` printed: the real-time server's lines are in it. */
+    logFor(key) {
+      return slots.get(key)?.control.status().log ?? []
+    },
     async stopAll() {
       await Promise.all([...slots.values()].map((s) => s.control.stopAll()))
       slots.clear()

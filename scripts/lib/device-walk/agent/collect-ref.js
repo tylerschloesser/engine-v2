@@ -53,11 +53,69 @@
       return []
     }
   }
-  const joined = (item) =>
-    waitFor(
-      () => check()?.ready && readings().link === 'online' && readings().ui_seen,
-      item.opts.timeoutMs,
-    )
+  /** Resources of this document that did not load (an error status, or nothing transferred), the first ten. */
+  const failedResources = () => {
+    try {
+      return performance
+        .getEntriesByType('resource')
+        .filter((e) => e.responseStatus >= 400 || (e.transferSize === 0 && e.decodedBodySize === 0))
+        .slice(0, 10)
+        .map((e) => ({ name: e.name, status: e.responseStatus ?? null, type: e.initiatorType }))
+    } catch {
+      return []
+    }
+  }
+  /** Which of the three join conditions failed, and what the page says about itself (M39n). */
+  const joinWhy = () => {
+    let r = {}
+    try {
+      r = readings() || {}
+    } catch {
+      // no check hook at all: `ready` says so
+    }
+    let ready = false
+    try {
+      ready = !!check()?.ready
+    } catch {
+      // as above
+    }
+    return {
+      ready,
+      link: r.link ?? null,
+      ui_seen: !!r.ui_seen,
+      errors: errors(),
+      url: location.href,
+      readyState: document.readyState,
+      failedResources: failedResources(),
+    }
+  }
+  const joinedNow = () => {
+    try {
+      return !!check()?.ready && readings().link === 'online' && !!readings().ui_seen
+    } catch {
+      return false
+    }
+  }
+  /**
+   * Waits for the page to join. `{ ok: true }`, or `{ ok: false, why }` after the timeout. The first failure of
+   * a check reloads the page once (a cold tunnel's first load): the document that follows is a reload of an
+   * unfinished attempt, which the walk machine turns into a fresh attempt; the mark is per check id, so a
+   * second failure is final.
+   */
+  const joined = async (item) => {
+    if (await waitFor(joinedNow, item.opts.timeoutMs)) return { ok: true }
+    const why = joinWhy()
+    if (get('joinRetry') !== item.id && item.opts.reloadOnce !== false) {
+      set('joinRetry', item.id)
+      const u = new URL(location.href)
+      u.searchParams.set('_retry', Date.now().toString(36))
+      location.assign(u.href)
+      await sleep(item.opts.reloadWaitMs ?? 30_000) // the document is going away; if it does not, the failure stands
+      why.reloaded = true
+    }
+    return { ok: false, why }
+  }
+  const notJoined = (j) => ({ ready: false, why: j.why, errors: j.why.errors })
   const say = (item, phase, extra) =>
     A.send('reading', { id: item.id, n: item.n, key: 'phone', data: { phase, ...extra } })
   const stateOf = (item) => K.live(item).state || {}
@@ -75,7 +133,8 @@
   const MP = {
     /** M34-two-devices: the bot collects, crafts and places; each side sees the other; it drops and returns. */
     async two(item) {
-      if (!(await joined(item))) return { ready: false, errors: errors() }
+      const j = await joined(item)
+      if (!j.ok) return notJoined(j)
       await stand(item)
       say(item, 'joined')
       const max = { remote_entities: 0, furnaces: 0, roster_n: 0 }
@@ -128,7 +187,8 @@
 
     /** M34-own-timer-bar: three collects timed tap to result on Wi-Fi, then three on the other link. */
     async timer(item) {
-      if (!(await joined(item))) return { ready: false, errors: errors() }
+      const j = await joined(item)
+      if (!j.ok) return notJoined(j)
       const stone = item.plan.tiles.stone
       await act('moveTo', { x: stone.x, y: stone.y, tiles: 20 })
       await waitFor(
@@ -181,7 +241,8 @@
 
     /** M34-remote-motion: the bot walks, every frame's remote circle is kept; then the bot goes and the fade is. */
     async motion(item) {
-      if (!(await joined(item))) return { ready: false, errors: errors() }
+      const j = await joined(item)
+      if (!j.ok) return notJoined(j)
       await stand(item)
       const seen = await waitFor(() => readings().remote_circles >= 1, botMs(item), 200)
       if (!seen)
@@ -314,5 +375,5 @@
   }
 
   Object.assign(K.collectors, refCollectors)
-  K.refFacts = { domFacts, visible }
+  K.refFacts = { domFacts, visible, joined }
 })()
