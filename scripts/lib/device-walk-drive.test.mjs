@@ -956,6 +956,20 @@ describe('device-walk drive: the iOS backend without a phone', () => {
     expect(value).toBe('1')
   })
 
+  test('device-walk drive: when the Low Power flow fails Settings is not left in front (the check page is frozen behind it)', async () => {
+    const { b, calls } = make({
+      '/element$': () => {
+        throw new Error('no such element')
+      },
+    })
+    await b.open('https://x.example/device.html')
+    await expect(b.setLowPower(true)).rejects.toThrow(/no Battery row|no Low Power/)
+    const acts = calls
+      .filter((c) => c[2]?.script === 'mobile: activateApp')
+      .map((c) => c[2].args[0].bundleId)
+    expect(acts.at(-1)).toBe('com.apple.mobilesafari')
+  })
+
   test('device-walk drive: only a webview showing one of our pages is ever entered (extension, about:blank and error pages are not)', async () => {
     const { b, calls } = make({
       'execute/sync': (body) =>

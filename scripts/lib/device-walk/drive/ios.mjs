@@ -438,6 +438,58 @@ export function createIosBackend(o = {}) {
     return closed
   }
 
+  /** Settings > Battery: the Low Power Mode switch (Control Center has no tile for it on this phone). */
+  async function lowPower(on) {
+    await activate(SETTINGS)
+    await wait(800)
+    const find = () => tryEl('accessibility id', 'LOW_POWER_MODE_IDENTIFIER_SWITCH')
+    let sw = await find()
+    for (let attempt = 0; !sw && attempt < 2; attempt++) {
+      let row = await tryEl(
+        '-ios predicate string',
+        `label == 'Battery' AND type == 'XCUIElementTypeButton'`,
+      )
+      if (!row) {
+        // Settings reopens on the page it was left on (another pane, or this one's sub-page): start it afresh.
+        await native()
+        await exec('mobile: terminateApp', { bundleId: SETTINGS })
+        await wait(500)
+        await activate(SETTINGS)
+        await wait(1200)
+        row = await tryEl(
+          '-ios predicate string',
+          `label == 'Battery' AND type == 'XCUIElementTypeButton'`,
+        )
+      }
+      if (!row) continue
+      await call('POST', `/element/${row}/click`)
+      await wait(1500)
+      sw = await find()
+    }
+    if (!sw) throw new Error('ios: no Low Power Mode switch')
+    // The switch moves when Settings settles its scroll position: the element found a moment ago can be stale.
+    // Find it again and read its value fresh, up to three times.
+    let v = null
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        sw = (await find()) ?? sw
+        const value = async () => String(await call('GET', `/element/${sw}/attribute/value`))
+        if ((await value()) !== (on ? '1' : '0')) await call('POST', `/element/${sw}/click`)
+        await wait(2500)
+        sw = (await find()) ?? sw
+        v = await value()
+        break
+      } catch (e) {
+        if (!/stale element/i.test(String(e.message)) || attempt === 2) throw e
+        await wait(800)
+      }
+    }
+    st.lowPower = on
+    log(`ios: Low Power Mode ${on ? 'on' : 'off'} (switch value ${v})`)
+    await pressHome()
+    await api.returnToBrowser()
+  }
+
   const api = {
     platform: 'ios',
     hideLagMs: 300,
@@ -545,54 +597,14 @@ export function createIosBackend(o = {}) {
 
     /** Settings > Battery: the Low Power Mode switch (Control Center has no tile for it on this phone). */
     async setLowPower(on) {
-      await activate(SETTINGS)
-      await wait(800)
-      const find = () => tryEl('accessibility id', 'LOW_POWER_MODE_IDENTIFIER_SWITCH')
-      let sw = await find()
-      for (let attempt = 0; !sw && attempt < 2; attempt++) {
-        let row = await tryEl(
-          '-ios predicate string',
-          `label == 'Battery' AND type == 'XCUIElementTypeButton'`,
-        )
-        if (!row) {
-          // Settings reopens on the page it was left on (another pane, or this one's sub-page): start it afresh.
-          await native()
-          await exec('mobile: terminateApp', { bundleId: SETTINGS })
-          await wait(500)
-          await activate(SETTINGS)
-          await wait(1200)
-          row = await tryEl(
-            '-ios predicate string',
-            `label == 'Battery' AND type == 'XCUIElementTypeButton'`,
-          )
-        }
-        if (!row) continue
-        await call('POST', `/element/${row}/click`)
-        await wait(1500)
-        sw = await find()
+      try {
+        await lowPower(on)
+      } catch (e) {
+        // Never leave Settings in front: the page of the check is frozen behind it (found when a stale switch did).
+        await pressHome().catch(() => {})
+        await api.returnToBrowser().catch(() => {})
+        throw e
       }
-      if (!sw) throw new Error('ios: no Low Power Mode switch')
-      // The switch moves when Settings settles its scroll position: the element found a moment ago can be stale.
-      // Find it again and read its value fresh, up to three times.
-      let v = null
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          sw = (await find()) ?? sw
-          const value = async () => String(await call('GET', `/element/${sw}/attribute/value`))
-          if ((await value()) !== (on ? '1' : '0')) await call('POST', `/element/${sw}/click`)
-          await wait(2500)
-          sw = (await find()) ?? sw
-          v = await value()
-          break
-        } catch (e) {
-          if (!/stale element/i.test(String(e.message)) || attempt === 2) throw e
-          await wait(800)
-        }
-      }
-      st.lowPower = on
-      log(`ios: Low Power Mode ${on ? 'on' : 'off'} (switch value ${v})`)
-      await pressHome()
-      await api.returnToBrowser()
     },
 
     async screenshot(path) {
