@@ -1,0 +1,12 @@
+import { attach, sleep, swipe } from './lib.mjs'
+const { browser, page } = await attach()
+const cdp = await page.context().newCDPSession(page)
+await page.evaluate(() => { window.__e = []; for (const t of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel']) addEventListener(t, (e) => window.__e.push(`${t[7] ?? ''}${t === 'pointermove' ? 'm' : t.slice(7, 8)}@${Math.round(e.timeStamp % 100000)}:${Math.round(e.clientX)}${e.getCoalescedEvents ? '/c' + e.getCoalescedEvents().length : ''}`), true) })
+await sleep(2500); swipe(900, 1200, 300, 1200, 80); await sleep(800)
+console.log('adb :', (await page.evaluate(() => window.__e.splice(0))).join(' '))
+const touch = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map(([x, y], id) => ({ x, y, id })) })
+await sleep(2500)
+await touch('touchStart', [[800, 700]]); for (let i = 1; i <= 8; i++) { await touch('touchMove', [[800 - 62 * i, 700]]); await sleep(10) } await touch('touchEnd', [])
+await sleep(500)
+console.log('cdp :', (await page.evaluate(() => window.__e.splice(0))).join(' '))
+await browser.close()
