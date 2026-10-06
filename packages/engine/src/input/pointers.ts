@@ -285,9 +285,11 @@ export function recordGestureEnd(state: PointerSlots): void {
 
 export type ScreenVelocity = { x: number; y: number }
 
-/** Velocity in CSS px/second (screen space), from the oldest sample within `INERTIA_WINDOW_MS` of
+/** The *finger's* velocity in CSS px/second (screen space; finger left gives `x < 0`), from the oldest sample within `INERTIA_WINDOW_MS` of
  * the newest one, to the newest. Returns `false` (leaving `out` untouched) when fewer than two
- * samples fall inside that window -- too short a history to derive a velocity from. */
+ * samples fall inside that window -- too short a history to derive a velocity from. The camera
+ * negates it (`createCameraIntegrator`, `updateSlotBookkeeping`) because a drag moves the camera
+ * opposite the finger. */
 export function pointerVelocity(slot: PointerSlot, out: ScreenVelocity): boolean {
   const n = slot.sampleCount
   if (n < 2) return false

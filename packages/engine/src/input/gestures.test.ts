@@ -7,7 +7,14 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect, test } from 'vitest'
 import { installPageStyles } from './page-css.js'
-import { installPointerListeners, PointerSlots } from './pointers.js'
+import {
+  installPointerListeners,
+  PointerSlots,
+  pointerVelocity,
+  recordPointerDown,
+  recordPointerMove,
+  recordPointerUp,
+} from './pointers.js'
 import { installWheelListeners, WheelState } from './wheel.js'
 
 type Handler = (e: Event) => void
@@ -112,4 +119,16 @@ test('input gestures: gesture_event_without_offset_records_finite_point', () => 
   expect(state.gesture.scale).toBe(1.5)
   expect(state.gesture.x).toBe(200)
   expect(state.gesture.y).toBe(300)
+})
+
+test("input: pointer velocity is the finger's", () => {
+  const pointers = new PointerSlots()
+  recordPointerDown(pointers, 1, 900, 700, 0)
+  recordPointerMove(pointers, 1, 600, 500, 40)
+  recordPointerUp(pointers, 1, 300, 300, 80)
+  const slot = pointers.slots[0]
+  const out = { x: 0, y: 0 }
+  expect(slot && pointerVelocity(slot, out)).toBe(true)
+  expect(out.x).toBeCloseTo(-7500, 6) // finger left: the camera code negates this
+  expect(out.y).toBeCloseTo(-5000, 6)
 })

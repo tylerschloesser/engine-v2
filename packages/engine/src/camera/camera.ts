@@ -209,8 +209,10 @@ export function createCameraIntegrator(
     if (wasActive[i] === 1) {
       if (pointerVelocity(slot, velScratch)) {
         const ppt = pxPerTile(state, viewport)
-        state.velocityX = velScratch.x / ppt
-        state.velocityY = velScratch.y / ppt
+        // The camera moves opposite the finger (a drag subtracts the finger delta), so the glide
+        // continues the drag's direction only if the finger velocity is negated here.
+        state.velocityX = -velScratch.x / ppt
+        state.velocityY = -velScratch.y / ppt
       } else {
         state.velocityX = 0
         state.velocityY = 0

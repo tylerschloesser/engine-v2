@@ -6,6 +6,7 @@ import {
   recordGestureStart,
   recordPointerDown,
   recordPointerMove,
+  recordPointerUp,
 } from '../input/pointers.js'
 import { recordWheel, WheelState } from '../input/wheel.js'
 import {
@@ -418,4 +419,76 @@ test('camera: non_finite_gesture_input_leaves_camera_finite', () => {
   integrator.integrate(state, viewport, 16)
   expect(Number.isFinite(state.centreX)).toBe(true)
   expect(state.centreX).not.toBe(10)
+})
+
+// M39i: a real release (no direct `velocityX` write). The finger drags towards -axis, so the camera
+// centre drags towards +axis, and the glide must keep going that way.
+type FlickAxis = 'x' | 'y'
+function flick(axis: FlickAxis, events: ReadonlyArray<readonly [number, number]>) {
+  const state = new CameraState()
+  state.centreX = 50
+  state.centreY = -20
+  state.tilesAcross = 20
+  const pointers = new PointerSlots()
+  const integrator = createCameraIntegrator({
+    pointers,
+    keys: new KeyState(),
+    wheel: new WheelState(),
+  })
+  const at = (v: number): [number, number] => (axis === 'x' ? [v, 450] : [900, v])
+  const start = events[0] as readonly [number, number]
+  recordPointerDown(pointers, 1, ...at(start[1]), start[0], 2)
+  integrator.integrate(state, viewport, 16)
+  for (let i = 1; i < events.length - 1; i++) {
+    const [t, v] = events[i] as readonly [number, number]
+    recordPointerMove(pointers, 1, ...at(v), t)
+    integrator.integrate(state, viewport, 16)
+  }
+  const [t, v] = events[events.length - 1] as readonly [number, number]
+  recordPointerUp(pointers, 1, ...at(v), t)
+  integrator.integrate(state, viewport, 16) // the release frame derives the velocity
+  const key = axis === 'x' ? 'centreX' : 'centreY'
+  const vel = axis === 'x' ? 'velocityX' : 'velocityY'
+  const afterRelease = state[vel]
+  const centres = [state[key]]
+  for (let i = 0; i < 10; i++) {
+    integrator.integrate(state, viewport, 16)
+    centres.push(state[key])
+  }
+  return { afterRelease, centres }
+}
+
+function expectGlidesPositive(r: { afterRelease: number; centres: number[] }): void {
+  expect(r.afterRelease).toBeGreaterThan(0)
+  for (let i = 1; i < r.centres.length; i++) {
+    expect(r.centres[i] as number).toBeGreaterThan(r.centres[i - 1] as number)
+  }
+}
+
+const steady: ReadonlyArray<readonly [number, number]> = [
+  [0, 900],
+  [16, 800],
+  [32, 600],
+  [48, 500],
+  [64, 400],
+  [80, 300],
+]
+// Android-like: six events, one coalesced move jumping most of the distance.
+const coalesced: ReadonlyArray<readonly [number, number]> = [
+  [0, 900],
+  [8, 890],
+  [16, 880],
+  [64, 360],
+  [72, 330],
+  [80, 300],
+]
+
+test('camera: flick release glides with the drag direction', () => {
+  expectGlidesPositive(flick('x', steady))
+  expectGlidesPositive(flick('y', steady))
+})
+
+test('camera: flick release glides with the drag direction, coalesced Android-like batch', () => {
+  expectGlidesPositive(flick('x', coalesced))
+  expectGlidesPositive(flick('y', coalesced))
 })

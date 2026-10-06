@@ -39,4 +39,8 @@ Inertia constants, the sample window, coalesced events (the diagnosis ruled out 
 After landing, the orchestrator re-runs the spike's flick on the Pixel: `adb shell input swipe 900 1200 300 1200 80` from rest. `centre_x` 2.5 s after `pointerup` must be above its value at release.
 
 ## Deviations
-(filled in during Phase 3)
+- Fix: `updateSlotBookkeeping` (`camera/camera.ts`) now sets `velocityX/Y = -velScratch / ppt`. `pointerVelocity` unchanged (finger convention), doc comment says so.
+- Red lines (old code): flick tests `expected -89.24638321346593 to be greater than 0` (both, x axis first). The `input: pointer velocity is the finger's` test pins existing behaviour so it passes on the old code; seen red by injecting a sign flip in `pointerVelocity`: `expected 7500 to be close to -7500`.
+- Writers/readers of `velocityX/Y` checked, all in the camera convention (world tiles/s, positive = centre moves +): `camera.ts` zero-resets (lines ~367, 420, 448) and `applyInertia` (adds `velocity * disp`); `state.ts` copy; `block.ts` writes it into the shared block unchanged; `test/headless-client.ts` `advancePan` (velocity = direction towards target) and `setView` (`velX/velY` from the report); browser pages `gc-*.ts`, `gen.ts`, `terrain-client.ts`, `moving-remote.ts` and netcode `rates`/`interpolation` tests all set a positive world velocity for motion in +x. No change needed. The reference game has no `velocity` reader.
+- Tests live in `camera/camera.test.ts` (two flick tests, x and y in each) and `input/gestures.test.ts` (pointer velocity).
+- Verified: `pnpm test unit -t "flick|pointer velocity"` pass 3 tests; `pnpm test unit -t camera` pass 21 tests.
