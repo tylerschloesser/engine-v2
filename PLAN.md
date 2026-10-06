@@ -110,6 +110,9 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 39m | `39m-flick-frame-rate.md` | a scripted flick went 0.77x as far at 30 Hz: the instrument's timer-stamped samples, a dropped release tail, a criterion that could not fail (finding 3, 2026-10-06) | 39l | |
 | [x] | 39n | `39n-two-devices-join.md` | M34-two-devices never joins on the phones: first-load diagnostics, tunnel warm-up and COEP preflight, the bot's ghost remote (finding 4b, 2026-10-06) | 39m | |
 | [ ] | 39o | `39o-large-save-tick-breakdown.md` | the large-save tick (26 ms Pixel, 12 ms iPhone vs 10) is real compute: split the timed pass per call (seal, tick, frame, resync) in the bench build, desktop reference at scale 1/4/16; the optimisation brief follows from the phone numbers (finding 2, 2026-10-06) | 39n | Q18 |
+| [ ] | 39p | `39p-quiet-measuring-windows.md` | the iPhone's M09b rAF and M16-coexist hitches with WDA/Appium/tunnel beside the page: the driver goes quiet during a measuring window, then re-measure (finding 5, 2026-10-06; brief written after its diagnosis) | 39o | |
+| [ ] | 39q | `39q-net-heap-boot-race.md` | M29-net-heap's collector skips `ready()` and the link wait, so it acts mid-boot; an empty window must never pass a criterion (finding 6, 2026-10-06) | 39p | |
+| [ ] | 39r | `39r-pixel-ring-pick.md` | M18-pick never lands on the Pixel: record tap targets, then fix the fixture's ring/button clearance and the driver's tap point (finding 7, likely Chrome touch adjustment, 2026-10-06) | 39q | |
 | [ ] | 39 | `39-acceptance.md` | coverage + budget audit, full device checklist, Phase 3 exit | all above | D |
 | [ ] | 39b | `39b-phase-4-handoff.md` | capture what code cannot say in ADRs, `PROMPT.md` for Phase 4. **Phase 3 complete.** | 39 | |
 
