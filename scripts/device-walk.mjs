@@ -197,6 +197,8 @@ async function main() {
       tunnel: drive === 'android' ? flags.has('--tunnel') : !flags.has('--no-tunnel'),
       noOpen: flags.has('--no-open') || !!drive,
       noBuild: flags.has('--no-build'),
+      // A driven full round runs for hours: `--timeout <seconds>` (default 90 min) bounds it.
+      timeoutMs: values.timeout ? Math.round(Number(values.timeout) * 1000) : undefined,
       drive,
       params,
       monitorPort: values['monitor-port'],

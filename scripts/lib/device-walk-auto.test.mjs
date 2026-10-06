@@ -353,3 +353,25 @@ describe('device-walk auto', () => {
     expect(r.results()[0].result).toBe('fail')
   })
 })
+
+describe('device-walk auto: a deferred judge sheet (M39j)', () => {
+  test('device-walk auto: a deferred judge sheet stays open while the walk goes on, and a result closes it', () => {
+    const r = rig(['M11-gestures', 'M16-slice-boot'])
+    r.start()
+    r.series('M11-gestures', 1, {
+      steps_done: 7,
+      reloads: 0,
+      pointer: { pageScrolled: false, pageZoomed: false, worldPointDriftTiles: 0.1 },
+      camera: { judged: 'zoom 12 to 256' },
+      rotation: { shown: 'the centre moved 0.1 tiles (5 px)' },
+      final: { cursor_valid: true },
+    })
+    expect(r.step()).toMatchObject({ phase: 'judge', item: { id: 'M11-gestures' } })
+    appendEvent(r.file, { type: 'defer', id: 'M11-gestures', n: 1 })
+    r.m.settle()
+    expect(foldItem(r.events(), 'M11-gestures').last.deferred).toBe(true)
+    expect(r.step()).toMatchObject({ phase: 'run', item: { id: 'M16-slice-boot' } })
+    expect(r.results().some((e) => e.id === 'M11-gestures')).toBe(false)
+    expect(r.m.done()).toBe(false)
+  })
+})

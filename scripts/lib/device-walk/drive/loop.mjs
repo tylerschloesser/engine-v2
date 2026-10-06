@@ -101,8 +101,12 @@ export function startDrive(o) {
       ...(out.reason ? { reason: out.reason } : {}),
       ...(out.error ? { error: out.error } : {}),
     })
-    if (out.status === 'pending' && out.shot)
-      append({ type: 'shot', id: p.id, n: p.n, path: out.shot })
+    if (out.status === 'pending') {
+      if (out.shot) append({ type: 'shot', id: p.id, n: p.n, path: out.shot })
+      // The row stays open for the orchestrator (`--judge`); the walk goes on to the next check.
+      append({ type: 'defer', id: p.id, n: p.n })
+      settle()
+    }
     if (out.status === 'notDrivable') {
       // The row ends here: skipped, with the reason (never a pass). The phone moves on with the step.
       append({

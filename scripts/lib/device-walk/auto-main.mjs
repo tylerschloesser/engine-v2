@@ -107,6 +107,7 @@ export async function autoCli(o) {
       only: o.only,
       spawnServe: (args, io) => spawnServe([...args, ...noBuild], io),
       tunnel: o.tunnel,
+      timeoutMs: o.timeoutMs,
       // `client: 'both'`: the phone walks its rows, the Mac's own browsers walk theirs. `botTimings` (dev and
       // tests) is the M34 bot's, not a round parameter.
       // A driven round is the phone's alone (the Mac's own browsers are not driven).

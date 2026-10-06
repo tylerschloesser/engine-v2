@@ -91,6 +91,11 @@ export function foldItem(events, id) {
           metrics: e.metrics,
           evidence: e.evidence,
         })
+    } else if (e.type === 'defer') {
+      // M39j: the device person left this judge sheet for the orchestrator (a screenshot is in the log): the
+      // walk goes on with the next check and the row stays open until a `--judge` result.
+      const a = st.attempts.get(e.n)
+      if (a?.status === 'judge') a.deferred = true
     } else if (e.type === 'answer') {
       const a = st.attempts.get(e.n)
       if (a?.status === 'judge')
@@ -229,6 +234,8 @@ export function createAutoRound({
     ...(params.warmupMs !== undefined ? { warmupMs: params.warmupMs } : {}),
   })
 
+  /** A judge sheet the device person deferred: not the current check, not a result either. */
+  const parked = (s) => !s.result && s.last?.status === 'judge' && s.last.deferred === true
   const states = (events) => new Map(list.map((it) => [it.id, foldItem(events, it.id)]))
   const needsDesktop = (entry) => entry.plan.needs === 'desktopMedianMs' && desktop === undefined
   // `plan.assist`: a `human` row the service still collects what the page can say (M17b: the harness's probe
@@ -288,7 +295,7 @@ export function createAutoRound({
       if (s.result) continue
       const last = s.last
       if (!last || last.n <= s.since) continue
-      if (last.status === 'open' || last.status === 'judge') return []
+      if (last.status === 'open' || (last.status === 'judge' && !last.deferred)) return []
       if (last.status === 'interrupted' && last.reason !== 'reload' && !last.redone) return []
       if (last.status === 'interrupted' && last.reason === 'reload' && s.reloads > opts.maxReloads)
         return [
@@ -299,7 +306,7 @@ export function createAutoRound({
           }),
         ]
     }
-    const it = list.find((i) => !st.get(i.id).result)
+    const it = list.find((i) => !st.get(i.id).result && !parked(st.get(i.id)))
     if (!it) return []
     const entry = CHECKS[it.id]
     const s = st.get(it.id)
@@ -486,6 +493,7 @@ export function createAutoRound({
         const s = st.get(it.id)
         const a = s.last
         if (!a || a.n <= s.since) continue
+        if (parked(s)) continue
         const entry = CHECKS[it.id]
         if (tabClient && clientOf(entry) !== tabClient)
           return { ...base, phase: 'wait', waitFor: clientOf(entry), progress }
