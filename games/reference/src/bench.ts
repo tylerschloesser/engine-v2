@@ -241,8 +241,8 @@ export function createBenchMeter(): BenchMeter {
       `tick: ${h.tick}`,
       `main p95: ${ms(h.mainP95Ms)} ms`,
       `frame p95: ${ms(h.frameP95Ms)} ms`,
-      `tick p50/p95: ${ms(h.tickP50Ms)} / ${ms(h.tickP95Ms)} ms`,
-      `  seal p95 ${ms(h.sealP95Ms)}, sim_tick p50/p95 ${ms(h.simTickP50Ms)} / ${ms(h.simTickP95Ms)}, frame build p95 ${ms(h.frameBuildP95Ms)}, resync p95 ${ms(h.resyncP95Ms)} ms; catch-up ticks/10s ${h.catchupTicksPer10s}`,
+      `tick p95: ${ms(h.tickP95Ms)} ms`,
+      `  tick p50 ${ms(h.tickP50Ms)}, seal p95 ${ms(h.sealP95Ms)}, sim_tick p50/p95 ${ms(h.simTickP50Ms)} / ${ms(h.simTickP95Ms)}, frame build p95 ${ms(h.frameBuildP95Ms)}, resync p95 ${ms(h.resyncP95Ms)} ms; catch-up ticks/10s ${h.catchupTicksPer10s}`,
       `drawables: ${h.records} (dropped ${h.dropped}), draws/frame max ${h.drawCallsMax}, upload B/frame max ${h.uploadBytesMax}, upload backlog ${h.uploadBacklog}, at cap ${h.uploadFramesAtCap} frames, drops ${h.uploadDrops}`,
     ].join('\n')
   }
