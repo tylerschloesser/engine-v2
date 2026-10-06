@@ -113,6 +113,11 @@
   let lastRx = Date.now()
   let offset = 0
   let step = null
+  // The measuring window now open (beginMeasure .. endMeasure). `until` is a safety stop for the quiet: a window that is
+  // never closed (a collector that threw) must not leave the agent silent for ever.
+  const meas = { on: false, id: null, n: 0, interrupted: false, until: 0 }
+  /** True inside a measuring window: nothing but the window's own load runs (M39p; no ping, no `step?`, no flush). */
+  const quiet = () => meas.on && Date.now() < meas.until
   const persist = () => {
     set('out', JSON.stringify(outbox))
     set('seq', String(seq))
@@ -159,6 +164,7 @@
     persist()
   }
   function flush() {
+    if (quiet()) return // a measuring window sends nothing: the outbox is flushed when it ends (M39p)
     if (ws?.readyState !== 1) return
     for (let i = inflight; i < outbox.length; i++) ws.send(JSON.stringify(outbox[i]))
     inflight = outbox.length
@@ -215,7 +221,7 @@
   }
   let posting = false
   async function postFlush() {
-    if (posting || !outbox.length) return
+    if (posting || !outbox.length || quiet()) return
     posting = true
     try {
       const r = await fetch(url('msg'), {
@@ -228,6 +234,7 @@
     posting = false
   }
   setInterval(() => {
+    if (quiet()) return // no ping, no `step?`, no dead-socket check inside a measuring window (M39p)
     if (ws && ws.readyState === 1) {
       control('ping', { vis: document.visibilityState })
       if (step && step.kind === 'walk' && step.phase !== 'done') control('step?') // a walk waits on the Mac
@@ -355,7 +362,6 @@
   const vis = { hidden: 0 }
   // A measured attempt (beginMeasure) that sees the page hidden is interrupted, never failed: its data
   // is discarded (rAF recorder reset) and, on return, the bar offers "Redo this check".
-  const meas = { on: false, id: null, n: 0, interrupted: false }
   function interrupt(why) {
     if (!meas.on) return
     meas.on = false
@@ -390,13 +396,31 @@
 
   // --- rAF gap recorder (allocation-free: one stable callback, one preallocated ring) ----------
   const ring = new Float32Array(512)
-  const raf = { n: 0, frames: 0, long25: 0, long50: 0, max: 0 }
+  // M39p: the window-local view. Every frame's page time and gap go into preallocated rings (about 34 s at 60 Hz),
+  // gaps over 20 ms into a second, small one, so a statistic can cover exactly the frames of a time range
+  // (the page's own HUD keeps a rolling 600-frame window that still holds the load and the rotation).
+  const WN = 2048
+  const GN = 256
+  const wT = new Float64Array(WN) // page time of frame i (the rAF timestamp, `performance.now()` clock)
+  const wG = new Float32Array(WN) // the gap before it
+  const gT = new Float64Array(GN)
+  const gD = new Float32Array(GN)
+  const scratch = new Float32Array(WN) // human-rate statistics sort here, never in the callback
+  const raf = { n: 0, w: 0, g: 0, frames: 0, long25: 0, long50: 0, max: 0, t0: 0 }
   let rafLast = 0
   function rafTick(t) {
     if (rafLast !== 0) {
       const d = t - rafLast
       ring[raf.n & 511] = d
       raf.n++
+      wT[raf.w & (WN - 1)] = t
+      wG[raf.w & (WN - 1)] = d
+      raf.w++
+      if (d > 20) {
+        gT[raf.g & (GN - 1)] = t
+        gD[raf.g & (GN - 1)] = d
+        raf.g++
+      }
       raf.frames++
       if (d > 25) raf.long25++
       if (d > 50) raf.long50++
@@ -419,8 +443,52 @@
       p95: pick(0.95),
     }
   }
+  /** Milliseconds since the window opened, on the rAF clock (what `rafWindow` and `rafGaps` count from). */
+  const windowT = () => performance.now() - raf.t0
+  /**
+   * Statistics of the frames in [`fromMs`, `toMs`] of the current window (ms since `beginMeasure`; `toMs` defaults
+   * to now): frame count, p50, p95, worst gap, gaps over 20 ms and over 25 ms. Only frames after the reset count.
+   */
+  function rafWindow(fromMs, toMs = Infinity) {
+    const a = raf.t0 + fromMs
+    const b = raf.t0 + toMs
+    let n = 0
+    let over20 = 0
+    let over25 = 0
+    let max = 0
+    for (let i = raf.w - 1; i >= 0 && i >= raf.w - WN; i--) {
+      const t = wT[i & (WN - 1)]
+      if (t < a) break
+      if (t > b) continue
+      const d = wG[i & (WN - 1)]
+      scratch[n++] = d
+      if (d > 20) over20++
+      if (d > 25) over25++
+      if (d > max) max = d
+    }
+    const s = scratch.subarray(0, n).sort()
+    const pick = (p) => (n ? +s[Math.min(n - 1, Math.floor(p * n))].toFixed(2) : null)
+    return { n, p50: pick(0.5), p95: pick(0.95), max: +max.toFixed(1), over20, over25 }
+  }
+  /**
+   * Every gap over 20 ms of this window (the newest 256), oldest first: `list` of `{ t, gap }` with `t` in ms since
+   * `beginMeasure`, and `origin`, the Date.now() epoch (ms) of that moment on this phone's clock.
+   */
+  function rafGaps() {
+    const list = []
+    for (let i = Math.max(0, raf.g - GN); i < raf.g; i++)
+      list.push({ t: +(gT[i & (GN - 1)] - raf.t0).toFixed(1), gap: +gD[i & (GN - 1)].toFixed(1) })
+    return {
+      total: raf.g,
+      kept: list.length,
+      origin: Math.round(performance.timeOrigin + raf.t0),
+      list,
+    }
+  }
   function rafReset() {
-    raf.n = raf.frames = raf.long25 = raf.long50 = raf.max = 0
+    raf.n = raf.w = raf.g = raf.frames = raf.long25 = raf.long50 = raf.max = 0
+    raf.t0 = performance.now()
+    rafLast = 0
   }
 
   // --- Screen wake lock -----------------------------------------------------------------------
@@ -550,8 +618,13 @@
     drawBar()
   }
   /** Open a measuring window for attempt `n` of check `id`: bar removed, recorder reset, hidden = interrupted. */
-  function beginMeasure(id, n) {
-    Object.assign(meas, { on: true, id, n, interrupted: false })
+  function beginMeasure(id, n, ms) {
+    // The start marker goes out first, and alone: the Mac's drive loop goes quiet on it (M39p). `ms` is how long the
+    // window will last; the agent's own quiet stops a bounded time after it whatever happens.
+    const span = ms > 0 ? ms : 12 * 60_000
+    Object.assign(meas, { on: false, id, n, interrupted: false })
+    send('window', { phase: 'start', id, n, ms: span })
+    Object.assign(meas, { on: true, until: Date.now() + span + 20_000 })
     rafReset()
     setMeasuring(true)
   }
@@ -559,7 +632,9 @@
   function endMeasure() {
     const r = { id: meas.id, n: meas.n, interrupted: meas.interrupted }
     meas.on = false
+    lastRx = Date.now() // the quiet is over: a socket silent for the window is not dead
     setMeasuring(false)
+    send('window', { phase: 'end', id: meas.id, n: meas.n, interrupted: meas.interrupted }) // flushes what the window queued
     return r
   }
 
@@ -586,6 +661,9 @@
     endMeasure,
     measure: () => ({ on: meas.on, id: meas.id, n: meas.n, interrupted: meas.interrupted }),
     rafStats,
+    rafWindow,
+    rafGaps,
+    windowT,
     rafReset,
     envFacts,
     /** Call from a user gesture (the runner's Start tap): remembers the wish and requests the lock. */

@@ -292,8 +292,9 @@
      */
     async 'reference-dom'(item) {
       const ready = await pageReady(item)
-      A.beginMeasure(item.id, item.n)
-      await sleep(item.opts.observeMs ?? item.plan.observeMs ?? 8000)
+      const observeMs = item.opts.observeMs ?? item.plan.observeMs ?? 8000
+      A.beginMeasure(item.id, item.n, observeMs)
+      await sleep(observeMs)
       if (A.measure().interrupted) {
         A.endMeasure()
         return null

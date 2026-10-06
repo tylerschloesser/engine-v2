@@ -43,6 +43,7 @@ export const SEQUENCED = new Set([
   'result',
   'reading',
   'walk',
+  'window',
 ])
 const RESERVED = new Set(['run', 'tab', 'seq', 't', 'type', 'src'])
 // A 10 minute window's series (600 one-second readings, M16-coexist) is about 250 KB, a 5 minute one more of the

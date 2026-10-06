@@ -48,6 +48,8 @@
       await sleep(every)
     }
   }
+  const ROLLING_MS = 10_000 // the length of the page's rolling statistics (device.ts, the bench HUD)
+  const MIN_STEADY_FRAMES = 10
   const clone = (v) => JSON.parse(JSON.stringify(v ?? null))
   const orientation = () => (window.innerWidth >= window.innerHeight ? 'landscape' : 'portrait')
   const check = () => window.__check
@@ -128,7 +130,7 @@
     /** `?probe=memory`: follow the probe's own progress lines until it says it is complete. */
     async memory(item) {
       const o = item.opts
-      A.beginMeasure(item.id, item.n)
+      A.beginMeasure(item.id, item.n, o.memoryTimeoutMs)
       const t0 = Date.now()
       let steps = []
       let complete = false
@@ -153,13 +155,20 @@
    */
   async function measureWindow(item, each) {
     const o = item.opts
+    const warm = o.warmupMs || 0
+    const roll = o.rollingMs ?? ROLLING_MS
+    // The page's HUD statistics (p95 and the rest of `readings()`) are rolling 10 s windows that still hold the
+    // frames before the warm-up ended (the load, a rotation's relayout). A steady sample therefore starts one rolling
+    // window after the warm-up when the window is long enough to spare it; the rAF fields are recomputed from the
+    // agent's own window-local ring and cover only frames after the warm-up (M39p).
+    const steadyFrom = o.windowMs - warm >= 3 * roll ? warm + roll : warm
     let last = null
     for (let tries = 0; tries < 3; tries++) {
       const orient = orientation()
       const t0 = Date.now()
       const samples = []
       let turned = false
-      A.beginMeasure(item.id, item.n)
+      A.beginMeasure(item.id, item.n, o.windowMs)
       while (Date.now() - t0 < o.windowMs) {
         await sleep(Math.max(0, 1000 * (samples.length + 1) - (Date.now() - t0)))
         if (A.measure().interrupted) {
@@ -167,11 +176,25 @@
           return null
         }
         const r = readings()
+        const wt = A.windowT()
+        const w = A.rafWindow(Math.max(warm, wt - roll), wt)
         if (r.orientation !== orient) turned = true
-        samples.push(Object.assign({ t: Date.now() - t0 }, r))
+        samples.push(
+          Object.assign({ t: Date.now() - t0 }, r, {
+            page_raf_p95_ms: r.raf_p95_ms,
+            page_raf_over20: r.raf_over20,
+            raf_p50_ms: w.p50,
+            raf_p95_ms: w.p95,
+            raf_worst_ms: w.max,
+            raf_n: w.n,
+            raf_over20: w.over20,
+            raf_over25: w.over25,
+          }),
+        )
         if (each) await each(samples.length, Date.now() - t0)
       }
       const raf = A.rafStats()
+      const gaps = A.rafGaps()
       if (A.endMeasure().interrupted) return null
       last = {
         window: {
@@ -179,9 +202,11 @@
           windowMs: o.windowMs,
           samples,
           raf,
+          gaps,
           ...(turned ? { turned } : {}),
         },
-        steady: samples.filter((s) => s.t >= (o.warmupMs || 0)),
+        // A sample counts once it has more than a second of frames after the warm-up.
+        steady: samples.filter((s) => s.t >= steadyFrom && s.raf_n >= MIN_STEADY_FRAMES),
       }
       if (!turned) return last // rotated mid-window: measured again in the new orientation
     }
