@@ -5,6 +5,9 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { startAutoRound } from './auto-cli.mjs'
+import { createAndroidBackend } from './drive/android.mjs'
+import { startDrive } from './drive/loop.mjs'
+import { devicePerson } from './drive/person.mjs'
 import { createLive, readLive, waitRound } from './live.mjs'
 import { openMacBrowser } from './mac-browser.mjs'
 import { createMonitor } from './monitor.mjs'
@@ -45,7 +48,9 @@ export async function waitCli({ round, timeoutS, json, read, out = console.log }
 
 /**
  * `--auto`: returns when the round is done (exit code 0) or was stopped (2). `o`: `{ repo, round, only, items,
- * file, seriesDir, tunnel, noOpen, noBuild, params, monitorPort, log }`.
+ * file, seriesDir, tunnel, noOpen, noBuild, params, monitorPort, log, drive, makeBackend }`. `drive: 'android'`
+ * (M39j): the Mac is the person: it opens the runner on the USB phone and answers the act prompts
+ * (`drive/`); `makeBackend(kind)` is how a test supplies a backend.
  */
 export async function autoCli(o) {
   const { repo, round, items, file, seriesDir, log = console.log } = o
@@ -67,16 +72,21 @@ export async function autoCli(o) {
   let run = null
   let monitor = null
   let beat = null
-  let stopping = false
-  const shutdown = async () => {
-    if (stopping) return
-    stopping = true
-    ac.abort()
-    clearInterval(beat)
-    live.set({ phase: 'stopped' })
-    await monitor?.close().catch(() => {})
-    await run?.stop().catch(() => {})
-  }
+  let stopping = null
+  let driver = null
+  let backend = null
+  // One shutdown, however many callers: a second one (the normal path after a signal) waits for the first,
+  // so the process never exits with the phone half restored.
+  const shutdown = () =>
+    (stopping ??= (async () => {
+      ac.abort()
+      clearInterval(beat)
+      live.set({ phase: 'stopped' })
+      await driver?.stop().catch(() => {})
+      await backend?.cleanup().catch(() => {})
+      await monitor?.close().catch(() => {})
+      await run?.stop().catch(() => {})
+    })())
   const bye = (code) => shutdown().finally(() => process.exit(code))
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => bye(130))
   process.on('uncaughtException', (e) => {
@@ -98,7 +108,8 @@ export async function autoCli(o) {
       tunnel: o.tunnel,
       // `client: 'both'`: the phone walks its rows, the Mac's own browsers walk theirs. `botTimings` (dev and
       // tests) is the M34 bot's, not a round parameter.
-      params: { client: 'both', ...paramsRest },
+      // A driven round is the phone's alone (the Mac's own browsers are not driven).
+      params: { client: o.drive ? 'phone' : 'both', ...paramsRest },
       botTimings,
       signal: ac.signal,
       log,
@@ -148,6 +159,33 @@ export async function autoCli(o) {
     log(`another session: pnpm device:walk --wait ${round}   or   --status ${round} --json`)
     if (!o.noOpen && process.platform === 'darwin')
       spawn('open', [monitorUrl], { stdio: 'ignore', detached: true }).unref()
+    if (o.drive) {
+      backend = (o.makeBackend ?? ((kind) => createAndroidBackend({ log })))(o.drive)
+      // The phone reaches this Mac's servers on its own loopback: `adb reverse` each variant's port.
+      const ports = Object.values(run.origins)
+        .map((u) => new URL(u))
+        .filter((u) => u.hostname === '127.0.0.1')
+        .map((u) => Number(u.port))
+      await backend.reverse?.(ports)
+      live.set({ drive: o.drive })
+      log(`driving the ${o.drive} phone over USB (no QR): ${run.joinUrl}`)
+      driver = startDrive({
+        backend,
+        person: devicePerson(backend, { log }),
+        file,
+        ids: walked.map((i) => i.id),
+        joinUrl: run.joinUrl,
+        seriesDir,
+        append: (e) => run.api.append(e),
+        settle: () => run.machine.settle(),
+        isDone: () => run.machine.done(),
+        log,
+      })
+      driver.finished.catch((e) => {
+        log(`drive failed: ${e.stack ?? e}`)
+        ac.abort()
+      })
+    }
     const done = await run.finished()
     live.set({ phase: done ? 'done' : 'stopped' })
     const final = status()

@@ -21,9 +21,10 @@ import { fileURLToPath } from 'node:url'
 import { createApp } from './lib/device-walk/app.mjs'
 import { applyRound, lineDiff } from './lib/device-walk/apply.mjs'
 import { autoCli, readStatus, seriesDirFor, waitCli } from './lib/device-walk/auto-main.mjs'
+import { judgeEvent } from './lib/device-walk/drive/judge.mjs'
 import { parseChecks, selectItems } from './lib/device-walk/parse.mjs'
 import { qrTerminal } from './lib/device-walk/qr.mjs'
-import { checkRoundName, readEvents, replay } from './lib/device-walk/rounds.mjs'
+import { appendEvent, checkRoundName, readEvents, replay } from './lib/device-walk/rounds.mjs'
 import { DEFAULT_PARAMS, formatSelftest, SELFTEST_ID } from './lib/device-walk/selftest.mjs'
 import { runSelftest } from './lib/device-walk/selftest-cli.mjs'
 import { createServerControl } from './lib/device-walk/servers.mjs'
@@ -53,10 +54,15 @@ export function parseArgs(argv) {
     '--series-dir',
     '--monitor-port',
     '--base-port',
+    '--drive',
+    '--judge',
+    '--note',
   ])
+  o.positional = []
   for (let i = 0; i < argv.length; i++) {
     if (withValue.has(argv[i])) o.values[argv[i].slice(2)] = argv[++i]
-    else o.flags.add(argv[i])
+    else if (argv[i].startsWith('--')) o.flags.add(argv[i])
+    else o.positional.push(argv[i])
   }
   return o
 }
@@ -106,7 +112,7 @@ const fail = (msg) => {
 }
 
 async function main() {
-  const { flags, values } = parseArgs(process.argv.slice(2))
+  const { flags, values, positional } = parseArgs(process.argv.slice(2))
   const checksPath = values.checks ?? join(REPO, 'docs/plan/device-checks.md')
   const roundsDir = values['rounds-dir'] ?? join(REPO, 'docs/plan/device-rounds')
   const checksText = readFileSync(checksPath, 'utf8')
@@ -114,6 +120,34 @@ async function main() {
   const roundFile = (r) => join(roundsDir, `${r}.jsonl`)
 
   if (flags.has('--selftest')) return selftest({ flags, values, roundFile })
+
+  if (values.judge !== undefined) {
+    // M39j: a verdict on a judge sheet the device person left pending (its screenshot is in the round's evidence).
+    const bad = checkRoundName(values.judge)
+    if (bad) fail(`--judge takes an existing round: ${bad}`)
+    const file = roundFile(values.judge)
+    const events = readEvents(file)
+    if (!events.length) fail(`no round "${values.judge}" (${file})`)
+    const [id, value] = positional
+    const start = events.findLast((e) => e.type === 'start')
+    const sel = selectItems(items, start?.only ?? undefined)
+    let ev
+    try {
+      ev = judgeEvent({
+        events,
+        ids: sel.filter((i) => !i.android).map((i) => i.id),
+        id,
+        value,
+        note: values.note,
+        base: REPO,
+      })
+    } catch (e) {
+      fail(`${e.message}\nusage: --judge <round> <id> pass|fail|skip [--note <text>]`)
+    }
+    appendEvent(file, ev)
+    console.log(`round ${values.judge}: ${id} ${value} (by orchestrator)`)
+    return
+  }
 
   if (values.wait !== undefined) {
     const bad = checkRoundName(values.wait)
@@ -148,6 +182,10 @@ async function main() {
     } catch {
       fail('--params is a JSON object')
     }
+    const drive = values.drive
+    if (drive !== undefined && !['android', 'ios'].includes(drive))
+      fail('--drive takes android or ios')
+    if (drive === 'ios') fail('--drive ios is not built yet (M39j delegation 2)')
     const code = await autoCli({
       repo: REPO,
       round,
@@ -155,9 +193,11 @@ async function main() {
       only,
       file: roundFile(round),
       seriesDir: seriesDirFor(REPO, round, values['series-dir']),
-      tunnel: !flags.has('--no-tunnel'),
-      noOpen: flags.has('--no-open'),
+      // A driven phone is on USB: its origins are the loopback ones, reached through `adb reverse`.
+      tunnel: drive ? flags.has('--tunnel') : !flags.has('--no-tunnel'),
+      noOpen: flags.has('--no-open') || !!drive,
       noBuild: flags.has('--no-build'),
+      drive,
       params,
       monitorPort: values['monitor-port'],
       basePort: values['base-port'] ? Number(values['base-port']) : undefined,

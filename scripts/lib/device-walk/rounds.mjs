@@ -69,7 +69,7 @@ const ATTEMPT_FIELDS = [
 /**
  * Replay events over the walked `items`. Returns
  * `{ only, device, cursor, env, macEnvs (by user agent), others, items: Map<id, { result, notes, numbers, device, history,
- * attempts, prompts, by, criteria, metrics, evidence }> }`. Events from the phone API (M39f: `env`,
+ * attempts, prompts, shots, by, criteria, metrics, evidence }> }`. Events from the phone API (M39f: `env`,
  * `attempt`, `prompt`, `result` with `by`/`criteria`/`metrics`/`evidence`) are replayed here; readers
  * from before M39f ignore the extra types and fields. A `result` for an id that is not walked (the
  * built-in `M39f-selftest`) lands in `others`.
@@ -94,6 +94,7 @@ export function replay(events, items) {
       history: [],
       attempts: [],
       prompts: [],
+      shots: [],
     })
   for (const e of events) {
     if (e.type === 'start') state.only = e.only ?? null
@@ -124,7 +125,10 @@ export function replay(events, items) {
           status: e.status ?? 'open',
           ...pickDefined(e, ATTEMPT_FIELDS.slice(3)),
         })
-    } else if (e.type === 'prompt' && ids.has(e.id))
+    } else if (e.type === 'shot' && ids.has(e.id))
+      // M39j: a screenshot the device person saved for a judge sheet it left pending.
+      state.items.get(e.id).shots.push({ t: e.t, n: e.n, path: e.path })
+    else if (e.type === 'prompt' && ids.has(e.id))
       state.items.get(e.id).prompts.push({ t: e.t, n: e.n, kind: e.kind, text: e.text })
     else if ((e.type === 'result' || e.type === 'redo') && ids.has(e.id)) {
       const s = state.items.get(e.id)

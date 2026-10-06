@@ -187,7 +187,7 @@ export function inherited(entry, data, events) {
   return out
 }
 
-const rel = (path, base) => (base && isAbsolute(path) ? relative(base, path) : path)
+export const rel = (path, base) => (base && isAbsolute(path) ? relative(base, path) : path)
 
 /**
  * @param {{ file: string, items: object[], origins: Record<string, string>, params?: object,

@@ -45,7 +45,7 @@ const REPO = fileURLToPath(new URL('../../..', import.meta.url))
  *   log?: (s: string) => void, timeoutMs?: number, signal?: AbortSignal, pollMs?: number,
  *   desktop?: (url: string) => Promise<number|null> }} o
  * @returns {Promise<{ finished(): Promise<boolean>, stop(): Promise<void>, joinUrl: string, token: string,
- *   api: object, machine: object }>}
+ *   api: object, machine: object, origins: Record<string, string> }>}
  */
 export async function startAutoRound(o) {
   const {
@@ -178,7 +178,7 @@ export async function startAutoRound(o) {
         await new Promise((r) => setTimeout(r, pollMs))
       return machine.done()
     }
-    return { finished, stop, joinUrl, token, api, machine }
+    return { finished, stop, joinUrl, token, api, machine, origins }
   } catch (e) {
     await stop()
     throw e

@@ -10,7 +10,6 @@
 import { finger, NotDrivable } from './backend.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const secondsIn = (text, re) => Number(re.exec(text)?.[1])
 
 const VIEW = `({ w: innerWidth, h: innerHeight })`
 const CENTRE_OF = (find) => `(() => {

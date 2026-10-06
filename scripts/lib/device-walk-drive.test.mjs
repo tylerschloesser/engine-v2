@@ -1,10 +1,12 @@
 // M39j: the device person and its backends (docs/plan/39j-device-driver.md). No phone: a fake backend records
 // the calls, and the Android backend's adb and CDP are injected. The real-phone runs are evidence in the
 // milestone report, not tests.
-import { readdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
+import { applyRound } from './device-walk/apply.mjs'
 import { CHECKS, MP_SCENARIOS } from './device-walk/checks.mjs'
 import {
   createAndroidBackend,
@@ -15,7 +17,12 @@ import {
 } from './device-walk/drive/android.mjs'
 import { assertBackend, NotDrivable } from './device-walk/drive/backend.mjs'
 import { createFakeBackend } from './device-walk/drive/fake-backend.mjs'
+import { judgeEvent } from './device-walk/drive/judge.mjs'
+import { startDrive } from './device-walk/drive/loop.mjs'
 import { ACT_COVERAGE, devicePerson, HANDLERS } from './device-walk/drive/person.mjs'
+import { parseChecks } from './device-walk/parse.mjs'
+import { appendEvent, readEvents, replay } from './device-walk/rounds.mjs'
+import { fullStatus } from './device-walk/status.mjs'
 
 const REPO = fileURLToPath(new URL('../..', import.meta.url))
 const AGENT = join(REPO, 'scripts/lib/device-walk/agent')
@@ -280,6 +287,200 @@ describe('device-walk drive: the device person on a recording backend', () => {
     assertBackend(createFakeBackend())
     assertBackend(createAndroidBackend({ run: () => '', serial: 'x' }))
     expect(() => assertBackend({ open() {} })).toThrow(/lacks: readPage/)
+  })
+})
+
+describe('device-walk drive: the drive loop over a round log', () => {
+  const setup = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'drive-'))
+    const file = join(dir, 'r.jsonl')
+    for (const e of [
+      { type: 'start', only: null, mode: 'auto' },
+      { type: 'walk', phase: 'start' },
+      { type: 'attempt', id: 'M09b-fill-rate', n: 1, variant: 'fixture', page: 'p', rung: 0 },
+    ])
+      appendEvent(file, e)
+    const b = createFakeBackend({ pages: { autolock: { runner: false } } })
+    return { dir, file, b }
+  }
+  const drive = async (o) => {
+    let done = false
+    const d = startDrive({
+      backend: o.b,
+      person: person(o.b),
+      file: o.file,
+      ids: ['M09b-fill-rate', 'M16-low-power'],
+      joinUrl: 'http://127.0.0.1:1/__walk/runner.html?walk=t',
+      seriesDir: o.dir,
+      append: (e) => appendEvent(o.file, e),
+      settle: () => {},
+      isDone: () => done,
+      pollMs: 10,
+    })
+    await d.ready
+    await o.until()
+    done = true
+    await d.stop()
+  }
+
+  test('device-walk drive: an open act prompt is answered once, however often the log is read', async () => {
+    const { dir, file, b } = setup()
+    appendEvent(file, {
+      type: 'prompt',
+      id: 'M09b-fill-rate',
+      n: 1,
+      kind: 'act',
+      text: 'Rotate the phone to landscape.',
+    })
+    await drive({ b, dir, file, until: () => new Promise((r) => setTimeout(r, 150)) })
+    expect(b.calls.filter((c) => c.m === 'rotate')).toHaveLength(1)
+    expect(b.calls[0]).toMatchObject({ m: 'open' })
+    expect(readEvents(file).find((e) => e.type === 'drive')).toMatchObject({
+      id: 'M09b-fill-rate',
+      action: 'done',
+      handler: 'rotate',
+    })
+  })
+
+  test('device-walk drive: NotDrivable ends the row as a skip with its reason', async () => {
+    const { dir, file, b } = setup()
+    appendEvent(file, {
+      type: 'attempt',
+      id: 'M16-low-power',
+      n: 1,
+      variant: 'fixture',
+      page: 'p',
+      rung: 0,
+    })
+    appendEvent(file, {
+      type: 'prompt',
+      id: 'M16-low-power',
+      n: 1,
+      kind: 'act',
+      text: 'Lock the screen for 60 seconds, then unlock the phone and come back to this page.',
+    })
+    await drive({ b, dir, file, until: () => new Promise((r) => setTimeout(r, 150)) })
+    const row = readEvents(file).find((e) => e.type === 'result')
+    expect(row).toMatchObject({ id: 'M16-low-power', result: 'skip', by: 'device' })
+    expect(row.notes).toMatch(/^NotDrivable: .*never/)
+  })
+
+  test('device-walk drive: a judge sheet gets a screenshot logged as evidence and stays open', async () => {
+    const { dir, file, b } = setup()
+    appendEvent(file, {
+      type: 'attempt',
+      id: 'M09b-fill-rate',
+      n: 1,
+      status: 'done',
+      outcome: 'judge',
+      criteria: [],
+    })
+    appendEvent(file, {
+      type: 'prompt',
+      id: 'M09b-fill-rate',
+      n: 1,
+      kind: 'judge',
+      text: 'no visible hitch',
+    })
+    await drive({ b, dir, file, until: () => new Promise((r) => setTimeout(r, 150)) })
+    expect(b.calls.filter((c) => c.m === 'screenshot').map((c) => c.args[0])).toEqual([
+      join(dir, 'M09b-fill-rate-1-judge.png'),
+    ])
+    const ev = readEvents(file)
+    expect(ev.find((e) => e.type === 'shot')).toMatchObject({
+      id: 'M09b-fill-rate',
+      n: 1,
+      path: join(dir, 'M09b-fill-rate-1-judge.png'),
+    })
+    expect(ev.some((e) => e.type === 'result')).toBe(false)
+    expect(replay(ev, [{ id: 'M09b-fill-rate' }]).items.get('M09b-fill-rate').shots).toHaveLength(1)
+  })
+})
+
+describe('device-walk drive: --judge', () => {
+  const REAL = join(REPO, 'docs/plan/device-checks.md')
+  const text = readFileSync(REAL, 'utf8')
+  const { items } = parseChecks(text)
+  const ids = ['M11-gestures']
+  const log = [
+    { type: 'start', only: ['M11-gestures'], mode: 'auto' },
+    { type: 'attempt', id: 'M11-gestures', n: 1, variant: 'fixture', page: 'p', rung: 0 },
+    {
+      type: 'attempt',
+      id: 'M11-gestures',
+      n: 1,
+      status: 'done',
+      outcome: 'judge',
+      criteria: [
+        { name: 'steps', value: 7, limit: 7, ok: true },
+        { name: 'world point under finger', value: null, limit: null, ok: null },
+      ],
+      metrics: { glide: 4.2 },
+      evidence: join(REPO, 'test-results/device-walk/x/M11-gestures-1.json'),
+    },
+  ]
+
+  test('device-walk drive: the verdict is a result row (by: orchestrator) that status, replay and apply read', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'judge-'))
+    const file = join(dir, 'r.jsonl')
+    for (const e of log) appendEvent(file, e)
+    const ev = judgeEvent({
+      events: readEvents(file),
+      ids,
+      id: 'M11-gestures',
+      value: 'pass',
+      note: 'glides, stops',
+      base: REPO,
+    })
+    expect(ev).toMatchObject({
+      type: 'result',
+      result: 'pass',
+      by: 'orchestrator',
+      attempt: 1,
+      notes: 'glides, stops',
+      evidence: 'test-results/device-walk/x/M11-gestures-1.json',
+    })
+    expect(ev.criteria[1]).toMatchObject({ ok: true, by: 'orchestrator' })
+    appendEvent(file, ev)
+    const sel = items.filter((i) => ids.includes(i.id))
+    const state = replay(readEvents(file), sel)
+    expect(state.items.get('M11-gestures')).toMatchObject({
+      result: 'pass',
+      by: 'orchestrator',
+      notes: 'glides, stops',
+    })
+    const full = fullStatus({
+      round: 'r',
+      file,
+      items: sel,
+      events: readEvents(file),
+      overrides: {},
+      live: null,
+    })
+    expect(full.items[0]).toMatchObject({ id: 'M11-gestures', result: 'pass', by: 'orchestrator' })
+    expect(full.remaining).toEqual([])
+    const { changes } = applyRound(text, state, { round: 'r', overrides: {} })
+    expect(changes.join('\n')).toMatch(/M11-gestures/)
+  })
+
+  test('device-walk drive: nothing to judge, a bad value and a second verdict are refused', () => {
+    const open = log.slice(0, 2)
+    expect(() => judgeEvent({ events: open, ids, id: 'M11-gestures', value: 'pass' })).toThrow(
+      /no judge sheet open/,
+    )
+    expect(() => judgeEvent({ events: log, ids, id: 'M11-gestures', value: 'maybe' })).toThrow(
+      /pass, fail or skip/,
+    )
+    expect(() => judgeEvent({ events: log, ids, id: 'M99-x', value: 'pass' })).toThrow(
+      /not an item/,
+    )
+    const done = [
+      ...log,
+      { type: 'result', id: 'M11-gestures', result: 'pass', by: 'orchestrator' },
+    ]
+    expect(() => judgeEvent({ events: done, ids, id: 'M11-gestures', value: 'fail' })).toThrow(
+      /already has a result/,
+    )
   })
 })
 

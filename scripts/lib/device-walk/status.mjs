@@ -32,6 +32,7 @@ export function summarize({ round, file, items, state, overrides }) {
       ...(s.metrics ? { metrics: s.metrics } : {}),
       ...(s.evidence ? { evidence: s.evidence } : {}),
       ...(s.attempts.length ? { attempts: s.attempts.map(attemptRow) } : {}),
+      ...(s.shots?.length ? { shots: s.shots } : {}),
     }
   })
   const counts = { pass: 0, fail: 0, skip: 0, 'not run: no device': 0, open: 0 }
