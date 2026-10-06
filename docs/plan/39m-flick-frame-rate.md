@@ -1,6 +1,6 @@
 # M39m: A flick's distance does not depend on the frame rate, and the check can fail
 
-Status: not started · After: 39l · Tyler-dependent: no
+Status: done (2026-10-06) · After: 39l · Tyler-dependent: no
 
 ## Goal
 Finding 3 of the driven rounds (`docs/plan/device-rounds/m39j-ios-lp.jsonl`, iPhone 12): with Low Power Mode on (rAF p50 33.4 ms against 16.7 ms) the scripted flick of M16-low-power travelled 0.768 as far (15.829 against 20.605 tiles). A read-only diagnosis (2026-10-06) found that the camera glide is time-based: `applyInertia` (`packages/engine/src/camera/camera.ts`) decays analytically, `exp(-dt/tau)`, with no dt clamp. The likely cause is the instrument. The page's `check.act.flick` (`packages/engine/tests/browser/pages/src/slice.ts`) stamps each injected sample with `performance.now()` after a `setTimeout(16)`, so the release velocity is 60 px divided by the *real timer spacing*. Low Power Mode probably stretches that spacing (a guess, unmeasured: the evidence has no sample times). The criterion `flick_distance_ratio` (`scripts/lib/device-walk/checks.mjs`) has `limit: null`, so it can never fail. On the way the diagnosis found one small engine defect: the drag delta between the last frame and `pointerup` is never applied (`applyPointers` only moves the camera for an active slot; `recordPointerUp` writes the final position and deactivates it). That costs about `v*dt/2`, more at 30 Hz.
@@ -30,9 +30,9 @@ Inertia constants; `pointerVelocity`'s window; real-finger (WDA) flicks; driving
 - `device-walk checks: flick ratio fails outside 0.95-1.05` (0.768 fails, 1.0 passes, 1.06 fails). Red by setting the limit back to null.
 
 ## Exit criteria
-- [ ] The three tests exist, pass, and each was seen red.
-- [ ] Existing camera tests (`pnpm test unit -t camera`), `[gc] input` and the slice browser tests stay green; no golden, budget or baseline changed.
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The three tests exist, pass, and each was seen red.
+- [x] Existing camera tests (`pnpm test unit -t camera`), `[gc] input` and the slice browser tests stay green; no golden, budget or baseline changed.
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test unit -t "camera|flick"` · `node --test scripts/lib/device-walk-checks.test.mjs` (or the suite that runs it) · `pnpm test browser -t slice` (targeted, foreground).
@@ -47,3 +47,4 @@ After landing, the orchestrator re-runs M16-low-power driven on the iPhone (`pnp
 - Criteria: `flick_distance_ratio` (`>=` 0.95, `ref: 'pass'`) and `flick_distance_ratio_max` (`<=` 1.05); `judge: 'always'` and the judge prompt removed; metric `flick_release_ratio` (`lowPower.releaseRatio`). M16-low-power Pass text now names 0.95 and 1.05; hash `39cfc710` -> `f2e7bbb0`.
 - Gate round 1: `[gc] input` (clean, neg object client, neg object gen0) went red with the first tail (about 171 B/frame on main). My earlier claim that it failed identically at base was wrong. Cause (not attributed per function; confirmed by the fix): the tail block ran on every idle frame, calling `pxPerTile` and writing `state.centreX/Y` (`-= 0`). The block is now guarded by `wasActive[0] === 1 || wasActive[1] === 1`, so it runs only on the release frame and an idle frame does not touch the camera state. `pnpm test browser -t input` (11 tests) passed 3 of 3: `browser pass 11 tests 5.7s/48s`, `5.4s/48s`, `5.3s/48s`. Camera unit tests unchanged and green.
 - I ran `git stash -- camera.ts` once (popped at once) to see the red; a process slip, no state lost.
+- **Gate (orchestrator):** round 1 red: `[gc] input clean` / `neg object client` / `neg object gen0` (main about 171 B/frame); bisected by the orchestrator to `camera.ts` (base file: 11 pass; M39m's: 3 red, every run). The report's 'fails identically at base' was wrong. Fixed in `82eabd0` (the tail runs only on the release frame). Round 2: `pnpm test && pnpm lint` green (unit 589, browser 256 in 45 s). Orchestrator inject-fail-revert: tail disabled, both camera tests red (`0.0411 < 0.01`, `0.7318 close to 1.4818`), reverted. **Device re-run pending:** M16-low-power is iPhone-only (Battery Saver does not engage on the charging Pixel), and the iPhone needs its passcode off for WDA.
