@@ -108,7 +108,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 39k | `39k-gpu-exec-metric.md` | the fill-rate GPU criterion measured queue latency (vsync floor 12-14 ms); measure execution with timestamp queries (opt-in render option), found by the driven rounds (2026-10-06) | 39j | |
 | [x] | 39l | `39l-remote-motion-staircase.md` | the remote circle is drawn as a 10 Hz staircase (changes on 78 of 695 frames, also on loopback); measure the cause, fix, failable per-frame test; the fade check tests vanish-on-leave plus a viewer-stall fade (finding 4a, 2026-10-06) | 39k | |
 | [x] | 39m | `39m-flick-frame-rate.md` | a scripted flick went 0.77x as far at 30 Hz: the instrument's timer-stamped samples, a dropped release tail, a criterion that could not fail (finding 3, 2026-10-06) | 39l | |
-| [ ] | 39n | `39n-two-devices-join.md` | M34-two-devices never joins on the phones: first-load diagnostics, tunnel warm-up and COEP preflight, the bot's ghost remote (finding 4b, 2026-10-06) | 39m | |
+| [x] | 39n | `39n-two-devices-join.md` | M34-two-devices never joins on the phones: first-load diagnostics, tunnel warm-up and COEP preflight, the bot's ghost remote (finding 4b, 2026-10-06) | 39m | |
 | [ ] | 39 | `39-acceptance.md` | coverage + budget audit, full device checklist, Phase 3 exit | all above | D |
 | [ ] | 39b | `39b-phase-4-handoff.md` | capture what code cannot say in ADRs, `PROMPT.md` for Phase 4. **Phase 3 complete.** | 39 | |
 

@@ -1,6 +1,6 @@
 # M39n: M34-two-devices joins on the phones, and a failed join says why
 
-Status: not started · After: 39m · Tyler-dependent: no
+Status: done (2026-10-06; verified on the Pixel 5) · After: 39m · Tyler-dependent: no
 
 ## Goal
 Finding 4b of the driven rounds: M34-two-devices never joins through the tunnel on either phone. A read-only diagnosis (2026-10-06) found that the bot and the phone use the same code path in both M34 items (`bot.mjs` `join()`, `collect-ref.js` `joined()`), so the item is not the difference. The pattern is the *first load of the bench page from the tunnel origin*: across 5 rounds, the first reference-bench item returns `{ready:false, errors:[]}` after about 120 s with no diagnostics, and a second load of the same origin joins in 1.9 s. The likely mechanism (a guess) is a cold quick tunnel serving a worker or wasm without COEP while its name warms up; `m39j-ios-redo` logged "worker script blocked: is COEP set on every path?" on a first tunnel load. Separately, in `m39j-ios-redo` the *bot* also failed on loopback ("the bot never came online"). That points at the server or the `/ws` proxy in that round, perhaps an orphan `reference-server` on the ws port (finding 15). And `botView.sawPhone` turns true 1-3 s after the bot joins, before the phone page has loaded, in every run: `bot_sees_phone` is probably a false positive, cause unknown.
@@ -25,10 +25,10 @@ Remote motion and fade (M39l), `mp.html`'s `__check.act` (finding 6), the engine
 `scripts/lib/device-walk/{bot.mjs,agent/collect-ref.js,servers.mjs,spawn-serve.mjs,auto-round.mjs}`, `scripts/device-serve.mjs`, their tests under `scripts/lib/`, `games/reference/src/check.ts` (botView fields), `packages/engine/tests/browser/walk-ref.spec.ts`.
 
 ## Exit criteria
-- [ ] Step 1-3 tests exist, pass, and each was seen red (red lines in Deviations).
-- [ ] The ghost-remote cause is named in Deviations.
-- [ ] `pnpm test:slow browser -t walk-ref` green (pasted line); no golden, budget or baseline changed.
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] Step 1-3 tests exist, pass, and each was seen red (red lines in Deviations).
+- [x] The ghost-remote cause is named in Deviations.
+- [x] `pnpm test:slow browser -t walk-ref` green (pasted line); no golden, budget or baseline changed.
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test unit -t device-walk` · `pnpm test:slow browser -t walk-ref` (targeted, foreground).
@@ -45,3 +45,4 @@ After landing, the orchestrator runs M34-two-devices driven on both phones.
 - **Evidence.** `pnpm test unit -t "device-walk"`: `unit pass 199 tests`. `pnpm test:slow browser -t walk-ref`: `browser pass 10 tests   79s`. One earlier targeted run of `walk-ref: M34-two-devices` failed at the `r.phone(...)` assertion (line 259) once, output not captured; five later runs passed (including after the last change). Not charged to the code, not explained. No golden, budget or baseline touched.
 - **Not measured.** No phone run; the `why` of any remaining failure is for the orchestrator's driven rounds.
 - **Fix round 2 (cause: the check subscribed late).** Verified by test: `Client.onLink`/`onUi` do not replay and `installCheck` ran after `await startGame(...)`, so on a first load `link` stayed `'none'`. Fix: `StartGameOptions.onClient?: (client) => void` (game.ts), called synchronously after `createClient`; `check.ts` exports `watchClient(client)` (subscribes link and Ui into a per-client record that `installCheck` reads); `main.ts` loads `check.js` before `startGame` (`__BENCH__` still the gate, `check-reporter:` netcode `pass 3 tests`). Test: `walk-ref: the check build reports link online and the first Ui when check.js arrives late` holds the `check-*.js` response 6 s (test-only `page.route`). Red on the old ordering (all three files at `51f94c9`): `Expected: "online" Received: "none"` at `link`; green on the new: `browser pass 2 tests    11s`. `walk-ref: M34-two-devices` x5 at the fix: `browser pass 2 tests    36s` five times.
+- **Gate (orchestrator):** round 1, `pnpm test && pnpm lint` green; the orchestrator's 15 slow runs of `walk-ref: M34-two-devices` gave 1 failure and 1 hang (ledger row), and the failure carried no diagnostics. Round 2: diagnostics in the spec; 0 of 10 at base, 0 of 10 at HEAD. A driven Pixel round (`m39n-pixel`) with the new `why`/`diag` showed `link: "none"` on both sides while both were in the roster: the cause was `installCheck` subscribing to the non-replaying `onLink`/`onUi` after `startGame`'s awaits. That was the first-load pattern, not the tunnel or COEP. Round 3 (`3cc6b76`): `StartGameOptions.onClient` + `watchClient`; the late-`check.js` walk-ref test was red on the old ordering and green on the fix. Gate green (unit 598, browser 256 in 44 s). **Driven Pixel round `m39n-pixel-2` (tunnel):** M34-two-devices pass (all automatic criteria; 'I see its circle' judged by the orchestrator) and M34-remote-motion pass (`moving_frames_changed_ratio` 0.997, `max_still_ms` 17, `vanish_ms` 151; 3 jumps <= 0.85 tiles judged as late samples). The iPhone is not run: its passcode sheet blocks WDA.
