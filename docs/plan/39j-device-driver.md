@@ -98,3 +98,84 @@ Unit (no phone): every act prompt in `checks.mjs` maps to a handler or a listed 
 - **M16-background** (ios-2): `skip [device] NotDrivable: the screen is never turned off or locked on these phones (Tyler); a lock needs the passcode`. The first leave (30 s, Home and `activateApp`) was answered before it. Evidence that the leave itself works: **M23-hidden-pause** (ios-3, the same 30 s Home leave) read `tick_delta 50, durable true, reloads 0` and sits on its judge sheet.
 - **Pixel re-run** (`m39j-pixel-4`, M09b then M11 in one round): M09b `fail` (`gpu_p95_ms 13.925`); M11 `gestures_done 7/7`, `world_point_drift_tiles 0.009 (limit 1, 262 samples)`, `rotation_keeps_centre: the centre moved 0.16 tiles (10.9 px) across the rotation`, flick glided 28.3 tiles, tiles 12 to 256; judge-pending.
 - Left clean: Airplane off (screenshot), Low Power off, rotation portrait, Auto-Lock already Never (read from Settings, not changed), no Appium/WDA/xcodebuild/cloudflared processes, no adb reverse/forward, Pixel `accelerometer_rotation 1`, screen Awake.
+
+### Delegation 3 (steps 6-7): full rounds, findings, what was built on the way
+
+**Outcome.** The Pixel's full round ran to its end (`m39j-full-android`: 45 rows, 38 recorded, 7 open = 6 judge sheets and the meta row `M39-rerun`). **The iPhone's full round did not finish** (`m39j-full-ios`: 9 rows recorded, then stopped): a first run hung on a 10 minute series (below), and after I restarted it the iPhone refuses to start WDA: `xcodebuild failed with code 65`, because iOS shows "Enter iPhone Passcode for XCTest: Enable UI Automation" on the phone (screenshot seen over `pymobiledevice3`). That needs Tyler's passcode once; nothing here can or should type it. Three more tries 20 to 90 minutes later failed the same way. When it is entered, `pnpm device:walk --auto --drive ios --round m39j-full-ios --timeout 36000` resumes from the log.
+
+**Machine load** (`uptime`, 1/5/15 min) at the measuring items: 2.4 to 5.8 for both full rounds (two rounds ran at once, one per phone, ports 4173 and 4373); no item ran above 8, so no row carries a load note. Stale Safari tabs: 18 of them (Cloudflare error pages and "Device walk" runner pages) were closed before the iPhone rounds, only those; `ios.mjs` `closeStaleTabs()` does it once per backend at `open` (titles `trycloudflare`, `Cloudflare Tunnel`, `Can't Open Page`, `Device walk`).
+
+**Home-to-return gap (M29's 5 s drop), measured with `device.html`, 4 runs each:** the old way (Home, sleep, intent) gave 4.35 s of absence on the Pixel (the `hidden` event comes 0.65 s after Home), inside the 3.5 to 6.5 s window but near its edge; the person's `leave-app` now counts the stated time from the page's own `hidden` beacon (polled, raced against a 1.2 s timer so a hidden page that does not answer DevTools cannot hold the walk: `world.html` did not, once: the walk waited 30 minutes on it), with `backend.hideLagMs` (Pixel 650, iPhone 300) as the fallback: **Pixel 5.13 to 5.22 s, iPhone 5.13 to 5.22 s** for a 5 s target. No compensation was needed beyond that; `returnLagMs` stays 0.
+
+**Built on the way (each found by a driven round, each with a test seen red):**
+1. **`phone-api.mjs` `MAX_BODY` 200 KB to 10 MB.** A 10 minute window's series (600 readings, about 250 KB) closed the phone's socket and the POST was refused: both rounds hung on M16-coexist for 30 minutes (found by status, then by reading the agent's `__walkAgent.state()` over CDP: connected, outbox empty... the series never left). Test `a 10 minute window's series ... is accepted over POST and over the socket`.
+2. **Deferred judge sheets.** `defer {id, n}` event (written by the driver after the screenshot): the machine skips a deferred judge item (`parked`) for the current step and for `advance`, so the walk goes on and the row stays open for `--judge`. `--status --json` still lists it in `humanPending` and `shots`. Test in `device-walk-auto.test.mjs`.
+3. **`--timeout <seconds>`** for `--auto` (default stays 90 min; a driven full round takes hours).
+4. **An act that times out is a result** (`driver.js`): a collector returning null with no interruption used to leave the check hanging for ever (M18-pick sat 30 minutes); it now sends `{ready: true, actTimedOut: true}` and the service fails the criteria that have no value.
+5. **The runner page is opened again while its tunnel name does not resolve yet** (`passRunner`: `chrome-error:` or `about:blank`, every 10 s up to 18 times).
+6. **WDA start retried** (3 attempts, `pkill` of its xcodebuild marker between) - it did not help against the passcode sheet.
+7. **`--apply` of an Android round** writes **Run on** lines and ticks nothing (the ids are the iPhone's rows; `-android` rows are never ticked, existing rule). Test `a round run on an Android phone writes its Run on lines and ticks nothing`.
+8. **Debug aids**: `ANDROID_TRACE=1` (the page every `readPage` ran in), `DRIVE_SHOTS`, `IOS_TRACE` (see delegation 2).
+9. `device-checks.md` header and `.claude/skills/device-round/SKILL.md`: driven rounds, `--judge`, what stays Tyler's; `Android:` line now says a Pixel on USB exists and its rounds tick nothing.
+
+**Round log hygiene.** Because of restarts (items 1, 4, 5) some rows of `m39j-full-android` are not clean: `M18-pick`, `M23-world-busy`, `M23-hidden-pause`, `M34-two-devices`, `M34-own-timer-bar`, `M34-remote-motion` failed while a restart or a driver defect was in play (null criteria = nothing was measured). I reran only those, in fresh rounds (`m39j-dbg-android`, `m39j-dbg2-android`, `m39j-android-redo`, `m39j-android-redo2`); the first results stay in the full round's log and history. A rerun is reported next to the original, never in place of it.
+
+#### Pixel 5 full round `m39j-full-android` (tunnel, 45 rows)
+
+| id | result | by | one line |
+|---|---|---|---|
+| M03-determinism, M08-worldgen-ms-per-chunk, M08-warn-threshold | pass | auto | |
+| M09b-fill-rate | fail | auto | no rung passes: `gpu_p95 13.2` (limit 6); rAF p95 and hitches fine (the known GPU-latency question) |
+| M11-boot, M11-memory | pass | auto | memory ceiling 1024 MiB, no reload |
+| M11-gestures | open | | judge sheet (flick glides, rotation) with screenshot |
+| M11-pinch-desktop-safari, M17b-harness-desktop-safari/-firefox, M35-safari-build-mac, M39-desktop-browsers | skip | auto | Mac rows, not a phone round's |
+| M16-slice-boot | open | | judge sheet (inherits M11-gestures) |
+| M16-round-trip, M16-coexist | pass | auto | coexist: 600 paints, no hitch gap over 25 ms, `engine_mem_grows` 0 |
+| M16-background | skip | device | NotDrivable: lock the screen (never locked); the first 30 s leave was done |
+| M16-low-power | skip | device | NotDrivable: Battery Saver does not engage while charging |
+| M18-anchors, M18-touch-ghost | open | | judge sheets |
+| M18-fill-rate-with-anchors | fail | auto | no rung passes: `gpu_p95 19.0` |
+| M18-pick | fail | auto | **driver unresolved, not a measurement** (null criteria): see finding 4 |
+| M23-opfs-latency, M23-kill-resume | pass | auto | kill-resume: relaunch by intent, world resumed, 0 admitted actions lost |
+| M23-world-busy | fail (original) | auto | CDP timeout reading the page; **rerun `m39j-dbg-android`: pass** (second tab busy, banner shown, first tab keeps playing) |
+| M23-private | skip | device | NotDrivable: Chrome ignores the incognito flag from adb |
+| M23-hidden-pause | fail (original) | auto | my restart killed the attempt; **rerun `m39j-android-redo`: judge sheet** `tick_delta 40`, `durable true`, 0 reloads |
+| M23-export-import | skip | device | NotDrivable: system file picker |
+| M29-socket-resume, M29-play-through-drop | skip | device | NotDrivable: lock the screen (the 5 s, 30 s and 5 min app drops ran before it) |
+| M29-net-heap | fail | auto | **adapter error**: `Cannot read properties of undefined (reading 'paint')` (`mp.html` has no `__check.act.paint`), then `pagehide` interruption: finding 3 |
+| M34-two-devices | fail | auto | `ready: false`, null criteria; **rerun twice, same**: the phone does not report the bot's player: finding 5 |
+| M34-own-timer-bar | fail (original) | auto | `ready: false`; **rerun: skip, NotDrivable** (Wi-Fi to cellular not built) |
+| M34-remote-motion | fail | auto | **rerun `m39j-dbg2-android`, joined: `remote_moved 0` (limit 1), `fade_missing 1`**: finding 5 |
+| M35-safari-build-iphone | open | | judge sheet ("the game plays", `world_drawn 785`) |
+| M35-capability | skip | auto | retired |
+| M37b-ios-background | open | | judge sheet; `drawn_again_per_run false` (backgrounded with Home, no memory pressure) |
+| M38-hosted-boot, -socket-resume, -remote-motion, M39-full-game-touch, M39-two-devices, M39-sign-off | skip | auto | human rows |
+| M39-large-save | fail | auto | `tick_p95 26.1 ms` against 10 (sim-worker tick time on the Pixel); no reload, `engine_mem_grows` 0 |
+| M39-frame-shares | pass | auto | main p95 0.9 ms, frame p95 5.3 ms |
+| M39-rerun | open | | meta row |
+
+#### iPhone 12 `m39j-full-ios` (stopped after 9 rows; see Outcome)
+
+M03, M08 x2, M11-boot, M11-memory, M16-round-trip: pass (auto). M09b-fill-rate: fail (auto; `raf_p95 18.9`, `raf_over20 19`, `gpu_p95 6.52`, 22 hitch gaps: delegation 2's run). M11-pinch-desktop-safari, M35-capability: skip. **Open judge sheets:** M11-gestures, M16-slice-boot. Everything after M16-round-trip is open: M16-coexist and the rest need the passcode first.
+
+#### Judge-pending (screenshots under `test-results/device-walk/<round>/`, untracked)
+
+- `m39j-full-android`: M11-gestures, M16-slice-boot, M18-anchors, M18-touch-ghost, M35-safari-build-iphone, M37b-ios-background (`<id>-1-judge.png` each).
+- `m39j-android-redo`: M23-hidden-pause (`M23-hidden-pause-1-judge.png`).
+- `m39j-full-ios`: M11-gestures, M16-slice-boot.
+- Record with `pnpm device:walk --judge <round> <id> pass|fail|skip --note "..."`.
+
+#### Findings (none fixed here; each is a candidate brief)
+
+1. **M09b, M18-fill-rate, M39-large-save on the Pixel and M09b on the iPhone fail on GPU p95 / tick p95** (13 to 19 ms against 6; tick 26 ms against 10): the numbers, not the driver.
+2. **M18-pick cannot be done on a 392 px phone at 40 tiles.** A ring sits under its own button; a finger's touch area snaps to the button (Chrome's touch adjustment: `elementFromPoint` says canvas, the real tap's target is BUTTON). 11 px under the ring's anchor picks it, 9 hits the button, 15 misses the ring. A person has the same trouble. The driver's nudge (tap just under the button's box) did not make the collector's `ask` see the tap in two runs: unresolved.
+3. **`M29-net-heap`'s adapter dies on `mp.html`** (`window.__check.act.paint` undefined) and its interruption record races the previous page's `pagehide`.
+4. **M18-pick's and every `ask`'s silent hang** (fixed here, item 4 above) was in M39f's driver.
+5. **M34 on the Pixel through the tunnel:** `joined()` (check ready, link online, UI seen) was false in two of three runs, and when it joined the bot's player never moved in the phone's view (`remote_moved 0`). Not diagnosed (the bot is the Mac's headless Chromium on the same tunnel).
+6. **The iPhone needs the passcode again for "Enable UI Automation"** after a session ended; a driven iOS round cannot start without it.
+7. **Backgrounding a page that DevTools cannot read** (`world.html` hidden, Pixel): Runtime.evaluate never answered; the leave now ignores it.
+8. **`M23-world-busy` read of the bar timed out once with the first tab on `world.html`** (CDP 15 s) and passed in a clean rerun: an unexplained flake, perhaps the choice of one of the 22 Chrome tabs. `--drive android` does not close Chrome's old tabs; `closeStaleTabs` exists only for iOS.
+9. M37b and M16-background ran on the Pixel without memory pressure or lock (NotDrivable or partial): their rows say so.
+
+**Not verified:** any iPhone item after M16-round-trip; relaunch, Redo and the Wi-Fi/cellular switch on either phone; the `--judge` flow on the full rounds' sheets (done on a scratch copy in delegation 1).
+
