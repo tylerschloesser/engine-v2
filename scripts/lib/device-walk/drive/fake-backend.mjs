@@ -20,6 +20,7 @@ export function createFakeBackend(o = {}) {
     'innerWidth, h: innerHeight': () => view,
     tiles_across: () => (tiles.length > 1 ? tiles.shift() : tiles[0]),
     "tagName === 'CANVAS'": () => ({ x: view.w / 2, y: view.h / 2 }),
+    visibilityState: 'hidden',
     '#walk-ring': () => ({ x: 123, y: 234 }),
     'Open second tab': () => ({ x: 50, y: 700 }),
     'Redo this check': () => ({ x: 60, y: 710 }),

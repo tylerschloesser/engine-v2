@@ -340,8 +340,61 @@ export function createIosBackend(o = {}) {
     return after
   }
 
+  /**
+   * Close the tabs earlier rounds left in Safari (error pages of dead tunnels, "Device walk" runner pages):
+   * every `deepLink` opens a tab, and a webview that hangs behind ten of them slowed the driver. Only tabs whose
+   * title says so are closed; the person's own tabs are never touched. Returns how many were closed.
+   */
+  async function closeStaleTabs() {
+    const stale = /trycloudflare|Cloudflare Tunnel|Can.t Open Page|^Device walk/
+    await activate(SAFARI)
+    await wait(1000)
+    const overview = await tryEl('accessibility id', 'TabOverviewButton')
+    if (overview) {
+      await call('POST', `/element/${overview}/click`)
+      await wait(1200)
+    }
+    const items = async () => {
+      const src = await call('GET', '/source')
+      const out = []
+      for (const m of src.matchAll(
+        /<XCUIElementTypeButton type="[^"]+" name="TabOverviewItemView[^"]*"([^>]*)>/g,
+      )) {
+        const g = (k) => new RegExp(`${k}="([^"]*)"`).exec(m[1])?.[1]
+        out.push({ label: g('label') ?? '', x: Number(g('x')), y: Number(g('y')) })
+      }
+      return out
+    }
+    let closed = 0
+    for (let round = 0; round < 80; round++) {
+      const its = await items()
+      const hit = its.find((i) => i.y > 100 && stale.test(i.label))
+      if (hit) {
+        await exec('mobile: tap', { x: hit.x + 145, y: hit.y + 8 })
+        closed++
+        await wait(700)
+        continue
+      }
+      const before = JSON.stringify(its.map((i) => i.label))
+      await exec('mobile: dragFromToForDuration', {
+        duration: 0.3,
+        fromX: 200,
+        fromY: 600,
+        toX: 200,
+        toY: 250,
+      })
+      await wait(800)
+      if (JSON.stringify((await items()).map((i) => i.label)) === before) break
+    }
+    const done = await tryEl('accessibility id', 'DoneButton')
+    if (done) await call('POST', `/element/${done}/click`)
+    log(`ios: closed ${closed} stale Safari tab(s)`)
+    return closed
+  }
+
   const api = {
     platform: 'ios',
+    closeStaleTabs,
     start,
     /** A raw call inside the session (diagnostics and the odd one-off). */
     raw: (m, p, b) => call(m, p, b),
@@ -350,6 +403,12 @@ export function createIosBackend(o = {}) {
     async open(url) {
       await start()
       st.origins.add(new URL(url).origin)
+      if (!st.tabsClosed) {
+        st.tabsClosed = true
+        await closeStaleTabs().catch((e) =>
+          log(`ios: closing stale tabs failed: ${String(e.message).slice(0, 100)}`),
+        )
+      }
       await native()
       await exec('mobile: deepLink', { url, bundleId: SAFARI })
       log(`ios: deepLink sent`)

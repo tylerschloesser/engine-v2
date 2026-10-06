@@ -39,6 +39,26 @@ const CANVAS_POINT = `(() => {
   return { x: innerWidth / 2, y: innerHeight / 2 }
 })()`
 
+/**
+ * Wait `ms` of absence after Home: poll the page for `hidden` (up to 3 s; a backend that cannot read a hidden page
+ * falls back to `ctx.hideLagMs`) and count the time from there, less `ctx.returnLagMs` for the way back.
+ */
+async function leaveFor(backend, ms, ctx) {
+  const t0 = Date.now()
+  let seen = null
+  for (let i = 0; i < 40; i++) {
+    try {
+      if ((await backend.readPage('document.visibilityState')) === 'hidden') {
+        seen = Date.now()
+        break
+      }
+    } catch {}
+    await ctx.sleep(80)
+  }
+  const from = seen ?? t0 + ctx.hideLagMs
+  await ctx.sleep(Math.max(0, ms - ctx.returnLagMs - (Date.now() - from)))
+}
+
 /** Handlers, in order: first whose `match` hits the prompt text runs. `run({ backend, prompt, ctx, text, m })`. */
 export const HANDLERS = [
   {
@@ -139,13 +159,13 @@ export const HANDLERS = [
   {
     name: 'leave-app',
     match: /Switch to another app for ([\d.]+) seconds/,
-    // Home, wait, come back: the absence the page measures is a little longer than the wait (the intent that
-    // brings the browser back takes a moment), so the wait is shortened by `returnLagMs`.
+    // Home, then the stated time counted from the moment the page reports `hidden` (it comes a moment after the
+    // key press, and a visible one after the intent that brings the browser back): the absence the page measures
+    // is the one asked for, not the one the Mac's own clock saw.
     run: async ({ backend, m, ctx }) => {
-      const ms = Number(m[1]) * 1000
       await ctx.sleep(300)
       await backend.home()
-      await ctx.sleep(Math.max(0, ms - ctx.returnLagMs))
+      await leaveFor(backend, Number(m[1]) * 1000, ctx)
       await backend.returnToBrowser()
     },
   },
@@ -157,7 +177,7 @@ export const HANDLERS = [
     run: async ({ backend, m, ctx }) => {
       await ctx.sleep(300)
       await backend.home()
-      await ctx.sleep(Math.max(0, Number(m[1]) * 1000 - ctx.returnLagMs))
+      await leaveFor(backend, Number(m[1]) * 1000, ctx)
       await backend.returnToBrowser()
     },
   },
@@ -402,7 +422,7 @@ export const ACT_COVERAGE = {
  * orchestrator), `{ status: 'notDrivable', reason }`, `{ status: 'unmatched' }` or `{ status: 'error', error }`.
  */
 export function devicePerson(backend, ctx = {}) {
-  const c = { returnLagMs: 700, log: () => {}, sleep, ...ctx }
+  const c = { returnLagMs: 0, hideLagMs: 0, log: () => {}, sleep, ...ctx }
   return {
     handlers: HANDLERS,
     coverage: ACT_COVERAGE,

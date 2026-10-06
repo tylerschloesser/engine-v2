@@ -260,6 +260,20 @@ describe('device-walk drive: the device person on a recording backend', () => {
     ])
   })
 
+  test('device-walk drive: the absence is counted from the hidden beacon: Home, poll the page for hidden, then the way back', async () => {
+    let polls = 0
+    const b = createFakeBackend({
+      pages: { visibilityState: () => (++polls < 3 ? 'visible' : 'hidden') },
+    })
+    await person(b).answer(
+      act(
+        'Drop 1 of 3 (app-5s): Switch to another app for 0.1 seconds, then come back to this page.',
+      ),
+    )
+    const seq = b.calls.map((c) => (c.m === 'readPage' ? 'poll' : c.m)).join(',')
+    expect(seq).toBe('home,poll,poll,poll,returnToBrowser')
+  })
+
   test('device-walk drive: what a phone cannot do is NotDrivable with its reason, never a pass', async () => {
     const lock = await run(
       'Lock the screen for 60 seconds, then unlock the phone and come back to this page.',
