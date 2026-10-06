@@ -1,6 +1,6 @@
 # M39k: Measure GPU execution time, not queue latency
 
-Status: not started · After: 39j · Tyler-dependent: no
+Status: done (2026-10-06) · After: 39j · Tyler-dependent: no
 
 ## Goal
 M09b-fill-rate and M18-fill-rate-with-anchors fail on both phones on `gpu_p95_ms` alone: Pixel 12-14 ms (19 ms with anchors), iPhone 6.5-14 ms. The limit is 6 ms, from `docs/decisions/0018-renderer.md` §9 ("GPU ≤ 6 ms") and Consequences ("GPU time under ~6 ms").
@@ -33,10 +33,10 @@ Renderer performance work: if real execution time exceeds 6 ms, that is a findin
 - The engine's timing ring reads back late (not on the writing frame), checked with a fake queue and buffers.
 
 ## Exit criteria
-- [ ] The tests exist and each was seen red.
-- [ ] Driven rounds on both phones (`pnpm device:walk --auto --drive android|ios --round m39k-<phone> --only M09b-fill-rate,M18-fill-rate-with-anchors`): status rows pasted with `gpu_exec_p95_ms` and `gpu_latency_p95_ms`. A fail on real execution time is reported as a finding, not tuned away.
-- [ ] No golden, budget or baseline changed; the zero-GC pages are unchanged (option off).
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The tests exist and each was seen red.
+- [x] Driven rounds on both phones (`pnpm device:walk --auto --drive android|ios --round m39k-<phone> --only M09b-fill-rate,M18-fill-rate-with-anchors`): status rows pasted with `gpu_exec_p95_ms` and `gpu_latency_p95_ms`. A fail on real execution time is reported as a finding, not tuned away.
+- [x] No golden, budget or baseline changed; the zero-GC pages are unchanged (option off).
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Deviations
 **Seams (Provides).**
@@ -59,3 +59,4 @@ Renderer performance work: if real execution time exceeds 6 ms, that is a findin
 - iPhone: M09b `fail` on rAF only (default: raf p95 18.58, over20 10, hitch 3; the ladder rungs 19.3-20, 21-29 gaps), `gpu_exec_p95_ms` 3.852 (p50 2.567), `gpu_latency_p95_ms` 9.02. WDA, Appium and the tunnel run beside it (load 2-3, not a quiet-phone number; as in M39j). M18 on the iPhone: raf p95 17.1, over20 1, `gpu_exec_p95_ms` 0.69, one rAF gap over 25 ms -> judge sheet, left pending (not judged by me); screenshot `test-results/device-walk/m39k-iphone/M18-fill-rate-with-anchors-1-judge.png`. I SIGTERMed the driver after that (it does not exit by itself while a sheet is parked); cleanup shown clean (no device-walk/appium/xcodebuild/cloudflared/vite processes, `adb reverse`/`forward` empty).
 - With the exec metric, the GPU criterion is met on both phones; the remaining iPhone M09b failure is the rAF criteria (a finding for a new brief, not the GPU share).
 
+- **Gate (orchestrator):** device-checks.md Pass text of M09b-fill-rate and M18-fill-rate-with-anchors now says GPU execution p95 (timestamp queries, `gpu_exec_p95_ms`); `checks.mjs` pass hashes updated (`a6f372a8`, `58065580`). iPhone M18 judged pass (one dropped frame with automation beside it). Open: iPhone M09b fails on rAF only (p95 18.6 ms, 10 gaps > 20 ms) with WDA/tunnel beside the page: joins finding 5 (re-measure on a quiet phone). Pixel M09b passes at 5.57 ms of 6: thin margin.

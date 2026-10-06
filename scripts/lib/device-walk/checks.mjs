@@ -392,7 +392,7 @@ export const CHECKS = {
     judges: [],
   },
   'M09b-fill-rate': {
-    pass: '8e59fb30',
+    pass: 'a6f372a8',
     class: 'auto',
     signal:
       'device.html __check.readings() (the HUD numbers as numbers), one 60 s window per orientation',
@@ -831,7 +831,7 @@ export const CHECKS = {
     judges: ['no swim, text crisp at every zoom'],
   },
   'M18-fill-rate-with-anchors': {
-    pass: '530d7b25',
+    pass: '58065580',
     class: 'auto',
     signal:
       'as M09b-fill-rate on ?anchors=50 with the scripted pan and zoom sweep (__check.act.sweep), ladder &anchorMode=translate first',
