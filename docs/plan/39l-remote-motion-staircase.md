@@ -1,6 +1,6 @@
 # M39l: A remote player's circle moves every frame, and the fade check tests what ADR 0013 allows
 
-Status: not started · After: 39k · Tyler-dependent: no
+Status: done (2026-10-06) · After: 39k · Tyler-dependent: no
 
 ## Goal
 Finding 4a of the driven rounds (`m39j-full-ios`, iPhone 12, evidence `test-results/device-walk/m39j-full-ios/M34-remote-motion-1.json`): `snaps` 46, `fade_missing` 1. A read-only diagnosis (2026-10-06, full text copied under Deviations › Diagnosis) found two separate things:
@@ -30,11 +30,11 @@ The two-devices join (M39n), interp delay constants, the bot's speed, any fast-t
 `packages/engine/crates/engine/src/{interp,client}/` if the cause is there; `packages/engine/src/` worker or frame-loop if it is there; `games/reference/src/check.ts`; `packages/engine/tests/browser/walk-ref.spec.ts` (+ a fade spec); `packages/engine/tests/netcode/interpolation.test.ts`; `scripts/lib/device-walk/{checks.mjs,agent/collect-ref.js}` and tests; `docs/plan/device-checks.md` (M34-remote-motion line only).
 
 ## Exit criteria
-- [ ] The cause is named with the step 1 table in Deviations.
-- [ ] The walk-ref motion spec asserts ratio >= 0.9 and max still <= 50 ms in Chromium and WebKit, was seen red before the fix, and is green after it (pasted `pnpm test:slow browser -t walk-ref` line).
-- [ ] The viewer-stall fade test and the `analyseMotion` / `analyseFade` unit tests exist, pass, and were seen red.
-- [ ] No golden, budget or baseline changed. `[gc]` multiplayer pages stay within budget.
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The cause is named with the step 1 table in Deviations.
+- [x] The walk-ref motion spec asserts ratio >= 0.9 and max still <= 50 ms in Chromium and WebKit, was seen red before the fix, and is green after it (pasted `pnpm test:slow browser -t walk-ref` line).
+- [x] The viewer-stall fade test and the `analyseMotion` / `analyseFade` unit tests exist, pass, and were seen red.
+- [x] No golden, budget or baseline changed. `[gc]` multiplayer pages stay within budget.
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test:slow browser -t walk-ref` · `pnpm test netcode -t interp` · `node --test scripts/lib/device-walk-checks.test.mjs` (targeted, foreground).
@@ -82,3 +82,4 @@ Guesses (i) Hold, (ii) stale slot, (iii) skipped frames: none; `sample()` units 
 5. Unit tests are vitest in `scripts/lib/device-walk-ref.test.mjs` (`pnpm test unit -t "device-walk"`, 189 pass), not `node --test device-walk-checks.test.mjs` (the brief's verification line names a runner these files do not use).
 
 **Not verified / notes.** A late-joining client previously lagged by (host tick x 50 ms) / 10 for the whole session (about 17 s lag at a 19 s world; a day-old world would not have converged in the first hour): this also touched `tick_fraction` consumers other than interpolation, whose own tests pass. Phones not run. `pnpm test` / `pnpm lint` in full left to the orchestrator.
+- **Gate (orchestrator):** `pnpm test && pnpm lint` green (rust 801, unit 586, wasm 172, netcode 147, browser 256 in 44 s of 48). Inject-fail-revert re-run by the orchestrator: the `host_clock_primed` branch disabled -> `interpolation/late_joiner_remote_moves_every_frame` red (`expected 0.167 to be >= 0.9`), reverted. Existing-test edits in `device-walk-ref.test.mjs` (the never-fading judge case replaced by vanish cases) accepted: they follow ADR 0013. Untracked: about 14 % of rAFs re-read the previous `frame_seq` (worker publish jitter), excluded from the ratio as `repeated_frames`; not charged here.
