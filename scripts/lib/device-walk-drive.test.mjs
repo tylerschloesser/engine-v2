@@ -1078,6 +1078,84 @@ describe('device-walk drive: the iOS backend without a phone', () => {
     expect(acts.at(-1)).toBe('com.apple.mobilesafari')
   })
 
+  test('device-walk drive: one WDA session for the whole round, logged with its number and time', async () => {
+    const logs = []
+    const calls = []
+    const call = async (method, path, body) => {
+      calls.push(`${method} ${path}`)
+      if (path === '/session') return { sessionId: 'SID' }
+      if (body?.script === 'mobile: getContexts')
+        return [{ id: 'WEBVIEW_1', title: '', url: 'https://x.example/device.html' }]
+      return null
+    }
+    const b = createIosBackend({ call, sleep: async () => {}, log: (l) => logs.push(l) })
+    await b.open('https://x.example/device.html')
+    await b.readPage('1')
+    await b.rotate('landscape')
+    await b.screenshot('/dev/null').catch(() => {})
+    expect(calls.filter((c) => c === 'POST /session')).toHaveLength(1)
+    expect(b.sessionCount()).toBe(1)
+    expect(logs.filter((l) => /^ios: WDA session #\d+/.test(l))).toEqual([
+      expect.stringMatching(
+        /^ios: WDA session #1 \(start\): starting \(xcodebuild\) at \d{4}-\d\d-\d\dT/,
+      ),
+    ])
+  })
+
+  test('device-walk drive: a session Appium dropped is replaced by one that reuses the running WDA, and the call goes on', async () => {
+    const logs = []
+    const posts = []
+    let dropped = false
+    const call = async (method, path, body) => {
+      if (path === '/session') {
+        posts.push(body.capabilities.alwaysMatch)
+        return { sessionId: posts.length === 1 ? 'S1' : 'S2' }
+      }
+      if (path === '/session/S1/orientation' && !dropped) {
+        dropped = true
+        throw new Error(
+          'POST /session/S1/orientation: invalid session id: A session is either terminated or not started',
+        )
+      }
+      return null
+    }
+    const b = createIosBackend({ call, sleep: async () => {}, log: (l) => logs.push(l) })
+    await b.start()
+    await b.rotate('landscape')
+    expect(posts).toHaveLength(2)
+    expect(posts[1]['appium:useNewWDA']).toBe(false)
+    expect(b.sessionCount()).toBe(2)
+    expect(b.sessions().map((x) => x.why)).toEqual(['start', 'reconnect'])
+    expect(logs.some((l) => /reconnecting to the running WDA \(no new xcodebuild\)/.test(l))).toBe(
+      true,
+    )
+  })
+
+  test('device-walk drive: the passcode sheet (WDA code 65) is one clear line and one pause, then the tool stops; no loop', async () => {
+    process.env.IOS_SHEET_PAUSE_S = '0'
+    try {
+      const logs = []
+      let posts = 0
+      const call = async (method, path) => {
+        if (path === '/session') {
+          posts++
+          throw new Error(
+            'POST /session: unknown error: Unable to launch WebDriverAgent. Original error: xcodebuild failed with code 65.',
+          )
+        }
+        return null
+      }
+      const b = createIosBackend({ call, sleep: async () => {}, log: (l) => logs.push(l) })
+      await expect(b.start()).rejects.toThrow(
+        /passcode sheet.*Tyler must enter the passcode or turn the passcode off/,
+      )
+      expect(posts).toBe(2)
+      expect(logs.filter((l) => /passcode sheet/.test(l))).toHaveLength(1)
+    } finally {
+      delete process.env.IOS_SHEET_PAUSE_S
+    }
+  })
+
   test('device-walk drive: only a webview showing one of our pages is ever entered (extension, about:blank and error pages are not)', async () => {
     const { b, calls } = make({
       'execute/sync': (body) =>

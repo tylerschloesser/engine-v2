@@ -148,6 +148,8 @@ export function createIosBackend(o = {}) {
     starting: null,
     context: null,
     webName: null,
+    sessions: [], // every WDA session this tool asked for: { at, why }
+    reconnecting: null,
     origins: new Set(),
     cal: new Map(), // `${w}x${h}` -> { offX, offY }
     lowPower: false,
@@ -155,12 +157,13 @@ export function createIosBackend(o = {}) {
     orientation: 'PORTRAIT',
     autolock: null, // the Auto-Lock label found before the round, set back by cleanup
   }
-  const call = async (m, path, b, t) => {
-    if (!process.env.IOS_TRACE) return raw(m, st.sid ? `/session/${st.sid}${path}` : path, b, t)
+  const traced = async (m, path, b, t) => {
+    const full = st.sid ? `/session/${st.sid}${path}` : path
+    if (!process.env.IOS_TRACE) return raw(m, full, b, t)
     const t0 = Date.now()
     const brief = JSON.stringify(b ?? '').slice(0, 90)
     try {
-      const v = await raw(m, st.sid ? `/session/${st.sid}${path}` : path, b, t)
+      const v = await raw(m, full, b, t)
       log(
         `ios> ${m} ${path} ${brief} (${Date.now() - t0} ms) -> ${JSON.stringify(v)?.slice(0, 80)}`,
       )
@@ -170,6 +173,18 @@ export function createIosBackend(o = {}) {
         `ios> ${m} ${path} ${brief} (${Date.now() - t0} ms) FAILED ${String(e.message).slice(0, 100)}`,
       )
       throw e
+    }
+  }
+  // One session for the whole round. If Appium says the session is gone (its idle timeout, a crash) the call is
+  // made again on a session that reuses the WDA already running on the phone (`useNewWDA: false`): no new xcodebuild.
+  const call = async (m, path, b, t) => {
+    try {
+      return await traced(m, path, b, t)
+    } catch (e) {
+      if (!st.sid || !/invalid session id|session is either terminated/i.test(String(e.message)))
+        throw e
+      await reconnect()
+      return traced(m, path, b, t)
     }
   }
   const exec = (name, args = {}) => call('POST', '/execute/sync', { script: name, args: [args] })
@@ -193,29 +208,70 @@ export function createIosBackend(o = {}) {
   }
 
   /** Appium, then a session (WDA starts with it): up to about 4.5 min the first time. Idempotent. */
+  const PASSCODE_SHEET =
+    'iPhone shows the XCTest passcode sheet ("Enter iPhone Passcode for XCTest: Enable UI Automation"): Tyler must enter the passcode or turn the passcode off'
+
+  /**
+   * Create the one Appium/WDA session of this tool. Every `POST /session` that starts WDA (an xcodebuild launch)
+   * is logged with its number and time (`st.sessions`), because iOS asks for the passcode on each new one.
+   * `xcodebuild failed with code 65` is what the passcode sheet looks like from here: print ONE clear line, wait
+   * a while for it to be dealt with (and for the last WDA to go), and try once more; if it fails the same way
+   * again the tool stops with that message instead of asking again.
+   */
+  async function newSession(extraCaps = {}, why = 'start') {
+    const t0 = Date.now()
+    let sheetSeen = false
+    for (;;) {
+      st.sessions.push({ at: new Date().toISOString(), why })
+      log(
+        `ios: WDA session #${st.sessions.length} (${why}): starting${extraCaps.useNewWDA === false ? ' (reusing the running WDA)' : ' (xcodebuild)'} at ${st.sessions.at(-1).at}`,
+      )
+      try {
+        const v = await raw('POST', '/session', {
+          capabilities: { alwaysMatch: { ...CAPS, ...extraCaps } },
+        })
+        st.sid = v.sessionId
+        log(`ios: session ${st.sid} after ${Math.round((Date.now() - t0) / 1000)} s`)
+        return
+      } catch (e) {
+        const wda = /WebDriverAgent|xcodebuild/i.test(String(e.message))
+        if (!wda) throw e
+        try {
+          spawnSync('pkill', ['-f', 'APPIUM_XCODEBUILD_WDA_MARKER'])
+        } catch {}
+        if (sheetSeen)
+          throw new Error(
+            `ios: ${PASSCODE_SHEET}. WDA failed to start twice (${String(e.message).slice(0, 120)})`,
+          )
+        sheetSeen = true
+        log(`ios: ${PASSCODE_SHEET}. Waiting ${Math.round(PAUSE_MS / 1000)} s, then one more try.`)
+        await wait(PAUSE_MS)
+      }
+    }
+  }
+  const PAUSE_MS = Number(process.env.IOS_SHEET_PAUSE_S ?? 120) * 1000
+
+  async function reconnect() {
+    if (st.reconnecting) return st.reconnecting
+    const old = st.sid
+    st.reconnecting = (async () => {
+      log(`ios: session ${old} is gone; reconnecting to the running WDA (no new xcodebuild)`)
+      st.sid = null
+      st.context = null
+      st.webName = null
+      await newSession({ 'appium:useNewWDA': false }, 'reconnect')
+    })().finally(() => {
+      st.reconnecting = null
+    })
+    return st.reconnecting
+  }
+
+  /** Appium, then the session (WDA starts with it). Idempotent. */
   function start() {
     st.starting ??= (async () => {
       await startAppium()
       log('ios: starting the Appium session (WDA may take minutes the first time)')
-      const t0 = Date.now()
-      // WDA sometimes fails to launch right after the last session ended (xcodebuild exit 65): stop what is left
-      // of it and ask again, up to three times. Nothing of a check has run yet, so this is not a retry of a result.
-      let v
-      for (let attempt = 1; ; attempt++) {
-        try {
-          v = await raw('POST', '/session', { capabilities: { alwaysMatch: CAPS } })
-          break
-        } catch (e) {
-          if (attempt >= 3 || !/WebDriverAgent|xcodebuild/i.test(String(e.message))) throw e
-          log(`ios: WDA did not start (attempt ${attempt}): ${String(e.message).slice(0, 120)}`)
-          try {
-            spawnSync('pkill', ['-f', 'APPIUM_XCODEBUILD_WDA_MARKER'])
-          } catch {}
-          await wait(8000)
-        }
-      }
-      st.sid = v.sessionId
-      log(`ios: session ${st.sid} after ${Math.round((Date.now() - t0) / 1000)} s`)
+      await newSession({}, 'start')
     })()
     return st.starting
   }
@@ -512,6 +568,9 @@ export function createIosBackend(o = {}) {
     hideLagMs: 300,
     closeStaleTabs,
     start,
+    /** WDA sessions asked for so far (each one is an xcodebuild launch unless it reused the running WDA). */
+    sessionCount: () => st.sessions.length,
+    sessions: () => [...st.sessions],
     /** A raw call inside the session (diagnostics and the odd one-off). */
     raw: (m, p, b) => call(m, p, b),
     exec,
