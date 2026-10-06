@@ -93,7 +93,7 @@ When: M16 ticked (`PRE-PLAN.md` §8 item 9: first on-device run of the slice).
 - [ ] **M16-round-trip** (`0004`). *Steps:* tap the page's Paint control 10 times. *Pass:* HUD shows `confirmed 10`, `rejected 0`, `ring drops 0`; each result appears with no perceptible delay.
 - [ ] **M16-coexist** (`0015` §5 whole-tab target; `0020` §10). *Steps:* play and pan for 10 min. *Pass:* no reload, no visible hitch, `engine_mem_grows` = 0 on every instance. *If it fails:* the smaller-arena parameters of M11-memory, then the plan edit of M11-memory.
 - [ ] **M16-background** (`simulation.md`, idle worlds). *Steps:* another app for 30 s and return; lock the screen for 60 s and return. *Pass:* frame loop and tick loop resume without a reload; the HUD `tick` did not advance while hidden.
-- [ ] **M16-low-power** (`0019` Context, time-based motion). *Steps:* turn Low Power Mode on, pan and flick. *Pass:* motion speed unchanged at the halved frame rate.
+- [ ] **M16-low-power** (`0019` Context, time-based motion). *Steps:* turn Low Power Mode on, pan and flick. *Pass:* motion speed unchanged at the halved frame rate: the scripted flick's glide distance at the halved rate is at least 0.95 and at most 1.05 of the one at the normal rate.
 - [ ] **M16-android** *(Android. **Not run: no device** (Q5). Skipped; never tick.)*. All items in Chrome.
 
 **Run on:** <device, OS, date>; **result:** <per item>

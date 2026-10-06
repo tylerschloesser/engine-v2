@@ -237,11 +237,13 @@ workersReady = true
 // camera`'s own CSS-pixel one, `pxPerTile`'s own formula against `renderer.viewport`.
 let lastCameraT: number | undefined
 let framesRendered = 0
+let lastFrameDtMs = 0
 const PAN_TILES_PER_SECOND = 4 // `device.ts`'s own scripted pan
 function onCamera(): void {
   const t = performance.now()
   const dtMs = lastCameraT === undefined ? 0 : t - lastCameraT
   lastCameraT = t
+  lastFrameDtMs = dtMs
   framesRendered += 1
   if (autopan) client.cameraState.centreX += PAN_TILES_PER_SECOND * (dtMs / 1000)
   client.camera.tick(dtMs) // real pan/pinch/wheel/WASD/inertia + semantic recognition
@@ -608,6 +610,8 @@ check.readings = () => {
     centre_y: r3(cam.centreY),
   }
 }
+const FLICK_STEP_MS = 50 / 3
+const FLICK_INERTIA_TAU_MS = 325 // camera.ts INERTIA_TAU_MS (0019 §3)
 const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 check.act = {
   /** One Paint at `(x, y)`; resolves with the host's verdict and the click-to-verdict time in ms. */
@@ -627,25 +631,47 @@ check.act = {
     })
   },
   /**
-   * A scripted one-finger flick (M16-low-power): `px` CSS pixels right in six ~16 ms steps, the pointer
+   * A scripted one-finger flick (M16-low-power): `px` CSS pixels right in six steps, the pointer
    * lifted at speed, then the camera glides for `settleMs`. Resolves with how far the centre went, in
-   * tiles. Time-based motion (0019) means the distance must not depend on the frame rate.
+   * tiles. Time-based motion (0019) means the distance must not depend on the frame rate. The samples
+   * carry computed times (`FLICK_STEP_MS` apart, `up` at the last move's time), not `performance.now()`,
+   * so the release velocity is the same whatever the timers do (the timers only pace the injection);
+   * `spacingMaxMs` is the real gap the timers gave, `releaseVx/Vy` the velocity the camera took (tiles/s).
    */
   flick: async (arg) => {
     const { px = 360, settleMs = 1600 } = (arg ?? {}) as { px?: number; settleMs?: number }
     const x0 = Math.round(window.innerWidth * 0.25)
     const y = Math.round(window.innerHeight * 0.5)
     const c0 = { x: client.cameraState.centreX, y: client.cameraState.centreY }
-    injectPointer(client, 'down', 7, x0, y, performance.now(), 'touch')
+    const t0 = performance.now()
+    let spacingMaxMs = 0
+    let prev = t0
+    injectPointer(client, 'down', 7, x0, y, t0, 'touch')
     for (let i = 1; i <= 6; i++) {
       await sleepMs(16)
-      injectPointer(client, 'move', 7, x0 + (px * i) / 6, y, performance.now(), 'touch')
+      const now = performance.now()
+      spacingMaxMs = Math.max(spacingMaxMs, now - prev)
+      prev = now
+      injectPointer(client, 'move', 7, x0 + (px * i) / 6, y, t0 + i * FLICK_STEP_MS, 'touch')
     }
-    injectPointer(client, 'up', 7, x0 + px, y, performance.now(), 'touch')
+    injectPointer(client, 'up', 7, x0 + px, y, t0 + 6 * FLICK_STEP_MS, 'touch')
+    // The release velocity is derived on the next frame, which also takes its first decay step: undo it.
+    const f = framesRendered
+    while (framesRendered === f) await sleepMs(4)
+    const undo = Math.exp(-lastFrameDtMs / FLICK_INERTIA_TAU_MS)
+    const releaseVx = client.cameraState.velocityX / undo
+    const releaseVy = client.cameraState.velocityY / undo
     await sleepMs(settleMs)
     const dx = client.cameraState.centreX - c0.x
     const dy = client.cameraState.centreY - c0.y
-    return { tiles: r3(Math.hypot(dx, dy)), dx: r3(dx), dy: r3(dy) }
+    return {
+      tiles: r3(Math.hypot(dx, dy)),
+      dx: r3(dx),
+      dy: r3(dy),
+      releaseVx: r3(releaseVx),
+      releaseVy: r3(releaseVy),
+      spacingMaxMs: r3(spacingMaxMs),
+    }
   },
 }
 

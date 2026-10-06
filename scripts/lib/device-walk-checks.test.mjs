@@ -285,3 +285,18 @@ describe('device-walk criteria', () => {
     expect(read(o, 'nope.*.p', 'max')).toBeNull()
   })
 })
+
+describe('device-walk checks: M16-low-power', () => {
+  const run = (distanceRatio) =>
+    evaluate(CHECKS['M16-low-power'], {
+      lowPower: { detected: true, p50Normal: 16.7, p50Low: 33.4, distanceRatio, releaseRatio: 1 },
+    })
+  test('device-walk checks: flick ratio fails outside 0.95-1.05', () => {
+    expect(run(0.768).verdict).toBe('fail')
+    expect(run(1.0).verdict).toBe('pass')
+    expect(run(0.95).verdict).toBe('pass')
+    expect(run(1.05).verdict).toBe('pass')
+    expect(run(1.06).verdict).toBe('fail')
+    expect(run(1.06).criteria.find((c) => !c.ok).name).toBe('flick_distance_ratio_max')
+  })
+})

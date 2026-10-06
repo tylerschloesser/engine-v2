@@ -728,7 +728,7 @@ export const CHECKS = {
     judges: [],
   },
   'M16-low-power': {
-    pass: '39cfc710',
+    pass: 'f2e7bbb0',
     class: 'auto',
     signal:
       'Low Power Mode as a ~30 Hz rAF (the agent recorder); one scripted flick (__check.act.flick) at normal cadence, one at the halved one',
@@ -745,19 +745,24 @@ export const CHECKS = {
         name: 'flick_distance_ratio',
         source: 'lowPower.distanceRatio',
         op: '>=',
-        limit: null,
-        ref: 'none: the Pass text says unchanged, so the ratio is shown to the judge',
-        judge: 'always',
+        limit: 0.95,
+        ref: 'pass',
+      },
+      {
+        name: 'flick_distance_ratio_max',
+        source: 'lowPower.distanceRatio',
+        op: '<=',
+        limit: 1.05,
+        ref: 'pass',
       },
     ],
     metrics: [
       { name: 'rafp50_normal_ms', source: 'lowPower.p50Normal' },
       { name: 'rafp50_low_power_ms', source: 'lowPower.p50Low' },
+      { name: 'flick_release_ratio', source: 'lowPower.releaseRatio' },
     ],
     acts: ['turn Low Power Mode on'],
-    judges: [
-      'flick distance at the halved frame rate against the one at 60 Hz (ratio near 1 = unchanged)',
-    ],
+    judges: [],
   },
   'M17b-harness-desktop-safari': {
     pass: '4c162c7f',
