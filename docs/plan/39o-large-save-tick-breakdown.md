@@ -47,4 +47,27 @@ Any optimisation: the follow-up brief owns it. Phone runs: the orchestrator's. `
 After landing, the orchestrator runs M39-large-save driven on the Pixel (and on the iPhone when its passcode is off) and writes the optimisation brief from the per-part numbers.
 
 ## Deviations
-(filled in during Phase 3)
+Commits: `8774c8d` (step 1, engine split), `74310d0` (step 2, meter, readings, check metrics, test).
+
+**Seams.**
+- `packages/engine/src/sab/control.ts`: `CONTROL_BLOCK_INT32S` 69 -> 74; words `CB_SIM_SEAL_US` 69, `CB_SIM_ONETICK_US` 70, `CB_SIM_FRAME_US` 71, `CB_SIM_RESYNC_US` 72, `CB_SIM_CATCHUP` 73; `PROFILE_SEAL|TICK|FRAME|RESYNC|CATCHUP` (0-4), `PROFILE_SLOTS` 5. All integer microseconds except the catch-up count.
+- `SimHost.profile: Int32Array | null` (`server.ts`, `null` by default; the sim worker sets a preallocated one only under `test.timing`). `runOneTick` times seal, `sim_tick` and the frame build and send over all connections, only for the paced tick (`catchingUp` skips the catch-up ticks, whose count lands in `PROFILE_CATCHUP`); `runPacedTick` times the whole `resync()` (catch-up and warming included, `max(1, us)` so 0 means "no resync"). Off the bench: one `null` check per site, no clock read.
+- The sim worker zero-fills the profile before the timed pass and copies it into the words before `CB_SIM_TICK_US` (itself before `CB_SIM_TICKS_RUN`); `CB_SIM_TICK_US` is unchanged. `BenchProbe` (`engine/test`) gains `sealUs()`, `simTickUs()`, `frameBuildUs()`, `resyncUs()`, `catchupTicks()`.
+- `games/reference/src/bench-stats.ts` (new; `Rolling` moved here, plus `p50`, `quantile`, `sum`, and `createPartStats`) so the unit test needs neither engine nor DOM. HUD: two new lines (`tick p50/p95`, then the parts). `readings()` keys: `tick_p50_ms`, `seal_p95_ms`, `sim_tick_p50_ms`, `sim_tick_p95_ms`, `frame_build_p95_ms` (not `frame_p95_ms`, which is the client worker's), `resync_p95_ms`, `catchup_ticks_per_10s`. `resync_p95_ms` is over the passes that ran a resync only.
+- `checks.mjs` M39-large-save: seven metrics added (medians of p50, maxima of p95); Pass text, hash and criteria untouched (`pnpm test unit -t "bench meter|device-walk"`: 202 pass).
+
+**Tests, seen red.** `games/reference/src/bench-stats.test.ts`, three tests. Red 1 (my arithmetic, fixed): `expected 1.096 to be 1.092`. Red 2 (mutation: whole-pass sample pushed as the `sim_tick` value, then reverted): `AssertionError: expected 0.5 to be 1` (exact p50 test) and `expected 11.372 to be 11.472` (whole-pass p95 equals a plain `Rolling`).
+
+**Zero-GC.** No `[gc]` page sets `timing` (only `bench.ts` does), so none covers the timing-on path; I added no browser test. The timing-off path changed (null checks in `runOneTick`/`runPacedTick`), so I ran `pnpm test browser -t "sim-paced|zero_gc|neg_control_snapshot|input|sim"`: `browser pass 58 tests   31s/48s`, which includes `[gc] sim-paced clean`, `[gc] sim clean`, `[gc] input clean`, `zero_gc_singleplayer_with_snapshot`, `input: inputRing drops 0` and the negative controls. Timing on: `Math.round`, clock reads and the `Int32Array` slots allocate nothing persistent beyond the clock's number boxes; unmeasured.
+
+**Desktop reference** (this Mac, headless Chromium `--enable-unsafe-webgpu`, `dist-bench`, `?bench=large-save&scale=N`, 60 s, 1202 ticks, 0 catch-up ticks, `engine_mem_grows` 0; driven by a scratch script outside the repo; machine load average about 4, a shared host). Values are the median over the five 10 s readings taken at 10..50 s (max in brackets), ms:
+
+| scale | sim_tick p50 | sim_tick p95 | whole tick p50 | whole tick p95 | seal p95 | frame build p95 | resync p95 | us per 1000 furnaces (sim_tick p50) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 4.615 (4.885) | 5.56 (6.565) | 5.115 | 6.155 (7.165) | 0.015 | 0.65 (0.66) | 0.07 (0.095) | 17.6 |
+| 4 | 1.11 (1.16) | 1.955 (2.41) | 1.435 | 2.535 (3.035) | 0.015 | 0.525 (0.655) | 0.045 (0.13) | 16.9 (x4) |
+| 16 | 0.28 (0.305) | 0.555 (0.59) | 0.475 | 0.97 (1.07) | 0.02 | 0.37 (0.405) | 0.055 (0.07) | 17.1 (x16) |
+
+Reading: `sim_tick` is about 90 % of the pass at scale 1 and per furnace flat (17-18 ns) from 1/16 to full scale, so it is compute bound, not cache bound, on this desktop; the frame build does not scale with the save (it follows the view, 0.4-0.65 ms); seal and resync are noise (under 0.1 ms). The p95 over p50 spread of `sim_tick` (5.56 vs 4.6) is the next thing to explain on a phone. One readings dump (scale 1, reading at 50 s): `tick_p95_ms 6.375, tick_p50_ms 5.03, seal_p95_ms 0.015, sim_tick_p50_ms 4.57, sim_tick_p95_ms 5.56, frame_build_p95_ms 0.655, resync_p95_ms 0.07, catchup_ticks_per_10s 0, main_p95_ms 0.335, frame_p95_ms 0.7`. HUD at scale 1: `tick p50/p95: 5.03 / 6.38 ms` then `seal p95 0.01, sim_tick p50/p95 4.57 / 5.56, frame build p95 0.66, resync p95 0.07 ms; catch-up ticks/10s 0`.
+
+Note for the follow-up: this desktop single-player `sim_tick` (4.6 ms) is above the 3.1-4.2 ms of M36's HUD evidence, with a loaded host; compare phones against a same-day desktop run.
