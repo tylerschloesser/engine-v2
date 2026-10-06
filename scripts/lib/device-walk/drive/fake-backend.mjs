@@ -21,6 +21,7 @@ export function createFakeBackend(o = {}) {
     tiles_across: () => (tiles.length > 1 ? tiles.shift() : tiles[0]),
     "tagName === 'CANVAS'": () => ({ x: view.w / 2, y: view.h / 2 }),
     visibilityState: 'hidden',
+    'act.zoomTo': () => 1,
     "shadowRoot?.querySelector('input')": () => o.judgeShown ?? true,
     "of document.querySelectorAll('button')": () => null,
     '#walk-ring': () => ({ x: 123, y: 234 }),

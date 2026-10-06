@@ -11,6 +11,14 @@ import { finger, NotDrivable } from './backend.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+/** Judge sheets whose screenshot needs the page put in view first: one entry per picture. */
+const JUDGE_VIEWS = {
+  'M18-anchors': [
+    '(window.__check.act.zoomTo({ tiles: 40, x: 0.5, y: 0.5 }), 1)',
+    '(window.__check.act.zoomTo({ tiles: 20, x: 0.5, y: 0.5 }), 1)',
+  ],
+}
+
 /** The walk bar shows a judge sheet (its note field is there). */
 const JUDGE_SHOWN = `!!document.getElementById('walk-bar')?.shadowRoot?.querySelector('input')`
 
@@ -466,9 +474,28 @@ export function devicePerson(backend, ctx = {}) {
           shown = (await backend.readPage(JUDGE_SHOWN).catch(() => false)) === true
           if (!shown) await c.sleep(400)
         }
-        const shot = c.shotPath?.(prompt)
-        if (shot) await backend.screenshot(shot)
-        return { status: 'pending', shot, ...(shown ? {} : { unverified: true }) }
+        // Some sheets are about what is on the screen behind them: the page is set to show it first, once per view
+        // (M18-anchors: the anchors at two zooms; the check leaves the camera where its sweep ended, which on the
+        // iPhone was an empty grey view).
+        const views = JUDGE_VIEWS[prompt.id] ?? [null]
+        const shots = []
+        for (const [i, view] of views.entries()) {
+          if (view) {
+            await backend.readPage(view).catch(() => {})
+            await c.sleep(900)
+          }
+          const path = c.shotPath?.(prompt, i === 0 ? '' : `-${i + 1}`)
+          if (path) {
+            await backend.screenshot(path)
+            shots.push(path)
+          }
+        }
+        return {
+          status: 'pending',
+          shot: shots[0],
+          shots,
+          ...(shown ? {} : { unverified: true }),
+        }
       }
       for (const h of HANDLERS) {
         const m = typeof h.match === 'function' ? h.match(prompt) : h.match.exec(prompt.text)

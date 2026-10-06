@@ -105,7 +105,7 @@ export function startDrive(o) {
   const handled = new Set()
   person.ctx.joinUrl = joinUrl
   person.ctx.passRunner = () => passRunner(backend, { log, joinUrl })
-  person.ctx.shotPath = (p) => join(seriesDir, `${p.id}-${p.n}-judge.png`)
+  person.ctx.shotPath = (p, suffix = '') => join(seriesDir, `${p.id}-${p.n}-judge${suffix}.png`)
 
   const note = (e) => append({ type: 'drive', ...e })
 
@@ -137,12 +137,12 @@ export function startDrive(o) {
       ...(out.error ? { error: out.error } : {}),
     })
     if (out.status === 'pending') {
-      if (out.shot)
+      for (const path of out.shots ?? (out.shot ? [out.shot] : []))
         append({
           type: 'shot',
           id: p.id,
           n: p.n,
-          path: out.shot,
+          path,
           ...(out.unverified ? { unverified: true } : {}),
         })
       // The row stays open for the orchestrator (`--judge`); the walk goes on to the next check.

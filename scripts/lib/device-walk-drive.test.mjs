@@ -337,11 +337,38 @@ describe('device-walk drive: the device person on a recording backend', () => {
       kind: 'judge',
       text: 'the flick glides',
     })
-    expect(out).toEqual({ status: 'pending', shot: '/x/M11-gestures-2-judge.png' })
+    expect(out).toEqual({
+      status: 'pending',
+      shot: '/x/M11-gestures-2-judge.png',
+      shots: ['/x/M11-gestures-2-judge.png'],
+    })
     // The sheet is looked for first (a page read), then the picture; nothing is tapped.
     expect(b.calls.filter((c) => c.m !== 'readPage')).toEqual([
       { m: 'screenshot', args: ['/x/M11-gestures-2-judge.png'] },
     ])
+  })
+
+  test('device-walk drive: the M18-anchors sheet is photographed with the anchors in view, at two zooms', async () => {
+    const b = createFakeBackend()
+    const out = await person(b, {
+      shotPath: (p, suffix = '') => `/x/${p.id}-${p.n}-judge${suffix}.png`,
+    }).answer({
+      id: 'M18-anchors',
+      n: 1,
+      kind: 'judge',
+      text: 'no swim',
+    })
+    expect(out.shots).toEqual(['/x/M18-anchors-1-judge.png', '/x/M18-anchors-1-judge-2.png'])
+    const seq = b.calls.map((c) =>
+      c.m === 'readPage'
+        ? /tiles: 40/.test(c.args[0])
+          ? 'z40'
+          : /tiles: 20/.test(c.args[0])
+            ? 'z20'
+            : 'read'
+        : c.m,
+    )
+    expect(seq.filter((x) => x !== 'read')).toEqual(['z40', 'screenshot', 'z20', 'screenshot'])
   })
 
   test('device-walk drive: the fake backend and the Android backend both implement the interface', () => {
