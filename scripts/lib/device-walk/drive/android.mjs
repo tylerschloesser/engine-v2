@@ -109,6 +109,7 @@ export function createAndroidBackend(o = {}) {
   }
 
   function ensureForward() {
+    if (st.closed) throw new Error('android: the backend is shut down')
     if (st.port) return st.port
     const out = run(['forward', 'tcp:0', 'localabstract:chrome_devtools_remote']).trim()
     st.port = Number(out)
@@ -356,6 +357,7 @@ export function createAndroidBackend(o = {}) {
     },
 
     async cleanup() {
+      st.closed = true // a handler still running after this must not set a forward up again
       const tried = (f) => {
         try {
           f()

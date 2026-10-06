@@ -719,6 +719,15 @@ describe('device-walk drive: the Android backend without a phone', () => {
     expect(adb.filter((c) => /KEYCODE_(SLEEP|POWER)|unplug|input keyevent 26/.test(c))).toEqual([])
   })
 
+  test('device-walk drive: a handler still running after cleanup cannot set an adb forward up again', async () => {
+    const { b, adb } = make()
+    await b.readPage('1').catch(() => {})
+    await b.cleanup()
+    const before = adb.filter((c) => c.startsWith('forward ')).length
+    await expect(b.readPage('1')).rejects.toThrow(/shut down/)
+    expect(adb.filter((c) => c.startsWith('forward ')).length).toBe(before)
+  })
+
   test('device-walk drive: Low Power Mode is NotDrivable on a charging Pixel, and the screen is only ever woken', async () => {
     const { b } = make()
     await expect(b.setLowPower(true)).rejects.toBeInstanceOf(NotDrivable)
