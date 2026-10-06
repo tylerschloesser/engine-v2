@@ -104,6 +104,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 39g | `39g-ios-pinch-nan.md` | iOS pinch froze the camera at a NaN centre (gesture events read `offsetX`, pinch applied twice); found by M11-gestures in the m39-auto round (2026-10-05) | 39f | |
 | [x] | 39h | `39h-mobile-viewport.md` | fixture pages laid out at 980 CSS px on phones: the page-CSS helper's viewport meta lacks `width=device-width` (found by the device-driver spikes, 2026-10-05) | 39g | |
 | [x] | 39i | `39i-flick-direction.md` | a flick glided against the drag since M11 (release velocity not negated); found by the Pixel device-driver spike (2026-10-05) | 39h | |
+| [ ] | 39j | `39j-device-driver.md` | the Mac drives a round on the USB-attached iPhone (Appium/WDA) and Pixel (adb+CDP): no QR, act prompts done by a device person, judges from screenshots (Tyler's request, 2026-10-05) | 39i | Q5 |
 | [ ] | 39 | `39-acceptance.md` | coverage + budget audit, full device checklist, Phase 3 exit | all above | D |
 | [ ] | 39b | `39b-phase-4-handoff.md` | capture what code cannot say in ADRs, `PROMPT.md` for Phase 4. **Phase 3 complete.** | 39 | |
 
