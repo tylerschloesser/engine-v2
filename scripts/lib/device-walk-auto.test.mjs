@@ -354,6 +354,25 @@ describe('device-walk auto', () => {
   })
 })
 
+describe('device-walk auto: a series after the check has its result (M39j)', () => {
+  test("device-walk auto: a late series does not turn the driver's NotDrivable skip into a second verdict", () => {
+    const r = rig(['M23-private'])
+    r.start()
+    appendEvent(r.file, {
+      type: 'result',
+      id: 'M23-private',
+      result: 'skip',
+      by: 'device',
+      notes: 'NotDrivable: x',
+    })
+    r.series('M23-private', 1, { ready: true })
+    const rows = r.events().filter((e) => e.type === 'result' && e.id === 'M23-private')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ result: 'skip', by: 'device' })
+    expect(r.events().some((e) => e.type === 'attempt' && e.status === 'done')).toBe(false)
+  })
+})
+
 describe('device-walk auto: a deferred judge sheet (M39j)', () => {
   test('device-walk auto: a deferred judge sheet stays open while the walk goes on, and a result closes it', () => {
     const r = rig(['M11-gestures', 'M16-slice-boot'])

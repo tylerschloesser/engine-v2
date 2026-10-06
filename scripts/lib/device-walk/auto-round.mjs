@@ -414,6 +414,9 @@ export function createAutoRound({
     const st = foldItem(events, e.id)
     const a = st.attempts.get(e.n)
     if (!it || !a) return
+    // The check already has its result (the driver ended it as NotDrivable while the page was still on its way to
+    // a series): a late series is not a second verdict (it turned a skip into a fail on the iPhone).
+    if (st.result) return
     const data = readData(e.path) ?? { unreadable: true }
     // A reload shows as `hidden`/`pagehide` first (the old document's own events interrupt the attempt);
     // the new document then reports `reloaded`, and for a probe that must not reload that is the result.
