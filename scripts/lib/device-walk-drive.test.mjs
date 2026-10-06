@@ -282,6 +282,21 @@ describe('device-walk drive: the device person on a recording backend', () => {
     expect(seq).toBe('home,poll,poll,poll,returnToBrowser')
   })
 
+  test("device-walk drive: a hidden page that never answers does not hold the walk: the backend's hide lag stands in", async () => {
+    const b = createFakeBackend({ pages: { visibilityState: () => new Promise(() => {}) } })
+    const t0 = Date.now()
+    await person(b, { pollMs: 5 }).answer(
+      act(
+        'Drop 1 of 3 (app-5s): Switch to another app for 0.05 seconds, then come back to this page.',
+      ),
+    )
+    expect(Date.now() - t0).toBeLessThan(2000)
+    expect(b.calls.map((c) => c.m).filter((m) => m !== 'readPage')).toEqual([
+      'home',
+      'returnToBrowser',
+    ])
+  })
+
   test('device-walk drive: what a phone cannot do is NotDrivable with its reason, never a pass', async () => {
     const lock = await run(
       'Lock the screen for 60 seconds, then unlock the phone and come back to this page.',

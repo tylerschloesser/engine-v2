@@ -245,6 +245,8 @@ export function createAndroidBackend(o = {}) {
 
   const api = {
     platform: 'android',
+    // Home to the page's `hidden` event, measured on the Pixel 5 (a 5 s wait showed 4.35 s of absence).
+    hideLagMs: 650,
     /** Ports the phone reaches on this Mac's loopback (`adb reverse`): the fixture servers of a no-tunnel round. */
     async reverse(ports) {
       for (const p of ports) {

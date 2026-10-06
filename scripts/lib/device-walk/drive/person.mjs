@@ -46,16 +46,21 @@ const CANVAS_POINT = `(() => {
 async function leaveFor(backend, ms, ctx) {
   const t0 = Date.now()
   let seen = null
-  for (let i = 0; i < 40; i++) {
-    try {
-      if ((await backend.readPage('document.visibilityState')) === 'hidden') {
-        seen = Date.now()
-        break
-      }
-    } catch {}
+  // Each poll is raced against a short timer: a hidden page that does not answer DevTools (`world.html` did not,
+  // on the Pixel) must not hold the walk; the backend's own `hideLagMs` stands in for the beacon then.
+  const asked = () =>
+    Promise.race([
+      backend.readPage('document.visibilityState').catch(() => null),
+      new Promise((r) => setTimeout(() => r(null), ctx.pollMs ?? 1200)),
+    ])
+  for (let i = 0; i < 40 && Date.now() - t0 < 4000; i++) {
+    if ((await asked()) === 'hidden') {
+      seen = Date.now()
+      break
+    }
     await ctx.sleep(80)
   }
-  const from = seen ?? t0 + ctx.hideLagMs
+  const from = seen ?? t0 + (ctx.hideLagMs ?? backend.hideLagMs ?? 0)
   await ctx.sleep(Math.max(0, ms - ctx.returnLagMs - (Date.now() - from)))
 }
 
@@ -438,7 +443,7 @@ export const ACT_COVERAGE = {
  * orchestrator), `{ status: 'notDrivable', reason }`, `{ status: 'unmatched' }` or `{ status: 'error', error }`.
  */
 export function devicePerson(backend, ctx = {}) {
-  const c = { returnLagMs: 0, hideLagMs: 0, log: () => {}, sleep, ...ctx }
+  const c = { returnLagMs: 0, log: () => {}, sleep, ...ctx }
   return {
     handlers: HANDLERS,
     coverage: ACT_COVERAGE,

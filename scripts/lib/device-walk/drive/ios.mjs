@@ -409,6 +409,7 @@ export function createIosBackend(o = {}) {
 
   const api = {
     platform: 'ios',
+    hideLagMs: 300,
     closeStaleTabs,
     start,
     /** A raw call inside the session (diagnostics and the odd one-off). */
