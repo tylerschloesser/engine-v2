@@ -6,9 +6,37 @@
 // `visibilitychange` with `document.hidden` overridden (`simulateVisibility`), the memory-pressure kill is
 // not simulated at all (a reload is a closed and reopened page), a lost WebGPU device is the page's own
 // device `destroy()`ed through a handle the test's init script keeps. All `@slow @webkit-gpu`.
+import { readdirSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { expect, type Page, test } from '@playwright/test'
 import { ensureBenchBuild } from './support/reference-build.js'
-import { type Final, fake, finalOf, type Handler, start } from './support/walk-rig.js'
+import { type Final, fake, finalOf, type Handler, type Run, start } from './support/walk-rig.js'
+
+/**
+ * What a red M34 round says about itself (M39n): the bot's phases and `diag`, `botView` (roster, circles, the
+ * view it decided on), the phone's phases, each attempt's outcome, and the phone's `why` (which join
+ * condition failed) from the collected series.
+ */
+function diagnose(r: Run): string {
+  const lines: string[] = []
+  for (const e of r.events()) {
+    if (e.type === 'reading') lines.push(`${e.key}#${e.n}: ${JSON.stringify(e.data)}`)
+    else if (e.type === 'attempt')
+      lines.push(
+        `attempt ${e.n} ${e.status ?? 'open'} ${JSON.stringify(e.outcome ?? e.reason ?? '')}`,
+      )
+  }
+  try {
+    const dir = join(dirname(r.file), 'series')
+    for (const f of readdirSync(dir).filter((x) => x.endsWith('.json'))) {
+      const d = JSON.parse(readFileSync(join(dir, f), 'utf8'))
+      if (d?.why || d?.ready === false) lines.push(`series ${f}: ${JSON.stringify(d.why ?? d)}`)
+    }
+  } catch {
+    // no series yet
+  }
+  return lines.join('\n')
+}
 
 const crit = (e: Final, n: string) => e.criteria.find((c) => c.name === n)
 
@@ -256,9 +284,12 @@ test('walk-ref: M34-two-devices (the bot collects, crafts, places, drops and ret
   )
   try {
     const seen = await r.phone(page, { timeoutMs: 380_000 })
-    expect(seen.judged, 'one confirm tap: I see its circle').toBe(1)
+    expect(seen.judged, `one confirm tap: I see its circle\n${diagnose(r)}`).toBe(1)
     const e = finalOf(r, 'M34-two-devices')
-    expect(e, JSON.stringify(e.criteria)).toMatchObject({ result: 'pass', by: 'mixed' })
+    expect(e, `${JSON.stringify(e.criteria)}\n${diagnose(r)}`).toMatchObject({
+      result: 'pass',
+      by: 'mixed',
+    })
     for (const n of [
       'remote_entity_seen',
       'furnace_seen',
@@ -267,6 +298,9 @@ test('walk-ref: M34-two-devices (the bot collects, crafts, places, drops and ret
       'roster_dot_filled_on_return',
     ])
       expect(crit(e, n), n).toMatchObject({ ok: true })
+  } catch (e) {
+    if (e instanceof Error && !e.message.includes('attempt 1')) e.message += `\n${diagnose(r)}`
+    throw e
   } finally {
     await r.stop()
   }
