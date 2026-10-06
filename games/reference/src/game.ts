@@ -43,6 +43,9 @@ export type StartGameOptions = {
    * passes as `test.clock` (Deviations: "one manual clock drives everything"). */
   clock?: Clock
   scheduler?: Scheduler
+  /** Called with the client synchronously after `createClient`, before the first `await` of `startGame`: a
+   * subscriber that must not miss `onLink`/`onUi` events (which never replay) registers here (the check build). */
+  onClient?: (client: Client) => void
   /** The dev-only desync counter (default: a Vite dev server, `import.meta.env.DEV`). */
   dev?: boolean
 }
@@ -95,6 +98,7 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
     ...(opts.test ? { test: opts.test } : {}),
   }
   const client: Client = createClient(options)
+  opts.onClient?.(client)
   // A refused start (`world-busy`, `save-incompatible`) rejects `client.ready` while the GPU setup
   // below is still awaited, before the caller attaches its own handler: mark it handled here so it
   // is never an unhandled rejection. The caller still sees the rejection through `client.ready`.

@@ -33,6 +33,11 @@ if (!support.ok) {
   const benchModule = __BENCH__ ? await import('./bench.js') : undefined
   const bench = benchModule?.benchRequest(location.search)
   const meter = bench ? benchModule?.createBenchMeter() : undefined
+  // The check module is loaded *before* the game starts and subscribes inside `startGame` (`onClient`): the
+  // client's link and Ui events do not replay, and the game's first awaits (GPU init) outlast `online` on a
+  // cold first load (M39n fix round 2).
+  const checkModule = __BENCH__ ? await import('./check.js') : undefined
+  const onClient = checkModule ? { onClient: checkModule.watchClient } : {}
   const game = await startGame(
     bench && meter && benchModule
       ? {
@@ -40,14 +45,15 @@ if (!support.ok) {
           host: benchModule.benchHost(bench.scale),
           scheduler: meter.scheduler,
           test: benchModule.BENCH_TEST_OPTIONS,
+          ...onClient,
         }
-      : { canvas, host: selectHost(location, undefined, { persist: true }) },
+      : { canvas, host: selectHost(location, undefined, { persist: true }), ...onClient },
   )
   const { client } = game
   const benchApi = bench && meter ? meter.start(game, bench) : undefined
   // The check build (M39f): the bench build also carries `window.__check` (`src/check.ts`, never in a
   // release build: `__BENCH__` is a build-time false there, and the module is not in the bundle at all).
-  if (__BENCH__) (await import('./check.js')).installCheck(game, benchApi)
+  checkModule?.installCheck(game, benchApi)
   try {
     await client.ready
     attachHostLifecycle(client) // snapshot and flush when the tab is hidden (M23)

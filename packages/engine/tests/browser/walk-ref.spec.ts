@@ -10,7 +10,15 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { expect, type Page, test } from '@playwright/test'
 import { ensureBenchBuild } from './support/reference-build.js'
-import { type Final, fake, finalOf, type Handler, type Run, start } from './support/walk-rig.js'
+import {
+  type Final,
+  fake,
+  finalOf,
+  type Handler,
+  type Run,
+  sleep,
+  start,
+} from './support/walk-rig.js'
 
 /**
  * What a red M34 round says about itself (M39n): the bot's phases and `diag`, `botView` (roster, circles, the
@@ -303,5 +311,77 @@ test('walk-ref: M34-two-devices (the bot collects, crafts, places, drops and ret
     throw e
   } finally {
     await r.stop()
+  }
+})
+
+// M39n fix round 2: the check build's `window.__check` must see `online` and the first Ui even when its module
+// arrives late. The client's `onLink`/`onUi` do not replay, so a check that subscribes after `startGame`
+// stayed at link 'none' on a cold first load (a cold tunnel, a first GPU init). The delay is injected here
+// only: the check module's response is held for 6 s, long past the connection.
+test('walk-ref: the check build reports link online and the first Ui when check.js arrives late @slow @webkit-gpu', async ({
+  page,
+}) => {
+  test.setTimeout(240_000)
+  await ensureBenchBuild()
+  const serve = (await import(
+    new URL('../../../../scripts/lib/device-walk/spawn-serve.mjs', import.meta.url).href
+  )) as {
+    spawnServe(
+      args: string[],
+      io: { onLine(l: string): void; onExit(c: number): void; env: Record<string, string> },
+    ): { stop(): Promise<void> }
+  }
+  const port = 16800 + (test.info().project.name === 'chromium' ? 0 : 5000)
+  let origin = ''
+  const child = serve.spawnServe(['--ws', '--app', 'reference', '--bench', '--no-build'], {
+    onLine: (l) => {
+      origin = /^DEVICE_SERVE_URL=(\S+)/.exec(l)?.[1] ?? origin
+    },
+    onExit: () => {},
+    env: { ENGINE_TEST_PORT: String(port), ENGINE_WS_PORT: String(port + 1) },
+  })
+  try {
+    for (let i = 0; i < 600 && !origin; i++) await sleep(100)
+    expect(origin, 'device-serve printed its URL').not.toBe('')
+    await page.route(/\/assets\/check-[^/]*\.js$/, async (route) => {
+      await sleep(6000)
+      await route.continue()
+    })
+    await page.goto(`${origin}/#k=`)
+    await page.waitForFunction(
+      () => (window as unknown as { __check?: unknown }).__check,
+      undefined,
+      {
+        timeout: 60_000,
+      },
+    )
+    const r = await page
+      .waitForFunction(
+        () => {
+          const x = (
+            window as unknown as {
+              __check: { readings(): { link: string; ui_seen: boolean } }
+            }
+          ).__check.readings()
+          return x.link === 'online' && x.ui_seen ? x : false
+        },
+        undefined,
+        { timeout: 30_000 },
+      )
+      .catch(async () =>
+        page.evaluate(() =>
+          (window as unknown as { __check: { readings(): unknown } }).__check.readings(),
+        ),
+      )
+    expect(r, 'link and ui_seen after a late check.js').toMatchObject({})
+    const v = (await page.evaluate(() =>
+      (
+        window as unknown as { __check: { readings(): { link: string; ui_seen: boolean } } }
+      ).__check.readings(),
+    )) as { link: string; ui_seen: boolean }
+    expect(v.link, 'link').toBe('online')
+    expect(v.ui_seen, 'ui_seen').toBe(true)
+  } finally {
+    await child.stop()
   }
 })

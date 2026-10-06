@@ -48,18 +48,31 @@ declare global {
   }
 }
 
-export function installCheck(game: StartedGame, bench?: BenchApi): void {
-  const client: Client = game.client
-  let link: LinkState | 'none' = 'none'
-  let ui: RefUi | null = null
-  let uiSeq = 0
+/**
+ * The link and Ui as the client published them. `Client.onLink` and `onUi` are per-event and never replay, so
+ * this subscribes through `watchClient` (called by `startGame`'s `onClient`, synchronously after `createClient`,
+ * before its first `await`): on a first load (a cold tunnel, a first GPU init) `online` and the first Ui
+ * publish otherwise fire before `installCheck` runs and `link` stays 'none' for good (M39n fix round 2).
+ */
+type Seen = { link: LinkState | 'none'; ui: RefUi | null; uiSeq: number }
+const watched = new WeakMap<Client, Seen>()
+export function watchClient(client: Client): void {
+  if (watched.has(client)) return
+  const seen: Seen = { link: 'none', ui: null, uiSeq: 0 }
+  watched.set(client, seen)
   client.onLink((e) => {
-    link = e.state
+    seen.link = e.state
   })
   client.onUi<RefUi>((u) => {
-    ui = u
-    uiSeq++
+    seen.ui = u
+    seen.uiSeq++
   })
+}
+
+export function installCheck(game: StartedGame, bench?: BenchApi): void {
+  const client: Client = game.client
+  watchClient(client) // a no-op when `startGame` already did it at creation
+  const seen = watched.get(client) as Seen
   let frames = 0
   const scratch: DrawRecord[] = []
 
@@ -80,7 +93,7 @@ export function installCheck(game: StartedGame, bench?: BenchApi): void {
   }
 
   function roster(): string[] {
-    return (ui?.roster ?? []).map(
+    return (seen.ui?.roster ?? []).map(
       (p) => `${p.id}:${p.online ? 'online' : 'offline'}:${p.me ? 'me' : 'other'}`,
     )
   }
@@ -146,7 +159,7 @@ export function installCheck(game: StartedGame, bench?: BenchApi): void {
     const fill = button.querySelector<HTMLElement>('.collect-fill')
     const w: Watch = {
       fill,
-      before: ui?.inventory[SLOT.stone] ?? 0,
+      before: seen.ui?.inventory[SLOT.stone] ?? 0,
       lastFill: null,
       resultAt: null,
       fillAtResult: null,
@@ -184,12 +197,12 @@ export function installCheck(game: StartedGame, bench?: BenchApi): void {
 
   const reading = (): Record<string, CheckReading> => {
     const w = world()
-    const u = ui
+    const u = seen.ui
     const r: Record<string, CheckReading> = {
-      link,
+      link: seen.link,
       frames,
       ui_seen: u !== null,
-      ui_seq: uiSeq,
+      ui_seq: seen.uiSeq,
       roster_n: u?.roster.length ?? 0,
       roster_offline_n: u?.roster.filter((p) => !p.online).length ?? 0,
       roster: roster(),
