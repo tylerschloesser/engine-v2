@@ -424,16 +424,29 @@ export function createIosBackend(o = {}) {
     async setLowPower(on) {
       await activate(SETTINGS)
       await wait(800)
-      let sw = await tryEl('accessibility id', 'LOW_POWER_MODE_IDENTIFIER_SWITCH')
-      if (!sw) {
-        const row = await tryEl(
+      const find = () => tryEl('accessibility id', 'LOW_POWER_MODE_IDENTIFIER_SWITCH')
+      let sw = await find()
+      for (let attempt = 0; !sw && attempt < 2; attempt++) {
+        let row = await tryEl(
           '-ios predicate string',
-          `label == 'Battery' AND type == 'XCUIElementTypeCell'`,
+          `label == 'Battery' AND type == 'XCUIElementTypeButton'`,
         )
-        if (!row) throw new Error('ios: no Battery row in Settings')
+        if (!row) {
+          // Settings reopens on the page it was left on (another pane, or this one's sub-page): start it afresh.
+          await native()
+          await exec('mobile: terminateApp', { bundleId: SETTINGS })
+          await wait(500)
+          await activate(SETTINGS)
+          await wait(1200)
+          row = await tryEl(
+            '-ios predicate string',
+            `label == 'Battery' AND type == 'XCUIElementTypeButton'`,
+          )
+        }
+        if (!row) continue
         await call('POST', `/element/${row}/click`)
         await wait(1500)
-        sw = await tryEl('accessibility id', 'LOW_POWER_MODE_IDENTIFIER_SWITCH')
+        sw = await find()
       }
       if (!sw) throw new Error('ios: no Low Power Mode switch')
       const value = async () => String(await call('GET', `/element/${sw}/attribute/value`))
