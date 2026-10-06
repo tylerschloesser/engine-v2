@@ -11,7 +11,7 @@ Scripts here are throwaway-quality plain Node `.mjs` plus one shell script; `wd.
 |---|---|
 | A. safaridriver, no signing | Works once Remote Automation is on (first attempt: "Remote Automation is turned off"). Navigate, JS, `__check.readings()`, one-finger touch actions, screenshot all work. **Two-finger pinch does not: see below.** |
 | B. pymobiledevice3, no signing | Works, no sudo (the CLI falls back to a no-root userspace tunnel by itself). Screenshot, process list, kill, launch by bundle id. URL open needs `xcrun devicectl ... --payload-url` (`pymobiledevice3 webinspector launch` hung, 90 s, with no output). |
-| C. WDA via Appium | Signing works (cert created by `xcodebuild -allowProvisioningUpdates`, team `Z5N9W23WW4`, WDA built and installed). Launch blocked: **"Developer App Certificate is not trusted"**. Tyler must tap Trust (Settings > General > VPN & Device Management). Nothing past that was run. |
+| C. WDA via Appium | Works after Tyler's Trust tap. Rotate, Home and back, real two-finger pinch (both ways), Airplane Mode and Low Power Mode toggles and full screenshots all ran. Page JS is readable through Appium's WEBVIEW context while WDA drives (no Guided Access). Lock/unlock not tried (needs the passcode). |
 
 ## Leg A evidence (`01-probe.mjs`, `02-gestures.mjs`, `03-pinch-debug.mjs`, `04-persist.mjs`, `06-background.mjs`)
 
@@ -77,22 +77,43 @@ Screenshot during the 10 s rAF/GPU window (`device.html`, 10 s rolling windows, 
 p95s moved by 0.1 ms; the >20 ms count hit 7 once (budget 5 per 10 s) and the gpu p95 was also 24.6 on an undisturbed window.
 Inconclusive but suspect: do not screenshot inside a measuring window; screenshot before or after it.
 
-## Leg C (WDA), what was done and what is left
+## Leg C evidence (`ap.mjs`, `11-wda-legs.mjs`, `12-wda-pinch.mjs`, `13` to `19`)
 
-Done: `xcodebuild build-for-testing ... -allowProvisioningUpdates DEVELOPMENT_TEAM=Z5N9W23WW4` created the identity
-`Apple Development: tylerschloesser@gmail.com (33F737MFNK)` (`security find-identity -v -p codesigning` -> 1) and built WDA for
-`com.tylerschloesser.WebDriverAgentRunner`. Appium 4725 with `caps.json` (here) reached the install, then:
-`The application could not be launched because the Developer App Certificate is not trusted` / `profile has not been explicitly trusted`.
+Setup: `appium -p 4725` then `POST /session` with `caps.json` (Xcode team `Z5N9W23WW4`, `updatedWDABundleId com.tylerschloesser.WebDriverAgentRunner`,
+`allowProvisioningUpdates`, `bundleId com.apple.mobilesafari`). Free-team profile: expires in 7 days.
+`xcodebuild build-for-testing -allowProvisioningUpdates` created the cert `Apple Development: tylerschloesser@gmail.com (33F737MFNK)`; the first launch failed
+with "Developer App Certificate is not trusted"; after Tyler's Trust it ran.
 
-Left, in order:
-1. Tyler: phone Settings > General > VPN & Device Management > Apple Development: tylerschloesser@gmail.com > Trust.
-2. `appium -p 4725 &` then `curl -X POST localhost:4725/session -d @caps.json` (the first run also builds, about 3 min; add
-   `appium:usePreinstalledWDA`/`derivedDataPath` after that to skip it). Free-team profiles expire in 7 days: rebuild weekly.
-3. Then try, untested: `mobile: pinch` (scale, velocity) with `bundleId com.apple.mobilesafari`, orientation
-   `POST /session/:id/orientation` {LANDSCAPE}, `mobile: pressButton {name:"home"}`, `mobile: activateApp`, Control Center
-   (swipe from top right, find Low Power Mode / Airplane by accessibility label; on iOS 27 these toggles may need coordinates),
-   `/screenshot`. WDA drives the phone like a human, so Safari + page can run un-automated (no Guided Access banner) while WDA
-   works in the foreground; the page's own readings then need Remote Automation off or a second channel (see below).
+Page readings come from Appium contexts: `GET /contexts` lists `NATIVE_APP` and several `WEBVIEW_*` (Safari extension pages too); switch to each and pick the one whose
+`location.href` contains `device.html`; `execute/sync` then runs page JS (`window.__check.readings()`). `crossOriginIsolated` true. Switch to `NATIVE_APP` to send touches.
+Open the page with `mobile: deepLink {url, bundleId: com.apple.mobilesafari}` (118 ms). Viewport here is 390x844 points, canvas 780x1478 (the page still had the old viewport meta
+in this dist: see surprises).
+
+| Action | Time | Evidence |
+|---|---|---|
+| new session, WDA already running | 3 to 4 s | |
+| new session, WDA not running (cold start) | up to 4.5 min | first call timed out in my script at 250 s while WDA was still starting; retry then took 28 s total. Use a 10 min client timeout. |
+| rotate to LANDSCAPE (`POST /orientation`) | 1.0 s (+2.5 s settle) | readings `orientation: landscape`, canvas 1688x780, one `resize` event 844x280; PORTRAIT 0.5 s back: `portrait`, 780x1478 |
+| `mobile: pressButton home`, 5 s, `mobile: activateApp` | 0.5 s + 0.3 s | page got `visibilitychange` `hidden` at 31.997 s and `visible` at 36.179 s; `frames` kept counting after return; no reload |
+| W3C two-touch pinch via WDA `POST /actions` | 1.3 to 1.4 s each | page sees 2 pointerIds, `gesturestart`, ~37 `gesturechange`, 2 `pointerup`; `visualViewport.scale` stays 1 |
+| `mobile: pinch {scale, velocity}` | 0.9 to 3.3 s | real two-finger events arrive, but `scale 2.5` left `tiles_across` at 12 (already at its minimum) and `scale 0.3` over the page opened Safari's tab overview once (the screenshot showed it): prefer W3C actions inside the page |
+| full-screen screenshot (`GET /screenshot`) | 0.25 to 0.6 s | PNG 1170x2532 with status bar and Safari chrome |
+| open Control Center (`mobile: dragFromToForDuration` 360,2 -> 360,500) | 2.3 to 2.6 s | |
+| tap Airplane Mode tile (`mobile: tap 194,163`) on, then off | 0.6 s, 0.7 s | tile `On`, status bar plane icon, Wi-Fi tile `Off`; then `Off`, Wi-Fi back (`.Woodhouse`); ended OFF |
+| Low Power Mode on and off | 2.0 s, 1.8 s | see below; value `0 -> 1 -> 0`, ended OFF |
+
+Pinch results (W3C, two fingers 600 ms, readings `tiles_across`, always finite). Pinch IN (fingers together, zoom out): 12 -> 81.8 -> 256 (limit);
+second run 12 -> 85.0 -> 256. Pinch OUT from 256: 33.6 -> 12 (limit) -> 12. So both limits are reached in a few gestures and nothing went NaN.
+No `visualViewport` change, no page scroll.
+
+Control Center, iOS 27 on this phone: it opens on the connectivity page (Airplane Mode tile, Wi-Fi, AirDrop, Cellular, Bluetooth); the main page has no Low Power Mode tile
+(Add a Control would change Tyler's layout; I tapped `+` once, which put Control Center in edit mode, and left it with Home, not changing anything). The toggle is in
+Settings > Battery: `mobile: activateApp com.apple.Preferences` (session created with `appium:bundleId com.apple.Preferences`), tap the Battery row
+(100,705), then the switch with accessibility id `LOW_POWER_MODE_IDENTIFIER_SWITCH` (click, read attribute `value`). The phone has no SIM ("No SIM"), so Airplane Mode here
+only drops Wi-Fi: the Wi-Fi to cellular and airplane steps of M29 cannot be exercised on this device, but Wi-Fi off/on can.
+
+Not done: lock/unlock (Tyler wants the screen on; WDA unlock needs the passcode). Final state: unlocked, Safari in front, Airplane Mode OFF, Low Power Mode OFF.
+Flaky: the first Control Center drag sometimes lands on the last-used page; Appium and the 4620 server were killed once by an external cleanup mid-run.
 
 ## Per check family
 
@@ -100,30 +121,33 @@ Legend: A = safaridriver, B = pymobiledevice3/devicectl, C = WDA (pending Trust;
 
 | Check | Verdict | Mechanism / what remains |
 |---|---|---|
-| M03 determinism page | fully automatable | A: load `determinism.html`, read banner and `crossOriginIsolated` (verified on device.html). |
-| M08 worldgen ms/chunk | fully automatable | A: load, wait, read page output (bench page text; same read path as `__check`). |
-| M09b fill rate (portrait/landscape 60 s) | caveat | A: portrait readings verified (rAF p50/p95/over20, GPU p95). Landscape needs rotation: C (or H). No screenshots inside the window (B). |
-| M11-boot | fully automatable | A: `isolated`, adapter, `workers_ready`, `delivery` read (verified). |
-| M11-gestures | caveat | A: pan, flick, tap, pull-down, no page zoom/scroll verified. Pinch, rotate: C (`mobile: pinch`, orientation). NaN check readable via `__check`. Two-finger A is impossible. |
-| M11-memory | fully automatable | A: `?probe=memory&probeS=` and read the page (not run here). |
-| M16 slice boot, round-trip | fully automatable | A: tap the Paint control (a tap works), read HUD/`__check`. |
-| M16-coexist 10 min | fully automatable | A, if the session lasts 10 min (not tried; `newCommandTimeout` of safaridriver unknown). |
-| M16-background / low power | still human, C likely | A blocks other apps (Guided Access). C: `activateApp`/Home + Control Center toggles. B can launch other apps only without a session; page state then is unreadable (no session), so the reading must come from the page itself (server-side beacon) or from C. |
-| M18 anchors, pick | caveat | A: taps and pans work; continuous pinch for 30 s needs C. `pick_id` reads via `__check`. |
-| M18-touch-ghost | fully automatable | A: tap then drag; cursor tile readings verified. |
-| M23 OPFS latency, export/import | with caveat | A works for the latency page; the session store is ephemeral. |
-| M23 kill-resume, world-busy, private, hidden-pause | with caveat / H | Kill-resume: B kill + relaunch via devicectl in ordinary Safari, but there is then no automation session to read the HUD (screenshot via B and read it, or an in-page beacon). Private browsing and second tab: C (tab switcher UI). |
-| M29 socket resume (app switch, lock, Wi-Fi to cellular, airplane) | still human | Background and lock need C (Home/lock); airplane and Wi-Fi to cellular need Control Center via C; the on-page link log is readable only without A's block. |
-| M34 two devices | with caveat | A for the phone side with the Mac as the second client (already done by `device-walk` bot partner). |
-| M35 built game, capability screen | fully automatable | A for iPhone boot; the no-`navigator.gpu` case needs Settings toggling (C) or stays on desktop. |
-| M37b renderer recovery under memory pressure | still human | needs several heavy apps in the foreground: C could launch them, not verified. |
-| M38 hosted deployment | fully automatable | A against the hosted URL (https, so secure context without tunnel). Cellular leg: H or C. |
-| M39 acceptance (large save, frame shares, full-game touch, two devices) | with caveat | A for pan/tap scripts and reading the bench HUD; sign-off and "feel" remain H. |
+| M03 determinism page | fully automatable | A: load `determinism.html`, read banner and `crossOriginIsolated` (verified on device.html). Or C's WEBVIEW context. |
+| M08 worldgen ms/chunk | fully automatable | A or C-webview: load, wait, read page output. |
+| M09b fill rate | fully automatable (C) | portrait readings verified; landscape via C `POST /orientation` (verified, canvas 1688x780). No screenshots inside the window (B/C). |
+| M11-boot | fully automatable | A or C-webview: `isolated`, adapter, `workers_ready`, `delivery` read. |
+| M11-gestures | fully automatable (C) | C: pan/flick/tap via W3C touch, pinch both ways via W3C two-touch (verified, finite, limits 12 and 256), rotate, pull-down. A cannot pinch. Judging "world point stays under the finger" needs a position assertion on top. |
+| M11-memory | fully automatable | A or C-webview with `?probe=memory&probeS=`. |
+| M11-pinch-desktop-safari | still human | Mac trackpad; not the phone. |
+| M16 slice boot, round-trip, coexist | fully automatable | C-webview taps and readings; 10 min hold is just time (WDA `newCommandTimeout` 600 s in caps.json; raise it). |
+| M16-background | fully automatable (C) | Home + `activateApp` verified: `hidden` then `visible`, no reload. Lock for 60 s needs the passcode (not tried). |
+| M16-low-power | fully automatable (C) | Settings > Battery switch verified on/off; readings via webview unverified under Low Power. |
+| M18 anchors, pick, fill rate with anchors | fully automatable (C) | continuous pinch and landscape via C; `pick_id` through webview readings. |
+| M18-touch-ghost | fully automatable | A or C. |
+| M23 OPFS latency, export/import | fully automatable (C) | A's session store is ephemeral; C drives real Safari with a persistent store (export needs the download UI: unverified). |
+| M23 kill-resume | with caveat | B kill then `devicectl --payload-url` relaunch restored the tab; read results with the webview after C reattach or by screenshot. |
+| M23 world-busy, private | with caveat | second tab and Private Browsing are Safari UI: C taps (tab overview verified by accident). |
+| M23 hidden-pause | fully automatable (C) | Home + wait 30 s + `activateApp`; read `tick` before and after. |
+| M29 socket resume | with caveat | app switch 5 s / 30 s / 5 min: C. Airplane: C toggle verified (phone has no SIM, so no real cellular fallback; Wi-Fi off/on works). Screen lock: passcode. |
+| M34 two devices | fully automatable | C for the phone, the Mac as second client (the walk's bot partner). |
+| M35 built game, capability screen | with caveat | iPhone boot: C. "no `navigator.gpu`" needs the Safari WebGPU feature flag toggled in Settings > Apps > Safari > Advanced (C can navigate, unverified). |
+| M37b renderer recovery under memory pressure | with caveat | C can launch heavy apps (Camera, pages in other tabs), then return; "memory pressure" is not controllable, results are probabilistic. |
+| M38 hosted deployment | fully automatable | A or C against the real URL; the cellular leg needs a SIM (none). |
+| M39 acceptance | with caveat | scripted large-save / frame-share runs and two-device play via C; "feel" and Tyler's sign-off stay human. |
 
 ## Surprises
-- The automation window renders `device.html` at a 980 px layout width (`viewport-fit=cover` only, no `width=device-width`),
-  `visualViewport.scale 0.398`. Ordinary Safari after a B launch looks identical (screenshot: black page with a green block),
-  so this is the page, not the driver. W3C coordinates are in layout px (0..980 x 0..1756).
+- Under safaridriver the page laid out at 980 px (`visualViewport.scale 0.398`, W3C coordinates 0..980) because the dist then had `viewport-fit=cover` without `width=device-width`;
+  under WDA/ordinary Safari at that dist it laid out at 390 px. The orchestrator says the dist now has the M39h viewport fix (innerWidth about 390); scripts in `02-gestures.mjs` use 980-wide coordinates and need rescaling.
 - Safari relaunched by `devicectl --payload-url` or `dvt launch` with no session open showed the page; the green block in the screenshots was not investigated (Tyler's own look at a normal render is needed).
 - `pymobiledevice3 webinspector launch|opened-tabs` hung even with Web Inspector on; `devicectl` (Xcode, no signing needed) is the working URL opener.
-- Files: `wd.mjs`, `01-probe`, `02-gestures`, `03-pinch-debug`, `04-persist`, `05-screenshot-disturb`, `06-background`, `07-pmd3-lifecycle.sh`, `caps.json`.
+- WDA reads the page and drives real touches at once; safaridriver is only for reads and one-finger touch and blocks the phone. If one tool must be chosen, it is Appium/WDA.
+- Files: `wd.mjs`, `ap.mjs`, `10` to `19` (WDA legs), `01-probe`, `02-gestures`, `03-pinch-debug`, `04-persist`, `05-screenshot-disturb`, `06-background`, `07-pmd3-lifecycle.sh`, `caps.json`.
