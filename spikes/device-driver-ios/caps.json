@@ -1,0 +1,6 @@
+{"capabilities":{"alwaysMatch":{
+ "platformName":"iOS","appium:automationName":"XCUITest","appium:udid":"00008101-001845EE1A82001E",
+ "appium:xcodeOrgId":"Z5N9W23WW4","appium:xcodeSigningId":"Apple Development",
+ "appium:updatedWDABundleId":"com.tylerschloesser.WebDriverAgentRunner","appium:allowProvisioningUpdates":true,
+ "appium:bundleId":"com.apple.mobilesafari","appium:wdaLaunchTimeout":240000,"appium:wdaConnectionTimeout":240000,
+ "appium:showXcodeLog":true,"appium:newCommandTimeout":600}}}

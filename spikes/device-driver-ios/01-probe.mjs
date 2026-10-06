@@ -1,0 +1,15 @@
+import { newSession, sleep } from './wd.mjs'
+const u = process.argv[2]
+const s = await newSession()
+console.log('session', s.id)
+await s.get(u + '/device.html')
+await sleep(6000)
+console.log('title', await s.js('return document.title'))
+console.log('coi', await s.js('return crossOriginIsolated'), 'secure', await s.js('return isSecureContext'))
+console.log('ua', await s.js('return navigator.userAgent'))
+console.log('viewport', await s.js('return [innerWidth,innerHeight,devicePixelRatio,visualViewport.scale,scrollX,scrollY,screen.orientation?.type]'))
+console.log('adapter', await s.js('return window.__check?.adapter ?? document.body.innerText.slice(0,600)'))
+console.log('readings', JSON.stringify(await s.readings()))
+await s.screenshot(process.argv[3] ?? 'probe.png')
+console.log('rect', await s.js('return 1').catch(String))
+await s.end()
