@@ -75,6 +75,24 @@ export async function passRunner(
 }
 
 /**
+ * Did an earlier process answer this prompt? The newest `prompt` event of the same words is older than a `drive`
+ * event for it (an act) or a `defer` (a judge sheet).
+ */
+export function answeredInLog(events, p) {
+  let at = -1
+  events.forEach((e, i) => {
+    if (e.type === 'prompt' && e.id === p.id && e.n === p.n && e.text === p.text) at = i
+  })
+  return events.some(
+    (e, i) =>
+      i > at &&
+      e.id === p.id &&
+      e.n === p.n &&
+      (p.kind === 'judge' ? e.type === 'defer' : e.type === 'drive' && e.text === p.text),
+  )
+}
+
+/**
  * Start driving. `o`: `{ backend, person, file, ids, joinUrl, seriesDir, append(event), settle(), isDone(),
  * log, pollMs }`. Returns `{ ready, stop() }`: `ready` resolves when the runner has been started, `stop()` ends
  * the loop (it does not clean the backend up: the caller does).
@@ -91,10 +109,14 @@ export function startDrive(o) {
 
   const note = (e) => append({ type: 'drive', ...e })
 
-  async function onPrompt(p) {
+  async function onPrompt(p, events) {
     const key = `${p.id}:${p.n}:${p.kind}:${p.text}`
     if (handled.has(key)) return
     handled.add(key)
+    // A prompt an earlier process of this round already answered (a resumed round finds it still open in the log):
+    // not answered again. A judge sheet's screenshot is taken once, while the sheet is on the phone; a second
+    // one on resume would be of whatever page the phone shows then (the runner, in `m39j-full-android`).
+    if (answeredInLog(events, p)) return
     const out = await person.answer(p)
     // DRIVE_SHOTS=<dir>: a screenshot after every answered act prompt (a debugging aid: a prompt is never open in a window).
     if (process.env.DRIVE_SHOTS && p.kind === 'act')
@@ -115,7 +137,14 @@ export function startDrive(o) {
       ...(out.error ? { error: out.error } : {}),
     })
     if (out.status === 'pending') {
-      if (out.shot) append({ type: 'shot', id: p.id, n: p.n, path: out.shot })
+      if (out.shot)
+        append({
+          type: 'shot',
+          id: p.id,
+          n: p.n,
+          path: out.shot,
+          ...(out.unverified ? { unverified: true } : {}),
+        })
       // The row stays open for the orchestrator (`--judge`); the walk goes on to the next check.
       append({ type: 'defer', id: p.id, n: p.n })
       settle()
@@ -145,7 +174,7 @@ export function startDrive(o) {
       const events = readEvents(file)
       for (const p of openPrompts(events, ids)) {
         if (stopped) break
-        await onPrompt(p).catch((e) => log(`drive: ${e.stack ?? e}`))
+        await onPrompt(p, events).catch((e) => log(`drive: ${e.stack ?? e}`))
       }
       await sleep(pollMs)
     }

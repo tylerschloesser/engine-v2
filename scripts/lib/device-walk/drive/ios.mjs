@@ -16,6 +16,7 @@ import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { NotDrivable } from './backend.mjs'
+import { bestEffort } from './deadline.mjs'
 
 const SAFARI = 'com.apple.mobilesafari'
 const SETTINGS = 'com.apple.Preferences'
@@ -78,6 +79,13 @@ export function tapActions(x, y, count = 1) {
   return [{ type: 'pointer', id: 'finger1', parameters: { pointerType: 'touch' }, actions: acts }]
 }
 
+/** Requests to Appium that have not answered yet: `abortAll()` ends them (a shutdown must not wait on a hung call). */
+const INFLIGHT = new Set()
+export function abortAll() {
+  for (const r of INFLIGHT) r.destroy(new Error('aborted: the tool is shutting down'))
+  INFLIGHT.clear()
+}
+
 /** A JSON call to Appium with a long timeout (`node:http`: fetch's own headers timeout is 5 min). */
 export function appiumCall(base, method, path, body, timeoutMs = 900_000) {
   return new Promise((resolve, reject) => {
@@ -113,6 +121,8 @@ export function appiumCall(base, method, path, body, timeoutMs = 900_000) {
         })
       },
     )
+    INFLIGHT.add(req)
+    req.on('close', () => INFLIGHT.delete(req))
     req.on('timeout', () =>
       req.destroy(new Error(`${method} ${path}: timed out after ${timeoutMs} ms`)),
     )
@@ -217,33 +227,54 @@ export function createIosBackend(o = {}) {
   }
   const native = () => ctx('NATIVE_APP')
 
-  /** The webview whose page is one of ours (Safari lists extension pages and other tabs too). */
+  /**
+   * The webviews Safari offers with their pages, without switching into any (`mobile: getContexts`): a Safari
+   * extension's webview, `about:blank` and an error page (`data:text/html`) can hang a switch for ever, so only
+   * a webview whose URL is one of our origins is ever entered.
+   */
+  async function webviews() {
+    const all = await call(
+      'POST',
+      '/execute/sync',
+      { script: 'mobile: getContexts', args: [{ waitForWebviewMs: 0 }] },
+      15_000,
+    )
+    return all
+      .filter((c) => String(c.id).startsWith('WEBVIEW'))
+      .map((c) => ({ id: c.id, title: String(c.title ?? ''), url: String(c.url ?? '') }))
+  }
+  const isOurs = (w) => {
+    try {
+      return st.origins.has(new URL(w.url).origin)
+    } catch {
+      return false
+    }
+  }
+
+  /** Switch into the webview showing one of our pages (the visible one when there are several). */
   async function web() {
     await start()
-    const names = (await call('GET', '/contexts')).filter((x) => String(x).startsWith('WEBVIEW'))
-    for (const w of names) {
-      try {
-        await call('POST', '/context', { name: w }, 8000)
-        st.context = w
-        // A Safari extension's webview may never answer: a short timeout, then the next one.
-        const href = await call(
-          'POST',
-          '/execute/sync',
-          { script: 'return location.href', args: [] },
-          8000,
-        )
-        log(`ios: ${w} is ${String(href).slice(0, 80)}`)
-        if (st.origins.size === 0 || st.origins.has(new URL(href).origin)) {
-          st.webName = w
-          return w
-        }
-      } catch (e) {
-        log(`ios: ${w}: ${String(e.message).slice(0, 100)}`)
+    const mine = (await webviews()).filter(isOurs)
+    if (!mine.length) throw new Error('ios: no webview shows one of our pages')
+    let first = null
+    for (const w of mine) {
+      await call('POST', '/context', { name: w.id }, 8000)
+      st.context = w.id
+      first ??= w.id
+      const vis = await call(
+        'POST',
+        '/execute/sync',
+        { script: 'return document.visibilityState', args: [] },
+        8000,
+      ).catch(() => null)
+      if (vis === 'visible' || mine.length === 1) {
+        st.webName = w.id
+        return w.id
       }
     }
-    st.context = null
-    st.webName = null
-    throw new Error(`ios: no webview of ours among ${names.join(', ') || 'none'}`)
+    st.webName = first
+    await ctx(first)
+    return first
   }
 
   /**
@@ -425,18 +456,35 @@ export function createIosBackend(o = {}) {
           log(`ios: closing stale tabs failed: ${String(e.message).slice(0, 100)}`),
         )
       }
+      // Safari must show our page: wait for a webview whose URL is ours, ask again once (a quick tunnel's name
+      // can take a minute to resolve and Safari shows an error page meanwhile), then give up with a clear message.
+      let seen = ''
+      const showing = async (budgetMs) => {
+        for (let i = 0; i < Math.ceil(budgetMs / 1500); i++) {
+          const ws = await webviews().catch(() => [])
+          const now = ws.map((w) => w.url.slice(0, 50)).join(' | ')
+          if (now !== seen) {
+            log(`ios: Safari shows ${now || 'nothing'}`)
+            seen = now
+          }
+          if (ws.some(isOurs)) {
+            await web()
+            return true
+          }
+          await wait(1500)
+        }
+        return false
+      }
       await native()
       await exec('mobile: deepLink', { url, bundleId: SAFARI })
-      log(`ios: deepLink sent`)
-      for (let i = 0; i < 60; i++) {
-        try {
-          await web()
-          return
-        } catch {
-          await wait(500)
-        }
-      }
-      throw new Error(`ios: Safari never showed ${url}`)
+      if (await showing(60_000)) return
+      log('ios: Safari did not load it in 60 s, opening it again')
+      await native()
+      await exec('mobile: deepLink', { url, bundleId: SAFARI })
+      if (await showing(60_000)) return
+      throw new Error(
+        `ios: Safari did not load ${url} in two minutes (it shows: ${seen || 'nothing'}); is the tunnel up and the phone online?`,
+      )
     },
 
     readPage: (js) => page(js),
@@ -540,25 +588,21 @@ export function createIosBackend(o = {}) {
       writeFileSync(path, Buffer.from(b64, 'base64'))
     },
 
+    /** Best effort and bounded (about 8 s): in-flight calls are ended first, each restore step has its own deadline. */
     async cleanup() {
-      const tried = async (name, f) => {
-        try {
-          await f()
-        } catch (e) {
-          log(`ios cleanup (${name}): ${String(e.message).split('\n')[0]}`)
-        }
-      }
+      abortAll()
+      const step = (name, p, ms = 4000) => bestEffort(p, ms, `ios cleanup (${name})`, log)
       if (st.sid) {
-        if (st.lowPower) await tried('low power', () => api.setLowPower(false))
-        if (st.airplane) await tried('airplane', () => api.setAirplane(false))
-        if (st.orientation !== 'PORTRAIT') await tried('rotation', () => api.rotate('portrait'))
-        await tried('session', () => raw('DELETE', `/session/${st.sid}`))
+        if (st.lowPower) await step('low power', api.setLowPower(false))
+        if (st.airplane) await step('airplane', api.setAirplane(false))
+        if (st.orientation !== 'PORTRAIT') await step('rotation', api.rotate('portrait'), 3000)
+        await step('session', raw('DELETE', `/session/${st.sid}`, undefined, 3000), 3500)
         st.sid = null
       }
       if (st.appium) {
         st.appium.kill('SIGTERM')
         st.appium = null
-        await wait(1500)
+        await wait(500)
         // WDA's xcodebuild is Appium's child but outlives a killed Appium: stop it by its own marker.
         try {
           spawnSync('pkill', ['-f', 'APPIUM_XCODEBUILD_WDA_MARKER'])

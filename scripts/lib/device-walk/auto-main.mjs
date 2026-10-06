@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { startAutoRound } from './auto-cli.mjs'
 import { createAndroidBackend } from './drive/android.mjs'
+import { bestEffort } from './drive/deadline.mjs'
 import { createIosBackend } from './drive/ios.mjs'
 import { startDrive } from './drive/loop.mjs'
 import { devicePerson } from './drive/person.mjs'
@@ -78,18 +79,26 @@ export async function autoCli(o) {
   let backend = null
   // One shutdown, however many callers: a second one (the normal path after a signal) waits for the first,
   // so the process never exits with the phone half restored.
+  // Every step has its own deadline: a hung Appium call or an unanswering page must not hold the shutdown (the
+  // whole of it takes about 10 s at most, then the process exits).
   const shutdown = () =>
     (stopping ??= (async () => {
       ac.abort()
       clearInterval(beat)
       live.set({ phase: 'stopped' })
-      await driver?.stop().catch(() => {})
-      await backend?.cleanup().catch(() => {})
-      await monitor?.close().catch(() => {})
-      await run?.stop().catch(() => {})
+      await bestEffort(driver?.stop(), 2000, 'stopping the drive loop', log)
+      await bestEffort(backend?.cleanup(), 6000, 'restoring the phone', log)
+      await bestEffort(monitor?.close(), 1000, 'closing the monitor', log)
+      await bestEffort(run?.stop(), 4000, 'stopping the servers', log)
     })())
   const bye = (code) => shutdown().finally(() => process.exit(code))
-  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => bye(130))
+  let signals = 0
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'])
+    process.on(sig, () => {
+      if (++signals > 1) process.exit(130) // a second signal does not wait
+      bye(130)
+      setTimeout(() => process.exit(130), 12_000).unref() // and the first does not wait for ever
+    })
   process.on('uncaughtException', (e) => {
     console.error(e)
     bye(1)

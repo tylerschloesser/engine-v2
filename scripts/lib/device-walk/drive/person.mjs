@@ -11,6 +11,9 @@ import { finger, NotDrivable } from './backend.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+/** The walk bar shows a judge sheet (its note field is there). */
+const JUDGE_SHOWN = `!!document.getElementById('walk-bar')?.shadowRoot?.querySelector('input')`
+
 const VIEW = `({ w: innerWidth, h: innerHeight })`
 const CENTRE_OF = (find) => `(() => {
   const el = ${find}
@@ -456,9 +459,16 @@ export function devicePerson(backend, ctx = {}) {
     ctx: c,
     async answer(prompt) {
       if (prompt.kind === 'judge') {
+        // The sheet is the question: wait (up to about 10 s) until the phone shows it, then take the picture, so
+        // the screenshot is of the item's page with its sheet and not of a page the walk has moved on to.
+        let shown = false
+        for (let i = 0; i < 25 && !shown; i++) {
+          shown = (await backend.readPage(JUDGE_SHOWN).catch(() => false)) === true
+          if (!shown) await c.sleep(400)
+        }
         const shot = c.shotPath?.(prompt)
         if (shot) await backend.screenshot(shot)
-        return { status: 'pending', shot }
+        return { status: 'pending', shot, ...(shown ? {} : { unverified: true }) }
       }
       for (const h of HANDLERS) {
         const m = typeof h.match === 'function' ? h.match(prompt) : h.match.exec(prompt.text)

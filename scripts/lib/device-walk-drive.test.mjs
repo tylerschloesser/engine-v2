@@ -18,15 +18,17 @@ import {
   touchScript,
 } from './device-walk/drive/android.mjs'
 import { assertBackend, NotDrivable } from './device-walk/drive/backend.mjs'
+import { bestEffort, withDeadline } from './device-walk/drive/deadline.mjs'
 import { createFakeBackend } from './device-walk/drive/fake-backend.mjs'
 import {
+  abortAll,
   appiumCall,
   createIosBackend,
   pointerActions,
   tapActions,
 } from './device-walk/drive/ios.mjs'
 import { judgeEvent } from './device-walk/drive/judge.mjs'
-import { passRunner, startDrive } from './device-walk/drive/loop.mjs'
+import { answeredInLog, passRunner, startDrive } from './device-walk/drive/loop.mjs'
 import { ACT_COVERAGE, devicePerson, HANDLERS } from './device-walk/drive/person.mjs'
 import { parseChecks } from './device-walk/parse.mjs'
 import { appendEvent, readEvents, replay } from './device-walk/rounds.mjs'
@@ -327,7 +329,10 @@ describe('device-walk drive: the device person on a recording backend', () => {
       text: 'the flick glides',
     })
     expect(out).toEqual({ status: 'pending', shot: '/x/M11-gestures-2-judge.png' })
-    expect(b.calls).toEqual([{ m: 'screenshot', args: ['/x/M11-gestures-2-judge.png'] }])
+    // The sheet is looked for first (a page read), then the picture; nothing is tapped.
+    expect(b.calls.filter((c) => c.m !== 'readPage')).toEqual([
+      { m: 'screenshot', args: ['/x/M11-gestures-2-judge.png'] },
+    ])
   })
 
   test('device-walk drive: the fake backend and the Android backend both implement the interface', () => {
@@ -466,6 +471,69 @@ describe('device-walk drive: the runner page behind a tunnel that does not resol
     })
     expect(b.calls.filter((c) => c.m === 'open')).toHaveLength(2)
     expect(log.filter((l) => /opening it again/.test(l))).toHaveLength(2)
+  })
+})
+
+describe('device-walk drive: a resumed round does not answer twice', () => {
+  const P = (kind, text, extra = {}) => ({
+    type: 'prompt',
+    id: 'M18-anchors',
+    n: 1,
+    kind,
+    text,
+    ...extra,
+  })
+  const p = (kind, text) => ({ id: 'M18-anchors', n: 1, kind, text })
+
+  test('device-walk drive: an act or a judge sheet an earlier process answered is skipped; one asked again is not', () => {
+    const act = 'Rotate the phone to landscape.'
+    const ev = [P('act', act), { type: 'drive', id: 'M18-anchors', n: 1, kind: 'act', text: act }]
+    expect(answeredInLog(ev, p('act', act))).toBe(true)
+    // asked again after the answer (the page restarted): open again
+    expect(answeredInLog([...ev, P('act', act)], p('act', act))).toBe(false)
+    const judge = [P('judge', 'no swim'), { type: 'defer', id: 'M18-anchors', n: 1 }]
+    expect(answeredInLog(judge, p('judge', 'no swim'))).toBe(true)
+    expect(answeredInLog([P('judge', 'no swim')], p('judge', 'no swim'))).toBe(false)
+  })
+
+  test('device-walk drive: a judge sheet that is not on the phone yet is waited for; the shot says when it never showed', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'drive-'))
+    const file = join(dir, 'r.jsonl')
+    for (const e of [
+      { type: 'start', only: null, mode: 'auto' },
+      { type: 'walk', phase: 'start' },
+      { type: 'attempt', id: 'M09b-fill-rate', n: 1, variant: 'fixture', page: 'p', rung: 0 },
+      {
+        type: 'attempt',
+        id: 'M09b-fill-rate',
+        n: 1,
+        status: 'done',
+        outcome: 'judge',
+        criteria: [],
+      },
+      { type: 'prompt', id: 'M09b-fill-rate', n: 1, kind: 'judge', text: 'no visible hitch' },
+    ])
+      appendEvent(file, e)
+    const b = createFakeBackend({ judgeShown: false, pages: { autolock: { runner: false } } })
+    let done = false
+    const d = startDrive({
+      backend: b,
+      person: person(b),
+      file,
+      ids: ['M09b-fill-rate'],
+      joinUrl: 'http://127.0.0.1:1/__walk/runner.html?walk=t',
+      seriesDir: dir,
+      append: (e) => appendEvent(file, e),
+      settle: () => {},
+      isDone: () => done,
+      pollMs: 10,
+    })
+    await d.ready
+    await new Promise((r) => setTimeout(r, 200))
+    done = true
+    await d.stop()
+    expect(readEvents(file).find((e) => e.type === 'shot')).toMatchObject({ unverified: true })
+    expect(readEvents(file).some((e) => e.type === 'defer')).toBe(true)
   })
 })
 
@@ -763,8 +831,14 @@ describe('device-walk drive: the iOS backend without a phone', () => {
         if (new RegExp(re).test(`${method} ${path}`)) return typeof v === 'function' ? v(body) : v
       if (path === '/session') return { sessionId: 'SID' }
       if (path.endsWith('/contexts')) return ['NATIVE_APP', 'WEBVIEW_1']
-      if (path.endsWith('/execute/sync'))
+      if (path.endsWith('/execute/sync')) {
+        if (body.script === 'mobile: getContexts')
+          return [
+            { id: 'NATIVE_APP' },
+            { id: 'WEBVIEW_1', title: 'device', url: 'https://x.example/device.html' },
+          ]
         return body.script === 'return location.href' ? 'https://x.example/device.html' : null
+      }
       return null
     }
     const b = createIosBackend({ call, sleep: async () => {}, log: () => {} })
@@ -812,6 +886,8 @@ describe('device-walk drive: the iOS backend without a phone', () => {
     let cal = null
     const { b, calls } = make({
       'execute/sync': (body) => {
+        if (body.script === 'mobile: getContexts')
+          return [{ id: 'WEBVIEW_1', title: 'device', url: 'https://x.example/device.html' }]
         if (body.script === 'return location.href') return 'https://x.example/device.html'
         if (/innerWidth/.test(body.script) && /screen\.width/.test(body.script))
           return { w: 390, h: 664, sw: 390, sh: 844, s: 1 }
@@ -851,6 +927,81 @@ describe('device-walk drive: the iOS backend without a phone', () => {
     expect(off.length).toBeGreaterThan(2)
     expect(calls.at(-1)).toEqual(['DELETE', '/session/SID', undefined])
     expect(JSON.stringify(calls)).not.toMatch(/lock|sleep|screenOff/i)
+  })
+
+  test('device-walk drive: only a webview showing one of our pages is ever entered (extension, about:blank and error pages are not)', async () => {
+    const { b, calls } = make({
+      'execute/sync': (body) =>
+        body.script === 'mobile: getContexts'
+          ? [
+              { id: 'NATIVE_APP' },
+              { id: 'WEBVIEW_1', title: '', url: 'data:text/html,' },
+              { id: 'WEBVIEW_2', title: '', url: 'safari-web-extension://ABC/_background.html' },
+              { id: 'WEBVIEW_3', title: '', url: 'about:blank' },
+              { id: 'WEBVIEW_4', title: 'device', url: 'https://x.example/device.html' },
+            ]
+          : body.script === 'return document.visibilityState'
+            ? 'visible'
+            : null,
+    })
+    await b.open('https://x.example/device.html')
+    const entered = calls.filter((c) => c[1].endsWith('/context')).map((c) => c[2].name)
+    expect(entered).not.toContain('WEBVIEW_1')
+    expect(entered).not.toContain('WEBVIEW_2')
+    expect(entered).not.toContain('WEBVIEW_3')
+    expect(entered).toContain('WEBVIEW_4')
+  })
+
+  test('device-walk drive: Safari that never shows the page is asked once more, then the round fails with a message (no silent loop)', async () => {
+    const logs = []
+    const calls = []
+    const call = async (method, path, body) => {
+      calls.push(body?.script ?? path)
+      if (path === '/session') return { sessionId: 'SID' }
+      if (body?.script === 'mobile: getContexts')
+        return [{ id: 'WEBVIEW_1', title: '', url: 'data:text/html,' }]
+      return null
+    }
+    const b = createIosBackend({ call, sleep: async () => {}, log: (l) => logs.push(l) })
+    await expect(b.open('https://x.example/device.html')).rejects.toThrow(
+      /did not load https:\/\/x\.example\/device\.html in two minutes \(it shows: data:text\/html,\)/,
+    )
+    expect(calls.filter((c) => c === 'mobile: deepLink')).toHaveLength(2)
+    // One line when the pages change, not one per poll.
+    expect(logs.filter((l) => /^ios: Safari shows/.test(l))).toHaveLength(1)
+  })
+
+  test('device-walk drive: abortAll ends a call to a hung Appium at once', async () => {
+    const { createServer } = await import('node:http')
+    const srv = createServer(() => {}) // never answers
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r))
+    const pending = appiumCall(
+      `http://127.0.0.1:${srv.address().port}`,
+      'GET',
+      '/x',
+      undefined,
+      60_000,
+    )
+    const t0 = Date.now()
+    setTimeout(abortAll, 50)
+    await expect(pending).rejects.toThrow(/aborted/)
+    expect(Date.now() - t0).toBeLessThan(2000)
+    srv.close()
+    srv.closeAllConnections?.()
+  })
+
+  test('device-walk drive: a step that never answers is given up after its deadline and the rest goes on', async () => {
+    const t0 = Date.now()
+    await expect(withDeadline(new Promise(() => {}), 40, 'restore')).rejects.toThrow(
+      /restore timed out after 40 ms/,
+    )
+    const logs = []
+    expect(
+      await bestEffort(new Promise(() => {}), 30, 'cleanup', (l) => logs.push(l)),
+    ).toBeUndefined()
+    expect(await bestEffort(Promise.resolve(7), 30, 'ok')).toBe(7)
+    expect(logs[0]).toMatch(/cleanup: cleanup timed out/)
+    expect(Date.now() - t0).toBeLessThan(1500)
   })
 
   test('device-walk drive: appiumCall rejects a WebDriver error with its message', async () => {
