@@ -33,15 +33,25 @@ export function installPageStyles(doc: Document = document): () => void {
   ].join('\n')
   doc.head.appendChild(style)
 
+  // A mobile browser lays out at its desktop width (980 CSS px) without `width=device-width`.
+  // No `user-scalable` / `maximum-scale`: 0019 §3 stops page zoom with `touch-action` and
+  // `preventDefault`, not by disabling accessibility zoom.
   let meta = doc.querySelector('meta[name="viewport"]') as HTMLMetaElement | null
   if (!meta) {
     meta = doc.createElement('meta')
     meta.name = 'viewport'
-    meta.content = 'viewport-fit=cover'
+    meta.content = 'width=device-width, initial-scale=1, viewport-fit=cover'
     doc.head.appendChild(meta)
-  } else if (!meta.content.includes('viewport-fit')) {
-    meta.content =
-      meta.content.length > 0 ? `${meta.content}, viewport-fit=cover` : 'viewport-fit=cover'
+  } else {
+    const parts = meta.content
+      .split(',')
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0)
+    const has = (key: string): boolean => parts.some((p) => p.startsWith(`${key}=`))
+    if (!has('width')) parts.unshift('width=device-width')
+    if (!has('initial-scale')) parts.push('initial-scale=1')
+    if (!has('viewport-fit')) parts.push('viewport-fit=cover')
+    meta.content = parts.join(', ')
   }
 
   return () => {
