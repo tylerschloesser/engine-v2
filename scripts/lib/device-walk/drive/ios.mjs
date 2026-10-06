@@ -467,23 +467,40 @@ export function createIosBackend(o = {}) {
       sw = await find()
     }
     if (!sw) throw new Error('ios: no Low Power Mode switch')
-    // The switch moves when Settings settles its scroll position: the element found a moment ago can be stale.
-    // Find it again and read its value fresh, up to three times.
+    // An element reference can go stale and then point at another switch (a click once flipped "Battery
+    // Percentage", Tyler's own setting, instead of Low Power Mode): so the switch is found again before every
+    // click, its identifier is checked, and "Battery Percentage" is read before and after and put back if it moved.
+    const LP = 'LOW_POWER_MODE_IDENTIFIER_SWITCH'
+    const BP = 'BATTERY_PERCENTAGE_IDENTIFIER_SWITCH'
+    const read = async (id) => {
+      const e = await tryEl('accessibility id', id)
+      return e ? String(await call('GET', `/element/${e}/attribute/value`)) : null
+    }
+    const bpBefore = await read(BP)
     let v = null
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        sw = (await find()) ?? sw
-        const value = async () => String(await call('GET', `/element/${sw}/attribute/value`))
-        if ((await value()) !== (on ? '1' : '0')) await call('POST', `/element/${sw}/click`)
+        const e = await find()
+        if (!e) throw new Error('stale element: the Low Power switch is gone')
+        if ((await call('GET', `/element/${e}/attribute/name`)) !== LP)
+          throw new Error('stale element: not the Low Power switch')
+        if ((await call('GET', `/element/${e}/attribute/value`)) !== (on ? '1' : '0'))
+          await call('POST', `/element/${e}/click`)
         await wait(2500)
-        sw = (await find()) ?? sw
-        v = await value()
+        v = await read(LP)
         break
       } catch (e) {
         if (!/stale element/i.test(String(e.message)) || attempt === 2) throw e
         await wait(800)
       }
     }
+    if (bpBefore !== null && (await read(BP)) !== bpBefore) {
+      const e = await tryEl('accessibility id', BP)
+      if (e) await call('POST', `/element/${e}/click`)
+      log('ios: "Battery Percentage" had moved; put back')
+    }
+    if (v !== (on ? '1' : '0'))
+      throw new Error(`ios: Low Power Mode did not turn ${on ? 'on' : 'off'} (switch value ${v})`)
     st.lowPower = on
     log(`ios: Low Power Mode ${on ? 'on' : 'off'} (switch value ${v})`)
     await pressHome()

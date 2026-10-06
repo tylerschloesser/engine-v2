@@ -984,6 +984,7 @@ describe('device-walk drive: the iOS backend without a phone', () => {
 
   test('device-walk drive: Low Power and Airplane go back off in cleanup, then the session ends; the screen is never locked', async () => {
     const { b, calls } = make({
+      'attribute/name': () => 'LOW_POWER_MODE_IDENTIFIER_SWITCH',
       'attribute/value': () => '1',
       '/element$': () => ({ 'element-6066-11e4-a52e-4f735466cecf': 'E1' }),
     })
@@ -1004,9 +1005,14 @@ describe('device-walk drive: the iOS backend without a phone', () => {
     let clicks = 0
     let value = '0'
     const { b } = make({
-      'attribute/value': () => value,
-      '/element$': () => ({ 'element-6066-11e4-a52e-4f735466cecf': 'E1' }),
-      '/click$': () => {
+      'attribute/name': () => 'LOW_POWER_MODE_IDENTIFIER_SWITCH',
+      '/element$': (body) => ({
+        'element-6066-11e4-a52e-4f735466cecf':
+          body.value === 'BATTERY_PERCENTAGE_IDENTIFIER_SWITCH' ? 'BP' : 'E1',
+      }),
+      '/element/BP/attribute/value': () => '0',
+      '/element/E1/attribute/value': () => value,
+      '/element/E1/click$': () => {
         if (++clicks === 1) throw new Error('POST /element/E1/click: stale element reference: gone')
         value = '1'
         return null
@@ -1016,6 +1022,46 @@ describe('device-walk drive: the iOS backend without a phone', () => {
     await b.setLowPower(true)
     expect(clicks).toBe(2)
     expect(value).toBe('1')
+  })
+
+  test('device-walk drive: a switch that is not Low Power is never clicked, and "Battery Percentage" is put back if it moved', async () => {
+    // Every element answers with another switch's name: nothing may be clicked.
+    const wrong = make({
+      'attribute/name': () => 'BATTERY_PERCENTAGE_IDENTIFIER_SWITCH',
+      'attribute/value': () => '0',
+      '/element$': () => ({ 'element-6066-11e4-a52e-4f735466cecf': 'E1' }),
+    })
+    await wrong.b.open('https://x.example/device.html')
+    const before = wrong.calls.length
+    await expect(wrong.b.setLowPower(true)).rejects.toThrow(/not the Low Power switch/)
+    expect(wrong.calls.slice(before).filter((c) => c[1].endsWith('/click'))).toHaveLength(0)
+    // A click that also moved Battery Percentage: put back (a second click on it).
+    let bp = '0'
+    let lp = '0'
+    const moved = make({
+      'attribute/name': () => 'LOW_POWER_MODE_IDENTIFIER_SWITCH',
+      '/element$': (body) => ({
+        'element-6066-11e4-a52e-4f735466cecf':
+          body.value === 'BATTERY_PERCENTAGE_IDENTIFIER_SWITCH' ? 'BP' : 'LP',
+      }),
+      '/element/LP/attribute/value': () => lp,
+      '/element/BP/attribute/value': () => bp,
+      '/element/LP/click': () => {
+        lp = '1'
+        bp = '1' // the same click moved the other switch too
+        return null
+      },
+      '/element/BP/click': () => {
+        bp = '0'
+        return null
+      },
+    })
+    await moved.b.open('https://x.example/device.html')
+    bp = '0' // (opening Safari clicked the same fake element)
+    lp = '0'
+    await moved.b.setLowPower(true)
+    expect(bp).toBe('0')
+    expect(lp).toBe('1')
   })
 
   test('device-walk drive: when the Low Power flow fails Settings is not left in front (the check page is frozen behind it)', async () => {
