@@ -238,6 +238,64 @@ describe('device-walk reference: M34 (the bot partner)', () => {
     expect(analyseMotion([], snap)).toMatchObject({ frames: 0, snaps: 0, travelTiles: 0 })
   })
 
+  // 39l: a 60 Hz series at 12 tiles/s (a sweep of +-6 tiles) is drawn every frame; the same path sampled at
+  // each 10 Hz presence sample is a staircase. `seq` (the fourth column) is the DrawList's frame_seq.
+  const sweep = (hold) =>
+    Array.from({ length: 360 }, (_, i) => {
+      const at = hold ? Math.floor(i / 6) * 6 : i
+      return [Math.round(i * 16.667), +(6 * Math.sin((2 * at) / 60)).toFixed(3), 0, i]
+    })
+
+  test('device-walk reference: a smooth 12 tiles/s series moves on every frame; a 10 Hz staircase and the real m39j series do not', () => {
+    expect(analyseMotion(sweep(false), snap)).toMatchObject({
+      movingFramesChangedRatio: 1,
+      maxStillMs: 0,
+      repeatedFrames: 0,
+    })
+    const stairs = analyseMotion(sweep(true), snap)
+    expect(stairs.movingFramesChangedRatio).toBeLessThan(0.25)
+    expect(stairs.maxStillMs).toBeGreaterThanOrEqual(83)
+    const real = JSON.parse(
+      readFileSync(new URL('./fixtures/m39j-remote-motion-frames.json', import.meta.url), 'utf8'),
+    )
+    const m = analyseMotion(real.motionFrames, snap)
+    expect(m.movingFramesChangedRatio).toBeLessThan(0.2)
+    expect(m.maxStillMs).toBeGreaterThan(80)
+    expect(m.snaps).toBe(46)
+    // The criteria turn the same series into a failure; the smooth one passes them.
+    const e = CHECKS['M34-remote-motion']
+    const crit = (r, n) => r.criteria.find((c) => c.name === n)
+    const bad = evaluate(e, { motionFrames: real.motionFrames, fadeFrames: real.fadeFrames })
+    expect(crit(bad, 'moving_frames_changed_ratio').ok).toBe(false)
+    expect(crit(bad, 'max_still_ms').ok).toBe(false)
+    expect(bad.verdict).toBe('fail')
+    const good = evaluate(e, { motionFrames: sweep(false), fadeFrames: [] })
+    expect(crit(good, 'moving_frames_changed_ratio').ok).toBe(true)
+    expect(crit(good, 'max_still_ms').ok).toBe(true)
+  })
+
+  test('device-walk reference: a repeated DrawList (same frame_seq) is not a frame the circle failed to move on', () => {
+    // Every fourth rAF repeats the previous picture, the rest move: the ratio is over new pictures only.
+    const jittery = sweep(false).map((f, i) => [f[0], f[1], f[2], i - Math.floor(i / 4)])
+    const m = analyseMotion(jittery, snap)
+    expect(m.movingFramesChangedRatio).toBeLessThan(1.01)
+    expect(m.repeatedFrames).toBeGreaterThan(80)
+    // A series that never carried a seq (an older record) still counts each frame.
+    expect(
+      analyseMotion(
+        sweep(false).map((f) => f.slice(0, 3)),
+        snap,
+      ).repeatedFrames,
+    ).toBe(0)
+    // Nothing moved in a stretch: no ratio to judge (null), which the criterion fails.
+    expect(
+      analyseMotion(
+        sweep(false).map((f) => [f[0], 3, 3, f[3]]),
+        snap,
+      ).movingFramesChangedRatio,
+    ).toBeNull()
+  })
+
   test('device-walk reference: a fade is an alpha under 255 while the circle is drawn; vanishing at once is not one', () => {
     const fade = [
       [0, 1, 255],
@@ -274,6 +332,8 @@ describe('device-walk reference: M34 (the bot partner)', () => {
     const clean = evaluate(e, motion())
     expect(clean.criteria.map((c) => [c.name, c.ok])).toEqual([
       ['remote_moved', true],
+      ['moving_frames_changed_ratio', true],
+      ['max_still_ms', true],
       ['snaps', true],
       ['fade_missing', true],
       ['no_snap_and_fades', null], // always the person's tap

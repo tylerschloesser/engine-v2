@@ -1328,6 +1328,20 @@ export const CHECKS = {
         ref: 'Steps: move on the Mac and watch the phone: a remote circle that never moved shows nothing about snapping',
       },
       {
+        name: 'moving_frames_changed_ratio',
+        source: 'derived.movingFramesChangedRatio',
+        op: '>=',
+        limit: 0.9,
+        ref: '39l: while the remote moves, its drawn position changes on at least 90 % of the frames with a new picture (a 10 Hz staircase scores about 0.15)',
+      },
+      {
+        name: 'max_still_ms',
+        source: 'derived.maxStillMs',
+        op: '<=',
+        limit: 50,
+        ref: '39l: while the remote moves, its drawn position is never still for more than 50 ms (a 10 Hz staircase holds 100 ms)',
+      },
+      {
         name: 'snaps',
         source: 'derived.snaps',
         op: 'proxy',
