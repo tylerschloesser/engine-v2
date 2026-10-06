@@ -492,3 +492,70 @@ test('camera: flick release glides with the drag direction, coalesced Android-li
   expectGlidesPositive(flick('x', coalesced))
   expectGlidesPositive(flick('y', coalesced))
 })
+
+// M39m: the glide's distance is a property of the release velocity, not of the frame rate.
+const FLICK_STEP_MS = 50 / 3 // 16.667
+
+function stampedFlick(frameMs: number, phaseMs: number) {
+  const state = new CameraState()
+  state.centreX = 50
+  state.centreY = -20
+  state.tilesAcross = 20
+  const pointers = new PointerSlots()
+  const integrator = createCameraIntegrator({
+    pointers,
+    keys: new KeyState(),
+    wheel: new WheelState(),
+  })
+  // 60 px per 16.667 ms, six steps, `up` at the last move's time (not on a frame boundary).
+  type Ev = { t: number; kind: 'down' | 'move' | 'up'; x: number }
+  const events: Ev[] = [{ t: 0, kind: 'down', x: 300 }]
+  for (let i = 1; i <= 6; i++) events.push({ t: i * FLICK_STEP_MS, kind: 'move', x: 300 + 60 * i })
+  events.push({ t: 6 * FLICK_STEP_MS, kind: 'up', x: 660 })
+  let next = 0
+  const x0 = state.centreX
+  for (let t = phaseMs; t <= 1600; t += frameMs) {
+    while (next < events.length && (events[next] as Ev).t <= t) {
+      const e = events[next++] as Ev
+      if (e.kind === 'down') recordPointerDown(pointers, 1, e.x, 450, e.t)
+      else if (e.kind === 'move') recordPointerMove(pointers, 1, e.x, 450, e.t)
+      else recordPointerUp(pointers, 1, e.x, 450, e.t)
+    }
+    integrator.integrate(state, viewport, frameMs)
+  }
+  return x0 - state.centreX // the camera moves opposite the finger
+}
+
+test('camera: flick glide distance is frame-rate independent', () => {
+  const ppt = 1600 / 20
+  const v = 60 / (FLICK_STEP_MS / 1000) // px/s
+  const expected = 360 / ppt + (v * 0.325) / ppt
+  const d60 = stampedFlick(FLICK_STEP_MS, 5)
+  const d30 = stampedFlick(2 * FLICK_STEP_MS, 5)
+  expect(Math.abs(d30 - d60) / d60).toBeLessThan(0.01)
+  expect(Math.abs(d60 - expected) / expected).toBeLessThan(0.01)
+  expect(Math.abs(d30 - expected) / expected).toBeLessThan(0.01)
+})
+
+test('camera: release applies the movement since the last frame', () => {
+  const state = new CameraState()
+  state.centreX = 50
+  state.centreY = -20
+  state.tilesAcross = 20
+  const pointers = new PointerSlots()
+  const integrator = createCameraIntegrator({
+    pointers,
+    keys: new KeyState(),
+    wheel: new WheelState(),
+  })
+  recordPointerDown(pointers, 1, 300, 450, 0)
+  integrator.integrate(state, viewport, 16)
+  recordPointerMove(pointers, 1, 360, 450, 16)
+  recordPointerUp(pointers, 1, 360, 450, 16)
+  integrator.integrate(state, viewport, 16)
+  const ppt = 1600 / 20
+  // The full drag (60 px), plus the glide's first step (v = 60 px / 16 ms).
+  const v = 60 / 0.016
+  const glide = (0.325 * v * (1 - Math.exp(-16 / 325))) / ppt
+  expect(50 - state.centreX).toBeCloseTo(60 / ppt + glide, 3)
+})

@@ -272,7 +272,20 @@ export function createCameraIntegrator(
       lastDist = dist
       hadTwo = true
     } else {
+      const wasTwo = hadTwo
       hadTwo = false
+      if (activeCount === 0 && !wasTwo) {
+        // Release tail: the finger moved from its last applied position to where it lifted, and no
+        // frame saw it active, so apply that movement before the release velocity takes over.
+        const ppt = pxPerTile(state, viewport)
+        for (let i = 0; i < 2; i++) {
+          const slot = pointers.slots[i] as PointerSlot
+          if (wasActive[i] === 1 && !slot.active) {
+            state.centreX -= (slot.x - (lastX[i] as number)) / ppt
+            state.centreY -= (slot.y - (lastY[i] as number)) / ppt
+          }
+        }
+      }
       if (activeCount === 1) {
         const i = p0.active ? 0 : 1
         const slot = p0.active ? p0 : p1
