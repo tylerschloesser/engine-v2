@@ -1,6 +1,6 @@
 # M39o: The large-save tick says where its time goes
 
-Status: not started · After: 39n · Tyler-dependent: Q18 (default: the iPhone 12 is the baseline phone; the Pixel 5 is informational)
+Status: done (2026-10-06) · After: 39n · Tyler-dependent: Q18 (default: the iPhone 12 is the baseline phone; the Pixel 5 is informational)
 
 ## Goal
 Finding 2 of the driven rounds: M39-large-save `tick_p95_ms` is 26.1 ms on the Pixel 5 and 12.2 ms on the iPhone 12, against the 10 ms ceiling (PRE-PLAN §7, ADR 0010: "derived, not measured"). A read-only diagnosis (2026-10-06) found it is real compute, not a measurement fault:
@@ -35,10 +35,10 @@ Any optimisation: the follow-up brief owns it. Phone runs: the orchestrator's. `
 - The `[gc]` bench or large-save page (whichever exists in the slow tier) stays within its budget with the breakdown on. If no zero-GC test covers the bench timing path, say so in Deviations, and don't add a fast-tier browser test (the `browser` suite is at 44-45 s of 48).
 
 ## Exit criteria
-- [ ] The breakdown readings appear on the HUD and in `__check.readings()` of the bench build. Show one readings dump from the desktop run.
-- [ ] The desktop reference table at scale 1, 4 and 16 is in Deviations.
-- [ ] The tests exist, pass, and were seen red. No golden, budget or baseline changed, and the release build is byte-identical in behaviour (the `timing` flag is off there; `check-reporter` absence stays green).
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The breakdown readings appear on the HUD and in `__check.readings()` of the bench build. Show one readings dump from the desktop run.
+- [x] The desktop reference table at scale 1, 4 and 16 is in Deviations.
+- [x] The tests exist, pass, and were seen red. No golden, budget or baseline changed, and the release build is byte-identical in behaviour (the `timing` flag is off there; `check-reporter` absence stays green).
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test unit -t bench` · `pnpm test:slow browser -t "large-save|bench"` (targeted, foreground).
@@ -71,3 +71,6 @@ Commits: `8774c8d` (step 1, engine split), `74310d0` (step 2, meter, readings, c
 Reading: `sim_tick` is about 90 % of the pass at scale 1 and per furnace flat (17-18 ns) from 1/16 to full scale, so it is compute bound, not cache bound, on this desktop; the frame build does not scale with the save (it follows the view, 0.4-0.65 ms); seal and resync are noise (under 0.1 ms). The p95 over p50 spread of `sim_tick` (5.56 vs 4.6) is the next thing to explain on a phone. One readings dump (scale 1, reading at 50 s): `tick_p95_ms 6.375, tick_p50_ms 5.03, seal_p95_ms 0.015, sim_tick_p50_ms 4.57, sim_tick_p95_ms 5.56, frame_build_p95_ms 0.655, resync_p95_ms 0.07, catchup_ticks_per_10s 0, main_p95_ms 0.335, frame_p95_ms 0.7`. HUD at scale 1 (before the line was reworded, same fields): `tick p50 5.03, seal p95 0.01, sim_tick p50/p95 4.57 / 5.56, frame build p95 0.66, resync p95 0.07 ms; catch-up ticks/10s 0`.
 
 Note for the follow-up: this desktop single-player `sim_tick` (4.6 ms) is above the 3.1-4.2 ms of M36's HUD evidence, with a loaded host; compare phones against a same-day desktop run.
+- **Gate (orchestrator):** `pnpm test && pnpm lint` green (unit 601, browser 256 in 45 s). Accepted: the timing-on path's allocation is unmeasured (no `[gc]` page sets `timing`). It runs only in bench builds, and the bench meter is not a zero-GC criterion. The desktop result moves the target: `sim_tick` is about 90 % of the pass at scale 1, and the cost per furnace is flat (17 us per 1000), so the follow-up targets the furnace tick, not `build_frame` (the native profile's 57 % was frames for 8 connections).
+- **Pixel 5, driven (`m39o-pixel`, adb reverse, 10 min, 36,002 ticks):** `tick_p95_ms` 26.78 (criterion, fail), `tick_p50_ms` median 9.29, `sim_tick` p50 median 7.89 / p95 max 23.16, `frame_build_p95_ms` 3.83, `seal` 0.025, `resync` 0.185, catch-up 0, memory flat. On desktop (same build) `sim_tick` p95/p50 is 1.2x; on the Pixel it is 2.9x. **The Pixel's median pass is under 10 ms: the failure is a tail inside `sim_tick`.** Candidates (guesses): periodic heavy ticks (timer-wheel cascades, batched completions) or the worker scheduled onto a little core. The follow-up brief starts with a per-tick series. iPhone not run (passcode).
+
