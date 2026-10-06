@@ -13,6 +13,7 @@ import type { Scheduler } from 'engine/render'
 import { RingConsumer, type RingStats, systemScheduler } from 'engine/render'
 import { type BenchProbe, benchProbe, parkWorkers, resumeWorkers } from 'engine/test'
 import { type BenchRequest, furnaceBlock } from './bench-request.js'
+import { createPartStats, Rolling } from './bench-stats.js'
 import type { StartedGame } from './game.js'
 import { DEFAULT_WORLD, type Host } from './mode.js'
 
@@ -41,29 +42,6 @@ export function benchHost(scale: number): Host {
  * although `test` is present). */
 export const BENCH_TEST_OPTIONS = { flags: { pace: true, timing: true } } as const
 
-const WINDOW_MS = 10_000
-
-class Rolling {
-  private readonly ts: number[] = []
-  private readonly vs: number[] = []
-  push(t: number, v: number): void {
-    this.ts.push(t)
-    this.vs.push(v)
-    const cutoff = t - WINDOW_MS
-    let drop = 0
-    while (drop < this.ts.length && (this.ts[drop] as number) < cutoff) drop++
-    if (drop > 0) {
-      this.ts.splice(0, drop)
-      this.vs.splice(0, drop)
-    }
-  }
-  p95(): number {
-    if (this.vs.length === 0) return 0
-    const sorted = [...this.vs].sort((a, b) => a - b)
-    return sorted[Math.min(sorted.length - 1, Math.ceil(0.95 * sorted.length) - 1)] as number
-  }
-}
-
 export type BenchHud = {
   scale: number
   engineMemGrows: { sim: number; client: number }
@@ -71,6 +49,14 @@ export type BenchHud = {
   mainP95Ms: number
   frameP95Ms: number
   tickP95Ms: number
+  /** docs/plan/39o: the whole pass's median and the parts of the pass (10 s window each). */
+  tickP50Ms: number
+  sealP95Ms: number
+  simTickP50Ms: number
+  simTickP95Ms: number
+  frameBuildP95Ms: number
+  resyncP95Ms: number
+  catchupTicksPer10s: number
   framesRendered: number
   records: number
   dropped: number
@@ -127,7 +113,7 @@ export type BenchMeter = {
 export function createBenchMeter(): BenchMeter {
   const main = new Rolling()
   const frame = new Rolling()
-  const tick = new Rolling()
+  const parts = createPartStats()
   let game: StartedGame | undefined
   let probe: BenchProbe | undefined
   let request: BenchRequest | undefined
@@ -193,7 +179,14 @@ export function createBenchMeter(): BenchMeter {
     const tn = probe.tickN()
     if (tn !== lastTickN) {
       lastTickN = tn
-      tick.push(t, probe.tickUs() / 1000)
+      parts.push(t, {
+        wholeUs: probe.tickUs(),
+        sealUs: probe.sealUs(),
+        tickUs: probe.simTickUs(),
+        frameUs: probe.frameBuildUs(),
+        resyncUs: probe.resyncUs(),
+        catchupTicks: probe.catchupTicks(),
+      })
     }
     const draws = game.renderer.drawCalls()
     const upload = game.real.loop.uploadBytes()
@@ -208,13 +201,21 @@ export function createBenchMeter(): BenchMeter {
   function hud(): BenchHud {
     const g = game as StartedGame
     const p = probe as BenchProbe
+    const pr = parts.readings()
     return {
       scale: (request as BenchRequest).scale,
       engineMemGrows: { sim: p.simGrows(), client: p.clientGrows() },
       tick: p.tickN(),
       mainP95Ms: main.p95(),
       frameP95Ms: frame.p95(),
-      tickP95Ms: tick.p95(),
+      tickP95Ms: pr.tickP95Ms,
+      tickP50Ms: pr.tickP50Ms,
+      sealP95Ms: pr.sealP95Ms,
+      simTickP50Ms: pr.simTickP50Ms,
+      simTickP95Ms: pr.simTickP95Ms,
+      frameBuildP95Ms: pr.frameBuildP95Ms,
+      resyncP95Ms: pr.resyncP95Ms,
+      catchupTicksPer10s: pr.catchupTicksPer10s,
       framesRendered: frames,
       records: g.drawables.drawables.recordCount(),
       dropped: g.drawables.drawables.drawListDropped(),
@@ -240,7 +241,8 @@ export function createBenchMeter(): BenchMeter {
       `tick: ${h.tick}`,
       `main p95: ${ms(h.mainP95Ms)} ms`,
       `frame p95: ${ms(h.frameP95Ms)} ms`,
-      `tick p95: ${ms(h.tickP95Ms)} ms`,
+      `tick p50/p95: ${ms(h.tickP50Ms)} / ${ms(h.tickP95Ms)} ms`,
+      `  seal p95 ${ms(h.sealP95Ms)}, sim_tick p50/p95 ${ms(h.simTickP50Ms)} / ${ms(h.simTickP95Ms)}, frame build p95 ${ms(h.frameBuildP95Ms)}, resync p95 ${ms(h.resyncP95Ms)} ms; catch-up ticks/10s ${h.catchupTicksPer10s}`,
       `drawables: ${h.records} (dropped ${h.dropped}), draws/frame max ${h.drawCallsMax}, upload B/frame max ${h.uploadBytesMax}, upload backlog ${h.uploadBacklog}, at cap ${h.uploadFramesAtCap} frames, drops ${h.uploadDrops}`,
     ].join('\n')
   }

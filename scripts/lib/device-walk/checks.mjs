@@ -1554,6 +1554,19 @@ export const CHECKS = {
       { name: 'frame_p95_ms_last', source: 'final.frame_p95_ms' },
       { name: 'ticks', source: 'final.tick' },
       { name: 'raf_gap_max_ms', source: 'windows.*.raf.max', reduce: 'max' },
+      // M39o: where the pass's time goes (10 s windows; the median of the steady windows' p50, the
+      // worst of their p95). Metrics only: the criterion above is the whole pass.
+      { name: 'tick_p50_ms_median', source: 'steady.*.tick_p50_ms', reduce: 'median' },
+      { name: 'sim_tick_p50_ms_median', source: 'steady.*.sim_tick_p50_ms', reduce: 'median' },
+      { name: 'sim_tick_p95_ms_max', source: 'steady.*.sim_tick_p95_ms', reduce: 'max' },
+      { name: 'seal_p95_ms_max', source: 'steady.*.seal_p95_ms', reduce: 'max' },
+      { name: 'frame_build_p95_ms_max', source: 'steady.*.frame_build_p95_ms', reduce: 'max' },
+      { name: 'resync_p95_ms_max', source: 'steady.*.resync_p95_ms', reduce: 'max' },
+      {
+        name: 'catchup_ticks_per_10s_max',
+        source: 'steady.*.catchup_ticks_per_10s',
+        reduce: 'max',
+      },
     ],
     acts: [],
     judges: [],
