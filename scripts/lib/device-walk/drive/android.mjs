@@ -160,6 +160,7 @@ export function createAndroidBackend(o = {}) {
 
   async function withPage(fn) {
     const t = await pageTarget()
+    if (process.env.ANDROID_TRACE) log(`android> page ${t.id.slice(0, 6)} ${t.url.slice(0, 90)}`)
     const c = await connect(t.webSocketDebuggerUrl)
     try {
       return await fn(c)

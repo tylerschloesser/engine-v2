@@ -26,7 +26,7 @@ import {
   tapActions,
 } from './device-walk/drive/ios.mjs'
 import { judgeEvent } from './device-walk/drive/judge.mjs'
-import { startDrive } from './device-walk/drive/loop.mjs'
+import { passRunner, startDrive } from './device-walk/drive/loop.mjs'
 import { ACT_COVERAGE, devicePerson, HANDLERS } from './device-walk/drive/person.mjs'
 import { parseChecks } from './device-walk/parse.mjs'
 import { appendEvent, readEvents, replay } from './device-walk/rounds.mjs'
@@ -439,6 +439,31 @@ describe('device-walk drive: the drive loop over a round log', () => {
     })
     expect(ev.some((e) => e.type === 'result')).toBe(false)
     expect(replay(ev, [{ id: 'M09b-fill-rate' }]).items.get('M09b-fill-rate').shots).toHaveLength(1)
+  })
+})
+
+describe('device-walk drive: the runner page behind a tunnel that does not resolve yet', () => {
+  test('device-walk drive: an error page is opened again until the runner shows, then the pre-flight is tapped', async () => {
+    let n = 0
+    const b = createFakeBackend({
+      pages: {
+        autolock: () =>
+          ++n < 3
+            ? { runner: false, href: 'chrome-error://chromewebdata/' }
+            : n === 3
+              ? { runner: true, autolock: true, href: 'https://x/__walk/runner.html' }
+              : { runner: false, walking: false, href: 'https://x/device.html' },
+        'getElementById("autolock")': { x: 5, y: 6 },
+      },
+    })
+    const log = []
+    await passRunner(b, {
+      joinUrl: 'https://x/__walk/runner.html',
+      wait: async () => {},
+      log: (l) => log.push(l),
+    })
+    expect(b.calls.filter((c) => c.m === 'open')).toHaveLength(2)
+    expect(log.filter((l) => /opening it again/.test(l))).toHaveLength(2)
   })
 })
 

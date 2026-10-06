@@ -34,15 +34,28 @@ const CENTRE = (id) => `(() => {
  * The runner's pre-flight as Tyler does it: "Auto-Lock is Never" (the driver keeps the screen on), the idle
  * check (no touch for `probeMs`), Start. A page that is no longer the runner, or already walking, is done.
  */
-export async function passRunner(backend, { timeoutMs = 180_000, log = () => {} } = {}) {
+export async function passRunner(
+  backend,
+  { timeoutMs = 180_000, log = () => {}, joinUrl = null, wait = sleep } = {},
+) {
   const t0 = Date.now()
   let tapped = ''
+  let reloads = 0
   while (Date.now() - t0 < timeoutMs) {
     let s
     try {
       s = await backend.readPage(RUNNER)
     } catch {
       await sleep(500) // the document is navigating
+      continue
+    }
+    // A quick tunnel's name may not resolve yet when the phone first asks (Chrome and Safari then show their own
+    // error page): ask again, about every 10 s, for up to 3 minutes.
+    if (joinUrl && /^(chrome-error:|about:blank)/.test(s.href) && reloads < 18) {
+      reloads++
+      log(`runner: ${s.href}, opening it again (${reloads})`)
+      await wait(10_000)
+      await backend.open(joinUrl)
       continue
     }
     if (!s.runner || s.walking) {
@@ -73,7 +86,7 @@ export function startDrive(o) {
   let stopped = false
   const handled = new Set()
   person.ctx.joinUrl = joinUrl
-  person.ctx.passRunner = () => passRunner(backend, { log })
+  person.ctx.passRunner = () => passRunner(backend, { log, joinUrl })
   person.ctx.shotPath = (p) => join(seriesDir, `${p.id}-${p.n}-judge.png`)
 
   const note = (e) => append({ type: 'drive', ...e })
@@ -122,7 +135,7 @@ export function startDrive(o) {
 
   const ready = (async () => {
     await backend.open(joinUrl)
-    await passRunner(backend, { log })
+    await passRunner(backend, { log, joinUrl })
   })()
 
   const finished = (async () => {
