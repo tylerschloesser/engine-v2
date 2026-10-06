@@ -1,6 +1,6 @@
 # M39q: M29-net-heap waits for the page, and an empty window can't pass
 
-Status: not started · After: 39p · Tyler-dependent: no
+Status: done (2026-10-06) · After: 39p · Tyler-dependent: no
 
 ## Goal
 Finding 6 of the driven rounds: M29-net-heap fails in every driven round with `reloads: null` while `hitch_gaps_over_25ms` reads 0. M39j's note ("the `mp.html` adapter is missing") was wrong. A read-only diagnosis (2026-10-06) found:
@@ -28,10 +28,10 @@ When this is done the collector waits for the page and the link, and a run with 
 `scripts/lib/device-walk/agent/collect-life.js`, `scripts/lib/device-walk/checks.mjs`, their tests under `scripts/lib/`, `packages/engine/tests/browser/walk-life.spec.ts` (and `support/walk-rig.ts` if it needs a page-query override).
 
 ## Exit criteria
-- [ ] The race test and the unit test exist, pass, and were seen red (red lines pasted).
-- [ ] The empty-window audit is listed in Deviations.
-- [ ] `pnpm test:slow browser -t walk-life` green (pasted line); no golden, budget or baseline changed.
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The race test and the unit test exist, pass, and were seen red (red lines pasted).
+- [x] The empty-window audit is listed in Deviations.
+- [x] `pnpm test:slow browser -t walk-life` green (pasted line); no golden, budget or baseline changed.
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test unit -t device-walk` · `pnpm test:slow browser -t walk-life` (targeted, foreground).
@@ -51,3 +51,5 @@ After landing, the orchestrator runs M29-net-heap driven on the Pixel (10 min) a
 - **Race test.** `walk-life: M29-net-heap: a page that boots after the agent attached is waited for` (`walk-life.spec.ts`): a test-only `page.route` answers every `.wasm` 8 s late. `?genDelay=` did not work: the same spec with `genDelay=15000` ran 9.8 s and passed at base (it delays only the late gen workers after Welcome, not `client.ready`). Red at base (old `collect-life.js` only), both engines: `Error: a measured value, not an error ... Expected ok: true, value: 0; Received ok: false, value: null`, `browser FAIL 2 tests 32s`. Green: `browser pass 4 tests 18s` (`-t "walk-life: M29-net-heap"`).
 - **Unit test.** `scripts/lib/device-walk-netheap.test.mjs` (7 tests, vm harness of M39p). Red at base (old `collect-life.js`, `driver.js`, `checks.mjs`): `FAIL 7 tests`, among them `expected +0 to be null`, `TypeError: Cannot read properties of undefined (reading 'paint')` (the finding-6 error), `expected Object{ frames: +0, long25: +0 ...} to match object { frames: +0, long25: null, max: null }`. Green: `unit pass 212 tests` (`pnpm test unit -t device-walk`).
 - **Not done.** `mp.ts` unchanged; no phone run (the orchestrator's driven Pixel/iPhone round).
+- **Gate (orchestrator):** the first full run had two fast-tier reds this milestone cannot reach (`[gc] no_ui_change clean`, `reference_furnace_pick_up`; it changed only device-walk scripts and a slow spec). They passed alone 3 of 3, and the full re-run was green (unit 614, browser 256 in 44 s): the ledger's full-suite-only flake pattern. The `sum` change (empty is null) is accepted: it was the unfailable criterion.
+
