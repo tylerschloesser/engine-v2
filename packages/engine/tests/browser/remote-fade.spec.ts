@@ -15,13 +15,6 @@ import { type MovingRemote, startMovingRemote } from './support/moving-remote.js
 import { openPage } from './support/page.js'
 import { startTestServer, type TestServer } from './support/test-server.js'
 
-declare global {
-  interface Window {
-    __step?: (dtMs: number) => Promise<void>
-    __probe?: () => Promise<{ rows: { mode: string; alpha: number }[]; delayMs: number }>
-  }
-}
-
 const PORT = 48_273 + 2 * Number(process.env.TEST_PARALLEL_INDEX ?? 0)
 // The page dials a proxy in front of the server: stalling it is a viewer whose downlink has stopped while
 // the host (and the remote) go on.
@@ -114,7 +107,7 @@ test('remote-fade: a remote fades when the viewer hears nothing for 2 s and retu
     await new Promise((r) => setTimeout(r, 15)) // the socket's real delivery
     return page.evaluate(async (dt) => {
       await window.__step?.(dt)
-      const p = await window.__probe?.()
+      const p = (await window.__probe?.()) as { rows: { alpha: number }[] } | undefined
       return { alpha: p?.rows[0]?.alpha ?? 0, n: p?.rows.length ?? 0 }
     }, STEP_MS)
   }
