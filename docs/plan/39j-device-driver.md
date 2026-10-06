@@ -1,6 +1,6 @@
 # M39j: Device driver (the Mac does the person's part of a round)
 
-Status: not started · After: 39i · Tyler-dependent: Q5 (default assumed: the Android rows run on the Pixel 5; Tyler offered it on 2026-10-05, "same with my pixel too")
+Status: done (2026-10-06; driven rounds on both phones, findings below go to their own briefs) · After: 39i · Tyler-dependent: Q5 (default assumed: the Android rows run on the Pixel 5; Tyler offered it on 2026-10-05, "same with my pixel too")
 
 ## Goal
 Tyler, 2026-10-05, mid-round: "Is it possible for you to fully instrument my iPhone when it's plugged in. Like swiping and reading screenshots and shit. Kinda pissed that I have to do all this manually still." The spikes say yes (`spikes/device-driver-ios/RESULT.md`, `spikes/device-driver-android/RESULT.md`; read both in full, they are the reading list's core). When this is done, `pnpm device:walk --auto --round <r> --drive ios|android` opens the runner on a USB-attached phone with no QR scan. A **device person** on the Mac answers every *act* prompt with real device actions: OS-level touches, rotation, Home/app switch, Control Center/Settings toggles, Safari relaunch. It answers *judge* prompts from screenshots and readings where the item's Pass text is mechanical. It leaves the others pending with a screenshot as evidence, for the orchestrator to judge with `--judge`. The orchestrator can then run a whole round with nobody at the phone.
@@ -40,12 +40,12 @@ Fixing anything a driven round finds: each finding becomes its own brief (the M3
 Unit (no phone): every act prompt in `checks.mjs` maps to a handler or a listed `NotDrivable`; the backend interface is implemented by a fake backend that records calls, so the device person's mapping is tested without hardware (prompt "Rotate the phone to landscape." → `rotate('landscape')`). `--judge` writes a `result` row the status and apply readers accept (round-trip through `rounds.mjs`). The real-phone runs are evidence in the report, not suite tests (no phone on CI).
 
 ## Exit criteria
-- [ ] Delegation 1: Pixel M11-gestures and M09b-fill-rate driven end to end, status rows pasted, no QR scan.
-- [ ] Delegation 2: iPhone M11-gestures, M09b-fill-rate and M16-background driven end to end, status rows pasted.
-- [ ] Delegation 3: both full rounds driven; every item has a result or a stated `NotDrivable`/judge-pending; skill and header updated.
-- [ ] The unit tests exist and each was seen red once.
-- [ ] Both phones left awake, unlocked, toggles off, rotation restored, no Appium/WDA/adb rules left behind.
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] Delegation 1: Pixel M11-gestures and M09b-fill-rate driven end to end, status rows pasted, no QR scan.
+- [x] Delegation 2: iPhone M11-gestures, M09b-fill-rate and M16-background driven end to end, status rows pasted.
+- [x] Delegation 3: both full rounds driven; every item has a result or a stated `NotDrivable`/judge-pending; skill and header updated.
+- [x] The unit tests exist and each was seen red once.
+- [x] Both phones left awake, unlocked, toggles off, rotation restored, no Appium/WDA/adb rules left behind.
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Context artifacts
 `.claude/skills/device-round/SKILL.md` updated (driven rounds, `--judge`). Memory: Tyler's phones are test devices; keep screens on.
