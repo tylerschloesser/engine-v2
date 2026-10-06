@@ -32,7 +32,7 @@ const CAPS = {
   'appium:bundleId': SAFARI,
   'appium:wdaLaunchTimeout': 240_000,
   'appium:wdaConnectionTimeout': 240_000,
-  'appium:newCommandTimeout': 1800,
+  'appium:newCommandTimeout': 36000,
 }
 
 /** W3C touch pointers for `fingers` (screen points), each moving over `ms`, optionally repeated `count` times (a tap). */
