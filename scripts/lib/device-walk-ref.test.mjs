@@ -304,6 +304,7 @@ describe('device-walk reference: M34 (the bot partner)', () => {
       [48, 0, null],
     ]
     expect(analyseFade(fade)).toMatchObject({
+      vanishMs: 48,
       fades: true,
       fadeMissing: 0,
       minAlpha: 90,
@@ -314,8 +315,18 @@ describe('device-walk reference: M34 (the bot partner)', () => {
       [16, 1, 255],
       [32, 0, null],
     ]
-    expect(analyseFade(gone)).toMatchObject({ fades: false, fadeMissing: 1, vanished: true })
-    expect(analyseFade([])).toMatchObject({ fades: false, fadeMissing: 1, minAlpha: null })
+    expect(analyseFade(gone)).toMatchObject({
+      fades: false,
+      fadeMissing: 1,
+      vanished: true,
+      vanishMs: 32,
+    })
+    expect(analyseFade([])).toMatchObject({
+      fades: false,
+      fadeMissing: 1,
+      minAlpha: null,
+      vanishMs: null,
+    })
   })
 
   const motion = (over = {}) => ({
@@ -327,7 +338,7 @@ describe('device-walk reference: M34 (the bot partner)', () => {
     ],
     ...over,
   })
-  test('device-walk reference: M34-remote-motion asks the person for a snap or a missing fade, fails a circle that never moved', () => {
+  test('device-walk reference: M34-remote-motion asks the person for a snap, fails a circle that lingers after the bot left, fails a circle that never moved', () => {
     const e = CHECKS['M34-remote-motion']
     const clean = evaluate(e, motion())
     expect(clean.criteria.map((c) => [c.name, c.ok])).toEqual([
@@ -335,7 +346,7 @@ describe('device-walk reference: M34 (the bot partner)', () => {
       ['moving_frames_changed_ratio', true],
       ['max_still_ms', true],
       ['snaps', true],
-      ['fade_missing', true],
+      ['vanished_at_once', true],
       ['no_snap_and_fades', null], // always the person's tap
     ])
     expect(clean.verdict).toBe('judge')
@@ -346,20 +357,54 @@ describe('device-walk reference: M34 (the bot partner)', () => {
       }),
     )
     expect(snappy.criteria.find((c) => c.name === 'snaps')).toMatchObject({ value: 1, ok: null })
-    const nofade = evaluate(
+    // 39l: the bot closing its page is a clean close (0013: `Gone`), so the circle must be absent within 1 s;
+    // that it was never drawn with an alpha under 255 is a metric, not a failure.
+    const gone = evaluate(
+      e,
+      motion({
+        fadeFrames: [
+          [100, 1, 255],
+          [116, 1, 255],
+          [133, 0, null],
+        ],
+      }),
+    )
+    expect(gone.criteria.find((c) => c.name === 'vanished_at_once')).toMatchObject({
+      value: 33,
+      ok: true,
+    })
+    expect(gone.metrics).toMatchObject({ vanish_ms: 33, fade_missing: 1 })
+    expect(gone.verdict).toBe('judge')
+    const lingers = (ms) => [
+      [0, 1, 255],
+      [ms - 16, 1, 255],
+      [ms, 0, null],
+    ]
+    for (const [ms, ok] of [
+      [1000, true],
+      [1017, false],
+    ])
+      expect(
+        evaluate(e, motion({ fadeFrames: lingers(ms) })).criteria.find(
+          (c) => c.name === 'vanished_at_once',
+        ),
+        `vanish at ${ms} ms`,
+      ).toMatchObject({ ok })
+    // Still drawn when the window ended: it never vanished.
+    const stays = evaluate(
       e,
       motion({
         fadeFrames: [
           [0, 1, 255],
-          [16, 0, null],
+          [16, 1, 255],
         ],
       }),
     )
-    expect(nofade.criteria.find((c) => c.name === 'fade_missing')).toMatchObject({
-      value: 1,
-      ok: null,
+    expect(stays.criteria.find((c) => c.name === 'vanished_at_once')).toMatchObject({
+      value: null,
+      ok: false,
     })
-    expect(nofade.verdict).toBe('judge') // never an automatic failure
+    expect(stays.verdict).toBe('fail')
     const still = evaluate(e, motion({ motionFrames: [[0, 1, 1]] }))
     expect(still.verdict).toBe('fail')
     expect(still.criteria.find((c) => c.name === 'remote_moved')).toMatchObject({

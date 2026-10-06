@@ -1350,22 +1350,18 @@ export const CHECKS = {
         judge: 'borderline',
       },
       {
-        name: 'fade_missing',
-        source: 'derived.fadeMissing',
-        op: 'proxy',
-        limit: 0,
-        // 1 when the circle was never drawn with an alpha under 255 after the bot went. `0012` fades an avatar
-        // after 2 s of silence (a dropped link: the Mac's Wi-Fi off); a bot that closes its page is a clean
-        // close, which `0013` makes vanish at once. So "no fade seen" is a judge prompt, never a failure.
-        ref: 'hitch proxy (39f Planning decisions): 1 when no fade was seen; the person judges, never an automatic failure',
-        judge: 'borderline',
+        name: 'vanished_at_once',
+        source: 'derived.vanishMs',
+        op: '<=',
+        limit: 1000,
+        ref: 'pass',
       },
       {
         name: 'no_snap_and_fades',
         source: 'derived.maxJumpTiles',
         op: '<=',
         limit: null,
-        ref: 'none: "moves without snapping" and "it fades" are seen by the person: one confirm tap, with the largest jump shown',
+        ref: 'none: "moves without snapping" is seen by the person: one confirm tap, with the largest jump shown',
         judge: 'always',
       },
     ],
@@ -1376,10 +1372,12 @@ export const CHECKS = {
       { name: 'moving_frames_changed_ratio', source: 'derived.movingFramesChangedRatio' },
       { name: 'max_still_ms', source: 'derived.maxStillMs' },
       { name: 'repeated_frames', source: 'derived.repeatedFrames' },
+      { name: 'vanish_ms', source: 'derived.vanishMs' },
+      { name: 'fade_missing', source: 'derived.fadeMissing' },
       { name: 'fade_min_alpha', source: 'derived.minAlpha' },
     ],
     acts: [],
-    judges: ['it fades, no snap'],
+    judges: ['no snap, it disappears'],
   },
   'M35-safari-build-mac': {
     pass: 'c814759c',
@@ -1840,7 +1838,11 @@ export function analyseFade(frames) {
   const minAlpha = drawn.length ? Math.min(...drawn.map((f) => f[2])) : null
   const last = frames.at(-1)
   const fades = minAlpha !== null && minAlpha < 255
+  // The bot's socket goes away right after the series starts (the collector marks it first): the circle
+  // is expected to be gone within a second (0013: `Gone` on a clean close). `null` when it never went.
+  const gone = frames.find((f, i) => i > 0 && f[1] === 0 && drawn.length > 0 && f[0] > drawn[0][0])
   return {
+    vanishMs: gone && frames.length ? Math.round(gone[0] - (frames[0]?.[0] ?? 0)) : null,
     fades,
     fadeMissing: fades ? 0 : 1,
     minAlpha,

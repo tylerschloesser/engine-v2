@@ -220,10 +220,13 @@ test('walk-ref: M34-own-timer-bar (three collects per link, tap to result) and M
     test
       .info()
       .annotations.push({ type: 'remote-motion', description: JSON.stringify(motion.metrics) })
-    // A bot that closes its page is a clean close (0013: its circle vanishes at once, no fade) and the
-    // remote circle is drawn at each presence sample: both are the person's to judge, never a failure.
+    // A bot that closes its page is a clean close (0013: `Gone`, its circle vanishes at once; the 2 s fade of
+    // 0012 is a viewer's stalled link, `remote-fade.spec.ts`): `vanished_at_once` is a criterion, and the
+    // person only confirms "no snap".
     expect(motion, JSON.stringify(motion.criteria)).toMatchObject({ result: 'pass', by: 'mixed' })
     expect(crit(motion, 'remote_moved')).toMatchObject({ ok: true })
+    expect(crit(motion, 'vanished_at_once')).toMatchObject({ ok: true })
+    expect(Number(motion.metrics.vanish_ms)).toBeLessThanOrEqual(1000)
     expect(Number(motion.metrics.travel_tiles)).toBeGreaterThan(1)
     expect(Number(motion.metrics.frames)).toBeGreaterThan(30)
     // 39l: the drawn remote circle moves on (nearly) every frame while it moves, not once per 10 Hz presence
