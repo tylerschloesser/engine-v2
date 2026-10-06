@@ -92,10 +92,14 @@ export async function autoCli(o) {
       await bestEffort(run?.stop(), 4000, 'stopping the servers', log)
     })())
   const bye = (code) => shutdown().finally(() => process.exit(code))
-  let signals = 0
+  // `pnpm` forwards a Ctrl-C to the tool on top of the one the terminal sends it: signals close together are one.
+  // A signal 2 s or more after the first means the shutdown is stuck: leave at once.
+  let firstSignal = 0
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'])
     process.on(sig, () => {
-      if (++signals > 1) process.exit(130) // a second signal does not wait
+      if (firstSignal && Date.now() - firstSignal > 2000) process.exit(130)
+      if (firstSignal) return
+      firstSignal = Date.now()
       bye(130)
       setTimeout(() => process.exit(130), 12_000).unref() // and the first does not wait for ever
     })
