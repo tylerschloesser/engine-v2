@@ -150,10 +150,26 @@ export const HANDLERS = [
   {
     name: 'tap-ring',
     match: /^(Zoom \d+ of \d+: tap the highlighted ring|Tap the highlighted button)/,
-    run: async ({ backend }) => {
+    // The highlight is drawn where the tap must land. A ring sits under its own little button, and a finger's
+    // touch area snaps to the button there (the page's `elementFromPoint` says canvas, the real tap says BUTTON:
+    // found on the Pixel): for a ring the tap goes just under the button's box, which is still on the ring
+    // (measured: 6 px below the anchor picks it, 14 px does not); for the button itself, its centre.
+    run: async ({ backend, text }) => {
       const r = await backend.readPage(BY_ID('#walk-ring'))
       if (!r) throw new Error('no highlighted ring on the page')
-      await backend.tap(r.x, r.y)
+      let { x, y } = r
+      if (/ring/.test(text)) {
+        const below = await backend.readPage(`(() => {
+          let bottom = null
+          for (const b of document.querySelectorAll('button')) {
+            const q = b.getBoundingClientRect()
+            if (${x} > q.left - 8 && ${x} < q.right + 8 && ${y} > q.top - 8 && ${y} < q.bottom + 8) bottom = Math.max(bottom ?? 0, q.bottom)
+          }
+          return bottom
+        })()`)
+        if (below !== null) y = below + 2
+      }
+      await backend.tap(x, y)
     },
   },
   {

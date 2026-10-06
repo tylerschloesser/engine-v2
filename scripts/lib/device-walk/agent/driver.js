@@ -346,7 +346,13 @@
     } catch (e) {
       data = { error: String((e && e.message) || e) }
     }
-    if (data === null) return // interrupted: wait for the person's Redo
+    if (data === null) {
+      if (A.measure().interrupted) return // interrupted: wait for the person's Redo
+      // A collector that gives up with nothing and no interruption: an act prompt ran out of time (the person,
+      // or the driver, never did it). That is a result, not a reason to wait for ever (a driven round hung on
+      // it for half an hour): the service evaluates what is missing.
+      data = { ready: true, actTimedOut: true }
+    }
     if (data && data.__walkHelper) {
       set('helper', key)
       set('col', null)

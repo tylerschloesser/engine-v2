@@ -248,6 +248,14 @@ describe('device-walk drive: the device person on a recording backend', () => {
     ])
   })
 
+  test('device-walk drive: a ring under its own button is tapped just below the button, the button itself at its centre', async () => {
+    const o = { pages: { "of document.querySelectorAll('button')": () => 250 } }
+    const ring = await run('Zoom 1 of 3: tap the highlighted ring (1 of 3).', o)
+    expect(ring.b.calls.find((c) => c.m === 'tap').args).toEqual([123, 252])
+    const button = await run('Tap the highlighted button (it is numbered 26).', o)
+    expect(button.b.calls.find((c) => c.m === 'tap').args).toEqual([123, 234])
+  })
+
   test('device-walk drive: leaving the app is Home, the wait, the way back; airplane is on, wait, off', async () => {
     const { b } = await run(
       'Drop 1 of 3 (app-5s): Switch to another app for 0.2 seconds, then come back to this page.',
@@ -628,6 +636,12 @@ describe('device-walk drive: a fresh camera per attempt, and the world point und
       `const CAMERA_PREFIX = '${prefix}'`,
     )
     expect(cameraStorageKey()).toBe(`${prefix}default`)
+  })
+
+  test('device-walk drive: a collector that gives up with no interruption is a result (actTimedOut), not an endless wait', () => {
+    expect(driverSrc).toContain('actTimedOut: true')
+    expect(driverSrc).toMatch(/if \(A\.measure\(\)\.interrupted\) return/)
+    expect(driverSrc).not.toMatch(/if \(data === null\) return/)
   })
 
   test('device-walk drive: every navigation to an attempt asks for a fresh camera unless the check keeps it', () => {

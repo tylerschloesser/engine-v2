@@ -188,7 +188,22 @@ export function createIosBackend(o = {}) {
       await startAppium()
       log('ios: starting the Appium session (WDA may take minutes the first time)')
       const t0 = Date.now()
-      const v = await raw('POST', '/session', { capabilities: { alwaysMatch: CAPS } })
+      // WDA sometimes fails to launch right after the last session ended (xcodebuild exit 65): stop what is left
+      // of it and ask again, up to three times. Nothing of a check has run yet, so this is not a retry of a result.
+      let v
+      for (let attempt = 1; ; attempt++) {
+        try {
+          v = await raw('POST', '/session', { capabilities: { alwaysMatch: CAPS } })
+          break
+        } catch (e) {
+          if (attempt >= 3 || !/WebDriverAgent|xcodebuild/i.test(String(e.message))) throw e
+          log(`ios: WDA did not start (attempt ${attempt}): ${String(e.message).slice(0, 120)}`)
+          try {
+            spawnSync('pkill', ['-f', 'APPIUM_XCODEBUILD_WDA_MARKER'])
+          } catch {}
+          await wait(8000)
+        }
+      }
       st.sid = v.sessionId
       log(`ios: session ${st.sid} after ${Math.round((Date.now() - t0) / 1000)} s`)
     })()
