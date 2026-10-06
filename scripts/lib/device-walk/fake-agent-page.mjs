@@ -65,10 +65,16 @@ export function createFakePage(o = {}) {
     visibilityState: 'visible',
     readyState: 'complete',
     addEventListener,
-    createElement: () => ({ style: {}, append() {}, remove() {}, attachShadow: () => ({}) }),
+    createElement: () => {
+      const el = { style: {}, append() {}, remove() {}, isConnected: true, querySelector: () => el }
+      el.attachShadow = () => el
+      return el
+    },
     head: { append() {} },
     body: { append() {} },
     querySelector: () => null,
+    querySelectorAll: () => o.buttons ?? [],
+    getElementById: () => null,
   }
   const search = o.search ?? '?walk=tok&run=r1&tab=t1'
   const location = {
@@ -91,11 +97,15 @@ export function createFakePage(o = {}) {
     innerWidth: 400,
     innerHeight: 800,
     devicePixelRatio: 3,
-    __check: { readings: o.readings ?? (() => ({ orientation: 'portrait', raf_p95_ms: 99 })) },
+    __check: o.check ?? {
+      readings: o.readings ?? (() => ({ orientation: 'portrait', raf_p95_ms: 99 })),
+    },
   }
   const sandbox = {
     window: w,
     self: w,
+    innerWidth: w.innerWidth,
+    innerHeight: w.innerHeight,
     document,
     location,
     history: { state: null, replaceState() {} },
@@ -166,6 +176,10 @@ export function createFakePage(o = {}) {
     frames,
     sockets,
     advance,
+    /** Deliver an event to the page's own (capture-phase) listeners, as the browser would. */
+    fire: (name, ev) => {
+      for (const fn of listeners[name] ?? []) fn(ev)
+    },
     now: () => now,
     /** Open the socket the way the service does: a welcome with an empty step. */
     async connect() {

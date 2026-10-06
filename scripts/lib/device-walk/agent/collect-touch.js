@@ -160,6 +160,60 @@
     return st
   }
 
+  // --- the tap log (M39r) -------------------------------------------------------------------------
+  /**
+   * Where each tap's events landed: capture-phase `pointerdown`, `pointerup` and `click` into a fixed ring of
+   * slots written in place (no object per event; the tag is the DOM's own string), so the log can stay on the
+   * page's input path. `since(n)` copies the events after the count `n` out, once per tap, never per frame.
+   * Finding 7: a Pixel tap that never reached the engine left `{actTimedOut}` and no clue where it went.
+   */
+  function tapLog() {
+    if (K.tapLogger) return K.tapLogger
+    const N = 24
+    const slots = []
+    for (let i = 0; i < N; i++) slots.push({ type: '', tag: '', id: '', x: 0, y: 0, pt: '', t: 0 })
+    const st = { n: 0 }
+    const opt = { capture: true, passive: true }
+    const rec = (e) => {
+      const s = slots[st.n % N]
+      const t = e.target
+      s.type = e.type
+      s.tag = t && t.tagName ? t.tagName : ''
+      s.id = t && t.id ? t.id : ''
+      s.x = e.clientX
+      s.y = e.clientY
+      s.pt = e.pointerType || ''
+      s.t = Math.round(e.timeStamp)
+      st.n++
+    }
+    for (const type of ['pointerdown', 'pointerup', 'click']) addEventListener(type, rec, opt)
+    /** The events after count `n` (the last `N` at most), oldest first, as plain objects. */
+    st.since = (n) => {
+      const out = []
+      for (let i = Math.max(n, st.n - N); i < st.n; i++) out.push({ ...slots[i % N] })
+      return out
+    }
+    K.tapLogger = st
+    return st
+  }
+  /** The box of the nearest `<button>` to a client point, or null (the neighbour a touch adjustment snaps to). */
+  function nearestButton(x, y) {
+    let best = null
+    let bd = Infinity
+    for (const b of document.querySelectorAll('button')) {
+      const q = b.getBoundingClientRect()
+      const d = Math.hypot(
+        Math.max(q.left - x, 0, x - q.right),
+        Math.max(q.top - y, 0, y - q.bottom),
+      )
+      if (d < bd) {
+        bd = d
+        best = { left: q.left, top: q.top, right: q.right, bottom: q.bottom }
+      }
+    }
+    return best && { ...best, gapPx: +bd.toFixed(1) }
+  }
+
   // --- M11-gestures -------------------------------------------------------------------------------
   /**
    * The seven gestures of M11-gestures' Steps, one sheet each with its own "detected" ticks. The data:
@@ -386,11 +440,22 @@
      * on it must leave `pick_id` and the tap count alone (it never reaches the canvas).
      */
     async pick(item) {
+      /** An act timeout keeps what the page saw: the last events and the tap that was asked for (M39r). */
+      const timedOut = (log, mark, want, done) => ({
+        ready: true,
+        actTimedOut: true,
+        tapLog: {
+          asked: want,
+          events: log.since(0),
+          sinceAsk: log.n - mark,
+          tapsDone: done.length,
+        },
+        errors: errors(),
+      })
       const levels = item.plan.levels || [40, 20, 12]
       const taps = []
       let misses = 0
-      const P = pointerLog()
-      void P
+      const L = tapLog()
       for (let z = 0; z < levels.length; z++) {
         await act('zoomTo', { tiles: levels[z], x: 0.5, y: 0.5 })
         await sleep(600)
@@ -406,16 +471,24 @@
         for (let k = 0; k < chosen.length; k++) {
           const c = chosen[k]
           const before = readings().taps
+          const mark = L.n
+          const want = {
+            id: c.id,
+            zoom: levels[z],
+            x: c.s.x,
+            y: c.s.tapY,
+            button: nearestButton(c.s.x, c.s.tapY),
+          }
           highlight(c.s.x, c.s.tapY)
           const seen = await ask(item, {
             text: `Zoom ${z + 1} of ${levels.length}: tap the highlighted ring (${k + 1} of ${chosen.length}).`,
             detect: { tapped: () => readings().taps > before },
           })
           unhighlight()
-          if (!seen) return null
+          if (!seen) return timedOut(L, mark, want, taps)
           await sleep(200)
           const got = readings().pick_id
-          taps.push({ zoom: levels[z], expected: c.id, got })
+          taps.push({ zoom: levels[z], expected: c.id, got, events: L.since(mark), at: want })
           if (got !== c.id) misses++
         }
       }
@@ -433,6 +506,7 @@
       let buttonChanged = null
       if (target) {
         const before = readings()
+        const mark = L.n
         let clicked = false
         const onClick = (e) => {
           if (e.target && e.target.closest && e.target.closest('button')) clicked = true
@@ -445,7 +519,8 @@
         })
         document.removeEventListener('click', onClick, true)
         unhighlight()
-        if (!seen) return null
+        if (!seen)
+          return timedOut(L, mark, { button: target.id, x: target.b.x, y: target.b.y }, taps)
         await sleep(400)
         const after = readings()
         buttonChanged = after.taps !== before.taps || after.pick_id !== before.pick_id
@@ -511,5 +586,5 @@
     if (!(await ready(item))) return { ready: false }
     return ANCHORS[item.plan.mode](item)
   }
-  K.touch = { pointerLog, gestures, ANCHORS, highlight }
+  K.touch = { pointerLog, gestures, ANCHORS, highlight, tapLog, nearestButton }
 })()
