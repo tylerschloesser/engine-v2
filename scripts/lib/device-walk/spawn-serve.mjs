@@ -66,6 +66,75 @@ export function reapStale({
   return killed
 }
 
+/** The processes on this machine, `{ pid, ppid, command, ports }`: `ps` joined with the listening TCP ports of `lsof`. */
+function listProcesses() {
+  const ps = execFileSync('ps', ['-eo', 'pid=,ppid=,command='], {
+    encoding: 'utf8',
+    maxBuffer: 16 << 20,
+  })
+  const ports = new Map()
+  try {
+    const out = execFileSync('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN', '-Fpn'], {
+      encoding: 'utf8',
+      maxBuffer: 16 << 20,
+    })
+    let pid = 0
+    for (const l of out.split('\n')) {
+      if (l[0] === 'p') pid = Number(l.slice(1))
+      else if (l[0] === 'n') {
+        const m = /:(\d+)$/.exec(l)
+        if (m) ports.set(pid, [...(ports.get(pid) ?? []), Number(m[1])])
+      }
+    }
+  } catch {
+    // no lsof: the command lines alone decide
+  }
+  return ps
+    .split('\n')
+    .map((l) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(l))
+    .filter(Boolean)
+    .map((m) => ({
+      pid: Number(m[1]),
+      ppid: Number(m[2]),
+      command: m[3],
+      ports: ports.get(Number(m[1])) ?? [],
+    }))
+}
+
+const PORT_LOW = 4173
+const PORT_HIGH = 4204
+
+/**
+ * The servers a SIGKILLed `device:walk` leaves behind (`vite preview`, the real-time `reference-server`, a
+ * quick tunnel): they are orphans (parent 1) and either say what they are on their command line or listen on
+ * 4173-4204 with this repo's path or vite on it. A server whose tool is alive has its tool as parent and is
+ * never touched. The next round otherwise fails with "device-serve exited (1)" on the taken port. Returns the
+ * pids signalled.
+ */
+export function reapOrphans({ list = listProcesses, kill = process.kill } = {}) {
+  const killed = []
+  for (const p of list()) {
+    if (p.ppid !== 1) continue
+    const byCommand =
+      /vite(\.js)?\s+preview\b.*engine\/tests\/browser\/pages\/vite\.config\.ts/.test(p.command) ||
+      /games\/reference-server\b/.test(p.command) ||
+      new RegExp(
+        `cloudflared tunnel --url http://127\\.0\\.0\\.1:(${PORT_LOW}|41[7-9]\\d|42[0-9]\\d)\\b`,
+      ).test(p.command)
+    const byPort =
+      p.ports.some((n) => n >= PORT_LOW && n <= PORT_HIGH) &&
+      (/vite/.test(p.command) || p.command.includes(REPO))
+    if (!byCommand && !byPort) continue
+    try {
+      kill(p.pid, 'SIGTERM')
+      killed.push(p.pid)
+    } catch {
+      // gone already
+    }
+  }
+  return killed
+}
+
 /**
  * The child's environment without colour: `device-serve` waits for `:<port>` in vite's output, which a
  * coloured run (FORCE_COLOR, set by Playwright's runner, say) splits with escape codes, and the server then

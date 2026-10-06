@@ -153,3 +153,38 @@ describe('device-walk reapStale', () => {
     ])
   })
 })
+
+describe('device-walk reapOrphans', () => {
+  test("device-walk reap: the orphaned vite preview, reference-server and tunnel of a SIGKILLed run are reaped; a live tool's servers and strangers are not", async () => {
+    const { reapOrphans } = await import('./device-walk/spawn-serve.mjs')
+    const list = () => [
+      {
+        pid: 101,
+        ppid: 1,
+        command:
+          'node ./node_modules/.bin/../vite/bin/vite.js preview --config packages/engine/tests/browser/pages/vite.config.ts --host 127.0.0.1',
+        ports: [4173],
+      },
+      {
+        pid: 102,
+        ppid: 1,
+        command: 'node /Users/x/repos/engine-v2/games/reference-server --game /g --port 4184',
+        ports: [4184],
+      },
+      { pid: 103, ppid: 1, command: 'cloudflared tunnel --url http://127.0.0.1:4193', ports: [] },
+      { pid: 104, ppid: 1, command: 'node /somewhere/else/server.js', ports: [4180] }, // a stranger on the port: not ours
+      { pid: 105, ppid: 55, command: 'node vite.js preview --host 127.0.0.1', ports: [4183] }, // its tool is alive
+      {
+        pid: 106,
+        ppid: 1,
+        command: 'node /Users/x/other/vite.js preview --host 127.0.0.1',
+        ports: [3000],
+      }, // another project's vite, off our ports: not ours
+      { pid: 107, ppid: 1, command: 'cloudflared tunnel --url http://127.0.0.1:8080', ports: [] }, // not ours
+    ]
+    const killed = []
+    const out = reapOrphans({ list, kill: (pid, sig) => killed.push([pid, sig]) })
+    expect(out).toEqual([101, 102, 103])
+    expect(killed.every(([, sig]) => sig === 'SIGTERM')).toBe(true)
+  })
+})

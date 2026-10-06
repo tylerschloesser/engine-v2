@@ -29,7 +29,7 @@ import { DEFAULT_PARAMS, formatSelftest, SELFTEST_ID } from './lib/device-walk/s
 import { runSelftest } from './lib/device-walk/selftest-cli.mjs'
 import { createServerControl } from './lib/device-walk/servers.mjs'
 import { OVERRIDES } from './lib/device-walk/serving.mjs'
-import { reapStale, spawnServe } from './lib/device-walk/spawn-serve.mjs'
+import { reapOrphans, reapStale, spawnServe } from './lib/device-walk/spawn-serve.mjs'
 import { formatState, formatStatus } from './lib/device-walk/status.mjs'
 
 const REPO = fileURLToPath(new URL('..', import.meta.url))
@@ -82,7 +82,7 @@ async function selftest({ values, roundFile }) {
   }
   if (Object.values(params).some((n) => !Number.isFinite(n) || n <= 0))
     fail('bad --hold/--drop-at/--drop')
-  const stale = reapStale()
+  const stale = [...reapStale(), ...reapOrphans()]
   if (stale.length) console.log(`stopped ${stale.length} server(s) left by an earlier run`)
   const ac = new AbortController()
   let run = null
@@ -269,7 +269,7 @@ async function main() {
   const sel = selectItems(items, only)
   if (!sel.some((i) => !i.android)) fail(`no items match --only ${values.only}`)
 
-  const stale = reapStale()
+  const stale = [...reapStale(), ...reapOrphans()]
   if (stale.length) console.log(`stopped ${stale.length} server(s) left by an earlier run`)
 
   let appRef

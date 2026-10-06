@@ -15,7 +15,7 @@ import { openMacBrowser } from './mac-browser.mjs'
 import { createMonitor } from './monitor.mjs'
 import { readEvents } from './rounds.mjs'
 import { OVERRIDES } from './serving.mjs'
-import { reapStale, spawnServe } from './spawn-serve.mjs'
+import { reapOrphans, reapStale, spawnServe } from './spawn-serve.mjs'
 import { formatState, formatStatus, fullStatus } from './status.mjs'
 
 /** Where a round's untracked files live: raw series, `qr.svg`, `state.json`. */
@@ -56,7 +56,7 @@ export async function waitCli({ round, timeoutS, json, read, out = console.log }
  */
 export async function autoCli(o) {
   const { repo, round, items, file, seriesDir, log = console.log } = o
-  const stale = reapStale()
+  const stale = [...reapStale(), ...reapOrphans()]
   if (stale.length) log(`stopped ${stale.length} server(s) left by an earlier run`)
   const prior = readLive(join(seriesDir, 'state.json'))
   if (prior?.pid && prior.pid !== process.pid && prior.phase !== 'stopped') {
