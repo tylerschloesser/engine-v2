@@ -459,15 +459,22 @@ export const CHECKS = {
         ref: 'pass',
       },
       {
-        name: 'rotation_keeps_centre',
-        source: 'rotation.centreShiftPx',
+        name: 'world_point_drift_tiles',
+        source: 'pointer.worldPointDriftTiles',
         op: '<=',
+        limit: 1,
+        ref: '0019 §3: "One-pointer drag pans (the world point under the finger stays under it)"; the Pass text names no tolerance, one tile is the allowance for the frame between an event and the camera (measured at touch-down against the latest finger position, every 40 ms of the pan)',
+      },
+      {
+        name: 'rotation_keeps_centre',
+        source: 'rotation.shown',
+        op: '==',
         limit: null,
-        ref: 'none: the Pass text names no tolerance, so the shift in CSS px is shown to the judge',
+        ref: 'none: the Pass text names no tolerance, so the shift is shown to the judge in tiles and CSS px',
         judge: 'always',
       },
       {
-        name: 'world_point_and_flick',
+        name: 'flick_glides',
         source: 'camera.judged',
         op: '==',
         limit: null,
@@ -480,12 +487,14 @@ export const CHECKS = {
       { name: 'tiles_max', source: 'camera.tilesMax' },
       { name: 'flick_speed_px_ms', source: 'pointer.flickSpeed' },
       { name: 'glide_tiles', source: 'pointer.glide' },
+      { name: 'world_point_samples', source: 'pointer.worldPointSamples' },
+      { name: 'rotation_shift_px', source: 'rotation.centreShiftPx' },
       { name: 'centre_shift_tiles', source: 'rotation.centreShiftTiles' },
     ],
     acts: [
       'one-finger pan 10 s, flick, pinch in and out, tap a tile, pull down from the top edge, double-tap, rotate',
     ],
-    judges: ['the world point stays under the finger', 'the flick glides and stops'],
+    judges: ['the flick glides and stops; the centre kept across the rotation'],
   },
   'M11-memory': {
     pass: '5bcd5bb2',
@@ -919,6 +928,7 @@ export const CHECKS = {
       collector: 'world',
       mode: 'kill',
       resumable: true,
+      keepCamera: true, // the reopened page restores what the first one saved
     }),
     criteria: [
       { name: 'world_resumed', source: 'after.resumed', op: '==', limit: true, ref: 'pass' },

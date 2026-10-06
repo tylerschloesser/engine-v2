@@ -258,9 +258,12 @@ describe('device-walk life', () => {
     const data = (over = {}) => ({
       steps_done: 7,
       reloads: 0,
-      pointer: { pageScrolled: false, pageZoomed: false },
+      pointer: { pageScrolled: false, pageZoomed: false, worldPointDriftTiles: 0.2 },
       camera: { judged: 'zoom 12 to 256 tiles across' },
-      rotation: { centreShiftPx: 5.1 },
+      rotation: {
+        centreShiftPx: 5.1,
+        shown: 'the centre moved 0.1 tiles (5.1 px) across the rotation',
+      },
       final: { cursor_valid: true },
       ...over,
     })
@@ -270,15 +273,25 @@ describe('device-walk life', () => {
       expect(e.verdict).toBe('fail')
       expect(e.criteria.find((c) => c.name === name).ok).toBe(false)
     }
-    bad({ pointer: { pageScrolled: true, pageZoomed: false } }, 'page_scrolled')
-    bad({ pointer: { pageScrolled: false, pageZoomed: true } }, 'page_zoomed')
+    bad(
+      { pointer: { pageScrolled: true, pageZoomed: false, worldPointDriftTiles: 0.2 } },
+      'page_scrolled',
+    )
+    bad(
+      { pointer: { pageScrolled: false, pageZoomed: true, worldPointDriftTiles: 0.2 } },
+      'page_zoomed',
+    )
+    bad(
+      { pointer: { pageScrolled: false, pageZoomed: false, worldPointDriftTiles: 1.5 } },
+      'world_point_drift_tiles',
+    )
     bad({ steps_done: 6 }, 'gestures_done')
     bad({ reloads: 1 }, 'page_reloaded')
-    // The shift in px is shown to the judge, never judged by a number nobody wrote down.
+    // The shift in tiles and px is shown to the judge, never judged by a number nobody wrote down.
     expect(
       evaluate(g, data()).criteria.find((c) => c.name === 'rotation_keeps_centre'),
     ).toMatchObject({
-      value: 5.1,
+      value: 'the centre moved 0.1 tiles (5.1 px) across the rotation',
       limit: null,
       ok: null,
     })

@@ -185,7 +185,6 @@ async function main() {
     const drive = values.drive
     if (drive !== undefined && !['android', 'ios'].includes(drive))
       fail('--drive takes android or ios')
-    if (drive === 'ios') fail('--drive ios is not built yet (M39j delegation 2)')
     const code = await autoCli({
       repo: REPO,
       round,
@@ -193,8 +192,9 @@ async function main() {
       only,
       file: roundFile(round),
       seriesDir: seriesDirFor(REPO, round, values['series-dir']),
-      // A driven phone is on USB: its origins are the loopback ones, reached through `adb reverse`.
-      tunnel: drive ? flags.has('--tunnel') : !flags.has('--no-tunnel'),
+      // An Android phone is on USB: its origins are the loopback ones, reached through `adb reverse`.
+      // The iPhone has no `adb reverse`, and a plain-http address is not a secure context: it needs the tunnel.
+      tunnel: drive === 'android' ? flags.has('--tunnel') : !flags.has('--no-tunnel'),
       noOpen: flags.has('--no-open') || !!drive,
       noBuild: flags.has('--no-build'),
       drive,

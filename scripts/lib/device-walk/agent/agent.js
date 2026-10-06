@@ -63,6 +63,30 @@
   }
   if (!id?.token) return
 
+  // --- A fresh attempt starts with a fresh camera (M39j) -----------------------------------------------
+  // The engine saves its camera to localStorage (`camera/persistence.ts`), so the zoom and place the last check
+  // left would be where this one boots (M09b's 256 tiles made M11's "zoomed out" impossible). The driver puts
+  // `_fresh=1` on the URL of every attempt it navigates to; this runs before the page boots (the agent is the
+  // first script of the head) and clears every camera key of this origin. `CAMERA_PREFIX` follows
+  // `cameraStorageKey` (a unit test fails when they differ); a check that tests the restore itself
+  // (`plan.keepCamera`) is navigated to without the parameter.
+  const CAMERA_PREFIX = 'engine:camera:v1:'
+  if (q.get('_fresh')) {
+    try {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i)
+        if (k?.startsWith(CAMERA_PREFIX)) localStorage.removeItem(k)
+      }
+    } catch {}
+    q.delete('_fresh')
+    const left = q.toString()
+    history.replaceState(
+      history.state,
+      '',
+      location.pathname + (left ? `?${left}` : '') + location.hash,
+    )
+  }
+
   // --- Events and the outbox ------------------------------------------------------------------
   const handlers = {}
   const on = (name, fn) => {

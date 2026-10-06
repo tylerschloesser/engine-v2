@@ -6,8 +6,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
+import { cameraStorageKey } from '../../packages/engine/src/camera/persistence.ts'
+import { screenToWorld } from '../../packages/engine/src/camera/transform.ts'
 import { applyRound } from './device-walk/apply.mjs'
-import { CHECKS, MP_SCENARIOS } from './device-walk/checks.mjs'
+import { CHECKS, evaluate, MP_SCENARIOS } from './device-walk/checks.mjs'
 import {
   createAndroidBackend,
   offsetsFor,
@@ -17,6 +19,12 @@ import {
 } from './device-walk/drive/android.mjs'
 import { assertBackend, NotDrivable } from './device-walk/drive/backend.mjs'
 import { createFakeBackend } from './device-walk/drive/fake-backend.mjs'
+import {
+  appiumCall,
+  createIosBackend,
+  pointerActions,
+  tapActions,
+} from './device-walk/drive/ios.mjs'
 import { judgeEvent } from './device-walk/drive/judge.mjs'
 import { startDrive } from './device-walk/drive/loop.mjs'
 import { ACT_COVERAGE, devicePerson, HANDLERS } from './device-walk/drive/person.mjs'
@@ -592,5 +600,198 @@ describe('device-walk drive: the Android backend without a phone', () => {
     })
     await c.cleanup()
     expect(asleep).toContain('shell input keyevent KEYCODE_WAKEUP')
+  })
+})
+
+describe('device-walk drive: a fresh camera per attempt, and the world point under the finger (M39j delegation 2)', () => {
+  const agentSrc = readFileSync(join(AGENT, 'agent.js'), 'utf8')
+  const driverSrc = readFileSync(join(AGENT, 'driver.js'), 'utf8')
+
+  test('device-walk drive: the agent clears the key prefix the engine saves its camera under', () => {
+    const prefix = cameraStorageKey('anything').slice(0, -'anything'.length)
+    expect(prefix).toMatch(/^engine:camera:v\d+:$/)
+    expect(agentSrc, 'agent.js CAMERA_PREFIX follows persistence.ts').toContain(
+      `const CAMERA_PREFIX = '${prefix}'`,
+    )
+    expect(cameraStorageKey()).toBe(`${prefix}default`)
+  })
+
+  test('device-walk drive: every navigation to an attempt asks for a fresh camera unless the check keeps it', () => {
+    expect(driverSrc).toContain('_fresh')
+    expect((driverSrc.match(/freshUrl\(/g) ?? []).length).toBeGreaterThanOrEqual(3)
+    expect(driverSrc).toContain("item.plan.keepCamera ? {} : { _fresh: '1' }")
+    expect(CHECKS['M23-kill-resume'].plan.keepCamera).toBe(true)
+    const keeps = Object.entries(CHECKS)
+      .filter(([, e]) => e.plan.keepCamera)
+      .map(([id]) => id)
+    expect(keeps).toEqual(['M23-kill-resume'])
+  })
+
+  test("device-walk drive: the pointer log's world point is the engine's screenToWorld", () => {
+    const src = readFileSync(join(AGENT, 'collect-touch.js'), 'utf8')
+    const fn = /function worldUnder\(r, x, y\) \{[\s\S]*?\n {2}\}\n/.exec(src)?.[0]
+    expect(fn).toBeTruthy()
+    const make = (w, h) =>
+      new Function('document', `${fn}; return worldUnder`)({
+        querySelector: () => ({
+          getBoundingClientRect: () => ({ left: 0, top: 0, width: w, height: h }),
+        }),
+      })
+    for (const [w, h, st, x, y] of [
+      [392, 745, { centreX: 3.5, centreY: -7.25, tilesAcross: 12 }, 100, 600],
+      [801, 308, { centreX: -40, centreY: 12, tilesAcross: 256 }, 700, 20],
+    ]) {
+      const out = { x: 0, y: 0 }
+      screenToWorld(st, { widthPx: w, heightPx: h }, x, y, out)
+      const got = make(w, h)(
+        { centre_x: st.centreX, centre_y: st.centreY, tiles_across: st.tilesAcross },
+        x,
+        y,
+      )
+      expect(got.x).toBeCloseTo(out.x, 9)
+      expect(got.y).toBeCloseTo(out.y, 9)
+    }
+  })
+
+  test('device-walk drive: M11 fails past one tile of drift, passes within it, and shows the rotation with its units', () => {
+    const data = (drift) => ({
+      steps_done: 7,
+      pointer: { pageScrolled: false, pageZoomed: false, worldPointDriftTiles: drift },
+      reloads: 0,
+      final: { cursor_valid: true },
+      rotation: {
+        centreShiftPx: 17.9,
+        centreShiftTiles: 0.27,
+        shown: 'the centre moved 0.27 tiles (17.9 px) across the rotation',
+      },
+      camera: { judged: 'zoom 12 to 256 tiles across; flick glided 7.2 tiles' },
+    })
+    const ok = evaluate(CHECKS['M11-gestures'], data(0.4))
+    expect(ok.verdict).toBe('judge')
+    expect(ok.criteria.find((c) => c.name === 'world_point_drift_tiles')).toMatchObject({
+      value: 0.4,
+      limit: 1,
+      ok: true,
+    })
+    expect(ok.criteria.find((c) => c.name === 'rotation_keeps_centre').value).toMatch(
+      /0\.27 tiles \(17\.9 px\)/,
+    )
+    expect(evaluate(CHECKS['M11-gestures'], data(1.4)).verdict).toBe('fail')
+    expect(evaluate(CHECKS['M11-gestures'], data(null)).verdict).toBe('fail') // never measured
+    expect(
+      CHECKS['M11-gestures'].criteria.find((c) => c.name === 'world_point_drift_tiles').ref,
+    ).toMatch(/^0019 §3/)
+  })
+})
+
+describe('device-walk drive: the iOS backend without a phone', () => {
+  const make = (answers = {}) => {
+    const calls = []
+    const call = async (method, path, body) => {
+      calls.push([method, path, body])
+      for (const [re, v] of Object.entries(answers))
+        if (new RegExp(re).test(`${method} ${path}`)) return typeof v === 'function' ? v(body) : v
+      if (path === '/session') return { sessionId: 'SID' }
+      if (path.endsWith('/contexts')) return ['NATIVE_APP', 'WEBVIEW_1']
+      if (path.endsWith('/execute/sync'))
+        return body.script === 'return location.href' ? 'https://x.example/device.html' : null
+      return null
+    }
+    const b = createIosBackend({ call, sleep: async () => {}, log: () => {} })
+    return { b, calls, paths: () => calls.map((c) => `${c[0]} ${c[1]}`) }
+  }
+
+  test('device-walk drive: W3C actions are two touch pointers moving together; a tap is down, pause, up', () => {
+    const [a, b] = pointerActions(
+      [
+        { from: { x: 10, y: 20 }, to: { x: 110, y: 20 } },
+        { from: { x: 300, y: 20 }, to: { x: 200, y: 20 } },
+      ],
+      600,
+    )
+    expect([a.id, b.id]).toEqual(['finger1', 'finger2'])
+    expect(a.parameters.pointerType).toBe('touch')
+    expect(a.actions.map((x) => x.type)).toEqual([
+      'pointerMove',
+      'pointerDown',
+      'pointerMove',
+      'pointerUp',
+    ])
+    expect(b.actions[2]).toMatchObject({ x: 200, duration: 600 })
+    const [t] = tapActions(5, 6, 2)
+    expect(t.actions.filter((x) => x.type === 'pointerDown')).toHaveLength(2)
+  })
+
+  test('device-walk drive: rotation, Home and the way back are the WDA calls the spike measured', async () => {
+    const { b, paths, calls } = make()
+    await b.open('https://x.example/device.html')
+    await b.rotate('landscape')
+    await b.home()
+    await b.returnToBrowser()
+    expect(calls.find((c) => c[1] === '/session/SID/orientation')[2]).toEqual({
+      orientation: 'LANDSCAPE',
+    })
+    const scripts = calls.filter((c) => c[1].endsWith('/execute/sync')).map((c) => c[2].script)
+    expect(scripts).toContain('mobile: deepLink')
+    expect(scripts).toContain('mobile: pressButton')
+    expect(scripts).toContain('mobile: activateApp')
+    expect(paths()[0]).toBe('POST /session')
+  })
+
+  test('device-walk drive: a tap is placed through the offset one swallowed calibration tap taught', async () => {
+    let cal = null
+    const { b, calls } = make({
+      'execute/sync': (body) => {
+        if (body.script === 'return location.href') return 'https://x.example/device.html'
+        if (/innerWidth/.test(body.script) && /screen\.width/.test(body.script))
+          return { w: 390, h: 664, sw: 390, sh: 844, s: 1 }
+        if (/__driveCal\)$/.test(body.script)) return cal
+        return null
+      },
+      'POST /session/SID/actions': (body) => {
+        cal = [195 - 0, 422 - 100] // a page that starts 100 points down
+        return null
+      },
+    })
+    await b.open('https://x.example/device.html')
+    await b.tap(50, 60)
+    const actions = calls
+      .filter((c) => c[1].endsWith('/actions'))
+      .map((c) => c[2].actions[0].actions)
+    expect(actions).toHaveLength(2) // the calibration tap, then ours
+    expect(actions[0][0]).toMatchObject({ x: 195, y: 422 })
+    expect(actions[1][0]).toMatchObject({ x: 50, y: 160 })
+    await b.tap(10, 10)
+    expect(calls.filter((c) => c[1].endsWith('/actions'))).toHaveLength(3) // learned once per page size
+  })
+
+  test('device-walk drive: Low Power and Airplane go back off in cleanup, then the session ends; the screen is never locked', async () => {
+    const { b, calls } = make({
+      'attribute/value': () => '1',
+      '/element$': () => ({ 'element-6066-11e4-a52e-4f735466cecf': 'E1' }),
+    })
+    await b.open('https://x.example/device.html')
+    await b.setLowPower(true)
+    await b.setAirplane(true)
+    await b.cleanup()
+    const off = calls.filter(
+      (c) =>
+        c[1].endsWith('/click') || c[1].endsWith('/tap') || /airplane/i.test(JSON.stringify(c[2])),
+    )
+    expect(off.length).toBeGreaterThan(2)
+    expect(calls.at(-1)).toEqual(['DELETE', '/session/SID', undefined])
+    expect(JSON.stringify(calls)).not.toMatch(/lock|sleep|screenOff/i)
+  })
+
+  test('device-walk drive: appiumCall rejects a WebDriver error with its message', async () => {
+    const { createServer } = await import('node:http')
+    const srv = createServer((_, res) =>
+      res.end(JSON.stringify({ value: { error: 'no such element', message: 'gone' } })),
+    )
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r))
+    await expect(appiumCall(`http://127.0.0.1:${srv.address().port}`, 'GET', '/x')).rejects.toThrow(
+      /no such element: gone/,
+    )
+    srv.close()
   })
 })

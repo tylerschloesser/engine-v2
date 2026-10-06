@@ -41,7 +41,8 @@ test('walk-touch: M11-gestures: seven gestures, each with its own detected ticks
     expect(crit(g, 'page_zoomed')).toMatchObject({ value: false, ok: true })
     expect(crit(g, 'page_reloaded')).toMatchObject({ value: 0, ok: true })
     expect(crit(g, 'cursor_tile_after_tap')).toMatchObject({ value: true, ok: true })
-    expect(typeof crit(g, 'rotation_keeps_centre')?.value).toBe('number') // px, shown to the judge
+    expect(String(crit(g, 'rotation_keeps_centre')?.value)).toMatch(/tiles \(.* px\)/) // tiles and px, shown to the judge
+    expect(crit(g, 'world_point_drift_tiles')?.limit).toBe(1) // the drag's world point is measured, not judged
     // The zoom went out and back: both ends of the range were seen.
     expect(Number(g.metrics.tiles_max)).toBeGreaterThan(Number(g.metrics.tiles_min) * 3)
     expect(Number(g.metrics.flick_speed_px_ms)).toBeGreaterThan(0.8)

@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { startAutoRound } from './auto-cli.mjs'
 import { createAndroidBackend } from './drive/android.mjs'
+import { createIosBackend } from './drive/ios.mjs'
 import { startDrive } from './drive/loop.mjs'
 import { devicePerson } from './drive/person.mjs'
 import { createLive, readLive, waitRound } from './live.mjs'
@@ -160,7 +161,11 @@ export async function autoCli(o) {
     if (!o.noOpen && process.platform === 'darwin')
       spawn('open', [monitorUrl], { stdio: 'ignore', detached: true }).unref()
     if (o.drive) {
-      backend = (o.makeBackend ?? ((kind) => createAndroidBackend({ log })))(o.drive)
+      backend = (
+        o.makeBackend ??
+        ((kind) => (kind === 'ios' ? createIosBackend({ log }) : createAndroidBackend({ log })))
+      )(o.drive)
+      backend.start?.().catch(() => {}) // the iPhone's WDA warm-up overlaps the rest; `open` waits for it
       // The phone reaches this Mac's servers on its own loopback: `adb reverse` each variant's port.
       const ports = Object.values(run.origins)
         .map((u) => new URL(u))

@@ -28,6 +28,18 @@
   const pxPerTile = (r) => Math.max(innerWidth, innerHeight) / r.tiles_across
   const dist = (a, b) => Math.hypot(a.centre_x - b.centre_x, a.centre_y - b.centre_y)
 
+  /** The world tile coordinates under client point (x, y): `transform.ts` `screenToWorld` (the canvas fills the page). */
+  function worldUnder(r, x, y) {
+    const c = document.querySelector('canvas')?.getBoundingClientRect()
+    const w = c ? c.width : innerWidth
+    const h = c ? c.height : innerHeight
+    const ppt = Math.max(w, h) / r.tiles_across
+    return {
+      x: r.centre_x + (x - (c ? c.left : 0) - w / 2) / ppt,
+      y: r.centre_y + (y - (c ? c.top : 0) - h / 2) / ppt,
+    }
+  }
+
   // --- the pointer log ----------------------------------------------------------------------------
   /** Scalars only. `flickSpeed` is the speed (px/ms) of the last move before a lift; `panMs` the time one
    * finger spent moving; `pull` a down within 60 px of the top edge that moved 100 px down. */
@@ -50,6 +62,12 @@
       lastT: 0,
       speed: 0,
       pullY0: -1,
+      watch: false, // the pan step: the world point under the first finger, kept from touch-down
+      wpX: 0,
+      wpY: 0,
+      wpOk: false,
+      drift: 0,
+      driftN: 0,
       downT: 0,
       downX: 0,
       downY: 0,
@@ -68,6 +86,13 @@
         st.lastY = e.clientY
         st.lastT = e.timeStamp
         st.speed = 0
+        if (st.watch && st.active === 1) {
+          // Once per pan, at touch-down (a rare event, not the move path): the camera and so the world point.
+          const w = worldUnder(readings(), e.clientX, e.clientY)
+          st.wpX = w.x
+          st.wpY = w.y
+          st.wpOk = true
+        }
         st.pullY0 = e.clientY < 60 ? e.clientY : -1
         if (
           st.downT &&
@@ -122,7 +147,9 @@
     )
     const vv = window.visualViewport
     const zoomed = () => {
-      if (vv && Math.abs(vv.scale - 1) > 0.01) st.zoomed++
+      if (vv && Math.abs(vv.scale - 1) > 0.01) {
+        st.zoomed++
+      }
     }
     if (vv) {
       vv.addEventListener('resize', zoomed)
@@ -159,12 +186,26 @@
     }
     const s0 = { ...P }
     const ok = []
+    // 0019 §3: "the world point under the finger stays under it". Taken at touch-down, compared every 40 ms
+    // with the point under the finger's latest position (off the input path: a timer, not an event).
+    P.watch = true
+    P.wpOk = false
+    P.drift = 0
+    P.driftN = 0
+    const watcher = setInterval(() => {
+      if (P.active !== 1 || !P.wpOk) return
+      const w = worldUnder(readings(), P.lastX, P.lastY)
+      P.drift = Math.max(P.drift, Math.hypot(w.x - P.wpX, w.y - P.wpY))
+      P.driftN++
+    }, 40)
     ok.push(
       await step(`Pan with one finger for about ${Math.round(panMs / 1000)} seconds.`, {
         panned: () => dist(r0, readings()) >= 2,
         'moving long enough': () => P.panMs - s0.panMs >= panMs,
       }),
     )
+    clearInterval(watcher)
+    P.watch = false
     ok.push(
       await step('Flick the world and let it glide to a stop.', {
         flicked: () => P.flickSpeed > 0.8,
@@ -196,7 +237,7 @@
     ok.push(
       await step('Double-tap anywhere.', {
         'double-tapped': () => P.dbl,
-        'page not zoomed': () => P.zoomed === 0 && P.gestures === 0,
+        'page not zoomed': () => P.zoomed === 0,
       }),
     )
     // A glide still running would be counted as the rotation moving the centre: wait for the camera to rest.
@@ -230,10 +271,16 @@
       reloads: 0,
       pointer: {
         pageScrolled: P.scrolled > 0,
-        pageZoomed: P.zoomed > 0 || P.gestures > 0,
+        // The page zooming is the visual viewport's scale moving. WebKit sends `gesturestart`/`gesturechange`
+        // for every two-finger touch (the engine's own pinch input, found on the iPhone in M39j), so the gesture
+        // events are counted for the record and are not what "the page zoomed" means.
+        pageZoomed: P.zoomed > 0,
+        gestureEvents: P.gestures,
         downs: P.downs,
         maxTouches: P.maxTouches,
         panMs: Math.round(P.panMs),
+        worldPointDriftTiles: P.driftN > 0 ? +P.drift.toFixed(3) : null,
+        worldPointSamples: P.driftN,
         flickSpeed: +P.flickSpeed.toFixed(2),
         glide: +P.glide.toFixed(2),
         pull: P.pull,
@@ -248,13 +295,15 @@
           cursor: [tapped.cursor_tile_x, tapped.cursor_tile_y],
           expected: expected ? [expected.tileX, expected.tileY] : null,
         },
-        // "The world point stays under the finger" and "the flick glides": the person's, asked next.
+        // "The flick glides and stops": the person's, asked next ("the world point stays under the finger" is measured).
         judged: `zoom ${tmin} to ${tmax} tiles across; flick glided ${P.glide.toFixed(1)} tiles`,
       },
       // In CSS px (tiles x px per tile): 4 px is a tiny shift at 256 tiles across and a big one at 12.
       rotation: {
         centreShiftTiles: +moved.toFixed(3),
         centreShiftPx: +(moved * pxPerTile(c1)).toFixed(1),
+        // For the judge sheet: the number and its units.
+        shown: `the centre moved ${moved.toFixed(2)} tiles (${(moved * pxPerTile(c1)).toFixed(1)} px) across the rotation`,
         from: first,
       },
       final: readings(),

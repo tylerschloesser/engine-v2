@@ -20,8 +20,11 @@ import type { CameraState } from './state.js'
 
 export type PersistedCamera = { centreX: number; centreY: number; tilesAcross: number }
 
+/** Every camera key starts with this (the device-walk agent clears them by it: `scripts/lib/device-walk-drive.test.mjs`). */
+export const CAMERA_KEY_PREFIX = 'engine:camera:v1:'
+
 export function cameraStorageKey(cameraKey?: string): string {
-  return `engine:camera:v1:${cameraKey ?? 'default'}`
+  return `${CAMERA_KEY_PREFIX}${cameraKey ?? 'default'}`
 }
 
 /** Best-effort: a full `localStorage` quota, Safari private-mode `setItem`, or `localStorage` being

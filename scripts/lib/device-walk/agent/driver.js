@@ -80,6 +80,7 @@
     const want = [...new URLSearchParams(query)].filter(([k]) => !tol.has(k))
     const have = new URLSearchParams(location.search)
     have.delete('_walk') // the cache-buster of a fresh attempt (below)
+    have.delete('_fresh')
     for (const k of tol) have.delete(k)
     if (want.some(([k, v]) => have.get(k) !== v)) return false
     return [...have].length === want.length
@@ -276,6 +277,12 @@
     return loaded[name]
   }
 
+  /** `_fresh=1`: the agent of the new document clears the persisted camera before the page boots (agent.js). */
+  function freshUrl(u, item) {
+    if (!item.plan.keepCamera) u.searchParams.set('_fresh', '1')
+    return u.href
+  }
+
   async function go(item) {
     const key = `${item.id}:${item.n}`
     // A helper tab (a second tab, a Private tab, the imported world: opened with a `-h...` tab id) did its part
@@ -286,8 +293,9 @@
     if (!here(item)) {
       navigating = true
       if (!item.origin) return
-      if (item.origin !== location.origin) return A.hop(item.origin, item.page)
-      return location.assign(new URL(item.page, location.origin).href)
+      if (item.origin !== location.origin)
+        return A.hop(item.origin, item.page, item.plan.keepCamera ? {} : { _fresh: '1' })
+      return location.assign(freshUrl(new URL(item.page, location.origin), item))
     }
     if (served) {
       // A fresh document for every attempt. Not `location.reload()`: a reload revalidates every
@@ -296,7 +304,7 @@
       navigating = true
       const u = new URL(location.href)
       u.searchParams.set('_walk', `${item.n}-${Date.now().toString(36)}`) // unique: `n` restarts at 1 for every check, and the same URL again is no navigation at all
-      return location.assign(u.href)
+      return location.assign(freshUrl(u, item))
     }
     if (get('helper') === key) return // a second tab of this attempt that already did its part
     served = true

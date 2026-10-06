@@ -196,6 +196,10 @@ export const HANDLERS = [
     name: 'second-tab',
     match: /^Tap "Open second tab"/,
     run: async ({ backend, ctx }) => {
+      if (backend.platform === 'ios')
+        throw new NotDrivable(
+          "coming back to the first tab needs Safari's tab switcher: not driven yet",
+        )
       const b = await backend.readPage(BAR_BUTTON('Open second tab'))
       if (!b) throw new Error('no "Open second tab" button on the bar')
       await backend.tap(b.x, b.y)
@@ -225,18 +229,22 @@ export const HANDLERS = [
   {
     name: 'wifi',
     match: /(Turn Wi-Fi off so the phone moves to cellular|Switch the phone off Wi-Fi now)/,
-    run: () => {
+    run: ({ backend }) => {
       throw new NotDrivable(
-        'a driven round serves over adb reverse (USB), so the Wi-Fi state changes nothing the page can see; it needs a tunnel round with the phone on Wi-Fi and cellular',
+        backend.platform === 'ios'
+          ? 'the iPhone has no SIM, so there is no cellular to move to: Wi-Fi off is no network at all'
+          : 'a driven round serves over adb reverse (USB), so the Wi-Fi state changes nothing the page can see; it needs a tunnel round with the phone on Wi-Fi and cellular',
       )
     },
   },
   {
     name: 'private-tab',
     match: /^Open this link in a Private tab/,
-    run: () => {
+    run: ({ backend }) => {
       throw new NotDrivable(
-        'Chrome ignores the incognito flag of an intent sent from adb (only Chrome itself may open an Incognito tab by intent)',
+        backend.platform === 'ios'
+          ? "Safari's Private mode is the tab switcher's UI: not driven yet"
+          : 'Chrome ignores the incognito flag of an intent sent from adb (only Chrome itself may open an Incognito tab by intent)',
       )
     },
   },

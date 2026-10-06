@@ -244,6 +244,7 @@ export function createAndroidBackend(o = {}) {
   }
 
   const api = {
+    platform: 'android',
     /** Ports the phone reaches on this Mac's loopback (`adb reverse`): the fixture servers of a no-tunnel round. */
     async reverse(ports) {
       for (const p of ports) {

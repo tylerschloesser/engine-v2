@@ -18,6 +18,7 @@ const RUNNER = `(() => {
   const on = (id) => { const e = el(id); return !!e && !e.hidden && !e.disabled && !e.closest('[hidden]') }
   return {
     runner: /runner\\.html$/.test(location.pathname),
+    href: location.href.slice(0, 120),
     autolock: on('autolock'), probe: on('probe'), start: on('start'),
     walking: !!el('run') && !el('run').hidden,
   }
@@ -44,7 +45,10 @@ export async function passRunner(backend, { timeoutMs = 180_000, log = () => {} 
       await sleep(500) // the document is navigating
       continue
     }
-    if (!s.runner || s.walking) return true
+    if (!s.runner || s.walking) {
+      log(`runner: done (${s.walking ? 'walking' : 'not the runner page'}: ${s.href})`)
+      return true
+    }
     const next = s.autolock ? 'autolock' : s.probe ? 'probe' : s.start ? 'start' : ''
     if (next && next !== tapped) {
       const p = await backend.readPage(CENTRE(next))
@@ -79,6 +83,11 @@ export function startDrive(o) {
     if (handled.has(key)) return
     handled.add(key)
     const out = await person.answer(p)
+    // DRIVE_SHOTS=<dir>: a screenshot after every answered act prompt (a debugging aid: a prompt is never open in a window).
+    if (process.env.DRIVE_SHOTS && p.kind === 'act')
+      await backend
+        .screenshot(join(process.env.DRIVE_SHOTS, `${p.id}-${p.n}-${out.handler ?? 'x'}.png`))
+        .catch(() => {})
     log(
       `drive ${p.id} #${p.n} [${p.kind}] ${p.text.slice(0, 70)} -> ${out.status}${out.reason ? `: ${out.reason}` : ''}${out.error ? `: ${out.error}` : ''}`,
     )
