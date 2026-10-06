@@ -44,6 +44,14 @@ import {
 import type { EngineInstance } from './loader.js'
 import { instantiate } from './loader.js'
 import { readU32LE } from './sab/bytes.js'
+import {
+  PROFILE_CATCHUP,
+  PROFILE_FRAME,
+  PROFILE_RESYNC,
+  PROFILE_SEAL,
+  PROFILE_SLOTS,
+  PROFILE_TICK,
+} from './sab/control.js'
 import { buildSimInstanceConfig, type WorldConfig } from './sim-config.js'
 import type { Storage } from './storage/types.js'
 import { worldKeys } from './storage/types.js'
@@ -487,6 +495,11 @@ export interface SimHost {
   readonly running: boolean
   readonly counters: SimHostCounters
   logSink: ((bytes: Uint8Array) => void) | null
+  /** docs/plan/39o-large-save-tick-breakdown.md: bench builds only. When set (`PROFILE_SLOTS` int32s,
+   * preallocated by the sim worker), the paced tick writes its parts' durations into it in whole
+   * microseconds (`PROFILE_*`, `sab/control.ts`); `null` everywhere else, where each site is one
+   * null check. Timing never feeds the sim. */
+  profile: Int32Array | null
   /** docs/plan/30d-hello-resent-silence.md: test-only diagnostic. When set, every handshake step
    * (a `Hello` queued, an attach-queue slot filled, what `pumpHandshakes` did with an entry, a
    * connection closing) is reported as one line. `null` in production; each call site is guarded
@@ -939,6 +952,9 @@ export function createSimHostFromInstance(
    * `sim_build_frame(conn)` -> `connection.send(...)` when `len > 0`"), once per accepted
    * connection, in `ConnId` order. No clock read here any more (Deviations): a tick's own overrun
    * is no longer measured individually. */
+  /** True while `resync` runs its catch-up ticks: their parts are not the paced tick's (`profile`). */
+  let catchingUp = false
+
   function runOneTick(): void {
     // A fatal host runs no tick. A storage failure is the exception: a manual driver that still
     // steps gets `Persistence`'s own "a previous storage error is fatal" throw (M22's contract).
@@ -950,7 +966,14 @@ export function createSimHostFromInstance(
     // already has (host/mod.rs `connect`/`disconnect`). Zero cost when `handshake` was never given
     // (`worker/sim.ts`'s single-player topology): `handshakeState` stays empty forever.
     if (handshake) pumpHandshakes()
+    const prof = catchingUp ? null : host.profile
+    let tp = prof ? services.clock.now() : 0
     const seal = sim.simSealFrame()
+    if (prof) {
+      const t = services.clock.now()
+      prof[PROFILE_SEAL] = Math.round((t - tp) * 1000)
+      tp = t
+    }
     // `seal.bytes` is the whole persistent `Persist` region view (Orchestrator ruling 2), but
     // `logSink`'s own contract (`SimHost.logSink`'s doc comment: "exactly `len` bytes") is fixed at
     // one argument -- unlike `simBuildFrame`'s `bytes`+separate `.len` pair, `Storage.append`
@@ -964,7 +987,12 @@ export function createSimHostFromInstance(
     if (seal.len > 0 && host.logSink) {
       host.logSink((seal.bytes as Uint8Array).subarray(0, seal.len))
     }
+    if (prof) tp = services.clock.now()
     const status = sim.simTick()
+    if (prof) {
+      const t = services.clock.now()
+      prof[PROFILE_TICK] = Math.round((t - tp) * 1000)
+    }
     if (status !== Status.Ok) throw new Error(`sim_tick failed: status ${status}`)
     counters.ticksRun++
     // docs/plan/24-recovery-and-migration.md, Planning decisions 3: "1,200 successfully ticked
@@ -976,6 +1004,7 @@ export function createSimHostFromInstance(
     // hook, right after `sim_tick()` succeeds -- `counters.ticksRun` is the same completed-tick
     // count `Persistence.afterTick`'s own doc comment names as its `tick` argument.
     persistence?.afterTick(counters.ticksRun)
+    if (prof) tp = services.clock.now()
     for (let conn = 0; conn < MAX_CONNS; conn++) {
       const connection = conns[conn]
       if (!connection) continue
@@ -1002,6 +1031,7 @@ export function createSimHostFromInstance(
         withLen.send(MsgClass.ReliableOrdered, frame.bytes as Uint8Array, frame.len)
       }
     }
+    if (prof) prof[PROFILE_FRAME] = Math.round((services.clock.now() - tp) * 1000)
     // docs/plan/28b-reconnect-and-lifecycle.md step 4 (0013 "the tick that applies the last
     // `Disconnected` is the last tick run"): a no-op unless `sim.simTick()` above just applied the
     // world's last `Disconnected` record (queued by `lifecycle.playerLeft`/a grace timeout,
@@ -1054,7 +1084,11 @@ export function createSimHostFromInstance(
       const behindTicks = (overshoot - (overshoot % tickMs)) / tickMs // exact: stays a Smi
       if (behindTicks > 0) {
         const runCount = Math.min(behindTicks, MAX_CATCHUP_TICKS)
+        catchingUp = true
         for (let i = 0; i < runCount; i++) runOneTick()
+        catchingUp = false
+        const prof = host.profile
+        if (prof) prof[PROFILE_CATCHUP] = runCount
         caughtUp = runCount > 0
         const dropped = behindTicks - runCount
         if (dropped > 0) counters.ticksDropped += dropped
@@ -1075,7 +1109,14 @@ export function createSimHostFromInstance(
     ensureSyncBase()
     runOneTick()
     ticksSinceSync++
-    if (ticksSinceSync >= RESYNC_TICKS) resync()
+    if (ticksSinceSync >= RESYNC_TICKS) {
+      const prof = host.profile
+      if (prof) {
+        const t0 = services.clock.now()
+        resync()
+        prof[PROFILE_RESYNC] = Math.max(1, Math.round((services.clock.now() - t0) * 1000))
+      } else resync()
+    }
   }
 
   /** Pacing (Scope): `AtomicsTimer` calls this on every real wake while armed. It no longer checks
@@ -1291,6 +1332,7 @@ export function createSimHostFromInstance(
     },
     counters,
     logSink: null,
+    profile: null,
     handshakeTrace: null,
     get epoch() {
       return epoch

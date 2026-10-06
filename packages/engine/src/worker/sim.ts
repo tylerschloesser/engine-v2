@@ -31,9 +31,20 @@ import { EngineTrap } from '../loader.js'
 import { RingConnection } from '../ring-connection.js'
 import {
   CB_FORCE_SNAPSHOT_REQ,
+  CB_SIM_CATCHUP,
+  CB_SIM_FRAME_US,
+  CB_SIM_ONETICK_US,
+  CB_SIM_RESYNC_US,
+  CB_SIM_SEAL_US,
   CB_SIM_STEP_REQ,
   CB_SIM_TICK_US,
   CB_SIM_TICKS_RUN,
+  PROFILE_CATCHUP,
+  PROFILE_FRAME,
+  PROFILE_RESYNC,
+  PROFILE_SEAL,
+  PROFILE_SLOTS,
+  PROFILE_TICK,
   W_ACK,
   WORKER_CLIENT,
   workerWord,
@@ -596,6 +607,9 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   const leakyAppendArmed = message.test?.leakyStorageAppend === true
   // M36's bench HUD (`CB_SIM_TICK_US`); only a bench page's setup carries it.
   const timing = message.test?.timing === true
+  // docs/plan/39o: the parts of the timed pass (`SimHost.profile`), preallocated once.
+  const profile = timing ? new Int32Array(PROFILE_SLOTS) : null
+  if (profile) simHost.profile = profile
 
   function body(wokenBy: number): void {
     if (fatalSeen) {
@@ -635,10 +649,19 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
         // M36's bench HUD: the duration of a pass that ran a tick (admit and frames included),
         // stored before `CB_SIM_TICKS_RUN` so main never reads a count ahead of its duration.
         const ticksBefore = simHost.counters.ticksRun
+        profile?.fill(0)
         const t0 = systemClock.now()
         if (wokenBy === lastWokenBy) atomicsTimer.poll()
         else atomicsTimer.interrupt()
         if (simHost.counters.ticksRun !== ticksBefore) {
+          if (profile) {
+            const w = shell.control.words
+            Atomics.store(w, CB_SIM_SEAL_US, profile[PROFILE_SEAL] as number)
+            Atomics.store(w, CB_SIM_ONETICK_US, profile[PROFILE_TICK] as number)
+            Atomics.store(w, CB_SIM_FRAME_US, profile[PROFILE_FRAME] as number)
+            Atomics.store(w, CB_SIM_RESYNC_US, profile[PROFILE_RESYNC] as number)
+            Atomics.store(w, CB_SIM_CATCHUP, profile[PROFILE_CATCHUP] as number)
+          }
           Atomics.store(
             shell.control.words,
             CB_SIM_TICK_US,

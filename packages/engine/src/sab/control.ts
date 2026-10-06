@@ -14,7 +14,7 @@
 // global words *after* the existing per-worker region: `WORKER_BASE`/`WORKER_STRIDE`/`MAX_WORKERS`
 // are unchanged, so every existing `workerWord(...)` address (and `control.workerWord addressing`'s
 // own pinned literals, `control.test.ts`) is untouched -- only the block's own total size grows.
-export const CONTROL_BLOCK_INT32S = 69
+export const CONTROL_BLOCK_INT32S = 74
 export const CONTROL_BLOCK_BYTES = CONTROL_BLOCK_INT32S * 4
 
 // Global words (indices 0-7, all now used as of `CB_FORCE_SNAPSHOT_REQ` below).
@@ -114,6 +114,28 @@ export const CB_LINK_GEN = 65
 export const CB_CLIENT_FRAME_US = 66
 export const CB_CLIENT_FRAME_N = 67
 export const CB_SIM_TICK_US = 68
+
+/**
+ * docs/plan/39o-large-save-tick-breakdown.md: the parts of that same timed pass (indices 69-73), written
+ * by the sim worker before `CB_SIM_TICK_US`, only under `test.timing`. Whole microseconds each:
+ * `CB_SIM_SEAL_US` (`sim_seal_frame`), `CB_SIM_ONETICK_US` (`sim_tick`), `CB_SIM_FRAME_US` (the frame
+ * build and send over every connection), all three of the pass's own paced tick (catch-up ticks
+ * excluded); `CB_SIM_RESYNC_US` (the whole `resync()` of this pass, 0 when it ran none, catch-up ticks
+ * and warming included) and `CB_SIM_CATCHUP` (the catch-up ticks that resync ran).
+ */
+export const CB_SIM_SEAL_US = 69
+export const CB_SIM_ONETICK_US = 70
+export const CB_SIM_FRAME_US = 71
+export const CB_SIM_RESYNC_US = 72
+export const CB_SIM_CATCHUP = 73
+
+/** Slots of `SimHost.profile` (`server.ts`), in the order of the control words above. */
+export const PROFILE_SEAL = 0
+export const PROFILE_TICK = 1
+export const PROFILE_FRAME = 2
+export const PROFILE_RESYNC = 3
+export const PROFILE_CATCHUP = 4
+export const PROFILE_SLOTS = 5
 
 // Worker indexes (docs/plan/06-sab-primitives-and-workers.md, Seams).
 export const WORKER_CLIENT = 0

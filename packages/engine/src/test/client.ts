@@ -13,6 +13,11 @@ import {
   CB_CLIENT_FRAME_US,
   CB_FORCE_SNAPSHOT_REQ,
   CB_FRAME_REQ,
+  CB_SIM_CATCHUP,
+  CB_SIM_FRAME_US,
+  CB_SIM_ONETICK_US,
+  CB_SIM_RESYNC_US,
+  CB_SIM_SEAL_US,
   CB_SIM_STEP_REQ,
   CB_SIM_TICK_US,
   CB_SIM_TICKS_RUN,
@@ -1078,6 +1083,13 @@ export type BenchProbe = {
   frameUs(): number
   tickN(): number
   tickUs(): number
+  /** docs/plan/39o: the parts of that pass (`CB_SIM_SEAL_US` ...), valid once `tickN()` has moved. */
+  sealUs(): number
+  simTickUs(): number
+  frameBuildUs(): number
+  /** 0 when the pass ran no resync. */
+  resyncUs(): number
+  catchupTicks(): number
   /** `engine_mem_grows` of the sim worker (`W_MEM_GROWS`); the client worker's is `clientGrows`. */
   simGrows(): number
   clientGrows(): number
@@ -1092,6 +1104,11 @@ export function benchProbe(client: Client): BenchProbe {
     frameUs: () => Atomics.load(w, CB_CLIENT_FRAME_US),
     tickN: () => Atomics.load(w, CB_SIM_TICKS_RUN),
     tickUs: () => Atomics.load(w, CB_SIM_TICK_US),
+    sealUs: () => Atomics.load(w, CB_SIM_SEAL_US),
+    simTickUs: () => Atomics.load(w, CB_SIM_ONETICK_US),
+    frameBuildUs: () => Atomics.load(w, CB_SIM_FRAME_US),
+    resyncUs: () => Atomics.load(w, CB_SIM_RESYNC_US),
+    catchupTicks: () => Atomics.load(w, CB_SIM_CATCHUP),
     simGrows: () => Atomics.load(w, host),
     clientGrows: () => Atomics.load(w, cli),
   }
