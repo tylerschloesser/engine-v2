@@ -1,6 +1,6 @@
 # M39p: A measuring window measures only itself, and the driver keeps quiet during it
 
-Status: not started · After: 39o · Tyler-dependent: no
+Status: done (2026-10-06) · After: 39o · Tyler-dependent: no
 
 ## Goal
 Finding 5 of the driven rounds: on the USB iPhone 12, M09b-fill-rate fails on rAF only (`m39k-iphone`: p95 18.58 against 17.5, 10 gaps over 20 ms per 10 s against 5; GPU exec 3.9 ms passes), and M16-coexist counts 15 hitches in 10 min. The Pixel passes M09b (p95 16.77, 0 gaps). A read-only diagnosis (2026-10-06) found:
@@ -29,10 +29,10 @@ Detaching Web Inspector or WDA during a window (a later brief if the re-measure 
 `scripts/lib/device-walk/{agent/agent.js,agent/driver.js,agent/collect-*.js,drive/loop.mjs,drive/ios.mjs,drive/android.mjs,checks.mjs}`, their tests under `scripts/lib/`, and the fixture page HUD if the window-local stats live there (`packages/engine/tests/browser/pages/src/`).
 
 ## Exit criteria
-- [ ] The step 1 and step 4 tests exist, pass, and were seen red (red lines pasted). The step 1 audit of `steady.*` criteria is in Deviations.
-- [ ] The gap ring appears in a loopback walk's evidence (paste one), and `pnpm test:slow browser -t walk` is green (pasted line).
-- [ ] No golden, budget or baseline changed; `[gc]` fixture pages stay within budget.
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The step 1 and step 4 tests exist, pass, and were seen red (red lines pasted). The step 1 audit of `steady.*` criteria is in Deviations.
+- [x] The gap ring appears in a loopback walk's evidence (paste one), and `pnpm test:slow browser -t walk` is green (pasted line).
+- [x] No golden, budget or baseline changed; `[gc]` fixture pages stay within budget.
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test unit -t device-walk` · `pnpm test:slow browser -t walk` (targeted, foreground).
@@ -63,3 +63,4 @@ After landing, the orchestrator re-runs M09b-fill-rate and M16-coexist driven on
 **Loopback evidence.** `node scripts/lib/device-walk/fake-phone-run.mjs M09b-fill-rate chromium ...` (3 s windows, chromium): `[ 'M09b-fill-rate', 'pass', 'auto' ]`; `windows[0].gaps` = `{"total":0,"kept":0,"origin":1791327395778,"list":[]}` (a smooth run: a non-empty list is in the unit test), `steady` 6 samples, the round log has `window` start/end pairs (`"phase":"start",...,"ms":3000` then `"phase":"end"` 3.006 s later).
 
 **Not done / for the next brief.** The loop's own phone-facing calls are timestamped only for iOS (`IOS_TRACE`); Android has none. The quiet wake on the end marker is wired only through `onWindow` (auto-main); without it the loop waits for the timer. No device run.
+- **Gate (orchestrator):** round 1 stopped on a misread commit gate: the implementer blamed the `bench.ts` `heldD` warning, but the only error was in its own `fake-agent-page.mjs`. The two `walk-life: M16-low-power` reds the report found at base were M39m's miss: the item became `auto` when the ratio became a failable criterion, and M39m never ran the slow walk specs. The orchestrator fixed the spec (`by: 'auto'`, both ratio criteria `ok: true`): `pnpm test:slow browser -t walk-life` pass 20. `pnpm test && pnpm lint` green (unit 607, browser 256 in 45 s). The steady-start margin for windows of 30 s or more past warm-up is accepted: it keeps rolling 10 s page statistics from reading warm-up frames, without changing a limit.

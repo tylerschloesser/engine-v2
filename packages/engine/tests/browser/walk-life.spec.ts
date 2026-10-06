@@ -94,11 +94,13 @@ test('walk-life: coexist (a window with scripted pan and paints), background (tw
     expect(Number(bg.metrics.hidden_ms)).toBeGreaterThanOrEqual(1050)
 
     const lp = finalOf(r, 'M16-low-power')
-    expect(lp).toMatchObject({ result: 'pass', by: 'mixed' })
+    // M39m: the ratio is a failable criterion (0.95-1.05), no longer a judge sheet, so the item is `auto`.
+    expect(lp).toMatchObject({ result: 'pass', by: 'auto' })
     expect(crit(lp, 'low_power_detected')).toMatchObject({ value: true, ok: true })
     expect(Number(lp.metrics.rafp50_low_power_ms)).toBeGreaterThan(25)
     expect(Number(lp.metrics.rafp50_normal_ms)).toBeLessThanOrEqual(20)
-    expect(typeof crit(lp, 'flick_distance_ratio')?.value).toBe('number')
+    expect(crit(lp, 'flick_distance_ratio')).toMatchObject({ ok: true })
+    expect(crit(lp, 'flick_distance_ratio_max')).toMatchObject({ ok: true })
   } finally {
     await r.stop()
   }
