@@ -1361,6 +1361,7 @@ export const CHECKS = {
       { name: 'frames', source: 'derived.frames' },
       { name: 'moving_frames_changed_ratio', source: 'derived.movingFramesChangedRatio' },
       { name: 'max_still_ms', source: 'derived.maxStillMs' },
+      { name: 'repeated_frames', source: 'derived.repeatedFrames' },
       { name: 'fade_min_alpha', source: 'derived.minAlpha' },
     ],
     acts: [],
@@ -1734,7 +1735,8 @@ const medianOfAll = (a) => {
 
 /**
  * M34-remote-motion's numbers from the phone's raw per-frame record of the remote circle (`frames`:
- * `[t, x, y]` for each frame the circle was in the DrawList). A *snap* is a frame-to-frame jump above
+ * `[t, x, y, seq]` for each frame the circle was in the DrawList; `seq` is the DrawList's `frame_seq`, absent
+ * in older records). A *snap* is a frame-to-frame jump above
  * `floorTiles` and above `factor` times the median jump of the `window` frames on either side (the
  * "expected step": a circle at rest has median 0, which is why the floor exists). The definition lives
  * here, beside the criterion, and the page only reports what it saw.
@@ -1775,12 +1777,14 @@ const MOVING_MIN_TILES = 1
  * path over the 15 frames either side is at least a tile) where the position differs from the frame before;
  * `maxStillMs` is the longest time the position stayed identical inside such a stretch. A circle drawn at
  * each 10 Hz presence sample scores about 0.17 and 100 ms; one interpolated per frame scores 1 and one frame.
- * `null` when there was no stretch of motion to judge.
+ * Pairs whose two frames carry the same DrawList `frame_seq` are left out of the ratio (`repeatedFrames`
+ * counts them: a rAF that came before the worker's next publish). `null` when there was no stretch of motion.
  */
 function stepsWhileMoving(frames, jumps) {
   const w = MOVING_WINDOW_FRAMES
   let pairs = 0
   let changed = 0
+  let repeated = 0
   let maxStill = 0
   let stillFrom = null // the time of the last frame at which the position changed (or the run began)
   for (let i = 0; i < jumps.length; i++) {
@@ -1788,6 +1792,12 @@ function stepsWhileMoving(frames, jumps) {
     for (let k = Math.max(0, i - w); k < Math.min(jumps.length, i + w + 1); k++) path += jumps[k]
     if (path < MOVING_MIN_TILES) {
       stillFrom = null
+      continue
+    }
+    // The same `frame_seq` twice: the client worker had published nothing new by this rAF, so the picture
+    // cannot have moved. That is the frame pipeline's jitter, not the interpolation: counted apart.
+    if (frames[i][3] !== undefined && frames[i][3] === frames[i + 1][3]) {
+      repeated++
       continue
     }
     pairs++
@@ -1802,6 +1812,7 @@ function stepsWhileMoving(frames, jumps) {
   return {
     movingFramesChangedRatio: pairs ? +(changed / pairs).toFixed(3) : null,
     maxStillMs: pairs ? Math.round(maxStill) : null,
+    repeatedFrames: repeated,
   }
 }
 

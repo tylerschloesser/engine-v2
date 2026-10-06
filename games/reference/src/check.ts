@@ -11,7 +11,7 @@
 // allocates, it is outside the zero-GC rule (`.claude/rules/hot-paths.md`), and the per-frame recorder runs
 // only between `act.sample(true)` and `act.sample(false)`.
 import type { Client, LinkState } from 'engine'
-import { type DrawRecord, drawListRecords } from 'engine/test'
+import { type DrawRecord, drawListRecords, drawListSeq } from 'engine/test'
 import type { BenchApi } from './bench.js'
 import type { RefAction } from './bindings/RefAction.js'
 import type { RefUi } from './bindings/RefUi.js'
@@ -27,7 +27,7 @@ const KIND_RING = 2
 const SLOT = { stone: 0, iron: 1, wood: 2, coal: 3, furnace: 4, ingot: 5 } as const
 
 type Circle = { x: number; y: number; alpha: number }
-type Frame = { t: number; circles: Circle[] }
+type Frame = { t: number; circles: Circle[]; seq: number }
 export type Timed = {
   ok: boolean
   reason?: string
@@ -90,7 +90,10 @@ export function installCheck(game: StartedGame, bench?: BenchApi): void {
   let recorded: Frame[] = []
   const tick = (): void => {
     frames++
-    if (sampling) recorded.push({ t: performance.now(), circles: world().remote })
+    if (sampling) {
+      const remote = world().remote
+      recorded.push({ t: performance.now(), circles: remote, seq: drawListSeq(client) })
+    }
     if (watch?.fill?.parentElement?.classList.contains('is-filling'))
       watch.lastFill = fillOf(watch.fill)
     requestAnimationFrame(tick)

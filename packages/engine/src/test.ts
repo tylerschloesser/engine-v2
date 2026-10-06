@@ -24,6 +24,7 @@ export {
   dispatchRaw,
   drawListHash,
   drawListRecords,
+  drawListSeq,
   forceSnapshot,
   hashDrawListFields,
   hostRegionHash,

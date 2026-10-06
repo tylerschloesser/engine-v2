@@ -178,6 +178,11 @@ pub struct ClientCore<G: Game> {
     arrivals_len: usize,
     /// [`Self::rebase_interp`] ran: the host clock snaps at the next [`Self::tick_fraction`].
     rebase_pending: bool,
+    /// The host clock has been fed a real host tick (the replica's tick is above 0): until then its
+    /// samples are the empty replica's tick 0, and seeding the clock from one would leave it
+    /// `tick x tick_ms` behind for good, closing only at the 10 % dilation limit (docs/plan/
+    /// 39l-remote-motion-staircase.md).
+    host_clock_primed: bool,
     /// The client clock of the previous [`Self::tick_fraction`] call (`None` before the first).
     last_interp_ms: Option<f64>,
     /// The interpolation render time, host ticks, as of the last [`Self::tick_fraction`].
@@ -311,6 +316,7 @@ impl<G: Game> ClientCore<G> {
             arrivals: [0; ARRIVALS_CAP],
             arrivals_len: 0,
             rebase_pending: false,
+            host_clock_primed: false,
             last_interp_ms: None,
             render_t: 0.0,
             host_now: 0.0,
@@ -585,6 +591,13 @@ impl<G: Game> ClientCore<G> {
     /// exactly what keeps this from freezing between heartbeats, 0010).
     pub fn tick_fraction(&mut self, local_ms: f64) -> f32 {
         self.host_clock.on_frame(self.replica.tick(), local_ms);
+        if !self.host_clock_primed && self.replica.tick().0 > 0 {
+            // The first real host tick (the join snapshot of a world that has already run): the clock
+            // was seeded from tick 0 on the frames before it. Snap once, like a resync, instead of
+            // slewing `tick x tick_ms` away at 10 % (the remote circle sat at the oldest held sample).
+            self.host_clock_primed = true;
+            self.rebase_pending = true;
+        }
         if self.rebase_pending {
             self.rebase_pending = false;
             self.host_clock.rebase();

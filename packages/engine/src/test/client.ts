@@ -998,6 +998,14 @@ export function drawListHash(client: Client): string {
   return hashDrawListFields(headerBytes, drawListSlot.body, drawListSlot.recordCount)
 }
 
+/** The header `frame_seq` (offset 0) of the slot the last `drawListRecords`/`drawListHash` acquired, with
+ * no new acquire: it changes only when the client worker published a new DrawList, so two rAFs that read
+ * the same value saw the same picture (the check reporter's per-frame record, docs/plan/
+ * 39l-remote-motion-staircase.md). Test-only. */
+export function drawListSeq(client: Client): number {
+  return clientTestHandle(client).drawListSlot.frameSeq
+}
+
 /** One decoded `Draw` record (0018 §2), for `drawListRecords` below. */
 export type DrawRecord = {
   pos: [number, number]

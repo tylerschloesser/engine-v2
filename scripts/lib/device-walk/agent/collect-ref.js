@@ -192,7 +192,12 @@
       const walked = await act('sample', false)
       const motionFrames = (walked || [])
         .filter((f) => f.circles.length)
-        .map((f) => [Math.round(f.t), +f.circles[0].x.toFixed(3), +f.circles[0].y.toFixed(3)])
+        .map((f) => [
+          Math.round(f.t),
+          +f.circles[0].x.toFixed(3),
+          +f.circles[0].y.toFixed(3),
+          f.seq,
+        ])
       await act('sample', true)
       say(item, 'moved-seen') // the bot's socket goes away now
       const t0 = Date.now()
