@@ -97,7 +97,15 @@ export type WorldConfig<Params = unknown> = Omit<ServerWorldConfig<Params>, 'bui
  * by `createClient` itself (rendering never touches a WASM instance, 0018 §1) -- kept here so one
  * `ClientOptions` object is also what a caller hands `frame-loop.ts`'s `createRealFrameLoop`, the
  * same pattern `assets` already uses for `render/art.ts`'s `loadTileArt`. */
-export type RenderOptions = { scale?: number; scaleCap?: number; neighbourCutoffPx?: number }
+export type RenderOptions = {
+  scale?: number
+  scaleCap?: number
+  neighbourCutoffPx?: number
+  /** Default off. On: `initDevice` requests `timestamp-query` when the adapter has it and the terrain
+   * pass is timed (`renderer.gpuTimer`, `render/gpu-timing.ts`; docs/plan/39k-gpu-exec-metric.md). Read
+   * by `createGpuResources`; the device page passes it to `initDevice` and `createTerrainRenderer`. */
+  gpuTiming?: boolean
+}
 
 /** `sim::EngineReject`'s TS shape, hand-mirrored here (docs/plan/16-action-round-trip.md step 4):
  * `engine` itself has no game to run `export_bindings` against, so this one small, stable enum is

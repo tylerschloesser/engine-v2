@@ -8,7 +8,9 @@
 // `VISUAL_TABLE_BYTES` is owned by `render/art.ts` (Deviations: it lays the table's bytes out, and
 // step 3 precedes step 4 in the Order of work); re-exported here so a caller of this module never
 // needs to know that.
+
 import { VISUAL_TABLE_BYTES, VISUAL_TABLE_ENTRIES } from './art.js'
+import { createGpuTimer, type GpuTimer } from './gpu-timing.js'
 import { TERRAIN_WGSL } from './wgsl.generated.js'
 
 export { VISUAL_TABLE_BYTES, VISUAL_TABLE_ENTRIES }
@@ -115,6 +117,8 @@ export interface TerrainRenderer {
    * callback (M17, `render/drawables.ts`) reports issuing in the same pass. Was "count of `draw()`
    * *method* calls" before M17; identical for every caller that never registers `onEncode`. */
   drawCalls(): number
+  /** The main pass's GPU execution timer (`render/gpu-timing.ts`); `null` unless `gpuTiming` was set. */
+  readonly gpuTimer?: GpuTimer | null
   /** Count of distinct page slots written by `writePageChunk`/`writePageTexel` since creation
    * (`engine/test`'s `pageSlotsUsed` counter, Seams). */
   pageSlotsUsed(): number
@@ -181,6 +185,9 @@ export async function createTerrainRenderer(
      * checked at the same "init, not per frame" point 0018 §1 places `uncapturederror` -- every
      * caller passes its own `initDevice()` result's own method. */
     checkCompilation(label: string, module: GPUShaderModule): Promise<void>
+    /** `ClientOptions.render.gpuTiming` (docs/plan/39k-gpu-exec-metric.md): default off, and then
+     * `draw` is exactly as before. On: `renderer.gpuTimer` times the main pass. */
+    gpuTiming?: boolean
   },
 ): Promise<TerrainRenderer> {
   const pageTexture = device.createTexture({
@@ -315,6 +322,7 @@ export async function createTerrainRenderer(
     clearValue: { r: 0, g: 0, b: 0, a: 1 },
   }
   const passDescriptor: GPURenderPassDescriptor = { colorAttachments: [colorAttachment] }
+  const gpuTimer: GpuTimer | null = opts.gpuTiming ? createGpuTimer(device) : null
   const submitList: GPUCommandBuffer[] = [undefined as unknown as GPUCommandBuffer]
   const frameScratch = new ArrayBuffer(FRAME_UNIFORM_BYTES)
   const frameView = new DataView(frameScratch)
@@ -470,6 +478,7 @@ export async function createTerrainRenderer(
           : target.createView()
       }
       const encoder = device.createCommandEncoder()
+      if (gpuTimer) gpuTimer.begin(passDescriptor)
       const pass = encoder.beginRenderPass(passDescriptor)
       let calls = 0
       // docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal gate"): the pass above still
@@ -483,14 +492,18 @@ export async function createTerrainRenderer(
         if (encodeCallback) calls += encodeCallback(pass)
       }
       pass.end()
+      if (gpuTimer) gpuTimer.resolve(encoder)
       submitList[0] = encoder.finish()
       device.queue.submit(submitList)
+      if (gpuTimer) gpuTimer.afterSubmit()
       drawCallCount += calls
     },
 
     drawCalls() {
       return drawCallCount
     },
+
+    gpuTimer,
 
     pageSlotsUsed() {
       return usedSlots.size

@@ -23,6 +23,8 @@ export type GpuResourcesOptions = {
   /** When given, the client's DrawList is drawn in the terrain pass (`attachClientDrawables`, which
    * also loads `client.assets.sprites`). Omitted: terrain only. */
   client?: Client
+  /** `ClientOptions.render.gpuTiming`: default off (nothing changes). */
+  gpuTiming?: boolean
   /** Test-only, forwarded to `initDevice`. */
   test?: { forceViewProbe?: boolean }
 }
@@ -38,11 +40,19 @@ export type GpuResources = {
 
 /** The one constructor. Rejects with `NoAdapterError` (`device.ts`) when there is no adapter. */
 export async function createGpuResources(opts: GpuResourcesOptions): Promise<GpuResources> {
-  const device = await initDevice(opts.test ? { test: opts.test } : undefined)
+  const device = await initDevice(
+    opts.test || opts.gpuTiming
+      ? {
+          ...(opts.test ? { test: opts.test } : {}),
+          ...(opts.gpuTiming ? { gpuTiming: true } : {}),
+        }
+      : undefined,
+  )
   const renderer = await createTerrainRenderer(device.device, {
     colorFormat: opts.colorFormat,
     viewProbePasses: device.viewProbePasses,
     checkCompilation: device.checkCompilation,
+    ...(opts.gpuTiming ? { gpuTiming: true } : {}),
   })
   const art = await loadTileArt(device.device, opts.tilesUrl, {
     checkCompilation: device.checkCompilation,

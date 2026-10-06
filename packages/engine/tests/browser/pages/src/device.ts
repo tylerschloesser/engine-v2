@@ -50,6 +50,7 @@ import {
   type DrawablesRenderer,
   KIND_GHOST,
 } from '../../../../src/render/drawables.ts'
+import type { GpuTimer } from '../../../../src/render/gpu-timing.ts'
 import type { TerrainRenderer } from '../../../../src/render/terrain.ts'
 import { createTerrainRenderer } from '../../../../src/render/terrain.ts'
 import {
@@ -160,12 +161,31 @@ function fmtStat(n: number, digits = 1): string {
   return n.toFixed(digits)
 }
 
+/** M39k: `null` (never 0) when no timestamp sample is in the window, so a missing reading is not a pass. */
+function execReading(
+  timer: GpuTimer | null | undefined,
+  vals: readonly number[],
+  p: number,
+): number | null {
+  return !timer || timer.unavailable !== null || vals.length === 0 ? null : r3(percentile(vals, p))
+}
+
+/** The HUD line for the main pass's GPU execution time (`render/gpu-timing.ts`), or why there is none. */
+function execHudLine(timer: GpuTimer | null | undefined, vals: readonly number[]): string {
+  if (!timer) return 'GPU exec (timestamp query): off'
+  if (timer.unavailable !== null)
+    return `GPU exec (timestamp query): unavailable (${timer.unavailable})`
+  if (vals.length === 0) return 'GPU exec (timestamp query): no sample yet'
+  return `GPU exec p50/p95 (10s, timestamp query): ${fmtStat(percentile(vals, 0.5), 2)} / ${fmtStat(percentile(vals, 0.95), 2)} ms  (n=${vals.length})`
+}
+
 async function runFillRateHud(): Promise<void> {
   installPageStyles() // 0019 §3 page CSS: pull-to-refresh structurally prevented, canvas touch-action
 
   const rafInterval = new RollingStat()
   const callbackDuration = new RollingStat()
   const gpuLatency = new RollingStat()
+  const gpuExec = new RollingStat()
   let lastRafTime: number | undefined
   let framesRendered = 0
   let gpuSampleCounter = 0
@@ -187,13 +207,16 @@ async function runFillRateHud(): Promise<void> {
   const canvas = document.createElement('canvas')
   document.body.appendChild(canvas)
 
-  const device: RendererDevice = await initDevice()
+  const device: RendererDevice = await initDevice({ gpuTiming: true })
   const gpuApi = (navigator as unknown as { gpu: GPU }).gpu
   const renderer: TerrainRenderer = await createTerrainRenderer(device.device, {
     colorFormat: gpuApi.getPreferredCanvasFormat(),
     viewProbePasses: device.viewProbePasses,
     checkCompilation: device.checkCompilation,
+    gpuTiming: true,
   })
+  const gpuTimer = renderer.gpuTimer
+  if (gpuTimer) gpuTimer.onSample = (ms) => gpuExec.push(performance.now(), ms)
   const art = await loadTileArt(device.device, '/terrain/tiles.json', {
     checkCompilation: device.checkCompilation,
   })
@@ -314,7 +337,8 @@ async function runFillRateHud(): Promise<void> {
       `rAF interval p50/p95/worst (10s): ${fmt(percentile(raf, 0.5))} / ${fmt(percentile(raf, 0.95))} / ${fmt(raf.length ? Math.max(...raf) : 0)} ms  (n=${raf.length})`,
       `rAF intervals >20ms (10s): ${over20}`,
       `main rAF callback p95 (10s): ${fmt(percentile(cb, 0.95), 2)} ms`,
-      `GPU latency p95 (10s, sampled every ${GPU_SAMPLE_EVERY_N_FRAMES} frames): ${fmt(percentile(gpuVals, 0.95), 2)} ms  (n=${gpuVals.length})`,
+      execHudLine(gpuTimer, gpuExec.values()),
+      `GPU latency p95 (informational: submit-to-done incl. vsync wait; every ${GPU_SAMPLE_EVERY_N_FRAMES} frames): ${fmt(percentile(gpuVals, 0.95), 2)} ms  (n=${gpuVals.length})`,
       `frames rendered: ${framesRendered}`,
     ]
     hudEl.textContent = lines.join('\n')
@@ -358,7 +382,11 @@ async function runFillRateHud(): Promise<void> {
       raf_n: raf.length,
       raf_over20: raf.filter((x) => x > 20).length,
       cb_p95_ms: r3(percentile(cb, 0.95)),
-      gpu_p95_ms: r3(percentile(gpuVals, 0.95)),
+      gpu_exec_p95_ms: execReading(gpuTimer, gpuExec.values(), 0.95),
+      gpu_exec_p50_ms: execReading(gpuTimer, gpuExec.values(), 0.5),
+      gpu_exec_n: gpuExec.values().length,
+      gpu_exec_unavailable: gpuTimer?.unavailable ?? (gpuTimer ? '' : 'option off'),
+      gpu_latency_p95_ms: r3(percentile(gpuVals, 0.95)),
       gpu_n: gpuVals.length,
       frames: framesRendered,
       steps: [],
@@ -756,14 +784,17 @@ async function runAnchorsCheck(count: number, mode: 'properties' | 'translate'):
   const canvas = document.createElement('canvas')
   document.body.appendChild(canvas)
 
-  const device: RendererDevice = await initDevice()
+  const device: RendererDevice = await initDevice({ gpuTiming: true })
   const gpuApi = (navigator as unknown as { gpu: GPU }).gpu
   const colorFormat = gpuApi.getPreferredCanvasFormat()
   const renderer: TerrainRenderer = await createTerrainRenderer(device.device, {
     colorFormat,
     viewProbePasses: device.viewProbePasses,
     checkCompilation: device.checkCompilation,
+    gpuTiming: true,
   })
+  const gpuTimer = renderer.gpuTimer
+  if (gpuTimer) gpuTimer.onSample = (ms) => gpuExec.push(performance.now(), ms)
   const assets = { tiles: '/terrain/tiles.json', sprites: '/drawables/sprites.json' }
   const art = await loadTileArt(device.device, assets.tiles, {
     checkCompilation: device.checkCompilation,
@@ -855,6 +886,7 @@ async function runAnchorsCheck(count: number, mode: 'properties' | 'translate'):
   // costs enough style-recalc time to widen the gap between frames).
   const rafInterval = new RollingStat()
   const gpuLatency = new RollingStat()
+  const gpuExec = new RollingStat()
   let lastRafTime: number | undefined
   let framesRendered = 0
   let gpuSampleCounter = 0
@@ -905,7 +937,8 @@ async function runAnchorsCheck(count: number, mode: 'properties' | 'translate'):
       `pick_id: ${lastPickIdHud}`,
       `rAF interval p50/p95/worst (10s): ${fmtStat(percentile(raf, 0.5))} / ${fmtStat(percentile(raf, 0.95))} / ${fmtStat(raf.length ? Math.max(...raf) : 0)} ms (n=${raf.length})`,
       `rAF intervals >20ms (10s): ${over20}`,
-      `GPU latency p95 (10s, sampled every ${GPU_SAMPLE_EVERY_N_FRAMES} frames): ${fmtStat(percentile(gpuVals, 0.95), 2)} ms (n=${gpuVals.length})`,
+      execHudLine(gpuTimer, gpuExec.values()),
+      `GPU latency p95 (informational: submit-to-done incl. vsync wait; every ${GPU_SAMPLE_EVERY_N_FRAMES} frames): ${fmtStat(percentile(gpuVals, 0.95), 2)} ms (n=${gpuVals.length})`,
       `frames rendered: ${framesRendered}`,
     ]
     hudEl.textContent = lines.join('\n')
@@ -981,7 +1014,11 @@ async function runAnchorsCheck(count: number, mode: 'properties' | 'translate'):
       raf_worst_ms: r3(raf.length ? Math.max(...raf) : 0),
       raf_n: raf.length,
       raf_over20: raf.filter((x) => x > 20).length,
-      gpu_p95_ms: r3(percentile(gpuVals, 0.95)),
+      gpu_exec_p95_ms: execReading(gpuTimer, gpuExec.values(), 0.95),
+      gpu_exec_p50_ms: execReading(gpuTimer, gpuExec.values(), 0.5),
+      gpu_exec_n: gpuExec.values().length,
+      gpu_exec_unavailable: gpuTimer?.unavailable ?? (gpuTimer ? '' : 'option off'),
+      gpu_latency_p95_ms: r3(percentile(gpuVals, 0.95)),
       gpu_n: gpuVals.length,
       frames: framesRendered,
       anchor_frames: probe.frames,

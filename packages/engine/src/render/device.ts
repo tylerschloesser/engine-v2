@@ -13,6 +13,22 @@
 // checking `adapter.limits`" -- this milestone needs none).
 export const ADAPTER_REQUEST: GPURequestAdapterOptions = { featureLevel: 'compatibility' }
 export const DEVICE_REQUEST: GPUDeviceDescriptor = {}
+/** `DEVICE_REQUEST` plus `timestamp-query` (docs/plan/39k-gpu-exec-metric.md): the only feature this
+ * engine ever requests, and only for `ClientOptions.render.gpuTiming`, built once. */
+export const DEVICE_REQUEST_GPU_TIMING: GPUDeviceDescriptor = {
+  requiredFeatures: ['timestamp-query' as GPUFeatureName],
+}
+
+/** The descriptor for one `requestDevice` call: `DEVICE_REQUEST` itself unless timing was asked for
+ * and the adapter has the feature (then `DEVICE_REQUEST_GPU_TIMING`). */
+export function deviceRequestFor(
+  adapter: { features: { has(name: string): boolean } },
+  gpuTiming: boolean | undefined,
+): GPUDeviceDescriptor {
+  return gpuTiming && adapter.features.has('timestamp-query')
+    ? DEVICE_REQUEST_GPU_TIMING
+    : DEVICE_REQUEST
+}
 
 /** The `console.warn` line every lost device logs (`initDevice`); the browser harness matches it. */
 export const DEVICE_LOST_PREFIX = 'GPU device lost'
@@ -72,6 +88,9 @@ export interface RendererDevice {
    * with no `uncapturederror` (Planning decisions "`writeTexture` from a SAB view is unverified");
    * `render/upload.ts` reads this to pick its CHUNK-record fast path or fallback. */
   readonly sabWriteTextureOk: boolean
+  /** `true` when this device was created with `timestamp-query` (`initDevice({ gpuTiming: true })` on
+   * an adapter that has it); `createGpuTimer` and `createTerrainRenderer({ gpuTiming })` read it. */
+  readonly gpuTimingFeature: boolean
   /** Every `uncapturederror` message seen since this device was created, in order. Every GPU test
    * asserts this is empty (0020 §6). */
   errors(): string[]
@@ -173,13 +192,15 @@ export function armFailNextAdapter(): void {
  */
 export async function initDevice(opts?: {
   test?: { forceViewProbe?: boolean }
+  /** `ClientOptions.render.gpuTiming`: request `timestamp-query` when the adapter has it. */
+  gpuTiming?: boolean
 }): Promise<RendererDevice> {
   const gpu = (globalThis.navigator as { gpu?: GPU } | undefined)?.gpu
   if (!gpu) throw new NoAdapterError('is unavailable: navigator.gpu is not present')
   const adapter = failNextAdapterOnce ? null : await gpu.requestAdapter(ADAPTER_REQUEST)
   failNextAdapterOnce = false
   if (!adapter) throw new NoAdapterError('returned null')
-  const device = await adapter.requestDevice(DEVICE_REQUEST)
+  const device = await adapter.requestDevice(deviceRequestFor(adapter, opts?.gpuTiming))
   const errors: string[] = []
   // A lost device is never silent (0020 §6): `tests/browser/support/page.ts`'s `openPage` fails any
   // test that sees this line unless it opted in with `allowDeviceLoss(page)`.
@@ -201,6 +222,7 @@ export async function initDevice(opts?: {
     adapterInfo: adapterInfoOf(adapter),
     viewProbePasses,
     sabWriteTextureOk,
+    gpuTimingFeature: device.features.has('timestamp-query'),
     errors: () => errors.slice(),
     async checkCompilation(label, module) {
       const info = await module.getCompilationInfo()
