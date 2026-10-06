@@ -226,6 +226,16 @@ test('walk-ref: M34-own-timer-bar (three collects per link, tap to result) and M
     expect(crit(motion, 'remote_moved')).toMatchObject({ ok: true })
     expect(Number(motion.metrics.travel_tiles)).toBeGreaterThan(1)
     expect(Number(motion.metrics.frames)).toBeGreaterThan(30)
+    // 39l: the drawn remote circle moves on (nearly) every frame while it moves, not once per 10 Hz presence
+    // sample (the staircase of a render time that sat far behind the newest sample).
+    expect(
+      Number(motion.metrics.moving_frames_changed_ratio),
+      'share of frames the remote circle changed position',
+    ).toBeGreaterThanOrEqual(0.9)
+    expect(
+      Number(motion.metrics.max_still_ms),
+      'longest still stretch while moving',
+    ).toBeLessThanOrEqual(50)
   } finally {
     await r.stop()
   }

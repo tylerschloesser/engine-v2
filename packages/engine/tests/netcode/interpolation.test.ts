@@ -501,3 +501,60 @@ test('interpolation/lead_tracks_rtt_under_jitter', async () => {
     await h.dispose()
   }
 })
+
+// docs/plan/39l-remote-motion-staircase.md: the observer joins a world whose host tick is already large
+// (a real world is never at tick 0 when someone joins), and the remote is sampled at every client frame
+// (16.7 ms, three per tick), not once per host tick. The producer moves at 12 tiles/s, the speed of the
+// walk-ref bot. The remote must move on (almost) every frame by about `speed x dt`, never in 100 ms steps.
+test('interpolation/late_joiner_remote_moves_every_frame', async () => {
+  const seed = 3013
+  const h = await make(seed, 1, { frameMs: TICK_MS / 3 })
+  try {
+    h.link(0).set({ latencyMs: 40, jitterMs: 0 })
+    const SPEED = 12 // tiles/s, the peak of `sweep`
+    const sweep = (tMs: number) => {
+      const s = tMs / 1000
+      return { x: 30 + 6 * Math.sin(2 * s), vx: SPEED * Math.cos(2 * s) }
+    }
+    const drive0 = () => {
+      const p = sweep(h.clock.now())
+      h.clients[0]?.setView({ x: p.x, y: 0, halfW: 10, halfH: 10, velX: p.vx, velY: 0 })
+    }
+    // 400 ticks (20 s) with only the producer in the world.
+    for (let k = 0; k < 400; k++) {
+      drive0()
+      await h.advanceTicks(1)
+    }
+    const obs = h.addClient()
+    h.link(1).set({ latencyMs: 40, jitterMs: 0 })
+    obs.setView({ x: 30, y: 0, halfW: 20, halfH: 20 })
+    const xs: number[] = []
+    h.onFrame = () => {
+      const row = only(obs.samplePresences())
+      if (row) xs.push(row.x / TILE)
+    }
+    for (let k = 0; k < 120; k++) {
+      drive0()
+      await h.advanceTicks(1)
+    }
+    h.onFrame = null
+    // The first 40 ticks: the join, the delay settling. Judge the last 80 ticks (240 frames).
+    const tail = xs.slice(-240)
+    expect(tail.length, `seed ${seed}`).toBe(240)
+    const dt = TICK_MS / 3 / 1000
+    let changed = 0
+    let worst = 0
+    for (let i = 1; i < tail.length; i++) {
+      const step = Math.abs((tail[i] as number) - (tail[i - 1] as number))
+      worst = Math.max(worst, step)
+      if (step > 0) changed++ // the sweep stands still only for an instant at each turn
+    }
+    expect(
+      changed / (tail.length - 1),
+      `seed ${seed}: share of frames the remote moved`,
+    ).toBeGreaterThanOrEqual(0.9)
+    expect(worst, `seed ${seed}: largest single-frame step`).toBeLessThanOrEqual(2 * SPEED * dt)
+  } finally {
+    await h.dispose()
+  }
+})

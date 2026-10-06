@@ -1359,6 +1359,8 @@ export const CHECKS = {
       { name: 'max_jump_tiles', source: 'derived.maxJumpTiles' },
       { name: 'travel_tiles', source: 'derived.travelTiles' },
       { name: 'frames', source: 'derived.frames' },
+      { name: 'moving_frames_changed_ratio', source: 'derived.movingFramesChangedRatio' },
+      { name: 'max_still_ms', source: 'derived.maxStillMs' },
       { name: 'fade_min_alpha', source: 'derived.minAlpha' },
     ],
     acts: [],
@@ -1745,6 +1747,7 @@ export function analyseMotion(frames, { factor, floorTiles, window: w }) {
     jumps.push(d)
     travel += d
   }
+  const staircase = stepsWhileMoving(frames, jumps)
   let snaps = 0
   let max = 0
   jumps.forEach((d, i) => {
@@ -1757,6 +1760,48 @@ export function analyseMotion(frames, { factor, floorTiles, window: w }) {
     travelTiles: +travel.toFixed(3),
     maxJumpTiles: +max.toFixed(3),
     snaps,
+    ...staircase,
+  }
+}
+
+/** The frames either side of a pair that `stepsWhileMoving` looks at to say the circle is moving there. */
+const MOVING_WINDOW_FRAMES = 15
+/** A pair is "while moving" when the circle covered at least this many tiles over that window (2 tiles/s at 60 Hz). */
+const MOVING_MIN_TILES = 1
+
+/**
+ * Whether the drawn circle changes position at every frame while it moves (docs/plan/39l-remote-motion-
+ * staircase.md): `movingFramesChangedRatio` is the share of frame pairs inside a stretch of motion (the
+ * path over the 15 frames either side is at least a tile) where the position differs from the frame before;
+ * `maxStillMs` is the longest time the position stayed identical inside such a stretch. A circle drawn at
+ * each 10 Hz presence sample scores about 0.17 and 100 ms; one interpolated per frame scores 1 and one frame.
+ * `null` when there was no stretch of motion to judge.
+ */
+function stepsWhileMoving(frames, jumps) {
+  const w = MOVING_WINDOW_FRAMES
+  let pairs = 0
+  let changed = 0
+  let maxStill = 0
+  let stillFrom = null // the time of the last frame at which the position changed (or the run began)
+  for (let i = 0; i < jumps.length; i++) {
+    let path = 0
+    for (let k = Math.max(0, i - w); k < Math.min(jumps.length, i + w + 1); k++) path += jumps[k]
+    if (path < MOVING_MIN_TILES) {
+      stillFrom = null
+      continue
+    }
+    pairs++
+    if (jumps[i] > 0) {
+      changed++
+      stillFrom = null
+    } else {
+      stillFrom ??= frames[i][0]
+      maxStill = Math.max(maxStill, frames[i + 1][0] - stillFrom)
+    }
+  }
+  return {
+    movingFramesChangedRatio: pairs ? +(changed / pairs).toFixed(3) : null,
+    maxStillMs: pairs ? Math.round(maxStill) : null,
   }
 }
 
