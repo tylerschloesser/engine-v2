@@ -6,8 +6,10 @@ import { expect, test } from '@playwright/test'
 import { openPage } from './support/page.js'
 import { finalOf, type Handler, start } from './support/walk-rig.js'
 
-const crit = (e: { criteria: { name: string; value: unknown; ok: boolean | null }[] }, n: string) =>
-  e.criteria.find((c) => c.name === n)
+const crit = (
+  e: { criteria: { name: string; value: unknown; limit?: unknown; ok: boolean | null }[] },
+  n: string,
+) => e.criteria.find((c) => c.name === n)
 
 type Touch = { gestureHandlers(o?: { panMs?: number }): Handler[]; anchorHandlers(): Handler[] }
 const touch = async (): Promise<Touch> =>
