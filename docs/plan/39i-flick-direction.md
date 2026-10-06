@@ -1,6 +1,6 @@
 # M39i: A flick glides with the drag, not against it
 
-Status: not started · After: 39h · Tyler-dependent: no
+Status: done (2026-10-05; verified on the Pixel 5) · After: 39h · Tyler-dependent: no
 
 ## Goal
 The Pixel 5 device-driver spike (`spikes/device-driver-android/RESULT.md`, 2026-10-05) saw every fast flick through real OS input glide the wrong way (5 of 5; finger left, `centre_x 33.8 → -196.9`). A read-only diagnosis traced it to a missing negation present since M11 step 3 (`926eb5b`), on every platform:
@@ -28,9 +28,9 @@ Inertia constants, the sample window, coalesced events (the diagnosis ruled out 
 - `input: pointer velocity is the finger's`: finger-left samples give `out.x < 0` (pins the convention the camera negates).
 
 ## Exit criteria
-- [ ] The tests exist, pass, and each was seen red.
-- [ ] No golden, budget or baseline changed; the `[gc] input` page reads within its budget (orchestrator's gate).
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The tests exist, pass, and each was seen red.
+- [x] No golden, budget or baseline changed; the `[gc] input` page reads within its budget (orchestrator's gate).
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test unit -t flick` · `pnpm test unit -t camera` (targeted, foreground).
@@ -44,3 +44,4 @@ After landing, the orchestrator re-runs the spike's flick on the Pixel: `adb she
 - Writers/readers of `velocityX/Y` checked, all in the camera convention (world tiles/s, positive = centre moves +): `camera.ts` zero-resets (lines ~367, 420, 448) and `applyInertia` (adds `velocity * disp`); `state.ts` copy; `block.ts` writes it into the shared block unchanged; `test/headless-client.ts` `advancePan` (velocity = direction towards target) and `setView` (`velX/velY` from the report); browser pages `gc-*.ts`, `gen.ts`, `terrain-client.ts`, `moving-remote.ts` and netcode `rates`/`interpolation` tests all set a positive world velocity for motion in +x. No change needed. The reference game has no `velocity` reader.
 - Tests live in `camera/camera.test.ts` (two flick tests, x and y in each) and `input/gestures.test.ts` (pointer velocity).
 - Verified: `pnpm test unit -t "flick|pointer velocity"` pass 3 tests; `pnpm test unit -t camera` pass 21 tests.
+- **Device verification (orchestrator, Pixel 5, after M39h):** `spikes/device-driver-android/11-m11-gestures.mjs`: flick 80 ms finger left `centre_x 35.456 -> 376.595`, stops (+1 s unchanged); before the fix `33.8 -> -196.9`. The script's pinch and pull-down rows now fail on harness constants calibrated for the 980 px layout (touch points at 490 ± 330 CSS px; expected `visualViewport.scale` 0.4007, now 1). `12-pinch-devicewidth.mjs` at innerWidth 392: `tiles_across 256 -> 12 -> 256`, finite. `13-fill-devicewidth.mjs`: canvas 785x1603 (was 1960x3999), rAF p95 16.8 ms (was 50), GPU p95 12-14 ms idle and panning alike (budget 6): the M09b metric itself needs a look.
