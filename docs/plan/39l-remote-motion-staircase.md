@@ -44,3 +44,22 @@ After landing, the orchestrator re-runs M34-remote-motion driven on both phones.
 
 ## Deviations
 **Diagnosis** (orchestrator, from the read-only agent, 2026-10-06): the series has plateaus of exactly 5-7 frames (83-118 ms), then a jump; the 2.0 and 2.11 jumps are one late or lost sample. The first jump is at +1.1 s, 0.73 tiles: not a join teleport. `analyseMotion` (checks.mjs ~1741): snap = jump > 0.25 tiles and > 4x the median of the 5 jumps either side. Smooth motion scores 0, so all 46 are staircase steps. Fade: `fadeFrames` alpha 255 until t=12595 ms and absent from 12612. The host sends `PresenceRelayOp::Gone` (host/mod.rs ~2243); the client calls `apply_presence_gone`, which calls `buffer.remove`. `refresh_presence` re-relays held samples at >= 1 Hz, so a connected silent remote never fades.
+
+**Step 1 measurement (loopback Chromium, `walk-ref` M34 motion collect, temporary instrumentation reverted).** Per rAF: DrawList `frame_seq` (header offset 0) and `frame_time_ms` (offset 96), the own circle, and, through a temporary change of `FrameView::presences` and the reference `extract` that encoded them into a second circle, the interp `render_t` and the newest sample's tick. Result over 567 frames: `frame_seq` changed on 490 of them (about 15 % repeat: a worker wake without a new publish, not a stale slot), the remote position on 56, the own circle on 22 (settled). The remote's `vel` was constant across a plateau and nonzero, so not Hold (which zeroes it) and not extrapolation (which would move `pos`).
+
+**Cause: `render_t` is about 345 host ticks (17 s) behind the newest sample, so `InterpBuffer::sample` takes the `render_t <= oldest.t` branch and returns the oldest of the 8 held samples, which changes whenever a new sample pushes the ring.** `ClientCore::tick_fraction` feeds `HostClock::on_frame(replica.tick(), local_ms)` on the first rAFs, when the replica tick is still 0, and `on_frame` seeds `effective_offset` from that first sample ("initialization, not a step"). When the host's real tick (378, a world already 19 s old) arrives, the target offset jumps by `tick * tick_ms`, and `advance` slews toward it at the 10 % dilation limit: the lag closes by 10 % of elapsed time only (measured: lag 347.3 ticks at the first frame, 333.0 at +6.7 s, `render_t` advancing 0.367 tick per 16.7 ms frame instead of 0.333). `rebase()` is called only on resync or tab return (`rebase_interp`), never on the first frame. A client that joins a world that has run for a day would lag by a tenth of that for ten times as long. The netcode suite never saw it: its observers join at tick 0.
+
+| t (ms) | frame_seq | remote x (tiles) | render_t (ticks) | newest sample tick | lag (ticks) |
+|---|---|---|---|---|---|
+| 1823 | 107 | 1.098 | 33.76 | 378 | 344.2 |
+| 1839 | 109 | 2.445 (jump) | 34.50 | 380 | 345.5 |
+| 1856 | 109 | 2.445 | 34.50 | 380 | 345.5 |
+| 1874 | 110 | 2.445 | 34.86 | 380 | 345.1 |
+| 1890 | 111 | 2.445 | 35.23 | 380 | 344.8 |
+| 1906 | 112 | 2.445 | 35.60 | 380 | 344.4 |
+| 1923 | 113 | 2.445 | 35.96 | 380 | 344.0 |
+| 1940 | 115 | 2.445 | 36.70 | 380 | 343.3 |
+| 1957 | 115 | 2.445 | 36.70 | 380 | 343.3 |
+| 1973 | 117 | 3.68 (jump) | 37.43 | 383 | 345.6 |
+
+Guesses (i) Hold, (ii) stale slot, (iii) skipped frames: none; `sample()` units are right. A harness scenario that adds the observer after the host has run 400 ticks reproduces it (step 2).

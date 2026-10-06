@@ -429,6 +429,9 @@ export interface NetHarness {
   hostTick(): number
   advanceTo(t: number): Promise<void>
   advanceTicks(n: number): Promise<void>
+  /** Called after every client frame of `advanceTicks` (all clients have just stepped): a scenario that
+   * samples between host ticks (docs/plan/39l-remote-motion-staircase.md). `null` clears it. */
+  onFrame: (() => void) | null
   settle(): Promise<void>
   /**
    * `replicaHash() === hostRegionHash(conn)` per client (Seams), for every client. M27 gate round
@@ -834,6 +837,8 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
   const clients: HeadlessClient[] = []
   for (let i = 0; i < opts.clients; i++) clients.push(makeClient())
 
+  const frameHook: { fn: (() => void) | null } = { fn: null }
+
   async function advanceTicks(n: number): Promise<void> {
     for (let i = 0; i < n; i++) {
       // docs/plan/29-net-worker-and-reference-server.md steps 1-2, docs/plan/30c-ci-reds-after-m30.md
@@ -858,6 +863,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       for (let f = 0; f < framesPerTick; f++) {
         await clock.advanceBy(frameMs)
         for (const e of entries) e.client.stepFrame(frameMs)
+        frameHook.fn?.()
         await collectDumps()
       }
     }
@@ -1167,6 +1173,12 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     hostTick: () => simHost.counters.ticksRun,
     advanceTo,
     advanceTicks,
+    get onFrame() {
+      return frameHook.fn
+    },
+    set onFrame(fn) {
+      frameHook.fn = fn
+    },
     settle,
     assertConverged,
     desyncs,
