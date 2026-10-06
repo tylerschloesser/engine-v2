@@ -179,3 +179,44 @@ M03, M08 x2, M11-boot, M11-memory, M16-round-trip: pass (auto). M09b-fill-rate: 
 
 **Not verified:** any iPhone item after M16-round-trip; relaunch, Redo and the Wi-Fi/cellular switch on either phone; the `--judge` flow on the full rounds' sheets (done on a scratch copy in delegation 1).
 
+### Delegation 3, second pass (coordinator's rulings after the Pixel gate): iPhone round to its end, M18 re-run, what was fixed
+
+**Outcome.** `m39j-full-ios` ran to its end: 37 of 45 rows recorded, 8 open (7 judge sheets and `M39-rerun`). Plus `m39j-ios-redo` (4 items) and `m39j-ios-lp` (M16-low-power on the fixed backend). `m39j-android-m18` re-ran M18-anchors and M18-touch-ghost on the Pixel; their judge screenshots are now of the item with its sheet. No Appium, WDA, xcodebuild, cloudflared, vite or reference-server process is left; the Pixel is awake with rotation restored and no adb forward or reverse; the iPhone has Airplane and Low Power off, **Battery Percentage back off** (see below) and Safari in front.
+
+**Fixed (each with a unit test seen red):**
+1. **iOS opens the runner itself and waits boundedly.** `open()` lists the webviews with `mobile: getContexts` (id, title, url) and enters only one whose URL is one of our origins (extension pages, `about:blank` and `data:text/html` error pages are never entered: switching into a wedged one is what timed out). It waits up to 60 s, opens the URL again once, waits 60 s more, then throws `Safari did not load <url> in two minutes (it shows: ...)`. One log line when the set of pages changes, not one per poll.
+2. **Shutdown in about 10 s.** Every step has a deadline (`drive/deadline.mjs`: loop 2 s, phone cleanup 6 s, monitor 1 s, servers 4 s); `abortAll()` ends in-flight Appium requests first; the process exits after 12 s whatever happens. Signals within 2 s of the first count as one (pnpm forwards a Ctrl-C on top of the terminal's, and the first version of this took that for "stuck" and exited without restoring the phone: found by a test run that left `accelerometer_rotation 0`); a later one leaves at once. Measured: 1 to 6 s on both phones. A shut-down Android backend no longer sets an adb forward up (a handler still running after cleanup had).
+3. **Judge screenshots are of the item.** A resumed round found the old judge prompts still open and photographed the runner page over the good shots (`m39j-full-android`'s anchors and touch-ghost): a prompt an earlier process answered is now recognised from the log (`drive` after an act prompt, `defer` after a judge prompt) and skipped; and a judge shot waits (about 10 s) until the walk bar shows its sheet, the shot says `unverified: true` if it never did.
+4. **Silent phone.** The agent pings every few seconds, even inside a 10 minute window; a phone not heard from for 3 minutes is sent back to the join URL (3 times at most, logged as `drive {action: 'reopened'}`). An mp.html page whose agent never started hung the iPhone round for 40 minutes.
+5. **A late series is not a second verdict**: the page was still finishing M23-private when the driver had already recorded its NotDrivable skip, and the service turned the row into a fail (iPhone).
+6. **The Low Power flow** returns to Safari when it fails (a frozen check page sat behind Settings for 22 minutes), and finds the switch again before every click, checks its identifier and **puts "Battery Percentage" back if it moved**: a stale element reference had flipped Tyler's Battery Percentage setting on (it was off before, the failed `m39j-ios-redo` run left it on, a screenshot showed it, and I turned it back off with a WDA session). `m39j-ios-lp`: Low Power Mode on, `low_power_detected true`, `flick_distance_ratio 0.768`, judge-pending.
+7. **WDA sessions**: one `POST /session` per tool process, logged `ios: WDA session #N (start|reconnect): starting (xcodebuild | reusing the running WDA) at <time>`; a session Appium drops is replaced by one with `useNewWDA: false` (no new xcodebuild); `appium:newCommandTimeout` is 10 h (it was 30 min and expired under a 1 h wait). `WDA failed with code 65` is treated as the passcode sheet: ONE line ("iPhone shows the XCTest passcode sheet ... Tyler must enter the passcode or turn the passcode off"), a 120 s pause (`IOS_SHEET_PAUSE_S`), one more try, then the tool stops with that message. `backend.sessionCount()` and `sessions()` list them.
+8. Runner page opened again while its tunnel name does not resolve yet (Android and iOS), Android leave not waiting on a hidden page DevTools cannot read (delegation 3, first pass).
+
+**WDA sessions created for the iPhone work this pass** (from my logs; each line is an xcodebuild launch unless it says reused): `m39j-full-ios` process 1 (04:05 UTC): 1 session; then failed launches: 1 + 3 + 3, then 3 more at 15:08 UTC (11 with the one in `m39j-ios-redo`); sessions that came up: 15:03 UTC (reused 3 s after a clean WDA), 15:46 UTC (my one probe with `showXcodeLog`), the resumed round (1), `m39j-ios-redo` (1 failed launch, 1 up after 130 s), the Battery Percentage repair (1), `m39j-ios-lp` (1). **That is 7 sessions up and 11 failed launches in about 12 hours (not counting the coordinator's own resume)**; none of them was per item (each process held one). The passcode sheet came with the failed launches.
+
+#### iPhone 12 `m39j-full-ios` (45 rows)
+
+| id | result | by | one line |
+|---|---|---|---|
+| M03, M08 ×2, M11-boot, M11-memory, M16-round-trip, M18-fill-rate-with-anchors, M18-pick, M23-opfs-latency, M23-kill-resume, M39-frame-shares | pass | auto | M18-pick passes on the iPhone (the tap lands) |
+| M09b-fill-rate | fail | auto | no rung: rAF p95 19.1 (17.5), 21 over 20 ms (5), 12 hitch gaps |
+| M11-gestures, M16-slice-boot | pass | orchestrator | judged by you |
+| M16-coexist | open | | judge sheet (`hitch_gaps_over_25ms 15`) |
+| M16-background | skip | device | NotDrivable: lock (the 30 s leave ran first) |
+| M16-low-power | fail (first run) / open (rerun) | auto | first run: my click flipped Battery Percentage, LPM never on (driver bug, fixed); **rerun `m39j-ios-lp`: detected, ratio 0.768, judge sheet** |
+| M18-anchors, M18-touch-ghost, M23-hidden-pause, M34-remote-motion, M35-safari-build-iphone, M37b-ios-background | open | | judge sheets |
+| M23-world-busy | skip | device | NotDrivable: back to the first tab needs Safari's tab switcher |
+| M23-private | skip (after the fix; fail first) | device | NotDrivable (Private mode is the tab switcher's UI); the first run showed a fail from the late series (fixed); rerun `m39j-ios-redo` skip |
+| M23-export-import | skip | device | NotDrivable: file picker |
+| M29-socket-resume, M29-play-through-drop | skip | device | NotDrivable: lock (5 s, 30 s and 5 min drops ran first) |
+| M29-net-heap | fail | auto | adapter error `undefined is not an object (evaluating 'check().act[name]')`: the same `mp.html` adapter bug as on the Pixel; rerun, same |
+| M34-two-devices | fail | auto | `ready false` (never joined with the bot): same on the Pixel, same on a rerun |
+| M34-own-timer-bar | skip | device | NotDrivable: no SIM |
+| M39-large-save | fail | auto | `tick_p95 12.2 ms` (limit 10); no reload, no memory growth |
+| other rows | skip | auto | Mac rows, retired M35-capability, human rows |
+
+**Judge-pending (screenshots, untracked under `test-results/device-walk/<round>/<id>-1-judge.png`):** `m39j-full-ios`: M16-coexist, M18-anchors, M18-touch-ghost, M23-hidden-pause, M34-remote-motion, M35-safari-build-iphone, M37b-ios-background; `m39j-ios-lp`: M16-low-power; `m39j-android-m18`: M18-anchors, M18-touch-ghost (the shot shows the item page with its sheet; touch-ghost: `ghost_on_tile 0,-1`, the ghost is not visible in the picture).
+
+**Findings added:** (10) the `mp.html` adapter (`__check.act`) is missing on both phones (M29-net-heap); (11) M34-two-devices never joins on either phone; (12) M18-pick passes on the iPhone and fails to land on the Pixel (touch adjustment to the ring's button); (13) iOS asks for the passcode on new WDA sessions: not automatable; (14) a click on a stale XCUITest element reference can hit a different switch: never click without checking the element's identifier; (15) `device-serve` orphans (vite preview, reference-server) survive a SIGKILLed tool and hold the ports 4173-4204: the next run fails with "device-serve exited (1)"; `reapStale` does not know them (not fixed).
+
