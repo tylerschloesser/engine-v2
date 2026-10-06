@@ -297,7 +297,7 @@ describe('device-walk life', () => {
     })
   })
 
-  test('device-walk life: M18-pick fails on a missed ring or a button that reached the canvas; M18-touch-ghost and M18-anchors keep the confirm tap', () => {
+  test('device-walk life: M18-pick fails on a missed ring or a button that reached the canvas; M18-touch-ghost is measured (the ghost is in the draw list and anchored to the tapped tile), M18-anchors keeps the confirm tap', () => {
     const pick = CHECKS['M18-pick']
     expect(evaluate(pick, { pick: { misses: 0, buttonChanged: false } }).verdict).toBe('pass')
     expect(evaluate(pick, { pick: { misses: 1, buttonChanged: false } }).verdict).toBe('fail')
@@ -306,10 +306,21 @@ describe('device-walk life', () => {
     expect(evaluate(pick, { pick: { misses: 0, buttonChanged: null } }).verdict).toBe('fail')
     const ghost = CHECKS['M18-touch-ghost']
     const gd = (over = {}) => ({
-      ghost: { tileMatches: true, centreMoved: true, cursor: [3, 4], ...over },
+      ghost: {
+        tileMatches: true,
+        centreMoved: true,
+        cursor: [3, 4],
+        drawn: true,
+        onTapped: true,
+        tapped: 'tapped tile 3,4; ghost anchored to 3,4',
+        ...over,
+      },
     })
-    expect(evaluate(ghost, gd()).verdict).toBe('judge')
+    // Measured, not asked: a ghost that is drawn on the tapped tile passes, any miss fails.
+    expect(evaluate(ghost, gd()).verdict).toBe('pass')
     expect(evaluate(ghost, gd({ tileMatches: false })).verdict).toBe('fail')
+    expect(evaluate(ghost, gd({ drawn: false, onTapped: false })).verdict).toBe('fail')
+    expect(evaluate(ghost, gd({ onTapped: false })).verdict).toBe('fail')
     const swim = CHECKS['M18-anchors']
     const sd = (p95) => ({
       anchors: { maxErrorPx: 0.2 },

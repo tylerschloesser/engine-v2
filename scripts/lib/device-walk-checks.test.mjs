@@ -57,7 +57,7 @@ describe('device-walk checks', () => {
       confirm: count('auto+confirm'),
       human: count('human'),
       retired: count('retired'),
-    }).toEqual({ auto: 24, confirm: 11, human: 8, retired: 1 })
+    }).toEqual({ auto: 25, confirm: 10, human: 8, retired: 1 })
     expect(walkable('M35-capability')).toBe(false)
     expect(walkable('M39-rerun')).toBe(false)
     for (const [id, e] of Object.entries(CHECKS)) {

@@ -48,12 +48,15 @@ import {
   attachDrawables,
   createDrawablesRenderer,
   type DrawablesRenderer,
+  KIND_GHOST,
 } from '../../../../src/render/drawables.ts'
 import type { TerrainRenderer } from '../../../../src/render/terrain.ts'
 import { createTerrainRenderer } from '../../../../src/render/terrain.ts'
 import {
   asHarness,
+  type DrawRecord,
   dispatchRaw,
+  drawListRecords,
   pumpUntilLive,
   stepSimTickSync,
 } from '../../../../src/test/client.ts'
@@ -1046,8 +1049,26 @@ async function runAnchorsCheck(count: number, mode: 'properties' | 'translate'):
       screenToWorld(client.cameraState, cssViewport(), x - r.left, y - r.top, sp)
       return { tileX: Math.floor(sp.x), tileY: Math.floor(sp.y) }
     },
+    /**
+     * M18-touch-ghost: is the cursor-anchored ghost in the draw list the renderer reads (`KIND_GHOST`, the
+     * Rust `extract()`'s own `ANCHOR_CURSOR_TILE` record), and which tile is the cursor on. The record's own
+     * position is always zero (the shader puts it on the cursor tile), so "on the tapped tile" is the cursor
+     * tile the ghost is anchored to.
+     */
+    ghost: async () => {
+      drawListRecords(client, ghostScratch)
+      const rec = ghostScratch.find((r) => r.kind === KIND_GHOST)
+      const cam = client.cameraState
+      return {
+        drawn: rec !== undefined,
+        anchored: rec !== undefined && (rec.flags & 1) !== 0, // ANCHOR_CURSOR_TILE
+        records: ghostScratch.length,
+        cursor: cam.cursorValid ? [cam.cursorTileX, cam.cursorTileY] : null,
+      }
+    },
   }
 }
+const ghostScratch: DrawRecord[] = []
 
 if (params.get('harness') === '1') {
   await runHarness()

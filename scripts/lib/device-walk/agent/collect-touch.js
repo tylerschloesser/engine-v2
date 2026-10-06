@@ -472,7 +472,10 @@
       })
       if (!seen) return null
       const r = readings()
+      // The tile the driver (or the finger) tapped: the tile under the up point, worked out by the page itself.
       const expected = await act('tileUnder', { x: P.upX, y: P.upY })
+      // The ghost (M18-touch-ghost): is it in the draw list, and is the tile it is anchored to the tapped one.
+      const g = await act('ghost')
       const c0 = readings()
       const dragged = await ask(item, {
         text: 'Now drag the map with one finger.',
@@ -487,6 +490,14 @@
             r.cursor_tile_y === expected.tileY,
           cursor: [r.cursor_tile_x, r.cursor_tile_y],
           expected: [expected.tileX, expected.tileY],
+          tapped: `tapped tile ${expected.tileX},${expected.tileY}; ghost anchored to ${g.cursor ? g.cursor.join(',') : 'none'}`,
+          drawn: g.drawn === true && g.anchored === true,
+          onTapped:
+            g.drawn === true &&
+            g.anchored === true &&
+            !!g.cursor &&
+            g.cursor[0] === expected.tileX &&
+            g.cursor[1] === expected.tileY,
           centreMoved: !!dragged,
         },
         final: readings(),

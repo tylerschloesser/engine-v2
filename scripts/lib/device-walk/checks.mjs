@@ -861,9 +861,9 @@ export const CHECKS = {
   },
   'M18-touch-ghost': {
     pass: 'c02c078f',
-    class: 'auto+confirm',
+    class: 'auto',
     signal:
-      "cursorTile after a tap against the tile under the finger (worked out from the pointer's own position); the camera centre moved by a drag",
+      "cursorTile after a tap against the tile under the finger (worked out from the pointer's own position); the ghost's draw-list record and the tile it is anchored to; the camera centre moved by a drag",
     plan: lifecycle('device.html?anchors=50', { collector: 'anchors', mode: 'ghost' }),
     criteria: [
       {
@@ -875,17 +875,23 @@ export const CHECKS = {
       },
       { name: 'drag_pans', source: 'ghost.centreMoved', op: '==', limit: true, ref: 'pass' },
       {
-        name: 'ghost_on_tile',
-        source: 'ghost.cursor',
+        name: 'ghost_drawn',
+        source: 'ghost.drawn',
         op: '==',
-        limit: null,
-        ref: "none: the Pass text says the ghost sits on the tapped tile; seeing it is the person's",
-        judge: 'always',
+        limit: true,
+        ref: 'pass: "the ghost (a translucent square, `extract()`\'s own `ANCHOR_CURSOR_TILE` draw)" is in the draw list the renderer reads (page state; not a pixel readback)',
+      },
+      {
+        name: 'ghost_on_tapped_tile',
+        source: 'ghost.onTapped',
+        op: '==',
+        limit: true,
+        ref: 'pass: "sits on the tapped tile": the tile the driver tapped (the page\'s `tileUnder` of the up point) is the tile the ghost is anchored to (the cursor tile)',
       },
     ],
-    metrics: [],
+    metrics: [{ name: 'ghost_tile', source: 'ghost.tapped' }],
     acts: ['tap to move the cursor tile, then drag'],
-    judges: ['the ghost (a translucent square) sits on the tapped tile'],
+    judges: [],
   },
   'M23-opfs-latency': {
     pass: 'db650cb0',

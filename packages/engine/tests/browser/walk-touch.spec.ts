@@ -100,7 +100,9 @@ test('walk-touch: M18 on device.html?anchors=50: the swim probe in both orientat
     expect(pick.metrics.rings_tapped).toBe(9) // three rings at each of three zoom levels
 
     const ghost = finalOf(r, 'M18-touch-ghost')
-    expect(ghost, JSON.stringify(ghost)).toMatchObject({ result: 'pass', by: 'mixed' })
+    expect(ghost, JSON.stringify(ghost)).toMatchObject({ result: 'pass', by: 'auto' }) // measured now: no judge sheet
+    expect(crit(ghost, 'ghost_drawn')).toMatchObject({ value: true, ok: true })
+    expect(crit(ghost, 'ghost_on_tapped_tile')).toMatchObject({ value: true, ok: true })
     expect(crit(ghost, 'cursor_tile_matches_tap')).toMatchObject({ value: true, ok: true })
     expect(crit(ghost, 'drag_pans')).toMatchObject({ value: true, ok: true })
 
