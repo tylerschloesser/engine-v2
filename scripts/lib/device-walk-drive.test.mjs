@@ -474,6 +474,68 @@ describe('device-walk drive: the runner page behind a tunnel that does not resol
   })
 })
 
+describe('device-walk drive: a phone that went silent', () => {
+  test('device-walk drive: a phone not heard from for idleMs is sent back to the join URL, at most three times', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'drive-'))
+    const file = join(dir, 'r.jsonl')
+    for (const e of [
+      { type: 'start', only: null, mode: 'auto' },
+      { type: 'walk', phase: 'start' },
+      { type: 'attempt', id: 'M09b-fill-rate', n: 1, variant: 'fixture', page: 'p', rung: 0 },
+    ])
+      appendEvent(file, e)
+    const b = createFakeBackend({ pages: { autolock: { runner: false } } })
+    let done = false
+    const d = startDrive({
+      backend: b,
+      person: person(b),
+      file,
+      ids: ['M09b-fill-rate'],
+      joinUrl: 'http://127.0.0.1:1/__walk/runner.html?walk=t',
+      seriesDir: dir,
+      append: (e) => appendEvent(file, e),
+      settle: () => {},
+      isDone: () => done,
+      lastSeen: () => Date.now() - 10_000, // always 10 s ago
+      idleMs: 30,
+      pollMs: 5,
+    })
+    await d.ready
+    await new Promise((r) => setTimeout(r, 400))
+    done = true
+    await d.stop()
+    expect(b.calls.filter((c) => c.m === 'open')).toHaveLength(1 + 3)
+    expect(readEvents(file).filter((e) => e.action === 'reopened')).toHaveLength(3)
+  })
+
+  test('device-walk drive: a phone heard from recently is left alone', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'drive-'))
+    const file = join(dir, 'r.jsonl')
+    appendEvent(file, { type: 'start', only: null, mode: 'auto' })
+    const b = createFakeBackend({ pages: { autolock: { runner: false } } })
+    let done = false
+    const d = startDrive({
+      backend: b,
+      person: person(b),
+      file,
+      ids: ['M09b-fill-rate'],
+      joinUrl: 'http://127.0.0.1:1/__walk/runner.html?walk=t',
+      seriesDir: dir,
+      append: (e) => appendEvent(file, e),
+      settle: () => {},
+      isDone: () => done,
+      lastSeen: () => Date.now(),
+      idleMs: 30,
+      pollMs: 5,
+    })
+    await d.ready
+    await new Promise((r) => setTimeout(r, 200))
+    done = true
+    await d.stop()
+    expect(b.calls.filter((c) => c.m === 'open')).toHaveLength(1)
+  })
+})
+
 describe('device-walk drive: a resumed round does not answer twice', () => {
   const P = (kind, text, extra = {}) => ({
     type: 'prompt',

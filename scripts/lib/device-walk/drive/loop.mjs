@@ -167,9 +167,39 @@ export function startDrive(o) {
     await passRunner(backend, { log, joinUrl })
   })()
 
+  // A page whose agent never started (the token lost, a script that did not load through the tunnel) says nothing
+  // for ever: the agent pings the service every few seconds, even inside a 10 minute window, so a phone not heard
+  // from for `idleMs` is sent back to the join URL, which resumes the walk where the log is. Three times, then it
+  // is left alone (and the round says so).
+  const idleMs = o.idleMs ?? 180_000
+  let reopened = 0
+  let reopenedAt = 0
+  async function watchdog() {
+    const seen = o.lastSeen?.() ?? 0
+    const now = Date.now()
+    if (!seen || now - seen < idleMs || now - reopenedAt < idleMs || reopened >= 3) return
+    reopened++
+    reopenedAt = now
+    log(
+      `drive: the phone has been silent for ${Math.round((now - seen) / 1000)} s: opening the join URL again (${reopened} of 3)`,
+    )
+    append({
+      type: 'drive',
+      action: 'reopened',
+      reason: `silent for ${Math.round((now - seen) / 1000)} s`,
+      id: 'walk',
+      n: reopened,
+    })
+    await backend
+      .open(joinUrl)
+      .catch((e) => log(`drive: reopening failed: ${String(e.message).slice(0, 120)}`))
+    await passRunner(backend, { log, joinUrl }).catch(() => {})
+  }
+
   const finished = (async () => {
     await ready
     while (!stopped && !isDone()) {
+      await watchdog()
       settle() // a `--judge` from another process is a row in the log: let the round move on
       const events = readEvents(file)
       for (const p of openPrompts(events, ids)) {
