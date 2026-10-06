@@ -1306,7 +1306,7 @@ export const CHECKS = {
     judges: [],
   },
   'M34-remote-motion': {
-    pass: 'f469a332',
+    pass: '04ed618a',
     class: 'auto+confirm',
     signal:
       'check build `__check.act.sample`: the remote circle of the bot from the newest DrawList every frame, jump against the neighbouring frames (a snap), and its alpha after the bot disconnects',
@@ -1332,14 +1332,14 @@ export const CHECKS = {
         source: 'derived.movingFramesChangedRatio',
         op: '>=',
         limit: 0.9,
-        ref: '39l: while the remote moves, its drawn position changes on at least 90 % of the frames with a new picture (a 10 Hz staircase scores about 0.15)',
+        ref: 'pass',
       },
       {
         name: 'max_still_ms',
         source: 'derived.maxStillMs',
         op: '<=',
         limit: 50,
-        ref: '39l: while the remote moves, its drawn position is never still for more than 50 ms (a 10 Hz staircase holds 100 ms)',
+        ref: 'pass',
       },
       {
         name: 'snaps',
