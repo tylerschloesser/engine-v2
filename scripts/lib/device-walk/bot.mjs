@@ -24,10 +24,22 @@ export const viewOf = (r) => ({
 })
 
 /**
- * Does this reading of the bot's page show the *phone*? Today: what the old code counted, two or more roster
- * entries and one remote circle. (Replaced in step 2 once the ghost is named.)
+ * Does the bot's page show the *phone*? All three: the phone said it joined (its own `reading {key: 'phone'}`),
+ * the roster has an online player that is not the bot, and a circle is drawn that is not the bot's own.
+ * (M39n, "ghost remote": the old test was `roster_n >= 2 && remote_circles >= 1`: any second roster entry, an
+ * offline one included, and a circle count that includes the bot's own when the DrawList has no range ring to
+ * tell it by. A bot alone on a fresh server sees neither, so what it counted in the rounds was a real second
+ * client; this makes sure it is the phone.)
+ * @param {Record<string, any>} r  the bot page's `__check.readings()`
+ * @param {boolean} phoneJoined  the phone has posted phase `joined` for this attempt
  */
-export const phoneSeen = (r) => r.roster_n >= 2 && r.remote_circles >= 1
+export const phoneSeen = (r, phoneJoined) => {
+  const roster = r.roster ?? []
+  const otherOnline = roster.some((d) => d.endsWith(':online:other'))
+  // `own_xy` null: no range ring, the own circle is among the remote ones and one of them is the bot's.
+  const others = (r.remote_circles ?? 0) - (r.own_xy ? 0 : 1)
+  return !!phoneJoined && otherOnline && others >= 1
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -149,7 +161,7 @@ export function createBots({
         let first = null
         const sawPhone = await until(async () => {
           const r = await rd()
-          if (!phoneSeen(r)) return false
+          if (!phoneSeen(r, phone(id, n) !== undefined)) return false
           first = { ms: Date.now() - tJoined, ...viewOf(r) }
           return true
         }, 120_000)

@@ -8,7 +8,7 @@ import { runInNewContext } from 'node:vm'
 import { describe, expect, test } from 'vitest'
 import { applyRound } from './device-walk/apply.mjs'
 import { createAutoRound } from './device-walk/auto-round.mjs'
-import { createBots } from './device-walk/bot.mjs'
+import { createBots, phoneSeen } from './device-walk/bot.mjs'
 import { analyseFade, analyseMotion, CHECKS, evaluate, MP_TILES } from './device-walk/checks.mjs'
 import { parseChecks } from './device-walk/parse.mjs'
 import { appendEvent, readEvents, replay } from './device-walk/rounds.mjs'
@@ -679,5 +679,28 @@ describe('device-walk reference: M34 (the bot partner)', () => {
       readings: { link: 'connecting', ui_seen: false },
       server: ['[reference-server] listening: 4184', '[reference-server] Reject VersionMismatch'],
     })
+  })
+  test('device-walk reference: the bot sees the phone only when the phone said it joined, an online other player is on the roster and a circle that is not its own is drawn', () => {
+    const view = (over = {}) => ({
+      roster: ['1:online:other', '2:online:me'],
+      roster_n: 2,
+      remote_circles: 1,
+      own_xy: '0.11,0.11',
+      ...over,
+    })
+    expect(phoneSeen(view(), true)).toBe(true)
+    // The only remote circle is the bot's own (no range ring to tell it by) and the one other roster entry
+    // is an offline leftover: the old count (roster >= 2 and a circle) said yes.
+    const ghost = view({ roster: ['1:offline:other', '2:online:me'], own_xy: null })
+    expect(ghost.roster_n >= 2 && ghost.remote_circles >= 1).toBe(true)
+    expect(phoneSeen(ghost, true)).toBe(false)
+    // An online other player and its circle, but the phone has not said it joined: not the phone.
+    expect(phoneSeen(view(), false)).toBe(false)
+    // With no ring a second circle is the other player's.
+    expect(phoneSeen(view({ own_xy: null, remote_circles: 2 }), true)).toBe(true)
+    // A roster with only the bot (alone on a fresh server).
+    expect(phoneSeen(view({ roster: ['1:online:me'], roster_n: 1, remote_circles: 0 }), true)).toBe(
+      false,
+    )
   })
 })
