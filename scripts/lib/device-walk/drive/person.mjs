@@ -164,15 +164,21 @@ export const HANDLERS = [
       if (!r) throw new Error('no highlighted ring on the page')
       let { x, y } = r
       if (/ring/.test(text)) {
-        const below = await backend.readPage(`(() => {
-          let bottom = null
+        const btn = await backend.readPage(`(() => {
+          let hit = null
           for (const b of document.querySelectorAll('button')) {
             const q = b.getBoundingClientRect()
-            if (${x} > q.left - 8 && ${x} < q.right + 8 && ${y} > q.top - 8 && ${y} < q.bottom + 8) bottom = Math.max(bottom ?? 0, q.bottom)
+            if (${x} > q.left - 8 && ${x} < q.right + 8 && ${y} > q.top - 8 && ${y} < q.bottom + 8)
+              hit = { bottom: q.bottom, cx: q.left + q.width / 2 }
           }
-          return bottom
+          return hit
         })()`)
-        if (below !== null) y = below + 2
+        // 4 px under the button's box (measured on the Pixel 5 at 40 tiles: 11 px under the ring's anchor picks it,
+        // 9 hits the button, 15 misses the ring).
+        if (btn) {
+          x = btn.cx
+          y = btn.bottom + 4
+        }
       }
       await backend.tap(x, y)
     },
@@ -274,7 +280,7 @@ export const HANDLERS = [
       throw new NotDrivable(
         backend.platform === 'ios'
           ? 'the iPhone has no SIM, so there is no cellular to move to: Wi-Fi off is no network at all'
-          : 'a driven round serves over adb reverse (USB), so the Wi-Fi state changes nothing the page can see; it needs a tunnel round with the phone on Wi-Fi and cellular',
+          : 'switching the Pixel from Wi-Fi to cellular (`svc wifi disable`, `svc data enable`) is not built yet; over adb reverse the Wi-Fi state would change nothing the page sees',
       )
     },
   },

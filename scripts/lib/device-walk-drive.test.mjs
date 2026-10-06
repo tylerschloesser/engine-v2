@@ -249,9 +249,11 @@ describe('device-walk drive: the device person on a recording backend', () => {
   })
 
   test('device-walk drive: a ring under its own button is tapped just below the button, the button itself at its centre', async () => {
-    const o = { pages: { "of document.querySelectorAll('button')": () => 250 } }
+    const o = {
+      pages: { "of document.querySelectorAll('button')": () => ({ bottom: 250, cx: 120 }) },
+    }
     const ring = await run('Zoom 1 of 3: tap the highlighted ring (1 of 3).', o)
-    expect(ring.b.calls.find((c) => c.m === 'tap').args).toEqual([123, 252])
+    expect(ring.b.calls.find((c) => c.m === 'tap').args).toEqual([120, 254])
     const button = await run('Tap the highlighted button (it is numbered 26).', o)
     expect(button.b.calls.find((c) => c.m === 'tap').args).toEqual([123, 234])
   })
