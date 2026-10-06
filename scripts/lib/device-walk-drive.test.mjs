@@ -6,7 +6,14 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
 import { CHECKS, MP_SCENARIOS } from './device-walk/checks.mjs'
-import { assertBackend } from './device-walk/drive/backend.mjs'
+import {
+  createAndroidBackend,
+  offsetsFor,
+  pickSerial,
+  toScreen,
+  touchScript,
+} from './device-walk/drive/android.mjs'
+import { assertBackend, NotDrivable } from './device-walk/drive/backend.mjs'
 import { createFakeBackend } from './device-walk/drive/fake-backend.mjs'
 import { ACT_COVERAGE, devicePerson, HANDLERS } from './device-walk/drive/person.mjs'
 
@@ -269,8 +276,120 @@ describe('device-walk drive: the device person on a recording backend', () => {
     expect(b.calls).toEqual([{ m: 'screenshot', args: ['/x/M11-gestures-2-judge.png'] }])
   })
 
-  test('device-walk drive: the fake backend implements the interface', () => {
+  test('device-walk drive: the fake backend and the Android backend both implement the interface', () => {
     assertBackend(createFakeBackend())
+    assertBackend(createAndroidBackend({ run: () => '', serial: 'x' }))
     expect(() => assertBackend({ open() {} })).toThrow(/lacks: readPage/)
+  })
+})
+
+describe('device-walk drive: the Android backend without a phone', () => {
+  const pageOf = (url) => ({ id: 'T1', type: 'page', url, webSocketDebuggerUrl: 'ws://x' })
+  const make = (o = {}) => {
+    const adb = []
+    const m = { innerWidth: 392, innerHeight: 721, outerWidth: 393, outerHeight: 851, dpr: 2.75 }
+    const b = createAndroidBackend({
+      serial: 'S',
+      sleep: async () => {},
+      run: (args) => {
+        adb.push(args.join(' '))
+        if (args[0] === 'forward') return '41234\n'
+        if (args[1]?.startsWith('dumpsys power')) return 'mWakefulness=Awake'
+        if (args[1]?.startsWith('settings get system accelerometer_rotation')) return '1'
+        if (args[1]?.startsWith('settings get system user_rotation')) return '0'
+        return ''
+      },
+      fetchJson: async () => [pageOf('http://127.0.0.1:4173/__walk/runner.html')],
+      connect: async () => ({
+        send: async () => ({}),
+        evaluate: async (js) => (/outerWidth/.test(js) ? m : undefined),
+        close() {},
+      }),
+      ...o,
+    })
+    return { b, adb }
+  }
+
+  test('device-walk drive: the serial is the one attached, or the one asked for', () => {
+    const out = 'List of devices attached\n13061FDD4002VN\tdevice\n\n'
+    expect(pickSerial(out)).toBe('13061FDD4002VN')
+    expect(() => pickSerial('List of devices attached\n')).toThrow(/0 devices/)
+    expect(() => pickSerial(`${out}ZZ\tdevice\n`)).toThrow(/2 devices/)
+    expect(() => pickSerial(out, 'nope')).toThrow(/no device nope/)
+    expect(pickSerial(`${out}ZZ\tdevice\n`, 'ZZ')).toBe('ZZ')
+  })
+
+  test('device-walk drive: CSS px become screen px through the page offset and the pixel ratio (numbers measured on the Pixel 5)', () => {
+    // Portrait: the page's top is 105.45 CSS px down (status bar and toolbar), the chin 24 below.
+    const off = offsetsFor(
+      { innerWidth: 392, innerHeight: 721.45, outerWidth: 393, outerHeight: 851, dpr: 2.75 },
+      24.1,
+    )
+    expect(off.offY).toBeCloseTo(105.45, 1)
+    expect(toScreen({ ...off, offX: 0 }, 196.36, 330.91)).toEqual({ x: 540, y: 1200 })
+    // Landscape: the camera cutout puts 49.45 CSS px beside the page.
+    const land = offsetsFor(
+      { innerWidth: 801, innerHeight: 284.7, outerWidth: 851, outerHeight: 393, dpr: 2.75 },
+      24.1,
+    )
+    expect(land.offX).toBeCloseTo(50, 0)
+    expect(toScreen({ offX: 49.45, offY: 84, dpr: 2.75 }, 376, 112.36)).toEqual({ x: 1170, y: 540 })
+  })
+
+  test('device-walk drive: two-finger touch is start, equal moves, end, both fingers at every step', () => {
+    const s = touchScript(
+      [
+        { from: { x: 100, y: 200 }, to: { x: 150, y: 200 } },
+        { from: { x: 300, y: 200 }, to: { x: 250, y: 200 } },
+      ],
+      5,
+    )
+    expect(s.map((e) => e.type)).toEqual([
+      'touchStart',
+      'touchMove',
+      'touchMove',
+      'touchMove',
+      'touchMove',
+      'touchMove',
+      'touchEnd',
+    ])
+    expect(s[0].touchPoints.map((p) => [p.id, p.x])).toEqual([
+      [0, 100],
+      [1, 300],
+    ])
+    expect(s[5].touchPoints.map((p) => p.x)).toEqual([150, 250])
+    expect(s[6].touchPoints).toEqual([])
+  })
+
+  test('device-walk drive: rotation, Home, airplane and the way back are plain adb; cleanup restores what it changed', async () => {
+    const { b, adb } = make()
+    await b.rotate('landscape')
+    await b.home()
+    await b.setAirplane(true)
+    await b.reverse([4173])
+    await b.cleanup()
+    expect(adb).toContain('shell settings put system user_rotation 1')
+    expect(adb).toContain('shell input keyevent KEYCODE_HOME')
+    expect(adb).toContain('shell cmd connectivity airplane-mode enable')
+    expect(adb).toContain('shell cmd connectivity airplane-mode disable')
+    expect(adb).toContain('shell settings put system user_rotation 0')
+    expect(adb).toContain('shell settings put system accelerometer_rotation 1')
+    expect(adb).toContain('reverse --remove tcp:4173')
+    expect(adb.filter((c) => /KEYCODE_(SLEEP|POWER)|unplug|input keyevent 26/.test(c))).toEqual([])
+  })
+
+  test('device-walk drive: Low Power Mode is NotDrivable on a charging Pixel, and the screen is only ever woken', async () => {
+    const { b } = make()
+    await expect(b.setLowPower(true)).rejects.toBeInstanceOf(NotDrivable)
+    const asleep = []
+    const c = createAndroidBackend({
+      serial: 'S',
+      run: (args) => {
+        asleep.push(args.join(' '))
+        return args[1]?.startsWith('dumpsys power') ? 'mWakefulness=Asleep' : ''
+      },
+    })
+    await c.cleanup()
+    expect(asleep).toContain('shell input keyevent KEYCODE_WAKEUP')
   })
 })
