@@ -1,6 +1,6 @@
 # M39g: iOS pinch freezes the camera (gesture events)
 
-Status: not started · After: 39f · Tyler-dependent: no (re-run of M11-gestures on his iPhone follows)
+Status: done (2026-10-05; device re-run of M11-gestures owed in round `m39-auto`) · After: 39f · Tyler-dependent: no (re-run of M11-gestures on his iPhone follows)
 
 ## Goal
 Tyler's M39 auto round on the iPhone (2026-10-05, round `m39-auto`, item **M11-gestures**): "it asked me to zoom. And the zoom is fucked. Screen is green (as though it zoomed in super close to something). And now it's stuck green - like zoom doesn't work at all." When this is done a pinch on iOS Safari zooms once, about the fingers, and no input can leave the camera non-finite. The macOS trackpad pinch (device check M11-pinch-desktop-safari) zooms about the cursor.
@@ -37,10 +37,10 @@ Inertia, tap thresholds, wheel maths, any renderer change, `device-walk` tooling
 Each test gets one inject-fail-revert (put the old code back, see it red, restore), with the red line pasted in the report.
 
 ## Exit criteria
-- [ ] The three tests exist and pass; each was seen red against the old behaviour.
-- [ ] `camera.gesturechange_scale_zooms_about_cursor` still passes (macOS trackpad pinch maths unchanged).
-- [ ] No allocation added in a gesture listener or `integrate` (say how you checked).
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The three tests exist and pass; each was seen red against the old behaviour.
+- [x] `camera.gesturechange_scale_zooms_about_cursor` still passes (macOS trackpad pinch maths unchanged).
+- [x] No allocation added in a gesture listener or `integrate` (say how you checked).
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test unit -t gesture` · `pnpm test unit -t camera` (targeted, foreground).
@@ -55,3 +55,4 @@ Re-run **M11-gestures** in round `m39-auto` (`pnpm device:walk --auto --round m3
 - `applyGesture(state, viewport, gesture, touching)`: while a pointer slot is active the scale change is not applied, `gestureLastApplied` still tracks it.
 - Test names follow each file's `camera: ...`/`input gestures: ...` style with the brief's snake_case names; the existing test is `camera: gesturechange scale zooms about cursor` (passes).
 - Inject-fail-revert (old `pointers.ts`+`camera.ts` restored, then new): `touch_pinch...` red `expected 12 to be close to 20` (also red with only camera.ts old); `non_finite...` red `expected -3.5 to be 10`; `gesture_event_without_offset...` red `expected undefined to be 100`.
+- **Gate fix (orchestrator):** the implementer's `applyZoomTo` guard `Number.isFinite(screenX + screenY + newTilesAcrossRaw)` boxed a HeapNumber per zoom: `[gc] input clean` read 193.5-193.9 B/frame against its 190 budget (base passes under the same load). Three separate `Number.isFinite` calls instead: 180.4 B/frame (budget forced to 1 to read it, then restored), at the base level. The allocation criterion was a read-the-code claim; the gc page is what checked it.

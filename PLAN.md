@@ -101,7 +101,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 39d | `39d-full-world-reconnect.md` | a full world admits a returning player (supersede) and gives a ninth player `Reject{Full}` (found by M39c, 2026-10-02) | 39c | |
 | [x] | 39e | `39e-device-walkthrough-tool.md` | `pnpm device:walk`: local walkthrough of a manual-check round (auto QR, resumable log, `--apply` to `device-checks.md`), `device-round` skill (Tyler's request, 2026-10-03) | 39d | |
 | [x] | 39f | `39f-device-auto-runner.md` | one QR, the phone runs the round: injected check agent, auto-collected readings, one-tap prompts only for judgement (Tyler's request and answers, 2026-10-03) | 39e | |
-| [ ] | 39g | `39g-ios-pinch-nan.md` | iOS pinch froze the camera at a NaN centre (gesture events read `offsetX`, pinch applied twice); found by M11-gestures in the m39-auto round (2026-10-05) | 39f | |
+| [x] | 39g | `39g-ios-pinch-nan.md` | iOS pinch froze the camera at a NaN centre (gesture events read `offsetX`, pinch applied twice); found by M11-gestures in the m39-auto round (2026-10-05) | 39f | |
 | [ ] | 39 | `39-acceptance.md` | coverage + budget audit, full device checklist, Phase 3 exit | all above | D |
 | [ ] | 39b | `39b-phase-4-handoff.md` | capture what code cannot say in ADRs, `PROMPT.md` for Phase 4. **Phase 3 complete.** | 39 | |
 

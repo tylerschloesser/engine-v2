@@ -175,8 +175,14 @@ export function createCameraIntegrator(
     screenY: number,
     newTilesAcrossRaw: number,
   ): void {
-    // NaN is absorbing in the camera: refuse it at the one zoom primitive.
-    if (!Number.isFinite(screenX + screenY + newTilesAcrossRaw)) return
+    // NaN is absorbing in the camera: refuse it at the one zoom primitive. Three calls, not one on a
+    // sum: the sum boxed a HeapNumber per zoom (+12 B/frame on the `input` gc page).
+    if (
+      !Number.isFinite(newTilesAcrossRaw) ||
+      !Number.isFinite(screenX) ||
+      !Number.isFinite(screenY)
+    )
+      return
     const clamped = clampTiles(constraints, viewClampMaxTiles, newTilesAcrossRaw)
     if (clamped === state.tilesAcross) return
     screenToWorld(state, viewport, screenX, screenY, worldScratch)
