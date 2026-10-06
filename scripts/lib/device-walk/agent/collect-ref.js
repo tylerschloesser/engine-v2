@@ -275,7 +275,14 @@
         set('runs', JSON.stringify(runs))
         A.send('reading', { id: item.id, n: item.n, key: 'run', data: run })
       }
-      return { ready: true, runs, reloads: 0, gpu: A.gpu, dom: domFacts() }
+      // What the judge reads per run (the value of `drawn_again_per_run`): the facts, in words.
+      const summary = runs
+        .map(
+          (r) =>
+            `run ${r.run}: ${r.frozen ? 'FROZEN or no canvas' : 'drawn again'} (frames ${r.rafResumed ? 'resumed' : 'did not resume'}, canvas ${r.canvas ? 'present' : 'missing'}, renderer-lost banner ${r.rendererLost ? 'shown' : 'not shown'}, device lost ${r.deviceLost})`,
+        )
+        .join('; ')
+      return { ready: true, runs, summary, reloads: 0, gpu: A.gpu, dom: domFacts() }
     },
 
     /**

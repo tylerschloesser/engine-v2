@@ -1427,11 +1427,13 @@ export const CHECKS = {
       { name: 'reloads', source: 'reloads', op: '==', limit: 0, ref: 'pass' },
       {
         name: 'drawn_again_per_run',
-        source: 'runs.*.rendererLost',
-        reduce: 'any',
+        // The measured facts of each run in words (frames resumed, canvas present, banner, device lost): the page and
+        // the collector were right, the value shown used to be "any renderer-lost banner" (false), which read as
+        // "not drawn again". A black canvas is not measurable from the page: that stays the judge's.
+        source: 'summary',
         op: '==',
         limit: null,
-        ref: 'none: "the world drawn again" is the person\'s, per run; the device-loss and banner facts of each run are shown with it',
+        ref: "none: a black canvas cannot be told from the page; every run's facts are shown with it",
         judge: 'always',
       },
     ],

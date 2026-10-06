@@ -1297,4 +1297,44 @@ describe('device-walk drive: the iOS backend without a phone', () => {
     )
     srv.close()
   })
+
+  test('device-walk drive: M37b shows the judge each run\'s facts in words, not a bare false for "drawn again"', () => {
+    const run = (n, over = {}) => ({
+      run: n,
+      ms: 180_000,
+      deviceLost: 0,
+      gpuErrors: 0,
+      rendererLost: false,
+      fatal: false,
+      canvas: true,
+      rafResumed: true,
+      frozen: false,
+      ...over,
+    })
+    const summary =
+      'run 1: drawn again (frames resumed, canvas present, renderer-lost banner not shown, device lost 0)'
+    const e = evaluate(CHECKS['M37b-ios-background'], {
+      reloads: 0,
+      runs: [run(1), run(2), run(3)],
+      summary,
+    })
+    expect(e.verdict).toBe('judge')
+    expect(e.criteria.find((c) => c.name === 'drawn_again_per_run')).toMatchObject({
+      value: summary,
+      ok: null,
+    })
+    expect(e.criteria.find((c) => c.name === 'black_or_frozen_runs')).toMatchObject({
+      value: false,
+      ok: true,
+    })
+    const frozen = evaluate(CHECKS['M37b-ios-background'], {
+      reloads: 0,
+      runs: [run(1), run(2, { frozen: true }), run(3)],
+      summary,
+    })
+    expect(frozen.verdict).toBe('fail')
+    // The collector writes that summary (source check: the words the judge reads).
+    const src = readFileSync(join(AGENT, 'collect-ref.js'), 'utf8')
+    expect(src).toContain("'FROZEN or no canvas' : 'drawn again'")
+  })
 })
