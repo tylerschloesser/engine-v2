@@ -53,3 +53,4 @@ After landing, the orchestrator runs M29-net-heap driven on the Pixel (10 min) a
 - **Not done.** `mp.ts` unchanged; no phone run (the orchestrator's driven Pixel/iPhone round).
 - **Gate (orchestrator):** the first full run had two fast-tier reds this milestone cannot reach (`[gc] no_ui_change clean`, `reference_furnace_pick_up`; it changed only device-walk scripts and a slow spec). They passed alone 3 of 3, and the full re-run was green (unit 614, browser 256 in 44 s): the ledger's full-suite-only flake pattern. The `sum` change (empty is null) is accepted: it was the unfailable criterion.
 
+- **Driven Pixel round `m39q-pixel` (orchestrator):** M29-net-heap pass, measured: 10 min, 2,400 paints, `reloads` 0, `hitch_gaps_over_25ms` 0, max rAF gap 17 ms.
