@@ -257,7 +257,9 @@ export function recordPointerUp(
   slot.quickTap = true
 }
 
+// A non-finite gesture input is dropped whole: one NaN written into the camera is absorbing.
 export function recordGestureStart(state: PointerSlots, x: number, y: number): void {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return
   state.gesture.active = true
   state.gesture.scale = 1
   state.gesture.x = x
@@ -270,6 +272,7 @@ export function recordGestureChange(
   x: number,
   y: number,
 ): void {
+  if (!Number.isFinite(scale) || scale <= 0 || !Number.isFinite(x) || !Number.isFinite(y)) return
   state.gesture.active = true
   state.gesture.scale = scale
   state.gesture.x = x
@@ -308,7 +311,7 @@ export function pointerVelocity(slot: PointerSlot, out: ScreenVelocity): boolean
 /** Canvas-only (0019 §3): `pointerdown` takes pointer capture so a drag that passes under a
  * `pointer-events: auto` widget keeps panning; `gesturestart`/`gesturechange`/`gestureend` are
  * Safari-only (harmless no-ops elsewhere) and call `preventDefault()` the same way the non-passive
- * `wheel` listener does (`input/wheel.ts`). Uses `offsetX`/`offsetY` (canvas-relative, provided by
+ * `wheel` listener does (`input/wheel.ts`). Pointer events use `offsetX`/`offsetY` (canvas-relative, provided by
  * the browser on every `MouseEvent`-derived event) rather than `getBoundingClientRect()`, which
  * would allocate a fresh `DOMRect` on every single pointer move during a real drag -- a per-event
  * allocation on a path that runs during ordinary play (0016 §2 "steady state ... including
@@ -361,15 +364,33 @@ export function installPointerListeners(state: PointerSlots, canvas: HTMLElement
   function onLeave(e: PointerEvent): void {
     if (e.pointerType === 'mouse') state.mouseHover.valid = false
   }
+  // WebKit's `GestureEvent` is a `UIEvent`: `clientX`/`clientY`, no `offsetX`/`offsetY`. The canvas
+  // rect is read once per gesture into these numbers, so `gesturechange` allocates nothing.
+  let gestureLeft = 0
+  let gestureTop = 0
+  let gestureW = 0
+  let gestureH = 0
+  // Canvas-relative coordinate; a missing client coordinate falls back to the canvas centre.
+  function gestureX(ge: { clientX: number }): number {
+    return Number.isFinite(ge.clientX) ? ge.clientX - gestureLeft : gestureW / 2
+  }
+  function gestureY(ge: { clientY: number }): number {
+    return Number.isFinite(ge.clientY) ? ge.clientY - gestureTop : gestureH / 2
+  }
   function onGestureStart(e: Event): void {
     e.preventDefault()
-    const ge = e as unknown as { offsetX: number; offsetY: number }
-    recordGestureStart(state, ge.offsetX, ge.offsetY)
+    const r = canvas.getBoundingClientRect()
+    gestureLeft = r.left
+    gestureTop = r.top
+    gestureW = r.width
+    gestureH = r.height
+    const ge = e as unknown as { clientX: number; clientY: number }
+    recordGestureStart(state, gestureX(ge), gestureY(ge))
   }
   function onGestureChange(e: Event): void {
     e.preventDefault()
-    const ge = e as unknown as { scale: number; offsetX: number; offsetY: number }
-    recordGestureChange(state, ge.scale, ge.offsetX, ge.offsetY)
+    const ge = e as unknown as { scale: number; clientX: number; clientY: number }
+    recordGestureChange(state, ge.scale, gestureX(ge), gestureY(ge))
   }
   function onGestureEnd(e: Event): void {
     e.preventDefault()

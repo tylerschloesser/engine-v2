@@ -49,4 +49,9 @@ Each test gets one inject-fail-revert (put the old code back, see it red, restor
 Re-run **M11-gestures** in round `m39-auto` (`pnpm device:walk --auto --round m39-auto`), and M11-pinch-desktop-safari later in the round.
 
 ## Deviations
-(filled in during Phase 3)
+- **GestureEvent shape not confirmed from primary sources.** MDN lists only `scale`/`rotation` (parent `UIEvent`, no `offsetX`); WebKit's implementation lives in private WebKitAdditions, so the IDL could not be read. Apple's legacy Safari reference (not reachable) is the source for `clientX`/`clientY`. The `offsetX` absence is consistent with every source; `clientX` presence is not machine-verified. Mitigation: a non-finite `clientX`/`clientY` falls back to the canvas centre, so a macOS pinch still zooms instead of being dropped.
+- Listener (`input/pointers.ts`): `getBoundingClientRect()` read once per `gesturestart` into closure numbers (`gestureLeft/Top/W/H`); `gesturechange` allocates nothing (no new objects/closures per event).
+- Guards: `recordGestureStart` drops non-finite x/y; `recordGestureChange` drops non-finite scale/x/y and `scale <= 0` (state is left as it was); `applyZoomTo` returns on a non-finite point or target (the one primitive pinch, wheel and gesture all pass through, so no input path reaches a NaN camera). Wheel/pointer coordinates are not separately guarded.
+- `applyGesture(state, viewport, gesture, touching)`: while a pointer slot is active the scale change is not applied, `gestureLastApplied` still tracks it.
+- Test names follow each file's `camera: ...`/`input gestures: ...` style with the brief's snake_case names; the existing test is `camera: gesturechange scale zooms about cursor` (passes).
+- Inject-fail-revert (old `pointers.ts`+`camera.ts` restored, then new): `touch_pinch...` red `expected 12 to be close to 20` (also red with only camera.ts old); `non_finite...` red `expected -3.5 to be 10`; `gesture_event_without_offset...` red `expected undefined to be 100`.

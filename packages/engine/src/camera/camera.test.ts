@@ -354,3 +354,68 @@ test('camera: gesturechange scale zooms about cursor', () => {
   expect(after.x).toBeCloseTo(before.x, 6)
   expect(after.y).toBeCloseTo(before.y, 6)
 })
+
+test('camera: touch_pinch_with_gesture_events_zooms_once', () => {
+  const state = new CameraState()
+  state.centreX = 10
+  state.centreY = 5
+  state.tilesAcross = 40
+  const pointers = new PointerSlots()
+  const integrator = createCameraIntegrator({
+    pointers,
+    keys: new KeyState(),
+    wheel: new WheelState(),
+  })
+  // iOS fires gesture* alongside the two touch pointers.
+  recordPointerDown(pointers, 1, 750, 380, 0)
+  recordPointerDown(pointers, 2, 1050, 420, 0)
+  recordGestureStart(pointers, 900, 400)
+  integrator.integrate(state, viewport, 16)
+  const before = { x: 0, y: 0 }
+  screenToWorld(state, viewport, 900, 400, before)
+
+  // Fingers double their distance about the same midpoint; the gesture reports scale 2.
+  recordPointerMove(pointers, 1, 600, 360, 16)
+  recordPointerMove(pointers, 2, 1200, 440, 16)
+  recordGestureChange(pointers, 2, 900, 400)
+  integrator.integrate(state, viewport, 16)
+
+  expect(state.tilesAcross).toBeCloseTo(20, 9) // halved once, not quartered
+  const after = { x: 0, y: 0 }
+  screenToWorld(state, viewport, 900, 400, after)
+  expect(after.x).toBeCloseTo(before.x, 6)
+  expect(after.y).toBeCloseTo(before.y, 6)
+})
+
+test('camera: non_finite_gesture_input_leaves_camera_finite', () => {
+  const state = new CameraState()
+  state.centreX = 10
+  state.centreY = 5
+  state.tilesAcross = 40
+  const pointers = new PointerSlots()
+  const integrator = createCameraIntegrator({
+    pointers,
+    keys: new KeyState(),
+    wheel: new WheelState(),
+  })
+  const bad = [Number.NaN, undefined as unknown as number, Number.POSITIVE_INFINITY]
+  recordGestureStart(pointers, Number.NaN, undefined as unknown as number)
+  integrator.integrate(state, viewport, 16)
+  for (const v of bad) {
+    recordGestureChange(pointers, 2, v, 300)
+    recordGestureChange(pointers, v, 900, 400)
+    recordGestureChange(pointers, 0, 900, 400)
+    integrator.integrate(state, viewport, 16)
+  }
+  expect(state.centreX).toBe(10)
+  expect(state.centreY).toBe(5)
+  expect(state.tilesAcross).toBe(40)
+
+  // A following valid pan still moves the camera.
+  recordPointerDown(pointers, 1, 900, 450, 0)
+  integrator.integrate(state, viewport, 16)
+  recordPointerMove(pointers, 1, 940, 470, 16)
+  integrator.integrate(state, viewport, 16)
+  expect(Number.isFinite(state.centreX)).toBe(true)
+  expect(state.centreX).not.toBe(10)
+})

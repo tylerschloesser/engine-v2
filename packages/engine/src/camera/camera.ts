@@ -175,6 +175,8 @@ export function createCameraIntegrator(
     screenY: number,
     newTilesAcrossRaw: number,
   ): void {
+    // NaN is absorbing in the camera: refuse it at the one zoom primitive.
+    if (!Number.isFinite(screenX + screenY + newTilesAcrossRaw)) return
     const clamped = clampTiles(constraints, viewClampMaxTiles, newTilesAcrossRaw)
     if (clamped === state.tilesAcross) return
     screenToWorld(state, viewport, screenX, screenY, worldScratch)
@@ -211,9 +213,20 @@ export function createCameraIntegrator(
     wasActive[i] = 0
   }
 
-  function applyGesture(state: CameraState, viewport: CameraViewport, gesture: GestureState): void {
+  function applyGesture(
+    state: CameraState,
+    viewport: CameraViewport,
+    gesture: GestureState,
+    touching: boolean,
+  ): void {
     if (gesture.active) {
-      if (wasGesture && gesture.scale !== gestureLastApplied && gestureLastApplied !== 0) {
+      // On iOS a touch pinch fires `gesture*` too: the pointer path owns it, so only track scale.
+      if (
+        !touching &&
+        wasGesture &&
+        gesture.scale !== gestureLastApplied &&
+        gestureLastApplied !== 0
+      ) {
         const incremental = gesture.scale / gestureLastApplied
         // 0019 §3: "pinch is direct" (not eased like a wheel notch).
         applyZoomTo(state, viewport, gesture.x, gesture.y, state.tilesAcross / incremental)
@@ -402,7 +415,7 @@ export function createCameraIntegrator(
       state.velocityY = 0
     }
 
-    applyGesture(state, viewport, gesture)
+    applyGesture(state, viewport, gesture, p0.active || p1.active)
     const activeCount = applyPointers(state, viewport, pointers)
 
     if (activeCount === 0 && !gesture.active) {

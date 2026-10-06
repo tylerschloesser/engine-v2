@@ -20,6 +20,9 @@ class FakeCanvas {
     this.listeners.delete(type)
   }
   setPointerCapture(): void {}
+  getBoundingClientRect(): { left: number; top: number; width: number; height: number } {
+    return { left: 30, top: 70, width: 800, height: 600 }
+  }
 }
 /** A cancelable event: `preventDefault()` flips `defaultPrevented` once, as the DOM does. */
 function cancelable(extra: object): Event {
@@ -91,4 +94,22 @@ test('input gestures: nothing in the engine source calls getCoalescedEvents', ()
   if (offenders.length > 0)
     throw new Error(`getCoalescedEvents() called in: ${offenders.join(', ')}`)
   expect(readFileSync(join(src, 'input/pointers.ts'), 'utf8')).toContain('onMove')
+})
+
+test('input gestures: gesture_event_without_offset_records_finite_point', () => {
+  const canvas = new FakeCanvas()
+  const state = new PointerSlots()
+  installPointerListeners(state, canvas as unknown as HTMLElement)
+  // WebKit's GestureEvent carries clientX/clientY and no offsetX/offsetY.
+  canvas.listeners
+    .get('gesturestart')
+    ?.handler(cancelable({ scale: 1, clientX: 130, clientY: 270 }))
+  expect(state.gesture.x).toBe(100)
+  expect(state.gesture.y).toBe(200)
+  canvas.listeners
+    .get('gesturechange')
+    ?.handler(cancelable({ scale: 1.5, clientX: 230, clientY: 370 }))
+  expect(state.gesture.scale).toBe(1.5)
+  expect(state.gesture.x).toBe(200)
+  expect(state.gesture.y).toBe(300)
 })
