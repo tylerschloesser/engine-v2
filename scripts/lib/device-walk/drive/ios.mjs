@@ -165,12 +165,12 @@ export function createIosBackend(o = {}) {
     try {
       const v = await raw(m, full, b, t)
       log(
-        `ios> ${m} ${path} ${brief} (${Date.now() - t0} ms) -> ${JSON.stringify(v)?.slice(0, 80)}`,
+        `ios> @${t0} ${m} ${path} ${brief} (${Date.now() - t0} ms) -> ${JSON.stringify(v)?.slice(0, 80)}`,
       )
       return v
     } catch (e) {
       log(
-        `ios> ${m} ${path} ${brief} (${Date.now() - t0} ms) FAILED ${String(e.message).slice(0, 100)}`,
+        `ios> @${t0} ${m} ${path} ${brief} (${Date.now() - t0} ms) FAILED ${String(e.message).slice(0, 100)}`,
       )
       throw e
     }
