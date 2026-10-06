@@ -57,7 +57,7 @@ const sample = (over = {}) => ({
   raf_p50_ms: 16.6,
   raf_p95_ms: 16.9,
   raf_over20: 0,
-  gpu_p95_ms: 3,
+  gpu_exec_p95_ms: 3,
   ...over,
 })
 const fillData = (over = {}, raf = {}) => ({

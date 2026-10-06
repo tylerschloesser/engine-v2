@@ -534,6 +534,14 @@ export function createAutoRound({
             .filter((c) => c.ok === null)
             .map((c) => `${c.name} ${c.value}${c.limit === null ? '' : ` (limit ${c.limit})`}`)
             .join(', ')
+          // M39k: no timestamp-query reading: the latency is shown, labelled, so the judge is not blind.
+          const noExec = (a.criteria ?? []).some(
+            (c) => c.ok === null && c.name === 'gpu_exec_p95_ms',
+          )
+          const lat = a.metrics?.gpu_latency_p95_ms
+          const latNote = noExec
+            ? `; timestamp-query unavailable, gpu_latency_p95_ms ${lat ?? 'n/a'} (informational: submit-to-done, includes the vsync wait)`
+            : ''
           return {
             ...base,
             phase: 'judge',
@@ -541,7 +549,7 @@ export function createAutoRound({
             judge: {
               id: it.id,
               n: a.n,
-              text: `${entry.judges.join('; ') || 'Judge this check'}. Measured: ${hint}.`,
+              text: `${entry.judges.join('; ') || 'Judge this check'}. Measured: ${hint}${latNote}.`,
             },
             progress,
           }

@@ -123,7 +123,7 @@ describe('device-walk criteria', () => {
     raf_p50_ms: 16.6,
     raf_p95_ms: 16.9,
     raf_over20: 0,
-    gpu_p95_ms: 3,
+    gpu_exec_p95_ms: 3,
     ...over,
   })
   const win = (orientation, over = {}, raf = {}) => ({
@@ -138,7 +138,7 @@ describe('device-walk criteria', () => {
 
   test('device-walk criteria: limits at, above and below (rAF p95 17.5, gaps 5 per 10 s, GPU 6)', () => {
     const run = (over) => evaluate(fill, data(win('portrait', over), win('landscape')))
-    expect(run({ raf_p95_ms: 17.5, raf_over20: 5, gpu_p95_ms: 6 }).verdict).toBe('pass')
+    expect(run({ raf_p95_ms: 17.5, raf_over20: 5, gpu_exec_p95_ms: 6 }).verdict).toBe('pass')
     const high = run({ raf_p95_ms: 17.6 })
     expect(high.verdict).toBe('fail')
     expect(high.criteria.find((c) => !c.ok)).toMatchObject({
@@ -148,8 +148,25 @@ describe('device-walk criteria', () => {
       ok: false,
     })
     expect(run({ raf_over20: 6 }).criteria.find((c) => !c.ok).name).toBe('raf_over20_per_10s')
-    expect(run({ gpu_p95_ms: 6.1 }).criteria.find((c) => !c.ok).name).toBe('gpu_p95_ms')
-    expect(run({ raf_p95_ms: 12, gpu_p95_ms: 1 }).verdict).toBe('pass')
+    expect(run({ gpu_exec_p95_ms: 6.1 }).criteria.find((c) => !c.ok).name).toBe('gpu_exec_p95_ms')
+    expect(run({ raf_p95_ms: 12, gpu_exec_p95_ms: 1 }).verdict).toBe('pass')
+  })
+
+  test('device-walk criteria: the GPU criterion reads gpu_exec_p95_ms; a null reading is a judge prompt, never a pass', () => {
+    const run = (over) => evaluate(fill, data(win('portrait', over), win('landscape')))
+    expect(run({ gpu_exec_p95_ms: 6.0 }).verdict).toBe('pass')
+    const over = run({ gpu_exec_p95_ms: 6.1 })
+    expect(over.verdict).toBe('fail')
+    expect(over.criteria.find((c) => c.name === 'gpu_exec_p95_ms')).toMatchObject({ ok: false })
+    const none = run({ gpu_exec_p95_ms: null, gpu_latency_p95_ms: 13.2 })
+    expect(none.verdict).toBe('judge')
+    expect(none.criteria.find((c) => c.name === 'gpu_exec_p95_ms')).toMatchObject({
+      value: null,
+      ok: null,
+    })
+    // The old latency reading alone no longer decides, and is recorded as a metric.
+    expect(run({ gpu_exec_p95_ms: 3, gpu_latency_p95_ms: 14 }).verdict).toBe('pass')
+    expect(run({ gpu_exec_p95_ms: 3, gpu_latency_p95_ms: 14 }).metrics.gpu_latency_p95_ms).toBe(14)
   })
 
   test('device-walk criteria: the worst window of the two orientations decides', () => {

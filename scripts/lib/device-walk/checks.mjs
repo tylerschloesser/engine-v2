@@ -74,12 +74,17 @@ const fillRate = (extra = []) => [
     ref: 'pass',
   },
   {
-    name: 'gpu_p95_ms',
-    source: 'steady.*.gpu_p95_ms',
+    // M39k: the main pass's GPU *execution* time from timestamp queries, not the submit-to-done latency (a
+    // vsync-paced queue reads about 0.8 of a frame interval whatever the pass costs). A null reading
+    // (`timestamp-query` unavailable, a failed readback) is never a pass: it goes to a judge sheet that
+    // shows `gpu_latency_p95_ms`.
+    name: 'gpu_exec_p95_ms',
+    source: 'steady.*.gpu_exec_p95_ms',
     reduce: 'max',
     op: '<=',
     limit: 6,
     ref: 'pass',
+    nullIs: 'judge',
   },
   {
     name: 'hitch_gaps_over_25ms',
@@ -96,6 +101,9 @@ const fillMetrics = [
   { name: 'raf_gap_max_ms', source: 'windows.*.raf.max', reduce: 'max' },
   { name: 'frames', source: 'windows.*.raf.frames', reduce: 'sum' },
   { name: 'raf_p50_ms', source: 'steady.*.raf_p50_ms', reduce: 'median' },
+  { name: 'gpu_exec_p50_ms', source: 'steady.*.gpu_exec_p50_ms', reduce: 'max-known' },
+  // Informational (M39k): submit-to-done latency, the old `gpu_p95_ms`; includes the vsync wait.
+  { name: 'gpu_latency_p95_ms', source: 'steady.*.gpu_latency_p95_ms', reduce: 'max-known' },
 ]
 // *If it fails* of M09b-fill-rate, in the order 0018 Consequences states: 1.5, then 1, then add cutoff 4
 const FILL_LADDER = ['&scaleCap=1.5', '&scaleCap=1', '&scaleCap=1&cutoff=4']
