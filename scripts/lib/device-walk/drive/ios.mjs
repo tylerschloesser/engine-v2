@@ -572,10 +572,23 @@ export function createIosBackend(o = {}) {
         sw = await find()
       }
       if (!sw) throw new Error('ios: no Low Power Mode switch')
-      const value = async () => String(await call('GET', `/element/${sw}/attribute/value`))
-      if ((await value()) !== (on ? '1' : '0')) await call('POST', `/element/${sw}/click`)
-      await wait(2500)
-      const v = await value()
+      // The switch moves when Settings settles its scroll position: the element found a moment ago can be stale.
+      // Find it again and read its value fresh, up to three times.
+      let v = null
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          sw = (await find()) ?? sw
+          const value = async () => String(await call('GET', `/element/${sw}/attribute/value`))
+          if ((await value()) !== (on ? '1' : '0')) await call('POST', `/element/${sw}/click`)
+          await wait(2500)
+          sw = (await find()) ?? sw
+          v = await value()
+          break
+        } catch (e) {
+          if (!/stale element/i.test(String(e.message)) || attempt === 2) throw e
+          await wait(800)
+        }
+      }
       st.lowPower = on
       log(`ios: Low Power Mode ${on ? 'on' : 'off'} (switch value ${v})`)
       await pressHome()

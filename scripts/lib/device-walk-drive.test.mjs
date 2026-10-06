@@ -938,6 +938,24 @@ describe('device-walk drive: the iOS backend without a phone', () => {
     expect(JSON.stringify(calls)).not.toMatch(/lock|sleep|screenOff/i)
   })
 
+  test('device-walk drive: a stale Low Power switch is found again and clicked, not given up on', async () => {
+    let clicks = 0
+    let value = '0'
+    const { b } = make({
+      'attribute/value': () => value,
+      '/element$': () => ({ 'element-6066-11e4-a52e-4f735466cecf': 'E1' }),
+      '/click$': () => {
+        if (++clicks === 1) throw new Error('POST /element/E1/click: stale element reference: gone')
+        value = '1'
+        return null
+      },
+    })
+    await b.open('https://x.example/device.html')
+    await b.setLowPower(true)
+    expect(clicks).toBe(2)
+    expect(value).toBe('1')
+  })
+
   test('device-walk drive: only a webview showing one of our pages is ever entered (extension, about:blank and error pages are not)', async () => {
     const { b, calls } = make({
       'execute/sync': (body) =>
