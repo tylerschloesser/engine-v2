@@ -107,6 +107,7 @@ export function createPhoneApi({
     const b = Buffer.from(token)
     return a.length === b.length && timingSafeEqual(a, b)
   }
+  const windowFns = new Set() // `onWindow` subscribers (the drive loop's quiet wait ends on the end marker)
   const isCut = () => clock() < cut.until
 
   // `tab`: the asking page's tab id, so one round can tell a phone's tab from a Mac browser's (`mac-...`).
@@ -156,6 +157,7 @@ export function createPhoneApi({
     } else Object.assign(event, body)
     const logged = append(event)
     lastSeq.set(tab, seq)
+    if (type === 'window') for (const fn of windowFns) fn(logged)
     for (const extra of react(logged, { api, via, events: readEvents(file) })) append(extra)
     return stepFields({ type: 'ack', seq }, tab)
   }
@@ -266,6 +268,11 @@ export function createPhoneApi({
     lastSeq: (tab) => lastSeq.get(tab) ?? 0,
     seen: () => ({ ...seen }),
     seenMac: () => ({ ...seenMac }),
+    /** `fn(event)` for every `window` marker the phone logs; returns the unsubscribe. */
+    onWindow: (fn) => {
+      windowFns.add(fn)
+      return () => windowFns.delete(fn)
+    },
     /** Refuse every request and socket for `ms` (the self-test's "tunnel drop"); open sockets are closed. */
     cut(ms) {
       cut = { from: clock(), until: clock() + ms }

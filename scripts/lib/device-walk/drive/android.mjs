@@ -7,7 +7,7 @@
 // never turned off, locked or put to sleep, and the battery is never faked unplugged.
 import { execFileSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
-import { NotDrivable } from './backend.mjs'
+import { NotDrivable, withQuiet } from './backend.mjs'
 import { cdpConnect } from './cdp.mjs'
 
 const CHROME = 'com.android.chrome'
@@ -376,5 +376,5 @@ export function createAndroidBackend(o = {}) {
       Object.assign(st, { port: null, reversed: [], saved: null, airplaneOn: false })
     },
   }
-  return api
+  return withQuiet(api)
 }

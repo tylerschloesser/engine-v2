@@ -5,11 +5,28 @@
 // open (the bar is gone during a measuring window, a navigation empties it, a second tab has its own), costs
 // the phone nothing, and a restart of this process resumes from it; the cost is that a button of the bar must
 // still be found through page JS when a handler needs it (done by the handlers that tap one).
-// Nothing here touches the phone inside a measuring window: a handler runs only for an open prompt, and no
-// prompt is open while a window is.
+// Nothing here touches the phone inside a measuring window, and the Mac does as little as it can (M39p): the agent
+// sends a `window` start marker (`ms` long) and an end marker; from the start the loop sets `backend.quiet(until)`
+// (any call then rejects with `QuietWindowError`), skips the watchdog, `settle()` and the log reads, and waits on
+// ONE timer (the window's end plus `quietGraceMs`), or on the end marker when `onWindow` delivers it.
 import { join } from 'node:path'
 import { openPrompts } from '../live.mjs'
 import { readEvents } from '../rounds.mjs'
+
+/**
+ * The measuring window the log says is open at `now`: the newest `window` start with no end after it and not past its
+ * length plus `graceMs` (a phone that died mid-window must not hold the loop). `{ until }` or null.
+ */
+export function openWindow(events, now, graceMs) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]
+    if (e.type !== 'window') continue
+    if (e.phase !== 'start') return null
+    const until = Date.parse(e.t) + (e.ms > 0 ? e.ms : 0) + graceMs
+    return until > now ? { until, id: e.id, n: e.n } : null
+  }
+  return null
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -101,6 +118,11 @@ export function startDrive(o) {
   const { backend, person, file, ids, joinUrl, seriesDir, append, settle, isDone } = o
   const log = o.log ?? (() => {})
   const pollMs = o.pollMs ?? 250
+  const graceMs = o.quietGraceMs ?? 3000
+  let wakeQuiet = null // resolves the quiet wait early (the end marker, stop())
+  o.onWindow?.((e) => {
+    if (e.phase === 'end') wakeQuiet?.()
+  })
   let stopped = false
   const handled = new Set()
   person.ctx.joinUrl = joinUrl
@@ -199,12 +221,33 @@ export function startDrive(o) {
   const finished = (async () => {
     await ready
     while (!stopped && !isDone()) {
+      let events = readEvents(file)
+      const w = openWindow(events, Date.now(), graceMs)
+      if (w) {
+        // A measuring window: nothing to the phone, nothing on the Mac but one timer.
+        backend.quiet?.(w.until)
+        log(`drive: quiet for ${w.id} #${w.n} until ${new Date(w.until).toISOString()}`)
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, Math.max(0, w.until - Date.now()))
+          wakeQuiet = () => {
+            clearTimeout(timer)
+            resolve()
+          }
+        })
+        wakeQuiet = null
+        backend.quiet?.(0)
+        continue
+      }
       await watchdog()
       settle() // a `--judge` from another process is a row in the log: let the round move on
-      const events = readEvents(file)
+      events = readEvents(file)
       for (const p of openPrompts(events, ids)) {
         if (stopped) break
-        await onPrompt(p, events).catch((e) => log(`drive: ${e.stack ?? e}`))
+        await onPrompt(p, events).catch((e) =>
+          log(
+            `drive: ${e.name === 'QuietWindowError' ? `quiet violation: ${e.message}` : (e.stack ?? e)}`,
+          ),
+        )
       }
       await sleep(pollMs)
     }
@@ -214,6 +257,7 @@ export function startDrive(o) {
     finished,
     stop: async () => {
       stopped = true
+      wakeQuiet?.()
       await finished.catch(() => {})
     },
   }

@@ -199,6 +199,7 @@ export async function autoCli(o) {
         settle: () => run.machine.settle(),
         isDone: () => run.machine.done(),
         lastSeen: () => run.api.seen().at,
+        onWindow: (fn) => run.api.onWindow(fn),
         log,
       })
       driver.finished.catch((e) => {

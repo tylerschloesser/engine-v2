@@ -15,7 +15,7 @@ import { writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { NotDrivable } from './backend.mjs'
+import { NotDrivable, withQuiet } from './backend.mjs'
 import { bestEffort } from './deadline.mjs'
 
 const SAFARI = 'com.apple.mobilesafari'
@@ -713,5 +713,5 @@ export function createIosBackend(o = {}) {
       st.context = null
     },
   }
-  return api
+  return withQuiet(api)
 }

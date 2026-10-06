@@ -35,6 +35,7 @@ export const finger = (x1, y1, x2, y2) => ({ from: { x: x1, y: y1 }, to: { x: x2
  * @property {(on: boolean) => Promise<void>} setLowPower  may throw NotDrivable
  * @property {(path: string) => Promise<void>} screenshot
  * @property {() => Promise<void>} cleanup  toggles off, rotation restored, forwards removed
+ * @property {(untilMs: number) => void} quiet  every other call rejects with `QuietWindowError` until that time (0: lifted)
  */
 export const BACKEND_METHODS = [
   'open',
@@ -50,7 +51,50 @@ export const BACKEND_METHODS = [
   'setLowPower',
   'screenshot',
   'cleanup',
+  'quiet',
 ]
+
+/** A call reached the phone inside a measuring window (M39p): a bug in whatever made it, never silent noise. */
+export class QuietWindowError extends Error {
+  constructor(method, until) {
+    super(`quiet window: backend.${method}() called until ${new Date(until).toISOString()}`)
+    this.name = 'QuietWindowError'
+    this.method = method
+  }
+}
+
+/**
+ * Give `b` its `quiet(untilMs)`: while it is in force every method but `cleanup` and `quiet` rejects with
+ * `QuietWindowError` instead of touching the phone (a measuring window's numbers come from a phone nothing
+ * else talks to, M39p). Methods are replaced in place, so a backend's own calls through `b` are guarded too.
+ * `o.now` is the clock, `o.onViolation(method)` sees every refused call (a test's evidence).
+ */
+export function withQuiet(b, o = {}) {
+  const now = o.now ?? Date.now
+  let until = 0
+  for (const m of BACKEND_METHODS) {
+    if (m === 'quiet' || m === 'cleanup' || typeof b[m] !== 'function') continue
+    const inner = b[m].bind(b)
+    b[m] = (...args) => {
+      if (now() < until) {
+        o.onViolation?.(m)
+        return Promise.reject(new QuietWindowError(m, until))
+      }
+      return inner(...args)
+    }
+  }
+  if (typeof b.cleanup === 'function') {
+    const clean = b.cleanup.bind(b)
+    b.cleanup = () => {
+      until = 0 // an abort during a window must be able to restore the phone
+      return clean()
+    }
+  }
+  b.quiet = (untilMs) => {
+    until = untilMs
+  }
+  return b
+}
 
 /** Throws when `b` lacks a method of the interface (a backend is plain methods, no base class). */
 export function assertBackend(b) {
