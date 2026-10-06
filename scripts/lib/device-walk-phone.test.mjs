@@ -118,6 +118,28 @@ describe('device-walk phone api', () => {
     ])
   })
 
+  test("device-walk phone: a 10 minute window's series (600 readings, over 200 KB) is accepted over POST and over the socket", async () => {
+    const a = await boot()
+    const sample = { t: 1, isolated: true, adapter: 'qualcomm/adreno-6xx', note: 'x'.repeat(300) }
+    const data = { windows: [{ samples: Array.from({ length: 700 }, () => sample) }] }
+    expect(JSON.stringify(data).length).toBeGreaterThan(200_000)
+    const r = await (await a.post([msg(1, 'series', { id: 'M16-coexist', n: 1, data })])).json()
+    expect(r.replies[0]).toMatchObject({ type: 'ack', seq: 1 })
+    const ws = new WebSocket(`${a.base.replace('http', 'ws')}/__walk/ws?walk=${TOKEN}&tab=t2`, {
+      headers: { origin: a.origin },
+    })
+    await new Promise((res, rej) => {
+      ws.on('open', res)
+      ws.on('error', rej)
+    })
+    const ack = new Promise((res) =>
+      ws.on('message', (m) => JSON.parse(String(m)).type === 'ack' && res(true)),
+    )
+    ws.send(JSON.stringify({ ...msg(1, 'series', { id: 'M16-coexist', n: 2, data }), tab: 't2' }))
+    expect(await ack).toBe(true)
+    ws.close()
+  })
+
   test('device-walk phone: a series is written beside the log and referenced by path', async () => {
     const { post, file, dir } = await boot()
     await post([msg(1, 'series', { id: 'M03', n: 1, data: [1, 2, 3] })])

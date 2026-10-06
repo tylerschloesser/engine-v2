@@ -45,7 +45,9 @@ export const SEQUENCED = new Set([
   'walk',
 ])
 const RESERVED = new Set(['run', 'tab', 'seq', 't', 'type', 'src'])
-const MAX_BODY = 200_000
+// A 10 minute window's series (600 one-second readings, M16-coexist) is about 250 KB, a 5 minute one more of the
+// same: the first limit (200 KB) closed the phone's socket on it and the round hung (M39j, found by a driven round).
+const MAX_BODY = 10_000_000
 const TAB = /^[\w-]{1,40}$/
 const NAME = /^[\w.-]{1,80}$/
 
