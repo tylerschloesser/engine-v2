@@ -46,7 +46,7 @@ export async function passRunner(
     try {
       s = await backend.readPage(RUNNER)
     } catch {
-      await sleep(500) // the document is navigating
+      await wait(500) // the document is navigating
       continue
     }
     // A quick tunnel's name may not resolve yet when the phone first asks (Chrome and Safari then show their own
@@ -69,7 +69,7 @@ export async function passRunner(
       log(`runner: tapped ${next}`)
       tapped = next
     }
-    await sleep(next ? 400 : 1000)
+    await wait(next ? 400 : 1000)
   }
   throw new Error(`the runner page did not reach Start within ${timeoutMs / 1000} s`)
 }

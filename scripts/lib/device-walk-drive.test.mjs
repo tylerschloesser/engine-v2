@@ -37,6 +37,15 @@ import { fullStatus } from './device-walk/status.mjs'
 const REPO = fileURLToPath(new URL('../..', import.meta.url))
 const AGENT = join(REPO, 'scripts/lib/device-walk/agent')
 const act = (text, id = 'M11-gestures', n = 1) => ({ id, n, kind: 'act', text })
+/** Wait for a condition instead of a fixed time (polls every 2 ms; fails after 2 s). */
+const until = async (f, ms = 2000) => {
+  const t0 = Date.now()
+  while (!f()) {
+    if (Date.now() - t0 > ms) throw new Error('until: condition not met in time')
+    await new Promise((r) => setTimeout(r, 2))
+  }
+}
+const pause = (ms) => new Promise((r) => setTimeout(r, ms))
 const person = (b, ctx = {}) => devicePerson(b, { returnLagMs: 0, sleep: async () => {}, ...ctx })
 
 describe('device-walk drive: coverage of every act prompt', () => {
@@ -289,7 +298,7 @@ describe('device-walk drive: the device person on a recording backend', () => {
   test("device-walk drive: a hidden page that never answers does not hold the walk: the backend's hide lag stands in", async () => {
     const b = createFakeBackend({ pages: { visibilityState: () => new Promise(() => {}) } })
     const t0 = Date.now()
-    await person(b, { pollMs: 5 }).answer(
+    await person(b, { pollMs: 1 }).answer(
       act(
         'Drop 1 of 3 (app-5s): Switch to another app for 0.05 seconds, then come back to this page.',
       ),
@@ -384,7 +393,15 @@ describe('device-walk drive: the drive loop over a round log', () => {
       kind: 'act',
       text: 'Rotate the phone to landscape.',
     })
-    await drive({ b, dir, file, until: () => new Promise((r) => setTimeout(r, 150)) })
+    await drive({
+      b,
+      dir,
+      file,
+      until: async () => {
+        await until(() => readEvents(file).some((e) => e.type === 'drive'))
+        await pause(30) // and still once after a few more polls
+      },
+    })
     expect(b.calls.filter((c) => c.m === 'rotate')).toHaveLength(1)
     expect(b.calls[0]).toMatchObject({ m: 'open' })
     expect(readEvents(file).find((e) => e.type === 'drive')).toMatchObject({
@@ -411,7 +428,12 @@ describe('device-walk drive: the drive loop over a round log', () => {
       kind: 'act',
       text: 'Lock the screen for 60 seconds, then unlock the phone and come back to this page.',
     })
-    await drive({ b, dir, file, until: () => new Promise((r) => setTimeout(r, 150)) })
+    await drive({
+      b,
+      dir,
+      file,
+      until: () => until(() => readEvents(file).some((e) => e.type === 'result')),
+    })
     const row = readEvents(file).find((e) => e.type === 'result')
     expect(row).toMatchObject({ id: 'M16-low-power', result: 'skip', by: 'device' })
     expect(row.notes).toMatch(/^NotDrivable: .*never/)
@@ -434,7 +456,12 @@ describe('device-walk drive: the drive loop over a round log', () => {
       kind: 'judge',
       text: 'no visible hitch',
     })
-    await drive({ b, dir, file, until: () => new Promise((r) => setTimeout(r, 150)) })
+    await drive({
+      b,
+      dir,
+      file,
+      until: () => until(() => readEvents(file).some((e) => e.type === 'defer')),
+    })
     expect(b.calls.filter((c) => c.m === 'screenshot').map((c) => c.args[0])).toEqual([
       join(dir, 'M09b-fill-rate-1-judge.png'),
     ])
@@ -501,7 +528,8 @@ describe('device-walk drive: a phone that went silent', () => {
       pollMs: 5,
     })
     await d.ready
-    await new Promise((r) => setTimeout(r, 400))
+    await until(() => readEvents(file).filter((e) => e.action === 'reopened').length >= 3)
+    await pause(40) // no fourth
     done = true
     await d.stop()
     expect(b.calls.filter((c) => c.m === 'open')).toHaveLength(1 + 3)
@@ -529,7 +557,7 @@ describe('device-walk drive: a phone that went silent', () => {
       pollMs: 5,
     })
     await d.ready
-    await new Promise((r) => setTimeout(r, 200))
+    await pause(80) // idleMs is 30: it would have fired by now
     done = true
     await d.stop()
     expect(b.calls.filter((c) => c.m === 'open')).toHaveLength(1)
@@ -591,7 +619,7 @@ describe('device-walk drive: a resumed round does not answer twice', () => {
       pollMs: 10,
     })
     await d.ready
-    await new Promise((r) => setTimeout(r, 200))
+    await until(() => readEvents(file).some((e) => e.type === 'defer'))
     done = true
     await d.stop()
     expect(readEvents(file).find((e) => e.type === 'shot')).toMatchObject({ unverified: true })
