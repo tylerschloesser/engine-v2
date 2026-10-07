@@ -135,8 +135,9 @@ export function autocorrPeriod(x: ArrayLike<number>): { period: number | null; r
     let s = 0
     for (let i = 0; i + lag < n; i++)
       s += ((x[i] as number) - mean) * ((x[i + lag] as number) - mean)
-    r[lag] = s / energy
-    if (r[lag] > best) best = r[lag] as number
+    const rl = s / energy
+    r[lag] = rl
+    if (rl > best) best = rl
   }
   if (best < MIN_PERIOD_R) return { period: null, r: best }
   for (let lag = 2; lag <= maxLag; lag++) {
