@@ -18,6 +18,13 @@ import { join } from 'node:path'
 import { NotDrivable, withQuiet } from './backend.mjs'
 import { bestEffort } from './deadline.mjs'
 
+/**
+ * Deadline of one Settings walk in cleanup. Measured: the in-session Low Power walk of m39r-iphone took 19 s
+ * (act prompt at 01:26:13, `drive` done at 01:26:32; the 30 s of a standalone run includes starting WDA, which
+ * a cleanup with a live session does not). 30 s is that with about 50% margin.
+ */
+export const SETTINGS_WALK_MS = 30_000
+
 const SAFARI = 'com.apple.mobilesafari'
 const SETTINGS = 'com.apple.Preferences'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -689,13 +696,18 @@ export function createIosBackend(o = {}) {
       writeFileSync(path, Buffer.from(b64, 'base64'))
     },
 
-    /** Best effort and bounded (about 8 s): in-flight calls are ended first, each restore step has its own deadline. */
+    /**
+     * Best effort and bounded: in-flight calls are ended first, each restore step has its own deadline. The
+     * Settings walks (Low Power, Airplane) get SETTINGS_WALK_MS each: the 4 s they had cut the walk off and left
+     * the phone in Low Power Mode (m39r-iphone). Worst case (every step hangs) is about 70 s; a normal cleanup
+     * takes as long as the walks that are needed, 20 s or so each, and is a second or two when nothing is on.
+     */
     async cleanup() {
       abortAll()
       const step = (name, p, ms = 4000) => bestEffort(p, ms, `ios cleanup (${name})`, log)
       if (st.sid) {
-        if (st.lowPower) await step('low power', api.setLowPower(false))
-        if (st.airplane) await step('airplane', api.setAirplane(false))
+        if (st.lowPower) await step('low power', api.setLowPower(false), SETTINGS_WALK_MS)
+        if (st.airplane) await step('airplane', api.setAirplane(false), SETTINGS_WALK_MS)
         if (st.orientation !== 'PORTRAIT') await step('rotation', api.rotate('portrait'), 3000)
         await step('session', raw('DELETE', `/session/${st.sid}`, undefined, 3000), 3500)
         st.sid = null

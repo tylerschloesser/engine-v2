@@ -80,14 +80,15 @@ export async function autoCli(o) {
   // One shutdown, however many callers: a second one (the normal path after a signal) waits for the first,
   // so the process never exits with the phone half restored.
   // Every step has its own deadline: a hung Appium call or an unanswering page must not hold the shutdown (the
-  // whole of it takes about 10 s at most, then the process exits).
+  // whole of it takes about 10 s when nothing is on the phone; restoring Low Power or Airplane is a Settings walk of
+  // about 20 s each, so the phone gets up to 70 s, then the process exits).
   const shutdown = () =>
     (stopping ??= (async () => {
       ac.abort()
       clearInterval(beat)
       live.set({ phase: 'stopped' })
       await bestEffort(driver?.stop(), 2000, 'stopping the drive loop', log)
-      await bestEffort(backend?.cleanup(), 6000, 'restoring the phone', log)
+      await bestEffort(backend?.cleanup(), 70_000, 'restoring the phone', log)
       await bestEffort(monitor?.close(), 1000, 'closing the monitor', log)
       await bestEffort(run?.stop(), 4000, 'stopping the servers', log)
     })())
@@ -101,7 +102,7 @@ export async function autoCli(o) {
       if (firstSignal) return
       firstSignal = Date.now()
       bye(130)
-      setTimeout(() => process.exit(130), 12_000).unref() // and the first does not wait for ever
+      setTimeout(() => process.exit(130), 80_000).unref() // and the first does not wait for ever
     })
   process.on('uncaughtException', (e) => {
     console.error(e)
