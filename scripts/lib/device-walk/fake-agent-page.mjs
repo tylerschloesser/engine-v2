@@ -184,6 +184,8 @@ export function createFakePage(o = {}) {
   for (const f of o.load ?? []) run(f)
   return {
     window: w,
+    /** The page's `document` (a test may wrap `createElement` to see what the agent mounts). */
+    document,
     A: w.__walkAgent,
     kit: w.__walkKit,
     frames,

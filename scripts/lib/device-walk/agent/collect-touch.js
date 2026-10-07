@@ -381,14 +381,18 @@
   }
 
   // --- M18 ----------------------------------------------------------------------------------------
-  /** A ring drawn over the canvas where a tap must land (pointer-events none: it never takes a tap). */
+  /**
+   * A ring drawn over the canvas where a tap must land (pointer-events none: it never takes a tap). `border-box`:
+   * its border box is centred on (x, y), where the person and the driver aim (M39r: as a content box it was 52 px
+   * from -22 px, 4 px right of and below the ring; on the Pixel 5 every driven tap landed there).
+   */
   function highlight(x, y, pickRadiusPx) {
     let el = document.getElementById('walk-ring')
     if (!el) {
       el = document.createElement('div')
       el.id = 'walk-ring'
       el.style.cssText =
-        'position:fixed;width:44px;height:44px;margin:-22px 0 0 -22px;border:4px solid #f0f;border-radius:50%;pointer-events:none;z-index:2147483646;box-shadow:0 0 0 2px #fff'
+        'position:fixed;box-sizing:border-box;width:44px;height:44px;margin:-22px 0 0 -22px;border:4px solid #f0f;border-radius:50%;pointer-events:none;z-index:2147483646;box-shadow:0 0 0 2px #fff'
       document.body.append(el)
     }
     el.dataset.r = pickRadiusPx ? String(pickRadiusPx) : '' // the ring's pick radius: the driver stays inside it

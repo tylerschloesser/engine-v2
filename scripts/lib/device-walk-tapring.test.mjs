@@ -150,3 +150,45 @@ describe('device-walk tap ring: only rings a finger can reach are asked for', ()
     ])
   })
 })
+
+describe('device-walk tap ring: the highlight is centred on the point it marks (M39r round m39r-probe-2)', () => {
+  // The box a CSS layout gives `#walk-ring` (no layout in the vm: the box model's arithmetic, read off the
+  // style the page sets). Measured on the Pixel 5: the driver aimed at the highlight's rect centre, css
+  // (200.5, 358.9), for a ring at (196.52, 345.45); the pointerdown landed at (200.36, 358.91).
+  const px = (s, name) => {
+    const m = new RegExp(`(?:^|;)\\s*${name}\\s*:\\s*([^;]+)`).exec(s)
+    return m ? m[1].trim() : ''
+  }
+  const boxCentre = (style) => {
+    const css = style.cssText ?? ''
+    const w = Number.parseFloat(px(css, 'width'))
+    const h = Number.parseFloat(px(css, 'height'))
+    const border = Number.parseFloat(px(css, 'border')) || 0
+    const [mt, , , ml] = px(css, 'margin')
+      .split(/\s+/)
+      .map((v) => Number.parseFloat(v))
+    const extra = px(css, 'box-sizing') === 'border-box' ? 0 : 2 * border
+    return {
+      x: Number.parseFloat(style.left) + ml + (w + extra) / 2,
+      y: Number.parseFloat(style.top) + mt + (h + extra) / 2,
+    }
+  }
+
+  test("device-walk tap ring: the highlight's border box is centred on (x, y), so a tap at its rect centre is a tap at the ring", async () => {
+    const page = createFakePage({ load: ['collect-touch.js'] })
+    const made = []
+    const doc = page.document
+    const create = doc.createElement
+    doc.createElement = (tag) => {
+      const el = create(tag)
+      made.push(el)
+      return el
+    }
+    page.kit.touch.highlight(196.52, 345.45, 11.2)
+    const el = made.find((e) => e.id === 'walk-ring')
+    expect(el).toBeDefined()
+    const c = boxCentre(el.style)
+    expect(Math.abs(c.x - 196.52)).toBeLessThan(0.01)
+    expect(Math.abs(c.y - 345.45)).toBeLessThan(0.01)
+  })
+})
