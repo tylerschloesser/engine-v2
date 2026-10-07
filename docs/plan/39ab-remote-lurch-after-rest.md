@@ -1,6 +1,6 @@
 # M39ab: a remote that starts walking after rest is drawn up to a tile behind
 
-Status: not started · After: 39aa · Tyler-dependent: no
+Status: done (2026-10-07) · After: 39aa · Tyler-dependent: no
 
 ## Goal
 A read-only diagnosis (2026-10-07, `test-results/m39aa-lurch-diagnosis.md`, not committed) found an engine defect in remote interpolation, `InterpBuffer::sample` (`packages/engine/crates/engine/src/interp/buffer.rs`, about line 187):
@@ -36,11 +36,11 @@ The delay value and the fade (0012); the bot; other checks.
 `packages/engine/crates/engine/src/interp/buffer.rs` and its tests, a browser spec for the loopback check (slow tier), `scripts/lib/device-walk/checks.mjs` and its tests, `docs/plan/device-checks.md` M34-remote-motion **Pass** text only if a new criterion needs it (keep the `pass:` hash in step).
 
 ## Exit criteria
-- [ ] The rest-to-walk unit test was seen red (line pasted) and passes; the ordinary-walk case is unchanged within 1e-6.
-- [ ] The slow loopback check exists and passes.
-- [ ] `max_backstep_tiles` and the new moving-window rule exist, with tools tests seen red.
-- [ ] `pnpm test rust -t interp`, `pnpm test tools`, `pnpm test:slow browser -t "remote"` green (pasted lines); no golden changed.
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The rest-to-walk unit test was seen red (line pasted) and passes; the ordinary-walk case is unchanged within 1e-6.
+- [x] The slow loopback check exists and passes.
+- [x] `max_backstep_tiles` and the new moving-window rule exist, with tools tests seen red.
+- [x] `pnpm test rust -t interp`, `pnpm test tools`, `pnpm test:slow browser -t "remote"` green (pasted lines); no golden changed.
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test rust -t interp` · `pnpm test tools` · `pnpm test:slow browser -t "remote"` (targeted, foreground). Loops run in the foreground, bounded, with no background load generators.
@@ -62,3 +62,4 @@ After landing, the orchestrator re-runs M34-remote-motion driven on the Pixel an
   - (b) The clamp now applies only when `h * 1000 > EXTRAPOLATION_CAP_MS` (250 ms). Justification: the relay interval while moving is 100 ms; one lost relay gives 200 ms and two 300 ms, around the 250 ms horizon past which 0012 already treats a key as held, so a segment longer than the cap is a gap with no motion information; the rest-to-walk case is seconds. Segments at or under the cap, duplicates and delta = 0 included, use the plain Hermite exactly as before (test `interp_zero_delta_mid_walk_is_unchanged`: a 10 Hz walk with one delta = 0 sample, equal to an independent unclamped Hermite on the flat and the following segment; it would fail under the all-segments clamp, which zeroes the flat segment's tangents). `interp_rest_then_walk_never_draws_behind` (3 s segment) and the slow `remote-rest-walk` spec stay green; their earlier red lines stand.
   - (c) A/B, `walk-ref: M34`, both with the new `checks.mjs`, blocks of 5 interleaved (new, base `dc18c9e` engine, new, base): new 5 pass / 1 FAIL of 5, then 5 / 0; base 5 / 0 and 5 / 0. Total new 1 FAIL of 10, base 0 of 10 (not significant at n = 10). The one new failure (`/tmp/m39ab/fail-new1-3`) is NOT `max_still_ms` (17) but `max_backstep_tiles` 0.059 > 0.05: a +0.059 step (3.082 -> 3.141) in the middle of a return-leg deceleration, frames 107-108 of the series, in segments the new code leaves identical to the base. So the 0.05 limit sits close to the ordinary Hermite wobble under jitter on a loaded Mac, and the loopback test can trip on it; **decision for the orchestrator**: raise the limit (the lurches are 0.34-1.09, so 0.1 or 0.15 would still judge them) or leave it.
 - **Fix round 2.** `max_backstep_tiles` limit 0.05 -> **0.15** (orchestrator ruling): ordinary interpolation wobble measured <= 0.059 (fail-new1-3), real rest-to-walk lurches 0.344 / 0.454 / 1.094, so 0.15 separates them with margin both ways. Pass text and hash updated (`50397e61` -> `2ce3af28`). `interp_zero_delta_mid_walk_is_unchanged` seen red against the all-segments variant (the current file with the stale condition forced true; the `9b24e56` file predates the test): `assertion left == right failed: flat t 4.05  left: 204  right: 206`; restored, green.
+- **Gate (orchestrator):** `pnpm test` green (rust 804, tools 262, browser 256 at 50 s of 48 under load 16, the known load warning), lint clean incl. `tsc`; no golden changed. History: the first fix clamped every segment and caused a 100 ms onset stall (orchestrator A/B: 3 FAIL of 10 with the clamp against 1 of 10 without). Fix round 1 limited the clamp to stale segments (`h > EXTRAPOLATION_CAP_MS`). Fix round 2 set the `max_backstep_tiles` limit to 0.15 from measurement: ordinary wobble ≤ 0.059, real lurches 0.344-1.094. 0.05 had been the orchestrator's unmeasured guess. `walk-ref: M34` then passed 10 of 10 at load 7-8.
