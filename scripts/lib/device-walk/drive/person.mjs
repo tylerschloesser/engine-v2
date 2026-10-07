@@ -114,6 +114,20 @@ async function leaveFor(backend, ms, ctx) {
   await ctx.sleep(Math.max(0, ms - ctx.returnLagMs - (Date.now() - from)))
 }
 
+/**
+ * The rows the pan swipe runs between. The walk bar is a fixed sheet along the bottom (about 100 css px, and the
+ * collector reserves `BAR_RESERVE_PX` = 170 for it): at 0.7 of a 364 px landscape page the swipe began 9 px above
+ * it and the Pixel's pan stream died after 0.7 s (M39y). Start `PAN_BAR_CLEAR_PX` above the bottom when 0.7h is
+ * lower than that: portrait is unchanged (0.7h is already higher), landscape no longer depends on the order the
+ * items rotated the phone in. Chosen over rotating back to portrait because that works for the next item that
+ * rotates too, and costs no extra device call.
+ */
+export const PAN_BAR_CLEAR_PX = 190
+export function panRows(h) {
+  const y0 = Math.min(h * 0.7, h - PAN_BAR_CLEAR_PX)
+  return { y0, y1: Math.min(h * 0.3, y0 - 40) }
+}
+
 /** Handlers, in order: first whose `match` hits the prompt text runs. `run({ backend, prompt, ctx, text, m })`. */
 export const HANDLERS = [
   {
@@ -129,7 +143,8 @@ export const HANDLERS = [
     run: async ({ backend, m }) => {
       const { w, h } = await backend.readPage(VIEW)
       const ms = (Number(m[1]) + 1.5) * 1000
-      await backend.swipe(w * 0.85, h * 0.7, w * 0.15, h * 0.3, ms)
+      const { y0, y1 } = panRows(h)
+      await backend.swipe(w * 0.85, y0, w * 0.15, y1, ms)
     },
   },
   {

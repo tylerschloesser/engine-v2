@@ -50,6 +50,8 @@
       active: 0,
       maxTouches: 0,
       panMs: 0,
+      cancels: 0,
+      cancelPanMs: -1,
       flickSpeed: 0,
       glide: 0,
       pull: false,
@@ -123,6 +125,11 @@
       opt,
     )
     const lift = (e) => {
+      if (e.type === 'pointercancel') {
+        // Evidence only (M39aa): a browser that takes a drag for its own gesture cuts the stream here.
+        st.cancels++
+        if (st.cancelPanMs < 0) st.cancelPanMs = st.panMs
+      }
       if (st.active > 0) st.active--
       st.upX = e.clientX
       st.upY = e.clientY
@@ -348,6 +355,8 @@
         downs: P.downs,
         maxTouches: P.maxTouches,
         panMs: Math.round(P.panMs),
+        pointerCancels: P.cancels,
+        firstCancelPanMs: P.cancelPanMs < 0 ? null : Math.round(P.cancelPanMs),
         worldPointDriftTiles: P.driftN > 0 ? +P.drift.toFixed(3) : null,
         worldPointSamples: P.driftN,
         flickSpeed: +P.flickSpeed.toFixed(2),

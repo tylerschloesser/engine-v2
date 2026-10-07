@@ -221,6 +221,24 @@ describe('device-walk drive: the device person on a recording backend', () => {
     expect(land.args).toEqual([638.25, 142, 212.75, 142, 80])
   })
 
+  // M39aa: the Pixel's landscape pan began 9 px above the walk bar (0.7 x 364 = 255, sheet top about 264).
+  test('device-walk drive: the pan starts clear of the walk bar in landscape and keeps its rows in portrait', async () => {
+    const BAR_TOP_FROM_BOTTOM = 100 // the sheet's height in css px (agent.js)
+    for (const view of [
+      { w: 780, h: 364 },
+      { w: 851, h: 393 },
+      { w: 400, h: 800 },
+    ]) {
+      const pan = (await run('Pan with one finger for about 10 seconds.', { view })).b.calls.find(
+        (c) => c.m === 'swipe',
+      )
+      const [, y0, , y1] = pan.args
+      expect(y0).toBeLessThanOrEqual(view.h - 190)
+      expect(y0).toBeLessThan(view.h - BAR_TOP_FROM_BOTTOM - 40)
+      expect(y1).toBeLessThan(y0) // still a drag upwards
+    }
+  })
+
   test('device-walk drive: pinch goes together until the limit, then apart, two fingers each time', async () => {
     const { b } = await run('Pinch out to the furthest zoom, then in to the closest.', {
       tiles: [12, 40, 130, 262, 100, 30, 12],
