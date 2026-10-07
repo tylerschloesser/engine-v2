@@ -50,4 +50,13 @@ Re-running any round (the orchestrator's); `--apply` of existing rounds; any eng
 After landing, the orchestrator re-applies the iPhone rounds' results under the new criteria, through a new driverless round with Tyler for the frame-pacing items.
 
 ## Deviations
-(filled in during Phase 3)
+**Seams (as built).**
+- `checks.mjs`: `evaluate(entry, data, ctx)` reads `ctx.platform` (`'ios' | 'android' | undefined`) and `ctx.driven` (boolean). Criteria gain `platform: { ios?|android?: 'advisory' }`, `only: 'ios'` and `pacing: true`. An advisory row is `{ok: true, advisory: true}` with its value kept (and in `metrics`) and never decides; `pacing` is advisory when `platform === 'ios' && driven`, and the result then has `notes: [string]`. New reducer `engine-gaps` (count of gaps with `stall >= 16`, `late >= 2` or no attribution) behind new M09b criterion `engine_gap_causes` (source `windows.*.gaps.list.*`, <= 0, iOS only). `fillRate(extra, {iosPacing})`: only M09b sets `iosPacing`, so M18-fill-rate-with-anchors is unchanged. `pacing` is also on M16-coexist, M29-net-heap and M34-remote-motion's hitch proxy (`snaps`); M34's `moving_frames_changed_ratio` and `max_still_ms` are not marked (not rAF or hitch criteria by name).
+- `auto-round.mjs`: exported `verdictContext(events, inspector)`: platform from the newest non-Mac `env` event's UA (`parseUa().device` iPhone/iPad/iPod = ios, Android = android; anything else, or no env, = no platform, i.e. the old behaviour), driven = `!!inspector`. The done attempt event gains `notes` when present.
+- **Driven detection:** a round knows it is driven by `inspector` (`'attached' | 'detached'`, set by `auto-main.mjs` only when `--drive` is given, M39v); absent on a QR round. Android driven rounds also carry `attached`, but the pacing rule applies to iOS only.
+- **Hashes:** edited by hand the way the drift test reads them: `passHash()` of the new Pass text (M09b-fill-rate `a6f372a8` -> `eee998a5`, M39-large-save `85d26f8a` -> `58f94431`); no other `pass:` changed. The M09b text keeps the substring the existing drift test edits. The driven-iOS note is in the M09b section's intro (no other item touched).
+- ADR `docs/decisions/0056-ios-pacing-and-tick-bar.md`. 0010 not edited.
+
+**Red at base** (new file `scripts/lib/device-walk-pacing.test.mjs`, 11 tests, 7 red): `expected 'fail' to be 'pass'` (iOS M09b rAF 18); `expected undefined to match object { value: 2, ok: false }` (stall 30); `expected 'fail' to be 'pass'` (driven M09b); `expected 'judge' to be 'pass'` (driven M16-coexist; M29-net-heap); `expected 'fail' to be 'pass'` (Android large-save p95 26; the auto-round wiring). Four pass at base by construction, as guards: Android M09b p95 18 fails, iOS large-save 11.5 fails, iOS GPU 6.5 fails, M18 keeps rAF limits.
+
+**Verification.** `pnpm test tools`: `tools pass 255 tests  2.3s/9s`. `pnpm lint`: biome, rustfmt, clippy, tsc all pass. Full `pnpm test` not run (the orchestrator's).
