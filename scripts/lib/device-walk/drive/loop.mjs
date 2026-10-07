@@ -223,12 +223,17 @@ export function startDrive(o) {
     await passRunner(backend, { log, joinUrl }).catch(() => {})
   }
 
+  // The end marker can wake the quiet wait (`onWindow`) before its row is in the log, so the next read still
+  // shows the window open: remember the one handled, or it is detached and quieted twice (M39x gate).
+  let lastWindow = null
   const finished = (async () => {
     await ready
     while (!stopped && !isDone()) {
       let events = readEvents(file)
       const w = openWindow(events, Date.now(), graceMs)
-      if (w) {
+      const key = w && `${w.id}#${w.n}#${w.until}`
+      if (w && key !== lastWindow) {
+        lastWindow = key
         // A measuring window: nothing to the phone, nothing on the Mac but one timer.
         if (detach) {
           await backend
