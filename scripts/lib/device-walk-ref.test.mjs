@@ -326,6 +326,14 @@ describe('device-walk reference: M34 (the bot partner)', () => {
       return [i * 16.7, 0.52 + k * 0.2, 0.5, i]
     })
     expect(analyseMotion(stop, snap).maxStillMs).toBeGreaterThanOrEqual(150)
+    // The rest after the walk ended is not a stretch of motion (it was, for 15 frames, with a symmetric window).
+    const ended = Array.from({ length: 140 }, (_, i) => [
+      i * 16.7,
+      0.52 + Math.min(i, 40) * 0.2,
+      0.5,
+      i,
+    ])
+    expect(analyseMotion(ended, snap).maxStillMs).toBeLessThan(50)
   })
 
   test('device-walk reference: a repeated DrawList (same frame_seq) is not a frame the circle failed to move on', () => {

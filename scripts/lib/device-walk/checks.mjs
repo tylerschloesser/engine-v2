@@ -1899,6 +1899,8 @@ const BACKSTEP_LOOKAHEAD_FRAMES = 30
 const MOVING_WINDOW_FRAMES = 15
 /** How many frames back `stepsWhileMoving` looks for a tile of net displacement (long enough to span a turn at 12 tiles/s). */
 const MOVING_TRAILING_FRAMES = 45
+/** ...and the circle must still cover this much over the next `MOVING_WINDOW_FRAMES`, or the walk has ended. */
+const MOVING_GOES_ON_TILES = 0.05
 /** A pair is "while moving" when the circle covered at least this many tiles over that window (2 tiles/s at 60 Hz). */
 const MOVING_MIN_TILES = 1
 
@@ -1922,7 +1924,14 @@ function stepsWhileMoving(frames, jumps) {
     // frames before this pair's second frame. The standing frames before a walk have none, so they are not
     // "moving" (docs/plan/39ab: the lurch sat in their old symmetric window, `max_still_ms` 234).
     const [dx, dy] = displacement(frames, jumps, Math.max(0, i + 1 - MOVING_TRAILING_FRAMES), i + 1)
-    const moving = Math.hypot(dx, dy) >= MOVING_MIN_TILES
+    // ...and it goes on: the frames after a walk ends are not a "stretch of motion" either (judged only
+    // when a full window follows, so the end of the record is not read as an end of the walk).
+    const ahead = i + 1 + MOVING_WINDOW_FRAMES
+    let onward = 0 // path length, not net: a turn may bring the circle back to where it was
+    for (let k = i + 1; k < Math.min(jumps.length, ahead); k++)
+      onward += jumps[k] <= MOVING_MAX_STEP_TILES ? jumps[k] : 0
+    const goesOn = ahead > frames.length - 1 || onward >= MOVING_GOES_ON_TILES
+    const moving = Math.hypot(dx, dy) >= MOVING_MIN_TILES && goesOn
     if (!moving) {
       stillFrom = null
       continue
