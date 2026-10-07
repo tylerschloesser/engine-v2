@@ -624,5 +624,13 @@ export function createAutoRound({
       const st = states(events)
       return list.length > 0 && list.every((i) => st.get(i.id).result)
     },
+    /**
+     * M39w: the walk is over: every check has a result or is a judge sheet the device person deferred (only
+     * `--judge` can close it). A driven round ends here; `done()` is the stricter word.
+     */
+    walkOver: (events = readEvents(file)) => {
+      const st = states(events)
+      return list.length > 0 && list.every((i) => st.get(i.id).result || parked(st.get(i.id)))
+    },
   }
 }

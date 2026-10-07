@@ -49,6 +49,26 @@ export async function waitCli({ round, timeoutS, json, read, out = console.log }
 }
 
 /**
+ * The end of a walk (M39w): record the phase, print the status and, for a driven round that ended with judge
+ * sheets parked, their ids and the `--judge` line; then the one shutdown (the M39u path), whatever the outcome.
+ * Returns the exit code: 0 when done or done-pending-judge, 2 when stopped.
+ */
+export async function endRound({ round, done, live, status, shutdown, log = console.log }) {
+  const final = status()
+  const parked = final.state === 'done-pending-judge'
+  const ok = done || parked
+  live.set({ phase: done && !parked ? 'done' : parked ? 'done-pending-judge' : 'stopped' })
+  const word = ok ? (parked ? 'done-pending-judge' : 'done') : final.state
+  log(`${formatStatus(final)}\n${formatState({ ...final, state: word })}`)
+  if (parked) {
+    log(`judge sheets open: ${final.humanPending.join(', ')}`)
+    log(`pnpm device:walk --judge ${round} <id> pass|fail|skip [--note "..."]`)
+  }
+  await shutdown()
+  return ok ? 0 : 2
+}
+
+/**
  * `--auto`: returns when the round is done (exit code 0) or was stopped (2). `o`: `{ repo, round, only, items,
  * file, seriesDir, tunnel, noOpen, noBuild, params, monitorPort, log, drive, makeBackend }`. `drive: 'android'`
  * (M39j): the Mac is the person: it opens the runner on the USB phone and answers the act prompts
@@ -134,6 +154,8 @@ export async function autoCli(o) {
         : undefined,
       botTimings,
       signal: ac.signal,
+      // M39w: a driven round ends when only parked judge sheets are left (nothing here can answer them).
+      endOnParked: !!o.drive,
       log,
       openMac: o.openMac ?? ((browser, url) => openMacBrowser(browser, url, { log })),
       basePort: o.basePort,
@@ -216,11 +238,7 @@ export async function autoCli(o) {
       })
     }
     const done = await run.finished()
-    live.set({ phase: done ? 'done' : 'stopped' })
-    const final = status()
-    log(`${formatStatus(final)}\n${formatState({ ...final, state: done ? 'done' : final.state })}`)
-    await shutdown()
-    return done ? 0 : 2
+    return await endRound({ round, done, live, status, shutdown, log })
   } catch (e) {
     await shutdown()
     throw e

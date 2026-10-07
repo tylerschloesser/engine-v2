@@ -11,6 +11,8 @@
 //   paused             the person pressed Pause on the bar and nothing has happened since (advisory: the
 //                      walk does not stop; see Deviations of delegation 5)
 //   done               every walked check has a result (read from the log: it needs no live process)
+//   done-pending-judge a driven round (M39w) walked every check and the rest are judge sheets its driver deferred:
+//                      the process has ended on purpose and releases the phone; `--judge` closes them (from the log)
 //   stalled            the process is gone (killed, crashed, timed out) and the round is not done
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -112,6 +114,26 @@ export function openPrompts(events, ids) {
   return out
 }
 
+/** Is the newest attempt of `id` a judge sheet the driver deferred (a `defer` for it after its `judge` outcome)? */
+function parkedJudge(events, id) {
+  let n = 0
+  let judge = false
+  let deferred = false
+  for (const e of events) {
+    if (e.id !== id) continue
+    if (e.type === 'result') n = 0
+    else if (e.type === 'attempt' && e.status === undefined && e.n >= n) {
+      n = e.n
+      judge = false
+      deferred = false
+    } else if (e.type === 'attempt' && e.n === n && e.status === 'done')
+      judge = e.outcome === 'judge'
+    else if (e.type === 'defer' && e.n === n && judge) deferred = true
+    else if ((e.type === 'answer' || e.type === 'redo') && e.n === n) deferred = false
+  }
+  return judge && deferred
+}
+
 /**
  * The state word of an auto round.
  * @param {{ events: object[], ids: string[], live: object|null, now?: number, alive?: boolean|((pid: number) => boolean),
@@ -165,6 +187,14 @@ export function roundState({
   }
   if (left.length === 0 && ids.some((id) => walkable(id)))
     return { state: 'done', reason: null, ...base }
+  // M39w: nothing is left but judge sheets the driver parked for `--judge`: the walk is over whether or not the
+  // process is still shutting down (a QR round never has a deferred sheet).
+  if (left.length > 0 && left.every((id) => parkedJudge(events, id)))
+    return {
+      state: 'done-pending-judge',
+      reason: `walk over; ${left.length} judge sheet(s) wait for --judge: ${left.join(', ')}`,
+      ...base,
+    }
   const up = live && (typeof alive === 'function' ? alive(live.pid) : alive)
   if (!up)
     return {
@@ -219,7 +249,8 @@ export async function waitRound({
       seen = key
       onChange(s)
     }
-    if (s.state === 'done') return { code: 0, final: s, timedOut: false }
+    if (s.state === 'done' || s.state === 'done-pending-judge')
+      return { code: 0, final: s, timedOut: false }
     if (s.state === 'stalled') {
       stalledSince ??= clock()
       if (clock() - stalledSince >= stalledGraceMs) return { code: 2, final: s, timedOut: false }

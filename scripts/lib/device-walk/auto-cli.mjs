@@ -38,6 +38,18 @@ const serving = (key) => {
 const REPO = fileURLToPath(new URL('../../..', import.meta.url))
 
 /**
+ * Wait for the walk to end: true when every check has a result, or (`endOnParked`, a driven round: M39w) when the
+ * rest are judge sheets the driver deferred, since nothing in this process can answer those; false on timeout or abort.
+ */
+export async function walkFinished({ machine, endOnParked, timeoutMs, signal, pollMs = 300 }) {
+  const over = () => (endOnParked ? machine.walkOver() : machine.done())
+  const deadline = Date.now() + (timeoutMs ?? 90 * 60_000)
+  while (!over() && Date.now() < deadline && !signal?.aborted)
+    await new Promise((r) => setTimeout(r, pollMs))
+  return over()
+}
+
+/**
  * Start the servers and the phone API and print the QR; resolves with `joinUrl` as soon as the phone can
  * scan it. `finished()` resolves true when every walked check has a result (false on timeout or abort);
  * the servers stay up until `stop()`.
@@ -193,12 +205,14 @@ export async function startAutoRound(o) {
     mkdirSync(seriesDir, { recursive: true })
     writeFileSync(join(seriesDir, 'qr.svg'), qrSvg(joinUrl))
     log(`\nScan with the iPhone camera (opens in Safari):\n${qrTerminal(joinUrl)}\n${joinUrl}\n`)
-    const finished = async () => {
-      const deadline = Date.now() + (o.timeoutMs ?? 90 * 60_000)
-      while (!machine.done() && Date.now() < deadline && !o.signal?.aborted)
-        await new Promise((r) => setTimeout(r, pollMs))
-      return machine.done()
-    }
+    const finished = () =>
+      walkFinished({
+        machine,
+        endOnParked: o.endOnParked,
+        timeoutMs: o.timeoutMs,
+        signal: o.signal,
+        pollMs,
+      })
     return { finished, stop, joinUrl, token, api, machine, origins }
   } catch (e) {
     await stop()
