@@ -105,6 +105,8 @@ export const HIST_EDGES_MS: readonly number[] = [
 export const TOP_TICKS = 20
 const MAX_LAG = 512
 const MIN_PERIOD_R = 0.3
+const DETREND = 4
+const PEAK_SHARE = 0.97
 
 export type TickSummary = {
   /** Ticks in the ring, and the ticks the meter never saw (a gap in the tick number). */
@@ -114,14 +116,23 @@ export type TickSummary = {
   counts: number[]
   /** The slowest ticks, slowest first. */
   top: { tick: number; ms: number }[]
-  /** The shortest lag (in ticks) whose autocorrelation is within 80 % of the best, or null. */
+  /** The first autocorrelation peak (in ticks) within 3 % of the best, or null. */
   period: number | null
   periodR: number
 }
 
 /** The shortest lag at which `x` repeats, from its autocorrelation; null if no lag reaches `MIN_PERIOD_R`. */
-export function autocorrPeriod(x: ArrayLike<number>): { period: number | null; r: number } {
-  const n = x.length
+export function autocorrPeriod(raw: ArrayLike<number>): { period: number | null; r: number } {
+  // High-pass first (minus a centred moving average): a slowly drifting level is correlated at
+  // every short lag and would read as "period 2".
+  const len = raw.length
+  const n = Math.max(0, len - 2 * DETREND)
+  const x = new Float64Array(n)
+  for (let i = 0; i < n; i++) {
+    let m = 0
+    for (let j = i; j <= i + 2 * DETREND; j++) m += raw[j] as number
+    x[i] = (raw[i + DETREND] as number) - m / (2 * DETREND + 1)
+  }
   let mean = 0
   for (let i = 0; i < n; i++) mean += x[i] as number
   mean /= n || 1
@@ -131,17 +142,20 @@ export function autocorrPeriod(x: ArrayLike<number>): { period: number | null; r
   const maxLag = Math.min(MAX_LAG, n >> 1)
   const r = new Float64Array(maxLag + 1)
   let best = 0
-  for (let lag = 2; lag <= maxLag; lag++) {
+  for (let lag = 1; lag <= maxLag; lag++) {
     let s = 0
     for (let i = 0; i + lag < n; i++)
       s += ((x[i] as number) - mean) * ((x[i + lag] as number) - mean)
     const rl = s / energy
     r[lag] = rl
-    if (rl > best) best = rl
+    if (lag >= 2 && rl > best) best = rl
   }
   if (best < MIN_PERIOD_R) return { period: null, r: best }
   for (let lag = 2; lag <= maxLag; lag++) {
-    if ((r[lag] as number) >= 0.8 * best) return { period: lag, r: r[lag] as number }
+    const here = r[lag] as number
+    // A peak, not the shoulder of one.
+    if (here >= PEAK_SHARE * best && here >= (r[lag - 1] as number) && here >= (r[lag + 1] ?? -1))
+      return { period: lag, r: here }
   }
   return { period: null, r: best }
 }

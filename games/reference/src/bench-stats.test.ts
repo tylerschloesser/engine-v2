@@ -94,6 +94,22 @@ describe('bench meter: per-tick series', () => {
     expect(flat.summary().period).toBeNull()
   })
 
+  it('reads a slow drift as no short period, and a 20-tick wave as 20', () => {
+    const drift = createTickRing()
+    for (let t = 1; t <= 1000; t++) drift.push(t, 3_000 + t * 2)
+    expect(drift.summary().period).toBeNull()
+    const wave = createTickRing()
+    let seed = 99
+    for (let t = 1; t <= 1000; t++) {
+      seed ^= seed << 13
+      seed ^= seed >>> 17
+      seed ^= seed << 5
+      const noise = (seed >>> 0) % 300
+      wave.push(t, Math.round(4_000 + 1_500 * Math.sin((2 * Math.PI * t) / 20) + noise))
+    }
+    expect(wave.summary().period).toBe(20)
+  })
+
   it('keeps the last 4096 ticks, counts missed ones, and buckets finely below 10 ms', () => {
     const ring = createTickRing(8)
     for (let t = 1; t <= 20; t++) if (t !== 15) ring.push(t, 8_600)
