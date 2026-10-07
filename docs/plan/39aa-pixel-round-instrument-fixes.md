@@ -1,6 +1,6 @@
 # M39aa: three instrument and driver gaps found by the Pixel full round
 
-Status: not started · After: 39z · Tyler-dependent: no
+Status: done (2026-10-07) · After: 39z · Tyler-dependent: no
 
 ## Goal
 The driven Pixel full round `m39y-full-pixel` (2026-10-07) failed M11-gestures, M34-remote-motion, M29-socket-resume and M29-play-through-drop. A read-only diagnosis (`test-results/m39y-pixel-fails-diagnosis.md`, not committed) traced all of them to the instrument or the driver. None is an engine defect. When this is done, each gap has a test that fails the way the round did, the fix makes it pass, and the orchestrator re-runs those items on the Pixel.
@@ -34,9 +34,9 @@ Any criterion's limit; any engine runtime behaviour (the window origin itself is
 `scripts/lib/device-walk/drive/{person.mjs,loop.mjs,android.mjs}` as needed, `scripts/lib/device-walk/{checks.mjs,agent/collect-touch.js,agent/collect-life.js}` as needed, `games/reference/src/check.ts`, the engine's test-surface module for the origin export, their tests.
 
 ## Exit criteria
-- [ ] Tests (a) to (e) and the origin test exist, pass, and were seen red (red lines pasted).
-- [ ] `pnpm test tools` green (pasted line); no limit changed.
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] Tests (a) to (e) and the origin test exist, pass, and were seen red (red lines pasted).
+- [x] `pnpm test tools` green (pasted line); no limit changed.
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test tools` · `pnpm test unit -t check` · the origin test's suite, targeted, in the foreground. No phone runs.
@@ -51,3 +51,4 @@ After landing, the orchestrator re-runs M11-gestures (after M09b-fill-rate, so t
 - **Watchdog:** `loop.mjs` sets `leftAt` after a `leave-app`, `background` or `airplane` handler returns (the guard is `max(reopenedAt, leftAt)`), and clears the prompt dedup set on every reopen (a new tab id is not detected: the log prompt events do not reach the loop with it). `answeredInLog` still stops a second answer to a prompt the log shows answered.
 - **M29-play-through-drop:** reducers `all-known` / `any-known` (null on empty) with `nullIs: 'judge'`. `reused()` in `auto-round.mjs` returns null for `actTimedOut`, `reloaded`, unreadable or empty `runs`; play-through-drop then falls back to asking for its own drops (not a skip, as the diagnosis preferred; the brief said null). The in-round assertion of that fallback does not discriminate old from new code (the criteria test does).
 - Tests seen red: pan (landscape y0 254.8 > 174), 64 jump (snaps 1), leave and reopen (two tests), zero runs (`[false, true]` not `[null, null]`). Origin test written with its helper, no red phase.
+- **Gate (orchestrator):** fix round 1 removed the `analyseMotion` multiple-of-64 strip. It was a mask: with true world positions from `world()`, an exact 64-tile jump would be a real renderer defect. A 64.000 jump now counts as a snap, and the origin fix is proven at `recordWorldPos`, seen red (`expected 64.5199966430664 to be close to 0.52`). The first full gate had one red, `reference_furnace_pick_up` (the ledger's full-suite-only `reference_*` flake). It passed 5 of 5 alone, and its spec does not read `world()`. The re-run is green. The implementer's session left a shell hung on an aliased `cp -i`, which the orchestrator killed (the tree was clean).

@@ -121,7 +121,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 39s | `39s-sim-tick-tail.md` | the large-save `sim_tick` tail (Pixel p50 7.9 / p95 23.2 ms; desktop 4.6 / 5.6): per-tick series first, then fix the engine cause or stop with it measured (finding 2 follow-up, 2026-10-06) | 39x | Q18 |
 | [x] | 39y | `39y-wasm-tick-cost.md` | the large-save tick runs about 3x native in browser wasm (desktop p50 3.9 against 1.26 ms native; phones 7.9-8.6): build profiles, bench-only per-phase counters, a three-runtime table, then fix or stop with the mechanism (M39s split, 2026-10-07) | 39s | Q18 |
 | [x] | 39z | `39z-ios-pacing-and-tick-bar.md` | Q18 (a) and Q19 answered: on iOS M09b passes on engine-owned numbers, iOS frame-pacing items judged driverless only, the large-save bar is the iPhone at p95 (ADR 0056) | 39y | |
-| [ ] | 39aa | `39aa-pixel-round-instrument-fixes.md` | three instrument and driver gaps from the Pixel full round `m39y-full-pixel`: the pan swipe in landscape, `world()` positions relative to the 64-tile window origin, and the watchdog reopening the page during a 300 s app-leave (diagnosed 2026-10-07) | 39z | |
+| [x] | 39aa | `39aa-pixel-round-instrument-fixes.md` | three instrument and driver gaps from the Pixel full round `m39y-full-pixel`: the pan swipe in landscape, `world()` positions relative to the 64-tile window origin, and the watchdog reopening the page during a 300 s app-leave (diagnosed 2026-10-07) | 39z | |
 | [ ] | 39 | `39-acceptance.md` | coverage + budget audit, full device checklist, Phase 3 exit | all above | D |
 | [ ] | 39b | `39b-phase-4-handoff.md` | capture what code cannot say in ADRs, `PROMPT.md` for Phase 4. **Phase 3 complete.** | 39 | |
 
