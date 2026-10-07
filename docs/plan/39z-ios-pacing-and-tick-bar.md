@@ -1,6 +1,6 @@
 # M39z: what M09b asserts on iOS, and which phone is the large-save bar
 
-Status: not started · After: 39y · Tyler-dependent: no (Q18 and Q19 answered 2026-10-07: "yes to all" on the recommended defaults)
+Status: done (2026-10-07) · After: 39y · Tyler-dependent: no (Q18 and Q19 answered 2026-10-07: "yes to all" on the recommended defaults)
 
 ## Goal
 Tyler accepted two recommendations on 2026-10-07 (`docs/plan/questions-for-tyler.md`):
@@ -38,10 +38,10 @@ Re-running any round (the orchestrator's); `--apply` of existing rounds; any eng
 `scripts/lib/device-walk/checks.mjs` (and the module that applies criteria, if separate), their tests under `scripts/lib/`, `docs/plan/device-checks.md` (the M09b and M39-large-save sections only), new `docs/decisions/0056-*.md`.
 
 ## Exit criteria
-- [ ] ADR 0056 exists and covers (a), (b) and (c).
-- [ ] The six tests exist, pass, and were seen red (red lines pasted).
-- [ ] `pnpm test tools` green (pasted line); every `pass:` hash matches its text.
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] ADR 0056 exists and covers (a), (b) and (c).
+- [x] The six tests exist, pass, and were seen red (red lines pasted).
+- [x] `pnpm test tools` green (pasted line); every `pass:` hash matches its text.
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test tools` (targeted, foreground). No phone runs.
@@ -60,3 +60,4 @@ After landing, the orchestrator re-applies the iPhone rounds' results under the 
 **Red at base** (new file `scripts/lib/device-walk-pacing.test.mjs`, 11 tests, 7 red): `expected 'fail' to be 'pass'` (iOS M09b rAF 18); `expected undefined to match object { value: 2, ok: false }` (stall 30); `expected 'fail' to be 'pass'` (driven M09b); `expected 'judge' to be 'pass'` (driven M16-coexist; M29-net-heap); `expected 'fail' to be 'pass'` (Android large-save p95 26; the auto-round wiring). Four pass at base by construction, as guards: Android M09b p95 18 fails, iOS large-save 11.5 fails, iOS GPU 6.5 fails, M18 keeps rAF limits.
 
 **Verification.** `pnpm test tools`: `tools pass 255 tests  2.3s/9s`. `pnpm lint`: biome, rustfmt, clippy, tsc all pass. Full `pnpm test` not run (the orchestrator's).
+- **Gate (orchestrator):** `pnpm test` green (tools 255, unit 407, browser 256 in 45 s), lint clean incl. `tsc`. Rulings: M34's `max_still_ms` and `moving_frames_changed_ratio` stay judged on a driven iOS attempt (both passed comfortably driven in `m39u-iphone`: 17 ms, 0.991). The note in the M09b section intro is accepted. Two of the six tests (Android M09b 18 ms, iOS large-save 11.5) pass at base and are guards. ADR bookkeeping by the orchestrator (`62731cf`).
