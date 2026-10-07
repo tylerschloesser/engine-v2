@@ -216,6 +216,36 @@ describe('device-walk life', () => {
     ])
   })
 
+  // M39y: the 300 s app-leave tripped the watchdog, the item timed out with no runs, and the reused empty list
+  // turned into stayed_interactive = false.
+  test('device-walk life: M29-play-through-drop on zero runs is no verdict, and a timed-out socket-resume is no evidence to reuse', () => {
+    const e = CHECKS['M29-play-through-drop']
+    const none = evaluate(e, { ready: true, actTimedOut: true })
+    expect(none.criteria.map((c) => c.ok)).toEqual([null, null])
+    expect(none.verdict).not.toBe('fail')
+    expect(evaluate(e, { runs: [] }).verdict).not.toBe('fail')
+    // Measured runs still decide.
+    expect(evaluate(e, { runs: [{ interactive: false, dialog: false }] }).verdict).toBe('fail')
+    expect(evaluate(e, { runs: [{ interactive: true, dialog: false }] }).verdict).toBe('pass')
+    // In the round: the timed-out socket-resume does not feed play-through-drop a verdict.
+    const r = rig(['M29-socket-resume', 'M29-play-through-drop'])
+    r.start()
+    r.series('M29-socket-resume', 1, { ready: true, actTimedOut: true })
+    expect(
+      r.results().filter((x) => x.id === 'M29-play-through-drop' && x.result === 'fail'),
+    ).toEqual([])
+    expect(
+      r
+        .results()
+        .some(
+          (x) =>
+            x.id === 'M29-play-through-drop' &&
+            x.by === 'auto' &&
+            x.notes === 'the same runs as M29-socket-resume',
+        ),
+    ).toBe(false)
+  })
+
   test('device-walk life: a socket-resume with no reconnect to time (every run survived) is a judge prompt, never a pass by silence', () => {
     const e = evaluate(CHECKS['M29-socket-resume'], {
       runs: [

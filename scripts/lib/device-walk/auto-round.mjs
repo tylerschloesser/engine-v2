@@ -425,7 +425,11 @@ export function createAutoRound({
     const a = [...st.attempts.values()].findLast((x) => x.evidence && x.status !== 'interrupted')
     if (!a) return null
     const data = readData(a.evidence)
-    return data && !data.unreadable && !data.reloaded ? { data, evidence: a.evidence } : null
+    // A failed run is no evidence: no `runs`, or an act that timed out, would otherwise give this check a verdict
+    // from nothing (M39y: M29-play-through-drop failed on the zero runs of a socket-resume that timed out).
+    if (!data || data.unreadable || data.reloaded || data.actTimedOut) return null
+    if (Array.isArray(data.runs) ? data.runs.length === 0 : false) return null
+    return { data, evidence: a.evidence }
   }
 
   function readData(path) {
