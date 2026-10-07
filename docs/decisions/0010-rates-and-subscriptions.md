@@ -1,6 +1,6 @@
 # 0010: Rates, subscriptions, and the bandwidth budget
 
-Status: Accepted (2026-09-19). Conditional amendment recorded in [0024](0024-planning-amendments.md) §15.  Amended by [0040](0040-interpolation-delay-presence-interval.md) §1-2.
+Status: Accepted (2026-09-19). Conditional amendment recorded in [0024](0024-planning-amendments.md) §15.  Amended by [0040](0040-interpolation-delay-presence-interval.md) §1-2. Amended by [0056](0056-ios-pacing-and-tick-bar.md) (the phone bar for the tick ceiling: the iPhone 12 at p95).
 
 ## Context
 
