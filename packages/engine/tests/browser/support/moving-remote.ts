@@ -13,6 +13,8 @@ import { loadFixture } from '../../support/fixtures.js'
 export interface MovingRemote {
   /** One client frame with the camera advanced along the curve; call between server ticks. */
   step(): void
+  /** One client frame with the camera at `x` tiles (y fixed) and velocity `velX` tiles/s. */
+  stepAt(x: number, velX: number): void
   leave(): void
 }
 
@@ -51,6 +53,10 @@ export async function startMovingRemote(
         velX: 1.5 * Math.cos(0.5 * s),
         velY: 1.8 * Math.cos(0.9 * s + 1),
       })
+      client.stepFrame(50)
+    },
+    stepAt(x, velX) {
+      client.setView({ x, y: 0.5, halfW: 4, halfH: 4, velX, velY: 0 })
       client.stepFrame(50)
     },
     leave() {
