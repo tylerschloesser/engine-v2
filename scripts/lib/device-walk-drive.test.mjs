@@ -260,13 +260,14 @@ describe('device-walk drive: the device person on a recording backend', () => {
   })
 
   // M39r: the rule "4 px under the button's box" (found on the Pixel 5 to be inside Chrome's snap radius) is
-  // replaced by the most-clearance point (`device-walk-ringtap.test.mjs`); this keeps the button half.
+  // replaced by the clear point nearest the centre (`device-walk-ringtap.test.mjs`): a button 8 px left of the
+  // centre pushes the tap right. This keeps the button half.
   test('device-walk drive: a ring beside a button is tapped on its far side, the button itself at its centre', async () => {
     const o = {
       pages: {
         "of document.querySelectorAll('button')": () => ({
-          r: 5.88,
-          boxes: [{ left: 80, top: 227, right: 94, bottom: 241 }],
+          r: 20,
+          boxes: [{ left: 101, top: 227, right: 115, bottom: 241 }],
         }),
       },
     }

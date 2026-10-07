@@ -45,12 +45,26 @@ describe('device-walk ring tap: the tap point keeps its clearance from every but
     for (const b of boxes) expect(gap(p, b)).toBeGreaterThanOrEqual(12)
   })
 
-  test('device-walk ring tap: chooseRingTap returns the point with the most clearance, and no buttons means the ring centre', () => {
+  test('device-walk ring tap: chooseRingTap returns the clear point nearest the centre: no buttons, or one far enough, means the centre', () => {
     expect(chooseRingTap(ring, [])).toMatchObject({ x: ring.x, y: ring.y })
     const far = box(ring.x - 40, ring.y - 7)
     const best = chooseRingTap(ring, [far])
-    expect(gap(best, far)).toBeGreaterThan(gap(ring, far))
+    expect(best).toMatchObject({ x: ring.x, y: ring.y })
     expect(best.clearance).toBeCloseTo(gap(best, far), 3)
+    // A box 6 px left of the centre: the point moves right only as far as 12 px clearance needs.
+    const near = box(ring.x - 20, ring.y - 7)
+    const p = chooseRingTap({ ...ring, r: 20 }, [near])
+    expect(p.clearance).toBeGreaterThanOrEqual(12)
+    expect(Math.hypot(p.x - ring.x, p.y - ring.y)).toBeLessThanOrEqual(0.3 * 20 + 1e-9)
+  })
+
+  test('device-walk ring tap: with the only button lifted 26 px clear of the ring (ringPhase, zoom 40 on the Pixel 5) the tap is the ring centre, not its edge', () => {
+    // M39r round m39r-pixel-2: the most-clearance rule tapped 0.85 r below the centre (+9.5 px at 40 tiles,
+    // +23 at 20, +35.5 at 12), and with the 4 px highlight offset every tap missed.
+    const big = { x: 196.52, y: 345.45, r: 0.6 * (745 / 40) }
+    const lifted = box(big.x - 7, big.y - big.r - 26 - 14)
+    const bar = { left: 0, top: 655, right: 392, bottom: 745 }
+    expect(chooseRingTap(big, [lifted], undefined, [bar])).toMatchObject({ x: big.x, y: big.y })
   })
 
   test('device-walk ring tap: the button step still taps the button centre', async () => {

@@ -20,34 +20,32 @@ const boxGap = (x, y, b) =>
 
 /**
  * The tap point for a ring `{ x, y, r }` (its centre and radius, CSS px) among visible button boxes: the point
- * inside the ring (within 0.85 r of the centre, so the pick still lands) farthest from every box. No boxes: the
- * centre. Throws `NotDrivable` when even the best point is under `MIN_RING_CLEARANCE_PX` from a box.
+ * nearest the centre (within 0.85 r, so the pick still lands) that is at least `minClear` from every box and
+ * `COVER_MARGIN_PX` clear of every cover. No boxes and no covers: the centre. Throws `NotDrivable` when no point
+ * is clear of the covers, or none of those is `minClear` from every box. (M39r round 2: the most-clearance
+ * point sat at 0.85 r, on the ring's edge, where any placement error is a miss.)
  * @returns {{ x: number, y: number, clearance: number }}
  */
 export function chooseRingTap(ring, boxes, minClear = MIN_RING_CLEARANCE_PX, covers = []) {
   const free = (x, y) => covers.every((b) => boxGap(x, y, b) >= COVER_MARGIN_PX)
   const clear = (x, y) => boxes.reduce((m, b) => Math.min(m, boxGap(x, y, b)), Infinity)
-  let best = free(ring.x, ring.y)
-    ? { x: ring.x, y: ring.y, clearance: clear(ring.x, ring.y) }
-    : null
-  for (const [f, n] of [
-    [0.45, 12],
-    [0.85, 24],
-  ])
+  let bestFree = null // the most clearance among points clear of the covers: only for the reason
+  for (const f of [0, 0.15, 0.3, 0.45, 0.6, 0.75, 0.85]) {
+    const n = f === 0 ? 1 : 24
     for (let i = 0; i < n; i++) {
       const a = (2 * Math.PI * i) / n
       const x = ring.x + ring.r * f * Math.cos(a)
       const y = ring.y + ring.r * f * Math.sin(a)
       if (!free(x, y)) continue
       const c = clear(x, y)
-      if (!best || c > best.clearance + 1e-9) best = { x, y, clearance: c }
+      if (c >= minClear) return { x, y, clearance: c }
+      if (!bestFree || c > bestFree.clearance) bestFree = { x, y, clearance: c }
     }
-  if (!best) throw new NotDrivable('ring is under the walk bar or another element at this zoom')
-  if (best.clearance < minClear)
-    throw new NotDrivable(
-      `ring too close to a button at this zoom (best clearance ${best.clearance.toFixed(1)} px, need ${minClear})`,
-    )
-  return best
+  }
+  if (!bestFree) throw new NotDrivable('ring is under the walk bar or another element at this zoom')
+  throw new NotDrivable(
+    `ring too close to a button at this zoom (best clearance ${bestFree.clearance.toFixed(1)} px, need ${minClear})`,
+  )
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
