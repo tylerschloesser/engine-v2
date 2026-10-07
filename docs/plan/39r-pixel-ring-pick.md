@@ -1,6 +1,6 @@
 # M39r: M18-pick lands on the Pixel, and a tap's target is recorded
 
-Status: not started · After: 39q · Tyler-dependent: no
+Status: done (2026-10-06; verified on the Pixel 5) · After: 39q · Tyler-dependent: no
 
 ## Goal
 Finding 7 of the driven rounds: M18-pick passes on the iPhone (9 rings, 0 misses) and fails on the Pixel 5. In every Android round the act "finishes" in 0.6 s, five minutes of silence follow, and the result is a fail with `rings_tapped 0`. The evidence JSON holds only `{ready, actTimedOut: true}`: no tap coordinates, no pick results, no event targets. A read-only diagnosis (2026-10-06) cleared the driver's coordinate mapping (`drive/android.mjs` `toScreen`, `adb shell input tap`, calibrated by `learnChin`; the same mapping serves tap-tile and M18-touch-ghost) and the engine's pick (`input/pick.ts`). The likely cause, **unproven** because no round logged where the events landed: at 40 tiles across a 392 px viewport a ring is about 12 px across, and its 14 px button sits directly against it (`RING_BUTTON_CSS` in the device page, `overlay/anchors.ts`). Chrome Android's touch adjustment snaps a tap near a `<button>` onto the button; WebKit doesn't. The driver's nudge (`person.mjs`, 4 px under the button) is inside the snap radius. The only Pixel probe (39j Deviations) fits: 11 px under the anchor picks the ring, 9 px hits the button.
@@ -25,10 +25,10 @@ Engine pick and overlay code (stop and report if step 2 implicates it); CDP touc
 The device fixture page (`packages/engine/tests/browser/pages/src/device.ts`), `scripts/lib/device-walk/{agent/collect-*.js,drive/person.mjs,drive/android.mjs}` and their tests under `scripts/lib/`.
 
 ## Exit criteria
-- [ ] The tap evidence records event targets, and the cause is named from the probe round in Deviations.
-- [ ] The step 4 tests exist, pass, and were seen red.
-- [ ] Existing anchors/overlay browser tests stay green; no golden, budget or baseline changed.
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The tap evidence records event targets, and the cause is named from the probe round in Deviations.
+- [x] The step 4 tests exist, pass, and were seen red.
+- [x] Existing anchors/overlay browser tests stay green; no golden, budget or baseline changed.
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test unit -t device-walk` · `pnpm test browser -t "anchors|overlay|device"` (targeted, foreground).
@@ -67,3 +67,4 @@ Gate `pnpm test && pnpm lint` green (unit 627). Driven Pixel round `m39r-pixel-2
 **Round `m39r-pixel-3` (Pixel 5, tunnel, `337fc80`): M18-pick pass.** `pick_misses 0`, `button_tap_changed_pick false`, `rings_tapped 8`; skipped `24 at 40 (under DIV), 45, 46, 47 at 20, 36 at 12 (bar reserve)`. `at` against pointerdown: zoom 40: (196.52, 345.45) → (196.36, 345.45); (196.52, 405.52) → (196.36, 405.45); (136.44, 345.45) → (136.36, 345.45). zoom 20: (196.54, 410.55) → (196.36, 410.55); (196.54, 290.40) → (196.36, 290.55); (76.39, 410.55) → (76.36, 410.55). zoom 12: (196.89, 417.58) → (196.73, 417.45); (196.89, 217.33) → (196.73, 217.45). Worst error 0.18 px (the 1/2.75 px quantum). Every pointerdown on CANVAS, every `got` the expected ring.
 
 **Slow tier.** `pnpm test:slow browser -t walk`: 34 passed, 1 failed, `walk-life: coexist` `engine_mem_grows` `{value: null, ok: false}` (a file this round did not touch, `collect-life.js` path); rerun alone, `browser pass 2 tests`.
+- **Gate (orchestrator), after fix round 3 (Opus):** `pnpm test && pnpm lint` green (unit 629, browser 256 in 45 s). Accepted: `ringPhase` (only the target ring's button is mounted, the others `display: none`), and the two existing-test edits that encoded the old max-clearance tap rule. Driven Pixel `m39r-pixel-3`: M18-pick **pass**, 8 taps, 0 misses, `button_tap_changed_pick` false, every pointerdown within 0.2 px of the ring centre. The 5 skipped rings are under the walk bar or a DIV. Cause chain: Chrome touch adjustment retargeted taps near the 14 px button, then the `#walk-ring` highlight was 4 px off centre (content-box), then the edge-seeking tap point. **Heads-up (not this milestone):** at 40 tiles on a 392 px phone, rings with buttons 29 px apart can't be tapped reliably by a finger in Chrome. That is a game-layout matter for any game that anchors buttons that densely. The iPhone run is owed (passcode).
