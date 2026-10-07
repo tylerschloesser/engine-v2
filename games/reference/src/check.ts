@@ -11,7 +11,13 @@
 // allocates, it is outside the zero-GC rule (`.claude/rules/hot-paths.md`), and the per-frame recorder runs
 // only between `act.sample(true)` and `act.sample(false)`.
 import type { Client, LinkState } from 'engine'
-import { type DrawRecord, drawListRecords, drawListSeq, drawListWindowOrigin } from 'engine/test'
+import {
+  type DrawRecord,
+  drawListRecords,
+  drawListSeq,
+  drawListWindowOrigin,
+  recordWorldPos,
+} from 'engine/test'
 import type { BenchApi } from './bench.js'
 import { HIST_EDGES_MS } from './bench-stats.js'
 import type { RefAction } from './bindings/RefAction.js'
@@ -87,13 +93,10 @@ export function installCheck(game: StartedGame, bench?: BenchApi): void {
     let ringed = false
     let furnaces = 0
     for (const r of scratch) {
-      if (r.kind === KIND_CIRCLE)
-        circles.push({
-          x: r.pos[0] + origin.x,
-          y: r.pos[1] + origin.y,
-          alpha: (r.color >>> 24) & 0xff,
-        })
-      else if (r.kind === KIND_RING) ringed = true
+      if (r.kind === KIND_CIRCLE) {
+        const [wx, wy] = recordWorldPos(r, origin)
+        circles.push({ x: wx, y: wy, alpha: (r.color >>> 24) & 0xff })
+      } else if (r.kind === KIND_RING) ringed = true
       else if (r.kind === KIND_SPRITE && (r.flags & 4) === 0) furnaces++ // flag 4: a predicted ghost
     }
     const own = ringed ? (circles.pop() ?? null) : null

@@ -1072,6 +1072,14 @@ export function windowOriginOf(slot: Pick<DrawListSlot, 'windowOriginX' | 'windo
   return { x: slot.windowOriginX, y: slot.windowOriginY }
 }
 
+/** A record's world position in tiles: `pos` plus the window origin it is relative to. What `check.ts world()` reports. */
+export function recordWorldPos(
+  rec: Pick<DrawRecord, 'pos'>,
+  origin: { x: number; y: number },
+): [number, number] {
+  return [rec.pos[0] + origin.x, rec.pos[1] + origin.y]
+}
+
 export function drawListWindowOrigin(client: Client): { x: number; y: number } {
   return windowOriginOf(clientTestHandle(client).drawListSlot)
 }

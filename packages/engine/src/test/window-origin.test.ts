@@ -5,7 +5,7 @@ import { expect, test } from 'vitest'
 import { createDrawListSlot } from '../render/drawlist-slot.js'
 import { DRAWLIST_BODY_BYTES, DRAWLIST_HEADER_BYTES } from '../sab/layout.js'
 import { createTriple, TripleWriter } from '../sab/triple.js'
-import { type DrawRecord, decodeSlotRecords, windowOriginOf } from './client.js'
+import { type DrawRecord, decodeSlotRecords, recordWorldPos, windowOriginOf } from './client.js'
 
 /** Publish one frame with one record at `rel` (tiles relative to `origin`); returns the world position read back. */
 function worldRead(origin: [number, number], rel: [number, number]): [number, number] {
@@ -30,7 +30,7 @@ function worldRead(origin: [number, number], rel: [number, number]): [number, nu
   decodeSlotRecords(slot, out)
   const o = windowOriginOf(slot)
   const r = out[0] as DrawRecord
-  return [r.pos[0] + o.x, r.pos[1] + o.y]
+  return recordWorldPos(r, o)
 }
 
 test('window_origin: a world position is the same with the camera either side of a 64-tile boundary', () => {

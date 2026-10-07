@@ -38,6 +38,7 @@ export {
   pickAt,
   pickScanned,
   pumpUntilLive,
+  recordWorldPos,
   replicaHash,
   resumeWorkers,
   samplePresences,
