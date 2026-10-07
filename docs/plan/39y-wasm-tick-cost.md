@@ -1,6 +1,6 @@
 # M39y: where the large-save tick spends 3x native in wasm
 
-Status: not started · After: 39s · Tyler-dependent: Q18 (default: the iPhone 12 is the baseline phone)
+Status: done (2026-10-07; stopped at step 4, drain fix kept) · After: 39s · Tyler-dependent: Q18 (default: the iPhone 12 is the baseline phone)
 
 ## Goal
 M39s (`docs/plan/39s-sim-tick-tail.md` Deviations) measured the large-save `sim_tick` three ways:
@@ -30,11 +30,11 @@ The 10 ms ceiling and the save's size (Q18); frame build; phone runs (the orches
 The engine crate's sim tick path and its bench feature (name the modules in Deviations), `packages/engine/src/worker/sim.ts` for the readout, `games/reference/src/{bench.ts,bench-stats.ts,check.ts}` and their tests, build config (`Cargo.toml` profiles, the wasm build script) only if step 1 finds a mismatch.
 
 ## Exit criteria
-- [ ] The build-profile comparison is pasted in Deviations.
-- [ ] Per-phase counters exist in bench builds only (a test shows a release build has none, or a compile-out check), goldens and determinism hashes unchanged.
-- [ ] The three-runtime per-phase table is in Deviations, with the phase or phases that carry the gap named.
-- [ ] Either the fix lands with the before/after browser table, or the report stops at step 4 with the mechanism measured.
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The build-profile comparison is pasted in Deviations.
+- [x] Per-phase counters exist in bench builds only (a test shows a release build has none, or a compile-out check), goldens and determinism hashes unchanged.
+- [x] The three-runtime per-phase table is in Deviations, with the phase or phases that carry the gap named.
+- [x] Either the fix lands with the before/after browser table, or the report stops at step 4 with the mechanism measured.
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test rust -t tick` · `pnpm test wasm` · `pnpm test unit -t bench` · `pnpm test:slow browser -t "large-save|bench"` (targeted, foreground). Loops run in the foreground, bounded, with a per-run kill timeout, and no background load generators.
@@ -88,3 +88,4 @@ Before / after, `sim_tick` p50 / p95 ms (the "after" runs at load average 7-10, 
 Drain phase alone: native 0.33 -> 0.16 ms (-52 %), Node 0.47 -> 0.33, Node paced 1.17 -> 0.78, Chromium 1.52 -> 1.12. p95 rose in the two noisy rows (load, not the change: the p95 of the tick is the wake). **The fix is a modest win (about 10 % of the median), not the 3.7 ms target**: the remaining cost is spread evenly (`advance`, `wake_at`, `put_entity` and the `by_entity` BTreeMap churn each 0.2-0.4 ms natively). Not done, candidates for a successor: `by_entity` as a dense table (needs a bound on ids from an untrusted snapshot first), skipping repeated `chunk_versions.insert` for the same chunk in `Host::tick`, and the `put_entity` write path (`entity_scopes`, the change log); a cache-footprint change is what shortens the cold wake, and none of these shrinks the working set by much.
 
 **Verification run.** `pnpm test rust -t tick` 29 pass; `pnpm test rust` 801 pass; `pnpm test wasm` 172 pass; `pnpm test unit -t "bench|control"` 16 pass and `-t per-phase` 1 pass; `pnpm test:slow wasm -t tick-phases` 1 pass (31 s); `pnpm test:slow browser -t "large-save|bench"` 3 pass; `tsc` clean for `packages/engine` (`pnpm typecheck`) and `games/reference`; `cargo clippy` on `engine` and `reference-sim` with `bench-phases` on, and the workspace without it, no errors. Not run: full `pnpm test`, `pnpm lint` (the orchestrator's gate), phones.
+- **Gate (orchestrator):** `pnpm test` green (unit 407, tools 244, wasm 172, browser 256 in 45 s), lint clean incl. `tsc`; no golden changed. The gate's 'marker ADDED 1' is a false positive (`.skip(1)` on an iterator in `bench_phases.rs`). Rulings: the `VecDeque` drain fix is kept (order and goldens unchanged; it shrinks memory touched per tick, the lever the stop names). `engine.bench_mark` needed ADR 0055 (amends 0014 §3, bench builds only), written; the control-block growth from 74 to 88 words needs none (no ADR fixes its size; M39o grew it the same way). **Conclusion:** the 3x is a cold wake after the 50 ms sleep (the same `.wasm` in Node: 1.3x native back to back, 3.65 ms paced), not wasm or Chromium. The candidates trim tenths of a millisecond; reaching about 3.7 ms needs a smaller per-tick working set, a storage redesign for 262,144 furnaces. That is a scope and cost call, so it goes into **Q18** with this evidence, not into another brief.
