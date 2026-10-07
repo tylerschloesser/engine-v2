@@ -1,6 +1,6 @@
 # M39u: M16-low-power turns Low Power Mode back off
 
-Status: not started · After: 39t · Tyler-dependent: no
+Status: done (2026-10-06) · After: 39t · Tyler-dependent: no
 
 ## Goal
 Finding 8 of the driven rounds (round `m39r-iphone`, 2026-10-06): after M16-low-power, the iPhone stayed in Low Power Mode for the rest of the round. Every later item then ran at the 30 Hz cap: M29-net-heap counted 17,977 of about 36,000 frames over 25 ms, and M34-remote-motion's `max_still_ms` was 134. M39-large-save's tick p95 of 13.86 ms was measured throttled too. The screenshots show the battery icon green before the item and yellow after it. The orchestrator traced the cause to two places:
@@ -29,10 +29,10 @@ The criteria and limits of every item; M09b and M16-coexist's iPhone hitches (fi
 `scripts/lib/device-walk/agent/collect-life.js`, `scripts/lib/device-walk/drive/ios.mjs` (and `android.mjs` only if its cleanup has the same gap), the walker or `driver.js` for step 3, their tests under `scripts/lib/`.
 
 ## Exit criteria
-- [ ] The two collector tests and the cleanup test exist, pass, and were seen red (red lines pasted).
-- [ ] `cadence_throttled` is recorded on a throttled attempt (unit test) and changes no verdict.
-- [ ] `pnpm test unit -t device-walk` green (pasted line); no budget or limit changed.
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The two collector tests and the cleanup test exist, pass, and were seen red (red lines pasted).
+- [x] `cadence_throttled` is recorded on a throttled attempt (unit test) and changes no verdict.
+- [x] `pnpm test unit -t device-walk` green (pasted line); no budget or limit changed.
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test unit -t device-walk` (targeted, foreground). No phone runs: the orchestrator re-runs the iPhone items.
@@ -46,3 +46,4 @@ After landing, the orchestrator re-runs M16-low-power, M29-net-heap, M34-remote-
 - **Outside the brief's Files touched: `auto-main.mjs`.** `shutdown()` raced `backend.cleanup()` against 6000 ms and the process hard-exited at 12 s, so a 30 s step in `cleanup()` would still have been cut. Now `backend.cleanup()` gets 70 000 ms (worst case 30+30+3+3.5+0.5 s) and the hard exit is 80 000 ms. A second signal 2 s or more later still exits at once. The cleanup doc comment now says: normal cleanup is as long as the walks needed (about 20 s each), a second or two when nothing is on, worst case about 70 s (was "about 8 s"). The comments in `auto-main.mjs` follow. `deadline.mjs`'s header (10 s) and the 39j Deviations number are history, untouched.
 - **Order guard.** `measureWindow` (`agent/driver.js`) sets `window.cadence_throttled: true` when the window's `raf.p50 > 25`; `auto-round.mjs` `onSeries` copies it to the `attempt {status: 'done'}` event as `cadence_throttled: true` when any object in the collected data (depth 4) carries it. No limit, criterion or verdict reads it. `lowpower` itself does not use `measureWindow` (its throttle is the point).
 - **Tests** `scripts/lib/device-walk-lowpower.test.mjs` (5, vm page on a virtual clock whose cadence follows the fake backend's Low Power state, the real `devicePerson` answering prompts). Red at base (`61eeaa6^` sources): `expected Object{ detected: true, ...(10) } to match object { detected: true, ...(1) }` (driven), `expected [ true ] to deeply equal [ true, false ]` (throw path), `expected undefined to be 30000` (cleanup; red by the missing export, so the 4 s cut itself is not shown red), `expected undefined to be true` (cadence_throttled). Green after: `unit pass 234 tests` for `pnpm test unit -t device-walk`. Lint and full test not run (orchestrator is the gate).
+- **Gate (orchestrator):** `pnpm test` green (unit 636, browser 256 in 42 s), lint clean incl. `tsc`. The `auto-main.mjs` shutdown bounds (cleanup 70 s, hard exit 80 s; a second signal after 2 s exits at once) are accepted: a cut cleanup is what left the phone throttled and sleeping. The cleanup test shows the new constant, not the old 4 s cut failing: accepted, since the round log is that red.
