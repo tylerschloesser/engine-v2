@@ -1,6 +1,6 @@
 # 0020: Testing strategy
 
-Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §14, [0031](0031-browser-suite-five-workers.md) (§3's `workers: 3` line), and [0033](0033-fast-tier-budget-after-build-fix.md) (§3's budgets). §9's 25 % rule amended by [0047](0047-bench-gate-absolute-floor.md) (absolute floor `minDeltaMs`). §3's compilation budget raised to 45 s by [0049](0049-compile-budget-45s.md).
+Status: Accepted (2026-09-19). Amended by [0024](0024-planning-amendments.md) §14, [0031](0031-browser-suite-five-workers.md) (§3's `workers: 3` line), and [0033](0033-fast-tier-budget-after-build-fix.md) (§3's budgets). §9's 25 % rule amended by [0047](0047-bench-gate-absolute-floor.md) (absolute floor `minDeltaMs`). §3's compilation budget raised to 45 s by [0049](0049-compile-budget-45s.md). Amended by [0054](0054-tools-suite.md) §1-3 (a `tools` suite row).
 
 ## Context
 

@@ -35,7 +35,7 @@ Rules in force; the rest: briefs 09, 09b, 11, 17b, 18, `docs/plan/device-checks.
 ## Commands
 
 - `pnpm --filter engine build`: `tsc`, `src/` → `dist/`, no bundler; `pnpm test`'s first step. `typecheck` covers `src/`, `tests/`, `tests/browser/pages/` (`pnpm lint` runs it).
-- `pnpm test unit [-t pattern]`: `src/**/*.test.ts` plus `scripts/**/*.test.mjs`. `pnpm test wasm`: `tests/wasm/` against `src/`, plus the Bun leg (`bun-leg.mjs`) against `dist/`. `pnpm golden [fixture]`: the only writer of `golden/golden.json` (0020 §5). Review the diff: a changed golden is a changed sim.
+- `pnpm test unit [-t pattern]`: `src/**/*.test.ts` plus `scripts/**/*.test.mjs` except the device-walk tool's (`pnpm test tools [-t device-walk]`, ADR 0054). `pnpm test wasm`: `tests/wasm/` against `src/`, plus the Bun leg (`bun-leg.mjs`) against `dist/`. `pnpm golden [fixture]`: the only writer of `golden/golden.json` (0020 §5). Review the diff: a changed golden is a changed sim.
 - `pnpm golden:bytes [-- <nextest filter>]`: blesses native byte goldens, same review. One fixture crate: `GOLDEN_BLESS=1 cargo nextest run -p fx-<name> -E 'test(<test>)'` (the wrapper rejects `-p`/`-E`); then rebuild and retest the `.wasm` before committing.
 - `pnpm bench:frame`: `bench.frame_worstcase`, the one frame-time exit criterion (0018 §9), gated against `baselines/frame.json` and never loosened to pass. Diagnosis and baseline updates: `profile-frame` skill.
 

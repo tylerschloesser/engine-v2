@@ -21,7 +21,7 @@ playwright.config.ts`). Ids come from `scripts/suites.mjs`; that file is the reg
 a new suite, nowhere else.
 
 Run one test by name: `pnpm test <suite> -t "<substring>"`, e.g. `pnpm test wasm -t "import
-allowlist"`, `pnpm test browser -t determinism`, `pnpm test unit -t "manual clock"`. `-t` is a plain
+allowlist"`, `pnpm test browser -t determinism`, `pnpm test unit -t "manual clock"`. The device-walk tool's tests (`scripts/lib/device-walk*.test.mjs`) are their own `tools` suite: `pnpm test tools -t device-walk` (ADR 0054). `-t` is a plain
 substring match, not a regex.
 
 Reference game (M34b): `pnpm test browser -t reference_` (its `reference` Playwright project), `pnpm test wasm -t reference_`

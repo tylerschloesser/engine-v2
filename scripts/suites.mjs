@@ -83,6 +83,8 @@ export const suites = [
   // pool they measured 32 % over a baseline they hold alone. Same reason as `frame-bench`'s `solo`.
   { name: 'rust', kind: 'nextest', tiers: ['fast', 'slow'], budgetMs: 10_000, soloTiers: ['slow'] },
   { name: 'unit', kind: 'vitest', tiers: ['fast', 'slow'], budgetMs: 3_000, first: true },
+  // M39x (docs/decisions/0054): the device-walk tool's tests (`scripts/lib/device-walk*.test.mjs`).
+  { name: 'tools', kind: 'vitest', tiers: ['fast', 'slow'], budgetMs: 4_000 },
   {
     name: 'wasm',
     kind: 'vitest',
