@@ -7,6 +7,8 @@ Finding 8 of the driven rounds (round `m39r-iphone`, 2026-10-06): after M16-low-
 - `SLICE.lowpower` (`scripts/lib/device-walk/agent/collect-life.js`, about line 161) asks "Turn Low Power Mode on", measures the second flick and returns. It never asks for Low Power Mode off again. A non-driven round leaves Tyler's phone throttled the same way.
 - The iOS backend's `cleanup()` (`scripts/lib/device-walk/drive/ios.mjs`, about line 693) runs every step through `bestEffort` with a 4000 ms default. The Settings walk in `lowPower(false)` takes longer than that, so the round's log reads `ios cleanup (low power) timed out after 4000 ms` and the phone stays in Low Power Mode after the round.
 
+iOS also caps Auto-Lock at 30 s while Low Power Mode is on. After the round, Tyler's iPhone kept sleeping until the orchestrator switched Low Power off with the backend alone: `createIosBackend()`, then `screenshot()` (which starts the session), then `setLowPower(false)`, then `cleanup()`, all in one `node -e`. A leftover Low Power Mode therefore breaks the never-sleep rule too, not only the frame rate.
+
 When this is done, the item leaves the phone as it found it before the next item starts, and cleanup can actually turn Low Power Mode off.
 
 ## Read first
