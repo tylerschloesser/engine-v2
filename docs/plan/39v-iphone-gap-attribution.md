@@ -63,7 +63,7 @@ After landing, the orchestrator runs M09b-fill-rate and M16-coexist on the iPhon
 - Flag: `--detach-inspector` (boolean) in `scripts/device-walk.mjs` -> `autoCli({detachInspector})` -> `startDrive`. `startAutoRound({inspector})` -> `createAutoRound({inspector})` puts `inspector: 'attached' | 'detached'` on each attempt's `status: 'done'` event; only on a driven round (`'detached'` for `--drive ios --detach-inspector`, `'attached'` otherwise, so Android is `attached`). Absent on a QR round.
 - The page needs no webview context inside a window: its agent talks to the service over its own WebSocket, and the end marker comes through the log. Nothing found that needs the inspector; this is untested on the phone.
 - `fake-agent-page.mjs`: a `MessageChannel` (delivery delay `o.messageDelay(pageTime)`), `Uint8Array`, `posts()`.
-- The M39p quiet test needed no edit: its allowed-calls assertion runs without `--detach-inspector`. The detach tests are in the new `scripts/lib/device-walk-attribution.test.mjs` (9 tests, `pnpm test unit -t "device-walk attribution"`).
+- The M39p quiet test needed no edit: its allowed-calls assertion runs without `--detach-inspector`. The detach tests are in the new `scripts/lib/device-walk-attribution.test.mjs` (7 tests, `pnpm test unit -t "device-walk attribution"`).
 
 **Red at base** (new tests against the base agent and loop): `page.A.task is not a function`; `actual value must be number or bigint, received "undefined"`; `expected 256 to be 2048`; `page.A.heartbeat is not a function`; `expected [ 'rotate' ] to deeply equal [ 'native', 'web' ]`.
 
