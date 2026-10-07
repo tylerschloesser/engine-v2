@@ -117,7 +117,8 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 39u | `39u-low-power-left-on.md` | M16-low-power never asks for Low Power Mode off and the iOS cleanup's 4 s step times out, so the rest of an iPhone round runs at 30 Hz (finding 8, round `m39r-iphone`, 2026-10-06) | 39t | |
 | [x] | 39v | `39v-iphone-gap-attribution.md` | finding 5 is still open on the iPhone after M39p (round `m39r-iphone`): per-gap attribution in the rAF recorder and a `--detach-inspector` drive mode, so the orchestrator can run the three-way comparison before any fix (diagnosed 2026-10-06, low confidence) | 39u | |
 | [x] | 39w | `39w-driven-round-exits.md` | a driven round waits on its pending judge sheets and held the iPhone ~10 h overnight (`m39v-ios-attached-1`, 2026-10-07): exit once every item is walked, leave sheets for `--judge` | 39v | |
-| [ ] | 39s | `39s-sim-tick-tail.md` | the large-save `sim_tick` tail (Pixel p50 7.9 / p95 23.2 ms; desktop 4.6 / 5.6): per-tick series first, then fix the engine cause or stop with it measured (finding 2 follow-up, 2026-10-06) | 39w | Q18 |
+| [ ] | 39x | `39x-tools-suite.md` | `unit` is at 2.9 of its 3 s, mostly the device-walk tool's tests: give them their own `tools` suite (ADR amending 0020 §3) (ledger row, 2026-10-07) | 39w | |
+| [ ] | 39s | `39s-sim-tick-tail.md` | the large-save `sim_tick` tail (Pixel p50 7.9 / p95 23.2 ms; desktop 4.6 / 5.6): per-tick series first, then fix the engine cause or stop with it measured (finding 2 follow-up, 2026-10-06) | 39x | Q18 |
 | [ ] | 39 | `39-acceptance.md` | coverage + budget audit, full device checklist, Phase 3 exit | all above | D |
 | [ ] | 39b | `39b-phase-4-handoff.md` | capture what code cannot say in ADRs, `PROMPT.md` for Phase 4. **Phase 3 complete.** | 39 | |
 
