@@ -194,32 +194,56 @@
         if (!off) return null
       }
       const p50Normal = A.rafStats().p50
-      const f60 = await act('flick', {})
-      const seen = await ask(item, {
-        text: 'Turn Low Power Mode on (Settings, Battery), then come back to this page.',
-        detect: { 'low power detected': low },
-        settleMs: 1000,
-      })
-      if (!seen) return { ready: true, lowPower: { detected: false, p50Normal }, final: readings() }
-      const p50Low = A.rafStats().p50
-      const f30 = await act('flick', {})
-      return {
-        ready: true,
-        lowPower: {
-          detected: true,
-          p50Normal,
-          p50Low,
-          tiles60: f60.tiles,
-          tiles30: f30.tiles,
-          release60: f60.releaseVx,
-          release30: f30.releaseVx,
-          spacing60: f60.spacingMaxMs,
-          spacing30: f30.spacingMaxMs,
-          releaseRatio: f60.releaseVx ? +(f30.releaseVx / f60.releaseVx).toFixed(3) : null,
-          distanceRatio: f60.tiles > 0 ? +(f30.tiles / f60.tiles).toFixed(3) : null,
-        },
-        final: readings(),
-        errors: errors(),
+      // Whatever happens from here on (a throw, a prompt nobody answered), the phone is asked to leave Low Power
+      // Mode before the item ends: it stays on for every later item otherwise (M39u, finding 8 of m39r-iphone).
+      let asked = false
+      let result = null
+      try {
+        const f60 = await act('flick', {})
+        asked = true
+        const seen = await ask(item, {
+          text: 'Turn Low Power Mode on (Settings, Battery), then come back to this page.',
+          detect: { 'low power detected': low },
+          settleMs: 1000,
+        })
+        if (!seen) {
+          result = { ready: true, lowPower: { detected: false, p50Normal }, final: readings() }
+          return result
+        }
+        const p50Low = A.rafStats().p50
+        const f30 = await act('flick', {})
+        result = {
+          ready: true,
+          lowPower: {
+            detected: true,
+            p50Normal,
+            p50Low,
+            tiles60: f60.tiles,
+            tiles30: f30.tiles,
+            release60: f60.releaseVx,
+            release30: f30.releaseVx,
+            spacing60: f60.spacingMaxMs,
+            spacing30: f30.spacingMaxMs,
+            releaseRatio: f60.releaseVx ? +(f30.releaseVx / f60.releaseVx).toFixed(3) : null,
+            distanceRatio: f60.tiles > 0 ? +(f30.tiles / f60.tiles).toFixed(3) : null,
+          },
+          final: readings(),
+          errors: errors(),
+        }
+        return result
+      } finally {
+        if (asked) {
+          let restored = false
+          try {
+            restored = !!(await ask(item, {
+              text: 'Low Power Mode looks on. Turn it off (Settings, Battery), then come back to this page.',
+              detect: { normal },
+              settleMs: 1000,
+            }))
+          } catch {}
+          // A fact for the next items' numbers, never a criterion.
+          if (result) result.lowPower.low_power_restored = restored
+        }
       }
     },
   }
