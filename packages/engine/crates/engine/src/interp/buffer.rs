@@ -259,11 +259,19 @@ impl<K: Ord + Copy> InterpBuffer<K> {
                 if k == 0 { a.pos.x } else { a.pos.y } as f64,
                 if k == 0 { b.pos.x } else { b.pos.y } as f64,
             );
-            // Monotone Hermite (Fritsch-Carlson): |h v| <= 3 |delta| per end, so a long rest
-            // segment cannot overshoot (or undershoot) its own endpoints.
-            let lim = 3.0 * (p1 - p0).abs();
-            let clamp = |v: f64| (v * h).clamp(-lim, lim) / h;
-            let (v0, v1) = (clamp(a.vel[k] as f64), clamp(b.vel[k] as f64));
+            // Monotone Hermite (Fritsch-Carlson), for a *stale* segment only: one longer than the
+            // extrapolation cap, i.e. a gap in which the key was treated as held. There a tangent
+            // scaled by the whole gap (`h * v`) overshoots its endpoints (a rest-to-walk start drew a
+            // tile behind), so |h v| <= 3 |delta| per end. A segment at the relay interval (100 ms; one
+            // or two lost relays is 200-300 ms, still about the cap) keeps the plain Hermite -- even
+            // with delta = 0 -- so ordinary motion is unchanged (docs/plan/39ab Deviations).
+            let (v0, v1) = if h * 1000.0 > EXTRAPOLATION_CAP_MS {
+                let lim = 3.0 * (p1 - p0).abs();
+                let clamp = |v: f64| (v * h).clamp(-lim, lim) / h;
+                (clamp(a.vel[k] as f64), clamp(b.vel[k] as f64))
+            } else {
+                (a.vel[k] as f64, b.vel[k] as f64)
+            };
             let p = h00 * p0 + h10 * h * v0 + h01 * p1 + h11 * h * v1;
             let dp = (d00 * p0 + d10 * h * v0 + d01 * p1 + d11 * h * v1) / h;
             pos[k] = round(p);
@@ -425,6 +433,48 @@ mod tests {
                 + (-2.0 * u3 + 3.0 * u2) * x_at(t1)
                 + (u3 - u2) * h * v;
             assert_eq!(got, want.round() as i32, "t {t}");
+            t += 0.1;
+        }
+    }
+
+    #[test]
+    fn interp_zero_delta_mid_walk_is_unchanged() {
+        // 10 Hz walk at 4 tiles/s with one sample that did not move (a stall: delta = 0, velocity
+        // still 4): a 100 ms segment is not stale, so it is drawn exactly as the plain Hermite.
+        let mut b = buf();
+        let k = pl(1);
+        let v = (4.0 * T) as i32;
+        let xs = [0, 102, 204, 204, 307, 409];
+        for (i, x) in xs.iter().enumerate() {
+            b.push(k, i as f64 * 2.0, p(*x, 0), [v, 0]);
+        }
+        let mut t = 6.05; // inside the flat segment [4, 6)
+        while t < 8.0 {
+            let got = b.sample(k, t).unwrap().pos.x;
+            let (t0, t1) = (6.0, 8.0);
+            let (p0, p1) = (204.0, 307.0);
+            let h = 2.0 / HZ as f64;
+            let u: f64 = (t - t0) / (t1 - t0);
+            let (u2, u3) = (u * u, u * u * u);
+            let want = (2.0 * u3 - 3.0 * u2 + 1.0) * p0
+                + (u3 - 2.0 * u2 + u) * h * v as f64
+                + (-2.0 * u3 + 3.0 * u2) * p1
+                + (u3 - u2) * h * v as f64;
+            assert_eq!(got, want.round() as i32, "t {t}");
+            t += 0.1;
+        }
+        // The flat segment itself [4, 6): same check, delta = 0.
+        let mut t = 4.05;
+        while t < 6.0 {
+            let got = b.sample(k, t).unwrap().pos.x;
+            let h = 2.0 / HZ as f64;
+            let u: f64 = (t - 4.0) / 2.0;
+            let (u2, u3) = (u * u, u * u * u);
+            let want = (2.0 * u3 - 3.0 * u2 + 1.0) * 204.0
+                + (u3 - 2.0 * u2 + u) * h * v as f64
+                + (-2.0 * u3 + 3.0 * u2) * 204.0
+                + (u3 - u2) * h * v as f64;
+            assert_eq!(got, want.round() as i32, "flat t {t}");
             t += 0.1;
         }
     }
