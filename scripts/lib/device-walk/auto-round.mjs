@@ -50,6 +50,9 @@ export function pageFor(entry, rung, params = {}) {
     : entry.plan.page
   let page = withRung(base, entry.plan.ladder?.[rung - 1])
   if (entry.plan.collector === 'memory' && params.probeS) page += `&probeS=${params.probeS}`
+  // Tests only (M39t): the slice page's memory-reading interval, to delay the first `engine_mem_grows`.
+  if (entry.plan.collector === 'slice' && params.memEveryMs)
+    page += `&memEveryMs=${params.memEveryMs}`
   // Tests only: the bench page's `scale=n` divides the large save (64: a 1/64 world a headless engine plays).
   if (entry.plan.collector === 'bench' && params.benchScale) page += `&scale=${params.benchScale}`
   return page

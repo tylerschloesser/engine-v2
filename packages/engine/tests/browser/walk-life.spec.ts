@@ -106,6 +106,22 @@ test('walk-life: coexist (a window with scripted pan and paints), background (tw
   }
 })
 
+test('walk-life: coexist: a memory reading that arrives after the window would have ended is waited for @slow @webkit-gpu', async ({
+  page,
+}) => {
+  test.setTimeout(180_000)
+  // M39t: the page's first `engine_mem_grows` comes 6 s in, the window is 3 s: the old collector sampled
+  // only nulls (`max-known` of nothing is null, which fails).
+  const r = await start(['M16-coexist'], { windowMs: 3000, warmupMs: 0, memEveryMs: 6000 }, 16500)
+  try {
+    await r.phone(page, { timeoutMs: 170_000 })
+    const co = finalOf(r, 'M16-coexist')
+    expect(crit(co, 'engine_mem_grows')).toMatchObject({ value: 0, ok: true })
+  } finally {
+    await r.stop()
+  }
+})
+
 type Rig = Awaited<ReturnType<typeof start>>
 
 /** The fake person of the world checks: every prompt the five of them can show. */

@@ -484,6 +484,8 @@ window.__tick = authoritativeTick
 // the rest of the HUD, each reading its own brief park/resume pair, the same cost
 // `connected-paced.ts`'s real-time page already accepts for a parked-only reading.
 let memGrows: Record<string, number> = {}
+// Test only (M39t): `?memEveryMs=6000` delays the first reading past a short walk window. Default 3000.
+const memEveryMs = Math.max(100, Number(params.get('memEveryMs')) || 3000)
 async function refreshMemGrows(): Promise<void> {
   if (!workersReady) return
   await parkWorkers(client)
@@ -492,7 +494,7 @@ async function refreshMemGrows(): Promise<void> {
 }
 setInterval(() => {
   refreshMemGrows().catch(() => {})
-}, 3000)
+}, memEveryMs)
 
 // --- HUD text -------------------------------------------------------------------------------
 function memGrowsText(): string {
