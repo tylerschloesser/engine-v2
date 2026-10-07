@@ -618,6 +618,105 @@ describe('device-walk drive: a phone that went silent', () => {
   })
 })
 
+describe('device-walk drive: the watchdog and a driven leave (M39y, Pixel)', () => {
+  const rig = (extra = []) => {
+    const dir = mkdtempSync(join(tmpdir(), 'drive-'))
+    const file = join(dir, 'r.jsonl')
+    for (const e of [
+      { type: 'start', only: null, mode: 'auto' },
+      { type: 'walk', phase: 'start' },
+      { type: 'attempt', id: 'M09b-fill-rate', n: 1, variant: 'fixture', page: 'p', rung: 0 },
+      ...extra,
+    ])
+      appendEvent(file, e)
+    return { dir, file, b: createFakeBackend({ pages: { autolock: { runner: false } } }) }
+  }
+  const start = (r, o) => {
+    let done = false
+    const d = startDrive({
+      backend: r.b,
+      person: o.person,
+      file: r.file,
+      ids: ['M09b-fill-rate'],
+      joinUrl: 'http://127.0.0.1:1/__walk/runner.html?walk=t',
+      seriesDir: r.dir,
+      append: (e) => appendEvent(r.file, e),
+      settle: () => {},
+      isDone: () => done,
+      pollMs: 5,
+      ...o.drive,
+    })
+    return {
+      d,
+      stop: async () => {
+        done = true
+        await d.stop()
+      },
+    }
+  }
+
+  test('device-walk drive: a long leave act resets the idle clock: the page is not reopened when the handler returns', async () => {
+    const r = rig([
+      {
+        type: 'prompt',
+        id: 'M09b-fill-rate',
+        n: 1,
+        kind: 'act',
+        text: 'Drop 1 of 3 (app-5min): Switch to another app for 2 seconds.',
+      },
+    ])
+    const t0 = Date.now()
+    // The leave lasts about 0.4 s of real time (sleeps run at a fifth), far over idleMs; the page pings nothing meanwhile.
+    const person = devicePerson(r.b, {
+      returnLagMs: 0,
+      sleep: (ms) => new Promise((res) => setTimeout(res, ms / 5)),
+    })
+    const { d, stop } = start(r, { person, drive: { idleMs: 150, lastSeen: () => t0 } })
+    await d.ready
+    await until(() =>
+      readEvents(r.file).some((e) => e.type === 'drive' && e.handler === 'leave-app'),
+    )
+    await pause(80) // less than idleMs after the handler returned
+    await stop()
+    expect(Date.now() - t0).toBeGreaterThan(150)
+    expect(readEvents(r.file).filter((e) => e.action === 'reopened')).toHaveLength(0)
+    expect(r.b.calls.filter((c) => c.m === 'open')).toHaveLength(1)
+  })
+
+  test('device-walk drive: a prompt the reopened page shows again is answered again', async () => {
+    const r = rig([
+      {
+        type: 'prompt',
+        id: 'M09b-fill-rate',
+        n: 1,
+        kind: 'act',
+        text: 'Rotate the phone to landscape.',
+      },
+    ])
+    let seen = Date.now()
+    const { d, stop } = start(r, {
+      person: person(r.b),
+      drive: { idleMs: 40, lastSeen: () => seen },
+    })
+    await d.ready
+    await until(() => readEvents(r.file).some((e) => e.type === 'drive'))
+    seen = Date.now() - 10_000 // the page went quiet: the watchdog reopens it
+    await until(() => readEvents(r.file).some((e) => e.action === 'reopened'))
+    seen = Date.now() // the new document is heard from, and shows the same prompt
+    appendEvent(r.file, {
+      type: 'prompt',
+      id: 'M09b-fill-rate',
+      n: 1,
+      kind: 'act',
+      text: 'Rotate the phone to landscape.',
+    })
+    await until(() => r.b.calls.filter((c) => c.m === 'rotate').length >= 2)
+    await pause(30)
+    await stop()
+    expect(r.b.calls.filter((c) => c.m === 'rotate')).toHaveLength(2)
+  })
+})
+
 describe('device-walk drive: a resumed round does not answer twice', () => {
   const P = (kind, text, extra = {}) => ({
     type: 'prompt',

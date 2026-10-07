@@ -28,6 +28,9 @@ export function openWindow(events, now, graceMs) {
   return null
 }
 
+/** Handlers that take the page away from the network or the foreground on purpose (`person.mjs` names). */
+const LEAVE_HANDLERS = new Set(['leave-app', 'background', 'airplane'])
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 const RUNNER = `(() => {
@@ -134,6 +137,7 @@ export function startDrive(o) {
   person.ctx.passRunner = () => passRunner(backend, { log, joinUrl })
   person.ctx.shotPath = (p, suffix = '') => join(seriesDir, `${p.id}-${p.n}-judge${suffix}.png`)
 
+  let leftAt = 0
   const note = (e) => append({ type: 'drive', ...e })
 
   async function onPrompt(p, events) {
@@ -145,6 +149,9 @@ export function startDrive(o) {
     // one on resume would be of whatever page the phone shows then (the runner, in `m39j-full-android`).
     if (answeredInLog(events, p)) return
     const out = await person.answer(p)
+    // A handler that sent the page away on purpose (app switch, background, airplane) has it silent for as long as
+    // it ran: the idle clock starts when it returns, so a 300 s absence never trips the watchdog (M39y, Pixel).
+    if (LEAVE_HANDLERS.has(out.handler)) leftAt = Date.now()
     // DRIVE_SHOTS=<dir>: a screenshot after every answered act prompt (a debugging aid: a prompt is never open in a window).
     if (process.env.DRIVE_SHOTS && p.kind === 'act')
       await backend
@@ -204,9 +211,18 @@ export function startDrive(o) {
   async function watchdog() {
     const seen = o.lastSeen?.() ?? 0
     const now = Date.now()
-    if (!seen || now - seen < idleMs || now - reopenedAt < idleMs || reopened >= 3) return
+    if (
+      !seen ||
+      now - seen < idleMs ||
+      now - Math.max(reopenedAt, leftAt) < idleMs ||
+      reopened >= 3
+    )
+      return
     reopened++
     reopenedAt = now
+    // The new document shows its open prompt again (a restarted item asks "Drop 1 of 3" afresh): answered again,
+    // not eaten by the dedup. `answeredInLog` still keeps a prompt the log shows as answered from a second answer.
+    handled.clear()
     log(
       `drive: the phone has been silent for ${Math.round((now - seen) / 1000)} s: opening the join URL again (${reopened} of 3)`,
     )
