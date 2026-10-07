@@ -39,4 +39,11 @@ The ADR; any skill or `CLAUDE.md` line naming the suite for device-walk tests.
 None.
 
 ## Deviations
-(filled in during Phase 3)
+- **Moved files:** the 35 `scripts/lib/device-walk*.test.mjs` files only (`device-walk-app` ... `device-walk-warm`; 244 tests). No other test imports `scripts/lib/device-walk/`; `scripts/lib/device-walk/` holds no test files. The tests import `../acceptance-check.mjs`, two `packages/engine/src/camera` files, `walk-preview-plugin.ts` and `games/reference/tests/helpers/script.ts`, none a gate tool.
+- **Config:** `unit` gets `exclude: ['**/node_modules/**', 'scripts/lib/device-walk*.test.mjs']` (setting `exclude` replaces Vitest's default, so node_modules is restated); new project `tools` includes the same glob. `suites.mjs` row: `{ name: 'tools', kind: 'vitest', tiers: ['fast','slow'], budgetMs: 4_000 }`, placed after `unit`.
+- **Counts:** before `unit` 646 tests 2.9 s (3 s budget). After `unit` 402 tests 1.4-1.5 s; `tools` 244 tests 2.3-2.4 s. 402 + 244 = 646. `pnpm test tools -t device-walk`: 244 tests 2.4 s/4 s. `pnpm test:slow tools`: `tools pass 0 tests 0.8s` (no `@slow` test in these files; the row runs, nothing to run).
+- **5 timing runs of `pnpm test tools`** (foreground, load average 1 min beside each): 2.4 s (5.92), 2.3 (6.89), 2.3 (6.91), 2.3 (6.31), 2.3 (5.88). Median 2.3 s x 1.5 = 3.45 s, rounded up: 4 s.
+- **ADR:** `docs/decisions/0054-tools-suite.md` (amends 0020 §3; 0020's Status line got `Amended by 0054`). Not touched, for the orchestrator: the `PLAN.md` "Plan-level decisions" line, the `PRE-PLAN.md` §1 ADR index row, and the ADR range (0001-0053) in the root `CLAUDE.md` context-map row.
+- **Existing test changed (additively):** `scripts/lib/repo-config.test.mjs` pins the fast-tier budget table with `toEqual`; adding the row required adding `tools: 4_000` to it. Nothing loosened; the 51 s total is unchanged (`tools` is not `first`, and 4 s is under the 10 s concurrent maximum).
+- **Handoff:** `pnpm handoff`'s check reads `rust unit wasm browser` and not `netcode`; it needs no `tools=` key, no script change. The orchestrator updates `unit=646` to `unit=402` in the `PROMPT.md` marker.
+- **Docs updated:** `packages/engine/CLAUDE.md` (the `pnpm test unit` line), `.claude/skills/run-tests/SKILL.md` (the `-t` example paragraph). No other doc or skill named `unit` for device-walk tests (grep of `-t device-walk`).
