@@ -12,6 +12,9 @@ import { finger, NotDrivable } from './backend.mjs'
 /** Below this clearance (CSS px) from every button box, a ring cannot be tapped without Chrome Android snapping to a button. */
 export const MIN_RING_CLEARANCE_PX = 12
 
+/** A tap point keeps this far from the walk's own bar (its own sheet takes the tap, not the page). */
+const COVER_MARGIN_PX = 8
+
 const boxGap = (x, y, b) =>
   Math.hypot(Math.max(b.left - x, 0, x - b.right), Math.max(b.top - y, 0, y - b.bottom))
 
@@ -21,9 +24,12 @@ const boxGap = (x, y, b) =>
  * centre. Throws `NotDrivable` when even the best point is under `MIN_RING_CLEARANCE_PX` from a box.
  * @returns {{ x: number, y: number, clearance: number }}
  */
-export function chooseRingTap(ring, boxes, minClear = MIN_RING_CLEARANCE_PX) {
+export function chooseRingTap(ring, boxes, minClear = MIN_RING_CLEARANCE_PX, covers = []) {
+  const free = (x, y) => covers.every((b) => boxGap(x, y, b) >= COVER_MARGIN_PX)
   const clear = (x, y) => boxes.reduce((m, b) => Math.min(m, boxGap(x, y, b)), Infinity)
-  let best = { x: ring.x, y: ring.y, clearance: clear(ring.x, ring.y) }
+  let best = free(ring.x, ring.y)
+    ? { x: ring.x, y: ring.y, clearance: clear(ring.x, ring.y) }
+    : null
   for (const [f, n] of [
     [0.45, 12],
     [0.85, 24],
@@ -32,9 +38,11 @@ export function chooseRingTap(ring, boxes, minClear = MIN_RING_CLEARANCE_PX) {
       const a = (2 * Math.PI * i) / n
       const x = ring.x + ring.r * f * Math.cos(a)
       const y = ring.y + ring.r * f * Math.sin(a)
+      if (!free(x, y)) continue
       const c = clear(x, y)
-      if (c > best.clearance + 1e-9) best = { x, y, clearance: c }
+      if (!best || c > best.clearance + 1e-9) best = { x, y, clearance: c }
     }
+  if (!best) throw new NotDrivable('ring is under the walk bar or another element at this zoom')
   if (best.clearance < minClear)
     throw new NotDrivable(
       `ring too close to a button at this zoom (best clearance ${best.clearance.toFixed(1)} px, need ${minClear})`,
@@ -215,9 +223,12 @@ export const HANDLERS = [
             if (q.width > 0 && q.height > 0)
               boxes.push({ left: q.left, top: q.top, right: q.right, bottom: q.bottom })
           }
-          return { r: Number(document.getElementById('walk-ring')?.dataset.r) || 0, boxes }
+          const bar = document.getElementById('walk-bar')?.getBoundingClientRect()
+          const covers = bar && bar.height > 0 ? [{ left: bar.left, top: bar.top, right: bar.right, bottom: bar.bottom }] : []
+          return { r: Number(document.getElementById('walk-ring')?.dataset.r) || 0, boxes, covers }
         })()`)
-        if (near?.r > 0) ({ x, y } = chooseRingTap({ x, y, r: near.r }, near.boxes))
+        if (near?.r > 0)
+          ({ x, y } = chooseRingTap({ x, y, r: near.r }, near.boxes, undefined, near.covers ?? []))
       }
       await backend.tap(x, y)
     },

@@ -51,11 +51,29 @@ export const toScreen = (cal, x, y) => ({
  * Each kind's chin is learned once from one swallowed tap (`chin`); the toolbar hiding on a page that
  * scrolls is then followed by `innerHeight` alone.
  */
-export const offsetsFor = (m, chin) => ({
-  offX: m.outerWidth - m.innerWidth - (m.rightInset ?? 0),
+export const offsetsFor = (m, chin, xBias = 0) => ({
+  offX: m.outerWidth - m.innerWidth - (m.rightInset ?? 0) + xBias,
   offY: m.outerHeight - m.innerHeight - chin,
   dpr: m.dpr,
 })
+
+/**
+ * What one swallowed calibration tap teaches: it was sent at physical (`px`, `py`) and the page saw it at client
+ * (`hit.x`, `hit.y`). The y gives the chin (the page's offset below the window's top); the x gives the page's
+ * offset itself. The formula `outerWidth - innerWidth` is 1 css px on the Pixel 5 where the tap proved the page
+ * is 4 px the other way (every pointerdown of the M39r rounds landed about 5 px right of the aim), so the x is
+ * measured, not derived.
+ */
+export const calibrationFrom = (m, hit, px, py) => {
+  const offY = py / m.dpr - hit.y
+  const offX = px / m.dpr - hit.x
+  // `xBias`: how far the measured offset is from the formula's, carried to the other orientation (a cutout there).
+  return {
+    chin: m.outerHeight - m.innerHeight - offY,
+    offX,
+    xBias: offX - (m.outerWidth - m.innerWidth - (m.rightInset ?? 0)),
+  }
+}
 
 /** The CDP touch events of two fingers moving in `steps` equal steps (`Input.dispatchTouchEvent` payloads). */
 export function touchScript(fingers, steps) {
@@ -103,6 +121,7 @@ export function createAndroidBackend(o = {}) {
     reversed: [],
     tab: null,
     origins: new Set(),
+    xBias: {}, // by page kind: measured x offset minus the formula's
     chin: {}, // by page kind: `cover` (viewport-fit=cover: drawn under the navigation bar) or `plain`
     saved: null,
     airplaneOn: false,
@@ -229,8 +248,10 @@ export function createAndroidBackend(o = {}) {
     })
     if (!hit) throw new Error('android: the calibration tap did not reach the page')
     // The tap was at (px, py) physical = (px/dpr, py/dpr) CSS in screen space; client = screen - offset.
+    const cal = calibrationFrom(m, hit, px, py)
     const offY = py / m.dpr - hit.y
-    st.chin[m.kind] = m.outerHeight - m.innerHeight - offY
+    st.chin[m.kind] = cal.chin
+    st.xBias[m.kind] = cal.xBias
     log(
       `android: calibrated a ${m.kind} page, chin ${st.chin[m.kind].toFixed(1)} css px, page offset y ${offY.toFixed(1)}, x ${(px / m.dpr - hit.x).toFixed(1)}`,
     )
@@ -242,7 +263,7 @@ export function createAndroidBackend(o = {}) {
       await learnChin()
       m = await measure()
     }
-    return offsetsFor(m, st.chin[m.kind])
+    return offsetsFor(m, st.chin[m.kind], st.xBias[m.kind])
   }
 
   const api = {

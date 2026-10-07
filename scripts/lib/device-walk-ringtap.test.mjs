@@ -2,6 +2,7 @@
 // <button> onto it: measured on the Pixel 5, a pointerdown 9 px under a button's edge targeted the button), and a
 // layout with no such point is NotDrivable at once, not a five-minute wait.
 import { describe, expect, test } from 'vitest'
+import { calibrationFrom, offsetsFor, toScreen } from './device-walk/drive/android.mjs'
 import { createFakeBackend } from './device-walk/drive/fake-backend.mjs'
 import { chooseRingTap, devicePerson } from './device-walk/drive/person.mjs'
 
@@ -78,5 +79,64 @@ describe("device-walk ring tap: the driver's own placement is not where the offs
         )
       }
     expect(worst).toBeLessThanOrEqual(0.5 / cal.dpr + 1e-9)
+  })
+})
+
+describe('device-walk ring tap: the page x offset is measured by the calibration tap (M39r Pixel rounds)', () => {
+  // The Pixel 5 measure: inner 392 x 745, outer 393 x 851, dpr 2.75. The pointerdown of every tap landed at
+  // x 201.45 for an aim of 196.38 (formula offset 1 css px): the page's true x offset there is -4.0 css px.
+  const m = { innerWidth: 392, innerHeight: 745, outerWidth: 393, outerHeight: 851, dpr: 2.75 }
+  const TRUE = { x: -4.0, y: 105.45 } // client = physical / dpr - TRUE
+  const lands = (s) => ({ x: s.x / m.dpr - TRUE.x, y: s.y / m.dpr - TRUE.y })
+
+  test('device-walk ring tap: an aim at (196.38, 344.64) lands within 0.2 px once the calibration tap has taught the x offset', () => {
+    const px = Math.round((m.outerWidth * m.dpr) / 2)
+    const py = Math.round((m.outerHeight * m.dpr) / 2)
+    const hit = lands({ x: px, y: py })
+    const cal = calibrationFrom(m, hit, px, py)
+    const got = lands(toScreen(offsetsFor(m, cal.chin, cal.xBias), 196.38, 344.64))
+    expect(Math.abs(got.x - 196.38)).toBeLessThan(0.2)
+    expect(Math.abs(got.y - 344.64)).toBeLessThan(0.2)
+    // The formula alone (what the rounds ran) lands 4 px right of the aim.
+    const old = lands(toScreen(offsetsFor(m, cal.chin), 196.38, 344.64))
+    expect(old.x - 196.38).toBeGreaterThan(4)
+  })
+
+  test('device-walk ring tap: the learned x bias follows the page to the other orientation (the formula still carries a cutout)', () => {
+    const cal = calibrationFrom(m, { x: 200.36, y: 313 }, 540, 1170)
+    const land = { ...m, innerWidth: 800, innerHeight: 392, outerWidth: 851, outerHeight: 393 }
+    expect(offsetsFor(land, 0.5, cal.xBias).offX).toBeCloseTo(851 - 800 - 4 - 1, 1)
+  })
+})
+
+describe('device-walk ring tap: the walk bar is not tapped (M39r Pixel round: ring 36 at 12 tiles landed on the bar)', () => {
+  // Ring 36 at 12 tiles across a 392 x 745 page: centre (196.89, 617.83), pick radius 0.6 x 62 = 37 px.
+  const big = { x: 196.89, y: 617.83, r: 37.2 }
+  const bar = { left: 0, top: 655, right: 392, bottom: 745 }
+  const lifted = box(190, 538, 14, 14)
+
+  async function tapWith(covers) {
+    const b = createFakeBackend({
+      pages: {
+        '#walk-ring': { x: big.x, y: big.y },
+        [KEY]: { r: big.r, boxes: [lifted], covers },
+      },
+    })
+    const out = await devicePerson(b).answer(PROMPT)
+    return { out, tap: b.calls.find((c) => c.m === 'tap')?.args }
+  }
+
+  test('device-walk ring tap: the chosen point stays 8 px clear of the bar even when the farthest point from the button is under it', async () => {
+    const { out, tap } = await tapWith([bar])
+    expect(out.status).toBe('done')
+    expect(gap({ x: tap[0], y: tap[1] }, bar)).toBeGreaterThanOrEqual(8)
+    expect(gap({ x: tap[0], y: tap[1] }, lifted)).toBeGreaterThanOrEqual(12)
+  })
+
+  test('device-walk ring tap: a ring wholly under the bar is NotDrivable at once, no tap', async () => {
+    const { out, tap } = await tapWith([{ left: 0, top: 500, right: 392, bottom: 745 }])
+    expect(out.status).toBe('notDrivable')
+    expect(out.reason).toMatch(/under the walk bar/)
+    expect(tap).toBeUndefined()
   })
 })

@@ -397,6 +397,9 @@
   }
   const unhighlight = () => document.getElementById('walk-ring')?.remove()
 
+  /** The walk bar's room at the bottom of the page while it asks (the sheet is about 90 px at a phone's width). */
+  const BAR_RESERVE_PX = 170
+
   const ANCHORS = {
     /**
      * M18-anchors and its fill-rate sibling's anchor half: per orientation, a stretch with the scripted pan
@@ -470,6 +473,7 @@
       })
       const levels = item.plan.levels || [40, 20, 12]
       const taps = []
+      const skipped = []
       let misses = 0
       const L = tapLog()
       for (let z = 0; z < levels.length; z++) {
@@ -478,8 +482,17 @@
         const cands = []
         for (let id = 1; id <= 50; id++) {
           const s = await act('ringScreen', { pickId: id })
-          if (s.visible)
-            cands.push({ id, s, d: Math.hypot(s.x - innerWidth / 2, s.tapY - innerHeight / 2) })
+          if (!s.visible) continue
+          // A ring is asked for only when a finger can reach it: the canvas is what is at its centre, and the
+          // walk's own prompt bar (fixed at the bottom while it asks) is clear of its tappable disc (M39r: a tap
+          // on ring 36 at 12 tiles landed on the bar).
+          const reach = 0.85 * 0.6 * pxPerTile(readings())
+          const top = document.elementFromPoint(s.x, s.tapY)
+          if (s.tapY + reach > innerHeight - BAR_RESERVE_PX || (top && top.tagName !== 'CANVAS')) {
+            skipped.push({ id, zoom: levels[z], under: top ? top.tagName : null })
+            continue
+          }
+          cands.push({ id, s, d: Math.hypot(s.x - innerWidth / 2, s.tapY - innerHeight / 2) })
         }
         cands.sort((a, b) => a.d - b.d)
         // Rings are 3 tiles apart: three that are not neighbours of each other give no ambiguity.
@@ -547,7 +560,7 @@
       }
       return {
         ready: true,
-        pick: { misses, taps, buttonChanged, buttonTested: !!target },
+        pick: { misses, taps, skipped, buttonChanged, buttonTested: !!target },
         final: readings(),
         errors: errors(),
       }

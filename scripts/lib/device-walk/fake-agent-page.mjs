@@ -82,6 +82,7 @@ export function createFakePage(o = {}) {
     querySelector: () => null,
     querySelectorAll: () => o.buttons ?? [],
     getElementById: () => null,
+    elementFromPoint: (x, y) => (o.elementAt ? o.elementAt(x, y) : { tagName: 'CANVAS' }),
   }
   const search = o.search ?? '?walk=tok&run=r1&tab=t1'
   const location = {

@@ -101,3 +101,52 @@ describe('device-walk tap ring: the evidence says where a tap landed', () => {
     expect(got[23].x).toBe(39)
   })
 })
+
+describe('device-walk tap ring: only rings a finger can reach are asked for', () => {
+  test('device-walk tap ring: a ring whose centre is under another element, or whose disc reaches the bar zone, is skipped and recorded, never asked', async () => {
+    const st = { taps: 0, pick_id: 0 }
+    const at = { 26: [197, 106], 16: [197, 300], 25: [100, 400], 36: [197, 700] }
+    const asked = []
+    const page = createFakePage({
+      load: ['collect-touch.js'],
+      elementAt: (x, y) => (x === 197 && y === 300 ? { tagName: 'DIV' } : { tagName: 'CANVAS' }),
+      check: {
+        ready: true,
+        errors: () => [],
+        readings: () => ({ ...st, tiles_across: 12, orientation: 'portrait' }),
+        act: {
+          zoomTo: () => ({}),
+          ringScreen: ({ pickId }) =>
+            at[pickId]
+              ? { visible: true, x: at[pickId][0], tapY: at[pickId][1] }
+              : { visible: false },
+          ringPhase: (a) => {
+            if (a?.pickId) asked.push(a.pickId)
+            return {}
+          },
+          buttonScreen: () => null,
+        },
+      },
+    })
+    await page.connect()
+    const run = page.kit.collectors.anchors({
+      id: 'M18-pick',
+      n: 1,
+      plan: { mode: 'pick', levels: [12] },
+      opts: { timeoutMs: 1000, actTimeoutMs: 8000 },
+    })
+    await page.advance(1000)
+    for (const id of [26, 25]) {
+      st.taps++
+      st.pick_id = id
+      await page.advance(1500)
+    }
+    await page.advance(3000)
+    const out = await run
+    expect(asked.sort()).toEqual([25, 26])
+    expect(out.pick.skipped.map((s) => [s.id, s.under])).toEqual([
+      [16, 'DIV'],
+      [36, 'CANVAS'],
+    ])
+  })
+})
