@@ -1,6 +1,6 @@
 # M39x: the device-walk tool's tests get their own suite
 
-Status: not started · After: 39w · Tyler-dependent: no
+Status: done (2026-10-07) · After: 39w · Tyler-dependent: no
 
 ## Goal
 `unit` runs first and has a 3 s budget (ADR 0020 §3). At M39w's done gate it ran 646 tests in 2.9 s, against 1.3 s at M37 (ledger row of 2026-10-07). Most of the growth is the device-walk tool's tests (`scripts/lib/device-walk*.test.mjs`, about 244 tests, M39e-M39w). These test Mac-side tooling, not the engine or the game. When this is done they run in a separate suite with its own budget, `unit` is back near its M37 time, and no test is lost.
@@ -24,10 +24,10 @@ Speeding up any test; any other suite's budget; Q16.
 `vitest.config.ts`, `scripts/suites.mjs`, possibly `scripts/lib/handoff*.mjs` and its test, `.claude/skills/*` or `CLAUDE.md` files that name the suite for these tests, a new ADR.
 
 ## Exit criteria
-- [ ] `unit` + `tools` counts equal the old `unit` count (pasted).
-- [ ] `tools` budget derived from 5 measured runs (pasted); the new ADR exists.
-- [ ] `pnpm test unit` is back under 2 s (pasted line).
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] `unit` + `tools` counts equal the old `unit` count (pasted).
+- [x] `tools` budget derived from 5 measured runs (pasted); the new ADR exists.
+- [x] `pnpm test unit` is back under 2 s (pasted line).
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test unit` · `pnpm test tools` · `pnpm test tools -t device-walk` (foreground).
@@ -47,3 +47,4 @@ None.
 - **Existing test changed (additively):** `scripts/lib/repo-config.test.mjs` pins the fast-tier budget table with `toEqual`; adding the row required adding `tools: 4_000` to it. Nothing loosened; the 51 s total is unchanged (`tools` is not `first`, and 4 s is under the 10 s concurrent maximum).
 - **Handoff:** `pnpm handoff`'s check reads `rust unit wasm browser` and not `netcode`; it needs no `tools=` key, no script change. The orchestrator updates `unit=646` to `unit=402` in the `PROMPT.md` marker.
 - **Docs updated:** `packages/engine/CLAUDE.md` (the `pnpm test unit` line), `.claude/skills/run-tests/SKILL.md` (the `-t` example paragraph). No other doc or skill named `unit` for device-walk tests (grep of `-t device-walk`).
+- **Gate (orchestrator):** the `repo-config.test.mjs` budget-table addition (`tools: 4_000`) is accepted: a table-pinning test has to gain the row, and nothing was loosened. Bookkeeping by the orchestrator: the `PLAN.md` plan-level line, the root `CLAUDE.md` ADR range (0001-0054), and the `handoff:ground` marker (`unit=402`). `PRE-PLAN.md` §1 indexes Phase 1 ADRs only, so it is not touched.
