@@ -259,7 +259,11 @@ impl<K: Ord + Copy> InterpBuffer<K> {
                 if k == 0 { a.pos.x } else { a.pos.y } as f64,
                 if k == 0 { b.pos.x } else { b.pos.y } as f64,
             );
-            let (v0, v1) = (a.vel[k] as f64, b.vel[k] as f64);
+            // Monotone Hermite (Fritsch-Carlson): |h v| <= 3 |delta| per end, so a long rest
+            // segment cannot overshoot (or undershoot) its own endpoints.
+            let lim = 3.0 * (p1 - p0).abs();
+            let clamp = |v: f64| (v * h).clamp(-lim, lim) / h;
+            let (v0, v1) = (clamp(a.vel[k] as f64), clamp(b.vel[k] as f64));
             let p = h00 * p0 + h10 * h * v0 + h01 * p1 + h11 * h * v1;
             let dp = (d00 * p0 + d10 * h * v0 + d01 * p1 + d11 * h * v1) / h;
             pos[k] = round(p);
@@ -373,6 +377,56 @@ mod tests {
         // Before the oldest sample: clamped, still Interp.
         let early = b.sample(k, -3.0).unwrap();
         assert_eq!((early.pos.x, early.mode), (0, InterpMode::Interp));
+    }
+
+    #[test]
+    fn interp_rest_then_walk_never_draws_behind() {
+        let mut b = buf();
+        let k = pl(1);
+        let rest = (0.52 * T) as i32;
+        b.push(k, 0.0, p(rest, 0), [0, 0]);
+        // 60 ticks (3 s) later the first walking sample: barely moved, 4 tiles/s.
+        b.push(
+            k,
+            60.0,
+            p(rest + (0.1 * T) as i32, 0),
+            [(4.0 * T) as i32, 0],
+        );
+        let mut prev = rest;
+        let mut t = 0.0;
+        while t < 60.0 {
+            let x = b.sample(k, t).unwrap().pos.x;
+            assert!(x >= rest, "t {t}: x {x} behind rest {rest}");
+            assert!(x >= prev, "t {t}: x {x} stepped back from {prev}");
+            prev = x;
+            t += 0.1;
+        }
+    }
+
+    #[test]
+    fn interp_ordinary_walk_matches_unclamped_hermite() {
+        // 10 Hz relay (2 ticks) at 4 tiles/s: |h v| = 0.4 tile <= 3 |delta| = 1.2, no clamp.
+        let mut b = buf();
+        let k = pl(1);
+        line(&mut b, k, 5, 2.0);
+        let mut t = 0.1;
+        while t < 8.0 {
+            let got = b.sample(k, t).unwrap().pos.x;
+            // The unclamped cubic Hermite on the bracketing pair, computed independently.
+            let i = (t / 2.0).floor();
+            let (t0, t1) = (i * 2.0, i * 2.0 + 2.0);
+            let x_at = |tt: f64| (4.0 * T * tt / HZ as f64) as i32 as f64;
+            let v = 4.0 * T;
+            let h = (t1 - t0) / HZ as f64;
+            let u = (t - t0) / (t1 - t0);
+            let (u2, u3) = (u * u, u * u * u);
+            let want = (2.0 * u3 - 3.0 * u2 + 1.0) * x_at(t0)
+                + (u3 - 2.0 * u2 + u) * h * v
+                + (-2.0 * u3 + 3.0 * u2) * x_at(t1)
+                + (u3 - u2) * h * v;
+            assert_eq!(got, want.round() as i32, "t {t}");
+            t += 0.1;
+        }
     }
 
     #[test]
