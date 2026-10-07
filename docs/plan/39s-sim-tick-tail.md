@@ -1,6 +1,6 @@
 # M39s: The large-save tick has no tail
 
-Status: not started · After: 39r · Tyler-dependent: Q18 (default: the iPhone 12 is the baseline phone; the Pixel 5 is informational)
+Status: done (2026-10-07; stopped at step 3) · After: 39r · Tyler-dependent: Q18 (default: the iPhone 12 is the baseline phone; the Pixel 5 is informational)
 
 ## Goal
 M39o split the large-save pass and ran it on the Pixel 5 (`docs/plan/39o-large-save-tick-breakdown.md` Deviations). The pass median is 9.29 ms, already under the 10 ms ceiling of ADR 0010. The failure is a **tail inside `sim_tick`**: p50 7.89 ms against p95 23.2 ms (2.9x). On desktop Chromium the same build gives 4.57 against 5.56 (1.2x). The frame build (p95 3.8 ms), seal and resync are small, and there are no catch-up ticks. Desktop time per furnace is flat across `&scale=` 1, 4 and 16, so steady compute scales linearly; the tail is something else. Candidates (guesses, in no order): (a) periodic heavy ticks from the timer structure (a hierarchical wheel cascading a level every N ticks), or furnace completions bunched by a common start time; (b) the sim worker scheduled onto a little core of the Pixel's big.LITTLE CPU for some ticks; (c) wasm memory growth or a `BTreeMap` rebalance burst. The iPhone 12 (12.2 ms p95, M39j) has not been measured per part yet: its passcode blocks the driver.
@@ -26,10 +26,10 @@ Rules: `.claude/rules/determinism.md` (any change in sim or timer code must keep
 `packages/engine/src/worker/sim.ts` and `server.ts` (the ring), `games/reference/src/{bench.ts,bench-stats.ts,check.ts}` and tests, `scripts/lib/device-walk/{checks.mjs,agent/collect-ref.js}` and tests; for the fix, the engine crate's timer or store module, or the reference sim's furnace system (name it in Deviations).
 
 ## Exit criteria
-- [ ] The per-tick series and summary exist (bench build only); the periodicity unit test was seen red.
-- [ ] The desktop characterisation and the cause are in Deviations.
-- [ ] Either the fix lands with the before/after scale-1 per-tick evidence on the spike ticks and unchanged goldens, or the report stops at step 3 with the measured cause.
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The per-tick series and summary exist (bench build only); the periodicity unit test was seen red.
+- [x] The desktop characterisation and the cause are in Deviations.
+- [x] Either the fix lands with the before/after scale-1 per-tick evidence on the spike ticks and unchanged goldens, or the report stops at step 3 with the measured cause.
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test unit -t bench` · `pnpm test rust -t tick` · `pnpm test wasm` · `pnpm test:slow browser -t "large-save|bench"` (targeted, foreground).
@@ -64,3 +64,4 @@ From the full ring of run 1 (and run 2 agrees; analysis script outside the repo)
 2. **Proposal, not built: a per-system breakdown for the median.** Native 1.26 ms vs wasm 3.9 ms on desktop is a 3x gap the engine can attack (the iPhone needs the median down by about 20 %): time the phases inside `sim_tick` in the wasm (due-timer drain, `advance`, `put_entity` and store apply, wake list) with a counter pair per phase read from the bench build only, as `CB_SIM_ONETICK_US` is. It touches the engine crate and the sim worker, and a phase counter must never feed state (determinism rule).
 3. Not done: the fix (step 4), by the step 3 stop. No golden or determinism hash was touched; no engine, sim or timer code was changed, so `pnpm test rust`/`wasm` were not run.
 4. Verification run: `pnpm test unit -t bench meter` 6 pass; `pnpm test tools -t device-walk` 244 pass; `pnpm test:slow browser -t "large-save|bench"` **3 pass 78 s** (the walk-ref M39-large-save at 1/64 reads the new readings through the collector; it does not assert `tick_series`). `tsc --noEmit -p games/reference` clean. The slow build step printed `WARN 18s/10s` on this loaded host (reference-bench 6.9 s).
+- **Gate (orchestrator):** `pnpm test` green (unit 406, tools 244 in 6.9 s of 9, browser 256 in 45 s), lint clean incl. `tsc`; no golden changed. Stopped at step 3 under its own rule: there are no periodic engine spikes (the timer is a `BTreeMap`, so nothing cascades; native is flat at p50 1.26 / p95 1.41 ms). The cause is narrowed, not named. The large-save tick in browser wasm is about 3x native (desktop p50 3.9-4.0 ms) as a wide body with a slow wander about 2 s long, and the phones' numbers have the same shape. Split: **M39y** measures where wasm-in-browser spends the 3x (per-phase bench counters, worker against Node wasm against native) before any fix. Not verified: the walk-ref test does not assert `tick_series` in the evidence (the phone round shows it).
