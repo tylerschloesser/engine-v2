@@ -13,7 +13,13 @@ import type { Scheduler } from 'engine/render'
 import { RingConsumer, type RingStats, systemScheduler } from 'engine/render'
 import { type BenchProbe, benchProbe, parkWorkers, resumeWorkers } from 'engine/test'
 import { type BenchRequest, furnaceBlock } from './bench-request.js'
-import { createPartStats, createTickRing, Rolling, type TickSummary } from './bench-stats.js'
+import {
+  createPartStats,
+  createPhaseStats,
+  createTickRing,
+  Rolling,
+  type TickSummary,
+} from './bench-stats.js'
 import type { StartedGame } from './game.js'
 import { DEFAULT_WORLD, type Host } from './mode.js'
 
@@ -59,6 +65,8 @@ export type BenchHud = {
   catchupTicksPer10s: number
   /** docs/plan/39s: the last 4,096 `sim_tick` durations, summarised. */
   tickSeries: TickSummary
+  /** docs/plan/39y: p50/p95 ms per `sim_tick` phase (all 0 unless the module is a `bench-phases` build). */
+  phases: Record<string, [number, number]>
   framesRendered: number
   records: number
   dropped: number
@@ -119,6 +127,7 @@ export function createBenchMeter(): BenchMeter {
   const frame = new Rolling()
   const parts = createPartStats()
   const ticks = createTickRing()
+  const phases = createPhaseStats()
   let game: StartedGame | undefined
   let probe: BenchProbe | undefined
   let request: BenchRequest | undefined
@@ -193,6 +202,7 @@ export function createBenchMeter(): BenchMeter {
         catchupTicks: probe.catchupTicks(),
       })
       ticks.push(tn, probe.simTickUs())
+      phases.push(t, probe.phaseUs)
     }
     const draws = game.renderer.drawCalls()
     const upload = game.real.loop.uploadBytes()
@@ -223,6 +233,7 @@ export function createBenchMeter(): BenchMeter {
       resyncP95Ms: pr.resyncP95Ms,
       catchupTicksPer10s: pr.catchupTicksPer10s,
       tickSeries: ticks.summary(),
+      phases: phases.readings(),
       framesRendered: frames,
       records: g.drawables.drawables.recordCount(),
       dropped: g.drawables.drawables.drawListDropped(),

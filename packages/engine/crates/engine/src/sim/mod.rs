@@ -263,14 +263,19 @@ impl<G: Game> Sim<G> {
         // The fixed point (0007 §7; docs/plan/21b-timers-wakeups-and-tickcx.md Scope): swap the
         // wake queue at the start of `G::tick`, compact every active list's tombstones and drop
         // whatever the wake queue's `now` list still holds at the end of it.
+        use crate::bench_phase::{Phase as Bp, mark};
+        mark(Bp::Records);
         on_phase(Phase::Tick, 0);
         self.authority.begin_tick();
+        mark(Bp::BeginTick);
         {
             let mut cx = TickCx::new(&mut self.authority);
             G::tick(&mut cx);
         }
+        mark(Bp::GameTick);
         self.authority.end_tick();
         self.authority.advance_tick();
+        mark(Bp::EndTick);
     }
 
     pub fn tick(&self) -> Tick {

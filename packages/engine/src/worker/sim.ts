@@ -27,13 +27,14 @@ import { systemClock, systemScheduler } from '../clock.js'
 import { MAGIC, parseBuildHash32 } from '../host/handshake.js'
 import { Persistence, WorldLoadError } from '../host/persistence.js'
 import { loadSessionTable } from '../host/sessions.js'
-import { EngineTrap } from '../loader.js'
+import { EngineTrap, setBenchMarkHook } from '../loader.js'
 import { RingConnection } from '../ring-connection.js'
 import {
   CB_FORCE_SNAPSHOT_REQ,
   CB_SIM_CATCHUP,
   CB_SIM_FRAME_US,
   CB_SIM_ONETICK_US,
+  CB_SIM_PHASE0,
   CB_SIM_RESYNC_US,
   CB_SIM_SEAL_US,
   CB_SIM_STEP_REQ,
@@ -45,6 +46,7 @@ import {
   PROFILE_SEAL,
   PROFILE_SLOTS,
   PROFILE_TICK,
+  SIM_PHASES,
   W_ACK,
   WORKER_CLIENT,
   workerWord,
@@ -610,6 +612,16 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // docs/plan/39o: the parts of the timed pass (`SimHost.profile`), preallocated once.
   const profile = timing ? new Int32Array(PROFILE_SLOTS) : null
   if (profile) simHost.profile = profile
+  // docs/plan/39y: `engine.bench_mark(phase)` of a `bench-phases` module attributes the time since
+  // the previous call to `phase`; slot `SIM_PHASES` holds that previous call's time. Preallocated.
+  const phaseMs = timing ? new Float64Array(SIM_PHASES + 1) : null
+  if (phaseMs) {
+    setBenchMarkHook((id) => {
+      const t = systemClock.now()
+      if (id !== 0) phaseMs[id] = (phaseMs[id] as number) + t - (phaseMs[SIM_PHASES] as number)
+      phaseMs[SIM_PHASES] = t
+    })
+  }
 
   function body(wokenBy: number): void {
     if (fatalSeen) {
@@ -650,6 +662,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
         // stored before `CB_SIM_TICKS_RUN` so main never reads a count ahead of its duration.
         const ticksBefore = simHost.counters.ticksRun
         profile?.fill(0)
+        phaseMs?.fill(0, 0, SIM_PHASES)
         const t0 = systemClock.now()
         if (wokenBy === lastWokenBy) atomicsTimer.poll()
         else atomicsTimer.interrupt()
@@ -661,6 +674,10 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
             Atomics.store(w, CB_SIM_FRAME_US, profile[PROFILE_FRAME] as number)
             Atomics.store(w, CB_SIM_RESYNC_US, profile[PROFILE_RESYNC] as number)
             Atomics.store(w, CB_SIM_CATCHUP, profile[PROFILE_CATCHUP] as number)
+            if (phaseMs) {
+              for (let i = 1; i < SIM_PHASES; i++)
+                Atomics.store(w, CB_SIM_PHASE0 + i, Math.round((phaseMs[i] as number) * 1000))
+            }
           }
           Atomics.store(
             shell.control.words,

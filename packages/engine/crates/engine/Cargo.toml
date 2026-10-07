@@ -19,6 +19,9 @@ testing = []
 # byte-mask diff of every entity put would have sent (`host/measure_diff.rs`). Measurement only: no
 # `buildGame` call and no shipped `.wasm` turns it on, and the host sends the same bytes with it.
 measure-diff = []
+# M39y (docs/plan/39y-wasm-tick-cost.md): per-phase `sim_tick` timing (`bench_phase.rs`); in a `.wasm` it adds
+# the output-only import `engine.bench_mark`. Bench builds only: nothing shipped turns it on.
+bench-phases = []
 
 # Policy and the exact allowed list: docs/decisions/0017 §7 (checked by scripts/lib/crate-policy.test.mjs).
 [dependencies]

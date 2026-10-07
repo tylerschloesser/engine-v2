@@ -101,6 +101,17 @@ export class EngineTrap extends Error {
   }
 }
 
+/**
+ * docs/plan/39y-wasm-tick-cost.md: the receiver of `engine.bench_mark(phase)`, the one import a
+ * module built with cargo feature `bench-phases` has beyond `panic` and `log` (bench builds only;
+ * a shipped module has no such import). The hook reads a host clock and attributes the time since
+ * its previous call to `phase`; it must not allocate. `null` (the default) makes every call a no-op.
+ */
+let benchMarkHook: ((phase: number) => void) | null = null
+export function setBenchMarkHook(hook: ((phase: number) => void) | null): void {
+  benchMarkHook = hook
+}
+
 const decoder = new TextDecoder()
 const encoder = new TextEncoder()
 
@@ -155,6 +166,7 @@ class Instance implements EngineInstance {
           onPanic(this.panicMessage)
         },
         log: (level: number, ptr: number, len: number) => onLog(level as LogLevel, text(ptr, len)),
+        bench_mark: (phase: number) => benchMarkHook?.(phase),
       },
     })
     this.role = role

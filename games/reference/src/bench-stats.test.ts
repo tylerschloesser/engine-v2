@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { createPartStats, createTickRing, Rolling, WINDOW_MS } from './bench-stats.js'
+import {
+  createPartStats,
+  createPhaseStats,
+  createTickRing,
+  PHASE_NAMES,
+  PHASE_SAMPLE_EVERY,
+  Rolling,
+  WINDOW_MS,
+} from './bench-stats.js'
 
 describe('bench meter: per-part statistics', () => {
   it('p50 and p95 per part are exact over a window of synthetic samples', () => {
@@ -120,5 +128,26 @@ describe('bench meter: per-tick series', () => {
     expect(ring.series()[0]).toEqual([12, 8600])
     // 8.6 ms falls in [8.5, 9): bucket index 17.
     expect(s.counts[17]).toBe(8)
+  })
+})
+
+describe('bench meter: per-phase statistics', () => {
+  it('scales the sampled phases, takes one mark overhead out of each, and leaves the others', () => {
+    const stats = createPhaseStats()
+    const id = (n: string) => PHASE_NAMES.indexOf(n)
+    for (let i = 0; i < 100; i++) {
+      stats.push(i * 50, (p) => {
+        if (p === id('changes')) return 100 // us, every tick
+        if (p === id('drain')) return 60 // sampled: 50 us of work plus 10 of mark overhead
+        if (p === id('overhead')) return 10
+        return 0
+      })
+    }
+    const r = stats.readings()
+    expect(r.changes).toEqual([0.1, 0.1])
+    // (60 - 10) us times the sampling factor, in ms.
+    expect(r.drain).toEqual([+((50 * PHASE_SAMPLE_EVERY) / 1000).toFixed(4), 0.8])
+    expect(r.overhead).toEqual([0.16, 0.16])
+    expect(r.begin_tick).toEqual([0, 0])
   })
 })

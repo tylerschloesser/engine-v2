@@ -747,8 +747,11 @@ impl<'a, G: Game> TickCx<'a, G> {
     /// Pops the earliest entity whose timer is now due (`tick <= self.tick()`), in key order, or
     /// `None` if the wheel is empty or its earliest entry is not yet due.
     pub fn next_due(&mut self) -> Option<EntityId> {
+        use crate::bench_phase::{Phase, drain_enter, sampled};
+        drain_enter();
         let now = self.authority.tick;
         let id = self.authority.store.timer_next_due(now);
+        sampled(Phase::Drain);
         if id.is_some() {
             self.authority.bump_visited();
         }
@@ -763,7 +766,10 @@ impl<'a, G: Game> TickCx<'a, G> {
 
     /// Sets `id`'s one timer (0007 §7: at most one per entity), replacing any existing one.
     pub fn wake_at(&mut self, id: EntityId, at: Tick) {
+        use crate::bench_phase::{Phase, sampled};
+        sampled(Phase::Advance);
         self.authority.store.timer_wake_at(id, at);
+        sampled(Phase::WakeAt);
     }
 
     /// Removes `id`'s timer, if any.
@@ -834,7 +840,10 @@ impl<G: Game> WorldWrite<G> for TickCx<'_, G> {
         self.authority.do_spawn(e, false)
     }
     fn put_entity(&mut self, id: EntityId, e: G::Entity) {
+        use crate::bench_phase::{Phase, sampled};
+        sampled(Phase::Advance);
         self.authority.do_put_entity(id, e, false);
+        sampled(Phase::Put);
     }
     fn despawn(&mut self, id: EntityId) {
         self.authority.do_despawn(id);

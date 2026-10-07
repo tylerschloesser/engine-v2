@@ -5,6 +5,7 @@
 
 pub mod abi;
 pub mod authority;
+pub mod bench_phase;
 pub mod budget;
 pub mod bytes;
 pub mod client;

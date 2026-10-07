@@ -247,6 +247,8 @@ export function installCheck(game: StartedGame, bench?: BenchApi): void {
         tick_period_r: +h.tickSeries.periodR.toFixed(3),
         tick_series_n: h.tickSeries.n,
         tick_missed: h.tickSeries.missed,
+        // docs/plan/39y: `[p50, p95]` ms by `sim_tick` phase (sampled ones scaled; zeros off a bench-phases build).
+        sim_phases_ms: h.phases,
         main_p95_ms: +h.mainP95Ms.toFixed(3),
         frame_p95_ms: +h.frameP95Ms.toFixed(3),
         bench_frames: h.framesRendered,

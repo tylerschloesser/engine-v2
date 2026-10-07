@@ -91,6 +91,63 @@ export function createPartStats(): {
   }
 }
 
+// docs/plan/39y-wasm-tick-cost.md: `sim_tick` split by phase (`bench_phase.rs`'s `Phase`, bench builds
+// only). Ids 1-7 are timed on every tick; 8-12 are a 1-in-`PHASE_SAMPLE_EVERY` sample of the furnaces
+// inside `game_tick`, so their sums are scaled by it. Slot 8 (`skip`) is the unsampled remainder.
+export const PHASE_NAMES: readonly string[] = [
+  'start',
+  'records',
+  'begin_tick',
+  'game_tick',
+  'end_tick',
+  'changes',
+  'results',
+  'subs',
+  'skip',
+  'drain',
+  'advance',
+  'wake_at',
+  'put',
+  'overhead',
+]
+export const PHASE_SAMPLE_EVERY = 16
+const FIRST_SAMPLED_PHASE = 9
+const OVERHEAD_PHASE = 13
+
+/** Per-phase p50/p95 over the last `WINDOW_MS`: `ms[name] = [p50, p95]`, scaled for the sampled ones. */
+export function createPhaseStats(): {
+  push(t: number, us: (id: number) => number): void
+  readings(): Record<string, [number, number]>
+} {
+  const rolling = PHASE_NAMES.map(() => new Rolling())
+  return {
+    push(t, us) {
+      for (let i = 1; i < PHASE_NAMES.length; i++) (rolling[i] as Rolling).push(t, us(i) / 1000)
+    },
+    readings() {
+      const out: Record<string, [number, number]> = {}
+      const over = rolling[OVERHEAD_PHASE] as Rolling
+      for (let i = 1; i < OVERHEAD_PHASE; i++) {
+        const r = rolling[i] as Rolling
+        const sampled = i >= FIRST_SAMPLED_PHASE
+        const k = sampled ? PHASE_SAMPLE_EVERY : 1
+        // A sampled sub-phase includes one `mark`'s own cost; take it out (never below 0).
+        const o50 = sampled ? over.quantile(0.5) : 0
+        const o95 = sampled ? over.quantile(0.95) : 0
+        out[PHASE_NAMES[i] as string] = [
+          +(Math.max(0, r.quantile(0.5) - o50) * k).toFixed(4),
+          +(Math.max(0, r.quantile(0.95) - o95) * k).toFixed(4),
+        ]
+      }
+      out.overhead = [
+        +(over.quantile(0.5) * PHASE_SAMPLE_EVERY).toFixed(4),
+        +(over.quantile(0.95) * PHASE_SAMPLE_EVERY).toFixed(4),
+      ]
+      return out
+    },
+  }
+}
+
 // docs/plan/39s-sim-tick-tail.md: the per-tick series. `sim_tick` is timed in the sim worker for
 // the paced tick of each pass and published through the control block (`CB_SIM_ONETICK_US`); the
 // bench meter reads it once per rAF whenever the tick number moved and keeps the last `TICK_RING`

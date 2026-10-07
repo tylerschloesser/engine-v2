@@ -16,6 +16,7 @@ import {
   CB_SIM_CATCHUP,
   CB_SIM_FRAME_US,
   CB_SIM_ONETICK_US,
+  CB_SIM_PHASE0,
   CB_SIM_RESYNC_US,
   CB_SIM_SEAL_US,
   CB_SIM_STEP_REQ,
@@ -1090,6 +1091,8 @@ export type BenchProbe = {
   /** 0 when the pass ran no resync. */
   resyncUs(): number
   catchupTicks(): number
+  /** docs/plan/39y: whole microseconds `sim_tick` spent in phase `id` (1-13), 0 outside a `bench-phases` build. */
+  phaseUs(id: number): number
   /** `engine_mem_grows` of the sim worker (`W_MEM_GROWS`); the client worker's is `clientGrows`. */
   simGrows(): number
   clientGrows(): number
@@ -1109,6 +1112,7 @@ export function benchProbe(client: Client): BenchProbe {
     frameBuildUs: () => Atomics.load(w, CB_SIM_FRAME_US),
     resyncUs: () => Atomics.load(w, CB_SIM_RESYNC_US),
     catchupTicks: () => Atomics.load(w, CB_SIM_CATCHUP),
+    phaseUs: (id) => Atomics.load(w, CB_SIM_PHASE0 + id),
     simGrows: () => Atomics.load(w, host),
     clientGrows: () => Atomics.load(w, cli),
   }

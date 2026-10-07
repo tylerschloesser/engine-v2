@@ -14,7 +14,7 @@
 // global words *after* the existing per-worker region: `WORKER_BASE`/`WORKER_STRIDE`/`MAX_WORKERS`
 // are unchanged, so every existing `workerWord(...)` address (and `control.workerWord addressing`'s
 // own pinned literals, `control.test.ts`) is untouched -- only the block's own total size grows.
-export const CONTROL_BLOCK_INT32S = 74
+export const CONTROL_BLOCK_INT32S = 74 + 14
 export const CONTROL_BLOCK_BYTES = CONTROL_BLOCK_INT32S * 4
 
 // Global words (indices 0-7, all now used as of `CB_FORCE_SNAPSHOT_REQ` below).
@@ -128,6 +128,14 @@ export const CB_SIM_ONETICK_US = 70
 export const CB_SIM_FRAME_US = 71
 export const CB_SIM_RESYNC_US = 72
 export const CB_SIM_CATCHUP = 73
+
+/**
+ * docs/plan/39y-wasm-tick-cost.md: the phases of that `sim_tick` (`bench_phase.rs`'s `Phase`, ids 1-13;
+ * word `CB_SIM_PHASE0 + id`), whole microseconds, written beside `CB_SIM_ONETICK_US` under
+ * `test.timing`. Zero unless the module was built with cargo feature `bench-phases` (the bench build).
+ */
+export const CB_SIM_PHASE0 = 74
+export const SIM_PHASES = 14
 
 /** Slots of `SimHost.profile` (`server.ts`), in the order of the control words above. */
 export const PROFILE_SEAL = 0

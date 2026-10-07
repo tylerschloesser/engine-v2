@@ -1726,6 +1726,8 @@ impl<G: Game> Host<G> {
     /// re-evaluated every tick, not only on a fresh uplink, so hysteresis advances in ticks exactly
     /// as Planning decisions requires even when uplinks arrive less than once a tick).
     pub fn tick(&mut self) {
+        use crate::bench_phase::{Phase, mark};
+        mark(Phase::Start);
         self.scratch_snapshot_len.clear();
         let progress_ptr = self.progress_ptr;
         let Host {
@@ -1770,11 +1772,13 @@ impl<G: Game> Host<G> {
                 }
             }
         }
+        mark(Phase::Changes);
         for (who, outcome) in scratch_action_players.drain(..).zip(outcomes.drain(..)) {
             if let Some(slot) = conns.iter_mut().flatten().find(|s| s.player == who) {
                 slot.pending_results.push(outcome);
             }
         }
+        mark(Phase::Results);
         for slot in conns.iter_mut().flatten() {
             if let Some(held) = slot.pace.take_held_camera(completed.0) {
                 slot.camera = Some(held);
@@ -1783,6 +1787,7 @@ impl<G: Game> Host<G> {
                 slot.subs.update(camera, completed);
             }
         }
+        mark(Phase::Subs);
     }
 
     /// Closes out the tick every connection's `build_frame` has now read from: clears the
