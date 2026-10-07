@@ -66,7 +66,14 @@ export function createFakePage(o = {}) {
     readyState: 'complete',
     addEventListener,
     createElement: () => {
-      const el = { style: {}, append() {}, remove() {}, isConnected: true, querySelector: () => el }
+      const el = {
+        style: {},
+        dataset: {},
+        append() {},
+        remove() {},
+        isConnected: true,
+        querySelector: () => el,
+      }
       el.attachShadow = () => el
       return el
     },
@@ -106,6 +113,11 @@ export function createFakePage(o = {}) {
     self: w,
     innerWidth: w.innerWidth,
     innerHeight: w.innerHeight,
+    outerWidth: w.innerWidth,
+    outerHeight: w.innerHeight,
+    devicePixelRatio: w.devicePixelRatio,
+    scrollX: 0,
+    scrollY: 0,
     document,
     location,
     history: { state: null, replaceState() {} },

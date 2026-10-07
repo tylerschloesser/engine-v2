@@ -171,7 +171,8 @@
     if (K.tapLogger) return K.tapLogger
     const N = 24
     const slots = []
-    for (let i = 0; i < N; i++) slots.push({ type: '', tag: '', id: '', x: 0, y: 0, pt: '', t: 0 })
+    for (let i = 0; i < N; i++)
+      slots.push({ type: '', tag: '', id: '', x: 0, y: 0, sx: 0, sy: 0, pt: '', t: 0 })
     const st = { n: 0 }
     const opt = { capture: true, passive: true }
     const rec = (e) => {
@@ -182,6 +183,8 @@
       s.id = t && t.id ? t.id : ''
       s.x = e.clientX
       s.y = e.clientY
+      s.sx = e.screenX
+      s.sy = e.screenY
       s.pt = e.pointerType || ''
       s.t = Math.round(e.timeStamp)
       st.n++
@@ -196,12 +199,24 @@
     K.tapLogger = st
     return st
   }
+  /** The window and visual viewport (CSS px), once per tap: what an OS-touch offset could be made of. */
+  function viewInfo() {
+    const v = window.visualViewport
+    return {
+      inner: [innerWidth, innerHeight],
+      outer: [outerWidth, outerHeight],
+      dpr: devicePixelRatio,
+      vv: v ? [v.offsetLeft, v.offsetTop, v.scale] : null,
+      scroll: [scrollX, scrollY],
+    }
+  }
   /** The box of the nearest `<button>` to a client point, or null (the neighbour a touch adjustment snaps to). */
   function nearestButton(x, y) {
     let best = null
     let bd = Infinity
     for (const b of document.querySelectorAll('button')) {
       const q = b.getBoundingClientRect()
+      if (q.width === 0) continue // display: none
       const d = Math.hypot(
         Math.max(q.left - x, 0, x - q.right),
         Math.max(q.top - y, 0, y - q.bottom),
@@ -367,7 +382,7 @@
 
   // --- M18 ----------------------------------------------------------------------------------------
   /** A ring drawn over the canvas where a tap must land (pointer-events none: it never takes a tap). */
-  function highlight(x, y) {
+  function highlight(x, y, pickRadiusPx) {
     let el = document.getElementById('walk-ring')
     if (!el) {
       el = document.createElement('div')
@@ -376,6 +391,7 @@
         'position:fixed;width:44px;height:44px;margin:-22px 0 0 -22px;border:4px solid #f0f;border-radius:50%;pointer-events:none;z-index:2147483646;box-shadow:0 0 0 2px #fff'
       document.body.append(el)
     }
+    el.dataset.r = pickRadiusPx ? String(pickRadiusPx) : '' // the ring's pick radius: the driver stays inside it
     el.style.left = `${x}px`
     el.style.top = `${y}px`
   }
@@ -477,14 +493,18 @@
             zoom: levels[z],
             x: c.s.x,
             y: c.s.tapY,
-            button: nearestButton(c.s.x, c.s.tapY),
+            button: null,
+            view: viewInfo(),
           }
-          highlight(c.s.x, c.s.tapY)
+          await act('ringPhase', { pickId: c.id }) // only this ring's button, lifted clear of it (M39r)
+          want.button = nearestButton(c.s.x, c.s.tapY) // the visible one: where it ended up
+          highlight(c.s.x, c.s.tapY, 0.6 * pxPerTile(readings()))
           const seen = await ask(item, {
             text: `Zoom ${z + 1} of ${levels.length}: tap the highlighted ring (${k + 1} of ${chosen.length}).`,
             detect: { tapped: () => readings().taps > before },
           })
           unhighlight()
+          await act('ringPhase')
           if (!seen) return timedOut(L, mark, want, taps)
           await sleep(200)
           const got = readings().pick_id

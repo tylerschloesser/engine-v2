@@ -767,7 +767,17 @@ const RING_ROWS = 5
 const RING_SPACING_TILES = 3
 const ANCHOR_SLOT_COUNT = 4
 const RING_BUTTON_CSS =
-  'width:14px;height:14px;padding:0;font-size:8px;line-height:14px;text-align:center;'
+  'width:14px;height:14px;padding:0;font-size:8px;line-height:14px;text-align:center;margin-top:calc(var(--ring-clear, 0px) * -1);'
+/**
+ * M18-pick's ring phase (M39r): clearance (CSS px) between a ring's top edge and the bottom of its own button.
+ * A tap within about 9 px of a `<button>` is snapped onto it by Chrome Android (probe, Pixel 5), so the ring a
+ * finger is asked to tap must have none near it. At 40 tiles across a 392 px phone the 50 rings sit 29 px apart
+ * with a 12 px ring each: no place in that grid is 24 px from every ring and every button, so the phase mounts
+ * only the target ring's button (the rest are `display: none`, not `pointer-events: none`: nothing is hidden
+ * from a finger that is on the page) and lifts it by this clearance plus the ring's own half-height.
+ */
+const RING_BUTTON_CLEAR_PX = 26
+const RING_PHASE_CSS = 'html[data-ring-phase] .ring-btn:not([data-ring-target]){display:none}'
 
 function ringWorld(pickId: number): { x: number; y: number } {
   const i = pickId - 1
@@ -841,10 +851,14 @@ async function runAnchorsCheck(count: number, mode: 'properties' | 'translate'):
     const pickId = i + 1
     btn.textContent = String(pickId)
     btn.style.cssText = RING_BUTTON_CSS
+    btn.className = 'ring-btn'
     const w = ringWorld(pickId)
     client.overlay.anchor(btn, w.x, w.y)
     ringButtons.push({ pickId, el: btn, wx: w.x, wy: w.y })
   }
+  const phaseStyle = document.createElement('style')
+  phaseStyle.textContent = RING_PHASE_CSS
+  document.head.appendChild(phaseStyle)
   for (let slot = 0; slot < ANCHOR_SLOT_COUNT; slot++) {
     const el = document.createElement('div')
     el.textContent = `●${slot}`
@@ -1071,6 +1085,30 @@ async function runAnchorsCheck(count: number, mode: 'properties' | 'translate'):
         tapY: r.top + sp.y + 0.25 * pxPerTile(client.cameraState, vp),
         visible: sp.x > 12 && sp.y > 12 && sp.x < vp.widthPx - 12 && sp.y < vp.heightPx - 12,
       }
+    },
+    /**
+     * `{pickId}`: the ring phase of M18-pick for that ring (only its button is mounted, lifted clear of the
+     * ring at the current zoom: `RING_BUTTON_CLEAR_PX`); no `pickId` ends the phase (every button back in place).
+     */
+    ringPhase: async (arg) => {
+      const { pickId } = (arg ?? {}) as { pickId?: number }
+      const root = document.documentElement
+      for (const b of ringButtons) {
+        b.el.removeAttribute('data-ring-target')
+        b.el.style.removeProperty('--ring-clear')
+      }
+      if (pickId === undefined) {
+        root.removeAttribute('data-ring-phase')
+        return { clearPx: 0 }
+      }
+      const b = ringButtons.find((x) => x.pickId === pickId)
+      if (!b) return { clearPx: 0 }
+      // The ring's top edge is 0.35 tile above its anchor (centre 0.25 tile under it, radius 0.6).
+      const clearPx = RING_BUTTON_CLEAR_PX + 0.35 * pxPerTile(client.cameraState, cssViewport())
+      b.el.style.setProperty('--ring-clear', `${clearPx}px`)
+      b.el.setAttribute('data-ring-target', '')
+      root.setAttribute('data-ring-phase', '')
+      return { clearPx }
     },
     /** `{pickId}`: the centre of that ring's button (a tap there must never reach the canvas). */
     buttonScreen: async (arg) => {

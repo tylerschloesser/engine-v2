@@ -9,6 +9,39 @@
 // `skip` with that reason, never as a pass.
 import { finger, NotDrivable } from './backend.mjs'
 
+/** Below this clearance (CSS px) from every button box, a ring cannot be tapped without Chrome Android snapping to a button. */
+export const MIN_RING_CLEARANCE_PX = 12
+
+const boxGap = (x, y, b) =>
+  Math.hypot(Math.max(b.left - x, 0, x - b.right), Math.max(b.top - y, 0, y - b.bottom))
+
+/**
+ * The tap point for a ring `{ x, y, r }` (its centre and radius, CSS px) among visible button boxes: the point
+ * inside the ring (within 0.85 r of the centre, so the pick still lands) farthest from every box. No boxes: the
+ * centre. Throws `NotDrivable` when even the best point is under `MIN_RING_CLEARANCE_PX` from a box.
+ * @returns {{ x: number, y: number, clearance: number }}
+ */
+export function chooseRingTap(ring, boxes, minClear = MIN_RING_CLEARANCE_PX) {
+  const clear = (x, y) => boxes.reduce((m, b) => Math.min(m, boxGap(x, y, b)), Infinity)
+  let best = { x: ring.x, y: ring.y, clearance: clear(ring.x, ring.y) }
+  for (const [f, n] of [
+    [0.45, 12],
+    [0.85, 24],
+  ])
+    for (let i = 0; i < n; i++) {
+      const a = (2 * Math.PI * i) / n
+      const x = ring.x + ring.r * f * Math.cos(a)
+      const y = ring.y + ring.r * f * Math.sin(a)
+      const c = clear(x, y)
+      if (c > best.clearance + 1e-9) best = { x, y, clearance: c }
+    }
+  if (best.clearance < minClear)
+    throw new NotDrivable(
+      `ring too close to a button at this zoom (best clearance ${best.clearance.toFixed(1)} px, need ${minClear})`,
+    )
+  return best
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /** Judge sheets whose screenshot needs the page put in view first: one entry per picture. */
@@ -166,30 +199,25 @@ export const HANDLERS = [
   {
     name: 'tap-ring',
     match: /^(Zoom \d+ of \d+: tap the highlighted ring|Tap the highlighted button)/,
-    // The highlight is drawn where the tap must land. A ring sits under its own little button, and a finger's
-    // touch area snaps to the button there (the page's `elementFromPoint` says canvas, the real tap says BUTTON:
-    // found on the Pixel): for a ring the tap goes just under the button's box, which is still on the ring
-    // (measured: 6 px below the anchor picks it, 14 px does not); for the button itself, its centre.
+    // The highlight is drawn where the tap must land. Chrome Android snaps a tap near a `<button>` onto it (M39r
+    // probe on the Pixel 5: the pointerdown 9 px under a button's edge had the BUTTON as its target), so for a ring
+    // the tap goes to the point inside the ring with the most clearance from every visible button box
+    // (`chooseRingTap`), and a layout with none 12 px clear is `NotDrivable` at once. For a button, its centre.
     run: async ({ backend, text }) => {
       const r = await backend.readPage(BY_ID('#walk-ring'))
       if (!r) throw new Error('no highlighted ring on the page')
       let { x, y } = r
       if (/ring/.test(text)) {
-        const btn = await backend.readPage(`(() => {
-          let hit = null
+        const near = await backend.readPage(`(() => {
+          const boxes = []
           for (const b of document.querySelectorAll('button')) {
             const q = b.getBoundingClientRect()
-            if (${x} > q.left - 8 && ${x} < q.right + 8 && ${y} > q.top - 8 && ${y} < q.bottom + 8)
-              hit = { bottom: q.bottom, cx: q.left + q.width / 2 }
+            if (q.width > 0 && q.height > 0)
+              boxes.push({ left: q.left, top: q.top, right: q.right, bottom: q.bottom })
           }
-          return hit
+          return { r: Number(document.getElementById('walk-ring')?.dataset.r) || 0, boxes }
         })()`)
-        // 4 px under the button's box (measured on the Pixel 5 at 40 tiles: 11 px under the ring's anchor picks it,
-        // 9 hits the button, 15 misses the ring).
-        if (btn) {
-          x = btn.cx
-          y = btn.bottom + 4
-        }
+        if (near?.r > 0) ({ x, y } = chooseRingTap({ x, y, r: near.r }, near.boxes))
       }
       await backend.tap(x, y)
     },

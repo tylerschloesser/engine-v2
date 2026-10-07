@@ -287,6 +287,9 @@ export function createAndroidBackend(o = {}) {
     async tap(x, y, { count = 1 } = {}) {
       const cal = await placement()
       const a = toScreen(cal, x, y)
+      log(
+        `android: tap css (${x.toFixed(1)}, ${y.toFixed(1)}) -> screen px (${a.x}, ${a.y}), page offset (${cal.offX.toFixed(2)}, ${cal.offY.toFixed(2)}) css, dpr ${cal.dpr}`,
+      )
       sh(Array.from({ length: count }, () => `input tap ${a.x} ${a.y}`).join('; '))
     },
 
