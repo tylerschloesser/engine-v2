@@ -1,6 +1,6 @@
 # M39v: attribute the iPhone's rAF gaps, and a driver mode with the inspector detached
 
-Status: not started · After: 39u · Tyler-dependent: no
+Status: done (2026-10-06) · After: 39u · Tyler-dependent: no
 
 ## Goal
 Finding 5 is still open after M39p. In round `m39r-iphone`, the iPhone failed M09b-fill-rate and M16-coexist:
@@ -42,10 +42,10 @@ Any limit or criterion; fixing the gaps; heat cool-downs; the three-way phone co
 `scripts/lib/device-walk/agent/*.js` (recorder, `driver.js`), `scripts/lib/device-walk/drive/ios.mjs`, the drive loop (`drive/loop.mjs`) and argument parsing (`auto-main.mjs` or wherever drive flags live), their tests under `scripts/lib/`.
 
 ## Exit criteria
-- [ ] The three unit tests exist, pass, and were seen red (red lines pasted).
-- [ ] Attribution and `inspector` mode appear in an attempt's evidence: a loopback `walk-life` or fake-backend run whose pasted evidence shows them.
-- [ ] `pnpm test:slow browser -t walk-life` green (pasted line); no limit, budget or golden changed.
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The three unit tests exist, pass, and were seen red (red lines pasted).
+- [x] Attribution and `inspector` mode appear in an attempt's evidence: a loopback `walk-life` or fake-backend run whose pasted evidence shows them.
+- [x] `pnpm test:slow browser -t walk-life` green (pasted line); no limit, budget or golden changed.
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test unit -t device-walk` · `pnpm test:slow browser -t walk-life` (targeted, foreground). Loops run in the foreground, bounded, with a per-run kill timeout, and no background load generators. No phone runs.
@@ -68,3 +68,4 @@ After landing, the orchestrator runs M09b-fill-rate and M16-coexist on the iPhon
 **Red at base** (new tests against the base agent and loop): `page.A.task is not a function`; `actual value must be number or bigint, received "undefined"`; `expected 256 to be 2048`; `page.A.heartbeat is not a function`; `expected [ 'rotate' ] to deeply equal [ 'native', 'web' ]`.
 
 **Verification.** `pnpm test unit -t device-walk`: `unit pass 241 tests`. `pnpm test:slow browser -t walk-life`: `browser pass 24 tests 54s`. Loopback `fake-phone-run.mjs M09b-fill-rate chromium` and `M16-coexist` (3 s windows) pass `auto`; `windows[0].gaps` = `{"total":0,"kept":0,"summary":{"withStall":0,"withoutStall":0,"heartbeat":751,"topTasks":[]}}` (a smooth run: about 250 beats a second; a gap with every field is in the unit test). `pnpm lint` and the full `pnpm test` were not run (the orchestrator's gate); `pnpm format` and the commit gate passed. No `[gc]` run: no fixture page changed.
+- **Gate (orchestrator):** `pnpm test` green (unit 643 in 2.7 s of its 3 s, a thin margin to watch; browser 256 in 42 s), lint clean incl. `tsc`. The evidence criterion is ticked on the unit tests plus the loopback heartbeat summary (Chromium had no gaps to attribute); the phone round is the real check. Accepted with two notes. (1) Observer effect: the 4 ms heartbeat runs in every window and has no switch. The control is round `m39r-iphone` (driven, attached, no heartbeat): if the attached leg's M09b over-20 rate is clearly above its 6-7 per 10 s, the heartbeat is suspect before the inspector is. (2) A `MessageChannel` receipt allocates a `MessageEvent` per beat; this is agent code inside windows only, not the engine's per-frame path, so the hot-paths rule is not engaged, but 'allocates nothing per beat' is not literally true.
