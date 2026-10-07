@@ -126,6 +126,7 @@
         return { ready: false, why: notReadyWhy(), errors: errors() }
       let paints = 0
       const m = await measureWindow(item, async (i) => {
+        A.task('paint')
         await act('paint', { x: 50 + (i % 20), y: 50 + (i % 7) })
         paints++
       })
@@ -628,6 +629,7 @@
       let paints = 0
       const m = await measureWindow(item, async () => {
         for (let k = 0; k < 4; k++) {
+          A.task('paint')
           await act('paint', { x: 50 + (paints % 30), y: 50 + (paints % 11) })
           paints++
         }

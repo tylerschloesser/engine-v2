@@ -164,6 +164,7 @@
     persist()
   }
   function flush() {
+    task('post')
     if (quiet()) return // a measuring window sends nothing: the outbox is flushed when it ends (M39p)
     if (ws?.readyState !== 1) return
     for (let i = inflight; i < outbox.length; i++) ws.send(JSON.stringify(outbox[i]))
@@ -366,6 +367,7 @@
     if (!meas.on) return
     meas.on = false
     meas.interrupted = true
+    beatStop()
     rafReset()
     send('attempt', { id: meas.id, n: meas.n, status: 'interrupted', reason: why })
   }
@@ -400,11 +402,73 @@
   // gaps over 20 ms into a second, small one, so a statistic can cover exactly the frames of a time range
   // (the page's own HUD keeps a rolling 600-frame window that still holds the load and the rotation).
   const WN = 2048
-  const GN = 256
+  const GN = 2048 // M39v: gaps over 20 ms kept per window (was 256)
   const wT = new Float64Array(WN) // page time of frame i (the rAF timestamp, `performance.now()` clock)
   const wG = new Float32Array(WN) // the gap before it
   const gT = new Float64Array(GN)
   const gD = new Float32Array(GN)
+  // M39v: what ran before each gap. Per gap: the epoch stamp, the callback's lateness (performance.now() at the callback
+  // minus the rAF timestamp), the longest heartbeat stall in the 100 ms before it, and the last three named tasks in the
+  // 50 ms before it (ids into `taskNames`, 0 none). All preallocated; filled only when a gap is recorded.
+  const gE = new Float64Array(GN)
+  const gL = new Float32Array(GN)
+  const gS = new Float32Array(GN)
+  const gK = new Uint8Array(GN * 3)
+  const STALL_LOOKBACK_MS = 100
+  const TASK_LOOKBACK_MS = 50
+  const HN = 64 // heartbeat ring (about 256 ms at 4 ms)
+  const hT = new Float64Array(HN) // when beat i was received (performance.now())
+  const hS = new Float32Array(HN) // its stall: delivery delay plus how late the timer itself ran
+  const hb = { n: 0, sent: 0, prev: 0, id: 0, posts: 0, ch: null }
+  const TN = 32 // named task ring
+  const tT = new Float64Array(TN)
+  const tI = new Uint8Array(TN)
+  const tk = { n: 0 }
+  const taskNames = [''] // id 0 is none; an id is interned the first time a name is seen
+  const taskIds = {}
+  /** Note that a named task ran now (agent and page code call it at their own work: no allocation after the first use of a name). */
+  function task(name) {
+    let i = taskIds[name]
+    if (i === undefined) {
+      if (taskNames.length > 250) return
+      i = taskNames.length
+      taskNames.push(name)
+      taskIds[name] = i
+    }
+    tT[tk.n & (TN - 1)] = performance.now()
+    tI[tk.n & (TN - 1)] = i
+    tk.n++
+  }
+  // The heartbeat: a 4 ms timer posts to a MessageChannel and the receipt notes how long that took. It exists only
+  // inside a measuring window (`beginMeasure` .. `endMeasure`, or an interrupt) and posts a number: no allocation.
+  function beat() {
+    const t = performance.now()
+    hb.sent = t
+    hb.posts++
+    hb.ch.port2.postMessage(0)
+  }
+  function beatReceived() {
+    const t = performance.now()
+    const late = hb.prev ? Math.max(0, hb.sent - hb.prev - 4) : 0
+    hb.prev = hb.sent
+    hT[hb.n & (HN - 1)] = t
+    hS[hb.n & (HN - 1)] = t - hb.sent + late
+    hb.n++
+  }
+  function beatStart() {
+    if (hb.id || typeof MessageChannel !== 'function') return
+    if (!hb.ch) {
+      hb.ch = new MessageChannel()
+      hb.ch.port1.onmessage = beatReceived
+    }
+    hb.n = hb.prev = 0
+    hb.id = setInterval(beat, 4)
+  }
+  function beatStop() {
+    if (!hb.id) return
+    clearInterval(hb.id)
+    hb.id = 0
+  }
   const scratch = new Float32Array(WN) // human-rate statistics sort here, never in the callback
   const raf = { n: 0, w: 0, g: 0, frames: 0, long25: 0, long50: 0, max: 0, t0: 0 }
   let rafLast = 0
@@ -417,8 +481,24 @@
       wG[raf.w & (WN - 1)] = d
       raf.w++
       if (d > 20) {
-        gT[raf.g & (GN - 1)] = t
-        gD[raf.g & (GN - 1)] = d
+        const g = raf.g & (GN - 1)
+        const now = performance.now()
+        gT[g] = t
+        gD[g] = d
+        gE[g] = Date.now()
+        gL[g] = now - t
+        let stall = 0
+        for (let k = hb.n - 1; k >= 0 && k >= hb.n - HN; k--) {
+          if (hT[k & (HN - 1)] < now - STALL_LOOKBACK_MS) break
+          if (hS[k & (HN - 1)] > stall) stall = hS[k & (HN - 1)]
+        }
+        gS[g] = stall
+        let j = 0
+        for (let k = tk.n - 1; k >= 0 && k >= tk.n - TN && j < 3; k--) {
+          if (tT[k & (TN - 1)] < now - TASK_LOOKBACK_MS) break
+          gK[g * 3 + j++] = tI[k & (TN - 1)]
+        }
+        while (j < 3) gK[g * 3 + j++] = 0
         raf.g++
       }
       raf.frames++
@@ -476,19 +556,48 @@
    */
   function rafGaps() {
     const list = []
-    for (let i = Math.max(0, raf.g - GN); i < raf.g; i++)
-      list.push({ t: +(gT[i & (GN - 1)] - raf.t0).toFixed(1), gap: +gD[i & (GN - 1)].toFixed(1) })
+    let stalled = 0
+    const before = {}
+    for (let i = Math.max(0, raf.g - GN); i < raf.g; i++) {
+      const g = i & (GN - 1)
+      const tasks = []
+      for (let j = 0; j < 3; j++) if (gK[g * 3 + j]) tasks.push(taskNames[gK[g * 3 + j]])
+      const stall = +gS[g].toFixed(1)
+      if (stall > 16) stalled++
+      for (const nm of tasks) before[nm] = (before[nm] || 0) + 1
+      list.push({
+        t: +(gT[g] - raf.t0).toFixed(1),
+        gap: +gD[g].toFixed(1),
+        at: gE[g],
+        late: +gL[g].toFixed(1),
+        stall,
+        tasks,
+      })
+    }
+    const top = Object.keys(before)
+      .sort((a, b) => before[b] - before[a])
+      .slice(0, 5)
+      .map((name) => ({ name, n: before[name] }))
     return {
       total: raf.g,
       kept: list.length,
       origin: Math.round(performance.timeOrigin + raf.t0),
       list,
+      // M39v, evidence only (no criterion reads it): gaps a heartbeat stall over 16 ms explains against those it does
+      // not, and the task names most often seen in the 50 ms before a gap.
+      summary: {
+        withStall: stalled,
+        withoutStall: list.length - stalled,
+        heartbeat: hb.n,
+        topTasks: top,
+      },
     }
   }
   function rafReset() {
     raf.n = raf.w = raf.g = raf.frames = raf.long25 = raf.long50 = raf.max = 0
     raf.t0 = performance.now()
     rafLast = 0
+    tk.n = 0
   }
 
   // --- Screen wake lock -----------------------------------------------------------------------
@@ -626,12 +735,14 @@
     send('window', { phase: 'start', id, n, ms: span })
     Object.assign(meas, { on: true, until: Date.now() + span + 20_000 })
     rafReset()
+    beatStart()
     setMeasuring(true)
   }
   /** Close it; `interrupted` true means the data must be discarded. */
   function endMeasure() {
     const r = { id: meas.id, n: meas.n, interrupted: meas.interrupted }
     meas.on = false
+    beatStop()
     lastRx = Date.now() // the quiet is over: a socket silent for the window is not dead
     setMeasuring(false)
     send('window', { phase: 'end', id: meas.id, n: meas.n, interrupted: meas.interrupted }) // flushes what the window queued
@@ -663,6 +774,8 @@
     rafStats,
     rafWindow,
     rafGaps,
+    task,
+    heartbeat: () => ({ running: !!hb.id, posts: hb.posts }),
     windowT,
     rafReset,
     envFacts,

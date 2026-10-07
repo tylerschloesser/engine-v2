@@ -175,6 +175,7 @@
           A.endMeasure()
           return null
         }
+        A.task('sample')
         const r = readings()
         const wt = A.windowT()
         const w = A.rafWindow(Math.max(warm, wt - roll), wt)

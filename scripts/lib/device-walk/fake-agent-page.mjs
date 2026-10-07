@@ -60,6 +60,21 @@ export function createFakePage(o = {}) {
     return id
   }
   const clear = (id) => timers.delete(id)
+  // A MessageChannel whose delivery takes `o.messageDelay(pageTime)` ms (default 0): a test makes the page stall by
+  // delaying messages for a while. `posts` counts what was posted.
+  let posts = 0
+  class FakeMessageChannel {
+    constructor() {
+      const port1 = {}
+      this.port1 = port1
+      this.port2 = {
+        postMessage: () => {
+          posts++
+          setTimeout(() => port1.onmessage?.({ data: 0 }), o.messageDelay?.(now - 1_000_000) ?? 0)
+        },
+      }
+    }
+  }
   const document = {
     hidden: false,
     visibilityState: 'visible',
@@ -133,6 +148,7 @@ export function createFakePage(o = {}) {
     Math,
     Promise,
     Float32Array,
+    Uint8Array,
     Float64Array,
     Array,
     Object,
@@ -143,6 +159,7 @@ export function createFakePage(o = {}) {
     Date: Object.assign(function FakeDate() {}, { now: () => now }),
     performance: { now: () => now - 1_000_000, timeOrigin: 1_000_000 },
     WebSocket: FakeSocket,
+    MessageChannel: FakeMessageChannel,
     fetch: async () => ({ ok: true, json: async () => ({ replies: [] }) }),
     setTimeout,
     setInterval,
@@ -190,6 +207,7 @@ export function createFakePage(o = {}) {
     kit: w.__walkKit,
     frames,
     sockets,
+    posts: () => posts,
     advance,
     /** Deliver an event to the page's own (capture-phase) listeners, as the browser would. */
     fire: (name, ev) => {
