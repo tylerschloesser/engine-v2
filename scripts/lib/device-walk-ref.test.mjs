@@ -289,6 +289,45 @@ describe('device-walk reference: M34 (the bot partner)', () => {
     expect(m.maxStillMs).toBeLessThan(50)
   })
 
+  // M39ab: a remote that stood still and starts walking was drawn up to a tile behind for ~250 ms (the Hermite
+  // of a long rest segment). The snap proxy misses it (under its floor), and the standing frames before the
+  // walk used to count as "moving" because the lurch sat inside their window (`max_still_ms` 234).
+  const lurch = (back) =>
+    Array.from({ length: 90 }, (_, i) => {
+      // 16 standing frames at 0.52, then a +x walk at 0.2 tile a frame; `back` draws the first walking frame
+      // behind the rest position and glides to the path by frame 24.
+      const walk = 0.52 + Math.max(0, i - 16) * 0.2
+      const x = back && i >= 17 && i < 24 ? walk - 1.1 * (1 - (i - 17) / 7) : walk
+      return [1000 + Math.round(i * 16.7), +x.toFixed(3), 0.52, 100 + i]
+    })
+
+  test('device-walk reference: a backward step at the start of a walk is measured; a clean start has none', () => {
+    expect(analyseMotion(lurch(true), snap).maxBackstepTiles).toBeGreaterThanOrEqual(0.9)
+    expect(analyseMotion(lurch(false), snap).maxBackstepTiles).toBe(0)
+    // A sweep that turns round (12 tiles/s, +-6 tiles) slows into each turn: its last forward steps are
+    // far under the 0.05 limit, so turning is not a backstep.
+    expect(analyseMotion(sweep(false), snap).maxBackstepTiles).toBeLessThanOrEqual(0.05)
+    const e = CHECKS['M34-remote-motion']
+    const crit = (r, n) => r.criteria.find((c) => c.name === n)
+    expect(
+      crit(evaluate(e, { motionFrames: lurch(true), fadeFrames: [] }), 'max_backstep_tiles').ok,
+    ).toBe(false)
+    expect(
+      crit(evaluate(e, { motionFrames: lurch(false), fadeFrames: [] }), 'max_backstep_tiles').ok,
+    ).toBe(true)
+  })
+
+  test('device-walk reference: the standing frames before a walk are not a still stretch, the first moving frames are', () => {
+    const m = analyseMotion(lurch(true), snap)
+    expect(m.maxStillMs).toBeLessThan(50)
+    // A circle that really stops mid-walk for 200 ms is still counted: walk 40 frames, stand 12, walk on.
+    const stop = Array.from({ length: 80 }, (_, i) => {
+      const k = i < 40 ? i : i < 52 ? 40 : i - 12
+      return [i * 16.7, 0.52 + k * 0.2, 0.5, i]
+    })
+    expect(analyseMotion(stop, snap).maxStillMs).toBeGreaterThanOrEqual(150)
+  })
+
   test('device-walk reference: a repeated DrawList (same frame_seq) is not a frame the circle failed to move on', () => {
     // Every fourth rAF repeats the previous picture, the rest move: the ratio is over new pictures only.
     const jittery = sweep(false).map((f, i) => [f[0], f[1], f[2], i - Math.floor(i / 4)])
@@ -360,6 +399,7 @@ describe('device-walk reference: M34 (the bot partner)', () => {
       ['remote_moved', true],
       ['moving_frames_changed_ratio', true],
       ['max_still_ms', true],
+      ['max_backstep_tiles', true],
       ['snaps', true],
       ['vanished_at_once', true],
       ['no_snap_and_fades', null], // always the person's tap

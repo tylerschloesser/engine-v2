@@ -1341,7 +1341,7 @@ export const CHECKS = {
     judges: [],
   },
   'M34-remote-motion': {
-    pass: '04ed618a',
+    pass: '50397e61',
     class: 'auto+confirm',
     signal:
       'check build `__check.act.sample`: the remote circle of the bot from the newest DrawList every frame, jump against the neighbouring frames (a snap), and its alpha after the bot disconnects',
@@ -1377,6 +1377,13 @@ export const CHECKS = {
         ref: 'pass',
       },
       {
+        name: 'max_backstep_tiles',
+        source: 'derived.maxBackstepTiles',
+        op: '<=',
+        limit: 0.05,
+        ref: 'pass',
+      },
+      {
         name: 'snaps',
         source: 'derived.snaps',
         op: 'proxy',
@@ -1407,6 +1414,7 @@ export const CHECKS = {
       { name: 'frames', source: 'derived.frames' },
       { name: 'moving_frames_changed_ratio', source: 'derived.movingFramesChangedRatio' },
       { name: 'max_still_ms', source: 'derived.maxStillMs' },
+      { name: 'max_backstep_tiles', source: 'derived.maxBackstepTiles' },
       { name: 'repeated_frames', source: 'derived.repeatedFrames' },
       { name: 'vanish_ms', source: 'derived.vanishMs' },
       { name: 'fade_missing', source: 'derived.fadeMissing' },
@@ -1824,6 +1832,7 @@ export function analyseMotion(frames, { factor, floorTiles, window: w }) {
     travel += d
   }
   const staircase = stepsWhileMoving(frames, jumps)
+  const maxBackstepTiles = maxBackstep(frames, jumps)
   let snaps = 0
   let max = 0
   jumps.forEach((d, i) => {
@@ -1836,39 +1845,85 @@ export function analyseMotion(frames, { factor, floorTiles, window: w }) {
     travelTiles: +travel.toFixed(3),
     maxJumpTiles: +max.toFixed(3),
     snaps,
+    maxBackstepTiles,
     ...staircase,
   }
+}
+
+/**
+ * The largest step *against* the direction the circle is walking (docs/plan/39ab-remote-lurch-after-rest.md): a
+ * pair's direction is the endpoint displacement of the `BACKSTEP_LOOKAHEAD_FRAMES` frames after it, taken only when
+ * that is at least `MOVING_MIN_TILES` (a circle that does not go on is not walking) and does not oppose where the
+ * circle came from (a turn is not a backstep), and the backstep is the
+ * length of the pair's step projected the other way. A snap proxy cannot see this: a lurch of a third of a tile
+ * is under its floor. Steps over `MOVING_MAX_STEP_TILES` are recorder artefacts, as in `stepsWhileMoving`.
+ */
+function maxBackstep(frames, jumps) {
+  let max = 0
+  for (let i = 0; i < jumps.length; i++) {
+    if (jumps[i] > MOVING_MAX_STEP_TILES) continue
+    const to = Math.min(frames.length - 1, i + 1 + BACKSTEP_LOOKAHEAD_FRAMES)
+    const [dx, dy] = displacement(frames, jumps, i + 1, to)
+    const len = Math.hypot(dx, dy)
+    if (len < MOVING_MIN_TILES) continue
+    // A circle that was walking the other way and now returns is turning round, not stepping back: the
+    // direction counts only from rest or when it agrees with where the circle came from.
+    const [tx, ty] = displacement(frames, jumps, Math.max(0, i - MOVING_TRAILING_FRAMES), i)
+    if (Math.hypot(tx, ty) >= MOVING_MIN_TILES && tx * dx + ty * dy < 0) continue
+    const along =
+      ((frames[i + 1][1] - frames[i][1]) * dx + (frames[i + 1][2] - frames[i][2]) * dy) / len
+    max = Math.max(max, -along)
+  }
+  return +max.toFixed(3)
+}
+
+/** The vector from frame `from` to frame `to`, summing only the steps that are walking (see `MOVING_MAX_STEP_TILES`). */
+function displacement(frames, jumps, from, to) {
+  let dx = 0
+  let dy = 0
+  for (let k = from; k < to; k++) {
+    if (jumps[k] > MOVING_MAX_STEP_TILES) continue
+    dx += frames[k + 1][1] - frames[k][1]
+    dy += frames[k + 1][2] - frames[k][2]
+  }
+  return [dx, dy]
 }
 
 /** A frame-to-frame jump above this is a teleport or a recorder artefact, not walking: left out of a moving window's path. */
 const MOVING_MAX_STEP_TILES = 3
 
-/** The frames either side of a pair that `stepsWhileMoving` looks at to say the circle is moving there. */
+/** How far ahead `maxBackstep` looks for the direction of the walk (the replayed device series need 30 frames: a lurch is followed by a glide that nets under a tile in 15). */
+const BACKSTEP_LOOKAHEAD_FRAMES = 30
+
+/** The frames before a pair that `stepsWhileMoving` looks back at to say the circle is moving there. */
 const MOVING_WINDOW_FRAMES = 15
+/** How many frames back `stepsWhileMoving` looks for a tile of net displacement (long enough to span a turn at 12 tiles/s). */
+const MOVING_TRAILING_FRAMES = 45
 /** A pair is "while moving" when the circle covered at least this many tiles over that window (2 tiles/s at 60 Hz). */
 const MOVING_MIN_TILES = 1
 
 /**
  * Whether the drawn circle changes position at every frame while it moves (docs/plan/39l-remote-motion-
  * staircase.md): `movingFramesChangedRatio` is the share of frame pairs inside a stretch of motion (the
- * path over the 15 frames either side is at least a tile) where the position differs from the frame before;
+ * circle has covered at least a tile, endpoint to endpoint, over the 15 frames before it) where the position differs from the frame before;
  * `maxStillMs` is the longest time the position stayed identical inside such a stretch. A circle drawn at
  * each 10 Hz presence sample scores about 0.17 and 100 ms; one interpolated per frame scores 1 and one frame.
  * Pairs whose two frames carry the same DrawList `frame_seq` are left out of the ratio (`repeatedFrames`
  * counts them: a rAF that came before the worker's next publish). `null` when there was no stretch of motion.
  */
 function stepsWhileMoving(frames, jumps) {
-  const w = MOVING_WINDOW_FRAMES
   let pairs = 0
   let changed = 0
   let repeated = 0
   let maxStill = 0
   let stillFrom = null // the time of the last frame at which the position changed (or the run began)
   for (let i = 0; i < jumps.length; i++) {
-    let path = 0
-    for (let k = Math.max(0, i - w); k < Math.min(jumps.length, i + w + 1); k++)
-      path += jumps[k] <= MOVING_MAX_STEP_TILES ? jumps[k] : 0
-    if (path < MOVING_MIN_TILES) {
+    // The circle has already moved: net displacement (endpoint to endpoint, not path length) over the
+    // frames before this pair's second frame. The standing frames before a walk have none, so they are not
+    // "moving" (docs/plan/39ab: the lurch sat in their old symmetric window, `max_still_ms` 234).
+    const [dx, dy] = displacement(frames, jumps, Math.max(0, i + 1 - MOVING_TRAILING_FRAMES), i + 1)
+    const moving = Math.hypot(dx, dy) >= MOVING_MIN_TILES
+    if (!moving) {
       stillFrom = null
       continue
     }
