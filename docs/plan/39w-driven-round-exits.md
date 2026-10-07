@@ -1,6 +1,6 @@
 # M39w: a driven round exits when every item is walked
 
-Status: not started · After: 39v · Tyler-dependent: no
+Status: done (2026-10-07) · After: 39v · Tyler-dependent: no
 
 ## Goal
 A driven round (`--drive ios|android`) does not exit while any item has a pending judge sheet. The driver saves the screenshot, logs `shot` and `defer`, and walks on. But the process then waits for a result that only `pnpm device:walk --judge` can write, holding the Appium/WDA session and the page on the phone:
@@ -26,9 +26,9 @@ Judging itself (the orchestrator's `--judge`); any criterion; the iOS rAF limits
 `scripts/lib/device-walk/drive/loop.mjs`, `auto-main.mjs`, `auto-round.mjs` and the status code, their tests under `scripts/lib/`; the `device-round` skill's section 1b if a state name changes.
 
 ## Exit criteria
-- [ ] The exit test and the QR test exist, pass, and the exit test was seen red (red line pasted).
-- [ ] `pnpm test unit -t device-walk` green (pasted line).
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The exit test and the QR test exist, pass, and the exit test was seen red (red line pasted).
+- [x] `pnpm test unit -t device-walk` green (pasted line).
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test unit -t device-walk` (targeted, foreground). No phone runs.
@@ -46,3 +46,4 @@ None; the next driven round shows it.
 - `pnpm test unit -t device-walk`: `unit pass 244 tests  2.7s/3s`. Not run: full `pnpm test`, `pnpm lint` (the orchestrator is the gate).
 - Skill: `.claude/skills/device-round/SKILL.md` 1b (judge sheets bullet) and 2 (state list, `done-pending-judge`).
 - Not covered by a test: `autoCli` as a whole (it starts real servers); the glue is two lines (`endOnParked`, `endRound`).
+- **Gate (orchestrator):** the first full run had one red, mine (`handoff` `PROMPT.md has balanced parens`: a Status edit left one `)` too many); fixed in the Status rewrite. Then `pnpm test` green (unit 646), lint clean incl. `tsc`.
