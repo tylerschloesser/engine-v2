@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createPartStats, Rolling, WINDOW_MS } from './bench-stats.js'
+import { createPartStats, createTickRing, Rolling, WINDOW_MS } from './bench-stats.js'
 
 describe('bench meter: per-part statistics', () => {
   it('p50 and p95 per part are exact over a window of synthetic samples', () => {
@@ -68,5 +68,41 @@ describe('bench meter: per-part statistics', () => {
     const r = stats.readings()
     expect(r.tickP95Ms).toBe(1)
     expect(r.catchupTicksPer10s).toBe(0)
+  })
+})
+
+describe('bench meter: per-tick series', () => {
+  it('finds a spike every 64 ticks as the period, and none in flat noise', () => {
+    const ring = createTickRing()
+    for (let t = 1; t <= 1000; t++)
+      ring.push(t, t % 64 === 0 ? 20_000 : 4_000 + ((t * 37) % 11) * 20)
+    const s = ring.summary()
+    expect(s.n).toBe(1000)
+    expect(s.missed).toBe(0)
+    expect(s.period).toBe(64)
+    expect(s.top[0]?.ms).toBe(20)
+    expect(s.top.slice(0, 15).every((p) => p.tick % 64 === 0)).toBe(true)
+
+    const flat = createTickRing()
+    let seed = 12345
+    for (let t = 1; t <= 1000; t++) {
+      seed ^= seed << 13
+      seed ^= seed >>> 17
+      seed ^= seed << 5
+      flat.push(t, 4_000 + ((seed >>> 0) % 1000))
+    }
+    expect(flat.summary().period).toBeNull()
+  })
+
+  it('keeps the last 4096 ticks, counts missed ones, and buckets finely below 10 ms', () => {
+    const ring = createTickRing(8)
+    for (let t = 1; t <= 20; t++) if (t !== 15) ring.push(t, 8_600)
+    // ticks 1..14, then 16..20 (15 never seen): one missed.
+    const s = ring.summary()
+    expect(s.n).toBe(8)
+    expect(s.missed).toBe(1)
+    expect(ring.series()[0]).toEqual([12, 8600])
+    // 8.6 ms falls in [8.5, 9): bucket index 17.
+    expect(s.counts[17]).toBe(8)
   })
 })

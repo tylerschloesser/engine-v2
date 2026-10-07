@@ -369,6 +369,8 @@
         windows: [m.window],
         steady: m.steady,
         final: clone(last),
+        // M39s: the whole per-tick ring, `[tick, sim_tick us]` pairs, once at the end of the window.
+        tick_series: clone(check().tickSeries?.() ?? []),
         reloads: 0,
         errors: clone(check().errors()),
       }

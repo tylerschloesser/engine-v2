@@ -90,3 +90,117 @@ export function createPartStats(): {
     }),
   }
 }
+
+// docs/plan/39s-sim-tick-tail.md: the per-tick series. `sim_tick` is timed in the sim worker for
+// the paced tick of each pass and published through the control block (`CB_SIM_ONETICK_US`); the
+// bench meter reads it once per rAF whenever the tick number moved and keeps the last `TICK_RING`
+// of them here, with their tick numbers (a jump in the number is counted as `missed`).
+
+export const TICK_RING = 4096
+/** Histogram edges in ms: 0.5 ms wide to 10 ms (where the iPhone's median sits), coarser above. */
+export const HIST_EDGES_MS: readonly number[] = [
+  0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10, 12, 15, 20, 30,
+  50,
+]
+export const TOP_TICKS = 20
+const MAX_LAG = 512
+const MIN_PERIOD_R = 0.3
+
+export type TickSummary = {
+  /** Ticks in the ring, and the ticks the meter never saw (a gap in the tick number). */
+  n: number
+  missed: number
+  /** `counts[i]` is the number of ticks below `HIST_EDGES_MS[i]` (and from the previous edge); the last is the rest. */
+  counts: number[]
+  /** The slowest ticks, slowest first. */
+  top: { tick: number; ms: number }[]
+  /** The shortest lag (in ticks) whose autocorrelation is within 80 % of the best, or null. */
+  period: number | null
+  periodR: number
+}
+
+/** The shortest lag at which `x` repeats, from its autocorrelation; null if no lag reaches `MIN_PERIOD_R`. */
+export function autocorrPeriod(x: ArrayLike<number>): { period: number | null; r: number } {
+  const n = x.length
+  let mean = 0
+  for (let i = 0; i < n; i++) mean += x[i] as number
+  mean /= n || 1
+  let energy = 0
+  for (let i = 0; i < n; i++) energy += ((x[i] as number) - mean) ** 2
+  if (energy === 0) return { period: null, r: 0 }
+  const maxLag = Math.min(MAX_LAG, n >> 1)
+  const r = new Float64Array(maxLag + 1)
+  let best = 0
+  for (let lag = 2; lag <= maxLag; lag++) {
+    let s = 0
+    for (let i = 0; i + lag < n; i++)
+      s += ((x[i] as number) - mean) * ((x[i + lag] as number) - mean)
+    r[lag] = s / energy
+    if (r[lag] > best) best = r[lag] as number
+  }
+  if (best < MIN_PERIOD_R) return { period: null, r: best }
+  for (let lag = 2; lag <= maxLag; lag++) {
+    if ((r[lag] as number) >= 0.8 * best) return { period: lag, r: r[lag] as number }
+  }
+  return { period: null, r: best }
+}
+
+export function createTickRing(capacity = TICK_RING): {
+  push(tick: number, us: number): void
+  summary(): TickSummary
+  /** The whole ring, oldest first: `[tick, us]` pairs. */
+  series(): [number, number][]
+} {
+  const ticks = new Int32Array(capacity)
+  const us = new Int32Array(capacity)
+  let count = 0
+  let head = 0
+  let missed = 0
+  let lastTick = -1
+  let cached: { period: number | null; r: number } = { period: null, r: 0 }
+  let cachedAt = -1
+
+  const at = (i: number): number => (head - count + i + capacity * 2) % capacity
+  const series = (): [number, number][] => {
+    const out: [number, number][] = []
+    for (let i = 0; i < count; i++) out.push([ticks[at(i)] as number, us[at(i)] as number])
+    return out
+  }
+  return {
+    push(tick, v) {
+      if (lastTick >= 0 && tick > lastTick + 1) missed += tick - lastTick - 1
+      lastTick = tick
+      ticks[head] = tick
+      us[head] = v
+      head = (head + 1) % capacity
+      if (count < capacity) count++
+    },
+    series,
+    summary() {
+      const counts = new Array<number>(HIST_EDGES_MS.length + 1).fill(0)
+      const s = series()
+      for (const [, v] of s) {
+        const ms = v / 1000
+        let b = 0
+        while (b < HIST_EDGES_MS.length && ms >= (HIST_EDGES_MS[b] as number)) b++
+        counts[b] = (counts[b] as number) + 1
+      }
+      const top = [...s]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, TOP_TICKS)
+        .map(([tick, v]) => ({ tick, ms: v / 1000 }))
+      if (s.length >= 16 && lastTick - cachedAt >= 256) {
+        // Laid out by tick number so a missed tick is a gap, not a shortened period; a gap is
+        // filled with the median.
+        const first = (s[0] as [number, number])[0]
+        const sorted = s.map((p) => p[1]).sort((a, b) => a - b)
+        const med = sorted[sorted.length >> 1] as number
+        const x = new Float64Array(lastTick - first + 1).fill(med)
+        for (const [t, v] of s) x[t - first] = v
+        cached = autocorrPeriod(x)
+        cachedAt = lastTick
+      }
+      return { n: s.length, missed, counts, top, period: cached.period, periodR: cached.r }
+    },
+  }
+}

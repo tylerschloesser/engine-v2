@@ -1567,6 +1567,10 @@ export const CHECKS = {
         source: 'steady.*.catchup_ticks_per_10s',
         reduce: 'max',
       },
+      // M39s: the per-tick series (its whole ring is the evidence's `tick_series`; the last reading
+      // carries the histogram, the 20 slowest ticks and the period).
+      { name: 'tick_period_last', source: 'final.tick_period' },
+      { name: 'tick_missed_last', source: 'final.tick_missed' },
     ],
     acts: [],
     judges: [],

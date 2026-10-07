@@ -13,7 +13,7 @@ import type { Scheduler } from 'engine/render'
 import { RingConsumer, type RingStats, systemScheduler } from 'engine/render'
 import { type BenchProbe, benchProbe, parkWorkers, resumeWorkers } from 'engine/test'
 import { type BenchRequest, furnaceBlock } from './bench-request.js'
-import { createPartStats, Rolling } from './bench-stats.js'
+import { createPartStats, createTickRing, Rolling, type TickSummary } from './bench-stats.js'
 import type { StartedGame } from './game.js'
 import { DEFAULT_WORLD, type Host } from './mode.js'
 
@@ -57,6 +57,8 @@ export type BenchHud = {
   frameBuildP95Ms: number
   resyncP95Ms: number
   catchupTicksPer10s: number
+  /** docs/plan/39s: the last 4,096 `sim_tick` durations, summarised. */
+  tickSeries: TickSummary
   framesRendered: number
   records: number
   dropped: number
@@ -76,6 +78,8 @@ export type BenchHud = {
 export type BenchApi = {
   hud(): BenchHud
   hudText(): string
+  /** The whole per-tick ring, oldest first: `[tick, sim_tick us]` pairs (docs/plan/39s). */
+  tickSeries(): [number, number][]
   framesRendered(): number
   /** Arms `mf-s-n`/`mf-e-n` marks around every main rAF callback (`bench.frame_reference` reads them
    * from a trace, never from page-side deltas). */
@@ -114,6 +118,7 @@ export function createBenchMeter(): BenchMeter {
   const main = new Rolling()
   const frame = new Rolling()
   const parts = createPartStats()
+  const ticks = createTickRing()
   let game: StartedGame | undefined
   let probe: BenchProbe | undefined
   let request: BenchRequest | undefined
@@ -187,6 +192,7 @@ export function createBenchMeter(): BenchMeter {
         resyncUs: probe.resyncUs(),
         catchupTicks: probe.catchupTicks(),
       })
+      ticks.push(tn, probe.simTickUs())
     }
     const draws = game.renderer.drawCalls()
     const upload = game.real.loop.uploadBytes()
@@ -216,6 +222,7 @@ export function createBenchMeter(): BenchMeter {
       frameBuildP95Ms: pr.frameBuildP95Ms,
       resyncP95Ms: pr.resyncP95Ms,
       catchupTicksPer10s: pr.catchupTicksPer10s,
+      tickSeries: ticks.summary(),
       framesRendered: frames,
       records: g.drawables.drawables.recordCount(),
       dropped: g.drawables.drawables.drawListDropped(),
@@ -271,6 +278,7 @@ export function createBenchMeter(): BenchMeter {
       const api: BenchApi = {
         hud,
         hudText,
+        tickSeries: () => ticks.series(),
         framesRendered: () => frames,
         startMarking() {
           marking = true

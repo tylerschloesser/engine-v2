@@ -13,6 +13,7 @@
 import type { Client, LinkState } from 'engine'
 import { type DrawRecord, drawListRecords, drawListSeq } from 'engine/test'
 import type { BenchApi } from './bench.js'
+import { HIST_EDGES_MS } from './bench-stats.js'
 import type { RefAction } from './bindings/RefAction.js'
 import type { RefUi } from './bindings/RefUi.js'
 import type { StartedGame } from './game.js'
@@ -237,6 +238,15 @@ export function installCheck(game: StartedGame, bench?: BenchApi): void {
         frame_build_p95_ms: +h.frameBuildP95Ms.toFixed(3),
         resync_p95_ms: +h.resyncP95Ms.toFixed(3),
         catchup_ticks_per_10s: h.catchupTicksPer10s,
+        // docs/plan/39s: the per-tick series of the last 4,096 sim_tick durations, summarised
+        // (the whole ring is `tickSeries()`).
+        tick_hist_edges_ms: HIST_EDGES_MS,
+        tick_hist: h.tickSeries.counts,
+        tick_top: h.tickSeries.top.map((t) => [t.tick, +t.ms.toFixed(3)]),
+        tick_period: h.tickSeries.period,
+        tick_period_r: +h.tickSeries.periodR.toFixed(3),
+        tick_series_n: h.tickSeries.n,
+        tick_missed: h.tickSeries.missed,
         main_p95_ms: +h.mainP95Ms.toFixed(3),
         frame_p95_ms: +h.frameP95Ms.toFixed(3),
         bench_frames: h.framesRendered,
@@ -256,6 +266,7 @@ export function installCheck(game: StartedGame, bench?: BenchApi): void {
     },
     page: bench ? 'bench' : 'reference',
     readings: reading,
+    tickSeries: () => bench?.tickSeries() ?? [],
     errors: () =>
       [...document.querySelectorAll('.engine-fatal-message, .start-failure-text')].map(
         (e) => e.textContent ?? '',
