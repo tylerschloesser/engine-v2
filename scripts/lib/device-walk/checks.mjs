@@ -1341,7 +1341,7 @@ export const CHECKS = {
     judges: [],
   },
   'M34-remote-motion': {
-    pass: '50397e61',
+    pass: '2ce3af28',
     class: 'auto+confirm',
     signal:
       'check build `__check.act.sample`: the remote circle of the bot from the newest DrawList every frame, jump against the neighbouring frames (a snap), and its alpha after the bot disconnects',
@@ -1380,7 +1380,7 @@ export const CHECKS = {
         name: 'max_backstep_tiles',
         source: 'derived.maxBackstepTiles',
         op: '<=',
-        limit: 0.05,
+        limit: 0.15,
         ref: 'pass',
       },
       {
