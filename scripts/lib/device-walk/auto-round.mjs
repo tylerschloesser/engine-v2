@@ -20,6 +20,7 @@
 import { readFileSync } from 'node:fs'
 import { isAbsolute, relative } from 'node:path'
 import { CHECKS, evaluate, walkable } from './checks.mjs'
+import { parseUa } from './env.mjs'
 import { readEvents } from './rounds.mjs'
 
 export const WALK_ID = 'walk'
@@ -195,6 +196,24 @@ export function inherited(entry, data, events) {
   return out
 }
 
+/**
+ * What the verdict needs to know about the phone (M39z, ADR 0056): `platform` from the newest phone `env`
+ * event's user agent (a Mac tab's is not the phone's), `driven` from the round's driver mode (`inspector`
+ * is set on a driven round only, M39v).
+ */
+export function verdictContext(events, inspector) {
+  const env = events.findLast(
+    (e) => e.type === 'env' && !String(e.src?.tab ?? '').startsWith('mac'),
+  )
+  const device = parseUa(env?.ua).device
+  const platform = /^(iPhone|iPad|iPod)$/.test(device)
+    ? 'ios'
+    : device === 'Android'
+      ? 'android'
+      : undefined
+  return { platform, driven: !!inspector }
+}
+
 export const rel = (path, base) => (base && isAbsolute(path) ? relative(base, path) : path)
 
 /**
@@ -342,7 +361,11 @@ export function createAutoRound({
     if (shared) {
       // The same runs as another check of this round (M29-play-through-drop reads M29-socket-resume's
       // 18 drops: the person is not asked to do them twice).
-      const { verdict, criteria, metrics } = evaluate(entry, shared.data, {})
+      const { verdict, criteria, metrics, notes } = evaluate(
+        entry,
+        shared.data,
+        verdictContext(events, inspector),
+      )
       const open = {
         type: 'attempt',
         id: it.id,
@@ -359,6 +382,7 @@ export function createAutoRound({
         outcome: verdict,
         criteria,
         metrics,
+        ...(notes ? { notes } : {}),
         evidence: shared.evidence,
       }
       const st = foldItem([...events, open, done], it.id)
@@ -436,8 +460,9 @@ export function createAutoRound({
     const reloaded = data.reloaded === true && a.status === 'interrupted'
     if (a.status !== 'open' && !reloaded) return // stale: interrupted by a hide, or already judged
     const entry = CHECKS[it.id]
-    const { verdict, criteria, metrics } = evaluate(entry, inherited(entry, data, events), {
+    const { verdict, criteria, metrics, notes } = evaluate(entry, inherited(entry, data, events), {
       desktopMedianMs: desktop,
+      ...verdictContext(events, inspector),
     })
     const done = {
       type: 'attempt',
@@ -447,6 +472,7 @@ export function createAutoRound({
       outcome: verdict,
       criteria,
       metrics,
+      ...(notes ? { notes } : {}),
       evidence: e.path,
       ...(inspector ? { inspector } : {}),
       ...(throttled(data) ? { cadence_throttled: true } : {}),

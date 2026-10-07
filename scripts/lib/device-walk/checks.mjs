@@ -9,6 +9,10 @@
 //   criteria [{ name, source, reduce?, op, limit, ref, group?, judge?, nullIs? }]   the service decides, never
 //            the page. `nullIs: 'judge'`: a value the data cannot give (an item not in this round, two worlds
 //            at different ticks) is a judge prompt, not a failure.
+//            Two more optional fields (M39z, ADR 0056): `platform: { ios?, android? }`, a mode for that
+//            platform (`'advisory'`: the value is recorded and shown, the criterion never decides) and
+//            `only: 'ios'` (the row exists on that platform alone); `pacing: true` marks a frame-pacing or hitch
+//            criterion, advisory on a *driven* iOS attempt (a live WDA session degrades WebKit's frame delivery).
 //   metrics  [{ name, source, reduce? }]        recorded in `result.metrics`, never gating
 //   acts     what the person is asked to do (a prompt with a live "detected" tick)
 //   judges   what only the person can judge (a judge prompt)
@@ -32,7 +36,7 @@ export function passHash(text) {
 }
 
 // --- the shared criteria of the fill-rate family (M09b-fill-rate, M18-fill-rate-with-anchors) ----------
-const fillRate = (extra = []) => [
+const fillRate = (extra = [], { iosPacing = false } = {}) => [
   {
     name: 'windows_measured',
     source: 'windows.*.orientation',
@@ -64,6 +68,8 @@ const fillRate = (extra = []) => [
     op: '<=',
     limit: 17.5,
     ref: 'pass',
+    pacing: true,
+    ...(iosPacing ? { platform: { ios: 'advisory' } } : {}),
   },
   {
     name: 'raf_over20_per_10s',
@@ -72,6 +78,8 @@ const fillRate = (extra = []) => [
     op: '<=',
     limit: 5,
     ref: 'pass',
+    pacing: true,
+    ...(iosPacing ? { platform: { ios: 'advisory' } } : {}),
   },
   {
     // M39k: the main pass's GPU *execution* time from timestamp queries, not the submit-to-done latency (a
@@ -94,6 +102,7 @@ const fillRate = (extra = []) => [
     limit: 0,
     ref: 'hitch proxy (39f Planning decisions): a count above 25 ms; any gap is a judge prompt',
     judge: 'borderline',
+    pacing: true,
   },
   ...extra,
 ]
@@ -392,7 +401,7 @@ export const CHECKS = {
     judges: [],
   },
   'M09b-fill-rate': {
-    pass: 'a6f372a8',
+    pass: 'eee998a5',
     class: 'auto',
     signal:
       'device.html __check.readings() (the HUD numbers as numbers), one 60 s window per orientation',
@@ -406,7 +415,24 @@ export const CHECKS = {
       built: true,
       delegation: 2,
     },
-    criteria: fillRate(),
+    criteria: fillRate(
+      [
+        {
+          // M39z (ADR 0056 (a)): on iOS the pass is the engine-owned numbers. Every gap over 20 ms of the
+          // measured windows has `stall` under 16 ms (no main-thread block behind it) and callback lateness
+          // under 2 ms; the count of gaps that do not is 0. Absent attribution counts as a cause.
+          name: 'engine_gap_causes',
+          source: 'windows.*.gaps.list.*',
+          reduce: 'engine-gaps',
+          op: '<=',
+          limit: 0,
+          ref: 'pass',
+          only: 'ios',
+          pacing: true,
+        },
+      ],
+      { iosPacing: true },
+    ),
     metrics: fillMetrics,
     acts: ['rotate the phone once between the two windows'],
     judges: ['no visible hitch (asked only when the rAF-gap proxy is not clean)'],
@@ -664,6 +690,7 @@ export const CHECKS = {
         limit: 0,
         ref: 'hitch proxy (39f Planning decisions): a count above 25 ms; any gap is a judge prompt',
         judge: 'borderline',
+        pacing: true,
       },
     ],
     metrics: [
@@ -1197,6 +1224,7 @@ export const CHECKS = {
         limit: 0,
         ref: 'hitch proxy (39f Planning decisions): a count above 25 ms; any gap is a judge prompt',
         judge: 'borderline',
+        pacing: true,
       },
     ],
     metrics: [
@@ -1353,6 +1381,7 @@ export const CHECKS = {
         limit: 0,
         ref: 'hitch proxy (39f Planning decisions): a count of jumps above the snap definition; any is a judge prompt',
         judge: 'borderline',
+        pacing: true,
       },
       {
         name: 'vanished_at_once',
@@ -1506,7 +1535,7 @@ export const CHECKS = {
     judges: ['moves without snapping; fades when its player drops'],
   },
   'M39-large-save': {
-    pass: '85d26f8a',
+    pass: '58f94431',
     class: 'auto',
     signal:
       'bench build `window.__check.readings()` (the bench HUD as numbers, once a second) read after the first 10 s: engine_mem_grows sim and client, tick p95; reload nonce; 10 min',
@@ -1544,6 +1573,8 @@ export const CHECKS = {
         op: '<=',
         limit: 10,
         ref: 'PRE-PLAN §7 Tick time (0010)',
+        // M39z (ADR 0056 (c)): the bar is the iPhone 12's; on Android the number is reported only.
+        platform: { android: 'advisory' },
       },
     ],
     // What `docs/plan/acceptance/budgets.md` cites for "Tick time: phone sim worker": the worst steady
@@ -1678,6 +1709,7 @@ export const CHECKS = {
         limit: 0,
         ref: 'hitch proxy (39f Planning decisions): a count above 25 ms; any gap is a judge prompt',
         judge: 'borderline',
+        pacing: true,
       },
     ],
     metrics: [],
@@ -1741,6 +1773,9 @@ const REDUCERS = {
     return k.length ? Math.max(...k) : null
   },
   'count-true': (v) => v.filter((x) => x === true).length,
+  /** Gaps (`A.rafGaps().list` entries) with an engine cause: `stall` >= 16 ms, lateness >= 2 ms, or no attribution. */
+  'engine-gaps': (v) =>
+    v.filter((g) => !(num(g?.stall) && num(g?.late) && g.stall < 16 && g.late < 2)).length,
   'ceiling-mib': (v) => {
     const line = (v[0] ?? []).find?.((l) => /^\(1\) ceiling: (\d+) MiB reached/.test(l))
     return line ? Number(/(\d+) MiB/.exec(line)[1]) : null
@@ -1899,19 +1934,35 @@ const round = (v) => (typeof v === 'number' ? +v.toFixed(3) : v)
  * `false`, or `null` for a hitch proxy that is not clean (a judge prompt decides) or a criterion the
  * page could not report. Criteria sharing a `group` pass when any one does. `judge: 'always'` rows only
  * ever ask the person.
+ *
+ * `ctx.platform` ('ios' | 'android' | absent) and `ctx.driven` (a live driver session was on the phone) pick the
+ * M39z modes: a criterion advisory for the platform, or `pacing` on a driven iOS attempt, is recorded with
+ * `advisory: true`, `ok: true`, and never decides; `notes` says so. `only` drops a row on other platforms.
  */
 export function evaluate(entry, data, ctx = {}) {
   const root = { ...data }
   if (entry.plan.derive) root.derived = DERIVE[entry.plan.derive](data, ctx, entry)
-  const rows = [...entry.criteria, ...(entry.assist?.criteria ?? [])].map((c) => {
-    const value = read(root, c.source, c.reduce)
-    let ok
-    if (c.op === 'proxy') ok = num(value) ? (value <= c.limit ? true : null) : null
-    else if (value === null || value === undefined) ok = c.nullIs === 'judge' ? null : false
-    else ok = !!OPS[c.op](value, c.limit)
-    if (c.judge === 'always') ok = null
-    return { c, row: { name: c.name, value: round(value ?? null), limit: c.limit, ok } }
-  })
+  const notes = []
+  const all = [...entry.criteria, ...(entry.assist?.criteria ?? [])]
+  const rows = all
+    .filter((c) => !c.only || c.only === ctx.platform)
+    .map((c) => {
+      const value = read(root, c.source, c.reduce)
+      let ok
+      const drivenIos = ctx.platform === 'ios' && ctx.driven === true && c.pacing === true
+      const advisory = c.platform?.[ctx.platform] === 'advisory' || drivenIos
+      if (advisory) {
+        ok = true
+        if (drivenIos)
+          notes.push(`${c.name}: driven iOS attempt, frame pacing is not judged (ADR 0056)`)
+      } else if (c.op === 'proxy') ok = num(value) ? (value <= c.limit ? true : null) : null
+      else if (value === null || value === undefined) ok = c.nullIs === 'judge' ? null : false
+      else ok = !!OPS[c.op](value, c.limit)
+      if (c.judge === 'always' && !advisory) ok = null
+      const row = { name: c.name, value: round(value ?? null), limit: c.limit, ok }
+      if (advisory) row.advisory = true
+      return { c, row }
+    })
   const groups = new Map()
   for (const { c, row } of rows)
     if (c.group) groups.set(c.group, [...(groups.get(c.group) ?? []), row])
@@ -1934,7 +1985,12 @@ export function evaluate(entry, data, ctx = {}) {
     if (v !== null && v !== undefined) metrics[m.name] = round(v)
   }
   for (const r of rows) if (typeof r.row.value === 'number') metrics[r.row.name] ??= r.row.value
-  return { verdict, criteria: rows.map((r) => r.row), metrics }
+  return {
+    verdict,
+    criteria: rows.map((r) => r.row),
+    metrics,
+    ...(notes.length ? { notes: [...new Set(notes)] } : {}),
+  }
 }
 
 /** Entries that a round walks: not retired, not meta (a missing entry is not walked either). */
