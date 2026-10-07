@@ -411,6 +411,15 @@ export function createAutoRound({
     }
   }
 
+  /** A window of the collected data says the rAF cadence was Low Power shaped (p50 over 25 ms): a note, no verdict. */
+  function throttled(data) {
+    const seen = (v, d) =>
+      !!v &&
+      typeof v === 'object' &&
+      (v.cadence_throttled === true || (d < 4 && Object.values(v).some((x) => seen(x, d + 1))))
+    return seen(data, 0)
+  }
+
   function onSeries(e) {
     const it = byId.get(e.id)
     const events = readEvents(file)
@@ -438,6 +447,7 @@ export function createAutoRound({
       criteria,
       metrics,
       evidence: e.path,
+      ...(throttled(data) ? { cadence_throttled: true } : {}),
     }
     api.append(done)
     if (verdict === 'judge') return

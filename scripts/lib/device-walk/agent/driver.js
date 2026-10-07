@@ -206,6 +206,9 @@
           raf,
           gaps,
           ...(turned ? { turned } : {}),
+          // A Low Power shaped cadence (p50 over 25 ms): a note so a throttled measurement never passes silently
+          // (M39u). No limit reads it.
+          ...(raf.p50 > 25 ? { cadence_throttled: true } : {}),
         },
         // A sample counts once it has more than a second of frames after the warm-up.
         steady: samples.filter((s) => s.t >= steadyFrom && s.raf_n >= MIN_STEADY_FRAMES),
