@@ -64,7 +64,9 @@ pub fn mark(p: Phase) {
     unsafe { host_bench_mark(p as u32) }
 }
 
+// A bench timer: nothing in the sim reads it back (0002 §2: only a value that can reach state is banned).
 #[cfg(all(feature = "bench-phases", not(target_arch = "wasm32")))]
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 mod native {
     use super::{PHASES, Phase};
     use std::cell::{Cell, RefCell};
@@ -76,14 +78,12 @@ mod native {
     }
 
     pub fn mark(p: Phase) {
-        // Wall clock, measurement only: nothing reads it back into sim state.
-        #[allow(clippy::disallowed_methods)]
         let now = Instant::now();
-        if let Some(last) = LAST.with(|l| l.replace(Some(now))) {
-            if !matches!(p, Phase::Start) {
-                let ns = now.duration_since(last).as_nanos() as u64;
-                SUMS.with(|s| s.borrow_mut()[p as usize] += ns);
-            }
+        if let Some(last) = LAST.with(|l| l.replace(Some(now)))
+            && !matches!(p, Phase::Start)
+        {
+            let ns = now.duration_since(last).as_nanos() as u64;
+            SUMS.with(|s| s.borrow_mut()[p as usize] += ns);
         }
     }
 

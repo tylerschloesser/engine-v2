@@ -17,7 +17,7 @@
 //! `wake_at`/`cancel` need to find and remove an entity's *current* bucket entry in O(log n) without
 //! a linear scan.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use crate::bytes::{ByteReader, ByteSink};
 use crate::codec::CodecError;
@@ -26,7 +26,7 @@ use crate::time::Tick;
 
 #[derive(Default)]
 pub(crate) struct TimerWheel {
-    wheel: BTreeMap<Tick, Vec<EntityId>>,
+    wheel: BTreeMap<Tick, VecDeque<EntityId>>,
     by_entity: BTreeMap<EntityId, Tick>,
 }
 
@@ -81,7 +81,9 @@ impl TimerWheel {
             .wheel
             .get_mut(&tick)
             .expect("just found by iter().next()");
-        let id = bucket.remove(0);
+        // `pop_front`, not `Vec::remove(0)` (M39y): draining a bucket of N ids that way moved the
+        // rest of it on every pop, N^2/2 id moves per tick (13 MB for the large save's 2,621).
+        let id = bucket.pop_front().expect("a bucket is never left empty");
         if bucket.is_empty() {
             self.wheel.remove(&tick);
         }
@@ -119,7 +121,7 @@ impl TimerWheel {
         for _ in 0..count {
             let tick = Tick(reader.u32()?);
             let id = EntityId(reader.u32()?);
-            w.wheel.entry(tick).or_default().push(id);
+            w.wheel.entry(tick).or_default().push_back(id);
             w.by_entity.insert(id, tick);
         }
         Ok(w)
