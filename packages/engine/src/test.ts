@@ -25,6 +25,7 @@ export {
   drawListHash,
   drawListRecords,
   drawListSeq,
+  drawListWindowOrigin,
   forceSnapshot,
   hashDrawListFields,
   hostRegionHash,

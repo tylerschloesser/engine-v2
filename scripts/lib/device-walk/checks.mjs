@@ -1814,7 +1814,7 @@ export function analyseMotion(frames, { factor, floorTiles, window: w }) {
   const jumps = []
   let travel = 0
   for (let i = 1; i < frames.length; i++) {
-    const d = Math.hypot(frames[i][1] - frames[i - 1][1], frames[i][2] - frames[i - 1][2])
+    const d = hypotNoOrigin(frames[i][1] - frames[i - 1][1], frames[i][2] - frames[i - 1][2])
     jumps.push(d)
     travel += d
   }
@@ -1834,6 +1834,27 @@ export function analyseMotion(frames, { factor, floorTiles, window: w }) {
     ...staircase,
   }
 }
+
+/**
+ * The draw list's window origin snaps to multiples of 64 tiles (ADR 0018 section 2); a recorder that reports
+ * positions relative to it (the reference game's before M39aa) shows a camera crossing a boundary as an exact
+ * 64.000 jump of a circle at rest. A component within `ORIGIN_JUMP_TOL` of a multiple of 64 is that artefact:
+ * the multiple is taken off, what is left (the real move) stays.
+ */
+const ORIGIN_SNAP_TILES = 64
+const ORIGIN_JUMP_TOL = 0.05
+function hypotNoOrigin(dx, dy) {
+  const strip = (d) => {
+    const m = Math.round(d / ORIGIN_SNAP_TILES)
+    return m !== 0 && Math.abs(d - m * ORIGIN_SNAP_TILES) <= ORIGIN_JUMP_TOL
+      ? d - m * ORIGIN_SNAP_TILES
+      : d
+  }
+  return Math.hypot(strip(dx), strip(dy))
+}
+
+/** A frame-to-frame jump above this is a teleport or a recorder artefact, not walking: left out of a moving window's path. */
+const MOVING_MAX_STEP_TILES = 3
 
 /** The frames either side of a pair that `stepsWhileMoving` looks at to say the circle is moving there. */
 const MOVING_WINDOW_FRAMES = 15
@@ -1858,7 +1879,8 @@ function stepsWhileMoving(frames, jumps) {
   let stillFrom = null // the time of the last frame at which the position changed (or the run began)
   for (let i = 0; i < jumps.length; i++) {
     let path = 0
-    for (let k = Math.max(0, i - w); k < Math.min(jumps.length, i + w + 1); k++) path += jumps[k]
+    for (let k = Math.max(0, i - w); k < Math.min(jumps.length, i + w + 1); k++)
+      path += jumps[k] <= MOVING_MAX_STEP_TILES ? jumps[k] : 0
     if (path < MOVING_MIN_TILES) {
       stillFrom = null
       continue

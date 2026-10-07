@@ -275,6 +275,24 @@ describe('device-walk reference: M34 (the bot partner)', () => {
     expect(crit(good, 'max_still_ms').ok).toBe(true)
   })
 
+  // M39aa: the Pixel round's first frame was read 64.000 tiles away from the second while the remote stood still
+  // (positions relative to a window origin that snapped between the frames). The remote stands for 3 frames, then walks.
+  test('device-walk reference: a 64.000 window-origin jump at frame 1 is no snap and no still stretch', () => {
+    const series = Array.from({ length: 90 }, (_, i) => {
+      const x = i < 3 ? 0.52 : 0.52 + (i - 3) * 0.2
+      return [1018 + Math.round(i * 16.7), +(i === 0 ? x + 64 : x).toFixed(3), 0.52, 18 + i]
+    })
+    const m = analyseMotion(series, snap)
+    expect(m.snaps).toBe(0)
+    expect(m.maxJumpTiles).toBeLessThan(0.25)
+    expect(m.maxStillMs).toBeLessThan(50)
+    expect(m.travelTiles).toBeLessThan(20)
+    // Even a hop the strip does not recognise (a teleport) must not make a circle at rest look stuck in motion:
+    // the window path leaves out steps over 3 tiles (here: 10 tiles at frame 1, then 3 frames at rest).
+    const hop = series.map((f, i) => (i === 0 ? [f[0], f[1] + 10 - 64, f[2], f[3]] : f))
+    expect(analyseMotion(hop, snap).maxStillMs).toBeLessThan(50)
+  })
+
   test('device-walk reference: a repeated DrawList (same frame_seq) is not a frame the circle failed to move on', () => {
     // Every fourth rAF repeats the previous picture, the rest move: the ratio is over new pictures only.
     const jittery = sweep(false).map((f, i) => [f[0], f[1], f[2], i - Math.floor(i / 4)])

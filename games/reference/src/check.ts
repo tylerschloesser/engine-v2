@@ -11,7 +11,7 @@
 // allocates, it is outside the zero-GC rule (`.claude/rules/hot-paths.md`), and the per-frame recorder runs
 // only between `act.sample(true)` and `act.sample(false)`.
 import type { Client, LinkState } from 'engine'
-import { type DrawRecord, drawListRecords, drawListSeq } from 'engine/test'
+import { type DrawRecord, drawListRecords, drawListSeq, drawListWindowOrigin } from 'engine/test'
 import type { BenchApi } from './bench.js'
 import { HIST_EDGES_MS } from './bench-stats.js'
 import type { RefAction } from './bindings/RefAction.js'
@@ -80,12 +80,19 @@ export function installCheck(game: StartedGame, bench?: BenchApi): void {
   /** Circles of the newest DrawList without the own one (the circle just before the range ring), and furnaces. */
   function world(): { remote: Circle[]; furnaces: number; own: Circle | null } {
     drawListRecords(client, scratch)
+    // `pos` is relative to the frame's window origin, which snaps to multiples of 64 tiles (ADR 0018 section 2):
+    // add it back, or a camera crossing a boundary reads as a 64-tile jump (M39aa, the Pixel round's M34).
+    const origin = drawListWindowOrigin(client)
     const circles: Circle[] = []
     let ringed = false
     let furnaces = 0
     for (const r of scratch) {
       if (r.kind === KIND_CIRCLE)
-        circles.push({ x: r.pos[0], y: r.pos[1], alpha: (r.color >>> 24) & 0xff })
+        circles.push({
+          x: r.pos[0] + origin.x,
+          y: r.pos[1] + origin.y,
+          alpha: (r.color >>> 24) & 0xff,
+        })
       else if (r.kind === KIND_RING) ringed = true
       else if (r.kind === KIND_SPRITE && (r.flags & 4) === 0) furnaces++ // flag 4: a predicted ghost
     }

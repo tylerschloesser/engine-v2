@@ -8,6 +8,7 @@ import type { CameraState } from '../camera/state.js'
 import type { ActionOutcome, Client, ClientTestHandle, WorkerEntry } from '../client.js'
 import { clientTestHandle } from '../client.js'
 import { createResyncingClock, type ResyncingClock } from '../clock.js'
+import type { DrawListSlot } from '../render/drawlist-slot.js'
 import {
   CB_CLIENT_FRAME_N,
   CB_CLIENT_FRAME_US,
@@ -1031,7 +1032,15 @@ export type DrawRecord = {
 export function drawListRecords(client: Client, out: DrawRecord[]): number {
   const { drawListSlot } = clientTestHandle(client)
   drawListSlot.acquire()
-  const { body, recordCount } = drawListSlot
+  return decodeSlotRecords(drawListSlot, out)
+}
+
+/** `drawListRecords` over an already acquired slot (split out so a test can drive a slot it built itself). */
+export function decodeSlotRecords(
+  slot: Pick<DrawListSlot, 'body' | 'recordCount'>,
+  out: DrawRecord[],
+): number {
+  const { body, recordCount } = slot
   out.length = 0
   for (let i = 0; i < recordCount; i++) {
     const base = i * 32
@@ -1050,6 +1059,21 @@ export function drawListRecords(client: Client, out: DrawRecord[]): number {
     })
   }
   return recordCount
+}
+
+/** The window origin (integer world tiles) the slot's records are relative to (0018 section 2: the camera
+ * centre tile floored to a multiple of 64, so it jumps by 64 when the camera crosses a boundary). Add it to a
+ * `DrawRecord.pos` for a world position. Reads the slot the last `drawListRecords` acquired, no new acquire.
+ * Test-only (M39aa). */
+export function windowOriginOf(slot: Pick<DrawListSlot, 'windowOriginX' | 'windowOriginY'>): {
+  x: number
+  y: number
+} {
+  return { x: slot.windowOriginX, y: slot.windowOriginY }
+}
+
+export function drawListWindowOrigin(client: Client): { x: number; y: number } {
+  return windowOriginOf(clientTestHandle(client).drawListSlot)
 }
 
 /** docs/plan/18-picking-and-overlay.md `engine/test`: a thin wrapper over `Client.pick.at` -- the
