@@ -259,12 +259,20 @@ describe('device-walk drive: the device person on a recording backend', () => {
     ])
   })
 
-  test('device-walk drive: a ring under its own button is tapped just below the button, the button itself at its centre', async () => {
+  // M39r: the rule "4 px under the button's box" (found on the Pixel 5 to be inside Chrome's snap radius) is
+  // replaced by the most-clearance point (`device-walk-ringtap.test.mjs`); this keeps the button half.
+  test('device-walk drive: a ring beside a button is tapped on its far side, the button itself at its centre', async () => {
     const o = {
-      pages: { "of document.querySelectorAll('button')": () => ({ bottom: 250, cx: 120 }) },
+      pages: {
+        "of document.querySelectorAll('button')": () => ({
+          r: 5.88,
+          boxes: [{ left: 80, top: 227, right: 94, bottom: 241 }],
+        }),
+      },
     }
     const ring = await run('Zoom 1 of 3: tap the highlighted ring (1 of 3).', o)
-    expect(ring.b.calls.find((c) => c.m === 'tap').args).toEqual([120, 254])
+    const [tx] = ring.b.calls.find((c) => c.m === 'tap').args
+    expect(tx).toBeGreaterThan(123)
     const button = await run('Tap the highlighted button (it is numbered 26).', o)
     expect(button.b.calls.find((c) => c.m === 'tap').args).toEqual([123, 234])
   })

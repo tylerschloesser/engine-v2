@@ -3,8 +3,9 @@
 import { describe, expect, test } from 'vitest'
 import { createFakePage } from './device-walk/fake-agent-page.mjs'
 
-const BTN = { left: 190, top: 90, right: 204, bottom: 104 }
+const BTN = { left: 190, top: 90, right: 204, bottom: 104, width: 14, height: 14 }
 function setup(extra = {}) {
+  const phases = []
   const st = { taps: 0, pick_id: 0 }
   const page = createFakePage({
     load: ['collect-touch.js'],
@@ -16,12 +17,16 @@ function setup(extra = {}) {
       act: {
         zoomTo: () => ({}),
         ringScreen: ({ pickId }) => ({ visible: pickId === 26, x: 197, tapY: 106 }),
+        ringPhase: (a) => {
+          phases.push(a?.pickId ?? null)
+          return {}
+        },
         buttonScreen: () => null,
       },
       ...extra,
     },
   })
-  return { page, st }
+  return { page, st, phases }
 }
 const ev = (type, tagName, id, x, y, t = 1) => ({
   type,
@@ -40,7 +45,7 @@ const item = {
 
 describe('device-walk tap ring: the evidence says where a tap landed', () => {
   test('device-walk tap ring: a finished tap records the target of its pointerdown, pointerup and click, and the ring point and nearest button', async () => {
-    const { page, st } = setup()
+    const { page, st, phases } = setup()
     await page.connect()
     const run = page.kit.collectors.anchors(item)
     await page.advance(1000)
@@ -60,6 +65,9 @@ describe('device-walk tap ring: the evidence says where a tap landed', () => {
     ])
     expect(t.at).toMatchObject({ id: 26, zoom: 40, x: 197, y: 106 })
     expect(t.at.button).toMatchObject({ bottom: 104, gapPx: 2 })
+    expect(t.at.view).toMatchObject({ dpr: 3 })
+    // The ring phase: only that ring's button for the tap, then every button back.
+    expect(phases).toEqual([26, null])
   })
 
   test('device-walk tap ring: an act timeout writes the last events and the asked tap into the evidence, not only actTimedOut', async () => {
