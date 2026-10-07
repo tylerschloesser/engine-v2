@@ -133,7 +133,10 @@ export function compareGround(marker, actual) {
  * JUnit report lives under `target/nextest/`, outside `test-results/`): `Summary [...] N tests
  * run: ...`. */
 export function parseRustSummary(logText) {
-  const m = /Summary\s*\[[^\]]*\]\s*(\d+)\s*tests run/.exec(logText)
+  // nextest may colour the summary (`Summary [ 1.2s] \e[1m801\e[0m tests run`): strip SGR codes first.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC is the point
+  const plain = logText.replace(/\u001b\[[0-9;]*m/g, '')
+  const m = /Summary\s*\[[^\]]*\]\s*(\d+)\s*tests run/.exec(plain)
   return m ? Number(m[1]) : null
 }
 

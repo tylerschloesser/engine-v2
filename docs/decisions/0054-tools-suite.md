@@ -12,7 +12,9 @@ Status: Accepted (2026-10-07). Amends [0020](0020-testing-strategy.md) §3 (the 
 
 **2. Why a suite of its own.** Tooling tests stay out of the first, fast engine suite. Because `tools` is not `first`, it runs concurrently with `wasm`, `netcode` and `browser`, inside the longest of them, so the fast tier's budgeted total (`first` budget plus the longest of the rest, 51 s) does not change.
 
-**3. Budget: 4 s.** Five runs of `pnpm test tools` alone measured 2.4, 2.3, 2.3, 2.3, 2.3 s (median 2.3 s, load average 5.9-6.9 from other sessions). 2.3 s times 1.5 is 3.45 s, rounded up to a whole second: 4 s. The rule (median of 5 runs times 1.5, rounded up) is the one to use again when the row is re-measured.
+**3. Budget: 9 s, from the full gate.** The suite runs beside `rust`, `wasm`, `netcode` and `browser`, so its budget is derived from its time there, as every other suite's is. Three full `pnpm test` gate runs gave `tools pass 244 tests` in 5.7, 5.5 and 5.6 s (1-minute load 4.6 to 11). Median 5.6 s times 1.5 is 8.4 s, rounded up to a whole second: 9 s. The rule (median of full-gate times times 1.5, rounded up) is the one to use again. Alone it takes 2.3 s (five runs: 2.4, 2.3, 2.3, 2.3, 2.3).
+
+*Correction, 2026-10-07 (same milestone, before any push):* this section first gave 4 s, derived from those alone-runs. That budget warned (`5.7s/4s WARN over budget`) on its first full gate, so it was re-derived from the gate as above.
 
 ## Alternatives rejected
 
@@ -21,8 +23,8 @@ Status: Accepted (2026-10-07). Amends [0020](0020-testing-strategy.md) §3 (the 
 
 ## Consequences
 
-`unit` no longer contains the tool's tests, so a failing tool test names `tools` in the runner's line. `pnpm handoff`'s ground marker keeps its four keys: `tools` is not in the marker (neither is `netcode`); the `unit=` count dropped by the 244 moved tests. Revisit the budget when `tools` passes 3 s alone.
+`unit` no longer contains the tool's tests, so a failing tool test names `tools` in the runner's line. `pnpm handoff`'s ground marker keeps its four keys: `tools` is not in the marker (neither is `netcode`); the `unit=` count dropped by the 244 moved tests. Revisit the budget when `tools` passes 3 s alone or the gate time passes 7 s.
 
 ## Sources
 
-Measured in M39x (2026-10-07), `pnpm test tools`, five foreground runs; the M39w ledger row of 2026-10-07 for the `unit` time.
+Measured in M39x (2026-10-07): `pnpm test tools` alone (five runs) and three full `pnpm test` gate runs; the M39w ledger row of 2026-10-07 for the `unit` time.

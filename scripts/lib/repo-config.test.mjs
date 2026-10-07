@@ -63,7 +63,7 @@ describe('repo-config', () => {
       rust: 10_000,
       unit: 3_000,
       wasm: 7_000,
-      tools: 4_000,
+      tools: 9_000,
       netcode: 10_000,
       browser: 48_000,
     })

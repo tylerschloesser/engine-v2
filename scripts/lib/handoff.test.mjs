@@ -223,6 +223,12 @@ describe('handoff', () => {
       expect(parseRustSummary('no summary line here')).toBe(null)
     })
 
+    test('parseRustSummary reads a summary line with ANSI colour codes', () => {
+      const log =
+        '     \u001b[32;1mSummary\u001b[0m [   1.230s] \u001b[1m801\u001b[0m tests run: \u001b[1m801\u001b[0m passed'
+      expect(parseRustSummary(log)).toBe(801)
+    })
+
     test('parseBunLegCount reads the last JSON line’s tests array', () => {
       const log = 'ignored first line\n{"tests":[{"name":"a","ok":true},{"name":"b","ok":true}]}'
       expect(parseBunLegCount(log)).toBe(2)
