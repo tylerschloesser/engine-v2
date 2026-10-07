@@ -55,3 +55,4 @@ After landing, the orchestrator runs M29-net-heap driven on the Pixel (10 min) a
 
 - **Driven Pixel round `m39q-pixel` (orchestrator):** M29-net-heap pass, measured: 10 min, 2,400 paints, `reloads` 0, `hitch_gaps_over_25ms` 0, max rAF gap 17 ms.
 - **Driven iPhone round `m39r-iphone` (orchestrator):** M29-net-heap ran to the end (10 min, 2,400 paints, `reloads` 0; the boot race is fixed on the iPhone) but ran after M16-low-power left Low Power Mode on (finding 8, M39u), so throttled to 30 Hz; not a valid iPhone result, re-run owed after M39u: 17,977 gaps over 25 ms. Recorded `skip`.
+- **Driven iPhone round `m39u-iphone`:** M29-net-heap **pass** (judged): 10 min, 35,985 frames, p95 17 ms, reloads 0; 9 gaps over 25 ms (7 of 25-29 ms jitter, 2 single drops) in pairs about 130 s apart, left for M39v's attribution.
