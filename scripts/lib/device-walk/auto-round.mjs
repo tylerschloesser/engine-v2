@@ -210,6 +210,7 @@ export function createAutoRound({
   origins,
   macOrigins = {},
   params = {},
+  inspector,
   evidenceBase,
   onAttempt,
   onLeg,
@@ -447,6 +448,7 @@ export function createAutoRound({
       criteria,
       metrics,
       evidence: e.path,
+      ...(inspector ? { inspector } : {}),
       ...(throttled(data) ? { cadence_throttled: true } : {}),
     }
     api.append(done)

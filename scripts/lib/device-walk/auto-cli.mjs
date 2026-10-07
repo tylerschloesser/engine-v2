@@ -101,6 +101,7 @@ export async function startAutoRound(o) {
     origins,
     macOrigins,
     params: o.params,
+    inspector: o.inspector,
     evidenceBase: REPO,
     onLeg: (l) => openLeg(l.plan, l.k),
     onAttempt: (a) => {

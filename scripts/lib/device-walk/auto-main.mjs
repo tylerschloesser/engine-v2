@@ -126,6 +126,12 @@ export async function autoCli(o) {
       // tests) is the M34 bot's, not a round parameter.
       // A driven round is the phone's alone (the Mac's own browsers are not driven).
       params: { client: o.drive ? 'phone' : 'both', ...paramsRest },
+      // M39v: how the Web Inspector stood during the windows (recorded on each attempt); a driven round only.
+      inspector: o.drive
+        ? o.drive === 'ios' && o.detachInspector
+          ? 'detached'
+          : 'attached'
+        : undefined,
       botTimings,
       signal: ac.signal,
       log,
@@ -201,6 +207,7 @@ export async function autoCli(o) {
         isDone: () => run.machine.done(),
         lastSeen: () => run.api.seen().at,
         onWindow: (fn) => run.api.onWindow(fn),
+        detachInspector: o.detachInspector,
         log,
       })
       driver.finished.catch((e) => {

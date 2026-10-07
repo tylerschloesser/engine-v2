@@ -7,6 +7,7 @@
 //   pnpm device:walk --apply <round> [--dry-run]
 //   pnpm device:walk --auto [--round <name>] [--only <id-prefix,...>] [--no-open] [--no-tunnel]
 //     (M39f: one QR, the phone and the Mac's own browsers walk the round; the Mac page is a live monitor)
+//   pnpm device:walk --auto --drive ios --detach-inspector   (M39v: the Web Inspector is detached during measuring windows)
 //   pnpm device:walk --wait <round> [--timeout <s>] [--json]       (exit 0 done, 2 stalled or timed out)
 //   pnpm device:walk --manual ...                                  (the M39e flow; the default without --auto)
 //   pnpm device:walk --selftest [--round <name>] [--no-tunnel] [--hold <s> --drop-at <s> --drop <s> --probe <s>]
@@ -200,6 +201,7 @@ async function main() {
       // A driven full round runs for hours: `--timeout <seconds>` (default 90 min) bounds it.
       timeoutMs: values.timeout ? Math.round(Number(values.timeout) * 1000) : undefined,
       drive,
+      detachInspector: flags.has('--detach-inspector'),
       params,
       monitorPort: values['monitor-port'],
       basePort: values['base-port'] ? Number(values['base-port']) : undefined,

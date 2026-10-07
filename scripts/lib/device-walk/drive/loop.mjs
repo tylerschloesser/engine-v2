@@ -119,6 +119,11 @@ export function startDrive(o) {
   const log = o.log ?? (() => {})
   const pollMs = o.pollMs ?? 250
   const graceMs = o.quietGraceMs ?? 3000
+  // M39v `--detach-inspector` (iOS): the session leaves the webview for the native context while a window measures
+  // and comes back to it after the end. A backend without `native`/`web` (Android) ignores it, with a log line.
+  const detach = !!o.detachInspector && typeof backend.native === 'function'
+  if (o.detachInspector && !detach)
+    log('drive: --detach-inspector: this backend has no inspector to detach, ignored')
   let wakeQuiet = null // resolves the quiet wait early (the end marker, stop())
   o.onWindow?.((e) => {
     if (e.phase === 'end') wakeQuiet?.()
@@ -225,6 +230,13 @@ export function startDrive(o) {
       const w = openWindow(events, Date.now(), graceMs)
       if (w) {
         // A measuring window: nothing to the phone, nothing on the Mac but one timer.
+        if (detach) {
+          await backend
+            .native()
+            .catch((e) =>
+              log(`drive: detaching the inspector failed: ${String(e.message).slice(0, 120)}`),
+            )
+        }
         backend.quiet?.(w.until)
         log(`drive: quiet for ${w.id} #${w.n} until ${new Date(w.until).toISOString()}`)
         await new Promise((resolve) => {
@@ -236,6 +248,12 @@ export function startDrive(o) {
         })
         wakeQuiet = null
         backend.quiet?.(0)
+        if (detach)
+          await backend
+            .web()
+            .catch((e) =>
+              log(`drive: attaching the inspector failed: ${String(e.message).slice(0, 120)}`),
+            )
         continue
       }
       await watchdog()

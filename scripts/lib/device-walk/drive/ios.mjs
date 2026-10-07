@@ -690,6 +690,15 @@ export function createIosBackend(o = {}) {
       }
     },
 
+    /** M39v: leave the webview for the native context (the Web Inspector detaches); only the drive loop calls it, outside a quiet window. */
+    async native() {
+      await start()
+      await native()
+    },
+    /** M39v: back into the webview showing our page. */
+    async web() {
+      await web()
+    },
     async screenshot(path) {
       await start()
       const b64 = await call('GET', '/screenshot')

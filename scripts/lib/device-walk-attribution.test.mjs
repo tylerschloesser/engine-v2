@@ -1,15 +1,17 @@
 // M39v: each long rAF gap carries what ran before it, the heartbeat lives only inside a window, and a driven round
 // can leave the inspector detached during a window. The agent runs in a `vm` on a virtual clock; the drive loop runs
 // over the recording backend.
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
+import { createAutoRound } from './device-walk/auto-round.mjs'
 import { createFakeBackend } from './device-walk/drive/fake-backend.mjs'
 import { startDrive } from './device-walk/drive/loop.mjs'
 import { devicePerson } from './device-walk/drive/person.mjs'
 import { createFakePage } from './device-walk/fake-agent-page.mjs'
-import { appendEvent } from './device-walk/rounds.mjs'
+import { parseChecks } from './device-walk/parse.mjs'
+import { appendEvent, readEvents } from './device-walk/rounds.mjs'
 
 const pause = (ms) => new Promise((r) => setTimeout(r, ms))
 const until = async (f, ms = 3000) => {
@@ -186,5 +188,45 @@ describe('device-walk attribution: --detach-inspector', () => {
     const x = setup()
     const { seen } = await windowed(x, {})
     expect(seen.map((c) => c.m).filter((m) => m === 'native' || m === 'web')).toEqual([])
+  })
+})
+
+describe('device-walk attribution: the inspector mode is on the attempt', () => {
+  const { items } = parseChecks(
+    readFileSync(new URL('../../docs/plan/device-checks.md', import.meta.url), 'utf8'),
+  )
+  const run = (inspector) => {
+    const dir = mkdtempSync(join(tmpdir(), 'walk-insp-'))
+    const file = join(dir, 'r.jsonl')
+    mkdirSync(join(dir, 's'))
+    const m = createAutoRound({
+      file,
+      items: items.filter((i) => i.id === 'M09b-fill-rate'),
+      origins: { fixture: 'http://127.0.0.1:1' },
+      params: {},
+      inspector,
+    })
+    m.attach({ append: (e) => appendEvent(file, e) })
+    const send = (type, body) =>
+      m.react(appendEvent(file, { type, src: { tab: 't', seq: 1 }, ...body }))
+    send('walk', { phase: 'start' })
+    const path = join(dir, 's', 'x.json')
+    writeFileSync(
+      path,
+      JSON.stringify({
+        windows: [{ orientation: 'portrait', raf: { long25: 0, max: 18, frames: 100, p50: 16.6 } }],
+        steady: [
+          { isolated: true, adapter: 'a/a', raf_p50_ms: 16.6, raf_p95_ms: 16.9, raf_over20: 0 },
+        ],
+      }),
+    )
+    send('series', { id: 'M09b-fill-rate', n: 1, path })
+    return readEvents(file).find((e) => e.type === 'attempt' && e.status === 'done')
+  }
+
+  test('device-walk attribution: inspector is recorded on a driven attempt, absent on an undriven one', () => {
+    expect(run('detached').inspector).toBe('detached')
+    expect(run('attached').inspector).toBe('attached')
+    expect(run(undefined)).not.toHaveProperty('inspector')
   })
 })

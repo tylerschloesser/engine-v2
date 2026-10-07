@@ -62,6 +62,8 @@ export function createFakeBackend(o = {}) {
     },
     screenshot: rec('screenshot'),
     cleanup: rec('cleanup'),
+    // The context switches of `--detach-inspector` (iOS only): recorded, not part of the Android-shaped interface.
+    ...(o.inspector ? { native: rec('native'), web: rec('web') } : {}),
   }
   return withQuiet(b, { onViolation: (m) => violations.push({ m, at: Date.now() }) })
 }
