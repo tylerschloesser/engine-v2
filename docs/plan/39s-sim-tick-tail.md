@@ -39,3 +39,4 @@ The orchestrator re-runs M39-large-save driven on the Pixel (and on the iPhone o
 
 ## Deviations
 (filled in during Phase 3)
+- **Driven iPhone round `m39r-iphone` (orchestrator, before this milestone):** M39-large-save auto **fail**, `tick_p95_ms` 13.86 (limit 10), `sim_tick` p50 9.4 / p95 max 12.4, memory and reloads pass; ran after M16-low-power left Low Power Mode on (finding 8, M39u), so throttled to 30 Hz; not a valid iPhone result, re-run owed after M39u. The iPhone baseline for this milestone has to be re-measured after M39u.
