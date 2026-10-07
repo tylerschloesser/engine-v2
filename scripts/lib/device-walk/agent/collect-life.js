@@ -117,6 +117,13 @@
     },
     /** M16-coexist: the whole window with the page's scripted pan (`?autopan=1`) and a Paint a second. */
     async coexist(item) {
+      // M39t: the page publishes `engine_mem_grows` only after its first reading (a 3 s interval); a window
+      // that sampled before that has no value to judge. Wait for it, bounded like the page's own ready.
+      if (
+        !(await ready(item)) ||
+        !(await waitFor(() => readings().engine_mem_grows != null, item.opts.timeoutMs))
+      )
+        return { ready: false, why: notReadyWhy(), errors: errors() }
       let paints = 0
       const m = await measureWindow(item, async (i) => {
         await act('paint', { x: 50 + (i % 20), y: 50 + (i % 7) })
