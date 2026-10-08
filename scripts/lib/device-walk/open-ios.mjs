@@ -111,7 +111,10 @@ export function startDriverless(o) {
 
   const guard = (when) => {
     const alive = procs()
-    if (!alive.length) return
+    if (!alive.length) {
+      log(`driverless: no appium, xcodebuild or WebDriverAgent process ${when}`)
+      return
+    }
     const msg = `a driver process is alive ${when}: ${alive.join(' | ').slice(0, 300)}; a WDA session degrades WebKit's frame delivery (ADR 0056), so the round is not measured`
     append({ type: 'drive', action: 'refused', id: 'walk', n: 0, reason: msg })
     throw new Error(msg)
