@@ -7,6 +7,7 @@
 //   pnpm device:walk --apply <round> [--dry-run]
 //   pnpm device:walk --auto [--round <name>] [--only <id-prefix,...>] [--no-open] [--no-tunnel]
 //     (M39f: one QR, the phone and the Mac's own browsers walk the round; the Mac page is a live monitor)
+//   pnpm device:walk --auto --open ios [--round <r>] [--only ...]   (M39ad: the USB iPhone, driverless: no WDA, no person)
 //   pnpm device:walk --auto --drive ios --detach-inspector   (M39v: the Web Inspector is detached during measuring windows)
 //   pnpm device:walk --wait <round> [--timeout <s>] [--json]       (exit 0 done, 2 stalled or timed out)
 //   pnpm device:walk --manual ...                                  (the M39e flow; the default without --auto)
@@ -56,6 +57,7 @@ export function parseArgs(argv) {
     '--monitor-port',
     '--base-port',
     '--drive',
+    '--open',
     '--judge',
     '--note',
   ])
@@ -186,6 +188,11 @@ async function main() {
     const drive = values.drive
     if (drive !== undefined && !['android', 'ios'].includes(drive))
       fail('--drive takes android or ios')
+    const open = values.open
+    if (open !== undefined && open !== 'ios') fail('--open takes ios')
+    if (open && drive) fail('--open and --drive are different ways to start the phone')
+    if (open && flags.has('--no-tunnel'))
+      fail('--open ios needs the tunnel (https, a secure context)')
     const code = await autoCli({
       repo: REPO,
       round,
@@ -196,11 +203,12 @@ async function main() {
       // An Android phone is on USB: its origins are the loopback ones, reached through `adb reverse`.
       // The iPhone has no `adb reverse`, and a plain-http address is not a secure context: it needs the tunnel.
       tunnel: drive === 'android' ? flags.has('--tunnel') : !flags.has('--no-tunnel'),
-      noOpen: flags.has('--no-open') || !!drive,
+      noOpen: flags.has('--no-open') || !!drive || !!open,
       noBuild: flags.has('--no-build'),
       // A driven full round runs for hours: `--timeout <seconds>` (default 90 min) bounds it.
       timeoutMs: values.timeout ? Math.round(Number(values.timeout) * 1000) : undefined,
       drive,
+      open,
       detachInspector: flags.has('--detach-inspector'),
       params,
       monitorPort: values['monitor-port'],

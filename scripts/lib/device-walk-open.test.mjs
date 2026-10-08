@@ -1,10 +1,13 @@
 // M39ad: the iPhone's driverless round: the runner path warms before the join URL is printed, the opener, the
 // WDA guard and the act prompts of a round with no hands.
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { assertRunnerWarm } from './device-walk/auto-cli.mjs'
 import { createFakePage } from './device-walk/fake-agent-page.mjs'
-import { replay } from './device-walk/rounds.mjs'
+import { createIosOpener, openerArgs, startDriverless } from './device-walk/open-ios.mjs'
+import { appendEvent, readEvents, replay } from './device-walk/rounds.mjs'
 import { runnerPaths, warmTunnel } from './device-walk/warm.mjs'
 
 const res = (status, headers, body = '') => ({
@@ -166,5 +169,131 @@ describe('device-walk open: env facts (step 3, 5)', () => {
       driver: 'none',
       wakeLock: 'skipped (autostart)',
     })
+  })
+})
+
+describe('device-walk open: --open ios (step 5)', () => {
+  const ID = 'M29-net-heap'
+  const URL_ = 'https://t1.trycloudflare.com/__walk/runner.html?walk=abc&run=r'
+  const rig = (extra = {}) => {
+    const dir = mkdtempSync(join(tmpdir(), 'walk-open-'))
+    const file = join(dir, 'r.jsonl')
+    const opened = []
+    const opener = {
+      name: 'devicectl',
+      open: async (u) => void opened.push(u),
+      screenshot: async () => false,
+    }
+    let over = false
+    let windowFn = () => {}
+    const d = startDriverless({
+      opener,
+      joinUrl: URL_,
+      file,
+      ids: [ID],
+      seriesDir: dir,
+      append: (e) => appendEvent(file, e),
+      settle: () => {},
+      isDone: () => over,
+      lastSeen: () => extra.seen?.() ?? 0,
+      onWindow: (fn) => {
+        windowFn = fn
+      },
+      driverProcesses: () => [],
+      pollMs: 5,
+      sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 5))),
+      log: () => {},
+      ...extra.o,
+    })
+    return { d, file, opened, finish: () => (over = true), window: (e) => windowFn(e) }
+  }
+
+  test('device-walk open: the opener is devicectl --payload-url into Safari, never WDA', async () => {
+    expect(openerArgs({ udid: 'U', url: 'https://x/y?a=1' })).toEqual([
+      'xcrun',
+      'devicectl',
+      'device',
+      'process',
+      'launch',
+      '--device',
+      'U',
+      '--payload-url',
+      'https://x/y?a=1',
+      'com.apple.mobilesafari',
+    ])
+    const ran = []
+    const o = createIosOpener({
+      udid: 'U',
+      run: async (argv) => (ran.push(argv), { code: 0, out: 'Launched application.' }),
+    })
+    await o.open('https://x/y')
+    expect(ran[0].slice(0, 3)).toEqual(['xcrun', 'devicectl', 'device'])
+    const bad = createIosOpener({ run: async () => ({ code: 1, out: 'device is locked' }) })
+    await expect(bad.open('https://x')).rejects.toThrow(/could not open the URL.*locked/)
+  })
+
+  test('device-walk open: the URL is opened with autostart=1 after a clean process check, env records opener and driver none', async () => {
+    const r = rig()
+    await new Promise((x) => setTimeout(x, 30))
+    r.finish()
+    await r.d.finished
+    expect(r.opened).toEqual([`${URL_}&autostart=1`])
+    expect(replay(readEvents(r.file), []).env).toBeNull() // only partial facts so far: no full env yet
+    expect(readEvents(r.file).find((e) => e.type === 'env')).toMatchObject({
+      partial: true,
+      opener: 'devicectl',
+      driver: 'none',
+    })
+  })
+
+  test('device-walk open: a live WDA process before the first window fails the round and nothing is opened', async () => {
+    const r = rig({ o: { driverProcesses: () => ['4242 node appium --port 4723'] } })
+    await expect(r.d.finished).rejects.toThrow(
+      /driver process is alive before the first measuring window: 4242 node appium/,
+    )
+    expect(r.opened).toEqual([])
+    expect(readEvents(r.file).find((e) => e.action === 'refused')).toBeTruthy()
+  })
+
+  test('device-walk open: a WDA process that appears is caught at the next window start', async () => {
+    let alive = []
+    const r = rig({ o: { driverProcesses: () => alive, guardEveryMs: 1e9 } })
+    await new Promise((x) => setTimeout(x, 30))
+    alive = ['7 xcodebuild -project WebDriverAgent.xcodeproj APPIUM_XCODEBUILD_WDA_MARKER']
+    r.window({ phase: 'start', id: ID })
+    await expect(r.d.finished).rejects.toThrow(/at a measuring window start/)
+  })
+
+  test('device-walk open: an act prompt ends as the NotDrivable skip by device, never a hang', async () => {
+    const r = rig()
+    appendEvent(r.file, { type: 'attempt', id: ID, n: 1, variant: 'fixture', page: 'p', rung: 0 })
+    appendEvent(r.file, {
+      type: 'prompt',
+      id: ID,
+      n: 1,
+      kind: 'act',
+      text: 'Turn airplane mode on for 10 seconds',
+    })
+    await new Promise((x) => setTimeout(x, 60))
+    r.finish()
+    await r.d.finished
+    const res = readEvents(r.file).filter((e) => e.type === 'result')
+    expect(res).toHaveLength(1)
+    expect(res[0]).toMatchObject({
+      id: ID,
+      result: 'skip',
+      by: 'device',
+      notes: 'NotDrivable: driverless open has no hands (Turn airplane mode on for 10 seconds)',
+    })
+  })
+
+  test('device-walk open: a phone not seen within the bound gets one more open, logged', async () => {
+    const logs = []
+    const r = rig({ o: { seenTimeoutMs: 20, log: (l) => logs.push(l) } })
+    await new Promise((x) => setTimeout(x, 120))
+    r.finish()
+    await r.d.finished
+    expect(r.opened).toHaveLength(2)
+    expect(logs.some((l) => /not been seen.*opening the URL again/.test(l))).toBe(true)
   })
 })

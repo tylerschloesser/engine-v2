@@ -13,6 +13,7 @@ import { devicePerson } from './drive/person.mjs'
 import { createLive, readLive, waitRound } from './live.mjs'
 import { openMacBrowser } from './mac-browser.mjs'
 import { createMonitor } from './monitor.mjs'
+import { createIosOpener, startDriverless } from './open-ios.mjs'
 import { readEvents } from './rounds.mjs'
 import { OVERRIDES } from './serving.mjs'
 import { reapOrphans, reapStale, spawnServe } from './spawn-serve.mjs'
@@ -145,7 +146,7 @@ export async function autoCli(o) {
       // `client: 'both'`: the phone walks its rows, the Mac's own browsers walk theirs. `botTimings` (dev and
       // tests) is the M34 bot's, not a round parameter.
       // A driven round is the phone's alone (the Mac's own browsers are not driven).
-      params: { client: o.drive ? 'phone' : 'both', ...paramsRest },
+      params: { client: o.drive || o.open ? 'phone' : 'both', ...paramsRest },
       // M39v: how the Web Inspector stood during the windows (recorded on each attempt); a driven round only.
       inspector: o.drive
         ? o.drive === 'ios' && o.detachInspector
@@ -155,7 +156,7 @@ export async function autoCli(o) {
       botTimings,
       signal: ac.signal,
       // M39w: a driven round ends when only parked judge sheets are left (nothing here can answer them).
-      endOnParked: !!o.drive,
+      endOnParked: !!(o.drive || o.open),
       log,
       openMac: o.openMac ?? ((browser, url) => openMacBrowser(browser, url, { log })),
       basePort: o.basePort,
@@ -241,6 +242,32 @@ export async function autoCli(o) {
       })
       driver.finished.catch((e) => {
         log(`drive failed: ${e.stack ?? e}`)
+        ac.abort()
+      })
+    }
+    if (o.open) {
+      // M39ad: no WDA, no Appium, no person: the Mac opens the URL, the page starts itself.
+      const opener = (o.makeOpener ?? (() => createIosOpener({ log })))(o.open)
+      live.set({ open: o.open })
+      log(
+        `opening the round on the ${o.open} phone with ${opener.name} (no driver, no person): ${run.joinUrl}`,
+      )
+      driver = startDriverless({
+        opener,
+        joinUrl: run.joinUrl,
+        file,
+        ids: walked.map((i) => i.id),
+        seriesDir,
+        append: (e) => run.api.append(e),
+        settle: () => run.machine.settle(),
+        isDone: () => run.machine.walkOver(),
+        lastSeen: () => run.api.seen().at,
+        onWindow: (fn) => run.api.onWindow(fn),
+        driverProcesses: o.driverProcesses,
+        log,
+      })
+      driver.finished.catch((e) => {
+        log(`driverless open failed: ${e.message ?? e}`)
         ac.abort()
       })
     }
