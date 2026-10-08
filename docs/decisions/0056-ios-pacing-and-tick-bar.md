@@ -1,6 +1,6 @@
 # 0056: What M09b asserts on iOS, and which phone is the large-save tick bar
 
-Status: Accepted (2026-10-07). Amends what [0010](0010-rates-and-subscriptions.md) (the tick ceiling) and the M09b-fill-rate check say about phones. Implemented by M39z. Tyler answered Q18 (a) and Q19 "yes to all" on 2026-10-07.
+Status: Accepted (2026-10-07). Amends what [0010](0010-rates-and-subscriptions.md) (the tick ceiling) and the M09b-fill-rate check say about phones. Implemented by M39z. Tyler answered Q18 (a) and Q19 "yes to all" on 2026-10-07. Amended by [0057](0057-ios-m09b-portrait-only.md) (iOS M09b measures portrait only).
 
 ## Context
 

@@ -1,6 +1,6 @@
 # M39ac: the iPhone's driverless M09b measures portrait only
 
-Status: not started · After: 39ab · Tyler-dependent: no (Tyler agreed 2026-10-07)
+Status: done (2026-10-07) · After: 39ab · Tyler-dependent: no (Tyler agreed 2026-10-07)
 
 ## Goal
 ADR 0056 judges iOS frame-pacing items only from driverless QR runs. M09b-fill-rate measures one 60 s window per orientation, with a "Rotate the phone to landscape/portrait." prompt between them (`scripts/lib/device-walk/agent/driver.js`, about lines 112-260), and every ladder rung repeats both. A page cannot rotate an iPhone (Safari has no `screen.orientation.lock`), so in a driverless run Tyler has to turn the phone, up to 4 times. The landscape window adds nothing to the fill-rate question on a phone: it is the same pixel count with a different aspect. Resize handling is covered elsewhere, by M11-gestures' rotation criterion (`rotation_keeps_centre`), which the driver can do without skewing timing. Tyler agreed on 2026-10-07 to measure portrait only there. When this is done, M09b on iOS asks for no rotation, and passes or fails on its portrait windows alone.
@@ -23,10 +23,10 @@ M18-anchors' orientations; any limit; re-running rounds (the orchestrator's).
 `scripts/lib/device-walk/agent/driver.js`, `scripts/lib/device-walk/checks.mjs`, their tests, `docs/plan/device-checks.md` (the M09b section only), the new ADR.
 
 ## Exit criteria
-- [ ] The three tests exist, pass, and were seen red (red lines pasted).
-- [ ] ADR 0057 exists; the M09b Pass text and hash match.
-- [ ] `pnpm test tools` green (pasted line).
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The three tests exist, pass, and were seen red (red lines pasted).
+- [x] ADR 0057 exists; the M09b Pass text and hash match.
+- [x] `pnpm test tools` green (pasted line).
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test tools` (targeted, foreground). No phone runs.
@@ -38,3 +38,4 @@ The orchestrator's driverless iPhone round with Tyler.
 - Seams: plan flag `portraitOnlyIos: true` on M09b only (M18 untouched); collector returns `portraitOnly: true` on iOS; criteria fields `limitBy` / `reduceBy: { ios }` on `windows_measured` (reducer `count-portrait`, limit 1 on iOS). `createFakePage({ userAgent })` added. Pass hash `eee998a5` -> `b494714e`.
 - "Every portrait" is enforced by the collector (it measures nothing else on iOS), not by a second criterion: existing pacing tests feed iOS a portrait+landscape fixture and must stay green; a landscape-only record fails (value 0).
 - Not done (not mine to edit): ADR index rows in `PRE-PLAN.md` §1, `PLAN.md` plan-level line, root `CLAUDE.md` ADR range (0001-0057), `Amended by 0057 §1` on 0056's Status line.
+- **Gate (orchestrator):** accepted. 'Every portrait' is enforced by the collector, which measures nothing else on iOS, plus the `count-portrait` reducer (a landscape-only record fails `windows_measured`), with no separate criterion. ADR bookkeeping by the orchestrator.
