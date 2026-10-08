@@ -1,6 +1,6 @@
 # M39ad: the iPhone's driverless round runs without Tyler
 
-Status: not started · After: 39ac · Tyler-dependent: no (Tyler asked for it 2026-10-08; the iPhone is free for this milestone)
+Status: done (2026-10-08) · After: 39ac · Tyler-dependent: no (Tyler asked for it 2026-10-08; the iPhone is free for this milestone)
 
 ## Goal
 ADR 0056 judges iOS frame-pacing items only from driverless runs, because a live WDA session degrades WebKit's frame delivery. Today "driverless" means Tyler opens the join URL on the iPhone and taps Start. On 2026-10-08 a resumed QR round (`m39ad-iphone-qr`, second run) never saw the phone for 30 min although Tyler opened the link as told, and the tool cannot say why. When this is done, `pnpm device:walk --auto --open ios --round <r> --only ...` opens the round on the USB iPhone with no person and **no WDA/Appium/XCUITest process alive while anything is measured**, the walk starts without a tap, and the round exits by itself like a driven one (M39w). A refused or never-arriving phone is visible in `--status`.
@@ -32,12 +32,12 @@ Changing any criterion or limit; WDA open-then-teardown; running the orchestrato
 In `pnpm test tools` (ADR 0054; the suite runs 5-7 s of its 9 s budget: keep new tests fast, no real network or phone): a refused request with a wrong token and one with a wrong host each show up in `phone.requests.refused`; warm-up waits for the runner path and fails when it never answers; `autostart=1` sends `walk start` after the idle probe with no tap (fake page); `--open ios` refuses to measure while a fake WDA process marker is alive; an act prompt in open mode ends as the `NotDrivable` skip; the opener builds the command line verified in step 4. Each seen red once (paste the red line).
 
 ## Exit criteria
-- [ ] The tests above exist, pass, and were seen red.
-- [ ] Step 4's opener verified on the iPhone: command and evidence pasted.
-- [ ] **Proof run** on the iPhone: `timeout 900 pnpm device:walk --auto --open ios --round m39ad-proof --only M11-boot`, with no person touching the phone: the phone is seen, the item gets a result, the process exits by itself, `pgrep -fl "appium|xcodebuild|WebDriverAgent"` was empty throughout (show how you checked). Paste `--status --json` (state, phone, requests, env.opener/driver).
-- [ ] Cleanup after the proof: `pgrep -fl "device-walk|appium|xcodebuild|cloudflared|vite preview"` empty.
-- [ ] `pnpm test tools` green (pasted line).
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The tests above exist, pass, and were seen red.
+- [x] Step 4's opener verified on the iPhone: command and evidence pasted.
+- [x] **Proof run** on the iPhone: `timeout 900 pnpm device:walk --auto --open ios --round m39ad-proof --only M11-boot`, with no person touching the phone: the phone is seen, the item gets a result, the process exits by itself, `pgrep -fl "appium|xcodebuild|WebDriverAgent"` was empty throughout (show how you checked). Paste `--status --json` (state, phone, requests, env.opener/driver).
+- [x] Cleanup after the proof: `pgrep -fl "device-walk|appium|xcodebuild|cloudflared|vite preview"` empty.
+- [x] `pnpm test tools` green (pasted line).
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test tools` (targeted, foreground). The single proof run above, foreground, bounded by `timeout`. Never leave the iPhone locked, asleep or in Low Power Mode; never more than the proof run on it.
@@ -54,3 +54,4 @@ The orchestrator's driverless round for M29-net-heap and M34-remote-motion after
 - `--open ios` needs the tunnel (`--no-tunnel` and `--drive` together with it are refused). Monitor tab not opened. The loop does nothing but one log read per second inside a measuring window. Driver check: `pgrep -fl "appium|xcodebuild|WebDriverAgent|APPIUM_XCODEBUILD_WDA_MARKER"` before the first open, at every `window` start marker and every 5 s otherwise; each clean check is a log line; a hit appends a `drive` `refused` event and fails the round (exit 2).
 - **Act prompts on iOS today (read from the collectors, not measured):** M09b-fill-rate: "Rotate the phone to portrait." only when the page starts in landscape (portrait-only on iOS, ADR 0057), otherwise none; M16-coexist (`coexist`), M29-net-heap (`netheap`), M34-remote-motion (`motion`): none (`acts: []`, no `ask` in their collectors). In this mode a landscape start would end M09b as the NotDrivable skip.
 - **Proof run** (`timeout 900 pnpm device:walk --auto --open ios --round m39ad-proof --only M11-boot --timeout 800`, nobody touched the phone, ~1 min): `M11-boot` pass by auto; state `done`; `phone.requests` `{served: 1, warm: 1, refused: {}, last: null}`; `env.opener` devicectl, `env.driver` none, `env.wakeLock` "skipped (autostart)", UA iPhone iOS 18.7 Safari 27.0.1, `crossOriginIsolated` true. The tool logged "no appium, xcodebuild or WebDriverAgent process" before the first open and 6 times while the round ran; `pgrep` after the exit was empty. Load average 5.9 at the start. Round log: `docs/plan/device-rounds/m39ad-proof.jsonl`.
+- **Gate (orchestrator):** accepted. Full `pnpm test` and `pnpm lint` green (tools 281 in 5.4 s/9 s, browser 44 s/48 s). Inject-fail by the orchestrator: guard disabled (`if (true)`) turns both WDA-guard tests red; reverted. Partial `env` merge accepted. The 7 tools reds were the orchestrator's apply commit `2759636` meeting tests that read the live checklist; fixed here with `test-checks.mjs`.
