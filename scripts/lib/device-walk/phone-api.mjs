@@ -64,6 +64,7 @@ export function createPhoneApi({
   stepFor = () => ({}),
   react = () => [],
   observe = () => {},
+  onRefusal = () => {},
   agentPath = here('./agent/agent.js'),
   driverPath = here('./agent/driver.js'),
   lifePath = here('./agent/collect-life.js'),
@@ -79,6 +80,21 @@ export function createPhoneApi({
   const seenMac = { at: 0, tab: null, count: 0 } // the Mac browsers' tabs (`mac-...`), apart from the phone's
   let cut = { from: 0, until: 0 }
   let listener = null
+  // M39ad: what the phone's requests came to. A refusal names its reason, the Host header and the first 8
+  // characters of the token it carried (never more), so a phone that never arrives is not silent.
+  const counts = { served: 0, warm: 0, refused: {}, last: null }
+  const refused = (request, url, reason) => {
+    counts.refused[reason] = (counts.refused[reason] ?? 0) + 1
+    const info = {
+      reason,
+      host: String(request.headers.host ?? ''),
+      token: (url.searchParams.get('walk') ?? '').slice(0, 8),
+      path: url.pathname,
+      at: clock(),
+    }
+    counts.last = info
+    onRefusal(info, counts.refused[reason] === 1)
+  }
 
   const rebuild = () => {
     for (const e of readEvents(file))
@@ -188,18 +204,26 @@ export function createPhoneApi({
     res.end(typeof body === 'string' ? body : JSON.stringify(body))
   }
 
+  const deny = (req, res, url, code, reason) => {
+    refused(req, url, reason)
+    return send(res, code, { error: reason })
+  }
+
   function handler(req, res) {
     const url = new URL(req.url ?? '/', 'http://x')
     if (!url.pathname.startsWith('/__walk/')) return send(res, 404, { error: 'not found' })
-    if (!hostOk(req)) return send(res, 403, { error: 'host' })
-    if (isCut()) return send(res, 503, { error: 'cut' })
+    if (!hostOk(req)) return deny(req, res, url, 403, 'host')
+    if (isCut()) return deny(req, res, url, 503, 'cut')
     const code = req.method === 'GET' ? publicCode[url.pathname] : undefined
     if (code) return asset(res, code, 'text/javascript; charset=utf-8')
-    if (!tokenOk(url)) return send(res, 403, { error: 'token' })
-    if (req.method === 'GET' && url.pathname === '/__walk/runner.html')
+    if (!tokenOk(url)) return deny(req, res, url, 403, 'token')
+    if (req.method === 'GET' && url.pathname === '/__walk/runner.html') {
+      // `warm=1` is the Mac warming the tunnel (M39ad): not the phone arriving.
+      counts[url.searchParams.get('warm') ? 'warm' : 'served']++
       return asset(res, runnerPath, 'text/html; charset=utf-8')
+    }
     if (req.method === 'POST' && url.pathname === '/__walk/msg') {
-      if (!originOk(req)) return send(res, 403, { error: 'origin' })
+      if (!originOk(req)) return deny(req, res, url, 403, 'origin')
       let body = ''
       let big = false
       req.on('data', (d) => {
@@ -243,15 +267,16 @@ export function createPhoneApi({
 
   function upgrade(req, socket, head) {
     const url = new URL(req.url ?? '/', 'http://x')
-    const refuse = (code, why) => {
+    const refuse = (code, why, reason) => {
+      if (reason) refused(req, url, reason)
       socket.write(`HTTP/1.1 ${code} ${why}\r\nconnection: close\r\n\r\n`)
       socket.destroy()
     }
     if (url.pathname !== '/__walk/ws') return refuse(404, 'Not Found')
-    if (!hostOk(req)) return refuse(403, 'Forbidden')
-    if (isCut()) return refuse(503, 'Service Unavailable')
-    if (!tokenOk(url)) return refuse(403, 'Forbidden')
-    if (!originOk(req)) return refuse(403, 'Forbidden')
+    if (!hostOk(req)) return refuse(403, 'Forbidden', 'host')
+    if (isCut()) return refuse(503, 'Service Unavailable', 'cut')
+    if (!tokenOk(url)) return refuse(403, 'Forbidden', 'token')
+    if (!originOk(req)) return refuse(403, 'Forbidden', 'origin')
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
   }
 
@@ -267,6 +292,8 @@ export function createPhoneApi({
     process,
     lastSeq: (tab) => lastSeq.get(tab) ?? 0,
     seen: () => ({ ...seen }),
+    /** `{ served, warm, refused: { <reason>: n }, last }` (M39ad). */
+    requests: () => ({ ...counts, refused: { ...counts.refused } }),
     seenMac: () => ({ ...seenMac }),
     /** `fn(event)` for every `window` marker the phone logs; returns the unsubscribe. */
     onWindow: (fn) => {

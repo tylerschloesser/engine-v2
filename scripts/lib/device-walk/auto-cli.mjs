@@ -129,6 +129,13 @@ export async function startAutoRound(o) {
     token,
     seriesDir,
     ...machine.hooks,
+    // One line on the first refusal of each reason; the counts are in `--status --json` (`phone.requests`).
+    onRefusal: (r, first) => {
+      if (first)
+        log(
+          `phone API refused a request: ${r.reason} (Host ${r.host || '-'}, token ${r.token || '-'}..., ${r.path})`,
+        )
+    },
     observe: (msg, at) => {
       if (String(msg.tab).startsWith('mac')) macSeen[browserOf(msg.tab)] = at
     },

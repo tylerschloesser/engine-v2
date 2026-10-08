@@ -186,9 +186,16 @@ export async function autoCli(o) {
     live.set({ phase: 'serving', joinUrl: run.joinUrl, monitorUrl, mode: 'auto' })
     let lastAt = 0
     let lastMac = 0
+    let lastReq = ''
     beat = setInterval(() => {
       const seen = run.api.seen()
       const mac = run.api.seenMac()
+      const rq = run.api.requests()
+      const rqKey = JSON.stringify(rq)
+      if (rqKey !== lastReq) {
+        lastReq = rqKey
+        live.set({ requests: rq })
+      }
       if (seen.at !== lastAt) {
         lastAt = seen.at
         live.set({ phone: { lastSeen: seen.at, tab: seen.tab, count: seen.count } })

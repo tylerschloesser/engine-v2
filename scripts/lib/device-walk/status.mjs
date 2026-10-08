@@ -89,7 +89,8 @@ export function fullStatus({ round, file, items, events, overrides, live, now, a
     joinUrl: live?.joinUrl ?? null,
     monitorUrl: live?.monitorUrl ?? null,
     pid: live?.pid ?? null,
-    phone: rs.phone,
+    // M39ad: what the phone's requests came to (served runner pages, refusals by reason, the last one).
+    phone: { ...rs.phone, requests: live?.requests ?? { served: 0, refused: {}, last: null } },
     current: rs.current,
     humanPending: rs.humanPending,
     prompts: rs.prompts,
