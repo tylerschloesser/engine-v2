@@ -78,6 +78,10 @@
   let reporting = false
   let finishing = false
   let tapN = +sessionStorage.getItem(TAPS) || 0
+  // M39ad `&autostart=1`: the Mac opened this page on a USB phone (no WDA, no person): after the same 30 s idle
+  // probe it sends `walk start` itself. Auto-Lock Never is a precondition of that phone, so there is no
+  // Auto-Lock sheet, no Start tap and no wake-lock request (a lock request needs a gesture).
+  const AUTO = new URLSearchParams(location.search).get('autostart') === '1'
 
   A.on('step', (s) => { cur = s; drive(s) })
 
@@ -93,7 +97,8 @@
     if (probing && document.hidden) probeHidden = true
     if (!document.hidden && probeHidden && !probing) $('probemsg').textContent = 'The screen locked or you left the page: set Auto-Lock to Never, then run the idle check again.'
   })
-  $('probe').onclick = () => {
+  $('probe').onclick = () => runProbe()
+  function runProbe() {
     const ms = (cur && cur.params && cur.params.probeMs) || 30000
     probing = true
     probeHidden = false
@@ -110,23 +115,41 @@
       if (ok) {
         $('probemsg').textContent = 'Idle check passed.'
         $('probe').hidden = true
+        if (AUTO) { startWalk(); return }
         $('start').hidden = false
         $('start').disabled = false
       } else {
         $('probe').disabled = false
         $('probe').textContent = 'Run the idle check again'
+        if (AUTO) { autoRan = false; $('probe').hidden = true; setTimeout(autoPreflight, 3000) }
         if (!document.hidden) $('probemsg').textContent = 'The screen locked or you left the page: set Auto-Lock to Never, then run the idle check again.'
       }
     }, 250)
   }
-  $('start').onclick = async () => {
+  $('start').onclick = () => startWalk()
+  async function startWalk() {
     $('start').disabled = true
-    await A.start() // the gesture: best-effort wake lock
+    if (AUTO) A.send('env', { partial: true, wakeLock: 'skipped (autostart)' })
+    else await A.start() // the gesture: best-effort wake lock
     const walk = cur && cur.kind === 'walk'
     const ack = walk
       ? await A.sendAndWait('walk', { phase: 'start', origin: location.origin })
       : await A.sendAndWait('selftest', { phase: 'start', origin: location.origin })
-    if (!ack) { status('The Mac did not answer; tap Start again.'); $('start').disabled = false }
+    if (!ack) {
+      status('The Mac did not answer; tap Start again.')
+      $('start').disabled = false
+      if (AUTO) { $('start').hidden = false; autoRan = false; setTimeout(autoPreflight, 2000) }
+    }
+  }
+  // Autostart: the idle check runs by itself once the first step says it is idle (no sheet, no tap).
+  let autoRan = false
+  function autoPreflight() {
+    if (!AUTO || autoRan || probing) return
+    autoRan = true
+    $('autolock').closest('.card').hidden = true
+    $('probebox').hidden = false
+    $('probe').hidden = true
+    runProbe()
   }
   $('tap').onclick = () => {
     A.wakeRequest('tap')
@@ -153,6 +176,7 @@
       document.querySelector('#idle h2').textContent = 'Before you start (a check round)'
       show('idle')
       status('Ready.')
+      autoPreflight()
     } else if (step.phase === 'done') {
       show('done')
       status('The round is finished.')

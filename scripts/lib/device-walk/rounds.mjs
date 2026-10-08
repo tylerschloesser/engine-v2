@@ -96,6 +96,7 @@ export function replay(events, items) {
       prompts: [],
       shots: [],
     })
+  let envNotes = {}
   for (const e of events) {
     if (e.type === 'start') state.only = e.only ?? null
     else if (e.type === 'device')
@@ -104,7 +105,13 @@ export function replay(events, items) {
     else if (e.type === 'env') {
       // A Mac browser's tab (`mac...`) is the Mac's, never the phone's: its facts go to `macEnvs`.
       if (String(e.src?.tab ?? '').startsWith('mac')) state.macEnvs.set(e.ua ?? '', withoutMeta(e))
-      else state.env = withoutMeta(e)
+      else if (e.partial) {
+        // M39ad: facts the tool or the runner page adds (`opener`, `driver`, `wakeLock`); they stay over every
+        // later full `env` of a page on another origin.
+        const { partial: _p, ...facts } = withoutMeta(e)
+        envNotes = { ...envNotes, ...facts }
+        state.env = state.env ? { ...state.env, ...envNotes } : state.env
+      } else state.env = { ...withoutMeta(e), ...envNotes }
     } else if (e.type === 'result' && !ids.has(e.id) && typeof e.id === 'string')
       state.others.set(e.id, {
         t: e.t,

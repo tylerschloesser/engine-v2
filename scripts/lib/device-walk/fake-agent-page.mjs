@@ -201,6 +201,8 @@ export function createFakePage(o = {}) {
   for (const f of o.load ?? []) run(f)
   return {
     window: w,
+    /** Run page source in the page (M39ad: the runner's inline script). */
+    runSource: (src) => runInContext(src, ctx),
     /** The page's `document` (a test may wrap `createElement` to see what the agent mounts). */
     document,
     A: w.__walkAgent,

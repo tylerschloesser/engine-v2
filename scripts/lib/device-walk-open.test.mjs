@@ -1,7 +1,10 @@
 // M39ad: the iPhone's driverless round: the runner path warms before the join URL is printed, the opener, the
 // WDA guard and the act prompts of a round with no hands.
+import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
 import { assertRunnerWarm } from './device-walk/auto-cli.mjs'
+import { createFakePage } from './device-walk/fake-agent-page.mjs'
+import { replay } from './device-walk/rounds.mjs'
 import { runnerPaths, warmTunnel } from './device-walk/warm.mjs'
 
 const res = (status, headers, body = '') => ({
@@ -69,5 +72,99 @@ describe('device-walk open: the tunnel warm-up covers the runner (step 2)', () =
     expect(() =>
       assertRunnerWarm([null, { origin: 'o', r: { ok: false, runnerMissing: [] } }]),
     ).not.toThrow()
+  })
+})
+
+/** The runner page's inline script on the fake page, over a small element table (no DOM, no tap). */
+async function runner(search) {
+  const page = createFakePage({ search })
+  const els = new Map()
+  const el = (id) => {
+    if (!els.has(id))
+      els.set(id, {
+        id,
+        hidden: id !== 'idle',
+        disabled: false,
+        textContent: '',
+        className: '',
+        onclick: null,
+        closest: () => ({ hidden: false }),
+      })
+    return els.get(id)
+  }
+  page.document.getElementById = el
+  page.document.querySelector = () => ({ textContent: '' })
+  page.window.__walkAgent.start = async () => {
+    starts.n++
+  }
+  const starts = { n: 0 }
+  const html = readFileSync(new URL('./device-walk/runner.html', import.meta.url), 'utf8')
+  const inline = html.split('<script>')[1].split('</script>')[0]
+  page.runSource(`var sessionStorage = window.sessionStorage;${inline}`)
+  await page.connect()
+  const sent = () => page.frames.map((f) => f.msg)
+  const stepWalk = async () => {
+    page.sockets[0].receive({
+      type: 'step',
+      step: {
+        kind: 'walk',
+        phase: 'idle',
+        params: { probeMs: 2000 },
+        progress: { done: 0, total: 1 },
+      },
+    })
+    await page.advance(10)
+  }
+  return { page, el, sent, stepWalk, starts }
+}
+
+describe('device-walk open: autostart=1 (step 3)', () => {
+  test('device-walk open: autostart sends walk start after the idle probe with no tap and no wake-lock request', async () => {
+    const r = await runner('?walk=tok&run=r1&tab=t1&autostart=1')
+    await r.stepWalk()
+    expect(r.sent().some((m) => m.type === 'walk')).toBe(false) // not before the probe has passed
+    await r.page.advance(2500)
+    const walks = r.sent().filter((m) => m.type === 'walk')
+    expect(walks).toHaveLength(1)
+    expect(walks[0]).toMatchObject({ phase: 'start' })
+    expect(r.sent().find((m) => m.type === 'selftest')).toMatchObject({
+      phase: 'preflight',
+      ok: true,
+    })
+    expect(r.sent().find((m) => m.type === 'env' && m.partial)).toMatchObject({
+      wakeLock: 'skipped (autostart)',
+    })
+    expect(r.starts.n).toBe(0)
+    expect(r.el('autolock').onclick).not.toBe(null) // still there for a person; just never needed
+  })
+
+  test('device-walk open: without autostart the page waits for the taps', async () => {
+    const r = await runner('?walk=tok&run=r1&tab=t1')
+    await r.stepWalk()
+    await r.page.advance(5000)
+    expect(r.sent().some((m) => m.type === 'walk')).toBe(false)
+  })
+})
+
+describe('device-walk open: env facts (step 3, 5)', () => {
+  test('device-walk open: a partial env adds opener, driver and wakeLock and survives a later full env', () => {
+    const full = (ua) => ({ type: 'env', src: { tab: 't', seq: 1 }, ua, cores: 6 })
+    const note = (o) => ({ type: 'env', partial: true, ...o })
+    const st = replay(
+      [
+        full('A'),
+        note({ opener: 'devicectl', driver: 'none' }),
+        note({ wakeLock: 'skipped (autostart)' }),
+        full('B'),
+      ],
+      [],
+    )
+    expect(st.env).toEqual({
+      ua: 'B',
+      cores: 6,
+      opener: 'devicectl',
+      driver: 'none',
+      wakeLock: 'skipped (autostart)',
+    })
   })
 })
