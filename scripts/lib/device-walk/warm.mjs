@@ -24,9 +24,22 @@ export function pagePaths(distDir, ls = readdirSync) {
 }
 
 /**
+ * The paths the phone's first load takes (M39ad): the runner page with the run token (`warm=1`: the Mac, not the
+ * phone, so the API does not count it as the phone arriving) and the agent script it loads. They are checked for a
+ * 200 and their content type, not for COOP/COEP (the phone API serves them, not the fixture server), and a warm-up
+ * that cannot get them is fatal to the start: the third tunnel of 2026-10-08 took 77 s and its runner was never
+ * warmed, so the printed URL was dead.
+ * @returns {{ path: string, type: RegExp, runner: true }[]}
+ */
+export const runnerPaths = (token) => [
+  { path: `/__walk/runner.html?walk=${token}&warm=1`, type: /^text\/html/, runner: true },
+  { path: '/__walk/agent.js', type: /javascript/, runner: true },
+]
+
+/**
  * Fetch each path of `origin` until all answer with COOP and COEP, bounded by `timeoutMs`. Never throws and
  * never fails the round: it returns what it saw, for the log and for a later reading of why a load failed.
- * @param {{ origin: string, paths: string[], fetch?: typeof fetch, timeoutMs?: number, pollMs?: number,
+ * @param {{ origin: string, paths: (string | { path: string, type: RegExp, runner: true })[], fetch?: typeof fetch, timeoutMs?: number, pollMs?: number,
  *   now?: () => number, sleep?: (ms: number) => Promise<void>, log?: (s: string) => void }} o
  * @returns {Promise<{ ok: boolean, waitedMs: number, rounds: number, missing: { path: string, status: number | null, coop: string | null, coep: string | null }[] }>}
  */
@@ -42,11 +55,12 @@ export async function warmTunnel({
 }) {
   const t0 = now()
   let rounds = 0
-  let missing = paths.map((path) => ({ path, status: null, coop: null, coep: null }))
+  const spec = paths.map((p) => (typeof p === 'string' ? { path: p } : p))
+  let missing = spec.map((p) => ({ path: p.path, status: null, coop: null, coep: null }))
   while (true) {
     rounds++
     const next = []
-    for (const path of paths) {
+    for (const { path, type } of spec) {
       let seen = { path, status: null, coop: null, coep: null }
       try {
         const res = await get(`${origin}${path}`, { signal: AbortSignal.timeout(15_000) })
@@ -57,10 +71,14 @@ export async function warmTunnel({
           coop: res.headers.get('cross-origin-opener-policy'),
           coep: res.headers.get('cross-origin-embedder-policy'),
         }
+        if (type) seen.type = res.headers.get('content-type')
       } catch {
         // the name is not up yet
       }
-      if (!(seen.status === 200 && seen.coop === COOP && seen.coep === COEP)) next.push(seen)
+      const good = type
+        ? seen.status === 200 && type.test(seen.type ?? '')
+        : seen.status === 200 && seen.coop === COOP && seen.coep === COEP
+      if (!good) next.push(type ? { ...seen, runner: true } : seen)
     }
     missing = next
     if (!missing.length || now() - t0 + pollMs > timeoutMs) break
@@ -73,7 +91,7 @@ export async function warmTunnel({
       ? `tunnel warm: ${paths.length} path(s) carry COOP/COEP after ${rounds} round(s), ${waitedMs} ms`
       : `tunnel NOT warm after ${waitedMs} ms: ${missing.map((m) => `${m.path} (${m.status ?? 'no answer'}, coep ${m.coep})`).join(', ')}`,
   )
-  return { ok, waitedMs, rounds, missing }
+  return { ok, waitedMs, rounds, missing, runnerMissing: missing.filter((m) => m.runner) }
 }
 
 /**

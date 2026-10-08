@@ -14,7 +14,7 @@ import { createPhoneApi } from './phone-api.mjs'
 import { qrSvg, qrTerminal } from './qr.mjs'
 import { appendEvent, readEvents } from './rounds.mjs'
 import { createMultiServerControl } from './servers.mjs'
-import { pagePaths, warmTunnel, wsHandshake } from './warm.mjs'
+import { pagePaths, runnerPaths, warmTunnel, wsHandshake } from './warm.mjs'
 
 /**
  * What each variant of `checks.mjs` is served as. `fixture-ws`: the fixture app with `--ws puts` (the real-time
@@ -33,6 +33,20 @@ export const VARIANTS = {
 const serving = (key) => {
   if (!VARIANTS[key]) throw new Error(`no serving for the variant "${key}" (auto-cli.mjs VARIANTS)`)
   return VARIANTS[key]
+}
+
+/** Throws when any tunnel's runner paths never answered: the join URL must not be printed (M39ad). */
+export function assertRunnerWarm(warmed) {
+  const dead = warmed.filter((w) => w?.r.runnerMissing?.length)
+  if (dead.length)
+    throw new Error(
+      `the tunnel never served the runner page: ${dead
+        .map(
+          (w) =>
+            `${w.origin} (${w.r.runnerMissing.map((m) => `${m.path.split('?')[0]} ${m.status ?? 'no answer'}`).join(', ')})`,
+        )
+        .join('; ')}; no join URL printed`,
+    )
 }
 
 const REPO = fileURLToPath(new URL('../../..', import.meta.url))
@@ -157,28 +171,34 @@ export async function startAutoRound(o) {
     const keys = machine.variants()
     log(`starting ${keys.length} server(s): ${keys.join(', ')}`)
     await control.ensureAll(keys.map((key) => ({ key, ...serving(key), tunnel })))
-    // A cold quick tunnel serves its first loads without COOP/COEP for a while: the Mac loads each variant's page,
-    // scripts and module through it until they all carry the headers, before any attempt can open (M39n).
-    if (tunnel)
-      await Promise.all(
-        keys.map((key) => {
-          const u = control.urlsFor(key)
-          if (!u.tunnel) return null
-          const s = serving(key)
-          const dist = join(REPO, 'games/reference', s.bench ? 'dist-bench' : 'dist')
-          return (o.warm ?? warmTunnel)({
-            origin: u.tunnel,
-            paths: s.app === 'reference' ? pagePaths(dist) : ['/'],
-            log,
-          })
-        }),
-      )
+    // The hosts are known now: the warm-up below asks the phone API through each tunnel, which is Host-checked.
     for (const key of keys) {
       const u = control.urlsFor(key)
       origins[key] = control.urlFor(key)
       macOrigins[key] = u.loopback ?? origins[key]
       for (const x of [u.loopback, u.tunnel, origins[key]]) if (x) api.allowHost(x)
       if (u.loopback) api.allowHost(u.loopback.replace('127.0.0.1', 'localhost'))
+    }
+    // A cold quick tunnel serves its first loads without COOP/COEP for a while: the Mac loads each variant's page,
+    // scripts and module through it until they all carry the headers, before any attempt can open (M39n).
+    // M39ad: the runner page and the agent script the join URL loads are part of it, and a tunnel that never
+    // serves them fails the start instead of printing a dead URL.
+    if (tunnel) {
+      const warmed = await Promise.all(
+        keys.map(async (key) => {
+          const u = control.urlsFor(key)
+          if (!u.tunnel) return null
+          const s = serving(key)
+          const dist = join(REPO, 'games/reference', s.bench ? 'dist-bench' : 'dist')
+          const r = await (o.warm ?? warmTunnel)({
+            origin: u.tunnel,
+            paths: [...(s.app === 'reference' ? pagePaths(dist) : ['/']), ...runnerPaths(token)],
+            log,
+          })
+          return { key, origin: u.tunnel, r }
+        }),
+      )
+      assertRunnerWarm(warmed)
     }
     if (keys.includes('reference-bench'))
       bots = createBots({
