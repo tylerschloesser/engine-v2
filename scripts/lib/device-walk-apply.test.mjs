@@ -9,15 +9,16 @@ import { readDeviceChecks } from '../acceptance-check.mjs'
 import { applyRound } from './device-walk/apply.mjs'
 import { parseChecks, selectItems } from './device-walk/parse.mjs'
 import { appendEvent, readEvents, replay } from './device-walk/rounds.mjs'
+import { copyPristineChecks, readPristineChecks } from './device-walk/test-checks.mjs'
 
 const REPO = fileURLToPath(new URL('../..', import.meta.url))
 const REAL = join(REPO, 'docs/plan/device-checks.md')
-const text = readFileSync(REAL, 'utf8')
+const text = readPristineChecks(REAL)
 
 function scratch() {
   const dir = mkdtempSync(join(tmpdir(), 'dwp-'))
   const checks = join(dir, 'device-checks.md')
-  copyFileSync(REAL, checks)
+  copyPristineChecks(REAL, checks)
   return { dir, checks, rounds: join(dir, 'rounds'), log: (r) => join(dir, 'rounds', `${r}.jsonl`) }
 }
 const walk = (s, ...args) =>

@@ -33,6 +33,7 @@ import { ACT_COVERAGE, devicePerson, HANDLERS } from './device-walk/drive/person
 import { parseChecks } from './device-walk/parse.mjs'
 import { appendEvent, readEvents, replay } from './device-walk/rounds.mjs'
 import { fullStatus } from './device-walk/status.mjs'
+import { readPristineChecks } from './device-walk/test-checks.mjs'
 
 const REPO = fileURLToPath(new URL('../..', import.meta.url))
 const AGENT = join(REPO, 'scripts/lib/device-walk/agent')
@@ -782,7 +783,7 @@ describe('device-walk drive: a resumed round does not answer twice', () => {
 
 describe('device-walk drive: --judge', () => {
   const REAL = join(REPO, 'docs/plan/device-checks.md')
-  const text = readFileSync(REAL, 'utf8')
+  const text = readPristineChecks(REAL)
   const { items } = parseChecks(text)
   const ids = ['M11-gestures']
   const log = [

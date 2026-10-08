@@ -8,6 +8,7 @@ import { desktopMedian, medianOf } from './device-walk/desktop-median.mjs'
 import { adapterString, describeEnv, formatEnv, parseUa } from './device-walk/env.mjs'
 import { parseChecks } from './device-walk/parse.mjs'
 import { replay } from './device-walk/rounds.mjs'
+import { readPristineChecks } from './device-walk/test-checks.mjs'
 
 const IPHONE_UA =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1'
@@ -74,7 +75,7 @@ describe('device-walk env', () => {
   })
 
   test('device-walk env: --apply writes Run on from the auto round: device facts from env, numbers from metrics, no typing', () => {
-    const text = readFileSync(CHECKS, 'utf8')
+    const text = readPristineChecks(CHECKS)
     const { items } = parseChecks(text)
     const ids = ['M03-determinism', 'M08-worldgen-ms-per-chunk']
     const sel = items.filter((i) => ids.includes(i.id))

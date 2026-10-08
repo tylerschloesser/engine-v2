@@ -12,10 +12,11 @@ import { createMonitor } from './device-walk/monitor.mjs'
 import { parseChecks } from './device-walk/parse.mjs'
 import { appendEvent, readEvents } from './device-walk/rounds.mjs'
 import { fullStatus } from './device-walk/status.mjs'
+import { copyPristineChecks, readPristineChecks } from './device-walk/test-checks.mjs'
 
 const REPO = fileURLToPath(new URL('../..', import.meta.url))
 const REAL = join(REPO, 'docs/plan/device-checks.md')
-const { items } = parseChecks(readFileSync(REAL, 'utf8'))
+const { items } = parseChecks(readPristineChecks(REAL))
 const IDS = ['M03-determinism', 'M08-worldgen-ms-per-chunk']
 const NOW = 1_000_000_000
 const live = (extra = {}) => ({
@@ -155,7 +156,7 @@ describe('device-walk track: --wait', () => {
 function scratch() {
   const dir = mkdtempSync(join(tmpdir(), 'dwt-'))
   const checks = join(dir, 'device-checks.md')
-  copyFileSync(REAL, checks)
+  copyPristineChecks(REAL, checks)
   const rounds = join(dir, 'rounds')
   mkdirSync(rounds)
   return {
@@ -376,17 +377,16 @@ test('device-walk track: acceptance-check reads the device ticks from another co
 test('device-walk track: every item line is its checkbox line, and apply ticks a wrapped item (M23-opfs-latency)', async () => {
   const { applyRound } = await import('./device-walk/apply.mjs')
   const { replay } = await import('./device-walk/rounds.mjs')
-  const lines = readFileSync(REAL, 'utf8').split('\n')
+  const lines = readPristineChecks(REAL).split('\n')
   for (const it of items)
     expect(lines[it.line - 1], it.id).toMatch(new RegExp(`^- \\[[ xX]\\] \\*\\*${it.id}\\*\\*`))
   const file = join(mkdtempSync(join(tmpdir(), 'dwt-')), 'r.jsonl')
   appendEvent(file, { type: 'result', id: 'M23-opfs-latency', result: 'pass', by: 'auto' })
   const walked = items.filter((i) => i.id === 'M23-opfs-latency')
-  const { text, changes } = applyRound(
-    readFileSync(REAL, 'utf8'),
-    replay(readEvents(file), walked),
-    { round: 'r', overrides: {} },
-  )
+  const { text, changes } = applyRound(readPristineChecks(REAL), replay(readEvents(file), walked), {
+    round: 'r',
+    overrides: {},
+  })
   expect(changes).toContain('tick M23-opfs-latency')
   expect(text).toMatch(/^- \[x\] \*\*M23-opfs-latency\*\*/m)
 })
