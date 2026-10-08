@@ -21,7 +21,7 @@ pnpm device:walk --auto --round <name> [--only M03,M08,M11-boot] --no-open
 
 Then tell Tyler, in one message: the join URL (or the QR file), the pre-flight, and that nothing else is needed. Pre-flight he does once on the phone: Settings, Display & Brightness, **Auto-Lock: Never** (set it back afterwards), Low Power Mode off, Safari as the browser (any network: the tunnel carries it), the Mac awake and on the network. The phone page runs a 30 s idle check and then shows Start.
 
-Do not start a QR (non-driven) auto round without Tyler: the phone is needed. A driven round (1b) needs only the USB phone.
+Do not start a QR (non-driven) auto round without Tyler: the phone is needed. A driven round (1b) or a driverless open (1c) needs only the USB phone.
 
 ## 1b. Start a driven round (no person, a USB phone)
 
@@ -42,6 +42,22 @@ Run it in the background; there is no QR to scan (the printed one is not needed)
 - **Applying** an Android round writes **Run on** lines only and ticks nothing (the ids are the iPhone's rows; the `-android` rows are never ticked). Apply iPhone rounds as in section 4.
 - **Clean up** when the round is over (Ctrl-C or SIGTERM: the tool restores rotation, turns Airplane and Low Power off, removes `adb reverse`/`forward`, ends the Appium session and WDA): `pgrep -fl "device-walk|appium|xcodebuild|cloudflared|vite preview"` must show nothing, `adb reverse --list` and `adb forward --list` must be empty.
 - **Stay Tyler's:** the Mac trackpad pinch (`M11-pinch-desktop-safari`), the desktop Safari and Firefox allocation recordings (`M17b-harness-*`), the human rows (`M38-*`, `M39-full-game-touch`, `M39-two-devices`), `M39-sign-off`, `M39-rerun`.
+
+## 1c. Start a driverless round on the USB iPhone (no person, no WDA)
+
+ADR 0056 judges iOS frame-pacing items only from driverless runs (a live WDA session degrades WebKit's frame delivery). For those items **only this open, or Tyler's QR round, may be used**; `--drive ios` is for everything else.
+
+```
+pnpm device:walk --auto --open ios --round <name> [--only M29-net-heap,M34-remote-motion] --timeout 3600
+```
+
+Run it in the foreground or background, bounded. What it does: serves through tunnels, warms each tunnel until the runner page and `agent.js` answer 200 (a tunnel that never does fails the start; no dead URL is printed), then opens the join URL with `&autostart=1` in Safari on the iPhone with `xcrun devicectl device process launch --device <udid> --payload-url <url> com.apple.mobilesafari` (`scripts/lib/device-walk/open-ios.mjs`; UDID of Tyler's iPhone 12, `IOS_UDID` overrides). The page runs the 30 s idle probe and sends `walk start` itself (no Auto-Lock sheet, no Start tap, no wake-lock request: `env.wakeLock: "skipped (autostart)"`). The tool re-opens the URL once if the phone is not seen within 60 s, and the round ends by itself like a driven one (`done-pending-judge` with deferred judge sheets; section 1b says how to judge). `env.opener` is `devicectl` and `env.driver` is `none`.
+
+Preconditions (nothing sets them for you): the iPhone is plugged in, **unlocked**, Auto-Lock **Never**, Low Power Mode **off**, Safari installed. The tool never locks or sleeps it and starts no WDA, Appium or XCUITest. Before the first window and at every window start it runs `pgrep -fl "appium|xcodebuild|WebDriverAgent"`; a hit fails the round loudly (kill the leftover with `pkill -f APPIUM_XCODEBUILD_WDA_MARKER`, then start again).
+
+No hands: an **act** prompt ends its row as `skip`, `by: device`, notes `NotDrivable: driverless open has no hands (<prompt>)`. Items with act prompts (Low Power, leave the app, rotate from landscape, Wi-Fi) are not for this mode.
+
+If the phone never arrives, `--status <round> --json` shows `phone.requests`: `served` (runner pages the phone loaded; the Mac's warm-up is counted apart), `refused` by reason (`host`, `token`, `origin`, `cut`) and `last` (reason, Host header, 8-character token prefix); the tool also prints one line on the first refusal of each reason. `served: 0` and no refusals means the request never reached the Mac (the tunnel, or the open).
 
 ## 2. Wait without polling the phone
 
