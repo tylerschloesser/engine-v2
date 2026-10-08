@@ -124,6 +124,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 39aa | `39aa-pixel-round-instrument-fixes.md` | three instrument and driver gaps from the Pixel full round `m39y-full-pixel`: the pan swipe in landscape, `world()` positions relative to the 64-tile window origin, and the watchdog reopening the page during a 300 s app-leave (diagnosed 2026-10-07) | 39z | |
 | [x] | 39ab | `39ab-remote-lurch-after-rest.md` | a remote that starts walking after rest is drawn up to a tile behind for about 250 ms (`InterpBuffer::sample` Hermite from a stale rest sample; in 3 driven rounds); monotone fix, red test first, `max_backstep_tiles` in the M34 check (diagnosed 2026-10-07) | 39aa | |
 | [x] | 39ac | `39ac-ios-fill-rate-portrait-only.md` | the iPhone's driverless M09b measures portrait only, so Tyler rotates nothing (a page cannot rotate an iPhone; same pixel count) (ADR 0057; Tyler agreed 2026-10-07) | 39ab | |
+| [ ] | 39ad | `39ad-ios-driverless-without-tyler.md` | the iPhone's driverless round opens and starts with no person and no WDA (`--open ios`, `autostart=1`); tunnel warm-up covers the runner; refused phone requests are counted (a resumed QR round never saw the phone, 2026-10-08) | 39ac | |
 | [ ] | 39 | `39-acceptance.md` | coverage + budget audit, full device checklist, Phase 3 exit | all above | D |
 | [ ] | 39b | `39b-phase-4-handoff.md` | capture what code cannot say in ADRs, `PROMPT.md` for Phase 4. **Phase 3 complete.** | 39 | |
 
