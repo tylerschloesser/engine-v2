@@ -13,6 +13,7 @@
 //            platform (`'advisory'`: the value is recorded and shown, the criterion never decides) and
 //            `only: 'ios'` (the row exists on that platform alone); `pacing: true` marks a frame-pacing or hitch
 //            criterion, advisory on a *driven* iOS attempt (a live WDA session degrades WebKit's frame delivery).
+//            `limitBy` / `reduceBy: { ios?, android? }` (M39ac, ADR 0057): a limit or reducer for that platform in place of `limit` / `reduce`.
 //   metrics  [{ name, source, reduce? }]        recorded in `result.metrics`, never gating
 //   acts     what the person is asked to do (a prompt with a live "detected" tick)
 //   judges   what only the person can judge (a judge prompt)
@@ -36,13 +37,15 @@ export function passHash(text) {
 }
 
 // --- the shared criteria of the fill-rate family (M09b-fill-rate, M18-fill-rate-with-anchors) ----------
-const fillRate = (extra = [], { iosPacing = false } = {}) => [
+const fillRate = (extra = [], { iosPacing = false, portraitIos = false } = {}) => [
   {
     name: 'windows_measured',
     source: 'windows.*.orientation',
     reduce: 'distinct',
     op: '>=',
     limit: 2,
+    // M39ac (ADR 0057): on iOS M09b counts portrait windows alone; one is enough.
+    ...(portraitIos ? { limitBy: { ios: 1 }, reduceBy: { ios: 'count-portrait' } } : {}),
     ref: 'Steps: portrait 60 s, then landscape 60 s (a completeness check, not a Pass number)',
   },
   {
@@ -401,7 +404,7 @@ export const CHECKS = {
     judges: [],
   },
   'M09b-fill-rate': {
-    pass: 'eee998a5',
+    pass: 'b494714e',
     class: 'auto',
     signal:
       'device.html __check.readings() (the HUD numbers as numbers), one 60 s window per orientation',
@@ -409,6 +412,7 @@ export const CHECKS = {
       page: 'device.html?autopan=1&tiles=256&scale=2',
       variant: 'fixture',
       collector: 'fill-rate',
+      portraitOnlyIos: true,
       windowMs: 60 * SECOND,
       warmupMs: 10 * SECOND,
       ladder: FILL_LADDER,
@@ -431,7 +435,7 @@ export const CHECKS = {
           pacing: true,
         },
       ],
-      { iosPacing: true },
+      { iosPacing: true, portraitIos: true },
     ),
     metrics: fillMetrics,
     acts: ['rotate the phone once between the two windows'],
@@ -1785,6 +1789,7 @@ const REDUCERS = {
     const k = v.filter(num)
     return k.length ? Math.max(...k) : null
   },
+  'count-portrait': (v) => v.filter((o) => o === 'portrait').length,
   'count-true': (v) => v.filter((x) => x === true).length,
   /** Gaps (`A.rafGaps().list` entries) with an engine cause: `stall` >= 16 ms, lateness >= 2 ms, or no attribution. */
   'engine-gaps': (v) =>
@@ -2020,7 +2025,8 @@ export function evaluate(entry, data, ctx = {}) {
   const rows = all
     .filter((c) => !c.only || c.only === ctx.platform)
     .map((c) => {
-      const value = read(root, c.source, c.reduce)
+      const value = read(root, c.source, c.reduceBy?.[ctx.platform] ?? c.reduce)
+      const limit = c.limitBy?.[ctx.platform] ?? c.limit
       let ok
       const drivenIos = ctx.platform === 'ios' && ctx.driven === true && c.pacing === true
       const advisory = c.platform?.[ctx.platform] === 'advisory' || drivenIos
@@ -2028,11 +2034,11 @@ export function evaluate(entry, data, ctx = {}) {
         ok = true
         if (drivenIos)
           notes.push(`${c.name}: driven iOS attempt, frame pacing is not judged (ADR 0056)`)
-      } else if (c.op === 'proxy') ok = num(value) ? (value <= c.limit ? true : null) : null
+      } else if (c.op === 'proxy') ok = num(value) ? (value <= limit ? true : null) : null
       else if (value === null || value === undefined) ok = c.nullIs === 'judge' ? null : false
-      else ok = !!OPS[c.op](value, c.limit)
+      else ok = !!OPS[c.op](value, limit)
       if (c.judge === 'always' && !advisory) ok = null
-      const row = { name: c.name, value: round(value ?? null), limit: c.limit, ok }
+      const row = { name: c.name, value: round(value ?? null), limit, ok }
       if (advisory) row.advisory = true
       return { c, row }
     })

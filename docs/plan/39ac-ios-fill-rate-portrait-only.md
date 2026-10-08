@@ -35,4 +35,6 @@ M18-anchors' orientations; any limit; re-running rounds (the orchestrator's).
 The orchestrator's driverless iPhone round with Tyler.
 
 ## Deviations
-(filled in during Phase 3)
+- Seams: plan flag `portraitOnlyIos: true` on M09b only (M18 untouched); collector returns `portraitOnly: true` on iOS; criteria fields `limitBy` / `reduceBy: { ios }` on `windows_measured` (reducer `count-portrait`, limit 1 on iOS). `createFakePage({ userAgent })` added. Pass hash `eee998a5` -> `b494714e`.
+- "Every portrait" is enforced by the collector (it measures nothing else on iOS), not by a second criterion: existing pacing tests feed iOS a portrait+landscape fixture and must stay green; a landscape-only record fails (value 0).
+- Not done (not mine to edit): ADR index rows in `PRE-PLAN.md` §1, `PLAN.md` plan-level line, root `CLAUDE.md` ADR range (0001-0057), `Amended by 0057 §1` on 0056's Status line.

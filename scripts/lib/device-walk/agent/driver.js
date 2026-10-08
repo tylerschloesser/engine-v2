@@ -114,18 +114,30 @@
       const o = item.opts
       if (!(await waitFor(() => check()?.ready, o.timeoutMs)))
         return { ready: false, windows: [], steady: [] }
-      const first = orientation()
+      // M39ac (ADR 0057): on iOS the M09b rungs measure portrait alone; a page cannot rotate an iPhone, so a
+      // second window would need a person. The same rule as `verdictContext` (iPhone, iPad, iPod).
+      const portraitOnly =
+        !!item.plan.portraitOnlyIos && /iPhone|iPad|iPod/.test(navigator.userAgent)
       const windows = []
       const steady = []
+      if (portraitOnly && orientation() !== 'portrait' && !(await rotate(item, 'landscape')))
+        return { ready: true, windows, steady, portraitOnly, errors: clone(check().errors()) }
+      const first = orientation()
       if (item.plan.sweep) await check().act.sweep({ on: true }) // the scripted pan and zoom of M18
-      for (let w = 0; w < 2; w++) {
+      for (let w = 0; w < (portraitOnly ? 1 : 2); w++) {
         if (w === 1 && !(await rotate(item, first))) break
         const m = await measureWindow(item)
         if (!m) return null // interrupted by a hide: the service has the interrupted attempt
         windows.push(m.window)
         steady.push(...m.steady)
       }
-      return { ready: true, windows, steady, errors: clone(check().errors()) }
+      return {
+        ready: true,
+        windows,
+        steady,
+        ...(portraitOnly ? { portraitOnly } : {}),
+        errors: clone(check().errors()),
+      }
     },
     /** `?probe=memory`: follow the probe's own progress lines until it says it is complete. */
     async memory(item) {

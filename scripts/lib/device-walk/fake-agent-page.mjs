@@ -10,7 +10,7 @@ const AGENT = new URL('./agent/', import.meta.url)
 const flush = () => new Promise((r) => setImmediate(r))
 
 /**
- * @param {{ agentDir?: URL, frames?: (t: number) => number, load?: string[], readings?: () => object, search?: string }} [o]
+ * @param {{ agentDir?: URL, frames?: (t: number) => number, load?: string[], readings?: () => object, search?: string, userAgent?: string }} [o]
  * `frames(t)`: the page time of the first frame after `t` (default: a 60 Hz cadence, 16.667 ms).
  * `load`: further agent files to run after the driver (default none).
  */
@@ -137,7 +137,7 @@ export function createFakePage(o = {}) {
     document,
     location,
     history: { state: null, replaceState() {} },
-    navigator: { userAgent: 'fake', platform: 'fake', maxTouchPoints: 5 },
+    navigator: { userAgent: o.userAgent ?? 'fake', platform: 'fake', maxTouchPoints: 5 },
     screen: { width: 400, height: 800, availWidth: 400, availHeight: 800 },
     matchMedia: () => ({ matches: false }),
     addEventListener,
