@@ -428,7 +428,9 @@ export function createIosBackend(o = {}) {
           )
       }
       st.cal.set(key, { offX: px - hit[0], offY: py - hit[1] })
-      log(`ios: calibrated ${key}: page offset (${px - hit[0]}, ${py - hit[1]}) points`)
+      log(
+        `ios: calibrated ${key}: page offset (${px - hit[0]}, ${py - hit[1]}) points; screen.width x height ${m.sw}x${m.sh}, aimed ${px},${py}, hit ${hit[0]},${hit[1]}`,
+      )
     }
     return st.cal.get(key)
   }
