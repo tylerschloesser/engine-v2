@@ -515,6 +515,11 @@ pub struct Host<G: Game> {
     scratch_left: Vec<ChunkCoord>,
     scratch_pristine: Vec<ChunkCoord>,
     scratch_snapshot: Vec<ChunkCoord>,
+    /// The standalone snapshot bytes (`encode_chunk_snapshot`) of this frame's `scratch_snapshot`
+    /// chunks, appended by the drain that priced them, and where each chunk's run lies in it.
+    /// The `ChunkSnapshots` section copies them instead of encoding every chunk a second time.
+    scratch_snap_bytes: Vec<u8>,
+    scratch_snap_spans: Vec<(ChunkCoord, u32, u32)>,
     /// Chunks this frame's drain newly marked held (undone if the frame overflows `out`).
     scratch_new_held: Vec<ChunkCoord>,
     /// docs/plan/28b-reconnect-and-lifecycle.md step 5: this tick's `ChunkKeeps` entries -- chunks
@@ -850,6 +855,8 @@ impl<G: Game> Host<G> {
             scratch_left: Vec::new(),
             scratch_pristine: Vec::new(),
             scratch_snapshot: Vec::new(),
+            scratch_snap_bytes: Vec::new(),
+            scratch_snap_spans: Vec::new(),
             scratch_new_held: Vec::new(),
             scratch_keep: Vec::new(),
             scratch_delta_est: Vec::with_capacity(160),
@@ -1967,23 +1974,39 @@ impl<G: Game> Host<G> {
         self.scratch_entered.clear();
         self.scratch_pristine.clear();
         self.scratch_snapshot.clear();
+        self.scratch_snap_bytes.clear();
+        self.scratch_snap_spans.clear();
         self.scratch_new_held.clear();
         while let Some(&q) = slot.pace.queue.first() {
             let c = q.chunk;
             let snapshot = q.kind == EnterKind::Resnapshot
                 || store.terrain().overlay(c).is_some_and(|o| !o.is_empty())
                 || !store.chunk_overlapping(c).is_empty();
+            // A snapshot is encoded once, here, to price it; the section copies these bytes.
+            let snap_start = self.scratch_snap_bytes.len();
             let cost = if snapshot {
                 let version = self.chunk_versions.get(&c).copied().unwrap_or(0);
-                let mut count = crate::bytes::CountSink::default();
-                encode_chunk_snapshot(store, c, version, &mut count);
-                count.0 as i64
+                encode_chunk_snapshot(
+                    store,
+                    c,
+                    version,
+                    &mut VecBytes(&mut self.scratch_snap_bytes),
+                );
+                (self.scratch_snap_bytes.len() - snap_start) as i64
             } else {
                 PRISTINE_ENTER_COST
             };
             let affordable = slot.pace.tokens >= cost || slot.pace.tokens >= burst;
             if !affordable || (spent > 0 && spent + cost > frame_cap) {
+                self.scratch_snap_bytes.truncate(snap_start);
                 break;
+            }
+            if snapshot {
+                self.scratch_snap_spans.push((
+                    c,
+                    snap_start as u32,
+                    self.scratch_snap_bytes.len() as u32,
+                ));
             }
             slot.pace.tokens -= cost;
             spent += cost;
@@ -2037,6 +2060,7 @@ impl<G: Game> Host<G> {
         insertion_sort_by_key(&mut self.scratch_entered, |c| (c.y, c.x));
         insertion_sort_by_key(&mut self.scratch_pristine, |c| (c.y, c.x));
         insertion_sort_by_key(&mut self.scratch_snapshot, |c| (c.y, c.x));
+        insertion_sort_by_key(&mut self.scratch_snap_spans, |(c, _, _)| (c.y, c.x));
         insertion_sort_by_key(&mut self.scratch_left, |c| (c.y, c.x));
 
         // -- ChunkDeltas: tiles + entity ops for subscribed, non-entering chunks ---------------
@@ -2424,12 +2448,12 @@ impl<G: Game> Host<G> {
                 });
             }
             if !self.scratch_snapshot.is_empty() {
-                let snapshot = &self.scratch_snapshot;
-                let version_of = |c: ChunkCoord| self.chunk_versions.get(&c).copied().unwrap_or(0);
+                let bytes = &self.scratch_snap_bytes;
+                let spans = &self.scratch_snap_spans;
                 fw.section(SectionId::ChunkSnapshots, |s| {
                     let mut w = SnapshotWriter::new();
-                    for &c in snapshot {
-                        w.write_chunk(s, store, c, version_of(c));
+                    for &(c, from, to) in spans {
+                        w.write_chunk_encoded(s, c, &bytes[from as usize..to as usize]);
                     }
                 });
             }
@@ -2655,6 +2679,15 @@ impl<G: Game> Host<G> {
     }
 }
 
+/// Appends to a `Vec<u8>` (the engine's other sinks are a fixed slice and a counter).
+struct VecBytes<'a>(&'a mut Vec<u8>);
+
+impl crate::bytes::ByteSink for VecBytes<'_> {
+    fn put(&mut self, bytes: &[u8]) {
+        self.0.extend_from_slice(bytes);
+    }
+}
+
 const HELD_ENTERING: u8 = 1;
 const HELD_COLLAPSED: u8 = 2;
 
@@ -2868,6 +2901,8 @@ where
             scratch_left: Vec::new(),
             scratch_pristine: Vec::new(),
             scratch_snapshot: Vec::new(),
+            scratch_snap_bytes: Vec::new(),
+            scratch_snap_spans: Vec::new(),
             scratch_new_held: Vec::new(),
             scratch_keep: Vec::new(),
             scratch_delta_est: Vec::with_capacity(160),
