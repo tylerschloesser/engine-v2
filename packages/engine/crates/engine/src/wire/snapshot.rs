@@ -78,6 +78,17 @@ impl SnapshotWriter {
         self.coords.write(sink, chunk);
         encode_chunk_snapshot(store, chunk, version, sink);
     }
+
+    /// [`Self::write_chunk`] with the chunk's [`encode_chunk_snapshot`] bytes already in hand.
+    pub fn write_chunk_encoded(
+        &mut self,
+        sink: &mut (impl ByteSink + ?Sized),
+        chunk: ChunkCoord,
+        encoded: &[u8],
+    ) {
+        self.coords.write(sink, chunk);
+        sink.put(encoded);
+    }
 }
 
 /// The read half of [`SnapshotWriter`]. `on_tile`/`on_entity` are called for every overlay tile and
