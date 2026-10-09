@@ -5,7 +5,7 @@ entirely; amends [0016](0016-zero-gc-definition.md) §3 step 7 (assertion B) and
 `object` control's size). [0026](0026-zero-gc-burst-controls-in-slow-tier.md) is the prior amendment
 in this area. Implemented in milestone M11 (fix round 3), and amended by its own **Amendment (M11 fix round 4)**
 section below, which re-derives every page's `main` budget downward and returns the `object` control
-to one object.
+to one object. Amended by [0058](0058-zero-gc-attributed-minimum-per-window.md) §1.
 
 ## Context
 
