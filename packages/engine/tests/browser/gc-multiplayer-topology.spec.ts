@@ -39,7 +39,10 @@ const PRESENCE_DIR = fixtureBuildDir('presence')
 // ever runs -- there is no way to thread an async-discovered port into it. Worker-indexed (the same
 // `TEST_PARALLEL_INDEX` convention `playwright.config.ts`'s own `cdpPort` uses) so two `gc` project
 // workers that each pick up a test from this file never collide.
-const PORT = 48_173 + Number(process.env.TEST_PARALLEL_INDEX ?? 0)
+// Below 32768: Linux (CI) hands out ephemeral source ports from 32768-60999 and macOS from 49152, so a
+// fixed listen port in those ranges can already be held by an outgoing connection (EADDRINUSE on
+// CI runs 37705847137 and 37956458910 at 48282).
+const PORT = 28_173 + Number(process.env.TEST_PARALLEL_INDEX ?? 0)
 const BASE_PATH = `/gc-multiplayer-topology.html?url=${encodeURIComponent(`ws://127.0.0.1:${PORT}`)}`
 
 let server: TestServer | undefined

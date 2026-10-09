@@ -12,7 +12,10 @@ import { type MovingRemote, startMovingRemote } from './support/moving-remote.js
 import { openPage } from './support/page.js'
 import { startTestServer, type TestServer } from './support/test-server.js'
 
-const PORT = 48_273 + 2 * Number(process.env.TEST_PARALLEL_INDEX ?? 0)
+// Below 32768: Linux (CI) hands out ephemeral source ports from 32768-60999 and macOS from 49152, so a
+// fixed listen port in those ranges can already be held by an outgoing connection (EADDRINUSE on
+// CI runs 37705847137 and 37956458910 at 48282).
+const PORT = 28_273 + 2 * Number(process.env.TEST_PARALLEL_INDEX ?? 0)
 const BASE_PATH = `/gc-multiplayer-topology.html?url=${encodeURIComponent(`ws://127.0.0.1:${PORT}`)}`
 const STEP_MS = 50
 const REST_X = 0.52

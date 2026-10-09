@@ -15,7 +15,10 @@ import { type MovingRemote, startMovingRemote } from './support/moving-remote.js
 import { openPage } from './support/page.js'
 import { startTestServer, type TestServer } from './support/test-server.js'
 
-const PORT = 48_273 + 2 * Number(process.env.TEST_PARALLEL_INDEX ?? 0)
+// Below 32768: Linux (CI) hands out ephemeral source ports from 32768-60999 and macOS from 49152, so a
+// fixed listen port in those ranges can already be held by an outgoing connection (EADDRINUSE on
+// CI runs 37705847137 and 37956458910 at 48282).
+const PORT = 28_273 + 2 * Number(process.env.TEST_PARALLEL_INDEX ?? 0)
 // The page dials a proxy in front of the server: stalling it is a viewer whose downlink has stopped while
 // the host (and the remote) go on.
 const PROXY_PORT = PORT + 1
