@@ -1,6 +1,6 @@
 # M39af: the iPhone driver calibrates taps in landscape
 
-Status: not started · After: 39ad · Tyler-dependent: no
+Status: done (2026-10-08) · After: 39ad · Tyler-dependent: no
 
 ## Goal
 M18-touch-ghost failed in the driven iPhone round `m39ad-iphone-driven` with every criterion null. Diagnosis (reproduced on the iPhone, round `docs/plan/device-rounds/m39ad-touch-ghost-diag.jsonl`, with `IOS_TRACE=1`): the item before it, M18-fill-rate-with-anchors, leaves the phone in landscape. `placement()` in `scripts/lib/device-walk/drive/ios.mjs` (~l.376-415) calibrates the page offset by tapping the screen point (`screen.width/2`, `screen.height/2`) = (195, 422). iOS Safari does not swap `screen.width/height` in landscape, so y=422 is off the 844×390 screen. WDA clamps it to the bottom edge, and the calibration `pointerdown` comes back at page y=280 = `innerHeight`. The computed offset is 142 pt instead of the true 110 (the tab strip above the page), so `tap()` (~l.646) sends every page point 32 pt low. The tile tap landed on the walk bar, the page counted no tap, and the act timed out. When this is done, calibration is right in both orientations, and a clamped calibration hit can't pass silently.
@@ -26,11 +26,11 @@ The page, collectors and criteria; Android; the driverless `--open ios` path (it
 In `pnpm test tools` (fake WDA/page, no phone): a landscape placement (screen 390×844 reported, page 844×280 with the page top at 110) computes an offset of 110, not 142; a calibration hit at the page edge is retried, then fails loudly; portrait is unchanged. Each seen red against the current code (paste the red lines).
 
 ## Exit criteria
-- [ ] The three tests exist, pass, and were seen red.
-- [ ] Step 3's gesture list is in Deviations.
-- [ ] The phone proof: M18-touch-ghost reached "drag" and has a result; the `calibrated` trace line is pasted; cleanup is empty and the phone is portrait.
-- [ ] `pnpm test tools` green (pasted line).
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] The three tests exist, pass, and were seen red.
+- [x] Step 3's gesture list is in Deviations.
+- [x] The phone proof: M18-touch-ghost reached "drag" and has a result; the `calibrated` trace line is pasted; cleanup is empty and the phone is portrait.
+- [x] `pnpm test tools` green (pasted line).
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test tools` (targeted, foreground), then the one phone proof. Never lock, sleep or Low-Power the phone. Do not run `pnpm device:walk --help` (it starts a round).
@@ -46,3 +46,4 @@ The orchestrator re-runs M18-touch-ghost on the iPhone afterwards.
 - Tests (`device-walk-drive.test.mjs`), seen red against the old `ios.mjs`: landscape ("expected 422 to be less than 390"), edge hit retried then loud ("promise resolved "undefined" instead of rejecting"), retry teaches offset ("expected [[195,422],[5,427]] to have a length of 3 but got 2"); portrait-unchanged test passes on both. `pnpm test tools`: `tools pass 285 tests  2.3s/9s`.
 - Phone proof (`m39af-proof`, log `docs/plan/device-rounds/m39af-proof.jsonl`): portrait `ios: calibrated 390x699: page offset (0, 47) points; screen.width x height 390x844, aimed 195,422, hit 195,375`; landscape `ios: calibrated 844x280: page offset (0, 110) points; screen.width x height 390x844, aimed 422,250, hit 422,140`. Round: `2/2 recorded (pass 2, fail 0 ...)`, M18-touch-ghost `pass`, prompts "Tap a tile" then "Now drag the map with one finger" both done. Afterwards `pgrep` empty; screenshot 1170x2532 (portrait).
 - The 3 s rotation cleanup timeout fired again: `ios cleanup (rotation): ios cleanup (rotation) timed out after 3000 ms` (the phone still ended in portrait).
+- **Gate (orchestrator):** accepted. `pnpm test` and `pnpm lint` green (tools 285). The three tests were red against the old `ios.mjs` (pasted). Phone proof `m39af-proof`: landscape offset 110 pt, M18-touch-ghost pass, applied (ticks M18-touch-ghost).
