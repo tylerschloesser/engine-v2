@@ -1,6 +1,6 @@
 # M39ae: the large-save tick fits 10 ms on the iPhone
 
-Status: not started · After: 39ad · Tyler-dependent: no (Q18 (a), 2026-10-07: the iPhone 12 at p95 is the bar, ADR 0056 §3)
+Status: done (2026-10-08) · After: 39ad · Tyler-dependent: no (Q18 (a), 2026-10-07: the iPhone 12 at p95 is the bar, ADR 0056 §3)
 
 ## Goal
 M39-large-save fails on the iPhone 12 in every round: `tick_p95_ms` 11.48 (`m39u-iphone`), 12.22, 13.86, and **11.82 on 2026-10-08** (`m39ad-iphone-driven`; `sim_tick` p50 8.24, p95 max 10.74). The bar is 10 ms (ADR 0010, ADR 0056 §3), so the per-tick cost has to drop by about 20 %. M39y measured where it goes (its Deviations: the phase table, and the conclusion that the phones pay a **cold wake**, so every byte and cache line a tick touches costs about 3x native). It fixed the quadratic drain and listed the remaining candidates. When this is done, the per-tick work at full scale is at least **20 % cheaper on the paced measurement** (Node, the release bench `.wasm`, 50 ms sleep between ticks: M39y's "Node paced 20 Hz" row, p50 3.19 ms after M39y), with state unchanged: same goldens, same hashes, same canonical encoding. The iPhone proof run is the orchestrator's.
@@ -35,12 +35,12 @@ Any change to state, the snapshot format, goldens or determinism hashes; the fur
 - No new test may assert a timing.
 
 ## Exit criteria
-- [ ] Step-1 baseline table and a per-candidate before/after table pasted (three runs each, load average stated).
-- [ ] Paced Node `sim_tick` p50 ≤ 80 % of the step-1 baseline, or the stop report with the table.
-- [ ] Goldens and hashes unchanged (`git status` shows no golden; `pnpm test rust` and `pnpm test wasm` pass, pasted lines).
-- [ ] The bound test (if step 2 adds a table) exists and was seen red.
-- [ ] `pnpm test:slow browser -t "large-save|bench"` passes (pasted).
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] Step-1 baseline table and a per-candidate before/after table pasted (three runs each, load average stated).
+- [x] Paced Node `sim_tick` p50 ≤ 80 % of the step-1 baseline, or the stop report with the table.
+- [x] Goldens and hashes unchanged (`git status` shows no golden; `pnpm test rust` and `pnpm test wasm` pass, pasted lines).
+- [x] The bound test (if step 2 adds a table) exists and was seen red.
+- [x] `pnpm test:slow browser -t "large-save|bench"` passes (pasted).
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test rust`, `pnpm test wasm`, `pnpm test:slow wasm -t tick-phases`, the native `slow_phases_large_save` (release), `pnpm test:slow browser -t "large-save|bench"`. All foreground, bounded. Check `uptime` before each timing run; the Mac is shared (load 5-10 is normal; ratios within one run are the evidence).
@@ -74,3 +74,4 @@ Median paced p50: 3.223 -> 2.542 ms = **78.9 %** (-21.1 %; the three step-2 runs
 **Verification**: `pnpm test rust` -> `rust pass 805 tests`; `pnpm test wasm` -> `wasm pass 172 tests`; `pnpm test:slow wasm -t tick-phases` pass (x6 above); `pnpm test:slow browser -t "large-save|bench"` -> `browser pass 3 tests 78s`; `git status` showed only `sim/timers.rs` modified (no golden). `cargo clippy --workspace --all-targets` clean. Not run: full `pnpm test`/`pnpm lint` (the orchestrator's gate). Note (pre-existing, not mine): `cargo clippy -p engine --all-targets --features bench-phases` fails to compile the lib tests (`assert_golden_bytes` not found), because that feature combination lacks `testing`.
 
 Not done: candidates 3 (`chunk_versions.insert`), 4 (`put_entity` write path: `put` is now the largest phase at 1.1 ms paced, 0.36 native; each furnace is put once per tick, so "already recorded this tick" would skip nothing) and 5; they are the room for margin if the iPhone proof falls short. The entity table itself is a `BTreeMap<EntityId, Entity>` (`store/mod.rs:94`), the likely next cost and a storage change (Q18 (c)).
+- **Gate (orchestrator):** accepted. `pnpm test` (rust 805) and `pnpm lint` green; no golden. Dense `by_entity` capped at `DENSE_LIMIT` 2^20 ids x 8 B (`Option<Tick>`, `Tick(u32)`) = 8 MB, grown only for ids under the cap; the bound test was red with the cap removed. Paced p50 78.9 % of baseline (one run 79.9 %: thin margin); the phone decides.
