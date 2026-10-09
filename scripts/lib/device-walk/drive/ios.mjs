@@ -379,11 +379,14 @@ export function createIosBackend(o = {}) {
     )
     const key = `${m.w}x${m.h}`
     if (!st.cal.has(key)) {
-      const px = Math.round(m.sw / 2)
-      const py = Math.round(m.sh / 2)
-      let hit = null
-      for (let attempt = 0; attempt < 3 && !hit; attempt++) {
-        await page(`(() => {
+      // iOS Safari does not swap screen.width/height in landscape: take the screen of the current orientation.
+      const landscape = m.w > m.h
+      const sw = landscape ? Math.max(m.sw, m.sh) : m.sw
+      const sh = landscape ? Math.min(m.sw, m.sh) : m.sh
+      const tapAt = async (px, py) => {
+        let hit = null
+        for (let attempt = 0; attempt < 3 && !hit; attempt++) {
+          await page(`(() => {
         window.__driveCal = null
         const swallow = (e) => { e.stopImmediatePropagation(); if (e.cancelable) e.preventDefault() }
         const opt = { capture: true, passive: false }
@@ -393,19 +396,36 @@ export function createIosBackend(o = {}) {
         window.__driveCalOff = () => { for (const t of T) removeEventListener(t, swallow, opt) }
         return 1
       })()`)
-        await native()
-        await call('POST', '/actions', { actions: tapActions(px, py) })
-        for (let i = 0; i < 20 && !hit; i++) {
-          await wait(150)
-          hit = await page('window.__driveCal')
+          await native()
+          await call('POST', '/actions', { actions: tapActions(px, py) })
+          for (let i = 0; i < 20 && !hit; i++) {
+            await wait(150)
+            hit = await page('window.__driveCal')
+          }
+          await wait(300)
+          await page('window.__driveCalOff && window.__driveCalOff()').catch(() => {})
         }
-        await wait(300)
-        await page('window.__driveCalOff && window.__driveCalOff()').catch(() => {})
+        if (!hit) {
+          const f = join(tmpdir(), 'ios-calibration-failed.png')
+          await api.screenshot(f).catch(() => {})
+          throw new Error(`ios: the calibration tap did not reach the page (screenshot ${f})`)
+        }
+        return hit
       }
-      if (!hit) {
-        const f = join(tmpdir(), 'ios-calibration-failed.png')
-        await api.screenshot(f).catch(() => {})
-        throw new Error(`ios: the calibration tap did not reach the page (screenshot ${f})`)
+      // A hit at 0 or within 1 point of the page's far edge is where WDA clamped an off-page tap.
+      const clamped = (h) => h[0] <= 0 || h[1] <= 0 || h[0] >= m.w - 1 || h[1] >= m.h - 1
+      // Portrait: the screen's middle is inside the page. Landscape: the page is the bottom of the screen.
+      let px = Math.round(sw / 2)
+      let py = landscape ? Math.round(sh - m.h / 2) : Math.round(sh / 2)
+      let hit = await tapAt(px, py)
+      if (clamped(hit)) {
+        px = Math.round(sw * 0.4)
+        py = Math.round(sh - m.h * 0.6)
+        hit = await tapAt(px, py)
+        if (clamped(hit))
+          throw new Error(
+            `ios: calibration clamped at the page edge (tapped ${px},${py}, page saw ${hit[0]},${hit[1]} of ${m.w}x${m.h})`,
+          )
       }
       st.cal.set(key, { offX: px - hit[0], offY: py - hit[1] })
       log(`ios: calibrated ${key}: page offset (${px - hit[0]}, ${py - hit[1]}) points`)

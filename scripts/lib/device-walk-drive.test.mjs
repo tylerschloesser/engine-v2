@@ -1164,6 +1164,68 @@ describe('device-walk drive: the iOS backend without a phone', () => {
     expect(calls.filter((c) => c[1].endsWith('/actions'))).toHaveLength(3) // learned once per page size
   })
 
+  /** A fake page of w x h whose top is `top` points down a screen that reports `sw` x `sh`; WDA clamps off-page taps. */
+  const fakePage = ({ w, h, sw, sh, top, clampAll = false }) => {
+    let cal = null
+    const taps = []
+    const fake = make({
+      'execute/sync': (body) => {
+        if (body.script === 'mobile: getContexts')
+          return [{ id: 'WEBVIEW_1', title: 'device', url: 'https://x.example/device.html' }]
+        if (body.script === 'return location.href') return 'https://x.example/device.html'
+        if (/innerWidth/.test(body.script) && /screen\.width/.test(body.script))
+          return { w, h, sw, sh, s: 1 }
+        if (/__driveCal\)$/.test(body.script)) return cal
+        return null
+      },
+      'POST /session/SID/actions': (body) => {
+        const { x, y } = body.actions[0].actions[0]
+        taps.push([x, y])
+        const cy = y - top
+        cal = clampAll
+          ? [Math.min(x, w), h]
+          : [Math.max(0, Math.min(x, w)), Math.max(0, Math.min(cy, h))]
+        return null
+      },
+    })
+    return { ...fake, taps }
+  }
+
+  test('device-walk drive: landscape calibration aims inside the page and learns the true offset', async () => {
+    const { b, calls, taps } = fakePage({ w: 844, h: 280, sw: 390, sh: 844, top: 110 })
+    await b.open('https://x.example/device.html')
+    await b.tap(50, 60)
+    expect(taps[0][1]).toBeGreaterThanOrEqual(110)
+    expect(taps[0][1]).toBeLessThan(390)
+    const ours = calls.filter((c) => c[1].endsWith('/actions')).at(-1)[2].actions[0].actions[0]
+    expect(ours).toMatchObject({ x: 50, y: 170 }) // 110 + 60, not 142 + 60
+  })
+
+  test('device-walk drive: a calibration hit at the page edge is retried, then fails loudly', async () => {
+    const always = fakePage({ w: 844, h: 280, sw: 390, sh: 844, top: 110, clampAll: true })
+    await always.b.open('https://x.example/device.html')
+    await expect(always.b.tap(50, 60)).rejects.toThrow(/calibration clamped at the page edge/)
+    expect(always.taps).toHaveLength(2) // one retry, no more
+  })
+
+  test('device-walk drive: a clamped first hit then a good retry teaches the true offset', async () => {
+    // a short page at the screen bottom: the middle of the screen is above it
+    const { b, calls, taps } = fakePage({ w: 390, h: 400, sw: 390, sh: 844, top: 444 })
+    await b.open('https://x.example/device.html')
+    await b.tap(5, 5)
+    expect(taps).toHaveLength(3) // clamped aim, the retry, then ours
+    expect(
+      calls.filter((c) => c[1].endsWith('/actions')).at(-1)[2].actions[0].actions[0],
+    ).toMatchObject({ x: 5, y: 449 })
+  })
+
+  test('device-walk drive: portrait calibration is unchanged (the screen middle)', async () => {
+    const { b, taps } = fakePage({ w: 390, h: 664, sw: 390, sh: 844, top: 100 })
+    await b.open('https://x.example/device.html')
+    await b.tap(50, 60)
+    expect(taps[0]).toEqual([195, 422])
+  })
+
   test('device-walk drive: Low Power and Airplane go back off in cleanup, then the session ends; the screen is never locked', async () => {
     const { b, calls } = make({
       'attribute/name': () => 'LOW_POWER_MODE_IDENTIFIER_SWITCH',
