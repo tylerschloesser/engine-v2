@@ -63,6 +63,8 @@ export type BenchHud = {
   frameBuildP95Ms: number
   resyncP95Ms: number
   catchupTicksPer10s: number
+  /** docs/plan/39ag: p50/p95 ms of the whole pass and its parts (`rest` = the untimed remainder). */
+  parts: Record<string, [number, number]>
   /** docs/plan/39s: the last 4,096 `sim_tick` durations, summarised. */
   tickSeries: TickSummary
   /** docs/plan/39y: p50/p95 ms per `sim_tick` phase (all 0 unless the module is a `bench-phases` build). */
@@ -232,6 +234,7 @@ export function createBenchMeter(): BenchMeter {
       frameBuildP95Ms: pr.frameBuildP95Ms,
       resyncP95Ms: pr.resyncP95Ms,
       catchupTicksPer10s: pr.catchupTicksPer10s,
+      parts: pr.parts,
       tickSeries: ticks.summary(),
       phases: phases.readings(),
       framesRendered: frames,

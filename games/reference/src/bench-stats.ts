@@ -57,6 +57,8 @@ export type PartReadings = {
   frameBuildP95Ms: number
   resyncP95Ms: number
   catchupTicksPer10s: number
+  /** docs/plan/39ag: p50/p95 ms of the whole pass and of each part; `rest` = whole minus the timed parts. */
+  parts: Record<string, [number, number]>
 }
 
 export function createPartStats(): {
@@ -69,6 +71,7 @@ export function createPartStats(): {
   const frame = new Rolling()
   const resync = new Rolling()
   const catchup = new Rolling()
+  const rest = new Rolling()
   return {
     push(t, s) {
       whole.push(t, s.wholeUs / 1000)
@@ -77,6 +80,7 @@ export function createPartStats(): {
       frame.push(t, s.frameUs / 1000)
       if (s.resyncUs > 0) resync.push(t, s.resyncUs / 1000)
       catchup.push(t, s.catchupTicks)
+      rest.push(t, (s.wholeUs - s.sealUs - s.tickUs - s.frameUs - s.resyncUs) / 1000)
     },
     readings: () => ({
       tickP50Ms: whole.p50(),
@@ -87,6 +91,14 @@ export function createPartStats(): {
       frameBuildP95Ms: frame.p95(),
       resyncP95Ms: resync.p95(),
       catchupTicksPer10s: catchup.sum(),
+      parts: {
+        whole: [whole.p50(), whole.p95()],
+        seal: [seal.p50(), seal.p95()],
+        tick: [simTick.p50(), simTick.p95()],
+        frame: [frame.p50(), frame.p95()],
+        resync: [resync.p50(), resync.p95()],
+        rest: [rest.p50(), rest.p95()],
+      },
     }),
   }
 }
