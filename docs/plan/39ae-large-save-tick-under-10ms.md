@@ -52,4 +52,25 @@ Any change to state, the snapshot format, goldens or determinism hashes; the fur
 M39-large-save on the iPhone, by the orchestrator, after this lands.
 
 ## Deviations
-(filled in during Phase 3)
+**M39ae, step 1 (baseline) and step 2 (one commit, `36e00bab`); the stop rule was met after step 2, so candidates 3-5 were not done.**
+
+Load average at the runs: 3-7 (baseline and after, interleaved by session; the browser test ran at 20). `sim_tick` ms p50 / p95; "Node paced" is the release bench `.wasm`, 50 ms sleep (`tick-phases @slow`), "native" is `slow_phases_large_save` (release).
+
+| run (load) | native | Node back to back | Node paced |
+|---|---|---|---|
+| base 1 (3.8-6.6) | 1.128 / 1.211 | 1.530 / 1.759 | 3.195 / 7.027 |
+| base 2 | 1.128 / 1.196 | 1.525 / 1.778 | 3.223 / 7.034 |
+| base 3 | 1.134 / 1.189 | 1.530 / 1.799 | 3.249 / 7.085 |
+| step 2, run 1 (6-9) | 0.777 / 0.854 | 1.097 / 1.242 | 2.528 / 5.442 |
+| step 2, run 2 | 0.768 / 0.820 | 1.095 / 1.251 | 2.575 / 6.358 |
+| step 2, run 3 | 0.775 / 0.872 | 1.093 / 1.284 | 2.542 / 6.569 |
+
+Median paced p50: 3.223 -> 2.542 ms = **78.9 %** (-21.1 %; the three step-2 runs are 78.4, 79.9, 78.8 %). Native -31 %, Node back to back -28 %. Phases, paced p50 (base median -> step 2 median): drain 0.75 -> 0.32, wake_at 0.63 -> 0.25, put 1.11 -> 1.12, advance 0.73 -> 0.93 (noise; native advance fell 0.233 -> 0.166), changes 0.24 -> 0.24. Margin to the 80 % line is thin (run 2 is 79.9 %).
+
+**Step 2 change** (`sim/timers.rs` only): `by_entity` is now `Reverse`, a `Vec<Option<Tick>>` indexed by id for `id < DENSE_LIMIT` (`1 << 20`, 8 MB at most) plus a `BTreeMap` overflow for larger ids, and a live count. Bound: ids come from an untrusted snapshot (`TimerWheel::decode`); the table grows in exactly one place (`Reverse::insert`), only for `id < DENSE_LIMIT`, capped to the bound, so no id sizes an allocation beyond 8 MB. Both paths answer the same, so the canonical bytes and hashes are unchanged. Also `next_due` uses `BTreeMap::first_entry` (one tree walk instead of `iter().next()` then `get_mut`, then `remove`). No state, order or encoding change.
+
+**Test**: `sim::timers::tests::huge_id_never_grows_the_dense_table` (no timing). Seen red with the bound removed (`DENSE_LIMIT = u32::MAX`): `FAIL rust engine sim::timers::tests::huge_id_never_grows_the_dense_table ... timers.rs:253:9: and sized by small ids only`; green restored.
+
+**Verification**: `pnpm test rust` -> `rust pass 805 tests`; `pnpm test wasm` -> `wasm pass 172 tests`; `pnpm test:slow wasm -t tick-phases` pass (x6 above); `pnpm test:slow browser -t "large-save|bench"` -> `browser pass 3 tests 78s`; `git status` showed only `sim/timers.rs` modified (no golden). `cargo clippy --workspace --all-targets` clean. Not run: full `pnpm test`/`pnpm lint` (the orchestrator's gate). Note (pre-existing, not mine): `cargo clippy -p engine --all-targets --features bench-phases` fails to compile the lib tests (`assert_golden_bytes` not found), because that feature combination lacks `testing`.
+
+Not done: candidates 3 (`chunk_versions.insert`), 4 (`put_entity` write path: `put` is now the largest phase at 1.1 ms paced, 0.36 native; each furnace is put once per tick, so "already recorded this tick" would skip nothing) and 5; they are the room for margin if the iPhone proof falls short. The entity table itself is a `BTreeMap<EntityId, Entity>` (`store/mod.rs:94`), the likely next cost and a storage change (Q18 (c)).
