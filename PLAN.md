@@ -127,6 +127,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 39ad | `39ad-ios-driverless-without-tyler.md` | the iPhone's driverless round opens and starts with no person and no WDA (`--open ios`, `autostart=1`); tunnel warm-up covers the runner; refused phone requests are counted (a resumed QR round never saw the phone, 2026-10-08) | 39ac | |
 | [x] | 39af | `39af-ios-landscape-tap-calibration.md` | M18-touch-ghost failed on the iPhone: in landscape the driver's calibration tap at (screen.width/2, screen.height/2) is off-screen and clamped, so every tap lands 32 pt low (`placement()` in `drive/ios.mjs`) | 39ad | |
 | [x] | 39ae | `39ae-large-save-tick-under-10ms.md` | the large-save tick misses 10 ms on the iPhone (11.82 ms p95, `m39ad-iphone-driven`; Q18 (a) makes the iPhone the bar): M39y's remaining candidates (`by_entity`, `chunk_versions`, `put_entity` path), state-neutral, stop at -20 % paced or report | 39ad | |
+| [ ] | 39ag | `39ag-large-save-pass-margin.md` | after M39ae the iPhone's large-save pass is 10.32 ms p95 (sim_tick 7.08 p50; the criterion times the whole pass): account for the whole pass, cut frame build / `chunk_versions` / `put_entity` path, -10 % or report | 39ae | |
 | [ ] | 39 | `39-acceptance.md` | coverage + budget audit, full device checklist, Phase 3 exit | all above | D |
 | [ ] | 39b | `39b-phase-4-handoff.md` | capture what code cannot say in ADRs, `PROMPT.md` for Phase 4. **Phase 3 complete.** | 39 | |
 
