@@ -12,6 +12,7 @@ import { createBots, phoneSeen } from './device-walk/bot.mjs'
 import { analyseFade, analyseMotion, CHECKS, evaluate, MP_TILES } from './device-walk/checks.mjs'
 import { parseChecks } from './device-walk/parse.mjs'
 import { appendEvent, readEvents, replay } from './device-walk/rounds.mjs'
+import { readPristineChecks } from './device-walk/test-checks.mjs'
 
 const { items } = parseChecks(
   readFileSync(new URL('../../docs/plan/device-checks.md', import.meta.url), 'utf8'),
@@ -144,7 +145,7 @@ describe('device-walk reference', () => {
   })
 
   test('device-walk reference: --apply writes the numbers the phone Frame time and Tick time rows will cite into Run on', () => {
-    const text = readFileSync(new URL('../../docs/plan/device-checks.md', import.meta.url), 'utf8')
+    const text = readPristineChecks(new URL('../../docs/plan/device-checks.md', import.meta.url))
     const ids = ['M39-large-save', 'M39-frame-shares']
     const sel = parseChecks(text).items.filter((i) => ids.includes(i.id))
     const large = evaluate(CHECKS['M39-large-save'], bench([hud({ tick_p95_ms: 6.5 })]))
