@@ -1,6 +1,6 @@
 # M39ag: the large-save pass gets margin under 10 ms on the iPhone
 
-Status: not started · After: 39ae · Tyler-dependent: no (Q18 (a); ADR 0056 §3)
+Status: done (2026-10-09) · After: 39ae · Tyler-dependent: no (Q18 (a); ADR 0056 §3)
 
 ## Goal
 After M39ae, the iPhone's driverless M39-large-save (`docs/plan/device-rounds/m39ae-iphone-large-save.jsonl`, 2026-10-09) still fails by 3 %: `tick_p95_ms` **10.32** (limit 10; it was 11.82). `sim_tick` alone is now p50 7.08 / p95 max 8.7, but the criterion times the **whole sim-worker pass** (`PassSample.wholeUs` in `games/reference/src/bench-stats.ts`: seal, the sim tick, frame build, resync and whatever else is in the pass). The pass median is 8.4 ms, about 1.3 ms above `sim_tick`. On the phone, `frame_build_p95_ms_max` is 1.68, seal 0.02, resync 0.14, and catch-up 0. When this is done the whole pass is at least **10 % cheaper** than at M39ae's `done` (`a2087c62`) on the desktop proxy, with state unchanged, so the phone has margin. The iPhone run is the orchestrator's.
@@ -33,12 +33,12 @@ The engine crate (`host/`, `authority.rs`, and the frame build path the measurem
 Every golden, hash and determinism test passes unchanged (paste that `git status` shows no golden). If a frame-build change skips work when nothing changed, add a test that a pass with a subscriber-visible change still sends it (fails if the skip is too eager: inject and paste the red). No timing assertions.
 
 ## Exit criteria
-- [ ] Step 1's whole-pass breakdown pasted (three runs, load).
-- [ ] A per-change before/after table; whole-pass p50 ≤ 90 % of baseline, or the stop report.
-- [ ] Goldens and hashes unchanged (`pnpm test rust`, `pnpm test wasm`, `pnpm test netcode` pass lines).
-- [ ] The eager-skip test (if any) exists and was seen red.
-- [ ] `pnpm test:slow browser -t "large-save|bench"` passes (pasted).
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] Step 1's whole-pass breakdown pasted (three runs, load).
+- [x] A per-change before/after table; whole-pass p50 ≤ 90 % of baseline, or the stop report.
+- [x] Goldens and hashes unchanged (`pnpm test rust`, `pnpm test wasm`, `pnpm test netcode` pass lines).
+- [x] The eager-skip test (if any) exists and was seen red.
+- [x] `pnpm test:slow browser -t "large-save|bench"` passes (pasted).
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 As above, foreground and bounded. `uptime` before each timing run; interleave before/after.
@@ -82,3 +82,4 @@ Final build without the temporary debugging, `base-dist` vs the tree (two interl
 **Verification:** `pnpm test rust` -> `rust pass 806 tests`; `pnpm test wasm` -> `wasm pass 172 tests`; `pnpm test netcode` -> `netcode pass 147 tests`; `pnpm test:slow browser -t "large-save|bench"` -> `browser pass 3 tests    78s`; `pnpm test unit -t bench` -> `unit pass 12 tests`. Not run: full `pnpm test`/`pnpm lint` (the orchestrator's gate).
 
 **Not done, for margin if the phone is still short:** `chunk_versions.insert` dedupe and the `put_entity`/`entity_scopes` path (the tick side, 1.9 ms of the 2.4: `store.entity()` BTree `get` is about a quarter of the native tick samples; the per-furnace lookups in `furnace::advance`, `entity_scopes` and `Store::apply` are the same map, Q18 (c)); `write_chunk_deltas_flat` and the collapse estimate each still do a BTree `get` plus an encode per put; the collapse's `scratch_snapshot_len` count and next tick's drain encode the same chunk twice across ticks.
+- **Gate (orchestrator):** accepted. Full `pnpm test` and `pnpm lint` green (rust 806, netcode 147, wasm 172; browser 256 on a rerun: the first full run at load 12 had `paced_session_lands_periodic_snapshots` at 2 persistence snapshots against 3, a timing check this change does not touch, then 3/3 alone and green in the full suite). No golden changed. Removed a stray `host/mod.rs.orig` (4000 lines) the implementer had committed. Wire order checked: `scratch_snap_spans` is pushed one-to-one with `scratch_snapshot` and sorted by the same key. Inject-fail by the orchestrator: delivering entity puts to collapsed/entering chunks turns `netcode rates/degrade-on-soft-cap` red; cutting one byte off each cached snapshot turns 3 rust tests red; reverted. A tile delta sent to an entering/collapsed chunk is caught by no test (redundant bytes, not wrong state; the same gap existed before 2a). Desktop whole-pass p50 86-89 % of base; the phone decides.
