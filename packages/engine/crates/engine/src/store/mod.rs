@@ -326,6 +326,34 @@ impl<G: Game> Store<G> {
         self.entities.get(&id)
     }
 
+    /// Calls `f` for every id of `ids` (ascending) that names a stored entity, in order: what a
+    /// loop of [`Store::entity`] over `ids` yields. When the ids lie close together in id space
+    /// (a chunk filled in one go) it walks the map's leaves once instead of searching the tree from
+    /// the root for each id (docs/plan/39ag); otherwise it falls back to the lookups.
+    pub fn for_each_entity_in(&self, ids: &[EntityId], mut f: impl FnMut(EntityId, &G::Entity)) {
+        let (Some(&first), Some(&last)) = (ids.first(), ids.last()) else {
+            return;
+        };
+        let span = (last.0 as u64).saturating_sub(first.0 as u64);
+        if span <= 4 * ids.len() as u64 {
+            let mut walk = self.entities.range(first..=last).peekable();
+            for &id in ids {
+                while walk.next_if(|(k, _)| **k < id).is_some() {}
+                if let Some((k, e)) = walk.peek()
+                    && **k == id
+                {
+                    f(id, e);
+                }
+            }
+        } else {
+            for &id in ids {
+                if let Some(e) = self.entities.get(&id) {
+                    f(id, e);
+                }
+            }
+        }
+    }
+
     /// Every entity in ascending id order (`BTreeMap`'s own iteration order, 0022 §1's `Ord`).
     /// Additive accessor beyond M12's own Provides list, like `terrain()`/`next_entity_id()`
     /// (docs/plan/12-store-and-game-trait.md Deviations): nothing needed to enumerate every entity
@@ -853,6 +881,43 @@ mod tests {
         a.apply(&Delta::EntityGone { id: EntityId(5) });
         assert_eq!(once, encoded(&a));
         assert!(a.entity(EntityId(5)).is_none());
+    }
+
+    /// `for_each_entity_in` answers what a loop of `entity()` answers, on both of its paths: ids
+    /// packed together (the leaf walk) and ids spread far apart (the lookups), with gaps and absent
+    /// ids in both.
+    #[test]
+    fn for_each_entity_in_matches_entity_lookups() {
+        let mut a = store();
+        let stored: Vec<u32> = (1..=40)
+            .filter(|i| i % 3 != 0)
+            .chain([5_000, 90_000])
+            .collect();
+        for &i in &stored {
+            a.apply(&Delta::EntityPut {
+                id: EntityId(i),
+                entity: TEntity { hp: i, variant: 1 },
+            });
+        }
+        let cases: Vec<Vec<u32>> = vec![
+            vec![],
+            vec![7],
+            vec![3],
+            (1..=45).collect(),
+            vec![2, 3, 4, 6, 9, 10, 11],
+            vec![1, 5_000, 90_000],
+            vec![4, 5_000, 6_000, 90_000, 90_001],
+        ];
+        for case in cases {
+            let ids: Vec<EntityId> = case.iter().map(|&i| EntityId(i)).collect();
+            let want: Vec<(EntityId, TEntity)> = ids
+                .iter()
+                .filter_map(|&id| a.entity(id).map(|e| (id, *e)))
+                .collect();
+            let mut got = Vec::new();
+            a.for_each_entity_in(&ids, |id, e| got.push((id, *e)));
+            assert_eq!(got, want, "ids {case:?}");
+        }
     }
 
     #[test]

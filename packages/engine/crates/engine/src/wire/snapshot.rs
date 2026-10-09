@@ -46,12 +46,10 @@ pub fn encode_chunk_snapshot<G: Game>(
     }
     let overlapping = store.chunk_overlapping(chunk);
     sink.put_varint(overlapping.len() as u64);
-    for &id in overlapping {
-        if let Some(entity) = store.entity(id) {
-            sink.put_varint(id.0 as u64);
-            encode_to(entity, sink).expect("encoding an entity into a ByteSink cannot fail");
-        }
-    }
+    store.for_each_entity_in(overlapping, |id, entity| {
+        sink.put_varint(id.0 as u64);
+        encode_to(entity, sink).expect("encoding an entity into a ByteSink cannot fail");
+    });
 }
 
 /// The section-level writer for `ChunkSnapshots` (id 5): chains chunk coordinates across several
