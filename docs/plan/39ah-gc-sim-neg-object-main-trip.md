@@ -41,4 +41,8 @@ If the cause is engine code, the existing `sim clean` and `sim neg object sim` m
 None.
 
 ## Deviations
-(filled in during Phase 3)
+- Cause: harness-side. `instrument.ts` chose the lower window by raw total, then read attributed bytes from that winner. Temporary dump (reverted) showed main's attributed bytes were `128` (or `56`) in window 1 and `0` in window 2, always under `run > drive(gc-page) > drive(gc-sim) > stepSimTickSync > load@:0` (the `Atomics.load` builtin), raw totals e.g. `[13860, 14812]`, so window 1 won on raw total. `sim clean` never shows it (only the control run).
+- Local repro: `ENGINE_GPU=swiftshader GC_MODE=software pnpm test browser -t "sim neg object sim"`: red 5 of 6 attempts (the 56 B variant in 1 of them). Note CI's env also needs `GC_MODE=software` (ENGINE_GPU alone leaves hardware arithmetic).
+- Fix: `gc/instrument.ts` now records `attributedWindows[name]` per window and uses `Math.min` as `attributedBytesTotal`; `byFn` still comes from `lowerWindow`. Source-string test added in `analyse.test.ts`. No budget, control or retry change.
+- Evidence after: `sim neg object sim` 6/6 green; `-t 'gc-sim.spec'` (clean, neg object main, neg object sim, 2 more) green 10 times in a row. `sim neg object main` (a deliberate per-frame allocation under `drive`) still trips main in both windows, so the minimum keeps it.
+- Not run: full `pnpm test`/`pnpm lint` (orchestrator).

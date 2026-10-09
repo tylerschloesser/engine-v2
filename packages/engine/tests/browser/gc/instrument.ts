@@ -366,6 +366,12 @@ export async function measure(
   const rawProfiles: Record<string, Profile> = {}
   const windowBytes: Record<string, [number, number]> = {}
   const windowByFn: Record<string, [Record<string, number>, Record<string, number>]> = {}
+  // M39ah: the software-mode assertion compares *attributed* bytes, so the 0028 minimum must be
+  // taken over that quantity too. Selecting the window by raw total and reading attribution from the
+  // winner let a one-off V8 allocation billed under `drive` (an `Atomics.load` builtin in
+  // `stepSimTickSync`, first window only) decide the verdict whenever that window's raw total
+  // happened to be the lower one.
+  const attributedWindows: Record<string, [number, number]> = {}
   for (const name of Object.keys(secondProfiles)) {
     const first = firstProfiles[name] as Profile
     const second = secondProfiles[name] as Profile
@@ -374,6 +380,8 @@ export async function measure(
     const totals: [number, number] = [firstSummed.total, secondSummed.total]
     windowBytes[name] = totals
     windowByFn[name] = [firstSummed.byFn, secondSummed.byFn]
+    const roots = budgets.isolates[name]?.attributionRoots ?? []
+    attributedWindows[name] = [attributedBytes(first, roots), attributedBytes(second, roots)]
     rawProfiles[name] = lowerWindow(totals, first, second)
   }
   await browserSession.send('Tracing.end')
@@ -398,8 +406,8 @@ export async function measure(
     totalBytes[name] = summed.total
     bytesPerFrame[name] = summed.total / frames
     byFn[name] = summed.byFn
-    const roots = budgets.isolates[name]?.attributionRoots ?? []
-    const attributed = attributedBytes(profile, roots)
+    const [attributedFirst, attributedSecond] = attributedWindows[name] as [number, number]
+    const attributed = Math.min(attributedFirst, attributedSecond)
     attributedBytesTotal[name] = attributed
     attributedBytesPerFrame[name] = attributed / frames
   }

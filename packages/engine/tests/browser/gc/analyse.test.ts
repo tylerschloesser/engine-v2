@@ -275,6 +275,15 @@ test('gc analyse: the lower of the two windows is selected per isolate', () => {
   expect(instrument).toContain('rawProfiles[name] = lowerWindow(totals, first, second)')
 })
 
+// M39ah: software-mode attribution takes the 0028 minimum over the attributed bytes themselves, not
+// over the raw totals (a one-off first-window `Atomics.load` allocation under `drive` flipped
+// `sim neg object sim`'s `main` verdict on CI whenever that window's raw total was the lower one).
+test('gc analyse: attributed bytes are the lower of the two windows (M39ah)', () => {
+  const instrument = readFileSync(new URL('./instrument.ts', import.meta.url), 'utf8')
+  expect(instrument).toContain('attributedWindows[name] = [attributedBytes(first, roots)')
+  expect(instrument).toContain('Math.min(attributedFirst, attributedSecond)')
+})
+
 // 0016 §3 step 3 as amended by ADR 0052: 4000 warm-up frames in 8 passes (500 each), then the
 // 600-frame windows pinned above. Literals, so a shortened warm-up fails here.
 test('gc analyse: warm-up is 4000 frames in 8 passes (ADR 0052)', () => {
