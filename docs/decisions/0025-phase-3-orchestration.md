@@ -1,6 +1,6 @@
 # 0025: Phase 3 runs as one orchestrating session with Sonnet implementers, on `main`
 
-Status: Accepted (2026-09-19). Amends [0021](0021-context-architecture.md): the "one session per milestone" premise of its Context, §3 (what a Phase 3 sub-agent is briefed for), §5 (adds the first custom sub-agent) and §7 (one allowlist entry). Implemented before M02b, outside the milestone table.
+Status: Accepted (2026-09-19). Amends [0021](0021-context-architecture.md): the "one session per milestone" premise of its Context, §3 (what a Phase 3 sub-agent is briefed for), §5 (adds the first custom sub-agent) and §7 (one allowlist entry). Implemented before M02b, outside the milestone table. Amended by [0070](0070-phase-3-tooling-retired.md) §1, §2.
 
 ## Context
 
