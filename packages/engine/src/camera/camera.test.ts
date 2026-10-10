@@ -125,8 +125,11 @@ test('camera: zoom clamps and constraints', () => {
     keys: new KeyState(),
     wheel: wheelOut,
   })
-  recordWheel(wheelOut, 100_000, 0, 800, 400, false)
-  for (let i = 0; i < 50; i++) integratorOut.integrate(zoomOut, viewport2, 16)
+  // M39aj: one burst queues at most one doubling (0061), so keep scrolling until the limit.
+  for (let i = 0; i < 50; i++) {
+    recordWheel(wheelOut, 100_000, 0, 800, 400, false)
+    integratorOut.integrate(zoomOut, viewport2, 16)
+  }
   expect(zoomOut.tilesAcross).toBe(DEFAULT_MAX_TILES)
 
   const zoomIn = new CameraState()
@@ -565,4 +568,56 @@ test('camera: fresh camera opens mid-range', () => {
   expect(state.tilesAcross).toBe(32)
   expect(state.tilesAcross).toBeGreaterThan(DEFAULT_MIN_TILES)
   expect(state.tilesAcross).toBeLessThan(DEFAULT_MAX_TILES)
+})
+
+// M39aj (docs/decisions/0061): the wheel accumulator is bounded. Helper: integrate until the
+// accumulator has drained (the zoom is at rest).
+function wheelRig(tiles: number) {
+  const state = new CameraState()
+  state.tilesAcross = tiles
+  const wheel = new WheelState()
+  const integrator = createCameraIntegrator({
+    pointers: new PointerSlots(),
+    keys: new KeyState(),
+    wheel,
+  })
+  const toRest = () => {
+    for (let i = 0; i < 400 && wheel.pendingDeltaLog !== 0; i++)
+      integrator.integrate(state, viewport, 16)
+  }
+  return { state, wheel, toRest }
+}
+
+test('wheel: one notch zooms by a fixed factor', () => {
+  // (The brief starts from 12, the zoom-in limit, where zooming in would clamp; 32 is mid-range.)
+  for (const [deltaY, mode, log] of [
+    [100, 0, 0.2],
+    [-100, 0, -0.2],
+    [3, 1, 0.15],
+    [-3, 1, -0.15],
+  ] as const) {
+    const { state, wheel, toRest } = wheelRig(32)
+    recordWheel(wheel, deltaY, mode, 800, 400, false)
+    toRest()
+    expect(Math.abs(state.tilesAcross - 32 * Math.exp(log))).toBeLessThan(1e-6)
+  }
+})
+
+test('wheel: a burst cannot pass one doubling', () => {
+  const { state, wheel, toRest } = wheelRig(32)
+  for (let i = 0; i < 200; i++) recordWheel(wheel, 50, 0, 800, 400, false)
+  toRest()
+  expect(state.tilesAcross / 32).toBeLessThanOrEqual(2 + 1e-9)
+  const zin = wheelRig(100)
+  for (let i = 0; i < 200; i++) recordWheel(zin.wheel, -50, 0, 800, 400, false)
+  zin.toRest()
+  expect(100 / zin.state.tilesAcross).toBeLessThanOrEqual(2 + 1e-9)
+})
+
+test('wheel: ctrl pinch stream is bounded', () => {
+  const { state, wheel, toRest } = wheelRig(32)
+  for (let i = 0; i < 20; i++) recordWheel(wheel, 4, 0, 800, 400, true)
+  toRest()
+  expect(state.tilesAcross / 32).toBeLessThanOrEqual(2 + 1e-9)
+  expect(state.tilesAcross / 32).toBeGreaterThan(1.5) // it still zooms
 })

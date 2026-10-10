@@ -10,6 +10,10 @@ export const WHEEL_K = 0.002
 const DELTA_MODE_LINE_MULT = 25
 const DELTA_MODE_PAGE_MULT = 500
 const CTRL_MULT = 10
+/** M39aj (docs/decisions/0061-wheel-zoom-bounded-accumulator.md, amending 0019 §3): the outstanding
+ * accumulator saturates here, so one burst of events (a momentum flick, a trackpad pinch) queues at
+ * most one doubling or halving. The whole default range is only ln(256/12) = 3.06. */
+export const WHEEL_MAX_PENDING_LOG = Math.LN2
 
 export class WheelState {
   /** Remaining log-zoom delta not yet eased in by `camera/camera.ts` (consumed there, not here). */
@@ -32,7 +36,13 @@ export function recordWheel(
   const modeMult =
     deltaMode === 1 ? DELTA_MODE_LINE_MULT : deltaMode === 2 ? DELTA_MODE_PAGE_MULT : 1
   const ctrlMult = ctrlKey ? CTRL_MULT : 1
-  state.pendingDeltaLog += deltaY * WHEEL_K * modeMult * ctrlMult
+  const next = state.pendingDeltaLog + deltaY * WHEEL_K * modeMult * ctrlMult
+  state.pendingDeltaLog =
+    next > WHEEL_MAX_PENDING_LOG
+      ? WHEEL_MAX_PENDING_LOG
+      : next < -WHEEL_MAX_PENDING_LOG
+        ? -WHEEL_MAX_PENDING_LOG
+        : next
   state.cssX = cssX
   state.cssY = cssY
   state.hasPending = true
