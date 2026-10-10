@@ -106,7 +106,7 @@ impl<G: Game> Replica<G> {
         if let CacheCapacity::Chunks(n) = cache {
             assert!(
                 n as usize >= crate::host::subs::CAP_CHUNKS,
-                "Replica cache capacity ({n} chunks) is smaller than the 128-chunk subscription \
+                "Replica cache capacity ({n} chunks) is smaller than the 144-chunk subscription \
                  cap (0010): every held chunk must stay cached, or held chunks would evict each \
                  other out from under the subscription"
             );
@@ -663,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "smaller than the 128-chunk subscription cap")]
+    #[should_panic(expected = "smaller than the 144-chunk subscription cap")]
     fn cache_below_the_subscription_cap_panics() {
         Replica::<RGame>::new(
             ChunkDims::new(5),
@@ -686,11 +686,11 @@ mod tests {
 
     #[test]
     fn cache_at_the_cap_fits_the_budget() {
-        // 128 chunks at edge 32 (4096 B/chunk) = 512 KiB, comfortably under 4 MiB.
+        // 144 chunks at edge 32 (4096 B/chunk) = 576 KiB, comfortably under 4 MiB.
         let _ = Replica::<RGame>::new(
             ChunkDims::new(5),
             Box::new(ZeroSource),
-            CacheCapacity::Chunks(128),
+            CacheCapacity::Chunks(144),
             PlayerId(1),
         );
     }
@@ -707,7 +707,7 @@ mod tests {
         let mut r = Replica::<RGame>::new(
             ChunkDims::new(5),
             Box::new(ZeroSource),
-            CacheCapacity::Chunks(128),
+            CacheCapacity::Chunks(144),
             PlayerId(1),
         );
         r.apply_entity_put(EntityId(5), REntity);

@@ -210,7 +210,7 @@ fn relay_recipients_newest_after_stall() {
     let mut client = ClientCore::new(Replica::<Presence>::new(
         ChunkDims::new(Presence::CHUNK_BITS),
         Box::new(FlatSource),
-        CacheCapacity::Chunks(128),
+        CacheCapacity::Chunks(144),
         b,
     ));
 

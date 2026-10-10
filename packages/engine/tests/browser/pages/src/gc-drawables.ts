@@ -211,7 +211,7 @@ const { cameraState } = client
 // Wide enough to keep every populated entity's own chunk subscribed (and inside `visible()`,
 // margin included) for the whole run: `POPULATE_HALF_EXTENT` covers the full spawn grid below with
 // slack, `ChunkDims::new(5)` (32-tile chunks, `Game::CHUNK_BITS`'s own default) puts the whole
-// grid's chunk footprint well under the 128-chunk subscription cap (0010).
+// grid's chunk footprint well under the 144-chunk subscription cap (0010).
 const POPULATE_HALF_EXTENT = 120
 cameraState.centreX = 0
 cameraState.centreY = 0

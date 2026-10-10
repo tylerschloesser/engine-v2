@@ -25,12 +25,12 @@ function measure(name: string, counters: object) {
 
 const worlds = new Map<number, Promise<NetHarness>>()
 const nextClient = new Map<number, number>()
-/** One dense world per subscription cap (128 by default; 144 is the risk-3 candidate). Client 0
+/** One dense world per subscription cap (the old 128 default, kept as the risk-3 baseline since ADR 0059 made 144 the default; 144 is the new default). Client 0
  * fills; clients 1.. are the scenarios', parked far away by `denseWorld` until each takes its turn. */
 function shared(cap = 128): Promise<NetHarness> {
   let w = worlds.get(cap)
   if (!w) {
-    w = denseWorld(3301 + cap, 6, REGION, cap === 128 ? undefined : cap)
+    w = denseWorld(3301 + cap, 6, REGION, cap)
     worlds.set(cap, w)
   }
   return w

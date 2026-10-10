@@ -41,7 +41,7 @@ fn connected_client() -> Loopback<Drawables> {
         0,
         ChunkDims::new(5),
         Box::new(ZeroSource),
-        CacheCapacity::Chunks(128),
+        CacheCapacity::Chunks(144),
     );
     lb.set_camera(
         idx,

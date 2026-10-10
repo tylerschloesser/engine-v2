@@ -162,10 +162,9 @@ export const suites = [
     name: 'browser',
     kind: 'playwright',
     tiers: ['fast', 'slow'],
-    // 48,000, up from 35,000 (docs/decisions/0036 §1): measured at 28-29 s quiet / 36-39 s under
-    // load (M20b-M21) with the demotion ladder (0020 §4) exhausted, so M22+'s own fast browser
-    // tests need the room; build (10 s) + browser (48 s) stays under Tyler's one-minute wall time.
-    budgetMs: 48_000,
+    // 60,000 (docs/decisions/0060 §1, Tyler's Q16 answer; 48,000 under 0036 §1, 35,000 before):
+    // the demotion ladder (0020 §4) is exhausted, so the fast tier is about 70 s with the 10 s build.
+    budgetMs: 60_000,
     // `chromium` + `gc` in every tier (0020 §4, first rung: gate round 3, docs/plan/
     // 09-renderer-terrain.md Deviations). WebKit and Firefox move to the `engines` leg below.
     // `reference` (docs/plan/20-reference-game-v0.md): `games/reference`'s own project, same leg

@@ -4,7 +4,7 @@
 //! function 0008 §5's generation queue uses, so the generation set this feeds through
 //! [`SubscriptionSet::warm_rect`] stays a superset of the subscription target) is subscribed at
 //! once; a chunk unsubscribes only once it has been outside ring 3 continuously for the hold time.
-//! Over the 128-chunk cap, the farthest chunk in the lowest-priority class (visible > ring 1 >
+//! Over the 144-chunk cap, the farthest chunk in the lowest-priority class (visible > ring 1 >
 //! look-ahead > retained) is evicted, repeatedly, until back at the cap.
 //!
 //! Host-side, not sim-side (crate `CLAUDE.md`: "host/ and client/ are outside the deterministic
@@ -19,8 +19,8 @@ use crate::view::lookahead_chunks;
 use crate::wire::CameraReport;
 use crate::world::{ChunkCoord, ChunkDims, ChunkRect, TILE_MAX, TILE_MIN, TilePos};
 
-/// 0010 "Cap": 128 chunks per client.
-pub const CAP_CHUNKS: usize = 128;
+/// 0010 "Cap" as amended by 0059: 144 chunks per client.
+pub const CAP_CHUNKS: usize = 144;
 /// 0010 "Untrusted-view clamps": at most 256 tiles per axis, i.e. half-extent at most 128.
 pub const MAX_HALF_TILES: u16 = 128;
 /// 0010 does not name a minimum (only "zero or over-large extents are clamped about the centre,
@@ -100,7 +100,7 @@ enum Class {
 pub struct SubscriptionSet {
     dims: ChunkDims,
     hold: Ticks,
-    /// The chunk cap (0010: 128 unless `WorldConfig.view.maxChunks` says otherwise).
+    /// The chunk cap (0010, amended by 0059: 144 unless `WorldConfig.view.maxChunks` says otherwise).
     cap: usize,
     entries: Vec<Entry>,
     target: Vec<ChunkCoord>,
@@ -411,7 +411,8 @@ mod tests {
         let new_count = new_ring1.iter().count();
         assert_eq!(new_count, 121, "0010's own worked number at the clamp");
 
-        assert_eq!(s.len(), CAP_CHUNKS, "trimmed back to the cap");
+        assert_eq!(s.len(), 144, "trimmed back to the 144-chunk cap (0059)");
+        assert_eq!(CAP_CHUNKS, 144);
         for c in new_ring1.iter() {
             assert!(
                 s.is_subscribed(c),

@@ -224,7 +224,7 @@ mod tests {
         Replica::<UGame>::new(
             ChunkDims::new(UGame::CHUNK_BITS),
             Box::new(FlatSource),
-            CacheCapacity::Chunks(128),
+            CacheCapacity::Chunks(144),
             PlayerId(1),
         )
     }

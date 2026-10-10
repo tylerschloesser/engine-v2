@@ -290,7 +290,7 @@ struct SimConfig<P> {
     /// config built before this milestone (native tests, `testkit`) keeps working.
     #[serde(default = "default_view_max_tiles")]
     view_max_tiles_per_axis: u16,
-    /// 0009's `WorldConfig.view.maxChunks`, the subscription cap -- default `128` (0010).
+    /// 0009's `WorldConfig.view.maxChunks`, the subscription cap -- default `144` (0010, amended by 0059).
     #[serde(default = "default_view_max_chunks")]
     view_max_chunks: u16,
     /// 0009 `WorldConfig.bandwidth` (0010 defaults when absent), docs/plan/31-rates-and-integrity.md.
@@ -322,7 +322,7 @@ fn default_view_max_tiles() -> u16 {
     256
 }
 fn default_view_max_chunks() -> u16 {
-    128
+    144
 }
 
 /// [`SimConfig::build_hash`]'s hex decode: the first 32 hex digits (128 bits), or all-zero on
@@ -3987,10 +3987,10 @@ mod default_tests {
         assert_eq!(cfg.max_modified_tiles, 1_048_576);
         assert_eq!(cfg.max_action_growth, 4096, "4 KiB");
         assert_eq!(cfg.cache_chunks, 1024);
-        // 0010 (spec client R3): 256 tiles per axis, about 128 subscribed chunks per client.
+        // 0010 (spec client R3): 256 tiles per axis, about 144 subscribed chunks per client.
         assert_eq!(cfg.view_max_tiles_per_axis, 256);
-        assert_eq!(cfg.view_max_chunks, 128);
-        assert_eq!(subs::CAP_CHUNKS, 128);
+        assert_eq!(cfg.view_max_chunks, 144);
+        assert_eq!(subs::CAP_CHUNKS, 144);
         assert_eq!(
             cfg.world_budget_bytes,
             u32::MAX,

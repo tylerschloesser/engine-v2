@@ -22,7 +22,7 @@ fn client() -> ClientCore<Presence> {
     let replica = Replica::<Presence>::new(
         dims,
         Box::new(FlatSource),
-        CacheCapacity::Chunks(128),
+        CacheCapacity::Chunks(144),
         PlayerId(1),
     );
     ClientCore::new(replica)

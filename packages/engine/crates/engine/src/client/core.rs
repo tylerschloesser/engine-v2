@@ -271,7 +271,7 @@ struct ResyncRequest {
     sent: bool,
 }
 
-/// Most requests in flight at once (`view.maxChunks` is 128 by default, plus the reserved one).
+/// Most requests in flight at once (`view.maxChunks` is 144 by default, plus the reserved one).
 const MAX_RESYNC_REQUESTS: usize = 256;
 
 impl<G: Game> ClientCore<G> {
@@ -1454,7 +1454,7 @@ mod tests {
         let replica = Replica::<CGame>::new(
             dims,
             Box::new(FlatSource),
-            CacheCapacity::Chunks(128),
+            CacheCapacity::Chunks(144),
             PlayerId(1),
         );
         ClientCore::new(replica)

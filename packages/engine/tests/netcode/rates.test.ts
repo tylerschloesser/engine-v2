@@ -401,7 +401,9 @@ test('rates/deltas-collapse-to-snapshot', async () => {
 })
 
 test('rates/teleport-drops-queued-enters', async () => {
-  const h = await denseWorld(3108, 2)
+  // Pinned to the old 128-chunk cap: the recorded wasted-bytes ceiling measures how many queued old
+  // enters a 128 cap evicts; at the 144 default (ADR 0059) more of them stay inside the cap and are paid.
+  const h = await denseWorld(3108, 2, undefined, 128)
   try {
     const joiner = h.clients[1]
     if (!joiner) throw new Error('no joiner')
@@ -410,7 +412,7 @@ test('rates/teleport-drops-queued-enters', async () => {
     const mid = h.counters(1)
     expect(mid.queuedEnters).toBeGreaterThan(20)
     // Teleport into wilderness: the new view's enters are cheap and visible, so they go first, and
-    // the old queue is evicted over the 128-chunk cap instead of being paid for.
+    // the old queue is evicted over the cap instead of being paid for.
     joiner.setView({ x: 20_000, y: 20_000, ...MAX_VIEW })
     await h.advanceTicks(60)
     const end = h.counters(1)

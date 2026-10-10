@@ -251,7 +251,7 @@ export interface NetHarnessCounters {
   /** The host's own per-connection pacing counters (`host/pacing.rs`, read through
    * `sim_pacing_counters`), current values at the time of the call: enters of a chunk that left
    * under 5 s before (`reentersWithin5s`, and their bucket bytes `reenterBytes`), subscription
-   * evictions over the 128-chunk cap, ticks from a chunk becoming visible to its enter being sent
+   * evictions over the 144-chunk cap, ticks from a chunk becoming visible to its enter being sent
    * (max and p95 over all sent), the degrade level (1, 2 or 4 ticks per message) and visible chunks
    * dropped unsent (left the subscription while queued), enters still queued, the chunk bucket's tokens, chunks the client holds, deltas
    * collapsed into a snapshot, and multi-frame messages sent. All zero if the host instance is not

@@ -57,7 +57,7 @@ describe('repo-config', () => {
   // every other fast-tier suite concurrently, so its budgeted length is the first suite's budget plus
   // the longest of the rest (the build steps carry their own 10 s warning budget, apart). The literal
   // budgets are those of 0020 §3 as amended (0033, 0036 §1): a loosened one fails here.
-  test('repo-config: the fast tier is budgeted under one minute', () => {
+  test('repo-config: the fast tier is budgeted at about 70 s (ADR 0060)', () => {
     const fast = suites.filter((s) => s.tiers.includes('fast'))
     expect(Object.fromEntries(fast.map((s) => [s.name, s.budgetMs]))).toEqual({
       rust: 10_000,
@@ -65,12 +65,12 @@ describe('repo-config', () => {
       wasm: 7_000,
       tools: 9_000,
       netcode: 10_000,
-      browser: 48_000,
+      browser: 60_000,
     })
     const alone = fast.filter((s) => s.first).reduce((n, s) => n + s.budgetMs, 0)
     const concurrent = Math.max(...fast.filter((s) => !s.first).map((s) => s.budgetMs))
-    expect(alone + concurrent).toBe(51_000)
-    expect(alone + concurrent).toBeLessThan(60_000)
+    expect(alone + concurrent).toBe(63_000)
+    expect(alone + concurrent).toBeLessThan(70_000)
     expect(buildBudgetMs).toBeLessThanOrEqual(10_000)
   })
 

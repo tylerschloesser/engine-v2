@@ -1,7 +1,7 @@
 # 0036: `browser` fast-tier budget, 35,000 → 48,000 ms
 
 Status: Accepted (2026-09-25). Amends [0033](0033-fast-tier-budget-after-build-fix.md) §2 (the
-`browser` suite budget only; §1 and §3 stand). Decided by the orchestrator with Tyler.
+`browser` suite budget only; §1 and §3 stand). Decided by the orchestrator with Tyler. Amended by [0060](0060-browser-fast-tier-budget-60s.md) §1 (the number: 60,000).
 
 ## Context
 
