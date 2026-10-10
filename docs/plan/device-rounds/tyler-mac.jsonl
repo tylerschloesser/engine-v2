@@ -1,0 +1,14 @@
+{"t":"2026-10-10T15:47:14.019Z","type":"start","only":["M11-pinch-desktop-safari","M17b-harness-desktop-safari","M17b-harness-desktop-firefox","M35-safari-build-mac"]}
+{"t":"2026-10-10T15:47:14.020Z","type":"cursor","id":"M11-pinch-desktop-safari"}
+{"t":"2026-10-10T15:47:43.210Z","type":"result","id":"M11-pinch-desktop-safari","result":"pass","notes":"","numbers":""}
+{"t":"2026-10-10T15:47:43.213Z","type":"cursor","id":"M17b-harness-desktop-safari"}
+{"t":"2026-10-10T15:48:25.286Z","type":"cursor","id":"M11-pinch-desktop-safari"}
+{"t":"2026-10-10T15:48:27.865Z","type":"cursor","id":"M17b-harness-desktop-safari"}
+{"t":"2026-10-10T15:51:42.108Z","type":"result","id":"M17b-harness-desktop-safari","result":"pass","notes":"","numbers":""}
+{"t":"2026-10-10T15:51:42.112Z","type":"cursor","id":"M17b-harness-desktop-firefox"}
+{"t":"2026-10-10T15:56:47.648Z","type":"cursor","id":"M17b-harness-desktop-safari"}
+{"t":"2026-10-10T15:57:03.858Z","type":"cursor","id":"M17b-harness-desktop-firefox"}
+{"t":"2026-10-10T16:01:20.990Z","type":"result","id":"M17b-harness-desktop-firefox","result":"pass","notes":"","numbers":""}
+{"t":"2026-10-10T16:01:20.994Z","type":"cursor","id":"M35-safari-build-mac"}
+{"t":"2026-10-10T16:02:00.131Z","type":"result","id":"M35-safari-build-mac","result":"pass","notes":"","numbers":""}
+{"t":"2026-10-10T16:02:07.074Z","type":"cursor","id":"M35-safari-build-mac"}
