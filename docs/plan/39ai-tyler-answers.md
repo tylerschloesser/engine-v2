@@ -1,6 +1,6 @@
 # M39ai: Tyler's answers (Q15, Q16, R1, R2, R4)
 
-Status: open · After: 39ah · Tyler-dependent: no
+Status: done (2026-10-10) · After: 39ah · Tyler-dependent: no
 
 ## Goal
 On 2026-10-10 Tyler answered the open questions in `docs/plan/questions-for-tyler.md`. Five answers change the code. They are already recorded in the Requirements of `docs/spec/reference-game.md` and `docs/spec/testing.md`. When this is done, the code and the ADRs match them:
@@ -39,14 +39,14 @@ Other questions (Q9, Q12 and Q13 need no code). Any other budget. Raising any ze
 Do an inject-fail-revert for each and paste the red line.
 
 ## Exit criteria
-- [ ] `CAP_CHUNKS` and the `maxChunks` default are 144; the cap test fails at 128 (pasted).
-- [ ] The `browser` budget is 60,000 ms.
-- [ ] R1: placement over a resource confirmed; covered resource refused and hidden; collectable again after pick-up; deterministic across save/load (tests named, reds pasted).
-- [ ] R2: `FurnaceTake` predicted; the acceptance/coverage rows no longer cite it as the opt-out's coverage.
-- [ ] R4: Export world in the normal game UI (test named).
-- [ ] Two ADRs written (amending 0010 and 0036) and indexed in `PLAN.md`.
-- [ ] Changed goldens listed with why (the orchestrator approves them through `pnpm gate`).
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] `CAP_CHUNKS` and the `maxChunks` default are 144; the cap test fails at 128 (pasted).
+- [x] The `browser` budget is 60,000 ms.
+- [x] R1: placement over a resource confirmed; covered resource refused and hidden; collectable again after pick-up; deterministic across save/load (tests named, reds pasted).
+- [x] R2: `FurnaceTake` predicted; the acceptance/coverage rows no longer cite it as the opt-out's coverage.
+- [x] R4: Export world in the normal game UI (test named).
+- [x] Two ADRs written (amending 0010 and 0036) and indexed in `PLAN.md`.
+- [x] Changed goldens listed with why (the orchestrator approves them through `pnpm gate`).
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test rust -t subs`, `pnpm test rust -t <reference test>`, `pnpm test browser -t <name>`, `pnpm golden <fixture>` only if a golden must move (list it). Foreground, bounded; check `uptime` first.
@@ -64,3 +64,4 @@ None. M39-full-game-touch and M39-sign-off (Tyler's) cover the feel.
 - **R2.** `RefGame::predict` is `true` for everything (the `test-hooks` poison craft still opts out). `furnace_predict::take_is_not_predicted` became `take_is_predicted` (`Applied`, overlay entry, ingot shows at once, ack leaves the same state); red with the opt-out restored: `furnace_predict.rs:300 assertion left == right failed: FurnaceTake { .. }`. `games/reference/tests/netcode/races.test.ts` `reference_race_same_ingots` asserted the opt-out (no ghost, `NotPredictable` then verdict): now no ghost check (`Ui` is the confirmed replica) and results are `['Confirmed']` / `[{ Rejected: ... }]`. `docs/plan/reference-coverage.md` row for the opt-out now points at the engine tests `predict_opt_out_declines`/`predict_not_predictable_event`; R1, R2, R4 removed from its question table. No `docs/plan/acceptance/` or `coverage*.md` row cited `FurnaceTake`.
 - **R4.** `src/ui/export.ts` (`createExportUi`), wired in `game.ts`'s `startGame` for a local world, shown after `client.ready` (a refused start never gets it, so `persistence.spec.ts`'s "no `[data-export-world]` on a refused second tab" holds; its attribute is `data-game-export`). It calls `exportWorldFile` (new export of `ui/status.ts`, the code the `save-incompatible` screen now also uses). Test `reference_export_control_in_game_ui` (`persistence.spec.ts`): visible, click starts a download named `reference.world`. Fast tier: 339 ms measured. Red with the `show()` call removed: `expect(locator).toBeVisible() failed ... unexpected value "hidden"`.
 - **Goldens moved: none.** `pnpm test rust`, `wasm`, `unit`, `netcode` green; `pnpm test browser -t reference_` 30 pass. Flake seen once on a loaded machine (load average 15 to 23): `reference: status walks every event` timed out in `resumeWorkers`; it passes alone and with the change reverted, three runs of `-t status` pass after.
+- **Gate (orchestrator):** accepted. `pnpm gate 1fc00cb2`: 42 files, no goldens, no markers. `pnpm test` green (rust 812, unit 409, tools 285, wasm 172, netcode 147, browser 257 in 52 s of the new 60 s); `pnpm lint` green. Decision: the collect button for a resource covered by a *predicted* furnace stays until the placement is acked (one round trip). Accepted: the in-range list reads the confirmed replica, a predicted status is a hint (`.claude/rules/prediction.md`), and a `StartCollect` sent in that window is refused by the host. The changed existing tests each follow from a Tyler answer (repo-config 60 s / 70 s bounds, 128 pinned where a test measured the old default, placement over iron now valid, `FurnaceTake` predicted).
