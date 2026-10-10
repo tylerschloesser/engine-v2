@@ -133,7 +133,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 39aj | `39aj-zoom-feel.md` | Tyler (2026-10-10): "zooms in super close instantly and then is stuck": open at 32 tiles across (was the 12-tile limit), bound the wheel accumulator to one doubling, wheel zooms over overlays; magnitude tests | 39ai | |
 | [x] | 39ak | `39ak-hello-settle-rejection.md` | found by the M39b sweep: a rejected `Hello` settle (`hashSecretHex` / `sessions.save`) never releases `sessionMutationChain` and every later `Hello` stalls; release, remove the slot, close, test | 39aj | |
 | [x] | 39 | `39-acceptance.md` | coverage + budget audit, full device checklist, Phase 3 exit | all above | D |
-| [ ] | 39b | `39b-phase-4-handoff.md` | capture what code cannot say in ADRs, `PROMPT.md` for Phase 4. **Phase 3 complete.** | 39 | |
+| [x] | 39b | `39b-phase-4-handoff.md` | capture what code cannot say in ADRs, `PROMPT.md` for Phase 4. **Phase 3 complete.** | 39 | |
 
 ## Companion files
 

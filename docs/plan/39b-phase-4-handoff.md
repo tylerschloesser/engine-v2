@@ -1,6 +1,6 @@
 # M39b: Hand-off to Phase 4
 
-Status: in progress (2026-10-10) · After: 39 · Tyler-dependent: no (it carries forward, without waiting on, whatever M39 listed as unanswered)
+Status: done (2026-10-10) · After: 39 · Tyler-dependent: no (it carries forward, without waiting on, whatever M39 listed as unanswered)
 
 Split out of M39 (one session each: M39 audits and may block on Tyler; this one sweeps roughly seventy soon-to-be-deleted files and writes the last ADRs and the Phase 4 prompt).
 
@@ -56,14 +56,14 @@ Any Phase 4 work: writing `docs/architecture/`, deleting files, folding the spec
 None.
 
 ## Exit criteria
-- [ ] Every candidate line in `docs/plan/handoff/*.md` ends in `captured in <path>` or `dropped: <reason>` (`grep -L` finds no unresolved candidate).
-- [ ] `docs/decisions/README.md` lists every file in `docs/decisions/` (checked by a one-line shell comparison of counts and numbers).
-- [ ] The ADR "Budgets as measured at Phase 3 exit" has one entry per PRE-PLAN §7 row with a re-measure command or device check.
-- [ ] `.claude/skills/device-check/SKILL.md` exists and contains every entry of `docs/plan/device-checks.md`.
-- [ ] `PROMPT.md` is the Phase 4 prompt; the fresh-session sub-agent's remaining-questions list is empty or answered in the file; `CLAUDE.md`'s map matches the files that exist and is within its line cap.
-- [ ] `grep -n "static host" PROMPT.md` finds the carried-forward COOP/COEP item, and the hosting capture ADR states it as unverified.
-- [ ] `PLAN.md` is fully ticked; the working tree is clean; the tag `phase-3-complete` exists on the final commit; Tyler has been told `main` is ready to push.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] Every candidate line in `docs/plan/handoff/*.md` ends in `captured in <path>` or `dropped: <reason>` (`grep -L` finds no unresolved candidate).
+- [x] `docs/decisions/README.md` lists every file in `docs/decisions/` (checked by a one-line shell comparison of counts and numbers).
+- [x] The ADR "Budgets as measured at Phase 3 exit" has one entry per PRE-PLAN §7 row with a re-measure command or device check.
+- [x] `.claude/skills/device-check/SKILL.md` exists and contains every entry of `docs/plan/device-checks.md`.
+- [x] `PROMPT.md` is the Phase 4 prompt; the fresh-session sub-agent's remaining-questions list is empty or answered in the file; `CLAUDE.md`'s map matches the files that exist and is within its line cap.
+- [x] `grep -n "static host" PROMPT.md` finds the carried-forward COOP/COEP item, and the hosting capture ADR states it as unverified.
+- [x] `PLAN.md` is fully ticked; the working tree is clean; the tag `phase-3-complete` exists on the final commit; Tyler has been told `main` is ready to push.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test` · `pnpm lint` · `grep -c "^| \[" docs/decisions/README.md` against `ls docs/decisions/0*.md | wc -l` · `grep -rL "captured in\|dropped:" docs/plan/handoff/` (expect no candidate file left unresolved) · `wc -l CLAUDE.md` · `git status --short`
@@ -78,4 +78,6 @@ Creates the `device-check` skill and `docs/decisions/README.md`; adds captured c
 none (M39 ran them)
 
 ## Deviations
-(filled in during Phase 3)
+- **Run (orchestrator, 2026-10-10).** Eleven sweep sub-agents (PRE-PLAN; briefs in eight slices, 39 split into 36-39n and 39o-39aj because the 39 series grew to 36 briefs; side files; research+process+PROMPT) wrote `docs/plan/handoff/*.md` (~243 candidates). Capture: ADR 0062 (budgets as measured), 0063 world and simulation, 0064 sync and netcode, 0065 persistence, 0066 client/renderer/input, 0067 runtime/packaging/hosting (states the static-host COOP/COEP item as unverified), 0068 testing and tooling, 0069 working rules; conventions went to nested `CLAUDE.md` files, `.claude/rules/{hot-paths,prediction}.md` and the `run-tests`/`gc-test`/`device-round` skills. Every candidate ends `captured in`, `dropped:` or `carried to Phase 4 prompt` (two were resolved by the orchestrator: one dropped, code differs; one carried). `docs/decisions/README.md`: 69 rows for 69 ADRs. `device-check` skill: all 55 checklist ids. Fresh-session check of the Phase 4 prompt found 13 gaps (missing `handoff` tooling, a broken grep, an unspecified link check, the stay-or-go defaults, the `context-artifacts` test that enforces the caps); all fixed in the prompt.
+- **Behaviour bug found by the sweep → M39ak** (brief Non-scope: "it is a plan edit and this milestone waits"): a rejected `Hello` settle stalled every later `Hello`; fixed and tested before this milestone closed.
+- The ADR 0062 agent left the Fly billed figure as awaited; the orchestrator corrected it to Tyler's $0.04 reading.
