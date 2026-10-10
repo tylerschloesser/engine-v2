@@ -1,6 +1,6 @@
 # M39ak: a rejected `Hello` settle must not stall every later `Hello`
 
-Status: open · After: 39aj · Tyler-dependent: no
+Status: done (2026-10-10) · After: 39aj · Tyler-dependent: no
 
 ## Goal
 Found by the M39b sweep (ADR 0064 §26; noted in `packages/engine/CLAUDE.md`). In `packages/engine/src/server.ts`'s `Hello` handler (about lines 1491-1561), the async `settle` awaits `hashSecretHex(parsed.playerSecret)` and, for a new secret, `deps.sessions.save()`. If either rejects (a digest failure; a full or failing disk on a server):
@@ -31,10 +31,10 @@ Retrying the save; changing the session-table format; anything outside the `Hell
 - If practical, the same for a rejection on a returning secret (digest path only).
 
 ## Exit criteria
-- [ ] A rejected settle releases `sessionMutationChain`, removes its slot and closes its connection (test named, red pasted).
-- [ ] No unhandled rejection from `settle`.
-- [ ] The "Open gap" line is gone from `packages/engine/CLAUDE.md`.
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] A rejected settle releases `sessionMutationChain`, removes its slot and closes its connection (test named, red pasted).
+- [x] No unhandled rejection from `settle`.
+- [x] The "Open gap" line is gone from `packages/engine/CLAUDE.md`.
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test netcode -t "settle"` (or `unit`). Foreground, bounded.
@@ -49,3 +49,4 @@ None.
 - Shape: the body is now `settleBody()` and `settle = settleBody().catch(...)`; the catch calls `resolveMyTurn()` again (idempotent), splices `slot`, traces, and closes if the connection is still this arrival's.
 - Not undone: a new secret whose `save()` rejected stays in the in-memory session table (no remove API; table format is non-scope). A redial with that secret is admitted from memory and persisted by the next successful save.
 - Tests: `handshake.test.ts` `hello settle rejection does not stall later hellos` (save) and `... (digest) ...`. Red with the `resolveMyTurn()` in the catch removed: `AssertionError: expected false to be true` at handshake.test.ts:603 and :610 (bounded 2 s race, 4.8 s run).
+- **Gate (orchestrator):** accepted. `pnpm test` green (netcode 149: the two new tests), `pnpm lint` green; inject-fail red pasted by the implementer. Accepted: `ProtocolError` (4005, transient, so the client redials); the failure is surfaced only through `handshakeTrace` (the server has no non-fatal log path; `onFatal` would stop the world); a new secret whose `save()` failed stays in the in-memory table and is made durable by the next successful save (recorded, no decision needed).
